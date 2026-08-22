@@ -912,20 +912,29 @@ function startUiStoreOpenTimer(): () => number {
   return (): number => Math.round((performance.now() - startedAt) * 1000) / 1000;
 }
 
+// Deliberately NOT `computeStoreFingerprint(db)`: that helper also runs `readTableRowCounts` (a
+// `COUNT(*)` scan over all `UI_STORE_FINGERPRINT_TABLES.length` tables — O(rows), no cached count
+// in SQLite) and its own `PRAGMA quick_check` via `readQuickCheckOk`, neither of which this event
+// carries (see the `extra` fields below — there is no `tableRowCounts`). `openNodeUiDatabase`, this
+// function's only caller, already ran `assertQuickCheckOk(db)` earlier in the very same call
+// without it throwing (a throw either propagates past this call entirely or is repaired by the
+// quarantine-and-reopen branch, which re-asserts before falling through here), so `quickCheckOk` is
+// already a known fact and is stated directly instead of re-scanning the whole database a second
+// time on every production server start.
 function buildUiStoreOpenedEvent(db: DatabaseSync, durationMs: number): ServerLogEvent {
-  const fingerprint = computeStoreFingerprint(db);
+  const schemaVersion = boundedSchemaVersion(safeReadSchemaVersion(db));
   return {
     category: "setup",
     op: "store.opened",
     durationMs,
     extra: {
-      store: fingerprint.store,
+      store: "ui",
       // Named `storeSchemaVersion`, not `schemaVersion`: the latter is a RESERVED envelope field
       // name on the log line itself (the log schema's own version) and would be silently dropped.
-      storeSchemaVersion: fingerprint.schemaVersion,
-      migrationsAppliedCount: fingerprint.migrationsApplied.length,
-      quickCheckOk: fingerprint.quickCheckOk,
-      encryptionMode: fingerprint.encryptionMode,
+      storeSchemaVersion: schemaVersion,
+      migrationsAppliedCount: migrationsAppliedFor(schemaVersion).length,
+      quickCheckOk: true,
+      encryptionMode: "plaintext",
       // `keySource` is omitted: this store is never encrypted, so no key is ever resolved.
     },
   };

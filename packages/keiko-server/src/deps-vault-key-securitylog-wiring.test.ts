@@ -48,6 +48,13 @@ type ResolveLocalVaultKeyOptions = Parameters<
   typeof import("@oscharko-dev/keiko-security/secret-vault").resolveLocalVaultKey
 >[0];
 
+// A deterministic, valid 32-byte-base64 env-tier key so every vault under test resolves at tier 1
+// (env) and `resolveLocalVaultKey` never falls through to tier 2 (macOS Keychain, via
+// `createKeychainVaultKeyAccess`'s real `/usr/bin/security` spawn). Without this, an environment
+// that omits the vault's `KEIKO_*_KEY` lets the resolver reach the developer's real login keychain —
+// exactly the shared, uncontrolled state AGENTS.md's "tests are hermetic" rule forbids.
+const WIRING_TEST_VAULT_KEY = Buffer.alloc(32, 7).toString("base64");
+
 let calls: ResolveLocalVaultKeyOptions[];
 
 vi.mock("@oscharko-dev/keiko-security/secret-vault", async (importOriginal) => {
@@ -131,7 +138,7 @@ describe("buildUiHandlerDeps — editorHotExitStore wires resolveLocalVaultKey's
     const deps = buildUiHandlerDeps({
       configPath: undefined,
       evidenceDir,
-      env: { KEIKO_UI_DATA_DIR: uiDir },
+      env: { KEIKO_UI_DATA_DIR: uiDir, KEIKO_EDITOR_HOT_EXIT_KEY: WIRING_TEST_VAULT_KEY },
     });
     try {
       const snapshot = hotExitSnapshot();
@@ -155,7 +162,7 @@ describe("buildUiHandlerDeps — localKnowledgeKeyProvider wires resolveLocalVau
     const deps = buildUiHandlerDeps({
       configPath: undefined,
       evidenceDir,
-      env: { KEIKO_UI_DATA_DIR: uiDir },
+      env: { KEIKO_UI_DATA_DIR: uiDir, KEIKO_LOCAL_KNOWLEDGE_KEY: WIRING_TEST_VAULT_KEY },
     });
     try {
       present(deps.localKnowledgeKeyProvider, "localKnowledgeKeyProvider").resolveKey({
@@ -179,7 +186,7 @@ describe("buildUiHandlerDeps — workspaceIndexForRoot wires resolveLocalVaultKe
     const deps = buildUiHandlerDeps({
       configPath: undefined,
       evidenceDir,
-      env: { KEIKO_UI_DATA_DIR: uiDir },
+      env: { KEIKO_UI_DATA_DIR: uiDir, KEIKO_WORKSPACE_INDEX_KEY: WIRING_TEST_VAULT_KEY },
     });
     try {
       if (deps.workspaceIndexForRoot === undefined) {
@@ -203,7 +210,10 @@ describe("buildUiHandlerDeps — atlassianConnectorCredentials wires resolveLoca
     const deps = buildUiHandlerDeps({
       configPath: join(configDir, "keiko.config.json"),
       evidenceDir,
-      env: { KEIKO_UI_DATA_DIR: uiDir },
+      env: {
+        KEIKO_UI_DATA_DIR: uiDir,
+        KEIKO_ATLASSIAN_CONNECTOR_CREDENTIALS_KEY: WIRING_TEST_VAULT_KEY,
+      },
     });
     try {
       if (deps.atlassianConnectorCredentials === undefined) {
@@ -255,7 +265,7 @@ describe("buildUiHandlerDeps — provider-credential vault wires resolveLocalVau
     const deps = buildUiHandlerDeps({
       configPath,
       evidenceDir,
-      env: { KEIKO_UI_DATA_DIR: uiDir },
+      env: { KEIKO_UI_DATA_DIR: uiDir, KEIKO_PROVIDER_CREDENTIALS_KEY: WIRING_TEST_VAULT_KEY },
       store: createInMemoryUiStore(),
     });
     try {

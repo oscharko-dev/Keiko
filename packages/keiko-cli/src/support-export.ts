@@ -238,7 +238,11 @@ function redactedAuditSummary(audit: AuditResult): RedactedAuditSummary {
 // this state dir) or that cannot be opened (corrupt, or a vault key the operator has not supplied)
 // contributes no fingerprint — its name and a closed-vocabulary reason go to `storesUnavailable`
 // instead, never a path or the underlying error's message.
-export type StoreUnavailableReasonKind = "missing" | "open-failed";
+// `invalid-fingerprint`: the collector handed the exporter an object that fails the contract's
+// `isStoreFingerprint` guard. The exporter never embeds such an object — and never drops it
+// silently either: a store that disappears from both manifest lists would read as "never used",
+// which is the one thing a support bundle must not say about a store that exists.
+export type StoreUnavailableReasonKind = "missing" | "open-failed" | "invalid-fingerprint";
 
 export interface StoreUnavailableEntry {
   readonly store: StoreFingerprint["store"];
@@ -309,7 +313,39 @@ export interface ManifestInput {
   readonly storesUnavailable: readonly StoreUnavailableEntry[];
 }
 
+const KNOWN_STORES: ReadonlySet<string> = new Set(["ui", "local-knowledge", "memory-vault"]);
+
+function knownStoreName(value: unknown): StoreFingerprint["store"] | undefined {
+  if (typeof value !== "object" || value === null) return undefined;
+  const store: unknown = Reflect.get(value, "store");
+  return typeof store === "string" && KNOWN_STORES.has(store)
+    ? (store as StoreFingerprint["store"])
+    : undefined;
+}
+
+// Every collected fingerprint either passes the contract guard and is embedded, or is named in
+// `storesUnavailable` with `invalid-fingerprint` — never silently dropped. An object that does not
+// even carry a known store name cannot be attributed and is the one case that is dropped, counted
+// by nothing: the collector's closed `store` union makes it unreachable from production code.
+function partitionManifestFingerprints(input: ManifestInput): {
+  readonly fingerprints: readonly StoreFingerprint[];
+  readonly unavailable: readonly StoreUnavailableEntry[];
+} {
+  const fingerprints: StoreFingerprint[] = [];
+  const unavailable: StoreUnavailableEntry[] = [...input.storesUnavailable];
+  for (const candidate of input.storeFingerprints) {
+    if (isStoreFingerprint(candidate)) {
+      fingerprints.push(candidate);
+      continue;
+    }
+    const store = knownStoreName(candidate);
+    if (store !== undefined) unavailable.push({ store, reasonKind: "invalid-fingerprint" });
+  }
+  return { fingerprints, unavailable };
+}
+
 export function buildSupportBundleManifest(input: ManifestInput): SupportBundleManifest {
+  const partitioned = partitionManifestFingerprints(input);
   return {
     $section: "manifest",
     schemaVersion: input.schemaVersion,
@@ -332,8 +368,8 @@ export function buildSupportBundleManifest(input: ManifestInput): SupportBundleM
     // doctrine): re-validated against the same closed structural guard the manifest's own bundle
     // reader would use, so a malformed fingerprint (a future producer bug, a version-skewed
     // dependency) is silently dropped rather than embedded in a customer-facing artifact.
-    storeFingerprints: input.storeFingerprints.filter(isStoreFingerprint),
-    storesUnavailable: input.storesUnavailable,
+    storeFingerprints: partitioned.fingerprints,
+    storesUnavailable: partitioned.unavailable,
   };
 }
 

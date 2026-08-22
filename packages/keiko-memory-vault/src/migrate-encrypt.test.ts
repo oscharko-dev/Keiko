@@ -106,8 +106,16 @@ describe("encryptExistingContent — store.encryption-migrated event", () => {
 
   // The migration itself must never fail because its OWN logging failed — the same rule
   // `vault-log.test.ts` proves for the seam in isolation, pinned again here at the real call site.
-  it("never lets a throwing sink surface as a migration failure", () => {
-    vi.spyOn(process, "emitWarning").mockImplementation(() => undefined);
+  //
+  // A sink that ALWAYS throws (this test's `dead` sink) also throws on `emitMemoryVaultLogEvent`'s
+  // own envelope-only retry, so the failure must reach the last channel, `process.emitWarning`
+  // (`vault-log.ts`'s `warnFailedMemoryVaultLogSink`). Asserting only `.not.toThrow()` (as this
+  // test used to) is satisfied just as well by a sink failure that is silently swallowed — the
+  // "No silent failures" guideline requires proving the report actually happened, not merely that
+  // the migration survived it. RED (before failure reporting existed): the `emitWarning` spy below
+  // was never called, so `toHaveBeenCalledTimes(1)` failed with 0 calls.
+  it("never lets a throwing sink surface as a migration failure, and reports the drop", () => {
+    const warnSpy = vi.spyOn(process, "emitWarning").mockImplementation(() => undefined);
     const db = openTestDb();
     insertMemoryRow(db, makeRecord({ id: memId("m1") }), TEST_CIPHER);
     overwriteBodyWithPlaintext(db, "m1", "plaintext body");
@@ -124,6 +132,16 @@ describe("encryptExistingContent — store.encryption-migrated event", () => {
       readonly body: string;
     };
     expect(TEST_CIPHER.isSealed(row.body)).toBe(true);
+
+    expect(warnSpy).toHaveBeenCalledTimes(1);
+    const [message, options] = warnSpy.mock.calls[0] ?? [];
+    expect(message).toBe("Keiko memory-vault log sink is failing; log lines are being dropped.");
+    // Redacted context only: the dropped op name and a shape-gated error kind — never the sink's
+    // thrown message ("sink is down"), which could carry caller-supplied detail.
+    expect(options).toMatchObject({ type: "KeikoActivityLog", code: "KEIKO_LOG_SINK_FAILED" });
+    expect((options as { detail?: string } | undefined)?.detail).toBe(
+      "op=store.encryption-migrated errorKind=Error",
+    );
     db.close();
   });
 });

@@ -5,8 +5,6 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { EmbeddingModelIdentity } from "@oscharko-dev/keiko-contracts";
 
-import type { KnowledgeLogEvent, KnowledgeLogSink } from "../knowledge-log.js";
-
 import {
   __resetTargetRuntimeCacheForTests,
   clearUsearchAnnCacheForTests,
@@ -404,51 +402,14 @@ describe("USearch ANN index", () => {
     expect(readsAfterWarm).toBe(readsAfterCold);
   });
 
-  it("logs search.native-runtime-resolved on the cold path only, content-free", async () => {
-    const corpus = clusteredCorpus(64, IDENTITY);
-    const queryVector = corpus.entries[0]?.vector;
-    if (queryVector === undefined) throw new Error("test corpus must contain a query vector");
-    const binary = runtimePath();
-    const events: KnowledgeLogEvent[] = [];
-    const logSink: KnowledgeLogSink = {
-      write: (event): void => {
-        events.push(event);
-      },
-    };
-    const request = {
-      partition: partition(corpus.entries, "native-runtime-resolved-logging"),
-      queryVector,
-      candidateLimit: 5,
-      exactScanThreshold: 0,
-      binaryPath: binary,
-      logSink,
-    };
-    __resetTargetRuntimeCacheForTests();
-
-    const cold = await searchUsearchAnnIndex(request);
-    expect(cold.ok).toBe(true);
-    const coldLines = events.filter((event) => event.op === "search.native-runtime-resolved");
-    // resolvedIndex() and buildSearchIndex() both call targetRuntime() for the same request;
-    // the second call is already a warm hit against the cache the first call just populated,
-    // so exactly one line — not two — is written for one logical search call.
-    expect(coldLines).toHaveLength(1);
-    expect(coldLines[0]).toMatchObject({
-      level: "info",
-      category: "search",
-      extra: {
-        targetKey: usearchRuntimeTargetKey(process.platform, process.arch),
-        resolved: true,
-        version: USEARCH_RUNTIME_MANIFEST.version,
-      },
-    });
-    // Content-free: never the resolved filesystem path or the raw SHA-256 digest.
-    expect(JSON.stringify(coldLines[0])).not.toContain(binary);
-
-    events.length = 0;
-    const warm = await searchUsearchAnnIndex(request);
-    expect(warm.ok).toBe(true);
-    expect(events.filter((event) => event.op === "search.native-runtime-resolved")).toHaveLength(0);
-  });
+  // The "logs search.native-runtime-resolved on the cold path only, content-free" case moved to
+  // ./usearch-runtime-resolved-logging.test.ts: it needs a mocked runtime-manifest approval to
+  // run hermetically (no host-native USearch binary, no order dependency on this file's shared
+  // TARGET_RUNTIME_CACHE), which would have required either a per-file vi.mock here — poisoning
+  // every other real-binary test in this suite — or a scoped vi.doMock reimport that was harder
+  // to reason about than a small dedicated file. Native-addon search correctness stays covered
+  // right here by every other test in this file that already exercises the real binary via
+  // runtimePath().
 
   it("serializes concurrent callers through queryQueue without cross-contaminating results (KEIKO-0360)", async () => {
     // KEIKO-0360: coverage pin for the ADR-0164 D2 single-Worker queryQueue serialization

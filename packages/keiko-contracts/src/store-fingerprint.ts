@@ -8,7 +8,9 @@
 // repository's own fixed table/migration lists — never a row, a path, a key, a secret, or free
 // text (ADR-0128 D6 redaction vocabulary). `isStoreFingerprint` lets the manifest assembler
 // refuse a malformed value before it is embedded, mirroring the fail-closed guard style already
-// established in `atlassian-connectors-validation.ts`.
+// established in `atlassian-connectors-validation.ts`. The guard also fails closed against a
+// hostile value whose property enumeration/access throws (a proxy trap, a throwing getter), and
+// rejects `encryptionMode`/`keySource` combinations that contradict each other.
 //
 // Leaf-package rule (ADR-0019 direction 1): no `@oscharko-dev/keiko-*` imports, pure functions
 // only, zero logic beyond the shape and its guard.
@@ -32,7 +34,13 @@ export interface StoreFingerprint {
   /** `PRAGMA quick_check` summary — pass/fail only, never the raw check output. */
   readonly quickCheckOk: boolean;
   readonly encryptionMode: "plaintext" | "encrypted" | "migrating";
-  /** The already-computed-then-discarded key-resolution tier, when the store is encrypted. */
+  /**
+   * The already-computed-then-discarded key-resolution tier. May be present only when
+   * `encryptionMode` is `"encrypted"` or `"migrating"` — a `"plaintext"` store has no key
+   * material to report, and `isStoreFingerprint` rejects the two fields combined that way, even
+   * though a store may legitimately report `"encrypted"`/`"migrating"` with `keySource` omitted
+   * (e.g. `local-knowledge`, whose key provider has no key-resolution-tier concept to report).
+   */
   readonly keySource?: "env" | "keychain" | "keyfile" | undefined;
 }
 
@@ -129,21 +137,41 @@ function isStoreFingerprintCore(value: Record<string, unknown>): boolean {
   );
 }
 
+// `keySource` documents a key-resolution tier, which only exists once a key is in play — a
+// `"plaintext"` store never resolved one, so the two fields riding together is the exact
+// contradictory state `readStoreEncryptionMode`/`computeStoreFingerprint` producers must never
+// emit. The reverse is NOT required: `local-knowledge` legitimately reports `"encrypted"` with
+// `keySource` omitted (its key provider has no key-resolution-tier concept), so this only checks
+// the one direction.
+function isConsistentEncryptionKeySource(value: Record<string, unknown>): boolean {
+  if (value.keySource === undefined) return true;
+  return value.encryptionMode === "encrypted" || value.encryptionMode === "migrating";
+}
+
 function isStoreFingerprintEncryptionShape(value: Record<string, unknown>): boolean {
   return (
     typeof value.quickCheckOk === "boolean" &&
     isStoreFingerprintEncryptionMode(value.encryptionMode) &&
-    isOptionalStoreFingerprintKeySource(value.keySource)
+    isOptionalStoreFingerprintKeySource(value.keySource) &&
+    isConsistentEncryptionKeySource(value)
   );
 }
 
 /**
  * Fail-closed structural guard for {@link StoreFingerprint}: every union is checked against its
  * closed vocabulary, every count is a finite non-negative integer, every table/migration name is
- * a bounded identifier, and no unexpected field rides through. The manifest assembler uses this
- * to refuse a malformed fingerprint rather than embed it.
+ * a bounded identifier, `encryptionMode`/`keySource` cannot contradict each other, and no
+ * unexpected field rides through. The manifest assembler uses this to refuse a malformed
+ * fingerprint rather than embed it. Wrapped in `try`/`catch`: a hostile producer value can make
+ * property enumeration or access (`Object.keys`, a field getter, `Object.entries` on a nested
+ * object) throw via a proxy trap or a throwing accessor — this guard must fail closed (`false`),
+ * never propagate, so one malformed value cannot abort manifest assembly.
  */
 export function isStoreFingerprint(value: unknown): value is StoreFingerprint {
-  if (!isRecord(value) || !hasKnownStoreFingerprintKeys(value)) return false;
-  return isStoreFingerprintCore(value) && isStoreFingerprintEncryptionShape(value);
+  try {
+    if (!isRecord(value) || !hasKnownStoreFingerprintKeys(value)) return false;
+    return isStoreFingerprintCore(value) && isStoreFingerprintEncryptionShape(value);
+  } catch {
+    return false;
+  }
 }

@@ -350,6 +350,22 @@ function logFingerprintDiffCompleted(
   });
 }
 
+// The one delta this run reports — from `prior` to the EFFECTIVE next baseline (the
+// failure-withheld set the caller is about to persist, never the raw scan), with `removed`
+// suppressed to 0 whenever enumeration is incomplete. Computed once and reused for both the
+// logged event and the persisted `RepositoryPodChangeCounts` so the two can never disagree with
+// each other about whether something was removed.
+function effectiveFingerprintDelta(
+  prior: ReadonlyMap<string, RepositoryFileFingerprint>,
+  next: readonly RepositoryFileFingerprint[],
+  enumerationComplete: boolean,
+): FingerprintSetDelta {
+  const delta = diffFingerprintSets(fingerprintMap([...prior.values()]), fingerprintMap(next), {
+    detectMoves: false,
+  });
+  return enumerationComplete ? delta : { ...delta, removed: 0 };
+}
+
 function runCounts(
   deps: RepositoryPodDeps,
   runId: string,
@@ -359,14 +375,12 @@ function runCounts(
   rejectedEntries: number,
   enumerationComplete: boolean,
 ): RepositoryPodChangeCounts {
-  const delta = diffFingerprintSets(fingerprintMap([...prior.values()]), fingerprintMap(next), {
-    detectMoves: false,
-  });
+  const delta = effectiveFingerprintDelta(prior, next, enumerationComplete);
   logFingerprintDiffCompleted(deps, runId, delta);
   return {
     addedFiles: delta.added,
     changedFiles: delta.changed,
-    removedFiles: enumerationComplete ? delta.removed : 0,
+    removedFiles: delta.removed,
     unchangedFiles: delta.unchanged,
     failedDocuments: result.failedDocuments,
     rejectedEntries,
@@ -473,7 +487,7 @@ export async function refreshRepositoryPod(
     deps,
     runId,
     prior,
-    scan.fingerprints,
+    next,
     drained.result,
     scan.rejectedEntries,
     enumerationComplete,

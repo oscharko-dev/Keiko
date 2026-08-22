@@ -14,6 +14,7 @@ import { randomBytes } from "node:crypto";
 import {
   createMemoryContentCipher,
   keyFromKeychain,
+  keyFromKeychainReadOnly,
   NO_KEYCHAIN,
   resolveVaultKey,
   resolveVaultKeyReadOnly,
@@ -179,9 +180,10 @@ describe("resolveVaultKey — keychain tier", () => {
 
 describe("resolveVaultKeyReadOnly (Finding 0 — read-only diagnostic export seam)", () => {
   it("never writes a keyfile when the env and keychain tiers both miss, and reports no key", () => {
-    const resolved = resolveVaultKeyReadOnly({}, () => undefined);
+    const resolved = resolveVaultKeyReadOnly({}, () => ({ key: undefined, malformed: false }));
     expect(resolved.key).toBeUndefined();
     expect(resolved.source).toBeUndefined();
+    expect(resolved.keychainMalformed).toBe(false);
     // The RED assertion: `resolveVaultKey({}, dir, NO_KEYCHAIN)` against this same empty dir
     // would call `keyFromKeyfile`, which mints and writes `vault.key`. The read-only resolver
     // must leave the directory exactly as it found it — no file of any name appears.
@@ -193,18 +195,58 @@ describe("resolveVaultKeyReadOnly (Finding 0 — read-only diagnostic export sea
     let keychainCalls = 0;
     const resolved = resolveVaultKeyReadOnly({ KEIKO_MEMORY_KEY: raw.toString("base64") }, () => {
       keychainCalls += 1;
-      return undefined;
+      return { key: undefined, malformed: false };
     });
     expect(resolved.source).toBe("env");
     expect(resolved.key?.equals(raw)).toBe(true);
     expect(keychainCalls).toBe(0);
+    expect(resolved.keychainMalformed).toBe(false);
   });
 
   it("reports the keychain tier when a read-only lookup finds a stored key, without minting one", () => {
     const stored = randomBytes(32);
-    const resolved = resolveVaultKeyReadOnly({}, () => stored);
+    const resolved = resolveVaultKeyReadOnly({}, () => ({ key: stored, malformed: false }));
     expect(resolved.source).toBe("keychain");
     expect(resolved.key?.equals(stored)).toBe(true);
+    expect(resolved.keychainMalformed).toBe(false);
+  });
+
+  // Finding: Thread 5. Before this fix, a stored-but-undecodable keychain secret and an outright
+  // absent one both collapsed to `{ key: undefined, source: undefined }` — operationally
+  // indistinguishable. RED (before fix): `keychainMalformed` did not exist on
+  // `ResolvedVaultKeyReadOnly` at all, so this assertion could not even compile against the old
+  // shape; against the old boolean-less behaviour it would read `undefined`, never `true`.
+  it("reports keychainMalformed when a stored secret exists but fails to decode as a key", () => {
+    const resolved = resolveVaultKeyReadOnly({}, () => ({ key: undefined, malformed: true }));
+    expect(resolved.key).toBeUndefined();
+    expect(resolved.source).toBeUndefined();
+    expect(resolved.keychainMalformed).toBe(true);
+  });
+
+  it("end-to-end: keyFromKeychainReadOnly itself reports malformed for an undecodable stored secret", () => {
+    const scriptDir = mkdtempSync(join(tmpdir(), "keiko-keychain-readonly-"));
+    try {
+      const security = join(scriptDir, "security");
+      writeFileSync(
+        security,
+        [
+          "#!/bin/sh",
+          'case "$1" in',
+          "find-generic-password) printf %s 'not-a-32-byte-key' ;;",
+          "esac",
+        ].join("\n"),
+      );
+      chmodSync(security, 0o700);
+
+      const resolved = resolveVaultKeyReadOnly({}, () =>
+        keyFromKeychainReadOnly({ executable: security, platform: "darwin" }),
+      );
+      expect(resolved.key).toBeUndefined();
+      expect(resolved.source).toBeUndefined();
+      expect(resolved.keychainMalformed).toBe(true);
+    } finally {
+      rmSync(scriptDir, { recursive: true, force: true });
+    }
   });
 });
 

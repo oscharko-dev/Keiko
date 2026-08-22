@@ -1207,8 +1207,13 @@ export function createMemoryVault(options?: CreateMemoryVaultOptions): MemoryVau
   const { cipher, keySource } = resolveCipherWithSource(options, env, options?.securityLogSink);
   const elapsedMs = startMemoryVaultLogTimer();
   const db = openMemoryDatabase(dbPath, cipher, options?.logSink);
-  emitVaultOpened(options?.logSink, keySource, elapsedMs());
+  // Emitted only after BOTH remaining initialization steps succeed (Finding: store-open ordering)
+  // — a body-suppression-key failure or a sidecar-hardening failure must fail `createMemoryVault`
+  // without the activity log ever reporting the open as having succeeded. Emitting right after
+  // `openMemoryDatabase` (as this line used to) reported a successful open even when either
+  // operation below then threw and the vault never actually became usable.
   const bodySuppressionKey = resolveBodySuppressionKey(db, cipher);
   hardenVaultSidecars(dbPath);
+  emitVaultOpened(options?.logSink, keySource, elapsedMs());
   return buildStore(db, resolveOptions(options, cipher, dbPath, bodySuppressionKey));
 }

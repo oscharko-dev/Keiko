@@ -1,7 +1,7 @@
 // ADR-0013 D3/D8 — db.ts: createInMemoryUiStore (tests), createNodeUiStore (real on-disk).
 // Asserts perms 0o700/0o600 on the dir/file (Unix), and that the DB file is NOT inside process.cwd().
 
-import { describe, expect, it, beforeEach, afterEach } from "vitest";
+import { describe, expect, it, beforeEach, afterEach, vi } from "vitest";
 import { DatabaseSync } from "node:sqlite";
 import {
   mkdtempSync,
@@ -1236,6 +1236,39 @@ describe("openNodeUiDatabase — store.opened activity log (Wave 4a, epic #3233 
       expect(row?.user_version).toBe(SCHEMA_VERSION);
     } finally {
       opened.close();
+    }
+  });
+
+  // PR #3244 review, thread 15: `buildUiStoreOpenedEvent` used to call `computeStoreFingerprint`,
+  // which runs a SECOND full-database `PRAGMA quick_check` (the first already ran inside this same
+  // `openNodeUiDatabase` call, via `assertQuickCheckOk`) and a `COUNT(*)` scan over every one of
+  // `UI_STORE_FINGERPRINT_TABLES` — a cost that scales with database size, paid on every production
+  // server start. Neither is needed: the emitted event carries only `quickCheckOk` (a boolean) and
+  // `storeSchemaVersion`/`migrationsAppliedCount` (from the already-cheap `PRAGMA user_version`),
+  // never `tableRowCounts`.
+  it("emits the store.opened event without re-running quick_check or scanning any table for a row count", () => {
+    const dbPath = join(tmpDir, "opened-perf.db");
+    const sink: ServerLogSink = { write: (): void => undefined };
+    const prepareSpy = vi.spyOn(DatabaseSync.prototype, "prepare");
+    let db: DatabaseSync | undefined;
+    try {
+      db = openNodeUiDatabase(dbPath, sink);
+      const preparedSql = prepareSpy.mock.calls.map((call) => call[0]);
+      const quickCheckCalls = preparedSql.filter((sql) => sql.includes("quick_check"));
+      const countCalls = preparedSql.filter((sql) => /count\(\*\)/iu.test(sql));
+      // Exactly one: the real integrity check `openNodeUiDatabase` itself needs, not a second one
+      // recomputed only to build the log event.
+      expect(quickCheckCalls).toHaveLength(1);
+      // `runMigrations` legitimately issues its own single, unrelated `COUNT(*)` against
+      // `workspace_manifests` (`migrateLegacyProjectManifests`'s post-migration trust-record
+      // cleanup check) — that is not what this test guards against. What must NOT happen is
+      // `computeStoreFingerprint`'s `readTableRowCounts`, which queries EVERY one of
+      // `UI_STORE_FINGERPRINT_TABLES` (13 tables). Fewer COUNT(*) calls than that full table list
+      // proves the whole-database row-count scan did not run for this event.
+      expect(countCalls.length).toBeLessThan(UI_STORE_FINGERPRINT_TABLES.length);
+    } finally {
+      prepareSpy.mockRestore();
+      db?.close();
     }
   });
 });

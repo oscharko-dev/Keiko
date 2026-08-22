@@ -26,16 +26,37 @@ describe("isStoreFingerprint", () => {
     expect(isStoreFingerprint({ ...rest, encryptionMode: "plaintext" })).toBe(true);
   });
 
-  it("accepts every closed-vocabulary store, encryptionMode, and keySource value", () => {
+  it("accepts every closed-vocabulary store value", () => {
     for (const store of ["ui", "local-knowledge", "memory-vault"] as const) {
       expect(isStoreFingerprint({ ...validFingerprint(), store })).toBe(true);
     }
-    for (const encryptionMode of ["plaintext", "encrypted", "migrating"] as const) {
+  });
+
+  it("accepts every closed-vocabulary encryptionMode value paired with a consistent keySource", () => {
+    for (const encryptionMode of ["encrypted", "migrating"] as const) {
       expect(isStoreFingerprint({ ...validFingerprint(), encryptionMode })).toBe(true);
     }
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars
+    const { keySource: _keySource, ...rest } = validFingerprint();
+    expect(isStoreFingerprint({ ...rest, encryptionMode: "plaintext" })).toBe(true);
+  });
+
+  it("accepts every closed-vocabulary keySource value", () => {
     for (const keySource of ["env", "keychain", "keyfile"] as const) {
       expect(isStoreFingerprint({ ...validFingerprint(), keySource })).toBe(true);
     }
+  });
+
+  it("rejects a plaintext fingerprint that still carries a keySource", () => {
+    // A `"plaintext"` store never resolved a key, so `keySource` riding along on it is the exact
+    // contradictory state `encryptionMode`'s own doc comment rules out.
+    expect(
+      isStoreFingerprint({
+        ...validFingerprint(),
+        encryptionMode: "plaintext",
+        keySource: "keychain",
+      }),
+    ).toBe(false);
   });
 
   it("rejects a non-object, null, and an array", () => {
@@ -110,5 +131,44 @@ describe("isStoreFingerprint", () => {
     // eslint-disable-next-line @typescript-eslint/no-unused-vars
     const { store: _store, ...withoutStore } = validFingerprint();
     expect(isStoreFingerprint(withoutStore)).toBe(false);
+  });
+
+  it("fails closed instead of throwing when top-level key enumeration is hostile", () => {
+    const hostile = new Proxy(
+      { ...validFingerprint() },
+      {
+        ownKeys(): never {
+          throw new Error("hostile ownKeys trap");
+        },
+      },
+    );
+    expect(isStoreFingerprint(hostile)).toBe(false);
+  });
+
+  it("fails closed instead of throwing when a required field getter is hostile", () => {
+    const hostile = new Proxy(
+      { ...validFingerprint() },
+      {
+        get(target: object, prop: string | symbol, receiver: unknown): unknown {
+          if (prop === "store") throw new Error("hostile store getter");
+          return Reflect.get(target, prop, receiver);
+        },
+      },
+    );
+    expect(isStoreFingerprint(hostile)).toBe(false);
+  });
+
+  it("fails closed instead of throwing when tableRowCounts enumeration is hostile", () => {
+    const hostileTableRowCounts = new Proxy(
+      {},
+      {
+        ownKeys(): never {
+          throw new Error("hostile nested ownKeys trap");
+        },
+      },
+    );
+    expect(
+      isStoreFingerprint({ ...validFingerprint(), tableRowCounts: hostileTableRowCounts }),
+    ).toBe(false);
   });
 });

@@ -35,8 +35,28 @@ import {
 type CreateMemoryVaultOptions = Parameters<
   typeof import("@oscharko-dev/keiko-memory-vault").createMemoryVault
 >[0];
+type MemoryVaultStore = import("@oscharko-dev/keiko-memory-vault").MemoryVaultStore;
 
 let captured: CreateMemoryVaultOptions;
+
+// A real `createMemoryVault(options)` call can touch OS keychain state and initialize a real
+// encrypted store — this file's job is only the composition boundary (does `createBffMemoryVault`
+// pass `securityLogSink` through?), never the vault's own key resolution. A `Proxy` stands in for
+// the ~30-member `MemoryVaultStore` interface without restating it member-by-member: `close` (the
+// only member this test's `finally` block calls) is a real no-op, and any other member this test
+// does not touch throws immediately rather than silently returning `undefined`, so an accidental
+// use is a loud failure instead of a hermeticity gap.
+function fakeMemoryVaultStore(): MemoryVaultStore {
+  const target = { close: (): void => undefined };
+  return new Proxy(target, {
+    get(obj, prop, receiver): unknown {
+      if (prop in obj) return Reflect.get(obj, prop, receiver);
+      return (): never => {
+        throw new Error(`fakeMemoryVaultStore: "${String(prop)}" is not implemented`);
+      };
+    },
+  }) as unknown as MemoryVaultStore;
+}
 
 vi.mock("@oscharko-dev/keiko-memory-vault", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@oscharko-dev/keiko-memory-vault")>();
@@ -46,7 +66,7 @@ vi.mock("@oscharko-dev/keiko-memory-vault", async (importOriginal) => {
       options: CreateMemoryVaultOptions,
     ): ReturnType<typeof actual.createMemoryVault> => {
       captured = options;
-      return actual.createMemoryVault(options);
+      return fakeMemoryVaultStore();
     },
   };
 });

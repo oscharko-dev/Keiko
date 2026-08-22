@@ -15,6 +15,7 @@ import {
 
 let blockedOpenDir = "";
 let blockedRenameDest = "";
+let blockedOpenSyncHits = 0;
 
 vi.mock("node:fs", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:fs")>();
@@ -28,6 +29,7 @@ vi.mock("node:fs", async (importOriginal) => {
     // any pre-set restriction. This scoped mock is the only hermetic way to exercise it.
     openSync: (path: unknown, flags: unknown, mode?: unknown): number => {
       if (path === blockedOpenDir && flags === "r") {
+        blockedOpenSyncHits += 1;
         throw Object.assign(new Error("simulated: directory cannot be opened for fsync"), {
           code: "EACCES",
         });
@@ -60,6 +62,7 @@ const dirs: string[] = [];
 afterEach(() => {
   blockedOpenDir = "";
   blockedRenameDest = "";
+  blockedOpenSyncHits = 0;
   for (const d of dirs.splice(0)) rmSync(d, { recursive: true, force: true });
 });
 
@@ -79,6 +82,10 @@ describe("fsyncDirectory — the directory itself cannot be opened for fsync", (
       vault.set("cred:a", "value");
     }).not.toThrow();
     expect(vault.get("cred:a")).toBe("value");
+    // Prove the injected fault actually fired: without this, a path mismatch (e.g. a realpath
+    // difference between `blockedOpenDir` and the directory `fsyncDirectory` actually opens) would
+    // silently skip the throwing branch and this test would still pass for the wrong reason.
+    expect(blockedOpenSyncHits).toBeGreaterThan(0);
   });
 
   it("sharded layout: set() still commits and returns the secret when the post-rename directory fsync fails to open", () => {
@@ -91,6 +98,8 @@ describe("fsyncDirectory — the directory itself cannot be opened for fsync", (
       vault.set("cred:a", "value");
     }).not.toThrow();
     expect(vault.get("cred:a")).toBe("value");
+    // Same discrimination as the single-file case above: the fault must have actually fired.
+    expect(blockedOpenSyncHits).toBeGreaterThan(0);
   });
 });
 

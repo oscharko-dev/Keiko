@@ -32,7 +32,7 @@ describe("nullMemoryVaultLogSink", () => {
   it("accepts an event without throwing and returns a shared instance", () => {
     const sink = nullMemoryVaultLogSink();
     expect(() => {
-      sink.write({ category: "memory", op: "test.op" });
+      sink.write({ category: "memory", op: "memory-vault.store.opened" });
     }).not.toThrow();
     expect(nullMemoryVaultLogSink()).toBe(sink);
   });
@@ -211,10 +211,15 @@ describe("emitMemoryVaultLogEvent", () => {
       },
     };
 
+    // `secret` is embedded in the SINK's own thrown message, not in `event.extra` — this event's
+    // `extra` is intentionally omitted, since `MemoryVaultLogExtra`'s closed schema (Finding:
+    // Thread 8) has no field that could hold arbitrary free text like `secret` in the first
+    // place. The proof this test carries is that `memoryVaultErrorKind` never reads `.message`
+    // (see the `memoryVaultErrorKind` suite above), so a secret embedded in a thrown error's
+    // message can never reach the fallback warning either.
     emitMemoryVaultLogEvent(dead, {
       category: "memory",
       op: "memory-vault.store.opened",
-      extra: { note: secret },
     });
 
     const reported = JSON.stringify(warn.mock.calls);
@@ -258,5 +263,26 @@ describe("MemoryVaultLogEvent", () => {
       "op",
       "status",
     ]);
+  });
+
+  // Finding: Thread 8. Before this fix `op: string` and `extra?: Readonly<Record<string,
+  // unknown>>` accepted anything, so a memory body or filesystem path could reach this event with
+  // no compile-time signal. RED (before fix): both `@ts-expect-error` directives below were
+  // themselves compile errors ("Unused '@ts-expect-error' directive") under `npm run typecheck`,
+  // because the old, open shape happily accepted an arbitrary `op` string and an arbitrary
+  // `extra` key — there was nothing to suppress.
+  it("rejects an arbitrary op and an arbitrary extra field at compile time", () => {
+    // @ts-expect-error — `op` is now a closed `MemoryVaultLogOp` union; a caller-chosen string is
+    // no longer assignable.
+    const badOp: MemoryVaultLogEvent = { category: "memory", op: "arbitrary.caller.chosen.op" };
+    const badExtra: MemoryVaultLogEvent = {
+      category: "memory",
+      op: "memory-vault.store.opened",
+      // @ts-expect-error — `extra` is now a closed, body-free `MemoryVaultLogExtra` schema; an
+      // unlisted key (here shaped like a leaked filesystem path) is no longer assignable.
+      extra: { path: "/Users/someone/memory/vault.db" },
+    };
+    expect(badOp.category).toBe("memory");
+    expect(badExtra.category).toBe("memory");
   });
 });

@@ -945,6 +945,8 @@ describe("runUiCli — node:sqlite re-exec guard (ADR-0013 D2)", () => {
     child.kill = (): void => {
       /* no-op */
     };
+    const sigintBefore = process.listenerCount("SIGINT");
+    const sigtermBefore = process.listenerCount("SIGTERM");
     queueMicrotask(() => {
       child.emit("error", new Error("spawn EMFILE"));
     });
@@ -959,8 +961,10 @@ describe("runUiCli — node:sqlite re-exec guard (ADR-0013 D2)", () => {
       },
     );
     expect(code).toBe(1);
-    // The signal forwarders must be gone (no listener leak after the failure).
-    expect(child.listenerCount("exit")).toBeGreaterThanOrEqual(0);
+    // The signal forwarders must be gone (no listener leak after the failure): the
+    // process-level SIGINT/SIGTERM listener counts must be back to their pre-call baseline.
+    expect(process.listenerCount("SIGINT")).toBe(sigintBefore);
+    expect(process.listenerCount("SIGTERM")).toBe(sigtermBefore);
   });
 
   // Without these forwarders, a Ctrl-C during re-exec kills the PARENT (whose own SIGINT
@@ -976,6 +980,8 @@ describe("runUiCli — node:sqlite re-exec guard (ADR-0013 D2)", () => {
       killedWith.push(signal);
       return true;
     };
+    const sigintBefore = process.listenerCount("SIGINT");
+    const sigtermBefore = process.listenerCount("SIGTERM");
 
     const promise = runUiCli(
       [],
@@ -992,14 +998,19 @@ describe("runUiCli — node:sqlite re-exec guard (ADR-0013 D2)", () => {
     // guard runs synchronously (spawnFn is called synchronously, and nothing awaits before the
     // listeners are registered) — so both are already attached the instant `runUiCli` yields its
     // pending promise back to this line, with no need to wait a tick first.
+    // The forwarders are registered: one SIGINT and one SIGTERM listener added on `process`.
+    expect(process.listenerCount("SIGINT")).toBe(sigintBefore + 1);
+    expect(process.listenerCount("SIGTERM")).toBe(sigtermBefore + 1);
     process.emit("SIGINT");
     process.emit("SIGTERM");
     expect(killedWith).toEqual(["SIGINT", "SIGTERM"]);
 
     child.emit("exit", 0, null);
     expect(await promise).toBe(0);
-    // The forwarders must be gone once the child has exited (no listener leak).
-    expect(child.listenerCount("exit")).toBeGreaterThanOrEqual(0);
+    // The forwarders must be gone once the child has exited (no listener leak): the
+    // process-level SIGINT/SIGTERM listener counts must be back to their pre-call baseline.
+    expect(process.listenerCount("SIGINT")).toBe(sigintBefore);
+    expect(process.listenerCount("SIGTERM")).toBe(sigtermBefore);
   });
 
   // Regression pin (KEIKO-0443): the three "does not re-exec" tests below previously used the

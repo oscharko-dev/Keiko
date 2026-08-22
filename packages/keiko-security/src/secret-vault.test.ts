@@ -1059,7 +1059,7 @@ describe("createShardedLocalSecretVault — CRUD parity with the single-file lay
       level: "warn",
       category: "security",
       op: "security.vault.shard-unreadable",
-      errorKind: "Error",
+      errorKind: "EISDIR",
       extra: { count: 1 },
     });
     expect(Object.keys(event ?? {}).sort()).toEqual([

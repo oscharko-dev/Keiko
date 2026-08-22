@@ -276,7 +276,12 @@ function migrationsAppliedUpTo(schemaVersion: number): readonly string[] {
   );
 }
 
-function fallbackStoreFingerprint(keySource: VaultKeySource | undefined): StoreFingerprint {
+// A store whose schema could not be read is reported as `plaintext` with NO `keySource`: the key
+// tier that was resolved for it is not evidence about bytes nobody could read, and the contract's
+// `isStoreFingerprint` rejects a plaintext fingerprint that still names a key source — a rejected
+// fingerprint must never silently vanish from a support bundle (see the exporter's
+// `invalid-fingerprint` unavailability reason, the fail-closed backstop for exactly that).
+function fallbackStoreFingerprint(): StoreFingerprint {
   return {
     store: "memory-vault",
     schemaVersion: 0,
@@ -284,7 +289,6 @@ function fallbackStoreFingerprint(keySource: VaultKeySource | undefined): StoreF
     tableRowCounts: {},
     quickCheckOk: false,
     encryptionMode: "plaintext",
-    keySource,
   };
 }
 
@@ -300,16 +304,19 @@ export function computeStoreFingerprint(
 ): StoreFingerprint {
   try {
     const schemaVersion = safeUserVersion(db);
+    const encrypted = schemaVersion >= ENCRYPTION_SCHEMA_VERSION;
     return {
       store: "memory-vault",
       schemaVersion,
       migrationsApplied: migrationsAppliedUpTo(schemaVersion),
       tableRowCounts: safeTableRowCounts(db),
       quickCheckOk: safeQuickCheckOk(db),
-      encryptionMode: schemaVersion >= ENCRYPTION_SCHEMA_VERSION ? "encrypted" : "plaintext",
-      keySource,
+      encryptionMode: encrypted ? "encrypted" : "plaintext",
+      // `keySource` describes how THIS store's key was resolved; a plaintext store has no key in
+      // play, so naming a tier for it would contradict the contract (`isStoreFingerprint`).
+      ...(encrypted && keySource !== undefined ? { keySource } : {}),
     };
   } catch {
-    return fallbackStoreFingerprint(keySource);
+    return fallbackStoreFingerprint();
   }
 }

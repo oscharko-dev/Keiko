@@ -329,7 +329,7 @@
     {
       "op": "memory-vault.log.sink-failed",
       "category": "diagnostic",
-      "site": "packages/keiko-memory-vault/src/vault-log.ts:140",
+      "site": "packages/keiko-memory-vault/src/vault-log.ts:174",
       "package": "keiko-memory-vault"
     },
     {
@@ -659,13 +659,13 @@
     {
       "op": "security.vault.key-resolved",
       "category": "security",
-      "site": "packages/keiko-security/src/secret-vault.ts:272",
+      "site": "packages/keiko-security/src/secret-vault.ts:275",
       "package": "keiko-security"
     },
     {
       "op": "security.vault.shard-unreadable",
       "category": "security",
-      "site": "packages/keiko-security/src/secret-vault.ts:537",
+      "site": "packages/keiko-security/src/secret-vault.ts:540",
       "package": "keiko-security"
     },
     {
@@ -875,7 +875,7 @@
     {
       "op": "store.opened",
       "category": "setup",
-      "site": "packages/keiko-server/src/store/db.ts:919",
+      "site": "packages/keiko-server/src/store/db.ts:928",
       "package": "keiko-server"
     }
   ],

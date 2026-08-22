@@ -24,6 +24,13 @@
 // A field here carries counts, durations, and shape-gated error kinds (ADR-0128 D6: identifiers,
 // counts, and hashes only). A memory body, a tag, a scope coordinate, a vault key, and a
 // filesystem path never reach a field on this event.
+//
+// `op` and `extra` are CLOSED, not `string` / `Record<string, unknown>` (Finding: Thread 8 —
+// review flagged the previous open shape as a path by which a caller could send a memory body or
+// filesystem path through this package boundary). Every literal below is one this package's own
+// three producers (`db.ts`, `migrate-encrypt.ts`, `vault.ts`) already emit; a narrower union/
+// interface is still assignable to `ServerLogEvent`'s `op: string` / `extra?: Record<string,
+// unknown>`, so `processServerLogSink()` remains a valid `MemoryVaultLogSink` with no adapter.
 
 import { classifyErrorKind } from "@oscharko-dev/keiko-contracts";
 
@@ -31,16 +38,43 @@ export type MemoryVaultLogLevel = "debug" | "info" | "warn" | "error";
 
 export type MemoryVaultLogCategory = "memory" | "diagnostic";
 
+// The closed set of ops this package ever emits.
+export type MemoryVaultLogOp =
+  | "memory-vault.store.opened"
+  | "memory-vault.store.quarantined"
+  | "store.encryption-migrated"
+  | "memory-vault.log.sink-failed";
+
+// A closed mirror of cipher.ts's `VaultKeySource` ("env" | "keychain" | "keyfile"), duplicated
+// rather than imported: cipher.ts imports from db.ts (for keyfile hardening) and db.ts imports
+// from this file (to emit its own events), so an import here would complete a
+// cipher.ts -> db.ts -> vault-log.ts -> cipher.ts cycle. The same accepted, documented-duplication
+// tradeoff `ERROR_KIND_PATTERN` used across three packages before ADR-0173 consolidated it.
+export type MemoryVaultLogKeySource = "env" | "keychain" | "keyfile";
+
+// The closed, body-free `extra` schema: every field this package's producers have ever needed —
+// the retained key-resolution tier, whether a quarantine reopen succeeded, the encryption sweep's
+// scope transition and row count, and the op name a failed sink dropped. Never a memory body, a
+// tag, a scope coordinate, a vault key, or a filesystem path.
+export interface MemoryVaultLogExtra {
+  readonly keySource?: MemoryVaultLogKeySource | undefined;
+  readonly reopened?: boolean | undefined;
+  readonly fromScope?: "plaintext" | undefined;
+  readonly toScope?: "encrypted" | undefined;
+  readonly rowsMigrated?: number | undefined;
+  readonly droppedOp?: MemoryVaultLogOp | undefined;
+}
+
 export interface MemoryVaultLogEvent {
   // Omitted means `info`, matching the server sink's own default.
   readonly level?: MemoryVaultLogLevel | undefined;
   readonly category: MemoryVaultLogCategory;
-  readonly op: string;
+  readonly op: MemoryVaultLogOp;
   readonly correlationId?: string | undefined;
   readonly durationMs?: number | undefined;
   readonly status?: number | undefined;
   readonly errorKind?: string | undefined;
-  readonly extra?: Readonly<Record<string, unknown>> | undefined;
+  readonly extra?: Readonly<MemoryVaultLogExtra> | undefined;
 }
 
 export interface MemoryVaultLogSink {
@@ -127,7 +161,7 @@ export function emitMemoryVaultLogEvent(
 
 function reportFailedMemoryVaultLogSink(
   sink: MemoryVaultLogSink,
-  droppedOp: string,
+  droppedOp: MemoryVaultLogOp,
   cause: unknown,
 ): void {
   if (REPORTED_FAILED_SINKS.has(sink)) return;
@@ -149,7 +183,7 @@ function reportFailedMemoryVaultLogSink(
   warnFailedMemoryVaultLogSink(droppedOp, errorKind);
 }
 
-function warnFailedMemoryVaultLogSink(droppedOp: string, errorKind: string): void {
+function warnFailedMemoryVaultLogSink(droppedOp: MemoryVaultLogOp, errorKind: string): void {
   try {
     process.emitWarning("Keiko memory-vault log sink is failing; log lines are being dropped.", {
       type: "KeikoActivityLog",

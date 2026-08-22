@@ -37,6 +37,12 @@ type ResolveLocalVaultKeyOptions = Parameters<
   typeof import("@oscharko-dev/keiko-security/secret-vault").resolveLocalVaultKey
 >[0];
 
+// A deterministic, valid 32-byte-base64 env-tier key so the provider-credential vault resolves at
+// tier 1 (env) and never falls through to tier 2 (macOS Keychain, via
+// `createKeychainVaultKeyAccess`'s real `/usr/bin/security` spawn) — see the sibling
+// `deps-vault-key-securitylog-wiring.test.ts` for the same fix applied to the other four vaults.
+const WIRING_TEST_VAULT_KEY = Buffer.alloc(32, 7).toString("base64");
+
 let calls: ResolveLocalVaultKeyOptions[];
 
 vi.mock("@oscharko-dev/keiko-security/secret-vault", async (importOriginal) => {
@@ -95,7 +101,7 @@ describe("gateway-setup.ts — provider-credential vault wires resolveLocalVault
     const deps = buildUiHandlerDeps({
       configPath: undefined,
       evidenceDir,
-      env: { KEIKO_UI_DATA_DIR: uiDir },
+      env: { KEIKO_UI_DATA_DIR: uiDir, KEIKO_PROVIDER_CREDENTIALS_KEY: WIRING_TEST_VAULT_KEY },
       gatewayModelDiscovery: () => Promise.resolve(["wiring-test-model"]),
       gatewayEmbeddingProbe: (_config, ids) => Promise.resolve(ids),
       gatewaySetupTester: (_config, modelIds) =>

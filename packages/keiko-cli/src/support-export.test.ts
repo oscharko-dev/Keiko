@@ -295,6 +295,27 @@ describe("describeErrorKind", () => {
 });
 
 describe("buildSupportBundleManifest", () => {
+  it("names a fingerprint that fails the contract guard in storesUnavailable instead of dropping it", () => {
+    // A store that vanished from both lists would read as "never used" — the one claim a support
+    // bundle must not make about a store that exists (Wave 4a acceptance regression).
+    const contradictory = {
+      store: "memory-vault",
+      schemaVersion: 0,
+      migrationsApplied: [],
+      tableRowCounts: {},
+      quickCheckOk: false,
+      encryptionMode: "plaintext",
+      keySource: "env",
+    } as unknown as StoreFingerprint;
+    const manifest = buildSupportBundleManifest(
+      baseManifestInput({ storeFingerprints: [contradictory], storesUnavailable: [] }),
+    );
+    expect(manifest.storeFingerprints).toEqual([]);
+    expect(manifest.storesUnavailable).toEqual([
+      { store: "memory-vault", reasonKind: "invalid-fingerprint" },
+    ]);
+  });
+
   it("produces the exact manifest shape for the minimal Wave 1 bundle", () => {
     const manifest = buildSupportBundleManifest(
       baseManifestInput({

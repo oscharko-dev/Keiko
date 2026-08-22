@@ -232,9 +232,16 @@ describe("startSecurityLogTimer", () => {
   });
 
   it("is driven by performance.now, so a backwards wall clock cannot go negative", () => {
-    vi.spyOn(Date, "now").mockReturnValue(0);
+    // Date.now steps BACKWARDS between the start and the read: a Date.now-based timer would
+    // compute a negative delta here. performance.now is mocked to a known, forward-moving pair so
+    // the assertion pins the exact value a performance.now-based implementation must produce —
+    // discriminating this from a Date.now-based one, which `toBeGreaterThanOrEqual(0)` against a
+    // constant-0 Date.now mock could not (that passed for either implementation).
+    vi.spyOn(Date, "now").mockReturnValueOnce(5000).mockReturnValueOnce(1000);
+    const nowSpy = vi.spyOn(performance, "now");
+    nowSpy.mockReturnValueOnce(2000).mockReturnValueOnce(2017.5);
     const elapsed = startSecurityLogTimer();
-    expect(elapsed()).toBeGreaterThanOrEqual(0);
+    expect(elapsed()).toBe(17.5);
   });
 });
 

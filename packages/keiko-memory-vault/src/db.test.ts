@@ -10,6 +10,7 @@ import {
   statSync,
   writeFileSync,
 } from "node:fs";
+import { isStoreFingerprint } from "@oscharko-dev/keiko-contracts";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Worker } from "node:worker_threads";
@@ -296,6 +297,26 @@ describe("openMemoryDatabase — store.encryption-migrated wiring", () => {
 });
 
 describe("computeStoreFingerprint", () => {
+  it("names no keySource for a plaintext or unreadable store, so the contract guard accepts it", () => {
+    // Regression (#3244 review + Wave 4a acceptance): a corrupt vault file read as schema 0 and
+    // was reported as `plaintext` WITH the resolved `keySource`; the contract rejects that pair,
+    // and the exporter then had no fingerprint and no unavailability entry for the store.
+    const dir = mkdtempSync(join(tmpdir(), "keiko-vault-fp-"));
+    const corruptPath = join(dir, "keiko-memory.db");
+    writeFileSync(corruptPath, "garbage that is not a sqlite header");
+    const db = new DatabaseSync(corruptPath, { readOnly: true });
+    try {
+      const fingerprint = computeStoreFingerprint(db, "env");
+      expect(fingerprint.encryptionMode).toBe("plaintext");
+      expect(fingerprint.quickCheckOk).toBe(false);
+      expect("keySource" in fingerprint).toBe(false);
+      expect(isStoreFingerprint(fingerprint)).toBe(true);
+    } finally {
+      db.close();
+      rmSync(dir, { force: true, recursive: true });
+    }
+  });
+
   it("reports schemaVersion, table row counts, quickCheckOk, encryptionMode and keySource for a healthy vault", () => {
     const dir = freshDir();
     const dbPath = join(dir, "keiko-memory.db");

@@ -30,6 +30,7 @@ import {
   MemoryStorageError,
   MemoryStoragePreconditionError,
   MemoryStorageValidationError,
+  type MemoryContentCipher,
   type MemoryEvent,
   type MemoryVaultStore,
 } from "./index.js";
@@ -1306,5 +1307,37 @@ describe("activity-log seam: memory-vault.store.opened retains the key-resolutio
       });
       v.close();
     }).not.toThrow();
+  });
+
+  // Finding: store-open ordering. `createMemoryVault` used to emit `memory-vault.store.opened`
+  // right after `openMemoryDatabase`, BEFORE `resolveBodySuppressionKey` ran. A cipher that fails
+  // on its very first `sealString` call (the fresh-vault path, which mints and persists a new
+  // body-suppression HMAC key) makes `createMemoryVault` throw, but the previous ordering had
+  // already reported the open as successful by then. RED (before fix): this test's second
+  // assertion fails because `opened` has length 1, not 0.
+  it("emits no store-opened event when initialization fails after the store is opened", () => {
+    const dir = freshDir();
+    const { sink, events } = recordingSink();
+    const throwingCipher: MemoryContentCipher = {
+      sealString: (): string => {
+        throw new Error("cipher unavailable");
+      },
+      openString: (envelope: string): string => envelope,
+      sealBytes: (buf: Buffer): Buffer => buf,
+      openBytes: (envelope: Buffer): Buffer => envelope,
+      isSealed: (): boolean => false,
+    };
+
+    expect(() => {
+      createMemoryVault({
+        memoryDir: dir,
+        env: { KEIKO_MEMORY_DIR: dir },
+        cipher: throwingCipher,
+        logSink: sink,
+      });
+    }).toThrow();
+
+    const opened = events.filter((event) => event.op === "memory-vault.store.opened");
+    expect(opened).toHaveLength(0);
   });
 });

@@ -50,10 +50,13 @@ import {
   KEYCHAIN_SPAWN_TIMEOUT_MS,
   keychainItemNotFound,
 } from "./macos-keychain.js";
-// Independent activity-log seam (ADR-0019, w4a-security-log-port) and the hardened error-class
-// classifier this package already applies to its persisted quarantine diagnostic.
-import { emitSecurityLogEvent, startSecurityLogTimer, type SecurityLogSink } from "./log-port.js";
-import { hardenedErrorClass } from "./sqlite-corruption.js";
+// Independent activity-log seam (ADR-0019, w4a-security-log-port).
+import {
+  emitSecurityLogEvent,
+  securityErrorKind,
+  startSecurityLogTimer,
+  type SecurityLogSink,
+} from "./log-port.js";
 
 const KEY_BYTES = 32;
 const STORE_VERSION = 1;
@@ -535,7 +538,7 @@ function emitShardUnreadable(sink: SecurityLogSink | undefined, cause: unknown):
     level: "warn",
     category: "security",
     op: "security.vault.shard-unreadable",
-    errorKind: hardenedErrorClass(cause),
+    errorKind: securityErrorKind(cause),
     // A single unreadable file per call; never the filename (it decodes to the reference) or the
     // read error's message (it can carry the resolved path).
     extra: { count: 1 },

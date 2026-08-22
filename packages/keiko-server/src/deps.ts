@@ -2857,6 +2857,7 @@ function loadRuntimeGatewayConfig(
     env: options.env,
     evidenceDir: resolvedEvidenceDir,
     securityLogSink: processServerLogSink(),
+    diagnostics: options.diagnostics,
   });
   const secretResolver = createProviderSecretResolver({
     configPath: effectiveConfigPath,
