@@ -6,7 +6,7 @@
  * Extracted so neither script grows its own copy (AGENTS.md section 5: reuse first).
  */
 
-export function githubRepositoryFromRemote(remoteUrl) {
+function githubRepositoryFromRemote(remoteUrl) {
   const trimmed = remoteUrl.trim();
   const httpsMatch = /^https:\/\/github\.com\/([^/]+\/[^/]+?)(?:\.git)?$/u.exec(trimmed);
   if (httpsMatch !== null) return httpsMatch[1];
