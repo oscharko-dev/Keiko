@@ -2591,8 +2591,8 @@ describe("sendDesktopChatStream — correlation id threading", () => {
     );
 
     const init = fetchMock.mock.calls[0]?.[1] as RequestInit;
-    // buildBffHeaders returns a Headers instance (#3241 review — the only way to preserve every
-    // HeadersInit shape), so read it through the Headers API rather than casting to a plain record.
+    // buildBffHeaders returns a plain record (#3241 review: it merges every HeadersInit shape into
+    // it); normalize through the Headers API so the assertion stays case-insensitive.
     const headers = new Headers(init.headers);
     expect(headers.get(CORRELATION_HEADER)).toMatch(/^[A-Za-z0-9._-]{8,128}$/);
     expect(headers.get("Accept")).toBe("text/event-stream");
