@@ -154,6 +154,7 @@
     "check:release-required-workflows": "node scripts/check-release-required-workflow-names.mjs",
     "check:release-impact": "node scripts/check-release-impact.mjs",
     "check:release-impact:publish": "node scripts/check-release-impact.mjs --publish",
+    "check:release-alignment": "node scripts/check-release-alignment.mjs",
     "check:portable-manifest": "node scripts/check-portable-runtime-manifest.mjs --contract-example docs/release/portable-runtime-artifact-contract.md",
     "check:portable-approvals": "node scripts/check-portable-runtime-approvals.mjs",
     "portable:stage": "node scripts/stage-portable-runtime.mjs",

@@ -8,7 +8,7 @@ import {
   machineToken,
   safeProperty,
 } from "./observability/error-classification.js";
-import { closeReasonVocabulary } from "./observability/log-redaction.js";
+import { closeReasonVocabulary, redactLogFields } from "./observability/log-redaction.js";
 import { redactRoutePath } from "./observability/route-template.js";
 import { createFileServerLogSink } from "./observability/server-log.js";
 import { causeChain, keikoStackFrames } from "./observability/stack-frames.js";
@@ -69,7 +69,11 @@ export interface ServerDiagnosticRecord {
   // The content-free error class (never the raw message), e.g. `Error`, `TransportError`.
   readonly errorClass: string;
   // A code-declared, allowlisted summary. Foreign error/provider/customer text is never read.
-  readonly message: string;
+  // Typed as the closed `ServerDiagnosticSummary` union (Issue #3245) rather than `string`, so a
+  // producer that assigns free text no longer compiles — `allowlistedSummary`'s runtime check
+  // below remains as defence in depth for a record built without going through the type checker
+  // (e.g. `JSON.parse`d input, or a caller that casts around the type).
+  readonly message: ServerDiagnosticSummary;
   // A stable machine-readable code when the error carries one (coded errors, GatewayError.code).
   readonly code?: string | undefined;
   // Usage a streaming gateway call had accumulated before failing mid-stream
@@ -147,23 +151,38 @@ export const defaultServerDiagnosticSink: ServerDiagnosticSink = {
     // (`sanitizeDiagnosticRecord`: a CRLF-bearing or otherwise out-of-shape id never reaches
     // either track — this sink is the choke point for the three direct `.record()` callers as
     // much as for `emitServerDiagnostic`). Then the stderr line carries the SAME redaction
-    // guarantee as the activity-log file line: the record is never serialised directly;
-    // `diagnosticActivityLogFields` already projects it onto allowlisted, bounded fields for the
-    // file sink (ADR-0173 D11 g29) and is reused here rather than a second ad-hoc redaction, so
-    // both channels share one contract.
+    // guarantee as the activity-log file line: `diagnosticActivityLogFields` projects the record
+    // onto allowlisted, bounded FIELD NAMES (ADR-0173 D11 g29), but a field name allowlist alone
+    // does not check what a caller put IN a field's value — that is `redactLogFields`'s job, and
+    // the file sink already runs every `extra` field through it (`formatServerLogLine`). Running
+    // the same projected fields through `redactLogFields` here, not just through the name
+    // projection, is what actually makes the two channels share one contract instead of only
+    // sharing the field list.
     const sanitized = sanitizeDiagnosticRecord(record);
     const safeLine = {
       correlationId: sanitized.correlationId,
       timestamp: sanitized.timestamp,
       operation: sanitized.operation,
       errorClass: sanitized.errorClass,
-      ...diagnosticActivityLogFields(sanitized),
+      ...redactLogFields(diagnosticActivityLogFields(sanitized)),
     };
     // eslint-disable-next-line no-console
     console.error(`[keiko-server:diagnostic] ${JSON.stringify(safeLine)}`);
     appendDiagnosticToActivityLog(sanitized);
   },
 };
+
+// `code` is a producer-declared machine token: coded-error codes, `GatewayError.code`, or a
+// colon-joined `key=value` detail string (#3245 moved per-invocation counts and closed labels here
+// when `message` became a closed vocabulary). Bounded at the writer, not only at each producer: no
+// whitespace, a fixed alphabet, at most 256 characters — a value outside the shape is dropped, never
+// written under a marker, because an out-of-shape code is evidence of a producer bug, not content
+// worth preserving.
+const DIAGNOSTIC_CODE_SHAPE = /^[A-Za-z0-9][A-Za-z0-9._:=/-]{0,255}$/u;
+
+function boundedDiagnosticCode(code: string | undefined): string | undefined {
+  return code !== undefined && DIAGNOSTIC_CODE_SHAPE.test(code) ? code : undefined;
+}
 
 // Omits an absent value rather than writing it as `null`; see the projection contract below.
 function addBoundedField(
@@ -210,7 +229,7 @@ const UNSUPPORTED_REASON_FALLBACK = "unrecognised-mode";
 // `ts`; `correlationId`, `operation` and `errorClass` ride on the envelope.
 function diagnosticActivityLogFields(record: ServerDiagnosticRecord): Record<string, unknown> {
   const fields: Record<string, unknown> = { source: record.source };
-  addBoundedField(fields, "code", record.code);
+  addBoundedField(fields, "code", boundedDiagnosticCode(record.code));
   if (
     record.parentCorrelationId !== undefined &&
     isValidCorrelationId(record.parentCorrelationId)
@@ -302,13 +321,16 @@ export const DEFAULT_SERVER_DIAGNOSTIC_SUMMARY = "server-operation-failed";
 // degrades to the default rather than extending the diagnostic trust boundary.
 //
 // Every literal `message` this module (or a caller building a `ServerDiagnosticRecord` by hand,
-// e.g. `emitEvidenceRetentionDiagnostic` below) ever assigns MUST be a member of this list: since
+// e.g. `emitEvidenceRetentionDiagnostic` below) ever assigns MUST be a member of this list.
+// `ServerDiagnosticRecord.message` is typed `ServerDiagnosticSummary` (Issue #3245), so a producer
+// assigning a string that is not a member of this array fails `npm run typecheck` outright — the
+// vocabulary is now closed at compile time, not merely by convention. `allowlistedSummary` (and
+// `diagnosticActivityLogFields`'s use of it below) remains as runtime defence in depth for a
+// record that reaches this module without having gone through the type checker (e.g. a value
+// reconstructed from persisted/JSON-parsed data, or a caller that casts around the type): since
 // ADR-0173 D11 g29 the activity log projects `message` (as `diagnosticSummary`) through
-// `allowlistedSummary`, so an entry missing here does not leak — it silently loses its summary on
-// the log line instead. `message`'s own type stayed a plain `string` rather than
-// `ServerDiagnosticSummary` (which would force every call site to satisfy this list at compile
-// time) to keep the historical `redact`-callback compatibility path in `compatibilitySummary`
-// working unchanged; this list is the runtime enforcement of the same closed vocabulary instead.
+// `allowlistedSummary`, so a record whose `message` fails the runtime check does not leak — it
+// silently loses its summary on the log line instead of ever being echoed as-is.
 const SERVER_DIAGNOSTIC_SUMMARIES = [
   DEFAULT_SERVER_DIAGNOSTIC_SUMMARY,
   "Provider verification failed without exposing upstream response details.",
@@ -342,6 +364,74 @@ const SERVER_DIAGNOSTIC_SUMMARIES = [
   "Evidence retention deleted manifests.",
   "Semantic memory retrieval skipped incompatible embeddings.",
   "Semantic memory retrieval was disabled for this turn.",
+  "Harness run reached a terminal completed state.",
+  "Harness run reached a terminal failed state.",
+  "Harness run reached a terminal cancelled state.",
+  "Bug-investigation workflow reached a terminal completed state.",
+  "Bug-investigation workflow reached a terminal failed state.",
+  "Unit-test workflow reached a terminal completed state.",
+  "Unit-test workflow reached a terminal failed state.",
+  // Issue #3245: `message` narrowed from `string` to this closed union surfaced every producer
+  // that had been assigning free/bounded-but-uncatalogued text. Each entry below is the literal
+  // a real producer already assigned (or, where the producer used to embed per-invocation
+  // dynamic data via a template literal, the fixed condition label that replaced it — the
+  // dynamic detail moved to the record's existing `code` field, which already exists for exactly
+  // this "stable machine-readable code" purpose, or was dropped outright where it was unbounded
+  // free text, e.g. figmaSnapshotRoutes.ts's former `err.message` echo).
+  "chat-memory-auto-maintenance-failed",
+  "chat-memory-post-commit-side-effect-failed",
+  "sse-backpressure",
+  "sse-subscriber-write-failed",
+  "sse-listener-failed",
+  "runtime-event-invalid",
+  "runtime-exit-code",
+  "runtime-stderr-counts",
+  "runtime-stream-drain-failed",
+  "runtime-approval-revocation-failed",
+  "runtime-handshake-failed",
+  "safe-activity-dropped-validation-rejected",
+  "safe-activity-dropped-redactor-collapsed",
+  "safe-activity-dropped-projection-rejected",
+  "safe-activity-dropped-capacity-rejected",
+  "safe-activity-dropped-subscriber-rejected",
+  "safe-activity-purged-stop",
+  "safe-activity-purged-takeover",
+  "safe-activity-purged-shutdown",
+  "safe-activity-purged-workspace-switch",
+  "safe-activity-purged-expiry",
+  "workspace-discovery-failed",
+  "edit-transport-failed",
+  "prepare-bridge-close",
+  "prepare-run-root-remove",
+  "tool-facade-failed",
+  "sidecar-gateway-evidence-aggregation-failed",
+  "coding-sidecar-gateway-tool-contract-rejected",
+  "coding-sidecar-gateway-tool-adoption-gap",
+  "Local credential migration failed; plaintext config remains in place.",
+  "Editor local-history capture failed.",
+  "Verification execution failed unexpectedly.",
+  "A verification event subscriber failed.",
+  "Model discovery exceeded the discovery cap; setup continued with the retained models.",
+  "Setup skipped models the gateway declared as unsupported modes or that failed the embedding probe.",
+  "gateway-setup-audit-validation-failed",
+  "entailment-claim-judging-incomplete",
+  "entailment stage failed; degraded to WARN",
+  "model-incompatible",
+  "capability-unenriched",
+  "model-port-unavailable",
+  "grounded-memory-enrichment-failed",
+  "advisory-phase-summary",
+  "salience-extraction-diagnostic",
+  "salience-capture-dropped-queue-full",
+  "salience-capture-summary",
+  "figma-internal-error",
+  "Network isolation probe failed; verification enforcement defaults to fail-closed.",
+  "SSE stream destroyed because the client stopped draining.",
+  "grounded-preview-citations-row-dropped",
+  "release-impact-bundled-catalog-corrupted",
+  "memory-consolidation-scheduled-job-failed",
+  "functional-workspace-read-not-found",
+  "functional-workspace-read-permission-denied",
 ] as const;
 
 export type ServerDiagnosticSummary = (typeof SERVER_DIAGNOSTIC_SUMMARIES)[number];

@@ -32,6 +32,13 @@ import {
 import { createInMemoryUiStore } from "./store/index.js";
 import type { RouteContext, RouteResult } from "./routes.js";
 import { createUiServer, UI_HOST } from "./server.js";
+import type { ServerDiagnosticRecord } from "./diagnostics-log.js";
+import {
+  createBufferedServerLogSink,
+  createServerLogger,
+  resetServerLogger,
+  setServerLogger,
+} from "./observability/index.js";
 
 function makeReq(payload: unknown): IncomingMessage {
   const json = JSON.stringify(payload);
@@ -986,6 +993,86 @@ describe("memory consolidation job handlers", () => {
     const serialized = JSON.stringify(getResult.body);
     expect(serialized).not.toContain(secret);
     expect(serialized).not.toContain("/srv/vault");
+  });
+
+  it("logs a content-free diagnostic when the scheduled run throws (#2902 w4b)", async () => {
+    // FAILS BEFORE: prior to this fix the catch{} around the scheduled run's engine call
+    // discarded the thrown error entirely — no diagnostic was ever emitted, so `records` below
+    // stayed empty and this assertion failed. PASSES AFTER: a structured, content-free diagnostic
+    // now records that the job failed and why (error CLASS only), before the job is marked failed.
+    const secret = "sk-" + "test0ABC123DEF456GHI789";
+    const rawMessage = `embedding read /srv/vault/embeddings.db failed: token ${secret}`;
+    const vault = makeVault();
+    insertAcceptedMemory(vault, { id: "m-1", body: "user prefers tabs in editor" });
+    insertAcceptedMemory(vault, { id: "m-2", body: "user prefers tabs in the editor" });
+    const faulty: MemoryVaultStore = {
+      ...vault,
+      getEmbeddings: () => {
+        throw new Error(rawMessage);
+      },
+    };
+    const records: ServerDiagnosticRecord[] = [];
+    const deps = makeDeps({
+      memoryVault: faulty,
+      diagnostics: { record: (record) => records.push(record) },
+    });
+    const createResult = await handleCreateConsolidationJob(
+      makeCtx("/api/memory/consolidation/jobs", { scopes: [{ kind: "user", userId: "u-1" }] }),
+      deps,
+    );
+    expect(createResult.status).toBe(202);
+    await flushImmediate();
+    expect(records).toHaveLength(1);
+    const [record] = records;
+    if (record === undefined) throw new Error("expected a diagnostic record");
+    expect(record.source).toBe("memory-consolidation.scheduled-job");
+    expect(record.operation).toBe("memory.consolidation.job.run");
+    expect(record.errorClass).toBe("Error");
+    expect(record.correlationId.length).toBeGreaterThan(0);
+    const serialized = JSON.stringify(record);
+    expect(serialized).not.toContain(secret);
+    expect(serialized).not.toContain("/srv/vault");
+  });
+
+  describe("consolidation.summary.fallback activity-log wiring (#2902 w6)", () => {
+    afterEach(() => {
+      resetServerLogger();
+    });
+
+    // FAILS BEFORE: buildRunOptions never set `logSink`, so `emitConsolidationLogEvent` no-op'd on
+    // every fallback and `consolidation.summary.fallback` never reached `server.log` no matter who
+    // was listening. PASSES AFTER: the job's own id is wired through as the composition-root sink's
+    // correlationId, so an operator can join the fallback reason back to the specific job that
+    // produced it.
+    it("emits a durable, job-correlated line when the summary generator is absent", async () => {
+      const vault = makeVault();
+      insertAcceptedMemory(vault, { id: "m-a", body: "use tabs" });
+      insertAcceptedMemory(vault, { id: "m-b", body: "prefer compact diffs" });
+      insertAcceptedMemory(vault, { id: "m-c", body: "keep PR titles short" });
+      const deps = makeDeps({ memoryVault: vault });
+      const sink = createBufferedServerLogSink();
+      setServerLogger(createServerLogger({ sink, level: "info" }));
+
+      const createResult = await handleCreateConsolidationJob(
+        makeCtx("/api/memory/consolidation/jobs", {
+          scopes: [{ kind: "user", userId: "u-1" }],
+          settings: { jaccardThreshold: 0 },
+        }),
+        deps,
+      );
+      expect(createResult.status).toBe(202);
+      const createdJob = asJobEnvelope(createResult).job;
+      await flushImmediate();
+
+      expect(sink.events).toContainEqual(
+        expect.objectContaining({
+          category: "consolidation",
+          op: "consolidation.summary.fallback",
+          correlationId: createdJob.id,
+          extra: { reason: "absent" },
+        }),
+      );
+    });
   });
 
   describe("settings range validation", () => {

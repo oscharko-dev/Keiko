@@ -3,6 +3,12 @@
   "generatedBy": "scripts/generate-op-catalog.mjs",
   "entries": [
     {
+      "op": "<dynamic>",
+      "category": "unknown",
+      "site": "packages/keiko-cli/src/support-analyze.ts:516",
+      "package": "keiko-cli"
+    },
+    {
       "op": "process.exiting",
       "category": "process",
       "site": "packages/keiko-cli/src/ui.ts:448",
@@ -327,6 +333,18 @@
       "package": "keiko-local-knowledge"
     },
     {
+      "op": "consolidation.log.sink-failed",
+      "category": "diagnostic",
+      "site": "packages/keiko-memory-consolidation/src/log-port.ts:119",
+      "package": "keiko-memory-consolidation"
+    },
+    {
+      "op": "consolidation.summary.fallback",
+      "category": "consolidation",
+      "site": "packages/keiko-memory-consolidation/src/consolidate.ts:465",
+      "package": "keiko-memory-consolidation"
+    },
+    {
       "op": "memory-vault.log.sink-failed",
       "category": "diagnostic",
       "site": "packages/keiko-memory-vault/src/vault-log.ts:174",
@@ -366,6 +384,12 @@
       "op": "<dynamic>",
       "category": "embedding",
       "site": "packages/keiko-model-gateway/src/openai-embedding-adapter.ts:994",
+      "package": "keiko-model-gateway"
+    },
+    {
+      "op": "chat.request.dispatch",
+      "category": "gateway",
+      "site": "packages/keiko-model-gateway/src/openai-adapter.ts:708",
       "package": "keiko-model-gateway"
     },
     {
@@ -671,25 +695,19 @@
     {
       "op": "<dynamic>",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/diagnostics-log.ts:280",
+      "site": "packages/keiko-server/src/diagnostics-log.ts:299",
       "package": "keiko-server"
     },
     {
       "op": "<dynamic>",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/observability/server-log.ts:734",
+      "site": "packages/keiko-server/src/observability/server-log.ts:738",
       "package": "keiko-server"
     },
     {
       "op": "<dynamic>",
       "category": "unknown",
-      "site": "packages/keiko-server/src/observability/server-logger.ts:153",
-      "package": "keiko-server"
-    },
-    {
-      "op": "<dynamic>",
-      "category": "unknown",
-      "site": "packages/keiko-server/src/observability/server-logger.ts:180",
+      "site": "packages/keiko-server/src/observability/server-logger.ts:154",
       "package": "keiko-server"
     },
     {
@@ -699,9 +717,15 @@
       "package": "keiko-server"
     },
     {
+      "op": "<dynamic>",
+      "category": "unknown",
+      "site": "packages/keiko-server/src/observability/server-logger.ts:182",
+      "package": "keiko-server"
+    },
+    {
       "op": "chat.turn.started",
       "category": "gateway",
-      "site": "packages/keiko-server/src/chat-handlers.ts:1687",
+      "site": "packages/keiko-server/src/chat-handlers.ts:1688",
       "package": "keiko-server"
     },
     {
@@ -887,13 +911,13 @@
     {
       "op": "server-log.write-failed",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/observability/server-log.ts:326",
+      "site": "packages/keiko-server/src/observability/server-log.ts:330",
       "package": "keiko-server"
     },
     {
       "op": "server-log.write-failed",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/observability/server-log.ts:352",
+      "site": "packages/keiko-server/src/observability/server-log.ts:356",
       "package": "keiko-server"
     },
     {
@@ -906,6 +930,18 @@
       "op": "store.opened",
       "category": "setup",
       "site": "packages/keiko-server/src/store/db.ts:928",
+      "package": "keiko-server"
+    },
+    {
+      "op": "voice.realtime.session-ended",
+      "category": "http",
+      "site": "packages/keiko-server/src/voice-realtime.ts:440",
+      "package": "keiko-server"
+    },
+    {
+      "op": "voice.realtime.session-started",
+      "category": "http",
+      "site": "packages/keiko-server/src/voice-realtime.ts:358",
       "package": "keiko-server"
     }
   ],

@@ -94,6 +94,7 @@ const KNOWN_CATEGORIES = new Set<string>([
   "security",
   "diagnostic",
   "process",
+  "consolidation",
 ]);
 
 // A binding resolved once at `child()` time so the emit path never re-partitions the context.

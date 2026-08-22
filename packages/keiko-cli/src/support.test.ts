@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { DatabaseSync } from "node:sqlite";
 import { tmpdir } from "node:os";
@@ -89,10 +90,17 @@ describe("parseSupportArgs", () => {
     expect(parsed.kind).toBe("usage");
   });
 
-  it("parses export flags, defaulting absent ones to undefined", () => {
+  it("parses export flags, defaulting absent ones to undefined/false/empty", () => {
     expect(parseSupportArgs(["export"])).toEqual({
       kind: "export",
-      value: { out: undefined, stateDir: undefined, maxBytes: undefined },
+      value: {
+        out: undefined,
+        stateDir: undefined,
+        maxBytes: undefined,
+        includeUiLog: false,
+        iUnderstandUnredacted: false,
+        includeEvidenceRunIds: [],
+      },
     });
     expect(
       parseSupportArgs([
@@ -103,11 +111,29 @@ describe("parseSupportArgs", () => {
         "/tmp/.keiko",
         "--max-bytes",
         "100",
+        "--include-ui-log",
+        "--i-understand-this-is-unredacted",
+        "--include-evidence",
+        "run-a, run-b,,run-c",
       ]),
     ).toEqual({
       kind: "export",
-      value: { out: "/tmp/x.jsonl", stateDir: "/tmp/.keiko", maxBytes: 100 },
+      value: {
+        out: "/tmp/x.jsonl",
+        stateDir: "/tmp/.keiko",
+        maxBytes: 100,
+        includeUiLog: true,
+        iUnderstandUnredacted: true,
+        includeEvidenceRunIds: ["run-a", "run-b", "run-c"],
+      },
     });
+  });
+
+  it("parses --include-ui-log alone as consent NOT given (the confirmation flag is separate)", () => {
+    const parsed = parseSupportArgs(["export", "--include-ui-log"]);
+    expect(parsed.kind).toBe("export");
+    expect(parsed.kind === "export" && parsed.value.includeUiLog).toBe(true);
+    expect(parsed.kind === "export" && parsed.value.iUnderstandUnredacted).toBe(false);
   });
 
   it("rejects a --max-bytes that is not a positive integer", () => {
@@ -130,12 +156,79 @@ describe("parseSupportArgs", () => {
       parseSupportArgs(["analyze", "bundle.jsonl", "--correlation-id", "req-1", "--json"]),
     ).toEqual({
       kind: "analyze",
-      value: { file: "bundle.jsonl", correlationId: "req-1", json: true },
+      value: {
+        file: "bundle.jsonl",
+        correlationId: "req-1",
+        json: true,
+        clusters: false,
+        seed: false,
+        emitFixture: undefined,
+      },
     });
     expect(parseSupportArgs(["analyze", "bundle.jsonl"])).toEqual({
       kind: "analyze",
-      value: { file: "bundle.jsonl", correlationId: undefined, json: false },
+      value: {
+        file: "bundle.jsonl",
+        correlationId: undefined,
+        json: false,
+        clusters: false,
+        seed: false,
+        emitFixture: undefined,
+      },
     });
+  });
+
+  // Wave 6 (epic #3233 closeout, gap #1): --clusters/--seed/--emit-fixture now parse.
+  it("parses --clusters, --seed, and --emit-fixture", () => {
+    expect(parseSupportArgs(["analyze", "bundle.jsonl", "--clusters"])).toEqual({
+      kind: "analyze",
+      value: {
+        file: "bundle.jsonl",
+        correlationId: undefined,
+        json: false,
+        clusters: true,
+        seed: false,
+        emitFixture: undefined,
+      },
+    });
+    expect(
+      parseSupportArgs([
+        "analyze",
+        "bundle.jsonl",
+        "--correlation-id",
+        "req-1",
+        "--seed",
+        "--emit-fixture",
+        "out.ts",
+      ]),
+    ).toEqual({
+      kind: "analyze",
+      value: {
+        file: "bundle.jsonl",
+        correlationId: "req-1",
+        json: false,
+        clusters: false,
+        seed: true,
+        emitFixture: "out.ts",
+      },
+    });
+  });
+
+  it("rejects --seed without --correlation-id", () => {
+    expect(parseSupportArgs(["analyze", "bundle.jsonl", "--seed"]).kind).toBe("usage");
+  });
+
+  it("rejects --emit-fixture without --correlation-id", () => {
+    expect(parseSupportArgs(["analyze", "bundle.jsonl", "--emit-fixture", "out.ts"]).kind).toBe(
+      "usage",
+    );
+  });
+
+  it("rejects --emit-fixture missing its value", () => {
+    expect(
+      parseSupportArgs(["analyze", "bundle.jsonl", "--correlation-id", "req-1", "--emit-fixture"])
+        .kind,
+    ).toBe("usage");
   });
 });
 
@@ -179,12 +272,15 @@ describe("runSupportCli export", () => {
     });
 
     expect(code).toBe(0);
-    expect(c.out()).toContain("Wrote 3 lines to");
+    // manifest + config-snapshot (always attached, Wave 6) + the two raw content lines.
+    expect(c.out()).toContain("Wrote 4 lines to");
     const outPath = join(outDir, "keiko-support-2026-08-21T12-00-00.000Z.jsonl");
     expect(existsSync(outPath)).toBe(true);
     const written = readFileSync(outPath, "utf8");
-    const [manifestLine, ...logLines] = written.trimEnd().split("\n");
+    const [manifestLine, configSnapshotLine, ...logLines] = written.trimEnd().split("\n");
     expect(logLines).toEqual([rotatedLine, currentLine]);
+    const configSnapshot = JSON.parse(configSnapshotLine ?? "{}") as Record<string, unknown>;
+    expect(configSnapshot.$section).toBe("config-snapshot");
     const manifest: Record<string, unknown> = JSON.parse(manifestLine ?? "{}") as Record<
       string,
       unknown
@@ -197,13 +293,61 @@ describe("runSupportCli export", () => {
     expect(manifest.sourceLogFiles).toEqual(["server-2026-08-19.log", "server.log"]);
     expect(manifest.truncatedLogFiles).toEqual([]);
     expect(manifest.skippedLogFiles).toEqual([]);
-    expect(manifest.sectionsExcluded).toEqual([]);
+    // Wave 6: "ui-log" is always named here unless BOTH --include-ui-log AND
+    // --i-understand-this-is-unredacted were passed — neither was, here.
+    expect(manifest.sectionsExcluded).toEqual(["ui-log"]);
     expect(manifest.evidenceIndexCount).toBe(2);
     // The manifest's auditSummary must carry the audit result MINUS the raw stateDir path (which
     // embeds the operator's OS username on a real machine): stateDirSource above already says
     // "default vs. override" without the absolute path.
     expect(manifest.auditSummary).toEqual({ ok: HEALTHY_AUDIT.ok, classes: HEALTHY_AUDIT.classes });
     expect(written).not.toContain(HEALTHY_AUDIT.stateDir);
+  });
+
+  // Regression pin: `redactLogFields`'s field-NAME denylist matches only an exact normalized
+  // whole name (`log-redaction.ts`'s `DENIED_FIELD_NAMES`/`normalizeLogFieldName`). Every
+  // config-snapshot field name is collected with the literal `KEIKO_` prefix still attached
+  // (`keikoConfigEnvFields`), so normalization fuses the prefix into the rest of the name —
+  // `KEIKO_LOCAL_KNOWLEDGE_KEY` normalizes to `keikolocalknowledgekey`, which can never equal the
+  // denylist's `key` entry. Safety then falls entirely to the VALUE-shape heuristics, which do not
+  // catch a hex-only secret (lowercase + digits only never sees the uppercase class the
+  // high-entropy check requires) or any other operator-chosen credential shape those heuristics
+  // were never designed to enumerate. `keikoConfigEnvFields` must refuse to even collect a
+  // credential-shaped KEY/SECRET/TOKEN/CREDENTIAL(S) env name, independent of its value.
+  it("never embeds a KEIKO_*_KEY/_SECRET/_TOKEN/_CREDENTIALS env value in config-snapshot, even one the value-shape redactor cannot catch", async () => {
+    writeFileSync(join(stateDir, "logs", "server.log"), "");
+
+    const hexOnlyEnvValue = "a1b2c3d4e5f6".repeat(5).slice(0, 64);
+    const secretEnv = {
+      ...AUDIT_ENV,
+      KEIKO_LOCAL_KNOWLEDGE_KEY: hexOnlyEnvValue,
+      KEIKO_PROVIDER_TOKEN_GITHUB: hexOnlyEnvValue,
+      KEIKO_CODING_APP_SESSION_LAUNCHER_SECRET: hexOnlyEnvValue,
+      KEIKO_ATLASSIAN_CONNECTOR_CREDENTIALS_KEY: hexOnlyEnvValue,
+    };
+
+    const c = makeIo();
+    const code = await runSupportCli(["export", "--state-dir", stateDir], c.io, secretEnv, {
+      cwd: outDir,
+      now: () => new Date("2026-08-21T12:00:00.000Z"),
+      auditDeps: healthyAuditDeps(),
+      evidenceStore: seededEvidenceStore([]),
+    });
+
+    expect(code).toBe(0);
+    const outPath = join(outDir, "keiko-support-2026-08-21T12-00-00.000Z.jsonl");
+    const written = readFileSync(outPath, "utf8");
+    // The raw secret value must never reach the bundle, and none of the credential-shaped field
+    // names may even be attached (excluded entirely, not merely redacted-to-a-marker).
+    expect(written).not.toContain(hexOnlyEnvValue);
+    const [, configSnapshotLine] = written.trimEnd().split("\n");
+    const configSnapshot = JSON.parse(configSnapshotLine ?? "{}") as {
+      fields: Record<string, unknown>;
+    };
+    expect(configSnapshot.fields).not.toHaveProperty("KEIKO_LOCAL_KNOWLEDGE_KEY");
+    expect(configSnapshot.fields).not.toHaveProperty("KEIKO_PROVIDER_TOKEN_GITHUB");
+    expect(configSnapshot.fields).not.toHaveProperty("KEIKO_CODING_APP_SESSION_LAUNCHER_SECRET");
+    expect(configSnapshot.fields).not.toHaveProperty("KEIKO_ATLASSIAN_CONNECTOR_CREDENTIALS_KEY");
   });
 
   it("records a log file that vanishes between discovery and read as skipped, not aborted", async () => {
@@ -321,7 +465,9 @@ describe("runSupportCli export", () => {
 
     expect(code).toBe(0);
     const written = readFileSync(join(outDir, "tail.jsonl"), "utf8");
-    const [manifestLine, ...logLines] = written.trimEnd().split("\n");
+    // Skip the always-attached config-snapshot $section line (Wave 6) between the manifest and
+    // the raw log content.
+    const [manifestLine, , ...logLines] = written.trimEnd().split("\n");
     const manifest: Record<string, unknown> = JSON.parse(manifestLine ?? "{}") as Record<
       string,
       unknown
@@ -561,6 +707,116 @@ describe("runSupportCli export", () => {
       "keiko support export: computing store fingerprints (may take a while on a large local-knowledge index)...",
     );
   });
+
+  // Wave 6, design doc §6.3: ui.log carries the UI/BFF process's raw, unredacted stdout+stderr, so
+  // it is excluded by default — RED before this wave existed (there was no ui.log logic at all).
+  function bundleLines(outPath: string): readonly Record<string, unknown>[] {
+    return readFileSync(outPath, "utf8")
+      .trimEnd()
+      .split("\n")
+      .map((line) => JSON.parse(line) as Record<string, unknown>);
+  }
+
+  it("excludes ui.log by default: no ui-log section, and sectionsExcluded names it", async () => {
+    writeFileSync(join(stateDir, "ui.log"), "TypeError: boom at /Users/jsmith/app\n");
+    const c = makeIo();
+    const outPath = join(outDir, "default-no-ui-log.jsonl");
+    const code = await runSupportCli(
+      ["export", "--state-dir", stateDir, "--out", outPath],
+      c.io,
+      AUDIT_ENV,
+      { auditDeps: healthyAuditDeps(), evidenceStore: createInMemoryEvidenceStore() },
+    );
+
+    expect(code).toBe(0);
+    const lines = bundleLines(outPath);
+    expect(lines.some((line) => line.$section === "ui-log")).toBe(false);
+    expect(lines[0]?.sectionsExcluded).toEqual(["ui-log"]);
+  });
+
+  // THE key regression-shaped assertion: one flag alone is NOT sufficient consent. Without this
+  // gate, an operator (or a script) passing only --include-ui-log would leak unredacted free text.
+  it("still excludes ui.log with ONLY --include-ui-log — the confirmation flag is not optional", async () => {
+    writeFileSync(join(stateDir, "ui.log"), "TypeError: boom at /Users/jsmith/app\n");
+    const c = makeIo();
+    const outPath = join(outDir, "half-consent.jsonl");
+    const code = await runSupportCli(
+      ["export", "--state-dir", stateDir, "--out", outPath, "--include-ui-log"],
+      c.io,
+      AUDIT_ENV,
+      { auditDeps: healthyAuditDeps(), evidenceStore: createInMemoryEvidenceStore() },
+    );
+
+    expect(code).toBe(0);
+    const lines = bundleLines(outPath);
+    expect(lines.some((line) => line.$section === "ui-log")).toBe(false);
+    expect(lines[0]?.sectionsExcluded).toEqual(["ui-log"]);
+  });
+
+  it("attaches ui.log verbatim, and clears sectionsExcluded, when BOTH flags are passed", async () => {
+    const uiLogContent = "TypeError: boom at /Users/jsmith/app\n";
+    writeFileSync(join(stateDir, "ui.log"), uiLogContent);
+    const c = makeIo();
+    const outPath = join(outDir, "full-consent.jsonl");
+    const code = await runSupportCli(
+      [
+        "export",
+        "--state-dir",
+        stateDir,
+        "--out",
+        outPath,
+        "--include-ui-log",
+        "--i-understand-this-is-unredacted",
+      ],
+      c.io,
+      AUDIT_ENV,
+      { auditDeps: healthyAuditDeps(), evidenceStore: createInMemoryEvidenceStore() },
+    );
+
+    expect(code).toBe(0);
+    const lines = bundleLines(outPath);
+    expect(lines.find((line) => line.$section === "ui-log")).toEqual({
+      $section: "ui-log",
+      content: uiLogContent,
+    });
+    expect(lines[0]?.sectionsExcluded).toEqual([]);
+  });
+
+  it("attaches a full evidence manifest per --include-evidence runId, beyond the index count", async () => {
+    const c = makeIo();
+    const outPath = join(outDir, "with-evidence.jsonl");
+    const code = await runSupportCli(
+      ["export", "--state-dir", stateDir, "--out", outPath, "--include-evidence", "run-a"],
+      c.io,
+      AUDIT_ENV,
+      { auditDeps: healthyAuditDeps(), evidenceStore: seededEvidenceStore(["run-a", "run-b"]) },
+    );
+
+    expect(code).toBe(0);
+    const lines = bundleLines(outPath);
+    const evidenceSection = lines.find((line) => line.$section === "evidence-manifest");
+    expect(evidenceSection?.runId).toBe("run-a");
+    expect(evidenceSection?.manifest).toEqual(minimalEvidenceManifest("run-a"));
+  });
+
+  // Wave 6, design doc §6.2 closing addendum: a cheap integrity story for an artifact crossing a
+  // customer-machine-to-agent trust boundary. RED before this wave: no .sha256 sidecar existed.
+  it("writes a <output>.sha256 sidecar matching an independently-computed digest of the bundle bytes", async () => {
+    const c = makeIo();
+    const outPath = join(outDir, "digest.jsonl");
+    const code = await runSupportCli(
+      ["export", "--state-dir", stateDir, "--out", outPath],
+      c.io,
+      AUDIT_ENV,
+      { auditDeps: healthyAuditDeps(), evidenceStore: createInMemoryEvidenceStore() },
+    );
+
+    expect(code).toBe(0);
+    const sidecarPath = `${outPath}.sha256`;
+    expect(existsSync(sidecarPath)).toBe(true);
+    const expectedDigest = createHash("sha256").update(readFileSync(outPath)).digest("hex");
+    expect(readFileSync(sidecarPath, "utf8").trim()).toBe(expectedDigest);
+  });
 });
 
 describe("runSupportCli analyze", () => {
@@ -732,6 +988,179 @@ describe("runSupportCli analyze", () => {
     expect(code).toBe(1);
     expect(c.err()).toContain("could not read");
     expect(c.err()).not.toContain("ENOENT:");
+  });
+
+  // Wave 6 (epic #3233 closeout, disclosed gap #1): --clusters/--seed/--emit-fixture were
+  // implemented and exported from support-analyze.ts but never wired into the CLI dispatch path —
+  // these fail before that wiring and pass after.
+  function writeGatewayLog(filePath: string): void {
+    const line = JSON.stringify({
+      ts: "2026-08-21T00:00:00.000Z",
+      category: "gateway",
+      op: "gateway.chat.completed",
+      correlationId: "req-1",
+      durationMs: 120,
+      modelId: "gpt-x",
+      finishReason: "stop",
+    });
+    const other = JSON.stringify({
+      ts: "2026-08-21T00:00:01.000Z",
+      category: "http",
+      op: "request",
+      correlationId: "req-2",
+      errorKind: "HTTP_TIMEOUT",
+    });
+    writeFileSync(filePath, `${line}\n${other}\n`);
+  }
+
+  it("prints whole-file clusters via --clusters, independent of --correlation-id", async () => {
+    const filePath = join(dir, "server.log");
+    writeGatewayLog(filePath);
+
+    const jsonRun = makeIo();
+    const jsonCode = await runSupportCli(["analyze", filePath, "--clusters", "--json"], jsonRun.io);
+    expect(jsonCode).toBe(0);
+    const clusters = JSON.parse(jsonRun.out()) as { readonly op: string }[];
+    expect(clusters.map((cluster) => cluster.op).sort()).toEqual([
+      "gateway.chat.completed",
+      "request",
+    ]);
+
+    const humanRun = makeIo();
+    const humanCode = await runSupportCli(["analyze", filePath, "--clusters"], humanRun.io);
+    expect(humanCode).toBe(0);
+    expect(humanRun.out()).toContain("Clusters: 2");
+    expect(humanRun.out()).toContain("gateway.chat.completed");
+  });
+
+  it("prints a ReproductionSeed via --seed", async () => {
+    const filePath = join(dir, "server.log");
+    writeGatewayLog(filePath);
+
+    const jsonRun = makeIo();
+    const jsonCode = await runSupportCli(
+      ["analyze", filePath, "--correlation-id", "req-1", "--seed", "--json"],
+      jsonRun.io,
+    );
+    expect(jsonCode).toBe(0);
+    const seed = JSON.parse(jsonRun.out()) as {
+      readonly correlationId: string;
+      readonly gatewayScript?: { readonly attempts: readonly unknown[] };
+      readonly warnings: readonly string[];
+    };
+    expect(seed.correlationId).toBe("req-1");
+    expect(seed.gatewayScript?.attempts).toHaveLength(1);
+    expect(seed.warnings.length).toBeGreaterThan(0);
+
+    const humanRun = makeIo();
+    const humanCode = await runSupportCli(
+      ["analyze", filePath, "--correlation-id", "req-1", "--seed"],
+      humanRun.io,
+    );
+    expect(humanCode).toBe(0);
+    expect(humanRun.out()).toContain("correlationId=req-1");
+    expect(humanRun.out()).toContain("gatewayScript:");
+  });
+
+  it("exits 1 for --seed when the correlation id has no timeline", async () => {
+    const filePath = join(dir, "server.log");
+    writeGatewayLog(filePath);
+
+    const c = makeIo();
+    const code = await runSupportCli(
+      ["analyze", filePath, "--correlation-id", "missing", "--seed"],
+      c.io,
+    );
+    expect(code).toBe(1);
+    expect(c.err()).toContain("no lines found for correlation id: missing");
+  });
+
+  it("writes a fixture via --emit-fixture, fail-closed against an existing file", async () => {
+    const filePath = join(dir, "server.log");
+    writeGatewayLog(filePath);
+    const fixturePath = join(dir, "fixtures", "gateway.fixture.ts");
+
+    const c = makeIo();
+    const code = await runSupportCli(
+      ["analyze", filePath, "--correlation-id", "req-1", "--emit-fixture", fixturePath],
+      c.io,
+    );
+    expect(code).toBe(0);
+    expect(c.out()).toContain(`Wrote fixture to ${fixturePath}`);
+    const contents = readFileSync(fixturePath, "utf8");
+    expect(contents).toContain("GatewayReplayScriptEntry");
+    expect(contents).toContain("gatewayReplayScript");
+
+    // Fail-closed: a second run against the same path must refuse to overwrite it.
+    const rerun = makeIo();
+    const rerunCode = await runSupportCli(
+      ["analyze", filePath, "--correlation-id", "req-1", "--emit-fixture", fixturePath],
+      rerun.io,
+    );
+    expect(rerunCode).toBe(1);
+    expect(rerun.err()).toContain("refusing to overwrite existing file");
+    // The original fixture content must survive the refused overwrite attempt.
+    expect(readFileSync(fixturePath, "utf8")).toBe(contents);
+  });
+
+  it("combines --seed and --emit-fixture into one JSON object under --json", async () => {
+    const filePath = join(dir, "server.log");
+    writeGatewayLog(filePath);
+    const fixturePath = join(dir, "gateway.fixture.ts");
+
+    const c = makeIo();
+    const code = await runSupportCli(
+      [
+        "analyze",
+        filePath,
+        "--correlation-id",
+        "req-1",
+        "--seed",
+        "--emit-fixture",
+        fixturePath,
+        "--json",
+      ],
+      c.io,
+    );
+    expect(code).toBe(0);
+    // Exactly one JSON document on stdout (the seed with `fixturePath` folded in), never a
+    // separate plain-text "wrote fixture" line alongside it — --json stays a single JSON object.
+    const seed = JSON.parse(c.out()) as {
+      readonly fixturePath: string;
+      readonly correlationId: string;
+    };
+    expect(seed.fixturePath).toBe(fixturePath);
+    expect(seed.correlationId).toBe("req-1");
+  });
+
+  it("exits 1 with a clear message when --emit-fixture has no gateway script to write", async () => {
+    const filePath = join(dir, "server.log");
+    writeFileSync(
+      filePath,
+      `${JSON.stringify({
+        ts: "2026-08-21T00:00:00.000Z",
+        category: "http",
+        op: "request",
+        correlationId: "req-1",
+      })}\n`,
+    );
+
+    const c = makeIo();
+    const code = await runSupportCli(
+      ["analyze", filePath, "--correlation-id", "req-1", "--emit-fixture", join(dir, "out.ts")],
+      c.io,
+    );
+    expect(code).toBe(1);
+    expect(c.err()).toContain("no gateway replay script to write for correlationId=req-1");
+  });
+
+  it("exits 2 when --seed is given without --correlation-id", async () => {
+    const filePath = join(dir, "server.log");
+    writeGatewayLog(filePath);
+
+    const c = makeIo();
+    const code = await runSupportCli(["analyze", filePath, "--seed"], c.io);
+    expect(code).toBe(2);
   });
 });
 

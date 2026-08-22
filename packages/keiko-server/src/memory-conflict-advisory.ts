@@ -392,19 +392,22 @@ function emitAdvisoryPhaseSummary(
   if (counts.truncatedByCap === 0 && counts.truncatedByBudget === 0 && counts.timeouts === 0) {
     return;
   }
+  // Issue #3245: `message` is now the fixed closed-vocabulary condition label. The three counts
+  // this line used to compose into free text (then pass through the general redactor, which is
+  // not the closed-vocabulary allowlist this record's contract requires) move to `code` as a
+  // compact machine-readable string — bounded numeric data, not user/model content, so nothing is
+  // lost; `deps.redactor` is no longer the right tool for a value that was never foreign text.
   emitServerDiagnostic(deps.diagnostics, {
     correlationId: jobId,
     timestamp: new Date().toISOString(),
     operation: ADVISORY_OPERATION,
     source: ADVISORY_SOURCE,
     errorClass: "AdvisoryPhaseSummary",
-    message: String(
-      deps.redactor(
-        `advisory phase: ${String(counts.timeouts)} timed out, ` +
-          `${String(counts.truncatedByCap)} skipped over the per-job cap, ` +
-          `${String(counts.truncatedByBudget)} skipped over the wall-clock budget`,
-      ),
-    ),
+    message: "advisory-phase-summary",
+    code:
+      `timeouts=${String(counts.timeouts)}:` +
+      `truncatedByCap=${String(counts.truncatedByCap)}:` +
+      `truncatedByBudget=${String(counts.truncatedByBudget)}`,
   });
 }
 

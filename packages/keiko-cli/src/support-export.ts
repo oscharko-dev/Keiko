@@ -14,8 +14,10 @@
 // audit/evidence subsystems; this file owns everything that can be exercised without touching
 // argv, process.*, or another package's runtime.
 
+import { createHash } from "node:crypto";
 import { closeSync, openSync, readFileSync, readSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
+import type { EvidenceManifest } from "@oscharko-dev/keiko-evidence";
 import { isStoreFingerprint, type StoreFingerprint } from "@oscharko-dev/keiko-contracts";
 import type { AuditResult } from "./audit.js";
 
@@ -27,6 +29,19 @@ import type { AuditResult } from "./audit.js";
 const NEWLINE_BYTE = 0x0a;
 
 export const CURRENT_LOG_FILE_NAME = "server.log";
+
+// `lifecycle.ts`'s `logFile()` writes the UI/BFF process's raw, unredacted stdout+stderr here
+// (`<stateDir>/ui.log`) — an acknowledged-unredacted operator channel, distinct from the redacted
+// `server*.log` stream above. Named once here so the double-confirmation gate in `support.ts` and
+// this module's own section builder never risk drifting on the literal.
+export const UI_LOG_FILE_NAME = "ui.log";
+
+// The one `sectionsExcluded` member Wave 6 introduces: always present unless the operator passed
+// BOTH `--include-ui-log` AND `--i-understand-this-is-unredacted` on `keiko support export`
+// (design doc §6.3) — a single flag is never sufficient consent. `support.ts` decides the gate (it
+// owns argv); this constant keeps the section tag and the exclusion label byte-identical between
+// the two files that need it.
+export const UI_LOG_SECTION = "ui-log";
 
 // The sink's own DEFAULT_LOG_RETENTION_DAYS (7) keeps at most a week of rotated files on disk, so
 // 50MB is a generous ceiling for a single export; --max-bytes on the CLI overrides it.
@@ -400,8 +415,12 @@ export interface SupportBundleManifest {
   // absolute paths) alongside the fs error kind that caused the skip. Distinct from
   // `truncatedLogFiles`: those were dropped on purpose for the size budget; these were simply gone.
   readonly skippedLogFiles: readonly SkippedLogFile[];
-  // Always empty in this minimal version: ui.log gating and evidence/config-snapshot sections are
-  // Wave 6 features, so nothing is yet excluded that this manifest could name.
+  // Names every optional section this export did NOT attach — Wave 6. Currently the only member
+  // this manifest can ever carry is `"ui-log"` (§6.3): it is present whenever `support.ts`'s
+  // double-confirmation gate did not pass (either flag absent, or present alone), and ALWAYS —
+  // never merely when the operator happened to ask — so a reader of the manifest can tell the
+  // channel's status without knowing whether it was ever requested. Empty exactly when the gate
+  // passed and the section was attached.
   readonly sectionsExcluded: readonly string[];
   readonly auditSummary: RedactedAuditSummary;
   readonly evidenceIndexCount: number;
@@ -442,6 +461,9 @@ export interface ManifestInput {
   readonly evidenceIndexCount: number;
   readonly storeFingerprints: readonly StoreFingerprint[];
   readonly storesUnavailable: readonly StoreUnavailableEntry[];
+  // Computed by `support.ts` from its own double-confirmation gate (this module stays pure/argv-
+  // free — file banner) and passed straight through to `SupportBundleManifest.sectionsExcluded`.
+  readonly sectionsExcluded: readonly string[];
 }
 
 const KNOWN_STORES: ReadonlySet<string> = new Set(["ui", "local-knowledge", "memory-vault"]);
@@ -494,7 +516,7 @@ export function buildSupportBundleManifest(input: ManifestInput): SupportBundleM
     currentFileTailTruncated: input.currentFileTailTruncated,
     budgetExceeded: input.budgetExceeded,
     skippedLogFiles: input.skippedLogFiles,
-    sectionsExcluded: [],
+    sectionsExcluded: input.sectionsExcluded,
     auditSummary: redactedAuditSummary(input.auditSummary),
     evidenceIndexCount: input.evidenceIndexCount,
     // Defense-in-depth (never trust the producer unconditionally, matching this repo's redaction
@@ -506,15 +528,82 @@ export function buildSupportBundleManifest(input: ManifestInput): SupportBundleM
   };
 }
 
-// Line 1 (the manifest) plus every already-read content line, in file order. The manifest is
-// built from `readKeptFiles`'s result (see `support.ts`'s `runSupportExport`) so its
-// `sourceLogFiles`/`skippedLogFiles` reflect what was actually read, not merely what was kept
-// after the size budget — never touches an already-copied line's bytes.
+// ─── Wave 6 sections: ui-log (opt-in), config-snapshot (always), evidence-manifest (opt-in) ────
+//
+// Each is one `$section`-tagged JSONL record, exactly like the manifest itself (§6.1) — never
+// re-transformed content mixed into the manifest object, so a bug in one section's assembly can
+// never corrupt another's.
+
+// Attached only when `support.ts`'s double-confirmation gate (`--include-ui-log` AND
+// `--i-understand-this-is-unredacted`, both required) passes and `<stateDir>/ui.log` has content.
+// `content` is the file's bytes verbatim — `ui.log` is free text, not JSONL, so there is no
+// per-line shape to preserve the way the raw server-log content lines do.
+export interface SupportBundleUiLogSection {
+  readonly $section: "ui-log";
+  readonly content: string;
+}
+
+export function buildUiLogSection(content: string): SupportBundleUiLogSection {
+  return { $section: "ui-log", content };
+}
+
+// Always attached (never flag-gated): a snapshot of Keiko's own resolved `KEIKO_*` runtime
+// configuration, already passed through `redactLogFields` by the caller (`support.ts`) before this
+// builder ever sees it — this module writes no redaction logic of its own (file banner).
+export interface SupportBundleConfigSnapshotSection {
+  readonly $section: "config-snapshot";
+  readonly fields: Record<string, unknown>;
+}
+
+export function buildConfigSnapshotSection(
+  fields: Record<string, unknown>,
+): SupportBundleConfigSnapshotSection {
+  return { $section: "config-snapshot", fields };
+}
+
+// One per `--include-evidence <runId,...>` entry that actually resolved to a manifest (a runId
+// that does not exist under `--state-dir` contributes no section — see `support.ts`). The
+// `EvidenceManifest` embedded here is already redacted-by-construction (persisted evidence is
+// redacted at write time, `index-api.ts`'s own file banner) — beyond the index-only summary Wave 1
+// already includes via `evidenceIndexCount`, this is the full manifest for deep replay.
+export interface SupportBundleEvidenceManifestSection {
+  readonly $section: "evidence-manifest";
+  readonly runId: string;
+  readonly manifest: EvidenceManifest;
+}
+
+export function buildEvidenceManifestSection(
+  runId: string,
+  manifest: EvidenceManifest,
+): SupportBundleEvidenceManifestSection {
+  return { $section: "evidence-manifest", runId, manifest };
+}
+
+// Line 1 (the manifest), then any Wave 6 `$section` records (config-snapshot always, ui-log and
+// evidence-manifest only when their gates pass), then every already-read content line, in file
+// order. The manifest is built from `readKeptFiles`'s result (see `support.ts`'s
+// `runSupportExport`) so its `sourceLogFiles`/`skippedLogFiles` reflect what was actually read, not
+// merely what was kept after the size budget — never touches an already-copied line's bytes.
 export function serializeBundleLines(
   manifest: SupportBundleManifest,
+  sections: readonly unknown[],
   contentLines: readonly string[],
 ): readonly string[] {
-  return [JSON.stringify(manifest), ...contentLines];
+  const sectionLines = sections.map((section) => JSON.stringify(section));
+  return [JSON.stringify(manifest), ...sectionLines, ...contentLines];
+}
+
+// A cheap integrity story for an artifact that crosses a customer-machine-to-agent trust boundary:
+// the caller (`support.ts`) writes this hex digest to a `<output>.sha256` sidecar alongside the
+// `.jsonl` bundle, computed over the EXACT bytes written to the bundle file (the same UTF-8
+// encoding `writeFileSync(outPath, contents, "utf8")` produces) — not a gate requirement, but worth
+// the one-line addition.
+export function bundleSha256Hex(bundleContents: string): string {
+  return createHash("sha256").update(bundleContents, "utf8").digest("hex");
+}
+
+export function sha256SidecarPath(outPath: string): string {
+  return `${outPath}.sha256`;
 }
 
 // Joins lines with a single trailing newline, the same shape server-log.ts's own file sink writes

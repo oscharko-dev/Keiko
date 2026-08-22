@@ -1,14 +1,20 @@
+import { createHash } from "node:crypto";
 import { mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { SERVER_LOG_SCHEMA_VERSION } from "@oscharko-dev/keiko-server";
 import type { StoreFingerprint } from "@oscharko-dev/keiko-contracts";
+import type { EvidenceManifest } from "@oscharko-dev/keiko-evidence";
 
 import type { AuditResult } from "./audit.js";
 import {
+  bundleSha256Hex,
   bundleText,
+  buildConfigSnapshotSection,
+  buildEvidenceManifestSection,
   buildSupportBundleManifest,
+  buildUiLogSection,
   CURRENT_LOG_FILE_NAME,
   DEFAULT_MAX_BUNDLE_BYTES,
   describeErrorKind,
@@ -17,6 +23,7 @@ import {
   readVerbatimLogLines,
   selectLogFilesWithinBudget,
   serializeBundleLines,
+  sha256SidecarPath,
   type LogFileInfo,
 } from "./support-export.js";
 
@@ -64,6 +71,7 @@ function baseManifestInput(
     evidenceIndexCount: 0,
     storeFingerprints: [],
     storesUnavailable: [],
+    sectionsExcluded: [],
     ...overrides,
   };
 }
@@ -595,8 +603,73 @@ describe("buildSupportBundleManifest", () => {
     ).toBeUndefined();
   });
 
-  it("always leaves sectionsExcluded empty in this minimal version", () => {
+  it("passes sectionsExcluded through from ManifestInput unchanged (Wave 6)", () => {
     expect(buildSupportBundleManifest(baseManifestInput()).sectionsExcluded).toEqual([]);
+    expect(
+      buildSupportBundleManifest(baseManifestInput({ sectionsExcluded: ["ui-log"] }))
+        .sectionsExcluded,
+    ).toEqual(["ui-log"]);
+  });
+});
+
+describe("Wave 6 section builders", () => {
+  it("buildUiLogSection wraps verbatim content with the ui-log $section tag", () => {
+    expect(buildUiLogSection("TypeError: boom\n")).toEqual({
+      $section: "ui-log",
+      content: "TypeError: boom\n",
+    });
+  });
+
+  it("buildConfigSnapshotSection wraps the caller-supplied (already-redacted) fields", () => {
+    const fields = { KEIKO_STATE_DIR: "[redacted-path]" };
+    expect(buildConfigSnapshotSection(fields)).toEqual({
+      $section: "config-snapshot",
+      fields,
+    });
+  });
+
+  it("buildEvidenceManifestSection wraps one runId's full manifest", () => {
+    const manifest = {
+      evidenceSchemaVersion: "1",
+      run: {
+        runId: "run-a",
+        fingerprint: "fp",
+        harnessVersion: "0.1.5",
+        taskType: "explain-plan",
+        outcome: "completed",
+        startedAt: 100,
+        finishedAt: 150,
+        durationMs: 50,
+      },
+      model: { modelId: "m1", costClass: "low" },
+      usageTotals: { promptTokens: 1, completionTokens: 1, requestCount: 1, totalLatencyMs: 1 },
+      stateTransitions: [],
+      toolCalls: [],
+      commandExecutions: [],
+    } as unknown as EvidenceManifest;
+    expect(buildEvidenceManifestSection("run-a", manifest)).toEqual({
+      $section: "evidence-manifest",
+      runId: "run-a",
+      manifest,
+    });
+  });
+});
+
+describe("bundleSha256Hex", () => {
+  it("matches an independently-computed SHA-256 digest of the same bytes", () => {
+    const contents = "line-one\nline-two\n";
+    const expected = createHash("sha256").update(contents, "utf8").digest("hex");
+    expect(bundleSha256Hex(contents)).toBe(expected);
+  });
+
+  it("produces different digests for different content", () => {
+    expect(bundleSha256Hex("a")).not.toBe(bundleSha256Hex("b"));
+  });
+});
+
+describe("sha256SidecarPath", () => {
+  it("appends .sha256 to the bundle output path", () => {
+    expect(sha256SidecarPath("/tmp/out/bundle.jsonl")).toBe("/tmp/out/bundle.jsonl.sha256");
   });
 });
 
@@ -625,7 +698,7 @@ describe("serializeBundleLines and bundleText", () => {
     const manifest = buildSupportBundleManifest(baseManifestInput());
     const { contentLines } = readKeptFiles(files);
 
-    const lines = serializeBundleLines(manifest, contentLines);
+    const lines = serializeBundleLines(manifest, [], contentLines);
 
     expect(lines[0]).toBe(JSON.stringify(manifest));
     expect(lines.slice(1)).toEqual([rotatedLine, currentLine]);
@@ -633,6 +706,21 @@ describe("serializeBundleLines and bundleText", () => {
     // "op" field must stay an escaped two-character sequence, never become a real newline byte
     // that would split the line).
     expect(JSON.parse(lines[1] ?? "")).toEqual(JSON.parse(rotatedLine));
+  });
+
+  it("places every $section record between the manifest and the raw content lines, in order", () => {
+    const manifest = buildSupportBundleManifest(baseManifestInput());
+    const configSnapshot = buildConfigSnapshotSection({ KEIKO_STATE_DIR: "[redacted-path]" });
+    const uiLog = buildUiLogSection("crash text\n");
+
+    const lines = serializeBundleLines(manifest, [configSnapshot, uiLog], ["raw-log-line"]);
+
+    expect(lines).toEqual([
+      JSON.stringify(manifest),
+      JSON.stringify(configSnapshot),
+      JSON.stringify(uiLog),
+      "raw-log-line",
+    ]);
   });
 
   it("bundleText joins with a single trailing newline, and is empty for zero lines", () => {

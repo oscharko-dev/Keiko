@@ -4892,15 +4892,20 @@ function recordGatewaySetupAudit(
   if (!validation.ok) {
     // Never a silent drop: a record this side built and cannot validate is a defect in this code,
     // and swallowing it would leave the same evidence gap the record exists to close. The reason is
-    // a fixed validator string naming a field — it carries no value from the record.
+    // a fixed validator string naming a field — it carries no value from the record. Issue #3245:
+    // `message` is now the closed-vocabulary condition label; `validation.reason` (still bounded —
+    // one of the validator's own fixed field-naming strings, never record content) moves to `code`,
+    // which already carries exactly this "stable machine-readable code" shape elsewhere in this
+    // file, so the generic `GATEWAY_SETUP_AUDIT_INVALID` marker (redundant with `errorClass`) is
+    // replaced by the more specific reason rather than lost.
     emitServerDiagnostic(deps.diagnostics, {
       correlationId: record.correlationId,
       timestamp: record.timestamp,
       operation: "POST /api/gateway/setup",
       source: "gateway-setup.audit",
       errorClass: "GatewaySetupAuditInvalid",
-      message: `Gateway setup audit record failed validation: ${validation.reason}`,
-      code: "GATEWAY_SETUP_AUDIT_INVALID",
+      message: "gateway-setup-audit-validation-failed",
+      code: validation.reason,
     });
     return;
   }

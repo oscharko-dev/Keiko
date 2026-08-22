@@ -90,11 +90,14 @@ export { redactRoutePath } from "./route-template.js";
 // Coarse routing label. Kept a closed union so a typo cannot invent a category an operator's
 // grep will never find; `memory` was added for the vault/retrieval surface, `process` for the
 // process-lifecycle lines (`process.started`/`process.heartbeat`/`process.exiting`) envelope v2
-// adds, and `security` (Wave 4a, epic #3233 §8) for `keiko-security`'s own structural
-// `SecurityLogSink` port (`packages/keiko-security/src/log-port.ts`) — without this member here,
-// `SecurityLogEvent`'s `category` union is not a subset of this one, so `ServerLogSink` (via
-// `processServerLogSink()`) is not structurally assignable to `SecurityLogSink` at all, unlike the
-// `MemoryVaultLogSink`/`KnowledgeLogSink` ports, whose categories are already subsets of this union.
+// adds, `security` (Wave 4a, epic #3233 §8) for `keiko-security`'s own structural
+// `SecurityLogSink` port (`packages/keiko-security/src/log-port.ts`), and `consolidation` (Wave 6,
+// epic #3233) for `keiko-memory-consolidation`'s own structural `ConsolidationLogSink` port
+// (`packages/keiko-memory-consolidation/src/log-port.ts`) — without each of these members here,
+// that package's own `*LogEvent.category` union is not a subset of this one, so `ServerLogSink`
+// (via `processServerLogSink()`) is not structurally assignable to its port at all, unlike the
+// `MemoryVaultLogSink`/`KnowledgeLogSink` ports, whose categories were already subsets of this
+// union from the start.
 export type ServerLogCategory =
   | "http"
   | "gateway"
@@ -105,7 +108,8 @@ export type ServerLogCategory =
   | "memory"
   | "security"
   | "diagnostic"
-  | "process";
+  | "process"
+  | "consolidation";
 
 export interface ServerLogEvent {
   // Omitted means `info`. An event below the sink threshold costs nothing.

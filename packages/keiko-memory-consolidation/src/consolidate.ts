@@ -1,5 +1,8 @@
 // runConsolidation: the engine entry point. Pure function; no IO; no clock reads; no
-// randomness. Every impurity is injected via ConsolidationOptions.
+// randomness. Every impurity is injected via ConsolidationOptions — including the one optional
+// activity-log write (`logSink`, see `log-port.ts`): absent by default, so the default call
+// remains IO-free, and a caller that opts in only ever observes a `consolidation.summary.fallback`
+// event synchronously during the call, never anything that changes the returned result.
 //
 // Merge / supersession relationships are routed through ReviewItems; optional body summaries are
 // emitted as MemoryUpdate envelopes in updatesProposed only when the caller supplies the pure
@@ -39,6 +42,7 @@ import {
 } from "./_ordering.js";
 import { CONFLICT_OVERLAP_THRESHOLD, detectConflicts, findConflictPairs } from "./conflicts.js";
 import { scanDuplicateClusters, type DuplicateCluster } from "./dedupe.js";
+import { emitConsolidationLogEvent, type ConsolidationLogSink } from "./log-port.js";
 import { normalizeBody } from "./similarity.js";
 import { findStaleMemories } from "./stale.js";
 import type {
@@ -68,6 +72,7 @@ interface ResolvedOptions {
   readonly embeddingFor?: (memoryId: MemoryId) => ConsolidationEmbedding | undefined;
   readonly accessStatsFor?: (memoryId: MemoryId) => ConsolidationAccessStat | undefined;
   readonly summaryGenerator?: ConsolidationSummaryGenerator;
+  readonly logSink?: ConsolidationLogSink;
 }
 
 const DEFAULT_ELIGIBLE_STATUSES: readonly MemoryStatus[] = ["accepted", "proposed", "conflicted"];
@@ -115,6 +120,7 @@ function optionalResolvedPorts(options: ConsolidationOptions): Partial<ResolvedO
     ...(options.summaryGenerator !== undefined
       ? { summaryGenerator: options.summaryGenerator }
       : {}),
+    ...(options.logSink !== undefined ? { logSink: options.logSink } : {}),
   };
 }
 
@@ -393,10 +399,18 @@ function normalizeSummaryOutput(
   return output;
 }
 
+// The distinct cause behind a deterministic-union fallback. All four branches below collapsed to
+// an identical `fallbackUsed: true` before this field existed, discarding the actual cause the
+// moment it was known — this is the ONLY place any of the four is ever determined, so it must be
+// captured here rather than re-derived by a caller from the (already fallback-shaped) body.
+export type SummaryFallbackReason =
+  "absent" | "invalid-output" | "union-not-preserved" | "generator-threw";
+
 interface GeneratedSummaryChoice {
   readonly body: string;
   readonly reviewerNote?: string;
   readonly fallbackUsed: boolean;
+  readonly summaryFallbackReason?: SummaryFallbackReason;
 }
 
 function chooseSummaryBody(
@@ -405,14 +419,16 @@ function chooseSummaryBody(
   sourceBodies: readonly string[],
   unionBody: string,
 ): GeneratedSummaryChoice {
-  if (generator === undefined) return { body: unionBody, fallbackUsed: true };
+  if (generator === undefined) {
+    return { body: unionBody, fallbackUsed: true, summaryFallbackReason: "absent" };
+  }
   try {
     const generated = normalizeSummaryOutput(generator(input));
     if (generated === null || generated.body.trim().length === 0) {
-      return { body: unionBody, fallbackUsed: true };
+      return { body: unionBody, fallbackUsed: true, summaryFallbackReason: "invalid-output" };
     }
     if (!summaryPreservesUnion(generated.body, sourceBodies)) {
-      return { body: unionBody, fallbackUsed: true };
+      return { body: unionBody, fallbackUsed: true, summaryFallbackReason: "union-not-preserved" };
     }
     return {
       body: generated.body.trim(),
@@ -420,7 +436,7 @@ function chooseSummaryBody(
       fallbackUsed: false,
     };
   } catch {
-    return { body: unionBody, fallbackUsed: true };
+    return { body: unionBody, fallbackUsed: true, summaryFallbackReason: "generator-threw" };
   }
 }
 
@@ -436,6 +452,19 @@ function summaryReviewerNote(
   }
   if (reviewerNote !== undefined && reviewerNote.length > 0) noteParts.push(reviewerNote);
   return noteParts.join(" ");
+}
+
+// Fires exactly when `chooseSummaryBody` fell back to the deterministic union — the ONE call
+// site (this package's composition root, `runConsolidation`, via `buildSummaryUpdate`) that both
+// knows the cause AND has the caller-supplied sink. `extra.reason` is the closed-union label
+// only, never the generated body, the union body, or any source content.
+function logSummaryFallback(resolved: ResolvedOptions, summary: GeneratedSummaryChoice): void {
+  if (!summary.fallbackUsed || summary.summaryFallbackReason === undefined) return;
+  emitConsolidationLogEvent(resolved.logSink, {
+    category: "consolidation",
+    op: "consolidation.summary.fallback",
+    extra: { reason: summary.summaryFallbackReason },
+  });
 }
 
 function buildSummaryUpdate(
@@ -463,6 +492,7 @@ function buildSummaryUpdate(
     sourceBodies,
     unionBody,
   );
+  logSummaryFallback(resolved, summary);
   return {
     update: {
       schemaVersion: "1",

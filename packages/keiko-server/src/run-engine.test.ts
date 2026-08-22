@@ -4,7 +4,7 @@
 // passed). No model port is exercised (verify never calls a model); the rejected model port
 // asserts that property.
 
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -23,6 +23,7 @@ import {
 import { editorAgentAuthorityRegistry } from "./editor/agentAuthorityRegistry.js";
 import type { VerificationReport } from "@oscharko-dev/keiko-verification";
 import type { NetworkIsolationProbe } from "./editor/verificationExecution.js";
+import { closeFileServerLogSinks } from "./observability/index.js";
 
 const REJECT_MODEL: ModelPort = {
   call: (): Promise<NormalizedResponse> =>
@@ -450,5 +451,81 @@ describe("applyRun — verification egress probe threading", () => {
       consoleError.mockRestore();
       vi.doUnmock("./editor/verificationExecution.js");
     }
+  });
+});
+
+// #2902 w4b: before the QueueEventSink terminal-event tee, a run's terminal outcome was fanned
+// out to SSE writers ONLY. If no writer was ever attached — a closed browser tab, a connection
+// that dropped before the run finished — the outcome reached nobody, and once the sink's ring
+// buffer was evicted it left no trace anywhere, including `server.log`. This suite proves the
+// forced-failure case leaves a durable, run-id-keyed trace even with zero SSE consumers.
+describe("run terminal outcome reaches server.log without any SSE consumer (#2902 w4b)", () => {
+  let stateDir: string;
+
+  beforeEach(() => {
+    stateDir = mkdtempSync(join(tmpdir(), "keiko-run-engine-diagnostics-"));
+    vi.stubEnv("KEIKO_STATE_DIR", stateDir);
+    // The diagnostic sink also writes one line to stderr; that track is covered elsewhere
+    // (diagnostics-log.activity-log.test.ts). Silence it here so the test output stays clean.
+    vi.spyOn(console, "error").mockImplementation(() => undefined);
+  });
+
+  afterEach(() => {
+    closeFileServerLogSinks();
+    vi.restoreAllMocks();
+    vi.unstubAllEnvs();
+    rmSync(stateDir, { recursive: true, force: true });
+  });
+
+  function readServerLogLines(): readonly Record<string, unknown>[] {
+    const raw = readFileSync(join(stateDir, "logs", "server.log"), "utf8");
+    return raw
+      .split("\n")
+      .filter((line) => line.length > 0)
+      .map((line) => JSON.parse(line) as Record<string, unknown>);
+  }
+
+  // Polls the RUN REGISTRY (never the sink) for a terminal status — attaching a writer to the
+  // sink, even a throwaway one, would defeat the very scenario this test proves: nobody ever
+  // subscribed to this run's SSE stream.
+  async function waitForRegistryTerminal(runId: string): Promise<void> {
+    await vi.waitFor(() => {
+      const record = registry.get(runId);
+      if (record === undefined || record.status === "running") {
+        throw new Error("run has not reached a terminal state yet");
+      }
+    });
+  }
+
+  it("writes a structured diagnostic for a forced explain-plan failure, keyed by the run's id, with no SSE writer ever attached", async () => {
+    writeFileSync(join(workspaceRoot, "README.md"), "fixture\n");
+    const failingModel: ModelPort = {
+      call: (): Promise<NormalizedResponse> => Promise.reject(new Error("forced model failure")),
+    };
+    const request = ok(
+      parseRunRequest(
+        JSON.stringify({
+          taskType: "explain-plan",
+          modelId: "m",
+          input: { workspaceRoot, filePath: "README.md" },
+        }),
+      ),
+    );
+
+    const result = startRun({ request, model: failingModel, registry }, (value) => value);
+    // No `record.sink.attach(...)` call anywhere in this test — the run's SSE stream has zero
+    // consumers for its entire lifetime, exactly like a closed browser tab.
+    await waitForRegistryTerminal(result.runId);
+
+    expect(registry.get(result.runId)?.status).toBe("failed");
+
+    const diagnosticLine = readServerLogLines().find(
+      (line) => line.category === "diagnostic" && line.correlationId === result.runId,
+    );
+    expect(diagnosticLine).toMatchObject({
+      op: "harness.run.failed",
+      correlationId: result.runId,
+      errorKind: "HarnessRunFailed",
+    });
   });
 });

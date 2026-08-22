@@ -26,6 +26,12 @@ import { maybeRunChatAutoMaintenance } from "./chat-handlers.js";
 import { createInMemoryUiStore, type UiStore } from "./store/index.js";
 import type { RouteContext, RouteResult } from "./routes.js";
 import type { ServerDiagnosticRecord } from "./diagnostics-log.js";
+import {
+  createBufferedServerLogSink,
+  createServerLogger,
+  resetServerLogger,
+  setServerLogger,
+} from "./observability/index.js";
 
 const DAY = 864e5;
 const RETENTION_NOW = Date.parse("2026-08-02T08:00:00.000Z");
@@ -538,6 +544,42 @@ describe("handleRunMaintenance", () => {
     expect(serialized).not.toContain("/srv/vault");
     expect(serialized).not.toContain("/etc/keiko");
     expect(body.error.message).toBe("Memory maintenance failed.");
+  });
+});
+
+describe("handleRunMaintenance — consolidation.summary.fallback activity-log wiring (#2902 w6)", () => {
+  afterEach(() => {
+    resetServerLogger();
+  });
+
+  // FAILS BEFORE: runConsolidationPass never set `logSink` on the options handed to
+  // `runConsolidation`, so `emitConsolidationLogEvent` no-op'd on every fallback and
+  // `consolidation.summary.fallback` never reached `server.log` for a maintenance sweep, unlike
+  // the scheduled consolidation-job path. PASSES AFTER: the route's own request correlationId is
+  // threaded through as the sink's correlationId, so this sweep's fallback line joins the same
+  // request an operator is already looking at.
+  it("emits a durable, request-correlated line when the summary generator is absent", () => {
+    const vault = makeVault();
+    insert(vault, { id: "m-a", body: "x" });
+    insert(vault, { id: "m-b", body: "x" });
+    insert(vault, { id: "m-c", body: "x" });
+    const sink = createBufferedServerLogSink();
+    setServerLogger(createServerLogger({ sink, level: "info" }));
+
+    const result = handleRunMaintenance(
+      makeCtx("req-consolidation-fallback-1"),
+      makeDeps({ memoryVault: vault }),
+    );
+    expect(result.status).toBe(200);
+
+    expect(sink.events).toContainEqual(
+      expect.objectContaining({
+        category: "consolidation",
+        op: "consolidation.summary.fallback",
+        correlationId: "req-consolidation-fallback-1",
+        extra: { reason: "absent" },
+      }),
+    );
   });
 });
 

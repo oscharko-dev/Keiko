@@ -1528,7 +1528,12 @@ function emitInvalidRuntimeEventDiagnostic(
     operation: "coding-runtime.emit",
     source: "coding-runtime-manager.emit",
     errorClass: "InvalidRuntimeEvent",
-    message: `runtime-event-invalid:${event.kind}`,
+    // Issue #3245: `event.kind` is a bounded closed union, but its members number too many to
+    // enumerate as individual `message` vocabulary entries. `message` stays a fixed condition
+    // label; the specific kind moves to `code` (already documented as "a stable machine-readable
+    // code"), which is exactly the shape this value has.
+    message: "runtime-event-invalid",
+    code: event.kind,
   });
 }
 
@@ -1544,7 +1549,10 @@ function emitRuntimeExitDiagnostic(
     operation: "coding-runtime.exit",
     source: "coding-runtime-manager.exit",
     errorClass: "RuntimeUnexpectedExit",
-    message: `runtime-exit-code:${code === null ? "signal" : String(code)}`,
+    // Issue #3245: the process exit code is unbounded per-invocation data, not a fixed condition
+    // label — moved to `code` (the field this data actually belongs on), `message` stays fixed.
+    message: "runtime-exit-code",
+    code: code === null ? "signal" : String(code),
   });
 }
 
@@ -1560,7 +1568,10 @@ function emitRuntimeStderrSummary(
     operation: "coding-runtime.stderr",
     source: "coding-runtime-manager.stderr",
     errorClass: "RuntimeStderrSummary",
-    message: `runtime-stderr-counts:bytes=${String(summary.bytes)}:lines=${String(summary.lines)}:truncated=${String(summary.truncated)}`,
+    // Issue #3245: bytes/lines/truncated are unbounded per-invocation counts, not a fixed
+    // condition label — moved to `code` as a compact machine-readable string, `message` fixed.
+    message: "runtime-stderr-counts",
+    code: `bytes=${String(summary.bytes)}:lines=${String(summary.lines)}:truncated=${String(summary.truncated)}`,
   });
 }
 
@@ -1999,7 +2010,11 @@ function emitOpenCodeHandshakeDiagnostic(
     operation: "coding-runtime.handshake",
     source: "coding-runtime-manager.handshake",
     errorClass: "OpenCodeHandshakeFailure",
-    message: `runtime-handshake-phase:${phase}`,
+    // Issue #3245: `phase` is bounded (OPEN_CODE_HANDSHAKE_PHASES) but not narrowed by `.has()`
+    // on a `ReadonlySet<string>`, and enumerating all 16 phases as `message` members would bloat
+    // the vocabulary for one condition — moved to `code`, `message` stays the fixed condition.
+    message: "runtime-handshake-failed",
+    code: phase,
   });
 }
 

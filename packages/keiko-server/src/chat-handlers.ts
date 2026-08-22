@@ -1185,6 +1185,7 @@ export function maybeRunChatAutoMaintenance(
   maybeRunAutoMaintenance(vault, memoryMaintenanceAuditSink(deps), state, {
     nowMs,
     enabled: true,
+    correlationId,
     autonomyMode: resolveMaintenanceAutonomyMode(deps, correlationId),
     ...(multipliers !== undefined ? { decayHalfLifeMultiplierByType: multipliers } : {}),
     ...(retentionPolicy !== undefined ? { retentionPolicy } : {}),

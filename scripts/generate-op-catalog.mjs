@@ -139,6 +139,17 @@ const POSITIONAL_OP_HELPERS = [
   // adoptPreflightIdentity(state, identity, op) — category "embedding" (via logEmbeddingRun's
   // hardcoded category).
   { name: "adoptPreflightIdentity", argIndex: 2, category: "embedding" },
+  // logChatDispatch(log, op, fields) in openai-adapter.ts — category hardcoded "gateway" in the
+  // function body. Deliberately its own name (not `logDispatch`) and its own file-scoped entry:
+  // the embedding module's `logDispatch` above shares the same (log, op, fields) shape but is
+  // hardcoded to category "embedding", and a bare name match would misattribute this chat-layer
+  // call site to the wrong category.
+  {
+    name: "logChatDispatch",
+    argIndex: 1,
+    category: "gateway",
+    file: "packages/keiko-model-gateway/src/openai-adapter.ts",
+  },
 ];
 
 // Functions that receive the whole log-event object literal as an argument and hardcode their own

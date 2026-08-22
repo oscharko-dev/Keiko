@@ -384,3 +384,24 @@ Release-note generation fails closed when public notes contain obvious local fil
 private key material, or common secret-token patterns. Re-running `npm run release:publish -- --tag
 latest` is idempotent for already published packages: it verifies npm versions/dist-tags, reruns the
 registry smoke, and updates the GitHub Release metadata from the already-rendered notes snapshot.
+
+## Release alignment (issue #3252)
+
+Version, tag, GitHub Latest release, npm `latest`, and the `npm-publish` deployment record must
+never diverge silently. 0.3.12-0.3.15 published through the governed-container path, which creates
+no GitHub deployment, so the Deployments panel kept showing v0.3.11 while npm `latest` was already
+0.3.15 — nothing read all five sources together. A real `--tag latest` publish now records a
+`npm-publish` GitHub Deployment itself (skipped only inside the Actions `publish` job, which GitHub
+already deploys for; `scripts/lib/npm-publish-deployment.mjs`) and then runs the alignment gate
+before reporting PASS, failing the publish on any divergence instead of leaving a stale panel.
+
+Run the same check standalone at any time:
+
+```sh
+npm run check:release-alignment
+```
+
+It reads the checkout version, the newest `v*` tag, the GitHub Latest release, npm `latest`, and
+the newest `npm-publish` deployment ref, and passes only when the checkout equals npm `latest` or
+is exactly one patch/minor release ahead of it (a cut pending) and the other four sources all name
+that same version. An unreadable source counts as a divergence, never a pass.

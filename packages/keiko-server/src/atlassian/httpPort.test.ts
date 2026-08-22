@@ -15,7 +15,11 @@ import {
   type AtlassianResolvedCredential,
 } from "@oscharko-dev/keiko-connectors";
 import type { OutboundHttpEgressConfig } from "@oscharko-dev/keiko-model-gateway/internal/http";
-import { createGatewayAtlassianHttpBodyPort, createGatewayAtlassianHttpPort } from "./httpPort.js";
+import {
+  createGatewayAtlassianHttpBodyPort,
+  createGatewayAtlassianHttpPort,
+  exceedsBodyByteCeiling,
+} from "./httpPort.js";
 
 const SYNTHETIC_TOKEN = ["ATATT", "port", "test", "0123456789", "abcdefghij"].join("");
 const SYNTHETIC_EMAIL = ["port-tester", "@", "example", ".", "com"].join("");
@@ -721,6 +725,49 @@ describe("Atlassian connector egress posture — proxied DNS-rebinding refusal (
       vi.doUnmock("node:dns/promises");
       vi.resetModules();
       await closeServer(proxy);
+    }
+  });
+});
+
+describe("Atlassian write-channel body ceiling — fails closed on a non-finite cap (Issue #3246)", () => {
+  // dev run 32563378802: the oversized-body test above resolved 200 in coverage shard 1/3 and
+  // passed on rerun. The only way `assertValidRequestBody` could let a 1 000 001-byte body
+  // through is the imported `ATLASSIAN_HTTP_REQUEST_BODY_MAX_BYTES` not being a finite number in
+  // that worker — `bytes > cap` is false for EVERY comparison against NaN, so the old guard
+  // silently passed. These two tests pin both halves of the fix independently: the inverted
+  // comparison (a pure, body-free predicate — byte counts only) and the module-load assertion
+  // that turns a non-finite imported ceiling into a load-time throw instead of a silent bypass.
+  it("rejects when the ceiling is NaN, where the old `bytes > cap` comparison would have silently passed", () => {
+    expect(exceedsBodyByteCeiling(0, Number.NaN)).toBe(true);
+    expect(exceedsBodyByteCeiling(1_000_000, Number.NaN)).toBe(true);
+  });
+
+  it("stays a strict >-cap rejection for finite ceilings: at the cap passes, one byte over rejects", () => {
+    expect(exceedsBodyByteCeiling(1_000_000, 1_000_000)).toBe(false);
+    expect(exceedsBodyByteCeiling(1_000_001, 1_000_000)).toBe(true);
+  });
+
+  it("throws a TypeError naming the ceiling at module load when the imported constant is non-finite", async () => {
+    vi.resetModules();
+    const actualConnectors = await vi.importActual<typeof import("@oscharko-dev/keiko-connectors")>(
+      "@oscharko-dev/keiko-connectors",
+    );
+    vi.doMock("@oscharko-dev/keiko-connectors", () => ({
+      ...actualConnectors,
+      ATLASSIAN_HTTP_REQUEST_BODY_MAX_BYTES: Number.NaN,
+    }));
+    try {
+      let loadError: unknown;
+      try {
+        await import("./httpPort.js");
+      } catch (error) {
+        loadError = error;
+      }
+      expect(loadError).toBeInstanceOf(TypeError);
+      expect((loadError as Error).message).toContain("ATLASSIAN_HTTP_REQUEST_BODY_MAX_BYTES");
+    } finally {
+      vi.doUnmock("@oscharko-dev/keiko-connectors");
+      vi.resetModules();
     }
   });
 });

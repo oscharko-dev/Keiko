@@ -49,13 +49,7 @@ import { lstatSync, readdirSync, readFileSync } from "node:fs";
 import type { IncomingMessage } from "node:http";
 import { join } from "node:path";
 import { STREAMING, type HandlerOutcome, type RouteContext, type RouteResult } from "../routes.js";
-import {
-  currentGatewayConfig,
-  currentGatewayEgressConfig,
-  currentRedactionSecrets,
-  type UiHandlerDeps,
-} from "../deps.js";
-import { redact } from "@oscharko-dev/keiko-security";
+import { currentGatewayConfig, currentGatewayEgressConfig, type UiHandlerDeps } from "../deps.js";
 import type { EnvSource } from "@oscharko-dev/keiko-security";
 import { emitServerDiagnostic } from "../diagnostics-log.js";
 import {
@@ -781,14 +775,21 @@ function figmaRequestTimeoutMsFromEnv(env: EnvSource): number {
 // FIGMA_INTERNAL — expected coded errors (consent/auth/rate-limit) stay quiet (already audited).
 function logFigmaInternal(stage: string, err: unknown, deps: UiHandlerDeps): void {
   const name = err instanceof Error ? err.constructor.name : typeof err;
-  const message = err instanceof Error ? err.message : String(err);
+  // Issue #3245: `redact()` only strips known SECRET shapes (bearer tokens, API keys) out of a
+  // string — it passes every other character through unchanged, so `err.message` survived it as
+  // free-form provider/filesystem text, exactly the "foreign error/provider/customer text" this
+  // record's own contract forbids on `message`. `message` narrowing from `string` to the closed
+  // `ServerDiagnosticSummary` union caught this at compile time: the fix drops the raw message
+  // entirely rather than relocating it — unlike a bounded count or a machine-readable code, an
+  // arbitrary error message has no safe home on a body-free evidence record. `errorClass` (the
+  // constructor name, already content-free) is retained as the diagnosable signal.
   emitServerDiagnostic(deps.diagnostics, {
     correlationId: randomUUID(),
     timestamp: new Date().toISOString(),
     operation: "figma.snapshotBuild",
     source: `figmaSnapshotRoutes.logFigmaInternal.${stage}`,
     errorClass: name,
-    message: redact(message, currentRedactionSecrets(deps)),
+    message: "figma-internal-error",
   });
 }
 

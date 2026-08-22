@@ -280,7 +280,7 @@ describe("CodingRuntimeEventHub", () => {
         operation: "coding-runtime.sse-fanout",
         source: "coding-runtime-event-hub.write",
         errorClass: "Error",
-        message: "subscriber-write-threw",
+        message: "sse-subscriber-write-failed",
       }),
     ]);
     expect(JSON.stringify(records)).not.toContain("STREAM_SECRET");
@@ -300,7 +300,7 @@ describe("CodingRuntimeEventHub", () => {
       expect.objectContaining({
         correlationId: "run-back",
         source: "coding-runtime-event-hub.write",
-        message: "backpressure",
+        message: "sse-backpressure",
       }),
     ]);
   });

@@ -2,7 +2,7 @@
 // and injected negotiation seam exercise lifecycle, SDP signaling, content-free capability offers,
 // content-free replay, idempotency, and deterministic teardown without network, media, or paid calls.
 
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   sweepControlHeartbeat,
   VoiceControlConnection,
@@ -10,6 +10,14 @@ import {
 } from "./voice-realtime.js";
 import type { RealtimeNegotiationOutcome } from "@oscharko-dev/keiko-model-gateway";
 import type { VoiceControlMessage, VoiceSessionChatContext } from "@oscharko-dev/keiko-contracts";
+import type { ServerDiagnosticRecord, ServerDiagnosticSink } from "./diagnostics-log.js";
+import {
+  createBufferedServerLogSink,
+  createServerLogger,
+  resetServerLogger,
+  setServerLogger,
+  type BufferedServerLogSink,
+} from "./observability/index.js";
 
 const OFFER_SDP =
   "v=0\r\no=- 1 1 IN IP4 127.0.0.1\r\ns=-\r\nt=0 0\r\nm=audio 9 UDP/TLS/RTP/SAVPF 111\r\na=sendonly\r\n";
@@ -114,6 +122,7 @@ function connect(options?: {
   redact?: (value: unknown) => unknown;
   session?: TestSession;
   correlationId?: string;
+  diagnostics?: ServerDiagnosticSink | undefined;
 }): { socket: FakeSocket; session: TestSession; conn: VoiceControlConnection } {
   const socket = new FakeSocket();
   const session = options?.session ?? makeSession();
@@ -123,6 +132,7 @@ function connect(options?: {
     negotiate: options?.negotiate ?? okAsync,
     redact: options?.redact ?? ((value: unknown): unknown => value),
     correlationId: options?.correlationId ?? TEST_CORRELATION_ID,
+    diagnostics: options?.diagnostics,
   });
   return { socket, session, conn };
 }
@@ -601,5 +611,64 @@ describe("sweepControlHeartbeat (liveness)", () => {
     expect(terminate).not.toHaveBeenCalled();
     expect(ping).toHaveBeenCalledTimes(1);
     expect(fresh.isAlive).toBe(false);
+  });
+});
+
+// w4b-voice-realtime (#2902): voice-realtime.ts had zero logging or diagnostic emission of any
+// kind — mirrors voice-live-dictation.ts's reportNegotiationFailure pattern at session start,
+// session end, and negotiation failure, reusing the connection-scoped correlation id (RB-6 /
+// ADR-0173 D5) rather than minting anything new here.
+describe("VoiceControlConnection diagnostics (w4b-voice-realtime)", () => {
+  function captureServerLog(): BufferedServerLogSink {
+    const sink = createBufferedServerLogSink();
+    setServerLogger(createServerLogger({ sink, level: "info" }));
+    return sink;
+  }
+
+  afterEach(() => {
+    resetServerLogger();
+  });
+
+  it("emits a structured diagnostic carrying the connection's correlation id on negotiation failure", async () => {
+    const records: ServerDiagnosticRecord[] = [];
+    const diagnostics: ServerDiagnosticSink = { record: (record) => records.push(record) };
+    const { conn } = connect({
+      negotiate: (): Promise<RealtimeNegotiationOutcome> =>
+        Promise.resolve({ ok: false, kind: "transport" }),
+      correlationId: "diag-negotiation-fail-1",
+      diagnostics,
+    });
+    conn.start(false);
+
+    await conn.receive(clientMessage("signal.sdp.offer", 1, { sdp: OFFER_SDP }));
+
+    expect(records).toHaveLength(1);
+    expect(records[0]).toMatchObject({
+      correlationId: "diag-negotiation-fail-1",
+      operation: "voice.realtime.negotiate",
+      source: "voice.realtime",
+      code: "transport",
+    });
+  });
+
+  it("brackets a normal session lifecycle with a session-start and a session-end line", () => {
+    const sink = captureServerLog();
+    const { conn } = connect({ correlationId: "diag-lifecycle-1" });
+
+    conn.start(false);
+    conn.dispose();
+
+    const ops = sink.events.map((event) => event.op);
+    expect(ops).toEqual(["voice.realtime.session-started", "voice.realtime.session-ended"]);
+    expect(sink.events[0]).toMatchObject({
+      category: "http",
+      op: "voice.realtime.session-started",
+      correlationId: "diag-lifecycle-1",
+    });
+    expect(sink.events[1]).toMatchObject({
+      category: "http",
+      op: "voice.realtime.session-ended",
+      correlationId: "diag-lifecycle-1",
+    });
   });
 });

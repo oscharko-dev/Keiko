@@ -1755,7 +1755,8 @@ describe("coding runtime manager", () => {
         operation: "coding-runtime.emit",
         source: "coding-runtime-manager.emit",
         errorClass: "InvalidRuntimeEvent",
-        message: "runtime-event-invalid:runtime-started",
+        message: "runtime-event-invalid",
+        code: "runtime-started",
       }),
     );
     expect(JSON.stringify(diagnostics.record.mock.calls)).not.toContain(fixture.workspaceRoot);
@@ -1767,10 +1768,10 @@ describe("coding runtime manager", () => {
   // code is a bounded number, not content, and belongs on the redacted diagnostic channel keyed by
   // the run's correlation id.
   it.each([
-    [9, "runtime-exit-code:9"],
-    [0, "runtime-exit-code:0"],
-    [null, "runtime-exit-code:signal"],
-  ] as const)("records runtime exit code %s in an operator diagnostic", async (code, message) => {
+    [9, "9"],
+    [0, "0"],
+    [null, "signal"],
+  ] as const)("records runtime exit code %s in an operator diagnostic", async (code, exitCode) => {
     const fixture = createManagedFixture();
     const harness = createSpawnHarness();
     const diagnostics = { record: vi.fn<(record: ServerDiagnosticRecord) => void>() };
@@ -1795,7 +1796,8 @@ describe("coding runtime manager", () => {
         operation: "coding-runtime.exit",
         source: "coding-runtime-manager.exit",
         errorClass: "RuntimeUnexpectedExit",
-        message,
+        message: "runtime-exit-code",
+        code: exitCode,
       }),
     );
     expect(JSON.stringify(diagnostics.record.mock.calls)).not.toContain(fixture.workspaceRoot);
@@ -1992,7 +1994,8 @@ describe("coding runtime manager", () => {
       source: "coding-runtime-manager.stderr",
       errorClass: "RuntimeStderrSummary",
     });
-    expect(diagnostic?.message).toMatch(/^runtime-stderr-counts:bytes=\d+:lines=\d+:truncated=/u);
+    expect(diagnostic?.message).toBe("runtime-stderr-counts");
+    expect(diagnostic?.code).toMatch(/^bytes=\d+:lines=\d+:truncated=/u);
 
     const stopped = manager.stop("run-1988");
     child.exit(0);
@@ -3632,7 +3635,8 @@ describe("coding runtime manager", () => {
         correlationId: "run-1988",
         operation: "coding-runtime.handshake",
         errorClass: "OpenCodeHandshakeFailure",
-        message: `runtime-handshake-phase:${reason}`,
+        message: "runtime-handshake-failed",
+        code: reason,
       }),
     );
   });

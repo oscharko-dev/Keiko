@@ -19,7 +19,11 @@ import {
   type SessionPairingPort,
 } from "./sessionPairingPort.js";
 import type { AppSession, SessionRegistry } from "./sessionRegistry.js";
-import { contentFreeErrorClass, type ServerDiagnosticSink } from "../diagnostics-log.js";
+import {
+  contentFreeErrorClass,
+  type ServerDiagnosticSink,
+  type ServerDiagnosticSummary,
+} from "../diagnostics-log.js";
 
 export const CODING_APP_SESSION_MAX_LIVE_STREAMS = 32;
 
@@ -143,7 +147,7 @@ function subscribeToContent(
 function recordSseFailure(
   diagnostics: ServerDiagnosticSink | undefined,
   correlationId: string,
-  message: string,
+  message: ServerDiagnosticSummary,
   errorClass: string,
 ): void {
   if (diagnostics === undefined) return;
@@ -214,11 +218,16 @@ function makePublish(
         // KEIKO-0225: previously a listener returning `false` silently detached with nothing to
         // diagnose. Report backpressure once so operators can see a stream that dropped.
         if (valid && !accepted)
-          recordSseFailure(diagnostics, correlationId, "backpressure", "Error");
+          recordSseFailure(diagnostics, correlationId, "sse-backpressure", "Error");
         detach();
       }
     } catch (error) {
-      recordSseFailure(diagnostics, correlationId, "listener-threw", contentFreeErrorClass(error));
+      recordSseFailure(
+        diagnostics,
+        correlationId,
+        "sse-listener-failed",
+        contentFreeErrorClass(error),
+      );
       detach();
     }
   };

@@ -179,6 +179,81 @@ describe("analyzeLogText — raw log", () => {
     const req1 = result.timelines.find((t) => t.correlationId === "req-1");
     expect(req1?.errorKinds).toEqual(["GATEWAY_TIMEOUT", "GATEWAY_5XX"]);
   });
+
+  it("omits frames entirely (never an empty array) when no line in the timeline carried any", () => {
+    const req1 = result.timelines.find((t) => t.correlationId === "req-1");
+    expect(req1?.frames).toBeUndefined();
+  });
+});
+
+describe("analyzeLogText — Wave 6: LogTimeline.frames union", () => {
+  it("unions every line's frames[] across a timeline, in first-occurrence order, deduplicated", () => {
+    const first = line({
+      ts: T0,
+      category: "gateway",
+      op: "gateway.chat.failed",
+      correlationId: "req-frames",
+      frames: ["packages/keiko-server/dist/a.js:1:1", "packages/keiko-server/dist/b.js:2:2"],
+    });
+    const second = line({
+      ts: T1,
+      category: "gateway",
+      op: "gateway.retry.exhausted",
+      correlationId: "req-frames",
+      frames: ["packages/keiko-server/dist/b.js:2:2", "packages/keiko-server/dist/c.js:3:3"],
+    });
+
+    const result = analyzeLogText(`${first}\n${second}\n`);
+
+    expect(findTimeline(result, "req-frames")?.frames).toEqual([
+      "packages/keiko-server/dist/a.js:1:1",
+      "packages/keiko-server/dist/b.js:2:2",
+      "packages/keiko-server/dist/c.js:3:3",
+    ]);
+  });
+});
+
+describe("analyzeLogText — Wave 6: clusters", () => {
+  it("groups every parsed line by (category, op, errorKind) regardless of correlationId", () => {
+    const a = line({
+      ts: T0,
+      category: "gateway",
+      op: "gateway.retry.scheduled",
+      correlationId: "req-a",
+      errorKind: "GATEWAY_RATE_LIMIT",
+    });
+    const b = line({
+      ts: T1,
+      category: "gateway",
+      op: "gateway.retry.scheduled",
+      correlationId: "req-b",
+      errorKind: "GATEWAY_RATE_LIMIT",
+    });
+    const c = line({ ts: T2, category: "http", op: "request", correlationId: "req-a" });
+
+    const result = analyzeLogText(`${a}\n${b}\n${c}\n`);
+
+    expect(result.clusters).toEqual([
+      {
+        category: "gateway",
+        op: "gateway.retry.scheduled",
+        errorKind: "GATEWAY_RATE_LIMIT",
+        count: 2,
+        sampleCorrelationIds: ["req-a", "req-b"],
+      },
+      {
+        category: "http",
+        op: "request",
+        errorKind: null,
+        count: 1,
+        sampleCorrelationIds: ["req-a"],
+      },
+    ]);
+  });
+
+  it("reports an empty clusters array, not an omitted field, when there are no parsed lines", () => {
+    expect(analyzeLogText("").clusters).toEqual([]);
+  });
 });
 
 describe("analyzeLogText — bundle auto-detect", () => {
@@ -578,6 +653,7 @@ describe("human-readable rendering", () => {
         processes: [],
         legacyLineCount: 0,
         warnings: [],
+        clusters: [],
       }),
     ).toBe("No correlated events found.\n");
   });

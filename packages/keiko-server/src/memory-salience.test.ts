@@ -320,7 +320,10 @@ describe("captureSalientFromTurn", () => {
       expect(diagnostics.record).toHaveBeenCalledWith(
         expect.objectContaining({
           errorClass: "SalienceCaptureDropped",
-          message: "voice salience capture skipped: background queue full (32/32)",
+          // Issue #3245: `message` is now the fixed closed-vocabulary condition label; the
+          // surface/pending-count detail (previously composed into free text here) moved to `code`.
+          message: "salience-capture-dropped-queue-full",
+          code: "surface=voice pending=32/32",
           // ADR-0173 D5 / g12: this informational diagnostic used to mint its own disconnected
           // `randomUUID()` instead of reusing the turn-scoped id the caller already resolved
           // (`"assistant-dropped"`, the correlationId argument below). Fails before the fix.
@@ -823,6 +826,40 @@ describe("captureSalientFromTurn", () => {
     );
     expect(actions).toEqual([]);
     expect(countMemories(vault, ctx)).toBe(0);
+  });
+
+  // Regression: the extraction diagnostic's `code` used to be a hand-composed, space-joined
+  // string (`model=<id> responseFormat=<bool> kind=<kind> <detail>`) whose safety depended on
+  // log-redaction.ts's generic space-count heuristic, and — after the #3245 relocation — still
+  // carried the configured model id verbatim, against this file's own convention (a model id is
+  // recorded once by `gateway.config.resolved`; a diagnostic never repeats it). Fails before the
+  // fix (the model id is on `code`); passes after (colon-joined, zero spaces, no model id).
+  it("never puts the model id or a space-bearing value onto the salience extraction diagnostic", async () => {
+    const vault = makeVault();
+    const diagnostics = { record: vi.fn<(record: ServerDiagnosticRecord) => void>() };
+    const deps = makeDeps({
+      memoryVault: vault,
+      modelPortFactory: () => fakeModel("I could not find anything durable to remember."),
+      diagnostics,
+    });
+    const ctx = context();
+
+    await captureSalientFromTurn(
+      deps,
+      { content: USER_TEXT, memory: { enabled: true } },
+      ctx,
+      "gpt-4o",
+      "ok",
+    );
+
+    const diagnosticCall = diagnostics.record.mock.calls.find(
+      ([entry]) => entry.message === "salience-extraction-diagnostic",
+    );
+    expect(diagnosticCall).toBeDefined();
+    const entry = diagnosticCall?.[0];
+    expect(entry?.code).toBe("responseFormat=false:kind=parse-or-empty-output:rawItemCount=0");
+    expect(JSON.stringify(entry)).not.toContain("gpt-4o");
+    expect(entry?.code).not.toMatch(/ /);
   });
 
   it("dedups a salient candidate against an already-stored body", async () => {

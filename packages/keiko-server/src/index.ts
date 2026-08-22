@@ -397,7 +397,10 @@ export {
 // this package's log-level resolution and shutdown-close logic locally instead of reusing it.
 // `createBufferedServerLogSink` is deliberately absent: it is a test-only helper, every consumer
 // is an in-package test importing it from `./observability/index.js`, and a packaged export is a
-// promise this package would then have to keep.
+// promise this package would then have to keep. `redactLogFields` is exported for the same
+// support-bundle exporter's Wave 6 `config-snapshot` section (epic #3233 §6.2/§8): the ONE
+// redaction choke point this package's own log line formatter uses, reused rather than re-derived
+// so `keiko-cli` never grows a second copy of field redaction (AGENTS.md §7).
 export {
   createFileServerLogSink,
   nullServerLogSink,
@@ -407,6 +410,7 @@ export {
   resolveServerLogThreshold,
   SERVER_LOG_LEVEL_ENV,
   DEFAULT_SERVER_LOG_LEVEL,
+  redactLogFields,
   type ServerLogSink,
   type ServerLogEvent,
   type ServerLogCategory,
