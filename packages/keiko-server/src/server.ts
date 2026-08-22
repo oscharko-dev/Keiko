@@ -349,6 +349,12 @@ async function resolveCsp(deps: UiServerDeps): Promise<string> {
 // this function directly on a constructed `URL` — no real HTTP request, no spy on the shared
 // `Array.prototype.sort`, and no risk of a second call site (in the test) drifting from this one's
 // actual cap.
+// Plain code-point order (see the comment at the call site): deterministic across hosts.
+function codePointOrder(a: string, b: string): number {
+  if (a < b) return -1;
+  return a > b ? 1 : 0;
+}
+
 export function computeQueryParamFields(url: URL, context: RequestLogContext): void {
   const seen = new Set<string>();
   const kept: string[] = [];
@@ -368,7 +374,7 @@ export function computeQueryParamFields(url: URL, context: RequestLogContext): v
   // the cost difference is immaterial, but `localeCompare` depends on the host ICU data and the
   // default locale — two servers could then emit the same request with a different
   // `queryParamNames` order, and this field is compared/deduplicated across hosts.
-  kept.sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
+  kept.sort(codePointOrder);
   context.queryParamNames = kept;
   if (dropped > 0) context.queryParamDroppedCount = dropped;
 }

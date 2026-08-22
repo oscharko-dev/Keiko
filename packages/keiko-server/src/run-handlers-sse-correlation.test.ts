@@ -40,7 +40,12 @@ function listenableFakeRes(): { res: RouteContext["res"]; fireClose: () => void 
       emitter.on(event, handler);
     },
   } as unknown as RouteContext["res"];
-  return { res, fireClose: (): void => emitter.emit("close") };
+  return {
+    res,
+    fireClose: (): void => {
+      emitter.emit("close");
+    },
+  };
 }
 
 function fakeReq(): RouteContext["req"] {

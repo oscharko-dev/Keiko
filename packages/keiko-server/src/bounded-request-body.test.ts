@@ -398,37 +398,40 @@ describe("bounded request body activity log", () => {
 // is now the one owner of that wrapper layer; each caller keeps its own max-bytes constant and
 // becomes a one-line delegate to this function.
 describe("readJsonRequestBody", () => {
-  it("returns 413 PAYLOAD_TOO_LARGE for an oversized body", async () => {
-    const req = asRequest(Readable.from([Buffer.from("this body is too long")]));
+  it.each([
+    {
+      name: "413 PAYLOAD_TOO_LARGE for an oversized body",
+      body: "this body is too long",
+      maxBytes: 4,
+      expected: {
+        status: 413,
+        body: { error: { code: "PAYLOAD_TOO_LARGE", message: "Request body too large." } },
+      },
+    },
+    {
+      name: "400 BAD_REQUEST for malformed JSON",
+      body: "{not json",
+      maxBytes: 128_000,
+      expected: {
+        status: 400,
+        body: { error: { code: "BAD_REQUEST", message: "Request body is not valid JSON." } },
+      },
+    },
+    {
+      name: "400 BAD_REQUEST for valid JSON that is not an object (an array)",
+      body: "[1,2,3]",
+      maxBytes: 128_000,
+      expected: {
+        status: 400,
+        body: { error: { code: "BAD_REQUEST", message: "Request body must be a JSON object." } },
+      },
+    },
+  ])("returns $name", async ({ body, maxBytes, expected }) => {
+    const req = asRequest(Readable.from([Buffer.from(body)]));
 
-    const result = await readJsonRequestBody(req, 4);
+    const result = await readJsonRequestBody(req, maxBytes);
 
-    expect(result).toEqual({
-      status: 413,
-      body: { error: { code: "PAYLOAD_TOO_LARGE", message: "Request body too large." } },
-    });
-  });
-
-  it("returns 400 BAD_REQUEST for malformed JSON", async () => {
-    const req = asRequest(Readable.from([Buffer.from("{not json")]));
-
-    const result = await readJsonRequestBody(req, 128_000);
-
-    expect(result).toEqual({
-      status: 400,
-      body: { error: { code: "BAD_REQUEST", message: "Request body is not valid JSON." } },
-    });
-  });
-
-  it("returns 400 BAD_REQUEST for valid JSON that is not an object (an array)", async () => {
-    const req = asRequest(Readable.from([Buffer.from("[1,2,3]")]));
-
-    const result = await readJsonRequestBody(req, 128_000);
-
-    expect(result).toEqual({
-      status: 400,
-      body: { error: { code: "BAD_REQUEST", message: "Request body must be a JSON object." } },
-    });
+    expect(result).toEqual(expected);
   });
 
   it("returns the parsed record for a valid JSON object body", async () => {

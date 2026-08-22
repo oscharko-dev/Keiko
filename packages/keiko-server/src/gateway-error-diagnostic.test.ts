@@ -32,7 +32,7 @@ describe("emitGatewayErrorDiagnostic", () => {
       deps,
       new Error("boom"),
       "correlation-9",
-      "POST /api/example",
+      "POST /api/chat",
       "example.source",
     );
 
@@ -40,7 +40,7 @@ describe("emitGatewayErrorDiagnostic", () => {
     const [event] = events;
     if (event === undefined) throw new Error("expected a diagnostic record");
     expect(event.correlationId).toBe("correlation-9");
-    expect(event.operation).toBe("POST /api/example");
+    expect(event.operation).toBe("POST /api/chat");
     expect(event.source).toBe("example.source");
     expect(event.errorClass).toBe("Error");
   });
@@ -52,7 +52,7 @@ describe("emitGatewayErrorDiagnostic", () => {
       deps,
       new Error("boom"),
       undefined,
-      "POST /api/example",
+      "POST /api/chat",
       "example.source",
     );
 
@@ -70,7 +70,7 @@ describe("emitGatewayErrorDiagnostic", () => {
         deps,
         new Error("boom"),
         "correlation-1",
-        "POST /api/example",
+        "POST /api/chat",
         "example.source",
       );
     }).not.toThrow();

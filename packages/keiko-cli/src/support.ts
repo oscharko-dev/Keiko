@@ -303,6 +303,54 @@ function reportAuditFailure(error: unknown, io: CliIo): number {
   throw error;
 }
 
+type ManifestInput = Parameters<typeof buildSupportBundleManifest>[0];
+
+function processProvenance(
+  server: Awaited<ReturnType<typeof loadServer>>,
+  generatedAt: Date,
+  stateDirSource: ManifestInput["stateDirSource"],
+): Pick<
+  ManifestInput,
+  | "schemaVersion"
+  | "productVersion"
+  | "platform"
+  | "arch"
+  | "nodeVersion"
+  | "generatedAt"
+  | "installMode"
+  | "stateDirSource"
+> {
+  return {
+    schemaVersion: server.SERVER_LOG_SCHEMA_VERSION,
+    productVersion: KEIKO_PRODUCT_VERSION,
+    platform: process.platform,
+    arch: process.arch,
+    nodeVersion: process.version,
+    generatedAt: generatedAt.toISOString(),
+    installMode: resolveExportInstallMode(server),
+    stateDirSource,
+  };
+}
+
+function logContentManifestFields(
+  logContent: LogContent,
+): Pick<
+  ManifestInput,
+  | "sourceLogFiles"
+  | "truncatedLogFiles"
+  | "currentFileTailTruncated"
+  | "budgetExceeded"
+  | "skippedLogFiles"
+> {
+  return {
+    sourceLogFiles: logContent.sourceLogFiles,
+    truncatedLogFiles: logContent.truncatedLogFiles,
+    currentFileTailTruncated: logContent.currentFileTailTruncated,
+    budgetExceeded: logContent.budgetExceeded,
+    skippedLogFiles: logContent.skippedLogFiles,
+  };
+}
+
 async function runSupportExport(
   args: ExportArgs,
   io: CliIo,
@@ -336,19 +384,8 @@ async function runSupportExport(
   const storeFingerprintCollection = await server.collectStoreFingerprints({ stateDir, env });
   const generatedAtDate = now();
   const manifest = buildSupportBundleManifest({
-    schemaVersion: server.SERVER_LOG_SCHEMA_VERSION,
-    productVersion: KEIKO_PRODUCT_VERSION,
-    platform: process.platform,
-    arch: process.arch,
-    nodeVersion: process.version,
-    generatedAt: generatedAtDate.toISOString(),
-    installMode: resolveExportInstallMode(server),
-    stateDirSource,
-    sourceLogFiles: logContent.sourceLogFiles,
-    truncatedLogFiles: logContent.truncatedLogFiles,
-    currentFileTailTruncated: logContent.currentFileTailTruncated,
-    budgetExceeded: logContent.budgetExceeded,
-    skippedLogFiles: logContent.skippedLogFiles,
+    ...processProvenance(server, generatedAtDate, stateDirSource),
+    ...logContentManifestFields(logContent),
     auditSummary,
     evidenceIndexCount,
     storeFingerprints: storeFingerprintCollection.fingerprints,
