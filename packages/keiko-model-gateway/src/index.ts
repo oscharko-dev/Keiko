@@ -129,7 +129,29 @@ export {
   type SafeRerankerConfig,
 } from "./config.js";
 
-export { Gateway, type GatewayDeps } from "./gateway.js";
+export { Gateway, type GatewayCallRequest, type GatewayDeps } from "./gateway.js";
+
+// The caller-supplied correlation context a `GatewayCallRequest` may carry (ADR-0173 D5). Exported
+// so a `ModelPort`/`ChatModel` caller outside this package can build one without reaching past the
+// public surface into `./observability.js` directly.
+export { type ModelGatewayLogContext } from "./observability.js";
+
+// The provider-specific detail (HTTP status, server-supplied retry-after) a `ProviderError`/
+// `RateLimitError` already types and redacts at construction (ADR-0173 D5 g26). Exported so the
+// keiko-server diagnostic call sites that turn a GatewayError into an HTTP/SSE response can fold
+// the same detail into their operator diagnostic that `resilience.ts`'s own retry lines already
+// carry, instead of re-deriving it from the error a second time.
+export { providerErrorDetail, type ProviderErrorDetail } from "./resilience.js";
+
+// Fetch-seam and Clock replay doubles (ADR-0173 D5, §7.3): deterministic reconstruction of a
+// gateway call's retry/circuit-breaker behaviour from a scripted HTTP transcript, one layer below
+// `createScriptedModelPort` (`@oscharko-dev/keiko-evaluations`).
+export {
+  createScriptedGatewayClock,
+  createScriptedGatewayFetch,
+  type GatewayClockScript,
+  type GatewayReplayScriptEntry,
+} from "./replay.js";
 
 export {
   requestGatewayReadinessChatCompletion,

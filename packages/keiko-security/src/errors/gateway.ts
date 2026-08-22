@@ -80,18 +80,32 @@ export class ContextOverflowError extends GatewayError {
   readonly retryable = false;
 }
 
+// A rate limit is always an HTTP 429 by definition (that is the status the provider used to
+// signal it), so httpStatus defaults to 429 rather than requiring every call site to repeat the
+// literal. The parameter exists — instead of hardcoding 429 into the field — only so a caller that
+// somehow observes a different provider-reported status (there is none today; every known
+// RateLimitError construction maps HTTP 429, see openai-adapter.ts's mapHttpError) is not forced
+// to lie about it.
+const DEFAULT_RATE_LIMIT_HTTP_STATUS = 429;
+
 export class RateLimitError extends GatewayError {
   readonly code = ERROR_CODES.RATE_LIMIT;
   readonly retryable = true;
   readonly retryAfterMs: number | null;
+  // NEW: carried so a diagnostic record or a retry log line does not have to infer "429" from
+  // errorKind === GATEWAY_RATE_LIMIT — a downstream consumer (e.g. a replay-script builder) can
+  // read the status directly off the same shape ProviderError already exposes it through.
+  readonly httpStatus: number;
 
   constructor(
     message: string,
     retryAfterMs: number | null = null,
     secrets: readonly string[] = [],
+    httpStatus: number = DEFAULT_RATE_LIMIT_HTTP_STATUS,
   ) {
     super(message, secrets);
     this.retryAfterMs = retryAfterMs;
+    this.httpStatus = httpStatus;
   }
 }
 

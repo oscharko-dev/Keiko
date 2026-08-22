@@ -8,7 +8,7 @@
     "keiko-cli": {
       "files": 44,
       "uncoveredFiles": 0,
-      "uncoveredLines": 385,
+      "uncoveredLines": 387,
       "totalLines": 4880,
       "coverage": {
         "lines": 92.11,
@@ -30,14 +30,14 @@
       }
     },
     "keiko-contracts": {
-      "files": 187,
+      "files": 186,
       "uncoveredFiles": 0,
       "uncoveredLines": 857,
-      "totalLines": 13875,
+      "totalLines": 13852,
       "coverage": {
-        "lines": 93.82,
-        "statements": 92.41,
-        "branches": 90.25,
+        "lines": 93.81,
+        "statements": 92.39,
+        "branches": 90.23,
         "functions": 97.46
       }
     },
@@ -174,15 +174,15 @@
       }
     },
     "keiko-model-gateway": {
-      "files": 42,
+      "files": 43,
       "uncoveredFiles": 0,
-      "uncoveredLines": 184,
-      "totalLines": 3250,
+      "uncoveredLines": 185,
+      "totalLines": 3302,
       "coverage": {
-        "lines": 94.34,
-        "statements": 93.33,
-        "branches": 87.43,
-        "functions": 96.99
+        "lines": 94.4,
+        "statements": 93.4,
+        "branches": 87.54,
+        "functions": 97.05
       }
     },
     "keiko-quality-intelligence": {
@@ -225,24 +225,24 @@
       "files": 23,
       "uncoveredFiles": 0,
       "uncoveredLines": 11,
-      "totalLines": 614,
+      "totalLines": 616,
       "coverage": {
         "lines": 98.21,
-        "statements": 97.61,
-        "branches": 94.07,
+        "statements": 97.62,
+        "branches": 94.08,
         "functions": 98.6
       }
     },
     "keiko-server": {
-      "files": 581,
+      "files": 580,
       "uncoveredFiles": 0,
-      "uncoveredLines": 4485,
-      "totalLines": 56247,
+      "uncoveredLines": 4516,
+      "totalLines": 56260,
       "coverage": {
-        "lines": 92.03,
-        "statements": 89.32,
-        "branches": 81.95,
-        "functions": 94.9
+        "lines": 91.98,
+        "statements": 89.27,
+        "branches": 81.89,
+        "functions": 94.86
       }
     },
     "keiko-tools": {
@@ -258,15 +258,15 @@
       }
     },
     "keiko-ui": {
-      "files": 418,
+      "files": 419,
       "uncoveredFiles": 3,
-      "uncoveredLines": 2962,
-      "totalLines": 39477,
+      "uncoveredLines": 2967,
+      "totalLines": 39452,
       "coverage": {
-        "lines": 92.5,
-        "statements": 89.54,
-        "branches": 81.82,
-        "functions": 91.29
+        "lines": 92.48,
+        "statements": 89.52,
+        "branches": 81.8,
+        "functions": 91.28
       }
     },
     "keiko-verification": {

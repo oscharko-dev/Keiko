@@ -5,7 +5,7 @@
 
 import {
   CancelledError,
-  type GatewayRequest,
+  type GatewayCallRequest,
   type GatewayStreamChunk,
   type NormalizedResponse,
   type ToolDefinition,
@@ -14,24 +14,31 @@ import type { ModelPort, ToolCallRequest, ToolCallResult, ToolPort } from "./por
 
 // The minimal Gateway surface the model port depends on. Depending on this structural
 // type (not the concrete Gateway class) keeps the harness decoupled and trivially fakeable.
+//
+// `request` is a `GatewayCallRequest` (ADR-0173 D5): `GatewayRequest` plus an optional
+// `logContext` carrying the caller's correlation id. Widening from `GatewayRequest` adds exactly
+// one optional field, so a fake built against the narrower type stays assignable here.
 export interface ChatModel {
-  readonly chat: (request: GatewayRequest) => Promise<NormalizedResponse>;
+  readonly chat: (request: GatewayCallRequest) => Promise<NormalizedResponse>;
   // Optional streaming surface (#152). A concrete Gateway always provides it; structural fakes
   // may omit it. GatewayModelPort.callStream forwards to it.
-  readonly chatStream?: (request: GatewayRequest) => AsyncIterable<GatewayStreamChunk>;
+  readonly chatStream?: (request: GatewayCallRequest) => AsyncIterable<GatewayStreamChunk>;
 }
 
 export class GatewayModelPort implements ModelPort {
   constructor(private readonly gateway: ChatModel) {}
 
-  async call(request: GatewayRequest, signal: AbortSignal): Promise<NormalizedResponse> {
+  async call(request: GatewayCallRequest, signal: AbortSignal): Promise<NormalizedResponse> {
     return this.gateway.chat({ ...request, cancellationSignal: signal });
   }
 
   // #152 — propagate the run's AbortSignal as GatewayRequest.cancellationSignal, mirroring `call`.
   // The concrete Gateway always exposes chatStream; defaultModelPortFactory only ever constructs
   // this port with a real Gateway, so the non-null assertion is sound at the production call site.
-  callStream(request: GatewayRequest, signal: AbortSignal): AsyncIterable<GatewayStreamChunk> {
+  //
+  // Object spread forwards `logContext` when the caller supplied one — no change needed here for
+  // the correlation id to reach the Gateway's log lines.
+  callStream(request: GatewayCallRequest, signal: AbortSignal): AsyncIterable<GatewayStreamChunk> {
     const stream = this.gateway.chatStream;
     if (stream === undefined) {
       throw new Error("gateway does not support streaming");

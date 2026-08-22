@@ -29,10 +29,10 @@ describe("bffFetchJson — header union", () => {
     vi.stubGlobal("fetch", fetchMock);
 
     await bffFetchJson("/api/x");
-    const headers = lastInit(fetchMock).headers as Record<string, string>;
-    expect(headers.Accept).toBe("application/json");
-    expect(headers["Content-Type"]).toBeUndefined();
-    expect(headers["X-Keiko-CSRF"]).toBeUndefined();
+    const headers = new Headers(lastInit(fetchMock).headers);
+    expect(headers.get("Accept")).toBe("application/json");
+    expect(headers.has("Content-Type")).toBe(false);
+    expect(headers.has("X-Keiko-CSRF")).toBe(false);
   });
 
   it("state-changing method sends CSRF + JSON Content-Type even without a body", async () => {
@@ -40,9 +40,9 @@ describe("bffFetchJson — header union", () => {
     vi.stubGlobal("fetch", fetchMock);
 
     await bffFetchJson("/api/x", { method: "DELETE" });
-    const headers = lastInit(fetchMock).headers as Record<string, string>;
-    expect(headers["Content-Type"]).toBe("application/json");
-    expect(headers["X-Keiko-CSRF"]).toBe("1");
+    const headers = new Headers(lastInit(fetchMock).headers);
+    expect(headers.get("Content-Type")).toBe("application/json");
+    expect(headers.get("X-Keiko-CSRF")).toBe("1");
   });
 
   it("adds Content-Type when a body is present on a non-state-changing method", async () => {
@@ -52,18 +52,18 @@ describe("bffFetchJson — header union", () => {
     vi.stubGlobal("fetch", fetchMock);
 
     await bffFetchJson("/api/x", { method: "GET", body: "{}" });
-    const headers = lastInit(fetchMock).headers as Record<string, string>;
-    expect(headers["Content-Type"]).toBe("application/json");
-    expect(headers["X-Keiko-CSRF"]).toBeUndefined();
+    const headers = new Headers(lastInit(fetchMock).headers);
+    expect(headers.get("Content-Type")).toBe("application/json");
+    expect(headers.has("X-Keiko-CSRF")).toBe(false);
   });
 
-  it("lets caller-supplied init.headers win last (spread-style override)", async () => {
+  it("lets caller-supplied init.headers win last (caller override)", async () => {
     const fetchMock = vi.fn().mockResolvedValue(jsonResponse({ ok: true }));
     vi.stubGlobal("fetch", fetchMock);
 
     await bffFetchJson("/api/x", { headers: { Accept: "application/pdf" } });
-    const headers = lastInit(fetchMock).headers as Record<string, string>;
-    expect(headers.Accept).toBe("application/pdf");
+    const headers = new Headers(lastInit(fetchMock).headers);
+    expect(headers.get("Accept")).toBe("application/pdf");
   });
 });
 
@@ -72,8 +72,8 @@ describe("bffFetchJson — correlation id (RB-6, GEN-OBS-CORRELATION-601)", () =
     const fetchMock = vi.fn().mockResolvedValue(jsonResponse({ ok: true }));
     vi.stubGlobal("fetch", fetchMock);
     await bffFetchJson("/api/x");
-    const headers = lastInit(fetchMock).headers as Record<string, string>;
-    expect(headers["X-Keiko-Correlation-Id"]).toMatch(/^[A-Za-z0-9._-]{8,128}$/);
+    const headers = new Headers(lastInit(fetchMock).headers);
+    expect(headers.get("X-Keiko-Correlation-Id")).toMatch(/^[A-Za-z0-9._-]{8,128}$/);
   });
 
   it("attaches the server-echoed correlation id to a thrown ApiError", async () => {

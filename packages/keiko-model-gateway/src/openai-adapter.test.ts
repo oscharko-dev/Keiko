@@ -257,6 +257,19 @@ describe("OpenAiAdapter.call", () => {
     }
   });
 
+  it("throws RateLimitError carrying httpStatus 429 on a 429 response", async () => {
+    const adapter = adapterWith(() =>
+      Promise.resolve(jsonResponse({}, { status: 429, headers: { "retry-after": "5" } })),
+    );
+    try {
+      await adapter.call(REQUEST, CONFIG);
+      expect.unreachable("should throw");
+    } catch (error) {
+      expect(error).toBeInstanceOf(RateLimitError);
+      expect((error as RateLimitError).httpStatus).toBe(429);
+    }
+  });
+
   it("yields a null retryAfterMs when the Retry-After header is non-numeric", async () => {
     const adapter = adapterWith(() =>
       Promise.resolve(jsonResponse({}, { status: 429, headers: { "retry-after": "soon" } })),

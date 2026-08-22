@@ -42,7 +42,7 @@ import {
   deleteConversationAttachment,
   updateChat,
 } from "@/lib/api";
-import type { SseDonePayload } from "@/lib/api";
+import type { SseDonePayload, SseErrorPayload } from "@/lib/api";
 import {
   acceptMemoryProposal,
   forgetMemory,
@@ -3377,7 +3377,7 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
           if (outcome.status === "failed") setError(EMPTY_MODEL_RESPONSE_USER_MESSAGE);
           resolve(outcome);
         },
-        onError: ({ code, message }: { code: string; message: string }): void => {
+        onError: ({ code, message, correlationId }: SseErrorPayload): void => {
           // GEN-PERF-CHAT-007 — cancel any pending frame; onError/onCancelled remove the temp
           // bubble entirely (AC#3, no partial kept), so the buffered text must NOT be flushed.
           cancelFlush();
@@ -3392,7 +3392,12 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
             resolve({ status: "failed", canonicalTurnInProgress: true });
             return;
           }
-          setError(errorMessage(new ApiError(code, message, 0)));
+          // RB-6 / ADR-0173 D5 — the stream error event carries the same correlation id as every
+          // other diagnostic for this request; keep it on the ApiError instead of dropping it, so
+          // formatUserError can surface it as a copyable support id.
+          const apiError = new ApiError(code, message, 0);
+          if (correlationId !== undefined) apiError.correlationId = correlationId;
+          setError(errorMessage(apiError));
           removeTempMessage(tempAssistantId);
           resolve({ status: "failed" });
         },

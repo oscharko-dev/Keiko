@@ -40,6 +40,36 @@ function capture(level: ServerLogThreshold): BufferedServerLogSink {
   return sink;
 }
 
+// The ONE-TIME `gateway.config.resolved` snapshot every `new Gateway(...)` construction now emits
+// (Gateway's constructor, keiko-model-gateway/gateway.ts) — shared by every activity-log test below
+// that triggers a fresh construction, so the provider-shape literal is written once, not per test.
+function configResolvedExtra(): Record<string, unknown> {
+  return {
+    providers: [
+      {
+        modelId: "test-chat",
+        endpointHost: "gateway.example.com",
+        timeoutMs: 30_000,
+        maxRetries: 3,
+        retryBaseDelayMs: 500,
+      },
+    ],
+  };
+}
+
+function configResolvedEvent(): Record<string, unknown> {
+  return {
+    level: "info",
+    category: "gateway",
+    op: "gateway.config.resolved",
+    correlationId: undefined,
+    durationMs: undefined,
+    status: undefined,
+    errorKind: undefined,
+    extra: configResolvedExtra(),
+  };
+}
+
 describe("gateway instance cache", () => {
   it("reuses a config-keyed gateway when the runtime source is resolved later", () => {
     const current = config();
@@ -124,6 +154,8 @@ describe("gateway instance cache activity log", () => {
     generation += 1;
     gatewayForRuntimeConfig(source);
 
+    // The generation change discards the cached Gateway and constructs a fresh one, so the reset
+    // line is followed by that new instance's own one-time `gateway.config.resolved` snapshot.
     expect(sink.events).toEqual([
       {
         level: "info",
@@ -135,6 +167,7 @@ describe("gateway instance cache activity log", () => {
         errorKind: undefined,
         extra: { generation: 1, reason: "generation-changed", lifecycleReset: true },
       },
+      configResolvedEvent(),
     ]);
   });
 
@@ -150,7 +183,13 @@ describe("gateway instance cache activity log", () => {
     current = config();
     gatewayForRuntimeConfig(source);
 
-    expect(sink.events.map((event) => event.op)).toEqual(["gateway.instance.bound"]);
+    // A rebind onto a new (but not yet cached) parsed config object still converges through
+    // `forConfig`, which constructs a fresh Gateway for that object — its own one-time
+    // `gateway.config.resolved` snapshot follows the bind line.
+    expect(sink.events.map((event) => event.op)).toEqual([
+      "gateway.instance.bound",
+      "gateway.config.resolved",
+    ]);
     expect(sink.events[0]?.extra).toEqual({
       generation: 0,
       reason: "rebound",
@@ -212,13 +251,17 @@ describe("gateway instance cache activity log", () => {
     available = config();
     gatewayForRuntimeConfig(source);
 
+    // Recovery discards the "unavailable" marker and constructs a fresh Gateway for the now-present
+    // config — its own one-time `gateway.config.resolved` snapshot follows the reset line.
     expect(sink.events.map((event) => event.extra)).toEqual([
       { generation: 0, reason: "unconfigured" },
       { generation: 0, reason: "recovered", lifecycleReset: true },
+      configResolvedExtra(),
     ]);
     expect(sink.events.map((event) => event.op)).toEqual([
       "gateway.instance.unavailable",
       "gateway.instance.reset",
+      "gateway.config.resolved",
     ]);
   });
 });

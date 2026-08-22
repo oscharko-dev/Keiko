@@ -1,8 +1,10 @@
 import { describe, expect, it } from "vitest";
 import {
   CancelledError,
+  type GatewayCallRequest,
   type GatewayRequest,
   type GatewayStreamChunk,
+  type ModelGatewayLogContext,
   type NormalizedResponse,
   type ToolDefinition,
 } from "@oscharko-dev/keiko-model-gateway";
@@ -79,6 +81,59 @@ describe("GatewayModelPort", () => {
     }
     expect(seen).toBe(controller.signal);
     expect(received).toEqual(chunks);
+  });
+
+  it("forwards the caller's logContext through call to the Gateway double (ADR-0173 D5)", async () => {
+    let seen: ModelGatewayLogContext | undefined;
+    const port = new GatewayModelPort({
+      chat: (req: GatewayCallRequest): Promise<NormalizedResponse> => {
+        seen = req.logContext;
+        return Promise.resolve(response());
+      },
+    });
+    const request: GatewayCallRequest = {
+      modelId: "m",
+      messages: [],
+      logContext: { correlationId: "run-42" },
+    };
+    await port.call(request, new AbortController().signal);
+    expect(seen).toEqual({ correlationId: "run-42" });
+  });
+
+  it("forwards the caller's logContext through callStream to the Gateway double (ADR-0173 D5)", async () => {
+    let seen: ModelGatewayLogContext | undefined;
+    const port = new GatewayModelPort({
+      chat: (): Promise<NormalizedResponse> => Promise.resolve(response()),
+      // eslint-disable-next-line @typescript-eslint/require-await
+      chatStream: async function* (req: GatewayCallRequest): AsyncGenerator<GatewayStreamChunk> {
+        seen = req.logContext;
+        yield { type: "done", response: response() };
+      },
+    });
+    const request: GatewayCallRequest = {
+      modelId: "m",
+      messages: [],
+      logContext: { correlationId: "run-77" },
+    };
+    const received: GatewayStreamChunk[] = [];
+    for await (const chunk of port.callStream(request, new AbortController().signal)) {
+      received.push(chunk);
+    }
+    expect(seen).toEqual({ correlationId: "run-77" });
+    expect(received).toEqual([{ type: "done", response: response() }]);
+  });
+
+  it("leaves logContext undefined when the caller supplies a plain GatewayRequest", async () => {
+    let seen: ModelGatewayLogContext | undefined = { correlationId: "should-be-overwritten" };
+    const port = new GatewayModelPort({
+      chat: (req: GatewayCallRequest): Promise<NormalizedResponse> => {
+        seen = req.logContext;
+        return Promise.resolve(response());
+      },
+    });
+    const request: GatewayRequest = { modelId: "m", messages: [] };
+    await port.call(request, new AbortController().signal);
+    expect(seen).toBeUndefined();
   });
 });
 
