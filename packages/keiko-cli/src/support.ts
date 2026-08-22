@@ -17,7 +17,10 @@ import type { EvidenceStore } from "@oscharko-dev/keiko-evidence";
 import type { EnvSource } from "@oscharko-dev/keiko-model-gateway";
 import { type AuditCliDeps, AuditLoadError, auditLocalStateResult } from "./audit.js";
 // GEN-PERF-CLI-001 — the evidence graph (and, below, the server module graph) load at dispatch,
-// and only for `export`; `analyze` never needs either.
+// and only for `export`; `analyze` never needs either. Store-fingerprint collection (ui,
+// local-knowledge, memory-vault) is owned by keiko-server (ADR-0019 direction rule 7: keiko-cli
+// is a leaf consumer and must not import keiko-local-knowledge directly) and reached through the
+// same lazily-loaded server module, via `server.collectStoreFingerprints`.
 import { loadEvidence, loadServer } from "./lazy-modules.js";
 import type { CliIo } from "./runner.js";
 import { resolveStateDir } from "./state-paths.js";
@@ -46,11 +49,14 @@ const USAGE = `Usage:
   keiko support analyze FILE [--correlation-id ID] [--json]
 
 export writes a redacted .jsonl support bundle: a manifest line (local-state audit summary,
-evidence-index count, exactly which log files were copied) followed by every line of
-<state-dir>/logs/server*.log, copied byte-for-byte. Default --out is
-./keiko-support-<timestamp>.jsonl (colons replaced with '-'); default --max-bytes is 50MB —
-the oldest log files are dropped first when the cap would be exceeded, and always named in the
-manifest's truncatedLogFiles.
+evidence-index count, exactly which log files were copied, and a redacted schema/integrity
+fingerprint for each of the ui, local-knowledge, and memory-vault stores found under --state-dir)
+followed by every line of <state-dir>/logs/server*.log, copied byte-for-byte. A store that has
+never been used from this state dir, or that cannot be opened (corrupt, or a vault key the
+operator has not supplied), is named in the manifest's storesUnavailable instead of failing the
+export. Default --out is ./keiko-support-<timestamp>.jsonl (colons replaced with '-'); default
+--max-bytes is 50MB — the oldest log files are dropped first when the cap would be exceeded, and
+always named in the manifest's truncatedLogFiles.
 
 analyze reads FILE (a support bundle or a raw server.log — auto-detected), groups its lines by
 correlationId, and prints one reconstructed timeline per id. Each process lifetime is ordered by
@@ -262,6 +268,16 @@ function writeBundleOrExitCode(outPath: string, contents: string, io: CliIo): nu
   }
 }
 
+// Finding 1 (minor): store fingerprint collection runs a synchronous full-DB `quick_check` plus
+// a row count per table for each store, which can take a while against a large local-knowledge
+// index with nothing printed while it runs. This progress line keeps a slow run from looking
+// hung, without changing the collection's synchronous, untimed behavior itself.
+function reportStoreFingerprintProgress(io: CliIo): void {
+  io.err(
+    "keiko support export: computing store fingerprints (may take a while on a large local-knowledge index)...\n",
+  );
+}
+
 function reportAuditFailure(error: unknown, io: CliIo): number {
   if (error instanceof AuditLoadError) {
     io.err(
@@ -304,6 +320,10 @@ async function runSupportExport(
     return reportAuditFailure(error, io);
   }
 
+  // Deferred until after the audit's own fail-closed check: opening three real stores is real
+  // I/O, wasted if the export is about to be refused anyway.
+  reportStoreFingerprintProgress(io);
+  const storeFingerprintCollection = await server.collectStoreFingerprints({ stateDir, env });
   const generatedAtDate = now();
   const manifest = buildSupportBundleManifest({
     schemaVersion: server.SERVER_LOG_SCHEMA_VERSION,
@@ -319,6 +339,8 @@ async function runSupportExport(
     skippedLogFiles: logContent.skippedLogFiles,
     auditSummary,
     evidenceIndexCount,
+    storeFingerprints: storeFingerprintCollection.fingerprints,
+    storesUnavailable: storeFingerprintCollection.unavailable,
   });
 
   const lines = serializeBundleLines(manifest, logContent.contentLines);

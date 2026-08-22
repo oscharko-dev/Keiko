@@ -30,6 +30,7 @@ import {
   resolveFigmaToken,
   resolveScopedPaginationLimits,
   resolveFigmaVaultKey,
+  figmaKeychainReader,
   type FigmaConnectorMetrics,
   type FigmaHttpPort,
   type FigmaKeychainAccess,
@@ -44,6 +45,7 @@ import {
 import { QualityIntelligenceFigma } from "@oscharko-dev/keiko-quality-intelligence";
 import type { EnvSource } from "@oscharko-dev/keiko-security";
 import type { OutboundHttpEgressConfig } from "@oscharko-dev/keiko-model-gateway/internal/http";
+import { processServerLogSink } from "../process-log-sink.js";
 
 const FIGMA_VAULT_SUBDIR = "figma";
 const FIGMA_TOKEN_VAULT_FILE = "figma-token.vault";
@@ -96,6 +98,19 @@ const tokenVaultDir = (evidenceDir: string): string => join(evidenceDir, FIGMA_V
 const tokenVaultPath = (evidenceDir: string): string =>
   join(tokenVaultDir(evidenceDir), FIGMA_TOKEN_VAULT_FILE);
 
+// `deps.keychainAccess` is a test/CI seam (every call site in this package's tests supplies one).
+// Production omits it, and this is where that gap is filled: the SAME bounded reader
+// `resolveFigmaVaultKey`'s own default would use, but with the process-wide activity log
+// (Wave 4a, epic #3233 §8) threaded into it, so a keychain that never answers emits
+// `security.keychain.fallback` on `server.log` instead of falling through silently. Built once per
+// call rather than hoisted to a constant so `processServerLogSink()` — itself cheap and resolved
+// per write — always reflects the currently configured server logger.
+const productionKeychainAccess = (deps: {
+  readonly keychainAccess?: FigmaKeychainAccess;
+}): FigmaKeychainAccess =>
+  deps.keychainAccess ??
+  ((): Buffer | undefined => figmaKeychainReader({ sink: processServerLogSink() }));
+
 /**
  * Read the encrypted-at-rest vault PAT (#758), or `undefined` when no vault token is stored or the
  * vault key cannot be resolved. Highest precedence in {@link resolveFigmaToken}. Never throws — a
@@ -106,7 +121,7 @@ export const readFigmaVaultToken = (deps: GovernedSnapshotDeps): string | undefi
     const { key } = resolveFigmaVaultKey(
       deps.env,
       tokenVaultDir(deps.evidenceDir),
-      deps.keychainAccess,
+      productionKeychainAccess(deps),
     );
     return createFigmaTokenStore({ key, storePath: tokenVaultPath(deps.evidenceDir) }).read();
   } catch {
@@ -121,7 +136,7 @@ export const figmaTokenStoreFor = (
   const { key } = resolveFigmaVaultKey(
     deps.env,
     tokenVaultDir(deps.evidenceDir),
-    deps.keychainAccess,
+    productionKeychainAccess(deps),
   );
   return createFigmaTokenStore({ key, storePath: tokenVaultPath(deps.evidenceDir) });
 };

@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { SERVER_LOG_SCHEMA_VERSION } from "@oscharko-dev/keiko-server";
+import type { StoreFingerprint } from "@oscharko-dev/keiko-contracts";
 
 import type { AuditResult } from "./audit.js";
 import {
@@ -47,6 +48,8 @@ function baseManifestInput(
     skippedLogFiles: [],
     auditSummary: HEALTHY_AUDIT,
     evidenceIndexCount: 0,
+    storeFingerprints: [],
+    storesUnavailable: [],
     ...overrides,
   };
 }
@@ -292,6 +295,27 @@ describe("describeErrorKind", () => {
 });
 
 describe("buildSupportBundleManifest", () => {
+  it("names a fingerprint that fails the contract guard in storesUnavailable instead of dropping it", () => {
+    // A store that vanished from both lists would read as "never used" — the one claim a support
+    // bundle must not make about a store that exists (Wave 4a acceptance regression).
+    const contradictory = {
+      store: "memory-vault",
+      schemaVersion: 0,
+      migrationsApplied: [],
+      tableRowCounts: {},
+      quickCheckOk: false,
+      encryptionMode: "plaintext",
+      keySource: "env",
+    } as unknown as StoreFingerprint;
+    const manifest = buildSupportBundleManifest(
+      baseManifestInput({ storeFingerprints: [contradictory], storesUnavailable: [] }),
+    );
+    expect(manifest.storeFingerprints).toEqual([]);
+    expect(manifest.storesUnavailable).toEqual([
+      { store: "memory-vault", reasonKind: "invalid-fingerprint" },
+    ]);
+  });
+
   it("produces the exact manifest shape for the minimal Wave 1 bundle", () => {
     const manifest = buildSupportBundleManifest(
       baseManifestInput({
@@ -320,6 +344,8 @@ describe("buildSupportBundleManifest", () => {
       sectionsExcluded: [],
       auditSummary: REDACTED_HEALTHY_AUDIT,
       evidenceIndexCount: 3,
+      storeFingerprints: [],
+      storesUnavailable: [],
     });
   });
 
@@ -334,6 +360,51 @@ describe("buildSupportBundleManifest", () => {
 
     expect(manifest.auditSummary).not.toHaveProperty("stateDir");
     expect(JSON.stringify(manifest)).not.toContain(HEALTHY_AUDIT.stateDir);
+  });
+
+  // Wave 4a (epic #3233 §6.2/§8): a valid fingerprint and an unavailable-store entry both pass
+  // through to the manifest unchanged.
+  it("carries valid storeFingerprints and storesUnavailable entries through unchanged", () => {
+    const validFingerprint: StoreFingerprint = {
+      store: "ui",
+      schemaVersion: 19,
+      migrationsApplied: ["v1"],
+      tableRowCounts: { projects: 2 },
+      quickCheckOk: true,
+      encryptionMode: "plaintext",
+    };
+
+    const manifest = buildSupportBundleManifest(
+      baseManifestInput({
+        storeFingerprints: [validFingerprint],
+        storesUnavailable: [{ store: "memory-vault", reasonKind: "missing" }],
+      }),
+    );
+
+    expect(manifest.storeFingerprints).toEqual([validFingerprint]);
+    expect(manifest.storesUnavailable).toEqual([{ store: "memory-vault", reasonKind: "missing" }]);
+  });
+
+  // Defense-in-depth (this file's own header discipline, and the redaction doctrine every other
+  // guard in this repo follows): a fingerprint that fails the shared `isStoreFingerprint` guard —
+  // here, a negative row count nothing in this codebase could produce — must never reach the
+  // exported bundle, even though `buildSupportBundleManifest`'s own caller is the only producer
+  // today. Proves the filter is live, not merely a type-level assumption.
+  it("drops a fingerprint that fails isStoreFingerprint rather than embedding it", () => {
+    const malformed = {
+      store: "local-knowledge",
+      schemaVersion: 1,
+      migrationsApplied: [],
+      tableRowCounts: { capsules: -1 },
+      quickCheckOk: true,
+      encryptionMode: "plaintext",
+    } as unknown as StoreFingerprint;
+
+    const manifest = buildSupportBundleManifest(
+      baseManifestInput({ storeFingerprints: [malformed] }),
+    );
+
+    expect(manifest.storeFingerprints).toEqual([]);
   });
 
   // `buildSupportBundleManifest` forwards `schemaVersion` verbatim rather than deriving its own

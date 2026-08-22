@@ -31,7 +31,7 @@ import {
   type DiscoveryOptions,
 } from "./discovery/types.js";
 import { KnowledgeStoreError } from "./errors.js";
-import { diffFingerprintSets } from "./fingerprint-diff.js";
+import { diffFingerprintSets, type FingerprintSetDelta } from "./fingerprint-diff.js";
 import {
   readRepositoryFileFingerprints,
   replaceRepositoryFileFingerprints,
@@ -41,12 +41,12 @@ import {
 } from "./indexing/repository-fingerprints.js";
 import type { ContextualRetrievalOptions } from "./indexing/contextual-retrieval.js";
 import { runIndexingJob, type IndexingEvent, type IndexingResult } from "./indexing/index.js";
+import { emitKnowledgeLogEvent, type KnowledgeLogSink } from "./knowledge-log.js";
 import { buildKnowledgePodSummary } from "./knowledge-pods.js";
 import type { ParserRegistry } from "./parsers/index.js";
 import type { AuditEventSink } from "./privacy/index.js";
 import { addSourceToCapsule, listCapsuleSources } from "./source-lifecycle.js";
 import type { KnowledgeStore } from "./store.js";
-import type { KnowledgeLogSink } from "./knowledge-log.js";
 
 export interface RepositoryPodDeps {
   readonly store: KnowledgeStore;
@@ -327,20 +327,60 @@ function pruneRemovedDocuments(
   }
 }
 
+// Job-scoped: correlated to the refresh run, not the document, since a fingerprint diff is a
+// whole-source-scan fact rather than a per-document one. Category "indexing" matches the op
+// prefix and every other repository-pod-adjacent line this package already writes from
+// `orchestrator.ts`'s `logIndexing`.
+function logFingerprintDiffCompleted(
+  deps: RepositoryPodDeps,
+  runId: string,
+  delta: FingerprintSetDelta,
+): void {
+  emitKnowledgeLogEvent(deps.logSink, {
+    category: "indexing",
+    op: "repository.fingerprint-diff.completed",
+    correlationId: runId,
+    extra: {
+      added: delta.added,
+      changed: delta.changed,
+      removed: delta.removed,
+      moved: delta.moved,
+      unchanged: delta.unchanged,
+    },
+  });
+}
+
+// The one delta this run reports — from `prior` to the EFFECTIVE next baseline (the
+// failure-withheld set the caller is about to persist, never the raw scan), with `removed`
+// suppressed to 0 whenever enumeration is incomplete. Computed once and reused for both the
+// logged event and the persisted `RepositoryPodChangeCounts` so the two can never disagree with
+// each other about whether something was removed.
+function effectiveFingerprintDelta(
+  prior: ReadonlyMap<string, RepositoryFileFingerprint>,
+  next: readonly RepositoryFileFingerprint[],
+  enumerationComplete: boolean,
+): FingerprintSetDelta {
+  const delta = diffFingerprintSets(fingerprintMap([...prior.values()]), fingerprintMap(next), {
+    detectMoves: false,
+  });
+  return enumerationComplete ? delta : { ...delta, removed: 0 };
+}
+
 function runCounts(
+  deps: RepositoryPodDeps,
+  runId: string,
   prior: ReadonlyMap<string, RepositoryFileFingerprint>,
   next: readonly RepositoryFileFingerprint[],
   result: IndexingResult,
   rejectedEntries: number,
   enumerationComplete: boolean,
 ): RepositoryPodChangeCounts {
-  const delta = diffFingerprintSets(fingerprintMap([...prior.values()]), fingerprintMap(next), {
-    detectMoves: false,
-  });
+  const delta = effectiveFingerprintDelta(prior, next, enumerationComplete);
+  logFingerprintDiffCompleted(deps, runId, delta);
   return {
     addedFiles: delta.added,
     changedFiles: delta.changed,
-    removedFiles: enumerationComplete ? delta.removed : 0,
+    removedFiles: delta.removed,
     unchangedFiles: delta.unchanged,
     failedDocuments: result.failedDocuments,
     rejectedEntries,
@@ -444,8 +484,10 @@ export async function refreshRepositoryPod(
   }
   const persisted = applied ? next : [...prior.values()];
   const counts = runCounts(
+    deps,
+    runId,
     prior,
-    scan.fingerprints,
+    next,
     drained.result,
     scan.rejectedEntries,
     enumerationComplete,

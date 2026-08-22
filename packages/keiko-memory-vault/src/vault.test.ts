@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { DatabaseSync } from "node:sqlite";
+import { randomBytes } from "node:crypto";
 import {
   existsSync,
   mkdtempSync,
@@ -29,9 +30,11 @@ import {
   MemoryStorageError,
   MemoryStoragePreconditionError,
   MemoryStorageValidationError,
+  type MemoryContentCipher,
   type MemoryEvent,
   type MemoryVaultStore,
 } from "./index.js";
+import type { MemoryVaultLogEvent, MemoryVaultLogSink } from "./vault-log.js";
 
 // Deterministic injected key so the vault tests never touch the OS keychain or write a keyfile,
 // and so encrypted-at-rest reads are reproducible across the suite (ADR-0035).
@@ -1234,5 +1237,107 @@ describe("replaceAllEmbeddings concurrent-write detection", () => {
     // Prior vector space untouched.
     expect(Array.from(v.getEmbedding(a.id)?.vector ?? [])).toEqual(Array.from(EMBEDDING.vector));
     v.close();
+  });
+});
+
+// w4a-memory-vault-fingerprint (epic #3233 §8, g18): `resolveVaultKey` returns `{ key, source }`
+// but createMemoryVault used to destructure only `{ key }`, discarding `source` entirely — the
+// key-resolution tier an operator needs to tell "opened via KEIKO_MEMORY_KEY" from "fell through
+// to the weaker keyfile tier" was computed and then thrown away.
+describe("activity-log seam: memory-vault.store.opened retains the key-resolution tier", () => {
+  function recordingSink(): { sink: MemoryVaultLogSink; events: MemoryVaultLogEvent[] } {
+    const events: MemoryVaultLogEvent[] = [];
+    return {
+      sink: {
+        write: (event): void => {
+          events.push(event);
+        },
+      },
+      events,
+    };
+  }
+
+  // RED (before fix): createMemoryVault had no `logSink` option and `resolveCipher` returned only
+  // the cipher, so this event did not exist at all.
+  it('emits exactly one event carrying keySource:"env" when KEIKO_MEMORY_KEY resolves the key', () => {
+    const dir = freshDir();
+    const { sink, events } = recordingSink();
+    const key = randomBytes(32);
+
+    const v = createMemoryVault({
+      memoryDir: dir,
+      env: { KEIKO_MEMORY_DIR: dir, KEIKO_MEMORY_KEY: key.toString("base64") },
+      logSink: sink,
+    });
+
+    const opened = events.filter((event) => event.op === "memory-vault.store.opened");
+    expect(opened).toHaveLength(1);
+    expect(opened[0]).toMatchObject({ category: "memory", op: "memory-vault.store.opened" });
+    expect(opened[0]?.extra).toEqual({ keySource: "env" });
+    expect(typeof opened[0]?.durationMs).toBe("number");
+    v.close();
+  });
+
+  // A test-injected vaultKey/cipher never touches resolveVaultKey at all, so there is no tier to
+  // report — the event still fires (the vault still opened), but without a keySource field.
+  it("omits keySource from the event when a vaultKey/cipher test seam bypassed key resolution", () => {
+    const dir = freshDir();
+    const { sink, events } = recordingSink();
+
+    const v = createMemoryVault({
+      memoryDir: dir,
+      env: { KEIKO_MEMORY_DIR: dir },
+      vaultKey: Buffer.alloc(32, 7),
+      logSink: sink,
+    });
+
+    const opened = events.filter((event) => event.op === "memory-vault.store.opened");
+    expect(opened).toHaveLength(1);
+    expect(opened[0]?.extra).toBeUndefined();
+    v.close();
+  });
+
+  it("never throws when no logSink is supplied (fully backward-compatible)", () => {
+    const dir = freshDir();
+    expect(() => {
+      const v = createMemoryVault({
+        memoryDir: dir,
+        env: { KEIKO_MEMORY_DIR: dir },
+        vaultKey: Buffer.alloc(32, 7),
+      });
+      v.close();
+    }).not.toThrow();
+  });
+
+  // Finding: store-open ordering. `createMemoryVault` used to emit `memory-vault.store.opened`
+  // right after `openMemoryDatabase`, BEFORE `resolveBodySuppressionKey` ran. A cipher that fails
+  // on its very first `sealString` call (the fresh-vault path, which mints and persists a new
+  // body-suppression HMAC key) makes `createMemoryVault` throw, but the previous ordering had
+  // already reported the open as successful by then. RED (before fix): this test's second
+  // assertion fails because `opened` has length 1, not 0.
+  it("emits no store-opened event when initialization fails after the store is opened", () => {
+    const dir = freshDir();
+    const { sink, events } = recordingSink();
+    const throwingCipher: MemoryContentCipher = {
+      sealString: (): string => {
+        throw new Error("cipher unavailable");
+      },
+      openString: (envelope: string): string => envelope,
+      sealBytes: (buf: Buffer): Buffer => buf,
+      openBytes: (envelope: Buffer): Buffer => envelope,
+      isSealed: (): boolean => false,
+    };
+
+    expect(() => {
+      createMemoryVault({
+        memoryDir: dir,
+        env: { KEIKO_MEMORY_DIR: dir },
+        cipher: throwingCipher,
+        logSink: sink,
+      });
+    }).toThrow();
+
+    const opened = events.filter((event) => event.op === "memory-vault.store.opened");
+    expect(opened).toHaveLength(0);
   });
 });

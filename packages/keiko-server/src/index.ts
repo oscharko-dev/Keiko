@@ -118,14 +118,18 @@ export {
 } from "./evidence.js";
 // ADR-0013 — UI-local SQLite persistence: ports, factories, and route handlers.
 export {
+  computeStoreFingerprint,
   createInMemoryUiStore,
   createNodeUiStore,
   isProjectAvailable,
+  openNodeUiDatabase,
+  openNodeUiDatabaseReadOnly,
   resolveUiDbPath,
   runMigrations,
   SCHEMA_VERSION,
   UI_DB_DIRNAME,
   UI_DB_FILENAME,
+  UI_STORE_FINGERPRINT_TABLES,
   UiStoreError,
   validateProjectPath,
   type Chat,
@@ -143,6 +147,16 @@ export {
   type WorkspaceTrustRecordRow,
   type WorkspaceTrustRecordRowInput,
 } from "./store/index.js";
+// Wave 4a, epic #3233 §6.2/§8 — `keiko support export`'s per-store schema/integrity snapshot.
+// Lives here (not in keiko-cli) because this is the one package already depending on all three
+// store packages; see store-fingerprints.ts's header for the full ADR-0019 rationale.
+export {
+  collectStoreFingerprints,
+  type CollectStoreFingerprintsInput,
+  type CollectStoreFingerprintsResult,
+  type StoreFingerprintUnavailableEntry,
+  type StoreFingerprintUnavailableReasonKind,
+} from "./store-fingerprints.js";
 export {
   handleListProjects,
   handleCreateProject,

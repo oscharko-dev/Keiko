@@ -516,6 +516,32 @@ browser saw. Everything on these lines is a count, a closed label, a template, o
   that two packages could otherwise structurally agree on without importing each other.
   `keiko-contracts` (the leaf) gains only pure wire/data shapes used by more than one package
   (the client-diagnostics ingest request, a store-fingerprint data shape) — never logic.
+- **Wave 4a** (epic #3233 §8) added two more ports of that same shape: `SecurityLogSink`
+  (`keiko-security/src/log-port.ts`, categories `security`/`diagnostic`) and `MemoryVaultLogSink`
+  (`keiko-memory-vault/src/vault-log.ts`, categories `memory`/`diagnostic`). `keiko-server`'s
+  `processServerLogSink()` supplies both at every call site: `keiko-memory-vault`'s `cipher.ts`
+  (`keyFromKeychain`, threaded through `createMemoryVault`'s `securityLogSink` option from
+  `memory-handlers.ts`'s `createBffMemoryVault`), `qualityIntelligence/figmaSnapshotOrchestration.ts`,
+  `conversation-attachment-store.ts`, and `editor/localHistory/localHistoryStore.ts` (the latter two
+  via `deps.ts`). Each site degrades to a silent no-op sink when unwired, so a missing composition
+  edge fails closed rather than throwing.
+- **Gap g18** (epic #3233 §8, later in Wave 4a): `resolveLocalVaultKey`
+  (`keiko-security/src/secret-vault.ts`), the shared env -> macOS Keychain -> keyfile key-tier
+  resolver every local vault composes, had no `sink` parameter at all, so none of its production
+  callers could ever report which tier answered or that the keychain tier fell back — independent
+  of the `SecurityLogSink` port existing. It now emits `security.vault.key-resolved`
+  (`extra.source: "env" | "keychain" | "keyfile"`) on every resolution, and its own keychain reader
+  (`createKeychainVaultKeyAccess`, a separate implementation from `macos-keychain.ts`'s
+  `readMacosKeychainSecret` — it spawns `security` through an injectable `KeychainCommandRunner`
+  rather than that function) reports `security.keychain.fallback` via the same
+  `emitKeychainFallback` helper `macos-keychain.ts` exports, so the two keychain surfaces cannot
+  report the fallback shape differently. `processServerLogSink()` reaches it through every caller:
+  `credentialVault.ts` and `gateway-setup.ts`'s `persistGatewayConfig`/`durableStoredGatewayConfig`
+  (the provider-credential vault), `atlassian/credentialVault.ts` via `atlassian/wiring.ts`,
+  `editor/hotExitStore.ts`, `localKnowledgeKeyProvider.ts`, `workspace-index-provider.ts` (all five
+  via `deps.ts`), and the `conversation-attachment-store.ts`/`editor/localHistory/localHistoryStore.ts`
+  sink options wired in the earlier bullet, which reached the sharded vault's shard reads but not
+  this key-resolution layer until now.
 - **ADR-0048** (evidence artifact confidentiality) classified evidence artifacts into confidentiality
   tiers and mandated write-time permission enforcement. The support bundle is a new artifact class in
   that same spirit: every log line it carries was already redacted before this contract existed

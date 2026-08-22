@@ -350,6 +350,29 @@ describe("scanRuntimeState — runtime-state manifest", () => {
     );
   });
 
+  it("retains a stray file dropped directly under a subtree that owns no files of its own", () => {
+    // `local-knowledge/` and `evidence/qi/figma-snapshots/` are classified subtrees that own
+    // NOTHING but their recognized child directories (`OWNS_NO_FILE`): a namespace/run-id
+    // directory is owned via `childSubtree`, but any plain FILE sitting directly inside them —
+    // which nothing in this manifest ever writes — must be retained, not silently swallowed.
+    const stateDir = join(makeRoot(), ".keiko");
+    mkdirSync(join(stateDir, "local-knowledge", "default"), { recursive: true });
+    touch(join(stateDir, "local-knowledge", "default", "capsules.db"));
+    touch(join(stateDir, "local-knowledge", "stray.txt"));
+
+    const scan = scanRuntimeState(stateDir);
+
+    expect(categoryOf(scan, "local-knowledge/default/capsules.db")).toBe("local-knowledge");
+    expect(categoryOf(scan, "local-knowledge/stray.txt")).toBeUndefined();
+    const retained = scan.retained.find((r) => r.relPath === "local-knowledge/stray.txt");
+    expect(retained).toEqual({
+      relPath: "local-knowledge/stray.txt",
+      absPath: join(stateDir, "local-knowledge", "stray.txt"),
+      reason: "unknown",
+      owned: false,
+    });
+  });
+
   it("retains a customer file whose name only resembles a database (no prefix over-match)", () => {
     const stateDir = join(makeRoot(), ".keiko");
     mkdirSync(stateDir, { recursive: true });

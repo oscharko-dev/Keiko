@@ -1,4 +1,5 @@
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { DatabaseSync } from "node:sqlite";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -8,7 +9,11 @@ import {
   type EvidenceManifest,
   type EvidenceStore,
 } from "@oscharko-dev/keiko-evidence";
-import { SERVER_LOG_SCHEMA_VERSION } from "@oscharko-dev/keiko-server";
+import {
+  createNodeUiStore,
+  SERVER_LOG_SCHEMA_VERSION,
+  UI_DB_FILENAME,
+} from "@oscharko-dev/keiko-server";
 import type { AuditResult } from "./audit.js";
 import type { CliIo } from "./runner.js";
 import { parseSupportArgs, runSupportCli, type SupportCliDeps } from "./support.js";
@@ -200,6 +205,31 @@ describe("runSupportCli export", () => {
     expect(written).not.toContain(HEALTHY_AUDIT.stateDir);
   });
 
+  it("records a log file that vanishes between discovery and read as skipped, not aborted", async () => {
+    // `discoverServerLogFiles` only `statSync`s each name (which succeeds on a directory too), so
+    // a directory sitting where `server.log` belongs passes discovery — the read step afterward
+    // (`readFileSync`) is what actually fails, with EISDIR. This is the same "vanished between two
+    // fs calls" shape the sink's own rotation/retention pruning produces, exercised deterministically
+    // instead of via a real race.
+    mkdirSync(join(stateDir, "logs", "server.log"), { recursive: true });
+
+    const c = makeIo();
+    const code = await runSupportCli(["export", "--state-dir", stateDir], c.io, AUDIT_ENV, {
+      cwd: outDir,
+      now: () => new Date("2026-08-21T12:00:00.000Z"),
+      auditDeps: healthyAuditDeps(),
+      evidenceStore: createInMemoryEvidenceStore(),
+    });
+
+    expect(code).toBe(0);
+    const outPath = join(outDir, "keiko-support-2026-08-21T12-00-00.000Z.jsonl");
+    const manifest: Record<string, unknown> = JSON.parse(
+      readFileSync(outPath, "utf8").split("\n")[0] ?? "{}",
+    ) as Record<string, unknown>;
+    expect(manifest.sourceLogFiles).toEqual([]);
+    expect(manifest.skippedLogFiles).toEqual([{ name: "server.log", errorKind: "EISDIR" }]);
+  });
+
   it("defaults stateDirSource to 'default' when neither --state-dir nor KEIKO_STATE_DIR is set", async () => {
     const cwdWithDefaultState = mkdtempSync(join(tmpdir(), "keiko-support-cli-default-"));
     mkdirSync(join(cwdWithDefaultState, ".keiko", "logs"), { recursive: true });
@@ -348,6 +378,140 @@ describe("runSupportCli export", () => {
     expect(c.err()).toContain("keiko support export: could not write the bundle: ENOENT");
     expect(c.err()).not.toContain(badOutPath);
     expect(existsSync(badOutPath)).toBe(false);
+  });
+
+  // Wave 4a (epic #3233 §6.2/§8): none of the three stores has ever been created under this
+  // state dir, so the export must still succeed — each store is named in storesUnavailable with
+  // reasonKind "missing", and none of their (nonexistent) db files or directories are created as
+  // a side effect of merely running an export.
+  it("reports all three stores as missing, never creating them, when none exist under --state-dir", async () => {
+    const c = makeIo();
+    const outPath = join(outDir, "no-stores.jsonl");
+    const code = await runSupportCli(
+      ["export", "--state-dir", stateDir, "--out", outPath],
+      c.io,
+      AUDIT_ENV,
+      {
+        auditDeps: healthyAuditDeps(),
+        evidenceStore: createInMemoryEvidenceStore(),
+      },
+    );
+
+    expect(code).toBe(0);
+    const manifest: Record<string, unknown> = JSON.parse(
+      readFileSync(outPath, "utf8").split("\n")[0] ?? "{}",
+    ) as Record<string, unknown>;
+    expect(manifest.storeFingerprints).toEqual([]);
+    expect(manifest.storesUnavailable).toEqual(
+      expect.arrayContaining([
+        { store: "ui", reasonKind: "missing" },
+        { store: "local-knowledge", reasonKind: "missing" },
+        { store: "memory-vault", reasonKind: "missing" },
+      ]),
+    );
+    expect(existsSync(join(stateDir, "ui"))).toBe(false);
+    expect(existsSync(join(stateDir, "memory"))).toBe(false);
+    expect(existsSync(join(stateDir, "local-knowledge"))).toBe(false);
+  });
+
+  // Wave 4a: a store whose db path exists but cannot be opened as a database (here, a directory
+  // sitting where the db file is expected — not classified as SQLite corruption, so the store's
+  // own quarantine-and-recover path never kicks in) reports reasonKind "open-failed", and the
+  // export still succeeds for the other two stores.
+  it("reports open-failed (never throwing) when a store's db path exists but cannot be opened", async () => {
+    mkdirSync(join(stateDir, "ui", UI_DB_FILENAME), { recursive: true });
+
+    const c = makeIo();
+    const outPath = join(outDir, "open-failed.jsonl");
+    const code = await runSupportCli(
+      ["export", "--state-dir", stateDir, "--out", outPath],
+      c.io,
+      AUDIT_ENV,
+      { auditDeps: healthyAuditDeps(), evidenceStore: createInMemoryEvidenceStore() },
+    );
+
+    expect(code).toBe(0);
+    const manifest: Record<string, unknown> = JSON.parse(
+      readFileSync(outPath, "utf8").split("\n")[0] ?? "{}",
+    ) as Record<string, unknown>;
+    expect(manifest.storesUnavailable).toEqual(
+      expect.arrayContaining([{ store: "ui", reasonKind: "open-failed" }]),
+    );
+    expect(manifest.storeFingerprints).toEqual([]);
+  });
+
+  // RED (before fix): computing the ui store's fingerprint called `openNodeUiDatabase`, the
+  // mutating production open path — which unconditionally runs `sqlRecoverInterruptedClientTurns`,
+  // flipping any `client_turn_state = 'pending'` row to `'failed'`. That is exactly the evidence an
+  // operator running `keiko support export` to diagnose a stuck chat turn needs preserved. This
+  // goes through the real, on-disk ui store (no mock of the open path) so a regression in which
+  // fingerprint collection touches the production open path again cannot hide behind a fixture.
+  it("does not flip a pending client turn to failed as a side effect of computing the ui store fingerprint", async () => {
+    const uiDataDir = join(stateDir, "ui");
+    mkdirSync(uiDataDir, { recursive: true });
+    const dbPath = join(uiDataDir, UI_DB_FILENAME);
+    const projectDir = mkdtempSync(join(stateDir, "pending-turn-project-"));
+    const store = createNodeUiStore(dbPath);
+    store.createProject(projectDir);
+    const chat = store.createChat(projectDir, "Chat", "example-chat-model");
+    const admission = store.admitChatTurn("turn-stuck-in-flight", {
+      chatId: chat.id,
+      role: "user",
+      content: "message stuck in flight",
+      timestamp: 1,
+      runId: undefined,
+      workflowId: undefined,
+      workflowStatus: undefined,
+      shortResult: undefined,
+      taskType: undefined,
+    });
+    expect(admission.kind).toBe("admitted");
+    if (admission.kind !== "admitted") throw new Error("expected canonical admission");
+    store.close();
+
+    const c = makeIo();
+    const outPath = join(outDir, "pending-turn.jsonl");
+    const code = await runSupportCli(
+      ["export", "--state-dir", stateDir, "--out", outPath],
+      c.io,
+      AUDIT_ENV,
+      { auditDeps: healthyAuditDeps(), evidenceStore: createInMemoryEvidenceStore() },
+    );
+    expect(code).toBe(0);
+
+    const inspector = new DatabaseSync(dbPath, { readOnly: true });
+    const stored = inspector
+      .prepare("SELECT client_turn_state FROM chat_messages WHERE id = ?")
+      .get(admission.userMessage.id) as { client_turn_state: string };
+    inspector.close();
+    expect(stored.client_turn_state).toBe("pending");
+
+    const manifest: Record<string, unknown> = JSON.parse(
+      readFileSync(outPath, "utf8").split("\n")[0] ?? "{}",
+    ) as Record<string, unknown>;
+    expect(manifest.storesUnavailable).toEqual(
+      expect.not.arrayContaining([{ store: "ui", reasonKind: "open-failed" }]),
+    );
+  });
+
+  // Finding 1 (minor): store fingerprint collection runs a synchronous full-DB quick_check plus
+  // per-table row counts with nothing printed while it runs, so a slow run against a large
+  // local-knowledge index looks hung to the operator. A stderr progress line before the call
+  // fixes that. RED (before fix): no such line was ever written to stderr.
+  it("prints a stderr progress line before computing store fingerprints", async () => {
+    const c = makeIo();
+    const outPath = join(outDir, "progress-line.jsonl");
+    const code = await runSupportCli(
+      ["export", "--state-dir", stateDir, "--out", outPath],
+      c.io,
+      AUDIT_ENV,
+      { auditDeps: healthyAuditDeps(), evidenceStore: createInMemoryEvidenceStore() },
+    );
+
+    expect(code).toBe(0);
+    expect(c.err()).toContain(
+      "keiko support export: computing store fingerprints (may take a while on a large local-knowledge index)...",
+    );
   });
 });
 

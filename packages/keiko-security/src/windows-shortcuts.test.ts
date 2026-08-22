@@ -56,6 +56,24 @@ describe("windows shortcut fallback codec", () => {
       `${JSON.stringify({ schema: "keiko-windows-shortcut-v1", targetPath: "x" })}\n`,
     ],
     ["non-object", '"just a string"\n'],
+    [
+      "non-string targetPath",
+      `${JSON.stringify({
+        schema: "keiko-windows-shortcut-v1",
+        targetPath: 123,
+        workingDirectory: "wd",
+        iconPath: "ip",
+      })}\n`,
+    ],
+    [
+      "non-string iconPath",
+      `${JSON.stringify({
+        schema: "keiko-windows-shortcut-v1",
+        targetPath: "tp",
+        workingDirectory: "wd",
+        iconPath: 123,
+      })}\n`,
+    ],
   ])("refuses a %s fallback document", (_label, content) => {
     const path = join(tempRoot(), "Keiko.lnk");
     writeFileSync(path, content, "utf8");
@@ -132,6 +150,14 @@ describe("definition read/write entry points on the win32 route", () => {
     expect(spawnFn).toHaveBeenCalledTimes(1);
     expect(spawnFn.mock.calls[0]?.[1]).toContain("create");
   });
+
+  it("returns undefined instead of throwing when the underlying cscript call fails", () => {
+    // On the win32 route, readWindowsShortcutDefinition is a fail-closed READ: any refusal from
+    // runWindowsShortcutCommand (a nonzero exit here) must be swallowed, not propagated.
+    stubWin32();
+    const spawnFn = vi.fn<WindowsShortcutSpawnFn>(() => spawnResult({ status: 1 }));
+    expect(readWindowsShortcutDefinition("p", {}, "test prefix", spawnFn)).toBeUndefined();
+  });
 });
 
 describe("runWindowsShortcutCommand", () => {
@@ -180,6 +206,35 @@ describe("runWindowsShortcutCommand", () => {
       spawnFn,
     );
     expect(spawnFn.mock.calls[0]?.[0]).toBe(String.raw`C:\Windows\System32\cscript.exe`);
+  });
+
+  it("passes TEMP/TMP through to the script-host environment when the caller's env carries them", () => {
+    const spawnFn = vi.fn<WindowsShortcutSpawnFn>(() => spawnResult());
+    runWindowsShortcutCommand(
+      "read",
+      "p",
+      DEFINITION,
+      { SystemRoot: String.raw`C:\Windows`, TEMP: String.raw`C:\Temp`, TMP: String.raw`C:\Tmp` },
+      "test prefix",
+      spawnFn,
+    );
+    expect(spawnFn.mock.calls[0]?.[2]?.env).toEqual({
+      SystemRoot: String.raw`C:\Windows`,
+      WINDIR: String.raw`C:\Windows`,
+      ComSpec: String.raw`C:\Windows\System32\cmd.exe`,
+      TEMP: String.raw`C:\Temp`,
+      TMP: String.raw`C:\Tmp`,
+    });
+  });
+
+  it("falls back to an empty buffer when stdout/stderr are null instead of throwing", () => {
+    // The WindowsShortcutSpawnFn type allows a null stdout/stderr (matches spawnSync's own return
+    // shape); every OTHER fixture in this file supplies a real Buffer, so the `?? Buffer.alloc(0)`
+    // fallback on each field is otherwise never exercised.
+    const spawnFn = vi.fn<WindowsShortcutSpawnFn>(() =>
+      spawnResult({ stdout: null, stderr: null }),
+    );
+    expect(runWindowsShortcutCommand("read", "p", DEFINITION, {}, "test prefix", spawnFn)).toBe("");
   });
 
   it("fails closed on a nonzero exit", () => {

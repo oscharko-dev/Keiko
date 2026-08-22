@@ -49,7 +49,11 @@ import {
   reconcileTaskWorkspacesAtStartup,
   type UiHandlerDeps,
 } from "./deps.js";
-import type { ServerDiagnosticRecord, ServerDiagnosticSink } from "./diagnostics-log.js";
+import {
+  DEFAULT_SERVER_DIAGNOSTIC_SUMMARY,
+  type ServerDiagnosticRecord,
+  type ServerDiagnosticSink,
+} from "./diagnostics-log.js";
 import type { WorkspaceReconciliationService } from "./task-workspace/types.js";
 import {
   TASK_WORKSPACE_SCHEMA_VERSION,
@@ -1138,6 +1142,43 @@ describe("buildUiHandlerDeps — UiStore wiring (ADR-0013)", () => {
     ).toEqual([]);
     deps.store.close();
     deps.memoryVault?.close();
+  });
+
+  // Wave 4a (epic #3233 §8): a UiStoreSchemaVersionError previously crashed startup as a bare,
+  // undiagnosed exception. Fail-closed is still correct here — this binary genuinely cannot open a
+  // newer schema — but the crash must be diagnosable, mirroring every other composition-root
+  // boundary in this module (see "diagnoses why the managed workspace boundary..." above).
+  it("diagnoses why the UI store could not be opened, and still fails closed", () => {
+    const stateDir = tmp("ui-store-open-diagnostic-");
+    const uiDbPath = join(stateDir, "keiko-ui.db");
+    const seed = new DatabaseSync(uiDbPath);
+    seed.exec("PRAGMA journal_mode = WAL");
+    seed.exec("PRAGMA user_version = 9999");
+    seed.close();
+    const records: ServerDiagnosticRecord[] = [];
+    const diagnostics: ServerDiagnosticSink = {
+      record: (entry) => {
+        records.push(entry);
+      },
+    };
+
+    expect(() =>
+      buildUiHandlerDeps({
+        configPath: undefined,
+        evidenceDir: tmp("ui-store-open-diagnostic-evidence-"),
+        env: {},
+        uiDbPath,
+        diagnostics,
+      }),
+    ).toThrow(/newer than this binary supports/);
+
+    expect(records).toHaveLength(1);
+    expect(records[0]?.source).toBe("deps.composePersistence");
+    expect(records[0]?.operation).toBe("server.composition");
+    expect(records[0]?.message).toBe(DEFAULT_SERVER_DIAGNOSTIC_SUMMARY);
+    expect(records[0]?.correlationId).toMatch(/^[A-Za-z0-9._-]{8,128}$/);
+    // Content-free: the state directory path never enters the record.
+    expect(JSON.stringify(records)).not.toContain(stateDir);
   });
 });
 

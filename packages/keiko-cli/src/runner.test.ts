@@ -163,6 +163,11 @@ describe("runCli", () => {
     ["verify", ["--help"], "keiko verify"],
     ["evaluate", ["--suite", "definitely-not-a-suite"], "unknown suite"],
     ["memory", [], "Usage:"],
+    // Both handlers are wrapped in a closure in COMMAND_HANDLERS (they thread `env`/build extra
+    // deps rather than being registered directly), so calling `runPromptEnhancerCli`/
+    // `runSupportCli` straight from their own test files never exercises the wrapper itself.
+    ["prompt-enhancer", ["--help"], "keiko prompt-enhancer"],
+    ["support", ["--help"], "keiko support"],
   ] as const)("dispatches %s through the top-level command table", async (_name, rest, marker) => {
     const c = makeIo();
     const code = await runCli([_name, ...rest], c.io);

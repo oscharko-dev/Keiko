@@ -402,6 +402,15 @@ describe("USearch ANN index", () => {
     expect(readsAfterWarm).toBe(readsAfterCold);
   });
 
+  // The "logs search.native-runtime-resolved on the cold path only, content-free" case moved to
+  // ./usearch-runtime-resolved-logging.test.ts: it needs a mocked runtime-manifest approval to
+  // run hermetically (no host-native USearch binary, no order dependency on this file's shared
+  // TARGET_RUNTIME_CACHE), which would have required either a per-file vi.mock here — poisoning
+  // every other real-binary test in this suite — or a scoped vi.doMock reimport that was harder
+  // to reason about than a small dedicated file. Native-addon search correctness stays covered
+  // right here by every other test in this file that already exercises the real binary via
+  // runtimePath().
+
   it("serializes concurrent callers through queryQueue without cross-contaminating results (KEIKO-0360)", async () => {
     // KEIKO-0360: coverage pin for the ADR-0164 D2 single-Worker queryQueue serialization
     // at annSearch()/annSearchExclusive(). Twelve concurrent Promise.all searches against

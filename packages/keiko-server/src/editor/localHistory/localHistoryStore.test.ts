@@ -17,10 +17,12 @@ import {
   createShardedLocalSecretVault,
   type LocalSecretVault,
 } from "@oscharko-dev/keiko-security/secret-vault";
+import type { SecurityLogEvent, SecurityLogSink } from "@oscharko-dev/keiko-security";
 import type { EditorLocalHistoryOrigin } from "@oscharko-dev/keiko-contracts";
 import { inspectWorkspaceRootIdentity } from "../../workspace-root-identity.js";
 import {
   createEditorLocalHistoryStore,
+  EditorLocalHistoryError,
   EDITOR_LOCAL_HISTORY_INDEX_MAX_BYTES,
   type EditorLocalHistoryCaptureInput,
   type EditorLocalHistoryRootScope,
@@ -661,6 +663,42 @@ describe("editor local-history store", () => {
     roomyStore.setPinned(roomy.scope, pinnedSecond.entryRef, true, 2_002);
     expect(() => roomyStore.capture(captureInput(roomy, "DDDD\n", "user-save", 3_000))).toThrow(
       expect.objectContaining({ code: "PINNED_CAPACITY_EXHAUSTED" }),
+    );
+  });
+});
+
+// Wiring test for `securityLogSink` (Wave 4a, epic #3233 §8): every test above supplies
+// `KEIKO_EDITOR_LOCAL_HISTORY_KEY` (env tier, via `storeOptions`) so none of them touch the
+// keychain, and none supplies `securityLogSink`. This is the one test that forces the sharded
+// vault's own failure mode, `security.vault.shard-unreadable`, and proves it reaches the caller's
+// sink through the real `createVault` composition (no `vaultFactory` override — that seam bypasses
+// `createShardedLocalSecretVault` entirely).
+//
+// THE FAILURE THIS PINS: dropping `sink: options.securityLogSink` from the
+// `createShardedLocalSecretVault` call in `createVault` (`localHistoryStore.ts`) makes `events`
+// stay empty below.
+describe("createEditorLocalHistoryStore — securityLogSink wiring to the sharded vault", () => {
+  it("records shard-unreadable when a checkpoint body cannot be read for a reason other than absent", () => {
+    const fx = fixture();
+    const events: SecurityLogEvent[] = [];
+    const sink: SecurityLogSink = { write: (event): void => void events.push(event) };
+    const store = createEditorLocalHistoryStore({ ...storeOptions(fx), securityLogSink: sink });
+
+    const captured = store.capture(captureInput(fx, "wired\n", "user-save", 1_000)).entry;
+    const checkpointsDir = join(workspaceStateDir(fx.stateDir), "checkpoints");
+    const [shardName] = bodyFiles(fx.stateDir);
+    if (shardName === undefined) throw new Error("fixture wrote no checkpoint body");
+    const shardPath = join(checkpointsDir, shardName);
+
+    // Replace the just-written shard FILE with a DIRECTORY of the same name: the next read fails
+    // with EISDIR, a reason other than "absent" (ENOENT), which is exactly what the sharded
+    // vault's own `readShardEnvelope` treats as "one unreadable entry" and reports on the sink.
+    rmSync(shardPath, { force: true });
+    mkdirSync(shardPath);
+
+    expect(() => store.read(fx.scope, captured.entryRef, 2_000)).toThrow(EditorLocalHistoryError);
+    expect(events).toContainEqual(
+      expect.objectContaining({ category: "security", op: "security.vault.shard-unreadable" }),
     );
   });
 });

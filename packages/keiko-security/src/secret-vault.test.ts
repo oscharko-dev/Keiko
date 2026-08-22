@@ -13,8 +13,9 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { SecretboxError } from "./errors/secretbox.js";
+import type { SecurityLogEvent, SecurityLogSink } from "./log-port.js";
 import {
   NO_LOCAL_VAULT_KEYCHAIN,
   SecretVaultStoreError,
@@ -184,6 +185,126 @@ describe("resolveLocalVaultKey — KEYFILE tier", () => {
         keychainAccess: NO_LOCAL_VAULT_KEYCHAIN,
       }),
     ).toThrow("symlinked path");
+  });
+});
+
+describe("resolveLocalVaultKey — default keychainAccess when the option is omitted", () => {
+  const originalPlatform = process.platform;
+
+  afterEach(() => {
+    Object.defineProperty(process, "platform", { value: originalPlatform, configurable: true });
+  });
+
+  it("builds the default macOS keychain access itself and falls through to keyfile off darwin", () => {
+    // No `keychainAccess` in these options at all — computeLocalVaultKey must construct the default
+    // (createKeychainVaultKeyAccess-backed) access itself. Off darwin that default returns undefined
+    // WITHOUT spawning `security`, so this stays hermetic while still exercising the real default
+    // construction path rather than an injected stand-in.
+    Object.defineProperty(process, "platform", { value: "linux", configurable: true });
+    const resolved = resolveLocalVaultKey({
+      env: {},
+      vaultDir: dir,
+      envVarName: "KEIKO_TEST_VAULT_KEY",
+      keychainService: "keiko-test-vault",
+      keyfileName: "test-vault.key",
+    });
+    expect(resolved.source).toBe("keyfile");
+  });
+});
+
+// gap g18: the key-source fact (which tier answered) was previously invisible even on the
+// ordinary, no-fallback path. `security.vault.key-resolved` closes that — it fires every time a
+// tier resolves, independent of whether anything went wrong.
+describe("resolveLocalVaultKey — security.vault.key-resolved sink wiring", () => {
+  function recordingSink(): { sink: SecurityLogSink; events: SecurityLogEvent[] } {
+    const events: SecurityLogEvent[] = [];
+    return { sink: { write: (event): void => void events.push(event) }, events };
+  }
+
+  it("emits source=env, with only the documented fields, on the env tier", () => {
+    const { sink, events } = recordingSink();
+    resolveLocalVaultKey({
+      env: { KEIKO_TEST_VAULT_KEY: Buffer.alloc(32, 5).toString("base64") },
+      vaultDir: dir,
+      envVarName: "KEIKO_TEST_VAULT_KEY",
+      keychainService: "keiko-test-vault",
+      keyfileName: "test-vault.key",
+      keychainAccess: NO_LOCAL_VAULT_KEYCHAIN,
+      sink,
+    });
+
+    expect(events).toHaveLength(1);
+    const [event] = events;
+    expect(event).toMatchObject({
+      level: "info",
+      category: "security",
+      op: "security.vault.key-resolved",
+      extra: { source: "env" },
+    });
+    expect(Object.keys(event ?? {}).sort()).toEqual(["category", "extra", "level", "op"]);
+  });
+
+  it("emits source=keychain when the keychain tier answers", () => {
+    const { sink, events } = recordingSink();
+    resolveLocalVaultKey({
+      env: {},
+      vaultDir: dir,
+      envVarName: "KEIKO_TEST_VAULT_KEY",
+      keychainService: "keiko-test-vault",
+      keyfileName: "test-vault.key",
+      keychainAccess: () => Buffer.alloc(32, 9),
+      sink,
+    });
+
+    expect(events).toEqual([
+      expect.objectContaining({ op: "security.vault.key-resolved", extra: { source: "keychain" } }),
+    ]);
+  });
+
+  it("emits source=keyfile when env and keychain are both absent", () => {
+    const { sink, events } = recordingSink();
+    resolveLocalVaultKey({
+      env: {},
+      vaultDir: dir,
+      envVarName: "KEIKO_TEST_VAULT_KEY",
+      keychainService: "keiko-test-vault",
+      keyfileName: "test-vault.key",
+      keychainAccess: NO_LOCAL_VAULT_KEYCHAIN,
+      sink,
+    });
+
+    expect(events).toEqual([
+      expect.objectContaining({ op: "security.vault.key-resolved", extra: { source: "keyfile" } }),
+    ]);
+  });
+
+  it("emits nothing when the tier computation throws (a malformed env key)", () => {
+    const { sink, events } = recordingSink();
+    expect(() =>
+      resolveLocalVaultKey({
+        env: { KEIKO_TEST_VAULT_KEY: Buffer.alloc(16, 3).toString("base64") },
+        vaultDir: dir,
+        envVarName: "KEIKO_TEST_VAULT_KEY",
+        keychainService: "keiko-test-vault",
+        keyfileName: "test-vault.key",
+        keychainAccess: NO_LOCAL_VAULT_KEYCHAIN,
+        sink,
+      }),
+    ).toThrow("32 bytes");
+    expect(events).toHaveLength(0);
+  });
+
+  it("stays exactly as silent as before when no sink is wired", () => {
+    expect(() =>
+      resolveLocalVaultKey({
+        env: {},
+        vaultDir: dir,
+        envVarName: "KEIKO_TEST_VAULT_KEY",
+        keychainService: "keiko-test-vault",
+        keyfileName: "test-vault.key",
+        keychainAccess: NO_LOCAL_VAULT_KEYCHAIN,
+      }),
+    ).not.toThrow();
   });
 });
 
@@ -500,6 +621,56 @@ describe("createLocalSecretVault — symlink guard", () => {
   });
 });
 
+describe("createLocalSecretVault — non-symlink lstat failure propagates unmodified", () => {
+  it("propagates a non-ENOENT lstat failure raised while walking ancestor path segments", () => {
+    // A path segment that is itself a plain FILE (not a directory) makes lstat on anything beneath
+    // it fail with ENOTDIR rather than ENOENT — the "keychain refused, not merely absent" analogue
+    // for the symlink-guard walk: only ENOENT is swallowed as "not a symlink", every other lstat
+    // failure must propagate as-is rather than being reinterpreted as the deliberate guard error.
+    const blockedFile = join(dir, "blocked-file");
+    writeFileSync(blockedFile, "not a directory");
+    const storePath = join(blockedFile, "sub", "vault.enc.json");
+    const vault = vaultAt(storePath);
+
+    let caught: unknown;
+    try {
+      vault.set("cred:a", "value");
+    } catch (error) {
+      caught = error;
+    }
+    expect(caught).toBeInstanceOf(Error);
+    expect((caught as NodeJS.ErrnoException).code).toBe("ENOTDIR");
+    // Not the deliberate symlink-guard error: this is the raw fs failure propagating unmodified.
+    expect(String(caught)).not.toContain("symlinked path");
+  });
+});
+
+describe("createLocalSecretVault — fsyncDirectory skips the directory fsync on win32", () => {
+  const originalPlatform = process.platform;
+
+  afterEach(() => {
+    Object.defineProperty(process, "platform", { value: originalPlatform, configurable: true });
+  });
+
+  it("still completes a write when the platform is win32 (POSIX directory fsync is meaningless there)", () => {
+    Object.defineProperty(process, "platform", { value: "win32", configurable: true });
+    const storePath = join(dir, "vault.enc.json");
+    const vault = vaultAt(storePath);
+
+    expect(() => {
+      vault.set("cred:a", "value");
+    }).not.toThrow();
+    expect(vault.get("cred:a")).toBe("value");
+  });
+});
+
+// NOTE: the analogous "leaves no temp file behind when the commit rename fails" proof for the
+// SHARDED layout (below, near writeShard) blocks the target with a real pre-existing directory
+// because sharded set() never reads its target before writing. The single-file layout's set()
+// always reads the CURRENT store content first (readStore), so the same trick makes readStore
+// itself fail first (EISDIR) — never reaching writeStore's rename at all. That version of this
+// proof lives in secret-vault.fs-fault-injection.test.ts, using a scoped renameSync mock instead.
+
 describe("createLocalSecretVault — additional isStoreFile branches", () => {
   it("a store file containing JSON null fails closed", () => {
     const storePath = join(dir, "vault.enc.json");
@@ -626,6 +797,102 @@ describe("createKeychainVaultKeyAccess", () => {
       throw new Error("security unavailable");
     };
     expect(createKeychainVaultKeyAccess("svc", runner)()).toBeUndefined();
+  });
+
+  it("regenerates the key when the stored keychain value cannot be decoded (corrupt/garbage bytes)", () => {
+    setPlatform("darwin");
+    // Base64 of 16 bytes decodes cleanly but to the wrong length, so decodeKeyOrThrow rejects it —
+    // distinct from "keychain has none" (item-not-found): here the read SUCCEEDS with a value this
+    // vault cannot use, and the undecodable-value path must replace it exactly as generate-on-miss does.
+    const undecodable = Buffer.alloc(16, 2).toString("base64");
+    const commands: string[][] = [];
+    const runner = (args: readonly string[]): string => {
+      commands.push([...args]);
+      if (args[0] === "find-generic-password") return `${undecodable}\n`;
+      return "";
+    };
+    const key = createKeychainVaultKeyAccess("svc", runner)();
+    expect(key?.length).toBe(32);
+    expect(commands.map((c) => c[0])).toEqual(["find-generic-password", "add-generic-password"]);
+  });
+
+  it("returns undefined when the item-not-found path's own key generation fails (add error)", () => {
+    setPlatform("darwin");
+    const commands: string[][] = [];
+    const runner = (args: readonly string[]): string => {
+      commands.push([...args]);
+      if (args[0] === "find-generic-password") throw itemNotFound();
+      throw new Error("add-generic-password failed");
+    };
+    expect(createKeychainVaultKeyAccess("svc", runner)()).toBeUndefined();
+    expect(commands.map((c) => c[0])).toEqual(["find-generic-password", "add-generic-password"]);
+  });
+
+  // The keychain key-tier path spawns `security` through its own injectable `KeychainCommandRunner`
+  // rather than calling `readMacosKeychainSecret`, so it needs its own proof that a read failure
+  // (other than "no such item") reports `security.keychain.fallback` — the same shape
+  // `readMacosKeychainSecret` reports for its own read tier (macos-keychain.test.ts).
+  describe("security.keychain.fallback sink wiring", () => {
+    function recordingSink(): { sink: SecurityLogSink; events: SecurityLogEvent[] } {
+      const events: SecurityLogEvent[] = [];
+      return { sink: { write: (event): void => void events.push(event) }, events };
+    }
+
+    it("emits one security.keychain.fallback event when the read refuses for a reason other than 'not found'", () => {
+      setPlatform("darwin");
+      const { sink, events } = recordingSink();
+      const runner = (): string => {
+        throw Object.assign(new Error("keychain refused"), { status: 45 });
+      };
+
+      expect(createKeychainVaultKeyAccess("svc", runner, sink)()).toBeUndefined();
+
+      expect(events).toHaveLength(1);
+      const [event] = events;
+      expect(event).toMatchObject({
+        level: "warn",
+        category: "security",
+        op: "security.keychain.fallback",
+        extra: { reasonKind: "Error", boundedExitKind: "exit-status" },
+      });
+      expect(typeof event?.durationMs).toBe("number");
+      // Never the service name this call was made with.
+      expect(JSON.stringify(event)).not.toContain("svc");
+    });
+
+    it("does not emit for the ordinary first-run case (item not found)", () => {
+      setPlatform("darwin");
+      const { sink, events } = recordingSink();
+      const runner = (args: readonly string[]): string => {
+        if (args[0] === "find-generic-password") throw itemNotFound();
+        return "";
+      };
+
+      const key = createKeychainVaultKeyAccess("svc", runner, sink)();
+
+      expect(key?.length).toBe(32);
+      expect(events).toHaveLength(0);
+    });
+
+    it("does not emit when the read succeeds", () => {
+      setPlatform("darwin");
+      const { sink, events } = recordingSink();
+      const stored = Buffer.alloc(32, 5).toString("base64");
+      const runner = (): string => `${stored}\n`;
+
+      createKeychainVaultKeyAccess("svc", runner, sink)();
+
+      expect(events).toHaveLength(0);
+    });
+
+    it("stays exactly as silent as before when no sink is wired", () => {
+      setPlatform("darwin");
+      const runner = (): string => {
+        throw Object.assign(new Error("keychain refused"), { status: 45 });
+      };
+
+      expect(() => createKeychainVaultKeyAccess("svc", runner)()).not.toThrow();
+    });
   });
 });
 
@@ -758,6 +1025,109 @@ describe("createShardedLocalSecretVault — CRUD parity with the single-file lay
 
     expect(vault.get("cred:a")).toBeUndefined();
     expect(vault.has("cred:a")).toBe(false);
+  });
+
+  function recordingSink(): { sink: SecurityLogSink; events: SecurityLogEvent[] } {
+    const events: SecurityLogEvent[] = [];
+    return {
+      sink: {
+        write: (event): void => {
+          events.push(event);
+        },
+      },
+      events,
+    };
+  }
+
+  it("emits one security.vault.shard-unreadable event, with only the documented fields, for an EISDIR shard", () => {
+    const storeDir = join(dir, "sharded");
+    const { sink, events } = recordingSink();
+    const vault = createShardedLocalSecretVault({ key: KEY, storeDir, sink });
+    vault.set("cred:a", "secret-A");
+    const [name] = readdirSync(storeDir);
+    // Same fixture as the unwired test above: a directory where the entry file belongs makes
+    // readFileSync raise EISDIR without depending on process privilege (unlike EACCES, which a
+    // root-run test worker would never actually be refused).
+    rmSync(join(storeDir, name ?? "missing"));
+    mkdirSync(join(storeDir, name ?? "missing"), { recursive: true });
+
+    expect(vault.get("cred:a")).toBeUndefined();
+
+    expect(events).toHaveLength(1);
+    const [event] = events;
+    expect(event).toMatchObject({
+      level: "warn",
+      category: "security",
+      op: "security.vault.shard-unreadable",
+      errorKind: "EISDIR",
+      extra: { count: 1 },
+    });
+    expect(Object.keys(event ?? {}).sort()).toEqual([
+      "category",
+      "errorKind",
+      "extra",
+      "level",
+      "op",
+    ]);
+    // Never the reference, never the shard's filename/path.
+    expect(JSON.stringify(event)).not.toContain("cred:a");
+    expect(JSON.stringify(event)).not.toContain(storeDir);
+  });
+
+  // EACCES specifically, as distinct proof from the EISDIR case above — skipped only when the
+  // worker itself runs as root (uid 0), where a permission bit never actually refuses a read.
+  it.skipIf(process.getuid?.() === 0)(
+    "emits security.vault.shard-unreadable for an EACCES shard, and never breaks the read when the sink throws",
+    () => {
+      const warn = vi.spyOn(process, "emitWarning").mockImplementation(() => undefined);
+      const storeDir = join(dir, "sharded");
+      const dead: SecurityLogSink = {
+        write: (): never => {
+          throw new Error("sink transport is down");
+        },
+      };
+      const vault = createShardedLocalSecretVault({ key: KEY, storeDir, sink: dead });
+      vault.set("cred:a", "secret-A");
+      const [name] = readdirSync(storeDir);
+      const shardPath = join(storeDir, name ?? "missing");
+      chmodSync(shardPath, 0o000);
+
+      let read: string | undefined;
+      try {
+        expect(() => {
+          read = vault.get("cred:a");
+        }).not.toThrow();
+      } finally {
+        chmodSync(shardPath, 0o600);
+        vi.restoreAllMocks();
+      }
+      expect(read).toBeUndefined();
+      // Degrade-once: the dead sink's own write threw, so the report fell through to the one
+      // channel left — exactly once, never silently and never per-line.
+      expect(warn).toHaveBeenCalledTimes(1);
+    },
+  );
+
+  it("does not emit for an entry that simply was never set", () => {
+    const storeDir = join(dir, "sharded");
+    const { sink, events } = recordingSink();
+    const vault = createShardedLocalSecretVault({ key: KEY, storeDir, sink });
+
+    expect(vault.get("cred:never-set")).toBeUndefined();
+    expect(events).toHaveLength(0);
+  });
+
+  it("stays exactly as silent as before when no sink is wired", () => {
+    const storeDir = join(dir, "sharded");
+    const vault = createShardedLocalSecretVault({ key: KEY, storeDir });
+    vault.set("cred:a", "secret-A");
+    const [name] = readdirSync(storeDir);
+    rmSync(join(storeDir, name ?? "missing"));
+    mkdirSync(join(storeDir, name ?? "missing"), { recursive: true });
+
+    expect(() => {
+      vault.get("cred:a");
+    }).not.toThrow();
   });
 
   it("never lists a filename it would refuse to read or delete under that reference", () => {

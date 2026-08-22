@@ -12,6 +12,7 @@ import {
   resolveLocalVaultKey,
   type LocalVaultKeychainAccess,
 } from "@oscharko-dev/keiko-security/secret-vault";
+import type { SecurityLogSink } from "@oscharko-dev/keiko-security";
 import {
   emitServerDiagnostic,
   serverDiagnosticFromError,
@@ -28,6 +29,9 @@ export interface ServerWorkspaceIndexProviderOptions {
   readonly env?: WorkspaceIndexEnv | undefined;
   readonly keychainAccess?: LocalVaultKeychainAccess | undefined;
   readonly diagnostics?: ServerDiagnosticSink | undefined;
+  // Optional activity-log seam (ADR-0019); the deps.ts composition root supplies
+  // `processServerLogSink()`.
+  readonly securityLogSink?: SecurityLogSink | undefined;
 }
 
 export type WorkspaceIndexProvider = (workspaceRoot: string) => WorkspaceIndex | undefined;
@@ -300,6 +304,7 @@ export function createServerWorkspaceIndexProvider(
         keychainService: WORKSPACE_INDEX_KEYCHAIN_SERVICE,
         keyfileName: WORKSPACE_INDEX_KEYFILE,
         ...(options.keychainAccess === undefined ? {} : { keychainAccess: options.keychainAccess }),
+        sink: options.securityLogSink,
       });
       const keyFingerprint = workspaceIndexKeyFingerprint(key);
       if (existing?.generation.active === true && existing.keyFingerprint === keyFingerprint) {

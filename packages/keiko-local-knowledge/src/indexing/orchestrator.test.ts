@@ -2869,6 +2869,38 @@ describe("runIndexingJob — activity log", () => {
     }
   });
 
+  it("states the resolved chunker profile on indexing.job.started, reflecting an operator override", async () => {
+    // `IndexingOptions.chunkingOptions` is operator-overridable but, before this test, never
+    // reached the run's spine line — an operator-supplied budget was invisible to anyone
+    // reading the activity log. Asserting on a NON-default override (rather than the defaults
+    // every other test in this suite exercises implicitly) proves the values are read from the
+    // resolved run configuration, not hard-coded defaults that would pass even if the wiring
+    // were dropped.
+    const fixture = buildFixture({
+      "alpha.txt": "Lorem ipsum dolor sit amet, consectetur adipiscing elit. ".repeat(12),
+    });
+    const log = recordingSink();
+    try {
+      await drain(
+        runIndexingJob(
+          buildOptions(fixture, {
+            logSink: log.sink,
+            idSource: () => "job-chunker-profile",
+            chunkingOptions: { maxTokens: 96, minTokens: 8, overlapTokens: 12 },
+          }),
+        ),
+      );
+      expect(extraOf(requireLine(log, "indexing.job.started"))).toMatchObject({
+        minChunkTokens: 8,
+        maxChunkTokens: 96,
+        overlapTokens: 12,
+        tokenizerKind: "estimator",
+      });
+    } finally {
+      fixture.cleanup();
+    }
+  });
+
   it("correlates every line to the job and identifies capsule and document by digest only", async () => {
     const fixture = buildFixture({
       "alpha.txt": "Lorem ipsum dolor sit amet, consectetur adipiscing elit. ".repeat(12),

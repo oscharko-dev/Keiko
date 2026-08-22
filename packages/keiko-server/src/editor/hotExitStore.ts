@@ -7,6 +7,7 @@ import {
   type LocalVaultKeychainAccess,
 } from "@oscharko-dev/keiko-security/secret-vault";
 import { SecretboxError } from "@oscharko-dev/keiko-security/errors";
+import type { SecurityLogSink } from "@oscharko-dev/keiko-security";
 import {
   EDITOR_HOT_EXIT_TTL_MS,
   type EditorDocumentVersion,
@@ -69,6 +70,9 @@ export interface CreateEditorHotExitStoreOptions {
   // sample lands close enough to match -- two independent real-clock reads that are never
   // actually synchronized (AGENTS.md hermetic-tests rule).
   readonly receiptClock?: (() => number) | undefined;
+  // Optional activity-log seam (ADR-0019); the deps.ts composition root supplies
+  // `processServerLogSink()`.
+  readonly securityLogSink?: SecurityLogSink | undefined;
 }
 
 interface StoredItem {
@@ -126,6 +130,7 @@ function hotExitVault(options: CreateEditorHotExitStoreOptions): LocalSecretVaul
     keychainService: HOT_EXIT_KEYCHAIN_SERVICE,
     keyfileName: HOT_EXIT_KEYFILE,
     ...(options.keychainAccess !== undefined ? { keychainAccess: options.keychainAccess } : {}),
+    sink: options.securityLogSink,
   });
   return createLocalSecretVault({ key, storePath: join(vaultDir, HOT_EXIT_STORE_FILE) });
 }
