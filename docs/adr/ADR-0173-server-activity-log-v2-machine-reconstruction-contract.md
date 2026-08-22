@@ -342,7 +342,11 @@ against a `stateDir` whose history predates that fix.
 
 **Size bounds.** Capped at the sink's own retention window, further capped by an overall byte
 ceiling; files are dropped oldest-first when the ceiling is exceeded, and every drop is recorded in
-the manifest's `truncatedLogFiles` — never silent.
+the manifest's `truncatedLogFiles` — never silent. The current (never-dropped) file is not exempt
+from the ceiling: when it alone still exceeds the residual budget, only its tail is exported —
+the newest bytes, advanced to the next line boundary so the first exported line is always
+complete — read with a bounded reader rather than loading the whole oversized file, and recorded
+in the manifest's `currentFileTailTruncated` (name and dropped-byte count only, never a path).
 
 ### D9 — CLI surface: `keiko support export` and `keiko support analyze`
 

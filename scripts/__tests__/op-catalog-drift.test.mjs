@@ -58,6 +58,19 @@ describe("op catalog drift", () => {
     expect(checkedIn.generatedBy).toBe("scripts/generate-op-catalog.mjs");
   });
 
+  // #2902 W5: orchestrator.ts's logIndexing/logEmbeddingRun/logDocument hardcode `category` inside
+  // their OWN body rather than the caller's object literal, so tier 1 (findSiblingCategory) never
+  // finds a sibling `category:` at these call sites, and tier 3 (fileCategoryBinding) backs off
+  // because the file binds two distinct categories. Before OBJECT_ARG_CATEGORY_FUNCTIONS, both ops
+  // below resolved to "unknown" even though the runtime always stamps a deterministic category for
+  // them. Driven through the real generator entry point, not a re-derivation of its category rules.
+  it("attributes the deterministic category to an op:-only call site of a checked-in object-arg category function", () => {
+    const catalog = generateOpCatalog(repoRoot);
+    const byOp = (op) => catalog.entries.find((entry) => entry.op === op);
+    expect(byOp("indexing.document.failed")?.category).toBe("indexing");
+    expect(byOp("embedding.preflight.identity-rejected")?.category).toBe("embedding");
+  });
+
   // Proves the drift gate actually fails closed: mutating a COPY of the checked-in catalog must
   // make it stop matching what the generator produces right now. Without this, a future change
   // that made `generateOpCatalog` just return the parsed checked-in file (or made the "matches the

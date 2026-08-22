@@ -17,6 +17,7 @@ import {
 import type { AuditResult } from "./audit.js";
 import type { CliIo } from "./runner.js";
 import { parseSupportArgs, runSupportCli, type SupportCliDeps } from "./support.js";
+import { CURRENT_LOG_FILE_NAME } from "./support-export.js";
 
 function makeIo(): { io: CliIo; out: () => string; err: () => string } {
   const outChunks: string[] = [];
@@ -289,6 +290,53 @@ describe("runSupportCli export", () => {
     ) as Record<string, unknown>;
     expect(manifest.truncatedLogFiles).toEqual(["server-2026-08-18.log"]);
     expect(manifest.sourceLogFiles).toEqual(["server.log"]);
+  });
+
+  // Regression for #2902 PR review, follow-up finding: a single oversized CURRENT server.log was
+  // exported in full (never dropped, per the rule above), exceeding --max-bytes outright, and read
+  // via a whole-file readFileSync. Combines both effects of a tiny budget in one export: an older
+  // rotated file is dropped whole (still recorded in truncatedLogFiles, per (d) above) AND the
+  // current file alone still exceeds what's left of the budget, so only its tail is exported.
+  it("drops older files first and ALSO tail-truncates the current file when both are needed to fit --max-bytes", async () => {
+    const rotatedLine = JSON.stringify({
+      ts: "2026-08-18T00:00:00.000Z",
+      category: "http",
+      op: "old",
+    });
+    writeFileSync(join(stateDir, "logs", "server-2026-08-18.log"), `${rotatedLine}\n`.repeat(50));
+    // 20 fixed-width lines (11 bytes + "\n" = 12 bytes each, 240 bytes total) so the tail cut lands
+    // at a byte offset that can be reasoned about exactly, the same fixture shape
+    // support-export.test.ts uses for the same scenario.
+    const currentLine = (i: number): string => `{"seq":${String(i).padStart(3, "0")}}`;
+    const currentText = `${Array.from({ length: 20 }, (_, i) => currentLine(i)).join("\n")}\n`;
+    writeFileSync(join(stateDir, "logs", CURRENT_LOG_FILE_NAME), currentText);
+
+    const c = makeIo();
+    const code = await runSupportCli(
+      ["export", "--state-dir", stateDir, "--out", join(outDir, "tail.jsonl"), "--max-bytes", "50"],
+      c.io,
+      AUDIT_ENV,
+      { auditDeps: healthyAuditDeps(), evidenceStore: createInMemoryEvidenceStore() },
+    );
+
+    expect(code).toBe(0);
+    const written = readFileSync(join(outDir, "tail.jsonl"), "utf8");
+    const [manifestLine, ...logLines] = written.trimEnd().split("\n");
+    const manifest: Record<string, unknown> = JSON.parse(manifestLine ?? "{}") as Record<
+      string,
+      unknown
+    >;
+
+    expect(manifest.truncatedLogFiles).toEqual(["server-2026-08-18.log"]);
+    expect(manifest.sourceLogFiles).toEqual([CURRENT_LOG_FILE_NAME]);
+    expect(manifest.currentFileTailTruncated).toEqual({
+      name: CURRENT_LOG_FILE_NAME,
+      droppedBytes: 192,
+    });
+    // The tail strategy brought the export back within budget, so budgetExceeded must be false.
+    expect(manifest.budgetExceeded).toBe(false);
+    // Every surviving line is one of the file's own complete lines — the newest ones, in order.
+    expect(logLines).toEqual([currentLine(16), currentLine(17), currentLine(18), currentLine(19)]);
   });
 
   it("fails closed with exit 1 when the local-state audit cannot run, and writes no bundle", async () => {

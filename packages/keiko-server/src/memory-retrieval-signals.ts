@@ -15,7 +15,7 @@
 // embedding model => semanticById undefined (lexical fallback); empty access history => strengthById
 // empty (the ranker zeroes its weight).
 
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { isIP } from "node:net";
 
 import type { MemoryId, MemoryScope } from "@oscharko-dev/keiko-contracts/memory";
@@ -51,6 +51,7 @@ import {
 } from "@oscharko-dev/keiko-memory-capture";
 
 import { currentGatewayConfig, type UiHandlerDeps } from "./deps.js";
+import { emitServerDiagnostic } from "./diagnostics-log.js";
 import { configuredEmbeddingProviders } from "./local-knowledge-handlers.js";
 import { embedMemoryText, memoryEmbeddingCalibrationFor } from "./memory-embedding.js";
 
@@ -266,15 +267,22 @@ function compatibleMemoryEntries(
   return { entries, skipped };
 }
 
-function warnSkippedIncompatible(skipped: number, candidates: number, queryModelId: string): void {
+// Content-free operator diagnostic (O-F4 / #2902): routes through the single redaction-safe
+// server diagnostic sink (diagnostics-log.ts) instead of console.* directly, mirroring
+// emitSalienceDiagnostic in memory-salience.ts. Never the query text, a memory body, or a model
+// id — only bounded counts and the closed-vocabulary skip reason.
+function warnSkippedIncompatible(deps: UiHandlerDeps, skipped: number, candidates: number): void {
   if (skipped === 0) return;
-  // Safe diagnostic: counts and model ids only, never query text or memory bodies.
-  // eslint-disable-next-line no-console
-  console.warn("memory semantic scores skipped for incompatible embeddings", {
-    reason: "identity-mismatch",
-    skipped,
-    candidates,
-    queryModelId,
+  emitServerDiagnostic(deps.diagnostics, {
+    correlationId: randomUUID(),
+    timestamp: new Date().toISOString(),
+    operation: "memory.retrieval.semantic-skipped",
+    source: "memory-retrieval-signals.semanticScoresFrom",
+    errorClass: "SemanticRetrievalSkipped",
+    message: "Semantic memory retrieval skipped incompatible embeddings.",
+    code: "identity-mismatch",
+    semanticSkippedCount: skipped,
+    semanticCandidateCount: candidates,
   });
 }
 
@@ -396,7 +404,7 @@ async function semanticScoresFrom(
   throwIfAborted(signal);
   const queryEmbedding = await embedMemoryText(deps, queryText, "query");
   if (queryEmbedding === null) {
-    warnSemanticRetrievalDisabled("no-embedder", { candidates: candidateIds.length });
+    warnSemanticRetrievalDisabled(deps, "no-embedder", candidateIds.length);
     return undefined;
   }
   throwIfAborted(signal);
@@ -407,7 +415,7 @@ async function semanticScoresFrom(
     candidateIds,
     embeddings,
   );
-  warnSkippedIncompatible(compatible.skipped, candidateIds.length, queryEmbedding.modelId);
+  warnSkippedIncompatible(deps, compatible.skipped, candidateIds.length);
   if (compatible.entries.length === 0) return new Map<MemoryId, number>();
   throwIfAborted(signal);
   const result = await createMemoryVectorIndexPort(queryIdentity, compatible.entries).search({
@@ -419,23 +427,39 @@ async function semanticScoresFrom(
     candidateIds,
   });
   if (!result.ok) {
-    warnSemanticRetrievalDisabled("vector-index-failed", {
-      vectorIndexReason: result.diagnostics.reason ?? "unknown",
-      candidates: compatible.entries.length,
-    });
+    warnSemanticRetrievalDisabled(
+      deps,
+      "vector-index-failed",
+      compatible.entries.length,
+      result.diagnostics.reason ?? "unknown",
+    );
     return undefined;
   }
   return new Map(result.candidates.map((candidate) => [candidate.id as MemoryId, candidate.score]));
 }
 
+// Content-free operator diagnostic (O-F4 / #2902): see warnSkippedIncompatible above for why this
+// routes through emitServerDiagnostic rather than console.warn. `vectorIndexReason` is the vector
+// index port's own contract-guaranteed content-free reason code (VectorIndexDiagnostics.reason,
+// "never a body, a path, an endpoint, or a query string") — safe to compose onto `code` alongside
+// the already-closed `reason` union.
 function warnSemanticRetrievalDisabled(
+  deps: UiHandlerDeps,
   reason: SemanticRetrievalGateReason,
-  extra: Record<string, unknown> = {},
+  candidates: number,
+  vectorIndexReason?: string,
 ): void {
   if (reason === "allowed") return;
-  // Safe diagnostic: reason and counts only, never query text, memory bodies, endpoints, or keys.
-  // eslint-disable-next-line no-console
-  console.warn("memory semantic scores disabled", { reason, ...extra });
+  emitServerDiagnostic(deps.diagnostics, {
+    correlationId: randomUUID(),
+    timestamp: new Date().toISOString(),
+    operation: "memory.retrieval.semantic-disabled",
+    source: "memory-retrieval-signals",
+    errorClass: "SemanticRetrievalDisabled",
+    message: "Semantic memory retrieval was disabled for this turn.",
+    code: vectorIndexReason === undefined ? reason : `${reason}:${vectorIndexReason}`,
+    semanticCandidateCount: candidates,
+  });
 }
 
 function hasNonZeroMagnitude(vector: Float32Array): boolean {
@@ -511,14 +535,15 @@ function collectEmbeddingSignals(
 }
 
 function warnSemanticGate(
+  deps: UiHandlerDeps,
   semanticGate: SemanticRetrievalGate,
   embeddings: ReadonlyMap<MemoryId, MemoryEmbeddingRow>,
   candidateCount: number,
 ): void {
   if (semanticGate.allowed && embeddings.size === 0) {
-    warnSemanticRetrievalDisabled("no-embeddings", { candidates: candidateCount });
+    warnSemanticRetrievalDisabled(deps, "no-embeddings", candidateCount);
   } else if (!semanticGate.allowed && semanticGate.reason !== "no-query") {
-    warnSemanticRetrievalDisabled(semanticGate.reason, { candidates: candidateCount });
+    warnSemanticRetrievalDisabled(deps, semanticGate.reason, candidateCount);
   }
 }
 
@@ -552,7 +577,7 @@ export async function buildConversationRetrievalSignals(
       : new Map<MemoryId, MemoryEmbeddingRow>();
   throwIfAborted(signal);
   const embeddingSignals = collectEmbeddingSignals(deps, embeddings, signal);
-  warnSemanticGate(semanticGate, embeddings, candidateIds.length);
+  warnSemanticGate(deps, semanticGate, embeddings, candidateIds.length);
   const semanticById = shouldComputeSemanticScores(semanticGate, queryText, embeddings)
     ? await semanticScoresFrom(deps, queryText, candidateIds, embeddings, signal)
     : undefined;

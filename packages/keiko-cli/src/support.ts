@@ -41,6 +41,7 @@ import {
   readKeptFiles,
   selectLogFilesWithinBudget,
   serializeBundleLines,
+  type CurrentFileTailTruncated,
   type SkippedLogFile,
 } from "./support-export.js";
 
@@ -56,7 +57,9 @@ never been used from this state dir, or that cannot be opened (corrupt, or a vau
 operator has not supplied), is named in the manifest's storesUnavailable instead of failing the
 export. Default --out is ./keiko-support-<timestamp>.jsonl (colons replaced with '-'); default
 --max-bytes is 50MB — the oldest log files are dropped first when the cap would be exceeded, and
-always named in the manifest's truncatedLogFiles.
+always named in the manifest's truncatedLogFiles. The current log file is never dropped; if it
+alone still exceeds the cap, only its tail is exported instead, named in the manifest's
+currentFileTailTruncated.
 
 analyze reads FILE (a support bundle or a raw server.log — auto-detected), groups its lines by
 correlationId, and prints one reconstructed timeline per id. Each process lifetime is ordered by
@@ -228,6 +231,8 @@ interface LogContent {
   readonly contentLines: readonly string[];
   readonly sourceLogFiles: readonly string[];
   readonly truncatedLogFiles: readonly string[];
+  readonly currentFileTailTruncated: CurrentFileTailTruncated | undefined;
+  readonly budgetExceeded: boolean;
   readonly skippedLogFiles: readonly SkippedLogFile[];
 }
 
@@ -236,11 +241,14 @@ interface LogContent {
 // (support-export.ts's `discoverServerLogFiles`, between `readdirSync` and `statSync`, and
 // `readKeptFiles`, between selection and the actual read): `sourceLogFiles` names only the files
 // that actually contributed content; `skippedLogFiles` names every file that vanished at either
-// boundary, by name only, never by its absolute path.
+// boundary, by name only, never by its absolute path. `budgetExceeded` and
+// `currentFileTailTruncated` come from `readKeptFiles`, not `selection`: only the read step knows
+// whether a tail read of the current file actually managed to keep a complete line, which is what
+// decides whether the size budget was, in the end, honoured.
 function collectLogContent(logsDir: string, maxBytes: number): LogContent {
   const discovery = discoverServerLogFiles(logsDir);
   const selection = selectLogFilesWithinBudget(discovery.files, maxBytes);
-  const read = readKeptFiles(selection.kept);
+  const read = readKeptFiles(selection.kept, selection.currentFileTailBudgetBytes);
   const readSkipped = new Set(read.skippedLogFiles.map((skipped) => skipped.name));
   const sourceLogFiles = selection.kept
     .map((file) => file.name)
@@ -249,6 +257,8 @@ function collectLogContent(logsDir: string, maxBytes: number): LogContent {
     contentLines: read.contentLines,
     sourceLogFiles,
     truncatedLogFiles: selection.truncatedLogFiles,
+    currentFileTailTruncated: read.currentFileTailTruncated,
+    budgetExceeded: read.budgetExceeded,
     skippedLogFiles: [...discovery.skippedLogFiles, ...read.skippedLogFiles],
   };
 }
@@ -336,6 +346,8 @@ async function runSupportExport(
     stateDirSource,
     sourceLogFiles: logContent.sourceLogFiles,
     truncatedLogFiles: logContent.truncatedLogFiles,
+    currentFileTailTruncated: logContent.currentFileTailTruncated,
+    budgetExceeded: logContent.budgetExceeded,
     skippedLogFiles: logContent.skippedLogFiles,
     auditSummary,
     evidenceIndexCount,

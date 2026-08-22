@@ -20,6 +20,18 @@ import {
   type LogFileInfo,
 } from "./support-export.js";
 
+// A fixed-width line so a chosen `--max-bytes` cuts it at a known, deterministic byte offset:
+// `{"seq":000}` is exactly 11 bytes for every index in [0, 999], so a file of `count` such lines
+// (each followed by "\n") is exactly `count * 12` bytes, and any byte offset within it can be
+// reasoned about without measuring the file after the fact.
+function fixedWidthLine(index: number): string {
+  return `{"seq":${String(index).padStart(3, "0")}}`;
+}
+
+function fixedWidthLogText(count: number): string {
+  return `${Array.from({ length: count }, (_, i) => fixedWidthLine(i)).join("\n")}\n`;
+}
+
 const HEALTHY_AUDIT: AuditResult = {
   ok: true,
   stateDir: "/tmp/example/.keiko",
@@ -45,6 +57,8 @@ function baseManifestInput(
     stateDirSource: "default",
     sourceLogFiles: [],
     truncatedLogFiles: [],
+    currentFileTailTruncated: undefined,
+    budgetExceeded: false,
     skippedLogFiles: [],
     auditSummary: HEALTHY_AUDIT,
     evidenceIndexCount: 0,
@@ -128,6 +142,7 @@ describe("selectLogFilesWithinBudget", () => {
 
     expect(selection.kept).toEqual(files);
     expect(selection.truncatedLogFiles).toEqual([]);
+    expect(selection.budgetExceeded).toBe(false);
   });
 
   it("drops the oldest files first, recording their names, never truncating the current file", () => {
@@ -146,6 +161,9 @@ describe("selectLogFilesWithinBudget", () => {
       "server-2026-08-20.log",
     ]);
     expect(selection.kept.map((f) => f.name)).toEqual(["server.log"]);
+    // The residual `kept` total (server.log's 10 bytes) is back under the 15-byte budget once the
+    // oldest files were dropped, so the budget WAS honoured in the end.
+    expect(selection.budgetExceeded).toBe(false);
   });
 
   it("never drops the last remaining file even if it alone exceeds the budget", () => {
@@ -155,6 +173,22 @@ describe("selectLogFilesWithinBudget", () => {
 
     expect(selection.kept).toEqual(files);
     expect(selection.truncatedLogFiles).toEqual([]);
+    // Nothing was left to drop, yet the surviving file alone (1000 bytes) is still over the
+    // 10-byte budget: `truncatedLogFiles` alone would read identically to "everything fit"
+    // without this flag. This is the SIZE-only, pre-tail signal — see `readKeptFiles`'s own
+    // `budgetExceeded` below the current file's tail is what decides the manifest's final value.
+    expect(selection.budgetExceeded).toBe(true);
+    // Tells `readKeptFiles` to give this file's own tail reader the full 10-byte budget, since
+    // nothing else in `kept` shares it.
+    expect(selection.currentFileTailBudgetBytes).toBe(10);
+  });
+
+  it("leaves currentFileTailBudgetBytes undefined when every kept file fits in full", () => {
+    const files = [fileInfo("server-2026-08-19.log", 10), fileInfo("server.log", 10)];
+
+    const selection = selectLogFilesWithinBudget(files, 100);
+
+    expect(selection.currentFileTailBudgetBytes).toBeUndefined();
   });
 
   it("the default budget is 50MB", () => {
@@ -270,6 +304,120 @@ describe("readKeptFiles", () => {
   });
 });
 
+// Regression for #2902 PR review, follow-up finding: `selectLogFilesWithinBudget`'s "never drop
+// the last file" rule kept a single oversized current `server.log` in full, exceeding
+// `--max-bytes`, and `readVerbatimLogLines` read it with a whole-file `readFileSync`. These tests
+// exercise the fix's contract directly on `readKeptFiles`: only the LAST kept file's tail is read
+// (bounded, never the whole file), the kept content always starts on a complete line, and the
+// manifest-facing `budgetExceeded` reflects whether that tail read actually rescued the export.
+describe("readKeptFiles — current-file tail truncation", () => {
+  let dir: string;
+
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), "keiko-support-export-tail-"));
+  });
+
+  afterEach(() => {
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("reads only the current file's tail when it alone exceeds the budget, starting on a complete line and staying within budget", () => {
+    const lineCount = 20;
+    const text = fixedWidthLogText(lineCount); // 12 bytes/line (11 + "\n") = 240 bytes total
+    const path = join(dir, CURRENT_LOG_FILE_NAME);
+    writeFileSync(path, text);
+    const sizeBytes = Buffer.byteLength(text, "utf8");
+    const tailBudgetBytes = 30; // < sizeBytes; cuts mid-line, so the boundary advance is exercised
+
+    const result = readKeptFiles(
+      [{ name: CURRENT_LOG_FILE_NAME, path, sizeBytes }],
+      tailBudgetBytes,
+    );
+
+    // The first kept line is one of the file's own complete lines, never a partial JSON fragment.
+    expect(result.contentLines.length).toBeGreaterThan(0);
+    expect(result.contentLines[0]).toMatch(/^\{"seq":\d{3}\}$/);
+    // Every kept line is the file's tail, in original (oldest-first) order.
+    expect(result.contentLines).toEqual([fixedWidthLine(18), fixedWidthLine(19)]);
+    const keptBytes = Buffer.byteLength(`${result.contentLines.join("\n")}\n`, "utf8");
+    expect(keptBytes).toBeLessThanOrEqual(tailBudgetBytes);
+    // (a) the manifest fact is set, name only, with the exact dropped-byte count.
+    expect(result.currentFileTailTruncated).toEqual({
+      name: CURRENT_LOG_FILE_NAME,
+      droppedBytes: sizeBytes - keptBytes,
+    });
+    // (b) the tail strategy rescued the export, so the manifest must not claim the budget failed.
+    expect(result.budgetExceeded).toBe(false);
+    expect(result.skippedLogFiles).toEqual([]);
+  });
+
+  it("keeps every older file's read in full and only tail-reads the current (last) file", () => {
+    const rotatedPath = join(dir, "server-2026-08-19.log");
+    const currentPath = join(dir, CURRENT_LOG_FILE_NAME);
+    writeFileSync(rotatedPath, '{"seq":"old"}\n');
+    const currentText = fixedWidthLogText(20);
+    writeFileSync(currentPath, currentText);
+    const currentSizeBytes = Buffer.byteLength(currentText, "utf8");
+
+    const result = readKeptFiles(
+      [
+        { name: "server-2026-08-19.log", path: rotatedPath, sizeBytes: 0 },
+        { name: CURRENT_LOG_FILE_NAME, path: currentPath, sizeBytes: currentSizeBytes },
+      ],
+      30,
+    );
+
+    expect(result.contentLines[0]).toBe('{"seq":"old"}');
+    expect(result.contentLines.slice(1)).toEqual([fixedWidthLine(18), fixedWidthLine(19)]);
+    expect(result.currentFileTailTruncated?.name).toBe(CURRENT_LOG_FILE_NAME);
+    expect(result.budgetExceeded).toBe(false);
+  });
+
+  // (c) A budget smaller than a single line — here, a file that is one giant line with no
+  // newline anywhere at all, so no byte offset within it can ever start a complete line.
+  it("keeps an empty tail and reports budgetExceeded when the budget is smaller than one line", () => {
+    const path = join(dir, CURRENT_LOG_FILE_NAME);
+    const text = `{"seq":"${"x".repeat(1_000)}"}`; // one line, no trailing newline anywhere
+    writeFileSync(path, text);
+    const sizeBytes = Buffer.byteLength(text, "utf8");
+
+    const result = readKeptFiles([{ name: CURRENT_LOG_FILE_NAME, path, sizeBytes }], 5);
+
+    expect(result.contentLines).toEqual([]);
+    expect(result.currentFileTailTruncated).toEqual({
+      name: CURRENT_LOG_FILE_NAME,
+      droppedBytes: sizeBytes,
+    });
+    expect(result.budgetExceeded).toBe(true);
+  });
+
+  it("never attempts a tail read, and never sets budgetExceeded, when currentFileTailBudgetBytes is undefined", () => {
+    const path = join(dir, CURRENT_LOG_FILE_NAME);
+    writeFileSync(path, fixedWidthLogText(5));
+
+    const result = readKeptFiles([{ name: CURRENT_LOG_FILE_NAME, path, sizeBytes: 0 }]);
+
+    expect(result.contentLines).toHaveLength(5);
+    expect(result.currentFileTailTruncated).toBeUndefined();
+    expect(result.budgetExceeded).toBe(false);
+  });
+
+  // Same vanish-before-read race `readVerbatimLogLinesOrSkip` already guards against, exercised on
+  // the bounded tail-reader path instead: the file selected for a tail read can still disappear
+  // before `openSync` runs.
+  it("skips the current file, recording its name and error kind, when it vanishes before the tail read", () => {
+    const path = join(dir, CURRENT_LOG_FILE_NAME);
+    writeFileSync(path, fixedWidthLogText(5));
+    rmSync(path);
+
+    const result = readKeptFiles([{ name: CURRENT_LOG_FILE_NAME, path, sizeBytes: 1_000 }], 30);
+
+    expect(result.contentLines).toEqual([]);
+    expect(result.currentFileTailTruncated).toBeUndefined();
+    expect(result.skippedLogFiles).toEqual([{ name: CURRENT_LOG_FILE_NAME, errorKind: "ENOENT" }]);
+  });
+});
+
 describe("describeErrorKind", () => {
   it("reports the fs error's code when it has one, never the message or a path", () => {
     const error = Object.assign(new Error("ENOENT: no such file or directory, open '/secret'"), {
@@ -340,6 +488,7 @@ describe("buildSupportBundleManifest", () => {
       redactionAttested: true,
       sourceLogFiles: ["server-2026-08-20.log", "server.log"],
       truncatedLogFiles: ["server-2026-08-18.log"],
+      budgetExceeded: false,
       skippedLogFiles: [{ name: "server-2026-08-17.log", errorKind: "ENOENT" }],
       sectionsExcluded: [],
       auditSummary: REDACTED_HEALTHY_AUDIT,
@@ -416,6 +565,34 @@ describe("buildSupportBundleManifest", () => {
     expect(buildSupportBundleManifest(baseManifestInput()).schemaVersion).toBe(
       SERVER_LOG_SCHEMA_VERSION,
     );
+  });
+
+  // `budgetExceeded` propagates verbatim from `ManifestInput` — the caller (`support.ts`) is the
+  // one place that resolves it from `readKeptFiles`'s post-tail result, so by the time it reaches
+  // this function it is already the authoritative value: true only when even a tail read of the
+  // current file could not keep a single complete line (see `ReadKeptFilesResult.budgetExceeded`).
+  it("propagates budgetExceeded from ManifestInput", () => {
+    expect(
+      buildSupportBundleManifest(baseManifestInput({ budgetExceeded: true })).budgetExceeded,
+    ).toBe(true);
+    expect(
+      buildSupportBundleManifest(baseManifestInput({ budgetExceeded: false })).budgetExceeded,
+    ).toBe(false);
+  });
+
+  // `currentFileTailTruncated` propagates verbatim from `ManifestInput`, same as
+  // `truncatedLogFiles` — the distinct, machine-readable fact that the current file's tail (not
+  // its whole content) was exported, naming only the file and the byte count cut, never a path.
+  it("propagates currentFileTailTruncated from ManifestInput", () => {
+    const fact = { name: CURRENT_LOG_FILE_NAME, droppedBytes: 123 };
+    expect(
+      buildSupportBundleManifest(baseManifestInput({ currentFileTailTruncated: fact }))
+        .currentFileTailTruncated,
+    ).toEqual(fact);
+    expect(
+      buildSupportBundleManifest(baseManifestInput({ currentFileTailTruncated: undefined }))
+        .currentFileTailTruncated,
+    ).toBeUndefined();
   });
 
   it("always leaves sectionsExcluded empty in this minimal version", () => {

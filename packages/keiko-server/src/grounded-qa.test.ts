@@ -2601,8 +2601,13 @@ describe("handleGroundedAsk", () => {
       expect(
         (result.body as GroundedAnswer & { readonly memory?: unknown }).memory,
       ).toBeUndefined();
-      expect(diagnostics).toHaveLength(1);
-      expect(diagnostics[0]).toMatchObject({
+      // Two records: the semantic-retrieval signal (now a diagnostic, never console.warn — audit of
+      // #3233) and the enrichment failure this test is about.
+      expect(diagnostics.map((record) => record.operation)).toEqual([
+        "memory.retrieval.semantic-disabled",
+        "grounded.memory",
+      ]);
+      expect(diagnostics[1]).toMatchObject({
         operation: "grounded.memory",
         source: "grounded-qa.attach-memory",
         message: "grounded-memory-enrichment-failed",
@@ -2742,7 +2747,12 @@ describe("handleGroundedAsk", () => {
       expect(result.status).toBe(200);
       expect((result.body as GroundedAnswer).content).toContain("Dark mode");
       expect(store.listMessages(chatId)).toHaveLength(2);
-      expect(diagnostics).toMatchObject([
+      // The semantic-retrieval signal precedes the capture failure (audit of #3233).
+      expect(diagnostics.map((record) => record.operation)).toEqual([
+        "memory.retrieval.semantic-disabled",
+        "grounded.memory",
+      ]);
+      expect(diagnostics.slice(1)).toMatchObject([
         {
           operation: "grounded.memory",
           source: "grounded-qa.attach-memory",

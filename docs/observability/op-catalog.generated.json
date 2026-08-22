@@ -148,7 +148,7 @@
     },
     {
       "op": "embedding.preflight.identity-rejected",
-      "category": "unknown",
+      "category": "embedding",
       "site": "packages/keiko-local-knowledge/src/indexing/orchestrator.ts:2707",
       "package": "keiko-local-knowledge"
     },
@@ -160,103 +160,103 @@
     },
     {
       "op": "indexing.chunking.failed",
-      "category": "unknown",
+      "category": "indexing",
       "site": "packages/keiko-local-knowledge/src/indexing/orchestrator.ts:1440",
       "package": "keiko-local-knowledge"
     },
     {
       "op": "indexing.chunking.failed",
-      "category": "unknown",
+      "category": "indexing",
       "site": "packages/keiko-local-knowledge/src/indexing/orchestrator.ts:1778",
       "package": "keiko-local-knowledge"
     },
     {
       "op": "indexing.chunking.failed",
-      "category": "unknown",
+      "category": "indexing",
       "site": "packages/keiko-local-knowledge/src/indexing/orchestrator.ts:982",
       "package": "keiko-local-knowledge"
     },
     {
       "op": "indexing.discovery.limit-reached",
-      "category": "unknown",
+      "category": "indexing",
       "site": "packages/keiko-local-knowledge/src/indexing/orchestrator.ts:2883",
       "package": "keiko-local-knowledge"
     },
     {
       "op": "indexing.discovery.scope-error",
-      "category": "unknown",
+      "category": "indexing",
       "site": "packages/keiko-local-knowledge/src/indexing/orchestrator.ts:2231",
       "package": "keiko-local-knowledge"
     },
     {
       "op": "indexing.document.chunked",
-      "category": "unknown",
+      "category": "indexing",
       "site": "packages/keiko-local-knowledge/src/indexing/orchestrator.ts:1317",
       "package": "keiko-local-knowledge"
     },
     {
       "op": "indexing.document.embedded",
-      "category": "unknown",
+      "category": "indexing",
       "site": "packages/keiko-local-knowledge/src/indexing/orchestrator.ts:1513",
       "package": "keiko-local-knowledge"
     },
     {
       "op": "indexing.document.embedding-started",
-      "category": "unknown",
+      "category": "indexing",
       "site": "packages/keiko-local-knowledge/src/indexing/orchestrator.ts:1069",
       "package": "keiko-local-knowledge"
     },
     {
       "op": "indexing.document.extracted",
-      "category": "unknown",
+      "category": "indexing",
       "site": "packages/keiko-local-knowledge/src/indexing/orchestrator.ts:1313",
       "package": "keiko-local-knowledge"
     },
     {
       "op": "indexing.document.extracted",
-      "category": "unknown",
+      "category": "indexing",
       "site": "packages/keiko-local-knowledge/src/indexing/orchestrator.ts:2000",
       "package": "keiko-local-knowledge"
     },
     {
       "op": "indexing.document.extraction-failed",
-      "category": "unknown",
+      "category": "indexing",
       "site": "packages/keiko-local-knowledge/src/indexing/orchestrator.ts:1109",
       "package": "keiko-local-knowledge"
     },
     {
       "op": "indexing.document.extraction-started",
-      "category": "unknown",
+      "category": "indexing",
       "site": "packages/keiko-local-knowledge/src/indexing/orchestrator.ts:2217",
       "package": "keiko-local-knowledge"
     },
     {
       "op": "indexing.document.failed",
-      "category": "unknown",
+      "category": "indexing",
       "site": "packages/keiko-local-knowledge/src/indexing/orchestrator.ts:1482",
       "package": "keiko-local-knowledge"
     },
     {
       "op": "indexing.document.skipped",
-      "category": "unknown",
+      "category": "indexing",
       "site": "packages/keiko-local-knowledge/src/indexing/orchestrator.ts:1082",
       "package": "keiko-local-knowledge"
     },
     {
       "op": "indexing.document.skipped",
-      "category": "unknown",
+      "category": "indexing",
       "site": "packages/keiko-local-knowledge/src/indexing/orchestrator.ts:1131",
       "package": "keiko-local-knowledge"
     },
     {
       "op": "indexing.document.skipped",
-      "category": "unknown",
+      "category": "indexing",
       "site": "packages/keiko-local-knowledge/src/indexing/orchestrator.ts:2003",
       "package": "keiko-local-knowledge"
     },
     {
       "op": "indexing.job.finished",
-      "category": "unknown",
+      "category": "indexing",
       "site": "packages/keiko-local-knowledge/src/indexing/orchestrator.ts:3209",
       "package": "keiko-local-knowledge"
     },
@@ -268,19 +268,19 @@
     },
     {
       "op": "indexing.job.started",
-      "category": "unknown",
+      "category": "indexing",
       "site": "packages/keiko-local-knowledge/src/indexing/orchestrator.ts:2961",
       "package": "keiko-local-knowledge"
     },
     {
       "op": "indexing.source.completed",
-      "category": "unknown",
+      "category": "indexing",
       "site": "packages/keiko-local-knowledge/src/indexing/orchestrator.ts:2340",
       "package": "keiko-local-knowledge"
     },
     {
       "op": "indexing.source.started",
-      "category": "unknown",
+      "category": "indexing",
       "site": "packages/keiko-local-knowledge/src/indexing/orchestrator.ts:2322",
       "package": "keiko-local-knowledge"
     },
@@ -671,7 +671,7 @@
     {
       "op": "<dynamic>",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/diagnostics-log.ts:258",
+      "site": "packages/keiko-server/src/diagnostics-log.ts:280",
       "package": "keiko-server"
     },
     {
