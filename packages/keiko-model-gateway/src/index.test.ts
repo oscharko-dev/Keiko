@@ -74,6 +74,7 @@ import type {
   Clock,
   CostClass,
   FinishReason,
+  GatewayCallRequest,
   GatewayConfig,
   GatewayRequest,
   InfillingAlignment,
@@ -96,6 +97,7 @@ import type {
   CompletionDegradeReason,
   CompletionModelSelection,
   CompletionSelectionOptions,
+  ModelGatewayLogContext,
 } from "./index.js";
 
 // The packaged manifest owns the version; a literal here re-states it and goes
@@ -299,6 +301,7 @@ describe("keiko-model-gateway package surface", () => {
     pin<Clock>();
     pin<CostClass>();
     pin<FinishReason>();
+    pin<GatewayCallRequest>();
     pin<GatewayConfig>();
     pin<GatewayRequest>();
     pin<InfillingAlignment>();
@@ -321,6 +324,7 @@ describe("keiko-model-gateway package surface", () => {
     pin<CompletionDegradeReason>();
     pin<CompletionModelSelection>();
     pin<CompletionSelectionOptions>();
+    pin<ModelGatewayLogContext>();
     // The pins above are compile-time only: `pin<T>()` is erased, so the real check is that
     // `tsc` can resolve each re-export. What IS observable at runtime is whether the barrel
     // loads at all — a circular or broken re-export throws here. The previous

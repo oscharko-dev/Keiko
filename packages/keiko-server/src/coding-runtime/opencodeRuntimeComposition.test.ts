@@ -1875,9 +1875,12 @@ describe("private OpenCode tool bridge", () => {
       expect(activity.settlements).toEqual([
         expect.objectContaining({ actionId: "tool:call_sync_throw", state: "failed" }),
       ]);
+      // The evidence's `tool:<callId>` action id is not a canonical correlation id (no `:`), so the
+      // bridge maps it onto `tool-<callId>` — the documented prefix swap — rather than letting the
+      // default sink replace it with its content-free marker and lose the correlation.
       expect(records).toEqual([
         expect.objectContaining({
-          correlationId: "tool:call_sync_throw",
+          correlationId: "tool-call_sync_throw",
           operation: "coding-runtime.tool-bridge",
           source: "opencode-runtime-composition.facade-execute",
           errorClass: "Error",

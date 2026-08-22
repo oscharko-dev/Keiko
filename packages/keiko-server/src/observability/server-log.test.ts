@@ -722,6 +722,34 @@ describe("server activity log line format", () => {
     expect(line.endsWith("\n")).toBe(true);
     expect(line.trimEnd()).not.toContain("\n");
   });
+
+  // ADR-0173 D5 / g12: `parentCorrelationId` reuses `isValidCorrelationId`'s `SAFE_CORRELATION_ID`
+  // shape guard rather than the generic string redaction `correlationId` gets, because it is
+  // producer-suppliable like `correlationId` (not spoof-resistant) but is expected to always be a
+  // correlation-id-shaped value — a malformed one is dropped outright, never written under a marker.
+  it("writes a validly shaped parentCorrelationId straight through, like correlationId", () => {
+    const record = JSON.parse(
+      formatServerLogLine({
+        category: "http",
+        op: "job.spawned",
+        correlationId: "job-123456",
+        parentCorrelationId: "req-parent-789",
+      }),
+    ) as Record<string, unknown>;
+    expect(record.parentCorrelationId).toBe("req-parent-789");
+  });
+
+  it("drops a parentCorrelationId that fails the SAFE_CORRELATION_ID shape guard", () => {
+    const record = JSON.parse(
+      formatServerLogLine({
+        category: "http",
+        op: "job.spawned",
+        // Five characters: below SAFE_CORRELATION_ID's 8-character floor.
+        parentCorrelationId: "short",
+      }),
+    ) as Record<string, unknown>;
+    expect(Object.keys(record)).not.toContain("parentCorrelationId");
+  });
 });
 
 // Requirement 9. Nothing closed the descriptor the process-wide logger opened: `resetServerLogger`

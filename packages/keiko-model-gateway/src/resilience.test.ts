@@ -9,22 +9,29 @@ import {
   TransportError,
 } from "@oscharko-dev/keiko-security/errors/gateway";
 import { CircuitBreaker, executeWithRetry } from "./resilience.js";
+import { createScriptedGatewayClock } from "./replay.js";
 import type { Clock } from "./types.js";
 
+// Wraps the shared createScriptedGatewayClock (replay.ts) with the extra instrumentation these
+// tests need: a `sleeps` log of every ms actually slept, and an `advance` escape hatch for the
+// CircuitBreaker tests below, which never call clock.sleep() themselves (the breaker only ever
+// reads clock.now()) and so need a way to move the simulated clock forward from outside. Both
+// wrappers delegate their actual clock arithmetic to the shared implementation rather than
+// restating it, so this file no longer carries its own, independently-driftable copy.
 function stubClock(): { clock: Clock; sleeps: number[]; advance: (ms: number) => void } {
-  let current = 0;
+  const scripted = createScriptedGatewayClock();
   const sleeps: number[] = [];
   return {
     sleeps,
-    advance: (ms: number): void => {
-      current += ms;
-    },
+    // Fire-and-forget: createScriptedGatewayClock's sleep() advances its internal clock
+    // synchronously before returning its (already-resolved) promise, so the mutation this line
+    // needs has already happened by the time the call returns.
+    advance: (ms: number): void => void scripted.sleep(ms),
     clock: {
-      now: (): number => current,
-      sleep: (ms: number): Promise<void> => {
+      now: scripted.now,
+      sleep: (ms: number, signal?: AbortSignal): Promise<void> => {
         sleeps.push(ms);
-        current += ms;
-        return Promise.resolve();
+        return scripted.sleep(ms, signal);
       },
     },
   };

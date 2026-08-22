@@ -497,43 +497,49 @@
     {
       "op": "gateway.chat.completed",
       "category": "gateway",
-      "site": "packages/keiko-model-gateway/src/gateway.ts:350",
+      "site": "packages/keiko-model-gateway/src/gateway.ts:442",
       "package": "keiko-model-gateway"
     },
     {
       "op": "gateway.chat.failed",
       "category": "gateway",
-      "site": "packages/keiko-model-gateway/src/gateway.ts:251",
+      "site": "packages/keiko-model-gateway/src/gateway.ts:339",
       "package": "keiko-model-gateway"
     },
     {
       "op": "gateway.chat.started",
       "category": "gateway",
-      "site": "packages/keiko-model-gateway/src/gateway.ts:232",
+      "site": "packages/keiko-model-gateway/src/gateway.ts:320",
       "package": "keiko-model-gateway"
     },
     {
       "op": "gateway.circuit.closed",
       "category": "gateway",
-      "site": "packages/keiko-model-gateway/src/resilience.ts:426",
+      "site": "packages/keiko-model-gateway/src/resilience.ts:463",
       "package": "keiko-model-gateway"
     },
     {
       "op": "gateway.circuit.half-open",
       "category": "gateway",
-      "site": "packages/keiko-model-gateway/src/resilience.ts:340",
+      "site": "packages/keiko-model-gateway/src/resilience.ts:377",
       "package": "keiko-model-gateway"
     },
     {
       "op": "gateway.circuit.opened",
       "category": "gateway",
-      "site": "packages/keiko-model-gateway/src/resilience.ts:406",
+      "site": "packages/keiko-model-gateway/src/resilience.ts:443",
       "package": "keiko-model-gateway"
     },
     {
       "op": "gateway.circuit.rejected",
       "category": "gateway",
-      "site": "packages/keiko-model-gateway/src/resilience.ts:300",
+      "site": "packages/keiko-model-gateway/src/resilience.ts:337",
+      "package": "keiko-model-gateway"
+    },
+    {
+      "op": "gateway.config.resolved",
+      "category": "gateway",
+      "site": "packages/keiko-model-gateway/src/gateway.ts:189",
       "package": "keiko-model-gateway"
     },
     {
@@ -545,55 +551,55 @@
     {
       "op": "gateway.retry.budget-exhausted",
       "category": "gateway",
-      "site": "packages/keiko-model-gateway/src/resilience.ts:181",
+      "site": "packages/keiko-model-gateway/src/resilience.ts:215",
       "package": "keiko-model-gateway"
     },
     {
       "op": "gateway.retry.exhausted",
       "category": "gateway",
-      "site": "packages/keiko-model-gateway/src/resilience.ts:216",
+      "site": "packages/keiko-model-gateway/src/resilience.ts:251",
       "package": "keiko-model-gateway"
     },
     {
       "op": "gateway.retry.scheduled",
       "category": "gateway",
-      "site": "packages/keiko-model-gateway/src/resilience.ts:224",
+      "site": "packages/keiko-model-gateway/src/resilience.ts:260",
       "package": "keiko-model-gateway"
     },
     {
       "op": "gateway.route.rejected",
       "category": "gateway",
-      "site": "packages/keiko-model-gateway/src/gateway.ts:458",
+      "site": "packages/keiko-model-gateway/src/gateway.ts:552",
       "package": "keiko-model-gateway"
     },
     {
       "op": "gateway.stream.abandoned",
       "category": "gateway",
-      "site": "packages/keiko-model-gateway/src/gateway.ts:295",
+      "site": "packages/keiko-model-gateway/src/gateway.ts:387",
       "package": "keiko-model-gateway"
     },
     {
       "op": "gateway.stream.buffered-fallback",
       "category": "gateway",
-      "site": "packages/keiko-model-gateway/src/gateway.ts:381",
+      "site": "packages/keiko-model-gateway/src/gateway.ts:475",
       "package": "keiko-model-gateway"
     },
     {
       "op": "gateway.stream.completed",
       "category": "gateway",
-      "site": "packages/keiko-model-gateway/src/gateway.ts:269",
+      "site": "packages/keiko-model-gateway/src/gateway.ts:359",
       "package": "keiko-model-gateway"
     },
     {
       "op": "gateway.stream.failed",
       "category": "gateway",
-      "site": "packages/keiko-model-gateway/src/gateway.ts:320",
+      "site": "packages/keiko-model-gateway/src/gateway.ts:412",
       "package": "keiko-model-gateway"
     },
     {
       "op": "gateway.stream.started",
       "category": "gateway",
-      "site": "packages/keiko-model-gateway/src/gateway.ts:232",
+      "site": "packages/keiko-model-gateway/src/gateway.ts:320",
       "package": "keiko-model-gateway"
     },
     {
@@ -665,31 +671,31 @@
     {
       "op": "<dynamic>",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/diagnostics-log.ts:213",
+      "site": "packages/keiko-server/src/diagnostics-log.ts:257",
       "package": "keiko-server"
     },
     {
       "op": "<dynamic>",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/observability/server-log.ts:719",
+      "site": "packages/keiko-server/src/observability/server-log.ts:734",
       "package": "keiko-server"
     },
     {
       "op": "<dynamic>",
       "category": "unknown",
-      "site": "packages/keiko-server/src/observability/server-logger.ts:144",
+      "site": "packages/keiko-server/src/observability/server-logger.ts:153",
       "package": "keiko-server"
     },
     {
       "op": "<dynamic>",
       "category": "unknown",
-      "site": "packages/keiko-server/src/observability/server-logger.ts:170",
+      "site": "packages/keiko-server/src/observability/server-logger.ts:180",
       "package": "keiko-server"
     },
     {
       "op": "<dynamic>",
       "category": "unknown",
-      "site": "packages/keiko-server/src/observability/server-logger.ts:171",
+      "site": "packages/keiko-server/src/observability/server-logger.ts:181",
       "package": "keiko-server"
     },
     {
@@ -857,13 +863,13 @@
     {
       "op": "server-log.write-failed",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/observability/server-log.ts:317",
+      "site": "packages/keiko-server/src/observability/server-log.ts:326",
       "package": "keiko-server"
     },
     {
       "op": "server-log.write-failed",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/observability/server-log.ts:343",
+      "site": "packages/keiko-server/src/observability/server-log.ts:352",
       "package": "keiko-server"
     },
     {

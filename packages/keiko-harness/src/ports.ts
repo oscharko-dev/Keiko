@@ -7,7 +7,7 @@
 // harness package surface.
 
 import type {
-  GatewayRequest,
+  GatewayCallRequest,
   GatewayStreamChunk,
   NormalizedResponse,
 } from "@oscharko-dev/keiko-model-gateway";
@@ -21,13 +21,18 @@ export type {
 } from "@oscharko-dev/keiko-contracts";
 
 export interface ModelPort {
-  readonly call: (request: GatewayRequest, signal: AbortSignal) => Promise<NormalizedResponse>;
+  readonly call: (request: GatewayCallRequest, signal: AbortSignal) => Promise<NormalizedResponse>;
   // Optional streaming variant (#152). Present only on ports backed by a streaming-capable
   // gateway; absent on buffered-only ports. Yields content deltas then a terminal `done` chunk
   // carrying the redacted NormalizedResponse. Keeping it optional leaves every existing
   // ModelPort and its tests valid without a streaming implementation.
+  //
+  // `request` is a `GatewayCallRequest` (ADR-0173 D5): `GatewayRequest` plus an optional
+  // `logContext` carrying the caller's correlation id. `GatewayCallRequest` widens strictly —
+  // it adds exactly one optional field — so every existing caller passing a plain
+  // `GatewayRequest` keeps compiling unchanged.
   readonly callStream?: (
-    request: GatewayRequest,
+    request: GatewayCallRequest,
     signal: AbortSignal,
   ) => AsyncIterable<GatewayStreamChunk>;
 }

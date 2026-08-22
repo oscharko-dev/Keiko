@@ -43,6 +43,7 @@ import { join, resolve as resolvePath } from "node:path";
 
 import { classifyErrorKind } from "@oscharko-dev/keiko-contracts";
 
+import { isValidCorrelationId } from "../correlation.js";
 import { contentFreeErrorClass, machineToken, safeProperty } from "./error-classification.js";
 import {
   DEFAULT_SERVER_LOG_LEVEL,
@@ -112,6 +113,14 @@ export interface ServerLogEvent {
   readonly category: ServerLogCategory;
   readonly op: string;
   readonly correlationId?: string | undefined;
+  // The correlation id of the request/run that SPAWNED this one, when this line's own
+  // `correlationId` belongs to a background job/HarnessEvent run minted fresh at that job's own
+  // start (ADR-0173 D5 / g12) — never set for an ordinary request-scoped line, which already has
+  // continuity through `correlationId` alone. Validated against `isValidCorrelationId`'s
+  // `SAFE_CORRELATION_ID` shape (imported, never redeclared) before it reaches the line: a value
+  // that does not fit the shape is dropped rather than written, the same fail-closed direction the
+  // named-hatch guards in `log-redaction.ts` already take for `frames`/`causeChain`.
+  readonly parentCorrelationId?: string | undefined;
   readonly durationMs?: number | undefined;
   readonly status?: number | undefined;
   readonly errorKind?: string | undefined;
@@ -356,6 +365,12 @@ function finiteOrUndefined(value: number | undefined): number | undefined {
 
 function applyEnvelopeFields(record: Record<string, unknown>, event: ServerLogEvent): void {
   if (event.correlationId !== undefined) record.correlationId = redactLogLabel(event.correlationId);
+  // Shape-guarded, not merely redacted: a `parentCorrelationId` that does not fit
+  // `isValidCorrelationId`'s shape is dropped outright rather than written under a marker — an
+  // unshaped value here is evidence of a producer bug, never content worth preserving a trace of.
+  if (event.parentCorrelationId !== undefined && isValidCorrelationId(event.parentCorrelationId)) {
+    record.parentCorrelationId = redactLogLabel(event.parentCorrelationId);
+  }
   const durationMs = finiteOrUndefined(event.durationMs);
   if (durationMs !== undefined) record.durationMs = durationMs;
   const status = finiteOrUndefined(event.status);

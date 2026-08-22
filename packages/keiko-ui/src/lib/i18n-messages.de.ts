@@ -608,6 +608,7 @@ export const DE_MESSAGES = {
   "chat.error.load": "Chat konnte nicht geladen werden.",
   "chat.error.scopeUpdate": "Wissensbereich konnte nicht aktualisiert werden.",
   "chat.error.memoryUpdate": "Speicher konnte nicht aktualisiert werden.",
+  "chat.error.supportId": "Support-ID: {correlationId}",
   "chat.grounding.label": "Grounding",
   "chat.grounding.mode": "Grounding-Modus",
   "chat.grounding.strategy": "Strategie",

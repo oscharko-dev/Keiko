@@ -245,7 +245,12 @@ reach and adds the one relationship it cannot express today:
 - **BFF → gateway**: `GatewayCallRequest.logContext`/`ModelGatewayLogContext` — already defined and
   unit-tested with zero production callers — become the wiring every model-call site uses, so a
   gateway retry, circuit-breaker transition, or provider error line carries the same id as the BFF
-  request that triggered it.
+  request that triggered it. A rate-limited call always carries `httpStatus` on that same line —
+  the provider's actual status, with `429` only as the default a standard rate-limit error
+  assumes when none was supplied — so an agent reconstructing the failure never has to infer the
+  HTTP status from the error class alone; `retryAfterMs` is present on the same line only when the provider itself supplied a
+  retry value — there is no fallback default, so its absence is itself evidence that the provider
+  did not advertise one, not a gap in the record.
 - **BFF → WebSocket**: one correlation id is resolved once per connection at upgrade time, not
   re-minted per failure, so every diagnostic a WS session emits over its lifetime is joinable to
   the same id.
@@ -365,7 +370,11 @@ coherent noun groups the artifact producer and its own consumer under one verb s
   corruption, never conflated with a legacy line, which parses cleanly and is merely missing the v2
   identity triple. `--json` emits all of this in Wave 1; the fuller analyzer output (stack-frame
   unions, gateway replay scripts, a reproduction-seed fixture emitter) is Wave 6 scope, once the
-  fields it reads exist.
+  fields it reads exist. Among those fields: a rate-limited call always carries `httpStatus` — the
+  provider's actual status (`429` is only the default for a standard rate-limit error, never a
+  replacement for a supplied `503`) — so a replay script's rate-limit attempt never has to infer
+  its HTTP status from the outcome discriminant alone; `retryAfterMs` rides along on the same line
+  only when the provider supplied one, with no synthesized fallback.
 
 ### D10 — Why Wave 1 ships the exporter and analyzer alongside `seq`, not after it
 

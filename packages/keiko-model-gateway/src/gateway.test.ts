@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { Gateway } from "./gateway.js";
+import { createScriptedGatewayClock } from "./replay.js";
 import {
   CancelledError,
   CircuitOpenError,
@@ -39,14 +40,6 @@ function config(providers: ModelProviderConfig[]): GatewayConfig {
   };
 }
 
-function stubClock(): Clock {
-  let current = 0;
-  return {
-    now: (): number => (current += 1),
-    sleep: (): Promise<void> => Promise.resolve(),
-  };
-}
-
 function okResponse(modelId: string): NormalizedResponse {
   return {
     modelId,
@@ -69,6 +62,9 @@ const REQUEST: GatewayRequest = {
 
 describe("Gateway.chat", () => {
   it("returns a response with a UUID v4 request id and exact deterministic latency", async () => {
+    // Bespoke on purpose: this pins an exact now()-call-count sequence
+    // (createScriptedGatewayClock's now() never advances merely by being read, so it cannot
+    // reproduce this without also faking a sleep-driven advance the adapter never performs here).
     // now() sequence: 1000 (start), 1042 (end). Math.max(1, 1042-1000) = 42.
     const sequence = [1000, 1042];
     let callIndex = 0;
@@ -88,7 +84,7 @@ describe("Gateway.chat", () => {
   it("stamps usage.costClass from the runtime default for an undeclared model", async () => {
     const gateway = new Gateway(config([provider()]), {
       adapter: fakeAdapter((_req, cfg) => Promise.resolve(okResponse(cfg.modelId))),
-      clock: stubClock(),
+      clock: createScriptedGatewayClock(),
     });
     const result = await gateway.chat(REQUEST);
     expect(result.usage.costClass).toBe("medium");
@@ -121,7 +117,7 @@ describe("Gateway.chat", () => {
       },
       {
         adapter: fakeAdapter((_req, cfg) => Promise.resolve(okResponse(cfg.modelId))),
-        clock: stubClock(),
+        clock: createScriptedGatewayClock(),
       },
     );
     const result = await gateway.chat({ modelId, messages: [{ role: "user", content: "q" }] });
@@ -132,7 +128,7 @@ describe("Gateway.chat", () => {
   it("throws UnknownModelError when the model is not configured", async () => {
     const gateway = new Gateway(config([provider()]), {
       adapter: fakeAdapter(() => Promise.resolve(okResponse("x"))),
-      clock: stubClock(),
+      clock: createScriptedGatewayClock(),
     });
     await expect(gateway.chat({ modelId: "not-configured", messages: [] })).rejects.toBeInstanceOf(
       UnknownModelError,
@@ -166,7 +162,7 @@ describe("Gateway.chat", () => {
       },
       {
         adapter: fakeAdapter(() => Promise.resolve(okResponse("x"))),
-        clock: stubClock(),
+        clock: createScriptedGatewayClock(),
       },
     );
     try {
@@ -184,7 +180,7 @@ describe("Gateway.chat", () => {
       adapter: fakeAdapter(() =>
         Promise.reject(new TransportError(`upstream ${upstreamKey} failed`)),
       ),
-      clock: stubClock(),
+      clock: createScriptedGatewayClock(),
     });
     try {
       await gateway.chat(REQUEST);
@@ -203,7 +199,7 @@ describe("Gateway.chat", () => {
           ? Promise.reject(new TransportError("boom"))
           : Promise.resolve(okResponse("example-chat-model"));
       }),
-      clock: stubClock(),
+      clock: createScriptedGatewayClock(),
     });
     const result = await gateway.chat(REQUEST);
     expect(result.content).toBe("answer");
@@ -219,7 +215,7 @@ describe("Gateway.chat", () => {
           new GatewayEgressError(ERROR_CODES.PROXY_BLOCKED_BY_POLICY, "proxy blocked egress"),
         );
       }),
-      clock: stubClock(),
+      clock: createScriptedGatewayClock(),
     });
     await expect(gateway.chat(REQUEST)).rejects.toMatchObject({
       code: ERROR_CODES.PROXY_BLOCKED_BY_POLICY,
@@ -229,6 +225,9 @@ describe("Gateway.chat", () => {
 
   it("passes the remaining end-to-end timeout budget to retry attempts", async () => {
     const seenTimeouts: number[] = [];
+    // Bespoke on purpose: the adapter mock below advances `current` directly (simulating the
+    // provider call's own latency), which createScriptedGatewayClock has no external handle to do
+    // — its internal clock only advances through its own sleep().
     let current = 0;
     const clock: Clock = {
       now: (): number => current,
@@ -261,7 +260,7 @@ describe("Gateway.chat", () => {
         calls += 1;
         return Promise.reject(new TransportError("down"));
       }),
-      clock: stubClock(),
+      clock: createScriptedGatewayClock(),
     });
     for (let i = 0; i < 3; i += 1) {
       await expect(gateway.chat(REQUEST)).rejects.toBeInstanceOf(TransportError);
@@ -308,7 +307,7 @@ describe("Gateway.chatStream", () => {
   it("yields ordered deltas then a done chunk enriched with a UUID requestId and costClass", async () => {
     const gateway = new Gateway(config([provider()]), {
       adapter: streamingAdapter(["Hel", "lo"]),
-      clock: stubClock(),
+      clock: createScriptedGatewayClock(),
     });
     const chunks = await collectStream(gateway.chatStream(REQUEST));
     expect(chunks.slice(0, 2)).toEqual([
@@ -329,7 +328,7 @@ describe("Gateway.chatStream", () => {
       adapter: fakeAdapter(() =>
         Promise.resolve({ ...okResponse("example-chat-model"), content: "buffered" }),
       ),
-      clock: stubClock(),
+      clock: createScriptedGatewayClock(),
     });
     const chunks = await collectStream(gateway.chatStream(REQUEST));
     expect(chunks[0]).toEqual({ type: "delta", token: "buffered" });
@@ -351,7 +350,7 @@ describe("Gateway.chatStream", () => {
     };
     const gateway = new Gateway(config([provider({ maxRetries: 0 })]), {
       adapter: failing,
-      clock: stubClock(),
+      clock: createScriptedGatewayClock(),
     });
     await expect(collectStream(gateway.chatStream(REQUEST))).rejects.toBeInstanceOf(TransportError);
     expect(gateway.circuitStatus("example-chat-model").consecutiveFailures).toBe(1);
@@ -370,7 +369,7 @@ describe("Gateway.chatStream", () => {
     };
     const gateway = new Gateway(config([provider({ maxRetries: 0 })]), {
       adapter: cancelling,
-      clock: stubClock(),
+      clock: createScriptedGatewayClock(),
     });
     await expect(collectStream(gateway.chatStream(REQUEST))).rejects.toBeInstanceOf(CancelledError);
     expect(gateway.circuitStatus("example-chat-model").consecutiveFailures).toBe(0);
@@ -380,7 +379,7 @@ describe("Gateway.chatStream", () => {
   it("throws UnknownModelError for an unconfigured model without touching the breaker", async () => {
     const gateway = new Gateway(config([provider()]), {
       adapter: streamingAdapter(["x"]),
-      clock: stubClock(),
+      clock: createScriptedGatewayClock(),
     });
     await expect(
       collectStream(gateway.chatStream({ modelId: "nope", messages: [] })),
@@ -392,7 +391,7 @@ describe("Gateway.circuitStatus", () => {
   it("reports closed before any failures", () => {
     const gateway = new Gateway(config([provider()]), {
       adapter: fakeAdapter(() => Promise.resolve(okResponse("x"))),
-      clock: stubClock(),
+      clock: createScriptedGatewayClock(),
     });
     expect(gateway.circuitStatus("example-chat-model").state).toBe("closed");
   });
@@ -400,7 +399,7 @@ describe("Gateway.circuitStatus", () => {
   it("reports closed for an unconfigured model id", () => {
     const gateway = new Gateway(config([provider()]), {
       adapter: fakeAdapter(() => Promise.resolve(okResponse("x"))),
-      clock: stubClock(),
+      clock: createScriptedGatewayClock(),
     });
     expect(gateway.circuitStatus("nope").state).toBe("closed");
   });
@@ -427,7 +426,7 @@ describe("Gateway per-provider circuitBreaker override (KEIKO-0167)", () => {
   it("opens the flaky provider after ONE failure while the strict provider stays closed", async () => {
     const gateway = new Gateway(config([flakyProvider, strictProvider]), {
       adapter: fakeAdapter(() => Promise.reject(new TransportError("down"))),
-      clock: stubClock(),
+      clock: createScriptedGatewayClock(),
     });
 
     await expect(gateway.chat({ ...REQUEST, modelId: "flaky-provider" })).rejects.toBeInstanceOf(

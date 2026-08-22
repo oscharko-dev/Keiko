@@ -42,8 +42,9 @@ import type {
   ServerLogSink,
 } from "./server-log.js";
 
-// A flat record of fields to bind. `correlationId` and `category` are lifted onto the event
-// envelope; everything else is merged into `extra` and passes the same redaction as any field.
+// A flat record of fields to bind. `correlationId`, `parentCorrelationId` and `category` are
+// lifted onto the event envelope; everything else is merged into `extra` and passes the same
+// redaction as any field.
 export type ServerLogContext = Readonly<Record<string, unknown>>;
 
 // An event as a call site writes it: the level comes from the method, the category may come from
@@ -52,6 +53,9 @@ export interface ServerLogEventInput {
   readonly category?: ServerLogCategory | undefined;
   readonly op: string;
   readonly correlationId?: string | undefined;
+  // See `ServerLogEvent.parentCorrelationId` (server-log.ts) — set only when this event belongs to
+  // a background job/HarnessEvent run spawned from a request whose id is known.
+  readonly parentCorrelationId?: string | undefined;
   readonly durationMs?: number | undefined;
   readonly status?: number | undefined;
   readonly errorKind?: string | undefined;
@@ -74,7 +78,7 @@ export interface ServerLogger {
 
 const FALLBACK_CATEGORY: ServerLogCategory = "diagnostic";
 
-const LIFTED_CONTEXT_KEYS = new Set<string>(["correlationId", "category"]);
+const LIFTED_CONTEXT_KEYS = new Set<string>(["correlationId", "parentCorrelationId", "category"]);
 
 // Kept in lockstep with `ServerLogCategory` in `server-log.ts` — this is the runtime mirror of that
 // compile-time union, consulted by `readCategory` below so a bound context can only ever lift a
@@ -96,12 +100,14 @@ const KNOWN_CATEGORIES = new Set<string>([
 interface ResolvedBinding {
   readonly category: ServerLogCategory | undefined;
   readonly correlationId: string | undefined;
+  readonly parentCorrelationId: string | undefined;
   readonly extra: Readonly<Record<string, unknown>> | undefined;
 }
 
 const EMPTY_BINDING: ResolvedBinding = {
   category: undefined,
   correlationId: undefined,
+  parentCorrelationId: undefined,
   extra: undefined,
 };
 
@@ -117,9 +123,12 @@ function resolveBinding(parent: ResolvedBinding, context: ServerLogContext): Res
     if (!LIFTED_CONTEXT_KEYS.has(name)) extra[name] = value;
   }
   const correlationId = context.correlationId;
+  const parentCorrelationId = context.parentCorrelationId;
   return {
     category: readCategory(context.category) ?? parent.category,
     correlationId: typeof correlationId === "string" ? correlationId : parent.correlationId,
+    parentCorrelationId:
+      typeof parentCorrelationId === "string" ? parentCorrelationId : parent.parentCorrelationId,
     extra: Object.keys(extra).length === 0 ? undefined : extra,
   };
 }
@@ -143,6 +152,7 @@ function buildEvent(
     category: input.category ?? binding.category ?? FALLBACK_CATEGORY,
     op: input.op,
     correlationId: input.correlationId ?? binding.correlationId,
+    parentCorrelationId: input.parentCorrelationId ?? binding.parentCorrelationId,
     durationMs: input.durationMs,
     status: input.status,
     errorKind: input.errorKind,
