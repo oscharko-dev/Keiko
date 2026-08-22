@@ -179,6 +179,8 @@ import {
   handleFilesTree,
 } from "./files.js";
 import {
+  GIT_DIFF_ROUTE_TEMPLATE,
+  GIT_STRUCTURED_DIFF_ROUTE_TEMPLATE,
   handleGitBlame,
   handleGitBranches,
   handleGitDiff,
@@ -375,6 +377,7 @@ import { GIT_DELIVERY_PR_ROUTE_GROUP } from "./gitDelivery/prRoutes.js";
 import { GIT_DELIVERY_MERGE_ROUTE_GROUP } from "./gitDelivery/mergeRoutes.js";
 import { GIT_DELIVERY_SYNC_ROUTE_GROUP } from "./gitDelivery/syncRoutes.js";
 import { GIT_AGENT_OPERATION_ROUTE_GROUP } from "./gitDelivery/agentOperationsRoutes.js";
+import { handleClientDiagnosticIngest } from "./client-diagnostics-routes.js";
 
 export interface ApiError {
   readonly error: {
@@ -596,12 +599,12 @@ export const API_ROUTES: readonly RouteDefinition[] = [
   },
   {
     method: "GET",
-    pattern: "/api/git/diff",
+    pattern: GIT_DIFF_ROUTE_TEMPLATE,
     handler: (ctx, deps) => handleGitDiff(ctx, deps, deps.gitRouteOptions),
   },
   {
     method: "GET",
-    pattern: "/api/git/diff/structured",
+    pattern: GIT_STRUCTURED_DIFF_ROUTE_TEMPLATE,
     handler: (ctx, deps) => handleGitStructuredDiff(ctx, deps, deps.gitRouteOptions),
   },
   {
@@ -1498,6 +1501,10 @@ export const API_ROUTES: readonly RouteDefinition[] = [
   // authorization, the server deployment ceiling, and connector-scope grants. Context stays
   // untrusted-labeled and evidence content-free; upstream failures answer as an opaque 502.
   ...CODING_CONTEXT_ROUTE_GROUP,
+  // Browser-side diagnostic ingest (Wave 5 of epic #3233): a bounded, redaction-checked crash/error
+  // report from the UI's client-diagnostics sink, joined to the server request it describes via
+  // `correlationId`. See client-diagnostics-routes.ts for the trust boundary this route enforces.
+  { method: "POST", pattern: "/api/diagnostics/client", handler: handleClientDiagnosticIngest },
 ];
 
 interface PreparedRoute {

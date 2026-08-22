@@ -28,6 +28,7 @@ import { newCorrelationId } from "./correlation.js";
 import { emitServerDiagnostic, serverDiagnosticFromError } from "./diagnostics-log.js";
 import { rerankSelection } from "./grounded-rerank-facade.js";
 import type { RouteContext, RouteResult } from "./routes.js";
+import { readBoundedRequestBody, RequestBodyTooLargeError } from "./bounded-request-body.js";
 
 const DEFAULT_PROBES: readonly GatewayReadinessProbeName[] = [
   "chat",
@@ -84,33 +85,6 @@ interface ProviderSelection {
   readonly capability: ModelCapability | undefined;
 }
 
-class ReadinessBodyTooLargeError extends Error {
-  constructor() {
-    super("Readiness request body exceeds the size limit.");
-  }
-}
-
-function readBody(req: IncomingMessage): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const chunks: Buffer[] = [];
-    let bytes = 0;
-    req.on("data", (chunk: Buffer | string) => {
-      const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk, "utf8");
-      bytes += buffer.byteLength;
-      if (bytes > MAX_BODY_BYTES) {
-        reject(new ReadinessBodyTooLargeError());
-        req.destroy();
-        return;
-      }
-      chunks.push(buffer);
-    });
-    req.on("end", () => {
-      resolve(Buffer.concat(chunks).toString("utf8"));
-    });
-    req.on("error", reject);
-  });
-}
-
 function error(code: string, message: string, status = 400): RouteResult {
   return { status, body: { error: { code, message } } };
 }
@@ -123,12 +97,17 @@ function isProbeName(value: unknown): value is GatewayReadinessProbeName {
   return typeof value === "string" && ALL_PROBES.has(value as GatewayReadinessProbeName);
 }
 
-async function readJsonBody(req: IncomingMessage): Promise<ParsedReadinessBody | RouteResult> {
+// Consolidated onto the shared bounded reader (#2902 w5-sse-counters) — the cap above is
+// unchanged, only the ad hoc listener wiring is gone.
+async function readJsonBody(
+  req: IncomingMessage,
+  correlationId?: string,
+): Promise<ParsedReadinessBody | RouteResult> {
   let raw: string;
   try {
-    raw = await readBody(req);
+    raw = await readBoundedRequestBody(req, MAX_BODY_BYTES, undefined, correlationId);
   } catch (bodyError) {
-    if (bodyError instanceof ReadinessBodyTooLargeError) {
+    if (bodyError instanceof RequestBodyTooLargeError) {
       return error("PAYLOAD_TOO_LARGE", "Readiness request body exceeds the size limit.", 413);
     }
     return error("BAD_REQUEST", "The readiness request body could not be read.");
@@ -1438,7 +1417,7 @@ export async function handleGatewayReadiness(
   ctx: RouteContext,
   deps: UiHandlerDeps,
 ): Promise<RouteResult> {
-  const body = await readJsonBody(ctx.req);
+  const body = await readJsonBody(ctx.req, ctx.correlationId);
   if ("status" in body) return body;
   const report = await runGatewayReadiness(body.parsed, deps, ctx.correlationId);
   if ("status" in report) return report;

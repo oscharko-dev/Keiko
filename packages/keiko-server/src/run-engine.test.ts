@@ -323,6 +323,35 @@ describe("probeNetworkIsolationSafely", () => {
     expect(probeSafely("/nonexistent/workspace")).toBe(false);
   });
 
+  it("threads the dispatching run's own id into the failure diagnostic instead of a disconnected mint", async () => {
+    // ADR-0173 D5 / g12: dispatchWorkflow/applyRun both have a runId in scope when they call this
+    // probe; the probe failure diagnostic must carry THAT id (via the default stderr sink, which
+    // this test observes through console.error) rather than a fresh randomUUID() unrelated to the
+    // run whose verification enforcement it affects.
+    vi.resetModules();
+    const actualVerification = await vi.importActual<
+      typeof import("./editor/verificationExecution.js")
+    >("./editor/verificationExecution.js");
+    vi.doMock("./editor/verificationExecution.js", () => ({
+      ...actualVerification,
+      probeNetworkIsolation: (): never => {
+        throw new Error("probe backend detection failed");
+      },
+    }));
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    try {
+      const { probeNetworkIsolationSafely: probeSafely } = await import("./run-engine.js");
+      const runId = `run-${randomUUID()}`;
+      expect(probeSafely("/nonexistent/workspace", runId)).toBe(false);
+      expect(consoleError).toHaveBeenCalledTimes(1);
+      const line = consoleError.mock.calls[0]?.[0] as string;
+      const record = JSON.parse(line.slice(line.indexOf("{"))) as { correlationId?: unknown };
+      expect(record.correlationId).toBe(runId);
+    } finally {
+      consoleError.mockRestore();
+    }
+  });
+
   it.each([true, false])(
     "passes through the real probe's available:%s without swallowing it",
     async (available) => {
@@ -376,5 +405,50 @@ describe("applyRun — verification egress probe threading", () => {
 
     expect(capturedDeps).toBeDefined();
     expect(typeof capturedDeps?.verificationEnforcedNetworkAvailable).toBe("boolean");
+  });
+
+  it("threads the replayed run's own runId into a probe failure during apply", async () => {
+    // ADR-0173 D5 / g12: run-handlers.ts's gated apply path always has the run's own runId in
+    // scope (RunRecord.runId); a probe failure during the replayed verify stage must carry it
+    // rather than a disconnected randomUUID().
+    vi.resetModules();
+    const actualWorkflows = await vi.importActual<typeof import("@oscharko-dev/keiko-workflows")>(
+      "@oscharko-dev/keiko-workflows",
+    );
+    vi.doMock("@oscharko-dev/keiko-workflows", () => ({
+      ...actualWorkflows,
+      generateUnitTests: (): Promise<unknown> => Promise.resolve({ status: "completed" }),
+    }));
+    const actualVerification = await vi.importActual<
+      typeof import("./editor/verificationExecution.js")
+    >("./editor/verificationExecution.js");
+    vi.doMock("./editor/verificationExecution.js", () => ({
+      ...actualVerification,
+      probeNetworkIsolation: (): never => {
+        throw new Error("probe backend detection failed");
+      },
+    }));
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    try {
+      const { applyRun: apply } = await import("./run-engine.js");
+      const runId = `run-${randomUUID()}`;
+
+      await apply(
+        { kind: "unit-tests", payload: { workspaceRoot }, limits: undefined },
+        { call: () => Promise.reject(new Error("unused")) },
+        "m",
+        (value) => value,
+        undefined,
+        runId,
+      );
+
+      expect(consoleError).toHaveBeenCalledTimes(1);
+      const line = consoleError.mock.calls[0]?.[0] as string;
+      const record = JSON.parse(line.slice(line.indexOf("{"))) as { correlationId?: unknown };
+      expect(record.correlationId).toBe(runId);
+    } finally {
+      consoleError.mockRestore();
+      vi.doUnmock("./editor/verificationExecution.js");
+    }
   });
 });

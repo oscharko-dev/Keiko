@@ -6,6 +6,10 @@ import {
   subscribeBrowserStreamCapacity,
 } from "../../../../../lib/browser-stream-capacity";
 import { secureRandomInt } from "../../../../../lib/secure-random";
+import {
+  reportClientDiagnostic,
+  sseStreamErrorDiagnostic,
+} from "../../../../../lib/client-diagnostics";
 
 type SharedEventListener = (event: MessageEvent<string>) => void;
 
@@ -140,6 +144,7 @@ function openEntrySource(entry: SharedEventSourceEntry): void {
     entry.reconnectAttempts = 0;
   };
   source.onerror = () => {
+    reportClientDiagnostic(sseStreamErrorDiagnostic("shared-event-source", source.readyState));
     closeEntrySource(entry);
     scheduleReconnect(entry);
   };

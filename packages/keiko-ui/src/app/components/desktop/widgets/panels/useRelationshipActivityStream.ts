@@ -28,6 +28,10 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { RelationshipActivityState } from "@oscharko-dev/keiko-contracts";
 import { RELATIONSHIP_FORBIDDEN_METADATA_KEY_SUBSTRINGS } from "@oscharko-dev/keiko-contracts";
+import {
+  reportClientDiagnostic,
+  sseStreamErrorDiagnostic,
+} from "../../../../../lib/client-diagnostics";
 import { createSameOriginApiEventSource } from "../../../../../lib/safe-event-source";
 import { secureRandomInt } from "../../../../../lib/secure-random";
 
@@ -477,6 +481,7 @@ export function useRelationshipActivityStream(
 
       es.onerror = (): void => {
         if (closed) return;
+        reportClientDiagnostic(sseStreamErrorDiagnostic("relationship-activity", es?.readyState));
         closeStream();
         scheduleReconnect();
       };

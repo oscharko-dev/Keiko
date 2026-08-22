@@ -18,11 +18,13 @@ import {
   createRunRegistry,
   type UiHandlerDeps,
 } from "./index.js";
-import type { RouteContext } from "./routes.js";
+import { matchRoute, type RouteContext } from "./routes.js";
 import type { ServerDiagnosticRecord } from "./diagnostics-log.js";
 import type { UiStore } from "./store/index.js";
 import { mockRequest, mockResponse } from "./_support.js";
 import {
+  GIT_DIFF_ROUTE_TEMPLATE,
+  GIT_STRUCTURED_DIFF_ROUTE_TEMPLATE,
   handleGitBranches,
   handleGitBlame,
   handleGitDiff,
@@ -1724,4 +1726,30 @@ describe("GET /api/git/blame", () => {
       expect(JSON.stringify(result.body)).not.toContain("private/repository");
     },
   );
+});
+
+// The `operation` string `gitReadErrorBody` reports for a diff failure is built from
+// `GIT_DIFF_ROUTE_TEMPLATE` / `GIT_STRUCTURED_DIFF_ROUTE_TEMPLATE` (gitRoutes.ts), a literal
+// that used to be restated separately in routes.ts's own `pattern` field with nothing linking
+// the two — a route rename could silently leave the diagnostic reporting the old path. Both
+// constants are now imported into routes.ts as the registered `pattern`, so this pin resolves
+// each one through the real router (`matchRoute`) rather than comparing the constant to itself.
+describe("git diff route templates stay pinned to the registered routes", () => {
+  it("resolves GIT_DIFF_ROUTE_TEMPLATE to the route actually registered for GET /api/git/diff", () => {
+    const match = matchRoute("GET", GIT_DIFF_ROUTE_TEMPLATE);
+    expect(match).not.toBe("method-not-allowed");
+    expect(match).not.toBeUndefined();
+    expect((match as { definition: { pattern: string } }).definition.pattern).toBe(
+      GIT_DIFF_ROUTE_TEMPLATE,
+    );
+  });
+
+  it("resolves GIT_STRUCTURED_DIFF_ROUTE_TEMPLATE to the route actually registered for GET /api/git/diff/structured", () => {
+    const match = matchRoute("GET", GIT_STRUCTURED_DIFF_ROUTE_TEMPLATE);
+    expect(match).not.toBe("method-not-allowed");
+    expect(match).not.toBeUndefined();
+    expect((match as { definition: { pattern: string } }).definition.pattern).toBe(
+      GIT_STRUCTURED_DIFF_ROUTE_TEMPLATE,
+    );
+  });
 });

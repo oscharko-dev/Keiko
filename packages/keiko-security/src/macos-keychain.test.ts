@@ -1,9 +1,11 @@
 import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterAll, describe, expect, it } from "vitest";
+import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
+import type { SecurityLogEvent, SecurityLogSink } from "./log-port.js";
 import {
   KEYCHAIN_SPAWN_TIMEOUT_MS,
+  emitKeychainFallback,
   readMacosKeychainSecret,
   writeMacosKeychainSecret,
 } from "./macos-keychain.js";
@@ -132,6 +134,18 @@ describe("readMacosKeychainSecret", () => {
     expect(read.kind).toBe(process.platform === "darwin" ? "absent" : "unavailable");
   });
 
+  it("resolves the default executable path itself when none is supplied, off darwin", () => {
+    // `resolveSpawn` computes the `options.executable ?? MACOS_SECURITY_EXECUTABLE` default
+    // unconditionally, before the darwin check short-circuits — so this exercises that default
+    // branch without ever spawning the real `/usr/bin/security` (the early non-darwin return fires
+    // first, exactly as the equivalent-executable HANGS-off-darwin test above proves for the
+    // caller-supplied path).
+    const started = process.hrtime.bigint();
+    const read = readMacosKeychainSecret("svc", "acct", { platform: "linux" });
+    expect(Number(process.hrtime.bigint() - started) / 1e6).toBeLessThan(1_000);
+    expect(read).toEqual({ kind: "unavailable" });
+  });
+
   it("applies the production spawn bound when timeoutMs is omitted", () => {
     // The one call that really omits timeoutMs runs against the HANGING fixture on purpose: a
     // fast fixture would flake on a saturated runner (the incident this file hardens against),
@@ -255,4 +269,179 @@ describe("writeMacosKeychainSecret", () => {
     expect(elapsedMs).toBeLessThan(15_000);
     expect(stored).toBe(false);
   }, 20_000);
+});
+
+// The wiring the 0.3.0 boot-hang incident (file header) was missing: a fallback now emits ONE
+// event, carrying only closed-vocabulary/duration fields — never the service/account name, and
+// never the executable path or the OS error's message.
+describe("readMacosKeychainSecret sink wiring", () => {
+  function recordingSink(): { sink: SecurityLogSink; events: SecurityLogEvent[] } {
+    const events: SecurityLogEvent[] = [];
+    return {
+      sink: {
+        write: (event): void => {
+          events.push(event);
+        },
+      },
+      events,
+    };
+  }
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("emits one security.keychain.fallback event, with only the documented fields, when the keychain refuses immediately", () => {
+    const { sink, events } = recordingSink();
+
+    const read = readMacosKeychainSecret("svc", "acct", {
+      executable: DENIES,
+      platform: "darwin",
+      timeoutMs: 30_000,
+      sink,
+    });
+
+    expect(read).toEqual({ kind: "unavailable" });
+    expect(events).toHaveLength(1);
+    const [event] = events;
+    expect(event).toMatchObject({
+      level: "warn",
+      category: "security",
+      op: "security.keychain.fallback",
+      extra: { reasonKind: "Error", boundedExitKind: "exit-status" },
+    });
+    expect(typeof event?.durationMs).toBe("number");
+    expect(event?.durationMs).toBeGreaterThanOrEqual(0);
+    expect(Object.keys(event ?? {}).sort()).toEqual([
+      "category",
+      "durationMs",
+      "extra",
+      "level",
+      "op",
+    ]);
+    // Never the service/account this call was made with, never a path.
+    expect(JSON.stringify(event)).not.toContain("svc");
+    expect(JSON.stringify(event)).not.toContain("acct");
+  });
+
+  it("classifies a timed-out spawn distinctly from an immediate refusal", () => {
+    const { sink, events } = recordingSink();
+
+    readMacosKeychainSecret("svc", "acct", {
+      executable: HANGS,
+      platform: "darwin",
+      timeoutMs: 250,
+      sink,
+    });
+
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({
+      op: "security.keychain.fallback",
+      extra: { reasonKind: "ETIMEDOUT", boundedExitKind: "timeout" },
+    });
+  }, 15_000);
+
+  it("does not emit for the ordinary first-run case (item not found)", () => {
+    const { sink, events } = recordingSink();
+
+    const read = readMacosKeychainSecret("svc", "acct", {
+      executable: REFUSES,
+      platform: "darwin",
+      timeoutMs: 30_000,
+      sink,
+    });
+
+    expect(read).toEqual({ kind: "absent" });
+    expect(events).toHaveLength(0);
+  });
+
+  it("does not emit when the call succeeds", () => {
+    const { sink, events } = recordingSink();
+
+    readMacosKeychainSecret("svc", "acct", {
+      executable: ANSWERS,
+      platform: "darwin",
+      timeoutMs: 30_000,
+      sink,
+    });
+
+    expect(events).toHaveLength(0);
+  });
+
+  it("degrades a throwing sink without ever failing the read (degrade-once idiom)", () => {
+    const warn = vi.spyOn(process, "emitWarning").mockImplementation(() => undefined);
+    const dead: SecurityLogSink = {
+      write: (): never => {
+        throw new Error("sink transport is down");
+      },
+    };
+
+    const read = readMacosKeychainSecret("svc", "acct", {
+      executable: DENIES,
+      platform: "darwin",
+      timeoutMs: 30_000,
+      sink: dead,
+    });
+
+    expect(read).toEqual({ kind: "unavailable" });
+    expect(warn).toHaveBeenCalledTimes(1);
+  });
+
+  it("stays exactly as silent as before when no sink is wired", () => {
+    expect(() => {
+      readMacosKeychainSecret("svc", "acct", {
+        executable: DENIES,
+        platform: "darwin",
+        timeoutMs: 30_000,
+      });
+    }).not.toThrow();
+  });
+});
+
+// classifyBoundedExit's closed vocabulary end to end: readMacosKeychainSecret's own fixtures only
+// ever reach "timeout" (HANGS) and "exit-status" (DENIES/REFUSES). The other two members —
+// "signal" and "spawn-error" — describe spawn shapes `execFileSync` can produce that this suite's
+// shell-script fixtures cannot fabricate on demand, so they are exercised directly through
+// `emitKeychainFallback`, the exported reporter both keychain surfaces in this package share
+// [GEN-MAINT-COUPLING-006]. "unknown" covers a thrown value that is not even an object.
+describe("emitKeychainFallback — boundedExitKind classification", () => {
+  function recordingSink(): { sink: SecurityLogSink; events: SecurityLogEvent[] } {
+    const events: SecurityLogEvent[] = [];
+    return {
+      sink: {
+        write: (event): void => {
+          events.push(event);
+        },
+      },
+      events,
+    };
+  }
+
+  it("classifies a thrown non-object value as unknown", () => {
+    const { sink, events } = recordingSink();
+    emitKeychainFallback(sink, "plain string throw", () => 0);
+    expect(events).toHaveLength(1);
+    expect(events[0]?.extra).toMatchObject({ boundedExitKind: "unknown" });
+  });
+
+  it("classifies a thrown null as unknown", () => {
+    const { sink, events } = recordingSink();
+    emitKeychainFallback(sink, null, () => 0);
+    expect(events).toHaveLength(1);
+    expect(events[0]?.extra).toMatchObject({ boundedExitKind: "unknown" });
+  });
+
+  it("classifies a spawn killed by signal as signal", () => {
+    const { sink, events } = recordingSink();
+    emitKeychainFallback(sink, { signal: "SIGKILL" }, () => 0);
+    expect(events).toHaveLength(1);
+    expect(events[0]?.extra).toMatchObject({ boundedExitKind: "signal" });
+  });
+
+  it("classifies a spawn failure carrying a string code other than ETIMEDOUT as spawn-error", () => {
+    const { sink, events } = recordingSink();
+    emitKeychainFallback(sink, { code: "ENOENT" }, () => 0);
+    expect(events).toHaveLength(1);
+    expect(events[0]?.extra).toMatchObject({ boundedExitKind: "spawn-error" });
+  });
 });

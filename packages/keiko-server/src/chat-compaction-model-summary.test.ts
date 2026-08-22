@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   CONTEXT_ENGINEERING_SCHEMA_VERSION,
@@ -13,12 +14,14 @@ import {
 import { sha256Hex } from "@oscharko-dev/keiko-security";
 import {
   createDefaultChatCapability,
+  type GatewayCallRequest,
   type GatewayConfig,
   type GatewayRequest,
   type NormalizedResponse,
 } from "@oscharko-dev/keiko-model-gateway";
 import type { ModelPort } from "@oscharko-dev/keiko-harness";
 import type { UiHandlerDeps } from "./deps.js";
+import type { ServerDiagnosticRecord, ServerDiagnosticSink } from "./diagnostics-log.js";
 import type { ChatMessage } from "./store/index.js";
 import { enrichChatCompactionWithModelSummary } from "./chat-compaction-model-summary.js";
 
@@ -113,6 +116,7 @@ function deps(
   store: EvidenceStore,
   model: ModelPort | undefined,
   supportsResponseFormat = true,
+  diagnostics?: ServerDiagnosticSink,
 ): UiHandlerDeps {
   return {
     config: gatewayConfig(supportsResponseFormat),
@@ -121,6 +125,7 @@ function deps(
     env: {},
     redactor,
     modelPortFactory: () => model,
+    diagnostics,
   } as unknown as UiHandlerDeps;
 }
 
@@ -198,6 +203,14 @@ function neverResolvingModel(): ModelPort {
   };
 }
 
+function rejectingModel(): ModelPort {
+  return {
+    call(): Promise<NormalizedResponse> {
+      return Promise.reject(new Error("summary model transport failed"));
+    },
+  };
+}
+
 function defaultEnrichmentInput(
   messageCount = 2,
 ): Parameters<typeof enrichChatCompactionWithModelSummary>[1] {
@@ -258,6 +271,21 @@ describe("enrichChatCompactionWithModelSummary", () => {
     expect(calls).toHaveLength(1);
     expectStructuredSummaryRequest(request, prompt);
     expectStructuredSummaryPersisted(persisted);
+  });
+
+  // ADR-0173 D5: this best-effort background summarization has no live HTTP request in scope, so
+  // the chat's own (internally-minted, opaque) id is the stable correlation key stamped into the
+  // model's GatewayCallRequest.logContext.
+  it("stamps the chat id into the model gateway call's logContext", async () => {
+    const store = createInMemoryEvidenceStore();
+    const calls: GatewayRequest[] = [];
+    await enrichChatCompactionWithModelSummary(
+      deps(store, structuredSummaryModel(calls)),
+      defaultEnrichmentInput(),
+    );
+
+    const request = requireFirstRequest(calls);
+    expect((request as GatewayCallRequest).logContext?.correlationId).toBe(CHAT_ID);
   });
 
   it("keeps a safe legacy text fallback when the model lacks response-format support", async () => {
@@ -401,6 +429,44 @@ describe("enrichChatCompactionWithModelSummary", () => {
     expect(persisted.validationState).toBe("rejected");
     expect(persisted.failureReason).toBe("model-unavailable");
     expect(persisted.content).toBe("");
+  });
+
+  // ADR-0173 D5 g25 — a scheduled-enrichment call failure used to reach only a bare `console.warn`
+  // (see the source-grep pin below); background summarization has no live REQUEST correlation id
+  // in scope, so the chat's own id — already the stable job key `callModelWithTimeout` labels its
+  // own call with — is the join key this diagnostic carries instead.
+  it("routes a model-call failure through the diagnostic sink, keyed by chatId", async () => {
+    const store = createInMemoryEvidenceStore();
+    const events: ServerDiagnosticRecord[] = [];
+    const diagnostics: ServerDiagnosticSink = {
+      record: (record): void => {
+        events.push(record);
+      },
+    };
+
+    await enrichChatCompactionWithModelSummary(
+      deps(store, rejectingModel(), true, diagnostics),
+      defaultEnrichmentInput(9),
+    );
+
+    expect(events).toHaveLength(1);
+    const [event] = events;
+    if (event === undefined) throw new Error("expected a diagnostic record");
+    expect(event.correlationId).toBe(CHAT_ID);
+    expect(event.operation).toBe("chat.compaction.summary");
+    expect(event.source).toBe("chat.compaction.model-summary");
+    expect(event.errorClass).toBe("Error");
+    // The diagnostic is additive: the turn still gets a usable fallback summary either way.
+    const persisted = requireModelSummary(store, 9);
+    expect(persisted.failureReason).toBe("model-unavailable");
+  });
+
+  it("no longer logs a scheduled-enrichment failure through console.warn", () => {
+    const source = readFileSync(
+      new URL("./chat-compaction-model-summary.ts", import.meta.url),
+      "utf8",
+    );
+    expect(source).not.toContain("console.warn(");
   });
 
   it("accepts a structured summary needing no safety redaction despite cosmetic whitespace", async () => {

@@ -213,6 +213,26 @@ describe("runUiCli", () => {
     expect(err.join("")).toContain("UI database path must be absolute");
   });
 
+  // process-guards.ts's fatal-crash handler reads `process.env.KEIKO_STATE_DIR` directly (it has
+  // no other seam into a real, non-injected launch). This drives the REAL (non-injected) launch
+  // path — `deps.createServer` is left undefined — but stops before any socket binds by forcing
+  // the same early `UiStoreError` bail as "fails fast when --ui-db is relative" above, so the
+  // real process.env mutation is observable without ever starting a real server.
+  it("sets the real process.env.KEIKO_STATE_DIR on a direct (non-injected) launch before any crash could occur", async () => {
+    const { io } = captureIo();
+    const cwd = await mkdtemp(join(REAL_TMPDIR, "keiko-ui-cli-real-launch-state-env-"));
+    vi.stubEnv("KEIKO_STATE_DIR", "");
+    try {
+      expect(process.env.KEIKO_STATE_DIR).toBe("");
+      const code = await runUiCli(["--ui-db", ".keiko/ui.db"], io, {}, { staticRoot, cwd });
+      expect(code).toBe(2);
+      expect(process.env.KEIKO_STATE_DIR).toBe(join(cwd, ".keiko"));
+    } finally {
+      vi.unstubAllEnvs();
+      await rm(cwd, { recursive: true, force: true });
+    }
+  });
+
   it("fails fast when --ui-db is inside the current workspace", async () => {
     const { io, err } = captureIo();
     const nested = join(process.cwd(), ".keiko-test-ui", "ui.db");
@@ -945,6 +965,8 @@ describe("runUiCli — node:sqlite re-exec guard (ADR-0013 D2)", () => {
     child.kill = (): void => {
       /* no-op */
     };
+    const sigintBefore = process.listenerCount("SIGINT");
+    const sigtermBefore = process.listenerCount("SIGTERM");
     queueMicrotask(() => {
       child.emit("error", new Error("spawn EMFILE"));
     });
@@ -959,8 +981,56 @@ describe("runUiCli — node:sqlite re-exec guard (ADR-0013 D2)", () => {
       },
     );
     expect(code).toBe(1);
-    // The signal forwarders must be gone (no listener leak after the failure).
-    expect(child.listenerCount("exit")).toBeGreaterThanOrEqual(0);
+    // The signal forwarders must be gone (no listener leak after the failure): the
+    // process-level SIGINT/SIGTERM listener counts must be back to their pre-call baseline.
+    expect(process.listenerCount("SIGINT")).toBe(sigintBefore);
+    expect(process.listenerCount("SIGTERM")).toBe(sigtermBefore);
+  });
+
+  // Without these forwarders, a Ctrl-C during re-exec kills the PARENT (whose own SIGINT
+  // listeners are the default Node behaviour: terminate) while the re-exec'd CHILD — the process
+  // actually doing the work — keeps running orphaned. The parent must relay the signal instead.
+  it("forwards SIGINT and SIGTERM to the re-exec'd child instead of leaving it orphaned", async () => {
+    const { io } = captureIo();
+    const child = new EventEmitter() as EventEmitter & {
+      kill: (signal?: NodeJS.Signals) => boolean;
+    };
+    const killedWith: (NodeJS.Signals | undefined)[] = [];
+    child.kill = (signal?: NodeJS.Signals): boolean => {
+      killedWith.push(signal);
+      return true;
+    };
+    const sigintBefore = process.listenerCount("SIGINT");
+    const sigtermBefore = process.listenerCount("SIGTERM");
+
+    const promise = runUiCli(
+      [],
+      io,
+      {},
+      {
+        currentExecArgv: () => [],
+        sqliteProbe: () => false,
+        spawnFn: () => child as unknown as import("node:child_process").ChildProcess,
+      },
+    );
+
+    // Everything up to and including `process.on("SIGINT"/"SIGTERM", ...)` inside the re-exec
+    // guard runs synchronously (spawnFn is called synchronously, and nothing awaits before the
+    // listeners are registered) — so both are already attached the instant `runUiCli` yields its
+    // pending promise back to this line, with no need to wait a tick first.
+    // The forwarders are registered: one SIGINT and one SIGTERM listener added on `process`.
+    expect(process.listenerCount("SIGINT")).toBe(sigintBefore + 1);
+    expect(process.listenerCount("SIGTERM")).toBe(sigtermBefore + 1);
+    process.emit("SIGINT");
+    process.emit("SIGTERM");
+    expect(killedWith).toEqual(["SIGINT", "SIGTERM"]);
+
+    child.emit("exit", 0, null);
+    expect(await promise).toBe(0);
+    // The forwarders must be gone once the child has exited (no listener leak): the
+    // process-level SIGINT/SIGTERM listener counts must be back to their pre-call baseline.
+    expect(process.listenerCount("SIGINT")).toBe(sigintBefore);
+    expect(process.listenerCount("SIGTERM")).toBe(sigtermBefore);
   });
 
   // Regression pin (KEIKO-0443): the three "does not re-exec" tests below previously used the

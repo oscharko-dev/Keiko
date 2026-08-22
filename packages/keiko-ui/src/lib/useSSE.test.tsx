@@ -1,5 +1,6 @@
 import { act, renderHook, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { resetClientDiagnosticWriter, setClientDiagnosticWriter } from "./client-diagnostics";
 import { useSSE } from "./useSSE";
 
 class FakeEventSource {
@@ -10,6 +11,9 @@ class FakeEventSource {
   onerror: ((event: Event) => void) | null = null;
   onmessage: ((event: MessageEvent) => void) | null = null;
   readonly close = vi.fn();
+  // Real EventSource is CLOSED (2) by the time `onerror` typically fires for a fatal failure;
+  // tests that care about a different observed state override this before triggering onerror.
+  readyState = 2;
   private readonly listeners = new Map<string, EventListenerOrEventListenerObject[]>();
 
   constructor(url: string) {
@@ -61,6 +65,7 @@ describe("useSSE", () => {
     vi.unstubAllGlobals();
     vi.restoreAllMocks();
     vi.useRealTimers();
+    resetClientDiagnosticWriter();
   });
 
   it("opens encoded run streams, recovers after transient errors, ignores malformed frames, and closes on terminal events", async () => {
@@ -224,5 +229,28 @@ describe("useSSE", () => {
     await waitFor(() => expect(view.result.current.events).toHaveLength(500));
     expect(view.result.current.events[0]?.seq).toBe(20);
     expect(view.result.current.events[499]?.seq).toBe(519);
+  });
+
+  // Wave 5 of epic #3233 (g6): every EventSource.onerror handler reports a client diagnostic
+  // carrying the observed readyState and a closed reason label.
+  it("reports a client diagnostic with readyState and a reason label on stream error", () => {
+    vi.stubGlobal("EventSource", FakeEventSource);
+    const reported: string[] = [];
+    setClientDiagnosticWriter((message) => reported.push(message));
+    const view = renderHook(({ runId }: { runId: string | null }) => useSSE(runId), {
+      initialProps: { runId: "run 1" },
+    });
+    const source = FakeEventSource.instances[0];
+    if (source === undefined) throw new Error("Expected stream.");
+    source.readyState = 2;
+
+    act(() => {
+      source.onerror?.(new Event("error"));
+    });
+
+    expect(reported).toEqual([
+      "[keiko] run-events sse stream error (kind=sse-error, readyState=2, reason=closed)",
+    ]);
+    view.unmount();
   });
 });

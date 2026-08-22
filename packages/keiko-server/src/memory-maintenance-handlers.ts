@@ -593,14 +593,22 @@ export function memoryMaintenanceAuditSink(deps: UiHandlerDeps): MemoryAuditSink
 // never widen authority and must never break the caller (the chat path runs this pass), so an
 // unreadable policy row degrades to the most restrictive posture — no unattended acceptance — and
 // is reported as a content-free operator diagnostic rather than swallowed.
-export function resolveMaintenanceAutonomyMode(deps: UiHandlerDeps): CodingWorkbenchMode {
+//
+// `correlationId` defaults to a fresh mint ONLY so a caller with no id in scope keeps compiling
+// unchanged (ADR-0173 D5 / g12). The route caller (`handleRunMaintenance`) threads its own
+// request id; the chat auto-maintenance caller mints ONE id for its whole pass and threads that,
+// so a route request or a background pass never fragments across disconnected mints.
+export function resolveMaintenanceAutonomyMode(
+  deps: UiHandlerDeps,
+  correlationId: string = randomUUID(),
+): CodingWorkbenchMode {
   try {
     return resolveMemoryMaintenanceAutonomyMode(deps);
   } catch (error) {
     emitServerDiagnostic(
       deps.diagnostics,
       serverDiagnosticFromError({
-        correlationId: randomUUID(),
+        correlationId,
         operation: "memory.maintenance.autonomy-mode",
         source: "memory-maintenance-handlers.resolveMaintenanceAutonomyMode",
         error,
@@ -611,8 +619,11 @@ export function resolveMaintenanceAutonomyMode(deps: UiHandlerDeps): CodingWorkb
   }
 }
 
-function reportRetentionPolicyFailure(deps: UiHandlerDeps, error: unknown): string {
-  const correlationId = randomUUID();
+function reportRetentionPolicyFailure(
+  deps: UiHandlerDeps,
+  error: unknown,
+  correlationId: string = randomUUID(),
+): string {
   emitServerDiagnostic(
     deps.diagnostics,
     serverDiagnosticFromError({
@@ -630,22 +641,26 @@ export type MemoryRetentionPolicyResolution =
   | { readonly ok: true; readonly policy: MemoryRetentionPolicy | undefined }
   | { readonly ok: false };
 
-export function resolveMemoryRetentionPolicy(deps: UiHandlerDeps): MemoryRetentionPolicyResolution {
+export function resolveMemoryRetentionPolicy(
+  deps: UiHandlerDeps,
+  correlationId?: string,
+): MemoryRetentionPolicyResolution {
   try {
     return { ok: true, policy: memoryRetentionPolicy(deps.env) };
   } catch (error) {
-    reportRetentionPolicyFailure(deps, error);
+    reportRetentionPolicyFailure(deps, error, correlationId);
     return { ok: false };
   }
 }
 
 function manualRetentionPolicy(
   deps: UiHandlerDeps,
+  correlationId: string,
 ): MemoryRetentionPolicy | undefined | RouteResult {
   try {
     return memoryRetentionPolicy(deps.env);
   } catch (error) {
-    const correlationId = reportRetentionPolicyFailure(deps, error);
+    reportRetentionPolicyFailure(deps, error, correlationId);
     return {
       status: 500,
       body: errorBody(
@@ -657,15 +672,19 @@ function manualRetentionPolicy(
   }
 }
 
-export function handleRunMaintenance(_ctx: RouteContext, deps: UiHandlerDeps): RouteResult {
+export function handleRunMaintenance(ctx: RouteContext, deps: UiHandlerDeps): RouteResult {
   const vault = resolveVault(deps);
   if (isRouteResult(vault)) return vault;
+  // Minted once so a caller who supplied no id (RouteContext.correlationId is optional for test
+  // literals) still shares ONE id across every diagnostic this single route invocation reports,
+  // rather than each helper minting its own (ADR-0173 D5 / g12).
+  const correlationId = ctx.correlationId ?? randomUUID();
   try {
     const multipliers = memorySemanticizationMultipliers(deps.env);
-    const retentionPolicy = manualRetentionPolicy(deps);
+    const retentionPolicy = manualRetentionPolicy(deps, correlationId);
     if (isRouteResult(retentionPolicy)) return retentionPolicy;
     const counts = runMemoryMaintenance(vault, memoryMaintenanceAuditSink(deps), {
-      autonomyMode: resolveMaintenanceAutonomyMode(deps),
+      autonomyMode: resolveMaintenanceAutonomyMode(deps, correlationId),
       ...(multipliers !== undefined ? { decayHalfLifeMultiplierByType: multipliers } : {}),
       ...(retentionPolicy !== undefined ? { retentionPolicy } : {}),
     });

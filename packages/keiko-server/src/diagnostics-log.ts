@@ -9,6 +9,7 @@ import {
   safeProperty,
 } from "./observability/error-classification.js";
 import { closeReasonVocabulary } from "./observability/log-redaction.js";
+import { redactRoutePath } from "./observability/route-template.js";
 import { createFileServerLogSink } from "./observability/server-log.js";
 import { causeChain, keikoStackFrames } from "./observability/stack-frames.js";
 
@@ -112,6 +113,11 @@ export interface ServerDiagnosticRecord {
   // explicitly asserted), `dropped` were removed (Keiko had only inferred the role).
   readonly unverifiedEmbeddingModelCount?: number | undefined;
   readonly droppedEmbeddingModelCount?: number | undefined;
+  // How many candidate memories the conversation-retrieval semantic reranker skipped for a stored
+  // embedding whose identity did not match the query's, and how many candidates were in play when
+  // it did. Bounded counts only; never a memory id, model id, or embedding vector.
+  readonly semanticSkippedCount?: number | undefined;
+  readonly semanticCandidateCount?: number | undefined;
   // Keiko-code stack frames the error passed through, nearest-to-throw-site first, reduced by
   // `keikoStackFrames` (ADR-0173 D3) to their dist/src-anchored form — never an absolute path, never
   // a `node_modules`/`node:internal` frame. Capped at 8; absent when the error carried no `.stack`
@@ -137,9 +143,24 @@ export interface ServerDiagnosticSink {
 // exactly like one routed through `emitServerDiagnostic`.
 export const defaultServerDiagnosticSink: ServerDiagnosticSink = {
   record(record: ServerDiagnosticRecord): void {
+    // Two guarantees, applied in order. First the record's correlation ids are sanitized
+    // (`sanitizeDiagnosticRecord`: a CRLF-bearing or otherwise out-of-shape id never reaches
+    // either track — this sink is the choke point for the three direct `.record()` callers as
+    // much as for `emitServerDiagnostic`). Then the stderr line carries the SAME redaction
+    // guarantee as the activity-log file line: the record is never serialised directly;
+    // `diagnosticActivityLogFields` already projects it onto allowlisted, bounded fields for the
+    // file sink (ADR-0173 D11 g29) and is reused here rather than a second ad-hoc redaction, so
+    // both channels share one contract.
     const sanitized = sanitizeDiagnosticRecord(record);
+    const safeLine = {
+      correlationId: sanitized.correlationId,
+      timestamp: sanitized.timestamp,
+      operation: sanitized.operation,
+      errorClass: sanitized.errorClass,
+      ...diagnosticActivityLogFields(sanitized),
+    };
     // eslint-disable-next-line no-console
-    console.error(`[keiko-server:diagnostic] ${JSON.stringify(sanitized)}`);
+    console.error(`[keiko-server:diagnostic] ${JSON.stringify(safeLine)}`);
     appendDiagnosticToActivityLog(sanitized);
   },
 };
@@ -205,6 +226,8 @@ function diagnosticActivityLogFields(record: ServerDiagnosticRecord): Record<str
   addBoundedField(fields, "unsupportedModelCount", record.unsupportedModelCount);
   addBoundedField(fields, "unverifiedEmbeddingModelCount", record.unverifiedEmbeddingModelCount);
   addBoundedField(fields, "droppedEmbeddingModelCount", record.droppedEmbeddingModelCount);
+  addBoundedField(fields, "semanticSkippedCount", record.semanticSkippedCount);
+  addBoundedField(fields, "semanticCandidateCount", record.semanticCandidateCount);
   addBoundedField(fields, "diagnosticSummary", allowlistedSummary(record.message));
   if (record.unsupportedReasons !== undefined) {
     fields.unsupportedReasons = record.unsupportedReasons.map((reason) =>
@@ -317,6 +340,8 @@ const SERVER_DIAGNOSTIC_SUMMARIES = [
   "Debug production service composition failed.",
   "Managed task-workspace boundary materialization failed.",
   "Evidence retention deleted manifests.",
+  "Semantic memory retrieval skipped incompatible embeddings.",
+  "Semantic memory retrieval was disabled for this turn.",
 ] as const;
 
 export type ServerDiagnosticSummary = (typeof SERVER_DIAGNOSTIC_SUMMARIES)[number];
@@ -407,16 +432,41 @@ function compatibilitySummary(
   }
 }
 
+// An operation label shaped like `"GET /api/foo/bar"` (a method word, a space, then a path
+// starting with `/`) carries a live request path in its trailing word, and a path segment can be
+// a customer-chosen identifier — a project name, a repository, a capsule id — exactly the raw
+// content this record's own contract (counts, hashes, closed-vocabulary labels; never customer
+// content) forbids. `redactRoutePath` (route-template.ts) is the reducer the HTTP request line
+// itself already uses for the same purpose; calling it here reuses that one reduction instead of
+// writing a second one, so there is exactly one place that decides what a route "looks like" once
+// redacted. `SOURCE_LABEL_SHAPE` never admits a `/`, so this only ever runs for `fallback ===
+// "server.operation"`. A label with no path component (e.g. `"chat.stream"`) is returned as-is.
+function pathReducedOperationLabel(value: string): string | undefined {
+  const spaceIndex = value.indexOf(" ");
+  const prefix = spaceIndex === -1 ? "" : value.slice(0, spaceIndex + 1);
+  const path = spaceIndex === -1 ? value : value.slice(spaceIndex + 1);
+  if (!path.startsWith("/")) return value;
+  const template = redactRoutePath(path, MAX_DIAGNOSTIC_LABEL_LENGTH - prefix.length);
+  return template === undefined ? undefined : `${prefix}${template}`;
+}
+
 function diagnosticLabel(
   value: unknown,
   shape: RegExp,
   fallback: "server.operation" | "server.diagnostic",
 ): string {
-  return typeof value === "string" &&
-    value.length <= MAX_DIAGNOSTIC_LABEL_LENGTH &&
-    shape.test(value)
-    ? value
-    : fallback;
+  if (
+    typeof value !== "string" ||
+    value.length > MAX_DIAGNOSTIC_LABEL_LENGTH ||
+    !shape.test(value)
+  ) {
+    return fallback;
+  }
+  if (fallback !== "server.operation") return value;
+  // A path this server does not serve (an unknown route) or one wearing traversal segments
+  // (`redactRoutePath` fails closed on both) is not partially echoed — the whole label degrades
+  // to the fallback, same fail-closed direction `redactRoutePath` itself documents.
+  return pathReducedOperationLabel(value) ?? fallback;
 }
 
 // A fixed, content-free stand-in for a `correlationId` that fails `isValidCorrelationId`.

@@ -5,7 +5,7 @@ import type { CodingWorkbenchRuntimePendingApprovalReview } from "@oscharko-dev/
 
 import { codingAppSessionPairingSettled } from "./coding-app-session-client";
 import { getCodingWorkbenchRuntimeApprovalReview } from "./coding-workbench-runtime-api";
-import { clientErrorSummary } from "./client-error-summary";
+import { clientErrorSummary, correlationIdOf } from "./client-error-summary";
 import { reportClientDiagnostic } from "./client-diagnostics";
 
 export type CodingWorkbenchApprovalReviewStatus = "idle" | "loading" | "ready" | "unavailable";
@@ -76,6 +76,7 @@ function startApprovalReviewSync(
       // content-free "unavailable", but the underlying refresh failure remains diagnosable.
       reportClientDiagnostic(
         `[keiko] approval review channel refresh failed: ${clientErrorSummary(error)}`,
+        { correlationId: correlationIdOf(error) },
       );
       publish(scopeState(runId, permissionRequestId, UNAVAILABLE));
     }

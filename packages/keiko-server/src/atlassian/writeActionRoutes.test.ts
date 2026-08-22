@@ -1185,3 +1185,30 @@ describe("write-action route — clear-field validation (KEIKO-0319)", () => {
     expect(result.status).toBe(400);
   });
 });
+
+describe("write-action route — governed action correlation", () => {
+  it("threads the request's own correlation id into a policy-denied response instead of minting one", async () => {
+    // ADR-0173 D5 / g12: ctx.correlationId is minted at request entry (server.ts) and is already
+    // in scope in handleExecuteAtlassianConnectorAction — the governed-action denial record must
+    // reuse it, not a disconnected randomUUID(). An envelope with no write scope denies fast
+    // (policy-denied) without needing a provider round-trip.
+    const guard = guardWith({ count: 0, requests: [] });
+    const deniedAuthority = registerEnvelope("autonomous-delivery", []);
+    const result = (await handleExecuteAtlassianConnectorAction(
+      {
+        ...ctx(
+          { action: ACTION_REQUESTS["transition-issue"], authority: deniedAuthority },
+          { authRef: JIRA_AUTH_REF },
+        ),
+        correlationId: "req-write-thread-01",
+      },
+      deps(guard, "autonomous-delivery"),
+    )) as { status: number; body: Record<string, unknown> };
+
+    expect(result.status).toBe(200);
+    expect(result.body).toMatchObject({
+      disposition: "denied",
+      correlationId: "req-write-thread-01",
+    });
+  });
+});

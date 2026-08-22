@@ -6,12 +6,19 @@
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ServerResponse } from "node:http";
+import { EventEmitter } from "node:events";
 import {
   subscribeActivityBroadcast,
   _activeBroadcastCountForTests,
   type ActivityFrame,
   type ActivitySubscriber,
 } from "./relationship-activity-broadcast.js";
+import {
+  createBufferedServerLogSink,
+  createServerLogger,
+  resetServerLogger,
+  setServerLogger,
+} from "./observability/index.js";
 
 const REFRESH_MS = 5_000;
 const PING_MS = 30_000;
@@ -205,5 +212,85 @@ describe("subscribeActivityBroadcast", () => {
     u3();
     expect(_activeBroadcastCountForTests(scopeA)).toBe(0);
     expect(_activeBroadcastCountForTests(scopeB)).toBe(0);
+  });
+});
+
+// Finding 0 (#2902 audit): a fanned-out subscriber's OWN request correlationId never reached its
+// own stream's terminal `sse.stream.closed` line — ActivitySubscriber had no field to carry it and
+// writeTo() (the shared fan-out write path) never passed one to writeOrDestroy.
+describe("ActivitySubscriber correlationId threading (#2902 audit finding 0)", () => {
+  function listenableFakeRes(): { res: ServerResponse; fireClose: () => void } {
+    const emitter = new EventEmitter();
+    const res = {
+      writableEnded: false,
+      write: () => true,
+      destroy: (): void => undefined,
+      on: (event: string, handler: (...args: unknown[]) => void) => {
+        emitter.on(event, handler);
+      },
+    } as unknown as ServerResponse;
+    return { res, fireClose: () => emitter.emit("close") };
+  }
+
+  afterEach(() => {
+    resetServerLogger();
+  });
+
+  it("attaches the joining subscriber's own correlationId to its sse.stream.closed line", () => {
+    const sink = createBufferedServerLogSink();
+    setServerLogger(createServerLogger({ sink, level: "info" }));
+    const scope = {};
+    const source = {
+      collectFrames: (): readonly ActivityFrame[] => [frame("snap-1", 1)],
+      refreshMs: REFRESH_MS,
+      pingMs: PING_MS,
+    };
+    const { res, fireClose } = listenableFakeRes();
+    const subscriber: ActivitySubscriber = {
+      res,
+      controller: new AbortController(),
+      correlationId: "corr-relact-1",
+    };
+
+    subscribeActivityBroadcast(scope, "ws-corr", subscriber, source);
+    fireClose();
+
+    const closed = sink.events.filter((event) => event.op === "sse.stream.closed");
+    expect(closed).toHaveLength(1);
+    expect(closed[0]?.correlationId).toBe("corr-relact-1");
+  });
+
+  it("two concurrent subscribers on the same broadcaster each keep their own correlationId", () => {
+    const sink = createBufferedServerLogSink();
+    setServerLogger(createServerLogger({ sink, level: "info" }));
+    const scope = {};
+    const source = {
+      collectFrames: (): readonly ActivityFrame[] => [frame("snap-1", 1)],
+      refreshMs: REFRESH_MS,
+      pingMs: PING_MS,
+    };
+    const first = listenableFakeRes();
+    const second = listenableFakeRes();
+    subscribeActivityBroadcast(
+      scope,
+      "ws-corr-2",
+      { res: first.res, controller: new AbortController(), correlationId: "corr-first" },
+      source,
+    );
+    subscribeActivityBroadcast(
+      scope,
+      "ws-corr-2",
+      { res: second.res, controller: new AbortController(), correlationId: "corr-second" },
+      source,
+    );
+    first.fireClose();
+    second.fireClose();
+
+    const closed = sink.events.filter((event) => event.op === "sse.stream.closed");
+    expect(closed).toHaveLength(2);
+    expect(closed.map((event) => event.correlationId).sort()).toEqual([
+      "corr-first",
+      "corr-second",
+    ]);
   });
 });

@@ -31,6 +31,7 @@ import { Readable } from "node:stream";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createNodeFigmaSnapshotStore } from "@oscharko-dev/keiko-evidence";
 import { buildCspHeader } from "../csp.js";
+import type { ServerDiagnosticRecord } from "../diagnostics-log.js";
 import { buildRedactor, createInMemoryUiStore, type UiHandlerDeps } from "../index.js";
 import { createRunRegistry } from "../runs.js";
 import { UI_HOST } from "../server.js";
@@ -381,22 +382,27 @@ describe("POST /api/figma/snapshots — code→status matrix", () => {
     const spy = vi.spyOn(orchModule, "governedSnapshotBuild");
     // A non-coded build error whose message embeds the secret PAT (defence-in-depth redaction).
     spy.mockRejectedValueOnce(new TypeError(`render parse failed token=${TOKEN}`));
-    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const diagnosticCalls: ServerDiagnosticRecord[] = [];
+    const deps: UiHandlerDeps = {
+      ...makeDeps(evidenceDir, { FIGMA_ACCESS_TOKEN: TOKEN }),
+      diagnostics: { record: (record) => diagnosticCalls.push(record) },
+    };
 
     try {
       const result = await handleFigmaTriggerSnapshot(
         makeCtx(JSON.stringify({ boardLink: BOARD_LINK, acknowledgeReadOnly: false })),
-        makeDeps(evidenceDir, { FIGMA_ACCESS_TOKEN: TOKEN }),
+        deps,
       );
       expect(result.status).toBe(500);
       expect((result.body as { error: { code: string } }).error.code).toBe("FIGMA_INTERNAL");
-      expect(errorSpy).toHaveBeenCalled();
-      const logged = errorSpy.mock.calls.flat().map(String).join(" ");
-      expect(logged).toContain("TypeError"); // the cause class is surfaced for diagnosis…
-      expect(logged).not.toContain(TOKEN); // …but the secret PAT is redacted out
+      // The cause reaches the redaction-safe operator diagnostic sink, not raw console.error.
+      expect(diagnosticCalls.length).toBeGreaterThan(0);
+      const record = diagnosticCalls[0];
+      expect(record?.errorClass).toBe("TypeError"); // the cause class is surfaced for diagnosis…
+      expect(record?.correlationId).toMatch(/^[0-9a-f-]{36}$/u);
+      expect(JSON.stringify(record)).not.toContain(TOKEN); // …but the secret PAT is redacted out
     } finally {
       spy.mockRestore();
-      errorSpy.mockRestore();
     }
   });
 

@@ -79,6 +79,7 @@ export {
 export {
   createFigmaTokenStore,
   resolveFigmaVaultKey,
+  keyFromKeychain as figmaKeychainReader,
   NO_FIGMA_KEYCHAIN,
   type FigmaTokenStore,
   type FigmaTokenStoreDeps,

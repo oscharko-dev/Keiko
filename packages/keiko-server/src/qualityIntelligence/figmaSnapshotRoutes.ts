@@ -57,6 +57,7 @@ import {
 } from "../deps.js";
 import { redact } from "@oscharko-dev/keiko-security";
 import type { EnvSource } from "@oscharko-dev/keiko-security";
+import { emitServerDiagnostic } from "../diagnostics-log.js";
 import {
   appendFigmaConnectorAudit,
   parseFigmaTarget,
@@ -774,16 +775,21 @@ function figmaRequestTimeoutMsFromEnv(env: EnvSource): number {
 // the coded body is content-free, so on its own an operator cannot tell a transient render-body
 // malformation from a filesystem failure from a genuine bug. Log the redacted cause (class + message,
 // secrets scrubbed) so the incident is diagnosable without ever leaking a token or provider body.
-// Matches the redacted-console.error convention (memory-salience.ts). Only fires for FIGMA_INTERNAL —
-// expected coded errors (consent/auth/rate-limit) stay quiet (they are already audited).
+// Routes through the single redaction-safe server diagnostic sink (diagnostics-log.ts), the same
+// pattern memory-salience.ts's emitSalienceDiagnostic uses — never console.* directly, so the record
+// lands in server.log with a correlationId and is visible to a support bundle. Only fires for
+// FIGMA_INTERNAL — expected coded errors (consent/auth/rate-limit) stay quiet (already audited).
 function logFigmaInternal(stage: string, err: unknown, deps: UiHandlerDeps): void {
   const name = err instanceof Error ? err.constructor.name : typeof err;
   const message = err instanceof Error ? err.message : String(err);
-  // eslint-disable-next-line no-console
-  console.error(
-    `figma snapshot-build failed (${stage}): ${name}`,
-    redact(message, currentRedactionSecrets(deps)),
-  );
+  emitServerDiagnostic(deps.diagnostics, {
+    correlationId: randomUUID(),
+    timestamp: new Date().toISOString(),
+    operation: "figma.snapshotBuild",
+    source: `figmaSnapshotRoutes.logFigmaInternal.${stage}`,
+    errorClass: name,
+    message: redact(message, currentRedactionSecrets(deps)),
+  });
 }
 
 // Map a thrown error from the governed build to a coded route result: a coded connector error maps to

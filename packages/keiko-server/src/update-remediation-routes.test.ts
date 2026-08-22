@@ -54,6 +54,7 @@ function report(): UpdateRemediationStatusReport {
 class FakeUpdateRemediationManager implements UpdateRemediationManager {
   public readonly statuses: UpdateRemediationStatusRequest[] = [];
   public readonly actions: UpdateRemediationActionRequest[] = [];
+  public readonly runActionCorrelationIds: (string | undefined)[] = [];
 
   public readonly getStatus = (
     request: UpdateRemediationStatusRequest = {},
@@ -64,8 +65,10 @@ class FakeUpdateRemediationManager implements UpdateRemediationManager {
 
   public readonly runAction = (
     request: UpdateRemediationActionRequest,
+    correlationId?: string,
   ): Promise<UpdateRemediationStatusReport> => {
     this.actions.push(request);
+    this.runActionCorrelationIds.push(correlationId);
     return Promise.resolve({ ...report(), overallStatus: "completed", updateCanComplete: true });
   };
 
@@ -197,5 +200,22 @@ describe("update remediation routes", () => {
     expect(updateRemediation.actions[0]).toMatchObject({
       actionId: "local-knowledge-reindex:local-knowledge",
     });
+  });
+
+  it("threads the request's own correlation id into runAction instead of leaving it to mint one", async () => {
+    // ADR-0173 D5 / g12: ctx.correlationId is minted at request entry (server.ts, honouring a
+    // well-formed client-supplied X-Keiko-Correlation-Id) and was already in scope in
+    // handleRunUpdateRemediationAction — before the fix it was never threaded into runAction, so
+    // every diagnostic runAction's own implementation reports minted an id disconnected from this
+    // request's trail.
+    const requestCorrelationId = "req-update-remediation-thread-01";
+    const action = await fetch(`${baseUrl()}/api/update/remediation/actions`, {
+      method: "POST",
+      headers: { ...csrfHeaders(), "X-Keiko-Correlation-Id": requestCorrelationId },
+      body: JSON.stringify({ actionId: "local-knowledge-reindex:local-knowledge" }),
+    });
+
+    expect(action.status).toBe(200);
+    expect(updateRemediation.runActionCorrelationIds).toEqual([requestCorrelationId]);
   });
 });

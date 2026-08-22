@@ -13,7 +13,7 @@ import {
   findConfiguredCapability,
   QualityIntelligenceSafeErrorException,
   type ChatMessage,
-  type GatewayRequest,
+  type GatewayCallRequest,
   type ModelCapability,
 } from "@oscharko-dev/keiko-model-gateway";
 import {
@@ -285,7 +285,8 @@ function buildGenerationRequest(
   useSeed: boolean,
   requestedSeed: number | undefined,
   signal: AbortSignal,
-): GatewayRequest {
+  correlationId: string | undefined,
+): GatewayCallRequest {
   return {
     modelId,
     messages,
@@ -304,6 +305,7 @@ function buildGenerationRequest(
           },
         }
       : {}),
+    logContext: { correlationId },
   };
 }
 
@@ -336,6 +338,7 @@ function abortErrorForGeneration(reasonKind: "timeout" | "external" | "none"): E
 // eslint-disable-next-line max-lines-per-function
 function createModelGenerationPort(
   resolved: ResolvedGenerationModel,
+  correlationId: string | undefined,
 ): QualityIntelligenceGenerationPort {
   const { model, modelId, useResponseFormat, useSeed, requestedSeed } = resolved;
   return {
@@ -354,6 +357,7 @@ function createModelGenerationPort(
         useSeed,
         requestedSeed,
         cancellation.signal,
+        correlationId,
       );
       let removeAbortListener = (): void => {
         /* not attached yet */
@@ -393,10 +397,11 @@ function createModelGenerationPort(
 export function createQiGenerationPort(
   deps: UiHandlerDeps,
   target: QiGenerationTarget,
+  correlationId?: string,
 ): QualityIntelligenceGenerationPort {
   const normalized = normalizeTarget(target);
   if (normalized.kind === "baseline") {
     return createBaselineGenerationPort();
   }
-  return createModelGenerationPort(resolveGenerationModel(deps, normalized));
+  return createModelGenerationPort(resolveGenerationModel(deps, normalized), correlationId);
 }

@@ -113,175 +113,175 @@
     {
       "op": "embedding.preflight.cache-hit",
       "category": "unknown",
-      "site": "packages/keiko-local-knowledge/src/indexing/orchestrator.ts:2675",
+      "site": "packages/keiko-local-knowledge/src/indexing/orchestrator.ts:2690",
       "package": "keiko-local-knowledge"
     },
     {
       "op": "embedding.preflight.completed",
       "category": "unknown",
-      "site": "packages/keiko-local-knowledge/src/indexing/orchestrator.ts:2656",
+      "site": "packages/keiko-local-knowledge/src/indexing/orchestrator.ts:2671",
       "package": "keiko-local-knowledge"
     },
     {
       "op": "embedding.preflight.failed",
       "category": "unknown",
-      "site": "packages/keiko-local-knowledge/src/indexing/orchestrator.ts:2647",
+      "site": "packages/keiko-local-knowledge/src/indexing/orchestrator.ts:2662",
       "package": "keiko-local-knowledge"
     },
     {
       "op": "embedding.preflight.failed",
       "category": "unknown",
-      "site": "packages/keiko-local-knowledge/src/indexing/orchestrator.ts:2786",
+      "site": "packages/keiko-local-knowledge/src/indexing/orchestrator.ts:2801",
       "package": "keiko-local-knowledge"
     },
     {
       "op": "embedding.preflight.identity-adopted",
       "category": "embedding",
-      "site": "packages/keiko-local-knowledge/src/indexing/orchestrator.ts:2723",
+      "site": "packages/keiko-local-knowledge/src/indexing/orchestrator.ts:2738",
       "package": "keiko-local-knowledge"
     },
     {
       "op": "embedding.preflight.identity-refreshed",
       "category": "embedding",
-      "site": "packages/keiko-local-knowledge/src/indexing/orchestrator.ts:2735",
+      "site": "packages/keiko-local-knowledge/src/indexing/orchestrator.ts:2750",
       "package": "keiko-local-knowledge"
     },
     {
       "op": "embedding.preflight.identity-rejected",
-      "category": "unknown",
-      "site": "packages/keiko-local-knowledge/src/indexing/orchestrator.ts:2692",
+      "category": "embedding",
+      "site": "packages/keiko-local-knowledge/src/indexing/orchestrator.ts:2707",
       "package": "keiko-local-knowledge"
     },
     {
       "op": "embedding.preflight.started",
       "category": "unknown",
-      "site": "packages/keiko-local-knowledge/src/indexing/orchestrator.ts:2640",
+      "site": "packages/keiko-local-knowledge/src/indexing/orchestrator.ts:2655",
       "package": "keiko-local-knowledge"
     },
     {
       "op": "indexing.chunking.failed",
-      "category": "unknown",
-      "site": "packages/keiko-local-knowledge/src/indexing/orchestrator.ts:1425",
+      "category": "indexing",
+      "site": "packages/keiko-local-knowledge/src/indexing/orchestrator.ts:1440",
       "package": "keiko-local-knowledge"
     },
     {
       "op": "indexing.chunking.failed",
-      "category": "unknown",
-      "site": "packages/keiko-local-knowledge/src/indexing/orchestrator.ts:1763",
+      "category": "indexing",
+      "site": "packages/keiko-local-knowledge/src/indexing/orchestrator.ts:1778",
       "package": "keiko-local-knowledge"
     },
     {
       "op": "indexing.chunking.failed",
-      "category": "unknown",
-      "site": "packages/keiko-local-knowledge/src/indexing/orchestrator.ts:967",
+      "category": "indexing",
+      "site": "packages/keiko-local-knowledge/src/indexing/orchestrator.ts:982",
       "package": "keiko-local-knowledge"
     },
     {
       "op": "indexing.discovery.limit-reached",
-      "category": "unknown",
-      "site": "packages/keiko-local-knowledge/src/indexing/orchestrator.ts:2868",
+      "category": "indexing",
+      "site": "packages/keiko-local-knowledge/src/indexing/orchestrator.ts:2883",
       "package": "keiko-local-knowledge"
     },
     {
       "op": "indexing.discovery.scope-error",
-      "category": "unknown",
-      "site": "packages/keiko-local-knowledge/src/indexing/orchestrator.ts:2216",
+      "category": "indexing",
+      "site": "packages/keiko-local-knowledge/src/indexing/orchestrator.ts:2231",
       "package": "keiko-local-knowledge"
     },
     {
       "op": "indexing.document.chunked",
-      "category": "unknown",
-      "site": "packages/keiko-local-knowledge/src/indexing/orchestrator.ts:1302",
+      "category": "indexing",
+      "site": "packages/keiko-local-knowledge/src/indexing/orchestrator.ts:1317",
       "package": "keiko-local-knowledge"
     },
     {
       "op": "indexing.document.embedded",
-      "category": "unknown",
-      "site": "packages/keiko-local-knowledge/src/indexing/orchestrator.ts:1498",
+      "category": "indexing",
+      "site": "packages/keiko-local-knowledge/src/indexing/orchestrator.ts:1513",
       "package": "keiko-local-knowledge"
     },
     {
       "op": "indexing.document.embedding-started",
-      "category": "unknown",
-      "site": "packages/keiko-local-knowledge/src/indexing/orchestrator.ts:1054",
+      "category": "indexing",
+      "site": "packages/keiko-local-knowledge/src/indexing/orchestrator.ts:1069",
       "package": "keiko-local-knowledge"
     },
     {
       "op": "indexing.document.extracted",
-      "category": "unknown",
-      "site": "packages/keiko-local-knowledge/src/indexing/orchestrator.ts:1298",
+      "category": "indexing",
+      "site": "packages/keiko-local-knowledge/src/indexing/orchestrator.ts:1313",
       "package": "keiko-local-knowledge"
     },
     {
       "op": "indexing.document.extracted",
-      "category": "unknown",
-      "site": "packages/keiko-local-knowledge/src/indexing/orchestrator.ts:1985",
+      "category": "indexing",
+      "site": "packages/keiko-local-knowledge/src/indexing/orchestrator.ts:2000",
       "package": "keiko-local-knowledge"
     },
     {
       "op": "indexing.document.extraction-failed",
-      "category": "unknown",
-      "site": "packages/keiko-local-knowledge/src/indexing/orchestrator.ts:1094",
+      "category": "indexing",
+      "site": "packages/keiko-local-knowledge/src/indexing/orchestrator.ts:1109",
       "package": "keiko-local-knowledge"
     },
     {
       "op": "indexing.document.extraction-started",
-      "category": "unknown",
-      "site": "packages/keiko-local-knowledge/src/indexing/orchestrator.ts:2202",
+      "category": "indexing",
+      "site": "packages/keiko-local-knowledge/src/indexing/orchestrator.ts:2217",
       "package": "keiko-local-knowledge"
     },
     {
       "op": "indexing.document.failed",
-      "category": "unknown",
-      "site": "packages/keiko-local-knowledge/src/indexing/orchestrator.ts:1467",
+      "category": "indexing",
+      "site": "packages/keiko-local-knowledge/src/indexing/orchestrator.ts:1482",
       "package": "keiko-local-knowledge"
     },
     {
       "op": "indexing.document.skipped",
-      "category": "unknown",
-      "site": "packages/keiko-local-knowledge/src/indexing/orchestrator.ts:1067",
+      "category": "indexing",
+      "site": "packages/keiko-local-knowledge/src/indexing/orchestrator.ts:1082",
       "package": "keiko-local-knowledge"
     },
     {
       "op": "indexing.document.skipped",
-      "category": "unknown",
-      "site": "packages/keiko-local-knowledge/src/indexing/orchestrator.ts:1116",
+      "category": "indexing",
+      "site": "packages/keiko-local-knowledge/src/indexing/orchestrator.ts:1131",
       "package": "keiko-local-knowledge"
     },
     {
       "op": "indexing.document.skipped",
-      "category": "unknown",
-      "site": "packages/keiko-local-knowledge/src/indexing/orchestrator.ts:1988",
+      "category": "indexing",
+      "site": "packages/keiko-local-knowledge/src/indexing/orchestrator.ts:2003",
       "package": "keiko-local-knowledge"
     },
     {
       "op": "indexing.job.finished",
-      "category": "unknown",
-      "site": "packages/keiko-local-knowledge/src/indexing/orchestrator.ts:3193",
+      "category": "indexing",
+      "site": "packages/keiko-local-knowledge/src/indexing/orchestrator.ts:3209",
       "package": "keiko-local-knowledge"
     },
     {
       "op": "indexing.job.received",
       "category": "indexing",
-      "site": "packages/keiko-local-knowledge/src/indexing/orchestrator.ts:3006",
+      "site": "packages/keiko-local-knowledge/src/indexing/orchestrator.ts:3022",
       "package": "keiko-local-knowledge"
     },
     {
       "op": "indexing.job.started",
-      "category": "unknown",
-      "site": "packages/keiko-local-knowledge/src/indexing/orchestrator.ts:2946",
+      "category": "indexing",
+      "site": "packages/keiko-local-knowledge/src/indexing/orchestrator.ts:2961",
       "package": "keiko-local-knowledge"
     },
     {
       "op": "indexing.source.completed",
-      "category": "unknown",
-      "site": "packages/keiko-local-knowledge/src/indexing/orchestrator.ts:2325",
+      "category": "indexing",
+      "site": "packages/keiko-local-knowledge/src/indexing/orchestrator.ts:2340",
       "package": "keiko-local-knowledge"
     },
     {
       "op": "indexing.source.started",
-      "category": "unknown",
-      "site": "packages/keiko-local-knowledge/src/indexing/orchestrator.ts:2307",
+      "category": "indexing",
+      "site": "packages/keiko-local-knowledge/src/indexing/orchestrator.ts:2322",
       "package": "keiko-local-knowledge"
     },
     {
@@ -293,14 +293,62 @@
     {
       "op": "knowledge.store.encryption-rejected",
       "category": "diagnostic",
-      "site": "packages/keiko-local-knowledge/src/store.ts:510",
+      "site": "packages/keiko-local-knowledge/src/store.ts:514",
       "package": "keiko-local-knowledge"
     },
     {
       "op": "knowledge.store.quarantined",
       "category": "diagnostic",
-      "site": "packages/keiko-local-knowledge/src/store.ts:473",
+      "site": "packages/keiko-local-knowledge/src/store.ts:477",
       "package": "keiko-local-knowledge"
+    },
+    {
+      "op": "repository.fingerprint-diff.completed",
+      "category": "indexing",
+      "site": "packages/keiko-local-knowledge/src/repository-pod.ts:341",
+      "package": "keiko-local-knowledge"
+    },
+    {
+      "op": "search.index-invalidated-for-capsule",
+      "category": "search",
+      "site": "packages/keiko-local-knowledge/src/retrieval/local-vector-index-port.ts:167",
+      "package": "keiko-local-knowledge"
+    },
+    {
+      "op": "search.native-runtime-resolved",
+      "category": "search",
+      "site": "packages/keiko-local-knowledge/src/retrieval/usearch-ann-index.ts:411",
+      "package": "keiko-local-knowledge"
+    },
+    {
+      "op": "store.encryption-migrated",
+      "category": "diagnostic",
+      "site": "packages/keiko-local-knowledge/src/store-content-encryption.ts:305",
+      "package": "keiko-local-knowledge"
+    },
+    {
+      "op": "memory-vault.log.sink-failed",
+      "category": "diagnostic",
+      "site": "packages/keiko-memory-vault/src/vault-log.ts:174",
+      "package": "keiko-memory-vault"
+    },
+    {
+      "op": "memory-vault.store.opened",
+      "category": "memory",
+      "site": "packages/keiko-memory-vault/src/vault.ts:420",
+      "package": "keiko-memory-vault"
+    },
+    {
+      "op": "memory-vault.store.quarantined",
+      "category": "diagnostic",
+      "site": "packages/keiko-memory-vault/src/db.ts:127",
+      "package": "keiko-memory-vault"
+    },
+    {
+      "op": "store.encryption-migrated",
+      "category": "diagnostic",
+      "site": "packages/keiko-memory-vault/src/migrate-encrypt.ts:117",
+      "package": "keiko-memory-vault"
     },
     {
       "op": "<dynamic>",
@@ -597,33 +645,75 @@
       "package": "keiko-model-gateway"
     },
     {
+      "op": "security.keychain.fallback",
+      "category": "security",
+      "site": "packages/keiko-security/src/macos-keychain.ts:151",
+      "package": "keiko-security"
+    },
+    {
+      "op": "security.log.sink-failed",
+      "category": "diagnostic",
+      "site": "packages/keiko-security/src/log-port.ts:138",
+      "package": "keiko-security"
+    },
+    {
+      "op": "security.vault.key-resolved",
+      "category": "security",
+      "site": "packages/keiko-security/src/secret-vault.ts:275",
+      "package": "keiko-security"
+    },
+    {
+      "op": "security.vault.shard-unreadable",
+      "category": "security",
+      "site": "packages/keiko-security/src/secret-vault.ts:540",
+      "package": "keiko-security"
+    },
+    {
       "op": "<dynamic>",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/diagnostics-log.ts:257",
+      "site": "packages/keiko-server/src/diagnostics-log.ts:280",
       "package": "keiko-server"
     },
     {
       "op": "<dynamic>",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/observability/server-log.ts:729",
+      "site": "packages/keiko-server/src/observability/server-log.ts:734",
       "package": "keiko-server"
     },
     {
       "op": "<dynamic>",
       "category": "unknown",
-      "site": "packages/keiko-server/src/observability/server-logger.ts:152",
-      "package": "keiko-server"
-    },
-    {
-      "op": "<dynamic>",
-      "category": "unknown",
-      "site": "packages/keiko-server/src/observability/server-logger.ts:179",
+      "site": "packages/keiko-server/src/observability/server-logger.ts:153",
       "package": "keiko-server"
     },
     {
       "op": "<dynamic>",
       "category": "unknown",
       "site": "packages/keiko-server/src/observability/server-logger.ts:180",
+      "package": "keiko-server"
+    },
+    {
+      "op": "<dynamic>",
+      "category": "unknown",
+      "site": "packages/keiko-server/src/observability/server-logger.ts:181",
+      "package": "keiko-server"
+    },
+    {
+      "op": "chat.turn.started",
+      "category": "gateway",
+      "site": "packages/keiko-server/src/chat-handlers.ts:1687",
+      "package": "keiko-server"
+    },
+    {
+      "op": "client.diagnostic",
+      "category": "diagnostic",
+      "site": "packages/keiko-server/src/client-diagnostics-routes.ts:122",
+      "package": "keiko-server"
+    },
+    {
+      "op": "client.diagnostic.rate-limited",
+      "category": "diagnostic",
+      "site": "packages/keiko-server/src/client-diagnostics-routes.ts:104",
       "package": "keiko-server"
     },
     {
@@ -677,19 +767,25 @@
     {
       "op": "http.request.body.cancelled",
       "category": "http",
-      "site": "packages/keiko-server/src/bounded-request-body.ts:88",
+      "site": "packages/keiko-server/src/bounded-request-body.ts:92",
       "package": "keiko-server"
     },
     {
       "op": "http.request.body.failed",
       "category": "http",
-      "site": "packages/keiko-server/src/bounded-request-body.ts:102",
+      "site": "packages/keiko-server/src/bounded-request-body.ts:106",
+      "package": "keiko-server"
+    },
+    {
+      "op": "http.request.body.received",
+      "category": "http",
+      "site": "packages/keiko-server/src/bounded-request-body.ts:151",
       "package": "keiko-server"
     },
     {
       "op": "http.request.body.rejected",
       "category": "http",
-      "site": "packages/keiko-server/src/bounded-request-body.ts:73",
+      "site": "packages/keiko-server/src/bounded-request-body.ts:77",
       "package": "keiko-server"
     },
     {
@@ -779,7 +875,7 @@
     {
       "op": "request",
       "category": "http",
-      "site": "packages/keiko-server/src/server.ts:323",
+      "site": "packages/keiko-server/src/server.ts:480",
       "package": "keiko-server"
     },
     {
@@ -791,13 +887,25 @@
     {
       "op": "server-log.write-failed",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/observability/server-log.ts:321",
+      "site": "packages/keiko-server/src/observability/server-log.ts:326",
       "package": "keiko-server"
     },
     {
       "op": "server-log.write-failed",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/observability/server-log.ts:347",
+      "site": "packages/keiko-server/src/observability/server-log.ts:352",
+      "package": "keiko-server"
+    },
+    {
+      "op": "sse.stream.closed",
+      "category": "http",
+      "site": "packages/keiko-server/src/sse-write.ts:69",
+      "package": "keiko-server"
+    },
+    {
+      "op": "store.opened",
+      "category": "setup",
+      "site": "packages/keiko-server/src/store/db.ts:928",
       "package": "keiko-server"
     }
   ],

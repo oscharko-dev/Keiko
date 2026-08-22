@@ -127,7 +127,14 @@ import { embedAndStoreMemory } from "./memory-embedding.js";
 import { recordMemoryAudit } from "./memory-audit-handler.js";
 import { recordAutoAcceptedMemoryCaptureDecision } from "./memory-capture-audit.js";
 import { scheduleMemorySalienceCapture } from "./memory-salience.js";
-import { contentFreeErrorClass, emitServerDiagnostic } from "./diagnostics-log.js";
+import { UNKNOWN_CORRELATION_ID } from "./correlation.js";
+import {
+  contentFreeErrorClass,
+  emitServerDiagnostic,
+  serverDiagnosticFromError,
+} from "./diagnostics-log.js";
+import { emitGatewayErrorDiagnostic } from "./gateway-error-diagnostic.js";
+import { getServerLogger } from "./observability/index.js";
 import {
   assertUsableAssistantContent,
   isLegacyEmptyAssistantPlaceholder,
@@ -356,12 +363,31 @@ function gatewayErrorStatus(error: GatewayError): number {
   return 502;
 }
 
-function gatewayErrorResult(error: GatewayError, deps: UiHandlerDeps): RouteResult {
+// ADR-0173 D5 g25 — every GatewayError this path maps to a response also reaches the redacted
+// operator diagnostic sink, the same symmetry `chat-stream-handlers.ts`'s SSE path already had.
+// `emitDiagnostic` defaults on for the normal (response-returning) callers below and is turned off
+// by the ONE caller that already emitted its own broader diagnostic for this exact error a moment
+// earlier and calls back in purely to reuse the code/message mapping (`chat-stream-handlers.ts`'s
+// `errorEvent`) — without it that caller would double-log the same failure.
+function gatewayErrorResult(
+  error: GatewayError,
+  deps: UiHandlerDeps,
+  correlationId: string | undefined,
+  emitDiagnostic: boolean,
+): RouteResult {
+  if (emitDiagnostic) {
+    emitGatewayErrorDiagnostic(deps, error, correlationId, "POST /api/desktop/chat", "chat.send");
+  }
   const status = gatewayErrorStatus(error);
   return { status, body: errorBody(error.code, redactErrorMessage(error.message, deps)) };
 }
 
-export function desktopChatErrorResult(error: unknown, deps: UiHandlerDeps): RouteResult {
+export function desktopChatErrorResult(
+  error: unknown,
+  deps: UiHandlerDeps,
+  correlationId?: string,
+  emitDiagnostic = true,
+): RouteResult {
   if (error instanceof ConversationAttachmentStoreError) {
     return {
       status: 409,
@@ -369,7 +395,7 @@ export function desktopChatErrorResult(error: unknown, deps: UiHandlerDeps): Rou
     };
   }
   if (error instanceof GatewayError) {
-    return gatewayErrorResult(error, deps);
+    return gatewayErrorResult(error, deps, correlationId, emitDiagnostic);
   }
   if (error instanceof UiStoreError) {
     return {
@@ -1135,11 +1161,23 @@ export function maybeRunChatAutoMaintenance(
   vault: MemoryVaultStore,
   state: AutoMaintenanceState = memoryMaintenanceCursor,
   nowMs: number = Date.now(),
+  // The triggering chat request's own correlation id, when known (ADR-0173 D5 / g12). This pass
+  // is genuinely background-originated (opportunistic, rate-limited, may run well after the turn
+  // that triggered it), so it mints its own id below rather than reusing the request's outright —
+  // but a known request id still rides as `parentCorrelationId` so an operator can join this
+  // pass's diagnostics back to the request that opportunistically triggered it.
+  requestCorrelationId?: string,
 ): void {
   if (deps.env.KEIKO_MEMORY_AUTO_MAINTAIN === "0") return;
   if (!isMaintenanceDue(state.lastRunAtMs, nowMs)) return;
+  // Minted ONCE here, at the start of this maintenance pass, rather than inside each helper's own
+  // catch block: the retention-policy read, the autonomy-mode read, and the maintenance sweep
+  // itself are three separate failure points of the SAME pass, and used to mint three disconnected
+  // ids — making it impossible for an operator to tell they came from one invocation (ADR-0173 D5
+  // / g12).
+  const correlationId = randomUUID();
   const multipliers = memorySemanticizationMultipliers(deps.env);
-  const retention = resolveMemoryRetentionPolicy(deps);
+  const retention = resolveMemoryRetentionPolicy(deps, correlationId);
   // A malformed retention setting disables only the retention phase. The resolver already emits a
   // diagnostic; promotion, consolidation, supersession, and fade must keep running so one invalid
   // optional setting cannot silently suspend all pre-existing vault maintenance.
@@ -1147,17 +1185,20 @@ export function maybeRunChatAutoMaintenance(
   maybeRunAutoMaintenance(vault, memoryMaintenanceAuditSink(deps), state, {
     nowMs,
     enabled: true,
-    autonomyMode: resolveMaintenanceAutonomyMode(deps),
+    autonomyMode: resolveMaintenanceAutonomyMode(deps, correlationId),
     ...(multipliers !== undefined ? { decayHalfLifeMultiplierByType: multipliers } : {}),
     ...(retentionPolicy !== undefined ? { retentionPolicy } : {}),
     onFailure: (error): void => {
       emitServerDiagnostic(deps.diagnostics, {
-        correlationId: randomUUID(),
+        correlationId,
         timestamp: new Date(Date.now()).toISOString(),
         operation: "chat.memory.auto-maintenance",
         source: "chat.memory.maintenance",
         errorClass: contentFreeErrorClass(error),
         message: "chat-memory-auto-maintenance-failed",
+        ...(requestCorrelationId === undefined
+          ? {}
+          : { parentCorrelationId: requestCorrelationId }),
       });
     },
   });
@@ -1584,6 +1625,71 @@ export function buildGatewayAssembly(
   return selected;
 }
 
+// ADR-0173 D5 g9 — the INPUT shape of a chat turn, never its content: how many messages the
+// assembled prompt carries (split by role) and how many image attachments rode along (count +
+// bytes). Logged once, at the point the assembled prompt and the parsed attachments are both
+// already in hand, so an agent reconstructing a defect from the activity log can tell "a
+// 40-message context with two images" from "a bare one-line question" without ever seeing a
+// token of either. Deliberately NOT the speculative JSON shape-skeleton feature (positional
+// locator tuples over the request/response bodies) — that stays a documented forward guardrail,
+// not built here (final-design.md Decisions Log D14).
+const CHAT_TURN_ROLES = ["system", "user", "assistant", "tool"] as const;
+type ChatTurnRole = (typeof CHAT_TURN_ROLES)[number];
+const CHAT_TURN_ROLE_SET: ReadonlySet<string> = new Set(CHAT_TURN_ROLES);
+
+export interface ChatTurnShapeFields {
+  readonly messageCount: number;
+  readonly roleCounts: Readonly<Record<ChatTurnRole, number>>;
+  // Denormalized copy of roleCounts.tool: a scalar an agent can grep for directly, without
+  // descending into the nested extra.roleCounts object.
+  readonly toolCount: number;
+  readonly imageAttachmentCount: number;
+  readonly imageAttachmentBytes: number;
+}
+
+// Exported so its co-located test derives its expectations by calling this exact production
+// formula (AGENTS.md §7) rather than restating the counting logic as a second copy that could
+// drift from it.
+export function chatTurnShapeFields(
+  messages: readonly { readonly role: string }[],
+  attachments: readonly ConversationAttachment[],
+): ChatTurnShapeFields {
+  const roleCounts: Record<ChatTurnRole, number> = { system: 0, user: 0, assistant: 0, tool: 0 };
+  for (const message of messages) {
+    if (CHAT_TURN_ROLE_SET.has(message.role)) {
+      roleCounts[message.role as ChatTurnRole] += 1;
+    }
+  }
+  let imageAttachmentCount = 0;
+  let imageAttachmentBytes = 0;
+  for (const attachment of attachments) {
+    if (attachment.kind === "image") {
+      imageAttachmentCount += 1;
+      imageAttachmentBytes += attachment.sizeBytes;
+    }
+  }
+  return {
+    messageCount: messages.length,
+    roleCounts,
+    toolCount: roleCounts.tool,
+    imageAttachmentCount,
+    imageAttachmentBytes,
+  };
+}
+
+function logChatTurnStarted(
+  correlationId: string | undefined,
+  messages: readonly { readonly role: string }[],
+  attachments: readonly ConversationAttachment[],
+): void {
+  getServerLogger().info({
+    category: "gateway",
+    op: "chat.turn.started",
+    correlationId,
+    extra: { ...chatTurnShapeFields(messages, attachments) },
+  });
+}
+
 export interface ChatCompactionTurn {
   readonly compaction: ConversationCompactionOutcome["compaction"];
   readonly request: SendDesktopChatRequest;
@@ -1591,6 +1697,10 @@ export interface ChatCompactionTurn {
   readonly messageCount: number;
   readonly startedAt: number;
   readonly historyPrefix: readonly ChatMessage[];
+  // ADR-0173 D5 g25 — the request's correlation id, carried through so a scheduled-enrichment
+  // failure (logged well after the response left, from inside a detached setImmediate) still
+  // joins back to the request that triggered it instead of standing alone in the activity log.
+  readonly correlationId: string | undefined;
 }
 
 // ADR-0057 D3: best-effort persist of the turn's compaction record AFTER the response completes.
@@ -1607,13 +1717,14 @@ export function recordChatCompaction(deps: UiHandlerDeps, turn: ChatCompactionTu
     finishedAt: Date.now(),
   } satisfies ChatCompactionEvidenceInput;
   persistChatCompactionEvidence(deps, input);
-  scheduleCompactionModelSummary(deps, input, turn.historyPrefix);
+  scheduleCompactionModelSummary(deps, input, turn.historyPrefix, turn.correlationId);
 }
 
 function scheduleCompactionModelSummary(
   deps: UiHandlerDeps,
   input: ChatCompactionEvidenceInput,
   historyPrefix: readonly ChatMessage[],
+  correlationId: string | undefined,
 ): void {
   if (
     input.compaction === undefined ||
@@ -1625,7 +1736,7 @@ function scheduleCompactionModelSummary(
   const handle = setImmediate(() => {
     void enrichChatCompactionWithModelSummary(deps, { ...input, historyPrefix })
       .catch((error: unknown) => {
-        logCompactionSummaryFailure(error);
+        logCompactionSummaryFailure(deps, correlationId, error);
       })
       .finally(() => {
         pendingCompactionSummaries -= 1;
@@ -1634,9 +1745,25 @@ function scheduleCompactionModelSummary(
   handle.unref();
 }
 
-function logCompactionSummaryFailure(error: unknown): void {
-  // eslint-disable-next-line no-console
-  console.warn("chat-compaction-model-summary: scheduled enrichment failed", error);
+// Replaces a bare `console.warn` (ADR-0173 D5 g25): the scheduled enrichment runs detached from
+// the request/response cycle, so its own internal try/catch (`enrichChatCompactionWithModelSummary`)
+// already routes the ordinary failure paths to a diagnostic — this outer catch only fires for a
+// failure that escapes THAT guard, and must not go back to being invisible.
+function logCompactionSummaryFailure(
+  deps: UiHandlerDeps,
+  correlationId: string | undefined,
+  error: unknown,
+): void {
+  emitServerDiagnostic(
+    deps.diagnostics,
+    serverDiagnosticFromError({
+      correlationId: correlationId ?? UNKNOWN_CORRELATION_ID,
+      operation: "chat.compaction.summary.scheduled",
+      source: "chat.compaction.model-summary",
+      error,
+      redact: (message) => String(deps.redactor(message)),
+    }),
+  );
 }
 
 function buildRegenerateGatewayAssembly(
@@ -1796,6 +1923,7 @@ async function resolveBufferedMemory(
   prepared: PreparedDesktopChatSend,
   admitted: AdmittedTurnHandle,
   abortSignal: AbortSignal,
+  correlationId: string | undefined,
 ): Promise<ConversationMemoryResultWire | RouteResult> {
   const { request, memoryContext } = prepared;
   let memory: ConversationMemoryResultWire;
@@ -1807,7 +1935,9 @@ async function resolveBufferedMemory(
   } catch (error) {
     const cancelled = requestSignalAborted(abortSignal);
     settleRejectedDesktopChatTurn(deps, prepared, admitted, cancelled ? "cancelled" : "failed");
-    return cancelled ? requestCancelledResult() : desktopChatErrorResult(error, deps);
+    return cancelled
+      ? requestCancelledResult()
+      : desktopChatErrorResult(error, deps, correlationId);
   }
   // Cancellation that lands during retrieval must be settled HERE, before assembly and the
   // provider call — this is still pre-provider, so a legacy row is discarded rather than
@@ -1854,6 +1984,7 @@ async function persistModelChatTurn(
   deps: UiHandlerDeps,
   prepared: PreparedDesktopChatSend,
   abortSignal: AbortSignal,
+  correlationId: string | undefined,
 ): Promise<RouteResult> {
   const { request } = prepared;
   // ADR-0057 D3: pin the pre-user-message count BEFORE createUserMessage stores the turn, so the
@@ -1867,11 +1998,14 @@ async function persistModelChatTurn(
       abortSignal,
       messageCountBeforeTurn,
       startedAt,
+      correlationId,
     );
   } catch (error) {
     const cancelled = requestSignalAborted(abortSignal);
     failDesktopChatTurn(deps, request, cancelled ? "cancelled" : "failed");
-    return cancelled ? requestCancelledResult() : desktopChatErrorResult(error, deps);
+    return cancelled
+      ? requestCancelledResult()
+      : desktopChatErrorResult(error, deps, correlationId);
   }
 }
 
@@ -1881,6 +2015,7 @@ async function executeBufferedModelTurn(
   abortSignal: AbortSignal,
   messageCountBeforeTurn: number,
   startedAt: number,
+  correlationId: string | undefined,
 ): Promise<RouteResult> {
   const { request, modelId } = prepared;
   const outcome = admitBufferedModelTurn(deps, prepared);
@@ -1888,21 +2023,22 @@ async function executeBufferedModelTurn(
   const { admitted, executionAdmission } = outcome;
   const { userMessage } = admitted;
   const gatewayTurn = captureGatewayTurnSnapshot(deps, request, userMessage);
-  const memory = await resolveBufferedMemory(deps, prepared, admitted, abortSignal);
+  const memory = await resolveBufferedMemory(deps, prepared, admitted, abortSignal, correlationId);
   if (isRouteResult(memory)) return memory;
-  const assembly = assemblyWithConversationImages(
-    deps,
-    request,
-    modelId,
-    buildGatewayAssembly(deps, request, memory, modelId, gatewayTurn),
-  );
+  const baseAssembly = buildGatewayAssembly(deps, request, memory, modelId, gatewayTurn);
+  // Logged from the base assembly, BEFORE image content parts are spliced in: image delivery can
+  // still fail its own (unrelated) authority/session check below, and this shape evidence must
+  // exist either way. Splicing only augments the final message's contentParts, never message
+  // count or role — so the counted shape is identical from either assembly.
+  logChatTurnStarted(correlationId, baseAssembly.messages, request.attachments);
+  const assembly = assemblyWithConversationImages(deps, request, modelId, baseAssembly);
   const model = bufferedModelAtProviderBoundary(deps, modelId, executionAdmission);
   if (isRouteResult(model)) {
     settleRejectedDesktopChatTurn(deps, prepared, admitted);
     return model;
   }
   const response = await model.call(
-    { modelId, messages: assembly.messages, stream: false },
+    { modelId, messages: assembly.messages, stream: false, logContext: { correlationId } },
     abortSignal,
   );
   const cancelledAfterCall = bufferedTurnCancellationResult(deps, prepared, abortSignal);
@@ -1918,6 +2054,7 @@ async function executeBufferedModelTurn(
       messageCount: messageCountBeforeTurn,
       startedAt,
       historyPrefix: gatewayHistoryPrefix(gatewayTurn),
+      correlationId,
     },
   );
 }
@@ -1929,6 +2066,7 @@ interface BufferedCompactionContext {
   readonly messageCount: number;
   readonly startedAt: number;
   readonly historyPrefix: readonly ChatMessage[];
+  readonly correlationId: string | undefined;
 }
 
 async function finalizeAndRecordBufferedTurn(
@@ -1948,6 +2086,7 @@ async function finalizeAndRecordBufferedTurn(
       messageCount: compaction.messageCount,
       startedAt: compaction.startedAt,
       historyPrefix: compaction.historyPrefix,
+      correlationId: compaction.correlationId,
     });
   }
   return finalized;
@@ -2298,7 +2437,7 @@ export async function handleSendDesktopChat(
       () => {
         const current = validateCurrentDesktopChatSend(parsed, deps);
         if (isRouteResult(current)) return current;
-        return persistModelChatTurn(deps, current, cancellation.signal);
+        return persistModelChatTurn(deps, current, cancellation.signal, ctx.correlationId);
       },
     );
     return result === CHAT_TURN_WAIT_CANCELLED ? requestCancelledResult() : result;
@@ -2683,6 +2822,7 @@ async function persistRegeneratedChatTurn(
   deps: UiHandlerDeps,
   prepared: PreparedDesktopChatRegenerate,
   signal: AbortSignal,
+  correlationId: string | undefined,
 ): Promise<RouteResult> {
   const { chat, modelId, memoryRequest, executionAdmission } = prepared;
   try {
@@ -2698,7 +2838,10 @@ async function persistRegeneratedChatTurn(
     if (model === undefined) {
       return { status: 400, body: errorBody("NO_MODEL", "No model provider is configured.") };
     }
-    const response = await model.call({ modelId, messages, stream: false }, signal);
+    const response = await model.call(
+      { modelId, messages, stream: false, logContext: { correlationId } },
+      signal,
+    );
     if (requestSignalAborted(signal)) return requestCancelledResult();
     const redactedContent = deps.redactor(response.content) as string;
     assertUsableAssistantContent(redactedContent, modelId);
@@ -2720,7 +2863,9 @@ async function persistRegeneratedChatTurn(
       },
     };
   } catch (error) {
-    return signal.aborted ? requestCancelledResult() : desktopChatErrorResult(error, deps);
+    return signal.aborted
+      ? requestCancelledResult()
+      : desktopChatErrorResult(error, deps, correlationId);
   }
 }
 
@@ -2741,7 +2886,7 @@ export async function handleRegenerateDesktopChat(
         const current = prepareDesktopChatRegenerateRequest(prepared.request, deps);
         return isRouteResult(current)
           ? current
-          : persistRegeneratedChatTurn(deps, current, cancellation.signal);
+          : persistRegeneratedChatTurn(deps, current, cancellation.signal, ctx.correlationId);
       },
     );
     return result === CHAT_TURN_WAIT_CANCELLED ? requestCancelledResult() : result;

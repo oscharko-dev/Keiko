@@ -22,8 +22,20 @@
 import type { DatabaseSync } from "node:sqlite";
 
 import { KnowledgeStoreError } from "./errors.js";
+import {
+  emitKnowledgeLogEvent,
+  startKnowledgeLogTimer,
+  type KnowledgeLogSink,
+} from "./knowledge-log.js";
 import { sectionPathHashFromJson } from "./section-path-hash.js";
 import type { StoreContentCipher } from "./store-content-cipher.js";
+
+// Sentinel `fromScope` reported on a store that had never been encrypted before this migration —
+// there is no prior `content_encryption_scope` value to report, and this reads clearly next to
+// the real scope-version strings (`ENCRYPTION_SCOPE_VALUE` and its predecessors).
+const UNENCRYPTED_SCOPE_LABEL = "plaintext";
+// Reported when an already-encrypted store predates the scope-marker key entirely (pre-v2).
+const UNSCOPED_ENCRYPTED_SCOPE_LABEL = "unscoped";
 
 const ENCRYPTION_MARKER_KEY = "content_encryption";
 const ENCRYPTION_MARKER_VALUE = "aes-256-gcm/v1";
@@ -277,7 +289,31 @@ function flushPlaintextResidue(db: DatabaseSync): void {
   db.exec("VACUUM");
 }
 
-function migrateToEncrypted(db: DatabaseSync, cipher: StoreContentCipher): void {
+// Fires only after the migration function it is called from has ALREADY returned without
+// throwing — never inside the transactional try/catch above it, and never for a branch of
+// `applyStoreContentEncryption` that migrates nothing (a store already at the current scope).
+// `durationMs` rides the envelope's own field, not `extra`, matching every other timed line this
+// package writes (`startKnowledgeLogTimer`, ADR-0019 seam).
+function logEncryptionMigrated(
+  logSink: KnowledgeLogSink | undefined,
+  fromScope: string,
+  toScope: string,
+  durationMs: number,
+): void {
+  emitKnowledgeLogEvent(logSink, {
+    category: "diagnostic",
+    op: "store.encryption-migrated",
+    durationMs,
+    extra: { fromScope, toScope },
+  });
+}
+
+function migrateToEncrypted(
+  db: DatabaseSync,
+  cipher: StoreContentCipher,
+  logSink?: KnowledgeLogSink,
+): void {
+  const elapsed = startKnowledgeLogTimer();
   // Phase 1 (transactional): seal every content row and write the sealed key-verification probe. The
   // completion MARKER is deliberately NOT written here — see phase 2.
   db.exec("BEGIN");
@@ -303,9 +339,16 @@ function migrateToEncrypted(db: DatabaseSync, cipher: StoreContentCipher): void 
   flushPlaintextResidue(db);
   writeSchemaMeta(db, ENCRYPTION_MARKER_KEY, ENCRYPTION_MARKER_VALUE);
   writeSchemaMeta(db, ENCRYPTION_SCOPE_KEY, ENCRYPTION_SCOPE_VALUE);
+  logEncryptionMigrated(logSink, UNENCRYPTED_SCOPE_LABEL, ENCRYPTION_SCOPE_VALUE, elapsed());
 }
 
-function upgradeEncryptedScope(db: DatabaseSync, cipher: StoreContentCipher): void {
+function upgradeEncryptedScope(
+  db: DatabaseSync,
+  cipher: StoreContentCipher,
+  fromScope: string,
+  logSink?: KnowledgeLogSink,
+): void {
+  const elapsed = startKnowledgeLogTimer();
   db.exec("BEGIN");
   try {
     ensureSectionPathHashes(db, cipher);
@@ -323,6 +366,7 @@ function upgradeEncryptedScope(db: DatabaseSync, cipher: StoreContentCipher): vo
   }
   flushPlaintextResidue(db);
   writeSchemaMeta(db, ENCRYPTION_SCOPE_KEY, ENCRYPTION_SCOPE_VALUE);
+  logEncryptionMigrated(logSink, fromScope, ENCRYPTION_SCOPE_VALUE, elapsed());
 }
 
 function verifyProbe(db: DatabaseSync, cipher: StoreContentCipher): void {
@@ -364,7 +408,11 @@ function assertSupportedEncryptionScope(scope: string | undefined): void {
 
 // Reconciles the store's on-disk encryption state with the resolved cipher. Called once from
 // openKnowledgeStore after migrations and before the handle is returned.
-export function applyStoreContentEncryption(db: DatabaseSync, cipher: StoreContentCipher): void {
+export function applyStoreContentEncryption(
+  db: DatabaseSync,
+  cipher: StoreContentCipher,
+  logSink?: KnowledgeLogSink,
+): void {
   const marker = readSchemaMeta(db, ENCRYPTION_MARKER_KEY);
   const probe = readSchemaMeta(db, ENCRYPTION_PROBE_KEY);
   const scope = readSchemaMeta(db, ENCRYPTION_SCOPE_KEY);
@@ -382,7 +430,7 @@ export function applyStoreContentEncryption(db: DatabaseSync, cipher: StoreConte
     verifyProbe(db, cipher);
     assertSupportedEncryptionScope(scope);
     if (scope !== ENCRYPTION_SCOPE_VALUE) {
-      upgradeEncryptedScope(db, cipher);
+      upgradeEncryptedScope(db, cipher, scope ?? UNSCOPED_ENCRYPTED_SCOPE_LABEL, logSink);
     }
     return;
   }
@@ -394,14 +442,27 @@ export function applyStoreContentEncryption(db: DatabaseSync, cipher: StoreConte
       );
     }
     verifyProbe(db, cipher);
-    migrateToEncrypted(db, cipher);
+    migrateToEncrypted(db, cipher, logSink);
     return;
   }
   if (!cipher.isEncrypted) {
     ensureSectionPathHashes(db, cipher);
     return;
   }
-  migrateToEncrypted(db, cipher);
+  migrateToEncrypted(db, cipher, logSink);
+}
+
+export type StoreContentEncryptionMode = "plaintext" | "encrypted" | "migrating";
+
+// Read-only snapshot of the store's on-disk encryption state, independent of any resolved cipher
+// and never throwing — used by `computeStoreFingerprint` (store.ts) to report `encryptionMode`
+// in the support-bundle manifest (Wave 4a, epic #3233 §6.2) without re-deriving the marker/probe
+// schema_meta keys a second time. Mirrors the case matrix documented at the top of this file: a
+// malformed marker VALUE is still reported as "encrypted" here — validating it is
+// `applyStoreContentEncryption`'s job, not a read-only reporter's.
+export function readStoreEncryptionMode(db: DatabaseSync): StoreContentEncryptionMode {
+  if (readSchemaMeta(db, ENCRYPTION_MARKER_KEY) !== undefined) return "encrypted";
+  return readSchemaMeta(db, ENCRYPTION_PROBE_KEY) !== undefined ? "migrating" : "plaintext";
 }
 
 export const STORE_CONTENT_ENCRYPTION_TEST_CONSTANTS = {

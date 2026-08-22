@@ -12,6 +12,8 @@
 // require touching `tryVectorIndexForCapsule` or `searchVectorIndex`. Every refusal is
 // content-free `ok: false` — never an exception, never a body, never a path.
 
+import { createHash } from "node:crypto";
+
 import {
   embeddingIdentityKey,
   isValidVectorIndexQuery,
@@ -25,6 +27,7 @@ import {
 } from "@oscharko-dev/keiko-contracts";
 
 import { getCapsule } from "../capsule-lifecycle.js";
+import { emitKnowledgeLogEvent, type KnowledgeLogSink } from "../knowledge-log.js";
 import type { KnowledgeStore } from "../store.js";
 
 import type { RetrievalVectorIndexDiagnostics } from "./types.js";
@@ -138,6 +141,34 @@ function portIdentityMismatch(): VectorIndexResult {
   };
 }
 
+const CAPSULE_ID_DIGEST_LENGTH = 16;
+
+// A caller-supplied capsule id is never logged raw — only its digest (matches the convention
+// `orchestrator.ts`'s `logDigest` establishes for the same reason: the id is caller-chosen and
+// must not become a durable, searchable identifier in the log).
+function capsuleIdDigest(capsuleId: KnowledgeCapsuleId): string {
+  const digest = createHash("sha256").update(String(capsuleId)).digest("hex");
+  return digest.slice(0, CAPSULE_ID_DIGEST_LENGTH);
+}
+
+// Fires exactly where the identity-mismatch VALUE is already computed (`portIdentityMismatch`'s
+// caller, just below) — never a second, independent identity comparison. This is the same fact
+// that later reconstructs into the adapter shim's `sawIdentityIncompatible: true` and, further
+// up, a capsule's `vectorCompatible: false` / `staleReasons` health projection: the capsule's
+// persisted index no longer matches the identity a caller is querying with and needs a reindex.
+function logIndexInvalidatedForCapsule(
+  logSink: KnowledgeLogSink | undefined,
+  namespace: LocalKnowledgeStoreNamespace,
+  capsuleId: KnowledgeCapsuleId,
+): void {
+  emitKnowledgeLogEvent(logSink, {
+    level: "warn",
+    category: "search",
+    op: "search.index-invalidated-for-capsule",
+    extra: { namespace, capsuleIdDigest: capsuleIdDigest(capsuleId) },
+  });
+}
+
 function toPortDiagnostics(source: RetrievalVectorIndexDiagnostics): VectorIndexDiagnostics {
   return {
     ...diagnostic(source.provider, source.status, source.reason),
@@ -175,6 +206,10 @@ export interface CreateLocalKnowledgeStoreVectorIndexPortOptions {
   // set here is cleared before dispatch: the LK adapter shim wraps THIS port, so keeping an
   // adapter would re-enter the port through itself.
   readonly vectorIndexOptions?: VectorIndexOptions | undefined;
+  // Content-free activity log (ADR-0019 seam, `knowledge-log.ts`). Absent → nothing is written.
+  // Covers the port's OWN identity-mismatch refusal, which happens before `vectorIndexOptions`
+  // is ever handed to `searchVectorIndex` (Wave 4a, epic #3233 §8).
+  readonly logSink?: KnowledgeLogSink | undefined;
 }
 
 // Build the `VectorIndexPort` implementation over an owned Local Knowledge store.
@@ -197,7 +232,7 @@ export interface CreateLocalKnowledgeStoreVectorIndexPortOptions {
 export function createLocalKnowledgeStoreVectorIndexPort(
   options: CreateLocalKnowledgeStoreVectorIndexPortOptions,
 ): VectorIndexPort {
-  const { namespace, store } = options;
+  const { namespace, store, logSink } = options;
   return {
     async search(query: VectorIndexQuery): Promise<VectorIndexResult> {
       if (!isValidVectorIndexQuery(query)) return portInvalidQuery();
@@ -210,6 +245,7 @@ export function createLocalKnowledgeStoreVectorIndexPort(
         embeddingIdentityKey(query.identity) !==
         embeddingIdentityKey(capsule.embeddingModelIdentity)
       ) {
+        logIndexInvalidatedForCapsule(logSink, namespace, capsule.id);
         return portIdentityMismatch();
       }
       const request: VectorIndexSearchRequest = {

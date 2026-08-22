@@ -13,6 +13,7 @@ import type { Server } from "node:http";
 import { WebSocket } from "ws";
 import { createUiServer, UI_HOST } from "./server.js";
 import type { ServerDiagnosticRecord } from "./diagnostics-log.js";
+import { CORRELATION_HEADER } from "./correlation.js";
 import { MAX_VOICE_CONTROL_FRAME_BYTES } from "./voice-realtime.js";
 import { VOICE_LIVE_TRANSCRIBE_PATH } from "./voice-live-dictation.js";
 import { buildRedactor, createRunRegistry, type UiHandlerDeps } from "./index.js";
@@ -561,6 +562,136 @@ describe("WebSocket live dictation upgrade — transcription-only control plane"
     socket.close();
   });
 
+  // RB-6 / ADR-0173 D5 regression pin: the correlation id is resolved ONCE per WebSocket connection
+  // at handleUpgrade, never re-minted per failure. Before the fix, `reportNegotiationFailure` called
+  // `randomUUID()` on every invocation, so two failures on the SAME connection carried two unrelated
+  // ids; this proves they now match.
+  it("reuses the same correlation id across two negotiation failures on one live-dictation connection", async (): Promise<void> => {
+    const diagnostics: ServerDiagnosticRecord[] = [];
+    const port = await boot(
+      depsWith({
+        config: voiceConfig(true),
+        configPresent: true,
+        diagnostics: { record: (record): void => void diagnostics.push(record) },
+        voiceRealtimeNegotiationRequest: (): Promise<RealtimeNegotiationOutcome> =>
+          Promise.resolve({ ok: false, kind: "wrong-header" }),
+      }),
+    );
+    const { ws: socket, next } = expectOpen(
+      await connect(port, { path: VOICE_LIVE_TRANSCRIBE_PATH }),
+    );
+    socket.send(liveSessionCreate());
+    await next(); // session.created
+    await next(); // capability.offer
+
+    socket.send(
+      JSON.stringify({
+        protocolVersion: "1",
+        sessionId: "sess-live-1",
+        seq: 1,
+        direction: "client-to-host",
+        kind: "signal.sdp.offer",
+        sdp: OFFER_SDP,
+      }),
+    );
+    await next(); // media.track.state negotiating
+    const firstFailure = await next();
+    await next(); // media.track.state ended
+
+    socket.send(
+      JSON.stringify({
+        protocolVersion: "1",
+        sessionId: "sess-live-1",
+        seq: 2,
+        direction: "client-to-host",
+        kind: "signal.sdp.offer",
+        sdp: OFFER_SDP,
+      }),
+    );
+    await next(); // media.track.state negotiating
+    const secondFailure = await next();
+    await next(); // media.track.state ended
+
+    expect(firstFailure.correlationId).toMatch(/^[0-9a-f-]{36}$/u);
+    expect(secondFailure.correlationId).toBe(firstFailure.correlationId);
+    expect(diagnostics).toHaveLength(2);
+    expect(diagnostics[0]?.correlationId).toBe(firstFailure.correlationId);
+    expect(diagnostics[1]?.correlationId).toBe(firstFailure.correlationId);
+    socket.close();
+  });
+
+  it("honors a well-formed client-supplied X-Keiko-Correlation-Id on the live-dictation upgrade", async (): Promise<void> => {
+    const diagnostics: ServerDiagnosticRecord[] = [];
+    const port = await boot(
+      depsWith({
+        config: voiceConfig(true),
+        configPresent: true,
+        diagnostics: { record: (record): void => void diagnostics.push(record) },
+        voiceRealtimeNegotiationRequest: (): Promise<RealtimeNegotiationOutcome> =>
+          Promise.resolve({ ok: false, kind: "wrong-header" }),
+      }),
+    );
+    const { ws: socket, next } = expectOpen(
+      await connect(port, {
+        path: VOICE_LIVE_TRANSCRIBE_PATH,
+        headers: { [CORRELATION_HEADER]: "client-supplied-live-corr-1" },
+      }),
+    );
+    socket.send(liveSessionCreate());
+    await next(); // session.created
+    await next(); // capability.offer
+    socket.send(
+      JSON.stringify({
+        protocolVersion: "1",
+        sessionId: "sess-live-1",
+        seq: 1,
+        direction: "client-to-host",
+        kind: "signal.sdp.offer",
+        sdp: OFFER_SDP,
+      }),
+    );
+    await next(); // media.track.state negotiating
+    const failure = await next();
+    expect(failure.correlationId).toBe("client-supplied-live-corr-1");
+    expect(diagnostics[0]?.correlationId).toBe("client-supplied-live-corr-1");
+    socket.close();
+  });
+
+  it("replaces a malformed client-supplied X-Keiko-Correlation-Id on the live-dictation upgrade", async (): Promise<void> => {
+    const port = await boot(
+      depsWith({
+        config: voiceConfig(true),
+        configPresent: true,
+        voiceRealtimeNegotiationRequest: (): Promise<RealtimeNegotiationOutcome> =>
+          Promise.resolve({ ok: false, kind: "wrong-header" }),
+      }),
+    );
+    const { ws: socket, next } = expectOpen(
+      await connect(port, {
+        path: VOICE_LIVE_TRANSCRIBE_PATH,
+        headers: { [CORRELATION_HEADER]: "short" },
+      }),
+    );
+    socket.send(liveSessionCreate());
+    await next(); // session.created
+    await next(); // capability.offer
+    socket.send(
+      JSON.stringify({
+        protocolVersion: "1",
+        sessionId: "sess-live-1",
+        seq: 1,
+        direction: "client-to-host",
+        kind: "signal.sdp.offer",
+        sdp: OFFER_SDP,
+      }),
+    );
+    await next(); // media.track.state negotiating
+    const failure = await next();
+    expect(failure.correlationId).not.toBe("short");
+    expect(failure.correlationId).toMatch(/^[0-9a-f-]{36}$/u);
+    socket.close();
+  });
+
   it("rejects chat context and persona on the live dictation endpoint", async () => {
     const port = await boot(depsWith({ config: voiceConfig(true), configPresent: true }));
     const { ws: socket } = expectOpen(await connect(port, { path: VOICE_LIVE_TRANSCRIBE_PATH }));
@@ -659,6 +790,118 @@ describe("WebSocket voice control upgrade — protocol behavior", () => {
     await next(); // media.track.state negotiating
     const answer = await next();
     expect(answer).toMatchObject({ kind: "signal.sdp.answer", sdp: ANSWER_SDP });
+    socket.close();
+  });
+
+  // RB-6 / ADR-0173 D5 regression pin: the correlation id is resolved ONCE per WebSocket connection
+  // at handleUpgrade, never re-minted per failure — mirrors the live-dictation pin above for the
+  // full realtime control plane, which had no correlation-id concept at all before the fix.
+  it("reuses the same correlation id across two negotiation failures on one realtime control connection", async (): Promise<void> => {
+    const { deps, chat } = depsWithChat({
+      config: voiceConfig(true),
+      configPresent: true,
+      voiceRealtimeNegotiationRequest: (): Promise<RealtimeNegotiationOutcome> =>
+        Promise.resolve({ ok: false, kind: "wrong-header" }),
+    });
+    const port = await boot(deps);
+    const { ws: socket, next } = expectOpen(await connect(port));
+    socket.send(sessionCreate(chat.id));
+    await next(); // session.created
+    await next(); // capability.offer
+
+    socket.send(
+      JSON.stringify({
+        protocolVersion: "1",
+        sessionId: "sess-int-1",
+        seq: 1,
+        direction: "client-to-host",
+        kind: "signal.sdp.offer",
+        sdp: OFFER_SDP,
+      }),
+    );
+    await next(); // media.track.state negotiating
+    const firstFailure = await next();
+    await next(); // media.track.state ended
+
+    socket.send(
+      JSON.stringify({
+        protocolVersion: "1",
+        sessionId: "sess-int-1",
+        seq: 2,
+        direction: "client-to-host",
+        kind: "signal.sdp.offer",
+        sdp: OFFER_SDP,
+      }),
+    );
+    await next(); // media.track.state negotiating
+    const secondFailure = await next();
+    await next(); // media.track.state ended
+
+    expect(firstFailure).toMatchObject({ kind: "error", code: "negotiation-failed" });
+    expect(firstFailure.correlationId).toMatch(/^[0-9a-f-]{36}$/u);
+    expect(secondFailure.correlationId).toBe(firstFailure.correlationId);
+    socket.close();
+  });
+
+  it("honors a well-formed client-supplied X-Keiko-Correlation-Id on the realtime control upgrade", async (): Promise<void> => {
+    const { deps, chat } = depsWithChat({
+      config: voiceConfig(true),
+      configPresent: true,
+      voiceRealtimeNegotiationRequest: (): Promise<RealtimeNegotiationOutcome> =>
+        Promise.resolve({ ok: false, kind: "wrong-header" }),
+    });
+    const port = await boot(deps);
+    const { ws: socket, next } = expectOpen(
+      await connect(port, { headers: { [CORRELATION_HEADER]: "client-supplied-rt-corr-1" } }),
+    );
+    socket.send(sessionCreate(chat.id));
+    await next(); // session.created
+    await next(); // capability.offer
+    socket.send(
+      JSON.stringify({
+        protocolVersion: "1",
+        sessionId: "sess-int-1",
+        seq: 1,
+        direction: "client-to-host",
+        kind: "signal.sdp.offer",
+        sdp: OFFER_SDP,
+      }),
+    );
+    await next(); // media.track.state negotiating
+    const failure = await next();
+    expect(failure).toMatchObject({ kind: "error", code: "negotiation-failed" });
+    expect(failure.correlationId).toBe("client-supplied-rt-corr-1");
+    socket.close();
+  });
+
+  it("replaces a malformed client-supplied X-Keiko-Correlation-Id on the realtime control upgrade", async (): Promise<void> => {
+    const { deps, chat } = depsWithChat({
+      config: voiceConfig(true),
+      configPresent: true,
+      voiceRealtimeNegotiationRequest: (): Promise<RealtimeNegotiationOutcome> =>
+        Promise.resolve({ ok: false, kind: "wrong-header" }),
+    });
+    const port = await boot(deps);
+    const { ws: socket, next } = expectOpen(
+      await connect(port, { headers: { [CORRELATION_HEADER]: "short" } }),
+    );
+    socket.send(sessionCreate(chat.id));
+    await next(); // session.created
+    await next(); // capability.offer
+    socket.send(
+      JSON.stringify({
+        protocolVersion: "1",
+        sessionId: "sess-int-1",
+        seq: 1,
+        direction: "client-to-host",
+        kind: "signal.sdp.offer",
+        sdp: OFFER_SDP,
+      }),
+    );
+    await next(); // media.track.state negotiating
+    const failure = await next();
+    expect(failure.correlationId).not.toBe("short");
+    expect(failure.correlationId).toMatch(/^[0-9a-f-]{36}$/u);
     socket.close();
   });
 

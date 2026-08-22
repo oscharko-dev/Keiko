@@ -46,6 +46,7 @@ import type {
   ConsolidationJobSettings,
 } from "./memory-consolidation-registry.js";
 import { enrichReviewItemsWithAdvisory } from "./memory-conflict-advisory.js";
+import { readJsonRequestBody } from "./bounded-request-body.js";
 
 const MAX_BODY_BYTES = 64_000;
 const DEFAULT_JACCARD_THRESHOLD = 0.85;
@@ -61,13 +62,6 @@ const DEFAULT_CONSOLIDATION_STATUSES: readonly MemoryStatus[] = [
   "conflicted",
 ];
 
-class BodyTooLargeError extends Error {
-  public constructor() {
-    super("request body too large");
-    this.name = "BodyTooLargeError";
-  }
-}
-
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
@@ -76,51 +70,16 @@ function isRouteResult(value: unknown): value is RouteResult {
   return isRecord(value) && typeof value.status === "number";
 }
 
-function readBody(req: IncomingMessage): Promise<string> {
-  return new Promise<string>((resolve, reject) => {
-    const chunks: Buffer[] = [];
-    let total = 0;
-    let capped = false;
-    req.on("data", (chunk: Buffer) => {
-      total += chunk.length;
-      if (total > MAX_BODY_BYTES) {
-        if (!capped) {
-          capped = true;
-          chunks.length = 0;
-          reject(new BodyTooLargeError());
-          req.resume();
-        }
-        return;
-      }
-      chunks.push(chunk);
-    });
-    req.on("end", () => {
-      if (!capped) resolve(Buffer.concat(chunks).toString("utf8"));
-    });
-    req.on("error", reject);
-  });
-}
-
-async function readJsonBody(req: IncomingMessage): Promise<Record<string, unknown> | RouteResult> {
-  let raw: string;
-  try {
-    raw = await readBody(req);
-  } catch (error) {
-    if (error instanceof BodyTooLargeError) {
-      return { status: 413, body: errorBody("PAYLOAD_TOO_LARGE", "Request body too large.") };
-    }
-    throw error;
-  }
-  let parsed: unknown;
-  try {
-    parsed = raw.length === 0 ? {} : JSON.parse(raw);
-  } catch {
-    return { status: 400, body: errorBody("BAD_REQUEST", "Request body is not valid JSON.") };
-  }
-  if (!isRecord(parsed)) {
-    return { status: 400, body: errorBody("BAD_REQUEST", "Request body must be a JSON object.") };
-  }
-  return parsed;
+// Consolidated onto the shared bounded reader (#2902 w5-sse-counters) — the cap above is
+// unchanged, only the ad hoc listener wiring is gone. The read-parse-validate wrapper itself is
+// also consolidated (#2902 audit finding 3): `readJsonRequestBody` (bounded-request-body.ts) is
+// the one owner of "bounded read, then parse+validate as a JSON object", previously hand-rolled
+// identically in this file, memory-handlers.ts and memory-conv-handlers.ts.
+function readJsonBody(
+  req: IncomingMessage,
+  correlationId?: string,
+): Promise<Record<string, unknown> | RouteResult> {
+  return readJsonRequestBody(req, MAX_BODY_BYTES, correlationId);
 }
 
 function resolveVault(deps: UiHandlerDeps): MemoryVaultStore | RouteResult {
@@ -709,7 +668,7 @@ export async function handleCreateConsolidationJob(
   if (isRouteResult(vault)) return vault;
   const registry = resolveJobRegistry(deps);
   if (isRouteResult(registry)) return registry;
-  const body = await readJsonBody(ctx.req);
+  const body = await readJsonBody(ctx.req, ctx.correlationId);
   if (isRouteResult(body)) return body;
   const input = parseCreateInput(body);
   if (isRouteResult(input)) return input;
@@ -1019,7 +978,7 @@ export async function handleApplyConsolidationReviewItem(
   if (previous !== undefined) return previous;
   const inputs = findApplyInputs(route.record, route.itemId);
   if (isRouteResult(inputs)) return inputs;
-  const body = await readJsonBody(ctx.req);
+  const body = await readJsonBody(ctx.req, ctx.correlationId);
   if (isRouteResult(body)) return body;
   const latest = route.registry.get(route.jobId);
   const concurrent = latest === undefined ? undefined : previousApplication(latest, route.itemId);

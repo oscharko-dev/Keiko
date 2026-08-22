@@ -13,7 +13,7 @@ import {
   type ActiveWorkspaceView,
 } from "./task-workspace-api";
 import { isWorkspaceFailureClass, type WorkspaceFailureClass } from "@oscharko-dev/keiko-contracts";
-import { clientErrorSummary } from "./client-error-summary";
+import { clientErrorSummary, correlationIdOf } from "./client-error-summary";
 import { reportClientDiagnostic } from "./client-diagnostics";
 
 export type VerifiedTaskWorkspaceBindFailureReason = "branch-conflict";
@@ -41,6 +41,9 @@ export interface VerifiedTaskWorkspaceBindInput {
 function warnBindStage(stage: string, error: unknown): void {
   reportClientDiagnostic(
     `[keiko] task workspace bind ${stage} failed: ${clientErrorSummary(error)}`,
+    {
+      correlationId: correlationIdOf(error),
+    },
   );
 }
 

@@ -690,9 +690,9 @@ function governedActionResult(
   credential: AtlassianCredentialMetadata,
   authority: AtlassianActionAuthorityContext,
   plan: GovernedActionPlan,
+  correlationId: string,
 ): Promise<RouteResult> | RouteResult {
   const connectorId = connectorIdForAuthRef(credential.authRef);
-  const correlationId = randomUUID();
   const denied = (reasonCode: AtlassianConnectorActivityReasonCode): RouteResult =>
     deniedAtlassianActionResult({
       connectorId,
@@ -785,11 +785,14 @@ export function handleExecuteAtlassianConnectorAction(
       throw invalid("authority must carry runId, envelopeDigest, and workspaceRoot");
     }
     const input = validateGovernedActionInput(body.action, credential.provider);
+    // Threads the request's own correlation id (ADR-0173 D5 / g12) into the governed-action
+    // denial/pending-approval/allowed records instead of a disconnected mint.
     return governedActionResult(
       deps,
       credential,
       authority,
       actionPlanFor(guard, credential, input),
+      ctx.correlationId ?? randomUUID(),
     );
   });
 }

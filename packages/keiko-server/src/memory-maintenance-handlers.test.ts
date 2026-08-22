@@ -30,13 +30,14 @@ import type { ServerDiagnosticRecord } from "./diagnostics-log.js";
 const DAY = 864e5;
 const RETENTION_NOW = Date.parse("2026-08-02T08:00:00.000Z");
 
-function makeCtx(): RouteContext {
+function makeCtx(correlationId?: string): RouteContext {
   const socket = new Socket();
   return {
     req: {} as RouteContext["req"],
     res: { socket } as unknown as RouteContext["res"],
     params: {},
     url: new URL("http://127.0.0.1/api/memory/maintenance"),
+    ...(correlationId === undefined ? {} : { correlationId }),
   };
 }
 
@@ -341,6 +342,59 @@ describe("handleRunMaintenance", () => {
     expect(result).toHaveProperty("body.error.correlationId", expect.any(String));
     expect(diagnostics).toHaveLength(1);
     expect(JSON.stringify({ result, diagnostics })).not.toContain(raw);
+  });
+
+  it("threads the request's own correlation id into the retention-config-invalid response instead of minting one", () => {
+    // ADR-0173 D5 / g12: ctx.correlationId is minted at request entry (server.ts) and is already
+    // in scope in handleRunMaintenance — the failure diagnostic and error body must reuse it, not
+    // a disconnected randomUUID(). Before the fix handleRunMaintenance discarded ctx entirely
+    // (bound as `_ctx`), so the response correlationId never matched ctx.correlationId.
+    const vault = makeVault();
+    const diagnostics: ServerDiagnosticRecord[] = [];
+    const result = handleRunMaintenance(
+      makeCtx("req-maintenance-thread-01"),
+      makeDeps({
+        memoryVault: vault,
+        env: { KEIKO_MEMORY_RETENTION_MAX_AGE_DAYS: "not-a-number" },
+        diagnostics: { record: (record) => diagnostics.push(record) },
+      }),
+    );
+
+    expect(result).toMatchObject({
+      status: 500,
+      body: { error: { correlationId: "req-maintenance-thread-01" } },
+    });
+    expect(diagnostics[0]?.correlationId).toBe("req-maintenance-thread-01");
+  });
+
+  it("threads the request's own correlation id into an autonomy-mode-read failure too, sharing it with the retention read", () => {
+    // ADR-0173 D5 / g12: resolveMaintenanceAutonomyMode's own default mint only fires when NO id
+    // is threaded in; the route always threads its one correlationId (from ctx or minted once) so
+    // an autonomy-mode failure never gets its own disconnected id relative to the SAME call's
+    // other diagnostics.
+    const diagnostics: ServerDiagnosticRecord[] = [];
+    const vault = makeVault();
+    const store = createInMemoryUiStore();
+    const faultyStore: UiStore = {
+      ...store,
+      readMemoryAutonomyPolicy: (): never => {
+        throw new Error("preference store unavailable");
+      },
+    };
+    handleRunMaintenance(
+      makeCtx("req-maintenance-autonomy-thread-01"),
+      makeDeps({
+        memoryVault: vault,
+        store: faultyStore,
+        diagnostics: { record: (record) => diagnostics.push(record) },
+      }),
+    );
+
+    expect(diagnostics).toHaveLength(1);
+    expect(diagnostics[0]?.source).toBe(
+      "memory-maintenance-handlers.resolveMaintenanceAutonomyMode",
+    );
+    expect(diagnostics[0]?.correlationId).toBe("req-maintenance-autonomy-thread-01");
   });
 
   it("returns a review item instead of auto-superseding a pairwise correction conflict", () => {
@@ -774,6 +828,37 @@ describe("maybeRunAutoMaintenance (O-V4)", () => {
       }),
     );
     expect(JSON.stringify(diagnostics)).not.toContain("customer content");
+  });
+
+  it("mints ONE correlation id shared by every diagnostic of a single auto-maintenance pass, not one per failure point", () => {
+    // ADR-0173 D5 / g12: before the fix, resolveMemoryRetentionPolicy's own catch and this
+    // function's onFailure catch each minted a disconnected randomUUID() — an operator could not
+    // tell two diagnostics from the SAME opportunistic pass apart from two diagnostics from two
+    // different passes. A malformed retention env (read at pass start) AND a vault fault (surfaced
+    // through onFailure) now both report under the SAME id.
+    const diagnostics: ServerDiagnosticRecord[] = [];
+    const faulty = {
+      ...makeVault(),
+      listMemoriesAcrossScopes: () => {
+        throw new Error("disk gone");
+      },
+    } as MemoryVaultStore;
+
+    maybeRunChatAutoMaintenance(
+      makeDeps({
+        env: { KEIKO_MEMORY_RETENTION_MAX_AGE_DAYS: "not-a-number" },
+        diagnostics: { record: (record) => diagnostics.push(record) },
+      }),
+      faulty,
+      {},
+      NOW,
+    );
+
+    const sources = diagnostics.map((record) => record.source);
+    expect(sources).toContain("memory-maintenance-handlers.resolveMemoryRetentionPolicy");
+    expect(sources).toContain("chat.memory.maintenance");
+    const ids = new Set(diagnostics.map((record) => record.correlationId));
+    expect(ids.size).toBe(1);
   });
 
   it("promotes nothing when no autonomy mode is supplied (fail closed to governed-assist)", () => {

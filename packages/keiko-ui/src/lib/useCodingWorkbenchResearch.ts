@@ -10,7 +10,7 @@ import type {
 import { codingAppSessionPairingSettled } from "./coding-app-session-client";
 import { getCodingWorkbenchRuntimeResearch } from "./coding-workbench-runtime-api";
 import { reportClientDiagnostic } from "./client-diagnostics";
-import { clientErrorSummary } from "./client-error-summary";
+import { clientErrorSummary, correlationIdOf } from "./client-error-summary";
 
 export type CodingWorkbenchResearchStatus = "idle" | "loading" | "ready" | "unavailable";
 
@@ -89,6 +89,7 @@ function startResearchSync(
         // content-free "unavailable", but the underlying refresh failure remains diagnosable.
         reportClientDiagnostic(
           `[keiko] research channel refresh failed: ${clientErrorSummary(error)}`,
+          { correlationId: correlationIdOf(error) },
         );
         publish(
           scopeResearchStateFromInput(input, {

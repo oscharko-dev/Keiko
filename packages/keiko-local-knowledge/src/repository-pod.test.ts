@@ -22,7 +22,9 @@ import {
 import type {
   GatewayRequest,
   NormalizedResponse,
+  OpenAIEmbeddingAdapter,
   OpenAIEmbeddingOutcome,
+  OpenAIEmbeddingRequest,
 } from "@oscharko-dev/keiko-model-gateway";
 import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -34,6 +36,7 @@ import {
   resolveRepositoryChunkLineRange,
 } from "./indexing/repository-chunk-lines.js";
 import { readRepositoryFileFingerprints } from "./indexing/repository-fingerprints.js";
+import type { KnowledgeLogEvent, KnowledgeLogSink } from "./knowledge-log.js";
 import { isCodeSymbolDefinitionLine } from "./parsers/code-parser.js";
 import { createDefaultParserRegistry } from "./parsers/index.js";
 import {
@@ -511,6 +514,154 @@ function stubChatGateway(): {
     },
   };
 }
+
+describe("repository pod fingerprint-diff activity log", () => {
+  function recordingSink(): {
+    readonly sink: KnowledgeLogSink;
+    readonly events: KnowledgeLogEvent[];
+  } {
+    const events: KnowledgeLogEvent[] = [];
+    return {
+      sink: {
+        write: (event): void => {
+          events.push(event);
+        },
+      },
+      events,
+    };
+  }
+
+  it("logs repository.fingerprint-diff.completed with the run's delta counts, correlated to the run id", async () => {
+    createShell();
+    const adapter = countingAdapter();
+    const { sink, events } = recordingSink();
+
+    await refreshRepositoryPod(indexingDeps(adapter, { logSink: sink }), {
+      runId: "fp-diff-initial",
+    });
+    const initialLine = events.find(
+      (event) => event.op === "repository.fingerprint-diff.completed",
+    );
+    expect(initialLine).toBeDefined();
+    expect(initialLine?.category).toBe("indexing");
+    expect(initialLine?.correlationId).toBe("fp-diff-initial");
+    expect(initialLine?.extra).toEqual({
+      added: 4,
+      changed: 0,
+      removed: 0,
+      moved: 0,
+      unchanged: 0,
+    });
+
+    events.length = 0;
+    writeFileSync(
+      join(repositoryRoot, "src", "service.py"),
+      ["class Service:", "    pass", "", "def load():", '    return "changed"', ""].join("\n"),
+      "utf8",
+    );
+    await refreshRepositoryPod(indexingDeps(adapter, { logSink: sink }), {
+      runId: "fp-diff-refresh",
+    });
+    const refreshLine = events.find(
+      (event) => event.op === "repository.fingerprint-diff.completed",
+    );
+    expect(refreshLine).toBeDefined();
+    expect(refreshLine?.correlationId).toBe("fp-diff-refresh");
+    expect(refreshLine?.extra).toEqual({
+      added: 0,
+      changed: 1,
+      removed: 0,
+      moved: 0,
+      unchanged: 3,
+    });
+  });
+
+  it("suppresses removed in the logged event too, not only in the persisted counts, when enumeration is incomplete", async () => {
+    // A bounded scan (maxFiles) sees only a slice of the tree, so a diff against the full prior
+    // baseline manufactures large, spurious "removed" entries for every previously-known file the
+    // bound cut off — none of which are actually gone. `counts.removedFiles` already suppresses
+    // this to 0; the logged `repository.fingerprint-diff.completed` event must report the same
+    // suppressed number, not the raw (and here, wildly wrong) delta.
+    createShell();
+    const adapter = countingAdapter();
+    await refreshRepositoryPod(indexingDeps(adapter), { runId: "fp-diff-bounded-initial" });
+    const { sink, events } = recordingSink();
+
+    const incomplete = await refreshRepositoryPod(
+      indexingDeps(adapter, {
+        discoveryOptions: { maxDepth: 12, maxFiles: 1 },
+        logSink: sink,
+      }),
+      { runId: "fp-diff-bounded-incomplete" },
+    );
+
+    expect(incomplete.run.applied).toBe(false);
+    expect(incomplete.run.counts.removedFiles).toBe(0);
+    const line = events.find((event) => event.op === "repository.fingerprint-diff.completed");
+    expect(line?.extra).toMatchObject({ removed: 0 });
+  });
+
+  it("reports the effective delta — not the raw scan — when a discovered file fails to embed", async () => {
+    // `scan.fingerprints` includes every file the walk finds, including one whose embedding call
+    // fails afterward; `next` (the persisted baseline) deliberately withholds that path so the
+    // next run retries it. The reported delta must come from `next`, not from the raw scan, or a
+    // file that never made it into the persisted baseline gets counted as "added" anyway.
+    createShell();
+    writeFileSync(
+      join(repositoryRoot, "src", "flaky.ts"),
+      "export const flakyEmbedMarker = 1;\n",
+      "utf8",
+    );
+    const { sink, events } = recordingSink();
+    const adapter: OpenAIEmbeddingAdapter = {
+      endpoint: "https://example.test/v1",
+      apiKey: "sk-test",
+      request: (request: OpenAIEmbeddingRequest): Promise<OpenAIEmbeddingOutcome> =>
+        Promise.resolve(
+          request.input.includes("flakyEmbedMarker")
+            ? { ok: false, kind: "unsupported-model" }
+            : {
+                ok: true,
+                value: { vector: VECTOR, modelId: DEFAULT_EMBEDDING.modelId },
+              },
+        ),
+    };
+
+    const result = await refreshRepositoryPod(
+      {
+        store,
+        capsuleId: CAPSULE_ID,
+        sourceId: SOURCE_ID,
+        parserRegistry: createDefaultParserRegistry(),
+        embeddingAdapter: adapter,
+        workspaceFs: nodeWorkspaceFs,
+        trackedPaths: TRACKED_PATHS,
+        logSink: sink,
+      },
+      { runId: "fp-diff-withheld-failure" },
+    );
+
+    expect(result.run.applied).toBe(true);
+    expect(documentRows().map((row) => row.document_path)).toContain("src/flaky.ts");
+    // 4 files (.gitignore, app.ts, service.py, worker.go) persist into the baseline;
+    // flaky.ts failed to embed and is withheld, so it must NOT be counted as "added".
+    expect(result.run.counts.addedFiles).toBe(4);
+    const line = events.find((event) => event.op === "repository.fingerprint-diff.completed");
+    expect(line?.extra).toMatchObject({ added: 4 });
+    expect([...readRepositoryFileFingerprints(store, CAPSULE_ID, SOURCE_ID).keys()]).not.toContain(
+      "src/flaky.ts",
+    );
+  });
+
+  it("writes nothing when no logSink is supplied", async () => {
+    createShell();
+    const adapter = countingAdapter();
+    // No logSink override — must not throw, and the deps default carries none.
+    await expect(
+      refreshRepositoryPod(indexingDeps(adapter), { runId: "fp-diff-no-sink" }),
+    ).resolves.toBeDefined();
+  });
+});
 
 describe("repository pod capsule setting parity (M2.12)", () => {
   it("honours contextualRetrieval when threaded through refreshRepositoryPod", async (): Promise<void> => {

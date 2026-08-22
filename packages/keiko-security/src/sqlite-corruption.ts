@@ -88,7 +88,11 @@ const ERROR_CLASS_SHAPE = /^[A-Za-z][A-Za-z0-9_$]*$/;
 
 // Truncation happens AFTER redaction: cutting first could split a secret so that no pattern matches
 // the remaining prefix, and the point of the cap is size, not concealment.
-function boundedRedactedText(value: string): string {
+//
+// Exported so `log-port.ts`'s callers (`macos-keychain.ts`, `secret-vault.ts`) can bound an
+// activity-log field with the exact same redaction and cap this module already applies to the
+// persisted quarantine diagnostic, rather than growing a second copy [w4a-security-log-port].
+export function boundedRedactedText(value: string): string {
   const redacted = redact(value);
   return redacted.length <= MAX_ERROR_RECORD_TEXT_CHARS
     ? redacted
@@ -96,7 +100,8 @@ function boundedRedactedText(value: string): string {
 }
 
 // Reflective reads over a thrown value are hostile-input reads: a getter or proxy trap may throw.
-function safeName(value: object): string | undefined {
+// Exported for the same reuse reason as `boundedRedactedText` above [w4a-security-log-port].
+export function safeName(value: object): string | undefined {
   try {
     const name: unknown = Reflect.get(value, "name");
     return typeof name === "string" ? name : undefined;
@@ -107,7 +112,11 @@ function safeName(value: object): string | undefined {
 
 // The class label comes from code (a class declaration), never from request data — but only once it is
 // shape- and length-checked, because `name` is writable. Anything else degrades to "Error".
-function hardenedErrorClass(cause: unknown): string {
+//
+// Exported so `secret-vault.ts`'s `readShardEnvelope` can classify an fs failure (EACCES, EISDIR,
+// EIO) for `security.vault.shard-unreadable` with the same hardened classifier this module already
+// uses for the persisted quarantine diagnostic [w4a-security-log-port].
+export function hardenedErrorClass(cause: unknown): string {
   if (!(cause instanceof Error)) return typeof cause;
   const name = safeName(cause);
   if (name === undefined || name.length > MAX_ERROR_CLASS_CHARS || !ERROR_CLASS_SHAPE.test(name)) {

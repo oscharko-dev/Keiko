@@ -384,10 +384,10 @@ async function startSyncGoverned(
   credential: AtlassianCredentialMetadata,
   body: StartSyncBody,
   authority: AtlassianActionAuthorityContext,
+  correlationId: string,
 ): Promise<RouteResult> {
   const actionType = SYNC_ACTION_TYPE_FOR_PROVIDER[credential.provider];
   const connectorId = connectorIdForAuthRef(credential.authRef);
-  const correlationId = randomUUID();
   const targetRef = syncScopeTargetRef(body);
   const outcome = decideGovernedAtlassianAction(actionType, authority, deps);
   const denied = (reasonCode: AtlassianConnectorActivityReasonCode): RouteResult =>
@@ -428,7 +428,16 @@ export function handleStartAtlassianConnectorSync(
     const credential = requireAtlassianCredential(ctx, guard);
     const body = validateStartSyncBody(await readJsonObject(ctx.req), credential.provider);
     if (body.authority !== undefined) {
-      return startSyncGoverned(deps, guard, credential, body, body.authority);
+      // Threads the request's own correlation id (ADR-0173 D5 / g12) into the governed-start
+      // denial/pending-approval/allowed records instead of a disconnected mint.
+      return startSyncGoverned(
+        deps,
+        guard,
+        credential,
+        body,
+        body.authority,
+        ctx.correlationId ?? randomUUID(),
+      );
     }
     // Direct human-triggered start: human-approved by construction (ADR-0129; ADR-0128 D5) —
     // recorded as `allowed` + `human-initiated` on the run's activity record.

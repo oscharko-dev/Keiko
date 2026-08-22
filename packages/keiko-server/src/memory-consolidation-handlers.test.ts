@@ -165,6 +165,22 @@ describe("memory consolidation job handlers", () => {
     expect(result.status).toBe(503);
   });
 
+  // #2902 w5-sse-counters: readJsonBody now consolidates onto the shared readBoundedRequestBody,
+  // so an oversized body must still yield the shared reader's own 413 rejection shape.
+  it("rejects an oversized body using the shared bounded-body reader", async () => {
+    const deps = makeDeps({ memoryVault: makeVault() });
+
+    const result = await handleCreateConsolidationJob(
+      makeCtx("/api/memory/consolidation/jobs", {
+        scopes: [{ kind: "user", userId: "u-1" }],
+        settings: { notes: "x".repeat(70_000) },
+      }),
+      deps,
+    );
+
+    expect(result.status).toBe(413);
+  });
+
   it("registers a queued job and then skips when no memories match", async () => {
     const vault = makeVault();
     const deps = makeDeps({ memoryVault: vault });

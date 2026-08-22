@@ -14,8 +14,10 @@ import { createRunRegistry } from "./runs.js";
 import { createUiServer, UI_HOST } from "./server.js";
 import { EventEmitter } from "node:events";
 import type { ServerResponse } from "node:http";
-import { openTerminalSseStream } from "./terminal-routes.js";
+import { handleTerminalEvents, openTerminalSseStream } from "./terminal-routes.js";
 import type { SseBackpressureSignal } from "./sse-write.js";
+import type { RouteContext } from "./routes.js";
+import type { ServerDiagnosticRecord, ServerDiagnosticSink } from "./diagnostics-log.js";
 import {
   TerminalToolError,
   type TerminalEventEmitter,
@@ -24,6 +26,12 @@ import {
   type TerminalExecutionManager,
   type TerminalExecutionResult,
 } from "./index.js";
+import {
+  createBufferedServerLogSink,
+  createServerLogger,
+  resetServerLogger,
+  setServerLogger,
+} from "./observability/index.js";
 
 interface FakeOptions {
   readonly executeShouldThrow?: TerminalToolError;
@@ -642,5 +650,73 @@ describe("openTerminalSseStream backpressure (KEIKO-0142)", () => {
     expect(fake.destroyCount).toBe(0);
     expect(signals).toHaveLength(0);
     expect(fake.writes.length).toBeGreaterThan(1);
+  });
+});
+
+// Finding 0 (#2902 audit): the request-scoped correlationId never reached the terminal
+// `sse.stream.closed` line because openTerminalSseStream had no parameter to receive it, even
+// though handleTerminalEvents' RouteContext carries one. The heartbeat is the first write on
+// every stream (sse-write.ts's per-stream state is set-once-wins), so threading it through the
+// heartbeat's backpressure object is sufficient for the whole stream's terminal line.
+describe("openTerminalSseStream correlationId threading (#2902 audit finding 0)", () => {
+  afterEach(() => {
+    resetServerLogger();
+  });
+
+  it("attaches the supplied correlationId to the sse.stream.closed terminal line", () => {
+    const sink = createBufferedServerLogSink();
+    setServerLogger(createServerLogger({ sink, level: "info" }));
+    const fake = makeFakeSseRes();
+    const manager = new FakeTerminalExecutionManager();
+
+    openTerminalSseStream(fake.res, manager, (value) => value, undefined, "corr-terminal-1");
+    fake.emitClose();
+
+    expect(sink.events).toHaveLength(1);
+    expect(sink.events[0]).toMatchObject({
+      op: "sse.stream.closed",
+      correlationId: "corr-terminal-1",
+    });
+  });
+
+  it("omits correlationId from the terminal line when none is supplied (unchanged behavior)", () => {
+    const sink = createBufferedServerLogSink();
+    setServerLogger(createServerLogger({ sink, level: "info" }));
+    const fake = makeFakeSseRes();
+    const manager = new FakeTerminalExecutionManager();
+
+    openTerminalSseStream(fake.res, manager, (value) => value);
+    fake.emitClose();
+
+    expect(sink.events).toHaveLength(1);
+    expect(sink.events[0]?.correlationId).toBeUndefined();
+  });
+});
+
+describe("handleTerminalEvents backpressure correlation (ADR-0173 D5 / g12)", () => {
+  it("threads the request's own correlation id into the backpressure diagnostic instead of minting one", () => {
+    const fake = makeFakeSseRes();
+    fake.writeReturns = false; // rejects the ready frame -> immediate backpressure kill.
+    const manager = new FakeTerminalExecutionManager();
+    const records: ServerDiagnosticRecord[] = [];
+    const diagnostics: ServerDiagnosticSink = {
+      record: (entry) => {
+        records.push(entry);
+      },
+    };
+    const ctx: RouteContext = {
+      req: { on: (): void => undefined } as unknown as RouteContext["req"],
+      res: fake.res,
+      params: {},
+      url: new URL("http://127.0.0.1/api/terminal/events"),
+      correlationId: "req-terminal-thread-01",
+    };
+    const routeDeps: UiHandlerDeps = { ...deps, terminal: manager, diagnostics };
+
+    handleTerminalEvents(ctx, routeDeps);
+
+    expect(records).toHaveLength(1);
+    expect(records[0]?.source).toBe("sse.terminal.backpressure");
+    expect(records[0]?.correlationId).toBe("req-terminal-thread-01");
   });
 });

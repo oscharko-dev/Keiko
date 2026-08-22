@@ -14,9 +14,17 @@
 // audit/evidence subsystems; this file owns everything that can be exercised without touching
 // argv, process.*, or another package's runtime.
 
-import { readFileSync, readdirSync, statSync } from "node:fs";
+import { closeSync, openSync, readFileSync, readSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
+import { isStoreFingerprint, type StoreFingerprint } from "@oscharko-dev/keiko-contracts";
 import type { AuditResult } from "./audit.js";
+
+// The one byte that ends a log line in this format (server-log.ts's own file sink writes ASCII
+// "\n" between JSON objects, never inside one — any literal 0x0A byte in the file is therefore a
+// real line boundary, never a raw newline embedded in a JSON string field, which is always escaped
+// as the two-character sequence "\\n" at write time). Reading a tail region and splitting on this
+// byte is exactly as safe as `readVerbatimLogLines`'s existing full-file `split("\n")`.
+const NEWLINE_BYTE = 0x0a;
 
 export const CURRENT_LOG_FILE_NAME = "server.log";
 
@@ -138,13 +146,26 @@ export function discoverServerLogFiles(logsDir: string): LogFileDiscovery {
 export interface LogFileSelection {
   readonly kept: readonly LogFileInfo[];
   readonly truncatedLogFiles: readonly string[];
+  // Set when the current (never-dropped) file alone still exceeds the residual budget once every
+  // droppable file has been dropped: the byte budget `readKeptFiles` should give that file's own
+  // tail reader instead of reading it whole. `undefined` when every kept file already fits
+  // `maxBytes` read in full — nothing needs a tail read.
+  readonly currentFileTailBudgetBytes: number | undefined;
+  // True when the surviving `kept` files, read in FULL, would still total more than `maxBytes` —
+  // i.e. exactly when `currentFileTailBudgetBytes` is set (by construction, only the single
+  // never-dropped file can be left once this is true). This is the SIZE-only, pre-tail signal;
+  // `readKeptFiles`'s own `budgetExceeded` is the authoritative, post-tail value the manifest uses,
+  // since a tail read can still bring the export back under budget.
+  readonly budgetExceeded: boolean;
 }
 
 // Drops the OLDEST files first when the combined size would exceed maxBytes, and never drops the
 // last (current) file: dropping the most recent evidence instead of the least recent, or dropping
-// silently, would defeat the whole point of naming what was truncated. maxBytes bounds the sum of
-// the copied log-file bytes only — the one manifest line is a small, roughly-constant addition on
-// top of that budget, not subtracted from it.
+// silently, would defeat the whole point of naming what was truncated. When the current file alone
+// still exceeds `maxBytes` after every droppable file is gone, it is not read in full either —
+// `currentFileTailBudgetBytes` tells `readKeptFiles` to keep only that file's tail instead. maxBytes
+// bounds the sum of the copied log-file bytes only — the one manifest line is a small,
+// roughly-constant addition on top of that budget, not subtracted from it.
 export function selectLogFilesWithinBudget(
   files: readonly LogFileInfo[],
   maxBytes: number,
@@ -158,7 +179,9 @@ export function selectLogFilesWithinBudget(
     truncatedLogFiles.push(dropped.name);
     total -= dropped.sizeBytes;
   }
-  return { kept, truncatedLogFiles };
+  const budgetExceeded = total > maxBytes;
+  const currentFileTailBudgetBytes = budgetExceeded && kept.length === 1 ? maxBytes : undefined;
+  return { kept, truncatedLogFiles, currentFileTailBudgetBytes, budgetExceeded };
 }
 
 // Splits raw file bytes into lines, dropping only the single empty artifact a trailing newline
@@ -187,10 +210,74 @@ function readVerbatimLogLinesOrSkip(
   }
 }
 
+// One current (never-dropped) file whose full content did not fit `--max-bytes`, so only its tail
+// (the newest bytes) was exported instead of the whole file. `droppedBytes` counts that file's own
+// leading bytes that were cut to make the tail fit — name only, never the file's absolute path
+// (AGENTS.md §7). Distinct from `truncatedLogFiles`: those files were dropped WHOLE for the size
+// budget; this one file was kept, just not in full.
+export interface CurrentFileTailTruncated {
+  readonly name: string;
+  readonly droppedBytes: number;
+}
+
+interface TailReadOutcome {
+  readonly lines: readonly string[];
+  readonly droppedBytes: number;
+}
+
+// Reads only the last `tailBudgetBytes` bytes of `path` via a bounded `openSync`/`readSync` pair —
+// never `readFileSync`'ing the whole (potentially oversized) file — then advances past the first
+// newline inside that region so the kept content always starts on a complete line, never a partial
+// JSON line. When the region contains no newline at all (the budget is smaller than a single
+// line, or the region's only newline is the file's own final byte), nothing can be kept safely and
+// `lines` is empty with `droppedBytes` equal to the whole file size.
+function readTailLines(path: string, sizeBytes: number, tailBudgetBytes: number): TailReadOutcome {
+  const regionLength = Math.max(0, Math.min(tailBudgetBytes, sizeBytes));
+  const regionStart = sizeBytes - regionLength;
+  const buffer = Buffer.alloc(regionLength);
+  const fd = openSync(path, "r");
+  try {
+    if (regionLength > 0) readSync(fd, buffer, 0, regionLength, regionStart);
+  } finally {
+    closeSync(fd);
+  }
+  const newlineIndex = buffer.indexOf(NEWLINE_BYTE);
+  if (newlineIndex === -1) return { lines: [], droppedBytes: sizeBytes };
+  const droppedBytes = regionStart + newlineIndex + 1;
+  const keptText = buffer.toString("utf8", newlineIndex + 1);
+  if (keptText.length === 0) return { lines: [], droppedBytes };
+  const lines = keptText.split("\n");
+  if (lines.at(-1) === "") lines.pop();
+  return { lines, droppedBytes };
+}
+
+// Same vanish-before-read race as `readVerbatimLogLinesOrSkip`, for the bounded tail reader.
+function readTailLinesOrSkip(
+  path: string,
+  sizeBytes: number,
+  tailBudgetBytes: number,
+): TailReadOutcome | { readonly skip: string } {
+  try {
+    return readTailLines(path, sizeBytes, tailBudgetBytes);
+  } catch (error) {
+    return { skip: describeErrorKind(error) };
+  }
+}
+
 export interface ReadKeptFilesResult {
   readonly contentLines: readonly string[];
   // Relative names only, from `LogFileInfo.name` — never the absolute `LogFileInfo.path`.
   readonly skippedLogFiles: readonly SkippedLogFile[];
+  // Set when the current file's tail was read instead of its full content — see
+  // `CurrentFileTailTruncated`. `undefined` when no tail read was attempted at all.
+  readonly currentFileTailTruncated: CurrentFileTailTruncated | undefined;
+  // True only when a tail read WAS attempted and could not keep even one complete line inside the
+  // budget (e.g. the budget is smaller than one line) — the one case a tail read cannot rescue.
+  // False whenever no tail read was attempted, and false when the tail read kept >=1 line: the
+  // export is within budget in both of those cases. This is the manifest's authoritative,
+  // post-tail `budgetExceeded` value — see `LogFileSelection.budgetExceeded` for the earlier,
+  // size-only signal this one supersedes.
+  readonly budgetExceeded: boolean;
 }
 
 // Reads every kept log file's bytes verbatim, in file order, tolerating the same
@@ -200,18 +287,51 @@ export interface ReadKeptFilesResult {
 // `contentLines.push(...fileLines)`: a spread of a large array as call arguments can throw
 // `RangeError: Maximum call stack size exceeded` (observed at ~262k elements on Node v24), and a
 // single oversized rotated log file must not abort the whole export.
-export function readKeptFiles(keptFiles: readonly LogFileInfo[]): ReadKeptFilesResult {
+//
+// `currentFileTailBudgetBytes` (from `LogFileSelection`) applies only to the LAST file in
+// `keptFiles` — by construction the one file `selectLogFilesWithinBudget` never drops — and only
+// that file is read with the bounded tail reader instead of `readVerbatimLogLines`'s whole-file
+// read; every other kept file is read in full exactly as before.
+export function readKeptFiles(
+  keptFiles: readonly LogFileInfo[],
+  currentFileTailBudgetBytes?: number,
+): ReadKeptFilesResult {
   const contentLines: string[] = [];
   const skippedLogFiles: SkippedLogFile[] = [];
-  for (const file of keptFiles) {
-    const lookup = readVerbatimLogLinesOrSkip(file.path);
-    if ("lines" in lookup) {
-      for (const line of lookup.lines) contentLines.push(line);
-    } else {
+  let currentFileTailTruncated: CurrentFileTailTruncated | undefined;
+  let budgetExceeded = false;
+  const lastIndex = keptFiles.length - 1;
+
+  for (const [index, file] of keptFiles.entries()) {
+    const tailBudget = index === lastIndex ? currentFileTailBudgetBytes : undefined;
+    const lookup = readKeptFileLines(file, tailBudget);
+    if ("skip" in lookup) {
       skippedLogFiles.push({ name: file.name, errorKind: lookup.skip });
+      continue;
+    }
+    for (const line of lookup.lines) contentLines.push(line);
+    if (lookup.tail !== undefined) {
+      currentFileTailTruncated = lookup.tail;
+      budgetExceeded = lookup.lines.length === 0;
     }
   }
-  return { contentLines, skippedLogFiles };
+  return { contentLines, skippedLogFiles, currentFileTailTruncated, budgetExceeded };
+}
+
+type KeptFileLookup =
+  | { readonly lines: readonly string[]; readonly tail: CurrentFileTailTruncated | undefined }
+  | { readonly skip: SkippedLogFile["errorKind"] };
+
+// One kept file's lines: the bounded tail when a tail budget applies (only ever the last, never-
+// dropped file), the whole file otherwise. `tail` is set exactly when the tail reader ran.
+function readKeptFileLines(file: LogFileInfo, tailBudgetBytes: number | undefined): KeptFileLookup {
+  if (tailBudgetBytes === undefined) {
+    const whole = readVerbatimLogLinesOrSkip(file.path);
+    return "skip" in whole ? whole : { lines: whole.lines, tail: undefined };
+  }
+  const tail = readTailLinesOrSkip(file.path, file.sizeBytes, tailBudgetBytes);
+  if ("skip" in tail) return tail;
+  return { lines: tail.lines, tail: { name: file.name, droppedBytes: tail.droppedBytes } };
 }
 
 // What the manifest is allowed to say about the audit: everything EXCEPT `stateDir`. `AuditResult`
@@ -224,6 +344,28 @@ export type RedactedAuditSummary = Omit<AuditResult, "stateDir">;
 
 function redactedAuditSummary(audit: AuditResult): RedactedAuditSummary {
   return { ok: audit.ok, classes: audit.classes };
+}
+
+// ─── Store fingerprints (Wave 4a, epic #3233 §6.2/§8) ──────────────────────────────────────────
+//
+// `support.ts` opens each of the three stores (ui, local-knowledge, memory-vault) through that
+// store package's genuinely read-only open (`openNodeUiDatabaseReadOnly` /
+// `openKnowledgeStoreReadOnly` / `openMemoryDatabaseReadOnly`, `node:sqlite`'s `readOnly: true`) —
+// never the mutating production open path, which migrates, recovers, re-encrypts, or quarantines as
+// an ordinary part of opening — against the resolved state-dir paths, and calls that store
+// package's own `computeStoreFingerprint(db)`. A store that does not exist yet (never used from
+// this state dir) or that cannot be opened (corrupt, or a vault key the operator has not supplied)
+// contributes no fingerprint — its name and a closed-vocabulary reason go to `storesUnavailable`
+// instead, never a path or the underlying error's message.
+// `invalid-fingerprint`: the collector handed the exporter an object that fails the contract's
+// `isStoreFingerprint` guard. The exporter never embeds such an object — and never drops it
+// silently either: a store that disappears from both manifest lists would read as "never used",
+// which is the one thing a support bundle must not say about a store that exists.
+export type StoreUnavailableReasonKind = "missing" | "open-failed" | "invalid-fingerprint";
+
+export interface StoreUnavailableEntry {
+  readonly store: StoreFingerprint["store"];
+  readonly reasonKind: StoreUnavailableReasonKind;
 }
 
 export interface SupportBundleManifest {
@@ -243,6 +385,16 @@ export interface SupportBundleManifest {
   readonly redactionAttested: true;
   readonly sourceLogFiles: readonly string[];
   readonly truncatedLogFiles: readonly string[];
+  // Set when the current (never-dropped) log file's full content did not fit `--max-bytes`, so
+  // only its tail (the newest bytes, advanced to the next line boundary so the first exported line
+  // is always complete) was exported instead of the whole file. `undefined` when every log file
+  // was exported in full. See `CurrentFileTailTruncated` and `ReadKeptFilesResult`.
+  readonly currentFileTailTruncated: CurrentFileTailTruncated | undefined;
+  // True only when even a tail read of the current file could not keep a single complete line
+  // inside `--max-bytes` (e.g. the budget is smaller than one line) — the one case the tail
+  // strategy above cannot rescue. False whenever the export (in full, or via a successful tail
+  // read) fits `--max-bytes`. See `ReadKeptFilesResult.budgetExceeded`.
+  readonly budgetExceeded: boolean;
   // Files a directory listing named but that had vanished (the sink's own rotation/retention
   // pruning) by the time this export tried to size or read them — named (never the files'
   // absolute paths) alongside the fs error kind that caused the skip. Distinct from
@@ -253,6 +405,12 @@ export interface SupportBundleManifest {
   readonly sectionsExcluded: readonly string[];
   readonly auditSummary: RedactedAuditSummary;
   readonly evidenceIndexCount: number;
+  // Wave 4a additions (epic #3233 §6.2/§8), additive over the Wave 1 shape above. A bundle
+  // produced by a pre-Wave-4a build simply lacks `storeFingerprints`; `storesUnavailable` is
+  // always present once this exporter runs, even when every store fingerprinted cleanly (empty
+  // array), so a reader never has to distinguish "not attempted" from "nothing to report".
+  readonly storeFingerprints?: readonly StoreFingerprint[];
+  readonly storesUnavailable: readonly StoreUnavailableEntry[];
 }
 
 export interface ManifestInput {
@@ -277,12 +435,48 @@ export interface ManifestInput {
   readonly stateDirSource: "default" | "env-override";
   readonly sourceLogFiles: readonly string[];
   readonly truncatedLogFiles: readonly string[];
+  readonly currentFileTailTruncated: CurrentFileTailTruncated | undefined;
+  readonly budgetExceeded: boolean;
   readonly skippedLogFiles: readonly SkippedLogFile[];
   readonly auditSummary: AuditResult;
   readonly evidenceIndexCount: number;
+  readonly storeFingerprints: readonly StoreFingerprint[];
+  readonly storesUnavailable: readonly StoreUnavailableEntry[];
+}
+
+const KNOWN_STORES: ReadonlySet<string> = new Set(["ui", "local-knowledge", "memory-vault"]);
+
+function knownStoreName(value: unknown): StoreFingerprint["store"] | undefined {
+  if (typeof value !== "object" || value === null) return undefined;
+  const store: unknown = Reflect.get(value, "store");
+  return typeof store === "string" && KNOWN_STORES.has(store)
+    ? (store as StoreFingerprint["store"])
+    : undefined;
+}
+
+// Every collected fingerprint either passes the contract guard and is embedded, or is named in
+// `storesUnavailable` with `invalid-fingerprint` — never silently dropped. An object that does not
+// even carry a known store name cannot be attributed and is the one case that is dropped, counted
+// by nothing: the collector's closed `store` union makes it unreachable from production code.
+function partitionManifestFingerprints(input: ManifestInput): {
+  readonly fingerprints: readonly StoreFingerprint[];
+  readonly unavailable: readonly StoreUnavailableEntry[];
+} {
+  const fingerprints: StoreFingerprint[] = [];
+  const unavailable: StoreUnavailableEntry[] = [...input.storesUnavailable];
+  for (const candidate of input.storeFingerprints) {
+    if (isStoreFingerprint(candidate)) {
+      fingerprints.push(candidate);
+      continue;
+    }
+    const store = knownStoreName(candidate);
+    if (store !== undefined) unavailable.push({ store, reasonKind: "invalid-fingerprint" });
+  }
+  return { fingerprints, unavailable };
 }
 
 export function buildSupportBundleManifest(input: ManifestInput): SupportBundleManifest {
+  const partitioned = partitionManifestFingerprints(input);
   return {
     $section: "manifest",
     schemaVersion: input.schemaVersion,
@@ -297,10 +491,18 @@ export function buildSupportBundleManifest(input: ManifestInput): SupportBundleM
     redactionAttested: true,
     sourceLogFiles: input.sourceLogFiles,
     truncatedLogFiles: input.truncatedLogFiles,
+    currentFileTailTruncated: input.currentFileTailTruncated,
+    budgetExceeded: input.budgetExceeded,
     skippedLogFiles: input.skippedLogFiles,
     sectionsExcluded: [],
     auditSummary: redactedAuditSummary(input.auditSummary),
     evidenceIndexCount: input.evidenceIndexCount,
+    // Defense-in-depth (never trust the producer unconditionally, matching this repo's redaction
+    // doctrine): re-validated against the same closed structural guard the manifest's own bundle
+    // reader would use, so a malformed fingerprint (a future producer bug, a version-skewed
+    // dependency) is silently dropped rather than embedded in a customer-facing artifact.
+    storeFingerprints: partitioned.fingerprints,
+    storesUnavailable: partitioned.unavailable,
   };
 }
 

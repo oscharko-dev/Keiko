@@ -9,6 +9,8 @@ import {
   type EmbeddingVectorMetric,
 } from "@oscharko-dev/keiko-contracts";
 
+import { emitKnowledgeLogEvent, type KnowledgeLogSink } from "../knowledge-log.js";
+
 import {
   USEARCH_RUNTIME_MANIFEST,
   type UsearchRuntimeApproval,
@@ -45,6 +47,10 @@ export interface UsearchAnnSearchRequest {
   readonly binaryPath?: string;
   readonly exactScanThreshold?: number;
   readonly maxIndexBytes?: number;
+  // Content-free activity log (ADR-0019 seam, `knowledge-log.ts`). Absent → nothing is written.
+  // Threaded down to `targetRuntime()` so a fresh native-addon resolution is visible in
+  // `server.log` beside the search that triggered it (Wave 4a, epic #3233 §8).
+  readonly logSink?: KnowledgeLogSink;
 }
 
 export interface UsearchAnnCandidate {
@@ -390,7 +396,31 @@ function cacheEntryStillMatches(
   );
 }
 
-function targetRuntime(binaryPath: string | undefined): TargetRuntimeResult {
+// Content-free: `targetKey` is a closed platform:arch label this package owns
+// (`usearchRuntimeTargetKey`), never the resolved filesystem path or the raw SHA-256 digest.
+// Emitted only on the COLD path below — a warm cache hit never re-logs, matching the reasoning
+// that already justifies not re-hashing on every request (KEIKO-0409).
+function logNativeRuntimeResolved(
+  logSink: KnowledgeLogSink | undefined,
+  targetKey: string,
+  result: TargetRuntimeResult,
+): void {
+  emitKnowledgeLogEvent(logSink, {
+    level: typeof result === "string" ? "warn" : "info",
+    category: "search",
+    op: "search.native-runtime-resolved",
+    extra: {
+      targetKey,
+      resolved: typeof result !== "string",
+      ...(typeof result === "string" ? { reason: result } : { version: result.expectedVersion }),
+    },
+  });
+}
+
+function targetRuntime(
+  binaryPath: string | undefined,
+  logSink?: KnowledgeLogSink,
+): TargetRuntimeResult {
   const targetKey = usearchRuntimeTargetKey(process.platform, process.arch);
   if (targetKey === undefined) return "unavailable";
   const path = resolvedRuntimePath(binaryPath, targetKey);
@@ -412,6 +442,7 @@ function targetRuntime(binaryPath: string | undefined): TargetRuntimeResult {
     return cached.result;
   }
   const result = verifyRuntimeAt(path);
+  logNativeRuntimeResolved(logSink, targetKey, result);
   // PR-review follow-up: only memoize SUCCESSFUL verifications. A transient failure
   // (EMFILE, EIO, temporarily-tightened permissions) that later heals must NOT be cached
   // against the same tuple — otherwise a recovered runtime is permanently invisible to every
@@ -678,7 +709,7 @@ async function buildSearchIndex(
       byteSize: estimate,
     });
   }
-  const runtime = targetRuntime(request.binaryPath);
+  const runtime = targetRuntime(request.binaryPath, request.logSink);
   if (runtime === "unavailable") return { ok: false, reason: "runtime-unavailable" };
   if (runtime === "invalid") return { ok: false, reason: "runtime-integrity-failed" };
   const worker = await startWorker(request.partition, vectors, runtime, HNSW_MAX_RESULTS);
@@ -727,7 +758,7 @@ async function resolvedIndex(
     // cost that motivated the finding is neutralised by memoization inside targetRuntime()
     // (keyed on the resolved (path, mtimeMs, size)), so a warm hit no longer re-reads the
     // multi-MB addon on the Node.js event loop.
-    const runtime = targetRuntime(request.binaryPath);
+    const runtime = targetRuntime(request.binaryPath, request.logSink);
     if (runtime === "unavailable") return { ok: false, reason: "runtime-unavailable" };
     if (runtime === "invalid") return { ok: false, reason: "runtime-integrity-failed" };
   }

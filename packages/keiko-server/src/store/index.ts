@@ -52,9 +52,12 @@ export {
 export { runMigrations, SCHEMA_VERSION, UiStoreSchemaVersionError } from "./schema.js";
 export {
   buildUiStoreOverDatabase,
+  computeStoreFingerprint,
   createInMemoryUiStore,
   createNodeUiStore,
   isProjectAvailable,
   openNodeUiDatabase,
+  openNodeUiDatabaseReadOnly,
   UI_DB_BUSY_TIMEOUT_MS,
+  UI_STORE_FINGERPRINT_TABLES,
 } from "./db.js";

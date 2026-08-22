@@ -32,10 +32,17 @@ import type { ConversationMemoryRuntimeContext } from "./memory-conversation-con
 import { composeDiscussionDirectiveBlock } from "./discussion-prompt.js";
 import { STREAMING, type RouteContext } from "./routes.js";
 import { buildRedactor, createRunRegistry, type UiHandlerDeps } from "./index.js";
+import {
+  createBufferedServerLogSink,
+  createServerLogger,
+  resetServerLogger,
+  setServerLogger,
+} from "./observability/index.js";
 import type { RuntimeGatewayConfig } from "./deps.js";
 import { createInMemoryUiStore, type UiStore } from "./store/index.js";
 import type { ModelPort } from "@oscharko-dev/keiko-harness";
 import type {
+  GatewayCallRequest,
   GatewayConfig,
   GatewayRequest,
   GatewayStreamChunk,
@@ -284,7 +291,7 @@ function deferred<T>(): {
 
 interface StreamingModel {
   readonly model: ModelPort;
-  readonly recorded: { request: GatewayRequest | undefined };
+  readonly recorded: { request: GatewayCallRequest | undefined };
   readonly calls: { count: number };
 }
 
@@ -292,13 +299,13 @@ interface StreamingModel {
 // terminal done chunk. `onFirstDelta` (used by the cancel test) runs after the first delta is yielded
 // so the test can abort the controller deterministically before the done chunk arrives.
 function streamingModel(content: string, onFirstDelta?: () => void): StreamingModel {
-  const recorded: { request: GatewayRequest | undefined } = { request: undefined };
+  const recorded: { request: GatewayCallRequest | undefined } = { request: undefined };
   const calls = { count: 0 };
   const model: ModelPort = {
     call(): Promise<NormalizedResponse> {
       return Promise.resolve(normalizedResponse(content));
     },
-    async *callStream(request: GatewayRequest): AsyncGenerator<GatewayStreamChunk> {
+    async *callStream(request: GatewayCallRequest): AsyncGenerator<GatewayStreamChunk> {
       calls.count += 1;
       recorded.request = request;
       yield { type: "delta", token: "hi" };
@@ -2842,6 +2849,29 @@ describe("desktop chat SSE streaming handler", () => {
     expect(JSON.stringify(record)).not.toContain("boom-unexpected-mid-stream");
   });
 
+  // ADR-0173 D5: the streaming call site (streamAndPersist) must stamp the request's correlation id
+  // into GatewayCallRequest.logContext, mirroring the buffered path, so a gateway retry line for a
+  // streamed turn joins the same trail as the rest of the request.
+  it("threads the request correlation id into the streaming model gateway call's logContext", async () => {
+    const chatId = seedChat();
+    const streaming = streamingModel("hi");
+    const res = captureRes();
+    const ctx: RouteContext = {
+      ...routeContext(
+        makeReq({ chatId, projectPath: projectDir, modelId: CHAT_MODEL, content: "hello" }),
+        res.res,
+      ),
+      correlationId: "cid-stream-logcontext-000001",
+    };
+
+    await handleSendDesktopChatStream(ctx, deps(streaming.model));
+
+    expect(streaming.calls.count).toBe(1);
+    expect(streaming.recorded.request?.logContext?.correlationId).toBe(
+      "cid-stream-logcontext-000001",
+    );
+  });
+
   it("persists the user message but NO assistant message when the stream is cancelled", async () => {
     const chatId = seedChat();
     // captureResWithEvents is required here so the res.on("close") listener registered by
@@ -3279,5 +3309,87 @@ describe("concurrent chat stream bulkhead", () => {
     );
     expect(accepted).toBe(STREAMING);
     expect(parseSse(second.writes).some((record) => record.event === "done")).toBe(true);
+  });
+});
+
+// Finding 0 (#2902 audit): the request-scoped correlationId never reached the terminal
+// `sse.stream.closed` line on the desktop chat stream. The heartbeat's own write is deferred to
+// its interval timer, so in practice the first model token — written via streamConversation's
+// writeOrDestroy call — is the write that actually attaches it first.
+describe("desktop chat SSE stream correlationId threading (#2902 audit finding 0)", () => {
+  afterEach(() => {
+    resetServerLogger();
+  });
+
+  it("attaches the supplied correlationId to the sse.stream.closed terminal line", async () => {
+    const sink = createBufferedServerLogSink();
+    setServerLogger(createServerLogger({ sink, level: "info" }));
+    const chatId = seedChat();
+    const captured = captureResWithEvents();
+    const { model } = streamingModel("answer");
+    const ctx: RouteContext = {
+      ...routeContext(
+        makeReq({ chatId, projectPath: projectDir, modelId: CHAT_MODEL, content: "hello" }),
+        captured.res,
+      ),
+      correlationId: "corr-chat-stream-1",
+    };
+
+    await handleSendDesktopChatStream(ctx, deps(model));
+    captured.emitClose();
+
+    const closed = sink.events.filter((event) => event.op === "sse.stream.closed");
+    expect(closed).toHaveLength(1);
+    expect(closed[0]?.correlationId).toBe("corr-chat-stream-1");
+  });
+
+  it("omits correlationId from the terminal line when none is supplied (unchanged behavior)", async () => {
+    const sink = createBufferedServerLogSink();
+    setServerLogger(createServerLogger({ sink, level: "info" }));
+    const chatId = seedChat();
+    const captured = captureResWithEvents();
+    const { model } = streamingModel("answer");
+
+    await handleSendDesktopChatStream(
+      routeContext(
+        makeReq({ chatId, projectPath: projectDir, modelId: CHAT_MODEL, content: "hello" }),
+        captured.res,
+      ),
+      deps(model),
+    );
+    captured.emitClose();
+
+    const closed = sink.events.filter((event) => event.op === "sse.stream.closed");
+    expect(closed).toHaveLength(1);
+    expect(closed[0]?.correlationId).toBeUndefined();
+  });
+
+  it("attaches the correlationId to sse.stream.closed even when the model throws before the first chunk", async () => {
+    const sink = createBufferedServerLogSink();
+    setServerLogger(createServerLogger({ sink, level: "info" }));
+    const chatId = seedChat();
+    const captured = captureResWithEvents();
+    const failing: ModelPort = {
+      call: () => Promise.resolve(normalizedResponse("unused")),
+      // eslint-disable-next-line require-yield -- fails before any chunk by design
+      async *callStream(): AsyncGenerator<GatewayStreamChunk> {
+        await Promise.resolve();
+        throw new Error("upstream exploded before first token");
+      },
+    };
+    const ctx: RouteContext = {
+      ...routeContext(
+        makeReq({ chatId, projectPath: projectDir, modelId: CHAT_MODEL, content: "hello" }),
+        captured.res,
+      ),
+      correlationId: "corr-chat-stream-early-failure",
+    };
+
+    await handleSendDesktopChatStream(ctx, deps(failing));
+    captured.emitClose();
+
+    const closed = sink.events.filter((event) => event.op === "sse.stream.closed");
+    expect(closed).toHaveLength(1);
+    expect(closed[0]?.correlationId).toBe("corr-chat-stream-early-failure");
   });
 });

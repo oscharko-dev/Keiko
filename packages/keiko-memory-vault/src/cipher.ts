@@ -96,6 +96,34 @@ function generateKeychainKey(account: string, options: MacosKeychainOptions): Bu
     : undefined;
 }
 
+// Result of the read-only keychain lookup below. A plain `Buffer | undefined` cannot distinguish
+// "no stored secret" from "a stored secret exists but failed to decode as a 32-byte key" — both
+// collapsed to `undefined` — so an operator inspecting a diagnostic export's absent `keySource`
+// could not tell "this tier was never used" from "this tier is broken" (coding guideline: "Errors
+// must surface with enough context to diagnose"). `malformed` carries exactly that distinction and
+// nothing else — no secret material, no keychain account/service name, just a boolean.
+export interface ReadOnlyKeychainLookup {
+  readonly key: Buffer | undefined;
+  readonly malformed: boolean;
+}
+
+// Read-only keychain lookup for the diagnostic export seam (Wave 4a, epic #3233 §6.2): a plain
+// find, never `generateKeychainKey`'s find-or-mint-and-store. A miss (including `unavailable`) is
+// reported as "this tier has nothing to offer", not "mint one" — the export path this feeds must
+// never write a new secret to the OS keychain any more than it may write a keyfile.
+export function keyFromKeychainReadOnly(
+  options: MacosKeychainOptions = {},
+): ReadOnlyKeychainLookup {
+  const account = userInfo().username;
+  const read = readMacosKeychainSecret(KEYCHAIN_SERVICE, account, options);
+  if (read.kind !== "found") return { key: undefined, malformed: false };
+  try {
+    return { key: decodeKeyOrThrow(read.secret, "Keychain key"), malformed: false };
+  } catch {
+    return { key: undefined, malformed: true };
+  }
+}
+
 function keyFromKeyfile(memoryDir: string): Buffer {
   ensureDirHardened(memoryDir);
   const keyfile = join(memoryDir, KEYFILE_NAME);
@@ -122,6 +150,40 @@ export function resolveVaultKey(
 
 // Test/CI seam: an explicit "no keychain" reader so callers can force the keyfile tier.
 export const NO_KEYCHAIN: KeychainAccess = () => undefined;
+
+export interface ResolvedVaultKeyReadOnly {
+  readonly key: Buffer | undefined;
+  readonly source: VaultKeySource | undefined;
+  // True iff the keychain tier held a stored secret that failed to decode as a 32-byte key —
+  // distinct from an absent `source`, which also covers "the keychain had nothing at all" and "the
+  // env tier resolved the key so the keychain was never consulted" (both `false`). This is a
+  // read-only classification: unlike `keyFromKeychain`'s mutating counterpart, this path never
+  // replaces or regenerates the malformed value (Finding: Thread 5).
+  readonly keychainMalformed: boolean;
+}
+
+// Test/CI seam for the read-only diagnostic path (Finding: Thread 5): distinct from `KeychainAccess`
+// because the read-only resolver reports a `malformed` classification the mutating tier does not.
+export type ReadOnlyKeychainAccess = () => ReadOnlyKeychainLookup;
+
+// Read-only counterpart to `resolveVaultKey` for the diagnostic export seam (Wave 4a, epic #3233
+// §6.2/Finding 0): tries env, then a plain keychain lookup, and — unlike `resolveVaultKey` — never
+// falls through to the keyfile tier, because that tier's only miss behaviour is minting and
+// persisting a brand-new key to the customer's state directory. No `memoryDir` parameter: the
+// whole point of this function is that it never touches the filesystem, so it must not carry a
+// parameter that invites a future keyfile branch.
+export function resolveVaultKeyReadOnly(
+  env: Readonly<Record<string, string | undefined>>,
+  keychainAccess: ReadOnlyKeychainAccess = keyFromKeychainReadOnly,
+): ResolvedVaultKeyReadOnly {
+  const fromEnv = keyFromEnv(env);
+  if (fromEnv !== undefined) return { key: fromEnv, source: "env", keychainMalformed: false };
+  const fromKeychain = keychainAccess();
+  if (fromKeychain.key !== undefined) {
+    return { key: fromKeychain.key, source: "keychain", keychainMalformed: false };
+  }
+  return { key: undefined, source: undefined, keychainMalformed: fromKeychain.malformed };
+}
 
 export function createMemoryContentCipher(key: Buffer): MemoryContentCipher {
   return {

@@ -342,7 +342,11 @@ against a `stateDir` whose history predates that fix.
 
 **Size bounds.** Capped at the sink's own retention window, further capped by an overall byte
 ceiling; files are dropped oldest-first when the ceiling is exceeded, and every drop is recorded in
-the manifest's `truncatedLogFiles` — never silent.
+the manifest's `truncatedLogFiles` — never silent. The current (never-dropped) file is not exempt
+from the ceiling: when it alone still exceeds the residual budget, only its tail is exported —
+the newest bytes, advanced to the next line boundary so the first exported line is always
+complete — read with a bounded reader rather than loading the whole oversized file, and recorded
+in the manifest's `currentFileTailTruncated` (name and dropped-byte count only, never a path).
 
 ### D9 — CLI surface: `keiko support export` and `keiko support analyze`
 
@@ -447,6 +451,61 @@ impossible to violate, because there is no longer more than one copy to diverge.
 relaxation of the pin, and no future change may cite this ADR to justify re-introducing a second
 copy without a single source of truth.
 
+### D13 — HTTP and SSE lifecycle detail, and a body-free browser diagnostic ingest (Wave 5, landed)
+
+Wave 5 closes the gap between "a request line exists" and "a request line is enough to reproduce the
+request":
+
+- **The `request` line carries the exact matched route, not a guess.** `routeTemplate` is the
+  `RouteDefinition.pattern` the dispatcher actually resolved (`/api/relationships/:id`), recorded by
+  a per-request context the dispatcher fills and the close-time writer reads — never derived from
+  the raw path after the fact, where a customer id shaped like a route word would misclassify.
+  Unmatched and static requests fall back to `redactRoutePath`. `queryParamNames` lists the query
+  parameter NAMES only (deduplicated, shape-checked against a bounded identifier pattern, sorted,
+  capped at 16; anything dropped is counted in `queryParamDroppedCount`), never a value.
+  `responseBytes` is what the response actually put on the socket — headers and body, compressed
+  as sent — measured as the socket's `bytesWritten` delta from request arrival to response close,
+  so JSON, gzip, static files and streams are counted the same way.
+  `aborted` is computed at `close` by the shared `requestAlreadyClosed` predicate, and a request the
+  client abandoned before any write logs `status: 0` instead of Node's default `200` — the
+  predicate was corrected in the same wave so a normally ended response (which Node also marks
+  `destroyed`) is not mistaken for an abort.
+- **Every SSE stream ends with exactly one terminal line.** `sse.stream.closed` (`frameCount`,
+  `bytesStreamed`, `durationMs`, `reason`) is emitted once per response on its `close` event by the
+  shared frame recorder every SSE writer already funnels through; `reason` is the closed
+  vocabulary `completed | client-disconnected | backpressure-killed | server-error`, and a write path
+  that destroys the socket because a write was rejected marks the stream first so a backpressure
+  kill is never reported as a client disconnect. `http.request.body.received` records the media
+  type and byte count of an accepted request body; the six ad hoc body readers that predated
+  `readBoundedRequestBody` were consolidated onto it so the line — and the 413 path — have one
+  owner.
+- **Diagnostic `operation` labels never carry a raw request path.** `diagnosticLabel` reduces a
+  path-bearing operation label through the same route reducer the activity log uses and degrades to
+  the fixed `server.operation` fallback when the path cannot be templated; the two git diff handlers
+  now pass their route literal instead of `ctx.url.pathname` at the source.
+- **The browser reports to the log, body-free.** `POST /api/diagnostics/client` accepts a
+  `ClientDiagnosticIngestRequest` (`keiko-contracts`) — a bounded message, `clientTs`, an optional
+  SSE `readyState`, a closed `kind`, and an optional `correlationId` that the server re-validates
+  with `isValidCorrelationId` and drops otherwise — and writes `client.diagnostic` with the message
+  redacted into `clientNote` (never under a `message` key) behind a process-wide token bucket
+  (reusing the editor's inline-completion limiter, 60 s window) that logs one
+  `client.diagnostic.rate-limited` line per window carrying the count of further drops it
+  suppressed, and answers `204` whether a report was kept or dropped.
+  The route's body reader returns a module-tagged outcome, not a duck-typed `RouteResult`, so a
+  client body shaped like `{status, body}` can never be reflected as the route's own response. On the
+  browser side the existing `reportClientDiagnostic` sink fans out to the console and to this route
+  (best-effort, throttled, never awaited); the four native `EventSource.onerror` sites report
+  `readyState` and a closed reason label, and every call site that catches an `ApiError` passes its
+  `correlationId` through a structured `meta` argument — the join that lets an agent pair a
+  browser-visible failure with the exact server request line it came from. Producers that
+  structurally have no id (native `EventSource`, message-only notices) say so in their doc comments
+  rather than inventing one.
+
+The agent-reading step this adds: **for a failed request**, read `routeTemplate`,
+`queryParamNames`, `responseBytes`, `aborted` and — for a stream — the `sse.stream.closed` line's
+`reason`, then look for a `client.diagnostic` line sharing the `correlationId` to learn what the
+browser saw. Everything on these lines is a count, a closed label, a template, or an id.
+
 ### D12 — Relation to prior decisions
 
 - **ADR-0010** (audit ledger and evidence manifests) established the precedent this contract
@@ -463,6 +522,32 @@ copy without a single source of truth.
   that two packages could otherwise structurally agree on without importing each other.
   `keiko-contracts` (the leaf) gains only pure wire/data shapes used by more than one package
   (the client-diagnostics ingest request, a store-fingerprint data shape) — never logic.
+- **Wave 4a** (epic #3233 §8) added two more ports of that same shape: `SecurityLogSink`
+  (`keiko-security/src/log-port.ts`, categories `security`/`diagnostic`) and `MemoryVaultLogSink`
+  (`keiko-memory-vault/src/vault-log.ts`, categories `memory`/`diagnostic`). `keiko-server`'s
+  `processServerLogSink()` supplies both at every call site: `keiko-memory-vault`'s `cipher.ts`
+  (`keyFromKeychain`, threaded through `createMemoryVault`'s `securityLogSink` option from
+  `memory-handlers.ts`'s `createBffMemoryVault`), `qualityIntelligence/figmaSnapshotOrchestration.ts`,
+  `conversation-attachment-store.ts`, and `editor/localHistory/localHistoryStore.ts` (the latter two
+  via `deps.ts`). Each site degrades to a silent no-op sink when unwired, so a missing composition
+  edge fails closed rather than throwing.
+- **Gap g18** (epic #3233 §8, later in Wave 4a): `resolveLocalVaultKey`
+  (`keiko-security/src/secret-vault.ts`), the shared env -> macOS Keychain -> keyfile key-tier
+  resolver every local vault composes, had no `sink` parameter at all, so none of its production
+  callers could ever report which tier answered or that the keychain tier fell back — independent
+  of the `SecurityLogSink` port existing. It now emits `security.vault.key-resolved`
+  (`extra.source: "env" | "keychain" | "keyfile"`) on every resolution, and its own keychain reader
+  (`createKeychainVaultKeyAccess`, a separate implementation from `macos-keychain.ts`'s
+  `readMacosKeychainSecret` — it spawns `security` through an injectable `KeychainCommandRunner`
+  rather than that function) reports `security.keychain.fallback` via the same
+  `emitKeychainFallback` helper `macos-keychain.ts` exports, so the two keychain surfaces cannot
+  report the fallback shape differently. `processServerLogSink()` reaches it through every caller:
+  `credentialVault.ts` and `gateway-setup.ts`'s `persistGatewayConfig`/`durableStoredGatewayConfig`
+  (the provider-credential vault), `atlassian/credentialVault.ts` via `atlassian/wiring.ts`,
+  `editor/hotExitStore.ts`, `localKnowledgeKeyProvider.ts`, `workspace-index-provider.ts` (all five
+  via `deps.ts`), and the `conversation-attachment-store.ts`/`editor/localHistory/localHistoryStore.ts`
+  sink options wired in the earlier bullet, which reached the sharded vault's shard reads but not
+  this key-resolution layer until now.
 - **ADR-0048** (evidence artifact confidentiality) classified evidence artifacts into confidentiality
   tiers and mandated write-time permission enforcement. The support bundle is a new artifact class in
   that same spirit: every log line it carries was already redacted before this contract existed
@@ -511,6 +596,9 @@ rather than left implicit across the Decision section:
    further evidence-gap classes (stack-frame unions, gateway replay scripts, and other later-wave
    evidence). A warning names exactly what evidence class is missing and why, so an agent's report to
    a human names the actual gap instead of guessing.
+8. **For a failed or slow request** (landed Wave 5), read the `request` line's `routeTemplate`,
+   `queryParamNames`, `responseBytes` and `aborted`, the stream's `sse.stream.closed` `reason`, and
+   any `client.diagnostic` line that shares the request's `correlationId` (D13).
 
 ## Consequences
 

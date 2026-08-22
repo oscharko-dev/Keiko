@@ -895,6 +895,26 @@ describe("memory handlers", () => {
     expect(vault.getEmbedding(memoryId("memory-edit-2"))).toBeUndefined();
   });
 
+  // #2902 w5-sse-counters: readJsonBody now consolidates onto the shared readBoundedRequestBody,
+  // so an oversized body must still yield the shared reader's own 413 rejection shape.
+  it("rejects an oversized body using the shared bounded-body reader", async () => {
+    const vault = makeVault();
+
+    const result = await handleCorrectMemory(
+      makeCtx(
+        "/api/memory/memory-oversize/correct",
+        { body: "x".repeat(70_000) },
+        { id: "memory-oversize" },
+      ),
+      makeDeps({ memoryVault: vault }),
+    );
+
+    expect(result.status).toBe(413);
+    expect(asJson(result)).toEqual({
+      error: { code: "PAYLOAD_TOO_LARGE", message: "Request body too large." },
+    });
+  });
+
   it("creates a correction proposal with a provenance-preserving supersession edge", async () => {
     const vault = makeVault();
     const evidenceStore = createInMemoryEvidenceStore();

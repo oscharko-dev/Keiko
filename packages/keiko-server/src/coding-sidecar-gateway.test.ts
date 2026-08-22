@@ -5,6 +5,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   ProviderError,
   resolveCodingSafeSidecarGatewayProfile,
+  type GatewayCallRequest,
   type GatewayConfig,
   type GatewayRequest,
   type GatewayStreamChunk,
@@ -13,6 +14,7 @@ import {
   type NormalizedResponse,
 } from "@oscharko-dev/keiko-model-gateway";
 import { buildRedactor, type UiHandlerDeps } from "./deps.js";
+import { UNKNOWN_CORRELATION_ID } from "./correlation.js";
 import type { ServerDiagnosticRecord } from "./diagnostics-log.js";
 import {
   createOpenCodeGatewayReadinessRegistry,
@@ -1629,6 +1631,51 @@ describe("coding-sidecar gateway", () => {
     expect(JSON.stringify(streamRecords)).not.toContain("upstream reset");
   });
 
+  // Regression: a mid-stream failure with no request correlation id in scope used to fall back to
+  // the bare literal `"unknown"` (7 characters), which fails `isValidCorrelationId`'s 8-character
+  // floor and was silently rewritten by `emitServerDiagnostic`'s sanitizer to the "hostile value"
+  // marker `"invalid-correlation-id"` — misreporting an honestly-absent id as a malformed one. The
+  // fallback is now the shape-valid sentinel `UNKNOWN_CORRELATION_ID`, which survives the sanitizer
+  // unchanged. This test fails against the old bare-`"unknown"` fallback.
+  it("falls back the stream-failure correlation id to the unknown-id sentinel, never the invalid-id marker", async () => {
+    const diagnostics = { record: vi.fn<(record: ServerDiagnosticRecord) => void>() };
+    const stream = async function* (): AsyncGenerator<GatewayStreamChunk> {
+      await Promise.resolve();
+      yield { type: "delta", token: "partial" };
+      throw Object.assign(new Error("upstream reset"), { code: "GATEWAY_TRANSPORT" });
+    };
+    const response = mockResponse({ captureBody: true });
+    const context: RouteContext = {
+      ...authenticatedContext({
+        model: "coding",
+        stream: true,
+        messages: [{ role: "user", content: "mid-stream failure, no correlation id" }],
+        tools: modelVisibleTools(),
+      }),
+      res: response.res,
+    };
+    const deps = {
+      ...runtimeGatewayDeps(
+        () => ({ ok: true, binding: { runId: "run-stream-failure-no-corr" } }),
+        undefined,
+        createOpenCodeGatewayReadinessRegistry(),
+        (): (() => AsyncIterable<GatewayStreamChunk>) => (): AsyncIterable<GatewayStreamChunk> =>
+          stream(),
+      ),
+      diagnostics,
+    } as UiHandlerDeps;
+
+    const result = await handleCodingSidecarGatewayChatCompletions(context, deps);
+
+    expect(result).toBe(STREAMING);
+    const streamRecords = diagnostics.record.mock.calls
+      .map(([entry]) => entry)
+      .filter((entry) => entry.source === "coding-sidecar-gateway.stream");
+    expect(streamRecords).toHaveLength(1);
+    expect(streamRecords[0]?.correlationId).toBe(UNKNOWN_CORRELATION_ID);
+    expect(streamRecords[0]?.correlationId).not.toBe("invalid-correlation-id");
+  });
+
   it("counts only each new UTF-8 stream delta instead of re-encoding accumulated output", async () => {
     const firstToken = "gateway-delta-one-α";
     const secondToken = "gateway-delta-two-β";
@@ -2174,6 +2221,39 @@ describe("coding-sidecar gateway", () => {
     expect(JSON.stringify(seenRequests[0])).not.toContain("apiKey");
     expect(JSON.stringify(seenRequests[0])).not.toContain("api-key");
     expect(JSON.stringify(result.body)).not.toContain("provider-secret");
+  });
+
+  // ADR-0173 D5: the buffered chat completion request built for the gateway must carry the HTTP
+  // request's correlation id in GatewayCallRequest.logContext, so a gateway retry/circuit-breaker
+  // line for this call joins the same trail as the sidecar request that triggered it.
+  it("threads the request correlation id into the Gateway double's GatewayCallRequest.logContext", async () => {
+    const seenRequests: GatewayCallRequest[] = [];
+    const deps = depsValue(
+      configValue(provider(), capability()),
+      (
+        _config: GatewayConfig,
+        modelId: string,
+      ): ((request: GatewayCallRequest) => Promise<NormalizedResponse>) => {
+        return (request: GatewayCallRequest): Promise<NormalizedResponse> => {
+          seenRequests.push(request);
+          return Promise.resolve(assistantResponse(modelId));
+        };
+      },
+    );
+    const context: RouteContext = {
+      ...routeContext({
+        model: "azure-coding-model",
+        messages: [{ role: "user", content: "continue" }],
+      }),
+      correlationId: "sidecar-corr-logcontext-0001",
+    };
+
+    const result = await handleCodingSidecarGatewayChatCompletions(context, deps);
+
+    assertRouteResult(result);
+    expect(result.status).toBe(200);
+    expect(seenRequests).toHaveLength(1);
+    expect(seenRequests[0]?.logContext?.correlationId).toBe("sidecar-corr-logcontext-0001");
   });
 
   it("returns BAD_REQUEST for malformed OpenAI-compatible tools", async () => {

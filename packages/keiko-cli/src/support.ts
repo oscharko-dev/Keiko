@@ -17,7 +17,10 @@ import type { EvidenceStore } from "@oscharko-dev/keiko-evidence";
 import type { EnvSource } from "@oscharko-dev/keiko-model-gateway";
 import { type AuditCliDeps, AuditLoadError, auditLocalStateResult } from "./audit.js";
 // GEN-PERF-CLI-001 — the evidence graph (and, below, the server module graph) load at dispatch,
-// and only for `export`; `analyze` never needs either.
+// and only for `export`; `analyze` never needs either. Store-fingerprint collection (ui,
+// local-knowledge, memory-vault) is owned by keiko-server (ADR-0019 direction rule 7: keiko-cli
+// is a leaf consumer and must not import keiko-local-knowledge directly) and reached through the
+// same lazily-loaded server module, via `server.collectStoreFingerprints`.
 import { loadEvidence, loadServer } from "./lazy-modules.js";
 import type { CliIo } from "./runner.js";
 import { resolveStateDir } from "./state-paths.js";
@@ -38,6 +41,7 @@ import {
   readKeptFiles,
   selectLogFilesWithinBudget,
   serializeBundleLines,
+  type CurrentFileTailTruncated,
   type SkippedLogFile,
 } from "./support-export.js";
 
@@ -46,11 +50,16 @@ const USAGE = `Usage:
   keiko support analyze FILE [--correlation-id ID] [--json]
 
 export writes a redacted .jsonl support bundle: a manifest line (local-state audit summary,
-evidence-index count, exactly which log files were copied) followed by every line of
-<state-dir>/logs/server*.log, copied byte-for-byte. Default --out is
-./keiko-support-<timestamp>.jsonl (colons replaced with '-'); default --max-bytes is 50MB —
-the oldest log files are dropped first when the cap would be exceeded, and always named in the
-manifest's truncatedLogFiles.
+evidence-index count, exactly which log files were copied, and a redacted schema/integrity
+fingerprint for each of the ui, local-knowledge, and memory-vault stores found under --state-dir)
+followed by every line of <state-dir>/logs/server*.log, copied byte-for-byte. A store that has
+never been used from this state dir, or that cannot be opened (corrupt, or a vault key the
+operator has not supplied), is named in the manifest's storesUnavailable instead of failing the
+export. Default --out is ./keiko-support-<timestamp>.jsonl (colons replaced with '-'); default
+--max-bytes is 50MB — the oldest log files are dropped first when the cap would be exceeded, and
+always named in the manifest's truncatedLogFiles. The current log file is never dropped; if it
+alone still exceeds the cap, only its tail is exported instead, named in the manifest's
+currentFileTailTruncated.
 
 analyze reads FILE (a support bundle or a raw server.log — auto-detected), groups its lines by
 correlationId, and prints one reconstructed timeline per id. Each process lifetime is ordered by
@@ -222,6 +231,8 @@ interface LogContent {
   readonly contentLines: readonly string[];
   readonly sourceLogFiles: readonly string[];
   readonly truncatedLogFiles: readonly string[];
+  readonly currentFileTailTruncated: CurrentFileTailTruncated | undefined;
+  readonly budgetExceeded: boolean;
   readonly skippedLogFiles: readonly SkippedLogFile[];
 }
 
@@ -230,11 +241,14 @@ interface LogContent {
 // (support-export.ts's `discoverServerLogFiles`, between `readdirSync` and `statSync`, and
 // `readKeptFiles`, between selection and the actual read): `sourceLogFiles` names only the files
 // that actually contributed content; `skippedLogFiles` names every file that vanished at either
-// boundary, by name only, never by its absolute path.
+// boundary, by name only, never by its absolute path. `budgetExceeded` and
+// `currentFileTailTruncated` come from `readKeptFiles`, not `selection`: only the read step knows
+// whether a tail read of the current file actually managed to keep a complete line, which is what
+// decides whether the size budget was, in the end, honoured.
 function collectLogContent(logsDir: string, maxBytes: number): LogContent {
   const discovery = discoverServerLogFiles(logsDir);
   const selection = selectLogFilesWithinBudget(discovery.files, maxBytes);
-  const read = readKeptFiles(selection.kept);
+  const read = readKeptFiles(selection.kept, selection.currentFileTailBudgetBytes);
   const readSkipped = new Set(read.skippedLogFiles.map((skipped) => skipped.name));
   const sourceLogFiles = selection.kept
     .map((file) => file.name)
@@ -243,6 +257,8 @@ function collectLogContent(logsDir: string, maxBytes: number): LogContent {
     contentLines: read.contentLines,
     sourceLogFiles,
     truncatedLogFiles: selection.truncatedLogFiles,
+    currentFileTailTruncated: read.currentFileTailTruncated,
+    budgetExceeded: read.budgetExceeded,
     skippedLogFiles: [...discovery.skippedLogFiles, ...read.skippedLogFiles],
   };
 }
@@ -262,6 +278,16 @@ function writeBundleOrExitCode(outPath: string, contents: string, io: CliIo): nu
   }
 }
 
+// Finding 1 (minor): store fingerprint collection runs a synchronous full-DB `quick_check` plus
+// a row count per table for each store, which can take a while against a large local-knowledge
+// index with nothing printed while it runs. This progress line keeps a slow run from looking
+// hung, without changing the collection's synchronous, untimed behavior itself.
+function reportStoreFingerprintProgress(io: CliIo): void {
+  io.err(
+    "keiko support export: computing store fingerprints (may take a while on a large local-knowledge index)...\n",
+  );
+}
+
 function reportAuditFailure(error: unknown, io: CliIo): number {
   if (error instanceof AuditLoadError) {
     io.err(
@@ -275,6 +301,54 @@ function reportAuditFailure(error: unknown, io: CliIo): number {
     return 1;
   }
   throw error;
+}
+
+type ManifestInput = Parameters<typeof buildSupportBundleManifest>[0];
+
+function processProvenance(
+  server: Awaited<ReturnType<typeof loadServer>>,
+  generatedAt: Date,
+  stateDirSource: ManifestInput["stateDirSource"],
+): Pick<
+  ManifestInput,
+  | "schemaVersion"
+  | "productVersion"
+  | "platform"
+  | "arch"
+  | "nodeVersion"
+  | "generatedAt"
+  | "installMode"
+  | "stateDirSource"
+> {
+  return {
+    schemaVersion: server.SERVER_LOG_SCHEMA_VERSION,
+    productVersion: KEIKO_PRODUCT_VERSION,
+    platform: process.platform,
+    arch: process.arch,
+    nodeVersion: process.version,
+    generatedAt: generatedAt.toISOString(),
+    installMode: resolveExportInstallMode(server),
+    stateDirSource,
+  };
+}
+
+function logContentManifestFields(
+  logContent: LogContent,
+): Pick<
+  ManifestInput,
+  | "sourceLogFiles"
+  | "truncatedLogFiles"
+  | "currentFileTailTruncated"
+  | "budgetExceeded"
+  | "skippedLogFiles"
+> {
+  return {
+    sourceLogFiles: logContent.sourceLogFiles,
+    truncatedLogFiles: logContent.truncatedLogFiles,
+    currentFileTailTruncated: logContent.currentFileTailTruncated,
+    budgetExceeded: logContent.budgetExceeded,
+    skippedLogFiles: logContent.skippedLogFiles,
+  };
 }
 
 async function runSupportExport(
@@ -304,21 +378,18 @@ async function runSupportExport(
     return reportAuditFailure(error, io);
   }
 
+  // Deferred until after the audit's own fail-closed check: opening three real stores is real
+  // I/O, wasted if the export is about to be refused anyway.
+  reportStoreFingerprintProgress(io);
+  const storeFingerprintCollection = await server.collectStoreFingerprints({ stateDir, env });
   const generatedAtDate = now();
   const manifest = buildSupportBundleManifest({
-    schemaVersion: server.SERVER_LOG_SCHEMA_VERSION,
-    productVersion: KEIKO_PRODUCT_VERSION,
-    platform: process.platform,
-    arch: process.arch,
-    nodeVersion: process.version,
-    generatedAt: generatedAtDate.toISOString(),
-    installMode: resolveExportInstallMode(server),
-    stateDirSource,
-    sourceLogFiles: logContent.sourceLogFiles,
-    truncatedLogFiles: logContent.truncatedLogFiles,
-    skippedLogFiles: logContent.skippedLogFiles,
+    ...processProvenance(server, generatedAtDate, stateDirSource),
+    ...logContentManifestFields(logContent),
     auditSummary,
     evidenceIndexCount,
+    storeFingerprints: storeFingerprintCollection.fingerprints,
+    storesUnavailable: storeFingerprintCollection.unavailable,
   });
 
   const lines = serializeBundleLines(manifest, logContent.contentLines);

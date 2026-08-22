@@ -101,6 +101,10 @@ function resolvePendingNegotiations(calls: readonly PendingNegotiation[]): void 
   for (const call of calls) call.resolve(ok());
 }
 
+// Default connection-scoped correlation id used by tests that don't care about its exact value —
+// distinct from any protocol code/kind string so an accidental field mix-up is easy to spot.
+const TEST_CORRELATION_ID = "conn-correlation-id-1";
+
 function connect(options?: {
   negotiate?: (
     offerSdp: string,
@@ -109,6 +113,7 @@ function connect(options?: {
   ) => Promise<RealtimeNegotiationOutcome>;
   redact?: (value: unknown) => unknown;
   session?: TestSession;
+  correlationId?: string;
 }): { socket: FakeSocket; session: TestSession; conn: VoiceControlConnection } {
   const socket = new FakeSocket();
   const session = options?.session ?? makeSession();
@@ -117,6 +122,7 @@ function connect(options?: {
     session,
     negotiate: options?.negotiate ?? okAsync,
     redact: options?.redact ?? ((value: unknown): unknown => value),
+    correlationId: options?.correlationId ?? TEST_CORRELATION_ID,
   });
   return { socket, session, conn };
 }
@@ -261,19 +267,48 @@ describe("VoiceControlConnection proxied-SDP signaling", () => {
     expect(negotiate.mock.calls[0]).toHaveLength(3);
   });
 
-  it("answers a negotiation failure with error negotiation-failed and an ended track", async () => {
+  it("answers a negotiation failure with error negotiation-failed, the connection's correlation id, and an ended track", async () => {
     const { socket, conn } = connect({
       negotiate: (): Promise<RealtimeNegotiationOutcome> =>
         Promise.resolve({ ok: false, kind: "transport" }),
+      correlationId: "negotiation-fail-corr-1",
     });
     conn.start(false);
     socket.sent.length = 0;
     await conn.receive(clientMessage("signal.sdp.offer", 1, { sdp: OFFER_SDP }));
     expect(kinds(socket)).toEqual(["media.track.state", "error", "media.track.state"]);
-    expect((socket.sent[1] as unknown as Record<string, unknown>).code).toBe("negotiation-failed");
+    const failure = socket.sent[1] as unknown as Record<string, unknown>;
+    expect(failure.code).toBe("negotiation-failed");
+    expect(failure.correlationId).toBe("negotiation-fail-corr-1");
   });
 
-  it("rejects a malformed SDP offer without calling the provider", async () => {
+  // RB-6 / ADR-0173 D5 regression pin: the correlation id is resolved ONCE per WebSocket connection
+  // (at handleUpgrade, injected here as the connection's constructor option), never re-minted per
+  // failure. Before the fix each negotiation failure on the same connection would have carried an
+  // unrelated fresh id; this proves a second failure on the same connection still matches the first.
+  it("reuses the same connection-scoped correlation id across repeated negotiation failures", async () => {
+    const { socket, conn } = connect({
+      negotiate: (): Promise<RealtimeNegotiationOutcome> =>
+        Promise.resolve({ ok: false, kind: "transport" }),
+      correlationId: "repeated-failure-corr-1",
+    });
+    conn.start(false);
+    socket.sent.length = 0;
+
+    await conn.receive(clientMessage("signal.sdp.offer", 1, { sdp: OFFER_SDP }));
+    const firstFailure = socket.sent[1] as unknown as Record<string, unknown>;
+    expect(firstFailure.code).toBe("negotiation-failed");
+    expect(firstFailure.correlationId).toBe("repeated-failure-corr-1");
+
+    socket.sent.length = 0;
+    await conn.receive(clientMessage("signal.sdp.offer", 2, { sdp: OFFER_SDP }));
+    const secondFailure = socket.sent[1] as unknown as Record<string, unknown>;
+    expect(secondFailure.code).toBe("negotiation-failed");
+    expect(secondFailure.correlationId).toBe("repeated-failure-corr-1");
+    expect(secondFailure.correlationId).toBe(firstFailure.correlationId);
+  });
+
+  it("rejects a malformed SDP offer without calling the provider or attaching a correlation id", async () => {
     const negotiate = vi.fn(okAsync);
     const { socket, conn } = connect({ negotiate });
     conn.start(false);
@@ -281,7 +316,9 @@ describe("VoiceControlConnection proxied-SDP signaling", () => {
     await conn.receive(clientMessage("signal.sdp.offer", 1, { sdp: "not-an-sdp" }));
     expect(negotiate).not.toHaveBeenCalled();
     expect(kinds(socket)).toEqual(["error"]);
-    expect((socket.sent[0] as unknown as Record<string, unknown>).code).toBe("invalid-message");
+    const failure = socket.sent[0] as unknown as Record<string, unknown>;
+    expect(failure.code).toBe("invalid-message");
+    expect(failure).not.toHaveProperty("correlationId");
   });
 
   it.each([

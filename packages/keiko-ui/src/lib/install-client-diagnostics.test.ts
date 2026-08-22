@@ -3,15 +3,34 @@
 // that it does — and that it does nothing else — lives where a reviewer looks for it.
 
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { writeToBrowserConsole } from "./install-client-diagnostics";
+import {
+  clientDiagnosticPostFailureCount,
+  clientDiagnosticPostThrottledCount,
+  fanOutClientDiagnostic,
+  resetClientDiagnosticPostStateForTests,
+  writeToBrowserConsole,
+} from "./install-client-diagnostics";
 import {
   reportClientDiagnostic,
   resetClientDiagnosticWriter,
   setClientDiagnosticWriter,
 } from "./client-diagnostics";
 
+function jsonResponse(status = 204): Response {
+  return new Response(null, { status });
+}
+
+function lastPostedBody(fetchMock: ReturnType<typeof vi.fn>): Record<string, unknown> {
+  const calls = fetchMock.mock.calls;
+  const lastCall = calls[calls.length - 1] as [string, RequestInit];
+  return JSON.parse(lastCall[1].body as string) as Record<string, unknown>;
+}
+
 afterEach(() => {
   resetClientDiagnosticWriter();
+  resetClientDiagnosticPostStateForTests();
+  vi.unstubAllGlobals();
+  vi.restoreAllMocks();
 });
 
 describe("writeToBrowserConsole", () => {
@@ -39,5 +58,179 @@ describe("writeToBrowserConsole", () => {
 
     expect(consoleWarn).toHaveBeenCalledWith("boot: gateway probe failed (TypeError)");
     consoleWarn.mockRestore();
+  });
+});
+
+// The second transport (Wave 5 of epic #3233, g6): a best-effort POST to
+// `POST /api/diagnostics/client`, fanned out alongside the console so neither call site regresses
+// when the other is added.
+describe("fanOutClientDiagnostic", () => {
+  it("writes to the console and posts the same message to the server", async () => {
+    const consoleWarn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse());
+    vi.stubGlobal("fetch", fetchMock);
+
+    fanOutClientDiagnostic("workspace-state: pull failed (network error)");
+
+    expect(consoleWarn).toHaveBeenCalledWith("workspace-state: pull failed (network error)");
+    expect(fetchMock).toHaveBeenCalledOnce();
+    const [path, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(path).toBe("/api/diagnostics/client");
+    expect(init.method).toBe("POST");
+    expect(init.keepalive).toBe(true);
+    const body = lastPostedBody(fetchMock);
+    expect(body["message"]).toBe("workspace-state: pull failed (network error)");
+    expect(typeof body["clientTs"]).toBe("string");
+    // A plain diagnostic never invented by this module carries no readyState/kind: only the four
+    // SSE call sites' exact convention (below) does.
+    expect(body).not.toHaveProperty("readyState");
+    expect(body).not.toHaveProperty("kind");
+    consoleWarn.mockRestore();
+  });
+
+  it("recovers readyState and kind from the shared SSE onerror message convention", () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse());
+    vi.stubGlobal("fetch", fetchMock);
+    vi.spyOn(console, "warn").mockImplementation(() => undefined);
+
+    fanOutClientDiagnostic(
+      "[keiko] shared-event-source sse stream error (kind=sse-error, readyState=0, reason=connecting)",
+    );
+
+    const body = lastPostedBody(fetchMock);
+    expect(body["readyState"]).toBe(0);
+    expect(body["kind"]).toBe("sse-error");
+  });
+
+  // Pins the exact convention each of the four SSE-consuming modules independently formats
+  // (sharedEventSource.ts, useSSE.ts, coding-workbench-event-retention.ts,
+  // useRelationshipActivityStream.ts) — the two ends are not import-linked (see this module's own
+  // header), so this is what catches the format drifting apart.
+  it.each([
+    [
+      "[keiko] shared-event-source sse stream error (kind=sse-error, readyState=2, reason=closed)",
+      2,
+    ],
+    ["[keiko] run-events sse stream error (kind=sse-error, readyState=0, reason=connecting)", 0],
+    [
+      "[keiko] coding-workbench-runtime sse stream error (kind=sse-error, readyState=1, reason=unknown)",
+      1,
+    ],
+    [
+      "[keiko] relationship-activity sse stream error (kind=sse-error, readyState=2, reason=closed)",
+      2,
+    ],
+  ])("parses %s", (message, expectedReadyState) => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse());
+    vi.stubGlobal("fetch", fetchMock);
+    vi.spyOn(console, "warn").mockImplementation(() => undefined);
+
+    fanOutClientDiagnostic(message);
+
+    const body = lastPostedBody(fetchMock);
+    expect(body["readyState"]).toBe(expectedReadyState);
+    expect(body["kind"]).toBe("sse-error");
+  });
+
+  it("counts a rejected POST, surfaces a bounded console notice, and does not throw back into the call site", async () => {
+    const consoleWarn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new TypeError("network error")));
+
+    expect(() => fanOutClientDiagnostic("boot: gateway probe failed")).not.toThrow();
+
+    await vi.waitFor(() => {
+      expect(clientDiagnosticPostFailureCount()).toBe(1);
+    });
+    // Once for the diagnostic itself (console-first fan-out), once for the delivery-failure
+    // notice — a developer watching devtools must be able to tell the server never received it.
+    expect(consoleWarn).toHaveBeenCalledTimes(2);
+    expect(consoleWarn).toHaveBeenCalledWith("boot: gateway probe failed");
+    const lastCall = consoleWarn.mock.calls[consoleWarn.mock.calls.length - 1] as [string];
+    expect(lastCall[0]).toMatch(/diagnostic delivery to the server failed/i);
+    // Bounded and redacted: the notice never repeats the original message content or any error
+    // detail, so it cannot itself become a place that leaks something the sink already redacted.
+    expect(lastCall[0]).not.toContain("network error");
+    expect(lastCall[0]).not.toContain("boot: gateway probe failed");
+  });
+
+  it("drops the 21st POST within a rolling minute and counts it, without dropping the console write", () => {
+    const consoleWarn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse());
+    vi.stubGlobal("fetch", fetchMock);
+
+    for (let index = 0; index < 21; index += 1) {
+      fanOutClientDiagnostic(`tick ${String(index)}`);
+    }
+
+    expect(fetchMock).toHaveBeenCalledTimes(20);
+    expect(consoleWarn).toHaveBeenCalledTimes(21);
+    expect(clientDiagnosticPostThrottledCount()).toBe(1);
+  });
+});
+
+// The fatal-flaw fix (Wave 5 follow-up, epic #3233): `correlationId` is what lets an agent join a
+// browser diagnostic to the specific failed server request it describes. These cases pin
+// `clientDiagnosticPostBody`'s shape validation (exercised only through the public
+// `fanOutClientDiagnostic` entry point, matching every other case in this file).
+describe("fanOutClientDiagnostic correlationId handling", () => {
+  it("puts a shape-valid correlationId on the wire body when the caller supplies one", () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse());
+    vi.stubGlobal("fetch", fetchMock);
+    vi.spyOn(console, "warn").mockImplementation(() => undefined);
+
+    fanOutClientDiagnostic("[keiko] app shell crashed: TypeError", {
+      correlationId: "original-request-id-01",
+    });
+
+    const body = lastPostedBody(fetchMock);
+    expect(body["correlationId"]).toBe("original-request-id-01");
+  });
+
+  it("omits correlationId from the wire body when the caller supplies none", () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse());
+    vi.stubGlobal("fetch", fetchMock);
+    vi.spyOn(console, "warn").mockImplementation(() => undefined);
+
+    fanOutClientDiagnostic("[keiko] app shell crashed: TypeError");
+
+    expect(lastPostedBody(fetchMock)).not.toHaveProperty("correlationId");
+  });
+
+  // Out-of-shape ids are dropped silently — never thrown, and never sent — rather than trusted
+  // as-is: this file is upstream of the server's OWN independent re-validation
+  // (client-diagnostics-routes.ts), so a malformed id here would just be redundant, not unsafe: this
+  // is defense in depth on the sending side, catching the mistake as close to its source as
+  // possible.
+  it.each([
+    ["too short (7 chars, one under the 8-char floor)", "a".repeat(7)],
+    ["too long (129 chars, one over the 128-char ceiling)", "a".repeat(129)],
+    ["contains a raw CRLF", "abcdef\r\nghij"],
+    ["contains a space", "not a valid id"],
+    ["contains a disallowed symbol", "req-id-!!!"],
+    ["is empty", ""],
+  ])("drops an out-of-shape correlationId: %s", (_label, correlationId) => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse());
+    vi.stubGlobal("fetch", fetchMock);
+    vi.spyOn(console, "warn").mockImplementation(() => undefined);
+
+    fanOutClientDiagnostic("[keiko] app shell crashed: TypeError", { correlationId });
+
+    expect(lastPostedBody(fetchMock)).not.toHaveProperty("correlationId");
+  });
+
+  it("still carries readyState/kind from the SSE convention alongside a valid correlationId", () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse());
+    vi.stubGlobal("fetch", fetchMock);
+    vi.spyOn(console, "warn").mockImplementation(() => undefined);
+
+    fanOutClientDiagnostic(
+      "[keiko] shared-event-source sse stream error (kind=sse-error, readyState=0, reason=connecting)",
+      { correlationId: "sse-req-0000001" },
+    );
+
+    const body = lastPostedBody(fetchMock);
+    expect(body["correlationId"]).toBe("sse-req-0000001");
+    expect(body["readyState"]).toBe(0);
+    expect(body["kind"]).toBe("sse-error");
   });
 });

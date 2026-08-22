@@ -9,6 +9,12 @@ import {
   useCodingWorkbenchResearch,
   type UseCodingWorkbenchResearchInput,
 } from "./useCodingWorkbenchResearch";
+import { ApiError } from "./api";
+import { resetClientDiagnosticWriter, setClientDiagnosticWriter } from "./client-diagnostics";
+import {
+  fanOutClientDiagnostic,
+  resetClientDiagnosticPostStateForTests,
+} from "./install-client-diagnostics";
 
 const getResearchMock = vi.hoisted(() => vi.fn());
 const pairingSettledMock = vi.hoisted(() => vi.fn());
@@ -124,6 +130,43 @@ describe("useCodingWorkbenchResearch", () => {
     // The whole state must clear: a retained ask would leave a stale destination on screen while
     // the panel claims the read failed.
     expect(result.current).toEqual({ status: "unavailable", ask: null, grant: null });
+  });
+
+  // Wave 5 follow-up (epic #3233) — the fatal-flaw fix: a real caught `ApiError` must carry its
+  // correlation id all the way onto the `POST /api/diagnostics/client` wire body, through
+  // `reportClientDiagnostic`'s structured second argument and `install-client-diagnostics.ts`'s
+  // transport, not just through a mock standing in for either. Installing the REAL transport (not a
+  // spy on `reportClientDiagnostic`) is what makes this end-to-end: it fails if the wiring line in
+  // `useCodingWorkbenchResearch.ts`'s catch block is ever removed, same as it would fail if
+  // `clientDiagnosticPostBody` stopped forwarding a valid id.
+  describe("correlationId wiring to the diagnostic ingest POST", () => {
+    afterEach(() => {
+      resetClientDiagnosticWriter();
+      resetClientDiagnosticPostStateForTests();
+      vi.unstubAllGlobals();
+    });
+
+    it("carries the failed request's correlationId onto the diagnostic ingest POST body", async () => {
+      const fetchMock = vi.fn().mockResolvedValue(new Response(null, { status: 204 }));
+      vi.stubGlobal("fetch", fetchMock);
+      setClientDiagnosticWriter(fanOutClientDiagnostic);
+      const failure = new ApiError("INTERNAL", "research channel unavailable", 502);
+      failure.correlationId = "req-research-000001";
+      getResearchMock.mockRejectedValue(failure);
+
+      const { result } = renderHook(() => useCodingWorkbenchResearch(RUN));
+
+      await waitFor(() => {
+        expect(result.current.status).toBe("unavailable");
+      });
+      await waitFor(() => {
+        expect(fetchMock).toHaveBeenCalled();
+      });
+      const [path, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+      expect(path).toBe("/api/diagnostics/client");
+      const body = JSON.parse(init.body as string) as Record<string, unknown>;
+      expect(body["correlationId"]).toBe("req-research-000001");
+    });
   });
 
   it("re-reads when a new ask or runtime revision replaces current research truth", async () => {

@@ -350,6 +350,21 @@ function endpointHostExtra(state: RunState): Readonly<Record<string, unknown>> {
   return host === undefined ? {} : { endpointHost: host };
 }
 
+// The run's chunker profile, resolved through the exact same two calls the pipeline itself
+// takes to decide chunk boundaries (`chunkingOptionsForState` + `resolveChunkingOptions`) — no
+// new computation, just surfacing values the run already derives. `IndexingOptions.chunkingOptions`
+// is operator-overridable, so without this an operator-supplied budget was invisible on the one
+// line that states the run's shape.
+function chunkerConfigExtra(state: RunState): Readonly<Record<string, unknown>> {
+  const resolved = resolveChunkingOptions(chunkingOptionsForState(state));
+  return {
+    minChunkTokens: resolved.minTokens,
+    maxChunkTokens: resolved.maxTokens,
+    overlapTokens: resolved.overlapTokens,
+    tokenizerKind: resolved.tokenizer.kind,
+  };
+}
+
 function documentLogContext(state: RunState, documentId: DocumentId): IndexingLogContext {
   return { ...state.logContext, documentIdDigest: logDigest(String(documentId)) };
 }
@@ -2951,6 +2966,7 @@ function emitJobStarted(state: RunState, sources: readonly KnowledgeSource[]): I
       force: state.options.force === true,
       resume: state.options.resume === true,
       contextualRetrieval: state.options.contextualRetrieval?.enabled === true,
+      ...chunkerConfigExtra(state),
       ...endpointHostExtra(state),
     },
   });

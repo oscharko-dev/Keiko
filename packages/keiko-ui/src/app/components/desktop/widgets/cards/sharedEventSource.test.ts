@@ -1,5 +1,9 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  resetClientDiagnosticWriter,
+  setClientDiagnosticWriter,
+} from "../../../../../lib/client-diagnostics";
+import {
   resetSharedEventSourcesForTests,
   sharedEventSourceGeneration,
   subscribeSharedEventSource,
@@ -13,6 +17,9 @@ class FakeEventSource {
   onopen: (() => void) | null = null;
   onerror: (() => void) | null = null;
   closed = false;
+  // Real EventSource is CLOSED (2) by the time `onerror` typically fires for a fatal failure; tests
+  // that care about a different observed state override this before triggering onerror.
+  readyState = 2;
 
   constructor(url: string) {
     this.url = url;
@@ -42,6 +49,7 @@ afterEach(() => {
   FakeEventSource.instances = [];
   FakeEventSource.immediateEventType = undefined;
   vi.unstubAllGlobals();
+  resetClientDiagnosticWriter();
 });
 
 describe("subscribeSharedEventSource", () => {
@@ -223,5 +231,31 @@ describe("subscribeSharedEventSource", () => {
     ]);
     unsubscribeBackground();
     unsubscribeEssential();
+  });
+
+  // Wave 5 of epic #3233 (g6): every EventSource.onerror handler reports a client diagnostic
+  // carrying the observed readyState and a closed reason label.
+  it("reports a client diagnostic with readyState and a reason label on stream error", () => {
+    vi.useFakeTimers();
+    vi.stubGlobal("EventSource", FakeEventSource);
+    const reported: string[] = [];
+    setClientDiagnosticWriter((message) => reported.push(message));
+
+    const unsubscribe = subscribeSharedEventSource(
+      "/api/editor/debug/events?workspaceId=workspace-1",
+      ["editor-debug:output"],
+      () => {},
+    );
+    const first = FakeEventSource.instances[0];
+    if (first === undefined) throw new Error("Expected stream.");
+    first.readyState = 0;
+
+    first.onerror?.();
+
+    expect(reported).toEqual([
+      "[keiko] shared-event-source sse stream error (kind=sse-error, readyState=0, reason=connecting)",
+    ]);
+    unsubscribe();
+    vi.useRealTimers();
   });
 });

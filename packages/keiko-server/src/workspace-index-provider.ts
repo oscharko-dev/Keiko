@@ -12,6 +12,7 @@ import {
   resolveLocalVaultKey,
   type LocalVaultKeychainAccess,
 } from "@oscharko-dev/keiko-security/secret-vault";
+import type { SecurityLogSink } from "@oscharko-dev/keiko-security";
 import {
   emitServerDiagnostic,
   serverDiagnosticFromError,
@@ -28,6 +29,9 @@ export interface ServerWorkspaceIndexProviderOptions {
   readonly env?: WorkspaceIndexEnv | undefined;
   readonly keychainAccess?: LocalVaultKeychainAccess | undefined;
   readonly diagnostics?: ServerDiagnosticSink | undefined;
+  // Optional activity-log seam (ADR-0019); the deps.ts composition root supplies
+  // `processServerLogSink()`.
+  readonly securityLogSink?: SecurityLogSink | undefined;
 }
 
 export type WorkspaceIndexProvider = (workspaceRoot: string) => WorkspaceIndex | undefined;
@@ -46,6 +50,11 @@ interface CachedWorkspaceIndex {
 interface WorkspaceIndexGeneration {
   active: boolean;
   reported: boolean;
+  // One id per generation (one workspace-root + key-fingerprint epoch), minted once when the
+  // generation is created — never re-minted per failure. A generation's load failure, save failure
+  // and eventual stale-generation report are all evidence about the SAME underlying epoch, so they
+  // must stay joinable under one id instead of each reporter drawing its own disconnected one.
+  readonly correlationId: string;
 }
 
 interface RuntimeWorkspaceIndexGeneration {
@@ -141,14 +150,19 @@ function workspaceIndexKeyFingerprint(key: Buffer): string {
   return createHash("sha256").update(key).digest("hex");
 }
 
+// `correlationId` is minted once by the caller, at the START of whichever operation this failure
+// belongs to (the provider-lookup attempt for `reportWorkspaceIndexFailure`, or the owning
+// generation for the other three) — never freshly here, so a cascade of related diagnostics about
+// the SAME attempt or the SAME generation stays joinable under one id (ADR-0173 D5 / g12).
 function reportWorkspaceIndexFailure(
   options: ServerWorkspaceIndexProviderOptions,
+  correlationId: string,
   error: unknown,
 ): void {
   emitServerDiagnostic(
     options.diagnostics,
     serverDiagnosticFromError({
-      correlationId: randomUUID(),
+      correlationId,
       operation: "workspace.index.open",
       source: "workspace-index-provider",
       error,
@@ -159,12 +173,13 @@ function reportWorkspaceIndexFailure(
 
 function reportWorkspaceIndexLoadFailure(
   options: ServerWorkspaceIndexProviderOptions,
+  generation: WorkspaceIndexGeneration,
   reason: WorkspaceIndexLoadFailureReason,
 ): void {
   emitServerDiagnostic(
     options.diagnostics,
     serverDiagnosticFromError({
-      correlationId: randomUUID(),
+      correlationId: generation.correlationId,
       operation: "workspace.index.load",
       source: "workspace-index-provider",
       error: new WorkspaceIndexSnapshotLoadError(reason),
@@ -173,11 +188,14 @@ function reportWorkspaceIndexLoadFailure(
   );
 }
 
-function reportWorkspaceIndexSaveFailure(options: ServerWorkspaceIndexProviderOptions): void {
+function reportWorkspaceIndexSaveFailure(
+  options: ServerWorkspaceIndexProviderOptions,
+  generation: WorkspaceIndexGeneration,
+): void {
   emitServerDiagnostic(
     options.diagnostics,
     serverDiagnosticFromError({
-      correlationId: randomUUID(),
+      correlationId: generation.correlationId,
       operation: "workspace.index.save",
       source: "workspace-index-provider",
       error: new WorkspaceIndexSnapshotSaveError(),
@@ -195,7 +213,7 @@ function reportStaleWorkspaceIndexGeneration(
   emitServerDiagnostic(
     options.diagnostics,
     serverDiagnosticFromError({
-      correlationId: randomUUID(),
+      correlationId: generation.correlationId,
       operation: "workspace.index.generation",
       source: "workspace-index-provider",
       error: new WorkspaceIndexKeyRotatedError(),
@@ -243,7 +261,11 @@ function activeRuntimeGeneration(
     return existing.generation;
   }
   if (existing !== undefined) existing.generation.active = false;
-  const generation: WorkspaceIndexGeneration = { active: true, reported: false };
+  const generation: WorkspaceIndexGeneration = {
+    active: true,
+    reported: false,
+    correlationId: randomUUID(),
+  };
   generations.set(runtimeDir, { generation, keyFingerprint });
   return generation;
 }
@@ -270,10 +292,10 @@ function createGenerationWorkspaceIndex(
       encryptionKey: key,
       isGenerationActive: (): boolean => generation.active,
       onLoadFailure: (failure): void => {
-        reportWorkspaceIndexLoadFailure(options, failure.reason);
+        reportWorkspaceIndexLoadFailure(options, generation, failure.reason);
       },
       onSaveFailure: (): void => {
-        reportWorkspaceIndexSaveFailure(options);
+        reportWorkspaceIndexSaveFailure(options, generation);
       },
     }),
   );
@@ -292,6 +314,10 @@ export function createServerWorkspaceIndexProvider(
     }
     const cacheKey = `${resolve(workspaceRoot)}\u0000${runtimeDir}`;
     const existing = indexes.get(cacheKey);
+    // Minted once, at the start of THIS lookup attempt, rather than inside the catch below: the
+    // attempt has exactly one failure point (key resolution or generation construction), so this
+    // is the id that failure — and only that failure — is reported under.
+    const correlationId = randomUUID();
     try {
       const { key } = resolveLocalVaultKey({
         env: options.env ?? process.env,
@@ -300,6 +326,7 @@ export function createServerWorkspaceIndexProvider(
         keychainService: WORKSPACE_INDEX_KEYCHAIN_SERVICE,
         keyfileName: WORKSPACE_INDEX_KEYFILE,
         ...(options.keychainAccess === undefined ? {} : { keychainAccess: options.keychainAccess }),
+        sink: options.securityLogSink,
       });
       const keyFingerprint = workspaceIndexKeyFingerprint(key);
       if (existing?.generation.active === true && existing.keyFingerprint === keyFingerprint) {
@@ -319,7 +346,7 @@ export function createServerWorkspaceIndexProvider(
     } catch (error) {
       if (existing !== undefined) existing.generation.active = false;
       retireRuntimeGeneration(generations, runtimeDir);
-      reportWorkspaceIndexFailure(options, error);
+      reportWorkspaceIndexFailure(options, correlationId, error);
       return undefined;
     }
   };

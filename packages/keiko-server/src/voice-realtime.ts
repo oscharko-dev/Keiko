@@ -47,6 +47,7 @@ import {
   type VoiceSessionCreateMessage,
 } from "@oscharko-dev/keiko-contracts";
 import { isAllowedHost } from "./host-check.js";
+import { resolveCorrelationId } from "./correlation.js";
 import { currentGatewayConfig, currentGatewayEgressConfig, type UiHandlerDeps } from "./deps.js";
 import { isVoiceDisabledByPolicy, isVoiceRealtimeCapable } from "./read-handlers.js";
 
@@ -294,6 +295,11 @@ export interface VoiceControlConnectionOptions {
   readonly session: SessionState;
   readonly negotiate: NegotiateFn;
   readonly redact: (value: unknown) => unknown;
+  // Resolved ONCE per WebSocket connection at handleUpgrade (RB-6 / ADR-0173 D5), never re-minted
+  // per failure — every diagnostic-bearing message this connection emits over its whole lifetime,
+  // including across a session resumed by a later reconnect's OWN new connection, is joinable to
+  // the id of the upgrade that produced it.
+  readonly correlationId: string;
 }
 
 // The protocol state machine for one attached control socket. Pure of WebSocket/IO concerns beyond
@@ -305,6 +311,7 @@ export class VoiceControlConnection {
   private readonly session: SessionState;
   private readonly negotiate: NegotiateFn;
   private readonly redact: (value: unknown) => unknown;
+  private readonly correlationId: string;
   private negotiation: AbortController | undefined;
   private closed = false;
 
@@ -313,6 +320,7 @@ export class VoiceControlConnection {
     this.session = options.session;
     this.negotiate = options.negotiate;
     this.redact = options.redact;
+    this.correlationId = options.correlationId;
   }
 
   // Re-delivers the buffered replayable events to a (re)attached client, then announces the resolved
@@ -429,7 +437,9 @@ export class VoiceControlConnection {
   }
 
   private failNegotiation(): void {
-    this.emitError("negotiation-failed");
+    // Same connection-scoped correlation id as every other negotiation attempt on this socket
+    // (RB-6 / ADR-0173 D5) — never re-minted per failure.
+    this.emitError("negotiation-failed", this.correlationId);
     this.emit({ kind: "media.track.state", track: "audio-in", state: "ended" });
   }
 
@@ -471,8 +481,8 @@ export class VoiceControlConnection {
     this.emit({ kind: "media.track.state", track: "audio-in", state: "live" });
   }
 
-  private emitError(code: VoiceProtocolErrorCode): void {
-    this.emit({ kind: "error", code });
+  private emitError(code: VoiceProtocolErrorCode, correlationId?: string): void {
+    this.emit({ kind: "error", code, ...(correlationId !== undefined ? { correlationId } : {}) });
   }
 
   // Builds a sequenced host→client control message from a payload, appends it to the bounded replay
@@ -700,8 +710,11 @@ class VoiceControlPlaneImpl implements VoiceControlPlane {
     ) {
       return false;
     }
+    // Resolved ONCE per upgrade (RB-6 / ADR-0173 D5): the id is scoped to this physical WebSocket
+    // connection, not the resumable logical session, so a later reconnect gets its own fresh id.
+    const correlationId = resolveCorrelationId(req);
     this.wss.handleUpgrade(req, sock, head, (ws) => {
-      this.onConnection(ws, deps);
+      this.onConnection(ws, deps, correlationId);
     });
     return true;
   }
@@ -852,7 +865,7 @@ class VoiceControlPlaneImpl implements VoiceControlPlane {
   }
 
   // eslint-disable-next-line max-lines-per-function -- connection lifecycle keeps heartbeat, frame limits, session start, and detach handling together.
-  private onConnection(ws: WsSocket, deps: UiHandlerDeps): void {
+  private onConnection(ws: WsSocket, deps: UiHandlerDeps, correlationId: string): void {
     this.attachHeartbeat(ws);
     const voice = resolveVoiceCapability(currentGatewayConfig(deps) ?? { providers: [] }, {
       policyDisabled: isVoiceDisabledByPolicy(deps.env),
@@ -896,6 +909,7 @@ class VoiceControlPlaneImpl implements VoiceControlPlane {
         session: resolved.state,
         negotiate,
         redact: deps.redactor,
+        correlationId,
       });
       connection.start(resolved.resume);
     });

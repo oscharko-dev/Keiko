@@ -1223,6 +1223,7 @@ export async function handleGitDiff(
             "GIT_DIFF_FAILED",
             "Git diff is unavailable for this folder.",
             "The bounded diff read was unavailable.",
+            GIT_DIFF_ROUTE_TEMPLATE,
           ),
         };
       }
@@ -1249,6 +1250,7 @@ export async function handleGitDiff(
       };
       return { status: 200, body: redacted(deps, body) };
     },
+    GIT_DIFF_ROUTE_TEMPLATE,
   );
 }
 
@@ -1285,6 +1287,19 @@ class GitRouteReadError extends Error {
   }
 }
 
+// The declared route templates `gitReadErrorBody` reports as `operation` — literal constants, not
+// derived from any live request, so the two routes sharing `runGitDiffHandler` can never be
+// confused for one another and neither can ever carry a request-supplied segment. Exported so
+// `routes.ts` registers these exact strings as the route `pattern` too: one declaration used by
+// both the route table and this diagnostic, so a renamed route pattern cannot leave this file
+// silently reporting the old path.
+export const GIT_DIFF_ROUTE_TEMPLATE = "/api/git/diff";
+export const GIT_STRUCTURED_DIFF_ROUTE_TEMPLATE = "/api/git/diff/structured";
+
+// `routeTemplate` is the DECLARED route pattern the caller is answering for (e.g.
+// `"/api/git/diff"`), never `ctx.url.pathname` — the live request path is not read here, so a
+// route registered without path parameters can never leak one, and a future dynamic segment on
+// one of these routes could not smuggle a customer-chosen value through this diagnostic either.
 function gitReadErrorBody(
   ctx: RouteContext,
   deps: UiHandlerDeps,
@@ -1292,13 +1307,14 @@ function gitReadErrorBody(
   code: string,
   message: string,
   summary: ServerDiagnosticSummary,
+  routeTemplate: string,
 ): ReturnType<typeof errorBody> {
   const correlationId = ctx.correlationId ?? randomUUID();
   emitServerDiagnostic(
     deps.diagnostics,
     serverDiagnosticFromError({
       correlationId,
-      operation: `GET ${ctx.url.pathname}`,
+      operation: `GET ${routeTemplate}`,
       source: "git-routes",
       error,
       summary,
@@ -1312,6 +1328,7 @@ async function runGitDiffHandler(
   ctx: RouteContext,
   deps: UiHandlerDeps,
   work: () => Promise<RouteResult>,
+  routeTemplate: string,
 ): Promise<RouteResult> {
   try {
     return await work();
@@ -1326,6 +1343,7 @@ async function runGitDiffHandler(
           "GIT_DIFF_FAILED",
           "Git diff is unavailable for this folder.",
           "The bounded diff read was unavailable.",
+          routeTemplate,
         ),
       };
     }
@@ -1340,6 +1358,7 @@ async function runGitDiffHandler(
             error.code,
             error.message,
             "The bounded diff read was unavailable.",
+            routeTemplate,
           )
         : errorBody(error.code, error.message),
     };
@@ -1374,30 +1393,39 @@ export async function handleGitStructuredDiff(
   deps: UiHandlerDeps,
   rawOptions?: GitRouteOptions,
 ): Promise<RouteResult> {
-  return runGitDiffHandler(ctx, deps, async () => {
-    const options = optionsWithDefaults(rawOptions ?? deps.gitRouteOptions);
-    const scope = parseStructuredScope(ctx.url.searchParams.get("scope"));
-    const path = validatePath(ctx.url.searchParams.get("path"));
-    const repo = await resolveRepository(ctx, deps, options);
-    if ("available" in repo) {
-      return { status: 200, body: redacted(deps, unavailableStructuredDiff(scope)) };
-    }
-    if (path !== undefined) await assertContainedGitPath(repo, path);
-    const result = await runDiff(
-      repo,
-      options,
-      scope === "staged",
-      path,
-      GIT_EDITOR_DIFF_MAX_BYTES,
-    );
-    if (result.exitCode !== 0) {
-      if (isUnavailableReadFailure(result)) {
+  return runGitDiffHandler(
+    ctx,
+    deps,
+    async () => {
+      const options = optionsWithDefaults(rawOptions ?? deps.gitRouteOptions);
+      const scope = parseStructuredScope(ctx.url.searchParams.get("scope"));
+      const path = validatePath(ctx.url.searchParams.get("path"));
+      const repo = await resolveRepository(ctx, deps, options);
+      if ("available" in repo) {
         return { status: 200, body: redacted(deps, unavailableStructuredDiff(scope)) };
       }
-      return correlatedGitError(ctx, "GIT_DIFF_FAILED", "Git diff is unavailable for this folder.");
-    }
-    return { status: 200, body: redacted(deps, structuredDiffBody(scope, repo, result)) };
-  });
+      if (path !== undefined) await assertContainedGitPath(repo, path);
+      const result = await runDiff(
+        repo,
+        options,
+        scope === "staged",
+        path,
+        GIT_EDITOR_DIFF_MAX_BYTES,
+      );
+      if (result.exitCode !== 0) {
+        if (isUnavailableReadFailure(result)) {
+          return { status: 200, body: redacted(deps, unavailableStructuredDiff(scope)) };
+        }
+        return correlatedGitError(
+          ctx,
+          "GIT_DIFF_FAILED",
+          "Git diff is unavailable for this folder.",
+        );
+      }
+      return { status: 200, body: redacted(deps, structuredDiffBody(scope, repo, result)) };
+    },
+    GIT_STRUCTURED_DIFF_ROUTE_TEMPLATE,
+  );
 }
 
 function parseBlameRequest(ctx: RouteContext): GitEditorBlameRequest {

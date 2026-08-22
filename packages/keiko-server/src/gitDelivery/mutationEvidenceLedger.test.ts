@@ -204,4 +204,70 @@ describe("recordGitDeliveryMutationEvidence — fail-closed + never throws", () 
       consoleError.mockRestore();
     }
   });
+
+  // ADR-0173 D5 / g12: a persistence-failure diagnostic used to mint a fresh, disconnected
+  // `randomUUID()` even though the record already carries the mutation's own deterministic
+  // `correlation.actionId` (`defaultGitDeliveryActionId`'s output shape, reused here). Fails
+  // before the fix — the diagnostic's correlationId would be an unrelated fresh UUID instead of
+  // the record's own action id.
+  it("threads the record's own action id as the diagnostic correlation id when it is validly shaped", () => {
+    const records: ServerDiagnosticRecord[] = [];
+    const diagnostics: ServerDiagnosticSink = {
+      record: (entry) => {
+        records.push(entry);
+      },
+    };
+    const actionId = "gde-action-deadbeefcafefeed01234567";
+    const throwingStore: EvidenceStore = {
+      put: (): string => {
+        throw Object.assign(new Error("ledger write failed"), { code: "ENOSPC" });
+      },
+      get: (): string | undefined => undefined,
+      list: (): readonly string[] => [],
+      delete: (): void => {
+        /* no-op */
+      },
+    };
+
+    recordGitDeliveryMutationEvidence(
+      { evidenceStore: throwingStore, redactString, diagnostics },
+      record({ correlation: { workflowRunIdHash: "a".repeat(64), actionId } }),
+    );
+
+    expect(records).toHaveLength(1);
+    expect(records[0]?.correlationId).toBe(actionId);
+  });
+
+  // The `record()` fixture's default `actionId` ("act-1") is only 5 characters — shorter than
+  // `isValidCorrelationId`'s 8-character floor — so this pins the fallback branch: an actionId
+  // that is not validly shaped as a correlation id must never reach the diagnostic verbatim, and
+  // the existing shape-only pin above (line ~200) still passes because the fallback is a fresh,
+  // validly-shaped UUID, not the unshaped actionId itself.
+  it("falls back to a fresh id when the record's action id is not validly shaped", () => {
+    const records: ServerDiagnosticRecord[] = [];
+    const diagnostics: ServerDiagnosticSink = {
+      record: (entry) => {
+        records.push(entry);
+      },
+    };
+    const throwingStore: EvidenceStore = {
+      put: (): string => {
+        throw new Error("ledger write failed");
+      },
+      get: (): string | undefined => undefined,
+      list: (): readonly string[] => [],
+      delete: (): void => {
+        /* no-op */
+      },
+    };
+
+    recordGitDeliveryMutationEvidence(
+      { evidenceStore: throwingStore, redactString, diagnostics },
+      record(),
+    );
+
+    expect(records).toHaveLength(1);
+    expect(records[0]?.correlationId).not.toBe("act-1");
+    expect(records[0]?.correlationId).toMatch(/^[A-Za-z0-9._-]{8,128}$/);
+  });
 });

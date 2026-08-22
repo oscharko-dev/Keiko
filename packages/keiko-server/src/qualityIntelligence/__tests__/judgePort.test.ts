@@ -4,6 +4,7 @@
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type {
+  GatewayCallRequest,
   GatewayRequest,
   ModelCapability,
   NormalizedResponse,
@@ -681,6 +682,24 @@ describe("createQiJudgePort.judge — gateway call", () => {
     expect(calls).toHaveLength(1);
     expect(verdict.verdict).toBe("strong");
     expect(verdict.gatewayCallCount).toBe(1);
+  });
+
+  // ADR-0173 D5: the caller's correlation id (a run id or an HTTP request id) must reach the
+  // judge's model.call so a gateway retry/circuit-breaker line for this judge stage joins the
+  // same trail as the run/request that triggered it.
+  it("stamps the supplied correlation id into the GatewayCallRequest.logContext", async () => {
+    const { deps, calls } = depsFor("chat-model-1", VALID_VERDICT_JSON);
+    const port = createQiJudgePort(deps, "chat-model-1", {
+      correlationId: "cid-qi-judge-000001",
+    });
+    await port.judge({
+      candidateText: "candidate text",
+      sourceContext: [{ atomId: "atom-1", text: "REQ-1" }],
+    });
+    expect(calls).toHaveLength(1);
+    expect((calls[0]?.request as GatewayCallRequest | undefined)?.logContext?.correlationId).toBe(
+      "cid-qi-judge-000001",
+    );
   });
 
   it("uses stream: false in the gateway request", async () => {

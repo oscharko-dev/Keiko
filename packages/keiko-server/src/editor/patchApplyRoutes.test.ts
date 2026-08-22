@@ -281,6 +281,36 @@ describe("POST /api/editor/patch-apply — explicit decision (AC1)", () => {
     expect(evidenceStore.list()).toHaveLength(2);
   });
 
+  it("threads the request's own correlation id into a local-history capture failure instead of minting one", async () => {
+    // ADR-0173 D5 / g12: ctx.correlationId is minted at request entry (server.ts) and is already
+    // in scope in handleEditorPatchApply — a local-history capture failure during the apply must
+    // reuse it via ApplyContext.correlationId, not a disconnected `local-history-<uuid>` mint.
+    const diagnostics: { correlationId?: unknown }[] = [];
+    const throwingHistoryStore = {
+      capture: (): never => {
+        throw new Error("history capture backend unavailable");
+      },
+    } as unknown as EditorLocalHistoryStore;
+    const ctx = { ...postContext(body()), correlationId: "req-patch-apply-thread-01" };
+
+    const result = await handleEditorPatchApply(
+      ctx,
+      {
+        ...deps({ env: ENABLED, editorLocalHistoryStore: throwingHistoryStore }),
+        diagnostics: {
+          record: (record: { correlationId?: unknown }): void => {
+            diagnostics.push(record);
+          },
+        },
+      },
+      options(),
+    );
+
+    expect(wire(result).status).toBe("applied");
+    expect(diagnostics).toHaveLength(1);
+    expect(diagnostics[0]?.correlationId).toBe("req-patch-apply-thread-01");
+  });
+
   it("records a reject decision and mutates nothing", async () => {
     const result = await handleEditorPatchApply(
       postContext(body({ decision: "reject" })),

@@ -1,9 +1,10 @@
 import { mkdtemp, writeFile, rm, mkdir } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { EventEmitter } from "node:events";
 import { request } from "node:http";
 import type { AddressInfo } from "node:net";
-import type { Server } from "node:http";
+import type { IncomingMessage, Server, ServerResponse } from "node:http";
 import { gunzipSync } from "node:zlib";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type {
@@ -18,11 +19,23 @@ import {
   createRunRegistry,
   type UiHandlerDeps,
 } from "./index.js";
-import { createUiServer, UI_HOST } from "./server.js";
+import {
+  computeQueryParamFields,
+  createUiServer,
+  logRequestOnClose,
+  MAX_QUERY_PARAM_NAMES,
+  UI_HOST,
+  type RequestLogContext,
+} from "./server.js";
 import type { ServerDiagnosticRecord } from "./diagnostics-log.js";
 import { buildCspHeader } from "./csp.js";
 import { resetWorkspaceStateForTests } from "./workspace-state-handlers.js";
 import type { EditorHotExitStore } from "./editor/hotExitStore.js";
+import {
+  createBufferedServerLogSink,
+  type BufferedServerLogSink,
+  type ServerLogEvent,
+} from "./observability/index.js";
 
 let server: Server;
 let staticRoot: string;
@@ -1097,4 +1110,339 @@ describe("top-level route-error catch (GEN-TEST-MISSING-008, RB-6)", () => {
   // internally rather than re-throwing past `dispatchApi`'s STREAMING short-circuit to the top-level
   // catch — so a mid-stream case cannot be constructed without adding a production test hook, which
   // is out of scope for this test-only change. The headers-not-sent branch above is fully covered.
+});
+
+// Wave 5 (w5-http-request-enrichment, #3233): `logRequestOnClose` reads the matched route pattern,
+// query-parameter NAMES, the response byte count, and an `aborted` flag from a per-request context
+// `dispatchApi`/`serveStatic`/`writeJson` populate as the request is actually resolved, instead of
+// the pre-existing lossy raw-path re-derivation and Node's un-set-by-default `res.statusCode`. Every
+// field asserted here did not exist on the pre-fix http-request line at all, so each assertion below
+// fails before this wave's `server.ts` change and passes after it.
+interface AwaitableActivityLogSink extends BufferedServerLogSink {
+  readonly nextEvent: () => Promise<ServerLogEvent>;
+}
+
+// Wraps `createBufferedServerLogSink` so a waiter can be notified the instant a write happens,
+// instead of polling `sink.events.length` on a `setTimeout` loop — the sink is the one place that
+// knows when an event actually arrived, so it is the one place that should resolve the wait.
+function createAwaitableActivityLogSink(): AwaitableActivityLogSink {
+  const buffered = createBufferedServerLogSink();
+  let onNextEvent: ((event: ServerLogEvent) => void) | undefined;
+  return {
+    ...buffered,
+    write(event: ServerLogEvent): void {
+      buffered.write(event);
+      const notify = onNextEvent;
+      onNextEvent = undefined;
+      notify?.(event);
+    },
+    nextEvent(): Promise<ServerLogEvent> {
+      const [existing] = buffered.events;
+      if (existing !== undefined) return Promise.resolve(existing);
+      return new Promise((resolve) => {
+        onNextEvent = resolve;
+      });
+    },
+  };
+}
+
+describe("activity log: http-request line enrichment (Wave 5, w5-http-request-enrichment)", () => {
+  // The 2000ms deadline is a safety net for a genuinely missing event, never the mechanism that
+  // detects arrival: the happy path always settles through `sink.nextEvent()` below.
+  async function waitForActivityLogEvent(
+    sink: AwaitableActivityLogSink,
+    timeoutMs = 2000,
+  ): Promise<ServerLogEvent> {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      return await Promise.race([
+        sink.nextEvent(),
+        new Promise<never>((_resolve, reject) => {
+          timer = setTimeout(() => {
+            reject(new Error("timed out waiting for an activity log event"));
+          }, timeoutMs);
+        }),
+      ]);
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
+  async function startWithActivityLog(): Promise<AwaitableActivityLogSink> {
+    const sink = createAwaitableActivityLogSink();
+    await closeServer();
+    server = createUiServer({ staticRoot, csp: buildCspHeader([]), port, activityLog: sink });
+    await new Promise<void>((res) => server.listen(port, UI_HOST, res));
+    return sink;
+  }
+
+  it("uses the exact matched RouteDefinition pattern, not a raw-path guess that can misfire on a customer id shaped like a route word", async () => {
+    const sink = await startWithActivityLog();
+    // "explain" is itself a literal segment of a DIFFERENT route (/api/relationships/:id/explain),
+    // so a relationship id that happens to be literally "explain" is exactly the case the old
+    // raw-path auto-template heuristic could misclassify as that literal segment instead of a
+    // customer-supplied :id. The real match is unambiguous: only /api/relationships/:id (3
+    // segments) matches this 3-segment path at all.
+    await fetchRaw("/api/relationships/explain");
+    const event = await waitForActivityLogEvent(sink);
+
+    expect(event.category).toBe("http");
+    expect(event.op).toBe("request");
+    expect(event.extra?.routeTemplate).toBe("/api/relationships/:id");
+  });
+
+  it("falls back to the route-template reduction of the raw path for an unmatched request", async () => {
+    const sink = await startWithActivityLog();
+    await fetchRaw("/api/this-route-does-not-exist");
+    const event = await waitForActivityLogEvent(sink);
+
+    expect(event.status).toBe(404);
+    expect(event.extra?.routeTemplate).toBe("/api/{id}");
+  });
+
+  it("collects distinct query-parameter NAMES only, sorted, and never a value", async () => {
+    const sink = await startWithActivityLog();
+    await fetchRaw("/api/health?foo=1&bar=2");
+    const event = await waitForActivityLogEvent(sink);
+
+    expect(event.extra?.queryParamNames).toEqual(["bar", "foo"]);
+    const serialized = JSON.stringify(event.extra);
+    expect(serialized).not.toContain("=1");
+    expect(serialized).not.toContain("=2");
+  });
+
+  // #2902 audit: the kept names used to be sorted with `localeCompare`, which orders by ICU
+  // collation rules (case-folded, locale-dependent) rather than by code point. "Banana" sorts
+  // AFTER "apple" under `localeCompare` (locale-aware) but BEFORE it under a plain code-point
+  // compare, since the uppercase 'B' (66) is less than the lowercase 'a' (97). A field compared
+  // or deduplicated across hosts needs one order regardless of host ICU data/default locale.
+  it("sorts kept query-parameter names by code point, not by locale collation", async () => {
+    const sink = await startWithActivityLog();
+    await fetchRaw("/api/health?Banana=1&apple=2");
+    const event = await waitForActivityLogEvent(sink);
+
+    expect(event.extra?.queryParamNames).toEqual(["Banana", "apple"]);
+  });
+
+  it("drops an over-length query-parameter name and counts it instead of logging it", async () => {
+    const sink = await startWithActivityLog();
+    const longName = "n".repeat(200);
+    await fetchRaw(`/api/health?${longName}=1&normal=2`);
+    const event = await waitForActivityLogEvent(sink);
+
+    expect(event.extra?.queryParamNames).toEqual(["normal"]);
+    expect(event.extra?.queryParamDroppedCount).toBe(1);
+    expect(JSON.stringify(event.extra)).not.toContain(longName);
+  });
+
+  it("records the bytes the response put on the socket — at least its body", async () => {
+    const sink = await startWithActivityLog();
+    const res = await fetchRaw("/api/health");
+    const bodyBytes = Buffer.byteLength(res.text, "utf8");
+    const event = await waitForActivityLogEvent(sink);
+
+    // Headers ride along, so the wire count is never below the body the client received.
+    expect(event.extra?.responseBytes).toBeGreaterThanOrEqual(bodyBytes);
+  });
+
+  it("counts a static asset's bytes too, not only writeJson's (#3247 review)", async () => {
+    // Before: only `writeJson` tallied `responseBytes`, so every static asset logged 0.
+    const sink = await startWithActivityLog();
+    const res = await fetchRaw("/_next/app.js");
+    const bodyBytes = Buffer.byteLength(res.text, "utf8");
+    const event = await waitForActivityLogEvent(sink);
+
+    expect(bodyBytes).toBeGreaterThan(0);
+    expect(event.extra?.responseBytes).toBeGreaterThanOrEqual(bodyBytes);
+  });
+
+  it("reports aborted:false and the real status for a normally completed request", async () => {
+    const sink = await startWithActivityLog();
+    await fetchRaw("/api/health");
+    const event = await waitForActivityLogEvent(sink);
+
+    expect(event.extra?.aborted).toBe(false);
+    expect(event.status).toBe(200);
+  });
+
+  // #2902 audit finding 1: computeQueryParamFields used to sort the FULL kept array before
+  // slicing it to the MAX_QUERY_PARAM_NAMES cap, so a client sending far more than the cap's worth
+  // of conforming query-param names paid an unbounded, locale-aware O(n log n) sort. The fix bounds
+  // the collection loop at the cap BEFORE sorting.
+  //
+  // Pinned by calling the exported production function directly with a constructed URL — no real
+  // HTTP request, no server, no spy on the shared `Array.prototype.sort` (which would leave a
+  // global built-in monkey-patched for the duration of the test). Insertion order is descending
+  // (p19, p18, …, p00): bounding the first MAX_QUERY_PARAM_NAMES encountered THEN sorting yields
+  // the highest-numbered names in ascending order; sorting the full set first and slicing would
+  // instead yield the lowest-numbered ones. The two outcomes are disjoint, so the returned content
+  // is direct, self-contained proof of which happened.
+  it("caps the collected set before sorting, regardless of how many the client sends", () => {
+    const total = MAX_QUERY_PARAM_NAMES + 4;
+    const names = Array.from(
+      { length: total },
+      (_, i) => `p${String(total - 1 - i).padStart(2, "0")}`,
+    );
+    const url = new URL(`http://${UI_HOST}/api/health?${names.map((n) => `${n}=1`).join("&")}`);
+    const context: RequestLogContext = {};
+
+    computeQueryParamFields(url, context);
+
+    const expectedKept = Array.from(
+      { length: MAX_QUERY_PARAM_NAMES },
+      (_, i) => `p${String(i + 4).padStart(2, "0")}`,
+    );
+    expect(context.queryParamNames).toEqual(expectedKept);
+    expect(context.queryParamDroppedCount).toBe(4);
+  });
+
+  // Companion end-to-end check: the same bound-before-sort behaviour observed through the real
+  // dispatch path (route match, host check, `writeJson`), not just the unit-level function call
+  // above — proves the wiring between `handle()` and `computeQueryParamFields` is intact.
+  it("surfaces the capped, sorted names on the real activity-log line for an oversized query string", async () => {
+    const sink = await startWithActivityLog();
+    const total = MAX_QUERY_PARAM_NAMES + 4;
+    const names = Array.from(
+      { length: total },
+      (_, i) => `p${String(total - 1 - i).padStart(2, "0")}`,
+    );
+    const query = names.map((n) => `${n}=1`).join("&");
+
+    await fetchRaw(`/api/health?${query}`);
+    const event = await waitForActivityLogEvent(sink);
+
+    expect(event.extra?.queryParamNames).toHaveLength(MAX_QUERY_PARAM_NAMES);
+    expect(event.extra?.queryParamDroppedCount).toBe(4);
+  });
+
+  // #2902 audit finding 1: computeQueryParamFields was called unconditionally before the
+  // trust-boundary host check, so a request that fails isAllowedHost still paid the full
+  // query-string scan even though its result was discarded. It now runs only after the host
+  // check passes, so a FORBIDDEN_HOST request's own activity-log line carries no query names.
+  it("carries no query-param names on a request that fails the host check", async () => {
+    const sink = await startWithActivityLog();
+    const res = await rawRequestWithHost("/api/health?foo=1&bar=2", "evil.example.com");
+    expect(res.status).toBe(403);
+    const event = await waitForActivityLogEvent(sink);
+
+    expect(event.extra?.queryParamNames).toEqual([]);
+    expect(event.extra?.queryParamDroppedCount).toBeUndefined();
+  });
+});
+
+// Direct unit coverage of `logRequestOnClose` itself, using the same fake req/res EventEmitter
+// doubles `request-cancellation.test.ts` already uses for `requestAlreadyClosed` — deterministic,
+// and independent of real socket teardown timing (which real-HTTP `close` timing cannot reliably
+// force into the "aborted before any write" shape below).
+describe("logRequestOnClose", () => {
+  interface RequestDouble extends EventEmitter {
+    complete: boolean;
+    destroyed: boolean;
+    url?: string;
+    method?: string;
+    socket: { bytesWritten: number };
+  }
+
+  interface ResponseDouble extends EventEmitter {
+    closed: boolean;
+    destroyed: boolean;
+    writableEnded: boolean;
+    headersSent: boolean;
+    statusCode: number;
+  }
+
+  function doubles(): { readonly req: RequestDouble; readonly res: ResponseDouble } {
+    const req = Object.assign(new EventEmitter(), {
+      complete: false,
+      destroyed: false,
+      url: "/api/health",
+      method: "GET",
+      socket: { bytesWritten: 0 },
+    });
+    const res = Object.assign(new EventEmitter(), {
+      closed: false,
+      destroyed: false,
+      writableEnded: false,
+      headersSent: false,
+      statusCode: 200,
+    });
+    return { req, res };
+  }
+
+  it("logs aborted:true and status 0 when the connection is gone and nothing was ever written", () => {
+    const { req, res } = doubles();
+    const sink = createBufferedServerLogSink();
+    const context: RequestLogContext = {};
+    logRequestOnClose(
+      req as unknown as IncomingMessage,
+      res as unknown as ServerResponse,
+      "corr-aborted",
+      sink,
+      context,
+    );
+
+    // The client vanished mid-handler: the response socket is destroyed, headers were never sent,
+    // so `res.statusCode` is still Node's construction-time default of 200.
+    res.destroyed = true;
+    res.emit("close");
+
+    expect(sink.events).toHaveLength(1);
+    const [event] = sink.events;
+    expect(event?.extra?.aborted).toBe(true);
+    expect(event?.status).toBe(0);
+  });
+
+  it("does not report status 0 once headers were actually sent, even if the connection later drops", () => {
+    const { req, res } = doubles();
+    const sink = createBufferedServerLogSink();
+    const context: RequestLogContext = {};
+    logRequestOnClose(
+      req as unknown as IncomingMessage,
+      res as unknown as ServerResponse,
+      "corr-partial",
+      sink,
+      context,
+    );
+
+    res.headersSent = true;
+    res.statusCode = 200;
+    res.destroyed = true;
+    res.emit("close");
+
+    const [event] = sink.events;
+    expect(event?.extra?.aborted).toBe(true);
+    expect(event?.status).toBe(200);
+  });
+
+  it("surfaces routeTemplate, queryParamNames, queryParamDroppedCount and responseBytes from the request context", () => {
+    const { req, res } = doubles();
+    const sink = createBufferedServerLogSink();
+    const context: RequestLogContext = {
+      routeTemplate: "/api/memory/:id",
+      queryParamNames: ["bar", "foo"],
+      queryParamDroppedCount: 2,
+    };
+    logRequestOnClose(
+      req as unknown as IncomingMessage,
+      res as unknown as ServerResponse,
+      "corr-context",
+      sink,
+      context,
+    );
+
+    // The socket carried 42 more bytes between request arrival and response close.
+    req.socket.bytesWritten += 42;
+    res.headersSent = true;
+    res.writableEnded = true;
+    res.emit("close");
+
+    const [event] = sink.events;
+    expect(event?.extra).toMatchObject({
+      routeTemplate: "/api/memory/:id",
+      queryParamNames: ["bar", "foo"],
+      queryParamDroppedCount: 2,
+      responseBytes: 42,
+      aborted: false,
+    });
+  });
 });

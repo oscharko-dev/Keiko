@@ -6,6 +6,7 @@
  */
 
 import { useEffect, useRef, useState } from "react";
+import { reportClientDiagnostic, sseStreamErrorDiagnostic } from "./client-diagnostics";
 import { createSameOriginApiEventSource } from "./safe-event-source";
 import { secureRandomInt } from "./secure-random";
 import { TERMINAL_EVENT_TYPES, type HarnessEvent, type SseStatus } from "./types";
@@ -139,6 +140,7 @@ function openSharedEventSource(): void {
   });
 
   sharedEventSource.onerror = () => {
+    reportClientDiagnostic(sseStreamErrorDiagnostic("run-events", sharedEventSource?.readyState));
     notifyAll("error", "Stream disconnected. Attempting to reconnect…");
     closeSharedEventSource();
     scheduleReconnect();

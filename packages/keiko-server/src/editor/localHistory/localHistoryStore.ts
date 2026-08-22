@@ -15,7 +15,7 @@ import {
   type LocalSecretVault,
   type LocalVaultKeychainAccess,
 } from "@oscharko-dev/keiko-security/secret-vault";
-import { containsRedactableSecret } from "@oscharko-dev/keiko-security";
+import { containsRedactableSecret, type SecurityLogSink } from "@oscharko-dev/keiko-security";
 import { containsPath } from "@oscharko-dev/keiko-git";
 import {
   EDITOR_LOCAL_HISTORY_ENCRYPTION,
@@ -212,6 +212,14 @@ export interface CreateEditorLocalHistoryStoreOptions {
   readonly vaultFactory?: ((workspaceDir: string) => LocalSecretVault) | undefined;
   readonly saveIndex?: ((path: string, value: Record<string, unknown>) => void) | undefined;
   readonly limits?: Partial<EditorLocalHistoryLimits> | undefined;
+  /**
+   * Optional activity-log seam (ADR-0019, Wave 4a epic #3233 §8; see
+   * `@oscharko-dev/keiko-security/log-port.ts`). When wired, a shard file this vault cannot read
+   * for a reason other than "absent" emits one `security.vault.shard-unreadable` event instead of
+   * failing silently. Ignored when `vaultFactory` is injected directly (tests). Omitted or
+   * `undefined` keeps the vault exactly as silent as before this change.
+   */
+  readonly securityLogSink?: SecurityLogSink | undefined;
 }
 
 function digest(domain: string, parts: readonly string[]): string {
@@ -510,10 +518,12 @@ function createVault(options: CreateEditorLocalHistoryStoreOptions, dir: string)
     keychainService: HISTORY_KEYCHAIN_SERVICE,
     keyfileName: HISTORY_KEYFILE,
     keychainAccess: options.keychainAccess,
+    sink: options.securityLogSink,
   });
   return createShardedLocalSecretVault({
     key: resolved.key,
     storeDir: join(dir, HISTORY_BODIES_DIR),
+    sink: options.securityLogSink,
   });
 }
 

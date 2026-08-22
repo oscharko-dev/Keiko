@@ -4768,3 +4768,24 @@ export {
   PROMPT_CANDIDATE_RANKING_EXPECTED_ORDER,
   PROMPT_CANDIDATE_RANKING_FIXTURE,
 } from "./prompt-enhancer-ranking-fixture.js";
+
+// ─── Client diagnostics ingest wire contract (Wave 5 of epic #3233) ─────────────
+export {
+  CLIENT_DIAGNOSTIC_KINDS,
+  CLIENT_DIAGNOSTIC_MESSAGE_MAX_LENGTH,
+  CLIENT_DIAGNOSTIC_READY_STATES,
+  isClientDiagnosticIngestRequest,
+  isClientDiagnosticKind,
+} from "./diagnostics.js";
+export type {
+  ClientDiagnosticIngestRequest,
+  ClientDiagnosticKind,
+  ClientDiagnosticReadyState,
+} from "./diagnostics.js";
+// ─── Store fingerprint (Epic #3233 §6.2, Wave 4a) ────────────────────────────────
+// A redacted, point-in-time snapshot of one persisted store's schema/integrity state, embedded
+// in the support bundle manifest's `storeFingerprints` array. `isStoreFingerprint` is the
+// fail-closed guard the manifest assembler uses to refuse a malformed value instead of embedding
+// it.
+export type { StoreFingerprint } from "./store-fingerprint.js";
+export { isStoreFingerprint } from "./store-fingerprint.js";

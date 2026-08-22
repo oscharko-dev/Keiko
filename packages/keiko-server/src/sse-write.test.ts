@@ -2,9 +2,22 @@
 // exactly once BEFORE the socket is destroyed, so a slow-client termination is not silently relabeled
 // as a user cancel. The signal must carry only non-secret counts (no body bytes) and an observer throw
 // must never break the protective abort+destroy path.
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ServerResponse } from "node:http";
-import { writeOrDestroy, type SseBackpressureSignal } from "./sse-write.js";
+import { mockResponse } from "./_support.js";
+import {
+  sseBackpressureReporter,
+  writeOrDestroy,
+  type SseBackpressureSignal,
+} from "./sse-write.js";
+import {
+  createBufferedServerLogSink,
+  createServerLogger,
+  resetServerLogger,
+  setServerLogger,
+  type BufferedServerLogSink,
+} from "./observability/index.js";
+import type { ServerDiagnosticRecord, ServerDiagnosticSink } from "./diagnostics-log.js";
 
 function fakeRes(writeReturns: boolean): {
   res: ServerResponse;
@@ -92,5 +105,180 @@ describe("writeOrDestroy backpressure signal (GEN-PERF-CHAT-006)", () => {
     expect(accepted).toBe(false);
     expect(controller.signal.aborted).toBe(true);
     expect(destroy).toHaveBeenCalledTimes(1);
+  });
+
+  it("never throws when res.on is not implemented (a minimal write/destroy-only double)", () => {
+    const { res } = fakeRes(true);
+    const controller = new AbortController();
+
+    expect(() => writeOrDestroy(res, "frame", controller)).not.toThrow();
+  });
+});
+
+// The terminal `sse.stream.closed` line (#2902 w5-sse-counters): a per-response frame/byte counter
+// closed over the SAME write path every SSE route already funnels through, surfaced exactly once
+// when the stream reaches its terminal `close` event.
+describe("sse.stream.closed terminal line", () => {
+  function captureServerLog(): BufferedServerLogSink {
+    const sink = createBufferedServerLogSink();
+    setServerLogger(createServerLogger({ sink, level: "info" }));
+    return sink;
+  }
+
+  // A hand-rolled EventEmitter-shaped fake (mirrors sse.test.ts's own convention) so a test can fire
+  // "close" deterministically without waiting on a real stream's autoDestroy timing.
+  function listenableFakeRes(writeReturns: boolean): {
+    res: ServerResponse;
+    fireClose: () => void;
+  } {
+    const listeners = new Map<string, () => void>();
+    const res = {
+      writableEnded: false,
+      write: vi.fn().mockReturnValue(writeReturns),
+      destroy: vi.fn(),
+      on: (event: string, handler: () => void) => {
+        listeners.set(event, handler);
+      },
+    } as unknown as ServerResponse;
+    return { res, fireClose: () => listeners.get("close")?.() };
+  }
+
+  afterEach(() => {
+    resetServerLogger();
+  });
+
+  it("counts every frame written through writeOrDestroy and reports reason=completed on a real stream end", async () => {
+    const sink = captureServerLog();
+    const { res } = mockResponse();
+    const controller = new AbortController();
+    const frames = ["event: a\ndata: {}\n\n", "event: b\ndata: {}\n\n", "event: c\ndata: {}\n\n"];
+
+    for (const frame of frames) writeOrDestroy(res, frame, controller);
+    const closed = new Promise<void>((resolve) => res.once("close", resolve));
+    res.end();
+    await closed;
+
+    expect(sink.events).toHaveLength(1);
+    const [event] = sink.events;
+    expect(event).toMatchObject({ level: "info", category: "http", op: "sse.stream.closed" });
+    expect(typeof event?.durationMs).toBe("number");
+    expect(event?.extra).toEqual({
+      frameCount: 3,
+      bytesStreamed: frames.reduce((sum, f) => sum + Buffer.byteLength(f, "utf8"), 0),
+      reason: "completed",
+    });
+  });
+
+  it("reports reason=client-disconnected when the socket closes without the producer ending it", async () => {
+    const sink = captureServerLog();
+    const { res } = mockResponse();
+    const controller = new AbortController();
+
+    writeOrDestroy(res, "event: a\ndata: {}\n\n", controller);
+    const closed = new Promise<void>((resolve) => res.once("close", resolve));
+    res.destroy();
+    await closed;
+
+    expect(sink.events[0]?.extra).toMatchObject({ reason: "client-disconnected" });
+  });
+
+  it("reports reason=backpressure-killed and threads the supplied correlation id", () => {
+    const sink = captureServerLog();
+    const { res, fireClose } = listenableFakeRes(false);
+    const controller = new AbortController();
+
+    writeOrDestroy(res, "event: a\ndata: {}\n\n", controller, undefined, "corr-sse-1");
+    fireClose();
+
+    expect(sink.events).toEqual([
+      {
+        level: "info",
+        category: "http",
+        op: "sse.stream.closed",
+        correlationId: "corr-sse-1",
+        durationMs: expect.any(Number) as number,
+        status: undefined,
+        errorKind: undefined,
+        extra: {
+          frameCount: 1,
+          bytesStreamed: Buffer.byteLength("event: a\ndata: {}\n\n"),
+          reason: "backpressure-killed",
+        },
+      },
+    ]);
+  });
+
+  it("emits the terminal line exactly once even when close fires more than once", () => {
+    const sink = captureServerLog();
+    const { res, fireClose } = listenableFakeRes(true);
+    const controller = new AbortController();
+
+    writeOrDestroy(res, "frame", controller);
+    fireClose();
+    fireClose();
+
+    expect(sink.events).toHaveLength(1);
+  });
+
+  it("reports reason=server-error when the response emits an error before closing", () => {
+    const sink = captureServerLog();
+    const listeners = new Map<string, () => void>();
+    const res = {
+      writableEnded: false,
+      write: vi.fn().mockReturnValue(true),
+      destroy: vi.fn(),
+      on: (event: string, handler: () => void) => {
+        listeners.set(event, handler);
+      },
+    } as unknown as ServerResponse;
+    const controller = new AbortController();
+
+    writeOrDestroy(res, "frame", controller);
+    listeners.get("error")?.();
+    listeners.get("close")?.();
+
+    expect(sink.events[0]?.extra).toMatchObject({ reason: "server-error" });
+  });
+
+  it("never tracks or logs a response that does not implement .on", () => {
+    const sink = captureServerLog();
+    const { res } = fakeRes(true);
+    const controller = new AbortController();
+
+    writeOrDestroy(res, "frame", controller);
+
+    expect(sink.events).toEqual([]);
+  });
+});
+
+// ADR-0173 D5 / g12: `sseBackpressureReporter` used to mint a fresh `randomUUID()` INSIDE the
+// returned closure on every backpressure signal. A caller with the stream's own request/session id
+// already in scope had no way to thread it through, and — the sharper defect — two signals from
+// the SAME reporter (the same SSE stream) reported under two disconnected ids.
+describe("sseBackpressureReporter correlation id (ADR-0173 D5 / g12)", () => {
+  it("threads a caller-supplied correlation id onto the backpressure diagnostic", () => {
+    const records: ServerDiagnosticRecord[] = [];
+    const diagnostics: ServerDiagnosticSink = { record: (record) => records.push(record) };
+    const observe = sseBackpressureReporter({ diagnostics }, "terminal", "req-abc12345");
+
+    observe({ frameBytes: 42, accepted: false });
+
+    expect(records).toHaveLength(1);
+    expect(records[0]?.correlationId).toBe("req-abc12345");
+  });
+
+  it("mints one id per reporter construction, shared across every signal that reporter emits", () => {
+    const records: ServerDiagnosticRecord[] = [];
+    const diagnostics: ServerDiagnosticSink = { record: (record) => records.push(record) };
+    const observeA = sseBackpressureReporter({ diagnostics }, "terminal");
+    const observeB = sseBackpressureReporter({ diagnostics }, "terminal");
+
+    observeA({ frameBytes: 1, accepted: false });
+    observeA({ frameBytes: 2, accepted: false });
+    observeB({ frameBytes: 3, accepted: false });
+
+    expect(records).toHaveLength(3);
+    expect(records[0]?.correlationId).toBe(records[1]?.correlationId);
+    expect(records[0]?.correlationId).not.toBe(records[2]?.correlationId);
   });
 });

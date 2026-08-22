@@ -15,6 +15,7 @@ import type {
   LocalSecretVault,
   LocalVaultKeychainAccess,
 } from "@oscharko-dev/keiko-security/secret-vault";
+import type { SecurityLogSink } from "@oscharko-dev/keiko-security";
 import type { EnvSource } from "@oscharko-dev/keiko-model-gateway";
 import type { OutboundHttpEgressConfig } from "@oscharko-dev/keiko-model-gateway/internal/http";
 import { openAtlassianCredentialVault } from "./credentialVault.js";
@@ -33,6 +34,9 @@ export interface BuildAtlassianConnectorCredentialDepsOptions {
   // tier; production leaves it undefined so the darwin keychain tier stays available.
   readonly keychainAccess?: LocalVaultKeychainAccess | undefined;
   readonly fetchImpl?: typeof fetch | undefined;
+  // Optional activity-log seam (ADR-0019); the deps.ts composition root supplies
+  // `processServerLogSink()`.
+  readonly securityLogSink?: SecurityLogSink | undefined;
 }
 
 // Lazy vault port: key resolution (which may create a keychain entry or keyfile) happens on the
@@ -46,6 +50,7 @@ function lazyVaultPort(
       configPath: options.configPath,
       env: options.env,
       ...(options.keychainAccess === undefined ? {} : { keychainAccess: options.keychainAccess }),
+      securityLogSink: options.securityLogSink,
     }));
   return {
     get: (reference: string): string | undefined => open().get(reference),

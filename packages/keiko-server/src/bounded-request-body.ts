@@ -2,6 +2,10 @@ import type { IncomingMessage } from "node:http";
 
 import { errorKindOf, getServerLogger } from "./observability/index.js";
 
+// A raw Node header value: absent, a single value, or (for a repeated header) several. Shared by
+// every helper below that reads `Content-Type` off a request, so the union is spelled once.
+type ContentTypeHeaderValue = string | string[] | undefined;
+
 export class RequestBodyTooLargeError extends Error {
   public constructor() {
     super("request body too large");
@@ -106,6 +110,50 @@ function logBodyFailed(
   });
 }
 
+// `IncomingMessage.headers` is typed as always present, but several test doubles across the
+// codebase construct a stream cast to `IncomingMessage` without setting it — read defensively so a
+// caller that never populated it does not crash the very read it is trying to observe.
+function safeContentTypeHeader(req: IncomingMessage): ContentTypeHeaderValue {
+  const headers = req as { headers?: IncomingMessage["headers"] };
+  return headers.headers?.["content-type"];
+}
+
+// Every media type this server's body readers are ever legitimately reached with: `server.ts`'s
+// `isJsonRequest` gate already rejects any state-changing request whose Content-Type is not
+// exactly `application/json` with a 415 before a handler can read its body. Allowlisted rather
+// than left open, because stripping `; charset=...` parameters does not make an arbitrary
+// subtype safe to log — a client fully controls the whole header and can place sensitive data in
+// a syntactically valid subtype (e.g. `Content-Type: application/<secret>`) that never reaches
+// this gate at all.
+const KNOWN_REQUEST_MEDIA_TYPES = new Set<string>(["application/json"]);
+
+// Reduces a `Content-Type` header to its media type, discarding parameters (`; charset=utf-8`,
+// `; boundary=...`) that can carry caller-chosen, unbounded text, then maps it through the
+// allowlist above. A subtype this reader has no reason to ever see collapses to the fixed label
+// `"other"` rather than being retained verbatim in the diagnostic sink.
+function mediaTypeOf(header: ContentTypeHeaderValue): string {
+  const value = typeof header === "string" ? header : header?.[0];
+  const mediaType = value?.split(";", 1)[0]?.trim().toLowerCase();
+  if (mediaType === undefined || mediaType.length === 0) return "unspecified";
+  return KNOWN_REQUEST_MEDIA_TYPES.has(mediaType) ? mediaType : "other";
+}
+
+// The one success line this reader emits, at debug: per-request volume makes it unfit for info,
+// but it is what closes the loop for `keiko log:analyze` — the rejected/cancelled/failed paths
+// above already say what went wrong; this says what a body that just worked actually looked like.
+function logBodyReceived(
+  correlationId: string | undefined,
+  contentType: ContentTypeHeaderValue,
+  receivedBytes: number,
+): void {
+  getServerLogger().debug(() => ({
+    category: "http" as const,
+    op: "http.request.body.received",
+    ...(correlationId === undefined ? {} : { correlationId }),
+    extra: { contentType: mediaTypeOf(contentType), receivedBytes },
+  }));
+}
+
 class BoundedRequestBodyReader {
   private readonly chunks: Buffer[] = [];
   private total = 0;
@@ -173,6 +221,7 @@ class BoundedRequestBodyReader {
     if (this.settled) return;
     this.settled = true;
     this.cleanup();
+    logBodyReceived(this.correlationId, safeContentTypeHeader(this.req), this.total);
     this.resolve(Buffer.concat(this.chunks).toString("utf8"));
   };
 
@@ -199,4 +248,50 @@ export function readBoundedRequestBody(
   return new Promise<string>((resolve, reject) => {
     new BoundedRequestBodyReader(req, maxBytes, signal, correlationId, resolve, reject).start();
   });
+}
+
+function isPlainRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+// #2902 audit finding 3: memory-handlers.ts, memory-conv-handlers.ts and memory-consolidation-
+// handlers.ts each hand-rolled a byte-identical "read a bounded body, then parse+validate it as a
+// JSON object" wrapper on top of `readBoundedRequestBody` — differing only in a catch-variable
+// name and which (identically-valued, 64_000) max-bytes constant they read. This is the ONE owner
+// for that wrapper layer; callers keep their own max-bytes constant (there is no reason to force
+// them to share one, only the logic), pass it in, and get back either the parsed JSON object or the
+// RouteResult (413/400) their handler should return as-is.
+export async function readJsonRequestBody(
+  req: IncomingMessage,
+  maxBytes: number,
+  correlationId?: string,
+): Promise<Record<string, unknown> | { readonly status: number; readonly body: unknown }> {
+  let raw: string;
+  try {
+    raw = await readBoundedRequestBody(req, maxBytes, undefined, correlationId);
+  } catch (error) {
+    if (error instanceof RequestBodyTooLargeError) {
+      return {
+        status: 413,
+        body: { error: { code: "PAYLOAD_TOO_LARGE", message: "Request body too large." } },
+      };
+    }
+    throw error;
+  }
+  let parsed: unknown;
+  try {
+    parsed = raw.length === 0 ? {} : JSON.parse(raw);
+  } catch {
+    return {
+      status: 400,
+      body: { error: { code: "BAD_REQUEST", message: "Request body is not valid JSON." } },
+    };
+  }
+  if (!isPlainRecord(parsed)) {
+    return {
+      status: 400,
+      body: { error: { code: "BAD_REQUEST", message: "Request body must be a JSON object." } },
+    };
+  }
+  return parsed;
 }

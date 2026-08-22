@@ -13,6 +13,7 @@ import type { RunRequest, RunVoiceOrigin } from "./run-request.js";
 import { startRun, applyRun, type EngineContext } from "./run-engine.js";
 import { ActiveRunLimitError, type AppliableSnapshot, type RunRecord } from "./runs.js";
 import { SSE_HEADERS, writeMessageEvent, readyMessage, startSseHeartbeat } from "./sse.js";
+import { markSseStreamBackpressureKilled } from "./sse-write.js";
 import type { SseWriter, StreamEvent } from "./sink.js";
 import type { RouteContext, RouteResult, HandlerOutcome } from "./routes.js";
 import { errorBody, STREAMING } from "./routes.js";
@@ -422,7 +423,7 @@ export function handleRunEvents(ctx: RouteContext, deps: UiHandlerDeps): Handler
   if (!agentRecordSessionMatches(record, ctx, deps)) {
     return { status: 404, body: errorBody("NOT_FOUND", "Unknown run.") };
   }
-  openSseStream(ctx.res, record, lastEventId(ctx.req), deps.redactor);
+  openSseStream(ctx.res, record, lastEventId(ctx.req), deps.redactor, ctx.correlationId);
   ctx.req.on("close", () => {
     ctx.res.end();
   });
@@ -485,8 +486,11 @@ function aggregateRunWriter(
   return {
     write: (event: StreamEvent): boolean => {
       if (!agentRecordSessionMatches(record, ctx, deps)) return false;
-      const accepted = writeMessageEvent(ctx.res, event, deps.redactor);
-      if (!accepted) ctx.res.destroy();
+      const accepted = writeMessageEvent(ctx.res, event, deps.redactor, ctx.correlationId);
+      if (!accepted) {
+        markSseStreamBackpressureKilled(ctx.res);
+        ctx.res.destroy();
+      }
       return accepted;
     },
     // A single run reaching terminal must not close the aggregate desktop stream.
@@ -511,13 +515,15 @@ function openSseStream(
   record: RunRecord,
   afterSeq: number,
   redactor: UiHandlerDeps["redactor"],
+  correlationId?: string,
 ): void {
   res.writeHead(200, SSE_HEADERS);
   startSseHeartbeat(res);
   const writer: SseWriter = {
     write: (event: StreamEvent): boolean => {
-      const accepted = writeMessageEvent(res, event, redactor);
+      const accepted = writeMessageEvent(res, event, redactor, correlationId);
       if (!accepted) {
+        markSseStreamBackpressureKilled(res);
         res.destroy();
       }
       return accepted;
@@ -689,7 +695,14 @@ export async function handleApplyRun(ctx: RouteContext, deps: UiHandlerDeps): Pr
   const budgetRejection = reserveAgentRunApplyBudget(record, snapshot);
   if (budgetRejection !== null) return budgetRejection;
   record.appliable = undefined;
-  const report = await applyRun(snapshot, model, record.modelId, deps.redactor, record.governance);
+  const report = await applyRun(
+    snapshot,
+    model,
+    record.modelId,
+    deps.redactor,
+    record.governance,
+    record.runId,
+  );
   record.applyReport = report;
   record.appliedAt = Date.now();
   return {

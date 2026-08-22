@@ -176,7 +176,7 @@ export function createEntailmentStage(
     ...observability,
     correlationId: observability.correlationId ?? randomUUID(),
   };
-  const judge = createGatewayEntailmentJudge(deps, modelId);
+  const judge = createGatewayEntailmentJudge(deps, modelId, correlated.correlationId);
   if (judge === undefined) {
     // KEIKO-0359: report WHY the stage is inert. Going inert used to be completely silent, so a
     // model whose capability metadata Gateway Setup never enriched looked identical to a model

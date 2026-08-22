@@ -19,6 +19,7 @@ import {
   findCapability,
   findConfiguredCapability,
   type ChatMessage,
+  type GatewayCallRequest,
   type GatewayRequest,
   type ModelCapability,
 } from "@oscharko-dev/keiko-model-gateway";
@@ -171,6 +172,7 @@ function isModelCompatible(capability: ModelCapability | undefined): boolean {
 export function createGatewayEntailmentJudge(
   deps: UiHandlerDeps,
   modelId: string,
+  correlationId?: string,
 ): EntailmentJudge | undefined {
   const capability = capabilityFor(deps, modelId);
   if (!isModelCompatible(capability)) return undefined;
@@ -183,13 +185,14 @@ export function createGatewayEntailmentJudge(
       signal?: AbortSignal,
     ): Promise<EntailmentVerdict> => {
       const cancellation = MgQI.composeCancellationSignal(profile.timeoutMsHint, signal);
-      const request: GatewayRequest = {
+      const request: GatewayCallRequest = {
         modelId,
         messages: buildEntailmentPrompt(input),
         stream: false,
         cancellationSignal: cancellation.signal,
         temperature: 0,
         responseFormat: buildEntailmentResponseFormat(),
+        logContext: { correlationId },
       };
       try {
         const response = await model.call(request, cancellation.signal);

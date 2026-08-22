@@ -8,7 +8,7 @@ import type {
   CodingWorkbenchRuntimeState,
   CodingWorkbenchRuntimeStateAction,
 } from "./coding-workbench-live-state";
-import { clientErrorSummary } from "./client-error-summary";
+import { clientErrorSummary, correlationIdOf } from "./client-error-summary";
 import { reportClientDiagnostic } from "./client-diagnostics";
 
 type RuntimeDispatch = Dispatch<CodingWorkbenchRuntimeStateAction>;
@@ -73,6 +73,7 @@ export function useCodingWorkbenchPairingEffect(dispatch: RuntimeDispatch): void
         // `unknown`, while the underlying failure remains diagnosable.
         reportClientDiagnostic(
           `[keiko] coding workbench pairing discovery failed: ${clientErrorSummary(error)}`,
+          { correlationId: correlationIdOf(error) },
         );
         if (!cancelled) dispatch({ kind: "pairing-set", pairing: "unknown" });
       },
