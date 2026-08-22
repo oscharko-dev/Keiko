@@ -41,6 +41,9 @@ import {
 } from "node:fs";
 import { join, resolve as resolvePath } from "node:path";
 
+import { classifyErrorKind } from "@oscharko-dev/keiko-contracts";
+
+import { contentFreeErrorClass, machineToken, safeProperty } from "./error-classification.js";
 import {
   DEFAULT_SERVER_LOG_LEVEL,
   resolveServerLogThreshold,
@@ -163,21 +166,40 @@ export function nullServerLogSink(): ServerLogSink {
   return NULL_SINK;
 }
 
-const ERROR_KIND_PATTERN = /^[A-Za-z][A-Za-z0-9_.-]{0,63}$/;
-
-function readStringProperty(source: object, key: string): string | undefined {
-  const value = (source as Record<string, unknown>)[key];
-  return typeof value === "string" && ERROR_KIND_PATTERN.test(value) ? value : undefined;
-}
-
 // Turns an unknown thrown value into a content-free classification: a coded error's `code`, else
-// the error's `name`, else `unknown`. The MESSAGE is never read — that is the whole point, and it
-// is why instrumentation sites should call this instead of `String(error)`. It lives here rather
+// its content-free CLASS, else `unknown`. The MESSAGE is never read — that is the whole point, and
+// it is why instrumentation sites should call this instead of `String(error)`. It lives here rather
 // than beside the logger because the file sink below classifies its own failures too, and this
 // module is the one both sides already depend on.
+//
+// Delegates to `error-classification.ts`'s `safeProperty`/`machineToken`/`contentFreeErrorClass`
+// (ADR-0173 D11) instead of maintaining a second, less-hardened regex-based reader: this used to
+// read `code`/`name` off a plain cast with no try/catch, so a hostile `code`/`name` accessor that
+// THROWS on read (rather than merely returning prose) crashed classification itself; the shared
+// helpers already wrap every reflective read.
+//
+// `code` is read off ANY object, `Error` or not — this function's contract has always been "read
+// the field if it is there", and gating that read on `instanceof Error` would silently drop a
+// conforming `code` carried by a plain thrown object (e.g. `{ code: "SQLITE_BUSY" }`), which the
+// pre-hardening reader classified correctly.
+//
+// The `Error`-vs-not split matters only for the FALLBACK once `code` is absent or non-conforming.
+// An actual `Error` instance goes through `contentFreeErrorClass`, which trusts `.name` only for a
+// specific, curated set of built-ins and otherwise reads the CODE-DECLARED class off the
+// prototype — `.name` is a plain mutable own property a hostile thrown value can load with
+// request-derived text, and `diagnostics-log.test.ts`'s "degrades an overridden name on a plain
+// Error and never serializes it" pins exactly this for every producer that shares this leaf, this
+// function included. A non-`Error` object has no declared class to recover, so its own `.name` is
+// read through the same shape gate (`classifyErrorKind`) every other package's reducer already
+// applies — restoring the pre-hardening reader's fidelity for that shape without reopening the
+// `Error`-name hardening above. Either branch still floors on the fixed string `"unknown"` for a
+// non-conforming candidate, pinned by `server-logger.test.ts`.
 export function errorKindOf(error: unknown): string {
   if (typeof error !== "object" || error === null) return "unknown";
-  return readStringProperty(error, "code") ?? readStringProperty(error, "name") ?? "unknown";
+  const code = machineToken(safeProperty(error, "code"));
+  if (code !== undefined) return code;
+  if (error instanceof Error) return contentFreeErrorClass(error);
+  return classifyErrorKind(safeProperty(error, "name")) ?? "unknown";
 }
 
 // LAST-RESORT FAILURE NOTICE

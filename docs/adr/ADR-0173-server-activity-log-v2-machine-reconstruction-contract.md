@@ -143,9 +143,14 @@ papered over exactly this gap; naming the limit explicitly is what lets Wave 1 a
 ### D3 — Keiko-code stack frames: dist-anchored, and why no source maps
 
 Stack frames and cause chains are added to `extra` as `frames?: readonly string[]` and
-`causeChain?: readonly string[]` (Wave 2; forward reference — the redaction and reducer machinery
-this depends on is not shipped in Wave 1). Each frame entry is a single joined string:
-`"packages/keiko-<pkg>/(dist|src)/relative/path.(js|ts):LINE:COL"`.
+`causeChain?: readonly string[]` (Wave 2, landed:
+`packages/keiko-server/src/observability/stack-frames.ts`). Each frame entry is a single joined
+string in one of two shapes: a workspace-package frame,
+`"packages/keiko-<pkg>/(dist|src)/relative/path.(js|ts):LINE:COL"`, or, for the root `keiko` bin's
+own entrypoint — which lives outside every `packages/*` directory —
+`"(dist|src)/cli/relative/path.(js|ts):LINE:COL"`. Both shapes are pinned together by one pattern,
+`FRAME_SHAPE_PATTERN` (`stack-frames.ts`), which `log-redaction.ts` re-validates structurally at the
+redaction boundary rather than trusting the producer (D4).
 
 **No runtime source maps are enabled**, and that is a considered decision, not an oversight. Every
 workspace package builds with `sourceMap: false` (only `declarationMap: true`); the root CLI
@@ -155,7 +160,14 @@ time against GEN-PERF-CLI-001's budget and real package size, for a repository t
 source: `packages/<pkgDirName>/(dist|src)/` matched at its **last** occurrence in the absolute
 path (not required to be a prefix), which makes the reducer correct across a dev checkout, a
 symlinked `node_modules/@oscharko-dev/*` resolution, and a portable/installed product layout without
-special-casing any of them.
+special-casing any of them. The scan keeps the last occurrence only among matches whose captured
+directory name is an actual known workspace package (`PACKAGE_DIR_NAMES`), so a later, unrecognised
+directory name can never shadow a real anchor further left in the path; the root-bin anchor
+(`(dist|src)/cli/`) is consulted only once that workspace-package scan finds nothing. A Windows
+absolute path uses backslashes and a drive letter (`C:\Users\...`), so the reducer normalises every
+backslash to a forward slash before anchoring, and splits the trailing `:LINE:COL` from the end via
+two successive `lastIndexOf(":")` calls rather than a whole-string regex — a drive-letter colon
+earlier in the string must never be mistaken for the line/column separator.
 
 The consequence for an agent reading a bundle is stated in the playbook this ADR forward-references
 (`docs/observability/reproduction-harness.md`, Wave 6): a frame names the `dist` output of the
@@ -166,34 +178,59 @@ usable only when a local `.js.map` happens to exist, is named as a later nicety 
 built in this epic.
 
 The redaction side of this decision — why a frame string structurally defeats the existing path
-guards, and the field-name-keyed guard added to close the gap for real rather than resting on an
-accidental non-match — is Wave 2 scope and is not re-litigated here; it is recorded so this ADR
-states the reducer's shape and its no-source-maps rationale, which is unaffected by which wave ships
-the guard.
+guards, and the field-name-keyed guard that closes the gap for real rather than resting on an
+accidental non-match — landed in Wave 2 as `redactKeikoFrames`/`redactCauseChain` in
+`log-redaction.ts`; its full shape is D4's scope, not re-litigated here, so this section keeps
+stating the reducer's own shape and its no-source-maps rationale.
 
 ### D4 — Redaction doctrine is unchanged: body-free, fail-closed, structural
 
 Nothing about this contract relaxes `log-redaction.ts`'s existing doctrine: guards are structural,
 not advisory, and do not depend on a caller naming its fields honestly. Every new field this ADR
-adds is additive to that doctrine, not an exception carved into it:
+adds is additive to that doctrine, not an exception carved into it. Wave 2 landed all three
+field-name-keyed escape hatches this section anticipated, and all three share one restriction: each
+fires only at the TOP LEVEL of `extra` — `redactLogObject`'s own direct call from
+`redactLogFields`, never at any nested depth. The trust extended is a promise this log's own
+producers make about their own top-level `frames`/`causeChain`/`diagnosticSummary` fields; the same
+field name nested inside some unrelated object carries no such promise and takes the ordinary
+generic path instead.
 
-- `frames`/`causeChain` (D3) are named, typed escape hatches — not a bypass of the generic
-  value guards, but a **dedicated, field-name-keyed validator** for exactly these two fields,
-  because the generic prose/path guards cannot recognize a dist-anchored frame as safe without
-  also being loose enough to leak an unrelated deep path. A non-conforming element is dropped,
-  never echoed or replaced in place — the same fail-closed direction the existing `path`-field
-  escape hatch (`redactRoutePath`) already uses. This is the same escape-hatch architecture
-  extended with two more named cases, not a second choke point.
-- Truncation becomes visible rather than silent: when array truncation actually drops elements, one
-  array slot is reserved for a bounded marker element; when the field-count cap breaks early, one
-  field is reserved for `_truncatedFieldCount: true`. The configured caps (`MAX_LOG_ARRAY_LENGTH`,
-  `MAX_LOG_FIELD_COUNT`) include these markers, so a truncated array or object never exceeds its
-  configured bound by one — the marker consumes a slot rather than riding along for free. An input
-  at or under the cap is untouched and carries no marker. An agent reading a bundle can distinguish
-  "nothing more happened" from "more happened and was cut for size."
-- A closed-vocabulary helper gives any future bounded-string-array field (starting with
-  `unsupportedReasons`) the same structural `Set`-plus-fallback closure categories already have,
-  replacing a comment-only closure with an enforced one.
+- `frames`/`causeChain` (D3) are named, typed escape hatches — `redactKeikoFrames`/`redactCauseChain`
+  in `log-redaction.ts`, dispatched by `redactGuardedArrayField` — not a bypass of the generic value
+  guards, but a **dedicated, field-name-keyed validator** for exactly these two fields, because the
+  generic prose/path guards cannot recognize a dist-anchored frame as safe without also being loose
+  enough to leak an unrelated deep path. `frames` is re-checked element-by-element against
+  `stack-frames.ts`'s own `FRAME_SHAPE_PATTERN` and `PACKAGE_DIR_NAMES` (imported from that module,
+  not restated); `causeChain` is re-checked against `DECLARED_ERROR_CLASS_SHAPE`, imported from the
+  leaf `error-classification.ts`. A non-conforming element is dropped, never echoed or replaced in
+  place — the same fail-closed direction the existing `path`-field escape hatch (`redactRoutePath`)
+  already uses — and each guarded array is additionally capped, after filtering, at the reducer's own
+  default element count (8 for `frames`, 5 for `causeChain`), so a forged over-length array cannot
+  push a real element out of the result by padding the front with junk. This is the same escape-hatch
+  architecture extended with two more named cases, not a second choke point.
+- `diagnosticSummary` (g29 — `ServerDiagnosticRecord.message` projected under a name other than
+  `message`, since `message` is itself a denied field name) needed a THIRD, scalar hatch of the same
+  shape — `redactProseAllowedValue`, dispatched by `redactGuardedScalarField` — discovered by a
+  failing test rather than designed up front: its legitimate values are complete sentences, which the
+  generic `hasProseShape` rule refuses regardless of field name, collapsing the value to
+  `[redacted:shape]` and defeating the field's own purpose. The hatch trusts the field NAME to lift
+  the prose-shape rule alone; every other guard (secret, personal-identifier, structured-payload,
+  length, path) still applies. This is sound specifically because `diagnosticSummary` — unlike
+  `frames`/`causeChain` — is never a directly caller-settable field on `ServerDiagnosticRecord`: it is
+  computed at exactly one call site (`diagnosticActivityLogFields`), always via `allowlistedSummary`
+  against a fixed, code-declared vocabulary, so trusting the name does not widen what can reach the
+  log beyond what that one call site already enforces.
+- Truncation becomes visible rather than silent, and the marker itself CONSUMES A SLOT rather than
+  riding along for free: when an array actually exceeds its cap, only `MAX_LOG_ARRAY_LENGTH - 1` real
+  elements survive, plus one bounded marker element (`DROPPED_LENGTH`); when the field-count cap
+  breaks early, only `MAX_LOG_FIELD_COUNT - 1` accepted fields survive, plus one synthetic
+  `_truncatedFieldCount: true` key. Either way the configured cap (`MAX_LOG_ARRAY_LENGTH`,
+  `MAX_LOG_FIELD_COUNT`) holds EXACTLY — never one over. An input at or under the cap is untouched
+  and carries no marker. An agent reading a bundle can distinguish "nothing more happened" from "more
+  happened and was cut for size."
+- A closed-vocabulary helper, `closeReasonVocabulary`, gives any future bounded-string-array field
+  (starting with `unsupportedReasons`) the same structural `Set`-plus-fallback closure categories
+  already have, replacing a comment-only closure with an enforced one.
 
 The product-level guarantee this preserves: the contract admits more **structure**, never more
 **content**. Every new field is a shape, a count, a class name, or a hash — never a body.
@@ -357,15 +394,43 @@ exactly one `warnings[]` entry when that count is nonzero. This is a stated, bou
 window, not a permanent second ordering path: once a log file's 7-day retention has rolled fully
 past the upgrade, no pre-v2 line can appear in it again.
 
-### D11 — `ERROR_KIND_PATTERN` consolidation (Wave 2) is a relocation, not a relaxation
+### D11 — `ERROR_KIND_PATTERN` consolidation (Wave 2, landed) is a relocation, not a relaxation
 
-Forward reference, recorded here because AGENTS.md treats this exact class of edit as the
-highest-consequence mistake this repository can produce. `ERROR_KIND_PATTERN` is currently defined
-byte-identically in three packages (`keiko-server`, `keiko-model-gateway`, `keiko-local-knowledge`),
-pinned only by a drift test whose own header states the consolidated form is the structurally
-correct answer: "a single definition cannot drift from itself." Wave 2 moves the pattern into
-`keiko-contracts` (the leaf every other package already depends on inward toward, per ADR-0019), has
-all three packages delegate to it, and deletes the byte-identity drift test.
+Recorded here because AGENTS.md treats this exact class of edit as the highest-consequence mistake
+this repository can produce. `ERROR_KIND_PATTERN` was defined byte-identically in three packages
+(`keiko-server`, `keiko-model-gateway`, `keiko-local-knowledge`), pinned only by
+`scripts/__tests__/error-kind-pattern-drift.test.mjs`, a test that diffed the three declarations
+against each other and whose own header stated the consolidated form was the structurally correct
+answer: "a single definition cannot drift from itself." Wave 2 moved the pattern into
+`packages/keiko-contracts/src/observability.ts` (the leaf every other package already depends on
+inward toward, per ADR-0019) and deleted that drift test.
+
+The three packages did not all converge on the shared constant the same way, and both shapes are
+load-bearing:
+
+- `keiko-model-gateway` and `keiko-local-knowledge` import `classifyErrorKind` from
+  `keiko-contracts` directly — literal delegation, so their `code`/`name` gate cannot drift from the
+  canonical pattern because there is no local copy of it left to drift.
+- `keiko-server`'s own `errorKindOf` (`server-log.ts`) was rewritten in the same wave to route
+  through `error-classification.ts`'s `machineToken`/`contentFreeErrorClass` instead — a different,
+  purpose-built composition, not a call to `classifyErrorKind`. This still satisfies the invariant
+  `ERROR_KIND_PATTERN` protects (there is no second textual declaration of the pattern anywhere in
+  `keiko-server`), and it closes a gap `classifyErrorKind` alone cannot: that function only judges a
+  string already in hand, while `errorKindOf` also has to safely READ a hostile `code`/`name`
+  property whose accessor may throw, and — when `code` is absent — fall back to a declared class
+  name. `error-classification.ts` bundles exactly that reflective-read hardening
+  (`safeProperty`/`machineToken`/`contentFreeErrorClass`), so `keiko-server` composes from it instead
+  of composing `classifyErrorKind` with a second, hand-rolled hardening layer beside it.
+
+The relocated pin is `scripts/__tests__/error-kind-pattern-single-source.test.mjs`: instead of
+diffing three declarations against each other, it asserts — by a repository-wide text search over
+every tracked (and staged-but-uncommitted) file — that exactly one file,
+`packages/keiko-contracts/src/observability.ts`, declares `ERROR_KIND_PATTERN` at all, and that the
+canonical declaration still gates the shapes the guard exists for (an identifier passes, a sentence
+and an over-long run do not). This is a STRONGER pin than the one it replaced: the retired test could
+only ever catch drift AFTER one copy relaxed; this one fails the instant a fourth package, or a
+reintroduced local copy in one of the original three, declares the pattern anywhere in the tree,
+before it ever has the chance to diverge.
 
 This is named explicitly, in this ADR, as an invariant **relocation**: the invariant the deleted test
 protected — "these three copies never silently diverge" — is not weakened, it is made structurally
@@ -428,14 +493,15 @@ rather than left implicit across the Decision section:
 5. **For process lifecycle events** (`process.started`/`process.heartbeat`/`process.exiting`), which
    carry no `correlationId` and so never enter a per-correlation timeline, read the analyzer's
    `processes[]` summaries instead — one entry per `(pid, instanceId)` lifetime (D9).
-6. **For an error**, read `errorKind` for the closed-vocabulary classification, and — once Wave 2
-   ships — `extra.frames`/`extra.causeChain` for the dist-anchored Keiko-code stack, resolved against
-   the exact tagged product version named in the support bundle's manifest (D3, D12).
+6. **For an error**, read `errorKind` for the closed-vocabulary classification, and
+   `extra.frames`/`extra.causeChain` for the dist-anchored Keiko-code stack (landed Wave 2), resolved
+   against the exact tagged product version named in the support bundle's manifest (D3, D12).
 7. **For what could not be reconstructed**, read the analyzer's `warnings` array rather than assuming
    silence means nothing happened — Wave 1 already populates it with exactly one entry naming
-   `legacyLineCount` when a retained pre-v2 line is present (D10); Wave 6 extends the same array
-   with further evidence-gap classes. A warning names exactly what evidence class is missing and
-   why, so an agent's report to a human names the actual gap instead of guessing.
+   `legacyLineCount` when a retained pre-v2 line is present (D10); Wave 6 extends the same array with
+   further evidence-gap classes (stack-frame unions, gateway replay scripts, and other later-wave
+   evidence). A warning names exactly what evidence class is missing and why, so an agent's report to
+   a human names the actual gap instead of guessing.
 
 ## Consequences
 
@@ -471,15 +537,18 @@ rather than left implicit across the Decision section:
   as `<dynamic>` at its own call site rather than failing generation, on the condition that every
   caller supplying that helper an `op` is itself a literal the generator catalogs separately. A
   `<dynamic>` entry is a pointer to those call sites, never the last word on what operation ran.
-- The `ERROR_KIND_PATTERN` relocation (D11) deletes an existing drift test as part of making its
-  invariant structurally unbreakable; this ADR is the documented justification a reviewer checks
-  that deletion against, and no later change may cite this ADR to justify a second copy reappearing.
-- This ADR is Proposed, not Accepted, because Waves 2 through 6 have not landed yet. A reader relying
-  on this document today should treat D3 (stack frames), D8's full manifest shape, and D9's fuller
-  analyzer output (stack-frame unions, gateway replay scripts, a reproduction-seed fixture emitter)
-  as forward references until the corresponding wave merges. D1, D2, D4's truncation markers, D5's
-  minimal wiring, D6's dynamic-entry policy, D7, D9's minimal analyzer output (`processes[]`,
-  `legacyLineCount`, `warnings[]`), and D10 are Wave 1 scope and load-bearing immediately.
+- The `ERROR_KIND_PATTERN` relocation (D11) deleted `error-kind-pattern-drift.test.mjs` and replaced
+  it with the stronger `error-kind-pattern-single-source.test.mjs` pin as part of making its invariant
+  structurally unbreakable; this ADR is the documented justification a reviewer checks that deletion
+  against, and no later change may cite this ADR to justify a second copy reappearing.
+- This ADR is Proposed, not Accepted, because Waves 3 through 6 have not landed yet. A reader relying
+  on this document today should treat the op catalog's fully finalized vocabulary (D6), D8's full
+  manifest shape, and D9's fuller analyzer output (stack-frame unions, gateway replay scripts, a
+  reproduction-seed fixture emitter) as forward references until the corresponding wave merges. D1,
+  D2, D4's truncation markers, D5's minimal wiring, D6's dynamic-entry policy, D7, D9's minimal
+  analyzer output (`processes[]`, `legacyLineCount`, `warnings[]`), and D10 are Wave 1 scope; D3
+  (stack frames), D4's three named escape hatches, and D11 (the `ERROR_KIND_PATTERN` relocation) are
+  Wave 2 scope — every one of them already load-bearing.
 
 ## References
 

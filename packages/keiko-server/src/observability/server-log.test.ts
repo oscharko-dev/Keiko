@@ -20,6 +20,7 @@ import {
   closeFileServerLogSinks,
   createBufferedServerLogSink,
   createFileServerLogSink,
+  errorKindOf,
   formatServerLogLine,
   reportServerLogFailure,
   resetServerLogFailureNotices,
@@ -919,5 +920,52 @@ describe("rotation fallback is narrow", () => {
 
   it("still rotates on a filesystem that genuinely has no hard links", () => {
     expect(rotateAcrossBoundary("EPERM")).toStrictEqual(["server-2026-08-20.log", "server.log"]);
+  });
+});
+
+// ADR-0173 D11: `errorKindOf` delegates to `error-classification.ts`'s hardened reflection helpers
+// (`safeProperty`/`machineToken`/`contentFreeErrorClass`) instead of a plain-cast regex reader with
+// no try/catch of its own. `server-logger.test.ts` already pins the full code-first/name-fallback/
+// unknown-floor contract this rewrite must reproduce exactly; this suite covers the ONE thing that
+// contract could not exercise before the rewrite — a `code` accessor that THROWS on read, which the
+// old plain-cast reader had no way to survive.
+describe("errorKindOf (ADR-0173 D11 hardened reflection)", () => {
+  it("degrades to the class instead of crashing when the `code` accessor throws", () => {
+    const hostile = new Error("placeholder");
+    Object.defineProperty(hostile, "code", {
+      get(): never {
+        throw new Error("hostile code accessor");
+      },
+    });
+    expect(() => errorKindOf(hostile)).not.toThrow();
+    expect(errorKindOf(hostile)).toBe("Error");
+  });
+
+  it("degrades to the class instead of crashing when the `code` property is a throwing proxy", () => {
+    const hostile = new Proxy(new Error("placeholder"), {
+      get(target, property, receiver): unknown {
+        if (property === "code") throw new Error("hostile trap");
+        return Reflect.get(target, property, receiver);
+      },
+    });
+    expect(() => errorKindOf(hostile)).not.toThrow();
+    expect(errorKindOf(hostile)).toBe("Error");
+  });
+
+  // The rewrite's `instanceof Error` gate (added only to keep the `errorKindOf({})` floor below)
+  // over-corrected: it also discarded a `code`/`name` carried by a THROWN VALUE THAT IS NOT AN
+  // `Error` INSTANCE AT ALL — a plain object, which the pre-rewrite reader (any object, not only
+  // `Error`) classified correctly. `code` still wins over `name` for a non-`Error` object, exactly
+  // as it does for an `Error`.
+  it("still reads `code`/`name` off a thrown value that is not an `Error` instance", () => {
+    expect(errorKindOf({ code: "SQLITE_BUSY" })).toBe("SQLITE_BUSY");
+    expect(errorKindOf({ code: "not an identifier", name: "TransportFailure" })).toBe(
+      "TransportFailure",
+    );
+  });
+
+  it("still floors a code-less, name-less non-`Error` object to `unknown`", () => {
+    expect(errorKindOf({})).toBe("unknown");
+    expect(errorKindOf({ irrelevant: true })).toBe("unknown");
   });
 });

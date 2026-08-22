@@ -371,3 +371,82 @@ describe("describeError partial-usage passthrough", () => {
     expect(describeError(new Error("x")).partialUsage).toBeUndefined();
   });
 });
+
+// ADR-0173 D3: `describeError` wires `keikoStackFrames`/`causeChain` onto its result rather than
+// re-deriving stack/cause reduction itself — `stack-frames.test.ts` owns the reducers' own
+// contract (dist-anchoring, bounds, hostile-input handling); this suite only proves the wiring.
+describe("describeError frames and causeChain (ADR-0173 D3)", () => {
+  function withStack(error: Error, stack: string): Error {
+    error.stack = stack;
+    return error;
+  }
+
+  it("includes keikoStackFrames' reduction under frames", () => {
+    const error = withStack(
+      new Error("boom"),
+      [
+        "Error: boom",
+        "    at Object.handler (file:///Users/someone/app/packages/keiko-server/dist/observability/server-log.js:128:18)",
+        "    at process.processTicksAndRejections (node:internal/process/task_queues:95:5)",
+      ].join("\n"),
+    );
+    expect(describeError(error).frames).toEqual([
+      "packages/keiko-server/dist/observability/server-log.js:128:18",
+    ]);
+  });
+
+  it("omits frames entirely rather than an empty array when nothing anchors", () => {
+    const error = withStack(
+      new Error("boom"),
+      ["Error: boom", "    at node_modules/some-lib/index.js:1:1"].join("\n"),
+    );
+    expect(describeError(error).frames).toBeUndefined();
+    expect(describeError("not an error").frames).toBeUndefined();
+  });
+
+  it("includes causeChain's content-free class reduction of the error's cause chain", () => {
+    const inner = new TypeError("inner");
+    const outer = new Error("outer", { cause: inner });
+    expect(describeError(outer).causeChain).toEqual(["TypeError"]);
+  });
+
+  it("omits causeChain rather than an empty array when the error carries no cause", () => {
+    expect(describeError(new Error("no cause")).causeChain).toBeUndefined();
+  });
+});
+
+describe("serverDiagnosticFromError forwards frames and causeChain (ADR-0173 D3)", () => {
+  it("carries both onto the produced record when the error carries both", () => {
+    const inner = new TypeError("inner");
+    const error = new Error("outer", { cause: inner });
+    error.stack = [
+      "Error: outer",
+      "    at file:///Users/someone/app/packages/keiko-server/dist/foo.js:1:1",
+    ].join("\n");
+
+    const record = serverDiagnosticFromError({
+      correlationId: "cid-frames-chain",
+      operation: "op",
+      source: "unit",
+      error,
+      redact: identity,
+      now: () => 0,
+    });
+
+    expect(record.frames).toEqual(["packages/keiko-server/dist/foo.js:1:1"]);
+    expect(record.causeChain).toEqual(["TypeError"]);
+  });
+
+  it("omits both when the error carries neither a recognisable stack nor a cause", () => {
+    const record = serverDiagnosticFromError({
+      correlationId: "cid-no-evidence",
+      operation: "op",
+      source: "unit",
+      error: "plain string throw",
+      redact: identity,
+      now: () => 0,
+    });
+    expect(record.frames).toBeUndefined();
+    expect(record.causeChain).toBeUndefined();
+  });
+});

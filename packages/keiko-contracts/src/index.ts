@@ -44,6 +44,13 @@ export { compareStrings } from "./comparators.js";
 // ─── Shared coded-HTTP-error mechanism (GEN-DUP-NEAR-008) ───────────────────────
 export { CodedHttpError, httpStatusFor } from "./http-error.js";
 
+// ─── Shared error-kind classification gate (ADR-0173 D11) ──────────────────────
+// One declaration of ERROR_KIND_PATTERN and its shape-gated reducer, so keiko-server,
+// keiko-model-gateway and keiko-local-knowledge cannot drift into accepting different things
+// under the `errorKind` activity-log envelope field. Relocated from three independently
+// declared, byte-identical copies that were pinned only by a source-text drift test.
+export { ERROR_KIND_PATTERN, classifyErrorKind, isErrorKind } from "./observability.js";
+
 // ─── Harness ───────────────────────────────────────────────────────────────────
 export type {
   HarnessStateName,

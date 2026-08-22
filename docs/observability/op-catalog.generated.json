@@ -9,6 +9,12 @@
       "package": "keiko-cli"
     },
     {
+      "op": "process.fatal",
+      "category": "process",
+      "site": "packages/keiko-cli/src/process-guards.ts:114",
+      "package": "keiko-cli"
+    },
+    {
       "op": "process.heartbeat",
       "category": "process",
       "site": "packages/keiko-cli/src/ui.ts:701",
@@ -281,7 +287,7 @@
     {
       "op": "knowledge.log.sink-failed",
       "category": "diagnostic",
-      "site": "packages/keiko-local-knowledge/src/knowledge-log.ts:162",
+      "site": "packages/keiko-local-knowledge/src/knowledge-log.ts:164",
       "package": "keiko-local-knowledge"
     },
     {
@@ -485,7 +491,7 @@
     {
       "op": "gateway.log.sink-failed",
       "category": "gateway",
-      "site": "packages/keiko-model-gateway/src/observability.ts:128",
+      "site": "packages/keiko-model-gateway/src/observability.ts:130",
       "package": "keiko-model-gateway"
     },
     {
@@ -587,13 +593,13 @@
     {
       "op": "<dynamic>",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/diagnostics-log.ts:171",
+      "site": "packages/keiko-server/src/diagnostics-log.ts:213",
       "package": "keiko-server"
     },
     {
       "op": "<dynamic>",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/observability/server-log.ts:692",
+      "site": "packages/keiko-server/src/observability/server-log.ts:714",
       "package": "keiko-server"
     },
     {
@@ -779,13 +785,13 @@
     {
       "op": "server-log.write-failed",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/observability/server-log.ts:290",
+      "site": "packages/keiko-server/src/observability/server-log.ts:312",
       "package": "keiko-server"
     },
     {
       "op": "server-log.write-failed",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/observability/server-log.ts:316",
+      "site": "packages/keiko-server/src/observability/server-log.ts:338",
       "package": "keiko-server"
     }
   ],

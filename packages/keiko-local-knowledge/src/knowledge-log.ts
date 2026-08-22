@@ -21,6 +21,8 @@
 // text, document text, extracted content, prompts, embeddings, api keys, endpoints, and
 // absolute filesystem paths never reach a field on this event.
 
+import { classifyErrorKind } from "@oscharko-dev/keiko-contracts";
+
 export type KnowledgeLogLevel = "debug" | "info" | "warn" | "error";
 
 export type KnowledgeLogCategory = "embedding" | "indexing" | "search" | "diagnostic";
@@ -59,10 +61,11 @@ export function startKnowledgeLogTimer(): () => number {
   return (): number => Math.round((performance.now() - startedAt) * 1000) / 1000;
 }
 
-// The shape an error KIND may have. Kept character-for-character identical to `ERROR_KIND_PATTERN`
-// in `keiko-server/src/observability/server-logger.ts` and `keiko-model-gateway/src/observability.ts`,
-// so the three reducers cannot drift into accepting different things: an identifier, a taxonomy
-// code, a constructor name — never a sentence.
+// The shape an error KIND may have is `classifyErrorKind` (ADR-0173 D11), imported from
+// `keiko-contracts` rather than declared here, so this reducer and the ones in
+// `keiko-server/src/observability/server-log.ts` and `keiko-model-gateway/src/observability.ts`
+// cannot drift into accepting different things: an identifier, a taxonomy code, a constructor
+// name — never a sentence.
 //
 // Reading `code`/`name` instead of `message` is only HALF the guard, and this reducer used to ship
 // with the other half missing. Neither property is reserved by the language: a provider client is
@@ -71,7 +74,6 @@ export function startKnowledgeLogTimer(): () => number {
 // body. Without a shape gate that sentence — including one echoing the very input that was
 // rejected — was written verbatim into `errorKind`, which is an ENVELOPE field and therefore the
 // one place a value is read before `extra` is redacted.
-const ERROR_KIND_PATTERN = /^[A-Za-z][A-Za-z0-9_.-]{0,63}$/;
 
 // READING the property is itself a call into foreign code. `code` and `name` are ordinary
 // properties on an object this layer did not build: an accessor, a Proxy `get` trap, or a
@@ -88,15 +90,15 @@ function errorKindProperty(error: object, key: string): string | undefined {
   } catch {
     return undefined;
   }
-  return typeof value === "string" && ERROR_KIND_PATTERN.test(value) ? value : undefined;
+  return classifyErrorKind(value);
 }
 
 // Classification only: the coded `code`, else the constructor `name`, else "unknown". The
 // message is NEVER read — a thrown error's message routinely carries a path, an endpoint, or a
 // fragment of the content that failed to parse — and neither `code` nor `name` is trusted to be a
-// code just because it is called one: both must pass `ERROR_KIND_PATTERN` first. A `code` that
-// fails the shape falls through to `name`, and a failing `name` falls through to "unknown", so a
-// prose-carrying property degrades to a classification instead of leaking.
+// code just because it is called one: both must pass `classifyErrorKind`'s shape gate first. A
+// `code` that fails the shape falls through to `name`, and a failing `name` falls through to
+// "unknown", so a prose-carrying property degrades to a classification instead of leaking.
 export function knowledgeErrorKind(error: unknown): string {
   if (typeof error !== "object" || error === null) return "unknown";
   return errorKindProperty(error, "code") ?? errorKindProperty(error, "name") ?? "unknown";
