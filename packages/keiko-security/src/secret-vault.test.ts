@@ -188,6 +188,30 @@ describe("resolveLocalVaultKey — KEYFILE tier", () => {
   });
 });
 
+describe("resolveLocalVaultKey — default keychainAccess when the option is omitted", () => {
+  const originalPlatform = process.platform;
+
+  afterEach(() => {
+    Object.defineProperty(process, "platform", { value: originalPlatform, configurable: true });
+  });
+
+  it("builds the default macOS keychain access itself and falls through to keyfile off darwin", () => {
+    // No `keychainAccess` in these options at all — computeLocalVaultKey must construct the default
+    // (createKeychainVaultKeyAccess-backed) access itself. Off darwin that default returns undefined
+    // WITHOUT spawning `security`, so this stays hermetic while still exercising the real default
+    // construction path rather than an injected stand-in.
+    Object.defineProperty(process, "platform", { value: "linux", configurable: true });
+    const resolved = resolveLocalVaultKey({
+      env: {},
+      vaultDir: dir,
+      envVarName: "KEIKO_TEST_VAULT_KEY",
+      keychainService: "keiko-test-vault",
+      keyfileName: "test-vault.key",
+    });
+    expect(resolved.source).toBe("keyfile");
+  });
+});
+
 // gap g18: the key-source fact (which tier answered) was previously invisible even on the
 // ordinary, no-fallback path. `security.vault.key-resolved` closes that — it fires every time a
 // tier resolves, independent of whether anything went wrong.
@@ -597,6 +621,56 @@ describe("createLocalSecretVault — symlink guard", () => {
   });
 });
 
+describe("createLocalSecretVault — non-symlink lstat failure propagates unmodified", () => {
+  it("propagates a non-ENOENT lstat failure raised while walking ancestor path segments", () => {
+    // A path segment that is itself a plain FILE (not a directory) makes lstat on anything beneath
+    // it fail with ENOTDIR rather than ENOENT — the "keychain refused, not merely absent" analogue
+    // for the symlink-guard walk: only ENOENT is swallowed as "not a symlink", every other lstat
+    // failure must propagate as-is rather than being reinterpreted as the deliberate guard error.
+    const blockedFile = join(dir, "blocked-file");
+    writeFileSync(blockedFile, "not a directory");
+    const storePath = join(blockedFile, "sub", "vault.enc.json");
+    const vault = vaultAt(storePath);
+
+    let caught: unknown;
+    try {
+      vault.set("cred:a", "value");
+    } catch (error) {
+      caught = error;
+    }
+    expect(caught).toBeInstanceOf(Error);
+    expect((caught as NodeJS.ErrnoException).code).toBe("ENOTDIR");
+    // Not the deliberate symlink-guard error: this is the raw fs failure propagating unmodified.
+    expect(String(caught)).not.toContain("symlinked path");
+  });
+});
+
+describe("createLocalSecretVault — fsyncDirectory skips the directory fsync on win32", () => {
+  const originalPlatform = process.platform;
+
+  afterEach(() => {
+    Object.defineProperty(process, "platform", { value: originalPlatform, configurable: true });
+  });
+
+  it("still completes a write when the platform is win32 (POSIX directory fsync is meaningless there)", () => {
+    Object.defineProperty(process, "platform", { value: "win32", configurable: true });
+    const storePath = join(dir, "vault.enc.json");
+    const vault = vaultAt(storePath);
+
+    expect(() => {
+      vault.set("cred:a", "value");
+    }).not.toThrow();
+    expect(vault.get("cred:a")).toBe("value");
+  });
+});
+
+// NOTE: the analogous "leaves no temp file behind when the commit rename fails" proof for the
+// SHARDED layout (below, near writeShard) blocks the target with a real pre-existing directory
+// because sharded set() never reads its target before writing. The single-file layout's set()
+// always reads the CURRENT store content first (readStore), so the same trick makes readStore
+// itself fail first (EISDIR) — never reaching writeStore's rename at all. That version of this
+// proof lives in secret-vault.fs-fault-injection.test.ts, using a scoped renameSync mock instead.
+
 describe("createLocalSecretVault — additional isStoreFile branches", () => {
   it("a store file containing JSON null fails closed", () => {
     const storePath = join(dir, "vault.enc.json");
@@ -723,6 +797,35 @@ describe("createKeychainVaultKeyAccess", () => {
       throw new Error("security unavailable");
     };
     expect(createKeychainVaultKeyAccess("svc", runner)()).toBeUndefined();
+  });
+
+  it("regenerates the key when the stored keychain value cannot be decoded (corrupt/garbage bytes)", () => {
+    setPlatform("darwin");
+    // Base64 of 16 bytes decodes cleanly but to the wrong length, so decodeKeyOrThrow rejects it —
+    // distinct from "keychain has none" (item-not-found): here the read SUCCEEDS with a value this
+    // vault cannot use, and the undecodable-value path must replace it exactly as generate-on-miss does.
+    const undecodable = Buffer.alloc(16, 2).toString("base64");
+    const commands: string[][] = [];
+    const runner = (args: readonly string[]): string => {
+      commands.push([...args]);
+      if (args[0] === "find-generic-password") return `${undecodable}\n`;
+      return "";
+    };
+    const key = createKeychainVaultKeyAccess("svc", runner)();
+    expect(key?.length).toBe(32);
+    expect(commands.map((c) => c[0])).toEqual(["find-generic-password", "add-generic-password"]);
+  });
+
+  it("returns undefined when the item-not-found path's own key generation fails (add error)", () => {
+    setPlatform("darwin");
+    const commands: string[][] = [];
+    const runner = (args: readonly string[]): string => {
+      commands.push([...args]);
+      if (args[0] === "find-generic-password") throw itemNotFound();
+      throw new Error("add-generic-password failed");
+    };
+    expect(createKeychainVaultKeyAccess("svc", runner)()).toBeUndefined();
+    expect(commands.map((c) => c[0])).toEqual(["find-generic-password", "add-generic-password"]);
   });
 
   // The keychain key-tier path spawns `security` through its own injectable `KeychainCommandRunner`

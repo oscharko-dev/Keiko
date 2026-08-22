@@ -205,6 +205,31 @@ describe("runSupportCli export", () => {
     expect(written).not.toContain(HEALTHY_AUDIT.stateDir);
   });
 
+  it("records a log file that vanishes between discovery and read as skipped, not aborted", async () => {
+    // `discoverServerLogFiles` only `statSync`s each name (which succeeds on a directory too), so
+    // a directory sitting where `server.log` belongs passes discovery — the read step afterward
+    // (`readFileSync`) is what actually fails, with EISDIR. This is the same "vanished between two
+    // fs calls" shape the sink's own rotation/retention pruning produces, exercised deterministically
+    // instead of via a real race.
+    mkdirSync(join(stateDir, "logs", "server.log"), { recursive: true });
+
+    const c = makeIo();
+    const code = await runSupportCli(["export", "--state-dir", stateDir], c.io, AUDIT_ENV, {
+      cwd: outDir,
+      now: () => new Date("2026-08-21T12:00:00.000Z"),
+      auditDeps: healthyAuditDeps(),
+      evidenceStore: createInMemoryEvidenceStore(),
+    });
+
+    expect(code).toBe(0);
+    const outPath = join(outDir, "keiko-support-2026-08-21T12-00-00.000Z.jsonl");
+    const manifest: Record<string, unknown> = JSON.parse(
+      readFileSync(outPath, "utf8").split("\n")[0] ?? "{}",
+    ) as Record<string, unknown>;
+    expect(manifest.sourceLogFiles).toEqual([]);
+    expect(manifest.skippedLogFiles).toEqual([{ name: "server.log", errorKind: "EISDIR" }]);
+  });
+
   it("defaults stateDirSource to 'default' when neither --state-dir nor KEIKO_STATE_DIR is set", async () => {
     const cwdWithDefaultState = mkdtempSync(join(tmpdir(), "keiko-support-cli-default-"));
     mkdirSync(join(cwdWithDefaultState, ".keiko", "logs"), { recursive: true });

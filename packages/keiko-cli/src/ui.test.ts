@@ -963,6 +963,45 @@ describe("runUiCli — node:sqlite re-exec guard (ADR-0013 D2)", () => {
     expect(child.listenerCount("exit")).toBeGreaterThanOrEqual(0);
   });
 
+  // Without these forwarders, a Ctrl-C during re-exec kills the PARENT (whose own SIGINT
+  // listeners are the default Node behaviour: terminate) while the re-exec'd CHILD — the process
+  // actually doing the work — keeps running orphaned. The parent must relay the signal instead.
+  it("forwards SIGINT and SIGTERM to the re-exec'd child instead of leaving it orphaned", async () => {
+    const { io } = captureIo();
+    const child = new EventEmitter() as EventEmitter & {
+      kill: (signal?: NodeJS.Signals) => boolean;
+    };
+    const killedWith: (NodeJS.Signals | undefined)[] = [];
+    child.kill = (signal?: NodeJS.Signals): boolean => {
+      killedWith.push(signal);
+      return true;
+    };
+
+    const promise = runUiCli(
+      [],
+      io,
+      {},
+      {
+        currentExecArgv: () => [],
+        sqliteProbe: () => false,
+        spawnFn: () => child as unknown as import("node:child_process").ChildProcess,
+      },
+    );
+
+    // Everything up to and including `process.on("SIGINT"/"SIGTERM", ...)` inside the re-exec
+    // guard runs synchronously (spawnFn is called synchronously, and nothing awaits before the
+    // listeners are registered) — so both are already attached the instant `runUiCli` yields its
+    // pending promise back to this line, with no need to wait a tick first.
+    process.emit("SIGINT");
+    process.emit("SIGTERM");
+    expect(killedWith).toEqual(["SIGINT", "SIGTERM"]);
+
+    child.emit("exit", 0, null);
+    expect(await promise).toBe(0);
+    // The forwarders must be gone once the child has exited (no listener leak).
+    expect(child.listenerCount("exit")).toBeGreaterThanOrEqual(0);
+  });
+
   // Regression pin (KEIKO-0443): the three "does not re-exec" tests below previously used the
   // invalid `["--host", "0.0.0.0"]` args, so parseUiArgsOrExit returned 2 *before* the sqlite
   // guard ran and neither `sqliteProbe`, the NODE_OPTIONS branch of `alreadyFlagged`, nor the

@@ -366,6 +366,21 @@ describe("credential key-name scanner", () => {
   it("does not flag adjacent non-secret metadata keys", () => {
     expect(objectContainsCredentialKey({ tokenCount: 42, secretariat: "team" })).toBe(false);
   });
+
+  it("terminates on a circular reference instead of recursing forever", () => {
+    // The `seen` WeakSet guard exists precisely for this shape: a self-referencing object would
+    // otherwise recurse without bound. No credential key anywhere in the cycle, so this must
+    // settle on false rather than exhausting the stack.
+    const cyclic: Record<string, unknown> = { harmless: "value" };
+    cyclic.self = cyclic;
+    expect(objectContainsCredentialKey(cyclic)).toBe(false);
+  });
+
+  it("still finds a credential key reachable before the cycle is revisited", () => {
+    const cyclic: Record<string, unknown> = { client_secret: "opaque" };
+    cyclic.self = cyclic;
+    expect(objectContainsCredentialKey(cyclic)).toBe(true);
+  });
 });
 
 describe("createAuditRedactor — env-value redaction", () => {

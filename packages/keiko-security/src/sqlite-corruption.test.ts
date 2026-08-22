@@ -3,6 +3,7 @@ import {
   SqliteQuickCheckError,
   errorRecord,
   isSqliteCorruptionError,
+  safeName,
   sqliteErrorLike,
   sqliteErrorText,
 } from "./sqlite-corruption.js";
@@ -79,6 +80,32 @@ describe("shape helpers", () => {
     expect(record.message).toBe("plain failure");
     expect(record.code).toBeUndefined();
     expect(record.errcode).toBeUndefined();
+  });
+});
+
+describe("safeName", () => {
+  it("returns the value when the reflective read finds a string name", () => {
+    expect(safeName(new Error("boom"))).toBe("Error");
+    expect(safeName({ name: "CustomName" })).toBe("CustomName");
+  });
+
+  it("returns undefined when there is no name property at all", () => {
+    expect(safeName({})).toBeUndefined();
+  });
+
+  it("returns undefined when name is present but not a string", () => {
+    expect(safeName({ name: 42 })).toBeUndefined();
+  });
+
+  it("returns undefined instead of throwing when the reflective read itself throws", () => {
+    // A hostile getter on `name` must not escape this reflective read — it is exercised over
+    // untrusted thrown values, which may be adversarially shaped.
+    const hostile = {
+      get name(): string {
+        throw new Error("getter boom");
+      },
+    };
+    expect(safeName(hostile)).toBeUndefined();
   });
 });
 
