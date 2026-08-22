@@ -2,7 +2,8 @@ import { randomUUID } from "node:crypto";
 import { mkdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeAll, describe, expect, it } from "vitest";
+import { loadServer } from "./lazy-modules.js";
 import { activateMacosPortableRuntime } from "./portable-macos-activation.js";
 import { layoutFor } from "./portable-shared.js";
 
@@ -21,6 +22,18 @@ function activationFixture(): {
   roots.push(root);
   return { root, manager, layout };
 }
+
+// The production signature probe lives behind `loadServer()` — the whole keiko-server module graph,
+// imported lazily (GEN-PERF-CLI-001). That import is the only slow thing in this file: under V8
+// coverage instrumentation it alone exceeds vitest's default 5 s per-test budget, which made the
+// "through the production probe" case time out intermittently while asserting nothing about time.
+// Paying the import once here keeps that test measuring its own logic; the bound is on the HOOK and
+// states what it covers (one cold module-graph load), so a real hang still fails rather than waits.
+const SERVER_GRAPH_WARMUP_MS = 60_000;
+
+beforeAll(async () => {
+  await loadServer();
+}, SERVER_GRAPH_WARMUP_MS);
 
 afterEach(() => {
   for (const root of roots.splice(0)) rmSync(root, { force: true, recursive: true });
