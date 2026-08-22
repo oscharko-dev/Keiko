@@ -400,6 +400,16 @@ export {
   type ServerLogThreshold,
 } from "./observability/server-log.js";
 
+// ADR-0173 D3/D11 — error evidence for the activity log: dist/src-anchored stack frames, a
+// content-free `.cause` chain, and the content-free error-CLASS classifier they both build on.
+// Exposed so `keiko-cli`'s process-guards fatal path (an uncaught exception/unhandled rejection
+// with a state directory present) can compute the SAME evidence this package's own diagnostics
+// sink already writes, via a dynamic `import("@oscharko-dev/keiko-server")` reached only inside the
+// crash handler — never at module scope, where it would cost real startup time against
+// GEN-PERF-CLI-001's budget.
+export { causeChain, keikoStackFrames } from "./observability/stack-frames.js";
+export { contentFreeErrorClass, describeError } from "./diagnostics-log.js";
+
 // Install-mode detection for `keiko-cli`'s process-lifecycle (`process.started`) and
 // support-bundle manifest fields. `detectUpdateInstallMode`/`productionUpdateFacts` are exported
 // rather than `detectPortableUpdateInstallMode` (the narrower portable-only branch in

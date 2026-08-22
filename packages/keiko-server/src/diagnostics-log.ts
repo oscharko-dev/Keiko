@@ -1,7 +1,31 @@
 import { DECLARED_MODEL_MODES } from "@oscharko-dev/keiko-contracts";
 
+import {
+  contentFreeErrorClass,
+  machineToken,
+  safeProperty,
+} from "./observability/error-classification.js";
 import { closeReasonVocabulary } from "./observability/log-redaction.js";
 import { createFileServerLogSink } from "./observability/server-log.js";
+import { causeChain, keikoStackFrames } from "./observability/stack-frames.js";
+
+// The error-classification primitives below (`contentFreeErrorClass`, `safeProperty`,
+// `machineToken`, and the shapes/sets they use) used to live in this file. They moved to
+// `./observability/error-classification.js` (ADR-0173 D11) so `server-log.ts`'s `errorKindOf`
+// could delegate to the same hardened reflection helpers instead of maintaining a second,
+// less-hardened regex-based reader — `server-log.ts` cannot import THIS file (it already imports
+// `server-log.ts` for `createFileServerLogSink`, so the reverse edge would cycle), but both can
+// import a leaf that imports neither. Re-exported here so every import site that already reads
+// `contentFreeErrorClass` (and friends) from `./diagnostics-log.js` keeps working unchanged.
+export {
+  contentFreeErrorClass,
+  declaredErrorClassName,
+  DECLARED_ERROR_CLASS_SHAPE,
+  machineToken,
+  MACHINE_TOKEN_SHAPE,
+  safeProperty,
+  SPECIFIC_BUILT_IN_ERROR_NAMES,
+} from "./observability/error-classification.js";
 // Server-side operator diagnostics sink (RB-6 / GEN-OBS-DIAGNOSTICS-901/602/603, STATUS-403).
 //
 // Before this module the top-level route-error catch, the buffered-send rethrow, and the streamed
@@ -58,6 +82,14 @@ export interface ServerDiagnosticRecord {
   // explicitly asserted), `dropped` were removed (Keiko had only inferred the role).
   readonly unverifiedEmbeddingModelCount?: number | undefined;
   readonly droppedEmbeddingModelCount?: number | undefined;
+  // Keiko-code stack frames the error passed through, nearest-to-throw-site first, reduced by
+  // `keikoStackFrames` (ADR-0173 D3) to their dist/src-anchored form — never an absolute path, never
+  // a `node_modules`/`node:internal` frame. Capped at 8; absent when the error carried no `.stack`
+  // this reducer could anchor.
+  readonly frames?: readonly string[] | undefined;
+  // The content-free CLASS of each link in the error's `.cause` chain (never the raw cause itself),
+  // reduced by `causeChain`. Capped at 5; absent when the error carried no `.cause`.
+  readonly causeChain?: readonly string[] | undefined;
 }
 
 export interface ServerDiagnosticSink {
@@ -109,9 +141,16 @@ const UNSUPPORTED_REASON_FALLBACK = "unrecognised-mode";
 // instead: counts, codes, hashes and labels, each named here in code. Anything not on this list
 // never reaches the file, whatever a producer puts on the record.
 //
-// `message` is deliberately absent — it is a code-declared summary the line does not need, and it
-// is the one field on the record shaped like prose. `timestamp` is absent because the line already
-// carries `ts`; `correlationId`, `operation` and `errorClass` ride on the envelope.
+// `message` is never projected under ITS OWN name: `message` is on `log-redaction.ts`'s
+// `DENIED_FIELD_NAMES`, so a field literally named `message` would collapse to `[redacted:key]`
+// even though the value is already safe — a code-declared, allowlisted summary, never foreign
+// error/provider/customer text (see the field's own doc comment above). It is instead projected
+// under `diagnosticSummary` (ADR-0173 D11 g29), and re-validated against the SAME closed
+// vocabulary a second time here — the same "closure applied again, structurally, at the point
+// that actually writes the value" `unsupportedReasons` above already uses — so a future producer
+// that sets `.message` without going through `serverDiagnosticFromError`'s allowlist check cannot
+// put arbitrary text on this line either. `timestamp` is absent because the line already carries
+// `ts`; `correlationId`, `operation` and `errorClass` ride on the envelope.
 function diagnosticActivityLogFields(record: ServerDiagnosticRecord): Record<string, unknown> {
   const fields: Record<string, unknown> = { source: record.source };
   addBoundedField(fields, "code", record.code);
@@ -122,6 +161,7 @@ function diagnosticActivityLogFields(record: ServerDiagnosticRecord): Record<str
   addBoundedField(fields, "unsupportedModelCount", record.unsupportedModelCount);
   addBoundedField(fields, "unverifiedEmbeddingModelCount", record.unverifiedEmbeddingModelCount);
   addBoundedField(fields, "droppedEmbeddingModelCount", record.droppedEmbeddingModelCount);
+  addBoundedField(fields, "diagnosticSummary", allowlistedSummary(record.message));
   if (record.unsupportedReasons !== undefined) {
     fields.unsupportedReasons = record.unsupportedReasons.map((reason) =>
       closeReasonVocabulary(UNSUPPORTED_REASON_VOCABULARY, reason, UNSUPPORTED_REASON_FALLBACK),
@@ -131,6 +171,8 @@ function diagnosticActivityLogFields(record: ServerDiagnosticRecord): Record<str
     fields.promptTokens = record.partialUsage.promptTokens;
     fields.completionTokens = record.partialUsage.completionTokens;
   }
+  if (record.frames !== undefined) fields.frames = record.frames;
+  if (record.causeChain !== undefined) fields.causeChain = record.causeChain;
   return fields;
 }
 
@@ -191,6 +233,15 @@ export const DEFAULT_SERVER_DIAGNOSTIC_SUMMARY = "server-operation-failed";
 // the historical `redact` callback, but it receives only DEFAULT_SERVER_DIAGNOSTIC_SUMMARY; it is
 // never handed foreign error text. A callback that returns request/provider content therefore
 // degrades to the default rather than extending the diagnostic trust boundary.
+//
+// Every literal `message` this module (or a caller building a `ServerDiagnosticRecord` by hand,
+// e.g. `emitEvidenceRetentionDiagnostic` below) ever assigns MUST be a member of this list: since
+// ADR-0173 D11 g29 the activity log projects `message` (as `diagnosticSummary`) through
+// `allowlistedSummary`, so an entry missing here does not leak — it silently loses its summary on
+// the log line instead. `message`'s own type stayed a plain `string` rather than
+// `ServerDiagnosticSummary` (which would force every call site to satisfy this list at compile
+// time) to keep the historical `redact`-callback compatibility path in `compatibilitySummary`
+// working unchanged; this list is the runtime enforcement of the same closed vocabulary instead.
 const SERVER_DIAGNOSTIC_SUMMARIES = [
   DEFAULT_SERVER_DIAGNOSTIC_SUMMARY,
   "Provider verification failed without exposing upstream response details.",
@@ -221,106 +272,50 @@ const SERVER_DIAGNOSTIC_SUMMARIES = [
   "Audit or evidence persistence failed.",
   "Debug production service composition failed.",
   "Managed task-workspace boundary materialization failed.",
+  "Evidence retention deleted manifests.",
 ] as const;
 
 export type ServerDiagnosticSummary = (typeof SERVER_DIAGNOSTIC_SUMMARIES)[number];
 
 const SERVER_DIAGNOSTIC_SUMMARY_SET: ReadonlySet<string> = new Set(SERVER_DIAGNOSTIC_SUMMARIES);
 
+const OPERATION_LABEL_SHAPE = /^[A-Za-z0-9][A-Za-z0-9._:/-]*(?: [A-Za-z0-9/][A-Za-z0-9._:/-]*)?$/;
+const SOURCE_LABEL_SHAPE = /^[A-Za-z0-9][A-Za-z0-9._:-]*$/;
+const MAX_DIAGNOSTIC_LABEL_LENGTH = 160;
+
+// `keikoStackFrames`/`causeChain` always return an array, empty when there is nothing to report
+// (no stack, no cause). An empty array is still a VALUE, and writing `frames: []`/`causeChain: []`
+// onto every diagnostic record — including the vast majority that carry no error object at all —
+// would put a content-free but permanent field on every single line. Degrading empty to `undefined`
+// keeps both fields doing what every other optional field on this record already does: present
+// only when there is real evidence, `addBoundedField`'s omission contract downstream.
+function nonEmpty(values: readonly string[]): readonly string[] | undefined {
+  return values.length > 0 ? values : undefined;
+}
+
 // Extracts only the diagnosable, body-free shape of an unknown thrown value. In particular this
 // function never reads `.message` or stringifies the value. Machine fields are read independently
-// through fail-closed property access, then admitted only by their bounded shapes.
+// through fail-closed property access, then admitted only by their bounded shapes. `frames` and
+// `causeChain` (ADR-0173 D3) reuse `stack-frames.ts`'s reducers rather than re-deriving them: a
+// second stack reducer here would either duplicate that module's dist-anchoring and bounds, or,
+// worse, drift from them.
 export function describeError(error: unknown): {
   readonly errorClass: string;
   readonly code?: string | undefined;
   readonly gatewayRequestId?: string | undefined;
   readonly partialUsage?:
     { readonly promptTokens: number; readonly completionTokens: number } | undefined;
+  readonly frames?: readonly string[] | undefined;
+  readonly causeChain?: readonly string[] | undefined;
 } {
   return {
     errorClass: contentFreeErrorClass(error),
     code: machineToken(safeProperty(error, "code")),
     gatewayRequestId: machineToken(safeProperty(error, "requestId")),
     partialUsage: partialUsageCounts(safeProperty(error, "partialUsage")),
+    frames: nonEmpty(keikoStackFrames(error)),
+    causeChain: nonEmpty(causeChain(error)),
   };
-}
-
-// `Error.name` and the instance's `constructor` are plain mutable own properties: a hostile thrown
-// value — or a buggy merge of request data onto an error — can load them with request-derived text.
-// A name passes only when it is one of these SPECIFIC well-known built-ins, which legitimately ride
-// on generic `Error`/`DOMException` instances (e.g. an abort reason named "AbortError") where the
-// declared class name would erase the useful distinction. The generic "Error" is deliberately NOT
-// in the set: for it, the code-declared class name is the more specific, equally safe label.
-const SPECIFIC_BUILT_IN_ERROR_NAMES: ReadonlySet<string> = new Set([
-  "TypeError",
-  "RangeError",
-  "SyntaxError",
-  "ReferenceError",
-  "EvalError",
-  "URIError",
-  "AggregateError",
-  "AbortError",
-  "TimeoutError",
-]);
-
-// Class names come from code (class declarations), never from request data, so a bounded,
-// identifier-shaped constructor name is safe to surface. Machine tokens (`code`, `requestId`)
-// reuse the correlation-id alphabet: no whitespace, no prose, bounded length.
-const DECLARED_ERROR_CLASS_SHAPE = /^[A-Z][A-Za-z0-9]{0,63}$/;
-const MACHINE_TOKEN_SHAPE = /^[A-Za-z0-9._-]{1,128}$/;
-const OPERATION_LABEL_SHAPE = /^[A-Za-z0-9][A-Za-z0-9._:/-]*(?: [A-Za-z0-9/][A-Za-z0-9._:/-]*)?$/;
-const SOURCE_LABEL_SHAPE = /^[A-Za-z0-9][A-Za-z0-9._:-]*$/;
-const MAX_DIAGNOSTIC_LABEL_LENGTH = 160;
-
-// Resolves the content-free class of an unknown thrown value: a specific built-in error name, else
-// the class name declared in code (recovering subclasses that never assign `this.name`), else the
-// generic "Error" (or `typeof` for non-Error throws). Shared by every diagnostics producer that
-// labels an error, so the mutable-`name` hardening lives in exactly one place.
-export function contentFreeErrorClass(error: unknown): string {
-  try {
-    if (!(error instanceof Error)) return typeof error;
-    const name = safeProperty(error, "name");
-    if (typeof name === "string" && SPECIFIC_BUILT_IN_ERROR_NAMES.has(name)) return name;
-    return declaredErrorClassName(error) ?? "Error";
-  } catch {
-    // Reflection over a hostile value (a proxy trap or throwing accessor) must never turn the
-    // diagnostic path into a second failure; degrade to the generic class instead.
-    return "Error";
-  }
-}
-
-// Reads the constructor name off the PROTOTYPE (not the instance) so an own-property
-// `constructor` planted by hostile data cannot shadow the code-declared class.
-function declaredErrorClassName(error: Error): string | undefined {
-  const proto = Reflect.getPrototypeOf(error);
-  const ctor = safeProperty(proto, "constructor");
-  const name = safeProperty(ctor, "name");
-  if (typeof ctor !== "function" || typeof name !== "string") return undefined;
-  if (!DECLARED_ERROR_CLASS_SHAPE.test(name)) {
-    return undefined;
-  }
-  return name;
-}
-
-// Reflective reads from a thrown value are hostile-input reads: accessors and proxy traps may throw.
-// Every optional machine field therefore goes through this helper and degrades to absence.
-function safeProperty(value: unknown, property: string): unknown {
-  if ((typeof value !== "object" || value === null) && typeof value !== "function") {
-    return undefined;
-  }
-  try {
-    return Reflect.get(value, property);
-  } catch {
-    return undefined;
-  }
-}
-
-// Forwards a `code`/`requestId` style value only when it is a bounded machine token: the charset
-// and length bound exclude prose, whitespace, and oversized payloads. Values are dropped, never
-// rewritten, so the field stays machine-parseable or absent. The message redactor is deliberately
-// NOT consulted here — producers that redact by constant message would otherwise lose every token.
-function machineToken(value: unknown): string | undefined {
-  return typeof value === "string" && MACHINE_TOKEN_SHAPE.test(value) ? value : undefined;
 }
 
 // Accepts only the numeric counts (GatewayError.partialUsage shape) — anything
@@ -437,5 +432,7 @@ export function serverDiagnosticFromError(input: {
       ? {}
       : { gatewayRequestId: described.gatewayRequestId }),
     ...(described.partialUsage === undefined ? {} : { partialUsage: described.partialUsage }),
+    ...(described.frames === undefined ? {} : { frames: described.frames }),
+    ...(described.causeChain === undefined ? {} : { causeChain: described.causeChain }),
   };
 }

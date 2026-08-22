@@ -8,9 +8,14 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { defaultServerDiagnosticSink } from "./diagnostics-log.js";
+import {
+  DEFAULT_SERVER_DIAGNOSTIC_SUMMARY,
+  defaultServerDiagnosticSink,
+  serverDiagnosticFromError,
+} from "./diagnostics-log.js";
 import type { ServerDiagnosticRecord } from "./diagnostics-log.js";
 import { closeFileServerLogSinks, SERVER_LOG_LEVEL_ENV } from "./observability/index.js";
+import { FRAME_SHAPE_PATTERN } from "./observability/stack-frames.js";
 
 function readActivityLine(stateDir: string): Record<string, unknown> {
   const raw = readFileSync(join(stateDir, "logs", "server.log"), "utf8").trim();
@@ -56,6 +61,10 @@ describe("diagnostic records on the activity log", () => {
     const line = readActivityLine(stateDir);
 
     // The evidence an operator reads, flat on the line and keyed the way every other line is.
+    // `diagnosticSummary` carries the SAME text as `record.message` — that is expected and safe:
+    // `message` is an allowlisted, code-declared summary (never foreign error/provider/customer
+    // text), just projected under a different key so it does not collide with `message` on
+    // `log-redaction.ts`'s `DENIED_FIELD_NAMES`.
     expect(line).toMatchObject({
       category: "diagnostic",
       op: "chat.stream",
@@ -66,16 +75,70 @@ describe("diagnostic records on the activity log", () => {
       occurrenceCount: 2,
       promptTokens: 10,
       completionTokens: 4,
+      diagnosticSummary: "Provider verification failed without exposing upstream response details.",
     });
 
     // Nothing else. Not the undeclared field, not the whole record under a `record` key, and not
-    // the summary or the timestamp the envelope already carries as `ts`.
+    // a key literally named `message` (the DENIED_FIELD_NAMES collision this design avoids), nor
+    // the timestamp the envelope already carries as `ts`.
     expect(line.notes).toBeUndefined();
     expect(line.record).toBeUndefined();
     expect(line.message).toBeUndefined();
+    expect(Object.keys(line)).not.toContain("message");
     expect(line.timestamp).toBeUndefined();
     expect(JSON.stringify(line)).not.toContain("JaneDoe1985");
-    expect(JSON.stringify(line)).not.toContain("Provider verification");
+  });
+
+  // ADR-0173 D3/D11 (g2, g29): a thrown Error carries its stack and its allowlisted summary all
+  // the way to the persisted line, through `serverDiagnosticFromError` → `defaultServerDiagnosticSink`
+  // → the file sink's redaction pass — not merely through `describeError` in isolation.
+  it("wires frames and diagnosticSummary from a thrown Error onto the activity log", () => {
+    function levelThree(): never {
+      throw new Error("boom");
+    }
+    function levelTwo(): void {
+      levelThree();
+    }
+    function levelOne(): void {
+      levelTwo();
+    }
+
+    let caught: unknown;
+    try {
+      levelOne();
+    } catch (error) {
+      caught = error;
+    }
+
+    const record = serverDiagnosticFromError({
+      correlationId: "cid-frames",
+      operation: "unit.frames",
+      source: "unit",
+      error: caught,
+      summary: DEFAULT_SERVER_DIAGNOSTIC_SUMMARY,
+      redact: (message) => message,
+      now: () => 0,
+    });
+    defaultServerDiagnosticSink.record(record);
+    const line = readActivityLine(stateDir);
+
+    expect(line.diagnosticSummary).toBe(DEFAULT_SERVER_DIAGNOSTIC_SUMMARY);
+    expect(Object.keys(line)).not.toContain("message");
+
+    expect(line.frames).toBeInstanceOf(Array);
+    const frames = line.frames as readonly string[];
+    // Only "at least one frame survives, and every surviving frame has the reducer's shape" is a
+    // property of the reducer under test here. The exact surviving frame COUNT is a property of the
+    // runtime (V8 inlining, `Error.stackTraceLimit`, Vitest's transform), so the count is pinned
+    // instead in `diagnostics-log.test.ts` against an injected synthetic stack. Likewise, a fixed
+    // `src/` prefix depends on how Vitest reports this module's path (workspace root vs. package
+    // root as cwd), so every frame is checked against the reducer's own exported shape pattern and
+    // at least one is required to name this test's own package directory instead.
+    expect(frames.length).toBeGreaterThanOrEqual(1);
+    for (const frame of frames) {
+      expect(frame).toMatch(FRAME_SHAPE_PATTERN);
+    }
+    expect(frames.some((frame) => frame.startsWith("packages/keiko-server/"))).toBe(true);
   });
 
   it("omits an absent optional field rather than writing it as null", () => {

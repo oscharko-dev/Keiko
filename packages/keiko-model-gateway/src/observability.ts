@@ -22,6 +22,8 @@
 // bodies, API keys, or headers — counts, sizes, statuses, durations, and closed-union decision
 // labels only.
 
+import { classifyErrorKind } from "@oscharko-dev/keiko-contracts";
+
 export type ModelGatewayLogLevel = "debug" | "info" | "warn" | "error";
 
 // A narrowing of the server's category union. Kept to the three surfaces this package owns so a
@@ -206,14 +208,24 @@ export function logTimer(): () => number {
 // `extra` redaction entirely and is only length/prose-checked at the far end. A non-conforming
 // `code` is not hypothetical: SDKs routinely set it to a sentence ("The request body was rejected:
 // …"), which is a provider message reaching the log through the one field guaranteed to be
-// exempt from field-name policy. This is the identical shape gate the server's `errorKindOf`
-// applies (`server-logger.ts`), kept character-for-character so the two surfaces cannot drift into
-// accepting different things: an identifier, a code, a taxonomy label — never a sentence.
-const ERROR_KIND_PATTERN = /^[A-Za-z][A-Za-z0-9_.-]{0,63}$/;
-
+// exempt from field-name policy. `classifyErrorKind` (ADR-0173 D11) is the identical shape gate
+// `keiko-server` and `keiko-local-knowledge` apply, imported from `keiko-contracts` rather than
+// restated here so the three surfaces cannot drift into accepting different things: an
+// identifier, a code, a taxonomy label — never a sentence.
+//
+// Reading `code`/`name` also runs foreign code: an accessor, or a Proxy `get` trap, both of which
+// can throw. Every caller classifies a cause while it is already handling a failure — a retry
+// ladder mid-`catch`, a resilience event mid-construction — so a throw here would escape ahead of
+// any sink guard and replace the real failure with an unrelated "hostile accessor" crash. An
+// unreadable property is an unclassifiable one and must degrade to the next candidate.
 function errorKindProperty(error: object, key: string): string | undefined {
-  const value: unknown = (error as Record<string, unknown>)[key];
-  return typeof value === "string" && ERROR_KIND_PATTERN.test(value) ? value : undefined;
+  let value: unknown;
+  try {
+    value = (error as Record<string, unknown>)[key];
+  } catch {
+    return undefined;
+  }
+  return classifyErrorKind(value);
 }
 
 // The error's KIND, never its text. A provider's `message` routinely carries the rejected body,

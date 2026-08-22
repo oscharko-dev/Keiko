@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 
+import { DECLARED_ERROR_CLASS_SHAPE } from "./error-classification.js";
 import {
   DROPPED_DEPTH,
   DROPPED_LENGTH,
@@ -558,5 +559,143 @@ describe("embedded personal identifiers", () => {
 
   it("leaves an ordinary short identifier alone", () => {
     expect(redactLogString("cap-2f9c7a")).toBe("cap-2f9c7a");
+  });
+});
+
+// The `frames`/`causeChain` field-name-keyed guard (ADR-0173 D4): defense-in-depth for two fields
+// whose exact machine-generated shape this module knows well enough to re-validate structurally,
+// at the single point named in the header comment ("TWO NAMED ESCAPE HATCHES") — never relying on
+// the fact that a well-formed frame string already happens to slip past the generic prose/path
+// guards for reasons that have nothing to do with this guard existing.
+describe("frames field guard (ADR-0173 D4)", () => {
+  const VALID_DIST_FRAME = "packages/keiko-server/dist/observability/server-log.js:128:18";
+  const VALID_SRC_FRAME = "packages/keiko-server/src/observability/server-log.ts:42:9";
+  const VALID_ROOT_BIN_DIST_FRAME = "dist/cli/index.js:5:1";
+  const VALID_ROOT_BIN_SRC_FRAME = "src/cli/index.ts:5:1";
+
+  it("passes well-formed frames through completely untouched", () => {
+    const frames = [
+      VALID_DIST_FRAME,
+      VALID_SRC_FRAME,
+      VALID_ROOT_BIN_DIST_FRAME,
+      VALID_ROOT_BIN_SRC_FRAME,
+    ];
+
+    expect(redactLogFields({ frames })).toStrictEqual({ frames });
+  });
+
+  it.each([
+    ["an absolute path", `/Users/someone/app/${VALID_DIST_FRAME}`],
+    ["a node_modules path", "node_modules/some-lib/index.js:10:4"],
+    ["a frame naming a non-existent package", "packages/keiko-nonexistent/dist/foo.js:1:1"],
+    ["a traversal segment", "packages/keiko-server/dist/../secrets/foo.js:1:1"],
+    ["a space inside the relative part", "packages/keiko-server/dist/server log.js:1:1"],
+    ["a 200-character relative part", `packages/keiko-server/dist/${"a".repeat(200)}.js:1:1`],
+    ["an embedded email address", "packages/keiko-server/dist/jane.doe@example.com.js:1:1"],
+  ])("drops %s entirely, never a marker in its place", (_label, badFrame) => {
+    expect(redactLogFields({ frames: [badFrame] })).toBeUndefined();
+    // Mixed with a good frame, only the non-conforming one is dropped — the good one is untouched.
+    expect(redactLogFields({ frames: [VALID_DIST_FRAME, badFrame] })).toStrictEqual({
+      frames: [VALID_DIST_FRAME],
+    });
+  });
+
+  it("caps at 8 conforming frames, dropping a 9th", () => {
+    const nineFrames = Array.from(
+      { length: 9 },
+      (_, index) => `packages/keiko-server/dist/observability/server-log.js:${String(index + 1)}:1`,
+    );
+
+    const fields = redactLogFields({ frames: nineFrames });
+
+    expect(fields?.frames).toStrictEqual(nineFrames.slice(0, 8));
+  });
+
+  it("does not extend the guard to a frames field nested under another object", () => {
+    const bogus = "packages/keiko-nonexistent/dist/foo.js:1:1";
+
+    // At the top level the named guard drops the whole array — nothing survives the package check.
+    expect(redactLogFields({ frames: [bogus] })).toBeUndefined();
+    // One level down, `frames` is just another field name: the generic array/string path applies
+    // instead, and this particular string is not itself shaped like a body/prompt/secret/path, so
+    // it survives unchanged. The point under test is that a DIFFERENT policy applied — not that
+    // this exact string happens to pass.
+    expect(redactLogFields({ context: { frames: [bogus] } })).toStrictEqual({
+      context: { frames: [bogus] },
+    });
+  });
+});
+
+describe("causeChain field guard (ADR-0173 D4)", () => {
+  it("passes well-formed cause-chain classes through untouched", () => {
+    const causeChain = ["TransportError", "GatewayError", "AbortError"];
+    // Ties the fixture to the production shape rather than a hand-picked guess: every entry this
+    // test expects to survive really is one `error-classification.ts`'s own regex accepts.
+    for (const entry of causeChain) expect(DECLARED_ERROR_CLASS_SHAPE.test(entry)).toBe(true);
+    expect(redactLogFields({ causeChain })).toStrictEqual({ causeChain });
+  });
+
+  it.each([
+    ["a lowercase-leading entry", "networkError"],
+    ["a prose entry", "bad request from client"],
+  ])("drops %s, keeping only the conforming entries", (_label, badEntry) => {
+    expect(DECLARED_ERROR_CLASS_SHAPE.test(badEntry)).toBe(false);
+    expect(redactLogFields({ causeChain: ["TransportError", badEntry] })).toStrictEqual({
+      causeChain: ["TransportError"],
+    });
+  });
+
+  it("omits the field entirely when nothing survives", () => {
+    expect(
+      redactLogFields({ causeChain: ["networkError", "bad request from client"] }),
+    ).toBeUndefined();
+  });
+
+  it("caps at 5 conforming classes, dropping a 6th", () => {
+    const sixClasses = ["ErrorA", "ErrorB", "ErrorC", "ErrorD", "ErrorE", "ErrorF"];
+    const fields = redactLogFields({ causeChain: sixClasses });
+    expect(fields?.causeChain).toStrictEqual(sixClasses.slice(0, 5));
+  });
+});
+
+// The `diagnosticSummary` field-name-keyed guard (ADR-0173 D11 g29): the one field in this schema
+// whose legitimate values are prose. Without this hatch a full sentence is indistinguishable from a
+// leaked body/prompt fragment to the generic guard, and collapses to `[redacted:shape]` — silently
+// discarding the very summary this field exists to carry, even though the value is already safe.
+describe("diagnosticSummary field guard (ADR-0173 D11 g29)", () => {
+  const ALLOWLISTED_SUMMARY =
+    "Provider verification failed without exposing upstream response details.";
+
+  it("passes an allowlisted, prose-shaped summary through untouched", () => {
+    expect(redactLogFields({ diagnosticSummary: ALLOWLISTED_SUMMARY })).toStrictEqual({
+      diagnosticSummary: ALLOWLISTED_SUMMARY,
+    });
+  });
+
+  it("still refuses a secret-shaped value under this field name", () => {
+    expect(redactLogFields({ diagnosticSummary: OPENAI_PROJECT_KEY })).toStrictEqual({
+      diagnosticSummary: REDACTED_SECRET,
+    });
+  });
+
+  it("still refuses a value carrying an embedded email address under this field name", () => {
+    expect(
+      redactLogFields({ diagnosticSummary: `contact jane.doe@example.com for details` }),
+    ).toStrictEqual({ diagnosticSummary: REDACTED_PERSONAL });
+  });
+
+  it("still refuses an oversized value under this field name", () => {
+    expect(redactLogFields({ diagnosticSummary: "a".repeat(200) })).toStrictEqual({
+      diagnosticSummary: REDACTED_LENGTH,
+    });
+  });
+
+  it("does not extend the guard to a diagnosticSummary field nested under another object", () => {
+    // One level down, `diagnosticSummary` is just another field name: the generic prose guard
+    // applies instead, and a full sentence there collapses to `[redacted:shape]` exactly as any
+    // other prose-shaped value would under an unrelated field name.
+    expect(redactLogFields({ context: { diagnosticSummary: ALLOWLISTED_SUMMARY } })).toStrictEqual({
+      context: { diagnosticSummary: REDACTED_SHAPE },
+    });
   });
 });

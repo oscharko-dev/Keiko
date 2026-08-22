@@ -242,6 +242,37 @@ describe("logErrorKind", () => {
     expect(() => logErrorKind(error)).not.toThrow();
     expect(logErrorKind(error)).toBe("Error");
   });
+
+  // Reading `code` runs foreign code: a gateway SDK's error class, or a hostile response body
+  // deserialized into a getter, can throw from its own accessor. This call sits inside a `catch`
+  // block that is already building the retry-exhausted event (`resilience.ts`), so a throw here
+  // would escape as the failure instead of describing it — an unreadable property is an
+  // unclassifiable one and must degrade to the next candidate, exactly like its `code`/`name`
+  // sibling in `keiko-local-knowledge`.
+  it("degrades to the next candidate when a property accessor throws", () => {
+    const hostile = { name: "ProviderTimeoutError" };
+    Object.defineProperty(hostile, "code", {
+      get(): string {
+        throw new Error("accessor refused");
+      },
+      enumerable: true,
+    });
+    expect(() => logErrorKind(hostile)).not.toThrow();
+    expect(logErrorKind(hostile)).toBe("ProviderTimeoutError");
+  });
+
+  it("degrades to `unknown` when every candidate accessor throws", () => {
+    const hostile = new Proxy(
+      {},
+      {
+        get(): never {
+          throw new Error("trap refused");
+        },
+      },
+    );
+    expect(() => logErrorKind(hostile)).not.toThrow();
+    expect(logErrorKind(hostile)).toBe("unknown");
+  });
 });
 
 describe("logEndpointHost", () => {

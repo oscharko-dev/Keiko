@@ -35,8 +35,49 @@
 // An absolute path is not passed through under any exemption. A request path is reduced to its
 // route TEMPLATE by `route-template.ts` — literal route segments survive, every other segment is
 // digested — and everything else that starts at the filesystem root is refused.
+//
+// NAMED ESCAPE HATCHES: ONE VALUE-KEYED, THREE FIELD-NAME-KEYED (ADR-0173 D4, D11 g29)
+//
+// `path` above is a VALUE-shape escape hatch: `redactLogString` recognises a path-shaped STRING
+// and hands it to `redactRoutePath`, whatever field it arrived under. `frames`, `causeChain` and
+// `diagnosticSummary` each get a field-NAME-keyed hatch instead, because none of the three is
+// something the generic value guards can admit unaided:
+//
+//   * `frames` and `causeChain` are ARRAYS, and this module happens to know the exact
+//     machine-generated shape of their elements well enough to re-validate them structurally
+//     instead of dropping the whole array under the generic type/shape rules. `frames` (a
+//     `keikoStackFrames` reduction, ADR-0173 D3) is re-checked element-by-element against
+//     `stack-frames.ts`'s own `FRAME_SHAPE_PATTERN` and `PACKAGE_DIR_NAMES` — imported here exactly
+//     as that module's own header anticipates, so only ONE file states what a well-formed frame
+//     looks like. `causeChain` (a `contentFreeErrorClass` reduction) is re-checked against
+//     `DECLARED_ERROR_CLASS_SHAPE`, imported straight from the leaf `error-classification.ts`
+//     (ADR-0173 D11) rather than restated: that module imports nothing of its own, so importing
+//     from it here closes no cycle, and reusing its constant directly means there is still exactly
+//     one declaration of "what a code-declared error class name looks like" in the package, not a
+//     second copy for this guard to drift from.
+//   * `diagnosticSummary` is a SCALAR whose legitimate values are prose — a complete sentence —
+//     which the generic `hasProseShape` rule refuses regardless of field name. Lifting that one
+//     rule for that one name is safe because, unlike `frames`/`causeChain`, `diagnosticSummary` is
+//     never a directly caller-settable field on `ServerDiagnosticRecord`: `diagnosticActivityLogFields`
+//     (`diagnostics-log.ts`) is the ONLY place this key is ever computed, and it always derives the
+//     value through `allowlistedSummary`, which admits only an exact member of a fixed,
+//     code-declared vocabulary — never foreign text. Every OTHER guard (secret,
+//     personal-identifier, structured-payload, length, path) still applies at full strength.
+//
+// All three hatches share the fail-closed direction every other guard in this file takes: an
+// element or value the reducer does not recognise is DROPPED outright, never echoed and never
+// replaced with a marker in its place — a marker would still tell an adversary their forged element
+// was seen.
+//
+// All three name-keyed guards fire ONLY at the top level of `extra` — `redactLogObject`'s own
+// direct call from `redactLogFields` — never at any nested depth. The trust they extend is a
+// promise this log's OWN producers make about their own top-level `frames`/`causeChain`/
+// `diagnosticSummary` fields; the same field name nested inside some unrelated object merely
+// happens to share it, carries no such promise, and takes the ordinary generic path instead.
 
+import { DECLARED_ERROR_CLASS_SHAPE } from "./error-classification.js";
 import { redactRoutePath } from "./route-template.js";
+import { FRAME_SHAPE_PATTERN, PACKAGE_DIR_NAMES } from "./stack-frames.js";
 
 // A log field value is an identifier, a code, a host or a status — never prose. 160 characters is
 // far above every legitimate value in the instrumentation surface and far below any body.
@@ -71,6 +112,13 @@ export const DROPPED_DEPTH = "[dropped:depth]";
 // "this list really only had 16 entries" from "this list had more and the rest were dropped" —
 // the same distinction DROPPED_DEPTH already draws for nesting.
 export const DROPPED_LENGTH = "[dropped:length]";
+
+// At most 8 (mirrors `keikoStackFrames`' own default cap) and 5 (mirrors `causeChain`'s own
+// default `maxDepth`) elements survive the respective name-keyed guard, applied AFTER filtering out
+// non-conforming elements — so a forged over-length array cannot push a real, well-formed element
+// out of the result merely by padding the front with junk.
+const MAX_GUARDED_FRAME_ELEMENTS = 8;
+const MAX_GUARDED_CAUSE_CHAIN_ELEMENTS = 5;
 
 // The identity of a log line: timestamp, severity, routing, and (v2) process/sequence identity. An
 // `extra` field may never spoof one, because every operator query and every alert keys on them, and
@@ -504,6 +552,108 @@ function redactLogArray(value: readonly unknown[], depth: number): unknown[] {
   return sanitized;
 }
 
+// Re-validates a `frames` element against the exact shape `stack-frames.ts` constructs, instead of
+// trusting that only `keikoStackFrames` ever produced this array: defense-in-depth, not a shortcut
+// that relies on the producer's own good behaviour. `FRAME_SHAPE_PATTERN` alone pins the SHAPE but
+// not the package name it names — the pattern's own header says so — so a captured `pkg` (absent
+// on the root-bin branch, where there is no package to check) is re-checked against
+// `PACKAGE_DIR_NAMES` here.
+//
+// `FRAME_SHAPE_PATTERN`'s relative-part character class allows `.` and `/` (a real relative path
+// needs both), so it cannot by itself reject a `..` traversal segment hiding inside an otherwise
+// shape-conforming string — the same gap `looksLikeFilesystemPath` closes for a path VALUE with
+// `RELATIVE_MARKER_PATTERN`. Reused here rather than restated, for the same reason: one
+// declaration of "what a traversal segment looks like" in this file.
+function isConformingFrame(value: unknown): value is string {
+  if (typeof value !== "string") return false;
+  if (RELATIVE_MARKER_PATTERN.test(value)) return false;
+  const match = FRAME_SHAPE_PATTERN.exec(value);
+  if (match === null) return false;
+  const packageName = match.groups?.pkg;
+  return packageName === undefined || PACKAGE_DIR_NAMES.has(packageName);
+}
+
+// Drops every non-conforming element outright — never a marker in its place, the same fail-closed
+// direction `redactRoutePath` and `stack-frames.ts` itself already take for a frame that cannot be
+// safely reduced. See the "NAMED ESCAPE HATCHES" header comment for why this guard exists on
+// top of the generic array/string path at all.
+function redactKeikoFrames(value: readonly unknown[]): string[] {
+  return value.filter(isConformingFrame).slice(0, MAX_GUARDED_FRAME_ELEMENTS);
+}
+
+function isConformingCauseClass(value: unknown): value is string {
+  return typeof value === "string" && DECLARED_ERROR_CLASS_SHAPE.test(value);
+}
+
+// Same fail-closed shape as `redactKeikoFrames`, for the sibling `causeChain` field.
+function redactCauseChain(value: readonly unknown[]): string[] {
+  return value.filter(isConformingCauseClass).slice(0, MAX_GUARDED_CAUSE_CHAIN_ELEMENTS);
+}
+
+// The two ARRAY name-keyed guards apply only when this call is `redactLogObject`'s own direct call
+// from `redactLogFields` (`depth === MAX_LOG_FIELD_DEPTH`) — never at any nested depth, where the
+// recursive dispatch always passes a strictly smaller `depth`. Returns `undefined` when the name
+// does not match either guarded field, so the caller falls through to the generic dispatch.
+function redactGuardedArrayField(
+  name: string,
+  fieldValue: unknown,
+  depth: number,
+): string[] | undefined {
+  if (depth !== MAX_LOG_FIELD_DEPTH || !Array.isArray(fieldValue)) return undefined;
+  if (name === "frames") return redactKeikoFrames(fieldValue);
+  if (name === "causeChain") return redactCauseChain(fieldValue);
+  return undefined;
+}
+
+// A THIRD, SCALAR name-keyed hatch, alongside the two array hatches above (ADR-0173 D11 g29):
+// `diagnosticSummary` is the one field in this schema whose legitimate values ARE prose — a
+// complete sentence — which `redactLogString`'s `hasProseShape` rule refuses regardless of field
+// name. It is safe to lift that ONE rule for this ONE name because, unlike `frames`/`causeChain`,
+// `diagnosticSummary` is never a directly caller-settable field on `ServerDiagnosticRecord` at all:
+// `diagnosticActivityLogFields` (`diagnostics-log.ts`) is the ONLY place this key is ever computed,
+// and it always derives the value through `allowlistedSummary`, which admits only an EXACT member
+// of a fixed, code-declared vocabulary of complete sentences — never foreign error/provider/
+// customer text. Every other guard (secret, personal-identifier, structured-payload, length, path)
+// still applies at full strength below, so a future bug at that one call site is still caught by
+// everything except the sentence shape itself.
+function redactProseAllowedValue(value: string): string {
+  if (value.length > MAX_LOG_STRING_LENGTH) return REDACTED_LENGTH;
+  if (looksLikeSecret(value)) return REDACTED_SECRET;
+  if (looksLikePersonalIdentifier(value)) return REDACTED_PERSONAL;
+  if (STRUCTURED_PAYLOAD_PATTERN.test(value)) return REDACTED_SHAPE;
+  if (looksLikeFilesystemPath(value)) {
+    return redactRoutePath(value, MAX_LOG_STRING_LENGTH) ?? REDACTED_PATH;
+  }
+  return value;
+}
+
+// Mirrors `redactGuardedArrayField`'s depth/name gate for the scalar hatch. `undefined` means
+// "not this field" (wrong depth, wrong name, or a non-string value under this name — which cannot
+// happen through the one producer that ever sets it, but degrades to the generic path rather than
+// asserting the impossible), so the caller falls through to the generic dispatch.
+function redactGuardedScalarField(
+  name: string,
+  fieldValue: unknown,
+  depth: number,
+): string | undefined {
+  if (depth !== MAX_LOG_FIELD_DEPTH || name !== "diagnosticSummary") return undefined;
+  return typeof fieldValue === "string" ? redactProseAllowedValue(fieldValue) : undefined;
+}
+
+// Resolves what a single ACCEPTED field (past the count/reserved/name-shape gates already applied
+// by the caller's loop) contributes to the sanitised object: the denylist marker, a guarded array
+// or scalar result (the array form returns `undefined` when nothing in it survived, so the caller
+// omits the field entirely rather than storing an empty array), or the generic recursive redaction.
+// Split out of `redactLogObject` to keep that loop's own branching under the complexity budget.
+function redactAcceptedField(name: string, fieldValue: unknown, depth: number): unknown {
+  if (isDeniedLogFieldName(name)) return REDACTED_KEY;
+  const guardedArray = redactGuardedArrayField(name, fieldValue, depth);
+  if (guardedArray !== undefined) return guardedArray.length > 0 ? guardedArray : undefined;
+  const guardedScalar = redactGuardedScalarField(name, fieldValue, depth);
+  if (guardedScalar !== undefined) return guardedScalar;
+  return redactLogValue(fieldValue, depth);
+}
+
 interface AcceptedLogFields {
   readonly entries: readonly (readonly [string, unknown])[];
   // Set only when the cap actually dropped a remaining field, never when the input simply ran out
@@ -514,7 +664,9 @@ interface AcceptedLogFields {
 // Split out of `redactLogObject` so each function stays under the complexity ceiling. Collects
 // every field this object accepts (by name and by the field-count cap), WITHOUT yet deciding which
 // of them make the final cut: that decision needs to know whether the cap fired, which is only
-// known once a field beyond it is seen.
+// known once a field beyond it is seen. Each accepted field is resolved through
+// `redactAcceptedField` so the two array hatches and the scalar hatch apply here too, not only in
+// a since-removed direct loop.
 function collectAcceptedLogFields(
   value: Readonly<Record<string, unknown>>,
   depth: number,
@@ -528,10 +680,7 @@ function collectAcceptedLogFields(
     if (reserved?.has(name) === true) continue;
     if (!FIELD_NAME_PATTERN.test(name)) continue;
     if (entries.length >= MAX_LOG_FIELD_COUNT) return { entries, truncated: true };
-    const redactedValue = isDeniedLogFieldName(name)
-      ? REDACTED_KEY
-      : redactLogValue(fieldValue, depth);
-    entries.push([name, redactedValue]);
+    entries.push([name, redactAcceptedField(name, fieldValue, depth)]);
   }
   return { entries, truncated: false };
 }
