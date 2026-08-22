@@ -5,7 +5,12 @@
 // both of which `server-log.ts`'s `errorKindOf` now depends on directly.
 import { describe, expect, it } from "vitest";
 
-import { contentFreeErrorClass, machineToken, safeProperty } from "./error-classification.js";
+import {
+  contentFreeErrorClass,
+  declaredErrorClassName,
+  machineToken,
+  safeProperty,
+} from "./error-classification.js";
 
 describe("safeProperty", () => {
   it("reads an own property off a plain object", () => {
@@ -69,7 +74,37 @@ describe("machineToken", () => {
   });
 });
 
+describe("declaredErrorClassName", () => {
+  it("degrades to undefined instead of throwing when getPrototypeOf traps", () => {
+    const hostile = new Proxy(
+      {},
+      {
+        getPrototypeOf(): never {
+          throw new Error("trap");
+        },
+      },
+    );
+    expect(() => declaredErrorClassName(hostile as unknown as Error)).not.toThrow();
+    expect(declaredErrorClassName(hostile as unknown as Error)).toBeUndefined();
+  });
+});
+
 describe("contentFreeErrorClass", () => {
+  it("still resolves to the generic Error class when getPrototypeOf traps", () => {
+    // `instanceof` itself walks the prototype chain, so the trap fires before
+    // `declaredErrorClassName` is ever reached; the outer try/catch here is what absorbs it.
+    const hostile = new Proxy(
+      {},
+      {
+        getPrototypeOf(): never {
+          throw new Error("trap");
+        },
+      },
+    );
+    expect(() => contentFreeErrorClass(hostile)).not.toThrow();
+    expect(contentFreeErrorClass(hostile)).toBe("Error");
+  });
+
   it("labels non-Error throws by their typeof", () => {
     expect(contentFreeErrorClass("plain string")).toBe("string");
     expect(contentFreeErrorClass(42)).toBe("number");

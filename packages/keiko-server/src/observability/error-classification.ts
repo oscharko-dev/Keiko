@@ -80,7 +80,15 @@ export function machineToken(value: unknown): string | undefined {
 // `diagnostics-log.ts` verbatim as part of the ADR-0173 D11 leaf extraction and that module
 // re-exports it; no producer outside `contentFreeErrorClass` has a use for it on its own.
 export function declaredErrorClassName(error: Error): string | undefined {
-  const proto = Reflect.getPrototypeOf(error);
+  let proto: object | null;
+  try {
+    proto = Reflect.getPrototypeOf(error);
+  } catch {
+    // A hostile `getPrototypeOf` trap must degrade to absence, like every other reflective read
+    // in this module — this function is exported and on the package surface, so it cannot rely on
+    // `contentFreeErrorClass`'s outer `try` to absorb the throw for it.
+    return undefined;
+  }
   const ctor = safeProperty(proto, "constructor");
   const name = safeProperty(ctor, "name");
   if (typeof ctor !== "function" || typeof name !== "string") return undefined;

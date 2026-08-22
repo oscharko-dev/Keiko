@@ -15,6 +15,7 @@ import {
 } from "./diagnostics-log.js";
 import type { ServerDiagnosticRecord } from "./diagnostics-log.js";
 import { closeFileServerLogSinks, SERVER_LOG_LEVEL_ENV } from "./observability/index.js";
+import { FRAME_SHAPE_PATTERN } from "./observability/stack-frames.js";
 
 function readActivityLine(stateDir: string): Record<string, unknown> {
   const raw = readFileSync(join(stateDir, "logs", "server.log"), "utf8").trim();
@@ -126,12 +127,18 @@ describe("diagnostic records on the activity log", () => {
 
     expect(line.frames).toBeInstanceOf(Array);
     const frames = line.frames as readonly string[];
-    // `levelThree`, `levelTwo`, `levelOne` and the `try` block itself are four distinct call sites
-    // in THIS file, so at least three frames survive the dist/src anchor.
-    expect(frames.length).toBeGreaterThanOrEqual(3);
+    // Only "at least one frame survives, and every surviving frame has the reducer's shape" is a
+    // property of the reducer under test here. The exact surviving frame COUNT is a property of the
+    // runtime (V8 inlining, `Error.stackTraceLimit`, Vitest's transform), so the count is pinned
+    // instead in `diagnostics-log.test.ts` against an injected synthetic stack. Likewise, a fixed
+    // `src/` prefix depends on how Vitest reports this module's path (workspace root vs. package
+    // root as cwd), so every frame is checked against the reducer's own exported shape pattern and
+    // at least one is required to name this test's own package directory instead.
+    expect(frames.length).toBeGreaterThanOrEqual(1);
     for (const frame of frames) {
-      expect(frame).toMatch(/^packages\/keiko-server\/src\//);
+      expect(frame).toMatch(FRAME_SHAPE_PATTERN);
     }
+    expect(frames.some((frame) => frame.startsWith("packages/keiko-server/"))).toBe(true);
   });
 
   it("omits an absent optional field rather than writing it as null", () => {

@@ -404,6 +404,29 @@ describe("describeError frames and causeChain (ADR-0173 D3)", () => {
     expect(describeError("not an error").frames).toBeUndefined();
   });
 
+  // The exact surviving frame COUNT is a property of the runtime (V8 inlining,
+  // `Error.stackTraceLimit`, Vitest's transform), never of the reducer under test — so it is
+  // pinned here against an INJECTED synthetic stack, not against a real thrown-error stack whose
+  // shape the runtime controls. `diagnostics-log.activity-log.test.ts` deliberately asserts only
+  // "at least one frame" on a real stack for that reason.
+  it("pins the exact frame count for a synthetic multi-frame stack", () => {
+    const error = withStack(
+      new Error("boom"),
+      [
+        "Error: boom",
+        "    at levelThree (file:///Users/someone/app/packages/keiko-server/dist/foo.js:10:5)",
+        "    at levelTwo (file:///Users/someone/app/packages/keiko-server/dist/foo.js:20:7)",
+        "    at levelOne (file:///Users/someone/app/packages/keiko-server/dist/foo.js:30:9)",
+        "    at process.processTicksAndRejections (node:internal/process/task_queues:95:5)",
+      ].join("\n"),
+    );
+    expect(describeError(error).frames).toEqual([
+      "packages/keiko-server/dist/foo.js:10:5",
+      "packages/keiko-server/dist/foo.js:20:7",
+      "packages/keiko-server/dist/foo.js:30:9",
+    ]);
+  });
+
   it("includes causeChain's content-free class reduction of the error's cause chain", () => {
     const inner = new TypeError("inner");
     const outer = new Error("outer", { cause: inner });

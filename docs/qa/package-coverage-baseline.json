@@ -8,7 +8,7 @@
     "keiko-cli": {
       "files": 44,
       "uncoveredFiles": 0,
-      "uncoveredLines": 385,
+      "uncoveredLines": 387,
       "totalLines": 4880,
       "coverage": {
         "lines": 92.11,
@@ -236,8 +236,8 @@
     "keiko-server": {
       "files": 580,
       "uncoveredFiles": 0,
-      "uncoveredLines": 4515,
-      "totalLines": 56237,
+      "uncoveredLines": 4516,
+      "totalLines": 56239,
       "coverage": {
         "lines": 91.97,
         "statements": 89.27,
