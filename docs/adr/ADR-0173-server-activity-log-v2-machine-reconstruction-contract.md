@@ -463,7 +463,9 @@ request":
   Unmatched and static requests fall back to `redactRoutePath`. `queryParamNames` lists the query
   parameter NAMES only (deduplicated, shape-checked against a bounded identifier pattern, sorted,
   capped at 16; anything dropped is counted in `queryParamDroppedCount`), never a value.
-  `responseBytes` is the byte count `writeJson` already computed and previously discarded.
+  `responseBytes` is what the response actually put on the socket — headers and body, compressed
+  as sent — measured as the socket's `bytesWritten` delta from request arrival to response close,
+  so JSON, gzip, static files and streams are counted the same way.
   `aborted` is computed at `close` by the shared `requestAlreadyClosed` predicate, and a request the
   client abandoned before any write logs `status: 0` instead of Node's default `200` — the
   predicate was corrected in the same wave so a normally ended response (which Node also marks

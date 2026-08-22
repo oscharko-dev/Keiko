@@ -173,9 +173,9 @@ describe("(a) client disconnect mid-response — real socket abort", () => {
       expect(event.extra?.aborted).toBe(true);
       expect(event.extra?.routeTemplate).toBe("/api/runs/:runId/events");
       expect(event.extra?.queryParamNames).toEqual(["bar", "foo"]);
-      // A STREAMING route never calls `writeJson` (the only place `responseBytes` is computed), so
-      // the field is present and reports the documented default rather than being silently absent.
-      expect(event.extra?.responseBytes).toBe(0);
+      // `responseBytes` is measured on the socket, so a streaming route is counted like any other:
+      // the headers and the first frame the client read are on the wire before the abort.
+      expect(event.extra?.responseBytes).toBeGreaterThan(0);
     } finally {
       if (started !== undefined) await closeUiTestServer(started.server);
       handlerDeps.store.close();

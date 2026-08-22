@@ -1235,14 +1235,25 @@ describe("activity log: http-request line enrichment (Wave 5, w5-http-request-en
     expect(JSON.stringify(event.extra)).not.toContain(longName);
   });
 
-  it("records writeJson's own computed response byte count", async () => {
+  it("records the bytes the response put on the socket — at least its body", async () => {
     const sink = await startWithActivityLog();
     const res = await fetchRaw("/api/health");
-    const expectedBytes = Buffer.byteLength(res.text, "utf8");
+    const bodyBytes = Buffer.byteLength(res.text, "utf8");
     const event = await waitForActivityLogEvent(sink);
 
-    expect(event.extra?.responseBytes).toBe(expectedBytes);
-    expect(event.extra?.responseBytes).toBeGreaterThan(0);
+    // Headers ride along, so the wire count is never below the body the client received.
+    expect(event.extra?.responseBytes).toBeGreaterThanOrEqual(bodyBytes);
+  });
+
+  it("counts a static asset's bytes too, not only writeJson's (#3247 review)", async () => {
+    // Before: only `writeJson` tallied `responseBytes`, so every static asset logged 0.
+    const sink = await startWithActivityLog();
+    const res = await fetchRaw("/_next/app.js");
+    const bodyBytes = Buffer.byteLength(res.text, "utf8");
+    const event = await waitForActivityLogEvent(sink);
+
+    expect(bodyBytes).toBeGreaterThan(0);
+    expect(event.extra?.responseBytes).toBeGreaterThanOrEqual(bodyBytes);
   });
 
   it("reports aborted:false and the real status for a normally completed request", async () => {
@@ -1329,6 +1340,7 @@ describe("logRequestOnClose", () => {
     destroyed: boolean;
     url?: string;
     method?: string;
+    socket: { bytesWritten: number };
   }
 
   interface ResponseDouble extends EventEmitter {
@@ -1345,6 +1357,7 @@ describe("logRequestOnClose", () => {
       destroyed: false,
       url: "/api/health",
       method: "GET",
+      socket: { bytesWritten: 0 },
     });
     const res = Object.assign(new EventEmitter(), {
       closed: false,
@@ -1408,7 +1421,6 @@ describe("logRequestOnClose", () => {
       routeTemplate: "/api/memory/:id",
       queryParamNames: ["bar", "foo"],
       queryParamDroppedCount: 2,
-      responseBytes: 42,
     };
     logRequestOnClose(
       req as unknown as IncomingMessage,
@@ -1418,6 +1430,8 @@ describe("logRequestOnClose", () => {
       context,
     );
 
+    // The socket carried 42 more bytes between request arrival and response close.
+    req.socket.bytesWritten += 42;
     res.headersSent = true;
     res.writableEnded = true;
     res.emit("close");

@@ -83,17 +83,18 @@ export interface UiServerDeps {
 
 // Per-request scratch space the http-request line reads at response `close`, populated as the
 // request is actually resolved: `handle` fills in the query-parameter fields as soon as the URL is
-// parsed, `dispatchApi`/`serveStatic` fill in `routeTemplate` once the route (or its absence) is
-// known, and `writeJson` fills in `responseBytes` the one time it actually serialises a body. A
-// fresh object is created once per incoming request and threaded explicitly through the same call
-// chain `correlationId` already travels — plain per-request state, not a keyed side-table.
-// Exported for `server.test.ts` only (not part of the package's public entry point, mirroring how
-// `request-cancellation.ts` exports its own req/res-close shapes for the same reason).
+// parsed and `dispatchApi`/`serveStatic` fill in `routeTemplate` once the route (or its absence)
+// is known. A fresh object is created once per incoming request and threaded explicitly through
+// the same call chain `correlationId` already travels — plain per-request state, not a keyed
+// side-table. The response size is NOT tracked here: `logRequestOnClose` measures it on the socket
+// (see `responseBytes` there), so every writer — JSON, gzip, static file, SSE stream — is counted
+// the same way without each one reporting. Exported for `server.test.ts` only (not part of the
+// package's public entry point, mirroring how `request-cancellation.ts` exports its own
+// req/res-close shapes for the same reason).
 export interface RequestLogContext {
   routeTemplate?: string;
   queryParamNames?: readonly string[];
   queryParamDroppedCount?: number;
-  responseBytes?: number;
 }
 
 function acceptsGzip(acceptEncoding: string | readonly string[] | undefined): boolean {
@@ -111,19 +112,16 @@ function writeJson(
   status: number,
   body: unknown,
   headers: Readonly<Record<string, string | readonly string[]>> = {},
-  context?: RequestLogContext,
 ): void {
   res.statusCode = status;
   for (const [key, value] of Object.entries(headers)) {
     res.setHeader(key, typeof value === "string" ? value : [...value]);
   }
   if (status === 204 || status === 304) {
-    if (context !== undefined) context.responseBytes = 0;
     res.end();
     return;
   }
   const payload = Buffer.from(JSON.stringify(body), "utf8");
-  if (context !== undefined) context.responseBytes = payload.byteLength;
   res.setHeader("Content-Type", "application/json; charset=utf-8");
   if (payload.byteLength >= JSON_GZIP_MIN_BYTES && acceptsGzip(req.headers["accept-encoding"])) {
     res.setHeader("Content-Encoding", "gzip");
@@ -147,30 +145,17 @@ function hasCsrfHeader(req: IncomingMessage): boolean {
   return value === "1";
 }
 
-function rejectUnsupportedMediaType(
-  req: IncomingMessage,
-  res: ServerResponse,
-  context: RequestLogContext,
-): void {
+function rejectUnsupportedMediaType(req: IncomingMessage, res: ServerResponse): void {
   writeJson(
     req,
     res,
     415,
     errorBody("UNSUPPORTED_MEDIA_TYPE", "State-changing API requests must use JSON."),
-    {},
-    context,
   );
 }
 
-function rejectCsrf(req: IncomingMessage, res: ServerResponse, context: RequestLogContext): void {
-  writeJson(
-    req,
-    res,
-    403,
-    errorBody("FORBIDDEN_CSRF", "Missing state-changing request guard."),
-    {},
-    context,
-  );
+function rejectCsrf(req: IncomingMessage, res: ServerResponse): void {
+  writeJson(req, res, 403, errorBody("FORBIDDEN_CSRF", "Missing state-changing request guard."));
 }
 
 // A minimal default deps object so a 3-arg server can still serve the deps-bound read routes (e.g.
@@ -204,17 +189,16 @@ function rejectIfInvalidStateChange(
   res: ServerResponse,
   method: string,
   pathname: string,
-  context: RequestLogContext,
 ): boolean {
   if (!isJsonRequest(req)) {
-    rejectUnsupportedMediaType(req, res, context);
+    rejectUnsupportedMediaType(req, res);
     return true;
   }
   if (isCsrfExemptStateChange(method, pathname)) {
     return false;
   }
   if (!hasCsrfHeader(req)) {
-    rejectCsrf(req, res, context);
+    rejectCsrf(req, res);
     return true;
   }
   return false;
@@ -241,18 +225,17 @@ async function dispatchApi(
   const match = matchRoute(method, url.pathname);
   if (match === undefined) {
     setFallbackRouteTemplate(context, url.pathname);
-    writeJson(req, res, 404, notFoundBody(), {}, context);
+    writeJson(req, res, 404, notFoundBody());
     return;
   }
   if (match === "method-not-allowed") {
     setFallbackRouteTemplate(context, url.pathname);
-    writeJson(req, res, 405, methodNotAllowedBody(), {}, context);
+    writeJson(req, res, 405, methodNotAllowedBody());
     return;
   }
   context.routeTemplate = match.definition.pattern;
   const invalidStateChange =
-    isStateChangingMethod(method) &&
-    rejectIfInvalidStateChange(req, res, method, url.pathname, context);
+    isStateChangingMethod(method) && rejectIfInvalidStateChange(req, res, method, url.pathname);
   if (invalidStateChange) {
     return;
   }
@@ -261,7 +244,7 @@ async function dispatchApi(
   if (outcome === STREAMING) {
     return;
   }
-  writeJson(req, res, outcome.status, outcome.body, outcome.headers, context);
+  writeJson(req, res, outcome.status, outcome.body, outcome.headers);
 }
 
 function resolveStaticTargets(pathname: string): readonly string[] {
@@ -296,23 +279,12 @@ async function serveStatic(
   if (await serveFile(res, indexPath, req.headers["accept-encoding"])) {
     return;
   }
-  writeJson(
-    req,
-    res,
-    404,
-    errorBody("NOT_FOUND", "The requested resource was not found."),
-    {},
-    context,
-  );
+  writeJson(req, res, 404, errorBody("NOT_FOUND", "The requested resource was not found."));
 }
 
-function rejectForbiddenHost(
-  req: IncomingMessage,
-  res: ServerResponse,
-  context: RequestLogContext,
-): void {
+function rejectForbiddenHost(req: IncomingMessage, res: ServerResponse): void {
   const body: ApiError = errorBody("FORBIDDEN_HOST", "Request host is not the local interface.");
-  writeJson(req, res, 403, body, {}, context);
+  writeJson(req, res, 403, body);
 }
 
 async function resolveCsp(deps: UiServerDeps): Promise<string> {
@@ -396,7 +368,7 @@ async function handle(
     allowMicrophone: isVoiceDictationCapable(handlerDeps) || isVoiceRealtimeCapable(handlerDeps),
   });
   if (!isAllowedHost(req, deps.port)) {
-    rejectForbiddenHost(req, res, context);
+    rejectForbiddenHost(req, res);
     return;
   }
   // #2902 audit finding 1: computed only once the trust-boundary host check has passed (AGENTS.md
@@ -440,20 +412,25 @@ function createVoicePlanes(
 // (reduced generically by `log-redaction.ts`'s own path guard); `routeTemplate` is the field this
 // wave adds so a reader learns WHICH declared route actually matched, sourced from the real match
 // `dispatchApi` resolved rather than re-derived independently from the same raw path.
+interface HttpRequestOutcome {
+  readonly method: string;
+  readonly path: string;
+  readonly aborted: boolean;
+  readonly responseBytes: number;
+}
+
 function buildHttpRequestExtra(
-  method: string,
-  path: string,
-  aborted: boolean,
+  outcome: HttpRequestOutcome,
   context: RequestLogContext,
 ): Record<string, unknown> {
   return {
-    method,
-    path,
+    method: outcome.method,
+    path: outcome.path,
     routeTemplate: context.routeTemplate,
     queryParamNames: context.queryParamNames ?? [],
     queryParamDroppedCount: context.queryParamDroppedCount,
-    responseBytes: context.responseBytes ?? 0,
-    aborted,
+    responseBytes: outcome.responseBytes,
+    aborted: outcome.aborted,
   };
 }
 
@@ -487,16 +464,27 @@ export function logRequestOnClose(
   const startedAt = Date.now();
   const requestUrl = req.url ?? "";
   const method = req.method ?? "GET";
+  // `responseBytes` is what this response actually put on the wire — headers and body, compressed
+  // as sent — measured as the socket's `bytesWritten` delta between request arrival and response
+  // close. A kept-alive socket serves responses one after another, so the delta belongs to this
+  // response alone; every writer (JSON, gzip, static file, SSE stream) is counted the same way,
+  // which a per-writer tally could not guarantee (#3247 review: `writeJson` alone reported the
+  // uncompressed JSON length and every static asset read as 0).
+  const socketBytesAtStart = req.socket.bytesWritten;
   res.on("close", () => {
     const aborted = requestAlreadyClosed({ req, res });
     const status = aborted && !res.headersSent ? 0 : res.statusCode;
+    const responseBytes = Math.max(0, req.socket.bytesWritten - socketBytesAtStart);
     activityLog.write({
       category: "http",
       op: "request",
       correlationId,
       status,
       durationMs: Date.now() - startedAt,
-      extra: buildHttpRequestExtra(method, requestUrl.split("?")[0] ?? "", aborted, context),
+      extra: buildHttpRequestExtra(
+        { method, path: requestUrl.split("?")[0] ?? "", aborted, responseBytes },
+        context,
+      ),
     });
   });
 }
@@ -524,14 +512,7 @@ function reportTopLevelFailure(
     }),
   );
   if (!res.headersSent) {
-    writeJson(
-      req,
-      res,
-      500,
-      errorBody("INTERNAL", "An unexpected error occurred.", correlationId),
-      {},
-      context,
-    );
+    writeJson(req, res, 500, errorBody("INTERNAL", "An unexpected error occurred.", correlationId));
   } else {
     res.end();
   }
