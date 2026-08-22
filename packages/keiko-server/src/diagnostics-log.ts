@@ -1,4 +1,7 @@
 import { DECLARED_MODEL_MODES } from "@oscharko-dev/keiko-contracts";
+import { providerErrorDetail } from "@oscharko-dev/keiko-model-gateway";
+
+import { isValidCorrelationId } from "./correlation.js";
 
 import {
   contentFreeErrorClass,
@@ -39,6 +42,16 @@ import { randomUUID } from "node:crypto";
 
 export interface ServerDiagnosticRecord {
   readonly correlationId: string;
+  // The correlation id of the request/run that SPAWNED this one, set only when this record
+  // belongs to a background job/HarnessEvent run whose own `correlationId` was minted fresh at
+  // that job's start (ADR-0173 D5 / g12) — a request-scoped record already has continuity through
+  // `correlationId` alone and never sets this. Shape-guarded, not merely redacted, the same way
+  // `server-log.ts`'s `applyEnvelopeFields` guards its own `parentCorrelationId` envelope field:
+  // `diagnosticActivityLogFields` only projects this into `extra` when it satisfies
+  // `isValidCorrelationId`; a value that does not fit the shape is dropped outright rather than
+  // written under a marker — an unshaped value here is evidence of a producer bug, never content
+  // worth preserving a trace of.
+  readonly parentCorrelationId?: string | undefined;
   readonly timestamp: string;
   // A coarse operation label, e.g. `GET /api/projects` or `chat.stream`.
   readonly operation: string;
@@ -58,6 +71,15 @@ export interface ServerDiagnosticRecord {
   // The upstream model-gateway request id when the failure originated from a gateway call — this is
   // what links a UI/server correlation id to the gateway's own record (GEN-OBS-CORRELATION-503).
   readonly gatewayRequestId?: string | undefined;
+  // The provider HTTP status a `ProviderError`/`RateLimitError` carried (ADR-0173 D5 g26), derived
+  // through the SAME `providerErrorDetail` helper `resilience.ts`'s retry lines already use — one
+  // implementation of "what HTTP status did the provider report", not a second one bolted on here.
+  // Removes the reconstruction ambiguity a bare `GATEWAY_PROVIDER_ERROR`/`GATEWAY_RATE_LIMIT`
+  // `errorClass` leaves behind (which of 429/500/502/503/529 actually happened).
+  readonly httpStatus?: number | undefined;
+  // The provider-supplied retry delay a `RateLimitError` carried (ADR-0173 D5 g26), same
+  // `providerErrorDetail` derivation. A count only — never content.
+  readonly retryAfterMs?: number | undefined;
   // Bounded numeric occurrence for rate-limited diagnostics; never parsed from content.
   readonly occurrenceCount?: number | undefined;
   // Serialized byte count of the SSE frame that was rejected when a stream was destroyed for
@@ -154,7 +176,15 @@ const UNSUPPORTED_REASON_FALLBACK = "unrecognised-mode";
 function diagnosticActivityLogFields(record: ServerDiagnosticRecord): Record<string, unknown> {
   const fields: Record<string, unknown> = { source: record.source };
   addBoundedField(fields, "code", record.code);
+  if (
+    record.parentCorrelationId !== undefined &&
+    isValidCorrelationId(record.parentCorrelationId)
+  ) {
+    addBoundedField(fields, "parentCorrelationId", record.parentCorrelationId);
+  }
   addBoundedField(fields, "gatewayRequestId", record.gatewayRequestId);
+  addBoundedField(fields, "httpStatus", record.httpStatus);
+  addBoundedField(fields, "retryAfterMs", record.retryAfterMs);
   addBoundedField(fields, "occurrenceCount", record.occurrenceCount);
   addBoundedField(fields, "frameBytes", record.frameBytes);
   addBoundedField(fields, "retainedModelCount", record.retainedModelCount);
@@ -303,15 +333,24 @@ export function describeError(error: unknown): {
   readonly errorClass: string;
   readonly code?: string | undefined;
   readonly gatewayRequestId?: string | undefined;
+  readonly httpStatus?: number | undefined;
+  readonly retryAfterMs?: number | undefined;
   readonly partialUsage?:
     { readonly promptTokens: number; readonly completionTokens: number } | undefined;
   readonly frames?: readonly string[] | undefined;
   readonly causeChain?: readonly string[] | undefined;
 } {
+  // `providerErrorDetail` (keiko-model-gateway/resilience.ts) is the SAME instanceof-based
+  // derivation `gateway.retry.*` lines already use — reused, not re-implemented, so a diagnostic
+  // record and its sibling retry line never disagree about what a `ProviderError`/`RateLimitError`
+  // carried (ADR-0173 D5 g26).
+  const detail = providerErrorDetail(error);
   return {
     errorClass: contentFreeErrorClass(error),
     code: machineToken(safeProperty(error, "code")),
     gatewayRequestId: machineToken(safeProperty(error, "requestId")),
+    httpStatus: detail.httpStatus,
+    retryAfterMs: detail.retryAfterMs,
     partialUsage: partialUsageCounts(safeProperty(error, "partialUsage")),
     frames: nonEmpty(keikoStackFrames(error)),
     causeChain: nonEmpty(causeChain(error)),
@@ -379,13 +418,19 @@ export function emitServerDiagnostic(
   }
 }
 
+// `correlationId` defaults to a fresh mint ONLY so a caller that already has a request/run id in
+// scope can pass it straight through (ADR-0173 D5 / g12) — the retention sweep itself has no
+// triggering request, so `evidenceRetentionDiagnosticObserver` below is the real production path
+// and mints exactly once per observer rather than once per call, so every deletion this ONE
+// retention pass reports stays joinable under the same id.
 export function emitEvidenceRetentionDiagnostic(
   sink: ServerDiagnosticSink | undefined,
   source: string,
   occurrenceCount: number,
+  correlationId: string = randomUUID(),
 ): void {
   emitServerDiagnostic(sink, {
-    correlationId: randomUUID(),
+    correlationId,
     timestamp: new Date().toISOString(),
     operation: "evidence.retention",
     source: diagnosticLabel(source, SOURCE_LABEL_SHAPE, "server.diagnostic"),
@@ -395,11 +440,50 @@ export function emitEvidenceRetentionDiagnostic(
   });
 }
 
+// Minted ONCE here, at the start of the enclosing retention-observer registration, rather than
+// inside `emitEvidenceRetentionDiagnostic` on every `onRetentionDeleted` firing: a single retention
+// pass over one evidence store can delete manifests from more than one bucket, and each deletion
+// used to mint its own disconnected id — making it impossible for an operator to tell two
+// deletions from the SAME sweep apart from two deletions from different sweeps.
 export function evidenceRetentionDiagnosticObserver(
   sink: ServerDiagnosticSink | undefined,
   source: string,
 ): (occurrenceCount: number) => void {
-  return emitEvidenceRetentionDiagnostic.bind(undefined, sink, source);
+  const correlationId = randomUUID();
+  return (occurrenceCount: number): void => {
+    emitEvidenceRetentionDiagnostic(sink, source, occurrenceCount, correlationId);
+  };
+}
+
+// The optional half of `describeError`'s output, each field omitted (never written as
+// `undefined`) rather than always present — split out of `serverDiagnosticFromError` purely to
+// keep that function's cyclomatic complexity under the repository's limit as the field set grows;
+// the omission contract itself is unchanged from before this split.
+function describedErrorFields(
+  described: ReturnType<typeof describeError>,
+): Partial<
+  Pick<
+    ServerDiagnosticRecord,
+    | "code"
+    | "gatewayRequestId"
+    | "httpStatus"
+    | "retryAfterMs"
+    | "partialUsage"
+    | "frames"
+    | "causeChain"
+  >
+> {
+  return {
+    ...(described.code === undefined ? {} : { code: described.code }),
+    ...(described.gatewayRequestId === undefined
+      ? {}
+      : { gatewayRequestId: described.gatewayRequestId }),
+    ...(described.httpStatus === undefined ? {} : { httpStatus: described.httpStatus }),
+    ...(described.retryAfterMs === undefined ? {} : { retryAfterMs: described.retryAfterMs }),
+    ...(described.partialUsage === undefined ? {} : { partialUsage: described.partialUsage }),
+    ...(described.frames === undefined ? {} : { frames: described.frames }),
+    ...(described.causeChain === undefined ? {} : { causeChain: described.causeChain }),
+  };
 }
 
 // Convenience: build a record from an unknown error with a current timestamp. Kept separate from
@@ -427,12 +511,6 @@ export function serverDiagnosticFromError(input: {
     source: diagnosticLabel(input.source, SOURCE_LABEL_SHAPE, "server.diagnostic"),
     errorClass: described.errorClass,
     message,
-    ...(described.code === undefined ? {} : { code: described.code }),
-    ...(described.gatewayRequestId === undefined
-      ? {}
-      : { gatewayRequestId: described.gatewayRequestId }),
-    ...(described.partialUsage === undefined ? {} : { partialUsage: described.partialUsage }),
-    ...(described.frames === undefined ? {} : { frames: described.frames }),
-    ...(described.causeChain === undefined ? {} : { causeChain: described.causeChain }),
+    ...describedErrorFields(described),
   };
 }

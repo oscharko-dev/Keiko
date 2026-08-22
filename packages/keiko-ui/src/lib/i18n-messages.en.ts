@@ -590,6 +590,7 @@ export const EN_MESSAGES = {
   "chat.error.load": "Could not load chat.",
   "chat.error.scopeUpdate": "Unable to update knowledge scope.",
   "chat.error.memoryUpdate": "Unable to update memory.",
+  "chat.error.supportId": "Support ID: {correlationId}",
   "chat.grounding.label": "Grounding",
   "chat.grounding.mode": "Grounding mode",
   "chat.grounding.strategy": "Strategy",

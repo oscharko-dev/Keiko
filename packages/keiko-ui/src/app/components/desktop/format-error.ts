@@ -15,6 +15,10 @@ export interface UserErrorNotice {
   readonly message: string;
   readonly code: string | undefined;
   readonly remediation: string | undefined;
+  // RB-6 / ADR-0173 D5 — the request correlation id, when the underlying failure carried one, so
+  // the notice can offer a copyable support id (same i18n "{feature}.supportId" pattern proven at
+  // VoiceDictation.tsx, WorkspaceTrustSurfaces.tsx, TaskWorkspaceSwitcher.tsx).
+  readonly correlationId: string | undefined;
 }
 
 const SECRET_PATTERNS: readonly RegExp[] = [
@@ -80,6 +84,33 @@ function parseFormattedMessage(message: string): {
   return { message: message.slice(0, trailing.prefixEnd).trim(), code: trailing.code };
 }
 
+// RB-6 / ADR-0173 D5 — a correlation id survives the formatUserError -> setError(string) ->
+// toUserErrorNotice round trip (the architecture every desktop chat error surface already uses)
+// as a dedicated trailing segment, kept structurally separate from the "(CODE)" convention above
+// rather than sharing its charset: a correlation id's alphabet ([A-Za-z0-9._-]) includes lowercase
+// letters `isCodeBodyChar` does not accept, so folding the two together would silently truncate the
+// id. Peeled off with plain string search (no regex — nothing here risks S8786's catastrophic
+// backtracking, but this stays consistent with the manual-scan style above).
+const SUPPORT_ID_PREFIX = "[correlationId:";
+const SUPPORT_ID_SUFFIX = "]";
+
+function appendSupportId(base: string, correlationId: string | undefined): string {
+  if (correlationId === undefined) return base;
+  return `${base} ${SUPPORT_ID_PREFIX}${correlationId}${SUPPORT_ID_SUFFIX}`;
+}
+
+function extractTrailingSupportId(message: string): {
+  readonly message: string;
+  readonly correlationId: string | undefined;
+} {
+  if (!message.endsWith(SUPPORT_ID_SUFFIX)) return { message, correlationId: undefined };
+  const openIndex = message.lastIndexOf(SUPPORT_ID_PREFIX);
+  if (openIndex === -1) return { message, correlationId: undefined };
+  const correlationId = message.slice(openIndex + SUPPORT_ID_PREFIX.length, -1);
+  if (correlationId.length === 0) return { message, correlationId: undefined };
+  return { message: message.slice(0, openIndex).trimEnd(), correlationId };
+}
+
 function isTooBroadRepositoryQuestion(message: string, code: string | undefined): boolean {
   return (
     code === "BAD_REQUEST" &&
@@ -140,7 +171,7 @@ export function formatUserError(error: unknown, fallback: string): string {
       error.code,
       fallback,
     );
-    return `${message} (${error.code})`;
+    return appendSupportId(`${message} (${error.code})`, error.correlationId);
   }
   if (error instanceof Error && error.message.trim().length > 0) {
     return sanitizeMessage(error.message.trim());
@@ -167,14 +198,17 @@ export function toUserErrorNotice(error: unknown, fallback: string): UserErrorNo
       message,
       code: error.code,
       remediation: remediationForError(message, error.code),
+      correlationId: error.correlationId,
     };
   }
   const rawMessage = rawErrorMessage(error);
-  const formatted = parseFormattedMessage(sanitizeMessage(rawMessage || fallback));
+  const withoutSupportId = extractTrailingSupportId(sanitizeMessage(rawMessage || fallback));
+  const formatted = parseFormattedMessage(withoutSupportId.message);
   return {
     title: titleForError(formatted.message, formatted.code),
     message: formatted.message,
     code: formatted.code,
     remediation: remediationForError(formatted.message, formatted.code),
+    correlationId: withoutSupportId.correlationId,
   };
 }

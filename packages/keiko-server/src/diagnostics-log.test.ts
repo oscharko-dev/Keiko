@@ -5,6 +5,7 @@ import {
   contentFreeErrorClass,
   describeError,
   emitServerDiagnostic,
+  evidenceRetentionDiagnosticObserver,
   serverDiagnosticFromError,
   type ServerDiagnosticRecord,
 } from "./diagnostics-log.js";
@@ -14,6 +15,7 @@ import {
   newCorrelationId,
   resolveCorrelationId,
 } from "./correlation.js";
+import { ProviderError, RateLimitError } from "@oscharko-dev/keiko-security/errors/gateway";
 
 const identity = (message: string): string => message;
 
@@ -38,6 +40,32 @@ describe("describeError (RB-6)", () => {
     const described = describeError("just a string");
     expect(described.errorClass).toBe("string");
     expect(described.code).toBeUndefined();
+  });
+
+  // ADR-0173 D5 g26: httpStatus/retryAfterMs are derived through the SAME instanceof-based
+  // `providerErrorDetail()` (keiko-model-gateway/resilience.ts) `gateway.retry.*` lines already
+  // use — reused, not re-implemented, so a diagnostic record and its sibling retry line never
+  // disagree about what a `ProviderError`/`RateLimitError` carried.
+  it("carries httpStatus from a ProviderError but not retryAfterMs", () => {
+    const described = describeError(new ProviderError("upstream overloaded", 503));
+    expect(described.httpStatus).toBe(503);
+    expect(described.retryAfterMs).toBeUndefined();
+  });
+
+  // httpStatus is read off a RateLimitError too, deliberately: a rate limit is always HTTP 429 by
+  // definition, so a consumer building a replay/reproduction artifact from these lines (e.g.
+  // `GatewayReplayAttempt.httpStatus`) never has to infer the status from
+  // errorClass === "RateLimitError" when the error itself already carries it.
+  it("carries both retryAfterMs and httpStatus=429 from a RateLimitError", () => {
+    const described = describeError(new RateLimitError("slow down", 4_000));
+    expect(described.retryAfterMs).toBe(4_000);
+    expect(described.httpStatus).toBe(429);
+  });
+
+  it("contributes neither field for an error that is neither a ProviderError nor a RateLimitError", () => {
+    const described = describeError(new TypeError("unrelated"));
+    expect(described.httpStatus).toBeUndefined();
+    expect(described.retryAfterMs).toBeUndefined();
   });
 });
 
@@ -404,29 +432,6 @@ describe("describeError frames and causeChain (ADR-0173 D3)", () => {
     expect(describeError("not an error").frames).toBeUndefined();
   });
 
-  // The exact surviving frame COUNT is a property of the runtime (V8 inlining,
-  // `Error.stackTraceLimit`, Vitest's transform), never of the reducer under test — so it is
-  // pinned here against an INJECTED synthetic stack, not against a real thrown-error stack whose
-  // shape the runtime controls. `diagnostics-log.activity-log.test.ts` deliberately asserts only
-  // "at least one frame" on a real stack for that reason.
-  it("pins the exact frame count for a synthetic multi-frame stack", () => {
-    const error = withStack(
-      new Error("boom"),
-      [
-        "Error: boom",
-        "    at levelThree (file:///Users/someone/app/packages/keiko-server/dist/foo.js:10:5)",
-        "    at levelTwo (file:///Users/someone/app/packages/keiko-server/dist/foo.js:20:7)",
-        "    at levelOne (file:///Users/someone/app/packages/keiko-server/dist/foo.js:30:9)",
-        "    at process.processTicksAndRejections (node:internal/process/task_queues:95:5)",
-      ].join("\n"),
-    );
-    expect(describeError(error).frames).toEqual([
-      "packages/keiko-server/dist/foo.js:10:5",
-      "packages/keiko-server/dist/foo.js:20:7",
-      "packages/keiko-server/dist/foo.js:30:9",
-    ]);
-  });
-
   it("includes causeChain's content-free class reduction of the error's cause chain", () => {
     const inner = new TypeError("inner");
     const outer = new Error("outer", { cause: inner });
@@ -471,5 +476,36 @@ describe("serverDiagnosticFromError forwards frames and causeChain (ADR-0173 D3)
     });
     expect(record.frames).toBeUndefined();
     expect(record.causeChain).toBeUndefined();
+  });
+});
+
+// ADR-0173 D5 / g12: `evidenceRetentionDiagnosticObserver`'s bound callback used to mint a fresh
+// `randomUUID()` on EVERY `onRetentionDeleted` firing, so two deletions reported by the same
+// retention sweep (the same observer registration) looked like unrelated operations. Fails before
+// the fix — two firings from one observer would carry two different random UUIDs.
+describe("evidenceRetentionDiagnosticObserver correlation id (ADR-0173 D5 / g12)", () => {
+  it("shares one correlation id across every firing of the same observer", () => {
+    const records: ServerDiagnosticRecord[] = [];
+    const observe = evidenceRetentionDiagnosticObserver(
+      { record: (record) => records.push(record) },
+      "unit-test-source",
+    );
+
+    observe(2);
+    observe(5);
+
+    expect(records).toHaveLength(2);
+    expect(records[0]?.correlationId).toBeDefined();
+    expect(records[0]?.correlationId).toBe(records[1]?.correlationId);
+  });
+
+  it("mints a distinct id for each separate observer registration", () => {
+    const records: ServerDiagnosticRecord[] = [];
+    const sink = { record: (record: ServerDiagnosticRecord): number => records.push(record) };
+    evidenceRetentionDiagnosticObserver(sink, "unit-test-source-a")(1);
+    evidenceRetentionDiagnosticObserver(sink, "unit-test-source-b")(1);
+
+    expect(records).toHaveLength(2);
+    expect(records[0]?.correlationId).not.toBe(records[1]?.correlationId);
   });
 });

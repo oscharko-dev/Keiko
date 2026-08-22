@@ -32,7 +32,13 @@
  */
 
 import { ApiError } from "./api";
-import { secureRandomId } from "./secure-random";
+import { buildBffHeaders, CORRELATION_HEADER, newClientCorrelationId } from "./bff-correlation";
+
+// Re-exported for the existing consumers that import these two from "./http"
+// (AppShell.tsx, TaskWorkspaceSwitcher.tsx, SelectionAwareWorkspaceHosts.tsx,
+// coding-app-session-channel-api.ts). The implementation lives in ./bff-correlation so this file
+// and ./api can both depend on it without the module cycle documented above.
+export { CORRELATION_HEADER, newClientCorrelationId };
 
 // The `{ error: { code, message, … } }` envelope every BFF route returns on a non-2xx. Extra
 // fields (e.g. task-workspace `failureClass`) are surfaced to `opts.enrichError`.
@@ -65,31 +71,6 @@ export interface BffFetchOptions<T> {
 
 function defaultParseFailureMessage(status: number): string {
   return `HTTP ${status.toString()}`;
-}
-
-// RB-6 (GEN-OBS-CORRELATION-601): a per-request correlation id sent on X-Keiko-Correlation-Id so a
-// failure is traceable UI -> server with a single id (the server honours a well-formed client id and
-// echoes it back). Header-safe alphabet + length, matching the server's SAFE_CORRELATION_ID predicate.
-export const CORRELATION_HEADER = "X-Keiko-Correlation-Id";
-
-export function newClientCorrelationId(): string {
-  return secureRandomId("ui");
-}
-
-// Builds the request headers as the union of both historical styles. `init.headers` win last so a
-// caller can still override any computed header (e.g. a non-JSON Accept). A correlation id is added
-// unless the caller already supplied one.
-function buildBffHeaders(init: RequestInit | undefined, correlationId: string): HeadersInit {
-  const method = (init?.method ?? "GET").toUpperCase();
-  const isStateChanging = method !== "GET" && method !== "HEAD";
-  const hasBody = init?.body !== undefined && init.body !== null;
-  return {
-    Accept: "application/json",
-    [CORRELATION_HEADER]: correlationId,
-    ...(isStateChanging || hasBody ? { "Content-Type": "application/json" } : {}),
-    ...(isStateChanging ? { "X-Keiko-CSRF": "1" } : {}),
-    ...(init?.headers as Record<string, string> | undefined),
-  };
 }
 
 /**

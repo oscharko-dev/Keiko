@@ -56,6 +56,11 @@ function ErrorNotice({
       {notice.code !== undefined ? (
         <div className="ui-error-notice-code mono">{notice.code}</div>
       ) : null}
+      {notice.correlationId !== undefined ? (
+        <div className="ui-error-notice-code mono">
+          {t("chat.error.supportId", { correlationId: notice.correlationId })}
+        </div>
+      ) : null}
     </div>
   );
 }
