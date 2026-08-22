@@ -67,14 +67,28 @@ export const REDACTED_SECRET = "[redacted:secret]";
 export const REDACTED_PATH = "[redacted:path]";
 export const REDACTED_PERSONAL = "[redacted:personal]";
 export const DROPPED_DEPTH = "[dropped:depth]";
+// Sibling of DROPPED_DEPTH: a bounded marker appended to a truncated array, so a reader can tell
+// "this list really only had 16 entries" from "this list had more and the rest were dropped" —
+// the same distinction DROPPED_DEPTH already draws for nesting.
+export const DROPPED_LENGTH = "[dropped:length]";
 
-// The identity of a log line: timestamp, severity and routing. An `extra` field may never spoof
-// one, because every operator query and every alert keys on them. The remaining envelope fields
-// (correlationId, durationMs, status, errorKind) are NOT reserved — an instrumentation site
-// naturally carries `durationMs` or `httpStatus` in its field list, and dropping those would be a
-// silent footgun. The formatter simply applies the envelope after `extra`, so the envelope wins
-// when both are present and `extra` fills the gap when it is not.
-const RESERVED_FIELD_NAMES = new Set<string>(["ts", "level", "category", "op"]);
+// The identity of a log line: timestamp, severity, routing, and (v2) process/sequence identity. An
+// `extra` field may never spoof one, because every operator query and every alert keys on them, and
+// an agent reconstructing a run joins lines across a rotated file on exactly these fields. The
+// remaining envelope fields (correlationId, durationMs, status, errorKind) are NOT reserved — an
+// instrumentation site naturally carries `durationMs` or `httpStatus` in its field list, and
+// dropping those would be a silent footgun. The formatter simply applies the envelope after `extra`,
+// so the envelope wins when both are present and `extra` fills the gap when it is not.
+const RESERVED_FIELD_NAMES = new Set<string>([
+  "ts",
+  "level",
+  "category",
+  "op",
+  "schemaVersion",
+  "pid",
+  "instanceId",
+  "seq",
+]);
 
 // Whole-name matches only, normalised to lowercase with `_` and `-` removed.
 const DENIED_FIELD_NAMES = new Set<string>([
@@ -470,13 +484,56 @@ function redactLogValue(value: unknown, depth: number): unknown {
   return redactLogObject(value, depth - 1);
 }
 
+// The slice is the bound; the marker is evidence that the bound actually fired, so a reconstructing
+// agent does not mistake a truncated list for a complete one that merely happened to be short.
+//
+// The marker CONSUMES A SLOT rather than riding along for free: when the input actually exceeds
+// the cap, only `MAX_LOG_ARRAY_LENGTH - 1` real elements are kept, so the marker's own slot brings
+// the output back to exactly `MAX_LOG_ARRAY_LENGTH` — never `MAX_LOG_ARRAY_LENGTH + 1`. An input at
+// or under the cap is untouched and carries no marker, so the configured bound holds exactly in
+// both directions instead of being a soft "roughly this many" guideline.
 function redactLogArray(value: readonly unknown[], depth: number): unknown[] {
+  const isTruncated = value.length > MAX_LOG_ARRAY_LENGTH;
+  const keepCount = isTruncated ? MAX_LOG_ARRAY_LENGTH - 1 : MAX_LOG_ARRAY_LENGTH;
   const sanitized: unknown[] = [];
-  for (const element of value.slice(0, MAX_LOG_ARRAY_LENGTH)) {
+  for (const element of value.slice(0, keepCount)) {
     const redacted = redactLogValue(element, depth);
     if (redacted !== undefined) sanitized.push(redacted);
   }
+  if (isTruncated) sanitized.push(DROPPED_LENGTH);
   return sanitized;
+}
+
+interface AcceptedLogFields {
+  readonly entries: readonly (readonly [string, unknown])[];
+  // Set only when the cap actually dropped a remaining field, never when the input simply ran out
+  // at exactly the cap — the same "bound fired" signal `redactLogArray`'s marker gives arrays.
+  readonly truncated: boolean;
+}
+
+// Split out of `redactLogObject` so each function stays under the complexity ceiling. Collects
+// every field this object accepts (by name and by the field-count cap), WITHOUT yet deciding which
+// of them make the final cut: that decision needs to know whether the cap fired, which is only
+// known once a field beyond it is seen.
+function collectAcceptedLogFields(
+  value: Readonly<Record<string, unknown>>,
+  depth: number,
+  reserved: ReadonlySet<string> | undefined,
+): AcceptedLogFields {
+  const entries: (readonly [string, unknown])[] = [];
+  for (const [name, fieldValue] of Object.entries(value)) {
+    // Ineligible names are filtered FIRST: the cap counts only fields that would actually be kept,
+    // so a reserved or pattern-invalid key sitting right at the boundary can never consume the last
+    // counted slot and falsely report a truncation that dropped a real, accepted field.
+    if (reserved?.has(name) === true) continue;
+    if (!FIELD_NAME_PATTERN.test(name)) continue;
+    if (entries.length >= MAX_LOG_FIELD_COUNT) return { entries, truncated: true };
+    const redactedValue = isDeniedLogFieldName(name)
+      ? REDACTED_KEY
+      : redactLogValue(fieldValue, depth);
+    entries.push([name, redactedValue]);
+  }
+  return { entries, truncated: false };
 }
 
 function redactLogObject(
@@ -484,20 +541,16 @@ function redactLogObject(
   depth: number,
   reserved?: ReadonlySet<string>,
 ): Record<string, unknown> {
+  const { entries, truncated } = collectAcceptedLogFields(value, depth, reserved);
+  // The marker CONSUMES A SLOT: truncation keeps only `MAX_LOG_FIELD_COUNT - 1` accepted fields, so
+  // `_truncatedFieldCount` brings the key count back to exactly `MAX_LOG_FIELD_COUNT` — added AFTER
+  // the slice so it is never itself subject to the count it reports on.
+  const kept = truncated ? entries.slice(0, MAX_LOG_FIELD_COUNT - 1) : entries;
   const sanitized: Record<string, unknown> = {};
-  let accepted = 0;
-  for (const [name, fieldValue] of Object.entries(value)) {
-    if (accepted >= MAX_LOG_FIELD_COUNT) break;
-    if (reserved?.has(name) === true) continue;
-    if (!FIELD_NAME_PATTERN.test(name)) continue;
-    accepted += 1;
-    if (isDeniedLogFieldName(name)) {
-      sanitized[name] = REDACTED_KEY;
-      continue;
-    }
-    const redacted = redactLogValue(fieldValue, depth);
-    if (redacted !== undefined) sanitized[name] = redacted;
+  for (const [name, redactedValue] of kept) {
+    if (redactedValue !== undefined) sanitized[name] = redactedValue;
   }
+  if (truncated) sanitized._truncatedFieldCount = true;
   return sanitized;
 }
 
@@ -513,4 +566,19 @@ export function redactLogFields(extra: unknown): Record<string, unknown> | undef
 // string guard. Used by the line formatter for `op`, `correlationId` and `errorKind`.
 export function redactLogLabel(value: string): string {
   return redactLogString(value);
+}
+
+// A closed-vocabulary array field (e.g. `unsupportedReasons`) is meant to carry only the fixed set
+// of reason codes a producer's own type declares — but the type is a compile-time promise, not a
+// runtime one: nothing stops a future producer, or a bug in an existing one, from putting unbounded
+// third-party text on the same field. This is the same "structural, not caller discipline" guard
+// `KNOWN_CATEGORIES`/`readCategory()` already give categories, generalised to any closed-vocabulary
+// string: a value the caller's own vocabulary recognises passes through, anything else collapses to
+// the caller's fallback marker rather than reaching the log verbatim.
+export function closeReasonVocabulary(
+  vocab: ReadonlySet<string>,
+  value: string,
+  fallback: string,
+): string {
+  return vocab.has(value) ? value : fallback;
 }

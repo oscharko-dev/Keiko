@@ -1,3 +1,6 @@
+import { DECLARED_MODEL_MODES } from "@oscharko-dev/keiko-contracts";
+
+import { closeReasonVocabulary } from "./observability/log-redaction.js";
 import { createFileServerLogSink } from "./observability/server-log.js";
 // Server-side operator diagnostics sink (RB-6 / GEN-OBS-DIAGNOSTICS-901/602/603, STATUS-403).
 //
@@ -82,6 +85,23 @@ function addBoundedField(
   if (value !== undefined) fields[name] = value;
 }
 
+// The closed vocabulary `unsupportedReasons` is allowed to carry: every declared mode Keiko
+// recognises (the same set `boundedUnsupportedReason` in keiko-contracts already narrows a gateway
+// declaration onto), plus the two fixed markers a producer falls back to when a declaration is
+// unrecognised or names a non-chat capability. `boundedUnsupportedReason` already closes this
+// vocabulary AT THE PRODUCER (gateway-setup.ts) — this is the SAME closure applied again,
+// structurally, at the point that actually writes the value to disk: a future producer of this
+// field that never calls `boundedUnsupportedReason`, or a bug that stops calling it, must not be
+// able to put unbounded third-party text onto this record's activity-log line. The generic value
+// guards in `log-redaction.ts` cannot backstop this on their own — a short, space-free vendor string
+// like `"vendor-private-mode"` is indistinguishable from a legitimate reason code by shape alone.
+export const UNSUPPORTED_REASON_VOCABULARY: ReadonlySet<string> = new Set([
+  ...DECLARED_MODEL_MODES,
+  "unrecognised-mode",
+  "not-chat-capable",
+]);
+const UNSUPPORTED_REASON_FALLBACK = "unrecognised-mode";
+
 // A diagnostic record is a CALLER-SUPPLIED object, so handing it to the activity log whole
 // (`extra: { record }`) made every field of it — including every field added to the type later —
 // a log field by default, and made the log's value guards the only thing standing between a
@@ -103,7 +123,9 @@ function diagnosticActivityLogFields(record: ServerDiagnosticRecord): Record<str
   addBoundedField(fields, "unverifiedEmbeddingModelCount", record.unverifiedEmbeddingModelCount);
   addBoundedField(fields, "droppedEmbeddingModelCount", record.droppedEmbeddingModelCount);
   if (record.unsupportedReasons !== undefined) {
-    fields.unsupportedReasons = [...record.unsupportedReasons];
+    fields.unsupportedReasons = record.unsupportedReasons.map((reason) =>
+      closeReasonVocabulary(UNSUPPORTED_REASON_VOCABULARY, reason, UNSUPPORTED_REASON_FALLBACK),
+    );
   }
   if (record.partialUsage !== undefined) {
     fields.promptTokens = record.partialUsage.promptTokens;

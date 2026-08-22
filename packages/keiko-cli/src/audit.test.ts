@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
-import { parseAuditArgs, runAuditCli } from "./audit.js";
+import { AuditLoadError, auditLocalStateResult, parseAuditArgs, runAuditCli } from "./audit.js";
 import type { CliIo } from "./runner.js";
 
 function makeIo(): { io: CliIo; out: () => string; err: () => string } {
@@ -44,10 +44,33 @@ const DRIFTED = {
 
 describe("parseAuditArgs", () => {
   it("accepts local-state with and without an explicit state dir", () => {
-    expect(parseAuditArgs(["local-state"])).toEqual({ kind: "args", stateDir: undefined });
+    expect(parseAuditArgs(["local-state"])).toEqual({
+      kind: "args",
+      stateDir: undefined,
+      json: false,
+    });
     expect(parseAuditArgs(["local-state", "--state-dir", "/srv/.keiko"])).toEqual({
       kind: "args",
       stateDir: "/srv/.keiko",
+      json: false,
+    });
+  });
+
+  it("accepts --json alone, combined with --state-dir, and in either order", () => {
+    expect(parseAuditArgs(["local-state", "--json"])).toEqual({
+      kind: "args",
+      stateDir: undefined,
+      json: true,
+    });
+    expect(parseAuditArgs(["local-state", "--state-dir", "/srv/.keiko", "--json"])).toEqual({
+      kind: "args",
+      stateDir: "/srv/.keiko",
+      json: true,
+    });
+    expect(parseAuditArgs(["local-state", "--json", "--state-dir", "/srv/.keiko"])).toEqual({
+      kind: "args",
+      stateDir: "/srv/.keiko",
+      json: true,
     });
   });
 
@@ -67,6 +90,13 @@ describe("parseAuditArgs", () => {
   it("routes help through", () => {
     expect(parseAuditArgs(["--help"])).toEqual({ kind: "help" });
     expect(parseAuditArgs(["local-state", "-h"])).toEqual({ kind: "help" });
+  });
+
+  it("lets --help win over --json regardless of order", () => {
+    // Existing precedence: help is checked first on every token the flag scanner visits, so it
+    // wins no matter where it appears relative to --json.
+    expect(parseAuditArgs(["local-state", "--json", "--help"])).toEqual({ kind: "help" });
+    expect(parseAuditArgs(["local-state", "--help", "--json"])).toEqual({ kind: "help" });
   });
 });
 
@@ -283,5 +313,104 @@ describe("runAuditCli", () => {
     expect(c.err()).toContain("could not run");
     // The report must not claim anything about the tree it never read.
     expect(c.out()).toBe("");
+  });
+
+  describe("--json", () => {
+    it("emits exactly JSON.stringify(result) plus a newline and nothing else on a healthy tree", async () => {
+      const c = makeIo();
+      const code = await runAuditCli(
+        ["local-state", "--state-dir", "/tmp/example/.keiko", "--json"],
+        c.io,
+        env,
+        { loadAuditor: () => Promise.resolve({ auditLocalState: () => HEALTHY }) },
+      );
+      expect(code).toBe(0);
+      expect(c.out()).toBe(`${JSON.stringify(HEALTHY)}\n`);
+      expect(c.err()).toBe("");
+    });
+
+    it("emits exactly JSON.stringify(result) plus a newline and exits 1 on a drifted tree", async () => {
+      const c = makeIo();
+      const code = await runAuditCli(
+        ["local-state", "--state-dir", "/tmp/example/.keiko", "--json"],
+        c.io,
+        env,
+        { loadAuditor: () => Promise.resolve({ auditLocalState: () => DRIFTED }) },
+      );
+      expect(code).toBe(1);
+      expect(c.out()).toBe(`${JSON.stringify(DRIFTED)}\n`);
+      // No human-report framing ("=> FAIL", "local-state: FAIL") leaks into either stream.
+      expect(c.err()).toBe("");
+    });
+
+    it("keeps the same exit codes and error text as the text path when the auditor fails to load", async () => {
+      const c = makeIo();
+      const code = await runAuditCli(["local-state", "--json"], c.io, env, {
+        loadAuditor: () => Promise.resolve({} as never),
+      });
+      expect(code).toBe(1);
+      expect(c.err()).toContain("does not export");
+      expect(c.out()).toBe("");
+    });
+
+    it("still exits 2 on a usage error with --json present", async () => {
+      const c = makeIo();
+      expect(await runAuditCli(["local-state", "--state-dir", "", "--json"], c.io, env)).toBe(2);
+      expect(c.out()).toBe("");
+    });
+  });
+});
+
+describe("auditLocalStateResult", () => {
+  const env = { KEIKO_LOCAL_STATE_AUDITOR: "/opt/keiko/scripts/lib/local-state-audit.mjs" };
+
+  it("returns the validated AuditResult on a healthy tree", async () => {
+    const result = await auditLocalStateResult("/tmp/example/.keiko", env, {
+      loadAuditor: () => Promise.resolve({ auditLocalState: () => HEALTHY }),
+    });
+    expect(result).toEqual(HEALTHY);
+  });
+
+  it("returns the validated AuditResult on a drifted tree, same as the CLI would print", async () => {
+    const result = await auditLocalStateResult("/tmp/example/.keiko", env, {
+      loadAuditor: () => Promise.resolve({ auditLocalState: () => DRIFTED }),
+    });
+    expect(result).toEqual(DRIFTED);
+  });
+
+  it("rejects with a plain Error, not AuditLoadError, when the auditor path is unconfigured", async () => {
+    await expect(auditLocalStateResult("/tmp/example/.keiko", {})).rejects.toThrow(
+      /KEIKO_LOCAL_STATE_AUDITOR/,
+    );
+    await expect(
+      auditLocalStateResult("/tmp/example/.keiko", { KEIKO_LOCAL_STATE_AUDITOR: "" }),
+    ).rejects.not.toBeInstanceOf(AuditLoadError);
+  });
+
+  it("rejects with AuditLoadError(reason: missing-export) when the module has no auditLocalState", async () => {
+    const failure = await auditLocalStateResult("/tmp/example/.keiko", env, {
+      loadAuditor: () => Promise.resolve({} as never),
+    }).catch((error: unknown) => error);
+    expect(failure).toBeInstanceOf(AuditLoadError);
+    expect((failure as AuditLoadError).reason).toBe("missing-export");
+  });
+
+  it("rejects with AuditLoadError(reason: invalid-result) on a malformed result", async () => {
+    const failure = await auditLocalStateResult("/tmp/example/.keiko", env, {
+      loadAuditor: () => Promise.resolve({ auditLocalState: () => "clean" } as never),
+    }).catch((error: unknown) => error);
+    expect(failure).toBeInstanceOf(AuditLoadError);
+    expect((failure as AuditLoadError).reason).toBe("invalid-result");
+  });
+
+  it("rejects with AuditLoadError(reason: threw, causeConstructorName set) when loading throws", async () => {
+    const failure = await auditLocalStateResult("/tmp/example/.keiko", env, {
+      loadAuditor: () => Promise.reject(new Error("ERR_MODULE_NOT_FOUND")),
+    }).catch((error: unknown) => error);
+    expect(failure).toBeInstanceOf(AuditLoadError);
+    expect((failure as AuditLoadError).reason).toBe("threw");
+    expect((failure as AuditLoadError).causeConstructorName).toBe("Error");
+    // Body-free: the underlying message must never leak into the rejection.
+    expect((failure as AuditLoadError).message).not.toContain("ERR_MODULE_NOT_FOUND");
   });
 });

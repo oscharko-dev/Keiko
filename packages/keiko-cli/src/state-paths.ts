@@ -185,6 +185,7 @@ export function classifyPid(
 //     updates/runtime-state.json            keiko-server  update-local-state.ts
 //     updates/update-audit.jsonl            keiko-server  update-local-state.ts
 //     updates/snapshots/<id>/manifest.json  keiko-server  update-local-state.ts
+//     logs/server.log, server-<date>.log    keiko-server  observability/server-log.ts
 //
 // The sealed `*.vault` ciphertext and its `*.key` keyfile (the env/keychain-tier fallback,
 // ADR-0046) are the most confidentiality-critical artifacts here, so they are first-class
@@ -210,6 +211,7 @@ const CREDENTIALS_SUBDIR = "credentials"; // keiko-server/src/credentialVault.ts
 const MEMORY_SUBDIR = "memory"; // keiko-memory-vault/src/paths.ts (MEMORY_DIR_NAME)
 const LOCAL_KNOWLEDGE_SUBDIR = "local-knowledge"; // keiko-local-knowledge store-paths.ts (SUBSYSTEM_DIR)
 const EVIDENCE_SUBDIR = "evidence"; // keiko-evidence/src/store.ts (DEFAULT_EVIDENCE_DIR)
+const LOGS_SUBDIR = "logs"; // keiko-server/src/observability/server-log.ts (createFileServerLogSink)
 const TOOL_RESULTS_SUBDIR = "tool-results"; // keiko-evidence/src/tool-result-artifact-store.ts
 const UPDATE_SUBDIR = "updates"; // keiko-server/src/update-local-state.ts (UPDATE_DIR)
 const FIGMA_VAULT_SUBDIR = "figma"; // keiko-server figmaTokenStore.ts (Figma PAT vault dir, under evidence)
@@ -231,6 +233,8 @@ const TOOL_RESULT_ARTIFACT_SUFFIX = ".tool-result.txt"; // keiko-evidence tool-r
 const PRODUCER_TEMP_SUFFIX = ".tmp"; // atomic-save temp files (`<target>.<random>.tmp`)
 const PRODUCER_TEMP_TOKEN = /^[A-Za-z0-9._-]{8,}$/u;
 const SECRET_VAULT_TEMP_FILE = /^\.secret-vault\.[1-9]\d*\.[0-9a-f]{16}\.tmp$/u;
+const SERVER_LOG_FILE = "server.log"; // keiko-server/src/observability/server-log.ts (createFileServerLogSink)
+const SERVER_LOG_ARCHIVE_FILE = /^server-\d{4}-\d{2}-\d{2}\.log$/u; // day-rotated archive (archiveCurrentDay)
 const QI_OWNED_SUFFIXES = [
   ".qi.json", // keiko-evidence/src/qualityIntelligence/store.ts
   ".candidates.json", // keiko-evidence/src/qualityIntelligence/candidatesArtifact.ts
@@ -253,7 +257,8 @@ export type RuntimeStateCategory =
   | "local-knowledge"
   | "evidence"
   | "quality-intelligence"
-  | "update-recovery";
+  | "update-recovery"
+  | "activity-log";
 
 // A SQLite store file plus its exact WAL/SHM sidecars and `.corrupt.<ts>` quarantine copies
 // — and ONLY those. Matching is exact-name or a known dotted suffix, never a bare `${base}-`
@@ -378,6 +383,10 @@ function isEditorHotExitVaultFile(name: string): boolean {
     name === EDITOR_HOT_EXIT_KEYFILE ||
     SECRET_VAULT_TEMP_FILE.test(name)
   );
+}
+
+function isServerLogFile(name: string): boolean {
+  return name === SERVER_LOG_FILE || SERVER_LOG_ARCHIVE_FILE.test(name);
 }
 
 function dirHasSqliteFamilyArtifact(absDir: string, base: string): boolean {
@@ -515,6 +524,18 @@ const updateSubtree: OwnedSubtree = {
   childSubtree: NO_CHILD,
 };
 
+// `logs/` holds only `server.log` and its day-rotated `server-<date>.log` archives
+// (`createFileServerLogSink`). Classified rather than `whole`: an operator file dropped into
+// `logs/`, or an unexpected nested directory, must be retained rather than claimed by
+// `repair`/`uninstall` — a `whole` subtree here would let anything placed under `logs/` get
+// chmod'd or removed as if Keiko had written it (#2902 PR review).
+const logsSubtree: OwnedSubtree = {
+  category: "activity-log",
+  whole: false,
+  ownsFile: isServerLogFile,
+  childSubtree: NO_CHILD,
+};
+
 function topLevelFileCategory(name: string): RuntimeStateCategory | undefined {
   if (name === "ui.pid" || name === "ui.log") return "lifecycle";
   if (name === "launcher-state.json" || name === "portable-install-state.json") {
@@ -525,14 +546,24 @@ function topLevelFileCategory(name: string): RuntimeStateCategory | undefined {
   return undefined;
 }
 
+// A direct name->subtree map rather than a chain of `if (name === X) return Y` — the chain was
+// already at the cyclomatic-complexity ceiling before `logs/` (#2902); adding a ninth top-level
+// child directory here would keep pushing straight-line lookups over that budget instead of
+// growing this data table by one row.
+const TOP_LEVEL_CHILD_SUBTREES: ReadonlyMap<string, OwnedSubtree> = new Map([
+  [DEFAULT_UI_STATE_SUBDIR, uiDataSubtree],
+  [CREDENTIALS_SUBDIR, credentialsSubtree],
+  [MEMORY_SUBDIR, memorySubtree],
+  [LOCAL_KNOWLEDGE_SUBDIR, localKnowledgeSubtree],
+  [EVIDENCE_SUBDIR, evidenceSubtree],
+  [EDITOR_HOT_EXIT_SUBDIR, editorHotExitSubtree],
+  [UPDATE_SUBDIR, updateSubtree],
+  [LOGS_SUBDIR, logsSubtree],
+]);
+
 function topLevelChildSubtree(name: string, absPath: string): OwnedSubtree | undefined {
-  if (name === DEFAULT_UI_STATE_SUBDIR) return uiDataSubtree;
-  if (name === CREDENTIALS_SUBDIR) return credentialsSubtree;
-  if (name === MEMORY_SUBDIR) return memorySubtree;
-  if (name === LOCAL_KNOWLEDGE_SUBDIR) return localKnowledgeSubtree;
-  if (name === EVIDENCE_SUBDIR) return evidenceSubtree;
-  if (name === EDITOR_HOT_EXIT_SUBDIR) return editorHotExitSubtree;
-  if (name === UPDATE_SUBDIR) return updateSubtree;
+  const direct = TOP_LEVEL_CHILD_SUBTREES.get(name);
+  if (direct !== undefined) return direct;
   if (isMkdtempOwnedDir(absPath, name, LAUNCHER_STATE_TMP_PREFIX)) return launcherTmpSubtree;
   if (isMkdtempOwnedDir(absPath, name, PORTABLE_REGISTRATION_TMP_PREFIX)) {
     return launcherTmpSubtree;

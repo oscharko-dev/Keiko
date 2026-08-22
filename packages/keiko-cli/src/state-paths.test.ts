@@ -157,6 +157,7 @@ function seedRuntimeState(root: string): string {
   mkdirSync(join(stateDir, "evidence", "qi", "figma-snapshots", "run-1"), { recursive: true });
   mkdirSync(join(stateDir, "editor-hot-exit"), { recursive: true });
   mkdirSync(join(stateDir, "updates", "snapshots", "snap-1"), { recursive: true });
+  mkdirSync(join(stateDir, "logs"), { recursive: true });
   touch(join(stateDir, "ui.pid"));
   touch(join(stateDir, "ui.log"));
   touch(join(stateDir, "launcher-state.json"));
@@ -211,6 +212,11 @@ function seedRuntimeState(root: string): string {
   touch(join(stateDir, "updates", "runtime-state.json"));
   touch(join(stateDir, "updates", "update-audit.jsonl"));
   touch(join(stateDir, "updates", "snapshots", "snap-1", "manifest.json"));
+  touch(join(stateDir, "logs", "server.log"));
+  touch(join(stateDir, "logs", "server-2026-06-20.log"));
+  touch(join(stateDir, "logs", "operator-notes.txt")); // a foreign file — must be retained
+  mkdirSync(join(stateDir, "logs", "archive"), { recursive: true });
+  touch(join(stateDir, "logs", "archive", "old.log")); // nested dir — must be retained, not recursed
   touch(join(stateDir, "user-notes.txt")); // a customer file — must be retained
   return stateDir;
 }
@@ -321,6 +327,18 @@ describe("scanRuntimeState — runtime-state manifest", () => {
     expect(categoryOf(scan, "updates/runtime-state.json")).toBe("update-recovery");
     expect(categoryOf(scan, "updates/update-audit.jsonl")).toBe("update-recovery");
     expect(categoryOf(scan, "updates/snapshots/snap-1/manifest.json")).toBe("update-recovery");
+    expect(categoryOf(scan, "logs")).toBe("activity-log");
+    expect(categoryOf(scan, "logs/server.log")).toBe("activity-log");
+    expect(categoryOf(scan, "logs/server-2026-06-20.log")).toBe("activity-log");
+    // `logsSubtree` is classified, not `whole`: only the two recognized log-sink names are
+    // owned. A foreign file or an unexpected nested directory under `logs/` must be retained,
+    // not claimed by `repair`/`uninstall` (#2902 PR review).
+    expect(categoryOf(scan, "logs/operator-notes.txt")).toBeUndefined();
+    expect(categoryOf(scan, "logs/archive")).toBeUndefined();
+    const logsRetained = scan.retained.map((r) => r.relPath);
+    expect(logsRetained).toContain("logs/operator-notes.txt");
+    expect(logsRetained).toContain("logs/archive");
+    expect(logsRetained.some((relPath) => relPath.startsWith("logs/archive/"))).toBe(false);
   });
 
   it("classifies quarantined .corrupt.<ts> database and sidecar copies as owned", () => {

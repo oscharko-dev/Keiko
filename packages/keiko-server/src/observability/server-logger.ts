@@ -76,6 +76,9 @@ const FALLBACK_CATEGORY: ServerLogCategory = "diagnostic";
 
 const LIFTED_CONTEXT_KEYS = new Set<string>(["correlationId", "category"]);
 
+// Kept in lockstep with `ServerLogCategory` in `server-log.ts` — this is the runtime mirror of that
+// compile-time union, consulted by `readCategory` below so a bound context can only ever lift a
+// category the type actually declares onto the envelope.
 const KNOWN_CATEGORIES = new Set<string>([
   "http",
   "gateway",
@@ -85,6 +88,7 @@ const KNOWN_CATEGORIES = new Set<string>([
   "search",
   "memory",
   "diagnostic",
+  "process",
 ]);
 
 // A binding resolved once at `child()` time so the emit path never re-partitions the context.

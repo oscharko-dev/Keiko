@@ -17,14 +17,17 @@
 // The cost is bounded and pinned by COUNTING, not by timing. The sink holds ONE append-mode
 // descriptor open for the life of the file, so a line costs a single `write(2)` rather than the
 // open/write/close triple `appendFileSync` pays per call. `server-log.test.ts` asserts exactly
-// that over a burst — one `openSync`, one `writeSync` per line, and a file whose size is N times
-// one line — so a regression to per-write open/close, or to a quadratic format path, fails the
-// suite deterministically instead of showing up as latency in production. A wall-clock budget
-// would measure the runner's disk instead, and go red on a diff that never touched this file.
+// that over a burst — one `openSync`, one `writeSync` per line, and a file whose size is the SUM of
+// each line's own byte length (lines are no longer byte-identical once `seq` is in the envelope: its
+// digit width grows at each power-of-ten boundary the burst crosses) — so a regression to per-write
+// open/close, or to a quadratic format path, fails the suite deterministically instead of showing up
+// as latency in production. A wall-clock budget would measure the runner's disk instead, and go red
+// on a diff that never touched this file.
 //
 // Levels are the volume control instead: an event below the configured threshold returns before
 // any string or JSON work happens at all (`KEIKO_LOG_LEVEL`, default `info`).
 
+import { randomUUID } from "node:crypto";
 import {
   closeSync,
   existsSync,
@@ -70,6 +73,8 @@ export {
   REDACTED_SECRET,
   REDACTED_SHAPE,
   DROPPED_DEPTH,
+  DROPPED_LENGTH,
+  closeReasonVocabulary,
   isDeniedLogFieldName,
   normalizeLogFieldName,
   redactLogFields,
@@ -79,9 +84,19 @@ export {
 export { redactRoutePath } from "./route-template.js";
 
 // Coarse routing label. Kept a closed union so a typo cannot invent a category an operator's
-// grep will never find; `memory` was added for the vault/retrieval surface.
+// grep will never find; `memory` was added for the vault/retrieval surface, `process` for the
+// process-lifecycle lines (`process.started`/`process.heartbeat`/`process.exiting`) envelope v2
+// adds.
 export type ServerLogCategory =
-  "http" | "gateway" | "embedding" | "indexing" | "setup" | "search" | "memory" | "diagnostic";
+  | "http"
+  | "gateway"
+  | "embedding"
+  | "indexing"
+  | "setup"
+  | "search"
+  | "memory"
+  | "diagnostic"
+  | "process";
 
 export interface ServerLogEvent {
   // Omitted means `info`. An event below the sink threshold costs nothing.
@@ -93,6 +108,34 @@ export interface ServerLogEvent {
   readonly status?: number | undefined;
   readonly errorKind?: string | undefined;
   readonly extra?: Readonly<Record<string, unknown>> | undefined;
+}
+
+// Bumped only on a breaking change to the line FORMAT (a reserved field renamed, removed, or
+// retyped) — never on an additive change, which is what every wave of this schema so far has been.
+export const SERVER_LOG_SCHEMA_VERSION = 2;
+
+// One instance id per process, computed once from a single `randomUUID()` call so every line this
+// process ever writes carries the SAME value. A pid alone is not a process-identity key: the OS
+// reuses pids across restarts, so two different process lifetimes can share one in a rotated
+// multi-day file. `pid` + `instanceId` together, never `pid` alone, is what an agent joins on.
+const INSTANCE_ID = randomUUID().replaceAll("-", "").slice(0, 8);
+
+// Exposed so a future consumer (the CLI's support-bundle manifest) can name the same instance the
+// running process is stamping onto its own lines, without recomputing or guessing at the value.
+export function serverLogInstanceId(): string {
+  return INSTANCE_ID;
+}
+
+// The four fields the sink stamps once, at the physical write boundary — never left to a caller,
+// and never spoofable through `extra` (see `RESERVED_FIELD_NAMES` in `log-redaction.ts`). Bundled
+// as one optional parameter on `formatServerLogLine` rather than four, because a caller either
+// wants the full process/sequence identity or none of it: the file sink always passes one, and the
+// in-memory buffered test sink is free to omit it entirely.
+export interface ServerLogIdentity {
+  readonly schemaVersion: number;
+  readonly pid: number;
+  readonly instanceId: string;
+  readonly seq: number;
 }
 
 export interface ServerLogSink {
@@ -161,8 +204,16 @@ export interface ServerLogFailureContext {
 const failureNotice = { lastAt: null as number | null, suppressed: 0 };
 
 // Tests reset this so one suite's notice cannot silence the next suite's assertion; the server
-// resets it on shutdown for the same reason.
+// resets it on shutdown for the same reason. Either caller is clearing `suppressed` — a count that
+// otherwise only ever surfaces on the NEXT unthrottled failure — so a suppressed count sitting here
+// when the reset runs is flushed to stderr first: without this, a clean shutdown (or a suite that
+// never sees another failure) would clear the counter with nothing ever having reported it, and
+// `reportServerLogFailure`'s "suppressed notices are counted and reported on the next one" promise
+// would be broken for whatever window was still open.
 export function resetServerLogFailureNotices(): void {
+  if (failureNotice.suppressed > 0) {
+    emitShutdownFlushNotice(failureNotice.suppressed, Date.now());
+  }
   failureNotice.lastAt = null;
   failureNotice.suppressed = 0;
 }
@@ -191,6 +242,41 @@ export function reportServerLogFailure(
   emitFailureNotice(error, context, suppressed, now);
 }
 
+// Shared by every stderr notice this module emits: a diagnostic that cannot itself be delivered
+// must not fail the operation (or the shutdown) it was describing. When stderr itself is
+// unavailable (a closed descriptor, a broken pipe, ...) the notice still reaches an operator
+// through an INDEPENDENT channel — `process.emitWarning` dispatches the 'warning' event
+// synchronously to any listener, which fires even when stderr is closed; Node's own default
+// handler happens to also print to stderr, but that is Node's problem to swallow, not this
+// module's. This is genuinely the last channel: if a 'warning' listener itself throws, or every
+// stream this process owns is gone, the notice is lost.
+function writeStderrNotice(notice: Record<string, unknown>): void {
+  try {
+    process.stderr.write(`${JSON.stringify(notice)}\n`);
+  } catch {
+    emitLogNoticeFailedWarning(notice);
+  }
+}
+
+function emitLogNoticeFailedWarning(notice: Record<string, unknown>): void {
+  try {
+    process.emitWarning("keiko server log notice could not be written to stderr", {
+      code: "KEIKO_LOG_NOTICE_FAILED",
+      // Named `noticeOp`, not `op`: this is a description of a notice, not a log event, and the
+      // op-catalog generator indexes every `op:` property in product code.
+      detail: JSON.stringify({
+        noticeOp: notice.op,
+        failedOp: notice.failedOp,
+        correlationId: notice.correlationId,
+        errorKind: notice.errorKind,
+        suppressedNotices: notice.suppressedNotices,
+      }),
+    });
+  } catch {
+    // No channel left to report through; nothing further to do.
+  }
+}
+
 function emitFailureNotice(
   error: unknown,
   context: ServerLogFailureContext,
@@ -209,12 +295,28 @@ function emitFailureNotice(
     notice.correlationId = redactLogLabel(context.correlationId);
   }
   if (suppressed > 0) notice.suppressedNotices = suppressed;
-  try {
-    process.stderr.write(`${JSON.stringify(notice)}\n`);
-  } catch {
-    // There is no third channel. A diagnostic that cannot be delivered must not fail the
-    // operation it was describing.
-  }
+  writeStderrNotice(notice);
+}
+
+// The last-resort flush: whatever `suppressed` count was still sitting unreported when the notice
+// state was reset (a clean process shutdown, or a suite boundary) is announced here, ONCE, before
+// `resetServerLogFailureNotices` clears it. This has the same body-free shape as a throttled
+// failure notice, plus `reason` so a reader can tell "reported because another failure arrived"
+// from "reported because the counter was about to be cleared with nothing else coming."
+//
+// This still cannot promise EXACT accounting across every possible exit: a hard kill (SIGKILL,
+// power loss, or any crash the process never gets to handle) skips this flush entirely, same as it
+// skips every other cleanup path. The `seq` gap for such a window still marks that a write failed;
+// only the count of how many is not recoverable after that kind of exit.
+function emitShutdownFlushNotice(suppressed: number, now: number): void {
+  writeStderrNotice({
+    ts: new Date(now).toISOString(),
+    level: "error",
+    category: "diagnostic",
+    op: LOG_FAILURE_NOTICE_OP,
+    reason: "shutdown-flush",
+    suppressedNotices: suppressed,
+  });
 }
 
 function eventLevel(event: ServerLogEvent): ServerLogLevel {
@@ -234,17 +336,30 @@ function applyEnvelopeFields(record: Record<string, unknown>, event: ServerLogEv
   if (event.errorKind !== undefined) record.errorKind = redactLogLabel(event.errorKind);
 }
 
-// `ts`, `level`, `category` and `op` are written first and are reserved inside `redactLogFields`,
-// so `extra` cannot spoof the identity of a line. The remaining envelope fields are applied AFTER
-// `extra` so an explicit `durationMs`/`status`/`errorKind` on the event wins, while an
-// instrumentation site that carries the same name in its field list still gets it logged.
-export function formatServerLogLine(event: ServerLogEvent, now: Date = new Date()): string {
-  const record: Record<string, unknown> = {
-    ts: now.toISOString(),
-    level: eventLevel(event),
-    category: event.category,
-    op: redactLogLabel(event.op),
-  };
+// `ts`, `schemaVersion`, `pid`, `instanceId`, `seq`, `level`, `category` and `op` are written first
+// and are reserved inside `redactLogFields`, so `extra` cannot spoof the identity of a line. The
+// remaining envelope fields are applied AFTER `extra` so an explicit `durationMs`/`status`/
+// `errorKind` on the event wins, while an instrumentation site that carries the same name in its
+// field list still gets it logged.
+//
+// `identity` is optional so the in-memory buffered sink (tests only) can format a line without a
+// process/sequence context; the file sink below always supplies one, so every line that actually
+// reaches disk carries the full v2 envelope.
+export function formatServerLogLine(
+  event: ServerLogEvent,
+  now: Date = new Date(),
+  identity?: ServerLogIdentity,
+): string {
+  const record: Record<string, unknown> = { ts: now.toISOString() };
+  if (identity !== undefined) {
+    record.schemaVersion = identity.schemaVersion;
+    record.pid = identity.pid;
+    record.instanceId = identity.instanceId;
+    record.seq = identity.seq;
+  }
+  record.level = eventLevel(event);
+  record.category = event.category;
+  record.op = redactLogLabel(event.op);
   const extra = redactLogFields(event.extra);
   if (extra !== undefined) Object.assign(record, extra);
   applyEnvelopeFields(record, event);
@@ -271,14 +386,18 @@ export function serverLogLineWithinCap(line: string): boolean {
 }
 
 function oversizedLine(record: Record<string, unknown>, lineBytes: number): string {
-  const replacement = {
-    ts: record.ts,
-    level: record.level,
-    category: record.category,
-    op: record.op,
-    errorKind: "log-line-oversized",
-    droppedLineBytes: lineBytes,
-  };
+  // The identity fields ride along when present: an agent joining lines by (pid, instanceId, seq)
+  // must not see a gap in that join key just because the ORIGINAL event happened to be oversized.
+  const replacement: Record<string, unknown> = { ts: record.ts };
+  if (record.schemaVersion !== undefined) replacement.schemaVersion = record.schemaVersion;
+  if (record.pid !== undefined) replacement.pid = record.pid;
+  if (record.instanceId !== undefined) replacement.instanceId = record.instanceId;
+  if (record.seq !== undefined) replacement.seq = record.seq;
+  replacement.level = record.level;
+  replacement.category = record.category;
+  replacement.op = record.op;
+  replacement.errorKind = "log-line-oversized";
+  replacement.droppedLineBytes = lineBytes;
   return `${JSON.stringify(replacement)}\n`;
 }
 
@@ -302,6 +421,33 @@ interface ActiveLog {
   // stalled mid-line is remembered: the file ends mid-record and the next record must open with a
   // newline. See `writeRecord`.
   pendingNewline: boolean;
+}
+
+// PROCESS-WIDE `seq` ALLOCATOR — one counter, one module, for the life of the process.
+//
+// It must NOT live on `ActiveLog`. Two independent state directories in the same process (a CLI
+// pointed at a workspace-local state dir, and the server logger's own default) each resolve to a
+// DIFFERENT `ActiveLog`; a counter kept per `ActiveLog` restarts at 1 for each one, so two lines
+// written moments apart — one to each directory — can carry the identical `(pid, instanceId, seq)`
+// tuple. That tuple is the join key ADR-0173 (D2) promises an agent a total, gap-free order on, and
+// a duplicate breaks the promise regardless of how many log directories the process happens to
+// have open. One allocator shared by every `ActiveLog`, every rotation, and every sink built on top
+// of any of them is what keeps the tuple unique process-wide.
+//
+// Claimed as soon as an event clears the level gate, in `createFileSinkFacade.write`, BEFORE the
+// write is attempted — never rolled back if that write then throws. The alternative, claiming only
+// after a successful write, would let two callers racing the same failure both observe the same
+// pre-failure counter value and then both claim the number that follows it, silently reusing a
+// sequence number for two different lines. A gap is not a bug in this counter: it is the evidence
+// that a line was not persisted, and `reportServerLogFailure`'s suppressed-notice count accounts
+// for the writes a gap represents. Monotonic per process; a gap marks a line the sink could not
+// persist.
+let nextProcessSeq = 1;
+
+function allocateServerLogSeq(): number {
+  const seq = nextProcessSeq;
+  nextProcessSeq += 1;
+  return seq;
 }
 
 function todayUtc(now: Date = new Date()): string {
@@ -527,7 +673,16 @@ function createFileSinkFacade(active: ActiveLog, threshold: ServerLogThreshold):
       if (!serverLogLevelEnabled(eventLevel(event), threshold)) return;
       try {
         rotateIfNeeded(active);
-        writeRecord(active, ensureHandle(active), formatServerLogLine(event));
+        // Claimed as soon as the event clears the gate, before the write is attempted: see
+        // `allocateServerLogSeq` for why a dropped write must not roll this number back.
+        const seq = allocateServerLogSeq();
+        const identity: ServerLogIdentity = {
+          schemaVersion: SERVER_LOG_SCHEMA_VERSION,
+          pid: process.pid,
+          instanceId: INSTANCE_ID,
+          seq,
+        };
+        writeRecord(active, ensureHandle(active), formatServerLogLine(event, undefined, identity));
       } catch (error) {
         // Writing must never take the server down; a full disk, a permission change or a file
         // removed under us drops the line and forces a reopen on the next write. It does NOT drop

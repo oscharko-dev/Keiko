@@ -19,6 +19,7 @@ import { runRepairCli } from "./repair.js";
 import { runUpdateCli } from "./update.js";
 import { emitDoctorWarning, runDoctorCli } from "./doctor.js";
 import { runAuditCli } from "./audit.js";
+import { runSupportCli } from "./support.js";
 import type { EnvSource } from "@oscharko-dev/keiko-model-gateway";
 // The version constant comes from the contracts LEAF, not the keiko-sdk barrel:
 // the sdk package eagerly re-exports harness/workflows/evidence/gateway/
@@ -44,6 +45,8 @@ Usage:
   keiko doctor             Diagnose stale global-vs-local launch paths.
   keiko audit local-state [--state-dir PATH]
                            Audit a local .keiko tree against the at-rest contract (read-only).
+  keiko support <export|analyze> [OPTIONS]
+                           Export a redacted support bundle, or analyze one by correlation id.
   keiko repair [OPTIONS]   Repair a broken local install (offline remediation pass).
   keiko uninstall [OPTIONS] Remove Keiko's runtime artifacts (state, shortcuts, scripts).
   keiko update <status|check|apply> Inspect or run governed updates (UI remains primary).
@@ -101,6 +104,7 @@ const COMMAND_HANDLERS: ReadonlyMap<string, CommandHandler> = new Map<string, Co
   ["init", runInitCli],
   ["doctor", runDoctorCli],
   ["audit", (rest, io, env): Promise<number> => runAuditCli(rest, io, env)],
+  ["support", (rest, io, env): Promise<number> => runSupportCli(rest, io, env)],
   ["repair", runRepairCli],
   ["uninstall", runUninstallCli],
   ["update", runUpdateCli],

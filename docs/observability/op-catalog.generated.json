@@ -1,0 +1,793 @@
+{
+  "$schema": "keiko-op-catalog/1",
+  "generatedBy": "scripts/generate-op-catalog.mjs",
+  "entries": [
+    {
+      "op": "process.exiting",
+      "category": "process",
+      "site": "packages/keiko-cli/src/ui.ts:448",
+      "package": "keiko-cli"
+    },
+    {
+      "op": "process.heartbeat",
+      "category": "process",
+      "site": "packages/keiko-cli/src/ui.ts:701",
+      "package": "keiko-cli"
+    },
+    {
+      "op": "process.started",
+      "category": "process",
+      "site": "packages/keiko-cli/src/ui.ts:816",
+      "package": "keiko-cli"
+    },
+    {
+      "op": "embedding.batch.budgeting-failed",
+      "category": "embedding",
+      "site": "packages/keiko-local-knowledge/src/indexing/embedding-batcher.ts:815",
+      "package": "keiko-local-knowledge"
+    },
+    {
+      "op": "embedding.batch.cancelled",
+      "category": "embedding",
+      "site": "packages/keiko-local-knowledge/src/indexing/embedding-batcher.ts:1041",
+      "package": "keiko-local-knowledge"
+    },
+    {
+      "op": "embedding.batch.completed",
+      "category": "embedding",
+      "site": "packages/keiko-local-knowledge/src/indexing/embedding-batcher.ts:1004",
+      "package": "keiko-local-knowledge"
+    },
+    {
+      "op": "embedding.batch.failed",
+      "category": "embedding",
+      "site": "packages/keiko-local-knowledge/src/indexing/embedding-batcher.ts:633",
+      "package": "keiko-local-knowledge"
+    },
+    {
+      "op": "embedding.batch.grouped",
+      "category": "embedding",
+      "site": "packages/keiko-local-knowledge/src/indexing/embedding-batcher.ts:827",
+      "package": "keiko-local-knowledge"
+    },
+    {
+      "op": "embedding.batch.partial-progress",
+      "category": "embedding",
+      "site": "packages/keiko-local-knowledge/src/indexing/embedding-batcher.ts:499",
+      "package": "keiko-local-knowledge"
+    },
+    {
+      "op": "embedding.batch.persist-failed",
+      "category": "embedding",
+      "site": "packages/keiko-local-knowledge/src/indexing/embedding-batcher.ts:984",
+      "package": "keiko-local-knowledge"
+    },
+    {
+      "op": "embedding.batch.rejected",
+      "category": "embedding",
+      "site": "packages/keiko-local-knowledge/src/indexing/embedding-batcher.ts:1030",
+      "package": "keiko-local-knowledge"
+    },
+    {
+      "op": "embedding.batch.retry",
+      "category": "embedding",
+      "site": "packages/keiko-local-knowledge/src/indexing/embedding-batcher.ts:499",
+      "package": "keiko-local-knowledge"
+    },
+    {
+      "op": "embedding.batch.transport-selected",
+      "category": "embedding",
+      "site": "packages/keiko-local-knowledge/src/indexing/embedding-batcher.ts:861",
+      "package": "keiko-local-knowledge"
+    },
+    {
+      "op": "embedding.batch.transport-unavailable",
+      "category": "embedding",
+      "site": "packages/keiko-local-knowledge/src/indexing/embedding-batcher.ts:525",
+      "package": "keiko-local-knowledge"
+    },
+    {
+      "op": "embedding.chunk.retry",
+      "category": "embedding",
+      "site": "packages/keiko-local-knowledge/src/indexing/embedding-batcher.ts:316",
+      "package": "keiko-local-knowledge"
+    },
+    {
+      "op": "embedding.chunk.retry-exhausted",
+      "category": "embedding",
+      "site": "packages/keiko-local-knowledge/src/indexing/embedding-batcher.ts:329",
+      "package": "keiko-local-knowledge"
+    },
+    {
+      "op": "embedding.identity.rejected",
+      "category": "embedding",
+      "site": "packages/keiko-local-knowledge/src/indexing/embedding-batcher.ts:577",
+      "package": "keiko-local-knowledge"
+    },
+    {
+      "op": "embedding.preflight.cache-hit",
+      "category": "unknown",
+      "site": "packages/keiko-local-knowledge/src/indexing/orchestrator.ts:2675",
+      "package": "keiko-local-knowledge"
+    },
+    {
+      "op": "embedding.preflight.completed",
+      "category": "unknown",
+      "site": "packages/keiko-local-knowledge/src/indexing/orchestrator.ts:2656",
+      "package": "keiko-local-knowledge"
+    },
+    {
+      "op": "embedding.preflight.failed",
+      "category": "unknown",
+      "site": "packages/keiko-local-knowledge/src/indexing/orchestrator.ts:2647",
+      "package": "keiko-local-knowledge"
+    },
+    {
+      "op": "embedding.preflight.failed",
+      "category": "unknown",
+      "site": "packages/keiko-local-knowledge/src/indexing/orchestrator.ts:2786",
+      "package": "keiko-local-knowledge"
+    },
+    {
+      "op": "embedding.preflight.identity-adopted",
+      "category": "embedding",
+      "site": "packages/keiko-local-knowledge/src/indexing/orchestrator.ts:2723",
+      "package": "keiko-local-knowledge"
+    },
+    {
+      "op": "embedding.preflight.identity-refreshed",
+      "category": "embedding",
+      "site": "packages/keiko-local-knowledge/src/indexing/orchestrator.ts:2735",
+      "package": "keiko-local-knowledge"
+    },
+    {
+      "op": "embedding.preflight.identity-rejected",
+      "category": "unknown",
+      "site": "packages/keiko-local-knowledge/src/indexing/orchestrator.ts:2692",
+      "package": "keiko-local-knowledge"
+    },
+    {
+      "op": "embedding.preflight.started",
+      "category": "unknown",
+      "site": "packages/keiko-local-knowledge/src/indexing/orchestrator.ts:2640",
+      "package": "keiko-local-knowledge"
+    },
+    {
+      "op": "indexing.chunking.failed",
+      "category": "unknown",
+      "site": "packages/keiko-local-knowledge/src/indexing/orchestrator.ts:1425",
+      "package": "keiko-local-knowledge"
+    },
+    {
+      "op": "indexing.chunking.failed",
+      "category": "unknown",
+      "site": "packages/keiko-local-knowledge/src/indexing/orchestrator.ts:1763",
+      "package": "keiko-local-knowledge"
+    },
+    {
+      "op": "indexing.chunking.failed",
+      "category": "unknown",
+      "site": "packages/keiko-local-knowledge/src/indexing/orchestrator.ts:967",
+      "package": "keiko-local-knowledge"
+    },
+    {
+      "op": "indexing.discovery.limit-reached",
+      "category": "unknown",
+      "site": "packages/keiko-local-knowledge/src/indexing/orchestrator.ts:2868",
+      "package": "keiko-local-knowledge"
+    },
+    {
+      "op": "indexing.discovery.scope-error",
+      "category": "unknown",
+      "site": "packages/keiko-local-knowledge/src/indexing/orchestrator.ts:2216",
+      "package": "keiko-local-knowledge"
+    },
+    {
+      "op": "indexing.document.chunked",
+      "category": "unknown",
+      "site": "packages/keiko-local-knowledge/src/indexing/orchestrator.ts:1302",
+      "package": "keiko-local-knowledge"
+    },
+    {
+      "op": "indexing.document.embedded",
+      "category": "unknown",
+      "site": "packages/keiko-local-knowledge/src/indexing/orchestrator.ts:1498",
+      "package": "keiko-local-knowledge"
+    },
+    {
+      "op": "indexing.document.embedding-started",
+      "category": "unknown",
+      "site": "packages/keiko-local-knowledge/src/indexing/orchestrator.ts:1054",
+      "package": "keiko-local-knowledge"
+    },
+    {
+      "op": "indexing.document.extracted",
+      "category": "unknown",
+      "site": "packages/keiko-local-knowledge/src/indexing/orchestrator.ts:1298",
+      "package": "keiko-local-knowledge"
+    },
+    {
+      "op": "indexing.document.extracted",
+      "category": "unknown",
+      "site": "packages/keiko-local-knowledge/src/indexing/orchestrator.ts:1985",
+      "package": "keiko-local-knowledge"
+    },
+    {
+      "op": "indexing.document.extraction-failed",
+      "category": "unknown",
+      "site": "packages/keiko-local-knowledge/src/indexing/orchestrator.ts:1094",
+      "package": "keiko-local-knowledge"
+    },
+    {
+      "op": "indexing.document.extraction-started",
+      "category": "unknown",
+      "site": "packages/keiko-local-knowledge/src/indexing/orchestrator.ts:2202",
+      "package": "keiko-local-knowledge"
+    },
+    {
+      "op": "indexing.document.failed",
+      "category": "unknown",
+      "site": "packages/keiko-local-knowledge/src/indexing/orchestrator.ts:1467",
+      "package": "keiko-local-knowledge"
+    },
+    {
+      "op": "indexing.document.skipped",
+      "category": "unknown",
+      "site": "packages/keiko-local-knowledge/src/indexing/orchestrator.ts:1067",
+      "package": "keiko-local-knowledge"
+    },
+    {
+      "op": "indexing.document.skipped",
+      "category": "unknown",
+      "site": "packages/keiko-local-knowledge/src/indexing/orchestrator.ts:1116",
+      "package": "keiko-local-knowledge"
+    },
+    {
+      "op": "indexing.document.skipped",
+      "category": "unknown",
+      "site": "packages/keiko-local-knowledge/src/indexing/orchestrator.ts:1988",
+      "package": "keiko-local-knowledge"
+    },
+    {
+      "op": "indexing.job.finished",
+      "category": "unknown",
+      "site": "packages/keiko-local-knowledge/src/indexing/orchestrator.ts:3193",
+      "package": "keiko-local-knowledge"
+    },
+    {
+      "op": "indexing.job.received",
+      "category": "indexing",
+      "site": "packages/keiko-local-knowledge/src/indexing/orchestrator.ts:3006",
+      "package": "keiko-local-knowledge"
+    },
+    {
+      "op": "indexing.job.started",
+      "category": "unknown",
+      "site": "packages/keiko-local-knowledge/src/indexing/orchestrator.ts:2946",
+      "package": "keiko-local-knowledge"
+    },
+    {
+      "op": "indexing.source.completed",
+      "category": "unknown",
+      "site": "packages/keiko-local-knowledge/src/indexing/orchestrator.ts:2325",
+      "package": "keiko-local-knowledge"
+    },
+    {
+      "op": "indexing.source.started",
+      "category": "unknown",
+      "site": "packages/keiko-local-knowledge/src/indexing/orchestrator.ts:2307",
+      "package": "keiko-local-knowledge"
+    },
+    {
+      "op": "knowledge.log.sink-failed",
+      "category": "diagnostic",
+      "site": "packages/keiko-local-knowledge/src/knowledge-log.ts:162",
+      "package": "keiko-local-knowledge"
+    },
+    {
+      "op": "knowledge.store.encryption-rejected",
+      "category": "diagnostic",
+      "site": "packages/keiko-local-knowledge/src/store.ts:510",
+      "package": "keiko-local-knowledge"
+    },
+    {
+      "op": "knowledge.store.quarantined",
+      "category": "diagnostic",
+      "site": "packages/keiko-local-knowledge/src/store.ts:473",
+      "package": "keiko-local-knowledge"
+    },
+    {
+      "op": "<dynamic>",
+      "category": "embedding",
+      "site": "packages/keiko-model-gateway/src/openai-embedding-adapter.ts:744",
+      "package": "keiko-model-gateway"
+    },
+    {
+      "op": "<dynamic>",
+      "category": "embedding",
+      "site": "packages/keiko-model-gateway/src/openai-embedding-adapter.ts:82",
+      "package": "keiko-model-gateway"
+    },
+    {
+      "op": "<dynamic>",
+      "category": "embedding",
+      "site": "packages/keiko-model-gateway/src/openai-embedding-adapter.ts:994",
+      "package": "keiko-model-gateway"
+    },
+    {
+      "op": "embedding.batch.array-unsupported",
+      "category": "embedding",
+      "site": "packages/keiko-model-gateway/src/openai-embedding-adapter.ts:929",
+      "package": "keiko-model-gateway"
+    },
+    {
+      "op": "embedding.batch.degrade-inconclusive",
+      "category": "embedding",
+      "site": "packages/keiko-model-gateway/src/openai-embedding-adapter.ts:768",
+      "package": "keiko-model-gateway"
+    },
+    {
+      "op": "embedding.batch.degrade-skipped",
+      "category": "embedding",
+      "site": "packages/keiko-model-gateway/src/openai-embedding-adapter.ts:759",
+      "package": "keiko-model-gateway"
+    },
+    {
+      "op": "embedding.batch.degraded-to-scalar",
+      "category": "embedding",
+      "site": "packages/keiko-model-gateway/src/openai-embedding-adapter.ts:784",
+      "package": "keiko-model-gateway"
+    },
+    {
+      "op": "embedding.batch.degrading-to-scalar",
+      "category": "embedding",
+      "site": "packages/keiko-model-gateway/src/openai-embedding-adapter.ts:762",
+      "package": "keiko-model-gateway"
+    },
+    {
+      "op": "embedding.batch.dispatch",
+      "category": "embedding",
+      "site": "packages/keiko-model-gateway/src/openai-embedding-adapter.ts:583",
+      "package": "keiko-model-gateway"
+    },
+    {
+      "op": "embedding.batch.invalid-response",
+      "category": "embedding",
+      "site": "packages/keiko-model-gateway/src/openai-embedding-adapter.ts:664",
+      "package": "keiko-model-gateway"
+    },
+    {
+      "op": "embedding.batch.minimal-shape-retry",
+      "category": "embedding",
+      "site": "packages/keiko-model-gateway/src/openai-embedding-adapter.ts:846",
+      "package": "keiko-model-gateway"
+    },
+    {
+      "op": "embedding.batch.scalar-memo-hit",
+      "category": "embedding",
+      "site": "packages/keiko-model-gateway/src/openai-embedding-adapter.ts:813",
+      "package": "keiko-model-gateway"
+    },
+    {
+      "op": "embedding.endpoint.strict-shape-memoized",
+      "category": "embedding",
+      "site": "packages/keiko-model-gateway/src/openai-embedding-adapter.ts:540",
+      "package": "keiko-model-gateway"
+    },
+    {
+      "op": "embedding.endpoint.strict-shape-memoized",
+      "category": "embedding",
+      "site": "packages/keiko-model-gateway/src/openai-embedding-adapter.ts:893",
+      "package": "keiko-model-gateway"
+    },
+    {
+      "op": "embedding.request.dispatch",
+      "category": "embedding",
+      "site": "packages/keiko-model-gateway/src/openai-embedding-adapter.ts:354",
+      "package": "keiko-model-gateway"
+    },
+    {
+      "op": "embedding.request.failed",
+      "category": "embedding",
+      "site": "packages/keiko-model-gateway/src/openai-embedding-adapter.ts:429",
+      "package": "keiko-model-gateway"
+    },
+    {
+      "op": "embedding.request.failed",
+      "category": "embedding",
+      "site": "packages/keiko-model-gateway/src/openai-embedding-adapter.ts:471",
+      "package": "keiko-model-gateway"
+    },
+    {
+      "op": "embedding.request.minimal-shape-failed",
+      "category": "embedding",
+      "site": "packages/keiko-model-gateway/src/openai-embedding-adapter.ts:512",
+      "package": "keiko-model-gateway"
+    },
+    {
+      "op": "embedding.request.minimal-shape-failed",
+      "category": "embedding",
+      "site": "packages/keiko-model-gateway/src/openai-embedding-adapter.ts:528",
+      "package": "keiko-model-gateway"
+    },
+    {
+      "op": "embedding.request.minimal-shape-retry",
+      "category": "embedding",
+      "site": "packages/keiko-model-gateway/src/openai-embedding-adapter.ts:460",
+      "package": "keiko-model-gateway"
+    },
+    {
+      "op": "embedding.scalar-ladder.completed",
+      "category": "embedding",
+      "site": "packages/keiko-model-gateway/src/openai-embedding-adapter.ts:1092",
+      "package": "keiko-model-gateway"
+    },
+    {
+      "op": "embedding.scalar-ladder.deadline-expired",
+      "category": "embedding",
+      "site": "packages/keiko-model-gateway/src/openai-embedding-adapter.ts:1074",
+      "package": "keiko-model-gateway"
+    },
+    {
+      "op": "embedding.scalar-ladder.item-completed",
+      "category": "embedding",
+      "site": "packages/keiko-model-gateway/src/openai-embedding-adapter.ts:1054",
+      "package": "keiko-model-gateway"
+    },
+    {
+      "op": "embedding.scalar-ladder.item-failed",
+      "category": "embedding",
+      "site": "packages/keiko-model-gateway/src/openai-embedding-adapter.ts:1085",
+      "package": "keiko-model-gateway"
+    },
+    {
+      "op": "gateway.chat.completed",
+      "category": "gateway",
+      "site": "packages/keiko-model-gateway/src/gateway.ts:350",
+      "package": "keiko-model-gateway"
+    },
+    {
+      "op": "gateway.chat.failed",
+      "category": "gateway",
+      "site": "packages/keiko-model-gateway/src/gateway.ts:251",
+      "package": "keiko-model-gateway"
+    },
+    {
+      "op": "gateway.chat.started",
+      "category": "gateway",
+      "site": "packages/keiko-model-gateway/src/gateway.ts:232",
+      "package": "keiko-model-gateway"
+    },
+    {
+      "op": "gateway.circuit.closed",
+      "category": "gateway",
+      "site": "packages/keiko-model-gateway/src/resilience.ts:426",
+      "package": "keiko-model-gateway"
+    },
+    {
+      "op": "gateway.circuit.half-open",
+      "category": "gateway",
+      "site": "packages/keiko-model-gateway/src/resilience.ts:340",
+      "package": "keiko-model-gateway"
+    },
+    {
+      "op": "gateway.circuit.opened",
+      "category": "gateway",
+      "site": "packages/keiko-model-gateway/src/resilience.ts:406",
+      "package": "keiko-model-gateway"
+    },
+    {
+      "op": "gateway.circuit.rejected",
+      "category": "gateway",
+      "site": "packages/keiko-model-gateway/src/resilience.ts:300",
+      "package": "keiko-model-gateway"
+    },
+    {
+      "op": "gateway.log.sink-failed",
+      "category": "gateway",
+      "site": "packages/keiko-model-gateway/src/observability.ts:128",
+      "package": "keiko-model-gateway"
+    },
+    {
+      "op": "gateway.retry.budget-exhausted",
+      "category": "gateway",
+      "site": "packages/keiko-model-gateway/src/resilience.ts:181",
+      "package": "keiko-model-gateway"
+    },
+    {
+      "op": "gateway.retry.exhausted",
+      "category": "gateway",
+      "site": "packages/keiko-model-gateway/src/resilience.ts:216",
+      "package": "keiko-model-gateway"
+    },
+    {
+      "op": "gateway.retry.scheduled",
+      "category": "gateway",
+      "site": "packages/keiko-model-gateway/src/resilience.ts:224",
+      "package": "keiko-model-gateway"
+    },
+    {
+      "op": "gateway.route.rejected",
+      "category": "gateway",
+      "site": "packages/keiko-model-gateway/src/gateway.ts:458",
+      "package": "keiko-model-gateway"
+    },
+    {
+      "op": "gateway.stream.abandoned",
+      "category": "gateway",
+      "site": "packages/keiko-model-gateway/src/gateway.ts:295",
+      "package": "keiko-model-gateway"
+    },
+    {
+      "op": "gateway.stream.buffered-fallback",
+      "category": "gateway",
+      "site": "packages/keiko-model-gateway/src/gateway.ts:381",
+      "package": "keiko-model-gateway"
+    },
+    {
+      "op": "gateway.stream.completed",
+      "category": "gateway",
+      "site": "packages/keiko-model-gateway/src/gateway.ts:269",
+      "package": "keiko-model-gateway"
+    },
+    {
+      "op": "gateway.stream.failed",
+      "category": "gateway",
+      "site": "packages/keiko-model-gateway/src/gateway.ts:320",
+      "package": "keiko-model-gateway"
+    },
+    {
+      "op": "gateway.stream.started",
+      "category": "gateway",
+      "site": "packages/keiko-model-gateway/src/gateway.ts:232",
+      "package": "keiko-model-gateway"
+    },
+    {
+      "op": "http.gateway.egress.planned",
+      "category": "http",
+      "site": "packages/keiko-model-gateway/src/http.ts:1347",
+      "package": "keiko-model-gateway"
+    },
+    {
+      "op": "http.gateway.fetch.completed",
+      "category": "http",
+      "site": "packages/keiko-model-gateway/src/http.ts:1482",
+      "package": "keiko-model-gateway"
+    },
+    {
+      "op": "http.gateway.fetch.failed",
+      "category": "http",
+      "site": "packages/keiko-model-gateway/src/http.ts:1515",
+      "package": "keiko-model-gateway"
+    },
+    {
+      "op": "http.gateway.fetch.started",
+      "category": "http",
+      "site": "packages/keiko-model-gateway/src/http.ts:1446",
+      "package": "keiko-model-gateway"
+    },
+    {
+      "op": "http.gateway.tls.ca-bundle-fallback",
+      "category": "http",
+      "site": "packages/keiko-model-gateway/src/http.ts:1207",
+      "package": "keiko-model-gateway"
+    },
+    {
+      "op": "http.gateway.tls.trust-failed",
+      "category": "http",
+      "site": "packages/keiko-model-gateway/src/http.ts:1175",
+      "package": "keiko-model-gateway"
+    },
+    {
+      "op": "http.gateway.tls.trust-failed",
+      "category": "http",
+      "site": "packages/keiko-model-gateway/src/http.ts:1217",
+      "package": "keiko-model-gateway"
+    },
+    {
+      "op": "<dynamic>",
+      "category": "diagnostic",
+      "site": "packages/keiko-server/src/diagnostics-log.ts:171",
+      "package": "keiko-server"
+    },
+    {
+      "op": "<dynamic>",
+      "category": "diagnostic",
+      "site": "packages/keiko-server/src/observability/server-log.ts:692",
+      "package": "keiko-server"
+    },
+    {
+      "op": "<dynamic>",
+      "category": "unknown",
+      "site": "packages/keiko-server/src/observability/server-logger.ts:143",
+      "package": "keiko-server"
+    },
+    {
+      "op": "<dynamic>",
+      "category": "unknown",
+      "site": "packages/keiko-server/src/observability/server-logger.ts:169",
+      "package": "keiko-server"
+    },
+    {
+      "op": "<dynamic>",
+      "category": "unknown",
+      "site": "packages/keiko-server/src/observability/server-logger.ts:170",
+      "package": "keiko-server"
+    },
+    {
+      "op": "embedding.memory.failed",
+      "category": "embedding",
+      "site": "packages/keiko-server/src/memory-embedding.ts:174",
+      "package": "keiko-server"
+    },
+    {
+      "op": "embedding.memory.succeeded",
+      "category": "embedding",
+      "site": "packages/keiko-server/src/memory-embedding.ts:200",
+      "package": "keiko-server"
+    },
+    {
+      "op": "embedding.memory.unavailable",
+      "category": "embedding",
+      "site": "packages/keiko-server/src/memory-embedding.ts:161",
+      "package": "keiko-server"
+    },
+    {
+      "op": "gateway.instance.bound",
+      "category": "gateway",
+      "site": "packages/keiko-server/src/gateway-instance-cache.ts:72",
+      "package": "keiko-server"
+    },
+    {
+      "op": "gateway.instance.reset",
+      "category": "gateway",
+      "site": "packages/keiko-server/src/gateway-instance-cache.ts:72",
+      "package": "keiko-server"
+    },
+    {
+      "op": "gateway.instance.reused",
+      "category": "gateway",
+      "site": "packages/keiko-server/src/gateway-instance-cache.ts:64",
+      "package": "keiko-server"
+    },
+    {
+      "op": "gateway.instance.unavailable",
+      "category": "gateway",
+      "site": "packages/keiko-server/src/gateway-instance-cache.ts:86",
+      "package": "keiko-server"
+    },
+    {
+      "op": "gateway.instance.unavailable",
+      "category": "gateway",
+      "site": "packages/keiko-server/src/gateway-instance-cache.ts:93",
+      "package": "keiko-server"
+    },
+    {
+      "op": "http.request.body.cancelled",
+      "category": "http",
+      "site": "packages/keiko-server/src/bounded-request-body.ts:88",
+      "package": "keiko-server"
+    },
+    {
+      "op": "http.request.body.failed",
+      "category": "http",
+      "site": "packages/keiko-server/src/bounded-request-body.ts:102",
+      "package": "keiko-server"
+    },
+    {
+      "op": "http.request.body.rejected",
+      "category": "http",
+      "site": "packages/keiko-server/src/bounded-request-body.ts:73",
+      "package": "keiko-server"
+    },
+    {
+      "op": "indexing.cancel.accepted",
+      "category": "indexing",
+      "site": "packages/keiko-server/src/local-knowledge-handlers.ts:3103",
+      "package": "keiko-server"
+    },
+    {
+      "op": "indexing.cancel.refused",
+      "category": "indexing",
+      "site": "packages/keiko-server/src/local-knowledge-handlers.ts:3083",
+      "package": "keiko-server"
+    },
+    {
+      "op": "indexing.cancel.refused",
+      "category": "indexing",
+      "site": "packages/keiko-server/src/local-knowledge-handlers.ts:3094",
+      "package": "keiko-server"
+    },
+    {
+      "op": "indexing.cancel.requested",
+      "category": "indexing",
+      "site": "packages/keiko-server/src/local-knowledge-handlers.ts:3077",
+      "package": "keiko-server"
+    },
+    {
+      "op": "indexing.detached-run.failed",
+      "category": "indexing",
+      "site": "packages/keiko-server/src/local-knowledge-handlers.ts:2919",
+      "package": "keiko-server"
+    },
+    {
+      "op": "indexing.detached-run.launched",
+      "category": "indexing",
+      "site": "packages/keiko-server/src/local-knowledge-handlers.ts:2953",
+      "package": "keiko-server"
+    },
+    {
+      "op": "indexing.start.accepted",
+      "category": "indexing",
+      "site": "packages/keiko-server/src/local-knowledge-handlers.ts:2999",
+      "package": "keiko-server"
+    },
+    {
+      "op": "indexing.start.refused",
+      "category": "indexing",
+      "site": "packages/keiko-server/src/local-knowledge-handlers.ts:2880",
+      "package": "keiko-server"
+    },
+    {
+      "op": "memory.capture.novelty-gate",
+      "category": "memory",
+      "site": "packages/keiko-server/src/memory-embedding.ts:686",
+      "package": "keiko-server"
+    },
+    {
+      "op": "memory.embedding.invalidated",
+      "category": "memory",
+      "site": "packages/keiko-server/src/memory-embedding.ts:330",
+      "package": "keiko-server"
+    },
+    {
+      "op": "memory.embedding.invalidation-failed",
+      "category": "memory",
+      "site": "packages/keiko-server/src/memory-embedding.ts:341",
+      "package": "keiko-server"
+    },
+    {
+      "op": "memory.embedding.store-rejected",
+      "category": "memory",
+      "site": "packages/keiko-server/src/memory-embedding.ts:298",
+      "package": "keiko-server"
+    },
+    {
+      "op": "memory.embedding.store-rejected",
+      "category": "memory",
+      "site": "packages/keiko-server/src/memory-embedding.ts:321",
+      "package": "keiko-server"
+    },
+    {
+      "op": "memory.embedding.store-rejected",
+      "category": "memory",
+      "site": "packages/keiko-server/src/memory-embedding.ts:721",
+      "package": "keiko-server"
+    },
+    {
+      "op": "request",
+      "category": "http",
+      "site": "packages/keiko-server/src/server.ts:323",
+      "package": "keiko-server"
+    },
+    {
+      "op": "search.rerank.completed",
+      "category": "search",
+      "site": "packages/keiko-server/src/grounded-rerank-facade.ts:327",
+      "package": "keiko-server"
+    },
+    {
+      "op": "server-log.write-failed",
+      "category": "diagnostic",
+      "site": "packages/keiko-server/src/observability/server-log.ts:290",
+      "package": "keiko-server"
+    },
+    {
+      "op": "server-log.write-failed",
+      "category": "diagnostic",
+      "site": "packages/keiko-server/src/observability/server-log.ts:316",
+      "package": "keiko-server"
+    }
+  ],
+  "violations": []
+}

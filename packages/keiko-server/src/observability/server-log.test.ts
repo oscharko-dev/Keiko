@@ -16,16 +16,19 @@ import { MAX_LOG_FIELD_COUNT, REDACTED_KEY, REDACTED_SHAPE } from "./log-redacti
 import {
   MAX_LOG_LINE_BYTES,
   SERVER_LOG_LEVEL_ENV,
+  SERVER_LOG_SCHEMA_VERSION,
   closeFileServerLogSinks,
   createBufferedServerLogSink,
   createFileServerLogSink,
   formatServerLogLine,
+  reportServerLogFailure,
   resetServerLogFailureNotices,
+  serverLogInstanceId,
   serverLogLineBytes,
   serverLogLineWithinCap,
 } from "./server-log.js";
 import type { ServerLogEvent } from "./server-log.js";
-import { getServerLogger, resetServerLogger } from "./server-logger.js";
+import { getServerLogger, resetServerLogger, shutdownServerLogging } from "./server-logger.js";
 
 // A line the file holds, or `null` when those bytes are not a parseable record. Used by the
 // short-write test, which is about exactly that distinction.
@@ -170,6 +173,137 @@ describe("server activity log", () => {
     expect(typeof lines[0]?.ts).toBe("string");
   });
 
+  // Envelope v2 (#2902): every line the file sink writes carries a process/sequence identity an
+  // agent joins a run across a rotated multi-day file on. This is the functional counterpart to the
+  // spoofing test below — it proves the real values actually land on disk, not merely that a forged
+  // one is stripped.
+  it("stamps schemaVersion, pid, instanceId and seq on every file-sink line", () => {
+    const sink = createFileServerLogSink(stateDir);
+    sink.write({ category: "http", op: "one" });
+    sink.write({ category: "http", op: "two" });
+    const lines = readLines(stateDir);
+
+    expect(lines[0]).toMatchObject({ schemaVersion: SERVER_LOG_SCHEMA_VERSION, pid: process.pid });
+    expect(lines[0]?.instanceId).toBe(serverLogInstanceId());
+    expect(String(lines[0]?.instanceId)).toMatch(/^[0-9a-f]{8}$/);
+    // Monotonic PER PROCESS, not per file and not starting at a fixed value: the allocator is
+    // shared by every ActiveLog this process ever resolves, so an earlier test's sink may already
+    // have claimed numbers below this one — an absolute starting value is exactly what a
+    // process-wide counter makes unstable to assert. What the contract actually promises is that
+    // two lines written back to back by the SAME sink are exactly one apart, and carry the SAME
+    // instanceId/pid — two different process lifetimes are told apart by instanceId, never pid
+    // alone, since the OS reuses pids across restarts.
+    expect(typeof lines[0]?.seq).toBe("number");
+    expect(lines[1]?.seq).toBe((lines[0]?.seq as number) + 1);
+    expect(lines[1]?.instanceId).toBe(lines[0]?.instanceId);
+    expect(lines[1]?.pid).toBe(lines[0]?.pid);
+  });
+
+  // The reserved-field defense-in-depth this envelope depends on: `RESERVED_FIELD_NAMES` in
+  // `log-redaction.ts` strips a same-named `extra` key before the real identity is ever applied, so
+  // a caller (or a hostile upstream value merged into `extra`) cannot make its own line look like a
+  // different process or a different position in the sequence.
+  it("never lets extra spoof schemaVersion, pid, instanceId or seq", () => {
+    const sink = createFileServerLogSink(stateDir);
+    sink.write({
+      category: "http",
+      op: "spoof-attempt",
+      extra: { schemaVersion: 999, pid: -1, instanceId: "deadbeef", seq: 999_999, keep: 1 },
+    });
+    const lines = readLines(stateDir);
+
+    expect(lines[0]).toMatchObject({
+      schemaVersion: SERVER_LOG_SCHEMA_VERSION,
+      pid: process.pid,
+      keep: 1,
+    });
+    expect(lines[0]?.instanceId).toBe(serverLogInstanceId());
+    expect(lines[0]?.pid).not.toBe(-1);
+    expect(lines[0]?.instanceId).not.toBe("deadbeef");
+    // The real, process-allocated value, never the forged one. `seq` is not pinned to 1 here: the
+    // allocator is process-wide, so an earlier test's sink may already have advanced it — asserting
+    // "not the forged value, and a genuine positive integer" is what still holds regardless.
+    expect(lines[0]?.seq).not.toBe(999_999);
+    expect(typeof lines[0]?.seq).toBe("number");
+    expect(lines[0]?.seq as number).toBeGreaterThan(0);
+  });
+
+  // ADR-0173 D2's join key is `(pid, instanceId, seq)`, promised unique PROCESS-WIDE — not merely
+  // within one log file. Before this fix `seq` lived on `ActiveLog`, one per resolved directory, so
+  // two state directories in the very same process each started counting at 1 and could stamp an
+  // identical tuple on two unrelated lines. A shared, module-scoped allocator is the only way two
+  // independent `ActiveLog`s can still hand out non-overlapping numbers.
+  it("shares one seq allocator across independent state directories, so seq never repeats", () => {
+    const otherStateDir = mkdtempSync(join(tmpdir(), "keiko-server-log-other-"));
+    try {
+      const sinkA = createFileServerLogSink(stateDir);
+      const sinkB = createFileServerLogSink(otherStateDir);
+      sinkA.write({ category: "http", op: "a1" });
+      sinkB.write({ category: "http", op: "b1" });
+      sinkA.write({ category: "http", op: "a2" });
+      sinkB.write({ category: "http", op: "b2" });
+      sinkB.close?.();
+
+      const seqA = readLines(stateDir).map((line) => line.seq as number);
+      const seqB = readLines(otherStateDir).map((line) => line.seq as number);
+
+      // No duplicate anywhere across the two directories: a per-directory counter would let
+      // seqA[0] and seqB[0] both be 1.
+      const combined = [...seqA, ...seqB];
+      expect(new Set(combined).size).toBe(combined.length);
+      // Strictly increasing within each directory's own lines, even though the two sinks'
+      // writes were interleaved and share one process-wide counter.
+      expect(seqA[1]).toBeGreaterThan(seqA[0] ?? Number.POSITIVE_INFINITY);
+      expect(seqB[1]).toBeGreaterThan(seqB[0] ?? Number.POSITIVE_INFINITY);
+    } finally {
+      rmSync(otherStateDir, { recursive: true, force: true });
+    }
+  });
+
+  // The counter is claimed BEFORE the write is attempted (see `allocateServerLogSeq`), so a write
+  // that throws still consumes a number. That number is never seen again — reusing it for the next
+  // line would be silently worse than the gap it would hide. The gap is therefore the expected,
+  // diagnosable outcome, not a bug: an agent reconstructing the run sees seq jump by two and knows
+  // exactly one line failed to persist at that point, which is what the stderr failure notice
+  // (asserted elsewhere) also reports.
+  it("leaves a gap in seq for a write that throws, and keeps allocating correctly after", () => {
+    const sink = createFileServerLogSink(stateDir, { level: "debug" });
+    sink.write({ category: "http", op: "before-failure" });
+    const before = readRawRecords(stateDir)[0]?.seq as number;
+
+    // A zero-byte budget means the descriptor accepts NOTHING for this record: `writeAll` throws
+    // on its first call before a single byte lands, so — unlike the short-write test below, which
+    // corrupts a partial record — this record leaves no bytes behind at all. `readRawRecords`
+    // filters the resulting blank line, which is why it (not `readLines`) is used here.
+    //
+    // The restore runs in `finally` so this shared fixture cannot leak a nonzero budget into a
+    // later test if anything above throws before the plain reset would have run — belt-and-braces
+    // alongside the file's own unconditional `afterEach` reset.
+    fsCalls.writeBudgetBytes = 0;
+    try {
+      sink.write({ category: "http", op: "dropped" });
+    } finally {
+      fsCalls.writeBudgetBytes = null;
+    }
+
+    sink.write({ category: "http", op: "after-failure" });
+    const records = readRawRecords(stateDir);
+
+    // Only the two writes that actually landed are on disk; the failed one never appears.
+    expect(records.map((record) => record?.op)).toStrictEqual(["before-failure", "after-failure"]);
+    // The gap is exactly one seq wide: the failed write claimed `before + 1` and never persisted
+    // it, so the next persisted line is `before + 2`, not `before + 1`.
+    expect(records[1]?.seq).toBe(before + 2);
+  });
+
+  // Envelope v2 widens the category union to include process-lifecycle lines; this proves the sink
+  // actually accepts and persists the new member rather than only the type system allowing it.
+  it("accepts the process category alongside every existing one", () => {
+    const sink = createFileServerLogSink(stateDir);
+    sink.write({ category: "process", op: "process.started" });
+    expect(readLines(stateDir)[0]).toMatchObject({ category: "process", op: "process.started" });
+  });
+
   it("stamps every line with a level, defaulting to info", () => {
     const sink = createFileServerLogSink(stateDir);
     sink.write({ category: "http", op: "request" });
@@ -285,14 +419,18 @@ describe("server activity log", () => {
     const sink = createFileServerLogSink(stateDir, { level: "debug" });
     sink.write({ category: "http", op: "first" });
     // The descriptor takes 10 bytes of the next line and then reports 0 — a short write that never
-    // completes. The bytes it accepted cannot be recalled.
+    // completes. The bytes it accepted cannot be recalled. Restored in `finally` so a failed
+    // assertion above cannot leave the shared fixture's budget mutated for a later test.
     fsCalls.writeBudgetBytes = 10;
-    expect(() => {
-      sink.write({ category: "http", op: "stalled" });
-    }).not.toThrow();
-    fsCalls.writeBudgetBytes = null;
-    fsCalls.linkErrorCode = null;
-    fsCalls.rename = 0;
+    try {
+      expect(() => {
+        sink.write({ category: "http", op: "stalled" });
+      }).not.toThrow();
+    } finally {
+      fsCalls.writeBudgetBytes = null;
+      fsCalls.linkErrorCode = null;
+      fsCalls.rename = 0;
+    }
     sink.write({ category: "http", op: "second" });
 
     const records = readRawRecords(stateDir);
@@ -308,11 +446,20 @@ describe("server activity log", () => {
   it("announces a write failure on stderr instead of dropping the line in silence", () => {
     const stderr = vi.spyOn(process.stderr, "write").mockReturnValue(true);
     const sink = createFileServerLogSink(stateDir, { level: "debug" });
+    // Restored in `finally` so a failed assertion below cannot leave the shared fixture's budget
+    // mutated for a later test.
     fsCalls.writeBudgetBytes = 0;
-    sink.write({ category: "indexing", op: "indexing.document.persisted", correlationId: "job-7" });
-    fsCalls.writeBudgetBytes = null;
-    fsCalls.linkErrorCode = null;
-    fsCalls.rename = 0;
+    try {
+      sink.write({
+        category: "indexing",
+        op: "indexing.document.persisted",
+        correlationId: "job-7",
+      });
+    } finally {
+      fsCalls.writeBudgetBytes = null;
+      fsCalls.linkErrorCode = null;
+      fsCalls.rename = 0;
+    }
 
     expect(stderr).toHaveBeenCalledTimes(1);
     const notice = JSON.parse(String(stderr.mock.calls[0]?.[0])) as Record<string, unknown>;
@@ -325,6 +472,64 @@ describe("server activity log", () => {
     });
     // Body-free, exactly like a log line: a classification, never the thrown message.
     expect(String(stderr.mock.calls[0]?.[0])).not.toContain("accepted no bytes");
+  });
+
+  // Regression: when stderr itself cannot be written (a closed descriptor, a broken pipe, ...),
+  // the notice must not vanish into an empty catch. It surfaces on the independent
+  // `process.emitWarning` channel instead — Node dispatches the 'warning' event synchronously to
+  // any listener even when stderr is gone. Fails before the fix: the write failure was swallowed
+  // and no warning was ever emitted.
+  it("warns via process.emitWarning when the stderr notice itself cannot be written", () => {
+    const stderr = vi.spyOn(process.stderr, "write").mockImplementation(() => {
+      throw new Error("EPIPE: broken pipe");
+    });
+    const warn = vi.spyOn(process, "emitWarning").mockImplementation(() => undefined);
+    try {
+      reportServerLogFailure(new Error("disk full"), {
+        op: "indexing.persist",
+        correlationId: "job-42",
+      });
+      expect(stderr).toHaveBeenCalledTimes(1);
+      expect(warn).toHaveBeenCalledTimes(1);
+      const calls: readonly (readonly unknown[])[] = warn.mock.calls;
+      expect(calls[0]?.[1]).toMatchObject({ code: "KEIKO_LOG_NOTICE_FAILED" });
+      const options = calls[0]?.[1] as { detail?: string } | undefined;
+      expect(options?.detail).toContain("job-42");
+      // Body-free: the thrown pipe error's own text must never reach the warning.
+      expect(JSON.stringify(warn.mock.calls)).not.toContain("broken pipe");
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  // Regression for ADR-0173 D2's accounting promise: a suppressed count otherwise surfaces only on
+  // the NEXT unthrottled failure. Without a shutdown flush, a count with no further failure to
+  // report it is silently lost the instant the notice state is cleared — exactly what a clean
+  // process shutdown does.
+  it("flushes an unreported suppressed count to stderr instead of losing it on shutdown", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-08-21T00:00:00Z"));
+    const stderr = vi.spyOn(process.stderr, "write").mockReturnValue(true);
+
+    reportServerLogFailure(new Error("first"), { op: "indexing.persist" });
+    expect(stderr).toHaveBeenCalledTimes(1);
+
+    // Inside the one-minute throttle window: counted, not emitted.
+    vi.setSystemTime(new Date("2026-08-21T00:00:10Z"));
+    reportServerLogFailure(new Error("second"), { op: "indexing.persist" });
+    expect(stderr).toHaveBeenCalledTimes(1);
+
+    shutdownServerLogging();
+
+    expect(stderr).toHaveBeenCalledTimes(2);
+    const flushNotice = JSON.parse(String(stderr.mock.calls[1]?.[0])) as Record<string, unknown>;
+    expect(flushNotice).toMatchObject({
+      level: "error",
+      category: "diagnostic",
+      op: "server-log.write-failed",
+      reason: "shutdown-flush",
+      suppressedNotices: 1,
+    });
   });
 
   it("closes the descriptor it holds and reopens on the next write", () => {
@@ -611,10 +816,35 @@ describe("server activity log burst cost", () => {
     sink.close?.();
     expect(fsCalls.close).toBe(1);
 
-    // Linear output, not quadratic: the file is exactly N identical lines and nothing else.
-    const lineBytes = serverLogLineBytes(formatServerLogLine(event));
-    expect(statSync(join(stateDir, "logs", "server.log")).size).toBe(lineBytes * BURST_EVENT_COUNT);
-    expect(readLines(stateDir)).toHaveLength(BURST_EVENT_COUNT);
+    // Linear output, not quadratic — but lines are no longer byte-identical now that the envelope
+    // carries `seq`: its digit width grows at each power-of-ten boundary the burst crosses
+    // (9 -> 10, 99 -> 100, 999 -> 1000), so the total is the SUM of each line's own width rather
+    // than one width times the count. Summing through the production formatter itself — not
+    // re-deriving its byte math here — is what keeps this pin honest: a future change to what the
+    // identity envelope carries shows up here automatically, the same way the single-width version
+    // did before `seq` existed.
+    //
+    // `seq` is process-wide (ADR-0173 D2), not scoped to this burst's own sink, so the first line
+    // this burst wrote is NOT necessarily `1` — an earlier test in this file may already have
+    // advanced the shared allocator. The starting point is read back off the actual first
+    // persisted line instead of assumed, and the rest of the burst's numbers are derived from it:
+    // the allocator is claimed once per write with nothing else writing to this sink concurrently,
+    // so they are exactly consecutive.
+    const lines = readLines(stateDir);
+    const firstSeq = lines[0]?.seq as number;
+    let expectedBytes = 0;
+    for (let index = 0; index < BURST_EVENT_COUNT; index += 1) {
+      expectedBytes += serverLogLineBytes(
+        formatServerLogLine(event, undefined, {
+          schemaVersion: SERVER_LOG_SCHEMA_VERSION,
+          pid: process.pid,
+          instanceId: serverLogInstanceId(),
+          seq: firstSeq + index,
+        }),
+      );
+    }
+    expect(statSync(join(stateDir, "logs", "server.log")).size).toBe(expectedBytes);
+    expect(lines).toHaveLength(BURST_EVENT_COUNT);
   });
 
   it(`does no work at all for ${String(BURST_EVENT_COUNT)} below-threshold events`, () => {

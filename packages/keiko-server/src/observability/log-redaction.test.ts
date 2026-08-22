@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   DROPPED_DEPTH,
+  DROPPED_LENGTH,
   MAX_LOG_ARRAY_LENGTH,
   MAX_LOG_FIELD_COUNT,
   MAX_LOG_STRING_LENGTH,
@@ -11,6 +12,7 @@ import {
   REDACTED_PERSONAL,
   REDACTED_SECRET,
   REDACTED_SHAPE,
+  closeReasonVocabulary,
   isDeniedLogFieldName,
   normalizeLogFieldName,
   OPAQUE_TOKEN_RUN_LENGTH,
@@ -89,15 +91,25 @@ describe("log field redaction", () => {
   });
 
   it("never lets an extra field spoof the identity of a line", () => {
-    // ts/level/category/op are what every operator query keys on and are reserved outright.
-    // status is not reserved — an instrumentation site legitimately carries it as a field, and
-    // the formatter applies the envelope after `extra` so an explicit envelope value still wins.
+    // ts/level/category/op are what every operator query keys on and are reserved outright, and
+    // envelope v2 (#2902) adds the process/sequence identity to that reserved set: schemaVersion,
+    // pid, instanceId and seq are stamped once by the sink itself, so an `extra.pid`/`extra.seq`/
+    // `extra.schemaVersion`/`extra.instanceId` planted by a caller (or by a hostile value merged
+    // into `extra`) must be dropped before the real identity is ever applied — never merely
+    // overridden by it, which would still leave the spoofed key in the record if the real value
+    // were absent. status is not reserved — an instrumentation site legitimately carries it as a
+    // field, and the formatter applies the envelope after `extra` so an explicit envelope value
+    // still wins.
     expect(
       redactLogFields({
         ts: "1970",
         level: "debug",
         category: "http",
         op: "spoof",
+        schemaVersion: 999,
+        pid: 1,
+        instanceId: "deadbeef",
+        seq: 999_999,
         status: 200,
         keep: 1,
       }),
@@ -304,23 +316,100 @@ describe("log field redaction", () => {
     expect(fields).toStrictEqual({ error: REDACTED_KEY, survivor: 1 });
   });
 
-  it("bounds nesting depth, array length and field count", () => {
+  it("bounds nesting depth", () => {
     // MAX_LOG_FIELD_DEPTH nested objects below `extra` survive; the next one down does not.
     expect(redactLogFields({ a: { b: { c: 1 } } })).toStrictEqual({ a: { b: { c: 1 } } });
     expect(redactLogFields({ a: { b: { c: { d: { e: 1 } } } } })).toStrictEqual({
       a: { b: { c: { d: DROPPED_DEPTH } } },
     });
+  });
 
-    const wide = redactLogFields({
-      list: Array.from({ length: MAX_LOG_ARRAY_LENGTH + 5 }, (_unused, index) => index),
-    });
+  function widthListOf(length: number): Record<string, unknown> {
+    return { list: Array.from({ length }, (_unused, index) => index) };
+  }
+
+  // The marker CONSUMES A SLOT, so the configured cap holds EXACTLY: MAX_LOG_ARRAY_LENGTH - 1 real
+  // elements survive, plus one bounded marker proving the bound actually fired —
+  // MAX_LOG_ARRAY_LENGTH total, never MAX_LOG_ARRAY_LENGTH + 1. A reconstructing agent can still
+  // tell a truncated list from one that genuinely only had that many entries (the marker), and a
+  // consumer that enforces the documented cap on array length no longer sees it exceeded by one
+  // every time truncation actually fires.
+  it("reserves one array slot for the truncation marker, so the length cap holds exactly", () => {
+    const wide = redactLogFields(widthListOf(MAX_LOG_ARRAY_LENGTH + 5));
     expect(wide?.list).toHaveLength(MAX_LOG_ARRAY_LENGTH);
+    expect((wide?.list as unknown[]).slice(0, MAX_LOG_ARRAY_LENGTH - 1)).toStrictEqual(
+      Array.from({ length: MAX_LOG_ARRAY_LENGTH - 1 }, (_unused, index) => index),
+    );
+    expect((wide?.list as unknown[]).at(-1)).toBe(DROPPED_LENGTH);
+  });
 
-    const many: Record<string, unknown> = {};
-    for (let index = 0; index < MAX_LOG_FIELD_COUNT + 10; index += 1) {
-      many[`f${String(index)}`] = index;
+  it("holds the array cap exactly one element over the limit, not one under it", () => {
+    // One element over the cap is the boundary the reserved slot exists for: still exactly
+    // MAX_LOG_ARRAY_LENGTH total, not MAX_LOG_ARRAY_LENGTH + 1.
+    const oneOver = redactLogFields(widthListOf(MAX_LOG_ARRAY_LENGTH + 1));
+    expect(oneOver?.list).toHaveLength(MAX_LOG_ARRAY_LENGTH);
+    expect((oneOver?.list as unknown[]).at(-1)).toBe(DROPPED_LENGTH);
+  });
+
+  it("passes an array exactly at the length cap through whole, with no marker", () => {
+    // Exactly MAX_LOG_ARRAY_LENGTH elements is not a truncation: nothing was dropped, so the whole
+    // array passes through with no marker and no slot reserved.
+    const exact = redactLogFields(widthListOf(MAX_LOG_ARRAY_LENGTH));
+    expect(exact?.list).toHaveLength(MAX_LOG_ARRAY_LENGTH);
+    expect((exact?.list as unknown[]).at(-1)).not.toBe(DROPPED_LENGTH);
+  });
+
+  function fieldsOf(count: number): Record<string, unknown> {
+    const fields: Record<string, unknown> = {};
+    for (let index = 0; index < count; index += 1) {
+      fields[`f${String(index)}`] = index;
     }
-    expect(Object.keys(redactLogFields(many) ?? {})).toHaveLength(MAX_LOG_FIELD_COUNT);
+    return fields;
+  }
+
+  it("reserves one field slot for the truncation marker, so the field-count cap holds exactly", () => {
+    // The marker CONSUMES A SLOT here too: MAX_LOG_FIELD_COUNT - 1 accepted fields, plus one
+    // synthetic key proving the field-count bound fired — MAX_LOG_FIELD_COUNT keys total, never
+    // MAX_LOG_FIELD_COUNT + 1.
+    const truncated = redactLogFields(fieldsOf(MAX_LOG_FIELD_COUNT + 10)) ?? {};
+    expect(Object.keys(truncated)).toHaveLength(MAX_LOG_FIELD_COUNT);
+    expect(truncated._truncatedFieldCount).toBe(true);
+  });
+
+  it("holds the field-count cap exactly one field over the limit, not one under it", () => {
+    // One field over the cap is the boundary the reserved slot exists for: still exactly
+    // MAX_LOG_FIELD_COUNT keys total, not MAX_LOG_FIELD_COUNT + 1.
+    const oneOverFields = redactLogFields(fieldsOf(MAX_LOG_FIELD_COUNT + 1)) ?? {};
+    expect(Object.keys(oneOverFields)).toHaveLength(MAX_LOG_FIELD_COUNT);
+    expect(oneOverFields._truncatedFieldCount).toBe(true);
+  });
+
+  it("passes an object exactly at the field-count cap through whole, with no marker", () => {
+    // Exactly MAX_LOG_FIELD_COUNT fields is not a truncation: every field was accepted, so no
+    // synthetic key is added and no slot is reserved.
+    const notTruncated = redactLogFields(fieldsOf(MAX_LOG_FIELD_COUNT)) ?? {};
+    expect(Object.keys(notTruncated)).toHaveLength(MAX_LOG_FIELD_COUNT);
+    expect(notTruncated._truncatedFieldCount).toBeUndefined();
+  });
+
+  it("counts only eligible fields toward the cap, never a reserved or invalid name at the boundary", () => {
+    // Regression: the cap check used to run BEFORE the reserved-name and pattern filters, so an
+    // ineligible key sitting right at the boundary consumed the last counted slot, dropped a real
+    // accepted field, and reported a truncation that never actually happened.
+    const lastValidKey = `f${String(MAX_LOG_FIELD_COUNT - 1)}`;
+    const withReservedTail = { ...fieldsOf(MAX_LOG_FIELD_COUNT), seq: 999 };
+    const reservedResult = redactLogFields(withReservedTail) ?? {};
+    expect(Object.keys(reservedResult)).toHaveLength(MAX_LOG_FIELD_COUNT);
+    expect(reservedResult._truncatedFieldCount).toBeUndefined();
+    // The last accepted field must have survived, not been evicted to make room for `seq`.
+    expect(reservedResult[lastValidKey]).toBe(MAX_LOG_FIELD_COUNT - 1);
+    expect(reservedResult.seq).toBeUndefined();
+
+    const withInvalidTail = { ...fieldsOf(MAX_LOG_FIELD_COUNT), "bad name!": 1 };
+    const invalidResult = redactLogFields(withInvalidTail) ?? {};
+    expect(Object.keys(invalidResult)).toHaveLength(MAX_LOG_FIELD_COUNT);
+    expect(invalidResult._truncatedFieldCount).toBeUndefined();
+    expect(invalidResult[lastValidKey]).toBe(MAX_LOG_FIELD_COUNT - 1);
   });
 
   it("yields no fields for a non-object, an array or an empty object", () => {
@@ -409,6 +498,31 @@ describe("redaction cannot be defeated through extra", () => {
     // Unsupported types leave no trace at all rather than a marker.
     expect(fields.bytes).toBeUndefined();
     expect(fields.thrown).toBeUndefined();
+  });
+});
+
+// closeReasonVocabulary generalises the same "structural, not caller discipline" guard
+// KNOWN_CATEGORIES/readCategory already give categories to any closed-vocabulary array field
+// (#2902 g33) — a producer's own type is a compile-time promise, not a runtime one, so the log
+// layer closes the vocabulary again at the point that writes the value.
+describe("closeReasonVocabulary", () => {
+  const VOCAB = new Set(["chat", "embedding", "not-chat-capable"]);
+
+  it("passes a recognised value through unchanged", () => {
+    expect(closeReasonVocabulary(VOCAB, "chat", "unrecognised-mode")).toBe("chat");
+    expect(closeReasonVocabulary(VOCAB, "not-chat-capable", "unrecognised-mode")).toBe(
+      "not-chat-capable",
+    );
+  });
+
+  it("collapses anything outside the vocabulary to the caller's fallback", () => {
+    expect(closeReasonVocabulary(VOCAB, "vendor-private-mode", "unrecognised-mode")).toBe(
+      "unrecognised-mode",
+    );
+    // A short, space-free, credential-free string is exactly what would otherwise sail through
+    // every generic value guard untouched — this closure is the only thing that stops it.
+    expect(closeReasonVocabulary(VOCAB, "REALTIME", "unrecognised-mode")).toBe("unrecognised-mode");
+    expect(closeReasonVocabulary(VOCAB, "", "unrecognised-mode")).toBe("unrecognised-mode");
   });
 });
 
