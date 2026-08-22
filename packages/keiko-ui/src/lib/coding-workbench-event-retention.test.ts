@@ -1,5 +1,6 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { CodingWorkbenchRuntimeSseEvent } from "@oscharko-dev/keiko-contracts";
+import { resetClientDiagnosticWriter, setClientDiagnosticWriter } from "./client-diagnostics";
 import {
   CODING_WORKBENCH_EVENT_RETENTION_LIMIT,
   CODING_WORKBENCH_OBSERVATION_BATCH_MS,
@@ -7,6 +8,10 @@ import {
   isPinnedCodingWorkbenchRuntimeEvent,
   retainCodingWorkbenchRuntimeEvents,
 } from "./coding-workbench-event-retention";
+
+afterEach(() => {
+  resetClientDiagnosticWriter();
+});
 
 function event(
   sequence: number,
@@ -121,6 +126,27 @@ describe("Coding Workbench event retention", () => {
     expect(onEvents).not.toHaveBeenCalled();
     expect(onReset).not.toHaveBeenCalled();
     expect(onError).not.toHaveBeenCalled();
+  });
+
+  // Wave 5 of epic #3233 (g6): every EventSource.onerror handler reports a client diagnostic
+  // carrying the observed readyState and a closed reason label.
+  it("reports a client diagnostic with readyState and a reason label on stream error", () => {
+    const reported: string[] = [];
+    setClientDiagnosticWriter((message) => reported.push(message));
+    const source = new FakeEventSource();
+    source.readyState = 0;
+    const session = createCodingWorkbenchRuntimeStreamSession(
+      "run-1",
+      { onOpen: vi.fn(), onEvents: vi.fn(), onError: vi.fn(), onReset: vi.fn() },
+      { createEventSource: () => source as unknown as EventSource },
+    );
+
+    source.onerror?.(new Event("error"));
+
+    expect(reported).toEqual([
+      "[keiko] coding-workbench-runtime sse stream error (kind=sse-error, readyState=0, reason=connecting)",
+    ]);
+    session.close();
   });
 
   it("delivers observations before a later state event without bypassing the batch", () => {
@@ -267,6 +293,9 @@ class FakeEventSource {
   public onopen: ((event: Event) => void) | null = null;
   public onerror: ((event: Event) => void) | null = null;
   public readonly close = vi.fn();
+  // Real EventSource is CLOSED (2) by the time `onerror` typically fires for a fatal failure;
+  // tests that care about a different observed state override this before triggering onerror.
+  public readyState = 2;
   private readonly listeners = new Map<string, EventListener[]>();
 
   public addEventListener(type: string, listener: EventListener): void {

@@ -33,6 +33,7 @@ import type {
 import type { RouteContext, RouteDefinition, RouteResult } from "../routes.js";
 import type { UiHandlerDeps } from "../deps.js";
 import { currentGateway, currentGatewayConfig } from "../deps.js";
+import { readBoundedRequestBody, RequestBodyTooLargeError } from "../bounded-request-body.js";
 import {
   normaliseQiModelPolicy,
   recommendQiModelPolicy,
@@ -70,13 +71,6 @@ export class QiModelPolicyError extends Error {
   ) {
     super(message);
     this.name = "QiModelPolicyError";
-  }
-}
-
-class BodyTooLargeError extends Error {
-  constructor() {
-    super("QI model-policy request body is too large");
-    this.name = "BodyTooLargeError";
   }
 }
 
@@ -152,31 +146,6 @@ function configuredModels(deps: UiHandlerDeps): readonly ModelCapability[] {
   return config === undefined ? [] : listConfiguredCapabilities(config);
 }
 
-function readBody(req: IncomingMessage): Promise<string> {
-  return new Promise<string>((resolve, reject) => {
-    const chunks: Buffer[] = [];
-    let total = 0;
-    let capped = false;
-    req.on("data", (chunk: Buffer) => {
-      total += chunk.length;
-      if (total > MAX_POLICY_BODY_BYTES) {
-        if (!capped) {
-          capped = true;
-          chunks.length = 0;
-          reject(new BodyTooLargeError());
-          req.resume();
-        }
-        return;
-      }
-      chunks.push(chunk);
-    });
-    req.on("end", () => {
-      if (!capped) resolve(Buffer.concat(chunks).toString("utf8"));
-    });
-    req.on("error", reject);
-  });
-}
-
 function isObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
@@ -195,12 +164,17 @@ function parsePolicyValue(raw: unknown): QualityIntelligenceModelPolicy | undefi
   });
 }
 
-async function parseJsonBody(req: IncomingMessage): Promise<Record<string, unknown> | RouteResult> {
+// Consolidated onto the shared bounded reader (#2902 w5-sse-counters) — the cap above is
+// unchanged, only the ad hoc listener wiring is gone.
+async function parseJsonBody(
+  req: IncomingMessage,
+  correlationId?: string,
+): Promise<Record<string, unknown> | RouteResult> {
   let raw: string;
   try {
-    raw = await readBody(req);
+    raw = await readBoundedRequestBody(req, MAX_POLICY_BODY_BYTES, undefined, correlationId);
   } catch (error) {
-    return error instanceof BodyTooLargeError
+    return error instanceof RequestBodyTooLargeError
       ? errorResult(413, "QI_BAD_MODEL_POLICY", "Request body is too large.")
       : errorResult(400, "QI_BAD_MODEL_POLICY", "Could not read request body.");
   }
@@ -497,7 +471,7 @@ export async function handlePutQiModelPolicy(
   if (deps.evidenceDir === undefined) {
     return errorResult(500, "QI_NO_EVIDENCE_DIR", "The evidence directory is not configured.");
   }
-  const parsed = await parseJsonBody(ctx.req);
+  const parsed = await parseJsonBody(ctx.req, ctx.correlationId);
   if (isRouteResult(parsed)) return parsed;
   const policy = parsePolicyValue(parsed.modelPolicy ?? parsed.policy ?? parsed);
   if (policy === undefined) {
@@ -547,7 +521,7 @@ export async function handlePreflightQiModelPolicy(
   ctx: RouteContext,
   deps: UiHandlerDeps,
 ): Promise<RouteResult> {
-  const parsed = await parseJsonBody(ctx.req);
+  const parsed = await parseJsonBody(ctx.req, ctx.correlationId);
   if (isRouteResult(parsed)) return parsed;
   const modelPolicy = parsePolicyValue(parsed.modelPolicy);
   if (parsed.modelPolicy !== undefined && modelPolicy === undefined) {

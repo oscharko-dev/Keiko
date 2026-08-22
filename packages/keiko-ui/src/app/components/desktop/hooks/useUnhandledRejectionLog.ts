@@ -11,7 +11,7 @@
 
 import { useEffect } from "react";
 import { reportClientDiagnostic } from "@/lib/client-diagnostics";
-import { clientErrorSummary } from "@/lib/client-error-summary";
+import { clientErrorSummary, correlationIdOf } from "@/lib/client-error-summary";
 
 const MAX_LOGGED_REJECTIONS = 5;
 
@@ -23,6 +23,7 @@ export function useUnhandledRejectionLog(): void {
       logged += 1;
       reportClientDiagnostic(
         `[keiko] unhandled promise rejection: ${clientErrorSummary(event.reason)}`,
+        { correlationId: correlationIdOf(event.reason) },
       );
     };
     window.addEventListener("unhandledrejection", onRejection);

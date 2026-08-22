@@ -593,7 +593,7 @@
     {
       "op": "<dynamic>",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/diagnostics-log.ts:213",
+      "site": "packages/keiko-server/src/diagnostics-log.ts:214",
       "package": "keiko-server"
     },
     {
@@ -618,6 +618,18 @@
       "op": "<dynamic>",
       "category": "unknown",
       "site": "packages/keiko-server/src/observability/server-logger.ts:170",
+      "package": "keiko-server"
+    },
+    {
+      "op": "client.diagnostic",
+      "category": "diagnostic",
+      "site": "packages/keiko-server/src/client-diagnostics-routes.ts:119",
+      "package": "keiko-server"
+    },
+    {
+      "op": "client.diagnostic.rate-limited",
+      "category": "diagnostic",
+      "site": "packages/keiko-server/src/client-diagnostics-routes.ts:101",
       "package": "keiko-server"
     },
     {
@@ -671,19 +683,25 @@
     {
       "op": "http.request.body.cancelled",
       "category": "http",
-      "site": "packages/keiko-server/src/bounded-request-body.ts:88",
+      "site": "packages/keiko-server/src/bounded-request-body.ts:92",
       "package": "keiko-server"
     },
     {
       "op": "http.request.body.failed",
       "category": "http",
-      "site": "packages/keiko-server/src/bounded-request-body.ts:102",
+      "site": "packages/keiko-server/src/bounded-request-body.ts:106",
+      "package": "keiko-server"
+    },
+    {
+      "op": "http.request.body.received",
+      "category": "http",
+      "site": "packages/keiko-server/src/bounded-request-body.ts:142",
       "package": "keiko-server"
     },
     {
       "op": "http.request.body.rejected",
       "category": "http",
-      "site": "packages/keiko-server/src/bounded-request-body.ts:73",
+      "site": "packages/keiko-server/src/bounded-request-body.ts:77",
       "package": "keiko-server"
     },
     {
@@ -773,7 +791,7 @@
     {
       "op": "request",
       "category": "http",
-      "site": "packages/keiko-server/src/server.ts:323",
+      "site": "packages/keiko-server/src/server.ts:468",
       "package": "keiko-server"
     },
     {
@@ -792,6 +810,12 @@
       "op": "server-log.write-failed",
       "category": "diagnostic",
       "site": "packages/keiko-server/src/observability/server-log.ts:338",
+      "package": "keiko-server"
+    },
+    {
+      "op": "sse.stream.closed",
+      "category": "http",
+      "site": "packages/keiko-server/src/sse-write.ts:69",
       "package": "keiko-server"
     }
   ],

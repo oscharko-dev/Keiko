@@ -13,6 +13,7 @@ import type { RunRequest, RunVoiceOrigin } from "./run-request.js";
 import { startRun, applyRun, type EngineContext } from "./run-engine.js";
 import { ActiveRunLimitError, type AppliableSnapshot, type RunRecord } from "./runs.js";
 import { SSE_HEADERS, writeMessageEvent, readyMessage, startSseHeartbeat } from "./sse.js";
+import { markSseStreamBackpressureKilled } from "./sse-write.js";
 import type { SseWriter, StreamEvent } from "./sink.js";
 import type { RouteContext, RouteResult, HandlerOutcome } from "./routes.js";
 import { errorBody, STREAMING } from "./routes.js";
@@ -486,7 +487,10 @@ function aggregateRunWriter(
     write: (event: StreamEvent): boolean => {
       if (!agentRecordSessionMatches(record, ctx, deps)) return false;
       const accepted = writeMessageEvent(ctx.res, event, deps.redactor);
-      if (!accepted) ctx.res.destroy();
+      if (!accepted) {
+        markSseStreamBackpressureKilled(ctx.res);
+        ctx.res.destroy();
+      }
       return accepted;
     },
     // A single run reaching terminal must not close the aggregate desktop stream.
@@ -518,6 +522,7 @@ function openSseStream(
     write: (event: StreamEvent): boolean => {
       const accepted = writeMessageEvent(res, event, redactor);
       if (!accepted) {
+        markSseStreamBackpressureKilled(res);
         res.destroy();
       }
       return accepted;

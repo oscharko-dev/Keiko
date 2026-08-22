@@ -306,14 +306,51 @@ describe("bounded request body activity log", () => {
     ]);
   });
 
-  it("writes nothing when the body stays inside the limit", async () => {
-    const sink = captureServerLog("debug");
+  it("writes nothing at info when the body stays inside the limit", async () => {
+    const sink = captureServerLog("info");
 
     await expect(
       readBoundedRequestBody(asRequest(Readable.from([Buffer.from("hello")])), 5),
     ).resolves.toBe("hello");
 
     expect(sink.events).toEqual([]);
+  });
+
+  it("logs one debug success line with the reduced media type and byte count", async () => {
+    const sink = captureServerLog("debug");
+    const stream = new PassThrough();
+    const req = asRequest(stream);
+    Object.defineProperty(req, "headers", {
+      configurable: true,
+      value: { "content-type": "application/json; charset=utf-8" },
+    });
+    const outcome = readBoundedRequestBody(req, 128_000, undefined, "req-ok-01");
+
+    stream.end(Buffer.from("hello"));
+
+    await expect(outcome).resolves.toBe("hello");
+    expect(sink.events).toEqual([
+      {
+        level: "debug",
+        category: "http",
+        op: "http.request.body.received",
+        correlationId: "req-ok-01",
+        durationMs: undefined,
+        status: undefined,
+        errorKind: undefined,
+        extra: { contentType: "application/json", receivedBytes: 5 },
+      },
+    ]);
+  });
+
+  it("falls back to the closed 'unspecified' label when no Content-Type header was sent", async () => {
+    const sink = captureServerLog("debug");
+    const req = asRequest(Readable.from([Buffer.from("hi")]));
+    Object.defineProperty(req, "headers", { configurable: true, value: {} });
+
+    await expect(readBoundedRequestBody(req, 128_000)).resolves.toBe("hi");
+
+    expect(sink.events[0]?.extra).toEqual({ contentType: "unspecified", receivedBytes: 2 });
   });
 
   it("logs one rejection even when a late data event arrives after the read settled", async () => {

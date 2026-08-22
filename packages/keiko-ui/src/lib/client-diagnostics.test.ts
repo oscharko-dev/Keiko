@@ -6,8 +6,9 @@ import {
   reportClientDiagnostic,
   resetClientDiagnosticWriter,
   setClientDiagnosticWriter,
+  type ClientDiagnosticMeta,
 } from "./client-diagnostics";
-import { clientErrorSummary } from "./client-error-summary";
+import { clientErrorSummary, correlationIdOf } from "./client-error-summary";
 
 // The shared setup installs the application's console transport for every test, which is what the
 // rest of the suite should exercise. These cases are about the sink BEFORE any transport exists, so
@@ -82,6 +83,65 @@ describe("reportClientDiagnostic", () => {
     setClientDiagnosticWriter((message) => written.push(message));
 
     expect(written).toEqual([]);
+  });
+
+  // Wave 5 follow-up (epic #3233): the second argument is how a call site that holds an ApiError
+  // hands its correlation id to a transport, without folding it into the message string.
+  it("passes a supplied correlationId through to the installed writer", () => {
+    const received: (ClientDiagnosticMeta | undefined)[] = [];
+    setClientDiagnosticWriter((_message, meta) => received.push(meta));
+
+    reportClientDiagnostic("desktop shell crashed", { correlationId: "req-abc12345" });
+
+    expect(received).toEqual([{ correlationId: "req-abc12345" }]);
+  });
+
+  it("passes undefined meta through unchanged when the caller has no correlation id", () => {
+    const received: (ClientDiagnosticMeta | undefined)[] = [];
+    setClientDiagnosticWriter((_message, meta) => received.push(meta));
+
+    reportClientDiagnostic("workspace-state: local persistence parse failed");
+
+    expect(received).toEqual([undefined]);
+  });
+
+  // The pre-transport buffer must replay each record's OWN meta, not lose it or leak a later
+  // record's id onto an earlier one — the same in-order guarantee the plain-message buffering test
+  // above already covers for `message`.
+  it("replays buffered diagnostics with their original correlationId, each kept separate", () => {
+    reportClientDiagnostic("boot: first", { correlationId: "req-boot-000001" });
+    reportClientDiagnostic("boot: second");
+    reportClientDiagnostic("boot: third", { correlationId: "req-boot-000003" });
+
+    const received: (ClientDiagnosticMeta | undefined)[] = [];
+    setClientDiagnosticWriter((_message, meta) => received.push(meta));
+
+    expect(received).toEqual([
+      { correlationId: "req-boot-000001" },
+      undefined,
+      { correlationId: "req-boot-000003" },
+    ]);
+  });
+});
+
+describe("correlationIdOf", () => {
+  it("recovers a string correlationId from any error-shaped object that carries one", () => {
+    const apiErrorShaped = Object.assign(new Error("boom"), { correlationId: "req-xyz12345" });
+
+    expect(correlationIdOf(apiErrorShaped)).toBe("req-xyz12345");
+  });
+
+  it("returns undefined for an error with no correlationId, or a non-error thrown value", () => {
+    expect(correlationIdOf(new Error("boom"))).toBeUndefined();
+    expect(correlationIdOf("plain string throw")).toBeUndefined();
+    expect(correlationIdOf(undefined)).toBeUndefined();
+    expect(correlationIdOf(null)).toBeUndefined();
+  });
+
+  it("ignores a non-string correlationId field rather than passing it through unchecked", () => {
+    const malformed = Object.assign(new Error("boom"), { correlationId: 12345 });
+
+    expect(correlationIdOf(malformed)).toBeUndefined();
   });
 });
 

@@ -438,6 +438,59 @@ impossible to violate, because there is no longer more than one copy to diverge.
 relaxation of the pin, and no future change may cite this ADR to justify re-introducing a second
 copy without a single source of truth.
 
+### D13 — HTTP and SSE lifecycle detail, and a body-free browser diagnostic ingest (Wave 5, landed)
+
+Wave 5 closes the gap between "a request line exists" and "a request line is enough to reproduce the
+request":
+
+- **The `request` line carries the exact matched route, not a guess.** `routeTemplate` is the
+  `RouteDefinition.pattern` the dispatcher actually resolved (`/api/relationships/:id`), recorded by
+  a per-request context the dispatcher fills and the close-time writer reads — never derived from
+  the raw path after the fact, where a customer id shaped like a route word would misclassify.
+  Unmatched and static requests fall back to `redactRoutePath`. `queryParamNames` lists the query
+  parameter NAMES only (deduplicated, shape-checked against a bounded identifier pattern, sorted,
+  capped at 16; anything dropped is counted in `queryParamDroppedCount`), never a value.
+  `responseBytes` is the byte count `writeJson` already computed and previously discarded.
+  `aborted` is computed at `close` by the shared `requestAlreadyClosed` predicate, and a request the
+  client abandoned before any write logs `status: 0` instead of Node's default `200` — the
+  predicate was corrected in the same wave so a normally ended response (which Node also marks
+  `destroyed`) is not mistaken for an abort.
+- **Every SSE stream ends with exactly one terminal line.** `sse.stream.closed` (`frameCount`,
+  `bytesStreamed`, `durationMs`, `reason`) is emitted once per response on its `close` event by the
+  shared frame recorder every SSE writer already funnels through; `reason` is the closed
+  vocabulary `completed | client-disconnected | backpressure-killed | server-error`, and a write path
+  that destroys the socket because a write was rejected marks the stream first so a backpressure
+  kill is never reported as a client disconnect. `http.request.body.received` records the media
+  type and byte count of an accepted request body; the six ad hoc body readers that predated
+  `readBoundedRequestBody` were consolidated onto it so the line — and the 413 path — have one
+  owner.
+- **Diagnostic `operation` labels never carry a raw request path.** `diagnosticLabel` reduces a
+  path-bearing operation label through the same route reducer the activity log uses and degrades to
+  the fixed `server.operation` fallback when the path cannot be templated; the two git diff handlers
+  now pass their route literal instead of `ctx.url.pathname` at the source.
+- **The browser reports to the log, body-free.** `POST /api/diagnostics/client` accepts a
+  `ClientDiagnosticIngestRequest` (`keiko-contracts`) — a bounded message, `clientTs`, an optional
+  SSE `readyState`, a closed `kind`, and an optional `correlationId` that the server re-validates
+  with `isValidCorrelationId` and drops otherwise — and writes `client.diagnostic` with the message
+  redacted into `clientNote` (never under a `message` key) behind a process-wide token bucket
+  (reusing the editor's inline-completion limiter, 60 s window) that logs one
+  `client.diagnostic.rate-limited` line per window carrying the count of further drops it
+  suppressed, and answers `204` whether a report was kept or dropped.
+  The route's body reader returns a module-tagged outcome, not a duck-typed `RouteResult`, so a
+  client body shaped like `{status, body}` can never be reflected as the route's own response. On the
+  browser side the existing `reportClientDiagnostic` sink fans out to the console and to this route
+  (best-effort, throttled, never awaited); the four native `EventSource.onerror` sites report
+  `readyState` and a closed reason label, and every call site that catches an `ApiError` passes its
+  `correlationId` through a structured `meta` argument — the join that lets an agent pair a
+  browser-visible failure with the exact server request line it came from. Producers that
+  structurally have no id (native `EventSource`, message-only notices) say so in their doc comments
+  rather than inventing one.
+
+The agent-reading step this adds: **for a failed request**, read `routeTemplate`,
+`queryParamNames`, `responseBytes`, `aborted` and — for a stream — the `sse.stream.closed` line's
+`reason`, then look for a `client.diagnostic` line sharing the `correlationId` to learn what the
+browser saw. Everything on these lines is a count, a closed label, a template, or an id.
+
 ### D12 — Relation to prior decisions
 
 - **ADR-0010** (audit ledger and evidence manifests) established the precedent this contract
@@ -502,6 +555,9 @@ rather than left implicit across the Decision section:
    further evidence-gap classes (stack-frame unions, gateway replay scripts, and other later-wave
    evidence). A warning names exactly what evidence class is missing and why, so an agent's report to
    a human names the actual gap instead of guessing.
+8. **For a failed or slow request** (landed Wave 5), read the `request` line's `routeTemplate`,
+   `queryParamNames`, `responseBytes` and `aborted`, the stream's `sse.stream.closed` `reason`, and
+   any `client.diagnostic` line that shares the request's `correlationId` (D13).
 
 ## Consequences
 

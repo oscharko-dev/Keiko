@@ -2,6 +2,10 @@ import type { IncomingMessage } from "node:http";
 
 import { errorKindOf, getServerLogger } from "./observability/index.js";
 
+// A raw Node header value: absent, a single value, or (for a repeated header) several. Shared by
+// every helper below that reads `Content-Type` off a request, so the union is spelled once.
+type ContentTypeHeaderValue = string | string[] | undefined;
+
 export class RequestBodyTooLargeError extends Error {
   public constructor() {
     super("request body too large");
@@ -106,6 +110,41 @@ function logBodyFailed(
   });
 }
 
+// `IncomingMessage.headers` is typed as always present, but several test doubles across the
+// codebase construct a stream cast to `IncomingMessage` without setting it — read defensively so a
+// caller that never populated it does not crash the very read it is trying to observe.
+function safeContentTypeHeader(req: IncomingMessage): ContentTypeHeaderValue {
+  const headers = req as { headers?: IncomingMessage["headers"] };
+  return headers.headers?.["content-type"];
+}
+
+// Reduces a `Content-Type` header to its media type, discarding parameters (`; charset=utf-8`,
+// `; boundary=...`) that can carry caller-chosen, unbounded text. Mirrors `isJsonRequest`'s
+// reduction in `server.ts`. A media type is left readable by `log-redaction.ts`'s deep-path guard
+// on purpose (it is at most one `/`, never three-plus path segments), so no further redaction is
+// needed once it is isolated this way.
+function mediaTypeOf(header: ContentTypeHeaderValue): string {
+  const value = typeof header === "string" ? header : header?.[0];
+  const mediaType = value?.split(";", 1)[0]?.trim().toLowerCase();
+  return mediaType === undefined || mediaType.length === 0 ? "unspecified" : mediaType;
+}
+
+// The one success line this reader emits, at debug: per-request volume makes it unfit for info,
+// but it is what closes the loop for `keiko log:analyze` — the rejected/cancelled/failed paths
+// above already say what went wrong; this says what a body that just worked actually looked like.
+function logBodyReceived(
+  correlationId: string | undefined,
+  contentType: ContentTypeHeaderValue,
+  receivedBytes: number,
+): void {
+  getServerLogger().debug(() => ({
+    category: "http" as const,
+    op: "http.request.body.received",
+    ...(correlationId === undefined ? {} : { correlationId }),
+    extra: { contentType: mediaTypeOf(contentType), receivedBytes },
+  }));
+}
+
 class BoundedRequestBodyReader {
   private readonly chunks: Buffer[] = [];
   private total = 0;
@@ -173,6 +212,7 @@ class BoundedRequestBodyReader {
     if (this.settled) return;
     this.settled = true;
     this.cleanup();
+    logBodyReceived(this.correlationId, safeContentTypeHeader(this.req), this.total);
     this.resolve(Buffer.concat(this.chunks).toString("utf8"));
   };
 

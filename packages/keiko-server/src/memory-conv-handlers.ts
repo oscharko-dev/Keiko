@@ -61,6 +61,7 @@ import { recordMemoryAudit } from "./memory-audit-handler.js";
 import { recordAutoAcceptedMemoryCaptureDecision } from "./memory-capture-audit.js";
 import { buildMemoryRecordFromProposal } from "./memory-record-builders.js";
 import { persistCapturedMemory } from "./memory-capture-persistence.js";
+import { readBoundedRequestBody, RequestBodyTooLargeError } from "./bounded-request-body.js";
 import {
   enforcePersistableMemoryOutcome,
   FORGOTTEN_MEMORY_SUPPRESSION_REASON,
@@ -84,50 +85,23 @@ import {
 
 const MAX_BODY_BYTES = 64_000;
 
-// ─── Body reading (mirrors memory-handlers.ts pattern) ────────────────────────
-
-class BodyTooLargeError extends Error {
-  public constructor() {
-    super("request body too large");
-    this.name = "BodyTooLargeError";
-  }
-}
+// ─── Body reading ──────────────────────────────────────────────────────────────
+// Consolidated onto the shared bounded reader (#2902 w5-sse-counters) — the cap below is
+// unchanged, only the ad hoc listener wiring is gone.
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-function readBody(req: IncomingMessage): Promise<string> {
-  return new Promise<string>((resolve, reject) => {
-    const chunks: Buffer[] = [];
-    let total = 0;
-    let capped = false;
-    req.on("data", (chunk: Buffer) => {
-      total += chunk.length;
-      if (total > MAX_BODY_BYTES) {
-        if (!capped) {
-          capped = true;
-          chunks.length = 0;
-          reject(new BodyTooLargeError());
-          req.resume();
-        }
-        return;
-      }
-      chunks.push(chunk);
-    });
-    req.on("end", () => {
-      if (!capped) resolve(Buffer.concat(chunks).toString("utf8"));
-    });
-    req.on("error", reject);
-  });
-}
-
-async function readJsonBody(req: IncomingMessage): Promise<Record<string, unknown> | RouteResult> {
+async function readJsonBody(
+  req: IncomingMessage,
+  correlationId?: string,
+): Promise<Record<string, unknown> | RouteResult> {
   let raw: string;
   try {
-    raw = await readBody(req);
+    raw = await readBoundedRequestBody(req, MAX_BODY_BYTES, undefined, correlationId);
   } catch (err) {
-    if (err instanceof BodyTooLargeError) {
+    if (err instanceof RequestBodyTooLargeError) {
       return { status: 413, body: errorBody("PAYLOAD_TOO_LARGE", "Request body too large.") };
     }
     throw err;
@@ -336,7 +310,7 @@ export async function handleMemoryRetrieveContext(
 ): Promise<RouteResult> {
   const vault = resolveVault(deps);
   if (isRouteResult(vault)) return vault;
-  const body = await readJsonBody(ctx.req);
+  const body = await readJsonBody(ctx.req, ctx.correlationId);
   if (isRouteResult(body)) return body;
   const input = parseContextInput(body);
   if (isRouteResult(input)) return input;
@@ -452,7 +426,7 @@ export async function handleMemoryCaptureFromConversation(
 ): Promise<RouteResult> {
   const vault = resolveVault(deps);
   if (isRouteResult(vault)) return vault;
-  const body = await readJsonBody(ctx.req);
+  const body = await readJsonBody(ctx.req, ctx.correlationId);
   if (isRouteResult(body)) return body;
   const input = parseCaptureInput(body);
   if (isRouteResult(input)) return input;

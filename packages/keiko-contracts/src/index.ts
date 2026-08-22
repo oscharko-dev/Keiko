@@ -4768,3 +4768,17 @@ export {
   PROMPT_CANDIDATE_RANKING_EXPECTED_ORDER,
   PROMPT_CANDIDATE_RANKING_FIXTURE,
 } from "./prompt-enhancer-ranking-fixture.js";
+
+// ─── Client diagnostics ingest wire contract (Wave 5 of epic #3233) ─────────────
+export {
+  CLIENT_DIAGNOSTIC_KINDS,
+  CLIENT_DIAGNOSTIC_MESSAGE_MAX_LENGTH,
+  CLIENT_DIAGNOSTIC_READY_STATES,
+  isClientDiagnosticIngestRequest,
+  isClientDiagnosticKind,
+} from "./diagnostics.js";
+export type {
+  ClientDiagnosticIngestRequest,
+  ClientDiagnosticKind,
+  ClientDiagnosticReadyState,
+} from "./diagnostics.js";

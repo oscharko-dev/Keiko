@@ -8,6 +8,7 @@ import { Readable } from "node:stream";
 import { createGzip } from "node:zlib";
 import { applySecurityHeaders } from "./headers.js";
 import { isAllowedHost } from "./host-check.js";
+import { requestAlreadyClosed } from "./request-cancellation.js";
 import { resolveContainedPath, serveFile } from "./static.js";
 import {
   errorBody,
@@ -20,7 +21,12 @@ import {
   type RouteContext,
 } from "./routes.js";
 import { buildRedactor, type UiHandlerDeps } from "./deps.js";
-import { nullServerLogSink, type ServerLogSink } from "./observability/server-log.js";
+import {
+  MAX_LOG_STRING_LENGTH,
+  nullServerLogSink,
+  redactRoutePath,
+  type ServerLogSink,
+} from "./observability/server-log.js";
 import { CORRELATION_RESPONSE_HEADER, resolveCorrelationId } from "./correlation.js";
 import { emitServerDiagnostic, serverDiagnosticFromError } from "./diagnostics-log.js";
 import { isVoiceDictationCapable, isVoiceRealtimeCapable } from "./read-handlers.js";
@@ -37,6 +43,17 @@ export { UI_HOST };
 export { DEFAULT_UI_PORT } from "@oscharko-dev/keiko-contracts";
 const CSP_CACHE_TTL_MS = 1000;
 const JSON_GZIP_MIN_BYTES = 1024;
+// The http-request line's query-param-NAME field admits only a bounded identifier shape — the
+// same bar `log-redaction.ts`'s own field-name guard holds a field NAME to, applied here to a
+// query PARAM name before it ever reaches `extra`. Restated rather than imported: importing
+// `log-redaction.ts`'s private constant here would reach across the redaction choke point for a
+// shape both files already independently agree is "a bounded identifier",
+// `^[A-Za-z_][A-Za-z0-9_.-]{0,63}$`.
+const QUERY_PARAM_NAME_PATTERN = /^[A-Za-z_][A-Za-z0-9_.-]{0,63}$/;
+// Mirrors the bounded-array discipline every other array field in this schema already has
+// (`MAX_LOG_ARRAY_LENGTH`, `keikoStackFrames`' own frame cap): a request with more distinct query
+// parameter names than this is truncated, not silently grown without limit.
+const MAX_QUERY_PARAM_NAMES = 16;
 const cspCache = new WeakMap<
   UiServerDeps,
   { readonly value: string; readonly expiresAt: number }
@@ -62,6 +79,21 @@ export interface UiServerDeps {
   readonly activityLog?: ServerLogSink | undefined;
 }
 
+// Per-request scratch space the http-request line reads at response `close`, populated as the
+// request is actually resolved: `handle` fills in the query-parameter fields as soon as the URL is
+// parsed, `dispatchApi`/`serveStatic` fill in `routeTemplate` once the route (or its absence) is
+// known, and `writeJson` fills in `responseBytes` the one time it actually serialises a body. A
+// fresh object is created once per incoming request and threaded explicitly through the same call
+// chain `correlationId` already travels — plain per-request state, not a keyed side-table.
+// Exported for `server.test.ts` only (not part of the package's public entry point, mirroring how
+// `request-cancellation.ts` exports its own req/res-close shapes for the same reason).
+export interface RequestLogContext {
+  routeTemplate?: string;
+  queryParamNames?: readonly string[];
+  queryParamDroppedCount?: number;
+  responseBytes?: number;
+}
+
 function acceptsGzip(acceptEncoding: string | readonly string[] | undefined): boolean {
   const value =
     typeof acceptEncoding === "string" ? acceptEncoding : (acceptEncoding ?? []).join(",");
@@ -77,16 +109,19 @@ function writeJson(
   status: number,
   body: unknown,
   headers: Readonly<Record<string, string | readonly string[]>> = {},
+  context?: RequestLogContext,
 ): void {
   res.statusCode = status;
   for (const [key, value] of Object.entries(headers)) {
     res.setHeader(key, typeof value === "string" ? value : [...value]);
   }
   if (status === 204 || status === 304) {
+    if (context !== undefined) context.responseBytes = 0;
     res.end();
     return;
   }
   const payload = Buffer.from(JSON.stringify(body), "utf8");
+  if (context !== undefined) context.responseBytes = payload.byteLength;
   res.setHeader("Content-Type", "application/json; charset=utf-8");
   if (payload.byteLength >= JSON_GZIP_MIN_BYTES && acceptsGzip(req.headers["accept-encoding"])) {
     res.setHeader("Content-Encoding", "gzip");
@@ -110,17 +145,30 @@ function hasCsrfHeader(req: IncomingMessage): boolean {
   return value === "1";
 }
 
-function rejectUnsupportedMediaType(req: IncomingMessage, res: ServerResponse): void {
+function rejectUnsupportedMediaType(
+  req: IncomingMessage,
+  res: ServerResponse,
+  context: RequestLogContext,
+): void {
   writeJson(
     req,
     res,
     415,
     errorBody("UNSUPPORTED_MEDIA_TYPE", "State-changing API requests must use JSON."),
+    {},
+    context,
   );
 }
 
-function rejectCsrf(req: IncomingMessage, res: ServerResponse): void {
-  writeJson(req, res, 403, errorBody("FORBIDDEN_CSRF", "Missing state-changing request guard."));
+function rejectCsrf(req: IncomingMessage, res: ServerResponse, context: RequestLogContext): void {
+  writeJson(
+    req,
+    res,
+    403,
+    errorBody("FORBIDDEN_CSRF", "Missing state-changing request guard."),
+    {},
+    context,
+  );
 }
 
 // A minimal default deps object so a 3-arg server can still serve the deps-bound read routes (e.g.
@@ -154,19 +202,29 @@ function rejectIfInvalidStateChange(
   res: ServerResponse,
   method: string,
   pathname: string,
+  context: RequestLogContext,
 ): boolean {
   if (!isJsonRequest(req)) {
-    rejectUnsupportedMediaType(req, res);
+    rejectUnsupportedMediaType(req, res, context);
     return true;
   }
   if (isCsrfExemptStateChange(method, pathname)) {
     return false;
   }
   if (!hasCsrfHeader(req)) {
-    rejectCsrf(req, res);
+    rejectCsrf(req, res, context);
     return true;
   }
   return false;
+}
+
+// The route-template reduction of the raw path, for a request `dispatchApi` never resolved to a
+// declared route (404/405) or that never entered API dispatch at all (a static asset). A matched
+// API request gets the exact `RouteDefinition.pattern` instead (`dispatchApi` sets it directly) —
+// the two no longer come from the same lossy, independently-re-derived heuristic.
+function setFallbackRouteTemplate(context: RequestLogContext, pathname: string): void {
+  const template = redactRoutePath(pathname, MAX_LOG_STRING_LENGTH);
+  if (template !== undefined) context.routeTemplate = template;
 }
 
 async function dispatchApi(
@@ -176,17 +234,24 @@ async function dispatchApi(
   method: string,
   url: URL,
   correlationId: string,
+  context: RequestLogContext,
 ): Promise<void> {
   const match = matchRoute(method, url.pathname);
   if (match === undefined) {
-    writeJson(req, res, 404, notFoundBody());
+    setFallbackRouteTemplate(context, url.pathname);
+    writeJson(req, res, 404, notFoundBody(), {}, context);
     return;
   }
   if (match === "method-not-allowed") {
-    writeJson(req, res, 405, methodNotAllowedBody());
+    setFallbackRouteTemplate(context, url.pathname);
+    writeJson(req, res, 405, methodNotAllowedBody(), {}, context);
     return;
   }
-  if (isStateChangingMethod(method) && rejectIfInvalidStateChange(req, res, method, url.pathname)) {
+  context.routeTemplate = match.definition.pattern;
+  const invalidStateChange =
+    isStateChangingMethod(method) &&
+    rejectIfInvalidStateChange(req, res, method, url.pathname, context);
+  if (invalidStateChange) {
     return;
   }
   const ctx: RouteContext = { req, res, params: match.params, url, correlationId };
@@ -194,7 +259,7 @@ async function dispatchApi(
   if (outcome === STREAMING) {
     return;
   }
-  writeJson(req, res, outcome.status, outcome.body, outcome.headers);
+  writeJson(req, res, outcome.status, outcome.body, outcome.headers, context);
 }
 
 function resolveStaticTargets(pathname: string): readonly string[] {
@@ -212,7 +277,9 @@ async function serveStatic(
   res: ServerResponse,
   staticRoot: string,
   pathname: string,
+  context: RequestLogContext,
 ): Promise<void> {
+  setFallbackRouteTemplate(context, pathname);
   const targets = resolveStaticTargets(pathname);
   for (const target of targets) {
     const resolved = resolveContainedPath(staticRoot, target);
@@ -227,12 +294,23 @@ async function serveStatic(
   if (await serveFile(res, indexPath, req.headers["accept-encoding"])) {
     return;
   }
-  writeJson(req, res, 404, errorBody("NOT_FOUND", "The requested resource was not found."));
+  writeJson(
+    req,
+    res,
+    404,
+    errorBody("NOT_FOUND", "The requested resource was not found."),
+    {},
+    context,
+  );
 }
 
-function rejectForbiddenHost(req: IncomingMessage, res: ServerResponse): void {
+function rejectForbiddenHost(
+  req: IncomingMessage,
+  res: ServerResponse,
+  context: RequestLogContext,
+): void {
   const body: ApiError = errorBody("FORBIDDEN_HOST", "Request host is not the local interface.");
-  writeJson(req, res, 403, body);
+  writeJson(req, res, 403, body, {}, context);
 }
 
 async function resolveCsp(deps: UiServerDeps): Promise<string> {
@@ -252,14 +330,40 @@ async function resolveCsp(deps: UiServerDeps): Promise<string> {
   }
 }
 
+// Names only — values never leave this function. Deduplicated (a repeated key collapses to one
+// name), sorted for a stable line, and capped the same way every other bounded array field in this
+// schema is: a name beyond the cap, and any name that is not a bounded identifier (the same shape
+// a log field name itself must have), is dropped and COUNTED rather than silently grown or
+// silently truncated with no trace.
+function computeQueryParamFields(url: URL, context: RequestLogContext): void {
+  const names = new Set(url.searchParams.keys());
+  const kept: string[] = [];
+  let dropped = 0;
+  for (const name of names) {
+    if (QUERY_PARAM_NAME_PATTERN.test(name)) {
+      kept.push(name);
+    } else {
+      dropped += 1;
+    }
+  }
+  kept.sort((a, b) => a.localeCompare(b));
+  if (kept.length > MAX_QUERY_PARAM_NAMES) {
+    dropped += kept.length - MAX_QUERY_PARAM_NAMES;
+  }
+  context.queryParamNames = kept.slice(0, MAX_QUERY_PARAM_NAMES);
+  if (dropped > 0) context.queryParamDroppedCount = dropped;
+}
+
 async function handle(
   deps: UiServerDeps,
   handlerDeps: UiHandlerDeps,
   req: IncomingMessage,
   res: ServerResponse,
   correlationId: string,
+  context: RequestLogContext,
 ): Promise<void> {
   const url = new URL(req.url ?? "/", `http://${UI_HOST}`);
+  computeQueryParamFields(url, context);
   const apiPath = isApiPath(url.pathname);
   // Issue #495/#497 — scope the Permissions-Policy microphone directive to deployments that advertise
   // speech-to-text dictation OR full-realtime voice (whose WebRTC capture track also needs the mic);
@@ -268,15 +372,15 @@ async function handle(
     allowMicrophone: isVoiceDictationCapable(handlerDeps) || isVoiceRealtimeCapable(handlerDeps),
   });
   if (!isAllowedHost(req, deps.port)) {
-    rejectForbiddenHost(req, res);
+    rejectForbiddenHost(req, res, context);
     return;
   }
   const method = (req.method ?? "GET").toUpperCase();
   if (apiPath) {
-    await dispatchApi(handlerDeps, req, res, method, url, correlationId);
+    await dispatchApi(handlerDeps, req, res, method, url, correlationId, context);
     return;
   }
-  await serveStatic(req, res, deps.staticRoot, url.pathname);
+  await serveStatic(req, res, deps.staticRoot, url.pathname, context);
 }
 
 function createVoicePlanes(
@@ -304,29 +408,106 @@ function createVoicePlanes(
 // ADR-0101) re-opens the upgrade for the single loopback voice control path `/api/voice/control`, and
 // ONLY when the deployment is full-realtime voice capable; every other upgrade keeps the hard reject.
 
+// Content-free by construction: every value here is a count, a bounded label, or a route
+// TEMPLATE — never a raw query value, a header or a body. `path` keeps its pre-existing behaviour
+// (reduced generically by `log-redaction.ts`'s own path guard); `routeTemplate` is the field this
+// wave adds so a reader learns WHICH declared route actually matched, sourced from the real match
+// `dispatchApi` resolved rather than re-derived independently from the same raw path.
+function buildHttpRequestExtra(
+  method: string,
+  path: string,
+  aborted: boolean,
+  context: RequestLogContext,
+): Record<string, unknown> {
+  return {
+    method,
+    path,
+    routeTemplate: context.routeTemplate,
+    queryParamNames: context.queryParamNames ?? [],
+    queryParamDroppedCount: context.queryParamDroppedCount,
+    responseBytes: context.responseBytes ?? 0,
+    aborted,
+  };
+}
+
 // Every incoming HTTP request emits ONE structured line in the activity log on close, with the
 // correlation id echoed in the response header. Extracted from the createServer callback so the
-// top-level handler stays under the 50-line ceiling; the payload is intentionally content-free
-// (method, path, status, duration).
-function logRequestOnClose(
+// top-level handler stays under the 50-line ceiling. `context` is the SAME object `handle`'s call
+// chain mutates as the request is actually resolved (query-parameter fields at URL-parse time, the
+// matched route pattern once `dispatchApi`/`serveStatic` know it, the response byte count the one
+// time `writeJson` actually serialises a body) — read here only once the response has finished or
+// the connection has gone away, so every mutation above is guaranteed to have already happened.
+//
+// `aborted` reuses the SAME `requestAlreadyClosed` predicate `request-cancellation.ts` already uses
+// to decide whether an in-flight handler's `AbortSignal` should fire — not a second, independent
+// read of `req`/`res` state invented for this line. When the connection is gone AND no response was
+// ever actually sent (`!res.headersSent`), `status` is logged as 0 instead of Node's own default
+// `res.statusCode` of 200: that default holds from construction regardless of whether anything was
+// ever written, so echoing it here for an aborted, header-less response would misreport a dropped
+// connection as a successful one.
+//
+// Exported for `server.test.ts` only, so the close-time behaviour (aborted mid-response before any
+// write, a normally completed request) can be driven with the same fake req/res EventEmitter
+// doubles `request-cancellation.test.ts` already uses for `requestAlreadyClosed` itself, instead of
+// depending on real socket teardown timing.
+export function logRequestOnClose(
   req: IncomingMessage,
   res: ServerResponse,
   correlationId: string,
   activityLog: ServerLogSink,
+  context: RequestLogContext,
 ): void {
   const startedAt = Date.now();
   const requestUrl = req.url ?? "";
   const method = req.method ?? "GET";
   res.on("close", () => {
+    const aborted = requestAlreadyClosed({ req, res });
+    const status = aborted && !res.headersSent ? 0 : res.statusCode;
     activityLog.write({
       category: "http",
       op: "request",
       correlationId,
-      status: res.statusCode,
+      status,
       durationMs: Date.now() - startedAt,
-      extra: { method, path: requestUrl.split("?")[0] },
+      extra: buildHttpRequestExtra(method, requestUrl.split("?")[0] ?? "", aborted, context),
     });
   });
+}
+
+// The cause is no longer discarded: it is routed — REDACTED — to the operator diagnostic sink,
+// keyed by the correlation id, and the id is folded into the opaque 500 body so a user-reported
+// failure can be tied back to exactly one server-side record (GEN-OBS-DIAGNOSTICS-901). Split out
+// of `createUiServer`'s callback so that closure stays under the line-count ceiling.
+function reportTopLevelFailure(
+  req: IncomingMessage,
+  res: ServerResponse,
+  correlationId: string,
+  handlerDeps: UiHandlerDeps,
+  context: RequestLogContext,
+  error: unknown,
+): void {
+  emitServerDiagnostic(
+    handlerDeps.diagnostics,
+    serverDiagnosticFromError({
+      correlationId,
+      operation: "server.request",
+      source: "server.top-level-catch",
+      error,
+      redact: (message) => String(handlerDeps.redactor(message)),
+    }),
+  );
+  if (!res.headersSent) {
+    writeJson(
+      req,
+      res,
+      500,
+      errorBody("INTERNAL", "An unexpected error occurred.", correlationId),
+      {},
+      context,
+    );
+  } else {
+    res.end();
+  }
 }
 
 export function createUiServer(deps: UiServerDeps): Server {
@@ -336,32 +517,13 @@ export function createUiServer(deps: UiServerDeps): Server {
   const server = createServer((req, res) => {
     const correlationId = resolveCorrelationId(req);
     res.setHeader(CORRELATION_RESPONSE_HEADER, correlationId);
-    logRequestOnClose(req, res, correlationId, activityLog);
-    void handle(deps, handlerDeps, req, res, correlationId).catch((error: unknown) => {
-      // The cause is no longer discarded: it is routed — REDACTED — to the operator diagnostic sink,
-      // keyed by the correlation id, and the id is folded into the opaque 500 body so a user-reported
-      // failure can be tied back to exactly one server-side record (GEN-OBS-DIAGNOSTICS-901).
-      emitServerDiagnostic(
-        handlerDeps.diagnostics,
-        serverDiagnosticFromError({
-          correlationId,
-          operation: "server.request",
-          source: "server.top-level-catch",
-          error,
-          redact: (message) => String(handlerDeps.redactor(message)),
-        }),
-      );
-      if (!res.headersSent) {
-        writeJson(
-          req,
-          res,
-          500,
-          errorBody("INTERNAL", "An unexpected error occurred.", correlationId),
-        );
-      } else {
-        res.end();
-      }
-    });
+    const requestLogContext: RequestLogContext = {};
+    logRequestOnClose(req, res, correlationId, activityLog, requestLogContext);
+    void handle(deps, handlerDeps, req, res, correlationId, requestLogContext).catch(
+      (error: unknown) => {
+        reportTopLevelFailure(req, res, correlationId, handlerDeps, requestLogContext, error);
+      },
+    );
   });
   server.on("upgrade", (req, socket, head) => {
     if (voiceControl.handleUpgrade(req, socket, head)) {

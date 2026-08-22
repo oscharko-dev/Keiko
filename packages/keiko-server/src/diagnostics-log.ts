@@ -6,6 +6,7 @@ import {
   safeProperty,
 } from "./observability/error-classification.js";
 import { closeReasonVocabulary } from "./observability/log-redaction.js";
+import { redactRoutePath } from "./observability/route-template.js";
 import { createFileServerLogSink } from "./observability/server-log.js";
 import { causeChain, keikoStackFrames } from "./observability/stack-frames.js";
 
@@ -354,16 +355,41 @@ function compatibilitySummary(
   }
 }
 
+// An operation label shaped like `"GET /api/foo/bar"` (a method word, a space, then a path
+// starting with `/`) carries a live request path in its trailing word, and a path segment can be
+// a customer-chosen identifier — a project name, a repository, a capsule id — exactly the raw
+// content this record's own contract (counts, hashes, closed-vocabulary labels; never customer
+// content) forbids. `redactRoutePath` (route-template.ts) is the reducer the HTTP request line
+// itself already uses for the same purpose; calling it here reuses that one reduction instead of
+// writing a second one, so there is exactly one place that decides what a route "looks like" once
+// redacted. `SOURCE_LABEL_SHAPE` never admits a `/`, so this only ever runs for `fallback ===
+// "server.operation"`. A label with no path component (e.g. `"chat.stream"`) is returned as-is.
+function pathReducedOperationLabel(value: string): string | undefined {
+  const spaceIndex = value.indexOf(" ");
+  const prefix = spaceIndex === -1 ? "" : value.slice(0, spaceIndex + 1);
+  const path = spaceIndex === -1 ? value : value.slice(spaceIndex + 1);
+  if (!path.startsWith("/")) return value;
+  const template = redactRoutePath(path, MAX_DIAGNOSTIC_LABEL_LENGTH - prefix.length);
+  return template === undefined ? undefined : `${prefix}${template}`;
+}
+
 function diagnosticLabel(
   value: unknown,
   shape: RegExp,
   fallback: "server.operation" | "server.diagnostic",
 ): string {
-  return typeof value === "string" &&
-    value.length <= MAX_DIAGNOSTIC_LABEL_LENGTH &&
-    shape.test(value)
-    ? value
-    : fallback;
+  if (
+    typeof value !== "string" ||
+    value.length > MAX_DIAGNOSTIC_LABEL_LENGTH ||
+    !shape.test(value)
+  ) {
+    return fallback;
+  }
+  if (fallback !== "server.operation") return value;
+  // A path this server does not serve (an unknown route) or one wearing traversal segments
+  // (`redactRoutePath` fails closed on both) is not partially echoed — the whole label degrades
+  // to the fallback, same fail-closed direction `redactRoutePath` itself documents.
+  return pathReducedOperationLabel(value) ?? fallback;
 }
 
 // Emits a diagnostic record through the provided sink (falling back to the default stderr sink).

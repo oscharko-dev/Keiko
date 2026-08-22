@@ -12,7 +12,7 @@ import {
   type EditorM11SettingsSnapshot,
 } from "@oscharko-dev/keiko-contracts";
 import { reportClientDiagnostic } from "@/lib/client-diagnostics";
-import { clientErrorSummary } from "@/lib/client-error-summary";
+import { clientErrorSummary, correlationIdOf } from "@/lib/client-error-summary";
 
 const RESET_SCOPES: readonly EditorM11SettingScope[] = ["user", "workspace"];
 
@@ -55,6 +55,7 @@ async function clearOverridesInScope(
   } catch (error) {
     reportClientDiagnostic(
       `shell-recovery: ${scope} layer reset failed (${clientErrorSummary(error)})`,
+      { correlationId: correlationIdOf(error) },
     );
     return null;
   }

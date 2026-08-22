@@ -45,6 +45,9 @@ interface FakeReq extends EventEmitter {
   headers: Record<string, string>;
   url: string;
   method: string;
+  // The shared bounded-body reader calls `resume()` to drain an oversized/cancelled body
+  // (#2902 w5-sse-counters); a bare EventEmitter has no such method.
+  resume(): void;
 }
 
 function makeReq(opts: {
@@ -57,6 +60,7 @@ function makeReq(opts: {
   e.headers = opts.headers ?? {};
   e.url = opts.url ?? "/";
   e.method = opts.method ?? "GET";
+  e.resume = (): void => undefined;
   // Defer body emission to next tick so consumer can attach `data`/`end` listeners.
   process.nextTick(() => {
     if (opts.body !== undefined) {
@@ -478,6 +482,26 @@ describe("POST /api/relationships (create + validate-before-persist)", () => {
     const res = await handleRelationshipValidate(makeCtx(req), deps);
     expect(res.status).toBe(400);
     expect((res.body as { error: { code: string } }).error.code).toBe("relationship/bad-request");
+  });
+
+  // #2902 w5-sse-counters: readJsonBody now consolidates onto the shared readBoundedRequestBody,
+  // so an oversized body must still yield this handler's own 413 shape (16 KiB cap unchanged).
+  it("rejects an oversized body using the shared bounded-body reader", async () => {
+    const store = freshStore();
+    const { redactor } = trackingRedactor();
+    const deps = buildDeps("ws-a", store, redactor);
+    const req = makeReq({
+      method: "POST",
+      url: "/api/relationships/validate",
+      body: "x".repeat(17 * 1024),
+    });
+
+    const res = await handleRelationshipValidate(makeCtx(req), deps);
+
+    expect(res.status).toBe(413);
+    expect((res.body as { error: { code: string } }).error.code).toBe(
+      "relationship/payload-too-large",
+    );
   });
 
   it("replays an identical body via cached idempotency record", async () => {

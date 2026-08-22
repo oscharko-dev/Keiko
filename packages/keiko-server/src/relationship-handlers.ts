@@ -74,6 +74,7 @@ import type {
 import { UiStoreError } from "./store/errors.js";
 import { SSE_HEADERS } from "./sse.js";
 import { writeOrDestroy } from "./sse-write.js";
+import { readBoundedRequestBody, RequestBodyTooLargeError } from "./bounded-request-body.js";
 import {
   subscribeActivityBroadcast,
   type ActivityFrame,
@@ -313,38 +314,24 @@ class HandlerError extends Error {
   }
 }
 
-function readBody(req: IncomingMessage): Promise<string> {
-  return new Promise<string>((resolveBody, rejectBody) => {
-    const chunks: Buffer[] = [];
-    let total = 0;
-    let capped = false;
-    req.on("data", (chunk: Buffer) => {
-      total += chunk.length;
-      if (total > MAX_BODY_BYTES) {
-        if (!capped) {
-          capped = true;
-          chunks.length = 0;
-          rejectBody(
-            new HandlerError(413, "relationship/payload-too-large", "Body exceeds 16 KiB."),
-          );
-          req.resume();
-        }
-        return;
-      }
-      chunks.push(chunk);
-    });
-    req.on("end", () => {
-      if (!capped) resolveBody(Buffer.concat(chunks).toString("utf8"));
-    });
-    req.on("error", rejectBody);
-  });
-}
-
-async function readJsonBody(req: IncomingMessage): Promise<{
+// Consolidated onto the shared bounded reader (#2902 w5-sse-counters) — the 16 KiB cap above is
+// unchanged, only the ad hoc listener wiring is gone.
+async function readJsonBody(
+  req: IncomingMessage,
+  correlationId?: string,
+): Promise<{
   readonly raw: string;
   readonly value: Record<string, unknown>;
 }> {
-  const raw = await readBody(req);
+  let raw: string;
+  try {
+    raw = await readBoundedRequestBody(req, MAX_BODY_BYTES, undefined, correlationId);
+  } catch (bodyReadError) {
+    if (bodyReadError instanceof RequestBodyTooLargeError) {
+      throw new HandlerError(413, "relationship/payload-too-large", "Body exceeds 16 KiB.");
+    }
+    throw bodyReadError;
+  }
   let parsed: unknown;
   try {
     parsed = JSON.parse(raw);
@@ -1157,7 +1144,7 @@ async function handleValidateImpl(ctx: RouteContext, deps: UiHandlerDeps): Promi
     async () => {
       const relationship = readRelationshipDeps(deps);
       const workspaceId = scope(ctx.req, relationship);
-      const { value: body } = await readJsonBody(ctx.req);
+      const { value: body } = await readJsonBody(ctx.req, ctx.correlationId);
       assertOnlyKeys(body, ["schemaVersion", "proposal"], "body");
       assertSchemaVersion(body);
       const proposal = parseProposal(body, workspaceId);
@@ -1296,7 +1283,7 @@ async function handleCreateImpl(ctx: RouteContext, deps: UiHandlerDeps): Promise
       const relationship = readRelationshipDeps(deps);
       const workspaceId = scope(ctx.req, relationship);
       const idempotencyHeader = requireIdempotencyKey(ctx.req);
-      const { raw, value: body } = await readJsonBody(ctx.req);
+      const { raw, value: body } = await readJsonBody(ctx.req, ctx.correlationId);
       assertOnlyKeys(body, ["schemaVersion", "proposal"], "body");
       assertSchemaVersion(body);
       const proposal = parseProposal(body, workspaceId);
@@ -1598,7 +1585,7 @@ async function performPatchPreflight(
   const id = requireRelationshipId(ctx.params.id);
   const ifMatch = requireIfMatch(ctx.req);
   requireIdempotencyKey(ctx.req);
-  const { value: body } = await readJsonBody(ctx.req);
+  const { value: body } = await readJsonBody(ctx.req, ctx.correlationId);
   assertOnlyKeys(body, ["schemaVersion", "transition", "reconnect"], "body");
   assertSchemaVersion(body);
   const transition = body.transition;

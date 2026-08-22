@@ -21,6 +21,10 @@ import { useRelationshipActivityStream, N_VISIBLE } from "./useRelationshipActiv
 import { RelationshipEdgeBadge, ACTIVITY_VISUALS } from "./RelationshipEdgeBadge";
 import type { RelationshipActivityState } from "@oscharko-dev/keiko-contracts";
 import { RELATIONSHIP_ACTIVITY_STATES } from "@oscharko-dev/keiko-contracts";
+import {
+  resetClientDiagnosticWriter,
+  setClientDiagnosticWriter,
+} from "../../../../../lib/client-diagnostics";
 
 expect.extend(toHaveNoViolations);
 
@@ -36,6 +40,9 @@ class FakeEventSource {
   private readonly listeners: Map<string, MessageHandler[]> = new Map();
   public onmessage: MessageHandler | null = null;
   public onerror: (() => void) | null = null;
+  // Real EventSource is CLOSED (2) by the time `onerror` typically fires for a fatal failure;
+  // tests that care about a different observed state override this before triggering onerror.
+  public readyState = 2;
 
   constructor(_url: string) {
     FakeEventSource.last = this;
@@ -161,6 +168,7 @@ afterEach(() => {
   vi.unstubAllGlobals();
   vi.clearAllTimers();
   vi.useRealTimers();
+  resetClientDiagnosticWriter();
 });
 
 // ─── Tests ─────────────────────────────────────────────────────────────────────
@@ -522,6 +530,28 @@ describe("useRelationshipActivityStream", () => {
 
       expect(FakeEventSource.instances).toHaveLength(2);
       expect(fetchSpy).not.toHaveBeenCalled();
+    });
+
+    // Wave 5 of epic #3233 (g6): every EventSource.onerror handler reports a client diagnostic
+    // carrying the observed readyState and a closed reason label.
+    it("reports a client diagnostic with readyState and a reason label on stream error", () => {
+      vi.useFakeTimers();
+      const reported: string[] = [];
+      setClientDiagnosticWriter((message) => reported.push(message));
+
+      render(<HookHarness onState={() => undefined} />);
+      expect(FakeEventSource.last).not.toBeNull();
+      const source = FakeEventSource.last;
+      if (source === null) throw new Error("Expected stream.");
+      source.readyState = 0;
+
+      act(() => {
+        source.onerror?.();
+      });
+
+      expect(reported).toEqual([
+        "[keiko] relationship-activity sse stream error (kind=sse-error, readyState=0, reason=connecting)",
+      ]);
     });
 
     it("pauses expiry and reconnect while the page is hidden, then resumes on visibility", async () => {

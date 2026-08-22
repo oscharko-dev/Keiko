@@ -1,7 +1,7 @@
 import { EventEmitter } from "node:events";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { describe, expect, it } from "vitest";
-import { createRequestCancellation } from "./request-cancellation.js";
+import { createRequestCancellation, requestAlreadyClosed } from "./request-cancellation.js";
 import type { RouteContext } from "./routes.js";
 
 interface RequestDouble extends EventEmitter {
@@ -121,5 +121,66 @@ describe("request cancellation", () => {
 
     expect(cancellation.signal.aborted).toBe(false);
     cancellation.dispose();
+  });
+});
+
+// `requestAlreadyClosed` itself, exported so `server.ts`'s activity log http-request line can
+// reuse it at response `close` time — a moment `createRequestCancellation` never evaluates it at
+// (it only calls the predicate once, synchronously, before any response activity).
+describe("requestAlreadyClosed", () => {
+  it("accepts the minimal req/res pair directly, without a full RouteContext", () => {
+    const req = Object.assign(new EventEmitter(), { complete: true, destroyed: false });
+    const res = Object.assign(new EventEmitter(), {
+      closed: false,
+      destroyed: false,
+      writableEnded: true,
+    });
+
+    expect(
+      requestAlreadyClosed({
+        req: req as unknown as IncomingMessage,
+        res: res as unknown as ServerResponse,
+      }),
+    ).toBe(false);
+  });
+
+  // Verified against a real `http.Server` (not only these fake doubles): Node marks a
+  // `ServerResponse` `destroyed` once its stream is torn down after a fully successful `res.end()`
+  // too, not only on an abrupt client disconnect. Every EXISTING caller (`createRequestCancellation`,
+  // above) only ever evaluated this predicate before any response activity, where `writableEnded` is
+  // always still `false` — so a `destroyed`-without-`writableEnded` shape never arose there and this
+  // gap was invisible. The activity log's http-request line calls it AFTER the response may have
+  // completed, which is exactly the shape this pins: `destroyed` alone must never mean "aborted"
+  // once the response actually ended.
+  it("does not treat a normally completed response (destroyed AND writableEnded) as already closed", () => {
+    const req = Object.assign(new EventEmitter(), { complete: true, destroyed: false });
+    const res = Object.assign(new EventEmitter(), {
+      closed: true,
+      destroyed: true,
+      writableEnded: true,
+    });
+
+    expect(
+      requestAlreadyClosed({
+        req: req as unknown as IncomingMessage,
+        res: res as unknown as ServerResponse,
+      }),
+    ).toBe(false);
+  });
+
+  it("still treats a destroyed response that never finished as closed", () => {
+    const req = Object.assign(new EventEmitter(), { complete: true, destroyed: false });
+    const res = Object.assign(new EventEmitter(), {
+      closed: false,
+      destroyed: true,
+      writableEnded: false,
+    });
+
+    expect(
+      requestAlreadyClosed({
+        req: req as unknown as IncomingMessage,
+        res: res as unknown as ServerResponse,
+      }),
+    ).toBe(true);
   });
 });

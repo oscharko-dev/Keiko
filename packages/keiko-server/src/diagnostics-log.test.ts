@@ -272,6 +272,67 @@ describe("emitServerDiagnostic (RB-6)", () => {
     expect(JSON.stringify(record)).not.toContain(labelMarker);
   });
 
+  // ADR-0173 D3-adjacent follow-up (#3235 review, Wave 5): an `operation` label built from a live
+  // request path (`GET ${ctx.url.pathname}`-shaped) could carry a customer-chosen route segment
+  // verbatim onto the record. `diagnosticLabel` now reduces the path portion of an operation label
+  // through the SAME `redactRoutePath` reducer the HTTP request line uses, rather than accepting
+  // any string that merely matches the shape regex.
+  describe("operation labels never carry a raw request path (review follow-up, #3235)", () => {
+    it("reduces a path with a customer-named segment to its route template", () => {
+      const customerMarker = "fixture-customer-named-repository";
+      const record = serverDiagnosticFromError({
+        correlationId: "cid-path-template",
+        operation: `GET /api/git/repositories/${customerMarker}/status`,
+        source: "unit",
+        error: new Error("placeholder"),
+        redact: identity,
+        now: () => 0,
+      });
+
+      expect(record.operation).toBe("GET /api/git/repositories/{id}/status");
+      expect(JSON.stringify(record)).not.toContain(customerMarker);
+    });
+
+    it("leaves an operation label with no path component unchanged", () => {
+      const record = serverDiagnosticFromError({
+        correlationId: "cid-no-path",
+        operation: "chat.stream",
+        source: "unit",
+        error: new Error("placeholder"),
+        redact: identity,
+        now: () => 0,
+      });
+
+      expect(record.operation).toBe("chat.stream");
+    });
+
+    it("falls back to server.operation for a traversal-shaped path", () => {
+      const record = serverDiagnosticFromError({
+        correlationId: "cid-traversal",
+        operation: "GET /api/git/../../etc/passwd",
+        source: "unit",
+        error: new Error("placeholder"),
+        redact: identity,
+        now: () => 0,
+      });
+
+      expect(record.operation).toBe("server.operation");
+    });
+
+    it("keeps a fully-literal route path unchanged (every segment is a declared route word)", () => {
+      const record = serverDiagnosticFromError({
+        correlationId: "cid-literal-path",
+        operation: "POST /api/desktop/chat/stream",
+        source: "unit",
+        error: new Error("placeholder"),
+        redact: identity,
+        now: () => 0,
+      });
+
+      expect(record.operation).toBe("POST /api/desktop/chat/stream");
+    });
+  });
+
   it("routes the record to the provided sink", () => {
     const records: ServerDiagnosticRecord[] = [];
     const record = serverDiagnosticFromError({

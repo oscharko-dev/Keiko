@@ -19,18 +19,33 @@
 // `unknown` or an `Error`: a raw error carries a stack with absolute paths and a message Keiko does
 // not control, and a diagnostic surface is what users screenshot into bug reports. Callers that hold
 // an error pass `clientErrorSummary(error)`, which yields its class and nothing else.
+//
+// The optional second argument is metadata ABOUT the report, not content: currently just the
+// correlation id of the server request the diagnostic describes (see `correlationIdOf` in
+// client-error-summary.ts), when the caller has one. It rides alongside `message` rather than being
+// folded into it so a transport can use it structurally (e.g. as a real wire field) instead of every
+// caller re-deriving a string convention a transport then has to parse back out.
 
-export type ClientDiagnosticWriter = (message: string) => void;
+export interface ClientDiagnosticMeta {
+  readonly correlationId?: string | undefined;
+}
+
+export type ClientDiagnosticWriter = (message: string, meta?: ClientDiagnosticMeta) => void;
+
+interface PendingDiagnostic {
+  readonly message: string;
+  readonly meta?: ClientDiagnosticMeta | undefined;
+}
 
 // Bounded on purpose: a failing poll loop can raise a diagnostic every tick while the BFF restarts,
 // and an unbounded pre-transport buffer would grow without limit in exactly that case. The oldest
 // records are dropped first — a storm's later entries describe the same fault as its first.
 const PENDING_LIMIT = 100;
 
-const pending: string[] = [];
+const pending: PendingDiagnostic[] = [];
 
-function bufferUntilTransportArrives(message: string): void {
-  pending.push(message);
+function bufferUntilTransportArrives(message: string, meta?: ClientDiagnosticMeta): void {
+  pending.push({ message, meta });
   if (pending.length > PENDING_LIMIT) pending.shift();
 }
 
@@ -40,10 +55,13 @@ let writer: ClientDiagnosticWriter = bufferUntilTransportArrives;
  * Report a bounded, already-redacted operator diagnostic.
  *
  * `message` must contain only counts, statuses, closed identifiers and error classes — never a raw
- * error, a file path, a URL with a query string, or anything the user typed.
+ * error, a file path, a URL with a query string, or anything the user typed. `meta.correlationId`,
+ * when supplied, must be the ORIGINAL failed request's id (e.g. a caught `ApiError`'s
+ * `.correlationId`) — never this report's own; a transport re-validates its shape independently
+ * before trusting it for anything (never assume a caller-supplied value is well-formed).
  */
-export function reportClientDiagnostic(message: string): void {
-  writer(message);
+export function reportClientDiagnostic(message: string, meta?: ClientDiagnosticMeta): void {
+  writer(message, meta);
 }
 
 /**
@@ -56,7 +74,7 @@ export function setClientDiagnosticWriter(next: ClientDiagnosticWriter): void {
   writer = next;
   if (pending.length === 0) return;
   const buffered = pending.splice(0, pending.length);
-  for (const message of buffered) next(message);
+  for (const record of buffered) next(record.message, record.meta);
 }
 
 /** Restore the buffering default and discard anything held. Tests use this; product code does not. */

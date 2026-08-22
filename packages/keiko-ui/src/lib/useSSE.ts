@@ -6,6 +6,7 @@
  */
 
 import { useEffect, useRef, useState } from "react";
+import { reportClientDiagnostic } from "./client-diagnostics";
 import { createSameOriginApiEventSource } from "./safe-event-source";
 import { secureRandomInt } from "./secure-random";
 import { TERMINAL_EVENT_TYPES, type HarnessEvent, type SseStatus } from "./types";
@@ -14,6 +15,26 @@ const MAX_VISIBLE_SSE_EVENTS = 500;
 const RECONNECT_INITIAL_DELAY_MS = 1000;
 const RECONNECT_MAX_DELAY_MS = 30000;
 const RUN_EVENTS_URL = "/api/runs/events";
+
+// Duplicated identically across the four SSE-consuming modules (sharedEventSource.ts, useSSE.ts,
+// coding-workbench-event-retention.ts, useRelationshipActivityStream.ts) rather than imported from
+// `install-client-diagnostics.ts`, which owns the matching parser: that module installs the app's
+// diagnostic transport as a side effect at import time (by design — see its own header), and none of
+// these four modules' unit tests may pull that side effect (a real `fetch` attempt) into their own
+// module graph. `install-client-diagnostics.ts`'s own test pins the exact convention below against
+// all four call sites so the two ends cannot silently drift apart.
+type SseStreamCloseReason = "connecting" | "closed" | "unknown";
+
+function sseStreamCloseReason(readyState: number | undefined): SseStreamCloseReason {
+  if (readyState === 0) return "connecting";
+  if (readyState === 2) return "closed";
+  return "unknown";
+}
+
+function sseStreamErrorDiagnostic(readyState: number | undefined): string {
+  const readyStateText = readyState === undefined ? "unknown" : String(readyState);
+  return `[keiko] run-events sse stream error (kind=sse-error, readyState=${readyStateText}, reason=${sseStreamCloseReason(readyState)})`;
+}
 
 export interface UseSSEResult {
   events: HarnessEvent[];
@@ -139,6 +160,7 @@ function openSharedEventSource(): void {
   });
 
   sharedEventSource.onerror = () => {
+    reportClientDiagnostic(sseStreamErrorDiagnostic(sharedEventSource?.readyState));
     notifyAll("error", "Stream disconnected. Attempting to reconnect…");
     closeSharedEventSource();
     scheduleReconnect();

@@ -1,9 +1,10 @@
 import { mkdtemp, writeFile, rm, mkdir } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { EventEmitter } from "node:events";
 import { request } from "node:http";
 import type { AddressInfo } from "node:net";
-import type { Server } from "node:http";
+import type { IncomingMessage, Server, ServerResponse } from "node:http";
 import { gunzipSync } from "node:zlib";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type {
@@ -18,11 +19,12 @@ import {
   createRunRegistry,
   type UiHandlerDeps,
 } from "./index.js";
-import { createUiServer, UI_HOST } from "./server.js";
+import { createUiServer, logRequestOnClose, UI_HOST, type RequestLogContext } from "./server.js";
 import type { ServerDiagnosticRecord } from "./diagnostics-log.js";
 import { buildCspHeader } from "./csp.js";
 import { resetWorkspaceStateForTests } from "./workspace-state-handlers.js";
 import type { EditorHotExitStore } from "./editor/hotExitStore.js";
+import { createBufferedServerLogSink, type ServerLogEvent } from "./observability/index.js";
 
 let server: Server;
 let staticRoot: string;
@@ -1097,4 +1099,215 @@ describe("top-level route-error catch (GEN-TEST-MISSING-008, RB-6)", () => {
   // internally rather than re-throwing past `dispatchApi`'s STREAMING short-circuit to the top-level
   // catch — so a mid-stream case cannot be constructed without adding a production test hook, which
   // is out of scope for this test-only change. The headers-not-sent branch above is fully covered.
+});
+
+// Wave 5 (w5-http-request-enrichment, #3233): `logRequestOnClose` reads the matched route pattern,
+// query-parameter NAMES, the response byte count, and an `aborted` flag from a per-request context
+// `dispatchApi`/`serveStatic`/`writeJson` populate as the request is actually resolved, instead of
+// the pre-existing lossy raw-path re-derivation and Node's un-set-by-default `res.statusCode`. Every
+// field asserted here did not exist on the pre-fix http-request line at all, so each assertion below
+// fails before this wave's `server.ts` change and passes after it.
+describe("activity log: http-request line enrichment (Wave 5, w5-http-request-enrichment)", () => {
+  async function waitForActivityLogEvent(
+    sink: ReturnType<typeof createBufferedServerLogSink>,
+    timeoutMs = 2000,
+  ): Promise<ServerLogEvent> {
+    const deadline = Date.now() + timeoutMs;
+    while (sink.events.length === 0) {
+      if (Date.now() > deadline) {
+        throw new Error("timed out waiting for an activity log event");
+      }
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    }
+    const [event] = sink.events;
+    if (event === undefined) throw new Error("unreachable: length checked above");
+    return event;
+  }
+
+  async function startWithActivityLog(): Promise<ReturnType<typeof createBufferedServerLogSink>> {
+    const sink = createBufferedServerLogSink();
+    await closeServer();
+    server = createUiServer({ staticRoot, csp: buildCspHeader([]), port, activityLog: sink });
+    await new Promise<void>((res) => server.listen(port, UI_HOST, res));
+    return sink;
+  }
+
+  it("uses the exact matched RouteDefinition pattern, not a raw-path guess that can misfire on a customer id shaped like a route word", async () => {
+    const sink = await startWithActivityLog();
+    // "explain" is itself a literal segment of a DIFFERENT route (/api/relationships/:id/explain),
+    // so a relationship id that happens to be literally "explain" is exactly the case the old
+    // raw-path auto-template heuristic could misclassify as that literal segment instead of a
+    // customer-supplied :id. The real match is unambiguous: only /api/relationships/:id (3
+    // segments) matches this 3-segment path at all.
+    await fetchRaw("/api/relationships/explain");
+    const event = await waitForActivityLogEvent(sink);
+
+    expect(event.category).toBe("http");
+    expect(event.op).toBe("request");
+    expect(event.extra?.routeTemplate).toBe("/api/relationships/:id");
+  });
+
+  it("falls back to the route-template reduction of the raw path for an unmatched request", async () => {
+    const sink = await startWithActivityLog();
+    await fetchRaw("/api/this-route-does-not-exist");
+    const event = await waitForActivityLogEvent(sink);
+
+    expect(event.status).toBe(404);
+    expect(event.extra?.routeTemplate).toBe("/api/{id}");
+  });
+
+  it("collects distinct query-parameter NAMES only, sorted, and never a value", async () => {
+    const sink = await startWithActivityLog();
+    await fetchRaw("/api/health?foo=1&bar=2");
+    const event = await waitForActivityLogEvent(sink);
+
+    expect(event.extra?.queryParamNames).toEqual(["bar", "foo"]);
+    const serialized = JSON.stringify(event.extra);
+    expect(serialized).not.toContain("=1");
+    expect(serialized).not.toContain("=2");
+  });
+
+  it("drops an over-length query-parameter name and counts it instead of logging it", async () => {
+    const sink = await startWithActivityLog();
+    const longName = "n".repeat(200);
+    await fetchRaw(`/api/health?${longName}=1&normal=2`);
+    const event = await waitForActivityLogEvent(sink);
+
+    expect(event.extra?.queryParamNames).toEqual(["normal"]);
+    expect(event.extra?.queryParamDroppedCount).toBe(1);
+    expect(JSON.stringify(event.extra)).not.toContain(longName);
+  });
+
+  it("records writeJson's own computed response byte count", async () => {
+    const sink = await startWithActivityLog();
+    const res = await fetchRaw("/api/health");
+    const expectedBytes = Buffer.byteLength(res.text, "utf8");
+    const event = await waitForActivityLogEvent(sink);
+
+    expect(event.extra?.responseBytes).toBe(expectedBytes);
+    expect(event.extra?.responseBytes).toBeGreaterThan(0);
+  });
+
+  it("reports aborted:false and the real status for a normally completed request", async () => {
+    const sink = await startWithActivityLog();
+    await fetchRaw("/api/health");
+    const event = await waitForActivityLogEvent(sink);
+
+    expect(event.extra?.aborted).toBe(false);
+    expect(event.status).toBe(200);
+  });
+});
+
+// Direct unit coverage of `logRequestOnClose` itself, using the same fake req/res EventEmitter
+// doubles `request-cancellation.test.ts` already uses for `requestAlreadyClosed` — deterministic,
+// and independent of real socket teardown timing (which real-HTTP `close` timing cannot reliably
+// force into the "aborted before any write" shape below).
+describe("logRequestOnClose", () => {
+  interface RequestDouble extends EventEmitter {
+    complete: boolean;
+    destroyed: boolean;
+    url?: string;
+    method?: string;
+  }
+
+  interface ResponseDouble extends EventEmitter {
+    closed: boolean;
+    destroyed: boolean;
+    writableEnded: boolean;
+    headersSent: boolean;
+    statusCode: number;
+  }
+
+  function doubles(): { readonly req: RequestDouble; readonly res: ResponseDouble } {
+    const req = Object.assign(new EventEmitter(), {
+      complete: false,
+      destroyed: false,
+      url: "/api/health",
+      method: "GET",
+    });
+    const res = Object.assign(new EventEmitter(), {
+      closed: false,
+      destroyed: false,
+      writableEnded: false,
+      headersSent: false,
+      statusCode: 200,
+    });
+    return { req, res };
+  }
+
+  it("logs aborted:true and status 0 when the connection is gone and nothing was ever written", () => {
+    const { req, res } = doubles();
+    const sink = createBufferedServerLogSink();
+    const context: RequestLogContext = {};
+    logRequestOnClose(
+      req as unknown as IncomingMessage,
+      res as unknown as ServerResponse,
+      "corr-aborted",
+      sink,
+      context,
+    );
+
+    // The client vanished mid-handler: the response socket is destroyed, headers were never sent,
+    // so `res.statusCode` is still Node's construction-time default of 200.
+    res.destroyed = true;
+    res.emit("close");
+
+    expect(sink.events).toHaveLength(1);
+    const [event] = sink.events;
+    expect(event?.extra?.aborted).toBe(true);
+    expect(event?.status).toBe(0);
+  });
+
+  it("does not report status 0 once headers were actually sent, even if the connection later drops", () => {
+    const { req, res } = doubles();
+    const sink = createBufferedServerLogSink();
+    const context: RequestLogContext = {};
+    logRequestOnClose(
+      req as unknown as IncomingMessage,
+      res as unknown as ServerResponse,
+      "corr-partial",
+      sink,
+      context,
+    );
+
+    res.headersSent = true;
+    res.statusCode = 200;
+    res.destroyed = true;
+    res.emit("close");
+
+    const [event] = sink.events;
+    expect(event?.extra?.aborted).toBe(true);
+    expect(event?.status).toBe(200);
+  });
+
+  it("surfaces routeTemplate, queryParamNames, queryParamDroppedCount and responseBytes from the request context", () => {
+    const { req, res } = doubles();
+    const sink = createBufferedServerLogSink();
+    const context: RequestLogContext = {
+      routeTemplate: "/api/memory/:id",
+      queryParamNames: ["bar", "foo"],
+      queryParamDroppedCount: 2,
+      responseBytes: 42,
+    };
+    logRequestOnClose(
+      req as unknown as IncomingMessage,
+      res as unknown as ServerResponse,
+      "corr-context",
+      sink,
+      context,
+    );
+
+    res.headersSent = true;
+    res.writableEnded = true;
+    res.emit("close");
+
+    const [event] = sink.events;
+    expect(event?.extra).toMatchObject({
+      routeTemplate: "/api/memory/:id",
+      queryParamNames: ["bar", "foo"],
+      queryParamDroppedCount: 2,
+      responseBytes: 42,
+      aborted: false,
+    });
+  });
 });

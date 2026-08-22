@@ -79,6 +79,7 @@ import {
   type MemoryCaptureDecision,
 } from "./memory-capture-projection.js";
 import { refreshMemoryEmbeddingAfterBodyEdit } from "./memory-embedding.js";
+import { readBoundedRequestBody, RequestBodyTooLargeError } from "./bounded-request-body.js";
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -243,45 +244,18 @@ function parseScope(raw: unknown): MemoryScope | RouteResult {
 }
 
 // ─── Body reading ──────────────────────────────────────────────────────────────
+// Consolidated onto the shared bounded reader (#2902 w5-sse-counters) — the caps below are
+// unchanged, only the ad hoc listener wiring is gone.
 
-class BodyTooLargeError extends Error {
-  public constructor() {
-    super("request body too large");
-    this.name = "BodyTooLargeError";
-  }
-}
-
-function readBody(req: IncomingMessage): Promise<string> {
-  return new Promise<string>((resolve, reject) => {
-    const chunks: Buffer[] = [];
-    let total = 0;
-    let capped = false;
-    req.on("data", (chunk: Buffer) => {
-      total += chunk.length;
-      if (total > MAX_MEMORY_BODY_BYTES) {
-        if (!capped) {
-          capped = true;
-          chunks.length = 0;
-          reject(new BodyTooLargeError());
-          req.resume();
-        }
-        return;
-      }
-      chunks.push(chunk);
-    });
-    req.on("end", () => {
-      if (!capped) resolve(Buffer.concat(chunks).toString("utf8"));
-    });
-    req.on("error", reject);
-  });
-}
-
-async function readJsonBody(req: IncomingMessage): Promise<Record<string, unknown> | RouteResult> {
+async function readJsonBody(
+  req: IncomingMessage,
+  correlationId?: string,
+): Promise<Record<string, unknown> | RouteResult> {
   let raw: string;
   try {
-    raw = await readBody(req);
+    raw = await readBoundedRequestBody(req, MAX_MEMORY_BODY_BYTES, undefined, correlationId);
   } catch (err) {
-    if (err instanceof BodyTooLargeError) {
+    if (err instanceof RequestBodyTooLargeError) {
       return { status: 413, body: errorBody("PAYLOAD_TOO_LARGE", "Request body too large.") };
     }
     throw err;
@@ -887,7 +861,7 @@ function memoryIdFromParams(ctx: RouteContext): MemoryId | RouteResult {
 }
 
 async function readEditRouteInput(ctx: RouteContext): Promise<EditInput | RouteResult> {
-  const body = await readJsonBody(ctx.req);
+  const body = await readJsonBody(ctx.req, ctx.correlationId);
   if (isRouteResult(body)) return body;
   return parseEditInput(body);
 }
@@ -1020,7 +994,7 @@ export async function handleArchiveMemory(
     return { status: 400, body: errorBody("BAD_REQUEST", "Memory id is required.") };
   }
 
-  const body = await readJsonBody(ctx.req);
+  const body = await readJsonBody(ctx.req, ctx.correlationId);
   if (isRouteResult(body)) return body;
 
   const rawReason = typeof body.reason === "string" ? body.reason : undefined;
@@ -1338,7 +1312,7 @@ export async function handleForgetMemory(
     return { status: 400, body: errorBody("BAD_REQUEST", "Memory id is required.") };
   }
 
-  const body = await readJsonBody(ctx.req);
+  const body = await readJsonBody(ctx.req, ctx.correlationId);
   if (isRouteResult(body)) return body;
 
   const input = parseDestructiveInput(body);
@@ -1367,7 +1341,7 @@ export async function handleForgetMemories(
   const vault = resolveVault(deps);
   if (isRouteResult(vault)) return vault;
 
-  const body = await readJsonBody(ctx.req);
+  const body = await readJsonBody(ctx.req, ctx.correlationId);
   if (isRouteResult(body)) return body;
 
   const input = parseForgetSelectionInput(body);
@@ -1399,7 +1373,7 @@ export async function handleDeleteMemory(
     return { status: 400, body: errorBody("BAD_REQUEST", "Memory id is required.") };
   }
 
-  const body = await readJsonBody(ctx.req);
+  const body = await readJsonBody(ctx.req, ctx.correlationId);
   if (isRouteResult(body)) return body;
 
   const input = parseDestructiveInput(body);
@@ -1644,7 +1618,7 @@ export async function handleResolveMemoryConflict(
   const vault = resolveVault(deps);
   if (isRouteResult(vault)) return vault;
 
-  const body = await readJsonBody(ctx.req);
+  const body = await readJsonBody(ctx.req, ctx.correlationId);
   if (isRouteResult(body)) return body;
 
   const input = parseConflictResolutionInput(body);
@@ -1779,7 +1753,7 @@ export async function handleCorrectMemory(
     return { status: 400, body: errorBody("BAD_REQUEST", "Memory id is required.") };
   }
 
-  const body = await readJsonBody(ctx.req);
+  const body = await readJsonBody(ctx.req, ctx.correlationId);
   if (isRouteResult(body)) return body;
 
   const input = parseCorrectInput(body);
@@ -2009,7 +1983,7 @@ export async function handleAcceptMemoryProposal(
   if (id === undefined || id.length === 0) {
     return { status: 400, body: errorBody("BAD_REQUEST", "Memory id is required.") };
   }
-  const body = await readJsonBody(ctx.req);
+  const body = await readJsonBody(ctx.req, ctx.correlationId);
   if (isRouteResult(body)) return body;
   const bodyOverride = parseAcceptBody(body, id as MemoryId, deps);
   if (isRouteResult(bodyOverride)) return bodyOverride;
@@ -2066,7 +2040,7 @@ export async function handleRejectMemoryProposal(
     return { status: 400, body: errorBody("BAD_REQUEST", "Memory id is required.") };
   }
 
-  const body = await readJsonBody(ctx.req);
+  const body = await readJsonBody(ctx.req, ctx.correlationId);
   if (isRouteResult(body)) return body;
 
   const { reason } = parseRejectInput(body);

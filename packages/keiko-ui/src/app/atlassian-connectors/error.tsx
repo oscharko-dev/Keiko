@@ -11,7 +11,7 @@
 
 import { useEffect, type ReactNode } from "react";
 import { useTranslate } from "@/lib/i18n";
-import { clientErrorSummary } from "@/lib/client-error-summary";
+import { clientErrorSummary, correlationIdOf } from "@/lib/client-error-summary";
 import { reportClientDiagnostic } from "@/lib/client-diagnostics";
 
 export default function AtlassianConnectorsRouteError({
@@ -28,6 +28,7 @@ export default function AtlassianConnectorsRouteError({
     // stay diagnosable from the console even though the UI only shows the recovery surface.
     reportClientDiagnostic(
       `[keiko] atlassian-connectors route crashed: ${clientErrorSummary(error)}`,
+      { correlationId: correlationIdOf(error) },
     );
   }, [error]);
 

@@ -9,7 +9,12 @@ import type { ServerResponse } from "node:http";
 import type { StreamEvent } from "./sink.js";
 import type { Redactor } from "./deps.js";
 import { redactedEventJson } from "./sse-frame-cache.js";
-import { writeOrDestroy, type SseBackpressureSignal } from "./sse-write.js";
+import {
+  markSseStreamBackpressureKilled,
+  recordSseStreamFrame,
+  writeOrDestroy,
+  type SseBackpressureSignal,
+} from "./sse-write.js";
 
 /**
  * Optional protective wiring for the heartbeat. A heartbeat can be the FIRST write rejected on an
@@ -20,11 +25,18 @@ import { writeOrDestroy, type SseBackpressureSignal } from "./sse-write.js";
 export interface SseHeartbeatBackpressure {
   readonly controller: AbortController;
   readonly onBackpressure?: ((signal: SseBackpressureSignal) => void) | undefined;
+  // Attached to this stream's terminal `sse.stream.closed` line (#2902 w5-sse-counters) when the
+  // caller already holds the request-scoped correlation id.
+  readonly correlationId?: string | undefined;
 }
 
 function writeOrDestroyLegacy(res: ServerResponse, frame: string): boolean {
+  recordSseStreamFrame(res, frame);
   const accepted = res.write(frame);
-  if (!accepted) res.destroy();
+  if (!accepted) {
+    markSseStreamBackpressureKilled(res);
+    res.destroy();
+  }
   return accepted;
 }
 
@@ -47,7 +59,13 @@ export function startSseHeartbeat(
   const writeFrame = (frame: string): boolean =>
     backpressure === undefined
       ? writeOrDestroyLegacy(res, frame)
-      : writeOrDestroy(res, frame, backpressure.controller, backpressure.onBackpressure);
+      : writeOrDestroy(
+          res,
+          frame,
+          backpressure.controller,
+          backpressure.onBackpressure,
+          backpressure.correlationId,
+        );
   const timer = setInterval(() => {
     if (res.destroyed || res.writableEnded) return;
     if (!writeFrame(": keep-alive\n\n")) {
@@ -94,7 +112,9 @@ export function readyMessage(): string {
 // Writes one framed event to the response stream. Returns Node's backpressure signal so the caller can
 // detach a slow client instead of letting the HTTP response buffer grow without bound.
 export function writeEvent(res: ServerResponse, event: StreamEvent, redactor: Redactor): boolean {
-  return res.write(frameEvent(event, redactor));
+  const frame = frameEvent(event, redactor);
+  recordSseStreamFrame(res, frame);
+  return res.write(frame);
 }
 
 export function writeMessageEvent(
@@ -102,5 +122,7 @@ export function writeMessageEvent(
   event: StreamEvent,
   redactor: Redactor,
 ): boolean {
-  return res.write(frameMessageEvent(event, redactor));
+  const frame = frameMessageEvent(event, redactor);
+  recordSseStreamFrame(res, frame);
+  return res.write(frame);
 }

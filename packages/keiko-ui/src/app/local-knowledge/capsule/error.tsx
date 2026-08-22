@@ -11,7 +11,7 @@
 
 import { useEffect, type ReactNode } from "react";
 import { useLocalKnowledgeTranslate as useTranslate } from "../local-knowledge-i18n";
-import { clientErrorSummary } from "@/lib/client-error-summary";
+import { clientErrorSummary, correlationIdOf } from "@/lib/client-error-summary";
 import { reportClientDiagnostic } from "@/lib/client-diagnostics";
 
 export default function CapsuleDetailRouteError({
@@ -28,6 +28,7 @@ export default function CapsuleDetailRouteError({
     // stay diagnosable from the console even though the UI only shows the recovery surface.
     reportClientDiagnostic(
       `[keiko] local-knowledge capsule route crashed: ${clientErrorSummary(error)}`,
+      { correlationId: correlationIdOf(error) },
     );
   }, [error]);
 

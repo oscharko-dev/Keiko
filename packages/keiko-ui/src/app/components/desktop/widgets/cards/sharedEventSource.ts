@@ -6,6 +6,27 @@ import {
   subscribeBrowserStreamCapacity,
 } from "../../../../../lib/browser-stream-capacity";
 import { secureRandomInt } from "../../../../../lib/secure-random";
+import { reportClientDiagnostic } from "../../../../../lib/client-diagnostics";
+
+// Duplicated identically across the four SSE-consuming modules (sharedEventSource.ts, useSSE.ts,
+// coding-workbench-event-retention.ts, useRelationshipActivityStream.ts) rather than imported from
+// `install-client-diagnostics.ts`, which owns the matching parser: that module installs the app's
+// diagnostic transport as a side effect at import time (by design — see its own header), and none of
+// these four modules' unit tests may pull that side effect (a real `fetch` attempt) into their own
+// module graph. `install-client-diagnostics.ts`'s own test pins the exact convention below against
+// all four call sites so the two ends cannot silently drift apart.
+type SseStreamCloseReason = "connecting" | "closed" | "unknown";
+
+function sseStreamCloseReason(readyState: number | undefined): SseStreamCloseReason {
+  if (readyState === 0) return "connecting";
+  if (readyState === 2) return "closed";
+  return "unknown";
+}
+
+function sseStreamErrorDiagnostic(readyState: number | undefined): string {
+  const readyStateText = readyState === undefined ? "unknown" : String(readyState);
+  return `[keiko] shared-event-source sse stream error (kind=sse-error, readyState=${readyStateText}, reason=${sseStreamCloseReason(readyState)})`;
+}
 
 type SharedEventListener = (event: MessageEvent<string>) => void;
 
@@ -140,6 +161,7 @@ function openEntrySource(entry: SharedEventSourceEntry): void {
     entry.reconnectAttempts = 0;
   };
   source.onerror = () => {
+    reportClientDiagnostic(sseStreamErrorDiagnostic(source.readyState));
     closeEntrySource(entry);
     scheduleReconnect(entry);
   };
