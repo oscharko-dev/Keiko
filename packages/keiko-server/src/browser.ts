@@ -260,12 +260,14 @@ export function handleBrowserEvents(ctx: RouteContext, deps: UiHandlerDeps): Han
   if (!guard.hasSession(sessionId)) {
     return { status: 404, body: errorBody("SESSION_NOT_FOUND", "Browser session not found.") };
   }
+  // Threads the request's own correlation id (ADR-0173 D5 / g12) so a later backpressure kill
+  // joins back to the request that opened this stream instead of a disconnected mint.
   openBrowserSseStream(
     ctx.res,
     guard,
     sessionId,
     deps.redactor,
-    sseBackpressureReporter(deps, "browser"),
+    sseBackpressureReporter(deps, "browser", ctx.correlationId),
     ctx.correlationId,
   );
   ctx.req.on("close", () => {

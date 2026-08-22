@@ -6,6 +6,7 @@
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type {
+  GatewayCallRequest,
   GatewayRequest,
   ModelCapability,
   NormalizedResponse,
@@ -844,6 +845,18 @@ describe("createQiGenerationPort.generate — determinism-first parameters", () 
     expect(result.modelParameters?.temperature).toBe(0);
     expect(result.modelParameters?.topP).toBe(1);
     expect(result.modelParameters?.responseFormatEnforced).toBe(false);
+  });
+
+  // ADR-0173 D5: the run id supplied to createQiGenerationPort must reach the model.call so a
+  // gateway retry/circuit-breaker line for this generation stage joins the run's other lines.
+  it("stamps the supplied correlation id into the GatewayCallRequest.logContext", async () => {
+    const { deps, calls } = depsFor("chat-model-1");
+    const port = createQiGenerationPort(deps, "chat-model-1", "cid-qi-generation-000001");
+    await port.generate(args());
+    expect(calls).toHaveLength(1);
+    expect((calls[0]?.request as GatewayCallRequest | undefined)?.logContext?.correlationId).toBe(
+      "cid-qi-generation-000001",
+    );
   });
 
   it("does not send a seed when the model does not advertise seeding support", async () => {

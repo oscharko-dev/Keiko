@@ -17,7 +17,8 @@ import {
   type RouteContext,
   type RouteResult,
 } from "./routes.js";
-import { emitServerDiagnostic, serverDiagnosticFromError } from "./diagnostics-log.js";
+import { emitGatewayErrorDiagnostic } from "./gateway-error-diagnostic.js";
+import type { ConversationCompactionOutcome } from "./conversation-compaction.js";
 import type { UiHandlerDeps } from "./deps.js";
 import type { ChatMessage } from "./store/index.js";
 import { ensureOnDemandConversationReadiness } from "./gateway-readiness.js";
@@ -116,15 +117,12 @@ function reportStreamIteratorCleanupFailure(
   deps: UiHandlerDeps,
   error: unknown,
 ): void {
-  emitServerDiagnostic(
-    deps.diagnostics,
-    serverDiagnosticFromError({
-      correlationId: ctx.correlationId ?? "unknown",
-      operation: "POST /api/desktop/chat/stream",
-      source: "chat.stream.iterator-cleanup",
-      error,
-      redact: (message) => String(deps.redactor(message)),
-    }),
+  emitGatewayErrorDiagnostic(
+    deps,
+    error,
+    ctx.correlationId,
+    "POST /api/desktop/chat/stream",
+    "chat.stream.iterator-cleanup",
   );
 }
 
@@ -265,15 +263,12 @@ function errorEvent(
   deps: UiHandlerDeps,
   correlationId: string | undefined,
 ): { code: string; message: string; correlationId?: string } {
-  emitServerDiagnostic(
-    deps.diagnostics,
-    serverDiagnosticFromError({
-      correlationId: correlationId ?? "unknown",
-      operation: "POST /api/desktop/chat/stream",
-      source: "chat.stream",
-      error,
-      redact: (message) => String(deps.redactor(message)),
-    }),
+  emitGatewayErrorDiagnostic(
+    deps,
+    error,
+    correlationId,
+    "POST /api/desktop/chat/stream",
+    "chat.stream",
   );
   const withId = (payload: {
     code: string;
@@ -285,7 +280,9 @@ function errorEvent(
   } => (correlationId === undefined ? payload : { ...payload, correlationId });
   let result;
   try {
-    result = desktopChatErrorResult(error, deps);
+    // emitDiagnostic: false — the diagnostic for this exact error was already emitted above; this
+    // call is reused purely for its redacted code/message mapping (#154), not as a second response.
+    result = desktopChatErrorResult(error, deps, correlationId, false);
   } catch {
     return withId({ code: "INTERNAL", message: "An unexpected error occurred." });
   }
@@ -315,7 +312,7 @@ async function streamAndPersist(
   admitted: AdmittedDesktopChatStream,
   controller: AbortController,
 ): Promise<void> {
-  const { prepared, callStream, userMessage, gatewayTurn, messageCountBeforeTurn } = admitted;
+  const { prepared, callStream, userMessage, gatewayTurn } = admitted;
   const { request, modelId, memoryContext } = prepared;
   const startedAt = Date.now();
   const memory = admitted.memory ?? (await resolveMemory(deps, request, memoryContext));
@@ -329,7 +326,10 @@ async function streamAndPersist(
     modelId,
     buildGatewayAssembly(deps, request, memory, modelId, gatewayTurn),
   );
-  const stream = callStream({ modelId, messages: assembly.messages }, controller.signal);
+  const stream = callStream(
+    { modelId, messages: assembly.messages, logContext: { correlationId: ctx.correlationId } },
+    controller.signal,
+  );
   const termination: StreamTermination = { backpressure: false };
   const turn = await streamConversation(ctx, deps, stream, controller, termination);
   if (turn === undefined || requestIsAborted(controller.signal)) {
@@ -350,13 +350,28 @@ async function streamAndPersist(
     failCancelledStreamTurn(ctx, deps, request, true);
     return;
   }
+  finalizeStreamedTurn(ctx, deps, payload, assembly.compaction, admitted, startedAt);
+}
+
+// Split out of streamAndPersist to keep it within the line budget: records the compaction evidence
+// for this turn and writes the terminal SSE `done` frame the client is waiting on.
+function finalizeStreamedTurn(
+  ctx: RouteContext,
+  deps: UiHandlerDeps,
+  payload: DesktopChatSendResponse,
+  compaction: ConversationCompactionOutcome["compaction"],
+  admitted: AdmittedDesktopChatStream,
+  startedAt: number,
+): void {
+  const { prepared, gatewayTurn, messageCountBeforeTurn } = admitted;
   recordChatCompaction(deps, {
-    compaction: assembly.compaction,
-    request,
-    modelId,
+    compaction,
+    request: prepared.request,
+    modelId: prepared.modelId,
     messageCount: messageCountBeforeTurn,
     startedAt,
     historyPrefix: gatewayHistoryPrefix(gatewayTurn),
+    correlationId: ctx.correlationId,
   });
   writeTerminalFrame(ctx, sseMessage({ event: "done", data: payload }));
 }
@@ -372,7 +387,11 @@ export async function handleSendDesktopChatStream(
     if (activeChatStreams >= maxActiveChatStreams()) {
       return {
         status: 429,
-        body: errorBody("TOO_MANY_STREAMS", "Too many concurrent chat streams; retry buffered."),
+        body: errorBody(
+          "TOO_MANY_STREAMS",
+          "Too many concurrent chat streams; retry buffered.",
+          ctx.correlationId,
+        ),
       };
     }
     activeChatStreams += 1;
@@ -398,10 +417,14 @@ type DesktopChatStreamPreparation =
   | { readonly kind: "outcome"; readonly outcome: HandlerOutcome }
   | { readonly kind: "replay"; readonly response: DesktopChatSendResponse };
 
-function streamingUnsupportedOutcome(): RouteResult {
+function streamingUnsupportedOutcome(correlationId: string | undefined): RouteResult {
   return {
     status: 400,
-    body: errorBody("STREAMING_UNSUPPORTED", "Streaming is not available for this model."),
+    body: errorBody(
+      "STREAMING_UNSUPPORTED",
+      "Streaming is not available for this model.",
+      correlationId,
+    ),
   };
 }
 
@@ -454,6 +477,7 @@ function resolveDesktopChatStreamCall(
   prepared: PreparedDesktopChatSend,
   executionAdmission: DesktopChatExecutionAdmission,
   deps: UiHandlerDeps,
+  correlationId: string | undefined,
 ): StreamCall | RouteResult {
   const invalidExecution = validateDesktopChatProviderBoundary(
     prepared.modelId,
@@ -463,7 +487,7 @@ function resolveDesktopChatStreamCall(
   if (invalidExecution !== undefined) return invalidExecution;
   const model = deps.modelPortFactory(prepared.modelId);
   return model?.callStream === undefined
-    ? streamingUnsupportedOutcome()
+    ? streamingUnsupportedOutcome(correlationId)
     : model.callStream.bind(model);
 }
 
@@ -529,6 +553,7 @@ interface DesktopChatStreamExecutionPreflight {
 function preflightDesktopChatStreamExecution(
   prepared: PreparedDesktopChatSend,
   deps: UiHandlerDeps,
+  correlationId: string | undefined,
 ): DesktopChatStreamExecutionPreflight | RouteResult {
   const legacyExecutionAdmission =
     prepared.request.clientTurnId === undefined
@@ -548,7 +573,7 @@ function preflightDesktopChatStreamExecution(
   const probed =
     legacyExecutionAdmission === undefined
       ? undefined
-      : resolveDesktopChatStreamCall(prepared, legacyExecutionAdmission, deps);
+      : resolveDesktopChatStreamCall(prepared, legacyExecutionAdmission, deps, correlationId);
   if (probed !== undefined && typeof probed !== "function") return probed;
   return {
     legacyExecutionAdmission,
@@ -565,6 +590,7 @@ async function prepareDesktopChatProviderStream(
   legacyCall: StreamCall | undefined,
   controller: AbortController,
   admitted: AdmittedTurnHandle,
+  correlationId: string | undefined,
 ): Promise<Pick<AdmittedDesktopChatStream, "callStream" | "memory"> | RouteResult> {
   let memory: AdmittedDesktopChatStream["memory"];
   try {
@@ -582,13 +608,14 @@ async function prepareDesktopChatProviderStream(
     if (cancelled) {
       return { status: 499, body: errorBody("REQUEST_CANCELLED", "Request was cancelled.") };
     }
-    return desktopChatErrorResult(error, deps);
+    return desktopChatErrorResult(error, deps, correlationId);
   }
   if (requestIsAborted(controller.signal)) {
     settleRejectedDesktopChatTurn(deps, prepared, admitted, "cancelled");
     return { status: 499, body: errorBody("REQUEST_CANCELLED", "Request was cancelled.") };
   }
-  const callStream = legacyCall ?? resolveDesktopChatStreamCall(prepared, executionAdmission, deps);
+  const callStream =
+    legacyCall ?? resolveDesktopChatStreamCall(prepared, executionAdmission, deps, correlationId);
   if (typeof callStream === "function") return { callStream, memory };
   settleRejectedDesktopChatTurn(deps, prepared, admitted);
   return callStream;
@@ -603,7 +630,7 @@ async function runAdmittedDesktopChatStream(
 ): Promise<HandlerOutcome> {
   const prepared = validateCurrentDesktopChatSend(start.parsed, deps);
   if ("status" in prepared) return prepared;
-  const preflight = preflightDesktopChatStreamExecution(prepared, deps);
+  const preflight = preflightDesktopChatStreamExecution(prepared, deps, ctx.correlationId);
   if ("status" in preflight) return preflight;
   const messageCountBeforeTurn = deps.store.countMessages(prepared.request.chatId);
   const admission = admitDesktopChatTurn(deps, prepared);
@@ -622,6 +649,7 @@ async function runAdmittedDesktopChatStream(
     preflight.legacyCall,
     controller,
     admission,
+    ctx.correlationId,
   );
   if ("status" in provider) return provider;
   const gatewayTurn = captureGatewayTurnSnapshot(deps, prepared.request, admission.userMessage);

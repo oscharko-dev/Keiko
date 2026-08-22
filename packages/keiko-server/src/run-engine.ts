@@ -257,12 +257,15 @@ function cancelWorkflow(controller: AbortController): (reason?: string) => void 
 // run at all — never fail open into an unenforced network:"none" step. A failure is still recorded
 // through the server's single redacted diagnostic sink (no cwd, no raw error text — a content-free
 // error class only) so a probe that starts failing is operator-visible, not silently swallowed.
-export function probeNetworkIsolationSafely(cwd: string): boolean {
+export function probeNetworkIsolationSafely(cwd: string, runId?: string): boolean {
   try {
     return probeNetworkIsolation(cwd).available;
   } catch (error) {
     emitServerDiagnostic(undefined, {
-      correlationId: randomUUID(),
+      // Threads the dispatching run's own id (ADR-0173 D5 / g12) when the caller has one in
+      // scope, rather than a disconnected mint, so this probe failure joins the SAME run's other
+      // diagnostics.
+      correlationId: runId ?? randomUUID(),
       timestamp: new Date().toISOString(),
       operation: "workflow.network-isolation-probe",
       source: "run-engine.probeNetworkIsolationSafely",
@@ -276,36 +279,47 @@ export function probeNetworkIsolationSafely(cwd: string): boolean {
 // Starts the underlying run for a workflow request: an AbortController drives cancellation (the
 // workflow honours deps.signal), and the BFF-owned runId is injected as the workflow idSource so the
 // streamed events carry the same runId the registry/SSE key on.
+// Split out of dispatchWorkflow purely to keep that function's line count under the repository
+// limit as the probe-correlation threading grew it; behavior is unchanged from before the split.
+function dispatchWorkflowMemoryDeps(
+  ctx: EngineContext,
+  runId: string,
+): { readonly memoryPort?: ReturnType<typeof createWorkflowMemoryPort> } {
+  if (ctx.memoryVault === undefined || ctx.evidence === undefined) return {};
+  return {
+    memoryPort: createWorkflowMemoryPort({
+      vault: ctx.memoryVault,
+      evidenceStore: ctx.evidence.store,
+      runId,
+      redactString: ctx.memoryAuditRedactString ?? ((input: string): string => input),
+      ...(ctx.memoryCustomerIdentifierMatchers === undefined
+        ? {}
+        : { customerIdentifierMatchers: ctx.memoryCustomerIdentifierMatchers }),
+    }),
+  };
+}
+
 function dispatchWorkflow(ctx: EngineContext, sink: QueueEventSink, runId: string): Dispatched {
   const controller = new AbortController();
   const ports = governedWorkflowPorts(ctx);
+  // Probe THIS host for an enforcing egress backend and hand the answer to the verify stage, the
+  // same probe-then-enforce composition the editor verification path uses (ADR-0043 D8). Threads
+  // this dispatch's own runId (ADR-0173 D5 / g12) into a probe-failure diagnostic.
+  const verificationEnforcedNetworkAvailable = probeNetworkIsolationSafely(
+    workspaceRoot(ctx.request),
+    runId,
+  );
   const commonDeps = {
     model: ports.model,
     ...(ports.spawn === undefined ? {} : { spawn: ports.spawn }),
-    // Probe THIS host for an enforcing egress backend and hand the answer to the verify stage, the
-    // same probe-then-enforce composition the editor verification path uses. Without it the stage
-    // could only ever see "no backend available" and had to choose between denying every
-    // network:"none" step and running model-authored code with inherited network (ADR-0043 D8).
-    verificationEnforcedNetworkAvailable: probeNetworkIsolationSafely(workspaceRoot(ctx.request)),
+    verificationEnforcedNetworkAvailable,
     sink,
     signal: controller.signal,
     idSource: (): string => runId,
     ...(ctx.request.governedHandoff === undefined
       ? {}
       : { workflowHandoff: ctx.request.governedHandoff }),
-    ...(ctx.memoryVault !== undefined && ctx.evidence !== undefined
-      ? {
-          memoryPort: createWorkflowMemoryPort({
-            vault: ctx.memoryVault,
-            evidenceStore: ctx.evidence.store,
-            runId,
-            redactString: ctx.memoryAuditRedactString ?? ((input: string): string => input),
-            ...(ctx.memoryCustomerIdentifierMatchers === undefined
-              ? {}
-              : { customerIdentifierMatchers: ctx.memoryCustomerIdentifierMatchers }),
-          }),
-        }
-      : {}),
+    ...dispatchWorkflowMemoryDeps(ctx, runId),
   };
   if (ctx.request.kind === "unit-tests") {
     const result = generateUnitTests(unitTestInput(ctx.request), commonDeps).then((report) => ({
@@ -649,6 +663,10 @@ export async function applyRun(
   modelId: string,
   redactReport: (value: unknown) => unknown,
   governance?: AgentRunGovernanceBinding,
+  // The originating run's own id (ADR-0173 D5 / g12), threaded into the re-invoked verify stage's
+  // network-isolation probe so a probe failure joins the SAME run's other diagnostics rather than
+  // a disconnected mint.
+  runId?: string,
 ): Promise<unknown> {
   const input = isRecord(snapshot.payload) ? snapshot.payload : {};
   const limitsOverride = snapshot.limits !== undefined ? { limits: snapshot.limits } : {};
@@ -672,7 +690,7 @@ export async function applyRun(
     // Apply replays an accepted snapshot through the same verify stage the initial dispatch used
     // (dispatchWorkflow above); without this, a governed apply's network:"none" steps see no probe
     // result and are denied even on hosts an enforcing backend IS available on (ADR-0043 D8).
-    verificationEnforcedNetworkAvailable: probeNetworkIsolationSafely(root),
+    verificationEnforcedNetworkAvailable: probeNetworkIsolationSafely(root, runId),
     ...(snapshot.governedHandoff === undefined
       ? {}
       : { workflowHandoff: snapshot.governedHandoff }),

@@ -77,6 +77,7 @@ import type {
   VerifiedModelCapabilityFields,
 } from "./deps.js";
 import { currentGatewayConfig, currentGatewayEgressConfig } from "./deps.js";
+import { UNKNOWN_CORRELATION_ID } from "./correlation.js";
 import {
   emitServerDiagnostic,
   serverDiagnosticFromError,
@@ -1807,6 +1808,7 @@ export async function smokeTestCandidates(
 async function defaultGatewaySetupTester(
   config: GatewayConfig,
   candidateModelIds: readonly string[],
+  correlationId: string | undefined,
 ): Promise<GatewaySetupTestResult> {
   // Wired to the process activity log: first-run setup is where an operator's endpoint is wrong
   // in a way no UI message can name (a proxy that blocks CONNECT, a provider that answers 404 for
@@ -1821,6 +1823,7 @@ async function defaultGatewaySetupTester(
           { role: "system", content: CONVERSATION_SYSTEM_PROMPT },
           { role: "user", content: "Reply with exactly: OK" },
         ],
+        logContext: { correlationId },
       });
     },
     SETUP_SMOKE_CONCURRENCY,
@@ -1828,7 +1831,10 @@ async function defaultGatewaySetupTester(
   const responseFormatModelIds = await passingCandidates(
     testedModelIds,
     async (modelId) => {
-      const response = await gateway.chat(buildQiJudgePreflightRequest(modelId));
+      const response = await gateway.chat({
+        ...buildQiJudgePreflightRequest(modelId),
+        logContext: { correlationId },
+      });
       if (tryParseJudgeVerdict(response.content) === null) {
         throw new Error("response format unsupported");
       }
@@ -1913,8 +1919,18 @@ function gatewayEmbeddingProbe(deps: UiHandlerDeps): GatewayEmbeddingProbe {
   return deps.gatewayEmbeddingProbe ?? defaultGatewayEmbeddingProbe;
 }
 
-function gatewaySetupTester(deps: UiHandlerDeps): GatewaySetupTester {
-  return deps.gatewaySetupTester ?? defaultGatewaySetupTester;
+// The seam type (UiHandlerDeps["gatewaySetupTester"]) is a fixed 2-arg shape shared by every
+// test override, so the request-scoped correlation id is closed over here rather than added as a
+// 3rd seam parameter — the override contract stays untouched while the real tester still stamps
+// GatewayCallRequest.logContext (ADR-0173 D5).
+function gatewaySetupTester(
+  deps: UiHandlerDeps,
+  correlationId: string | undefined,
+): GatewaySetupTester {
+  const override = deps.gatewaySetupTester;
+  if (override !== undefined) return override;
+  return (config, candidateModelIds) =>
+    defaultGatewaySetupTester(config, candidateModelIds, correlationId);
 }
 
 const FIGMA_ME_ENDPOINT = "https://api.figma.com/v1/me";
@@ -4137,7 +4153,7 @@ function reportSetupVerificationFailure(
   emitServerDiagnostic(
     deps.diagnostics,
     serverDiagnosticFromError({
-      correlationId: correlationId ?? "unknown",
+      correlationId: correlationId ?? UNKNOWN_CORRELATION_ID,
       operation: "POST /api/gateway/setup",
       source,
       error,
@@ -4195,6 +4211,11 @@ interface SetupVerificationInput {
   readonly current: GatewayConfig | undefined;
   /** Operator diagnostic sink; used to surface discovery truncation (KEIKO-0325). */
   readonly diagnostics?: ServerDiagnosticSink | undefined;
+  // The request's own correlation id (ADR-0173 D5 g12), threaded through so a discovery-truncation
+  // or unusable-models diagnostic for THIS setup attempt joins the same trace as the gateway.chat
+  // probe lines `verifySetupCandidate` triggers, instead of minting a disconnected id. Falls back
+  // to a fresh mint only when the request genuinely carried none.
+  readonly correlationId: string | undefined;
 }
 
 interface SetupCandidateModels {
@@ -4617,11 +4638,12 @@ function candidateProbeOptions(
 // construction — a count and a code, never a model id or an endpoint.
 function reportDiscoveryTruncation(
   diagnostics: ServerDiagnosticSink | undefined,
+  correlationId: string | undefined,
   candidateModels: SetupCandidateModels,
 ): void {
   if (candidateModels.truncated !== true) return;
   emitServerDiagnostic(diagnostics, {
-    correlationId: randomUUID(),
+    correlationId: correlationId ?? randomUUID(),
     timestamp: new Date().toISOString(),
     operation: "POST /api/gateway/setup",
     source: "gateway-setup.discovery",
@@ -4706,6 +4728,7 @@ async function admitEmbeddingCandidates(
 // channel stays free of gateway inventory.
 function reportUnusableDiscoveredModels(
   diagnostics: ServerDiagnosticSink | undefined,
+  correlationId: string | undefined,
   unsupported: readonly GatewayUnsupportedDiscoveredModel[],
   admission: EmbeddingAdmission,
 ): void {
@@ -4713,7 +4736,7 @@ function reportUnusableDiscoveredModels(
   const dropped = admission.droppedUnverified.length;
   if (unsupported.length === 0 && retained === 0 && dropped === 0) return;
   emitServerDiagnostic(diagnostics, {
-    correlationId: randomUUID(),
+    correlationId: correlationId ?? randomUUID(),
     timestamp: new Date().toISOString(),
     operation: "POST /api/gateway/setup",
     source: "gateway-setup.discovery",
@@ -4736,7 +4759,7 @@ async function verifySetupCandidate(input: SetupVerificationInput): Promise<Veri
   validateBaseUrl(input.baseUrl, "candidate", input.egress);
   const validationConfig = validationConfigForSetup(input);
   const candidateModels = await candidateModelIdsForSetup(input, validationConfig);
-  reportDiscoveryTruncation(input.diagnostics, candidateModels);
+  reportDiscoveryTruncation(input.diagnostics, input.correlationId, candidateModels);
   const smokeTimeoutMs =
     input.deploymentNames.length > 0
       ? DEPLOYMENT_SMOKE_TIMEOUT_MS
@@ -4755,6 +4778,7 @@ async function verifySetupCandidate(input: SetupVerificationInput): Promise<Veri
   // record of what discovery refused is most valuable for exactly that failed attempt.
   reportUnusableDiscoveredModels(
     input.diagnostics,
+    input.correlationId,
     candidateModels.unsupportedModels ?? [],
     embeddingAdmission,
   );
@@ -5212,6 +5236,7 @@ async function trySetupCandidate(
     figmaAccessToken: request.figmaAccessToken,
     current,
     diagnostics: deps.diagnostics,
+    correlationId: request.correlationId,
   });
   const workflowEligibilityError = validateWorkflowEligibleModelIds(request, verified.config);
   if (workflowEligibilityError !== undefined) return workflowEligibilityError;
@@ -5519,7 +5544,7 @@ async function verifyAndSaveGatewaySetup(
   gatewayConfig: RuntimeGatewayConfig,
 ): Promise<RouteResult> {
   const seams: SetupSeams = {
-    tester: gatewaySetupTester(deps),
+    tester: gatewaySetupTester(deps, request.correlationId),
     embeddingProbe: gatewayEmbeddingProbe(deps),
     discovery: deps.gatewayModelDiscovery ?? defaultGatewayModelDiscovery,
   };

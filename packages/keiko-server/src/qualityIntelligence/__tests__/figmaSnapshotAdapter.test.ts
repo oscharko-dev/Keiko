@@ -11,6 +11,7 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { parseGatewayConfig } from "@oscharko-dev/keiko-model-gateway";
 import type {
+  GatewayCallRequest,
   GatewayRequest,
   ModelCapability,
   NormalizedResponse,
@@ -426,6 +427,47 @@ describe("makeFigmaVisionHintProvider", () => {
       ).resolves.toEqual(["Primary CTA is visually disabled"]);
 
       expectStructuredVisionRequest(seenRequests);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  // ADR-0173 D5: this vision pass has no live HTTP request in scope (a background Figma snapshot
+  // run), so the snapshot run id is the natural correlation key stamped into the vision model's
+  // GatewayCallRequest.logContext.
+  it("stamps the snapshot run id into the vision model gateway call's logContext", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "qi-figma-adapter-vision-logcontext-"));
+    const seenRequests: GatewayRequest[] = [];
+    try {
+      const { loaded, screen } = recordVisionSnapshot(dir);
+      const port: ModelPort = {
+        call: (request) => {
+          seenRequests.push(request);
+          return Promise.resolve(normalizedResponse(JSON.stringify({ hints: [] }), "vision-low"));
+        },
+      };
+      const deps = depsWith({
+        config: configWith([
+          capability("vision-low", { supportsImageInput: true, supportsResponseFormat: true }),
+        ]),
+        configPresent: true,
+        evidenceDir: dir,
+        modelPortFactory: () => port,
+      });
+
+      const provider = makeFigmaVisionHintProvider(deps);
+      await provider({
+        snapshotRunId: loaded.runId,
+        screenId: screen.screenId,
+        image: screen.image,
+        imageRelativePath: screen.image.relativePath,
+        baselineText: "Screen: Login [s1]",
+      });
+
+      expect(seenRequests).toHaveLength(1);
+      expect((seenRequests[0] as GatewayCallRequest | undefined)?.logContext?.correlationId).toBe(
+        loaded.runId,
+      );
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

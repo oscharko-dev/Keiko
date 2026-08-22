@@ -18,7 +18,7 @@ import {
   listConfiguredCapabilities,
   findConfiguredCapability,
 } from "@oscharko-dev/keiko-model-gateway";
-import type { GatewayRequest, ModelCapability } from "@oscharko-dev/keiko-model-gateway";
+import type { GatewayCallRequest, ModelCapability } from "@oscharko-dev/keiko-model-gateway";
 import type {
   QualityIntelligenceModelPolicy,
   QualityIntelligenceModelPolicyPreflightResponse,
@@ -298,9 +298,10 @@ function requestForPreflight(
   stage: "generate" | "judge",
   modelId: string,
   _capability: ModelCapability,
-): GatewayRequest {
+  correlationId: string | undefined,
+): GatewayCallRequest {
   if (stage === "judge") {
-    return buildQiJudgePreflightRequest(modelId);
+    return { ...buildQiJudgePreflightRequest(modelId), logContext: { correlationId } };
   }
   return {
     modelId,
@@ -314,37 +315,38 @@ function requestForPreflight(
         content: "Quality Intelligence preflight.",
       },
     ],
+    logContext: { correlationId },
   };
 }
 
-async function preflightStage(
+function unavailablePreflightResult(
+  stage: "generate" | "judge",
+  modelId?: string,
+): QualityIntelligenceModelPreflightStageResult {
+  return {
+    stage,
+    ...(modelId === undefined ? {} : { modelId }),
+    status: "unavailable",
+    category: "unavailable",
+    message: preflightMessage("unavailable"),
+  };
+}
+
+// Split out of preflightStage to keep it within the line budget: the actual gateway round trip
+// plus its schema/transport failure classification.
+async function runPreflightGatewayCall(
   deps: UiHandlerDeps,
   stage: "generate" | "judge",
-  modelId: string | undefined,
+  modelId: string,
+  capability: ModelCapability,
+  correlationId: string | undefined,
 ): Promise<QualityIntelligenceModelPreflightStageResult> {
-  const config = currentGatewayConfig(deps);
-  if (modelId === undefined || config === undefined) {
-    return {
-      stage,
-      status: "unavailable",
-      category: "unavailable",
-      message: preflightMessage("unavailable"),
-    };
-  }
-  const capability = findConfiguredCapability(config, modelId);
-  if (capability?.kind !== "chat") {
-    return {
-      stage,
-      modelId,
-      status: "unavailable",
-      category: "unavailable",
-      message: preflightMessage("unavailable"),
-    };
-  }
   try {
     const gateway = currentGateway(deps);
     if (gateway === undefined) throw new TypeError("Model gateway is unavailable.");
-    const response = await gateway.chat(requestForPreflight(stage, modelId, capability));
+    const response = await gateway.chat(
+      requestForPreflight(stage, modelId, capability, correlationId),
+    );
     if (stage === "judge" && tryParseJudgeVerdict(response.content) === null) {
       return {
         stage,
@@ -365,6 +367,23 @@ async function preflightStage(
       message: preflightMessage(category),
     };
   }
+}
+
+async function preflightStage(
+  deps: UiHandlerDeps,
+  stage: "generate" | "judge",
+  modelId: string | undefined,
+  correlationId: string | undefined,
+): Promise<QualityIntelligenceModelPreflightStageResult> {
+  const config = currentGatewayConfig(deps);
+  if (modelId === undefined || config === undefined) {
+    return unavailablePreflightResult(stage);
+  }
+  const capability = findConfiguredCapability(config, modelId);
+  if (capability?.kind !== "chat") {
+    return unavailablePreflightResult(stage, modelId);
+  }
+  return runPreflightGatewayCall(deps, stage, modelId, capability, correlationId);
 }
 
 function preflightSummaryStatus(
@@ -391,6 +410,7 @@ function summarizePreflight(
 export async function buildQiModelRouting(
   deps: UiHandlerDeps,
   request: Pick<QualityIntelligenceStartRunRequest, "modelId" | "modelPolicy">,
+  correlationId?: string,
 ): Promise<QualityIntelligenceModelRouting> {
   const requested = policyForRequest(deps, request);
   const resolution = resolveQiModelPolicy(deps, { ...request, modelPolicy: requested });
@@ -400,11 +420,16 @@ export async function buildQiModelRouting(
       "The selected Quality Intelligence model policy is invalid.",
     );
   }
-  const generation = await preflightStage(deps, "generate", resolution.resolved.testDesignModelId);
+  const generation = await preflightStage(
+    deps,
+    "generate",
+    resolution.resolved.testDesignModelId,
+    correlationId,
+  );
   const judge =
     resolution.resolved.judgeModelId === undefined
-      ? await preflightStage(deps, "judge", undefined)
-      : await preflightStage(deps, "judge", resolution.resolved.judgeModelId);
+      ? await preflightStage(deps, "judge", undefined, correlationId)
+      : await preflightStage(deps, "judge", resolution.resolved.judgeModelId, correlationId);
   return {
     policyVersion: 1,
     requested,
@@ -440,8 +465,9 @@ function judgePreflightFailureReason(routing: QualityIntelligenceModelRouting): 
 export async function buildQiModelRoutingForRun(
   deps: UiHandlerDeps,
   request: Pick<QualityIntelligenceStartRunRequest, "modelId" | "modelPolicy">,
+  correlationId?: string,
 ): Promise<QualityIntelligenceModelRouting> {
-  const routing = await buildQiModelRouting(deps, request);
+  const routing = await buildQiModelRouting(deps, request, correlationId);
   const generation = routing.preflight.generation;
   if (generation?.status !== "passed" && routing.resolved.testDesignModelId !== undefined) {
     throw new QiModelPolicyError(
@@ -490,7 +516,7 @@ export async function handlePutQiModelPolicy(
     );
   }
   try {
-    await buildQiModelRoutingForRun(deps, { modelPolicy: policy });
+    await buildQiModelRoutingForRun(deps, { modelPolicy: policy }, ctx.correlationId);
   } catch (error) {
     if (error instanceof QiModelPolicyError) {
       return errorResult(400, error.code, error.message);
@@ -532,10 +558,14 @@ export async function handlePreflightQiModelPolicy(
     );
   }
   try {
-    const modelRouting = await buildQiModelRouting(deps, {
-      ...(modelPolicy !== undefined ? { modelPolicy } : {}),
-      ...(typeof parsed.modelId === "string" ? { modelId: parsed.modelId } : {}),
-    });
+    const modelRouting = await buildQiModelRouting(
+      deps,
+      {
+        ...(modelPolicy !== undefined ? { modelPolicy } : {}),
+        ...(typeof parsed.modelId === "string" ? { modelId: parsed.modelId } : {}),
+      },
+      ctx.correlationId,
+    );
     const body: QualityIntelligenceModelPolicyPreflightResponse = { modelRouting };
     return { status: 200, body };
   } catch (error) {

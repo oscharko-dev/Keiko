@@ -109,4 +109,34 @@ describe("captureEditorLocalHistorySafely", () => {
     expect(JSON.stringify(diagnostics)).not.toContain(secretValue);
     expect(JSON.stringify(diagnostics)).not.toContain(secretContent);
   });
+
+  // ADR-0173 D5 / g12: a capture failure that happens inside a request must carry THAT request's
+  // own correlation id, not a disconnected `local-history-<uuid>` mint, so an operator can join it
+  // back to the rest of the request's trail. Before the fix, `correlationId` threading did not
+  // exist on this function at all, so this assertion fails against the pre-fix signature (the
+  // extra field was silently ignored and a fresh `local-history-` id was always minted instead).
+  it("threads the caller's own correlation id into a capture failure instead of minting one", () => {
+    const diagnostics: ServerDiagnosticRecord[] = [];
+    const secretValue = "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY";
+    const secretContent = `AWS_SECRET_ACCESS_KEY=${secretValue}\n`;
+    const requestCorrelationId = "req-abc12345";
+
+    const result = captureEditorLocalHistorySafely({
+      deps: deps(diagnostics),
+      realRoot: root,
+      relativePath: "src/app.ts",
+      absolutePath: join(root, "src", "app.ts"),
+      content: secretContent,
+      origin: "user-save",
+      nowMs: 3_000,
+      correlationId: requestCorrelationId,
+    });
+
+    expect(result).toMatchObject({
+      status: "suppressed",
+      correlationId: requestCorrelationId,
+    });
+    expect(diagnostics).toHaveLength(1);
+    expect(diagnostics[0]?.correlationId).toBe(requestCorrelationId);
+  });
 });

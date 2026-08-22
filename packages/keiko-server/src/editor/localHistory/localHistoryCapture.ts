@@ -66,8 +66,12 @@ export function emitEditorLocalHistoryCaptureFailure(
   origin: EditorLocalHistoryOrigin,
   error: unknown,
   nowMs = Date.now(),
+  // Threads the request's own correlation id (ADR-0173 D5 / g12) when the caller has one in
+  // scope, so this failure — and the client-visible protection payload it returns the id on —
+  // joins the SAME id as the rest of the request's trail instead of a disconnected mint.
+  requestCorrelationId?: string,
 ): string {
-  const correlationId = `local-history-${randomUUID()}`;
+  const correlationId = requestCorrelationId ?? `local-history-${randomUUID()}`;
   emitServerDiagnostic(deps.diagnostics, {
     correlationId,
     timestamp: new Date(nowMs).toISOString(),
@@ -123,6 +127,8 @@ export function captureEditorLocalHistorySafely(input: {
   readonly content: string;
   readonly origin: EditorLocalHistoryOrigin;
   readonly nowMs?: number | undefined;
+  // The request's own correlation id (ADR-0173 D5 / g12), when the caller has one in scope.
+  readonly correlationId?: string | undefined;
 }): EditorLocalHistoryCaptureProtection {
   if (input.deps.editorLocalHistoryStore === undefined) {
     const error = new EditorLocalHistoryError(
@@ -135,6 +141,7 @@ export function captureEditorLocalHistorySafely(input: {
       input.origin,
       error,
       input.nowMs,
+      input.correlationId,
     );
     return degradedProtection(error, correlationId);
   }
@@ -155,6 +162,7 @@ export function captureEditorLocalHistorySafely(input: {
       input.origin,
       error,
       input.nowMs,
+      input.correlationId,
     );
     return protectionForCaptureFailure(error, correlationId);
   }

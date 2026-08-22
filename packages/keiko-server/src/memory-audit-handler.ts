@@ -43,6 +43,7 @@ import { createHash, randomUUID } from "node:crypto";
 import type { MemoryAuditEvent, MemoryId, MemoryStatus } from "@oscharko-dev/keiko-contracts";
 import type { EvidenceStore } from "@oscharko-dev/keiko-evidence";
 import type { MemoryEvent } from "@oscharko-dev/keiko-memory-vault";
+import { isValidCorrelationId } from "./correlation.js";
 import {
   buildDeletedEvent,
   buildInsertedEvent,
@@ -91,16 +92,22 @@ interface AuditPersistFailureContext {
 function reportAuditPersistFailure(
   options: AuditPersistFailureContext,
   source: string,
+  runId: string,
   error: unknown,
 ): void {
   if (options.onPersistError !== undefined) {
     options.onPersistError(error);
     return;
   }
+  // Reuses the date-bucket runId the failed append targeted (ADR-0173 D5 / g12, mirroring
+  // gitDelivery/mutationEvidenceLedger.ts's `evidenceCorrelationId`) instead of a disconnected
+  // fresh mint, so an operator can join this diagnostic back to the SAME bucket's other audit
+  // evidence. Re-validated against `isValidCorrelationId` rather than trusted blindly.
+  const correlationId = isValidCorrelationId(runId) ? runId : randomUUID();
   emitServerDiagnostic(
     options.diagnostics,
     serverDiagnosticFromError({
-      correlationId: randomUUID(),
+      correlationId,
       operation: "memory.audit.persist",
       source,
       error,
@@ -171,7 +178,7 @@ function parseExistingEvents(json: string | undefined): PersistedMemoryAuditEven
   try {
     const parsed: unknown = JSON.parse(json);
     if (!Array.isArray(parsed)) {
-      throw new Error("memory audit manifest has unexpected shape");
+      throw new TypeError("memory audit manifest has unexpected shape");
     }
     return parsed as PersistedMemoryAuditEvent[];
   } catch (error) {
@@ -350,12 +357,13 @@ export function createMemoryAuditHandler(options: MemoryAuditHandlerOptions): Me
     if (auditEvent === undefined) {
       return;
     }
+    const runId = auditRunIdFor(auditEvent.occurredAt);
     try {
-      appendAuditEvents(options.evidenceStore, auditRunIdFor(auditEvent.occurredAt), [
+      appendAuditEvents(options.evidenceStore, runId, [
         sanitizeAuditEvent(auditEvent, options.redactString),
       ]);
     } catch (error) {
-      reportAuditPersistFailure(options, "memory-audit-handler.bridge", error);
+      reportAuditPersistFailure(options, "memory-audit-handler.bridge", runId, error);
     }
   };
 }
@@ -484,7 +492,7 @@ export function recordMemoryAudits(
       if (options.required === true) {
         throw error;
       }
-      reportAuditPersistFailure(options, "memory-audit-handler.direct", error);
+      reportAuditPersistFailure(options, "memory-audit-handler.direct", runId, error);
     }
   }
 }

@@ -22,7 +22,7 @@ import {
   type FigmaSnapshotImageRef,
   type FigmaSnapshotRecord,
 } from "@oscharko-dev/keiko-evidence";
-import type { GatewayRequest } from "@oscharko-dev/keiko-model-gateway";
+import type { GatewayCallRequest } from "@oscharko-dev/keiko-model-gateway";
 import type { UiHandlerDeps } from "../deps.js";
 import { resolveQiMultimodalSelection } from "./modelSelection.js";
 
@@ -228,7 +228,7 @@ function buildVisionRequest(
   dataUrl: string,
   baselineText: string,
   structuredOutput: boolean,
-): GatewayRequest {
+): GatewayCallRequest {
   const userText = visionUserText(request, baselineText);
   return {
     modelId,
@@ -256,6 +256,9 @@ function buildVisionRequest(
           responseFormat: VISION_RESPONSE_FORMAT,
         }
       : {}),
+    // The Figma snapshot run id is the natural background-job correlation key here: this vision
+    // pass has no live HTTP request in scope (ADR-0173 D5, background-run case).
+    logContext: { correlationId: request.snapshotRunId },
   };
 }
 

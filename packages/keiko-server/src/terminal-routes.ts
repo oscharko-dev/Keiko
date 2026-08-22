@@ -227,11 +227,13 @@ export function handleDeleteTerminalExecution(ctx: RouteContext, deps: UiHandler
 export function handleTerminalEvents(ctx: RouteContext, deps: UiHandlerDeps): HandlerOutcome {
   const guard = requireTerminal(deps);
   if (isRouteResult(guard)) return guard;
+  // Threads the request's own correlation id (ADR-0173 D5 / g12) so a later backpressure kill
+  // joins back to the request that opened this stream instead of a disconnected mint.
   openTerminalSseStream(
     ctx.res,
     guard,
     deps.redactor,
-    sseBackpressureReporter(deps, "terminal"),
+    sseBackpressureReporter(deps, "terminal", ctx.correlationId),
     ctx.correlationId,
   );
   ctx.req.on("close", () => {

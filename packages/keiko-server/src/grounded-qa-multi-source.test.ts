@@ -41,6 +41,7 @@ import {
   buildLabeledAnswerCitations,
   buildConnectedScopes,
   buildMultiSourceGatewayMessages,
+  createMultiSourceAnswerer,
   mergeContextPackSummaries,
   runMultiSourceAsk,
   sourceLabels,
@@ -50,6 +51,7 @@ import {
   type MultiSourceAnswerer,
 } from "./grounded-qa-multi-source.js";
 import { buildGroundedAnswerContextPackSummary } from "@oscharko-dev/keiko-contracts/bff-wire";
+import { normalizeGroundedAnswerPayload } from "./grounded-answer.js";
 import { attachContextBudgetDiagnostics } from "./grounded-context-diagnostics.js";
 import { createInMemoryUiStore, type Chat, type UiStore } from "./store/index.js";
 import type { UiHandlerDeps } from "./deps.js";
@@ -57,7 +59,12 @@ import { buildRedactor, createRunRegistry } from "./index.js";
 import type { RouteContext } from "./routes.js";
 import type { OrchestratorInput, OrchestratorOutput } from "./grounded-orchestrator.js";
 import { RepoSearchUnsupportedFileError } from "@oscharko-dev/keiko-workspace";
-import { ContextOverflowError } from "@oscharko-dev/keiko-model-gateway";
+import {
+  ContextOverflowError,
+  type GatewayCallRequest,
+  type NormalizedResponse,
+} from "@oscharko-dev/keiko-model-gateway";
+import type { ModelPort } from "@oscharko-dev/keiko-harness";
 
 const NOW = 1_700_000_000_000;
 const CHAT_MODEL = "example-chat-model";
@@ -1633,5 +1640,52 @@ describe("multi-source entailment forwards the retrieved packs (KEIKO-0237)", ()
     // carry no capsule). Pin that explicitly so a regression that starts forwarding capsules
     // through the multi-source branch is visible.
     expect(observedCapsulesPerCall).toEqual([0]);
+  });
+});
+
+// ─── Correlation threading (ADR-0173 D5) ──────────────────────────────────────
+//
+// createMultiSourceAnswerer is the real model.call site the tests above bypass via an injected
+// MultiSourceSeam.answerer; unit-test it directly against a fake ModelPort that records the request.
+describe("createMultiSourceAnswerer correlation threading", () => {
+  it("stamps the caller's correlation id into the Gateway double's GatewayCallRequest.logContext", async () => {
+    const seenRequests: GatewayCallRequest[] = [];
+    const recordingModel: ModelPort = {
+      call(request): Promise<NormalizedResponse> {
+        seenRequests.push(request);
+        return Promise.resolve({
+          modelId: request.modelId,
+          content: "multi-source answer",
+          finishReason: "stop",
+          toolCalls: [],
+          structuredOutput: null,
+          usage: {
+            requestId: "multi-source-answerer-test",
+            promptTokens: 3,
+            completionTokens: 2,
+            latencyMs: 1,
+            costClass: "medium",
+          },
+        });
+      },
+    };
+
+    const answerer = createMultiSourceAnswerer(
+      recordingModel,
+      "example-chat-model",
+      buildRedactor({}),
+      new AbortController().signal,
+      "cid-multi-source-answerer-000001",
+    );
+    // `MultiSourceAnswerer`'s declared return type is `Promise<GroundedAnswerPayload>` (a
+    // `string | GroundedAnswerResult` union), even though `createMultiSourceAnswerer`'s own
+    // implementation always resolves the object branch — `normalizeGroundedAnswerPayload` is the
+    // SAME narrowing every production caller already applies to this result
+    // (grounded-qa-multi-source.ts, grounded-orchestrator.ts), not a test-only cast.
+    const result = normalizeGroundedAnswerPayload(await answerer("What is alpha?", []));
+
+    expect(result.content).toBe("multi-source answer");
+    expect(seenRequests).toHaveLength(1);
+    expect(seenRequests[0]?.logContext?.correlationId).toBe("cid-multi-source-answerer-000001");
   });
 });

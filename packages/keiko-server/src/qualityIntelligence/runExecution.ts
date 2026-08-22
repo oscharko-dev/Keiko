@@ -112,6 +112,7 @@ function resolveExecutionStrategy(
   deps: UiHandlerDeps,
   request: QualityIntelligenceStartRunRequest,
   modelRouting: QualityIntelligenceModelRouting,
+  runId: string,
 ): ResolvedExecutionStrategy {
   const modelId = modelRouting.resolved.testDesignModelId;
   const config = currentGatewayConfig(deps);
@@ -125,7 +126,7 @@ function resolveExecutionStrategy(
   // attribution contract and persist `seedUsed: null` when the model cannot apply the seed.
   if (modelId === undefined) {
     return {
-      generate: createQiGenerationPort(deps, { kind: "baseline" }),
+      generate: createQiGenerationPort(deps, { kind: "baseline" }, runId),
     };
   }
   if (
@@ -136,16 +137,20 @@ function resolveExecutionStrategy(
     })
   ) {
     return {
-      generate: createQiGenerationPort(deps, { kind: "baseline" }),
+      generate: createQiGenerationPort(deps, { kind: "baseline" }, runId),
     };
   }
   return {
     modelId,
-    generate: createQiGenerationPort(deps, {
-      kind: "model",
-      modelId,
-      requestedSeed: request.seed,
-    }),
+    generate: createQiGenerationPort(
+      deps,
+      {
+        kind: "model",
+        modelId,
+        requestedSeed: request.seed,
+      },
+      runId,
+    ),
   };
 }
 
@@ -281,11 +286,12 @@ async function runResolvedQi(
   const { deps, runId, request } = input;
   const requestedRouting = buildExecutionRouting(input);
   const { ingestion, gatewayCallCount } = await ingestForRun(input, capsuleResolver);
-  const { modelId, generate } = resolveExecutionStrategy(deps, request, requestedRouting);
+  const { modelId, generate } = resolveExecutionStrategy(deps, request, requestedRouting, runId);
   const resolvedJudge = resolveJudgeForModelRun(
     deps,
     requestedRouting.resolved.judgeModelId,
     request.seed,
+    runId,
   );
   // The routing the run actually executes under carries the judge degradation, so `onAccepted`,
   // the persisted manifest, and the terminal `done` frame all report the same classified failure.
@@ -354,9 +360,10 @@ function resolveJudgeForModelRun(
   deps: UiHandlerDeps,
   judgeModelId: string | undefined,
   requestedSeed: number | undefined,
+  correlationId: string,
 ): ResolvedJudge {
   if (judgeModelId === undefined) return {};
-  const outcome = tryCreateQiJudgePort(deps, judgeModelId, { requestedSeed });
+  const outcome = tryCreateQiJudgePort(deps, judgeModelId, { requestedSeed, correlationId });
   return outcome.available
     ? { judge: outcome.port }
     : { stageFailureReason: outcome.reasonSummary };

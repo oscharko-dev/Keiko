@@ -331,7 +331,9 @@ export async function handleCodingContextPack(
   } catch (error) {
     // Port failures stay opaque: content-free code + correlation id only. The
     // connector layer never places endpoints, credentials, or bodies on errors.
-    const correlationId = randomUUID();
+    // Threads the request's own correlation id (ADR-0173 D5 / g12) rather than minting a
+    // disconnected one — this IS the request whose failure is being reported.
+    const correlationId = ctx.correlationId ?? randomUUID();
     emitServerDiagnostic(
       deps.diagnostics,
       serverDiagnosticFromError({

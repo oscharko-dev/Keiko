@@ -183,14 +183,21 @@ export function writeOrDestroy(
  * happens either way, but nothing records WHY the stream ended.
  *
  * Carries only the frame byte count (never body bytes), so it cannot leak model tokens if logged.
+ *
+ * `correlationId` defaults to a fresh mint taken ONCE here, at reporter-construction time (i.e. at
+ * SSE stream setup) — not inside the returned closure, which fires at most once anyway, but
+ * minting eagerly lets a caller that already has the stream's own request/session id in scope
+ * (ADR-0173 D5 / g12) pass it straight through instead of a disconnected one being drawn if and
+ * only if the stream is later killed.
  */
 export function sseBackpressureReporter(
   deps: { readonly diagnostics?: ServerDiagnosticSink | undefined },
   stream: string,
+  correlationId: string = randomUUID(),
 ): (signal: SseBackpressureSignal) => void {
   return (signal: SseBackpressureSignal): void => {
     emitServerDiagnostic(deps.diagnostics, {
-      correlationId: randomUUID(),
+      correlationId,
       timestamp: new Date().toISOString(),
       operation: `sse.${stream}`,
       source: `sse.${stream}.backpressure`,

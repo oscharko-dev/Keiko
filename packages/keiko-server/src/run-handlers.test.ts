@@ -1330,3 +1330,82 @@ describe("apply re-proves workspace authorization at the write boundary", () => 
     expect(modelCalls).toEqual([]);
   });
 });
+
+describe("apply threads the run's own id into its verification egress probe", () => {
+  afterEach(() => {
+    vi.doUnmock("./editor/verificationExecution.js");
+    vi.resetModules();
+  });
+
+  it("passes record.runId through to the network-isolation probe failure diagnostic, not a disconnected mint", async () => {
+    // ADR-0173 D5 / g12: run-handlers.ts's gated apply path always has RunRecord.runId in scope;
+    // a network-isolation probe failure reached through the replayed verify stage must carry it.
+    vi.resetModules();
+    const actualVerification = await vi.importActual<
+      typeof import("./editor/verificationExecution.js")
+    >("./editor/verificationExecution.js");
+    vi.doMock("./editor/verificationExecution.js", () => ({
+      ...actualVerification,
+      probeNetworkIsolation: (): never => {
+        throw new Error("probe backend detection failed");
+      },
+    }));
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    try {
+      const { handleApplyRun: freshHandleApplyRun } = await import("./index.js");
+      const registry = createRunRegistry();
+      const workspace = authorizedApplyWorkspace();
+      registry.register({
+        runId: "probe-thread-run",
+        fingerprint: "fp-probe-thread-run",
+        modelId: "example-chat-model",
+        sink: new QueueEventSink(),
+        cancel: (): void => undefined,
+      });
+      registry.complete(
+        "probe-thread-run",
+        "completed",
+        { status: "dry-run" },
+        {
+          kind: "unit-tests",
+          payload: { workspaceRoot: workspace.root, target: { kind: "file", filePath: "x.ts" } },
+          limits: undefined,
+        },
+      );
+      const deps: UiHandlerDeps = {
+        config: undefined,
+        configPresent: false,
+        evidenceStore: createInMemoryEvidenceStore(),
+        env: {},
+        redactor: buildRedactor({}),
+        registry,
+        store: workspace.store,
+        modelPortFactory: (): ModelPort => ({
+          call: (): Promise<NormalizedResponse> => Promise.reject(new Error("test-stop")),
+        }),
+      };
+
+      const result = await freshHandleApplyRun(
+        {
+          req: {} as never,
+          res: {} as never,
+          params: { runId: "probe-thread-run" },
+          url: new URL("http://127.0.0.1/api/runs/probe-thread-run/apply"),
+        },
+        deps,
+      );
+
+      expect(result.status).toBe(200);
+      expect(consoleError).toHaveBeenCalled();
+      const diagnosticCall = consoleError.mock.calls.find((call) =>
+        String(call[0]).includes("workflow.network-isolation-probe"),
+      );
+      expect(diagnosticCall).toBeDefined();
+      const line = String(diagnosticCall?.[0]);
+      const record = JSON.parse(line.slice(line.indexOf("{"))) as { correlationId?: unknown };
+      expect(record.correlationId).toBe("probe-thread-run");
+    } finally {
+      consoleError.mockRestore();
+    }
+  });
+});

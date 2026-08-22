@@ -699,6 +699,12 @@
       "package": "keiko-server"
     },
     {
+      "op": "chat.turn.started",
+      "category": "gateway",
+      "site": "packages/keiko-server/src/chat-handlers.ts:1687",
+      "package": "keiko-server"
+    },
+    {
       "op": "client.diagnostic",
       "category": "diagnostic",
       "site": "packages/keiko-server/src/client-diagnostics-routes.ts:119",

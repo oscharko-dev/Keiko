@@ -42,6 +42,7 @@ import type { RuntimeGatewayConfig } from "./deps.js";
 import { createInMemoryUiStore, type UiStore } from "./store/index.js";
 import type { ModelPort } from "@oscharko-dev/keiko-harness";
 import type {
+  GatewayCallRequest,
   GatewayConfig,
   GatewayRequest,
   GatewayStreamChunk,
@@ -290,7 +291,7 @@ function deferred<T>(): {
 
 interface StreamingModel {
   readonly model: ModelPort;
-  readonly recorded: { request: GatewayRequest | undefined };
+  readonly recorded: { request: GatewayCallRequest | undefined };
   readonly calls: { count: number };
 }
 
@@ -298,13 +299,13 @@ interface StreamingModel {
 // terminal done chunk. `onFirstDelta` (used by the cancel test) runs after the first delta is yielded
 // so the test can abort the controller deterministically before the done chunk arrives.
 function streamingModel(content: string, onFirstDelta?: () => void): StreamingModel {
-  const recorded: { request: GatewayRequest | undefined } = { request: undefined };
+  const recorded: { request: GatewayCallRequest | undefined } = { request: undefined };
   const calls = { count: 0 };
   const model: ModelPort = {
     call(): Promise<NormalizedResponse> {
       return Promise.resolve(normalizedResponse(content));
     },
-    async *callStream(request: GatewayRequest): AsyncGenerator<GatewayStreamChunk> {
+    async *callStream(request: GatewayCallRequest): AsyncGenerator<GatewayStreamChunk> {
       calls.count += 1;
       recorded.request = request;
       yield { type: "delta", token: "hi" };
@@ -2846,6 +2847,29 @@ describe("desktop chat SSE streaming handler", () => {
     expect(record?.source).toBe("chat.stream");
     expect(record?.message).toBe("server-operation-failed");
     expect(JSON.stringify(record)).not.toContain("boom-unexpected-mid-stream");
+  });
+
+  // ADR-0173 D5: the streaming call site (streamAndPersist) must stamp the request's correlation id
+  // into GatewayCallRequest.logContext, mirroring the buffered path, so a gateway retry line for a
+  // streamed turn joins the same trail as the rest of the request.
+  it("threads the request correlation id into the streaming model gateway call's logContext", async () => {
+    const chatId = seedChat();
+    const streaming = streamingModel("hi");
+    const res = captureRes();
+    const ctx: RouteContext = {
+      ...routeContext(
+        makeReq({ chatId, projectPath: projectDir, modelId: CHAT_MODEL, content: "hello" }),
+        res.res,
+      ),
+      correlationId: "cid-stream-logcontext-000001",
+    };
+
+    await handleSendDesktopChatStream(ctx, deps(streaming.model));
+
+    expect(streaming.calls.count).toBe(1);
+    expect(streaming.recorded.request?.logContext?.correlationId).toBe(
+      "cid-stream-logcontext-000001",
+    );
   });
 
   it("persists the user message but NO assistant message when the stream is cancelled", async () => {

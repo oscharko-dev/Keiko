@@ -9,11 +9,11 @@
       "files": 44,
       "uncoveredFiles": 0,
       "uncoveredLines": 385,
-      "totalLines": 4916,
+      "totalLines": 4880,
       "coverage": {
-        "lines": 92.17,
-        "statements": 90.44,
-        "branches": 85.23,
+        "lines": 92.11,
+        "statements": 90.39,
+        "branches": 85.19,
         "functions": 93.23
       }
     },
@@ -234,15 +234,15 @@
       }
     },
     "keiko-server": {
-      "files": 580,
+      "files": 581,
       "uncoveredFiles": 0,
-      "uncoveredLines": 4516,
-      "totalLines": 56263,
+      "uncoveredLines": 4503,
+      "totalLines": 56309,
       "coverage": {
-        "lines": 91.98,
-        "statements": 89.27,
-        "branches": 81.89,
-        "functions": 94.86
+        "lines": 92,
+        "statements": 89.3,
+        "branches": 81.91,
+        "functions": 94.91
       }
     },
     "keiko-tools": {

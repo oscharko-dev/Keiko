@@ -185,6 +185,9 @@ export interface HybridGroundedAskCtx {
   readonly deps: UiHandlerDeps;
   readonly signal: AbortSignal;
   readonly readinessAdmission?: ConversationReadinessAdmission | undefined;
+  // ADR-0173 D5: the request-scoped correlation id, threaded from PreparedGroundedAsk into the
+  // GatewayCallRequest.logContext the hybrid answerer stamps onto its model.call.
+  readonly correlationId?: string | undefined;
   readonly folderRetriever?: FolderRetriever;
   readonly connectorRetrieve?: ConnectorRetrieve;
   readonly answer?: HybridAnswerer;
@@ -811,6 +814,7 @@ export function createHybridAnswerer(
   model: ModelPort,
   modelId: string,
   signal: AbortSignal,
+  correlationId: string | undefined,
 ): HybridAnswerer {
   return async (system, user): Promise<GroundedAnswerResult> => {
     ensureNotCancelled(signal);
@@ -822,6 +826,7 @@ export function createHybridAnswerer(
           { role: "user", content: user },
         ],
         stream: false,
+        logContext: { correlationId },
       },
       signal,
     );
@@ -1654,7 +1659,7 @@ function resolveHybridAnswerer(ctx: HybridGroundedAskCtx): ResolvedAnswerer | Ro
     readinessAdmission,
     ctx.deps,
   );
-  return { answer: createHybridAnswerer(model, ctx.modelId, ctx.signal) };
+  return { answer: createHybridAnswerer(model, ctx.modelId, ctx.signal, ctx.correlationId) };
 }
 
 async function noEvidenceAssistant(

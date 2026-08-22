@@ -26,6 +26,7 @@ import {
 import { deepRedactStrings } from "@oscharko-dev/keiko-evidence";
 import type { EvidenceStore } from "@oscharko-dev/keiko-evidence";
 import { randomUUID } from "node:crypto";
+import { isValidCorrelationId } from "../correlation.js";
 import {
   emitServerDiagnostic,
   serverDiagnosticFromError,
@@ -66,7 +67,11 @@ export interface RecordGitDeliveryEvidenceOptions {
 // The previous default was `console.error("…", error)` — the raw error object on a channel no
 // production assembly overrode, so a failed governed-mutation evidence write was invisible AND could
 // carry the very content this ledger redacts. Routed through the single redacted diagnostic sink.
-function reportPersistFailure(options: RecordGitDeliveryEvidenceOptions, error: unknown): void {
+function reportPersistFailure(
+  options: RecordGitDeliveryEvidenceOptions,
+  correlationId: string,
+  error: unknown,
+): void {
   if (options.onPersistError !== undefined) {
     options.onPersistError(error);
     return;
@@ -74,7 +79,7 @@ function reportPersistFailure(options: RecordGitDeliveryEvidenceOptions, error: 
   emitServerDiagnostic(
     options.diagnostics,
     serverDiagnosticFromError({
-      correlationId: randomUUID(),
+      correlationId,
       operation: "gitDelivery.mutationEvidence.persist",
       source: "gitDelivery.mutationEvidenceLedger",
       error,
@@ -82,6 +87,20 @@ function reportPersistFailure(options: RecordGitDeliveryEvidenceOptions, error: 
       redact: options.redactString,
     }),
   );
+}
+
+// The record's own `correlation.actionId` (ADR-0173 D5 / g12) is the run already in scope at the
+// moment this evidence was built — a deterministic, content-free id (`defaultGitDeliveryActionId`
+// hashes the command; `gitDelivery/mergeExecution.ts` and siblings mint it once per governed
+// mutation attempt). Reusing it instead of a fresh `randomUUID()` lets an operator join a failed
+// persistence diagnostic back to the SAME mutation attempt's other evidence. Re-validated here
+// against `isValidCorrelationId`'s shape rather than trusted blindly: `actionId` is typed as a
+// plain `string` on the wire contract, so a producer that has not adopted the deterministic helper
+// (or a test fixture) can still hand this a value that is not safe to use as a correlation id —
+// that case falls back to a fresh mint, exactly like the pre-fix behaviour.
+function evidenceCorrelationId(record: GitDeliveryEvidenceRecord): string {
+  const { actionId } = record.correlation;
+  return isValidCorrelationId(actionId) ? actionId : randomUUID();
 }
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
@@ -157,6 +176,6 @@ export function recordGitDeliveryMutationEvidence(
   try {
     appendRecord(options.evidenceStore, runId, safe, cap);
   } catch (error) {
-    reportPersistFailure(options, error);
+    reportPersistFailure(options, evidenceCorrelationId(record), error);
   }
 }

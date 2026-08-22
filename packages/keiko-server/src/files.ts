@@ -2537,6 +2537,7 @@ async function readFilesContentRoute(ctx: RouteContext, deps: UiHandlerDeps): Pr
 function createPreRestoreCapture(
   deps: UiHandlerDeps,
   target: ResolvedTarget,
+  correlationId: string | undefined,
 ): (content: string) => NonNullable<FilesContentWireResponse["localHistoryProtection"]> {
   return (content) =>
     captureEditorLocalHistorySafely({
@@ -2546,6 +2547,7 @@ function createPreRestoreCapture(
       absolutePath: target.path,
       content,
       origin: "pre-restore",
+      correlationId,
     });
 }
 
@@ -2553,6 +2555,7 @@ function captureNormalFileSave(
   deps: UiHandlerDeps,
   target: ResolvedTarget,
   fields: FilesWriteFields,
+  correlationId: string | undefined,
 ): FilesContentWireResponse["localHistoryProtection"] {
   if (fields.historyOrigin !== undefined) return undefined;
   return captureEditorLocalHistorySafely({
@@ -2562,6 +2565,7 @@ function captureNormalFileSave(
     absolutePath: target.path,
     content: fields.content,
     origin: "user-save",
+    correlationId,
   });
 }
 
@@ -2599,10 +2603,12 @@ async function writeFilesContentRoute(
       typeof body.expectedModifiedAt === "number" ? body.expectedModifiedAt : undefined,
     baseVersion,
     beforeWrite:
-      fields.historyOrigin === "pre-restore" ? createPreRestoreCapture(deps, target) : undefined,
+      fields.historyOrigin === "pre-restore"
+        ? createPreRestoreCapture(deps, target, ctx.correlationId)
+        : undefined,
   });
   notifyHostLspWorkspaceFileChanged(target.realRoot, target.path);
-  const localHistoryProtection = captureNormalFileSave(deps, target, fields);
+  const localHistoryProtection = captureNormalFileSave(deps, target, fields, ctx.correlationId);
   return {
     status: 200,
     body: localHistoryProtection === undefined ? response : { ...response, localHistoryProtection },
@@ -2718,6 +2724,7 @@ async function reKeyRenamedBreakpoints(
   realRoot: string,
   previousPath: string,
   nextPath: string,
+  requestCorrelationId: string | undefined,
 ): Promise<void> {
   const service = deps.dapDebug;
   if (service === undefined) return;
@@ -2727,9 +2734,11 @@ async function reKeyRenamedBreakpoints(
     // identity-inspection failure) used to skip the whole migration silently, bypassing the
     // service-side rejection diagnostic entirely. The rename still must not fail — but the skipped
     // migration has to be observable, mirroring the service's own redacted, body-free convention.
-    emitServerDiagnostic(
-      service.diagnosticSink,
-      serverDiagnosticFromError({
+    // This runs detached from the rename response (never awaited by the caller), so it mints its
+    // own id rather than reusing the request's — but `parentCorrelationId` (ADR-0173 D5 / g12)
+    // still joins it back to the request that spawned it when that id is known.
+    emitServerDiagnostic(service.diagnosticSink, {
+      ...serverDiagnosticFromError({
         correlationId: `files-rename-${randomUUID()}`,
         operation: "files.rename.breakpoint-migration-skipped",
         source: "files.rename",
@@ -2738,7 +2747,8 @@ async function reKeyRenamedBreakpoints(
           "Breakpoint migration for a rename was skipped: the instrumentation snapshot is " +
           "unavailable; breakpoints remain under the old path.",
       }),
-    );
+      ...(requestCorrelationId === undefined ? {} : { parentCorrelationId: requestCorrelationId }),
+    });
     return;
   }
   const renames = affectedRenamedFileIds(snapshot, previousPath, nextPath);
@@ -2783,7 +2793,13 @@ export async function handleFilesRename(
       // turning a long-completed filesystem rename into a UI timeout. renameInstrumentation's
       // contract is that it never rejects (failures degrade to redacted diagnostics), so nothing is
       // silently lost by detaching.
-      void reKeyRenamedBreakpoints(deps, resolvedRoot.realRoot, result.previousPath, result.path);
+      void reKeyRenamedBreakpoints(
+        deps,
+        resolvedRoot.realRoot,
+        result.previousPath,
+        result.path,
+        ctx.correlationId,
+      );
     }
     return { status: 200, body: result };
   });

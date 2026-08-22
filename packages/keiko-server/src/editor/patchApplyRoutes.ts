@@ -214,7 +214,13 @@ function captureAppliedHistory(ctx: ApplyContext, result: PatchApplyResult): voi
     try {
       content = readFileSync(absolutePath, "utf8");
     } catch (error) {
-      emitEditorLocalHistoryCaptureFailure(ctx.deps, "agent-apply", error, ctx.nowMs);
+      emitEditorLocalHistoryCaptureFailure(
+        ctx.deps,
+        "agent-apply",
+        error,
+        ctx.nowMs,
+        ctx.correlationId,
+      );
       continue;
     }
     captureEditorLocalHistorySafely({
@@ -225,6 +231,7 @@ function captureAppliedHistory(ctx: ApplyContext, result: PatchApplyResult): voi
       content,
       origin: "agent-apply",
       nowMs: ctx.nowMs,
+      correlationId: ctx.correlationId,
     });
   }
 }
@@ -255,6 +262,9 @@ interface ApplyContext {
   readonly signal: AbortSignal;
   readonly nowMs: number;
   readonly options: EditorPatchApplyRouteOptions;
+  // The request's own correlation id (ADR-0173 D5 / g12), threaded down so a local-history
+  // capture failure joins the SAME id as the rest of this request's trail.
+  readonly correlationId: string | undefined;
 }
 
 async function runVerificationPhase(
@@ -493,6 +503,7 @@ export async function handleEditorPatchApply(
       signal,
       nowMs,
       options,
+      correlationId: ctx.correlationId,
     });
     return { status: 200, body: deps.redactor(response) };
   });

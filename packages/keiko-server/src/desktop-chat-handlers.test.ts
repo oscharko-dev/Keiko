@@ -14,8 +14,8 @@ import { createInMemoryUiStore, type UiStore } from "./store/index.js";
 import { startUiTestServer } from "./ui-test-server/_support.js";
 import type { ModelPort } from "@oscharko-dev/keiko-harness";
 import type {
+  GatewayCallRequest,
   GatewayConfig,
-  GatewayRequest,
   NormalizedResponse,
 } from "@oscharko-dev/keiko-model-gateway";
 import { createMemoryVault, type MemoryVaultStore } from "@oscharko-dev/keiko-memory-vault";
@@ -41,7 +41,7 @@ let staticRoot: string;
 let tmp: string;
 let projectDir: string;
 let store: UiStore;
-let seenRequests: GatewayRequest[];
+let seenRequests: GatewayCallRequest[];
 
 function fakeModel(content: string): ModelPort {
   return {
@@ -676,6 +676,35 @@ describe("desktop chat routes", () => {
     const persistedRoles = store.listMessages(created.chat.id).map((message) => message.role);
     expect(persistedRoles).toHaveLength(2);
     expect(persistedRoles).toEqual(expect.arrayContaining(["user", "assistant"]));
+  });
+
+  // ADR-0173 D5 (BFF -> gateway correlation threading): the client-supplied request correlation id
+  // must reach the Gateway double's GatewayCallRequest.logContext, not just the response header, so
+  // a gateway retry/circuit-breaker line for this call joins the same trail as the HTTP request.
+  it("threads the request correlation id into the model gateway call's logContext", async () => {
+    const createRes = await fetch(`${base()}/api/desktop/chats`, {
+      method: "POST",
+      headers: POST_JSON_HEADERS,
+      body: JSON.stringify({ projectPath: projectDir, modelId: CHAT_MODEL }),
+    });
+    const created = (await createRes.json()) as { chat: { id: string } };
+    const correlationId = "test-correlation-id-send-0001";
+
+    const sendRes = await fetch(`${base()}/api/desktop/chat`, {
+      method: "POST",
+      headers: { ...POST_JSON_HEADERS, "X-Keiko-Correlation-Id": correlationId },
+      body: JSON.stringify({
+        chatId: created.chat.id,
+        projectPath: projectDir,
+        modelId: CHAT_MODEL,
+        content: "Say hello with correlation",
+      }),
+    });
+
+    expect(sendRes.status).toBe(200);
+    expect(sendRes.headers.get("X-Keiko-Correlation-Id")).toBe(correlationId);
+    expect(seenRequests).toHaveLength(1);
+    expect(seenRequests[0]?.logContext?.correlationId).toBe(correlationId);
   });
 
   it("admits a long canonical final atomically and rejects content beyond the UTF-8 hard cap", async () => {
@@ -1363,6 +1392,52 @@ describe("desktop chat routes", () => {
       supersedesResponseVersion: 1,
     });
     expect(store.listMessages(chat.id).map((message) => message.id)).toContain(assistant.id);
+  });
+
+  // ADR-0173 D5: the regenerate path builds a fresh model.call site distinct from the send path
+  // (chat-handlers.ts persistRegeneratedChatTurn) — it must thread the request correlation id too.
+  it("threads the request correlation id into the regenerate model gateway call", async () => {
+    await restartWithDeps(deps(fakeModel("regenerated with correlation")));
+    const chat = store.createChat(projectDir, "regen correlation", CHAT_MODEL);
+    store.createMessage({
+      chatId: chat.id,
+      role: "user",
+      content: "original question",
+      timestamp: 1,
+      runId: undefined,
+      workflowId: undefined,
+      workflowStatus: undefined,
+      shortResult: undefined,
+      taskType: undefined,
+    });
+    const assistant = store.createMessage({
+      chatId: chat.id,
+      role: "assistant",
+      content: "stale answer",
+      timestamp: 2,
+      runId: undefined,
+      workflowId: undefined,
+      workflowStatus: undefined,
+      shortResult: undefined,
+      taskType: undefined,
+    });
+    const correlationId = "test-correlation-id-regen-0001";
+
+    const res = await fetch(`${base()}/api/desktop/chat/regenerate`, {
+      method: "POST",
+      headers: { ...POST_JSON_HEADERS, "X-Keiko-Correlation-Id": correlationId },
+      body: JSON.stringify({
+        chatId: chat.id,
+        projectPath: projectDir,
+        modelId: CHAT_MODEL,
+        assistantMessageId: assistant.id,
+      }),
+    });
+
+    expect(res.status).toBe(200);
+    expect(res.headers.get("X-Keiko-Correlation-Id")).toBe(correlationId);
+    expect(seenRequests).toHaveLength(1);
+    expect(seenRequests[0]?.logContext?.correlationId).toBe(correlationId);
   });
 
   it("rejects regeneration of a closed chat without model work or message mutation", async () => {

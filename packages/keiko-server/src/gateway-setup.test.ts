@@ -5872,6 +5872,40 @@ describe("handleGatewaySetup", () => {
     deps.store.close();
   });
 
+  // ADR-0173 D5 g12: the discovery-truncation diagnostic must join the SAME trace as the rest of
+  // this setup attempt (e.g. the gateway.chat probe lines), not mint a disconnected id of its own
+  // — otherwise an operator cannot tell which setup attempt a truncation diagnostic belongs to.
+  it("threads the request's correlation id onto the discovery-truncation diagnostic (g12)", async () => {
+    const uiDir = await tempDir("keiko-gw-ui-discovery-truncated-corr-");
+    const evidenceDir = await tempDir("keiko-gw-ev-discovery-truncated-corr-");
+    const diagnostics: ServerDiagnosticRecord[] = [];
+    const oversized = Array.from({ length: MAX_DISCOVERED_MODELS + 5 }, (_unused, index) => ({
+      id: `discovered-model-${String(index)}`,
+    }));
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir,
+      env: { ...VAULT_ENV },
+      uiDbPath: join(uiDir, "keiko-ui.db"),
+      gatewayModelDiscovery: () => Promise.resolve(parseModelDiscovery({ data: oversized })),
+      gatewayEmbeddingProbe: PASSTHROUGH_EMBEDDING_PROBE,
+      gatewaySetupTester: (_config, modelIds) => Promise.resolve([...modelIds]),
+      diagnostics: { record: (record): void => void diagnostics.push(record) },
+    });
+
+    await handleGatewaySetup(
+      ctx(
+        { baseUrl: "https://llm-gateway.example.com", apiKey: "example-secret-token" },
+        "corr-discovery-truncation-g12",
+      ),
+      deps,
+    );
+
+    const truncation = diagnostics.find((record) => record.code === "GATEWAY_DISCOVERY_TRUNCATED");
+    expect(truncation?.correlationId).toBe("corr-discovery-truncation-g12");
+    deps.store.close();
+  });
+
   it("does not emit the truncation diagnostic when discovery fits the cap (KEIKO-0325)", async () => {
     const uiDir = await tempDir("keiko-gw-ui-discovery-fits-");
     const evidenceDir = await tempDir("keiko-gw-ev-discovery-fits-");
