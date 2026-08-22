@@ -4768,3 +4768,11 @@ export {
   PROMPT_CANDIDATE_RANKING_EXPECTED_ORDER,
   PROMPT_CANDIDATE_RANKING_FIXTURE,
 } from "./prompt-enhancer-ranking-fixture.js";
+
+// ─── Store fingerprint (Epic #3233 §6.2, Wave 4a) ────────────────────────────────
+// A redacted, point-in-time snapshot of one persisted store's schema/integrity state, embedded
+// in the support bundle manifest's `storeFingerprints` array. `isStoreFingerprint` is the
+// fail-closed guard the manifest assembler uses to refuse a malformed value instead of embedding
+// it.
+export type { StoreFingerprint } from "./store-fingerprint.js";
+export { isStoreFingerprint } from "./store-fingerprint.js";

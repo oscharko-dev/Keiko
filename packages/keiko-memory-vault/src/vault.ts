@@ -20,9 +20,21 @@ import type {
   MemoryScope,
   MemoryStatus,
 } from "@oscharko-dev/keiko-contracts/memory";
+import type { SecurityLogSink } from "@oscharko-dev/keiko-security";
 import { chmodIfPresent, openMemoryDatabase } from "./db.js";
 import { resolveMemoryDir, resolveMemoryDbPath } from "./paths.js";
-import { createMemoryContentCipher, resolveVaultKey, type MemoryContentCipher } from "./cipher.js";
+import {
+  createMemoryContentCipher,
+  keyFromKeychain,
+  resolveVaultKey,
+  type MemoryContentCipher,
+  type VaultKeySource,
+} from "./cipher.js";
+import {
+  emitMemoryVaultLogEvent,
+  startMemoryVaultLogTimer,
+  type MemoryVaultLogSink,
+} from "./vault-log.js";
 import { scopeCoordinateOf, scopeKindOf } from "./scope-key.js";
 import {
   deleteMemoryRow,
@@ -361,17 +373,54 @@ function resolveBodySuppressionKey(db: DatabaseSync, cipher: MemoryContentCipher
   return key;
 }
 
+interface ResolvedCipherWithSource {
+  readonly cipher: MemoryContentCipher;
+  // `undefined` for a test-injected cipher/vaultKey, where no key-resolution tier ran at all —
+  // never a made-up label for a tier that was never actually consulted.
+  readonly keySource: VaultKeySource | undefined;
+}
+
 // Resolve the content cipher. Precedence: an explicitly injected cipher (tests), then an injected
 // raw key (tests/CI), then the real tiered resolver (KEIKO_MEMORY_KEY > keychain > keyfile). The
 // public factory never requires any of these — production callers get the tiered resolver.
-function resolveCipher(
+//
+// The resolved tier is RETAINED here rather than discarded (previously `resolveVaultKey(...).key`
+// threw the `source` half away — the store-open event this file now emits is exactly the field an
+// operator needs to tell "the vault opened using an env override" from "the vault fell all the way
+// through to the weaker keyfile tier" without re-deriving it from a second key-resolution call).
+//
+// `securityLogSink` (Wave 4a, epic #3233 §8) is threaded into the keychain tier's own bounded
+// reader (`keyFromKeychain`, `cipher.ts`) rather than into `resolveVaultKey` itself: neither an
+// injected cipher nor an injected raw key ever touches the keychain, so building the sink-wired
+// closure only on the path that actually resolves through it keeps a test-injected key from paying
+// for, or depending on, a sink it will never call.
+function resolveCipherWithSource(
   opts: MemoryVaultFactoryOptions | undefined,
   env: Readonly<Record<string, string | undefined>>,
-): MemoryContentCipher {
-  if (opts?.cipher !== undefined) return opts.cipher;
-  if (opts?.vaultKey !== undefined) return createMemoryContentCipher(opts.vaultKey);
+  securityLogSink: SecurityLogSink | undefined,
+): ResolvedCipherWithSource {
+  if (opts?.cipher !== undefined) return { cipher: opts.cipher, keySource: undefined };
+  if (opts?.vaultKey !== undefined) {
+    return { cipher: createMemoryContentCipher(opts.vaultKey), keySource: undefined };
+  }
   const memoryDir = resolveMemoryDir(opts?.memoryDir, env);
-  return createMemoryContentCipher(resolveVaultKey(env, memoryDir).key);
+  const resolved = resolveVaultKey(env, memoryDir, () =>
+    keyFromKeychain({ sink: securityLogSink }),
+  );
+  return { cipher: createMemoryContentCipher(resolved.key), keySource: resolved.source };
+}
+
+function emitVaultOpened(
+  sink: MemoryVaultLogSink | undefined,
+  keySource: VaultKeySource | undefined,
+  durationMs: number,
+): void {
+  emitMemoryVaultLogEvent(sink, {
+    category: "memory",
+    op: "memory-vault.store.opened",
+    durationMs,
+    ...(keySource === undefined ? {} : { extra: { keySource } }),
+  });
 }
 
 // Validate-then-redact for inserts. The validator runs on the CALLER-SUPPLIED record so a
@@ -1127,11 +1176,38 @@ function buildStore(db: DatabaseSync, opts: ResolvedOptions): MemoryVaultStore {
   };
 }
 
-export function createMemoryVault(options?: MemoryVaultFactoryOptions): MemoryVaultStore {
+// `logSink`/`securityLogSink` are intentionally not on `MemoryVaultFactoryOptions` itself: an
+// intersection at the factory's own call boundary is enough for full external usability, since a
+// re-export preserves the exact function type TypeScript infers here, and object-literal
+// assignability at a call site is checked structurally rather than by the type's name being
+// importable — the same property that lets a bare `ServerLogSink` object literal satisfy either
+// seam with no adapter (see `log-port.ts`/`vault-log.ts`).
+export type CreateMemoryVaultOptions = MemoryVaultFactoryOptions & {
+  /**
+   * Optional activity-log seam (ADR-0019; see `vault-log.ts`). When wired, vault-open records the
+   * retained key-resolution tier on `memory-vault.store.opened`, and a corruption recovery emits
+   * `memory-vault.store.quarantined`. Omitted or `undefined` keeps the vault exactly as silent as
+   * before this change.
+   */
+  readonly logSink?: MemoryVaultLogSink;
+  /**
+   * Optional activity-log seam for the shared macOS Keychain tier (ADR-0019, Wave 4a epic #3233
+   * §8; see `@oscharko-dev/keiko-security/log-port.ts` and `cipher.ts`'s `keyFromKeychain`). When
+   * wired, a keychain spawn that falls through to the keyfile tier emits one
+   * `security.keychain.fallback` event on this sink instead of failing silently. A `ServerLogSink`
+   * (`processServerLogSink()`) is structurally assignable here with no adapter, mirroring `logSink`
+   * above. Omitted or `undefined` keeps the keychain tier exactly as silent as before this change.
+   */
+  readonly securityLogSink?: SecurityLogSink;
+};
+
+export function createMemoryVault(options?: CreateMemoryVaultOptions): MemoryVaultStore {
   const env = options?.env ?? defaultEnv();
   const dbPath = resolveMemoryDbPath(options?.memoryDir, env);
-  const cipher = resolveCipher(options, env);
-  const db = openMemoryDatabase(dbPath, cipher);
+  const { cipher, keySource } = resolveCipherWithSource(options, env, options?.securityLogSink);
+  const elapsedMs = startMemoryVaultLogTimer();
+  const db = openMemoryDatabase(dbPath, cipher, options?.logSink);
+  emitVaultOpened(options?.logSink, keySource, elapsedMs());
   const bodySuppressionKey = resolveBodySuppressionKey(db, cipher);
   hardenVaultSidecars(dbPath);
   return buildStore(db, resolveOptions(options, cipher, dbPath, bodySuppressionKey));

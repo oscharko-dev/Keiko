@@ -48,6 +48,12 @@ export {
   errorRecord,
 } from "./sqlite-corruption.js";
 
+// Content-free activity-log seam for this package (ADR-0019, w4a-security-log-port) — independent
+// of `keiko-local-knowledge`'s `KnowledgeLogSink`. Wired into `readMacosKeychainSecret` and
+// `createShardedLocalSecretVault`'s shard reads; the composition root supplies the real sink.
+export type { SecurityLogEvent, SecurityLogSink } from "./log-port.js";
+export { nullSecurityLogSink } from "./log-port.js";
+
 // Prompt Enhancer authoritative injection / unsafe-content detector (#1313, ADR-0044 §1/§5).
 export type {
   PromptInjectionSignalCode,

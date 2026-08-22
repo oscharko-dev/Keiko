@@ -13,6 +13,7 @@ import {
   writeVectorIndexState,
   type VectorIndexStateRecord,
 } from "../indexing/vector-index-state.js";
+import type { KnowledgeLogSink } from "../knowledge-log.js";
 import type { KnowledgeStore } from "../store.js";
 
 import type { RetrievalVectorIndexDiagnostics } from "./types.js";
@@ -70,6 +71,10 @@ export interface VectorIndexOptions {
   readonly now?: () => number;
   readonly newCorrelationId?: () => string;
   readonly onUnexpectedFailure?: (diagnostic: VectorIndexUnexpectedFailureDiagnostic) => void;
+  // Content-free activity log (ADR-0019 seam, `knowledge-log.ts`). Absent → nothing is written.
+  // Threaded down to the USearch ANN layer so a fresh native-runtime resolution is visible in
+  // `server.log` beside the search that triggered it (Wave 4a, epic #3233 §8).
+  readonly logSink?: KnowledgeLogSink;
 }
 
 export interface VectorIndexEnvironment {
@@ -85,6 +90,7 @@ interface ResolvedVectorIndexOptions {
   readonly now: () => number;
   readonly newCorrelationId: () => string;
   readonly onUnexpectedFailure?: (diagnostic: VectorIndexUnexpectedFailureDiagnostic) => void;
+  readonly logSink?: KnowledgeLogSink;
 }
 
 interface VectorIndexStampRow {
@@ -368,6 +374,7 @@ export function resolveVectorIndexOptions(
     ...(supplied.onUnexpectedFailure !== undefined
       ? { onUnexpectedFailure: supplied.onUnexpectedFailure }
       : {}),
+    ...(supplied.logSink !== undefined ? { logSink: supplied.logSink } : {}),
   };
 }
 
@@ -567,6 +574,7 @@ async function runBuiltInSearch(
     candidateLimit: request.candidateLimit,
     ...(options.usearchBinaryPath !== undefined ? { binaryPath: options.usearchBinaryPath } : {}),
     maxIndexBytes: options.maxIndexedVectorBytes,
+    ...(options.logSink !== undefined ? { logSink: options.logSink } : {}),
   });
 }
 

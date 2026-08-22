@@ -27,7 +27,9 @@ export {
 } from "./knowledge-log.js";
 export { resolveKnowledgeStorePath, type ResolveKnowledgeStorePathOptions } from "./store-paths.js";
 export {
+  computeStoreFingerprint,
   openKnowledgeStore,
+  openKnowledgeStoreReadOnly,
   type KnowledgeStoreKeyProvider,
   type KnowledgeStoreKeyProviderContext,
   type KnowledgeStoreProtectionOptions,

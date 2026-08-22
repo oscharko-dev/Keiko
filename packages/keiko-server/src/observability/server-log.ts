@@ -89,7 +89,11 @@ export { redactRoutePath } from "./route-template.js";
 // Coarse routing label. Kept a closed union so a typo cannot invent a category an operator's
 // grep will never find; `memory` was added for the vault/retrieval surface, `process` for the
 // process-lifecycle lines (`process.started`/`process.heartbeat`/`process.exiting`) envelope v2
-// adds.
+// adds, and `security` (Wave 4a, epic #3233 §8) for `keiko-security`'s own structural
+// `SecurityLogSink` port (`packages/keiko-security/src/log-port.ts`) — without this member here,
+// `SecurityLogEvent`'s `category` union is not a subset of this one, so `ServerLogSink` (via
+// `processServerLogSink()`) is not structurally assignable to `SecurityLogSink` at all, unlike the
+// `MemoryVaultLogSink`/`KnowledgeLogSink` ports, whose categories are already subsets of this union.
 export type ServerLogCategory =
   | "http"
   | "gateway"
@@ -98,6 +102,7 @@ export type ServerLogCategory =
   | "setup"
   | "search"
   | "memory"
+  | "security"
   | "diagnostic"
   | "process";
 

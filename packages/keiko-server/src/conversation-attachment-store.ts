@@ -10,6 +10,7 @@ import {
   resolveLocalVaultKey,
   type LocalSecretVault,
 } from "@oscharko-dev/keiko-security/secret-vault";
+import type { SecurityLogSink } from "@oscharko-dev/keiko-security";
 
 const STORE_DIR = "conversation-attachments";
 const KEY_ENV = "KEIKO_CONVERSATION_ATTACHMENT_KEY";
@@ -68,6 +69,14 @@ export interface CreateConversationAttachmentStoreOptions {
   readonly ttlMs?: number | undefined;
   /** Maximum aggregate decoded attachment-content bytes retained as live records. */
   readonly totalContentBytes?: number | undefined;
+  /**
+   * Optional activity-log seam (ADR-0019, Wave 4a epic #3233 §8; see
+   * `@oscharko-dev/keiko-security/log-port.ts`). When wired, a shard file this vault cannot read
+   * for a reason other than "absent" emits one `security.vault.shard-unreadable` event instead of
+   * failing silently. Ignored when `vault` is injected directly (tests). Omitted or `undefined`
+   * keeps the vault exactly as silent as before this change.
+   */
+  readonly securityLogSink?: SecurityLogSink | undefined;
 }
 
 export class ConversationAttachmentStoreError extends Error {
@@ -368,8 +377,10 @@ export function createConversationAttachmentStore(
         envVarName: KEY_ENV,
         keychainService: KEY_SERVICE,
         keyfileName: KEY_FILE,
+        sink: options.securityLogSink,
       }).key,
       storeDir: join(options.runtimeStateDir, STORE_DIR),
+      sink: options.securityLogSink,
     });
     return cachedVault;
   };

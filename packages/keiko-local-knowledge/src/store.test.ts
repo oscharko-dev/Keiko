@@ -23,7 +23,13 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { KnowledgeStoreError } from "./errors.js";
 import type { KnowledgeLogEvent, KnowledgeLogSink } from "./knowledge-log.js";
-import { LK_STORE_BUSY_TIMEOUT_MS, openKnowledgeStore } from "./store.js";
+import {
+  computeStoreFingerprint,
+  LK_STORE_BUSY_TIMEOUT_MS,
+  openKnowledgeStore,
+  type KnowledgeStoreKeyProvider,
+} from "./store.js";
+import { STORE_CONTENT_ENCRYPTION_TEST_CONSTANTS } from "./store-content-encryption.js";
 
 interface CountRow {
   readonly n: number;
@@ -780,5 +786,160 @@ describe("openKnowledgeStore — activity log", () => {
     expect(rejection).toBeDefined();
     expect(rejection?.level).toBe("error");
     expect(rejection?.extra).toEqual({ protectionMode: "encrypted-key-provider" });
+  });
+
+  function testKeyProvider(fill: number): KnowledgeStoreKeyProvider {
+    return {
+      providerId: `test-${String(fill)}`,
+      resolveKey: () => new Uint8Array(32).fill(fill),
+    };
+  }
+
+  it("records store.encryption-migrated on a fresh forward migration to encrypted storage", () => {
+    const dbPath = join(tmp, "capsules.db");
+    const { sink, events } = recordingSink();
+
+    const store = openKnowledgeStore({
+      dbPath,
+      logSink: sink,
+      protection: { mode: "encrypted-key-provider", keyProvider: testKeyProvider(7) },
+    });
+    store.close();
+
+    const migrated = events.find((event) => event.op === "store.encryption-migrated");
+    expect(migrated).toBeDefined();
+    expect(migrated?.category).toBe("diagnostic");
+    expect(migrated?.durationMs).toBeGreaterThanOrEqual(0);
+    expect(migrated?.extra).toEqual({
+      fromScope: "plaintext",
+      toScope: STORE_CONTENT_ENCRYPTION_TEST_CONSTANTS.scopeValue,
+    });
+  });
+
+  it("records store.encryption-migrated with the prior scope on a scope upgrade", () => {
+    const dbPath = join(tmp, "capsules.db");
+    const store = openKnowledgeStore({
+      dbPath,
+      protection: { mode: "encrypted-key-provider", keyProvider: testKeyProvider(9) },
+    });
+    store.close();
+
+    const raw = new DatabaseSync(dbPath);
+    try {
+      raw
+        .prepare("UPDATE schema_meta SET value = ? WHERE key = ?")
+        .run("reconstructive-columns/v2", STORE_CONTENT_ENCRYPTION_TEST_CONSTANTS.scopeKey);
+    } finally {
+      raw.close();
+    }
+
+    const { sink, events } = recordingSink();
+    const upgraded = openKnowledgeStore({
+      dbPath,
+      logSink: sink,
+      protection: { mode: "encrypted-key-provider", keyProvider: testKeyProvider(9) },
+    });
+    upgraded.close();
+
+    const migrated = events.find((event) => event.op === "store.encryption-migrated");
+    expect(migrated).toBeDefined();
+    expect(migrated?.extra).toEqual({
+      fromScope: "reconstructive-columns/v2",
+      toScope: STORE_CONTENT_ENCRYPTION_TEST_CONSTANTS.scopeValue,
+    });
+  });
+
+  it("never writes store.encryption-migrated when nothing needed migrating", () => {
+    const dbPath = join(tmp, "capsules.db");
+    const provider = testKeyProvider(11);
+    openKnowledgeStore({
+      dbPath,
+      protection: { mode: "encrypted-key-provider", keyProvider: provider },
+    }).close();
+
+    const { sink, events } = recordingSink();
+    openKnowledgeStore({
+      dbPath,
+      logSink: sink,
+      protection: { mode: "encrypted-key-provider", keyProvider: provider },
+    }).close();
+
+    expect(events.find((event) => event.op === "store.encryption-migrated")).toBeUndefined();
+  });
+});
+
+describe("computeStoreFingerprint", () => {
+  it("reports schema version, applied migrations, table row counts, and quick_check on a fresh plaintext store", () => {
+    const store = openKnowledgeStore({ dbPath: join(tmp, "capsules.db") });
+    try {
+      const fingerprint = computeStoreFingerprint(store._internal.db);
+      expect(fingerprint.store).toBe("local-knowledge");
+      expect(fingerprint.schemaVersion).toBe(LOCAL_KNOWLEDGE_DB_SCHEMA_VERSION);
+      expect(fingerprint.migrationsApplied).toEqual(
+        KNOWLEDGE_CAPSULE_MIGRATIONS.map((migration) => `v${String(migration.version)}`),
+      );
+      expect(Object.keys(fingerprint.tableRowCounts).sort()).toEqual(
+        [...KNOWLEDGE_CAPSULE_TABLES].sort(),
+      );
+      expect(Object.values(fingerprint.tableRowCounts).every((count) => count === 0)).toBe(true);
+      expect(fingerprint.quickCheckOk).toBe(true);
+      expect(fingerprint.encryptionMode).toBe("plaintext");
+      expect(fingerprint.keySource).toBeUndefined();
+    } finally {
+      store.close();
+    }
+  });
+
+  it("counts existing rows and reports encryptionMode: encrypted for an encrypted store", () => {
+    const dbPath = join(tmp, "capsules.db");
+    const store = openKnowledgeStore({
+      dbPath,
+      protection: {
+        mode: "encrypted-key-provider",
+        keyProvider: { providerId: "fp-test", resolveKey: () => new Uint8Array(32).fill(3) },
+      },
+    });
+    try {
+      store._internal.db
+        .prepare(
+          `INSERT INTO capsules (id, display_name, tags_json, retrieval_effort, output_mode,
+             answer_grounding_policy, lifecycle_state, storage_reference,
+             embedding_model_provider, embedding_model_id, vector_dimensions, vector_metric,
+             created_at, updated_at)
+           VALUES ('cap-fp', 'Fingerprint capsule', '[]', 'default', 'answers',
+             'require-citations-or-state-no-evidence', 'draft', 'capsules/cap-fp',
+             'test', 'model', 8, 'cosine', 1, 1)`,
+        )
+        .run();
+      const fingerprint = computeStoreFingerprint(store._internal.db);
+      expect(fingerprint.tableRowCounts.capsules).toBe(1);
+      expect(fingerprint.encryptionMode).toBe("encrypted");
+      expect(fingerprint.quickCheckOk).toBe(true);
+    } finally {
+      store.close();
+    }
+  });
+
+  it("degrades a failing quick_check read to quickCheckOk: false rather than throwing", () => {
+    const dbPath = join(tmp, "capsules.db");
+    const store = openKnowledgeStore({ dbPath });
+    // A quick_check failure must degrade, never propagate — a bundle export must not crash
+    // because the very store it is reporting on is unhealthy. Overriding `prepare` for just the
+    // one statement (rather than corrupting the on-disk file, which `openKnowledgeStore` already
+    // quarantines at open time) isolates the ONE read this function's `quickCheckOkFor` helper
+    // must swallow, without disturbing every other prepared statement `computeStoreFingerprint`
+    // also issues.
+    const originalPrepare = store._internal.db.prepare.bind(store._internal.db);
+    store._internal.db.prepare = (sql: string): ReturnType<typeof originalPrepare> => {
+      if (sql === "PRAGMA quick_check") throw new Error("simulated quick_check read failure");
+      return originalPrepare(sql);
+    };
+    try {
+      const fingerprint = computeStoreFingerprint(store._internal.db);
+      expect(fingerprint.quickCheckOk).toBe(false);
+    } finally {
+      store._internal.db.prepare = originalPrepare;
+      store.close();
+    }
   });
 });

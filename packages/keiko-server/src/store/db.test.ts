@@ -14,9 +14,13 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
-import type { StoredPdfCitationPreviewCitation } from "@oscharko-dev/keiko-contracts";
+import {
+  isStoreFingerprint,
+  type StoredPdfCitationPreviewCitation,
+} from "@oscharko-dev/keiko-contracts";
 import { MAX_DESKTOP_CHAT_CLIENT_TURN_ID_CHARS } from "@oscharko-dev/keiko-contracts/bff-wire";
 import {
+  buildUiStoreOverDatabase,
   createInMemoryUiStore,
   createNodeUiStore,
   openNodeUiDatabase,
@@ -25,6 +29,10 @@ import {
   type GroundedAnswer,
   type NewChatMessage,
 } from "./index.js";
+// Not yet re-exported through the barrel (Wave 4a is scoped to db.ts/deps.ts) — imported directly
+// from the co-located module instead, same package, no boundary crossed.
+import { computeStoreFingerprint, UI_STORE_FINGERPRINT_TABLES } from "./db.js";
+import type { ServerLogEvent, ServerLogSink } from "../observability/index.js";
 
 // Narrows an array-index access (T | undefined) to T without a non-null assertion.
 function must<T>(value: T | undefined): T {
@@ -1074,5 +1082,139 @@ describe("UI DB busy_timeout (issue #639)", () => {
     const store = createInMemoryUiStore();
     expect(store.listProjects()).toEqual([]);
     store.close();
+  });
+});
+
+// Wave 4a, epic #3233 §6.2 — the redacted, point-in-time schema/integrity snapshot embedded in
+// the support bundle manifest.
+describe("computeStoreFingerprint (Wave 4a, epic #3233 §6.2)", () => {
+  it("computes a valid, fully-populated fingerprint for a freshly migrated store", () => {
+    const dbPath = join(tmpDir, "fingerprint-fresh.db");
+    const db = openNodeUiDatabase(dbPath);
+    try {
+      const fingerprint = computeStoreFingerprint(db);
+      // Validated against the real, independently-owned keiko-contracts guard rather than
+      // re-asserting each field by hand — the producer and the shape gate must agree.
+      expect(isStoreFingerprint(fingerprint)).toBe(true);
+      expect(fingerprint.store).toBe("ui");
+      expect(fingerprint.schemaVersion).toBe(SCHEMA_VERSION);
+      expect(fingerprint.migrationsApplied).toEqual(
+        Array.from({ length: SCHEMA_VERSION }, (_unused, index) => `v${String(index + 1)}`),
+      );
+      expect(Object.keys(fingerprint.tableRowCounts).sort()).toEqual(
+        [...UI_STORE_FINGERPRINT_TABLES].sort(),
+      );
+      expect(Object.values(fingerprint.tableRowCounts).every((count) => count === 0)).toBe(true);
+      expect(fingerprint.quickCheckOk).toBe(true);
+      expect(fingerprint.encryptionMode).toBe("plaintext");
+      expect(fingerprint.keySource).toBeUndefined();
+    } finally {
+      db.close();
+    }
+  });
+
+  it("counts rows actually present in a table, independently per table", () => {
+    const dbPath = join(tmpDir, "fingerprint-counts.db");
+    const db = openNodeUiDatabase(dbPath);
+    try {
+      const store = buildUiStoreOverDatabase(db);
+      const projectA = mkdtempSync(join(tmpDir, "fingerprint-project-a-"));
+      const projectB = mkdtempSync(join(tmpDir, "fingerprint-project-b-"));
+      store.createProject(projectA, "Project A");
+      store.createProject(projectB, "Project B");
+      const fingerprint = computeStoreFingerprint(db);
+      expect(fingerprint.tableRowCounts.projects).toBe(2);
+      expect(fingerprint.tableRowCounts.chats).toBe(0);
+    } finally {
+      db.close();
+    }
+  });
+
+  // Regression pin: the manifest assembler this feeds must still produce a (degraded) fingerprint
+  // for the very store an operator is trying to diagnose — it must never throw and abort the
+  // whole support-bundle export over one unreadable store.
+  it("never throws against a corrupted file, and returns a degraded fingerprint instead", () => {
+    const dbPath = join(tmpDir, "fingerprint-corrupt.db");
+    writeFileSync(dbPath, Buffer.from("not a sqlite db"));
+    const db = new DatabaseSync(dbPath);
+    try {
+      let fingerprint: ReturnType<typeof computeStoreFingerprint> | undefined;
+      expect(() => {
+        fingerprint = computeStoreFingerprint(db);
+      }).not.toThrow();
+      const resolved = must(fingerprint);
+      expect(isStoreFingerprint(resolved)).toBe(true);
+      expect(resolved.quickCheckOk).toBe(false);
+      expect(resolved.schemaVersion).toBe(0);
+      expect(resolved.migrationsApplied).toEqual([]);
+      expect(resolved.tableRowCounts).toEqual({});
+    } finally {
+      db.close();
+    }
+  });
+});
+
+// Wave 4a, epic #3233 §8 — a `store.opened` activity-log event once per successful open.
+describe("openNodeUiDatabase — store.opened activity log (Wave 4a, epic #3233 §8)", () => {
+  it("emits exactly one store.opened event through the supplied sink on a successful open", () => {
+    const dbPath = join(tmpDir, "opened.db");
+    const events: ServerLogEvent[] = [];
+    const sink: ServerLogSink = {
+      write: (event) => {
+        events.push(event);
+      },
+    };
+    const db = openNodeUiDatabase(dbPath, sink);
+    try {
+      expect(events).toHaveLength(1);
+      const event = must(events[0]);
+      expect(event.category).toBe("setup");
+      expect(event.op).toBe("store.opened");
+      expect(typeof event.durationMs).toBe("number");
+      expect(event.durationMs ?? -1).toBeGreaterThanOrEqual(0);
+      expect(event.extra?.store).toBe("ui");
+      expect(event.extra?.storeSchemaVersion).toBe(SCHEMA_VERSION);
+      expect(event.extra?.migrationsAppliedCount).toBe(SCHEMA_VERSION);
+      expect(event.extra?.quickCheckOk).toBe(true);
+      expect(event.extra?.encryptionMode).toBe("plaintext");
+      // This store is never encrypted, so no key is ever resolved — `keySource` must be absent,
+      // not merely `undefined`, on the emitted event.
+      expect(event.extra !== undefined && "keySource" in event.extra).toBe(false);
+    } finally {
+      db.close();
+    }
+  });
+
+  it("does not emit any event, and still opens normally, when no sink is supplied", () => {
+    const dbPath = join(tmpDir, "opened-no-sink.db");
+    const db = openNodeUiDatabase(dbPath);
+    try {
+      const row = db.prepare("PRAGMA user_version").get() as
+        { readonly user_version?: number } | undefined;
+      expect(row?.user_version).toBe(SCHEMA_VERSION);
+    } finally {
+      db.close();
+    }
+  });
+
+  it("still returns a working database when the supplied sink throws on write", () => {
+    const dbPath = join(tmpDir, "opened-sink-throws.db");
+    const sink: ServerLogSink = {
+      write: () => {
+        throw new Error("boom");
+      },
+    };
+    let db: DatabaseSync | undefined;
+    expect(() => {
+      db = openNodeUiDatabase(dbPath, sink);
+    }).not.toThrow();
+    const opened = must(db);
+    try {
+      const row = opened.prepare("PRAGMA user_version").get() as
+        { readonly user_version?: number } | undefined;
+      expect(row?.user_version).toBe(SCHEMA_VERSION);
+    } finally {
+      opened.close();
+    }
   });
 });

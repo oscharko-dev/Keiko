@@ -15,6 +15,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import type { EnvSource } from "@oscharko-dev/keiko-model-gateway";
 import type { LocalVaultKeychainAccess } from "@oscharko-dev/keiko-security/secret-vault";
+import type { SecurityLogSink } from "@oscharko-dev/keiko-security";
 import { savePrivateJson } from "./private-json.js";
 import {
   hasPlaintextGatewayCredentials,
@@ -32,6 +33,9 @@ export interface SealGatewayConfigContext {
   readonly evidenceDir: string;
   readonly keychainAccess?: LocalVaultKeychainAccess | undefined;
   readonly figmaKeychainAccess?: FigmaKeychainAccess | undefined;
+  // Optional activity-log seam (ADR-0019); the deps.ts/gateway-setup.ts composition roots supply
+  // `processServerLogSink()`.
+  readonly securityLogSink?: SecurityLogSink | undefined;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -77,6 +81,7 @@ export function persistSealedGatewayConfig(
     env: ctx.env,
     configPath: ctx.storagePath,
     ...(ctx.keychainAccess !== undefined ? { keychainAccess: ctx.keychainAccess } : {}),
+    securityLogSink: ctx.securityLogSink,
   });
   const withSealedProviders = { ...raw, providers: sealedProviders.providers };
   const withSealedCredentials =
@@ -90,6 +95,7 @@ export function persistSealedGatewayConfig(
       env: ctx.env,
       configPath: ctx.storagePath,
       ...(ctx.keychainAccess !== undefined ? { keychainAccess: ctx.keychainAccess } : {}),
+      securityLogSink: ctx.securityLogSink,
     },
     sealedProviders.activeSecretRefs,
   );
@@ -101,6 +107,9 @@ export interface MigrateCredentialsOptions {
   readonly evidenceDir: string;
   readonly keychainAccess?: LocalVaultKeychainAccess | undefined;
   readonly figmaKeychainAccess?: FigmaKeychainAccess | undefined;
+  // Optional activity-log seam (ADR-0019); the deps.ts composition root supplies
+  // `processServerLogSink()`.
+  readonly securityLogSink?: SecurityLogSink | undefined;
 }
 
 export interface MigrateCredentialsOutcome {
@@ -131,6 +140,7 @@ export function migrateLocalConfigCredentials(
       ...(options.figmaKeychainAccess !== undefined
         ? { figmaKeychainAccess: options.figmaKeychainAccess }
         : {}),
+      securityLogSink: options.securityLogSink,
     });
     return { migrated: true };
   } catch {

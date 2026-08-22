@@ -18,6 +18,13 @@
 
 import { execFileSync } from "node:child_process";
 
+import {
+  emitSecurityLogEvent,
+  securityErrorKind,
+  startSecurityLogTimer,
+  type SecurityLogSink,
+} from "./log-port.js";
+
 const MACOS_SECURITY_EXECUTABLE = "/usr/bin/security";
 
 /**
@@ -34,6 +41,14 @@ export interface MacosKeychainOptions {
   readonly timeoutMs?: number | undefined;
   /** Test seam, so the tier's behaviour is assertable on a non-darwin host. */
   readonly platform?: NodeJS.Platform | undefined;
+  /**
+   * Optional activity-log seam (ADR-0019; see `log-port.ts`). When wired, a spawn failure that
+   * collapses to `{ kind: "unavailable" }` emits one `security.keychain.fallback` event instead of
+   * discarding the OS error silently — the gap the 0.3.0 boot-hang incident (see file header)
+   * exposed: the tier now returns in time, but still logged nothing about WHY it fell back.
+   * Omitted or `undefined` keeps this tier exactly as silent as before.
+   */
+  readonly sink?: SecurityLogSink | undefined;
 }
 
 /**
@@ -104,6 +119,44 @@ function readOutcome(error: unknown): MacosKeychainRead {
   return keychainItemNotFound(error) ? { kind: "absent" } : { kind: "unavailable" };
 }
 
+// Structural classification of HOW the bounded spawn ended, read from the same properties Node's
+// `execFileSync` sets on a `spawnSync`-family failure — never from `message`, which can carry the
+// resolved executable path. `"timeout"` is the one value an operator should treat as a recurrence
+// of the 0.3.0 boot-hang incident (file header): the keychain did not answer inside the bound and
+// had to be killed, exactly the shape a blocking OS modal produces. Closed vocabulary, verified
+// against the shipped `execFileSync` error shape for a killed timeout, a plain non-zero exit, and a
+// missing executable (ENOENT).
+function classifyBoundedExit(error: unknown): string {
+  if (typeof error !== "object" || error === null) return "unknown";
+  const e = error as { code?: unknown; signal?: unknown; status?: unknown };
+  if (e.code === "ETIMEDOUT") return "timeout";
+  if (typeof e.signal === "string") return "signal";
+  if (typeof e.status === "number") return "exit-status";
+  if (typeof e.code === "string") return "spawn-error";
+  return "unknown";
+}
+
+// Exported so the sibling keychain surface in `secret-vault.ts` — which spawns `security` through
+// its own injectable `KeychainCommandRunner` rather than calling `readMacosKeychainSecret` — can
+// report the identical `security.keychain.fallback` shape instead of growing a second copy of the
+// classification logic [GEN-MAINT-COUPLING-006].
+export function emitKeychainFallback(
+  sink: SecurityLogSink | undefined,
+  error: unknown,
+  elapsedMs: () => number,
+): void {
+  emitSecurityLogEvent(sink, {
+    level: "warn",
+    category: "security",
+    op: "security.keychain.fallback",
+    durationMs: elapsedMs(),
+    extra: {
+      reasonKind: securityErrorKind(error),
+      boundedExitKind: classifyBoundedExit(error),
+    },
+  });
+}
+
 /** Reads the generic password for `service`/`account`. Never throws. */
 export function readMacosKeychainSecret(
   service: string,
@@ -112,6 +165,7 @@ export function readMacosKeychainSecret(
 ): MacosKeychainRead {
   const spawn = resolveSpawn(options);
   if (!spawn.darwin) return { kind: "unavailable" };
+  const elapsedMs = startSecurityLogTimer();
   try {
     const secret = execFileSync(
       spawn.executable,
@@ -125,7 +179,9 @@ export function readMacosKeychainSecret(
     ).trim();
     return { kind: "found", secret };
   } catch (error) {
-    return readOutcome(error);
+    const outcome = readOutcome(error);
+    if (outcome.kind === "unavailable") emitKeychainFallback(options.sink, error, elapsedMs);
+    return outcome;
   }
 }
 

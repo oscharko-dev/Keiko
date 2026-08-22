@@ -22,6 +22,18 @@ export {
 } from "./paths.js";
 export { MEMORY_VAULT_SCHEMA_VERSION } from "./schema.js";
 export { memoryBodySuppressionHash } from "./body-fingerprint.js";
+// Read-only diagnostic seam for `keiko bundle export` (Wave 4a, epic #3233 §6.2): the exporter
+// resolves the vault key and opens the store itself via `openMemoryDatabaseReadOnly` (rather than
+// through `createMemoryVault`, whose returned `MemoryVaultStore` intentionally exposes no `db`
+// handle or `keySource`, or through the mutating `openMemoryDatabase`) so it can call
+// `computeStoreFingerprint` directly without migrating, re-encrypting, or quarantining the vault.
+export {
+  createMemoryContentCipher,
+  resolveVaultKey,
+  type MemoryContentCipher,
+  type VaultKeySource,
+} from "./cipher.js";
+export { computeStoreFingerprint, openMemoryDatabase, openMemoryDatabaseReadOnly } from "./db.js";
 export type {
   DeleteMemoryOptions,
   ListMemoriesOptions,

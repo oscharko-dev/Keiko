@@ -5,6 +5,8 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { EmbeddingModelIdentity } from "@oscharko-dev/keiko-contracts";
 
+import type { KnowledgeLogEvent, KnowledgeLogSink } from "../knowledge-log.js";
+
 import {
   __resetTargetRuntimeCacheForTests,
   clearUsearchAnnCacheForTests,
@@ -400,6 +402,52 @@ describe("USearch ANN index", () => {
     expect(second.ok).toBe(true);
     const readsAfterWarm = readFileSyncTelemetry.paths.filter((path) => path === binary).length;
     expect(readsAfterWarm).toBe(readsAfterCold);
+  });
+
+  it("logs search.native-runtime-resolved on the cold path only, content-free", async () => {
+    const corpus = clusteredCorpus(64, IDENTITY);
+    const queryVector = corpus.entries[0]?.vector;
+    if (queryVector === undefined) throw new Error("test corpus must contain a query vector");
+    const binary = runtimePath();
+    const events: KnowledgeLogEvent[] = [];
+    const logSink: KnowledgeLogSink = {
+      write: (event): void => {
+        events.push(event);
+      },
+    };
+    const request = {
+      partition: partition(corpus.entries, "native-runtime-resolved-logging"),
+      queryVector,
+      candidateLimit: 5,
+      exactScanThreshold: 0,
+      binaryPath: binary,
+      logSink,
+    };
+    __resetTargetRuntimeCacheForTests();
+
+    const cold = await searchUsearchAnnIndex(request);
+    expect(cold.ok).toBe(true);
+    const coldLines = events.filter((event) => event.op === "search.native-runtime-resolved");
+    // resolvedIndex() and buildSearchIndex() both call targetRuntime() for the same request;
+    // the second call is already a warm hit against the cache the first call just populated,
+    // so exactly one line — not two — is written for one logical search call.
+    expect(coldLines).toHaveLength(1);
+    expect(coldLines[0]).toMatchObject({
+      level: "info",
+      category: "search",
+      extra: {
+        targetKey: usearchRuntimeTargetKey(process.platform, process.arch),
+        resolved: true,
+        version: USEARCH_RUNTIME_MANIFEST.version,
+      },
+    });
+    // Content-free: never the resolved filesystem path or the raw SHA-256 digest.
+    expect(JSON.stringify(coldLines[0])).not.toContain(binary);
+
+    events.length = 0;
+    const warm = await searchUsearchAnnIndex(request);
+    expect(warm.ok).toBe(true);
+    expect(events.filter((event) => event.op === "search.native-runtime-resolved")).toHaveLength(0);
   });
 
   it("serializes concurrent callers through queryQueue without cross-contaminating results (KEIKO-0360)", async () => {

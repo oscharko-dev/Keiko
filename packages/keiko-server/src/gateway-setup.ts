@@ -1982,6 +1982,7 @@ function persistGatewayConfig(
       env: deps.env,
       storagePath,
       evidenceDir: resolveEvidenceDir(deps.evidenceDir, deps.env),
+      securityLogSink: processServerLogSink(),
     },
   );
 }
@@ -5273,6 +5274,7 @@ function durableStoredGatewayConfig(
       secretResolver: createProviderSecretResolver({
         configPath: storagePath,
         env: deps.env,
+        securityLogSink: processServerLogSink(),
       }),
     });
     // Inside the success path on purpose: on a fall-back the returned config is the RUNTIME one,

@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { DatabaseSync } from "node:sqlite";
 import {
   existsSync,
@@ -13,9 +13,16 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Worker } from "node:worker_threads";
-import { chmodIfPresent, openMemoryDatabase, quarantineCorruptDb } from "./db.js";
+import {
+  chmodIfPresent,
+  computeStoreFingerprint,
+  openMemoryDatabase,
+  quarantineCorruptDb,
+} from "./db.js";
 import { MEMORY_VAULT_SCHEMA_VERSION } from "./schema.js";
-import { TEST_CIPHER } from "./_support.js";
+import { insertMemoryRow } from "./memories.js";
+import { makeRecord, memId, TEST_CIPHER } from "./_support.js";
+import type { MemoryVaultLogEvent, MemoryVaultLogSink } from "./vault-log.js";
 
 const cleanups: string[] = [];
 
@@ -23,6 +30,7 @@ afterEach(() => {
   for (const path of cleanups.splice(0)) {
     rmSync(path, { recursive: true, force: true });
   }
+  vi.restoreAllMocks();
 });
 
 function freshDir(): string {
@@ -164,6 +172,195 @@ describe("openMemoryDatabase corruption path", () => {
       locker.close();
     }
     expect(readdirSync(dir).some((e) => e.includes(".corrupt."))).toBe(false);
+  });
+
+  // RED (before fix): openMemoryDatabase had no third parameter at all, so a quarantine — a
+  // data-losing recovery decision — was completely unobservable from the activity log.
+  it("emits exactly one memory-vault.store.quarantined event with reopened:true", () => {
+    const dir = freshDir();
+    const dbPath = join(dir, "keiko-memory.db");
+    writeFileSync(dbPath, "garbage that is not a sqlite header");
+    const events: MemoryVaultLogEvent[] = [];
+    const sink: MemoryVaultLogSink = {
+      write: (event): void => {
+        events.push(event);
+      },
+    };
+
+    const db = openMemoryDatabase(dbPath, TEST_CIPHER, sink);
+    db.close();
+
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({
+      level: "error",
+      category: "diagnostic",
+      op: "memory-vault.store.quarantined",
+      extra: { reopened: true },
+    });
+    expect(typeof events[0]?.errorKind).toBe("string");
+  });
+
+  it("never lets a throwing sink surface as an open failure", () => {
+    vi.spyOn(process, "emitWarning").mockImplementation(() => undefined);
+    const dir = freshDir();
+    const dbPath = join(dir, "keiko-memory.db");
+    writeFileSync(dbPath, "garbage that is not a sqlite header");
+    const dead: MemoryVaultLogSink = {
+      write: (): never => {
+        throw new Error("sink is down");
+      },
+    };
+
+    let db: DatabaseSync | undefined;
+    expect(() => {
+      db = openMemoryDatabase(dbPath, TEST_CIPHER, dead);
+    }).not.toThrow();
+    db?.close();
+  });
+});
+
+// RED (before fix): `runMigrations` never forwarded a sink into `encryptExistingContent`, so this
+// event could never fire through the real `openMemoryDatabase` path — only through a direct,
+// bypassing call to `encryptExistingContent` itself (see migrate-encrypt.test.ts). This test goes
+// through the real production entry point end to end, per AGENTS.md's fixture rule: a fixture that
+// never reaches the production entry point cannot detect a wiring gap between two functions that
+// both individually work.
+describe("openMemoryDatabase — store.encryption-migrated wiring", () => {
+  // Mirrors `encryption-at-rest.test.ts`'s `downgradeToLegacyPlaintext`, at the level this suite
+  // already operates on (a raw `DatabaseSync`, not the public vault API): bring the DB to schema
+  // head first, insert a row, downgrade its content back to plaintext, then roll the v3+ DDL back
+  // to its v1 shape (a genuine v1 DB predates it) so the reopen's pending-DDL replay does not
+  // collide with tables/columns that already exist.
+  function seedLegacyPlaintextDb(dbPath: string): void {
+    openMemoryDatabase(dbPath, TEST_CIPHER).close();
+    const db = new DatabaseSync(dbPath);
+    insertMemoryRow(db, makeRecord({ id: memId("m1") }), TEST_CIPHER);
+    db.prepare("UPDATE memories SET body = ? WHERE id = ?").run("plaintext body", "m1");
+    db.exec("DROP TABLE memory_access");
+    db.exec("DROP TABLE memory_tombstones");
+    db.exec(`
+      CREATE TABLE memory_tombstones (
+        id TEXT NOT NULL PRIMARY KEY,
+        memory_id TEXT NOT NULL,
+        scope_kind TEXT NOT NULL,
+        scope_coordinate TEXT NOT NULL,
+        type TEXT NOT NULL,
+        forgotten_at INTEGER NOT NULL,
+        forgetter_surface TEXT NOT NULL,
+        reason TEXT
+      ) STRICT;
+      CREATE INDEX idx_tombstones_scope ON memory_tombstones(scope_kind, scope_coordinate);
+      CREATE INDEX idx_tombstones_memory_id ON memory_tombstones(memory_id);
+    `);
+    db.exec("PRAGMA user_version = 1");
+    db.close();
+  }
+
+  it("emits store.encryption-migrated when opening a legacy plaintext DB", () => {
+    const dir = freshDir();
+    const dbPath = join(dir, "keiko-memory.db");
+    seedLegacyPlaintextDb(dbPath);
+    const events: MemoryVaultLogEvent[] = [];
+    const sink: MemoryVaultLogSink = {
+      write: (event): void => {
+        events.push(event);
+      },
+    };
+
+    const db = openMemoryDatabase(dbPath, TEST_CIPHER, sink);
+    db.close();
+
+    const migrated = events.filter((event) => event.op === "store.encryption-migrated");
+    expect(migrated).toHaveLength(1);
+    expect(migrated[0]).toMatchObject({ category: "diagnostic" });
+    const extra = migrated[0]?.extra as { rowsMigrated?: unknown } | undefined;
+    expect(typeof extra?.rowsMigrated).toBe("number");
+    expect(extra?.rowsMigrated as number).toBeGreaterThanOrEqual(1);
+  });
+
+  it("does not emit store.encryption-migrated for a fresh DB with nothing to migrate", () => {
+    const dir = freshDir();
+    const dbPath = join(dir, "keiko-memory.db");
+    const events: MemoryVaultLogEvent[] = [];
+    const sink: MemoryVaultLogSink = {
+      write: (event): void => {
+        events.push(event);
+      },
+    };
+
+    openMemoryDatabase(dbPath, TEST_CIPHER, sink).close();
+
+    expect(events.some((event) => event.op === "store.encryption-migrated")).toBe(false);
+  });
+});
+
+describe("computeStoreFingerprint", () => {
+  it("reports schemaVersion, table row counts, quickCheckOk, encryptionMode and keySource for a healthy vault", () => {
+    const dir = freshDir();
+    const dbPath = join(dir, "keiko-memory.db");
+    const db = openMemoryDatabase(dbPath, TEST_CIPHER);
+    db.prepare(
+      "INSERT INTO memory_vault_secrets (name, value) VALUES ('probe', 'kv1.probe-value')",
+    ).run();
+
+    const fingerprint = computeStoreFingerprint(db, "keychain");
+
+    expect(fingerprint.store).toBe("memory-vault");
+    expect(fingerprint.schemaVersion).toBe(MEMORY_VAULT_SCHEMA_VERSION);
+    expect(fingerprint.migrationsApplied).toContain("v1");
+    expect(fingerprint.migrationsApplied).toContain(`v${String(MEMORY_VAULT_SCHEMA_VERSION)}`);
+    expect(fingerprint.tableRowCounts.memory_vault_secrets).toBe(1);
+    expect(fingerprint.tableRowCounts.memories).toBe(0);
+    expect(fingerprint.quickCheckOk).toBe(true);
+    expect(fingerprint.encryptionMode).toBe("encrypted");
+    expect(fingerprint.keySource).toBe("keychain");
+    db.close();
+  });
+
+  it("omits keySource when the caller supplies none (an injected cipher/vaultKey test seam)", () => {
+    const dir = freshDir();
+    const dbPath = join(dir, "keiko-memory.db");
+    const db = openMemoryDatabase(dbPath, TEST_CIPHER);
+
+    const fingerprint = computeStoreFingerprint(db, undefined);
+
+    expect(fingerprint.keySource).toBeUndefined();
+    db.close();
+  });
+
+  it("never throws on a corrupt/garbage file and reports quickCheckOk:false", () => {
+    const dir = freshDir();
+    const dbPath = join(dir, "keiko-memory.db");
+    writeFileSync(dbPath, "garbage that is not a sqlite header, definitely not a real db file");
+    const raw = new DatabaseSync(dbPath);
+
+    let fingerprint: ReturnType<typeof computeStoreFingerprint> | undefined;
+    expect(() => {
+      fingerprint = computeStoreFingerprint(raw, undefined);
+    }).not.toThrow();
+
+    expect(fingerprint?.store).toBe("memory-vault");
+    expect(fingerprint?.quickCheckOk).toBe(false);
+    // Every fixed table read fails against a garbage file (not a database at all), so each
+    // reports the safe default of 0 rather than throwing or being omitted.
+    expect(Object.values(fingerprint?.tableRowCounts ?? {})).toEqual([0, 0, 0, 0, 0, 0]);
+    raw.close();
+  });
+
+  it("is read-only: computing a fingerprint does not change table row counts", () => {
+    const dir = freshDir();
+    const dbPath = join(dir, "keiko-memory.db");
+    const db = openMemoryDatabase(dbPath, TEST_CIPHER);
+    db.prepare("INSERT INTO memory_vault_secrets (name, value) VALUES ('a', 'kv1.a')").run();
+
+    computeStoreFingerprint(db, undefined);
+    computeStoreFingerprint(db, undefined);
+
+    const row = db.prepare("SELECT COUNT(*) AS n FROM memory_vault_secrets").get() as {
+      readonly n: number;
+    };
+    expect(row.n).toBe(1);
+    db.close();
   });
 });
 

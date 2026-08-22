@@ -87,6 +87,7 @@ const KNOWN_CATEGORIES = new Set<string>([
   "setup",
   "search",
   "memory",
+  "security",
   "diagnostic",
   "process",
 ]);

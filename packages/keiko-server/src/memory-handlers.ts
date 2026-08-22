@@ -79,6 +79,7 @@ import {
   type MemoryCaptureDecision,
 } from "./memory-capture-projection.js";
 import { refreshMemoryEmbeddingAfterBodyEdit } from "./memory-embedding.js";
+import { processServerLogSink } from "./process-log-sink.js";
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -2111,10 +2112,24 @@ export function createBffMemoryVault(
   // Optional onMemoryEvent (#214) wires every successful vault mutation into the audit
   // ledger. When undefined, the vault still fires its internal NOOP sink, so the absence
   // of an audit hook is fully backward-compatible with the pre-#214 BFF wiring.
+  //
+  // `logSink` (w4a-memory-vault-fingerprint, epic #3233 §8/g18): wires the process-wide activity
+  // log into the vault's own structural `MemoryVaultLogSink` port (ADR-0019 — see
+  // `keiko-memory-vault/src/vault-log.ts`), so vault-open (with the retained key-resolution
+  // tier), a corruption quarantine, and an encryption migration all land in `server.log` instead
+  // of being unobservable, mirroring `local-knowledge-store-open.ts`'s identical wiring.
+  //
+  // `securityLogSink` (Wave 4a, epic #3233 §8): the SAME sink threaded into the vault's own
+  // structural `SecurityLogSink` port (`@oscharko-dev/keiko-security/log-port.ts`) so the shared
+  // bounded macOS Keychain tier (`cipher.ts`'s `keyFromKeychain`) reports a fall-through to the
+  // keyfile tier as `security.keychain.fallback` instead of failing silently. `keiko-memory-vault`
+  // depends on `keiko-security` (ADR-0019), so importing the port's type here is legal.
   return createMemoryVault({
     redactString,
     ...(onMemoryEvent === undefined ? {} : { onMemoryEvent }),
     ...(onDeleteEventsBeforeCommit === undefined ? {} : { onDeleteEventsBeforeCommit }),
     ...(env === undefined ? {} : { env }),
+    logSink: processServerLogSink(),
+    securityLogSink: processServerLogSink(),
   });
 }

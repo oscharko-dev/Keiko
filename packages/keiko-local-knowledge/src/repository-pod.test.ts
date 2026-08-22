@@ -34,6 +34,7 @@ import {
   resolveRepositoryChunkLineRange,
 } from "./indexing/repository-chunk-lines.js";
 import { readRepositoryFileFingerprints } from "./indexing/repository-fingerprints.js";
+import type { KnowledgeLogEvent, KnowledgeLogSink } from "./knowledge-log.js";
 import { isCodeSymbolDefinitionLine } from "./parsers/code-parser.js";
 import { createDefaultParserRegistry } from "./parsers/index.js";
 import {
@@ -511,6 +512,77 @@ function stubChatGateway(): {
     },
   };
 }
+
+describe("repository pod fingerprint-diff activity log", () => {
+  function recordingSink(): {
+    readonly sink: KnowledgeLogSink;
+    readonly events: KnowledgeLogEvent[];
+  } {
+    const events: KnowledgeLogEvent[] = [];
+    return {
+      sink: {
+        write: (event): void => {
+          events.push(event);
+        },
+      },
+      events,
+    };
+  }
+
+  it("logs repository.fingerprint-diff.completed with the run's delta counts, correlated to the run id", async () => {
+    createShell();
+    const adapter = countingAdapter();
+    const { sink, events } = recordingSink();
+
+    await refreshRepositoryPod(indexingDeps(adapter, { logSink: sink }), {
+      runId: "fp-diff-initial",
+    });
+    const initialLine = events.find(
+      (event) => event.op === "repository.fingerprint-diff.completed",
+    );
+    expect(initialLine).toBeDefined();
+    expect(initialLine?.category).toBe("indexing");
+    expect(initialLine?.correlationId).toBe("fp-diff-initial");
+    expect(initialLine?.extra).toEqual({
+      added: 4,
+      changed: 0,
+      removed: 0,
+      moved: 0,
+      unchanged: 0,
+    });
+
+    events.length = 0;
+    writeFileSync(
+      join(repositoryRoot, "src", "service.py"),
+      ["class Service:", "    pass", "", "def load():", '    return "changed"', ""].join("\n"),
+      "utf8",
+    );
+    await refreshRepositoryPod(indexingDeps(adapter, { logSink: sink }), {
+      runId: "fp-diff-refresh",
+    });
+    const refreshLine = events.find(
+      (event) => event.op === "repository.fingerprint-diff.completed",
+    );
+    expect(refreshLine).toBeDefined();
+    expect(refreshLine?.correlationId).toBe("fp-diff-refresh");
+    expect(refreshLine?.extra).toEqual({
+      added: 0,
+      changed: 1,
+      removed: 0,
+      moved: 0,
+      unchanged: 3,
+    });
+  });
+
+  it("writes nothing when no logSink is supplied", async () => {
+    createShell();
+    const adapter = countingAdapter();
+    // No logSink override — must not throw, and the deps default carries none.
+    await expect(
+      refreshRepositoryPod(indexingDeps(adapter), { runId: "fp-diff-no-sink" }),
+    ).resolves.toBeDefined();
+  });
+});
 
 describe("repository pod capsule setting parity (M2.12)", () => {
   it("honours contextualRetrieval when threaded through refreshRepositoryPod", async (): Promise<void> => {

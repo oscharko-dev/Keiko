@@ -1,10 +1,11 @@
-import { mkdtempSync, readFileSync, readdirSync, realpathSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { MAX_ATTACHMENT_MIME_BYTES } from "@oscharko-dev/keiko-contracts";
 import type { LocalSecretVault } from "@oscharko-dev/keiko-security/secret-vault";
+import type { SecurityLogEvent, SecurityLogSink } from "@oscharko-dev/keiko-security";
 import {
   ConversationAttachmentStoreError,
   createConversationAttachmentStore,
@@ -555,5 +556,43 @@ describe("conversation attachment store", () => {
     expect(seedStore.resolve(selected.ref, binding())).toEqual(BYTES);
     expect(seedStore.resolve(other.ref, otherBinding)).toEqual(BYTES);
     expect(vault.has(CORRUPT_REF)).toBe(true);
+  });
+});
+
+// Wiring test for `securityLogSink` (Wave 4a, epic #3233 §8): every test above that exercises the
+// REAL sharded vault supplies `KEIKO_CONVERSATION_ATTACHMENT_KEY` (env tier) so it never touches
+// the keychain, and none supplies `securityLogSink` — this is the one test that forces the
+// sharded vault's OWN failure mode, `security.vault.shard-unreadable`, and proves it reaches the
+// caller's sink. `options.vault` is deliberately NOT injected: that seam bypasses
+// `createShardedLocalSecretVault` entirely, so it cannot exercise this wiring.
+//
+// THE FAILURE THIS PINS: dropping `sink: options.securityLogSink` from the `createShardedLocalSecretVault`
+// call in `createConversationAttachmentStore` (`conversation-attachment-store.ts`) makes `events`
+// stay empty below.
+describe("createConversationAttachmentStore — securityLogSink wiring to the sharded vault", () => {
+  it("records shard-unreadable when a shard file cannot be read for a reason other than absent", () => {
+    const root = realpathSync(mkdtempSync(join(tmpdir(), "keiko-chat-attachments-secloG-")));
+    const events: SecurityLogEvent[] = [];
+    const sink: SecurityLogSink = { write: (event): void => void events.push(event) };
+    const store = createConversationAttachmentStore({
+      runtimeStateDir: root,
+      env: { KEIKO_CONVERSATION_ATTACHMENT_KEY: Buffer.alloc(32, 9).toString("base64") },
+      securityLogSink: sink,
+    });
+
+    const uploaded = store.put({ ...binding(), bytes: BYTES });
+
+    // Replace the just-written shard FILE with a DIRECTORY of the same name: the next read fails
+    // with EISDIR, a reason other than "absent" (ENOENT), which is exactly what the sharded vault's
+    // own `readShardEnvelope` treats as "one unreadable entry" and reports on the sink.
+    const shardName = `entry-${Buffer.from(uploaded.ref, "utf8").toString("hex")}.sealed`;
+    const shardPath = join(root, "conversation-attachments", shardName);
+    rmSync(shardPath, { force: true });
+    mkdirSync(shardPath);
+
+    expect(() => store.resolve(uploaded.ref, binding())).toThrow(ConversationAttachmentStoreError);
+    expect(events).toContainEqual(
+      expect.objectContaining({ category: "security", op: "security.vault.shard-unreadable" }),
+    );
   });
 });

@@ -16,6 +16,7 @@
 
 import { readFileSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
+import { isStoreFingerprint, type StoreFingerprint } from "@oscharko-dev/keiko-contracts";
 import type { AuditResult } from "./audit.js";
 
 export const CURRENT_LOG_FILE_NAME = "server.log";
@@ -226,6 +227,24 @@ function redactedAuditSummary(audit: AuditResult): RedactedAuditSummary {
   return { ok: audit.ok, classes: audit.classes };
 }
 
+// ─── Store fingerprints (Wave 4a, epic #3233 §6.2/§8) ──────────────────────────────────────────
+//
+// `support.ts` opens each of the three stores (ui, local-knowledge, memory-vault) through that
+// store package's genuinely read-only open (`openNodeUiDatabaseReadOnly` /
+// `openKnowledgeStoreReadOnly` / `openMemoryDatabaseReadOnly`, `node:sqlite`'s `readOnly: true`) —
+// never the mutating production open path, which migrates, recovers, re-encrypts, or quarantines as
+// an ordinary part of opening — against the resolved state-dir paths, and calls that store
+// package's own `computeStoreFingerprint(db)`. A store that does not exist yet (never used from
+// this state dir) or that cannot be opened (corrupt, or a vault key the operator has not supplied)
+// contributes no fingerprint — its name and a closed-vocabulary reason go to `storesUnavailable`
+// instead, never a path or the underlying error's message.
+export type StoreUnavailableReasonKind = "missing" | "open-failed";
+
+export interface StoreUnavailableEntry {
+  readonly store: StoreFingerprint["store"];
+  readonly reasonKind: StoreUnavailableReasonKind;
+}
+
 export interface SupportBundleManifest {
   readonly $section: "manifest";
   readonly schemaVersion: 2;
@@ -253,6 +272,12 @@ export interface SupportBundleManifest {
   readonly sectionsExcluded: readonly string[];
   readonly auditSummary: RedactedAuditSummary;
   readonly evidenceIndexCount: number;
+  // Wave 4a additions (epic #3233 §6.2/§8), additive over the Wave 1 shape above. A bundle
+  // produced by a pre-Wave-4a build simply lacks `storeFingerprints`; `storesUnavailable` is
+  // always present once this exporter runs, even when every store fingerprinted cleanly (empty
+  // array), so a reader never has to distinguish "not attempted" from "nothing to report".
+  readonly storeFingerprints?: readonly StoreFingerprint[];
+  readonly storesUnavailable: readonly StoreUnavailableEntry[];
 }
 
 export interface ManifestInput {
@@ -280,6 +305,8 @@ export interface ManifestInput {
   readonly skippedLogFiles: readonly SkippedLogFile[];
   readonly auditSummary: AuditResult;
   readonly evidenceIndexCount: number;
+  readonly storeFingerprints: readonly StoreFingerprint[];
+  readonly storesUnavailable: readonly StoreUnavailableEntry[];
 }
 
 export function buildSupportBundleManifest(input: ManifestInput): SupportBundleManifest {
@@ -301,6 +328,12 @@ export function buildSupportBundleManifest(input: ManifestInput): SupportBundleM
     sectionsExcluded: [],
     auditSummary: redactedAuditSummary(input.auditSummary),
     evidenceIndexCount: input.evidenceIndexCount,
+    // Defense-in-depth (never trust the producer unconditionally, matching this repo's redaction
+    // doctrine): re-validated against the same closed structural guard the manifest's own bundle
+    // reader would use, so a malformed fingerprint (a future producer bug, a version-skewed
+    // dependency) is silently dropped rather than embedded in a customer-facing artifact.
+    storeFingerprints: input.storeFingerprints.filter(isStoreFingerprint),
+    storesUnavailable: input.storesUnavailable,
   };
 }
 

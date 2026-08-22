@@ -19,7 +19,8 @@
 
 import type { DatabaseSync } from "node:sqlite";
 import type { MemoryContentCipher } from "./cipher.js";
-import { encryptExistingContent } from "./migrate-encrypt.js";
+import { emitEncryptionMigrated, sweepExistingContent } from "./migrate-encrypt.js";
+import { startMemoryVaultLogTimer, type MemoryVaultLogSink } from "./vault-log.js";
 
 // v2 = encryption-at-rest (ADR-0035). v1 stored content columns in plaintext; v2 seals them via an
 // eager code sweep (no column changes). The bump is one-way: a v2 DB is unreadable by v1 code.
@@ -233,7 +234,11 @@ function setUserVersion(db: DatabaseSync, v: number): void {
   db.exec(`PRAGMA user_version = ${String(v)}`);
 }
 
-export function runMigrations(db: DatabaseSync, cipher: MemoryContentCipher): void {
+export function runMigrations(
+  db: DatabaseSync,
+  cipher: MemoryContentCipher,
+  sink?: MemoryVaultLogSink,
+): void {
   const start = currentUserVersion(db);
   if (start > MEMORY_VAULT_SCHEMA_VERSION) {
     throw new Error(
@@ -248,6 +253,8 @@ export function runMigrations(db: DatabaseSync, cipher: MemoryContentCipher): vo
   // An EXISTING (already-created) DB crossing into the encryption version had plaintext on disk;
   // its superseded pages must be purged from the WAL so the plaintext does not linger after upgrade.
   const upgradedExistingDb = start > 0 && needsEncryption;
+  const elapsedMs = startMemoryVaultLogTimer();
+  let rowsMigrated = 0;
   db.exec("BEGIN");
   try {
     for (const m of pendingDdl) {
@@ -258,8 +265,11 @@ export function runMigrations(db: DatabaseSync, cipher: MemoryContentCipher): vo
       // Idempotent: skips values already sealed, so a fresh DB (no rows) and a re-run are no-ops.
       // The encryption sweep is keyed to ENCRYPTION_VERSION (2) but is NOT a user_version write:
       // post-v2 migrations (v3+) own the version. Setting the version is deferred to the line below
-      // so encryption never regresses a DB that already applied a later DDL migration.
-      encryptExistingContent(db, cipher);
+      // so encryption never regresses a DB that already applied a later DDL migration. The sweep
+      // itself never emits (see migrate-encrypt.ts's `sweepExistingContent`): a log line for a
+      // migration that then rolls back would be a false report, so the emission below waits for
+      // this transaction's own COMMIT to actually succeed.
+      rowsMigrated = sweepExistingContent(db, cipher);
     }
     // Pin the final version to the current schema head once every pending DDL and the encryption
     // sweep have run. A fresh DB applies v1 + later DDL and the encryption sweep, then lands on
@@ -270,6 +280,11 @@ export function runMigrations(db: DatabaseSync, cipher: MemoryContentCipher): vo
     db.exec("ROLLBACK");
     throw error;
   }
+  // Outside the transaction, same reasoning as the WAL checkpoint below: a real transition is
+  // reported only once the migration has actually committed, never for a sweep that then rolled
+  // back. `emitEncryptionMigrated` itself is a no-op when `rowsMigrated` is 0 (fresh DB, or a
+  // re-run over already-sealed content).
+  emitEncryptionMigrated(sink, rowsMigrated, elapsedMs());
   if (upgradedExistingDb) {
     // Outside the transaction (checkpoint cannot run inside one): truncate the WAL so pages that
     // held the now-re-encrypted plaintext are reclaimed immediately, not at the next close.

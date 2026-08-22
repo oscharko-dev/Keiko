@@ -43,7 +43,17 @@ import { isSealed, openString, sealString } from "./secretbox.js";
 // pair; import it from the sibling module (relative — we ARE keiko-security).
 import { chmodIfPresent, ensureDirHardened, FILE_MODE } from "./fs-hardening.js";
 // Shared keychain-spawn bound [GEN-MAINT-COUPLING-006], so the three surfaces cannot drift apart.
-import { KEYCHAIN_SPAWN_TIMEOUT_MS, keychainItemNotFound } from "./macos-keychain.js";
+// `emitKeychainFallback` is the shared `security.keychain.fallback` reporter so this file's own
+// keychain reader (below) reports the identical shape as `readMacosKeychainSecret`'s.
+import {
+  emitKeychainFallback,
+  KEYCHAIN_SPAWN_TIMEOUT_MS,
+  keychainItemNotFound,
+} from "./macos-keychain.js";
+// Independent activity-log seam (ADR-0019, w4a-security-log-port) and the hardened error-class
+// classifier this package already applies to its persisted quarantine diagnostic.
+import { emitSecurityLogEvent, startSecurityLogTimer, type SecurityLogSink } from "./log-port.js";
+import { hardenedErrorClass } from "./sqlite-corruption.js";
 
 const KEY_BYTES = 32;
 const STORE_VERSION = 1;
@@ -94,6 +104,18 @@ export interface ResolveLocalVaultKeyOptions {
   readonly keyfileName: string;
   // Test/non-darwin seam. Defaults to the real `security` CLI reader scoped to keychainService.
   readonly keychainAccess?: LocalVaultKeychainAccess | undefined;
+  /**
+   * Optional activity-log seam (ADR-0019; see `log-port.ts`), mirroring
+   * {@link ShardedLocalSecretVaultDeps.sink}. When wired:
+   *   - one `security.vault.key-resolved` event fires every time a key tier resolves, carrying
+   *     which tier won (`extra.source`) — visible even on the ordinary path where no fallback
+   *     ever happens (gap g18);
+   *   - a keychain read that fails for a reason other than "no such item" additionally emits
+   *     `security.keychain.fallback`, the same shape `readMacosKeychainSecret` reports for its
+   *     own read tier.
+   * Omitted or `undefined` keeps this resolver exactly as silent as before.
+   */
+  readonly sink?: SecurityLogSink | undefined;
 }
 
 export interface LocalSecretVault {
@@ -164,10 +186,12 @@ const defaultKeychainCommandRunner = createKeychainCommandRunner();
 export function createKeychainVaultKeyAccess(
   keychainService: string,
   runCommand: KeychainCommandRunner = defaultKeychainCommandRunner,
+  sink?: SecurityLogSink,
 ): LocalVaultKeychainAccess {
   return (): Buffer | undefined => {
     if (process.platform !== "darwin") return undefined;
     const account = userInfo().username;
+    const elapsedMs = startSecurityLogTimer();
     let found: string;
     try {
       found = runCommand([
@@ -182,9 +206,11 @@ export function createKeychainVaultKeyAccess(
       // Only "the item is not there" invites a write. A read that timed out, or a keychain that
       // refused outright, means a store attempt would meet the same wall and spend a SECOND bounded
       // wait — on a path a caller may be blocking on. Same rule, same predicate, as the shared owner.
-      return keychainItemNotFound(error)
-        ? generateKeychainKey(keychainService, account, runCommand)
-        : undefined;
+      if (keychainItemNotFound(error)) {
+        return generateKeychainKey(keychainService, account, runCommand);
+      }
+      emitKeychainFallback(sink, error, elapsedMs);
+      return undefined;
     }
     try {
       return decodeKeyOrThrow(found);
@@ -237,10 +263,24 @@ function keyFromKeyfile(vaultDir: string, keyfileName: string): Buffer {
 }
 
 export function resolveLocalVaultKey(options: ResolveLocalVaultKeyOptions): ResolvedLocalVaultKey {
+  const resolved = computeLocalVaultKey(options);
+  // Fires only once the tier has genuinely resolved — a thrown error (a malformed env key, a
+  // symlinked keyfile path) skips this and reports nothing, exactly as before this event existed.
+  emitSecurityLogEvent(options.sink, {
+    level: "info",
+    category: "security",
+    op: "security.vault.key-resolved",
+    extra: { source: resolved.source },
+  });
+  return resolved;
+}
+
+function computeLocalVaultKey(options: ResolveLocalVaultKeyOptions): ResolvedLocalVaultKey {
   const fromEnv = keyFromEnv(options.env, options.envVarName);
   if (fromEnv !== undefined) return { key: fromEnv, source: "env" };
   const keychainAccess =
-    options.keychainAccess ?? createKeychainVaultKeyAccess(options.keychainService);
+    options.keychainAccess ??
+    createKeychainVaultKeyAccess(options.keychainService, undefined, options.sink);
   const fromKeychain = keychainAccess();
   if (fromKeychain !== undefined) return { key: fromKeychain, source: "keychain" };
   return { key: keyFromKeyfile(options.vaultDir, options.keyfileName), source: "keyfile" };
@@ -403,6 +443,14 @@ export interface ShardedLocalSecretVaultDeps {
   readonly key: Buffer;
   // Directory that holds this vault's sealed entry files. It is created hardened on first write.
   readonly storeDir: string;
+  /**
+   * Optional activity-log seam (ADR-0019; see `log-port.ts`). When wired, a shard file that fails
+   * to read for a reason other than the symlink guarantee (EACCES, EISDIR, EIO — previously
+   * collapsed to `undefined`, indistinguishable from "never set") emits one
+   * `security.vault.shard-unreadable` event instead of failing silently. Omitted or `undefined`
+   * keeps this layout exactly as silent as before.
+   */
+  readonly sink?: SecurityLogSink | undefined;
 }
 
 // References are opaque, NON-SECRET identifiers, so the filename may carry one — the single-file
@@ -469,7 +517,32 @@ function writeShard(dir: string, filePath: string, envelope: string): void {
   }
 }
 
-function readShardEnvelope(filePath: string): string | undefined {
+// ENOENT is the ORDINARY case — no such shard file, no such store directory yet, exactly what
+// every never-set reference looks like — and must never itself produce a log line, or every plain
+// miss on a fresh vault would emit one. Only a read that fails for a reason OTHER than "not there"
+// (EISDIR, EACCES, EIO) is the genuine unreadable-entry case this event exists to surface.
+function isEnoent(cause: unknown): boolean {
+  return (
+    typeof cause === "object" &&
+    cause !== null &&
+    "code" in cause &&
+    (cause as NodeJS.ErrnoException).code === "ENOENT"
+  );
+}
+
+function emitShardUnreadable(sink: SecurityLogSink | undefined, cause: unknown): void {
+  emitSecurityLogEvent(sink, {
+    level: "warn",
+    category: "security",
+    op: "security.vault.shard-unreadable",
+    errorKind: hardenedErrorClass(cause),
+    // A single unreadable file per call; never the filename (it decodes to the reference) or the
+    // read error's message (it can carry the resolved path).
+    extra: { count: 1 },
+  });
+}
+
+function readShardEnvelope(filePath: string, sink?: SecurityLogSink): string | undefined {
   // The symlink refusal is a guarantee and still throws. A read that fails for any other reason
   // (EISDIR, EACCES, EIO) is one unreadable entry, which says nothing about the others — reporting
   // it as absent is what this layout documents, and what `get`/`has` promise their callers.
@@ -477,7 +550,8 @@ function readShardEnvelope(filePath: string): string | undefined {
   let envelope: string;
   try {
     envelope = readFileSync(filePath, "utf8");
-  } catch {
+  } catch (cause) {
+    if (!isEnoent(cause)) emitShardUnreadable(sink, cause);
     return undefined;
   }
   return isSealed(envelope) ? envelope : undefined;
@@ -522,7 +596,7 @@ function listShardReferences(dir: string): readonly string[] {
  * bodies against its own index.
  */
 export function createShardedLocalSecretVault(deps: ShardedLocalSecretVaultDeps): LocalSecretVault {
-  const { key } = deps;
+  const { key, sink } = deps;
   const storeDir = resolve(deps.storeDir);
   // A reference with no representable filename can hold no entry, so reads and deletes report
   // "absent" rather than throwing — matching the single-file layout, where an unknown reference is
@@ -557,7 +631,7 @@ export function createShardedLocalSecretVault(deps: ShardedLocalSecretVaultDeps)
 
   const envelopeFor = (reference: string): string | undefined => {
     const filePath = readPath(reference);
-    return filePath === undefined ? undefined : readShardEnvelope(filePath);
+    return filePath === undefined ? undefined : readShardEnvelope(filePath, sink);
   };
 
   return {

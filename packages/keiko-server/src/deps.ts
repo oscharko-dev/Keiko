@@ -70,6 +70,7 @@ import {
   type WorkspaceInstance,
 } from "@oscharko-dev/keiko-contracts";
 import type { IncomingMessage } from "node:http";
+import type { DatabaseSync } from "node:sqlite";
 import { detectWorkspaceAt, isWithinWorkspace } from "@oscharko-dev/keiko-workspace";
 import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
 import { basename, delimiter, dirname, isAbsolute, join, resolve } from "node:path";
@@ -84,6 +85,7 @@ import {
 import { createRunRegistry } from "./runs.js";
 import type { ChatTurnSerializer } from "./chat-turn-serializer.js";
 import {
+  DEFAULT_SERVER_DIAGNOSTIC_SUMMARY,
   defaultServerDiagnosticSink,
   evidenceRetentionDiagnosticObserver,
   emitServerDiagnostic,
@@ -91,6 +93,7 @@ import {
   type ServerDiagnosticSink,
   type ServerDiagnosticSummary,
 } from "./diagnostics-log.js";
+import { processServerLogSink } from "./process-log-sink.js";
 import type { CodexSubscriptionProfileCoordinator } from "./coding-codex-subscription.js";
 import {
   assertUiDbOutsideProject,
@@ -1781,12 +1784,36 @@ interface ComposedPersistence {
   readonly codingRuntimeSnapshotStore: CodingRuntimeSnapshotStore | undefined;
 }
 
+// A `UiStoreSchemaVersionError` or unrecoverable corruption here crashes startup — correctly: this
+// store cannot silently continue without its schema — but that crash must not be a bare,
+// undiagnosed exception. `emitCompositionDiagnostic` records it before the throw propagates, so an
+// operator sees WHY the process refused to start instead of only an unhandled trace, exactly like
+// every other composition-root boundary in this module. `processServerLogSink()` is wired in as
+// the store's own `store.opened` activity-log sink so a successful open is recorded too.
+function openUiDatabaseForComposition(
+  resolvedUiDbPath: string,
+  diagnostics: ServerDiagnosticSink | undefined,
+): DatabaseSync {
+  try {
+    return openNodeUiDatabase(resolvedUiDbPath, processServerLogSink());
+  } catch (error) {
+    emitCompositionDiagnostic(
+      diagnostics,
+      "deps.composePersistence",
+      DEFAULT_SERVER_DIAGNOSTIC_SUMMARY,
+      error,
+    );
+    throw error;
+  }
+}
+
 function composePersistence(
   injected: UiStore | undefined,
   injectedCodingRuntimeSnapshots: CodingRuntimeSnapshotStore | undefined,
   resolvedUiDbPath: string,
   redactString: (value: string) => string,
   env: EnvSource,
+  diagnostics: ServerDiagnosticSink | undefined,
 ): ComposedPersistence {
   if (injected !== undefined) {
     return {
@@ -1798,7 +1825,7 @@ function composePersistence(
       codingRuntimeSnapshotStore: injectedCodingRuntimeSnapshots,
     };
   }
-  const db = openNodeUiDatabase(resolvedUiDbPath);
+  const db = openUiDatabaseForComposition(resolvedUiDbPath, diagnostics);
   const store = buildUiStoreOverDatabase(db, { redactString });
   const relationship: RelationshipHandlerDeps = {
     scopeResolver: (): { readonly workspaceId: string } => ({
@@ -2766,12 +2793,14 @@ function buildPeripherals(args: BuildPeripheralsArgs): PeripheralManagers {
       createEditorHotExitStore({
         stateDir: args.runtimeStateDir,
         env: args.options.env,
+        securityLogSink: processServerLogSink(),
       }),
     editorLocalHistoryStore:
       args.options.editorLocalHistoryStore ??
       createEditorLocalHistoryStore({
         stateDir: args.runtimeStateDir,
         env: args.options.env,
+        securityLogSink: processServerLogSink(),
       }),
     managedLspControl,
     debugActivationControl,
@@ -2827,10 +2856,12 @@ function loadRuntimeGatewayConfig(
     configPath: effectiveConfigPath,
     env: options.env,
     evidenceDir: resolvedEvidenceDir,
+    securityLogSink: processServerLogSink(),
   });
   const secretResolver = createProviderSecretResolver({
     configPath: effectiveConfigPath,
     env: options.env,
+    securityLogSink: processServerLogSink(),
   });
   const resolved = resolveConfig(
     options.configPath,
@@ -3022,6 +3053,7 @@ function buildPersistenceBundle(
     resolvedUiDbPath,
     redactString,
     options.env,
+    options.diagnostics,
   );
   const { store, dispose, relationship, codingRuntimeSnapshotStore } = persistence;
   try {
@@ -3169,6 +3201,7 @@ function atlassianConnectorCredentialFields(
       configPath: args.runtimeConfig.storagePath,
       env: args.options.env,
       egress: () => args.runtimeConfig.current()?.egress ?? args.egress,
+      securityLogSink: processServerLogSink(),
     }),
   };
 }
@@ -3593,6 +3626,7 @@ function buildBaseUiHandlerDeps(args: UiHandlerDepsAssemblyArgs): BaseUiHandlerD
       createConversationAttachmentStore({
         runtimeStateDir: dirname(args.resolvedUiDbPath),
         env: args.options.env,
+        securityLogSink: processServerLogSink(),
       }),
   };
 }
@@ -3679,6 +3713,7 @@ function buildIntegrationUiHandlerDeps(args: UiHandlerDepsAssemblyArgs): Integra
       runtimeStateDir: dirname(args.resolvedUiDbPath),
       env: args.options.env,
       diagnostics: args.options.diagnostics,
+      securityLogSink: processServerLogSink(),
     }),
     consolidationJobs: createConsolidationJobRegistry({ evidenceStore: args.evidenceStore }),
   };
@@ -4088,7 +4123,10 @@ export function buildUiHandlerDeps(options: BuildHandlerDepsOptions): UiHandlerD
     createNodeEvidenceStore(join(resolvedEvidenceDir, "coding-workbench"));
   const redactString = runtimeRedactString(options.env, runtimeConfig, egress);
   const liveRedactor = (value: unknown): unknown => deepRedactStrings(value, redactString);
-  const localKnowledgeKeyProvider = createLocalKnowledgeKeyProvider({ env: options.env });
+  const localKnowledgeKeyProvider = createLocalKnowledgeKeyProvider({
+    env: options.env,
+    securityLogSink: processServerLogSink(),
+  });
   const bundle = buildPersistenceBundle(options, resolvedUiDbPath, redactString, evidenceStore);
   const contextProfileForModel = buildContextProfileResolver(() => runtimeConfig.current());
   reconcileNodeStoreAtStartup(options, bundle);
