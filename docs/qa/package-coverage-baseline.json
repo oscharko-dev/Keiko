@@ -8,7 +8,7 @@
     "keiko-cli": {
       "files": 44,
       "uncoveredFiles": 0,
-      "uncoveredLines": 385,
+      "uncoveredLines": 387,
       "totalLines": 4880,
       "coverage": {
         "lines": 92.11,
@@ -177,11 +177,11 @@
       "files": 43,
       "uncoveredFiles": 0,
       "uncoveredLines": 185,
-      "totalLines": 3300,
+      "totalLines": 3302,
       "coverage": {
-        "lines": 94.39,
+        "lines": 94.4,
         "statements": 93.4,
-        "branches": 87.53,
+        "branches": 87.54,
         "functions": 97.05
       }
     },
@@ -236,8 +236,8 @@
     "keiko-server": {
       "files": 580,
       "uncoveredFiles": 0,
-      "uncoveredLines": 4514,
-      "totalLines": 56250,
+      "uncoveredLines": 4516,
+      "totalLines": 56260,
       "coverage": {
         "lines": 91.98,
         "statements": 89.27,
@@ -261,7 +261,7 @@
       "files": 419,
       "uncoveredFiles": 3,
       "uncoveredLines": 2967,
-      "totalLines": 39444,
+      "totalLines": 39452,
       "coverage": {
         "lines": 92.48,
         "statements": 89.52,

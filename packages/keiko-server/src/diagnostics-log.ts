@@ -34,9 +34,12 @@ export {
 // Before this module the top-level route-error catch, the buffered-send rethrow, and the streamed
 // mid-stream failure all discarded the underlying cause: an unexpected throw became an opaque 500 (or
 // a relabelled `GATEWAY_ERROR` SSE frame) with the error object dropped and nothing logged anywhere.
-// This sink is the single, redaction-safe choke point that turns those failures into a structured,
-// correlation-keyed operator record. It never surfaces raw content to the browser; the response body
-// stays opaque and the record is emitted only to the server's own diagnostic channel.
+// This module turns those failures into a structured, correlation-keyed operator record. It never
+// surfaces raw content to the browser; the response body stays opaque and the record is emitted only
+// to the server's own diagnostic channel. `defaultServerDiagnosticSink` — the one production sink,
+// and the only code that writes a record to stderr and the activity log — is the redaction-safe
+// choke point: it sanitizes the record's correlation ids itself, so a caller that invokes
+// `.record()` directly is protected exactly like one that goes through `emitServerDiagnostic`.
 
 import { randomUUID } from "node:crypto";
 
@@ -50,7 +53,12 @@ export interface ServerDiagnosticRecord {
   // `diagnosticActivityLogFields` only projects this into `extra` when it satisfies
   // `isValidCorrelationId`; a value that does not fit the shape is dropped outright rather than
   // written under a marker — an unshaped value here is evidence of a producer bug, never content
-  // worth preserving a trace of.
+  // worth preserving a trace of. `defaultServerDiagnosticSink.record()` ALSO sanitizes this field
+  // (and `correlationId`, for symmetry) on the record itself before writing — see
+  // `sanitizeDiagnosticRecord` — because `diagnosticActivityLogFields`'s guard only protects the
+  // activity-log projection; without the writer-side check, the sink's `JSON.stringify(record)`
+  // would still serialize an invalid value straight to stderr. `emitServerDiagnostic` applies the
+  // same sanitizer before handing a record to a caller-supplied sink.
   readonly parentCorrelationId?: string | undefined;
   readonly timestamp: string;
   // A coarse operation label, e.g. `GET /api/projects` or `chat.stream`.
@@ -122,11 +130,17 @@ export interface ServerDiagnosticSink {
 // under the CLI (KEIKO_STATE_DIR is set) — appends the same record to `<stateDir>/logs/server.log`.
 // The two-track design is deliberate: unit tests that capture the sink via UiHandlerDeps.diagnostics
 // keep observing stderr, while the shipped server writes a file the operator can read directly.
+//
+// This sink is the sanitizing choke point for the two ids a hostile or buggy producer can shape:
+// `sanitizeDiagnosticRecord` runs HERE, on the writer, so a record handed straight to `.record()`
+// — as grounded-entailment-stage, codingRuntimeEventHub and sessionChannel do — is protected
+// exactly like one routed through `emitServerDiagnostic`.
 export const defaultServerDiagnosticSink: ServerDiagnosticSink = {
   record(record: ServerDiagnosticRecord): void {
+    const sanitized = sanitizeDiagnosticRecord(record);
     // eslint-disable-next-line no-console
-    console.error(`[keiko-server:diagnostic] ${JSON.stringify(record)}`);
-    appendDiagnosticToActivityLog(record);
+    console.error(`[keiko-server:diagnostic] ${JSON.stringify(sanitized)}`);
+    appendDiagnosticToActivityLog(sanitized);
   },
 };
 
@@ -405,6 +419,40 @@ function diagnosticLabel(
     : fallback;
 }
 
+// A fixed, content-free stand-in for a `correlationId` that fails `isValidCorrelationId`.
+// `correlationId` is required by `ServerDiagnosticRecord`, so — unlike the optional
+// `parentCorrelationId`, which can simply be omitted — an out-of-shape value cannot be dropped
+// outright without leaving the field empty. Substituting this marker keeps the record's own shape
+// intact while guaranteeing the value that reaches a sink is never the hostile original.
+const INVALID_CORRELATION_ID_MARKER = "invalid-correlation-id";
+
+function sanitizedCorrelationId(value: string): string {
+  return isValidCorrelationId(value) ? value : INVALID_CORRELATION_ID_MARKER;
+}
+
+function sanitizedParentCorrelationId(value: string | undefined): string | undefined {
+  return value !== undefined && isValidCorrelationId(value) ? value : undefined;
+}
+
+// `diagnosticActivityLogFields` already shape-guards `parentCorrelationId` when projecting a record
+// into the activity-log `extra` object — but that guard runs too late to help the stderr track,
+// which serializes the record via `JSON.stringify`. A `parentCorrelationId` (or, for symmetry, a
+// `correlationId`) that fails `isValidCorrelationId` — e.g. one carrying an embedded CRLF — would
+// otherwise reach that stderr line untouched, regardless of what the activity-log projection does
+// with its own copy. The sanitizer is applied by `defaultServerDiagnosticSink.record()` itself, the
+// one place that writes, so it covers every caller of the default sink whether or not it went
+// through `emitServerDiagnostic` — three production sites call `.record()` directly.
+// `emitServerDiagnostic` applies it as well so a caller-supplied sink never observes the hostile
+// original; the operation is idempotent. `diagnosticActivityLogFields`'s own guard remains in place
+// as defence in depth.
+function sanitizeDiagnosticRecord(record: ServerDiagnosticRecord): ServerDiagnosticRecord {
+  return {
+    ...record,
+    correlationId: sanitizedCorrelationId(record.correlationId),
+    parentCorrelationId: sanitizedParentCorrelationId(record.parentCorrelationId),
+  };
+}
+
 // Emits a diagnostic record through the provided sink (falling back to the default stderr sink).
 // Never throws — a diagnostic sink failure must not compound the original request failure.
 export function emitServerDiagnostic(
@@ -412,7 +460,7 @@ export function emitServerDiagnostic(
   record: ServerDiagnosticRecord,
 ): void {
   try {
-    (sink ?? defaultServerDiagnosticSink).record(record);
+    (sink ?? defaultServerDiagnosticSink).record(sanitizeDiagnosticRecord(record));
   } catch {
     // A logging failure is never allowed to escalate into a second, unhandled failure.
   }

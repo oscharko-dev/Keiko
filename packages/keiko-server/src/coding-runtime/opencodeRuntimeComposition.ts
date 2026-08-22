@@ -20,6 +20,7 @@ import {
   emitServerDiagnostic,
   type ServerDiagnosticSink,
 } from "../diagnostics-log.js";
+import { isValidCorrelationId } from "../correlation.js";
 import type { PortableSidecarRuntimeVerification } from "../update-portable-sidecar-verification.js";
 import {
   createCodingRuntimeManager,
@@ -1274,9 +1275,24 @@ function startFacadeExecution(
 // class label comes from the shared `contentFreeErrorClass` hardening in diagnostics-log, so the
 // mutable-`Error.name` defense lives in exactly one place.
 // `actionId` is request content (parseCodingToolRequest bounds it to a non-empty string ≤512
-// bytes only), so it rides on the redaction-safe diagnostic solely as a bounded machine token:
-// the `tool:<callId>` production shape passes, prose/whitespace/overlength degrade to a marker.
-const SAFE_ACTION_CORRELATION_ID = /^[A-Za-z0-9:._-]{1,128}$/;
+// bytes only), so it rides on the redaction-safe diagnostic solely as a bounded machine token that
+// satisfies the one canonical correlation-id shape (`isValidCorrelationId`, the shape
+// `defaultServerDiagnosticSink` sanitizes against — a wider local shape would be replaced by the
+// sink's content-free marker and lose the correlation). The `tool:<callId>` production shape is not
+// valid as-is (the canonical shape admits no `:`), so it is mapped onto `tool-<callId>` — a fixed,
+// documented prefix swap an analyzer joins back to the evidence's `actionId`. Prose, whitespace,
+// overlength and too-short values degrade to the marker.
+const TOOL_ACTION_ID_PREFIX = "tool:";
+const TOOL_ACTION_CORRELATION_PREFIX = "tool-";
+const UNPARSED_ACTION_CORRELATION_ID = "tool-bridge-unparsed-action";
+
+function actionCorrelationId(actionId: string | undefined): string {
+  if (actionId === undefined) return UNPARSED_ACTION_CORRELATION_ID;
+  const candidate = actionId.startsWith(TOOL_ACTION_ID_PREFIX)
+    ? `${TOOL_ACTION_CORRELATION_PREFIX}${actionId.slice(TOOL_ACTION_ID_PREFIX.length)}`
+    : actionId;
+  return isValidCorrelationId(candidate) ? candidate : UNPARSED_ACTION_CORRELATION_ID;
+}
 
 function emitFacadeFailureDiagnostic(
   diagnostics: ServerDiagnosticSink | undefined,
@@ -1284,10 +1300,7 @@ function emitFacadeFailureDiagnostic(
   error: unknown,
 ): void {
   emitServerDiagnostic(diagnostics, {
-    correlationId:
-      actionId !== undefined && SAFE_ACTION_CORRELATION_ID.test(actionId)
-        ? actionId
-        : "tool-bridge-unparsed-action",
+    correlationId: actionCorrelationId(actionId),
     timestamp: new Date().toISOString(),
     operation: "coding-runtime.tool-bridge",
     source: "opencode-runtime-composition.facade-execute",

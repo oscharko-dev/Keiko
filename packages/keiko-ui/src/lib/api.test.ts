@@ -2591,11 +2591,13 @@ describe("sendDesktopChatStream — correlation id threading", () => {
     );
 
     const init = fetchMock.mock.calls[0]?.[1] as RequestInit;
-    const headers = init.headers as Record<string, string>;
-    expect(headers[CORRELATION_HEADER]).toMatch(/^[A-Za-z0-9._-]{8,128}$/);
-    expect(headers.Accept).toBe("text/event-stream");
-    expect(headers["Content-Type"]).toBe("application/json");
-    expect(headers["X-Keiko-CSRF"]).toBe("1");
+    // buildBffHeaders returns a Headers instance (#3241 review — the only way to preserve every
+    // HeadersInit shape), so read it through the Headers API rather than casting to a plain record.
+    const headers = new Headers(init.headers);
+    expect(headers.get(CORRELATION_HEADER)).toMatch(/^[A-Za-z0-9._-]{8,128}$/);
+    expect(headers.get("Accept")).toBe("text/event-stream");
+    expect(headers.get("Content-Type")).toBe("application/json");
+    expect(headers.get("X-Keiko-CSRF")).toBe("1");
   });
 
   it("attaches the server-echoed correlation id to a pre-stream StreamingUnavailableError", async () => {
@@ -2627,7 +2629,11 @@ describe("sendDesktopChatStream — correlation id threading", () => {
   });
 
   it("falls back to the client-generated correlation id when the pre-stream response carries none", async () => {
-    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response("stack", { status: 500 })));
+    // #3241 review — a well-formed-ID match also passes if the thrown error carries a SECOND,
+    // unrelated generated id instead of the id the request actually sent. Read the id off the
+    // mocked fetch call and assert the thrown error's id is exactly that one.
+    const fetchMock = vi.fn().mockResolvedValue(new Response("stack", { status: 500 }));
+    vi.stubGlobal("fetch", fetchMock);
 
     try {
       await sendDesktopChatStream(
@@ -2637,8 +2643,11 @@ describe("sendDesktopChatStream — correlation id threading", () => {
       );
       expect.unreachable("expected sendDesktopChatStream to throw");
     } catch (error) {
+      const init = fetchMock.mock.calls[0]?.[1] as RequestInit;
+      const sentCorrelationId = new Headers(init.headers).get(CORRELATION_HEADER);
+      expect(sentCorrelationId).toMatch(/^[A-Za-z0-9._-]{8,128}$/);
       expect(error).toBeInstanceOf(StreamingUnavailableError);
-      expect((error as StreamingUnavailableError).correlationId).toMatch(/^[A-Za-z0-9._-]{8,128}$/);
+      expect((error as StreamingUnavailableError).correlationId).toBe(sentCorrelationId);
     }
   });
 });

@@ -29,7 +29,10 @@ function ErrorNotice({
   readonly onDismiss?: (() => void) | undefined;
 }): ReactNode {
   const t = useTranslate();
-  const noticeKey = `${notice.title}\n${notice.message}\n${notice.code ?? ""}\n${notice.remediation ?? ""}`;
+  // RB-6 / ADR-0173 D5 — correlationId is a user-visible field (the "Support ID" line), so it must
+  // be part of the dismissal identity: without it, a later failure with the same title/message/code
+  // but a NEW support id would still match a stale dismissedKey and stay hidden (#3241 review).
+  const noticeKey = `${notice.title}\n${notice.message}\n${notice.code ?? ""}\n${notice.remediation ?? ""}\n${notice.correlationId ?? ""}`;
   const [dismissedKey, setDismissedKey] = useState<string | undefined>();
   if (dismissedKey === noticeKey) return null;
   return (

@@ -82,7 +82,9 @@ describe("error subclasses", () => {
   });
 
   it("RateLimitError.httpStatus carries an explicitly supplied value", () => {
-    expect(new RateLimitError("rate", 5000, [], 429).httpStatus).toBe(429);
+    // A distinct, non-default status (503, not 429) proves the constructor argument actually
+    // reaches httpStatus rather than the test merely observing the built-in default.
+    expect(new RateLimitError("rate", 5000, [], 503).httpStatus).toBe(503);
   });
 
   it("ProviderError carries the http status", () => {

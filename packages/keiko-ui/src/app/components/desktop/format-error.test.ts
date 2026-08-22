@@ -184,4 +184,83 @@ describe("formatUserError", () => {
     expect(Date.now() - start).toBeLessThan(1500);
     expect(notice.code).toBeUndefined();
   });
+
+  // #3241 review — the trailing "[correlationId:...]" segment is peeled off with plain string
+  // search (extractTrailingSupportId), not a validating parser: it accepts whatever sits between
+  // the prefix and the final "]". These cases pin that malformed/hostile input is never silently
+  // dropped — either the value is extracted verbatim, or (when extraction can't apply cleanly) the
+  // raw text stays fully visible in notice.message instead of vanishing.
+  it("keeps an empty support id suffix fully visible instead of silently dropping it", () => {
+    const notice = toUserErrorNotice(
+      "Model timed out (GATEWAY_UPSTREAM_FAILURE) [correlationId:]",
+      "Retry",
+    );
+    expect(notice.correlationId).toBeUndefined();
+    expect(notice.message).toBe("Model timed out (GATEWAY_UPSTREAM_FAILURE) [correlationId:]");
+  });
+
+  it("accepts an oversized (>128 char) correlation id without truncating it", () => {
+    const longId = "a".repeat(200);
+    const notice = toUserErrorNotice(
+      `Model timed out (CODE_XYZ) [correlationId:${longId}]`,
+      "Retry",
+    );
+    expect(notice.correlationId).toBe(longId);
+    expect(notice.correlationId).toHaveLength(200);
+    expect(notice.message).toBe("Model timed out");
+    expect(notice.code).toBe("CODE_XYZ");
+  });
+
+  it("uses the last of two repeated support id suffixes and keeps the first one visible in the message", () => {
+    const notice = toUserErrorNotice(
+      "Model timed out (GATEWAY_UPSTREAM_FAILURE) [correlationId:req-first] [correlationId:req-second]",
+      "Retry",
+    );
+    expect(notice.correlationId).toBe("req-second");
+    expect(notice.message).toBe(
+      "Model timed out (GATEWAY_UPSTREAM_FAILURE) [correlationId:req-first]",
+    );
+  });
+
+  it("carries a CRLF-hostile correlation id through verbatim without corrupting the message", () => {
+    const hostileId = "req-1\r\nX-Injected: evil";
+    const notice = toUserErrorNotice(
+      `Model timed out (CODE_XYZ) [correlationId:${hostileId}]`,
+      "Retry",
+    );
+    expect(notice.correlationId).toBe(hostileId);
+    expect(notice.message).toBe("Model timed out");
+    expect(notice.code).toBe("CODE_XYZ");
+  });
+
+  it("carries an HTML-hostile correlation id through verbatim without corrupting the message", () => {
+    const hostileId = "<script>alert(1)</script>";
+    const notice = toUserErrorNotice(
+      `Model timed out (CODE_XYZ) [correlationId:${hostileId}]`,
+      "Retry",
+    );
+    expect(notice.correlationId).toBe(hostileId);
+    expect(notice.message).toBe("Model timed out");
+    expect(notice.code).toBe("CODE_XYZ");
+  });
+
+  it("does not crash on a correlation id value that itself embeds a second support id prefix, and keeps the leftover text visible", () => {
+    const notice = toUserErrorNotice(
+      "Model timed out (CODE) [correlationId:evil[correlationId:nested]]",
+      "Retry",
+    );
+    expect(notice.correlationId).toBe("nested]");
+    expect(notice.message).toBe("Model timed out (CODE) [correlationId:evil");
+  });
+
+  it("does not treat a literal 'Support ID:' label in the message text as the internal correlation id marker", () => {
+    const notice = toUserErrorNotice(
+      "Model timed out (GATEWAY_UPSTREAM_FAILURE) Support ID: req-visible-999",
+      "Retry",
+    );
+    expect(notice.correlationId).toBeUndefined();
+    expect(notice.message).toBe(
+      "Model timed out (GATEWAY_UPSTREAM_FAILURE) Support ID: req-visible-999",
+    );
+  });
 });

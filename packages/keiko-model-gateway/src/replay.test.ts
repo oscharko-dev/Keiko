@@ -170,6 +170,19 @@ describe("createScriptedGatewayFetch", () => {
     ).rejects.toMatchObject({ name: "AbortError" });
   });
 
+  it("rejects with AbortError, not TypeError, when the signal is already aborted and the scripted entry is a networkError", async () => {
+    // Regression: the abort check must run BEFORE the script entry is selected/executed. A real
+    // `fetch` rejects an aborted request with AbortError before it ever starts transport work, so
+    // an aborted signal must win even when the entry it would have hit is `{ networkError: true }`
+    // (which otherwise throws a network-error-shaped TypeError).
+    const fetchImpl = createScriptedGatewayFetch([{ networkError: true }], clock());
+    const controller = new AbortController();
+    controller.abort();
+    await expect(
+      fetchImpl("https://example.test", { signal: controller.signal }),
+    ).rejects.toMatchObject({ name: "AbortError" });
+  });
+
   it("rejects descriptively for an empty script", async () => {
     const fetchImpl = createScriptedGatewayFetch([], clock());
     await expect(fetchImpl("https://example.test")).rejects.toThrow(/empty script/);

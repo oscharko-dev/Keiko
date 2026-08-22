@@ -116,13 +116,18 @@ function scriptedResponse(entry: {
 // cares about and let a steady-state outcome repeat for every call after. `clock` is the SAME
 // instance the caller passes to `Gateway`/`OpenAiAdapter` — see the module doc above for why that
 // matters. Honours the request's `AbortSignal`: an already-aborted signal rejects immediately with
-// an AbortError-shaped `DOMException`, via the injected clock's own abort handling.
+// an AbortError-shaped `DOMException`, checked BEFORE the scripted entry is selected or executed —
+// this matches real `fetch`, which rejects an aborted request before it starts transport work, so
+// a pre-aborted signal never reaches (and is never masked by) a scripted `networkError` entry.
 export function createScriptedGatewayFetch(
   script: readonly GatewayReplayScriptEntry[],
   clock: Clock,
 ): typeof fetch {
   let calls = 0;
   return async (_input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+    if (init?.signal?.aborted === true) {
+      throw abortError();
+    }
     const entry = scriptEntryAt(script, calls);
     calls += 1;
     if (isNetworkError(entry)) {

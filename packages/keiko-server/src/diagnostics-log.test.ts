@@ -1,8 +1,9 @@
 // Unit tests for the RB-6 operator diagnostics sink and correlation-id resolver.
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { IncomingMessage } from "node:http";
 import {
   contentFreeErrorClass,
+  defaultServerDiagnosticSink,
   describeError,
   emitServerDiagnostic,
   evidenceRetentionDiagnosticObserver,
@@ -303,7 +304,7 @@ describe("emitServerDiagnostic (RB-6)", () => {
   it("routes the record to the provided sink", () => {
     const records: ServerDiagnosticRecord[] = [];
     const record = serverDiagnosticFromError({
-      correlationId: "cid-1",
+      correlationId: "cid-routes-1",
       operation: "GET /api/x",
       source: "unit",
       error: new Error("nope"),
@@ -320,7 +321,7 @@ describe("emitServerDiagnostic (RB-6)", () => {
     );
     expect(records).toHaveLength(1);
     const [captured] = records;
-    expect(captured?.correlationId).toBe("cid-1");
+    expect(captured?.correlationId).toBe("cid-routes-1");
     expect(captured?.timestamp).toBe("1970-01-01T00:00:00.000Z");
   });
 
@@ -340,6 +341,127 @@ describe("emitServerDiagnostic (RB-6)", () => {
     expect(() => {
       emitServerDiagnostic(brokenSink, record);
     }).not.toThrow();
+  });
+
+  it("sanitizes an out-of-shape parentCorrelationId before ANY sink sees it, so a CRLF-bearing value never reaches the stderr line", () => {
+    // Regression: `diagnosticActivityLogFields` already dropped an invalid `parentCorrelationId`
+    // from the activity-log projection, but `defaultServerDiagnosticSink` serialized the ORIGINAL
+    // record straight to stderr via JSON.stringify — a producer bug or hostile input could still
+    // smuggle a CRLF (log-line injection) onto the operator's terminal even though the file-backed
+    // activity log stayed clean. `emitServerDiagnostic` must sanitize the record once, before it
+    // reaches any sink, so both tracks are protected.
+    const stderrSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    try {
+      const record = serverDiagnosticFromError({
+        correlationId: "cid-crlf-guard",
+        operation: "unit.crlf-guard",
+        source: "unit",
+        error: new Error("x"),
+        redact: identity,
+        now: () => 0,
+      });
+      const hostileParentCorrelationId = "job-1\r\ninjected-fake-log-line-marker";
+
+      emitServerDiagnostic(undefined, {
+        ...record,
+        parentCorrelationId: hostileParentCorrelationId,
+      });
+
+      expect(stderrSpy).toHaveBeenCalledTimes(1);
+      const [line] = stderrSpy.mock.calls[0] as [string];
+      expect(line).not.toContain(hostileParentCorrelationId);
+      expect(line).not.toContain("injected-fake-log-line-marker");
+      expect(line).not.toContain("\r\n");
+    } finally {
+      stderrSpy.mockRestore();
+    }
+  });
+
+  it("substitutes a fixed marker for an out-of-shape correlationId, for symmetry with parentCorrelationId", () => {
+    const stderrSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    try {
+      const record = serverDiagnosticFromError({
+        correlationId: "cid-symmetry-guard",
+        operation: "unit.symmetry-guard",
+        source: "unit",
+        error: new Error("x"),
+        redact: identity,
+        now: () => 0,
+      });
+      const hostileCorrelationId = "req-1\r\ninjected-fake-log-line-marker";
+
+      emitServerDiagnostic(undefined, { ...record, correlationId: hostileCorrelationId });
+
+      expect(stderrSpy).toHaveBeenCalledTimes(1);
+      const [line] = stderrSpy.mock.calls[0] as [string];
+      expect(line).not.toContain(hostileCorrelationId);
+      expect(line).not.toContain("injected-fake-log-line-marker");
+      // correlationId is required by the type, so an invalid value is replaced rather than
+      // omitted — the sanitized record still carries a (content-free) correlationId.
+      const parsed = JSON.parse(
+        line.replace("[keiko-server:diagnostic] ", ""),
+      ) as ServerDiagnosticRecord;
+      expect(parsed.correlationId).toBe("invalid-correlation-id");
+    } finally {
+      stderrSpy.mockRestore();
+    }
+  });
+
+  it("sanitizes a CRLF-bearing correlationId/parentCorrelationId handed straight to defaultServerDiagnosticSink.record(), bypassing emitServerDiagnostic", () => {
+    // Regression: `emitServerDiagnostic` sanitized the record, but three production call sites
+    // (grounded-entailment-stage, codingRuntimeEventHub, sessionChannel) hand their record to
+    // `ServerDiagnosticSink.record()` directly. The sanitization therefore has to live in the
+    // default sink — the only sink that writes to stderr and the activity log — so that the
+    // choke point is the writer itself, not one particular caller of it.
+    const stderrSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    try {
+      const record = serverDiagnosticFromError({
+        correlationId: "cid-direct-sink-guard",
+        operation: "unit.direct-sink-guard",
+        source: "unit",
+        error: new Error("x"),
+        redact: identity,
+        now: () => 0,
+      });
+
+      defaultServerDiagnosticSink.record({
+        ...record,
+        correlationId: "req-1\r\ninjected-fake-log-line-marker",
+        parentCorrelationId: "job-1\r\ninjected-parent-marker",
+      });
+
+      expect(stderrSpy).toHaveBeenCalledTimes(1);
+      const [line] = stderrSpy.mock.calls[0] as [string];
+      expect(line).not.toContain("injected-fake-log-line-marker");
+      expect(line).not.toContain("injected-parent-marker");
+      expect(line).not.toContain("\r\n");
+      const parsed = JSON.parse(
+        line.replace("[keiko-server:diagnostic] ", ""),
+      ) as ServerDiagnosticRecord;
+      expect(parsed.correlationId).toBe("invalid-correlation-id");
+      expect(parsed.parentCorrelationId).toBeUndefined();
+    } finally {
+      stderrSpy.mockRestore();
+    }
+  });
+
+  it("leaves a well-formed parentCorrelationId untouched on the sanitized record", () => {
+    const captured: ServerDiagnosticRecord[] = [];
+    const record = serverDiagnosticFromError({
+      correlationId: "cid-valid-parent",
+      operation: "unit.valid-parent",
+      source: "unit",
+      error: new Error("x"),
+      redact: identity,
+      now: () => 0,
+    });
+
+    emitServerDiagnostic(
+      { record: (r) => void captured.push(r) },
+      { ...record, parentCorrelationId: "job-parent-abc123" },
+    );
+
+    expect(captured[0]?.parentCorrelationId).toBe("job-parent-abc123");
   });
 });
 

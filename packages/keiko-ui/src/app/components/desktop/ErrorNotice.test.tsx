@@ -2,7 +2,7 @@
 // underlying failure carried a correlation id, using the same "{feature}.supportId" i18n key
 // pattern already proven at VoiceDictation.tsx, WorkspaceTrustSurfaces.tsx, TaskWorkspaceSwitcher.tsx.
 
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import { axe } from "jest-axe";
 import { afterEach, describe, expect, it } from "vitest";
 import { ApiError } from "@/lib/api";
@@ -58,5 +58,28 @@ describe("ErrorNoticeFromError — correlation support id", () => {
     const { container } = renderInLocale(error, "en");
 
     expect(await axe(container)).toHaveNoViolations();
+  });
+
+  // #3241 review — noticeKey used to omit correlationId, so dismissing a notice set a dismissedKey
+  // that ALSO matched a later failure with the same title/message/code but a different support id,
+  // hiding a genuinely new failure behind a stale dismissal.
+  it("shows a later notice with a new correlation id after an identical-looking one was dismissed", () => {
+    const first = new ApiError("GATEWAY_TIMEOUT", "GATEWAY_TIMEOUT", 503);
+    first.correlationId = "req-dismiss-000111";
+    const { rerender } = renderInLocale(first, "en");
+
+    expect(screen.getByText("Support ID: req-dismiss-000111")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Dismiss error" }));
+    expect(screen.queryByText("Support ID: req-dismiss-000111")).not.toBeInTheDocument();
+
+    const second = new ApiError("GATEWAY_TIMEOUT", "GATEWAY_TIMEOUT", 503);
+    second.correlationId = "req-dismiss-000222";
+    rerender(
+      <I18nProvider>
+        <ErrorNoticeFromError error={second} fallback="Could not send message." />
+      </I18nProvider>,
+    );
+
+    expect(screen.getByText("Support ID: req-dismiss-000222")).toBeInTheDocument();
   });
 });
