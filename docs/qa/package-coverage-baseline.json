@@ -236,7 +236,7 @@
     "keiko-server": {
       "files": 583,
       "uncoveredFiles": 0,
-      "uncoveredLines": 4473,
+      "uncoveredLines": 4474,
       "totalLines": 56410,
       "coverage": {
         "lines": 92.07,
@@ -260,12 +260,12 @@
     "keiko-ui": {
       "files": 419,
       "uncoveredFiles": 3,
-      "uncoveredLines": 2963,
+      "uncoveredLines": 2965,
       "totalLines": 39511,
       "coverage": {
         "lines": 92.5,
         "statements": 89.55,
-        "branches": 81.82,
+        "branches": 81.83,
         "functions": 91.3
       }
     },
