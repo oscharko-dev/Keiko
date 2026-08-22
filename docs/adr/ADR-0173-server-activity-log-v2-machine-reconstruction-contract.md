@@ -2,11 +2,19 @@
 
 ## Status
 
-Proposed (Epic #3233, Wave 1, 2026-08-21).
+Accepted (Epic #3233, Wave 6 closeout, 2026-08-22).
 
-Wave 1 of a seven-wave plan. This ADR is drafted before the implementation lands and finalized
-(Proposed → Accepted) in Wave 6, once the described contract exists in full. Sections below name
-which decisions are already load-bearing in Wave 1 and which are forward references to later waves.
+Drafted in Wave 1 alongside the envelope's ordering primitive (`seq`) and the minimal exporter/
+analyzer, and finalized here once all seven waves of the epic had landed: envelope v2 (D1–D2),
+stack frames and their redaction guards (D3–D4), correlation threading end-to-end (D5), the
+generated op catalog (D6), process lifecycle events (D7), the support-bundle format and its CLI
+(D8–D10), the `ERROR_KIND_PATTERN` relocation (D11), HTTP/SSE detail and the browser diagnostic
+ingest (D13), and the domain-package log-port wiring recorded in D12. The "Wave N" markers below
+are left in place as a record of when each decision became load-bearing, not as an indication that
+anything is still pending — nothing in this document describes future work. `keiko support
+analyze` exposes `--clusters`/`--seed`/`--emit-fixture` command-line flags for the reproduction-seed
+and op-cluster machinery D9 describes, so that machinery is reachable directly from the CLI, not
+only by importing it — see D9.
 
 ## Context
 
@@ -300,19 +308,24 @@ source, for no closure benefit the per-caller literal requirement does not alrea
 
 Before this contract, the log recorded what happened but never which process, running which
 version, configured how. `category: "process"` events close that gap: `process.started` (node
-version, platform, arch, product version, install mode, host, port, resolved log level, a
+version, platform, arch, product version, install mode — and, when detection failed, its own
+error kind — host, port, resolved log level, the count of configured gateway providers, and a
 closed-union `stateDirSource` label — never the raw state-dir path, which can embed an OS username
 that the existing path guard exists to refuse), `process.heartbeat` (memory and event-loop-delay
 gauges on an `unref()`'d interval that never keeps a one-shot CLI command alive and is cleared on
 every shutdown branch), and `process.exiting` (reason, uptime), which closes the log descriptor
-cleanly on every real shutdown path using the sink's own close function — already built, but dead in
-production until this wave wires a real shutdown path to call it.
+cleanly on every real shutdown path using the sink's own close function.
 
-Configuration identity (`process.config` at process start; a gateway-specific
-`gateway.config.resolved` line once `GatewayConfig` is assembled) is deliberately split across the
-wave that has the cheap fields in scope and the later wave that has the gateway-specific ones, so
-neither wave's diff stubs fields it cannot honestly populate yet. Feature flags are an explicitly
-named, out-of-scope-for-this-epic follow-up.
+Configuration identity ended up carried by two lines rather than three: the cheap, universally
+available fields (node/platform/arch/product version, install mode, host, port, log level, gateway
+provider count) ride directly on `process.started` itself — there is no separate `process.config`
+op — while the gateway-specific fields that are only knowable once a `GatewayConfig` has been
+assembled ride on their own `gateway.config.resolved` line (emitted once per `Gateway`
+construction: per-provider `modelId`, `endpointHost`, `timeoutMs`, `maxRetries`,
+`retryBaseDelayMs` — never `baseUrl` or `apiKey`). Folding the cheap fields into `process.started`
+rather than a separate `process.config` line avoids a second, always-co-occurring event for data
+that is knowable at the exact same instant `process.started` already fires. Feature flags remain an
+explicitly named, out-of-scope-for-this-epic follow-up.
 
 ### D8 — The support artifact is one JSON-Lines file; `ui.log` is excluded by default
 
@@ -353,32 +366,51 @@ in the manifest's `currentFileTailTruncated` (name and dropped-byte count only, 
 Two new commands under one `support` command family (not `bundle export` / `log:analyze` — a single
 coherent noun groups the artifact producer and its own consumer under one verb space):
 
-- `keiko support export [--out PATH] [--state-dir PATH]` composes only existing, already-hardened
-  pieces in Wave 1's minimal form: the evidence index listing, the audit summary, and a plain
-  read-and-concatenate of the rotated log files. No new redaction logic is written for the bulk of
-  the file — every line copied in is a line that was already redacted at write time.
-- `keiko support analyze FILE [--correlation-id ID] [--json]` reconstructs two complementary views
-  from the same parsed lines, because `correlationId` alone cannot carry everything Wave 1 needs to
-  reconstruct: a **per-correlation timeline** for every line that carries a `correlationId`, ordered
-  within one process lifetime by `seq` and across lifetimes by first file-position (D2); and a
-  **per-process-lifetime summary** (`processes[]`, keyed by `(pid, instanceId)`) built from every
+- `keiko support export [--out PATH] [--state-dir PATH] [--max-bytes N] [--include-ui-log
+  --i-understand-this-is-unredacted] [--include-evidence RUNID[,RUNID...]]` composes existing,
+  already-hardened pieces — the evidence index listing, the local-state audit summary, a redacted
+  config-snapshot of Keiko's own resolved `KEIKO_*` runtime configuration, and a plain
+  read-and-concatenate of the rotated log files — into one manifest-led `.jsonl` bundle, plus a
+  `<output>.sha256` integrity sidecar (D12). No new redaction logic is written for the bulk of the
+  file — every log line copied in is a line that was already redacted at write time. `ui.log` (a
+  verified, acknowledged-unredacted operator stream) is excluded by default and requires both new
+  flags together to attach (D8); `--include-evidence` attaches the full `EvidenceStore` manifest
+  for each named run id, beyond the index-only summary, for deep replay.
+- `keiko support analyze FILE [--correlation-id ID] [--json]` reconstructs three complementary
+  views from the same parsed lines, because `correlationId` alone cannot carry everything an agent
+  needs to reconstruct: a **per-correlation timeline** for every line that carries a
+  `correlationId`, ordered within one process lifetime by `seq` and across lifetimes by first
+  file-position (D2), additionally carrying the union of every `frames[]` entry seen for that id;
+  a **per-process-lifetime summary** (`processes[]`, keyed by `(pid, instanceId)`) built from every
   line carrying the full v2 identity triple regardless of `correlationId`, so the lifecycle events
   D7 introduces (`process.started`/`process.heartbeat`/`process.exiting`, which carry no
   `correlationId` and so belong to no timeline) are still reconstructable — first/last `seq`,
-  first/last `ts`, line count, and the `process.started`/`process.exiting` payloads when seen. The
-  analyzer also reports `legacyLineCount` — lines it parsed successfully but that are missing the
-  full identity triple — and a `warnings[]` entry naming that count when it is nonzero, so the
-  admission that some lines fell back to file-position ordering is machine-readable rather than a
-  silent omission. Separately, `malformedLineCount` counts lines that could not be read as a log
-  record at all (not valid JSON, or valid JSON missing `ts`/`category`/`op`) — evidence of
-  corruption, never conflated with a legacy line, which parses cleanly and is merely missing the v2
-  identity triple. `--json` emits all of this in Wave 1; the fuller analyzer output (stack-frame
-  unions, gateway replay scripts, a reproduction-seed fixture emitter) is Wave 6 scope, once the
-  fields it reads exist. Among those fields: a rate-limited call always carries `httpStatus` — the
-  provider's actual status (`429` is only the default for a standard rate-limit error, never a
-  replacement for a supplied `503`) — so a replay script's rate-limit attempt never has to infer
-  its HTTP status from the outcome discriminant alone; `retryAfterMs` rides along on the same line
-  only when the provider supplied one, with no synthesized fallback.
+  first/last `ts`, line count, and the `process.started`/`process.exiting` payloads when seen; and
+  whole-file `clusters` — every parsed line grouped by `(category, op, errorKind)` regardless of
+  correlationId. The analyzer also reports `legacyLineCount` — lines it parsed successfully but
+  that are missing the full identity triple — and a `warnings[]` entry naming that count when it is
+  nonzero, so the admission that some lines fell back to file-position ordering is machine-readable
+  rather than a silent omission. Separately, `malformedLineCount` counts lines that could not be
+  read as a log record at all (not valid JSON, or valid JSON missing `ts`/`category`/`op`) —
+  evidence of corruption, never conflated with a legacy line, which parses cleanly and is merely
+  missing the v2 identity triple. `--json` emits the timeline/process/cluster reconstruction above.
+  The fuller per-correlation output — a `ReproductionSeed` (`gatewayScript`/`httpRequest`/
+  `storeFingerprint`/`indexingJob`/`stackFrames`/`causeChain`, each with its own honest `warnings`
+  entry when it cannot be reconstructed) and a pasteable gateway-replay-script fixture — is
+  implemented and exported (`buildReproductionSeed`, `renderGatewayReplayScriptFixture` in
+  `packages/keiko-cli/src/support-analyze.ts`), unit-tested directly, and wired to
+  `support analyze` itself: `--clusters` renders the whole-file `(category, op, errorKind)`
+  grouping, `--seed` builds the `ReproductionSeed` for the id named by `--correlation-id`, and
+  `--emit-fixture PATH` writes the pasteable gateway-replay-script fixture to `PATH`. Both
+  `--clusters` and `--seed` render as human-readable text by default and as the same JSON shape the
+  underlying builder produces when `--json` is also given. `--emit-fixture` is fail-closed: it
+  refuses to overwrite a file that already exists at `PATH`, creates any missing parent directories
+  before writing, and reports the written path on success rather than the fixture body. Among the
+  `ReproductionSeed`'s fields: a rate-limited call always carries `httpStatus` — the provider's
+  actual status (`429` is only the default for a standard rate-limit error, never a replacement for
+  a supplied `503`) — so a replay script's rate-limit attempt never has to infer its HTTP status
+  from the outcome discriminant alone; `retryAfterMs` rides along on the same line only when the
+  provider supplied one, with no synthesized fallback.
 
 ### D10 — Why Wave 1 ships the exporter and analyzer alongside `seq`, not after it
 
@@ -590,12 +622,15 @@ rather than left implicit across the Decision section:
 6. **For an error**, read `errorKind` for the closed-vocabulary classification, and
    `extra.frames`/`extra.causeChain` for the dist-anchored Keiko-code stack (landed Wave 2), resolved
    against the exact tagged product version named in the support bundle's manifest (D3, D12).
-7. **For what could not be reconstructed**, read the analyzer's `warnings` array rather than assuming
-   silence means nothing happened — Wave 1 already populates it with exactly one entry naming
-   `legacyLineCount` when a retained pre-v2 line is present (D10); Wave 6 extends the same array with
-   further evidence-gap classes (stack-frame unions, gateway replay scripts, and other later-wave
-   evidence). A warning names exactly what evidence class is missing and why, so an agent's report to
-   a human names the actual gap instead of guessing.
+7. **For what could not be reconstructed**, read a `warnings` array rather than assuming silence
+   means nothing happened — there are two, at two different scopes, and neither is silent about a
+   gap. The whole-file `AnalyzeAllResult.warnings` carries exactly one entry naming
+   `legacyLineCount` when a retained pre-v2 line is present (D10). The per-correlation
+   `ReproductionSeed.warnings` (D9) is richer: it always names the standing by-design gap that no
+   prompt/response body is ever logged, plus one entry for each evidence class this particular
+   correlation id's timeline could not supply (missing stack frames, no gateway call, no HTTP
+   request line, no store fingerprint). A warning names exactly what evidence class is missing and
+   why, so an agent's report to a human names the actual gap instead of guessing.
 8. **For a failed or slow request** (landed Wave 5), read the `request` line's `routeTemplate`,
    `queryParamNames`, `responseBytes` and `aborted`, the stream's `sse.stream.closed` `reason`, and
    any `client.diagnostic` line that shares the request's `correlationId` (D13).
@@ -638,14 +673,30 @@ rather than left implicit across the Decision section:
   it with the stronger `error-kind-pattern-single-source.test.mjs` pin as part of making its invariant
   structurally unbreakable; this ADR is the documented justification a reviewer checks that deletion
   against, and no later change may cite this ADR to justify a second copy reappearing.
-- This ADR is Proposed, not Accepted, because Waves 3 through 6 have not landed yet. A reader relying
-  on this document today should treat the op catalog's fully finalized vocabulary (D6), D8's full
-  manifest shape, and D9's fuller analyzer output (stack-frame unions, gateway replay scripts, a
-  reproduction-seed fixture emitter) as forward references until the corresponding wave merges. D1,
-  D2, D4's truncation markers, D5's minimal wiring, D6's dynamic-entry policy, D7, D9's minimal
-  analyzer output (`processes[]`, `legacyLineCount`, `warnings[]`), and D10 are Wave 1 scope; D3
-  (stack frames), D4's three named escape hatches, and D11 (the `ERROR_KIND_PATTERN` relocation) are
-  Wave 2 scope — every one of them already load-bearing.
+- This ADR is Accepted: every decision above (D1–D13) is load-bearing in the shipped code, the op
+  catalog is generated and drift-tested against the full, final vocabulary (D6), and the "Wave N"
+  markers throughout this document are a record of when each decision landed, not an admission that
+  anything remains pending.
+- **Recorded limitation — the bare-`catch` sweep is bounded, not exhaustive.** The 12-reader audit
+  that opened this epic found roughly 739 bare `catch {}` blocks across `keiko-server`; this
+  contract fixes the audit-named true positives at the sites the audit identified as silently
+  losing real diagnostic value, and does not sweep the remaining population. A `catch` outside
+  those named sites that merely narrows an already-handled error class, or that intentionally
+  discards an expected, already-classified condition, is not a gap this ADR leaves open by
+  accident — it was never in scope. A future pass sweeping the remainder would be new, separately
+  scoped work, not a continuation this ADR defers.
+- **Recorded limitation — no JSON request/response shape-skeleton feature.** D9's forward-referenced
+  guardrail (positional locators over a request/response shape, never customer field names as
+  object keys) remains a specified guardrail for a feature this epic does not build. Nothing in the
+  shipped contract logs a request or response shape at all; this bullet exists so a future author
+  reads the constraint before building the feature, not as a pending deliverable of this epic.
+- **Recorded limitation — connector crawl logging is manual, not integrated.** Connector ingestion
+  (for example, the Atlassian and Figma connectors' crawl/sync loops) emits through the same
+  `ServerDiagnosticSink`/structural log-port choke points this contract wires everywhere else it
+  touches, but this epic did not perform a dedicated audit-and-instrument pass over every connector
+  crawl step the way it did for the memory, harness, and gateway lanes. Any gap in a specific
+  connector's crawl-step logging is tracked as ordinary product work against that connector, not as
+  unfinished business of this ADR.
 
 ## References
 

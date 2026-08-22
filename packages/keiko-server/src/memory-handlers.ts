@@ -81,6 +81,7 @@ import {
 import { refreshMemoryEmbeddingAfterBodyEdit } from "./memory-embedding.js";
 import { readJsonRequestBody } from "./bounded-request-body.js";
 import { processServerLogSink } from "./process-log-sink.js";
+import { emitServerDiagnostic, serverDiagnosticFromError } from "./diagnostics-log.js";
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -128,6 +129,43 @@ function sanitizeMemoryStatusMutationReason(
 // the inner detail string; the public surface should only expose the stable enum `code`.
 function governanceErrorBody(err: GovernanceError): ApiError {
   return errorBody("GOVERNANCE_ERROR", `Governance constraint violated (${err.code}).`);
+}
+
+// Operator diagnostic for a memory-handler failure that is about to become an opaque 500 (or a
+// 404/409 whose cause is still worth tracing). Mirrors `reportProjectTrustGrantFailure`
+// (store-handlers.ts) and `reportRetentionPolicyFailure` (memory-maintenance-handlers.ts): the raw
+// error stays server-side (`serverDiagnosticFromError` extracts only its content-free class/code),
+// and the SAME `deps.redactor` closure the response body already goes through is reused so the
+// diagnostic can never be less redacted than the client-facing response it accompanies.
+// `RouteContext.correlationId` is optional so existing `RouteContext` test literals keep compiling
+// (routes.ts); every failure-reporting call site below needs a concrete id to key its diagnostic
+// on, so this is the ONE place the `?? randomUUID()` fallback is written — isolating it in its own
+// function (rather than inlining `ctx.correlationId ?? randomUUID()` at each call site) keeps that
+// nullish-coalescing branch out of every handler's own cyclomatic-complexity count.
+function handlerCorrelationId(ctx: RouteContext): string {
+  return ctx.correlationId ?? randomUUID();
+}
+
+function reportMemoryHandlerFailure(
+  deps: UiHandlerDeps,
+  correlationId: string,
+  operation: string,
+  source: string,
+  error: unknown,
+): void {
+  emitServerDiagnostic(
+    deps.diagnostics,
+    serverDiagnosticFromError({
+      correlationId,
+      operation,
+      source,
+      error,
+      redact: (message: string): string => {
+        const redacted = deps.redactor(message);
+        return typeof redacted === "string" ? redacted : "[REDACTED]";
+      },
+    }),
+  );
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -655,13 +693,28 @@ export function handleListMemories(ctx: RouteContext, deps: UiHandlerDeps): Rout
     if (params.kind === "recent") return handleRecentMemories(deps, vault, params);
     return handleLegacyMemories(deps, vault, params);
   } catch (err) {
+    const correlationId = handlerCorrelationId(ctx);
     if (err instanceof MemoryCaptureProjectionReadError) {
+      reportMemoryHandlerFailure(
+        deps,
+        correlationId,
+        "memory.list",
+        "memory-handlers.handleListMemories",
+        err,
+      );
       return {
         status: 500,
         body: errorBody("MEMORY_AUDIT_UNAVAILABLE", "Recent memory history is unavailable."),
       };
     }
     if (err instanceof MemoryStorageError) {
+      reportMemoryHandlerFailure(
+        deps,
+        correlationId,
+        "memory.list",
+        "memory-handlers.handleListMemories",
+        err,
+      );
       return { status: 500, body: errorBody("MEMORY_ERROR", "Failed to list memories.") };
     }
     throw err;
@@ -735,7 +788,7 @@ export function handleListMemoryTombstones(ctx: RouteContext, deps: UiHandlerDep
 
 // ─── Handler: GET /api/memory/review-queue ────────────────────────────────────
 
-export function handleMemoryReviewQueue(_ctx: RouteContext, deps: UiHandlerDeps): RouteResult {
+export function handleMemoryReviewQueue(ctx: RouteContext, deps: UiHandlerDeps): RouteResult {
   const vault = resolveVault(deps);
   if (isRouteResult(vault)) return vault;
 
@@ -750,6 +803,13 @@ export function handleMemoryReviewQueue(_ctx: RouteContext, deps: UiHandlerDeps)
     };
   } catch (err) {
     if (err instanceof MemoryStorageError) {
+      reportMemoryHandlerFailure(
+        deps,
+        handlerCorrelationId(ctx),
+        "memory.review-queue",
+        "memory-handlers.handleMemoryReviewQueue",
+        err,
+      );
       return { status: 500, body: errorBody("MEMORY_ERROR", "Failed to load review queue.") };
     }
     throw err;
@@ -775,6 +835,13 @@ export function handleGetMemory(ctx: RouteContext, deps: UiHandlerDeps): RouteRe
     return { status: 200, body: { memory: redactMemory(deps, record) } };
   } catch (err) {
     if (err instanceof MemoryStorageError) {
+      reportMemoryHandlerFailure(
+        deps,
+        handlerCorrelationId(ctx),
+        "memory.get",
+        "memory-handlers.handleGetMemory",
+        err,
+      );
       return { status: 500, body: errorBody("MEMORY_ERROR", "Failed to read memory.") };
     }
     throw err;
@@ -885,6 +952,13 @@ export async function handleEditMemory(
     return await applyMemoryEdit(deps, vault, id, input);
   } catch (err) {
     if (err instanceof MemoryStorageError) {
+      reportMemoryHandlerFailure(
+        deps,
+        handlerCorrelationId(ctx),
+        "memory.edit",
+        "memory-handlers.handleEditMemory",
+        err,
+      );
       return {
         status: err.code === "not-found" ? 404 : 500,
         body: errorBody("MEMORY_ERROR", "Failed to update memory."),
@@ -924,6 +998,13 @@ export function handlePinMemory(ctx: RouteContext, deps: UiHandlerDeps): RouteRe
       };
     }
     if (err instanceof MemoryStorageError) {
+      reportMemoryHandlerFailure(
+        deps,
+        handlerCorrelationId(ctx),
+        "memory.pin",
+        "memory-handlers.handlePinMemory",
+        err,
+      );
       return { status: 500, body: errorBody("MEMORY_ERROR", "Failed to pin memory.") };
     }
     throw err;
@@ -960,6 +1041,13 @@ export function handleUnpinMemory(ctx: RouteContext, deps: UiHandlerDeps): Route
       };
     }
     if (err instanceof MemoryStorageError) {
+      reportMemoryHandlerFailure(
+        deps,
+        handlerCorrelationId(ctx),
+        "memory.unpin",
+        "memory-handlers.handleUnpinMemory",
+        err,
+      );
       return { status: 500, body: errorBody("MEMORY_ERROR", "Failed to unpin memory.") };
     }
     throw err;
@@ -1013,6 +1101,13 @@ export async function handleArchiveMemory(
       };
     }
     if (err instanceof MemoryStorageError) {
+      reportMemoryHandlerFailure(
+        deps,
+        handlerCorrelationId(ctx),
+        "memory.archive",
+        "memory-handlers.handleArchiveMemory",
+        err,
+      );
       return { status: 500, body: errorBody("MEMORY_ERROR", "Failed to archive memory.") };
     }
     throw err;
@@ -1258,11 +1353,18 @@ function formatForgetBody(memoryIds: readonly MemoryId[]): Record<string, unknow
   };
 }
 
-function memoryMutationErrorBody(err: unknown, fallbackMessage: string): RouteResult {
+function memoryMutationErrorBody(
+  deps: UiHandlerDeps,
+  correlationId: string,
+  operation: string,
+  err: unknown,
+  fallbackMessage: string,
+): RouteResult {
   if (err instanceof GovernanceError) {
     return { status: 400, body: governanceErrorBody(err) };
   }
   if (err instanceof MemoryStorageError) {
+    reportMemoryHandlerFailure(deps, correlationId, operation, "memory-handlers", err);
     return {
       status: err.code === "not-found" ? 404 : 500,
       body: errorBody("MEMORY_ERROR", fallbackMessage),
@@ -1271,11 +1373,21 @@ function memoryMutationErrorBody(err: unknown, fallbackMessage: string): RouteRe
   throw err;
 }
 
-function preflightPrivacyCriticalAudit(deps: UiHandlerDeps): RouteResult | undefined {
+function preflightPrivacyCriticalAudit(
+  deps: UiHandlerDeps,
+  correlationId: string,
+): RouteResult | undefined {
   try {
     assertMemoryAuditWritable(deps.evidenceStore, Date.now());
     return undefined;
-  } catch {
+  } catch (error) {
+    reportMemoryHandlerFailure(
+      deps,
+      correlationId,
+      "memory.audit.preflight",
+      "memory-handlers.preflightPrivacyCriticalAudit",
+      error,
+    );
     return {
       status: 500,
       body: errorBody(
@@ -1303,7 +1415,10 @@ export async function handleForgetMemory(
 
   const input = parseDestructiveInput(body);
   if (isRouteResult(input)) return input;
-  const auditReady = preflightPrivacyCriticalAudit(deps);
+  // Minted once so the preflight check and a later mutation failure report under the SAME id
+  // (ADR-0173 D5 / g12), mirroring handleRunMaintenance's correlationId reuse.
+  const correlationId = handlerCorrelationId(ctx);
+  const auditReady = preflightPrivacyCriticalAudit(deps, correlationId);
   if (auditReady !== undefined) return auditReady;
 
   try {
@@ -1316,7 +1431,13 @@ export async function handleForgetMemory(
     if (isRouteResult(result)) return result;
     return { status: 200, body: formatForgetBody(result.memoryIds) };
   } catch (err) {
-    return memoryMutationErrorBody(err, "Failed to forget memory.");
+    return memoryMutationErrorBody(
+      deps,
+      correlationId,
+      "memory.forget",
+      err,
+      "Failed to forget memory.",
+    );
   }
 }
 
@@ -1332,7 +1453,8 @@ export async function handleForgetMemories(
 
   const input = parseForgetSelectionInput(body);
   if (isRouteResult(input)) return input;
-  const auditReady = preflightPrivacyCriticalAudit(deps);
+  const correlationId = handlerCorrelationId(ctx);
+  const auditReady = preflightPrivacyCriticalAudit(deps, correlationId);
   if (auditReady !== undefined) return auditReady;
 
   try {
@@ -1340,7 +1462,13 @@ export async function handleForgetMemories(
     if (isRouteResult(result)) return result;
     return { status: 200, body: formatForgetBody(result.memoryIds) };
   } catch (err) {
-    return memoryMutationErrorBody(err, "Failed to forget memories.");
+    return memoryMutationErrorBody(
+      deps,
+      correlationId,
+      "memory.forget.batch",
+      err,
+      "Failed to forget memories.",
+    );
   }
 }
 
@@ -1364,7 +1492,8 @@ export async function handleDeleteMemory(
 
   const input = parseDestructiveInput(body);
   if (isRouteResult(input)) return input;
-  const auditReady = preflightPrivacyCriticalAudit(deps);
+  const correlationId = handlerCorrelationId(ctx);
+  const auditReady = preflightPrivacyCriticalAudit(deps, correlationId);
   if (auditReady !== undefined) return auditReady;
 
   try {
@@ -1385,7 +1514,13 @@ export async function handleDeleteMemory(
       },
     };
   } catch (err) {
-    return memoryMutationErrorBody(err, "Failed to delete memory.");
+    return memoryMutationErrorBody(
+      deps,
+      correlationId,
+      "memory.delete",
+      err,
+      "Failed to delete memory.",
+    );
   }
 }
 
@@ -1615,7 +1750,13 @@ export async function handleResolveMemoryConflict(
     if (isRouteResult(result)) return result;
     return { status: 200, body: result };
   } catch (err) {
-    return memoryMutationErrorBody(err, "Failed to resolve conflict.");
+    return memoryMutationErrorBody(
+      deps,
+      handlerCorrelationId(ctx),
+      "memory.conflicts.resolve",
+      err,
+      "Failed to resolve conflict.",
+    );
   }
 }
 
@@ -1727,6 +1868,35 @@ function recordCorrectionProposalAuditIfNeeded(
   );
 }
 
+// Split out of `handleCorrectMemory` (w4b, epic #3233) purely to keep the route handler under the
+// repository's 50-line function cap once its catch block gained `reportMemoryHandlerFailure` — no
+// behavior change, same statements in the same order.
+function executeCorrectMemory(
+  vault: MemoryVaultStore,
+  deps: UiHandlerDeps,
+  existing: MemoryRecord,
+  input: { readonly correctedBody: string },
+  id: string,
+): RouteResult {
+  const nowMs = Date.now();
+  const correctionId = randomUUID() as MemoryId;
+  const { proposal, supersession } = buildCorrection({
+    olderMemory: existing,
+    correctedBody: input.correctedBody,
+    context: { reviewerId: reviewerIdForMemoryMutation(deps), nowMs },
+    newProposalId: randomUUID() as MemoryProposalId,
+    newMemoryId: correctionId,
+  });
+  const auditCountBeforeInsert = auditEventCountForDay(deps, nowMs);
+  const inserted = vault.insertMemory(buildCorrectionRecord(proposal, correctionId, nowMs));
+  recordCorrectionProposalAuditIfNeeded(deps, inserted, nowMs, auditCountBeforeInsert);
+  vault.insertEdge(buildEdgeFromSupersession(supersession));
+  return {
+    status: 201,
+    body: { correction: redactMemory(deps, inserted), originalMemoryId: id },
+  };
+}
+
 export async function handleCorrectMemory(
   ctx: RouteContext,
   deps: UiHandlerDeps,
@@ -1750,28 +1920,19 @@ export async function handleCorrectMemory(
     if (existing === undefined) {
       return { status: 404, body: errorBody("NOT_FOUND", "Memory not found.") };
     }
-    const nowMs = Date.now();
-    const correctionId = randomUUID() as MemoryId;
-    const { proposal, supersession } = buildCorrection({
-      olderMemory: existing,
-      correctedBody: input.correctedBody,
-      context: { reviewerId: reviewerIdForMemoryMutation(deps), nowMs },
-      newProposalId: randomUUID() as MemoryProposalId,
-      newMemoryId: correctionId,
-    });
-    const auditCountBeforeInsert = auditEventCountForDay(deps, nowMs);
-    const inserted = vault.insertMemory(buildCorrectionRecord(proposal, correctionId, nowMs));
-    recordCorrectionProposalAuditIfNeeded(deps, inserted, nowMs, auditCountBeforeInsert);
-    vault.insertEdge(buildEdgeFromSupersession(supersession));
-    return {
-      status: 201,
-      body: { correction: redactMemory(deps, inserted), originalMemoryId: id },
-    };
+    return executeCorrectMemory(vault, deps, existing, input, id);
   } catch (err) {
     if (err instanceof GovernanceError) {
       return { status: 400, body: governanceErrorBody(err) };
     }
     if (err instanceof MemoryStorageError) {
+      reportMemoryHandlerFailure(
+        deps,
+        handlerCorrelationId(ctx),
+        "memory.correct",
+        "memory-handlers.handleCorrectMemory",
+        err,
+      );
       return { status: 500, body: errorBody("MEMORY_ERROR", "Failed to create correction.") };
     }
     throw err;
@@ -1977,7 +2138,13 @@ export async function handleAcceptMemoryProposal(
   try {
     return acceptMemoryProposal(vault, deps, id as MemoryId, bodyOverride);
   } catch (err) {
-    return memoryMutationErrorBody(err, "Failed to accept proposal.");
+    return memoryMutationErrorBody(
+      deps,
+      handlerCorrelationId(ctx),
+      "memory.proposals.accept",
+      err,
+      "Failed to accept proposal.",
+    );
   }
 }
 
@@ -2046,6 +2213,13 @@ export async function handleRejectMemoryProposal(
     return { status: 200, body: { memory: redactMemory(deps, updated) } };
   } catch (err) {
     if (err instanceof MemoryStorageError) {
+      reportMemoryHandlerFailure(
+        deps,
+        handlerCorrelationId(ctx),
+        "memory.proposals.reject",
+        "memory-handlers.handleRejectMemoryProposal",
+        err,
+      );
       return {
         status: err.code === "not-found" ? 404 : 500,
         body: errorBody("MEMORY_ERROR", "Failed to reject proposal."),

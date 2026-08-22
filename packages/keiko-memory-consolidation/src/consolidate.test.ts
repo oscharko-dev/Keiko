@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import { JACCARD_DEFAULT, MAX_AGE_MS_DEFAULT, STALE_CONFIDENCE_DEFAULT } from "./_constants.js";
 import { FIXED_NOW_MS, makeEdgeIdFactory, makeIdFactory, makeRecord, must } from "./_support.js";
 import { runConsolidation } from "./consolidate.js";
+import type { ConsolidationLogEvent, ConsolidationLogSink } from "./log-port.js";
 import type { ConsolidationOptions } from "./types.js";
 
 function baseOptions(overrides: Partial<ConsolidationOptions> = {}): ConsolidationOptions {
@@ -493,5 +494,116 @@ describe("runConsolidation - reserved summaryGenerator seam", () => {
     );
     expect(result.state).toBe("completed");
     expect(calls).toBe(0);
+  });
+});
+
+// `chooseSummaryBody` (consolidate.ts) has four distinct branches that all fell back to the
+// deterministic union. Before `summaryFallbackReason` existed, every branch was indistinguishable
+// from every other — a caller (or an operator reading the activity log) could not tell "nobody
+// configured a generator" apart from "the generator threw". These five specs go through the
+// public `runConsolidation` entry point only (this package's composition root) plus the
+// caller-supplied `logSink`, exactly the surface a real caller has — `GeneratedSummaryChoice` and
+// `chooseSummaryBody` stay package-private.
+describe("runConsolidation - summaryFallbackReason", () => {
+  function recordingLogSink(): { sink: ConsolidationLogSink; events: ConsolidationLogEvent[] } {
+    const events: ConsolidationLogEvent[] = [];
+    return { sink: { write: (event) => events.push(event) }, events };
+  }
+
+  function threeMemberCluster(): {
+    a: ReturnType<typeof makeRecord>;
+    b: ReturnType<typeof makeRecord>;
+    c: ReturnType<typeof makeRecord>;
+  } {
+    return {
+      a: makeRecord({ id: "m-a", body: "use tabs", createdAt: 100 }),
+      b: makeRecord({ id: "m-b", body: "prefer compact diffs", createdAt: 200 }),
+      c: makeRecord({ id: "m-c", body: "keep PR titles short", createdAt: 300 }),
+    };
+  }
+
+  it("reports 'absent' when no summaryGenerator is configured", () => {
+    const { a, b, c } = threeMemberCluster();
+    const { sink, events } = recordingLogSink();
+    runConsolidation([a, b, c], baseOptions({ jaccardThreshold: 0, logSink: sink }));
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({
+      category: "consolidation",
+      op: "consolidation.summary.fallback",
+      extra: { reason: "absent" },
+    });
+  });
+
+  it("reports 'invalid-output' when the summaryGenerator returns null", () => {
+    const { a, b, c } = threeMemberCluster();
+    const { sink, events } = recordingLogSink();
+    runConsolidation(
+      [a, b, c],
+      baseOptions({ jaccardThreshold: 0, summaryGenerator: () => null, logSink: sink }),
+    );
+    expect(events).toHaveLength(1);
+    expect(events[0]?.extra).toEqual({ reason: "invalid-output" });
+  });
+
+  it("reports 'invalid-output' when the summaryGenerator returns an empty body", () => {
+    const { a, b, c } = threeMemberCluster();
+    const { sink, events } = recordingLogSink();
+    runConsolidation(
+      [a, b, c],
+      baseOptions({ jaccardThreshold: 0, summaryGenerator: () => "   ", logSink: sink }),
+    );
+    expect(events).toHaveLength(1);
+    expect(events[0]?.extra).toEqual({ reason: "invalid-output" });
+  });
+
+  it("reports 'union-not-preserved' when the generated summary drops source content", () => {
+    const { a, b, c } = threeMemberCluster();
+    const { sink, events } = recordingLogSink();
+    runConsolidation(
+      [a, b, c],
+      baseOptions({ jaccardThreshold: 0, summaryGenerator: () => "use tabs", logSink: sink }),
+    );
+    expect(events).toHaveLength(1);
+    expect(events[0]?.extra).toEqual({ reason: "union-not-preserved" });
+  });
+
+  it("reports 'generator-threw' when the summaryGenerator throws, and the sink receives the event", () => {
+    const { a, b, c } = threeMemberCluster();
+    const { sink, events } = recordingLogSink();
+    const result = runConsolidation(
+      [a, b, c],
+      baseOptions({
+        jaccardThreshold: 0,
+        summaryGenerator: () => {
+          throw new Error("summary unavailable");
+        },
+        logSink: sink,
+      }),
+    );
+    // The engine keeps working (deterministic union fallback) regardless of whether a sink is
+    // wired — logging is an observation of the run, never a precondition for it.
+    expect(result.state).toBe("completed");
+    expect(must(result.updatesProposed[0]).bodyPatch).toContain("keep PR titles short");
+    expect(events).toEqual([
+      {
+        category: "consolidation",
+        op: "consolidation.summary.fallback",
+        extra: { reason: "generator-threw" },
+      },
+    ]);
+  });
+
+  it("never calls the sink when no fallback occurs", () => {
+    const { a, b, c } = threeMemberCluster();
+    const { sink, events } = recordingLogSink();
+    runConsolidation(
+      [a, b, c],
+      baseOptions({
+        jaccardThreshold: 0,
+        summaryGenerator: ({ sourceBodies }) => sourceBodies.join("; "),
+        logSink: sink,
+      }),
+    );
+    expect(events).toEqual([]);
   });
 });

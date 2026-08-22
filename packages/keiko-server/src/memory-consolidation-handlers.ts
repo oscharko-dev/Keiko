@@ -39,6 +39,7 @@ import {
 import type { UiHandlerDeps } from "./deps.js";
 import type { RouteContext, RouteResult } from "./routes.js";
 import { errorBody } from "./routes.js";
+import { contentFreeErrorClass, emitServerDiagnostic } from "./diagnostics-log.js";
 import type {
   ConsolidationJobRecord,
   ConsolidationReviewSnapshot,
@@ -47,6 +48,7 @@ import type {
 } from "./memory-consolidation-registry.js";
 import { enrichReviewItemsWithAdvisory } from "./memory-conflict-advisory.js";
 import { readJsonRequestBody } from "./bounded-request-body.js";
+import { consolidationLogSinkFor } from "./process-log-sink.js";
 
 const MAX_BODY_BYTES = 64_000;
 const DEFAULT_JACCARD_THRESHOLD = 0.85;
@@ -431,14 +433,18 @@ function newMemoryEdgeId(): MemoryEdgeId {
   return randomUUID() as unknown as MemoryEdgeId;
 }
 
-function buildRunOptions(
-  scheduledRecord: ConsolidationJobRecord | undefined,
-  createdAt: number,
-  vault: MemoryVaultStore,
-  memories: readonly MemoryRecord[],
-  selection: ConsolidationJobSelection,
-  settings: ConsolidationJobSettings,
-): Parameters<typeof runConsolidation>[1] {
+interface BuildRunOptionsArgs {
+  readonly jobId: string;
+  readonly scheduledRecord: ConsolidationJobRecord | undefined;
+  readonly createdAt: number;
+  readonly vault: MemoryVaultStore;
+  readonly memories: readonly MemoryRecord[];
+  readonly selection: ConsolidationJobSelection;
+  readonly settings: ConsolidationJobSettings;
+}
+
+function buildRunOptions(args: BuildRunOptionsArgs): Parameters<typeof runConsolidation>[1] {
+  const { jobId, scheduledRecord, createdAt, vault, memories, selection, settings } = args;
   const memoryIds = memories.map((memory) => memory.id);
   const embeddings = vault.getEmbeddings(memoryIds);
   const accessStats = vault.getAccessStats(memoryIds);
@@ -469,6 +475,12 @@ function buildRunOptions(
     // every poll — eliminates a theoretical race where the registry entry is replaced under the
     // closure before the signal is first checked.
     cancellationSignal: (): boolean => scheduledRecord?.cancelRequested === true,
+    // Wires the process-wide activity log so `consolidation.summary.fallback` (the ONE line
+    // `chooseSummaryBody`'s deterministic-union fallback emits) is durable rather than silently
+    // unreachable, and stamps this job's own id as the event's `correlationId` — the package's
+    // `ConsolidationLogEvent` carries no jobId field of its own — so an operator can join the
+    // fallback reason back to the job that produced it (#2902 w6).
+    logSink: consolidationLogSinkFor(jobId),
   };
 }
 
@@ -527,15 +539,29 @@ function buildReviewSnapshots(
 }
 
 function failScheduledJob(
+  deps: UiHandlerDeps,
+  correlationId: string,
   registry: NonNullable<UiHandlerDeps["consolidationJobs"]>,
   running: ReturnType<typeof transitionJob>,
   jobId: string,
   memories: readonly MemoryRecord[],
+  error: unknown,
 ): void {
   const completedAt = Date.now();
   // COUPLING-004: persist only the same fixed, cause-free string that finalizeTerminalJob() uses;
   // a raw error can contain a filesystem path or SQL fragment that must not cross into the browser.
   const message = "Consolidation run failed.";
+  // The engine/vault throw that caused this job to fail was previously discarded here: the job was
+  // marked permanently failed with no record of what threw. Log a content-free diagnostic (error
+  // CLASS only, never the raw message) before the job transitions to its terminal "failed" state.
+  emitServerDiagnostic(deps.diagnostics, {
+    correlationId,
+    timestamp: new Date(completedAt).toISOString(),
+    operation: "memory.consolidation.job.run",
+    source: "memory-consolidation.scheduled-job",
+    errorClass: contentFreeErrorClass(error),
+    message: "memory-consolidation-scheduled-job-failed",
+  });
   registry.fail(
     jobId,
     transitionJob(running, "failed", { completedAt, error: message }),
@@ -584,8 +610,24 @@ async function enrichConsolidationResult(
   return { ...result, reviewItems: advisory.enrichedItems };
 }
 
+// Shared by both cancellation checkpoints in `runScheduledJob` (before and after the load, which
+// used to duplicate the same transition+complete call inline) — extracted only to keep that
+// function under the AGENTS.md max-lines-per-function ceiling.
+function completeIfCanceled(
+  registry: NonNullable<UiHandlerDeps["consolidationJobs"]>,
+  jobId: string,
+  record: ConsolidationJobRecord,
+  recordCount: number,
+): boolean {
+  if (!record.cancelRequested) return false;
+  const canceled = transitionJob(record.job, "canceled", { completedAt: Date.now() });
+  registry.complete(jobId, canceled, recordCount);
+  return true;
+}
+
 async function runScheduledJob(
   deps: UiHandlerDeps,
+  correlationId: string,
   registry: NonNullable<UiHandlerDeps["consolidationJobs"]>,
   jobId: string,
   vault: MemoryVaultStore,
@@ -594,20 +636,12 @@ async function runScheduledJob(
 ): Promise<void> {
   const queued = registry.get(jobId);
   if (queued?.job.state !== "queued") return;
-  if (queued.cancelRequested) {
-    const canceled = transitionJob(queued.job, "canceled", { completedAt: Date.now() });
-    registry.complete(jobId, canceled, 0);
-    return;
-  }
+  if (completeIfCanceled(registry, jobId, queued, 0)) return;
   const loaded = loadSelectedMemories(vault, selection, settings.maxRecordsPerRun);
   const memories = loaded.records;
   const afterLoad = registry.get(jobId);
   if (afterLoad?.job.state !== "queued") return;
-  if (afterLoad.cancelRequested) {
-    const canceled = transitionJob(afterLoad.job, "canceled", { completedAt: Date.now() });
-    registry.complete(jobId, canceled, memories.length);
-    return;
-  }
+  if (completeIfCanceled(registry, jobId, afterLoad, memories.length)) return;
   if (memories.length === 0 || settings.maxClustersPerRun === 0) {
     const result = emptyConsolidationResult("skipped");
     const skipped = transitionJob(afterLoad.job, "skipped", {
@@ -623,17 +657,40 @@ async function runScheduledJob(
   try {
     const result = runConsolidation(
       memories,
-      buildRunOptions(scheduledRecord, queued.createdAt, vault, memories, selection, settings),
+      buildRunOptions({
+        jobId,
+        scheduledRecord,
+        createdAt: queued.createdAt,
+        vault,
+        memories,
+        selection,
+        settings,
+      }),
     );
-    const enrichedResult = await enrichConsolidationResult(deps, jobId, result, memories);
-    finalizeTerminalJob(registry, running, jobId, memories, enrichedResult, loaded.truncated);
-  } catch {
-    failScheduledJob(registry, running, jobId, memories);
+    await finalizeScheduledConsolidation(deps, registry, running, jobId, memories, result, loaded);
+  } catch (error) {
+    failScheduledJob(deps, correlationId, registry, running, jobId, memories, error);
   }
+}
+
+// Split out of `runScheduledJob` solely to keep that function under the AGENTS.md
+// max-lines-per-function ceiling; behaviourally this is still that function's success path.
+async function finalizeScheduledConsolidation(
+  deps: UiHandlerDeps,
+  registry: NonNullable<UiHandlerDeps["consolidationJobs"]>,
+  running: ReturnType<typeof transitionJob>,
+  jobId: string,
+  memories: readonly MemoryRecord[],
+  result: ConsolidationResult,
+  loaded: { readonly truncated: boolean },
+): Promise<void> {
+  const enrichedResult = await enrichConsolidationResult(deps, jobId, result, memories);
+  finalizeTerminalJob(registry, running, jobId, memories, enrichedResult, loaded.truncated);
 }
 
 function scheduleJob(
   deps: UiHandlerDeps,
+  correlationId: string,
   jobId: string,
   vault: MemoryVaultStore,
   selection: ConsolidationJobSelection,
@@ -642,7 +699,7 @@ function scheduleJob(
   const registry = deps.consolidationJobs;
   if (registry === undefined) return;
   setImmediate(() => {
-    void runScheduledJob(deps, registry, jobId, vault, selection, settings);
+    void runScheduledJob(deps, correlationId, registry, jobId, vault, selection, settings);
   });
 }
 
@@ -687,7 +744,14 @@ export async function handleCreateConsolidationJob(
   } catch {
     return registerJobLimit();
   }
-  scheduleJob(deps, jobId, vault, input.selection, input.settings);
+  scheduleJob(
+    deps,
+    ctx.correlationId ?? randomUUID(),
+    jobId,
+    vault,
+    input.selection,
+    input.settings,
+  );
   return createJobResponse(deps, record);
 }
 

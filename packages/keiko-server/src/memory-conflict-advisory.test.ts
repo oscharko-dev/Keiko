@@ -709,8 +709,14 @@ describe("enrichReviewItemsWithAdvisory — wall-clock phase budget (ADR-0120 D8
     expect(calls).toHaveLength(1);
     expect(outcome.enrichedItems[0]?.suggestedResolution).toBeDefined();
     expect(outcome.enrichedItems[1]?.suggestedResolution).toBeUndefined();
+    // Issue #3245: `message` is the fixed closed-vocabulary condition label; the per-invocation
+    // counts (previously composed into free text here) now live on `code`.
     expect(
-      diagnosticsSink.some((entry) => entry.message.includes("skipped over the wall-clock budget")),
+      diagnosticsSink.some(
+        (entry) =>
+          entry.message === "advisory-phase-summary" &&
+          entry.code?.includes("truncatedByBudget=1") === true,
+      ),
     ).toBe(true);
   });
 });

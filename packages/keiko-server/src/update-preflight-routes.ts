@@ -51,7 +51,8 @@ async function updateAvailableReport(
   registry: Awaited<ReturnType<typeof fetchRegistryLatestVersion>>,
   options: UpdatePreflightRuntimeOptions,
 ): Promise<UpdatePreflightReport> {
-  const catalog = validateBundledCatalog(options.bundledCatalog) ?? readBundledCatalogFromDisk();
+  const catalog =
+    validateBundledCatalog(options.bundledCatalog) ?? readBundledCatalogFromDisk(deps.diagnostics);
   const impactResolution = impactFromCatalog(catalog, currentVersion, targetVersion);
   const github = await fetchGitHubRelease(deps, targetVersion);
   const fallbackRelease = fallbackReleaseFromImpact(targetVersion, impactResolution.impact);
@@ -124,7 +125,8 @@ async function portablePreflightReport(
       outcome.warnings,
     );
   }
-  const catalog = validateBundledCatalog(options.bundledCatalog) ?? readBundledCatalogFromDisk();
+  const catalog =
+    validateBundledCatalog(options.bundledCatalog) ?? readBundledCatalogFromDisk(deps.diagnostics);
   const impactResolution = impactFromCatalog(catalog, currentVersion, outcome.targetVersion);
   return portableUpdateAvailableReport(
     base,

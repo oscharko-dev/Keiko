@@ -1,8 +1,34 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { QueueEventSink, type StreamEvent, type SseWriter } from "./sink.js";
+import type { ServerDiagnosticRecord, ServerDiagnosticSink } from "./diagnostics-log.js";
 
+// runId is shaped to satisfy correlation.ts's SAFE_CORRELATION_ID (8-128 chars) so the new
+// terminal-event diagnostic tests below can assert it survives `sanitizeDiagnosticRecord`
+// unchanged, rather than being replaced by the invalid-correlation-id marker.
 function event(seq: number, type = "tick"): StreamEvent {
-  return { schemaVersion: "1", runId: "run-1", fingerprint: "fp", seq, ts: seq, type };
+  return { schemaVersion: "1", runId: "run-000001", fingerprint: "fp", seq, ts: seq, type };
+}
+
+// Extra members beyond the shared StreamEvent envelope ride along untyped (see sink.ts's own
+// header comment), the same way the "bounds aggregate replay bytes" test below builds a
+// larger-than-envelope event.
+function terminalEvent(seq: number, type: string, extra: Record<string, unknown>): StreamEvent {
+  return { ...event(seq, type), ...extra };
+}
+
+function recordingDiagnosticSink(): {
+  readonly sink: ServerDiagnosticSink;
+  readonly records: ServerDiagnosticRecord[];
+} {
+  const records: ServerDiagnosticRecord[] = [];
+  return {
+    records,
+    sink: {
+      record: (record): void => {
+        records.push(record);
+      },
+    },
+  };
 }
 
 function recordingWriter(): { writer: SseWriter; events: StreamEvent[]; closed: () => boolean } {
@@ -162,5 +188,108 @@ describe("QueueEventSink ring buffer", () => {
     sink.emit(event(2));
     sink.closeAll();
     expect(sink.buffered().map((e) => e.seq)).toEqual([1, 2]);
+  });
+});
+
+// #2902 w4b: a run's terminal outcome must reach the operator diagnostic sink regardless of
+// whether any SSE writer is attached — the exact gap that left a closed-browser-tab run with no
+// trace anywhere once its ring buffer entry was evicted.
+describe("QueueEventSink terminal-event diagnostic tee", () => {
+  it("tees each terminal event type exactly once, keyed by the event's own runId", () => {
+    const { sink: diagnostics, records } = recordingDiagnosticSink();
+    const sink = new QueueEventSink({ diagnostics });
+    sink.emit(event(1, "run:completed"));
+    sink.emit(terminalEvent(2, "run:failed", { failure: { category: "HARNESS_MODEL_ERROR" } }));
+    sink.emit(terminalEvent(3, "run:cancelled", { atState: "model-call" }));
+    sink.emit(terminalEvent(4, "bug:completed", { status: "fix-applied" }));
+    sink.emit(terminalEvent(5, "bug:failed", { errorCode: "TypeError" }));
+    sink.emit(terminalEvent(6, "workflow:completed", { status: "dry-run" }));
+    sink.emit(terminalEvent(7, "workflow:failed", { errorCode: "RangeError" }));
+
+    expect(records).toHaveLength(7);
+    for (const record of records) {
+      expect(record.correlationId).toBe("run-000001");
+    }
+    expect(records.map((record) => record.operation)).toEqual([
+      "harness.run.completed",
+      "harness.run.failed",
+      "harness.run.cancelled",
+      "workflow.bug-investigation.completed",
+      "workflow.bug-investigation.failed",
+      "workflow.unit-tests.completed",
+      "workflow.unit-tests.failed",
+    ]);
+    expect(records.map((record) => record.code)).toEqual([
+      undefined,
+      "HARNESS_MODEL_ERROR",
+      "model-call",
+      "fix-applied",
+      "TypeError",
+      "dry-run",
+      "RangeError",
+    ]);
+  });
+
+  it("drops a bug/workflow errorCode that is not machine-token shaped, even though it would pass generic log redaction", () => {
+    const { sink: diagnostics, records } = recordingDiagnosticSink();
+    const sink = new QueueEventSink({ diagnostics });
+    // Shaped like a hostile Error subclass's freely-settable `.name` (stages.ts derives errorCode
+    // from `error.name`): short, printable ASCII, <=3 spaces -- it would sail through
+    // redactLogString's generic guards untouched, so only a writer-side shape check can stop it.
+    sink.emit(terminalEvent(1, "bug:failed", { errorCode: "internal ledger ref" }));
+    sink.emit(terminalEvent(2, "workflow:failed", { errorCode: "internal ledger ref" }));
+    expect(records.map((record) => record.code)).toEqual([undefined, undefined]);
+  });
+
+  it("never tees a non-terminal event", () => {
+    const { sink: diagnostics, records } = recordingDiagnosticSink();
+    const sink = new QueueEventSink({ diagnostics });
+    for (const type of [
+      "run:started",
+      "state:transition",
+      "model:call:started",
+      "tool:call:completed",
+      "bug:started",
+      "workflow:started",
+    ]) {
+      sink.emit(event(1, type));
+    }
+    expect(records).toHaveLength(0);
+  });
+
+  it("never reads free-text fields (report/reason/failure.message) into the diagnostic record", () => {
+    const { sink: diagnostics, records } = recordingDiagnosticSink();
+    const sink = new QueueEventSink({ diagnostics });
+    sink.emit(
+      terminalEvent(1, "run:failed", {
+        failure: { category: "HARNESS_MODEL_ERROR", message: "customer-secret-token-abc123" },
+      }),
+    );
+    sink.emit(
+      terminalEvent(2, "run:cancelled", { atState: "model-call", reason: "user hit stop" }),
+    );
+
+    const serialized = JSON.stringify(records);
+    expect(serialized).not.toContain("customer-secret-token-abc123");
+    expect(serialized).not.toContain("user hit stop");
+    // The fixed, code-declared summary is used instead of any field read off the event.
+    expect(records[0]?.message).toBe("Harness run reached a terminal failed state.");
+  });
+
+  it("falls back to the production diagnostic sink when no diagnostics option is supplied", () => {
+    // No `diagnostics` option: emitServerDiagnostic(undefined, ...) resolves to
+    // defaultServerDiagnosticSink, which writes one line to stderr — this is what makes the tee
+    // work for every existing `new QueueEventSink()` call site in run-engine.ts without change.
+    const sink = new QueueEventSink();
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    try {
+      sink.emit(event(1, "run:completed"));
+      expect(consoleError).toHaveBeenCalledTimes(1);
+      const stderrLine = consoleError.mock.calls[0]?.[0] as string;
+      expect(stderrLine).toContain("run-000001");
+      expect(stderrLine).toContain("harness.run.completed");
+    } finally {
+      consoleError.mockRestore();
+    }
   });
 });

@@ -28,6 +28,10 @@
 // threshold the single source of truth — the predicate can only ever suppress work, never
 // authorise a line the logger itself would refuse.
 
+import type {
+  ConsolidationLogEvent,
+  ConsolidationLogSink,
+} from "@oscharko-dev/keiko-memory-consolidation";
 import {
   DEFAULT_SERVER_LOG_LEVEL,
   getServerLogger,
@@ -61,4 +65,22 @@ const PROCESS_SERVER_LOG_SINK: ProcessServerLogSink = {
  */
 export function processServerLogSink(): ProcessServerLogSink {
   return PROCESS_SERVER_LOG_SINK;
+}
+
+/**
+ * The `keiko-memory-consolidation` package's log port, stamped with the caller's own
+ * correlationId. `ConsolidationLogEvent` carries no jobId/run-id field of its own (see that
+ * package's `log-port.ts`) and `ConsolidationOptions` deliberately stays a pure, caller-agnostic
+ * options bag — so the composition root injects the correlation id here rather than widening the
+ * package's public shape. A `logSummaryFallback` line that already carries its own
+ * `correlationId` (none does today, but the port allows one) is left untouched; only an absent one
+ * is stamped, so a future producer-set id is never silently overwritten.
+ */
+export function consolidationLogSinkFor(correlationId: string): ConsolidationLogSink {
+  const sink = processServerLogSink();
+  return {
+    write(event: ConsolidationLogEvent): void {
+      sink.write({ ...event, correlationId: event.correlationId ?? correlationId });
+    },
+  };
 }

@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import {
   lstatSync,
   mkdirSync,
@@ -30,7 +30,11 @@ import {
 import { createFakeSessionPairingPort } from "../../coding-app-session/_support.js";
 import { SESSION_PAIRING_LAUNCHER_SECRET_ENV } from "../../coding-app-session/launcherSessionPairingPort.js";
 import { buildUiHandlerDeps, type UiHandlerDeps } from "../../deps.js";
-import type { ServerDiagnosticSink } from "../../diagnostics-log.js";
+import {
+  contentFreeErrorClass,
+  emitServerDiagnostic,
+  type ServerDiagnosticSink,
+} from "../../diagnostics-log.js";
 import type { VerificationRunnerManager } from "../../editor/verificationRunner.js";
 import type { WorkspaceLifecycleService } from "../../task-workspace/types.js";
 import type { CodingRuntimeEvidenceAggregator } from "../codingRuntimeEvidenceAggregator.js";
@@ -173,7 +177,7 @@ export function createFunctionalRuntimeResolver(
       createSupervisor: input.createSupervisor,
       ...(input.diagnostics === undefined ? {} : { diagnostics: input.diagnostics }),
     }),
-    secureWorkspaceTextRead: functionalWorkspaceRead(activeRoot),
+    secureWorkspaceTextRead: functionalWorkspaceRead(activeRoot, input.diagnostics),
     editorAgentClient: functionalEditorAgentClient(activeRoot),
     verificationRunner: input.verificationRunner,
     confirmationConsumer: createAuthenticatedSessionStartConfirmationPlane(),
@@ -318,8 +322,9 @@ function withScriptedModelSeams(
 }
 
 /** Bounded, workspace-confined text read for the managed tool facade (functional stand-in). */
-function functionalWorkspaceRead(
+export function functionalWorkspaceRead(
   resolveRoot: () => string | undefined,
+  diagnostics: ServerDiagnosticSink | undefined,
 ): SecureWorkspaceTextReadPort {
   return {
     readText: ({ relativePath, signal }): ReturnType<SecureWorkspaceTextReadPort["readText"]> => {
@@ -327,7 +332,7 @@ function functionalWorkspaceRead(
       if (signal?.aborted === true || root === undefined) {
         return Promise.resolve({ ok: false as const, reason: "workspace-unavailable" as const });
       }
-      return Promise.resolve(readContainedText(root, relativePath, signal));
+      return Promise.resolve(readContainedText(root, relativePath, signal, diagnostics));
     },
   };
 }
@@ -336,6 +341,7 @@ function readContainedText(
   root: string,
   relativePath: string,
   signal: AbortSignal | undefined,
+  diagnostics: ServerDiagnosticSink | undefined,
 ): Awaited<ReturnType<SecureWorkspaceTextReadPort["readText"]>> {
   try {
     const path = containedRegularFile(root, relativePath);
@@ -351,9 +357,42 @@ function readContainedText(
     const text = bytes.toString("utf8");
     bytes.fill(0);
     return { ok: true, text };
-  } catch {
-    return { ok: false, reason: "not-found" };
+  } catch (error) {
+    return functionalReadFailure(error, diagnostics);
   }
+}
+
+// ENOENT is the ordinary case — no such file, exactly what a plain miss looks like — and is
+// reported as "not-found". Previously every OTHER failure (EACCES, EPERM — a genuine permission
+// denial) collapsed to the SAME "not-found" reason, actively mislabeling a containment/permission
+// failure as mere absence. Distinguish the two and log a content-free diagnostic (error CLASS
+// only, never the path or the raw OS message) noting which one fired, mirroring the
+// isEnoent/emitShardUnreadable split `secret-vault.ts` already uses for the same OS-error class.
+function functionalReadFailure(
+  error: unknown,
+  diagnostics: ServerDiagnosticSink | undefined,
+): { readonly ok: false; readonly reason: "denied" | "not-found" } {
+  const permissionDenied = !isEnoent(error);
+  emitServerDiagnostic(diagnostics, {
+    correlationId: randomUUID(),
+    timestamp: new Date().toISOString(),
+    operation: "coding-runtime.functional-workspace-read",
+    source: "productionOpenCodeBackend.functional._support.read-contained-text",
+    errorClass: contentFreeErrorClass(error),
+    message: permissionDenied
+      ? "functional-workspace-read-permission-denied"
+      : "functional-workspace-read-not-found",
+  });
+  return { ok: false, reason: permissionDenied ? "denied" : "not-found" };
+}
+
+function isEnoent(error: unknown): boolean {
+  return (
+    typeof error === "object" &&
+    error !== null &&
+    "code" in error &&
+    (error as NodeJS.ErrnoException).code === "ENOENT"
+  );
 }
 
 /**

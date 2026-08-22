@@ -23,6 +23,8 @@ import type {
   MemoryUpdate,
 } from "@oscharko-dev/keiko-contracts/memory";
 
+import type { ConsolidationLogSink } from "./log-port.js";
+
 // ─── Job lifecycle ────────────────────────────────────────────────────────────
 // `ConsolidationJob` is a VALUE OBJECT, not a process handle. The package does not spawn jobs,
 // schedule them, or persist them. The caller (a scheduler / UI button / workflow orchestrator)
@@ -174,6 +176,11 @@ export interface ConsolidationOptions {
   readonly embeddingFor?: (memoryId: MemoryId) => ConsolidationEmbedding | undefined;
   readonly accessStatsFor?: (memoryId: MemoryId) => ConsolidationAccessStat | undefined;
   readonly summaryGenerator?: ConsolidationSummaryGenerator;
+  // Optional activity-log port (see `log-port.ts`). Absent by default, matching every other
+  // injected port on this interface — a caller that supplies one opts into a
+  // `consolidation.summary.fallback` event whenever `chooseSummaryBody` falls back to the
+  // deterministic union, carrying the closed-union `summaryFallbackReason` and nothing else.
+  readonly logSink?: ConsolidationLogSink;
 }
 
 // ─── Result ───────────────────────────────────────────────────────────────────

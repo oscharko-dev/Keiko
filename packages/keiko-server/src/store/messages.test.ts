@@ -1,6 +1,6 @@
 // ADR-0013 — chat_messages CRUD. shortResult is redacted+truncated to ≤200 chars BEFORE persist.
 
-import { describe, expect, it, beforeEach, afterEach } from "vitest";
+import { describe, expect, it, beforeEach, afterEach, vi } from "vitest";
 import { DatabaseSync } from "node:sqlite";
 import { mkdtempSync, mkdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -18,6 +18,7 @@ import {
   type UiStore,
   type WorkflowStatus,
 } from "./index.js";
+import { defaultServerDiagnosticSink, type ServerDiagnosticRecord } from "../diagnostics-log.js";
 
 let tmp: string;
 let proj: string;
@@ -192,6 +193,18 @@ function tamperAssistantResponseVersionsJson(dbPath: string, messageId: string, 
   const db = new DatabaseSync(dbPath);
   try {
     db.prepare("UPDATE chat_messages SET assistant_response_versions_json = ? WHERE id = ?").run(
+      raw,
+      messageId,
+    );
+  } finally {
+    db.close();
+  }
+}
+
+function tamperGroundedPreviewCitationsJson(dbPath: string, messageId: string, raw: string): void {
+  const db = new DatabaseSync(dbPath);
+  try {
+    db.prepare("UPDATE chat_messages SET grounded_preview_citations_json = ? WHERE id = ?").run(
       raw,
       messageId,
     );
@@ -524,6 +537,55 @@ describe("createMessage", () => {
     expect(updated.groundedAnswer?.assistantMessageId).toBe(assistant.id);
     expect(store.findGroundedPreviewCitations(assistant.id)).toEqual(previewCitations);
     expect(reloaded).not.toHaveProperty("groundedPreviewCitations");
+  });
+
+  it("logs a content-free diagnostic and drops a corrupted stored citation row (#2902 w4b)", () => {
+    // FAILS BEFORE / PASSES AFTER: prior to this fix, a corrupted
+    // grounded_preview_citations_json row was silently dropped — `records` below stayed empty.
+    // The fix logs a structured, content-free diagnostic (error CLASS + a fixed reason label,
+    // never the malformed row body) before returning `undefined`, exactly as before, to the caller.
+    const fixture = createOnDiskStoreFixture();
+    const assistant = fixture.store.createMessage({
+      chatId: fixture.chatId,
+      role: "assistant",
+      content: "Answer from policy.pdf.",
+      timestamp: 300,
+      runId: undefined,
+      workflowId: undefined,
+      workflowStatus: undefined,
+      shortResult: undefined,
+      taskType: undefined,
+    });
+    fixture.store.attachGroundedAnswer(
+      assistant.id,
+      groundedAnswer({ assistantMessageId: assistant.id }),
+      [],
+    );
+    const corruptedRaw = '[{"stableId":"preview-1","marker":';
+    tamperGroundedPreviewCitationsJson(fixture.dbPath, assistant.id, corruptedRaw);
+
+    const records: ServerDiagnosticRecord[] = [];
+    const spy = vi
+      .spyOn(defaultServerDiagnosticSink, "record")
+      .mockImplementation((record) => records.push(record));
+    let result: unknown;
+    try {
+      result = fixture.store.findGroundedPreviewCitations(assistant.id);
+    } finally {
+      spy.mockRestore();
+    }
+
+    expect(result).toBeUndefined();
+    expect(records).toHaveLength(1);
+    const [record] = records;
+    if (record === undefined) throw new Error("expected a diagnostic record");
+    expect(record.source).toBe("store.messages.parse-grounded-preview-citations");
+    expect(record.operation).toBe("store.messages.grounded-preview-citations.read");
+    expect(record.message).toBe("grounded-preview-citations-row-dropped");
+    expect(record.errorClass.length).toBeGreaterThan(0);
+    const serialized = JSON.stringify(record);
+    expect(serialized).not.toContain(corruptedRaw);
+    expect(serialized).not.toContain("preview-1");
   });
 
   it("rejects grounded answer metadata on non-assistant messages", () => {

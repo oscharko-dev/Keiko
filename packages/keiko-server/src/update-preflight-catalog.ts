@@ -1,6 +1,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { randomUUID } from "node:crypto";
 import type {
   ReleaseImpactBreakingException,
   ReleaseImpactCatalog,
@@ -15,6 +16,11 @@ import {
   RELEASE_IMPACT_REMEDIATIONS,
 } from "@oscharko-dev/keiko-contracts";
 import { isRecord, isStableVersionString } from "./update-preflight-registry.js";
+import {
+  contentFreeErrorClass,
+  emitServerDiagnostic,
+  type ServerDiagnosticSink,
+} from "./diagnostics-log.js";
 
 const RELEASE_IMPACT_USER_VISIBLE_CHANGES = [
   "none",
@@ -182,7 +188,9 @@ export function validateBundledCatalog(raw: unknown): ReleaseImpactCatalog | und
   return { schemaVersion: 1, entries };
 }
 
-export function readBundledCatalogFromDisk(): ReleaseImpactCatalog | undefined {
+export function readBundledCatalogFromDisk(
+  diagnosticsSink?: ServerDiagnosticSink,
+): ReleaseImpactCatalog | undefined {
   for (const root of bundledCatalogSearchRoots()) {
     const candidate = join(root, "release-impact.catalog.json");
     if (!existsSync(candidate)) continue;
@@ -195,7 +203,20 @@ export function readBundledCatalogFromDisk(): ReleaseImpactCatalog | undefined {
       const validated = validateBundledCatalog(parsed);
       bundledCatalogCache.set(candidate, validated);
       return validated;
-    } catch {
+    } catch (error) {
+      // Previously this discarded the read/parse failure entirely and cached "invalid" with no
+      // diagnostic and no retry — an operator running a build with a corrupted bundled catalog
+      // would silently lose release-impact-driven update warnings forever with no trace of why.
+      // Log a content-free diagnostic (error CLASS only, never the file content or the parse
+      // exception message) so the failure is visible before caching the negative result.
+      emitServerDiagnostic(diagnosticsSink, {
+        correlationId: randomUUID(),
+        timestamp: new Date().toISOString(),
+        operation: "update.preflight.bundled-catalog.read",
+        source: "update-preflight-catalog.read-bundled-catalog-from-disk",
+        errorClass: contentFreeErrorClass(error),
+        message: "release-impact-bundled-catalog-corrupted",
+      });
       bundledCatalogCache.set(candidate, undefined);
       return undefined;
     }

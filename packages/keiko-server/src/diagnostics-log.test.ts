@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { IncomingMessage } from "node:http";
 import {
   contentFreeErrorClass,
+  DEFAULT_SERVER_DIAGNOSTIC_SUMMARY,
   defaultServerDiagnosticSink,
   describeError,
   emitServerDiagnostic,
@@ -524,6 +525,45 @@ describe("emitServerDiagnostic (RB-6)", () => {
 
     expect(captured[0]?.parentCorrelationId).toBe("job-parent-abc123");
   });
+
+  it("drops a content-shaped `code` at the writer, so neither the stderr line nor the file projection carries it (parity)", () => {
+    // Regression: the stderr branch built its line straight from
+    // `diagnosticActivityLogFields(sanitized)`, which projects onto allowlisted FIELD NAMES only
+    // — `addBoundedField` writes whatever value it is given, with no shape check. The actual
+    // content redaction (`redactLogFields`) ran only on the file-sink path, inside
+    // `formatServerLogLine`. A prose-shaped `code` (more than the space budget `hasProseShape`
+    // allows) therefore reached stderr in full while the file line would have replaced it — the
+    // opposite of the "SAME redaction guarantee" the module's own comment claims. Fails before the
+    // fix (stderr line still contains the raw prose); passes after (both lines carry the same
+    // writer-side drop).
+    const stderrSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    try {
+      const record = serverDiagnosticFromError({
+        correlationId: "cid-stderr-redaction-parity",
+        operation: "unit.stderr-redaction-parity",
+        source: "unit",
+        error: new Error("x"),
+        redact: identity,
+        now: () => 0,
+      });
+      const proseCode = "user said the sky is very blue today";
+
+      emitServerDiagnostic(undefined, { ...record, code: proseCode });
+
+      expect(stderrSpy).toHaveBeenCalledTimes(1);
+      const [line] = stderrSpy.mock.calls[0] as [string];
+      expect(line).not.toContain(proseCode);
+      const parsed = JSON.parse(
+        line.replace("[keiko-server:diagnostic] ", ""),
+      ) as ServerDiagnosticRecord;
+      // The writer bounds `code` to DIAGNOSTIC_CODE_SHAPE (no whitespace, fixed alphabet, ≤ 256):
+      // an out-of-shape value is dropped outright — on stderr AND in the file projection — rather
+      // than written under a marker, the same rule `parentCorrelationId` already follows.
+      expect(parsed.code).toBeUndefined();
+    } finally {
+      stderrSpy.mockRestore();
+    }
+  });
 });
 
 describe("resolveCorrelationId (RB-6)", () => {
@@ -690,5 +730,49 @@ describe("evidenceRetentionDiagnosticObserver correlation id (ADR-0173 D5 / g12)
 
     expect(records).toHaveLength(2);
     expect(records[0]?.correlationId).not.toBe(records[1]?.correlationId);
+  });
+});
+
+// Issue #3245: `ServerDiagnosticRecord.message` was `string`, so a producer could compile with
+// free/foreign text — the closed-vocabulary contract in the field's own doc comment ("A
+// code-declared, allowlisted summary. Foreign error/provider/customer text is never read.") was
+// enforced only by `allowlistedSummary`'s RUNTIME check, never by the type checker. Narrowing
+// `message` to the closed `ServerDiagnosticSummary` union makes a non-member string a compile
+// error, so a producer can no longer even build with it. This suite is the type-level proof: a
+// vitest `it` never executes the `@ts-expect-error` line (vitest transpiles, it never
+// type-checks — the repo's own documented tsc/vitest gap), so this is deliberately also asserted
+// by `npx tsc --noEmit -p packages/keiko-server/tsconfig.json`, the actual gate this narrowing
+// exists to turn red for a violating producer.
+describe("ServerDiagnosticRecord.message is the closed ServerDiagnosticSummary union (Issue #3245)", () => {
+  it("accepts a real vocabulary member without a cast", () => {
+    const record: ServerDiagnosticRecord = {
+      correlationId: "req-vocab-member",
+      timestamp: "2026-08-22T00:00:00.000Z",
+      operation: "unit.test",
+      source: "diagnostics-log.test",
+      errorClass: "Error",
+      message: DEFAULT_SERVER_DIAGNOSTIC_SUMMARY,
+    };
+    expect(record.message).toBe(DEFAULT_SERVER_DIAGNOSTIC_SUMMARY);
+  });
+
+  it("rejects a non-member string at compile time — a free-text message can no longer build", () => {
+    // Issue #3245: "definitely-not-a-real-summary" is not a member of SERVER_DIAGNOSTIC_SUMMARIES,
+    // so this literal must fail `npx tsc --noEmit` against `ServerDiagnosticSummary`. Before the
+    // fix (`message: string`) this whole object literal compiled cleanly — see the fails-before
+    // snapshot proof in the item's verification report. If the `@ts-expect-error` below ever goes
+    // unused, the closed vocabulary has silently widened back to `string`.
+    const record: ServerDiagnosticRecord = {
+      correlationId: "req-foreign-literal",
+      timestamp: "2026-08-22T00:00:00.000Z",
+      operation: "unit.test",
+      source: "diagnostics-log.test",
+      errorClass: "Error",
+      // @ts-expect-error — not a member of the closed ServerDiagnosticSummary union (Issue #3245).
+      message: "definitely-not-a-real-summary",
+    };
+    // The record still constructs at runtime (vitest doesn't type-check); the assertion below is
+    // incidental — the compile error above is the actual test.
+    expect(record.message).toBe("definitely-not-a-real-summary");
   });
 });

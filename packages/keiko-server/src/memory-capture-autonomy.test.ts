@@ -293,19 +293,20 @@ function recordingDiagnosticsSink(): ServerDiagnosticSink & {
 }
 
 // Extracts the content-free "SalienceExtractionDiagnostic" records a spy diagnostics sink
-// captured. logSalienceDiagnostic emits counts/kind only — never bodies — as a plain
-// "model=... kind=<kind> rawItemCount=<n>" message, so a regex read keeps the assertion
-// content-free without depending on the message's exact wording.
+// captured. logSalienceDiagnostic emits counts/kind only — never bodies — as a colon-joined
+// "model=...:kind=<kind>:rawItemCount=<n>" detail on `record.code` (the fixed `record.message`
+// is just the label "salience-extraction-diagnostic", per #3245's relocation), so a regex read
+// keeps the assertion content-free without depending on the code's exact wording.
 function capturedSalienceDiagnostics(
   calls: readonly (readonly unknown[])[],
 ): readonly SalienceDiagnosticPayload[] {
   const payloads: SalienceDiagnosticPayload[] = [];
   for (const args of calls) {
-    const record = args[0] as { readonly errorClass?: string; readonly message?: string };
+    const record = args[0] as { readonly errorClass?: string; readonly code?: string };
     if (record.errorClass !== "SalienceExtractionDiagnostic") continue;
-    const message = record.message ?? "";
-    const kind = /kind=(\S+)/u.exec(message)?.[1];
-    const rawItemCountMatch = /rawItemCount=(\d+)/u.exec(message)?.[1];
+    const code = record.code ?? "";
+    const kind = /kind=(\S+?)(?=:|$)/u.exec(code)?.[1];
+    const rawItemCountMatch = /rawItemCount=(\d+)/u.exec(code)?.[1];
     payloads.push({
       ...(kind === undefined ? {} : { kind }),
       ...(rawItemCountMatch === undefined ? {} : { rawItemCount: Number(rawItemCountMatch) }),

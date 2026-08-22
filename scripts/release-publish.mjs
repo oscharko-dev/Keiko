@@ -54,6 +54,9 @@ import {
 } from "./lib/portable-release-verification.mjs";
 import { sha256 } from "./lib/digest.mjs";
 import { readJsonFile } from "./lib/json.mjs";
+import { resolveGithubRepository } from "./lib/github-repository.mjs";
+import { recordNpmPublishDeployment } from "./lib/npm-publish-deployment.mjs";
+import { checkReleaseAlignment, printAlignmentReport } from "./check-release-alignment.mjs";
 import { createStagedPublishPackage } from "./stage-publish-package.mjs";
 
 const repoRoot = resolve(import.meta.dirname, "..");
@@ -317,6 +320,9 @@ function commandResult(cmd, args, options = {}) {
   return spawnSync(cmd, args, {
     cwd: options.cwd ?? repoRoot,
     encoding: "utf8",
+    // `input`, when present, overrides stdio[0] (Node's own documented behaviour) — this is what
+    // lets a caller pipe a JSON body to `gh api --input -` without a separate code path.
+    input: options.input,
     stdio: options.stdio ?? "pipe",
     env: options.env ?? process.env,
   });
@@ -540,27 +546,12 @@ function ensureReleaseTag(version) {
   }
 }
 
-function githubRepositoryFromRemote(remoteUrl) {
-  const trimmed = remoteUrl.trim();
-  const httpsMatch = /^https:\/\/github\.com\/([^/]+\/[^/]+?)(?:\.git)?$/u.exec(trimmed);
-  if (httpsMatch !== null) return httpsMatch[1];
-  const sshMatch = /^git@github\.com:([^/]+\/[^/]+?)(?:\.git)?$/u.exec(trimmed);
-  if (sshMatch !== null) return sshMatch[1];
-  return undefined;
-}
-
 function githubRepository() {
-  if (
-    typeof process.env.GITHUB_REPOSITORY === "string" &&
-    process.env.GITHUB_REPOSITORY.includes("/")
-  ) {
-    return process.env.GITHUB_REPOSITORY;
-  }
-  const remote = commandResult("git", ["remote", "get-url", "origin"]);
-  if (remote.status === 0) {
-    const repository = githubRepositoryFromRemote(remote.stdout);
-    if (repository !== undefined) return repository;
-  }
+  const repository = resolveGithubRepository({
+    env: process.env,
+    runGit: (args) => commandResult("git", args),
+  });
+  if (repository !== undefined) return repository;
   fail("could not determine GitHub repository; set GITHUB_REPOSITORY=owner/repo.");
 }
 
@@ -1799,6 +1790,50 @@ function runRegistrySmoke(rootPackage, options, npmEnv) {
   });
 }
 
+// Mirrors readReleaseImpactCatalog's KEIKO_RELEASE_IMPACT_CATALOG_PATH double gate above: the
+// release-publish-pipeline test drives this exact script end-to-end against a fabricated
+// npm/gh/git universe that only answers the questions the orchestrator itself already asks.
+// Wiring the real deployment record and alignment gate through that fiction would prove nothing
+// beyond what scripts/__tests__/npm-publish-deployment.test.mjs and
+// check-release-alignment.test.mjs already cover directly against the real seams, at the cost of
+// synchronizing several more fabricated gh/npm/git endpoints across every scenario in that file.
+// Both flags must be set; a real operator or CI publish never carries both at once.
+function testHarnessSkipsAlignmentProof() {
+  return process.env.NODE_ENV === "test" && process.env.KEIKO_RELEASE_SKIP_ALIGNMENT_PROOF === "1";
+}
+
+// Records the npm-publish deployment (the repair for issue #3252) and then proves the publish
+// left version, tag, GitHub Latest, npm latest and the deployment record aligned — the publish
+// path itself is what must prove alignment, not a separate manual step run later.
+function recordAndVerifyReleaseAlignment(rootPackage, options, npmEnv) {
+  if (testHarnessSkipsAlignmentProof()) return;
+  const repository = githubRepository();
+  const deploymentResult = recordNpmPublishDeployment({
+    env: process.env,
+    log: (message) => console.log(message),
+    pkg: { name: rootPackage.name, version: rootPackage.version },
+    repository,
+    spawnGh: (args, { input } = {}) =>
+      commandResult("gh", args, { env: githubEnvironment(), input }),
+    tag: options.tag,
+  });
+  if (deploymentResult.kind === "failed") fail(deploymentResult.failure);
+
+  const alignment = checkReleaseAlignment({
+    checkoutVersion: rootPackage.version,
+    packageName: rootPackage.name,
+    registry: options.registry,
+    repository,
+    runGh: (args) => commandResult("gh", args, { env: githubEnvironment() }),
+    runGit: (args) => commandResult("git", args),
+    runNpm: (args) => commandResult("npm", args, { env: npmEnv }),
+  });
+  printAlignmentReport(alignment);
+  if (!alignment.aligned) {
+    fail("release published, but the alignment gate found a divergence (see table above).");
+  }
+}
+
 const options = parseArgs(process.argv.slice(2));
 const rootManifest = readJson("package.json");
 const workspaces = collectWorkspaceManifests();
@@ -1890,6 +1925,9 @@ try {
   if (releaseInfo === undefined && !prepublished) {
     const finalReleaseInfo = ensureGithubRelease(rootPackage, options, githubReleaseNotes);
     publishPortableReleaseAssets(options, portableAssets, finalReleaseInfo);
+  }
+  if (options.tag === "latest" && !options.dryRun) {
+    recordAndVerifyReleaseAlignment(rootPackage, options, npmEnv);
   }
   console.log(`release-publish: PASS - ${rootPackage.spec} published as ${options.tag}.`);
 } finally {

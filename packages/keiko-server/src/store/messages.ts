@@ -5,7 +5,9 @@
 //   - updateMessage(): partial PATCH on the row, re-using the existing redact+truncate path.
 
 import type { DatabaseSync } from "node:sqlite";
+import { randomUUID } from "node:crypto";
 import { validateKnowledgePodRetrievalActivity } from "@oscharko-dev/keiko-contracts";
+import { contentFreeErrorClass, emitServerDiagnostic } from "../diagnostics-log.js";
 import type {
   ChatAssistantResponseVersion,
   ChatMessage,
@@ -128,7 +130,20 @@ function parseGroundedPreviewCitations(
   if (raw === null) return undefined;
   try {
     return JSON.parse(raw) as readonly StoredPdfCitationPreviewCitation[];
-  } catch {
+  } catch (error) {
+    // Previously this silently dropped a corrupted stored citation row: the caller got back
+    // `undefined` with no trace anywhere that the row was malformed. Log a content-free
+    // diagnostic (error CLASS only — never the row itself, which can carry document text) noting
+    // the drop, then keep failing open: a stored preview annotation is not worth turning an
+    // otherwise-successful message read into a 500.
+    emitServerDiagnostic(undefined, {
+      correlationId: randomUUID(),
+      timestamp: new Date().toISOString(),
+      operation: "store.messages.grounded-preview-citations.read",
+      source: "store.messages.parse-grounded-preview-citations",
+      errorClass: contentFreeErrorClass(error),
+      message: "grounded-preview-citations-row-dropped",
+    });
     return undefined;
   }
 }

@@ -29,6 +29,14 @@ import {
 import { normalizeChatResponse, textFromContent } from "./normalize.js";
 import { redact } from "@oscharko-dev/keiko-security";
 import { assertValidGatewaySamplingParameters } from "./types.js";
+import {
+  logEndpointHost,
+  logLevelEnabled,
+  resolveLogSink,
+  withCorrelationId,
+  type ModelGatewayLogContext,
+  type ModelGatewayLogSink,
+} from "./observability.js";
 import type {
   ChatMessageContentPart,
   CostClass,
@@ -64,6 +72,41 @@ export interface AdapterDeps {
   readonly requestId: string;
   readonly costClass: CostClass;
   readonly now?: (() => number) | undefined;
+  // Activity-log sink (ADR-0019: a local port, see `observability.ts`). Unset means no-op.
+  readonly log?: ModelGatewayLogSink | undefined;
+  // The enclosing operation's correlation id, stamped on every line this adapter produces —
+  // including the transport lines, since the sink handed to `gatewayFetch` is already bound to
+  // it. Unset keeps the previous behaviour exactly.
+  readonly logContext?: ModelGatewayLogContext | undefined;
+}
+
+// THE ATTEMPT LINE for a chat completion, mirroring `EmbeddingDispatchFields` /
+// `openai-embedding-adapter.ts`'s `logDispatch` field-for-field: written before the socket work
+// starts, so a hung provider call leaves the same evidence the embedding ladder does instead of
+// the silence `http.gateway.fetch.*` alone cannot fill for a real chat call (AdapterDeps carried
+// no sink at all before this change).
+interface ChatDispatchFields {
+  readonly endpoint: string | undefined;
+  readonly modelId: string;
+  readonly messageCount: number;
+  // UTF-8 BYTES on the wire, not `String.length`'s UTF-16 code units — see the identical note on
+  // `EmbeddingDispatchFields`.
+  readonly bodyBytes: number;
+  readonly timeoutMs: number;
+  readonly stream: boolean;
+}
+
+// `info`, not `debug`: a line that only appears once the operator has already reproduced the hang
+// under a raised threshold is not evidence of the hang.
+//
+// Named `logChatDispatch`, deliberately NOT `logDispatch`: `scripts/generate-op-catalog.mjs`'s
+// POSITIONAL_OP_HELPERS table matches a call site by function name alone and has an existing
+// `{ name: "logDispatch", category: "embedding" }` entry for the embedding module's identically
+// shaped helper. Reusing that name here would silently mislabel every op this function emits as
+// category "embedding" in the generated catalog instead of "gateway".
+function logChatDispatch(log: ModelGatewayLogSink, op: string, fields: ChatDispatchFields): void {
+  if (!logLevelEnabled(log, "info")) return;
+  log.write({ level: "info", category: "gateway", op, extra: { ...fields } });
 }
 
 interface ChatRequestBody {
@@ -482,9 +525,11 @@ function* flushPendingBuffer(
 
 export class OpenAiAdapter implements ProviderAdapter {
   private readonly now: () => number;
+  private readonly log: ModelGatewayLogSink;
 
   constructor(private readonly deps: AdapterDeps) {
     this.now = deps.now ?? Date.now;
+    this.log = withCorrelationId(resolveLogSink(deps.log), deps.logContext?.correlationId);
   }
 
   call = async (
@@ -660,6 +705,14 @@ export class OpenAiAdapter implements ProviderAdapter {
       "content-type": "application/json",
       ...apiKeyHeaders(config),
     };
+    logChatDispatch(this.log, "chat.request.dispatch", {
+      endpoint: logEndpointHost(url),
+      modelId: config.modelId,
+      messageCount: request.messages.length,
+      bodyBytes: Buffer.byteLength(body, "utf8"),
+      timeoutMs: config.timeoutMs,
+      stream,
+    });
     try {
       return await gatewayFetch(url, {
         method: "POST",
@@ -667,6 +720,7 @@ export class OpenAiAdapter implements ProviderAdapter {
         body,
         signal,
         fetchImpl: this.deps.fetchImpl,
+        log: this.log,
         ...(config.egress !== undefined ? { egress: config.egress } : {}),
       });
     } catch (error) {

@@ -120,16 +120,23 @@ describe("diagnostic records on the activity log", () => {
       "Provider verification failed without exposing upstream response details.",
     );
 
-    // A message NOT in the closed vocabulary must not appear verbatim on stderr either.
+    // A message NOT in the closed vocabulary must not appear verbatim on stderr either. Issue
+    // #3245 narrowed `message` from `string` to the closed `ServerDiagnosticSummary` union, so a
+    // literal like this one no longer type-checks as a `ServerDiagnosticRecord` — deliberately: a
+    // real producer can no longer compile with free text. This test's own subject is the RUNTIME
+    // defence in depth for a record that reaches the sink without having gone through the type
+    // checker (persisted/deserialized data, or a caller that casts around the type, per
+    // `allowlistedSummary`'s own doc comment) — so the cast below is the point of the test, not a
+    // workaround: it simulates exactly that hostile/foreign shape.
     errorSpy.mockClear();
-    const foreignRecord: ServerDiagnosticRecord = {
+    const foreignRecord = {
       correlationId: "req-foreign",
       timestamp: "2026-08-21T00:00:00.000Z",
       operation: "chat.stream",
       source: "server.top-level-catch",
       errorClass: "GatewayError",
       message: "not-in-the-closed-vocabulary",
-    };
+    } as unknown as ServerDiagnosticRecord;
     defaultServerDiagnosticSink.record(foreignRecord);
     const foreignStderrLine = errorSpy.mock.calls[0]?.[0] as string;
     expect(foreignStderrLine).not.toContain("not-in-the-closed-vocabulary");
@@ -235,7 +242,9 @@ describe("diagnostic records on the activity log", () => {
       operation: "knowledge.index",
       source: "server.diagnostic",
       errorClass: "IndexingError",
-      message: "Indexing failed.",
+      // Issue #3245: this test's subject is level-stamping, not vocabulary content — any closed
+      // member does. Use an existing one rather than adding a case-specific vocabulary entry.
+      message: DEFAULT_SERVER_DIAGNOSTIC_SUMMARY,
     });
 
     expect(readActivityLine(stateDir)).toMatchObject({
@@ -243,5 +252,31 @@ describe("diagnostic records on the activity log", () => {
       category: "diagnostic",
       op: "knowledge.index",
     });
+  });
+  it("bounds `code` at the writer: a colon-joined machine token passes, whitespace or over-length is dropped", () => {
+    // #3245 moved per-invocation detail onto `code`; the writer, not each producer, is the bound
+    // (DIAGNOSTIC_CODE_SHAPE): no whitespace, fixed alphabet, at most 256 characters.
+    const stderrSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    try {
+      const base = {
+        correlationId: "cid-code-bound-1",
+        timestamp: "2026-08-22T00:00:00.000Z",
+        operation: "unit.code-bound",
+        source: "unit",
+        errorClass: "Error",
+        message: "salience-extraction-diagnostic",
+      } as const;
+      defaultServerDiagnosticSink.record({ ...base, code: "responseFormat=false:kind=x:count=3" });
+      defaultServerDiagnosticSink.record({ ...base, code: "has a space Jane Doe" });
+      defaultServerDiagnosticSink.record({ ...base, code: "x".repeat(300) });
+      const lines = stderrSpy.mock.calls.map(([line]) => line as string);
+      expect(lines).toHaveLength(3);
+      expect(lines[0]).toContain('"code":"responseFormat=false:kind=x:count=3"');
+      expect(lines[1]).not.toContain("Jane Doe");
+      expect(lines[1]).not.toContain('"code"');
+      expect(lines[2]).not.toContain('"code"');
+    } finally {
+      stderrSpy.mockRestore();
+    }
   });
 });

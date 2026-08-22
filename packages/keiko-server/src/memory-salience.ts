@@ -45,7 +45,11 @@ import {
 import { buildMemoryRecordFromProposal } from "./memory-record-builders.js";
 import { insertSalienceMemoryWithNoveltyGate } from "./memory-embedding.js";
 import { recordMemoryAudit } from "./memory-audit-handler.js";
-import { emitServerDiagnostic, serverDiagnosticFromError } from "./diagnostics-log.js";
+import {
+  emitServerDiagnostic,
+  serverDiagnosticFromError,
+  type ServerDiagnosticSummary,
+} from "./diagnostics-log.js";
 import {
   buildMemoryCaptureDecisionAuditEvent,
   type MemoryCaptureDecisionOutcome,
@@ -224,12 +228,18 @@ function salienceSeedFor(deps: UiHandlerDeps, modelId: string): number | undefin
 // own fallback default) — never minted fresh here — so an informational salience diagnostic joins
 // the SAME trail as that turn's eventual failure diagnostic (`emitSalienceFailureDiagnostic`)
 // instead of reporting under a disconnected, unrelated id.
+// Issue #3245: `message` is now the fixed closed-vocabulary condition label. Every call site
+// below used to compose a per-invocation detail string (model id, mode, surface, bounded counts —
+// never user/model text, per each site's own "safe diagnostic" comment) directly into `message`;
+// that detail moves to the optional `code` param as a compact machine-readable string instead, so
+// none of it is lost — only relocated to the field this record already has for exactly this shape.
 function emitSalienceDiagnostic(
   deps: UiHandlerDeps,
   correlationId: string,
   source: string,
   errorClass: string,
-  message: string,
+  message: ServerDiagnosticSummary,
+  code?: string,
 ): void {
   emitServerDiagnostic(deps.diagnostics, {
     correlationId,
@@ -238,6 +248,7 @@ function emitSalienceDiagnostic(
     source,
     errorClass,
     message,
+    ...(code === undefined ? {} : { code }),
   });
 }
 
@@ -250,15 +261,21 @@ function logSalienceDiagnostic(
   const responseFormatEnabled = salienceResponseFormatFor(deps, modelId) !== undefined;
   const detail =
     diagnostic.kind === "dropped-model-items"
-      ? `reason=${diagnostic.reason} count=${String(diagnostic.count)}`
+      ? `reason=${diagnostic.reason}:count=${String(diagnostic.count)}`
       : `rawItemCount=${String(diagnostic.rawItemCount)}`;
-  // Safe diagnostic: model id, response-format bit, and counts only; never user text or model text.
+  // `code` is a colon-joined machine token (no spaces — the same closed shape
+  // `memory-conflict-advisory.ts`'s `emitAdvisoryPhaseSummary` uses), bounded again by the writer
+  // (`diagnostics-log.ts` drops a `code` outside DIAGNOSTIC_CODE_SHAPE). It carries the
+  // response-format bit, the diagnostic kind and counts only — never the model id (this file's
+  // convention: a model id is recorded once by `gateway.config.resolved`, and the correlation id
+  // joins this record to it), never user text, never model text.
   emitSalienceDiagnostic(
     deps,
     correlationId,
     "memory-salience.logSalienceDiagnostic",
     "SalienceExtractionDiagnostic",
-    `model=${modelId} responseFormat=${String(responseFormatEnabled)} kind=${diagnostic.kind} ${detail}`,
+    "salience-extraction-diagnostic",
+    `responseFormat=${String(responseFormatEnabled)}:kind=${diagnostic.kind}:${detail}`,
   );
 }
 
@@ -489,9 +506,10 @@ function logSalienceCaptureDropped(
     correlationId,
     "memory-salience.scheduleMemorySalienceCapture",
     "SalienceCaptureDropped",
-    `${surface} salience capture skipped: background queue full (${String(
-      pendingSalienceCaptures,
-    )}/${String(MAX_PENDING_SALIENCE_CAPTURES)})`,
+    "salience-capture-dropped-queue-full",
+    `surface=${surface} pending=${String(pendingSalienceCaptures)}/${String(
+      MAX_PENDING_SALIENCE_CAPTURES,
+    )}`,
   );
 }
 
@@ -632,6 +650,7 @@ function logSalienceCaptureSummary(
     correlationId,
     "memory-salience.captureSalientFromTurn",
     "SalienceCaptureSummary",
+    "salience-capture-summary",
     `mode=${mode} proposed=${String(summary.proposed)} accepted=${String(summary.accepted)} ` +
       `rejected=${String(summary.rejected)} merged=${String(summary.merged)}`,
   );

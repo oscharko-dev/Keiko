@@ -8,7 +8,11 @@ import type {
   CodingWorkbenchRuntimeStateName,
 } from "@oscharko-dev/keiko-contracts";
 
-import { contentFreeErrorClass, type ServerDiagnosticSink } from "../diagnostics-log.js";
+import {
+  contentFreeErrorClass,
+  type ServerDiagnosticSink,
+  type ServerDiagnosticSummary,
+} from "../diagnostics-log.js";
 
 /** Maximum replay retention. Kept small because this is an SSE recovery aid, not a history store. */
 export const CODING_RUNTIME_EVENT_HUB_MAX_EVENTS = 256;
@@ -415,7 +419,7 @@ function write(
       // A subscriber that returns `false` from write() is signalling backpressure exhaustion.
       // Emit a redacted operator record so the failure is diagnosable — previously it was
       // silently swallowed and closed. KEIKO-0225.
-      recordSseFailure(diagnostics, runId, "backpressure", "Error");
+      recordSseFailure(diagnostics, runId, "sse-backpressure", "Error");
       close(subscriber);
     }
     return accepted !== false;
@@ -423,7 +427,12 @@ function write(
     // A throwing subscriber write means the wire is gone (client hung up, socket broken).
     // Same treatment: record one line and close the subscriber. `contentFreeErrorClass` is the
     // shared, prototype-safe classifier (protects against shadowed/throwing `constructor`).
-    recordSseFailure(diagnostics, runId, "subscriber-write-threw", contentFreeErrorClass(error));
+    recordSseFailure(
+      diagnostics,
+      runId,
+      "sse-subscriber-write-failed",
+      contentFreeErrorClass(error),
+    );
     close(subscriber);
     return false;
   }
@@ -432,7 +441,7 @@ function write(
 function recordSseFailure(
   diagnostics: ServerDiagnosticSink | undefined,
   runId: string,
-  message: string,
+  message: ServerDiagnosticSummary,
   errorClass: string,
 ): void {
   if (diagnostics === undefined) return;

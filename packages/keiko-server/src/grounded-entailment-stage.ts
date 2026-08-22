@@ -39,7 +39,11 @@ import {
   createGatewayEntailmentJudge,
   entailmentJudgeUnavailableReason,
 } from "./grounded-entailment-judge.js";
-import { contentFreeErrorClass, type ServerDiagnosticSink } from "./diagnostics-log.js";
+import {
+  contentFreeErrorClass,
+  type ServerDiagnosticSink,
+  type ServerDiagnosticSummary,
+} from "./diagnostics-log.js";
 import type { UiHandlerDeps } from "./deps.js";
 
 export interface EntailmentStage {
@@ -69,7 +73,8 @@ function recordDiagnostic(
   observability: CorrelatedEntailmentObservability,
   nowMs: number,
   errorClass: string,
-  message: string,
+  message: ServerDiagnosticSummary,
+  code?: string,
 ): void {
   const sink = observability.diagnostics;
   if (sink === undefined) {
@@ -86,6 +91,7 @@ function recordDiagnostic(
       source: "grounded.entailment-stage",
       errorClass,
       message,
+      ...(code === undefined ? {} : { code }),
     });
   } catch {
     // A diagnostics failure is never allowed to escalate into a failed grounded ask.
@@ -104,13 +110,15 @@ function markersFor(
   }
   if (result.unavailableClaims > 0) {
     markers.push(entailmentUnavailableMarker(nowMs));
-    // Body-free: counts + failure class only, no claim/excerpt text.
+    // Body-free: counts + failure class only, no claim/excerpt text. Issue #3245: `message` is
+    // now the fixed condition label; the two counts (unbounded per-invocation data) move to
+    // `code` as a compact machine-readable string instead of being embedded in `message`.
     recordDiagnostic(
       observability,
       nowMs,
       "EntailmentJudgeUnavailable",
-      `entailment judge unavailable for ${String(result.unavailableClaims)} of ` +
-        `${String(result.judgedClaims)} judged claims`,
+      "entailment-claim-judging-incomplete",
+      `unavailable=${String(result.unavailableClaims)}:judged=${String(result.judgedClaims)}`,
     );
   }
   return markers;

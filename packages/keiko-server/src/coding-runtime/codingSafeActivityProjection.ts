@@ -24,7 +24,11 @@ import {
   type UnavailableCodingSafeActivityFeed,
 } from "@oscharko-dev/keiko-contracts";
 
-import { emitServerDiagnostic, type ServerDiagnosticSink } from "../diagnostics-log.js";
+import {
+  emitServerDiagnostic,
+  type ServerDiagnosticSink,
+  type ServerDiagnosticSummary,
+} from "../diagnostics-log.js";
 
 const DEFAULT_TTL_MS = 30 * 60_000;
 const DEFAULT_MAX_SUBSCRIBERS = 32;
@@ -891,6 +895,32 @@ function withDroppedCount(
   };
 }
 
+// Issue #3245: both drop/purge reason unions are small and genuinely closed (5 members each), so
+// each (reason -> fixed vocabulary member) pairing is enumerated directly rather than moved to
+// `code` — `code` already carries the fixed generic event code here (CODING_SAFE_ACTIVITY_*), and
+// the bounded count for a drop already has its own dedicated field (`occurrenceCount`), so nothing
+// about the drop/purge is lost by keeping `message` a closed-vocabulary lookup instead of a
+// template literal.
+const SAFE_ACTIVITY_DROP_SUMMARY: Readonly<
+  Record<CodingSafeActivityDropReason, ServerDiagnosticSummary>
+> = {
+  "validation-rejected": "safe-activity-dropped-validation-rejected",
+  "redactor-collapsed": "safe-activity-dropped-redactor-collapsed",
+  "projection-rejected": "safe-activity-dropped-projection-rejected",
+  "capacity-rejected": "safe-activity-dropped-capacity-rejected",
+  "subscriber-rejected": "safe-activity-dropped-subscriber-rejected",
+};
+
+const SAFE_ACTIVITY_PURGE_SUMMARY: Readonly<
+  Record<CodingSafeActivityPurgeReason, ServerDiagnosticSummary>
+> = {
+  stop: "safe-activity-purged-stop",
+  takeover: "safe-activity-purged-takeover",
+  shutdown: "safe-activity-purged-shutdown",
+  "workspace-switch": "safe-activity-purged-workspace-switch",
+  expiry: "safe-activity-purged-expiry",
+};
+
 function emitDropDiagnostic(
   sink: ServerDiagnosticSink | undefined,
   now: () => number,
@@ -903,7 +933,7 @@ function emitDropDiagnostic(
     operation: "coding-runtime.safe-activity",
     source: "opencode.safe-activity",
     errorClass: "SafeActivityProjectionDrop",
-    message: `Safe-activity event dropped (${reason}); bounded count ${String(count)}.`,
+    message: SAFE_ACTIVITY_DROP_SUMMARY[reason],
     code: "CODING_SAFE_ACTIVITY_EVENT_DROPPED",
     occurrenceCount: count,
   });
@@ -920,7 +950,7 @@ function emitPurgeDiagnostic(
     operation: "coding-runtime.safe-activity",
     source: "opencode.safe-activity",
     errorClass: "SafeActivityProjectionPurge",
-    message: `Safe-activity projection purged (${reason}).`,
+    message: SAFE_ACTIVITY_PURGE_SUMMARY[reason],
     code: "CODING_SAFE_ACTIVITY_PURGED",
   });
 }

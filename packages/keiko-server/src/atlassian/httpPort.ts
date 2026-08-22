@@ -40,6 +40,33 @@ import {
 // for less (the verify probe asks for 30 000 ms); a hostile or buggy caller can never widen it.
 const MAX_TIMEOUT_MS = 60_000;
 
+// Issue #3246: on dev run 32563378802 the oversized-body test resolved 200 in one coverage
+// shard — the only way `assertValidRequestBody` below can let an oversized body through is the
+// imported ceiling not being a finite number in that worker (a build/resolution defect, not a
+// request-shaped input). A defect in the imported constant must surface as a load-time throw,
+// never as a silently unbounded write-channel body cap, so this runs once, unconditionally, as
+// soon as the module is evaluated — before any port can be constructed or any request guarded.
+function assertFiniteSafeIntegerCeiling(value: number, name: string): void {
+  if (!Number.isSafeInteger(value) || value <= 0) {
+    throw new TypeError(`${name} must be a finite positive safe integer`);
+  }
+}
+assertFiniteSafeIntegerCeiling(
+  ATLASSIAN_HTTP_REQUEST_BODY_MAX_BYTES,
+  "ATLASSIAN_HTTP_REQUEST_BODY_MAX_BYTES",
+);
+
+// Exported so the inverted-comparison rejection (below) is unit-testable directly against a
+// non-finite ceiling without reaching around the module-load assertion above, which already
+// blocks a non-finite `ATLASSIAN_HTTP_REQUEST_BODY_MAX_BYTES` from ever reaching this function in
+// a real process. Pure and body-free: byte counts only, never request content.
+export function exceedsBodyByteCeiling(bytes: number, ceilingBytes: number): boolean {
+  // A non-finite ceiling rejects explicitly: with a bare `bytes > cap`, NaN/undefined fail EVERY comparison including
+  // `>`, so `bytes > cap` silently lets an oversized body through when `cap` is not a finite
+  // number. The negated form rejects closed on exactly that case.
+  return !Number.isFinite(ceilingBytes) || bytes > ceilingBytes;
+}
+
 export interface CreateAtlassianHttpPortOptions {
   readonly baseUrl: string;
   readonly authRef: string;
@@ -284,7 +311,8 @@ function assertValidRequestBody(request: AtlassianHttpBodyRequest): void {
       "a request body is not allowed on GET",
     ]);
   }
-  if (Buffer.byteLength(request.bodyJson, "utf8") > ATLASSIAN_HTTP_REQUEST_BODY_MAX_BYTES) {
+  const bodyBytes = Buffer.byteLength(request.bodyJson, "utf8");
+  if (exceedsBodyByteCeiling(bodyBytes, ATLASSIAN_HTTP_REQUEST_BODY_MAX_BYTES)) {
     throw new AtlassianCredentialCustodyError("invalid-input", [
       "request body exceeds the write-channel size ceiling",
     ]);

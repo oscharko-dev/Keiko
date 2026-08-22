@@ -599,8 +599,46 @@ function ghStubBody() {
     "  }",
     '  if (argv[1] && argv[1].includes("/releases/latest")) {',
     // Which release GitHub presents as Latest. By default the same release the by-tag read
-    // answers with; a test can hand the badge to another release to prove the refusal.
-    "    writeFileSync(1, JSON.stringify({ id: state().latestBadgeElsewhere ? 111 : 987654321 }));",
+    // answers with; a test can hand the badge to another release to prove the refusal. The
+    // release-alignment gate (issue #3252) reads `tag_name` off this same endpoint; a test can
+    // point it at a different tag to prove a real, post-publish alignment divergence.
+    "    writeFileSync(1, JSON.stringify({ id: state().latestBadgeElsewhere ? 111 : 987654321, tag_name: state().alignmentGithubLatestTag || `v${VERSION}` }));",
+    "    process.exit(0);",
+    "  }",
+    // The npm-publish deployment record (issue #3252): POST creates (deployment, then its
+    // success status), GET lists — the idempotency check (scoped by `ref=`) always reports
+    // nothing recorded yet so the create path runs and can be asserted on; a fixture can force
+    // either write to fail closed the same way a 403/404 token would.
+    '  if (argv.includes("--method") && argv.includes("POST")) {',
+    '    const apiPath = argv.find((a) => typeof a === "string" && a.startsWith("repos/"));',
+    '    if (apiPath && apiPath.endsWith("/statuses")) {',
+    "      if (state().failDeploymentStatus) {",
+    '        process.stderr.write("HTTP 403: Resource not accessible by integration\\n");',
+    "        process.exit(1);",
+    "      }",
+    '      writeFileSync(1, JSON.stringify({ id: 900001, state: "success" }));',
+    "      process.exit(0);",
+    "    }",
+    '    if (apiPath && apiPath.endsWith("/deployments")) {',
+    "      if (state().failDeploymentCreate) {",
+    '        process.stderr.write("HTTP 403: Resource not accessible by integration\\n");',
+    "        process.exit(1);",
+    "      }",
+    "      writeFileSync(1, JSON.stringify({ id: 900000 }));",
+    "      process.exit(0);",
+    "    }",
+    "  }",
+    '  if (argv[1] && argv[1].includes("/deployments?ref=")) {',
+    // The idempotency listing (npm-publish-deployment.mjs): always reports nothing recorded
+    // yet, so the create path runs every time and can be asserted on directly.
+    '    writeFileSync(1, "[]");',
+    "    process.exit(0);",
+    "  }",
+    '  if (argv[1] && argv[1].includes("/deployments?")) {',
+    // The newest-deployment-in-the-environment read (check-release-alignment.mjs): reports the
+    // ref this run's own create call just recorded, unless a fixture overrides it to prove a
+    // stale-deployment divergence.
+    "    writeFileSync(1, JSON.stringify([{ ref: state().alignmentDeploymentRef || `v${VERSION}` }]));",
     "    process.exit(0);",
     "  }",
     '  if (argv[1] && argv[1].includes("/releases/tags/")) {',
@@ -681,6 +719,9 @@ function gitStubBody() {
       JSON.stringify(HEAD_SHA) +
       ' + "\\n"); process.exit(0); }',
     'if (sub === "remote") { process.stdout.write("git@github.com:oscharko-dev/Keiko.git\\n"); process.exit(0); }',
+    // The release-alignment gate (issue #3252) lists tags with `git tag --list v*`; a fixture
+    // can override the reported newest tag to prove a real, post-publish alignment divergence.
+    'if (sub === "tag" && argv[1] === "--list") { process.stdout.write((state().alignmentTags || ["v" + VERSION]).join("\\n") + "\\n"); process.exit(0); }',
     "process.exit(0);",
   ].join("\n");
 }
@@ -1024,6 +1065,13 @@ function runPublish({
     KEIKO_PORTABLE_ASSETS_WORKFLOW_PATH: ".github/workflows/portable-assets.yml",
     KEIKO_RELEASE_IMPACT_CATALOG_PATH: catalogFile,
     KEIKO_RELEASE_OWNER_GITHUB_LOGINS: "release-owner",
+    // This suite's stub npm/gh/git answer only the questions the pre-existing orchestrator asks;
+    // the deployment-record and alignment-gate logic added for issue #3252 is covered directly
+    // (and hermetically) by npm-publish-deployment.test.mjs and check-release-alignment.test.mjs
+    // instead of being re-proven here through five more fabricated endpoints. Same double gate as
+    // KEIKO_RELEASE_IMPACT_CATALOG_PATH above: NODE_ENV=test alone (a real publish never has it)
+    // cannot trip this on its own.
+    KEIKO_RELEASE_SKIP_ALIGNMENT_PROOF: "1",
     // The real orchestrator must never inherit a developer's private registry credential. Tests
     // choose every auth source explicitly through qualificationEnv below.
     KEIKO_RELEASE_DISABLE_DOTENV_TOKEN: "1",
@@ -1947,6 +1995,92 @@ describe.skipIf(RELEASE_VERSION_IS_PRERELEASE)(
 
       // Verification still runs: the dist-tag is re-read even on the skip path.
       expect(lastRun.calls.some(isDistTagView)).toBe(true);
+    });
+
+    // The three scenarios below prove the release-alignment wiring in release-publish.mjs
+    // itself (issue #3252): that a real `--tag latest` run actually calls
+    // recordNpmPublishDeployment / checkReleaseAlignment, and that a "failed"/"not aligned"
+    // result actually reaches `fail()`. Every other scenario in this suite sets
+    // KEIKO_RELEASE_SKIP_ALIGNMENT_PROOF=1 (see runPublish's env) precisely so that its own
+    // unrelated fixture does not have to answer the deployment/alignment endpoints too — these
+    // three remove that flag and are the only place the call site itself is exercised end to end.
+    // The library functions' own branches are covered directly and hermetically by
+    // npm-publish-deployment.test.mjs and check-release-alignment.test.mjs; this only has to
+    // prove the wiring between them and release-publish.mjs was not dropped or inverted.
+    const alignmentViewBody = [
+      '  if (argv.includes("version")) { process.stdout.write(VERSION + "\\n"); process.exit(0); }',
+      '  if (argv.includes("dist-tags") && argv.includes("--json")) { process.stdout.write(JSON.stringify({ latest: VERSION }) + "\\n"); process.exit(0); }',
+      '  if (argv.some((a) => a.startsWith("dist-tags."))) { process.stdout.write(VERSION + "\\n"); process.exit(0); }',
+    ].join("\n");
+
+    it("records the npm-publish deployment and passes the alignment gate on a real latest publish", () => {
+      lastRun = runPublish({
+        npmBody: npmStub(alignmentViewBody, { failOnPublish: true }),
+        initState: { published: true, tagged: true },
+        qualificationEnv: { KEIKO_RELEASE_SKIP_ALIGNMENT_PROOF: undefined },
+      });
+
+      expect(lastRun.status, lastRun.stderr).toBe(0);
+      expect(lastRun.stdout).toContain(`PASS - ${RELEASE_SPEC} published as latest`);
+      expect(lastRun.stdout).toContain("npm-publish-deployment: recorded");
+      expect(lastRun.stdout).toContain("release-alignment: PASS");
+      expect(
+        lastRun.calls.some((l) =>
+          l.startsWith(
+            'gh ["api","--method","POST","repos/oscharko-dev/Keiko/deployments","--input","-"]',
+          ),
+        ),
+      ).toBe(true);
+      expect(
+        lastRun.calls.some(
+          (l) => l.startsWith('gh ["api","--method","POST"') && l.includes("/statuses"),
+        ),
+      ).toBe(true);
+    });
+
+    it("publishes but fails the release when the deployment record is refused", () => {
+      // Proves the `if (deploymentResult.kind === "failed") fail(...)` wiring: the publish must
+      // still be reported as failed even though npm and the GitHub release already succeeded —
+      // dropping this line would leave a real publish looking green with no deployment recorded.
+      lastRun = runPublish({
+        npmBody: npmStub(alignmentViewBody, { failOnPublish: true }),
+        initState: { published: true, tagged: true, failDeploymentCreate: true },
+        qualificationEnv: { KEIKO_RELEASE_SKIP_ALIGNMENT_PROOF: undefined },
+      });
+
+      expect(lastRun.status).toBe(1);
+      expect(lastRun.stderr).toContain("the GitHub deployment record was refused");
+      expect(lastRun.stderr).toContain("deployments:write");
+      // The publish itself was not rolled back or retried — this is a post-publish gate: the
+      // package was already confirmed present and correctly tagged before the deployment call.
+      expect(lastRun.stdout).toContain(`SKIP ${RELEASE_SPEC} already exists`);
+      expect(lastRun.stdout).toContain(`TAG ${RELEASE_NAME}@latest -> ${RELEASE_VERSION}`);
+      expect(lastRun.stdout).not.toContain(`PASS - ${RELEASE_SPEC} published as latest`);
+    });
+
+    it("publishes but fails the release when the alignment gate finds a real divergence", () => {
+      // Proves the `if (!alignment.aligned) fail(...)` wiring using the real 0.3.12-0.3.15
+      // incident shape: the GitHub Release still names a stale tag even though npm, the tag
+      // list, and the deployment record all agree. Dropping this line is exactly how that
+      // incident went unnoticed.
+      lastRun = runPublish({
+        npmBody: npmStub(alignmentViewBody, { failOnPublish: true }),
+        initState: { published: true, tagged: true, alignmentGithubLatestTag: "v0.0.1" },
+        qualificationEnv: { KEIKO_RELEASE_SKIP_ALIGNMENT_PROOF: undefined },
+      });
+
+      expect(lastRun.status).toBe(1);
+      expect(lastRun.stderr).toContain("release-alignment: FAIL");
+      expect(lastRun.stderr).toContain(
+        "release published, but the alignment gate found a divergence",
+      );
+      expect(lastRun.stderr).toContain(
+        `GitHub Latest release is v0.0.1, expected v${RELEASE_VERSION}`,
+      );
+      expect(lastRun.stdout).not.toContain(`PASS - ${RELEASE_SPEC} published as latest`);
+      // The deployment record itself was NOT refused — only the alignment gate found the
+      // divergence, so the deployment write still succeeded.
+      expect(lastRun.stdout).toContain("npm-publish-deployment: recorded");
     });
 
     it("retries post-publish registry visibility before failing the release", () => {

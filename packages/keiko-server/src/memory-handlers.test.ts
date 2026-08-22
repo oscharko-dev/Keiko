@@ -10,7 +10,11 @@ import {
   createInMemoryEvidenceStore,
   type EvidenceStore,
 } from "@oscharko-dev/keiko-evidence";
-import { createMemoryVault, type MemoryVaultStore } from "@oscharko-dev/keiko-memory-vault";
+import {
+  createMemoryVault,
+  MemoryStorageError,
+  type MemoryVaultStore,
+} from "@oscharko-dev/keiko-memory-vault";
 import { runConsolidation } from "@oscharko-dev/keiko-memory-consolidation";
 import { MEMORY_STATUS_TRANSITIONS } from "@oscharko-dev/keiko-contracts";
 import type {
@@ -30,24 +34,27 @@ import type {
 } from "@oscharko-dev/keiko-model-gateway";
 import { buildRedactor, createRunRegistry, type UiHandlerDeps } from "./index.js";
 import {
+  handleAcceptMemoryProposal,
   handleArchiveMemory,
+  handleCorrectMemory,
+  handleDeleteMemory,
   handleEditMemory,
+  handleForgetMemories,
+  handleForgetMemory,
+  handleGetMemory,
   handleListMemories,
   handleListMemoryTombstones,
   handleMemoryReviewQueue,
-  handleAcceptMemoryProposal,
-  handleCorrectMemory,
-  handleDeleteMemory,
-  handleForgetMemories,
-  handleForgetMemory,
   handlePinMemory,
-  handleResolveMemoryConflict,
   handleRejectMemoryProposal,
+  handleResolveMemoryConflict,
+  handleUnpinMemory,
 } from "./memory-handlers.js";
 import { createInMemoryUiStore } from "./store/index.js";
 import type { RouteContext, RouteResult } from "./routes.js";
 import { recordMemoryAudit } from "./memory-audit-handler.js";
 import { buildMemoryCaptureDecisionAuditEvent } from "./memory-capture-projection.js";
+import type { ServerDiagnosticRecord } from "./diagnostics-log.js";
 
 // Real security-layer redactor: `recordMemoryAudit` requires one by name, so a fixture must not
 // reinstate the identity default that made the evidence-redaction boundary fail open.
@@ -1647,5 +1654,369 @@ describe("memory handlers — outcome-driven forgetting (O-V1)", () => {
       outcomeCount: 1,
       utilitySum: 0,
     });
+  });
+});
+
+// ─── emitServerDiagnostic on storage failures (epic #3233, w4b) ───────────────
+// Before this wave every one of these catch blocks converted a real `MemoryStorageError` (or, for
+// the audit preflight, ANY thrown value) into an opaque response with the underlying cause
+// discarded — zero `emitServerDiagnostic` calls existed anywhere in memory-handlers.ts, so an
+// operator had no way to see WHY a memory route started failing. Each test below forces the vault
+// (or, for the preflight check, the evidence store) to throw and asserts a correlation-keyed
+// `ServerDiagnosticRecord` reaches the injected sink with the expected `operation` label.
+describe("emitServerDiagnostic on memory-handler storage failures (w4b)", () => {
+  function recordingSink(): {
+    readonly records: ServerDiagnosticRecord[];
+    readonly diagnostics: { record: (record: ServerDiagnosticRecord) => void };
+  } {
+    const records: ServerDiagnosticRecord[] = [];
+    return { records, diagnostics: { record: (record) => records.push(record) } };
+  }
+
+  function withCorrelation(ctx: RouteContext, correlationId: string): RouteContext {
+    return { ...ctx, correlationId };
+  }
+
+  function expectMemoryStorageDiagnostic(
+    records: readonly ServerDiagnosticRecord[],
+    correlationId: string,
+    operation: string,
+  ): void {
+    expect(records).toContainEqual(
+      expect.objectContaining({ correlationId, operation, errorClass: "MemoryStorageError" }),
+    );
+  }
+
+  it("reports a list failure", () => {
+    const vault = makeVault();
+    const { records, diagnostics } = recordingSink();
+    const broken: MemoryVaultStore = {
+      ...vault,
+      listMemoryScopes: () => {
+        throw new MemoryStorageError("internal", "simulated list failure");
+      },
+    };
+    const result = handleListMemories(
+      withCorrelation(makeCtx("/api/memory", {}), "corr-list-1"),
+      makeDeps({ memoryVault: broken, diagnostics }),
+    );
+    expect(result.status).toBe(500);
+    expectMemoryStorageDiagnostic(records, "corr-list-1", "memory.list");
+  });
+
+  it("reports a review-queue failure", () => {
+    const vault = makeVault();
+    const { records, diagnostics } = recordingSink();
+    const broken: MemoryVaultStore = {
+      ...vault,
+      listMemoryScopes: () => {
+        throw new MemoryStorageError("internal", "simulated review-queue failure");
+      },
+    };
+    const result = handleMemoryReviewQueue(
+      withCorrelation(makeCtx("/api/memory/review-queue", {}), "corr-review-1"),
+      makeDeps({ memoryVault: broken, diagnostics }),
+    );
+    expect(result.status).toBe(500);
+    expectMemoryStorageDiagnostic(records, "corr-review-1", "memory.review-queue");
+  });
+
+  it("reports a get failure", () => {
+    const vault = makeVault();
+    const { records, diagnostics } = recordingSink();
+    const broken: MemoryVaultStore = {
+      ...vault,
+      getMemory: () => {
+        throw new MemoryStorageError("internal", "simulated get failure");
+      },
+    };
+    const result = handleGetMemory(
+      withCorrelation(makeCtx("/api/memory/get-1", {}, { id: "get-1" }), "corr-get-1"),
+      makeDeps({ memoryVault: broken, diagnostics }),
+    );
+    expect(result.status).toBe(500);
+    expectMemoryStorageDiagnostic(records, "corr-get-1", "memory.get");
+  });
+
+  it("reports an edit failure", async () => {
+    const vault = makeVault();
+    vault.insertMemory(makeMemory("edit-1", "editable body"));
+    const { records, diagnostics } = recordingSink();
+    const broken: MemoryVaultStore = {
+      ...vault,
+      updateMemory: () => {
+        throw new MemoryStorageError("internal", "simulated edit failure");
+      },
+    };
+    const result = await handleEditMemory(
+      withCorrelation(
+        makeCtx("/api/memory/edit-1", { body: "new body" }, { id: "edit-1" }),
+        "corr-edit-1",
+      ),
+      makeDeps({ memoryVault: broken, diagnostics }),
+    );
+    expect(result.status).toBe(500);
+    expectMemoryStorageDiagnostic(records, "corr-edit-1", "memory.edit");
+  });
+
+  it("reports a pin failure", () => {
+    const vault = makeVault();
+    vault.insertMemory(makeMemory("pin-1", "pinnable body"));
+    const { records, diagnostics } = recordingSink();
+    const broken: MemoryVaultStore = {
+      ...vault,
+      updateMemory: () => {
+        throw new MemoryStorageError("internal", "simulated pin failure");
+      },
+    };
+    const result = handlePinMemory(
+      withCorrelation(makeCtx("/api/memory/pin-1/pin", {}, { id: "pin-1" }), "corr-pin-1"),
+      makeDeps({ memoryVault: broken, diagnostics }),
+    );
+    expect(result.status).toBe(500);
+    expectMemoryStorageDiagnostic(records, "corr-pin-1", "memory.pin");
+  });
+
+  it("reports an unpin failure", () => {
+    const vault = makeVault();
+    vault.insertMemory(makeMemory("unpin-1", "pinned body", { pinned: true }));
+    const { records, diagnostics } = recordingSink();
+    const broken: MemoryVaultStore = {
+      ...vault,
+      updateMemory: () => {
+        throw new MemoryStorageError("internal", "simulated unpin failure");
+      },
+    };
+    const result = handleUnpinMemory(
+      withCorrelation(makeCtx("/api/memory/unpin-1/unpin", {}, { id: "unpin-1" }), "corr-unpin-1"),
+      makeDeps({ memoryVault: broken, diagnostics }),
+    );
+    expect(result.status).toBe(500);
+    expectMemoryStorageDiagnostic(records, "corr-unpin-1", "memory.unpin");
+  });
+
+  it("reports an archive failure", async () => {
+    const vault = makeVault();
+    vault.insertMemory(makeMemory("archive-1", "archivable body"));
+    const { records, diagnostics } = recordingSink();
+    const broken: MemoryVaultStore = {
+      ...vault,
+      updateMemory: () => {
+        throw new MemoryStorageError("internal", "simulated archive failure");
+      },
+    };
+    const result = await handleArchiveMemory(
+      withCorrelation(
+        makeCtx("/api/memory/archive-1/archive", {}, { id: "archive-1" }),
+        "corr-archive-1",
+      ),
+      makeDeps({ memoryVault: broken, diagnostics }),
+    );
+    expect(result.status).toBe(500);
+    expectMemoryStorageDiagnostic(records, "corr-archive-1", "memory.archive");
+  });
+
+  it("reports a forget failure", async () => {
+    const vault = makeVault();
+    vault.insertMemory(makeMemory("forget-1", "forgettable body"));
+    const { records, diagnostics } = recordingSink();
+    const broken: MemoryVaultStore = {
+      ...vault,
+      deleteMemories: () => {
+        throw new MemoryStorageError("internal", "simulated forget failure");
+      },
+    };
+    const result = await handleForgetMemory(
+      withCorrelation(
+        makeCtx("/api/memory/forget-1/forget", { acknowledged: true }, { id: "forget-1" }),
+        "corr-forget-1",
+      ),
+      makeDeps({ memoryVault: broken, diagnostics }),
+    );
+    expect(result.status).toBe(500);
+    expectMemoryStorageDiagnostic(records, "corr-forget-1", "memory.forget");
+  });
+
+  it("reports a batch-forget failure", async () => {
+    const vault = makeVault();
+    vault.insertMemory(makeMemory("forget-batch-1", "forgettable body"));
+    const { records, diagnostics } = recordingSink();
+    const broken: MemoryVaultStore = {
+      ...vault,
+      deleteMemories: () => {
+        throw new MemoryStorageError("internal", "simulated batch-forget failure");
+      },
+    };
+    const result = await handleForgetMemories(
+      withCorrelation(
+        makeCtx("/api/memory/forget", {
+          acknowledged: true,
+          selector: { kind: "by-scope", scope: { kind: "global" } },
+        }),
+        "corr-forget-batch-1",
+      ),
+      makeDeps({ memoryVault: broken, diagnostics }),
+    );
+    expect(result.status).toBe(500);
+    expectMemoryStorageDiagnostic(records, "corr-forget-batch-1", "memory.forget.batch");
+  });
+
+  it("reports a delete failure", async () => {
+    const vault = makeVault();
+    vault.insertMemory(makeMemory("delete-1", "deletable body"));
+    const { records, diagnostics } = recordingSink();
+    const broken: MemoryVaultStore = {
+      ...vault,
+      deleteMemories: () => {
+        throw new MemoryStorageError("internal", "simulated delete failure");
+      },
+    };
+    const result = await handleDeleteMemory(
+      withCorrelation(
+        makeCtx("/api/memory/delete-1", { acknowledged: true }, { id: "delete-1" }),
+        "corr-delete-1",
+      ),
+      makeDeps({ memoryVault: broken, diagnostics }),
+    );
+    expect(result.status).toBe(500);
+    expectMemoryStorageDiagnostic(records, "corr-delete-1", "memory.delete");
+  });
+
+  it("reports a destructive-preflight audit failure", async () => {
+    const vault = makeVault();
+    vault.insertMemory(makeMemory("preflight-1", "preflight body"));
+    const { records, diagnostics } = recordingSink();
+    const result = await handleForgetMemory(
+      withCorrelation(
+        makeCtx("/api/memory/preflight-1/forget", { acknowledged: true }, { id: "preflight-1" }),
+        "corr-preflight-1",
+      ),
+      makeDeps({
+        memoryVault: vault,
+        diagnostics,
+        evidenceStore: {
+          put: () => {
+            throw new Error("simulated evidence store failure");
+          },
+          list: () => [],
+          get: () => undefined,
+          delete: () => undefined,
+        },
+      }),
+    );
+    expect(result.status).toBe(500);
+    expect(records).toContainEqual(
+      expect.objectContaining({
+        correlationId: "corr-preflight-1",
+        operation: "memory.audit.preflight",
+      }),
+    );
+  });
+
+  it("reports a conflict-resolution failure", async () => {
+    const vault = makeVault();
+    vault.insertMemory(makeMemory("resolve-winner", "formatter is biome"));
+    vault.insertMemory(makeMemory("resolve-loser", "formatter is prettier"));
+    const { records, diagnostics } = recordingSink();
+    const broken: MemoryVaultStore = {
+      ...vault,
+      updateMemory: () => {
+        throw new MemoryStorageError("internal", "simulated conflict-resolve failure");
+      },
+    };
+    const result = await handleResolveMemoryConflict(
+      withCorrelation(
+        makeCtx("/api/memory/conflicts/resolve", {
+          winner: "resolve-winner",
+          losers: ["resolve-loser"],
+        }),
+        "corr-resolve-1",
+      ),
+      makeDeps({ memoryVault: broken, diagnostics }),
+    );
+    expect(result.status).toBe(500);
+    expectMemoryStorageDiagnostic(records, "corr-resolve-1", "memory.conflicts.resolve");
+  });
+
+  it("reports a correction failure", async () => {
+    const vault = makeVault();
+    vault.insertMemory(makeMemory("correct-1", "original body"));
+    const { records, diagnostics } = recordingSink();
+    const broken: MemoryVaultStore = {
+      ...vault,
+      insertMemory: () => {
+        throw new MemoryStorageError("internal", "simulated correction failure");
+      },
+    };
+    const result = await handleCorrectMemory(
+      withCorrelation(
+        makeCtx("/api/memory/correct-1/correct", { body: "corrected body" }, { id: "correct-1" }),
+        "corr-correct-1",
+      ),
+      makeDeps({ memoryVault: broken, diagnostics }),
+    );
+    expect(result.status).toBe(500);
+    expectMemoryStorageDiagnostic(records, "corr-correct-1", "memory.correct");
+  });
+
+  it("reports an accept-proposal failure", async () => {
+    const vault = makeVault();
+    vault.insertMemory(makeMemory("accept-1", "proposed body", { status: "proposed" }));
+    const { records, diagnostics } = recordingSink();
+    const broken: MemoryVaultStore = {
+      ...vault,
+      updateMemories: () => {
+        throw new MemoryStorageError("internal", "simulated accept failure");
+      },
+    };
+    const result = await handleAcceptMemoryProposal(
+      withCorrelation(
+        makeCtx("/api/memory/proposals/accept-1/accept", {}, { id: "accept-1" }),
+        "corr-accept-1",
+      ),
+      makeDeps({ memoryVault: broken, diagnostics }),
+    );
+    expect(result.status).toBe(500);
+    expectMemoryStorageDiagnostic(records, "corr-accept-1", "memory.proposals.accept");
+  });
+
+  it("reports a reject-proposal failure", async () => {
+    const vault = makeVault();
+    vault.insertMemory(makeMemory("reject-1", "proposed body", { status: "proposed" }));
+    const { records, diagnostics } = recordingSink();
+    const broken: MemoryVaultStore = {
+      ...vault,
+      updateMemory: () => {
+        throw new MemoryStorageError("internal", "simulated reject failure");
+      },
+    };
+    const result = await handleRejectMemoryProposal(
+      withCorrelation(
+        makeCtx("/api/memory/proposals/reject-1/reject", {}, { id: "reject-1" }),
+        "corr-reject-1",
+      ),
+      makeDeps({ memoryVault: broken, diagnostics }),
+    );
+    expect(result.status).toBe(500);
+    expectMemoryStorageDiagnostic(records, "corr-reject-1", "memory.proposals.reject");
+  });
+
+  it("mints a fresh correlation id when the route context carries none", () => {
+    const vault = makeVault();
+    const { records, diagnostics } = recordingSink();
+    const broken: MemoryVaultStore = {
+      ...vault,
+      getMemory: () => {
+        throw new MemoryStorageError("internal", "simulated get failure");
+      },
+    };
+    const result = handleGetMemory(
+      makeCtx("/api/memory/no-corr-1", {}, { id: "no-corr-1" }),
+      makeDeps({ memoryVault: broken, diagnostics }),
+    );
+    expect(result.status).toBe(500);
+    expect(records).toHaveLength(1);
+    expect(typeof records[0]?.correlationId).toBe("string");
+    expect(records[0]?.correlationId.length).toBeGreaterThan(0);
   });
 });

@@ -59,12 +59,13 @@ levels.
 
 ## Log locations and debug mode
 
-| Path                   | Purpose                                                                                           |
-| ---------------------- | ------------------------------------------------------------------------------------------------- |
-| `.keiko/ui.log`        | Local UI process log. Written by `keiko start` for the background UI process.                     |
-| `.keiko/ui.pid`        | Background UI process id. Removed by `keiko stop` and by `keiko start` when the pid is not alive. |
-| `.keiko/evidence/`     | Redacted evidence written by surfaces that persist a manifest (for example `keiko verify`).       |
-| `~/.keiko/keiko-ui.db` | Local UI state database. User-scoped, not project-scoped.                                         |
+| Path                     | Purpose                                                                                                                                                                                                                                               |
+| ------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `.keiko/logs/server.log` | Redacted server activity log (JSON Lines), day-rotated with 7-day retention. See [Observability: the server activity log](../observability/README.md) for the field reference, `KEIKO_LOG_LEVEL`, and `keiko support export`/`keiko support analyze`. |
+| `.keiko/ui.log`          | Local UI process log. Written by `keiko start` for the background UI process.                                                                                                                                                                         |
+| `.keiko/ui.pid`          | Background UI process id. Removed by `keiko stop` and by `keiko start` when the pid is not alive.                                                                                                                                                     |
+| `.keiko/evidence/`       | Redacted evidence written by surfaces that persist a manifest (for example `keiko verify`).                                                                                                                                                           |
+| `~/.keiko/keiko-ui.db`   | Local UI state database. User-scoped, not project-scoped.                                                                                                                                                                                             |
 
 To capture verbose output for a single command run, invoke the CLI in the
 foreground and redirect both streams to a file you control. For example:
