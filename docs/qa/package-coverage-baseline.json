@@ -8,7 +8,7 @@
     "keiko-cli": {
       "files": 44,
       "uncoveredFiles": 0,
-      "uncoveredLines": 387,
+      "uncoveredLines": 385,
       "totalLines": 4880,
       "coverage": {
         "lines": 92.11,
@@ -174,15 +174,15 @@
       }
     },
     "keiko-model-gateway": {
-      "files": 42,
+      "files": 43,
       "uncoveredFiles": 0,
-      "uncoveredLines": 184,
-      "totalLines": 3250,
+      "uncoveredLines": 185,
+      "totalLines": 3300,
       "coverage": {
-        "lines": 94.34,
-        "statements": 93.33,
-        "branches": 87.43,
-        "functions": 96.99
+        "lines": 94.39,
+        "statements": 93.4,
+        "branches": 87.53,
+        "functions": 97.05
       }
     },
     "keiko-quality-intelligence": {
@@ -225,23 +225,23 @@
       "files": 23,
       "uncoveredFiles": 0,
       "uncoveredLines": 11,
-      "totalLines": 614,
+      "totalLines": 616,
       "coverage": {
         "lines": 98.21,
-        "statements": 97.61,
-        "branches": 94.07,
+        "statements": 97.62,
+        "branches": 94.08,
         "functions": 98.6
       }
     },
     "keiko-server": {
       "files": 580,
       "uncoveredFiles": 0,
-      "uncoveredLines": 4516,
-      "totalLines": 56239,
+      "uncoveredLines": 4514,
+      "totalLines": 56250,
       "coverage": {
-        "lines": 91.97,
+        "lines": 91.98,
         "statements": 89.27,
-        "branches": 81.88,
+        "branches": 81.89,
         "functions": 94.86
       }
     },
@@ -258,12 +258,12 @@
       }
     },
     "keiko-ui": {
-      "files": 418,
+      "files": 419,
       "uncoveredFiles": 3,
-      "uncoveredLines": 2969,
-      "totalLines": 39424,
+      "uncoveredLines": 2967,
+      "totalLines": 39444,
       "coverage": {
-        "lines": 92.47,
+        "lines": 92.48,
         "statements": 89.52,
         "branches": 81.8,
         "functions": 91.28
