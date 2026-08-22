@@ -57,7 +57,7 @@ const ISO_INSTANT_MAX_LENGTH = 40;
 // Deliberately less strict than `correlation.ts`'s SAFE_CORRELATION_ID: this file only asserts the
 // wire SHAPE (a short, non-empty string) so the leaf never has to import server plumbing. The
 // server re-validates with `isValidCorrelationId` before trusting the value for anything.
-const ISO_INSTANT_PATTERN = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?Z$/;
+const ISO_INSTANT_PATTERN = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.\d{1,3})?Z$/;
 
 export interface ClientDiagnosticIngestRequest {
   readonly message: string;
@@ -75,12 +75,38 @@ function isBoundedString(value: unknown, maxLength: number): value is string {
   return typeof value === "string" && value.length > 0 && value.length <= maxLength;
 }
 
-function isIsoInstant(value: unknown): value is string {
-  return (
-    isBoundedString(value, ISO_INSTANT_MAX_LENGTH) &&
-    ISO_INSTANT_PATTERN.test(value) &&
-    !Number.isNaN(Date.parse(value))
+// UTC component getters in the same order the capture groups appear in `ISO_INSTANT_PATTERN`
+// (year, month, day, hour, minute, second) — `getUTCMonth()` is 0-based, so it is adjusted to match
+// the 1-based literal the input wrote.
+const ISO_INSTANT_UTC_GETTERS: readonly ((date: Date) => number)[] = [
+  (date): number => date.getUTCFullYear(),
+  (date): number => date.getUTCMonth() + 1,
+  (date): number => date.getUTCDate(),
+  (date): number => date.getUTCHours(),
+  (date): number => date.getUTCMinutes(),
+  (date): number => date.getUTCSeconds(),
+];
+
+// `Date.parse` silently normalizes a calendar-invalid instant instead of rejecting it (e.g.
+// `2026-02-30T10:00:00.000Z` becomes `2026-03-02T10:00:00.000Z`), so a regex-shape match plus a
+// non-NaN parse is not enough on its own: reparse the accepted ms value and require every UTC
+// component the input literally said to still be there. All six capture groups in
+// `ISO_INSTANT_PATTERN` are mandatory (only the milliseconds fraction is optional, and it is
+// non-capturing), so `match[1..6]` is always populated once `match` itself is non-null.
+function isCalendarValidInstant(match: RegExpExecArray, parsedMs: number): boolean {
+  const components = match.slice(1, 7);
+  const parsed = new Date(parsedMs);
+  return ISO_INSTANT_UTC_GETTERS.every(
+    (getUtcComponent, index) => getUtcComponent(parsed) === Number(components[index]),
   );
+}
+
+function isIsoInstant(value: unknown): value is string {
+  if (!isBoundedString(value, ISO_INSTANT_MAX_LENGTH)) return false;
+  const match = ISO_INSTANT_PATTERN.exec(value);
+  if (match === null) return false;
+  const parsedMs = Date.parse(value);
+  return !Number.isNaN(parsedMs) && isCalendarValidInstant(match, parsedMs);
 }
 
 const CLIENT_DIAGNOSTIC_READY_STATE_SET: ReadonlySet<number> = new Set(

@@ -3363,4 +3363,33 @@ describe("desktop chat SSE stream correlationId threading (#2902 audit finding 0
     expect(closed).toHaveLength(1);
     expect(closed[0]?.correlationId).toBeUndefined();
   });
+
+  it("attaches the correlationId to sse.stream.closed even when the model throws before the first chunk", async () => {
+    const sink = createBufferedServerLogSink();
+    setServerLogger(createServerLogger({ sink, level: "info" }));
+    const chatId = seedChat();
+    const captured = captureResWithEvents();
+    const failing: ModelPort = {
+      call: () => Promise.resolve(normalizedResponse("unused")),
+      // eslint-disable-next-line require-yield -- fails before any chunk by design
+      async *callStream(): AsyncGenerator<GatewayStreamChunk> {
+        await Promise.resolve();
+        throw new Error("upstream exploded before first token");
+      },
+    };
+    const ctx: RouteContext = {
+      ...routeContext(
+        makeReq({ chatId, projectPath: projectDir, modelId: CHAT_MODEL, content: "hello" }),
+        captured.res,
+      ),
+      correlationId: "corr-chat-stream-early-failure",
+    };
+
+    await handleSendDesktopChatStream(ctx, deps(failing));
+    captured.emitClose();
+
+    const closed = sink.events.filter((event) => event.op === "sse.stream.closed");
+    expect(closed).toHaveLength(1);
+    expect(closed[0]?.correlationId).toBe("corr-chat-stream-early-failure");
+  });
 });

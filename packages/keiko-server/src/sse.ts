@@ -121,8 +121,9 @@ export function writeMessageEvent(
   res: ServerResponse,
   event: StreamEvent,
   redactor: Redactor,
+  correlationId?: string,
 ): boolean {
   const frame = frameMessageEvent(event, redactor);
-  recordSseStreamFrame(res, frame);
+  recordSseStreamFrame(res, frame, correlationId);
   return res.write(frame);
 }

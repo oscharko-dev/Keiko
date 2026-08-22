@@ -1289,9 +1289,12 @@ class GitRouteReadError extends Error {
 
 // The declared route templates `gitReadErrorBody` reports as `operation` — literal constants, not
 // derived from any live request, so the two routes sharing `runGitDiffHandler` can never be
-// confused for one another and neither can ever carry a request-supplied segment.
-const GIT_DIFF_ROUTE_TEMPLATE = "/api/git/diff";
-const GIT_STRUCTURED_DIFF_ROUTE_TEMPLATE = "/api/git/diff/structured";
+// confused for one another and neither can ever carry a request-supplied segment. Exported so
+// `routes.ts` registers these exact strings as the route `pattern` too: one declaration used by
+// both the route table and this diagnostic, so a renamed route pattern cannot leave this file
+// silently reporting the old path.
+export const GIT_DIFF_ROUTE_TEMPLATE = "/api/git/diff";
+export const GIT_STRUCTURED_DIFF_ROUTE_TEMPLATE = "/api/git/diff/structured";
 
 // `routeTemplate` is the DECLARED route pattern the caller is answering for (e.g.
 // `"/api/git/diff"`), never `ctx.url.pathname` — the live request path is not read here, so a

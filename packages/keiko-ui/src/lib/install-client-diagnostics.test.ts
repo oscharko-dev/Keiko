@@ -132,8 +132,8 @@ describe("fanOutClientDiagnostic", () => {
     expect(body["kind"]).toBe("sse-error");
   });
 
-  it("counts a rejected POST without throwing back into the call site", async () => {
-    vi.spyOn(console, "warn").mockImplementation(() => undefined);
+  it("counts a rejected POST, surfaces a bounded console notice, and does not throw back into the call site", async () => {
+    const consoleWarn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
     vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new TypeError("network error")));
 
     expect(() => fanOutClientDiagnostic("boot: gateway probe failed")).not.toThrow();
@@ -141,6 +141,16 @@ describe("fanOutClientDiagnostic", () => {
     await vi.waitFor(() => {
       expect(clientDiagnosticPostFailureCount()).toBe(1);
     });
+    // Once for the diagnostic itself (console-first fan-out), once for the delivery-failure
+    // notice — a developer watching devtools must be able to tell the server never received it.
+    expect(consoleWarn).toHaveBeenCalledTimes(2);
+    expect(consoleWarn).toHaveBeenCalledWith("boot: gateway probe failed");
+    const lastCall = consoleWarn.mock.calls[consoleWarn.mock.calls.length - 1] as [string];
+    expect(lastCall[0]).toMatch(/diagnostic delivery to the server failed/i);
+    // Bounded and redacted: the notice never repeats the original message content or any error
+    // detail, so it cannot itself become a place that leaks something the sink already redacted.
+    expect(lastCall[0]).not.toContain("network error");
+    expect(lastCall[0]).not.toContain("boot: gateway probe failed");
   });
 
   it("drops the 21st POST within a rolling minute and counts it, without dropping the console write", () => {

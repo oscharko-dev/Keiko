@@ -52,8 +52,10 @@ const JSON_GZIP_MIN_BYTES = 1024;
 const QUERY_PARAM_NAME_PATTERN = /^[A-Za-z_][A-Za-z0-9_.-]{0,63}$/;
 // Mirrors the bounded-array discipline every other array field in this schema already has
 // (`MAX_LOG_ARRAY_LENGTH`, `keikoStackFrames`' own frame cap): a request with more distinct query
-// parameter names than this is truncated, not silently grown without limit.
-const MAX_QUERY_PARAM_NAMES = 16;
+// parameter names than this is truncated, not silently grown without limit. Exported for
+// `server.test.ts` only, so a cap-boundary test reads the real production limit instead of
+// restating it as a second, independently-drifting literal.
+export const MAX_QUERY_PARAM_NAMES = 16;
 const cspCache = new WeakMap<
   UiServerDeps,
   { readonly value: string; readonly expiresAt: number }
@@ -342,7 +344,12 @@ async function resolveCsp(deps: UiServerDeps): Promise<string> {
 // count is a synchronous, amplifiable CPU cost on the request hot path. The remaining per-name work
 // (Set membership + regex test) stays a cheap O(n) pass, the same order as the WHATWG URL parsing
 // that already runs unconditionally for routing on every request.
-function computeQueryParamFields(url: URL, context: RequestLogContext): void {
+//
+// Exported for `server.test.ts` only, so the bound-before-sort ordering can be pinned by calling
+// this function directly on a constructed `URL` — no real HTTP request, no spy on the shared
+// `Array.prototype.sort`, and no risk of a second call site (in the test) drifting from this one's
+// actual cap.
+export function computeQueryParamFields(url: URL, context: RequestLogContext): void {
   const seen = new Set<string>();
   const kept: string[] = [];
   let dropped = 0;
@@ -357,7 +364,11 @@ function computeQueryParamFields(url: URL, context: RequestLogContext): void {
       dropped += 1;
     }
   }
-  kept.sort((a, b) => a.localeCompare(b));
+  // A code-point sort, not `localeCompare`: the list is capped at MAX_QUERY_PARAM_NAMES (16), so
+  // the cost difference is immaterial, but `localeCompare` depends on the host ICU data and the
+  // default locale — two servers could then emit the same request with a different
+  // `queryParamNames` order, and this field is compared/deduplicated across hosts.
+  kept.sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
   context.queryParamNames = kept;
   if (dropped > 0) context.queryParamDroppedCount = dropped;
 }

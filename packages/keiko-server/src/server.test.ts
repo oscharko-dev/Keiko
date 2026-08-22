@@ -6,7 +6,7 @@ import { request } from "node:http";
 import type { AddressInfo } from "node:net";
 import type { IncomingMessage, Server, ServerResponse } from "node:http";
 import { gunzipSync } from "node:zlib";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type {
   GatewayConfig,
   GatewayRequest,
@@ -19,12 +19,23 @@ import {
   createRunRegistry,
   type UiHandlerDeps,
 } from "./index.js";
-import { createUiServer, logRequestOnClose, UI_HOST, type RequestLogContext } from "./server.js";
+import {
+  computeQueryParamFields,
+  createUiServer,
+  logRequestOnClose,
+  MAX_QUERY_PARAM_NAMES,
+  UI_HOST,
+  type RequestLogContext,
+} from "./server.js";
 import type { ServerDiagnosticRecord } from "./diagnostics-log.js";
 import { buildCspHeader } from "./csp.js";
 import { resetWorkspaceStateForTests } from "./workspace-state-handlers.js";
 import type { EditorHotExitStore } from "./editor/hotExitStore.js";
-import { createBufferedServerLogSink, type ServerLogEvent } from "./observability/index.js";
+import {
+  createBufferedServerLogSink,
+  type BufferedServerLogSink,
+  type ServerLogEvent,
+} from "./observability/index.js";
 
 let server: Server;
 let staticRoot: string;
@@ -1107,25 +1118,58 @@ describe("top-level route-error catch (GEN-TEST-MISSING-008, RB-6)", () => {
 // the pre-existing lossy raw-path re-derivation and Node's un-set-by-default `res.statusCode`. Every
 // field asserted here did not exist on the pre-fix http-request line at all, so each assertion below
 // fails before this wave's `server.ts` change and passes after it.
+interface AwaitableActivityLogSink extends BufferedServerLogSink {
+  readonly nextEvent: () => Promise<ServerLogEvent>;
+}
+
+// Wraps `createBufferedServerLogSink` so a waiter can be notified the instant a write happens,
+// instead of polling `sink.events.length` on a `setTimeout` loop — the sink is the one place that
+// knows when an event actually arrived, so it is the one place that should resolve the wait.
+function createAwaitableActivityLogSink(): AwaitableActivityLogSink {
+  const buffered = createBufferedServerLogSink();
+  let onNextEvent: ((event: ServerLogEvent) => void) | undefined;
+  return {
+    ...buffered,
+    write(event: ServerLogEvent): void {
+      buffered.write(event);
+      const notify = onNextEvent;
+      onNextEvent = undefined;
+      notify?.(event);
+    },
+    nextEvent(): Promise<ServerLogEvent> {
+      const [existing] = buffered.events;
+      if (existing !== undefined) return Promise.resolve(existing);
+      return new Promise((resolve) => {
+        onNextEvent = resolve;
+      });
+    },
+  };
+}
+
 describe("activity log: http-request line enrichment (Wave 5, w5-http-request-enrichment)", () => {
+  // The 2000ms deadline is a safety net for a genuinely missing event, never the mechanism that
+  // detects arrival: the happy path always settles through `sink.nextEvent()` below.
   async function waitForActivityLogEvent(
-    sink: ReturnType<typeof createBufferedServerLogSink>,
+    sink: AwaitableActivityLogSink,
     timeoutMs = 2000,
   ): Promise<ServerLogEvent> {
-    const deadline = Date.now() + timeoutMs;
-    while (sink.events.length === 0) {
-      if (Date.now() > deadline) {
-        throw new Error("timed out waiting for an activity log event");
-      }
-      await new Promise((resolve) => setTimeout(resolve, 5));
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      return await Promise.race([
+        sink.nextEvent(),
+        new Promise<never>((_resolve, reject) => {
+          timer = setTimeout(() => {
+            reject(new Error("timed out waiting for an activity log event"));
+          }, timeoutMs);
+        }),
+      ]);
+    } finally {
+      clearTimeout(timer);
     }
-    const [event] = sink.events;
-    if (event === undefined) throw new Error("unreachable: length checked above");
-    return event;
   }
 
-  async function startWithActivityLog(): Promise<ReturnType<typeof createBufferedServerLogSink>> {
-    const sink = createBufferedServerLogSink();
+  async function startWithActivityLog(): Promise<AwaitableActivityLogSink> {
+    const sink = createAwaitableActivityLogSink();
     await closeServer();
     server = createUiServer({ staticRoot, csp: buildCspHeader([]), port, activityLog: sink });
     await new Promise<void>((res) => server.listen(port, UI_HOST, res));
@@ -1167,6 +1211,19 @@ describe("activity log: http-request line enrichment (Wave 5, w5-http-request-en
     expect(serialized).not.toContain("=2");
   });
 
+  // #2902 audit: the kept names used to be sorted with `localeCompare`, which orders by ICU
+  // collation rules (case-folded, locale-dependent) rather than by code point. "Banana" sorts
+  // AFTER "apple" under `localeCompare` (locale-aware) but BEFORE it under a plain code-point
+  // compare, since the uppercase 'B' (66) is less than the lowercase 'a' (97). A field compared
+  // or deduplicated across hosts needs one order regardless of host ICU data/default locale.
+  it("sorts kept query-parameter names by code point, not by locale collation", async () => {
+    const sink = await startWithActivityLog();
+    await fetchRaw("/api/health?Banana=1&apple=2");
+    const event = await waitForActivityLogEvent(sink);
+
+    expect(event.extra?.queryParamNames).toEqual(["Banana", "apple"]);
+  });
+
   it("drops an over-length query-parameter name and counts it instead of logging it", async () => {
     const sink = await startWithActivityLog();
     const longName = "n".repeat(200);
@@ -1198,39 +1255,53 @@ describe("activity log: http-request line enrichment (Wave 5, w5-http-request-en
   });
 
   // #2902 audit finding 1: computeQueryParamFields used to sort the FULL kept array before
-  // slicing it to the 16-name cap (MAX_QUERY_PARAM_NAMES, mirrored here — not exported), so a
-  // client sending far more than 16 conforming query-param names paid an unbounded, locale-aware
-  // O(n log n) sort. The fix bounds the collection loop at the cap BEFORE sorting.
-  it("caps the collected set at 16 names before sorting, regardless of how many the client sends", async () => {
-    const sink = await startWithActivityLog();
-    const names = Array.from({ length: 20 }, (_, i) => `p${String(19 - i).padStart(2, "0")}`);
-    const query = names.map((n) => `${n}=1`).join("&");
-    const sortSpy = vi.spyOn(Array.prototype, "sort");
-    let event: ServerLogEvent;
-    let queryNameSorts: string[][];
-    try {
-      await fetchRaw(`/api/health?${query}`);
-      event = await waitForActivityLogEvent(sink);
-      // `mock.contexts` captures the `this` receiver of every sort() call — i.e. the array that
-      // was actually sorted. None of them may be the `p\d\d`-shaped query-name collection at more
-      // than the 16-name cap: that is the direct proof the bound runs BEFORE the sort, not after.
-      // Read BEFORE mockRestore(), which also clears the call/context history (mockRestore does
-      // everything mockReset() does, plus restoring the original implementation).
-      queryNameSorts = sortSpy.mock.contexts.filter(
-        (receiver): receiver is string[] =>
-          Array.isArray(receiver) &&
-          receiver.every((v) => typeof v === "string" && /^p\d\d$/.test(v)),
-      );
-    } finally {
-      sortSpy.mockRestore();
-    }
+  // slicing it to the MAX_QUERY_PARAM_NAMES cap, so a client sending far more than the cap's worth
+  // of conforming query-param names paid an unbounded, locale-aware O(n log n) sort. The fix bounds
+  // the collection loop at the cap BEFORE sorting.
+  //
+  // Pinned by calling the exported production function directly with a constructed URL — no real
+  // HTTP request, no server, no spy on the shared `Array.prototype.sort` (which would leave a
+  // global built-in monkey-patched for the duration of the test). Insertion order is descending
+  // (p19, p18, …, p00): bounding the first MAX_QUERY_PARAM_NAMES encountered THEN sorting yields
+  // the highest-numbered names in ascending order; sorting the full set first and slicing would
+  // instead yield the lowest-numbered ones. The two outcomes are disjoint, so the returned content
+  // is direct, self-contained proof of which happened.
+  it("caps the collected set before sorting, regardless of how many the client sends", () => {
+    const total = MAX_QUERY_PARAM_NAMES + 4;
+    const names = Array.from(
+      { length: total },
+      (_, i) => `p${String(total - 1 - i).padStart(2, "0")}`,
+    );
+    const url = new URL(`http://${UI_HOST}/api/health?${names.map((n) => `${n}=1`).join("&")}`);
+    const context: RequestLogContext = {};
 
-    expect(event.extra?.queryParamNames).toHaveLength(16);
+    computeQueryParamFields(url, context);
+
+    const expectedKept = Array.from(
+      { length: MAX_QUERY_PARAM_NAMES },
+      (_, i) => `p${String(i + 4).padStart(2, "0")}`,
+    );
+    expect(context.queryParamNames).toEqual(expectedKept);
+    expect(context.queryParamDroppedCount).toBe(4);
+  });
+
+  // Companion end-to-end check: the same bound-before-sort behaviour observed through the real
+  // dispatch path (route match, host check, `writeJson`), not just the unit-level function call
+  // above — proves the wiring between `handle()` and `computeQueryParamFields` is intact.
+  it("surfaces the capped, sorted names on the real activity-log line for an oversized query string", async () => {
+    const sink = await startWithActivityLog();
+    const total = MAX_QUERY_PARAM_NAMES + 4;
+    const names = Array.from(
+      { length: total },
+      (_, i) => `p${String(total - 1 - i).padStart(2, "0")}`,
+    );
+    const query = names.map((n) => `${n}=1`).join("&");
+
+    await fetchRaw(`/api/health?${query}`);
+    const event = await waitForActivityLogEvent(sink);
+
+    expect(event.extra?.queryParamNames).toHaveLength(MAX_QUERY_PARAM_NAMES);
     expect(event.extra?.queryParamDroppedCount).toBe(4);
-    expect(queryNameSorts.length).toBeGreaterThan(0);
-    for (const receiver of queryNameSorts) {
-      expect(receiver.length).toBeLessThanOrEqual(16);
-    }
   });
 
   // #2902 audit finding 1: computeQueryParamFields was called unconditionally before the

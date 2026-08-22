@@ -50,6 +50,14 @@ function writeToBrowserConsole(message: string): void {
   if (typeof console !== "undefined" && typeof console.warn === "function") console.warn(message);
 }
 
+// Fixed, bounded, and content-free by construction: it never repeats the original diagnostic
+// message or any error detail, so it cannot itself become a place that leaks something the sink
+// already redacted. Written with `writeToBrowserConsole` directly (never `reportClientDiagnostic`)
+// — going back through the sink would re-enter `fanOutClientDiagnostic` and, on a persistently
+// failing transport, retry the same failing POST on every diagnostic: a reporting loop.
+const DIAGNOSTIC_DELIVERY_FAILURE_NOTICE =
+  "[keiko] diagnostic delivery to the server failed; the diagnostic above (if any) was not recorded server-side.";
+
 // Mirrors the server's SAFE_CORRELATION_ID predicate (packages/keiko-server/src/correlation.ts).
 // keiko-ui may only depend on the server through the shared contract types (AGENTS.md §4), never on
 // a server module directly, so this file re-derives the same alphabet+length shape as its own,
@@ -156,8 +164,11 @@ export function resetClientDiagnosticPostStateForTests(): void {
 // rejected fetch (or a non-2xx `ApiError` `bffFetchJson` throws) reach back into
 // `reportClientDiagnostic`'s caller — the same best-effort discipline `writeToBrowserConsole`
 // already has, just with a `.catch` standing in for that function's `typeof` guards. A failure is
-// counted, never logged to console (AGENTS.md §6: this module is the one sanctioned console site,
-// and re-entering it from a diagnostics-transport failure risks a loop under a flapping connection).
+// counted (for tests) AND surfaced to the console directly via the fixed, content-free
+// `DIAGNOSTIC_DELIVERY_FAILURE_NOTICE` (AGENTS.md §7: "errors must surface with enough context to
+// diagnose" — silently dropping a failed POST left a developer with no way to tell the server never
+// received the diagnostic). This never calls back through `reportClientDiagnostic`, which would
+// re-enter `fanOutClientDiagnostic` and risk a loop under a persistently failing transport.
 function postClientDiagnosticToServer(message: string, meta?: ClientDiagnosticMeta): void {
   if (!admittedByClientPostRateLimit(Date.now())) {
     postThrottledCount += 1;
@@ -171,9 +182,11 @@ function postClientDiagnosticToServer(message: string, meta?: ClientDiagnosticMe
       keepalive: true,
     }).catch(() => {
       postFailureCount += 1;
+      writeToBrowserConsole(DIAGNOSTIC_DELIVERY_FAILURE_NOTICE);
     });
   } catch {
     postFailureCount += 1;
+    writeToBrowserConsole(DIAGNOSTIC_DELIVERY_FAILURE_NOTICE);
   }
 }
 

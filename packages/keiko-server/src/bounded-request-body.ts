@@ -118,15 +118,24 @@ function safeContentTypeHeader(req: IncomingMessage): ContentTypeHeaderValue {
   return headers.headers?.["content-type"];
 }
 
+// Every media type this server's body readers are ever legitimately reached with: `server.ts`'s
+// `isJsonRequest` gate already rejects any state-changing request whose Content-Type is not
+// exactly `application/json` with a 415 before a handler can read its body. Allowlisted rather
+// than left open, because stripping `; charset=...` parameters does not make an arbitrary
+// subtype safe to log — a client fully controls the whole header and can place sensitive data in
+// a syntactically valid subtype (e.g. `Content-Type: application/<secret>`) that never reaches
+// this gate at all.
+const KNOWN_REQUEST_MEDIA_TYPES = new Set<string>(["application/json"]);
+
 // Reduces a `Content-Type` header to its media type, discarding parameters (`; charset=utf-8`,
-// `; boundary=...`) that can carry caller-chosen, unbounded text. Mirrors `isJsonRequest`'s
-// reduction in `server.ts`. A media type is left readable by `log-redaction.ts`'s deep-path guard
-// on purpose (it is at most one `/`, never three-plus path segments), so no further redaction is
-// needed once it is isolated this way.
+// `; boundary=...`) that can carry caller-chosen, unbounded text, then maps it through the
+// allowlist above. A subtype this reader has no reason to ever see collapses to the fixed label
+// `"other"` rather than being retained verbatim in the diagnostic sink.
 function mediaTypeOf(header: ContentTypeHeaderValue): string {
   const value = typeof header === "string" ? header : header?.[0];
   const mediaType = value?.split(";", 1)[0]?.trim().toLowerCase();
-  return mediaType === undefined || mediaType.length === 0 ? "unspecified" : mediaType;
+  if (mediaType === undefined || mediaType.length === 0) return "unspecified";
+  return KNOWN_REQUEST_MEDIA_TYPES.has(mediaType) ? mediaType : "other";
 }
 
 // The one success line this reader emits, at debug: per-request volume makes it unfit for info,

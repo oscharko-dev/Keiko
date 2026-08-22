@@ -71,6 +71,27 @@ describe("isClientDiagnosticIngestRequest", () => {
     );
   });
 
+  // `Date.parse` silently normalizes a calendar-invalid instant instead of rejecting it (e.g.
+  // `2026-02-30T10:00:00.000Z` becomes `2026-03-02T10:00:00.000Z`), so a shape-only regex plus
+  // `!Number.isNaN(Date.parse(...))` accepts a date that never happened on the calendar.
+  it("rejects a calendar-invalid clientTs that Date.parse would silently normalize", () => {
+    expect(
+      isClientDiagnosticIngestRequest({ ...validRequest(), clientTs: "2026-02-30T10:00:00.000Z" }),
+    ).toBe(false);
+    // April has 30 days; the 31st does not exist.
+    expect(
+      isClientDiagnosticIngestRequest({ ...validRequest(), clientTs: "2026-04-31T00:00:00Z" }),
+    ).toBe(false);
+    // Hour 24 does not exist as a clock value.
+    expect(
+      isClientDiagnosticIngestRequest({ ...validRequest(), clientTs: "2026-08-21T24:00:00Z" }),
+    ).toBe(false);
+    // The last valid day of February in a non-leap year.
+    expect(
+      isClientDiagnosticIngestRequest({ ...validRequest(), clientTs: "2027-02-28T00:00:00Z" }),
+    ).toBe(true);
+  });
+
   it("rejects a readyState outside the closed 0|1|2 vocabulary", () => {
     expect(isClientDiagnosticIngestRequest({ ...validRequest(), readyState: 3 })).toBe(false);
     expect(isClientDiagnosticIngestRequest({ ...validRequest(), readyState: "1" })).toBe(false);

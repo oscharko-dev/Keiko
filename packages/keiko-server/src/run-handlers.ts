@@ -423,7 +423,7 @@ export function handleRunEvents(ctx: RouteContext, deps: UiHandlerDeps): Handler
   if (!agentRecordSessionMatches(record, ctx, deps)) {
     return { status: 404, body: errorBody("NOT_FOUND", "Unknown run.") };
   }
-  openSseStream(ctx.res, record, lastEventId(ctx.req), deps.redactor);
+  openSseStream(ctx.res, record, lastEventId(ctx.req), deps.redactor, ctx.correlationId);
   ctx.req.on("close", () => {
     ctx.res.end();
   });
@@ -486,7 +486,7 @@ function aggregateRunWriter(
   return {
     write: (event: StreamEvent): boolean => {
       if (!agentRecordSessionMatches(record, ctx, deps)) return false;
-      const accepted = writeMessageEvent(ctx.res, event, deps.redactor);
+      const accepted = writeMessageEvent(ctx.res, event, deps.redactor, ctx.correlationId);
       if (!accepted) {
         markSseStreamBackpressureKilled(ctx.res);
         ctx.res.destroy();
@@ -515,12 +515,13 @@ function openSseStream(
   record: RunRecord,
   afterSeq: number,
   redactor: UiHandlerDeps["redactor"],
+  correlationId?: string,
 ): void {
   res.writeHead(200, SSE_HEADERS);
   startSseHeartbeat(res);
   const writer: SseWriter = {
     write: (event: StreamEvent): boolean => {
-      const accepted = writeMessageEvent(res, event, redactor);
+      const accepted = writeMessageEvent(res, event, redactor, correlationId);
       if (!accepted) {
         markSseStreamBackpressureKilled(res);
         res.destroy();

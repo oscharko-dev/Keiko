@@ -9,7 +9,7 @@
 // JSON RouteResult BEFORE any SSE header so the client can fall back to the buffered route.
 
 import { SSE_HEADERS, startSseHeartbeat } from "./sse.js";
-import { writeOrDestroy } from "./sse-write.js";
+import { recordSseStreamFrame, writeOrDestroy } from "./sse-write.js";
 import {
   STREAMING,
   errorBody,
@@ -180,8 +180,17 @@ async function streamConversation(
 // A backpressure kill destroys the socket; writing another SSE frame to it is a no-op at best and can
 // throw on some transports. Guard terminal writes so we never write-after-destroy nor relabel a
 // backpressure termination as a user cancel.
+//
+// Every terminal frame is recorded via `recordSseStreamFrame` BEFORE the write (#2902 audit finding
+// 0 follow-up), not only the per-token `writeOrDestroy` calls inside `streamConversation`. Without
+// this, a stream that errors or is cancelled before its first token (e.g. the model throws on the
+// very first `callStream` iteration) never calls `recordSseStreamFrame` at all: the per-stream state
+// — and the `res.on("close", …)` listener that emits the terminal `sse.stream.closed` line — is only
+// created lazily on the first recorded frame, so such a stream produced no closed line and no
+// correlationId, silently disappearing from the operator trail.
 function writeTerminalFrame(ctx: RouteContext, frame: string): void {
   if (ctx.res.writableEnded || ctx.res.destroyed) return;
+  recordSseStreamFrame(ctx.res, frame, ctx.correlationId);
   ctx.res.write(frame);
 }
 

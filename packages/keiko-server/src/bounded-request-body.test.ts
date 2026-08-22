@@ -344,6 +344,27 @@ describe("bounded request body activity log", () => {
     ]);
   });
 
+  it("collapses an arbitrary Content-Type subtype to the fixed 'other' label instead of logging it", async () => {
+    const sink = captureServerLog("debug");
+    const stream = new PassThrough();
+    const req = asRequest(stream);
+    Object.defineProperty(req, "headers", {
+      configurable: true,
+      value: { "content-type": "application/x-secret-token-abc123; charset=utf-8" },
+    });
+
+    await expect(
+      (async (): Promise<string> => {
+        const outcome = readBoundedRequestBody(req, 128_000, undefined, "req-hostile-ct");
+        stream.end(Buffer.from("hi"));
+        return outcome;
+      })(),
+    ).resolves.toBe("hi");
+
+    expect(sink.events[0]?.extra).toEqual({ contentType: "other", receivedBytes: 2 });
+    expect(JSON.stringify(sink.events)).not.toContain("secret-token-abc123");
+  });
+
   it("falls back to the closed 'unspecified' label when no Content-Type header was sent", async () => {
     const sink = captureServerLog("debug");
     const req = asRequest(Readable.from([Buffer.from("hi")]));
@@ -424,5 +445,48 @@ describe("readJsonRequestBody", () => {
     const result = await readJsonRequestBody(req, 128_000);
 
     expect(result).toEqual({});
+  });
+
+  // `JSON.parse` never triggers a prototype-setter for an own `"__proto__"` key — it defines it
+  // as a plain, enumerable, OWN data property, exactly like any other key. The parsed object's
+  // prototype stays `Object.prototype`, so this is not prototype pollution and the caller reads
+  // back exactly the object it sent, with `__proto__` as an ordinary field name.
+  it("returns a hostile '__proto__' key as an ordinary own property, not a polluted prototype", async () => {
+    const req = asRequest(Readable.from([Buffer.from('{"__proto__":{"polluted":true}}')]));
+
+    const result = await readJsonRequestBody(req, 128_000);
+
+    // Object.prototype itself must stay clean: an unrelated, freshly-created object never picks
+    // up "polluted" through its prototype chain.
+    expect(({} as { polluted?: unknown }).polluted).toBeUndefined();
+    expect(Object.getPrototypeOf(result)).toBe(Object.prototype);
+    expect(Object.prototype.hasOwnProperty.call(result, "__proto__")).toBe(true);
+    expect((result as { __proto__: unknown }).__proto__).toEqual({ polluted: true });
+  });
+
+  it("returns 400 BAD_REQUEST for valid JSON that is not an object (null)", async () => {
+    const req = asRequest(Readable.from([Buffer.from("null")]));
+
+    const result = await readJsonRequestBody(req, 128_000);
+
+    expect(result).toEqual({
+      status: 400,
+      body: { error: { code: "BAD_REQUEST", message: "Request body must be a JSON object." } },
+    });
+  });
+
+  it.each([
+    ["a number", "42"],
+    ["a string", '"hello"'],
+    ["a boolean", "true"],
+  ])("returns 400 BAD_REQUEST for valid JSON that is not an object (%s)", async (_label, raw) => {
+    const req = asRequest(Readable.from([Buffer.from(raw)]));
+
+    const result = await readJsonRequestBody(req, 128_000);
+
+    expect(result).toEqual({
+      status: 400,
+      body: { error: { code: "BAD_REQUEST", message: "Request body must be a JSON object." } },
+    });
   });
 });

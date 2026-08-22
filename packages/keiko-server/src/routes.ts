@@ -179,6 +179,8 @@ import {
   handleFilesTree,
 } from "./files.js";
 import {
+  GIT_DIFF_ROUTE_TEMPLATE,
+  GIT_STRUCTURED_DIFF_ROUTE_TEMPLATE,
   handleGitBlame,
   handleGitBranches,
   handleGitDiff,
@@ -597,12 +599,12 @@ export const API_ROUTES: readonly RouteDefinition[] = [
   },
   {
     method: "GET",
-    pattern: "/api/git/diff",
+    pattern: GIT_DIFF_ROUTE_TEMPLATE,
     handler: (ctx, deps) => handleGitDiff(ctx, deps, deps.gitRouteOptions),
   },
   {
     method: "GET",
-    pattern: "/api/git/diff/structured",
+    pattern: GIT_STRUCTURED_DIFF_ROUTE_TEMPLATE,
     handler: (ctx, deps) => handleGitStructuredDiff(ctx, deps, deps.gitRouteOptions),
   },
   {

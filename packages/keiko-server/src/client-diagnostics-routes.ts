@@ -56,11 +56,18 @@ const MAX_CLIENT_DIAGNOSTIC_BODY_BYTES = 4_096;
 // page. `minIntervalMs: 0` disables the limiter's own burst/cooldown gate, so only the sliding
 // window cap below applies.
 const CLIENT_DIAGNOSTIC_RATE_LIMIT_KEY = "client-diagnostics";
-let rateLimiter: InlineCompletionRateLimiter = createInlineCompletionRateLimiter({
+
+// One declaration for production and the test reset below — duplicating these three literals let
+// them drift, so the test reset silently exercised a limiter with different bounds than production.
+const CLIENT_DIAGNOSTIC_RATE_LIMIT_CONFIG = {
   minIntervalMs: 0,
   maxPerWindow: 60,
   windowMs: 60_000,
-});
+} as const;
+
+let rateLimiter: InlineCompletionRateLimiter = createInlineCompletionRateLimiter(
+  CLIENT_DIAGNOSTIC_RATE_LIMIT_CONFIG,
+);
 
 const DROP_NOTICE_WINDOW_MS = 60_000;
 
@@ -73,11 +80,7 @@ let dropNotice: DropNoticeState = { lastAt: null, suppressed: 0 };
 
 /** Test-only: puts the shared rate limiter and drop-notice counter back to a clean start. */
 export function resetClientDiagnosticsIngestStateForTests(): void {
-  rateLimiter = createInlineCompletionRateLimiter({
-    minIntervalMs: 0,
-    maxPerWindow: 60,
-    windowMs: 60_000,
-  });
+  rateLimiter = createInlineCompletionRateLimiter(CLIENT_DIAGNOSTIC_RATE_LIMIT_CONFIG);
   dropNotice = { lastAt: null, suppressed: 0 };
 }
 
