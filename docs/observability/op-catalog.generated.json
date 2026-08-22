@@ -627,6 +627,12 @@
       "package": "keiko-server"
     },
     {
+      "op": "chat.turn.started",
+      "category": "gateway",
+      "site": "packages/keiko-server/src/chat-handlers.ts:1687",
+      "package": "keiko-server"
+    },
+    {
       "op": "embedding.memory.failed",
       "category": "embedding",
       "site": "packages/keiko-server/src/memory-embedding.ts:174",

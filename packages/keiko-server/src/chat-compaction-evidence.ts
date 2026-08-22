@@ -11,6 +11,7 @@ import { resolveCostClass } from "@oscharko-dev/keiko-model-gateway";
 import { sha256Hex } from "@oscharko-dev/keiko-security";
 import type { ContextCompactionRecord } from "@oscharko-dev/keiko-contracts";
 import { randomUUID } from "node:crypto";
+import { isValidCorrelationId } from "./correlation.js";
 import type { UiHandlerDeps } from "./deps.js";
 import { currentAuditRedactString, currentRedactionSecrets } from "./deps.js";
 import {
@@ -49,11 +50,16 @@ export function persistChatCompactionEvidence(
     return;
   }
   const record = input.compaction;
+  // Computed before the try so a persistence failure can still report under it (ADR-0173 D5 /
+  // g12): this run's own runId already ties the diagnostic back to the SAME compaction evidence
+  // attempt an operator would otherwise have to guess at from a disconnected mint.
+  let runId: string | undefined;
   try {
     const chatIdHash = sha256Hex(input.chatId);
+    runId = compactionRunId(chatIdHash, input.messageCount);
     persistCompactionEvidence(
       {
-        runId: compactionRunId(chatIdHash, input.messageCount),
+        runId,
         modelId: input.modelId,
         records: [record],
         startedAt: input.startedAt,
@@ -75,10 +81,11 @@ export function persistChatCompactionEvidence(
     // Best-effort stays best-effort — the send is unaffected — but the failure is no longer a
     // `console.warn` carrying the raw error object on a channel production never overrode. It goes to
     // the server's single redacted diagnostic sink so a compaction-evidence gap is observable.
+    const correlationId = runId !== undefined && isValidCorrelationId(runId) ? runId : randomUUID();
     emitServerDiagnostic(
       deps.diagnostics,
       serverDiagnosticFromError({
-        correlationId: randomUUID(),
+        correlationId,
         operation: "chat.compaction.evidence",
         source: "chat-compaction-evidence",
         error,

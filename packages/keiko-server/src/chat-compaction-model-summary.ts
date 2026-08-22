@@ -23,6 +23,7 @@ import {
   persistChatCompactionEvidence,
   type ChatCompactionEvidenceInput,
 } from "./chat-compaction-evidence.js";
+import { emitServerDiagnostic, serverDiagnosticFromError } from "./diagnostics-log.js";
 
 const MODEL_SUMMARY_TIMEOUT_MS = 15_000;
 const MAX_SOURCE_TURNS = 16;
@@ -154,7 +155,7 @@ export async function enrichChatCompactionWithModelSummary(
     const modelSummary =
       model === undefined
         ? failureModelSummary(record, input.modelId, "unavailable", "model-unavailable")
-        : await buildModelSummary(model, deps.redactor, input, record, prompt, responseMode);
+        : await buildModelSummary(model, deps, input, record, prompt, responseMode);
     if (modelSummary !== undefined) {
       persistChatCompactionEvidence(deps, {
         ...input,
@@ -162,22 +163,31 @@ export async function enrichChatCompactionWithModelSummary(
       });
     }
   } catch (error) {
-    logSummaryFailure(error);
+    logSummaryFailure(deps, input.chatId, error);
   }
 }
 
 async function buildModelSummary(
   model: ModelPort,
-  redactor: Redactor,
+  deps: UiHandlerDeps,
   input: ChatCompactionModelSummaryInput,
   record: ContextCompactionRecord,
   prompt: string,
   responseMode: ModelSummaryResponseMode,
 ): Promise<ContextCompactionModelSummary | undefined> {
-  const result = await callModelWithTimeout(model, input.modelId, prompt, responseMode);
+  // Background best-effort summarization has no live request correlation id in scope; the chat's
+  // own id is the stable job key an operator greps by, mirroring the `jobId`-as-correlationId
+  // convention background jobs elsewhere in the BFF already use (ADR-0173 D5).
+  const result = await callModelWithTimeout(
+    model,
+    input.modelId,
+    prompt,
+    responseMode,
+    input.chatId,
+  );
   return result.kind === "response"
-    ? modelSummaryFromResponse(record, input.modelId, result.response, redactor, responseMode)
-    : modelSummaryFromCallFailure(record, input.modelId, result);
+    ? modelSummaryFromResponse(record, input.modelId, result.response, deps.redactor, responseMode)
+    : modelSummaryFromCallFailure(deps, input.chatId, record, input.modelId, result);
 }
 
 function modelSummaryFromResponse(
@@ -222,6 +232,8 @@ function modelSummaryFromPayload(
 }
 
 function modelSummaryFromCallFailure(
+  deps: UiHandlerDeps,
+  correlationId: string,
   record: ContextCompactionRecord,
   modelId: string,
   result: Exclude<ModelSummaryCallResult, { readonly kind: "response" }>,
@@ -229,7 +241,7 @@ function modelSummaryFromCallFailure(
   if (result.kind === "timed-out") {
     return failureModelSummary(record, modelId, "timed-out", "timed-out");
   }
-  logSummaryFailure(result.error);
+  logSummaryFailure(deps, correlationId, result.error);
   return failureModelSummary(record, modelId, "unavailable", "model-unavailable");
 }
 
@@ -238,6 +250,7 @@ async function callModelWithTimeout(
   modelId: string,
   prompt: string,
   responseMode: ModelSummaryResponseMode,
+  correlationId: string,
 ): Promise<ModelSummaryCallResult> {
   const controller = new AbortController();
   let timer: ReturnType<typeof setTimeout> | undefined;
@@ -263,6 +276,7 @@ async function callModelWithTimeout(
           ...(responseMode === "structured"
             ? { responseFormat: MODEL_SUMMARY_RESPONSE_FORMAT }
             : {}),
+          logContext: { correlationId },
         },
         controller.signal,
       ),
@@ -663,10 +677,19 @@ function failureModelSummary(
   });
 }
 
-function logSummaryFailure(error: unknown): void {
-  // eslint-disable-next-line no-console
-  console.warn(
-    "chat-compaction-model-summary: enrichment failed (best-effort, send unaffected)",
-    error,
+// Replaces a bare `console.warn` (ADR-0173 D5 g25): a best-effort background enrichment failure
+// (send unaffected — the compaction record itself already persisted) is still an operator-visible
+// event, not a silent one. `correlationId` is the chat id (see `buildModelSummary` above): this
+// background job has no live request id in scope, so the chat's own id is the stable join key.
+function logSummaryFailure(deps: UiHandlerDeps, correlationId: string, error: unknown): void {
+  emitServerDiagnostic(
+    deps.diagnostics,
+    serverDiagnosticFromError({
+      correlationId,
+      operation: "chat.compaction.summary",
+      source: "chat.compaction.model-summary",
+      error,
+      redact: (message) => String(deps.redactor(message)),
+    }),
   );
 }

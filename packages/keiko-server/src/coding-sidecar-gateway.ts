@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import {
   resolveCodingSafeSidecarGatewayProfile,
   type Gateway,
+  type GatewayCallRequest,
   type GatewayConfig,
   type GatewayRequest,
   type GatewayStreamChunk,
@@ -24,6 +25,7 @@ import {
 } from "./deps.js";
 import { OPENCODE_RUNTIME_MODEL_ALIAS } from "./coding-runtime/opencodeLaunchProfile.js";
 import { hasExactOpenCodeVisibleToolContract } from "./coding-runtime/opencodeToolSchemas.js";
+import { UNKNOWN_CORRELATION_ID } from "./correlation.js";
 import { emitServerDiagnostic, serverDiagnosticFromError } from "./diagnostics-log.js";
 import { readJsonObject } from "./files.js";
 import { STREAMING, errorBody, type RouteContext, type RouteResult } from "./routes.js";
@@ -356,7 +358,8 @@ function buildChatRequest(
   modelAlias: string,
   cancellationSignal: AbortSignal,
   maxOutputTokens: number,
-): GatewayRequest {
+  correlationId: string | undefined,
+): GatewayCallRequest {
   return {
     modelId: modelAlias,
     messages: parsed.messages,
@@ -365,6 +368,7 @@ function buildChatRequest(
     ...(parsed.top_p === undefined ? {} : { topP: parsed.top_p }),
     cancellationSignal,
     maxOutputTokens,
+    logContext: { correlationId },
   };
 }
 
@@ -642,7 +646,7 @@ function emitGatewayFailureDiagnostic(
   emitServerDiagnostic(
     deps.diagnostics,
     serverDiagnosticFromError({
-      correlationId: ctx.correlationId ?? "unknown",
+      correlationId: ctx.correlationId ?? UNKNOWN_CORRELATION_ID,
       operation: CODING_SIDECAR_GATEWAY_ROUTE,
       source: "coding-sidecar-gateway.chat",
       error,
@@ -668,7 +672,7 @@ function emitGatewayStreamFailureDiagnostic(
   emitServerDiagnostic(
     deps.diagnostics,
     serverDiagnosticFromError({
-      correlationId: ctx.correlationId ?? "unknown",
+      correlationId: ctx.correlationId ?? UNKNOWN_CORRELATION_ID,
       operation: CODING_SIDECAR_GATEWAY_ROUTE,
       source: "coding-sidecar-gateway.stream",
       error,
@@ -742,7 +746,7 @@ function emitGatewayToolContractDiagnostic(
   if (tools === undefined) code = "CODING_GATEWAY_TOOL_CONTRACT_MISSING";
   else if (tools.length === 0) code = "CODING_GATEWAY_TOOL_CONTRACT_EMPTY";
   emitServerDiagnostic(deps.diagnostics, {
-    correlationId: ctx.correlationId ?? "unknown",
+    correlationId: ctx.correlationId ?? UNKNOWN_CORRELATION_ID,
     timestamp: new Date(Date.now()).toISOString(),
     operation: CODING_SIDECAR_GATEWAY_ROUTE,
     source: "coding-sidecar-gateway.tool-contract",
@@ -781,7 +785,7 @@ function noteToolAdoptionGap(
   if (!hasToolAdoptionGapFingerprint(messages)) return;
   if (gatewayReadinessRegistry(deps)?.noteAdoptionGapDiagnosed(runId) === false) return;
   emitServerDiagnostic(deps.diagnostics, {
-    correlationId: ctx.correlationId ?? "unknown",
+    correlationId: ctx.correlationId ?? UNKNOWN_CORRELATION_ID,
     timestamp: new Date(Date.now()).toISOString(),
     operation: CODING_SIDECAR_GATEWAY_ROUTE,
     source: "coding-sidecar-gateway.tool-adoption",
@@ -914,7 +918,13 @@ async function executeGatewayChat(
 ): Promise<RouteResult | typeof STREAMING> {
   const { modelAlias, maxOutputTokens, upstreamStreamingSupported } = delivery;
   const cancellation = gatewayRequestCancellation(ctx, deps, binding.config, modelAlias, runId);
-  const request = buildChatRequest(parsed, modelAlias, cancellation.signal, maxOutputTokens);
+  const request = buildChatRequest(
+    parsed,
+    modelAlias,
+    cancellation.signal,
+    maxOutputTokens,
+    ctx.correlationId,
+  );
   let bufferedStream: BufferedOpenAiStreamSession | undefined;
   try {
     if (parsed.stream && upstreamStreamingSupported) {

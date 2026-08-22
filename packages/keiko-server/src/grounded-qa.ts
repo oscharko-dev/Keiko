@@ -140,6 +140,7 @@ import {
   evidenceRetentionDiagnosticObserver,
   emitServerDiagnostic,
 } from "./diagnostics-log.js";
+import { emitGatewayErrorDiagnostic } from "./gateway-error-diagnostic.js";
 import {
   buildAnswerCitations as projectAnswerCitations,
   buildPackCitations,
@@ -201,19 +202,39 @@ export function gatewayErrorStatus(error: GatewayError): number {
   return 502;
 }
 
-function gatewayErrorResult(error: GatewayError, deps: UiHandlerDeps): RouteResult {
+// ADR-0173 D5 g25/g27 — mirrors the buffered desktop chat path (`chat-handlers.ts`): a GatewayError
+// mapped straight to an HTTP response used to leave no trace in the operator diagnostic sink, unlike
+// the SSE chat path, which already routed the same error class through it. A cancellation is the
+// caller's own choice, not a failure, so it is excluded — matching the buffered path's convention
+// of never diagnosing an intentional cancel.
+function gatewayErrorResult(
+  error: GatewayError,
+  deps: UiHandlerDeps,
+  correlationId: string | undefined,
+): RouteResult {
   if (error instanceof CancelledError) {
     return { status: 499, body: errorBody(error.code, "Grounded request was cancelled.") };
   }
+  emitGatewayErrorDiagnostic(
+    deps,
+    error,
+    correlationId,
+    "POST /api/chats/messages/grounded",
+    "grounded.qa",
+  );
   const status = gatewayErrorStatus(error);
   const message = redact(error.message, currentRedactionSecrets(deps));
   return { status, body: errorBody(error.code, message) };
 }
 
-export function mappedGatewayError(error: unknown, deps: UiHandlerDeps): RouteResult | undefined {
+export function mappedGatewayError(
+  error: unknown,
+  deps: UiHandlerDeps,
+  correlationId?: string,
+): RouteResult | undefined {
   return (
     mappedConversationReadinessError(error) ??
-    (error instanceof GatewayError ? gatewayErrorResult(error, deps) : undefined)
+    (error instanceof GatewayError ? gatewayErrorResult(error, deps, correlationId) : undefined)
   );
 }
 
@@ -864,6 +885,7 @@ function createGatewayAnswerer(
   redactor: Redactor,
   signal: AbortSignal,
   modelInputTokensMax: number | undefined,
+  correlationId: string | undefined,
 ): GroundedAnswerer {
   return {
     answer: async (question, pack): Promise<GroundedAnswerResult> => {
@@ -874,6 +896,7 @@ function createGatewayAnswerer(
           modelId,
           messages: buildGroundedGatewayMessages(question, pack, redactor, promptOptions),
           stream: false,
+          logContext: { correlationId },
         },
         signal,
       );
@@ -905,12 +928,70 @@ function resolveGroundedAnswerModel(
   return withConversationReadinessAdmission(resolvedModel, modelId, readinessAdmission, deps);
 }
 
+interface DefaultRunnerContext {
+  readonly deps: UiHandlerDeps;
+  readonly modelId: string;
+  readonly signal: AbortSignal;
+  readonly contextProfile: UiHandlerDeps["contextProfile"];
+  readonly model: ModelPort;
+  readonly modelInputTokensMax: number | undefined;
+  readonly entailmentStage: EntailmentStage | undefined;
+  readonly correlationId: string | undefined;
+}
+
+// Split out of defaultRunner to keep it within the line budget: the actual GroundedRunner closure
+// invoked once per exploration input.
+function runDefaultGroundedExploration(
+  runnerCtx: DefaultRunnerContext,
+  input: OrchestratorInput,
+): Promise<OrchestratorOutput> {
+  const { deps, modelId, signal, contextProfile, model, modelInputTokensMax, entailmentStage } =
+    runnerCtx;
+  const nowMs = Date.now;
+  const budgetedInput =
+    input.budget === undefined
+      ? { ...input, budget: modelWindowAwareBudget(deps, modelId) }
+      : input;
+  const contextPackReranker = configuredContextPackRerankerFor(deps, budgetedInput.query, signal);
+  const semanticLease = configuredRepoSemanticSearchProviderLeaseFor(
+    deps,
+    signal,
+    budgetedInput.workspaceRoot,
+  );
+  return runGroundedExploration(budgetedInput, {
+    answerer: createGatewayAnswerer(
+      model,
+      modelId,
+      deps.redactor,
+      signal,
+      modelInputTokensMax,
+      runnerCtx.correlationId,
+    ),
+    nowMs,
+    signal,
+    microIndex: microIndexForGroundedScope(budgetedInput.scope, nowMs),
+    workspaceIndexForRoot: deps.workspaceIndexForRoot,
+    ...(contextPackReranker === undefined ? {} : { contextPackReranker }),
+    ...(semanticLease.provider === undefined
+      ? {}
+      : { repoSemanticSearchProvider: semanticLease.provider }),
+    ...(entailmentStage === undefined ? {} : { entailmentStage }),
+    // ADR-0055 D1/D5 (PR4-W1): thread the provisioned profile so the diagnostics observer fires
+    // on the assembled pack. exactOptionalPropertyTypes — omit the key entirely when absent so
+    // the legacy no-profile path stays byte-identical (observer guard never sees a key).
+    ...(contextProfile === undefined ? {} : { contextProfile }),
+  }).finally(() => {
+    semanticLease.close();
+  });
+}
+
 function defaultRunner(
   deps: UiHandlerDeps,
   modelId: string,
   readinessAdmission: ConversationReadinessAdmission,
   signal: AbortSignal,
   contextProfile: UiHandlerDeps["contextProfile"],
+  correlationId: string | undefined,
 ): GroundedRunner | RouteResult {
   const model = resolveGroundedAnswerModel(deps, modelId, readinessAdmission);
   if ("status" in model) return model;
@@ -925,37 +1006,18 @@ function defaultRunner(
     { diagnostics: deps.diagnostics },
     signal,
   );
-  return (input: OrchestratorInput): Promise<OrchestratorOutput> => {
-    const nowMs = Date.now;
-    const budgetedInput =
-      input.budget === undefined
-        ? { ...input, budget: modelWindowAwareBudget(deps, modelId) }
-        : input;
-    const contextPackReranker = configuredContextPackRerankerFor(deps, budgetedInput.query, signal);
-    const semanticLease = configuredRepoSemanticSearchProviderLeaseFor(
-      deps,
-      signal,
-      budgetedInput.workspaceRoot,
-    );
-    return runGroundedExploration(budgetedInput, {
-      answerer: createGatewayAnswerer(model, modelId, deps.redactor, signal, modelInputTokensMax),
-      nowMs,
-      signal,
-      microIndex: microIndexForGroundedScope(budgetedInput.scope, nowMs),
-      workspaceIndexForRoot: deps.workspaceIndexForRoot,
-      ...(contextPackReranker === undefined ? {} : { contextPackReranker }),
-      ...(semanticLease.provider === undefined
-        ? {}
-        : { repoSemanticSearchProvider: semanticLease.provider }),
-      ...(entailmentStage === undefined ? {} : { entailmentStage }),
-      // ADR-0055 D1/D5 (PR4-W1): thread the provisioned profile so the diagnostics observer fires
-      // on the assembled pack. exactOptionalPropertyTypes — omit the key entirely when absent so
-      // the legacy no-profile path stays byte-identical (observer guard never sees a key).
-      ...(contextProfile === undefined ? {} : { contextProfile }),
-    }).finally(() => {
-      semanticLease.close();
-    });
+  const runnerCtx: DefaultRunnerContext = {
+    deps,
+    modelId,
+    signal,
+    contextProfile,
+    model,
+    modelInputTokensMax,
+    entailmentStage,
+    correlationId,
   };
+  return (input: OrchestratorInput): Promise<OrchestratorOutput> =>
+    runDefaultGroundedExploration(runnerCtx, input);
 }
 
 // ─── Citation projection ──────────────────────────────────────────────────────
@@ -1053,6 +1115,9 @@ interface AskWorkerCtx {
   readonly deps: UiHandlerDeps;
   readonly runner: GroundedRunner;
   readonly signal: AbortSignal;
+  // ADR-0173 D5 — carried from PreparedGroundedAsk.correlationId so a GatewayError surfacing from
+  // the runner (or a late cancellation) reaches its operator diagnostic joined to the request.
+  readonly correlationId: string | undefined;
 }
 
 interface PreparedGroundedAsk {
@@ -1067,6 +1132,10 @@ interface PreparedGroundedAsk {
   readonly memory?: GroundedMemoryPreparation | undefined;
   readonly modelId?: string | undefined;
   readonly readinessAdmission?: ConversationReadinessAdmission | undefined;
+  // ADR-0173 D5: the request-scoped correlation id (RouteContext.correlationId), carried through
+  // every `{ ...prepared, ... }` preparation stage so the model call at the bottom of the
+  // orchestrator pipeline can stamp it into GatewayCallRequest.logContext.
+  readonly correlationId?: string | undefined;
 }
 
 interface GroundedMemoryPreparation {
@@ -1289,7 +1358,7 @@ async function runAsk(workerCtx: AskWorkerCtx): Promise<RouteResult> {
   if (!isValidGroundedPack(output.pack)) {
     return internalError("Grounded answer context pack failed validation.");
   }
-  const cancelResult = ensureRouteNotCancelled(workerCtx.signal, deps);
+  const cancelResult = ensureRouteNotCancelled(workerCtx.signal, deps, workerCtx.correlationId);
   if (cancelResult !== undefined) return cancelResult;
   return finalizeGroundedAnswer(workerCtx, output);
 }
@@ -1368,12 +1437,13 @@ function isRouteResult(value: unknown): value is RouteResult {
 function ensureRouteNotCancelled(
   signal: AbortSignal,
   deps: UiHandlerDeps,
+  correlationId: string | undefined,
 ): RouteResult | undefined {
   try {
     ensureNotCancelled(signal);
     return undefined;
   } catch (error) {
-    const gatewayResult = mappedGatewayError(error, deps);
+    const gatewayResult = mappedGatewayError(error, deps, correlationId);
     if (gatewayResult !== undefined) return gatewayResult;
     throw error;
   }
@@ -1404,7 +1474,7 @@ async function runGroundedRunner(
     }
     const workspaceResult = mappedWorkspaceError(error);
     if (workspaceResult !== undefined) return workspaceResult;
-    const gatewayResult = mappedGatewayError(error, workerCtx.deps);
+    const gatewayResult = mappedGatewayError(error, workerCtx.deps, workerCtx.correlationId);
     if (gatewayResult !== undefined) return gatewayResult;
     throw error;
   }
@@ -1428,7 +1498,7 @@ async function prepareGroundedAsk(
   if (parsed.kind === "err") return parsed.result;
   const chat = findChatById(deps, parsed.value.chatId);
   if (chat === undefined) return notFound("Chat not found.");
-  return { chat, input: parsed.value, signal };
+  return { chat, input: parsed.value, signal, correlationId: ctx.correlationId };
 }
 
 function resolveGroundedRunner(
@@ -1437,6 +1507,7 @@ function resolveGroundedRunner(
   readinessAdmission: ConversationReadinessAdmission,
   signal: AbortSignal,
   runner: GroundedRunner | undefined,
+  correlationId: string | undefined,
 ):
   | {
       readonly modelId: string;
@@ -1452,7 +1523,14 @@ function resolveGroundedRunner(
     };
   }
   const contextProfile = currentContextProfileForModel(deps, modelId);
-  const builtRunner = defaultRunner(deps, modelId, readinessAdmission, signal, contextProfile);
+  const builtRunner = defaultRunner(
+    deps,
+    modelId,
+    readinessAdmission,
+    signal,
+    contextProfile,
+    correlationId,
+  );
   if (typeof builtRunner !== "function") return builtRunner;
   return { modelId, contextProfile, runner: builtRunner };
 }
@@ -1474,6 +1552,7 @@ function resolveMultiSourceSeam(
   readinessAdmission: ConversationReadinessAdmission,
   signal: AbortSignal,
   override: MultiSourceSeam | undefined,
+  correlationId: string | undefined,
 ): MultiSourceSeam | RouteResult {
   if (override !== undefined) return override;
   const resolvedModel = deps.modelPortFactory(modelId);
@@ -1488,7 +1567,7 @@ function resolveMultiSourceSeam(
   );
   return {
     retriever: defaultRetriever(signal, deps),
-    answerer: createMultiSourceAnswerer(model, modelId, deps.redactor, signal),
+    answerer: createMultiSourceAnswerer(model, modelId, deps.redactor, signal, correlationId),
   };
 }
 
@@ -1510,6 +1589,7 @@ async function dispatchMultiSourceAsk(
     groundedReadinessAdmission(args),
     signal,
     seamOverride,
+    args.correlationId,
   );
   if ("status" in seam) return seam;
   return runMultiSourceAsk({
@@ -1604,6 +1684,7 @@ async function dispatchFolderAsk(
     groundedReadinessAdmission(prepared),
     signal,
     runner,
+    prepared.correlationId,
   );
   if ("status" in resolved) return resolved;
   return runAsk({
@@ -1620,6 +1701,7 @@ async function dispatchFolderAsk(
     deps,
     runner: resolved.runner,
     signal,
+    correlationId: prepared.correlationId,
   });
 }
 
@@ -1673,6 +1755,7 @@ async function dispatchHybridAsk(
     contextProfile: currentContextProfileForModel(deps, modelId),
     deps,
     signal,
+    correlationId: prepared.correlationId,
     readinessAdmission: groundedReadinessAdmission(prepared),
     preSkippedFolders: skippedFolders.map((s) => ({
       label: s.label,
@@ -1734,6 +1817,7 @@ async function dispatchPreparedGroundedAsk(
       deps,
       prepared.signal,
       groundedReadinessAdmission(prepared),
+      prepared.correlationId,
     );
   }
   return dispatchHybridAsk(preparedWithCanonicalFolders, deps, skippedFolders, hybrid);

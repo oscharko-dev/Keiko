@@ -29,6 +29,16 @@ export function newCorrelationId(): string {
   return randomUUID();
 }
 
+// A fixed, shape-valid stand-in for "no correlation id was known at this call site" — as opposed to
+// a hostile or malformed one (see `diagnostics-log.ts`'s `INVALID_CORRELATION_ID_MARKER`, which
+// covers that case). A `ServerDiagnosticRecord.correlationId` is required, so a caller with none in
+// scope needs SOME value rather than an omission; several call sites used the bare literal
+// `"unknown"` for this, but at 7 characters it always fails `isValidCorrelationId` itself and was
+// silently rewritten to the sanitizer's own marker — making an honestly-absent id indistinguishable
+// from a hostile one. This constant already satisfies the shape, so it survives the sanitizer and
+// keeps its own distinct meaning.
+export const UNKNOWN_CORRELATION_ID = "unknown-correlation-id";
+
 // Resolves the correlation id for a request: reuse a well-formed client-supplied id (UI -> server
 // continuity) or mint a fresh one. Never throws.
 export function resolveCorrelationId(req: IncomingMessage): string {

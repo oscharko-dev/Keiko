@@ -313,8 +313,9 @@ async function parseSources(req: IncomingMessage): Promise<ParseSourcesOutcome> 
 function buildJudgePortIfAvailable(
   deps: UiHandlerDeps,
   modelId: string,
+  correlationId: string,
 ): ReturnType<typeof createQiJudgePort> | undefined {
-  const outcome = tryCreateQiJudgePort(deps, modelId);
+  const outcome = tryCreateQiJudgePort(deps, modelId, { correlationId });
   return outcome.available ? outcome.port : undefined;
 }
 
@@ -1056,6 +1057,7 @@ function regenWorkflowDeps(
   evidenceStore: ReturnType<typeof createInMemoryQualityIntelligenceLocalStore>,
   capture: (cands: readonly QiTestCaseCandidate[], generatedAt: string) => void,
   signal: AbortSignal,
+  newRunId: string,
 ): QualityIntelligenceModelRoutedTestDesignDeps {
   return {
     sink: { emit: () => undefined },
@@ -1066,7 +1068,7 @@ function regenWorkflowDeps(
         capture(cands, generatedAt);
       },
     },
-    generate: createQiGenerationPort(deps, target),
+    generate: createQiGenerationPort(deps, target, newRunId),
     // The regenerate-stale judge deliberately shares the auto-selected generation model id rather than
     // resolving an independent qi:judge-logic model the way the initial run does (runExecution.ts).
     // This is safe because the regen target comes from resolveQiTestDesignSelection(deps) with NO
@@ -1077,7 +1079,9 @@ function regenWorkflowDeps(
     // asymmetry — an explicitly requested chat-only generation model paired with a separate
     // structured-output judge — cannot arise here because the regen path never carries an explicit
     // generation-model request.
-    ...(target.kind === "model" ? { judge: buildJudgePortIfAvailable(deps, target.modelId) } : {}),
+    ...(target.kind === "model"
+      ? { judge: buildJudgePortIfAvailable(deps, target.modelId, newRunId) }
+      : {}),
   };
 }
 
@@ -1101,6 +1105,7 @@ async function executeScopedWorkflow(args: {
   readonly atomsToRegenerate: readonly QualityIntelligenceIngestedAtom[];
   readonly profile: PolicyProfile;
   readonly signal: AbortSignal;
+  readonly newRunId: string;
 }): Promise<RouteResult | null> {
   const {
     deps,
@@ -1112,6 +1117,7 @@ async function executeScopedWorkflow(args: {
     atomsToRegenerate,
     profile,
     signal,
+    newRunId,
   } = args;
   try {
     const summary = await runQualityIntelligenceModelRoutedTestDesign(
@@ -1122,7 +1128,7 @@ async function executeScopedWorkflow(args: {
         provenanceRefs: ingestion.provenanceRefs,
         profile,
       },
-      regenWorkflowDeps(deps, target, evidenceStore, capture, signal),
+      regenWorkflowDeps(deps, target, evidenceStore, capture, signal, newRunId),
     );
     return summary.status === "succeeded"
       ? null
@@ -1183,6 +1189,7 @@ async function runScopedEphemeral(args: {
     atomsToRegenerate,
     profile,
     signal,
+    newRunId,
   });
   if (failure !== null) return { ok: false, result: failure };
   return finalizeScopedWorkflow(evidenceStore, newRunId, generatedCandidates, generatedAt);

@@ -689,7 +689,14 @@ export async function handleApplyRun(ctx: RouteContext, deps: UiHandlerDeps): Pr
   const budgetRejection = reserveAgentRunApplyBudget(record, snapshot);
   if (budgetRejection !== null) return budgetRejection;
   record.appliable = undefined;
-  const report = await applyRun(snapshot, model, record.modelId, deps.redactor, record.governance);
+  const report = await applyRun(
+    snapshot,
+    model,
+    record.modelId,
+    deps.redactor,
+    record.governance,
+    record.runId,
+  );
   record.applyReport = report;
   record.appliedAt = Date.now();
   return {

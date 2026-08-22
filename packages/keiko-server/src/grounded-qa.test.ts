@@ -34,6 +34,7 @@ import {
   buildGroundedGatewayMessages,
   groundedPromptInputTokensForCapability,
   handleGroundedAsk,
+  mappedGatewayError,
   modelWindowAwareBudget,
   modelInputPromptByteLimit,
   promptByteLength,
@@ -52,6 +53,8 @@ import { createInMemoryEvidenceStore, loadEvidence } from "@oscharko-dev/keiko-e
 import {
   CancelledError,
   ContextOverflowError,
+  RateLimitError,
+  type GatewayCallRequest,
   type GatewayConfig,
   type GatewayRequest,
   type NormalizedResponse,
@@ -70,7 +73,7 @@ import { RepoSearchInvalidQueryError } from "@oscharko-dev/keiko-workspace";
 import { createMemoryVault, type MemoryVaultStore } from "@oscharko-dev/keiko-memory-vault";
 import type { MemoryId } from "@oscharko-dev/keiko-contracts/memory";
 import type { MemoryUserId } from "@oscharko-dev/keiko-contracts";
-import type { ServerDiagnosticRecord } from "./diagnostics-log.js";
+import type { ServerDiagnosticRecord, ServerDiagnosticSink } from "./diagnostics-log.js";
 import { handleSendDesktopChat } from "./chat-handlers.js";
 import {
   canonicalChatTurnGroundingScopeIdentity,
@@ -1720,6 +1723,36 @@ describe("handleGroundedAsk", () => {
     );
   });
 
+  // ADR-0173 D5: the folder single-source answerer must stamp the request's correlation id into
+  // GatewayCallRequest.logContext so a gateway retry/circuit-breaker line for this call joins the
+  // same trail as the HTTP request that triggered it.
+  it("threads the request correlation id into the Model Gateway call's logContext", async () => {
+    const { chatId, projectPath } = await setupChatWithScope();
+    seedScopedRepo(projectPath);
+    const seenRequests: GatewayRequest[] = [];
+    const requestCtx: RouteContext = {
+      ...ctx(
+        JSON.stringify({
+          chatId,
+          content: GROUNDED_FIXTURE_QUESTION,
+          modelId: CHAT_MODEL,
+        }),
+      ),
+      correlationId: "cid-grounded-folder-000001",
+    };
+
+    const result = await handleGroundedAsk(
+      requestCtx,
+      deps(fakeModel("Grounded answer [src/foo.ts:1-3]", seenRequests)),
+    );
+
+    expect(result.status, JSON.stringify(result.body)).toBe(200);
+    expect(seenRequests).toHaveLength(1);
+    expect(
+      (firstGatewayRequest(seenRequests) as GatewayCallRequest).logContext?.correlationId,
+    ).toBe("cid-grounded-folder-000001");
+  });
+
   it("production path includes an explicitly connected single file when the question has no lexical hit", async () => {
     const project = store.createProject(tmp, "demo");
     mkdirSync(join(project.path, "src/pages"), { recursive: true });
@@ -3343,5 +3376,61 @@ describe("handleGroundedAsk", () => {
     const answer = asConnectedAnswer(result.body as GroundedAnswer);
     expect(answer.omittedCount).toBe(1);
     expect(answer.uncertainty[0]?.kind).toBe("budget-clipped");
+  });
+});
+
+// ADR-0173 D5 g25/g27 — mirrors the buffered desktop chat path's own symmetry fix
+// (chat-handlers.test.ts's "desktopChatErrorResult gateway diagnostic symmetry"): grounded Q&A used
+// to map a GatewayError straight to a response with no operator diagnostic at all.
+describe("mappedGatewayError diagnostic symmetry", () => {
+  function diagnosticDeps(diagnostics: ServerDiagnosticSink): UiHandlerDeps {
+    return {
+      env: {},
+      config: undefined,
+      redactor: (value: unknown): unknown => value,
+      diagnostics,
+    } as unknown as UiHandlerDeps;
+  }
+
+  it("emits an operator diagnostic for a RateLimitError, keyed to the given correlation id", () => {
+    const events: ServerDiagnosticRecord[] = [];
+    const deps = diagnosticDeps({
+      record: (record): void => {
+        events.push(record);
+      },
+    });
+
+    const result = mappedGatewayError(
+      new RateLimitError("provider rate limited", 1_500),
+      deps,
+      "grounded-correlation-1",
+    );
+
+    expect(result?.status).toBe(503);
+    expect(events).toHaveLength(1);
+    const [event] = events;
+    if (event === undefined) throw new Error("expected a diagnostic record");
+    expect(event.correlationId).toBe("grounded-correlation-1");
+    expect(event.operation).toBe("POST /api/chats/messages/grounded");
+    expect(event.source).toBe("grounded.qa");
+    expect(event.errorClass).toBe("RateLimitError");
+  });
+
+  it("does not diagnose an intentional cancellation", () => {
+    const events: ServerDiagnosticRecord[] = [];
+    const deps = diagnosticDeps({
+      record: (record): void => {
+        events.push(record);
+      },
+    });
+
+    const result = mappedGatewayError(
+      new CancelledError("grounded request cancelled"),
+      deps,
+      "grounded-correlation-2",
+    );
+
+    expect(result?.status).toBe(499);
+    expect(events).toHaveLength(0);
   });
 });

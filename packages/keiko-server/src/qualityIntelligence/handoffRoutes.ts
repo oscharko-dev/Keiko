@@ -317,7 +317,7 @@ const startHandoffRun = (deps: UiHandlerDeps, roots: readonly string[]): string 
   const runPromise =
     currentGatewayConfig(deps) === undefined
       ? execute()
-      : buildQiModelRoutingForRun(deps, {}).then((modelRouting) => execute(modelRouting));
+      : buildQiModelRoutingForRun(deps, {}, runId).then((modelRouting) => execute(modelRouting));
   void runPromise
     .then((summary) => {
       qiRunRegistry.complete(runId, summary.status);

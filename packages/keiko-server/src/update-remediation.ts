@@ -27,8 +27,14 @@ import {
 
 export interface UpdateRemediationManager {
   readonly getStatus: (request?: UpdateRemediationStatusRequest) => UpdateRemediationStatusReport;
+  // `correlationId` is optional so an existing caller keeps compiling unchanged; when the HTTP
+  // route layer threads its own request-scoped id through (ADR-0173 D5 / g12), every diagnostic
+  // this ONE action execution reports stays joined under it. Absent a caller-supplied id, one is
+  // minted here, once, so a cascade of failures from a single execution (persist, then audit, then
+  // outcome-uncertainty) still shares one id instead of each reporter minting its own.
   readonly runAction: (
     request: UpdateRemediationActionRequest,
+    correlationId?: string,
   ) => Promise<UpdateRemediationStatusReport>;
   readonly completeRestart: (targetVersion?: string) => UpdateRemediationStatusReport;
   readonly updateCanComplete: (targetVersion?: string) => boolean;
@@ -273,15 +279,19 @@ async function executeDraft(
   return "failed";
 }
 
+// `correlationId` is always the ONE id minted (or supplied) at the start of the enclosing
+// `runAction` call — never a fresh mint here — so every failure this single action execution
+// reports, however many of the call sites below fire, stays joined under it.
 function recordDraftFailure(
   options: UpdateRemediationManagerOptions,
+  correlationId: string,
   error: unknown,
   source = "update-remediation.executeDraft",
 ): void {
   emitServerDiagnostic(
     options.diagnostics,
     serverDiagnosticFromError({
-      correlationId: randomUUID(),
+      correlationId,
       operation: "update.remediation.execute",
       source,
       error,
@@ -293,11 +303,12 @@ function recordDraftFailure(
 async function executeDraftStatus(
   options: UpdateRemediationManagerOptions,
   draft: ActionDraft,
+  correlationId: string,
 ): Promise<RuntimeRemediationStatus> {
   try {
     return await executeDraft(options, draft);
   } catch (error) {
-    recordDraftFailure(options, error);
+    recordDraftFailure(options, correlationId, error);
     return "failed";
   }
 }
@@ -307,6 +318,7 @@ function persistOutcomeUncertainty(
   now: () => number,
   request: UpdateRemediationActionRequest,
   draft: ActionDraft,
+  correlationId: string,
 ): boolean {
   try {
     upsertRuntimeAction({
@@ -319,7 +331,12 @@ function persistOutcomeUncertainty(
     });
     return true;
   } catch (error) {
-    recordDraftFailure(options, error, "update-remediation.persistOutcomeUncertainty");
+    recordDraftFailure(
+      options,
+      correlationId,
+      error,
+      "update-remediation.persistOutcomeUncertainty",
+    );
     return false;
   }
 }
@@ -329,11 +346,12 @@ function recordDraftAuditSafely(
   request: UpdateRemediationActionRequest,
   draft: ActionDraft,
   status: RuntimeRemediationStatus,
+  correlationId: string,
 ): void {
   try {
-    recordRemediationAudit(options, request, draft, status);
+    recordRemediationAudit(options, request, draft, status, correlationId);
   } catch (error) {
-    recordDraftFailure(options, error, "update-remediation.persistDraftAudit");
+    recordDraftFailure(options, correlationId, error, "update-remediation.persistDraftAudit");
   }
 }
 
@@ -343,6 +361,7 @@ function persistDraftStatusSafely(
   request: UpdateRemediationActionRequest,
   draft: ActionDraft,
   status: RuntimeRemediationStatus,
+  correlationId: string,
 ): boolean {
   try {
     upsertRuntimeAction({
@@ -354,12 +373,12 @@ function persistDraftStatusSafely(
       ...(status === "failed" ? { warningCode: "remediation-execution-failed" } : {}),
     });
   } catch (error) {
-    recordDraftFailure(options, error, "update-remediation.persistDraftStatus");
-    const interlocked = persistOutcomeUncertainty(options, now, request, draft);
-    recordDraftAuditSafely(options, request, draft, status);
+    recordDraftFailure(options, correlationId, error, "update-remediation.persistDraftStatus");
+    const interlocked = persistOutcomeUncertainty(options, now, request, draft, correlationId);
+    recordDraftAuditSafely(options, request, draft, status, correlationId);
     return interlocked;
   }
-  recordDraftAuditSafely(options, request, draft, status);
+  recordDraftAuditSafely(options, request, draft, status, correlationId);
   return true;
 }
 
@@ -388,6 +407,7 @@ function recordRemediationAudit(
   request: UpdateRemediationActionRequest,
   draft: ActionDraft,
   status: RuntimeRemediationStatus,
+  correlationId: string,
 ): void {
   const result = options.localState.recordAuditEvent(remediationAuditEventType(status), {
     targetVersion: request.targetVersion,
@@ -397,7 +417,12 @@ function recordRemediationAudit(
     ...(status === "failed" ? { warningCode: "remediation-execution-failed" } : {}),
   });
   if (result.warning !== undefined) {
-    recordDraftFailure(options, new Error(result.warning), "update-remediation.persistDraftAudit");
+    recordDraftFailure(
+      options,
+      correlationId,
+      new Error(result.warning),
+      "update-remediation.persistDraftAudit",
+    );
   }
 }
 
@@ -406,6 +431,7 @@ function deferDraft(
   now: () => number,
   request: UpdateRemediationActionRequest,
   draft: ActionDraft,
+  correlationId: string,
 ): void {
   if (!draft.canDefer) {
     throw new UpdateRemediationError(
@@ -421,7 +447,7 @@ function deferDraft(
     status: "deferred",
     now,
   });
-  recordRemediationAudit(options, request, draft, "deferred");
+  recordRemediationAudit(options, request, draft, "deferred", correlationId);
 }
 
 function assertDraftOutcomeKnown(
@@ -444,6 +470,7 @@ async function runDraft(
   runningActions: Set<string>,
   request: UpdateRemediationActionRequest,
   draft: ActionDraft,
+  correlationId: string,
 ): Promise<void> {
   if (!draft.canRun) {
     throw new UpdateRemediationError(
@@ -469,7 +496,8 @@ async function runDraft(
       now,
       request,
       draft,
-      await executeDraftStatus(options, draft),
+      await executeDraftStatus(options, draft, correlationId),
+      correlationId,
     );
   } finally {
     if (releaseAllowed) {
@@ -513,14 +541,15 @@ async function runRemediationAction(
   now: () => number,
   runningActions: Set<string>,
   request: UpdateRemediationActionRequest,
+  correlationId: string,
 ): Promise<UpdateRemediationStatusReport> {
   const drafts = draftsForImpact(options.localState, request.impact, options.localKnowledge);
   const draft = findDraftOrThrow(drafts, request.actionId);
   assertDraftOutcomeKnown(options, draft);
   if (request.decision === "defer") {
-    deferDraft(options, now, request, draft);
+    deferDraft(options, now, request, draft, correlationId);
   } else {
-    await runDraft(options, now, runningActions, request, draft);
+    await runDraft(options, now, runningActions, request, draft, correlationId);
   }
   return statusFor(options, now, { ...request, persist: false });
 }
@@ -559,8 +588,8 @@ export function createUpdateRemediationManager(
   const runningActions = new Set<string>();
   return {
     getStatus: (request): UpdateRemediationStatusReport => statusFor(options, now, request),
-    runAction: (request): Promise<UpdateRemediationStatusReport> =>
-      runRemediationAction(options, now, runningActions, request),
+    runAction: (request, correlationId = randomUUID()): Promise<UpdateRemediationStatusReport> =>
+      runRemediationAction(options, now, runningActions, request, correlationId),
     completeRestart: (targetVersion): UpdateRemediationStatusReport =>
       completeRestartAction(options, now, targetVersion),
     updateCanComplete: (targetVersion): boolean =>

@@ -14,8 +14,10 @@ import { createRunRegistry } from "./runs.js";
 import { createUiServer, UI_HOST } from "./server.js";
 import { EventEmitter } from "node:events";
 import type { ServerResponse } from "node:http";
-import { openTerminalSseStream } from "./terminal-routes.js";
+import { handleTerminalEvents, openTerminalSseStream } from "./terminal-routes.js";
 import type { SseBackpressureSignal } from "./sse-write.js";
+import type { RouteContext } from "./routes.js";
+import type { ServerDiagnosticRecord, ServerDiagnosticSink } from "./diagnostics-log.js";
 import {
   TerminalToolError,
   type TerminalEventEmitter,
@@ -642,5 +644,33 @@ describe("openTerminalSseStream backpressure (KEIKO-0142)", () => {
     expect(fake.destroyCount).toBe(0);
     expect(signals).toHaveLength(0);
     expect(fake.writes.length).toBeGreaterThan(1);
+  });
+});
+
+describe("handleTerminalEvents backpressure correlation (ADR-0173 D5 / g12)", () => {
+  it("threads the request's own correlation id into the backpressure diagnostic instead of minting one", () => {
+    const fake = makeFakeSseRes();
+    fake.writeReturns = false; // rejects the ready frame -> immediate backpressure kill.
+    const manager = new FakeTerminalExecutionManager();
+    const records: ServerDiagnosticRecord[] = [];
+    const diagnostics: ServerDiagnosticSink = {
+      record: (entry) => {
+        records.push(entry);
+      },
+    };
+    const ctx: RouteContext = {
+      req: { on: (): void => undefined } as unknown as RouteContext["req"],
+      res: fake.res,
+      params: {},
+      url: new URL("http://127.0.0.1/api/terminal/events"),
+      correlationId: "req-terminal-thread-01",
+    };
+    const routeDeps: UiHandlerDeps = { ...deps, terminal: manager, diagnostics };
+
+    handleTerminalEvents(ctx, routeDeps);
+
+    expect(records).toHaveLength(1);
+    expect(records[0]?.source).toBe("sse.terminal.backpressure");
+    expect(records[0]?.correlationId).toBe("req-terminal-thread-01");
   });
 });

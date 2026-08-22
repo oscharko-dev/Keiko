@@ -1020,6 +1020,51 @@ describe("desktop files browser", () => {
     expect(JSON.stringify(diagnostics)).not.toContain("saved despite history failure");
   });
 
+  it("threads the request's own correlation id into a local-history capture failure instead of minting one", async () => {
+    // ADR-0173 D5 / g12: ctx.correlationId is minted at request entry (server.ts) and is already
+    // in scope in writeFilesContentRoute — the capture failure must reuse it, not a disconnected
+    // one. Before the fix the diagnostic and response always carried a fresh mint regardless of
+    // ctx.correlationId.
+    const diagnostics: ServerDiagnosticRecord[] = [];
+    const failingVault: LocalSecretVault = {
+      get: () => undefined,
+      set: (): never => {
+        throw new Error("capture-secret-marker-2");
+      },
+      replaceAll: () => undefined,
+      delete: () => undefined,
+      has: () => false,
+      list: () => [],
+    };
+    const failingHistory = createEditorLocalHistoryStore({
+      stateDir: join(root, ".history-test-state-correlation"),
+      env: {},
+      vaultFactory: () => failingVault,
+    });
+    const ctx = {
+      ...patchContentContext({ root, path: "src/app.ts", content: "threaded id\n" }),
+      correlationId: "req-files-save-thread-01",
+    };
+
+    const result = await handleFilesContent(ctx, {
+      store,
+      redactor: buildRedactor({}),
+      editorLocalHistoryStore: failingHistory,
+      diagnostics: {
+        record: (record: ServerDiagnosticRecord): void => {
+          diagnostics.push(record);
+        },
+      },
+    } as unknown as UiHandlerDeps);
+
+    expect(result.status).toBe(200);
+    expect(diagnostics).toHaveLength(1);
+    expect(diagnostics[0]?.correlationId).toBe("req-files-save-thread-01");
+    expect(result.body).toMatchObject({
+      localHistoryProtection: { correlationId: "req-files-save-thread-01" },
+    });
+  });
+
   it("fails closed for an unregistered root while preserving the save and original diagnostic", async () => {
     const arbitrary = await realpath(await mkdtemp(join(tmpdir(), "keiko-files-unregistered-")));
     extraRoot = arbitrary;
@@ -1608,6 +1653,50 @@ describe("desktop files mutations (create / rename / delete)", () => {
     expect(
       diagnostics.filter((record) => record.operation.endsWith("breakpoint-migration-skipped")),
     ).toHaveLength(1);
+  });
+
+  it("sets parentCorrelationId to the spawning rename request's own id on a skipped migration", async () => {
+    // ADR-0173 D5 / g12: reKeyRenamedBreakpoints runs detached (never awaited by the rename
+    // response), so it mints its own correlationId for this background operation — but the
+    // rename request's own ctx.correlationId, when known, must still ride as parentCorrelationId
+    // so an operator can join this diagnostic back to the request that spawned it. Before the fix
+    // there was no parentCorrelationId field on the emitted record at all.
+    const renameInstrumentation = vi.fn().mockResolvedValue(undefined);
+    const diagnostics: ServerDiagnosticRecord[] = [];
+    const breakpoints = {
+      snapshot: (): { readonly ok: false; readonly reason: string } => ({
+        ok: false,
+        reason: "state_unavailable",
+      }),
+    };
+    const ctx = {
+      ...patchContentContext({ root, path: "src/app.ts", newPath: "src/renamed.ts" }),
+      correlationId: "req-rename-thread-01",
+    };
+
+    const result = await handleFilesRename(ctx, {
+      store,
+      redactor: buildRedactor({}),
+      dapDebug: {
+        breakpoints,
+        renameInstrumentation,
+        diagnosticSink: {
+          record: (record: ServerDiagnosticRecord): void => {
+            diagnostics.push(record);
+          },
+        },
+      },
+    } as unknown as UiHandlerDeps);
+
+    expect(result).toMatchObject({ status: 200, body: { path: "src/renamed.ts" } });
+    const skipped = diagnostics.filter((record) =>
+      record.operation.endsWith("breakpoint-migration-skipped"),
+    );
+    expect(skipped).toHaveLength(1);
+    expect(skipped[0]?.parentCorrelationId).toBe("req-rename-thread-01");
+    // The operation's OWN correlationId stays a fresh, disconnected mint (it is not the request's
+    // id) — only parentCorrelationId links it back.
+    expect(skipped[0]?.correlationId).not.toBe("req-rename-thread-01");
   });
 
   it("delegates every fileId under a renamed directory in one call (KEIKO-0179)", async () => {

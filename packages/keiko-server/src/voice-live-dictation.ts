@@ -6,7 +6,6 @@
 
 import type { IncomingMessage } from "node:http";
 import type { Duplex } from "node:stream";
-import { randomUUID } from "node:crypto";
 import { WebSocketServer, type RawData, type WebSocket as WsSocket } from "ws";
 import {
   findConfiguredCapability,
@@ -29,6 +28,7 @@ import {
   type VoiceSessionCreateMessage,
 } from "@oscharko-dev/keiko-contracts";
 import { isAllowedHost } from "./host-check.js";
+import { resolveCorrelationId } from "./correlation.js";
 import { currentGatewayConfig, currentGatewayEgressConfig, type UiHandlerDeps } from "./deps.js";
 import { isVoiceDisabledByPolicy, isVoiceRealtimeCapable } from "./read-handlers.js";
 import {
@@ -324,6 +324,10 @@ class VoiceLiveDictationConnection {
     private readonly negotiate: LiveDictationNegotiateFn,
     private readonly redact: (value: unknown) => unknown,
     private readonly diagnostics: ServerDiagnosticSink | undefined,
+    // Resolved ONCE at handleUpgrade (RB-6 / ADR-0173 D5): every diagnostic this connection emits
+    // over its whole lifetime — however many negotiation attempts a client makes — is joinable to
+    // the same id, instead of a fresh one per failure.
+    private readonly correlationId: string,
   ) {}
 
   start(): void {
@@ -452,7 +456,7 @@ class VoiceLiveDictationConnection {
   }
 
   private reportNegotiationFailure(kind: RealtimeNegotiationErrorKind, thrown: unknown): void {
-    const correlationId = randomUUID();
+    const correlationId = this.correlationId;
     const diagnostic = serverDiagnosticFromError({
       correlationId,
       operation: "voice.live-dictation.negotiate",
@@ -513,8 +517,11 @@ class VoiceLiveDictationPlaneImpl implements VoiceControlPlane {
     ) {
       return false;
     }
+    // Resolved ONCE per upgrade (RB-6 / ADR-0173 D5), not re-minted per diagnostic — every
+    // negotiation failure this connection later reports carries the same id.
+    const correlationId = resolveCorrelationId(req);
     this.wss.handleUpgrade(req, sock, head, (ws) => {
-      this.onConnection(ws, deps);
+      this.onConnection(ws, deps, correlationId);
     });
     return true;
   }
@@ -614,7 +621,7 @@ class VoiceLiveDictationPlaneImpl implements VoiceControlPlane {
     };
   }
 
-  private onConnection(ws: WsSocket, deps: UiHandlerDeps): void {
+  private onConnection(ws: WsSocket, deps: UiHandlerDeps, correlationId: string): void {
     this.attachHeartbeat(ws);
     // KEIKO-0342: enforce the concurrent-connection cap after handleUpgrade admitted the
     // socket. wss.clients already includes this new one by the time onConnection runs, so
@@ -652,6 +659,7 @@ class VoiceLiveDictationPlaneImpl implements VoiceControlPlane {
         this.buildNegotiate(deps, session.transcriptionLanguage),
         deps.redactor,
         deps.diagnostics,
+        correlationId,
       );
       connection.start();
     });

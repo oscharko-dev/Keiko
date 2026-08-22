@@ -4,7 +4,12 @@
 // must never break the protective abort+destroy path.
 import { describe, expect, it, vi } from "vitest";
 import type { ServerResponse } from "node:http";
-import { writeOrDestroy, type SseBackpressureSignal } from "./sse-write.js";
+import {
+  sseBackpressureReporter,
+  writeOrDestroy,
+  type SseBackpressureSignal,
+} from "./sse-write.js";
+import type { ServerDiagnosticRecord, ServerDiagnosticSink } from "./diagnostics-log.js";
 
 function fakeRes(writeReturns: boolean): {
   res: ServerResponse;
@@ -92,5 +97,37 @@ describe("writeOrDestroy backpressure signal (GEN-PERF-CHAT-006)", () => {
     expect(accepted).toBe(false);
     expect(controller.signal.aborted).toBe(true);
     expect(destroy).toHaveBeenCalledTimes(1);
+  });
+});
+
+// ADR-0173 D5 / g12: `sseBackpressureReporter` used to mint a fresh `randomUUID()` INSIDE the
+// returned closure on every backpressure signal. A caller with the stream's own request/session id
+// already in scope had no way to thread it through, and — the sharper defect — two signals from
+// the SAME reporter (the same SSE stream) reported under two disconnected ids.
+describe("sseBackpressureReporter correlation id (ADR-0173 D5 / g12)", () => {
+  it("threads a caller-supplied correlation id onto the backpressure diagnostic", () => {
+    const records: ServerDiagnosticRecord[] = [];
+    const diagnostics: ServerDiagnosticSink = { record: (record) => records.push(record) };
+    const observe = sseBackpressureReporter({ diagnostics }, "terminal", "req-abc12345");
+
+    observe({ frameBytes: 42, accepted: false });
+
+    expect(records).toHaveLength(1);
+    expect(records[0]?.correlationId).toBe("req-abc12345");
+  });
+
+  it("mints one id per reporter construction, shared across every signal that reporter emits", () => {
+    const records: ServerDiagnosticRecord[] = [];
+    const diagnostics: ServerDiagnosticSink = { record: (record) => records.push(record) };
+    const observeA = sseBackpressureReporter({ diagnostics }, "terminal");
+    const observeB = sseBackpressureReporter({ diagnostics }, "terminal");
+
+    observeA({ frameBytes: 1, accepted: false });
+    observeA({ frameBytes: 2, accepted: false });
+    observeB({ frameBytes: 3, accepted: false });
+
+    expect(records).toHaveLength(3);
+    expect(records[0]?.correlationId).toBe(records[1]?.correlationId);
+    expect(records[0]?.correlationId).not.toBe(records[2]?.correlationId);
   });
 });

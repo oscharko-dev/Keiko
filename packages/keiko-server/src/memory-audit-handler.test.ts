@@ -281,6 +281,42 @@ describe("createMemoryAuditHandler", () => {
     expect(errors).toHaveLength(1);
   });
 
+  it("reports a bridge persistence failure with the SAME date-bucket runId as its correlationId", () => {
+    // ADR-0173 D5 / g12: the vault-bridge path (createMemoryAuditHandler) reports through the
+    // diagnostic sink, not onPersistError, so its failure must carry the SAME runId the append
+    // targeted rather than a disconnected `randomUUID()`. Before the fix this was a random UUID.
+    const throwingStore: EvidenceStore = {
+      put: (): string => {
+        throw Object.assign(new Error("disk full"), { code: "ENOSPC" });
+      },
+      get: (): string | undefined => undefined,
+      list: (): readonly string[] => [],
+      location: (runId: string): string => runId,
+      delete: (): void => undefined,
+    };
+    const records: ServerDiagnosticRecord[] = [];
+    const diagnostics: ServerDiagnosticSink = {
+      record: (entry) => {
+        records.push(entry);
+      },
+    };
+    const handler = createMemoryAuditHandler({
+      evidenceStore: throwingStore,
+      redactString: identityRedact,
+      now: () => FIXED_NOW,
+      newEventId: makeIdFactory(),
+      diagnostics,
+    });
+
+    expect(() => {
+      handler({ kind: "memory:inserted", record: makeRecord({ status: "proposed" }) });
+    }).not.toThrow();
+
+    expect(records).toHaveLength(1);
+    expect(records[0]?.source).toBe("memory-audit-handler.bridge");
+    expect(records[0]?.correlationId).toBe(auditRunIdFor(FIXED_NOW));
+  });
+
   it("preserves a corrupt audit manifest instead of resetting it", () => {
     const store = createInMemoryEvidenceStore();
     const runId = auditRunIdFor(FIXED_NOW);
@@ -733,6 +769,10 @@ describe("recordMemoryAudits", () => {
       expect(records[0]?.operation).toBe("memory.audit.persist");
       expect(records[0]?.code).toBe("EACCES");
       expect(records[0]?.correlationId).toMatch(/^[A-Za-z0-9._-]{8,128}$/);
+      // ADR-0173 D5 / g12: the failure's correlationId is the SAME date-bucket runId the append
+      // itself targeted, not a disconnected `randomUUID()` — an operator can join the failure back
+      // to the bucket it belongs to. Before the fix this was a random UUID.
+      expect(records[0]?.correlationId).toBe(auditRunIdFor(FIXED_NOW));
       // Body-free: the store's path never enters the record.
       expect(JSON.stringify(records)).not.toContain("/Users/op/.keiko/evidence");
       expect(consoleError).not.toHaveBeenCalled();

@@ -661,6 +661,7 @@ class StoreBackedAnswerGenerator implements AnswerGenerator {
     private readonly auditSink: ReturnType<typeof createSqliteAuditSink>,
     private readonly redactExcerpt: (value: string) => string,
     private readonly limits: ReturnType<typeof currentGroundingLimits>,
+    private readonly correlationId: string | undefined,
   ) {}
 
   public async generate(input: AnswerGeneratorInput): Promise<string> {
@@ -675,6 +676,7 @@ class StoreBackedAnswerGenerator implements AnswerGenerator {
           this.limits,
         ),
         stream: false,
+        logContext: { correlationId: this.correlationId },
       },
       input.signal ?? new AbortController().signal,
     );
@@ -752,7 +754,11 @@ function uniqueQueryVariants(variants: readonly string[]): readonly string[] {
   return out;
 }
 
-function createBroadQueryTransformer(model: ModelPort, modelId: string): QueryTransformer {
+function createBroadQueryTransformer(
+  model: ModelPort,
+  modelId: string,
+  correlationId: string | undefined,
+): QueryTransformer {
   return {
     rewrite: async ({ query, maxVariants, signal }): Promise<readonly string[]> => {
       try {
@@ -775,6 +781,7 @@ function createBroadQueryTransformer(model: ModelPort, modelId: string): QueryTr
               },
             ],
             stream: false,
+            logContext: { correlationId },
           },
           queryTransformSignal(signal),
         );
@@ -2213,6 +2220,7 @@ function createScopedAnswerGenerator(
   deps: UiHandlerDeps,
   env: { readonly store: KnowledgeStore },
   limits: ReturnType<typeof currentGroundingLimits>,
+  correlationId: string | undefined,
 ): StoreBackedAnswerGenerator {
   return new StoreBackedAnswerGenerator(
     model,
@@ -2221,7 +2229,20 @@ function createScopedAnswerGenerator(
     createSqliteAuditSink(env.store),
     (value: string): string => redactText(deps, value),
     limits,
+    correlationId,
   );
+}
+
+// The trailing three positional parameters `runScopedGroundedAnswer` used to take (signal,
+// readinessAdmission, correlationId) bundled into one object so the function itself stays under
+// the repository's 7-parameter ceiling (Sonar S107) as ADR-0173 D5 g9's correlationId threading
+// added an 8th. Grouped together because all three travel together for the lifetime of a single
+// grounded-ask attempt, unlike `chat`/`input`/`deps`/`env`/`selected`, which each name a different
+// piece of state.
+interface ScopedGroundedAnswerContext {
+  readonly signal: AbortSignal;
+  readonly readinessAdmission: ConversationReadinessAdmission;
+  readonly correlationId: string | undefined;
 }
 
 async function runScopedGroundedAnswer(
@@ -2230,23 +2251,23 @@ async function runScopedGroundedAnswer(
   deps: UiHandlerDeps,
   env: Pick<ReturnType<typeof openStoreForDeps>, "store" | "vectorIndex">,
   selected: SelectedLocalKnowledgeScope,
-  signal: AbortSignal,
-  readinessAdmission: ConversationReadinessAdmission,
+  context: ScopedGroundedAnswerContext,
 ): Promise<GroundedAnswer | RouteResult> {
+  const { signal, readinessAdmission, correlationId } = context;
   const embeddingAdapter = createEmbeddingAdapter(deps);
   if ("status" in embeddingAdapter) return embeddingAdapter;
   const modelId = input.modelId ?? chat.selectedModel;
   const model = resolveModel(deps, modelId, readinessAdmission);
   if ("status" in model) return model;
   const limits = currentGroundingLimits(deps);
-  const generator = createScopedAnswerGenerator(model, modelId, deps, env, limits);
+  const generator = createScopedAnswerGenerator(model, modelId, deps, env, limits, correlationId);
   const startedAt = Date.now();
   const result = await runGroundedAnswer(
     {
       retrieval: {
         store: env.store,
         embeddingAdapter,
-        queryTransformer: createBroadQueryTransformer(model, modelId),
+        queryTransformer: createBroadQueryTransformer(model, modelId, correlationId),
         vectorIndex: env.vectorIndex,
       },
       answerGenerator: generator,
@@ -2344,6 +2365,7 @@ export async function handleLocalKnowledgeGroundedAsk(
   deps: UiHandlerDeps,
   signal: AbortSignal,
   readinessAdmission?: ConversationReadinessAdmission,
+  correlationId?: string,
 ): Promise<RouteResult> {
   const modelId = input.modelId ?? chat.selectedModel;
   const effectiveAdmission = localKnowledgeReadinessAdmission(deps, modelId, readinessAdmission);
@@ -2357,15 +2379,11 @@ export async function handleLocalKnowledgeGroundedAsk(
       if (signal.aborted) throw new CancelledError("grounded request cancelled");
       return stateFailureRoute(chat, input, deps, env, selected, stateFailure);
     }
-    const answer = await runScopedGroundedAnswer(
-      chat,
-      input,
-      deps,
-      env,
-      selected,
+    const answer = await runScopedGroundedAnswer(chat, input, deps, env, selected, {
       signal,
-      effectiveAdmission,
-    );
+      readinessAdmission: effectiveAdmission,
+      correlationId,
+    });
     if ("status" in answer) return answer;
     return { status: 200, body: answer };
   } catch (error) {

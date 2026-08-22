@@ -551,4 +551,22 @@ describe("coding context pack route", () => {
     expect(typeof error.correlationId).toBe("string");
     expect(JSON.stringify(result.body)).not.toContain("secret endpoint detail");
   });
+
+  it("threads the request's own correlation id into the upstream-failure response instead of minting one", async () => {
+    // ADR-0173 D5 / g12: ctx.correlationId is minted at request entry (server.ts) and is already
+    // in scope here — the failure record and the response body must reuse it, not a disconnected
+    // randomUUID(). Before the fix the response correlationId never matched ctx.correlationId.
+    const failingPort: GitHubCodeContextApiPort = {
+      readJson: () => Promise.reject(new Error("secret endpoint detail must not leak")),
+    };
+    const ctx = { ...ctxFor(packRequest()), correlationId: "req-thread-0123456789" };
+    const result = await handleCodingContextPack(
+      ctx,
+      depsFor({ codingContextGitHubPort: failingPort }),
+    );
+
+    expect(result.status).toBe(502);
+    const error = bodyOf(result).error as Record<string, unknown>;
+    expect(error.correlationId).toBe("req-thread-0123456789");
+  });
 });
