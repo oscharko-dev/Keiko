@@ -54,7 +54,9 @@ import { GROUNDED_NO_EVIDENCE_ANSWER } from "./grounded-faithfulness.js";
 import type { ModelPort } from "@oscharko-dev/keiko-harness";
 import {
   parseGatewayConfig,
+  type GatewayCallRequest,
   type ModelCapability,
+  type NormalizedResponse,
   type RerankOutcome,
 } from "@oscharko-dev/keiko-model-gateway";
 import type { GroundedRetriever } from "./grounded-qa-multi-source.js";
@@ -62,11 +64,13 @@ import {
   EmbeddingAdapterError,
   connectorQuery,
   connectorRetrievalTopK,
+  createHybridAnswerer,
   estimateConnectorExcerptBytes,
   hashString32,
   runHybridGroundedAsk,
   type ConnectorRetrieve,
 } from "./grounded-qa-hybrid.js";
+import { normalizeGroundedAnswerPayload } from "./grounded-answer.js";
 import { createInMemoryUiStore, type UiStore } from "./store/index.js";
 import type { UiHandlerDeps } from "./deps.js";
 import { buildRedactor, createRunRegistry } from "./index.js";
@@ -2124,6 +2128,100 @@ describe("AC5 routing — single connector must route to handleLocalKnowledgeGro
     const lkAnswer = asLocalKnowledge(answer);
     expect(lkAnswer.contextPack.kind).toBe("local-knowledge");
   });
+
+  // ADR-0173 D5: local-knowledge-grounded-qa.ts's StoreBackedAnswerGenerator.generate is the real
+  // model.call site this dispatch path reaches (no seam bypasses it here, unlike the hybrid tests
+  // above) — it must stamp the request's correlation id into GatewayCallRequest.logContext.
+  it("threads the request correlation id into the local-knowledge answerer's model gateway call", async () => {
+    const { capsuleId: capId } = await seedReadyCapsule("Solo Docs Correlation");
+    const chatId = makeHybridChat([], [{ kind: "capsule", capsuleId: capId, connectedAtMs: NOW }]);
+    const hybrid: HybridSeam = { answer: throwingHybridAnswerer() };
+    const embeddingModelId = "text-embedding-3-small";
+    const adapter = scriptedAdapter();
+    const seenRequests: GatewayCallRequest[] = [];
+    const recordingModelPort: ModelPort = {
+      call: (request): Promise<NormalizedResponse> => {
+        seenRequests.push(request);
+        return Promise.resolve({
+          modelId: CHAT_MODEL,
+          content: "Local knowledge answer [1].",
+          finishReason: "stop" as const,
+          toolCalls: [],
+          structuredOutput: null,
+          usage: {
+            requestId: "lk-logcontext-test",
+            promptTokens: 10,
+            completionTokens: 5,
+            latencyMs: 5,
+            costClass: "medium" as const,
+          },
+        });
+      },
+    };
+    const configuredDeps: UiHandlerDeps = {
+      ...hybridDeps({ localKnowledgeEmbeddingRequest: adapter.request }),
+      config: {
+        providers: [
+          {
+            modelId: CHAT_MODEL,
+            baseUrl: "https://provider.example/v1",
+            apiKey: "test-api-key-1234567890",
+            timeoutMs: 30_000,
+            maxRetries: 0,
+            retryBaseDelayMs: 500,
+          },
+          {
+            modelId: embeddingModelId,
+            baseUrl: "https://provider.example/v1",
+            apiKey: "test-api-key-1234567890",
+            timeoutMs: 30_000,
+            maxRetries: 0,
+            retryBaseDelayMs: 500,
+          },
+        ],
+        circuitBreaker: { failureThreshold: 5, cooldownMs: 30_000, halfOpenProbes: 2 },
+        capabilities: [
+          {
+            id: CHAT_MODEL,
+            kind: "chat",
+            contextWindow: 64_000,
+            maxOutputTokens: 4_096,
+            toolCalling: true,
+            structuredOutput: true,
+            streaming: true,
+            supportsImageInput: false,
+            supportsDocumentInput: false,
+            workflowEligible: false,
+            costClass: "medium",
+            latencyClass: "standard",
+            throughputHint: "test",
+            preferredUseCases: [],
+            knownLimitations: [],
+          },
+        ],
+      },
+      configPresent: true,
+      modelPortFactory: () => recordingModelPort,
+    };
+    const requestCtx: RouteContext = {
+      ...routeCtx(JSON.stringify({ chatId, content: "Solo question", modelId: CHAT_MODEL })),
+      correlationId: "cid-local-knowledge-000001",
+    };
+
+    const result = await handleGroundedAsk(
+      requestCtx,
+      configuredDeps,
+      undefined,
+      undefined,
+      hybrid,
+    );
+
+    expect(result.status, JSON.stringify(result.body)).toBe(200);
+    expect(seenRequests.length).toBeGreaterThan(0);
+    for (const request of seenRequests) {
+      expect(request.logContext?.correlationId).toBe("cid-local-knowledge-000001");
+    }
+  });
 });
 
 // ─── Case 4c: Configured model reranker over hybrid candidates ────────────────
@@ -3296,5 +3394,54 @@ describe("hybrid entailment forwards the retrieved folder packs (KEIKO-0237)", (
     // capsule policy is evaluated inside the factory. Pin the count so ADD-01's connector-pack
     // forwarding stays visible if it changes.
     expect(observedCapsulesPerCall).toEqual([1]);
+  });
+});
+
+// ─── Correlation threading (ADR-0173 D5) ──────────────────────────────────────
+//
+// Every hybrid dispatch test above injects `HybridSeam.answer` (a bare (system, user) => string
+// function), which never touches the real Gateway-backed answerer this file's production code
+// builds via `resolveHybridAnswerer` -> `createHybridAnswerer`. That builder is the actual
+// model.call site fixed here, so it is unit-tested directly against a fake ModelPort that records
+// the request it receives.
+describe("createHybridAnswerer correlation threading", () => {
+  it("stamps the caller's correlation id into the Gateway double's GatewayCallRequest.logContext", async () => {
+    const seenRequests: GatewayCallRequest[] = [];
+    const recordingModel: ModelPort = {
+      call(request): Promise<NormalizedResponse> {
+        seenRequests.push(request);
+        return Promise.resolve({
+          modelId: request.modelId,
+          content: "hybrid answer",
+          finishReason: "stop",
+          toolCalls: [],
+          structuredOutput: null,
+          usage: {
+            requestId: "hybrid-answerer-test",
+            promptTokens: 3,
+            completionTokens: 2,
+            latencyMs: 1,
+            costClass: "medium",
+          },
+        });
+      },
+    };
+
+    const answerer = createHybridAnswerer(
+      recordingModel,
+      CHAT_MODEL,
+      new AbortController().signal,
+      "cid-hybrid-answerer-000001",
+    );
+    // `HybridAnswerer`'s declared return type is `Promise<GroundedAnswerPayload>` (a
+    // `string | GroundedAnswerResult` union), even though `createHybridAnswerer`'s own
+    // implementation always resolves the object branch — `normalizeGroundedAnswerPayload` is the
+    // SAME narrowing every production caller already applies to a `HybridAnswerer` result
+    // (grounded-qa-hybrid.ts, grounded-orchestrator.ts), not a test-only cast.
+    const result = normalizeGroundedAnswerPayload(await answerer("system prompt", "user prompt"));
+
+    expect(result.content).toBe("hybrid answer");
+    expect(seenRequests).toHaveLength(1);
+    expect(seenRequests[0]?.logContext?.correlationId).toBe("cid-hybrid-answerer-000001");
   });
 });

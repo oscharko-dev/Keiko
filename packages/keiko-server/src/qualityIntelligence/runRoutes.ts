@@ -616,7 +616,7 @@ export async function handleStartQiRun(
 
   let modelRouting: QualityIntelligenceModelRouting;
   try {
-    modelRouting = await buildQiModelRoutingForRun(deps, parsed.request);
+    modelRouting = await buildQiModelRoutingForRun(deps, parsed.request, runId);
   } catch (error) {
     qiRunRegistry.complete(runId, "failed");
     if (error instanceof QiModelPolicyError) {

@@ -560,6 +560,7 @@ export function createMultiSourceAnswerer(
   modelId: string,
   redactor: Redactor,
   signal: AbortSignal,
+  correlationId: string | undefined,
 ): MultiSourceAnswerer {
   return async (question, labeledPacks): Promise<GroundedAnswerResult> => {
     ensureNotCancelled(signal);
@@ -568,6 +569,7 @@ export function createMultiSourceAnswerer(
         modelId,
         messages: buildMultiSourceGatewayMessages(question, labeledPacks, redactor),
         stream: false,
+        logContext: { correlationId },
       },
       signal,
     );

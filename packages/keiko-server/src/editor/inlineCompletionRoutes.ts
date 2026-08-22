@@ -111,7 +111,10 @@ export interface EditorInlineCompletionRouteOptions {
 const sharedRateLimiter: InlineCompletionRateLimiter = createInlineCompletionRateLimiter();
 
 // Default chat seam: route the elected model through the Model Gateway, server-side only.
-function defaultChatFactoryFor(deps: UiHandlerDeps): InlineCompletionChatFactory {
+function defaultChatFactoryFor(
+  deps: UiHandlerDeps,
+  correlationId: string | undefined,
+): InlineCompletionChatFactory {
   return (_config, modelId): ModelChatFn => {
     const gateway = currentGateway(deps);
     if (gateway === undefined) throw new TypeError("Model gateway is unavailable.");
@@ -123,6 +126,7 @@ function defaultChatFactoryFor(deps: UiHandlerDeps): InlineCompletionChatFactory
           { role: "user", content: chatRequest.user },
         ],
         cancellationSignal: chatSignal,
+        logContext: { correlationId },
       });
       return { content: response.content, usage: response.usage };
     };
@@ -504,7 +508,7 @@ async function runInlineModelTier(
       deps,
       selection,
       modelId,
-      chatFactory: options.chatFactory ?? defaultChatFactoryFor(deps),
+      chatFactory: options.chatFactory ?? defaultChatFactoryFor(deps, correlationId),
       config,
       nowMs: now(),
       tokenBudget,

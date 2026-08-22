@@ -14,8 +14,10 @@ import { createRunRegistry } from "./runs.js";
 import { createUiServer, UI_HOST } from "./server.js";
 import { EventEmitter } from "node:events";
 import type { ServerResponse } from "node:http";
-import { openBrowserSseStream } from "./browser.js";
+import { handleBrowserEvents, openBrowserSseStream } from "./browser.js";
 import type { SseBackpressureSignal } from "./sse-write.js";
+import type { RouteContext } from "./routes.js";
+import type { ServerDiagnosticRecord, ServerDiagnosticSink } from "./diagnostics-log.js";
 import {
   BrowserToolError,
   type BrowserEventEmitter,
@@ -819,5 +821,50 @@ describe("openBrowserSseStream backpressure (KEIKO-0142)", () => {
     const writesAfterClose = fake.writes.length;
     manager.emit("session-close", browserEvent("session-close", "navigated", 2));
     expect(fake.writes).toHaveLength(writesAfterClose);
+  });
+});
+
+describe("handleBrowserEvents backpressure correlation (ADR-0173 D5 / g12)", () => {
+  it("threads the request's own correlation id into the backpressure diagnostic instead of minting one", () => {
+    const fake = makeFakeSseRes();
+    fake.writeReturns = false; // rejects the ready frame -> immediate backpressure kill.
+    const manager = new FakeBrowserSessionManager();
+    manager.opened.push("session-thread");
+    const records: ServerDiagnosticRecord[] = [];
+    const diagnostics: ServerDiagnosticSink = {
+      record: (entry) => {
+        records.push(entry);
+      },
+    };
+    const baseDeps: UiHandlerDeps = {
+      config: undefined,
+      configPresent: false,
+      evidenceStore: {
+        put: (): string => "",
+        list: (): readonly string[] => [],
+        get: (): undefined => undefined,
+        delete: (): undefined => undefined,
+      },
+      env: process.env,
+      redactor: buildRedactor({}),
+      registry: createRunRegistry(),
+      modelPortFactory: (): undefined => undefined,
+      store: createInMemoryUiStore(),
+      browser: manager,
+      diagnostics,
+    };
+    const ctx: RouteContext = {
+      req: { on: (): void => undefined } as unknown as RouteContext["req"],
+      res: fake.res,
+      params: { sessionId: "session-thread" },
+      url: new URL("http://127.0.0.1/api/browser/sessions/session-thread/events"),
+      correlationId: "req-browser-thread-01",
+    };
+
+    handleBrowserEvents(ctx, baseDeps);
+
+    expect(records).toHaveLength(1);
+    expect(records[0]?.source).toBe("sse.browser.backpressure");
+    expect(records[0]?.correlationId).toBe("req-browser-thread-01");
   });
 });

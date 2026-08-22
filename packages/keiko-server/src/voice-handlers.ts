@@ -41,6 +41,7 @@ import { currentGatewayConfig, currentGatewayEgressConfig } from "./deps.js";
 import { isVoiceDisabledByPolicy } from "./read-handlers.js";
 import { createRequestCancellation } from "./request-cancellation.js";
 import { toSpeakableText } from "./voice-speech-text.js";
+import { UNKNOWN_CORRELATION_ID } from "./correlation.js";
 import { emitServerDiagnostic, serverDiagnosticFromError } from "./diagnostics-log.js";
 
 // The decoded-audio ceiling for one dictation clip. This is the authoritative bound on the
@@ -793,7 +794,7 @@ async function pipeAudioStream(
       emitServerDiagnostic(
         deps.diagnostics,
         serverDiagnosticFromError({
-          correlationId: ctx.correlationId ?? "unknown",
+          correlationId: ctx.correlationId ?? UNKNOWN_CORRELATION_ID,
           operation: "voice.speech.stream",
           source: "voice.speech",
           error,

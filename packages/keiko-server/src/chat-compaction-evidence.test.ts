@@ -425,6 +425,13 @@ describe("chat compaction evidence wiring (ADR-0057 D3)", () => {
       expect(records[0]?.message).toBe("Audit or evidence persistence failed.");
       expect(records[0]?.errorClass).toMatch(/^[A-Z][A-Za-z0-9]*$/);
       expect(records[0]?.correlationId).toMatch(/^[A-Za-z0-9._-]{8,128}$/);
+      // ADR-0173 D5 / g12: the failure's correlationId is THIS attempt's own runId (same
+      // derivation the successful-persist tests above pin), not a disconnected `randomUUID()` —
+      // an operator can join the failure back to the compaction attempt it belongs to. Before the
+      // fix this was a random UUID (with dashes) and never matched the runId shape below.
+      expect(records[0]?.correlationId).toBe(
+        `chat-${sha256Hex("chat-compaction-diagnostic").slice(0, 16)}-t4`,
+      );
       expect(JSON.stringify(records)).not.toContain(SECRET);
       expect(consoleWarn).not.toHaveBeenCalled();
     } finally {

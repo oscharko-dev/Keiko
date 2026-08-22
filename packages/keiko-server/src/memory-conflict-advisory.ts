@@ -233,6 +233,7 @@ async function callAdvisoryModel(
   modelId: string,
   prompt: string,
   responseFormat: ResponseFormat,
+  jobId: string,
 ): Promise<AdvisoryCallResult> {
   const controller = new AbortController();
   let timer: ReturnType<typeof setTimeout> | undefined;
@@ -256,6 +257,7 @@ async function callAdvisoryModel(
           temperature: 0,
           topP: 1,
           responseFormat,
+          logContext: { correlationId: jobId },
         },
         controller.signal,
       ),
@@ -406,6 +408,49 @@ function emitAdvisoryPhaseSummary(
   });
 }
 
+interface AdvisoryPhaseSharedContext {
+  readonly deps: UiHandlerDeps;
+  readonly jobId: string;
+  readonly model: ModelPort;
+  readonly modelId: string;
+  readonly memoriesById: ReadonlyMap<MemoryId, MemoryRecord>;
+  readonly policy: CapturePolicyOptions;
+  readonly startedAt: number;
+}
+
+// Split out of runAdvisoryPhase to keep it within the line budget: one review item's candidate
+// gate, cap/budget truncation, and (sequential, ADR-0120 D8) advisory model call. `counts` is
+// mutated in place — the caller owns its lifetime across the whole phase.
+async function processAdvisoryReviewItem(
+  ctx: AdvisoryPhaseSharedContext,
+  item: ReviewItem,
+  attempted: number,
+  counts: AdvisoryPhaseCounts,
+): Promise<{ readonly item: ReviewItem; readonly attemptedCall: boolean }> {
+  const candidate = prepareAdvisoryCandidate(item, ctx.memoriesById, ctx.deps.redactor, ctx.policy);
+  if (candidate === undefined) return { item, attemptedCall: false };
+  if (attempted >= MAX_ADVISORY_CALLS_PER_JOB) {
+    counts.truncatedByCap += 1;
+    return { item, attemptedCall: false };
+  }
+  if (Date.now() - ctx.startedAt >= ADVISORY_PHASE_BUDGET_MS) {
+    counts.truncatedByBudget += 1;
+    return { item, attemptedCall: false };
+  }
+  const call = await callAdvisoryModel(
+    ctx.model,
+    ctx.modelId,
+    candidate.prompt,
+    advisoryResponseFormat(candidate.labels),
+    ctx.jobId,
+  );
+  const outcome = advisoryOutcomeFromCall(call, candidate, ctx.deps.redactor, ctx.policy);
+  return {
+    item: applyAdvisoryOutcome(item, outcome, ctx.deps, ctx.jobId, counts),
+    attemptedCall: true,
+  };
+}
+
 async function runAdvisoryPhase(
   deps: UiHandlerDeps,
   jobId: string,
@@ -429,35 +474,20 @@ async function runAdvisoryPhase(
     truncatedByCap: 0,
     truncatedByBudget: 0,
   };
-  const startedAt = Date.now();
+  const sharedCtx: AdvisoryPhaseSharedContext = {
+    deps,
+    jobId,
+    model,
+    modelId,
+    memoriesById,
+    policy,
+    startedAt: Date.now(),
+  };
   let attempted = 0;
   for (const item of reviewItems) {
-    const candidate = prepareAdvisoryCandidate(item, memoriesById, deps.redactor, policy);
-    if (candidate === undefined) {
-      enriched.push(item);
-      continue;
-    }
-    if (attempted >= MAX_ADVISORY_CALLS_PER_JOB) {
-      counts.truncatedByCap += 1;
-      enriched.push(item);
-      continue;
-    }
-    if (Date.now() - startedAt >= ADVISORY_PHASE_BUDGET_MS) {
-      counts.truncatedByBudget += 1;
-      enriched.push(item);
-      continue;
-    }
-    attempted += 1;
-    // Sequential by design (ADR-0120 D8): bounds concurrency to 1 and keeps the wall-clock
-    // budget check above accurate between calls, rather than a call-per-item fan-out.
-    const call = await callAdvisoryModel(
-      model,
-      modelId,
-      candidate.prompt,
-      advisoryResponseFormat(candidate.labels),
-    );
-    const outcome = advisoryOutcomeFromCall(call, candidate, deps.redactor, policy);
-    enriched.push(applyAdvisoryOutcome(item, outcome, deps, jobId, counts));
+    const result = await processAdvisoryReviewItem(sharedCtx, item, attempted, counts);
+    enriched.push(result.item);
+    if (result.attemptedCall) attempted += 1;
   }
   emitAdvisoryPhaseSummary(deps, jobId, counts);
   // Re-check cancellation after the (possibly multi-second) advisory window closes (ADR-0120

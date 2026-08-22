@@ -14,6 +14,7 @@ import {
   findConfiguredCapability,
   QualityIntelligenceSafeErrorException,
   type ChatMessage,
+  type GatewayCallRequest,
   type GatewayRequest,
   type ModelCapability,
 } from "@oscharko-dev/keiko-model-gateway";
@@ -217,6 +218,9 @@ const JUDGE_TASK_PROFILE = MgQI.getQualityIntelligenceTaskProfile("qi:judge-logi
 
 export interface QiJudgePortOptions {
   readonly requestedSeed?: number | undefined;
+  // The request/run correlation id (ADR-0173 D5), stamped into every judge model call's
+  // GatewayCallRequest.logContext so a judge-stage gateway line joins the run's other lines.
+  readonly correlationId?: string | undefined;
 }
 
 function isRubricDimensionName(value: string): value is TestQualityDimensionName {
@@ -469,7 +473,7 @@ export function createQiJudgePort(
         };
       }
       const cancellation = MgQI.composeCancellationSignal(JUDGE_TASK_PROFILE.timeoutMsHint, signal);
-      const request: GatewayRequest = {
+      const request: GatewayCallRequest = {
         modelId,
         messages,
         stream: false,
@@ -477,6 +481,7 @@ export function createQiJudgePort(
         temperature: 0,
         ...(useSeed ? { seed: requestedSeed } : {}),
         responseFormat: buildQiJudgeResponseFormat(),
+        logContext: { correlationId: options.correlationId },
       };
       let removeAbortListener = (): void => {
         /* not attached yet */

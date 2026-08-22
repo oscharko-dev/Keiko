@@ -684,6 +684,66 @@ describe("update remediation manager", () => {
     expect(localKnowledge.runs()).toBe(1);
   });
 
+  // ADR-0173 D5 / g12: each of `recordDraftFailure`'s call sites used to mint its own
+  // `randomUUID()`, so a cascade of failures inside a SINGLE `runAction` call (persist fails, then
+  // the outcome-uncertainty fallback also fails) reported as if they were unrelated operations.
+  // Fails before the fix — two independent random UUIDs practically never match — and passes after,
+  // once every reporter reads the one id `runAction` mints at its own start.
+  it("shares one correlation id across every diagnostic from a single failing action run", async () => {
+    const diagnostics: ServerDiagnosticRecord[] = [];
+    const localKnowledge = fakeLocalKnowledge();
+    const durable = createUpdateLocalStateManager({ stateDir: makeStateDir(), now: () => NOW });
+    let stateWrites = 0;
+    const unreliable: UpdateLocalStateManager = {
+      ...durable,
+      writeRuntimeState: (state) => {
+        stateWrites += 1;
+        if (stateWrites >= 2) throw new Error("terminal state unavailable");
+        return durable.writeRuntimeState(state);
+      },
+    };
+    const subject = createUpdateRemediationManager({
+      localState: unreliable,
+      localKnowledge,
+      now: () => NOW,
+      diagnostics: { record: (record) => diagnostics.push(record) },
+    });
+
+    await subject.runAction({
+      actionId: "local-knowledge-reindex:local-knowledge",
+      targetVersion: TARGET,
+      impact: localKnowledgeImpact,
+    });
+
+    const sources = diagnostics.map((record) => record.source);
+    expect(sources).toContain("update-remediation.persistDraftStatus");
+    expect(sources).toContain("update-remediation.persistOutcomeUncertainty");
+    const correlationIds = new Set(diagnostics.map((record) => record.correlationId));
+    expect(correlationIds.size).toBe(1);
+  });
+
+  it("threads a caller-supplied correlation id through onto every reported diagnostic", async () => {
+    const diagnostics: ServerDiagnosticRecord[] = [];
+    const subject = createUpdateRemediationManager({
+      localState: createUpdateLocalStateManager({ stateDir: makeStateDir(), now: () => NOW }),
+      localKnowledge: throwingLocalKnowledge(),
+      now: () => NOW,
+      diagnostics: { record: (record) => diagnostics.push(record) },
+      redactString: (value) => value,
+    });
+
+    await subject.runAction(
+      {
+        actionId: "local-knowledge-reindex:local-knowledge",
+        targetVersion: TARGET,
+        impact: localKnowledgeImpact,
+      },
+      "caller-req-77",
+    );
+
+    expect(diagnostics).toContainEqual(expect.objectContaining({ correlationId: "caller-req-77" }));
+  });
+
   it("retains the live lease when neither terminal nor uncertainty state can persist", async () => {
     const localKnowledge = fakeLocalKnowledge();
     const durable = createUpdateLocalStateManager({ stateDir: makeStateDir(), now: () => NOW });

@@ -685,3 +685,37 @@ describe("Confluence sync — request validation fail-closed", () => {
     );
   });
 });
+
+describe("Confluence sync — governed (agent-initiated) start correlation", () => {
+  it("threads the request's own correlation id into an authority-denied governed start instead of minting one", async () => {
+    // ADR-0173 D5 / g12: ctx.correlationId is minted at request entry (server.ts) and is already
+    // in scope in handleStartAtlassianConnectorSync — the governed denial record must reuse it,
+    // not a disconnected randomUUID(). An authority referencing a runId the server-side registry
+    // never issued denies fast (authority-invalid) without needing a real envelope setup.
+    const port = createInMemoryConfluenceFixture({ baseUrl: BASE_URL, spaces: [] });
+    const { deps, credential } = depsFor(port);
+    const ctx = {
+      ...ctxFor(
+        "POST",
+        { authRef: credential.authRef },
+        {
+          spaceKeys: ["ENG"],
+          authority: {
+            runId: "unregistered-agent-run",
+            envelopeDigest: "0".repeat(64),
+            workspaceRoot: "/nonexistent/workspace",
+          },
+        },
+      ),
+      correlationId: "req-governed-thread-01",
+    };
+
+    const result = await handleStartAtlassianConnectorSync(ctx, deps);
+
+    expect(result.status).toBe(200);
+    expect(result.body).toMatchObject({
+      disposition: "denied",
+      correlationId: "req-governed-thread-01",
+    });
+  });
+});

@@ -124,6 +124,8 @@ export async function handleRunUpdateRemediationAction(
     if (!parsed.ok) {
       throw new UpdateRemediationError("BAD_REQUEST", parsed.errors.join("; "), 400);
     }
-    return { status: 200, body: await guard.runAction(parsed.value) };
+    // Threads the request's own correlation id (ADR-0173 D5 / g12) so every diagnostic this one
+    // remediation action reports stays joined under it, per runAction's own contract.
+    return { status: 200, body: await guard.runAction(parsed.value, ctx.correlationId) };
   });
 }

@@ -8,7 +8,11 @@ import { join } from "node:path";
 import { createMemoryVault, type MemoryVaultStore } from "@oscharko-dev/keiko-memory-vault";
 import type { NormalizedResponse } from "@oscharko-dev/keiko-contracts";
 import type { ModelPort } from "@oscharko-dev/keiko-harness";
-import type { GatewayConfig, GatewayRequest } from "@oscharko-dev/keiko-model-gateway";
+import type {
+  GatewayCallRequest,
+  GatewayConfig,
+  GatewayRequest,
+} from "@oscharko-dev/keiko-model-gateway";
 import type {
   ConversationId,
   MemoryRecord,
@@ -317,6 +321,10 @@ describe("captureSalientFromTurn", () => {
         expect.objectContaining({
           errorClass: "SalienceCaptureDropped",
           message: "voice salience capture skipped: background queue full (32/32)",
+          // ADR-0173 D5 / g12: this informational diagnostic used to mint its own disconnected
+          // `randomUUID()` instead of reusing the turn-scoped id the caller already resolved
+          // (`"assistant-dropped"`, the correlationId argument below). Fails before the fix.
+          correlationId: "assistant-dropped",
         }),
       );
 
@@ -354,6 +362,75 @@ describe("captureSalientFromTurn", () => {
     expect(actions).toHaveLength(3);
     expect(actions.every((a) => a.kind === "candidate")).toBe(true);
     expect(countMemories(vault, ctx)).toBe(3);
+  });
+
+  // ADR-0173 D5 / g12: the capture-summary diagnostic used to mint its own disconnected
+  // `randomUUID()` instead of the turn-scoped id `captureSalientFromTurn` already resolved, so a
+  // successful turn's summary line could never be joined to that same turn's other diagnostics.
+  // Fails before the fix (the summary's correlationId would be an unrelated fresh UUID).
+  it("carries the turn's correlation id on the capture summary diagnostic", async () => {
+    const vault = makeVault();
+    const diagnostics = { record: vi.fn<(record: ServerDiagnosticRecord) => void>() };
+    const deps = makeDeps({ memoryVault: vault, diagnostics });
+
+    const actions = await captureSalientFromTurn(
+      deps,
+      { content: USER_TEXT, memory: { enabled: true } },
+      context(),
+      "gpt-test",
+      "Sounds like a great project!",
+      "desktop",
+      "assistant-summary-turn",
+    );
+
+    expect(actions.length).toBeGreaterThan(0);
+    expect(diagnostics.record).toHaveBeenCalledWith(
+      expect.objectContaining({
+        errorClass: "SalienceCaptureSummary",
+        correlationId: "assistant-summary-turn",
+      }),
+    );
+  });
+
+  // ADR-0173 D5: the same turn-scoped correlation id must also reach the salience model.call's
+  // GatewayCallRequest.logContext, not only the diagnostic above, so a gateway retry line for this
+  // extraction joins the turn's trail.
+  it("stamps the turn's correlation id into the salience model gateway call's logContext", async () => {
+    const vault = makeVault();
+    const seenRequests: GatewayCallRequest[] = [];
+    const recordingModel: ModelPort = {
+      call(request): Promise<NormalizedResponse> {
+        seenRequests.push(request);
+        return Promise.resolve({
+          modelId: request.modelId,
+          content: ATLAS_FACTS,
+          finishReason: "stop",
+          toolCalls: [],
+          structuredOutput: null,
+          usage: {
+            requestId: "salience-logcontext-test",
+            promptTokens: 7,
+            completionTokens: 3,
+            latencyMs: 11,
+            costClass: "high",
+          },
+        });
+      },
+    };
+    const deps = makeDeps({ memoryVault: vault, modelPortFactory: () => recordingModel });
+
+    await captureSalientFromTurn(
+      deps,
+      { content: USER_TEXT, memory: { enabled: true } },
+      context(),
+      "gpt-test",
+      "Sounds like a great project!",
+      "desktop",
+      "assistant-logcontext-turn",
+    );
+
+    expect(seenRequests.length).toBeGreaterThan(0);
+    expect(seenRequests[0]?.logContext?.correlationId).toBe("assistant-logcontext-turn");
   });
 
   it("keeps a failed model response body out of operator diagnostics", async () => {

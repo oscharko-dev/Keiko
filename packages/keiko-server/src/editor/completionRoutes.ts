@@ -99,7 +99,10 @@ export interface EditorCompletionRouteOptions {
 }
 
 // Default chat seam: route the elected model through the Model Gateway, server-side only.
-function defaultChatFactoryFor(deps: UiHandlerDeps): CompletionChatFactory {
+function defaultChatFactoryFor(
+  deps: UiHandlerDeps,
+  correlationId: string | undefined,
+): CompletionChatFactory {
   return (_config, modelId): ModelChatFn => {
     const gateway = currentGateway(deps);
     if (gateway === undefined) throw new TypeError("Model gateway is unavailable.");
@@ -111,6 +114,7 @@ function defaultChatFactoryFor(deps: UiHandlerDeps): CompletionChatFactory {
           { role: "user", content: chatRequest.user },
         ],
         cancellationSignal: chatSignal,
+        logContext: { correlationId },
       });
       return { content: response.content, usage: response.usage };
     };
@@ -649,7 +653,7 @@ export async function handleEditorCompletion(
       root.realRoot,
       signal,
       deps,
-      options.chatFactory ?? defaultChatFactoryFor(deps),
+      options.chatFactory ?? defaultChatFactoryFor(deps, ctx.correlationId),
       options.tokenBudget ?? sharedEditorModelTokenBudget,
       options.now ?? Date.now,
     );
