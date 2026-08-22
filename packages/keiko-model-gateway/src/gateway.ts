@@ -34,6 +34,7 @@ import type {
   ModelProviderConfig,
   NormalizedResponse,
   ProviderAdapter,
+  UsageMetadata,
 } from "./types.js";
 
 export interface GatewayDeps {
@@ -46,6 +47,11 @@ export interface GatewayDeps {
   // Activity-log sink (ADR-0019: declared as a local port in `observability.ts`, never imported
   // from the server). Unset means no-op — the Gateway behaves exactly as it did before.
   readonly log?: ModelGatewayLogSink | undefined;
+  // Fetch seam (ADR-0173 §7.3): threaded into every `OpenAiAdapter` this Gateway constructs, so a
+  // caller can replace the transport for deterministic replay (`createScriptedGatewayFetch`)
+  // without touching the real network. Unset means the adapter falls back to `globalThis.fetch`,
+  // exactly as it did before this field existed.
+  readonly fetchImpl?: typeof fetch | undefined;
 }
 
 // A gateway call plus the caller's log context.
@@ -106,10 +112,54 @@ interface RoutedCall {
   readonly capability: ModelCapability;
 }
 
+// Bare hostname only — never `scheme://host:port` (that's `logEndpointHost`, used on the per-call
+// attempt line) and never the full `baseUrl`, which can carry a path or embedded credentials for a
+// misconfigured provider entry (`https://user:token@host/deploy-path`). An unparseable URL yields
+// undefined rather than echoing the raw string back, mirroring `logEndpointHost`'s own failure mode.
+function providerEndpointHost(baseUrl: string): string | undefined {
+  try {
+    return new URL(baseUrl).hostname;
+  } catch {
+    return undefined;
+  }
+}
+
+// The moment worth naming on a stream is the FIRST content the caller actually saw, not the first
+// chunk of any kind — a synthesised buffered-fallback stream's lone "delta" already carries the
+// whole answer, and a provider's own stream can open with a role-only or empty delta before real
+// content arrives. Called on every chunk; returns undefined once a non-empty one has already fired
+// so the caller's `??=` never re-times a later chunk.
+function firstNonEmptyDeltaMs(
+  chunk: GatewayStreamChunk,
+  elapsed: () => number,
+): number | undefined {
+  return chunk.type === "delta" && chunk.token.length > 0 ? elapsed() : undefined;
+}
+
+// A minimal usage projection carried on the stream-completed line — never the full UsageMetadata,
+// whose `requestId`/`latencyMs`/`costClass` are already on the envelope or on `extra` elsewhere.
+interface StreamTerminalUsage {
+  readonly promptTokens: number;
+  readonly completionTokens: number;
+}
+
+// Streaming usage is accumulated by the adapter from an optional provider-supplied final chunk
+// (OpenAI's `include_usage`); a provider that never sends one leaves both counts at their initial
+// zero. Zero counts are therefore not a measurement, they are the absence of one — logging them
+// would tell an operator "this call cost nothing", which is a stronger and false claim compared to
+// simply not printing a field the provider never supplied.
+function streamUsageIfSupplied(usage: UsageMetadata | undefined): StreamTerminalUsage | undefined {
+  if (usage === undefined || (usage.promptTokens === 0 && usage.completionTokens === 0)) {
+    return undefined;
+  }
+  return { promptTokens: usage.promptTokens, completionTokens: usage.completionTokens };
+}
+
 export class Gateway {
   private readonly clock: Clock;
   private readonly random: () => number;
   private readonly adapter: ProviderAdapter | undefined;
+  private readonly fetchImpl: typeof fetch | undefined;
   private readonly providers: ReadonlyMap<string, ModelProviderConfig>;
   private readonly breakers = new Map<string, CircuitBreaker>();
   private readonly log: ModelGatewayLogSink;
@@ -121,8 +171,31 @@ export class Gateway {
     this.clock = deps.clock ?? systemClock;
     this.random = deps.random ?? Math.random;
     this.adapter = deps.adapter;
+    this.fetchImpl = deps.fetchImpl;
     this.log = resolveLogSink(deps.log);
     this.providers = new Map(config.providers.map((p) => [p.modelId, p]));
+    this.logConfigResolved();
+  }
+
+  // ONE-TIME configuration snapshot, written once per Gateway construction (the process-wide
+  // instance cache in keiko-server constructs exactly one Gateway per distinct GatewayConfig, so
+  // this line does not repeat on every call). Answers "what did the gateway actually resolve to
+  // run with" — the question an operator has no other way to answer once a provider's env-sourced
+  // baseUrl or timeout has been merged and parsed. Per-provider fields only, and never `baseUrl`
+  // or `apiKey`: `endpointHost` is the bare hostname a misconfigured entry cannot turn into a path
+  // or embedded-credential leak.
+  private logConfigResolved(): void {
+    this.log.write(
+      gatewayEvent("info", "gateway.config.resolved", undefined, {
+        providers: this.config.providers.map((provider) => ({
+          modelId: provider.modelId,
+          endpointHost: providerEndpointHost(provider.baseUrl),
+          timeoutMs: provider.timeoutMs,
+          maxRetries: provider.maxRetries,
+          retryBaseDelayMs: provider.retryBaseDelayMs,
+        })),
+      }),
+    );
   }
 
   async chat(request: GatewayCallRequest): Promise<NormalizedResponse> {
@@ -184,15 +257,23 @@ export class Gateway {
     const adapter = this.adapterFor(requestId, route.capability);
     this.logCallStarted(ids, route, true);
     let chunkCount = 0;
+    // The moment the caller saw its first actual content, timed off the same `elapsed()` as every
+    // other stream outcome. `??=` locks it in on the first non-empty delta and leaves it alone.
+    let firstTokenMs: number | undefined;
+    let terminalUsage: UsageMetadata | undefined;
     // EVERY started stream needs exactly one outcome line. Set the moment an outcome is written,
     // so the `finally` can tell "the consumer walked away" from the two paths that already spoke.
     let settled = false;
     try {
       for await (const chunk of this.streamFrom(adapter, request, route.provider, ids)) {
         chunkCount += 1;
-        yield chunk.type === "done"
-          ? { type: "done", response: this.enrich(chunk.response, requestId, start, route) }
-          : chunk;
+        firstTokenMs ??= firstNonEmptyDeltaMs(chunk, elapsed);
+        if (chunk.type === "done") {
+          terminalUsage = chunk.response.usage;
+          yield { type: "done", response: this.enrich(chunk.response, requestId, start, route) };
+        } else {
+          yield chunk;
+        }
       }
       breaker.recordSuccess(ids.correlationId);
       settled = true;
@@ -217,7 +298,14 @@ export class Gateway {
     }
     // Outside the try on purpose: a sink that throws here must not be caught above and reported as
     // a mid-stream provider failure — which would also trip the circuit breaker on a logging fault.
-    this.logStreamCompleted(ids, route, chunkCount, elapsed());
+    this.logStreamCompleted(
+      ids,
+      route,
+      chunkCount,
+      elapsed(),
+      firstTokenMs,
+      streamUsageIfSupplied(terminalUsage),
+    );
   }
 
   // THE ATTEMPT LINE for a model call — written BEFORE the adapter is invoked, not after it
@@ -264,6 +352,8 @@ export class Gateway {
     route: RoutedCall,
     chunkCount: number,
     durationMs: number,
+    firstTokenMs: number | undefined,
+    usage: StreamTerminalUsage | undefined,
   ): void {
     this.log.write(
       gatewayEvent(
@@ -275,6 +365,8 @@ export class Gateway {
           modelId: route.provider.modelId,
           costClass: route.capability.costClass,
           chunkCount,
+          ...(firstTokenMs === undefined ? {} : { firstTokenMs }),
+          ...usage,
         },
         durationMs,
       ),
@@ -357,6 +449,8 @@ export class Gateway {
           costClass: route.capability.costClass,
           finishReason: result.finishReason,
           toolCallCount: result.toolCalls.length,
+          promptTokens: result.usage.promptTokens,
+          completionTokens: result.usage.completionTokens,
           streaming: false,
         },
         durationMs,
@@ -500,6 +594,7 @@ export class Gateway {
         requestId,
         costClass: capability.costClass,
         now: this.clock.now,
+        fetchImpl: this.fetchImpl,
       })
     );
   }

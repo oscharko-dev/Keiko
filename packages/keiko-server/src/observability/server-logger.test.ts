@@ -130,6 +130,32 @@ describe("server logger bound context", () => {
     expect(sink.events[0]?.extra).toBeUndefined();
   });
 
+  it("lifts a bound parentCorrelationId onto the envelope, like correlationId", () => {
+    const sink = createBufferedServerLogSink();
+    const logger = createServerLogger({ sink, level: "debug" }).child({
+      correlationId: "job-child-1",
+      parentCorrelationId: "req-parent-1",
+    });
+    logger.info({ category: "indexing", op: "job.spawned" });
+
+    expect(sink.events[0]).toMatchObject({
+      correlationId: "job-child-1",
+      parentCorrelationId: "req-parent-1",
+    });
+    // The lifted keys must not also appear as ordinary fields.
+    expect(sink.events[0]?.extra).toBeUndefined();
+  });
+
+  it("lets an explicit event parentCorrelationId override the bound one", () => {
+    const sink = createBufferedServerLogSink();
+    const logger = createServerLogger({ sink, level: "debug" }).child({
+      parentCorrelationId: "req-parent-bound",
+    });
+    logger.info({ category: "indexing", op: "x", parentCorrelationId: "req-parent-explicit" });
+
+    expect(sink.events[0]?.parentCorrelationId).toBe("req-parent-explicit");
+  });
+
   it("ignores an unrecognised bound category rather than inventing one", () => {
     const sink = createBufferedServerLogSink();
     createServerLogger({ sink, level: "debug" }).child({ category: "made-up" }).info({ op: "x" });

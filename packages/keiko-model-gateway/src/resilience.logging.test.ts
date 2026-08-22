@@ -5,6 +5,7 @@
 import { describe, expect, it } from "vitest";
 import {
   CancelledError,
+  ProviderError,
   RateLimitError,
   TransportError,
 } from "@oscharko-dev/keiko-security/errors/gateway";
@@ -79,6 +80,59 @@ describe("executeWithRetry — activity log", () => {
       maxRetries: 2,
     });
     expect(typeof scheduled.extra?.delayMs).toBe("number");
+    // TransportError carries neither an HTTP status nor a server-supplied retry delay, so
+    // providerErrorDetail() must contribute nothing here — pinning the negative case keeps the
+    // positive ones below honest.
+    expect(scheduled.extra?.httpStatus).toBeUndefined();
+    expect(scheduled.extra?.retryAfterMs).toBeUndefined();
+  });
+
+  it("carries the provider's httpStatus on both the scheduled and exhausted retry lines", async () => {
+    const log = recorder();
+    const attempt = (): Promise<never> =>
+      Promise.reject(new ProviderError("upstream overloaded", 503));
+    await expect(
+      executeWithRetry(attempt, RETRY_CONFIG, stubClock(), undefined, () => 0.5, {
+        sink: log.sink,
+        modelId: "example-chat-model",
+      }),
+    ).rejects.toBeInstanceOf(ProviderError);
+
+    const scheduledLines = log.events.filter((event) => event.op === "gateway.retry.scheduled");
+    expect(scheduledLines).toHaveLength(2);
+    for (const line of scheduledLines) {
+      expect(line.extra?.httpStatus).toBe(503);
+      expect(line.extra?.retryAfterMs).toBeUndefined();
+    }
+    const exhausted = eventFor(log.events, "gateway.retry.exhausted");
+    expect(exhausted.extra?.httpStatus).toBe(503);
+    expect(exhausted.extra?.retryAfterMs).toBeUndefined();
+  });
+
+  it("carries the provider's retryAfterMs and httpStatus=429 on both the scheduled and exhausted retry lines", async () => {
+    const log = recorder();
+    const attempt = (): Promise<never> => Promise.reject(new RateLimitError("slow down", 1_500));
+    await expect(
+      executeWithRetry(
+        attempt,
+        { maxRetries: 1, retryBaseDelayMs: 10 },
+        stubClock(),
+        undefined,
+        () => 0.5,
+        {
+          sink: log.sink,
+        },
+      ),
+    ).rejects.toBeInstanceOf(RateLimitError);
+
+    const scheduled = eventFor(log.events, "gateway.retry.scheduled");
+    expect(scheduled.extra?.retryAfterMs).toBe(1_500);
+    // A rate limit is always HTTP 429 by definition — RateLimitError carries httpStatus too, so a
+    // consumer never has to infer the status from errorKind === GATEWAY_RATE_LIMIT alone.
+    expect(scheduled.extra?.httpStatus).toBe(429);
+    const exhausted = eventFor(log.events, "gateway.retry.exhausted");
+    expect(exhausted.extra?.retryAfterMs).toBe(1_500);
+    expect(exhausted.extra?.httpStatus).toBe(429);
   });
 
   it("labels the terminal attempt with the attempt number it gave up on", async () => {
@@ -150,7 +204,41 @@ describe("executeWithRetry — activity log", () => {
     const budget = eventFor(log.events, "gateway.retry.budget-exhausted");
     expect(budget.level).toBe("warn");
     expect(budget.errorKind).toBe("GATEWAY_RATE_LIMIT");
-    expect(budget.extra).toMatchObject({ modelId: "m", hadPriorFailure: true });
+    expect(budget.extra).toMatchObject({
+      modelId: "m",
+      hadPriorFailure: true,
+      retryAfterMs: 5,
+    });
+    // A rate limit is always HTTP 429 by definition — RateLimitError carries httpStatus too.
+    expect(budget.extra?.httpStatus).toBe(429);
+  });
+
+  it("carries the provider's httpStatus on the budget-exhausted line", async () => {
+    const log = recorder();
+    // Same clock-jump shape as above: attempt 1 runs and fails inside the budget, the second
+    // turn's budget check lands past it.
+    let reads = 0;
+    const clock: Clock = {
+      now: (): number => {
+        reads += 1;
+        return reads <= 3 ? 0 : 10_000;
+      },
+      sleep: (): Promise<void> => Promise.resolve(),
+    };
+    const attempt = (): Promise<never> => Promise.reject(new ProviderError("overloaded", 503));
+    await expect(
+      executeWithRetry(
+        attempt,
+        { maxRetries: 3, retryBaseDelayMs: 1, timeoutMs: 1000 },
+        clock,
+        undefined,
+        () => 0.5,
+        { sink: log.sink, modelId: "m" },
+      ),
+    ).rejects.toBeInstanceOf(ProviderError);
+    const budget = eventFor(log.events, "gateway.retry.budget-exhausted");
+    expect(budget.extra?.httpStatus).toBe(503);
+    expect(budget.extra?.retryAfterMs).toBeUndefined();
   });
 
   it("stays silent — and behaviourally identical — when no sink is wired", async () => {

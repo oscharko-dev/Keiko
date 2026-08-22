@@ -2087,7 +2087,10 @@ export function tryBuildKnowledgePodRetrievalActivity(input: {
     emitServerDiagnostic(
       input.diagnostics,
       serverDiagnosticFromError({
-        correlationId: "unknown",
+        // No request id is in scope here; a fixed label that satisfies the canonical correlation-id
+        // shape keeps the record joinable by its operation instead of being replaced by the sink's
+        // content-free marker (`"unknown"` is shorter than the shape's minimum).
+        correlationId: "retrieval-activity-uncorrelated",
         operation: "retrieval-activity.tryBuild",
         source: "retrieval-activity.tryBuild",
         error,

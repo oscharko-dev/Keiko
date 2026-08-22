@@ -163,6 +163,7 @@ import {
   type GitEditorDiffScope,
   type GatewayUnsupportedDiscoveredModel,
 } from "@oscharko-dev/keiko-contracts";
+import { buildBffHeaders, CORRELATION_HEADER, newClientCorrelationId } from "./bff-correlation";
 import {
   DESKTOP_CHAT_STREAM_EVENT_TYPES,
   isDesktopChatStreamEvent,
@@ -1273,6 +1274,12 @@ export async function regenerateDesktopChat(
 // Thrown pre-stream when the BFF responds with a non-SSE content-type (e.g.
 // STREAMING_UNSUPPORTED). The caller falls back to sendDesktopChat.
 export class StreamingUnavailableError extends Error {
+  // RB-6 (GEN-OBS-CORRELATION-402/601): the request correlation id, read off the SSE response's
+  // X-Keiko-Correlation-Id header — same shape and purpose as ApiError.correlationId, so a
+  // pre-stream failure is as traceable as any other BFF error. Optional and set after
+  // construction, matching ApiError's pattern.
+  public correlationId?: string;
+
   constructor(
     public readonly code: string,
     message: string,
@@ -1283,7 +1290,7 @@ export class StreamingUnavailableError extends Error {
 }
 
 export type SseDonePayload = DesktopChatStreamDoneEvent["data"];
-type SseErrorPayload = DesktopChatStreamErrorEvent["data"];
+export type SseErrorPayload = DesktopChatStreamErrorEvent["data"];
 
 export interface StreamHandlers {
   readonly onToken: (text: string) => void;
@@ -1412,21 +1419,28 @@ async function consumeSseStream(
 // (BFF returned a JSON pre-stream error), throws StreamingUnavailableError
 // so the caller can fall back. Otherwise reads the stream and dispatches to
 // handlers. Respects `signal` (abort stops reading immediately).
+//
+// RB-6 / ADR-0173 D5 — rebuilt on the same buildBffHeaders/newClientCorrelationId path
+// bffFetchJson (./http) uses, instead of a hand-built header object, so a streamed chat request
+// carries X-Keiko-Correlation-Id exactly like every other BFF call and a pre-stream failure is
+// traceable by the same id (attached to the thrown StreamingUnavailableError below).
 export async function sendDesktopChatStream(
   input: SendDesktopChatInput,
   signal: AbortSignal,
   handlers: StreamHandlers,
 ): Promise<void> {
-  const res = await fetch("/api/desktop/chat/stream", {
+  const correlationId = newClientCorrelationId();
+  const requestInit: RequestInit = {
     method: "POST",
-    headers: {
-      Accept: "text/event-stream",
-      "Content-Type": "application/json",
-      "X-Keiko-CSRF": "1",
-    },
     body: JSON.stringify(input),
+    headers: { Accept: "text/event-stream" },
+  };
+  const res = await fetch("/api/desktop/chat/stream", {
+    ...requestInit,
+    headers: buildBffHeaders(requestInit, correlationId),
     signal,
   });
+  const responseCorrelationId = res.headers.get(CORRELATION_HEADER) ?? correlationId;
 
   const contentType = res.headers.get("content-type") ?? "";
   if (!contentType.includes("text/event-stream")) {
@@ -1440,11 +1454,18 @@ export async function sendDesktopChatStream(
     } catch {
       // parse failure — keep generic values, never log body
     }
-    throw new StreamingUnavailableError(code, message);
+    const streamingError = new StreamingUnavailableError(code, message);
+    streamingError.correlationId = responseCorrelationId;
+    throw streamingError;
   }
 
   if (res.body === null) {
-    throw new StreamingUnavailableError("STREAMING_UNSUPPORTED", "Response body was null.");
+    const streamingError = new StreamingUnavailableError(
+      "STREAMING_UNSUPPORTED",
+      "Response body was null.",
+    );
+    streamingError.correlationId = responseCorrelationId;
+    throw streamingError;
   }
 
   await consumeSseStream(res.body, signal, handlers);
