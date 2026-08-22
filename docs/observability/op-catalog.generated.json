@@ -593,7 +593,7 @@
     {
       "op": "<dynamic>",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/observability/server-log.ts:667",
+      "site": "packages/keiko-server/src/observability/server-log.ts:692",
       "package": "keiko-server"
     },
     {
@@ -779,13 +779,13 @@
     {
       "op": "server-log.write-failed",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/observability/server-log.ts:265",
+      "site": "packages/keiko-server/src/observability/server-log.ts:290",
       "package": "keiko-server"
     },
     {
       "op": "server-log.write-failed",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/observability/server-log.ts:291",
+      "site": "packages/keiko-server/src/observability/server-log.ts:316",
       "package": "keiko-server"
     }
   ],

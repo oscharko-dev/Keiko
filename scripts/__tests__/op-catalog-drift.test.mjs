@@ -258,6 +258,39 @@ describe("op catalog drift", () => {
     );
   });
 
+  // Regression (#2902 PR review, round 3): before this fix, `isTypeAnnotationValue`'s
+  // parenthesized-function-type check looked only at the value's own content (does it start with
+  // `(` and have a top-level `=>` after the matching close paren?), never at WHERE its value span
+  // actually stopped. A runtime arrow function assigned as an object-literal property — the exact
+  // shape CodeRabbit's finding cited, `op: (value) => value,` — is structurally identical to a
+  // function-type annotation past the opening paren, and was misclassified as a type: the site was
+  // dropped entirely, not even recorded `<dynamic>`. The fix defers the parenthesized-function-type
+  // case entirely to `closesOverDeclaration`'s `stopChar` check (already run first in
+  // `opPropertyEntries`), so a real declaration (`;` or the enclosing `)`) is still skipped, while
+  // an object-literal property — which always stops at `,` or `}` — now falls through to
+  // `resolveLiteralValues` and reports `<dynamic>` instead of vanishing.
+  it("reports a runtime arrow-function op value as dynamic instead of dropping it as a type", () => {
+    withFixturePackage(
+      "zzz-fixture-runtime-arrow-value",
+      [
+        "export function fixtureRuntimeArrow(value) {",
+        "  return {",
+        '    category: "custom",',
+        "    op: (value) => value,",
+        "  };",
+        "}",
+        "",
+      ].join("\n"),
+      (root) => {
+        const catalog = generateOpCatalog(root);
+        const fixtureEntries = catalog.entries.filter((entry) => entry.site.includes("fixture.ts"));
+        expect(fixtureEntries).toHaveLength(1);
+        expect(fixtureEntries[0]?.op).toBe("<dynamic>");
+        expect(fixtureEntries[0]?.category).toBe("custom");
+      },
+    );
+  });
+
   // A positional-helper call whose argument the bracket scan cannot read (here: an unterminated
   // call reaching end of file) must surface as a `<dynamic>` entry, never vanish silently.
   // `gatewayEvent` is one of the unscoped `POSITIONAL_OP_HELPERS` entries, so it is recognized in

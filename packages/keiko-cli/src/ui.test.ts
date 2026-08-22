@@ -1370,6 +1370,13 @@ describe("waitForShutdown", () => {
       });
     });
 
+    // Regression: this workspace's vitest config does not enable `restoreMocks`/`mockReset`, so a
+    // `vi.spyOn(process, "emitWarning")` left unrestored here would leak into every later test in
+    // this file — not just the next one. The spy is restored in a `finally` (so a failed assertion
+    // inside cannot skip the restore), and this test proves that restore actually happened by
+    // checking the global right after, rather than relying on a separate, later, order-dependent
+    // test to notice the leak (that proof only fires when tests run in file order and a focused
+    // run of the leak-check test alone would trivially pass against a pre-fix implementation).
     it("does nothing and never warns when no activity log was supplied and onShutdown succeeds", async () => {
       await withIsolatedSignalListeners(async () => {
         const warn = vi.spyOn(process, "emitWarning").mockImplementation(() => undefined);
@@ -1385,12 +1392,22 @@ describe("waitForShutdown", () => {
           warn.mockRestore();
         }
       });
+      // Read via the property descriptor, not `process.emitWarning` directly: the latter is a
+      // bound-`this` method reference (flagged by `@typescript-eslint/unbound-method` the moment
+      // it is used as a value rather than called), and this check only needs the current function
+      // value's identity, never to invoke it with `process` as `this`.
+      const emitWarning: unknown = Object.getOwnPropertyDescriptor(process, "emitWarning")?.value;
+      expect(vi.isMockFunction(emitWarning)).toBe(false);
     });
 
     // No activity-log line can carry the failure kind on this path (no log in scope), so it must
     // still reach an operator on the independent process-warning channel — the same idiom
     // `knowledge-log.ts`'s dead-sink report uses — instead of vanishing with the shutdown path
     // that produced it (#2902 PR review).
+    //
+    // Also proves, order-independently, that the `emitWarning` spy above is restored: see the
+    // comment on the previous test for why this assertion lives here rather than in a separate,
+    // later, order-dependent test.
     it("warns via process.emitWarning when onShutdown throws and no activity log is in scope", async () => {
       await withIsolatedSignalListeners(async () => {
         const warn = vi.spyOn(process, "emitWarning").mockImplementation(() => undefined);
@@ -1415,18 +1432,6 @@ describe("waitForShutdown", () => {
           warn.mockRestore();
         }
       });
-    });
-
-    // Regression: this workspace's vitest config does not enable `restoreMocks`/`mockReset`, so a
-    // `vi.spyOn(process, "emitWarning")` left unrestored by either test above would leak into
-    // every later test in this file — not just the next one. Both tests above must restore the
-    // spy in a `finally` (so a failed assertion inside them cannot skip the restore) rather than
-    // rely on cleanup this project does not configure.
-    it("leaves no leaked process.emitWarning spy behind for later tests", () => {
-      // Read via the property descriptor, not `process.emitWarning` directly: the latter is a
-      // bound-`this` method reference (flagged by `@typescript-eslint/unbound-method` the moment
-      // it is used as a value rather than called), and this check only needs the current function
-      // value's identity, never to invoke it with `process` as `this`.
       const emitWarning: unknown = Object.getOwnPropertyDescriptor(process, "emitWarning")?.value;
       expect(vi.isMockFunction(emitWarning)).toBe(false);
     });

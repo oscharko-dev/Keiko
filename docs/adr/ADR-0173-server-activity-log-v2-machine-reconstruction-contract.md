@@ -106,15 +106,26 @@ A gap in the `seq` sequence therefore marks a line the sink attempted to persist
 not silently lost on a clean exit: `reportServerLogFailure` emits a throttled, independent-channel
 stderr notice (`server-log.write-failed`) whose `suppressedNotices` count accounts for the failed
 writes a gap represents, so the throttle hides the failure's *repetition*, never its *scale*. That
-count is delivered one of two ways — on the next unthrottled failure notice, or, if none arrives
-first, flushed once by `resetServerLogFailureNotices` (called on every clean shutdown via
-`shutdownServerLogging`, and by test teardown) before the counter is cleared. **The stated limit**:
-a hard kill the process never gets to handle — `SIGKILL`, a container OOM-kill, power loss — skips
-shutdown entirely, and whatever count was still open in that instant is lost with it. The `seq` gap
-itself still marks that a write failed even then; only the *count* of how many is not recoverable
-after that kind of exit. Exact accounting across every conceivable process exit was never a promise
-this design can keep, and this ADR states that limit rather than the stricter claim the code cannot
-back.
+notice travels a fixed **channel order**, each one independent of the one before it: the **file
+sink** is the primary write path and is what the notice reports on; failing that, the **stderr
+notice** carries the redacted classification (`op`, `failedOp`, `correlationId`, `errorKind`,
+`suppressedNotices`) to the process's stderr stream; and if `process.stderr.write` itself throws
+(a closed descriptor, a broken pipe — the stderr stream is not guaranteed writable either), the same
+fields are re-surfaced through a third, independent channel: `process.emitWarning` with
+`code: "KEIKO_LOG_NOTICE_FAILED"`, which dispatches Node's `'warning'` event synchronously to any
+listener and does not depend on stderr being writable. That count is delivered one of two ways — on
+the next unthrottled failure notice, or, if none arrives first, flushed once by
+`resetServerLogFailureNotices` (called on every clean shutdown via `shutdownServerLogging`, and by
+test teardown) before the counter is cleared. **The stated limit**: a hard kill the process never
+gets to handle — `SIGKILL`, a container OOM-kill, power loss — skips shutdown entirely, and whatever
+count was still open in that instant is lost with it. The channel layering has the same honest
+ceiling, not a stronger one: if the file sink, the stderr notice, *and* the `process.emitWarning`
+fallback are all unavailable in the same instant (for example, stderr is gone and nothing in the
+process is listening for `'warning'`), the notice is lost — three independent channels are not an
+infinite one. The `seq` gap itself still marks that a write failed even then; only the *count* of how
+many is not recoverable after that kind of exit. Exact accounting across every conceivable process
+exit or channel failure was never a promise this design can keep, and this ADR states that limit
+rather than the stricter claim the code cannot back.
 
 The wall-clock `ts` field is the only cross-process ordering signal, and it is stated as exactly
 that — a **best-effort tiebreak hint**, not a guarantee. Clock skew, coarse timestamp resolution,

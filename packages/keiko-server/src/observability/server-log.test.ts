@@ -474,6 +474,34 @@ describe("server activity log", () => {
     expect(String(stderr.mock.calls[0]?.[0])).not.toContain("accepted no bytes");
   });
 
+  // Regression: when stderr itself cannot be written (a closed descriptor, a broken pipe, ...),
+  // the notice must not vanish into an empty catch. It surfaces on the independent
+  // `process.emitWarning` channel instead — Node dispatches the 'warning' event synchronously to
+  // any listener even when stderr is gone. Fails before the fix: the write failure was swallowed
+  // and no warning was ever emitted.
+  it("warns via process.emitWarning when the stderr notice itself cannot be written", () => {
+    const stderr = vi.spyOn(process.stderr, "write").mockImplementation(() => {
+      throw new Error("EPIPE: broken pipe");
+    });
+    const warn = vi.spyOn(process, "emitWarning").mockImplementation(() => undefined);
+    try {
+      reportServerLogFailure(new Error("disk full"), {
+        op: "indexing.persist",
+        correlationId: "job-42",
+      });
+      expect(stderr).toHaveBeenCalledTimes(1);
+      expect(warn).toHaveBeenCalledTimes(1);
+      const calls: readonly (readonly unknown[])[] = warn.mock.calls;
+      expect(calls[0]?.[1]).toMatchObject({ code: "KEIKO_LOG_NOTICE_FAILED" });
+      const options = calls[0]?.[1] as { detail?: string } | undefined;
+      expect(options?.detail).toContain("job-42");
+      // Body-free: the thrown pipe error's own text must never reach the warning.
+      expect(JSON.stringify(warn.mock.calls)).not.toContain("broken pipe");
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
   // Regression for ADR-0173 D2's accounting promise: a suppressed count otherwise surfaces only on
   // the NEXT unthrottled failure. Without a shutdown flush, a count with no further failure to
   // report it is silently lost the instant the notice state is cleared — exactly what a clean

@@ -243,12 +243,37 @@ export function reportServerLogFailure(
 }
 
 // Shared by every stderr notice this module emits: a diagnostic that cannot itself be delivered
-// must not fail the operation (or the shutdown) it was describing. There is no third channel.
+// must not fail the operation (or the shutdown) it was describing. When stderr itself is
+// unavailable (a closed descriptor, a broken pipe, ...) the notice still reaches an operator
+// through an INDEPENDENT channel — `process.emitWarning` dispatches the 'warning' event
+// synchronously to any listener, which fires even when stderr is closed; Node's own default
+// handler happens to also print to stderr, but that is Node's problem to swallow, not this
+// module's. This is genuinely the last channel: if a 'warning' listener itself throws, or every
+// stream this process owns is gone, the notice is lost.
 function writeStderrNotice(notice: Record<string, unknown>): void {
   try {
     process.stderr.write(`${JSON.stringify(notice)}\n`);
   } catch {
-    // Nothing left to report to; swallow.
+    emitLogNoticeFailedWarning(notice);
+  }
+}
+
+function emitLogNoticeFailedWarning(notice: Record<string, unknown>): void {
+  try {
+    process.emitWarning("keiko server log notice could not be written to stderr", {
+      code: "KEIKO_LOG_NOTICE_FAILED",
+      // Named `noticeOp`, not `op`: this is a description of a notice, not a log event, and the
+      // op-catalog generator indexes every `op:` property in product code.
+      detail: JSON.stringify({
+        noticeOp: notice.op,
+        failedOp: notice.failedOp,
+        correlationId: notice.correlationId,
+        errorKind: notice.errorKind,
+        suppressedNotices: notice.suppressedNotices,
+      }),
+    });
+  } catch {
+    // No channel left to report through; nothing further to do.
   }
 }
 

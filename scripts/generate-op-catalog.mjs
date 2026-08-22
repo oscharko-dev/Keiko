@@ -519,38 +519,29 @@ const TYPE_LIKE_IDENTIFIER = /^[A-Z]\w*$/;
 // strings coerced to `NaN`, which nothing in this codebase writes or would want).
 const STRING_LITERAL_UNION = /^"[^"\\]*"(\s*\|\s*"[^"\\]*")+$/;
 
-const CLOSE_PAREN_STOP = (ch) => ch === ")";
-
-// True when `value` — which the caller has already confirmed starts with `(` — is a function
-// type such as `(x: string) => void`, including one broken across multiple lines with its own
-// trailing comma. Finds the paren that MATCHES value's own opening one with the same depth- and
-// string-aware scan the rest of this file already uses (`scanBalanced`) — starting just past that
-// opening paren so it is never counted itself, depth returns to zero exactly at the match — rather
-// than a regex, so a parenthesized RUNTIME value that merely starts with `(`, e.g.
-// `op: (flag ? "a" : "b")` or `op: (await resolve()).name`, is correctly told apart from a
-// function type: only a top-level `=>` immediately after the MATCHING close paren counts. Anything
-// else falls through to `resolveLiteralValues`, which reports it `<dynamic>` instead of silently
-// dropping the site.
-function isParenthesizedFunctionType(value) {
-  const closeIndex = scanBalanced(value, 1, CLOSE_PAREN_STOP);
-  if (closeIndex >= value.length) return false;
-  return value
-    .slice(closeIndex + 1)
-    .trimStart()
-    .startsWith("=>");
-}
-
 // True when `value` can only be naming a TypeScript type, never a runtime `op` value: the plain
-// annotation text this generator has always recognized, a function type (see
-// `isParenthesizedFunctionType` — `closesOverDeclaration` catches the common case only when it is
-// the WHOLE parameter list), a union of quoted string-literal types, or a bare PascalCase
-// identifier that is not one of this file's collected UPPER_SNAKE_CASE constants — a type
-// reference such as `OpName` or `LogOp`. A genuine runtime forward always reads a dotted
+// annotation text this generator has always recognized, a union of quoted string-literal types, or
+// a bare PascalCase identifier that is not one of this file's collected UPPER_SNAKE_CASE constants
+// — a type reference such as `OpName` or `LogOp`. A genuine runtime forward always reads a dotted
 // expression (`record.operation`, `event.op`) or one of those all-caps constants, never a bare
 // PascalCase name, so this never mistakes a real dynamic site for a declaration.
+//
+// A parenthesized FUNCTION TYPE (`(x: string) => void`) is deliberately NOT classified here, even
+// though it also starts with `(`. Its content alone cannot tell a function type apart from a
+// runtime arrow-function VALUE — `op: (value: string) => void;` (a type) and `op: (value) =>
+// value,` (a real runtime function assigned to an object-literal property) are structurally
+// identical past the opening paren: both close their own parens and can be followed by `=>`. Only
+// WHERE the value's span stops distinguishes them — `;` for an interface/type-literal member, or
+// the enclosing `)` when `op` is a function parameter (including a nested function-type parameter,
+// e.g. the `op` in `(op: () => void) => …`, whose OWN span ends at that outer `)`) — never `,` or
+// `}`, which is exactly what an object-literal property closes over instead, per this codebase's
+// "trailing commas everywhere" Prettier rule. `opPropertyEntries` already carries that exact
+// structural signal as `stopChar` and checks it via `closesOverDeclaration` before ever calling
+// this function, so gating on content here regardless of `stopChar` previously misclassified a
+// real runtime arrow-function `op` value (`op: (value) => value,`) as a type and silently dropped
+// the site instead of recording it `<dynamic>` (#2902 PR review, round 3).
 function isTypeAnnotationValue(value, constMap) {
   if (value === "string" || value === "string | undefined") return true;
-  if (value.startsWith("(") && isParenthesizedFunctionType(value)) return true;
   if (STRING_LITERAL_UNION.test(value)) return true;
   return TYPE_LIKE_IDENTIFIER.test(value) && !constMap.has(value);
 }
