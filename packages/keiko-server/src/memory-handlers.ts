@@ -79,7 +79,7 @@ import {
   type MemoryCaptureDecision,
 } from "./memory-capture-projection.js";
 import { refreshMemoryEmbeddingAfterBodyEdit } from "./memory-embedding.js";
-import { readBoundedRequestBody, RequestBodyTooLargeError } from "./bounded-request-body.js";
+import { readJsonRequestBody } from "./bounded-request-body.js";
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -245,31 +245,16 @@ function parseScope(raw: unknown): MemoryScope | RouteResult {
 
 // ─── Body reading ──────────────────────────────────────────────────────────────
 // Consolidated onto the shared bounded reader (#2902 w5-sse-counters) — the caps below are
-// unchanged, only the ad hoc listener wiring is gone.
+// unchanged, only the ad hoc listener wiring is gone. The read-parse-validate wrapper itself is
+// also consolidated (#2902 audit finding 3): `readJsonRequestBody` (bounded-request-body.ts) is
+// the one owner of "bounded read, then parse+validate as a JSON object", previously hand-rolled
+// identically in this file, memory-conv-handlers.ts and memory-consolidation-handlers.ts.
 
-async function readJsonBody(
+function readJsonBody(
   req: IncomingMessage,
   correlationId?: string,
 ): Promise<Record<string, unknown> | RouteResult> {
-  let raw: string;
-  try {
-    raw = await readBoundedRequestBody(req, MAX_MEMORY_BODY_BYTES, undefined, correlationId);
-  } catch (err) {
-    if (err instanceof RequestBodyTooLargeError) {
-      return { status: 413, body: errorBody("PAYLOAD_TOO_LARGE", "Request body too large.") };
-    }
-    throw err;
-  }
-  let parsed: unknown;
-  try {
-    parsed = raw.length === 0 ? {} : JSON.parse(raw);
-  } catch {
-    return { status: 400, body: errorBody("BAD_REQUEST", "Request body is not valid JSON.") };
-  }
-  if (!isRecord(parsed)) {
-    return { status: 400, body: errorBody("BAD_REQUEST", "Request body must be a JSON object.") };
-  }
-  return parsed;
+  return readJsonRequestBody(req, MAX_MEMORY_BODY_BYTES, correlationId);
 }
 
 function isRouteResult(v: unknown): v is RouteResult {

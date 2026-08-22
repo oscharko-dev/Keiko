@@ -6,7 +6,7 @@ import { request } from "node:http";
 import type { AddressInfo } from "node:net";
 import type { IncomingMessage, Server, ServerResponse } from "node:http";
 import { gunzipSync } from "node:zlib";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type {
   GatewayConfig,
   GatewayRequest,
@@ -1195,6 +1195,56 @@ describe("activity log: http-request line enrichment (Wave 5, w5-http-request-en
 
     expect(event.extra?.aborted).toBe(false);
     expect(event.status).toBe(200);
+  });
+
+  // #2902 audit finding 1: computeQueryParamFields used to sort the FULL kept array before
+  // slicing it to the 16-name cap (MAX_QUERY_PARAM_NAMES, mirrored here — not exported), so a
+  // client sending far more than 16 conforming query-param names paid an unbounded, locale-aware
+  // O(n log n) sort. The fix bounds the collection loop at the cap BEFORE sorting.
+  it("caps the collected set at 16 names before sorting, regardless of how many the client sends", async () => {
+    const sink = await startWithActivityLog();
+    const names = Array.from({ length: 20 }, (_, i) => `p${String(19 - i).padStart(2, "0")}`);
+    const query = names.map((n) => `${n}=1`).join("&");
+    const sortSpy = vi.spyOn(Array.prototype, "sort");
+    let event: ServerLogEvent;
+    let queryNameSorts: string[][];
+    try {
+      await fetchRaw(`/api/health?${query}`);
+      event = await waitForActivityLogEvent(sink);
+      // `mock.contexts` captures the `this` receiver of every sort() call — i.e. the array that
+      // was actually sorted. None of them may be the `p\d\d`-shaped query-name collection at more
+      // than the 16-name cap: that is the direct proof the bound runs BEFORE the sort, not after.
+      // Read BEFORE mockRestore(), which also clears the call/context history (mockRestore does
+      // everything mockReset() does, plus restoring the original implementation).
+      queryNameSorts = sortSpy.mock.contexts.filter(
+        (receiver): receiver is string[] =>
+          Array.isArray(receiver) &&
+          receiver.every((v) => typeof v === "string" && /^p\d\d$/.test(v)),
+      );
+    } finally {
+      sortSpy.mockRestore();
+    }
+
+    expect(event.extra?.queryParamNames).toHaveLength(16);
+    expect(event.extra?.queryParamDroppedCount).toBe(4);
+    expect(queryNameSorts.length).toBeGreaterThan(0);
+    for (const receiver of queryNameSorts) {
+      expect(receiver.length).toBeLessThanOrEqual(16);
+    }
+  });
+
+  // #2902 audit finding 1: computeQueryParamFields was called unconditionally before the
+  // trust-boundary host check, so a request that fails isAllowedHost still paid the full
+  // query-string scan even though its result was discarded. It now runs only after the host
+  // check passes, so a FORBIDDEN_HOST request's own activity-log line carries no query names.
+  it("carries no query-param names on a request that fails the host check", async () => {
+    const sink = await startWithActivityLog();
+    const res = await rawRequestWithHost("/api/health?foo=1&bar=2", "evil.example.com");
+    expect(res.status).toBe(403);
+    const event = await waitForActivityLogEvent(sink);
+
+    expect(event.extra?.queryParamNames).toEqual([]);
+    expect(event.extra?.queryParamDroppedCount).toBeUndefined();
   });
 });
 

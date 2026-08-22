@@ -335,22 +335,30 @@ async function resolveCsp(deps: UiServerDeps): Promise<string> {
 // schema is: a name beyond the cap, and any name that is not a bounded identifier (the same shape
 // a log field name itself must have), is dropped and COUNTED rather than silently grown or
 // silently truncated with no trace.
+//
+// #2902 audit finding 1: the collection loop is bounded at MAX_QUERY_PARAM_NAMES BEFORE the sort
+// runs, rather than sorting the full kept set and slicing afterward — a client fully controls the
+// query string, and an unbounded sort (locale-aware, O(n log n)) over an attacker-supplied name
+// count is a synchronous, amplifiable CPU cost on the request hot path. The remaining per-name work
+// (Set membership + regex test) stays a cheap O(n) pass, the same order as the WHATWG URL parsing
+// that already runs unconditionally for routing on every request.
 function computeQueryParamFields(url: URL, context: RequestLogContext): void {
-  const names = new Set(url.searchParams.keys());
+  const seen = new Set<string>();
   const kept: string[] = [];
   let dropped = 0;
-  for (const name of names) {
-    if (QUERY_PARAM_NAME_PATTERN.test(name)) {
+  for (const name of url.searchParams.keys()) {
+    if (seen.has(name)) continue;
+    seen.add(name);
+    if (!QUERY_PARAM_NAME_PATTERN.test(name)) {
+      dropped += 1;
+    } else if (kept.length < MAX_QUERY_PARAM_NAMES) {
       kept.push(name);
     } else {
       dropped += 1;
     }
   }
   kept.sort((a, b) => a.localeCompare(b));
-  if (kept.length > MAX_QUERY_PARAM_NAMES) {
-    dropped += kept.length - MAX_QUERY_PARAM_NAMES;
-  }
-  context.queryParamNames = kept.slice(0, MAX_QUERY_PARAM_NAMES);
+  context.queryParamNames = kept;
   if (dropped > 0) context.queryParamDroppedCount = dropped;
 }
 
@@ -363,7 +371,6 @@ async function handle(
   context: RequestLogContext,
 ): Promise<void> {
   const url = new URL(req.url ?? "/", `http://${UI_HOST}`);
-  computeQueryParamFields(url, context);
   const apiPath = isApiPath(url.pathname);
   // Issue #495/#497 — scope the Permissions-Policy microphone directive to deployments that advertise
   // speech-to-text dictation OR full-realtime voice (whose WebRTC capture track also needs the mic);
@@ -375,6 +382,9 @@ async function handle(
     rejectForbiddenHost(req, res, context);
     return;
   }
+  // #2902 audit finding 1: computed only once the trust-boundary host check has passed (AGENTS.md
+  // "validate before you process") — a FORBIDDEN_HOST request never pays the query-string scan.
+  computeQueryParamFields(url, context);
   const method = (req.method ?? "GET").toUpperCase();
   if (apiPath) {
     await dispatchApi(handlerDeps, req, res, method, url, correlationId, context);

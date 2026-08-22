@@ -82,3 +82,23 @@ export function resetClientDiagnosticWriter(): void {
   writer = bufferUntilTransportArrives;
   pending.length = 0;
 }
+
+type SseStreamCloseReason = "connecting" | "closed" | "unknown";
+
+function sseStreamCloseReason(readyState: number | undefined): SseStreamCloseReason {
+  if (readyState === 0) return "connecting";
+  if (readyState === 2) return "closed";
+  return "unknown";
+}
+
+/**
+ * The one text convention an `EventSource.onerror` site reports through `reportClientDiagnostic`.
+ * `install-client-diagnostics.ts` owns the matching parser (`SSE_DIAGNOSTIC_MESSAGE_PATTERN`) and
+ * pins this exact shape in its test; keeping the producer here — in the leaf every SSE consumer
+ * already imports — means one copy of the convention instead of one per consumer. `stream` is a
+ * fixed, code-owned label naming the consumer (never user content).
+ */
+export function sseStreamErrorDiagnostic(stream: string, readyState: number | undefined): string {
+  const readyStateText = readyState === undefined ? "unknown" : String(readyState);
+  return `[keiko] ${stream} sse stream error (kind=sse-error, readyState=${readyStateText}, reason=${sseStreamCloseReason(readyState)})`; // i18n-exempt: developer diagnostic for the activity log, never rendered to a person
+}

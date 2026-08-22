@@ -32,6 +32,12 @@ import type { ConversationMemoryRuntimeContext } from "./memory-conversation-con
 import { composeDiscussionDirectiveBlock } from "./discussion-prompt.js";
 import { STREAMING, type RouteContext } from "./routes.js";
 import { buildRedactor, createRunRegistry, type UiHandlerDeps } from "./index.js";
+import {
+  createBufferedServerLogSink,
+  createServerLogger,
+  resetServerLogger,
+  setServerLogger,
+} from "./observability/index.js";
 import type { RuntimeGatewayConfig } from "./deps.js";
 import { createInMemoryUiStore, type UiStore } from "./store/index.js";
 import type { ModelPort } from "@oscharko-dev/keiko-harness";
@@ -3279,5 +3285,58 @@ describe("concurrent chat stream bulkhead", () => {
     );
     expect(accepted).toBe(STREAMING);
     expect(parseSse(second.writes).some((record) => record.event === "done")).toBe(true);
+  });
+});
+
+// Finding 0 (#2902 audit): the request-scoped correlationId never reached the terminal
+// `sse.stream.closed` line on the desktop chat stream. The heartbeat's own write is deferred to
+// its interval timer, so in practice the first model token — written via streamConversation's
+// writeOrDestroy call — is the write that actually attaches it first.
+describe("desktop chat SSE stream correlationId threading (#2902 audit finding 0)", () => {
+  afterEach(() => {
+    resetServerLogger();
+  });
+
+  it("attaches the supplied correlationId to the sse.stream.closed terminal line", async () => {
+    const sink = createBufferedServerLogSink();
+    setServerLogger(createServerLogger({ sink, level: "info" }));
+    const chatId = seedChat();
+    const captured = captureResWithEvents();
+    const { model } = streamingModel("answer");
+    const ctx: RouteContext = {
+      ...routeContext(
+        makeReq({ chatId, projectPath: projectDir, modelId: CHAT_MODEL, content: "hello" }),
+        captured.res,
+      ),
+      correlationId: "corr-chat-stream-1",
+    };
+
+    await handleSendDesktopChatStream(ctx, deps(model));
+    captured.emitClose();
+
+    const closed = sink.events.filter((event) => event.op === "sse.stream.closed");
+    expect(closed).toHaveLength(1);
+    expect(closed[0]?.correlationId).toBe("corr-chat-stream-1");
+  });
+
+  it("omits correlationId from the terminal line when none is supplied (unchanged behavior)", async () => {
+    const sink = createBufferedServerLogSink();
+    setServerLogger(createServerLogger({ sink, level: "info" }));
+    const chatId = seedChat();
+    const captured = captureResWithEvents();
+    const { model } = streamingModel("answer");
+
+    await handleSendDesktopChatStream(
+      routeContext(
+        makeReq({ chatId, projectPath: projectDir, modelId: CHAT_MODEL, content: "hello" }),
+        captured.res,
+      ),
+      deps(model),
+    );
+    captured.emitClose();
+
+    const closed = sink.events.filter((event) => event.op === "sse.stream.closed");
+    expect(closed).toHaveLength(1);
+    expect(closed[0]?.correlationId).toBeUndefined();
   });
 });

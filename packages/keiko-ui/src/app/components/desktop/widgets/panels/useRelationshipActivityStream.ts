@@ -28,29 +28,12 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { RelationshipActivityState } from "@oscharko-dev/keiko-contracts";
 import { RELATIONSHIP_FORBIDDEN_METADATA_KEY_SUBSTRINGS } from "@oscharko-dev/keiko-contracts";
-import { reportClientDiagnostic } from "../../../../../lib/client-diagnostics";
+import {
+  reportClientDiagnostic,
+  sseStreamErrorDiagnostic,
+} from "../../../../../lib/client-diagnostics";
 import { createSameOriginApiEventSource } from "../../../../../lib/safe-event-source";
 import { secureRandomInt } from "../../../../../lib/secure-random";
-
-// Duplicated identically across the four SSE-consuming modules (sharedEventSource.ts, useSSE.ts,
-// coding-workbench-event-retention.ts, useRelationshipActivityStream.ts) rather than imported from
-// `install-client-diagnostics.ts`, which owns the matching parser: that module installs the app's
-// diagnostic transport as a side effect at import time (by design — see its own header), and none of
-// these four modules' unit tests may pull that side effect (a real `fetch` attempt) into their own
-// module graph. `install-client-diagnostics.ts`'s own test pins the exact convention below against
-// all four call sites so the two ends cannot silently drift apart.
-type SseStreamCloseReason = "connecting" | "closed" | "unknown";
-
-function sseStreamCloseReason(readyState: number | undefined): SseStreamCloseReason {
-  if (readyState === 0) return "connecting";
-  if (readyState === 2) return "closed";
-  return "unknown";
-}
-
-function sseStreamErrorDiagnostic(readyState: number | undefined): string {
-  const readyStateText = readyState === undefined ? "unknown" : String(readyState);
-  return `[keiko] relationship-activity sse stream error (kind=sse-error, readyState=${readyStateText}, reason=${sseStreamCloseReason(readyState)})`;
-}
 
 // ─── Constants ─────────────────────────────────────────────────────────────────
 
@@ -498,7 +481,7 @@ export function useRelationshipActivityStream(
 
       es.onerror = (): void => {
         if (closed) return;
-        reportClientDiagnostic(sseStreamErrorDiagnostic(es?.readyState));
+        reportClientDiagnostic(sseStreamErrorDiagnostic("relationship-activity", es?.readyState));
         closeStream();
         scheduleReconnect();
       };

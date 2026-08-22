@@ -17,6 +17,12 @@ import type { ServerResponse } from "node:http";
 import { openBrowserSseStream } from "./browser.js";
 import type { SseBackpressureSignal } from "./sse-write.js";
 import {
+  createBufferedServerLogSink,
+  createServerLogger,
+  resetServerLogger,
+  setServerLogger,
+} from "./observability/index.js";
+import {
   BrowserToolError,
   type BrowserEventEmitter,
   type BrowserEventEnvelope,
@@ -819,5 +825,51 @@ describe("openBrowserSseStream backpressure (KEIKO-0142)", () => {
     const writesAfterClose = fake.writes.length;
     manager.emit("session-close", browserEvent("session-close", "navigated", 2));
     expect(fake.writes).toHaveLength(writesAfterClose);
+  });
+});
+
+// Finding 0 (#2902 audit): the request-scoped correlationId never reached the terminal
+// `sse.stream.closed` line — openBrowserSseStream had no parameter to receive it. The ready frame
+// (not the heartbeat, whose own write is deferred to its interval timer) is the actual first write
+// on the stream, so that is where correlationId must be threaded.
+describe("openBrowserSseStream correlationId threading (#2902 audit finding 0)", () => {
+  afterEach(() => {
+    resetServerLogger();
+  });
+
+  it("attaches the supplied correlationId to the sse.stream.closed terminal line", () => {
+    const sink = createBufferedServerLogSink();
+    setServerLogger(createServerLogger({ sink, level: "info" }));
+    const fake = makeFakeSseRes();
+    const manager = new FakeBrowserSessionManager();
+
+    openBrowserSseStream(
+      fake.res,
+      manager,
+      "session-corr",
+      (value) => value,
+      undefined,
+      "corr-browser-1",
+    );
+    fake.emitClose();
+
+    expect(sink.events).toHaveLength(1);
+    expect(sink.events[0]).toMatchObject({
+      op: "sse.stream.closed",
+      correlationId: "corr-browser-1",
+    });
+  });
+
+  it("omits correlationId from the terminal line when none is supplied (unchanged behavior)", () => {
+    const sink = createBufferedServerLogSink();
+    setServerLogger(createServerLogger({ sink, level: "info" }));
+    const fake = makeFakeSseRes();
+    const manager = new FakeBrowserSessionManager();
+
+    openBrowserSseStream(fake.res, manager, "session-no-corr", (value) => value);
+    fake.emitClose();
+
+    expect(sink.events).toHaveLength(1);
+    expect(sink.events[0]?.correlationId).toBeUndefined();
   });
 });

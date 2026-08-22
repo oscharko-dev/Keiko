@@ -3,6 +3,7 @@ import { PassThrough, Readable } from "node:stream";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   readBoundedRequestBody,
+  readJsonRequestBody,
   RequestBodyCancelledError,
   RequestBodyTooLargeError,
 } from "./bounded-request-body.js";
@@ -367,5 +368,61 @@ describe("bounded request body activity log", () => {
 
     expect(sink.events).toHaveLength(1);
     stream.end();
+  });
+});
+
+// #2902 audit finding 3: memory-handlers.ts, memory-conv-handlers.ts and
+// memory-consolidation-handlers.ts each hand-rolled a byte-identical "bounded read, then
+// parse+validate as a JSON object" wrapper on top of `readBoundedRequestBody`. `readJsonRequestBody`
+// is now the one owner of that wrapper layer; each caller keeps its own max-bytes constant and
+// becomes a one-line delegate to this function.
+describe("readJsonRequestBody", () => {
+  it("returns 413 PAYLOAD_TOO_LARGE for an oversized body", async () => {
+    const req = asRequest(Readable.from([Buffer.from("this body is too long")]));
+
+    const result = await readJsonRequestBody(req, 4);
+
+    expect(result).toEqual({
+      status: 413,
+      body: { error: { code: "PAYLOAD_TOO_LARGE", message: "Request body too large." } },
+    });
+  });
+
+  it("returns 400 BAD_REQUEST for malformed JSON", async () => {
+    const req = asRequest(Readable.from([Buffer.from("{not json")]));
+
+    const result = await readJsonRequestBody(req, 128_000);
+
+    expect(result).toEqual({
+      status: 400,
+      body: { error: { code: "BAD_REQUEST", message: "Request body is not valid JSON." } },
+    });
+  });
+
+  it("returns 400 BAD_REQUEST for valid JSON that is not an object (an array)", async () => {
+    const req = asRequest(Readable.from([Buffer.from("[1,2,3]")]));
+
+    const result = await readJsonRequestBody(req, 128_000);
+
+    expect(result).toEqual({
+      status: 400,
+      body: { error: { code: "BAD_REQUEST", message: "Request body must be a JSON object." } },
+    });
+  });
+
+  it("returns the parsed record for a valid JSON object body", async () => {
+    const req = asRequest(Readable.from([Buffer.from('{"projectId":"p-1","cwd":"/tmp"}')]));
+
+    const result = await readJsonRequestBody(req, 128_000);
+
+    expect(result).toEqual({ projectId: "p-1", cwd: "/tmp" });
+  });
+
+  it("treats an empty body as an empty object", async () => {
+    const req = asRequest(Readable.from([]));
+
+    const result = await readJsonRequestBody(req, 128_000);
+
+    expect(result).toEqual({});
   });
 });

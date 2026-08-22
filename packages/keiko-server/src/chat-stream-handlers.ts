@@ -167,6 +167,7 @@ async function streamConversation(
           () => {
             termination.backpressure = true;
           },
+          ctx.correlationId,
         );
         if (requestIsAborted(controller.signal)) return undefined;
       } else {
@@ -501,7 +502,15 @@ async function executeAdmittedDesktopChatStream(
   try {
     ctx.res.writeHead(200, SSE_HEADERS);
     markStreamStarted();
-    stopHeartbeat = startSseHeartbeat(ctx.res);
+    // correlationId (#2902 w5-sse-counters) is threaded here AND into streamConversation's
+    // per-token writeOrDestroy call: whichever write actually happens first attaches it to the
+    // terminal `sse.stream.closed` line (sse-write.ts's per-stream state is set-once-wins). The
+    // heartbeat's own write is deferred to its interval timer, so in practice the first model
+    // token — not the heartbeat — is usually the write that sets it.
+    stopHeartbeat = startSseHeartbeat(ctx.res, undefined, undefined, {
+      controller,
+      ...(ctx.correlationId === undefined ? {} : { correlationId: ctx.correlationId }),
+    });
     await streamAndPersist(ctx, deps, turn, controller);
   } catch (error) {
     writeStreamFailure(ctx, deps, turn.prepared.request, controller, error);

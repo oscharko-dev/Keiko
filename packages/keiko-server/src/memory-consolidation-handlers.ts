@@ -46,7 +46,7 @@ import type {
   ConsolidationJobSettings,
 } from "./memory-consolidation-registry.js";
 import { enrichReviewItemsWithAdvisory } from "./memory-conflict-advisory.js";
-import { readBoundedRequestBody, RequestBodyTooLargeError } from "./bounded-request-body.js";
+import { readJsonRequestBody } from "./bounded-request-body.js";
 
 const MAX_BODY_BYTES = 64_000;
 const DEFAULT_JACCARD_THRESHOLD = 0.85;
@@ -71,30 +71,15 @@ function isRouteResult(value: unknown): value is RouteResult {
 }
 
 // Consolidated onto the shared bounded reader (#2902 w5-sse-counters) — the cap above is
-// unchanged, only the ad hoc listener wiring is gone.
-async function readJsonBody(
+// unchanged, only the ad hoc listener wiring is gone. The read-parse-validate wrapper itself is
+// also consolidated (#2902 audit finding 3): `readJsonRequestBody` (bounded-request-body.ts) is
+// the one owner of "bounded read, then parse+validate as a JSON object", previously hand-rolled
+// identically in this file, memory-handlers.ts and memory-conv-handlers.ts.
+function readJsonBody(
   req: IncomingMessage,
   correlationId?: string,
 ): Promise<Record<string, unknown> | RouteResult> {
-  let raw: string;
-  try {
-    raw = await readBoundedRequestBody(req, MAX_BODY_BYTES, undefined, correlationId);
-  } catch (error) {
-    if (error instanceof RequestBodyTooLargeError) {
-      return { status: 413, body: errorBody("PAYLOAD_TOO_LARGE", "Request body too large.") };
-    }
-    throw error;
-  }
-  let parsed: unknown;
-  try {
-    parsed = raw.length === 0 ? {} : JSON.parse(raw);
-  } catch {
-    return { status: 400, body: errorBody("BAD_REQUEST", "Request body is not valid JSON.") };
-  }
-  if (!isRecord(parsed)) {
-    return { status: 400, body: errorBody("BAD_REQUEST", "Request body must be a JSON object.") };
-  }
-  return parsed;
+  return readJsonRequestBody(req, MAX_BODY_BYTES, correlationId);
 }
 
 function resolveVault(deps: UiHandlerDeps): MemoryVaultStore | RouteResult {

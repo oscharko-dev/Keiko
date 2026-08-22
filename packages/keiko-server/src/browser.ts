@@ -266,6 +266,7 @@ export function handleBrowserEvents(ctx: RouteContext, deps: UiHandlerDeps): Han
     sessionId,
     deps.redactor,
     sseBackpressureReporter(deps, "browser"),
+    ctx.correlationId,
   );
   ctx.req.on("close", () => {
     ctx.res.end();
@@ -282,6 +283,7 @@ export function openBrowserSseStream(
   sessionId: string,
   redactor: UiHandlerDeps["redactor"],
   onBackpressure?: (signal: SseBackpressureSignal) => void,
+  correlationId?: string,
 ): void {
   res.writeHead(200, SSE_HEADERS);
   // Per-connection abort: a slow-client backpressure kill (writeOrDestroy) aborts this controller,
@@ -290,9 +292,14 @@ export function openBrowserSseStream(
   // subscribe() returns synchronously and events fire only asynchronously afterward, so no event
   // (hence no abort) can occur before `unsubscribe` is assigned.
   const controller = new AbortController();
+  // correlationId (#2902 w5-sse-counters) is threaded to every write path below so whichever one
+  // runs first attaches it: sse-write.ts's per-stream state is set-once-wins. The heartbeat's own
+  // write is deferred to its interval timer, so the ready frame just below is the actual first
+  // write in practice — it also carries correlationId for that reason.
   startSseHeartbeat(res, undefined, undefined, {
     controller,
     ...(onBackpressure === undefined ? {} : { onBackpressure }),
+    ...(correlationId === undefined ? {} : { correlationId }),
   });
   let seq = 0;
   const unsubscribe = manager.subscribe(sessionId, (event) => {
@@ -313,7 +320,7 @@ export function openBrowserSseStream(
   // The ready frame goes through the same protective path: a client that is already not draining
   // must abort and unsubscribe here too, rather than leaving the subscription live until some
   // later event happens to trip writeOrDestroy.
-  writeOrDestroy(res, readyMessage(), controller, onBackpressure);
+  writeOrDestroy(res, readyMessage(), controller, onBackpressure, correlationId);
   res.on("close", () => {
     stop();
   });

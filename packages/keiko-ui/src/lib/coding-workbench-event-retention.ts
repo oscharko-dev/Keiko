@@ -10,31 +10,11 @@ import {
   parseCodingWorkbenchRuntimeEvent,
 } from "./coding-workbench-runtime-api";
 import { reserveInteractiveBrowserStreamCapacity } from "./browser-stream-capacity";
-import { reportClientDiagnostic } from "./client-diagnostics";
+import { reportClientDiagnostic, sseStreamErrorDiagnostic } from "./client-diagnostics";
 
 export const CODING_WORKBENCH_EVENT_RETENTION_LIMIT = 500;
 export const CODING_WORKBENCH_OBSERVATION_BATCH_MS = 100;
 export const CODING_WORKBENCH_EVENT_STREAM_STALE_MS = 35_000;
-
-// Duplicated identically across the four SSE-consuming modules (sharedEventSource.ts, useSSE.ts,
-// coding-workbench-event-retention.ts, useRelationshipActivityStream.ts) rather than imported from
-// `install-client-diagnostics.ts`, which owns the matching parser: that module installs the app's
-// diagnostic transport as a side effect at import time (by design — see its own header), and none of
-// these four modules' unit tests may pull that side effect (a real `fetch` attempt) into their own
-// module graph. `install-client-diagnostics.ts`'s own test pins the exact convention below against
-// all four call sites so the two ends cannot silently drift apart.
-type SseStreamCloseReason = "connecting" | "closed" | "unknown";
-
-function sseStreamCloseReason(readyState: number | undefined): SseStreamCloseReason {
-  if (readyState === 0) return "connecting";
-  if (readyState === 2) return "closed";
-  return "unknown";
-}
-
-function sseStreamErrorDiagnostic(readyState: number | undefined): string {
-  const readyStateText = readyState === undefined ? "unknown" : String(readyState);
-  return `[keiko] coding-workbench-runtime sse stream error (kind=sse-error, readyState=${readyStateText}, reason=${sseStreamCloseReason(readyState)})`;
-}
 
 const TERMINAL_STATES = new Set<CodingWorkbenchRuntimeStateName>([
   "succeeded",
@@ -145,7 +125,9 @@ class RuntimeEventStreamSession implements CodingWorkbenchRuntimeStreamSession {
     };
     source.onerror = (): void => {
       if (this.source !== source) return;
-      reportClientDiagnostic(sseStreamErrorDiagnostic(source.readyState));
+      reportClientDiagnostic(
+        sseStreamErrorDiagnostic("coding-workbench-runtime", source.readyState),
+      );
       this.handlers.onError(new Error("The runtime event stream is reconnecting."));
     };
     const receive: EventListener = (event) => {

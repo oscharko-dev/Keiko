@@ -24,6 +24,12 @@ import {
   type TerminalExecutionManager,
   type TerminalExecutionResult,
 } from "./index.js";
+import {
+  createBufferedServerLogSink,
+  createServerLogger,
+  resetServerLogger,
+  setServerLogger,
+} from "./observability/index.js";
 
 interface FakeOptions {
   readonly executeShouldThrow?: TerminalToolError;
@@ -642,5 +648,45 @@ describe("openTerminalSseStream backpressure (KEIKO-0142)", () => {
     expect(fake.destroyCount).toBe(0);
     expect(signals).toHaveLength(0);
     expect(fake.writes.length).toBeGreaterThan(1);
+  });
+});
+
+// Finding 0 (#2902 audit): the request-scoped correlationId never reached the terminal
+// `sse.stream.closed` line because openTerminalSseStream had no parameter to receive it, even
+// though handleTerminalEvents' RouteContext carries one. The heartbeat is the first write on
+// every stream (sse-write.ts's per-stream state is set-once-wins), so threading it through the
+// heartbeat's backpressure object is sufficient for the whole stream's terminal line.
+describe("openTerminalSseStream correlationId threading (#2902 audit finding 0)", () => {
+  afterEach(() => {
+    resetServerLogger();
+  });
+
+  it("attaches the supplied correlationId to the sse.stream.closed terminal line", () => {
+    const sink = createBufferedServerLogSink();
+    setServerLogger(createServerLogger({ sink, level: "info" }));
+    const fake = makeFakeSseRes();
+    const manager = new FakeTerminalExecutionManager();
+
+    openTerminalSseStream(fake.res, manager, (value) => value, undefined, "corr-terminal-1");
+    fake.emitClose();
+
+    expect(sink.events).toHaveLength(1);
+    expect(sink.events[0]).toMatchObject({
+      op: "sse.stream.closed",
+      correlationId: "corr-terminal-1",
+    });
+  });
+
+  it("omits correlationId from the terminal line when none is supplied (unchanged behavior)", () => {
+    const sink = createBufferedServerLogSink();
+    setServerLogger(createServerLogger({ sink, level: "info" }));
+    const fake = makeFakeSseRes();
+    const manager = new FakeTerminalExecutionManager();
+
+    openTerminalSseStream(fake.res, manager, (value) => value);
+    fake.emitClose();
+
+    expect(sink.events).toHaveLength(1);
+    expect(sink.events[0]?.correlationId).toBeUndefined();
   });
 });

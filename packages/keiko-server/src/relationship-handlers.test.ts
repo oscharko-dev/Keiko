@@ -9,7 +9,7 @@
 //   - redactor invocation (single call site)
 //   - happy paths for the read routes
 
-import { describe, expect, it, beforeEach, vi } from "vitest";
+import { afterEach, describe, expect, it, beforeEach, vi } from "vitest";
 import { DatabaseSync } from "node:sqlite";
 import { EventEmitter } from "node:events";
 import { promises as fs, realpathSync } from "node:fs";
@@ -40,6 +40,12 @@ import { buildUiHandlerDeps, type UiHandlerDeps } from "./deps.js";
 import type { RouteContext, RouteResult } from "./routes.js";
 import { STREAMING } from "./routes.js";
 import { createRunRegistry } from "./runs.js";
+import {
+  createBufferedServerLogSink,
+  createServerLogger,
+  resetServerLogger,
+  setServerLogger,
+} from "./observability/index.js";
 
 interface FakeReq extends EventEmitter {
   headers: Record<string, string>;
@@ -1520,6 +1526,81 @@ describe("GET /api/relationships/:id/dependencies + impact + health + explain + 
     });
     expect(Object.keys(payload).sort()).toEqual(["id", "kind", "state", "timestamp"]);
     expect(sse.ended()).toBe(true);
+  });
+});
+
+// Finding 0 (#2902 audit): the request-scoped correlationId never reached the terminal
+// `sse.stream.closed` line on /api/relationships/events. On an idle workspace (no activity
+// snapshots), the `retry: … \n: connected` frame written directly in handleRelationshipEvents is
+// the ONLY write on the stream until the 30s ping, so correlationId must be attached there.
+describe("GET /api/relationships/events correlationId threading (#2902 audit finding 0)", () => {
+  afterEach(() => {
+    resetServerLogger();
+  });
+
+  // Like makeCtx, but the response double also implements `on("close", …)` so the shared SSE
+  // write path (sse-write.ts) tracks and emits the per-stream terminal line, and carries a
+  // request-scoped correlationId the way the real server.ts request entry point does.
+  function makeListenableCtx(req: FakeReq, correlationId?: string): RouteContext {
+    const url = new URL(`http://localhost${req.url}`);
+    const emitter = new EventEmitter();
+    const res = {
+      writeHead: (): void => undefined,
+      flushHeaders: (): void => undefined,
+      write: () => true,
+      end: (): void => undefined,
+      destroy: (): void => undefined,
+      writableEnded: false,
+      on: (event: string, handler: (...args: unknown[]) => void) => {
+        emitter.on(event, handler);
+      },
+      _fireClose: () => emitter.emit("close"),
+    } as unknown as ServerResponse;
+    return {
+      req: req as unknown as IncomingMessage,
+      res,
+      params: {},
+      url,
+      ...(correlationId === undefined ? {} : { correlationId }),
+    };
+  }
+
+  it("attaches the supplied correlationId to the sse.stream.closed terminal line", () => {
+    const sink = createBufferedServerLogSink();
+    setServerLogger(createServerLogger({ sink, level: "info" }));
+    const store = freshStore();
+    const { redactor } = trackingRedactor();
+    const deps = buildDeps("ws-corr-idle", store, redactor);
+    const req = makeReq({ method: "GET", url: "/api/relationships/events" });
+    const ctx = makeListenableCtx(req, "corr-relhandlers-1");
+
+    const result = handleRelationshipEvents(ctx, deps);
+    expect(result).toBe(STREAMING);
+    (ctx.res as unknown as { _fireClose: () => void })._fireClose();
+
+    const closed = sink.events.filter((event) => event.op === "sse.stream.closed");
+    expect(closed).toHaveLength(1);
+    expect(closed[0]?.correlationId).toBe("corr-relhandlers-1");
+    req.emit("close");
+  });
+
+  it("omits correlationId from the terminal line when none is supplied (unchanged behavior)", () => {
+    const sink = createBufferedServerLogSink();
+    setServerLogger(createServerLogger({ sink, level: "info" }));
+    const store = freshStore();
+    const { redactor } = trackingRedactor();
+    const deps = buildDeps("ws-corr-idle-2", store, redactor);
+    const req = makeReq({ method: "GET", url: "/api/relationships/events" });
+    const ctx = makeListenableCtx(req);
+
+    const result = handleRelationshipEvents(ctx, deps);
+    expect(result).toBe(STREAMING);
+    (ctx.res as unknown as { _fireClose: () => void })._fireClose();
+
+    const closed = sink.events.filter((event) => event.op === "sse.stream.closed");
+    expect(closed).toHaveLength(1);
+    expect(closed[0]?.correlationId).toBeUndefined();
+    req.emit("close");
   });
 });
 

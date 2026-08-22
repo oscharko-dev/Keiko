@@ -1964,16 +1964,45 @@ function handleEventsImpl(ctx: RouteContext, deps: UiHandlerDeps): RouteResult |
   // `retry:` reconnect directive plus an SSE comment (`:` lines are ignored by EventSource), so it
   // carries no relationship payload and never trips the activity allowlist.
   res.flushHeaders();
-  // GEN-PERF-RELACT-001 — refresh/ping timers, snapshot sweeps, and frame serialization
-  // are shared per workspace via the broadcaster instead of duplicated per connection,
-  // and every write reacts to backpressure (writeOrDestroy) so a non-draining client is
-  // destroyed instead of growing the response buffer without bound.
+  const unsubscribe = openRelationshipEventsStream(ctx, deps, res, relationship, workspaceId);
+  ctx.req.on("close", () => {
+    unsubscribe();
+    res.end();
+  });
+  return STREAMING;
+}
+
+// GEN-PERF-RELACT-001 — refresh/ping timers, snapshot sweeps, and frame serialization are shared
+// per workspace via the broadcaster instead of duplicated per connection, and every write reacts
+// to backpressure (writeOrDestroy) so a non-draining client is destroyed instead of growing the
+// response buffer without bound. `ctx.correlationId` (#2902 w5-sse-counters) is attached to the
+// "connected" frame below — the actual first write on the stream, ahead of
+// subscribeActivityBroadcast's own fanned-out writes — so sse-write.ts's set-once-wins per-stream
+// state captures it immediately, AND to the subscriber itself so a later fanned-out write (e.g. a
+// tick or ping) on a stream that never got an early frame still carries it.
+function openRelationshipEventsStream(
+  ctx: RouteContext,
+  deps: UiHandlerDeps,
+  res: ServerResponse,
+  relationship: RelationshipHandlerDeps,
+  workspaceId: string,
+): () => void {
   const controller = new AbortController();
-  writeOrDestroy(res, `retry: ${String(ACTIVITY_SSE_RETRY_MS)}\n: connected\n\n`, controller);
-  const unsubscribe = subscribeActivityBroadcast(
+  writeOrDestroy(
+    res,
+    `retry: ${String(ACTIVITY_SSE_RETRY_MS)}\n: connected\n\n`,
+    controller,
+    undefined,
+    ctx.correlationId,
+  );
+  return subscribeActivityBroadcast(
     deps,
     workspaceId,
-    { res, controller },
+    {
+      res,
+      controller,
+      ...(ctx.correlationId === undefined ? {} : { correlationId: ctx.correlationId }),
+    },
     {
       collectFrames: (): readonly ActivityFrame[] =>
         collectActivitySnapshots(deps, relationship, workspaceId).map((snapshot) => ({
@@ -1984,11 +2013,6 @@ function handleEventsImpl(ctx: RouteContext, deps: UiHandlerDeps): RouteResult |
       pingMs: ACTIVITY_SSE_PING_MS,
     },
   );
-  ctx.req.on("close", () => {
-    unsubscribe();
-    res.end();
-  });
-  return STREAMING;
 }
 
 // ─── Exposed handler bindings ─────────────────────────────────────────────────
