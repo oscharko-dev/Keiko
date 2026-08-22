@@ -1,5 +1,13 @@
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { DatabaseSync } from "node:sqlite";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -817,6 +825,77 @@ describe("runSupportCli export", () => {
     const expectedDigest = createHash("sha256").update(readFileSync(outPath)).digest("hex");
     expect(readFileSync(sidecarPath, "utf8").trim()).toBe(expectedDigest);
   });
+
+  // `readUiLogContentOrUndefined`'s catch path: BOTH consent flags are given, but no ui.log file
+  // was ever written for this state dir (no `keiko start` has run against it) — `readFileSync`
+  // throws ENOENT, and the section must be excluded exactly like the no-consent cases above,
+  // never a thrown error out of the export.
+  it("excludes ui.log via the catch path when both flags are passed but no ui.log file exists", async () => {
+    const c = makeIo();
+    const outPath = join(outDir, "consent-no-file.jsonl");
+    const code = await runSupportCli(
+      [
+        "export",
+        "--state-dir",
+        stateDir,
+        "--out",
+        outPath,
+        "--include-ui-log",
+        "--i-understand-this-is-unredacted",
+      ],
+      c.io,
+      AUDIT_ENV,
+      { auditDeps: healthyAuditDeps(), evidenceStore: createInMemoryEvidenceStore() },
+    );
+
+    expect(code).toBe(0);
+    const lines = bundleLines(outPath);
+    expect(lines.some((line) => line.$section === "ui-log")).toBe(false);
+    expect(lines[0]?.sectionsExcluded).toEqual(["ui-log"]);
+  });
+
+  // `resolveIncludedEvidenceSections`'s `deps.evidenceStore ?? evidence.createNodeEvidenceStore(...)`
+  // fallback: every other evidence test in this file injects `evidenceStore`, so the real
+  // node-backed store construction never ran. Deliberately omits it here, and requests a runId
+  // that was never written under this fresh state dir, so `evidence.loadEvidence` returns
+  // undefined and no section is attached — the same "count, don't fail" discipline
+  // `resolveEvidenceIndexCount`'s own real-store test already proves for the index count.
+  it("attaches no evidence-manifest section for a --include-evidence runId that does not exist, using the real evidence store", async () => {
+    const c = makeIo();
+    const outPath = join(outDir, "real-evidence-missing-run.jsonl");
+    const code = await runSupportCli(
+      ["export", "--state-dir", stateDir, "--out", outPath, "--include-evidence", "run-missing"],
+      c.io,
+      AUDIT_ENV,
+      { auditDeps: healthyAuditDeps() },
+    );
+
+    expect(code).toBe(0);
+    const lines = bundleLines(outPath);
+    expect(lines.some((line) => line.$section === "evidence-manifest")).toBe(false);
+    expect(lines[0]?.evidenceIndexCount).toBe(0);
+  });
+
+  // `resolveIncludedEvidenceSections`'s catch: `evidence.loadEvidence` throws (not merely returns
+  // undefined) when a stored manifest's `evidenceSchemaVersion` is unrecognised — the export must
+  // still succeed with no evidence-manifest section, never propagate the parse failure.
+  it("never fails the export when a requested evidence manifest is malformed", async () => {
+    const badStore = createInMemoryEvidenceStore();
+    badStore.put("bad-run", JSON.stringify({ evidenceSchemaVersion: "not-a-real-version" }));
+
+    const c = makeIo();
+    const outPath = join(outDir, "malformed-evidence.jsonl");
+    const code = await runSupportCli(
+      ["export", "--state-dir", stateDir, "--out", outPath, "--include-evidence", "bad-run"],
+      c.io,
+      AUDIT_ENV,
+      { auditDeps: healthyAuditDeps(), evidenceStore: badStore },
+    );
+
+    expect(code).toBe(0);
+    const lines = bundleLines(outPath);
+    expect(lines.some((line) => line.$section === "evidence-manifest")).toBe(false);
+  });
 });
 
 describe("runSupportCli analyze", () => {
@@ -1161,6 +1240,103 @@ describe("runSupportCli analyze", () => {
     const c = makeIo();
     const code = await runSupportCli(["analyze", filePath, "--seed"], c.io);
     expect(code).toBe(2);
+  });
+
+  // `resolveFixturePath`'s relative branch: every other --emit-fixture test in this file passes an
+  // already-absolute path (built via `join(dir, ...)` off an absolute mkdtemp root), so the
+  // `resolve(cwd, path)` arm never ran. A relative FILE argument and a relative --emit-fixture
+  // value, both resolved against the injected launch cwd.
+  it("resolves a relative --emit-fixture path against the launch cwd", async () => {
+    writeGatewayLog(join(dir, "server.log"));
+
+    const c = makeIo();
+    const code = await runSupportCli(
+      [
+        "analyze",
+        "server.log",
+        "--correlation-id",
+        "req-1",
+        "--emit-fixture",
+        "relative.fixture.ts",
+      ],
+      c.io,
+      {},
+      { cwd: dir },
+    );
+
+    expect(code).toBe(0);
+    const expectedPath = join(dir, "relative.fixture.ts");
+    expect(c.out()).toContain(`Wrote fixture to ${expectedPath}`);
+    expect(existsSync(expectedPath)).toBe(true);
+  });
+
+  // `writeFixtureOrExitCode`'s write-failure path: the target's parent directory exists but is
+  // read-only, so `writeFileSync` fails with EACCES after the (no-op, already-exists) recursive
+  // mkdirSync. Skipped as root, where chmod does not restrict writes (mirrors the same skip guard
+  // used elsewhere in this package for permission-based failure tests).
+  it("exits 1 with a content-free message when the fixture cannot be written", async (ctx) => {
+    if (process.platform === "win32") ctx.skip();
+    if (typeof process.getuid === "function" && process.getuid() === 0) ctx.skip();
+
+    const filePath = join(dir, "server.log");
+    writeGatewayLog(filePath);
+    const readOnlyDir = join(dir, "readonly");
+    mkdirSync(readOnlyDir, { recursive: true });
+    chmodSync(readOnlyDir, 0o500);
+    const fixturePath = join(readOnlyDir, "gateway.fixture.ts");
+
+    try {
+      const c = makeIo();
+      const code = await runSupportCli(
+        ["analyze", filePath, "--correlation-id", "req-1", "--emit-fixture", fixturePath],
+        c.io,
+      );
+      expect(code).toBe(1);
+      expect(c.err()).toContain("keiko support analyze: could not write fixture:");
+      // Content-free (AGENTS.md §7): the fs error's message may quote the absolute path it was
+      // writing, but this CLI's own reported message must not.
+      expect(c.err()).not.toContain(readOnlyDir);
+      expect(existsSync(fixturePath)).toBe(false);
+    } finally {
+      chmodSync(readOnlyDir, 0o700);
+    }
+  });
+
+  // `reportFixtureOnly`'s json branch: every other --emit-fixture-without---seed test in this file
+  // renders text ("Wrote fixture to ..."); this is the --json sibling.
+  it("emits fixturePath as a JSON object when --emit-fixture is combined with --json but not --seed", async () => {
+    const filePath = join(dir, "server.log");
+    writeGatewayLog(filePath);
+    const fixturePath = join(dir, "json-only.fixture.ts");
+
+    const c = makeIo();
+    const code = await runSupportCli(
+      ["analyze", filePath, "--correlation-id", "req-1", "--emit-fixture", fixturePath, "--json"],
+      c.io,
+    );
+
+    expect(code).toBe(0);
+    expect(JSON.parse(c.out())).toEqual({ fixturePath });
+  });
+
+  // `emitSeedResult`'s human-mode fixturePath branch: the existing "--seed" human-mode test never
+  // passes --emit-fixture, so `fixturePath` there is always undefined and the trailing "Wrote
+  // fixture to ..." line never prints. --json mode combining both flags is covered separately
+  // (folds fixturePath into the seed object); this is the non-json sibling of that combination.
+  it("prints both the human seed and the fixture confirmation when --seed and --emit-fixture are combined without --json", async () => {
+    const filePath = join(dir, "server.log");
+    writeGatewayLog(filePath);
+    const fixturePath = join(dir, "human-seed.fixture.ts");
+
+    const c = makeIo();
+    const code = await runSupportCli(
+      ["analyze", filePath, "--correlation-id", "req-1", "--seed", "--emit-fixture", fixturePath],
+      c.io,
+    );
+
+    expect(code).toBe(0);
+    expect(c.out()).toContain("correlationId=req-1");
+    expect(c.out()).toContain(`Wrote fixture to ${fixturePath}`);
   });
 });
 

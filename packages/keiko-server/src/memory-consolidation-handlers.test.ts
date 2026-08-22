@@ -838,6 +838,45 @@ describe("memory consolidation job handlers", () => {
     expect(asJobEnvelope(fetched).job.state).toBe("canceled");
   });
 
+  // Distinct from the previous test: handleCancelConsolidationJob itself transitions a
+  // still-queued job to canceled synchronously, so runScheduledJob's own `queued` guard
+  // (`if (queued?.job.state !== "queued") return;`) short-circuits before completeIfCanceled
+  // ever runs. Setting cancelRequested directly on the registry — bypassing that handler —
+  // reproduces the race the scheduled run's own pre-load checkpoint exists to close: a cancel
+  // request lands after the job is registered but before its setImmediate-scheduled run starts.
+  it("completes a still-queued job as canceled via the scheduled run's own pre-load checkpoint", async () => {
+    const vault = makeVault();
+    insertAcceptedMemory(vault, { id: "m-1", body: "user prefers tabs in editor" });
+    const registry = createConsolidationJobRegistry();
+    const deps = makeDeps({ memoryVault: vault, consolidationJobs: registry });
+
+    const createResult = await handleCreateConsolidationJob(
+      makeCtx("/api/memory/consolidation/jobs", { scopes: [{ kind: "user", userId: "u-1" }] }),
+      deps,
+    );
+    const jobId = asJobEnvelope(createResult).job.id;
+    registry.requestCancel(jobId);
+    const beforeRun = registry.get(jobId);
+    expect(beforeRun?.job.state).toBe("queued");
+    expect(beforeRun?.cancelRequested).toBe(true);
+
+    await flushImmediate();
+
+    const fetched = handleGetConsolidationJob(
+      makeCtx(`/api/memory/consolidation/jobs/${jobId}`, {}, { jobId }),
+      deps,
+    );
+    const envelope = asJobEnvelope(fetched);
+    expect(envelope.job.state).toBe("canceled");
+    expect(envelope.cancelRequested).toBe(true);
+    // The checkpoint fires before loadSelectedMemories ever runs, so the job carries no
+    // consolidation result and the record's memoryCount stays at the 0 the checkpoint was
+    // called with — proving runScheduledJob returned immediately afterward rather than
+    // proceeding to load memories or run the engine.
+    expect(envelope.job.result).toBeUndefined();
+    expect(envelope.memoryCount).toBe(0);
+  });
+
   it("folds a cancel request that arrives during the advisory phase into a canceled job (Issue #2130 / ADR-0120 D8)", async () => {
     const vault = makeVault();
     insertAcceptedMemory(vault, { id: "m-1", body: "user prefers dark mode everywhere" });

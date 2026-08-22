@@ -261,4 +261,126 @@ describe("recordNpmPublishDeployment", () => {
     const result = recordNpmPublishDeployment(baseArgs({ spawnGh }));
     expect(result).toEqual({ deploymentId: 5, kind: "recorded" });
   });
+
+  it("logs an empty listing-failure detail, without throwing, when the listing gh call returns no result at all", () => {
+    const logCalls = [];
+    const spawnGh = (args) => {
+      const path = pathOf(args);
+      if (path?.startsWith(`${CREATE_DEPLOYMENT_PATH}?`)) return undefined;
+      if (path === CREATE_DEPLOYMENT_PATH) return { status: 0, stdout: JSON.stringify({ id: 8 }) };
+      return { status: 0, stdout: JSON.stringify({ id: 1 }) };
+    };
+    const result = recordNpmPublishDeployment(
+      baseArgs({ log: (message) => logCalls.push(message), spawnGh }),
+    );
+    expect(result).toEqual({ deploymentId: 8, kind: "recorded" });
+    expect(logCalls[0]).toBe(
+      "npm-publish-deployment: could not list existing deployments for v0.3.15 ().",
+    );
+  });
+
+  it("fails closed with the documented invalid-JSON detail when gh reports success but returns no parsable body", () => {
+    const spawnGh = (args) => {
+      const path = pathOf(args);
+      if (path?.startsWith(`${CREATE_DEPLOYMENT_PATH}?`)) return { status: 0, stdout: "[]" };
+      if (path === CREATE_DEPLOYMENT_PATH) return { status: 0 };
+      throw new Error(`unexpected gh call: ${JSON.stringify(args)}`);
+    };
+    const result = recordNpmPublishDeployment(baseArgs({ spawnGh }));
+    expect(result).toEqual({
+      failure:
+        "published but the GitHub deployment record was refused while creating the deployment: " +
+        "gh returned a response that was not valid JSON.. The token needs the deployments:write " +
+        "permission on the npm-publish environment.",
+      kind: "failed",
+    });
+    expect(result.failure).not.toContain("HTTP");
+  });
+
+  it("does not treat an existing deployment as successful when its statuses response is not an array", () => {
+    const spawnGh = (args) => {
+      const path = pathOf(args);
+      if (path?.startsWith(`${CREATE_DEPLOYMENT_PATH}?`)) {
+        return { status: 0, stdout: JSON.stringify([{ id: 99 }]) };
+      }
+      if (path === `${CREATE_DEPLOYMENT_PATH}/99/statuses`) {
+        return { status: 0, stdout: JSON.stringify({}) };
+      }
+      if (path === CREATE_DEPLOYMENT_PATH)
+        return { status: 0, stdout: JSON.stringify({ id: 100 }) };
+      if (path === `${CREATE_DEPLOYMENT_PATH}/100/statuses`) {
+        return { status: 0, stdout: JSON.stringify({ id: 1 }) };
+      }
+      throw new Error(`unexpected gh call: ${JSON.stringify(args)}`);
+    };
+    const result = recordNpmPublishDeployment(baseArgs({ spawnGh }));
+    expect(result).toEqual({ deploymentId: 100, kind: "recorded" });
+  });
+
+  it("does not log a listing failure when the existing-deployments response parses but is not an array", () => {
+    const logCalls = [];
+    const spawnGh = (args) => {
+      const path = pathOf(args);
+      if (path?.startsWith(`${CREATE_DEPLOYMENT_PATH}?`)) {
+        return { status: 0, stdout: JSON.stringify({ message: "no results field" }) };
+      }
+      if (path === CREATE_DEPLOYMENT_PATH) return { status: 0, stdout: JSON.stringify({ id: 55 }) };
+      return { status: 0, stdout: JSON.stringify({ id: 1 }) };
+    };
+    const result = recordNpmPublishDeployment(
+      baseArgs({ log: (message) => logCalls.push(message), spawnGh }),
+    );
+    expect(result).toEqual({ deploymentId: 55, kind: "recorded" });
+    expect(logCalls).toEqual([
+      "npm-publish-deployment: recorded npm-publish deployment 55 for v0.3.15.",
+    ]);
+  });
+
+  it("fails closed when the create response body is not a record at all (e.g. an array)", () => {
+    const spawnGh = (args) => {
+      const path = pathOf(args);
+      if (path?.startsWith(`${CREATE_DEPLOYMENT_PATH}?`)) return { status: 0, stdout: "[]" };
+      if (path === CREATE_DEPLOYMENT_PATH) return { status: 0, stdout: JSON.stringify([1, 2, 3]) };
+      throw new Error(`unexpected gh call: ${JSON.stringify(args)}`);
+    };
+    const result = recordNpmPublishDeployment(baseArgs({ spawnGh }));
+    expect(result).toEqual({
+      failure: "published but the GitHub deployment response carried no deployment id.",
+      kind: "failed",
+    });
+  });
+
+  it("uses the current time for the description when now is not provided", () => {
+    const calls = [];
+    const spawnGh = (args, options) => {
+      calls.push({ args, input: options?.input });
+      const path = pathOf(args);
+      if (path?.startsWith(`${CREATE_DEPLOYMENT_PATH}?`)) return { status: 0, stdout: "[]" };
+      if (path === CREATE_DEPLOYMENT_PATH) return { status: 0, stdout: JSON.stringify({ id: 9 }) };
+      return { status: 0, stdout: JSON.stringify({ id: 1 }) };
+    };
+    const before = Date.now();
+    const result = recordNpmPublishDeployment({
+      dryRun: false,
+      env: {},
+      log: noopLog,
+      pkg: PKG,
+      planOnly: false,
+      repository: REPOSITORY,
+      spawnGh,
+      tag: "latest",
+    });
+    const after = Date.now();
+    expect(result).toEqual({ deploymentId: 9, kind: "recorded" });
+
+    const create = calls.find((call) => pathOf(call.args) === CREATE_DEPLOYMENT_PATH);
+    const { description } = JSON.parse(create.input);
+    const match = /registry publish time (\S+); dist-tag latest\)/u.exec(description);
+    expect(match).not.toBeNull();
+    const [, npmPublishTimeIso] = match;
+    expect(new Date(npmPublishTimeIso).toISOString()).toBe(npmPublishTimeIso);
+    const parsedMs = Date.parse(npmPublishTimeIso);
+    expect(parsedMs).toBeGreaterThanOrEqual(before);
+    expect(parsedMs).toBeLessThanOrEqual(after);
+  });
 });

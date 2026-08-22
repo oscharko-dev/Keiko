@@ -7,8 +7,13 @@ import { runCli } from "./runner.js";
 import type { CliIo } from "./runner.js";
 import { analyzeLogText, findTimeline, type LogTimeline } from "./support-analyze.js";
 import type { ModelPort } from "@oscharko-dev/keiko-harness";
-import { createInMemoryEvidenceStore, type EvidenceStore } from "@oscharko-dev/keiko-evidence";
 import {
+  createInMemoryEvidenceStore,
+  EvidenceWriteError,
+  type EvidenceStore,
+} from "@oscharko-dev/keiko-evidence";
+import {
+  CancelledError,
   createScriptedGatewayClock,
   createScriptedGatewayFetch,
   Gateway,
@@ -80,6 +85,21 @@ const FIX = [
   "Divisor was 3.",
   "## Confidence",
   "high",
+].join("\n");
+
+// Same shape as `bug-investigation/workflow.test.ts`'s own "rejects an out-of-scope patch after
+// retries" fixture: a patch outside the workflow's allowed scope (a CI workflow file), which the
+// scope guard rejects on every retry, driving the terminal status to "rejected".
+const OUT_OF_SCOPE_FIX = [
+  "```diff",
+  "--- a/.github/workflows/ci.yml",
+  "+++ b/.github/workflows/ci.yml",
+  "@@ -1 +1 @@",
+  "-on: push",
+  "+on: { push: {}, pull_request_target: {} }",
+  "```",
+  "## Root cause",
+  "x",
 ].join("\n");
 
 let dir: string;
@@ -595,6 +615,51 @@ describe("runInvestigateCli --from-timeline (Wave 6 closeout)", () => {
     expect(cap.err()).toContain("invalid --from-timeline file");
   });
 
+  // `isLogTimeline`'s own top-level type guard: the file above is valid JSON that IS an object, so
+  // the guard's `typeof value !== "object" || value === null` check passes straight through and the
+  // rejection instead comes from `hasLogTimelineCoreFields`. A bare JSON primitive at the top level
+  // hits the guard's own branch directly.
+  it("fails closed on a --from-timeline file whose JSON top level is not an object", async () => {
+    writeFileSync(join(dir, "primitive-timeline.json"), "42", "utf8");
+    const cap = makeIo();
+    const code = await runInvestigateCli(
+      ["--from-timeline", "primitive-timeline.json", "--dir-root", dir, "--no-evidence"],
+      cap.io,
+      {},
+      { model: modelReturning(FIX) },
+    );
+    expect(code).toBe(1);
+    expect(cap.err()).toContain("invalid --from-timeline file");
+  });
+
+  // `isServerLogLineView`'s own type guard: an otherwise well-shaped timeline whose `lines` array
+  // contains an entry that is not an object at all (never reachable from the real analyzer, which
+  // always emits object line records, but a hand-edited or hostile --from-timeline file can carry
+  // anything).
+  it("fails closed on a --from-timeline file whose lines array contains a non-object entry", async () => {
+    writeFileSync(
+      join(dir, "bad-lines-timeline.json"),
+      JSON.stringify({
+        correlationId: "req-x",
+        lines: ["not-an-object"],
+        firstTs: "2026-08-21T00:00:00.000Z",
+        lastTs: "2026-08-21T00:00:00.000Z",
+        durationMs: 1,
+        errorKinds: [],
+      }),
+      "utf8",
+    );
+    const cap = makeIo();
+    const code = await runInvestigateCli(
+      ["--from-timeline", "bad-lines-timeline.json", "--dir-root", dir, "--no-evidence"],
+      cap.io,
+      {},
+      { model: modelReturning(FIX) },
+    );
+    expect(code).toBe(1);
+    expect(cap.err()).toContain("invalid --from-timeline file");
+  });
+
   it("maps frames/ops/errorKinds onto BugReportInput via timelineToBugReportInput", () => {
     const timeline: LogTimeline = {
       correlationId: "unit-timeline-1",
@@ -633,6 +698,61 @@ describe("runInvestigateCli --from-timeline (Wave 6 closeout)", () => {
       errorKinds: [],
     };
     expect(timelineToBugReportInput(timeline)).toEqual({});
+  });
+
+  // `framePath`'s fallback (the `:LINE:COL` suffix stripping only fires when BOTH trailing
+  // colon-separated segments are all-digits): a frame that does not carry that shape must be
+  // passed through unchanged rather than dropped or mis-truncated.
+  it("passes a frame through unchanged when it has no trailing :LINE:COL suffix", () => {
+    const timeline: LogTimeline = {
+      correlationId: "unit-timeline-opaque-frame",
+      lines: [{ ts: "2026-08-21T00:00:00.000Z", category: "gateway", op: "gateway.chat.request" }],
+      firstTs: "2026-08-21T00:00:00.000Z",
+      lastTs: "2026-08-21T00:00:00.000Z",
+      durationMs: 0,
+      errorKinds: [],
+      frames: [
+        "packages/keiko-model-gateway/src/gateway.ts:42:7",
+        "some-opaque-frame-without-a-location",
+      ],
+    };
+    const report = timelineToBugReportInput(timeline);
+    expect(report.targetFiles).toEqual([
+      "packages/keiko-model-gateway/src/gateway.ts",
+      "some-opaque-frame-without-a-location",
+    ]);
+    expect(report.stackTrace).toContain("at some-opaque-frame-without-a-location");
+  });
+
+  // `timelineDescription`'s two independent `if`s (ops observed / error kinds observed): the two
+  // existing tests above exercise "both present" and "both absent" (which short-circuits before
+  // either `if`); these exercise each `if` landing on its OWN false branch, one at a time.
+  it("describes error kinds alone when no operations were observed", () => {
+    const timeline: LogTimeline = {
+      correlationId: "unit-timeline-ops-empty",
+      lines: [],
+      firstTs: "2026-08-21T00:00:00.000Z",
+      lastTs: "2026-08-21T00:00:00.000Z",
+      durationMs: 0,
+      errorKinds: ["GatewayError"],
+    };
+    const report = timelineToBugReportInput(timeline);
+    expect(report.description).toContain("Error kinds: GatewayError.");
+    expect(report.description).not.toContain("Operations observed");
+  });
+
+  it("describes operations alone when no error kinds were recorded", () => {
+    const timeline: LogTimeline = {
+      correlationId: "unit-timeline-errorkinds-empty",
+      lines: [{ ts: "2026-08-21T00:00:00.000Z", category: "http", op: "request.sent" }],
+      firstTs: "2026-08-21T00:00:00.000Z",
+      lastTs: "2026-08-21T00:00:00.000Z",
+      durationMs: 0,
+      errorKinds: [],
+    };
+    const report = timelineToBugReportInput(timeline);
+    expect(report.description).toContain("Operations observed: request.sent.");
+    expect(report.description).not.toContain("Error kinds");
   });
 });
 
@@ -714,6 +834,84 @@ describe("runInvestigateCli evidence-by-default (g23)", () => {
     expect(code).toBe(1);
     expect(cap.err()).toContain("failed to write evidence");
     expect(cap.out()).toBe("");
+  });
+
+  // `writeInvestigateEvidence`'s catch: the test above throws a plain `Error`, exercising the
+  // `gateway.redact(String(error))` branch. A typed `AuditError` (as a real evidence store failure
+  // would raise) takes the OTHER branch — its own already-redacted `.message`, unwrapped.
+  it("reports the AuditError's own message when persisting evidence fails with a typed audit error", async () => {
+    const failingStore: EvidenceStore = {
+      put: (): never => {
+        throw new EvidenceWriteError("evidence write failed");
+      },
+      get: (): undefined => undefined,
+      list: (): readonly string[] => [],
+      delete: (): void => undefined,
+    };
+    const cap = makeIo();
+    const code = await runInvestigateCli(
+      [
+        "--description",
+        "half is wrong",
+        "--stack",
+        "at half (src/buggy.ts:1:40)",
+        "--dir-root",
+        dir,
+      ],
+      cap.io,
+      {},
+      { model: modelReturning(FIX), store: failingStore },
+    );
+    expect(code).toBe(1);
+    expect(cap.err()).toContain("failed to write evidence: evidence write failed");
+    expect(cap.out()).toBe("");
+  });
+
+  // `terminalStatusFor`'s "cancelled" mapping: a model call that is cancelled mid-run resolves to a
+  // report with status "cancelled" (the workflow's own top-level catch boundary maps a thrown
+  // CancelledError to `cancelledReport`), and the persisted evidence's outcome must say so.
+  it("records outcome 'cancelled' in evidence when the model call is cancelled mid-run", async () => {
+    const store: EvidenceStore = createInMemoryEvidenceStore();
+    const cancellingModel: ModelPort = {
+      call: (): Promise<NormalizedResponse> =>
+        Promise.reject(new CancelledError("test cancellation")),
+    };
+    const cap = makeIo();
+    const code = await runInvestigateCli(
+      ["--description", "half is wrong", "--dir-root", dir],
+      cap.io,
+      {},
+      { model: cancellingModel, store },
+    );
+    expect(code).toBe(1);
+    expect(store.list()).toHaveLength(1);
+    const runId = store.list()[0];
+    expect(runId).toBeDefined();
+    if (runId === undefined) return;
+    const raw = store.get(runId);
+    expect(raw).toContain('"outcome": "cancelled"');
+  });
+
+  // `terminalStatusFor`'s "rejected" -> "failed" mapping: an out-of-scope patch is rejected by the
+  // scope guard after retries (status "rejected"), which `terminalStatusFor` maps to the SAME
+  // "failed" outcome a genuine IO failure would carry — both are non-completions from the
+  // registry's point of view.
+  it("records outcome 'failed' in evidence for a rejected (out-of-scope) investigation", async () => {
+    const store: EvidenceStore = createInMemoryEvidenceStore();
+    const cap = makeIo();
+    const code = await runInvestigateCli(
+      ["--description", "half is wrong", "--dir-root", dir],
+      cap.io,
+      {},
+      { model: modelReturning(OUT_OF_SCOPE_FIX), store },
+    );
+    expect(code).toBe(1);
+    expect(store.list()).toHaveLength(1);
+    const runId = store.list()[0];
+    expect(runId).toBeDefined();
+    if (runId === undefined) return;
+    const raw = store.get(runId);
+    expect(raw).toContain('"outcome": "failed"');
   });
 });
 

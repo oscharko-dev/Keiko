@@ -7,7 +7,7 @@
 
 import { describe, expect, it } from "vitest";
 
-import { checkReleaseAlignment } from "../check-release-alignment.mjs";
+import { checkReleaseAlignment, printAlignmentReport } from "../check-release-alignment.mjs";
 
 const REPOSITORY = "oscharko-dev/Keiko";
 const PACKAGE_NAME = "@oscharko-dev/keiko";
@@ -70,6 +70,18 @@ function alignedSeams(overrides = {}) {
     runNpm: npmDistTags("0.3.15"),
     ...overrides,
   };
+}
+
+// Collects every message passed to a `log`/`logError` seam, in call order, on the returned
+// function itself — the same "capture on the function object" shape as the `runNpm`/`runGit`
+// seams above, so printAlignmentReport tests can assert the exact rendered lines.
+function collector() {
+  const messages = [];
+  const record = (message) => {
+    messages.push(message);
+  };
+  record.messages = messages;
+  return record;
 }
 
 describe("checkReleaseAlignment", () => {
@@ -236,5 +248,128 @@ describe("checkReleaseAlignment", () => {
     );
     expect(result.aligned).toBe(false);
     expect(result.failures).toContain("npm latest dist-tag could not be read.");
+  });
+
+  it("treats a non-string checkout version as unparseable, not a crash", () => {
+    // parseVersion's `typeof text === "string"` guard only takes its "not a string" branch when
+    // the checkout version itself is malformed — package.json normally guarantees a string, but
+    // this gate must fail closed rather than throw if that ever isn't true.
+    const result = checkReleaseAlignment(alignedSeams({ checkoutVersion: undefined }));
+    expect(result.aligned).toBe(false);
+    expect(result.rows[0]).toEqual({ source: "checkout version", value: undefined });
+    expect(result.failures).toContain(
+      "checkout version undefined diverges from npm latest 0.3.15 " +
+        "(must equal it or be exactly one patch/minor release ahead).",
+    );
+  });
+
+  it("treats an npm latest dist-tag that is not version-shaped as a parse failure", () => {
+    // parseVersion's regex match can fail on a syntactically fine, non-empty string — e.g. a
+    // dist-tag pointed at a codename instead of a semver string.
+    const result = checkReleaseAlignment(alignedSeams({ runNpm: npmDistTags("canary") }));
+    expect(result.aligned).toBe(false);
+    expect(result.rows).toContainEqual({ source: "npm latest dist-tag", value: "canary" });
+    expect(result.failures).toContain(
+      "checkout version 0.3.15 diverges from npm latest canary " +
+        "(must equal it or be exactly one patch/minor release ahead).",
+    );
+  });
+
+  it("treats npm dist-tags stdout that is empty/undefined as unreadable, not a thrown error", () => {
+    // parsedJson's `result.stdout ?? ""` fallback feeds JSON.parse("") when a seam reports success
+    // but produced no stdout at all; the catch block must turn that into "unreadable", not
+    // propagate a SyntaxError out of the gate.
+    const result = checkReleaseAlignment(alignedSeams({ runNpm: () => ({ status: 0 }) }));
+    expect(result.aligned).toBe(false);
+    expect(result.failures).toContain("npm latest dist-tag could not be read.");
+    expect(result.rows).toContainEqual({ source: "npm latest dist-tag", value: "UNREADABLE" });
+  });
+
+  it("treats a git tag list with no stdout at all as an empty tag list", () => {
+    // readTags' `result.stdout ?? ""` fallback and the newest-tag "(none)" fallback both need a
+    // case where the seam reports success but stdout is missing entirely.
+    const result = checkReleaseAlignment(alignedSeams({ runGit: () => ({ status: 0 }) }));
+    expect(result.aligned).toBe(false);
+    expect(result.rows).toContainEqual({ source: "newest tag", value: "(none)" });
+    expect(result.failures).toContain("tag v0.3.15 does not exist (npm latest is 0.3.15).");
+  });
+
+  it("treats a whitespace-only git tag list the same as an empty one", () => {
+    const result = checkReleaseAlignment(alignedSeams({ runGit: () => ok("   \n  \n\t\n") }));
+    expect(result.aligned).toBe(false);
+    expect(result.rows).toContainEqual({ source: "newest tag", value: "(none)" });
+    expect(result.failures).toContain("tag v0.3.15 does not exist (npm latest is 0.3.15).");
+  });
+
+  it("keeps the first-seen tag as newest when two tags parse to an equal version", () => {
+    // The reduce's `cmp > 0 ? entry : best` only takes its "not strictly newer" branch when two
+    // tags compare equal (or the later one is older) — every other fixture in this file has tags
+    // in strictly ascending order, so a tie never exercises the `: best` side.
+    const result = checkReleaseAlignment(alignedSeams({ runGit: gitTags(["v0.3.15", "0.3.15"]) }));
+    expect(result.aligned).toBe(true);
+    expect(result.rows).toContainEqual({ source: "newest tag", value: "v0.3.15" });
+  });
+
+  it("treats a non-array deployments payload as unreadable", () => {
+    // `Array.isArray(parsed)` guards against `gh api .../deployments` ever answering with a JSON
+    // object instead of a list — e.g. a GitHub error body that still parses as valid JSON.
+    const runGh = (args) => {
+      const path = args[1];
+      if (path.includes("/releases/latest")) return ok(JSON.stringify({ tag_name: "v0.3.15" }));
+      if (path.includes("/deployments")) return ok(JSON.stringify({ message: "not found" }));
+      throw new Error(`unexpected gh call: ${JSON.stringify(args)}`);
+    };
+    const result = checkReleaseAlignment(alignedSeams({ runGh }));
+    expect(result.aligned).toBe(false);
+    expect(result.failures).toContain("no npm-publish deployment could be read.");
+    expect(result.rows).toContainEqual({
+      source: "newest npm-publish deployment",
+      value: "UNREADABLE",
+    });
+  });
+});
+
+describe("printAlignmentReport", () => {
+  it("prints one row per source, padded to the widest source name, then a PASS line", () => {
+    const result = checkReleaseAlignment(alignedSeams());
+    const log = collector();
+    const logError = collector();
+    printAlignmentReport(result, { log, logError });
+    expect(log.messages).toEqual([
+      "release-alignment: source -> value",
+      "  checkout version               0.3.15",
+      "  npm latest dist-tag            0.3.15",
+      "  newest tag                     v0.3.15",
+      "  GitHub Latest release          v0.3.15",
+      "  newest npm-publish deployment  v0.3.15",
+      "release-alignment: PASS - version, tag, GitHub Latest release, npm latest, and the " +
+        "deployment record agree.",
+    ]);
+    expect(logError.messages).toEqual([]);
+  });
+
+  it("prints a FAIL line and one '  - <failure>' line per failure for a non-aligned result", () => {
+    const result = checkReleaseAlignment(
+      alignedSeams({
+        runGh: ghFor({ deploymentRef: "v0.3.15", latestReleaseTag: undefined }),
+        runNpm: () => failed(),
+      }),
+    );
+    const log = collector();
+    const logError = collector();
+    printAlignmentReport(result, { log, logError });
+    expect(log.messages).toEqual([
+      "release-alignment: source -> value",
+      "  checkout version               0.3.15",
+      "  npm latest dist-tag            UNREADABLE",
+      "  newest tag                     v0.3.15",
+      "  GitHub Latest release          UNREADABLE",
+      "  newest npm-publish deployment  v0.3.15",
+    ]);
+    expect(logError.messages).toEqual([
+      "release-alignment: FAIL",
+      "  - npm latest dist-tag could not be read.",
+      "  - GitHub Latest release could not be read.",
+    ]);
   });
 });

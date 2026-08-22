@@ -2,11 +2,20 @@ import { describe, expect, it } from "vitest";
 
 import {
   analyzeLogText,
+  buildGatewayReplayScript,
+  buildReproductionSeed,
   detectSourceKind,
   findTimeline,
+  renderGatewayReplayScriptFixture,
   renderHumanAllTimelines,
+  renderHumanClusters,
+  renderHumanReproductionSeed,
   renderHumanTimeline,
+  type GatewayReplayScript,
   type LogTimeline,
+  type OpCluster,
+  type ReproductionSeed,
+  type ServerLogLineView,
 } from "./support-analyze.js";
 
 function line(fields: Record<string, unknown>): string {
@@ -656,5 +665,319 @@ describe("human-readable rendering", () => {
         clusters: [],
       }),
     ).toBe("No correlated events found.\n");
+  });
+});
+
+describe("analyzeLogText — causeChain passthrough and aggregation", () => {
+  it("carries a line's causeChain onto its view, and buildReproductionSeed aggregates it", () => {
+    const withCauseChain = line({
+      ts: T0,
+      category: "client",
+      op: "client.diagnostic",
+      correlationId: "req-cause",
+      pid: 9001,
+      instanceId: "c3c3c3c3",
+      seq: 1,
+      causeChain: ["ECONNRESET", "socket hang up"],
+    });
+
+    const result = analyzeLogText(`${withCauseChain}\n`);
+    const timeline = findTimeline(result, "req-cause");
+    expect(timeline?.lines[0]?.causeChain).toEqual(["ECONNRESET", "socket hang up"]);
+
+    const seed = buildReproductionSeed(`${withCauseChain}\n`, "req-cause", new Date(T1));
+    expect(seed?.causeChain).toEqual(["ECONNRESET", "socket hang up"]);
+  });
+});
+
+describe("analyzeLogText — Wave 6: cluster sample id cap", () => {
+  it("caps sampleCorrelationIds at MAX_CLUSTER_SAMPLE_IDS while count keeps growing", () => {
+    const lines = Array.from({ length: 6 }, (_, index) =>
+      line({
+        ts: T0,
+        category: "gateway",
+        op: "gateway.retry.scheduled",
+        correlationId: `req-cap-${String(index)}`,
+        errorKind: "GATEWAY_RATE_LIMIT",
+      }),
+    );
+
+    const result = analyzeLogText(`${lines.join("\n")}\n`);
+
+    const cluster = result.clusters.find((c) => c.op === "gateway.retry.scheduled");
+    expect(cluster?.count).toBe(6);
+    expect(cluster?.sampleCorrelationIds).toHaveLength(5);
+    expect(cluster?.sampleCorrelationIds).not.toContain("req-cap-5");
+  });
+});
+
+describe("renderHumanClusters", () => {
+  it("renders only the header, with zero count, when there are no clusters", () => {
+    expect(renderHumanClusters([])).toBe("Clusters: 0\n");
+  });
+
+  it("omits the sample= suffix for a cluster with no correlationId, and includes it otherwise", () => {
+    const withId: OpCluster = {
+      category: "gateway",
+      op: "gateway.retry.scheduled",
+      errorKind: "GATEWAY_RATE_LIMIT",
+      count: 1,
+      sampleCorrelationIds: ["req-a"],
+    };
+    const withoutId: OpCluster = {
+      category: "process",
+      op: "process.heartbeat",
+      errorKind: null,
+      count: 3,
+      sampleCorrelationIds: [],
+    };
+
+    const rendered = renderHumanClusters([withId, withoutId]);
+
+    expect(rendered).toContain("Clusters: 2");
+    expect(rendered).toContain(
+      "gateway gateway.retry.scheduled [GATEWAY_RATE_LIMIT] count=1 sample=req-a",
+    );
+    expect(rendered).toContain("process process.heartbeat [-] count=3");
+    expect(rendered).not.toContain("process process.heartbeat [-] count=3 sample=");
+  });
+});
+
+describe("buildGatewayReplayScript — outcome classification and attempt fallbacks", () => {
+  it("classifies GATEWAY_TIMEOUT as timeout and GATEWAY_TRANSPORT as transport-error", () => {
+    const timeoutLine: ServerLogLineView = {
+      ts: T0,
+      category: "gateway",
+      op: "gateway.chat.failed",
+      errorKind: "GATEWAY_TIMEOUT",
+    };
+    const transportLine: ServerLogLineView = {
+      ts: T1,
+      category: "gateway",
+      op: "gateway.stream.failed",
+      errorKind: "GATEWAY_TRANSPORT",
+    };
+
+    const script = buildGatewayReplayScript([timeoutLine, transportLine]);
+
+    expect(script?.attempts[0]?.outcome).toBe("timeout");
+    expect(script?.attempts[1]?.outcome).toBe("transport-error");
+  });
+
+  it("falls back to unknown-model, a zero durationMs, and no firstTokenMs when the line carries no extra", () => {
+    const attemptLine: ServerLogLineView = {
+      ts: T0,
+      category: "gateway",
+      op: "gateway.chat.failed",
+      errorKind: "GATEWAY_TIMEOUT",
+    };
+
+    const script = buildGatewayReplayScript([attemptLine]);
+
+    expect(script?.modelId).toBe("unknown-model");
+    expect(script?.attempts[0]?.durationMs).toBe(0);
+    expect(script?.attempts[0]?.firstTokenMs).toBeUndefined();
+  });
+
+  it("carries firstTokenMs through when the attempt's extra has it", () => {
+    const attemptLine: ServerLogLineView = {
+      ts: T0,
+      category: "gateway",
+      op: "gateway.stream.completed",
+      extra: { firstTokenMs: 120 },
+    };
+
+    const script = buildGatewayReplayScript([attemptLine]);
+
+    expect(script?.attempts[0]?.outcome).toBe("success");
+    expect(script?.attempts[0]?.firstTokenMs).toBe(120);
+  });
+});
+
+describe("buildReproductionSeed — indexingJob with no extra fields", () => {
+  it("returns an indexingJob object with every field undefined when the started line carries no extra", () => {
+    const started = line({
+      ts: T0,
+      category: "indexing",
+      op: "indexing.job.started",
+      correlationId: "req-job-bare",
+      pid: 1,
+      instanceId: "d4d4d4d4",
+      seq: 1,
+    });
+
+    const seed = buildReproductionSeed(`${started}\n`, "req-job-bare", new Date(T1));
+
+    expect(seed?.indexingJob).toBeDefined();
+    expect(seed?.indexingJob?.sourceCount).toBeUndefined();
+    expect(seed?.indexingJob?.tokenizerKind).toBeUndefined();
+  });
+});
+
+describe("buildReproductionSeed — storeFingerprint edge cases", () => {
+  it("treats an empty storeFingerprints array in the manifest as no fingerprints", () => {
+    const manifest = line({ $section: "manifest", schemaVersion: 2, storeFingerprints: [] });
+    const requestLine = line({
+      ts: T0,
+      category: "http",
+      op: "request",
+      correlationId: "req-empty-fp",
+      pid: 1,
+      instanceId: "e5e5e5e5",
+      seq: 1,
+    });
+
+    const seed = buildReproductionSeed(
+      `${manifest}\n${requestLine}\n`,
+      "req-empty-fp",
+      new Date(T1),
+    );
+
+    expect(seed?.storeFingerprint).toBeUndefined();
+  });
+
+  it("warns about a bundle manifest with no storeFingerprints, distinct from the raw-log warning", () => {
+    const manifest = line({ $section: "manifest", schemaVersion: 2 });
+    const requestLine = line({
+      ts: T0,
+      category: "http",
+      op: "request",
+      correlationId: "req-bundle-no-fp",
+      pid: 1,
+      instanceId: "f6f6f6f6",
+      seq: 1,
+    });
+
+    const seed = buildReproductionSeed(
+      `${manifest}\n${requestLine}\n`,
+      "req-bundle-no-fp",
+      new Date(T1),
+    );
+
+    expect(seed?.sourceArtifact.kind).toBe("bundle");
+    expect(seed?.warnings).toContain(
+      "no store fingerprints found in this bundle's manifest — either the exporter predates " +
+        "Wave 4a, or every store was unavailable at export time",
+    );
+  });
+});
+
+describe("buildReproductionSeed — frames present suppresses the missing-frames warning", () => {
+  it("omits the missing-frames warning and includes stackFrames when the timeline carries frames", () => {
+    const withFrames = line({
+      ts: T0,
+      category: "gateway",
+      op: "gateway.chat.failed",
+      correlationId: "req-frames-present",
+      pid: 1,
+      instanceId: "a7a7a7a7",
+      seq: 1,
+      frames: ["packages/keiko-server/dist/a.js:1:1"],
+    });
+
+    const seed = buildReproductionSeed(`${withFrames}\n`, "req-frames-present", new Date(T1));
+
+    expect(seed?.stackFrames).toEqual(["packages/keiko-server/dist/a.js:1:1"]);
+    expect(seed?.warnings).not.toContain(
+      "no frames recorded for this correlationId — either no error occurred on this call, or " +
+        "this artifact predates Wave 2's frame capture",
+    );
+  });
+});
+
+describe("renderHumanReproductionSeed — Wave 6 sub-field rendering", () => {
+  function baseSeed(overrides: Partial<ReproductionSeed> = {}): ReproductionSeed {
+    return {
+      schemaVersion: 1,
+      generatedAt: T0,
+      sourceArtifact: { kind: "raw-log", lineCount: 1, sha256: "a".repeat(64) },
+      correlationId: "req-seed",
+      timeline: [],
+      warnings: ["no prompt/response body was ever logged by design"],
+      ...overrides,
+    };
+  }
+
+  it("renders httpRequest, indexingJob, storeFingerprint, stackFrames, and causeChain when present", () => {
+    const seed = baseSeed({
+      httpRequest: { method: "POST", routeTemplate: "/api/chat", status: 200 },
+      indexingJob: { sourceCount: 4, tokenizerKind: "qwen3" },
+      storeFingerprint: [
+        {
+          store: "ui",
+          schemaVersion: 1,
+          migrationsApplied: ["0001-initial"],
+          tableRowCounts: { conversations: 1 },
+          quickCheckOk: true,
+          encryptionMode: "plaintext",
+        },
+      ],
+      stackFrames: ["packages/keiko-server/dist/a.js:1:1"],
+      causeChain: ["ECONNRESET", "socket hang up"],
+    });
+
+    const rendered = renderHumanReproductionSeed(seed);
+
+    expect(rendered).toContain('httpRequest: {"method":"POST"');
+    expect(rendered).toContain('indexingJob: {"sourceCount":4');
+    expect(rendered).toContain('storeFingerprint: [{"store":"ui"');
+    expect(rendered).toContain("stackFrames:\n  packages/keiko-server/dist/a.js:1:1");
+    expect(rendered).toContain("causeChain: ECONNRESET -> socket hang up");
+  });
+
+  it("omits every optional section, including stackFrames/causeChain defined but empty", () => {
+    const seed = baseSeed({ stackFrames: [], causeChain: [] });
+
+    const rendered = renderHumanReproductionSeed(seed);
+
+    expect(rendered).not.toContain("httpRequest:");
+    expect(rendered).not.toContain("indexingJob:");
+    expect(rendered).not.toContain("storeFingerprint:");
+    expect(rendered).not.toContain("stackFrames:");
+    expect(rendered).not.toContain("causeChain:");
+  });
+});
+
+describe("renderGatewayReplayScriptFixture — attempt field fallbacks", () => {
+  function parsedEntries(script: GatewayReplayScript): Record<string, unknown>[] {
+    const rendered = renderGatewayReplayScriptFixture(script);
+    const match = /= (\[[\s\S]*\]);\n$/.exec(rendered ?? "");
+    return JSON.parse(match?.[1] ?? "[]") as Record<string, unknown>[];
+  }
+
+  it("falls back to a stop finish_reason for a successful attempt with no finishReason", () => {
+    const script: GatewayReplayScript = {
+      modelId: "example-chat-model",
+      attempts: [{ outcome: "success", durationMs: 10 }],
+    };
+
+    const entries = parsedEntries(script);
+
+    const body = entries[0]?.bodyJson as { choices: { finish_reason: string }[] };
+    expect(body.choices[0]?.finish_reason).toBe("stop");
+  });
+
+  it("falls back to the outcome's default status and omits headers when retryAfterMs is absent", () => {
+    const script: GatewayReplayScript = {
+      modelId: "example-chat-model",
+      attempts: [{ outcome: "timeout", durationMs: 5 }],
+    };
+
+    const entries = parsedEntries(script);
+
+    expect(entries[0]?.status).toBe(504);
+    expect(entries[0]).not.toHaveProperty("headers");
+  });
+
+  it("includes a retry-after header derived from retryAfterMs, rounded up to whole seconds", () => {
+    const script: GatewayReplayScript = {
+      modelId: "example-chat-model",
+      attempts: [{ outcome: "rate-limit", durationMs: 3, retryAfterMs: 1500 }],
+    };
+
+    const entries = parsedEntries(script);
+
+    expect(entries[0]?.status).toBe(429);
+    expect(entries[0]?.headers).toEqual({ "retry-after": "2" });
   });
 });
