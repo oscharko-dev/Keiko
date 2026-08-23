@@ -8,15 +8,6 @@ boundaries and the epic board exception `Human Review Required: Yes` — was per
 on the implementing pull request. The W1.5 finalization section below records the decisions this
 ADR explicitly deferred to route enforcement (Issue #2478).
 
-> **Amended 2026-08-23 by ADR-0174 (Coding Workbench north star).** ADR-0174 D4 names this
-> authenticated channel the single content-bearing live surface for every future Workbench content
-> class — tool arguments/outputs/diffs, governed command output, and sub-agent and tool-protocol
-> results — not only the transcript/plan/question content this ADR and its finalizations already
-> route through it. Every new content route or field joins the same unauthenticated-sweep
-> regression (`contentRouteEnforcement.test.ts`) this ADR established; persisted evidence stays
-> body-free per D6/S4. No decision below is reopened; D3 remains the channel's content-posture
-> definition.
-
 ## Context
 
 ADR-0137 D4 declared that content-bearing live prompt, response, diff, and diagnostic events are
@@ -114,23 +105,6 @@ field. `EventSource` cannot attach an authorization header and is therefore neve
 transport; authenticated reads use `fetch` with the credentialed cookie. The channel payload reuses
 the runtime-question bounding discipline — bounded, non-empty text with a strict aggregate UTF-8
 budget — validated by the server-owned channel contract before it crosses the wire.
-
-**Amendment (ADR-0174, 2026-08-23).** Target: this channel becomes the single content-bearing
-transport for every Coding Workbench content class the north-star roadmap adds, not only the
-transcript/plan/question payloads this ADR ships with — full tool cards (arguments, command line,
-output excerpt, diff), governed command-execution output, and sub-agent/tool-protocol results all
-join the authenticated `fetch`/fetch-streamed reads defined here, never the content-free
-`EventSource` union this decision keeps content-free. Each new content route or field is added to
-`ENFORCED_CONTENT_ROUTE_PATTERNS` in `contentRouteEnforcement.test.ts`
-(`packages/keiko-server/src/coding-app-session/contentRouteEnforcement.test.ts:25`), so the same
-route-table sweep that proves no question text reaches a cookie-less, forged, or revoked caller
-(F1) is the regression a new content route must also pass before it ships. This widens what rides
-the channel, not who may read it: D1, D2, D5, D6, and D7 govern the new content exactly as they
-govern today's, and persisted evidence for the new content stays body-free (S4 of ADR-0174,
-`CodingWorkbenchEvidenceRecord`). Current implementation is unchanged until the roadmap waves that
-add each content class land (Wave 1 full tool cards, Wave 2 command output, Wave 6 sub-agent
-results; docs/coding-runtime/coding-workbench-north-star-roadmap.md); until then the recorded
-behaviour above remains the fail-closed implementation.
 
 ### D4 — Session material lives only in an HttpOnly, host- and path-scoped cookie
 
