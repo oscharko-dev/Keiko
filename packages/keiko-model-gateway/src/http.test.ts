@@ -82,7 +82,7 @@ zd4z7t+If2ThZ1V2mP4iHOUXyxhrjO8jck5v4ibwDkhpZqHZxXJnOlqR+p4Y/x0J
 // down even when a test body never reaches its own `finally { await close(...) }` — e.g. when a
 // mutant (mutation testing) or a vitest timeout aborts the body mid-await. Test-runner processes
 // are reused across hundreds of mutant runs; leaked listeners/sockets otherwise accumulate until
-// the CI runner exhausts memory (hermeticity contract, AGENTS.md §7/§9).
+// the CI runner exhausts memory (hermeticity contract, AGENTS.md §7/§10).
 const openServers = new Set<HttpServer | HttpsServer>();
 
 afterEach(async () => {
@@ -141,7 +141,7 @@ async function close(server: HttpServer | HttpsServer): Promise<void> {
 // sockets then shovels gigabytes per second until the test-runner host runs out of memory.
 // Legitimate tests move a few kilobytes, so the budget is invisible on the green path and turns
 // any flood into a fast, clean teardown (hermeticity contract: bounded resources under all
-// mutations, AGENTS.md §7/§9).
+// mutations, AGENTS.md §7/§10).
 const TUNNEL_BYTE_BUDGET = 1_048_576;
 
 interface BoundedEnd {

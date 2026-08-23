@@ -127,7 +127,7 @@ function producerToolOutcome(toolName: string, rawOutput: string): ProducerToolO
 // The fail-closed arms above cannot be reached through the route: every tool output the producer
 // ever parses is produced in-process by EditorAgentToolHost, so no real dispatch can hand it an
 // unknown kind or a non-record payload. Exposing the pure parser is the only way to prove the guards
-// actually degrade instead of echoing (AGENTS.md §9 -- both branches of every guard). Same
+// actually degrade instead of echoing (AGENTS.md §10 -- both branches of every guard). Same
 // `_...ForTests` seam convention as `_resetEditorAgentAuditForTests` in agentActionAudit.ts.
 export const _producerToolOutcomeForTests = producerToolOutcome;
 
