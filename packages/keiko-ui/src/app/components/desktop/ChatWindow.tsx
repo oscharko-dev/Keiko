@@ -126,6 +126,8 @@ import { fetchFilesSearch, updateChat } from "@/lib/api";
 import type { ChatEditorApplyOutcome } from "@/lib/chat-editor-apply";
 import { copyTextToClipboard } from "@/lib/clipboard";
 import { useTranslate, type I18nTranslate } from "@/lib/i18n";
+import { useFollowNewest } from "@/lib/useFollowNewest";
+import { ComposerShell, composerEnterSubmits, useComposerAutoGrow } from "./composer/ComposerShell";
 import { presentChatSessionError, useOptionalWidgetTranslate } from "@/lib/optional-widget-i18n";
 import { formatUserError } from "./format-error";
 import {
@@ -373,20 +375,6 @@ function conversationTurnSpacerStyle(hiddenTurns: number): CSSProperties {
 // configured the caller renders a noEligibleModels error instead (AC #4).
 function modelList(models: readonly ModelCapability[]): readonly ModelCapability[] {
   return models.filter((model) => model.kind === "chat");
-}
-
-function onComposerKeyDown(
-  send: () => Promise<void>,
-): (event: KeyboardEvent<HTMLTextAreaElement>) => void {
-  return (event) => {
-    // uiux-fix F041 (C206) — Enter during IME composition (Japanese, Chinese,
-    // Korean, …) confirms the composition; it must never submit the message.
-    if (event.nativeEvent.isComposing) return;
-    if (event.key === "Enter" && !event.shiftKey) {
-      event.preventDefault();
-      void send();
-    }
-  };
 }
 
 // uiux-fix F042 (C208) — citation markers in grounded answers (ASCII [n], CJK
@@ -2809,17 +2797,11 @@ function ComposerCoreImpl({
     activeProject,
     replaceChat,
   } = session;
-  // uiux-fix F009 C089 — auto-grow the composer with its content up to 220px
-  // (~8-9 lines at 15px/1.5), then scroll. Clearing the draft after a send
-  // collapses the textarea back to its rows={2} minimum. The mini composer
+  // uiux-fix F009 C089 — auto-grow with the content (shared ComposerShell behaviour). Clearing
+  // the draft after a send collapses the textarea back to its rows={2} minimum. The mini composer
   // (MiniChat) has its own textarea without this effect and stays height:100%.
   const taRef = useRef<HTMLTextAreaElement>(null);
-  useEffect(() => {
-    const ta = taRef.current;
-    if (ta === null) return;
-    ta.style.height = "auto";
-    ta.style.height = `${String(Math.min(ta.scrollHeight, 220))}px`;
-  }, [draft]);
+  useComposerAutoGrow(taRef, draft);
 
   // Rejection state for the inline alert (AC #2 / Part 2).
   const [rejectionReason, setRejectionReason] = useState<AttachmentRejectionReason | undefined>();
@@ -3273,7 +3255,7 @@ function ComposerCoreImpl({
         });
         if (handled) return;
       }
-      onComposerKeyDown(sendMessage)(event);
+      if (composerEnterSubmits(event)) void sendMessage();
     },
     [
       insertRepositoryFileReference,
@@ -3320,98 +3302,89 @@ function ComposerCoreImpl({
         data-composer-layer="normal"
         aria-hidden={voiceDialogActive ? true : undefined}
       >
-        <div className="cmp-input-stack">
-          {/* Drop zone above the textarea (Part 2 — shown when attachment is supported) */}
-          <AttachDropZone enabled={attachEnabled} onFiles={handleFiles} />
-          {/* The textarea remains a native textbox. When repository suggestions exist,
-            aria-controls points to their visible semantic list; the adjacent polite status
-            announces result-count changes. Arrow keys update the visible highlight and Enter
-            activates it without claiming a listbox/combobox relationship that is not present. */}
-          <div className="cmp-input-combobox">
-            <textarea
-              className="cmp-input"
-              ref={taRef}
-              rows={2}
-              value={draft}
-              aria-label={t("chat.messageLabel")}
-              placeholder={placeholder}
-              // The composer opts into shell chord dispatch (SHELL_CHORD_BYPASS_ATTRIBUTE in
-              // hooks/useKeyboardShortcuts.ts). Without it the substrate's editable-target guard
-              // left Cmd/Ctrl+P, Cmd/Ctrl+Shift+P and Cmd/Ctrl+Shift+F dead in the product's
-              // primary input. The rule the substrate then applies keeps the field's own
-              // text-editing chords (Cmd/Ctrl+Z undoes typing, not a workspace panel toggle).
-              data-shell-chord-bypass=""
-              aria-controls={repositoryResultsId}
-              onChange={handleDraftChange}
-              onSelect={handleDraftSelect}
-              onKeyDown={handleDraftKeyDown}
-              // uiux-fix F041 (C205, supersedes F009 C077 readOnly) — the textarea stays
-              // fully editable while a send is in flight so the next message can be
-              // pre-typed during streaming. Re-submit stays blocked by the isInFlight
-              // guard in useChatSession, and the primary button is "Cancel" meanwhile.
+        <ComposerShell
+          value={draft}
+          placeholder={placeholder}
+          textareaRef={taRef}
+          ariaLabel={t("chat.messageLabel")}
+          // The textarea remains a native textbox. When repository suggestions exist,
+          // aria-controls points to their visible semantic list; the adjacent polite status
+          // announces result-count changes. Arrow keys update the visible highlight and Enter
+          // activates it without claiming a listbox/combobox relationship that is not present.
+          ariaControls={repositoryResultsId}
+          onChange={handleDraftChange}
+          onSelect={handleDraftSelect}
+          onKeyDown={handleDraftKeyDown}
+          // uiux-fix F041 (C205, supersedes F009 C077 readOnly) — the textarea stays fully
+          // editable while a send is in flight so the next message can be pre-typed during
+          // streaming. Re-submit stays blocked by the isInFlight guard in useChatSession, and the
+          // primary button is "Cancel" meanwhile.
+          aboveInput={<AttachDropZone enabled={attachEnabled} onFiles={handleFiles} />}
+          belowInput={
+            <>
+              {repositoryPickerOpen ? (
+                <ComposerRepositoryPickerInline
+                  roots={repositoryRoots}
+                  selectedRoot={selectedRepositoryRoot}
+                  onRootChange={(next) => {
+                    setSelectedRepositoryRoot(next);
+                    setRepositoryHighlightedIndex(0);
+                  }}
+                  search={repositorySearch}
+                  pickingPath={repositoryPickingPath}
+                  highlightedIndex={repositoryHighlightedIndex}
+                  pickError={repositoryPickError}
+                  onPick={(result) => {
+                    void insertRepositoryFileReference(result);
+                  }}
+                  onClose={() => setRepositoryMention(null)}
+                />
+              ) : null}
+              <RepositoryReferenceStrip
+                references={repositoryReferences}
+                onRemove={removeRepositoryReference}
+              />
+              {/* Chip strip below the textarea, above the composer bar (AC #3) */}
+              <AttachmentStrip
+                attachments={pendingAttachments}
+                onRemove={removePendingAttachment}
+              />
+              {/* Inline rejection alert — role="alert" announces immediately (AC #2) */}
+              <AttachRejectionAlert reason={rejectionReason} mimeType={rejectionMime} />
+              {/* Issue #152 / AC#1 + AC#4 — lifecycle status announcement next to the textarea so
+                SR users hear the state without losing composer focus. Issue #495 — dictation
+                transcript review / transcribing status / error. */}
+              <ComposerStatusRow
+                voiceDialogActive={voiceDialogActive}
+                sendStatus={sendStatus}
+                voiceDictationVisible={voiceDictationVisible}
+                dictation={dictation}
+                onAfterDictationDiscard={() => micButtonRef.current?.focus()}
+              />
+            </>
+          }
+          footer={
+            <ComposerBar
+              session={session}
+              ready={ready}
+              selectedModelCapability={selectedModelCapability}
+              onAttachFiles={handleFiles}
+              controlsNarrow={controlsNarrow}
+              barCompact={barCompact}
+              voiceDictationVisible={voiceDictationVisible}
+              dictation={dictation}
+              micButtonRef={micButtonRef}
+              voiceSpeechOutputVisible={voiceSpeechOutputVisible}
+              voiceMuted={playback.snapshot.muted}
+              onToggleVoiceMute={playback.toggleMute}
+              playbackButtonRef={playbackButtonRef}
+              voiceDialogAvailable={voiceDialogAvailable}
+              voiceDialogActive={false}
+              onToggleVoiceDialog={toggleVoiceDialog}
+              voiceDialogButtonRef={normalVoiceDialogButtonRef}
             />
-          </div>
-          {repositoryPickerOpen ? (
-            <ComposerRepositoryPickerInline
-              roots={repositoryRoots}
-              selectedRoot={selectedRepositoryRoot}
-              onRootChange={(next) => {
-                setSelectedRepositoryRoot(next);
-                setRepositoryHighlightedIndex(0);
-              }}
-              search={repositorySearch}
-              pickingPath={repositoryPickingPath}
-              highlightedIndex={repositoryHighlightedIndex}
-              pickError={repositoryPickError}
-              onPick={(result) => {
-                void insertRepositoryFileReference(result);
-              }}
-              onClose={() => setRepositoryMention(null)}
-            />
-          ) : null}
-          <RepositoryReferenceStrip
-            references={repositoryReferences}
-            onRemove={removeRepositoryReference}
-          />
-          {/* Chip strip below the textarea, above the composer bar (AC #3) */}
-          <AttachmentStrip attachments={pendingAttachments} onRemove={removePendingAttachment} />
-          {/* Inline rejection alert — role="alert" announces immediately (AC #2) */}
-          <AttachRejectionAlert reason={rejectionReason} mimeType={rejectionMime} />
-          {/* Issue #152 / AC#1 + AC#4 — lifecycle status announcement. Renders
-            adjacent to the textarea so SR users hear the state without losing
-            composer focus. Hidden when there is nothing to announce.
-            Issue #495 — dictation transcript review / transcribing status / error. Lives in the
-            input stack so it is contextually adjacent to the textarea and announced to assistive
-            tech. It renders live capture feedback while recording and stays hidden only when idle. */}
-          <ComposerStatusRow
-            voiceDialogActive={voiceDialogActive}
-            sendStatus={sendStatus}
-            voiceDictationVisible={voiceDictationVisible}
-            dictation={dictation}
-            onAfterDictationDiscard={() => micButtonRef.current?.focus()}
-          />
-        </div>
-        <div className="cmp-footer-row">
-          <ComposerBar
-            session={session}
-            ready={ready}
-            selectedModelCapability={selectedModelCapability}
-            onAttachFiles={handleFiles}
-            controlsNarrow={controlsNarrow}
-            barCompact={barCompact}
-            voiceDictationVisible={voiceDictationVisible}
-            dictation={dictation}
-            micButtonRef={micButtonRef}
-            voiceSpeechOutputVisible={voiceSpeechOutputVisible}
-            voiceMuted={playback.snapshot.muted}
-            onToggleVoiceMute={playback.toggleMute}
-            playbackButtonRef={playbackButtonRef}
-            voiceDialogAvailable={voiceDialogAvailable}
-            voiceDialogActive={false}
-            onToggleVoiceDialog={toggleVoiceDialog}
-            voiceDialogButtonRef={normalVoiceDialogButtonRef}
-          />
-        </div>
+          }
+        />
       </div>
       <ComposerVoiceOverlay
         voiceAuraActive={voiceAura.active}
@@ -4864,15 +4837,14 @@ function composerFooterEffectiveFlags(
 // track whether the reader is near the bottom, and drop a stale pending question-jump once they
 // scroll back near it themselves.
 function handleChatWindowLogScroll(
-  el: HTMLDivElement,
+  onLogScroll: () => void,
   stickRef: CurrentRef<boolean>,
   pendingQuestionScrollRef: CurrentRef<string | null>,
   focusedQuestionId: string | null,
   setFocusedQuestionId: (id: string | null) => void,
 ): void {
-  const nearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 64;
-  stickRef.current = nearBottom;
-  if (nearBottom && focusedQuestionId !== null) {
+  onLogScroll();
+  if (stickRef.current && focusedQuestionId !== null) {
     pendingQuestionScrollRef.current = null;
     setFocusedQuestionId(null);
   }
@@ -4967,6 +4939,7 @@ function EmptyOrNoChatState({
 function ChatWindowLog({
   scrollRef,
   stickRef,
+  onLogScroll,
   pendingQuestionScrollRef,
   focusedQuestionId,
   setFocusedQuestionId,
@@ -4996,6 +4969,7 @@ function ChatWindowLog({
 }: {
   readonly scrollRef: RefObject<HTMLDivElement | null>;
   readonly stickRef: CurrentRef<boolean>;
+  readonly onLogScroll: () => void;
   readonly pendingQuestionScrollRef: CurrentRef<string | null>;
   readonly focusedQuestionId: string | null;
   readonly setFocusedQuestionId: (id: string | null) => void;
@@ -5032,9 +5006,9 @@ function ChatWindowLog({
       aria-label={t("chat.conversation")}
       // eslint-disable-next-line jsx-a11y/no-noninteractive-tabindex -- scrollable log region must be keyboard-focusable (axe scrollable-region-focusable)
       tabIndex={0}
-      onScroll={(event) => {
+      onScroll={() => {
         handleChatWindowLogScroll(
-          event.currentTarget,
+          onLogScroll,
           stickRef,
           pendingQuestionScrollRef,
           focusedQuestionId,
@@ -5356,8 +5330,9 @@ export function ChatWindow({
   // uiux-fix F009 C090 — stick-to-bottom autoscroll: follow new messages AND
   // streaming content growth (lastContent dependency), but only while the
   // reader is near the bottom; never yank someone who scrolled up into the
-  // history. Starting an own send (sending false→true) always jumps down.
-  const stickRef = useRef(true);
+  // history. Starting an own send (sending false→true) always jumps down. The
+  // behaviour lives in the shared useFollowNewest hook (also the Coding
+  // Workbench session stream) — one implementation, AGENTS.md §5.
   const prevSendingRef = useRef(false);
   const lastVisible = lastVisibleChatMessage(
     hasLiveStreamingAssistant,
@@ -5365,6 +5340,21 @@ export function ChatWindow({
     visible,
   );
   const lastContent = lastVisible === undefined ? "" : lastVisible.content;
+  // GEN-PERF-CHAT-013 — the growth key changes on every coalesced stream flush
+  // (lastContent per chunk commit); the hook keeps at most ONE pending frame,
+  // and a scheduled frame reads the live refs, so it covers newer chunks too.
+  const {
+    stickRef,
+    onScroll: onLogScroll,
+    resume: followNewest,
+  } = useFollowNewest(
+    scrollRef,
+    `${String(visible.length)}:${sending ? "1" : "0"}:${String(lastContent.length)}`,
+  );
+  useEffect(() => {
+    if (sending && !prevSendingRef.current) followNewest();
+    prevSendingRef.current = sending;
+  }, [followNewest, sending]);
   const effectiveMinimal = minimalChat;
   const { effectiveCompact, effectiveControlsNarrow, effectiveBarCompact } =
     composerFooterEffectiveFlags(
@@ -5411,16 +5401,19 @@ export function ChatWindow({
     },
     [],
   );
-  const scrollToQuestion = useCallback((messageId: string): void => {
-    setFocusedQuestionId(messageId);
-    const node = questionAnchorsRef.current.get(messageId);
-    if (node === undefined) {
-      pendingQuestionScrollRef.current = messageId;
-      return;
-    }
-    stickRef.current = false;
-    node.scrollIntoView({ block: "start", behavior: "smooth" });
-  }, []);
+  const scrollToQuestion = useCallback(
+    (messageId: string): void => {
+      setFocusedQuestionId(messageId);
+      const node = questionAnchorsRef.current.get(messageId);
+      if (node === undefined) {
+        pendingQuestionScrollRef.current = messageId;
+        return;
+      }
+      stickRef.current = false;
+      node.scrollIntoView({ block: "start", behavior: "smooth" });
+    },
+    [stickRef],
+  );
   useEffect(() => {
     const pending = pendingQuestionScrollRef.current;
     if (pending === null) return;
@@ -5429,7 +5422,7 @@ export function ChatWindow({
     pendingQuestionScrollRef.current = null;
     stickRef.current = false;
     node.scrollIntoView({ block: "start", behavior: "smooth" });
-  }, [focusedQuestionId, visible.length]);
+  }, [focusedQuestionId, stickRef, visible.length]);
   useEffect(() => {
     if (!sending) return;
     pendingQuestionScrollRef.current = null;
@@ -5439,29 +5432,6 @@ export function ChatWindow({
     pendingQuestionScrollRef.current = null;
     setFocusedQuestionId(null);
   }, [activeChat?.id]);
-  // GEN-PERF-CHAT-013 — this effect re-runs on every coalesced stream flush
-  // (lastContent changes per chunk commit); the old cleanup cancelled and
-  // rescheduled a fresh animation frame each time, doubling the per-chunk rAF
-  // churn on top of the content-flush rAF. Keep at most ONE pending frame: an
-  // already-scheduled frame reads the live refs, so it covers newer chunks too.
-  const stickFrameRef = useRef<number | null>(null);
-  useEffect(() => {
-    if (sending && !prevSendingRef.current) stickRef.current = true;
-    prevSendingRef.current = sending;
-    if (!stickRef.current) return;
-    if (stickFrameRef.current !== null) return;
-    stickFrameRef.current = window.requestAnimationFrame(() => {
-      stickFrameRef.current = null;
-      const el = scrollRef.current;
-      if (el !== null && stickRef.current) el.scrollTop = el.scrollHeight;
-    });
-  }, [visible.length, sending, lastContent]);
-  useEffect(
-    () => () => {
-      if (stickFrameRef.current !== null) window.cancelAnimationFrame(stickFrameRef.current);
-    },
-    [],
-  );
 
   return (
     <div
@@ -5489,6 +5459,7 @@ export function ChatWindow({
       <ChatWindowLog
         scrollRef={scrollRef}
         stickRef={stickRef}
+        onLogScroll={onLogScroll}
         pendingQuestionScrollRef={pendingQuestionScrollRef}
         focusedQuestionId={focusedQuestionId}
         setFocusedQuestionId={setFocusedQuestionId}

@@ -36,7 +36,7 @@
   },
   "src/app/components/desktop/ChatWindow.tsx": {
     "@typescript-eslint/explicit-function-return-type": {
-      "count": 7
+      "count": 6
     },
     "complexity": {
       "count": 6
