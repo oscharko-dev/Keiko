@@ -6,6 +6,12 @@ Accepted (2026-06-01)
 
 Implementation now lives at `packages/keiko-tools/src/terminal-policy.ts` and `packages/keiko-server/src/terminal.ts` (relocated from the original `src/tools/` single-package layout by ADR-0019). Not superseded — no later ADR re-decides this boundary; it is still cited as the unchanged terminal-execution allowlist by ADR-0080, ADR-0081, ADR-0084, ADR-0085, and ADR-0088.
 
+> **Amended 2026-08-23 by ADR-0174 (Coding Workbench north star).** This ADR's human-typed UI
+> terminal and its 13-executable `TERMINAL_COMMAND_RULES` allowlist (D3) are unchanged. ADR-0174
+> D3 adds a separate model-callable governed command tool, policed by its own mode-scoped
+> `CommandRule` sets over the same `runCommand` spawn boundary this ADR reuses — a sibling surface,
+> not an extension of the terminal allowlist. This affects Decision 2.
+
 ## Context
 
 Issue #78 (parent epic #61, sibling to the Browser tool in #76 and the Files explorer in #67/#75)
@@ -122,6 +128,21 @@ The allowlist is minimal and conservative. Each entry below is independently jus
 | `npm` | `allowedSubcommands`: `--version`, `ls`, `list`, `outdated`, `view`, `info`, `help`, `ping`. Inherits `denyFlags`: `-c`, `--call`. | Extends the harness npm allowlist to include `--version`. `install`, `run`, `exec`, `ci`, `publish` and all mutation subcommands are excluded by omission. |
 | `pwd` | No subcommand or flag gating. | Outputs only the current directory path. |
 | `echo` | All args accepted. | Echoes its arguments. `shell: false` prevents `echo $SECRET` from expanding env vars; output is still Layer-1 redacted by `runCommand`. |
+
+**Amendment (ADR-0174, 2026-08-23).** TARGET: this table, `TERMINAL_COMMAND_RULES`, and its
+13-executable surface stay exactly as decided here — this is the human-typed UI terminal, gated by
+`isTerminalCommandAllowed()` behind `/api/terminal/*`, and ADR-0174 does not touch it. The
+model-facing governed command tool ADR-0174 D3 adds (`keiko_command`) is a separate surface with
+its own mode-scoped `CommandRule` sets (Ask for approval / Supervised workspace / Full access),
+enforced by the Authority Envelope's `commandPolicy` and `commandAllowed()`
+(`codingToolAuthorityPort.ts:387-397`) over the same `runCommand` spawn boundary this ADR reuses —
+not a modification of `TERMINAL_COMMAND_RULES` and not a rule this table's entries inherit.
+Neither allowlist widens the other: a command denied here stays denied for the human terminal
+regardless of what the model-facing policy permits in Full access, and a command the model-facing
+policy permits does not become reachable from this terminal unless it is independently added to
+this table. Current implementation is unchanged until roadmap Wave 2 lands
+(docs/coding-runtime/coding-workbench-north-star-roadmap.md); until then the recorded behaviour
+above remains the fail-closed implementation.
 
 ### D4 — Explicit deny list (representative, not exhaustive)
 

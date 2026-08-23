@@ -9,6 +9,13 @@
   - [ADR-0140](ADR-0140-macos-dev-lane-activation-of-the-managed-coding-runtime.md) by completing
     the Wave-5 packaged path without changing the deliberately weaker development lane.
 
+> **Amended 2026-08-23 by ADR-0174 (Coding Workbench north star).** D6's subscription-profile
+> activation is not "disabled for this release" but retired for good (ADR-0174 D5). D6's "exactly
+> one approved OpenCode-compatible runtime" stays binding for packaged targets while the bridge
+> engine ships, and is future-dated to become "at least one approved runtime source" only once
+> the bridge is retired (ADR-0174 D12). Every other D6 guarantee — no runtime credential leakage,
+> gateway-only model routing, no bare-metal fallback — is unchanged. Affected: D6.
+
 ## Context
 
 The portable release contract already produces one ZIP for Windows x64, macOS arm64, and macOS
@@ -221,6 +228,18 @@ This prohibition is about FALLBACK, and it stands unchanged. The D9 evaluation p
 fallback: it is the same review-approved OpenCode payload, staged by the same producer, verified by
 the same digests, and reached only because the artifact itself declares that lane. Nothing about a
 missing or failing prerequisite can select it, and no lane is chosen after another one fails.
+
+**Amendment (ADR-0174, 2026-08-23).** TARGET: the subscription-profile activation named above is
+not "disabled for this release" — it is retired for good, along with its model source and runtime
+source (ADR-0174 D5). D6's "exactly one approved OpenCode-compatible runtime" stays the binding
+rule for packaged targets for as long as the bridge engine is the shipped runtime, and is
+future-dated to become "at least one approved runtime source" only once the bridge is retired under
+ADR-0174 D12 (roadmap Wave 7.1, `docs/coding-runtime/coding-workbench-north-star-roadmap.md`) — no
+packaging change now. Every other D6 guarantee is unchanged: no runtime credential leakage,
+gateway-only model routing through Keiko's loopback Model Gateway, and no bare-metal fallback.
+Current implementation is unchanged until roadmap Wave 7.1 lands
+(docs/coding-runtime/coding-workbench-north-star-roadmap.md); until then the recorded behaviour
+above remains the fail-closed implementation.
 
 ### D7 — Installation never widens authority
 

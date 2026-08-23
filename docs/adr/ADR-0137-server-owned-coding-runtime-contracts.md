@@ -4,6 +4,14 @@
 
 Accepted (Issue #2252, 2026-07-11).
 
+> **Amended 2026-08-23 by ADR-0174 (Coding Workbench north star).**
+> ADR-0174 D9 amends D2 to key the authority aggregate by task-workspace/worktree instead of one
+> process-wide singleton, admitting N concurrent runs under an explicit concurrency ceiling, and
+> adds a durable, encrypted, content-bearing session store for resume after a BFF restart (roadmap
+> Wave 5). ADR-0174 D1 amends the runtime-adapter-port text in D3: a Keiko-owned in-process engine
+> becomes a second adapter kind implementing the same port, next to the OpenCode bridge adapter
+> (roadmap child 3.3).
+
 ## Context
 
 The Epic #1982 acceptance audit found that the original Coding Workbench contracts could describe
@@ -52,6 +60,16 @@ project, branch, action/connector scope, budget, runtime source, or model source
 delegation replay, stop, and takeover fail closed. V1 permits exactly one active run per BFF; a
 concurrent start returns `active-run-conflict` deterministically.
 
+**Amendment (ADR-0174 D9, 2026-08-23).** ADR-0174 D9 keys the authority aggregate by
+task-workspace/worktree instead of the one process-wide singleton described above, admitting N
+concurrent runs bounded by an explicit concurrency ceiling (`active-run-conflict` becomes a
+per-worktree, not a per-BFF, denial), and adds a durable, encrypted, content-bearing session store
+in the existing server SQLite for resume after a BFF restart — the existing content-free
+`coding_runtime_snapshots` lifecycle/authority ledger stays unchanged; the new store owns content
+only. Current implementation is unchanged until roadmap Wave 5 lands
+(docs/coding-runtime/coding-workbench-north-star-roadmap.md); until then the recorded behaviour
+above remains the fail-closed implementation.
+
 ### D3 — Runtime state and failures are closed
 
 The server-owned state vocabulary is exactly `unavailable`, `idle`, `starting`, `ready`, `running`,
@@ -63,6 +81,15 @@ revocation, concurrency, and each drift axis without carrying raw process or mod
 The runtime adapter port accepts only the opaque authority reference, immutable execution binding,
 and closed runtime/model sources. Launch paths, argv, environment, endpoint, and credentials are
 adapter-internal server concerns deliberately excluded from the public contract.
+
+**Amendment (ADR-0174 D1, 2026-08-23).** This port shape is deliberately adapter-agnostic; ADR-0174
+D1 exercises that by adding a second adapter kind. A Keiko-owned in-process engine
+(`adapterKind: "keiko-engine"`, evolved from `keiko-harness`) implements this same runtime port
+in-process, hosted by the existing coding-runtime orchestrator next to the OpenCode bridge adapter
+— not a second child process, not a second orchestrator, not a second tool facade (roadmap child
+3.3). Current implementation is unchanged until roadmap Wave 3 lands
+(docs/coding-runtime/coding-workbench-north-star-roadmap.md); until then the recorded behaviour
+above remains the fail-closed implementation.
 
 ### D4 — Runtime confinement, transport, and durable evidence remain server-owned
 

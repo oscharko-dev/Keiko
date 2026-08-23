@@ -15,6 +15,12 @@ Accepted (Issue #1986, 2026-07-07).
 > total monotonic matrix in ADR-0138 D2, and "sidecar" is retired in favor of the canonical
 > runtime artifact/process/adapter/host vocabulary. The three machine values remain unchanged.
 
+> **Amended 2026-08-23 by ADR-0174 (Coding Workbench north star).** D5's closed model-source and
+> runtime-source vocabularies drop the `chatgpt-codex-subscription-profile` and `codex-cli-adapter`
+> members for good and gain a Keiko-owned in-process engine as a new runtime adapter kind alongside
+> the existing bridge runtime. D7's content-free evidence guarantee is cross-referenced against the
+> new authenticated, content-bearing live channel it does not govern. Affected: D5, D7.
+
 ## Context
 
 Epic #1982 introduces the governed Coding Workbench. Later child issues will add the sidecar
@@ -160,6 +166,19 @@ The shared model-source vocabulary is:
 This separation is load-bearing. ChatGPT/Codex subscription credentials are not modeled as OpenAI
 Platform API keys or generic provider credentials. They remain a distinct subscription/profile path.
 
+**Amendment (ADR-0174, 2026-08-23).** TARGET: the `chatgpt-codex-subscription-profile` model source
+and the `codex-cli-adapter` runtime source are retired for good, not merely left unused-but-declared
+— both closed enums drop the member entirely (ADR-0174 D5; removal executed in roadmap Wave 1.6,
+`docs/coding-runtime/coding-workbench-north-star-roadmap.md`, together with the `keiko-contracts`
+package-surface update). A Keiko-owned, in-process engine joins the runtime-source axis as a new
+adapter kind (`adapterKind: "keiko-engine"`), hosted inside the existing coding-runtime orchestrator
+next to the bridge runtime rather than as a second process or a second orchestrator (ADR-0174 D1;
+delivered by roadmap Wave 3.3). The `delivery-runner` runtime-source literal is removed from the
+closed enum and is not resurrected speculatively; it reappears only once a real producer exists
+(roadmap Wave 4). Current implementation is unchanged until roadmap Waves 1.6, 3.3, and 4 land
+(docs/coding-runtime/coding-workbench-north-star-roadmap.md); until then the recorded behaviour
+above remains the fail-closed implementation.
+
 ### D6 — Permission requests are typed, explicit, and content-free
 
 The sidecar runtime may request additional approval only through the shared permission-request
@@ -202,6 +221,15 @@ Rejected evidence content includes:
 Redaction helpers may over-redact after detecting a private path or token-bearing string. That
 conservative posture is correct. Losing detail is acceptable; leaking sensitive or content-bearing
 material is not.
+
+**Amendment (ADR-0174, 2026-08-23).** TARGET: D7 continues to govern persisted coding evidence
+records, diagnostics, the activity log, and exports — content-free by construction, unchanged. The
+paired, authenticated live channel to the local human (ADR-0141) is content-bearing by design
+(ADR-0174 D4): it carries full commands, arguments, outputs, and diffs live, on a separate,
+non-durable transport, because the human-control invariant (AGENTS.md §1) requires the human to see
+what the agent does. This is a cross-reference only — it adds no exception, relaxation, or
+narrowing to D7's guarantee, and the authenticated channel it points to is already shipped, not
+pending work.
 
 ## Consequences
 
