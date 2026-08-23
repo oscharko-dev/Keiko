@@ -24,6 +24,7 @@ import { useAutonomyModePolicy } from "../../hooks/useAutonomyModePolicy";
 import type { CodingWorkbenchRuntimeState } from "@/lib/coding-workbench-live-state";
 import { useCodingWorkbenchQuestions } from "@/lib/useCodingWorkbenchQuestions";
 import { useCodingWorkbenchSafeActivity } from "@/lib/useCodingWorkbenchSafeActivity";
+import { useFollowNewest } from "@/lib/useFollowNewest";
 import {
   useCodingWorkbenchResearch,
   type CodingWorkbenchResearchState,
@@ -277,6 +278,18 @@ function WorkbenchColumns({
     runId: state.run.value?.runId,
     active: activeRunState(state.run.value?.state),
   });
+  // The session stream is a bounded scroll region below the header; a run's newest activity lands
+  // at its end. Follow that growth while the operator is at the bottom, never yank a reader who
+  // scrolled up into the history, and start following again for every new run (#3257 Wave 0).
+  const sessionStreamRef = useRef<HTMLDivElement>(null);
+  const { onScroll: onStreamScroll, resume: followNewest } = useFollowNewest(
+    sessionStreamRef,
+    `${String(runtimeEventSignal)}:${activity.feed?.updatedAt ?? ""}:${String(questions.questions.length)}`,
+  );
+  const runId = state.run.value?.runId;
+  useEffect(() => {
+    if (runId !== undefined) followNewest();
+  }, [followNewest, runId]);
   const pausedRun = state.run.value?.state === "paused" ? state.run.value : undefined;
   const resumeMode = selectedResumeMode(
     resumeSelection,
@@ -317,9 +330,11 @@ function WorkbenchColumns({
   return (
     <div className={styles.session}>
       <div
+        ref={sessionStreamRef}
         className={styles.sessionStream}
         role="log"
         aria-label={t("codingWorkbench.readiness.eventStream.label")}
+        onScroll={onStreamScroll}
         // eslint-disable-next-line jsx-a11y/no-noninteractive-tabindex -- scrollable log region must be keyboard-focusable (axe scrollable-region-focusable)
         tabIndex={0}
       >
