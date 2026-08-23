@@ -73,6 +73,9 @@ This shapes the product _and_ how you work on it:
   pass. Fail closed. If a gate blocks you, the gate is usually right.
 - Secrets stay out of code, logs, evidence, config, and tests. Evidence and diagnostics are
   body-free: counts, hashes, redacted summaries — never raw content, keys, endpoints, or PII.
+- Every change to product runtime behaviour — feature, fix, refactor, anything — ships its own
+  body-free logging on the existing activity log, and when you debug, that log is the source you
+  read first (§8).
 
 ---
 
@@ -202,11 +205,12 @@ evidence.
 
 | You changed…                                   | Also run                                                                                                                                                                                                                                    |
 | ---------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Anything under `packages/keiko-ui/`            | `npm run typecheck --workspace @oscharko-dev/keiko-ui`, `npm run lint --workspace @oscharko-dev/keiko-ui`, `npm run test:coverage:ui`, `npm run check:editor-release-evidence` (see §7)                                                     |
+| Anything under `packages/keiko-ui/`            | `npm run typecheck --workspace @oscharko-dev/keiko-ui`, `npm run lint --workspace @oscharko-dev/keiko-ui`, `npm run test:coverage:ui`, `npm run check:editor-release-evidence` (see §9)                                                     |
 | A package's **public exports** / a new package | `npm run check:package-surface:assembled`                                                                                                                                                                                                   |
 | Retrieval / RAG / grounding                    | `check:retrieval-quality`, `check:grounded-retrieval-quality`, `check:grounded-faithfulness`                                                                                                                                                |
 | Context lanes / compaction                     | `check:context-quality`                                                                                                                                                                                                                     |
 | Server error handling / diagnostics            | `check:error-observability`                                                                                                                                                                                                                 |
+| A new or changed activity-log line or `op`     | `npm run generate:op-catalog` then `npm run check:op-catalog` (the catalog is generated, never hand-edited — §8)                                                                                                                            |
 | An ADR (added/renumbered)                      | `npm run check:adr-index`                                                                                                                                                                                                                   |
 | Added or renamed a `test:e2e:*` script         | `npm run check:e2e-suite-wiring` — a suite no lane runs is not coverage (#2629)                                                                                                                                                             |
 | Any file under `.github/workflows/`            | `npm run check:zizmor-anchors` — `.github/zizmor.yml` ignores are LINE numbers, so inserting a line anywhere above one silently drops a reviewed risk acceptance and turns the required `workflow hygiene` context red on an unrelated diff |
@@ -352,7 +356,88 @@ sent back.
 
 ---
 
-## 8. Traps specific to this repo (learn these once)
+## 8. Logging is part of every change — and the first thing you read when something breaks
+
+Keiko's activity log (`<stateDir>/logs/server.log`, governed by
+[ADR-0173](docs/adr/ADR-0173-server-activity-log-v2-machine-reconstruction-contract.md) and
+described in [`docs/observability/`](docs/observability/README.md)) is a **machine-reconstruction
+contract**: a customer's log file must let an agent rebuild a defect 1:1 without access to the
+machine it happened on. That contract only holds if every change keeps it true, so the two rules
+below apply to **every** change to product runtime behaviour — feature, enhancement, refactor,
+fix, migration, connector, UI surface — in every autonomy mode, with no exceptions and no "too
+small to log". (Repository tooling under `scripts/` is not product runtime; it keeps its
+deterministic `PASS`/`FAIL` output. Everything that runs inside the product is in scope.)
+
+### Rule 1 — every change ships its own logging, on the existing system
+
+The behaviour you add or change must leave body-free evidence in the activity log, built on the
+system that exists, never beside it:
+
+- **Emit through the owning layer's existing port.** On the server: `ServerLogSink` /
+  `ServerLogEvent` ([`server-log.ts`](packages/keiko-server/src/observability/server-log.ts)) for
+  activity, `emitServerDiagnostic` / `defaultServerDiagnosticSink`
+  ([`diagnostics-log.ts`](packages/keiko-server/src/diagnostics-log.ts)) for diagnostics. In domain
+  packages: the injected log port of that package — `SecurityLogSink`, `KnowledgeLogSink`,
+  `MemoryVaultLogSink`, `ConsolidationLogSink`, `ModelGatewayLogSink`. In the browser:
+  `reportClientDiagnostic` ([`client-diagnostics.ts`](packages/keiko-ui/src/lib/client-diagnostics.ts)).
+  A new package that performs work receives a port of the same shape from the server. Not
+  `console.*`, not a private logger, not a second log file, not a new format.
+- **`op` is a catalog value, never a free string.** Add the literal at the call site, run
+  `npm run generate:op-catalog`, and commit the regenerated
+  [`op-catalog.generated.json`](docs/observability/op-catalog.generated.json);
+  `npm run check:op-catalog` fails on drift. Never hand-edit the catalog.
+- **Thread the correlation.** Every line of one logical operation carries that operation's
+  `correlationId`; a background job spawned by a request carries `parentCorrelationId` pointing
+  back at it. The only sanctioned fallback is `UNKNOWN_CORRELATION_ID`
+  ([`correlation.ts`](packages/keiko-server/src/correlation.ts)) — never an ad-hoc string, never a
+  silently missing id.
+- **Errors take the structured path.** §7's no-silent-failures rule, made concrete for the log
+  line: `errorKind` from the closed vocabulary, the dist-anchored Keiko-code stack (`extra.frames` /
+  `extra.causeChain`) and a correlation id on every failure line. A `catch` that logs nothing, or
+  logs free text, loses the defect for good; `check:error-observability` pins the named sites and
+  every new failure path is held to the same shape.
+- **Body-free, always.** §7's redaction rule applies to every new field: counts, statuses, scopes,
+  hashes, ids, route templates, byte sizes, durations — never prompts, responses, file contents,
+  secrets, paths, endpoints or PII (ADR-0173 D4). New fields go into `extra` and through the
+  existing redaction ([`log-redaction.ts`](packages/keiko-server/src/observability/log-redaction.ts));
+  if a value cannot be made body-free, log its hash or its count, not the value.
+- **The log is part of the definition of done.** A change is complete only when the new behaviour
+  can be reconstructed from the log alone. Prove it the way you prove the fix: a test asserts the
+  emitted line(s) — `op`, `correlationId`, `errorKind`, the fields that carry the evidence — and a
+  change to a user-visible or failure-prone surface is checked against `keiko support analyze`
+  showing the operation in its timeline. The pull-request template carries this as a checklist item.
+
+### Rule 2 — when you debug, the log is your primary source
+
+Before you read code, form a hypothesis, or ask a human for a screenshot, read what the product
+already recorded:
+
+1. **Get the artifact.** `keiko support export --out bundle.jsonl` (adds store fingerprints, a
+   manifest and — with `--include-evidence` — evidence manifests), or the raw
+   `<stateDir>/logs/server.log`; the analyzer auto-detects which it was handed.
+2. **Reconstruct.** `keiko support analyze bundle.jsonl` prints every timeline;
+   `--correlation-id <id> --json` narrows to one as a machine-readable `LogTimeline`; `--clusters`
+   groups every parsed line of the file by category, `op` and `errorKind` (errors and successes
+   alike, independent of a correlation id); `--seed` builds the reproduction seed; and
+   `--emit-fixture <path>` writes a ready-to-paste gateway replay fixture.
+3. **Investigate from the timeline.** `keiko investigate --from-timeline <timeline.json>` turns that
+   timeline into a governed investigation with persisted evidence.
+4. **Read `warnings` before trusting a seed.** The analyzer names exactly which evidence class it
+   could not reconstruct (no stack frames, no gateway call, no request line, no store fingerprint).
+   A missing class is itself a finding: the surface that failed to log is part of the bug, and Rule
+   1 applies to its fix.
+5. **Turn the seed into a red-then-green test** following
+   [`docs/observability/reproduction-harness.md`](docs/observability/reproduction-harness.md), so the
+   fix is proven against the customer's actual sequence rather than a guess.
+
+The join keys — `(pid, instanceId, seq)` within a process lifetime, `correlationId` within an
+operation, `parentCorrelationId` across a spawn — are stated once in ADR-0173's "How an agent reads
+the log". If a defect cannot be located from the log, that gap is the first defect to fix: add the
+missing evidence under Rule 1, then fix the behaviour.
+
+---
+
+## 9. Traps specific to this repo (learn these once)
 
 These cost real time when rediscovered. They are all real and current.
 
@@ -408,7 +493,7 @@ These cost real time when rediscovered. They are all real and current.
 
 ---
 
-## 9. Tests
+## 10. Tests
 
 - **Unit/integration tests are co-located:** `foo.ts` → `foo.test.ts` next to it. Vitest,
   `environment: "node"` for packages; `keiko-ui` and `keiko-editor` use jsdom (+ `axe` a11y
@@ -421,7 +506,7 @@ test:e2e:smoke`. Performance-evidence and per-feature suites have their own `tes
 
 ---
 
-## 10. Git, branches, and PRs
+## 11. Git, branches, and PRs
 
 - **Signed commits are required** — `dev` branch protection rejects unsigned commits. Ensure
   commit signing is configured before you commit.
@@ -512,7 +597,7 @@ test:e2e:smoke`. Performance-evidence and per-feature suites have their own `tes
 
 ---
 
-## 11. Decisions and docs
+## 12. Decisions and docs
 
 - **ADRs (`docs/adr/`) are architectural guardrails, not authority over working code.** Read the
   relevant ones before changing a boundary, use them to understand intent and constraints, and
@@ -528,7 +613,7 @@ test:e2e:smoke`. Performance-evidence and per-feature suites have their own `tes
 
 ---
 
-## 12. When you are unsure
+## 13. When you are unsure
 
 Stop and ask the human rather than guessing across a trust boundary, a governance gate, a release
 process, or the human-control invariant. Do not stop solely because an ADR contradicts a verified

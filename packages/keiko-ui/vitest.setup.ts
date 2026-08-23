@@ -31,7 +31,7 @@ beforeEach(() => {
 // active locale back on mount, and `cleanup()` unmounts React trees without touching either that key
 // or the document locale attributes — so a suite asserting English copy passed or failed on whatever
 // a neighbouring test happened to leave behind. Resetting it here makes the precondition the same
-// for every test instead of a property of execution order (AGENTS.md §9: no shared mutable global
+// for every test instead of a property of execution order (AGENTS.md §7: no shared mutable global
 // state). Ordered after `cleanup()` so an unmounting provider cannot write the key back afterwards.
 afterEach(() => {
   cleanup();

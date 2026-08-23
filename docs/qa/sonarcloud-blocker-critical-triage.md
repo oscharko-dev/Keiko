@@ -7,7 +7,7 @@ conflicts with a rule this repository already enforces more strictly, or because
 reading confirmed the flagged pattern is safe/intentional. Each row states the recommended
 SonarCloud resolution (`Won't Fix` or `False Positive`); resolving them in the SonarCloud UI is a
 governed maintainer action with write access. SonarCloud analysis and its stricter repository
-verifier are wired into the required `ci` aggregate under ADR-0131 and ADR-0134; `AGENTS.md` §10
+verifier are wired into the required `ci` aggregate under ADR-0131 and ADR-0134; `AGENTS.md` §11
 remains the authoritative required-checks list.
 
 For findings that _do_ need a code change, see the corresponding PR (PR 1–4) instead. For the two
@@ -30,7 +30,7 @@ unawaited promise — removing `void` as Sonar suggests would either:
   `packages/keiko-editor/src/content-free-guard.ts:82-94`, `AssertNoForbiddenKeys<T>` pattern).
 
 This is a genuine rule conflict, not a bug: the project's own lint gate is stricter/more specific
-than Sonar's generic `void`-operator smell rule, and per `AGENTS.md` §12 ("A blocked gate is a
+than Sonar's generic `void`-operator smell rule, and per `AGENTS.md` §13 ("A blocked gate is a
 signal... fail closed") the project's own enforced gate wins. No code should change here.
 
 Representative sample of affected files (192 occurrences across ~60 files, full list available via

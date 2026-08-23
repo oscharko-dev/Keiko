@@ -59,7 +59,7 @@ const GH_API_TIMEOUT_MS = 120_000;
 const DEFAULT_WINDOW = 20;
 
 /**
- * The required-check names come from CONTRIBUTING.md, which AGENTS.md §10 names as authoritative,
+ * The required-check names come from CONTRIBUTING.md, which AGENTS.md §11 names as authoritative,
  * rather than from a second copy that would drift against it.
  */
 export function requiredChecksFromContributing(markdown) {

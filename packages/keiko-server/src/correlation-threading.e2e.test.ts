@@ -262,7 +262,7 @@ async function bootForVoice(handlerDeps: UiHandlerDeps): Promise<number> {
 
 // Polls the buffered sink instead of assuming synchronous availability: `gateway.*`/`chat.turn.*`
 // lines are written before the response leaves, but the `http`/`request` line is written from
-// `res.on("close")`, which can fire a tick after `fetch()`'s promise settles (AGENTS.md §9 — await
+// `res.on("close")`, which can fire a tick after `fetch()`'s promise settles (AGENTS.md §7 — await
 // a condition instead of sleeping).
 async function waitForEvent(
   sink: BufferedServerLogSink,

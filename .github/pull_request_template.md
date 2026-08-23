@@ -72,6 +72,11 @@ SonarCloud` job demands zero unresolved issues — see [`docs/qa/local-sonar.md`
 - [ ] `npm run check:ui-i18n` passes, or no UI production source changed.
 - [ ] Local verification commands or rationale are listed below.
 - [ ] Reuse/extension/generalization evidence or gap rationale is listed below.
+- [ ] The added or changed behaviour leaves body-free evidence in the activity log through an
+      existing log port (AGENTS.md §8), the emitted `op` / `correlationId` / `errorKind` are asserted
+      by a test, and any new `op` is in the regenerated catalog — or this change touches no product
+      runtime behaviour (repository tooling under `scripts/`, docs, or test-only), and that is
+      stated below.
 
 Local verification:
 

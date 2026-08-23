@@ -179,7 +179,7 @@ required context.
 3. **Phase 3 (the follow-up pull request).** The three micro-jobs are removed; the bundled job moves
    to its own workflow file with the union trigger surface (D2), taking the `osv-scanner.yml`
    pull-request and merge-queue lanes with it; and the required-check list is updated in
-   `CONTRIBUTING.md`, `AGENTS.md` §10, `docs/qa/autonomous-quality-gates.md`,
+   `CONTRIBUTING.md`, `AGENTS.md` §11, `docs/qa/autonomous-quality-gates.md`,
    `RELEASE_REQUIRED_CHECKS` in
    `release.yml` and `portable-assets.yml`, and `reevaluationCheckNames` in
    the then-active external aggregate. Four structural pins are relocated, none relaxed: the
@@ -199,7 +199,7 @@ unchanged too. See D2 for why `push` moved rather than staying as the issue text
 The documentation lists move in phase 3 rather than phase 1 for the same reason the jobs do.
 `CONTRIBUTING.md` is authoritative for what branch protection actually requires (ADR-0002), and an
 authoritative list that anticipates the owner's action is wrong for the whole window it anticipates —
-to a contributor, and to an agent that reads AGENTS.md §10 to learn what must be green.
+to a contributor, and to an agent that reads AGENTS.md §11 to learn what must be green.
 
 **D5 — The enumerated required-check set.** ADR-0135 D3's set is amended: the action-security and
 dependency-lockfile categories are executed inside the single required `workflow hygiene` context.
