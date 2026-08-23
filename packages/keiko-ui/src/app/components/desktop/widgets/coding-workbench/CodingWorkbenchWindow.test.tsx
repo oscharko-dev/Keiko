@@ -410,12 +410,17 @@ describe("CodingWorkbenchWindow", () => {
   // Release-audit F-08/RG-12: an unpaired browser window cannot start a coding run (ADR-0141 —
   // authority resolution fails without launcher pairing), so the surface must render the
   // blocked-idle state and name pairing as the missing input instead of narrating readiness.
-  it("names the unpaired window instead of narrating readiness (F-08/RG-12)", (): void => {
+  // The remedy is named verbatim: the operator learned on 2026-08-23 that "open Keiko through
+  // the launcher" alone does not say which command pairs a window, and a hand-opened tab on
+  // localhost:1983 stays unpaired forever.
+  it("names the unpaired window and the exact launch commands that pair it (F-08/RG-12)", (): void => {
     renderWorkbench(liveState({ canStart: false, pairing: "unpaired" }));
 
-    expect(screen.getByRole("alert")).toHaveTextContent(
-      "Browser window not paired — open Keiko through the launcher to enable coding runs.",
-    );
+    const alert = screen.getByRole("alert");
+    expect(alert).toHaveTextContent("Browser window not paired");
+    expect(alert).toHaveTextContent("keiko start --open");
+    expect(alert).toHaveTextContent("npm run dev:start -- --open");
+    expect(alert).toHaveTextContent("A tab opened by hand cannot be paired.");
     expect(screen.getByText("Not ready to start")).toBeInTheDocument();
     expect(screen.queryByText("Ready to start")).not.toBeInTheDocument();
   });
