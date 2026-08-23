@@ -127,6 +127,7 @@ import type { ChatEditorApplyOutcome } from "@/lib/chat-editor-apply";
 import { copyTextToClipboard } from "@/lib/clipboard";
 import { useTranslate, type I18nTranslate } from "@/lib/i18n";
 import { useFollowNewest } from "@/lib/useFollowNewest";
+import { ComposerShell, composerEnterSubmits, useComposerAutoGrow } from "./composer/ComposerShell";
 import { presentChatSessionError, useOptionalWidgetTranslate } from "@/lib/optional-widget-i18n";
 import { formatUserError } from "./format-error";
 import {
@@ -374,20 +375,6 @@ function conversationTurnSpacerStyle(hiddenTurns: number): CSSProperties {
 // configured the caller renders a noEligibleModels error instead (AC #4).
 function modelList(models: readonly ModelCapability[]): readonly ModelCapability[] {
   return models.filter((model) => model.kind === "chat");
-}
-
-function onComposerKeyDown(
-  send: () => Promise<void>,
-): (event: KeyboardEvent<HTMLTextAreaElement>) => void {
-  return (event) => {
-    // uiux-fix F041 (C206) — Enter during IME composition (Japanese, Chinese,
-    // Korean, …) confirms the composition; it must never submit the message.
-    if (event.nativeEvent.isComposing) return;
-    if (event.key === "Enter" && !event.shiftKey) {
-      event.preventDefault();
-      void send();
-    }
-  };
 }
 
 // uiux-fix F042 (C208) — citation markers in grounded answers (ASCII [n], CJK
@@ -2810,17 +2797,11 @@ function ComposerCoreImpl({
     activeProject,
     replaceChat,
   } = session;
-  // uiux-fix F009 C089 — auto-grow the composer with its content up to 220px
-  // (~8-9 lines at 15px/1.5), then scroll. Clearing the draft after a send
-  // collapses the textarea back to its rows={2} minimum. The mini composer
+  // uiux-fix F009 C089 — auto-grow with the content (shared ComposerShell behaviour). Clearing
+  // the draft after a send collapses the textarea back to its rows={2} minimum. The mini composer
   // (MiniChat) has its own textarea without this effect and stays height:100%.
   const taRef = useRef<HTMLTextAreaElement>(null);
-  useEffect(() => {
-    const ta = taRef.current;
-    if (ta === null) return;
-    ta.style.height = "auto";
-    ta.style.height = `${String(Math.min(ta.scrollHeight, 220))}px`;
-  }, [draft]);
+  useComposerAutoGrow(taRef, draft);
 
   // Rejection state for the inline alert (AC #2 / Part 2).
   const [rejectionReason, setRejectionReason] = useState<AttachmentRejectionReason | undefined>();
@@ -3274,7 +3255,7 @@ function ComposerCoreImpl({
         });
         if (handled) return;
       }
-      onComposerKeyDown(sendMessage)(event);
+      if (composerEnterSubmits(event)) void sendMessage();
     },
     [
       insertRepositoryFileReference,
@@ -3321,98 +3302,89 @@ function ComposerCoreImpl({
         data-composer-layer="normal"
         aria-hidden={voiceDialogActive ? true : undefined}
       >
-        <div className="cmp-input-stack">
-          {/* Drop zone above the textarea (Part 2 — shown when attachment is supported) */}
-          <AttachDropZone enabled={attachEnabled} onFiles={handleFiles} />
-          {/* The textarea remains a native textbox. When repository suggestions exist,
-            aria-controls points to their visible semantic list; the adjacent polite status
-            announces result-count changes. Arrow keys update the visible highlight and Enter
-            activates it without claiming a listbox/combobox relationship that is not present. */}
-          <div className="cmp-input-combobox">
-            <textarea
-              className="cmp-input"
-              ref={taRef}
-              rows={2}
-              value={draft}
-              aria-label={t("chat.messageLabel")}
-              placeholder={placeholder}
-              // The composer opts into shell chord dispatch (SHELL_CHORD_BYPASS_ATTRIBUTE in
-              // hooks/useKeyboardShortcuts.ts). Without it the substrate's editable-target guard
-              // left Cmd/Ctrl+P, Cmd/Ctrl+Shift+P and Cmd/Ctrl+Shift+F dead in the product's
-              // primary input. The rule the substrate then applies keeps the field's own
-              // text-editing chords (Cmd/Ctrl+Z undoes typing, not a workspace panel toggle).
-              data-shell-chord-bypass=""
-              aria-controls={repositoryResultsId}
-              onChange={handleDraftChange}
-              onSelect={handleDraftSelect}
-              onKeyDown={handleDraftKeyDown}
-              // uiux-fix F041 (C205, supersedes F009 C077 readOnly) — the textarea stays
-              // fully editable while a send is in flight so the next message can be
-              // pre-typed during streaming. Re-submit stays blocked by the isInFlight
-              // guard in useChatSession, and the primary button is "Cancel" meanwhile.
+        <ComposerShell
+          value={draft}
+          placeholder={placeholder}
+          textareaRef={taRef}
+          ariaLabel={t("chat.messageLabel")}
+          // The textarea remains a native textbox. When repository suggestions exist,
+          // aria-controls points to their visible semantic list; the adjacent polite status
+          // announces result-count changes. Arrow keys update the visible highlight and Enter
+          // activates it without claiming a listbox/combobox relationship that is not present.
+          ariaControls={repositoryResultsId}
+          onChange={handleDraftChange}
+          onSelect={handleDraftSelect}
+          onKeyDown={handleDraftKeyDown}
+          // uiux-fix F041 (C205, supersedes F009 C077 readOnly) — the textarea stays fully
+          // editable while a send is in flight so the next message can be pre-typed during
+          // streaming. Re-submit stays blocked by the isInFlight guard in useChatSession, and the
+          // primary button is "Cancel" meanwhile.
+          aboveInput={<AttachDropZone enabled={attachEnabled} onFiles={handleFiles} />}
+          belowInput={
+            <>
+              {repositoryPickerOpen ? (
+                <ComposerRepositoryPickerInline
+                  roots={repositoryRoots}
+                  selectedRoot={selectedRepositoryRoot}
+                  onRootChange={(next) => {
+                    setSelectedRepositoryRoot(next);
+                    setRepositoryHighlightedIndex(0);
+                  }}
+                  search={repositorySearch}
+                  pickingPath={repositoryPickingPath}
+                  highlightedIndex={repositoryHighlightedIndex}
+                  pickError={repositoryPickError}
+                  onPick={(result) => {
+                    void insertRepositoryFileReference(result);
+                  }}
+                  onClose={() => setRepositoryMention(null)}
+                />
+              ) : null}
+              <RepositoryReferenceStrip
+                references={repositoryReferences}
+                onRemove={removeRepositoryReference}
+              />
+              {/* Chip strip below the textarea, above the composer bar (AC #3) */}
+              <AttachmentStrip
+                attachments={pendingAttachments}
+                onRemove={removePendingAttachment}
+              />
+              {/* Inline rejection alert — role="alert" announces immediately (AC #2) */}
+              <AttachRejectionAlert reason={rejectionReason} mimeType={rejectionMime} />
+              {/* Issue #152 / AC#1 + AC#4 — lifecycle status announcement next to the textarea so
+                SR users hear the state without losing composer focus. Issue #495 — dictation
+                transcript review / transcribing status / error. */}
+              <ComposerStatusRow
+                voiceDialogActive={voiceDialogActive}
+                sendStatus={sendStatus}
+                voiceDictationVisible={voiceDictationVisible}
+                dictation={dictation}
+                onAfterDictationDiscard={() => micButtonRef.current?.focus()}
+              />
+            </>
+          }
+          footer={
+            <ComposerBar
+              session={session}
+              ready={ready}
+              selectedModelCapability={selectedModelCapability}
+              onAttachFiles={handleFiles}
+              controlsNarrow={controlsNarrow}
+              barCompact={barCompact}
+              voiceDictationVisible={voiceDictationVisible}
+              dictation={dictation}
+              micButtonRef={micButtonRef}
+              voiceSpeechOutputVisible={voiceSpeechOutputVisible}
+              voiceMuted={playback.snapshot.muted}
+              onToggleVoiceMute={playback.toggleMute}
+              playbackButtonRef={playbackButtonRef}
+              voiceDialogAvailable={voiceDialogAvailable}
+              voiceDialogActive={false}
+              onToggleVoiceDialog={toggleVoiceDialog}
+              voiceDialogButtonRef={normalVoiceDialogButtonRef}
             />
-          </div>
-          {repositoryPickerOpen ? (
-            <ComposerRepositoryPickerInline
-              roots={repositoryRoots}
-              selectedRoot={selectedRepositoryRoot}
-              onRootChange={(next) => {
-                setSelectedRepositoryRoot(next);
-                setRepositoryHighlightedIndex(0);
-              }}
-              search={repositorySearch}
-              pickingPath={repositoryPickingPath}
-              highlightedIndex={repositoryHighlightedIndex}
-              pickError={repositoryPickError}
-              onPick={(result) => {
-                void insertRepositoryFileReference(result);
-              }}
-              onClose={() => setRepositoryMention(null)}
-            />
-          ) : null}
-          <RepositoryReferenceStrip
-            references={repositoryReferences}
-            onRemove={removeRepositoryReference}
-          />
-          {/* Chip strip below the textarea, above the composer bar (AC #3) */}
-          <AttachmentStrip attachments={pendingAttachments} onRemove={removePendingAttachment} />
-          {/* Inline rejection alert — role="alert" announces immediately (AC #2) */}
-          <AttachRejectionAlert reason={rejectionReason} mimeType={rejectionMime} />
-          {/* Issue #152 / AC#1 + AC#4 — lifecycle status announcement. Renders
-            adjacent to the textarea so SR users hear the state without losing
-            composer focus. Hidden when there is nothing to announce.
-            Issue #495 — dictation transcript review / transcribing status / error. Lives in the
-            input stack so it is contextually adjacent to the textarea and announced to assistive
-            tech. It renders live capture feedback while recording and stays hidden only when idle. */}
-          <ComposerStatusRow
-            voiceDialogActive={voiceDialogActive}
-            sendStatus={sendStatus}
-            voiceDictationVisible={voiceDictationVisible}
-            dictation={dictation}
-            onAfterDictationDiscard={() => micButtonRef.current?.focus()}
-          />
-        </div>
-        <div className="cmp-footer-row">
-          <ComposerBar
-            session={session}
-            ready={ready}
-            selectedModelCapability={selectedModelCapability}
-            onAttachFiles={handleFiles}
-            controlsNarrow={controlsNarrow}
-            barCompact={barCompact}
-            voiceDictationVisible={voiceDictationVisible}
-            dictation={dictation}
-            micButtonRef={micButtonRef}
-            voiceSpeechOutputVisible={voiceSpeechOutputVisible}
-            voiceMuted={playback.snapshot.muted}
-            onToggleVoiceMute={playback.toggleMute}
-            playbackButtonRef={playbackButtonRef}
-            voiceDialogAvailable={voiceDialogAvailable}
-            voiceDialogActive={false}
-            onToggleVoiceDialog={toggleVoiceDialog}
-            voiceDialogButtonRef={normalVoiceDialogButtonRef}
-          />
-        </div>
+          }
+        />
       </div>
       <ComposerVoiceOverlay
         voiceAuraActive={voiceAura.active}

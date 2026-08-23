@@ -1,4 +1,4 @@
-import { useEffect, useRef, type KeyboardEvent, type ReactNode, type RefObject } from "react";
+import { useRef, type ReactNode, type RefObject } from "react";
 import { type CodingWorkbenchRuntimeStateName } from "@oscharko-dev/keiko-contracts";
 import { useTranslate } from "@/lib/i18n";
 import {
@@ -10,6 +10,11 @@ import { activeRunState, runStateLabel } from "./codingWorkbenchLabels";
 export { PanelTitle } from "./CodingWorkbenchPanelTitle";
 export { Timeline } from "./CodingWorkbenchTimeline";
 import { Icons } from "../../Icons";
+import {
+  ComposerShell,
+  composerEnterSubmits,
+  useComposerAutoGrow,
+} from "../../composer/ComposerShell";
 import styles from "./CodingWorkbenchWindow.module.css";
 
 // PascalCase aliases so the JSX tag itself signals "component", not member access (S6770).
@@ -106,12 +111,7 @@ export function TaskStartSection({
     else if (runState === "paused") actions.onSend();
     else actions.onStart();
   };
-  useEffect((): void => {
-    const textarea = textareaRef.current;
-    if (textarea === null) return;
-    textarea.style.height = "auto";
-    textarea.style.height = `${String(Math.min(textarea.scrollHeight, 220))}px`;
-  }, [taskIntent]);
+  useComposerAutoGrow(textareaRef, taskIntent);
   return (
     <form
       className="composer"
@@ -128,54 +128,40 @@ export function TaskStartSection({
         {t("codingWorkbench.task.instructions")}
       </label>
       <div className="cmp-box">
-        <div className="cmp-input-stack">
-          <div className="cmp-input-combobox">
-            <textarea
-              id="coding-workbench-task-intent"
-              className="cmp-input"
-              ref={textareaRef}
-              rows={2}
-              value={taskIntent}
-              maxLength={65_536}
-              disabled={mutationPending}
-              placeholder={t("codingWorkbench.task.placeholder")}
-              onChange={(event): void => onTaskIntentChange(event.target.value)}
-              onKeyDown={(event): void => handleComposerKeyDown(event, submit, submitBlocked)}
-            />
-          </div>
-        </div>
-        <div className="cmp-footer-row">
-          <div className="cmp-bar cmp-bar-compact">
-            <div className="cmp-bar-model">
-              <span className="cmp-model mono">
-                <CodeIcon size={15} />
-                {t("codingWorkbench.header.eyebrow")}
-              </span>
+        <ComposerShell
+          id="coding-workbench-task-intent"
+          value={taskIntent}
+          placeholder={t("codingWorkbench.task.placeholder")}
+          textareaRef={textareaRef}
+          maxLength={65_536}
+          disabled={mutationPending}
+          onChange={(event): void => onTaskIntentChange(event.target.value)}
+          onKeyDown={(event): void => {
+            if (composerEnterSubmits(event)) submit();
+          }}
+          footer={
+            <div className="cmp-bar cmp-bar-compact">
+              <div className="cmp-bar-model">
+                <span className="cmp-model mono">
+                  <CodeIcon size={15} />
+                  {t("codingWorkbench.header.eyebrow")}
+                </span>
+              </div>
+              <ComposerControls
+                actions={actions}
+                runState={runState}
+                submitBlocked={submitBlocked}
+                busy={mutationPending}
+                startBusy={startBusy}
+                canResume={canResume}
+                t={t}
+              />
             </div>
-            <ComposerControls
-              actions={actions}
-              runState={runState}
-              submitBlocked={submitBlocked}
-              busy={mutationPending}
-              startBusy={startBusy}
-              canResume={canResume}
-              t={t}
-            />
-          </div>
-        </div>
+          }
+        />
       </div>
     </form>
   );
-}
-
-function handleComposerKeyDown(
-  event: KeyboardEvent<HTMLTextAreaElement>,
-  submit: () => void,
-  blocked: boolean,
-): void {
-  if (event.key !== "Enter" || event.shiftKey || event.nativeEvent.isComposing) return;
-  event.preventDefault();
-  if (!blocked) submit();
 }
 
 function ComposerControls({
