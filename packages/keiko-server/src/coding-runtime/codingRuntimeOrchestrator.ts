@@ -25,7 +25,10 @@ import type {
   CodingRuntimeApprovalIssueResult,
   CodingRuntimeManager,
 } from "./codingRuntimeManager.js";
-import type { CodingRuntimeSnapshot } from "./codingRuntimeSnapshotStore.js";
+import type {
+  CodingRuntimeSnapshot,
+  CodingRuntimeSnapshotStore,
+} from "./codingRuntimeSnapshotStore.js";
 import { reviewableResearchAsk } from "./researchApprovalIssuance.js";
 import type { ActiveWorkspaceView } from "../task-workspace/types.js";
 import { CodingRuntimeOperationCoordinator } from "./codingRuntimeOperationCoordinator.js";
@@ -129,6 +132,12 @@ const GRANT_VISIBLE_STATES: ReadonlySet<CodingWorkbenchRuntimeStateName> = new S
 export class CodingRuntimeOrchestrator {
   private tail: Promise<void> = Promise.resolve();
   private activeRunId: string | undefined;
+  /**
+   * The most recently settled run, kept as the public status until the next run is admitted. A
+   * poller or a reloaded window that arrives after settlement still sees the run, its terminal
+   * state and its body-free result instead of an `idle` snapshot with no runId (#3257 Wave 0).
+   */
+  private settledRunId: string | undefined;
   private activeEffectiveMode: CodingWorkbenchMode | undefined;
   private readonly approvals = new Map<string, ApprovalChallenge>();
   private readonly operations: CodingRuntimeOperationCoordinator;
@@ -171,6 +180,8 @@ export class CodingRuntimeOrchestrator {
     // Production bootstrap marks stale active rows recovery-required before composition. Restore only
     // that content-free slot; no adapter turn or productive action is ever replayed.
     this.activeRunId = deps.snapshots.listRecentActive(1)[0]?.runId;
+    this.settledRunId =
+      this.activeRunId === undefined ? latestSettledRunId(deps.snapshots) : undefined;
   }
 
   start(input: unknown): Promise<CodingRuntimeOrchestratorResult> {
@@ -218,9 +229,10 @@ export class CodingRuntimeOrchestrator {
     this.pruneSettled();
   }
   snapshot(): PublicSnapshot {
-    return this.activeRunId
-      ? this.projection.publicSnapshot(this.deps.snapshots.get(this.activeRunId))
-      : this.projection.idle();
+    const visibleRunId = this.activeRunId ?? this.settledRunId;
+    return visibleRunId === undefined
+      ? this.projection.idle()
+      : this.projection.publicSnapshot(this.deps.snapshots.get(visibleRunId));
   }
   status(): PublicSnapshot {
     return this.snapshot();
@@ -771,6 +783,8 @@ export class CodingRuntimeOrchestrator {
     }
     this.pruneSettled();
     this.activeRunId = this.deps.snapshots.listRecentActive(1)[0]?.runId;
+    this.settledRunId =
+      this.activeRunId === undefined ? latestSettledRunId(this.deps.snapshots) : undefined;
   }
   shutdown(): Promise<CodingRuntimeOrchestratorResult> {
     const current = this.current();
@@ -803,6 +817,7 @@ export class CodingRuntimeOrchestrator {
     );
     this.deps.snapshots.create(snapshot);
     this.activeRunId = runId;
+    this.settledRunId = undefined;
     this.activeEffectiveMode = launch.effectiveMode;
     if (predecessorRunId !== undefined) this.settlePredecessorRecovery(predecessorRunId);
     this.projection.publish(snapshot);
@@ -1147,7 +1162,10 @@ export class CodingRuntimeOrchestrator {
       bindingDigest: next.bindingDigest,
       provenanceDigest: next.provenanceDigest,
     });
-    if (TERMINAL_STATES.has(state)) this.activeRunId = undefined;
+    if (TERMINAL_STATES.has(state)) {
+      this.activeRunId = undefined;
+      this.settledRunId = next.runId;
+    }
     if (TERMINAL_STATES.has(state) || state === "recovery-required")
       this.activeEffectiveMode = undefined;
     this.approvals.delete(next.runId);
@@ -1220,4 +1238,11 @@ export function createCodingRuntimeOrchestrator(
   deps: CodingRuntimeOrchestratorDeps,
 ): CodingRuntimeOrchestrator {
   return new CodingRuntimeOrchestrator(deps);
+}
+
+/** The most recently updated terminal row, if any — the run a restarted BFF still shows as settled. */
+function latestSettledRunId(
+  snapshots: Pick<CodingRuntimeSnapshotStore, "listAll">,
+): string | undefined {
+  return snapshots.listAll(1).find((row) => row.terminalAt !== undefined)?.runId;
 }

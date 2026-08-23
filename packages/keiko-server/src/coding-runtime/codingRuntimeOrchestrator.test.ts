@@ -268,6 +268,39 @@ describe("CodingRuntimeOrchestrator", () => {
     expect(f.evidence.settle).toHaveBeenCalledWith(
       expect.objectContaining({ runId: "run-1", state: "succeeded" }),
     );
+    // Observed live on 2026-08-23: within seconds of a run finishing, the public status reported
+    // `idle` with no runId, so a reload (or any poller) lost the settled run and its result. The
+    // settled run stays the public status until the next run is admitted.
+    expect(f.orchestrator.status()).toMatchObject({
+      state: "succeeded",
+      runId: "run-1",
+      result: { status: "succeeded" },
+    });
+  });
+
+  it("keeps the settled run as the public status until a new run is admitted", async () => {
+    const f = fixture();
+    let resolveCompletion: ((outcome: "succeeded") => void) | undefined;
+    f.taskDispatcher.dispatch.mockResolvedValueOnce({
+      ok: true,
+      completion: new Promise<"succeeded">((resolve) => {
+        resolveCompletion = resolve;
+      }),
+    });
+    expect(successfulSnapshot(await f.orchestrator.start(start)).state).toBe("running");
+    resolveCompletion?.("succeeded");
+    await vi.waitFor(() => {
+      expect(f.orchestrator.status()).toMatchObject({ state: "succeeded", runId: "run-1" });
+    });
+
+    f.taskDispatcher.dispatch.mockResolvedValueOnce({
+      ok: true,
+      completion: new Promise<"succeeded">(() => undefined),
+    });
+    expect(
+      successfulSnapshot(await f.orchestrator.start({ ...start, requestId: "request-2" })),
+    ).toMatchObject({ state: "running", runId: "run-2" });
+    expect(f.orchestrator.status()).toMatchObject({ state: "running", runId: "run-2" });
   });
 
   it.each(["succeeded", "failed"] satisfies readonly CodingRuntimeTaskOutcome[])(
