@@ -13,6 +13,7 @@ export interface OpenCodeLaunchProfileInput {
   readonly randomBytes?: ((size: number) => Buffer) | undefined;
 }
 export const OPENCODE_RUNTIME_MODEL_ALIAS = "coding";
+export const OPENCODE_RUNTIME_READINESS_PROMPT = "Keiko runtime readiness handshake.";
 const OPENCODE_PROVIDER_CHUNK_TIMEOUT_MS = 30 * 60_000;
 
 /**

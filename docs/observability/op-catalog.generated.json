@@ -389,7 +389,7 @@
     {
       "op": "chat.request.dispatch",
       "category": "gateway",
-      "site": "packages/keiko-model-gateway/src/openai-adapter.ts:708",
+      "site": "packages/keiko-model-gateway/src/openai-adapter.ts:710",
       "package": "keiko-model-gateway"
     },
     {
@@ -741,6 +741,18 @@
       "package": "keiko-server"
     },
     {
+      "op": "coding-runtime.run.settled",
+      "category": "process",
+      "site": "packages/keiko-server/src/coding-runtime/codingRuntimeOrchestrator.ts:162",
+      "package": "keiko-server"
+    },
+    {
+      "op": "coding-runtime.run.started",
+      "category": "process",
+      "site": "packages/keiko-server/src/coding-runtime/codingRuntimeOrchestrator.ts:139",
+      "package": "keiko-server"
+    },
+    {
       "op": "embedding.memory.failed",
       "category": "embedding",
       "site": "packages/keiko-server/src/memory-embedding.ts:174",
@@ -786,6 +798,24 @@
       "op": "gateway.instance.unavailable",
       "category": "gateway",
       "site": "packages/keiko-server/src/gateway-instance-cache.ts:93",
+      "package": "keiko-server"
+    },
+    {
+      "op": "git.commit.preview.completed",
+      "category": "diagnostic",
+      "site": "packages/keiko-server/src/gitDelivery/commitRoutes.ts:407",
+      "package": "keiko-server"
+    },
+    {
+      "op": "git.delivery.mutation.completed",
+      "category": "diagnostic",
+      "site": "packages/keiko-server/src/gitDelivery/execution.ts:229",
+      "package": "keiko-server"
+    },
+    {
+      "op": "git.delivery.mutation.failed",
+      "category": "diagnostic",
+      "site": "packages/keiko-server/src/gitDelivery/execution.ts:256",
       "package": "keiko-server"
     },
     {

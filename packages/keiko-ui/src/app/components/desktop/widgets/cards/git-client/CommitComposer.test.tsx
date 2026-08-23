@@ -61,6 +61,11 @@ describe("composeCommitMessage", () => {
 });
 
 describe("CommitComposer — commit gate", () => {
+  it("exposes a visible Commit heading", () => {
+    renderComposer();
+    expect(screen.getByRole("heading", { name: "Commit" })).toBeInTheDocument();
+  });
+
   it("disables Commit until a summary is entered", async () => {
     const user = userEvent.setup();
     renderComposer({ preview: makePreview(), previewDraft: "feat: do the thing" });
@@ -92,7 +97,7 @@ describe("CommitComposer — commit gate", () => {
     renderComposer({
       previewDraft: "wip: still cooking",
       preview: makePreview({
-        intent: { warnings: ["wip-marker"], mixedScope: false, isWip: true },
+        intent: { warnings: ["wip-marker", "empty-body"], mixedScope: false, isWip: true },
       }),
     });
     await user.type(screen.getByLabelText("Summary"), "wip: still cooking");
@@ -101,12 +106,13 @@ describe("CommitComposer — commit gate", () => {
     expect(screen.getByTestId("git-commit-warnings")).toHaveTextContent(
       "Work-in-progress marker in the subject",
     );
+    expect(screen.queryByText("No commit body")).not.toBeInTheDocument();
   });
 
   it("disables Commit and shows a hint when nothing is staged", () => {
     renderComposer({ stagedFileCount: 0 });
     expect(screen.getByRole("button", { name: /^Commit/ })).toBeDisabled();
-    expect(screen.getByText(/Stage changes to commit/)).toBeInTheDocument();
+    expect(screen.getByText(/Stage changes to prepare a commit draft/)).toBeInTheDocument();
   });
 
   it("disables Commit while a commit is in flight", () => {
@@ -126,13 +132,13 @@ describe("CommitComposer — commit gate", () => {
 });
 
 describe("CommitComposer — preview and outcomes", () => {
-  it("does not request a commit preview for an empty draft", async () => {
+  it("loads the current staged summary and eligible draft for an empty composer", async () => {
     vi.useFakeTimers();
     const { onPreview } = renderComposer();
 
-    await vi.advanceTimersByTimeAsync(500);
+    await vi.advanceTimersByTimeAsync(0);
 
-    expect(onPreview).not.toHaveBeenCalled();
+    expect(onPreview).toHaveBeenCalledWith("");
   });
 
   it("debounces a policy preview for the composed draft when changes are staged", async () => {
@@ -150,16 +156,60 @@ describe("CommitComposer — preview and outcomes", () => {
     expect(alert).toHaveTextContent("preview route unavailable");
   });
 
-  it("renders the change summary in the policy preview", () => {
+  it("renders the change summary before a commit draft is entered", () => {
     renderComposer({
       previewDraft: "",
       preview: makePreview({
         summary: { stagedFileCount: 3, areaCount: 2, areas: ["src", "docs"], touchesTests: true },
       }),
     });
-    const preview = screen.getByTestId("git-commit-preview");
+    const preview = screen.getByTestId("git-commit-draft");
     expect(preview).toHaveTextContent("3 staged files across 2 areas");
     expect(preview).toHaveTextContent("touches tests");
+  });
+
+  it("shows the live staged summary and applies an eligible commit draft on request", async () => {
+    const user = userEvent.setup();
+    const clipboardDescriptor = Object.getOwnPropertyDescriptor(navigator, "clipboard");
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: { writeText },
+    });
+    const suggestedMessage = [
+      "chore: update staged changes",
+      "",
+      "Update 2 staged files in src.",
+      "Keep the commit limited to the staged selection.",
+    ].join("\n");
+    const { onPreview } = renderComposer({
+      previewDraft: "",
+      preview: makePreview({ suggestedMessage }),
+    });
+
+    try {
+      expect(screen.getByTestId("git-commit-draft")).toHaveTextContent(
+        "2 staged files across 1 area",
+      );
+      await user.click(screen.getByRole("button", { name: "Review commit draft" }));
+
+      expect(screen.getByLabelText("Summary")).toHaveValue("chore: update staged changes");
+      expect(screen.getByLabelText("Description")).toHaveValue(
+        "Update 2 staged files in src.\nKeep the commit limited to the staged selection.",
+      );
+      expect(screen.getByTestId("git-commit-message-preview")).toHaveTextContent("Commit draft");
+      await user.click(screen.getByRole("button", { name: "Copy commit draft" }));
+
+      await waitFor(() => expect(onPreview).toHaveBeenCalledWith(suggestedMessage));
+      await waitFor(() => expect(writeText).toHaveBeenCalledWith(suggestedMessage));
+      expect(screen.getByText("Copied")).toBeInTheDocument();
+    } finally {
+      if (clipboardDescriptor === undefined) {
+        Reflect.deleteProperty(navigator, "clipboard");
+      } else {
+        Object.defineProperty(navigator, "clipboard", clipboardDescriptor);
+      }
+    }
   });
 
   it("renders the commit mutation outcome", () => {
@@ -188,10 +238,37 @@ describe("CommitComposer — commit action", () => {
 
     expect(onCommit).toHaveBeenCalledWith("feat: subject\n\nBody.");
   });
+
+  it("routes protected-branch commits to branch creation instead of execute", async () => {
+    const user = userEvent.setup();
+    const onCreateBranch = vi.fn();
+    const { onCommit } = renderComposer({
+      branchName: "dev",
+      onCreateBranch,
+      preview: makePreview({
+        policyOutcome: "blocked",
+        policyBlockReason: "protected-branch",
+      }),
+      previewDraft: "feat: x",
+    });
+
+    await user.type(screen.getByLabelText("Summary"), "feat: x");
+    expect(
+      screen.getByText(
+        (_, element) =>
+          element?.tagName === "P" &&
+          element.textContent?.includes("Current branch is protected") === true,
+      ),
+    ).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Create branch first" }));
+
+    expect(onCreateBranch).toHaveBeenCalledTimes(1);
+    expect(onCommit).not.toHaveBeenCalled();
+  });
 });
 
 describe("CommitComposer — keyboard", () => {
-  it("reaches the summary, description, and Commit button by Tab", async () => {
+  it("reaches the summary, description, Commit button, and draft copy by Tab", async () => {
     const user = userEvent.setup();
     renderComposer({ preview: makePreview(), previewDraft: "feat: x" });
 
@@ -204,5 +281,8 @@ describe("CommitComposer — keyboard", () => {
 
     await user.tab();
     expect(screen.getByRole("button", { name: /^Commit/ })).toHaveFocus();
+
+    await user.tab();
+    expect(screen.getByRole("button", { name: "Copy commit draft" })).toHaveFocus();
   });
 });

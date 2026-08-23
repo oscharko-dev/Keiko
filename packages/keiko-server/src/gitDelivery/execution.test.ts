@@ -19,6 +19,7 @@ import {
 import type { GitMutationLifecycleResult } from "@oscharko-dev/keiko-tools";
 import { buildRedactor } from "../index.js";
 import type { EvidenceStore } from "@oscharko-dev/keiko-evidence";
+import type { ServerLogEvent } from "../observability/server-log.js";
 import { createInMemoryUiStore } from "../store/index.js";
 import {
   executeGovernedMutation,
@@ -86,6 +87,21 @@ function captureStore(): { store: EvidenceStore; count: () => number } {
   };
 }
 
+function captureActivityLog(): {
+  readonly events: ServerLogEvent[];
+  readonly sink: { readonly write: (event: ServerLogEvent) => void };
+} {
+  const events: ServerLogEvent[] = [];
+  return {
+    events,
+    sink: {
+      write: (event): void => {
+        events.push(event);
+      },
+    },
+  };
+}
+
 // Real adapter + real snapshot reader: only the trusted policy pack is supplied (no adapter/reader/now
 // seam), exercising the default-seam branches and the live read-only inspection + mutation boundary.
 const REAL_SEAMS: GitDeliveryExecutionSeams = { policyPacks: { repoPack: ALLOW_LOCAL } };
@@ -108,6 +124,7 @@ afterEach(() => {
 describe("executeGovernedMutation — real git through the default seams", () => {
   it("creates a branch and records evidence", async () => {
     const cap = captureStore();
+    const activity = captureActivityLog();
     const deps = { evidenceStore: cap.store, redactor: buildRedactor({}) };
     const result = await executeGovernedMutation(
       {
@@ -119,11 +136,23 @@ describe("executeGovernedMutation — real git through the default seams", () =>
       { required: false },
       workspaceInfo(root),
       deps,
-      REAL_SEAMS,
+      { ...REAL_SEAMS, activityLog: activity.sink },
     );
     expect(result.outcome.status).toBe("succeeded");
     expect(git(["branch", "--list", "feature/x"])).toContain("feature/x");
     expect(cap.count()).toBe(1);
+    const event = activity.events[0];
+    expect(event?.category).toBe("diagnostic");
+    expect(event?.op).toBe("git.delivery.mutation.completed");
+    expect(event?.correlationId).toMatch(/^gde-action-[a-f0-9]{24}$/u);
+    expect(event?.extra?.actionKind).toBe("branch-create");
+    expect(event?.extra?.status).toBe("succeeded");
+    expect(event?.extra?.phaseReached).toBe("result");
+    expect(event?.extra?.policyOutcome).toBe("constrained");
+    expect(event?.extra?.preflightFindingCount).toBe(0);
+    expect(event?.extra?.preflightBlockingCount).toBe(0);
+    expect(event?.extra?.requiredApproverCount).toBe(0);
+    expect(JSON.stringify(activity.events)).not.toContain("feature/x");
   });
 
   it("switches branch, stages a file, and commits — all through the kernel", async () => {
@@ -203,6 +232,7 @@ describe("executeGovernedMutation — real git through the default seams", () =>
   it("surfaces a worktree read failure as a thrown error outside a git repository", async () => {
     const bare = realpathSync(mkdtempSync(join(tmpdir(), "keiko-gd-nonrepo-")));
     const deps = { evidenceStore: captureStore().store, redactor: buildRedactor({}) };
+    const activity = captureActivityLog();
     try {
       await expect(
         executeGovernedMutation(
@@ -210,9 +240,17 @@ describe("executeGovernedMutation — real git through the default seams", () =>
           { required: false },
           workspaceInfo(bare),
           deps,
-          REAL_SEAMS,
+          { ...REAL_SEAMS, activityLog: activity.sink },
         ),
       ).rejects.toBeTruthy();
+      const event = activity.events[0];
+      expect(event?.level).toBe("error");
+      expect(event?.category).toBe("diagnostic");
+      expect(event?.op).toBe("git.delivery.mutation.failed");
+      expect(typeof event?.errorKind).toBe("string");
+      expect(event?.extra?.actionKind).toBe("branch-switch");
+      expect(event?.extra?.phaseReached).toBe("snapshot");
+      expect(JSON.stringify(activity.events)).not.toContain(bare);
     } finally {
       rmSync(bare, { recursive: true, force: true });
     }

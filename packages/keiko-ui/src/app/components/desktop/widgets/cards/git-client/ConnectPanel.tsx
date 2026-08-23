@@ -169,8 +169,8 @@ export function ConnectPanel({
             <SparkIcon size={14} />
           </span>
           <span style={{ fontSize: 12, color: "var(--fg-muted)", lineHeight: 1.55 }}>
-            Once a repository is connected, Keiko can summarize your working changes and draft
-            commit messages for you.
+            After changes are staged, Keiko shows their structural summary and an eligible commit
+            draft for your review.
           </span>
         </div>
       </div>

@@ -457,25 +457,31 @@ describe("WindowFrame content zoom controls", () => {
     expect(contentZoom).toHaveStyle({ width: "604px", transform: "scale(0.5)" });
   });
 
-  it("keeps chat scrolling inside the chat log instead of the outer window body", () => {
-    registerWindowRender("chat", () => <div data-testid="chat-body" />);
-    const { container } = render(
-      <WindowFrame
-        win={appWindow({ type: "chat", w: 720, h: 560 })}
-        top
-        connState={null}
-        linkRevision={0}
-        api={api()}
-        wsRef={createRef<HTMLElement>()}
-      />,
-    );
+  it.each([
+    ["chat", "chat-body"],
+    ["governedGit", "git-body"],
+  ] as const)(
+    "keeps %s scrolling inside its working regions instead of the outer window body",
+    (type, testId) => {
+      registerWindowRender(type, () => <div data-testid={testId} />);
+      const { container } = render(
+        <WindowFrame
+          win={appWindow({ type, w: 720, h: 560 })}
+          top
+          connState={null}
+          linkRevision={0}
+          api={api()}
+          wsRef={createRef<HTMLElement>()}
+        />,
+      );
 
-    const body = container.querySelector<HTMLElement>(".win-body");
+      const body = container.querySelector<HTMLElement>(".win-body");
 
-    expect(body).not.toBeNull();
-    expect(body?.style.overflow).toBe("hidden");
-    expect(screen.getByTestId("chat-body").closest(".win-body")).toBe(body);
-  });
+      expect(body).not.toBeNull();
+      expect(body?.style.overflow).toBe("hidden");
+      expect(screen.getByTestId(testId).closest(".win-body")).toBe(body);
+    },
+  );
 
   it("requests connected Files context for Prompt Enhancer windows", () => {
     const linkedFilesRoot = vi.fn(() => "/repo");

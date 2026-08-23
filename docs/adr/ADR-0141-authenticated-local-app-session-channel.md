@@ -265,6 +265,16 @@ same-user local process can read on-disk worktree files directly. The app sessio
 generic HTTP routes from becoming an unauthenticated content projection; it does not claim to revoke
 local filesystem authority.
 
+### F8 — Run creation is workspace-authorized, existing-run control remains session-gated
+
+The run-creating `POST /api/coding-workbench/runtime/runs` has no existing `runId` and returns only
+the content-free runtime snapshot. It therefore does not use the app-session read gate. This keeps a
+manually opened local Keiko tab able to start the selected Coding Workbench when the active
+workspace, local operator principal, deployment ceiling, runtime source, model source, and
+start-confirmation plane all resolve inside the runtime authority service. Existing-run control
+routes and content-bearing channels remain app-session-gated before run resolution, preserving D6's
+non-oracle posture for run existence and protected runtime content.
+
 ## Research-grant finalization (Issue #2644)
 
 Approved research domains are model-selected content, just like the pending host and request line.

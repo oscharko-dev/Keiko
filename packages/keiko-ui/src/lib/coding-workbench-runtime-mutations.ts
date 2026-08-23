@@ -56,6 +56,8 @@ export function createStartMutation(
         taskIntent,
         requestedMode: current.requestedMode,
         runtimePreference: current.runtimePreference,
+        ...(current.selectedModelId === null ? {} : { modelId: current.selectedModelId }),
+        ...(current.reasoningEffort === null ? {} : { reasoningEffort: current.reasoningEffort }),
       }),
   };
 }
@@ -182,6 +184,8 @@ export function createRetryMutation(
         taskIntent,
         requestedMode: current.requestedMode,
         runtimePreference: current.runtimePreference,
+        ...(current.selectedModelId === null ? {} : { modelId: current.selectedModelId }),
+        ...(current.reasoningEffort === null ? {} : { reasoningEffort: current.reasoningEffort }),
       }),
   };
 }

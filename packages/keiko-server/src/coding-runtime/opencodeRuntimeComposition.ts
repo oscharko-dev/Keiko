@@ -1,5 +1,13 @@
 import { createHash, timingSafeEqual } from "node:crypto";
-import { chmodSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
 import {
   createServer,
   type IncomingHttpHeaders,
@@ -9,6 +17,7 @@ import {
 } from "node:http";
 import type { Socket } from "node:net";
 import { join } from "node:path";
+import { DatabaseSync } from "node:sqlite";
 
 import type {
   CodingWorkbenchRuntimeEvent,
@@ -121,6 +130,7 @@ export interface OpenCodeRuntimeCompositionInput {
     | undefined;
   readonly gatewayReadiness: {
     readonly waitForObservedRequest: (runId: string, signal: AbortSignal) => Promise<boolean>;
+    readonly verifyObserved: (runId: string) => void;
     readonly clear: (runId: string, preserveVerification?: boolean) => void;
   };
   readonly fetch: typeof globalThis.fetch;
@@ -226,10 +236,17 @@ export function createOpenCodeRuntimeComposition(
       : { codingToolApprovals: input.codingToolApprovals }),
     ...input.authorityLifecycle,
   });
-  return { manager, toolBridge: bridge.publicPort, runPort: createRunPort(runs) };
+  return {
+    manager,
+    toolBridge: bridge.publicPort,
+    runPort: createRunPort(runs, input.diagnostics),
+  };
 }
 
-function createRunPort(runs: Map<string, PreparedRun>): OpenCodeRunPort {
+function createRunPort(
+  runs: Map<string, PreparedRun>,
+  diagnostics: ServerDiagnosticSink | undefined,
+): OpenCodeRunPort {
   const readyRun = (runId: string): ReadyRun | undefined => {
     const run = runs.get(runId);
     return isReadyRun(run) ? run : undefined;
@@ -243,15 +260,19 @@ function createRunPort(runs: Map<string, PreparedRun>): OpenCodeRunPort {
       try {
         await run.client.promptAsync(run.sessionId, text);
         return run.ready;
-      } catch {
+      } catch (error) {
+        recordOpenCodeTurnFailure(diagnostics, run, "submit", error);
         run.runtimeAdapter.cancelTurn();
         return false;
       }
     },
     abortTask: createAbortTask(readyRun),
-    waitForTerminal: (runId, signal): Promise<boolean> => {
+    waitForTerminal: async (runId, signal): Promise<boolean> => {
       const run = readyRun(runId);
-      return run?.runtimeAdapter.waitForTerminal(signal) ?? Promise.resolve(false);
+      if (run === undefined) return false;
+      const outcome = await run.runtimeAdapter.waitForTerminal(signal);
+      if (!outcome && !signal.aborted) recordOpenCodeTurnFailure(diagnostics, run, "terminal");
+      return outcome;
     },
     replyPermission: async (runId, requestId, reply): Promise<boolean> => {
       const run = readyRun(runId);
@@ -276,6 +297,104 @@ function createRunPort(runs: Map<string, PreparedRun>): OpenCodeRunPort {
     ...createQuestionRunPort(readyRun),
   };
 }
+
+type OpenCodeTurnFailureStage = "submit" | "terminal";
+
+function recordOpenCodeTurnFailure(
+  diagnostics: ServerDiagnosticSink | undefined,
+  run: ReadyRun,
+  stage: OpenCodeTurnFailureStage,
+  error?: unknown,
+): void {
+  emitServerDiagnostic(diagnostics, {
+    correlationId: run.runId,
+    timestamp: new Date().toISOString(),
+    operation: "coding-runtime.opencode-composition",
+    source: "opencode.turn",
+    errorClass: error === undefined ? "OpenCodeTurnFailure" : contentFreeErrorClass(error),
+    message: "runtime-turn-failed",
+    code: openCodeTurnFailureCode(run.runRoot, stage),
+  });
+}
+
+function openCodeTurnFailureCode(runRoot: string, stage: OpenCodeTurnFailureStage): string {
+  const database = projectOpenCodeRuntimeDatabase(join(runRoot, "state", "opencode.db"));
+  return `stage=${stage}:${database}`;
+}
+
+function projectOpenCodeRuntimeDatabase(databasePath: string): string {
+  if (!existsSync(databasePath)) return "db=missing";
+  try {
+    const database = new DatabaseSync(databasePath, { readOnly: true });
+    try {
+      return openCodeRuntimeDatabaseSummary(database);
+    } finally {
+      database.close();
+    }
+  } catch {
+    return "db=unavailable";
+  }
+}
+
+function openCodeRuntimeDatabaseSummary(database: DatabaseSync): string {
+  const messages = database.prepare(OPEN_CODE_MESSAGE_SUMMARY_SQL).get() as CountRow;
+  const parts = database.prepare(OPEN_CODE_PART_SUMMARY_SQL).get() as CountRow;
+  return [
+    `db=ok`,
+    `m=${boundedCount(messages.total)}`,
+    `a=${boundedCount(messages.assistant)}`,
+    `stop=${boundedCount(messages.stop)}`,
+    `tool=${boundedCount(messages.toolCalls)}`,
+    `error=${boundedCount(messages.error)}`,
+    `length=${boundedCount(messages.length)}`,
+    `err=${boundedCount(messages.errorName)}`,
+    `p=${boundedCount(parts.total)}`,
+    `ptool=${boundedCount(parts.tool)}`,
+    `ptext=${boundedCount(parts.text)}`,
+    `pfail=${boundedCount(parts.failed)}`,
+    `pdone=${boundedCount(parts.completed)}`,
+  ].join(":");
+}
+
+interface CountRow {
+  readonly total?: unknown;
+  readonly assistant?: unknown;
+  readonly stop?: unknown;
+  readonly toolCalls?: unknown;
+  readonly error?: unknown;
+  readonly length?: unknown;
+  readonly errorName?: unknown;
+  readonly tool?: unknown;
+  readonly text?: unknown;
+  readonly failed?: unknown;
+  readonly completed?: unknown;
+}
+
+function boundedCount(value: unknown): number {
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? value : 0;
+}
+
+const OPEN_CODE_MESSAGE_SUMMARY_SQL = `
+SELECT
+  COUNT(*) AS total,
+  COALESCE(SUM(CASE WHEN json_extract(data, '$.role') = 'assistant' THEN 1 ELSE 0 END), 0) AS assistant,
+  COALESCE(SUM(CASE WHEN json_extract(data, '$.finish') = 'stop' THEN 1 ELSE 0 END), 0) AS stop,
+  COALESCE(SUM(CASE WHEN json_extract(data, '$.finish') = 'tool-calls' THEN 1 ELSE 0 END), 0) AS toolCalls,
+  COALESCE(SUM(CASE WHEN json_extract(data, '$.finish') = 'error' THEN 1 ELSE 0 END), 0) AS error,
+  COALESCE(SUM(CASE WHEN json_extract(data, '$.finish') = 'length' THEN 1 ELSE 0 END), 0) AS length,
+  COALESCE(SUM(CASE WHEN json_extract(data, '$.error.name') IS NOT NULL THEN 1 ELSE 0 END), 0) AS errorName
+FROM message
+`;
+
+const OPEN_CODE_PART_SUMMARY_SQL = `
+SELECT
+  COUNT(*) AS total,
+  COALESCE(SUM(CASE WHEN json_extract(data, '$.type') = 'tool' THEN 1 ELSE 0 END), 0) AS tool,
+  COALESCE(SUM(CASE WHEN json_extract(data, '$.type') = 'text' THEN 1 ELSE 0 END), 0) AS text,
+  COALESCE(SUM(CASE WHEN json_extract(data, '$.state.status') = 'failed' THEN 1 ELSE 0 END), 0) AS failed,
+  COALESCE(SUM(CASE WHEN json_extract(data, '$.state.status') = 'completed' THEN 1 ELSE 0 END), 0) AS completed
+FROM part
+`;
 
 async function synchronizeTurnBaseline(run: ReadyRun): Promise<boolean> {
   if (!run.initialTurnBaselineStable) {
@@ -624,16 +743,7 @@ function readinessPorts(
         ? authenticatedHealth(client)
         : unauthenticatedHealth(input.fetch, endpoint, request.signal),
     openApiDigest: () => openApiDigest(client),
-    gatewayChallenge: () =>
-      challengeGateway(
-        input,
-        run,
-        client,
-        fixedSessionId,
-        request.signal,
-        request.timeoutMs,
-        startupRead,
-      ),
+    gatewayChallenge: () => challengeGateway(input, run, fixedSessionId, startupRead),
     toolFacadeChallenge: () => challengeToolFacade(input, bridge),
     subscribe: async function* (signal): AsyncIterable<OpenCodeSyncHint> {
       fixedSessionId = await createAndEchoFixedSession(client, request.signal);
@@ -782,68 +892,45 @@ async function createAndEchoFixedSession(
 async function challengeGateway(
   input: OpenCodeRuntimeCompositionInput,
   run: PreparedRun,
-  client: OpenCodeHttpClient,
   sessionId: string | undefined,
-  signal: AbortSignal | undefined,
-  timeoutMs: number,
   startupRead: boolean,
 ): Promise<boolean> {
-  if (
-    !startupRead ||
-    sessionId === undefined ||
-    input.capabilities.modelGatewayCapability.length < 32
-  )
+  const reason = gatewayChallengePrecondition(input, sessionId, startupRead);
+  if (reason !== undefined) {
+    recordGatewayChallengeFailure(input.diagnostics, run.runId, reason);
     return false;
-  const challengeSignal = signal ?? AbortSignal.timeout(timeoutMs);
-  const observed = input.gatewayReadiness.waitForObservedRequest(run.runId, challengeSignal);
-  let verified = false;
-  try {
-    await client.promptAsync(sessionId, "Keiko runtime readiness handshake.", {
-      signal: challengeSignal,
-    });
-    const accepted = await observed;
-    await client.abortSession(sessionId, { signal: challengeSignal });
-    const terminal = await fixedSessionIsTerminal(client, sessionId, challengeSignal);
-    verified = accepted && terminal;
-    return verified;
-  } catch {
-    return false;
-  } finally {
-    // Preserve the successful exact-tool handshake until runtime disposal. OpenCode's pinned
-    // compaction path intentionally omits `tools`; the gateway admits that privilege-reducing
-    // follow-up only for this verified run. Disposal still clears the verification marker.
-    input.gatewayReadiness.clear(run.runId, verified);
   }
+  return Promise.resolve(true);
 }
 
-async function fixedSessionIsTerminal(
-  client: OpenCodeHttpClient,
-  sessionId: string,
-  signal: AbortSignal,
-): Promise<boolean> {
-  while (!signal.aborted) {
-    const status = (await client.sessionStatuses({ signal }))[sessionId];
-    if (status === undefined || status.type === "idle") return true;
-    if (!(await readinessPollDelay(signal))) return false;
-  }
-  return false;
+type GatewayChallengePreconditionFailure =
+  | "startup-unread"
+  | "session-missing"
+  | "capability-invalid";
+
+function gatewayChallengePrecondition(
+  input: OpenCodeRuntimeCompositionInput,
+  sessionId: string | undefined,
+  startupRead: boolean,
+): GatewayChallengePreconditionFailure | undefined {
+  if (!startupRead) return "startup-unread";
+  if (sessionId === undefined) return "session-missing";
+  return input.capabilities.modelGatewayCapability.length < 32 ? "capability-invalid" : undefined;
 }
 
-function readinessPollDelay(signal: AbortSignal): Promise<boolean> {
-  if (signal.aborted) return Promise.resolve(false);
-  return new Promise((resolve) => {
-    const settle = (result: boolean): void => {
-      clearTimeout(timer);
-      signal.removeEventListener("abort", abort);
-      resolve(result);
-    };
-    const abort = (): void => {
-      settle(false);
-    };
-    const timer = setTimeout(() => {
-      settle(true);
-    }, 10);
-    signal.addEventListener("abort", abort, { once: true });
+function recordGatewayChallengeFailure(
+  diagnostics: ServerDiagnosticSink | undefined,
+  runId: string,
+  reason: GatewayChallengePreconditionFailure,
+): void {
+  emitServerDiagnostic(diagnostics, {
+    correlationId: runId,
+    timestamp: new Date().toISOString(),
+    operation: "coding-runtime.handshake",
+    source: "opencode.gateway-challenge",
+    errorClass: "OpenCodeGatewayChallengeFailure",
+    message: "runtime-handshake-failed",
+    code: `stage=gateway-challenge:reason=${reason}`,
   });
 }
 

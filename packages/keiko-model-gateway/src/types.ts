@@ -20,6 +20,7 @@ export type {
   LatencyClass,
   ModelTokenAccountingSource,
   ModelTokenAccounting,
+  ModelReasoningEffort,
   InfillingAlignment,
   ModelCapability,
   CompletionInteractionMode,
@@ -51,6 +52,8 @@ export type {
 } from "@oscharko-dev/keiko-contracts";
 export {
   CONVERSATION_CAPABILITY_CONTRACT_VERSION,
+  MODEL_REASONING_EFFORTS,
+  isCodingWorkbenchModel,
   GATEWAY_TEMPERATURE_RANGE,
   GATEWAY_TOP_P_RANGE,
   VOICE_PROVIDER_LOCALITIES,

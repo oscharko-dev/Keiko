@@ -18,6 +18,12 @@ import {
   type CodingWorkbenchRuntimeStateName,
 } from "@oscharko-dev/keiko-contracts";
 import { resolveAppSessionReadAuthority } from "../coding-app-session/appSessionReadAuthority.js";
+import {
+  APP_SESSION_COOKIE_MAX_AGE_SECONDS,
+  readSessionCookie,
+  requestIsSecure,
+  serializeSessionCookies,
+} from "../coding-app-session/sessionCookie.js";
 import type { UiHandlerDeps } from "../deps.js";
 import {
   errorBody,
@@ -32,6 +38,7 @@ import type { CodingRuntimeEventHub } from "./codingRuntimeEventHub.js";
 import type { CodingRuntimeOrchestrator } from "./codingRuntimeOrchestrator.js";
 
 const MAX_BODY_BYTES = 64 * 1024;
+const RUN_START_SESSION_PRINCIPAL_LABEL = "coding-workbench";
 
 class BodyTooLargeError extends Error {}
 
@@ -137,34 +144,39 @@ async function withBody(work: () => Promise<RouteResult>): Promise<RouteResult> 
 }
 
 /**
- * The single authority choke point for every state-changing coding-runtime route.
+ * The single authority choke point for run-bound state-changing coding-runtime routes.
  *
  * ADR-0141 D1 fixes loopback, same-origin `Origin`, the constant CSRF header, and `runId` knowledge
  * as routing facts that never grant a route; D2 makes the launcher-attested app session the
  * authority. Enforcement was scoped to the content-bearing question and research reads (W1.5,
- * #2478), which left the authority-GRANTING lifecycle mutations — start, approve, stop, takeover,
+ * #2478), which left run-bound authority-GRANTING lifecycle mutations — approve, stop, takeover,
  * retry, recovery-ack, pause, resume, follow-up, research revoke — reachable by any same-user local
- * process that replayed those routing facts. Every one of them funnels through this helper, so the
- * boundary lives here once: a route that cannot mutate without `mutation()` cannot forget the
- * guard, and a future lifecycle route inherits it by construction.
+ * process that replayed those routing facts. Every run-bound mutation funnels through this helper,
+ * so the boundary lives here once: a route that cannot mutate an existing run without `mutation()`
+ * cannot forget the guard, and a future lifecycle route inherits it by construction.
  *
  * The check runs BEFORE run resolution and before the body is read (ADR-0141 F1 ordering), and it
  * fails closed: an absent channel, an absent cookie, a forged, revoked, rotated-away, or expired
- * session all resolve to no authority and are denied. The denial shape is deliberately split:
- *   - a per-run mutation answers with the existence-concealing not-found result, byte-identical to
- *     the response an unknown `runId` yields, so the denial is not a run-existence oracle
- *     (ADR-0141 D6, the same posture the question mutations already take);
- *   - the run-creating `POST /runs` names no run and conceals no existence, so it answers with the
- *     honest `authority-resolution-failed` the Workbench already renders as an actionable start
- *     failure — never a dead button, and never a silent success.
+ * session all resolve to no authority and are denied. A per-run mutation answers with the
+ * existence-concealing not-found result, byte-identical to the response an unknown `runId` yields,
+ * so the denial is not a run-existence oracle (ADR-0141 D6, the same posture the question
+ * mutations already take).
+ *
+ * The run-creating `POST /runs` is intentionally outside this app-session gate because it carries
+ * no existing run id or protected runtime content; the orchestrator still resolves the active
+ * workspace, local operator principal, deployment ceiling, runtime source, model source, and
+ * start-confirmation plane before minting authority. Once that start succeeds, the route issues
+ * the same scoped app-session cookie the paired channel uses, so the browser that created the run
+ * can read its own safe activity. Existing-run control and content remain session-gated.
  */
 function requireMutationAuthority(
   ctx: RouteContext,
   deps: UiHandlerDeps,
   runId: string | undefined,
 ): RouteResult | undefined {
+  if (runId === undefined) return undefined;
   if (resolveAppSessionReadAuthority(deps, ctx.req) !== undefined) return undefined;
-  return runId === undefined ? failureResult("authority-resolution-failed") : notFound();
+  return notFound();
 }
 
 async function mutation(
@@ -189,11 +201,39 @@ async function mutation(
   });
 }
 
+function runStartSessionHeaders(
+  ctx: RouteContext,
+  deps: UiHandlerDeps,
+): RouteResult["headers"] | undefined {
+  const ensured = deps.codingAppSessionChannel?.ensureLocalSession(
+    readSessionCookie(ctx.req),
+    RUN_START_SESSION_PRINCIPAL_LABEL,
+  );
+  if (ensured?.issued !== true) return undefined;
+  return {
+    "Set-Cookie": serializeSessionCookies(ensured.cookieToken, {
+      secure: requestIsSecure(ctx.req),
+      maxAgeSeconds: APP_SESSION_COOKIE_MAX_AGE_SECONDS,
+    }),
+  };
+}
+
 export function handleCreateCodingRuntimeRun(
   ctx: RouteContext,
   deps: UiHandlerDeps,
 ): Promise<RouteResult> {
-  return mutation(ctx, deps, undefined, (runtime, body) => runtime.start(body));
+  const required = requireRuntime(deps);
+  if (isRouteResult(required)) return Promise.resolve(required);
+  return withBody(async () => {
+    const body = await readBody(ctx.req);
+    if (body === undefined) return failureResult("invalid-intent");
+    const result = await required.orchestrator.start(body);
+    if (!result.ok) return failureResult(result.failureCode);
+    const headers = runStartSessionHeaders(ctx, deps);
+    return headers === undefined
+      ? { status: 200, body: result.snapshot }
+      : { status: 200, body: result.snapshot, headers };
+  });
 }
 
 export function handleCodingRuntimeStatus(ctx: RouteContext, deps: UiHandlerDeps): RouteResult {

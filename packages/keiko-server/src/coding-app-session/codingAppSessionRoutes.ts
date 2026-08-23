@@ -22,14 +22,13 @@ import {
 } from "../routes.js";
 import { SSE_HEADERS } from "../sse.js";
 import {
+  APP_SESSION_COOKIE_MAX_AGE_SECONDS,
   clearSessionCookies,
   readSessionCookie,
   requestIsSecure,
   serializeSessionCookies,
 } from "./sessionCookie.js";
 
-// Advisory browser hygiene only; server-side expiry in the registry is the authoritative bound.
-const APP_SESSION_COOKIE_MAX_AGE_SECONDS = 12 * 60 * 60;
 const MAX_PAIRING_BODY_BYTES = 8 * 1_024;
 
 /** Read and JSON-parse a bounded request body, resolving `undefined` on any failure (fail closed). */

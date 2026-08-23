@@ -1,5 +1,8 @@
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
-import type { CodingWorkbenchRuntimeAdapterKind } from "@oscharko-dev/keiko-contracts";
+import type {
+  CodingWorkbenchRuntimeAdapterKind,
+  ModelReasoningEffort,
+} from "@oscharko-dev/keiko-contracts";
 
 export type RuntimeCapabilityAudience = "model-gateway" | "tool-facade";
 
@@ -8,6 +11,8 @@ export interface RuntimeCapabilityBinding {
   readonly workspaceRootDigest: string;
   readonly envelopeDigest: string;
   readonly adapterKind: CodingWorkbenchRuntimeAdapterKind;
+  readonly modelProfileId?: string | undefined;
+  readonly reasoningEffort?: ModelReasoningEffort | undefined;
   readonly audience: RuntimeCapabilityAudience;
   readonly expiresAtMs: number;
 }
@@ -46,6 +51,13 @@ interface StoredCapability {
 const CAPABILITY_PATTERN = /^[A-Za-z0-9_-]{32,256}$/u;
 const DIGEST_PATTERN = /^[0-9a-f]{64}$/u;
 const CAPABILITY_AUDIENCES: ReadonlySet<string> = new Set(["model-gateway", "tool-facade"]);
+const REASONING_EFFORTS: ReadonlySet<string> = new Set([
+  "minimal",
+  "low",
+  "medium",
+  "high",
+  "xhigh",
+]);
 const DEFAULT_MAX_RECORDS = 64;
 
 /**
@@ -152,10 +164,18 @@ function validBinding(binding: RuntimeCapabilityBinding): boolean {
     DIGEST_PATTERN.test(binding.workspaceRootDigest) &&
     DIGEST_PATTERN.test(binding.envelopeDigest) &&
     ["model-gateway-sidecar", "codex-cli-adapter"].includes(binding.adapterKind) &&
+    validModelBinding(binding) &&
     CAPABILITY_AUDIENCES.has(binding.audience) &&
     Number.isSafeInteger(binding.expiresAtMs) &&
     binding.expiresAtMs > 0
   );
+}
+
+function validModelBinding(binding: RuntimeCapabilityBinding): boolean {
+  const profileValid = binding.modelProfileId === undefined || binding.modelProfileId.length > 0;
+  const effortValid =
+    binding.reasoningEffort === undefined || REASONING_EFFORTS.has(binding.reasoningEffort);
+  return profileValid && effortValid;
 }
 
 function bindingsEqual(
@@ -167,6 +187,8 @@ function bindingsEqual(
     expected.workspaceRootDigest === actual.workspaceRootDigest &&
     expected.envelopeDigest === actual.envelopeDigest &&
     expected.adapterKind === actual.adapterKind &&
+    expected.modelProfileId === actual.modelProfileId &&
+    expected.reasoningEffort === actual.reasoningEffort &&
     expected.audience === actual.audience &&
     expected.expiresAtMs === actual.expiresAtMs
   );

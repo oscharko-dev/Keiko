@@ -1,5 +1,6 @@
 import { deepFreeze } from "./deep-freeze.js";
 import type { GatewayVerificationState } from "./gateway-verification.js";
+import type { ModelReasoningEffort } from "./gateway.js";
 
 export const CODING_WORKBENCH_SCHEMA_VERSION = "1" as const;
 
@@ -488,6 +489,7 @@ export interface CodingWorkbenchModelProfile {
   readonly source: CodingWorkbenchModelSource;
   readonly supportsStreaming: boolean;
   readonly supportsToolCalling: boolean;
+  readonly reasoningEffort?: ModelReasoningEffort | undefined;
 }
 
 export type CodingWorkbenchSidecarGatewayStatus = "available" | "unavailable";

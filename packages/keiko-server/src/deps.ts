@@ -25,6 +25,7 @@ import {
   type LiteLLMRerankRequest,
   type ModelProviderConfig,
   type ModelCapability,
+  type ModelReasoningEffort,
   type NormalizedResponse,
   type OpenAIEmbeddingBatchOutcome,
   type OpenAIEmbeddingBatchRequest,
@@ -404,6 +405,7 @@ export interface GatewayDiscoveredModelMetadata {
   readonly contextWindow?: number | undefined;
   readonly maxOutputTokens?: number | undefined;
   readonly toolCalling?: boolean | undefined;
+  readonly reasoningEfforts?: readonly ModelReasoningEffort[] | undefined;
   /**
    * True when the discovery payload explicitly declared a chat-compatible mode for this model
    * (LiteLLM `/model/info` `mode` of chat/completion/responses). Never false — absent means the
@@ -470,6 +472,7 @@ export interface UiHandlerDeps {
     | {
         readonly claim: (runId: string) => boolean;
         readonly isVerified: (runId: string) => boolean;
+        readonly verifyObserved: (runId: string) => void;
         readonly waitForObservedRequest: (runId: string, signal: AbortSignal) => Promise<boolean>;
         readonly noteAdoptionGapDiagnosed: (runId: string) => boolean;
         readonly clear: (runId: string, preserveVerification?: boolean) => void;
@@ -3592,6 +3595,7 @@ function buildUiCodingRuntimeControlPlane(
     // wired, so the normal `keiko ui` / `dev-bff` composition actually records SSE fan-out
     // failures instead of silently no-op'ing recordSseFailure().
     diagnostics: args.options.diagnostics ?? defaultServerDiagnosticSink,
+    activityLog: processServerLogSink(),
   });
 }
 
@@ -3984,6 +3988,29 @@ function runtimeWorkspaceAuthority(
     deploymentCeiling,
     readWorkspaceHead: readProductionWorkspaceHead,
     researchEgressEnabled: args.options.codingRuntimeResearchEgressEnabled ?? true,
+    resolveManagedModelProfile: (
+      modelId,
+      reasoningEffort,
+    ): { readonly profileId: string; readonly reasoningEffort?: ModelReasoningEffort } => {
+      const config = args.runtimeConfig.current();
+      const resolved = resolveCodingSafeSidecarGatewayProfile(config, {
+        ...(modelId === undefined ? {} : { modelId }),
+      });
+      if (resolved.status !== "available" || config === undefined) {
+        throw new Error("runtime-model-unavailable");
+      }
+      const capability = findConfiguredCapability(config, resolved.modelAlias);
+      if (
+        reasoningEffort !== undefined &&
+        capability?.reasoningEfforts?.includes(reasoningEffort) !== true
+      ) {
+        throw new Error("runtime-reasoning-effort-unavailable");
+      }
+      return {
+        profileId: resolved.modelAlias,
+        ...(reasoningEffort === undefined ? {} : { reasoningEffort }),
+      };
+    },
   };
 }
 

@@ -5,6 +5,7 @@ import type { CodexRuntimeControl } from "./codexRuntimeComposition.js";
 import type { OpenCodeRunPort } from "./opencodeRuntimeComposition.js";
 import type { CodingRuntimeManager } from "./codingRuntimeManager.js";
 import type { CodingRuntimeAuthorityService } from "./runtimeAuthorityService.js";
+import type { ServerDiagnosticRecord } from "../diagnostics-log.js";
 import {
   createCodexRuntimeTurnPort,
   createOpenCodeRuntimeTurnPort,
@@ -108,6 +109,42 @@ describe("production coding runtime turn ports", () => {
       dispatcher.dispatch(operation("run-guarded", "request-live", 2, "private task")),
     ).resolves.toMatchObject({ ok: true });
     expect(submitTurn).toHaveBeenCalledTimes(2);
+  });
+
+  it("records a body-free diagnostic when dispatch cannot reserve authority", async () => {
+    const records: ServerDiagnosticRecord[] = [];
+    const dispatcher = createProductionRuntimeTaskDispatcher(
+      new Map([
+        [
+          "run-denied",
+          {
+            controller: new AbortController(),
+            operationGuard: createProductionRuntimeOperationGuard("run-denied", () => false),
+            turnPort: {
+              submitTurn: () => Promise.resolve(true),
+              abortTurn: () => Promise.resolve(false),
+              waitForTerminal: () => Promise.resolve("failed" as const),
+            },
+          },
+        ],
+      ]),
+      { record: (diagnostic): void => void records.push(diagnostic) },
+    );
+
+    await expect(
+      dispatcher.dispatch(operation("run-denied", "request-denied", 1, "private task")),
+    ).resolves.toEqual({ ok: false });
+
+    expect(records).toEqual([
+      expect.objectContaining({
+        correlationId: "run-denied",
+        operation: "coding-runtime.task-dispatch",
+        source: "runtime.dispatcher",
+        message: "runtime-turn-failed",
+        code: "stage=dispatch:reason=no-reservation",
+      }),
+    ]);
+    expect(JSON.stringify(records)).not.toContain("private task");
   });
 
   // #2386 regression: question listing is a read — it must stay repeatable at an unchanged

@@ -284,6 +284,7 @@ interface OpenCodeRuntimeCompositionModule {
     readonly onRuntimeEvent?: (event: Readonly<Record<string, unknown>>) => void;
     readonly gatewayReadiness: {
       readonly waitForObservedRequest: () => Promise<boolean>;
+      readonly verifyObserved: (runId: string) => void;
       readonly clear: () => void;
     };
     readonly fetch: typeof globalThis.fetch;
@@ -718,6 +719,7 @@ async function startBridgeFixture(
     ...optionalRuntimeEvents(control),
     gatewayReadiness: {
       waitForObservedRequest: (): Promise<boolean> => Promise.resolve(true),
+      verifyObserved: (): void => undefined,
       clear: (): void => undefined,
     },
     fetch,
@@ -770,6 +772,17 @@ async function startBridgeFixture(
 }
 
 function completedTurnHistory(): readonly Readonly<Record<string, unknown>>[] {
+  return turnHistory("stop");
+}
+
+function failedTurnHistory(): readonly Readonly<Record<string, unknown>>[] {
+  return turnHistory("error", "ProviderError");
+}
+
+function turnHistory(
+  finish: "stop" | "error",
+  errorName?: string,
+): readonly Readonly<Record<string, unknown>>[] {
   const tokens = {
     total: 0,
     input: 0,
@@ -822,7 +835,8 @@ function completedTurnHistory(): readonly Readonly<Record<string, unknown>>[] {
           path: { cwd: "/private/workspace", root: "/" },
           cost: 0,
           tokens,
-          finish: "stop",
+          finish,
+          ...(finish === "error" ? { error: { name: errorName ?? "Error" } } : {}),
         },
       },
     },
@@ -1035,6 +1049,7 @@ describe("unmounted OpenCode runtime composition", () => {
       },
       gatewayReadiness: {
         waitForObservedRequest: (): Promise<boolean> => Promise.resolve(true),
+        verifyObserved: (): void => undefined,
         clear: (): void => undefined,
       },
       fetch,
@@ -1071,7 +1086,7 @@ describe("unmounted OpenCode runtime composition", () => {
         }),
       ),
     ).resolves.toMatchObject({ ok: true });
-    expect(readinessStatusReads).toBe(5);
+    expect(readinessStatusReads).toBe(0);
     const sessionCreate = fetchMock.mock.calls.find(
       ([url, init]) => requestPath(url) === "/session" && init?.method === "POST",
     );
@@ -1085,8 +1100,8 @@ describe("unmounted OpenCode runtime composition", () => {
         }
       }
     }
-    // #2254: readiness consumes the hint, but must retain the authenticated stream for the
-    // post-ready supervisor. The SSE payload is deliberately the exact nested message shape.
+    // #2254: startup retains the authenticated stream for the post-ready supervisor. The SSE
+    // payload is deliberately the exact nested message shape.
     expect(order).toEqual(["spawn"]);
     expect(sseCancellations).toEqual([]);
     expect(launch?.args).toEqual(["serve", "--hostname", "127.0.0.1", "--port", "0", "--no-mdns"]);
@@ -1218,17 +1233,19 @@ describe("private OpenCode run control", () => {
     await fixture.stop();
   });
 
-  it("stops terminal polling when the handshake deadline aborts", async () => {
-    const fixture = await startBridgeFixture(facade, undefined, {
-      startTimeoutMs: 35,
-      expectedStart: { ok: false, failureCode: "start-timeout", retryable: true },
-      runControl: {
-        promptBodies: [],
-        abortSessions: [],
-        statusResponses: [{ ses_tool: { type: "busy" } }],
-      },
+  it("does not spend startup on a synthetic model turn terminal poll", async () => {
+    const runControl = {
+      promptBodies: [],
+      abortSessions: [],
+      statusResponses: [{ ses_tool: { type: "busy" } }],
+    };
+    const fixture = await startBridgeFixture(facade, undefined, { runControl });
+    expect(runControl.promptBodies).toEqual([]);
+    expect(runControl.statusResponses).toEqual([{ ses_tool: { type: "busy" } }]);
+    expect(fixture.runtime.manager.health()).toMatchObject({
+      status: "ready",
+      activeRunId: FIXTURE_RUN_ID,
     });
-    expect(fixture.runtime.manager.health()).toEqual({ status: "stopped" });
     await fixture.stop();
   });
 
@@ -1421,6 +1438,54 @@ describe("private OpenCode run control", () => {
       false,
     );
     await expect(fixture.runtime.runPort.abortTask(FIXTURE_RUN_ID)).resolves.toBe(false);
+  });
+
+  it("records a body-free diagnostic when a submitted turn terminates as failed", async () => {
+    const records: Parameters<ServerDiagnosticSink["record"]>[0][] = [];
+    let history: readonly Readonly<Record<string, unknown>>[] = completedTurnHistory().slice(0, 1);
+    const runControl = {
+      promptBodies: [] as string[],
+      abortSessions: [] as string[],
+      statusResponses: [{}] as unknown[],
+    };
+    const fixture = await startBridgeFixture(facade, undefined, {
+      runControl,
+      diagnostics: {
+        record: (record): void => {
+          records.push(record);
+        },
+      },
+      historyResponseFactory: () =>
+        Promise.resolve(
+          new Response(JSON.stringify(history), {
+            headers: { "content-type": "application/json" },
+          }),
+        ),
+    });
+    try {
+      await expect(
+        fixture.runtime.runPort.submitTask(FIXTURE_RUN_ID, "bounded failing task"),
+      ).resolves.toBe(true);
+      history = failedTurnHistory();
+      await expect(
+        fixture.runtime.runPort.waitForTerminal(FIXTURE_RUN_ID, AbortSignal.timeout(2_000)),
+      ).resolves.toBe(false);
+      expect(records).toEqual([
+        expect.objectContaining({
+          correlationId: FIXTURE_RUN_ID,
+          operation: "coding-runtime.opencode-composition",
+          source: "opencode.turn",
+          errorClass: "OpenCodeTurnFailure",
+          message: "runtime-turn-failed",
+          code: "stage=terminal:db=missing",
+        }),
+      ]);
+      const serialized = JSON.stringify(records);
+      expect(serialized).not.toContain("bounded failing task");
+      expect(serialized).not.toContain("ProviderError");
+    } finally {
+      await fixture.stop();
+    }
   });
 
   it("synchronizes durable history before arming and submitting each productive turn", async () => {

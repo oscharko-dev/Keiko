@@ -102,6 +102,8 @@ function actions(): CodingWorkbenchRuntimeActions {
   return {
     setRequestedMode: vi.fn(),
     setRuntimePreference: vi.fn(),
+    setSelectedModel: vi.fn(),
+    setReasoningEffort: vi.fn(),
     refreshProfile: vi.fn(() => Promise.resolve()),
     refreshSource: vi.fn(() => Promise.resolve()),
     refreshRuntime: vi.fn(() => Promise.resolve()),

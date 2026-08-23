@@ -14,7 +14,7 @@ import type { GitMutationOutcome } from "./git-client-seam";
 import { MutationOutcome } from "./git-client-ui";
 import { HistoryPane } from "./HistoryPane";
 import {
-  CHANGES_HEADER_STYLE,
+  CHANGES_COUNT_STYLE,
   COMPACT_BTN,
   disabledStyle,
   EMPTY_STATE_STYLE,
@@ -24,9 +24,11 @@ import {
   fileRowStyle,
   LOADING_STATE_STYLE,
   stageBoxStyle,
+  STAGING_SCOPE_HINT_STYLE,
   statusSquareStyle,
   SUBTLE_TEXT_STYLE,
-  SUMMARY_CHECK_STYLE,
+  STAGING_COUNT_STYLE,
+  SUMMARY_ACTIONS_STYLE,
   SUMMARY_STRIP_STYLE,
   TABS_ROW_STYLE,
   tabBadgeStyle,
@@ -348,35 +350,37 @@ function ChangesList({
 
       {hasChanges ? (
         <div style={SUMMARY_STRIP_STYLE}>
-          <span aria-hidden="true" style={SUMMARY_CHECK_STYLE}>
-            <CheckIcon size={11} />
+          <span style={CHANGES_COUNT_STYLE}>
+            {status.changes.length} {status.changes.length === 1 ? "change" : "changes"}
           </span>
-          <span style={{ fontSize: 12, fontWeight: 600, color: "var(--fg-muted)" }}>
-            {status.stagedCount} of {status.changes.length} files staged
+          {status.stagedCount > 0 ? (
+            <span style={STAGING_COUNT_STYLE}>{status.stagedCount} staged</span>
+          ) : null}
+          <span style={SUMMARY_ACTIONS_STYLE}>
+            <button
+              type="button"
+              style={{ ...COMPACT_BTN, ...disabledStyle(bulkActionsBlocked || !hasUnstaged) }}
+              disabled={bulkActionsBlocked || !hasUnstaged}
+              onClick={onStageAll}
+            >
+              <CheckIcon size={11} /> Stage all
+            </button>
+            <button
+              type="button"
+              style={{ ...COMPACT_BTN, ...disabledStyle(bulkActionsBlocked || !hasStaged) }}
+              disabled={bulkActionsBlocked || !hasStaged}
+              onClick={onUnstageAll}
+            >
+              <ResetIcon size={11} /> Unstage all
+            </button>
           </span>
         </div>
       ) : null}
 
       {hasChanges ? (
-        <div style={CHANGES_HEADER_STYLE}>
-          <span style={{ flex: 1, minWidth: 0 }} />
-          <button
-            type="button"
-            style={{ ...COMPACT_BTN, ...disabledStyle(bulkActionsBlocked || !hasUnstaged) }}
-            disabled={bulkActionsBlocked || !hasUnstaged}
-            onClick={onStageAll}
-          >
-            <CheckIcon size={11} /> Stage all
-          </button>
-          <button
-            type="button"
-            style={{ ...COMPACT_BTN, ...disabledStyle(bulkActionsBlocked || !hasStaged) }}
-            disabled={bulkActionsBlocked || !hasStaged}
-            onClick={onUnstageAll}
-          >
-            <ResetIcon size={11} /> Unstage all
-          </button>
-        </div>
+        <p style={STAGING_SCOPE_HINT_STYLE}>
+          Select files with the checkboxes. Keiko uses only staged files for the commit draft.
+        </p>
       ) : null}
 
       {stagingError !== null || stagingOutcome !== null ? (
@@ -506,8 +510,8 @@ function ChangeRow({
           onClick={onSelect}
           style={{
             display: "flex",
-            flexDirection: "column",
-            gap: 2,
+            alignItems: "center",
+            gap: 7,
             minWidth: 0,
             flex: 1,
             border: 0,
@@ -517,11 +521,11 @@ function ChangeRow({
             padding: 0,
           }}
         >
+          {dir !== "" ? <span style={FILE_PATH_STYLE}>{dir}</span> : null}
           <span style={FILE_NAME_STYLE}>
             <span className="rv-sr-only">{statusLabel} </span>
             {name}
           </span>
-          {dir !== "" ? <span style={FILE_PATH_STYLE}>{dir}</span> : null}
         </button>
         <span aria-hidden="true" style={statusSquareStyle(statusLetter)}>
           {statusLetter}

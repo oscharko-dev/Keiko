@@ -206,7 +206,7 @@ export class Gateway {
     const ids = callIds(requestId, request);
     const start = this.clock.now();
     const elapsed = logTimer();
-    const adapter = this.adapterFor(requestId, route.capability);
+    const adapter = this.adapterFor(requestId, route.capability, ids.correlationId);
     this.logCallStarted(ids, route, false);
     let result;
     try {
@@ -254,7 +254,7 @@ export class Gateway {
     breaker.assertAllowed(ids.correlationId);
     const start = this.clock.now();
     const elapsed = logTimer();
-    const adapter = this.adapterFor(requestId, route.capability);
+    const adapter = this.adapterFor(requestId, route.capability, ids.correlationId);
     this.logCallStarted(ids, route, true);
     let chunkCount = 0;
     // The moment the caller saw its first actual content, timed off the same `elapsed()` as every
@@ -587,7 +587,11 @@ export class Gateway {
     return breaker;
   }
 
-  private adapterFor(requestId: string, capability: ModelCapability): ProviderAdapter {
+  private adapterFor(
+    requestId: string,
+    capability: ModelCapability,
+    correlationId: string,
+  ): ProviderAdapter {
     return (
       this.adapter ??
       new OpenAiAdapter({
@@ -595,6 +599,8 @@ export class Gateway {
         costClass: capability.costClass,
         now: this.clock.now,
         fetchImpl: this.fetchImpl,
+        log: this.log,
+        logContext: { correlationId },
       })
     );
   }

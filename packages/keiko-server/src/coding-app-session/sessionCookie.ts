@@ -10,6 +10,8 @@ import type { IncomingMessage } from "node:http";
 
 /** Cookie name for the app session. Kept stable so it can be cleared reliably. */
 export const APP_SESSION_COOKIE_NAME = "keiko_coding_app_session";
+/** Advisory browser hygiene only; server-side expiry in the registry is the authoritative bound. */
+export const APP_SESSION_COOKIE_MAX_AGE_SECONDS = 12 * 60 * 60;
 /**
  * Path scopes: only API families that consume protected coding-session authority. W1.9 (#2482)
  * first added Git; the managed-worktree integration adds Files, Editor (including ADR-0147 D7

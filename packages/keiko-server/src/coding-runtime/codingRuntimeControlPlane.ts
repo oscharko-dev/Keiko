@@ -2,6 +2,7 @@ import type { CodingWorkbenchRuntimeEvent } from "@oscharko-dev/keiko-contracts"
 
 import type { WorkspaceLifecycleService } from "../task-workspace/types.js";
 import type { ServerDiagnosticSink } from "../diagnostics-log.js";
+import type { ServerLogSink } from "../observability/server-log.js";
 import type { CodingRuntimeManager } from "./codingRuntimeManager.js";
 import { CodingRuntimeEventHub } from "./codingRuntimeEventHub.js";
 import type { CodingRuntimeEvidenceAggregator } from "./codingRuntimeEvidenceAggregator.js";
@@ -52,6 +53,7 @@ export interface CodingRuntimeHost {
     | {
         readonly claim: (runId: string) => boolean;
         readonly isVerified: (runId: string) => boolean;
+        readonly verifyObserved: (runId: string) => void;
         readonly waitForObservedRequest: (runId: string, signal: AbortSignal) => Promise<boolean>;
         readonly noteAdoptionGapDiagnosed: (runId: string) => boolean;
         readonly clear: (runId: string, preserveVerification?: boolean) => void;
@@ -72,6 +74,7 @@ export interface CodingRuntimeControlPlaneInput {
    * redacted record per subscriber, correlationId=runId (KEIKO-0225).
    */
   readonly diagnostics?: ServerDiagnosticSink | undefined;
+  readonly activityLog?: ServerLogSink | undefined;
 }
 
 export interface CodingRuntimeControlPlane {
@@ -93,7 +96,6 @@ interface RuntimeEventReceiver {
  * Constructs exactly one process-lifetime runtime aggregate. An unqualified host still exposes the
  * lifecycle/status API, but start fails before minting launch material or touching a process.
  */
-// eslint-disable-next-line complexity -- process-lifetime authority composition is intentionally explicit.
 export function createCodingRuntimeControlPlane(
   input: CodingRuntimeControlPlaneInput,
 ): CodingRuntimeControlPlane {
@@ -107,7 +109,37 @@ export function createCodingRuntimeControlPlane(
     }) ?? unavailableManager();
   const launchResolver = input.runtimeHost?.launchResolver ?? unavailableLaunchResolver();
   const approvalAuthority = input.runtimeHost?.approvalAuthority ?? unavailableApprovalAuthority();
-  const orchestrator = createCodingRuntimeOrchestrator({
+  const orchestrator = createControlPlaneOrchestrator(
+    input,
+    manager,
+    approvalAuthority,
+    eventHub,
+    launchResolver,
+  );
+  receiver.ingest = (event: CodingWorkbenchRuntimeEvent): void => {
+    void orchestrator.ingest(event);
+  };
+  orchestrator.startupReconcileNow();
+  return {
+    orchestrator,
+    eventHub,
+    runtimeHostQualified: input.runtimeHost !== undefined,
+    ...(input.runtimeHost?.safeActivityProjection
+      ? { safeActivityProjection: input.runtimeHost.safeActivityProjection }
+      : {}),
+    ...runtimeHostCapabilities(input.runtimeHost),
+  };
+}
+
+// eslint-disable-next-line complexity -- process-lifetime authority composition is intentionally explicit.
+function createControlPlaneOrchestrator(
+  input: CodingRuntimeControlPlaneInput,
+  manager: CodingRuntimeManager,
+  approvalAuthority: CodingRuntimeApprovalAuthority,
+  eventHub: CodingRuntimeEventHub,
+  launchResolver: CodingRuntimeLaunchResolver,
+): CodingRuntimeOrchestrator {
+  return createCodingRuntimeOrchestrator({
     manager,
     approvalAuthority,
     eventHub,
@@ -128,20 +160,9 @@ export function createCodingRuntimeControlPlane(
     ...(input.runtimeHost?.pendingResearchApprovals
       ? { pendingResearchApprovals: input.runtimeHost.pendingResearchApprovals }
       : {}),
+    ...(input.diagnostics ? { diagnostics: input.diagnostics } : {}),
+    ...(input.activityLog ? { activityLog: input.activityLog } : {}),
   });
-  receiver.ingest = (event: CodingWorkbenchRuntimeEvent): void => {
-    void orchestrator.ingest(event);
-  };
-  orchestrator.startupReconcileNow();
-  return {
-    orchestrator,
-    eventHub,
-    runtimeHostQualified: input.runtimeHost !== undefined,
-    ...(input.runtimeHost?.safeActivityProjection
-      ? { safeActivityProjection: input.runtimeHost.safeActivityProjection }
-      : {}),
-    ...runtimeHostCapabilities(input.runtimeHost),
-  };
 }
 
 function unavailableTaskDispatcher(): CodingRuntimeTaskDispatcher {

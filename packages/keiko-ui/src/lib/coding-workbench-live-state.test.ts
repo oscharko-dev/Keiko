@@ -82,7 +82,7 @@ function readiness(): CodingWorkbenchRuntimeReadiness {
 }
 
 // `pairing: null` deliberately leaves the boot pairing dimension unconfirmed, mirroring a window
-// whose honest workspaces read has not resolved yet (release-audit F-08/RG-12).
+// whose honest workspaces read has not resolved yet.
 function readyState(
   switching = false,
   pairing: CodingWorkbenchPairingState | null = "paired",
@@ -241,6 +241,74 @@ describe("Coding Workbench live state", () => {
     expect(next.stream).toMatchObject({ status: "idle", value: null });
   });
 
+  it("clears stale stream failures once the current run reaches terminal server truth", () => {
+    let state = codingWorkbenchRuntimeReducer(readyState(), {
+      kind: "run-set",
+      snapshot: snapshot({
+        state: "running",
+        pendingPermission: undefined,
+      }),
+    });
+    state = codingWorkbenchRuntimeReducer(state, {
+      kind: "resource-failed",
+      resource: "stream",
+      status: "error",
+      error: { code: "STREAM_UNAVAILABLE", message: "stream unavailable", retryable: true },
+    });
+    expect(state.stream.status).toBe("error");
+
+    const terminal = codingWorkbenchRuntimeReducer(state, {
+      kind: "run-set",
+      snapshot: snapshot({
+        state: "succeeded",
+        revision: 5,
+        pendingPermission: undefined,
+      }),
+    });
+
+    expect(terminal.run.value).toMatchObject({ runId: "run-1", state: "succeeded", revision: 5 });
+    expect(terminal.stream).toMatchObject({ status: "idle", value: null, error: null });
+  });
+
+  it("ignores late stream failures after the streamable run has already settled", () => {
+    const settled = codingWorkbenchRuntimeReducer(readyState(), {
+      kind: "run-set",
+      snapshot: snapshot({
+        state: "succeeded",
+        revision: 5,
+        pendingPermission: undefined,
+      }),
+    });
+
+    const lateError = codingWorkbenchRuntimeReducer(settled, {
+      kind: "resource-failed",
+      resource: "stream",
+      status: "error",
+      error: { code: "STREAM_UNAVAILABLE", message: "stream unavailable", retryable: true },
+    });
+
+    expect(lateError).toBe(settled);
+    expect(lateError.stream).toMatchObject({ status: "idle", value: null, error: null });
+  });
+
+  it("ignores late stream readiness after the streamable run has already settled", () => {
+    const settled = codingWorkbenchRuntimeReducer(readyState(), {
+      kind: "run-set",
+      snapshot: snapshot({
+        state: "succeeded",
+        revision: 5,
+        pendingPermission: undefined,
+      }),
+    });
+
+    const lateReady = codingWorkbenchRuntimeReducer(settled, {
+      kind: "stream-set",
+      stream: { runId: "run-1", cursor: "cursor-late", connected: true },
+    });
+
+    expect(lateReady.stream).toMatchObject({ status: "idle", value: null, error: null });
+  });
+
   it.each(["succeeded", "failed", "cancelled", "taken-over"] as const)(
     "retains an SSE-observed %s run when global runtime status returns to idle",
     (terminalState): void => {
@@ -364,18 +432,14 @@ describe("app-session pairing readiness (release-audit F-08/RG-12)", () => {
     });
   }
 
-  // ADR-0141: without a launcher-paired app session, a run start is guaranteed to fail authority
-  // resolution (403, serverPrincipal() empty). Before this pin the readiness aggregation ignored
-  // pairing entirely, so an unpaired window narrated "Ready to start" over a start that could
-  // never succeed.
-  it("keeps Start blocked until the paired app session is confirmed", () => {
+  it("keeps Start blocked only while pairing is unresolved", () => {
     expect(startable(null).canStart).toBe(false);
     expect(startable("unknown").canStart).toBe(false);
-    expect(startable("unpaired").canStart).toBe(false);
+    expect(startable("unpaired").canStart).toBe(true);
     expect(startable("paired").canStart).toBe(true);
   });
 
-  it("keeps recovery Retry blocked in an unpaired window", () => {
+  it("keeps recovery Retry blocked only while pairing is unresolved", () => {
     const recovery = (pairing: CodingWorkbenchPairingState): CodingWorkbenchRuntimeState =>
       codingWorkbenchRuntimeReducer(readyState(false, pairing), {
         kind: "run-set",
@@ -387,7 +451,8 @@ describe("app-session pairing readiness (release-audit F-08/RG-12)", () => {
           pendingPermission: undefined,
         }),
       });
-    expect(recovery("unpaired").canRetry).toBe(false);
+    expect(recovery("unknown").canRetry).toBe(false);
+    expect(recovery("unpaired").canRetry).toBe(true);
     expect(recovery("paired").canRetry).toBe(true);
   });
 

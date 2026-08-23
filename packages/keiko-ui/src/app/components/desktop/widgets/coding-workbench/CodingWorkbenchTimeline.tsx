@@ -79,11 +79,18 @@ export interface CodingWorkbenchTimelineProps {
   readonly events: readonly CodingWorkbenchRuntimeSseEvent[];
   readonly activity: UseCodingWorkbenchSafeActivityResult;
   readonly questions: UseCodingWorkbenchQuestionsResult;
+  readonly focusRef?: RefObject<HTMLHeadingElement | null>;
 }
 
-export function Timeline({ events, activity, questions }: CodingWorkbenchTimelineProps): ReactNode {
+export function Timeline({
+  events,
+  activity,
+  questions,
+  focusRef,
+}: CodingWorkbenchTimelineProps): ReactNode {
   const t = useCodingWorkbenchTranslate();
-  const titleRef = useRef<HTMLHeadingElement>(null);
+  const internalTitleRef = useRef<HTMLHeadingElement>(null);
+  const titleRef = focusRef ?? internalTitleRef;
   const items = useMemo(() => timelineItems(events, activity.feed), [activity.feed, events]);
   const timeline = useTimelineWindow(items);
   return (
@@ -96,7 +103,7 @@ export function Timeline({ events, activity, questions }: CodingWorkbenchTimelin
       >
         {t("codingWorkbench.timeline.title")}
       </PanelTitle>
-      <p className={styles.helpText}>{t("codingWorkbench.activity.reasoningBoundary")}</p>
+      <p className="sr-only">{t("codingWorkbench.activity.reasoningBoundary")}</p>
       <ActivityStatus activity={activity} t={t} />
       <QuestionSummary questions={questions} />
       <TimelineContent

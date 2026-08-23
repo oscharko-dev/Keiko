@@ -21,7 +21,11 @@ import {
 // "no provisioned config" condition that blocked four prior live-test attempts.
 describe("dev-start gateway config resolution (KEIKO-0286)", () => {
   const DEV_CONFIG = "/state/ui/keiko.config.json";
-  const SEEDS = ["/repo/.keiko/ui/keiko.config.json", "/repo/sandbox/.keiko/ui/keiko.config.json"];
+  const SEEDS = [
+    "/repo/.keiko/ui/keiko.config.json",
+    "/repo/keiko.config.json",
+    "/repo/sandbox/.keiko/ui/keiko.config.json",
+  ];
   const existsOnly =
     (...present) =>
     (path) =>
@@ -49,6 +53,17 @@ describe("dev-start gateway config resolution (KEIKO-0286)", () => {
     expect(action.repointTo).toBe(DEV_CONFIG);
     expect(action.seedFrom).toBe(SEEDS[0]);
     expect(action.notices.join("\n")).toContain("does not exist");
+  });
+
+  it("uses the repository root config as the fallback seed for local development", () => {
+    const action = resolveDevGatewayConfigAction({
+      configuredPath: undefined,
+      devConfigFile: DEV_CONFIG,
+      seedCandidates: SEEDS,
+      fileExists: existsOnly(SEEDS[1]),
+    });
+    expect(action.seedFrom).toBe(SEEDS[1]);
+    expect(action.notices.join("\n")).toContain(SEEDS[1]);
   });
 
   it("repoints without reseeding when a dev config already exists", () => {

@@ -128,6 +128,7 @@ interface ChatRequestBody {
   readonly temperature?: number;
   readonly top_p?: number;
   readonly seed?: number;
+  readonly reasoning_effort?: string;
   readonly max_tokens?: number;
   readonly max_completion_tokens?: number;
   readonly stream?: boolean;
@@ -242,6 +243,7 @@ function buildBody(request: GatewayRequest, config: ModelProviderConfig): ChatRe
     ...(request.temperature !== undefined ? { temperature: request.temperature } : {}),
     ...(request.topP !== undefined ? { top_p: request.topP } : {}),
     ...(request.seed !== undefined ? { seed: request.seed } : {}),
+    ...(request.reasoningEffort !== undefined ? { reasoning_effort: request.reasoningEffort } : {}),
     ...outputTokenLimit(request, config),
   };
 }

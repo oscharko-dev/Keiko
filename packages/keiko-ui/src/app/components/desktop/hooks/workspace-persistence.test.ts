@@ -39,6 +39,33 @@ function hostileWindow(type: string, extra: Record<string, unknown> = {}): unkno
 }
 
 describe("workspace-persistence", () => {
+  it("retains only the closed Coding Workbench Git binding marker", () => {
+    const retained = sanitizePersistedWindows([
+      win({
+        id: "git-1",
+        type: "governedGit",
+        cfg: {
+          projectPath: "/repo",
+          rootBinding: "coding-repository",
+          ignoredBinding: "another-root",
+        },
+      }),
+    ]);
+    const rejected = sanitizePersistedWindows([
+      win({
+        id: "git-2",
+        type: "governedGit",
+        cfg: { projectPath: "/other", rootBinding: "another-root" },
+      }),
+    ]);
+
+    expect(retained[0]?.cfg).toEqual({
+      projectPath: "/repo",
+      rootBinding: "coding-repository",
+    });
+    expect(rejected[0]?.cfg).toEqual({ projectPath: "/other" });
+  });
+
   it("drops transient windows and preserves PDF preview as a safe shell only", () => {
     const persisted = sanitizePersistedWindows([
       win({ id: "browser-1", type: "browser", cfg: { url: "https://example.test" } }),

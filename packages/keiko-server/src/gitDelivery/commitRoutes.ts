@@ -15,14 +15,19 @@
 //       gates drives executeGovernedMutation (preflight + policy + approval + execute) and appends
 //       evidence.
 //
-// Content-free throughout: counts, structural area tokens, typed warning/violation/finding codes, and
-// the deterministic suggestion scaffold only — never the message body, diff, or raw paths.
+// Logs and evidence stay content-free: counts, structural area tokens, typed
+// warning/violation/finding codes, never the message body, diff, or raw paths. The UI-facing draft
+// suggestion is an editable convenience built from bounded structural path labels and is never
+// persisted as evidence.
 
 import type { IncomingMessage } from "node:http";
 import type { WorkspaceInfo } from "@oscharko-dev/keiko-workspace";
 import {
   analyzeGitCommitIntent,
+  evaluateGitDeliveryEffectivePolicy,
   evaluateGitPolicy,
+  gitDeliveryRiskClassForInputs,
+  suggestGitCommitMessage,
   validateGitCommitMessage,
   type GitCommitChangeSummary,
   type GitCommitIntentAnalysis,
@@ -35,8 +40,11 @@ import {
   summarizeStagedChangeset,
   type GitWorktreeSnapshot,
 } from "@oscharko-dev/keiko-tools";
+import { UNKNOWN_CORRELATION_ID } from "../correlation.js";
 import type { RouteContext, RouteDefinition, RouteResult } from "../routes.js";
 import type { UiHandlerDeps } from "../deps.js";
+import type { ServerLogSink } from "../observability/server-log.js";
+import { processServerLogSink } from "../process-log-sink.js";
 import {
   parseGitDeliveryApprovalRequest,
   resolveGitDeliveryApprovalRequirement,
@@ -100,6 +108,8 @@ export interface GitDeliveryCommitRouteOptions {
   readonly execution?: GitDeliveryExecutionSeams;
   // Test/deployment override. Production resolves the persisted governed setting for the workspace.
   readonly messagePolicy?: GitCommitMessagePolicy;
+  // Test seam. Production writes content-free preview evidence through the process activity log.
+  readonly activityLog?: ServerLogSink;
 }
 
 const readParsed = (req: IncomingMessage): Promise<GitDeliveryParsedBody<RouteResult>> =>
@@ -138,11 +148,233 @@ export interface GitDeliveryCommitPreviewBody {
   readonly preflightFindingCodes: readonly string[];
   readonly signatureRequirement: GitDeliverySignatureRequirement;
   readonly policyOutcome: string;
+  readonly suggestedMessage?: string;
   readonly policyBlockReason?: string;
+}
+
+interface DraftPathFacts {
+  readonly labels: readonly string[];
+  readonly hasCodingRuntime: boolean;
+  readonly hasDocs: boolean;
+  readonly hasGitDraft: boolean;
+  readonly hasModelGateway: boolean;
+  readonly hasTests: boolean;
+  readonly hasUi: boolean;
+}
+
+interface DraftLabelRule {
+  readonly fragment: string;
+  readonly label: string;
+}
+
+interface DraftSubjectRule {
+  readonly preferredType: string;
+  readonly scope: string;
+  readonly phrase: string;
+  readonly matches: (facts: DraftPathFacts) => boolean;
+}
+
+const DRAFT_LABEL_RULES: readonly DraftLabelRule[] = [
+  { fragment: "git-commit-intent", label: "commit intent heuristics" },
+  { fragment: "commitRoutes", label: "commit preview routing" },
+  { fragment: "CommitComposer", label: "commit composer draft review" },
+  { fragment: "GitClientWindow", label: "Git client workspace" },
+  { fragment: "git-client-styles", label: "Git client layout styles" },
+  { fragment: "coding-workbench-runtime", label: "coding workbench runtime API" },
+  { fragment: "keiko-model-gateway/src/config", label: "model gateway configuration" },
+  { fragment: "keiko-contracts/src/gateway", label: "gateway contracts" },
+  { fragment: ".test.", label: "related test coverage" },
+];
+
+const DRAFT_SUBJECT_RULES: readonly DraftSubjectRule[] = [
+  {
+    preferredType: "feat",
+    scope: "coding",
+    phrase: "align runtime model settings",
+    matches: (facts): boolean => facts.hasCodingRuntime && facts.hasModelGateway,
+  },
+  {
+    preferredType: "feat",
+    scope: "coding",
+    phrase: "update coding workbench runtime",
+    matches: (facts): boolean => facts.hasCodingRuntime,
+  },
+  {
+    preferredType: "feat",
+    scope: "models",
+    phrase: "update model gateway configuration",
+    matches: (facts): boolean => facts.hasModelGateway,
+  },
+  {
+    preferredType: "fix",
+    scope: "git",
+    phrase: "improve git commit draft workflow",
+    matches: (facts): boolean => facts.hasGitDraft,
+  },
+  {
+    preferredType: "fix",
+    scope: "ui",
+    phrase: "improve ui workflow",
+    matches: (facts): boolean => facts.hasUi,
+  },
+  {
+    preferredType: "docs",
+    scope: "docs",
+    phrase: "update documentation",
+    matches: (facts): boolean => facts.hasDocs,
+  },
+];
+
+function normalizeDraftPath(path: string): string {
+  return path.replaceAll("\\", "/");
+}
+
+function hasPathFragment(paths: readonly string[], fragment: string): boolean {
+  return paths.some((path): boolean => path.includes(fragment));
+}
+
+function fallbackDraftLabel(path: string): string {
+  if (path.startsWith("docs/")) return "documentation";
+  if (path.includes("packages/keiko-ui/")) return "UI files";
+  if (path.includes("packages/keiko-server/")) return "server routes";
+  if (path.includes("packages/keiko-contracts/")) return "shared contracts";
+  const fileName = path.split("/").at(-1) ?? "selected files";
+  return fileName.replace(/\.[^.]+$/, "").replace(/([a-z])([A-Z])/g, "$1 $2");
+}
+
+function labelForDraftPath(path: string): string {
+  const match = DRAFT_LABEL_RULES.find((rule): boolean => path.includes(rule.fragment));
+  return match?.label ?? fallbackDraftLabel(path);
+}
+
+function uniqueLimitedLabels(paths: readonly string[]): readonly string[] {
+  const seen = new Set<string>();
+  const labels: string[] = [];
+  for (const path of paths) {
+    const label = labelForDraftPath(path);
+    if (seen.has(label)) continue;
+    seen.add(label);
+    labels.push(label);
+    if (labels.length === 4) return labels;
+  }
+  return labels;
+}
+
+function collectDraftPathFacts(stagedPaths: readonly string[]): DraftPathFacts {
+  const paths = stagedPaths.map(normalizeDraftPath);
+  return {
+    labels: uniqueLimitedLabels(paths),
+    hasCodingRuntime: hasPathFragment(paths, "coding-workbench-runtime"),
+    hasDocs: paths.some((path): boolean => path.startsWith("docs/")),
+    hasGitDraft:
+      hasPathFragment(paths, "git-commit-intent") || hasPathFragment(paths, "git-client"),
+    hasModelGateway: hasPathFragment(paths, "keiko-model-gateway/"),
+    hasTests: hasPathFragment(paths, ".test."),
+    hasUi: hasPathFragment(paths, "packages/keiko-ui/"),
+  };
+}
+
+function humanList(labels: readonly string[]): string {
+  if (labels.length === 0) return "selected changes";
+  if (labels.length === 1) return labels[0] ?? "selected changes";
+  if (labels.length === 2) return `${labels[0] ?? ""} and ${labels[1] ?? ""}`;
+  const head = labels.slice(0, -1).join(", ");
+  return `${head}, and ${labels.at(-1) ?? "selected changes"}`;
+}
+
+function fallbackSubjectRule(): DraftSubjectRule {
+  return {
+    preferredType: "chore",
+    scope: "workspace",
+    phrase: "align staged repository changes",
+    matches: (): boolean => true,
+  };
+}
+
+function selectDraftSubjectRule(facts: DraftPathFacts): DraftSubjectRule {
+  return DRAFT_SUBJECT_RULES.find((rule): boolean => rule.matches(facts)) ?? fallbackSubjectRule();
+}
+
+function allowedDraftType(
+  preferredType: string,
+  intent: GitCommitIntentAnalysis,
+  policy: GitCommitMessagePolicy,
+): string | undefined {
+  if (!policy.conventionalCommit.enabled) return undefined;
+  const candidates = [
+    preferredType,
+    intent.suggestedType,
+    "chore",
+    policy.conventionalCommit.allowedTypes[0],
+  ];
+  for (const candidate of candidates) {
+    if (candidate !== undefined && policy.conventionalCommit.allowedTypes.includes(candidate)) {
+      return candidate;
+    }
+  }
+  return undefined;
+}
+
+function capitalizeDraftSubject(phrase: string): string {
+  const first = phrase[0];
+  if (first === undefined) return phrase;
+  return `${first.toUpperCase()}${phrase.slice(1)}`;
+}
+
+function buildDraftSubject(
+  rule: DraftSubjectRule,
+  intent: GitCommitIntentAnalysis,
+  policy: GitCommitMessagePolicy,
+): string | undefined {
+  const type = allowedDraftType(rule.preferredType, intent, policy);
+  if (type === undefined) return capitalizeDraftSubject(rule.phrase);
+  const scoped = `${type}(${rule.scope}): ${rule.phrase}`;
+  if (scoped.length <= policy.subjectMaxLength) return scoped;
+  const unscoped = `${type}: ${rule.phrase}`;
+  return unscoped.length <= policy.subjectMaxLength ? unscoped : undefined;
+}
+
+function draftBodyVerb(rule: DraftSubjectRule): string {
+  if (rule.phrase.startsWith("improve")) return "Improve";
+  if (rule.phrase.startsWith("align")) return "Align";
+  return "Update";
+}
+
+function buildSpecificDraftBody(
+  facts: DraftPathFacts,
+  rule: DraftSubjectRule,
+  summary: GitCommitChangeSummary,
+): string {
+  const lines = [
+    `${draftBodyVerb(rule)} the staged ${humanList(facts.labels)}.`,
+    "Keep the commit limited to the selected staged files.",
+  ];
+  if (summary.touchesTests || facts.hasTests) {
+    lines.push("Includes related test coverage.");
+  }
+  return lines.join("\n");
+}
+
+function suggestSpecificCommitMessage(
+  stagedPaths: readonly string[],
+  summary: GitCommitChangeSummary,
+  intent: GitCommitIntentAnalysis,
+  policy: GitCommitMessagePolicy,
+): string | undefined {
+  if (summary.stagedFileCount === 0) return undefined;
+  const facts = collectDraftPathFacts(stagedPaths);
+  const rule = selectDraftSubjectRule(facts);
+  const subject = buildDraftSubject(rule, intent, policy);
+  if (subject === undefined) return suggestGitCommitMessage(intent, policy, summary);
+  const message = `${subject}\n\n${buildSpecificDraftBody(facts, rule, summary)}`;
+  return validateGitCommitMessage(message, policy).ok
+    ? message
+    : suggestGitCommitMessage(intent, policy, summary);
 }
 
 function buildPreviewBody(
   summary: GitCommitChangeSummary,
+  stagedPaths: readonly string[],
   messageDraft: string,
   policy: GitCommitMessagePolicy,
   preflightCodes: readonly string[],
@@ -150,16 +382,39 @@ function buildPreviewBody(
   policyOutcome: string,
   policyBlockReason: string | undefined,
 ): GitDeliveryCommitPreviewBody {
+  const intent = analyzeGitCommitIntent({ summary, message: messageDraft });
+  const suggestedMessage = suggestSpecificCommitMessage(stagedPaths, summary, intent, policy);
   return {
     schemaVersion: "1",
     summary,
-    intent: analyzeGitCommitIntent({ summary, message: messageDraft }),
+    intent,
     messageValidation: validateGitCommitMessage(messageDraft, policy),
     preflightFindingCodes: preflightCodes,
     signatureRequirement,
     policyOutcome,
+    ...(suggestedMessage !== undefined ? { suggestedMessage } : {}),
     ...(policyBlockReason !== undefined ? { policyBlockReason } : {}),
   };
+}
+
+function logCommitPreview(
+  log: ServerLogSink,
+  correlationId: string | undefined,
+  body: GitDeliveryCommitPreviewBody,
+): void {
+  log.write({
+    category: "diagnostic",
+    op: "git.commit.preview.completed",
+    correlationId: correlationId ?? UNKNOWN_CORRELATION_ID,
+    status: 200,
+    extra: {
+      stagedFileCount: body.summary.stagedFileCount,
+      areaCount: body.summary.areaCount,
+      touchesTests: body.summary.touchesTests,
+      draftSuggested: body.suggestedMessage !== undefined,
+      policyOutcome: body.policyOutcome,
+    },
+  });
 }
 
 function preferredRemoteAlias(snapshot: GitWorktreeSnapshot): string | undefined {
@@ -208,21 +463,26 @@ async function computePreview(
   const preflight = evaluateGitPreflight(commitInputs, snapshot);
   const signatureRequirement = await commitSignatureRequirement(workspace, snapshot, seams);
   const packs = seams.policyPacks ?? { repoPack: KEIKO_DEFAULT_LOCAL_GIT_POLICY_PACK };
+  const targetBranchName = snapshot.currentBranchName;
   const decision = evaluateGitPolicy(packs.orgPack, packs.repoPack, {
     actionKind: "commit",
-    ...(snapshot.currentBranchName !== undefined
-      ? { targetBranchName: snapshot.currentBranchName }
-      : {}),
+    ...(targetBranchName !== undefined ? { targetBranchName } : {}),
+    activeProviderCapabilities: [],
+  });
+  const effectivePolicy = evaluateGitDeliveryEffectivePolicy(decision, {
+    riskClass: gitDeliveryRiskClassForInputs(commitInputs),
+    targetBranchName,
     activeProviderCapabilities: [],
   });
   return buildPreviewBody(
     summary,
+    stagedPaths,
     messageDraft,
     policy,
     [...preflight.findings.map((f) => f.code), ...signatureFinding(signatureRequirement)],
     signatureRequirement,
-    decision.outcome,
-    decision.outcome === "blocked" ? decision.reason : undefined,
+    effectivePolicy.outcome,
+    effectivePolicy.outcome === "blocked" ? effectivePolicy.blockReason : undefined,
   );
 }
 
@@ -230,6 +490,7 @@ export const createHandleCommitPreview = (
   options: GitDeliveryCommitRouteOptions = {},
 ): ((ctx: RouteContext, deps: UiHandlerDeps) => Promise<RouteResult>) => {
   const seams = options.execution ?? {};
+  const activityLog = options.activityLog ?? processServerLogSink();
   const now = (): number => (seams.now ?? Date.now)();
   return async (ctx, deps): Promise<RouteResult> => {
     const read = await readParsed(ctx.req);
@@ -250,6 +511,7 @@ export const createHandleCommitPreview = (
     } catch {
       return errResult(409, "GIT_DELIVERY_COMMIT_WORKTREE_UNAVAILABLE");
     }
+    logCommitPreview(activityLog, ctx.correlationId, body);
     return { status: 200, body: deps.redactor(body) };
   };
 };

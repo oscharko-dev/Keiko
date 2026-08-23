@@ -6,6 +6,8 @@ import type {
 } from "@oscharko-dev/keiko-contracts";
 
 import type { WorkspaceLifecycleService } from "../task-workspace/types.js";
+import type { ServerDiagnosticSink } from "../diagnostics-log.js";
+import type { ServerLogSink } from "../observability/server-log.js";
 import type {
   CodingRuntimeApprovalIssueRequest,
   CodingRuntimeApprovalIssueResult,
@@ -30,6 +32,8 @@ export interface CodingRuntimeLaunchResolver {
     readonly taskIntent: string;
     readonly requestedMode: CodingWorkbenchRuntimeStartRequest["requestedMode"];
     readonly runtimePreference?: CodingWorkbenchRuntimeStartRequest["runtimePreference"];
+    readonly modelId?: CodingWorkbenchRuntimeStartRequest["modelId"];
+    readonly reasoningEffort?: CodingWorkbenchRuntimeStartRequest["reasoningEffort"];
     readonly workspaceId: string;
     readonly workspaceRoot: string;
     readonly serverPrincipal: string;
@@ -68,6 +72,8 @@ export interface CodingRuntimeOrchestratorDeps {
    * channel reports no pending ask and the operator simply sees the content-free approval facts.
    */
   readonly pendingResearchApprovals?: PendingResearchApprovals | undefined;
+  readonly diagnostics?: ServerDiagnosticSink | undefined;
+  readonly activityLog?: ServerLogSink | undefined;
   readonly now?: () => Date;
   readonly newRunId?: () => string;
 }

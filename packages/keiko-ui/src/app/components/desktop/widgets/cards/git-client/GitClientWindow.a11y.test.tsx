@@ -21,7 +21,7 @@ import type {
   ProjectWithAvailability,
 } from "@/lib/types";
 import type { GitClientSeam } from "./git-client-seam";
-import { SIDEBAR_STYLE, TOOLBAR_STYLE } from "./git-client-styles";
+import { SIDEBAR_STYLE, TOOLBAR_STYLE, WORKSPACE_STYLE } from "./git-client-styles";
 import { AddRepositoryDialog } from "./AddRepositoryDialog";
 import { GitClientWindow } from "./GitClientWindow";
 
@@ -465,6 +465,16 @@ describe("GitClientWindow — explicit name/role/value assertions", () => {
       expect(screen.getByRole("button", { name: "Stage all" })).toBeInTheDocument();
       expect(screen.getByRole("button", { name: "Unstage all" })).toBeInTheDocument();
     });
+
+    it("explains that the selected staged files define the commit draft", async () => {
+      render(<GitClientWindow projectId={REPO_A.path} client={makeClient()} />);
+      expect(await screen.findByText("foo.ts")).toBeInTheDocument();
+      expect(
+        screen.getByText(
+          "Select files with the checkboxes. Keiko uses only staged files for the commit draft.",
+        ),
+      ).toBeInTheDocument();
+    });
   });
 
   describe("changed files and diff region", () => {
@@ -574,12 +584,14 @@ describe("GitClientWindow — explicit name/role/value assertions", () => {
       expect(box!.getAttribute("data-focus-visible")).toBeNull();
     });
 
-    it("narrow layout lets the toolbar wrap and keeps a diff-pane floor (GEN-UI-LAYOUT-003)", async () => {
-      // jsdom has no layout, so assert the style contract that keeps controls reachable and the
-      // diff pane usable when the window is narrowed to ~360px: the toolbar wraps and the sidebar
-      // width is capped so the flexing diff pane cannot be squeezed to zero.
-      expect(TOOLBAR_STYLE.flexWrap).toBe("wrap");
+    it("narrow layout preserves a single toolbar row and keeps a diff-pane floor (GEN-UI-LAYOUT-003)", async () => {
+      // jsdom has no layout, so assert the style contract that preserves the working order of the
+      // toolbar with horizontal reachability and keeps a usable diff pane beside the sidebar.
+      expect(TOOLBAR_STYLE.flexWrap).toBe("nowrap");
+      expect(TOOLBAR_STYLE.overflowX).toBe("auto");
       expect(String(SIDEBAR_STYLE.width)).toMatch(/min\(/);
+      expect(WORKSPACE_STYLE.height).toBe("100%");
+      expect(WORKSPACE_STYLE.overflow).toBe("hidden");
 
       // Sanity: with a repository connected, the toolbar controls and diff region are all present
       // and reachable regardless of width.

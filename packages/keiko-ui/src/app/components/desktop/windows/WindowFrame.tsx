@@ -1221,7 +1221,13 @@ function WindowFrameImpl({
   // content-visibility is limited to full-mode windows (mini/tiny are already
   // cheap) and skipped for the editor so an off-screen Monaco never mis-measures.
   const enableContentVisibility = bodyMode === "full" && win.type !== "editor";
-  const bodyOverflow = win.type === "chat" && bodyMode === "full" ? "hidden" : undefined;
+  // Dense working surfaces own their internal scroll regions (chat log, Git file list, diff, and
+  // history). Letting the generic window body scroll would create a second, unbounded canvas below
+  // the visible Git workspace when a repository has many changed files.
+  const bodyOverflow =
+    bodyMode === "full" && (win.type === "chat" || win.type === "governedGit")
+      ? "hidden"
+      : undefined;
   const bodyStyle = useMemo<CSSProperties>(
     () => ({
       ...(enableContentVisibility

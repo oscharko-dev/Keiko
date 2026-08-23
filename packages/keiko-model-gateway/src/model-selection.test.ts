@@ -420,6 +420,37 @@ describe("COST_RANK single source of truth (GEN-DUP-EXACT-002)", () => {
 });
 
 describe("resolveCodingSafeSidecarGatewayProfile", () => {
+  it("honours the concrete coding model selected for the run", () => {
+    const configValue = sidecarConfig(
+      [
+        {
+          modelId: "gpt-5.4",
+          baseUrl: "https://provider.example/v1",
+          apiKey: "secret",
+          timeoutMs: 30_000,
+          maxRetries: 3,
+          retryBaseDelayMs: 500,
+        },
+        {
+          modelId: "qwen-coder",
+          baseUrl: "https://provider.example/v1",
+          apiKey: "secret",
+          timeoutMs: 30_000,
+          maxRetries: 3,
+          retryBaseDelayMs: 500,
+        },
+      ],
+      [codingSidecarCapability("gpt-5.4"), codingSidecarCapability("qwen-coder")],
+    );
+
+    expect(
+      resolveCodingSafeSidecarGatewayProfile(configValue, { modelId: "qwen-coder" }),
+    ).toMatchObject({
+      status: "available",
+      modelAlias: "qwen-coder",
+    });
+  });
+
   it("selects a configured coding-capable model and omits provider endpoint and credential details", () => {
     const configValue = sidecarConfig(
       [

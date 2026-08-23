@@ -78,6 +78,15 @@ function runAnnouncement(state: CodingWorkbenchRuntimeState, t: CodingWorkbenchT
   if (state.run.status === "loading") return t("codingWorkbench.announcement.runChecking");
   const snapshot = state.run.value;
   if (snapshot === null) return t("codingWorkbench.announcement.noActiveRun");
+  if (snapshot.state === "idle" && !state.canStart) {
+    return t("codingWorkbench.header.notReady");
+  }
+  if (
+    snapshot.state === "idle" &&
+    state.runtime.value?.runtimeEvidenceClass === "functional-not-platform-qualified"
+  ) {
+    return t("codingWorkbench.header.readyEvaluation");
+  }
   return t("codingWorkbench.announcement.runRevision", {
     state: runStateLabel(snapshot.state, t),
     revision: snapshot.revision,
@@ -349,9 +358,8 @@ export function visibleAlert(
     if (value.status === "error") return t(`codingWorkbench.alert.${resource}RefreshFailed`);
   }
   // Standing conditions come after actionable refresh failures (one alert at a time — reporting a
-  // standing condition first would swallow the recoverable error). The unpaired window (F-08/
-  // RG-12) precedes the unqualified runtime: without a paired app session no run can start at all.
-  if (state.pairing === "unpaired") return t("codingWorkbench.pairing.unpaired");
+  // standing condition first would swallow the recoverable error). Pairing remains in the
+  // lifecycle narration, but it is not useful enough to take over the workbench as a banner.
   // Last: the unqualified runtime, and only while the bootstrap setup section is off screen — it
   // states the same condition itself, and duplicating it would announce it twice to assistive
   // technology. This wording is its own: the setup copy invites binding a workspace, which is

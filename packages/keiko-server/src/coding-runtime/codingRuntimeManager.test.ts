@@ -3646,10 +3646,12 @@ describe("coding runtime manager", () => {
     try {
       const fixture = createManagedFixture();
       const child = fakeChild();
+      const diagnostics = { record: vi.fn<(record: ServerDiagnosticRecord) => void>() };
       let observedSignal: AbortSignal | undefined;
       let resolveHandshake: ((result: { readonly ok: true }) => void) | undefined;
       const manager = createTestCodingRuntimeManager({
         processEnv: {},
+        diagnostics,
         supervisor: testSupervisor(() => ({
           ...child.handle,
           kill: (signal): void => {
@@ -3682,6 +3684,15 @@ describe("coding runtime manager", () => {
         retryable: true,
       });
       expect(observedSignal?.aborted).toBe(true);
+      expect(diagnostics.record).toHaveBeenCalledWith(
+        expect.objectContaining({
+          correlationId: "run-1988",
+          operation: "coding-runtime.handshake",
+          errorClass: "OpenCodeHandshakeFailure",
+          message: "runtime-handshake-failed",
+          code: "timeout",
+        }),
+      );
       resolveHandshake?.({ ok: true });
       await Promise.resolve();
       expect(manager.health()).toEqual({ status: "stopped" });

@@ -13,6 +13,7 @@ import {
 } from "@oscharko-dev/keiko-contracts/bff-wire";
 import { VOICE_PERSONAS, VOICE_PROVIDER_LOCALITIES } from "./types.js";
 import {
+  MODEL_REASONING_EFFORTS,
   PROVIDER_ENDPOINT_STYLES,
   REALTIME_AUTH_MODES,
   isVoiceCapability,
@@ -29,6 +30,7 @@ import type {
   LatencyClass,
   ModelCapability,
   ModelKind,
+  ModelReasoningEffort,
   ModelProviderConfig,
   ModelTokenAccounting,
   OutputTokenParameter,
@@ -1094,6 +1096,7 @@ function buildProviderCapabilityBody(
     ...(tokenAccounting === undefined ? {} : { tokenAccounting }),
     ...flags,
     ...optionalChatModeDeclaredFlag(raw, path),
+    ...optionalReasoningEfforts(raw.reasoningEfforts, `${path}.reasoningEfforts`, kind),
     ...resolveInfillingAlignment(raw, path, flags.supportsInfilling ?? false, kind),
     ...parseVoiceCapabilityFields(raw, path, kind),
     workflowEligible,
@@ -1169,6 +1172,7 @@ const MODEL_CAPABILITY_KNOWN_KEYS: ReadonlySet<string> = new Set([
   "supportsDocumentInput",
   "supportsSeeding",
   "supportsResponseFormat",
+  "reasoningEfforts",
   "supportsInfilling",
   "infillingAlignment",
   "chatModeDeclared",
@@ -1207,6 +1211,25 @@ function requireStringArray(value: unknown, path: string): readonly string[] {
     throw new ConfigInvalidError(`${path} must be an array of strings`);
   }
   return value as readonly string[];
+}
+
+function optionalReasoningEfforts(
+  value: unknown,
+  path: string,
+  kind: ModelKind,
+): Partial<Pick<ModelCapability, "reasoningEfforts">> {
+  if (value === undefined) return {};
+  if (!Array.isArray(value)) throw new ConfigInvalidError(`${path} must be an array`);
+  const efforts = value.map((entry, index) =>
+    requireEnum<ModelReasoningEffort>(entry, `${path}[${String(index)}]`, MODEL_REASONING_EFFORTS),
+  );
+  if (kind !== "chat" && efforts.length > 0) {
+    throw new ConfigInvalidError(`${path} is only valid for chat models`);
+  }
+  if (new Set(efforts).size !== efforts.length) {
+    throw new ConfigInvalidError(`${path} must not contain duplicates`);
+  }
+  return efforts.length === 0 ? {} : { reasoningEfforts: efforts };
 }
 
 // Optional discovery-mode flag — preserved only when declared so a capability record round-trips
@@ -1311,6 +1334,7 @@ export function parseModelCapability(value: unknown, path: string): ModelCapabil
       `${path}.supportsDocumentInput`,
     ),
     ...optionalDeterminismFlags(value, path),
+    ...optionalReasoningEfforts(value.reasoningEfforts, `${path}.reasoningEfforts`, kind),
     ...optionalChatModeDeclaredFlag(value, path),
     ...optionalInfillingFlags(value, path, kind),
     ...parseVoiceCapabilityFields(value, path, kind),

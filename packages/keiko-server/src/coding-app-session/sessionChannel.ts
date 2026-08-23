@@ -44,8 +44,20 @@ export type CodingAppSessionPairResult =
 export type CodingAppSessionRotateResult =
   { readonly rotated: true; readonly cookieToken: string } | { readonly rotated: false };
 
+export type CodingAppSessionEnsureResult =
+  { readonly issued: true; readonly cookieToken: string } | { readonly issued: false };
+
 export interface CodingAppSessionChannel {
   readonly pair: (attestation: unknown) => CodingAppSessionPairResult;
+  /**
+   * Ensure the current local browser has a valid app session after a server-side authority decision.
+   * This is deliberately not a public pairing route: callers first complete an owning operation
+   * such as a Coding Workbench run start, then issue the same scoped cookie the paired channel uses.
+   */
+  readonly ensureLocalSession: (
+    cookieToken: string | undefined,
+    principalLabel: string,
+  ) => CodingAppSessionEnsureResult;
   readonly snapshot: (cookieToken: string | undefined) => CodingAppSessionChannelSnapshot;
   readonly rotate: (cookieToken: string | undefined) => CodingAppSessionRotateResult;
   readonly signOut: (cookieToken: string | undefined) => void;
@@ -304,6 +316,14 @@ export function createCodingAppSessionChannel(
       if (decision.outcome !== "approved") return { paired: false };
       const mint = registry.mint(decision.principalLabel);
       return { paired: true, cookieToken: mint.cookieToken };
+    },
+    ensureLocalSession: (
+      cookieToken: string | undefined,
+      principalLabel: string,
+    ): CodingAppSessionEnsureResult => {
+      if (registry.verify(cookieToken) !== undefined) return { issued: false };
+      const mint = registry.mint(principalLabel);
+      return { issued: true, cookieToken: mint.cookieToken };
     },
     snapshot: (cookieToken: string | undefined): CodingAppSessionChannelSnapshot => {
       const session = registry.verify(cookieToken);

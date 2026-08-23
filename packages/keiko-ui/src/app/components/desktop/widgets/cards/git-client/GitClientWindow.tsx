@@ -12,7 +12,14 @@
 // See ADR-0098 for the git-client window conventions (layout contract, vocabulary, seam boundaries).
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { Dispatch, ReactNode, RefObject, SetStateAction } from "react";
+import type {
+  Dispatch,
+  KeyboardEvent as ReactKeyboardEvent,
+  PointerEvent as ReactPointerEvent,
+  ReactNode,
+  RefObject,
+  SetStateAction,
+} from "react";
 import type { GitBranchListEntry } from "@/lib/api";
 import { useTranslate, type I18nTranslate } from "@/lib/i18n";
 import {
@@ -30,7 +37,6 @@ import type {
   ProjectWithAvailability,
 } from "@/lib/types";
 import type { WindowCfgValue } from "../../../windows/types";
-import type { OpenEditorFileRequest } from "../../../hooks/useWorkspace.types";
 import { DEFAULT_GIT_CLIENT, formatGitError, useGitActions } from "./git-client-seam";
 import type { GitClientSeam } from "./git-client-seam";
 import { MutationOutcome } from "./git-client-ui";
@@ -65,15 +71,22 @@ import { requestEditorBufferReconciliation } from "../editor-buffer-reconciliati
 import { restoreModalTriggerFocus } from "../../../hooks/useModalInteractionLock";
 import {
   BODY_STYLE,
+  COMMIT_WORKSPACE_PANE_STYLE,
   DIFF_HEADER_STYLE,
   PANE_STYLE,
   SECONDARY_BTN,
-  SIDEBAR_STYLE,
+  SIDEBAR_RESIZER_STYLE,
+  sidebarStyle,
   WORKSPACE_STYLE,
 } from "./git-client-styles";
 
 const EMPTY_BRANCHES: readonly GitBranchListEntry[] = [];
 const HISTORY_PAGE_SIZE = 50;
+const SIDEBAR_DEFAULT_WIDTH = 330;
+const SIDEBAR_MIN_WIDTH = 280;
+const SIDEBAR_MAX_WIDTH = 620;
+const RIGHT_PANE_MIN_WIDTH = 360;
+const SIDEBAR_RESIZE_STEP = 24;
 const ChevronRightIcon = Icons.chevronR;
 
 export interface GitClientWindowProps {
@@ -83,7 +96,6 @@ export interface GitClientWindowProps {
   readonly initialCommit?: string | undefined;
   readonly onOpenFiles?: ((root: string) => void) | undefined;
   readonly onOpenEditor?: ((root: string) => void) | undefined;
-  readonly onOpenEditorFile?: ((request: OpenEditorFileRequest) => void) | undefined;
   /** Persists the selected repository into cfg.projectPath so resolveBoundRoot re-targets. */
   readonly updateCfg?: ((patch: Record<string, WindowCfgValue>) => void) | undefined;
   /** DI seam; defaults to the real BFF client. */
@@ -586,6 +598,27 @@ function syncViewForDisplay(
   };
 }
 
+function sidebarMaxWidth(bodyWidth: number): number {
+  return Math.max(SIDEBAR_MIN_WIDTH, Math.min(SIDEBAR_MAX_WIDTH, bodyWidth - RIGHT_PANE_MIN_WIDTH));
+}
+
+function clampSidebarWidth(width: number, bodyWidth: number): number {
+  return Math.min(Math.max(width, SIDEBAR_MIN_WIDTH), sidebarMaxWidth(bodyWidth));
+}
+
+function bodyWidthForResize(bodyRef: RefObject<HTMLDivElement | null>): number {
+  const width = bodyRef.current?.getBoundingClientRect().width ?? 0;
+  return width > 0 ? width : SIDEBAR_MAX_WIDTH + RIGHT_PANE_MIN_WIDTH;
+}
+
+function CommitWorkspacePane({ children }: { readonly children: ReactNode }): ReactNode {
+  return (
+    <section style={COMMIT_WORKSPACE_PANE_STYLE} aria-label="Commit draft workspace">
+      {children}
+    </section>
+  );
+}
+
 interface GitRightPaneContentProps {
   readonly mode: RightPaneMode;
   readonly diffPane: ReactNode;
@@ -631,7 +664,6 @@ export function GitClientWindow({
   initialCommit,
   onOpenFiles,
   onOpenEditor,
-  onOpenEditorFile,
   updateCfg,
   client = DEFAULT_GIT_CLIENT,
   reconcileEditorBuffers = requestEditorBufferReconciliation,
@@ -668,7 +700,6 @@ export function GitClientWindow({
   const [statusRevision, setStatusRevision] = useState(0);
   const [tab, setTab] = useState<ChangesTab>("changes");
   const [selectedChangePath, setSelectedChangePath] = useState<string | null>(null);
-  const [revealRequestId, setRevealRequestId] = useState(0);
   const [diffScope, setDiffScope] = useState<GitDiffScope>("worktree");
   const [commitNonce, setCommitNonce] = useState(0);
   const [dialogOpen, setDialogOpen] = useState(false);
@@ -681,11 +712,15 @@ export function GitClientWindow({
   const [syncError, setSyncError] = useState<string | null>(null);
   const [rightPaneMode, setRightPaneMode] = useState<RightPaneMode>("diff");
   const [rightPaneAnnouncement, setRightPaneAnnouncement] = useState("");
+  const [commitSummary, setCommitSummary] = useState("");
+  const [commitBody, setCommitBody] = useState("");
+  const [sidebarWidth, setSidebarWidth] = useState(SIDEBAR_DEFAULT_WIDTH);
   const syncSeqRef = useRef(0);
   const historyRequestSequenceRef = useRef(0);
   const repositoryConnectSeqRef = useRef(0);
   const newBranchReturnFocusRef = useRef<HTMLElement | null>(null);
   const worktreeConfirmationReturnFocusRef = useRef<HTMLElement | null>(null);
+  const bodyRef = useRef<HTMLDivElement | null>(null);
   const rightPaneRef = useRef<HTMLDivElement | null>(null);
   const diffPaneRef = useRef<HTMLDivElement | null>(null);
   const landedPathRef = useRef<string | null>(null);
@@ -1026,6 +1061,8 @@ export function GitClientWindow({
   useEffect(() => {
     if (commitOutcome?.status === "succeeded") {
       setCommitNonce((n) => n + 1);
+      setCommitSummary("");
+      setCommitBody("");
     }
   }, [commitOutcome]);
 
@@ -1044,11 +1081,11 @@ export function GitClientWindow({
     [updateCfg],
   );
 
-  const applyConnectedRepository = useCallback(
+  const applyAvailableRepository = useCallback(
     (project: ProjectWithAvailability): boolean => {
-      if (project.workspaceAvailable !== true) {
+      if (!project.available) {
         setReposLoading(false);
-        setReposError(optionalT("gitClientWindow.repository.workspaceUnavailable"));
+        setReposError(optionalT("gitClientWindow.repository.unavailable"));
         return false;
       }
       setReposError(null);
@@ -1067,7 +1104,7 @@ export function GitClientWindow({
       void client.reconnectRepository(path).then(
         (response): void => {
           if (requestSequence !== repositoryConnectSeqRef.current) return;
-          if (applyConnectedRepository(response.project)) loadRepositories();
+          if (applyAvailableRepository(response.project)) loadRepositories();
         },
         (error: unknown): void => {
           if (requestSequence !== repositoryConnectSeqRef.current) return;
@@ -1080,17 +1117,15 @@ export function GitClientWindow({
         },
       );
     },
-    [applyConnectedRepository, client, loadRepositories, optionalT],
+    [applyAvailableRepository, client, loadRepositories, optionalT],
   );
 
   const onRepositoryAdded = useCallback(
     (project: ProjectWithAvailability): void => {
-      // Create/clone owns manifest establishment. Reconnect through the existing-project route
-      // before selection so the Git window consumes a fresh server membership projection rather
-      // than trusting the mutation response or attempting duplicate project creation.
-      reconnectRepository(project.path);
+      applyAvailableRepository(project);
+      loadRepositories();
     },
-    [reconnectRepository],
+    [applyAvailableRepository, loadRepositories],
   );
 
   useEffect(() => {
@@ -1099,13 +1134,13 @@ export function GitClientWindow({
     const requestedPath = selectedPath ?? configuredPath;
     if (requestedPath === null) return;
     const selected = repositories.find((repository) => repository.path === requestedPath);
-    if (selected?.workspaceAvailable === true) {
+    if (selected?.available === true) {
       if (selectedPath !== requestedPath) setSelectedPath(requestedPath);
       return;
     }
     setSelectedPath(null);
     updateCfg?.({ projectPath: "" });
-    setReposError(optionalT("gitClientWindow.repository.workspaceUnavailable"));
+    setReposError(optionalT("gitClientWindow.repository.unavailable"));
   }, [optionalT, projectId, repositories, reposError, reposLoading, selectedPath, updateCfg]);
 
   const active = activeGitClientState({
@@ -1149,24 +1184,10 @@ export function GitClientWindow({
   const selectChange = useCallback(
     (path: string): void => {
       setSelectedChangePath(path);
-      setRevealRequestId((value) => value + 1);
       const change = activeStatus?.changes.find((c) => c.path === path);
       if (change !== undefined) setDiffScope(preferredDiffScopeForChange(change));
     },
     [activeStatus],
-  );
-
-  const revealEditorFile = useCallback(
-    (path: string, line: number): void => {
-      if (selectedPath === null || onOpenEditorFile === undefined) return;
-      onOpenEditorFile({
-        root: selectedPath,
-        path,
-        lineStart: line,
-        lineEnd: line,
-      });
-    },
-    [onOpenEditorFile, selectedPath],
   );
 
   const stageFile = useCallback(
@@ -1361,6 +1382,64 @@ export function GitClientWindow({
   const currentBranch = activeStatus?.branch ?? activeSummary?.branch;
   const inferredOwnerAndRepo = inferOwnerAndRepo(activeRemotes);
   const inferredBaseBranch = inferBaseBranch(currentBranch, activeSummary);
+  const useCommitWorkspace =
+    rightPaneMode === "diff" && tab === "changes" && selectedChangePath === null;
+  const resizeSidebar = useCallback((nextWidth: number): void => {
+    setSidebarWidth(clampSidebarWidth(nextWidth, bodyWidthForResize(bodyRef)));
+  }, []);
+  const beginSidebarResize = useCallback((event: ReactPointerEvent<HTMLInputElement>): void => {
+    const body = bodyRef.current;
+    if (body === null) return;
+    event.preventDefault();
+    const rect = body.getBoundingClientRect();
+    const onMove = (moveEvent: PointerEvent): void => {
+      setSidebarWidth(clampSidebarWidth(moveEvent.clientX - rect.left, rect.width));
+    };
+    const stop = (): void => {
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", stop);
+      window.removeEventListener("pointercancel", stop);
+    };
+    window.addEventListener("pointermove", onMove);
+    window.addEventListener("pointerup", stop, { once: true });
+    window.addEventListener("pointercancel", stop, { once: true });
+    onMove(event.nativeEvent);
+  }, []);
+  const resizeSidebarByKey = useCallback(
+    (event: ReactKeyboardEvent<HTMLInputElement>): void => {
+      if (event.key === "ArrowLeft") resizeSidebar(sidebarWidth - SIDEBAR_RESIZE_STEP);
+      else if (event.key === "ArrowRight") resizeSidebar(sidebarWidth + SIDEBAR_RESIZE_STEP);
+      else if (event.key === "Home") resizeSidebar(SIDEBAR_MIN_WIDTH);
+      else if (event.key === "End") resizeSidebar(SIDEBAR_MAX_WIDTH);
+      else return;
+      event.preventDefault();
+    },
+    [resizeSidebar, sidebarWidth],
+  );
+  const commitComposer = (
+    <CommitComposer
+      key={`${selectedPath ?? ""}:${commitNonce.toString()}`}
+      projectId={selectedPath}
+      branchName={currentBranch}
+      stagedFileCount={activeStatus?.stagedCount ?? 0}
+      busy={commit.flow.busy}
+      outcome={commit.flow.outcome}
+      error={commit.flow.error}
+      preview={commit.preview}
+      previewDraft={commit.previewDraft}
+      previewError={commit.previewError}
+      layout={useCommitWorkspace ? "workspace" : "sidebar"}
+      summaryValue={commitSummary}
+      bodyValue={commitBody}
+      onSummaryChange={setCommitSummary}
+      onBodyChange={setCommitBody}
+      onPreview={commit.runPreview}
+      onCommit={commitChanges}
+      onCreateBranch={openNewBranchDialog}
+      onCreatePullRequest={() => openRightPane("pull-request")}
+      onMerge={() => openRightPane("merge")}
+    />
+  );
 
   return (
     <div style={WORKSPACE_STYLE} aria-label="Git">
@@ -1411,7 +1490,7 @@ export function GitClientWindow({
           />
         </div>
       ) : null}
-      <div style={BODY_STYLE}>
+      <div ref={bodyRef} style={BODY_STYLE}>
         {selectedPath === null ? (
           <ConnectPanel
             repositories={repositories}
@@ -1429,7 +1508,7 @@ export function GitClientWindow({
           />
         ) : (
           <>
-            <div style={SIDEBAR_STYLE}>
+            <div style={sidebarStyle(sidebarWidth)}>
               <ChangesPane
                 tab={tab}
                 onTabChange={setTab}
@@ -1453,45 +1532,41 @@ export function GitClientWindow({
                 onLoadMoreHistory={loadMoreHistory}
                 selectedCommitSha={selectedCommitSha}
                 onSelectCommit={(entry) => setSelectedCommitSha(entry.sha)}
-                commitComposer={
-                  <CommitComposer
-                    key={`${selectedPath}:${commitNonce.toString()}`}
-                    projectId={selectedPath}
-                    branchName={currentBranch}
-                    stagedFileCount={activeStatus?.stagedCount ?? 0}
-                    busy={commit.flow.busy}
-                    outcome={commit.flow.outcome}
-                    error={commit.flow.error}
-                    preview={commit.preview}
-                    previewDraft={commit.previewDraft}
-                    previewError={commit.previewError}
-                    onPreview={commit.runPreview}
-                    onCommit={commitChanges}
-                    onCreatePullRequest={() => openRightPane("pull-request")}
-                    onMerge={() => openRightPane("merge")}
-                  />
-                }
+                commitComposer={useCommitWorkspace ? null : commitComposer}
               />
             </div>
+            <input
+              type="range"
+              aria-label="Resize changes column"
+              min={SIDEBAR_MIN_WIDTH}
+              max={SIDEBAR_MAX_WIDTH}
+              value={Math.round(sidebarWidth)}
+              style={SIDEBAR_RESIZER_STYLE}
+              onChange={(event) => resizeSidebar(event.currentTarget.valueAsNumber)}
+              onPointerDown={beginSidebarResize}
+              onKeyDown={resizeSidebarByKey}
+            />
             <GitRightPaneContent
               mode={rightPaneMode}
               rightPaneRef={rightPaneRef}
               returnToDiff={returnToDiff}
               t={t}
               diffPane={
-                <div ref={diffPaneRef} style={{ minWidth: 0, minHeight: 0, display: "contents" }}>
-                  <DiffPane
-                    client={client}
-                    repositoryRoot={selectedPath}
-                    selectedChangePath={selectedChangePath}
-                    selectedCommit={tab === "history" ? selectedCommit : null}
-                    scope={diffScope}
-                    onScopeChange={setDiffScope}
-                    revealRequestId={revealRequestId}
-                    onRevealFile={revealEditorFile}
-                    revision={statusRevision}
-                  />
-                </div>
+                useCommitWorkspace ? (
+                  <CommitWorkspacePane>{commitComposer}</CommitWorkspacePane>
+                ) : (
+                  <div ref={diffPaneRef} style={{ minWidth: 0, minHeight: 0, display: "contents" }}>
+                    <DiffPane
+                      client={client}
+                      repositoryRoot={selectedPath}
+                      selectedChangePath={selectedChangePath}
+                      selectedCommit={tab === "history" ? selectedCommit : null}
+                      scope={diffScope}
+                      onScopeChange={setDiffScope}
+                      revision={statusRevision}
+                    />
+                  </div>
+                )
               }
               pullRequestPane={
                 <GovernedPullRequestCard

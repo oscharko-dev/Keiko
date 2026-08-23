@@ -238,19 +238,6 @@ describe("DiffPane — scope controls", () => {
 });
 
 describe("DiffPane — structured navigation", () => {
-  it("reveals the selected file at the first added line from the matching structured hunk", async () => {
-    const onRevealFile = vi.fn();
-    renderPane({
-      client: makeSeam({
-        getStructuredDiff: vi.fn(async () => makeDiffResponse([makeDiffFile()])),
-      }),
-      revealRequestId: 1,
-      onRevealFile,
-    });
-
-    await waitFor(() => expect(onRevealFile).toHaveBeenCalledWith("src/index.ts", 7));
-  });
-
   it("drops a late response after the selected path changes", async () => {
     let resolveOld!: (value: GitEditorDiffResponse) => void;
     const oldResponse = new Promise<GitEditorDiffResponse>((resolve) => {
@@ -260,7 +247,6 @@ describe("DiffPane — structured navigation", () => {
       .fn<GitClientSeam["getStructuredDiff"]>()
       .mockReturnValueOnce(oldResponse)
       .mockResolvedValueOnce(makeDiffResponse([makeDiffFile({ path: "src/new.ts" })]));
-    const onRevealFile = vi.fn();
     const { rerender } = render(
       <DiffPane
         client={makeSeam({ getStructuredDiff })}
@@ -269,8 +255,6 @@ describe("DiffPane — structured navigation", () => {
         selectedCommit={null}
         scope="worktree"
         onScopeChange={vi.fn()}
-        revealRequestId={1}
-        onRevealFile={onRevealFile}
         revision={0}
       />,
     );
@@ -283,15 +267,13 @@ describe("DiffPane — structured navigation", () => {
         selectedCommit={null}
         scope="worktree"
         onScopeChange={vi.fn()}
-        revealRequestId={2}
-        onRevealFile={onRevealFile}
         revision={0}
       />,
     );
-    await waitFor(() => expect(onRevealFile).toHaveBeenCalledWith("src/new.ts", 7));
+    expect(await screen.findByText("src/new.ts")).toBeInTheDocument();
     act(() => resolveOld(makeDiffResponse([makeDiffFile({ path: "src/old.ts" })])));
 
-    expect(onRevealFile).toHaveBeenCalledTimes(1);
+    expect(screen.queryByText("src/old.ts")).not.toBeInTheDocument();
   });
 
   it("keeps the structured binary and truncation surface axe-clean", async () => {

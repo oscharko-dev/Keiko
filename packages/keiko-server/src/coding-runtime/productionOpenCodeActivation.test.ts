@@ -39,6 +39,7 @@ function activationInput(
     runtimeEvidence: { observe: () => undefined },
     gatewayReadiness: {
       waitForObservedRequest: () => Promise.resolve(false),
+      verifyObserved: () => undefined,
       clear: () => undefined,
     },
     ...(overrides.withSecureRead === true ? { secureWorkspaceTextRead: secureRead } : {}),

@@ -30,6 +30,30 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.composer.pause": "Lauf pausieren",
   "codingWorkbench.composer.resume": "Lauf fortsetzen",
   "codingWorkbench.composer.send": "Rückfrage senden",
+  "codingWorkbench.composer.model.label": "Coding-Modell",
+  "codingWorkbench.composer.model.menu": "Coding-Modell auswählen",
+  "codingWorkbench.composer.model.none": "Kein Coding-Modell verfügbar",
+  "codingWorkbench.composer.source.label": "Modellquelle",
+  "codingWorkbench.composer.source.menu": "Modellquelle auswählen",
+  "codingWorkbench.composer.effort.label": "Reasoning-Stufe",
+  "codingWorkbench.composer.effort.menu": "Reasoning-Stufe auswählen",
+  "codingWorkbench.composer.effort.minimal": "Minimal",
+  "codingWorkbench.composer.effort.low": "Niedrig",
+  "codingWorkbench.composer.effort.medium": "Mittel",
+  "codingWorkbench.composer.effort.high": "Hoch",
+  "codingWorkbench.composer.effort.xhigh": "Extra hoch",
+  "codingWorkbench.composer.authority.label": "Rechte für diesen Lauf",
+  "codingWorkbench.composer.authority.menu": "Rechte auswählen",
+  "codingWorkbench.composer.authority.error.hydrate":
+    "Die Rechte konnten nicht geladen werden. „Um Genehmigung bitten“ bleibt ausgewählt.",
+  "codingWorkbench.composer.authority.error.persist":
+    "Die Rechte konnten nicht gespeichert werden. Die vorherige Auswahl bleibt aktiv.",
+  "codingWorkbench.composer.context.label": "Coding-Kontext",
+  "codingWorkbench.composer.repository.open": "Repository {repository} in Git verwalten",
+  "codingWorkbench.composer.branch.open": "Branch {branch} in Git verwalten",
+  "codingWorkbench.composer.projectMemory.label": "MemoriaViva",
+  "codingWorkbench.composer.projectMemory.help":
+    "MemoriaViva verwendet in der Coding Workbench ausschließlich das aktive Projekt-Memory.",
   "codingWorkbench.composer.help":
     "Pausieren Sie den aktiven Lauf, um eine Rückfrage zu senden. Ein entworfener Follow-up wird nur im pausierten Zustand zugelassen und niemals in eine Warteschlange gestellt.",
   "codingWorkbench.questions.sectionLabel": "Laufzeitfragen",
@@ -47,8 +71,7 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.questions.terminal": "Der Coding-Lauf ist beendet.",
   "codingWorkbench.questions.unpaired":
     "Dieses Fenster ist nicht für Frageinhalte gekoppelt. Starten Sie Keiko über den Launcher neu, um eine neue App-Sitzung zu koppeln.",
-  "codingWorkbench.pairing.unpaired":
-    "Browserfenster nicht gekoppelt — öffnen Sie Keiko über den Launcher, um Coding-Läufe zu ermöglichen: `keiko start --open` bei einer installierten Keiko-Version, `npm run dev:start -- --open` in einem Entwicklungs-Checkout. Ein von Hand geöffneter Tab kann nicht gekoppelt werden.",
+  "codingWorkbench.pairing.unpaired": "Workbench nicht gekoppelt. Keiko über den Launcher öffnen.",
   "codingWorkbench.questions.answerFailed":
     "Ihre Antwort wurde nicht angenommen ({code}). Die Frage ist weiterhin offen — senden Sie sie erneut.",
   "codingWorkbench.questions.rejectFailed":
@@ -89,24 +112,22 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
     "Plattformgeprüft — signierte und notarisierte Runtime",
   "codingWorkbench.readiness.runtime.evaluation":
     "Ungeprüfte Evaluations-Runtime — ohne Plattformsignatur",
-  "codingWorkbench.timeline.eyebrow": "Authentifizierte Aktivität",
-  "codingWorkbench.timeline.title": "Live-Aktivitätszeitleiste",
-  "codingWorkbench.timeline.empty": "Noch keine bestätigte Aktivität.",
+  "codingWorkbench.timeline.eyebrow": "Verlauf",
+  "codingWorkbench.timeline.title": "Aktivität",
+  "codingWorkbench.timeline.empty": "Noch keine Aktivität.",
   "codingWorkbench.timeline.instructions":
     "Zeitleiste fokussieren und dann mit Pfeil- oder Bild-auf- und Bild-ab-Tasten scrollen.",
   "codingWorkbench.timeline.listLabel": "Coding-Lauf-Ereigniszeitleiste",
-  "codingWorkbench.changes.eyebrow": "Authentifizierte Änderungen",
-  "codingWorkbench.changes.title": "Änderungen des Laufs",
-  "codingWorkbench.changes.help":
-    "Schreibgeschützte Diffs stammen aus dem gebundenen Aufgaben-Workspace dieses Laufs und werden niemals als dauerhafte Evidenz gespeichert.",
+  "codingWorkbench.changes.eyebrow": "Dateien",
+  "codingWorkbench.changes.title": "Änderungen",
+  "codingWorkbench.changes.help": "Geänderte Dateien erscheinen hier.",
   "codingWorkbench.changes.idle": "Starte einen Lauf, um seine Workspace-Änderungen zu prüfen.",
   "codingWorkbench.changes.loading": "Neueste begrenzte Änderungen werden geladen…",
   "codingWorkbench.changes.bindingLost":
     "Die Aufgaben-Workspace-Bindung des Laufs ist nicht mehr verfügbar. Es wird kein Diff angezeigt.",
   "codingWorkbench.changes.unavailable":
     "Änderungen sind nicht verfügbar. Die App-Sitzung muss möglicherweise erneut gekoppelt werden; es wird kein veraltetes Diff angezeigt.",
-  "codingWorkbench.changes.unpaired":
-    "Browserfenster nicht gekoppelt — öffnen Sie Keiko über den Launcher, um den Aufgaben-Workspace dieses Laufs zu lesen. Es wird kein Diff angezeigt.",
+  "codingWorkbench.changes.unpaired": "Keine Änderungen in diesem Browser.",
   "codingWorkbench.changes.error":
     "Änderungen konnten nicht aktualisiert werden. Es wird kein veraltetes Diff angezeigt.",
   "codingWorkbench.changes.retry": "Änderungen aktualisieren",
@@ -145,30 +166,19 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.changes.diff.elevatedReview": "Erweiterte Prüfung",
   "codingWorkbench.activity.reasoningBoundary":
     "Diese Zeitleiste zeigt beobachtbare Konversation und Arbeitsaktivität. Private Gedankengänge werden niemals offengelegt.",
-  "codingWorkbench.activity.status.idle":
-    "Starte einen Lauf, um seine Aktivität hier zu verfolgen.",
-  "codingWorkbench.activity.status.loading":
-    "Verbindung zur geschützten Aktivitätsprojektion wird hergestellt…",
-  "codingWorkbench.activity.status.live": "Geschützte Aktivität wird live aktualisiert.",
-  "codingWorkbench.activity.status.paused":
-    "Lauf pausiert. Das Transkript unten ist der letzte bestätigte Snapshot und keine Live-Aktivität.",
-  "codingWorkbench.activity.status.recovery":
-    "Wiederherstellung ist erforderlich. Das Transkript unten ist der letzte bestätigte Snapshot und keine Live-Aktivität.",
-  "codingWorkbench.activity.status.ended":
-    "Lauf beendet. Die endgültige bestätigte Aktivität wird angezeigt.",
-  "codingWorkbench.activity.status.unavailable":
-    "Die geschützte Aktivitätsprojektion ist nicht verfügbar. Inhaltsfreie Runtime-Ereignisse bleiben sichtbar.",
-  "codingWorkbench.activity.status.disconnected":
-    "Die Live-Aktivitätsverbindung wurde geschlossen. Zuvor bestätigte Inhalte werden nicht als live dargestellt.",
-  "codingWorkbench.activity.status.offline":
-    "Der Aktivitätsstrom ist offline. Zuvor bestätigte Inhalte werden nicht als live dargestellt.",
-  "codingWorkbench.activity.status.error":
-    "Der Aktivitätsstrom konnte nicht gelesen werden. Zuvor bestätigte Inhalte werden nicht als live dargestellt.",
+  "codingWorkbench.activity.status.idle": "Noch kein Lauf gestartet.",
+  "codingWorkbench.activity.status.loading": "Aktivität wird verbunden…",
+  "codingWorkbench.activity.status.live": "Live.",
+  "codingWorkbench.activity.status.paused": "Pausiert.",
+  "codingWorkbench.activity.status.recovery": "Eingriff erforderlich.",
+  "codingWorkbench.activity.status.ended": "Lauf beendet.",
+  "codingWorkbench.activity.status.unavailable": "Aktivität nicht verbunden.",
+  "codingWorkbench.activity.status.disconnected": "Verbindung getrennt.",
+  "codingWorkbench.activity.status.offline": "Aktivität offline.",
+  "codingWorkbench.activity.status.error": "Aktivität nicht verfügbar.",
   "codingWorkbench.activity.retry": "Aktivität erneut verbinden",
-  "codingWorkbench.activity.truncated":
-    "Ältere oder zu große Aktivität wurde aus diesem begrenzten Transkript ausgelassen.",
-  "codingWorkbench.activity.dropped":
-    "{count} Aktivitätsaktualisierung(en) konnten nicht projiziert werden.",
+  "codingWorkbench.activity.truncated": "Aktivität gekürzt.",
+  "codingWorkbench.activity.dropped": "{count} Aktualisierung(en) ausgelassen.",
   "codingWorkbench.activity.truncationMark": "Ausgabe gekürzt",
   "codingWorkbench.activity.role.user": "Du",
   "codingWorkbench.activity.role.assistant": "Coding-Agent",
@@ -242,28 +252,6 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.controls.resumeMode.label": "Autonomie beim Fortsetzen",
   "codingWorkbench.controls.resumeMode.help":
     "Setze den Lauf mit dem serverbestätigten aktuellen oder einem strengeren Modus fort. Eine Erweiterung ist nicht verfügbar.",
-  "codingWorkbench.result.eyebrow": "Runtime-Ergebnis",
-  "codingWorkbench.result.title": "Inhaltsfreie Prozesszusammenfassung",
-  "codingWorkbench.result.help":
-    "Gespeichert werden nur begrenzte Zähler, Kürzungsmarkierungen und SHA-256-Digests. Prozessausgaben werden hier nie angezeigt oder gespeichert.",
-  "codingWorkbench.result.facts": "Fakten zum Runtime-Ergebnis",
-  "codingWorkbench.result.status": "Status",
-  "codingWorkbench.result.status.cancelled": "Abgebrochen",
-  "codingWorkbench.result.status.failed": "Fehlgeschlagen",
-  "codingWorkbench.result.status.signalled": "Durch Signal beendet",
-  "codingWorkbench.result.status.succeeded": "Erfolgreich",
-  "codingWorkbench.result.exitCode": "Exit-Code",
-  "codingWorkbench.result.noExitCode": "Nicht verfügbar",
-  "codingWorkbench.result.output.bytes": "Bytes der Standardausgabe",
-  "codingWorkbench.result.output.lines": "Zeilen der Standardausgabe",
-  "codingWorkbench.result.output.digest": "SHA-256 der Standardausgabe",
-  "codingWorkbench.result.output.truncated": "Zähler der Standardausgabe gekürzt",
-  "codingWorkbench.result.error.bytes": "Bytes der Fehlerausgabe",
-  "codingWorkbench.result.error.lines": "Zeilen der Fehlerausgabe",
-  "codingWorkbench.result.error.digest": "SHA-256 der Fehlerausgabe",
-  "codingWorkbench.result.error.truncated": "Zähler der Fehlerausgabe gekürzt",
-  "codingWorkbench.result.yes": "Ja",
-  "codingWorkbench.result.no": "Nein",
   "codingWorkbench.approval.eyebrow": "Genehmigung erforderlich",
   "codingWorkbench.approval.title": "Begrenzte Aktion prüfen",
   "codingWorkbench.approval.facts": "Genehmigungsdetails",

@@ -13,7 +13,12 @@ import {
   isGitCommitChangeSummary,
   isGitCommitIntentAnalysis,
   isGitCommitQualityWarningCode,
+  suggestGitCommitMessage,
 } from "./git-commit-intent.js";
+import {
+  KEIKO_DEFAULT_COMMIT_MESSAGE_POLICY,
+  REPOSITORY_NATIVE_COMMIT_MESSAGE_POLICY,
+} from "./git-commit-policy.js";
 import type { GitCommitChangeSummary, GitCommitQualityWarningCode } from "./git-commit-intent.js";
 
 function summary(over: Partial<GitCommitChangeSummary> = {}): GitCommitChangeSummary {
@@ -147,6 +152,74 @@ describe("analyzeGitCommitIntent suggestions (deterministic)", () => {
       message: "added docs",
     };
     expect(analyzeGitCommitIntent(input)).toEqual(analyzeGitCommitIntent(input));
+  });
+});
+
+describe("suggestGitCommitMessage", () => {
+  it("uses the actual staged-change intent and returns a policy-valid subject", () => {
+    const changeSummary = summary({ areas: ["docs"] });
+    const intent = analyzeGitCommitIntent({ summary: changeSummary });
+    const draft = suggestGitCommitMessage(
+      intent,
+      KEIKO_DEFAULT_COMMIT_MESSAGE_POLICY,
+      changeSummary,
+    );
+
+    expect(draft).toBe(
+      [
+        "docs: update staged changes",
+        "",
+        "Update 1 staged file in docs.",
+        "Keep the commit limited to the staged selection.",
+      ].join("\n"),
+    );
+  });
+
+  it("uses the repository-native message shape when conventional commits are disabled", () => {
+    const intent = analyzeGitCommitIntent({ summary: summary() });
+
+    expect(
+      suggestGitCommitMessage(intent, REPOSITORY_NATIVE_COMMIT_MESSAGE_POLICY, summary()),
+    ).toBe(
+      [
+        "Update staged changes",
+        "",
+        "Update 1 staged file in keiko-ui.",
+        "Keep the commit limited to the staged selection.",
+      ].join("\n"),
+    );
+  });
+
+  it("describes mixed staged selections without using diff contents", () => {
+    const changeSummary = summary({
+      stagedFileCount: 3,
+      areaCount: 3,
+      areas: ["docs", "packages"],
+      touchesTests: true,
+    });
+    const intent = analyzeGitCommitIntent({ summary: changeSummary });
+
+    expect(
+      suggestGitCommitMessage(intent, KEIKO_DEFAULT_COMMIT_MESSAGE_POLICY, changeSummary),
+    ).toBe(
+      [
+        "chore: update staged changes",
+        "",
+        "Update 3 staged files across 3 areas, including docs, packages.",
+        "Keep the commit limited to the staged selection.",
+        "Includes test-related changes.",
+      ].join("\n"),
+    );
+  });
+
+  it("does not fabricate policy-required user data", () => {
+    const intent = analyzeGitCommitIntent({ summary: summary() });
+    const policy = {
+      ...KEIKO_DEFAULT_COMMIT_MESSAGE_POLICY,
+      requireIssueKey: { enabled: true, pattern: "[A-Z]+-[0-9]+" },
+    };
+
+    expect(suggestGitCommitMessage(intent, policy)).toBeUndefined();
   });
 });
 

@@ -2,6 +2,7 @@ import { isCodeTaskChildRunId, isCodeTaskSkillId } from "./code-task-auxiliary.j
 import { isCodingWorkbenchEvidenceSafeText } from "./coding-workbench-evidence.js";
 import { validateStrictUtcInstant } from "./coding-workbench-runtime-api-validation.js";
 import { isVerificationKind } from "./editor-verification.js";
+import { MODEL_REASONING_EFFORTS } from "./gateway.js";
 import {
   CODING_WORKBENCH_ACTION_CLASSES,
   CODING_WORKBENCH_APPROVAL_RISKS,
@@ -246,7 +247,7 @@ function validateModelProfile(value: unknown, path: string, errors: string[]): v
   }
   validateAllowedKeys(
     value,
-    ["profileId", "source", "supportsStreaming", "supportsToolCalling"],
+    ["profileId", "source", "supportsStreaming", "supportsToolCalling", "reasoningEffort"],
     path,
     errors,
   );
@@ -259,6 +260,12 @@ function validateModelProfile(value: unknown, path: string, errors: string[]): v
   }
   if (typeof value.supportsToolCalling !== "boolean") {
     errors.push(`${path}.supportsToolCalling must be a boolean`);
+  }
+  if (
+    value.reasoningEffort !== undefined &&
+    !isOneOf(value.reasoningEffort, MODEL_REASONING_EFFORTS)
+  ) {
+    errors.push(`${path}.reasoningEffort is invalid`);
   }
 }
 

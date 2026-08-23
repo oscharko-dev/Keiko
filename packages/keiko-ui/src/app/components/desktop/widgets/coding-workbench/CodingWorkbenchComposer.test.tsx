@@ -1,7 +1,10 @@
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { CodingWorkbenchRuntimeStateName } from "@oscharko-dev/keiko-contracts";
+import type {
+  CodingWorkbenchRuntimeStateName,
+  ModelCapability,
+} from "@oscharko-dev/keiko-contracts";
 
 import { TaskStartSection, type TaskComposerActions } from "./CodingWorkbenchSections";
 
@@ -9,10 +12,31 @@ function composerActions(): TaskComposerActions {
   return { onStart: vi.fn(), onPause: vi.fn(), onResume: vi.fn(), onSend: vi.fn() };
 }
 
+const CODING_MODEL: ModelCapability = {
+  id: "gpt-5.4",
+  kind: "chat",
+  contextWindow: 128_000,
+  maxOutputTokens: 16_384,
+  toolCalling: true,
+  structuredOutput: true,
+  streaming: true,
+  supportsImageInput: false,
+  supportsDocumentInput: false,
+  workflowEligible: true,
+  costClass: "medium",
+  latencyClass: "standard",
+  throughputHint: "standard",
+  preferredUseCases: ["Coding"],
+  knownLimitations: [],
+  reasoningEfforts: ["low", "medium", "high"],
+};
+
 function renderComposer(
   runState: CodingWorkbenchRuntimeStateName,
   actions: TaskComposerActions,
   taskIntent = "Investigate the failing test",
+  onReasoningEffortChange = vi.fn(),
+  onOpenGit = vi.fn(),
 ): void {
   render(
     <TaskStartSection
@@ -24,11 +48,39 @@ function renderComposer(
       runState={runState}
       mutationPending={false}
       startBusy={false}
+      repositoryLabel="Keiko"
+      branchLabel="dev"
+      onOpenGit={onOpenGit}
+      autonomyMode="supervised-coding"
+      autonomyLabel="Supervised workspace"
+      requestedMode="supervised-coding"
+      runtimePreference="managed-gateway"
+      configurationLocked={runState !== "idle"}
+      onRequestedModeChange={vi.fn()}
+      onRuntimePreferenceChange={vi.fn()}
+      models={[CODING_MODEL]}
+      selectedModelId={CODING_MODEL.id}
+      reasoningEffort={null}
+      onSelectedModelChange={vi.fn()}
+      onReasoningEffortChange={onReasoningEffortChange}
     />,
   );
 }
 
 describe("Coding Workbench composer", () => {
+  it("opens Git from the active repository and branch controls", async () => {
+    const user = userEvent.setup();
+    const onOpenGit = vi.fn();
+    renderComposer("idle", composerActions(), undefined, undefined, onOpenGit);
+
+    const context = screen.getByLabelText("Coding context");
+    await user.click(within(context).getByRole("button", { name: "Manage repository Keiko" }));
+    await user.click(within(context).getByRole("button", { name: "Manage branch dev" }));
+
+    expect(onOpenGit).toHaveBeenCalledTimes(2);
+    expect(within(context).getByText("MemoriaViva")).toBeInTheDocument();
+  });
+
   afterEach(() => cleanup());
 
   it("shows Start while idle and calls the start handler", async () => {
@@ -65,5 +117,17 @@ describe("Coding Workbench composer", () => {
       "aria-disabled",
       "true",
     );
+  });
+
+  it("offers only the reasoning levels declared by the selected model", async () => {
+    const user = userEvent.setup();
+    const selectReasoningEffort = vi.fn();
+    renderComposer("idle", composerActions(), "Investigate", selectReasoningEffort);
+
+    await user.click(screen.getByRole("combobox", { name: "Reasoning effort" }));
+    await user.click(screen.getByRole("option", { name: "High" }));
+
+    expect(selectReasoningEffort).toHaveBeenCalledWith("high");
+    expect(screen.queryByRole("option", { name: "Extra high" })).toBeNull();
   });
 });

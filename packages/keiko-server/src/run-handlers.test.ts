@@ -153,6 +153,7 @@ const TEST_APP_SESSION: AppSession = {
 function testAppSessionChannel(paired: boolean): CodingAppSessionChannel {
   return {
     pair: () => ({ paired: false }),
+    ensureLocalSession: () => ({ issued: false }),
     snapshot: () => contentFreeCodingAppSessionChannelSnapshot(),
     rotate: () => ({ rotated: false }),
     signOut: () => undefined,

@@ -1,6 +1,11 @@
 import type { CodexRuntimeControl } from "./codexRuntimeComposition.js";
 import type { OpenCodeRunPort } from "./opencodeRuntimeComposition.js";
 import type { CodingRuntimeManager, CodingRuntimeStartResult } from "./codingRuntimeManager.js";
+import {
+  contentFreeErrorClass,
+  emitServerDiagnostic,
+  type ServerDiagnosticSink,
+} from "../diagnostics-log.js";
 import type {
   CodingRuntimeTaskDispatchResult,
   CodingRuntimeTaskDispatchRequest,
@@ -437,9 +442,10 @@ function pollDelay(signal: AbortSignal): Promise<void> {
 
 export function createProductionRuntimeTaskDispatcher(
   runs: ReadonlyMap<string, ProductionRuntimeRunRecord>,
+  diagnostics?: ServerDiagnosticSink | undefined,
 ): CodingRuntimeTaskDispatcher {
   return {
-    dispatch: (request) => dispatchRuntimeTask(runs, request),
+    dispatch: (request) => dispatchRuntimeTask(runs, request, diagnostics),
     abort: (request) => abortRuntimeTask(runs, request),
   };
 }
@@ -447,38 +453,88 @@ export function createProductionRuntimeTaskDispatcher(
 async function dispatchRuntimeTask(
   runs: ReadonlyMap<string, ProductionRuntimeRunRecord>,
   request: CodingRuntimeTaskDispatchRequest,
+  diagnostics: ServerDiagnosticSink | undefined,
 ): Promise<CodingRuntimeTaskDispatchResult> {
   const record = runs.get(request.runId);
-  if (record === undefined || record.controller.signal.aborted) return { ok: false };
+  if (record === undefined) return rejectedDispatch(diagnostics, request.runId, "no-record");
+  if (record.controller.signal.aborted)
+    return rejectedDispatch(diagnostics, request.runId, "aborted");
   const reservation = record.operationGuard.reserve(request);
-  if (reservation === undefined) return { ok: false };
+  if (reservation === undefined)
+    return rejectedDispatch(diagnostics, request.runId, "no-reservation");
   try {
     if (!(await record.turnPort.submitTurn(request.runId, request.taskIntent))) {
       reservation.release();
-      return { ok: false };
+      return rejectedDispatch(diagnostics, request.runId, "adapter-rejected");
     }
-    if (!reservation.commit()) return { ok: false };
-  } catch {
+    if (!reservation.commit()) {
+      return rejectedDispatch(diagnostics, request.runId, "commit-rejected");
+    }
+  } catch (error) {
     reservation.release();
+    recordRuntimeDispatchFailure(diagnostics, request.runId, "exception", error);
     return { ok: false };
   }
-  return { ok: true, completion: terminalCompletion(record, request.runId) };
+  return { ok: true, completion: terminalCompletion(record, request.runId, diagnostics) };
+}
+
+function rejectedDispatch(
+  diagnostics: ServerDiagnosticSink | undefined,
+  runId: string,
+  reason: RuntimeDispatchFailureReason,
+): CodingRuntimeTaskDispatchResult {
+  recordRuntimeDispatchFailure(diagnostics, runId, reason);
+  return { ok: false };
 }
 
 async function terminalCompletion(
   record: ProductionRuntimeRunRecord,
   runId: string,
+  diagnostics: ServerDiagnosticSink | undefined,
 ): Promise<CodingRuntimeTaskOutcome> {
   try {
     const outcome = await record.turnPort.waitForTerminal(runId, record.controller.signal);
+    if (outcome === "failed") recordRuntimeDispatchFailure(diagnostics, runId, "terminal-failed");
     if (outcome !== "succeeded" || record.waitForPendingMutations === undefined) return outcome;
     const settled = await record.waitForPendingMutations(record.controller.signal);
     if (settled) return "succeeded";
+    if (!record.controller.signal.aborted) {
+      recordRuntimeDispatchFailure(diagnostics, runId, "pending-mutations-unsettled");
+    }
     return record.controller.signal.aborted ? "cancelled" : "failed";
-  } catch {
+  } catch (error) {
+    recordRuntimeDispatchFailure(diagnostics, runId, "terminal-exception", error);
     // Consumers treat an unprovable terminal outcome as a failed turn; never leave it unhandled.
     return "failed";
   }
+}
+
+type RuntimeDispatchFailureReason =
+  | "aborted"
+  | "adapter-rejected"
+  | "commit-rejected"
+  | "exception"
+  | "no-record"
+  | "no-reservation"
+  | "pending-mutations-unsettled"
+  | "terminal-exception"
+  | "terminal-failed";
+
+function recordRuntimeDispatchFailure(
+  diagnostics: ServerDiagnosticSink | undefined,
+  runId: string,
+  reason: RuntimeDispatchFailureReason,
+  error?: unknown,
+): void {
+  emitServerDiagnostic(diagnostics, {
+    correlationId: runId,
+    timestamp: new Date().toISOString(),
+    operation: "coding-runtime.task-dispatch",
+    source: "runtime.dispatcher",
+    errorClass: error === undefined ? "RuntimeTaskDispatchFailure" : contentFreeErrorClass(error),
+    message: "runtime-turn-failed",
+    code: `stage=dispatch:reason=${reason}`,
+  });
 }
 
 async function abortRuntimeTask(

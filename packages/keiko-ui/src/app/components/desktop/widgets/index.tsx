@@ -213,6 +213,15 @@ function str(cfg: Record<string, unknown>, key: string): string | undefined {
   return typeof v === "string" ? v : undefined;
 }
 
+const CODING_REPOSITORY_BINDING = "coding-repository";
+
+function isCodingRepositoryBinding(
+  cfg: Record<string, unknown>,
+  configuredRoot: string | undefined,
+): boolean {
+  return configuredRoot !== undefined && str(cfg, "rootBinding") === CODING_REPOSITORY_BINDING;
+}
+
 // Issue #446 (ADR-0090) — the single root-resolution choke point for bound surfaces. When a task
 // workspace is active, its managed-worktree root OVERRIDES the window's per-window cfg root and the
 // selected Workbench root and linked-window fallback, so a switch atomically retargets every
@@ -235,18 +244,24 @@ function BoundRootSurface({
   surface,
   onSelect,
   children,
+  honorConfiguredRoot = false,
 }: {
   readonly ctx: WindowRenderContext;
   readonly configuredRoot: string | undefined;
   readonly surface: BoundRootSurfaceType;
   readonly onSelect: (root: string) => void;
   readonly children: (root: string | undefined) => ReactNode;
+  readonly honorConfiguredRoot?: boolean;
 }): ReactNode {
+  const fallbackRoot =
+    honorConfiguredRoot && configuredRoot !== undefined
+      ? configuredRoot
+      : resolveBoundRoot(ctx, configuredRoot);
   return (
     <BoundRootTarget
-      fallbackRoot={resolveBoundRoot(ctx, configuredRoot)}
+      fallbackRoot={fallbackRoot}
       configuredRoot={configuredRoot}
-      lockedToActiveRoot={ctx.activeBinding !== null}
+      lockedToActiveRoot={!honorConfiguredRoot && ctx.activeBinding !== null}
       surface={surface}
       onSelect={onSelect}
     >
@@ -580,7 +595,20 @@ registerWindowRender("runtime", (cfg, ctx) => {
   );
 });
 registerWindowRender("coding", (_cfg, ctx) => (
-  <CodingWorkbenchWindow selectedRoot={ctx.selectedRoot ?? undefined} />
+  <CodingWorkbenchWindow
+    selectedRoot={ctx.selectedRoot ?? undefined}
+    onOpenGit={({ root, binding }) => {
+      ctx.openWindow(
+        "governedGit",
+        root === null
+          ? undefined
+          : {
+              projectPath: root,
+              ...(binding === "repository" ? { rootBinding: CODING_REPOSITORY_BINDING } : {}),
+            },
+      );
+    }}
+  />
 ));
 // Epic #1571, Issue #1574 — Git client window shell. The active project root acts as the projectId.
 // Read it from cfg (projectPath / workspaceRoot, like terminal/agents) and fall back to a linked
@@ -592,6 +620,9 @@ registerWindowRender("governedGit", (cfg, ctx) => {
   // governed PR/merge windows run scoped to the active worktree and can never execute against the
   // previous workspace after a switch.
   const configuredRoot = str(cfg, "projectPath") ?? str(cfg, "workspaceRoot");
+  // A dormant Coding Workbench has an explicit repository selection. Preserve that selection when
+  // it opens Git; active coding runs omit this marker and remain bound to their task worktree.
+  const honorConfiguredRoot = isCodingRepositoryBinding(cfg, configuredRoot);
   const initialCommit = gitObjectId(str(cfg, "commit"));
   const initialPath = str(cfg, "path");
   return (
@@ -600,6 +631,7 @@ registerWindowRender("governedGit", (cfg, ctx) => {
       configuredRoot={configuredRoot}
       surface="governedGit"
       onSelect={(root) => ctx.updateCfg({ projectPath: root })}
+      honorConfiguredRoot={honorConfiguredRoot}
     >
       {(projectId) => (
         <GitClientWindow
@@ -609,7 +641,6 @@ registerWindowRender("governedGit", (cfg, ctx) => {
           initialCommit={initialCommit}
           onOpenFiles={(root: string) => ctx.openWindow("files", { root })}
           onOpenEditor={(root: string) => ctx.openWindow("editor", { root })}
-          onOpenEditorFile={ctx.openEditorFile}
           updateCfg={(patch: Record<string, WindowCfgValue>) => ctx.updateCfg(patch)}
         />
       )}

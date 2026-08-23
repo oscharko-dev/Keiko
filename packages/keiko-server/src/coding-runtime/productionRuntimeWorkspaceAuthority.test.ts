@@ -115,6 +115,39 @@ describe("production runtime workspace authority", () => {
         source: "chatgpt-codex-subscription-profile",
       },
     });
+
+    const managedContext = resolveProductionRuntimeContext(
+      {
+        workspaceLifecycle: {
+          getActive: () => ({ instance, binding: { activeRoot: workspace } }),
+        } as never,
+        managedTaskWorkspaceRoot: managed,
+        deploymentCeiling: "supervised-coding",
+        readWorkspaceHead: () => "1".repeat(40),
+        resolveManagedModelProfile: (modelId, reasoningEffort) => ({
+          profileId: modelId ?? "default-model",
+          ...(reasoningEffort === undefined ? {} : { reasoningEffort }),
+        }),
+      },
+      {
+        runId: "run-managed",
+        requestId: "request-managed",
+        taskIntent: "private task",
+        requestedMode: "supervised-coding",
+        runtimePreference: "managed-gateway",
+        modelId: "qwen-coder",
+        reasoningEffort: "high",
+        workspaceId: "workspace-private",
+        workspaceRoot: workspace,
+        serverPrincipal: "operator-private",
+      },
+    );
+
+    expect(managedContext.modelProfile).toMatchObject({
+      profileId: "qwen-coder",
+      source: "keiko-model-gateway",
+      reasoningEffort: "high",
+    });
   });
 
   it("denies non-canonical and mismatched request, binding, and instance roots", () => {

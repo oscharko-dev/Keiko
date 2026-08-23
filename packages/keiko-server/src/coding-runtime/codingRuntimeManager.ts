@@ -1939,7 +1939,10 @@ async function openCodeHandshakeFailure(
     const outcome = await Promise.race([handshake, cancellation]);
     if (outcome.kind === "ok") return undefined;
     if (outcome.kind === "aborted") return failure("start-aborted", true);
-    if (outcome.kind === "timeout") return failure("start-timeout", true);
+    if (outcome.kind === "timeout") {
+      emitOpenCodeHandshakeDiagnostic(diagnostics, request.runId, "timeout", now);
+      return failure("start-timeout", true);
+    }
     emitOpenCodeHandshakeDiagnostic(diagnostics, request.runId, outcome.reason, now);
     return failure(openCodeHandshakeFailureCode(outcome.reason), false);
   } finally {
@@ -1989,6 +1992,7 @@ const OPEN_CODE_HANDSHAKE_PHASES: ReadonlySet<string> = new Set([
   "preparation-missing",
   "readiness-failed",
   "handshake-rejected",
+  "timeout",
 ]);
 
 function openCodeHandshakeFailureCode(reason: string): CodingRuntimeFailureCode {

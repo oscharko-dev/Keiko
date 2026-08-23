@@ -483,6 +483,48 @@ describe("CodingRuntimeAuthorityService", () => {
     );
   });
 
+  it("keeps projected authority evidence separate from private runtime model binding", () => {
+    const capabilities = createInMemoryRuntimeCapabilityStore({ nowMs: () => Date.parse(NOW) });
+    const authority = new CodingRuntimeAuthorityService(
+      new EditorAgentAuthorityRegistry(),
+      () => "run-1",
+      () => "nonce-1",
+      undefined,
+      capabilities,
+    );
+    const trusted = context();
+    const minted = mint(authority);
+    if (!minted.ok) throw new Error("expected mint");
+    const projectedProfileId = projectRuntimeAuthorityValue(
+      "profile",
+      trusted.modelProfile.profileId,
+    );
+
+    expect(
+      capabilities.resolve({
+        capability: minted.modelGatewayCapability,
+        ...capabilityBinding(minted.authorityRef),
+        audience: "model-gateway",
+        nowMs: Date.parse(NOW),
+      }),
+    ).toMatchObject({
+      ok: true,
+      binding: { modelProfileId: trusted.modelProfile.profileId },
+    });
+    expect(
+      capabilities.resolve({
+        capability: minted.modelGatewayCapability,
+        ...capabilityBinding(minted.authorityRef),
+        audience: "model-gateway",
+        modelProfileId: projectedProfileId,
+        nowMs: Date.parse(NOW),
+      }),
+    ).toEqual({ ok: false, reason: "invalid" });
+
+    const delegated = resolve(authority, minted.authorityRef, facts(), "private-model-binding");
+    expect(JSON.stringify(delegated)).not.toContain(trusted.modelProfile.profileId);
+  });
+
   it("mints distinct run-scoped gateway and tool capabilities that cannot cross audiences", () => {
     const capabilities = createInMemoryRuntimeCapabilityStore();
     const authority = new CodingRuntimeAuthorityService(
@@ -1004,6 +1046,7 @@ function capabilityBinding(reference: {
     workspaceRootDigest: createHash("sha256").update(ROOT).digest("hex"),
     envelopeDigest: reference.envelopeDigest,
     adapterKind: "model-gateway-sidecar" as const,
+    modelProfileId: context().modelProfile.profileId,
     audience: "tool-facade",
     expiresAtMs: Date.parse(context().expiresAt),
   };

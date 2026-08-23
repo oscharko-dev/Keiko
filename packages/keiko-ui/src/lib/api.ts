@@ -2830,6 +2830,7 @@ export interface GitDeliveryCommitPreviewResponse {
   readonly preflightFindingCodes: readonly string[];
   readonly signatureRequirement: "required" | "not-required" | "unavailable";
   readonly policyOutcome: string;
+  readonly suggestedMessage?: string;
   readonly policyBlockReason?: string;
 }
 

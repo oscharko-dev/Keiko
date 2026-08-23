@@ -45,6 +45,7 @@ const CODING_RUNTIME_READINESS_PATH =
 const RUNNER_STOP_TIMEOUT_MS = 40_000;
 const gatewayConfigSeedCandidates = [
   join(repoRoot, ".keiko", "ui", "keiko.config.json"),
+  join(repoRoot, "keiko.config.json"),
   join(repoRoot, "sandbox", ".keiko", "ui", "keiko.config.json"),
 ];
 

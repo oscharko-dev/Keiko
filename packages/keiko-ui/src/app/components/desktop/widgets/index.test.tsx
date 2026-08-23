@@ -107,7 +107,7 @@ vi.mock("../ChatWindow", () => ({
       readonly workflowId: string;
       readonly taskType?: string | undefined;
     }) => void;
-  }) => (
+  }): ReactNode => (
     <div data-testid="chat-window">
       {`${String(mini)}:${linkedRoot ?? ""}:${(linkedRoots ?? []).join("|")}:${String(openEditorFile?.({ root: "/repo", path: "src/app.ts" }).ok ?? false)}`}
       <button
@@ -437,7 +437,37 @@ vi.mock("./cards/RuntimeHubWidget", () => ({
   ),
 }));
 vi.mock("./coding-workbench/CodingWorkbenchWindow", () => ({
-  CodingWorkbenchWindow: () => <div data-testid="coding-workbench-window">Coding Workbench</div>,
+  CodingWorkbenchWindow: ({
+    selectedRoot,
+    onOpenGit,
+  }: {
+    readonly selectedRoot?: string;
+    readonly onOpenGit?: (target: {
+      readonly root: string | null;
+      readonly binding: "repository" | "task-workspace";
+    }) => void;
+  }) => (
+    <div data-testid="coding-workbench-window">
+      Coding Workbench
+      <button
+        type="button"
+        onClick={() => onOpenGit?.({ root: selectedRoot ?? null, binding: "repository" })}
+      >
+        Open coding repository Git
+      </button>
+      <button
+        type="button"
+        onClick={() => onOpenGit?.({ root: "/worktrees/active-task", binding: "task-workspace" })}
+      >
+        Open coding task Git
+      </button>
+    </div>
+  ),
+}));
+vi.mock("./cards/git-client/GitClientWindow", () => ({
+  GitClientWindow: ({ projectId }: { readonly projectId?: string }): ReactNode => (
+    <div data-testid="git-client-window">{projectId ?? "unbound"}</div>
+  ),
 }));
 vi.mock("./cards/ReviewWidget", () => ({
   ReviewWidget: ({
@@ -1599,6 +1629,32 @@ describe("active workspace binding override (Issue #446)", () => {
     render(<>{WIN_TYPES.editor.render({}, boundCtx(null, selectedRoot))}</>);
 
     expect(await screen.findByTestId("editor-widget")).toHaveTextContent(`${selectedRoot}:`);
+  });
+
+  it("preserves an explicit Coding Workbench repository selection for Git", async () => {
+    const ctx = boundCtx("/worktrees/active-task", "/repos/keiko");
+    const view = render(<>{WIN_TYPES.coding.render({}, ctx)}</>);
+
+    fireEvent.click(await screen.findByRole("button", { name: "Open coding repository Git" }));
+    expect(ctx.openWindow).toHaveBeenCalledWith("governedGit", {
+      projectPath: "/repos/keiko",
+      rootBinding: "coding-repository",
+    });
+
+    view.rerender(
+      <>
+        {WIN_TYPES.governedGit.render(
+          { projectPath: "/repos/keiko", rootBinding: "coding-repository" },
+          ctx,
+        )}
+      </>,
+    );
+    expect(await screen.findByTestId("git-client-window")).toHaveTextContent("/repos/keiko");
+
+    view.rerender(<>{WIN_TYPES.governedGit.render({ projectPath: "/repos/keiko" }, ctx)}</>);
+    expect(await screen.findByTestId("git-client-window")).toHaveTextContent(
+      "/worktrees/active-task",
+    );
   });
 
   it("files renderer uses the active root, overriding the per-window cfg root", async () => {

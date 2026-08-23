@@ -4,11 +4,11 @@ import { useReducer, useRef, useState } from "react";
 import type {
   CodingWorkbenchMode,
   CodingWorkbenchRuntimePreference,
-  CodingWorkbenchRuntimeStateName,
 } from "@oscharko-dev/keiko-contracts";
 import type { ActiveWorkspaceApi } from "@/app/components/desktop/context/ActiveWorkspaceContext";
 import {
   createInitialCodingWorkbenchRuntimeState,
+  STREAMABLE_CODING_WORKBENCH_RUNTIME_STATES,
   type CodingWorkbenchRuntimeState,
 } from "./coding-workbench-live-state";
 import {
@@ -44,17 +44,9 @@ export interface UseCodingWorkbenchRuntimeResult {
   readonly actions: CodingWorkbenchRuntimeActions;
 }
 
-export const STREAMABLE_RUNTIME_STATES: ReadonlySet<CodingWorkbenchRuntimeStateName> = new Set([
-  "starting",
-  "ready",
-  "running",
-  // #2386: a paused run stays live — the stream must survive Pause, or the follow-up's
-  // task-submitted event (and any later question signal) never reaches the timeline.
-  "paused",
-  "awaiting-approval",
-  "stopping",
-  "recovery-required",
-]);
+// #2386: a paused run stays live — the stream must survive Pause, or the follow-up's
+// task-submitted event (and any later question signal) never reaches the timeline.
+export const STREAMABLE_RUNTIME_STATES = STREAMABLE_CODING_WORKBENCH_RUNTIME_STATES;
 
 export function useCodingWorkbenchRuntime(
   input: UseCodingWorkbenchRuntimeInput,

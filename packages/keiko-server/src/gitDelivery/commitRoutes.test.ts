@@ -393,7 +393,7 @@ describe("commit preview — read-only verification context (AC3)", () => {
         deps(managed.override),
       );
       expect(res.status).toBe(200);
-      expect((res.body as GitDeliveryCommitPreviewBody).policyOutcome).toBe("constrained");
+      expect((res.body as GitDeliveryCommitPreviewBody).policyOutcome).toBe("allowed");
     } finally {
       managed.cleanup();
     }
@@ -412,7 +412,73 @@ describe("commit preview — read-only verification context (AC3)", () => {
     expect(body.intent.warnings).toContain("wip-marker");
     expect(body.intent.isWip).toBe(true);
     expect(body.messageValidation.ok).toBe(false);
-    expect(body.policyOutcome).toBe("constrained");
+    expect(body.policyOutcome).toBe("allowed");
+    expect(body.suggestedMessage).toBe(
+      [
+        "fix(ui): improve ui workflow",
+        "",
+        "Improve the staged UI files and documentation.",
+        "Keep the commit limited to the selected staged files.",
+      ].join("\n"),
+    );
+  });
+
+  it("builds a concrete commit draft from the selected staged files", async () => {
+    const handler = createHandleCommitPreview({
+      execution: seams({
+        stagedPathsReader: () =>
+          Promise.resolve([
+            "packages/keiko-contracts/src/coding-workbench-runtime-api.ts",
+            "packages/keiko-contracts/src/gateway.ts",
+            "packages/keiko-contracts/src/git-commit-intent.ts",
+            "packages/keiko-model-gateway/src/config.ts",
+          ]),
+      }),
+    });
+    const res = await handler(
+      ctxFor(PREVIEW, { schemaVersion: "1", projectId, messageDraft: "" }),
+      deps(),
+    );
+    const body = res.body as GitDeliveryCommitPreviewBody;
+    expect(body.suggestedMessage).toBe(
+      [
+        "feat(coding): align runtime model settings",
+        "",
+        [
+          "Align the staged coding workbench runtime API, gateway contracts,",
+          "commit intent heuristics, and model gateway configuration.",
+        ].join(" "),
+        "Keep the commit limited to the selected staged files.",
+      ].join("\n"),
+    );
+  });
+
+  it("records a content-free preview summary and never the drafted message", async () => {
+    const events: { readonly extra?: Readonly<Record<string, unknown>> }[] = [];
+    const handler = createHandleCommitPreview({
+      execution: seams(),
+      activityLog: { write: (event): void => events.push(event) },
+    });
+
+    await handler(
+      { ...ctxFor(PREVIEW, { schemaVersion: "1", projectId }), correlationId: "commit-preview-1" },
+      deps(),
+    );
+
+    expect(events).toContainEqual({
+      category: "diagnostic",
+      op: "git.commit.preview.completed",
+      correlationId: "commit-preview-1",
+      status: 200,
+      extra: {
+        stagedFileCount: 2,
+        areaCount: 2,
+        touchesTests: false,
+        draftSuggested: true,
+        policyOutcome: "allowed",
+      },
+    });
+    expect(JSON.stringify(events)).not.toContain("update staged changes");
   });
 
   it("discloses a trusted signed-commit requirement before commit", async () => {
@@ -508,6 +574,19 @@ describe("commit preview — read-only verification context (AC3)", () => {
     );
     expect(execute.body).toMatchObject({ status: "succeeded" });
     expect(adapter.calls()).toEqual(["commit"]);
+  });
+
+  it("does not offer a draft when no changes are staged", async () => {
+    const handler = createHandleCommitPreview({
+      execution: seams({
+        snapshotReader: () => Promise.resolve({ ...SNAPSHOT, stagedFileCount: 0 }),
+        stagedPathsReader: () => Promise.resolve([]),
+      }),
+    });
+
+    const res = await handler(ctxFor(PREVIEW, { schemaVersion: "1", projectId }), deps());
+
+    expect((res.body as GitDeliveryCommitPreviewBody).suggestedMessage).toBeUndefined();
   });
 });
 
@@ -620,6 +699,24 @@ describe("commit execute — message policy gate + no-bypass (AC2/AC4/AC5)", () 
     expect((res.body as { preflightFindingCodes?: string[] }).preflightFindingCodes).toContain(
       "nothing-staged-to-commit",
     );
+    expect(adapter.calls()).toEqual([]);
+  });
+
+  it("blocks direct commits to dev under the default local policy", async () => {
+    const adapter = recordingAdapter();
+    const handler = createHandleCommitExecute({
+      execution: seams({
+        adapterFactory: () => adapter.adapter,
+        snapshotReader: () => Promise.resolve({ ...SNAPSHOT, currentBranchName: "dev" }),
+        policyPacks: undefined,
+      }),
+    });
+    const res = await handler(
+      ctxFor(EXECUTE, { schemaVersion: "1", projectId, message: "chore: update staged changes" }),
+      deps(),
+    );
+    expect((res.body as { status: string }).status).toBe("blocked");
+    expect((res.body as { blockReason?: string }).blockReason).toBe("protected-branch");
     expect(adapter.calls()).toEqual([]);
   });
 
@@ -744,6 +841,27 @@ describe("commit execute — message policy gate + no-bypass (AC2/AC4/AC5)", () 
 });
 
 describe("commit preview — default draft, policy block, and worktree failure", () => {
+  it("reports a protected-branch block for a default dev-branch commit preview", async () => {
+    const handler = createHandleCommitPreview({
+      execution: seams({
+        snapshotReader: () => Promise.resolve({ ...SNAPSHOT, currentBranchName: "dev" }),
+        policyPacks: undefined,
+      }),
+    });
+    const res = await handler(
+      ctxFor(PREVIEW, {
+        schemaVersion: "1",
+        projectId,
+        messageDraft: "chore: update staged changes",
+      }),
+      deps(),
+    );
+    const body = res.body as GitDeliveryCommitPreviewBody;
+    expect(body.policyOutcome).toBe("blocked");
+    expect(body.policyBlockReason).toBe("protected-branch");
+    expect(body.messageValidation.ok).toBe(true);
+  });
+
   it("defaults an absent messageDraft to empty and reports a policy block reason", async () => {
     const handler = createHandleCommitPreview({
       execution: seams({ policyPacks: { repoPack: BLOCK_ALL_PACK } }),

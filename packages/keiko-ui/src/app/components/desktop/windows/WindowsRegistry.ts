@@ -149,7 +149,9 @@ export type WindowCfgByType = {
     readonly state?: string;
     readonly taskRef?: string;
   };
-  readonly governedGit: ProjectRootWindowCfg;
+  readonly governedGit: ProjectRootWindowCfg & {
+    readonly rootBinding?: "coding-repository";
+  };
   readonly governedPullRequest: ProjectRootWindowCfg & { readonly headBranchName?: string };
   readonly governedMerge: ProjectRootWindowCfg & { readonly headBranchName?: string };
   readonly qiRun: WindowCfgRecord & { readonly runId?: string };
@@ -869,10 +871,10 @@ const PARTIAL: Readonly<Record<WindowType, PartialDef>> = {
     icon: "git",
     accent: true,
     descKey: "window.type.governedGit.desc",
-    w: 520,
-    h: 640,
-    min: { w: 360, h: 420 },
-    tiny: { w: 300, h: 240 },
+    w: 960,
+    h: 680,
+    min: { w: 720, h: 460 },
+    tiny: { w: 360, h: 260 },
     tool: true,
     singleton: true,
     config: [{ key: "projectPath", labelKey: "window.field.projectPath", type: "text" }],

@@ -4,6 +4,7 @@ import type {
   CodingWorkbenchModelSource,
   CodingWorkbenchRuntimePreference,
   CodingWorkbenchRuntimeSource,
+  ModelReasoningEffort,
 } from "@oscharko-dev/keiko-contracts";
 
 const DIGEST = /^[a-f0-9]{64}$/u;
@@ -13,6 +14,8 @@ export interface CodingRuntimeStartConfirmationFacts {
   readonly taskIntent: string;
   readonly requestedMode: CodingWorkbenchMode;
   readonly runtimePreference?: CodingWorkbenchRuntimePreference | undefined;
+  readonly modelId?: string | undefined;
+  readonly reasoningEffort?: ModelReasoningEffort | undefined;
   readonly operatorId: string;
   readonly taskId: string;
   readonly projectId: string;
@@ -61,6 +64,8 @@ export function codingRuntimeStartConfirmationClaim(
           taskIntent: facts.taskIntent,
           requestedMode: facts.requestedMode,
           runtimePreference: facts.runtimePreference,
+          modelId: facts.modelId,
+          reasoningEffort: facts.reasoningEffort,
         },
         operator: facts.operatorId,
         task: facts.taskId,

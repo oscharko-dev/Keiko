@@ -29,6 +29,7 @@ import type {
 import {
   UNVERIFIED_GATEWAY,
   deriveContextProfileFromCapability,
+  isCodingWorkbenchModel,
   type CodingWorkbenchModelSource,
   type CodingWorkbenchSidecarGatewayProjection,
   type CodingWorkbenchSidecarGatewayResult,
@@ -72,6 +73,8 @@ export interface ResolveCodingSafeSidecarGatewayProfileOptions {
    * `unverified` — the fail-closed state — and never implies a healthy provider.
    */
   readonly gatewayVerification?: GatewayVerificationState | undefined;
+  /** Concrete provider model selected for this run. Omitted keeps deterministic default election. */
+  readonly modelId?: string | undefined;
 }
 
 function matches(capability: ModelCapability, query: ModelSelectionQuery): boolean {
@@ -203,38 +206,17 @@ function codingSidecarProjection(
   };
 }
 
-function normalizePreferredUseCase(useCase: string): string {
-  return useCase.trim().toLowerCase().replace(/\s+/g, "-");
-}
-
-function hasCodingPreferredUseCase(capability: ModelCapability): boolean {
-  return capability.preferredUseCases.some((useCase) => {
-    const normalized = normalizePreferredUseCase(useCase);
-    return (
-      normalized === "coding" ||
-      normalized === "code" ||
-      normalized === "software-development" ||
-      normalized === "code-review" ||
-      normalized.includes("coding")
-    );
-  });
-}
-
-function isCodingSafeSidecarCapability(capability: ModelCapability): boolean {
-  return (
-    capability.kind === "chat" &&
-    capability.toolCalling &&
-    capability.workflowEligible &&
-    hasCodingPreferredUseCase(capability)
-  );
-}
-
 function selectCodingSafeSidecarCapability(
   config: ConfiguredCapabilitySource,
+  modelId?: string,
 ): ModelCapability | undefined {
+  if (modelId !== undefined) {
+    const selected = listConfiguredCapabilities(config).find((item) => item.id === modelId);
+    return selected !== undefined && isCodingWorkbenchModel(selected) ? selected : undefined;
+  }
   let best: ModelCapability | undefined;
   for (const capability of listConfiguredCapabilities(config)) {
-    if (!isCodingSafeSidecarCapability(capability)) {
+    if (!isCodingWorkbenchModel(capability)) {
       continue;
     }
     if (best === undefined || COST_RANK[capability.costClass] < COST_RANK[best.costClass]) {
@@ -295,7 +277,7 @@ export function resolveCodingSafeSidecarGatewayProfile(
   if (config === undefined || config.providers.length === 0) {
     return codingSidecarUnavailable("missing-config");
   }
-  const selected = selectCodingSafeSidecarCapability(config);
+  const selected = selectCodingSafeSidecarCapability(config, options.modelId);
   if (selected === undefined) {
     return codingSidecarUnavailable(unavailableReasonForSidecarConfig(config));
   }
