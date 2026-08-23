@@ -48,7 +48,7 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.questions.unpaired":
     "Dieses Fenster ist nicht für Frageinhalte gekoppelt. Starten Sie Keiko über den Launcher neu, um eine neue App-Sitzung zu koppeln.",
   "codingWorkbench.pairing.unpaired":
-    "Browserfenster nicht gekoppelt — öffnen Sie Keiko über den Launcher, um Coding-Läufe zu ermöglichen.",
+    "Browserfenster nicht gekoppelt — öffnen Sie Keiko über den Launcher, um Coding-Läufe zu ermöglichen: `keiko start --open` bei einer installierten Keiko-Version, `npm run dev:start -- --open` in einem Entwicklungs-Checkout. Ein von Hand geöffneter Tab kann nicht gekoppelt werden.",
   "codingWorkbench.questions.answerFailed":
     "Ihre Antwort wurde nicht angenommen ({code}). Die Frage ist weiterhin offen — senden Sie sie erneut.",
   "codingWorkbench.questions.rejectFailed":
