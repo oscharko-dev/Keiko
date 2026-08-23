@@ -46,7 +46,7 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.questions.unpaired":
     "This window is not paired for question content. Restart Keiko from its launcher to pair a new app session.",
   "codingWorkbench.pairing.unpaired":
-    "Browser window not paired — open Keiko through the launcher to enable coding runs.",
+    "Browser window not paired — open Keiko through the launcher to enable coding runs: `keiko start --open` for an installed Keiko, `npm run dev:start -- --open` in a development checkout. A tab opened by hand cannot be paired.",
   "codingWorkbench.questions.answerFailed":
     "Your answer was not accepted ({code}). The question is still open — send it again.",
   "codingWorkbench.questions.rejectFailed":
