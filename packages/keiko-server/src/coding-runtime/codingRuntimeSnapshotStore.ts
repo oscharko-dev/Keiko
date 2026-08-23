@@ -83,7 +83,9 @@ export interface CodingRuntimeSnapshotStore {
     transition: CodingRuntimeSnapshotTransition,
   ) => CodingRuntimeSnapshot;
   readonly get: (runId: string) => CodingRuntimeSnapshot | undefined;
+  /** Non-terminal rows, most recently updated first (`run_id` breaks ties), bounded by `limit`. */
   readonly listRecentActive: (limit?: number) => readonly CodingRuntimeSnapshot[];
+  /** Every row, most recently updated first (`run_id` breaks ties), bounded by `limit`. */
   readonly listAll: (limit?: number) => readonly CodingRuntimeSnapshot[];
   /** Startup-only containment: marks persisted active rows recoverable; never replays them. */
   readonly markNonterminalRecoveryRequired: (updatedAt: string) => readonly string[];

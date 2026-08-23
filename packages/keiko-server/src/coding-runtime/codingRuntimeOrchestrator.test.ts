@@ -38,8 +38,49 @@ function rowFor(
   return row;
 }
 
-function fixture(activityProjection?: CodingSafeActivityProjection, clock?: () => Date) {
-  const rows = new Map<string, CodingRuntimeSnapshot>();
+function settledRow(runId: string, updatedAt: string, revision: number): CodingRuntimeSnapshot {
+  return {
+    schemaVersion: "1",
+    runId,
+    state: "succeeded",
+    revision,
+    requestedMode: "supervised-coding",
+    runtimeSource: "keiko-sidecar",
+    modelSource: "keiko-model-gateway",
+    createdAt: "2026-01-01T00:00:00.000Z",
+    updatedAt,
+    terminalAt: updatedAt,
+    taskDigest: "t".repeat(64),
+    workspaceDigest: "w".repeat(64),
+    operatorDigest: "o".repeat(64),
+    authorityDigest: "u".repeat(64),
+    bindingDigest: "d".repeat(64),
+    provenanceDigest: "p".repeat(64),
+    toolCallCount: 0,
+    patchByteCount: 0,
+    modelRequestCount: 0,
+    result: {
+      status: "succeeded",
+      exitCode: null,
+      output: { byteCount: 0, lineCount: 0, sha256: "a".repeat(64), truncated: false },
+      error: { byteCount: 0, lineCount: 0, sha256: "b".repeat(64), truncated: false },
+    },
+  };
+}
+
+function orderedRows(rows: Map<string, CodingRuntimeSnapshot>): CodingRuntimeSnapshot[] {
+  return [...rows.values()].sort(
+    (left, right) =>
+      right.updatedAt.localeCompare(left.updatedAt) || left.runId.localeCompare(right.runId),
+  );
+}
+
+function fixture(
+  activityProjection?: CodingSafeActivityProjection,
+  clock?: () => Date,
+  seededRows: readonly CodingRuntimeSnapshot[] = [],
+) {
+  const rows = new Map<string, CodingRuntimeSnapshot>(seededRows.map((row) => [row.runId, row]));
   const listPrunableSettled = vi.fn((): readonly string[] => []);
   const deletePruned = vi.fn();
   const store: CodingRuntimeSnapshotStore = {
@@ -51,8 +92,14 @@ function fixture(activityProjection?: CodingSafeActivityProjection, clock?: () =
       return next;
     },
     get: (id) => rows.get(id),
-    listRecentActive: () => [...rows.values()].filter((r) => !r.terminalAt),
-    listAll: () => [...rows.values()],
+    // Mirrors the production SQL contract (`ORDER BY updated_at DESC, run_id LIMIT ?`). A fixture
+    // that ignored the ordering or the limit could not detect a restoration picking the wrong
+    // terminal row — the exact "simplified past the violation it guards" trap AGENTS.md §7 names.
+    listRecentActive: (limit = 100) =>
+      orderedRows(rows)
+        .filter((r) => !r.terminalAt)
+        .slice(0, limit),
+    listAll: (limit = 100) => orderedRows(rows).slice(0, limit),
     markNonterminalRecoveryRequired: (at) => {
       const changed: string[] = [];
       for (const [id, row] of rows)
@@ -275,6 +322,64 @@ describe("CodingRuntimeOrchestrator", () => {
       state: "succeeded",
       runId: "run-1",
       result: { status: "succeeded" },
+    });
+  });
+
+  // The constructor and the startup reconcile restore the settled pointer from the durable ledger.
+  // Without a reload test they can regress silently: the in-memory cases below never exercise them
+  // (CodeRabbit on #3270). The ledger holds three terminal rows here, so the assertion also proves
+  // the most recently updated one is chosen rather than an arbitrary row.
+  it("restores the most recently settled run from the ledger on construction", () => {
+    const older = settledRow("run-older", "2026-01-01T00:01:00.000Z", 3);
+    const newest = settledRow("run-newest", "2026-01-01T00:03:00.000Z", 7);
+    const middle = settledRow("run-middle", "2026-01-01T00:02:00.000Z", 5);
+    const f = fixture(undefined, undefined, [older, newest, middle]);
+
+    expect(f.orchestrator.status()).toEqual({
+      schemaVersion: "1",
+      state: "succeeded",
+      revision: 7,
+      updatedAt: "2026-01-01T00:03:00.000Z",
+      runId: "run-newest",
+      requestedMode: "supervised-coding",
+      runtimeSource: "keiko-sidecar",
+      modelSource: "keiko-model-gateway",
+      result: {
+        status: "succeeded",
+        exitCode: null,
+        output: { byteCount: 0, lineCount: 0, sha256: "a".repeat(64), truncated: false },
+        error: { byteCount: 0, lineCount: 0, sha256: "b".repeat(64), truncated: false },
+      },
+    });
+  });
+
+  it("reports no run when the ledger holds nothing", () => {
+    const f = fixture();
+
+    expect(f.orchestrator.status()).toEqual({
+      schemaVersion: "1",
+      state: "idle",
+      revision: 0,
+      updatedAt: "2026-01-01T00:00:00.000Z",
+    });
+  });
+
+  // A row still awaiting recovery is NOT settled: it stays the active run, and the settled pointer
+  // must not claim it (a recovery-required row keeps `terminalAt` unset).
+  it("prefers an unsettled recovery row over a settled one", () => {
+    const settled = settledRow("run-settled", "2026-01-01T00:03:00.000Z", 4);
+    const recovering: CodingRuntimeSnapshot = {
+      ...settledRow("run-recovering", "2026-01-01T00:01:00.000Z", 2),
+      state: "recovery-required",
+      failureCode: "recovery-required",
+      terminalAt: undefined,
+      result: undefined,
+    };
+    const f = fixture(undefined, undefined, [settled, recovering]);
+
+    expect(f.orchestrator.status()).toMatchObject({
+      state: "recovery-required",
+      runId: "run-recovering",
     });
   });
 
