@@ -41,7 +41,7 @@ export function useFollowNewest(
     const element = scrollRef.current;
     if (element === null) return;
     stickRef.current =
-      element.scrollHeight - element.scrollTop - element.clientHeight < NEAR_BOTTOM_PX;
+      element.scrollHeight - element.scrollTop - element.clientHeight <= NEAR_BOTTOM_PX;
   }, [scrollRef]);
 
   const resume = useCallback((): void => {

@@ -56,6 +56,24 @@ describe("useFollowNewest", () => {
     expect(region.scrollTop).toBe(1720);
   });
 
+  it("still follows at exactly the near-bottom boundary", () => {
+    const region = fakeRegion(1720, 292);
+    const { result, rerender } = renderFollow(region);
+    region.scrollTop = 1720 - 292 - 64;
+    result.current.onScroll();
+    rerender({ key: "b" });
+    expect(region.scrollTop).toBe(1720);
+  });
+
+  it("stops following one pixel beyond the near-bottom boundary", () => {
+    const region = fakeRegion(1720, 292);
+    const { result, rerender } = renderFollow(region);
+    region.scrollTop = 1720 - 292 - 65;
+    result.current.onScroll();
+    rerender({ key: "b" });
+    expect(region.scrollTop).toBe(1720 - 292 - 65);
+  });
+
   it("resumes on request regardless of the current position", () => {
     const region = fakeRegion(1720, 292);
     const { result } = renderFollow(region);
