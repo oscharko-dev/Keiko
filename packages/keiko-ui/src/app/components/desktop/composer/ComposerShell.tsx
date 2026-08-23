@@ -36,7 +36,7 @@ export interface ComposerShellProps {
 }
 
 /** uiux-fix F009 C089 — grow with the content up to ~8–9 lines, then scroll. */
-export const COMPOSER_MAX_HEIGHT_PX = 220;
+const COMPOSER_MAX_HEIGHT_PX = 220;
 
 /**
  * Enter submits, Shift+Enter inserts a newline, and Enter during an IME composition (Japanese,
