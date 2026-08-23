@@ -32,13 +32,6 @@ Accepted; module location superseded by ADR-0019 (monorepo split — code now un
 > ever forwarded" and "no credential is available for exfiltration" statements below are therefore
 > to be read as scoped to the default profile and every lane except governed remote delivery.
 
-> **Amended 2026-08-23 by ADR-0174 (Coding Workbench north star).** D1's deny-by-default
-> `DEFAULT_COMMAND_RULES` allowlist below is unchanged and remains the harness/model-facing
-> baseline. ADR-0174 D3 adds a second, explicitly model-callable governed command tool
-> (`keiko_command`) whose per-mode rules are new `CommandRule` sets carried on the Authority
-> Envelope's `commandPolicy`, not a change to `DEFAULT_COMMAND_RULES` itself. This affects
-> Decision 2.
-
 ## Context
 
 Issue #6 delivers the layer that lets a language model touch a developer's repository through a
@@ -124,27 +117,6 @@ All spawns use `{ shell: false }` unconditionally. Args are passed as an array t
 
 The allowlist is configurable via `ToolHostConfig.commandRules` so operators can narrow it further
 without code changes. The defaults are the most permissive safe baseline.
-
-**Amendment (ADR-0174, 2026-08-23).** TARGET: a second, explicitly model-callable governed
-command tool (`keiko_command`, working name) is added alongside this allowlist, not in place of
-it. Its rules are mode-scoped `CommandRule` sets declared in `keiko-contracts` — Ask for approval:
-every command requires per-command approval; Supervised workspace: an allowlisted, vetted set
-seeded from the harness's read-only defaults plus verification/build commands; Full access:
-governed and broader, still deny-listed (no remote `git`/`gh`, no network by default, no
-destructive paths outside the workspace). Enforcement is the Authority Envelope's existing
-`commandPolicy` shape and `commandAllowed()` gate (`codingToolAuthorityPort.ts:387-397`), derived
-per `effectiveMode` instead of the hardcoded `mode: "deny"` it carries today
-(`productionRuntimeWorkspaceAuthority.ts:113-119`) — not a new policy engine. The `shell:false`
-no-shell spawn, PATH-resolved bare executables, env allowlist, ephemeral `HOME`, workspace-rooted
-cwd, and output-edge redaction documented in D1/D2/D5 above are reused unchanged for this second
-tool; nothing in this amendment weakens or duplicates the spawn boundary. This is explicitly the
-`CommandRule` lineage this ADR defines, not the closed-catalog, server-frozen-argv pattern used by
-the command runner (`docs/command-runner/security-notes.md`, Issue #1387) or by
-`ADR-0070`'s container task execution — `keiko_command` extends the rule-based allowlist shape one
-level, it does not become a third parallel "safe command execution" pattern. Current implementation
-is unchanged until roadmap Wave 2 lands
-(docs/coding-runtime/coding-workbench-north-star-roadmap.md); until then the recorded behaviour
-above remains the fail-closed implementation.
 
 ### D2 — Five documented, test-enforced sandbox dimensions
 

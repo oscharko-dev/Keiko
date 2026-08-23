@@ -5,14 +5,6 @@
 Accepted (Issue #2385, Epic #2384, 2026-07-16); capability-availability semantics clarified by
 Issue #2857 (2026-07-31).
 
-> **Amended 2026-08-23 by ADR-0174 (Coding Workbench north star).** ADR-0174 extends the D3
-> action-kind → resource-scope mapping with two additional entries for the coding-runtime authority
-> path: a governed command-execution tool classified like `verification-command` under
-> `workspace-contained` (escalating to `external-file`/`internet` by declared command risk), and the
-> delivery sub-kinds `commit`/`push`/`pull-request` (draft PR). The 48-cell matrix and its monotonic
-> invariant (D2) are unchanged; only D3's enumerated-consumer mapping widens. See
-> `docs/coding-runtime/coding-workbench-north-star-roadmap.md` §2 (S3) and Waves 2 and 4.
-
 ## Amends
 
 This decision amends [ADR-0124](ADR-0124-coding-autonomy-modes-and-sidecar-runtime-authority.md),
@@ -181,25 +173,6 @@ is:
 Every existing policy consumer named above must be enumerated and regression-tested in the
 implementing child (#2385) before merge; no surface may keep a local copy of the old matrix or
 introduce a Code-local parallel matrix.
-
-**Amendment (ADR-0174, 2026-08-23).** Target: item 3's action-kind → resource-scope mapping gains
-two entries beside `file-edit`/`verification-command`. A governed command-execution tool is
-classified like `verification-command` — `workspace-contained` at low/medium risk, escalating to
-`external-file` or `internet` resource scope when a command declares those effects — evaluated
-under the unchanged D2 matrix and its monotonic invariant. The delivery sub-kinds `commit`, `push`,
-and `pull-request` (draft PR) map to the `delivery` resource scope, stay `approval-required` in
-every mode column per D2, and (per Full access mode semantics recorded in ADR-0174) are satisfied
-once per run rather than gated per call. D2's capability-availability clarification (Issue #2857:
-a matrix disposition, `allowed` included, does not create the capability, mount an executor, or
-make a substrate available) is exactly why today's command-execution cells are fail-closed by
-absence rather than merely undecided: `commandPolicy` is minted `mode: "deny"` for every mode
-(`packages/keiko-server/src/coding-runtime/productionRuntimeWorkspaceAuthority.ts:113`), so
-`commandAllowed()` (`packages/keiko-server/src/coding-runtime/codingToolAuthorityPort.ts:387`)
-rejects every command regardless of the matrix cell. Filling that gap is the roadmap's job, not a
-matrix edit. Current implementation is unchanged until roadmap Wave 2 (governed command tool and
-per-mode command policy) and Wave 4 (delivery tools) land
-(docs/coding-runtime/coding-workbench-north-star-roadmap.md); until then the recorded behaviour
-above remains the fail-closed implementation.
 
 ### D4 — Canonical Code-task terminology register
 

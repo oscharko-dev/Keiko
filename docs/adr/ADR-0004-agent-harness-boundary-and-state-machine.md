@@ -6,16 +6,6 @@ Accepted
 
 Accepted; module-location details (the single-package `src/harness/` file map) superseded by ADR-0019 (Modular Package Architecture) — the harness now lives in `packages/keiko-harness/` with shared types extracted to `packages/keiko-contracts/src/harness.ts`. D1–D10's design decisions remain accurate and are actively cited by decision letter in current harness/workflows/contracts source comments.
 
-> **Amended 2026-08-23 by ADR-0174 (Coding Workbench north star).** D8's "exactly three closed task
-> types" is no longer closed: a fourth, open-ended `code-task` type is added whose state path loops
-> `model-call ⇄ tool-call` under budget limits instead of a fixed sequence. Alternative 1's blanket
-> rejection of model-driven/ReAct dispatch is narrowed — the harness still owns control flow, now
-> through typed tool calling rather than a fixed per-type path. The "three task types only" Negative
-> consequence, and its "customers who expect a fully autonomous agent will be disappointed" framing,
-> is withdrawn: the Keiko-owned engine built on this harness is the target engine (ADR-0174 Decision
-> 1), hosted in-process by the server coding runtime as an adapter kind. The eight hard limits and the
-> "model output is data, not instructions" invariant are unchanged and still bind the new task type.
-
 ## Context
 
 Keiko's core value proposition in a regulated banking and insurance environment is that every
@@ -226,19 +216,6 @@ state path through the state machine.
   `ToolPort` is not called. The harness enforces this by task-type routing in the loop, not by
   configuration.
 
-**Amendment (ADR-0174, 2026-08-23).** A fourth task type, `code-task`, is added alongside the three
-above. Target state: `intake → planning → context-selection → (model-call ⇄ tool-call)* → reporting →
-completed`, an open loop instead of a fixed sequence — the model may call tools any number of times
-in either order, bounded by the same `HarnessLimits` (`maxIterations`, `maxModelCalls`,
-`maxToolCalls`, `maxCommandExecutions`, `maxContextBytes`, `maxPatchBytes`, `maxWallTimeMs`,
-`maxFailureAttempts`) that already gate the three closed types — no ninth limit, no unlimited retry.
-A tool failure re-enters `model-call` as a `role:"tool"` observation instead of ending the run
-(compare D10's `HARNESS_TOOL_ERROR`, which today terminates); `allowsVerification` is wired so
-`code-task` gates verification the way the other types already gate tools and patches. Current
-implementation is unchanged until roadmap Wave 3 lands
-(docs/coding-runtime/coding-workbench-north-star-roadmap.md); until then the recorded behaviour
-above remains the fail-closed implementation.
-
 ### D9 — Typed session API on both CLI and SDK surfaces
 
 The session/run API is the public surface callers use to start a bounded task and observe events:
@@ -328,16 +305,6 @@ Harness-level failure categories (in `HarnessFailure.category`):
   the bounded scope. This is a feature, not a bug: bounded tasks are auditable; unbounded agents
   are not.
 
-**Amendment (ADR-0174, 2026-08-23).** This consequence is withdrawn, not narrowed: three task types
-is no longer the closure (see D8's amendment), and "customers who expect a fully autonomous agent
-will be disappointed" is no longer the target framing. Target state: the Keiko-owned engine built on
-this harness — the `code-task` type, hosted in-process by the server coding runtime as a second
-runtime adapter kind next to the existing bridge adapter — is the target engine (ADR-0174 Decision
-1), not a scope the product deliberately declines. Auditability is preserved by budget limits and
-typed observations, not by closing the task-type set. Current implementation is unchanged until
-roadmap Wave 3 lands (docs/coding-runtime/coding-workbench-north-star-roadmap.md); until then the
-recorded behaviour above remains the fail-closed implementation.
-
 ### Neutral
 
 - The harness is implemented under `src/harness/**` across ~12 files to respect the LOC limit.
@@ -369,17 +336,6 @@ output and routes to functions.
   owns control flow". Model-driven dispatch is appropriate for exploratory chatbots; it is
   incompatible with regulated, evidence-backed delivery. The state machine approach costs more
   upfront but is the only design that satisfies the auditability requirement.
-
-**Amendment (ADR-0174, 2026-08-23).** The blanket rejection of a model→tool→observe loop is
-withdrawn; the invariant it protected is not. Target state: the harness STILL owns control flow —
-structured, typed tool calling (the `keiko_*` tool vocabulary, D8's `code-task` type) lets the
-harness gate every model-call/tool-call transition against the same `HarnessLimits` and the same
-typed `ToolPort`/`ModelPort` boundary this ADR already establishes, so "the model told it to do
-that" remains unacceptable as an audit trail — no unstructured string-parsed dispatch is admitted.
-What changes is only that the loop's shape is open (bounded by budgets) rather than a fixed per-type
-state path. Current implementation is unchanged until roadmap Wave 3 lands
-(docs/coding-runtime/coding-workbench-north-star-roadmap.md); until then the recorded behaviour
-above remains the fail-closed implementation.
 
 ### Alternative 2: Async-iterable EventSink instead of callback
 

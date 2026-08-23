@@ -1,10 +1,5 @@
 # Coding Workbench Codex Subscription Profiles
 
-> **Retired (ADR-0174, 2026-08-23).** The subscription-profile model source described here is
-> retired for good; its code is removed in roadmap Wave 1.6
-> (docs/coding-runtime/coding-workbench-north-star-roadmap.md). This page is kept as a historical
-> record until that removal lands and will be deleted with it.
-
 Issue #1995 adds a dedicated ChatGPT/Codex subscription profile path for Coding Workbench. This
 path is intentionally separate from OpenAI Platform API-key access.
 
