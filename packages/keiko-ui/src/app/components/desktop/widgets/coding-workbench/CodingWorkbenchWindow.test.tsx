@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { axe } from "jest-axe";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -984,6 +984,131 @@ describe("CodingWorkbenchWindow", () => {
     expect(revoke).toBeEnabled();
     await user.click(revoke);
     expect(liveActions.revokeResearchGrant).toHaveBeenCalledWith(grant);
+  });
+});
+
+describe("CodingWorkbenchWindow live stream follows the newest activity", () => {
+  beforeEach(() => {
+    chatCatalogMock.activeProject = undefined;
+    chatCatalogMock.projects = [];
+    questionsHookMock.mockReturnValue(EMPTY_QUESTIONS);
+    approvalReviewHookMock.mockReturnValue({ status: "idle", review: null });
+    researchHookMock.mockReturnValue({ status: "idle", ask: null, grant: null });
+    editorBridgeHookMock.mockReturnValue({
+      pendingReview: null,
+      approve: vi.fn(),
+      deny: vi.fn(),
+      retry: vi.fn(),
+    });
+    autonomyHookMock.mockReturnValue({
+      requestedMode: "governed-assist",
+      effectiveMode: "governed-assist",
+      deploymentCeiling: "governed-assist",
+      pending: false,
+      error: null,
+      change: vi.fn(),
+    });
+  });
+
+  // Observed live on 2026-08-23: a run completed with a plan, thirteen tool calls and the final
+  // answer in the feed, yet the operator saw only the first three rows because the scroll region
+  // never moved to the newest activity. The feed was right; the view was stale.
+  it("scrolls the log region to the newest activity as the feed grows", () => {
+    const runningState = liveState({
+      canStart: false,
+      run: {
+        status: "ready",
+        error: null,
+        value: snapshot({ state: "running", runId: "run-1", revision: 2 }),
+      },
+      events: [event(1)],
+    });
+    activityHookMock.mockReturnValue({ ...IDLE_ACTIVITY, status: "live", feed: activityFeed() });
+    runtimeHookMock.mockReturnValue({ state: runningState, actions: actions() });
+    const view = render(<CodingWorkbenchWindow selectedRoot={undefined} />);
+    const log = screen.getByRole("log");
+    const scrollTop = { value: 0 };
+    Object.defineProperty(log, "scrollHeight", { configurable: true, get: () => 1720 });
+    Object.defineProperty(log, "clientHeight", { configurable: true, get: () => 292 });
+    Object.defineProperty(log, "scrollTop", {
+      configurable: true,
+      get: () => scrollTop.value,
+      set: (next: number) => {
+        scrollTop.value = next;
+      },
+    });
+
+    const grown = activityFeed();
+    activityHookMock.mockReturnValue({
+      ...IDLE_ACTIVITY,
+      status: "live",
+      feed: {
+        ...grown,
+        updatedAt: "2026-08-23T09:52:09.000Z",
+        turns: [
+          {
+            ...grown.turns[0]!,
+            messages: [
+              ...grown.turns[0]!.messages,
+              {
+                messageId: "message-2",
+                role: "assistant",
+                occurredAt: "2026-08-23T09:52:09.000Z",
+                segments: [
+                  {
+                    kind: "text",
+                    text: "The file is scripts/check-adr-index.mjs.",
+                    truncated: false,
+                  },
+                ],
+                truncated: false,
+              },
+            ],
+          },
+        ],
+      },
+    });
+    view.rerender(<CodingWorkbenchWindow selectedRoot={undefined} />);
+
+    expect(scrollTop.value).toBe(1720);
+  });
+
+  it("does not yank a reader who scrolled up into the history", () => {
+    const runningState = liveState({
+      canStart: false,
+      run: {
+        status: "ready",
+        error: null,
+        value: snapshot({ state: "running", runId: "run-1", revision: 2 }),
+      },
+      events: [event(1)],
+    });
+    activityHookMock.mockReturnValue({ ...IDLE_ACTIVITY, status: "live", feed: activityFeed() });
+    runtimeHookMock.mockReturnValue({ state: runningState, actions: actions() });
+    const view = render(<CodingWorkbenchWindow selectedRoot={undefined} />);
+    const log = screen.getByRole("log");
+    const scrollTop = { value: 0 };
+    Object.defineProperty(log, "scrollHeight", { configurable: true, get: () => 1720 });
+    Object.defineProperty(log, "clientHeight", { configurable: true, get: () => 292 });
+    Object.defineProperty(log, "scrollTop", {
+      configurable: true,
+      get: () => scrollTop.value,
+      set: (next: number) => {
+        scrollTop.value = next;
+      },
+    });
+    // The reader scrolls up into the history (far from the bottom) and the view learns about it.
+    scrollTop.value = 100;
+    fireEvent.scroll(log);
+
+    activityHookMock.mockReturnValue({
+      ...IDLE_ACTIVITY,
+      status: "live",
+      feed: { ...activityFeed(), updatedAt: "2026-08-23T09:52:09.000Z" },
+    });
+    view.rerender(<CodingWorkbenchWindow selectedRoot={undefined} />);
+
+    expect(scrollTop.value).toBe(100);
   });
 });
 

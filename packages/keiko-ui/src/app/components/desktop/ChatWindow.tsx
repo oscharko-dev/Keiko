@@ -126,6 +126,7 @@ import { fetchFilesSearch, updateChat } from "@/lib/api";
 import type { ChatEditorApplyOutcome } from "@/lib/chat-editor-apply";
 import { copyTextToClipboard } from "@/lib/clipboard";
 import { useTranslate, type I18nTranslate } from "@/lib/i18n";
+import { useFollowNewest } from "@/lib/useFollowNewest";
 import { presentChatSessionError, useOptionalWidgetTranslate } from "@/lib/optional-widget-i18n";
 import { formatUserError } from "./format-error";
 import {
@@ -4864,15 +4865,14 @@ function composerFooterEffectiveFlags(
 // track whether the reader is near the bottom, and drop a stale pending question-jump once they
 // scroll back near it themselves.
 function handleChatWindowLogScroll(
-  el: HTMLDivElement,
+  onLogScroll: () => void,
   stickRef: CurrentRef<boolean>,
   pendingQuestionScrollRef: CurrentRef<string | null>,
   focusedQuestionId: string | null,
   setFocusedQuestionId: (id: string | null) => void,
 ): void {
-  const nearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 64;
-  stickRef.current = nearBottom;
-  if (nearBottom && focusedQuestionId !== null) {
+  onLogScroll();
+  if (stickRef.current && focusedQuestionId !== null) {
     pendingQuestionScrollRef.current = null;
     setFocusedQuestionId(null);
   }
@@ -4967,6 +4967,7 @@ function EmptyOrNoChatState({
 function ChatWindowLog({
   scrollRef,
   stickRef,
+  onLogScroll,
   pendingQuestionScrollRef,
   focusedQuestionId,
   setFocusedQuestionId,
@@ -4996,6 +4997,7 @@ function ChatWindowLog({
 }: {
   readonly scrollRef: RefObject<HTMLDivElement | null>;
   readonly stickRef: CurrentRef<boolean>;
+  readonly onLogScroll: () => void;
   readonly pendingQuestionScrollRef: CurrentRef<string | null>;
   readonly focusedQuestionId: string | null;
   readonly setFocusedQuestionId: (id: string | null) => void;
@@ -5032,9 +5034,9 @@ function ChatWindowLog({
       aria-label={t("chat.conversation")}
       // eslint-disable-next-line jsx-a11y/no-noninteractive-tabindex -- scrollable log region must be keyboard-focusable (axe scrollable-region-focusable)
       tabIndex={0}
-      onScroll={(event) => {
+      onScroll={() => {
         handleChatWindowLogScroll(
-          event.currentTarget,
+          onLogScroll,
           stickRef,
           pendingQuestionScrollRef,
           focusedQuestionId,
@@ -5356,8 +5358,9 @@ export function ChatWindow({
   // uiux-fix F009 C090 — stick-to-bottom autoscroll: follow new messages AND
   // streaming content growth (lastContent dependency), but only while the
   // reader is near the bottom; never yank someone who scrolled up into the
-  // history. Starting an own send (sending false→true) always jumps down.
-  const stickRef = useRef(true);
+  // history. Starting an own send (sending false→true) always jumps down. The
+  // behaviour lives in the shared useFollowNewest hook (also the Coding
+  // Workbench session stream) — one implementation, AGENTS.md §5.
   const prevSendingRef = useRef(false);
   const lastVisible = lastVisibleChatMessage(
     hasLiveStreamingAssistant,
@@ -5365,6 +5368,21 @@ export function ChatWindow({
     visible,
   );
   const lastContent = lastVisible === undefined ? "" : lastVisible.content;
+  // GEN-PERF-CHAT-013 — the growth key changes on every coalesced stream flush
+  // (lastContent per chunk commit); the hook keeps at most ONE pending frame,
+  // and a scheduled frame reads the live refs, so it covers newer chunks too.
+  const {
+    stickRef,
+    onScroll: onLogScroll,
+    resume: followNewest,
+  } = useFollowNewest(
+    scrollRef,
+    `${String(visible.length)}:${sending ? "1" : "0"}:${String(lastContent.length)}`,
+  );
+  useEffect(() => {
+    if (sending && !prevSendingRef.current) followNewest();
+    prevSendingRef.current = sending;
+  }, [followNewest, sending]);
   const effectiveMinimal = minimalChat;
   const { effectiveCompact, effectiveControlsNarrow, effectiveBarCompact } =
     composerFooterEffectiveFlags(
@@ -5411,16 +5429,19 @@ export function ChatWindow({
     },
     [],
   );
-  const scrollToQuestion = useCallback((messageId: string): void => {
-    setFocusedQuestionId(messageId);
-    const node = questionAnchorsRef.current.get(messageId);
-    if (node === undefined) {
-      pendingQuestionScrollRef.current = messageId;
-      return;
-    }
-    stickRef.current = false;
-    node.scrollIntoView({ block: "start", behavior: "smooth" });
-  }, []);
+  const scrollToQuestion = useCallback(
+    (messageId: string): void => {
+      setFocusedQuestionId(messageId);
+      const node = questionAnchorsRef.current.get(messageId);
+      if (node === undefined) {
+        pendingQuestionScrollRef.current = messageId;
+        return;
+      }
+      stickRef.current = false;
+      node.scrollIntoView({ block: "start", behavior: "smooth" });
+    },
+    [stickRef],
+  );
   useEffect(() => {
     const pending = pendingQuestionScrollRef.current;
     if (pending === null) return;
@@ -5429,7 +5450,7 @@ export function ChatWindow({
     pendingQuestionScrollRef.current = null;
     stickRef.current = false;
     node.scrollIntoView({ block: "start", behavior: "smooth" });
-  }, [focusedQuestionId, visible.length]);
+  }, [focusedQuestionId, stickRef, visible.length]);
   useEffect(() => {
     if (!sending) return;
     pendingQuestionScrollRef.current = null;
@@ -5439,29 +5460,6 @@ export function ChatWindow({
     pendingQuestionScrollRef.current = null;
     setFocusedQuestionId(null);
   }, [activeChat?.id]);
-  // GEN-PERF-CHAT-013 — this effect re-runs on every coalesced stream flush
-  // (lastContent changes per chunk commit); the old cleanup cancelled and
-  // rescheduled a fresh animation frame each time, doubling the per-chunk rAF
-  // churn on top of the content-flush rAF. Keep at most ONE pending frame: an
-  // already-scheduled frame reads the live refs, so it covers newer chunks too.
-  const stickFrameRef = useRef<number | null>(null);
-  useEffect(() => {
-    if (sending && !prevSendingRef.current) stickRef.current = true;
-    prevSendingRef.current = sending;
-    if (!stickRef.current) return;
-    if (stickFrameRef.current !== null) return;
-    stickFrameRef.current = window.requestAnimationFrame(() => {
-      stickFrameRef.current = null;
-      const el = scrollRef.current;
-      if (el !== null && stickRef.current) el.scrollTop = el.scrollHeight;
-    });
-  }, [visible.length, sending, lastContent]);
-  useEffect(
-    () => () => {
-      if (stickFrameRef.current !== null) window.cancelAnimationFrame(stickFrameRef.current);
-    },
-    [],
-  );
 
   return (
     <div
@@ -5489,6 +5487,7 @@ export function ChatWindow({
       <ChatWindowLog
         scrollRef={scrollRef}
         stickRef={stickRef}
+        onLogScroll={onLogScroll}
         pendingQuestionScrollRef={pendingQuestionScrollRef}
         focusedQuestionId={focusedQuestionId}
         setFocusedQuestionId={setFocusedQuestionId}
