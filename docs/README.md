@@ -349,6 +349,10 @@ Rules:
 
 Primary docs:
 
+- [coding-runtime/coding-workbench-north-star-roadmap.md](coding-runtime/coding-workbench-north-star-roadmap.md)
+  — the plan of record (waves, seams, journeys, gates); supersedes the wave plan of epic #2473
+- [coding-runtime/coding-workbench-baseline-2026-08.md](coding-runtime/coding-workbench-baseline-2026-08.md)
+  — the verified starting point (capability inventory, parity table, decision-record conflicts)
 - [coding-runtime/dev-lane.md](coding-runtime/dev-lane.md)
 - [coding-runtime/milestone-1-real-binary-validation.md](coding-runtime/milestone-1-real-binary-validation.md)
 - [coding-runtime/research-content-threat-model.md](coding-runtime/research-content-threat-model.md)
@@ -364,6 +368,8 @@ Rules:
   checkout marker. It never substitutes for packaged qualification (ADR-0140).
 - Packaged installs are release-qualified only for the fixed `windows-x64`, `macos-arm64`, and
   `macos-x64` ZIP targets; unsupported targets fail closed (ADR-0163).
+- The Coding Workbench north star, engine strategy, governed command execution, visibility
+  principle and parity program are recorded in ADR-0174; the roadmap above is the plan of record.
 
 ### Historical records, planning baselines, and delivery evidence
 

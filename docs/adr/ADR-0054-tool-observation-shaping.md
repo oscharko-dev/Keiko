@@ -2,7 +2,12 @@
 
 ## Status
 
-Proposed
+Accepted
+
+> Status corrected 2026-08-23 (ADR-0174 Wave 0): the design below shipped and is live
+> (allocator/compaction/shapers wired in `keiko-harness`, `keiko-server` and `keiko-workflows`;
+> CI-gated by `check:context-quality`). D7/D10 remainders (evidence persistence, UI disclosure) stay
+> open as recorded.
 
 ## Version
 

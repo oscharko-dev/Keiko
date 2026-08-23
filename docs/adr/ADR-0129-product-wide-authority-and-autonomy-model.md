@@ -9,6 +9,15 @@ Accepted (2026-07-10; renumbered to 0129 on 2026-07-11 during epic integration).
 > shared policy matrix is replaced by ADR-0138's total monotonic matrix. The three machine values,
 > product-wide adoption rule, hard denials, and delivery contract remain unchanged.
 
+> **Amended 2026-08-23 by ADR-0174 (Coding Workbench north star).**
+> ADR-0174 D6 splits D2a's flat "remote delivery execute" admission into commit /
+> push-to-own-branch / draft-pull-request — governed by the existing ADR-0080-0086 default policy
+> packs, satisfied once per run at envelope confirmation in Full access — versus merge, which stays
+> approval-gated in every mode under ADR-0087, unchanged; this reverses the direction of the
+> 2026-08-15 KEIKO-0227 correction below for a narrower, different reason. ADR-0174 D11 also
+> formally closes D5's parked contract-module rename: "Coding Workbench" stays the flagship product
+> identity.
+
 This record was first drafted as ADR-0127. During integration of Epic #2238, `origin/dev` had
 advanced to include ADR-0127 (editor Git reads, diff rendering, and conflict-editing semantics,
 Epic #2093) and the connector ADR-0128 from this epic. To avoid a number collision it was renumbered
@@ -87,6 +96,21 @@ approval-gated merge). The facade's admission now derives from the same shared
 `CODING_WORKBENCH_MODE_POLICIES` table D4 and ADR-0087 already govern, rather than an independently
 maintained one; the text above reflects that convergence rather than the threshold it replaced.
 
+**Amendment (ADR-0174 D6, 2026-08-23).** ADR-0174 D6 splits this paragraph's flat "delivery
+execute" admission into three separate actions: commit, push-to-own-branch, and draft-pull-request
+— each governed by the existing ADR-0080-0086 default policy packs and by
+`GitDeliveryApprovalRequirement` (`packages/keiko-contracts/src/git-delivery.ts:235`), satisfied
+ONCE per run at envelope confirmation in Full access (`autonomous-delivery`); Supervised workspace
+asks before push/PR; Ask for approval asks before commit — versus merge, which stays
+approval-gated in every mode, ADR-0087 unchanged. This explicitly reverses the direction of the
+KEIKO-0227 correction above, for a different and narrower reason: it mirrors the pattern ADR-0135
+already grants outward from Keiko's own `dev` delivery to end-user Full-access repositories, and it
+does NOT reopen the question KEIKO-0227 settled — the facade must never admit delivery on mode
+alone; the run-bound confirmation minted once at envelope-confirm time is the authority, not the
+mode label. Current implementation is unchanged until roadmap Wave 4 lands
+(docs/coding-runtime/coding-workbench-north-star-roadmap.md); until then the recorded behaviour
+above remains the fail-closed implementation.
+
 The facade grants no shell, provider, credential, or Git execution authority of its own. An
 admitted request still traverses the existing Git read or governed-delivery route and remains
 subject to its Authority Envelope, policy pack, approval, preflight, workspace containment, and
@@ -119,6 +143,11 @@ The machine vocabulary keeps its current home and module naming in
 a workload-neutral module is a cosmetic follow-up that requires its own ADR because it changes the
 public package surface; until then, non-coding surfaces import the existing vocabulary. Semantics
 defined here and in ADR-0124/ADR-0125 take precedence over module naming.
+
+**Amendment (ADR-0174 D11, 2026-08-23).** The parked rename above is formally closed, not merely
+deferred: "Coding Workbench" stays the flagship product identity (Decision 9), so the shared
+`coding-workbench` contract module keeps its current name and home permanently. No follow-up
+rehoming ADR is expected.
 
 ### D6 — Forward rule for decision records
 

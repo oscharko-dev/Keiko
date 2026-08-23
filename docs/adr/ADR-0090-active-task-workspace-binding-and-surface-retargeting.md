@@ -4,6 +4,13 @@
 
 Accepted
 
+> **Amended 2026-08-23 by ADR-0174 (Coding Workbench north star).**
+> ADR-0174 D9 replaces D1's server-persisted singleton active-workspace pointer with a set of
+> active pointers, one per open Code task, so that parallel Code-task runs in separate worktrees
+> become possible (roadmap Wave 5). The per-pointer `WorkspaceBinding` invariant and the existing
+> ADR-0088-0093 provisioning, health, drift, lock, and cleanup machinery are reused unchanged; only
+> the singleton `CHECK` constraint and the D4 `activeRoot` choke point are affected.
+
 ## Context
 
 Epic #443 builds task-scoped isolated workspaces. ADR-0088 (#444) shipped the
@@ -81,6 +88,15 @@ at most one row (a fixed primary key). It stores only the `workspace_id` of the
 active instance plus audit timestamps; the `WorkspaceBinding` is **derived** from
 the referenced `WorkspaceInstance` (`buildBinding`), never persisted as a second
 copy. The pointer persists across reload. Clearing the pointer = **unbound mode**.
+
+**Amendment (ADR-0174 D9, 2026-08-23).** ADR-0174 D9 replaces the singleton pointer above with a
+set of active pointers, one per open Code task, keeping the per-pointer `WorkspaceBinding`
+invariant (`gitDeliveryRoot === activeRoot === editorProjectRoot`) unchanged and reusing the
+existing ADR-0088-0093 provisioning, health, drift, lock, and cleanup machinery unmodified; only
+the "exactly one active row" `CHECK` constraint and its consuming D4 `ctx.activeRoot` choke point
+change, bounded by an explicit concurrency ceiling (roadmap child 5.4). Current implementation is
+unchanged until roadmap Wave 5 lands (docs/coding-runtime/coding-workbench-north-star-roadmap.md);
+until then the recorded behaviour above remains the fail-closed implementation.
 
 **D2 — Lifecycle-action service composes #445, never duplicates it.** A new
 `createWorkspaceLifecycleService` wraps the existing `WorkspaceInstanceStore`,

@@ -2,7 +2,12 @@
 
 ## Status
 
-Proposed
+Accepted
+
+> Status corrected 2026-08-23 (ADR-0174 Wave 0): the design below shipped and is live
+> (allocator/compaction/shapers wired in `keiko-harness`, `keiko-server` and `keiko-workflows`;
+> CI-gated by `check:context-quality`). D7/D10 remainders (evidence persistence, UI disclosure) stay
+> open as recorded.
 
 ## Version
 
@@ -272,6 +277,19 @@ field on `HarnessLimits` or a new `HarnessShaperDeps` optional struct on `RunCon
 avoids a new package edge. The production wiring in `keiko-server` (which already imports
 `keiko-workflows`) injects the shaper; existing harness tests that do not inject it are
 unaffected. The shaper port is absent → fast-path (no shaping, byte-identical output).
+
+**Amendment (ADR-0174, 2026-08-23).** ADR-0174 D8 (echoing this ADR's own S7 spine reference)
+extends the injected-port pattern D4 establishes for the shaper to the 8-lane allocator itself.
+Target state: `keiko-harness` may still not import `keiko-workflows` (dependency-cruiser rule 4a,
+unchanged); `keiko-server` composes `allocateContext`/`buildCompactionRecords` over the 8 lanes and
+hands the result to the harness through a new `ContextBudgetPort` in `keiko-harness/src/ports.ts`,
+following the exact `ModelPort`/`ToolPort`/`HarnessShaperPort` pattern this decision already uses —
+not a `keiko-harness → keiko-workflows` edge, and not a harness-side reimplementation of the
+allocator. The plan artifact introduced by the `code-task` type (ADR-0004 D8 amendment) IS the
+`active-plan` lane already allocated for by this ADR's eight-lane taxonomy — no second plan-storage
+format parallel to it. Current implementation is unchanged until roadmap Wave 3 lands
+(docs/coding-runtime/coding-workbench-north-star-roadmap.md); until then the recorded behaviour
+above (allocator diagnostic-only, no harness-side port) remains the fail-closed implementation.
 
 ### D5 — PROFILE PROVISIONING: `UiHandlerDeps.contextProfile?` default ON for diagnostics (PR4-W1)
 
