@@ -26,6 +26,7 @@ import { createRunRegistry } from "./runs.js";
 import { createInMemoryUiStore } from "./store/index.js";
 import { STREAMING, type RouteContext, type RouteResult } from "./routes.js";
 import { resetGatewayInstanceCacheForTests } from "./gateway-instance-cache.js";
+import { OPENCODE_RUNTIME_READINESS_PROMPT } from "./coding-runtime/opencodeLaunchProfile.js";
 
 function provider(overrides: Partial<ModelProviderConfig> = {}): ModelProviderConfig {
   return {
@@ -720,6 +721,106 @@ describe("coding-sidecar gateway", () => {
     expect(chat.mock.calls[0]?.[0]).toMatchObject({ modelId: "azure-coding-model" });
   });
 
+  it("dispatches the model and reasoning effort bound to the authenticated run", async () => {
+    const chat = vi.fn((_request: GatewayRequest) =>
+      Promise.resolve(assistantResponse("qwen-coder")),
+    );
+    const selectedConfig: GatewayConfig = {
+      ...configValue(provider(), capability()),
+      providers: [
+        provider(),
+        provider({ modelId: "qwen-coder", endpointStyle: "openai-compatible" }),
+      ],
+      capabilities: [capability(), capability({ id: "qwen-coder" })],
+    };
+    const deps = {
+      ...runtimeGatewayDeps(
+        () => ({
+          ok: true,
+          binding: {
+            runId: "run-qwen",
+            modelProfileId: "qwen-coder",
+            reasoningEffort: "high",
+          },
+        }),
+        () => chat,
+      ),
+      config: selectedConfig,
+    };
+
+    const result = await handleCodingSidecarGatewayChatCompletions(
+      authenticatedContext({
+        model: "coding",
+        messages: [{ role: "user", content: "use the selected model" }],
+        tools: modelVisibleTools(),
+      }),
+      deps,
+    );
+
+    expect(result).toMatchObject({ status: 200 });
+    expect(chat.mock.calls[0]?.[0]).toMatchObject({
+      modelId: "qwen-coder",
+      reasoningEffort: "high",
+    });
+  });
+
+  it.each(["coding", "coding-safe-openai-compatible"])(
+    "treats %s as a runtime transport model id",
+    async (modelProfileId) => {
+      const chat = vi.fn((request: GatewayRequest) =>
+        Promise.resolve(assistantResponse(request.modelId)),
+      );
+      const deps = runtimeGatewayDeps(
+        () => ({ ok: true, binding: { runId: "run-alias", modelProfileId } }),
+        () => chat,
+      );
+
+      const result = await handleCodingSidecarGatewayChatCompletions(
+        authenticatedContext({
+          model: "coding",
+          messages: [{ role: "user", content: "use the configured safe model" }],
+          tools: modelVisibleTools(),
+        }),
+        deps,
+      );
+
+      expect(result).toMatchObject({ status: 200 });
+      expect(chat).toHaveBeenCalledOnce();
+      expect(chat.mock.calls[0]?.[0].modelId).toBe("azure-coding-model");
+    },
+  );
+
+  it("keeps the safe runtime transport profile usable without a readiness registry", async () => {
+    const chat = vi.fn((request: GatewayRequest) =>
+      Promise.resolve(assistantResponse(request.modelId)),
+    );
+    const deps = runtimeGatewayDeps(
+      () => ({
+        ok: true,
+        binding: {
+          runId: "run-live",
+          adapterKind: "model-gateway-sidecar",
+          modelProfileId: "coding-safe-openai-compatible",
+        },
+      }),
+      () => chat,
+      undefined,
+    );
+
+    const result = await handleCodingSidecarGatewayChatCompletions(
+      authenticatedContext({
+        model: "coding",
+        messages: [{ role: "user", content: "live runtime task" }],
+        tools: modelVisibleTools(),
+      }),
+      deps,
+    );
+
+    expect(result).toMatchObject({ status: 200 });
+    expect(chat).toHaveBeenCalledOnce();
+    expect(chat.mock.calls[0]?.[0].modelId).toBe("azure-coding-model");
+  });
+
   it("fails closed when OpenCode sends the unprojected verification source schema", async () => {
     const chat = vi.fn(() => Promise.resolve(assistantResponse("azure-coding-model")));
     const tools = modelVisibleTools(
@@ -775,7 +876,7 @@ describe("coding-sidecar gateway", () => {
     const exact = await handleCodingSidecarGatewayChatCompletions(
       authenticatedContext({
         model: "coding",
-        messages: [{ role: "user", content: "readiness" }],
+        messages: [{ role: "user", content: OPENCODE_RUNTIME_READINESS_PROMPT }],
         tools: modelVisibleTools(),
       }),
       runtimeGatewayDeps(
@@ -813,7 +914,7 @@ describe("coding-sidecar gateway", () => {
     const drifted = await handleCodingSidecarGatewayChatCompletions(
       authenticatedContext({
         model: "coding",
-        messages: [{ role: "user", content: "readiness" }],
+        messages: [{ role: "user", content: OPENCODE_RUNTIME_READINESS_PROMPT }],
         tools: modelVisibleTools().slice(0, 2),
       }),
       runtimeGatewayDeps(
@@ -1052,10 +1153,13 @@ describe("coding-sidecar gateway", () => {
       () => chat,
       readiness,
     );
-    const request = (tools?: readonly ModelVisibleRequestTool[]): RouteContext =>
+    const request = (
+      tools?: readonly ModelVisibleRequestTool[],
+      content = "bounded private runtime content",
+    ): RouteContext =>
       authenticatedContext({
         model: "coding",
-        messages: [{ role: "user", content: "bounded private runtime content" }],
+        messages: [{ role: "user", content }],
         ...(tools === undefined ? {} : { tools }),
       });
 
@@ -1064,7 +1168,10 @@ describe("coding-sidecar gateway", () => {
     });
     expect(readiness.isVerified("run-1")).toBe(false);
     expect(
-      await handleCodingSidecarGatewayChatCompletions(request(modelVisibleTools()), deps),
+      await handleCodingSidecarGatewayChatCompletions(
+        request(modelVisibleTools(), OPENCODE_RUNTIME_READINESS_PROMPT),
+        deps,
+      ),
     ).toMatchObject({ status: 200 });
     await expect(observed).resolves.toBe(true);
     expect(readiness.isVerified("run-1")).toBe(true);
@@ -1084,6 +1191,40 @@ describe("coding-sidecar gateway", () => {
       status: 403,
     });
     expect(chat).toHaveBeenCalledOnce();
+  });
+
+  it("forwards a real exact-tool runtime turn and verifies the run for later compaction", async () => {
+    const readiness = createOpenCodeGatewayReadinessRegistry();
+    const chat = vi.fn(() => Promise.resolve(assistantResponse("azure-coding-model")));
+    const deps = runtimeGatewayDeps(
+      () => ({ ok: true, binding: { runId: "run-1" } }),
+      () => chat,
+      readiness,
+    );
+
+    expect(
+      await handleCodingSidecarGatewayChatCompletions(
+        authenticatedContext({
+          model: "coding",
+          messages: [{ role: "user", content: "real user task" }],
+          tools: modelVisibleTools(),
+        }),
+        deps,
+      ),
+    ).toMatchObject({ status: 200 });
+    expect(chat).toHaveBeenCalledOnce();
+    expect(readiness.isVerified("run-1")).toBe(true);
+
+    expect(
+      await handleCodingSidecarGatewayChatCompletions(
+        authenticatedContext({
+          model: "coding",
+          messages: [{ role: "user", content: "compaction follow-up" }],
+        }),
+        deps,
+      ),
+    ).toMatchObject({ status: 200 });
+    expect(chat).toHaveBeenCalledTimes(2);
   });
 
   it("canonicalizes key order but denies empty, drifted, unknown, and productive built-in tools", async () => {
@@ -2694,6 +2835,36 @@ describe("coding-sidecar gateway", () => {
         },
       },
     });
+  });
+
+  it("diagnoses unavailable gateway profiles without recording request bodies", async () => {
+    const diagnostics = { record: vi.fn<(record: ServerDiagnosticRecord) => void>() };
+    const deps = depsValue(
+      configValue(provider(), capability()),
+      undefined,
+      { KEIKO_CODING_SIDECAR_DISABLED: "1" },
+      undefined,
+      { diagnostics },
+    );
+
+    const result = await handleCodingSidecarGatewayChatCompletions(
+      routeContext({
+        messages: [{ role: "user", content: "private runtime task text" }],
+      }),
+      deps,
+    );
+
+    expect(result).toMatchObject({ status: 503 });
+    expect(diagnostics.record).toHaveBeenCalledOnce();
+    expect(diagnostics.record).toHaveBeenCalledWith(
+      expect.objectContaining({
+        source: "coding-sidecar-gateway.chat",
+        errorClass: "CodingSidecarGatewayUnavailable",
+        message: "coding-sidecar-gateway-profile-unavailable",
+        code: "status=unavailable:reason=deployment-policy-disabled:config=configured:gateway=configured:source=model-gateway:selector=absent:authority=gateway",
+      }),
+    );
+    expect(JSON.stringify(diagnostics.record.mock.calls)).not.toContain("private runtime task");
   });
 
   it("returns a content-free unavailable error for the injected subscription-backed model source", async () => {

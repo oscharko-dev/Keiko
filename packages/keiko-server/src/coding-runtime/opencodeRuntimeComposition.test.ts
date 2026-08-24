@@ -17,7 +17,7 @@ import { PassThrough } from "node:stream";
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import type { ServerDiagnosticSink } from "../diagnostics-log.js";
+import type { ServerDiagnosticRecord, ServerDiagnosticSink } from "../diagnostics-log.js";
 import type { PortableSidecarRuntimeVerification } from "../update-portable-sidecar-verification.js";
 import {
   createRuntimeProcessSupervisor,
@@ -284,6 +284,7 @@ interface OpenCodeRuntimeCompositionModule {
     readonly onRuntimeEvent?: (event: Readonly<Record<string, unknown>>) => void;
     readonly gatewayReadiness: {
       readonly waitForObservedRequest: () => Promise<boolean>;
+      readonly verifyObserved: (runId: string) => void;
       readonly clear: () => void;
     };
     readonly fetch: typeof globalThis.fetch;
@@ -718,6 +719,7 @@ async function startBridgeFixture(
     ...optionalRuntimeEvents(control),
     gatewayReadiness: {
       waitForObservedRequest: (): Promise<boolean> => Promise.resolve(true),
+      verifyObserved: (): void => undefined,
       clear: (): void => undefined,
     },
     fetch,
@@ -770,6 +772,20 @@ async function startBridgeFixture(
 }
 
 function completedTurnHistory(): readonly Readonly<Record<string, unknown>>[] {
+  return turnHistory("stop");
+}
+
+function failedTurnHistory(): readonly Readonly<Record<string, unknown>>[] {
+  return turnHistory("error", {
+    name: "APIError",
+    data: { message: "SENTINEL_PROVIDER_DETAIL", isRetryable: false },
+  });
+}
+
+function turnHistory(
+  finish: "stop" | "error",
+  error?: Readonly<Record<string, unknown>>,
+): readonly Readonly<Record<string, unknown>>[] {
   const tokens = {
     total: 0,
     input: 0,
@@ -822,7 +838,8 @@ function completedTurnHistory(): readonly Readonly<Record<string, unknown>>[] {
           path: { cwd: "/private/workspace", root: "/" },
           cost: 0,
           tokens,
-          finish: "stop",
+          finish,
+          ...(error === undefined ? {} : { error }),
         },
       },
     },
@@ -1035,6 +1052,7 @@ describe("unmounted OpenCode runtime composition", () => {
       },
       gatewayReadiness: {
         waitForObservedRequest: (): Promise<boolean> => Promise.resolve(true),
+        verifyObserved: (): void => undefined,
         clear: (): void => undefined,
       },
       fetch,
@@ -1077,16 +1095,19 @@ describe("unmounted OpenCode runtime composition", () => {
     );
     expect(sessionCreate?.[1]?.body).toBe(JSON.stringify({ title: FIXED_SESSION_TITLE }));
     expect(new Headers(sessionCreate?.[1]?.headers).get("content-type")).toBe("application/json");
+    let readinessPromptObserved = false;
     for (const [url, init] of fetchMock.mock.calls) {
       if (requestPath(url).endsWith("/prompt_async")) {
         expect(typeof init?.body).toBe("string");
         if (typeof init?.body === "string") {
           expect(init.body).not.toContain(FIXED_SESSION_TITLE);
+          readinessPromptObserved ||= init.body.includes("runtime readiness handshake");
         }
       }
     }
-    // #2254: readiness consumes the hint, but must retain the authenticated stream for the
-    // post-ready supervisor. The SSE payload is deliberately the exact nested message shape.
+    expect(readinessPromptObserved).toBe(true);
+    // #2254: startup retains the authenticated stream for the post-ready supervisor. The SSE
+    // payload is deliberately the exact nested message shape.
     expect(order).toEqual(["spawn"]);
     expect(sseCancellations).toEqual([]);
     expect(launch?.args).toEqual(["serve", "--hostname", "127.0.0.1", "--port", "0", "--no-mdns"]);
@@ -1218,17 +1239,20 @@ describe("private OpenCode run control", () => {
     await fixture.stop();
   });
 
-  it("stops terminal polling when the handshake deadline aborts", async () => {
-    const fixture = await startBridgeFixture(facade, undefined, {
-      startTimeoutMs: 35,
-      expectedStart: { ok: false, failureCode: "start-timeout", retryable: true },
-      runControl: {
-        promptBodies: [],
-        abortSessions: [],
-        statusResponses: [{ ses_tool: { type: "busy" } }],
-      },
+  it("isolates the live startup challenge from user task submissions", async () => {
+    const runControl = {
+      promptBodies: [],
+      abortSessions: [],
+      statusResponses: [{ ses_tool: { type: "busy" } }, {}],
+    };
+    const fixture = await startBridgeFixture(facade, undefined, { runControl });
+    expect(runControl.promptBodies).toEqual([]);
+    expect(runControl.abortSessions).toEqual([]);
+    expect(runControl.statusResponses).toEqual([{}]);
+    expect(fixture.runtime.manager.health()).toMatchObject({
+      status: "ready",
+      activeRunId: FIXTURE_RUN_ID,
     });
-    expect(fixture.runtime.manager.health()).toEqual({ status: "stopped" });
     await fixture.stop();
   });
 
@@ -1421,6 +1445,54 @@ describe("private OpenCode run control", () => {
       false,
     );
     await expect(fixture.runtime.runPort.abortTask(FIXTURE_RUN_ID)).resolves.toBe(false);
+  });
+
+  it("records a body-free diagnostic when a submitted turn terminates as failed", async () => {
+    const records: Parameters<ServerDiagnosticSink["record"]>[0][] = [];
+    let history: readonly Readonly<Record<string, unknown>>[] = completedTurnHistory().slice(0, 1);
+    const runControl = {
+      promptBodies: [] as string[],
+      abortSessions: [] as string[],
+      statusResponses: [{}] as unknown[],
+    };
+    const fixture = await startBridgeFixture(facade, undefined, {
+      runControl,
+      diagnostics: {
+        record: (record): void => {
+          records.push(record);
+        },
+      },
+      historyResponseFactory: () =>
+        Promise.resolve(
+          new Response(JSON.stringify(history), {
+            headers: { "content-type": "application/json" },
+          }),
+        ),
+    });
+    try {
+      await expect(
+        fixture.runtime.runPort.submitTask(FIXTURE_RUN_ID, "bounded failing task"),
+      ).resolves.toBe(true);
+      history = failedTurnHistory();
+      await expect(
+        fixture.runtime.runPort.waitForTerminal(FIXTURE_RUN_ID, AbortSignal.timeout(2_000)),
+      ).resolves.toBe(false);
+      expect(records).toEqual([
+        expect.objectContaining({
+          correlationId: FIXTURE_RUN_ID,
+          operation: "coding-runtime.opencode-composition",
+          source: "opencode.turn",
+          errorClass: "OpenCodeTurnFailure",
+          message: "runtime-turn-failed",
+          code: "stage=terminal:db=missing",
+        }),
+      ]);
+      const serialized = JSON.stringify(records);
+      expect(serialized).not.toContain("bounded failing task");
+      expect(serialized).not.toContain("SENTINEL_PROVIDER_DETAIL");
+    } finally {
+      await fixture.stop();
+    }
   });
 
   it("synchronizes durable history before arming and submitting each productive turn", async () => {
@@ -1679,6 +1751,57 @@ describe("private OpenCode tool bridge", () => {
 
     expect(recordDrops).toHaveBeenCalledOnce();
     expect(recordDrops).toHaveBeenCalledWith(512);
+    await fixture.stop();
+  });
+
+  it("records a body-free structural diagnostic for an unknown history message shape", async () => {
+    const records: ServerDiagnosticRecord[] = [];
+    const sentinel = "SENTINEL_PRIVATE_HISTORY_BODY";
+    const sentinelKey = "sentinelPrivateHistoryKey";
+    const history = completedTurnHistory();
+    const assistant = history.at(-1);
+    if (assistant === undefined) throw new Error("assistant history fixture missing");
+    const data = assistant.data as Readonly<Record<string, unknown>>;
+    const info = data.info as Readonly<Record<string, unknown>>;
+    const malformed = [
+      ...history.slice(0, -1),
+      { ...assistant, data: { ...data, info: { ...info, [sentinelKey]: sentinel } } },
+    ];
+    const fixture = await startBridgeFixture(
+      { execute: vi.fn(() => Promise.resolve(completed)) },
+      undefined,
+      {
+        diagnostics: {
+          record: (record): void => {
+            records.push(record);
+          },
+        },
+        historyResponse: Promise.resolve(
+          new Response(JSON.stringify(malformed), {
+            headers: { "content-type": "application/json" },
+          }),
+        ),
+        expectedStart: {
+          ok: false,
+          failureCode: "protocol-schema-mismatch",
+          retryable: false,
+        },
+      },
+    );
+
+    expect(records).toHaveLength(1);
+    expect(records[0]).toMatchObject({
+      correlationId: FIXTURE_RUN_ID,
+      operation: "coding-runtime.handshake",
+      source: "opencode.history",
+      errorClass: "OpenCodeHistoryFailure",
+      message: "runtime-handshake-failed",
+    });
+    expect(records[0]?.code).toMatch(
+      /^stage=sse-history-reconciliation:reason=event-unknown:eventSha256=[a-f0-9]{16}:role=assistant:extraCount=1:extraKeySha256=[a-f0-9]{16}:missing=none$/u,
+    );
+    expect(JSON.stringify(records)).not.toContain(sentinel);
+    expect(JSON.stringify(records)).not.toContain(sentinelKey);
     await fixture.stop();
   });
 

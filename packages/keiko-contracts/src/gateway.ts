@@ -25,6 +25,16 @@ export type ModelKind = "chat" | "embedding" | "ocr-vision" | "voice";
 
 export type CostClass = "low" | "medium" | "high";
 
+export type ModelReasoningEffort = "minimal" | "low" | "medium" | "high" | "xhigh";
+
+export const MODEL_REASONING_EFFORTS: readonly ModelReasoningEffort[] = Object.freeze([
+  "minimal",
+  "low",
+  "medium",
+  "high",
+  "xhigh",
+] as const);
+
 export const MODEL_COST_RANK: Readonly<Record<CostClass, number>> = {
   low: 0,
   medium: 1,
@@ -172,6 +182,8 @@ export interface ModelCapability {
   readonly supportsSeeding?: boolean | undefined;
   /** Whether the model supports a `responseFormat` parameter for JSON output (Epic #761). */
   readonly supportsResponseFormat?: boolean | undefined;
+  /** Provider-declared reasoning levels. Absent or empty means the model exposes no user choice. */
+  readonly reasoningEfforts?: readonly ModelReasoningEffort[] | undefined;
   /**
    * Whether the model supports suffix-aware (fill-in-the-middle / FIM) completion (Issue #1210).
    * Required for Keiko editor inline completion; a prefix-only model is a documented anti-pattern
@@ -224,6 +236,31 @@ export interface ModelCapability {
    * provider that advertises speech output.
    */
   readonly supportedVoicePersonas?: readonly VoicePersona[] | undefined;
+}
+
+function normalizedCodingUseCase(value: string): string {
+  return value.trim().toLowerCase().replace(/\s+/g, "-");
+}
+
+const CODING_WORKBENCH_USE_CASES: ReadonlySet<string> = new Set([
+  "code",
+  "code-review",
+  "coding",
+  "coding-workflow",
+  "local-coding-workflow",
+  "software-development",
+]);
+
+/** The single browser/server rule for models eligible to power the Coding Workbench. */
+export function isCodingWorkbenchModel(capability: ModelCapability): boolean {
+  return (
+    capability.kind === "chat" &&
+    capability.toolCalling &&
+    capability.workflowEligible &&
+    capability.preferredUseCases.some((value) =>
+      CODING_WORKBENCH_USE_CASES.has(normalizedCodingUseCase(value)),
+    )
+  );
 }
 
 // ─── Completion / infilling capability helpers (Issue #1210, ADR-0042 D5) ──────
@@ -600,6 +637,8 @@ export interface GatewayRequest {
   readonly topP?: number | undefined;
   /** Optional seed for deterministic sampling when the model supports it (Epic #761). */
   readonly seed?: number | undefined;
+  /** Optional provider-neutral reasoning level, admitted only from the selected model capability. */
+  readonly reasoningEffort?: ModelReasoningEffort | undefined;
 }
 
 // ─── Tool-call normalisation ──────────────────────────────────────────────────

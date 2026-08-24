@@ -101,6 +101,9 @@ const INTERNAL_CFG_KEYS: Readonly<Partial<Record<WindowType, readonly string[]>>
   ],
   editor: ["openFiles", "layoutJson", "rootSessionsJson"],
   files: ["activeFilePath", "activeDirectoryPath", "resolvedRoot"],
+  // The Coding Workbench can explicitly open the user-selected repository rather than an active
+  // task worktree. Retain only this closed marker, never an arbitrary binding instruction.
+  governedGit: ["rootBinding"],
   figma: ["snapshotRunId", "selectedScreenIdsJson", "selectedScreenName"],
   figmaView: ["snapshotRunId", "selectedScreenIdsJson", "selectedScreenName"],
   figmaJson: ["snapshotRunId", "screenId", "selectedScreenIdsJson", "selectedScreenName"],
@@ -119,6 +122,16 @@ const INTERNAL_CFG_KEYS: Readonly<Partial<Record<WindowType, readonly string[]>>
     "zoomMode",
     "zoomValue",
   ],
+};
+
+type ClosedConfigValueSanitizer = (value: unknown) => AppWindow["cfg"][string];
+
+function sanitizeCodingRepositoryBinding(value: unknown): AppWindow["cfg"][string] {
+  return value === "coding-repository" ? value : undefined;
+}
+
+const CLOSED_CONFIG_VALUE_SANITIZERS: Readonly<Record<string, ClosedConfigValueSanitizer>> = {
+  "governedGit:rootBinding": sanitizeCodingRepositoryBinding,
 };
 
 function isFiniteNumber(value: unknown): value is number {
@@ -640,6 +653,15 @@ function sanitizeConfigValue(
   return sanitizeGenericConfigValue(type, key, value);
 }
 
+function sanitizeWindowConfigValue(
+  type: WindowType,
+  key: string,
+  value: unknown,
+): AppWindow["cfg"][string] {
+  const sanitizer = CLOSED_CONFIG_VALUE_SANITIZERS[`${type}:${key}`];
+  return sanitizer === undefined ? sanitizeConfigValue(type, key, value) : sanitizer(value);
+}
+
 function sanitizeGenericConfigValue(
   type: WindowType,
   key: string,
@@ -669,7 +691,7 @@ function sanitizeCfgForPersistence(type: WindowType, cfg: unknown): AppWindow["c
   const out: AppWindow["cfg"] = {};
   for (const [key, value] of Object.entries(cfg)) {
     if (!allowedKeys.has(key)) continue;
-    const next = sanitizeConfigValue(type, key, value);
+    const next = sanitizeWindowConfigValue(type, key, value);
     if (next !== undefined) out[key] = next;
   }
   if (type === "chat" && out["projectPathPrivacy"] === "omit") {

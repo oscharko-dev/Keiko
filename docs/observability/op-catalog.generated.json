@@ -389,7 +389,7 @@
     {
       "op": "chat.request.dispatch",
       "category": "gateway",
-      "site": "packages/keiko-model-gateway/src/openai-adapter.ts:708",
+      "site": "packages/keiko-model-gateway/src/openai-adapter.ts:710",
       "package": "keiko-model-gateway"
     },
     {
@@ -521,19 +521,19 @@
     {
       "op": "gateway.chat.completed",
       "category": "gateway",
-      "site": "packages/keiko-model-gateway/src/gateway.ts:442",
+      "site": "packages/keiko-model-gateway/src/gateway.ts:448",
       "package": "keiko-model-gateway"
     },
     {
       "op": "gateway.chat.failed",
       "category": "gateway",
-      "site": "packages/keiko-model-gateway/src/gateway.ts:339",
+      "site": "packages/keiko-model-gateway/src/gateway.ts:345",
       "package": "keiko-model-gateway"
     },
     {
       "op": "gateway.chat.started",
       "category": "gateway",
-      "site": "packages/keiko-model-gateway/src/gateway.ts:320",
+      "site": "packages/keiko-model-gateway/src/gateway.ts:325",
       "package": "keiko-model-gateway"
     },
     {
@@ -593,37 +593,37 @@
     {
       "op": "gateway.route.rejected",
       "category": "gateway",
-      "site": "packages/keiko-model-gateway/src/gateway.ts:552",
+      "site": "packages/keiko-model-gateway/src/gateway.ts:558",
       "package": "keiko-model-gateway"
     },
     {
       "op": "gateway.stream.abandoned",
       "category": "gateway",
-      "site": "packages/keiko-model-gateway/src/gateway.ts:387",
+      "site": "packages/keiko-model-gateway/src/gateway.ts:393",
       "package": "keiko-model-gateway"
     },
     {
       "op": "gateway.stream.buffered-fallback",
       "category": "gateway",
-      "site": "packages/keiko-model-gateway/src/gateway.ts:475",
+      "site": "packages/keiko-model-gateway/src/gateway.ts:481",
       "package": "keiko-model-gateway"
     },
     {
       "op": "gateway.stream.completed",
       "category": "gateway",
-      "site": "packages/keiko-model-gateway/src/gateway.ts:359",
+      "site": "packages/keiko-model-gateway/src/gateway.ts:365",
       "package": "keiko-model-gateway"
     },
     {
       "op": "gateway.stream.failed",
       "category": "gateway",
-      "site": "packages/keiko-model-gateway/src/gateway.ts:412",
+      "site": "packages/keiko-model-gateway/src/gateway.ts:418",
       "package": "keiko-model-gateway"
     },
     {
       "op": "gateway.stream.started",
       "category": "gateway",
-      "site": "packages/keiko-model-gateway/src/gateway.ts:320",
+      "site": "packages/keiko-model-gateway/src/gateway.ts:325",
       "package": "keiko-model-gateway"
     },
     {
@@ -741,6 +741,18 @@
       "package": "keiko-server"
     },
     {
+      "op": "coding-runtime.run.settled",
+      "category": "process",
+      "site": "packages/keiko-server/src/coding-runtime/codingRuntimeOrchestrator.ts:166",
+      "package": "keiko-server"
+    },
+    {
+      "op": "coding-runtime.run.started",
+      "category": "process",
+      "site": "packages/keiko-server/src/coding-runtime/codingRuntimeOrchestrator.ts:143",
+      "package": "keiko-server"
+    },
+    {
       "op": "embedding.memory.failed",
       "category": "embedding",
       "site": "packages/keiko-server/src/memory-embedding.ts:174",
@@ -786,6 +798,24 @@
       "op": "gateway.instance.unavailable",
       "category": "gateway",
       "site": "packages/keiko-server/src/gateway-instance-cache.ts:93",
+      "package": "keiko-server"
+    },
+    {
+      "op": "git.commit.preview.completed",
+      "category": "diagnostic",
+      "site": "packages/keiko-server/src/gitDelivery/commitRoutes.ts:419",
+      "package": "keiko-server"
+    },
+    {
+      "op": "git.delivery.mutation.completed",
+      "category": "diagnostic",
+      "site": "packages/keiko-server/src/gitDelivery/execution.ts:235",
+      "package": "keiko-server"
+    },
+    {
+      "op": "git.delivery.mutation.failed",
+      "category": "diagnostic",
+      "site": "packages/keiko-server/src/gitDelivery/execution.ts:264",
       "package": "keiko-server"
     },
     {
@@ -897,6 +927,12 @@
       "package": "keiko-server"
     },
     {
+      "op": "project.workspace.reconnect",
+      "category": "setup",
+      "site": "packages/keiko-server/src/store-handlers.ts:485",
+      "package": "keiko-server"
+    },
+    {
       "op": "request",
       "category": "http",
       "site": "packages/keiko-server/src/server.ts:480",
@@ -929,7 +965,7 @@
     {
       "op": "store.opened",
       "category": "setup",
-      "site": "packages/keiko-server/src/store/db.ts:928",
+      "site": "packages/keiko-server/src/store/db.ts:929",
       "package": "keiko-server"
     },
     {

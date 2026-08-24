@@ -520,6 +520,51 @@ describe("OpenCode v1.17.17 protocol boundary", () => {
     },
   );
 
+  it.each([
+    { name: "ProviderAuthError", data: { providerID: "functional", message: "SENTINEL" } },
+    { name: "UnknownError", data: { message: "SENTINEL", ref: "bounded-reference" } },
+    { name: "MessageOutputLengthError", data: {} },
+    { name: "MessageAbortedError", data: { message: "SENTINEL" } },
+    { name: "StructuredOutputError", data: { message: "SENTINEL", retries: 2 } },
+    { name: "ContextOverflowError", data: { message: "SENTINEL", responseBody: "SENTINEL" } },
+    { name: "ContentFilterError", data: { message: "SENTINEL" } },
+    {
+      name: "APIError",
+      data: {
+        message: "SENTINEL",
+        statusCode: 503,
+        isRetryable: true,
+        responseHeaders: { "retry-after": "1" },
+        responseBody: "SENTINEL",
+        metadata: { category: "upstream" },
+      },
+    },
+  ])("classifies pinned assistant $name as a content-free failed terminal", (error) => {
+    const parsed = parseOpenCodeHistory([
+      syncRow(1, "message.updated.1", {
+        sessionID: "ses_1",
+        info: assistantMessage({ error, time: { created: 1, completed: 2 } }),
+      }),
+    ]);
+
+    expect(parsed).toMatchObject({
+      ok: true,
+      value: [{ sequence: 1, kind: "terminal-failure" }],
+    });
+    expect(JSON.stringify(parsed)).not.toContain("SENTINEL");
+  });
+
+  it("admits bounded pinned assistant structured output and variant metadata", () => {
+    expect(
+      parseOpenCodeHistory([
+        syncRow(1, "message.updated.1", {
+          sessionID: "ses_1",
+          info: assistantMessage({ structured: { status: "ok" }, variant: "high" }),
+        }),
+      ]),
+    ).toMatchObject({ ok: true, value: [{ kind: "observation" }] });
+  });
+
   it("admits bounded completed tool output without relaxing metadata or row budgets", () => {
     const output = "x".repeat(20_000);
     const base = toolPart("completed", "packages/example.ts");
@@ -692,8 +737,14 @@ describe("OpenCode v1.17.17 protocol boundary", () => {
         sessionID: "ses_1",
         info: {
           ...assistantMessage(),
-          error: { name: "UnknownError", data: { message: "secret" } },
+          error: { name: "UnreviewedError", data: { message: "secret" } },
         },
+      }),
+      syncRow(1, "message.updated.1", {
+        sessionID: "ses_1",
+        info: assistantMessage({
+          error: { name: "UnknownError", data: { message: "secret", unexpected: true } },
+        }),
       }),
       { ...base, data: { ...base.data, unexpected: true } },
       syncRow(1, "message.part.updated.1", {

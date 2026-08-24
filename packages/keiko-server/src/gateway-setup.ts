@@ -17,6 +17,7 @@ import {
   createDefaultEmbeddingCapability,
   findConfiguredCapability,
   GatewayError,
+  MODEL_REASONING_EFFORTS,
   isLikelyEmbeddingModelId,
   isVoiceCapability,
   listConfiguredCapabilities,
@@ -59,6 +60,7 @@ import type {
   EnvSource,
   GatewayConfig,
   ModelCapability,
+  ModelReasoningEffort,
   ModelProviderConfig,
   OpenAIEmbeddingOutcome,
   ParseGatewayConfigOptions,
@@ -96,6 +98,12 @@ import {
   tryParseJudgeVerdict,
 } from "./qualityIntelligence/judgePort.js";
 import { persistSealedGatewayConfig } from "./credentialPersistence.js";
+
+const MODEL_REASONING_EFFORT_SET: ReadonlySet<string> = new Set(MODEL_REASONING_EFFORTS);
+
+function isModelReasoningEffort(value: string): value is ModelReasoningEffort {
+  return MODEL_REASONING_EFFORT_SET.has(value);
+}
 import { createProviderSecretResolver } from "./credentialVault.js";
 
 const MAX_BODY_BYTES = 64_000;
@@ -460,6 +468,14 @@ function codingUseCases(capability: ModelCapability): readonly string[] {
     : [...capability.preferredUseCases, "Coding"];
 }
 
+function discoveredReasoningFields(
+  discovered: GatewayDiscoveredModelMetadata | undefined,
+): Partial<Pick<ModelCapability, "reasoningEfforts">> {
+  return discovered?.reasoningEfforts === undefined
+    ? {}
+    : { reasoningEfforts: discovered.reasoningEfforts };
+}
+
 function discoveredCapabilityFields(
   discovered: GatewayDiscoveredModelMetadata | undefined,
 ): Partial<ModelCapability> {
@@ -469,6 +485,7 @@ function discoveredCapabilityFields(
       ? {}
       : { maxOutputTokens: discovered.maxOutputTokens }),
     ...(discovered?.toolCalling === undefined ? {} : { toolCalling: discovered.toolCalling }),
+    ...discoveredReasoningFields(discovered),
     ...(discovered?.chatModeDeclared === undefined
       ? {}
       : { chatModeDeclared: discovered.chatModeDeclared }),
@@ -808,6 +825,14 @@ function metadataFromDiscoveryItem(item: Record<string, unknown>): GatewayDiscov
     "supports_function_calling",
     "supportsFunctionCalling",
   ]);
+  const reasoningEfforts = [
+    ...new Set(
+      stringListFieldFromRecords(records, [
+        "supported_reasoning_efforts",
+        "reasoning_efforts",
+      ]).filter(isModelReasoningEffort),
+    ),
+  ];
   // An affirmative chat-compatible `mode` declaration ranks the model ahead of mode-less
   // entries as the conversation default (keiko-contracts conversationDefaultRank). Only ever
   // true — declared NON-chat modes never reach the chat list, and "no mode" is no signal.
@@ -817,6 +842,7 @@ function metadataFromDiscoveryItem(item: Record<string, unknown>): GatewayDiscov
     ...(contextWindow === undefined ? {} : { contextWindow }),
     ...(maxOutputTokens === undefined ? {} : { maxOutputTokens }),
     ...(toolCalling === undefined ? {} : { toolCalling }),
+    ...(reasoningEfforts.length === 0 ? {} : { reasoningEfforts }),
     ...(chatModeDeclared ? { chatModeDeclared } : {}),
   };
 }

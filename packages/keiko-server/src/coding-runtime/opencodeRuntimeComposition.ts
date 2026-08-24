@@ -1,5 +1,13 @@
 import { createHash, timingSafeEqual } from "node:crypto";
-import { chmodSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
 import {
   createServer,
   type IncomingHttpHeaders,
@@ -9,6 +17,7 @@ import {
 } from "node:http";
 import type { Socket } from "node:net";
 import { join } from "node:path";
+import { DatabaseSync } from "node:sqlite";
 
 import type {
   CodingWorkbenchRuntimeEvent,
@@ -121,6 +130,7 @@ export interface OpenCodeRuntimeCompositionInput {
     | undefined;
   readonly gatewayReadiness: {
     readonly waitForObservedRequest: (runId: string, signal: AbortSignal) => Promise<boolean>;
+    readonly verifyObserved: (runId: string) => void;
     readonly clear: (runId: string, preserveVerification?: boolean) => void;
   };
   readonly fetch: typeof globalThis.fetch;
@@ -226,56 +236,180 @@ export function createOpenCodeRuntimeComposition(
       : { codingToolApprovals: input.codingToolApprovals }),
     ...input.authorityLifecycle,
   });
-  return { manager, toolBridge: bridge.publicPort, runPort: createRunPort(runs) };
+  return {
+    manager,
+    toolBridge: bridge.publicPort,
+    runPort: createRunPort(runs, input.diagnostics),
+  };
 }
 
-function createRunPort(runs: Map<string, PreparedRun>): OpenCodeRunPort {
+function createRunPort(
+  runs: Map<string, PreparedRun>,
+  diagnostics: ServerDiagnosticSink | undefined,
+): OpenCodeRunPort {
   const readyRun = (runId: string): ReadyRun | undefined => {
     const run = runs.get(runId);
     return isReadyRun(run) ? run : undefined;
   };
   return {
-    submitTask: async (runId, text): Promise<boolean> => {
-      const run = readyRun(runId);
-      if (run === undefined) return false;
-      if (!(await synchronizeTurnBaseline(run))) return false;
-      if (!run.runtimeAdapter.armTurn()) return false;
-      try {
-        await run.client.promptAsync(run.sessionId, text);
-        return run.ready;
-      } catch {
-        run.runtimeAdapter.cancelTurn();
-        return false;
-      }
-    },
+    submitTask: createSubmitTask(readyRun, diagnostics),
     abortTask: createAbortTask(readyRun),
-    waitForTerminal: (runId, signal): Promise<boolean> => {
-      const run = readyRun(runId);
-      return run?.runtimeAdapter.waitForTerminal(signal) ?? Promise.resolve(false);
-    },
-    replyPermission: async (runId, requestId, reply): Promise<boolean> => {
+    waitForTerminal: async (runId, signal): Promise<boolean> => {
       const run = readyRun(runId);
       if (run === undefined) return false;
-      try {
-        const owned = (await run.client.listPermissions()).filter(
-          (request) =>
-            request.sessionID === run.sessionId &&
-            projectOpenCodePermissionRequestId(request.id) === requestId,
-        );
-        const permission = owned[0];
-        return (
-          owned.length === 1 &&
-          permission !== undefined &&
-          (await run.client.replyPermission(permission.id, reply)) &&
-          run.ready
-        );
-      } catch {
-        return false;
-      }
+      const outcome = await run.runtimeAdapter.waitForTerminal(signal);
+      if (!outcome && !signal.aborted) recordOpenCodeTurnFailure(diagnostics, run, "terminal");
+      return outcome;
     },
+    replyPermission: createReplyPermission(readyRun, diagnostics),
     ...createQuestionRunPort(readyRun),
   };
 }
+
+function createSubmitTask(
+  readyRun: ReadyRunLookup,
+  diagnostics: ServerDiagnosticSink | undefined,
+): OpenCodeRunPort["submitTask"] {
+  return async (runId, text): Promise<boolean> => {
+    const run = readyRun(runId);
+    if (run === undefined) return false;
+    if (!(await synchronizeTurnBaseline(run))) return false;
+    if (!run.runtimeAdapter.armTurn()) return false;
+    try {
+      await run.client.promptAsync(run.sessionId, text);
+      return run.ready;
+    } catch (error) {
+      recordOpenCodeTurnFailure(diagnostics, run, "submit", error);
+      run.runtimeAdapter.cancelTurn();
+      return false;
+    }
+  };
+}
+
+function createReplyPermission(
+  readyRun: ReadyRunLookup,
+  diagnostics: ServerDiagnosticSink | undefined,
+): OpenCodeRunPort["replyPermission"] {
+  return async (runId, requestId, reply): Promise<boolean> => {
+    const run = readyRun(runId);
+    if (run === undefined) return false;
+    try {
+      const owned = (await run.client.listPermissions()).filter(
+        (request) =>
+          request.sessionID === run.sessionId &&
+          projectOpenCodePermissionRequestId(request.id) === requestId,
+      );
+      const permission = owned[0];
+      return (
+        owned.length === 1 &&
+        permission !== undefined &&
+        (await run.client.replyPermission(permission.id, reply)) &&
+        run.ready
+      );
+    } catch (error) {
+      recordOpenCodeTurnFailure(diagnostics, run, "permission", error);
+      return false;
+    }
+  };
+}
+
+type OpenCodeTurnFailureStage = "permission" | "submit" | "terminal";
+
+function recordOpenCodeTurnFailure(
+  diagnostics: ServerDiagnosticSink | undefined,
+  run: ReadyRun,
+  stage: OpenCodeTurnFailureStage,
+  error?: unknown,
+): void {
+  emitServerDiagnostic(diagnostics, {
+    correlationId: run.runId,
+    timestamp: new Date().toISOString(),
+    operation: "coding-runtime.opencode-composition",
+    source: "opencode.turn",
+    errorClass: error === undefined ? "OpenCodeTurnFailure" : contentFreeErrorClass(error),
+    message: "runtime-turn-failed",
+    code: openCodeTurnFailureCode(run.runRoot, stage),
+  });
+}
+
+function openCodeTurnFailureCode(runRoot: string, stage: OpenCodeTurnFailureStage): string {
+  const database = projectOpenCodeRuntimeDatabase(join(runRoot, "state", "opencode.db"));
+  return `stage=${stage}:${database}`;
+}
+
+function projectOpenCodeRuntimeDatabase(databasePath: string): string {
+  if (!existsSync(databasePath)) return "db=missing";
+  try {
+    const database = new DatabaseSync(databasePath, { readOnly: true });
+    try {
+      return openCodeRuntimeDatabaseSummary(database);
+    } finally {
+      database.close();
+    }
+  } catch {
+    return "db=unavailable";
+  }
+}
+
+function openCodeRuntimeDatabaseSummary(database: DatabaseSync): string {
+  const messages = database.prepare(OPEN_CODE_MESSAGE_SUMMARY_SQL).get() as CountRow;
+  const parts = database.prepare(OPEN_CODE_PART_SUMMARY_SQL).get() as CountRow;
+  return [
+    "db=ok",
+    `m=${String(boundedCount(messages.total))}`,
+    `a=${String(boundedCount(messages.assistant))}`,
+    `stop=${String(boundedCount(messages.stop))}`,
+    `tool=${String(boundedCount(messages.toolCalls))}`,
+    `error=${String(boundedCount(messages.error))}`,
+    `length=${String(boundedCount(messages.length))}`,
+    `err=${String(boundedCount(messages.errorName))}`,
+    `p=${String(boundedCount(parts.total))}`,
+    `ptool=${String(boundedCount(parts.tool))}`,
+    `ptext=${String(boundedCount(parts.text))}`,
+    `pfail=${String(boundedCount(parts.failed))}`,
+    `pdone=${String(boundedCount(parts.completed))}`,
+  ].join(":");
+}
+
+interface CountRow {
+  readonly total?: unknown;
+  readonly assistant?: unknown;
+  readonly stop?: unknown;
+  readonly toolCalls?: unknown;
+  readonly error?: unknown;
+  readonly length?: unknown;
+  readonly errorName?: unknown;
+  readonly tool?: unknown;
+  readonly text?: unknown;
+  readonly failed?: unknown;
+  readonly completed?: unknown;
+}
+
+function boundedCount(value: unknown): number {
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? value : 0;
+}
+
+const OPEN_CODE_MESSAGE_SUMMARY_SQL = `
+SELECT
+  COUNT(*) AS total,
+  COALESCE(SUM(CASE WHEN json_extract(data, '$.role') = 'assistant' THEN 1 ELSE 0 END), 0) AS assistant,
+  COALESCE(SUM(CASE WHEN json_extract(data, '$.finish') = 'stop' THEN 1 ELSE 0 END), 0) AS stop,
+  COALESCE(SUM(CASE WHEN json_extract(data, '$.finish') = 'tool-calls' THEN 1 ELSE 0 END), 0) AS toolCalls,
+  COALESCE(SUM(CASE WHEN json_extract(data, '$.finish') = 'error' THEN 1 ELSE 0 END), 0) AS error,
+  COALESCE(SUM(CASE WHEN json_extract(data, '$.finish') = 'length' THEN 1 ELSE 0 END), 0) AS length,
+  COALESCE(SUM(CASE WHEN json_extract(data, '$.error.name') IS NOT NULL THEN 1 ELSE 0 END), 0) AS errorName
+FROM message
+`;
+
+const OPEN_CODE_PART_SUMMARY_SQL = `
+SELECT
+  COUNT(*) AS total,
+  COALESCE(SUM(CASE WHEN json_extract(data, '$.type') = 'tool' THEN 1 ELSE 0 END), 0) AS tool,
+  COALESCE(SUM(CASE WHEN json_extract(data, '$.type') = 'text' THEN 1 ELSE 0 END), 0) AS text,
+  COALESCE(SUM(CASE WHEN json_extract(data, '$.state.status') = 'failed' THEN 1 ELSE 0 END), 0) AS failed,
+  COALESCE(SUM(CASE WHEN json_extract(data, '$.state.status') = 'completed' THEN 1 ELSE 0 END), 0) AS completed
+FROM part
+`;
 
 async function synchronizeTurnBaseline(run: ReadyRun): Promise<boolean> {
   if (!run.initialTurnBaselineStable) {
@@ -664,7 +798,10 @@ function readinessPorts(
       const normalized = normalizeOpenCodeSafeActivityHistory(rows);
       stageSafeActivity(normalized, safeActivity, input.safeActivity);
       const parsed = parseOpenCodeHistory(rows);
-      if (!parsed.ok) throw new Error("opencode-history-invalid");
+      if (!parsed.ok) {
+        recordHistoryParseFailure(input.diagnostics, run.runId, parsed.reason, rows);
+        throw new Error("opencode-history-invalid");
+      }
       return parsed.value;
     },
     takeSafeActivity: (
@@ -680,6 +817,108 @@ function readinessPorts(
     sessionEcho: (): Promise<string> => Promise.resolve(fixedSessionId ?? ""),
   };
 }
+
+function recordHistoryParseFailure(
+  diagnostics: ServerDiagnosticSink | undefined,
+  runId: string,
+  reason: "schema-invalid" | "event-unknown" | "frame-invalid" | "frame-oversized",
+  rows: readonly unknown[],
+): void {
+  const eventTypeDigest = firstUnknownHistoryEventTypeDigest(rows);
+  const eventShape = firstUnknownMessageShape(rows);
+  const eventDigestCode = eventTypeDigest === undefined ? "" : `:eventSha256=${eventTypeDigest}`;
+  const eventShapeCode = eventShape === undefined ? "" : `:${eventShape}`;
+  emitServerDiagnostic(diagnostics, {
+    correlationId: runId,
+    timestamp: new Date().toISOString(),
+    operation: "coding-runtime.handshake",
+    source: "opencode.history",
+    errorClass: "OpenCodeHistoryFailure",
+    message: "runtime-handshake-failed",
+    code: `stage=sse-history-reconciliation:reason=${reason}${eventDigestCode}${eventShapeCode}`,
+  });
+}
+
+function structuralNameDigest(value: string): string {
+  return createHash("sha256").update(value, "utf8").digest("hex").slice(0, 16);
+}
+
+function firstUnknownHistoryEventTypeDigest(rows: readonly unknown[]): string | undefined {
+  for (const row of rows) {
+    const parsed = parseOpenCodeHistory([row]);
+    if (parsed.ok || parsed.reason !== "event-unknown") continue;
+    if (typeof row !== "object" || row === null || Array.isArray(row)) return undefined;
+    const type = (row as Record<string, unknown>).type;
+    return typeof type === "string" ? structuralNameDigest(type) : undefined;
+  }
+  return undefined;
+}
+
+function firstUnknownMessageShape(rows: readonly unknown[]): string | undefined {
+  for (const row of rows) {
+    if (parseOpenCodeHistory([row]).ok) continue;
+    const message = historyMessageInfo(row);
+    if (message !== undefined) return unknownMessageShape(message);
+  }
+  return undefined;
+}
+
+function recordValue(value: unknown): Record<string, unknown> | undefined {
+  return typeof value === "object" && value !== null && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : undefined;
+}
+
+function historyMessageInfo(row: unknown): Record<string, unknown> | undefined {
+  const event = recordValue(row);
+  if (event?.type !== "message.updated.1") return undefined;
+  return recordValue(recordValue(event.data)?.info);
+}
+
+type HistoryMessageRole = "assistant" | "unknown" | "user";
+
+function historyMessageRole(message: Readonly<Record<string, unknown>>): HistoryMessageRole {
+  if (message.role === "assistant") return "assistant";
+  return message.role === "user" ? "user" : "unknown";
+}
+
+function unknownMessageShape(message: Readonly<Record<string, unknown>>): string {
+  const role = historyMessageRole(message);
+  const assistant = role === "assistant";
+  const allowed = assistant ? ASSISTANT_MESSAGE_KEYS : USER_MESSAGE_KEYS;
+  const required = assistant ? ASSISTANT_MESSAGE_REQUIRED_KEYS : USER_MESSAGE_KEYS;
+  const extraKeys = Object.keys(message)
+    .filter((key) => !allowed.has(key))
+    .sort((left, right) => left.localeCompare(right));
+  const firstExtraKey = extraKeys.at(0);
+  const missing = [...required].find((key) => !Object.hasOwn(message, key));
+  const extraKeyDigest = firstExtraKey === undefined ? "none" : structuralNameDigest(firstExtraKey);
+  return `role=${role}:extraCount=${String(extraKeys.length)}:extraKeySha256=${extraKeyDigest}:missing=${missing ?? "none"}`;
+}
+
+const USER_MESSAGE_KEYS = new Set(["id", "sessionID", "role", "time", "agent", "model"]);
+const ASSISTANT_MESSAGE_REQUIRED_KEYS = new Set([
+  "id",
+  "sessionID",
+  "role",
+  "time",
+  "parentID",
+  "modelID",
+  "providerID",
+  "mode",
+  "agent",
+  "path",
+  "cost",
+  "tokens",
+]);
+const ASSISTANT_MESSAGE_KEYS = new Set([
+  ...ASSISTANT_MESSAGE_REQUIRED_KEYS,
+  "finish",
+  "summary",
+  "error",
+  "structured",
+  "variant",
+]);
 
 const MAX_STAGED_SAFE_ACTIVITY_ITEMS = 2_048;
 const MAX_STAGED_SAFE_ACTIVITY_BYTES = 128 * 1_024;
@@ -782,18 +1021,18 @@ async function createAndEchoFixedSession(
 async function challengeGateway(
   input: OpenCodeRuntimeCompositionInput,
   run: PreparedRun,
-  client: OpenCodeHttpClient,
+  client: ReturnType<typeof createOpenCodeHttpClient>,
   sessionId: string | undefined,
   signal: AbortSignal | undefined,
   timeoutMs: number,
   startupRead: boolean,
 ): Promise<boolean> {
-  if (
-    !startupRead ||
-    sessionId === undefined ||
-    input.capabilities.modelGatewayCapability.length < 32
-  )
+  const reason = gatewayChallengePrecondition(input, sessionId, startupRead);
+  if (reason !== undefined) {
+    recordGatewayChallengeFailure(input.diagnostics, run.runId, reason);
     return false;
+  }
+  if (sessionId === undefined) return false;
   const challengeSignal = signal ?? AbortSignal.timeout(timeoutMs);
   const observed = input.gatewayReadiness.waitForObservedRequest(run.runId, challengeSignal);
   let verified = false;
@@ -805,19 +1044,49 @@ async function challengeGateway(
     await client.abortSession(sessionId, { signal: challengeSignal });
     const terminal = await fixedSessionIsTerminal(client, sessionId, challengeSignal);
     verified = accepted && terminal;
+    if (!verified) {
+      recordGatewayChallengeFailure(input.diagnostics, run.runId, "live-verification-failed");
+    }
     return verified;
   } catch {
+    recordGatewayChallengeFailure(input.diagnostics, run.runId, "live-verification-failed");
     return false;
   } finally {
-    // Preserve the successful exact-tool handshake until runtime disposal. OpenCode's pinned
-    // compaction path intentionally omits `tools`; the gateway admits that privilege-reducing
-    // follow-up only for this verified run. Disposal still clears the verification marker.
     input.gatewayReadiness.clear(run.runId, verified);
   }
 }
 
+type GatewayChallengePreconditionFailure =
+  "startup-unread" | "session-missing" | "capability-invalid" | "live-verification-failed";
+
+function gatewayChallengePrecondition(
+  input: OpenCodeRuntimeCompositionInput,
+  sessionId: string | undefined,
+  startupRead: boolean,
+): GatewayChallengePreconditionFailure | undefined {
+  if (!startupRead) return "startup-unread";
+  if (sessionId === undefined) return "session-missing";
+  return input.capabilities.modelGatewayCapability.length < 32 ? "capability-invalid" : undefined;
+}
+
+function recordGatewayChallengeFailure(
+  diagnostics: ServerDiagnosticSink | undefined,
+  runId: string,
+  reason: GatewayChallengePreconditionFailure,
+): void {
+  emitServerDiagnostic(diagnostics, {
+    correlationId: runId,
+    timestamp: new Date().toISOString(),
+    operation: "coding-runtime.handshake",
+    source: "opencode.gateway-challenge",
+    errorClass: "OpenCodeGatewayChallengeFailure",
+    message: "runtime-handshake-failed",
+    code: `stage=gateway-challenge:reason=${reason}`,
+  });
+}
+
 async function fixedSessionIsTerminal(
-  client: OpenCodeHttpClient,
+  client: ReturnType<typeof createOpenCodeHttpClient>,
   sessionId: string,
   signal: AbortSignal,
 ): Promise<boolean> {
@@ -834,16 +1103,16 @@ function readinessPollDelay(signal: AbortSignal): Promise<boolean> {
   return new Promise((resolve) => {
     const settle = (result: boolean): void => {
       clearTimeout(timer);
-      signal.removeEventListener("abort", abort);
+      signal.removeEventListener("abort", onAbort);
       resolve(result);
     };
-    const abort = (): void => {
+    const onAbort = (): void => {
       settle(false);
     };
     const timer = setTimeout(() => {
       settle(true);
     }, 10);
-    signal.addEventListener("abort", abort, { once: true });
+    signal.addEventListener("abort", onAbort, { once: true });
   });
 }
 

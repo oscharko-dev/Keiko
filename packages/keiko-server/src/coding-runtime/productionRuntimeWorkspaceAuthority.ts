@@ -8,6 +8,7 @@ import type {
   CodingWorkbenchNetworkPolicy,
   CodingWorkbenchRuntimeAuthorityFacts,
   WorkspaceInstance,
+  ModelReasoningEffort,
 } from "@oscharko-dev/keiko-contracts";
 
 import type { WorkspaceLifecycleService } from "../task-workspace/types.js";
@@ -18,6 +19,10 @@ import {
   type CodingRuntimeTrustedContext,
 } from "./runtimeAuthorityService.js";
 import { projectRuntimeAuthorityValue } from "./runtimeAuthorityProjection.js";
+import {
+  CodingRuntimeLaunchResolutionError,
+  type CodingRuntimeLaunchResolutionFailureReason,
+} from "./launchFailure.js";
 
 const RUNTIME_TTL_MS = 30 * 60_000;
 
@@ -34,6 +39,12 @@ export interface ProductionWorkspaceAuthorityInput {
   // the CLASS; a specific fetch still requires a live research grant in the registry AND passes the
   // human-approval gate, so no grant means no outbound request (fail closed).
   readonly researchEgressEnabled?: boolean | undefined;
+  readonly resolveManagedModelProfile?:
+    | ((
+        modelId: string | undefined,
+        reasoningEffort: ModelReasoningEffort | undefined,
+      ) => { readonly profileId: string; readonly reasoningEffort?: ModelReasoningEffort })
+    | undefined;
 }
 
 // The base workspace action classes, plus network-egress only when research egress is activated.
@@ -84,7 +95,7 @@ function contextFromActive(
 ): CodingRuntimeTrustedContext {
   const branch = instance.taskBranch;
   const now = input.now?.() ?? new Date();
-  const runtimeProfile = trustedRuntimeProfile(request.runtimePreference);
+  const runtimeProfile = trustedRuntimeProfile(input, request);
   return {
     operatorId: request.serverPrincipal,
     taskId: instance.taskId,
@@ -109,6 +120,9 @@ function contextFromActive(
       source: runtimeProfile.modelSource,
       supportsStreaming: true,
       supportsToolCalling: true,
+      ...(runtimeProfile.reasoningEffort === undefined
+        ? {}
+        : { reasoningEffort: runtimeProfile.reasoningEffort }),
     },
     commandPolicy: {
       mode: "deny",
@@ -129,24 +143,70 @@ function contextFromActive(
   };
 }
 
-function trustedRuntimeProfile(preference: LaunchResolutionInput["runtimePreference"]): Pick<
-  CodingRuntimeTrustedContext,
-  "runtimeSource"
-> & {
+type TrustedRuntimeProfile = Pick<CodingRuntimeTrustedContext, "runtimeSource"> & {
   readonly modelSource: CodingRuntimeTrustedContext["modelProfile"]["source"];
   readonly profileId: string;
-} {
-  return preference === "codex-subscription"
-    ? {
-        runtimeSource: "codex-cli-adapter",
-        modelSource: "chatgpt-codex-subscription-profile",
-        profileId: "codex-subscription",
-      }
-    : {
-        runtimeSource: "keiko-sidecar",
-        modelSource: "keiko-model-gateway",
-        profileId: "coding-safe-openai-compatible",
-      };
+  readonly reasoningEffort?: ModelReasoningEffort | undefined;
+};
+
+function codexSelectionFailure(
+  request: LaunchResolutionInput,
+): CodingRuntimeLaunchResolutionFailureReason | undefined {
+  if (request.modelId !== undefined && request.reasoningEffort !== undefined) {
+    return "codex-model-and-reasoning-unsupported";
+  }
+  if (request.modelId !== undefined) return "codex-model-selection-unsupported";
+  if (request.reasoningEffort !== undefined) return "codex-reasoning-effort-unsupported";
+  return undefined;
+}
+
+function managedSelectionFailure(
+  request: LaunchResolutionInput,
+): CodingRuntimeLaunchResolutionFailureReason | undefined {
+  if (request.modelId !== undefined && request.reasoningEffort !== undefined) {
+    return "managed-model-and-reasoning-unqualified";
+  }
+  if (request.modelId !== undefined) return "managed-model-unqualified";
+  if (request.reasoningEffort !== undefined) return "managed-reasoning-effort-unqualified";
+  return undefined;
+}
+
+function codexRuntimeProfile(request: LaunchResolutionInput): TrustedRuntimeProfile {
+  const failure = codexSelectionFailure(request);
+  if (failure !== undefined) throw new CodingRuntimeLaunchResolutionError(failure);
+  return {
+    runtimeSource: "codex-cli-adapter",
+    modelSource: "chatgpt-codex-subscription-profile",
+    profileId: "codex-subscription",
+  };
+}
+
+function managedRuntimeProfile(
+  input: ProductionWorkspaceAuthorityInput,
+  request: LaunchResolutionInput,
+): TrustedRuntimeProfile {
+  const selected = input.resolveManagedModelProfile?.(request.modelId, request.reasoningEffort);
+  const failure = managedSelectionFailure(request);
+  if (selected === undefined && failure !== undefined) {
+    throw new CodingRuntimeLaunchResolutionError(failure);
+  }
+  return {
+    runtimeSource: "keiko-sidecar",
+    modelSource: "keiko-model-gateway",
+    profileId: selected?.profileId ?? "coding-safe-openai-compatible",
+    ...(selected?.reasoningEffort === undefined
+      ? {}
+      : { reasoningEffort: selected.reasoningEffort }),
+  };
+}
+
+function trustedRuntimeProfile(
+  input: ProductionWorkspaceAuthorityInput,
+  request: LaunchResolutionInput,
+): TrustedRuntimeProfile {
+  return request.runtimePreference === "codex-subscription"
+    ? codexRuntimeProfile(request)
+    : managedRuntimeProfile(input, request);
 }
 
 export function productionRuntimeAuthorityFacts(

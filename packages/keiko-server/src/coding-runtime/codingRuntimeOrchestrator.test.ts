@@ -19,9 +19,15 @@ import {
   MAX_APPROVAL_CHALLENGE_TTL_MS,
   type CodingRuntimeOrchestratorResult,
 } from "./codingRuntimeOrchestrator.js";
-import { CodingRuntimeLaunchRejectedError } from "./launchFailure.js";
+import {
+  CodingRuntimeLaunchRejectedError,
+  CodingRuntimeLaunchResolutionError,
+} from "./launchFailure.js";
 import { createPendingResearchApprovals } from "./researchApprovalIssuance.js";
 import { createResearchGrantRegistry } from "./researchGrantRegistry.js";
+import { UNKNOWN_CORRELATION_ID } from "../correlation.js";
+import type { ServerDiagnosticRecord, ServerDiagnosticSink } from "../diagnostics-log.js";
+import type { ServerLogEvent, ServerLogSink } from "../observability/server-log.js";
 import type { AuxiliaryResearchScopeV1 } from "@oscharko-dev/keiko-contracts";
 
 function successfulSnapshot(result: CodingRuntimeOrchestratorResult) {
@@ -79,6 +85,8 @@ function fixture(
   activityProjection?: CodingSafeActivityProjection,
   clock?: () => Date,
   seededRows: readonly CodingRuntimeSnapshot[] = [],
+  diagnostics?: ServerDiagnosticSink,
+  activityLog?: ServerLogSink,
 ) {
   const rows = new Map<string, CodingRuntimeSnapshot>(seededRows.map((row) => [row.runId, row]));
   const listPrunableSettled = vi.fn((): readonly string[] => []);
@@ -235,6 +243,8 @@ function fixture(
     serverPrincipal: () => "server",
     researchGrants,
     pendingResearchApprovals,
+    ...(diagnostics ? { diagnostics } : {}),
+    ...(activityLog ? { activityLog } : {}),
     now: clock ?? ((): Date => new Date("2026-01-01T00:00:00.000Z")),
     newRunId: () => `run-${String(rows.size + 1)}`,
   });
@@ -255,6 +265,62 @@ function fixture(
     listPrunableSettled,
     deletePruned,
   };
+}
+
+function captureDiagnostics(): {
+  readonly diagnostics: ServerDiagnosticSink;
+  readonly records: readonly ServerDiagnosticRecord[];
+} {
+  const records: ServerDiagnosticRecord[] = [];
+  return {
+    diagnostics: { record: (record) => void records.push(record) },
+    records,
+  };
+}
+
+function captureActivityLog(): {
+  readonly activityLog: ServerLogSink;
+  readonly records: readonly ServerLogEvent[];
+} {
+  const records: ServerLogEvent[] = [];
+  return {
+    activityLog: { write: (event) => void records.push(event) },
+    records,
+  };
+}
+
+function expectRuntimeStartedEvent(records: readonly ServerLogEvent[]): void {
+  const event = records.find((candidate) => candidate.op === "coding-runtime.run.started");
+  if (event === undefined) throw new Error("expected coding runtime start log");
+  const extra = event.extra;
+  if (extra === undefined) throw new Error("expected coding runtime start fields");
+  expect(event.category).toBe("process");
+  expect(event.correlationId).toBe(UNKNOWN_CORRELATION_ID);
+  expect(extra.runId).toBe("run-1");
+  expect(extra.state).toBe("starting");
+  expect(extra.revision).toBe(1);
+  expect(extra.requestedMode).toBe("supervised-coding");
+  expect(extra.effectiveMode).toBe("supervised-coding");
+  expect(extra.runtimeSource).toBe("codex-cli-adapter");
+  expect(extra.modelSource).toBe("keiko-model-gateway");
+  expect(extra.hasPredecessor).toBe(false);
+}
+
+function expectRuntimeSettledEvent(records: readonly ServerLogEvent[]): void {
+  const event = records.find((candidate) => candidate.op === "coding-runtime.run.settled");
+  if (event === undefined) throw new Error("expected coding runtime settlement log");
+  const extra = event.extra;
+  if (extra === undefined) throw new Error("expected coding runtime settlement fields");
+  expect(event.category).toBe("process");
+  expect(event.correlationId).toBe(UNKNOWN_CORRELATION_ID);
+  expect(extra.runId).toBe("run-1");
+  expect(extra.state).toBe("cancelled");
+  expect(extra.requestedMode).toBe("supervised-coding");
+  expect(extra.taskOutcomeStatus).toBe("cancelled");
+  expect(extra.outputByteCount).toBe(0);
+  expect(extra.outputDigest).toBe("a".repeat(64));
+  expect(extra.diagnosticByteCount).toBe(0);
+  expect(extra.diagnosticDigest).toBe("b".repeat(64));
 }
 
 function fakeSafeActivityProjection(): CodingSafeActivityProjection {
@@ -293,6 +359,21 @@ const start = {
 } as const;
 
 describe("CodingRuntimeOrchestrator", () => {
+  it("records body-free activity log lines for run start and settlement", async () => {
+    const captured = captureActivityLog();
+    const f = fixture(undefined, undefined, [], undefined, captured.activityLog);
+
+    await f.orchestrator.start(start);
+    await f.orchestrator.stop("run-1", { requestId: "run-1" });
+
+    expectRuntimeStartedEvent(captured.records);
+    expectRuntimeSettledEvent(captured.records);
+    const serialized = JSON.stringify(captured.records);
+    expect(serialized).not.toContain(start.taskIntent);
+    expect(serialized).not.toContain("/workspace");
+    expect(serialized).not.toContain("/bin/runtime");
+  });
+
   it("reaps the managed runtime and settles a completed task exactly once", async () => {
     const f = fixture();
     let resolveCompletion: ((outcome: "succeeded") => void) | undefined;
@@ -540,12 +621,39 @@ describe("CodingRuntimeOrchestrator", () => {
   // could tell the two apart, and the structured code the runtime manager already defines for the
   // mismatch never reached the caller.
   it("reports a rejected launch under its own cause instead of one generic code", async () => {
-    const f = fixture();
+    const captured = captureDiagnostics();
+    const f = fixture(undefined, undefined, [], captured.diagnostics);
     f.launchResolver.resolve.mockImplementationOnce(() => {
       throw new CodingRuntimeLaunchRejectedError("adapter-profile-mismatch");
     });
 
     expect(await f.orchestrator.start(start)).toEqual({ ok: false, failureCode: "source-drift" });
+    expect(captured.records).toContainEqual(
+      expect.objectContaining({
+        operation: "coding-runtime.start",
+        message: "runtime-start-failed",
+        code: "stage=start:reason=launch-resolution:adapter-profile-mismatch",
+      }),
+    );
+  });
+
+  it("diagnoses a rejected model selection without exposing selection content", async () => {
+    const captured = captureDiagnostics();
+    const f = fixture(undefined, undefined, [], captured.diagnostics);
+    f.launchResolver.resolve.mockImplementationOnce(() => {
+      throw new CodingRuntimeLaunchResolutionError("managed-model-unqualified");
+    });
+
+    expect(await f.orchestrator.start(start)).toEqual({
+      ok: false,
+      failureCode: "authority-resolution-failed",
+    });
+    expect(captured.records).toContainEqual(
+      expect.objectContaining({
+        errorClass: "CodingRuntimeLaunchResolutionError",
+        code: "stage=start:reason=launch-resolution:managed-model-unqualified",
+      }),
+    );
   });
 
   it("keeps an unrecognized launch throw on the generic cause and never reports success", async () => {
@@ -968,7 +1076,8 @@ describe("CodingRuntimeOrchestrator", () => {
   it.each(["ready", "running", "awaiting-approval", "paused"] as const)(
     "terminates a run whose runtime exits while it is %s",
     async (state) => {
-      const f = fixture();
+      const captured = captureDiagnostics();
+      const f = fixture(undefined, undefined, [], captured.diagnostics);
       await f.orchestrator.start(start);
       f.rows.set("run-1", { ...rowFor(f.rows, "run-1"), state });
 
@@ -987,6 +1096,17 @@ describe("CodingRuntimeOrchestrator", () => {
       expect(f.evidence.settle).toHaveBeenCalledWith(
         expect.objectContaining({ runId: "run-1", state: "failed", failureCode: "runtime-failed" }),
       );
+      expect(captured.records).toContainEqual(
+        expect.objectContaining({
+          correlationId: UNKNOWN_CORRELATION_ID,
+          operation: "coding-runtime.lifecycle",
+          source: "coding-runtime-orchestrator.ingest",
+          errorClass: "CodingRuntimeLifecycleFailure",
+          message: "runtime-lifecycle-failed",
+          code: "stage=lifecycle:reason=runtime-stopped-live",
+        }),
+      );
+      expect(JSON.stringify(captured.records)).not.toContain(start.taskIntent);
     },
   );
 
@@ -1063,12 +1183,25 @@ describe("CodingRuntimeOrchestrator", () => {
   });
 
   it("contains rejected host lifecycle promises as recovery-required", async () => {
-    const startFailure = fixture();
+    const captured = captureDiagnostics();
+    const startFailure = fixture(undefined, undefined, [], captured.diagnostics);
     startFailure.manager.start.mockRejectedValueOnce(new Error("private host failure"));
     expect(successfulSnapshot(await startFailure.orchestrator.start(start)).state).toBe(
       "recovery-required",
     );
     expect(startFailure.manager.reconcile).toHaveBeenCalledWith("run-1");
+    expect(captured.records).toContainEqual(
+      expect.objectContaining({
+        correlationId: UNKNOWN_CORRELATION_ID,
+        operation: "coding-runtime.start",
+        source: "coding-runtime-orchestrator.start",
+        errorClass: "Error",
+        message: "runtime-start-failed",
+        code: "stage=start:reason=manager-exception",
+      }),
+    );
+    expect(JSON.stringify(captured.records)).not.toContain(start.taskIntent);
+    expect(JSON.stringify(captured.records)).not.toContain("private host failure");
 
     const stopFailure = fixture();
     await stopFailure.orchestrator.start(start);
@@ -1174,8 +1307,11 @@ describe("CodingRuntimeOrchestrator", () => {
 });
 
 describe("pause and resume (#2386 adversarial-review regressions)", () => {
-  async function runningFixture(clock?: () => Date): Promise<ReturnType<typeof fixture>> {
-    const f = fixture(undefined, clock);
+  async function runningFixture(
+    clock?: () => Date,
+    diagnostics?: ServerDiagnosticSink,
+  ): Promise<ReturnType<typeof fixture>> {
+    const f = fixture(undefined, clock, [], diagnostics);
     await f.orchestrator.start(start);
     await f.orchestrator.ingest({
       schemaVersion: "1",
@@ -1374,7 +1510,8 @@ describe("pause and resume (#2386 adversarial-review regressions)", () => {
   );
 
   it("still terminates a paused run on a redacted runtime failure", async () => {
-    const f = await runningFixture();
+    const captured = captureDiagnostics();
+    const f = await runningFixture(undefined, captured.diagnostics);
     await f.orchestrator.pause("run-1", { requestId: "run-1" });
     const failed = await f.orchestrator.ingest({
       schemaVersion: "1",
@@ -1385,6 +1522,17 @@ describe("pause and resume (#2386 adversarial-review regressions)", () => {
     });
     expect(successfulSnapshot(failed).state).toBe("failed");
     expect(f.manager.stop).toHaveBeenCalledWith("run-1", "failed");
+    expect(captured.records).toContainEqual(
+      expect.objectContaining({
+        correlationId: UNKNOWN_CORRELATION_ID,
+        operation: "coding-runtime.lifecycle",
+        source: "coding-runtime-orchestrator.ingest",
+        errorClass: "CodingRuntimeLifecycleFailure",
+        message: "runtime-lifecycle-failed",
+        code: "stage=lifecycle:reason=failure-redacted",
+      }),
+    );
+    expect(JSON.stringify(captured.records)).not.toContain(start.taskIntent);
   });
 
   it("projects the manager's body-free process result on terminal status", async () => {

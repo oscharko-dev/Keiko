@@ -40,6 +40,8 @@ import {
 } from "./runtimeProcessSupervisor.js";
 import { CodingRuntimeLaunchRejectedError } from "./launchFailure.js";
 
+const OPEN_CODE_START_TIMEOUT_MS = 120_000;
+
 /**
  * Functional-evidence stand-in for a platform-qualified portable OpenCode runtime. It is reachable
  * only through the explicit `createSupervisor` harness seam and never through production discovery.
@@ -65,7 +67,7 @@ export interface ProductionOpenCodeBackendInput {
   readonly runtimeEvidence: Pick<CodingRuntimeEvidenceAggregator, "observe">;
   readonly gatewayReadiness: Pick<
     OpenCodeGatewayReadinessRegistry,
-    "waitForObservedRequest" | "clear"
+    "waitForObservedRequest" | "verifyObserved" | "clear"
   >;
   readonly fetch?: typeof globalThis.fetch | undefined;
   readonly diagnostics?: ServerDiagnosticSink | undefined;
@@ -352,7 +354,7 @@ function openCodeLaunchMaterial(
     args: [],
     inheritedEnvAllowlist: [],
     shutdownTimeoutMs: 5_000,
-    startTimeoutMs: 30_000,
+    startTimeoutMs: OPEN_CODE_START_TIMEOUT_MS,
     confinement: input.portable.qualification,
   };
 }

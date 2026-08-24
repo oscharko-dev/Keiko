@@ -78,10 +78,9 @@ export interface RestoreVerifiedActiveTaskWorkspaceOptions {
  *
  * A persisted active pointer can outlive the verified state the runtime launch authority requires
  * (`lastVerifiedHead`, managed-root identity): after a browser reload the server may still expose
- * the binding while a coding-run start fails `authority-resolution-failed`. Restoring surfaces
- * therefore never claim a binding as-is — the active view is re-verified through the SAME #447
- * reconciliation pass the bind sequence gates on (which also re-stamps the verified head, so a
- * merely-stale binding is repaired rather than just reported).
+ * a stale binding. Restoring surfaces therefore never claim a binding as-is — the active view is
+ * re-verified through the SAME #447 reconciliation pass the bind sequence gates on (which also
+ * re-stamps the verified head, so a merely-stale binding is repaired rather than just reported).
  *
  * Fail-closed contract: when the verification verdict is non-healthy but the re-read view still
  * claims healthy, this throws instead of returning — a restored binding must never claim more

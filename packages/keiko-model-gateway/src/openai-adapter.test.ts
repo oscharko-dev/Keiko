@@ -506,6 +506,21 @@ describe("OpenAiAdapter.call", () => {
     expect((sentBody as { temperature?: number; top_p?: number }).top_p).toBe(1);
   });
 
+  it("serialises an explicitly selected reasoning effort", async () => {
+    let sentBody: unknown;
+    const adapter = adapterWith((_url, init) => {
+      const raw = init?.body;
+      sentBody = typeof raw === "string" ? JSON.parse(raw) : null;
+      return Promise.resolve(
+        jsonResponse({ choices: [{ message: { content: "x" }, finish_reason: "stop" }] }),
+      );
+    });
+
+    await adapter.call({ ...REQUEST, reasoningEffort: "high" }, CONFIG);
+
+    expect((sentBody as { reasoning_effort?: string }).reasoning_effort).toBe("high");
+  });
+
   it("serialises the server-selected output budget as OpenAI max_tokens", async () => {
     let sentBody: unknown;
     const adapter = adapterWith((_url, init) => {

@@ -5,6 +5,7 @@
 //     state, and is a no-op when the panel already holds it (audit: the old
 //     state-dependent toggle diverged from the record).
 //   - A Search open replays with its recorded workspace root.
+//   - A Git open replays with its recorded project root.
 //   - applyShellUndoAction is a no-op for action kinds not yet wired.
 //   - shellPanelIsOpen is the single openness rule both sides of undo read.
 //
@@ -120,6 +121,76 @@ describe("applyShellUndoAction — AppShell undo wiring (epic #518 #527 / ADR-00
     applyShellUndoAction(target(false, api), action);
 
     expect(api.toggleTool).toHaveBeenCalledWith("search");
+    expect(api.add).not.toHaveBeenCalled();
+  });
+
+  it("replays an explicitly rootless Search open without inheriting a stale root", (): void => {
+    const api = fakeApi();
+    const action: WorkspaceUiAction = {
+      kind: "ui.panel.toggle",
+      panel: "search",
+      before: false,
+      after: true,
+      searchRoot: undefined,
+    };
+
+    applyShellUndoAction(target(false, api), action);
+
+    expect(api.add).toHaveBeenCalledWith("search", { root: undefined });
+    expect(api.toggleTool).not.toHaveBeenCalled();
+  });
+
+  it("replays a Git open with its recorded project root", (): void => {
+    const api = fakeApi();
+    const action: WorkspaceUiAction = {
+      kind: "ui.panel.toggle",
+      panel: "governedGit",
+      before: false,
+      after: true,
+      projectRoot: "/repo/a",
+    };
+
+    applyShellUndoAction(target(false, api), action);
+
+    expect(api.add).toHaveBeenCalledWith("governedGit", {
+      projectPath: "/repo/a",
+      rootBinding: "coding-repository",
+    });
+    expect(api.toggleTool).not.toHaveBeenCalled();
+  });
+
+  it("replays an explicitly rootless Git open without inheriting a stale project", (): void => {
+    const api = fakeApi();
+    const action: WorkspaceUiAction = {
+      kind: "ui.panel.toggle",
+      panel: "governedGit",
+      before: false,
+      after: true,
+      projectRoot: undefined,
+    };
+
+    applyShellUndoAction(target(false, api), action);
+
+    expect(api.add).toHaveBeenCalledWith("governedGit", {
+      projectPath: undefined,
+      rootBinding: undefined,
+    });
+    expect(api.toggleTool).not.toHaveBeenCalled();
+  });
+
+  it("uses the normal toggle when undo closes a rooted Git window", (): void => {
+    const api = fakeApi();
+    const action: WorkspaceUiAction = {
+      kind: "ui.panel.toggle",
+      panel: "governedGit",
+      before: true,
+      after: false,
+      projectRoot: "/repo/a",
+    };
+
+    applyShellUndoAction(target(true, api), action);
+
+    expect(api.toggleTool).toHaveBeenCalledWith("governedGit");
     expect(api.add).not.toHaveBeenCalled();
   });
 

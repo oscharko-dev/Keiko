@@ -7,6 +7,7 @@ import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { GitDeliveryCommitPreviewResponse } from "@/lib/api";
+import { resetClientDiagnosticWriter, setClientDiagnosticWriter } from "@/lib/client-diagnostics";
 import { CommitComposer, composeCommitMessage } from "./CommitComposer";
 
 function makePreview(
@@ -37,6 +38,7 @@ function renderComposer(props: Partial<Parameters<typeof CommitComposer>[0]> = {
       preview={null}
       previewDraft={null}
       previewError={null}
+      previewRevision={0}
       onPreview={onPreview}
       onCommit={onCommit}
       {...props}
@@ -48,6 +50,7 @@ function renderComposer(props: Partial<Parameters<typeof CommitComposer>[0]> = {
 afterEach(() => {
   vi.useRealTimers();
   vi.clearAllMocks();
+  resetClientDiagnosticWriter();
 });
 
 describe("composeCommitMessage", () => {
@@ -61,6 +64,11 @@ describe("composeCommitMessage", () => {
 });
 
 describe("CommitComposer — commit gate", () => {
+  it("exposes a visible Commit heading", () => {
+    renderComposer();
+    expect(screen.getByRole("heading", { name: "Commit" })).toBeInTheDocument();
+  });
+
   it("disables Commit until a summary is entered", async () => {
     const user = userEvent.setup();
     renderComposer({ preview: makePreview(), previewDraft: "feat: do the thing" });
@@ -92,7 +100,7 @@ describe("CommitComposer — commit gate", () => {
     renderComposer({
       previewDraft: "wip: still cooking",
       preview: makePreview({
-        intent: { warnings: ["wip-marker"], mixedScope: false, isWip: true },
+        intent: { warnings: ["wip-marker", "empty-body"], mixedScope: false, isWip: true },
       }),
     });
     await user.type(screen.getByLabelText("Summary"), "wip: still cooking");
@@ -101,12 +109,13 @@ describe("CommitComposer — commit gate", () => {
     expect(screen.getByTestId("git-commit-warnings")).toHaveTextContent(
       "Work-in-progress marker in the subject",
     );
+    expect(screen.queryByText("No commit body")).not.toBeInTheDocument();
   });
 
   it("disables Commit and shows a hint when nothing is staged", () => {
     renderComposer({ stagedFileCount: 0 });
     expect(screen.getByRole("button", { name: /^Commit/ })).toBeDisabled();
-    expect(screen.getByText(/Stage changes to commit/)).toBeInTheDocument();
+    expect(screen.getByText(/Stage changes to prepare a commit draft/)).toBeInTheDocument();
   });
 
   it("disables Commit while a commit is in flight", () => {
@@ -126,13 +135,13 @@ describe("CommitComposer — commit gate", () => {
 });
 
 describe("CommitComposer — preview and outcomes", () => {
-  it("does not request a commit preview for an empty draft", async () => {
+  it("loads the current staged summary and eligible draft for an empty composer", async () => {
     vi.useFakeTimers();
     const { onPreview } = renderComposer();
 
-    await vi.advanceTimersByTimeAsync(500);
+    await vi.advanceTimersByTimeAsync(0);
 
-    expect(onPreview).not.toHaveBeenCalled();
+    expect(onPreview).toHaveBeenCalledWith("");
   });
 
   it("debounces a policy preview for the composed draft when changes are staged", async () => {
@@ -143,6 +152,32 @@ describe("CommitComposer — preview and outcomes", () => {
     await waitFor(() => expect(onPreview).toHaveBeenCalledWith("feat: x"));
   });
 
+  it("refreshes the preview when the staged repository revision changes", async () => {
+    vi.useFakeTimers();
+    const onPreview = vi.fn();
+    const props = {
+      projectId: "/repos/alpha",
+      stagedFileCount: 2,
+      busy: false,
+      outcome: null,
+      error: null,
+      preview: null,
+      previewDraft: null,
+      previewError: null,
+      onPreview,
+      onCommit: vi.fn(),
+    } as const;
+    const view = render(<CommitComposer {...props} previewRevision={1} />);
+    await vi.advanceTimersByTimeAsync(0);
+    onPreview.mockClear();
+
+    view.rerender(<CommitComposer {...props} previewRevision={2} />);
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(onPreview).toHaveBeenCalledOnce();
+    expect(onPreview).toHaveBeenCalledWith("");
+  });
+
   it("renders a preview-error alert when the preview fails", () => {
     renderComposer({ previewError: "preview route unavailable" });
     const alert = screen.getByRole("alert");
@@ -150,16 +185,167 @@ describe("CommitComposer — preview and outcomes", () => {
     expect(alert).toHaveTextContent("preview route unavailable");
   });
 
-  it("renders the change summary in the policy preview", () => {
+  it("hides stale draft, policy, and preview errors when the staged selection becomes empty", () => {
+    const props = {
+      projectId: "/repos/alpha",
+      busy: false,
+      outcome: null,
+      error: null,
+      preview: makePreview({ suggestedMessage: "chore: update staged changes" }),
+      previewDraft: "",
+      previewError: "stale preview error",
+      previewRevision: 1,
+      onPreview: vi.fn(),
+      onCommit: vi.fn(),
+    } as const;
+    const view = render(<CommitComposer {...props} stagedFileCount={2} />);
+    expect(screen.getByTestId("git-commit-draft")).toHaveTextContent(
+      "2 staged files across 1 area",
+    );
+
+    view.rerender(<CommitComposer {...props} stagedFileCount={0} previewRevision={2} />);
+
+    expect(screen.queryByTestId("git-commit-draft")).not.toBeInTheDocument();
+    expect(screen.queryByText("stale preview error")).not.toBeInTheDocument();
+    expect(screen.getByText("Stage changes to prepare a commit draft.")).toBeInTheDocument();
+  });
+
+  it("renders the change summary before a commit draft is entered", () => {
     renderComposer({
       previewDraft: "",
       preview: makePreview({
         summary: { stagedFileCount: 3, areaCount: 2, areas: ["src", "docs"], touchesTests: true },
       }),
     });
-    const preview = screen.getByTestId("git-commit-preview");
+    const preview = screen.getByTestId("git-commit-draft");
     expect(preview).toHaveTextContent("3 staged files across 2 areas");
     expect(preview).toHaveTextContent("touches tests");
+  });
+
+  it("renders singular summary nouns and an unavailable draft", () => {
+    renderComposer({
+      previewDraft: "",
+      preview: makePreview({
+        summary: { stagedFileCount: 1, areaCount: 1, areas: ["src"], touchesTests: false },
+      }),
+    });
+
+    const preview = screen.getByTestId("git-commit-draft");
+    expect(preview).toHaveTextContent("1 staged file across 1 area");
+    expect(preview).toHaveTextContent(
+      "This repository policy needs details that Keiko cannot safely draft.",
+    );
+  });
+
+  it("shows, copies, and applies an eligible commit draft", async () => {
+    const user = userEvent.setup();
+    const clipboardDescriptor = Object.getOwnPropertyDescriptor(navigator, "clipboard");
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: { writeText },
+    });
+    const suggestedMessage = [
+      "chore: update staged changes",
+      "",
+      "Update 2 staged files in src.",
+      "Keep the commit limited to the staged selection.",
+    ].join("\n");
+    const { onPreview } = renderComposer({
+      previewDraft: "",
+      preview: makePreview({ suggestedMessage }),
+    });
+
+    try {
+      expect(screen.getByTestId("git-commit-draft")).toHaveTextContent(
+        "2 staged files across 1 area",
+      );
+      expect(screen.getByRole("group", { name: "Commit draft" })).toBeInTheDocument();
+      expect(screen.getByTestId("git-commit-draft-subject")).toHaveTextContent(
+        "chore: update staged changes",
+      );
+      expect(screen.getByTestId("git-commit-draft-body")).toHaveTextContent(
+        "Update 2 staged files in src. Keep the commit limited to the staged selection.",
+      );
+      expect(screen.getByLabelText("Summary")).toHaveValue("");
+      await user.click(screen.getByRole("button", { name: "Copy commit draft" }));
+      await waitFor(() => expect(writeText).toHaveBeenCalledWith(suggestedMessage));
+      expect(screen.getByText("Copied")).toBeInTheDocument();
+
+      await user.click(screen.getByRole("button", { name: "Use commit draft" }));
+
+      expect(screen.getByLabelText("Summary")).toHaveValue("chore: update staged changes");
+      expect(screen.getByLabelText("Description")).toHaveValue(
+        "Update 2 staged files in src.\nKeep the commit limited to the staged selection.",
+      );
+      expect(screen.getByTestId("git-commit-message-preview")).toHaveTextContent("Commit draft");
+
+      await waitFor(() => expect(onPreview).toHaveBeenCalledWith(suggestedMessage));
+    } finally {
+      if (clipboardDescriptor === undefined) {
+        Reflect.deleteProperty(navigator, "clipboard");
+      } else {
+        Object.defineProperty(navigator, "clipboard", clipboardDescriptor);
+      }
+    }
+  });
+
+  it("clears an unchanged generated draft when the staged revision changes", async () => {
+    const user = userEvent.setup();
+    const diagnostics: string[] = [];
+    setClientDiagnosticWriter((message) => diagnostics.push(message));
+    const suggestedMessage = "chore: update staged changes\n\nUpdate the staged selection.";
+    const props = {
+      projectId: "/repos/alpha",
+      stagedFileCount: 2,
+      busy: false,
+      outcome: null,
+      error: null,
+      preview: makePreview({ suggestedMessage }),
+      previewDraft: "",
+      previewError: null,
+      onPreview: vi.fn(),
+      onCommit: vi.fn(),
+    } as const;
+    const view = render(<CommitComposer {...props} previewRevision={1} />);
+
+    await user.click(screen.getByRole("button", { name: "Use commit draft" }));
+    expect(screen.getByLabelText("Summary")).toHaveValue("chore: update staged changes");
+
+    view.rerender(<CommitComposer {...props} stagedFileCount={1} previewRevision={2} />);
+
+    await waitFor(() => expect(screen.getByLabelText("Summary")).toHaveValue(""));
+    expect(screen.getByLabelText("Description")).toHaveValue("");
+    expect(diagnostics).toEqual([
+      "git-client: stale generated commit draft cleared (repository-revision-changed)",
+    ]);
+  });
+
+  it("preserves a manually edited draft when the staged revision changes", async () => {
+    const user = userEvent.setup();
+    const suggestedMessage = "chore: update staged changes\n\nGenerated detail.";
+    const props = {
+      projectId: "/repos/alpha",
+      stagedFileCount: 2,
+      busy: false,
+      outcome: null,
+      error: null,
+      preview: makePreview({ suggestedMessage }),
+      previewDraft: "",
+      previewError: null,
+      onPreview: vi.fn(),
+      onCommit: vi.fn(),
+    } as const;
+    const view = render(<CommitComposer {...props} previewRevision={1} />);
+
+    await user.click(screen.getByRole("button", { name: "Use commit draft" }));
+    await user.clear(screen.getByLabelText("Summary"));
+    await user.type(screen.getByLabelText("Summary"), "docs: explain the selected change");
+
+    view.rerender(<CommitComposer {...props} stagedFileCount={1} previewRevision={2} />);
+
+    expect(screen.getByLabelText("Summary")).toHaveValue("docs: explain the selected change");
+    expect(screen.getByLabelText("Description")).toHaveValue("Generated detail.");
   });
 
   it("renders the commit mutation outcome", () => {
@@ -172,6 +358,60 @@ describe("CommitComposer — preview and outcomes", () => {
   it("renders a transport error", () => {
     renderComposer({ error: "network down" });
     expect(screen.getByTestId("git-commit-outcome")).toHaveTextContent("network down");
+  });
+
+  it("surfaces every preflight finding and a suggested subject prefix", async () => {
+    const user = userEvent.setup();
+    renderComposer({
+      previewDraft: "feat: x",
+      preview: makePreview({
+        summary: { stagedFileCount: 2, areaCount: 2, areas: ["src", "docs"], touchesTests: false },
+        intent: {
+          warnings: [],
+          mixedScope: false,
+          isWip: false,
+          suggestedSubjectPrefix: "feat",
+        },
+        preflightFindingCodes: [
+          "branch-protection-unavailable",
+          "signed-commits-required",
+          "custom-policy-check",
+        ],
+      }),
+    });
+
+    await user.type(screen.getByLabelText("Summary"), "feat: x");
+
+    expect(screen.getByText("Remote branch rules could not be read")).toBeInTheDocument();
+    expect(screen.getByText("Signed commits may be required")).toBeInTheDocument();
+    expect(screen.getByText("custom policy check")).toBeInTheDocument();
+    expect(screen.getByText("feat")).toBeInTheDocument();
+    expect(screen.getByTestId("git-commit-preview")).toHaveTextContent("2 areas");
+  });
+
+  it("reports a clipboard failure without losing the visible draft", async () => {
+    const user = userEvent.setup();
+    const clipboardDescriptor = Object.getOwnPropertyDescriptor(navigator, "clipboard");
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: { writeText: vi.fn().mockRejectedValue(new Error("denied")) },
+    });
+    renderComposer({ preview: makePreview(), previewDraft: "feat: x" });
+
+    try {
+      await user.type(screen.getByLabelText("Summary"), "feat: x");
+      await user.click(screen.getByRole("button", { name: "Copy commit draft" }));
+
+      expect(await screen.findByRole("alert")).toHaveTextContent("Copy failed");
+      expect(screen.getByLabelText("Summary")).toHaveValue("feat: x");
+      expect(screen.getByTestId("git-commit-message-preview")).toBeInTheDocument();
+    } finally {
+      if (clipboardDescriptor === undefined) {
+        Reflect.deleteProperty(navigator, "clipboard");
+      } else {
+        Object.defineProperty(navigator, "clipboard", clipboardDescriptor);
+      }
+    }
   });
 });
 
@@ -188,10 +428,92 @@ describe("CommitComposer — commit action", () => {
 
     expect(onCommit).toHaveBeenCalledWith("feat: subject\n\nBody.");
   });
+
+  it("routes protected-branch commits to branch creation instead of execute", async () => {
+    const user = userEvent.setup();
+    const onCreateBranch = vi.fn();
+    const { onCommit } = renderComposer({
+      branchName: "dev",
+      onCreateBranch,
+      preview: makePreview({
+        policyOutcome: "blocked",
+        policyBlockReason: "protected-branch",
+      }),
+      previewDraft: "feat: x",
+    });
+
+    await user.type(screen.getByLabelText("Summary"), "feat: x");
+    expect(
+      screen.getByText(
+        (_, element) =>
+          element?.tagName === "P" &&
+          element.textContent?.includes("Current branch is protected") === true,
+      ),
+    ).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Create branch first" }));
+
+    expect(onCreateBranch).toHaveBeenCalledTimes(1);
+    expect(onCommit).not.toHaveBeenCalled();
+  });
+
+  it("hides the redundant remote-protection finding on a protected current branch", async () => {
+    const user = userEvent.setup();
+    renderComposer({
+      onCreateBranch: vi.fn(),
+      preview: makePreview({
+        policyOutcome: "blocked",
+        policyBlockReason: "protected-branch",
+        preflightFindingCodes: ["branch-protection-unavailable"],
+      }),
+      previewDraft: "feat: x",
+    });
+
+    await user.type(screen.getByLabelText("Summary"), "feat: x");
+
+    expect(screen.getByText(/Current branch is protected/)).toBeInTheDocument();
+    expect(screen.queryByText("Remote branch rules could not be read")).not.toBeInTheDocument();
+  });
+
+  it("shows a generic policy block and keeps delivery actions available", async () => {
+    const user = userEvent.setup();
+    const onCreatePullRequest = vi.fn();
+    const onMerge = vi.fn();
+    renderComposer({
+      onCreatePullRequest,
+      onMerge,
+      preview: makePreview({ policyOutcome: "blocked", policyBlockReason: "policy-denied" }),
+      previewDraft: "feat: x",
+    });
+
+    await user.type(screen.getByLabelText("Summary"), "feat: x");
+    expect(
+      screen.getByText("Resolve the commit-policy issues below to commit."),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText("This commit is blocked by the repository policy."),
+    ).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "Create pull request" }));
+    await user.click(screen.getByRole("button", { name: "Merge…" }));
+    expect(onCreatePullRequest).toHaveBeenCalledTimes(1);
+    expect(onMerge).toHaveBeenCalledTimes(1);
+  });
+
+  it("disables delivery actions when no repository is selected", () => {
+    renderComposer({
+      projectId: null,
+      onCreatePullRequest: vi.fn(),
+      onMerge: vi.fn(),
+    });
+
+    expect(screen.getByRole("button", { name: "Create pull request" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Merge…" })).toBeDisabled();
+    expect(screen.getByText("Select a repository to commit.")).toBeInTheDocument();
+  });
 });
 
 describe("CommitComposer — keyboard", () => {
-  it("reaches the summary, description, and Commit button by Tab", async () => {
+  it("reaches the summary, description, Commit button, and draft copy by Tab", async () => {
     const user = userEvent.setup();
     renderComposer({ preview: makePreview(), previewDraft: "feat: x" });
 
@@ -204,5 +526,8 @@ describe("CommitComposer — keyboard", () => {
 
     await user.tab();
     expect(screen.getByRole("button", { name: /^Commit/ })).toHaveFocus();
+
+    await user.tab();
+    expect(screen.getByRole("button", { name: "Copy commit draft" })).toHaveFocus();
   });
 });

@@ -88,7 +88,7 @@ async function openWorkbench(page: Page, pairingFragment?: string): Promise<void
     await expect.poll(() => page.url()).not.toContain("keiko-app-session");
   }
   await page.getByRole("button", { name: "Coding Workbench" }).click();
-  await expect(page.getByRole("heading", { name: "Coding Workbench" })).toBeVisible();
+  await expect(workbench(page)).toBeVisible();
 }
 
 // Drives the "Code setup" section end to end through UI interactions only: binding the fixture
@@ -349,7 +349,7 @@ async function proveRunChangesView(
   stranger: APIRequestContext,
   target: string,
 ): Promise<void> {
-  const changes = page.getByRole("region", { name: "Run changes" });
+  const changes = page.getByRole("region", { name: "Changes" });
   const fileButton = changes.getByRole("button", {
     name: new RegExp(AUTHORITY_TARGET_RELATIVE_PATH, "u"),
   });
@@ -408,7 +408,7 @@ async function proveRevocationSurfacesRepairState(page: Page): Promise<void> {
   await expect(
     runtimeQuestions(page).getByText("not paired for question content", { exact: false }),
   ).toBeVisible();
-  const changes = page.getByRole("region", { name: "Run changes" });
+  const changes = page.getByRole("region", { name: "Changes" });
   await expect(changes.getByRole("alert")).toContainText("app session may need to be paired", {
     timeout: 15_000,
   });

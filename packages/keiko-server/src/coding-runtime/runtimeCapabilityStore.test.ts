@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { MODEL_REASONING_EFFORTS } from "@oscharko-dev/keiko-contracts";
 import {
   createInMemoryRuntimeCapabilityStore,
   type RuntimeCapabilityBinding,
@@ -30,6 +31,13 @@ function issueCapability(store: RuntimeCapabilityStore, runId = "run-1"): string
 }
 
 describe("RuntimeCapabilityStore", () => {
+  it.each(MODEL_REASONING_EFFORTS)("accepts canonical %s reasoning capabilities", (effort) => {
+    const store = createInMemoryRuntimeCapabilityStore({ nowMs: () => 0 });
+    expect(store.issue({ ...binding(`run-${effort}`), reasoningEffort: effort })).toMatchObject({
+      ok: true,
+    });
+  });
+
   it("rejects a legacy binding that omits its closed capability audience", () => {
     const store = createInMemoryRuntimeCapabilityStore({ nowMs: () => 0 });
     const legacyBinding = Object.fromEntries(

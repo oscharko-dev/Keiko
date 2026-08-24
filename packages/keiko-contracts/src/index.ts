@@ -1245,6 +1245,7 @@ export type {
 } from "./coding-workbench-runtime-api.js";
 export {
   CODING_WORKBENCH_RUNTIME_API_ID_MAX_CHARS,
+  CODING_WORKBENCH_RUNTIME_MODEL_ID_MAX_CHARS,
   CODING_WORKBENCH_RUNTIME_APPROVAL_DECISIONS,
   CODING_WORKBENCH_RUNTIME_EVIDENCE_CLASSES,
   CODING_WORKBENCH_RUNTIME_PREFERENCES,
@@ -1784,6 +1785,7 @@ export type {
   LatencyClass,
   ModelTokenAccountingSource,
   ModelTokenAccounting,
+  ModelReasoningEffort,
   InfillingAlignment,
   ModelCapability,
   CompletionInteractionMode,
@@ -1816,6 +1818,7 @@ export type {
 export type { ProviderEndpointStyle, RealtimeAuthMode } from "./gateway.js";
 export {
   CONVERSATION_CAPABILITY_CONTRACT_VERSION,
+  MODEL_REASONING_EFFORTS,
   GATEWAY_TEMPERATURE_RANGE,
   GATEWAY_TOP_P_RANGE,
   INFILLING_ALIGNMENTS,
@@ -1850,6 +1853,7 @@ export {
   modelSupportsInfilling,
   isAlignedInfillingModel,
   isAsYouTypeCompletionModel,
+  isCodingWorkbenchModel,
   isVoiceCapability,
   modelSupportsSpeechInput,
   modelSupportsSpeechOutput,
@@ -3902,6 +3906,7 @@ export {
   DEFAULT_LARGE_CHANGE_THRESHOLD,
   GIT_COMMIT_QUALITY_WARNING_CODES,
   analyzeGitCommitIntent,
+  suggestGitCommitMessage,
   isGitCommitQualityWarningCode,
   isGitCommitChangeSummary,
   isGitCommitIntentAnalysis,

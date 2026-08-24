@@ -1,14 +1,17 @@
 "use client";
 
-import { useEffect, useRef, useState, type ReactNode, type RefObject } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from "react";
 import {
   CODING_WORKBENCH_MODES,
   isCodingWorkbenchMode,
   isCodingWorkbenchModeWidening,
+  isCodingWorkbenchModel,
   type CodingWorkbenchMode,
   type CodingWorkbenchRuntimeApprovalDecision,
   type CodingWorkbenchRuntimePendingPermission,
   type CodingWorkbenchRuntimeSseEvent,
+  type CodingWorkbenchRuntimeStateName,
+  type ModelCapability,
 } from "@oscharko-dev/keiko-contracts";
 import { useTranslate } from "@/lib/i18n";
 import {
@@ -38,14 +41,21 @@ import {
   type CodingWorkbenchChangesetReview,
 } from "@/lib/useCodingWorkbenchEditorBridge";
 import { useOptionalActiveWorkspace } from "../../context/ActiveWorkspaceContext";
+import { useOptionalChatSessionCatalog } from "../../context/ChatSessionContext";
 import { DiffFileSection } from "../cards/shared/diffView";
-import { PanelTitle, TaskStartSection, Timeline, WorkbenchHeader } from "./CodingWorkbenchSections";
+import {
+  PanelTitle,
+  TaskStartSection,
+  Timeline,
+  WorkbenchWelcome,
+} from "./CodingWorkbenchSections";
 import {
   CodingWorkbenchSetup,
   type CodingWorkbenchSetupRuntimePosture,
 } from "./CodingWorkbenchSetup";
 import { CodingWorkbenchChanges, diffLabels } from "./CodingWorkbenchChanges";
 import { ResearchGrantChip } from "./CodingWorkbenchResearchGrant";
+import { requestGatewayModelCatalogRefresh } from "../shared/gatewaySetupBus";
 import {
   activeRunState,
   changesetDeliveryAlert,
@@ -95,6 +105,48 @@ interface ResumeModeSelection {
   readonly value: CodingWorkbenchMode;
 }
 
+interface WorkbenchAuthoritySelection {
+  readonly pending: boolean;
+  readonly errorMessage: string | null;
+  readonly onChange: (mode: CodingWorkbenchMode) => void;
+}
+
+function useWorkbenchAuthoritySelection(
+  state: CodingWorkbenchRuntimeState,
+  actions: CodingWorkbenchRuntimeActions,
+  t: CodingWorkbenchTranslate,
+): WorkbenchAuthoritySelection {
+  const policy = useAutonomyModePolicy();
+  const runState = state.run.value?.state;
+  useEffect(() => {
+    if (
+      activeRunState(runState) ||
+      state.mutation.status === "pending" ||
+      policy.pending ||
+      state.requestedMode === policy.requestedMode
+    ) {
+      return;
+    }
+    actions.setRequestedMode(policy.requestedMode);
+  }, [
+    actions,
+    policy.pending,
+    policy.requestedMode,
+    runState,
+    state.mutation.status,
+    state.requestedMode,
+  ]);
+  return {
+    pending: policy.pending,
+    errorMessage:
+      policy.error === null ? null : t(`codingWorkbench.composer.authority.error.${policy.error}`),
+    onChange: (mode): void => {
+      actions.setRequestedMode(mode);
+      policy.change(mode);
+    },
+  };
+}
+
 function resumableModes(currentMode: CodingWorkbenchMode): readonly CodingWorkbenchMode[] {
   return CODING_WORKBENCH_MODES.filter((mode) => !isCodingWorkbenchModeWidening(currentMode, mode));
 }
@@ -110,14 +162,29 @@ function selectedResumeMode(
     : currentMode;
 }
 
+export interface CodingWorkbenchGitTarget {
+  readonly root: string | null;
+  readonly binding: "repository" | "task-workspace";
+}
+
+function noopOpenGit(_target: CodingWorkbenchGitTarget): void {}
+
 export function CodingWorkbenchWindow({
   selectedRoot,
+  onOpenGit = noopOpenGit,
 }: {
   readonly selectedRoot?: string | undefined;
+  readonly onOpenGit?: ((target: CodingWorkbenchGitTarget) => void) | undefined;
 }): ReactNode {
   const activeWorkspace = useOptionalActiveWorkspace() ?? EMPTY_WORKSPACE;
+  const chatCatalog = useOptionalChatSessionCatalog();
   const { state, actions } = useCodingWorkbenchRuntime({ workspace: activeWorkspace });
-  const autonomyPolicy = useAutonomyModePolicy();
+  const codingModels = useMemo(
+    () => chatCatalog?.models.filter(isCodingWorkbenchModel) ?? [],
+    [chatCatalog?.models],
+  );
+  useEffect(() => requestGatewayModelCatalogRefresh(), []);
+  useCodingModelSelection(state, actions, codingModels);
   const research = useCodingWorkbenchResearch({
     runId: state.run.value?.runId,
     revision: state.run.value?.revision,
@@ -127,21 +194,15 @@ export function CodingWorkbenchWindow({
   const focusRef = useRef<HTMLHeadingElement>(null);
   const approvalAction = useRef(false);
   const t = useCodingWorkbenchTranslate();
+  const authority = useWorkbenchAuthoritySelection(state, actions, t);
   const workbenchLabel = useTranslate()("rail.coding");
   const pendingPermission = state.run.value?.pendingPermission;
-  const runState = state.run.value?.state;
-  const alert = visibleAlert(state, t, bootstrapSetupVisible(state, activeWorkspace));
-
-  useEffect(() => {
-    if (
-      activeRunState(runState) ||
-      state.mutation.status === "pending" ||
-      state.requestedMode === autonomyPolicy.requestedMode
-    ) {
-      return;
-    }
-    actions.setRequestedMode(autonomyPolicy.requestedMode);
-  }, [actions, autonomyPolicy.requestedMode, runState, state.mutation.status, state.requestedMode]);
+  const alert = visibleAlert(
+    state,
+    t,
+    bootstrapSetupVisible(state, activeWorkspace),
+    authority.errorMessage,
+  );
 
   useEffect(() => {
     if (!approvalAction.current || pendingPermission !== undefined) return;
@@ -167,8 +228,33 @@ export function CodingWorkbenchWindow({
       workbenchLabel={workbenchLabel}
       onDecision={decideApproval}
       research={research}
+      codingModels={codingModels}
+      authority={authority}
+      onOpenGit={onOpenGit}
     />
   );
+}
+
+function useCodingModelSelection(
+  state: CodingWorkbenchRuntimeState,
+  actions: CodingWorkbenchRuntimeActions,
+  models: readonly ModelCapability[],
+): void {
+  const selected = models.find((model) => model.id === state.selectedModelId);
+  useEffect(() => {
+    if (state.runtimePreference !== "managed-gateway") return;
+    const next = selected?.id ?? models[0]?.id ?? null;
+    if (next !== state.selectedModelId) actions.setSelectedModel(next);
+  }, [actions, models, selected?.id, state.runtimePreference, state.selectedModelId]);
+  useEffect(() => {
+    const efforts = selected?.reasoningEfforts ?? [];
+    const currentAllowed =
+      state.reasoningEffort !== null && efforts.includes(state.reasoningEffort);
+    const next = currentAllowed
+      ? state.reasoningEffort
+      : (efforts.find((effort) => effort === "medium") ?? efforts[0] ?? null);
+    if (next !== state.reasoningEffort) actions.setReasoningEffort(next);
+  }, [actions, selected, state.reasoningEffort]);
 }
 
 interface WorkbenchContentProps {
@@ -184,6 +270,18 @@ interface WorkbenchContentProps {
   readonly workbenchLabel: string;
   readonly onDecision: (decision: "approved" | "denied") => void;
   readonly research: CodingWorkbenchResearchState;
+  readonly codingModels: readonly ModelCapability[];
+  readonly authority: WorkbenchAuthoritySelection;
+  readonly onOpenGit: (target: CodingWorkbenchGitTarget) => void;
+}
+
+function WorkbenchAlert({ message }: { readonly message: string | null }): ReactNode {
+  if (message === null) return null;
+  return (
+    <p className={styles.alert} role="alert">
+      <span aria-hidden="true">!</span> {message}
+    </p>
+  );
 }
 
 function WorkbenchContent({
@@ -199,35 +297,39 @@ function WorkbenchContent({
   workbenchLabel,
   onDecision,
   research,
+  codingModels,
+  authority,
+  onOpenGit,
 }: WorkbenchContentProps): ReactNode {
-  const runState = state.run.value?.state;
   return (
     <section
       className={styles.shell}
       aria-label={workbenchLabel}
       aria-busy={state.mutation.status === "pending"}
-      data-state={runState ?? "idle"}
+      data-state={state.run.value?.state ?? "idle"}
     >
-      <WorkbenchHeader state={state} focusRef={focusRef} />
+      <h2 className="sr-only">{workbenchLabel}</h2>
       <SessionContextBar state={state} activeWorkspace={activeWorkspace} />
       <p className="sr-only" role="status" aria-live="polite" aria-atomic="true">
         {lifecycleAnnouncement(state, t, research.grant)}
       </p>
-      {alert ? (
-        <p className={styles.alert} role="alert">
-          <span aria-hidden="true">!</span> {alert}
-        </p>
-      ) : null}
-      <WorkbenchColumns
-        state={state}
-        actions={actions}
-        activeWorkspace={activeWorkspace}
-        selectedRoot={selectedRoot}
-        taskIntent={taskIntent}
-        onTaskIntentChange={onTaskIntentChange}
-        onDecision={onDecision}
-        research={research}
-      />
+      <div className={styles.body}>
+        <WorkbenchAlert message={alert} />
+        <WorkbenchColumns
+          state={state}
+          actions={actions}
+          activeWorkspace={activeWorkspace}
+          selectedRoot={selectedRoot}
+          taskIntent={taskIntent}
+          onTaskIntentChange={onTaskIntentChange}
+          focusRef={focusRef}
+          onDecision={onDecision}
+          research={research}
+          codingModels={codingModels}
+          authority={authority}
+          onOpenGit={onOpenGit}
+        />
+      </div>
     </section>
   );
 }
@@ -239,9 +341,13 @@ function WorkbenchColumns({
   selectedRoot,
   taskIntent,
   onTaskIntentChange,
+  focusRef,
   onDecision,
   research,
-}: Omit<WorkbenchContentProps, "alert" | "focusRef" | "t" | "workbenchLabel">): ReactNode {
+  codingModels,
+  authority,
+  onOpenGit,
+}: Omit<WorkbenchContentProps, "alert" | "t" | "workbenchLabel">): ReactNode {
   const t = useCodingWorkbenchTranslate();
   const [resumeSelection, setResumeSelection] = useState<ResumeModeSelection | null>(null);
   // The bootstrap Code setup (#2385) renders whenever no active task-workspace binding exists, so a
@@ -297,6 +403,10 @@ function WorkbenchColumns({
     pausedRun?.effectiveMode,
   );
   const resumeModes = pausedRun?.effectiveMode ? resumableModes(pausedRun.effectiveMode) : [];
+  const runIsActive = activeRunState(state.run.value?.state);
+  const repositoryRoot = runIsActive
+    ? (activeWorkspace.activeBinding?.activeRoot ?? selectedRoot ?? null)
+    : (selectedRoot ?? null);
   const taskComposer = (
     <TaskStartSection
       taskIntent={taskIntent}
@@ -314,6 +424,34 @@ function WorkbenchColumns({
       canResume={resumeMode !== null}
       mutationPending={state.mutation.status === "pending"}
       startBusy={state.mutation.kind === "start" && state.mutation.status === "pending"}
+      repositoryLabel={repositoryLabel(repositoryRoot)}
+      branchLabel={
+        runIsActive
+          ? (activeWorkspace.activeInstance?.taskBranch ?? null)
+          : (activeWorkspace.activeInstance?.baseBranch ?? null)
+      }
+      onOpenGit={() =>
+        onOpenGit({
+          root: repositoryRoot,
+          binding: runIsActive ? "task-workspace" : "repository",
+        })
+      }
+      autonomyMode={confirmedMode(state)}
+      autonomyLabel={confirmedModeLabel(state, t)}
+      requestedMode={state.requestedMode}
+      runtimePreference={state.runtimePreference}
+      configurationLocked={
+        activeRunState(state.run.value?.state) ||
+        state.mutation.status === "pending" ||
+        authority.pending
+      }
+      onRequestedModeChange={authority.onChange}
+      onRuntimePreferenceChange={actions.setRuntimePreference}
+      models={codingModels}
+      selectedModelId={state.selectedModelId}
+      reasoningEffort={state.reasoningEffort}
+      onSelectedModelChange={actions.setSelectedModel}
+      onReasoningEffortChange={actions.setReasoningEffort}
     />
   );
   if (showSetup) {
@@ -327,46 +465,61 @@ function WorkbenchColumns({
       </div>
     );
   }
+  const showWelcome =
+    welcomeEligibleState(state.run.value?.state) &&
+    state.events.length === 0 &&
+    activity.feed === null &&
+    questions.questions.length === 0 &&
+    editorBridge.pendingReview === null &&
+    research.grant === null;
   return (
     <div className={styles.session}>
-      <div
-        ref={sessionStreamRef}
-        className={styles.sessionStream}
-        role="log"
-        aria-label={t("codingWorkbench.readiness.eventStream.label")}
-        onScroll={onStreamScroll}
-        // eslint-disable-next-line jsx-a11y/no-noninteractive-tabindex -- scrollable log region must be keyboard-focusable (axe scrollable-region-focusable)
-        tabIndex={0}
-      >
-        <PermissionPrompt state={state} research={research} onDecision={onDecision} />
-        <ChangesetReviewPanel
-          review={editorBridge.pendingReview}
-          onApprove={editorBridge.approve}
-          onDeny={editorBridge.deny}
-          onRetry={editorBridge.retry}
-        />
-        <RecoveryPanel state={state} taskIntent={taskIntent} actions={actions} />
-        <ResearchGrantChip
-          grant={research.grant ?? undefined}
-          busy={state.mutation.status === "pending"}
-          onRevoke={() => {
-            if (research.grant !== null) void actions.revokeResearchGrant(research.grant);
-          }}
-        />
-        <RuntimeResultPanel state={state} />
-        <Timeline events={state.events} activity={activity} questions={questions} />
-        <CodingWorkbenchChanges
-          root={
-            activeWorkspace.error === null
-              ? (activeWorkspace.activeBinding?.activeRoot ?? null)
-              : null
-          }
-          runId={state.run.value?.runId}
-          changeSignal={latestChangesSignal(state.events)}
-          bindingPending={activeWorkspace.loading || activeWorkspace.switching}
-          pairing={state.pairing}
-        />
-      </div>
+      {showWelcome ? (
+        <WorkbenchWelcome />
+      ) : (
+        <div
+          ref={sessionStreamRef}
+          className={styles.sessionStream}
+          role="log"
+          aria-label={t("codingWorkbench.readiness.eventStream.label")}
+          onScroll={onStreamScroll}
+          // eslint-disable-next-line jsx-a11y/no-noninteractive-tabindex -- scrollable log region must be keyboard-focusable (axe scrollable-region-focusable)
+          tabIndex={0}
+        >
+          <PermissionPrompt state={state} research={research} onDecision={onDecision} />
+          <ChangesetReviewPanel
+            review={editorBridge.pendingReview}
+            onApprove={editorBridge.approve}
+            onDeny={editorBridge.deny}
+            onRetry={editorBridge.retry}
+          />
+          <RecoveryPanel state={state} taskIntent={taskIntent} actions={actions} />
+          <ResearchGrantChip
+            grant={research.grant ?? undefined}
+            busy={state.mutation.status === "pending"}
+            onRevoke={() => {
+              if (research.grant !== null) void actions.revokeResearchGrant(research.grant);
+            }}
+          />
+          <Timeline
+            events={state.events}
+            activity={activity}
+            questions={questions}
+            focusRef={focusRef}
+          />
+          <CodingWorkbenchChanges
+            root={
+              activeWorkspace.error === null
+                ? (activeWorkspace.activeBinding?.activeRoot ?? null)
+                : null
+            }
+            runId={state.run.value?.runId}
+            changeSignal={latestChangesSignal(state.events)}
+            bindingPending={activeWorkspace.loading || activeWorkspace.switching}
+            pairing={state.pairing}
+          />
+        </div>
+      )}
       <div className={styles.composerDock}>
         <RuntimeControls
           state={state}
@@ -388,6 +541,44 @@ function WorkbenchColumns({
   );
 }
 
+function welcomeEligibleState(state: CodingWorkbenchRuntimeStateName | undefined): boolean {
+  return (
+    state === undefined ||
+    state === "idle" ||
+    state === "succeeded" ||
+    state === "failed" ||
+    state === "cancelled" ||
+    state === "taken-over"
+  );
+}
+
+function repositoryLabel(root: string | null): string | null {
+  if (root === null) return null;
+  const parts = root.split(/[\\/]/u);
+  for (let index = parts.length - 1; index >= 0; index -= 1) {
+    const part = parts.at(index);
+    if (part !== undefined && part.length > 0) return part;
+  }
+  return root;
+}
+
+function confirmedModeLabel(
+  state: CodingWorkbenchRuntimeState,
+  t: CodingWorkbenchTranslate,
+): string {
+  const mode = confirmedMode(state);
+  return mode === null ? t("codingWorkbench.mode.unconfirmed") : modeLabel(mode, t);
+}
+
+function confirmedMode(state: CodingWorkbenchRuntimeState): CodingWorkbenchMode | null {
+  const snapshot = state.run.value;
+  return (
+    (activeRunState(snapshot?.state)
+      ? snapshot?.effectiveMode
+      : state.runtime.value?.effectiveMode) ?? null
+  );
+}
+
 // Single source for "the bootstrap Code setup section is on screen". Two copies of this predicate
 // would let the live alert and the setup section disagree about who states a condition.
 function bootstrapSetupVisible(
@@ -397,9 +588,6 @@ function bootstrapSetupVisible(
   return activeWorkspace.activeBinding === null && state.workspace.value === null;
 }
 
-// The bound worktree's health belongs next to its identity: a drifted worktree must stay visible in
-// the session context bar rather than only in the readiness resources (#1990). The projection always
-// carries a health, so there is no unreported case to branch on.
 function workspaceContextValue(
   workspace: CodingWorkbenchRuntimeState["workspace"]["value"],
   t: CodingWorkbenchTranslate,
@@ -408,76 +596,15 @@ function workspaceContextValue(
   return `${workspace.taskId} · ${workspace.taskBranch} · ${workspace.health}`;
 }
 
-// F-01 companion (S3358): the source line has three states — unselected, available, unavailable —
-// and the unavailable case must carry the unavailability on the same line as the source name.
 function sessionSourceValue(
   source: CodingWorkbenchRuntimeState["source"]["value"],
   t: CodingWorkbenchTranslate,
 ): string {
   if (source === null) return t("codingWorkbench.readiness.modelSource.select");
   const label = modelSourceLabel(source.modelSource, t);
-  if (source.available) return label;
-  return `${label} — ${t("codingWorkbench.resourceStatus.unavailable")}`;
+  return source.available ? label : `${label} — ${t("codingWorkbench.resourceStatus.unavailable")}`;
 }
 
-function SessionContextBar({
-  state,
-  activeWorkspace,
-}: {
-  readonly state: CodingWorkbenchRuntimeState;
-  readonly activeWorkspace: UseCodingWorkbenchRuntimeInput["workspace"];
-}): ReactNode {
-  const t = useCodingWorkbenchTranslate();
-  const workspace = state.workspace.value;
-  const source = state.source.value;
-  // Never present the locally requested mode as the effective one. Until readiness resolves, the
-  // request and the server's answer can differ — a deployment ceiling clamps it — and this bar is
-  // where an operator reads the authority a run will actually get.
-  const snapshot = state.run.value;
-  const confirmedMode = activeRunState(snapshot?.state)
-    ? (snapshot?.effectiveMode ?? null)
-    : (state.runtime.value?.effectiveMode ?? null);
-  const repository = activeWorkspace.activeBinding?.activeRoot;
-  const workspaceValue = workspaceContextValue(workspace, t);
-  // F-01: an unavailable source (e.g. the sidecar gateway profile reporting no-tool-calling) is
-  // never presented as a plain healthy source name — the unavailability rides the same line.
-  const sourceValue = sessionSourceValue(source, t);
-  return (
-    <div className={styles.contextBar} aria-label={t("codingWorkbench.header.summary")}>
-      <span className={styles.contextItem} title={repository}>
-        <span className={styles.contextLabel}>
-          {t("codingWorkbench.readiness.workspace.label")}
-        </span>
-        <span className={styles.contextValue}>{workspaceValue}</span>
-      </span>
-      <span className={styles.contextItem}>
-        <span className={styles.contextLabel}>
-          {t("codingWorkbench.readiness.modelSource.label")}
-        </span>
-        <span className={styles.contextValue}>{sourceValue}</span>
-      </span>
-      <RuntimeAssuranceContextItem state={state} t={t} />
-      <span
-        className={styles.contextItem}
-        {...(confirmedMode === null ? {} : { "data-mode": confirmedMode })}
-      >
-        <span className={styles.contextLabel}>{t("codingWorkbench.mode.eyebrow")}</span>
-        <span className={styles.contextValue}>
-          {confirmedMode === null
-            ? t("codingWorkbench.mode.unconfirmed")
-            : modeLabel(confirmedMode, t)}
-        </span>
-      </span>
-    </div>
-  );
-}
-
-/**
- * ADR-0163 D9. The context bar renders on every path and is never conditional, and it already
- * carries this kind of honesty (an unhealthy source name reads "— Unavailable" rather than plain).
- * An unverified evaluation runtime is a standing fact, so it belongs here. Absent readiness
- * degrades to the evaluation wording, never to "verified".
- */
 function RuntimeAssuranceContextItem({
   state,
   t,
@@ -497,6 +624,40 @@ function RuntimeAssuranceContextItem({
         )}
       </span>
     </span>
+  );
+}
+
+function SessionContextBar({
+  state,
+  activeWorkspace,
+}: {
+  readonly state: CodingWorkbenchRuntimeState;
+  readonly activeWorkspace: UseCodingWorkbenchRuntimeInput["workspace"];
+}): ReactNode {
+  const t = useCodingWorkbenchTranslate();
+  const mode = confirmedMode(state);
+  return (
+    <div className={styles.contextBar} aria-label={t("codingWorkbench.header.summary")}>
+      <span className={styles.contextItem} title={activeWorkspace.activeBinding?.activeRoot}>
+        <span className={styles.contextLabel}>
+          {t("codingWorkbench.readiness.workspace.label")}
+        </span>
+        <span className={styles.contextValue}>
+          {workspaceContextValue(state.workspace.value, t)}
+        </span>
+      </span>
+      <span className={styles.contextItem}>
+        <span className={styles.contextLabel}>
+          {t("codingWorkbench.readiness.modelSource.label")}
+        </span>
+        <span className={styles.contextValue}>{sessionSourceValue(state.source.value, t)}</span>
+      </span>
+      <RuntimeAssuranceContextItem state={state} t={t} />
+      <span className={styles.contextItem} {...(mode === null ? {} : { "data-mode": mode })}>
+        <span className={styles.contextLabel}>{t("codingWorkbench.mode.eyebrow")}</span>
+        <span className={styles.contextValue}>{confirmedModeLabel(state, t)}</span>
+      </span>
+    </div>
   );
 }
 
@@ -572,48 +733,6 @@ function RuntimeControls({
         </button>
       </div>
     </div>
-  );
-}
-
-function RuntimeResultPanel({ state }: { readonly state: CodingWorkbenchRuntimeState }): ReactNode {
-  const t = useCodingWorkbenchTranslate();
-  const result = state.run.value?.result;
-  if (result === undefined) return null;
-  const exitCode =
-    result.exitCode === null ? t("codingWorkbench.result.noExitCode") : String(result.exitCode);
-  const summary = (channel: "output" | "error"): readonly { label: string; value: string }[] => {
-    const value = result[channel];
-    return [
-      { label: t(`codingWorkbench.result.${channel}.bytes`), value: String(value.byteCount) },
-      { label: t(`codingWorkbench.result.${channel}.lines`), value: String(value.lineCount) },
-      { label: t(`codingWorkbench.result.${channel}.digest`), value: value.sha256 },
-      {
-        label: t(`codingWorkbench.result.${channel}.truncated`),
-        value: t(value.truncated ? "codingWorkbench.result.yes" : "codingWorkbench.result.no"),
-      },
-    ];
-  };
-  const facts = [
-    {
-      label: t("codingWorkbench.result.status"),
-      value: t(`codingWorkbench.result.status.${result.status}`),
-    },
-    { label: t("codingWorkbench.result.exitCode"), value: exitCode },
-    ...summary("output"),
-    ...summary("error"),
-  ];
-  return (
-    <section className={styles.card} aria-labelledby="coding-runtime-result-title">
-      <PanelTitle eyebrow={t("codingWorkbench.result.eyebrow")} id="coding-runtime-result-title">
-        {t("codingWorkbench.result.title")}
-      </PanelTitle>
-      <p className={styles.helpText}>{t("codingWorkbench.result.help")}</p>
-      <dl className={styles.approvalFacts} aria-label={t("codingWorkbench.result.facts")}>
-        {facts.map((fact) => (
-          <ApprovalFact key={fact.label} label={fact.label} value={fact.value} />
-        ))}
-      </dl>
-    </section>
   );
 }
 

@@ -271,8 +271,8 @@ describe("app-session pairing truth (release-audit F-08/RG-12)", () => {
     );
   });
 
-  it("surfaces the unpaired window as a standing visible alert", () => {
-    expect(visibleAlert(unpairedState(), t, false)).toBe("codingWorkbench.pairing.unpaired");
+  it("keeps the unpaired window out of standing visible alerts", () => {
+    expect(visibleAlert(unpairedState(), t, false)).toBeNull();
     expect(visibleAlert(createInitialCodingWorkbenchRuntimeState(), t, false)).toBeNull();
   });
 

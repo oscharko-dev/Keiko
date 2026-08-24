@@ -54,6 +54,7 @@ import { isLegacyEmptyAssistantPlaceholder } from "./assistant-response.js";
 import { CHAT_TURN_WAIT_CANCELLED, runSerializedChatTurn } from "./chat-turn-serializer.js";
 import { createRequestCancellation } from "./request-cancellation.js";
 import { emitServerDiagnostic, serverDiagnosticFromError } from "./diagnostics-log.js";
+import { UNKNOWN_CORRELATION_ID } from "./correlation.js";
 // Issue #184 — workspace-relative path gate. isValidScopePath is the canonical validator from
 // @oscharko-dev/keiko-contracts/connected-context (issue #178). Reusing it here keeps the BFF
 // boundary aligned with the rest of the connected-repo surface and avoids regex drift.
@@ -468,6 +469,43 @@ function buildProjectPatch(body: Record<string, unknown>): UpdateProjectPatch {
   };
 }
 
+function reconnectExistingProject(
+  ctx: RouteContext,
+  deps: UiHandlerDeps,
+  targetPath: string,
+): ProjectWithAvailability {
+  const correlationId = ctx.correlationId ?? UNKNOWN_CORRELATION_ID;
+  try {
+    const project = projectWithWorkspaceAvailability(
+      deps.store,
+      deps.store.reconnectProject(targetPath),
+    );
+    processServerLogSink().write({
+      category: "setup",
+      op: "project.workspace.reconnect",
+      correlationId,
+      status: 200,
+      extra: { outcome: project.workspaceAvailable ? "available" : "unavailable" },
+    });
+    return project;
+  } catch (error) {
+    emitServerDiagnostic(
+      deps.diagnostics,
+      serverDiagnosticFromError({
+        correlationId,
+        operation: "project.workspace.reconnect",
+        source: "store-handlers",
+        error,
+        summary: "server-operation-failed",
+        // Reconnect failures can contain an absolute local path. Diagnostics need the structured
+        // class and frames, never an error string that depends on a caller-provided redactor.
+        redact: (): string => "server-operation-failed",
+      }),
+    );
+    throw error;
+  }
+}
+
 export async function handleUpdateProject(
   ctx: RouteContext,
   deps: UiHandlerDeps,
@@ -479,10 +517,10 @@ export async function handleUpdateProject(
     // An empty PATCH is the existing-project reconnect operation. Re-entering the store's
     // existing-only paired-write owner repairs a missing single-root manifest atomically without
     // admitting an unregistered path; ordinary metadata patches stay on updateProject.
-    const project =
-      Object.keys(patch).length === 0
-        ? deps.store.reconnectProject(targetPath)
-        : deps.store.updateProject(targetPath, patch);
+    if (Object.keys(patch).length === 0) {
+      return { status: 200, body: { project: reconnectExistingProject(ctx, deps, targetPath) } };
+    }
+    const project = deps.store.updateProject(targetPath, patch);
     return {
       status: 200,
       body: { project: projectWithWorkspaceAvailability(deps.store, project) },

@@ -546,15 +546,15 @@ describe("gitDeliveryPolicyTargetBranchName", () => {
     expect(gitDeliveryPolicyTargetBranchName(merge, { mergeBaseBranchName: "dev" })).toBe("dev");
   });
 
-  it("has no branch target for actions that touch no ref by name", () => {
-    expect(
-      gitDeliveryPolicyTargetBranchName({
-        kind: "commit",
-        messageByteLength: 10,
-        stagedPathCount: 1,
-        allowEmptyCommit: false,
-      }),
-    ).toBeUndefined();
+  it("takes the checked-out branch for a commit from trusted worktree operands", () => {
+    const commit: GitDeliveryResolvedInputs = {
+      kind: "commit",
+      messageByteLength: 10,
+      stagedPathCount: 1,
+      allowEmptyCommit: false,
+    };
+    expect(gitDeliveryPolicyTargetBranchName(commit)).toBeUndefined();
+    expect(gitDeliveryPolicyTargetBranchName(commit, { commitBranchName: "dev" })).toBe("dev");
   });
 });
 

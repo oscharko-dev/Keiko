@@ -15,6 +15,7 @@ import type {
   CodingWorkbenchRuntimeStateName,
   CodingWorkbenchSidecarGatewayResult,
   GatewayVerificationState,
+  ModelReasoningEffort,
   TaskWorkspaceHealth,
 } from "@oscharko-dev/keiko-contracts";
 import { retainCodingWorkbenchRuntimeEvents } from "./coding-workbench-event-retention";
@@ -25,9 +26,9 @@ export type CodingWorkbenchResourceStatus =
 /**
  * Release-audit F-08/RG-12: whether this browser window holds a launcher-paired app session, as
  * reported by the honest workspaces read (`session: "paired" | "unpaired"`). Never guessed
- * client-side — an unpaired window's run start is guaranteed to fail authority resolution
- * (ADR-0141), so readiness must include this dimension. `unknown` (boot, or the read failed)
- * blocks start fail-closed without claiming the window is unpaired.
+ * client-side. Runtime start may proceed once the workspace is resolved, but content-bearing
+ * channels still use this dimension; `unknown` (boot, or the read failed) blocks start fail-closed
+ * without claiming the window is unpaired.
  */
 export type CodingWorkbenchPairingState = "unknown" | "paired" | "unpaired";
 
@@ -119,6 +120,8 @@ export interface CodingWorkbenchMutationState {
 export interface CodingWorkbenchRuntimeState {
   readonly requestedMode: CodingWorkbenchMode;
   readonly runtimePreference: CodingWorkbenchRuntimePreference;
+  readonly selectedModelId: string | null;
+  readonly reasoningEffort: ModelReasoningEffort | null;
   readonly profile: CodingWorkbenchResourceState<CodingWorkbenchCodexSubscriptionProfile>;
   readonly codexSetup: CodingWorkbenchResourceState<CodingWorkbenchCodexAuthSetupPlan>;
   readonly source: CodingWorkbenchResourceState<CodingWorkbenchSourceProjection>;
@@ -142,6 +145,8 @@ export type CodingWorkbenchRuntimeStateAction =
       readonly kind: "select-runtime-preference";
       readonly preference: CodingWorkbenchRuntimePreference;
     }
+  | { readonly kind: "select-model"; readonly modelId: string | null }
+  | { readonly kind: "select-reasoning-effort"; readonly effort: ModelReasoningEffort | null }
   | { readonly kind: "resource-loading"; readonly resource: CodingWorkbenchResourceKey }
   | { readonly kind: "profile-set"; readonly profile: CodingWorkbenchCodexSubscriptionProfile }
   | { readonly kind: "profile-empty" }
@@ -189,6 +194,8 @@ export function createInitialCodingWorkbenchRuntimeState(
   return {
     requestedMode,
     runtimePreference,
+    selectedModelId: null,
+    reasoningEffort: null,
     profile: emptyResource(),
     codexSetup: emptyResource(),
     source: emptyResource(),
@@ -216,6 +223,17 @@ const STARTABLE_RUN_STATES: ReadonlySet<CodingWorkbenchRuntimeStateName> = new S
   "taken-over",
 ]);
 
+export const STREAMABLE_CODING_WORKBENCH_RUNTIME_STATES: ReadonlySet<CodingWorkbenchRuntimeStateName> =
+  new Set([
+    "starting",
+    "ready",
+    "running",
+    "paused",
+    "awaiting-approval",
+    "stopping",
+    "recovery-required",
+  ]);
+
 function isConcreteTerminalState(state: CodingWorkbenchRuntimeStateName): boolean {
   return state !== "idle" && STARTABLE_RUN_STATES.has(state);
 }
@@ -224,8 +242,48 @@ function isConcreteTerminalRun(snapshot: CodingWorkbenchRuntimeSnapshot): boolea
   return snapshot.runId !== undefined && isConcreteTerminalState(snapshot.state);
 }
 
+function isStreamableSnapshot(snapshot: CodingWorkbenchRuntimeSnapshot | null): boolean {
+  return (
+    snapshot?.runId !== undefined && STREAMABLE_CODING_WORKBENCH_RUNTIME_STATES.has(snapshot.state)
+  );
+}
+
 function isUnboundIdle(snapshot: CodingWorkbenchRuntimeSnapshot): boolean {
   return snapshot.runId === undefined && snapshot.state === "idle";
+}
+
+function shouldRetainTerminalRun(
+  current: CodingWorkbenchRuntimeSnapshot,
+  snapshot: CodingWorkbenchRuntimeSnapshot,
+): boolean {
+  return isConcreteTerminalRun(current) && isUnboundIdle(snapshot);
+}
+
+function shouldIgnoreOlderSnapshot(
+  current: CodingWorkbenchRuntimeSnapshot | null,
+  snapshot: CodingWorkbenchRuntimeSnapshot,
+): boolean {
+  return (
+    current !== null && current.runId === snapshot.runId && current.revision > snapshot.revision
+  );
+}
+
+function streamForSnapshot(
+  state: CodingWorkbenchRuntimeState,
+  snapshot: CodingWorkbenchRuntimeSnapshot,
+): CodingWorkbenchResourceState<CodingWorkbenchStreamProjection> {
+  return !isStreamableSnapshot(snapshot) ? emptyResource() : state.stream;
+}
+
+function acceptStreamProjection(
+  state: CodingWorkbenchRuntimeState,
+  stream: CodingWorkbenchStreamProjection,
+): CodingWorkbenchRuntimeState {
+  const snapshot = state.run.value;
+  if (snapshot === null || !isStreamableSnapshot(snapshot) || snapshot.runId !== stream.runId) {
+    return { ...state, stream: emptyResource() };
+  }
+  return { ...state, stream: ready(stream) };
 }
 
 function projectReadiness(state: CodingWorkbenchRuntimeState): CodingWorkbenchRuntimeState {
@@ -252,10 +310,11 @@ function projectReadiness(state: CodingWorkbenchRuntimeState): CodingWorkbenchRu
   const runReady =
     state.run.status === "ready" && runState !== undefined && STARTABLE_RUN_STATES.has(runState);
   const mutationIdle = state.mutation.status !== "pending";
-  // Release-audit F-08/RG-12: a start (or retry — the same authority resolution) from an unpaired
-  // window is guaranteed to fail with 403 authority-resolution-failed (ADR-0141), so readiness is
-  // honest only once the paired app session is server-confirmed. Fail closed on "unknown".
-  const pairingReady = state.pairing === "paired";
+  // Pairing is a channel diagnostic, not a local-composer kill switch. `unknown` still blocks while
+  // the boot read is unresolved, but a confirmed unpaired browser must be allowed to send the start
+  // request so the server can either bind the registered workspace or return the authoritative
+  // failure. Blocking it here left a filled composer with a dead send button.
+  const pairingReady = state.pairing !== "unknown";
   return {
     ...state,
     canStart:
@@ -287,6 +346,8 @@ function selectPreference(
   return projectReadiness({
     ...state,
     runtimePreference,
+    selectedModelId: null,
+    reasoningEffort: null,
     profile: emptyResource(),
     codexSetup: emptyResource(),
     source: emptyResource(),
@@ -310,6 +371,7 @@ function resourceFailed(
   state: CodingWorkbenchRuntimeState,
   action: Extract<CodingWorkbenchRuntimeStateAction, { kind: "resource-failed" }>,
 ): CodingWorkbenchRuntimeState {
+  if (action.resource === "stream" && !isStreamableSnapshot(state.run.value)) return state;
   if (action.resource === "run") {
     return projectReadiness({
       ...state,
@@ -327,21 +389,16 @@ function acceptSnapshot(
   snapshot: CodingWorkbenchRuntimeSnapshot,
 ): CodingWorkbenchRuntimeState {
   const current = state.run.value;
-  if (current !== null && isConcreteTerminalRun(current) && isUnboundIdle(snapshot)) {
-    return projectReadiness({ ...state, run: ready(current) });
+  if (current !== null && shouldRetainTerminalRun(current, snapshot)) {
+    return projectReadiness({ ...state, run: ready(current), stream: emptyResource() });
   }
-  if (
-    current !== null &&
-    current.runId === snapshot.runId &&
-    current.revision > snapshot.revision
-  ) {
-    return state;
-  }
+  if (shouldIgnoreOlderSnapshot(current, snapshot)) return state;
   const changedRun = current?.runId !== snapshot.runId;
   return projectReadiness({
     ...state,
     run: ready(snapshot),
-    ...(changedRun ? { events: [], stream: emptyResource() } : {}),
+    stream: changedRun ? emptyResource() : streamForSnapshot(state, snapshot),
+    ...(changedRun ? { events: [] } : {}),
   });
 }
 
@@ -378,7 +435,7 @@ function acceptEvents(
   const terminal = terminalSnapshotFromEvents(state.run.value, incoming);
   return terminal === null
     ? { ...state, events }
-    : projectReadiness({ ...state, run: ready(terminal), events });
+    : projectReadiness({ ...state, run: ready(terminal), stream: emptyResource(), events });
 }
 
 type RuntimeActionHandlers = {
@@ -389,27 +446,48 @@ type RuntimeActionHandlers = {
 };
 
 const runtimeActionHandlers = {
-  "select-mode": (state, action) => selectMode(state, action.mode),
-  "select-runtime-preference": (state, action) => selectPreference(state, action.preference),
-  "resource-loading": (state, action) => resourceLoading(state, action.resource),
-  "resource-failed": (state, action) => resourceFailed(state, action),
-  "profile-set": (state, action) => ({ ...state, profile: ready(action.profile) }),
-  "profile-empty": (state) => ({ ...state, profile: emptyResource("empty") }),
-  "codex-setup-set": (state, action) => ({ ...state, codexSetup: ready(action.plan) }),
-  "source-set": (state, action) =>
+  "select-mode": (state, action): CodingWorkbenchRuntimeState => selectMode(state, action.mode),
+  "select-runtime-preference": (state, action): CodingWorkbenchRuntimeState =>
+    selectPreference(state, action.preference),
+  "select-model": (state, action): CodingWorkbenchRuntimeState => ({
+    ...state,
+    selectedModelId: action.modelId,
+    reasoningEffort: null,
+  }),
+  "select-reasoning-effort": (state, action): CodingWorkbenchRuntimeState => ({
+    ...state,
+    reasoningEffort: action.effort,
+  }),
+  "resource-loading": (state, action): CodingWorkbenchRuntimeState =>
+    resourceLoading(state, action.resource),
+  "resource-failed": (state, action): CodingWorkbenchRuntimeState => resourceFailed(state, action),
+  "profile-set": (state, action): CodingWorkbenchRuntimeState => ({
+    ...state,
+    profile: ready(action.profile),
+  }),
+  "profile-empty": (state): CodingWorkbenchRuntimeState => ({
+    ...state,
+    profile: emptyResource("empty"),
+  }),
+  "codex-setup-set": (state, action): CodingWorkbenchRuntimeState => ({
+    ...state,
+    codexSetup: ready(action.plan),
+  }),
+  "source-set": (state, action): CodingWorkbenchRuntimeState =>
     action.source.runtimePreference !== state.runtimePreference
       ? state
       : projectReadiness({ ...state, source: ready(action.source) }),
-  "runtime-set": (state, action) =>
+  "runtime-set": (state, action): CodingWorkbenchRuntimeState =>
     projectReadiness({ ...state, runtime: ready(action.readiness) }),
-  "workspace-set": (state, action) =>
+  "workspace-set": (state, action): CodingWorkbenchRuntimeState =>
     projectReadiness({
       ...state,
       workspace: action.workspace ? ready(action.workspace) : emptyResource("empty"),
     }),
-  "run-set": (state, action) => acceptSnapshot(state, action.snapshot),
-  "stream-set": (state, action) => ({ ...state, stream: ready(action.stream) }),
-  "mutation-start": (state, action) =>
+  "run-set": (state, action): CodingWorkbenchRuntimeState => acceptSnapshot(state, action.snapshot),
+  "stream-set": (state, action): CodingWorkbenchRuntimeState =>
+    acceptStreamProjection(state, action.stream),
+  "mutation-start": (state, action): CodingWorkbenchRuntimeState =>
     projectReadiness({
       ...state,
       mutation: {
@@ -419,16 +497,21 @@ const runtimeActionHandlers = {
         error: null,
       },
     }),
-  "mutation-complete": (state) => projectReadiness({ ...state, mutation: IDLE_MUTATION }),
-  "mutation-failed": (state, action) =>
+  "mutation-complete": (state): CodingWorkbenchRuntimeState =>
+    projectReadiness({ ...state, mutation: IDLE_MUTATION }),
+  "mutation-failed": (state, action): CodingWorkbenchRuntimeState =>
     projectReadiness({
       ...state,
       mutation: { ...state.mutation, status: "error", error: action.error },
     }),
   "events-received": (state, action): CodingWorkbenchRuntimeState =>
     acceptEvents(state, action.events),
-  "events-reset": (state) => ({ ...state, events: [], stream: emptyResource() }),
-  "pairing-set": (state, action) =>
+  "events-reset": (state): CodingWorkbenchRuntimeState => ({
+    ...state,
+    events: [],
+    stream: emptyResource(),
+  }),
+  "pairing-set": (state, action): CodingWorkbenchRuntimeState =>
     state.pairing === action.pairing
       ? state
       : projectReadiness({ ...state, pairing: action.pairing }),

@@ -5,7 +5,11 @@
 import type { DatabaseSync } from "node:sqlite";
 import { validateWorkspaceManifest } from "@oscharko-dev/keiko-contracts";
 import type { WorkspaceManifest } from "@oscharko-dev/keiko-contracts";
-import { createSingleRootWorkspaceManifest } from "../workspace-manifest-identity.js";
+import {
+  createSingleRootWorkspaceManifest,
+  inspectWorkspaceRootDescriptor,
+  reviseWorkspaceManifest,
+} from "../workspace-manifest-identity.js";
 import { inspectWorkspaceRootIdentity } from "../workspace-root-identity.js";
 import { projectExists } from "./errors.js";
 import type {
@@ -313,6 +317,78 @@ export function ensureProjectWorkspaceManifest(
   // Throwing instead rolls the transaction back and gives the caller a typed 409 to act on.
   if (findWorkspaceManifestRecordByRoot(db, root.rootRef) !== undefined) throw projectExists();
   insertManifest(db, manifest, [{ rootRef: root.rootRef, projectPath }], now);
+}
+
+function storedManifest(record: WorkspaceManifestRecordRow): WorkspaceManifest {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(record.recordJson);
+  } catch {
+    throw new Error("WORKSPACE_MANIFEST_INVALID");
+  }
+  if (!validateWorkspaceManifest(parsed).ok) throw new Error("WORKSPACE_MANIFEST_INVALID");
+  const manifest = parsed as WorkspaceManifest;
+  if (
+    manifest.workspaceId !== record.workspaceId ||
+    manifest.schemaVersion !== record.schemaVersion ||
+    manifest.manifestRef !== record.manifestRef ||
+    manifest.revision !== record.revision ||
+    manifest.manifestDigest !== record.manifestDigest ||
+    manifest.roots.length !== record.rootProjects.length ||
+    manifest.roots.some(
+      (root, index): boolean => root.rootRef !== record.rootProjects[index]?.rootRef,
+    )
+  ) {
+    throw new Error("WORKSPACE_MANIFEST_INVALID");
+  }
+  return manifest;
+}
+
+/**
+ * An explicit reconnect accepts the filesystem object currently occupying a registered
+ * single-root project's path. It never rewrites a multi-root workspace, and replacement always
+ * revokes the former root's trust before the refreshed identity becomes dispatchable.
+ */
+export function reconnectProjectWorkspaceManifest(
+  db: DatabaseSync,
+  projectPath: string,
+  projectName: string,
+  now: number,
+): void {
+  const record = findWorkspaceManifestRecordByProject(db, projectPath);
+  if (record === undefined) {
+    ensureProjectWorkspaceManifest(db, projectPath, projectName, now);
+    return;
+  }
+  if (record.rootProjects.length !== 1) return;
+  const manifest = storedManifest(record);
+  const previousRoot = manifest.roots[0];
+  const projectRoot = record.rootProjects[0];
+  if (previousRoot === undefined || projectRoot?.projectPath !== projectPath) {
+    throw new Error("WORKSPACE_MANIFEST_INVALID");
+  }
+  const inspected = inspectWorkspaceRootIdentity(projectPath);
+  if (
+    inspected.rootRef === previousRoot.rootRef &&
+    inspected.identityDigest === previousRoot.identityDigest &&
+    inspected.objectIdentityDigest === (projectRoot.objectIdentityDigest ?? undefined)
+  ) {
+    return;
+  }
+  const refreshedRoot = inspectWorkspaceRootDescriptor(projectPath, projectName);
+  const refreshed = reviseWorkspaceManifest(manifest, [refreshedRoot], refreshedRoot.rootRef);
+  updateTargetManifest(
+    db,
+    {
+      manifest: refreshed,
+      expectedRevision: manifest.revision,
+      absorbedWorkspaceIds: [],
+      rootProjects: [{ rootRef: refreshedRoot.rootRef, projectPath }],
+      releasedProjectPaths: [],
+    },
+    now,
+  );
+  db.prepare("DELETE FROM workspace_trust_records WHERE root_ref = ?").run(previousRoot.rootRef);
 }
 
 export function migrateLegacyProjectManifests(db: DatabaseSync): void {

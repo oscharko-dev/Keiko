@@ -5,6 +5,7 @@ import type {
   CodingWorkbenchRuntimeApprovalDecision,
   CodingWorkbenchRuntimePreference,
   CodingWorkbenchRuntimeResearchGrant,
+  ModelReasoningEffort,
 } from "@oscharko-dev/keiko-contracts";
 import type {
   CodingWorkbenchRuntimeState,
@@ -15,6 +16,8 @@ import type { RuntimeMutationActions, RuntimeResources } from "./coding-workbenc
 export interface CodingWorkbenchRuntimeActions {
   readonly setRequestedMode: (mode: CodingWorkbenchMode) => void;
   readonly setRuntimePreference: (preference: CodingWorkbenchRuntimePreference) => void;
+  readonly setSelectedModel: (modelId: string | null) => void;
+  readonly setReasoningEffort: (effort: ModelReasoningEffort | null) => void;
   readonly prepareCodexSetup?:
     ((method: CodingWorkbenchCodexAuthMethod) => Promise<void>) | undefined;
   readonly refreshProfile: () => Promise<void>;
@@ -75,6 +78,8 @@ function createCodingWorkbenchRuntimeActions({
       sourceSequence.current += 1;
       dispatch({ kind: "select-runtime-preference", preference });
     },
+    setSelectedModel: (modelId) => dispatch({ kind: "select-model", modelId }),
+    setReasoningEffort: (effort) => dispatch({ kind: "select-reasoning-effort", effort }),
     prepareCodexSetup,
     refreshProfile,
     refreshSource,

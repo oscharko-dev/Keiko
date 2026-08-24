@@ -8,14 +8,33 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
   productionRuntimeAuthorityFacts,
   productionWorkspaceMatches,
+  type ProductionWorkspaceAuthorityInput,
   resolveProductionRuntimeContext,
 } from "./productionRuntimeWorkspaceAuthority.js";
+import {
+  CodingRuntimeLaunchResolutionError,
+  type CodingRuntimeLaunchResolutionFailureReason,
+} from "./launchFailure.js";
 
 const roots: string[] = [];
 
 afterEach(() => {
   for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
 });
+
+function expectLaunchResolutionFailure(
+  run: () => unknown,
+  reason: CodingRuntimeLaunchResolutionFailureReason,
+): void {
+  try {
+    run();
+  } catch (error: unknown) {
+    expect(error).toBeInstanceOf(CodingRuntimeLaunchResolutionError);
+    if (error instanceof CodingRuntimeLaunchResolutionError) expect(error.reason).toBe(reason);
+    return;
+  }
+  throw new Error("expected launch resolution failure");
+}
 
 describe("production runtime workspace authority", () => {
   it("binds only the healthy active managed worktree and fails on live HEAD drift", () => {
@@ -115,6 +134,95 @@ describe("production runtime workspace authority", () => {
         source: "chatgpt-codex-subscription-profile",
       },
     });
+
+    const managedContext = resolveProductionRuntimeContext(
+      {
+        workspaceLifecycle: {
+          getActive: () => ({ instance, binding: { activeRoot: workspace } }),
+        } as never,
+        managedTaskWorkspaceRoot: managed,
+        deploymentCeiling: "supervised-coding",
+        readWorkspaceHead: () => "1".repeat(40),
+        resolveManagedModelProfile: (modelId, reasoningEffort) => ({
+          profileId: modelId ?? "default-model",
+          ...(reasoningEffort === undefined ? {} : { reasoningEffort }),
+        }),
+      },
+      {
+        runId: "run-managed",
+        requestId: "request-managed",
+        taskIntent: "private task",
+        requestedMode: "supervised-coding",
+        runtimePreference: "managed-gateway",
+        modelId: "qwen-coder",
+        reasoningEffort: "high",
+        workspaceId: "workspace-private",
+        workspaceRoot: workspace,
+        serverPrincipal: "operator-private",
+      },
+    );
+
+    expect(managedContext.modelProfile).toMatchObject({
+      profileId: "qwen-coder",
+      source: "keiko-model-gateway",
+      reasoningEffort: "high",
+    });
+  });
+
+  it("classifies unsupported subscription effort and unknown managed models separately", () => {
+    const managed = realpathSync(mkdtempSync(join(tmpdir(), "keiko-runtime-selection-")));
+    roots.push(managed);
+    const workspace = join(managed, "repo", "workspace");
+    mkdirSync(workspace, { recursive: true });
+    const instance = {
+      workspaceId: "workspace-private",
+      repositoryId: "repository-private",
+      repositoryRoot: workspace,
+      managedWorktreePath: workspace,
+      taskId: "task-private",
+      taskBranch: "issue/runtime",
+      baseBranch: "dev",
+      lastVerifiedHead: "1".repeat(40),
+      lifecycleState: "active",
+      health: "healthy",
+      driftMarkers: [],
+    };
+    const input: ProductionWorkspaceAuthorityInput = {
+      workspaceLifecycle: {
+        getActive: () => ({ instance, binding: { activeRoot: workspace } }),
+      } as never,
+      managedTaskWorkspaceRoot: managed,
+      deploymentCeiling: "supervised-coding",
+      readWorkspaceHead: () => "1".repeat(40),
+    };
+    const request = {
+      runId: "run-selection",
+      requestId: "request-selection",
+      taskIntent: "private task",
+      requestedMode: "supervised-coding" as const,
+      workspaceId: "workspace-private",
+      workspaceRoot: workspace,
+      serverPrincipal: "operator-private",
+    };
+
+    expectLaunchResolutionFailure(
+      () =>
+        resolveProductionRuntimeContext(input, {
+          ...request,
+          runtimePreference: "codex-subscription",
+          reasoningEffort: "high",
+        }),
+      "codex-reasoning-effort-unsupported",
+    );
+    expectLaunchResolutionFailure(
+      () =>
+        resolveProductionRuntimeContext(input, {
+          ...request,
+          runtimePreference: "managed-gateway",
+          modelId: "unknown-model",
+        }),
+      "managed-model-unqualified",
+    );
   });
 
   it("denies non-canonical and mismatched request, binding, and instance roots", () => {

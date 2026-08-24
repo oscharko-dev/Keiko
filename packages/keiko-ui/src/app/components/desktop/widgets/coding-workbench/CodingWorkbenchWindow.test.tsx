@@ -7,6 +7,8 @@ import type {
   AvailableCodingSafeActivityFeed,
   CodingWorkbenchRuntimeSnapshot,
   CodingWorkbenchRuntimeSseEvent,
+  WorkspaceBinding,
+  WorkspaceInstance,
 } from "@oscharko-dev/keiko-contracts";
 import type { CodingWorkbenchRuntimeActions } from "@/lib/useCodingWorkbenchRuntime";
 import type { UseCodingWorkbenchQuestionsResult } from "@/lib/useCodingWorkbenchQuestions";
@@ -16,7 +18,13 @@ import {
   type CodingWorkbenchRuntimeState,
 } from "@/lib/coding-workbench-live-state";
 import type { ProjectWithAvailability } from "@/lib/types";
-import { CodingWorkbenchWindow } from "./CodingWorkbenchWindow";
+import { CodingWorkbenchWindow, type CodingWorkbenchGitTarget } from "./CodingWorkbenchWindow";
+import styles from "./CodingWorkbenchWindow.module.css";
+import { GATEWAY_MODEL_CATALOG_REFRESH_REQUESTED_EVENT } from "../shared/gatewaySetupBus";
+import {
+  ActiveWorkspaceProvider,
+  type ActiveWorkspaceApi,
+} from "../../context/ActiveWorkspaceContext";
 
 const runtimeHookMock = vi.hoisted(() => vi.fn());
 const questionsHookMock = vi.hoisted(() => vi.fn());
@@ -94,6 +102,8 @@ function actions(): CodingWorkbenchRuntimeActions {
   return {
     setRequestedMode: vi.fn(),
     setRuntimePreference: vi.fn(),
+    setSelectedModel: vi.fn(),
+    setReasoningEffort: vi.fn(),
     refreshProfile: vi.fn(() => Promise.resolve()),
     refreshSource: vi.fn(() => Promise.resolve()),
     refreshRuntime: vi.fn(() => Promise.resolve()),
@@ -185,18 +195,78 @@ function liveState(
 function renderWorkbench(
   state: CodingWorkbenchRuntimeState = liveState(),
   liveActions: CodingWorkbenchRuntimeActions = actions(),
+  onOpenGit?: (target: CodingWorkbenchGitTarget) => void,
+  activeWorkspace?: ActiveWorkspaceApi,
 ): CodingWorkbenchRuntimeActions {
   runtimeHookMock.mockReturnValue({ state, actions: liveActions });
-  render(
+  const workbench = (
     <CodingWorkbenchWindow
       selectedRoot={
         chatCatalogMock.activeProject?.available === true
           ? chatCatalogMock.activeProject.path
           : undefined
       }
-    />,
+      onOpenGit={onOpenGit}
+    />
+  );
+  render(
+    activeWorkspace === undefined ? (
+      workbench
+    ) : (
+      <ActiveWorkspaceProvider value={activeWorkspace}>{workbench}</ActiveWorkspaceProvider>
+    ),
   );
   return liveActions;
+}
+
+function activeWorkspaceWithBinding(
+  repositoryRoot: string,
+  activeRoot: string,
+): ActiveWorkspaceApi {
+  const instance: WorkspaceInstance = {
+    schemaVersion: "1",
+    workspaceId: "workspace-1",
+    taskId: "task-1",
+    repositoryId: "repository-1",
+    repositoryRoot,
+    baseBranch: "dev",
+    taskBranch: "task-1",
+    managedWorktreePath: "/worktrees/task-1",
+    gitdirIdentity: "gitdir-1",
+    lifecycleState: "active",
+    health: "healthy",
+    lock: null,
+    createdAt: AT,
+    updatedAt: AT,
+    driftMarkers: [],
+    recoveryHints: [],
+    auditCorrelationId: "correlation-1",
+  };
+  const binding: WorkspaceBinding = {
+    schemaVersion: "1",
+    workspaceId: instance.workspaceId,
+    taskId: instance.taskId,
+    activeRoot,
+    boundSurfaces: ["git-delivery"],
+    gitDeliveryRoot: activeRoot,
+    editorProjectRoot: activeRoot,
+  };
+  return {
+    instances: [instance],
+    activeBinding: binding,
+    activeInstance: instance,
+    activeRoot,
+    loading: false,
+    switching: false,
+    error: null,
+    refresh: vi.fn(() => Promise.resolve()),
+    switchTo: vi.fn(() => Promise.resolve()),
+    clearActive: vi.fn(() => Promise.resolve()),
+    pause: vi.fn(() => Promise.resolve()),
+    resume: vi.fn(() => Promise.resolve()),
+    prepareHandoff: vi.fn(() => Promise.resolve()),
+    provision: vi.fn(() => Promise.resolve()),
+  };
 }
 
 describe("CodingWorkbenchWindow", () => {
@@ -222,6 +292,18 @@ describe("CodingWorkbenchWindow", () => {
       error: null,
       change: vi.fn(),
     });
+  });
+
+  it("refreshes the model catalog when the Workbench opens", (): void => {
+    const listener = vi.fn();
+    window.addEventListener(GATEWAY_MODEL_CATALOG_REFRESH_REQUESTED_EVENT, listener);
+
+    try {
+      renderWorkbench();
+      expect(listener).toHaveBeenCalledOnce();
+    } finally {
+      window.removeEventListener(GATEWAY_MODEL_CATALOG_REFRESH_REQUESTED_EVENT, listener);
+    }
   });
 
   it("inherits the globally selected folder without requiring a chat model", (): void => {
@@ -296,15 +378,187 @@ describe("CodingWorkbenchWindow", () => {
     const liveActions = renderWorkbench();
 
     expect(screen.getByRole("heading", { name: "Coding Workbench" })).toBeInTheDocument();
+    expect(screen.getByRole("img", { name: "Keiko" })).toBeInTheDocument();
+    expect(screen.queryByText("task-1")).not.toBeInTheDocument();
     expect(screen.getByText("task-1 · issue/2257 · healthy")).toBeInTheDocument();
-    expect(screen.getByText("Keiko Gateway")).toBeInTheDocument();
-    expect(screen.getByText("Ask for approval")).toBeInTheDocument();
+    expect(screen.getAllByText("Keiko Gateway")).toHaveLength(2);
+    expect(screen.getByRole("combobox", { name: "Run authority" })).toHaveTextContent(
+      "Supervised workspace",
+    );
     expect(screen.queryByRole("radio", { name: /Full access/u })).not.toBeInTheDocument();
     expect(screen.queryByText(/Issue #1990|marketing|preview/u)).not.toBeInTheDocument();
+    expect(screen.queryByText("Explore and understand code")).not.toBeInTheDocument();
 
-    await user.type(screen.getByLabelText("Task instructions"), "Investigate the failing test");
+    const taskInput = screen.getByLabelText("Task instructions");
+    await user.type(taskInput, "Investigate the failing test");
     await user.click(screen.getByRole("button", { name: "Start coding run" }));
     expect(liveActions.start).toHaveBeenCalledWith("Investigate the failing test");
+  });
+
+  it("opens Git for the selected repository from the composer context", async (): Promise<void> => {
+    const user = userEvent.setup();
+    const selectedProject: ProjectWithAvailability = {
+      path: "/repos/keiko",
+      name: "Keiko",
+      favorite: false,
+      createdAt: 1,
+      lastOpenedAt: 1,
+      available: true,
+      workspaceAvailable: false,
+    };
+    const onOpenGit = vi.fn();
+    chatCatalogMock.activeProject = selectedProject;
+    chatCatalogMock.projects = [selectedProject];
+
+    renderWorkbench(liveState(), actions(), onOpenGit);
+
+    await user.click(screen.getByRole("button", { name: "Manage repository keiko" }));
+    expect(onOpenGit).toHaveBeenCalledWith({
+      root: selectedProject.path,
+      binding: "repository",
+    });
+  });
+
+  it("uses the selected repository outside an active run despite a prior task worktree", async () => {
+    const user = userEvent.setup();
+    const selectedProject: ProjectWithAvailability = {
+      path: "/repos/keiko",
+      name: "Keiko",
+      favorite: false,
+      createdAt: 1,
+      lastOpenedAt: 1,
+      available: true,
+      workspaceAvailable: false,
+    };
+    const onOpenGit = vi.fn();
+    chatCatalogMock.activeProject = selectedProject;
+
+    renderWorkbench(
+      liveState(),
+      actions(),
+      onOpenGit,
+      activeWorkspaceWithBinding("/repos/keiko", "/worktrees/prior-task"),
+    );
+
+    await user.click(screen.getByRole("button", { name: "Manage repository keiko" }));
+    expect(onOpenGit).toHaveBeenCalledWith({
+      root: selectedProject.path,
+      binding: "repository",
+    });
+  });
+
+  it("opens Git on the active task worktree while a coding run is in progress", async (): Promise<void> => {
+    const user = userEvent.setup();
+    const onOpenGit = vi.fn();
+    chatCatalogMock.activeProject = {
+      path: "/repos/keiko",
+      name: "Keiko",
+      favorite: false,
+      createdAt: 1,
+      lastOpenedAt: 1,
+      available: true,
+      workspaceAvailable: false,
+    };
+
+    renderWorkbench(
+      liveState({
+        run: {
+          status: "ready",
+          value: snapshot({ state: "running", runId: "run-1" }),
+          error: null,
+        },
+      }),
+      actions(),
+      onOpenGit,
+      activeWorkspaceWithBinding("/repos/keiko", "/worktrees/active-task"),
+    );
+
+    expect(screen.getByRole("button", { name: "Manage branch task-1" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Manage branch dev" })).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Manage repository active-task" }));
+    expect(onOpenGit).toHaveBeenCalledWith({
+      root: "/worktrees/active-task",
+      binding: "task-workspace",
+    });
+  });
+
+  it("persists an explicitly selected run authority instead of reverting it", async () => {
+    const user = userEvent.setup();
+    const change = vi.fn();
+    autonomyHookMock.mockReturnValue({
+      requestedMode: "governed-assist",
+      effectiveMode: "governed-assist",
+      deploymentCeiling: "autonomous-delivery",
+      pending: false,
+      error: null,
+      change,
+    });
+    const liveActions = renderWorkbench(liveState({ requestedMode: "governed-assist" }));
+
+    await user.click(screen.getByRole("combobox", { name: "Run authority" }));
+    await user.click(screen.getByRole("option", { name: "Full access" }));
+
+    expect(liveActions.setRequestedMode).toHaveBeenCalledWith("autonomous-delivery");
+    expect(change).toHaveBeenCalledWith("autonomous-delivery");
+  });
+
+  it("shows the selected authority while the server enforces a lower deployment ceiling", () => {
+    renderWorkbench(
+      liveState({
+        requestedMode: "autonomous-delivery",
+        runtime: {
+          status: "ready",
+          error: null,
+          value: {
+            schemaVersion: "1",
+            requestedMode: "autonomous-delivery",
+            deploymentCeiling: "governed-assist",
+            effectiveMode: "governed-assist",
+            runtimeAvailable: true,
+          },
+        },
+      }),
+    );
+
+    expect(screen.getByRole("combobox", { name: "Run authority" })).toHaveTextContent(
+      "Full access",
+    );
+    expect(document.querySelectorAll("[data-mode]")).toHaveLength(1);
+    expect(document.querySelector('[data-mode="governed-assist"]')).toBeInTheDocument();
+  });
+
+  it("locks the authority control without reverting the selection while persistence is pending", () => {
+    autonomyHookMock.mockReturnValue({
+      requestedMode: "governed-assist",
+      effectiveMode: "governed-assist",
+      deploymentCeiling: "autonomous-delivery",
+      pending: true,
+      error: null,
+      change: vi.fn(),
+    });
+    const liveActions = renderWorkbench(liveState({ requestedMode: "autonomous-delivery" }));
+
+    expect(screen.getByRole("combobox", { name: "Run authority" })).toBeDisabled();
+    expect(screen.getByRole("combobox", { name: "Run authority" })).toHaveTextContent(
+      "Full access",
+    );
+    expect(liveActions.setRequestedMode).not.toHaveBeenCalled();
+  });
+
+  it("surfaces a failed authority update instead of silently reverting", () => {
+    autonomyHookMock.mockReturnValue({
+      requestedMode: "governed-assist",
+      effectiveMode: "governed-assist",
+      deploymentCeiling: "autonomous-delivery",
+      pending: false,
+      error: "persist",
+      change: vi.fn(),
+    });
+    renderWorkbench(liveState({ requestedMode: "governed-assist" }));
+
+    expect(screen.getByRole("alert")).toHaveTextContent(
+      "Run authority could not be saved. The previous authority remains active.",
+    );
   });
 
   it("never presents the requested mode as server-effective before readiness resolves", (): void => {
@@ -407,22 +661,40 @@ describe("CodingWorkbenchWindow", () => {
     expect(screen.getByRole("alert")).toHaveTextContent("Workspace could not be refreshed.");
   });
 
-  // Release-audit F-08/RG-12: an unpaired browser window cannot start a coding run (ADR-0141 —
-  // authority resolution fails without launcher pairing), so the surface must render the
-  // blocked-idle state and name pairing as the missing input instead of narrating readiness.
-  // The remedy is named verbatim: the operator learned on 2026-08-23 that "open Keiko through
-  // the launcher" alone does not say which command pairs a window, and a hand-opened tab on
-  // localhost:1983 stays unpaired forever.
-  it("names the unpaired window and the exact launch commands that pair it (F-08/RG-12)", (): void => {
+  it("keeps the unpaired browser state out of the standing workbench banner", (): void => {
     renderWorkbench(liveState({ canStart: false, pairing: "unpaired" }));
 
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    expect(
+      screen.queryByText(/Browser window not paired|keiko start --open/u),
+    ).not.toBeInTheDocument();
+    expect(screen.getByRole("status")).toHaveTextContent("Not ready to start");
+    expect(screen.getByRole("button", { name: "Start coding run" })).toHaveAttribute(
+      "aria-disabled",
+      "true",
+    );
+  });
+
+  it("keeps actionable standing alerts in the body row before the scrollable session", (): void => {
+    renderWorkbench(
+      liveState({
+        canStart: false,
+        run: {
+          status: "error",
+          value: null,
+          error: { code: "RUN_REFRESH_FAILED", message: "unavailable", retryable: true },
+        },
+      }),
+    );
+
     const alert = screen.getByRole("alert");
-    expect(alert).toHaveTextContent("Browser window not paired");
-    expect(alert).toHaveTextContent("keiko start --open");
-    expect(alert).toHaveTextContent("npm run dev:start -- --open");
-    expect(alert).toHaveTextContent("A tab opened by hand cannot be paired.");
-    expect(screen.getByText("Not ready to start")).toBeInTheDocument();
-    expect(screen.queryByText("Ready to start")).not.toBeInTheDocument();
+    const bodyClass = styles.body;
+    const sessionClass = styles.session;
+    if (bodyClass === undefined || sessionClass === undefined) {
+      throw new Error("Coding Workbench layout classes are unavailable");
+    }
+    expect(alert.parentElement).toHaveClass(bodyClass);
+    expect(alert.nextElementSibling).toHaveClass(sessionClass);
   });
 
   // Release-audit F-01: the idle header pill is a READINESS claim, not a run state. It must
@@ -447,9 +719,7 @@ describe("CodingWorkbenchWindow", () => {
       }),
     );
 
-    expect(screen.queryByText("Ready to start")).not.toBeInTheDocument();
-    expect(screen.getByText("Not ready to start")).toBeInTheDocument();
-    // The model-source context line must not present the unavailable gateway as a healthy source.
+    expect(screen.getByRole("status")).toHaveTextContent("Not ready to start");
     expect(screen.getByText(/Keiko Gateway — Unavailable/u)).toBeInTheDocument();
   });
 
@@ -478,25 +748,30 @@ describe("CodingWorkbenchWindow", () => {
     it("never renders the plain Ready to start label over an evaluation runtime", (): void => {
       renderWorkbench(evaluationState({ run: { status: "ready", value: null, error: null } }));
 
-      expect(screen.queryByText("Ready to start")).not.toBeInTheDocument();
-      expect(screen.getByText("Start — unverified evaluation runtime")).toBeInTheDocument();
+      expect(screen.getByRole("status")).toHaveTextContent(
+        "Runtime available as an unverified evaluation runtime",
+      );
     });
 
-    it("marks the state pill so the success colour cannot win mid-run", (): void => {
+    it("keeps evaluation assurance out of decorative status chrome", (): void => {
       renderWorkbench(evaluationState());
 
-      const pill = document.querySelector('[data-assurance="evaluation"]');
-      expect(pill).not.toBeNull();
+      expect(document.querySelector('[data-assurance="evaluation"]')).toBeNull();
+      expect(screen.getByRole("status")).toHaveTextContent(
+        "Runtime available as an unverified evaluation runtime",
+      );
     });
 
-    it("states the unverified runtime in the always-present session context bar", (): void => {
+    it("keeps runtime assurance in the lifecycle announcement", (): void => {
       renderWorkbench(evaluationState());
 
       expect(screen.getByText("Coding runtime")).toBeInTheDocument();
       expect(
         screen.getByText("Unverified evaluation runtime — no platform signature"),
       ).toBeInTheDocument();
-      expect(document.querySelector('[data-tone="warning"]')).not.toBeNull();
+      expect(screen.getByRole("status")).toHaveTextContent(
+        "Runtime available as an unverified evaluation runtime",
+      );
     });
 
     it("raises no alert and does not preempt a concurrent refresh failure", (): void => {
@@ -516,7 +791,7 @@ describe("CodingWorkbenchWindow", () => {
     it("keeps a platform-qualified runtime rendering exactly as before", (): void => {
       renderWorkbench(liveState({ run: { status: "ready", value: null, error: null } }));
 
-      expect(screen.getByText("Ready to start")).toBeInTheDocument();
+      expect(screen.getByRole("status")).toHaveTextContent("Runtime ready");
       expect(document.querySelector('[data-assurance="evaluation"]')).toBeNull();
       expect(
         screen.getByText("Platform-verified — signed and notarized runtime"),
@@ -540,6 +815,7 @@ describe("CodingWorkbenchWindow", () => {
         },
       }),
     );
+    expect(screen.getByRole("status")).toHaveTextContent("Workspace unavailable");
     expect(screen.getByText("task-1 · issue/2257 · drifted")).toBeInTheDocument();
   });
 
@@ -695,7 +971,7 @@ describe("CodingWorkbenchWindow", () => {
     expect(liveActions.acknowledgeRecovery).toHaveBeenCalledOnce();
   });
 
-  it("shows an accessible body-free terminal result without rendering hostile process text", async () => {
+  it("keeps terminal result evidence out of the user-facing workbench", async () => {
     renderWorkbench(
       liveState({
         canStart: false,
@@ -726,9 +1002,10 @@ describe("CodingWorkbenchWindow", () => {
       }),
     );
 
-    expect(screen.getByRole("heading", { name: "Body-free process summary" })).toBeInTheDocument();
-    expect(screen.getByText("9")).toBeInTheDocument();
-    expect(screen.getByText("a".repeat(64))).toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "Body-free process summary" })).toBeNull();
+    expect(screen.queryByText("Standard output SHA-256")).toBeNull();
+    expect(screen.queryByText("a".repeat(64))).toBeNull();
+    expect(screen.queryByText("b".repeat(64))).toBeNull();
     expect(screen.queryByText(/hostile-process-body/u)).not.toBeInTheDocument();
     expect(await axe(document.body)).toHaveNoViolations();
   });
@@ -944,7 +1221,7 @@ describe("CodingWorkbenchWindow", () => {
     await user.click(screen.getByRole("radio", { name: /Proceed/u }));
     await user.click(screen.getByRole("button", { name: "Send answer" }));
     expect(answer).toHaveBeenCalledWith("question-1", [["Proceed"]]);
-    expect(screen.getByRole("heading", { name: "Live activity timeline" })).toHaveFocus();
+    expect(screen.getByRole("heading", { name: "Activity" })).toHaveFocus();
   });
 
   it("has no serious or critical axe violations in the live ready state", async () => {

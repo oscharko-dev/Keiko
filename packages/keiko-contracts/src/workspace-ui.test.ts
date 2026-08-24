@@ -169,7 +169,13 @@ describe("workspace UI action label and inverse", () => {
     { kind: "ui.workspace.pan", before: VIEW_A, after: VIEW_B },
     { kind: "ui.workspace.zoom", before: VIEW_A, after: VIEW_B },
     { kind: "ui.workspace.fit", before: VIEW_A, after: VIEW_B },
-    { kind: "ui.panel.toggle", panel: "search", before: false, after: true },
+    {
+      kind: "ui.panel.toggle",
+      panel: "governedGit",
+      before: false,
+      after: true,
+      projectRoot: "/repo",
+    },
     { kind: "ui.selection.change", before: SELECTION_A, after: SELECTION_B },
     { kind: "ui.tab.switch", before: "tab-a", after: "tab-b" },
   ];

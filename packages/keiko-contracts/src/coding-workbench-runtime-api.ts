@@ -32,6 +32,7 @@ import {
   type CodingWorkbenchRuntimeFailureCode,
   type CodingWorkbenchRuntimeStateName,
 } from "./coding-workbench-runtime.js";
+import { MODEL_REASONING_EFFORTS, type ModelReasoningEffort } from "./gateway.js";
 
 /** Browser-level preference, deliberately not an adapter, model, profile, or endpoint selector. */
 export type CodingWorkbenchRuntimePreference = "managed-gateway" | "codex-subscription";
@@ -40,6 +41,7 @@ export const CODING_WORKBENCH_RUNTIME_PREFERENCES: readonly CodingWorkbenchRunti
   Object.freeze(["managed-gateway", "codex-subscription"] as const);
 
 export const CODING_WORKBENCH_RUNTIME_API_ID_MAX_CHARS = 128;
+export const CODING_WORKBENCH_RUNTIME_MODEL_ID_MAX_CHARS = 200;
 export const CODING_WORKBENCH_RUNTIME_SSE_CURSOR_MAX_CHARS = 128;
 
 export interface CodingWorkbenchRuntimeReadinessRequest {
@@ -109,6 +111,8 @@ export interface CodingWorkbenchRuntimeStartRequest {
   readonly taskIntent: string;
   readonly requestedMode: CodingWorkbenchMode;
   readonly runtimePreference?: CodingWorkbenchRuntimePreference | undefined;
+  readonly modelId?: string | undefined;
+  readonly reasoningEffort?: ModelReasoningEffort | undefined;
 }
 
 /** The retry route has the same fresh, transient intent shape as start. */
@@ -262,32 +266,60 @@ export type CodingWorkbenchRuntimeSseEvent =
       readonly contentTrust?: CodingWorkbenchContentTrust | undefined;
     };
 
+function validateTaskIntent(value: unknown, errors: string[]): void {
+  if (typeof value !== "string" || value.length === 0 || value.length > 65_536) {
+    errors.push("taskIntent must be a bounded non-empty string");
+  }
+}
+
+function validateRuntimePreference(value: unknown, errors: string[]): void {
+  if (value !== undefined && !isOneOf(value, CODING_WORKBENCH_RUNTIME_PREFERENCES)) {
+    errors.push("runtimePreference is invalid");
+  }
+}
+
+function containsControlCharacter(value: string): boolean {
+  return Array.from(value).some((character) => {
+    const code = character.codePointAt(0) ?? 0;
+    return code <= 31 || code === 127;
+  });
+}
+
+function validateRuntimeModelId(value: unknown, errors: string[]): void {
+  if (value === undefined) return;
+  if (
+    typeof value !== "string" ||
+    value.trim().length === 0 ||
+    value.length > CODING_WORKBENCH_RUNTIME_MODEL_ID_MAX_CHARS ||
+    containsControlCharacter(value)
+  ) {
+    errors.push("modelId must be bounded safe text");
+  }
+}
+
+function validateReasoningEffort(value: unknown, errors: string[]): void {
+  if (value !== undefined && !isOneOf(value, MODEL_REASONING_EFFORTS)) {
+    errors.push("reasoningEffort is invalid");
+  }
+}
+
 export function parseCodingWorkbenchRuntimeStartRequest(
   value: unknown,
 ): CodingWorkbenchValidationResult<CodingWorkbenchRuntimeStartRequest> {
   if (!isRecord(value)) return invalid("start request must be an object");
   const errors = exactKeys(
     value,
-    ["requestId", "taskIntent", "requestedMode", "runtimePreference"],
+    ["requestId", "taskIntent", "requestedMode", "runtimePreference", "modelId", "reasoningEffort"],
     "startRequest",
   );
   validateRequestId(value.requestId, errors);
-  if (
-    typeof value.taskIntent !== "string" ||
-    value.taskIntent.length === 0 ||
-    value.taskIntent.length > 65_536
-  ) {
-    errors.push("taskIntent must be a bounded non-empty string");
-  }
+  validateTaskIntent(value.taskIntent, errors);
   if (!isOneOf(value.requestedMode, CODING_WORKBENCH_MODES)) {
     errors.push("requestedMode is invalid");
   }
-  if (
-    value.runtimePreference !== undefined &&
-    !isOneOf(value.runtimePreference, CODING_WORKBENCH_RUNTIME_PREFERENCES)
-  ) {
-    errors.push("runtimePreference is invalid");
-  }
+  validateRuntimePreference(value.runtimePreference, errors);
+  validateRuntimeModelId(value.modelId, errors);
+  validateReasoningEffort(value.reasoningEffort, errors);
   return result(value, errors);
 }
 

@@ -268,7 +268,9 @@ describe("useCodingWorkbenchRuntime", () => {
 
     await waitFor(() => expect(view.result.current.state.run.value?.state).toBe("succeeded"));
     expect(source?.close).toHaveBeenCalledOnce();
+    expect(view.result.current.state.stream.status).toBe("idle");
     act(() => source?.onerror?.(new Event("error")));
+    expect(view.result.current.state.stream.status).toBe("idle");
     expect(FakeEventSource.instances).toHaveLength(1);
 
     view.unmount();
@@ -498,9 +500,7 @@ describe("useCodingWorkbenchRuntime", () => {
     view.unmount();
   });
 
-  // Release-audit F-08/RG-12: with every other readiness dimension green, an unpaired window must
-  // still resolve to a blocked start — the run start is guaranteed to 403 (ADR-0141).
-  it("keeps Start blocked when the honest workspaces read reports the window unpaired", async () => {
+  it("arms Start when a registered workspace is ready and the browser is confirmed unpaired", async () => {
     manifestAccessMock.mockResolvedValue({ session: "unpaired", manifests: [] });
     installBootstrap(snapshot({ state: "idle", runId: undefined, pendingPermission: undefined }));
     const activeWorkspace = workspace();
@@ -513,7 +513,7 @@ describe("useCodingWorkbenchRuntime", () => {
 
     await waitFor(() => expect(view.result.current.state.pairing).toBe("unpaired"));
     await waitFor(() => expect(view.result.current.state.run.status).toBe("ready"));
-    expect(view.result.current.state.canStart).toBe(false);
+    expect(view.result.current.state.canStart).toBe(true);
 
     view.unmount();
   });

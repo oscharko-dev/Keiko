@@ -28,6 +28,30 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.composer.pause": "Pause run",
   "codingWorkbench.composer.resume": "Resume run",
   "codingWorkbench.composer.send": "Send follow-up",
+  "codingWorkbench.composer.model.label": "Coding model",
+  "codingWorkbench.composer.model.menu": "Choose coding model",
+  "codingWorkbench.composer.model.none": "No coding model available",
+  "codingWorkbench.composer.source.label": "Model source",
+  "codingWorkbench.composer.source.menu": "Choose model source",
+  "codingWorkbench.composer.effort.label": "Reasoning effort",
+  "codingWorkbench.composer.effort.menu": "Choose reasoning effort",
+  "codingWorkbench.composer.effort.minimal": "Minimal",
+  "codingWorkbench.composer.effort.low": "Low",
+  "codingWorkbench.composer.effort.medium": "Medium",
+  "codingWorkbench.composer.effort.high": "High",
+  "codingWorkbench.composer.effort.xhigh": "Extra high",
+  "codingWorkbench.composer.authority.label": "Run authority",
+  "codingWorkbench.composer.authority.menu": "Choose authority",
+  "codingWorkbench.composer.authority.error.hydrate":
+    "Run authority could not be loaded. Ask for approval remains selected.",
+  "codingWorkbench.composer.authority.error.persist":
+    "Run authority could not be saved. The previous authority remains active.",
+  "codingWorkbench.composer.context.label": "Coding context",
+  "codingWorkbench.composer.repository.open": "Manage repository {repository}",
+  "codingWorkbench.composer.branch.open": "Manage branch {branch}",
+  "codingWorkbench.composer.projectMemory.label": "MemoriaViva",
+  "codingWorkbench.composer.projectMemory.help":
+    "MemoriaViva uses only the active project memory in Coding Workbench.",
   "codingWorkbench.composer.help":
     "Pause the active run to send a follow-up. A drafted follow-up is admitted only while paused and is never queued.",
   "codingWorkbench.questions.sectionLabel": "Runtime questions",
@@ -45,8 +69,7 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.questions.terminal": "The coding run has ended.",
   "codingWorkbench.questions.unpaired":
     "This window is not paired for question content. Restart Keiko from its launcher to pair a new app session.",
-  "codingWorkbench.pairing.unpaired":
-    "Browser window not paired — open Keiko through the launcher to enable coding runs: `keiko start --open` for an installed Keiko, `npm run dev:start -- --open` in a development checkout. A tab opened by hand cannot be paired.",
+  "codingWorkbench.pairing.unpaired": "Workbench is not paired. Open Keiko from the launcher.",
   "codingWorkbench.questions.answerFailed":
     "Your answer was not accepted ({code}). The question is still open — send it again.",
   "codingWorkbench.questions.rejectFailed":
@@ -86,16 +109,15 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.readiness.runtime.verified": "Platform-verified — signed and notarized runtime",
   "codingWorkbench.readiness.runtime.evaluation":
     "Unverified evaluation runtime — no platform signature",
-  "codingWorkbench.timeline.eyebrow": "Authenticated activity",
-  "codingWorkbench.timeline.title": "Live activity timeline",
-  "codingWorkbench.timeline.empty": "No confirmed activity yet.",
+  "codingWorkbench.timeline.eyebrow": "Timeline",
+  "codingWorkbench.timeline.title": "Activity",
+  "codingWorkbench.timeline.empty": "No activity yet.",
   "codingWorkbench.timeline.instructions":
     "Focus the timeline, then use Arrow or Page Up and Page Down keys to scroll.",
   "codingWorkbench.timeline.listLabel": "Coding run event timeline",
-  "codingWorkbench.changes.eyebrow": "Authenticated changes",
-  "codingWorkbench.changes.title": "Run changes",
-  "codingWorkbench.changes.help":
-    "Read-only diffs come from this run's bound task workspace and are never stored as durable evidence.",
+  "codingWorkbench.changes.eyebrow": "Files",
+  "codingWorkbench.changes.title": "Changes",
+  "codingWorkbench.changes.help": "Changed files appear here.",
   "codingWorkbench.changes.idle": "Start a run to inspect its workspace changes.",
   "codingWorkbench.changes.loading": "Loading the latest bounded changes…",
   "codingWorkbench.changes.bindingLost":
@@ -140,26 +162,19 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.changes.diff.elevatedReview": "Elevated review",
   "codingWorkbench.activity.reasoningBoundary":
     "This timeline shows observable conversation and work activity. It never exposes private reasoning.",
-  "codingWorkbench.activity.status.idle": "Start a run to watch its activity here.",
-  "codingWorkbench.activity.status.loading": "Connecting to the protected activity projection…",
-  "codingWorkbench.activity.status.live": "Protected activity is updating live.",
-  "codingWorkbench.activity.status.paused":
-    "Run paused. The transcript below is the latest confirmed snapshot, not live activity.",
-  "codingWorkbench.activity.status.recovery":
-    "Recovery is required. The transcript below is the last confirmed snapshot, not live activity.",
-  "codingWorkbench.activity.status.ended": "Run ended. Final confirmed activity is shown.",
-  "codingWorkbench.activity.status.unavailable":
-    "The protected activity projection is unavailable. Content-free runtime events remain visible.",
-  "codingWorkbench.activity.status.disconnected":
-    "The live activity connection closed. Previously confirmed content is not presented as live.",
-  "codingWorkbench.activity.status.offline":
-    "The activity stream is offline. Previously confirmed content is not presented as live.",
-  "codingWorkbench.activity.status.error":
-    "The activity stream could not be read. Previously confirmed content is not presented as live.",
+  "codingWorkbench.activity.status.idle": "No run yet.",
+  "codingWorkbench.activity.status.loading": "Connecting activity…",
+  "codingWorkbench.activity.status.live": "Live.",
+  "codingWorkbench.activity.status.paused": "Paused.",
+  "codingWorkbench.activity.status.recovery": "Needs attention.",
+  "codingWorkbench.activity.status.ended": "Run ended.",
+  "codingWorkbench.activity.status.unavailable": "Activity not connected.",
+  "codingWorkbench.activity.status.disconnected": "Disconnected.",
+  "codingWorkbench.activity.status.offline": "Activity offline.",
+  "codingWorkbench.activity.status.error": "Activity unavailable.",
   "codingWorkbench.activity.retry": "Reconnect activity",
-  "codingWorkbench.activity.truncated":
-    "Older or oversized activity was omitted from this bounded transcript.",
-  "codingWorkbench.activity.dropped": "{count} activity update(s) could not be projected.",
+  "codingWorkbench.activity.truncated": "Activity truncated.",
+  "codingWorkbench.activity.dropped": "{count} update(s) omitted.",
   "codingWorkbench.activity.truncationMark": "Output truncated",
   "codingWorkbench.activity.role.user": "You",
   "codingWorkbench.activity.role.assistant": "Coding agent",
@@ -232,28 +247,6 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.controls.resumeMode.label": "Resume autonomy",
   "codingWorkbench.controls.resumeMode.help":
     "Resume with the server-confirmed current mode or a stricter mode. Widening is unavailable.",
-  "codingWorkbench.result.eyebrow": "Runtime result",
-  "codingWorkbench.result.title": "Body-free process summary",
-  "codingWorkbench.result.help":
-    "Only bounded counts, truncation flags and SHA-256 digests are retained. Process output is never shown or stored here.",
-  "codingWorkbench.result.facts": "Runtime result facts",
-  "codingWorkbench.result.status": "Status",
-  "codingWorkbench.result.status.cancelled": "Cancelled",
-  "codingWorkbench.result.status.failed": "Failed",
-  "codingWorkbench.result.status.signalled": "Stopped by signal",
-  "codingWorkbench.result.status.succeeded": "Succeeded",
-  "codingWorkbench.result.exitCode": "Exit code",
-  "codingWorkbench.result.noExitCode": "Not available",
-  "codingWorkbench.result.output.bytes": "Standard output bytes",
-  "codingWorkbench.result.output.lines": "Standard output lines",
-  "codingWorkbench.result.output.digest": "Standard output SHA-256",
-  "codingWorkbench.result.output.truncated": "Standard output counts truncated",
-  "codingWorkbench.result.error.bytes": "Error output bytes",
-  "codingWorkbench.result.error.lines": "Error output lines",
-  "codingWorkbench.result.error.digest": "Error output SHA-256",
-  "codingWorkbench.result.error.truncated": "Error output counts truncated",
-  "codingWorkbench.result.yes": "Yes",
-  "codingWorkbench.result.no": "No",
   "codingWorkbench.approval.eyebrow": "Approval required",
   "codingWorkbench.approval.title": "Review the bounded action",
   "codingWorkbench.approval.facts": "Approval facts",

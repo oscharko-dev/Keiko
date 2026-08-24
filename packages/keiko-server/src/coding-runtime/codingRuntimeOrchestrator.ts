@@ -17,12 +17,14 @@ import {
   type CodingWorkbenchRuntimeFailureCode,
   type CodingWorkbenchRuntimePendingResearch,
   type CodingWorkbenchRuntimeResearchGrant,
+  type CodingWorkbenchRuntimeResult,
   type CodingWorkbenchRuntimeStartRequest,
   type CodingWorkbenchRuntimeSnapshot as PublicSnapshot,
   type CodingWorkbenchRuntimeStateName,
 } from "@oscharko-dev/keiko-contracts";
 import type {
   CodingRuntimeApprovalIssueResult,
+  CodingRuntimeFailureCode,
   CodingRuntimeManager,
 } from "./codingRuntimeManager.js";
 import type {
@@ -37,13 +39,20 @@ import {
   CodingRuntimeOrchestratorState,
   type AuxiliaryEventFacts,
 } from "./codingRuntimeOrchestratorState.js";
+import {
+  contentFreeErrorClass,
+  emitServerDiagnostic,
+  type ServerDiagnosticSink,
+} from "../diagnostics-log.js";
+import { isValidCorrelationId, UNKNOWN_CORRELATION_ID } from "../correlation.js";
+import type { ServerLogSink } from "../observability/server-log.js";
 import type {
   CodingRuntimeLaunchResolver,
   CodingRuntimeOrchestratorDeps,
   CodingRuntimeOrchestratorResult,
   CodingRuntimeQuestionOperationResult,
 } from "./codingRuntimeOrchestratorTypes.js";
-import { classifyLaunchRejection } from "./launchFailure.js";
+import { classifyLaunchRejection, launchRejectionDiagnosticReason } from "./launchFailure.js";
 import type { CodingRuntimeTaskOutcome } from "./productionCodingRuntimeHost.js";
 
 function runtimePauseFailureCode(
@@ -72,6 +81,120 @@ function runtimeApprovalIssueFailureCode(
 ): CodingWorkbenchRuntimeFailureCode {
   if (code === "approval-activation-failed") return code;
   return code === "runtime-run-mismatch" ? "authority-resolution-failed" : "runtime-failed";
+}
+
+type RuntimeStartFailureReason =
+  | CodingRuntimeFailureCode
+  | "initial-turn-dispatch"
+  | "initial-turn-recovery"
+  | "launch-resolution"
+  | "manager-exception"
+  | "run-mismatch";
+
+type RuntimeLifecycleFailureReason = "failure-redacted" | "runtime-stopped-live";
+
+function runtimeDiagnosticCorrelationId(runId: string): string {
+  return isValidCorrelationId(runId) ? runId : UNKNOWN_CORRELATION_ID;
+}
+
+function recordRuntimeStartFailure(
+  diagnostics: ServerDiagnosticSink | undefined,
+  runId: string,
+  reason: RuntimeStartFailureReason,
+  error?: unknown,
+): void {
+  const launchReason =
+    reason === "launch-resolution" ? launchRejectionDiagnosticReason(error) : undefined;
+  const diagnosticCode = `stage=start:reason=${reason}`;
+  emitServerDiagnostic(diagnostics, {
+    correlationId: runtimeDiagnosticCorrelationId(runId),
+    timestamp: new Date().toISOString(),
+    operation: "coding-runtime.start",
+    source: "coding-runtime-orchestrator.start",
+    errorClass: error === undefined ? "CodingRuntimeStartFailure" : contentFreeErrorClass(error),
+    message: "runtime-start-failed",
+    code: launchReason === undefined ? diagnosticCode : `${diagnosticCode}:${launchReason}`,
+  });
+}
+
+function recordRuntimeLifecycleFailure(
+  diagnostics: ServerDiagnosticSink | undefined,
+  runId: string,
+  reason: RuntimeLifecycleFailureReason,
+): void {
+  emitServerDiagnostic(diagnostics, {
+    correlationId: runtimeDiagnosticCorrelationId(runId),
+    timestamp: new Date().toISOString(),
+    operation: "coding-runtime.lifecycle",
+    source: "coding-runtime-orchestrator.ingest",
+    errorClass: "CodingRuntimeLifecycleFailure",
+    message: "runtime-lifecycle-failed",
+    code: `stage=lifecycle:reason=${reason}`,
+  });
+}
+
+function recordRuntimeRunStarted(
+  activityLog: ServerLogSink | undefined,
+  snapshot: CodingRuntimeSnapshot,
+  effectiveMode: CodingWorkbenchMode,
+): void {
+  activityLog?.write({
+    category: "process",
+    op: "coding-runtime.run.started",
+    correlationId: runtimeDiagnosticCorrelationId(snapshot.runId),
+    extra: {
+      runId: snapshot.runId,
+      state: snapshot.state,
+      revision: snapshot.revision,
+      requestedMode: snapshot.requestedMode,
+      effectiveMode,
+      runtimeSource: snapshot.runtimeSource,
+      modelSource: snapshot.modelSource,
+      hasPredecessor: snapshot.predecessorRunId !== undefined,
+    },
+  });
+}
+
+function recordRuntimeRunSettled(
+  activityLog: ServerLogSink | undefined,
+  snapshot: CodingRuntimeSnapshot,
+  state: CodingWorkbenchRuntimeStateName,
+  failureCode?: CodingWorkbenchRuntimeFailureCode,
+): void {
+  activityLog?.write({
+    category: "process",
+    op: "coding-runtime.run.settled",
+    correlationId: runtimeDiagnosticCorrelationId(snapshot.runId),
+    extra: {
+      runId: snapshot.runId,
+      state,
+      revision: snapshot.revision,
+      requestedMode: snapshot.requestedMode,
+      runtimeSource: snapshot.runtimeSource,
+      modelSource: snapshot.modelSource,
+      terminal: TERMINAL_STATES.has(state),
+      ...(failureCode === undefined ? {} : { failureCode }),
+      ...runtimeResultLogFields(snapshot.result),
+    },
+  });
+}
+
+function runtimeResultLogFields(
+  result: CodingWorkbenchRuntimeResult | undefined,
+): Readonly<Record<string, unknown>> {
+  if (result === undefined) return {};
+  return {
+    taskOutcomeStatus: result.status,
+    exitCode: result.exitCode,
+    outputByteCount: result.output.byteCount,
+    outputLineCount: result.output.lineCount,
+    outputDigest: result.output.sha256,
+    outputTruncated: result.output.truncated,
+    diagnosticByteCount: result.error.byteCount,
+    diagnosticLineCount: result.error.lineCount,
+    diagnosticDigest: result.error.sha256,
+    diagnosticTruncated: result.error.truncated,
+  };
 }
 
 export type {
@@ -617,6 +740,7 @@ export class CodingRuntimeOrchestrator {
     const current = this.current();
     if (event.runId !== current?.runId) return this.fail("invalid-intent");
     if (event.kind === "failure-redacted") {
+      recordRuntimeLifecycleFailure(this.deps.diagnostics, current.runId, "failure-redacted");
       return this.stopAfterIssueFailure(current, "runtime-failed");
     }
     const paused = this.ingestPausedEvent(current, event);
@@ -658,9 +782,11 @@ export class CodingRuntimeOrchestrator {
    * content-free lifecycle projection.
    */
   private ingestRuntimeStopped(current: CodingRuntimeSnapshot): CodingRuntimeOrchestratorResult {
-    return isLegalCodingWorkbenchRuntimeTransition(current.state, "cancelled")
-      ? this.transition(current, "cancelled")
-      : this.transition(current, "failed", "runtime-failed");
+    if (isLegalCodingWorkbenchRuntimeTransition(current.state, "cancelled")) {
+      return this.transition(current, "cancelled");
+    }
+    recordRuntimeLifecycleFailure(this.deps.diagnostics, current.runId, "runtime-stopped-live");
+    return this.transition(current, "failed", "runtime-failed");
   }
 
   private ingestPermissionRequested(
@@ -819,6 +945,7 @@ export class CodingRuntimeOrchestrator {
     this.activeRunId = runId;
     this.settledRunId = undefined;
     this.activeEffectiveMode = launch.effectiveMode;
+    recordRuntimeRunStarted(this.deps.activityLog, snapshot, launch.effectiveMode);
     if (predecessorRunId !== undefined) this.settlePredecessorRecovery(predecessorRunId);
     this.projection.publish(snapshot);
     const started = await this.startManagedRuntime(parsed.value, active, runId, launch);
@@ -839,7 +966,11 @@ export class CodingRuntimeOrchestrator {
       taskIntent: request.taskIntent,
     });
     if (initialTurn === "accepted") return this.transitionActive("running");
-    if (initialTurn === "failed") return this.transitionActive("failed", "runtime-failed");
+    if (initialTurn === "failed") {
+      recordRuntimeStartFailure(this.deps.diagnostics, runId, "initial-turn-dispatch");
+      return this.transitionActive("failed", "runtime-failed");
+    }
+    recordRuntimeStartFailure(this.deps.diagnostics, runId, "initial-turn-recovery");
     return this.transitionActive("recovery-required", "recovery-required");
   }
 
@@ -858,6 +989,8 @@ export class CodingRuntimeOrchestrator {
         taskIntent: request.taskIntent,
         requestedMode: request.requestedMode,
         ...(request.runtimePreference ? { runtimePreference: request.runtimePreference } : {}),
+        ...(request.modelId ? { modelId: request.modelId } : {}),
+        ...(request.reasoningEffort ? { reasoningEffort: request.reasoningEffort } : {}),
         workspaceId: active.instance.workspaceId,
         workspaceRoot: active.binding.activeRoot,
         serverPrincipal: principal,
@@ -866,6 +999,7 @@ export class CodingRuntimeOrchestrator {
     } catch (error) {
       // Never a bare `catch {}`: a rejected launch used to lose its identity here and surface as
       // `authority-resolution-failed` whatever the real cause was (KEIKO-0150).
+      recordRuntimeStartFailure(this.deps.diagnostics, runId, "launch-resolution", error);
       return { ok: false, failureCode: classifyLaunchRejection(error) };
     }
   }
@@ -917,17 +1051,22 @@ export class CodingRuntimeOrchestrator {
         workspaceRoot: active.binding.activeRoot,
         requestedMode: request.requestedMode,
       });
-    } catch {
+    } catch (error) {
+      recordRuntimeStartFailure(this.deps.diagnostics, runId, "manager-exception", error);
       // Recovery-required remains the only safe projection when host containment cannot be proven.
       await this.reconcileQuietly(runId);
       return this.transitionActive("recovery-required", "recovery-required");
     }
     if (result.ok && result.runId !== runId) {
+      recordRuntimeStartFailure(this.deps.diagnostics, runId, "run-mismatch");
       // A mismatched host success cannot be trusted; recovery remains fail-closed.
       await this.reconcileQuietly(result.runId);
       return this.transitionActive("recovery-required", "recovery-required");
     }
-    if (!result.ok) return this.transitionActive("failed", "runtime-failed");
+    if (!result.ok) {
+      recordRuntimeStartFailure(this.deps.diagnostics, runId, result.failureCode);
+      return this.transitionActive("failed", "runtime-failed");
+    }
     return undefined;
   }
 
@@ -1133,6 +1272,7 @@ export class CodingRuntimeOrchestrator {
     } else {
       this.purgeExplicitlyEndedActivity(next.runId, state);
     }
+    recordRuntimeRunSettled(this.deps.activityLog, next, state, failureCode);
     this.publishSettlement(next, state, failureCode);
   }
 

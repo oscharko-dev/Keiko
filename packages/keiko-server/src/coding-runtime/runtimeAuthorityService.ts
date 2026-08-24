@@ -224,7 +224,11 @@ export class CodingRuntimeAuthorityService {
     }
     const registered = this.registry.registerRuntime(envelope, context.deploymentCeiling, nowIso);
     if (!registered.ok) return { ok: false, reason: "authority-resolution-failed" };
-    const capabilities = this.issueCapabilities(envelope, registered.authorityRef);
+    const capabilities = this.issueCapabilities(
+      envelope,
+      registered.authorityRef,
+      context.modelProfile,
+    );
     if (capabilities === undefined) {
       return { ok: false, reason: "authority-resolution-failed" };
     }
@@ -587,6 +591,7 @@ export class CodingRuntimeAuthorityService {
     envelope: CodingWorkbenchRuntimeAuthorityEnvelope,
     authorityRef: CodingRuntimeAuthorityRef,
     audience: RuntimeCapabilityAudience,
+    modelProfile: CodingWorkbenchModelProfile,
   ): ReturnType<RuntimeCapabilityStore["issue"]> {
     const adapterKind = runtimeAdapterKind(envelope.authority.runtimeSource);
     if (adapterKind === undefined) return { ok: false, reason: "invalid" };
@@ -595,6 +600,10 @@ export class CodingRuntimeAuthorityService {
       workspaceRootDigest: envelope.binding.workspaceRootDigest,
       envelopeDigest: authorityRef.envelopeDigest,
       adapterKind,
+      modelProfileId: modelProfile.profileId,
+      ...(modelProfile.reasoningEffort === undefined
+        ? {}
+        : { reasoningEffort: modelProfile.reasoningEffort }),
       audience,
       expiresAtMs: Date.parse(envelope.authority.expiresAt),
     });
@@ -603,10 +612,16 @@ export class CodingRuntimeAuthorityService {
   private issueCapabilities(
     envelope: CodingWorkbenchRuntimeAuthorityEnvelope,
     authorityRef: CodingRuntimeAuthorityRef,
+    modelProfile: CodingWorkbenchModelProfile,
   ):
     { readonly modelGatewayCapability: string; readonly toolFacadeCapability: string } | undefined {
-    const modelGateway = this.issueCapability(envelope, authorityRef, "model-gateway");
-    const toolFacade = this.issueCapability(envelope, authorityRef, "tool-facade");
+    const modelGateway = this.issueCapability(
+      envelope,
+      authorityRef,
+      "model-gateway",
+      modelProfile,
+    );
+    const toolFacade = this.issueCapability(envelope, authorityRef, "tool-facade", modelProfile);
     if (modelGateway.ok && toolFacade.ok) {
       return {
         modelGatewayCapability: modelGateway.capability,

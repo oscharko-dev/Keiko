@@ -225,6 +225,25 @@ describe("Gateway replay integration (ADR-0173 §7.3)", () => {
     const result = await gateway.chat(request);
 
     expect(result.content).toBe("recovered");
+    const transportEvents = log.events.filter(
+      (event) => event.op === "chat.request.dispatch" || event.op.startsWith("http.gateway.fetch."),
+    );
+    expect(transportEvents.map((event) => event.op)).toEqual([
+      "chat.request.dispatch",
+      "http.gateway.fetch.started",
+      "http.gateway.fetch.completed",
+      "chat.request.dispatch",
+      "http.gateway.fetch.started",
+      "http.gateway.fetch.completed",
+    ]);
+    expect(transportEvents.map((event) => event.correlationId)).toEqual(
+      transportEvents.map(() => "replay-correlation-1"),
+    );
+    expect(
+      transportEvents
+        .filter((event) => event.op === "http.gateway.fetch.completed")
+        .map((event) => event.status),
+    ).toEqual([500, 200]);
     const scheduled = eventFor(log.events, "gateway.retry.scheduled");
     expect(scheduled.correlationId).toBe("replay-correlation-1");
     expect(scheduled.extra?.httpStatus).toBe(500);

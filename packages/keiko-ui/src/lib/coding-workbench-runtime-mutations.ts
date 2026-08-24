@@ -28,6 +28,20 @@ export interface CodingWorkbenchMutationCommand {
   readonly run: () => Promise<CodingWorkbenchRuntimeSnapshot>;
 }
 
+type RuntimeModelSelection = {
+  readonly modelId?: string | undefined;
+  readonly reasoningEffort?:
+    NonNullable<CodingWorkbenchRuntimeState["reasoningEffort"]> | undefined;
+};
+
+function managedGatewayModelSelection(current: CodingWorkbenchRuntimeState): RuntimeModelSelection {
+  if (current.runtimePreference !== "managed-gateway") return {};
+  return {
+    ...(current.selectedModelId === null ? {} : { modelId: current.selectedModelId }),
+    ...(current.reasoningEffort === null ? {} : { reasoningEffort: current.reasoningEffort }),
+  };
+}
+
 export function mutationResultMatchesCurrentTruth(
   command: CodingWorkbenchMutationCommand,
   current: CodingWorkbenchRuntimeSnapshot | null,
@@ -56,6 +70,7 @@ export function createStartMutation(
         taskIntent,
         requestedMode: current.requestedMode,
         runtimePreference: current.runtimePreference,
+        ...managedGatewayModelSelection(current),
       }),
   };
 }
@@ -182,6 +197,7 @@ export function createRetryMutation(
         taskIntent,
         requestedMode: current.requestedMode,
         runtimePreference: current.runtimePreference,
+        ...managedGatewayModelSelection(current),
       }),
   };
 }

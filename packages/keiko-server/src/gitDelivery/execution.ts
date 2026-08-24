@@ -31,20 +31,37 @@ import {
   readStagedPaths,
 } from "@oscharko-dev/keiko-tools/internal/git-mutation";
 import type { UiHandlerDeps } from "../deps.js";
+import { UNKNOWN_CORRELATION_ID } from "../correlation.js";
 import { resolveRegisteredOrManagedWorkspaceRoot } from "../task-workspace/authorization.js";
 import type { GitDeliveryApprovalStore } from "./approvalStore.js";
 import type { GitDeliveryTrustedPolicyPacks } from "./actionSheetProjection.js";
 import type { GitDeliveryBranchProtectionReader } from "./branchProtectionPreflight.js";
 import { recordGitDeliveryMutationEvidence } from "./mutationEvidenceLedger.js";
+import { errorKindOf, type ServerLogSink } from "../observability/server-log.js";
+import { processServerLogSink } from "../process-log-sink.js";
 
-// Default trusted policy: PERMIT the lowest risk class (local-mutation = branch create/switch, stage,
-// unstage, commit) and fail-closed for everything else (publish / protected-or-merge / recovery). It
-// applies when no stricter pack is configured. The decision is still EVALUATED for every action —
-// governance is preserved.
+const KEIKO_DEFAULT_PROTECTED_BRANCH_PATTERNS = [
+  { matchKind: "exact", value: "dev" },
+  { matchKind: "exact", value: "main" },
+] as const;
+
+// Default trusted policy: PERMIT the lowest risk class (branch create/switch, stage, unstage, and
+// feature-branch commits), block local commits on protected integration branches, and fail-closed for
+// everything else (publish / protected-or-merge / recovery). It applies when no stricter pack is
+// configured. The decision is still EVALUATED for every action — governance is preserved.
 export const KEIKO_DEFAULT_LOCAL_GIT_POLICY_PACK: GitDeliveryRepoPolicyPack = {
   schemaVersion: GIT_DELIVERY_POLICY_SCHEMA_VERSION,
   repoId: "keiko-local-default",
-  rules: [],
+  rules: [
+    {
+      actionKind: "commit",
+      decision: "constrained",
+      constraints: [
+        { kind: "risk-class-ceiling", maxRiskClass: "local-mutation" },
+        { kind: "protected-branch", patterns: KEIKO_DEFAULT_PROTECTED_BRANCH_PATTERNS },
+      ],
+    },
+  ],
   defaultRule: {
     decision: "constrained",
     constraints: [{ kind: "risk-class-ceiling", maxRiskClass: "local-mutation" }],
@@ -62,6 +79,7 @@ export interface GitDeliveryExecutionSeams {
   readonly branchProtectionReader?: GitDeliveryBranchProtectionReader | undefined;
   readonly policyPacks?: GitDeliveryTrustedPolicyPacks | undefined;
   readonly approvalStore?: GitDeliveryApprovalStore | undefined;
+  readonly activityLog?: ServerLogSink | undefined;
   readonly now?: (() => number) | undefined;
   readonly newActionId?: (() => string) | undefined;
 }
@@ -175,9 +193,17 @@ export async function executeGovernedMutation(
   workspace: WorkspaceInfo,
   deps: Pick<UiHandlerDeps, "evidenceStore" | "redactor">,
   seams: GitDeliveryExecutionSeams,
+  correlationId?: string,
 ): Promise<GitMutationLifecycleResult> {
   const now = seams.now ?? Date.now;
-  const snapshot = await readWorktreeSnapshotFor(workspace, seams, now);
+  const activityLog = seams.activityLog ?? processServerLogSink();
+  let snapshot: GitWorktreeSnapshot;
+  try {
+    snapshot = await readWorktreeSnapshotFor(workspace, seams, now);
+  } catch (error) {
+    logGitDeliveryPreconditionFailure(activityLog, command.kind, error, correlationId);
+    throw error;
+  }
   const adapter = adapterFor(workspace, seams, now);
   const packs = seams.policyPacks ?? { repoPack: KEIKO_DEFAULT_LOCAL_GIT_POLICY_PACK };
   const newActionId =
@@ -194,7 +220,55 @@ export async function executeGovernedMutation(
     },
   );
   persistGitDeliveryEvidence(deps, result, snapshot, workspace.root, now);
+  logGitDeliveryMutation(activityLog, result, correlationId);
   return result;
+}
+
+function logGitDeliveryMutation(
+  log: ServerLogSink,
+  result: GitMutationLifecycleResult,
+  correlationId: string | undefined,
+): void {
+  const { outcome, envelope, phaseReached, preflight } = result;
+  log.write({
+    category: "diagnostic",
+    op: "git.delivery.mutation.completed",
+    correlationId: correlationId ?? UNKNOWN_CORRELATION_ID,
+    extra: {
+      actionId: envelope.actionId,
+      actionKind: envelope.kind,
+      status: outcome.status,
+      phaseReached,
+      policyOutcome: envelope.policyDecision.outcome,
+      preflightFindingCount: preflight.findings.length,
+      preflightBlockingCount: preflight.blocking.length,
+      requiredApproverCount:
+        outcome.status === "approval-required" ? outcome.requiredApprovers.length : 0,
+      executionErrorCode:
+        outcome.status === "failed" || outcome.status === "recovery-required"
+          ? (outcome.executionResult.errorCode ?? "internal-error")
+          : undefined,
+    },
+  });
+}
+
+function logGitDeliveryPreconditionFailure(
+  log: ServerLogSink,
+  actionKind: GitDeliveryActionKind,
+  error: unknown,
+  correlationId: string | undefined,
+): void {
+  log.write({
+    level: "error",
+    category: "diagnostic",
+    op: "git.delivery.mutation.failed",
+    correlationId: correlationId ?? UNKNOWN_CORRELATION_ID,
+    errorKind: errorKindOf(error),
+    extra: {
+      actionKind,
+      phaseReached: "snapshot",
+    },
+  });
 }
 
 // ─── Content-free response projection ──────────────────────────────────────────────────────────

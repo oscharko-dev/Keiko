@@ -46,7 +46,7 @@ export function sourceVerificationLabel(
   return t(`codingWorkbench.source.verification.${verification}`);
 }
 
-export function runStateLabel(
+function runStateLabel(
   state: CodingWorkbenchRuntimeStateName,
   t: CodingWorkbenchTranslate,
 ): string {
@@ -78,6 +78,15 @@ function runAnnouncement(state: CodingWorkbenchRuntimeState, t: CodingWorkbenchT
   if (state.run.status === "loading") return t("codingWorkbench.announcement.runChecking");
   const snapshot = state.run.value;
   if (snapshot === null) return t("codingWorkbench.announcement.noActiveRun");
+  if (snapshot.state === "idle" && !state.canStart) {
+    return t("codingWorkbench.header.notReady");
+  }
+  if (
+    snapshot.state === "idle" &&
+    state.runtime.value?.runtimeEvidenceClass === "functional-not-platform-qualified"
+  ) {
+    return t("codingWorkbench.header.readyEvaluation");
+  }
   return t("codingWorkbench.announcement.runRevision", {
     state: runStateLabel(snapshot.state, t),
     revision: snapshot.revision,
@@ -329,14 +338,10 @@ export function changesetDeliveryAlert(
     : actionFailureAlert("codingWorkbench.changesetReview.deliveryFailedCode", failure, t);
 }
 
-export function visibleAlert(
+function refreshFailureAlert(
   state: CodingWorkbenchRuntimeState,
   t: CodingWorkbenchTranslate,
-  setupVisible: boolean,
 ): string | null {
-  if (state.mutation.error) {
-    return actionFailureAlert("codingWorkbench.alert.actionFailedCode", state.mutation.error, t);
-  }
   for (const [resource, value] of [
     ["authentication", state.profile],
     ["authenticationSetup", state.codexSetup],
@@ -348,10 +353,24 @@ export function visibleAlert(
   ] as const) {
     if (value.status === "error") return t(`codingWorkbench.alert.${resource}RefreshFailed`);
   }
+  return null;
+}
+
+export function visibleAlert(
+  state: CodingWorkbenchRuntimeState,
+  t: CodingWorkbenchTranslate,
+  setupVisible: boolean,
+  authorityError: string | null = null,
+): string | null {
+  if (state.mutation.error) {
+    return actionFailureAlert("codingWorkbench.alert.actionFailedCode", state.mutation.error, t);
+  }
+  const refreshAlert = refreshFailureAlert(state, t);
+  if (refreshAlert !== null) return refreshAlert;
+  if (!setupVisible && authorityError !== null) return authorityError;
   // Standing conditions come after actionable refresh failures (one alert at a time — reporting a
-  // standing condition first would swallow the recoverable error). The unpaired window (F-08/
-  // RG-12) precedes the unqualified runtime: without a paired app session no run can start at all.
-  if (state.pairing === "unpaired") return t("codingWorkbench.pairing.unpaired");
+  // standing condition first would swallow the recoverable error). Pairing remains in the
+  // lifecycle narration, but it is not useful enough to take over the workbench as a banner.
   // Last: the unqualified runtime, and only while the bootstrap setup section is off screen — it
   // states the same condition itself, and duplicating it would announce it twice to assistive
   // technology. This wording is its own: the setup copy invites binding a workspace, which is

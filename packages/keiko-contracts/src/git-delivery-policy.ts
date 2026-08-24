@@ -193,6 +193,9 @@ export function evaluateGitPolicy(
 // gate and tells the user the opposite of what will happen.
 
 export interface GitDeliveryPolicyBranchOperands {
+  // A commit writes to the checked-out branch, which is supplied by the trusted worktree snapshot.
+  // `GitDeliveryCommitInputs` deliberately carries no caller-controlled branch name.
+  readonly commitBranchName?: string | undefined;
   // `GitDeliveryMergeInputs` carries only the provider PR id — the base branch is not part of the
   // resolved inputs — so a caller that holds the merge command supplies it here. Ignored for every
   // other action kind.
@@ -204,6 +207,8 @@ export function gitDeliveryPolicyTargetBranchName(
   operands: GitDeliveryPolicyBranchOperands = {},
 ): string | undefined {
   switch (inputs.kind) {
+    case "commit":
+      return operands.commitBranchName;
     case "branch-create":
     case "branch-switch":
       return inputs.branchName;

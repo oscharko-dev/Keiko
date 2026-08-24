@@ -17,6 +17,7 @@ import {
   isAsYouTypeCompletionModel,
   isConfiguredVoiceProvider,
   isConversationEligibleModel,
+  isCodingWorkbenchModel,
   isVoiceCapability,
   listVoicePersonas,
   modelSupportsInfilling,
@@ -62,6 +63,29 @@ function cap(overrides: Partial<ModelCapability> = {}): ModelCapability {
     ...overrides,
   };
 }
+
+describe("isCodingWorkbenchModel", () => {
+  it.each(["Coding", "Code review", "Local coding workflow", "Software development"])(
+    "accepts the explicit coding use case %s",
+    (useCase) => {
+      expect(isCodingWorkbenchModel(cap({ preferredUseCases: [useCase] }))).toBe(true);
+    },
+  );
+
+  it.each(["Non-coding", "Coding disabled", "Coding-adjacent", "Chat"])(
+    "rejects the unrelated or negative use case %s",
+    (useCase) => {
+      expect(isCodingWorkbenchModel(cap({ preferredUseCases: [useCase] }))).toBe(false);
+    },
+  );
+
+  it("requires chat, tool calling, and workflow eligibility together", () => {
+    const coding = { preferredUseCases: ["Coding"] } as const;
+    expect(isCodingWorkbenchModel(cap({ ...coding, kind: "embedding" }))).toBe(false);
+    expect(isCodingWorkbenchModel(cap({ ...coding, toolCalling: false }))).toBe(false);
+    expect(isCodingWorkbenchModel(cap({ ...coding, workflowEligible: false }))).toBe(false);
+  });
+});
 
 describe("INFILLING_ALIGNMENTS", () => {
   it("enumerates the three alignment postures", () => {

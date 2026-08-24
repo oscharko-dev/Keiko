@@ -1139,9 +1139,6 @@
     },
     "complexity": {
       "count": 1
-    },
-    "max-lines-per-function": {
-      "count": 2
     }
   },
   "src/app/components/desktop/widgets/cards/git-client/ConnectPanel.tsx": {
@@ -1323,11 +1320,6 @@
       "count": 3
     }
   },
-  "src/app/components/desktop/widgets/coding-workbench/CodingWorkbenchSections.tsx": {
-    "max-lines-per-function": {
-      "count": 2
-    }
-  },
   "src/app/components/desktop/widgets/coding-workbench/CodingWorkbenchSetup.tsx": {
     "max-lines-per-function": {
       "count": 1
@@ -1416,7 +1408,7 @@
   },
   "src/app/components/desktop/widgets/index.test.tsx": {
     "@typescript-eslint/explicit-function-return-type": {
-      "count": 37
+      "count": 36
     },
     "complexity": {
       "count": 1
@@ -2075,9 +2067,6 @@
     }
   },
   "src/lib/coding-workbench-live-state.ts": {
-    "@typescript-eslint/explicit-function-return-type": {
-      "count": 17
-    },
     "complexity": {
       "count": 2
     }

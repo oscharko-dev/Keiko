@@ -12,10 +12,13 @@ import {
 } from "@oscharko-dev/keiko-model-gateway";
 import {
   estimateTokensForSegments,
+  MODEL_REASONING_EFFORTS,
   validateGatewaySamplingParameters,
   type CodingWorkbenchModelSource,
   type CodingWorkbenchSidecarGatewayRunMetadata,
   type CodingWorkbenchSidecarGatewayResult,
+  type CodingWorkbenchSidecarGatewayUnavailableReason,
+  type ModelReasoningEffort,
 } from "@oscharko-dev/keiko-contracts";
 import {
   currentGateway,
@@ -23,7 +26,10 @@ import {
   currentGatewayVerification,
   type UiHandlerDeps,
 } from "./deps.js";
-import { OPENCODE_RUNTIME_MODEL_ALIAS } from "./coding-runtime/opencodeLaunchProfile.js";
+import {
+  OPENCODE_RUNTIME_MODEL_ALIAS,
+  OPENCODE_RUNTIME_READINESS_PROMPT,
+} from "./coding-runtime/opencodeLaunchProfile.js";
 import { hasExactOpenCodeVisibleToolContract } from "./coding-runtime/opencodeToolSchemas.js";
 import { UNKNOWN_CORRELATION_ID } from "./correlation.js";
 import { emitServerDiagnostic, serverDiagnosticFromError } from "./diagnostics-log.js";
@@ -35,6 +41,7 @@ const ENABLE_TOKENS = new Set(["1", "true", "on", "yes", "enabled"]);
 const CODING_SIDECAR_DISABLED_ENV = "KEIKO_CODING_SIDECAR_DISABLED";
 const CODING_SIDECAR_GATEWAY_ERROR_CODE = "CODING_SIDECAR_UNAVAILABLE";
 const CODING_SIDECAR_GATEWAY_ROUTE = "POST /api/coding-sidecar/gateway/chat/completions";
+const CODING_SAFE_SIDECAR_GATEWAY_PROFILE_ID = "coding-safe-openai-compatible";
 const BUFFERED_STREAM_HEARTBEAT_MS = 5_000;
 const OUTPUT_BYTES_PER_TOKEN_LIMIT = 4;
 // The #2680 live-probe fingerprint (many model requests, zero keiko_* facade calls) becomes
@@ -43,9 +50,15 @@ const OUTPUT_BYTES_PER_TOKEN_LIMIT = 4;
 // within their first rounds.
 const TOOL_ADOPTION_GAP_MESSAGE_THRESHOLD = 9;
 const GOVERNED_TOOL_NAME_PREFIX = "keiko_";
+const MODEL_REASONING_EFFORT_SET: ReadonlySet<string> = new Set(MODEL_REASONING_EFFORTS);
+
+function isModelReasoningEffort(value: unknown): value is ModelReasoningEffort {
+  return typeof value === "string" && MODEL_REASONING_EFFORT_SET.has(value);
+}
 
 export interface OpenCodeGatewayReadinessRegistry {
   readonly claim: (runId: string) => boolean;
+  readonly verifyObserved: (runId: string) => void;
   readonly isVerified: (runId: string) => boolean;
   readonly waitForObservedRequest: (runId: string, signal: AbortSignal) => Promise<boolean>;
   /** True only on the first call per run — bounds the adoption-gap diagnostic to one per run. */
@@ -58,13 +71,17 @@ export function createOpenCodeGatewayReadinessRegistry(): OpenCodeGatewayReadine
   const armed = new Set<string>();
   const adoptionGapDiagnosed = new Set<string>();
   const waiters = new Map<string, (result: boolean) => void>();
+  const verifyObserved = (runId: string): void => {
+    observed.add(runId);
+    waiters.get(runId)?.(true);
+  };
   return {
     claim: (runId): boolean => {
       if (!armed.delete(runId)) return false;
-      observed.add(runId);
-      waiters.get(runId)?.(true);
+      verifyObserved(runId);
       return true;
     },
+    verifyObserved,
     isVerified: (runId): boolean => observed.has(runId),
     waitForObservedRequest: (runId, signal): Promise<boolean> => {
       if (observed.has(runId)) return Promise.resolve(true);
@@ -359,6 +376,7 @@ function buildChatRequest(
   cancellationSignal: AbortSignal,
   maxOutputTokens: number,
   correlationId: string | undefined,
+  reasoningEffort: ModelReasoningEffort | undefined,
 ): GatewayCallRequest {
   return {
     modelId: modelAlias,
@@ -368,6 +386,7 @@ function buildChatRequest(
     ...(parsed.top_p === undefined ? {} : { topP: parsed.top_p }),
     cancellationSignal,
     maxOutputTokens,
+    ...(reasoningEffort === undefined ? {} : { reasoningEffort }),
     logContext: { correlationId },
   };
 }
@@ -449,7 +468,10 @@ function currentModelSource(deps: UiHandlerDeps): CodingWorkbenchModelSource {
   );
 }
 
-function resolveGatewayProfile(deps: UiHandlerDeps): ResolvedGatewayProfile {
+function resolveGatewayProfile(
+  deps: UiHandlerDeps,
+  selectedModelId?: string,
+): ResolvedGatewayProfile {
   const config = currentGatewayConfig(deps);
   const gateway = config === undefined ? undefined : currentGateway(deps);
   const modelSource = currentModelSource(deps);
@@ -461,6 +483,7 @@ function resolveGatewayProfile(deps: UiHandlerDeps): ResolvedGatewayProfile {
     // probe must not lock out a gateway that answers now — a request that cannot be served fails on
     // its own live error, while the projection is what a surface is allowed to CLAIM.
     gatewayVerification: currentGatewayVerification(deps),
+    ...(selectedModelId === undefined ? {} : { modelId: selectedModelId }),
   });
   return { config, gateway, modelSource, result };
 }
@@ -688,17 +711,38 @@ interface RuntimeCapabilityAuthenticator {
     ((capability: string, promptTokens: number) => unknown) | undefined;
 }
 
+type RuntimeAdapterKind = "model-gateway-sidecar" | "codex-cli-adapter";
+
 function runtimeCapabilityAuthenticator(
   deps: UiHandlerDeps,
 ): RuntimeCapabilityAuthenticator | undefined {
   return deps.runtimeCapabilityAuthenticator;
 }
 
-function authenticatedRuntimeRunId(value: unknown): string | undefined {
+function authenticatedRuntimeBinding(value: unknown):
+  | {
+      readonly runId: string;
+      readonly adapterKind?: RuntimeAdapterKind | undefined;
+      readonly modelProfileId?: string | undefined;
+      readonly reasoningEffort?: ModelReasoningEffort | undefined;
+    }
+  | undefined {
   if (!isRecord(value) || value.ok !== true || !isRecord(value.binding)) return undefined;
-  return typeof value.binding.runId === "string" && value.binding.runId.length > 0
-    ? value.binding.runId
-    : undefined;
+  if (typeof value.binding.runId !== "string" || value.binding.runId.length === 0) return undefined;
+  const adapterKind = runtimeAdapterKind(value.binding.adapterKind);
+  const effort = value.binding.reasoningEffort;
+  return {
+    runId: value.binding.runId,
+    ...(adapterKind === undefined ? {} : { adapterKind }),
+    ...(typeof value.binding.modelProfileId === "string"
+      ? { modelProfileId: value.binding.modelProfileId }
+      : {}),
+    ...(isModelReasoningEffort(effort) ? { reasoningEffort: effort } : {}),
+  };
+}
+
+function runtimeAdapterKind(value: unknown): RuntimeAdapterKind | undefined {
+  return value === "model-gateway-sidecar" || value === "codex-cli-adapter" ? value : undefined;
 }
 
 function promptReservationRunId(value: unknown): string | undefined {
@@ -734,6 +778,14 @@ function isAdmittedManagedToolSet(
 ): boolean {
   return (
     isExactManagedToolSet(tools) || (tools === undefined && registry?.isVerified(runId) === true)
+  );
+}
+
+function isRuntimeReadinessProbe(parsed: CodingSidecarGatewayChatCompletionRequest): boolean {
+  return (
+    parsed.messages.length === 1 &&
+    parsed.messages[0]?.role === "user" &&
+    parsed.messages[0].content === OPENCODE_RUNTIME_READINESS_PROMPT
   );
 }
 
@@ -806,28 +858,57 @@ function unauthorizedGatewayRequest(): RouteResult {
   };
 }
 
+interface AuthenticatedGatewayRequest {
+  readonly runtimeAuthenticated: boolean;
+  readonly runId: string;
+  readonly capability: string;
+  readonly adapterKind?: RuntimeAdapterKind | undefined;
+  readonly modelProfileId?: string | undefined;
+  readonly reasoningEffort?: ModelReasoningEffort | undefined;
+}
+
 function authenticateGatewayRequest(
   ctx: RouteContext,
   deps: UiHandlerDeps,
-):
-  | { readonly runtimeAuthenticated: false; readonly runId: string; readonly capability: string }
-  | { readonly runtimeAuthenticated: true; readonly runId: string; readonly capability: string }
-  | RouteResult {
+): AuthenticatedGatewayRequest | RouteResult {
   if (hasOrigin(ctx)) return forbiddenGatewayRequest();
   const authenticator = runtimeCapabilityAuthenticator(deps);
   const capability = bearerCapability(ctx);
   if (authenticator === undefined || capability === undefined) return unauthorizedGatewayRequest();
-  const runId = authenticatedRuntimeRunId(authenticator.authenticate(capability, "model-gateway"));
-  if (runId === undefined) {
+  const binding = authenticatedRuntimeBinding(
+    authenticator.authenticate(capability, "model-gateway"),
+  );
+  if (binding === undefined) {
     return unauthorizedGatewayRequest();
   }
   // Runtime launch wires the readiness registry. Other callers still require the
   // same bound bearer, but do not claim the one-shot OpenCode readiness challenge.
   return {
-    runtimeAuthenticated: gatewayReadinessRegistry(deps) !== undefined,
-    runId,
+    runtimeAuthenticated:
+      binding.adapterKind === "model-gateway-sidecar" ||
+      gatewayReadinessRegistry(deps) !== undefined,
+    runId: binding.runId,
     capability,
+    ...(binding.adapterKind === undefined ? {} : { adapterKind: binding.adapterKind }),
+    ...(binding.modelProfileId === undefined ? {} : { modelProfileId: binding.modelProfileId }),
+    ...(binding.reasoningEffort === undefined ? {} : { reasoningEffort: binding.reasoningEffort }),
   };
+}
+
+function gatewayProfileModelIdForAuthentication(
+  authentication: AuthenticatedGatewayRequest,
+): string | undefined {
+  return isRuntimeTransportProfileId(authentication.modelProfileId)
+    ? undefined
+    : authentication.modelProfileId;
+}
+
+function isRuntimeTransportProfileId(modelProfileId: string | undefined): boolean {
+  return (
+    modelProfileId === undefined ||
+    modelProfileId === OPENCODE_RUNTIME_MODEL_ALIAS ||
+    modelProfileId === CODING_SAFE_SIDECAR_GATEWAY_PROFILE_ID
+  );
 }
 
 function reserveGatewayPromptBudget(
@@ -854,11 +935,60 @@ function isAvailableGatewayProfile(
 }
 
 function unavailableGatewayProfile(
-  _ctx: RouteContext,
-  _deps: UiHandlerDeps,
-  _resolved: ResolvedGatewayProfile,
+  ctx: RouteContext,
+  deps: UiHandlerDeps,
+  resolved: ResolvedGatewayProfile,
+  authentication: AuthenticatedGatewayRequest,
 ): RouteResult {
+  const selectedModelId = gatewayProfileModelIdForAuthentication(authentication);
+  emitServerDiagnostic(deps.diagnostics, {
+    correlationId: authentication.runtimeAuthenticated
+      ? authentication.runId
+      : (ctx.correlationId ?? UNKNOWN_CORRELATION_ID),
+    timestamp: new Date(Date.now()).toISOString(),
+    operation: CODING_SIDECAR_GATEWAY_ROUTE,
+    source: "coding-sidecar-gateway.chat",
+    errorClass: "CodingSidecarGatewayUnavailable",
+    message: "coding-sidecar-gateway-profile-unavailable",
+    code: unavailableGatewayProfileCode(resolved, selectedModelId, authentication),
+  });
   return unavailableError();
+}
+
+function unavailableGatewayProfileCode(
+  resolved: ResolvedGatewayProfile,
+  selectedModelId: string | undefined,
+  authentication: AuthenticatedGatewayRequest,
+): string {
+  const reason = unavailableGatewayReason(resolved);
+  const config = resolved.config === undefined ? "missing-config" : "configured";
+  const gateway = resolved.gateway === undefined ? "missing-gateway" : "configured";
+  const source =
+    resolved.modelSource === "chatgpt-codex-subscription-profile"
+      ? "subscription"
+      : "model-gateway";
+  const selector = gatewaySelectorKind(selectedModelId);
+  const authority = gatewayAuthorityKind(authentication);
+  return `status=unavailable:reason=${reason}:config=${config}:gateway=${gateway}:source=${source}:selector=${selector}:authority=${authority}`;
+}
+
+function gatewaySelectorKind(selectedModelId: string | undefined): string {
+  if (selectedModelId === undefined) return "absent";
+  if (selectedModelId === OPENCODE_RUNTIME_MODEL_ALIAS) return "runtime-alias";
+  if (selectedModelId === CODING_SAFE_SIDECAR_GATEWAY_PROFILE_ID) return "runtime-profile";
+  return "provider-model";
+}
+
+function gatewayAuthorityKind(authentication: AuthenticatedGatewayRequest): string {
+  if (authentication.adapterKind === "model-gateway-sidecar") return "sidecar";
+  if (authentication.runtimeAuthenticated) return "runtime";
+  return "gateway";
+}
+
+function unavailableGatewayReason(
+  resolved: ResolvedGatewayProfile,
+): CodingWorkbenchSidecarGatewayUnavailableReason {
+  return resolved.result.status === "unavailable" ? resolved.result.reason : "missing-provider";
 }
 
 interface GatewayRequestCancellation {
@@ -901,11 +1031,28 @@ interface GatewayChatDelivery {
   readonly modelAlias: string;
   readonly maxOutputTokens: number;
   readonly upstreamStreamingSupported: boolean;
+  readonly reasoningEffort?: ModelReasoningEffort | undefined;
 }
 
 interface PinnedGatewayBinding {
   readonly config: GatewayConfig;
   readonly gateway: Gateway;
+}
+
+function requestForGatewayDelivery(
+  ctx: RouteContext,
+  parsed: CodingSidecarGatewayChatCompletionRequest,
+  delivery: GatewayChatDelivery,
+  signal: AbortSignal,
+): GatewayCallRequest {
+  return buildChatRequest(
+    parsed,
+    delivery.modelAlias,
+    signal,
+    delivery.maxOutputTokens,
+    ctx.correlationId,
+    delivery.reasoningEffort,
+  );
 }
 
 async function executeGatewayChat(
@@ -916,15 +1063,9 @@ async function executeGatewayChat(
   runId: string,
   delivery: GatewayChatDelivery,
 ): Promise<RouteResult | typeof STREAMING> {
-  const { modelAlias, maxOutputTokens, upstreamStreamingSupported } = delivery;
+  const { modelAlias, upstreamStreamingSupported } = delivery;
   const cancellation = gatewayRequestCancellation(ctx, deps, binding.config, modelAlias, runId);
-  const request = buildChatRequest(
-    parsed,
-    modelAlias,
-    cancellation.signal,
-    maxOutputTokens,
-    ctx.correlationId,
-  );
+  const request = requestForGatewayDelivery(ctx, parsed, delivery, cancellation.signal);
   let bufferedStream: BufferedOpenAiStreamSession | undefined;
   try {
     if (parsed.stream && upstreamStreamingSupported) {
@@ -1375,14 +1516,44 @@ function upstreamGatewayStreamingSupported(
   return advertisedSupport || deps.codingSidecarGatewayChatStreamFactory !== undefined;
 }
 
+function runtimeGatewayAdmissionResponse(
+  ctx: RouteContext,
+  deps: UiHandlerDeps,
+  parsed: CodingSidecarGatewayChatCompletionRequest,
+  authentication: AuthenticatedGatewayRequest,
+  modelAlias: string,
+): RouteResult | typeof STREAMING | undefined {
+  if (!authentication.runtimeAuthenticated) return undefined;
+  const registry = gatewayReadinessRegistry(deps);
+  if (!isAdmittedManagedToolSet(parsed.tools, registry, authentication.runId)) {
+    emitGatewayToolContractDiagnostic(ctx, deps, parsed.tools);
+    return forbiddenGatewayRequest();
+  }
+  if (
+    isExactManagedToolSet(parsed.tools) &&
+    isRuntimeReadinessProbe(parsed) &&
+    registry?.claim(authentication.runId) === true
+  ) {
+    return fixedReadinessResponse(ctx, modelAlias, parsed.stream === true);
+  }
+  if (isExactManagedToolSet(parsed.tools)) registry?.verifyObserved(authentication.runId);
+  noteToolAdoptionGap(ctx, deps, authentication.runId, parsed.messages);
+  return undefined;
+}
+
 export async function handleCodingSidecarGatewayChatCompletions(
   ctx: RouteContext,
   deps: UiHandlerDeps,
 ): Promise<RouteResult | typeof STREAMING> {
-  const resolved = resolveGatewayProfile(deps);
-  if (!isAvailableGatewayProfile(resolved)) return unavailableGatewayProfile(ctx, deps, resolved);
   const authentication = authenticateGatewayRequest(ctx, deps);
   if (isRouteResult(authentication)) return authentication;
+  const resolved = resolveGatewayProfile(
+    deps,
+    gatewayProfileModelIdForAuthentication(authentication),
+  );
+  if (!isAvailableGatewayProfile(resolved)) {
+    return unavailableGatewayProfile(ctx, deps, resolved, authentication);
+  }
   const parsed = await readChatCompletionRequest(ctx, resolved.result.runMetadata.maxRequestBytes);
   const validationError = validationErrorForChatRequest(
     parsed,
@@ -1396,17 +1567,14 @@ export async function handleCodingSidecarGatewayChatCompletions(
   if (isRouteResult(parsed)) {
     return parsed;
   }
-  if (authentication.runtimeAuthenticated) {
-    const registry = gatewayReadinessRegistry(deps);
-    if (!isAdmittedManagedToolSet(parsed.tools, registry, authentication.runId)) {
-      emitGatewayToolContractDiagnostic(ctx, deps, parsed.tools);
-      return forbiddenGatewayRequest();
-    }
-    if (isExactManagedToolSet(parsed.tools) && registry?.claim(authentication.runId) === true) {
-      return fixedReadinessResponse(ctx, resolved.result.modelAlias, parsed.stream === true);
-    }
-    noteToolAdoptionGap(ctx, deps, authentication.runId, parsed.messages);
-  }
+  const admission = runtimeGatewayAdmissionResponse(
+    ctx,
+    deps,
+    parsed,
+    authentication,
+    resolved.result.modelAlias,
+  );
+  if (admission !== undefined) return admission;
   return executeBudgetedGatewayChat(ctx, deps, resolved, parsed, authentication, {
     modelAlias: resolved.result.modelAlias,
     maxOutputTokens: resolved.result.runMetadata.maxOutputTokens,
@@ -1414,6 +1582,9 @@ export async function handleCodingSidecarGatewayChatCompletions(
       deps,
       resolved.result.supportsStreaming,
     ),
+    ...(authentication.reasoningEffort === undefined
+      ? {}
+      : { reasoningEffort: authentication.reasoningEffort }),
   });
 }
 

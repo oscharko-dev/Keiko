@@ -31,7 +31,7 @@ import {
   type RetrievalQuery,
   type RetrievalReference,
 } from "@oscharko-dev/keiko-contracts";
-import type { MemoryScope, ProjectId, WorkspaceId } from "@oscharko-dev/keiko-contracts/memory";
+import type { MemoryScope, ProjectId } from "@oscharko-dev/keiko-contracts/memory";
 import {
   DEFAULT_SEARCH_LIMITS,
   detectWorkspaceAt,
@@ -57,7 +57,6 @@ import { createJiraCodeContextConnector } from "../coding-context/jiraCodeContex
 import { handleGitBlame, handleGitStatus, handleGitStructuredDiff } from "../gitRoutes.js";
 import { openStoreForDeps } from "../local-knowledge-grounded-qa.js";
 import { vaultAsQueryPort } from "../memory-conv-handlers.js";
-import { LOCAL_CONVERSATION_MEMORY_USER_ID } from "../memory-conversation-context.js";
 import { memoryCapturePolicyForDeps } from "../memory-capture-policy.js";
 import {
   buildConversationRetrievalSignals,
@@ -136,7 +135,7 @@ export interface EditorStateContextLease {
 
 function basename(scopePath: string): string {
   const parts = scopePath.split("/");
-  return parts[parts.length - 1] ?? scopePath;
+  return parts.at(-1) ?? scopePath;
 }
 
 // strip-then-redact, mirroring grounded-qa redactString: format-char stripping first (GRD-001)
@@ -839,12 +838,7 @@ export async function runLocalKnowledgeProvider(
 
 // ─── Memory provider (query-only, reuses retrieveMemoryContext) ───────────────────────
 function editorMemoryScopes(realRoot: string): readonly MemoryScope[] {
-  return [
-    { kind: "workspace", workspaceId: realRoot as WorkspaceId },
-    { kind: "project", projectId: realRoot as ProjectId },
-    { kind: "user", userId: LOCAL_CONVERSATION_MEMORY_USER_ID },
-    { kind: "global" },
-  ];
+  return [{ kind: "project", projectId: realRoot as ProjectId }];
 }
 
 async function runMemoryRetrieval(

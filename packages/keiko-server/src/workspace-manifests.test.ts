@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, realpathSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -19,6 +19,7 @@ import {
   type WorkspaceScriptTrustService,
 } from "./workspace-script-trust.js";
 import { WorkspaceManifestError, WorkspaceManifestService } from "./workspace-manifests.js";
+import { hasCurrentWorkspaceRootMembership } from "./workspace-root-membership.js";
 
 let tmp: string;
 let rootA: string;
@@ -115,6 +116,38 @@ afterEach(() => {
 });
 
 describe("WorkspaceManifestService", () => {
+  it("refreshes an explicitly reconnected single-root identity and revokes its old trust", () => {
+    const initial = alphaWorkspace();
+    const initialRoot = initial.roots[0];
+    if (initialRoot === undefined) throw new Error("missing alpha root");
+    expect(trust.grant(rootA)).toEqual({ trusted: true });
+
+    renameSync(rootA, join(tmp, "alpha-replaced"));
+    mkdirSync(rootA);
+    expect(hasCurrentWorkspaceRootMembership(store, rootA)).toBe(false);
+
+    store.reconnectProject(rootA);
+
+    const refreshed = service.get(initial.workspaceId);
+    expect(refreshed.revision).toBe(initial.revision + 1);
+    expect(refreshed.roots[0]?.identityDigest).not.toBe(initialRoot.identityDigest);
+    expect(hasCurrentWorkspaceRootMembership(store, rootA)).toBe(true);
+    expect(store.readWorkspaceTrustRecord(initialRoot.rootRef)).toBeUndefined();
+  });
+
+  it("does not rewrite a multi-root workspace during a project reconnect", () => {
+    const combined = service.addRoot(dispatch(alphaWorkspace(), 0), rootB).manifest;
+    const before = store.readWorkspaceManifestRecord(combined.workspaceId);
+    renameSync(rootA, join(tmp, "alpha-replaced"));
+    mkdirSync(rootA);
+
+    store.reconnectProject(rootA);
+
+    expect(store.readWorkspaceManifestRecord(combined.workspaceId)).toEqual(before);
+    expect(hasCurrentWorkspaceRootMembership(store, rootA)).toBe(false);
+    expect(hasCurrentWorkspaceRootMembership(store, rootB)).toBe(true);
+  });
+
   it("runs the two-root journey with explicit dispatch and fail-closed trust recompute", () => {
     const initial = service.list();
     expect(initial).toHaveLength(2);

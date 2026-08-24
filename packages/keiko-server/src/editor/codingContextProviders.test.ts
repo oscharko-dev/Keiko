@@ -15,7 +15,13 @@ import {
   type GitEditorDiffResponse,
 } from "@oscharko-dev/keiko-contracts";
 import { createMemoryVault, type MemoryVaultStore } from "@oscharko-dev/keiko-memory-vault";
-import type { MemoryId, MemoryRecord } from "@oscharko-dev/keiko-contracts/memory";
+import type {
+  MemoryId,
+  MemoryRecord,
+  MemoryScope,
+  ProjectId,
+  UserId,
+} from "@oscharko-dev/keiko-contracts/memory";
 import { buildRedactor } from "../index.js";
 import type { UiHandlerDeps } from "../index.js";
 import {
@@ -48,12 +54,17 @@ function makeVault(): MemoryVaultStore {
   return vault;
 }
 
-function insertUserMemory(vault: MemoryVaultStore, body: string): MemoryRecord {
+function insertMemory(
+  vault: MemoryVaultStore,
+  id: string,
+  body: string,
+  scope: MemoryScope,
+): MemoryRecord {
   const now = 1_700_000_000_000;
   const record = {
-    id: `mem-${body.length.toString(36)}` as unknown as MemoryId,
+    id: id as unknown as MemoryId,
     schemaVersion: "1",
-    scope: { kind: "user", userId: "local-operator" },
+    scope,
     type: "preference",
     body,
     provenance: {
@@ -718,7 +729,12 @@ describe("runMemoryProvider", () => {
 
   it("returns redacted memory excerpts from the reused retrieveMemoryContext path", async () => {
     const vault = makeVault();
-    insertUserMemory(vault, "Always prefer TypeScript strict mode in editor coding context.");
+    insertMemory(
+      vault,
+      "project-memory",
+      "Always prefer TypeScript strict mode in editor coding context.",
+      { kind: "project", projectId: "/tmp/does-not-exist" as ProjectId },
+    );
     const ctx = providerCtx({ deps: baseDeps({ memoryVault: vault }) });
     const outcome = await runMemoryProvider(ctx, { queryText: undefined });
     expect(outcome.omission).toBeUndefined();
@@ -727,9 +743,39 @@ describe("runMemoryProvider", () => {
     expect(outcome.excerpts[0]?.text).toContain("TypeScript strict mode");
   });
 
+  it("retrieves only the active project memory and never private or foreign project memory", async () => {
+    const vault = makeVault();
+    insertMemory(vault, "private-memory", "The operator's private name is Ada.", {
+      kind: "user",
+      userId: "local-operator" as UserId,
+    });
+    insertMemory(vault, "active-project-memory", "This project uses TypeScript.", {
+      kind: "project",
+      projectId: "/workspace/keiko" as ProjectId,
+    });
+    insertMemory(vault, "foreign-project-memory", "This other project uses Rust.", {
+      kind: "project",
+      projectId: "/workspace/other" as ProjectId,
+    });
+    const ctx = providerCtx({
+      deps: baseDeps({ memoryVault: vault }),
+      realRoot: "/workspace/keiko",
+    });
+
+    const outcome = await runMemoryProvider(ctx, { queryText: undefined });
+    const excerpts = outcome.excerpts.map((excerpt) => excerpt.text).join("\n");
+
+    expect(excerpts).toContain("This project uses TypeScript.");
+    expect(excerpts).not.toContain("private name");
+    expect(excerpts).not.toContain("other project uses Rust");
+  });
+
   it("omits memory retrieval when already cancelled", async () => {
     const vault = makeVault();
-    insertUserMemory(vault, "Cancelled retrieval should not be ranked.");
+    insertMemory(vault, "cancelled-memory", "Cancelled retrieval should not be ranked.", {
+      kind: "project",
+      projectId: "/tmp/does-not-exist" as ProjectId,
+    });
     const controller = new AbortController();
     controller.abort();
     const ctx = providerCtx({ deps: baseDeps({ memoryVault: vault }), signal: controller.signal });

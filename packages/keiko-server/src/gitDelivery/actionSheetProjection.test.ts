@@ -13,6 +13,7 @@ import type {
 } from "@oscharko-dev/keiko-contracts";
 import type { GitWorktreeSnapshot } from "@oscharko-dev/keiko-tools";
 import { buildActionSheetFromFacts, type BuildActionSheetFacts } from "./actionSheetProjection.js";
+import { KEIKO_DEFAULT_LOCAL_GIT_POLICY_PACK } from "./execution.js";
 import { KEIKO_DEFAULT_PUBLISH_POLICY_PACK } from "./pushExecution.js";
 import { KEIKO_DEFAULT_PR_POLICY_PACK } from "./prExecution.js";
 
@@ -302,6 +303,19 @@ const PR_ONTO_UNLISTED_BASE: GitDeliveryResolvedInputs = {
 };
 
 describe("policy target branch agreement with the executing gates", () => {
+  it("blocks a commit preview on the protected checked-out branch", () => {
+    const sheet = buildActionSheetFromFacts(
+      facts({
+        policyPacks: { repoPack: KEIKO_DEFAULT_LOCAL_GIT_POLICY_PACK },
+        worktreeSnapshot: { ...CLEAN_SNAPSHOT, currentBranchName: "dev" },
+      }),
+    );
+
+    expect(sheet.policyExplanation.decision).toBe("blocked");
+    expect(sheet.policyExplanation.blockReason).toBe("protected-branch");
+    expect(sheet.state).toBe("blocked");
+  });
+
   it("blocks a preview of a push whose REMOTE target is dev under the shipped publish pack", () => {
     const sheet = buildActionSheetFromFacts(
       facts({

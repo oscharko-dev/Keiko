@@ -1,14 +1,16 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { CSSProperties, KeyboardEvent as ReactKeyboardEvent, ReactNode } from "react";
 import { createPortal } from "react-dom";
 import {
   useOptionalWidgetTranslate,
   type OptionalWidgetTranslate,
 } from "@/lib/optional-widget-i18n";
+import { pickWithNativeDialog } from "@/lib/native-file-dialog";
 import type { ProjectWithAvailability } from "@/lib/types";
 import { Icons } from "../../../Icons";
+import { useNativeFileDialogCapability } from "../../../hooks/useNativeFileDialogCapability";
 import { useDialogTabTrap } from "../../../hooks/useDialogTabTrap";
 import { useModalInteractionLock } from "../../../hooks/useModalInteractionLock";
 import type { GitClientSeam } from "./git-client-seam";
@@ -23,6 +25,7 @@ import {
 
 // PascalCase aliases so the JSX tag itself signals "component", not member access (S6770).
 const CloseIcon = Icons.close;
+const FolderIcon = Icons.folder;
 
 const OVERLAY_STYLE: CSSProperties = {
   position: "fixed",
@@ -104,9 +107,11 @@ export function AddRepositoryDialog({
   const [destinationPath, setDestinationPath] = useState("");
   const [localPath, setLocalPath] = useState("");
   const [busy, setBusy] = useState(false);
+  const [pickingFolder, setPickingFolder] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const dialogRef = useRef<HTMLDialogElement | null>(null);
   const firstFieldRef = useRef<HTMLInputElement | null>(null);
+  const nativeDialogSupported = useNativeFileDialogCapability();
   useDialogTabTrap(dialogRef);
   useModalInteractionLock({ initialFocusRef: dialogRef });
 
@@ -148,6 +153,25 @@ export function AddRepositoryDialog({
       },
     );
   };
+
+  const chooseLocalRepository = useCallback((): void => {
+    if (!nativeDialogSupported || pickingFolder) return;
+    setPickingFolder(true);
+    setError(null);
+    void pickWithNativeDialog({
+      mode: "open-directory",
+      title: t("gitClientWindow.addRepository.chooseLocal"),
+      ...(localPath.trim().length > 0 ? { defaultPath: localPath.trim() } : {}),
+    })
+      .then((outcome): void => {
+        if (outcome.kind === "picked") setLocalPath(outcome.paths[0] ?? "");
+        else if (outcome.kind === "busy") setError(t("gitClientWindow.addRepository.pickerBusy"));
+        else if (outcome.kind === "unsupported") {
+          setError(t("gitClientWindow.addRepository.pickerUnsupported"));
+        } else if (outcome.kind === "error") setError(outcome.message);
+      })
+      .finally(() => setPickingFolder(false));
+  }, [localPath, nativeDialogSupported, pickingFolder, t]);
 
   const onKeyDown = (event: ReactKeyboardEvent<HTMLDialogElement>): void => {
     if (event.key === "Escape") {
@@ -238,16 +262,26 @@ export function AddRepositoryDialog({
         ) : (
           <label style={FIELD_LABEL_STYLE}>
             {t("gitClientWindow.addRepository.localPath")}
-            {/* No text-node space intended: FIELD_LABEL_STYLE stacks label and input via a
-                CSS column layout, not inline text flow. */}
-            <input
-              ref={firstFieldRef}
-              style={INPUT_STYLE}
-              value={localPath}
-              onChange={(event) => setLocalPath(event.target.value)}
-              aria-label={t("gitClientWindow.addRepository.localPath")}
-              placeholder="/Users/me/Work/existing-repo"
-            />
+            <span style={{ display: "flex", gap: "var(--space-3)" }}>
+              <input
+                ref={firstFieldRef}
+                style={{ ...INPUT_STYLE, flex: 1 }}
+                value={localPath}
+                onChange={(event) => setLocalPath(event.target.value)}
+                aria-label={t("gitClientWindow.addRepository.localPath")}
+                placeholder="/Users/me/Work/existing-repo"
+              />
+              <button
+                type="button"
+                style={{ ...SECONDARY_BTN, padding: "0 var(--space-3)" }}
+                onClick={chooseLocalRepository}
+                disabled={!nativeDialogSupported || pickingFolder}
+                aria-label={t("gitClientWindow.addRepository.chooseLocal")}
+                title={t("gitClientWindow.addRepository.chooseLocal")}
+              >
+                <FolderIcon size={16} />
+              </button>
+            </span>
           </label>
         )}
 

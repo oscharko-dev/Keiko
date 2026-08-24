@@ -30,6 +30,9 @@ import { createInMemoryUiStore, type UiStore } from "../store/index.js";
 import { createWorkspaceMutexRegistry } from "../task-workspace/mutex.js";
 import { createEditorSettingsControlService } from "../editor/settings/editorSettingsControl.js";
 import { createEditorSettingsStore } from "../editor/settings/editorSettingsStore.js";
+import { UNKNOWN_CORRELATION_ID } from "../correlation.js";
+import type { ServerLogEvent } from "../observability/server-log.js";
+import type { ServerDiagnosticRecord } from "../diagnostics-log.js";
 import type { RouteContext } from "../routes.js";
 import {
   createHandleCommitExecute,
@@ -393,7 +396,7 @@ describe("commit preview — read-only verification context (AC3)", () => {
         deps(managed.override),
       );
       expect(res.status).toBe(200);
-      expect((res.body as GitDeliveryCommitPreviewBody).policyOutcome).toBe("constrained");
+      expect((res.body as GitDeliveryCommitPreviewBody).policyOutcome).toBe("allowed");
     } finally {
       managed.cleanup();
     }
@@ -412,7 +415,121 @@ describe("commit preview — read-only verification context (AC3)", () => {
     expect(body.intent.warnings).toContain("wip-marker");
     expect(body.intent.isWip).toBe(true);
     expect(body.messageValidation.ok).toBe(false);
-    expect(body.policyOutcome).toBe("constrained");
+    expect(body.policyOutcome).toBe("allowed");
+    expect(body.suggestedMessage).toBe(
+      [
+        "chore: update selected files and documentation",
+        "",
+        "Update the staged selected files and documentation.",
+        "Keep the commit limited to the selected staged files.",
+      ].join("\n"),
+    );
+  });
+
+  it("builds a repository-neutral commit draft from the selected staged files", async () => {
+    const handler = createHandleCommitPreview({
+      execution: seams({
+        stagedPathsReader: () =>
+          Promise.resolve([
+            "apps/checkout/src/cartService.ts",
+            "apps/checkout/src/cartService.test.ts",
+            "apps/checkout/package.json",
+          ]),
+      }),
+    });
+    const res = await handler(
+      ctxFor(PREVIEW, { schemaVersion: "1", projectId, messageDraft: "" }),
+      deps(),
+    );
+    const body = res.body as GitDeliveryCommitPreviewBody;
+    expect(body.suggestedMessage).toBe(
+      [
+        "chore(checkout): update cart service and related changes",
+        "",
+        "Update the staged cart service, test coverage, and configuration.",
+        "Keep the commit limited to the selected staged files.",
+        "Includes related test coverage.",
+      ].join("\n"),
+    );
+    expect(body.suggestedMessage).not.toContain("Keiko");
+  });
+
+  it("classifies common config files and normalizes a repository scope", async () => {
+    const handler = createHandleCommitPreview({
+      execution: seams({
+        stagedPathsReader: () =>
+          Promise.resolve([
+            "services/---Billing Platform---/tsconfig.build.json",
+            "services/---Billing Platform---/vite.config.ts",
+            "services/---Billing Platform---/settings.yaml",
+          ]),
+      }),
+    });
+    const res = await handler(
+      ctxFor(PREVIEW, { schemaVersion: "1", projectId, messageDraft: "" }),
+      deps(),
+    );
+
+    expect((res.body as GitDeliveryCommitPreviewBody).suggestedMessage).toBe(
+      [
+        "chore(billing-platform): update configuration",
+        "",
+        "Update the staged configuration.",
+        "Keep the commit limited to the selected staged files.",
+      ].join("\n"),
+    );
+  });
+
+  it("uses the package name rather than the npm namespace as a scoped-package draft scope", async () => {
+    const handler = createHandleCommitPreview({
+      execution: seams({
+        stagedPathsReader: () =>
+          Promise.resolve([
+            "packages/@acme/payments/src/invoice.ts",
+            "packages/@acme/payments/src/invoice.test.ts",
+          ]),
+      }),
+    });
+    const res = await handler(
+      ctxFor(PREVIEW, { schemaVersion: "1", projectId, messageDraft: "" }),
+      deps(),
+    );
+
+    expect((res.body as GitDeliveryCommitPreviewBody).suggestedMessage).toContain(
+      "chore(payments):",
+    );
+  });
+
+  it("records a content-free preview summary and never the drafted message", async () => {
+    const events: ServerLogEvent[] = [];
+    const handler = createHandleCommitPreview({
+      execution: seams(),
+      activityLog: {
+        write(event): void {
+          events.push(event);
+        },
+      },
+    });
+
+    await handler(
+      { ...ctxFor(PREVIEW, { schemaVersion: "1", projectId }), correlationId: "commit-preview-1" },
+      deps(),
+    );
+
+    expect(events).toContainEqual({
+      category: "diagnostic",
+      op: "git.commit.preview.completed",
+      correlationId: "commit-preview-1",
+      status: 200,
+      extra: {
+        stagedFileCount: 2,
+        areaCount: 2,
+        touchesTests: false,
+        draftSuggested: true,
+        policyOutcome: "allowed",
+      },
+    });
+    expect(JSON.stringify(events)).not.toContain("update staged changes");
   });
 
   it("discloses a trusted signed-commit requirement before commit", async () => {
@@ -509,6 +626,32 @@ describe("commit preview — read-only verification context (AC3)", () => {
     expect(execute.body).toMatchObject({ status: "succeeded" });
     expect(adapter.calls()).toEqual(["commit"]);
   });
+
+  it("does not offer a draft when no changes are staged", async () => {
+    const handler = createHandleCommitPreview({
+      execution: seams({
+        snapshotReader: () => Promise.resolve({ ...SNAPSHOT, stagedFileCount: 0 }),
+        stagedPathsReader: () => Promise.resolve([]),
+      }),
+    });
+
+    const res = await handler(ctxFor(PREVIEW, { schemaVersion: "1", projectId }), deps());
+
+    expect((res.body as GitDeliveryCommitPreviewBody).suggestedMessage).toBeUndefined();
+  });
+
+  it("does not invent a draft when the snapshot and staged path read disagree", async () => {
+    const handler = createHandleCommitPreview({
+      execution: seams({ stagedPathsReader: () => Promise.resolve([]) }),
+    });
+
+    const res = await handler(ctxFor(PREVIEW, { schemaVersion: "1", projectId }), deps());
+
+    const body = res.body as GitDeliveryCommitPreviewBody;
+    expect(body.summary.stagedFileCount).toBe(0);
+    expect(body.preflightFindingCodes).toContain("nothing-staged-to-commit");
+    expect(body.suggestedMessage).toBeUndefined();
+  });
 });
 
 describe("commit execute — message policy gate + no-bypass (AC2/AC4/AC5)", () => {
@@ -558,6 +701,7 @@ describe("commit execute — message policy gate + no-bypass (AC2/AC4/AC5)", () 
 
   it("fails closed (409) when the conflict-marker read itself cannot be completed", async () => {
     const adapter = recordingAdapter();
+    const records: ServerDiagnosticRecord[] = [];
     const handler = createHandleCommitExecute({
       execution: seams({
         adapterFactory: () => adapter.adapter,
@@ -566,10 +710,24 @@ describe("commit execute — message policy gate + no-bypass (AC2/AC4/AC5)", () 
     });
     const res = await handler(
       ctxFor(EXECUTE, { schemaVersion: "1", projectId, message: "feat(ui): add governed flow" }),
-      deps(),
+      deps({
+        diagnostics: {
+          record: (record): void => {
+            records.push(record);
+          },
+        },
+      }),
     );
     expect(res.status).toBe(409);
     expect(adapter.calls()).toEqual([]);
+    expect(records).toEqual([
+      expect.objectContaining({
+        correlationId: UNKNOWN_CORRELATION_ID,
+        operation: "git.commit.execute.conflict-scan",
+        source: "git-delivery.commit-routes",
+        errorClass: "Error",
+      }),
+    ]);
   });
 
   it("executes a valid conventional commit and records evidence (AC4)", async () => {
@@ -620,6 +778,24 @@ describe("commit execute — message policy gate + no-bypass (AC2/AC4/AC5)", () 
     expect((res.body as { preflightFindingCodes?: string[] }).preflightFindingCodes).toContain(
       "nothing-staged-to-commit",
     );
+    expect(adapter.calls()).toEqual([]);
+  });
+
+  it("blocks direct commits to dev under the default local policy", async () => {
+    const adapter = recordingAdapter();
+    const handler = createHandleCommitExecute({
+      execution: seams({
+        adapterFactory: () => adapter.adapter,
+        snapshotReader: () => Promise.resolve({ ...SNAPSHOT, currentBranchName: "dev" }),
+        policyPacks: undefined,
+      }),
+    });
+    const res = await handler(
+      ctxFor(EXECUTE, { schemaVersion: "1", projectId, message: "chore: update staged changes" }),
+      deps(),
+    );
+    expect((res.body as { status: string }).status).toBe("blocked");
+    expect((res.body as { blockReason?: string }).blockReason).toBe("protected-branch");
     expect(adapter.calls()).toEqual([]);
   });
 
@@ -718,14 +894,29 @@ describe("commit execute — message policy gate + no-bypass (AC2/AC4/AC5)", () 
   });
 
   it("returns 409 worktree-unavailable when the live snapshot cannot be read", async () => {
+    const records: ServerDiagnosticRecord[] = [];
     const handler = createHandleCommitExecute({
       execution: seams({ snapshotReader: () => Promise.reject(new Error("not a git repo")) }),
     });
     const res = await handler(
       ctxFor(EXECUTE, { schemaVersion: "1", projectId, message: "feat(ui): add flow" }),
-      deps(),
+      deps({
+        diagnostics: {
+          record: (record): void => {
+            records.push(record);
+          },
+        },
+      }),
     );
     expect(res.status).toBe(409);
+    expect(records).toEqual([
+      expect.objectContaining({
+        correlationId: UNKNOWN_CORRELATION_ID,
+        operation: "git.commit.execute.mutation",
+        source: "git-delivery.commit-routes",
+        errorClass: "Error",
+      }),
+    ]);
   });
 
   it("rejects a malformed approval and an oversized/invalid body", async () => {
@@ -744,6 +935,27 @@ describe("commit execute — message policy gate + no-bypass (AC2/AC4/AC5)", () 
 });
 
 describe("commit preview — default draft, policy block, and worktree failure", () => {
+  it("reports a protected-branch block for a default dev-branch commit preview", async () => {
+    const handler = createHandleCommitPreview({
+      execution: seams({
+        snapshotReader: () => Promise.resolve({ ...SNAPSHOT, currentBranchName: "dev" }),
+        policyPacks: undefined,
+      }),
+    });
+    const res = await handler(
+      ctxFor(PREVIEW, {
+        schemaVersion: "1",
+        projectId,
+        messageDraft: "chore: update staged changes",
+      }),
+      deps(),
+    );
+    const body = res.body as GitDeliveryCommitPreviewBody;
+    expect(body.policyOutcome).toBe("blocked");
+    expect(body.policyBlockReason).toBe("protected-branch");
+    expect(body.messageValidation.ok).toBe(true);
+  });
+
   it("defaults an absent messageDraft to empty and reports a policy block reason", async () => {
     const handler = createHandleCommitPreview({
       execution: seams({ policyPacks: { repoPack: BLOCK_ALL_PACK } }),
@@ -756,13 +968,64 @@ describe("commit preview — default draft, policy block, and worktree failure",
   });
 
   it("returns 409 when the worktree cannot be read", async () => {
+    const records: ServerDiagnosticRecord[] = [];
     const handler = createHandleCommitPreview({
       execution: seams({ snapshotReader: () => Promise.reject(new Error("not a git repo")) }),
     });
     const res = await handler(
-      ctxFor(PREVIEW, { schemaVersion: "1", projectId, messageDraft: "feat: x" }),
-      deps(),
+      {
+        ...ctxFor(PREVIEW, { schemaVersion: "1", projectId, messageDraft: "feat: x" }),
+        correlationId: "123e4567-e89b-12d3-a456-426614174000",
+      },
+      deps({
+        diagnostics: {
+          record: (record): void => {
+            records.push(record);
+          },
+        },
+      }),
     );
     expect(res.status).toBe(409);
+    expect(records).toEqual([
+      expect.objectContaining({
+        correlationId: "123e4567-e89b-12d3-a456-426614174000",
+        operation: "git.commit.preview.worktree",
+        source: "git-delivery.commit-routes",
+        errorClass: "Error",
+      }),
+    ]);
+  });
+
+  it("degrades branch-protection inspection visibly and records the failure", async () => {
+    const records: ServerDiagnosticRecord[] = [];
+    const handler = createHandleCommitPreview({
+      execution: seams({
+        branchProtectionReader: () => Promise.reject(new Error("provider unavailable")),
+      }),
+    });
+    const res = await handler(
+      {
+        ...ctxFor(PREVIEW, { schemaVersion: "1", projectId }),
+        correlationId: "123e4567-e89b-12d3-a456-426614174001",
+      },
+      deps({
+        diagnostics: {
+          record: (record): void => {
+            records.push(record);
+          },
+        },
+      }),
+    );
+
+    expect(res.status).toBe(200);
+    expect((res.body as GitDeliveryCommitPreviewBody).signatureRequirement).toBe("unavailable");
+    expect(records).toEqual([
+      expect.objectContaining({
+        correlationId: "123e4567-e89b-12d3-a456-426614174001",
+        operation: "git.commit.preview.branch-protection",
+        source: "git-delivery.commit-routes",
+        errorClass: "Error",
+      }),
+    ]);
   });
 });

@@ -16,18 +16,19 @@ import type { CSSProperties } from "react";
 export const WORKSPACE_STYLE: CSSProperties = {
   display: "flex",
   flexDirection: "column",
+  height: "100%",
   minHeight: "100%",
   minWidth: 0,
+  overflow: "hidden",
   background: "var(--card)",
   color: "var(--fg)",
 };
 
-// Connected toolbar: a row of left-aligned cells separated by hairlines, a spacer, then the right
-// action group. 66px tall at comfortable widths; the cells wrap to additional rows when the window
-// is narrowed (e.g. 360px) so every control stays reachable instead of overflowing off-screen
-// (#GEN-UI-LAYOUT-003). minHeight (not a fixed height) lets the wrapped rows grow.
+// Connected toolbar: repository, branch, sync, and utility actions stay in scanning order and wrap
+// when the window narrows. minHeight lets additional rows grow without forcing horizontal scrolling
+// at the 320 CSS-pixel reflow boundary (GEN-UI-LAYOUT-003).
 export const TOOLBAR_STYLE: CSSProperties = {
-  minHeight: 66,
+  minHeight: 72,
   flex: "none",
   display: "flex",
   flexWrap: "wrap",
@@ -52,8 +53,8 @@ export const TOOLBAR_EMPTY_STYLE: CSSProperties = {
 export const TOOLBAR_CELL_STYLE: CSSProperties = {
   display: "flex",
   alignItems: "center",
-  gap: 11,
-  padding: "0 18px",
+  gap: 10,
+  padding: "0 14px",
   border: 0,
   background: "transparent",
   cursor: "pointer",
@@ -63,11 +64,11 @@ export const TOOLBAR_CELL_STYLE: CSSProperties = {
 
 // Tiny mono caps label above a cell value ("Repository", "Current branch").
 export const TOOLBAR_CELL_LABEL_STYLE: CSSProperties = {
-  fontSize: 10,
-  fontWeight: 600,
-  letterSpacing: "0.07em",
+  fontSize: 10.5,
+  fontWeight: 700,
+  letterSpacing: "0.05em",
   textTransform: "uppercase",
-  color: "var(--fg-faint)",
+  color: "var(--fg-muted)",
   fontFamily: "var(--font-mono)",
   lineHeight: 1.1,
 };
@@ -76,8 +77,8 @@ export const TOOLBAR_CELL_LABEL_STYLE: CSSProperties = {
 export const TOOLBAR_ACTIONS_STYLE: CSSProperties = {
   display: "flex",
   alignItems: "center",
-  gap: 6,
-  padding: "0 16px",
+  gap: 4,
+  padding: "0 12px",
   borderLeft: "1px solid var(--line-soft)",
 };
 
@@ -88,10 +89,10 @@ export const BODY_STYLE: CSSProperties = {
   minHeight: 0,
 };
 
-// Left column: 384px at comfortable widths, but capped at 45% of the body so the diff pane keeps a
-// usable floor when the window is narrowed to ~360px (#GEN-UI-LAYOUT-003).
+// Left column: enough room to scan a repository's changes, while the diff remains the dominant
+// working surface at normal desktop widths.
 export const SIDEBAR_STYLE: CSSProperties = {
-  width: "min(384px, 45%)",
+  width: "min(312px, 42%)",
   flex: "none",
   display: "flex",
   flexDirection: "column",
@@ -99,6 +100,28 @@ export const SIDEBAR_STYLE: CSSProperties = {
   minHeight: 0,
   borderRight: "1px solid var(--line-soft)",
   background: "var(--card)",
+};
+
+export function sidebarStyle(width: number): CSSProperties {
+  return {
+    ...SIDEBAR_STYLE,
+    width,
+    maxWidth: "62%",
+  };
+}
+
+export const SIDEBAR_RESIZER_STYLE: CSSProperties = {
+  width: 8,
+  height: "100%",
+  flex: "none",
+  margin: 0,
+  padding: 0,
+  border: 0,
+  appearance: "none",
+  cursor: "col-resize",
+  touchAction: "none",
+  background: "var(--surface)",
+  boxShadow: "inset 1px 0 0 var(--line-soft), inset -1px 0 0 var(--line-soft)",
 };
 
 export const PANE_STYLE: CSSProperties = {
@@ -131,6 +154,22 @@ export const SECONDARY_BTN: CSSProperties = {
   border: "1px solid var(--line)",
   background: "var(--card)",
   color: "var(--fg)",
+};
+
+// Compact, labelled-by-tooltip utility control for the toolbar. The accessible name stays on the
+// button; the icon is only the visual affordance.
+export const TOOLBAR_ICON_BTN: CSSProperties = {
+  display: "inline-flex",
+  alignItems: "center",
+  justifyContent: "center",
+  width: 34,
+  height: 34,
+  padding: 0,
+  borderRadius: 7,
+  border: "1px solid var(--line)",
+  background: "var(--card)",
+  color: "var(--fg)",
+  cursor: "pointer",
 };
 
 // Primary accent action (Commit, Connect repository).
@@ -206,34 +245,47 @@ export function tabUnderlineStyle(active: boolean): CSSProperties {
 
 // ─── Changes list ────────────────────────────────────────────────────────────────────────────────
 
-// Summary strip above the file list: staged check + "N of M files staged" + add/del stats.
+// Summary strip above the file list: changed-file count, staged count, then bulk actions.
 export const SUMMARY_STRIP_STYLE: CSSProperties = {
   display: "flex",
   alignItems: "center",
   gap: 8,
-  padding: "10px 14px 6px",
-  color: "var(--fg-faint)",
+  padding: "10px 12px 8px",
+  borderBottom: "1px solid var(--line-soft)",
 };
 
-export const SUMMARY_CHECK_STYLE: CSSProperties = {
+export const CHANGES_COUNT_STYLE: CSSProperties = {
   display: "inline-flex",
   alignItems: "center",
-  justifyContent: "center",
-  width: 15,
-  height: 15,
-  flex: "none",
-  borderRadius: 4,
-  background: "var(--accent-solid)",
-  color: "var(--accent-solid-ink)",
+  minWidth: 0,
+  color: "var(--fg)",
+  fontSize: 12,
+  fontWeight: 700,
 };
 
-// Bulk stage/unstage action bar (kept from the live surface, restyled).
-export const CHANGES_HEADER_STYLE: CSSProperties = {
+export const STAGING_COUNT_STYLE: CSSProperties = {
+  display: "inline-flex",
+  alignItems: "center",
+  color: "var(--fg-muted)",
+  fontFamily: "var(--font-mono)",
+  fontSize: 11,
+  fontWeight: 600,
+  whiteSpace: "nowrap",
+};
+
+export const SUMMARY_ACTIONS_STYLE: CSSProperties = {
   display: "flex",
   alignItems: "center",
-  gap: 8,
-  flexWrap: "wrap",
-  padding: "0 14px 8px",
+  gap: 5,
+  marginLeft: "auto",
+  flex: "none",
+};
+
+export const STAGING_SCOPE_HINT_STYLE: CSSProperties = {
+  margin: 0,
+  padding: "0 12px 8px",
+  color: "var(--fg-muted)",
+  font: "500 11.5px/1.45 var(--font-ui)",
 };
 
 export const COMPACT_BTN: CSSProperties = {
@@ -243,10 +295,10 @@ export const COMPACT_BTN: CSSProperties = {
   height: 26,
   padding: "0 10px",
   borderRadius: 7,
-  border: "1px solid var(--line)",
-  background: "var(--card)",
-  color: "var(--fg-muted)",
-  font: "500 11.5px var(--font-ui)",
+  border: "1px solid var(--line-strong)",
+  background: "var(--surface)",
+  color: "var(--fg)",
+  font: "600 11.5px var(--font-ui)",
   cursor: "pointer",
   whiteSpace: "nowrap",
 };
@@ -262,11 +314,11 @@ export function fileRowStyle(selected: boolean): CSSProperties {
   return {
     display: "flex",
     alignItems: "center",
-    gap: 11,
+    gap: 8,
     width: "100%",
-    padding: "9px 10px",
+    padding: "7px 8px",
     border: 0,
-    borderRadius: 9,
+    borderRadius: 7,
     cursor: "pointer",
     textAlign: "left",
     background: selected ? "var(--accent-dim)" : "transparent",
@@ -331,8 +383,10 @@ function statusColor(status: string): string {
 }
 
 export const FILE_NAME_STYLE: CSSProperties = {
-  fontSize: 13,
-  fontWeight: 500,
+  flex: "none",
+  minWidth: 0,
+  fontSize: 12.5,
+  fontWeight: 650,
   color: "var(--fg)",
   whiteSpace: "nowrap",
   overflow: "hidden",
@@ -340,9 +394,11 @@ export const FILE_NAME_STYLE: CSSProperties = {
 };
 
 export const FILE_PATH_STYLE: CSSProperties = {
+  flex: 1,
+  minWidth: 0,
   fontFamily: "var(--font-mono)",
-  fontSize: 10.5,
-  color: "var(--fg-faint)",
+  fontSize: 11,
+  color: "var(--fg-muted)",
   whiteSpace: "nowrap",
   overflow: "hidden",
   textOverflow: "ellipsis",
@@ -352,12 +408,50 @@ export const FILE_PATH_STYLE: CSSProperties = {
 
 export const COMMIT_PANEL_STYLE: CSSProperties = {
   flex: "none",
+  maxHeight: "min(520px, 64%)",
+  minHeight: 0,
+  overflowY: "auto",
+  overscrollBehavior: "contain",
+  scrollbarGutter: "stable",
   borderTop: "1px solid var(--line-soft)",
   background: "var(--surface)",
   padding: "13px 14px",
   display: "flex",
   flexDirection: "column",
   gap: 10,
+};
+
+export const COMMIT_WORKSPACE_PANE_STYLE: CSSProperties = {
+  flex: 1,
+  minWidth: 0,
+  minHeight: 0,
+  overflow: "hidden",
+  display: "flex",
+  padding: "22px 24px",
+  background: "var(--ed-bg)",
+};
+
+export const COMMIT_WORKSPACE_PANEL_STYLE: CSSProperties = {
+  flex: 1,
+  minWidth: 0,
+  minHeight: 0,
+  overflowY: "auto",
+  overscrollBehavior: "contain",
+  scrollbarGutter: "stable",
+  display: "flex",
+  flexDirection: "column",
+  gap: 13,
+  padding: 0,
+  background: "transparent",
+};
+
+export const COMMIT_HEADER_STYLE: CSSProperties = {
+  display: "flex",
+  alignItems: "center",
+  minHeight: 20,
+  color: "var(--fg)",
+  fontSize: 13,
+  fontWeight: 700,
 };
 
 // Single-line summary input. The 2px accent edge marks AI-authored content when applicable.
@@ -379,16 +473,23 @@ export function summaryFieldStyle(aiAuthored: boolean): CSSProperties {
 
 export const DESCRIPTION_FIELD_STYLE: CSSProperties = {
   width: "100%",
-  minHeight: 54,
+  minHeight: 82,
   padding: "9px 12px",
   borderRadius: 9,
   border: 0,
   background: "var(--inset)",
   boxShadow: "inset 0 0 0 1px var(--line)",
-  color: "var(--fg-muted)",
+  color: "var(--fg)",
   font: "400 13px var(--font-ui)",
   lineHeight: 1.5,
   resize: "vertical",
+};
+
+export const COMMIT_WORKSPACE_DESCRIPTION_FIELD_STYLE: CSSProperties = {
+  ...DESCRIPTION_FIELD_STYLE,
+  minHeight: 220,
+  flex: 1,
+  fontSize: 13.5,
 };
 
 export const FLOW_ROW_STYLE: CSSProperties = {
@@ -727,17 +828,4 @@ export const REPO_OPTION_STYLE: CSSProperties = {
 export const REPO_OPTION_SELECTED_STYLE: CSSProperties = {
   background: "var(--accent-dim)",
   boxShadow: "inset 2px 0 0 var(--accent)",
-};
-
-export const STATUS_PILL_STYLE: CSSProperties = {
-  display: "inline-flex",
-  alignItems: "center",
-  gap: 6,
-  padding: "3px 10px",
-  borderRadius: 999,
-  background: "var(--inset)",
-  boxShadow: "inset 0 0 0 1px var(--line)",
-  color: "var(--fg-muted)",
-  font: "600 11px var(--font-ui)",
-  whiteSpace: "nowrap",
 };

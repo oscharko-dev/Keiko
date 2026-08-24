@@ -132,10 +132,15 @@ export type WorkspaceUiAction =
       readonly before: boolean;
       readonly after: boolean;
       /**
-       * Present only for a Search open transition. Keeping the selected root on the in-memory
-       * action lets redo recreate the singleton with the same workspace ownership.
+       * Present for Search transitions. Keeping the selected root on both open and close lets
+       * undo and redo recreate the singleton with the same workspace ownership.
        */
       readonly searchRoot?: string | undefined;
+      /**
+       * Present for Git transitions. Undo and redo must recreate the singleton with the same
+       * explicit project ownership instead of silently inheriting another repository.
+       */
+      readonly projectRoot?: string | undefined;
     }
   | {
       readonly kind: "ui.selection.change";

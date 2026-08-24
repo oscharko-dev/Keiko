@@ -2,6 +2,7 @@
 
 import type { ReactNode } from "react";
 import type { GitBranchListEntry } from "@/lib/api";
+import { useTranslate } from "@/lib/i18n";
 import type { GitRepositoryStatusResponse, ProjectWithAvailability } from "@/lib/types";
 import { Icons } from "../../../Icons";
 import KeikoSelect from "../../../KeikoSelect";
@@ -10,6 +11,7 @@ import { SyncControl, type GitSyncView } from "./SyncControl";
 import type { SyncOutcomeView } from "./sync-outcome";
 import {
   SECONDARY_BTN,
+  TOOLBAR_ICON_BTN,
   TOOLBAR_ACTIONS_STYLE,
   TOOLBAR_CELL_LABEL_STYLE,
   TOOLBAR_CELL_STYLE,
@@ -100,6 +102,7 @@ export function RepositoryToolbar({
   onOpenEditor,
   onOpenFiles,
 }: RepositoryToolbarProps): ReactNode {
+  const t = useTranslate();
   const hasRepository = selectedPath !== null;
   const branchValue = currentBranchName(branches, status);
 
@@ -131,7 +134,7 @@ export function RepositoryToolbar({
 
   return (
     <header style={TOOLBAR_STYLE} aria-label="Repository toolbar">
-      <ToolbarCell label="Repository" minWidth={188}>
+      <ToolbarCell label="Repository" minWidth={248}>
         <span style={{ display: "flex", alignItems: "center", gap: 8, minWidth: 0 }}>
           <span style={{ color: "var(--fg-dim)" }}>
             <FolderIcon size={16} />
@@ -164,7 +167,7 @@ export function RepositoryToolbar({
         </span>
       </ToolbarCell>
 
-      <ToolbarCell label="Current branch" minWidth={212}>
+      <ToolbarCell label="Current branch" minWidth={190}>
         <BranchSelector
           branches={branches}
           currentBranch={branchValue}
@@ -176,7 +179,7 @@ export function RepositoryToolbar({
         />
       </ToolbarCell>
 
-      <ToolbarCell minWidth={196} last>
+      <ToolbarCell label={t("gitClientWindow.toolbar.sync")} minWidth={196} last>
         <SyncControl
           view={syncView}
           busy={syncBusy}
@@ -193,29 +196,31 @@ export function RepositoryToolbar({
           {onOpenEditor !== undefined ? (
             <button
               type="button"
-              style={SECONDARY_BTN}
+              style={TOOLBAR_ICON_BTN}
+              aria-label="Open in Editor"
+              title="Open in Editor"
               onClick={() => {
                 if (selectedPath !== null) onOpenEditor(selectedPath);
               }}
             >
               <span style={{ color: "var(--fg-dim)" }}>
                 <CodeIcon size={15} />
-              </span>{" "}
-              Open in Editor
+              </span>
             </button>
           ) : null}
           {onOpenFiles !== undefined ? (
             <button
               type="button"
-              style={SECONDARY_BTN}
+              style={TOOLBAR_ICON_BTN}
+              aria-label="Open Files"
+              title="Open Files"
               onClick={() => {
                 if (selectedPath !== null) onOpenFiles(selectedPath);
               }}
             >
               <span style={{ color: "var(--fg-dim)" }}>
                 <FilesIcon size={15} />
-              </span>{" "}
-              Open Files
+              </span>
             </button>
           ) : null}
         </div>

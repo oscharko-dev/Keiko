@@ -132,12 +132,18 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
   "gitClientWindow.addRepository.repositoryUrl": "Repository-URL",
   "gitClientWindow.addRepository.cloneDestination": "In Ordner klonen",
   "gitClientWindow.addRepository.localPath": "Lokaler Repository-Pfad",
+  "gitClientWindow.addRepository.chooseLocal": "Lokales Repository auswählen",
+  "gitClientWindow.addRepository.pickerBusy": "Eine andere Ordnerauswahl ist bereits geöffnet.",
+  "gitClientWindow.addRepository.pickerUnsupported":
+    "Die Ordnerauswahl ist in dieser Keiko-Sitzung nicht verfügbar.",
   "gitClientWindow.addRepository.cancel": "Abbrechen",
   "gitClientWindow.addRepository.adding": "Wird hinzugefügt…",
   "gitClientWindow.repository.reconnectFailed":
     "Die Repository-Verbindung ist fehlgeschlagen: {detail}",
   "gitClientWindow.repository.workspaceUnavailable":
     "Dieses Repository ist derzeit mit keinem Workspace verbunden. Verbinden Sie es erneut, um fortzufahren.",
+  "gitClientWindow.repository.unavailable":
+    "Dieses lokale Repository ist nicht verfügbar. Wählen Sie ein anderes Repository aus.",
   "gitClientWindow.history.commitUnavailable":
     "Der angeforderte Commit ist im begrenzten Verlauf nicht verfügbar.",
   "gitClientWindow.history.loadFailed": "Der Commit-Verlauf konnte nicht geladen werden.",
@@ -152,7 +158,7 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
   "gitClientWindow.history.commitDetailsAria": "Commit-Details",
   "gitClientWindow.panel.pullRequestOpened": "Pull-Request-Panel geöffnet.",
   "gitClientWindow.panel.mergeOpened": "Merge-Panel geöffnet.",
-  "gitClientWindow.panel.diffOpened": "Diff-Panel geöffnet.",
+  "gitClientWindow.panel.diffOpened": "Änderungsansicht geöffnet.",
   "gitClientWindow.sync.editorReconciliationFailed":
     "Der Pull wurde abgeschlossen, aber Editor-Puffer müssen wiederhergestellt werden. Prüfen Sie offene Dateien, bevor Sie fortfahren.",
   "chat.turn.failed": "Beitrag fehlgeschlagen",
@@ -323,9 +329,11 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
   "terminalWidget.log.ariaLabel": "Letzte Terminalereignisse",
   "commitComposer.hint.selectRepository": "Wählen Sie ein Repository zum Committen.",
   "commitComposer.hint.stageChanges":
-    "Stellen Sie Änderungen bereit, um sie in den aktuellen Branch zu committen.",
+    "Änderungen bereitstellen, um einen Commit-Entwurf vorzubereiten.",
   "commitComposer.hint.enterSummary": "Geben Sie eine Commit-Zusammenfassung ein.",
   "commitComposer.hint.waitPreview": "Warten Sie auf die Commit-Richtlinienvorschau.",
+  "commitComposer.hint.createBranchForProtected":
+    "Erstellen Sie vor dem Committen einen Arbeitsbranch für diesen geschützten Branch.",
   "commitComposer.hint.resolvePolicy":
     "Beheben Sie die nachfolgenden Commit-Richtlinienprobleme, um zu committen.",
   "commitComposer.hint.commitsStaged":
@@ -334,6 +342,9 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
   "commitComposer.action.merge": "Mergen…",
   "commitComposer.action.commit": "Commit",
   "commitComposer.action.commitTo": "In {branch} committen",
+  "commitComposer.action.createBranchFirst": "Zuerst Branch erstellen",
+  "commitComposer.action.useDraft": "Commit-Entwurf übernehmen",
+  "commitComposer.action.copyDraft": "Commit-Entwurf kopieren",
   "commitComposer.field.summary": "Zusammenfassung",
   "commitComposer.field.summaryPlaceholder": "Kurze Zusammenfassung der Änderung",
   "commitComposer.field.description": "Beschreibung",
@@ -341,6 +352,12 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
   "commitComposer.preview.unavailable": "Vorschau nicht verfügbar",
   "commitComposer.preview.policyActionNeeded": "Richtlinie: Aktion erforderlich",
   "commitComposer.preview.meetsPolicy": "Erfüllt die Commit-Richtlinie",
+  "commitComposer.preview.protectedBranchTitle": "Aktueller Branch ist geschützt",
+  "commitComposer.preview.protectedBranchDetail":
+    "Erstellen Sie einen Branch von {branch}, committen Sie dort und öffnen Sie danach einen Pull Request.",
+  "commitComposer.preview.currentBranch": "dem aktuellen Branch",
+  "commitComposer.preview.policyBlocked":
+    "Dieser Commit wird durch die Repository-Richtlinie blockiert.",
   "commitComposer.preview.summary":
     "{files} bereitgestellte {fileNoun} in {areas} {areaNoun}{tests}",
   "commitComposer.preview.fileSingular": "Datei",
@@ -349,9 +366,20 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
   "commitComposer.preview.areaPlural": "Bereichen",
   "commitComposer.preview.touchesTestsSuffix": " · betrifft Tests",
   "commitComposer.preview.suggestedPrefix": "Empfohlenes Präfix:",
+  "commitComposer.draft.title": "Commit-Entwurf",
+  "commitComposer.draft.detail": "Prüfen oder bearbeiten Sie diese Nachricht vor dem Commit.",
+  "commitComposer.draft.subject": "Betreff",
+  "commitComposer.draft.body": "Textkörper",
+  "commitComposer.draft.unavailable":
+    "Diese Repository-Richtlinie benötigt Angaben, die Keiko nicht sicher entwerfen kann.",
+  "commitComposer.copy.copied": "Kopiert",
+  "commitComposer.copy.failed": "Kopieren fehlgeschlagen",
   "commitComposer.preview.messageViolations": "Verstöße gegen Nachrichtenrichtlinie",
-  "commitComposer.preview.qualityWarnings": "Qualitätswarnungen",
-  "commitComposer.preview.preflightFindings": "Vorabprüfungsbefunde",
+  "commitComposer.preview.qualityWarnings": "Hinweise",
+  "commitComposer.preview.preflightFindings": "Prüfungen",
+  "commitComposer.preflight.branchProtectionUnavailable":
+    "Remote-Branch-Regeln konnten nicht gelesen werden",
+  "commitComposer.preflight.signedCommitsRequired": "Signierte Commits sind möglicherweise nötig",
   "commitComposer.warning.mixed-scope": "Gemischter Umfang — Änderungen betreffen mehrere Bereiche",
   "commitComposer.warning.wip-marker": "Work-in-Progress-Markierung im Betreff",
   "commitComposer.warning.large-change": "Große Änderung — viele Dateien bereitgestellt",

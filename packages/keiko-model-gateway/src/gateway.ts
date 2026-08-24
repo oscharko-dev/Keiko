@@ -206,8 +206,8 @@ export class Gateway {
     const ids = callIds(requestId, request);
     const start = this.clock.now();
     const elapsed = logTimer();
-    const adapter = this.adapterFor(requestId, route.capability);
-    this.logCallStarted(ids, route, false);
+    const adapter = this.adapterFor(requestId, route.capability, ids.correlationId);
+    this.logCallStarted(ids, route, false, request.reasoningEffort);
     let result;
     try {
       result = await executeWithRetry(
@@ -254,8 +254,8 @@ export class Gateway {
     breaker.assertAllowed(ids.correlationId);
     const start = this.clock.now();
     const elapsed = logTimer();
-    const adapter = this.adapterFor(requestId, route.capability);
-    this.logCallStarted(ids, route, true);
+    const adapter = this.adapterFor(requestId, route.capability, ids.correlationId);
+    this.logCallStarted(ids, route, true, request.reasoningEffort);
     let chunkCount = 0;
     // The moment the caller saw its first actual content, timed off the same `elapsed()` as every
     // other stream outcome. `??=` locks it in on the first non-empty delta and leaves it alone.
@@ -314,7 +314,12 @@ export class Gateway {
   // trying to diagnose. `timeoutMs` and `maxRetries` are on it because the pair bounds how long
   // this silence can legitimately last: an attempt line whose deadline has already passed with no
   // outcome is a wedge, not a slow provider.
-  private logCallStarted(ids: CallIds, route: RoutedCall, streaming: boolean): void {
+  private logCallStarted(
+    ids: CallIds,
+    route: RoutedCall,
+    streaming: boolean,
+    reasoningEffort: GatewayCallRequest["reasoningEffort"],
+  ): void {
     if (!logLevelEnabled(this.log, "info")) return;
     this.log.write(
       gatewayEvent(
@@ -328,6 +333,7 @@ export class Gateway {
           costClass: route.capability.costClass,
           timeoutMs: route.provider.timeoutMs,
           maxRetries: route.provider.maxRetries,
+          ...(reasoningEffort === undefined ? {} : { reasoningEffort }),
           streaming,
         },
       ),
@@ -587,7 +593,11 @@ export class Gateway {
     return breaker;
   }
 
-  private adapterFor(requestId: string, capability: ModelCapability): ProviderAdapter {
+  private adapterFor(
+    requestId: string,
+    capability: ModelCapability,
+    correlationId: string,
+  ): ProviderAdapter {
     return (
       this.adapter ??
       new OpenAiAdapter({
@@ -595,6 +605,8 @@ export class Gateway {
         costClass: capability.costClass,
         now: this.clock.now,
         fetchImpl: this.fetchImpl,
+        log: this.log,
+        logContext: { correlationId },
       })
     );
   }

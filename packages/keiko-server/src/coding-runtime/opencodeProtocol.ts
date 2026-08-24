@@ -79,6 +79,29 @@ const REVIEWED_FINISH_REASONS = new Set([
   "unknown",
 ]);
 const FAILED_TERMINAL_FINISH_REASONS = new Set(["length", "content-filter", "error", "unknown"]);
+const MESSAGE_ONLY_ASSISTANT_ERRORS = new Set(["MessageAbortedError", "ContentFilterError"]);
+const ASSISTANT_MESSAGE_REQUIRED_FIELDS = [
+  "id",
+  "sessionID",
+  "role",
+  "time",
+  "parentID",
+  "modelID",
+  "providerID",
+  "mode",
+  "agent",
+  "path",
+  "cost",
+  "tokens",
+] as const;
+const ASSISTANT_MESSAGE_FIELDS = [
+  ...ASSISTANT_MESSAGE_REQUIRED_FIELDS,
+  "finish",
+  "summary",
+  "error",
+  "structured",
+  "variant",
+] as const;
 const APPROVED_PRODUCTIVE_TOOLS = new Set<string>(
   OPENCODE_TOOL_SOURCE_DEFINITIONS.map(({ name }) => name),
 );
@@ -771,6 +794,7 @@ function messageUpdated(
     return undefined;
   if (data.info.role === "user") return userMessage(data.info) ? "observation" : undefined;
   if (!assistantMessage(data.info)) return undefined;
+  if (data.info.error !== undefined) return "terminal-failure";
   const completed = isRecord(data.info.time) && nonNegativeNumber(data.info.time.completed);
   if (!completed) return "observation";
   if (data.info.finish === "stop") return "terminal";
@@ -794,36 +818,8 @@ function userMessage(info: Record<string, unknown>): boolean {
 // eslint-disable-next-line complexity -- every required assistant completion field is checked explicitly.
 function assistantMessage(info: Record<string, unknown>): boolean {
   if (
-    !allowedRecord(info, [
-      "id",
-      "sessionID",
-      "role",
-      "time",
-      "parentID",
-      "modelID",
-      "providerID",
-      "mode",
-      "agent",
-      "path",
-      "cost",
-      "tokens",
-      "finish",
-      "summary",
-    ]) ||
-    ![
-      "id",
-      "sessionID",
-      "role",
-      "time",
-      "parentID",
-      "modelID",
-      "providerID",
-      "mode",
-      "agent",
-      "path",
-      "cost",
-      "tokens",
-    ].every((key) => Object.hasOwn(info, key))
+    !allowedRecord(info, ASSISTANT_MESSAGE_FIELDS) ||
+    !ASSISTANT_MESSAGE_REQUIRED_FIELDS.every((key) => Object.hasOwn(info, key))
   )
     return false;
   return (
@@ -838,9 +834,105 @@ function assistantMessage(info: Record<string, unknown>): boolean {
     (info.finish === undefined ||
       (nonEmpty(info.finish) && REVIEWED_FINISH_REASONS.has(info.finish))) &&
     (info.summary === undefined || typeof info.summary === "boolean") &&
+    (info.error === undefined || assistantError(info.error)) &&
+    (info.structured === undefined || boundedLifecycle(info.structured)) &&
+    (info.variant === undefined || boundedString(info.variant)) &&
     boundedLifecycle(info)
   );
 }
+
+function assistantError(value: unknown): boolean {
+  if (!exactRecord(value, ["name", "data"]) || !nonEmpty(value.name) || !isRecord(value.data))
+    return false;
+  const validator = assistantErrorDataValidator(value.name);
+  return validator?.(value.data) ?? false;
+}
+
+type AssistantErrorDataValidator = (data: Record<string, unknown>) => boolean;
+
+function assistantErrorDataValidator(name: string): AssistantErrorDataValidator | undefined {
+  if (MESSAGE_ONLY_ASSISTANT_ERRORS.has(name)) return messageOnlyErrorData;
+  return ASSISTANT_ERROR_DATA_VALIDATORS.get(name);
+}
+
+function messageOnlyErrorData(data: Record<string, unknown>): boolean {
+  return exactRecord(data, ["message"]) && boundedString(data.message);
+}
+
+function providerAuthErrorData(data: Record<string, unknown>): boolean {
+  return (
+    exactRecord(data, ["providerID", "message"]) &&
+    boundedString(data.providerID) &&
+    boundedString(data.message)
+  );
+}
+
+function unknownErrorData(data: Record<string, unknown>): boolean {
+  return (
+    allowedRecord(data, ["message", "ref"]) &&
+    Object.hasOwn(data, "message") &&
+    boundedString(data.message) &&
+    (data.ref === undefined || boundedString(data.ref))
+  );
+}
+
+function structuredOutputErrorData(data: Record<string, unknown>): boolean {
+  return (
+    exactRecord(data, ["message", "retries"]) &&
+    boundedString(data.message) &&
+    nonNegativeSafeInteger(data.retries)
+  );
+}
+
+function contextOverflowErrorData(data: Record<string, unknown>): boolean {
+  return (
+    allowedRecord(data, ["message", "responseBody"]) &&
+    Object.hasOwn(data, "message") &&
+    boundedString(data.message) &&
+    (data.responseBody === undefined || boundedString(data.responseBody))
+  );
+}
+
+function apiErrorData(data: Record<string, unknown>): boolean {
+  if (!apiErrorShape(data)) return false;
+  if (!boundedString(data.message) || typeof data.isRetryable !== "boolean") return false;
+  if (!optionalValue(data.statusCode, nonNegativeSafeInteger)) return false;
+  if (!optionalValue(data.responseHeaders, stringRecord)) return false;
+  if (!optionalValue(data.responseBody, boundedString)) return false;
+  return optionalValue(data.metadata, stringRecord);
+}
+
+function stringRecord(value: unknown): boolean {
+  return isRecord(value) && Object.values(value).every(boundedString);
+}
+
+function optionalValue(value: unknown, validate: (candidate: unknown) => boolean): boolean {
+  return value === undefined || validate(value);
+}
+
+function apiErrorShape(data: Record<string, unknown>): boolean {
+  return (
+    allowedRecord(data, [
+      "message",
+      "statusCode",
+      "isRetryable",
+      "responseHeaders",
+      "responseBody",
+      "metadata",
+    ]) &&
+    Object.hasOwn(data, "message") &&
+    Object.hasOwn(data, "isRetryable")
+  );
+}
+
+const ASSISTANT_ERROR_DATA_VALIDATORS: ReadonlyMap<string, AssistantErrorDataValidator> = new Map([
+  ["ProviderAuthError", providerAuthErrorData],
+  ["UnknownError", unknownErrorData],
+  ["MessageOutputLengthError", (data): boolean => exactRecord(data, [])],
+  ["StructuredOutputError", structuredOutputErrorData],
+  ["ContextOverflowError", contextOverflowErrorData],
+  ["APIError", apiErrorData],
+]);
 
 // eslint-disable-next-line complexity, max-lines-per-function -- reviewed part variants remain a closed allowlist.
 function messagePartUpdated(data: Record<string, unknown>, aggregateId: string): boolean {

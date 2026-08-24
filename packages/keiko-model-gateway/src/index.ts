@@ -51,11 +51,13 @@ export type {
   GatewaySamplingParameterIssue,
   GatewaySamplingParameterName,
   GatewaySamplingParameters,
+  ModelReasoningEffort,
 } from "./types.js";
 
 export {
   GATEWAY_TEMPERATURE_RANGE,
   GATEWAY_TOP_P_RANGE,
+  MODEL_REASONING_EFFORTS,
   assertValidGatewaySamplingParameters,
   isValidGatewaySamplingParameters,
   isValidGatewayTemperature,
