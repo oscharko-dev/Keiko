@@ -38,7 +38,7 @@ import type {
 } from "@/lib/types";
 import type { WindowCfgValue } from "../../../windows/types";
 import { DEFAULT_GIT_CLIENT, formatGitError, useGitActions } from "./git-client-seam";
-import type { GitClientSeam } from "./git-client-seam";
+import type { GitClientSeam, GitMutationOutcome } from "./git-client-seam";
 import { MutationOutcome } from "./git-client-ui";
 import { GovernedMergeCard } from "../GovernedMergeCard";
 import { GovernedPullRequestCard } from "../GovernedPullRequestCard";
@@ -613,7 +613,12 @@ function bodyWidthForResize(bodyRef: RefObject<HTMLDivElement | null>): number {
 
 function CommitWorkspacePane({ children }: { readonly children: ReactNode }): ReactNode {
   return (
-    <section style={COMMIT_WORKSPACE_PANE_STYLE} aria-label="Commit draft workspace">
+    <section
+      style={COMMIT_WORKSPACE_PANE_STYLE}
+      aria-label="Diff"
+      // eslint-disable-next-line jsx-a11y/no-noninteractive-tabindex -- The right pane remains a named keyboard-scrollable region while it hosts the commit workspace.
+      tabIndex={0}
+    >
       {children}
     </section>
   );
@@ -656,6 +661,22 @@ interface OptionalContentProps {
 
 function OptionalContent({ visible, children }: OptionalContentProps): ReactNode {
   return visible ? children : null;
+}
+
+function shouldUseCommitWorkspace(
+  mode: RightPaneMode,
+  tab: ChangesTab,
+  selectedChangePath: string | null,
+): boolean {
+  return mode === "diff" && tab === "changes" && selectedChangePath === null;
+}
+
+function shouldShowBranchOutcome(
+  dialogOpen: boolean,
+  error: string | null,
+  outcome: GitMutationOutcome | null,
+): boolean {
+  return !dialogOpen && (error !== null || (outcome !== null && outcome.status !== "succeeded"));
 }
 
 export function GitClientWindow({
@@ -1081,11 +1102,16 @@ export function GitClientWindow({
     [updateCfg],
   );
 
-  const applyAvailableRepository = useCallback(
+  const applyConnectedRepository = useCallback(
     (project: ProjectWithAvailability): boolean => {
-      if (!project.available) {
+      if (project.available !== true) {
         setReposLoading(false);
         setReposError(optionalT("gitClientWindow.repository.unavailable"));
+        return false;
+      }
+      if (project.workspaceAvailable !== true) {
+        setReposLoading(false);
+        setReposError(optionalT("gitClientWindow.repository.workspaceUnavailable"));
         return false;
       }
       setReposError(null);
@@ -1104,7 +1130,7 @@ export function GitClientWindow({
       void client.reconnectRepository(path).then(
         (response): void => {
           if (requestSequence !== repositoryConnectSeqRef.current) return;
-          if (applyAvailableRepository(response.project)) loadRepositories();
+          if (applyConnectedRepository(response.project)) loadRepositories();
         },
         (error: unknown): void => {
           if (requestSequence !== repositoryConnectSeqRef.current) return;
@@ -1117,15 +1143,14 @@ export function GitClientWindow({
         },
       );
     },
-    [applyAvailableRepository, client, loadRepositories, optionalT],
+    [applyConnectedRepository, client, loadRepositories, optionalT],
   );
 
   const onRepositoryAdded = useCallback(
     (project: ProjectWithAvailability): void => {
-      applyAvailableRepository(project);
-      loadRepositories();
+      reconnectRepository(project.path);
     },
-    [applyAvailableRepository, loadRepositories],
+    [reconnectRepository],
   );
 
   useEffect(() => {
@@ -1134,13 +1159,13 @@ export function GitClientWindow({
     const requestedPath = selectedPath ?? configuredPath;
     if (requestedPath === null) return;
     const selected = repositories.find((repository) => repository.path === requestedPath);
-    if (selected?.available === true) {
+    if (selected?.available === true && selected.workspaceAvailable === true) {
       if (selectedPath !== requestedPath) setSelectedPath(requestedPath);
       return;
     }
     setSelectedPath(null);
     updateCfg?.({ projectPath: "" });
-    setReposError(optionalT("gitClientWindow.repository.unavailable"));
+    setReposError(optionalT("gitClientWindow.repository.workspaceUnavailable"));
   }, [optionalT, projectId, repositories, reposError, reposLoading, selectedPath, updateCfg]);
 
   const active = activeGitClientState({
@@ -1382,8 +1407,12 @@ export function GitClientWindow({
   const currentBranch = activeStatus?.branch ?? activeSummary?.branch;
   const inferredOwnerAndRepo = inferOwnerAndRepo(activeRemotes);
   const inferredBaseBranch = inferBaseBranch(currentBranch, activeSummary);
-  const useCommitWorkspace =
-    rightPaneMode === "diff" && tab === "changes" && selectedChangePath === null;
+  const useCommitWorkspace = shouldUseCommitWorkspace(rightPaneMode, tab, selectedChangePath);
+  const showBranchOutcome = shouldShowBranchOutcome(
+    newBranchOpen,
+    branchActions.flow.error,
+    branchOutcome,
+  );
   const resizeSidebar = useCallback((nextWidth: number): void => {
     setSidebarWidth(clampSidebarWidth(nextWidth, bodyWidthForResize(bodyRef)));
   }, []);
@@ -1479,9 +1508,7 @@ export function GitClientWindow({
           shows its own copy of this outcome while it is open (the create-then-switch chain runs
           under the same flow), so this banner is suppressed then to avoid showing the same
           rejection twice. */}
-      {!newBranchOpen &&
-      (branchActions.flow.error !== null ||
-        (branchOutcome !== null && branchOutcome.status !== "succeeded")) ? (
+      {showBranchOutcome ? (
         <div style={{ padding: "10px 18px" }}>
           <MutationOutcome
             outcome={branchOutcome}

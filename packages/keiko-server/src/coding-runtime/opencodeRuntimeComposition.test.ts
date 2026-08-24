@@ -1086,20 +1086,23 @@ describe("unmounted OpenCode runtime composition", () => {
         }),
       ),
     ).resolves.toMatchObject({ ok: true });
-    expect(readinessStatusReads).toBe(0);
+    expect(readinessStatusReads).toBe(5);
     const sessionCreate = fetchMock.mock.calls.find(
       ([url, init]) => requestPath(url) === "/session" && init?.method === "POST",
     );
     expect(sessionCreate?.[1]?.body).toBe(JSON.stringify({ title: FIXED_SESSION_TITLE }));
     expect(new Headers(sessionCreate?.[1]?.headers).get("content-type")).toBe("application/json");
+    let readinessPromptObserved = false;
     for (const [url, init] of fetchMock.mock.calls) {
       if (requestPath(url).endsWith("/prompt_async")) {
         expect(typeof init?.body).toBe("string");
         if (typeof init?.body === "string") {
           expect(init.body).not.toContain(FIXED_SESSION_TITLE);
+          readinessPromptObserved ||= init.body.includes("runtime readiness handshake");
         }
       }
     }
+    expect(readinessPromptObserved).toBe(true);
     // #2254: startup retains the authenticated stream for the post-ready supervisor. The SSE
     // payload is deliberately the exact nested message shape.
     expect(order).toEqual(["spawn"]);
@@ -1233,15 +1236,16 @@ describe("private OpenCode run control", () => {
     await fixture.stop();
   });
 
-  it("does not spend startup on a synthetic model turn terminal poll", async () => {
+  it("isolates the live startup challenge from user task submissions", async () => {
     const runControl = {
       promptBodies: [],
       abortSessions: [],
-      statusResponses: [{ ses_tool: { type: "busy" } }],
+      statusResponses: [{ ses_tool: { type: "busy" } }, {}],
     };
     const fixture = await startBridgeFixture(facade, undefined, { runControl });
     expect(runControl.promptBodies).toEqual([]);
-    expect(runControl.statusResponses).toEqual([{ ses_tool: { type: "busy" } }]);
+    expect(runControl.abortSessions).toEqual([]);
+    expect(runControl.statusResponses).toEqual([{}]);
     expect(fixture.runtime.manager.health()).toMatchObject({
       status: "ready",
       activeRunId: FIXTURE_RUN_ID,

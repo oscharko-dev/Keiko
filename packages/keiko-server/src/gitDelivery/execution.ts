@@ -31,6 +31,7 @@ import {
   readStagedPaths,
 } from "@oscharko-dev/keiko-tools/internal/git-mutation";
 import type { UiHandlerDeps } from "../deps.js";
+import { UNKNOWN_CORRELATION_ID } from "../correlation.js";
 import { resolveRegisteredOrManagedWorkspaceRoot } from "../task-workspace/authorization.js";
 import type { GitDeliveryApprovalStore } from "./approvalStore.js";
 import type { GitDeliveryTrustedPolicyPacks } from "./actionSheetProjection.js";
@@ -192,6 +193,7 @@ export async function executeGovernedMutation(
   workspace: WorkspaceInfo,
   deps: Pick<UiHandlerDeps, "evidenceStore" | "redactor">,
   seams: GitDeliveryExecutionSeams,
+  correlationId?: string,
 ): Promise<GitMutationLifecycleResult> {
   const now = seams.now ?? Date.now;
   const activityLog = seams.activityLog ?? processServerLogSink();
@@ -199,7 +201,7 @@ export async function executeGovernedMutation(
   try {
     snapshot = await readWorktreeSnapshotFor(workspace, seams, now);
   } catch (error) {
-    logGitDeliveryPreconditionFailure(activityLog, command.kind, error);
+    logGitDeliveryPreconditionFailure(activityLog, command.kind, error, correlationId);
     throw error;
   }
   const adapter = adapterFor(workspace, seams, now);
@@ -218,17 +220,22 @@ export async function executeGovernedMutation(
     },
   );
   persistGitDeliveryEvidence(deps, result, snapshot, workspace.root, now);
-  logGitDeliveryMutation(activityLog, result);
+  logGitDeliveryMutation(activityLog, result, correlationId);
   return result;
 }
 
-function logGitDeliveryMutation(log: ServerLogSink, result: GitMutationLifecycleResult): void {
+function logGitDeliveryMutation(
+  log: ServerLogSink,
+  result: GitMutationLifecycleResult,
+  correlationId: string | undefined,
+): void {
   const { outcome, envelope, phaseReached, preflight } = result;
   log.write({
     category: "diagnostic",
     op: "git.delivery.mutation.completed",
-    correlationId: envelope.actionId,
+    correlationId: correlationId ?? UNKNOWN_CORRELATION_ID,
     extra: {
+      actionId: envelope.actionId,
       actionKind: envelope.kind,
       status: outcome.status,
       phaseReached,
@@ -249,11 +256,13 @@ function logGitDeliveryPreconditionFailure(
   log: ServerLogSink,
   actionKind: GitDeliveryActionKind,
   error: unknown,
+  correlationId: string | undefined,
 ): void {
   log.write({
     level: "error",
     category: "diagnostic",
     op: "git.delivery.mutation.failed",
+    correlationId: correlationId ?? UNKNOWN_CORRELATION_ID,
     errorKind: errorKindOf(error),
     extra: {
       actionKind,

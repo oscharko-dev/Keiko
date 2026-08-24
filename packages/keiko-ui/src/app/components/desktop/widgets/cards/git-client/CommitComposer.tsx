@@ -728,74 +728,22 @@ function SuggestedPrefixLine({
   );
 }
 
-export function CommitComposer({
-  projectId,
-  branchName,
-  stagedFileCount,
-  busy,
-  outcome,
-  error,
-  preview,
-  previewDraft,
-  previewError,
-  layout = "sidebar",
-  summaryValue,
-  bodyValue,
-  onSummaryChange,
-  onBodyChange,
-  onPreview,
-  onCommit,
-  onCreateBranch,
-  onCreatePullRequest,
-  onMerge,
-}: CommitComposerProps): ReactNode {
-  const t = useOptionalWidgetTranslate();
-  const [summary, setSummary] = useControlledComposerField(summaryValue, onSummaryChange);
-  const [body, setBody] = useControlledComposerField(bodyValue, onBodyChange);
-  const baseId = useId();
-  const hintId = `${baseId}-hint`;
-  const previewId = `${baseId}-preview`;
-  const onPreviewRef = useRef(onPreview);
-  onPreviewRef.current = onPreview;
+interface CommitMessageFieldsProps {
+  readonly state: CommitComposerState;
+  readonly summary: string;
+  readonly branchName: string | undefined;
+  readonly hintId: string;
+  readonly previewId: string;
+  readonly onSummaryChange: (value: string) => void;
+  readonly onApplyDraft: (message: string) => void;
+  readonly t: OptionalWidgetTranslate;
+}
 
-  const state = commitComposerState({
-    projectId,
-    branchName,
-    stagedFileCount,
-    busy,
-    preview,
-    previewDraft,
-    summary,
-    body,
-    onCreateBranch,
-    t,
-  });
-
-  // Load the current staged summary first; later edits are revalidated with a short debounce.
-  useEffect(() => {
-    if (!state.hasRepository || !state.hasStaged) return;
-    const delay = state.subjectEmpty ? 0 : PREVIEW_DEBOUNCE_MS;
-    const handle = setTimeout(() => onPreviewRef.current(state.message), delay);
-    return () => clearTimeout(handle);
-  }, [stagedFileCount, state.hasRepository, state.hasStaged, state.message, state.subjectEmpty]);
-
+function CommitMessageFields(props: CommitMessageFieldsProps): ReactNode {
+  const { state, summary, branchName, hintId, previewId, onSummaryChange, onApplyDraft, t } = props;
   return (
-    <section
-      style={layout === "workspace" ? COMMIT_WORKSPACE_PANEL_STYLE : COMMIT_PANEL_STYLE}
-      aria-label={t("commitComposer.action.commit")}
-    >
-      <header style={COMMIT_HEADER_STYLE}>
-        <h3 style={{ margin: 0, font: "inherit" }}>{t("commitComposer.action.commit")}</h3>
-      </header>
-      <CommitDraftSuggestionSlot
-        preview={state.emptyDraftPreview}
-        onUse={(suggestedMessage) => {
-          const draft = splitCommitMessageDraft(suggestedMessage);
-          setSummary(draft.summary);
-          setBody(draft.body);
-        }}
-        t={t}
-      />
+    <>
+      <CommitDraftSuggestionSlot preview={state.emptyDraftPreview} onUse={onApplyDraft} t={t} />
       <input
         type="text"
         aria-label={t("commitComposer.field.summary")}
@@ -804,7 +752,7 @@ export function CommitComposer({
         disabled={!state.hasRepository}
         aria-invalid={state.messageBlocked ? "true" : undefined}
         aria-describedby={state.policyBlocked && !state.protectedBranchBlocked ? previewId : hintId}
-        onChange={(e) => setSummary(e.target.value)}
+        onChange={(event) => onSummaryChange(event.target.value)}
         placeholder={t("commitComposer.field.summaryPlaceholder")}
       />
       {state.protectedBranchBlocked ? (
@@ -824,6 +772,28 @@ export function CommitComposer({
           {state.hint}
         </p>
       )}
+    </>
+  );
+}
+
+interface CommitEditorActionsProps {
+  readonly state: CommitComposerState;
+  readonly body: string;
+  readonly layout: CommitComposerLayout;
+  readonly hintId: string;
+  readonly summary: string;
+  readonly onBodyChange: (value: string) => void;
+  readonly onCommit: (message: string) => void;
+  readonly onCreateBranch: ((trigger: HTMLButtonElement) => void) | undefined;
+  readonly onCreatePullRequest: (() => void) | undefined;
+  readonly onMerge: (() => void) | undefined;
+  readonly t: OptionalWidgetTranslate;
+}
+
+function CommitEditorActions(props: CommitEditorActionsProps): ReactNode {
+  const { state, body, layout, hintId, summary, t } = props;
+  return (
+    <>
       <CommitActionLayout
         protectedBranchBlocked={state.protectedBranchBlocked}
         action={
@@ -834,8 +804,8 @@ export function CommitComposer({
             hintId={hintId}
             commitLabel={state.commitLabel}
             message={state.message}
-            onCommit={onCommit}
-            onCreateBranch={onCreateBranch}
+            onCommit={props.onCommit}
+            onCreateBranch={props.onCreateBranch}
             t={t}
           />
         }
@@ -844,7 +814,7 @@ export function CommitComposer({
             body={body}
             disabled={!state.hasRepository}
             layout={layout}
-            onBodyChange={setBody}
+            onBodyChange={props.onBodyChange}
             t={t}
           />
         }
@@ -853,19 +823,153 @@ export function CommitComposer({
       {state.protectedBranchBlocked ? null : (
         <CommitFlowActions
           hasRepository={state.hasRepository}
-          onCreatePullRequest={onCreatePullRequest}
-          onMerge={onMerge}
+          onCreatePullRequest={props.onCreatePullRequest}
+          onMerge={props.onMerge}
           t={t}
         />
       )}
-      <PreviewErrorBlock previewError={previewError} t={t} />
+    </>
+  );
+}
+
+interface CommitFeedbackProps {
+  readonly state: CommitComposerState;
+  readonly previewError: string | null;
+  readonly previewId: string;
+  readonly branchName: string | undefined;
+  readonly outcome: GitMutationOutcome | null;
+  readonly error: string | null;
+  readonly t: OptionalWidgetTranslate;
+}
+
+function CommitFeedback(props: CommitFeedbackProps): ReactNode {
+  return (
+    <>
+      <PreviewErrorBlock previewError={props.previewError} t={props.t} />
       <CommitPolicyPreviewSlot
-        id={previewId}
-        preview={state.visiblePreview}
-        branchName={branchName}
+        id={props.previewId}
+        preview={props.state.visiblePreview}
+        branchName={props.branchName}
+        t={props.t}
+      />
+      <MutationOutcome outcome={props.outcome} error={props.error} testid="git-commit-outcome" />
+    </>
+  );
+}
+
+interface CommitComposerController {
+  readonly state: CommitComposerState;
+  readonly summary: string;
+  readonly body: string;
+  readonly hintId: string;
+  readonly previewId: string;
+  readonly setSummary: (value: string) => void;
+  readonly setBody: (value: string) => void;
+  readonly applyDraft: (message: string) => void;
+}
+
+function useCommitComposerController(
+  props: CommitComposerProps,
+  t: OptionalWidgetTranslate,
+): CommitComposerController {
+  const [summary, setSummary] = useControlledComposerField(
+    props.summaryValue,
+    props.onSummaryChange,
+  );
+  const [body, setBody] = useControlledComposerField(props.bodyValue, props.onBodyChange);
+  const baseId = useId();
+  const hintId = `${baseId}-hint`;
+  const previewId = `${baseId}-preview`;
+  const onPreviewRef = useRef(props.onPreview);
+  onPreviewRef.current = props.onPreview;
+  const state = commitComposerState({
+    projectId: props.projectId,
+    branchName: props.branchName,
+    stagedFileCount: props.stagedFileCount,
+    busy: props.busy,
+    preview: props.preview,
+    previewDraft: props.previewDraft,
+    summary,
+    body,
+    onCreateBranch: props.onCreateBranch,
+    t,
+  });
+  useEffect(() => {
+    if (!state.hasRepository || !state.hasStaged) return;
+    const delay = state.subjectEmpty ? 0 : PREVIEW_DEBOUNCE_MS;
+    const handle = setTimeout(() => onPreviewRef.current(state.message), delay);
+    return () => clearTimeout(handle);
+  }, [state.hasRepository, state.hasStaged, state.message, state.subjectEmpty]);
+  const applyDraft = useCallback(
+    (message: string): void => {
+      const draft = splitCommitMessageDraft(message);
+      setSummary(draft.summary);
+      setBody(draft.body);
+    },
+    [setBody, setSummary],
+  );
+  return { state, summary, body, hintId, previewId, setSummary, setBody, applyDraft };
+}
+
+function CommitComposerContents({
+  props,
+  controller,
+  t,
+}: {
+  readonly props: CommitComposerProps;
+  readonly controller: CommitComposerController;
+  readonly t: OptionalWidgetTranslate;
+}): ReactNode {
+  return (
+    <>
+      <CommitMessageFields
+        state={controller.state}
+        summary={controller.summary}
+        branchName={props.branchName}
+        hintId={controller.hintId}
+        previewId={controller.previewId}
+        onSummaryChange={controller.setSummary}
+        onApplyDraft={controller.applyDraft}
         t={t}
       />
-      <MutationOutcome outcome={outcome} error={error} testid="git-commit-outcome" />
+      <CommitEditorActions
+        state={controller.state}
+        body={controller.body}
+        layout={props.layout ?? "sidebar"}
+        hintId={controller.hintId}
+        summary={controller.summary}
+        onBodyChange={controller.setBody}
+        onCommit={props.onCommit}
+        onCreateBranch={props.onCreateBranch}
+        onCreatePullRequest={props.onCreatePullRequest}
+        onMerge={props.onMerge}
+        t={t}
+      />
+      <CommitFeedback
+        state={controller.state}
+        previewError={props.previewError}
+        previewId={controller.previewId}
+        branchName={props.branchName}
+        outcome={props.outcome}
+        error={props.error}
+        t={t}
+      />
+    </>
+  );
+}
+
+export function CommitComposer(props: CommitComposerProps): ReactNode {
+  const t = useOptionalWidgetTranslate();
+  const controller = useCommitComposerController(props, t);
+  return (
+    <section
+      style={props.layout === "workspace" ? COMMIT_WORKSPACE_PANEL_STYLE : COMMIT_PANEL_STYLE}
+      aria-label={t("commitComposer.action.commit")}
+    >
+      <header style={COMMIT_HEADER_STYLE}>
+        <h3 style={{ margin: 0, font: "inherit" }}>{t("commitComposer.action.commit")}</h3>
+      </header>
+      <CommitComposerContents props={props} controller={controller} t={t} />
     </section>
   );
 }

@@ -7,7 +7,7 @@
   min-width: 0;
   min-height: 100%;
   height: 100%;
-  grid-template-rows: minmax(0, 1fr);
+  grid-template-rows: auto minmax(0, 1fr);
   border-radius: inherit;
   color: var(--text-primary);
   background: transparent;
@@ -56,6 +56,62 @@
 .activityBadge[data-state="failed"],
 .activityBadge[data-state="denied"] {
   color: var(--feedback-danger);
+}
+
+.contextBar {
+  display: flex;
+  min-width: 0;
+  min-height: 2.25rem;
+  align-items: stretch;
+  border-bottom: 1px solid var(--border-subtle);
+  padding: 0 var(--space-5);
+  overflow-x: auto;
+  background: color-mix(in oklch, var(--surface-primary) 72%, transparent);
+  scrollbar-width: thin;
+}
+
+.contextItem {
+  display: inline-flex;
+  min-width: 0;
+  flex: 0 1 auto;
+  gap: var(--space-2);
+  align-items: center;
+  border-inline-end: 1px solid var(--border-subtle);
+  padding: 0 var(--space-3);
+}
+
+.contextItem:first-child {
+  padding-inline-start: 0;
+}
+
+.contextItem:last-child {
+  border-inline-end: 0;
+}
+
+.contextLabel,
+.contextValue {
+  font-size: var(--text-caption);
+  white-space: nowrap;
+}
+
+.contextLabel {
+  color: var(--text-tertiary);
+}
+
+.contextValue {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  text-overflow: ellipsis;
+}
+
+.contextItem[data-tone="warning"] .contextValue {
+  color: var(--feedback-warning);
+}
+
+.contextItem[data-mode="autonomous-delivery"] .contextValue {
+  color: var(--text-accent);
 }
 
 .body {
@@ -312,6 +368,11 @@
 .reasoningControl {
   flex: 0 1 8.5rem;
   max-width: 8.5rem;
+}
+
+.authorityControl[data-mode="autonomous-delivery"] :global(.ksel-trigger) {
+  color: var(--text-accent);
+  box-shadow: inset 0 0 0 1px var(--accent-line);
 }
 
 .inlineActions,

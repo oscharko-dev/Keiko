@@ -211,7 +211,14 @@ export const createHandleLocalMutation = (
     }
     let result;
     try {
-      result = await executeGovernedMutation(command, verifiedApproval, workspace, deps, seams);
+      result = await executeGovernedMutation(
+        command,
+        verifiedApproval,
+        workspace,
+        deps,
+        seams,
+        ctx.correlationId,
+      );
     } catch {
       // The live worktree could not be read (not a git repository, git unavailable). The kernel itself
       // never throws — only the read-only snapshot step can — so this is a precondition failure, not a

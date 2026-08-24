@@ -380,8 +380,8 @@ describe("CodingWorkbenchWindow", () => {
     expect(screen.getByRole("heading", { name: "Coding Workbench" })).toBeInTheDocument();
     expect(screen.getByRole("img", { name: "Keiko" })).toBeInTheDocument();
     expect(screen.queryByText("task-1")).not.toBeInTheDocument();
-    expect(screen.queryByText("task-1 · issue/2257 · healthy")).not.toBeInTheDocument();
-    expect(screen.getByText("Keiko Gateway")).toBeInTheDocument();
+    expect(screen.getByText("task-1 · issue/2257 · healthy")).toBeInTheDocument();
+    expect(screen.getAllByText("Keiko Gateway")).toHaveLength(2);
     expect(screen.getByRole("combobox", { name: "Run authority" })).toHaveTextContent(
       "Supervised workspace",
     );
@@ -717,7 +717,7 @@ describe("CodingWorkbenchWindow", () => {
     );
 
     expect(screen.getByRole("status")).toHaveTextContent("Not ready to start");
-    expect(screen.queryByText(/Keiko Gateway — Unavailable/u)).not.toBeInTheDocument();
+    expect(screen.getByText(/Keiko Gateway — Unavailable/u)).toBeInTheDocument();
   });
 
   /**
@@ -762,7 +762,10 @@ describe("CodingWorkbenchWindow", () => {
     it("keeps runtime assurance in the lifecycle announcement", (): void => {
       renderWorkbench(evaluationState());
 
-      expect(screen.queryByText("Coding runtime")).not.toBeInTheDocument();
+      expect(screen.getByText("Coding runtime")).toBeInTheDocument();
+      expect(
+        screen.getByText("Unverified evaluation runtime — no platform signature"),
+      ).toBeInTheDocument();
       expect(screen.getByRole("status")).toHaveTextContent(
         "Runtime available as an unverified evaluation runtime",
       );
@@ -788,8 +791,8 @@ describe("CodingWorkbenchWindow", () => {
       expect(screen.getByRole("status")).toHaveTextContent("Runtime ready");
       expect(document.querySelector('[data-assurance="evaluation"]')).toBeNull();
       expect(
-        screen.queryByText("Platform-verified — signed and notarized runtime"),
-      ).not.toBeInTheDocument();
+        screen.getByText("Platform-verified — signed and notarized runtime"),
+      ).toBeInTheDocument();
     });
   });
 
@@ -810,7 +813,7 @@ describe("CodingWorkbenchWindow", () => {
       }),
     );
     expect(screen.getByRole("status")).toHaveTextContent("Workspace unavailable");
-    expect(screen.queryByText("task-1 · issue/2257 · drifted")).not.toBeInTheDocument();
+    expect(screen.getByText("task-1 · issue/2257 · drifted")).toBeInTheDocument();
   });
 
   it("binds one-time approval controls to live pending permission truth", async () => {

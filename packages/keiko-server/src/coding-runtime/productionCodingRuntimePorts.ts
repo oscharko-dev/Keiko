@@ -442,7 +442,7 @@ function pollDelay(signal: AbortSignal): Promise<void> {
 
 export function createProductionRuntimeTaskDispatcher(
   runs: ReadonlyMap<string, ProductionRuntimeRunRecord>,
-  diagnostics?: ServerDiagnosticSink | undefined,
+  diagnostics?: ServerDiagnosticSink,
 ): CodingRuntimeTaskDispatcher {
   return {
     dispatch: (request) => dispatchRuntimeTask(runs, request, diagnostics),

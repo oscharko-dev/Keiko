@@ -21,7 +21,6 @@ import {
   type HandlerOutcome,
   type RouteContext,
   type RouteDefinition,
-  type RouteResult,
 } from "../routes.js";
 import {
   CODING_RUNTIME_ROUTE_GROUP,
@@ -66,7 +65,6 @@ function context(
 ): RouteContext {
   const req = new PassThrough() as unknown as RouteContext["req"];
   req.headers = cookie === undefined ? {} : { cookie };
-  Object.defineProperty(req, "socket", { value: { encrypted: false } });
   queueMicrotask(() => (req as unknown as PassThrough).end(body));
   return {
     req,
@@ -86,18 +84,6 @@ function pairedAppSession(): { channel: UiHandlerDeps["codingAppSessionChannel"]
   const paired = channel.pair(fakePairingRequestBody());
   if (!paired.paired) throw new Error("test pairing failed");
   return { channel, cookie: `${APP_SESSION_COOKIE_NAME}=${paired.cookieToken}` };
-}
-
-function sessionCookieToken(result: RouteResult): string {
-  const headers = result.headers;
-  const setCookie = headers?.["Set-Cookie"];
-  const cookies = typeof setCookie === "string" ? [setCookie] : (setCookie ?? []);
-  const prefix = `${APP_SESSION_COOKIE_NAME}=`;
-  const cookie = cookies.find((candidate) => candidate.startsWith(prefix));
-  if (cookie === undefined) throw new Error("missing app-session cookie");
-  const pair = cookie.split(";", 1)[0];
-  if (pair === undefined) throw new Error("missing app-session cookie pair");
-  return pair.slice(prefix.length);
 }
 
 class FakeResponse extends EventEmitter {
@@ -760,28 +746,6 @@ describe("coding runtime routes", () => {
       { requestId: "r", taskIntent: "private", requestedMode: "governed-assist" },
     ]);
     expect(JSON.stringify(result.body)).not.toContain("private");
-    expect(result.headers).toBeUndefined();
-  });
-
-  it("issues an app-session cookie when an unpaired browser successfully starts a run", async () => {
-    const channel = createCodingAppSessionChannel({ registry: createSessionRegistry() });
-    const deps = runtime({ codingAppSessionChannel: channel });
-    const result = await handleCreateCodingRuntimeRun(
-      context(
-        '{"requestId":"r","taskIntent":"private","requestedMode":"autonomous-delivery"}',
-        {},
-        "/api/coding-workbench/runtime/runs",
-      ),
-      deps,
-    );
-    const cookieToken = sessionCookieToken(result);
-
-    expect(result).toMatchObject({ status: 200, body: { runId: "run-1" } });
-    expect(channel.verifySession(cookieToken)?.principalLabel).toBe("coding-workbench");
-    expect(JSON.stringify(result.body)).not.toContain("private");
-    const setCookie = result.headers?.["Set-Cookie"];
-    expect(Array.isArray(setCookie)).toBe(true);
-    expect(String(setCookie)).toContain("Path=/api/coding-workbench");
   });
 
   it("fails closed when runtime dependencies are absent and returns 404 for a stale run", async () => {
@@ -1070,25 +1034,19 @@ describe("coding runtime routes", () => {
   });
 });
 
-// Release-audit P0: every run-bound authority-granting coding-runtime mutation — approve, stop,
+// Release-audit P0: every authority-granting coding-runtime mutation — start, approve, stop,
 // takeover, retry, recovery-ack, pause, resume, follow-up, research revoke — was reachable by any
 // same-user local process that could set the constant CSRF header. ADR-0141 D1 fixes loopback,
 // Origin, CSRF and runId knowledge as routing facts that never grant a route; D2 makes the
-// launcher-attested app session the authority for existing-run control. These routes bind to it
-// and fail closed. The run-creating POST is covered separately because it has no runId or protected
-// runtime content and must remain usable from a manually opened local Keiko tab.
+// launcher-attested app session the authority. These routes bind to it and fail closed.
 // The one POST in the group that is a READ, not a mutation: the question list keeps its documented
 // ADR-0141 F1 content-free `{ session: "unpaired", questions: [] }` projection (HTTP 200) instead of
 // a denial, so the sweep asserts that exact shape for it rather than exempting it.
-const RUN_CREATING_POST = "/api/coding-workbench/runtime/runs";
 const UNPAIRED_CONTENT_FREE_POST = "/api/coding-workbench/runtime/runs/:runId/questions";
 
 const STATE_CHANGING_RUNTIME_ROUTES: readonly RouteDefinition[] = CODING_RUNTIME_ROUTE_GROUP.filter(
   ({ method, pattern }) => method === "POST" && pattern !== UNPAIRED_CONTENT_FREE_POST,
 );
-
-const SESSION_REQUIRED_STATE_CHANGING_RUNTIME_ROUTES: readonly RouteDefinition[] =
-  STATE_CHANGING_RUNTIME_ROUTES.filter(({ pattern }) => pattern !== RUN_CREATING_POST);
 
 const RUNTIME_POST_ROUTES: readonly RouteDefinition[] = CODING_RUNTIME_ROUTE_GROUP.filter(
   ({ method }) => method === "POST",
@@ -1159,11 +1117,11 @@ async function invokeRoute(
 }
 
 describe("coding runtime mutation authority boundary (ADR-0141 D1/D2)", () => {
-  it("denies every run-bound state-changing runtime route to a caller that presents no app session", async () => {
+  it("denies every state-changing runtime route to a caller that presents no app session", async () => {
     const { channel } = pairedAppSession();
     // The sweep is over the mounted group, so a lifecycle route added later is covered by default.
-    expect(SESSION_REQUIRED_STATE_CHANGING_RUNTIME_ROUTES.length).toBeGreaterThan(8);
-    for (const route of SESSION_REQUIRED_STATE_CHANGING_RUNTIME_ROUTES) {
+    expect(STATE_CHANGING_RUNTIME_ROUTES.length).toBeGreaterThan(9);
+    for (const route of STATE_CHANGING_RUNTIME_ROUTES) {
       const spy = spyingRuntime(channel);
       const outcome = await invokeRoute(route, spy.deps);
       expect(statusOf(outcome), route.pattern).not.toBe(200);
@@ -1171,22 +1129,17 @@ describe("coding runtime mutation authority boundary (ADR-0141 D1/D2)", () => {
     }
   });
 
-  it("admits only run creation from an unpaired POST in the runtime group", async () => {
+  it("reaches no orchestrator operation at all from any unpaired POST in the runtime group", async () => {
     const { channel } = pairedAppSession();
     for (const route of RUNTIME_POST_ROUTES) {
       const spy = spyingRuntime(channel);
       const outcome = await invokeRoute(route, spy.deps);
-      if (route.pattern === RUN_CREATING_POST) {
-        expect(statusOf(outcome), route.pattern).toBe(200);
-        expect(spy.invoked, route.pattern).toEqual(["start"]);
-      } else if (route.pattern === UNPAIRED_CONTENT_FREE_POST) {
-        expect(spy.invoked, route.pattern).toEqual([]);
+      expect(spy.invoked, route.pattern).toEqual([]);
+      if (route.pattern === UNPAIRED_CONTENT_FREE_POST) {
         expect(outcome, route.pattern).toEqual({
           status: 200,
           body: { session: "unpaired", questions: [] },
         });
-      } else {
-        expect(spy.invoked, route.pattern).toEqual([]);
       }
     }
   });
@@ -1217,7 +1170,7 @@ describe("coding runtime mutation authority boundary (ADR-0141 D1/D2)", () => {
       ["another window's cookie prefix", revokedSession.channel, "unrelated=value"],
     ];
     for (const [label, channel, cookie] of hostile) {
-      for (const route of SESSION_REQUIRED_STATE_CHANGING_RUNTIME_ROUTES) {
+      for (const route of STATE_CHANGING_RUNTIME_ROUTES) {
         const spy = spyingRuntime(channel);
         const outcome = await invokeRoute(route, spy.deps, cookie);
         expect(statusOf(outcome), `${label} ${route.pattern}`).not.toBe(200);
@@ -1226,9 +1179,9 @@ describe("coding runtime mutation authority boundary (ADR-0141 D1/D2)", () => {
     }
   });
 
-  it("fails closed on every run-bound state-changing runtime route when no app-session channel is composed", async () => {
+  it("fails closed on every state-changing runtime route when no app-session channel is composed", async () => {
     const { cookie } = pairedAppSession();
-    for (const route of SESSION_REQUIRED_STATE_CHANGING_RUNTIME_ROUTES) {
+    for (const route of STATE_CHANGING_RUNTIME_ROUTES) {
       const spy = spyingRuntime(undefined);
       const outcome = await invokeRoute(route, spy.deps, cookie);
       expect(statusOf(outcome), route.pattern).not.toBe(200);
@@ -1236,9 +1189,9 @@ describe("coding runtime mutation authority boundary (ADR-0141 D1/D2)", () => {
     }
   });
 
-  it("admits every run-bound state-changing runtime route for the launcher-attested paired caller", async () => {
+  it("admits every state-changing runtime route for the launcher-attested paired caller", async () => {
     const { channel, cookie } = pairedAppSession();
-    for (const route of SESSION_REQUIRED_STATE_CHANGING_RUNTIME_ROUTES) {
+    for (const route of STATE_CHANGING_RUNTIME_ROUTES) {
       const spy = spyingRuntime(channel);
       const outcome = await invokeRoute(route, spy.deps, cookie);
       expect(statusOf(outcome), route.pattern).toBe(200);
@@ -1248,7 +1201,7 @@ describe("coding runtime mutation authority boundary (ADR-0141 D1/D2)", () => {
 
   it("resolves authority before run existence, so an unpaired per-run denial is byte-identical to an unknown run", async () => {
     const { channel, cookie } = pairedAppSession();
-    const perRun = SESSION_REQUIRED_STATE_CHANGING_RUNTIME_ROUTES.filter(({ pattern }) =>
+    const perRun = STATE_CHANGING_RUNTIME_ROUTES.filter(({ pattern }) =>
       pattern.includes(":runId"),
     );
     for (const route of perRun) {
@@ -1264,16 +1217,19 @@ describe("coding runtime mutation authority boundary (ADR-0141 D1/D2)", () => {
     }
   });
 
-  it("admits an unpaired run start so a manually opened local Keiko tab can work", async () => {
+  it("answers an unpaired run start with the honest authority-resolution failure, never a silent success", async () => {
     const { channel } = pairedAppSession();
     const spy = spyingRuntime(channel);
-    const started = await handleCreateCodingRuntimeRun(
+    const denied = await handleCreateCodingRuntimeRun(
       context('{"requestId":"r","taskIntent":"secret","requestedMode":"governed-assist"}'),
       spy.deps,
     );
-    expect(started).toMatchObject({ status: 200, body: snapshot });
-    expect(spy.invoked).toEqual(["start"]);
-    expect(JSON.stringify(started.body)).not.toContain("secret");
+    expect(denied).toMatchObject({
+      status: 403,
+      body: { error: { code: "CODING_RUNTIME_AUTHORITY_RESOLUTION_FAILED" } },
+    });
+    expect(spy.invoked).toEqual([]);
+    expect(JSON.stringify(denied.body)).not.toContain("secret");
   });
 
   // The recorded attack, end to end: the unauthenticated status route publishes the pending

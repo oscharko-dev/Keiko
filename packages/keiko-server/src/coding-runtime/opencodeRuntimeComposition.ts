@@ -252,20 +252,7 @@ function createRunPort(
     return isReadyRun(run) ? run : undefined;
   };
   return {
-    submitTask: async (runId, text): Promise<boolean> => {
-      const run = readyRun(runId);
-      if (run === undefined) return false;
-      if (!(await synchronizeTurnBaseline(run))) return false;
-      if (!run.runtimeAdapter.armTurn()) return false;
-      try {
-        await run.client.promptAsync(run.sessionId, text);
-        return run.ready;
-      } catch (error) {
-        recordOpenCodeTurnFailure(diagnostics, run, "submit", error);
-        run.runtimeAdapter.cancelTurn();
-        return false;
-      }
-    },
+    submitTask: createSubmitTask(readyRun, diagnostics),
     abortTask: createAbortTask(readyRun),
     waitForTerminal: async (runId, signal): Promise<boolean> => {
       const run = readyRun(runId);
@@ -274,31 +261,59 @@ function createRunPort(
       if (!outcome && !signal.aborted) recordOpenCodeTurnFailure(diagnostics, run, "terminal");
       return outcome;
     },
-    replyPermission: async (runId, requestId, reply): Promise<boolean> => {
-      const run = readyRun(runId);
-      if (run === undefined) return false;
-      try {
-        const owned = (await run.client.listPermissions()).filter(
-          (request) =>
-            request.sessionID === run.sessionId &&
-            projectOpenCodePermissionRequestId(request.id) === requestId,
-        );
-        const permission = owned[0];
-        return (
-          owned.length === 1 &&
-          permission !== undefined &&
-          (await run.client.replyPermission(permission.id, reply)) &&
-          run.ready
-        );
-      } catch {
-        return false;
-      }
-    },
+    replyPermission: createReplyPermission(readyRun, diagnostics),
     ...createQuestionRunPort(readyRun),
   };
 }
 
-type OpenCodeTurnFailureStage = "submit" | "terminal";
+function createSubmitTask(
+  readyRun: ReadyRunLookup,
+  diagnostics: ServerDiagnosticSink | undefined,
+): OpenCodeRunPort["submitTask"] {
+  return async (runId, text): Promise<boolean> => {
+    const run = readyRun(runId);
+    if (run === undefined) return false;
+    if (!(await synchronizeTurnBaseline(run))) return false;
+    if (!run.runtimeAdapter.armTurn()) return false;
+    try {
+      await run.client.promptAsync(run.sessionId, text);
+      return run.ready;
+    } catch (error) {
+      recordOpenCodeTurnFailure(diagnostics, run, "submit", error);
+      run.runtimeAdapter.cancelTurn();
+      return false;
+    }
+  };
+}
+
+function createReplyPermission(
+  readyRun: ReadyRunLookup,
+  diagnostics: ServerDiagnosticSink | undefined,
+): OpenCodeRunPort["replyPermission"] {
+  return async (runId, requestId, reply): Promise<boolean> => {
+    const run = readyRun(runId);
+    if (run === undefined) return false;
+    try {
+      const owned = (await run.client.listPermissions()).filter(
+        (request) =>
+          request.sessionID === run.sessionId &&
+          projectOpenCodePermissionRequestId(request.id) === requestId,
+      );
+      const permission = owned[0];
+      return (
+        owned.length === 1 &&
+        permission !== undefined &&
+        (await run.client.replyPermission(permission.id, reply)) &&
+        run.ready
+      );
+    } catch (error) {
+      recordOpenCodeTurnFailure(diagnostics, run, "permission", error);
+      return false;
+    }
+  };
+}
+
+type OpenCodeTurnFailureStage = "permission" | "submit" | "terminal";
 
 function recordOpenCodeTurnFailure(
   diagnostics: ServerDiagnosticSink | undefined,
@@ -340,19 +355,19 @@ function openCodeRuntimeDatabaseSummary(database: DatabaseSync): string {
   const messages = database.prepare(OPEN_CODE_MESSAGE_SUMMARY_SQL).get() as CountRow;
   const parts = database.prepare(OPEN_CODE_PART_SUMMARY_SQL).get() as CountRow;
   return [
-    `db=ok`,
-    `m=${boundedCount(messages.total)}`,
-    `a=${boundedCount(messages.assistant)}`,
-    `stop=${boundedCount(messages.stop)}`,
-    `tool=${boundedCount(messages.toolCalls)}`,
-    `error=${boundedCount(messages.error)}`,
-    `length=${boundedCount(messages.length)}`,
-    `err=${boundedCount(messages.errorName)}`,
-    `p=${boundedCount(parts.total)}`,
-    `ptool=${boundedCount(parts.tool)}`,
-    `ptext=${boundedCount(parts.text)}`,
-    `pfail=${boundedCount(parts.failed)}`,
-    `pdone=${boundedCount(parts.completed)}`,
+    "db=ok",
+    `m=${String(boundedCount(messages.total))}`,
+    `a=${String(boundedCount(messages.assistant))}`,
+    `stop=${String(boundedCount(messages.stop))}`,
+    `tool=${String(boundedCount(messages.toolCalls))}`,
+    `error=${String(boundedCount(messages.error))}`,
+    `length=${String(boundedCount(messages.length))}`,
+    `err=${String(boundedCount(messages.errorName))}`,
+    `p=${String(boundedCount(parts.total))}`,
+    `ptool=${String(boundedCount(parts.tool))}`,
+    `ptext=${String(boundedCount(parts.text))}`,
+    `pfail=${String(boundedCount(parts.failed))}`,
+    `pdone=${String(boundedCount(parts.completed))}`,
   ].join(":");
 }
 
@@ -743,7 +758,16 @@ function readinessPorts(
         ? authenticatedHealth(client)
         : unauthenticatedHealth(input.fetch, endpoint, request.signal),
     openApiDigest: () => openApiDigest(client),
-    gatewayChallenge: () => challengeGateway(input, run, fixedSessionId, startupRead),
+    gatewayChallenge: () =>
+      challengeGateway(
+        input,
+        run,
+        client,
+        fixedSessionId,
+        request.signal,
+        request.timeoutMs,
+        startupRead,
+      ),
     toolFacadeChallenge: () => challengeToolFacade(input, bridge),
     subscribe: async function* (signal): AsyncIterable<OpenCodeSyncHint> {
       fixedSessionId = await createAndEchoFixedSession(client, request.signal);
@@ -892,7 +916,10 @@ async function createAndEchoFixedSession(
 async function challengeGateway(
   input: OpenCodeRuntimeCompositionInput,
   run: PreparedRun,
+  client: ReturnType<typeof createOpenCodeHttpClient>,
   sessionId: string | undefined,
+  signal: AbortSignal | undefined,
+  timeoutMs: number,
   startupRead: boolean,
 ): Promise<boolean> {
   const reason = gatewayChallengePrecondition(input, sessionId, startupRead);
@@ -900,13 +927,32 @@ async function challengeGateway(
     recordGatewayChallengeFailure(input.diagnostics, run.runId, reason);
     return false;
   }
-  return Promise.resolve(true);
+  if (sessionId === undefined) return false;
+  const challengeSignal = signal ?? AbortSignal.timeout(timeoutMs);
+  const observed = input.gatewayReadiness.waitForObservedRequest(run.runId, challengeSignal);
+  let verified = false;
+  try {
+    await client.promptAsync(sessionId, "Keiko runtime readiness handshake.", {
+      signal: challengeSignal,
+    });
+    const accepted = await observed;
+    await client.abortSession(sessionId, { signal: challengeSignal });
+    const terminal = await fixedSessionIsTerminal(client, sessionId, challengeSignal);
+    verified = accepted && terminal;
+    if (!verified) {
+      recordGatewayChallengeFailure(input.diagnostics, run.runId, "live-verification-failed");
+    }
+    return verified;
+  } catch {
+    recordGatewayChallengeFailure(input.diagnostics, run.runId, "live-verification-failed");
+    return false;
+  } finally {
+    input.gatewayReadiness.clear(run.runId, verified);
+  }
 }
 
 type GatewayChallengePreconditionFailure =
-  | "startup-unread"
-  | "session-missing"
-  | "capability-invalid";
+  "startup-unread" | "session-missing" | "capability-invalid" | "live-verification-failed";
 
 function gatewayChallengePrecondition(
   input: OpenCodeRuntimeCompositionInput,
@@ -931,6 +977,37 @@ function recordGatewayChallengeFailure(
     errorClass: "OpenCodeGatewayChallengeFailure",
     message: "runtime-handshake-failed",
     code: `stage=gateway-challenge:reason=${reason}`,
+  });
+}
+
+async function fixedSessionIsTerminal(
+  client: ReturnType<typeof createOpenCodeHttpClient>,
+  sessionId: string,
+  signal: AbortSignal,
+): Promise<boolean> {
+  while (!signal.aborted) {
+    const status = (await client.sessionStatuses({ signal }))[sessionId];
+    if (status === undefined || status.type === "idle") return true;
+    if (!(await readinessPollDelay(signal))) return false;
+  }
+  return false;
+}
+
+function readinessPollDelay(signal: AbortSignal): Promise<boolean> {
+  if (signal.aborted) return Promise.resolve(false);
+  return new Promise((resolve) => {
+    const settle = (result: boolean): void => {
+      clearTimeout(timer);
+      signal.removeEventListener("abort", onAbort);
+      resolve(result);
+    };
+    const onAbort = (): void => {
+      settle(false);
+    };
+    const timer = setTimeout(() => {
+      settle(true);
+    }, 10);
+    signal.addEventListener("abort", onAbort, { once: true });
   });
 }
 

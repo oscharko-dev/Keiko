@@ -268,7 +268,6 @@ export function AddRepositoryDialog({
                 style={{ ...INPUT_STYLE, flex: 1 }}
                 value={localPath}
                 onChange={(event) => setLocalPath(event.target.value)}
-                onClick={chooseLocalRepository}
                 aria-label={t("gitClientWindow.addRepository.localPath")}
                 placeholder="/Users/me/Work/existing-repo"
               />

@@ -830,16 +830,3 @@ export const REPO_OPTION_SELECTED_STYLE: CSSProperties = {
   background: "var(--accent-dim)",
   boxShadow: "inset 2px 0 0 var(--accent)",
 };
-
-export const STATUS_PILL_STYLE: CSSProperties = {
-  display: "inline-flex",
-  alignItems: "center",
-  gap: 6,
-  padding: "3px 10px",
-  borderRadius: 999,
-  background: "var(--inset)",
-  boxShadow: "inset 0 0 0 1px var(--line)",
-  color: "var(--fg-muted)",
-  font: "600 11px var(--font-ui)",
-  whiteSpace: "nowrap",
-};

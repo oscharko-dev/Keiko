@@ -11,8 +11,8 @@ import {
   type CodingWorkbenchRuntimePendingPermission,
   type CodingWorkbenchRuntimeSseEvent,
   type CodingWorkbenchRuntimeStateName,
+  type ModelCapability,
 } from "@oscharko-dev/keiko-contracts";
-import type { ModelCapability } from "@oscharko-dev/keiko-contracts";
 import { useTranslate } from "@/lib/i18n";
 import {
   useCodingWorkbenchTranslate,
@@ -62,6 +62,7 @@ import {
   cx,
   lifecycleAnnouncement,
   modeLabel,
+  modelSourceLabel,
   visibleAlert,
 } from "./codingWorkbenchLabels";
 import styles from "./CodingWorkbenchWindow.module.css";
@@ -196,8 +197,12 @@ export function CodingWorkbenchWindow({
   const authority = useWorkbenchAuthoritySelection(state, actions, t);
   const workbenchLabel = useTranslate()("rail.coding");
   const pendingPermission = state.run.value?.pendingPermission;
-  const alert =
-    visibleAlert(state, t, bootstrapSetupVisible(state, activeWorkspace)) ?? authority.errorMessage;
+  const alert = visibleAlert(
+    state,
+    t,
+    bootstrapSetupVisible(state, activeWorkspace),
+    authority.errorMessage,
+  );
 
   useEffect(() => {
     if (!approvalAction.current || pendingPermission !== undefined) return;
@@ -304,6 +309,7 @@ function WorkbenchContent({
       data-state={state.run.value?.state ?? "idle"}
     >
       <h2 className="sr-only">{workbenchLabel}</h2>
+      <SessionContextBar state={state} activeWorkspace={activeWorkspace} />
       <p className="sr-only" role="status" aria-live="polite" aria-atomic="true">
         {lifecycleAnnouncement(state, t, research.grant)}
       </p>
@@ -544,7 +550,12 @@ function welcomeEligibleState(state: CodingWorkbenchRuntimeStateName | undefined
 
 function repositoryLabel(root: string | null): string | null {
   if (root === null) return null;
-  return root.split(/[\\/]/u).filter(Boolean).at(-1) ?? root;
+  const parts = root.split(/[\\/]/u);
+  for (let index = parts.length - 1; index >= 0; index -= 1) {
+    const part = parts.at(index);
+    if (part !== undefined && part.length > 0) return part;
+  }
+  return root;
 }
 
 function confirmedModeLabel(
@@ -571,6 +582,79 @@ function bootstrapSetupVisible(
   activeWorkspace: UseCodingWorkbenchRuntimeInput["workspace"],
 ): boolean {
   return activeWorkspace.activeBinding === null && state.workspace.value === null;
+}
+
+function workspaceContextValue(
+  workspace: CodingWorkbenchRuntimeState["workspace"]["value"],
+  t: CodingWorkbenchTranslate,
+): string {
+  if (workspace === null) return t("codingWorkbench.readiness.workspace.none");
+  return `${workspace.taskId} · ${workspace.taskBranch} · ${workspace.health}`;
+}
+
+function sessionSourceValue(
+  source: CodingWorkbenchRuntimeState["source"]["value"],
+  t: CodingWorkbenchTranslate,
+): string {
+  if (source === null) return t("codingWorkbench.readiness.modelSource.select");
+  const label = modelSourceLabel(source.modelSource, t);
+  return source.available ? label : `${label} — ${t("codingWorkbench.resourceStatus.unavailable")}`;
+}
+
+function RuntimeAssuranceContextItem({
+  state,
+  t,
+}: {
+  readonly state: CodingWorkbenchRuntimeState;
+  readonly t: CodingWorkbenchTranslate;
+}): ReactNode {
+  const verified = state.runtime.value?.runtimeEvidenceClass === "platform-qualified";
+  return (
+    <span className={styles.contextItem} {...(verified ? {} : { "data-tone": "warning" })}>
+      <span className={styles.contextLabel}>{t("codingWorkbench.readiness.runtime.label")}</span>
+      <span className={styles.contextValue}>
+        {t(
+          verified
+            ? "codingWorkbench.readiness.runtime.verified"
+            : "codingWorkbench.readiness.runtime.evaluation",
+        )}
+      </span>
+    </span>
+  );
+}
+
+function SessionContextBar({
+  state,
+  activeWorkspace,
+}: {
+  readonly state: CodingWorkbenchRuntimeState;
+  readonly activeWorkspace: UseCodingWorkbenchRuntimeInput["workspace"];
+}): ReactNode {
+  const t = useCodingWorkbenchTranslate();
+  const mode = confirmedMode(state);
+  return (
+    <div className={styles.contextBar} aria-label={t("codingWorkbench.header.summary")}>
+      <span className={styles.contextItem} title={activeWorkspace.activeBinding?.activeRoot}>
+        <span className={styles.contextLabel}>
+          {t("codingWorkbench.readiness.workspace.label")}
+        </span>
+        <span className={styles.contextValue}>
+          {workspaceContextValue(state.workspace.value, t)}
+        </span>
+      </span>
+      <span className={styles.contextItem}>
+        <span className={styles.contextLabel}>
+          {t("codingWorkbench.readiness.modelSource.label")}
+        </span>
+        <span className={styles.contextValue}>{sessionSourceValue(state.source.value, t)}</span>
+      </span>
+      <RuntimeAssuranceContextItem state={state} t={t} />
+      <span className={styles.contextItem} {...(mode === null ? {} : { "data-mode": mode })}>
+        <span className={styles.contextLabel}>{t("codingWorkbench.mode.eyebrow")}</span>
+        <span className={styles.contextValue}>{confirmedModeLabel(state, t)}</span>
+      </span>
+    </div>
+  );
 }
 
 interface LiveSectionProps {

@@ -224,13 +224,18 @@ describe("Coding Workbench live state", () => {
   });
 
   it("resets timeline and stream state only when server truth changes to a different run", () => {
+    const streamable = codingWorkbenchRuntimeReducer(createInitialCodingWorkbenchRuntimeState(), {
+      kind: "run-set",
+      snapshot: snapshot({ runId: "run-1", state: "running" }),
+    });
     const withEvent = codingWorkbenchRuntimeReducer(
-      codingWorkbenchRuntimeReducer(createInitialCodingWorkbenchRuntimeState(), {
+      codingWorkbenchRuntimeReducer(streamable, {
         kind: "events-received",
         events: [event(1)],
       }),
       { kind: "stream-set", stream: { runId: "run-1", cursor: "cursor-1", connected: true } },
     );
+    expect(withEvent.stream.status).toBe("ready");
 
     const next = codingWorkbenchRuntimeReducer(withEvent, {
       kind: "run-set",

@@ -12,6 +12,7 @@ import {
 } from "@oscharko-dev/keiko-model-gateway";
 import {
   estimateTokensForSegments,
+  MODEL_REASONING_EFFORTS,
   validateGatewaySamplingParameters,
   type CodingWorkbenchModelSource,
   type CodingWorkbenchSidecarGatewayRunMetadata,
@@ -49,6 +50,11 @@ const OUTPUT_BYTES_PER_TOKEN_LIMIT = 4;
 // within their first rounds.
 const TOOL_ADOPTION_GAP_MESSAGE_THRESHOLD = 9;
 const GOVERNED_TOOL_NAME_PREFIX = "keiko_";
+const MODEL_REASONING_EFFORT_SET: ReadonlySet<string> = new Set(MODEL_REASONING_EFFORTS);
+
+function isModelReasoningEffort(value: unknown): value is ModelReasoningEffort {
+  return typeof value === "string" && MODEL_REASONING_EFFORT_SET.has(value);
+}
 
 export interface OpenCodeGatewayReadinessRegistry {
   readonly claim: (runId: string) => boolean;
@@ -731,9 +737,7 @@ function authenticatedRuntimeBinding(value: unknown):
     ...(typeof value.binding.modelProfileId === "string"
       ? { modelProfileId: value.binding.modelProfileId }
       : {}),
-    ...(["minimal", "low", "medium", "high", "xhigh"].includes(String(effort))
-      ? { reasoningEffort: effort as ModelReasoningEffort }
-      : {}),
+    ...(isModelReasoningEffort(effort) ? { reasoningEffort: effort } : {}),
   };
 }
 

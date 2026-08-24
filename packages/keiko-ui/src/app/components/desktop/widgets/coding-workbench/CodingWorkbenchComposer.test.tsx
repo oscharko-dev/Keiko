@@ -68,6 +68,8 @@ function renderComposer(
 }
 
 describe("Coding Workbench composer", () => {
+  afterEach(() => cleanup());
+
   it("opens Git from the active repository and branch controls", async () => {
     const user = userEvent.setup();
     const onOpenGit = vi.fn();
@@ -80,8 +82,6 @@ describe("Coding Workbench composer", () => {
     expect(onOpenGit).toHaveBeenCalledTimes(2);
     expect(within(context).getByText("MemoriaViva")).toBeInTheDocument();
   });
-
-  afterEach(() => cleanup());
 
   it("shows Start while idle and calls the start handler", async () => {
     const user = userEvent.setup();

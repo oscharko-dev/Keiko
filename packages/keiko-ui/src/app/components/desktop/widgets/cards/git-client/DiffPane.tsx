@@ -116,7 +116,10 @@ export function DiffPane({
         <div style={DIFF_HEADER_STYLE}>
           <DiffPathLabel path={selectedChangePath} />
           <span style={{ flex: 1 }} />
-          <div role="group" aria-label="Diff scope" style={SCOPE_TOGGLE_STYLE}>
+          <fieldset
+            aria-label="Diff scope"
+            style={{ ...SCOPE_TOGGLE_STYLE, border: 0, margin: 0, padding: 0, minWidth: 0 }}
+          >
             {SCOPES.map((entry) => {
               const active = entry.id === scope;
               return (
@@ -131,7 +134,7 @@ export function DiffPane({
                 </button>
               );
             })}
-          </div>
+          </fieldset>
         </div>
       )}
       <section

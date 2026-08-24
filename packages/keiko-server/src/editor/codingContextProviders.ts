@@ -135,7 +135,7 @@ export interface EditorStateContextLease {
 
 function basename(scopePath: string): string {
   const parts = scopePath.split("/");
-  return parts[parts.length - 1] ?? scopePath;
+  return parts.at(-1) ?? scopePath;
 }
 
 // strip-then-redact, mirroring grounded-qa redactString: format-char stripping first (GRD-001)

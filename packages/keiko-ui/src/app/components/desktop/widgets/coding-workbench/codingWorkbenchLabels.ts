@@ -46,7 +46,7 @@ export function sourceVerificationLabel(
   return t(`codingWorkbench.source.verification.${verification}`);
 }
 
-export function runStateLabel(
+function runStateLabel(
   state: CodingWorkbenchRuntimeStateName,
   t: CodingWorkbenchTranslate,
 ): string {
@@ -338,14 +338,10 @@ export function changesetDeliveryAlert(
     : actionFailureAlert("codingWorkbench.changesetReview.deliveryFailedCode", failure, t);
 }
 
-export function visibleAlert(
+function refreshFailureAlert(
   state: CodingWorkbenchRuntimeState,
   t: CodingWorkbenchTranslate,
-  setupVisible: boolean,
 ): string | null {
-  if (state.mutation.error) {
-    return actionFailureAlert("codingWorkbench.alert.actionFailedCode", state.mutation.error, t);
-  }
   for (const [resource, value] of [
     ["authentication", state.profile],
     ["authenticationSetup", state.codexSetup],
@@ -357,6 +353,21 @@ export function visibleAlert(
   ] as const) {
     if (value.status === "error") return t(`codingWorkbench.alert.${resource}RefreshFailed`);
   }
+  return null;
+}
+
+export function visibleAlert(
+  state: CodingWorkbenchRuntimeState,
+  t: CodingWorkbenchTranslate,
+  setupVisible: boolean,
+  authorityError: string | null = null,
+): string | null {
+  if (state.mutation.error) {
+    return actionFailureAlert("codingWorkbench.alert.actionFailedCode", state.mutation.error, t);
+  }
+  const refreshAlert = refreshFailureAlert(state, t);
+  if (refreshAlert !== null) return refreshAlert;
+  if (!setupVisible && authorityError !== null) return authorityError;
   // Standing conditions come after actionable refresh failures (one alert at a time — reporting a
   // standing condition first would swallow the recoverable error). Pairing remains in the
   // lifecycle narration, but it is not useful enough to take over the workbench as a banner.

@@ -15,7 +15,13 @@ import {
   type GitEditorDiffResponse,
 } from "@oscharko-dev/keiko-contracts";
 import { createMemoryVault, type MemoryVaultStore } from "@oscharko-dev/keiko-memory-vault";
-import type { MemoryId, MemoryRecord, MemoryScope } from "@oscharko-dev/keiko-contracts/memory";
+import type {
+  MemoryId,
+  MemoryRecord,
+  MemoryScope,
+  ProjectId,
+  UserId,
+} from "@oscharko-dev/keiko-contracts/memory";
 import { buildRedactor } from "../index.js";
 import type { UiHandlerDeps } from "../index.js";
 import {
@@ -727,7 +733,7 @@ describe("runMemoryProvider", () => {
       vault,
       "project-memory",
       "Always prefer TypeScript strict mode in editor coding context.",
-      { kind: "project", projectId: "/tmp/does-not-exist" },
+      { kind: "project", projectId: "/tmp/does-not-exist" as ProjectId },
     );
     const ctx = providerCtx({ deps: baseDeps({ memoryVault: vault }) });
     const outcome = await runMemoryProvider(ctx, { queryText: undefined });
@@ -741,15 +747,15 @@ describe("runMemoryProvider", () => {
     const vault = makeVault();
     insertMemory(vault, "private-memory", "The operator's private name is Ada.", {
       kind: "user",
-      userId: "local-operator",
+      userId: "local-operator" as UserId,
     });
     insertMemory(vault, "active-project-memory", "This project uses TypeScript.", {
       kind: "project",
-      projectId: "/workspace/keiko",
+      projectId: "/workspace/keiko" as ProjectId,
     });
     insertMemory(vault, "foreign-project-memory", "This other project uses Rust.", {
       kind: "project",
-      projectId: "/workspace/other",
+      projectId: "/workspace/other" as ProjectId,
     });
     const ctx = providerCtx({
       deps: baseDeps({ memoryVault: vault }),
@@ -768,7 +774,7 @@ describe("runMemoryProvider", () => {
     const vault = makeVault();
     insertMemory(vault, "cancelled-memory", "Cancelled retrieval should not be ranked.", {
       kind: "project",
-      projectId: "/tmp/does-not-exist",
+      projectId: "/tmp/does-not-exist" as ProjectId,
     });
     const controller = new AbortController();
     controller.abort();

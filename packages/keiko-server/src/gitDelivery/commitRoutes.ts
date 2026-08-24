@@ -372,28 +372,37 @@ function suggestSpecificCommitMessage(
     : suggestGitCommitMessage(intent, policy, summary);
 }
 
-function buildPreviewBody(
-  summary: GitCommitChangeSummary,
-  stagedPaths: readonly string[],
-  messageDraft: string,
-  policy: GitCommitMessagePolicy,
-  preflightCodes: readonly string[],
-  signatureRequirement: GitDeliverySignatureRequirement,
-  policyOutcome: string,
-  policyBlockReason: string | undefined,
-): GitDeliveryCommitPreviewBody {
-  const intent = analyzeGitCommitIntent({ summary, message: messageDraft });
-  const suggestedMessage = suggestSpecificCommitMessage(stagedPaths, summary, intent, policy);
+interface PreviewBodyInput {
+  readonly summary: GitCommitChangeSummary;
+  readonly stagedPaths: readonly string[];
+  readonly messageDraft: string;
+  readonly policy: GitCommitMessagePolicy;
+  readonly preflightCodes: readonly string[];
+  readonly signatureRequirement: GitDeliverySignatureRequirement;
+  readonly policyOutcome: string;
+  readonly policyBlockReason: string | undefined;
+}
+
+function buildPreviewBody(input: PreviewBodyInput): GitDeliveryCommitPreviewBody {
+  const intent = analyzeGitCommitIntent({ summary: input.summary, message: input.messageDraft });
+  const suggestedMessage = suggestSpecificCommitMessage(
+    input.stagedPaths,
+    input.summary,
+    intent,
+    input.policy,
+  );
   return {
     schemaVersion: "1",
-    summary,
+    summary: input.summary,
     intent,
-    messageValidation: validateGitCommitMessage(messageDraft, policy),
-    preflightFindingCodes: preflightCodes,
-    signatureRequirement,
-    policyOutcome,
+    messageValidation: validateGitCommitMessage(input.messageDraft, input.policy),
+    preflightFindingCodes: input.preflightCodes,
+    signatureRequirement: input.signatureRequirement,
+    policyOutcome: input.policyOutcome,
     ...(suggestedMessage !== undefined ? { suggestedMessage } : {}),
-    ...(policyBlockReason !== undefined ? { policyBlockReason } : {}),
+    ...(input.policyBlockReason !== undefined
+      ? { policyBlockReason: input.policyBlockReason }
+      : {}),
   };
 }
 
@@ -474,16 +483,20 @@ async function computePreview(
     targetBranchName,
     activeProviderCapabilities: [],
   });
-  return buildPreviewBody(
+  return buildPreviewBody({
     summary,
     stagedPaths,
     messageDraft,
     policy,
-    [...preflight.findings.map((f) => f.code), ...signatureFinding(signatureRequirement)],
+    preflightCodes: [
+      ...preflight.findings.map((finding) => finding.code),
+      ...signatureFinding(signatureRequirement),
+    ],
     signatureRequirement,
-    effectivePolicy.outcome,
-    effectivePolicy.outcome === "blocked" ? effectivePolicy.blockReason : undefined,
-  );
+    policyOutcome: effectivePolicy.outcome,
+    policyBlockReason:
+      effectivePolicy.outcome === "blocked" ? effectivePolicy.blockReason : undefined,
+  });
 }
 
 export const createHandleCommitPreview = (
@@ -636,7 +649,14 @@ export const createHandleCommitExecute = (
     if (verifiedApproval === undefined) return errResult(400, "GIT_DELIVERY_COMMIT_BAD_REQUEST");
     let result;
     try {
-      result = await executeGovernedMutation(command, verifiedApproval, workspace, deps, seams);
+      result = await executeGovernedMutation(
+        command,
+        verifiedApproval,
+        workspace,
+        deps,
+        seams,
+        ctx.correlationId,
+      );
     } catch {
       return errResult(409, "GIT_DELIVERY_COMMIT_WORKTREE_UNAVAILABLE");
     }

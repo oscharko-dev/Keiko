@@ -87,6 +87,7 @@ type RuntimeStartFailureReason =
   | CodingRuntimeFailureCode
   | "initial-turn-dispatch"
   | "initial-turn-recovery"
+  | "launch-resolution"
   | "manager-exception"
   | "run-mismatch";
 
@@ -995,6 +996,7 @@ export class CodingRuntimeOrchestrator {
     } catch (error) {
       // Never a bare `catch {}`: a rejected launch used to lose its identity here and surface as
       // `authority-resolution-failed` whatever the real cause was (KEIKO-0150).
+      recordRuntimeStartFailure(this.deps.diagnostics, runId, "launch-resolution", error);
       return { ok: false, failureCode: classifyLaunchRejection(error) };
     }
   }

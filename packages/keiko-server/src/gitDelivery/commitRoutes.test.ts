@@ -30,6 +30,7 @@ import { createInMemoryUiStore, type UiStore } from "../store/index.js";
 import { createWorkspaceMutexRegistry } from "../task-workspace/mutex.js";
 import { createEditorSettingsControlService } from "../editor/settings/editorSettingsControl.js";
 import { createEditorSettingsStore } from "../editor/settings/editorSettingsStore.js";
+import type { ServerLogEvent } from "../observability/server-log.js";
 import type { RouteContext } from "../routes.js";
 import {
   createHandleCommitExecute,
@@ -454,10 +455,14 @@ describe("commit preview — read-only verification context (AC3)", () => {
   });
 
   it("records a content-free preview summary and never the drafted message", async () => {
-    const events: { readonly extra?: Readonly<Record<string, unknown>> }[] = [];
+    const events: ServerLogEvent[] = [];
     const handler = createHandleCommitPreview({
       execution: seams(),
-      activityLog: { write: (event): void => events.push(event) },
+      activityLog: {
+        write(event): void {
+          events.push(event);
+        },
+      },
     });
 
     await handler(

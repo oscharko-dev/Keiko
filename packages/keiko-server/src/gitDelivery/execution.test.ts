@@ -102,6 +102,23 @@ function captureActivityLog(): {
   };
 }
 
+function expectCompletedMutationEvent(event: ServerLogEvent | undefined): void {
+  expect(event).toBeDefined();
+  if (event === undefined) throw new Error("mutation activity event missing");
+  const extra = event.extra ?? {};
+  expect(event.category).toBe("diagnostic");
+  expect(event.op).toBe("git.delivery.mutation.completed");
+  expect(event.correlationId).toBe("request-correlation-1");
+  expect(extra.actionId).toMatch(/^gde-action-[a-f0-9]{24}$/u);
+  expect(extra.actionKind).toBe("branch-create");
+  expect(extra.status).toBe("succeeded");
+  expect(extra.phaseReached).toBe("result");
+  expect(extra.policyOutcome).toBe("constrained");
+  expect(extra.preflightFindingCount).toBe(0);
+  expect(extra.preflightBlockingCount).toBe(0);
+  expect(extra.requiredApproverCount).toBe(0);
+}
+
 // Real adapter + real snapshot reader: only the trusted policy pack is supplied (no adapter/reader/now
 // seam), exercising the default-seam branches and the live read-only inspection + mutation boundary.
 const REAL_SEAMS: GitDeliveryExecutionSeams = { policyPacks: { repoPack: ALLOW_LOCAL } };
@@ -137,21 +154,12 @@ describe("executeGovernedMutation — real git through the default seams", () =>
       workspaceInfo(root),
       deps,
       { ...REAL_SEAMS, activityLog: activity.sink },
+      "request-correlation-1",
     );
     expect(result.outcome.status).toBe("succeeded");
     expect(git(["branch", "--list", "feature/x"])).toContain("feature/x");
     expect(cap.count()).toBe(1);
-    const event = activity.events[0];
-    expect(event?.category).toBe("diagnostic");
-    expect(event?.op).toBe("git.delivery.mutation.completed");
-    expect(event?.correlationId).toMatch(/^gde-action-[a-f0-9]{24}$/u);
-    expect(event?.extra?.actionKind).toBe("branch-create");
-    expect(event?.extra?.status).toBe("succeeded");
-    expect(event?.extra?.phaseReached).toBe("result");
-    expect(event?.extra?.policyOutcome).toBe("constrained");
-    expect(event?.extra?.preflightFindingCount).toBe(0);
-    expect(event?.extra?.preflightBlockingCount).toBe(0);
-    expect(event?.extra?.requiredApproverCount).toBe(0);
+    expectCompletedMutationEvent(activity.events[0]);
     expect(JSON.stringify(activity.events)).not.toContain("feature/x");
   });
 
@@ -241,12 +249,14 @@ describe("executeGovernedMutation — real git through the default seams", () =>
           workspaceInfo(bare),
           deps,
           { ...REAL_SEAMS, activityLog: activity.sink },
+          "request-correlation-2",
         ),
       ).rejects.toBeTruthy();
       const event = activity.events[0];
       expect(event?.level).toBe("error");
       expect(event?.category).toBe("diagnostic");
       expect(event?.op).toBe("git.delivery.mutation.failed");
+      expect(event?.correlationId).toBe("request-correlation-2");
       expect(typeof event?.errorKind).toBe("string");
       expect(event?.extra?.actionKind).toBe("branch-switch");
       expect(event?.extra?.phaseReached).toBe("snapshot");

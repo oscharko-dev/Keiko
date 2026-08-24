@@ -618,12 +618,20 @@ describe("CodingRuntimeOrchestrator", () => {
   // could tell the two apart, and the structured code the runtime manager already defines for the
   // mismatch never reached the caller.
   it("reports a rejected launch under its own cause instead of one generic code", async () => {
-    const f = fixture();
+    const captured = captureDiagnostics();
+    const f = fixture(undefined, undefined, [], captured.diagnostics);
     f.launchResolver.resolve.mockImplementationOnce(() => {
       throw new CodingRuntimeLaunchRejectedError("adapter-profile-mismatch");
     });
 
     expect(await f.orchestrator.start(start)).toEqual({ ok: false, failureCode: "source-drift" });
+    expect(captured.records).toContainEqual(
+      expect.objectContaining({
+        operation: "coding-runtime.start",
+        message: "runtime-start-failed",
+        code: "stage=start:reason=launch-resolution",
+      }),
+    );
   });
 
   it("keeps an unrecognized launch throw on the generic cause and never reports success", async () => {

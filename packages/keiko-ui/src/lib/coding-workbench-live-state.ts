@@ -271,9 +271,8 @@ function shouldIgnoreOlderSnapshot(
 function streamForSnapshot(
   state: CodingWorkbenchRuntimeState,
   snapshot: CodingWorkbenchRuntimeSnapshot,
-  changedRun: boolean,
 ): CodingWorkbenchResourceState<CodingWorkbenchStreamProjection> {
-  return changedRun || !isStreamableSnapshot(snapshot) ? emptyResource() : state.stream;
+  return !isStreamableSnapshot(snapshot) ? emptyResource() : state.stream;
 }
 
 function acceptStreamProjection(
@@ -398,7 +397,7 @@ function acceptSnapshot(
   return projectReadiness({
     ...state,
     run: ready(snapshot),
-    stream: streamForSnapshot(state, snapshot, changedRun),
+    stream: changedRun ? emptyResource() : streamForSnapshot(state, snapshot),
     ...(changedRun ? { events: [] } : {}),
   });
 }

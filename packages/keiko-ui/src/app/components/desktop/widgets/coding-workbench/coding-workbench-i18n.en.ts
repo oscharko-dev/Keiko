@@ -124,7 +124,8 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
     "The run's task-workspace binding is no longer available. No diff is shown.",
   "codingWorkbench.changes.unavailable":
     "Changes are unavailable. The app session may need to be paired again; no stale diff is shown.",
-  "codingWorkbench.changes.unpaired": "No changes in this browser.",
+  "codingWorkbench.changes.unpaired":
+    "Browser window not paired — open Keiko through the launcher to read this run's task workspace. No diff is shown.",
   "codingWorkbench.changes.error": "Changes could not be refreshed. No stale diff is shown.",
   "codingWorkbench.changes.retry": "Refresh changes",
   "codingWorkbench.changes.asOf": "As of {head}",

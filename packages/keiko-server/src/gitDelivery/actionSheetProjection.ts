@@ -100,8 +100,11 @@ function effectivePolicyDecision(
   inputs: GitDeliveryResolvedInputs,
   packs: GitDeliveryTrustedPolicyPacks,
   capabilities: readonly GitDeliveryProviderCapability[],
+  currentBranchName: string | undefined,
 ): GitDeliveryPolicyDecision {
-  const targetBranchName = gitDeliveryPolicyTargetBranchName(inputs);
+  const targetBranchName = gitDeliveryPolicyTargetBranchName(inputs, {
+    commitBranchName: currentBranchName,
+  });
   const decision = evaluateGitPolicy(packs.orgPack, packs.repoPack, {
     actionKind: inputs.kind,
     targetBranchName,
@@ -329,6 +332,7 @@ export function buildActionSheetFromFacts(facts: BuildActionSheetFacts): GitDeli
     resolvedInputs,
     facts.policyPacks,
     facts.activeProviderCapabilities,
+    worktreeSnapshot.currentBranchName,
   );
   const expectedBlockers = collectExpectedBlockers(
     preflight.findings,

@@ -280,47 +280,9 @@ function ChangesList({
   readonly stagingOutcome: GitMutationOutcome | null;
   readonly stagingError: string | null;
 }): ReactNode {
-  if (statusError !== null) {
-    return (
-      <p className="rv-empty" role="alert" style={{ padding: 14 }}>
-        {statusError}
-      </p>
-    );
-  }
-  if (statusLoading && status === null) {
-    return (
-      <output className="rv-empty" style={LOADING_STATE_STYLE}>
-        Loading changes…
-      </output>
-    );
-  }
-  if (status === null) {
-    return (
-      <div style={EMPTY_STATE_STYLE} role="status" aria-live="polite">
-        <GitIcon size={20} />
-        <p style={SUBTLE_TEXT_STYLE}>Select a repository to view its changes.</p>
-      </div>
-    );
-  }
-  if (!status.available) {
-    return (
-      <div style={EMPTY_STATE_STYLE} role="status" aria-live="polite">
-        <GitIcon size={20} />
-        <p style={SUBTLE_TEXT_STYLE}>{status.message ?? "This folder is not a Git repository."}</p>
-      </div>
-    );
-  }
-  if (status.detached) {
-    return (
-      <div style={EMPTY_STATE_STYLE} role="alert" aria-live="assertive">
-        <BranchIcon size={20} />
-        <p style={SUBTLE_TEXT_STYLE}>
-          Detached HEAD. Switch to an existing branch or create a branch before committing or
-          syncing.
-        </p>
-      </div>
-    );
-  }
+  const unavailableState = changesListUnavailableState(status, statusLoading, statusError);
+  if (unavailableState !== null) return unavailableState;
+  if (status === null) return null;
 
   const hasChanges = !status.clean && status.changes.length > 0;
   const bulkActionsBlocked = stagingBusy || status.truncated;
@@ -432,6 +394,55 @@ function ChangesList({
       </div>
     </div>
   );
+}
+
+function changesListUnavailableState(
+  status: GitRepositoryStatusResponse | null,
+  statusLoading: boolean,
+  statusError: string | null,
+): ReactNode | null {
+  if (statusError !== null) {
+    return (
+      <p className="rv-empty" role="alert" style={{ padding: 14 }}>
+        {statusError}
+      </p>
+    );
+  }
+  if (statusLoading && status === null) {
+    return (
+      <output className="rv-empty" style={LOADING_STATE_STYLE}>
+        Loading changes…
+      </output>
+    );
+  }
+  if (status === null) {
+    return (
+      <div style={EMPTY_STATE_STYLE} role="status" aria-live="polite">
+        <GitIcon size={20} />
+        <p style={SUBTLE_TEXT_STYLE}>Select a repository to view its changes.</p>
+      </div>
+    );
+  }
+  if (!status.available) {
+    return (
+      <div style={EMPTY_STATE_STYLE} role="status" aria-live="polite">
+        <GitIcon size={20} />
+        <p style={SUBTLE_TEXT_STYLE}>{status.message ?? "This folder is not a Git repository."}</p>
+      </div>
+    );
+  }
+  if (status.detached) {
+    return (
+      <div style={EMPTY_STATE_STYLE} role="alert" aria-live="assertive">
+        <BranchIcon size={20} />
+        <p style={SUBTLE_TEXT_STYLE}>
+          Detached HEAD. Switch to an existing branch or create a branch before committing or
+          syncing.
+        </p>
+      </div>
+    );
+  }
+  return null;
 }
 
 const STAGE_INPUT_STYLE: CSSProperties = {

@@ -127,7 +127,8 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
     "Die Aufgaben-Workspace-Bindung des Laufs ist nicht mehr verfügbar. Es wird kein Diff angezeigt.",
   "codingWorkbench.changes.unavailable":
     "Änderungen sind nicht verfügbar. Die App-Sitzung muss möglicherweise erneut gekoppelt werden; es wird kein veraltetes Diff angezeigt.",
-  "codingWorkbench.changes.unpaired": "Keine Änderungen in diesem Browser.",
+  "codingWorkbench.changes.unpaired":
+    "Browserfenster nicht gekoppelt — öffnen Sie Keiko über den Launcher, um den Aufgaben-Workspace dieses Laufs zu lesen. Es wird kein Diff angezeigt.",
   "codingWorkbench.changes.error":
     "Änderungen konnten nicht aktualisiert werden. Es wird kein veraltetes Diff angezeigt.",
   "codingWorkbench.changes.retry": "Änderungen aktualisieren",

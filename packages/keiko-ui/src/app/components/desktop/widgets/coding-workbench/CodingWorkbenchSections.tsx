@@ -1,4 +1,4 @@
-import { useCallback, useRef, type ReactNode, type RefObject } from "react";
+import { useCallback, useId, useRef, type ReactNode, type RefObject } from "react";
 import type {
   CodingWorkbenchMode,
   CodingWorkbenchRuntimePreference,
@@ -389,11 +389,16 @@ function ReasoningControl({ input, efforts, t }: ReasoningControlProps): ReactNo
 
 function AuthorityControl({ input, t }: ControlProps): ReactNode {
   const confirmed = input.autonomyMode !== null;
+  const confirmedModeId = useId();
   return (
-    <div className="cmp-model mono" {...(confirmed ? { "data-mode": input.autonomyMode } : {})}>
+    <div
+      className={`cmp-model mono ${styles.authorityControl}`}
+      {...(confirmed ? { "data-mode": input.autonomyMode } : {})}
+    >
       <KeikoSelect
         value={input.requestedMode}
         ariaLabel={t("codingWorkbench.composer.authority.label")}
+        ariaDescribedBy={confirmed ? confirmedModeId : undefined}
         menuTitle={t("codingWorkbench.composer.authority.menu")}
         menuMinWidth={260}
         disabled={input.configurationLocked}
@@ -404,7 +409,11 @@ function AuthorityControl({ input, t }: ControlProps): ReactNode {
           if (isCodingWorkbenchMode(value)) input.onRequestedModeChange(value);
         }}
       />
-      <span className="sr-only">{input.autonomyLabel}</span>
+      {confirmed ? (
+        <span className="sr-only" id={confirmedModeId}>
+          {input.autonomyLabel}
+        </span>
+      ) : null}
     </div>
   );
 }
