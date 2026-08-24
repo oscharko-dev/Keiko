@@ -469,7 +469,6 @@ const ROUTE_APP_SESSION: AppSession = {
 function pairedRouteAppSessionChannel(): CodingAppSessionChannel {
   return {
     pair: () => ({ paired: false }),
-    ensureLocalSession: () => ({ issued: false }),
     snapshot: () => contentFreeCodingAppSessionChannelSnapshot(),
     rotate: () => ({ rotated: false }),
     signOut: () => undefined,

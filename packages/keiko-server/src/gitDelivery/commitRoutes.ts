@@ -41,6 +41,7 @@ import {
   type GitWorktreeSnapshot,
 } from "@oscharko-dev/keiko-tools";
 import { UNKNOWN_CORRELATION_ID } from "../correlation.js";
+import { emitServerDiagnostic, serverDiagnosticFromError } from "../diagnostics-log.js";
 import type { RouteContext, RouteDefinition, RouteResult } from "../routes.js";
 import type { UiHandlerDeps } from "../deps.js";
 import type { ServerLogSink } from "../observability/server-log.js";
@@ -154,97 +155,69 @@ export interface GitDeliveryCommitPreviewBody {
 
 interface DraftPathFacts {
   readonly labels: readonly string[];
-  readonly hasCodingRuntime: boolean;
-  readonly hasDocs: boolean;
-  readonly hasGitDraft: boolean;
-  readonly hasModelGateway: boolean;
+  readonly allConfig: boolean;
+  readonly allDocs: boolean;
+  readonly allTests: boolean;
   readonly hasTests: boolean;
-  readonly hasUi: boolean;
+  readonly scope: string | undefined;
 }
 
-interface DraftLabelRule {
-  readonly fragment: string;
-  readonly label: string;
-}
+type DraftPathCategory = "config" | "docs" | "source" | "test";
 
-interface DraftSubjectRule {
-  readonly preferredType: string;
-  readonly scope: string;
-  readonly phrase: string;
-  readonly matches: (facts: DraftPathFacts) => boolean;
-}
-
-const DRAFT_LABEL_RULES: readonly DraftLabelRule[] = [
-  { fragment: "git-commit-intent", label: "commit intent heuristics" },
-  { fragment: "commitRoutes", label: "commit preview routing" },
-  { fragment: "CommitComposer", label: "commit composer draft review" },
-  { fragment: "GitClientWindow", label: "Git client workspace" },
-  { fragment: "git-client-styles", label: "Git client layout styles" },
-  { fragment: "coding-workbench-runtime", label: "coding workbench runtime API" },
-  { fragment: "keiko-model-gateway/src/config", label: "model gateway configuration" },
-  { fragment: "keiko-contracts/src/gateway", label: "gateway contracts" },
-  { fragment: ".test.", label: "related test coverage" },
-];
-
-const DRAFT_SUBJECT_RULES: readonly DraftSubjectRule[] = [
-  {
-    preferredType: "feat",
-    scope: "coding",
-    phrase: "align runtime model settings",
-    matches: (facts): boolean => facts.hasCodingRuntime && facts.hasModelGateway,
-  },
-  {
-    preferredType: "feat",
-    scope: "coding",
-    phrase: "update coding workbench runtime",
-    matches: (facts): boolean => facts.hasCodingRuntime,
-  },
-  {
-    preferredType: "feat",
-    scope: "models",
-    phrase: "update model gateway configuration",
-    matches: (facts): boolean => facts.hasModelGateway,
-  },
-  {
-    preferredType: "fix",
-    scope: "git",
-    phrase: "improve git commit draft workflow",
-    matches: (facts): boolean => facts.hasGitDraft,
-  },
-  {
-    preferredType: "fix",
-    scope: "ui",
-    phrase: "improve ui workflow",
-    matches: (facts): boolean => facts.hasUi,
-  },
-  {
-    preferredType: "docs",
-    scope: "docs",
-    phrase: "update documentation",
-    matches: (facts): boolean => facts.hasDocs,
-  },
-];
+const TEST_PATH_PATTERN = /(?:^|\/)(?:__tests__\/|[^/]+\.(?:spec|test)\.[^/]+$)/iu;
+const DOC_PATH_PATTERN = /\.(?:md|mdx|rst|txt)$/iu;
+const CONFIG_FILE_NAMES: ReadonlySet<string> = new Set([
+  "dockerfile",
+  "makefile",
+  "package-lock.json",
+  "package.json",
+]);
+const CONFIG_FILE_EXTENSIONS: ReadonlySet<string> = new Set(["toml", "yaml", "yml"]);
+const DRAFT_SCOPE_CONTAINERS: ReadonlySet<string> = new Set(["apps", "packages", "services"]);
 
 function normalizeDraftPath(path: string): string {
   return path.replaceAll("\\", "/");
 }
 
-function hasPathFragment(paths: readonly string[], fragment: string): boolean {
-  return paths.some((path): boolean => path.includes(fragment));
+function isConfigPath(path: string): boolean {
+  const fileName = path.split("/").at(-1)?.toLowerCase() ?? "";
+  if (CONFIG_FILE_NAMES.has(fileName)) return true;
+  if (fileName === "tsconfig.json") return true;
+  if (fileName.startsWith("tsconfig.") && fileName.endsWith(".json")) return true;
+  const segments = fileName.split(".");
+  const extension = segments.at(-1);
+  if (extension !== undefined && CONFIG_FILE_EXTENSIONS.has(extension)) return true;
+  return segments.length >= 3 && segments.at(-2) === "config";
 }
 
-function fallbackDraftLabel(path: string): string {
-  if (path.startsWith("docs/")) return "documentation";
-  if (path.includes("packages/keiko-ui/")) return "UI files";
-  if (path.includes("packages/keiko-server/")) return "server routes";
-  if (path.includes("packages/keiko-contracts/")) return "shared contracts";
-  const fileName = path.split("/").at(-1) ?? "selected files";
-  return fileName.replace(/\.[^.]+$/, "").replace(/([a-z])([A-Z])/g, "$1 $2");
+function draftPathCategory(path: string): DraftPathCategory {
+  if (TEST_PATH_PATTERN.test(path)) return "test";
+  if (path.startsWith("docs/") || DOC_PATH_PATTERN.test(path)) return "docs";
+  if (isConfigPath(path)) return "config";
+  return "source";
+}
+
+function readableDraftToken(value: string): string {
+  const token = value
+    .replace(/\.(?:spec|test)$/iu, "")
+    .replace(/([a-z0-9])([A-Z])/gu, "$1 $2")
+    .replace(/[^A-Za-z0-9]+/gu, " ")
+    .trim()
+    .toLowerCase()
+    .slice(0, 48);
+  return token.length > 1 ? token : "";
 }
 
 function labelForDraftPath(path: string): string {
-  const match = DRAFT_LABEL_RULES.find((rule): boolean => path.includes(rule.fragment));
-  return match?.label ?? fallbackDraftLabel(path);
+  const category = draftPathCategory(path);
+  if (category === "docs") return "documentation";
+  if (category === "test") return "test coverage";
+  if (category === "config") return "configuration";
+  const segments = path.split("/");
+  const fileName = segments.at(-1) ?? "";
+  const stem = fileName.replace(/\.[^.]+$/u, "");
+  const candidate = stem === "index" ? (segments.at(-2) ?? stem) : stem;
+  return readableDraftToken(candidate) || "selected files";
 }
 
 function uniqueLimitedLabels(paths: readonly string[]): readonly string[] {
@@ -260,17 +233,50 @@ function uniqueLimitedLabels(paths: readonly string[]): readonly string[] {
   return labels;
 }
 
+function draftScopeCandidate(segments: readonly string[]): string | undefined {
+  const containerIndex = segments.findIndex((segment) => DRAFT_SCOPE_CONTAINERS.has(segment));
+  if (containerIndex >= 0) {
+    const packageSegment = segments[containerIndex + 1];
+    return packageSegment?.startsWith("@") ? segments[containerIndex + 2] : packageSegment;
+  }
+  return segments.length > 1 ? segments[0] : undefined;
+}
+
+function trimHyphens(value: string): string {
+  let start = 0;
+  let end = value.length;
+  while (value[start] === "-") start += 1;
+  while (end > start && value[end - 1] === "-") end -= 1;
+  return value.slice(start, end);
+}
+
+function draftScope(paths: readonly string[]): string | undefined {
+  const candidates = paths.map((path): string | undefined => {
+    const segments = path.split("/");
+    const raw = draftScopeCandidate(segments);
+    if (raw === undefined) return undefined;
+    const normalized = raw
+      .toLowerCase()
+      .replace(/^keiko-/u, "")
+      .replace(/[^a-z0-9-]+/gu, "-");
+    return trimHyphens(normalized).slice(0, 32) || undefined;
+  });
+  const first = candidates[0];
+  return first !== undefined && candidates.every((candidate) => candidate === first)
+    ? first
+    : undefined;
+}
+
 function collectDraftPathFacts(stagedPaths: readonly string[]): DraftPathFacts {
   const paths = stagedPaths.map(normalizeDraftPath);
+  const categories = paths.map(draftPathCategory);
   return {
     labels: uniqueLimitedLabels(paths),
-    hasCodingRuntime: hasPathFragment(paths, "coding-workbench-runtime"),
-    hasDocs: paths.some((path): boolean => path.startsWith("docs/")),
-    hasGitDraft:
-      hasPathFragment(paths, "git-commit-intent") || hasPathFragment(paths, "git-client"),
-    hasModelGateway: hasPathFragment(paths, "keiko-model-gateway/"),
-    hasTests: hasPathFragment(paths, ".test."),
-    hasUi: hasPathFragment(paths, "packages/keiko-ui/"),
+    allConfig: categories.every((category) => category === "config"),
+    allDocs: categories.every((category) => category === "docs"),
+    allTests: categories.every((category) => category === "test"),
+    hasTests: categories.includes("test"),
+    scope: draftScope(paths),
   };
 }
 
@@ -282,17 +288,10 @@ function humanList(labels: readonly string[]): string {
   return `${head}, and ${labels.at(-1) ?? "selected changes"}`;
 }
 
-function fallbackSubjectRule(): DraftSubjectRule {
-  return {
-    preferredType: "chore",
-    scope: "workspace",
-    phrase: "align staged repository changes",
-    matches: (): boolean => true,
-  };
-}
-
-function selectDraftSubjectRule(facts: DraftPathFacts): DraftSubjectRule {
-  return DRAFT_SUBJECT_RULES.find((rule): boolean => rule.matches(facts)) ?? fallbackSubjectRule();
+function preferredDraftType(facts: DraftPathFacts): string {
+  if (facts.allDocs) return "docs";
+  if (facts.allTests) return "test";
+  return "chore";
 }
 
 function allowedDraftType(
@@ -321,32 +320,37 @@ function capitalizeDraftSubject(phrase: string): string {
   return `${first.toUpperCase()}${phrase.slice(1)}`;
 }
 
+function draftSubjectPhrase(facts: DraftPathFacts): string {
+  if (facts.allDocs) return "update documentation";
+  if (facts.allTests) return "update test coverage";
+  if (facts.allConfig) return "update configuration";
+  if (facts.labels.length > 2)
+    return `update ${facts.labels[0] ?? "selected files"} and related changes`;
+  return `update ${humanList(facts.labels)}`;
+}
+
 function buildDraftSubject(
-  rule: DraftSubjectRule,
+  facts: DraftPathFacts,
   intent: GitCommitIntentAnalysis,
   policy: GitCommitMessagePolicy,
 ): string | undefined {
-  const type = allowedDraftType(rule.preferredType, intent, policy);
-  if (type === undefined) return capitalizeDraftSubject(rule.phrase);
-  const scoped = `${type}(${rule.scope}): ${rule.phrase}`;
-  if (scoped.length <= policy.subjectMaxLength) return scoped;
-  const unscoped = `${type}: ${rule.phrase}`;
-  return unscoped.length <= policy.subjectMaxLength ? unscoped : undefined;
+  const phrase = draftSubjectPhrase(facts);
+  const type = allowedDraftType(preferredDraftType(facts), intent, policy);
+  if (type === undefined) {
+    const plain = capitalizeDraftSubject(phrase);
+    return plain.length <= policy.subjectMaxLength ? plain : undefined;
+  }
+  const candidates = [
+    ...(facts.scope === undefined ? [] : [`${type}(${facts.scope}): ${phrase}`]),
+    `${type}: ${phrase}`,
+    `${type}: update staged changes`,
+  ];
+  return candidates.find((candidate) => candidate.length <= policy.subjectMaxLength);
 }
 
-function draftBodyVerb(rule: DraftSubjectRule): string {
-  if (rule.phrase.startsWith("improve")) return "Improve";
-  if (rule.phrase.startsWith("align")) return "Align";
-  return "Update";
-}
-
-function buildSpecificDraftBody(
-  facts: DraftPathFacts,
-  rule: DraftSubjectRule,
-  summary: GitCommitChangeSummary,
-): string {
+function buildSpecificDraftBody(facts: DraftPathFacts, summary: GitCommitChangeSummary): string {
   const lines = [
-    `${draftBodyVerb(rule)} the staged ${humanList(facts.labels)}.`,
+    `Update the staged ${humanList(facts.labels)}.`,
     "Keep the commit limited to the selected staged files.",
   ];
   if (summary.touchesTests || facts.hasTests) {
@@ -361,12 +365,11 @@ function suggestSpecificCommitMessage(
   intent: GitCommitIntentAnalysis,
   policy: GitCommitMessagePolicy,
 ): string | undefined {
-  if (summary.stagedFileCount === 0) return undefined;
+  if (summary.stagedFileCount === 0 || stagedPaths.length === 0) return undefined;
   const facts = collectDraftPathFacts(stagedPaths);
-  const rule = selectDraftSubjectRule(facts);
-  const subject = buildDraftSubject(rule, intent, policy);
+  const subject = buildDraftSubject(facts, intent, policy);
   if (subject === undefined) return suggestGitCommitMessage(intent, policy, summary);
-  const message = `${subject}\n\n${buildSpecificDraftBody(facts, rule, summary)}`;
+  const message = `${subject}\n\n${buildSpecificDraftBody(facts, summary)}`;
   return validateGitCommitMessage(message, policy).ok
     ? message
     : suggestGitCommitMessage(intent, policy, summary);
@@ -426,6 +429,74 @@ function logCommitPreview(
   });
 }
 
+type CommitFailureDetails = Omit<Parameters<typeof serverDiagnosticFromError>[0], "operation">;
+
+function commitFailureDetails(correlationId: string, error: unknown): CommitFailureDetails {
+  return {
+    correlationId,
+    source: "git-delivery.commit-routes",
+    error,
+    summary: "server-operation-failed",
+    redact: (): string => "server-operation-failed",
+  } as const;
+}
+
+function reportBranchProtectionFailure(
+  deps: Pick<UiHandlerDeps, "diagnostics">,
+  correlationId: string,
+  error: unknown,
+): void {
+  emitServerDiagnostic(
+    deps.diagnostics,
+    serverDiagnosticFromError({
+      ...commitFailureDetails(correlationId, error),
+      operation: "git.commit.preview.branch-protection",
+    }),
+  );
+}
+
+function reportPreviewWorktreeFailure(
+  deps: Pick<UiHandlerDeps, "diagnostics">,
+  correlationId: string,
+  error: unknown,
+): void {
+  emitServerDiagnostic(
+    deps.diagnostics,
+    serverDiagnosticFromError({
+      ...commitFailureDetails(correlationId, error),
+      operation: "git.commit.preview.worktree",
+    }),
+  );
+}
+
+function reportConflictScanFailure(
+  deps: Pick<UiHandlerDeps, "diagnostics">,
+  correlationId: string,
+  error: unknown,
+): void {
+  emitServerDiagnostic(
+    deps.diagnostics,
+    serverDiagnosticFromError({
+      ...commitFailureDetails(correlationId, error),
+      operation: "git.commit.execute.conflict-scan",
+    }),
+  );
+}
+
+function reportCommitMutationFailure(
+  deps: Pick<UiHandlerDeps, "diagnostics">,
+  correlationId: string,
+  error: unknown,
+): void {
+  emitServerDiagnostic(
+    deps.diagnostics,
+    serverDiagnosticFromError({
+      ...commitFailureDetails(correlationId, error),
+      operation: "git.commit.execute.mutation",
+    }),
+  );
+}
+
 function preferredRemoteAlias(snapshot: GitWorktreeSnapshot): string | undefined {
   return snapshot.remoteAliases.includes("origin") ? "origin" : snapshot.remoteAliases[0];
 }
@@ -434,6 +505,7 @@ async function commitSignatureRequirement(
   workspace: WorkspaceInfo,
   snapshot: GitWorktreeSnapshot,
   seams: GitDeliveryExecutionSeams,
+  reportFailure: (error: unknown) => void,
 ): Promise<GitDeliverySignatureRequirement> {
   const branchName = snapshot.currentBranchName;
   const remoteAlias = preferredRemoteAlias(snapshot);
@@ -441,7 +513,8 @@ async function commitSignatureRequirement(
   const reader = seams.branchProtectionReader ?? readTrustedGitDeliveryBranchProtection;
   try {
     return signatureRequirementOf(await reader(workspace, remoteAlias, branchName));
-  } catch {
+  } catch (error) {
+    reportFailure(error);
     return "unavailable";
   }
 }
@@ -449,6 +522,25 @@ async function commitSignatureRequirement(
 function signatureFinding(requirement: GitDeliverySignatureRequirement): readonly string[] {
   if (requirement === "required") return ["signed-commits-required"];
   return requirement === "unavailable" ? ["branch-protection-unavailable"] : [];
+}
+
+function previewEffectivePolicy(
+  snapshot: GitWorktreeSnapshot,
+  commitInputs: GitDeliveryResolvedInputs,
+  seams: GitDeliveryExecutionSeams,
+): ReturnType<typeof evaluateGitDeliveryEffectivePolicy> {
+  const packs = seams.policyPacks ?? { repoPack: KEIKO_DEFAULT_LOCAL_GIT_POLICY_PACK };
+  const targetBranchName = snapshot.currentBranchName;
+  const decision = evaluateGitPolicy(packs.orgPack, packs.repoPack, {
+    actionKind: "commit",
+    ...(targetBranchName === undefined ? {} : { targetBranchName }),
+    activeProviderCapabilities: [],
+  });
+  return evaluateGitDeliveryEffectivePolicy(decision, {
+    riskClass: gitDeliveryRiskClassForInputs(commitInputs),
+    targetBranchName,
+    activeProviderCapabilities: [],
+  });
 }
 
 // Reads the live worktree and assembles the read-only preview. May throw if the worktree cannot be
@@ -459,6 +551,7 @@ async function computePreview(
   policy: GitCommitMessagePolicy,
   seams: GitDeliveryExecutionSeams,
   now: () => number,
+  reportFailure: (error: unknown) => void,
 ): Promise<GitDeliveryCommitPreviewBody> {
   const snapshot = await readWorktreeSnapshotFor(workspace, seams, now);
   const stagedPaths = await readStagedPathsFor(workspace, seams, now);
@@ -466,23 +559,20 @@ async function computePreview(
   const commitInputs: GitDeliveryResolvedInputs = {
     kind: "commit",
     messageByteLength: UTF8.encode(messageDraft).length,
-    stagedPathCount: snapshot.stagedFileCount,
+    // The path read is the exact selection summarized and drafted below. Using the independently
+    // sampled snapshot count here could make policy and preflight describe a different selection.
+    stagedPathCount: stagedPaths.length,
     allowEmptyCommit: false,
   };
-  const preflight = evaluateGitPreflight(commitInputs, snapshot);
-  const signatureRequirement = await commitSignatureRequirement(workspace, snapshot, seams);
-  const packs = seams.policyPacks ?? { repoPack: KEIKO_DEFAULT_LOCAL_GIT_POLICY_PACK };
-  const targetBranchName = snapshot.currentBranchName;
-  const decision = evaluateGitPolicy(packs.orgPack, packs.repoPack, {
-    actionKind: "commit",
-    ...(targetBranchName !== undefined ? { targetBranchName } : {}),
-    activeProviderCapabilities: [],
-  });
-  const effectivePolicy = evaluateGitDeliveryEffectivePolicy(decision, {
-    riskClass: gitDeliveryRiskClassForInputs(commitInputs),
-    targetBranchName,
-    activeProviderCapabilities: [],
-  });
+  const previewSnapshot = { ...snapshot, stagedFileCount: stagedPaths.length };
+  const preflight = evaluateGitPreflight(commitInputs, previewSnapshot);
+  const signatureRequirement = await commitSignatureRequirement(
+    workspace,
+    snapshot,
+    seams,
+    reportFailure,
+  );
+  const effectivePolicy = previewEffectivePolicy(snapshot, commitInputs, seams);
   return buildPreviewBody({
     summary,
     stagedPaths,
@@ -506,6 +596,7 @@ export const createHandleCommitPreview = (
   const activityLog = options.activityLog ?? processServerLogSink();
   const now = (): number => (seams.now ?? Date.now)();
   return async (ctx, deps): Promise<RouteResult> => {
+    const correlationId = ctx.correlationId ?? UNKNOWN_CORRELATION_ID;
     const read = await readParsed(ctx.req);
     if (!read.ok) return read.result;
     const pre = preValidate(read.value, PREVIEW_KEYS);
@@ -520,11 +611,14 @@ export const createHandleCommitPreview = (
     );
     let body: GitDeliveryCommitPreviewBody;
     try {
-      body = await computePreview(workspace, messageDraft, policy, seams, now);
-    } catch {
+      body = await computePreview(workspace, messageDraft, policy, seams, now, (error) => {
+        reportBranchProtectionFailure(deps, correlationId, error);
+      });
+    } catch (error) {
+      reportPreviewWorktreeFailure(deps, correlationId, error);
       return errResult(409, "GIT_DELIVERY_COMMIT_WORKTREE_UNAVAILABLE");
     }
-    logCommitPreview(activityLog, ctx.correlationId, body);
+    logCommitPreview(activityLog, correlationId, body);
     return { status: 200, body: deps.redactor(body) };
   };
 };
@@ -559,6 +653,35 @@ function validateExecute(obj: Record<string, unknown>): ExecuteRequest | undefin
   };
 }
 
+interface PreparedCommitExecution {
+  readonly request: ExecuteRequest;
+  readonly workspace: WorkspaceInfo;
+  readonly policy: GitCommitMessagePolicy;
+}
+
+type CommitExecutionPreparation =
+  | { readonly ok: true; readonly value: PreparedCommitExecution }
+  | { readonly ok: false; readonly result: RouteResult };
+
+async function prepareCommitExecution(
+  ctx: RouteContext,
+  deps: UiHandlerDeps,
+  messagePolicy: GitCommitMessagePolicy | undefined,
+): Promise<CommitExecutionPreparation> {
+  const read = await readParsed(ctx.req);
+  if (!read.ok) return read;
+  const pre = preValidate(read.value, EXECUTE_KEYS);
+  if (!pre.ok) return pre;
+  const request = validateExecute(pre.obj);
+  if (request === undefined)
+    return { ok: false, result: errResult(400, "GIT_DELIVERY_COMMIT_BAD_REQUEST") };
+  const workspace = resolveProjectWorkspace(deps, request.projectId);
+  if (workspace === undefined)
+    return { ok: false, result: errResult(404, "GIT_DELIVERY_COMMIT_UNKNOWN_PROJECT") };
+  const policy = await resolveGovernedCommitMessagePolicy(deps, workspace.root, messagePolicy);
+  return { ok: true, value: { request, workspace, policy } };
+}
+
 // Message-policy gate (AC2): a policy-violating message blocks the commit BEFORE the kernel runs.
 // Returns undefined when the message is clean (proceed).
 function messagePolicyBlockResult(
@@ -590,6 +713,7 @@ async function conflictMarkerBlockResult(
   workspace: WorkspaceInfo,
   seams: GitDeliveryExecutionSeams,
   deps: Pick<UiHandlerDeps, "redactor">,
+  reportFailure: (error: unknown) => void,
 ): Promise<RouteResult | undefined> {
   let conflictMarkerFileCount: number;
   try {
@@ -598,7 +722,8 @@ async function conflictMarkerBlockResult(
       seams,
       seams.now ?? Date.now,
     );
-  } catch {
+  } catch (error) {
+    reportFailure(error);
     return errResult(409, "GIT_DELIVERY_COMMIT_WORKTREE_UNAVAILABLE");
   }
   if (conflictMarkerFileCount === 0) return undefined;
@@ -619,25 +744,17 @@ export const createHandleCommitExecute = (
 ): ((ctx: RouteContext, deps: UiHandlerDeps) => Promise<RouteResult>) => {
   const seams = options.execution ?? {};
   return async (ctx, deps): Promise<RouteResult> => {
-    const read = await readParsed(ctx.req);
-    if (!read.ok) return read.result;
-    const pre = preValidate(read.value, EXECUTE_KEYS);
-    if (!pre.ok) return pre.result;
-    const req = validateExecute(pre.obj);
-    if (req === undefined) return errResult(400, "GIT_DELIVERY_COMMIT_BAD_REQUEST");
-    const workspace = resolveProjectWorkspace(deps, req.projectId);
-    if (workspace === undefined) return errResult(404, "GIT_DELIVERY_COMMIT_UNKNOWN_PROJECT");
-
-    const policy = await resolveGovernedCommitMessagePolicy(
-      deps,
-      workspace.root,
-      options.messagePolicy,
-    );
+    const correlationId = ctx.correlationId ?? UNKNOWN_CORRELATION_ID;
+    const prepared = await prepareCommitExecution(ctx, deps, options.messagePolicy);
+    if (!prepared.ok) return prepared.result;
+    const { request: req, workspace, policy } = prepared.value;
 
     const messageBlock = messagePolicyBlockResult(req.message, policy, deps);
     if (messageBlock !== undefined) return messageBlock;
 
-    const conflictBlock = await conflictMarkerBlockResult(workspace, seams, deps);
+    const conflictBlock = await conflictMarkerBlockResult(workspace, seams, deps, (error) => {
+      reportConflictScanFailure(deps, correlationId, error);
+    });
     if (conflictBlock !== undefined) return conflictBlock;
 
     const command = { kind: "commit" as const, message: req.message, allowEmpty: req.allowEmpty };
@@ -655,9 +772,10 @@ export const createHandleCommitExecute = (
         workspace,
         deps,
         seams,
-        ctx.correlationId,
+        correlationId,
       );
-    } catch {
+    } catch (error) {
+      reportCommitMutationFailure(deps, correlationId, error);
       return errResult(409, "GIT_DELIVERY_COMMIT_WORKTREE_UNAVAILABLE");
     }
     return { status: 200, body: deps.redactor(gitDeliveryMutationResponse(result)) };

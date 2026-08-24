@@ -803,7 +803,7 @@
     {
       "op": "git.commit.preview.completed",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/gitDelivery/commitRoutes.ts:416",
+      "site": "packages/keiko-server/src/gitDelivery/commitRoutes.ts:419",
       "package": "keiko-server"
     },
     {
@@ -927,6 +927,12 @@
       "package": "keiko-server"
     },
     {
+      "op": "project.workspace.reconnect",
+      "category": "setup",
+      "site": "packages/keiko-server/src/store-handlers.ts:485",
+      "package": "keiko-server"
+    },
+    {
       "op": "request",
       "category": "http",
       "site": "packages/keiko-server/src/server.ts:480",
@@ -959,7 +965,7 @@
     {
       "op": "store.opened",
       "category": "setup",
-      "site": "packages/keiko-server/src/store/db.ts:928",
+      "site": "packages/keiko-server/src/store/db.ts:929",
       "package": "keiko-server"
     },
     {

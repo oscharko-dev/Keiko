@@ -3,7 +3,15 @@
 // real createUiServer. Every test injects an in-memory UiStore so the FS is never touched.
 
 import { EventEmitter } from "node:events";
-import { mkdtempSync, mkdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import {
+  mkdtempSync,
+  mkdirSync,
+  realpathSync,
+  renameSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import type { IncomingMessage, Server } from "node:http";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -728,25 +736,52 @@ describe("PATCH /api/projects", () => {
 
   it("revalidates an existing project's current workspace membership with an empty patch", async () => {
     store.createProject(projDir, "existing");
-
-    const res = await fetch(url(`/api/projects?path=${encodeURIComponent(projDir)}`), {
-      method: "PATCH",
-      headers: PATCH_HEADERS,
-      body: "{}",
-    });
-
-    expect(res.status).toBe(200);
-    const body = (await res.json()) as {
-      project: { path: string; available: boolean; workspaceAvailable: boolean };
+    const oldRoot = join(tmp, "replaced-project-root");
+    renameSync(projDir, oldRoot);
+    mkdirSync(projDir);
+    const before = await fetch(url("/api/projects"));
+    const beforeBody = (await before.json()) as {
+      projects: { path: string; workspaceAvailable: boolean }[];
     };
-    expect(body.project).toMatchObject({
-      path: projDir,
-      available: true,
-      workspaceAvailable: true,
-    });
+    expect(beforeBody.projects).toContainEqual(
+      expect.objectContaining({ path: projDir, workspaceAvailable: false }),
+    );
+    const sink = createBufferedServerLogSink();
+    setServerLogger(createServerLogger({ sink, level: "info" }));
+
+    try {
+      const res = await fetch(url(`/api/projects?path=${encodeURIComponent(projDir)}`), {
+        method: "PATCH",
+        headers: PATCH_HEADERS,
+        body: "{}",
+      });
+
+      expect(res.status).toBe(200);
+      const body = (await res.json()) as {
+        project: { path: string; available: boolean; workspaceAvailable: boolean };
+      };
+      expect(body.project).toMatchObject({
+        path: projDir,
+        available: true,
+        workspaceAvailable: true,
+      });
+      expect(sink.events).toContainEqual(
+        expect.objectContaining({
+          category: "setup",
+          op: "project.workspace.reconnect",
+          status: 200,
+          extra: { outcome: "available" },
+        }),
+      );
+      expect(JSON.stringify(sink.events)).not.toContain(projDir);
+    } finally {
+      resetServerLogger();
+    }
   });
 
   it("does not register an unknown directory when reconnecting with an empty patch", async () => {
+    const diagnostic = vi.fn();
+    await restartWithDeps({ diagnostics: { record: diagnostic } });
     const res = await fetch(url(`/api/projects?path=${encodeURIComponent(projDir)}`), {
       method: "PATCH",
       headers: PATCH_HEADERS,
@@ -758,6 +793,13 @@ describe("PATCH /api/projects", () => {
     expect(body.error.code).toBe("NOT_FOUND");
     expect(store.listProjects()).toHaveLength(0);
     expect(store.listWorkspaceManifestRecords()).toHaveLength(0);
+    expect(diagnostic).toHaveBeenCalledWith(
+      expect.objectContaining({
+        operation: "project.workspace.reconnect",
+        source: "store-handlers",
+      }),
+    );
+    expect(JSON.stringify(diagnostic.mock.calls)).not.toContain(projDir);
   });
 
   it("returns 404 for unknown project", async () => {

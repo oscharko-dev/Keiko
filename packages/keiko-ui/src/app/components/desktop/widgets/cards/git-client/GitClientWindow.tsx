@@ -21,6 +21,7 @@ import type {
   SetStateAction,
 } from "react";
 import type { GitBranchListEntry } from "@/lib/api";
+import { reportClientDiagnostic } from "@/lib/client-diagnostics";
 import { useTranslate, type I18nTranslate } from "@/lib/i18n";
 import {
   useOptionalWidgetTranslate,
@@ -89,6 +90,62 @@ const RIGHT_PANE_MIN_WIDTH = 360;
 const SIDEBAR_RESIZE_STEP = 24;
 const ChevronRightIcon = Icons.chevronR;
 
+interface RepositoryCommitDraft {
+  readonly repositoryPath: string | null;
+  readonly summary: string;
+  readonly body: string;
+}
+
+interface RepositoryCommitDraftController {
+  readonly summary: string;
+  readonly body: string;
+  readonly setSummary: (value: string) => void;
+  readonly setBody: (value: string) => void;
+  readonly clear: () => void;
+}
+
+function emptyRepositoryCommitDraft(repositoryPath: string | null): RepositoryCommitDraft {
+  return { repositoryPath, summary: "", body: "" };
+}
+
+function useRepositoryCommitDraft(repositoryPath: string | null): RepositoryCommitDraftController {
+  const [draft, setDraft] = useState<RepositoryCommitDraft>(() =>
+    emptyRepositoryCommitDraft(repositoryPath),
+  );
+  const active =
+    draft.repositoryPath === repositoryPath ? draft : emptyRepositoryCommitDraft(repositoryPath);
+  useEffect(() => {
+    if (draft.repositoryPath === repositoryPath) return;
+    if (draft.summary.trim() !== "" || draft.body.trim() !== "") {
+      reportClientDiagnostic("git-client: commit draft cleared (repository-selection-changed)");
+    }
+    setDraft(emptyRepositoryCommitDraft(repositoryPath));
+  }, [draft, repositoryPath]);
+  const setSummary = useCallback(
+    (summary: string): void =>
+      setDraft((current) => ({
+        repositoryPath,
+        summary,
+        body: current.repositoryPath === repositoryPath ? current.body : "",
+      })),
+    [repositoryPath],
+  );
+  const setBody = useCallback(
+    (body: string): void =>
+      setDraft((current) => ({
+        repositoryPath,
+        summary: current.repositoryPath === repositoryPath ? current.summary : "",
+        body,
+      })),
+    [repositoryPath],
+  );
+  const clear = useCallback(
+    (): void => setDraft(emptyRepositoryCommitDraft(repositoryPath)),
+    [repositoryPath],
+  );
+  return { summary: active.summary, body: active.body, setSummary, setBody, clear };
+}
+
 export interface GitClientWindowProps {
   /** Repository path to preselect when opened from Files, Editor, or Runtime (resolveBoundRoot). */
   readonly projectId?: string | undefined;
@@ -150,20 +207,39 @@ function inferOwnerAndRepo(remotes: readonly GitRemoteSummary[]): string | undef
   return undefined;
 }
 
+const INTEGRATION_BRANCH_PREFERENCE = ["dev", "develop", "main", "master"] as const;
+
+function distinctUpstreamBranch(
+  currentBranch: string | undefined,
+  upstreamBranch: string | undefined,
+): string | undefined {
+  if (currentBranch === undefined || upstreamBranch === undefined) return undefined;
+  return upstreamBranch === currentBranch ? undefined : upstreamBranch;
+}
+
+function preferredIntegrationBranch(
+  currentBranch: string | undefined,
+  branches: readonly GitBranchListEntry[],
+): string | undefined {
+  const availableBranches = new Set(branches.map((branch) => branch.name));
+  return INTEGRATION_BRANCH_PREFERENCE.find(
+    (branch) => branch !== currentBranch && availableBranches.has(branch),
+  );
+}
+
 function inferBaseBranch(
   currentBranch: string | undefined,
   summary: GitRepositorySummary | null,
+  branches: readonly GitBranchListEntry[],
 ): string {
   const upstreamBranch = summary?.upstream?.branch;
-  if (
-    currentBranch !== undefined &&
-    upstreamBranch !== undefined &&
-    upstreamBranch !== currentBranch
-  ) {
-    return upstreamBranch;
-  }
-  if (currentBranch !== undefined && currentBranch !== "main") return "main";
-  return upstreamBranch ?? currentBranch ?? "main";
+  return (
+    distinctUpstreamBranch(currentBranch, upstreamBranch) ??
+    preferredIntegrationBranch(currentBranch, branches) ??
+    upstreamBranch ??
+    currentBranch ??
+    "main"
+  );
 }
 
 function useRightPaneFocus(
@@ -611,11 +687,17 @@ function bodyWidthForResize(bodyRef: RefObject<HTMLDivElement | null>): number {
   return width > 0 ? width : SIDEBAR_MAX_WIDTH + RIGHT_PANE_MIN_WIDTH;
 }
 
-function CommitWorkspacePane({ children }: { readonly children: ReactNode }): ReactNode {
+function CommitWorkspacePane({
+  children,
+  label,
+}: {
+  readonly children: ReactNode;
+  readonly label: string;
+}): ReactNode {
   return (
     <section
       style={COMMIT_WORKSPACE_PANE_STYLE}
-      aria-label="Diff"
+      aria-label={label}
       // eslint-disable-next-line jsx-a11y/no-noninteractive-tabindex -- The right pane remains a named keyboard-scrollable region while it hosts the commit workspace.
       tabIndex={0}
     >
@@ -733,8 +815,13 @@ export function GitClientWindow({
   const [syncError, setSyncError] = useState<string | null>(null);
   const [rightPaneMode, setRightPaneMode] = useState<RightPaneMode>("diff");
   const [rightPaneAnnouncement, setRightPaneAnnouncement] = useState("");
-  const [commitSummary, setCommitSummary] = useState("");
-  const [commitBody, setCommitBody] = useState("");
+  const {
+    summary: commitSummary,
+    body: commitBody,
+    setSummary: setCommitSummary,
+    setBody: setCommitBody,
+    clear: clearCommitDraft,
+  } = useRepositoryCommitDraft(selectedPath);
   const [sidebarWidth, setSidebarWidth] = useState(SIDEBAR_DEFAULT_WIDTH);
   const syncSeqRef = useRef(0);
   const historyRequestSequenceRef = useRef(0);
@@ -1082,10 +1169,9 @@ export function GitClientWindow({
   useEffect(() => {
     if (commitOutcome?.status === "succeeded") {
       setCommitNonce((n) => n + 1);
-      setCommitSummary("");
-      setCommitBody("");
+      clearCommitDraft();
     }
-  }, [commitOutcome]);
+  }, [clearCommitDraft, commitOutcome]);
 
   const branchOutcome = branchActions.flow.outcome;
   useEffect(() => {
@@ -1396,17 +1482,15 @@ export function GitClientWindow({
     setRightPaneMode("diff");
     setRightPaneAnnouncement(optionalT("gitClientWindow.panel.diffOpened"));
     window.requestAnimationFrame(() => {
-      // The diff pane's scroll region is a native <section> (#2721): its region role is
-      // implicit, so a [role="region"] attribute selector no longer matches it.
-      const diffRegion = diffPaneRef.current?.querySelector('section[aria-label="Diff"]');
-      if (diffRegion instanceof HTMLElement) diffRegion.focus();
+      const primaryRegion = diffPaneRef.current?.querySelector("section[aria-label]");
+      if (primaryRegion instanceof HTMLElement) primaryRegion.focus();
     });
   }, [optionalT]);
 
   const visibleStagingOutcome = staging.flow.outcome;
   const currentBranch = activeStatus?.branch ?? activeSummary?.branch;
   const inferredOwnerAndRepo = inferOwnerAndRepo(activeRemotes);
-  const inferredBaseBranch = inferBaseBranch(currentBranch, activeSummary);
+  const inferredBaseBranch = inferBaseBranch(currentBranch, activeSummary, activeBranches);
   const useCommitWorkspace = shouldUseCommitWorkspace(rightPaneMode, tab, selectedChangePath);
   const showBranchOutcome = shouldShowBranchOutcome(
     newBranchOpen,
@@ -1457,6 +1541,7 @@ export function GitClientWindow({
       preview={commit.preview}
       previewDraft={commit.previewDraft}
       previewError={commit.previewError}
+      previewRevision={statusRevision}
       layout={useCommitWorkspace ? "workspace" : "sidebar"}
       summaryValue={commitSummary}
       bodyValue={commitBody}
@@ -1579,10 +1664,12 @@ export function GitClientWindow({
               returnToDiff={returnToDiff}
               t={t}
               diffPane={
-                useCommitWorkspace ? (
-                  <CommitWorkspacePane>{commitComposer}</CommitWorkspacePane>
-                ) : (
-                  <div ref={diffPaneRef} style={{ minWidth: 0, minHeight: 0, display: "contents" }}>
+                <div ref={diffPaneRef} style={{ minWidth: 0, minHeight: 0, display: "contents" }}>
+                  {useCommitWorkspace ? (
+                    <CommitWorkspacePane label={optionalT("commitComposer.draft.title")}>
+                      {commitComposer}
+                    </CommitWorkspacePane>
+                  ) : (
                     <DiffPane
                       client={client}
                       repositoryRoot={selectedPath}
@@ -1592,8 +1679,8 @@ export function GitClientWindow({
                       onScopeChange={setDiffScope}
                       revision={statusRevision}
                     />
-                  </div>
-                )
+                  )}
+                </div>
               }
               pullRequestPane={
                 <GovernedPullRequestCard

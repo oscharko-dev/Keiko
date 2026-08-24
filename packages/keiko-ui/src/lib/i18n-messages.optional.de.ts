@@ -158,7 +158,7 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
   "gitClientWindow.history.commitDetailsAria": "Commit-Details",
   "gitClientWindow.panel.pullRequestOpened": "Pull-Request-Panel geöffnet.",
   "gitClientWindow.panel.mergeOpened": "Merge-Panel geöffnet.",
-  "gitClientWindow.panel.diffOpened": "Diff-Panel geöffnet.",
+  "gitClientWindow.panel.diffOpened": "Änderungsansicht geöffnet.",
   "gitClientWindow.sync.editorReconciliationFailed":
     "Der Pull wurde abgeschlossen, aber Editor-Puffer müssen wiederhergestellt werden. Prüfen Sie offene Dateien, bevor Sie fortfahren.",
   "chat.turn.failed": "Beitrag fehlgeschlagen",
@@ -343,7 +343,7 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
   "commitComposer.action.commit": "Commit",
   "commitComposer.action.commitTo": "In {branch} committen",
   "commitComposer.action.createBranchFirst": "Zuerst Branch erstellen",
-  "commitComposer.action.useDraft": "Commit-Entwurf prüfen",
+  "commitComposer.action.useDraft": "Commit-Entwurf übernehmen",
   "commitComposer.action.copyDraft": "Commit-Entwurf kopieren",
   "commitComposer.field.summary": "Zusammenfassung",
   "commitComposer.field.summaryPlaceholder": "Kurze Zusammenfassung der Änderung",

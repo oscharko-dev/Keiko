@@ -242,22 +242,24 @@ function normalizedCodingUseCase(value: string): string {
   return value.trim().toLowerCase().replace(/\s+/g, "-");
 }
 
+const CODING_WORKBENCH_USE_CASES: ReadonlySet<string> = new Set([
+  "code",
+  "code-review",
+  "coding",
+  "coding-workflow",
+  "local-coding-workflow",
+  "software-development",
+]);
+
 /** The single browser/server rule for models eligible to power the Coding Workbench. */
 export function isCodingWorkbenchModel(capability: ModelCapability): boolean {
   return (
     capability.kind === "chat" &&
     capability.toolCalling &&
     capability.workflowEligible &&
-    capability.preferredUseCases.some((value) => {
-      const normalized = normalizedCodingUseCase(value);
-      return (
-        normalized === "coding" ||
-        normalized === "code" ||
-        normalized === "software-development" ||
-        normalized === "code-review" ||
-        normalized.includes("coding")
-      );
-    })
+    capability.preferredUseCases.some((value) =>
+      CODING_WORKBENCH_USE_CASES.has(normalizedCodingUseCase(value)),
+    )
   );
 }
 

@@ -798,7 +798,10 @@ function readinessPorts(
       const normalized = normalizeOpenCodeSafeActivityHistory(rows);
       stageSafeActivity(normalized, safeActivity, input.safeActivity);
       const parsed = parseOpenCodeHistory(rows);
-      if (!parsed.ok) throw new Error("opencode-history-invalid");
+      if (!parsed.ok) {
+        recordHistoryParseFailure(input.diagnostics, run.runId, parsed.reason, rows);
+        throw new Error("opencode-history-invalid");
+      }
       return parsed.value;
     },
     takeSafeActivity: (
@@ -814,6 +817,108 @@ function readinessPorts(
     sessionEcho: (): Promise<string> => Promise.resolve(fixedSessionId ?? ""),
   };
 }
+
+function recordHistoryParseFailure(
+  diagnostics: ServerDiagnosticSink | undefined,
+  runId: string,
+  reason: "schema-invalid" | "event-unknown" | "frame-invalid" | "frame-oversized",
+  rows: readonly unknown[],
+): void {
+  const eventTypeDigest = firstUnknownHistoryEventTypeDigest(rows);
+  const eventShape = firstUnknownMessageShape(rows);
+  const eventDigestCode = eventTypeDigest === undefined ? "" : `:eventSha256=${eventTypeDigest}`;
+  const eventShapeCode = eventShape === undefined ? "" : `:${eventShape}`;
+  emitServerDiagnostic(diagnostics, {
+    correlationId: runId,
+    timestamp: new Date().toISOString(),
+    operation: "coding-runtime.handshake",
+    source: "opencode.history",
+    errorClass: "OpenCodeHistoryFailure",
+    message: "runtime-handshake-failed",
+    code: `stage=sse-history-reconciliation:reason=${reason}${eventDigestCode}${eventShapeCode}`,
+  });
+}
+
+function structuralNameDigest(value: string): string {
+  return createHash("sha256").update(value, "utf8").digest("hex").slice(0, 16);
+}
+
+function firstUnknownHistoryEventTypeDigest(rows: readonly unknown[]): string | undefined {
+  for (const row of rows) {
+    const parsed = parseOpenCodeHistory([row]);
+    if (parsed.ok || parsed.reason !== "event-unknown") continue;
+    if (typeof row !== "object" || row === null || Array.isArray(row)) return undefined;
+    const type = (row as Record<string, unknown>).type;
+    return typeof type === "string" ? structuralNameDigest(type) : undefined;
+  }
+  return undefined;
+}
+
+function firstUnknownMessageShape(rows: readonly unknown[]): string | undefined {
+  for (const row of rows) {
+    if (parseOpenCodeHistory([row]).ok) continue;
+    const message = historyMessageInfo(row);
+    if (message !== undefined) return unknownMessageShape(message);
+  }
+  return undefined;
+}
+
+function recordValue(value: unknown): Record<string, unknown> | undefined {
+  return typeof value === "object" && value !== null && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : undefined;
+}
+
+function historyMessageInfo(row: unknown): Record<string, unknown> | undefined {
+  const event = recordValue(row);
+  if (event?.type !== "message.updated.1") return undefined;
+  return recordValue(recordValue(event.data)?.info);
+}
+
+type HistoryMessageRole = "assistant" | "unknown" | "user";
+
+function historyMessageRole(message: Readonly<Record<string, unknown>>): HistoryMessageRole {
+  if (message.role === "assistant") return "assistant";
+  return message.role === "user" ? "user" : "unknown";
+}
+
+function unknownMessageShape(message: Readonly<Record<string, unknown>>): string {
+  const role = historyMessageRole(message);
+  const assistant = role === "assistant";
+  const allowed = assistant ? ASSISTANT_MESSAGE_KEYS : USER_MESSAGE_KEYS;
+  const required = assistant ? ASSISTANT_MESSAGE_REQUIRED_KEYS : USER_MESSAGE_KEYS;
+  const extraKeys = Object.keys(message)
+    .filter((key) => !allowed.has(key))
+    .sort((left, right) => left.localeCompare(right));
+  const firstExtraKey = extraKeys.at(0);
+  const missing = [...required].find((key) => !Object.hasOwn(message, key));
+  const extraKeyDigest = firstExtraKey === undefined ? "none" : structuralNameDigest(firstExtraKey);
+  return `role=${role}:extraCount=${String(extraKeys.length)}:extraKeySha256=${extraKeyDigest}:missing=${missing ?? "none"}`;
+}
+
+const USER_MESSAGE_KEYS = new Set(["id", "sessionID", "role", "time", "agent", "model"]);
+const ASSISTANT_MESSAGE_REQUIRED_KEYS = new Set([
+  "id",
+  "sessionID",
+  "role",
+  "time",
+  "parentID",
+  "modelID",
+  "providerID",
+  "mode",
+  "agent",
+  "path",
+  "cost",
+  "tokens",
+]);
+const ASSISTANT_MESSAGE_KEYS = new Set([
+  ...ASSISTANT_MESSAGE_REQUIRED_KEYS,
+  "finish",
+  "summary",
+  "error",
+  "structured",
+  "variant",
+]);
 
 const MAX_STAGED_SAFE_ACTIVITY_ITEMS = 2_048;
 const MAX_STAGED_SAFE_ACTIVITY_BYTES = 128 * 1_024;

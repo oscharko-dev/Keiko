@@ -344,6 +344,7 @@ async function assertLiveReadiness(baseUrl: string): Promise<void> {
     deploymentCeiling: "autonomous-delivery",
     effectiveMode: "autonomous-delivery",
     runtimeAvailable: true,
+    runtimeEvidenceClass: "functional-not-platform-qualified",
   });
 }
 
@@ -357,7 +358,11 @@ async function runDiscoveryProductiveScenario(
     "/api/coding-workbench/runtime/runs",
     startBody("discovery-productive"),
   );
-  expect(started.status).toBe(200);
+  const startedBody = await started.clone().text();
+  expect(
+    started.status,
+    `${startedBody}; diagnostics: ${JSON.stringify(pipeline.diagnostics)}`,
+  ).toBe(200);
   const run = (await started.json()) as { runId: string; state: string; failureCode?: string };
   pipeline.subscribeTimeline(run.runId);
   // Snapshot and timeline are content-free by contract; on failure they are the diagnostic.

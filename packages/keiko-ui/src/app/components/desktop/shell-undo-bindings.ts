@@ -54,8 +54,15 @@ export function applyShellUndoAction(target: ShellUndoTarget, action: WorkspaceU
   // original action produced. Either way it is the recorded target state.
   const recordedOpen = action.after;
   if (target.isPanelOpen(panel) === recordedOpen) return;
-  if (recordedOpen && panel === "search" && Object.hasOwn(action, "searchRoot")) {
+  if (recordedOpen && panel === "search" && action.searchRoot !== undefined) {
     target.api.add("search", { root: action.searchRoot });
+    return;
+  }
+  if (recordedOpen && panel === "governedGit" && action.projectRoot !== undefined) {
+    target.api.add("governedGit", {
+      projectPath: action.projectRoot,
+      rootBinding: "coding-repository",
+    });
     return;
   }
   target.api.toggleTool(panel);

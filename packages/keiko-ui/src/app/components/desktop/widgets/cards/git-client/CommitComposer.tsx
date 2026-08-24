@@ -15,6 +15,7 @@ import { useCallback, useEffect, useId, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import type { GitCommitMessageViolationCode } from "@oscharko-dev/keiko-contracts";
 import type { GitDeliveryCommitPreviewResponse } from "@/lib/api";
+import { reportClientDiagnostic } from "@/lib/client-diagnostics";
 import { copyTextToClipboard } from "@/lib/clipboard";
 import {
   useOptionalWidgetTranslate,
@@ -65,6 +66,12 @@ const DRAFT_REVIEW_STYLE = {
   boxShadow: "inset 0 0 0 1px color-mix(in oklch, var(--accent) 34%, var(--line))",
 } as const;
 
+const DRAFT_SUGGESTION_STYLE = {
+  ...DRAFT_REVIEW_STYLE,
+  alignItems: "stretch",
+  flexDirection: "column",
+} as const;
+
 interface CommitComposerProps {
   /** Non-empty when a repository is selected; the composer is inert otherwise. */
   readonly projectId: string | null;
@@ -76,6 +83,7 @@ interface CommitComposerProps {
   readonly preview: GitDeliveryCommitPreviewResponse | null;
   readonly previewDraft: string | null;
   readonly previewError: string | null;
+  readonly previewRevision: number;
   readonly layout?: CommitComposerLayout | undefined;
   readonly summaryValue?: string | undefined;
   readonly bodyValue?: string | undefined;
@@ -194,38 +202,74 @@ interface CommitDraftSuggestionProps {
   readonly t: OptionalWidgetTranslate;
 }
 
+function CommitDraftText({
+  message,
+  t,
+}: {
+  readonly message: string;
+  readonly t: OptionalWidgetTranslate;
+}): ReactNode {
+  const { summary, body } = splitCommitMessageDraft(message);
+  return (
+    <div style={{ display: "grid", gap: 8, minWidth: 0 }}>
+      <div style={{ display: "grid", gap: 3 }}>
+        <span style={{ ...SUBTLE_TEXT_STYLE, fontSize: 11 }}>
+          {t("commitComposer.draft.subject")}
+        </span>
+        <strong data-testid="git-commit-draft-subject" style={{ overflowWrap: "anywhere" }}>
+          {summary}
+        </strong>
+      </div>
+      {body === "" ? null : (
+        <div style={{ display: "grid", gap: 3 }}>
+          <span style={{ ...SUBTLE_TEXT_STYLE, fontSize: 11 }}>
+            {t("commitComposer.draft.body")}
+          </span>
+          <p
+            data-testid="git-commit-draft-body"
+            style={{ margin: 0, whiteSpace: "pre-wrap", overflowWrap: "anywhere", lineHeight: 1.5 }}
+          >
+            {body}
+          </p>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function CommitDraftSuggestion({ preview, onUse, t }: CommitDraftSuggestionProps): ReactNode {
   const { suggestedMessage } = preview;
-  return (
-    <div
-      data-testid="git-commit-draft"
-      style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}
-    >
-      <p style={{ ...SUBTLE_TEXT_STYLE, fontSize: 12, color: "var(--fg)" }}>
-        {t("commitComposer.preview.summary", {
-          files: preview.summary.stagedFileCount,
-          fileNoun:
-            preview.summary.stagedFileCount === 1
-              ? t("commitComposer.preview.fileSingular")
-              : t("commitComposer.preview.filePlural"),
-          areas: preview.summary.areaCount,
-          areaNoun:
-            preview.summary.areaCount === 1
-              ? t("commitComposer.preview.areaSingular")
-              : t("commitComposer.preview.areaPlural"),
-          tests: preview.summary.touchesTests ? t("commitComposer.preview.touchesTestsSuffix") : "",
-        })}
-      </p>
-      {suggestedMessage === undefined ? (
+  const summaryText = commitPreviewSummaryText(preview.summary, t);
+  if (suggestedMessage === undefined) {
+    return (
+      <div data-testid="git-commit-draft" style={DRAFT_SUGGESTION_STYLE}>
+        <p style={{ ...SUBTLE_TEXT_STYLE, fontSize: 12, color: "var(--fg)" }}>{summaryText}</p>
         <p style={{ ...SUBTLE_TEXT_STYLE, fontSize: 12 }}>
           {t("commitComposer.draft.unavailable")}
         </p>
-      ) : (
+      </div>
+    );
+  }
+  return (
+    <fieldset
+      data-testid="git-commit-draft"
+      aria-label={t("commitComposer.draft.title")}
+      style={{ ...DRAFT_SUGGESTION_STYLE, border: 0, margin: 0, minInlineSize: 0 }}
+    >
+      <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+        <StatusPill tone="info">
+          <SparkIcon size={11} /> {t("commitComposer.draft.title")}
+        </StatusPill>
+        <span style={{ ...SUBTLE_TEXT_STYLE, fontSize: 12 }}>{summaryText}</span>
+      </div>
+      <CommitDraftText message={suggestedMessage} t={t} />
+      <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+        <CopyCommitDraftAction message={suggestedMessage} t={t} />
         <button type="button" style={SECONDARY_BTN} onClick={() => onUse(suggestedMessage)}>
           <SparkIcon size={15} /> {t("commitComposer.action.useDraft")}
         </button>
-      )}
-    </div>
+      </div>
+    </fieldset>
   );
 }
 
@@ -576,13 +620,12 @@ function commitComposerState(input: CommitComposerStateInput): CommitComposerSta
   const subjectEmpty = input.summary.trim() === "";
   const selectedRepository = hasRepository(input.projectId);
   const hasStaged = input.stagedFileCount > 0;
-  const emptyDraftPreview = emptyDraftPreviewFor(subjectEmpty, input.preview, input.previewDraft);
-  const visiblePreview = visiblePreviewFor(
-    subjectEmpty,
-    input.preview,
-    input.previewDraft,
-    message,
-  );
+  const emptyDraftPreview = hasStaged
+    ? emptyDraftPreviewFor(subjectEmpty, input.preview, input.previewDraft)
+    : null;
+  const visiblePreview = hasStaged
+    ? visiblePreviewFor(subjectEmpty, input.preview, input.previewDraft, message)
+    : null;
   const protectedBranchBlocked = isProtectedBranchBlock(visiblePreview);
   const messageBlocked = visiblePreview !== null && !visiblePreview.messageValidation.ok;
   const policyBlocked =
@@ -711,6 +754,16 @@ function messageViolationsFor(
 ): readonly GitCommitMessageViolationCode[] {
   if (preview.messageValidation.ok) return [];
   return preview.messageValidation.violations;
+}
+
+function messageViolationItems(
+  preview: GitDeliveryCommitPreviewResponse,
+  t: OptionalWidgetTranslate,
+): readonly { readonly key: string; readonly text: string }[] {
+  return messageViolationsFor(preview).map((violation) => ({
+    key: violation,
+    text: t(`commitComposer.violation.${violation}`),
+  }));
 }
 
 function SuggestedPrefixLine({
@@ -845,7 +898,10 @@ interface CommitFeedbackProps {
 function CommitFeedback(props: CommitFeedbackProps): ReactNode {
   return (
     <>
-      <PreviewErrorBlock previewError={props.previewError} t={props.t} />
+      <PreviewErrorBlock
+        previewError={props.state.hasStaged ? props.previewError : null}
+        t={props.t}
+      />
       <CommitPolicyPreviewSlot
         id={props.previewId}
         preview={props.state.visiblePreview}
@@ -868,20 +924,106 @@ interface CommitComposerController {
   readonly applyDraft: (message: string) => void;
 }
 
-function useCommitComposerController(
-  props: CommitComposerProps,
-  t: OptionalWidgetTranslate,
-): CommitComposerController {
+interface AppliedCommitDraft {
+  readonly message: string;
+  readonly previewRevision: number;
+}
+
+interface CommitDraftFields {
+  readonly summary: string;
+  readonly body: string;
+  readonly setSummary: (value: string) => void;
+  readonly setBody: (value: string) => void;
+  readonly applyDraft: (message: string) => void;
+}
+
+function clearStaleAppliedDraft(
+  appliedDraft: AppliedCommitDraft | null,
+  previewRevision: number,
+  currentMessage: string,
+  clear: () => void,
+): AppliedCommitDraft | null {
+  if (appliedDraft === null || appliedDraft.previewRevision === previewRevision) {
+    return appliedDraft;
+  }
+  if (appliedDraft.message === currentMessage) {
+    clear();
+    reportClientDiagnostic(
+      "git-client: stale generated commit draft cleared (repository-revision-changed)",
+    );
+  }
+  return null;
+}
+
+function useCommitDraftFields(props: CommitComposerProps): CommitDraftFields {
   const [summary, setSummary] = useControlledComposerField(
     props.summaryValue,
     props.onSummaryChange,
   );
   const [body, setBody] = useControlledComposerField(props.bodyValue, props.onBodyChange);
+  const appliedDraftRef = useRef<AppliedCommitDraft | null>(null);
+  useEffect(() => {
+    appliedDraftRef.current = clearStaleAppliedDraft(
+      appliedDraftRef.current,
+      props.previewRevision,
+      composeCommitMessage(summary, body),
+      () => {
+        setSummary("");
+        setBody("");
+      },
+    );
+  }, [body, props.previewRevision, setBody, setSummary, summary]);
+  const applyDraft = useCallback(
+    (message: string): void => {
+      const draft = splitCommitMessageDraft(message);
+      setSummary(draft.summary);
+      setBody(draft.body);
+      appliedDraftRef.current = { message, previewRevision: props.previewRevision };
+    },
+    [props.previewRevision, setBody, setSummary],
+  );
+  const updateSummary = useCallback(
+    (value: string): void => {
+      appliedDraftRef.current = null;
+      setSummary(value);
+    },
+    [setSummary],
+  );
+  const updateBody = useCallback(
+    (value: string): void => {
+      appliedDraftRef.current = null;
+      setBody(value);
+    },
+    [setBody],
+  );
+  return { summary, body, setSummary: updateSummary, setBody: updateBody, applyDraft };
+}
+
+function useCommitPreviewRefresh(props: CommitComposerProps, state: CommitComposerState): void {
+  const onPreviewRef = useRef(props.onPreview);
+  onPreviewRef.current = props.onPreview;
+  useEffect(() => {
+    if (!state.hasRepository || !state.hasStaged) return;
+    const delay = state.subjectEmpty ? 0 : PREVIEW_DEBOUNCE_MS;
+    const handle = setTimeout(() => onPreviewRef.current(state.message), delay);
+    return () => clearTimeout(handle);
+  }, [
+    props.previewRevision,
+    state.hasRepository,
+    state.hasStaged,
+    state.message,
+    state.subjectEmpty,
+  ]);
+}
+
+function useCommitComposerController(
+  props: CommitComposerProps,
+  t: OptionalWidgetTranslate,
+): CommitComposerController {
+  const fields = useCommitDraftFields(props);
   const baseId = useId();
   const hintId = `${baseId}-hint`;
   const previewId = `${baseId}-preview`;
-  const onPreviewRef = useRef(props.onPreview);
-  onPreviewRef.current = props.onPreview;
   const state = commitComposerState({
     projectId: props.projectId,
     branchName: props.branchName,
@@ -889,26 +1031,22 @@ function useCommitComposerController(
     busy: props.busy,
     preview: props.preview,
     previewDraft: props.previewDraft,
-    summary,
-    body,
+    summary: fields.summary,
+    body: fields.body,
     onCreateBranch: props.onCreateBranch,
     t,
   });
-  useEffect(() => {
-    if (!state.hasRepository || !state.hasStaged) return;
-    const delay = state.subjectEmpty ? 0 : PREVIEW_DEBOUNCE_MS;
-    const handle = setTimeout(() => onPreviewRef.current(state.message), delay);
-    return () => clearTimeout(handle);
-  }, [state.hasRepository, state.hasStaged, state.message, state.subjectEmpty]);
-  const applyDraft = useCallback(
-    (message: string): void => {
-      const draft = splitCommitMessageDraft(message);
-      setSummary(draft.summary);
-      setBody(draft.body);
-    },
-    [setBody, setSummary],
-  );
-  return { state, summary, body, hintId, previewId, setSummary, setBody, applyDraft };
+  useCommitPreviewRefresh(props, state);
+  return {
+    state,
+    summary: fields.summary,
+    body: fields.body,
+    hintId,
+    previewId,
+    setSummary: fields.setSummary,
+    setBody: fields.setBody,
+    applyDraft: fields.applyDraft,
+  };
 }
 
 function CommitComposerContents({
@@ -1011,10 +1149,7 @@ function CommitPolicyPreview({
       <CodeList
         label={t("commitComposer.preview.messageViolations")}
         testid="git-commit-violations"
-        items={messageViolationsFor(preview).map((v) => ({
-          key: v,
-          text: t(`commitComposer.violation.${v}`),
-        }))}
+        items={messageViolationItems(preview, t)}
       />
       <CodeList
         label={t("commitComposer.preview.qualityWarnings")}

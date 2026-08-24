@@ -2295,7 +2295,7 @@ export const DE_MESSAGES = {
   "gitClientWindow.sync.hint.waitForProvider": "Warten Sie, bis der Anbieter verfügbar ist.",
   "gitClientWindow.panel.pullRequest": "Pull Request",
   "gitClientWindow.panel.merge": "Merge",
-  "gitClientWindow.action.backToDiff": "Zurück zum Diff",
+  "gitClientWindow.action.backToDiff": "Zurück zu Änderungen",
   // Zugängliche Namen der benannten <section>-Landmarks aus Welle #2721. Sie standen als
   // fest verdrahtetes Englisch auf den role="region"-Elementen, die diese Sections ersetzen;
   // ein Screenreader liest sie vor, also gehören sie wie jeder andere Nutzertext in den Katalog.

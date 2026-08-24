@@ -54,7 +54,8 @@ interface ChatUnbindTarget {
 interface TestSession {
   readonly chats: Chat[];
   readonly activeChat: Chat | undefined;
-  readonly activeProject: { readonly name: string; readonly available: boolean } | undefined;
+  readonly activeProject:
+    { readonly name: string; readonly path: string; readonly available: boolean } | undefined;
   readonly models: readonly unknown[];
   readonly loading: boolean;
   readonly error: string | undefined;
@@ -475,7 +476,7 @@ describe("AppShell grounding connections", () => {
     mocks.state.session = {
       chats: [activeChat],
       activeChat,
-      activeProject: { name: "Keiko", available: true },
+      activeProject: { name: "Keiko", path: "/repo", available: true },
       models: [{ id: "example-chat-model" }],
       loading: false,
       error: undefined,
@@ -560,6 +561,7 @@ describe("AppShell grounding connections", () => {
     const newChatCfg = add.mock.calls[0]?.[1];
     expect(newChatCfg).toStrictEqual({
       title: "Release grounding review",
+      projectPath: "/repo",
       chatId: undefined,
       selectionHandoffId: undefined,
       newChatRequestId: expect.stringMatching(/^[0-9a-f-]{36}$/u),
@@ -1527,6 +1529,32 @@ describe("AppShell grounding connections", () => {
       searchRoot: "/repo/editor-selected",
     });
     rafSpy.mockRestore();
+  });
+
+  it("opens Git from the rail with the selected project and records it for redo", async () => {
+    const api = workspaceApi();
+    mocks.state.workspaceResult = workspaceResult([], [], api);
+    await renderMounted();
+    expect(mocks.state.rightRailOnTool).toBeTypeOf("function");
+    vi.mocked(api.add).mockClear();
+    mocks.pushUndo.mockClear();
+
+    await act(async (): Promise<void> => {
+      mocks.state.rightRailOnTool?.("governedGit");
+    });
+
+    expect(api.add).toHaveBeenCalledWith("governedGit", {
+      projectPath: "/repo",
+      rootBinding: "coding-repository",
+    });
+    expect(api.toggleTool).not.toHaveBeenCalledWith("governedGit");
+    expect(mocks.pushUndo).toHaveBeenCalledWith({
+      kind: "ui.panel.toggle",
+      panel: "governedGit",
+      before: false,
+      after: true,
+      projectRoot: "/repo",
+    });
   });
 
   // Issue #2723 — the connected-scope rebind scan (chatWindowIdOf via useEffect) must reach its

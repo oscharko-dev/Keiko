@@ -154,7 +154,7 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
   "gitClientWindow.history.commitDetailsAria": "Commit details",
   "gitClientWindow.panel.pullRequestOpened": "Pull Request panel opened.",
   "gitClientWindow.panel.mergeOpened": "Merge panel opened.",
-  "gitClientWindow.panel.diffOpened": "Diff panel opened.",
+  "gitClientWindow.panel.diffOpened": "Changes view opened.",
   "gitClientWindow.sync.editorReconciliationFailed":
     "Pull completed, but editor buffers need recovery. Review open files before continuing.",
   "chat.turn.failed": "Turn failed",
@@ -333,7 +333,7 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
   "commitComposer.action.commit": "Commit",
   "commitComposer.action.commitTo": "Commit to {branch}",
   "commitComposer.action.createBranchFirst": "Create branch first",
-  "commitComposer.action.useDraft": "Review commit draft",
+  "commitComposer.action.useDraft": "Use commit draft",
   "commitComposer.action.copyDraft": "Copy commit draft",
   "commitComposer.field.summary": "Summary",
   "commitComposer.field.summaryPlaceholder": "Concise summary of the change",

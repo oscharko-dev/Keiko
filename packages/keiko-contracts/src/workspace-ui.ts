@@ -136,6 +136,12 @@ export type WorkspaceUiAction =
        * action lets redo recreate the singleton with the same workspace ownership.
        */
       readonly searchRoot?: string | undefined;
+      /**
+       * Present when a project-bound tool is opened from the shell. Redo must recreate the
+       * singleton with the same explicit project ownership instead of silently opening it
+       * unbound.
+       */
+      readonly projectRoot?: string | undefined;
     }
   | {
       readonly kind: "ui.selection.change";

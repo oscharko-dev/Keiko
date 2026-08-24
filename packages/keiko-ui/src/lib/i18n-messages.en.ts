@@ -2226,7 +2226,7 @@ export const EN_MESSAGES = {
   "gitClientWindow.sync.hint.waitForProvider": "Wait for the provider to become available.",
   "gitClientWindow.panel.pullRequest": "Pull Request",
   "gitClientWindow.panel.merge": "Merge",
-  "gitClientWindow.action.backToDiff": "Back to diff",
+  "gitClientWindow.action.backToDiff": "Back to changes",
   // Accessible names for the named <section> landmarks the #2721 wave introduced. They were
   // hardcoded English on the role="region" elements these sections replace; a screen reader
   // announces them, so they belong in the catalog like any other user-facing string.

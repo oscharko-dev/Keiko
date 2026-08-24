@@ -17,7 +17,7 @@ import { PassThrough } from "node:stream";
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import type { ServerDiagnosticSink } from "../diagnostics-log.js";
+import type { ServerDiagnosticRecord, ServerDiagnosticSink } from "../diagnostics-log.js";
 import type { PortableSidecarRuntimeVerification } from "../update-portable-sidecar-verification.js";
 import {
   createRuntimeProcessSupervisor,
@@ -776,12 +776,15 @@ function completedTurnHistory(): readonly Readonly<Record<string, unknown>>[] {
 }
 
 function failedTurnHistory(): readonly Readonly<Record<string, unknown>>[] {
-  return turnHistory("error", "ProviderError");
+  return turnHistory("error", {
+    name: "APIError",
+    data: { message: "SENTINEL_PROVIDER_DETAIL", isRetryable: false },
+  });
 }
 
 function turnHistory(
   finish: "stop" | "error",
-  errorName?: string,
+  error?: Readonly<Record<string, unknown>>,
 ): readonly Readonly<Record<string, unknown>>[] {
   const tokens = {
     total: 0,
@@ -836,7 +839,7 @@ function turnHistory(
           cost: 0,
           tokens,
           finish,
-          ...(finish === "error" ? { error: { name: errorName ?? "Error" } } : {}),
+          ...(error === undefined ? {} : { error }),
         },
       },
     },
@@ -1486,7 +1489,7 @@ describe("private OpenCode run control", () => {
       ]);
       const serialized = JSON.stringify(records);
       expect(serialized).not.toContain("bounded failing task");
-      expect(serialized).not.toContain("ProviderError");
+      expect(serialized).not.toContain("SENTINEL_PROVIDER_DETAIL");
     } finally {
       await fixture.stop();
     }
@@ -1748,6 +1751,57 @@ describe("private OpenCode tool bridge", () => {
 
     expect(recordDrops).toHaveBeenCalledOnce();
     expect(recordDrops).toHaveBeenCalledWith(512);
+    await fixture.stop();
+  });
+
+  it("records a body-free structural diagnostic for an unknown history message shape", async () => {
+    const records: ServerDiagnosticRecord[] = [];
+    const sentinel = "SENTINEL_PRIVATE_HISTORY_BODY";
+    const sentinelKey = "sentinelPrivateHistoryKey";
+    const history = completedTurnHistory();
+    const assistant = history.at(-1);
+    if (assistant === undefined) throw new Error("assistant history fixture missing");
+    const data = assistant.data as Readonly<Record<string, unknown>>;
+    const info = data.info as Readonly<Record<string, unknown>>;
+    const malformed = [
+      ...history.slice(0, -1),
+      { ...assistant, data: { ...data, info: { ...info, [sentinelKey]: sentinel } } },
+    ];
+    const fixture = await startBridgeFixture(
+      { execute: vi.fn(() => Promise.resolve(completed)) },
+      undefined,
+      {
+        diagnostics: {
+          record: (record): void => {
+            records.push(record);
+          },
+        },
+        historyResponse: Promise.resolve(
+          new Response(JSON.stringify(malformed), {
+            headers: { "content-type": "application/json" },
+          }),
+        ),
+        expectedStart: {
+          ok: false,
+          failureCode: "protocol-schema-mismatch",
+          retryable: false,
+        },
+      },
+    );
+
+    expect(records).toHaveLength(1);
+    expect(records[0]).toMatchObject({
+      correlationId: FIXTURE_RUN_ID,
+      operation: "coding-runtime.handshake",
+      source: "opencode.history",
+      errorClass: "OpenCodeHistoryFailure",
+      message: "runtime-handshake-failed",
+    });
+    expect(records[0]?.code).toMatch(
+      /^stage=sse-history-reconciliation:reason=event-unknown:eventSha256=[a-f0-9]{16}:role=assistant:extraCount=1:extraKeySha256=[a-f0-9]{16}:missing=none$/u,
+    );
+    expect(JSON.stringify(records)).not.toContain(sentinel);
+    expect(JSON.stringify(records)).not.toContain(sentinelKey);
     await fixture.stop();
   });
 

@@ -486,8 +486,15 @@ describe("GitClientWindow — explicit name/role/value assertions", () => {
       ).toBeInTheDocument();
     });
 
-    it("diff content is a named keyboard-scrollable region", async () => {
+    it("names the keyboard-scrollable primary region for both commit and diff work", async () => {
+      const user = userEvent.setup();
       render(<GitClientWindow projectId={REPO_A.path} client={makeClient()} />);
+
+      const commitRegion = await screen.findByRole("region", { name: "Commit draft" });
+      expect(commitRegion).toHaveAttribute("tabindex", "0");
+      expect(screen.getAllByRole("region", { name: "Commit draft" })).toHaveLength(1);
+
+      await user.click(screen.getByRole("button", { name: /src\/foo\.ts, staged modified/i }));
       const diffRegion = await screen.findByRole("region", { name: "Diff" });
       expect(diffRegion).toHaveAttribute("tabindex", "0");
     });
@@ -593,12 +600,16 @@ describe("GitClientWindow — explicit name/role/value assertions", () => {
       expect(WORKSPACE_STYLE.height).toBe("100%");
       expect(WORKSPACE_STYLE.overflow).toBe("hidden");
 
-      // Sanity: with a repository connected, the toolbar controls and diff region are all present
-      // and reachable regardless of width.
+      // Sanity: with a repository connected, the toolbar controls and primary work region are all
+      // present and reachable regardless of width. Selecting a file replaces the commit workspace
+      // with the diff workspace without changing the layout contract.
+      const user = userEvent.setup();
       render(<GitClientWindow projectId={REPO_A.path} client={makeClient()} />);
       expect(await screen.findByRole("combobox", { name: "Repository" })).toBeInTheDocument();
       expect(await screen.findByRole("button", { name: "Branch: main" })).toBeInTheDocument();
-      expect(screen.getByRole("region", { name: "Diff" })).toBeInTheDocument();
+      expect(screen.getByRole("region", { name: "Commit draft" })).toBeInTheDocument();
+      await user.click(screen.getByRole("button", { name: /src\/foo\.ts, staged modified/i }));
+      expect(await screen.findByRole("region", { name: "Diff" })).toBeInTheDocument();
     });
 
     it("new-branch dialog is modal, initially focuses the branch-name input, and traps Tab", async () => {

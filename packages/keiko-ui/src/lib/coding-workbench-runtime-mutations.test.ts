@@ -133,6 +133,40 @@ describe("createStartMutation", () => {
       runtimePreference: "managed-gateway",
     });
   });
+
+  it("does not leak stale gateway model settings into a Codex subscription start", async () => {
+    const state = stateWithRun(null, {
+      canStart: true,
+      runtimePreference: "codex-subscription",
+      selectedModelId: "stale-model",
+      reasoningEffort: "high",
+    });
+    const mutation = createStartMutation("inspect the repository", state);
+
+    await mutation.run();
+
+    expect(apiMocks.startCodingWorkbenchRuntime).toHaveBeenCalledWith({
+      requestId: mutation.requestId,
+      taskIntent: "inspect the repository",
+      requestedMode: "supervised-coding",
+      runtimePreference: "codex-subscription",
+    });
+  });
+
+  it("sends the selected model settings for the managed gateway", async () => {
+    const state = stateWithRun(null, {
+      canStart: true,
+      selectedModelId: "coding-model",
+      reasoningEffort: "high",
+    });
+    const mutation = createStartMutation("inspect the repository", state);
+
+    await mutation.run();
+
+    expect(apiMocks.startCodingWorkbenchRuntime).toHaveBeenCalledWith(
+      expect.objectContaining({ modelId: "coding-model", reasoningEffort: "high" }),
+    );
+  });
 });
 
 describe("createApprovalMutation", () => {
@@ -204,6 +238,25 @@ describe("createRetryMutation", () => {
       taskIntent: "retry it",
       requestedMode: "supervised-coding",
       runtimePreference: "managed-gateway",
+    });
+  });
+
+  it("drops stale gateway model settings when retrying through a Codex subscription", async () => {
+    const state = stateWithRun(snapshot(), {
+      canRetry: true,
+      runtimePreference: "codex-subscription",
+      selectedModelId: "stale-model",
+      reasoningEffort: "high",
+    });
+    const mutation = createRetryMutation("retry it", state);
+
+    await mutation.run();
+
+    expect(apiMocks.retryCodingWorkbenchRuntime).toHaveBeenCalledWith("run-1", {
+      requestId: mutation.requestId,
+      taskIntent: "retry it",
+      requestedMode: "supervised-coding",
+      runtimePreference: "codex-subscription",
     });
   });
 });

@@ -5,6 +5,7 @@ import {
   readFileSync,
   realpathSync,
   statSync,
+  writeFileSync,
   type BigIntStats,
 } from "node:fs";
 import { join, relative, resolve, sep } from "node:path";
@@ -257,6 +258,11 @@ export function productionDiscoveryBffDeps(input: DiscoveryBffDepsInput): UiHand
   for (const dir of ["state", "ui-db", "evidence"]) {
     mkdirSync(join(input.stateRoot, dir), { recursive: true, mode: 0o700 });
   }
+  writeFileSync(
+    join(input.stateRoot, "ui-db", "keiko.config.json"),
+    `${JSON.stringify(functionalGatewayConfig(), null, 2)}\n`,
+    { encoding: "utf8", mode: 0o600 },
+  );
   const env: NodeJS.ProcessEnv = {
     PATH: process.env.PATH ?? "",
     KEIKO_STATE_DIR: join(input.stateRoot, "state"),

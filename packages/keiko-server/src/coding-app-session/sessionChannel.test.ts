@@ -62,18 +62,6 @@ describe("createCodingAppSessionChannel", () => {
     expect(channel.sessionCount()).toBe(0);
   });
 
-  it("can internally ensure a local session after an owning route already accepted authority", () => {
-    const channel = createCodingAppSessionChannel({ registry: createSessionRegistry() });
-    const ensured = channel.ensureLocalSession(undefined, "coding-workbench");
-    expect(ensured.issued).toBe(true);
-    if (!ensured.issued) throw new Error("expected local session issuance");
-
-    expect(channel.verifySession(ensured.cookieToken)?.principalLabel).toBe("coding-workbench");
-    expect(channel.ensureLocalSession(ensured.cookieToken, "coding-workbench")).toEqual({
-      issued: false,
-    });
-  });
-
   it("does not pair when the authority denies a well-formed attestation", () => {
     const channel = createCodingAppSessionChannel({
       registry: createSessionRegistry(),

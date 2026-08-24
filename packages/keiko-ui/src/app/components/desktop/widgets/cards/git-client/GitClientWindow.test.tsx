@@ -31,6 +31,7 @@ import type {
   GitDeliveryPushPreviewResponse,
 } from "@/lib/api";
 import type { GitRepositoryStatusResponse } from "@/lib/types";
+import { resetClientDiagnosticWriter, setClientDiagnosticWriter } from "@/lib/client-diagnostics";
 import type { GitClientSeam } from "./git-client-seam";
 import { GitClientWindow } from "./GitClientWindow";
 import { parseUnifiedDiff } from "../shared/diffParser";
@@ -511,6 +512,7 @@ function makeStructuredDiffResponse(diff = "", scope: "staged" | "unstaged" = "u
 // ─── Tests ────────────────────────────────────────────────────────────────────
 
 afterEach(() => {
+  resetClientDiagnosticWriter();
   vi.clearAllMocks();
 });
 
@@ -653,6 +655,30 @@ describe("GitClientWindow — repository list", () => {
 
     await waitFor(() => expect(client.listBranches).toHaveBeenCalledWith(REPO_A.path));
     expect(client.getStatus).toHaveBeenCalledWith(REPO_A.path);
+  });
+
+  it("clears a repository-scoped commit draft when the selected repository changes", async () => {
+    const diagnostics: string[] = [];
+    setClientDiagnosticWriter((message) => diagnostics.push(message));
+    const client = makeClient({
+      getStatus: vi.fn(async (path: string) => ({
+        ...makeStatusRich(),
+        root: path,
+        repositoryRoot: path,
+      })),
+    });
+    const user = userEvent.setup();
+    render(<GitClientWindow projectId={REPO_A.path} client={client} />);
+    const summary = await screen.findByLabelText("Summary");
+    await user.type(summary, "fix: repository alpha only");
+
+    await user.click(screen.getByRole("combobox", { name: "Repository" }));
+    await user.click(await screen.findByRole("option", { name: /beta/ }));
+
+    await waitFor(() => expect(screen.getByLabelText("Summary")).toHaveValue(""));
+    expect(diagnostics).toContain(
+      "git-client: commit draft cleared (repository-selection-changed)",
+    );
   });
 
   it("refreshes Git state after requested, canonical, and aliased editor saves", async (): Promise<void> => {
@@ -1217,11 +1243,25 @@ describe("GitClientWindow — toolbar actions", () => {
 
     await user.click(screen.getByRole("button", { name: /Create pull request/ }));
     expect(await screen.findByRole("region", { name: "Pull Request" })).toBeInTheDocument();
-    await user.click(screen.getByRole("button", { name: "Back to diff" }));
+    await user.click(screen.getByRole("button", { name: "Back to changes" }));
     const diff = screen.getByRole("region", { name: "Diff" });
     expect(diff).toBeInTheDocument();
     await waitFor(() => expect(diff).toHaveFocus());
-    expect(screen.getByText("Diff panel opened.")).toBeInTheDocument();
+    expect(screen.getByText("Changes view opened.")).toBeInTheDocument();
+  });
+
+  it("returns from the PR panel to the commit workspace when no diff is selected", async () => {
+    const user = userEvent.setup();
+    const client = makeClient({ getStatus: vi.fn(async () => makeStatusRich()) });
+    render(<GitClientWindow projectId={REPO_A.path} client={client} />);
+    expect(await screen.findByRole("region", { name: "Commit draft" })).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: /Create pull request/ }));
+    expect(await screen.findByRole("region", { name: "Pull Request" })).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Back to changes" }));
+
+    const commitWorkspace = await screen.findByRole("region", { name: "Commit draft" });
+    await waitFor(() => expect(commitWorkspace).toHaveFocus());
   });
 });
 
@@ -2550,6 +2590,31 @@ describe("GitClientWindow — staging controls (Issue #1575)", () => {
 });
 
 describe("GitClientWindow — commit composer (Issue #1575)", () => {
+  it("removes stale commit evidence after all selected files are unstaged", async () => {
+    const getStatus = vi
+      .fn<GitClientSeam["getStatus"]>()
+      .mockResolvedValueOnce(makeStatusRich())
+      .mockResolvedValue(makeStatus());
+    const client = makeClient({
+      getStatus,
+      commitPreview: vi.fn<GitClientSeam["commitPreview"]>(async () =>
+        makeCommitPreview({ suggestedMessage: "chore: update staged changes\n\nBody." }),
+      ),
+    });
+    const user = userEvent.setup();
+    render(<GitClientWindow projectId={REPO_A.path} client={client} />);
+
+    await user.click(await screen.findByRole("button", { name: "Use commit draft" }));
+    expect(screen.getByLabelText("Summary")).toHaveValue("chore: update staged changes");
+    expect(screen.getByLabelText("Description")).toHaveValue("Body.");
+    await user.click(screen.getByRole("button", { name: "Unstage all" }));
+
+    await waitFor(() => expect(getStatus).toHaveBeenCalledTimes(2));
+    expect(await screen.findByText("Stage changes to prepare a commit draft.")).toBeInTheDocument();
+    expect(screen.queryByTestId("git-commit-draft")).not.toBeInTheDocument();
+    expect(screen.queryByText("Meets commit policy")).not.toBeInTheDocument();
+  });
+
   it("commits the composed summary through the commit-execute route", async () => {
     const client = makeClient({ getStatus: vi.fn(async () => makeStatusRich()) });
     const user = userEvent.setup();
@@ -2575,13 +2640,69 @@ describe("GitClientWindow — commit composer (Issue #1575)", () => {
     render(<GitClientWindow projectId={REPO_A.path} client={client} />);
     expect(await screen.findByText("index.ts")).toBeInTheDocument();
 
-    expect(screen.getByRole("region", { name: "Diff" })).toBeInTheDocument();
+    expect(screen.getByRole("region", { name: "Commit draft" })).toBeInTheDocument();
     expect(screen.queryByText("Select a change to view its diff.")).not.toBeInTheDocument();
 
     await user.click(screen.getByText("index.ts"));
 
     expect(screen.getByRole("region", { name: "Diff" })).toBeInTheDocument();
     await waitFor(() => expect(client.getStructuredDiff).toHaveBeenCalled());
+  });
+
+  it("prefers an available development branch as the pull-request base", async () => {
+    const client = makeClient({
+      getStatus: vi.fn(async () => makeStatus({ branch: "feat/audit" })),
+      listBranches: vi.fn(async () =>
+        makeBranchList({
+          branches: [
+            { name: "feat/audit", headRefHash: "aaa", current: true },
+            { name: "dev", headRefHash: "bbb", current: false },
+            { name: "main", headRefHash: "ccc", current: false },
+          ],
+        }),
+      ),
+      getSummary: vi.fn(async () =>
+        makeSummary({
+          branch: "feat/audit",
+          upstream: { ref: "origin/feat/audit", remote: "origin", branch: "feat/audit" },
+        }),
+      ),
+    });
+    const user = userEvent.setup();
+    render(<GitClientWindow projectId={REPO_A.path} client={client} />);
+    expect(await screen.findByText("No changes")).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "Create pull request" }));
+
+    expect(screen.getByLabelText("Base branch")).toHaveValue("dev");
+  });
+
+  it("uses another available integration branch instead of the current branch as PR base", async () => {
+    const client = makeClient({
+      getStatus: vi.fn(async () => makeStatus({ branch: "dev" })),
+      listBranches: vi.fn(async () =>
+        makeBranchList({
+          branches: [
+            { name: "dev", headRefHash: "aaa", current: true },
+            { name: "main", headRefHash: "bbb", current: false },
+          ],
+        }),
+      ),
+      getSummary: vi.fn(async () =>
+        makeSummary({
+          branch: "dev",
+          upstream: { ref: "origin/dev", remote: "origin", branch: "dev" },
+        }),
+      ),
+    });
+    const user = userEvent.setup();
+    render(<GitClientWindow projectId={REPO_A.path} client={client} />);
+    expect(await screen.findByText("No changes")).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "Create pull request" }));
+
+    expect(screen.getByLabelText("Base branch")).toHaveValue("main");
+    expect(screen.getByLabelText("Base branch")).not.toHaveValue("dev");
   });
 
   it("keeps the commit draft while moving between workspace and sidebar layouts", async () => {
@@ -2595,7 +2716,7 @@ describe("GitClientWindow — commit composer (Issue #1575)", () => {
     render(<GitClientWindow projectId={REPO_A.path} client={client} />);
     expect(await screen.findByText("index.ts")).toBeInTheDocument();
 
-    await user.click(await screen.findByRole("button", { name: "Review commit draft" }));
+    await user.click(await screen.findByRole("button", { name: "Use commit draft" }));
     expect(screen.getByLabelText("Description")).toHaveValue("Body.");
     await user.click(screen.getByText("README.md"));
 

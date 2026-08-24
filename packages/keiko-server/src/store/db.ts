@@ -102,6 +102,7 @@ import {
   findWorkspaceManifestRecordByRoot as sqlFindWorkspaceManifestRecordByRoot,
   listWorkspaceManifestRecords as sqlListWorkspaceManifestRecords,
   readWorkspaceManifestRecord as sqlReadWorkspaceManifestRecord,
+  reconnectProjectWorkspaceManifest,
   replaceWorkspaceManifest as sqlReplaceWorkspaceManifest,
   workspaceManifestRootCountForProject,
 } from "./workspaceManifests.js";
@@ -271,7 +272,7 @@ function reconnectProjectRecord(
   try {
     const project = sqlUpdateProject(db, normalized, {}, now);
     validateProjectPath(project.path, { mustExist: true });
-    ensureProjectWorkspaceManifest(db, project.path, project.name, now);
+    reconnectProjectWorkspaceManifest(db, project.path, project.name, now);
     db.exec("COMMIT");
     return project;
   } catch (error) {
