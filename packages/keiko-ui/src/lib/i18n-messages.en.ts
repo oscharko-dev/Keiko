@@ -2164,6 +2164,14 @@ export const EN_MESSAGES = {
   "figmaSnapshotWindow.viewSourceMode.notLoaded": "Selected view preview not loaded.",
   "figmaSnapshotWindow.viewSourceMode.screenNotPresent":
     "The selected screen is not present in this stored snapshot.",
+  "gitClientWindow.changes.stagingScopeHint":
+    "Select files with the checkboxes. Keiko uses only staged files for the commit draft.",
+  "gitClientWindow.connect.stagedDraftHint":
+    "After changes are staged, Keiko shows their structural summary and an eligible commit draft for your review.",
+  "gitClientWindow.diff.regionAriaLabel": "Diff",
+  "gitClientWindow.diff.scopeAriaLabel": "Diff scope",
+  "gitClientWindow.sidebar.resizeAriaLabel": "Resize changes column",
+  "gitClientWindow.toolbar.sync": "Sync",
   "gitClientWindow.sync.aheadSuffix": " (ahead {count})",
   "gitClientWindow.sync.behindSuffix": " (behind {count})",
   "gitClientWindow.sync.outcome": "{label} in {seconds}s{delta}",

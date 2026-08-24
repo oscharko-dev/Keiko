@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import type { ReactNode } from "react";
 import type { GitEditorDiffResponse, GitEditorDiffScope } from "@oscharko-dev/keiko-contracts";
+import { useTranslate } from "@/lib/i18n";
 import type { GitDiffScope, GitHistoryEntry } from "@/lib/types";
 import { DiffFileSection } from "../shared/diffView";
 import type { GitClientSeam } from "./git-client-seam";
@@ -75,6 +76,7 @@ export function DiffPane({
   onScopeChange,
   revision,
 }: DiffPaneProps): ReactNode {
+  const t = useTranslate();
   const [state, setState] = useState<DiffState>(EMPTY_DIFF);
 
   useEffect(() => {
@@ -117,7 +119,7 @@ export function DiffPane({
           <DiffPathLabel path={selectedChangePath} />
           <span style={{ flex: 1 }} />
           <fieldset
-            aria-label="Diff scope"
+            aria-label={t("gitClientWindow.diff.scopeAriaLabel")}
             style={{ ...SCOPE_TOGGLE_STYLE, border: 0, margin: 0, padding: 0, minWidth: 0 }}
           >
             {SCOPES.map((entry) => {
@@ -140,7 +142,7 @@ export function DiffPane({
       <section
         style={{ flex: 1, minHeight: 0, overflow: "auto" }}
         className="review"
-        aria-label="Diff"
+        aria-label={t("gitClientWindow.diff.regionAriaLabel")}
         // eslint-disable-next-line jsx-a11y/no-noninteractive-tabindex -- Long diffs need a named, keyboard-scrollable region.
         tabIndex={0}
       >

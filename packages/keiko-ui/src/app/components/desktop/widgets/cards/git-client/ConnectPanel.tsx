@@ -7,6 +7,7 @@
 // See ADR-0098 for the git-client window conventions.
 
 import type { ReactNode } from "react";
+import { useTranslate } from "@/lib/i18n";
 import type { ProjectWithAvailability } from "@/lib/types";
 import { Icons } from "../../../Icons";
 import { NATIVE_BLOCK_STYLE } from "../../../native-element-styles";
@@ -130,6 +131,7 @@ export function ConnectPanel({
   onConnect,
   onClone,
 }: ConnectPanelProps): ReactNode {
+  const t = useTranslate();
   return (
     <div style={CONNECT_WRAP_STYLE}>
       <div style={CONNECT_COLUMN_STYLE}>
@@ -169,8 +171,7 @@ export function ConnectPanel({
             <SparkIcon size={14} />
           </span>
           <span style={{ fontSize: 12, color: "var(--fg-muted)", lineHeight: 1.55 }}>
-            After changes are staged, Keiko shows their structural summary and an eligible commit
-            draft for your review.
+            {t("gitClientWindow.connect.stagedDraftHint")}
           </span>
         </div>
       </div>

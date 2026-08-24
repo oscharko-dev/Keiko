@@ -2,6 +2,7 @@
 
 import type { ReactNode } from "react";
 import type { GitBranchListEntry } from "@/lib/api";
+import { useTranslate } from "@/lib/i18n";
 import type { GitRepositoryStatusResponse, ProjectWithAvailability } from "@/lib/types";
 import { Icons } from "../../../Icons";
 import KeikoSelect from "../../../KeikoSelect";
@@ -101,6 +102,7 @@ export function RepositoryToolbar({
   onOpenEditor,
   onOpenFiles,
 }: RepositoryToolbarProps): ReactNode {
+  const t = useTranslate();
   const hasRepository = selectedPath !== null;
   const branchValue = currentBranchName(branches, status);
 
@@ -177,7 +179,7 @@ export function RepositoryToolbar({
         />
       </ToolbarCell>
 
-      <ToolbarCell label="Sync" minWidth={196} last>
+      <ToolbarCell label={t("gitClientWindow.toolbar.sync")} minWidth={196} last>
         <SyncControl
           view={syncView}
           busy={syncBusy}

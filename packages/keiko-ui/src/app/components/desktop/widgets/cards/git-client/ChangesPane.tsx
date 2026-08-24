@@ -8,6 +8,7 @@ import type {
   GitHistoryResponse,
   GitRepositoryStatusResponse,
 } from "@/lib/types";
+import { useTranslate } from "@/lib/i18n";
 import { Icons } from "../../../Icons";
 import { NATIVE_BLOCK_STYLE } from "../../../native-element-styles";
 import type { GitMutationOutcome } from "./git-client-seam";
@@ -280,6 +281,7 @@ function ChangesList({
   readonly stagingOutcome: GitMutationOutcome | null;
   readonly stagingError: string | null;
 }): ReactNode {
+  const t = useTranslate();
   const unavailableState = changesListUnavailableState(status, statusLoading, statusError);
   if (unavailableState !== null) return unavailableState;
   if (status === null) return null;
@@ -340,9 +342,7 @@ function ChangesList({
       ) : null}
 
       {hasChanges ? (
-        <p style={STAGING_SCOPE_HINT_STYLE}>
-          Select files with the checkboxes. Keiko uses only staged files for the commit draft.
-        </p>
+        <p style={STAGING_SCOPE_HINT_STYLE}>{t("gitClientWindow.changes.stagingScopeHint")}</p>
       ) : null}
 
       {stagingError !== null || stagingOutcome !== null ? (

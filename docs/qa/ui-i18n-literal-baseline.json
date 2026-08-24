@@ -316,7 +316,6 @@
       "Changes and history",
       "changes; the list is truncated.",
       "Detached HEAD. Switch to an existing branch or create a branch before committing or syncing.",
-      "files staged",
       "History",
       "Loading changes…",
       "No changes",
@@ -334,14 +333,12 @@
       "Loading repositories…",
       "No repositories yet. Connect or clone one to get started.",
       "No repository connected",
-      "Once a repository is connected, Keiko can summarize your working changes and draft commit messages for you.",
       "Recent"
     ],
     "packages/keiko-ui/src/app/components/desktop/widgets/cards/git-client/DiffPane.tsx": [
       "bytes or",
       "committed ·",
       "Diff",
-      "Diff scope",
       "file changed",
       "files changed",
       "Loading diff…",

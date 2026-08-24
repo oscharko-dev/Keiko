@@ -1564,7 +1564,7 @@ export function GitClientWindow({
             </div>
             <input
               type="range"
-              aria-label="Resize changes column"
+              aria-label={t("gitClientWindow.sidebar.resizeAriaLabel")}
               min={SIDEBAR_MIN_WIDTH}
               max={SIDEBAR_MAX_WIDTH}
               value={Math.round(sidebarWidth)}

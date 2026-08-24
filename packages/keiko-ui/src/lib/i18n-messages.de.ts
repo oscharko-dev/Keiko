@@ -2228,6 +2228,14 @@ export const DE_MESSAGES = {
     "Vorschau der ausgewählten Ansicht nicht geladen.",
   "figmaSnapshotWindow.viewSourceMode.screenNotPresent":
     "Der ausgewählte Bildschirm ist in diesem gespeicherten Snapshot nicht vorhanden.",
+  "gitClientWindow.changes.stagingScopeHint":
+    "Dateien über die Kontrollkästchen auswählen. Keiko verwendet für den Commit-Entwurf nur bereitgestellte Dateien.",
+  "gitClientWindow.connect.stagedDraftHint":
+    "Nach dem Bereitstellen der Änderungen zeigt Keiko ihre strukturelle Zusammenfassung und einen zulässigen Commit-Entwurf zur Prüfung.",
+  "gitClientWindow.diff.regionAriaLabel": "Diff",
+  "gitClientWindow.diff.scopeAriaLabel": "Diff-Bereich",
+  "gitClientWindow.sidebar.resizeAriaLabel": "Breite der Änderungsspalte anpassen",
+  "gitClientWindow.toolbar.sync": "Synchronisierung",
   "gitClientWindow.sync.aheadSuffix": " ({count} voraus)",
   "gitClientWindow.sync.behindSuffix": " ({count} zurück)",
   "gitClientWindow.sync.outcome": "{label} in {seconds} s{delta}",
