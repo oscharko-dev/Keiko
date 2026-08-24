@@ -473,6 +473,8 @@ describe("CodingWorkbenchWindow", () => {
       activeWorkspaceWithBinding("/repos/keiko", "/worktrees/active-task"),
     );
 
+    expect(screen.getByRole("button", { name: "Manage branch task-1" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Manage branch dev" })).not.toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Manage repository active-task" }));
     expect(onOpenGit).toHaveBeenCalledWith({
       root: "/worktrees/active-task",

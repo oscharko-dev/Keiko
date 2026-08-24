@@ -19,6 +19,10 @@ import {
   type CodingRuntimeTrustedContext,
 } from "./runtimeAuthorityService.js";
 import { projectRuntimeAuthorityValue } from "./runtimeAuthorityProjection.js";
+import {
+  CodingRuntimeLaunchResolutionError,
+  type CodingRuntimeLaunchResolutionFailureReason,
+} from "./launchFailure.js";
 
 const RUNTIME_TTL_MS = 30 * 60_000;
 
@@ -145,10 +149,31 @@ type TrustedRuntimeProfile = Pick<CodingRuntimeTrustedContext, "runtimeSource"> 
   readonly reasoningEffort?: ModelReasoningEffort | undefined;
 };
 
-function codexRuntimeProfile(request: LaunchResolutionInput): TrustedRuntimeProfile {
-  if (request.modelId !== undefined || request.reasoningEffort !== undefined) {
-    throw new Error("runtime-model-selection-unsupported");
+function codexSelectionFailure(
+  request: LaunchResolutionInput,
+): CodingRuntimeLaunchResolutionFailureReason | undefined {
+  if (request.modelId !== undefined && request.reasoningEffort !== undefined) {
+    return "codex-model-and-reasoning-unsupported";
   }
+  if (request.modelId !== undefined) return "codex-model-selection-unsupported";
+  if (request.reasoningEffort !== undefined) return "codex-reasoning-effort-unsupported";
+  return undefined;
+}
+
+function managedSelectionFailure(
+  request: LaunchResolutionInput,
+): CodingRuntimeLaunchResolutionFailureReason | undefined {
+  if (request.modelId !== undefined && request.reasoningEffort !== undefined) {
+    return "managed-model-and-reasoning-unqualified";
+  }
+  if (request.modelId !== undefined) return "managed-model-unqualified";
+  if (request.reasoningEffort !== undefined) return "managed-reasoning-effort-unqualified";
+  return undefined;
+}
+
+function codexRuntimeProfile(request: LaunchResolutionInput): TrustedRuntimeProfile {
+  const failure = codexSelectionFailure(request);
+  if (failure !== undefined) throw new CodingRuntimeLaunchResolutionError(failure);
   return {
     runtimeSource: "codex-cli-adapter",
     modelSource: "chatgpt-codex-subscription-profile",
@@ -161,11 +186,9 @@ function managedRuntimeProfile(
   request: LaunchResolutionInput,
 ): TrustedRuntimeProfile {
   const selected = input.resolveManagedModelProfile?.(request.modelId, request.reasoningEffort);
-  if (
-    selected === undefined &&
-    (request.modelId !== undefined || request.reasoningEffort !== undefined)
-  ) {
-    throw new Error("runtime-model-selection-unqualified");
+  const failure = managedSelectionFailure(request);
+  if (selected === undefined && failure !== undefined) {
+    throw new CodingRuntimeLaunchResolutionError(failure);
   }
   return {
     runtimeSource: "keiko-sidecar",

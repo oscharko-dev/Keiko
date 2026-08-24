@@ -1,8 +1,12 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { ReactNode } from "react";
-import type { GitEditorDiffResponse, GitEditorDiffScope } from "@oscharko-dev/keiko-contracts";
+import type {
+  GitEditorDiffFile,
+  GitEditorDiffResponse,
+  GitEditorDiffScope,
+} from "@oscharko-dev/keiko-contracts";
 import { useTranslate } from "@/lib/i18n";
 import type { GitDiffScope, GitHistoryEntry } from "@/lib/types";
 import { DiffFileSection } from "../shared/diffView";
@@ -39,6 +43,13 @@ function structuredScope(scope: GitDiffScope): GitEditorDiffScope {
   return scope === "staged" ? "staged" : "unstaged";
 }
 
+function firstChangedLine(file: GitEditorDiffFile): number {
+  const hunk = file.hunks[0];
+  if (hunk === undefined) return 1;
+  const changed = hunk.lines.find((line) => line.kind === "add" && line.newLine !== null);
+  return changed?.newLine ?? Math.max(1, hunk.newStart);
+}
+
 // Split a repo-relative path into its directory (with trailing slash) and the file name.
 function splitPath(path: string): { readonly dir: string; readonly name: string } {
   const idx = path.lastIndexOf("/");
@@ -63,6 +74,8 @@ interface DiffPaneProps {
   readonly selectedCommit: GitHistoryEntry | null;
   readonly scope: GitDiffScope;
   readonly onScopeChange: (scope: GitDiffScope) => void;
+  readonly revealRequestId?: number | undefined;
+  readonly onRevealFile?: ((path: string, line: number) => void) | undefined;
   /** Bumped after a staging/commit mutation so the visible diff reloads. */
   readonly revision: number;
 }
@@ -74,10 +87,13 @@ export function DiffPane({
   selectedCommit,
   scope,
   onScopeChange,
+  revealRequestId = 0,
+  onRevealFile,
   revision,
 }: DiffPaneProps): ReactNode {
   const t = useTranslate();
   const [state, setState] = useState<DiffState>(EMPTY_DIFF);
+  const handledRevealRef = useRef(0);
 
   useEffect(() => {
     if (selectedCommit !== null) {
@@ -100,6 +116,15 @@ export function DiffPane({
         (res) => {
           if (cancelled) return;
           setState({ loading: false, response: res, error: null });
+          const file = res.files.find((entry) => entry.path === selectedChangePath) ?? res.files[0];
+          if (
+            file !== undefined &&
+            onRevealFile !== undefined &&
+            revealRequestId > handledRevealRef.current
+          ) {
+            handledRevealRef.current = revealRequestId;
+            onRevealFile(file.path, firstChangedLine(file));
+          }
         },
         (err: unknown) => {
           if (cancelled) return;
@@ -109,7 +134,16 @@ export function DiffPane({
     return () => {
       cancelled = true;
     };
-  }, [client, repositoryRoot, revision, scope, selectedChangePath, selectedCommit]);
+  }, [
+    client,
+    onRevealFile,
+    repositoryRoot,
+    revealRequestId,
+    revision,
+    scope,
+    selectedChangePath,
+    selectedCommit,
+  ]);
 
   return (
     <div style={{ display: "flex", flexDirection: "column", minWidth: 0, minHeight: 0, flex: 1 }}>

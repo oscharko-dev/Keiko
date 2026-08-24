@@ -52,7 +52,7 @@ import type {
   CodingRuntimeOrchestratorResult,
   CodingRuntimeQuestionOperationResult,
 } from "./codingRuntimeOrchestratorTypes.js";
-import { classifyLaunchRejection } from "./launchFailure.js";
+import { classifyLaunchRejection, launchRejectionDiagnosticReason } from "./launchFailure.js";
 import type { CodingRuntimeTaskOutcome } from "./productionCodingRuntimeHost.js";
 
 function runtimePauseFailureCode(
@@ -103,6 +103,9 @@ function recordRuntimeStartFailure(
   reason: RuntimeStartFailureReason,
   error?: unknown,
 ): void {
+  const launchReason =
+    reason === "launch-resolution" ? launchRejectionDiagnosticReason(error) : undefined;
+  const diagnosticCode = `stage=start:reason=${reason}`;
   emitServerDiagnostic(diagnostics, {
     correlationId: runtimeDiagnosticCorrelationId(runId),
     timestamp: new Date().toISOString(),
@@ -110,7 +113,7 @@ function recordRuntimeStartFailure(
     source: "coding-runtime-orchestrator.start",
     errorClass: error === undefined ? "CodingRuntimeStartFailure" : contentFreeErrorClass(error),
     message: "runtime-start-failed",
-    code: `stage=start:reason=${reason}`,
+    code: launchReason === undefined ? diagnosticCode : `${diagnosticCode}:${launchReason}`,
   });
 }
 

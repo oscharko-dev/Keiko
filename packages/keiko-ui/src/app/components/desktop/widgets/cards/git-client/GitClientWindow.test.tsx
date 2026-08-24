@@ -841,6 +841,23 @@ describe("GitClientWindow — repository list", () => {
     expect(client.getStatus).not.toHaveBeenCalled();
   });
 
+  it.each([
+    ["missing", []],
+    ["unavailable", [makeRepo("/repos/legacy", "legacy", { available: false })]],
+  ])("reports a configured %s repository as unavailable", async (_case, projects) => {
+    const updateCfg = vi.fn();
+    const client = makeClient({
+      listRepositories: vi.fn(async () => ({ projects })),
+    });
+    render(<GitClientWindow projectId="/repos/legacy" client={client} updateCfg={updateCfg} />);
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "This local repository is unavailable.",
+    );
+    expect(updateCfg).toHaveBeenCalledWith({ projectPath: "" });
+    expect(client.getStatus).not.toHaveBeenCalled();
+  });
+
   it("offers Connect repository and Clone from URL actions in the connect panel", async () => {
     render(<GitClientWindow client={makeClient()} />);
     expect(screen.getByRole("button", { name: "Connect repository" })).toBeInTheDocument();
@@ -2284,11 +2301,54 @@ describe("GitClientWindow — changed-files list and diff selection", () => {
     );
   });
 
+  it("opens a clicked change in the editor at its first changed line", async () => {
+    const onOpenEditorFile = vi.fn();
+    const structured = [
+      "diff --git a/src/index.ts b/src/index.ts",
+      "--- a/src/index.ts",
+      "+++ b/src/index.ts",
+      "@@ -12,1 +12,1 @@",
+      "-old",
+      "+new",
+      "",
+    ].join("\n");
+    const client = makeClient({
+      getStatus: vi.fn(async () => makeStatusWithChanges()),
+      getStructuredDiff: vi.fn(async () => makeStructuredDiffResponse(structured, "staged")),
+    });
+    render(
+      <GitClientWindow
+        projectId={REPO_A.path}
+        client={client}
+        onOpenEditorFile={onOpenEditorFile}
+      />,
+    );
+
+    fireEvent.click((await screen.findByText("index.ts")).closest("button")!);
+
+    await waitFor(() =>
+      expect(onOpenEditorFile).toHaveBeenCalledWith({
+        root: REPO_A.path,
+        path: "src/index.ts",
+        lineStart: 12,
+        lineEnd: 12,
+      }),
+    );
+  });
+
   it("focuses an editor-originated path without bouncing back to the editor", async () => {
+    const onOpenEditorFile = vi.fn();
     const client = makeClient({
       getStatus: vi.fn(async () => makeStatusWithChanges()),
     });
-    render(<GitClientWindow projectId={REPO_A.path} initialPath="README.md" client={client} />);
+    render(
+      <GitClientWindow
+        projectId={REPO_A.path}
+        initialPath="README.md"
+        client={client}
+        onOpenEditorFile={onOpenEditorFile}
+      />,
+    );
 
     await waitFor(() =>
       expect(client.getStructuredDiff).toHaveBeenCalledWith({
@@ -2297,6 +2357,7 @@ describe("GitClientWindow — changed-files list and diff selection", () => {
         scope: "unstaged",
       }),
     );
+    expect(onOpenEditorFile).not.toHaveBeenCalled();
   });
 });
 
@@ -2703,6 +2764,27 @@ describe("GitClientWindow — commit composer (Issue #1575)", () => {
 
     expect(screen.getByLabelText("Base branch")).toHaveValue("main");
     expect(screen.getByLabelText("Base branch")).not.toHaveValue("dev");
+  });
+
+  it("leaves the PR base empty when no distinct branch is known yet", async () => {
+    const client = makeClient({
+      getStatus: vi.fn(async () => makeStatus({ branch: "feat/audit" })),
+      listBranches: vi.fn(async () => makeBranchList({ branches: [] })),
+      getSummary: vi.fn(async () =>
+        makeSummary({
+          branch: "feat/audit",
+          upstream: { ref: "origin/feat/audit", remote: "origin", branch: "feat/audit" },
+        }),
+      ),
+    });
+    const user = userEvent.setup();
+    render(<GitClientWindow projectId={REPO_A.path} client={client} />);
+    expect(await screen.findByText("No changes")).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "Create pull request" }));
+
+    expect(screen.getByLabelText("Base branch")).toHaveValue("");
+    expect(screen.getByLabelText("Head branch")).toHaveValue("feat/audit");
   });
 
   it("keeps the commit draft while moving between workspace and sidebar layouts", async () => {

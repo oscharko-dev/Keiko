@@ -1557,6 +1557,60 @@ describe("AppShell grounding connections", () => {
     });
   });
 
+  it("records the Search window root when closing it so undo restores the same binding", async () => {
+    const api = workspaceApi();
+    mocks.state.workspaceResult = workspaceResult(
+      [win("search", { root: "/repo/search-bound" }, "search-window")],
+      [],
+      api,
+    );
+    await renderMounted();
+    mocks.pushUndo.mockClear();
+
+    await act(async (): Promise<void> => {
+      mocks.state.rightRailOnTool?.("search");
+    });
+
+    expect(api.toggleTool).toHaveBeenCalledWith("search");
+    expect(mocks.pushUndo).toHaveBeenCalledWith({
+      kind: "ui.panel.toggle",
+      panel: "search",
+      before: true,
+      after: false,
+      searchRoot: "/repo/search-bound",
+    });
+  });
+
+  it("records the Git window root when closing it so undo restores the same binding", async () => {
+    const api = workspaceApi();
+    mocks.state.workspaceResult = workspaceResult(
+      [
+        win(
+          "governedGit",
+          { projectPath: "/repo/git-bound", rootBinding: "coding-repository" },
+          "git-window",
+        ),
+      ],
+      [],
+      api,
+    );
+    await renderMounted();
+    mocks.pushUndo.mockClear();
+
+    await act(async (): Promise<void> => {
+      mocks.state.rightRailOnTool?.("governedGit");
+    });
+
+    expect(api.toggleTool).toHaveBeenCalledWith("governedGit");
+    expect(mocks.pushUndo).toHaveBeenCalledWith({
+      kind: "ui.panel.toggle",
+      panel: "governedGit",
+      before: true,
+      after: false,
+      projectRoot: "/repo/git-bound",
+    });
+  });
+
   // Issue #2723 — the connected-scope rebind scan (chatWindowIdOf via useEffect) must reach its
   // per-connection body at least once; when neither endpoint is a chat window and no bind-time
   // snapshot exists, chatWindowIdOf returns null and the scan skips the connection entirely.

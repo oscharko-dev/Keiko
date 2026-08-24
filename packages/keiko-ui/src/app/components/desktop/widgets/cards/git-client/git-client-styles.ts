@@ -24,16 +24,15 @@ export const WORKSPACE_STYLE: CSSProperties = {
   color: "var(--fg)",
 };
 
-// Connected toolbar: repository, branch, sync, and utility actions remain in one compact working
-// row. A horizontal overflow keeps every control reachable in a deliberately narrow window without
-// weakening the scanning order or splitting the actions into an unrelated second row.
+// Connected toolbar: repository, branch, sync, and utility actions stay in scanning order and wrap
+// when the window narrows. minHeight lets additional rows grow without forcing horizontal scrolling
+// at the 320 CSS-pixel reflow boundary (GEN-UI-LAYOUT-003).
 export const TOOLBAR_STYLE: CSSProperties = {
   minHeight: 72,
   flex: "none",
   display: "flex",
-  flexWrap: "nowrap",
+  flexWrap: "wrap",
   alignItems: "stretch",
-  overflowX: "auto",
   borderBottom: "1px solid var(--line-soft)",
   background: "var(--surface)",
 };

@@ -622,7 +622,8 @@ registerWindowRender("governedGit", (cfg, ctx) => {
   const configuredRoot = str(cfg, "projectPath") ?? str(cfg, "workspaceRoot");
   // A dormant Coding Workbench has an explicit repository selection. Preserve that selection when
   // it opens Git; active coding runs omit this marker and remain bound to their task worktree.
-  const honorConfiguredRoot = isCodingRepositoryBinding(cfg, configuredRoot);
+  const honorConfiguredRoot =
+    ctx.activeBinding === null && isCodingRepositoryBinding(cfg, configuredRoot);
   const initialCommit = gitObjectId(str(cfg, "commit"));
   const initialPath = str(cfg, "path");
   return (
@@ -641,6 +642,7 @@ registerWindowRender("governedGit", (cfg, ctx) => {
           initialCommit={initialCommit}
           onOpenFiles={(root: string) => ctx.openWindow("files", { root })}
           onOpenEditor={(root: string) => ctx.openWindow("editor", { root })}
+          onOpenEditorFile={ctx.openEditorFile}
           updateCfg={(patch: Record<string, WindowCfgValue>) => ctx.updateCfg(patch)}
         />
       )}

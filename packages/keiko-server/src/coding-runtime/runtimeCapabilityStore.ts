@@ -1,7 +1,8 @@
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
-import type {
-  CodingWorkbenchRuntimeAdapterKind,
-  ModelReasoningEffort,
+import {
+  MODEL_REASONING_EFFORTS,
+  type CodingWorkbenchRuntimeAdapterKind,
+  type ModelReasoningEffort,
 } from "@oscharko-dev/keiko-contracts";
 
 export type RuntimeCapabilityAudience = "model-gateway" | "tool-facade";
@@ -51,13 +52,8 @@ interface StoredCapability {
 const CAPABILITY_PATTERN = /^[A-Za-z0-9_-]{32,256}$/u;
 const DIGEST_PATTERN = /^[0-9a-f]{64}$/u;
 const CAPABILITY_AUDIENCES: ReadonlySet<string> = new Set(["model-gateway", "tool-facade"]);
-const REASONING_EFFORTS: ReadonlySet<string> = new Set([
-  "minimal",
-  "low",
-  "medium",
-  "high",
-  "xhigh",
-]);
+// Runtime capabilities cross a trust boundary; derive validation from the canonical wire values.
+const REASONING_EFFORTS: ReadonlySet<string> = new Set(MODEL_REASONING_EFFORTS);
 const DEFAULT_MAX_RECORDS = 64;
 
 /**

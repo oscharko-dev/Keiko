@@ -30,6 +30,33 @@ export class CodingRuntimeLaunchRejectedError extends Error {
   }
 }
 
+export type CodingRuntimeLaunchResolutionFailureReason =
+  | "codex-model-and-reasoning-unsupported"
+  | "codex-model-selection-unsupported"
+  | "codex-reasoning-effort-unsupported"
+  | "managed-model-and-reasoning-unqualified"
+  | "managed-model-unqualified"
+  | "managed-reasoning-effort-unqualified";
+
+/** A model/runtime selection rejected before runtime launch, carrying only a closed reason. */
+export class CodingRuntimeLaunchResolutionError extends Error {
+  public readonly reason: CodingRuntimeLaunchResolutionFailureReason;
+
+  public constructor(reason: CodingRuntimeLaunchResolutionFailureReason) {
+    super(reason);
+    this.name = "CodingRuntimeLaunchResolutionError";
+    this.reason = reason;
+  }
+}
+
+export function launchRejectionDiagnosticReason(
+  error: unknown,
+): CodingRuntimeFailureCode | CodingRuntimeLaunchResolutionFailureReason | undefined {
+  if (error instanceof CodingRuntimeLaunchRejectedError) return error.failureCode;
+  if (error instanceof CodingRuntimeLaunchResolutionError) return error.reason;
+  return undefined;
+}
+
 // A backend rejects on runtimeSource/modelSource, which is precisely what `source-drift` already
 // names everywhere else in this contract (see agentAuthorityRegistry's drift classification) — so
 // the mismatch reuses that code rather than widening the wire union.

@@ -425,7 +425,11 @@ function WorkbenchColumns({
       mutationPending={state.mutation.status === "pending"}
       startBusy={state.mutation.kind === "start" && state.mutation.status === "pending"}
       repositoryLabel={repositoryLabel(repositoryRoot)}
-      branchLabel={activeWorkspace.activeInstance?.baseBranch ?? null}
+      branchLabel={
+        runIsActive
+          ? (activeWorkspace.activeInstance?.taskBranch ?? null)
+          : (activeWorkspace.activeInstance?.baseBranch ?? null)
+      }
       onOpenGit={() =>
         onOpenGit({
           root: repositoryRoot,

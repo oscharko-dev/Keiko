@@ -19,7 +19,10 @@ import {
   MAX_APPROVAL_CHALLENGE_TTL_MS,
   type CodingRuntimeOrchestratorResult,
 } from "./codingRuntimeOrchestrator.js";
-import { CodingRuntimeLaunchRejectedError } from "./launchFailure.js";
+import {
+  CodingRuntimeLaunchRejectedError,
+  CodingRuntimeLaunchResolutionError,
+} from "./launchFailure.js";
 import { createPendingResearchApprovals } from "./researchApprovalIssuance.js";
 import { createResearchGrantRegistry } from "./researchGrantRegistry.js";
 import { UNKNOWN_CORRELATION_ID } from "../correlation.js";
@@ -629,7 +632,26 @@ describe("CodingRuntimeOrchestrator", () => {
       expect.objectContaining({
         operation: "coding-runtime.start",
         message: "runtime-start-failed",
-        code: "stage=start:reason=launch-resolution",
+        code: "stage=start:reason=launch-resolution:adapter-profile-mismatch",
+      }),
+    );
+  });
+
+  it("diagnoses a rejected model selection without exposing selection content", async () => {
+    const captured = captureDiagnostics();
+    const f = fixture(undefined, undefined, [], captured.diagnostics);
+    f.launchResolver.resolve.mockImplementationOnce(() => {
+      throw new CodingRuntimeLaunchResolutionError("managed-model-unqualified");
+    });
+
+    expect(await f.orchestrator.start(start)).toEqual({
+      ok: false,
+      failureCode: "authority-resolution-failed",
+    });
+    expect(captured.records).toContainEqual(
+      expect.objectContaining({
+        errorClass: "CodingRuntimeLaunchResolutionError",
+        code: "stage=start:reason=launch-resolution:managed-model-unqualified",
       }),
     );
   });

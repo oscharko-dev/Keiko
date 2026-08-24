@@ -3,7 +3,12 @@
 // generic `authority-resolution-failed`. These pin the structured mapping that replaced it.
 
 import { describe, expect, it } from "vitest";
-import { CodingRuntimeLaunchRejectedError, classifyLaunchRejection } from "./launchFailure.js";
+import {
+  CodingRuntimeLaunchRejectedError,
+  CodingRuntimeLaunchResolutionError,
+  classifyLaunchRejection,
+  launchRejectionDiagnosticReason,
+} from "./launchFailure.js";
 
 describe("classifyLaunchRejection", () => {
   it("maps an adapter profile mismatch to the source-drift code the contract already defines", () => {
@@ -11,6 +16,15 @@ describe("classifyLaunchRejection", () => {
     expect(classifyLaunchRejection(rejection)).toBe("source-drift");
     expect(rejection.failureCode).toBe("adapter-profile-mismatch");
     expect(rejection.retryable).toBe(false);
+    expect(launchRejectionDiagnosticReason(rejection)).toBe("adapter-profile-mismatch");
+  });
+
+  it("keeps model resolution failures closed and diagnostic without changing the wire fallback", () => {
+    const rejection = new CodingRuntimeLaunchResolutionError("managed-model-unqualified");
+
+    expect(rejection.reason).toBe("managed-model-unqualified");
+    expect(classifyLaunchRejection(rejection)).toBe("authority-resolution-failed");
+    expect(launchRejectionDiagnosticReason(rejection)).toBe("managed-model-unqualified");
   });
 
   it("keeps an unmapped structured rejection on the generic code rather than guessing a cause", () => {
@@ -29,5 +43,6 @@ describe("classifyLaunchRejection", () => {
   ])("does not trust %s to name its own failure code", (_label, thrown) => {
     // The message and shape are attacker- and accident-controlled; only the class is evidence.
     expect(classifyLaunchRejection(thrown)).toBe("authority-resolution-failed");
+    expect(launchRejectionDiagnosticReason(thrown)).toBeUndefined();
   });
 });

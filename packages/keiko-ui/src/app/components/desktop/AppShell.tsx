@@ -326,6 +326,17 @@ export function frontmostSearchRootOwner(wins: readonly AppWindow[] | null): App
   return owner;
 }
 
+function panelBindingRoot(
+  wins: readonly AppWindow[] | null,
+  panel: "search" | "governedGit",
+): string | undefined {
+  const win = wins
+    ?.filter((candidate) => candidate.type === panel && candidate.minimized !== true)
+    .sort((left, right) => right.z - left.z)[0];
+  if (win === undefined) return undefined;
+  return panel === "search" ? resolveSearchRoot(null, win) : gitWindowRoot(win);
+}
+
 export function openOrFocusSearchWindow(api: WorkspaceApi, root: string | undefined): void {
   // WorkspaceApi.add is the singleton-aware open/focus operation. Passing an explicit undefined
   // clears a stale persisted root, so an unowned or ambiguous Search fails visibly before routing.
@@ -337,6 +348,7 @@ function openShellTool(
   api: WorkspaceApi,
   panel: WindowType,
   opensSearch: boolean,
+  opensProjectGit: boolean,
   searchRoot: string | undefined,
   projectRoot: string | undefined,
 ): void {
@@ -344,8 +356,11 @@ function openShellTool(
     openOrFocusSearchWindow(api, searchRoot);
     return;
   }
-  if (panel === "governedGit" && projectRoot !== undefined) {
-    api.add("governedGit", { projectPath: projectRoot, rootBinding: "coding-repository" });
+  if (opensProjectGit) {
+    api.add("governedGit", {
+      projectPath: projectRoot,
+      rootBinding: projectRoot === undefined ? undefined : "coding-repository",
+    });
     return;
   }
   api.toggleTool(panel);
@@ -1505,19 +1520,25 @@ function AppShellInner(): ReactNode {
       // state are one rule (shellPanelIsOpen) rather than two copies that can drift.
       const before = shellPanelIsOpen(ws.wins, panel);
       const opensSearch = panel === "search" && !before;
-      const searchRoot = opensSearch
-        ? resolveSearchRoot(activeWorkspace.activeRoot, searchOwner)
-        : undefined;
       const opensProjectGit = panel === "governedGit" && !before;
-      const projectRoot = opensProjectGit ? shortcutRoot : undefined;
-      openShellTool(ws.api, panel, opensSearch, searchRoot, projectRoot);
+      let searchRoot: string | undefined;
+      if (panel === "search") {
+        searchRoot = before
+          ? panelBindingRoot(ws.wins, "search")
+          : resolveSearchRoot(activeWorkspace.activeRoot, searchOwner);
+      }
+      let projectRoot: string | undefined;
+      if (panel === "governedGit") {
+        projectRoot = before ? panelBindingRoot(ws.wins, "governedGit") : shortcutRoot;
+      }
+      openShellTool(ws.api, panel, opensSearch, opensProjectGit, searchRoot, projectRoot);
       undoStack.push({
         kind: "ui.panel.toggle",
         panel,
         before,
-        after: opensSearch || !before,
-        ...(opensSearch ? { searchRoot } : {}),
-        ...(projectRoot === undefined ? {} : { projectRoot }),
+        after: !before,
+        ...(panel === "search" ? { searchRoot } : {}),
+        ...(panel === "governedGit" ? { projectRoot } : {}),
       });
     },
     [activeWorkspace.activeRoot, searchOwner, shortcutRoot, undoStack, ws.api, ws.wins],

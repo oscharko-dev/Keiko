@@ -41,6 +41,27 @@ export interface ShellUndoTarget {
   readonly isPanelOpen: (panel: WindowType) => boolean;
 }
 
+type PanelToggleAction = Extract<WorkspaceUiAction, { readonly kind: "ui.panel.toggle" }>;
+
+function applyBoundPanelOpen(
+  target: ShellUndoTarget,
+  panel: WindowType,
+  action: PanelToggleAction,
+): boolean {
+  if (panel === "search" && Object.hasOwn(action, "searchRoot")) {
+    target.api.add("search", { root: action.searchRoot });
+    return true;
+  }
+  if (panel === "governedGit" && Object.hasOwn(action, "projectRoot")) {
+    target.api.add("governedGit", {
+      projectPath: action.projectRoot,
+      rootBinding: action.projectRoot === undefined ? undefined : "coding-repository",
+    });
+    return true;
+  }
+  return false;
+}
+
 // Audit — this used to call `api.toggleTool(panel)` unconditionally: a STATE-DEPENDENT flip that
 // reverses whatever the panel happens to be right now instead of applying what the action recorded.
 // Toggle a panel open, close it by hand, then press Cmd+Z: the recorded state to restore is
@@ -54,16 +75,6 @@ export function applyShellUndoAction(target: ShellUndoTarget, action: WorkspaceU
   // original action produced. Either way it is the recorded target state.
   const recordedOpen = action.after;
   if (target.isPanelOpen(panel) === recordedOpen) return;
-  if (recordedOpen && panel === "search" && action.searchRoot !== undefined) {
-    target.api.add("search", { root: action.searchRoot });
-    return;
-  }
-  if (recordedOpen && panel === "governedGit" && action.projectRoot !== undefined) {
-    target.api.add("governedGit", {
-      projectPath: action.projectRoot,
-      rootBinding: "coding-repository",
-    });
-    return;
-  }
+  if (recordedOpen && applyBoundPanelOpen(target, panel, action)) return;
   target.api.toggleTool(panel);
 }

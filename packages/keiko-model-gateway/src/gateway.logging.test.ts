@@ -235,7 +235,7 @@ describe("Gateway.chat — activity log", () => {
       },
       log,
     );
-    const response = await gateway.chat(REQUEST);
+    const response = await gateway.chat({ ...REQUEST, reasoningEffort: "high" });
     expect(opsAtCall).toEqual(["gateway.chat.started"]);
     const started = eventFor(log.events, "gateway.chat.started");
     expect(started.level).toBe("info");
@@ -245,6 +245,7 @@ describe("Gateway.chat — activity log", () => {
       endpoint: "https://provider.example",
       timeoutMs: 30_000,
       maxRetries: 0,
+      reasoningEffort: "high",
       streaming: false,
     });
   });
@@ -283,10 +284,16 @@ describe("Gateway.chat — activity log", () => {
         yield { type: "done", response: await Promise.resolve(okResponse("example-chat-model")) };
       },
     };
-    await drainStream(gatewayWith(adapter, log).chatStream(REQUEST));
+    await drainStream(
+      gatewayWith(adapter, log).chatStream({ ...REQUEST, reasoningEffort: "medium" }),
+    );
     const started = eventFor(log.events, "gateway.stream.started");
     expect(started.level).toBe("info");
-    expect(started.extra).toMatchObject({ modelId: "example-chat-model", streaming: true });
+    expect(started.extra).toMatchObject({
+      modelId: "example-chat-model",
+      reasoningEffort: "medium",
+      streaming: true,
+    });
     expect(ops(log.events)).not.toContain("gateway.chat.started");
   });
 

@@ -465,8 +465,30 @@ vi.mock("./coding-workbench/CodingWorkbenchWindow", () => ({
   ),
 }));
 vi.mock("./cards/git-client/GitClientWindow", () => ({
-  GitClientWindow: ({ projectId }: { readonly projectId?: string }): ReactNode => (
-    <div data-testid="git-client-window">{projectId ?? "unbound"}</div>
+  GitClientWindow: ({
+    projectId,
+    onOpenEditorFile,
+  }: {
+    readonly projectId?: string;
+    readonly onOpenEditorFile?:
+      | ((request: {
+          readonly root: string;
+          readonly path: string;
+          readonly lineStart: number;
+        }) => void)
+      | undefined;
+  }): ReactNode => (
+    <div data-testid="git-client-window">
+      {projectId ?? "unbound"}
+      <button
+        type="button"
+        onClick={() =>
+          onOpenEditorFile?.({ root: projectId ?? "", path: "src/app.ts", lineStart: 7 })
+        }
+      >
+        Reveal Git file
+      </button>
+    </div>
   ),
 }));
 vi.mock("./cards/ReviewWidget", () => ({
@@ -1631,8 +1653,8 @@ describe("active workspace binding override (Issue #446)", () => {
     expect(await screen.findByTestId("editor-widget")).toHaveTextContent(`${selectedRoot}:`);
   });
 
-  it("preserves an explicit Coding Workbench repository selection for Git", async () => {
-    const ctx = boundCtx("/worktrees/active-task", "/repos/keiko");
+  it("preserves an explicit dormant Coding Workbench repository selection for Git", async () => {
+    const ctx = boundCtx(null, "/repos/keiko");
     const view = render(<>{WIN_TYPES.coding.render({}, ctx)}</>);
 
     fireEvent.click(await screen.findByRole("button", { name: "Open coding repository Git" }));
@@ -1650,8 +1672,38 @@ describe("active workspace binding override (Issue #446)", () => {
       </>,
     );
     expect(await screen.findByTestId("git-client-window")).toHaveTextContent("/repos/keiko");
+    fireEvent.click(screen.getByRole("button", { name: "Reveal Git file" }));
+    expect(ctx.openEditorFile).toHaveBeenCalledWith({
+      root: "/repos/keiko",
+      path: "src/app.ts",
+      lineStart: 7,
+    });
+  });
 
-    view.rerender(<>{WIN_TYPES.governedGit.render({ projectPath: "/repos/keiko" }, ctx)}</>);
+  it("retargets a dormant Git window to the active task worktree", async () => {
+    const activeRoot = "/worktrees/active-task";
+    const ctx: WindowRenderContext = {
+      ...boundCtx(activeRoot, "/repos/keiko"),
+      activeBinding: {
+        schemaVersion: "1",
+        workspaceId: "workspace-1",
+        taskId: "task-1",
+        activeRoot,
+        boundSurfaces: ["git-delivery"],
+        gitDeliveryRoot: activeRoot,
+        editorProjectRoot: activeRoot,
+      },
+    };
+
+    render(
+      <>
+        {WIN_TYPES.governedGit.render(
+          { projectPath: "/repos/keiko", rootBinding: "coding-repository" },
+          ctx,
+        )}
+      </>,
+    );
+
     expect(await screen.findByTestId("git-client-window")).toHaveTextContent(
       "/worktrees/active-task",
     );

@@ -594,11 +594,12 @@ describe("GitClientWindow — explicit name/role/value assertions", () => {
       expect(box!.getAttribute("data-focus-visible")).toBeNull();
     });
 
-    it("narrow layout preserves a single toolbar row and keeps a diff-pane floor (GEN-UI-LAYOUT-003)", async () => {
-      // jsdom has no layout, so assert the style contract that preserves the working order of the
-      // toolbar with horizontal reachability and keeps a usable diff pane beside the sidebar.
-      expect(TOOLBAR_STYLE.flexWrap).toBe("nowrap");
-      expect(TOOLBAR_STYLE.overflowX).toBe("auto");
+    it("narrow layout lets the toolbar wrap and keeps a diff-pane floor (GEN-UI-LAYOUT-003)", async () => {
+      // jsdom has no layout, so assert the style contract that keeps controls reachable and the
+      // diff pane usable when the window is narrowed: controls wrap instead of forcing horizontal
+      // scrolling, and the sidebar cannot squeeze the diff pane to zero.
+      expect(TOOLBAR_STYLE.flexWrap).toBe("wrap");
+      expect(TOOLBAR_STYLE.overflowX).not.toBe("auto");
       expect(String(SIDEBAR_STYLE.width)).toMatch(/min\(/);
       expect(WORKSPACE_STYLE.height).toBe("100%");
       expect(WORKSPACE_STYLE.overflow).toBe("hidden");

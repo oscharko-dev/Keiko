@@ -38,6 +38,7 @@ import type {
   ProjectWithAvailability,
 } from "@/lib/types";
 import type { WindowCfgValue } from "../../../windows/types";
+import type { OpenEditorFileRequest } from "../../../hooks/useWorkspace.types";
 import { DEFAULT_GIT_CLIENT, formatGitError, useGitActions } from "./git-client-seam";
 import type { GitClientSeam, GitMutationOutcome } from "./git-client-seam";
 import { MutationOutcome } from "./git-client-ui";
@@ -153,6 +154,7 @@ export interface GitClientWindowProps {
   readonly initialCommit?: string | undefined;
   readonly onOpenFiles?: ((root: string) => void) | undefined;
   readonly onOpenEditor?: ((root: string) => void) | undefined;
+  readonly onOpenEditorFile?: ((request: OpenEditorFileRequest) => void) | undefined;
   /** Persists the selected repository into cfg.projectPath so resolveBoundRoot re-targets. */
   readonly updateCfg?: ((patch: Record<string, WindowCfgValue>) => void) | undefined;
   /** DI seam; defaults to the real BFF client. */
@@ -213,7 +215,7 @@ function distinctUpstreamBranch(
   currentBranch: string | undefined,
   upstreamBranch: string | undefined,
 ): string | undefined {
-  if (currentBranch === undefined || upstreamBranch === undefined) return undefined;
+  if (upstreamBranch === undefined) return undefined;
   return upstreamBranch === currentBranch ? undefined : upstreamBranch;
 }
 
@@ -231,14 +233,11 @@ function inferBaseBranch(
   currentBranch: string | undefined,
   summary: GitRepositorySummary | null,
   branches: readonly GitBranchListEntry[],
-): string {
+): string | undefined {
   const upstreamBranch = summary?.upstream?.branch;
   return (
     distinctUpstreamBranch(currentBranch, upstreamBranch) ??
-    preferredIntegrationBranch(currentBranch, branches) ??
-    upstreamBranch ??
-    currentBranch ??
-    "main"
+    preferredIntegrationBranch(currentBranch, branches)
   );
 }
 
@@ -767,6 +766,7 @@ export function GitClientWindow({
   initialCommit,
   onOpenFiles,
   onOpenEditor,
+  onOpenEditorFile,
   updateCfg,
   client = DEFAULT_GIT_CLIENT,
   reconcileEditorBuffers = requestEditorBufferReconciliation,
@@ -803,6 +803,7 @@ export function GitClientWindow({
   const [statusRevision, setStatusRevision] = useState(0);
   const [tab, setTab] = useState<ChangesTab>("changes");
   const [selectedChangePath, setSelectedChangePath] = useState<string | null>(null);
+  const [revealRequestId, setRevealRequestId] = useState(0);
   const [diffScope, setDiffScope] = useState<GitDiffScope>("worktree");
   const [commitNonce, setCommitNonce] = useState(0);
   const [dialogOpen, setDialogOpen] = useState(false);
@@ -1251,7 +1252,13 @@ export function GitClientWindow({
     }
     setSelectedPath(null);
     updateCfg?.({ projectPath: "" });
-    setReposError(optionalT("gitClientWindow.repository.workspaceUnavailable"));
+    setReposError(
+      optionalT(
+        selected?.available !== true
+          ? "gitClientWindow.repository.unavailable"
+          : "gitClientWindow.repository.workspaceUnavailable",
+      ),
+    );
   }, [optionalT, projectId, repositories, reposError, reposLoading, selectedPath, updateCfg]);
 
   const active = activeGitClientState({
@@ -1295,10 +1302,24 @@ export function GitClientWindow({
   const selectChange = useCallback(
     (path: string): void => {
       setSelectedChangePath(path);
+      setRevealRequestId((value) => value + 1);
       const change = activeStatus?.changes.find((c) => c.path === path);
       if (change !== undefined) setDiffScope(preferredDiffScopeForChange(change));
     },
     [activeStatus],
+  );
+
+  const revealEditorFile = useCallback(
+    (path: string, line: number): void => {
+      if (selectedPath === null || onOpenEditorFile === undefined) return;
+      onOpenEditorFile({
+        root: selectedPath,
+        path,
+        lineStart: line,
+        lineEnd: line,
+      });
+    },
+    [onOpenEditorFile, selectedPath],
   );
 
   const stageFile = useCallback(
@@ -1677,6 +1698,8 @@ export function GitClientWindow({
                       selectedCommit={tab === "history" ? selectedCommit : null}
                       scope={diffScope}
                       onScopeChange={setDiffScope}
+                      revealRequestId={revealRequestId}
+                      onRevealFile={revealEditorFile}
                       revision={statusRevision}
                     />
                   )}

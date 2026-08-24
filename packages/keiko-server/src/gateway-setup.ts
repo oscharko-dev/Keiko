@@ -825,10 +825,14 @@ function metadataFromDiscoveryItem(item: Record<string, unknown>): GatewayDiscov
     "supports_function_calling",
     "supportsFunctionCalling",
   ]);
-  const reasoningEfforts = stringListFieldFromRecords(records, [
-    "supported_reasoning_efforts",
-    "reasoning_efforts",
-  ]).filter(isModelReasoningEffort);
+  const reasoningEfforts = [
+    ...new Set(
+      stringListFieldFromRecords(records, [
+        "supported_reasoning_efforts",
+        "reasoning_efforts",
+      ]).filter(isModelReasoningEffort),
+    ),
+  ];
   // An affirmative chat-compatible `mode` declaration ranks the model ahead of mode-less
   // entries as the conversation default (keiko-contracts conversationDefaultRank). Only ever
   // true — declared NON-chat modes never reach the chat list, and "no mode" is no signal.

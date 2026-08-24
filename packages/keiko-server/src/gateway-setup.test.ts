@@ -8321,6 +8321,24 @@ describe("normalizeDiscoveryPayload", () => {
     expect(normalized.modelMetadata?.["test-chat-1"]?.maxOutputTokens).toBe(4_096);
   });
 
+  it("deduplicates discovered reasoning efforts while preserving provider order", () => {
+    const normalized = normalizeDiscoveryPayloadForSetup({
+      data: [
+        {
+          id: "test-chat-1",
+          supported_reasoning_efforts: ["LOW", "high"],
+          model_info: { reasoning_efforts: ["high", "medium", "low"] },
+        },
+      ],
+    });
+
+    expect(normalized.modelMetadata?.["test-chat-1"]?.reasoningEfforts).toEqual([
+      "low",
+      "high",
+      "medium",
+    ]);
+  });
+
   it.each([0, -1, 1.5, Number.MAX_SAFE_INTEGER + 1])(
     "ignores invalid discovered token limits (%s)",
     (maxInputTokens) => {
