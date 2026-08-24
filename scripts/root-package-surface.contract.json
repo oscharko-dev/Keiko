@@ -359,6 +359,7 @@
     "ModelKind",
     "ModelPort",
     "ModelProviderConfig",
+    "ModelReasoningEffort",
     "ModelRefusalError",
     "ModelSelectionQuery",
     "modelSupportsInfilling",
