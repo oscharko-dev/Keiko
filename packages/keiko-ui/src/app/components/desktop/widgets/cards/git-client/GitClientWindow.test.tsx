@@ -912,6 +912,23 @@ describe("GitClientWindow — add-repository dialog", () => {
     await waitFor(() => expect(client.reconnectRepository).toHaveBeenCalledWith(REPO_A.path));
   });
 
+  it.each([
+    [{ kind: "busy" } as const, "Another folder chooser is already open."],
+    [{ kind: "unsupported" } as const, "Folder selection is not available in this Keiko session."],
+    [{ kind: "error", message: "Picker failed" } as const, "Picker failed"],
+  ])("surfaces native picker outcome %#", async (outcome, expectedMessage) => {
+    const user = userEvent.setup();
+    nativeFileDialogMock.pickWithNativeDialog.mockResolvedValue(outcome);
+    render(<GitClientWindow client={makeClient()} />);
+    await user.click(await screen.findByRole("button", { name: "Connect repository" }));
+    const dialog = screen.getByRole("dialog");
+    await user.click(within(dialog).getByRole("button", { name: "Open local repository" }));
+
+    await user.click(within(dialog).getByRole("button", { name: "Choose local repository" }));
+
+    expect(await within(dialog).findByRole("alert")).toHaveTextContent(expectedMessage);
+  });
+
   it("does not select a newly added repository without explicit workspace membership", async () => {
     const user = userEvent.setup();
     const updateCfg = vi.fn();
@@ -2596,6 +2613,53 @@ describe("GitClientWindow — commit composer (Issue #1575)", () => {
     fireEvent.keyDown(separator, { key: "ArrowRight" });
 
     expect(separator).toHaveValue("354");
+  });
+
+  it("supports the complete keyboard resize range", async () => {
+    const client = makeClient({ getStatus: vi.fn(async () => makeStatusRich()) });
+    render(<GitClientWindow projectId={REPO_A.path} client={client} />);
+    expect(await screen.findByText("index.ts")).toBeInTheDocument();
+    const separator = screen.getByRole("slider", { name: "Resize changes column" });
+
+    fireEvent.keyDown(separator, { key: "ArrowLeft" });
+    expect(separator).toHaveValue("306");
+    fireEvent.keyDown(separator, { key: "Home" });
+    expect(separator).toHaveValue("280");
+    fireEvent.keyDown(separator, { key: "End" });
+    expect(separator).toHaveValue("620");
+    fireEvent.keyDown(separator, { key: "Escape" });
+    expect(separator).toHaveValue("620");
+    fireEvent.change(separator, { target: { value: "410" } });
+    expect(separator).toHaveValue("410");
+  });
+
+  it("resizes the changes column with pointer movement and stops after release", async () => {
+    const client = makeClient({ getStatus: vi.fn(async () => makeStatusRich()) });
+    const { container } = render(<GitClientWindow projectId={REPO_A.path} client={client} />);
+    expect(await screen.findByText("index.ts")).toBeInTheDocument();
+    const separator = screen.getByRole("slider", { name: "Resize changes column" });
+    const body = separator.parentElement;
+    if (body === null) throw new Error("Git body was not rendered");
+    vi.spyOn(body, "getBoundingClientRect").mockReturnValue({
+      bottom: 700,
+      height: 600,
+      left: 100,
+      right: 1100,
+      top: 100,
+      width: 1000,
+      x: 100,
+      y: 100,
+      toJSON: vi.fn(),
+    });
+
+    fireEvent.pointerDown(separator, { clientX: 430 });
+    fireEvent.pointerMove(window, { clientX: 500 });
+    expect(separator).toHaveValue("400");
+    fireEvent.pointerUp(window);
+    fireEvent.pointerMove(window, { clientX: 650 });
+
+    expect(separator).toHaveValue("400");
+    expect(container).toContainElement(separator);
   });
 
   it("joins summary and description into a conventional message body", async () => {

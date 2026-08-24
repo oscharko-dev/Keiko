@@ -168,6 +168,21 @@ describe("CommitComposer — preview and outcomes", () => {
     expect(preview).toHaveTextContent("touches tests");
   });
 
+  it("renders singular summary nouns and an unavailable draft", () => {
+    renderComposer({
+      previewDraft: "",
+      preview: makePreview({
+        summary: { stagedFileCount: 1, areaCount: 1, areas: ["src"], touchesTests: false },
+      }),
+    });
+
+    const preview = screen.getByTestId("git-commit-draft");
+    expect(preview).toHaveTextContent("1 staged file across 1 area");
+    expect(preview).toHaveTextContent(
+      "This repository policy needs details that Keiko cannot safely draft.",
+    );
+  });
+
   it("shows the live staged summary and applies an eligible commit draft on request", async () => {
     const user = userEvent.setup();
     const clipboardDescriptor = Object.getOwnPropertyDescriptor(navigator, "clipboard");
@@ -223,6 +238,60 @@ describe("CommitComposer — preview and outcomes", () => {
     renderComposer({ error: "network down" });
     expect(screen.getByTestId("git-commit-outcome")).toHaveTextContent("network down");
   });
+
+  it("surfaces every preflight finding and a suggested subject prefix", async () => {
+    const user = userEvent.setup();
+    renderComposer({
+      previewDraft: "feat: x",
+      preview: makePreview({
+        summary: { stagedFileCount: 2, areaCount: 2, areas: ["src", "docs"], touchesTests: false },
+        intent: {
+          warnings: [],
+          mixedScope: false,
+          isWip: false,
+          suggestedSubjectPrefix: "feat",
+        },
+        preflightFindingCodes: [
+          "branch-protection-unavailable",
+          "signed-commits-required",
+          "custom-policy-check",
+        ],
+      }),
+    });
+
+    await user.type(screen.getByLabelText("Summary"), "feat: x");
+
+    expect(screen.getByText("Remote branch rules could not be read")).toBeInTheDocument();
+    expect(screen.getByText("Signed commits may be required")).toBeInTheDocument();
+    expect(screen.getByText("custom policy check")).toBeInTheDocument();
+    expect(screen.getByText("feat")).toBeInTheDocument();
+    expect(screen.getByTestId("git-commit-preview")).toHaveTextContent("2 areas");
+  });
+
+  it("reports a clipboard failure without losing the visible draft", async () => {
+    const user = userEvent.setup();
+    const clipboardDescriptor = Object.getOwnPropertyDescriptor(navigator, "clipboard");
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: { writeText: vi.fn().mockRejectedValue(new Error("denied")) },
+    });
+    renderComposer({ preview: makePreview(), previewDraft: "feat: x" });
+
+    try {
+      await user.type(screen.getByLabelText("Summary"), "feat: x");
+      await user.click(screen.getByRole("button", { name: "Copy commit draft" }));
+
+      expect(await screen.findByRole("alert")).toHaveTextContent("Copy failed");
+      expect(screen.getByLabelText("Summary")).toHaveValue("feat: x");
+      expect(screen.getByTestId("git-commit-message-preview")).toBeInTheDocument();
+    } finally {
+      if (clipboardDescriptor === undefined) {
+        Reflect.deleteProperty(navigator, "clipboard");
+      } else {
+        Object.defineProperty(navigator, "clipboard", clipboardDescriptor);
+      }
+    }
+  });
 });
 
 describe("CommitComposer — commit action", () => {
@@ -264,6 +333,61 @@ describe("CommitComposer — commit action", () => {
 
     expect(onCreateBranch).toHaveBeenCalledTimes(1);
     expect(onCommit).not.toHaveBeenCalled();
+  });
+
+  it("hides the redundant remote-protection finding on a protected current branch", async () => {
+    const user = userEvent.setup();
+    renderComposer({
+      onCreateBranch: vi.fn(),
+      preview: makePreview({
+        policyOutcome: "blocked",
+        policyBlockReason: "protected-branch",
+        preflightFindingCodes: ["branch-protection-unavailable"],
+      }),
+      previewDraft: "feat: x",
+    });
+
+    await user.type(screen.getByLabelText("Summary"), "feat: x");
+
+    expect(screen.getByText(/Current branch is protected/)).toBeInTheDocument();
+    expect(screen.queryByText("Remote branch rules could not be read")).not.toBeInTheDocument();
+  });
+
+  it("shows a generic policy block and keeps delivery actions available", async () => {
+    const user = userEvent.setup();
+    const onCreatePullRequest = vi.fn();
+    const onMerge = vi.fn();
+    renderComposer({
+      onCreatePullRequest,
+      onMerge,
+      preview: makePreview({ policyOutcome: "blocked", policyBlockReason: "policy-denied" }),
+      previewDraft: "feat: x",
+    });
+
+    await user.type(screen.getByLabelText("Summary"), "feat: x");
+    expect(
+      screen.getByText("Resolve the commit-policy issues below to commit."),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText("This commit is blocked by the repository policy."),
+    ).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "Create pull request" }));
+    await user.click(screen.getByRole("button", { name: "Merge…" }));
+    expect(onCreatePullRequest).toHaveBeenCalledTimes(1);
+    expect(onMerge).toHaveBeenCalledTimes(1);
+  });
+
+  it("disables delivery actions when no repository is selected", () => {
+    renderComposer({
+      projectId: null,
+      onCreatePullRequest: vi.fn(),
+      onMerge: vi.fn(),
+    });
+
+    expect(screen.getByRole("button", { name: "Create pull request" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Merge…" })).toBeDisabled();
+    expect(screen.getByText("Select a repository to commit.")).toBeInTheDocument();
   });
 });
 

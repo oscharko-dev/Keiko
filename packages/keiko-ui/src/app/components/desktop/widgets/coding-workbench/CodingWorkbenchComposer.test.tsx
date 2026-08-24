@@ -1,4 +1,4 @@
-import { cleanup, render, screen, within } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type {
@@ -31,6 +31,48 @@ const CODING_MODEL: ModelCapability = {
   reasoningEfforts: ["low", "medium", "high"],
 };
 
+const ALTERNATE_MODEL: ModelCapability = {
+  ...CODING_MODEL,
+  id: "gpt-5.5",
+  reasoningEfforts: ["medium"],
+};
+
+type ComposerProps = Parameters<typeof TaskStartSection>[0];
+
+function composerProps(
+  runState: CodingWorkbenchRuntimeStateName,
+  actions: TaskComposerActions,
+  taskIntent = "Investigate the failing test",
+  onReasoningEffortChange = vi.fn(),
+  onOpenGit = vi.fn(),
+): ComposerProps {
+  return {
+    taskIntent,
+    onTaskIntentChange: vi.fn(),
+    actions,
+    canStart: true,
+    canResume: true,
+    runState,
+    mutationPending: false,
+    startBusy: false,
+    repositoryLabel: "Keiko",
+    branchLabel: "dev",
+    onOpenGit,
+    autonomyMode: "supervised-coding",
+    autonomyLabel: "Supervised workspace",
+    requestedMode: "supervised-coding",
+    runtimePreference: "managed-gateway",
+    configurationLocked: runState !== "idle",
+    onRequestedModeChange: vi.fn(),
+    onRuntimePreferenceChange: vi.fn(),
+    models: [CODING_MODEL],
+    selectedModelId: CODING_MODEL.id,
+    reasoningEffort: null,
+    onSelectedModelChange: vi.fn(),
+    onReasoningEffortChange,
+  };
+}
+
 function renderComposer(
   runState: CodingWorkbenchRuntimeStateName,
   actions: TaskComposerActions,
@@ -40,31 +82,15 @@ function renderComposer(
 ): void {
   render(
     <TaskStartSection
-      taskIntent={taskIntent}
-      onTaskIntentChange={vi.fn()}
-      actions={actions}
-      canStart
-      canResume
-      runState={runState}
-      mutationPending={false}
-      startBusy={false}
-      repositoryLabel="Keiko"
-      branchLabel="dev"
-      onOpenGit={onOpenGit}
-      autonomyMode="supervised-coding"
-      autonomyLabel="Supervised workspace"
-      requestedMode="supervised-coding"
-      runtimePreference="managed-gateway"
-      configurationLocked={runState !== "idle"}
-      onRequestedModeChange={vi.fn()}
-      onRuntimePreferenceChange={vi.fn()}
-      models={[CODING_MODEL]}
-      selectedModelId={CODING_MODEL.id}
-      reasoningEffort={null}
-      onSelectedModelChange={vi.fn()}
-      onReasoningEffortChange={onReasoningEffortChange}
+      {...composerProps(runState, actions, taskIntent, onReasoningEffortChange, onOpenGit)}
     />,
   );
+}
+
+function renderComposerWithOverrides(overrides: Partial<ComposerProps>): ComposerProps {
+  const props = { ...composerProps("idle", composerActions()), ...overrides };
+  render(<TaskStartSection {...props} />);
+  return props;
 }
 
 describe("Coding Workbench composer", () => {
@@ -129,5 +155,80 @@ describe("Coding Workbench composer", () => {
 
     expect(selectReasoningEffort).toHaveBeenCalledWith("high");
     expect(screen.queryByRole("option", { name: "Extra high" })).toBeNull();
+  });
+
+  it("changes the coding model, model source, and run authority", async () => {
+    const user = userEvent.setup();
+    const onSelectedModelChange = vi.fn();
+    const onRuntimePreferenceChange = vi.fn();
+    const onRequestedModeChange = vi.fn();
+    renderComposerWithOverrides({
+      models: [CODING_MODEL, ALTERNATE_MODEL],
+      onSelectedModelChange,
+      onRuntimePreferenceChange,
+      onRequestedModeChange,
+    });
+
+    await user.click(screen.getByRole("combobox", { name: "Coding model" }));
+    await user.click(screen.getByRole("option", { name: "gpt-5.5" }));
+    await user.click(screen.getByRole("combobox", { name: "Model source" }));
+    await user.click(screen.getByRole("option", { name: "ChatGPT/Codex subscription" }));
+    await user.click(screen.getByRole("combobox", { name: "Run authority" }));
+    await user.click(screen.getByRole("option", { name: "Full access" }));
+
+    expect(onSelectedModelChange).toHaveBeenCalledWith("gpt-5.5");
+    expect(onRuntimePreferenceChange).toHaveBeenCalledWith("codex-subscription");
+    expect(onRequestedModeChange).toHaveBeenCalledWith("autonomous-delivery");
+  });
+
+  it("hides gateway-only controls for a Codex model with one reasoning level", () => {
+    renderComposerWithOverrides({
+      runtimePreference: "codex-subscription",
+      models: [ALTERNATE_MODEL],
+      selectedModelId: ALTERNATE_MODEL.id,
+    });
+
+    expect(screen.queryByRole("combobox", { name: "Coding model" })).toBeNull();
+    expect(screen.queryByRole("combobox", { name: "Reasoning effort" })).toBeNull();
+  });
+
+  it("keeps an unresolved empty composer blocked and accepts task text changes", async () => {
+    const user = userEvent.setup();
+    const actions = composerActions();
+    const onTaskIntentChange = vi.fn();
+    renderComposerWithOverrides({
+      actions,
+      taskIntent: "",
+      canStart: false,
+      repositoryLabel: null,
+      branchLabel: null,
+      autonomyMode: null,
+      onTaskIntentChange,
+    });
+    const textbox = screen.getByRole("textbox", { name: "Task instructions" });
+    const form = textbox.closest("form");
+    if (form === null) throw new Error("Task composer form was not rendered");
+
+    fireEvent.submit(form);
+    await user.type(textbox, "Inspect the repository");
+
+    expect(actions.onStart).not.toHaveBeenCalled();
+    expect(onTaskIntentChange).toHaveBeenCalled();
+    expect(screen.queryByLabelText("Coding context")).toBeNull();
+    expect(screen.getByRole("combobox", { name: "Run authority" })).not.toHaveAttribute(
+      "aria-describedby",
+    );
+  });
+
+  it("marks only confirmed full access on the authority control", () => {
+    renderComposerWithOverrides({
+      autonomyMode: "autonomous-delivery",
+      autonomyLabel: "Full access",
+      requestedMode: "autonomous-delivery",
+    });
+
+    const authority = screen.getByRole("combobox", { name: "Run authority" });
+    expect(authority).toHaveAttribute("aria-describedby");
+    expect(authority.closest("[data-full-access='true']")).not.toBeNull();
   });
 });

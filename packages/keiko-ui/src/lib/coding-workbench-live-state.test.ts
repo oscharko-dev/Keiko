@@ -470,6 +470,20 @@ describe("app-session pairing readiness (release-audit F-08/RG-12)", () => {
 });
 
 describe("mode selection, setup plans, and mutation failures", () => {
+  it("stores model and reasoning selections while resetting stale effort on model changes", () => {
+    const modelSelected = codingWorkbenchRuntimeReducer(
+      { ...readyState(), reasoningEffort: "high" },
+      { kind: "select-model", modelId: "gpt-5.4" },
+    );
+    expect(modelSelected).toMatchObject({ selectedModelId: "gpt-5.4", reasoningEffort: null });
+
+    const effortSelected = codingWorkbenchRuntimeReducer(modelSelected, {
+      kind: "select-reasoning-effort",
+      effort: "medium",
+    });
+    expect(effortSelected.reasoningEffort).toBe("medium");
+  });
+
   it("keeps the state identity when the requested mode does not change", () => {
     const state = readyState();
     expect(
