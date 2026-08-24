@@ -370,7 +370,7 @@
   max-width: 8.5rem;
 }
 
-.authorityControl[data-mode="autonomous-delivery"] :global(.ksel-trigger) {
+.authorityControl[data-full-access="true"] :global(.ksel-trigger) {
   color: var(--text-accent);
   box-shadow: inset 0 0 0 1px var(--accent-line);
 }

@@ -521,6 +521,7 @@ describe("CodingWorkbenchWindow", () => {
     expect(screen.getByRole("combobox", { name: "Run authority" })).toHaveTextContent(
       "Full access",
     );
+    expect(document.querySelectorAll("[data-mode]")).toHaveLength(1);
     expect(document.querySelector('[data-mode="governed-assist"]')).toBeInTheDocument();
   });
 

@@ -393,7 +393,9 @@ function AuthorityControl({ input, t }: ControlProps): ReactNode {
   return (
     <div
       className={`cmp-model mono ${styles.authorityControl}`}
-      {...(confirmed ? { "data-mode": input.autonomyMode } : {})}
+      {...(confirmed && input.autonomyMode === "autonomous-delivery"
+        ? { "data-full-access": "true" }
+        : {})}
     >
       <KeikoSelect
         value={input.requestedMode}
