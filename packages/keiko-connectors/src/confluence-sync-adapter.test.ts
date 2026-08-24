@@ -388,4 +388,50 @@ describe("fetchItem — page bodies, comments, and the failure matrix", () => {
     expect(outcome.item.contentHtml).toContain("<p>small</p>");
     expect(outcome.item.contentHtml).not.toContain("ccccc");
   });
+
+  // KEIKO-0453: the file header states a 401 is always run-fatal. A 401 during the footer-comment
+  // fetch was previously swallowed (fetchCommentBodies ignored walkPaginatedList's outcome), so
+  // the page composed without comments and the run reported completed. The header invariant must
+  // hold — a 401 on the comment lane fails the run fatally with `auth-failed`.
+  it("propagates a 401 on the footer-comments fetch as run-fatal auth-failed (KEIKO-0453 — byte accounting)", async () => {
+    const http = createInMemoryConfluenceFixture({
+      baseUrl: BASE_URL,
+      spaces: [space("ENG", "100", [fixturePage(13, { comments: ["<p>never served</p>"] })])],
+      override: (request) => {
+        if (new URL(request.url).pathname.endsWith("/footer-comments")) {
+          return { kind: "response", status: 401, bodyText: "", bodyBytes: 0, truncated: false };
+        }
+        return undefined;
+      },
+    });
+    expect(await fetchPage(http, "13")).toEqual({ kind: "fatal", reason: "auth-failed" });
+  });
+
+  // KEIKO-0467: `page.payload.storageBody.length` was UTF-16 code-unit length. A CJK body of
+  // 3 bytes per character was under-reported by ~3x, over-budgeting the comment allowance and
+  // letting the composed item overflow the per-item byte ceiling. After the fix the composed
+  // item's byteLength is measured in UTF-8 bytes and either fits the cap or is skipped as
+  // bounds-exceeded — never over-cap.
+  it("measures the composed item byteLength in UTF-8 bytes (CJK never overflows the per-item cap)", async () => {
+    // 500 000 CJK chars (each 3 UTF-8 bytes) = ~1.5 MB body — fits under the 2 MB transport cap.
+    // Plus one 200 000-char comment (~600 KB) that would push the composed item to ~2.1 MB.
+    // Pre-fix: `.length` reports 500 000, allowance stays at 1.5 MB, comment fits, composed
+    // byteLength ~2.1 MB > 2 MB cap. Post-fix: bodyBytes measured at 1.5 MB, allowance falls to
+    // ~500 KB, 600 KB comment rejected, composed fits (or is skipped bounds-exceeded).
+    const cjkBody = "你".repeat(500_000);
+    const cjkComment = "你".repeat(200_000);
+    const http = createInMemoryConfluenceFixture({
+      baseUrl: BASE_URL,
+      spaces: [
+        space("ENG", "100", [fixturePage(14, { storageBody: cjkBody, comments: [cjkComment] })]),
+      ],
+    });
+    const outcome = await fetchPage(http, "14");
+    if (outcome.kind === "item") {
+      expect(outcome.item.byteLength).toBeLessThanOrEqual(ATLASSIAN_SYNC_ITEM_MAX_BYTES);
+    } else {
+      // A per-page skip is the acceptable degradation for an oversized composed item.
+      expect(outcome).toEqual({ kind: "skipped", reason: "bounds-exceeded" });
+    }
+  });
 });

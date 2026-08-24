@@ -256,6 +256,22 @@ describe("classifyGitPublishRejection", () => {
     );
   });
 
+  // KEIKO-0215: the publish gateway used to carry its own drift-prone remote-unavailable phrase
+  // set (5 phrases) that had fallen behind keiko-git's authoritative set (10 phrases). These
+  // three phrases were absent from the local copy, so an unreachable host classified as
+  // "unknown" and the operator got a "provider-rejected" verdict for a network outage. The
+  // publish gateway now delegates to classifyGitRemoteFailure for the remote/auth/permission
+  // vocabulary so ONE table governs both clone/fetch/pull and push.
+  it("recognises the full remote-unavailable phrase set inherited from keiko-git", () => {
+    for (const stderr of [
+      "ssh: connect to host github.com port 22: Network is unreachable",
+      "ssh: connect to host github.com port 22: No route to host",
+      "ssh: Could not resolve hostname github.com: Temporary failure in name resolution",
+    ]) {
+      expect(classifyGitPublishRejection(stderr)).toBe("remote-unavailable");
+    }
+  });
+
   it("covers every rejection reason in the error-code + recovery maps", () => {
     for (const reason of GIT_PUBLISH_REJECTION_REASONS) {
       expect(typeof gitPublishRejectionToErrorCode(reason)).toBe("string");

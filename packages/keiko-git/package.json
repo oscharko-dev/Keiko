@@ -24,8 +24,5 @@
   "engines": {
     "node": ">=24.18.0 <25"
   },
-  "dependencies": {
-    "typescript": "~6.0.3"
-  },
   "private": true
 }

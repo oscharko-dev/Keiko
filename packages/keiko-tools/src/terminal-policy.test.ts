@@ -284,6 +284,23 @@ describe("isTerminalCommandAllowed — git (subcommand allowlist + value-flag sa
     expect(isTerminalCommandAllowed("git", ["branch", "-f", "main", "HEAD~5"]).allowed).toBe(false);
   });
 
+  // KEIKO-0496: `git branch -uorigin/main` parses identically to `--set-upstream-to=origin/main`,
+  // mutating .git/config upstream-tracking. Before this fix the concatenated form slipped past
+  // the deny set (no `=`, no bare `-u`) AND past the positional check (starts with `-`).
+  it("denies git branch -uorigin/main (concatenated -u<upstream>, mutates upstream tracking)", () => {
+    expect(isTerminalCommandAllowed("git", ["branch", "-uorigin/main"]).allowed).toBe(false);
+  });
+
+  it("denies git branch -Uorigin/main (uppercase concatenated form)", () => {
+    expect(isTerminalCommandAllowed("git", ["branch", "-Uorigin/main"]).allowed).toBe(false);
+  });
+
+  it("denies git branch -u origin/main (space-separated form) via the positional-operand path", () => {
+    // The bare -u is in the deny set; even if it were not, `origin/main` would be caught as a
+    // positional operand. Both defenses in the same test to lock the pin down.
+    expect(isTerminalCommandAllowed("git", ["branch", "-u", "origin/main"]).allowed).toBe(false);
+  });
+
   it("allows git branch with no args (listing)", () => {
     expect(isTerminalCommandAllowed("git", ["branch"]).allowed).toBe(true);
   });

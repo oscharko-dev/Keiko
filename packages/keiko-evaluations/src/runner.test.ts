@@ -5,7 +5,7 @@
 
 import { describe, expect, it } from "vitest";
 import { ConfigInvalidError } from "@oscharko-dev/keiko-model-gateway";
-import { runEvaluationSuite } from "./runner.js";
+import { collapseEvaluationRunStatus, runEvaluationSuite } from "./runner.js";
 import {
   ALL_FIXTURES,
   createScriptedModelPort,
@@ -418,6 +418,66 @@ describe("full offline suite (all 6 fixtures)", () => {
   it("schemaVersion is '1' on the full-suite scorecard", async () => {
     const sc = await runAll();
     expect(sc.schemaVersion).toBe("1");
+  });
+});
+
+// ─── KEIKO-0372: persistAndCheck preserves "cancelled" alongside "completed" / "failed" ──
+
+describe("KEIKO-0372 collapseEvaluationRunStatus", () => {
+  // Before this fix, persistAndCheck used a two-way collapse that reported any non-rejected/failed
+  // status as "completed" — including "cancelled". packages/keiko-server/src/run-engine.ts's
+  // statusOrFailed preserves "cancelled" as its own terminal, so the two consumers had drifted
+  // (the #2643 anti-pattern). The extracted helper now handles all three targets identically.
+  it.each([
+    { input: "completed", expected: "completed" as const },
+    { input: "dry-run", expected: "completed" as const },
+    { input: "fix-applied", expected: "completed" as const },
+    { input: "fix-proposed", expected: "completed" as const },
+    { input: "cancelled", expected: "cancelled" as const },
+    { input: "failed", expected: "failed" as const },
+    { input: "rejected", expected: "failed" as const },
+    // Non-string sentinel: any unrecognised value collapses to "failed" (never silently to completed).
+    { input: undefined, expected: "failed" as const },
+    { input: 42, expected: "failed" as const },
+  ])("collapses $input -> $expected", ({ input, expected }) => {
+    expect(collapseEvaluationRunStatus(input)).toBe(expected);
+  });
+});
+
+// ─── KEIKO-0232: applyVerificationExitCode routes through the fake spawn ──────
+
+describe("KEIKO-0232 apply-mode fake-spawn exit code (test-pass-rate)", () => {
+  // Baseline: the shipped happy-path fixture defaults to exit 0 and scores test-pass-rate=pass.
+  it("test-pass-rate scores pass when the fixture omits applyVerificationExitCode (default 0)", async () => {
+    const base = must(fixtureByName("unit-tests/happy-path"));
+    // Prove the default (undefined) still yields the historical exit-0 behaviour.
+    expect(base.applyVerificationExitCode).toBeUndefined();
+    const sc = await runEvaluationSuite(makeOfflineOptions([base]), makeDeps("keiko-0232-default"));
+    expect(outcomeOf(sc, "happy-path", "test-pass-rate")).toBe("pass");
+  });
+
+  // KEIKO-0232 anti-#2643 pin: with a non-zero applyVerificationExitCode the fake spawn must
+  // propagate the failure, and test-pass-rate must score fail. Before the fix the runner
+  // hard-coded fakeSpawn(0, "ok") which made this outcome unreachable — any apply-mode fixture
+  // reported test-pass-rate=pass regardless of what verification would have really done.
+  it("test-pass-rate scores fail when applyVerificationExitCode is non-zero", async () => {
+    const base = must(fixtureByName("unit-tests/happy-path"));
+    const failingVerification = {
+      ...base,
+      name: "happy-path-failing-verification",
+      applyVerificationExitCode: 1,
+    };
+    const sc = await runEvaluationSuite(
+      makeOfflineOptions([failingVerification]),
+      makeDeps("keiko-0232-fail"),
+    );
+    expect(outcomeOf(sc, "happy-path-failing-verification", "test-pass-rate")).toBe("fail");
+    // verification-completeness is orthogonal: the summary is still present even when it fails,
+    // so the dimension should keep reporting pass. This pins that the exit code affects the right
+    // dimension only.
+    expect(outcomeOf(sc, "happy-path-failing-verification", "verification-completeness")).toBe(
+      "pass",
+    );
   });
 });
 

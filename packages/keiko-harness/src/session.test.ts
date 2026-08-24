@@ -279,4 +279,27 @@ describe("createSession", () => {
     expect(result.outcome).toBe("failed");
     expect(result.failure?.category).toBe("HARNESS_MODEL_ERROR");
   });
+
+  it("reaches a terminal state when an auxiliary sink throws (KEIKO-0205)", async () => {
+    // A downstream sink throws on emit; the run must still resolve to a RunResult and
+    // the primary (in-memory) sink must still receive every subsequent event. Today
+    // this rejects because Emitter.emit lets the sink throw escape the fan-out.
+    let throwCount = 0;
+    const throwingSink: EventSink = {
+      emit: (): void => {
+        throwCount += 1;
+        throw new Error("sink is broken");
+      },
+    };
+    const session = createSession(EXPLAIN, CONFIG, {
+      ...deps(scriptedModel([response({ content: "ok" })]).port, new MemoryEventSink()),
+      sink: throwingSink,
+    });
+    const result = await session.result;
+    expect(result.outcome).toBe("completed");
+    expect(result.events.length).toBeGreaterThan(0);
+    // The throwing sink is quarantined after its first failure, so only one throw is
+    // observed even though the run emits many events.
+    expect(throwCount).toBe(1);
+  });
 });

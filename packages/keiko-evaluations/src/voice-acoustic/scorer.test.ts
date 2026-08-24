@@ -52,6 +52,31 @@ describe("voice-acoustic scorer transcript gates", () => {
     const missingTail = scoreVoiceAcousticFixture(fixture("negative-missing-trailing-word"));
     expect(check(missingTail, "last-token-retained")).toBe(false);
   });
+
+  // ─── KEIKO-0280 — boundary-anchored identifier match rejects substrings ───
+  it("rejects a required term that appears only as a substring of a longer token", () => {
+    // The pre-fix `requiredTerms.every((term) => hypothesis.includes(term))` reported true for
+    // "KEIKO-497-B" against "XKEIKO-497-BY" — the exact mis-segmentation failure mode the check exists
+    // to detect. The fixed regex anchors the term at non-alnum-non-hyphen boundaries, so this substring
+    // no longer counts as a match.
+    const embedded: VoiceAcousticFixture = {
+      ...fixture("exact-identifiers-preserved"),
+      hypothesisTranscript: "Open issue XKEIKO-497-BY and call run abc-123-Z",
+    };
+    const metrics = deriveVoiceAcousticMetrics(embedded);
+    expect(metrics.requiredIdentifierExactMatch).toBe(false);
+  });
+
+  it("still accepts a required term at a genuine token boundary (hyphen, whitespace, punctuation)", () => {
+    // Positive control: the same required terms embedded normally continue to match. Boundary rule
+    // treats hyphens as internal alnum characters, so "KEIKO-497-B" itself matches even after a comma.
+    const preserved: VoiceAcousticFixture = {
+      ...fixture("exact-identifiers-preserved"),
+      hypothesisTranscript: "Open issue KEIKO-497-B, and call run abc-123-Z now",
+    };
+    const metrics = deriveVoiceAcousticMetrics(preserved);
+    expect(metrics.requiredIdentifierExactMatch).toBe(true);
+  });
 });
 
 describe("voice-acoustic scorer latency and barge-in gates", () => {

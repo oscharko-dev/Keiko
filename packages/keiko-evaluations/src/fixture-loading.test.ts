@@ -12,6 +12,7 @@ import {
   isSuiteName,
   EVALUATION_DIMENSIONS,
 } from "./index.js";
+import { MIN_PILOT_FIXTURES_FOR_TESTS } from "./scorer.js";
 import { materializeFixture, recordingWriter } from "./runner-support.js";
 import type { EvaluationFixture } from "./types.js";
 import { must } from "./_support.js";
@@ -21,6 +22,14 @@ import { must } from "./_support.js";
 describe("ALL_FIXTURES", () => {
   it("contains exactly 6 fixtures", () => {
     expect(ALL_FIXTURES).toHaveLength(6);
+  });
+
+  // KEIKO-0218 sync-check: scorer.ts's MIN_PILOT_FIXTURES coverage precondition is documented as
+  // "equal to ALL_FIXTURES.length". If a fixture is added or removed without updating the constant,
+  // this test flips red so the drift cannot slip through. Relocating MIN_PILOT_FIXTURES is fine; a
+  // silent drift is not.
+  it("ALL_FIXTURES.length equals scorer.MIN_PILOT_FIXTURES (KEIKO-0218 sync-check)", () => {
+    expect(ALL_FIXTURES).toHaveLength(MIN_PILOT_FIXTURES_FOR_TESTS);
   });
 
   it("includes 3 unit-tests fixtures and 3 bug-investigation fixtures", () => {

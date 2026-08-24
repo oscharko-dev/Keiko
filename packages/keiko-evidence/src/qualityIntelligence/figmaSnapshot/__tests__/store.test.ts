@@ -472,6 +472,39 @@ describe("createNodeFigmaSnapshotStore", () => {
     });
   });
 
+  // KEIKO-0416: updateUserMetadata must derive its target management path from the AUTHENTICATED
+  // request runId, not from the record's own (possibly tampered) `runId` field. Today the store
+  // routes the write through `containedManagementPath(record.runId, ...)`, so a snapshot whose
+  // on-disk `runId` was flipped to a different valid uuid causes the update to land under the
+  // WRONG filename, silently clobbering an unrelated run's metadata while the caller's own update
+  // becomes unreadable (loadUserMetadata validates the embedded runId matches the requested key).
+  it("writes updateUserMetadata under the requested runId even when record.runId was tampered (KEIKO-0416)", () => {
+    const store = createNodeFigmaSnapshotStore(dir);
+    store.record(baseInput());
+    // Tamper the persisted record.runId to a different valid uuid — kept schema-valid so the
+    // snapshot still loads (the integrity hash is over screens + version, not record.runId).
+    const raw = readSnapshotFile();
+    raw.runId = RUN_ID_2;
+    writeSnapshotFile(raw);
+
+    const metadata = store.updateUserMetadata(RUN_ID, {
+      displayName: "Rebranded",
+      updatedAt: "2026-06-19T12:00:00.000Z",
+    });
+
+    expect(metadata).toEqual({
+      displayName: "Rebranded",
+      updatedAt: "2026-06-19T12:00:00.000Z",
+    });
+    // File lands under the AUTHENTICATED runId's derived path, not under the tampered runId.
+    expect(lstatSync(snapshotManagementFile(RUN_ID), { throwIfNoEntry: false })?.isFile()).toBe(
+      true,
+    );
+    expect(lstatSync(snapshotManagementFile(RUN_ID_2), { throwIfNoEntry: false })).toBeUndefined();
+    // And loadUserMetadata(runIdA) finds the update — closes the "unreadable to the caller" leg.
+    expect(store.loadUserMetadata(RUN_ID)).toEqual(metadata);
+  });
+
   it("does not overwrite a record that appears between the write-once precheck and final commit", () => {
     const existing = "existing snapshot written by a concurrent recorder";
     const store = createNodeFigmaSnapshotStore(dir, {
@@ -757,6 +790,30 @@ describe("createNodeFigmaSnapshotStore", () => {
     writeSnapshotFile(raw);
 
     expect(() => store.load(RUN_ID)).toThrow(EvidenceReadError);
+  });
+
+  // KEIKO-0415: verifyArtifactHash has three branches per artifact. Two are already covered by
+  // the tests above (hash-matches / hash-mismatch). The third — "artifact hash present but value
+  // stripped" — has no coverage. Regressing that branch to `return false` would let a partial
+  // tamper (delete the artifact body while keeping its integrity hash) pass unnoticed while the
+  // loader silently treats the whole artifact as absent. Pin it: the load must throw with the
+  // exact "artifact missing" phrase so the branch stays load-bearing.
+  it("rejects a record whose links artifact body is stripped after persist (KEIKO-0415)", () => {
+    const store = createNodeFigmaSnapshotStore(dir);
+    store.record({
+      ...baseInput(),
+      links: [{ sourceNodeId: "1:1", trigger: "ON_CLICK", targetNodeId: "1:2" }],
+    });
+
+    const raw = readSnapshotFile();
+    // Strip only the body; keep artifactHashes.links intact so verifyArtifactHash walks the
+    // value===undefined branch with an actualHash still present.
+    const { links: _links, ...withoutLinksBody } = raw;
+    void _links;
+    writeSnapshotFile(withoutLinksBody);
+
+    expect(() => store.load(RUN_ID)).toThrow(EvidenceReadError);
+    expect(() => store.load(RUN_ID)).toThrow(/links artifact missing/u);
   });
 
   it("rejects a record whose metrics artifact was tampered after persist", () => {

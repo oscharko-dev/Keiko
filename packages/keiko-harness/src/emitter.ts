@@ -72,6 +72,12 @@ function redactSensitive(event: HarnessEvent): HarnessEvent {
 
 export class Emitter {
   private seq = 0;
+  // A sink whose emit() throws is quarantined for the remainder of the run: subsequent
+  // fan-outs skip it, so one broken sink can never fault every subsequent event and one
+  // broken sink can never propagate its throw out through the state machine (KEIKO-0205).
+  // The isolated failure preserves the run's terminal-state invariant while other healthy
+  // sinks continue to receive the full event stream.
+  private readonly poisoned = new WeakSet<EventSink>();
 
   // Fans every event out to all sinks. Each sink receives raw SENSITIVE fields only if it
   // declares `retainsRawContent`; otherwise it receives a redacted copy.
@@ -94,7 +100,18 @@ export class Emitter {
     } as HarnessEvent;
     const redacted = redactSensitive(event);
     for (const sink of this.sinks) {
-      sink.emit(sink.retainsRawContent === true ? event : redacted);
+      if (this.poisoned.has(sink)) {
+        continue;
+      }
+      try {
+        sink.emit(sink.retainsRawContent === true ? event : redacted);
+      } catch {
+        // Isolate the failure: quarantine this sink so a broken emit implementation can
+        // never fault the whole fan-out. The throw value is deliberately dropped — its
+        // content is untrusted (it may carry an untyped body) and re-raising anything
+        // would defeat the whole point of the guard. Body-free by construction.
+        this.poisoned.add(sink);
+      }
     }
   }
 }

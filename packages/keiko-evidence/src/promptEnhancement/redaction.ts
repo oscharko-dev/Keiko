@@ -62,7 +62,9 @@ function deepRedact(
     );
   }
   if (typeof value === "object" && value !== null) {
-    const out: Record<string, unknown> = {};
+    // KEIKO-0188: null-prototype seed keeps a `__proto__` key from a JSON.parse'd input as a
+    // plain own-property instead of silently mutating the reconstructed object's prototype.
+    const out: Record<string, unknown> = Object.create(null) as Record<string, unknown>;
     for (const [key, child] of Object.entries(value)) {
       out[key] = deepRedact(child, additionalSecrets, redactAllStrings, counter);
     }

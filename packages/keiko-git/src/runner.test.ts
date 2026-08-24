@@ -4,9 +4,18 @@
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  realpathSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { classifyGitRemoteFailure } from "./classify.js";
 import { createGitProcessRunner, defaultGitProcessRunner, GIT_BASE_ARGS } from "./runner.js";
 
 let root: string;
@@ -45,16 +54,33 @@ describe("createGitProcessRunner", () => {
   it.each(["--upload-pack=touch /tmp/x", "--receive-pack=evil", "--exec=evil", "--upload-pack"])(
     "refuses the remote-command option %s before spawning git",
     async (badArg) => {
-      // A fake git on PATH would create a marker if it ran; the guard must reject before spawn.
+      // KEIKO-0317: the marker assertion used to be dead — no fake git was planted on PATH, so
+      // the check passed whether or not the guard fired. Plant a real fake `git` that writes the
+      // marker on any execution, then override PATH so the runner would resolve it if it ever
+      // reached the spawn. If the guard is removed, the marker gets written and this test fails.
+      const bin = mkdtempSync(join(tmpdir(), "keiko-git-runner-fake-bin-"));
       const marker = join(root, "spawned.marker");
-      const result = await defaultGitProcessRunner([...GIT_BASE_ARGS, "clone", "--", badArg], {
-        cwd: root,
-        maxBytes: 1024,
-        timeoutMs: 10_000,
-      });
-      expect(result.exitCode).toBe(128);
-      expect(result.stderr).toContain("refused git option");
-      expect(existsSync(marker)).toBe(false);
+      const fakeGit = join(bin, "git");
+      writeFileSync(fakeGit, `#!/bin/sh\ntouch '${marker}'\nexit 0\n`);
+      chmodSync(fakeGit, 0o755);
+      // Trusted bin dir semantics: 0o700 keeps resolveGitExecutable happy on Linux where
+      // realpath equality with a 0o777 tmpdir would otherwise reject the candidate.
+      chmodSync(bin, 0o700);
+      const runner = createGitProcessRunner(() => ({ PATH: bin }));
+      try {
+        const result = await runner([...GIT_BASE_ARGS, "clone", "--", badArg], {
+          cwd: root,
+          maxBytes: 1024,
+          timeoutMs: 10_000,
+        });
+        expect(result.exitCode).toBe(128);
+        expect(result.stderr).toContain("refused git option");
+        // Load-bearing: removing the guard leaks execution through to the fake git, which
+        // writes the marker — this assertion then fails, proving the guard is what stopped it.
+        expect(existsSync(marker)).toBe(false);
+      } finally {
+        rmSync(bin, { force: true, recursive: true });
+      }
     },
   );
 
@@ -83,7 +109,11 @@ describe("createGitProcessRunner", () => {
       writeFileSync(join(bin, "git"), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
       const runner = createGitProcessRunner(() => ({ PATH: bin }));
       const result = await runner(["--version"], { cwd: root, maxBytes: 1024, timeoutMs: 10_000 });
-      expect(result).toMatchObject({ exitCode: 127, stderr: "git executable unavailable" });
+      // KEIKO-0263: the runner now names the untrusted-location refusal distinctly instead of
+      // collapsing it into "git executable unavailable". The exit code stays 127 for existing
+      // consumers that key off the shape.
+      expect(result.exitCode).toBe(127);
+      expect(result.stderr).toBe("git executable in untrusted location refused");
     },
   );
 
@@ -165,6 +195,36 @@ describe("createGitProcessRunner", () => {
       expect(result.signal).toBe("SIGTERM");
       expect(result.truncated).toBe(true);
       expect(result.timedOut).toBe(false);
+    },
+    15_000,
+  );
+
+  // KEIKO-0184: `truncated` is also set on abort (the runner terminates the child so the
+  // originator-disconnect unblocks the caller), which used to make classifyGitRemoteFailure
+  // report every aborted run as "output-truncated". The runner now carries a distinct `aborted`
+  // bit so the classifier can tell them apart.
+  it.skipIf(process.platform === "win32")(
+    "flags aborted separately from truncated so classifier can distinguish the two",
+    async () => {
+      const fifo = join(root, "abort-flag.fifo");
+      execFileSync("mkfifo", [fifo]);
+      const controller = new AbortController();
+      const pending = defaultGitProcessRunner(
+        [...GIT_BASE_ARGS, "config", "--file", fifo, "--list"],
+        {
+          cwd: root,
+          maxBytes: 1024,
+          timeoutMs: 10_000,
+          abortSignal: controller.signal,
+        },
+      );
+      controller.abort();
+      const result = await pending;
+      expect(result.aborted).toBe(true);
+      expect(result.truncated).toBe(true);
+      expect(result.timedOut).toBe(false);
+      expect(classifyGitRemoteFailure(result)).toBe("cancelled");
+      expect(classifyGitRemoteFailure(result)).not.toBe("output-truncated");
     },
     15_000,
   );

@@ -72,6 +72,22 @@ describe("runDiscussionEvaluation summary gates", () => {
     expect(scorecard.summary.coversNoVoiceProfile).toBe(false);
     expect(scorecard.summary.goNoGo).toBe("NO-GO");
   });
+
+  // ─── KEIKO-0391 — coversNoVoiceProfile keys off gatingAllowed, not the topic-category label ───
+  it("reports coversNoVoiceProfile=true for a category run that contains a gating-denied fixture", () => {
+    // The 'correction' category holds two fixtures: evidence-check-correction (profile: 'none' →
+    // gatingAllowed=false) and voice-evidence-check-correction (profile: 'speech-to-text' →
+    // gatingAllowed=true). Category-scoped runs did NOT satisfy coversNoVoiceProfile before the fix,
+    // because the predicate keyed off f.category === 'no-voice' (a topic-bucket label) instead of the
+    // actual voice-gating signal. After the fix, this run should legitimately cover BOTH profiles.
+    const correction = discussionFixturesForCategory("correction");
+    const scorecard = runDiscussionEvaluation(correction);
+    expect(scorecard.summary.coversNoVoiceProfile).toBe(true);
+    expect(scorecard.summary.coversVoiceProfile).toBe(true);
+    // With both profile flags true and every dimension passing on the default fixtures, the verdict
+    // should be GO — the false NO-GO the bug produced was exactly what this test now prevents.
+    expect(scorecard.summary.goNoGo).toBe("GO");
+  });
 });
 
 describe("fixture selectors", () => {

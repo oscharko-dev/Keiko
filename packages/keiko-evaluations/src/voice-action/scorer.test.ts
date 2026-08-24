@@ -21,13 +21,18 @@ import {
 } from "./types.js";
 
 function audit(overrides: Partial<SpokenActionAuditRecord> = {}): SpokenActionAuditRecord {
+  // KEIKO-0242: default is a mutating action denied by the confirmation gate (requiresConfirmation=true,
+  // confirmed=false, outcome=denied) — the only combination that satisfies scoreEvidenceSafety's
+  // routed-without-confirmation defensive check while still exercising the confirmation-required shape
+  // the other dimension tests rely on. Individual tests override outcome/confirmationRequired/confirmed
+  // when they need a different governance verdict.
   return {
     schemaVersion: "1",
     effectClass: "mutating",
     state: "awaiting-confirmation",
     confirmationRequired: true,
     confirmed: false,
-    outcome: "routed",
+    outcome: "denied",
     source: "dictation",
     turnIndex: 0,
     committedSegmentCount: 1,
@@ -259,6 +264,34 @@ describe("evidence-safety scorer", () => {
   it("passes a 64-char sha256 hex binding digest", () => {
     const obs = observation({ audit: audit({ bindingDigest: "a".repeat(64) }) });
     expect(outcomeFor("evidence-safety", fixture(["evidence-safety"], oracle), obs)).toBe("pass");
+  });
+
+  // ─── KEIKO-0245 — auditKeysAreContentFree branches are pinned ───
+  it("fails when the audit carries a forbidden content-bearing key (rawTranscript)", () => {
+    // Injecting a `rawTranscript` key matches FORBIDDEN_AUDIT_KEY_FRAGMENTS ("raw" and "transcript")
+    // and must flip evidence-safety FAIL — the AC5 content-leak defense the scorer exists to enforce.
+    // Previously no test drove auditKeysAreContentFree's forbidden-key branch, so a mutation that
+    // deleted the forbidden-fragment check would ship green.
+    const tainted = {
+      ...audit(),
+      rawTranscript: "hostile committed text",
+    } as SpokenActionAuditRecord;
+    const obs = observation({ audit: tainted });
+    expect(outcomeFor("evidence-safety", fixture(["evidence-safety"], oracle), obs)).toBe("fail");
+  });
+
+  it("fails when the audit is missing a required content-free key (turnIndex)", () => {
+    // Dropping `turnIndex` from the record forces auditKeysAreContentFree's allRequired branch to false
+    // — the second half of the check, which pins that every closed-vocabulary key stays present.
+    const auditWithoutTurnIndex = (): Omit<SpokenActionAuditRecord, "turnIndex"> => {
+      const full = audit();
+      const rest: Record<string, unknown> = { ...full };
+      delete rest.turnIndex;
+      return rest as Omit<SpokenActionAuditRecord, "turnIndex">;
+    };
+    const withoutTurnIndex = auditWithoutTurnIndex();
+    const obs = observation({ audit: withoutTurnIndex as SpokenActionAuditRecord });
+    expect(outcomeFor("evidence-safety", fixture(["evidence-safety"], oracle), obs)).toBe("fail");
   });
 });
 

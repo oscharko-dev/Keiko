@@ -440,6 +440,53 @@ describe("incremental partition — updated-watermark narrowing", () => {
     expect(laterJiraProviderTimestamp("garbage", WATERMARK)).toBe(WATERMARK);
     expect(laterJiraProviderTimestamp(undefined, undefined)).toBeUndefined();
   });
+
+  // KEIKO-0435: an `updated` value far in the future (hostile or bulk-imported) must not fold
+  // into the enumeration watermark. Otherwise it poisons the persisted providerWatermark and the
+  // next incremental run silently stops observing content changes while still reporting
+  // completed.
+  it("clamps a far-future updated timestamp out of the enumeration watermark", async () => {
+    const NOW_MS = parseJiraProviderTimestampMs(WATERMARK) ?? 0;
+    const POISONED = "9999-01-01T00:00:00.000+0000";
+    const REALISTIC = WATERMARK;
+    const issues = [
+      fixtureIssue(1, { updated: POISONED }),
+      fixtureIssue(2, { updated: REALISTIC }),
+    ];
+    const snapshots: JiraSyncEnumerationSnapshot[] = [];
+    const harness = sourceFor([project("PLAT", issues)], {
+      onEnumerated: (snapshot) => {
+        snapshots.push(snapshot);
+      },
+      now: () => NOW_MS,
+    });
+    const outcome = await harness.source.enumerate(harness.context);
+    if (!outcome.ok) throw new Error("expected ok enumeration");
+    expect(snapshots).toHaveLength(1);
+    expect(snapshots[0]?.providerWatermark).toBe(REALISTIC);
+  });
+
+  // KEIKO-0435: a persisted providerWatermark that itself lies in the far future (poisoned from a
+  // previous run) must be treated as unusable — force a full re-fetch rather than carry every
+  // subsequent entry forward and freeze content updates in perpetuity.
+  it("forces a full re-fetch when the persisted watermark itself is in the far future", async () => {
+    const NOW_MS = parseJiraProviderTimestampMs(WATERMARK) ?? 0;
+    const POISONED_WATERMARK = "9999-01-01T00:00:00.000+0000";
+    const issues = [
+      fixtureIssue(1, { updated: BEFORE_OVERLAP }),
+      fixtureIssue(2, { updated: BEFORE_OVERLAP }),
+    ];
+    const harness = sourceFor([project("PLAT", issues)], {
+      incremental: {
+        providerWatermark: POISONED_WATERMARK,
+        knownItemKeys: ["jira:cred-test:10001", "jira:cred-test:10002"],
+      },
+      now: () => NOW_MS,
+    });
+    const outcome = await harness.source.enumerate(harness.context);
+    if (!outcome.ok) throw new Error("expected ok enumeration");
+    expect(outcome.refs.map((ref) => ref.issueId)).toStrictEqual(["10001", "10002"]);
+  });
 });
 
 describe("fetchItem — issue documents, metadata, and the failure matrix", () => {
@@ -607,6 +654,50 @@ describe("fetchItem — issue documents, metadata, and the failure matrix", () =
     const item = await fetchedItem(harness, issue.issueId);
     expect(item.contentHtml).toContain("Description of issue 3.");
     expect(item.contentHtml).not.toContain("data-connector-comments");
+  });
+
+  // KEIKO-0295: a hostile comment listing whose length exceeds Node's argument-count limit
+  // must never crash the lane through a `push(...comments)` RangeError. The lane's fail-closed
+  // contract requires every provider condition to classify to an outcome.
+  it("does not throw when a comment page carries more entries than the argument-count limit (KEIKO-0295)", async () => {
+    const issue = fixtureIssue(11, {
+      comments: [{ author: "A", created: "t", bodyAdf: adf("c") }],
+    });
+    // A page-count of `n` triggers `push(...comments)` with `n` positional arguments once the
+    // buffer flushes. 200 000 exceeds every observed V8 argument-count cap by a safe margin
+    // (empirically the ceiling sits between 65 535 and 131 071 depending on stack size); the
+    // pre-fix code raises `RangeError: too many arguments` here and the exception escapes the
+    // lane.
+    const hostileCommentPageBody = JSON.stringify({
+      startAt: 0,
+      maxResults: 100,
+      total: 200_000,
+      comments: Array.from({ length: 200_000 }, (_, index) => ({
+        id: `hostile-${String(index)}`,
+        author: { displayName: "X" },
+        created: "2026-05-01T10:00:00.000+0000",
+        body: adf(`c${String(index)}`),
+      })),
+    });
+    const harness = sourceFor(
+      [project("PLAT", [issue])],
+      {},
+      {
+        override: (request) =>
+          request.url.includes("/comment")
+            ? {
+                kind: "response",
+                status: 200,
+                bodyText: hostileCommentPageBody,
+                bodyBytes: hostileCommentPageBody.length,
+                truncated: false,
+              }
+            : undefined,
+      },
+    );
+    // The fetch must resolve (never reject) — regardless of whether the composed item includes
+    // comments or not, the classification contract is preserved.
+    await expect(fetchedItemOutcome(harness, issue.issueId)).resolves.toBeDefined();
   });
 
   it("skips an issue whose payload carries an unsafe key as malformed-payload", async () => {

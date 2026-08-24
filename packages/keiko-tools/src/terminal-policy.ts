@@ -120,6 +120,7 @@ const GIT_BRANCH_DENY_FLAGS: ReadonlySet<string> = new Set([
   "-f",
   "--copy",
   "--force",
+  "-u",
   "--set-upstream-to",
   "--unset-upstream",
   "--edit-description",
@@ -244,6 +245,15 @@ function checkGitBranch(argsAfterBranch: readonly string[]): TerminalCommandDeci
     const flag = arg.includes("=") ? arg.slice(0, arg.indexOf("=")) : arg;
     if (GIT_BRANCH_DENY_FLAGS.has(flag)) {
       return denied(`git branch: denied mutation flag ${flag}`);
+    }
+    // KEIKO-0496: `git branch -uorigin/main` parses identically to `--set-upstream-to=origin/main`
+    // (short flag with value concatenated, no `=`). The literal token is `-uorigin/main`, which
+    // is neither the bare `-u`/`-U` nor a positional, so it slipped past both checks and mutated
+    // .git/config upstream-tracking through a supposedly read-only inspection tool. Mirror
+    // deniedGitFlag's `arg.startsWith("-C")` pattern to cover both the lowercase and uppercase
+    // forms (git allows either).
+    if ((arg.startsWith("-u") || arg.startsWith("-U")) && arg.length > 2) {
+      return denied(`git branch: denied mutation flag ${flag} (concatenated -u<upstream>)`);
     }
     if (!arg.startsWith("-")) {
       // A bare positional after `branch` is a branch name operand — implies creation or mutation.

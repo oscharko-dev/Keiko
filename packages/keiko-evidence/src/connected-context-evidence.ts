@@ -217,9 +217,12 @@ function planOf(
     anchorKinds,
     anchorTermHashes,
     ringKinds: sortedStrings(rings.map((ring) => ring.kind)),
-    clarificationReason:
+    // KEIKO-1032: hash the redacted reason (matching planIdHash / anchorTermHashes). Raw
+    // free-text reasons were previously passed through unchanged, breaking the module's stated
+    // "never persist query text" invariant for this one field.
+    clarificationReasonHash:
       typeof input.plan.clarification?.reason === "string"
-        ? input.plan.clarification.reason
+        ? sha256Hex(redactString(redact, input.plan.clarification.reason))
         : undefined,
   };
 }

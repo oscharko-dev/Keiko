@@ -61,6 +61,18 @@ export const CONFLUENCE_LIST_RESPONSE_MAX_BYTES = 1_000_000;
 // terminates the run as malformed instead of spinning until the duration budget. A repeated
 // cursor is also classified as `malformed-payload` immediately (below), so a self-referential
 // A→A or A→B→A chain fails closed after two requests rather than 500.
+// Shared UTF-8 accountant. `String.prototype.length` is UTF-16 code-unit length; ADR-0128 D5's
+// byte bounds are enforced in UTF-8 bytes because that is the transport encoding.
+const UTF8_ENCODER = new TextEncoder();
+
+// Fixed byte-budget headroom the composed `<!DOCTYPE ...><main>...` envelope, escaped title (cap:
+// MAX_TITLE_CHARS = 500 chars → <=2000 UTF-8 bytes for CJK; entity-escaping doubles worst-case),
+// and comment section markup (`<h2>Comments</h2>` + per-comment `<section>` wrappers up to
+// MAX_COMMENT_PAGES_PER_ITEM * 100 comments) consume around the storage body. Flat allowance
+// keeps the byte accounting linear without paying for a re-composition pre-pass; small enough
+// that pre-existing per-item-allowance behaviour is preserved for typical bodies.
+const COMPOSED_HTML_ENVELOPE_BYTES = 1_024;
+
 const MAX_PAGINATION_REQUESTS = 500;
 // Footer-comment pages harvested per item (bounded enrichment).
 const MAX_COMMENT_PAGES_PER_ITEM = 10;
@@ -361,27 +373,36 @@ function collectCommentBodies(
   return true;
 }
 
+interface CommentFetchOutcome {
+  readonly bodies: readonly string[];
+  // Only 'auth-failed' propagates — the header contract makes 401 fatal for every lane, comment
+  // lane included (KEIKO-0453). Other comment-lane failures still degrade to a page-without-
+  // comments so the page body remains citable.
+  readonly fatalReason: AtlassianSyncFailureReason | undefined;
+}
+
 // Footer comments are bounded enrichment: harvested until the per-item byte allowance or page
-// ceiling is reached, and ANY comment-lane failure (except 401, which is run-fatal upstream via
-// the page fetch) degrades to "page without comments" rather than failing the page.
+// ceiling is reached. Non-auth comment-lane failures degrade to "page without comments" rather
+// than failing the page. A 401 during comment retrieval is propagated as run-fatal per the
+// file header (KEIKO-0453 — the header claim was previously not enforced for this lane).
 async function fetchCommentBodies(
   context: AtlassianSyncFetchContext,
   endpoints: ConfluenceEndpoints,
   pageId: string,
   byteAllowanceRemaining: number,
-): Promise<readonly string[]> {
+): Promise<CommentFetchOutcome> {
   const bodies: string[] = [];
   const allowance = { remaining: Math.max(0, byteAllowanceRemaining) };
-  if (allowance.remaining > 0) {
-    let pages = 0;
-    const url = apiUrl(endpoints, `pages/${pageId}/footer-comments?body-format=storage&limit=100`);
-    await walkPaginatedList(context, endpoints, url, (results) => {
-      pages += 1;
-      if (!collectCommentBodies(results, bodies, allowance)) return false;
-      return pages < MAX_COMMENT_PAGES_PER_ITEM;
-    });
-  }
-  return bodies;
+  if (allowance.remaining <= 0) return { bodies, fatalReason: undefined };
+  let pages = 0;
+  const url = apiUrl(endpoints, `pages/${pageId}/footer-comments?body-format=storage&limit=100`);
+  const walk = await walkPaginatedList(context, endpoints, url, (results) => {
+    pages += 1;
+    if (!collectCommentBodies(results, bodies, allowance)) return false;
+    return pages < MAX_COMMENT_PAGES_PER_ITEM;
+  });
+  const fatalReason = !walk.ok && walk.reason === "auth-failed" ? walk.reason : undefined;
+  return { bodies, fatalReason };
 }
 
 // ─── The AtlassianSyncSource implementation ───────────────────────────────────
@@ -429,14 +450,38 @@ async function fetchConfluenceItem(
   if (page.kind === "missing") return { kind: "missing" };
   if (page.kind === "fatal") return { kind: "fatal", reason: page.reason };
   if (page.kind === "skipped") return { kind: "skipped", reason: page.reason };
-  const bodyBytes = page.payload.storageBody.length;
+  // KEIKO-0467: `String.prototype.length` is UTF-16 code-unit length, not UTF-8 byte length. A
+  // 3-byte-per-char body (CJK) previously under-reported by ~3x, over-budgeting the comment
+  // allowance and letting the composed item overflow ATLASSIAN_SYNC_ITEM_MAX_BYTES. Use the
+  // shared TextEncoder for byte accounting throughout.
+  // KEIKO-0467: `String.prototype.length` is UTF-16 code-unit length, not UTF-8 byte length. A
+  // 3-byte-per-char body (CJK) previously under-reported by ~3x, over-budgeting the comment
+  // allowance and letting the composed item overflow ATLASSIAN_SYNC_ITEM_MAX_BYTES. Use the
+  // shared TextEncoder for byte accounting throughout.
+  const bodyBytes = UTF8_ENCODER.encode(page.payload.storageBody).length;
   const comments = await fetchCommentBodies(
     context,
     endpoints,
     ref.pageId,
-    ATLASSIAN_SYNC_ITEM_MAX_BYTES - bodyBytes,
+    ATLASSIAN_SYNC_ITEM_MAX_BYTES - bodyBytes - COMPOSED_HTML_ENVELOPE_BYTES,
   );
-  const contentHtml = composePageHtml(page.payload.title, page.payload.storageBody, comments);
+  // KEIKO-0453: propagate a 401 during comment retrieval as run-fatal per the file header
+  // (auth-failed is always fatal, regardless of which lane surfaced it).
+  if (comments.fatalReason !== undefined) {
+    return { kind: "fatal", reason: comments.fatalReason };
+  }
+  const contentHtml = composePageHtml(
+    page.payload.title,
+    page.payload.storageBody,
+    comments.bodies,
+  );
+  const byteLength = UTF8_ENCODER.encode(contentHtml).length;
+  // KEIKO-0467: even with the corrected accounting a hostile envelope (unusually long escaped
+  // title, oversized comment enrichment) can push the composed HTML past the per-item ceiling.
+  // Degrade to per-page skip like the oversized-page contract — never fail the whole run.
+  if (byteLength > ATLASSIAN_SYNC_ITEM_MAX_BYTES) {
+    return { kind: "skipped", reason: "bounds-exceeded" };
+  }
   return {
     kind: "item",
     item: {
@@ -444,7 +489,7 @@ async function fetchConfluenceItem(
       title: page.payload.title,
       relativePath: `pages/${ref.pageId}.html`,
       contentHtml,
-      byteLength: new TextEncoder().encode(contentHtml).length,
+      byteLength,
       ...(page.payload.webuiPath === undefined ? {} : { webuiPath: page.payload.webuiPath }),
     },
   };

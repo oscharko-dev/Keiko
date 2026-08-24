@@ -120,8 +120,22 @@ function lastTokenRetained(reference: string, hypothesis: string): boolean {
   return ref.length === 0 ? hyp.length === 0 : ref.at(-1) === hyp.at(-1);
 }
 
+// Boundary-aware exact match: reject substring matches like "XKEIKO-497-BY" matching "KEIKO-497-B"
+// (KEIKO-0280). The mis-segmentation failure mode is exactly the reason this check exists — plain
+// containment defeats it. Boundaries are anything that is not an ASCII alnum or `-` (fixture-authored
+// identifiers use hyphens as internal separators).
+function escapeRegExpLiteral(term: string): string {
+  return term.replace(/[.*+?^${}()|[\]\\]/gu, String.raw`\$&`);
+}
+
 function requiredTermsExact(hypothesis: string, requiredTerms: readonly string[]): boolean {
-  return requiredTerms.every((term) => hypothesis.includes(term));
+  return requiredTerms.every((term) => {
+    const pattern = new RegExp(
+      `(?<![A-Za-z0-9-])${escapeRegExpLiteral(term)}(?![A-Za-z0-9-])`,
+      "u",
+    );
+    return pattern.test(hypothesis);
+  });
 }
 
 function derivesPrematureFinalization(trace: readonly VoiceAcousticTraceEvent[]): boolean {

@@ -569,3 +569,116 @@ describe("loadQualityIntelligenceCandidates — fail closed companion parsing", 
     expect(reloaded?.editedRevisions?.[0]?.editedFields.preconditions).toEqual([]);
   });
 });
+
+// KEIKO-0279: the qualityVerdict validators (isRubricDimension, isDimensionScore,
+// isRubricDimensionName, isQualityVerdictValue, isCandidateQualityVerdict) are wired into
+// CANDIDATE_ROW_VALIDATORS at candidatesArtifact.ts:207-220, but no committed test asserted on
+// any of them. A regression that loosened, say, the `Number.isInteger` clause of isDimensionScore
+// or the `<=100` clause of isScore would ship undetected. Cover the four attack surfaces the
+// audit called out plus one positive round-trip.
+describe("loadQualityIntelligenceCandidates — qualityVerdict fail-closed (KEIKO-0279)", () => {
+  interface QualityVerdictJson {
+    verdict: string;
+    score: number;
+    dimensions: readonly { name: string; score: number; rationale: string }[];
+    overallRationale: string;
+  }
+
+  function validQualityVerdict(): QualityVerdictJson {
+    return {
+      verdict: "strong",
+      score: 87,
+      dimensions: [
+        { name: "verifiability", score: 90, rationale: "clear expected result" },
+        { name: "atomicity", score: 80, rationale: "one behaviour per case" },
+        { name: "determinism", score: 95, rationale: "no wall-clock" },
+        { name: "ac-fidelity", score: 82, rationale: "covers the AC" },
+      ],
+      overallRationale: "solid across the rubric",
+    };
+  }
+
+  function rewriteWithTamperedVerdict(patch: (verdict: QualityVerdictJson) => unknown): void {
+    // Rewrite the on-disk artifact swapping the verdict for the tampered variant, and STRIP the
+    // artifactIntegrity block. That isolates these pins to the row validators — without the strip
+    // the integrity-hash mismatch would fire first and any regression in isDimensionScore /
+    // isRubricDimensionName / isScore / isQualityVerdictValue would go undetected.
+    const raw = readFileSync(artifactPath(evidenceDir), "utf8");
+    const artifact = JSON.parse(raw) as {
+      candidates: { id: string; qualityVerdict?: unknown }[];
+      artifactIntegrity?: unknown;
+    };
+    const tamperedVerdict = patch(validQualityVerdict());
+    artifact.candidates = artifact.candidates.map((c) =>
+      c.id === "tc-1" ? { ...c, qualityVerdict: tamperedVerdict } : c,
+    );
+    delete artifact.artifactIntegrity;
+    writeFileSync(artifactPath(evidenceDir), JSON.stringify(artifact), "utf8");
+  }
+
+  function seedWithValidVerdict(): void {
+    // Overwrite the beforeEach-seeded artifact with one whose tc-1 carries a valid qualityVerdict.
+    // Using recordQualityIntelligenceCandidates keeps the integrity hash aligned.
+    const seeded: Candidate = {
+      ...seedCandidate("tc-1"),
+      qualityVerdict: validQualityVerdict(),
+    } as Candidate;
+    recordQualityIntelligenceCandidates({
+      runId: RUN_ID,
+      generatedAt: "2026-06-08T10:00:00.000Z",
+      candidates: [seeded, seedCandidate("tc-2")],
+      evidenceDir,
+      redact: identityRedact,
+    });
+  }
+
+  it("round-trips a valid qualityVerdict unchanged", () => {
+    seedWithValidVerdict();
+    const reloaded = loadQualityIntelligenceCandidates(RUN_ID, { evidenceDir });
+    const row = reloaded?.candidates.find((c) => c.id === "tc-1");
+    expect(row?.qualityVerdict?.verdict).toBe("strong");
+    expect(row?.qualityVerdict?.dimensions).toHaveLength(4);
+    expect(row?.qualityVerdict?.dimensions[0]?.name).toBe("verifiability");
+  });
+
+  it("throws EvidenceReadError when a dimension score is non-integer", () => {
+    seedWithValidVerdict();
+    rewriteWithTamperedVerdict((v) => ({
+      ...v,
+      dimensions: v.dimensions.map((d, i) => (i === 0 ? { ...d, score: 87.5 } : d)),
+    }));
+    expect(() => loadQualityIntelligenceCandidates(RUN_ID, { evidenceDir })).toThrow(
+      EvidenceReadError,
+    );
+  });
+
+  it("throws EvidenceReadError when a dimension score is outside [0, 100]", () => {
+    seedWithValidVerdict();
+    rewriteWithTamperedVerdict((v) => ({
+      ...v,
+      dimensions: v.dimensions.map((d, i) => (i === 0 ? { ...d, score: 105 } : d)),
+    }));
+    expect(() => loadQualityIntelligenceCandidates(RUN_ID, { evidenceDir })).toThrow(
+      EvidenceReadError,
+    );
+  });
+
+  it("throws EvidenceReadError when a rubric-dimension name is unknown", () => {
+    seedWithValidVerdict();
+    rewriteWithTamperedVerdict((v) => ({
+      ...v,
+      dimensions: v.dimensions.map((d, i) => (i === 0 ? { ...d, name: "made-up-dim" } : d)),
+    }));
+    expect(() => loadQualityIntelligenceCandidates(RUN_ID, { evidenceDir })).toThrow(
+      EvidenceReadError,
+    );
+  });
+
+  it("throws EvidenceReadError when the top-level verdict value is invalid", () => {
+    seedWithValidVerdict();
+    rewriteWithTamperedVerdict((v) => ({ ...v, verdict: "excellent" }));
+    expect(() => loadQualityIntelligenceCandidates(RUN_ID, { evidenceDir })).toThrow(
+      EvidenceReadError,
+    );
+  });
+});

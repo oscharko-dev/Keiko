@@ -535,6 +535,40 @@ describe("htmlCssAdapter — sanitized screen file names (Fix #7)", () => {
     expect(html).toContain('href="./s-home.html"');
     expect(html).not.toContain('href="s-home.html"');
   });
+
+  it("makes every emitted screen file path globally unique across late-collision suffixes (KEIKO-0414)", () => {
+    // Regression pin for KEIKO-0414: buildSafeNameIndex's counter-per-base scheme let a suffix
+    // collide with an earlier screen's already-emitted final name. Sanitize:
+    //   "12-34-1" → "12-34-1"        (count 0)  → final "12-34-1"
+    //   "12:34"   → "12-34"          (count 0)  → final "12-34"
+    //   "12;34"   → "12-34"          (count 1)  → final "12-34-1"   <-- collides with first
+    // and emitHtmlCss then writes two screens to `screens/12-34-1.html`, silently discarding
+    // one screen from the artifact when the two entries are later Map/Set-keyed by path.
+    const artifact = emitCode(
+      {
+        screens: [
+          screen("12-34-1", "First", node("root-a", "container")),
+          screen("12:34", "Second", node("root-b", "container")),
+          screen("12;34", "Third", node("root-c", "container")),
+        ],
+        tokens: NO_TOKENS,
+        hints: [],
+      },
+      htmlCssAdapter,
+    );
+    const screenPaths = artifact.files.map((f) => f.path).filter((p) => p.startsWith("screens/"));
+    expect(new Set(screenPaths).size).toBe(screenPaths.length);
+    // Each original screen id must be preserved as a data-attribute in exactly one file, so no
+    // screen has been dropped by the de-duplication.
+    const contents = artifact.files
+      .filter((f) => f.path.startsWith("screens/"))
+      .map((f) => f.contents);
+    const hasScreenId = (id: string): boolean =>
+      contents.filter((c) => c.includes(`data-screen-id="${id}"`)).length === 1;
+    expect(hasScreenId("12-34-1")).toBe(true);
+    expect(hasScreenId("12:34")).toBe(true);
+    expect(hasScreenId("12;34")).toBe(true);
+  });
 });
 
 // ─── Fix #8: CSS value injection prevention ──────────────────────────────────
@@ -569,6 +603,52 @@ describe("htmlCssAdapter — CSS value sanitization (Fix #8)", () => {
     expect(css).toContain("--font-1");
     // The curly braces and semicolons are stripped; the remainder is quoted.
     expect(css).toContain('"');
+  });
+
+  it("escapes backslashes in fontFamily so a trailing '\\' cannot swallow the closing quote (KEIKO-0455)", () => {
+    // Regression pin for KEIKO-0455: safeFontFamily only escaped '"' as `\22 `. A fontFamily
+    // ending in an ODD number of literal U+005C backslashes then emitted `"…\\"` where the last
+    // backslash escaped the closing quote, producing an unclosed CSS string that swallowed
+    // subsequent declarations. Emit two typography tokens: the first ending in ONE backslash,
+    // the second a plain family. After the fix both --font-1 and --font-2 must be present as
+    // their own declarations AND no raw backslash may survive into the emitted string.
+    const hostileTokens: DesignTokens = {
+      colors: [],
+      typography: [
+        {
+          id: "typo:evil",
+          kind: "typography",
+          // The JS source below is TWO backslashes so the actual runtime string contains
+          // exactly ONE trailing U+005C — the odd-count vulnerability class.
+          fontFamily: "evilFont\\",
+          fontSize: 16,
+          fontWeight: 400,
+          lineHeight: 24,
+        },
+        {
+          id: "typo:second",
+          kind: "typography",
+          fontFamily: "SecondFamily",
+          fontSize: 14,
+          fontWeight: 500,
+          lineHeight: 20,
+        },
+      ],
+      spacing: [],
+      radius: [],
+    };
+    const artifact = emitCode(
+      { screens: [loginScreen()], tokens: hostileTokens, hints: [] },
+      htmlCssAdapter,
+    );
+    const css = fileByPath(artifact, "tokens.css");
+    // The core invariant: after each font declaration the CSS string must be closed. A raw
+    // U+005C sitting immediately before the terminating `"` of a font-family literal is the
+    // fingerprint of the vulnerability — it escapes that closing quote and merges the next
+    // declaration into the current string. Assert it never appears.
+    expect(css).not.toMatch(/\\";/u);
+    // The second declaration must survive as its own line — proving the first's string closed.
+    expect(css).toMatch(/--font-2:[^;]*"SecondFamily"\s*;/u);
   });
 
   it("drops invalid (non-hex) color tokens rather than emitting them verbatim", () => {

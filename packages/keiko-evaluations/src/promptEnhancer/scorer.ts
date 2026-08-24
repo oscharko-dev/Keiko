@@ -13,7 +13,11 @@
 // Determinism: pure. Rationales are harness-authored and content-free (structural counts, closed-
 // vocabulary labels, numeric scores) — they never echo the untrusted draft (ADR-0044 §5).
 
-import type { PromptCriticDimension } from "@oscharko-dev/keiko-contracts";
+import {
+  BASELINE_LEAST_PRIVILEGE,
+  type PromptCriticDimension,
+} from "@oscharko-dev/keiko-contracts";
+import { PromptEnhancer } from "@oscharko-dev/keiko-model-gateway";
 import {
   PROMPT_QUALITY_DIMENSIONS,
   type EnhancementObservation,
@@ -28,11 +32,15 @@ import { meetsFiniteCeiling, meetsFiniteFloor } from "../quality-helpers.js";
 const DEFAULT_MIN_CLARITY = 0.85;
 const DEFAULT_MIN_COMPLETENESS = 0.2;
 const DEFAULT_MIN_TOKEN_EFFICIENCY = 0.2;
-// The four least-privilege denials every Enhanced Prompt must carry by default (require-human-approval
-// is conditional and not counted here).
-const BASELINE_LEAST_PRIVILEGE_DENIALS = 4;
+// The least-privilege denial count every Enhanced Prompt must carry by default. Derived from the
+// producer (`BASELINE_LEAST_PRIVILEGE` in keiko-contracts) so a change to the baseline posture cannot
+// silently leave the scorer's threshold stale — the #2643 fixture-parity rule for constants.
+// `require-human-approval` is conditional and not counted here (it is not in the baseline set).
+const BASELINE_LEAST_PRIVILEGE_DENIALS = BASELINE_LEAST_PRIVILEGE.length;
 // The grounded-grounding-rule count the deterministic critic also treats as the readiness threshold.
-const GROUNDED_MIN_RULES = 3;
+// Derived from the producer (`GROUNDING_READINESS_MIN_RULES` in keiko-model-gateway's critic) so the
+// scorer's structural gate matches the critic's continuous grading — same #2643 discipline.
+const GROUNDED_MIN_RULES = PromptEnhancer.GROUNDING_READINESS_MIN_RULES;
 
 interface Check {
   readonly label: string;

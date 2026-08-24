@@ -29,9 +29,13 @@ import { sortedStrings } from "@oscharko-dev/keiko-contracts";
 import { resolveWithinWorkspace, type WorkspaceFs } from "@oscharko-dev/keiko-workspace";
 import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
 import { assertValidRunId } from "@oscharko-dev/keiko-security";
-import { replaceViaDurableTempFile } from "../durable-write.js";
+import { PostRenameFsyncError, replaceViaDurableTempFile } from "../durable-write.js";
 import { EvidenceReadError, EvidenceWriteError } from "../errors.js";
-import { existingOwnedDirectory, prepareOwnedDirectory } from "../fs-safety.js";
+import {
+  existingOwnedDirectory,
+  isSingleLinkRegularFile,
+  prepareOwnedDirectory,
+} from "../fs-safety.js";
 import {
   QUALITY_INTELLIGENCE_EVIDENCE_SCHEMA_VERSION,
   validateQualityIntelligenceEvidenceManifest,
@@ -119,21 +123,18 @@ function isQiManifestName(name: string): boolean {
   }
 }
 
-function isSingleLinkRegularFile(path: string, fs: WorkspaceFs): boolean {
-  try {
-    const stat = fs.stat(path);
-    return stat.isFile && (stat.hardLinkCount ?? 1) <= 1;
-  } catch (error) {
-    throw new EvidenceReadError(
-      `cannot inspect QI manifest: ${error instanceof Error ? error.message : "unknown"}`,
-    );
-  }
+function toQiManifestInspectionError(message: string): Error {
+  return new EvidenceReadError(`cannot inspect QI manifest: ${message}`);
+}
+
+function isSingleLinkQiManifest(path: string, fs: WorkspaceFs): boolean {
+  return isSingleLinkRegularFile(path, fs, toQiManifestInspectionError);
 }
 
 function assertWritableQiManifestEntry(target: string, fs: WorkspaceFs): void {
   const entry = lstatSync(target, { throwIfNoEntry: false });
   if (entry === undefined) return;
-  if (!entry.isFile() || !isSingleLinkRegularFile(target, fs)) {
+  if (!entry.isFile() || !isSingleLinkQiManifest(target, fs)) {
     throw new EvidenceWriteError("cannot overwrite a non-ledger QI manifest");
   }
 }
@@ -146,7 +147,7 @@ function listQiRunIds(realBase: string, fs: WorkspaceFs): readonly string[] {
         entry.isSymbolicLink() ||
         !entry.isFile() ||
         !isQiManifestName(entry.name) ||
-        !isSingleLinkRegularFile(join(realBase, entry.name), fs)
+        !isSingleLinkQiManifest(join(realBase, entry.name), fs)
       ) {
         continue;
       }
@@ -165,6 +166,14 @@ function atomicWriteQiManifest(target: string, json: string, randomSuffix: () =>
   try {
     replaceViaDurableTempFile(target, temp, json);
   } catch (error) {
+    // Post-rename fsync failure = content is durable on the target, only the parent-dir metadata
+    // fsync is unconfirmed. Do not clean the (already gone) temp; do not claim the write failed.
+    // See KEIKO-0388 / KEIKO-1034.
+    if (error instanceof PostRenameFsyncError) {
+      throw new EvidenceWriteError(
+        `QI manifest parent-directory fsync failed after durable rename: ${error.message}`,
+      );
+    }
     rmSync(temp, { force: true });
     throw new EvidenceWriteError(
       `QI manifest write failed: ${error instanceof Error ? error.message : "unknown"}`,
@@ -349,7 +358,7 @@ function loadQiManifest(
     if (lstatSync(target, { throwIfNoEntry: false })?.isFile() !== true) {
       return undefined;
     }
-    if (!isSingleLinkRegularFile(target, fs)) {
+    if (!isSingleLinkQiManifest(target, fs)) {
       return undefined;
     }
     // GEN-PERF-PERSISTENCE-009 — reuse a previously verified manifest when the file's mtime+size is
@@ -407,7 +416,7 @@ function deleteQiManifest(baseDir: string, fs: WorkspaceFs, runId: string): bool
   if (lstatSync(target, { throwIfNoEntry: false })?.isFile() !== true) {
     return false;
   }
-  if (!isSingleLinkRegularFile(target, fs)) {
+  if (!isSingleLinkQiManifest(target, fs)) {
     return false;
   }
   rmSync(target, { force: true });

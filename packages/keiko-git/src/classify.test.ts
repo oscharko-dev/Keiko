@@ -190,5 +190,20 @@ describe("classifyGitRemoteFailure", () => {
     expect(new Set(GIT_REMOTE_FAILURE_REASONS).size).toBe(GIT_REMOTE_FAILURE_REASONS.length);
     expect(GIT_REMOTE_FAILURE_REASONS).toContain("remote-unavailable");
     expect(GIT_REMOTE_FAILURE_REASONS).toContain("output-truncated");
+    expect(GIT_REMOTE_FAILURE_REASONS).toContain("cancelled");
+  });
+
+  // KEIKO-0184: the runner sets `truncated` on abort too, so a classifier that only reads the
+  // byte-cap flag reports every caller-aborted run as `output-truncated`. The runner now also
+  // sets a distinct `aborted` bit, and the classifier must return `cancelled` for that case —
+  // ahead of the byte-cap fallback and ahead of the exit-code fallback.
+  it("distinguishes a caller-aborted run from a byte-cap truncation", () => {
+    expect(classifyGitRemoteFailure(result({ aborted: true, truncated: true }))).toBe("cancelled");
+    // Even when the process happened to close with exit 0 before the abort actually killed it,
+    // the abort remains the authoritative signal.
+    expect(classifyGitRemoteFailure(result({ aborted: true, exitCode: 0 }))).toBe("cancelled");
+    // A wall-clock timeout still wins over abort (deterministic ordering: the runner's own stops
+    // are stated in `timedOut > aborted > phrase-match > truncated`).
+    expect(classifyGitRemoteFailure(result({ aborted: true, timedOut: true }))).toBe("timeout");
   });
 });

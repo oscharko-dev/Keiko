@@ -649,6 +649,10 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
   "gitDelivery.blockReason.approval-expired": "The granted approval has expired",
   "gitDelivery.blockReason.risk-class-ceiling": "Exceeds the allowed risk-class ceiling",
   "gitDelivery.blockReason.no-applicable-rule": "No applicable policy rule (fail-closed)",
+  "gitDelivery.blockReason.approver-not-authorized":
+    "Approver identity is not on the required-approvers list",
+  "gitDelivery.blockReason.head-hash-mismatch":
+    "Working tree head does not match the expected commit",
   "gitDelivery.policyDecision.allowed": "Allowed",
   "gitDelivery.policyDecision.blocked": "Blocked",
   "gitDelivery.policyDecision.approval-gated": "Approval required",

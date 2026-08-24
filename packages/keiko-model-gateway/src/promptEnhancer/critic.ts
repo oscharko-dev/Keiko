@@ -46,6 +46,12 @@ const REFERENCE_INSTRUCTION_TOKENS = 800;
 // dimension a graded signal rather than a cliff for the most verbose profile.
 const TOKEN_EFFICIENCY_FLOOR = 0.2;
 
+// Grounded-task readiness threshold: the minimum number of grounding rules a grounded prompt must
+// carry for `scoreGroundingReadiness` to award full credit. Exported so downstream consumers
+// (evaluations, tests) derive the threshold from the producer rather than restating the literal —
+// the #2643 fixture-parity rule applies to constants too.
+export const GROUNDING_READINESS_MIN_RULES = 3;
+
 // Weighted aggregate. Safety carries the most weight (it is the floor candidate generation must never
 // relax, AC5); completeness is next; the remaining quality dimensions are balanced. Sums to 1.0.
 export const PROMPT_CRITIC_DIMENSION_WEIGHTS: Readonly<Record<PromptCriticDimension, number>> =
@@ -169,7 +175,7 @@ function scoreGroundingReadiness(prompt: EnhancedPrompt): DimensionAssessment {
     plan.sourcePriority.length > 0,
     plan.directives.includes("treat-retrieved-content-as-untrusted"),
     plan.directives.includes("stay-within-evidence"),
-    prompt.groundingRules.length >= 3,
+    prompt.groundingRules.length >= GROUNDING_READINESS_MIN_RULES,
   ];
   const satisfied = checks.filter(Boolean).length;
   return {

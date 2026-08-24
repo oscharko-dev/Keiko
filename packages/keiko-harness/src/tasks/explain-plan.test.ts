@@ -21,6 +21,17 @@ describe("buildExplainPlan", () => {
     expect(plan.messages[1]?.content).toContain("src/baz.ts");
   });
 
+  // KEIKO-0335: the "no context" disclosure is a load-bearing prompt affordance — the model is
+  // told, verbatim, that no excerpt was provided and to name that limitation before answering.
+  // A future edit that drops or garbles the string would silently start asking the model to
+  // hallucinate about a file it has not seen. Assert the exact production text.
+  it("emits the exact no-context disclosure when no excerpt is provided", () => {
+    const plan = buildExplainPlan({ filePath: "src/baz.ts" });
+    expect(plan.messages[1]?.content).toContain(
+      "File excerpt: not available. State that limitation before answering.",
+    );
+  });
+
   it("grounds the prompt with provided file context", () => {
     const plan = buildExplainPlan({
       filePath: "src/baz.ts",

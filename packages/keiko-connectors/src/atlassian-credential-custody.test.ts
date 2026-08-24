@@ -239,14 +239,48 @@ describe("createAtlassianCredentialCustody — create", () => {
 
 describe("createAtlassianCredentialCustody — list / getMetadata / delete", () => {
   it("lists metadata sorted by creation time and never the secret", () => {
-    const { custody } = custodyOverFakes();
-    custody.create(createInput());
-    custody.create(createInput({ displayName: "Confluence Docs", provider: "confluence" }));
+    // KEIKO-0403: use a LOCAL custody with a stepping clock so create() yields records with
+    // distinct createdAt values. custodyOverFakes()'s constant clock pinned every createdAt to a
+    // single value, so the primary sort key was never exercised and reversing the comparator
+    // direction left this test green. Kept the constant clock for other tests that need it.
+    const vault = inMemoryVault();
+    const metadataStore = inMemoryMetadataStore();
+    let tick = 1_700_000_000_000;
+    const { custody } = createAtlassianCredentialCustody({
+      vault,
+      metadataStore,
+      now: () => (tick += 1_000),
+    });
+    const first = custody.create(createInput());
+    const second = custody.create(
+      createInput({ displayName: "Confluence Docs", provider: "confluence" }),
+    );
     const listed = custody.list();
     expect(listed).toHaveLength(2);
     expect(JSON.stringify(listed)).not.toContain(SYNTHETIC_TOKEN);
     expect(JSON.stringify(listed)).not.toContain(SYNTHETIC_EMAIL);
     expect(listed.every((entry) => isAtlassianCredentialMetadata(entry))).toBe(true);
+    // The intended order is ascending createdAt — asserted from the create() return values, never
+    // a locally re-derived formula.
+    expect(listed.map((entry) => entry.authRef)).toEqual([first.authRef, second.authRef]);
+    expect(listed[0]?.createdAt).toBeLessThan(listed[1]?.createdAt ?? Number.NEGATIVE_INFINITY);
+
+    // Companion: creating in the OPPOSITE order still yields ascending-createdAt output. This
+    // rules out a comparator that happens to preserve insertion order but ignores createdAt.
+    const otherVault = inMemoryVault();
+    const otherStore = inMemoryMetadataStore();
+    let otherTick = 1_800_000_000_000;
+    const { custody: otherCustody } = createAtlassianCredentialCustody({
+      vault: otherVault,
+      metadataStore: otherStore,
+      now: () => (otherTick += 1_000),
+    });
+    const older = otherCustody.create(
+      createInput({ displayName: "Confluence Docs", provider: "confluence" }),
+    );
+    const newer = otherCustody.create(createInput());
+    const otherListed = otherCustody.list();
+    expect(otherListed.map((entry) => entry.authRef)).toEqual([older.authRef, newer.authRef]);
   });
 
   it("getMetadata answers undefined for malformed and unknown refs", () => {

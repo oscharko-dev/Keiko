@@ -20,6 +20,7 @@ import {
   type VoiceRedactionClass,
   type VoiceMediaTrackState,
   type VoicePlaybackState,
+  VOICE_REPLAY_CAPACITY,
   voiceMessageAllowedForProfile,
   isVoiceReplayEligible,
   voiceControlMessageRedactionClass,
@@ -39,7 +40,10 @@ export function createBrowserVoiceClock(): VoiceClock {
 // ─── Capacity / threshold constants (D4/D5) ────────────────────────────────────
 // The replay ring is the bounded reconnect system-of-record; the partial log is a tiny ephemeral timing
 // window; backpressure goes "elevated" at 80% of replay capacity (the partial log is never counted).
-export const VOICE_TIMEBASE_REPLAY_CAPACITY = 200;
+// The replay capacity is owned by @oscharko-dev/keiko-contracts (`VOICE_REPLAY_CAPACITY`) — the
+// keiko-server realtime session and the keiko-evaluations voice-twin model bind to the same value, so
+// drift is structurally impossible (KEIKO-0380).
+export const VOICE_TIMEBASE_REPLAY_CAPACITY: typeof VOICE_REPLAY_CAPACITY = VOICE_REPLAY_CAPACITY;
 const VOICE_TIMEBASE_PARTIAL_CAPACITY = 32;
 export const VOICE_TIMEBASE_BACKPRESSURE_HIGH = 160;
 

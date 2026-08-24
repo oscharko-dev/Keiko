@@ -39,6 +39,7 @@ import {
   VOICE_REALTIME_CONTROL_TRANSPORT,
   VOICE_PROFILE_NEGOTIATION_MODE,
   VOICE_PROTOCOL_VERSION,
+  VOICE_REPLAY_CAPACITY,
   voiceMessageAllowedForProfile,
   type VoiceControlMessage,
   type VoiceProfile,
@@ -69,8 +70,11 @@ export const MAX_VOICE_CONTROL_FRAME_BYTES = 320_000;
 // provider egress and oversized provider answers before client egress.
 const MAX_SDP_BYTES = 256_000;
 // The bounded per-session replay-diagnostic record (AC6): the host re-delivers these `replayable`
-// host→client events to a reconnecting client. Oldest entries are evicted past the cap.
-const MAX_REPLAY_EVENTS = 200;
+// host→client events to a reconnecting client. Oldest entries are evicted past the cap. The size is
+// owned by @oscharko-dev/keiko-contracts (`VOICE_REPLAY_CAPACITY`) — the keiko-ui timebase engine and
+// the keiko-evaluations voice-twin model bind to the same value, so drift is structurally impossible
+// (KEIKO-0380).
+const MAX_REPLAY_EVENTS: typeof VOICE_REPLAY_CAPACITY = VOICE_REPLAY_CAPACITY;
 // A disconnected session is resumable (by idempotency key) for this long, then swept.
 const SESSION_RESUME_TTL_MS = 60_000;
 // Bound the number of tracked sessions on the loopback control plane (single local user).

@@ -233,9 +233,22 @@ function validateIntegrityHashes(value: unknown): string | undefined {
   return undefined;
 }
 
+// KEIKO-0238: mirror the CANDIDATE_REJECTION_KEYS discipline — the closed set of allowed row
+// keys, so a caller cannot smuggle an unaudited `promptText` (or any other free-text field)
+// through the score row.
+const CANDIDATE_SCORE_KEYS: ReadonlySet<string> = new Set([
+  "candidateId",
+  "profile",
+  "aggregateScore",
+  "estimatedTokens",
+  "selected",
+]);
+
 function validateCandidateScoreRow(row: unknown, index: number): string | undefined {
   const label = `candidateScores[${String(index)}]`;
   if (!isRecord(row)) return `${label} must be an object`;
+  const unknown = Object.keys(row).find((key) => !CANDIDATE_SCORE_KEYS.has(key));
+  if (unknown !== undefined) return `${label} contains unknown field ${unknown}`;
   if (typeof row.candidateId !== "string" || row.candidateId.length === 0) {
     return `${label}.candidateId must be a non-empty string`;
   }
@@ -256,6 +269,11 @@ function validateCandidateScoreRow(row: unknown, index: number): string | undefi
 
 function validateCandidateScoreRows(value: unknown): string | undefined {
   if (!Array.isArray(value)) return "candidateScores must be an array";
+  // KEIKO-0238: bound the collection to the governed candidate ceiling, matching
+  // validateCandidateRejections.
+  if (value.length > PROMPT_ENHANCEMENT_MAX_CANDIDATE_COUNT) {
+    return `candidateScores must contain at most ${String(PROMPT_ENHANCEMENT_MAX_CANDIDATE_COUNT)} entries`;
+  }
   for (const [index, row] of value.entries()) {
     const error = validateCandidateScoreRow(row, index);
     if (error !== undefined) return error;

@@ -614,7 +614,24 @@ function resolveMergeGate(
     return { proceed: false, status: "policy-block", reason: effective.blockReason };
   }
   const state = approvalState(approval, now);
-  if (state === "valid") return { proceed: true };
+  if (state === "valid") {
+    // KEIKO-0147: an unexpired token is not enough — when the decision names a required-approver
+    // set, the person who granted the approval must be a member. Before this check the gate
+    // returned proceed=true for any valid token, so an unrelated operator's approval could
+    // integrate a merge for which a specific reviewer was mandated. An empty requiredApprovers
+    // array continues to mean "any authenticated approval" (ADR-0080 D5), and approvedByUserId
+    // is only present on the `required: true` branch of GitDeliveryApprovalRequirement — the
+    // approvalState check above already narrows to that branch when state === "valid".
+    if (
+      decision.outcome === "approval-gated" &&
+      decision.requiredApprovers.length > 0 &&
+      approval.required &&
+      !decision.requiredApprovers.includes(approval.approvedByUserId)
+    ) {
+      return { proceed: false, status: "policy-block", reason: "approver-not-authorized" };
+    }
+    return { proceed: true };
+  }
   if (state === "expired") {
     return { proceed: false, status: "policy-block", reason: "approval-expired" };
   }
@@ -763,6 +780,23 @@ function providerPullRequestMatchesCommand(
   );
 }
 
+// KEIKO-0154: derive a head-hash mismatch verdict. Fail-closed in two cases:
+//   1) the command carries expectedHeadRefHash and the provider's readiness read reports a
+//      different head — the branch advanced between approval and execute.
+//   2) the provider reports a head hash but the command omits expectedHeadRefHash — the caller
+//      could have pinned the merge and didn't, so we refuse to merge against an unpinned head.
+// A provider that reports no head hash at all leaves this check inert (nothing to compare against);
+// the merge PUT's own -f sha= guard is not offered by the adapter in that case either.
+function mergeHeadHashMismatch(
+  command: GitMergeCommand,
+  provider: GitMergeProviderReadiness,
+): "mismatched" | "unpinned" | undefined {
+  const providerHead = provider.headRefHash;
+  if (providerHead === undefined) return undefined;
+  if (command.expectedHeadRefHash === undefined) return "unpinned";
+  return command.expectedHeadRefHash === providerHead ? undefined : "mismatched";
+}
+
 function providerMismatchReadiness(summary: GitMergeReadinessSummary): GitMergeReadinessSummary {
   return {
     ...summary,
@@ -840,6 +874,26 @@ async function runReadinessAndMerge(
     return {
       lifecycle: readinessBlockLifecycle(prep, request.approval, mismatchReadiness, true),
       readiness: mismatchReadiness,
+    };
+  }
+  // KEIKO-0154: the readiness re-read of the provider head must match the command's
+  // expectedHeadRefHash before the merge PUT is issued. Before this check the readiness read
+  // fetched provider.headRefHash but never compared it, so the guard on the adapter side
+  // (opportunistic -f sha=…) only bit when the caller happened to set the field — a merge
+  // command without expectedHeadRefHash silently succeeded against whatever head the branch had
+  // acquired since the approval was granted. Ranked AFTER the provider-PR-shape check so a
+  // completely mismatched PR still reports the shape mismatch, not a head-hash mismatch.
+  const headMismatch = mergeHeadHashMismatch(request.command, provider);
+  if (headMismatch !== undefined) {
+    return {
+      lifecycle: lifecycleFor(
+        prep,
+        request.approval,
+        { status: "blocked", category: "policy-block", blockReason: "head-hash-mismatch" },
+        "policy",
+        undefined,
+      ),
+      readiness: summary,
     };
   }
 

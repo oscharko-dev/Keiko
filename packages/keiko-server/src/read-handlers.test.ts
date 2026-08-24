@@ -3,6 +3,9 @@ import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
+  __resetWorkspaceWalkCacheForTests,
+  __workspaceWalkCacheEntryForTests,
+  __workspaceWalkCacheSizeForTests,
   handleConfig,
   handleModels,
   handleVoiceCapability,
@@ -527,6 +530,30 @@ describe("GET /api/workflows", () => {
       required: false,
     });
     expect(body.verify.defaultLimits).toEqual(expect.any(Object));
+  });
+});
+
+describe("GET /api/workspace — walk cache (KEIKO-0253)", () => {
+  it("reuses the previous walk within the TTL window instead of re-walking the tree", () => {
+    __resetWorkspaceWalkCacheForTests();
+    const root = createWorkspaceFixture();
+    try {
+      const deps = depsWithRegisteredProject(root);
+      handleWorkspace(ctx(`/api/workspace?dir=${encodeURIComponent(root)}`), deps);
+      // Cache populated after the first call.
+      expect(__workspaceWalkCacheSizeForTests()).toBe(1);
+      const firstWalk = __workspaceWalkCacheEntryForTests(root);
+      expect(firstWalk).toBeDefined();
+      handleWorkspace(ctx(`/api/workspace?dir=${encodeURIComponent(root)}`), deps);
+      // The second call must not repopulate the cache with a new walk — its cached entry stays
+      // referentially identical, which is only true when the fs walk was skipped.
+      const secondWalk = __workspaceWalkCacheEntryForTests(root);
+      expect(secondWalk).toBe(firstWalk);
+      expect(__workspaceWalkCacheSizeForTests()).toBe(1);
+    } finally {
+      __resetWorkspaceWalkCacheForTests();
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 });
 

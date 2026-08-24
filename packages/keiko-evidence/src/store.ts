@@ -25,10 +25,11 @@ import { join, resolve } from "node:path";
 import { sortedStrings } from "@oscharko-dev/keiko-contracts";
 import { resolveWithinWorkspace, type WorkspaceFs } from "@oscharko-dev/keiko-workspace";
 import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
-import { replaceViaDurableTempFile } from "./durable-write.js";
+import { PostRenameFsyncError, replaceViaDurableTempFile } from "./durable-write.js";
 import { EvidenceReadError, EvidenceWriteError, InvalidRunIdError } from "./errors.js";
 import {
   existingOwnedDirectory,
+  isSingleLinkRegularFile,
   prepareOwnedDirectory,
   removeOwnedRunDirectory,
 } from "./fs-safety.js";
@@ -142,15 +143,12 @@ function isManifestName(name: string): boolean {
   }
 }
 
-function isSingleLinkRegularFile(path: string, fs: WorkspaceFs): boolean {
-  try {
-    const stat = fs.stat(path);
-    return stat.isFile && (stat.hardLinkCount ?? 1) <= 1;
-  } catch (error) {
-    throw new EvidenceReadError(
-      `cannot inspect evidence manifest: ${error instanceof Error ? error.message : "unknown"}`,
-    );
-  }
+function toManifestInspectionError(message: string): Error {
+  return new EvidenceReadError(`cannot inspect evidence manifest: ${message}`);
+}
+
+function isSingleLinkManifest(path: string, fs: WorkspaceFs): boolean {
+  return isSingleLinkRegularFile(path, fs, toManifestInspectionError);
 }
 
 function listManifestRunIds(
@@ -174,7 +172,7 @@ function listManifestRunIds(
         entry.isSymbolicLink() ||
         !entry.isFile() ||
         !isManifestName(entry.name) ||
-        !isSingleLinkRegularFile(join(realBase, entry.name), fs)
+        !isSingleLinkManifest(join(realBase, entry.name), fs)
       ) {
         continue;
       }
@@ -197,6 +195,15 @@ function atomicWrite(target: string, json: string, randomSuffix: () => string): 
     // rename so the rename discipline is durable across power loss.
     replaceViaDurableTempFile(target, temp, json);
   } catch (error) {
+    // A PostRenameFsyncError means the content IS durable on the target: only the parent-dir
+    // metadata fsync failed. Route it through a distinct message so a caller reading the error
+    // does not conclude "nothing was written", and skip the rmSync (the temp was already renamed
+    // away). See KEIKO-0388 / KEIKO-1034.
+    if (error instanceof PostRenameFsyncError) {
+      throw new EvidenceWriteError(
+        `evidence write parent-directory fsync failed after durable rename: ${error.message}`,
+      );
+    }
     rmSync(temp, { force: true });
     throw new EvidenceWriteError(
       `evidence write failed: ${error instanceof Error ? error.message : "unknown"}`,
@@ -209,7 +216,7 @@ function assertWritableLedgerEntry(target: string, fs: WorkspaceFs): void {
   if (entry === undefined) {
     return;
   }
-  if (!entry.isFile() || !isSingleLinkRegularFile(target, fs)) {
+  if (!entry.isFile() || !isSingleLinkManifest(target, fs)) {
     throw new EvidenceWriteError("cannot overwrite a non-ledger evidence manifest");
   }
 }
@@ -254,7 +261,7 @@ function getManifest(baseDir: string, fs: WorkspaceFs, runId: string): string | 
     if (lstatSync(target, { throwIfNoEntry: false })?.isFile() !== true) {
       return undefined;
     }
-    if (!isSingleLinkRegularFile(target, fs)) {
+    if (!isSingleLinkManifest(target, fs)) {
       return undefined;
     }
     return readFileSync(target, "utf8");
@@ -408,7 +415,7 @@ function readManifestForUpdate(target: string, fs: WorkspaceFs): string | undefi
     if (entry === undefined) {
       return undefined;
     }
-    if (!entry.isFile() || !isSingleLinkRegularFile(target, fs)) {
+    if (!entry.isFile() || !isSingleLinkManifest(target, fs)) {
       throw new EvidenceWriteError("cannot update a non-ledger evidence manifest");
     }
     return readFileSync(target, "utf8");
@@ -450,7 +457,7 @@ function deleteManifest(baseDir: string, fs: WorkspaceFs, runId: string): void {
   if (lstatSync(target, { throwIfNoEntry: false })?.isFile() !== true) {
     return;
   }
-  if (!isSingleLinkRegularFile(target, fs)) {
+  if (!isSingleLinkManifest(target, fs)) {
     return;
   }
   rmSync(target, { force: true });

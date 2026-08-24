@@ -39,6 +39,7 @@ import {
   gitDeliveryPolicyTargetBranchName,
   gitDeliveryRiskClassForInputs,
 } from "@oscharko-dev/keiko-contracts";
+import { classifyGitRemoteFailure } from "@oscharko-dev/keiko-git";
 import type { GitWorktreeSnapshot } from "./git-mutation-preflight.js";
 import { evaluateGitPreflight } from "./git-mutation-preflight.js";
 import type {
@@ -118,62 +119,78 @@ export function isGitPublishRejectionReason(value: unknown): value is GitPublish
   );
 }
 
-// Ordered phrase table. The first reason whose any-phrase appears in the (lower-cased, secret-redacted)
-// git output wins, so specific causes are matched before generic ones. Phrases are SPECIFIC: the generic
-// "failed to push some refs" / "could not read from remote repository" lines git prints for many failures
-// are deliberately NOT used as discriminators — only the cause-bearing hint lines are.
-const REJECTION_PHRASES: readonly (readonly [GitPublishRejectionReason, readonly string[]])[] = [
-  ["non-fast-forward", ["non-fast-forward", "tip of your current branch is behind"]],
-  ["fetch-first", ["fetch first", "remote contains work that you do"]],
+// Publish-only phrase table. Ordered by specificity: the first reason whose any-phrase appears in
+// the (lower-cased, secret-redacted) git output wins. Phrases are SPECIFIC: the generic
+// "failed to push some refs" / "could not read from remote repository" lines git prints for many
+// failures are deliberately NOT used as discriminators — only the cause-bearing hint lines are.
+//
+// KEIKO-0215: the remote-unavailable / auth-failed / permission-denied / repository-not-found /
+// untrusted-host-key / unsafe-repository phrases used to live here too, in a 5-phrase local copy
+// that had drifted out of sync with keiko-git's authoritative 10-phrase table (network is
+// unreachable, no route to host, temporary failure in name resolution were missing). The remote
+// classifier is now delegated to classifyGitRemoteFailure below so one phrase set governs both
+// clone/fetch/pull and push; the reasons the git classifier owns must not be duplicated here.
+const PUBLISH_LOCAL_PHRASES: readonly (readonly [GitPublishRejectionReason, readonly string[]])[] =
   [
-    "protected-ref",
-    ["protected branch", "pre-receive hook declined", "refusing to update", "gh006"],
-  ],
-  // Auth markers are checked BEFORE the generic "permission denied": an SSH "Permission denied
-  // (publickey)" is an AUTHENTICATION failure, whereas "remote: Permission to repo denied to user" is
-  // an authorization failure caught just below.
-  // Auth includes smart-HTTP 401 ("returned error: 401"), which some hosts emit without a remote: line.
-  [
-    "auth-failed",
+    ["non-fast-forward", ["non-fast-forward", "tip of your current branch is behind"]],
+    ["fetch-first", ["fetch first", "remote contains work that you do"]],
     [
-      "authentication failed",
-      "could not read username",
-      "publickey",
-      "invalid username",
-      "error: 401",
+      "protected-ref",
+      ["protected branch", "pre-receive hook declined", "refusing to update", "gh006"],
     ],
-  ],
-  // Permission includes smart-HTTP 403 ("returned error: 403"): git prints `unable to access ... returned
-  // error: 403` with NO literal "forbidden", and some hosts/proxies omit the `remote: Permission` line, so
-  // the bare 403 token must classify as an authorization denial (user-fixable) rather than falling through
-  // to remote-unavailable (retryable).
-  [
-    "permission-denied",
-    ["permission denied", "permission to", "error: 403", "403 forbidden", "access denied"],
-  ],
-  ["no-upstream", ["has no upstream branch", "no upstream configured", "set-upstream"]],
-  [
-    "remote-unavailable",
-    [
-      "could not resolve host",
-      "could not read from remote",
-      "connection refused",
-      "timed out",
-      "unable to access",
-    ],
-  ],
-] as const;
+    ["no-upstream", ["has no upstream branch", "no upstream configured", "set-upstream"]],
+  ] as const;
 
-// Pure classifier. Deterministic: same output text always yields the same reason. Matches lower-cased
-// so capitalisation differences across git versions do not change the classification.
+// Mapping from the keiko-git shared classifier's reasons onto the publish reason vocabulary.
+// Publish deliberately carries fewer members (no timeout/output-truncated/git-missing here —
+// those are process-level failures the publish executor either never surfaces or handles
+// differently). A shared reason that has no publish member falls through to "unknown", not to
+// a silently mismatched publish reason. Total Record: a new remote reason is a compile error.
+import type { GitRemoteFailureReason } from "@oscharko-dev/keiko-git";
+const REMOTE_TO_PUBLISH_REASON: Readonly<
+  Record<GitRemoteFailureReason, GitPublishRejectionReason | undefined>
+> = {
+  none: undefined,
+  "git-missing": undefined,
+  timeout: undefined,
+  cancelled: undefined,
+  "output-truncated": undefined,
+  "unsafe-repository": undefined,
+  "untrusted-host-key": "auth-failed",
+  "auth-failed": "auth-failed",
+  "permission-denied": "permission-denied",
+  "repository-not-found": "remote-unavailable",
+  "remote-unavailable": "remote-unavailable",
+  "not-a-repository": undefined,
+  "git-error": undefined,
+};
+
+// Pure classifier. Deterministic: same output text always yields the same reason. Matches
+// lower-cased so capitalisation differences across git versions do not change the classification.
+// Publish-specific phrases (non-fast-forward/fetch-first/protected-ref/no-upstream) are checked
+// FIRST — the remote-vocabulary phrases from keiko-git are broader and would otherwise steal a
+// publish-specific verdict (e.g. a "permission denied" clause on a protected-branch pre-receive
+// hook must stay classified as protected-ref).
 export function classifyGitPublishRejection(output: string): GitPublishRejectionReason {
   const haystack = output.toLowerCase();
-  for (const [reason, phrases] of REJECTION_PHRASES) {
+  for (const [reason, phrases] of PUBLISH_LOCAL_PHRASES) {
     if (phrases.some((phrase) => haystack.includes(phrase))) {
       return reason;
     }
   }
-  return "unknown";
+  // Delegate remote-shape phrases (unreachable host / auth / permission / repo-not-found / SSH
+  // host-key trust) to the single shared phrase table in keiko-git. Synthesize a minimal
+  // GitProcessResult: only stderr is examined by the classifier, and the exit code is set to a
+  // non-zero non-127 so the git-missing early-out does not fire.
+  const remote = classifyGitRemoteFailure({
+    exitCode: 1,
+    signal: null,
+    stdout: "",
+    stderr: output,
+    truncated: false,
+    timedOut: false,
+  });
+  return REMOTE_TO_PUBLISH_REASON[remote] ?? "unknown";
 }
 
 // ─── Reason → contract error code + recovery (reuses #471/#473/#474 vocabularies) ───────────

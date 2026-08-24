@@ -134,7 +134,13 @@ const ACTION_HINT_BY_BLOCK_REASON: Readonly<
   "protected-branch": "adjust-policy-target",
   "provider-capability-absent": "adjust-policy-target",
   "approval-expired": "request-approval",
+  // KEIKO-0147: the granting user is not in the decision's requiredApprovers set — the fix is a
+  // fresh approval from one of the named approvers.
+  "approver-not-authorized": "request-approval",
   "risk-class-ceiling": "adjust-policy-target",
+  // KEIKO-0154: the branch head advanced between approval and execute — the operator refreshes
+  // the readiness read and re-issues the merge with the new head, exactly the retry semantics.
+  "head-hash-mismatch": "retry",
   "no-applicable-rule": "adjust-policy-target",
 } as const;
 

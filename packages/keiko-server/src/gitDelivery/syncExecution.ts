@@ -209,6 +209,11 @@ const SYNC_OUTCOME_FOR_REMOTE_FAILURE: Readonly<
   none: undefined,
   "git-error": undefined,
   "output-truncated": undefined,
+  // A caller-aborted run is neither a byte-cap event nor a timeout — flow through to the
+  // unresolved-remote fallback so it lands as "git-error" on the wire outcome without ever
+  // being misreported as an output-cap or wall-clock stop. The typed reason survives in the
+  // classifier for anyone reading the underlying process result directly.
+  cancelled: undefined,
   "git-missing": "git-missing",
   timeout: "timeout",
   "unsafe-repository": "unsafe-repository",

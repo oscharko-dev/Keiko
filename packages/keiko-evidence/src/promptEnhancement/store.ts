@@ -24,9 +24,13 @@ import {
 import { resolveWithinWorkspace, type WorkspaceFs } from "@oscharko-dev/keiko-workspace";
 import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
 import { assertValidRunId, sha256Hex } from "@oscharko-dev/keiko-security";
-import { replaceViaDurableTempFile } from "../durable-write.js";
+import { PostRenameFsyncError, replaceViaDurableTempFile } from "../durable-write.js";
 import { EvidenceReadError, EvidenceWriteError } from "../errors.js";
-import { existingOwnedDirectory, prepareOwnedDirectory } from "../fs-safety.js";
+import {
+  existingOwnedDirectory,
+  isSingleLinkRegularFile,
+  prepareOwnedDirectory,
+} from "../fs-safety.js";
 import {
   PROMPT_ENHANCEMENT_EVIDENCE_SCHEMA_VERSION,
   validatePromptEnhancementEvidenceManifest,
@@ -188,9 +192,15 @@ function boundedMax(requested: number | undefined, ceiling: number): number {
 // Bound the produced prompt text and mark it when the bound bites. Unlike `inputExcerptRedacted`,
 // whose field name already declares it partial, this field reads as the complete artefact, so a
 // silent slice would turn a bounded record into a misleading one.
+//
+// KEIKO-0395: when `max` is smaller than the truncation marker itself, appending the marker would
+// blow past the caller's explicit tight cap (the pre-fix code returned a 31-char marker even when
+// max was 0). The data-minimisation invariant — "output length must not exceed max" — wins over
+// the readability of the marker: fall through to a plain slice and drop the marker entirely.
 function boundEnhancedPromptText(value: string, max: number): string {
   if (value.length <= max) return value;
-  const keep = Math.max(0, max - PE_EVIDENCE_TRUNCATION_MARKER.length);
+  if (max < PE_EVIDENCE_TRUNCATION_MARKER.length) return value.slice(0, max);
+  const keep = max - PE_EVIDENCE_TRUNCATION_MARKER.length;
   return value.slice(0, keep) + PE_EVIDENCE_TRUNCATION_MARKER;
 }
 
@@ -221,6 +231,21 @@ function projectCandidateRejections(
   }));
 }
 
+// KEIKO-0238: mirror projectCandidateRejections — strip any unexpected field a caller may have
+// spread onto a score row before it reaches persist, so the strict CANDIDATE_SCORE_KEYS check on
+// read has nothing extra to reject.
+function projectCandidateScores(
+  scores: readonly PromptEnhancementCandidateScoreRow[],
+): readonly PromptEnhancementCandidateScoreRow[] {
+  return scores.map(({ candidateId, profile, aggregateScore, estimatedTokens, selected }) => ({
+    candidateId,
+    profile,
+    aggregateScore,
+    estimatedTokens,
+    selected,
+  }));
+}
+
 function assembleManifest(
   input: PromptEnhancementRecordInput,
   redacted: RedactedTextFields,
@@ -228,6 +253,7 @@ function assembleManifest(
   inputRedactedFingerprintSha256: string,
 ): PromptEnhancementEvidenceManifest {
   const candidateRejections = projectCandidateRejections(input.candidateRejections);
+  const candidateScores = projectCandidateScores(input.candidateScores);
   const manifestWithoutHashes: PromptEnhancementEvidenceManifestWithoutHashes = {
     peEvidenceSchemaVersion: PROMPT_ENHANCEMENT_EVIDENCE_SCHEMA_VERSION,
     runId: input.runId,
@@ -241,13 +267,13 @@ function assembleManifest(
     appliedSafetyRules: redacted.appliedSafetyRules,
     appliedGroundingDirectives: input.appliedGroundingDirectives,
     assumptions: redacted.assumptions,
-    candidateScores: input.candidateScores,
+    candidateScores,
     candidateRejections,
     safety: input.safety,
     modelMetadata: redacted.modelMetadata,
     redactionSummary: summary,
     totals: {
-      candidateScores: input.candidateScores.length,
+      candidateScores: candidateScores.length,
       candidateRejections: candidateRejections.length,
       appliedSafetyRules: redacted.appliedSafetyRules.length,
       assumptions: redacted.assumptions.length,
@@ -480,21 +506,18 @@ function isManifestName(name: string): boolean {
   }
 }
 
-function isSingleLinkRegularFile(path: string, fs: WorkspaceFs): boolean {
-  try {
-    const stat = fs.stat(path);
-    return stat.isFile && (stat.hardLinkCount ?? 1) <= 1;
-  } catch (error) {
-    throw new EvidenceReadError(
-      `cannot inspect PE manifest: ${error instanceof Error ? error.message : "unknown"}`,
-    );
-  }
+function toPeManifestInspectionError(message: string): Error {
+  return new EvidenceReadError(`cannot inspect PE manifest: ${message}`);
+}
+
+function isSingleLinkPeManifest(path: string, fs: WorkspaceFs): boolean {
+  return isSingleLinkRegularFile(path, fs, toPeManifestInspectionError);
 }
 
 function assertWritableManifestEntry(target: string, fs: WorkspaceFs): void {
   const entry = lstatSync(target, { throwIfNoEntry: false });
   if (entry === undefined) return;
-  if (!entry.isFile() || !isSingleLinkRegularFile(target, fs)) {
+  if (!entry.isFile() || !isSingleLinkPeManifest(target, fs)) {
     throw new EvidenceWriteError("cannot overwrite a non-ledger PE manifest");
   }
 }
@@ -507,7 +530,7 @@ function listRunIds(realBase: string, fs: WorkspaceFs): readonly string[] {
         entry.isSymbolicLink() ||
         !entry.isFile() ||
         !isManifestName(entry.name) ||
-        !isSingleLinkRegularFile(join(realBase, entry.name), fs)
+        !isSingleLinkPeManifest(join(realBase, entry.name), fs)
       ) {
         continue;
       }
@@ -526,6 +549,14 @@ function atomicWriteManifest(target: string, json: string, randomSuffix: () => s
   try {
     replaceViaDurableTempFile(target, temp, json);
   } catch (error) {
+    // Post-rename fsync failure = content is durable on the target, only the parent-dir metadata
+    // fsync is unconfirmed. Do not clean the (already gone) temp; do not claim the write failed.
+    // See KEIKO-0388 / KEIKO-1034.
+    if (error instanceof PostRenameFsyncError) {
+      throw new EvidenceWriteError(
+        `PE manifest parent-directory fsync failed after durable rename: ${error.message}`,
+      );
+    }
     rmSync(temp, { force: true });
     throw new EvidenceWriteError(
       `PE manifest write failed: ${error instanceof Error ? error.message : "unknown"}`,
@@ -562,7 +593,7 @@ function loadManifest(
     if (lstatSync(target, { throwIfNoEntry: false })?.isFile() !== true) {
       return undefined;
     }
-    if (!isSingleLinkRegularFile(target, fs)) {
+    if (!isSingleLinkPeManifest(target, fs)) {
       return undefined;
     }
     return parseAndValidateManifest(readFileSync(target, "utf8"));
@@ -586,7 +617,7 @@ function deleteManifest(baseDir: string, fs: WorkspaceFs, runId: string): boolea
   if (lstatSync(target, { throwIfNoEntry: false })?.isFile() !== true) {
     return false;
   }
-  if (!isSingleLinkRegularFile(target, fs)) {
+  if (!isSingleLinkPeManifest(target, fs)) {
     return false;
   }
   rmSync(target, { force: true });

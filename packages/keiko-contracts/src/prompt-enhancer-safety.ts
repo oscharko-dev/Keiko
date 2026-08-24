@@ -133,8 +133,10 @@ export const LEAST_PRIVILEGE_CONSTRAINTS: readonly LeastPrivilegeConstraint[] = 
   "require-human-approval",
 ] as const;
 
-// The baseline deny-all posture every generated prompt carries (least privilege by default).
-const BASELINE_LEAST_PRIVILEGE: readonly LeastPrivilegeConstraint[] = [
+// The baseline deny-all posture every generated prompt carries (least privilege by default). Exported
+// so downstream consumers (evaluations, tests) derive the baseline denial count from the producer
+// rather than restating the literal — the #2643 fixture-parity rule applies to constants too.
+export const BASELINE_LEAST_PRIVILEGE: readonly LeastPrivilegeConstraint[] = [
   "no-tool-execution",
   "no-file-write",
   "no-network-egress",

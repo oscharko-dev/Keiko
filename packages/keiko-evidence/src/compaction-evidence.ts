@@ -204,6 +204,12 @@ function redactRehydration(
     ...(handle.evidenceAtomId === undefined
       ? {}
       : { evidenceAtomId: redactedPathSafe(handle.evidenceAtomId, redact) }),
+    // KEIKO-0328: preserve the persisted tool-result artifact id. Body-free (opaque hash-like
+    // identifier), so it's safe to keep; load-bearing for the `kind: "tool-result"` rehydration
+    // path — without it the audit trail terminates at a dangling pointer.
+    ...(handle.artifactId === undefined
+      ? {}
+      : { artifactId: redactedPathSafe(handle.artifactId, redact) }),
     ...(handle.notPersistedReason === undefined
       ? {}
       : { notPersistedReason: redactedPathSafe(handle.notPersistedReason, redact) }),

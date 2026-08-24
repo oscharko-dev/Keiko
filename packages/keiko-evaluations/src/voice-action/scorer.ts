@@ -232,6 +232,13 @@ function scoreEvidenceSafety(obs: VoiceActionObservation): VoiceActionDimensionR
       label: "audit bindingDigest is the empty sentinel or a content-free digest",
       ok: audit.bindingDigest === "" || /^[0-9a-f]{64}$/.test(audit.bindingDigest),
     },
+    {
+      // KEIKO-0242: an unconfirmed confirmation-required action can never carry outcome `routed` — the
+      // governance layer denies it. A `routed` here alongside `confirmationRequired && !confirmed` would
+      // misrepresent the security posture (a denied action reported as executed).
+      label: "confirmation-required proposal without confirmation is not `routed`",
+      ok: !(audit.confirmationRequired && !audit.confirmed && audit.outcome === "routed"),
+    },
   ]);
 }
 

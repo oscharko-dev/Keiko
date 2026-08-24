@@ -244,6 +244,26 @@ describe("buildPromptEnhancementEvidenceManifest", () => {
       expect(manifest.enhancedPromptTextRedacted.length).toBeLessThanOrEqual(200);
     });
 
+    // KEIKO-0395: with max < PE_EVIDENCE_TRUNCATION_MARKER.length (31 chars) the old bound helper
+    // hit Math.max(0, max - 31) = 0 and returned the 31-char marker, blowing past the tight cap the
+    // caller explicitly asked for. The floor branch must return at most `max` chars — dropping the
+    // marker is the correct trade when the cap is too tight to fit it.
+    it("never returns a string longer than a very tight caller cap (KEIKO-0395)", () => {
+      const { manifest } = buildPromptEnhancementEvidenceManifest(
+        recordInput({ enhancedPromptText: HUGE_DRAFT, enhancedPromptMaxChars: 10 }),
+      );
+      expect(manifest.enhancedPromptTextRedacted.length).toBeLessThanOrEqual(10);
+      // Not the marker (the marker is longer than 10 chars).
+      expect(manifest.enhancedPromptTextRedacted).not.toContain(PE_EVIDENCE_TRUNCATION_MARKER);
+    });
+
+    it("clamps to zero chars when the caller-supplied cap is zero (KEIKO-0395)", () => {
+      const { manifest } = buildPromptEnhancementEvidenceManifest(
+        recordInput({ enhancedPromptText: HUGE_DRAFT, enhancedPromptMaxChars: 0 }),
+      );
+      expect(manifest.enhancedPromptTextRedacted).toBe("");
+    });
+
     it("re-applies the ceiling on persist, whatever built the manifest", () => {
       const store = createInMemoryPromptEnhancementLocalStore();
       const { manifest } = buildPromptEnhancementEvidenceManifest(recordInput());

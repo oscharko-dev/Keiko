@@ -26,6 +26,15 @@ function scenarioCoverageMet(covered: readonly VoiceAcousticScenario[]): boolean
   );
 }
 
+// Negative-side coverage mirrors coveredScenarios/scenarioCoverageMet on the other polarity — a scenario
+// with no negative-polarity fixture cannot prove its adversarial path is caught (KEIKO-0171).
+function negativeCoveredScenarios(
+  negatives: readonly VoiceAcousticFixtureResult[],
+): readonly VoiceAcousticScenario[] {
+  const seen = new Set(negatives.map((result) => result.scenario));
+  return VOICE_ACOUSTIC_SCENARIOS.filter((scenario) => seen.has(scenario));
+}
+
 function summarize(
   fixtureResults: readonly VoiceAcousticFixtureResult[],
 ): VoiceAcousticEvalSummary {
@@ -35,6 +44,8 @@ function summarize(
   const negativeCaught = negatives.filter((result) => result.gatePassed).length;
   const covered = coveredScenarios(positives);
   const coverageMet = scenarioCoverageMet(covered);
+  const negativeCovered = negativeCoveredScenarios(negatives);
+  const negativeCoverageMet = scenarioCoverageMet(negativeCovered);
   const allPositivePassed = positivePassed === positives.length;
   const allNegativeCaught = negativeCaught === negatives.length;
   return {
@@ -45,7 +56,10 @@ function summarize(
     negativeCaught,
     coveredScenarios: covered,
     scenarioCoverageMet: coverageMet,
-    goNoGo: allPositivePassed && allNegativeCaught && coverageMet ? "GO" : "NO-GO",
+    negativeCoveredScenarios: negativeCovered,
+    negativeScenarioCoverageMet: negativeCoverageMet,
+    goNoGo:
+      allPositivePassed && allNegativeCaught && coverageMet && negativeCoverageMet ? "GO" : "NO-GO",
   };
 }
 

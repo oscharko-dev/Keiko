@@ -12,6 +12,7 @@ import {
   VOICE_PLAYBACK_SETTLED_PHASES,
   VOICE_PLAYBACK_TRANSITIONS,
   VOICE_PROFILE_MEDIA_TRANSPORT,
+  VOICE_REPLAY_CAPACITY,
   VOICE_TRANSCRIPT_CONSUMABLE_STATES,
   VOICE_TRANSCRIPT_SEGMENT_STATES,
   VOICE_TRANSCRIPT_SEGMENT_TRANSITIONS,
@@ -36,11 +37,12 @@ import type {
   TranscriptCorrectionMetricRecord,
 } from "./types.js";
 
-// Mirrors the documented keiko-ui replay ring (200) and the keiko-server MAX_REPLAY_EVENTS bound. The
-// value is restated here (not imported) because those packages are off-limits to keiko-evaluations
-// (ADR-0019 rule 3l); the buffer model proves the boundedness invariant the contract's replay-eligibility
-// classification implies, independent of the runtime ring's exact size.
-export const VOICE_TWIN_REPLAY_CAPACITY = 200 as const;
+// Re-export of the contract-owned `VOICE_REPLAY_CAPACITY` (200): the keiko-ui timebase engine, the
+// keiko-server realtime session, and this voice-twin buffer model all bind to the same ring size.
+// The single owner is `@oscharko-dev/keiko-contracts` (a legal shared-import target under ADR-0019
+// rule 3l — only keiko-ui/keiko-server are off-limits to evaluations); wiring it here rather than
+// restating `= 200` makes cross-consumer drift structurally impossible (KEIKO-0380).
+export const VOICE_TWIN_REPLAY_CAPACITY: typeof VOICE_REPLAY_CAPACITY = VOICE_REPLAY_CAPACITY;
 
 // A fixed content-free segment builder. `text` is harness-authored filler ("x" repeated) so the committed
 // projection has a non-zero character length without embedding any fixture content; it never leaves the
@@ -134,19 +136,28 @@ export function deriveProviderFailureRecoveryMetric(): ProviderFailureRecoveryMe
 // kinds. Asserts length never exceeds capacity, ephemeral kinds never buffer, and overflow evicts the
 // oldest. The runtime ring lives in keiko-ui / keiko-server (off-limits); this models the same invariant
 // over the contract's `isVoiceReplayEligible` classification.
+//
+// The admission guard and the ring-contents invariant check must read the classification from separate
+// sources — otherwise the ephemeralBuffered check has no discriminating power over the ring's real
+// state (KEIKO-0170). Admission uses a caller-supplied predicate defaulting to `isVoiceReplayEligible`,
+// while the invariant check ALWAYS reads the ring's actual contents against the contract-owned
+// `isVoiceReplayEligible`. Under the default admission the two agree and ephemeralBuffered stays false;
+// a broken admission predicate (or a future regression that pushed ephemeral kinds into the ring by
+// another path) flips ephemeralBuffered true.
+export type ReplayAdmissionPredicate = (kind: VoiceControlMessageKind) => boolean;
+
 export function deriveBufferBoundednessMetric(
   kinds: readonly VoiceControlMessageKind[],
   capacity: number = VOICE_TWIN_REPLAY_CAPACITY,
+  admissionOverride?: ReplayAdmissionPredicate,
 ): BufferBoundednessMetricRecord {
+  const admits: ReplayAdmissionPredicate = admissionOverride ?? isVoiceReplayEligible;
   const ring: VoiceControlMessageKind[] = [];
   let maxObservedLength = 0;
   let admittedCount = 0;
-  let ephemeralBuffered = false;
   let evictedOldestOnOverflow = false;
   for (const kind of kinds) {
-    if (!isVoiceReplayEligible(kind)) {
-      // An ephemeral kind is never admitted; if it ever entered the ring the invariant is broken.
-      ephemeralBuffered = ephemeralBuffered || ring.includes(kind);
+    if (!admits(kind)) {
       continue;
     }
     admittedCount += 1;
@@ -157,6 +168,10 @@ export function deriveBufferBoundednessMetric(
     ring.push(kind);
     maxObservedLength = Math.max(maxObservedLength, ring.length);
   }
+  // Independent invariant check: scan the ring's real contents against the contract classifier. This
+  // is decoupled from the admission predicate, so a lax or corrupted admission that lets an ephemeral
+  // kind into the ring is caught here rather than being masked by the same predicate that admitted it.
+  const ephemeralBuffered = ring.some((admitted) => !isVoiceReplayEligible(admitted));
   return {
     capacity,
     maxObservedLength,

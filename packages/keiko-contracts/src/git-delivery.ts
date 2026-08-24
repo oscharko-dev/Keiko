@@ -323,7 +323,15 @@ export type GitDeliveryBlockReason =
   | "protected-branch"
   | "provider-capability-absent"
   | "approval-expired"
+  // KEIKO-0147: the approval is valid and unexpired but the user who granted it is not in the
+  // decision's requiredApprovers set. Distinct from "approval-expired" so operators can tell a
+  // stale approval apart from an unauthorized approver.
+  | "approver-not-authorized"
   | "risk-class-ceiling"
+  // KEIKO-0154: the merge command carried an expectedHeadRefHash and the readiness re-read of the
+  // provider PR head disagreed (or the command omitted the guard entirely — fail-closed). Distinct
+  // from the generic providerError so the head-raced case surfaces its own operator message.
+  | "head-hash-mismatch"
   | "no-applicable-rule"; // fail-closed when neither level has a rule or defaultRule
 
 export const GIT_DELIVERY_BLOCK_REASONS: readonly GitDeliveryBlockReason[] = [
@@ -331,7 +339,9 @@ export const GIT_DELIVERY_BLOCK_REASONS: readonly GitDeliveryBlockReason[] = [
   "protected-branch",
   "provider-capability-absent",
   "approval-expired",
+  "approver-not-authorized",
   "risk-class-ceiling",
+  "head-hash-mismatch",
   "no-applicable-rule",
 ] as const;
 

@@ -41,7 +41,7 @@ export class GatewayModelPort implements ModelPort {
   callStream(request: GatewayCallRequest, signal: AbortSignal): AsyncIterable<GatewayStreamChunk> {
     const stream = this.gateway.chatStream;
     if (stream === undefined) {
-      throw new Error("gateway does not support streaming");
+      throw new TypeError("gateway does not support streaming");
     }
     return stream.call(this.gateway, { ...request, cancellationSignal: signal });
   }

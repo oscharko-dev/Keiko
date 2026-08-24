@@ -10,7 +10,7 @@
         document.documentElement.dataset.theme = t === "light" || t === "dark" ? t : "dark";
         var c = localStorage.getItem("keiko-ds-contrast");
         if (c === "more") document.documentElement.dataset.hc = "more";
-      } catch (e) {
+      } catch {
         // localStorage can throw when storage is disabled or restricted (private browsing,
         // blocked cookies); the hardcoded fallback below is the complete, correct handling —
         // there is no logging sink on a static doc page to report to.
@@ -462,13 +462,24 @@
         ci.value = v;
         openList(false);
       }
+      // KEIKO-0489 helper: pre-open the combobox lands on the correct end of the list;
+      // subsequent arrow presses wrap through the filtered options.
+      function nextActive(current, d, len, wasHidden) {
+        if (wasHidden) return d > 0 ? 0 : len - 1;
+        return (current + d + len) % len;
+      }
       function move(d) {
-        if (cl.hidden) {
+        // KEIKO-0489: capture the pre-open state so first-open lands on the correct end.
+        // Folding (-1 + d) through `(a + d + N) % N` on a closed combobox (active === -1)
+        // makes ArrowUp land on N-2 instead of N-1. WAI-ARIA-1.2 combobox pattern: open the
+        // list AND land on the last option when the user opens with ArrowUp, first when Down.
+        var wasHidden = cl.hidden;
+        if (wasHidden) {
           openList(true);
           paintCombo();
         }
         if (!filtered.length) return;
-        active = (active + d + filtered.length) % filtered.length;
+        active = nextActive(active, d, filtered.length, wasHidden);
         paintCombo();
         var el = document.getElementById("copt-" + active);
         if (el) el.scrollIntoView({ block: "nearest" });
