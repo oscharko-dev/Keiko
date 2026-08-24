@@ -494,7 +494,10 @@ describe("GitClientWindow — explicit name/role/value assertions", () => {
       expect(commitRegion).toHaveAttribute("tabindex", "0");
       expect(screen.getAllByRole("region", { name: "Commit draft" })).toHaveLength(1);
 
-      await user.click(screen.getByRole("button", { name: /src\/foo\.ts, staged modified/i }));
+      const changedFile = await screen.findByRole("button", {
+        name: /src\/foo\.ts, staged modified/i,
+      });
+      await user.click(changedFile);
       const diffRegion = await screen.findByRole("region", { name: "Diff" });
       expect(diffRegion).toHaveAttribute("tabindex", "0");
     });

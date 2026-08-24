@@ -352,7 +352,6 @@
       "Error"
     ],
     "packages/keiko-ui/src/app/components/desktop/widgets/cards/git-client/GitClientWindow.tsx": [
-      "Diff",
       "Git"
     ],
     "packages/keiko-ui/src/app/components/desktop/widgets/cards/git-client/HistoryPane.tsx": [
