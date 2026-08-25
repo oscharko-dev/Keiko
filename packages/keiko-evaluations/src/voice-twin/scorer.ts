@@ -288,12 +288,29 @@ function missingMetric(dimension: VoiceTwinDimension): VoiceTwinDimensionResult 
 
 // ─── Dispatch ─────────────────────────────────────────────────────────────────────────
 // The metric dimensions (the five AC6 metrics plus the latency-posture class) are dispatched separately so
-// neither dispatcher exceeds the cyclomatic complexity ceiling. `undefined` means the dimension is not a
-// metric dimension.
+// neither dispatcher exceeds the cyclomatic complexity ceiling.
+//
+// KEIKO-0716: scoreMetricDimension's parameter is deliberately the NARROW VoiceTwinMetricDimension
+// union, not the full VoiceTwinDimension -- this is what makes exhaustiveness a compile-time property
+// rather than a runtime default. scoreDimension's switch below explicitly handles the five structural
+// dimensions and returns from each; TypeScript narrows `dimension` in the `default` branch to exactly
+// the *remaining* members of VoiceTwinDimension. Today that remainder is precisely the six metric
+// literals, so it type-checks against scoreMetricDimension's narrower parameter. If a 12th
+// VoiceTwinDimension literal is ever added without a case here, the remainder gains that literal too,
+// it is no longer assignable to VoiceTwinMetricDimension, and `npm run typecheck` fails at the call
+// site below -- not a silent runtime default (mirrors EXPECTED_LATENCY_CLASS's totality discipline).
+type VoiceTwinMetricDimension =
+  | "interruption-metric"
+  | "end-of-turn-metric"
+  | "transcript-correction-metric"
+  | "provider-failure-recovery-metric"
+  | "buffer-boundedness-metric"
+  | "latency-class-metric";
+
 function scoreMetricDimension(
-  dimension: VoiceTwinDimension,
+  dimension: VoiceTwinMetricDimension,
   obs: VoiceTwinObservation,
-): VoiceTwinDimensionResult | undefined {
+): VoiceTwinDimensionResult {
   switch (dimension) {
     case "interruption-metric":
       return scoreInterruptionMetric(obs);
@@ -307,8 +324,10 @@ function scoreMetricDimension(
       return scoreBufferBoundednessMetric(obs);
     case "latency-class-metric":
       return scoreLatencyClassMetric(obs);
-    default:
-      return undefined;
+    default: {
+      const _exhaustive: never = dimension;
+      throw new TypeError(`unhandled VoiceTwinMetricDimension: ${String(_exhaustive)}`);
+    }
   }
 }
 
@@ -329,7 +348,7 @@ function scoreDimension(
     case "external-destination-privacy":
       return scoreExternalDestinationPrivacy(fixture, obs);
     default:
-      return scoreMetricDimension(dimension, obs) ?? missingMetric(dimension);
+      return scoreMetricDimension(dimension, obs);
   }
 }
 
