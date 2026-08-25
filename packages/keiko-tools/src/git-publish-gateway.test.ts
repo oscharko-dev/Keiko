@@ -453,6 +453,38 @@ describe("runGitPublish — policy gate (AC2/AC4)", () => {
     expect(publish).toHaveBeenCalledOnce();
   });
 
+  // KEIKO-0147 (round 2): the fix originally landed ONLY in git-merge-gateway. resolvePublishGate
+  // is Gate 2 of runGitPublish — it guards the actual push — and still returned proceed=true for
+  // ANY unexpired token. The test above passes only by coincidence: its approver happens to equal
+  // the single required approver. This pin uses a MISMATCHED identity, so it fails against the
+  // unguarded resolver and can never be satisfied by coincidence.
+  it("blocks the push when the granting user is not in the decision's requiredApprovers set", async () => {
+    const wrongApprover: GitDeliveryApprovalRequirement = {
+      required: true,
+      approvalTokenHash: "a".repeat(64),
+      approvedByUserId: "someone-else",
+      approvedAtMs: 0,
+    };
+    const { adapter, publish } = fakeAdapter(SUCCESS);
+    const result = await runGitPublish(
+      { command: command(), approval: wrongApprover },
+      {
+        adapter,
+        snapshot: snapshot(),
+        orgPolicyPack: approvalGateOrgPack(),
+        repoPolicyPack: approvalGateRepoPack(),
+        now: () => 1,
+        newActionId: () => "a1",
+      },
+    );
+
+    expect(result.lifecycle.outcome).toMatchObject({
+      status: "blocked",
+      blockReason: "approver-not-authorized",
+    });
+    expect(publish).not.toHaveBeenCalled();
+  });
+
   it("keeps an org protected-branch denial when the repo adds an approval gate", async () => {
     const approval: GitDeliveryApprovalRequirement = {
       required: true,

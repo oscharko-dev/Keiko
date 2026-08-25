@@ -462,24 +462,27 @@
         ci.value = v;
         openList(false);
       }
-      // KEIKO-0489 helper: pre-open the combobox lands on the correct end of the list;
-      // subsequent arrow presses wrap through the filtered options.
-      function nextActive(current, d, len, wasHidden) {
-        if (wasHidden) return d > 0 ? 0 : len - 1;
+      // KEIKO-0489 helper: `active === -1` is the "nothing highlighted yet" sentinel — true
+      // when the list is closed AND when it was just opened by focus/typing with no
+      // selection made. Folding -1 through `(a + d + N) % N` makes ArrowUp land on N-2
+      // instead of N-1, so key on the sentinel directly and land on the correct end (0 for
+      // Down, N-1 for Up). Once real navigation has begun (current >= 0) wrap normally.
+      function nextActive(current, d, len) {
+        if (current < 0) return d > 0 ? 0 : len - 1;
         return (current + d + len) % len;
       }
       function move(d) {
-        // KEIKO-0489: capture the pre-open state so first-open lands on the correct end.
-        // Folding (-1 + d) through `(a + d + N) % N` on a closed combobox (active === -1)
-        // makes ArrowUp land on N-2 instead of N-1. WAI-ARIA-1.2 combobox pattern: open the
-        // list AND land on the last option when the user opens with ArrowUp, first when Down.
-        var wasHidden = cl.hidden;
-        if (wasHidden) {
+        // Open the list on the first arrow press if it isn't already (closed combobox).
+        // The index itself no longer depends on whether we just opened it here —
+        // nextActive keys off the active === -1 sentinel, which already covers the
+        // focus-opened and post-typing states too (the list is open but nothing is
+        // highlighted yet), so all three entry paths land on the correct end.
+        if (cl.hidden) {
           openList(true);
           paintCombo();
         }
         if (!filtered.length) return;
-        active = nextActive(active, d, filtered.length, wasHidden);
+        active = nextActive(active, d, filtered.length);
         paintCombo();
         var el = document.getElementById("copt-" + active);
         if (el) el.scrollIntoView({ block: "nearest" });

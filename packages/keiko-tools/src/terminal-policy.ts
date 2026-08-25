@@ -126,6 +126,22 @@ const GIT_BRANCH_DENY_FLAGS: ReadonlySet<string> = new Set([
   "--edit-description",
 ]);
 
+// The long-form members of GIT_BRANCH_DENY_FLAGS. `git branch` resolves options through git's
+// parse_options(), which accepts any unambiguous PREFIX of a long option, so each of these is
+// reachable under many spellings (`--unset-upstrea`, `--set-upstream-t=x`, …). Note this is a
+// subcommand-level parser behaviour: git's TOP-LEVEL flags (GIT_GLOBAL_DENY_FLAGS below) do NOT
+// abbreviate, which is why only the branch deny set needs prefix treatment. (KEIKO-0496.)
+const GIT_BRANCH_DENY_LONG_FLAGS: readonly string[] = Object.freeze(
+  [...GIT_BRANCH_DENY_FLAGS].filter((f) => f.startsWith("--")),
+);
+
+// Returns the denied long flag that `flag` is an abbreviation of, or undefined. `--` alone is not
+// an abbreviation of anything; the exact-match case is handled by the caller before this runs.
+function abbreviatedBranchDenyFlag(flag: string): string | undefined {
+  if (!flag.startsWith("--") || flag.length <= 2) return undefined;
+  return GIT_BRANCH_DENY_LONG_FLAGS.find((denied) => denied.startsWith(flag));
+}
+
 // Global git flags that modify git's own config, working-tree, cwd, or execution path (A5 /
 // ADR-0018 S-H2). These are checked BEFORE subcommand resolution so they cannot be smuggled via a
 // value-flag value that happens to look like a subcommand.
@@ -245,6 +261,15 @@ function checkGitBranch(argsAfterBranch: readonly string[]): TerminalCommandDeci
     const flag = arg.includes("=") ? arg.slice(0, arg.indexOf("=")) : arg;
     if (GIT_BRANCH_DENY_FLAGS.has(flag)) {
       return denied(`git branch: denied mutation flag ${flag}`);
+    }
+    // KEIKO-0496: `git branch` parses its options with git's parse_options(), which accepts any
+    // UNAMBIGUOUS PREFIX of a long option. `--set-upstream-t=origin/main` and `--unset-upstrea`
+    // are both accepted by real git and both mutate .git/config upstream tracking, yet neither is
+    // an exact member of the deny set above. Exact-matching alone therefore leaves the read-only
+    // contract bypassable. Deny any long flag that is a prefix of a denied long form.
+    const abbreviated = abbreviatedBranchDenyFlag(flag);
+    if (abbreviated !== undefined) {
+      return denied(`git branch: denied mutation flag ${flag} (abbreviation of ${abbreviated})`);
     }
     // KEIKO-0496: `git branch -uorigin/main` parses identically to `--set-upstream-to=origin/main`
     // (short flag with value concatenated, no `=`). The literal token is `-uorigin/main`, which

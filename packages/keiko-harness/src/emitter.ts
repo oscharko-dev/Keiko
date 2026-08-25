@@ -1,6 +1,9 @@
 // Stamps every harness event with run identity, a monotonic seq, and a clock timestamp,
 // then forwards it to the sink. SENSITIVE fields (rationale, modelResponse, diff) are
 // redacted before forwarding UNLESS the sink retains raw content for replay (ADR-0004 D6).
+// A sink whose emit() throws is quarantined (KEIKO-0205); every sink still healthy afterward
+// receives one `sink:degraded` notice naming which sink failed, so the gap is recorded in the
+// audit trail instead of silently disappearing.
 
 import { redact, type Clock } from "@oscharko-dev/keiko-model-gateway";
 import type { EventSink } from "./ports.js";
@@ -70,13 +73,26 @@ function redactSensitive(event: HarnessEvent): HarnessEvent {
   return redactor === undefined ? event : redactor(event);
 }
 
+// The five identity fields every event carries, computed fresh (and consuming one seq number)
+// for both a normal event and a sink:degraded notice, so the two paths can never disagree on
+// shape.
+interface EventEnvelope {
+  readonly schemaVersion: "1";
+  readonly runId: string;
+  readonly fingerprint: string;
+  readonly seq: number;
+  readonly ts: number;
+}
+
 export class Emitter {
   private seq = 0;
   // A sink whose emit() throws is quarantined for the remainder of the run: subsequent
   // fan-outs skip it, so one broken sink can never fault every subsequent event and one
   // broken sink can never propagate its throw out through the state machine (KEIKO-0205).
   // The isolated failure preserves the run's terminal-state invariant while other healthy
-  // sinks continue to receive the full event stream.
+  // sinks continue to receive the full event stream, plus a `sink:degraded` notice recording
+  // that the gap happened — dropping the throw VALUE is correct (it is untrusted), dropping the
+  // FACT of the failure is not.
   private readonly poisoned = new WeakSet<EventSink>();
 
   // Fans every event out to all sinks. Each sink receives raw SENSITIVE fields only if it
@@ -89,17 +105,36 @@ export class Emitter {
   ) {}
 
   emit(body: EventBody): void {
+    const event = { ...this.nextEnvelope(), ...body } as HarnessEvent;
+    const redacted = redactSensitive(event);
+    const failedIndexes = this.deliverToSinks(event, redacted);
+    // Raised only after the original event has reached every sink that was still healthy at the
+    // start of this call, so seq stays strictly increasing per recipient: nobody ever observes a
+    // notice before the event it describes.
+    for (const sinkIndex of failedIndexes) {
+      this.announceDegraded(sinkIndex);
+    }
+  }
+
+  private nextEnvelope(): EventEnvelope {
     this.seq += 1;
-    const event = {
+    return {
       schemaVersion: "1",
       runId: this.runId,
       fingerprint: this.fingerprint,
       seq: this.seq,
       ts: this.clock.now(),
-      ...body,
-    } as HarnessEvent;
-    const redacted = redactSensitive(event);
-    for (const sink of this.sinks) {
+    };
+  }
+
+  // Delivers one already-built event to every sink not yet quarantined, isolating a throwing
+  // sink exactly as before. Returns the indexes (positions in the constructor-injected sink list)
+  // of sinks that newly failed during THIS delivery, so the caller can decide what to do about it
+  // — this method never itself reacts to a failure beyond quarantining, which is what lets it be
+  // reused for both a normal event and a degraded notice without risking recursion.
+  private deliverToSinks(event: HarnessEvent, redacted: HarnessEvent): number[] {
+    const failed: number[] = [];
+    for (const [index, sink] of this.sinks.entries()) {
       if (this.poisoned.has(sink)) {
         continue;
       }
@@ -111,7 +146,21 @@ export class Emitter {
         // content is untrusted (it may carry an untyped body) and re-raising anything
         // would defeat the whole point of the guard. Body-free by construction.
         this.poisoned.add(sink);
+        failed.push(index);
       }
     }
+    return failed;
+  }
+
+  // One notice per failing sink, consuming its own seq number so it is never mistaken for (or
+  // colliding with) the event whose delivery it reports. Delivery reuses deliverToSinks — a
+  // recipient that throws on the notice itself is quarantined exactly like any other faulty sink,
+  // but that failure is intentionally never announced: this method does not recurse on
+  // deliverToSinks's return value, which is what guarantees a bounded, single pass over the sink
+  // list no matter how many sinks are broken.
+  private announceDegraded(sinkIndex: number): void {
+    const noticeBody: EventBody = { type: "sink:degraded", sinkIndex, reason: "sink-threw" };
+    const event = { ...this.nextEnvelope(), ...noticeBody } as HarnessEvent;
+    this.deliverToSinks(event, redactSensitive(event));
   }
 }

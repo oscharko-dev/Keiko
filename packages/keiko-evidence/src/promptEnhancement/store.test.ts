@@ -264,6 +264,17 @@ describe("buildPromptEnhancementEvidenceManifest", () => {
       expect(manifest.enhancedPromptTextRedacted).toBe("");
     });
 
+    // KEIKO-0395 (round 2): a NEGATIVE cap used to reach `slice(0, negative)`, which counts from
+    // the END of the string and therefore returned a value LONGER than the requested bound —
+    // inverting the helper's one invariant. No shipped caller passes a negative bound, so this
+    // pins the guarantee as total rather than conditional.
+    it("returns an empty string for a negative caller cap (KEIKO-0395)", () => {
+      const { manifest } = buildPromptEnhancementEvidenceManifest(
+        recordInput({ enhancedPromptText: HUGE_DRAFT, enhancedPromptMaxChars: -25 }),
+      );
+      expect(manifest.enhancedPromptTextRedacted).toBe("");
+    });
+
     it("re-applies the ceiling on persist, whatever built the manifest", () => {
       const store = createInMemoryPromptEnhancementLocalStore();
       const { manifest } = buildPromptEnhancementEvidenceManifest(recordInput());

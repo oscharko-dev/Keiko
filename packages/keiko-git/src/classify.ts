@@ -161,12 +161,21 @@ function remoteFailurePhraseMatch(text: string): GitRemoteFailureReason | undefi
  */
 export function classifyGitRemoteFailure(result: GitProcessResult): GitRemoteFailureReason {
   if (result.exitCode === 127) return "git-missing";
-  if (result.timedOut === true) return "timeout";
-  // Abort precedence sits before the phrase match AND before the truncated cap: an aborted run
-  // typically has no discriminating remote output (the caller disconnected before git finished),
-  // and the runner also sets `truncated` on abort so a bare truncated check would masquerade the
-  // cancellation as an output-cap event. See GitRemoteFailureReason above.
+  // Abort outranks the deadline, the phrase match AND the truncated cap.
+  //
+  // Against `timedOut` this is a real race, not a theoretical one: `onAbort` sets `aborted` and
+  // starts the KILL_GRACE_MS escalation, but it does NOT clear the timeout timer — only `settle`
+  // does, and that runs when the child finally closes. A caller who aborts shortly before the
+  // deadline therefore lands with BOTH flags set, and ranking `timedOut` first reported that
+  // caller-initiated cancellation as a `timeout`, erasing the very distinction KEIKO-0184 added
+  // this reason for. The caller's cancellation is the first cause, so it wins.
+  //
+  // Against the phrase match and the cap: an aborted run typically has no discriminating remote
+  // output (the caller disconnected before git finished), and the runner also sets `truncated` on
+  // abort, so a bare truncated check would masquerade the cancellation as an output-cap event.
+  // See GitRemoteFailureReason above.
   if (result.aborted === true) return "cancelled";
+  if (result.timedOut === true) return "timeout";
   const matched = remoteFailurePhraseMatch(`${result.stdout}\n${result.stderr}`.toLowerCase());
   if (matched !== undefined) return matched;
   if (result.truncated) return "output-truncated";

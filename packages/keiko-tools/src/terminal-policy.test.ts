@@ -295,6 +295,32 @@ describe("isTerminalCommandAllowed — git (subcommand allowlist + value-flag sa
     expect(isTerminalCommandAllowed("git", ["branch", "-Uorigin/main"]).allowed).toBe(false);
   });
 
+  // KEIKO-0496 (round 2): `git branch` parses options through git's parse_options(), which accepts
+  // any UNAMBIGUOUS PREFIX of a long option. Verified against real git 2.50.1 that each spelling
+  // below is accepted and genuinely writes/removes branch.<name>.remote / .merge in .git/config —
+  // i.e. every one of these mutates state through a tool whose entire contract is read-only
+  // inspection. Exact-matching the deny set alone let all of them through.
+  it.each([
+    "--set-upstream-t=origin/main",
+    "--set-upstream-to=origin/main",
+    "--set-upstream-=origin/main",
+    "--set-upstrea=origin/main",
+    "--set-u=origin/main",
+    "--unset-upstream",
+    "--unset-upstrea",
+    "--unset-up",
+    "--unset-",
+  ])("denies the abbreviated git branch upstream flag %s", (arg) => {
+    expect(isTerminalCommandAllowed("git", ["branch", arg]).allowed).toBe(false);
+  });
+
+  it("still allows a read-only long flag that merely shares a prefix with nothing denied", () => {
+    // Guard against over-blocking: `--list` and `--all` are legitimate read-only listing flags and
+    // are not a prefix of any denied long form.
+    expect(isTerminalCommandAllowed("git", ["branch", "--list"]).allowed).toBe(true);
+    expect(isTerminalCommandAllowed("git", ["branch", "--all"]).allowed).toBe(true);
+  });
+
   it("denies git branch -u origin/main (space-separated form) via the positional-operand path", () => {
     // The bare -u is in the deny set; even if it were not, `origin/main` would be caught as a
     // positional operand. Both defenses in the same test to lock the pin down.

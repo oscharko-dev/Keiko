@@ -309,8 +309,11 @@ function resolveRegisteredWorkspace(
 // callers within the TTL window reuse one walk. Bytes and file counts of a real filesystem walk
 // change on a scale of seconds; a 2 s TTL matches gitRepositoryReads and stays well under any
 // human-visible latency budget.
-const WORKSPACE_WALK_CACHE_TTL_MS = 2_000;
-const WORKSPACE_WALK_CACHE_MAX_ENTRIES = 32;
+// Exported (not just an internal literal) so hermetic tests assert the TTL-expiry and
+// max-entries-eviction behaviour against the value the production module actually owns, instead of
+// restating the numbers as a second, driftable copy.
+export const WORKSPACE_WALK_CACHE_TTL_MS = 2_000;
+export const WORKSPACE_WALK_CACHE_MAX_ENTRIES = 32;
 
 interface WorkspaceWalkCacheEntry {
   readonly expiresAt: number;
@@ -365,17 +368,18 @@ function workspaceSummaryResult(
   request: WorkspaceRequest,
   registeredRoot: string,
   deps: UiHandlerDeps,
+  now: () => number = Date.now,
 ): RouteResult {
   try {
     const workspace = detectWorkspace(registeredRoot);
     if (workspace.root !== registeredRoot) {
       return workspaceNotRegisteredResult();
     }
-    const now = Date.now();
-    let walk = cachedWorkspaceWalk(workspace.root, now);
+    const nowMs = now();
+    let walk = cachedWorkspaceWalk(workspace.root, nowMs);
     if (walk === undefined) {
       walk = discoverWithStats(workspace, DEFAULT_CONTEXT_REQUEST.discovery);
-      storeWorkspaceWalk(workspace.root, walk, now);
+      storeWorkspaceWalk(workspace.root, walk, nowMs);
     }
     const { files, stats } = walk;
     const wantsContext = request.task !== undefined || request.budget !== undefined;
@@ -402,8 +406,14 @@ function workspaceSummaryResult(
   }
 }
 
-// Route 12 — workspace summary and optional context pack, built by the safe workspace layer.
-export function handleWorkspace(ctx: RouteContext, deps: UiHandlerDeps): RouteResult {
+// Route 12 — workspace summary and optional context pack, built by the safe workspace layer. `now`
+// is an injectable clock for the walk-cache TTL (KEIKO-0253); it defaults to Date.now so the route
+// table's two-argument call is unchanged and only hermetic tests ever pass an override.
+export function handleWorkspace(
+  ctx: RouteContext,
+  deps: UiHandlerDeps,
+  now: () => number = Date.now,
+): RouteResult {
   const request = readWorkspaceRequest(ctx.url.searchParams);
   if ("status" in request) {
     return request;
@@ -412,7 +422,7 @@ export function handleWorkspace(ctx: RouteContext, deps: UiHandlerDeps): RouteRe
   if ("status" in registered) {
     return registered;
   }
-  return workspaceSummaryResult(request, registered.normalized, deps);
+  return workspaceSummaryResult(request, registered.normalized, deps, now);
 }
 
 interface EvidenceFilters {

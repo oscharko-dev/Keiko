@@ -58,17 +58,15 @@ describe("design-system/Keiko Icon System.html — no third-party CDN (KEIKO-041
     // (which is a sibling file, not a CDN dep). Assert the library grid, window-control
     // buttons, and keyline-grid diagrams all render — those are the surfaces the deleted
     // React/JSX/Babel code owned before.
-    let html = readFileSync(iconSystemHtmlPath, "utf8");
-    // Inline lift-glyphs.js so jsdom doesn't have to fetch it. Strip <link> refs (external
-    // stylesheets) and the two sibling scripts we don't need for a render test.
-    html = html
-      .replace(
-        '<script src="lift-glyphs.js"></script>',
-        "<script>" + readFileSync(liftGlyphsPath, "utf8") + "</script>",
-      )
-      .replace('<script src="ds-nav.js"></script>', "")
-      .replace('<script src="theme-control.js"></script>', "")
-      .replaceAll(/<link[^>]*>/gu, "");
+    const rawHtml = readFileSync(iconSystemHtmlPath, "utf8");
+    // Only ONE substitution is needed: inline the sibling lift-glyphs.js so its renderer
+    // actually executes (jsdom is left at its default `resources` setting, under which it
+    // never fetches external subresources). That same default is what keeps the `<link>`
+    // stylesheets and the other two sibling scripts inert — they are parsed and ignored,
+    // so no stripping is required and no regex is applied to the markup.
+    const inlineGlyphs = `<script>${readFileSync(liftGlyphsPath, "utf8")}</script>`;
+    const html = rawHtml.replace('<script src="lift-glyphs.js"></script>', inlineGlyphs);
+    expect(html, "lift-glyphs.js script tag must be present to inline").not.toBe(rawHtml);
     const errors = [];
     const virtualConsole = new VirtualConsole().on("jsdomError", (e) => errors.push(String(e)));
     const dom = new JSDOM(html, {

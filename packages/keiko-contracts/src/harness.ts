@@ -428,6 +428,22 @@ export interface ToolShapingDegradedEvent extends BaseEvent {
   readonly reason: ToolShapingDegradedReason;
 }
 
+// KEIKO-0205: a sink whose emit() throws is quarantined by the harness's Emitter so a broken sink
+// integration can never fault the whole fan-out or reject the run — but dropping the FACT of that
+// failure (as opposed to the throw's untrusted VALUE, which is correctly discarded) would leave a
+// run reporting `completed` with a silently incomplete audit trail. This is the observability
+// signal for the quarantine: `reason` is a closed, safe vocabulary the emitter itself chooses, and
+// `sinkIndex` is the failing sink's position in the constructor-injected sink list — never the
+// underlying error's message, stack, or the event that failed to deliver, so it needs no
+// redaction.
+export type SinkDegradedReason = "sink-threw";
+
+export interface SinkDegradedEvent extends BaseEvent {
+  readonly type: "sink:degraded";
+  readonly sinkIndex: number;
+  readonly reason: SinkDegradedReason;
+}
+
 export type HarnessEvent =
   | RunStartedEvent
   | StateTransitionEvent
@@ -447,4 +463,5 @@ export type HarnessEvent =
   | RunCancelledEvent
   | RunFailedEvent
   | BrowserEvent
-  | ToolShapingDegradedEvent;
+  | ToolShapingDegradedEvent
+  | SinkDegradedEvent;

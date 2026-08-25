@@ -98,6 +98,8 @@ export type {
   BrowserEvent,
   ToolShapingDegradedReason,
   ToolShapingDegradedEvent,
+  SinkDegradedReason,
+  SinkDegradedEvent,
   HarnessEvent,
 } from "./harness.js";
 export { TERMINAL_STATES, DEFAULT_LIMITS, HARNESS_CODES, HARNESS_VERSION } from "./harness.js";

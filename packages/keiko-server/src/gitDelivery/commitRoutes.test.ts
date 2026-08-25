@@ -840,13 +840,19 @@ describe("commit execute — message policy gate + no-bypass (AC2/AC4/AC5)", () 
     expect(adapter.calls()).toEqual([]);
   });
 
+  // What this pins is BINDING integrity: a claim is redeemable only if its recorded binding
+  // (project + operation + command) matches the request. The approver IDENTITY is a separate
+  // concern, gated by KEIKO-0147 and pinned by the test below — so this rule uses
+  // `requiredApprovers: []`, which ADR-0080 D5 defines as "at least one approver of any
+  // identity". Previously it named `["lead"]` while the store minted `u-1`, which only passed
+  // because nothing checked membership.
   it("executes an approval-gated commit only with a matching server-issued claim", async () => {
     const adapter = recordingAdapter();
     const approvalStore = createInMemoryGitDeliveryApprovalStore();
     const approvalGated: GitDeliveryRepoPolicyPack = {
       schemaVersion: GIT_DELIVERY_POLICY_SCHEMA_VERSION,
       repoId: "repo",
-      rules: [{ actionKind: "commit", decision: "approval-gated", requiredApprovers: ["lead"] }],
+      rules: [{ actionKind: "commit", decision: "approval-gated", requiredApprovers: [] }],
       defaultRule: { decision: "blocked" },
     };
     const message = "feat(ui): add flow";
@@ -868,6 +874,43 @@ describe("commit execute — message policy gate + no-bypass (AC2/AC4/AC5)", () 
     );
     expect((res.body as { status: string }).status).toBe("succeeded");
     expect(adapter.calls()).toEqual(["commit"]);
+  });
+
+  // KEIKO-0147: a valid, correctly-bound, server-issued claim is still not authority when the
+  // pack names a required-approver set the granting identity is not in. This is fail-closed by
+  // design: Keiko mints every claim as the single local principal (`GIT_DELIVERY_LOCAL_OPERATOR_ID`
+  // — approvalStore.ts), so a pack naming any other approver describes an authority this product
+  // cannot produce, and blocking says so instead of silently proceeding over a policy it did not
+  // satisfy. `requiredApprovers: []` remains "any identity" per ADR-0080 D5 (pinned above).
+  it("blocks an approval-gated commit when the claim's approver is not in requiredApprovers", async () => {
+    const adapter = recordingAdapter();
+    const approvalStore = createInMemoryGitDeliveryApprovalStore();
+    const message = "feat(ui): add flow";
+    const namedApprover: GitDeliveryRepoPolicyPack = {
+      schemaVersion: GIT_DELIVERY_POLICY_SCHEMA_VERSION,
+      repoId: "repo",
+      // The store's helper mints `u-1`; this pack demands `lead`, which it can never be.
+      rules: [{ actionKind: "commit", decision: "approval-gated", requiredApprovers: ["lead"] }],
+      defaultRule: { decision: "blocked" },
+    };
+    const handler = createHandleCommitExecute({
+      execution: seams({
+        adapterFactory: () => adapter.adapter,
+        policyPacks: { repoPack: namedApprover },
+        approvalStore,
+      }),
+    });
+    const res = await handler(
+      ctxFor(EXECUTE, {
+        schemaVersion: "1",
+        projectId,
+        message,
+        approval: issueCommitApproval(approvalStore, message),
+      }),
+      deps(),
+    );
+    expect((res.body as { status: string }).status).toBe("blocked");
+    expect(adapter.calls()).toEqual([]);
   });
 
   it("rejects a forged browser-supplied approval object before commit execution", async () => {

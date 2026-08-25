@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -16,7 +16,10 @@ import {
   isVoiceDictationCapable,
   isVoiceRealtimeCapable,
   workspaceErrorStatus,
+  WORKSPACE_WALK_CACHE_MAX_ENTRIES,
+  WORKSPACE_WALK_CACHE_TTL_MS,
 } from "./read-handlers.js";
+import * as keikoWorkspaceModule from "@oscharko-dev/keiko-workspace";
 import { WORKSPACE_CODES } from "@oscharko-dev/keiko-workspace";
 import { buildRedactor, createRunRegistry, type UiHandlerDeps } from "./index.js";
 import { DEFAULT_GROUNDING_LIMITS } from "@oscharko-dev/keiko-contracts/bff-wire";
@@ -553,6 +556,54 @@ describe("GET /api/workspace — walk cache (KEIKO-0253)", () => {
     } finally {
       __resetWorkspaceWalkCacheForTests();
       rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("re-walks the tree once the TTL window has elapsed", () => {
+    __resetWorkspaceWalkCacheForTests();
+    const root = createWorkspaceFixture();
+    const walkSpy = vi.spyOn(keikoWorkspaceModule, "discoverWithStats");
+    let clock = 1_700_000_000_000;
+    const now = (): number => clock;
+    try {
+      const deps = depsWithRegisteredProject(root);
+      handleWorkspace(ctx(`/api/workspace?dir=${encodeURIComponent(root)}`), deps, now);
+      expect(walkSpy).toHaveBeenCalledTimes(1);
+      // Cross the TTL boundary: the entry stored at `clock` expires at `clock + TTL`, so landing
+      // one millisecond past that must be treated as expired, never reused.
+      clock += WORKSPACE_WALK_CACHE_TTL_MS + 1;
+      handleWorkspace(ctx(`/api/workspace?dir=${encodeURIComponent(root)}`), deps, now);
+      expect(walkSpy).toHaveBeenCalledTimes(2);
+      // The cache still holds exactly one entry for this root — the stale one was replaced, not
+      // appended alongside it.
+      expect(__workspaceWalkCacheSizeForTests()).toBe(1);
+    } finally {
+      walkSpy.mockRestore();
+      __resetWorkspaceWalkCacheForTests();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("never lets the cache grow past WORKSPACE_WALK_CACHE_MAX_ENTRIES distinct roots", () => {
+    __resetWorkspaceWalkCacheForTests();
+    const roots: string[] = [];
+    try {
+      const extraRoots = 8;
+      for (let i = 0; i < WORKSPACE_WALK_CACHE_MAX_ENTRIES + extraRoots; i += 1) {
+        const root = createWorkspaceFixture();
+        roots.push(root);
+        const deps = depsWithRegisteredProject(root);
+        handleWorkspace(ctx(`/api/workspace?dir=${encodeURIComponent(root)}`), deps);
+        expect(__workspaceWalkCacheSizeForTests()).toBeLessThanOrEqual(
+          WORKSPACE_WALK_CACHE_MAX_ENTRIES,
+        );
+      }
+      expect(__workspaceWalkCacheSizeForTests()).toBeLessThanOrEqual(
+        WORKSPACE_WALK_CACHE_MAX_ENTRIES,
+      );
+    } finally {
+      __resetWorkspaceWalkCacheForTests();
+      for (const root of roots) rmSync(root, { recursive: true, force: true });
     }
   });
 });

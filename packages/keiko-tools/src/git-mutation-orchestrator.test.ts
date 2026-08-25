@@ -356,6 +356,29 @@ describe("orchestrator — approval-gated policy", () => {
     expect(fake.callCount()).toBe(1);
   });
 
+  // KEIKO-0147 (round 2): the membership check originally landed only in git-merge-gateway, so
+  // this resolver accepted ANY unexpired token even when the decision named specific approvers.
+  // The approver here is deliberately not `alice`, so the pin cannot pass by coincidence.
+  it("blocks when the granting user is not in the decision's requiredApprovers set", async () => {
+    const wrongApprover: GitDeliveryApprovalRequirement = {
+      required: true,
+      approvalTokenHash: "a".repeat(64),
+      approvedByUserId: "mallory",
+      approvedAtMs: 900,
+      expiresAtMs: 5000,
+    };
+    const fake = fakeAdapter(exec("succeeded"));
+    const result = await runGitMutation(
+      request(COMMIT, wrongApprover),
+      deps(fake.adapter, { repoPolicyPack: APPROVAL_GATED }),
+    );
+    expect(result.outcome).toMatchObject({
+      status: "blocked",
+      blockReason: "approver-not-authorized",
+    });
+    expect(fake.callCount()).toBe(0);
+  });
+
   it("does not let a valid repo approval override an unsatisfied org constraint", async () => {
     const orgPolicyPack: GitDeliveryOrgPolicyPack = {
       schemaVersion: GIT_DELIVERY_POLICY_SCHEMA_VERSION,

@@ -197,24 +197,6 @@ function fakeCli(help: string): SurfaceParityCliRunner {
   };
 }
 
-function labelFor(passed: boolean): string {
-  return passed ? "passed" : "failed";
-}
-
-function findFailedChecks(
-  checks: readonly {
-    readonly check: string;
-    readonly passed: boolean;
-    readonly reason?: string | undefined;
-  }[],
-): readonly {
-  readonly check: string;
-  readonly passed: boolean;
-  readonly reason?: string | undefined;
-}[] {
-  return checks.filter((c) => !c.passed);
-}
-
 describe("KEIKO-0241 checkSurfaceParity FAIL branches (synthetic broken inputs)", () => {
   // Full-help strings that satisfy each CLI's requiredTokens on their own. Dropping one token from
   // one of the two CLIs should flip only that CLI's cli-flags check to failed.
@@ -313,19 +295,6 @@ describe("KEIKO-0241 checkSurfaceParity FAIL branches (synthetic broken inputs)"
       expect(check.passed).toBe(false);
       expect(check.reason).toBe("RunRequest field types mismatch");
     }
-  });
-
-  it("smoke: labelFor / findFailedChecks helpers behave as documented", () => {
-    // Local helpers stay covered so a future refactor doesn't drop them silently.
-    expect(labelFor(true)).toBe("passed");
-    expect(labelFor(false)).toBe("failed");
-    expect(findFailedChecks([{ check: "x", passed: true }])).toHaveLength(0);
-    expect(
-      findFailedChecks([
-        { check: "x", passed: false, reason: "r" },
-        { check: "y", passed: true },
-      ]),
-    ).toHaveLength(1);
   });
 
   it("smoke: the SurfaceParityCliIo alias covers a chunked-string capture", () => {

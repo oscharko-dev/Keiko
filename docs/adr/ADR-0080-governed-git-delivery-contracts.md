@@ -261,6 +261,21 @@ protected-branch constraint, and empty packs fail closed.
 `requiredApprovers: []` on an **explicit** `approval-gated` rule means "at least one approver of any
 identity" and is NOT the fail-closed case — the fail-closed case is `no-applicable-rule` blocked.
 
+A **non-empty** `requiredApprovers` list is enforced: the identity that granted the approval must be
+a member, and a gate whose approval was granted by anyone else blocks with
+`approver-not-authorized`. All four delivery gates (merge, publish, pull-request, local mutation)
+apply the one shared predicate in `keiko-tools/src/git-approval-gate.ts`, so the rule cannot drift
+between the surfaces that enforce it. Before this was enforced the list was recorded on every
+decision and consulted by nothing, so a deployment naming specific reviewers silently accepted any
+authenticated approval (audit KEIKO-0147).
+
+Note the consequence in this single-user, loopback-bound product: every claim Keiko mints is
+attributed to the one local principal (`GIT_DELIVERY_LOCAL_OPERATOR_ID`, `approvalStore.ts`), because
+there is no per-request authenticated end user to attribute a mint to. A pack that names any other
+approver therefore describes an authority this product cannot produce, and such a rule fails closed
+rather than being silently satisfied. Packs that want "an approval is required, from whoever is at
+this keyboard" express that as `requiredApprovers: []`.
+
 `parseGitPolicyPack` / `parseGitRepoPolicyPack` / `parseGitOrgPolicyPack` return the shared
 `GitDeliveryParseResult<T>`. `parseGitPolicyPack` discriminates a repo pack from an org pack by the
 presence of `repoId` vs `orgId`.

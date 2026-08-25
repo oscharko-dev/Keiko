@@ -832,6 +832,73 @@ describe("htmlCssAdapter — layout/sizing/cornerRadius/typography CSS (additive
   });
 });
 
+// ─── classHash pin (Issue #2903 audit) ─────────────────────────────────────────
+//
+// classHash (htmlCssAdapter.ts) moved from a UTF-16-code-unit `charCodeAt` loop to iterating
+// Unicode CODE POINTS via `codePointAt`, so a surrogate pair (an emoji, an astral character)
+// hashes as ONE unit instead of two. classHash itself is not exported, and is not exported purely
+// for this test — it is reached through the only place its output is externally observable: the
+// "-${classHash(id)}" suffix `nodeClass` appends to the SECOND of two Figma ids that sanitize to
+// the same class-name slug (see "keeps CSS classes distinct..." above). Golden values are captured
+// once from the real implementation and pinned as literals — deliberately, unlike the rest of this
+// file's fixtures — because the point of THIS pin is to freeze ordinary-input churn that would
+// otherwise silently rename every generated CSS class.
+
+describe("htmlCssAdapter — classHash pin (Issue #2903 audit)", () => {
+  // A node needs SOME CSS-affecting field (here: layout) before htmlCssAdapter assigns it a class
+  // at all — an id-only node with no layout/sizing/cornerRadius/typography emits no class
+  // attribute, so `nodeClass`/`classHash` are never reached (see "emits no <style> block and no
+  // class attribute..." below).
+  const collidingChild = (id: string): IrNode => node(id, "container", { layout: { mode: "row" } });
+
+  const collisionClassNames = (firstId: string, secondId: string): readonly string[] => {
+    const s = screen(
+      "s-hash",
+      "Hash",
+      node("root", "container", {
+        children: [collidingChild(firstId), collidingChild(secondId)],
+      }),
+    );
+    const artifact = emitCode({ screens: [s], tokens: NO_TOKENS, hints: [] }, htmlCssAdapter);
+    const html = fileByPath(artifact, "screens/s-hash.html");
+    return [...html.matchAll(/class="([^"]+)"/gu)].map((match) => match[1] ?? "");
+  };
+
+  it("pins classHash output for a few ASCII ids (ordinary-input churn guard)", () => {
+    // Three ids share one sanitized base ("n-alpha-one"): the first is unsuffixed, the second and
+    // third each get their OWN classHash(id) suffix.
+    const s = screen(
+      "s-hash-ascii",
+      "HashAscii",
+      node("root", "container", {
+        children: [
+          collidingChild("alpha:one"),
+          collidingChild("alpha;one"),
+          collidingChild("alpha/one"),
+        ],
+      }),
+    );
+    const artifact = emitCode({ screens: [s], tokens: NO_TOKENS, hints: [] }, htmlCssAdapter);
+    const html = fileByPath(artifact, "screens/s-hash-ascii.html");
+    const classNames = [...html.matchAll(/class="([^"]+)"/gu)].map((match) => match[1]);
+    expect(classNames).toHaveLength(3);
+    expect(classNames[0]).toBe("n-alpha-one");
+    expect(classNames[1]).toBe("n-alpha-one-13pyxh0");
+    expect(classNames[2]).toBe("n-alpha-one-ntm6fk");
+  });
+
+  it("hashes an id containing an astral character (emoji) without throwing, pinned and stable", () => {
+    const classNames = collisionClassNames("glyph:\u{1F642}", "glyph;\u{1F642}");
+    expect(classNames).toHaveLength(2);
+    expect(classNames[1]).toBe("n-glyph---jrlieg");
+
+    // Stable across two calls: re-running emitCode on an equivalent fixture is byte-identical, so
+    // the surrogate-pair id neither throws nor produces a non-deterministic hash.
+    const again = collisionClassNames("glyph:\u{1F642}", "glyph;\u{1F642}");
+    expect(again).toEqual(classNames);
+  });
+});
+
 // ─── Unsafe format-char stripping in the reviewable artifact ──────────────────
 //
 // Figma board text (screen names, node names, text content, font-family) is untrusted. Unicode

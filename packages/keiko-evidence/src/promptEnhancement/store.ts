@@ -199,8 +199,13 @@ function boundedMax(requested: number | undefined, ceiling: number): number {
 // the readability of the marker: fall through to a plain slice and drop the marker entirely.
 function boundEnhancedPromptText(value: string, max: number): string {
   if (value.length <= max) return value;
-  if (max < PE_EVIDENCE_TRUNCATION_MARKER.length) return value.slice(0, max);
-  const keep = max - PE_EVIDENCE_TRUNCATION_MARKER.length;
+  // Floor at 0 before slicing. A negative `max` would otherwise reach `slice(0, negative)`, which
+  // counts from the END and returns a string LONGER than the requested bound — inverting the one
+  // invariant this helper exists to hold (output length <= max). No live caller passes a negative
+  // bound today; the clamp makes the guarantee total rather than conditional. (KEIKO-0395.)
+  const ceiling = Math.max(0, max);
+  if (ceiling < PE_EVIDENCE_TRUNCATION_MARKER.length) return value.slice(0, ceiling);
+  const keep = ceiling - PE_EVIDENCE_TRUNCATION_MARKER.length;
   return value.slice(0, keep) + PE_EVIDENCE_TRUNCATION_MARKER;
 }
 

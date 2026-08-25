@@ -48,6 +48,8 @@ export type {
   BrowserEvent,
   ToolShapingDegradedReason,
   ToolShapingDegradedEvent,
+  SinkDegradedReason,
+  SinkDegradedEvent,
   HarnessEvent,
 } from "@oscharko-dev/keiko-contracts";
 export { TERMINAL_STATES, DEFAULT_LIMITS, HARNESS_CODES } from "@oscharko-dev/keiko-contracts";

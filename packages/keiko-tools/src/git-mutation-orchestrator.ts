@@ -40,6 +40,7 @@ import type {
   GitWorktreeSnapshot,
 } from "./git-mutation-preflight.js";
 import { evaluateGitPreflight } from "./git-mutation-preflight.js";
+import { approverIsNotAuthorized } from "./git-approval-gate.js";
 import type {
   GitMutationFailureCategory,
   GitMutationLifecyclePhase,
@@ -321,12 +322,19 @@ function approvalIsValid(
 }
 
 function resolveApprovalGate(
-  approvers: readonly string[],
+  decision: GitDeliveryPolicyDecision,
   approval: GitDeliveryApprovalRequirement,
   now: number,
 ): PolicyGate {
+  const approvers = decision.outcome === "approval-gated" ? decision.requiredApprovers : [];
   const state = approvalIsValid(approval, now);
   if (state === "valid") {
+    // KEIKO-0147: a valid token is not authority on its own — the granting identity must be in
+    // the decision's required-approver set when it names one. Same predicate as the merge,
+    // publish, and PR gates.
+    if (approverIsNotAuthorized(decision, approval)) {
+      return { proceed: false, status: "policy-block", blockReason: "approver-not-authorized" };
+    }
     return { proceed: true };
   }
   if (state === "expired") {
@@ -356,11 +364,7 @@ function resolvePolicyGate(
   if (effective.outcome === "blocked") {
     return { proceed: false, status: "policy-block", blockReason: effective.blockReason };
   }
-  return resolveApprovalGate(
-    decision.outcome === "approval-gated" ? decision.requiredApprovers : [],
-    request.approval,
-    now,
-  );
+  return resolveApprovalGate(decision, request.approval, now);
 }
 
 // ─── Phase 5: execution dispatch ─────────────────────────────────────────────────────────────

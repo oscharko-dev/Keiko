@@ -239,17 +239,26 @@ describe("createAtlassianCredentialCustody — create", () => {
 
 describe("createAtlassianCredentialCustody — list / getMetadata / delete", () => {
   it("lists metadata sorted by creation time and never the secret", () => {
-    // KEIKO-0403: use a LOCAL custody with a stepping clock so create() yields records with
-    // distinct createdAt values. custodyOverFakes()'s constant clock pinned every createdAt to a
-    // single value, so the primary sort key was never exercised and reversing the comparator
-    // direction left this test green. Kept the constant clock for other tests that need it.
+    // KEIKO-0403/#2903 audit: a stepping-forward clock alone is still tautological — when every
+    // create() call gets a LATER createdAt than the one before it, insertion order and
+    // createdAt-sorted order are identical, so `[...metadataStore.list()]` (i.e. deleting `.sort()`
+    // entirely) satisfies every assertion below just as well as a real sort does. The clock here
+    // steps BACKWARD for the second create(), so the record inserted SECOND gets an EARLIER
+    // createdAt than the record inserted FIRST: insertion order is [first, second] but the correct
+    // sorted order is [second, first]. Only a comparator that genuinely sorts by createdAt can
+    // produce that reversal.
     const vault = inMemoryVault();
     const metadataStore = inMemoryMetadataStore();
-    let tick = 1_700_000_000_000;
+    const clockSequence = [1_700_000_002_000, 1_700_000_000_000];
+    let callIndex = 0;
     const { custody } = createAtlassianCredentialCustody({
       vault,
       metadataStore,
-      now: () => (tick += 1_000),
+      now: (): number => {
+        const value = clockSequence[callIndex];
+        callIndex += 1;
+        return value ?? 1_700_000_004_000;
+      },
     });
     const first = custody.create(createInput());
     const second = custody.create(
@@ -260,27 +269,37 @@ describe("createAtlassianCredentialCustody — list / getMetadata / delete", () 
     expect(JSON.stringify(listed)).not.toContain(SYNTHETIC_TOKEN);
     expect(JSON.stringify(listed)).not.toContain(SYNTHETIC_EMAIL);
     expect(listed.every((entry) => isAtlassianCredentialMetadata(entry))).toBe(true);
-    // The intended order is ascending createdAt — asserted from the create() return values, never
-    // a locally re-derived formula.
-    expect(listed.map((entry) => entry.authRef)).toEqual([first.authRef, second.authRef]);
-    expect(listed[0]?.createdAt).toBeLessThan(listed[1]?.createdAt ?? Number.NEGATIVE_INFINITY);
+    // second.createdAt < first.createdAt (asserted from the create() return values, never a
+    // locally re-derived formula) — a real sort must therefore REVERSE insertion order.
+    expect(second.createdAt).toBeLessThan(first.createdAt);
+    expect(listed.map((entry) => entry.authRef)).toEqual([second.authRef, first.authRef]);
+    expect(listed[0]?.createdAt).toBeLessThan(listed[1]?.createdAt ?? Number.POSITIVE_INFINITY);
 
-    // Companion: creating in the OPPOSITE order still yields ascending-createdAt output. This
-    // rules out a comparator that happens to preserve insertion order but ignores createdAt.
+    // Companion: the reversal is not an artifact of which provider is created first — swapping
+    // which credential receives the earlier timestamp still yields ascending-createdAt output.
     const otherVault = inMemoryVault();
     const otherStore = inMemoryMetadataStore();
-    let otherTick = 1_800_000_000_000;
+    const otherClockSequence = [1_800_000_002_000, 1_800_000_000_000];
+    let otherCallIndex = 0;
     const { custody: otherCustody } = createAtlassianCredentialCustody({
       vault: otherVault,
       metadataStore: otherStore,
-      now: () => (otherTick += 1_000),
+      now: (): number => {
+        const value = otherClockSequence[otherCallIndex];
+        otherCallIndex += 1;
+        return value ?? 1_800_000_004_000;
+      },
     });
-    const older = otherCustody.create(
+    const insertedFirst = otherCustody.create(
       createInput({ displayName: "Confluence Docs", provider: "confluence" }),
     );
-    const newer = otherCustody.create(createInput());
+    const insertedSecond = otherCustody.create(createInput());
     const otherListed = otherCustody.list();
-    expect(otherListed.map((entry) => entry.authRef)).toEqual([older.authRef, newer.authRef]);
+    expect(insertedSecond.createdAt).toBeLessThan(insertedFirst.createdAt);
+    expect(otherListed.map((entry) => entry.authRef)).toEqual([
+      insertedSecond.authRef,
+      insertedFirst.authRef,
+    ]);
   });
 
   it("getMetadata answers undefined for malformed and unknown refs", () => {

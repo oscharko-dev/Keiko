@@ -76,6 +76,11 @@ step "lint (keiko-ui)" npm run lint --workspace @oscharko-dev/keiko-ui
 step "format:check" npm run format:check
 step "arch:check" npm run arch:check
 step "adr-index" npm run check:adr-index
+# KEIKO-0477: the Lift icon geometry is duplicated between design-system/lift-icons.jsx (the JSX
+# spec mirror) and design-system/lift-glyphs.js (the renderer every doc page loads). This gate
+# fails when the two disagree on any shared icon. Cheap and dependency-free, so it belongs in the
+# fast suite.
+step_script "lift-icon-parity" check:lift-icon-parity
 step_script "zizmor-anchors" check:zizmor-anchors
 step_git "dependency-hygiene" check:dependency-hygiene
 step_script "osv-waiver-scope" check:osv-waiver-scope

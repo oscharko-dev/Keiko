@@ -63,6 +63,7 @@ import type {
 } from "./git-mutation-orchestrator.js";
 import type { GitMutationFailureCategory } from "./git-mutation-taxonomy.js";
 import { gitMutationCategoryForExecutionResult } from "./git-mutation-taxonomy.js";
+import { approverIsNotAuthorized } from "./git-approval-gate.js";
 
 // ─── Merge command + narrow adapter port (no generic exec) ───────────────────────────────────────────
 // The command carries the structured operands the content-free GitDeliveryMergeInputs deliberately omits
@@ -616,18 +617,9 @@ function resolveMergeGate(
   const state = approvalState(approval, now);
   if (state === "valid") {
     // KEIKO-0147: an unexpired token is not enough — when the decision names a required-approver
-    // set, the person who granted the approval must be a member. Before this check the gate
-    // returned proceed=true for any valid token, so an unrelated operator's approval could
-    // integrate a merge for which a specific reviewer was mandated. An empty requiredApprovers
-    // array continues to mean "any authenticated approval" (ADR-0080 D5), and approvedByUserId
-    // is only present on the `required: true` branch of GitDeliveryApprovalRequirement — the
-    // approvalState check above already narrows to that branch when state === "valid".
-    if (
-      decision.outcome === "approval-gated" &&
-      decision.requiredApprovers.length > 0 &&
-      approval.required &&
-      !decision.requiredApprovers.includes(approval.approvedByUserId)
-    ) {
+    // set, the identity that granted the approval must be a member. Shared with the publish, PR,
+    // and mutation gates so the rule cannot drift between them.
+    if (approverIsNotAuthorized(decision, approval)) {
       return { proceed: false, status: "policy-block", reason: "approver-not-authorized" };
     }
     return { proceed: true };
@@ -794,7 +786,14 @@ function mergeHeadHashMismatch(
   const providerHead = provider.headRefHash;
   if (providerHead === undefined) return undefined;
   if (command.expectedHeadRefHash === undefined) return "unpinned";
-  return command.expectedHeadRefHash === providerHead ? undefined : "mismatched";
+  // KEIKO-0154: compare case-insensitively. Git SHAs are hex and the merge route's own request
+  // validator accepts mixed case, while the provider always reports lowercase — so a correct but
+  // upper/mixed-case pin would otherwise be reported as "mismatched" and block a legitimate merge.
+  // Length equality is still required on purpose: prefix-matching an abbreviated SHA would WEAKEN
+  // the guard (a short hex prefix is far easier to collide), and this is a fail-closed gate.
+  return command.expectedHeadRefHash.toLowerCase() === providerHead.toLowerCase()
+    ? undefined
+    : "mismatched";
 }
 
 function providerMismatchReadiness(summary: GitMergeReadinessSummary): GitMergeReadinessSummary {

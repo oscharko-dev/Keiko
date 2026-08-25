@@ -211,6 +211,26 @@ describe("executeAtlassianWriteRequest — D3 retry discipline", () => {
     expect(requests[0]).toMatchObject({ timeoutMs: 30_000, maxBodyBytes: 262_144, method: "PUT" });
   });
 
+  // KEIKO-0318: `deps.signal` was accepted and checked between retry attempts, but never
+  // forwarded into the transport call itself, so aborting mid-request never cancelled the
+  // in-flight request — the caller stayed blocked for up to the full per-request timeout. Every
+  // port call (initial attempt and every retry) must carry the EXACT AbortSignal instance passed
+  // in, so the adapter can compose it with its own timeout and tear the request down immediately.
+  it("forwards the write action's AbortSignal into every port call, including retries (KEIKO-0318)", async () => {
+    const controller = new AbortController();
+    const delays: number[] = [];
+    const { port, requests } = scriptedPort([response(503), response(204, "")]);
+    const outcome = await executeAtlassianWriteRequest(
+      { http: port, sleep: recordedSleep(delays), signal: controller.signal },
+      request(),
+    );
+    expect(outcome).toEqual({ ok: true, status: 204, body: undefined });
+    expect(requests).toHaveLength(2);
+    for (const issued of requests) {
+      expect(issued.signal).toBe(controller.signal);
+    }
+  });
+
   // KEIKO-0318: the retry loop must respect an aggregate deadline across attempts. Without it a
   // hostile upstream that hangs at the per-request timeout ceiling for every attempt holds the
   // governed write action for minutes. With an injected clock and injected sleep that advances

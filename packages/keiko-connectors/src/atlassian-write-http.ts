@@ -150,6 +150,10 @@ async function issueOnce(
     timeoutMs,
     maxBodyBytes: ATLASSIAN_WRITE_RESPONSE_MAX_BYTES,
     ...(request.bodyJson === undefined ? {} : { bodyJson: request.bodyJson }),
+    // KEIKO-0318: thread the caller's cancellation into the transport call itself so an abort
+    // tears down the in-flight request (AtlassianHttpBodyRequest.signal) instead of only being
+    // observed between attempts — the between-attempt checks alone only stopped a LATER retry.
+    ...(deps.signal === undefined ? {} : { signal: deps.signal }),
   });
 }
 

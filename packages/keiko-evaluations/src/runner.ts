@@ -193,7 +193,9 @@ export function collapseEvaluationRunStatus(
   return "completed";
 }
 
-export function persistAndCheck(options: PersistAndCheckOptions): {
+// Module-private: `collapseEvaluationRunStatus` above is the seam the KEIKO-0372 regression test
+// needs, so this stays unexported rather than widening the package surface for nothing.
+function persistAndCheck(options: PersistAndCheckOptions): {
   readonly manifestValid: boolean;
   readonly evidenceRef: string;
 } {
