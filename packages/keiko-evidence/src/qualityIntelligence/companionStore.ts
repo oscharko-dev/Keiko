@@ -37,7 +37,13 @@ export interface ContainedJsonArtifactStore<T> {
 export interface ContainedJsonArtifactStoreOptions<T> {
   readonly fs?: WorkspaceFs;
   readonly randomSuffix?: () => string;
-  /** Validates + narrows a parsed JSON value; return `undefined` to reject a corrupt artifact. */
+  /**
+   * Validates + narrows a parsed JSON value. Reject a corrupt artifact by THROWING (typically
+   * EvidenceReadError) -- this is the fail-closed pattern every current implementation uses, and
+   * `readArtifactFile` calls `parse` outside its own try/catch so a thrown error propagates as-is.
+   * A `parse` MAY still return `undefined` for a well-formed-but-absent optional shape; that is
+   * NOT the same as corruption and must not be conflated with it.
+   */
   readonly parse: (value: unknown) => T | undefined;
 }
 
