@@ -393,6 +393,52 @@ describe("handleBuildVoiceRecap", () => {
     ).toBe("attested");
   });
 
+  it("accepts a new attestation after evicting the oldest consumed proof", () => {
+    const attestations = createVoiceRecapContentAttestationStore(() => 1_000);
+    let oldestProof = "";
+    for (let index = 0; index < 1_024; index += 1) {
+      const sessionId = `consumed-session-${String(index)}`;
+      const committedSpans = [`consumed-span-${String(index)}`];
+      const proof = attestations.attest({
+        profile: "speech-to-text",
+        sessionId,
+        committedSpans,
+      });
+      if (index === 0) oldestProof = proof;
+      expect(
+        attestations.consume({
+          profile: "speech-to-text",
+          sessionId,
+          committedSpans,
+          proof,
+        }),
+      ).toBe("attested");
+    }
+
+    const freshProof = attestations.attest({
+      profile: "speech-to-text",
+      sessionId: "fresh-session",
+      committedSpans: ["fresh-span"],
+    });
+
+    expect(
+      attestations.consume({
+        profile: "speech-to-text",
+        sessionId: "consumed-session-0",
+        committedSpans: ["consumed-span-0"],
+        proof: oldestProof,
+      }),
+    ).toBe("invalid");
+    expect(
+      attestations.consume({
+        profile: "speech-to-text",
+        sessionId: "fresh-session",
+        committedSpans: ["fresh-span"],
+        proof: freshProof,
+      }),
+    ).toBe("attested");
+  });
+
   it.each(["forged", "replayed", "expired", "content-substituted"] as const)(
     "rejects %s recap content attestations before capture",
     async (scenario) => {

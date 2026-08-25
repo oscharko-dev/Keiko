@@ -63,5 +63,12 @@ describe("SDK package surface", () => {
       runnable: false,
       denialReasons: ["network-isolation-unavailable"],
     });
+
+    expect(() =>
+      probeVerificationCapabilities({ steps: [] }, "enforce-or-fail-closed", {
+        backend: "none",
+        enforced: true,
+      } as never),
+    ).toThrow(TypeError);
   });
 });

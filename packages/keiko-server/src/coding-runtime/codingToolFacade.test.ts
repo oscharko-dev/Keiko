@@ -550,6 +550,25 @@ describe("CodingToolFacade", () => {
     });
   });
 
+  it("forwards the closed command backend unavailable reason", async () => {
+    const ports = facade();
+    ports.delegate.execute = vi.fn(() =>
+      Promise.resolve({ outcome: "failed", reasonCode: "command-backend-unavailable" }),
+    );
+    const subject = createCodingToolFacade(ports);
+
+    const result = await subject.execute({
+      body: requestBody({ action: "command", commandId: "test" }),
+      capability,
+    });
+
+    expect(result).toEqual({
+      status: "failed",
+      reasonCode: "command-backend-unavailable",
+      evidence: [{ kind: "governed-delegate", code: "command-backend-unavailable" }],
+    });
+  });
+
   it("fails closed for blocked, denied, and malformed delegate outcomes", async () => {
     const ports = facade();
     const subject = createCodingToolFacade(ports);

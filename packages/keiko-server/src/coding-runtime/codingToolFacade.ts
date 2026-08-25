@@ -44,6 +44,7 @@ const EDIT_FAILURE_REASON_CODES: ReadonlySet<string> = new Set<string>([
 ]);
 const GOVERNED_FAILURE_REASON_CODES: ReadonlySet<string> = new Set([
   "capability-backend-unavailable",
+  "command-backend-unavailable",
   "command-authority-revoked",
   "command-execution-failed",
   "git-authority-revoked",

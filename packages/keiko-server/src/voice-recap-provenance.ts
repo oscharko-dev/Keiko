@@ -51,12 +51,16 @@ function pruneExpiredAttestations(
 function ensureAttestationCapacity(attestations: Map<string, StoredAttestation>): void {
   if (attestations.size < MAX_RETAINED_ATTESTATIONS) return;
   for (const [proof, attestation] of attestations) {
-    if (!attestation.consumed) {
+    if (attestation.consumed) {
       attestations.delete(proof);
       return;
     }
   }
-  throw new TypeError("voice recap attestation capacity is exhausted");
+  const oldestProof = attestations.keys().next().value;
+  if (oldestProof === undefined) {
+    throw new TypeError("voice recap attestation capacity state is invalid");
+  }
+  attestations.delete(oldestProof);
 }
 
 export function createVoiceRecapContentAttestationStore(

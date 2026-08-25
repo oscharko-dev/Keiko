@@ -11,15 +11,21 @@ import {
 export type VerificationCapabilityDenialReason =
   "memory-process-tree-unavailable" | "network-isolation-unavailable";
 
-export interface NetworkIsolationCapability {
-  readonly backend: SandboxBackend;
-  readonly enforced: boolean;
-}
+export type NetworkIsolationCapability =
+  | { readonly backend: "none"; readonly enforced: false }
+  | { readonly backend: Exclude<SandboxBackend, "none">; readonly enforced: boolean };
 
 const UNATTESTED_NETWORK_ISOLATION: NetworkIsolationCapability = {
   backend: "none",
   enforced: false,
 };
+
+function assertNetworkIsolationCapability(capability: NetworkIsolationCapability): void {
+  const candidate: { readonly backend: SandboxBackend; readonly enforced: boolean } = capability;
+  if (candidate.backend === "none" && candidate.enforced) {
+    throw new TypeError("network isolation cannot be enforced without a sandbox backend");
+  }
+}
 
 export interface VerificationStepCapability {
   readonly kind: VerificationStep["kind"];
@@ -71,6 +77,7 @@ export function probeVerificationCapabilities(
   networkEnforcement: NetworkEnforcementMode = "enforce-or-fail-closed",
   networkIsolation: NetworkIsolationCapability = UNATTESTED_NETWORK_ISOLATION,
 ): VerificationCapabilities {
+  assertNetworkIsolationCapability(networkIsolation);
   const memoryProcessTreeEnforced = nodeResourceMonitor.canEnforceProcessTreeMemory();
   const defaultStep: VerificationStep = {
     kind: "test",
