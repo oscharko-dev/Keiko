@@ -18,6 +18,7 @@ import type {
 import type { SecurityLogSink } from "@oscharko-dev/keiko-security";
 import type { EnvSource } from "@oscharko-dev/keiko-model-gateway";
 import type { OutboundHttpEgressConfig } from "@oscharko-dev/keiko-model-gateway/internal/http";
+import type { ServerLogSink } from "../observability/server-log.js";
 import { openAtlassianCredentialVault } from "./credentialVault.js";
 import { createAtlassianCredentialMetadataStore } from "./credentialMetadataStore.js";
 import { createGatewayAtlassianHttpBodyPort, createGatewayAtlassianHttpPort } from "./httpPort.js";
@@ -37,6 +38,12 @@ export interface BuildAtlassianConnectorCredentialDepsOptions {
   // Optional activity-log seam (ADR-0019); the deps.ts composition root supplies
   // `processServerLogSink()`.
   readonly securityLogSink?: SecurityLogSink | undefined;
+  // KEIKO-0826 follow-up: forwarded verbatim to AtlassianConnectorCredentialDeps.activityLog so
+  // typed-4xx custody-error paths (`credential-not-found`, `unsupported-auth-scheme`,
+  // `invalid-input`, `credential-limit-exceeded`) emit a body-free `atlassian.credential.rejected`
+  // line to the process activity log. deps.ts wires `processServerLogSink()` here; in-file test
+  // builds leave it undefined and the emit becomes a no-op.
+  readonly activityLog?: ServerLogSink | undefined;
 }
 
 // Lazy vault port: key resolution (which may create a keychain entry or keyfile) happens on the
@@ -88,5 +95,6 @@ export function buildAtlassianConnectorCredentialDeps(
         egress: options.egress,
         ...(options.fetchImpl === undefined ? {} : { fetchImpl: options.fetchImpl }),
       }),
+    ...(options.activityLog === undefined ? {} : { activityLog: options.activityLog }),
   };
 }
