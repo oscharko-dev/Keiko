@@ -209,4 +209,33 @@ describe("validatePromptEnhancementEvidenceManifest", () => {
     expect(result.ok).toBe(false);
     expect(result.reason).toContain("at most");
   });
+
+  // KEIKO-0656: validateCandidateScoreRow enforces five independent field-level invariants, but
+  // none had a negative-path test -- a future refactor that dropped one of these checks (e.g. the
+  // [0, 1] aggregateScore range) would go unnoticed by this suite. One case per invariant.
+  const validScoreRow = (): Record<string, unknown> => ({
+    candidateId: "candidate-fast",
+    profile: "fast",
+    aggregateScore: 0.9,
+    estimatedTokens: 120,
+    selected: true,
+  });
+
+  it.each([
+    ["candidateId", { candidateId: "" }],
+    ["profile", { profile: "" }],
+    ["aggregateScore", { aggregateScore: 1.5 }],
+    ["estimatedTokens", { estimatedTokens: 0.5 }],
+    ["selected", { selected: "yes" }],
+  ] as const)(
+    "rejects a candidateScores row with an invalid %s (KEIKO-0656)",
+    (field, override) => {
+      const result = validatePromptEnhancementEvidenceManifest({
+        ...validManifest(),
+        candidateScores: [{ ...validScoreRow(), ...override }],
+      });
+      expect(result.ok).toBe(false);
+      expect(result.reason).toContain(field);
+    },
+  );
 });
