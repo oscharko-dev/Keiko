@@ -282,6 +282,12 @@ async function walkSearchPages(
 ): Promise<JiraEnumerationWalk> {
   const entries: JiraEnumeratedIssue[] = [];
   let token: string | undefined;
+  // Repeated-token guard (KEIKO-0598), mirroring the Confluence walk's seen-URL guard
+  // (confluence-sync-adapter.ts's walkPaginatedList): a token that repeats a previously-seen
+  // exact value indicates a self-referential chain — legitimate pagination never re-serves a
+  // token it already handed out — so the walk fails closed instead of looping (bounded, in the
+  // worst case, only by MAX_SEARCH_REQUESTS).
+  const seenTokens = new Set<string>();
   for (let requests = 0; ; requests += 1) {
     if (requests >= MAX_SEARCH_REQUESTS) return { ok: false, reason: "malformed-payload" };
     if (context.deadlineExceeded()) return { ok: false, reason: "timeout" };
@@ -301,6 +307,8 @@ async function walkSearchPages(
     const next = nextSearchToken(page.body);
     if (!next.ok) return { ok: false, reason: "malformed-payload" };
     if (next.token === undefined) return { ok: true, entries, complete: true };
+    if (seenTokens.has(next.token)) return { ok: false, reason: "malformed-payload" };
+    seenTokens.add(next.token);
     token = next.token;
   }
 }

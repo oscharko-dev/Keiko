@@ -311,11 +311,21 @@ interface FetchRunState<TRef extends AtlassianSyncItemRef> {
   readonly progress: MutableProgress;
   readonly items: AtlassianSyncItem[];
   readonly failures: AtlassianSyncItemFailure[];
-  readonly enumeratedItemKeys: string[];
+  // A Set so a key enumerated more than once (legitimate re-served page during token pagination,
+  // or a hostile duplicate) is stored once, and a `missing` outcome removes it completely rather
+  // than one positional occurrence (KEIKO-0598). Materialized to a readonly array only at the
+  // terminal-outcome return points.
+  readonly enumeratedItemKeys: Set<string>;
   fatalReason: AtlassianSyncFailureReason | undefined;
+  // Set once this run has produced its terminal outcome (KEIKO-0758). `emitProgress` becomes a
+  // no-op past this point: a hard backstop so no `onProgress` callback can ever fire after
+  // `runAtlassianSyncFetch`'s promise has settled, even under a future regression in the worker
+  // pool below.
+  terminal: boolean;
 }
 
 function emitProgress<TRef extends AtlassianSyncItemRef>(state: FetchRunState<TRef>): void {
+  if (state.terminal) return;
   state.deps.onProgress?.(snapshotProgress(state.progress));
 }
 
@@ -337,9 +347,10 @@ function applyItemOutcome<TRef extends AtlassianSyncItemRef>(
     state.progress.failedItems += 1;
   } else if (outcome.kind === "missing") {
     // Vanished upstream between enumeration and fetch (404): drop it from the enumerated set so
-    // the downstream diff reports it removed — a natural deletion, not a failure.
-    const index = state.enumeratedItemKeys.indexOf(ref.itemKey);
-    if (index !== -1) state.enumeratedItemKeys.splice(index, 1);
+    // the downstream diff reports it removed — a natural deletion, not a failure. `Set.delete` is
+    // total (removes the one stored entry outright), unlike the former indexOf/splice pair which
+    // only removed a single positional occurrence and left a surviving duplicate behind.
+    state.enumeratedItemKeys.delete(ref.itemKey);
     state.progress.skippedItems += 1;
   } else {
     state.fatalReason ??= outcome.reason;
@@ -358,22 +369,44 @@ async function fetchOne<TRef extends AtlassianSyncItemRef>(
 // Bounded worker pool: at most `maxConcurrency` fetches in flight; stops dispatching on
 // cancellation, fatal classification, or budget exhaustion (the shared cursor makes each worker
 // pull the next undispatched ref).
+//
+// KEIKO-0758: a worker that throws (budget/deadline exhaustion, or any other terminating error)
+// is caught HERE rather than left to reject the pool's combinator. `Promise.allSettled` then
+// always waits for every dispatched sibling to finish before this function returns — unlike the
+// former `Promise.all`, which settled on the FIRST rejection and abandoned the rest to keep
+// running (and mutating shared state, and calling onProgress) after the caller already had its
+// terminal outcome. The `terminated` flag additionally stops siblings from dispatching any NEW
+// fetch once the pool is known to be done, instead of letting each one discover the same
+// exhaustion independently.
 async function fetchAllItems<TRef extends AtlassianSyncItemRef>(
   state: FetchRunState<TRef>,
   refs: readonly TRef[],
 ): Promise<void> {
   const concurrency = Math.max(1, Math.min(state.deps.bounds.maxConcurrency, refs.length));
   let cursor = 0;
+  let terminated = false;
+  let firstError: Error | undefined;
   const worker = async (): Promise<void> => {
     while (cursor < refs.length) {
-      if (cancelled(state) || state.fatalReason !== undefined) return;
+      if (terminated || cancelled(state) || state.fatalReason !== undefined) return;
       const ref = refs[cursor];
       cursor += 1;
       if (ref === undefined) return;
-      await fetchOne(state, ref);
+      try {
+        await fetchOne(state, ref);
+      } catch (error) {
+        terminated = true;
+        // Every throw on this path is an AtlassianSyncBudgetExhausted (an Error subclass) in
+        // practice; the fallback keeps this total and type-safe if an injected port ever violates
+        // that contract, without ever losing the caught instance's identity/type for the common
+        // case (the `instanceof AtlassianSyncBudgetExhausted` check below stays intact).
+        firstError ??= error instanceof Error ? error : new Error(String(error));
+        return;
+      }
     }
   };
-  await Promise.all(Array.from({ length: concurrency }, () => worker()));
+  await Promise.allSettled(Array.from({ length: concurrency }, () => worker()));
+  if (firstError !== undefined) throw firstError;
 }
 
 function truncatedOutcome<TRef extends AtlassianSyncItemRef>(
@@ -446,8 +479,9 @@ function buildRunState<TRef extends AtlassianSyncItemRef>(
     },
     items: [],
     failures: [],
-    enumeratedItemKeys: [],
+    enumeratedItemKeys: new Set(),
     fatalReason: undefined,
+    terminal: false,
   };
 }
 
@@ -478,7 +512,7 @@ async function enumerateWithinBounds<TRef extends AtlassianSyncItemRef>(
   if (!enumeration.complete || enumeration.refs.length > state.deps.bounds.maxItems) {
     return { kind: "terminal", outcome: truncatedOutcome(state, "bounds-exceeded") };
   }
-  state.enumeratedItemKeys.push(...enumeration.refs.map((ref) => ref.itemKey));
+  for (const ref of enumeration.refs) state.enumeratedItemKeys.add(ref.itemKey);
   return { kind: "refs", refs: enumeration.refs };
 }
 
@@ -489,6 +523,19 @@ export async function runAtlassianSyncFetch<TRef extends AtlassianSyncItemRef>(
   deps: RunAtlassianSyncFetchDeps<TRef>,
 ): Promise<AtlassianSyncFetchOutcome> {
   const state = buildRunState(deps);
+  try {
+    return await runFetchPipeline(state);
+  } finally {
+    // KEIKO-0758: whichever branch above produced the outcome, this run is now terminal — flip
+    // the flag that makes `emitProgress` a no-op BEFORE this function's promise can be observed
+    // as settled by the caller, so no onProgress callback is ever attributable to "after settled".
+    state.terminal = true;
+  }
+}
+
+async function runFetchPipeline<TRef extends AtlassianSyncItemRef>(
+  state: FetchRunState<TRef>,
+): Promise<AtlassianSyncFetchOutcome> {
   try {
     if (cancelled(state)) return terminalOutcome(state, false);
     const enumerated = await enumerateWithinBounds(state);
