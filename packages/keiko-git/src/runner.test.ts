@@ -13,12 +13,43 @@ import {
   rmSync,
   writeFileSync,
 } from "node:fs";
+import { createServer, type Server } from "node:http";
+import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { classifyGitRemoteFailure } from "./classify.js";
-import { createGitProcessRunner, defaultGitProcessRunner, GIT_BASE_ARGS } from "./runner.js";
+import {
+  createGitProcessRunner,
+  defaultGitNetworkProcessRunner,
+  defaultGitProcessRunner,
+  GIT_BASE_ARGS,
+} from "./runner.js";
 
 let root: string;
+
+function startCredentialChallengeServer(): Promise<{
+  readonly server: Server;
+  readonly url: string;
+}> {
+  return new Promise((resolve) => {
+    const server = createServer((_request, response) => {
+      response.writeHead(401, { "WWW-Authenticate": 'Basic realm="Keiko"' });
+      response.end();
+    });
+    server.listen(0, "127.0.0.1", () => {
+      const address = server.address();
+      if (address === null || typeof address === "string")
+        throw new TypeError("expected TCP server");
+      resolve({ server, url: `http://127.0.0.1:${(address as AddressInfo).port}/remote.git` });
+    });
+  });
+}
+
+function closeServer(server: Server): Promise<void> {
+  return new Promise((resolve, reject) => {
+    server.close((error) => (error === undefined ? resolve() : reject(error)));
+  });
+}
 
 beforeEach(() => {
   root = realpathSync(mkdtempSync(join(tmpdir(), "keiko-git-runner-")));
@@ -129,6 +160,33 @@ describe("createGitProcessRunner", () => {
     expect(Buffer.byteLength(result.stdout, "utf8")).toBeLessThanOrEqual(1024);
   });
 
+  it.skipIf(process.platform === "win32")(
+    "shares the output cap across stdout and stderr",
+    async () => {
+      const binDir = mkdtempSync(join(tmpdir(), "keiko-git-output-bin-"));
+      const fakeGit = join(binDir, "git");
+      writeFileSync(fakeGit, "#!/bin/sh\nprintf 'abcdefgh'\nprintf 'ijklmnop' >&2\n", "utf8");
+      chmodSync(binDir, 0o700);
+      chmodSync(fakeGit, 0o700);
+
+      try {
+        const runner = createGitProcessRunner(() => ({ PATH: binDir }));
+        const result = await runner(["status"], {
+          cwd: root,
+          timeoutMs: 1_000,
+          maxBytes: 12,
+        });
+
+        expect(
+          Buffer.byteLength(result.stdout) + Buffer.byteLength(result.stderr),
+        ).toBeLessThanOrEqual(12);
+        expect(result.truncated).toBe(true);
+      } finally {
+        rmSync(binDir, { recursive: true, force: true });
+      }
+    },
+  );
+
   it("does not report truncation when output exactly fills the cap", async () => {
     const result = await defaultGitProcessRunner(
       [...GIT_BASE_ARGS, "-C", root, "rev-parse", "--is-inside-work-tree"],
@@ -157,6 +215,44 @@ describe("createGitProcessRunner", () => {
       expect(existsSync(marker)).toBe(false);
     },
   );
+
+  it("suppresses executable repository settings for network operations", async () => {
+    const hooksDir = join(root, "hostile-hooks");
+    mkdirSync(hooksDir);
+    execFileSync("git", ["config", "core.hooksPath", hooksDir], { cwd: root });
+    execFileSync("git", ["config", "core.sshCommand", `touch ${root}`], { cwd: root });
+    const hooksResult = await defaultGitNetworkProcessRunner(
+      ["config", "--get", "core.hooksPath"],
+      { cwd: root, timeoutMs: 1_000, maxBytes: 1_024 },
+    );
+    const sshResult = await defaultGitNetworkProcessRunner(["config", "--get", "core.sshCommand"], {
+      cwd: root,
+      timeoutMs: 1_000,
+      maxBytes: 1_024,
+    });
+
+    expect(hooksResult.stdout.trim()).toBe(process.platform === "win32" ? "NUL" : "/dev/null");
+    expect(sshResult.stdout).toBe("\n");
+  });
+
+  it("does not execute a repository credential helper during network authentication", async () => {
+    const marker = join(root, "credential-helper-executed");
+    const { server, url } = await startCredentialChallengeServer();
+    execFileSync("git", ["config", "credential.helper", `!touch ${marker}`], { cwd: root });
+
+    try {
+      const result = await defaultGitNetworkProcessRunner([...GIT_BASE_ARGS, "ls-remote", url], {
+        cwd: root,
+        timeoutMs: 5_000,
+        maxBytes: 4_096,
+      });
+
+      expect(result.exitCode).not.toBe(0);
+      expect(existsSync(marker)).toBe(false);
+    } finally {
+      await closeServer(server);
+    }
+  });
 
   it.skipIf(process.platform === "win32")(
     "kills a wedged process at the timeout and flags timedOut",

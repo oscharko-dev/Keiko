@@ -1,7 +1,8 @@
-// Single hardened git spawn path. Owns process lifecycle, byte caps, wall-clock timeout with
-// SIGTERM→SIGKILL escalation, and spawn-error mapping. `buildEnv` is the only seam — local reads
-// pass the config-isolated `gitEnv`, network sync passes the credential-capable `networkGitEnv`;
-// everything else is identical, so every consumer inherits the same bounded-output behaviour.
+// Single hardened git spawn path. Owns process lifecycle, a shared stdout/stderr byte cap,
+// wall-clock timeout with SIGTERM→SIGKILL escalation, and spawn-error mapping. `buildEnv` is the
+// only seam: local reads pass the config-isolated `gitEnv`, network sync passes the
+// credential-capable `networkGitEnv`; everything else is identical, so every consumer inherits
+// the same bounded-output behaviour.
 
 import { spawn, type ChildProcess } from "node:child_process";
 import { Buffer } from "node:buffer";
@@ -21,6 +22,32 @@ export const GIT_BASE_ARGS: readonly string[] = ["--no-pager", "--no-optional-lo
 // but executable read helpers must never run. This fixed override is injected by the local runner
 // before every caller-supplied argument, so no route can accidentally omit it.
 const LOCAL_READ_CONFIG_ARGS: readonly string[] = ["-c", "core.fsmonitor=false"];
+const NETWORK_CONFIG_ARGS: readonly string[] = [
+  "-c",
+  "core.fsmonitor=false",
+  "-c",
+  `core.hooksPath=${process.platform === "win32" ? "NUL" : "/dev/null"}`,
+  "-c",
+  "core.sshCommand=",
+  "-c",
+  "credential.helper=",
+  "-c",
+  "core.pager=cat",
+  "-c",
+  "pager.fetch=false",
+  "-c",
+  "pager.pull=false",
+  "-c",
+  "alias.fetch=",
+  "-c",
+  "alias.pull=",
+  "-c",
+  "protocol.ext.allow=never",
+  "-c",
+  "fetch.recurseSubmodules=false",
+  "-c",
+  "submodule.recurse=false",
+];
 
 // Git options that make a remote-facing subcommand run a local command of the caller's choosing:
 // `git clone --upload-pack=<cmd>` / `--receive-pack=<cmd>` / `git send-pack --exec=<cmd>`. No Keiko
@@ -36,12 +63,12 @@ function forbiddenGitOption(args: readonly string[]): string | undefined {
 
 interface OutputAccumulator {
   readonly chunks: Buffer[];
-  bytes: number;
 }
 
 interface RunState {
   readonly stdout: OutputAccumulator;
   readonly stderr: OutputAccumulator;
+  capturedBytes: number;
   truncated: boolean;
   timedOut: boolean;
   aborted: boolean;
@@ -51,8 +78,9 @@ interface RunState {
 
 function newRunState(): RunState {
   return {
-    stdout: { chunks: [], bytes: 0 },
-    stderr: { chunks: [], bytes: 0 },
+    stdout: { chunks: [] },
+    stderr: { chunks: [] },
+    capturedBytes: 0,
     truncated: false,
     timedOut: false,
     aborted: false,
@@ -77,10 +105,10 @@ function captureChunk(
   chunk: Buffer,
   maxBytes: number,
 ): void {
-  const remaining = maxBytes - sink.bytes;
+  const remaining = maxBytes - state.capturedBytes;
   if (remaining > 0) {
     sink.chunks.push(chunk.byteLength > remaining ? chunk.subarray(0, remaining) : chunk);
-    sink.bytes = Math.min(maxBytes, sink.bytes + chunk.byteLength);
+    state.capturedBytes = Math.min(maxBytes, state.capturedBytes + chunk.byteLength);
   }
   if (chunk.byteLength > remaining) {
     state.truncated = true;
@@ -243,12 +271,14 @@ export function createGitProcessRunner(buildEnv: () => NodeJS.ProcessEnv): GitPr
   return createGitProcessRunnerWithFixedArgs(buildEnv, []);
 }
 
-// Local reads use the hardened, config-isolated env; network sync needs the user's credential
-// configuration but must still never prompt (fail-closed) — see env.ts.
+// Local reads use the hardened, config-isolated env; network sync needs credential account state
+// but command-overrides repository-controlled executable config and never prompts — see env.ts.
 export const defaultGitProcessRunner: GitProcessRunner = createGitProcessRunnerWithFixedArgs(
   gitEnv,
   LOCAL_READ_CONFIG_ARGS,
 );
 
-export const defaultGitNetworkProcessRunner: GitProcessRunner =
-  createGitProcessRunner(networkGitEnv);
+export const defaultGitNetworkProcessRunner: GitProcessRunner = createGitProcessRunnerWithFixedArgs(
+  networkGitEnv,
+  NETWORK_CONFIG_ARGS,
+);
