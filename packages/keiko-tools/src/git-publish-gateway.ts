@@ -48,7 +48,7 @@ import type {
 } from "./git-mutation-orchestrator.js";
 import type { GitMutationFailureCategory } from "./git-mutation-taxonomy.js";
 import { gitMutationCategoryForExecutionResult } from "./git-mutation-taxonomy.js";
-import { approverIsNotAuthorized } from "./git-approval-gate.js";
+import { resolveGitDeliveryApprovalGate } from "./git-approval-gate.js";
 import type { CommandRule } from "./types.js";
 
 // ─── Push command + remote adapter port (no generic exec) ───────────────────────────────────
@@ -441,19 +441,6 @@ type PublishGate =
       readonly reason: GitDeliveryBlockReason;
     };
 
-function approvalState(
-  approval: GitDeliveryApprovalRequirement,
-  now: number,
-): "valid" | "absent" | "expired" {
-  if (!approval.required) {
-    return "absent";
-  }
-  if (approval.expiresAtMs !== undefined && approval.expiresAtMs <= now) {
-    return "expired";
-  }
-  return "valid";
-}
-
 // The EFFECTIVE policy outcome for a specific push target, evaluating a `constrained` decision's
 // constraints against the target (which `evaluateGitPolicy` deliberately leaves to the caller). The
 // read-only preview reuses this so it predicts the execute outcome exactly: a constrained-but-passing
@@ -474,6 +461,10 @@ export function evaluateGitPublishEffectivePolicy(
   });
 }
 
+// KEIKO-0535: delegates the approval-gated branch to the one shared resolver
+// (git-approval-gate.ts) instead of re-deriving valid/expired/absent + KEIKO-0147's identity check
+// locally, then maps the canonical result onto this file's own PublishGate shape — the same shape
+// every existing caller already consumes, so behavior is unchanged.
 function resolvePublishGate(
   decision: GitDeliveryPolicyDecision,
   approval: GitDeliveryApprovalRequirement,
@@ -489,24 +480,14 @@ function resolvePublishGate(
   if (effective.outcome === "blocked") {
     return { proceed: false, status: "policy-block", reason: effective.blockReason };
   }
-  const state = approvalState(approval, now);
-  if (state === "valid") {
-    // KEIKO-0147: a valid token is not authority on its own — the granting identity must be in
-    // the decision's required-approver set when it names one. Same predicate as the merge, PR,
-    // and mutation gates.
-    if (approverIsNotAuthorized(decision, approval)) {
-      return { proceed: false, status: "policy-block", reason: "approver-not-authorized" };
-    }
+  const gate = resolveGitDeliveryApprovalGate(decision, approval, now);
+  if (gate.proceed) {
     return { proceed: true };
   }
-  if (state === "expired") {
-    return { proceed: false, status: "policy-block", reason: "approval-expired" };
+  if (gate.status === "approval-required") {
+    return { proceed: false, status: "approval-required", approvers: gate.approvers };
   }
-  return {
-    proceed: false,
-    status: "approval-required",
-    approvers: decision.outcome === "approval-gated" ? decision.requiredApprovers : [],
-  };
+  return { proceed: false, status: "policy-block", reason: gate.blockReason };
 }
 
 // ─── Execution outcome mapping (reuses the taxonomy) ─────────────────────────────────────────
