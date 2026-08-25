@@ -40,4 +40,14 @@ describe("buildExplainPlan", () => {
     expect(plan.messages[0]?.content).toContain("Do not infer");
     expect(plan.messages[1]?.content).toContain("export const value = 1;");
   });
+
+  // KEIKO-0550: a caller-supplied context: "" is a distinct value from an omitted context field,
+  // but both mean "no excerpt was provided" and must render identically — otherwise the model
+  // could read a bare "File excerpt:\n" as "an excerpt was checked and found empty" rather than
+  // "no excerpt was supplied at all".
+  it("treats an empty-string context the same as an omitted context", () => {
+    const omitted = buildExplainPlan({ filePath: "src/baz.ts" });
+    const empty = buildExplainPlan({ filePath: "src/baz.ts", context: "" });
+    expect(empty.messages).toEqual(omitted.messages);
+  });
 });

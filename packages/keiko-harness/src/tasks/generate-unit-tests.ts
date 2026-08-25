@@ -24,7 +24,9 @@ function userMessage(input: GenerateUnitTestsInput): string {
       : `Write unit tests for the function ${input.targetFunction} in ${input.filePath}.`;
   const retrieved =
     input.retrievedContext === undefined ? "" : renderRetrievedContext(input.retrievedContext);
-  const legacy = input.context === undefined ? "" : `Context: ${input.context}`;
+  // An empty string is treated the same as an absent field (KEIKO-0550).
+  const legacy =
+    input.context === undefined || input.context.length === 0 ? "" : `Context: ${input.context}`;
   return [target, retrieved, legacy].filter((section) => section.length > 0).join("\n\n");
 }
 

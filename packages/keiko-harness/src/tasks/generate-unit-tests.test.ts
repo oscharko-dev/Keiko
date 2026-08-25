@@ -59,6 +59,14 @@ describe("buildGenerateUnitTests", () => {
     expect(plan.messages[1]?.content).not.toContain("Retrieved context");
   });
 
+  // KEIKO-0550: context: "" is defined-but-empty, distinct from an omitted field, but must not
+  // survive as a labeled-but-empty "Context: " section in the rendered prompt.
+  it("treats an empty-string context the same as an omitted context", () => {
+    const omitted = buildGenerateUnitTests({ filePath: "src/foo.ts" });
+    const empty = buildGenerateUnitTests({ filePath: "src/foo.ts", context: "" });
+    expect(empty.messages).toEqual(omitted.messages);
+  });
+
   it("renders a retrieved context pack into the user message", () => {
     const plan = buildGenerateUnitTests({
       filePath: "src/foo.ts",

@@ -28,4 +28,12 @@ describe("buildInvestigateBug", () => {
     const plan = buildInvestigateBug({ description: "mystery" });
     expect(plan.targetFile.length).toBeGreaterThan(0);
   });
+
+  // KEIKO-0550: context: "" is defined-but-empty, distinct from an omitted field, but must not
+  // survive as a labeled-but-empty "Context: " section in the rendered prompt.
+  it("treats an empty-string context the same as an omitted context", () => {
+    const omitted = buildInvestigateBug({ description: "mystery" });
+    const empty = buildInvestigateBug({ description: "mystery", context: "" });
+    expect(empty.messages).toEqual(omitted.messages);
+  });
 });
