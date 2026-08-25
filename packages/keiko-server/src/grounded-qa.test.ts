@@ -2551,6 +2551,7 @@ describe("handleGroundedAsk", () => {
 
       expect(result.status).toBe(200);
       const answer = result.body as GroundedAnswer & {
+        readonly uncertainty: readonly { readonly kind: string; readonly claim: string }[];
         readonly memory?: {
           readonly context: { readonly memories: readonly { readonly bodyExcerpt: string }[] };
         };
@@ -2570,6 +2571,13 @@ describe("handleGroundedAsk", () => {
         generationQuestion.indexOf(CONVERSATION_MEMORY_FENCE_END),
       );
       expect(answerOnlyContextAvailable).toBe(true);
+      expect(answer.uncertainty).toContainEqual({
+        kind: "unsupported-citation",
+        claim:
+          "The answer received governed memory context outside retrieved evidence. Treat claims " +
+          "derived from that memory as uncited and unverified.",
+      });
+      expect(JSON.stringify(answer.uncertainty)).not.toContain("Use pnpm for package installs.");
       expect(
         memoryVault
           .getAccessStats(["mem-package-manager" as MemoryId])

@@ -99,6 +99,7 @@ import {
   type HybridAnswerer,
 } from "./grounded-qa-hybrid.js";
 import { GROUNDED_SYSTEM_PROMPT } from "./grounded-prompt.js";
+import { uncitedMemoryContextMarker } from "./grounded-faithfulness.js";
 import {
   commitGroundedTurn,
   discardGroundedTurn,
@@ -2251,6 +2252,15 @@ async function attachGroundedMemory(
   }
   const memoryPreparation = prepared.memory;
   if (memoryPreparation === undefined) return result;
+  const marker = uncitedMemoryContextMarker(Date.now());
+  const body = {
+    ...result.body,
+    uncertainty: [
+      ...result.body.uncertainty,
+      { kind: marker.kind, claim: redactString(deps.redactor, marker.claim) },
+    ],
+  };
+  const markedResult: RouteResult = { ...result, body };
   const chat = deps.store.findChatById(prepared.chat.id) ?? prepared.chat;
   try {
     const memory = await buildCanonicalTurnMemoryResult(
@@ -2265,10 +2275,10 @@ async function attachGroundedMemory(
         precomputedMemory: memoryPreparation.result,
       },
     );
-    return memory === undefined ? result : { ...result, body: { ...result.body, memory } };
+    return memory === undefined ? markedResult : { ...markedResult, body: { ...body, memory } };
   } catch (error) {
     recordGroundedMemoryFailure(deps, result.body.assistantMessageId, contentFreeErrorClass(error));
-    return result;
+    return markedResult;
   }
 }
 

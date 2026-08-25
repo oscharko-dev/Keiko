@@ -404,6 +404,21 @@ export function missingCitationMarker(nowMs: number): UncertaintyMarker {
   };
 }
 
+/**
+ * Body-free uncertainty for a grounded answer that received governed memory outside the evidence
+ * pack. A valid repository citation does not authenticate a separate memory-derived assertion.
+ */
+export function uncitedMemoryContextMarker(nowMs: number): UncertaintyMarker {
+  return {
+    kind: "unsupported-citation",
+    claim:
+      "The answer received governed memory context outside retrieved evidence. Treat claims " +
+      "derived from that memory as uncited and unverified.",
+    impactedAtomIds: [],
+    emittedAtMs: nowMs,
+  };
+}
+
 /** Marker for a truncated (finishReason "length") completion. */
 export function incompleteAnswerMarker(nowMs: number): UncertaintyMarker {
   return {
