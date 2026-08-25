@@ -173,6 +173,26 @@ describe("scorePromptQuality regression gates (AC2)", () => {
     expect(outcomeOf(stripped, ["format-adherence"], oracle, "format-adherence")).toBe("fail");
   });
 
+  // KEIKO-0676: the task-data-analysis fixture's oracle previously left expectedOutputStructured/
+  // expectedOutputFormat undefined, so scoreFormatAdherence's first two checks passed vacuously
+  // regardless of the analyzer's actual output. Now that the fixture pins the pipeline's observed
+  // values, the same mutation that flips task-structured-extraction's outcome above must also flip
+  // this fixture's outcome, proving the checks are load-bearing here too.
+  it("format-adherence is load-bearing for task-data-analysis (KEIKO-0676)", () => {
+    const fixture = promptEnhancerFixtureByName("task-data-analysis");
+    if (fixture === undefined) {
+      throw new Error("unknown fixture: task-data-analysis");
+    }
+    const obs = observe("task-data-analysis");
+    expect(outcomeOf(obs, ["format-adherence"], fixture.oracle, "format-adherence")).toBe("pass");
+    const stripped = withPrompt(obs, {
+      outputSchema: { ...obs.prompt.outputSchema, structured: false },
+    });
+    expect(outcomeOf(stripped, ["format-adherence"], fixture.oracle, "format-adherence")).toBe(
+      "fail",
+    );
+  });
+
   it("format-adherence fails when a structured schema loses its format hints", () => {
     const obs = observe("task-structured-extraction");
     const oracle: PromptEnhancerOracle = {
