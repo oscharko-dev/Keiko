@@ -28,6 +28,7 @@ import {
 import type { KnowledgeSourceScope } from "./local-knowledge.js";
 import { isSafeScopePath, isSafeStorageReference } from "./local-knowledge-paths.js";
 import type { LocalKnowledgeValidation } from "./local-knowledge-validation.js";
+import { LOCAL_KNOWLEDGE_WEB_DOCUMENT_FILE_EXTENSIONS } from "./local-knowledge-file-selection.js";
 import { containsAbsolutePath, stripUnsafeFormatChars } from "./text-safety.js";
 
 // ─── Schema version ───────────────────────────────────────────────────────────
@@ -37,12 +38,12 @@ export const HTML_MANUAL_SOURCE_FINGERPRINT_TAG_PREFIX =
   "keiko-html-manual-source-fingerprint:" as const;
 
 // Include globs used when an HTML manual is indexed through the existing folder-scope
-// discovery path. Kept in sync with the parser registry's HTML extensions.
-export const HTML_MANUAL_INCLUDE_GLOBS: readonly string[] = [
-  "**/*.html",
-  "**/*.htm",
-  "**/*.xhtml",
-] as const;
+// discovery path. KEIKO-0948: derived from LOCAL_KNOWLEDGE_WEB_DOCUMENT_FILE_EXTENSIONS so
+// adding a new HTML extension to the parser registry automatically widens the manual crawler's
+// include set — no second hand-listed table to keep in sync.
+export const HTML_MANUAL_INCLUDE_GLOBS: readonly string[] = Object.freeze(
+  LOCAL_KNOWLEDGE_WEB_DOCUMENT_FILE_EXTENSIONS.map((ext) => `**/*.${ext}`),
+);
 
 // ─── Internal (unredacted) crawl scope ──────────────────────────────────────────
 // `kind` is intentionally the same literal set as `DocumentationManualSourceKind` so the
@@ -346,22 +347,57 @@ export function htmlManualSourceFingerprintTag(sourceFingerprint: string): strin
   return `${HTML_MANUAL_SOURCE_FINGERPRINT_TAG_PREFIX}${sourceFingerprint}`;
 }
 
+// KEIKO-0785: fail closed instead of last-write-wins. An empty fingerprint suffix is a defect on
+// the producer side, not a valid absent-fingerprint signal — omit the field so downstream code
+// can distinguish "no fingerprint" from "empty fingerprint". Two conflicting kind tags on the
+// same manifest is also a defect the parser must not silently paper over: neither wins.
+interface TagCollector<T> {
+  value: T | undefined;
+  conflict: boolean;
+}
+
+function absorbConflictingValue<T>(collector: TagCollector<T>, next: T): void {
+  if (collector.value !== undefined && collector.value !== next) {
+    collector.conflict = true;
+    return;
+  }
+  collector.value = next;
+}
+
+function parseKindTag(tag: string, kindCollector: TagCollector<HtmlManualSourceKind>): boolean {
+  if (tag === htmlManualSourceKindTag("html-manual-local")) {
+    absorbConflictingValue(kindCollector, "html-manual-local");
+    return true;
+  }
+  if (tag === htmlManualSourceKindTag("html-manual-http")) {
+    absorbConflictingValue(kindCollector, "html-manual-http");
+    return true;
+  }
+  return false;
+}
+
+function parseFingerprintTag(tag: string, fingerprintCollector: TagCollector<string>): boolean {
+  if (!tag.startsWith(HTML_MANUAL_SOURCE_FINGERPRINT_TAG_PREFIX)) return false;
+  const suffix = tag.slice(HTML_MANUAL_SOURCE_FINGERPRINT_TAG_PREFIX.length);
+  if (suffix.length > 0) absorbConflictingValue(fingerprintCollector, suffix);
+  return true;
+}
+
 export function parseHtmlManualSourceTagMetadata(
   tags: readonly string[],
 ): HtmlManualSourceTagMetadata {
-  let sourceKind: HtmlManualSourceKind | undefined;
-  let sourceFingerprint: string | undefined;
+  const kindCollector: TagCollector<HtmlManualSourceKind> = { value: undefined, conflict: false };
+  const fingerprintCollector: TagCollector<string> = { value: undefined, conflict: false };
   for (const tag of tags) {
-    if (tag === htmlManualSourceKindTag("html-manual-local")) {
-      sourceKind = "html-manual-local";
-    } else if (tag === htmlManualSourceKindTag("html-manual-http")) {
-      sourceKind = "html-manual-http";
-    } else if (tag.startsWith(HTML_MANUAL_SOURCE_FINGERPRINT_TAG_PREFIX)) {
-      sourceFingerprint = tag.slice(HTML_MANUAL_SOURCE_FINGERPRINT_TAG_PREFIX.length);
-    }
+    if (parseKindTag(tag, kindCollector)) continue;
+    parseFingerprintTag(tag, fingerprintCollector);
   }
   return {
-    ...(sourceKind !== undefined ? { sourceKind } : {}),
-    ...(sourceFingerprint !== undefined ? { sourceFingerprint } : {}),
+    ...(kindCollector.value !== undefined && !kindCollector.conflict
+      ? { sourceKind: kindCollector.value }
+      : {}),
+    ...(fingerprintCollector.value !== undefined && !fingerprintCollector.conflict
+      ? { sourceFingerprint: fingerprintCollector.value }
+      : {}),
   };
 }

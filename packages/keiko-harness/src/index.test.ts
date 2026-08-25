@@ -83,6 +83,7 @@ describe("keiko-harness public surface", () => {
     expect(harness.DEFAULT_LIMITS).toBeDefined();
     expect(harness.HARNESS_CODES).toBeDefined();
     expect(harness.TERMINAL_STATES).toBeDefined();
+    expect(typeof harness.isTerminalHarnessState).toBe("function");
     // Error taxonomy (re-exported from keiko-security):
     expect(typeof harness.HarnessError).toBe("function");
     expect(typeof harness.HarnessInternalError).toBe("function");

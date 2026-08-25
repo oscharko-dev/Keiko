@@ -142,16 +142,20 @@ export const EDITOR_BUILTIN_CAPABILITIES: readonly EditorBuiltinCapability[] = O
 );
 
 // languageId -> capability, derived from the table. Frozen. Every registry id appears here.
+// KEIKO-0657: seed the accumulator on a null-prototype object so bracket lookups of untrusted
+// keys like `constructor`, `toString`, or `__proto__` return undefined rather than a prototype
+// method, keeping `editorBuiltinCapability(x)` faithful to its "unknown id → null" contract.
+function nullPrototypeCapabilityIndex(): Record<string, EditorBuiltinCapability> {
+  return Object.create(null) as Record<string, EditorBuiltinCapability>;
+}
+
 export const EDITOR_BUILTIN_CAPABILITY_BY_LANGUAGE: Readonly<
   Record<string, EditorBuiltinCapability>
 > = Object.freeze(
-  EDITOR_BUILTIN_CAPABILITIES.reduce<Record<string, EditorBuiltinCapability>>(
-    (accumulator, capability) => {
-      accumulator[capability.languageId] = capability;
-      return accumulator;
-    },
-    {},
-  ),
+  EDITOR_BUILTIN_CAPABILITIES.reduce((accumulator, capability) => {
+    accumulator[capability.languageId] = capability;
+    return accumulator;
+  }, nullPrototypeCapabilityIndex()),
 );
 
 // The built-in capability for a language id, or `null` when the id is not a known source language.

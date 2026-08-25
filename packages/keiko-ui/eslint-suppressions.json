@@ -548,7 +548,7 @@
   },
   "src/app/components/desktop/hooks/workspace-persistence.ts": {
     "complexity": {
-      "count": 7
+      "count": 6
     }
   },
   "src/app/components/desktop/hooks/workspaceActions.ts": {

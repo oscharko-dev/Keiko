@@ -22,27 +22,28 @@ import type {
   QualityIntelligenceSourceEnvelopeId,
 } from "./ids.js";
 
+// KEIKO-0522: const-first + `(typeof X)[number]` (matches retentionPolicy.ts / testQualityRubric.ts)
+// so each union type can never drift from the enumerable array it is derived from.
+export const QUALITY_INTELLIGENCE_EVIDENCE_ATOM_KINDS = [
+  "requirement",
+  "design-fragment",
+  "code-fragment",
+  "document-excerpt",
+  "human-statement",
+] as const;
+
 export type QualityIntelligenceEvidenceAtomKind =
-  "requirement" | "design-fragment" | "code-fragment" | "document-excerpt" | "human-statement";
+  (typeof QUALITY_INTELLIGENCE_EVIDENCE_ATOM_KINDS)[number];
 
-export const QUALITY_INTELLIGENCE_EVIDENCE_ATOM_KINDS: readonly QualityIntelligenceEvidenceAtomKind[] =
-  [
-    "requirement",
-    "design-fragment",
-    "code-fragment",
-    "document-excerpt",
-    "human-statement",
-  ] as const;
+export const QUALITY_INTELLIGENCE_REDACTION_STATUSES = ["redacted", "not-required"] as const;
 
-export type QualityIntelligenceRedactionStatus = "redacted" | "not-required";
+export type QualityIntelligenceRedactionStatus =
+  (typeof QUALITY_INTELLIGENCE_REDACTION_STATUSES)[number];
 
-export const QUALITY_INTELLIGENCE_REDACTION_STATUSES: readonly QualityIntelligenceRedactionStatus[] =
-  ["redacted", "not-required"] as const;
+export const QUALITY_INTELLIGENCE_LIFECYCLE_STATUSES = ["draft", "finalised", "archived"] as const;
 
-export type QualityIntelligenceLifecycleStatus = "draft" | "finalised" | "archived";
-
-export const QUALITY_INTELLIGENCE_LIFECYCLE_STATUSES: readonly QualityIntelligenceLifecycleStatus[] =
-  ["draft", "finalised", "archived"] as const;
+export type QualityIntelligenceLifecycleStatus =
+  (typeof QUALITY_INTELLIGENCE_LIFECYCLE_STATUSES)[number];
 
 interface QualityIntelligenceEvidenceAtomCommon {
   readonly id: QualityIntelligenceEvidenceAtomId;

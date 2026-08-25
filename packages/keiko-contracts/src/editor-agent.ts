@@ -1798,12 +1798,26 @@ function rangesOverlap(current: LanguageRange, next: LanguageRange): boolean {
   return positionLessThan(next.start, current.end);
 }
 
+// KEIKO-0756: Array.prototype.sort demands a comparator that returns 0 on equality — a comparator
+// that only ever returns -1 / +1 makes sort() non-stable in engines that switch strategies for
+// large arrays (V8 pre-Node 22 still ships TimSort but the ECMAScript contract stays: unstable
+// unless the comparator is a consistent total order that returns 0 on equal elements). Compare
+// line then character, returning 0 for equal starts so ties stay in input order.
+function comparePositions(
+  a: { readonly line: number; readonly character: number },
+  b: { readonly line: number; readonly character: number },
+): number {
+  const byLine = a.line - b.line;
+  if (byLine !== 0) return byLine;
+  return a.character - b.character;
+}
+
 function overlapError(
   edits: readonly { readonly range: LanguageRange; readonly newText: string }[],
 ): string | null {
   const ordered = edits
     .map((edit, index) => ({ edit, index }))
-    .sort((a, b) => (positionLessThan(a.edit.range.start, b.edit.range.start) ? -1 : 1));
+    .sort((a, b) => comparePositions(a.edit.range.start, b.edit.range.start));
   for (let i = 1; i < ordered.length; i += 1) {
     const current = ordered[i - 1];
     const next = ordered[i];
@@ -2301,12 +2315,20 @@ function invalidActionsPostBody(): EditorAgentParseFail {
 export function parseEditorAgentActionsPostBody(
   value: unknown,
 ): EditorAgentParse<EditorAgentActionsPostBody> {
+  // KEIKO-0747: route by the discriminator BEFORE the bare-action branch. isEditorAgentAction
+  // does not enforce exact-keys, so a body carrying { kind: "action", ...allEditorAgentActionFields }
+  // used to fall through to the bare-action branch — its `kind` and `bridgeDecisionCapability`
+  // fields silently discarded. The bridge and result branches carry their own exact-keys guards
+  // and are the only correct match for a discriminated payload.
+  if (isRecord(value) && (value.kind === "action" || value.kind === "result")) {
+    return value.kind === "action"
+      ? parseBridgeActionRequest(value)
+      : parseActionResultRequest(value);
+  }
   if (isEditorAgentAction(value)) {
     return { ok: true, value: canonicalEditorAgentAction(value) };
   }
-  if (!isRecord(value)) return invalidActionsPostBody();
-  if (value.kind === "action") return parseBridgeActionRequest(value);
-  return value.kind === "result" ? parseActionResultRequest(value) : invalidActionsPostBody();
+  return invalidActionsPostBody();
 }
 
 export function isEditorAgentBridgeDecisionCapability(value: unknown): value is string {

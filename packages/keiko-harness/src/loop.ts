@@ -7,7 +7,7 @@ import { contextBytes, type RunContext, type StateStep } from "./context.js";
 import { handleModelCall, handleToolCall } from "./executor.js";
 import { handlePatchProposal, handleReporting, handleVerification } from "./patcher.js";
 import { handleContextSelection, handlePlanning } from "./planner.js";
-import { TERMINAL_STATES, type HarnessStateName, type RunOutcome } from "./types.js";
+import { isTerminalHarnessState, type HarnessStateName, type RunOutcome } from "./types.js";
 
 const MAX_LOOP_STEPS = 10_000; // absolute safety net; bounded states make this unreachable.
 
@@ -179,7 +179,7 @@ export async function runLoop(ctx: RunContext): Promise<RunOutcome> {
     to: "planning",
     reason: "task validated",
   });
-  for (let step = 0; step < MAX_LOOP_STEPS && !TERMINAL_STATES.has(state); step += 1) {
+  for (let step = 0; step < MAX_LOOP_STEPS && !isTerminalHarnessState(state); step += 1) {
     if (ctx.signal.aborted) {
       state = transition(ctx, state, abortStep("abort detected at top of loop"));
       break;
@@ -193,7 +193,7 @@ export async function runLoop(ctx: RunContext): Promise<RunOutcome> {
     const postDispatchGuard = checkWallTimePostDispatch(ctx, dispatched);
     state = transition(ctx, state, postDispatchGuard ?? dispatched);
   }
-  if (!TERMINAL_STATES.has(state)) {
+  if (!isTerminalHarnessState(state)) {
     ctx.failure = toFailure(HARNESS_CODES.INTERNAL, "state-machine safety step limit exceeded");
     state = transition(ctx, state, {
       to: "failed",

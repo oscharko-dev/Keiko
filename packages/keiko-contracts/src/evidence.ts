@@ -5,6 +5,7 @@
 // from events/RunResult, never Date objects.
 
 import type { ContextAssemblyDiagnostics, ContextCompactionRecord } from "./context-engineering.js";
+import { deepFreeze } from "./deep-freeze.js";
 import type { CostClass } from "./gateway.js";
 import type {
   HarnessCode,
@@ -386,9 +387,9 @@ export interface RetentionPolicy {
   readonly disabled?: boolean | undefined;
 }
 
-export const DEFAULT_RETENTION: RetentionPolicy = {
+export const DEFAULT_RETENTION: RetentionPolicy = deepFreeze({
   maxRunsByPartition: { "chat-rag": 50, regulated: 50 },
-} as const;
+});
 
 // ─── Build input + injectable deps (D10) ──────────────────────────────────────────
 

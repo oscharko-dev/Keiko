@@ -38,6 +38,7 @@ import {
 } from "./local-knowledge-model-use-policy.js";
 import {
   isSafeDisplaySummary,
+  validateOnlyKeys as onlyKeys,
   type LocalKnowledgeValidation,
 } from "./local-knowledge-validation.js";
 import type { HtmlManualSourceKind } from "./html-manual-source.js";
@@ -458,21 +459,6 @@ const PROMPT_SCAFFOLD_RE =
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function onlyKeys(
-  value: Record<string, unknown>,
-  allowed: readonly string[],
-  field: string,
-  errors: string[],
-): void {
-  const set = new Set(allowed);
-  for (const key of Object.keys(value)) {
-    if (!set.has(key)) {
-      errors.push(`${field} must not include ${key}`);
-      return;
-    }
-  }
 }
 
 function isUrlTerminator(char: string): boolean {

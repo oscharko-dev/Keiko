@@ -1,6 +1,7 @@
 // All harness interfaces, states, events, limits, and task types. No runtime code
-// other than the frozen constant tables (DEFAULT_LIMITS, HARNESS_CODES, TERMINAL_STATES)
-// that the type layer needs to expose as values. Mirrors the ADR-0003 types.ts precedent.
+// other than the frozen constant tables (DEFAULT_LIMITS, HARNESS_CODES, TERMINAL_STATES) and the
+// isTerminalHarnessState predicate that the type layer needs to expose as values. Mirrors the
+// ADR-0003 types.ts precedent.
 
 import type { CodingContextPack } from "./coding-context.js";
 
@@ -22,12 +23,22 @@ export type HarnessStateName =
 
 export type TerminalState = "completed" | "cancelled" | "failed" | "limit-exceeded";
 
-export const TERMINAL_STATES: ReadonlySet<HarnessStateName> = new Set<HarnessStateName>([
+// Frozen backing tuple for TerminalState. `satisfies readonly TerminalState[]` compiler-binds the
+// enumeration to the type (KEIKO-0807): if TerminalState gains or loses a member without this
+// tuple following, the mismatch is a compile error instead of a silent runtime drift. Frozen with
+// Object.freeze, not a Set: Object.freeze on a Set does not block .add()/.delete() at runtime, so a
+// caller (or an unsafe cast) could previously widen terminal-ness for the remaining process
+// lifetime (KEIKO-0879). Test membership with isTerminalHarnessState, not array/.has() access.
+export const TERMINAL_STATES: readonly TerminalState[] = Object.freeze([
   "completed",
   "cancelled",
   "failed",
   "limit-exceeded",
-]);
+] as const satisfies readonly TerminalState[]);
+
+export function isTerminalHarnessState(state: HarnessStateName): boolean {
+  return (TERMINAL_STATES as readonly HarnessStateName[]).includes(state);
+}
 
 export interface StateTransition {
   readonly from: HarnessStateName;
@@ -48,7 +59,9 @@ export interface HarnessLimits {
   readonly maxFailureAttempts: number;
 }
 
-export const DEFAULT_LIMITS: HarnessLimits = {
+// Object.freeze (KEIKO-0879): a plain object literal is writable at runtime regardless of the
+// `HarnessLimits` (all-readonly) type annotation — TypeScript's readonly is compile-time only.
+export const DEFAULT_LIMITS: HarnessLimits = Object.freeze({
   maxIterations: 10,
   maxModelCalls: 20,
   maxToolCalls: 30,
@@ -57,7 +70,7 @@ export const DEFAULT_LIMITS: HarnessLimits = {
   maxPatchBytes: 65_536,
   maxWallTimeMs: 300_000,
   maxFailureAttempts: 3,
-} as const;
+} as const);
 
 // Version manifest stamped onto every RunManifest and side-file fingerprint header. Bump on a
 // breaking-shape change to the harness event union or RunManifest schema; consumers compare the
@@ -138,7 +151,16 @@ export interface RunCounters {
 
 // ─── Run result ───────────────────────────────────────────────────────────────
 
-export type RunOutcome = "completed" | "cancelled" | "failed" | "limit-exceeded";
+// A run's outcome IS the terminal harness state it reached — expressed as a projection of
+// TerminalState (KEIKO-0807), not a second independently-written 4-member union, so the two can
+// never silently drift apart. The alias is deliberate: it preserves the semantic name at call
+// sites (a `RunOutcome`-typed field reads as "the run's outcome", not "a terminal harness state
+// that happens to be a run's outcome"), while the compiler still enforces set-equality via the
+// projection.
+// NOSONAR (typescript:S6564): the alias is a semantic name, not redundant abstraction. Replacing
+// every `RunOutcome` with `TerminalState` would erase the domain-model distinction between "the
+// set of terminal states" and "the specific terminal state a run produced".
+export type RunOutcome = TerminalState;
 
 export interface RunResult {
   readonly runId: string;
@@ -171,7 +193,9 @@ export interface RunManifest {
 
 // ─── Failure taxonomy ─────────────────────────────────────────────────────────
 
-export const HARNESS_CODES = {
+// Object.freeze (KEIKO-0879): `as const` narrows the literal types the compiler sees but does not
+// make the object immutable at runtime.
+export const HARNESS_CODES = Object.freeze({
   LIMIT_ITERATIONS: "HARNESS_LIMIT_ITERATIONS",
   LIMIT_MODEL_CALLS: "HARNESS_LIMIT_MODEL_CALLS",
   LIMIT_TOOL_CALLS: "HARNESS_LIMIT_TOOL_CALLS",
@@ -183,7 +207,7 @@ export const HARNESS_CODES = {
   MODEL_ERROR: "HARNESS_MODEL_ERROR",
   TOOL_ERROR: "HARNESS_TOOL_ERROR",
   INTERNAL: "HARNESS_INTERNAL",
-} as const;
+} as const);
 
 export type HarnessCode = (typeof HARNESS_CODES)[keyof typeof HARNESS_CODES];
 

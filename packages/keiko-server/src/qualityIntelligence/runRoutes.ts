@@ -197,7 +197,15 @@ function validateSource(raw: unknown): QualityIntelligenceInlineSource | RouteRe
   if (!isObject(raw) || typeof raw.label !== "string") return undefined;
   const label = raw.label;
   if (raw.kind === "requirements" && typeof raw.text === "string") {
-    return { kind: "requirements", label, text: raw.text };
+    // KEIKO-0891 follow-on: the contract carries an optional `adf` Atlassian Document Format
+    // tree that `ingestRequirements` (runIngestion.ts) normalises to text via parseAdfDocument.
+    // The previous validator dropped `raw.adf`, so the ADF-normalisation branch was dead code in
+    // production (reachable only from direct unit-test calls). Pass a plain-object `adf` through
+    // to the ingestion layer; parseAdfDocument already validates the tree grammar and enforces
+    // the maxDocumentBytes / maxNodes / maxDepth / maxTextBytes ceilings, and the route body's
+    // MAX_BODY_BYTES envelope caps the total request size.
+    const adf = extractRequirementsAdf(raw);
+    return { kind: "requirements", label, text: raw.text, ...(adf !== undefined ? { adf } : {}) };
   }
   if (raw.kind === "workspace" && typeof raw.path === "string") {
     return { kind: "workspace", label, path: raw.path };
@@ -206,6 +214,20 @@ function validateSource(raw: unknown): QualityIntelligenceInlineSource | RouteRe
     return { kind: "file", label, path: raw.path };
   }
   return validateConnectorSource(label, raw);
+}
+
+// KEIKO-0891 follow-on: the ADF tree is a JSON-value shape (recursive object/array/primitive).
+// Only accept a value the server-side parseAdfDocument can meaningfully inspect — a plain object
+// or an array, or absent. Functions, class instances, and Symbol values are refused here so the
+// downstream parser never sees them. Deeper shape validation stays in parseAdfDocument.
+function extractRequirementsAdf(
+  raw: Record<string, unknown>,
+): QI.QualityIntelligenceAdfNode | undefined {
+  if (!("adf" in raw)) return undefined;
+  const value = raw.adf;
+  if (value === undefined) return undefined;
+  if (value === null || typeof value !== "object") return undefined;
+  return value as QI.QualityIntelligenceAdfNode;
 }
 
 function isRouteResult(v: unknown): v is RouteResult {

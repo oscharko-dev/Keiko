@@ -1,5 +1,8 @@
 import type { CapsuleSetId, KnowledgeCapsuleId, KnowledgeSourceId } from "./local-knowledge.js";
-import type { LocalKnowledgeValidation } from "./local-knowledge-validation.js";
+import {
+  validateOnlyKeys as onlyKeys,
+  type LocalKnowledgeValidation,
+} from "./local-knowledge-validation.js";
 import { isKnowledgePodEvidenceSafeText } from "./local-knowledge-pods.js";
 
 export const KNOWLEDGE_POD_RETRIEVAL_ACTIVITY_SCHEMA_VERSION = "1" as const;
@@ -317,21 +320,6 @@ function containsPhoneLikeText(value: string): boolean {
 
 function containsPiiLikeText(value: string): boolean {
   return containsEmailLikeText(value) || containsSsnLikeText(value) || containsPhoneLikeText(value);
-}
-
-function onlyKeys(
-  value: Record<string, unknown>,
-  allowed: readonly string[],
-  field: string,
-  errors: string[],
-): void {
-  const keys = new Set(allowed);
-  for (const key of Object.keys(value)) {
-    if (!keys.has(key)) {
-      errors.push(`${field} must not include ${key}`);
-      return;
-    }
-  }
 }
 
 function isSafeActivityText(value: unknown): value is string {

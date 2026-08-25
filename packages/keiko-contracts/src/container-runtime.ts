@@ -12,6 +12,12 @@
 
 import type { CommandRule } from "./tools.js";
 import { deepFreeze } from "./deep-freeze.js";
+import {
+  isNonEmptyString,
+  isOneOf,
+  isRecord,
+  validateRunResultCore,
+} from "./run-result-validation.js";
 import type {
   RuntimeCapabilityState,
   RuntimeCapabilityUnavailableReason,
@@ -282,18 +288,6 @@ export interface ContainerRunResultParseFail {
 
 export type ContainerRunResultParse = ContainerRunResultParseOk | ContainerRunResultParseFail;
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function isOneOf<T extends string>(value: unknown, allowed: readonly T[]): value is T {
-  return typeof value === "string" && (allowed as readonly string[]).includes(value);
-}
-
-function isNonEmptyString(value: unknown): value is string {
-  return typeof value === "string" && value.length > 0;
-}
-
 function isPositiveFinite(value: unknown): boolean {
   return typeof value === "number" && Number.isFinite(value) && value > 0;
 }
@@ -461,35 +455,16 @@ export function validateContainerTaskCatalog(value: unknown): ContainerTaskCatal
   return { ok: true, value: value as unknown as ContainerTaskCatalog };
 }
 
-function validateResultScalars(value: Record<string, unknown>, errors: string[]): void {
-  if (value.schemaVersion !== CONTAINER_RUNTIME_SCHEMA_VERSION) {
-    errors.push("schemaVersion is invalid");
-  }
-  if (!isNonEmptyString(value.runId)) errors.push("runId must be a non-empty string");
-  if (!isNonEmptyString(value.taskId)) errors.push("taskId must be a non-empty string");
-  if (!isOneOf(value.kind, CONTAINER_TASK_KINDS)) errors.push("kind is invalid");
+// KEIKO-0601: the field-by-field scalar/runtime checks (schemaVersion, runId, taskId, kind,
+// failureReason, exitCode, durationMs, truncated, timedOut, stdout, stderr) are shared with
+// command-runner.ts's validateCommandTaskRunResult via run-result-validation.ts's
+// validateRunResultCore, parameterized by this executor's own schema version, CONTAINER_TASK_KINDS
+// and CONTAINER_FAILURE_REASONS. `engine` is this executor's own extra field — the `afterKind` hook
+// validates it immediately after `kind` so the error order stays schemaVersion, runId, taskId, kind,
+// engine, failureReason, exitCode, durationMs, truncated, timedOut, stdout, stderr, exactly as
+// container-runtime.test.ts's fixed-order test pins.
+function validateEngineField(value: Record<string, unknown>, errors: string[]): void {
   if (!isOneOf(value.engine, CONTAINER_ENGINE_IDS)) errors.push("engine is invalid");
-  if (!isOneOf(value.failureReason, CONTAINER_FAILURE_REASONS)) {
-    errors.push("failureReason is invalid");
-  }
-}
-
-function validateResultNumbers(value: Record<string, unknown>, errors: string[]): void {
-  const exitCode = value.exitCode;
-  if (exitCode !== null && (typeof exitCode !== "number" || !Number.isInteger(exitCode))) {
-    errors.push("exitCode must be an integer or null");
-  }
-  const durationMs = value.durationMs;
-  if (typeof durationMs !== "number" || !Number.isFinite(durationMs) || durationMs < 0) {
-    errors.push("durationMs must be a non-negative finite number");
-  }
-}
-
-function validateResultFlagsAndText(value: Record<string, unknown>, errors: string[]): void {
-  if (typeof value.truncated !== "boolean") errors.push("truncated must be a boolean");
-  if (typeof value.timedOut !== "boolean") errors.push("timedOut must be a boolean");
-  if (typeof value.stdout !== "string") errors.push("stdout must be a string");
-  if (typeof value.stderr !== "string") errors.push("stderr must be a string");
 }
 
 export function validateContainerRunResult(value: unknown): ContainerRunResultParse {
@@ -497,9 +472,16 @@ export function validateContainerRunResult(value: unknown): ContainerRunResultPa
   if (!isRecord(value)) {
     return { ok: false, errors: ["result must be an object"] };
   }
-  validateResultScalars(value, errors);
-  validateResultNumbers(value, errors);
-  validateResultFlagsAndText(value, errors);
+  validateRunResultCore(
+    value,
+    {
+      schemaVersion: CONTAINER_RUNTIME_SCHEMA_VERSION,
+      kinds: CONTAINER_TASK_KINDS,
+      failureReasons: CONTAINER_FAILURE_REASONS,
+    },
+    errors,
+    validateEngineField,
+  );
   if (errors.length > 0) {
     return { ok: false, errors };
   }

@@ -22,4 +22,10 @@ describe("DEFAULT_COMMAND_RULES", () => {
     }).toThrow(TypeError);
     expect(DEFAULT_COMMAND_RULES[0]?.executable).toBe(first?.executable);
   });
+
+  // KEIKO-0888: DEFAULT_COMMAND_RULES must be built with the shared `deepFreeze` helper (not a
+  // shallow `Object.freeze` on the outer array alone), so every nested rule object is frozen too.
+  it("reports every nested rule object as frozen (Object.isFrozen), not just the array", () => {
+    expect(Object.isFrozen(DEFAULT_COMMAND_RULES[0])).toBe(true);
+  });
 });

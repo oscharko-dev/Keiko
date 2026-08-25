@@ -15,6 +15,7 @@ import {
   type CommandTaskCatalog,
   type CommandTaskRunResult,
 } from "./command-runner.js";
+import { validateRunResultCore } from "./run-result-validation.js";
 
 function baseRequest(): Record<string, unknown> {
   return { projectId: "/work/project", taskId: "npm-script:test" };
@@ -384,5 +385,97 @@ describe("validateCommandTaskRunResult", () => {
         ]),
       );
     }
+  });
+});
+
+// KEIKO-0601: command-runner.ts's and container-runtime.ts's run-result validators now both call
+// this single shared, parameterized core (run-result-validation.ts) instead of each independently
+// re-declaring the field-by-field checks. This test exercises the shared core directly, with a
+// synthetic vocabulary that is neither executor's real one, proving the module (a) exists and
+// (b) is genuinely parameterized rather than hard-coded to one executor's kinds/failure reasons.
+describe("validateRunResultCore (shared with container-runtime.ts, KEIKO-0601)", () => {
+  it("collects the full common field set in fixed order for an arbitrary vocabulary", () => {
+    const errors: string[] = [];
+    validateRunResultCore(
+      {
+        schemaVersion: "wrong",
+        runId: "",
+        taskId: "",
+        kind: "not-a-real-kind",
+        failureReason: "not-a-real-reason",
+        exitCode: 1.5,
+        durationMs: -2,
+        truncated: "no",
+        timedOut: 1,
+        stdout: 0,
+        stderr: null,
+      },
+      { schemaVersion: "synthetic-v1", kinds: ["alpha", "beta"], failureReasons: ["ok", "boom"] },
+      errors,
+    );
+    expect(errors).toEqual([
+      "schemaVersion is invalid",
+      "runId must be a non-empty string",
+      "taskId must be a non-empty string",
+      "kind is invalid",
+      "failureReason is invalid",
+      "exitCode must be an integer or null",
+      "durationMs must be a non-negative finite number",
+      "truncated must be a boolean",
+      "timedOut must be a boolean",
+      "stdout must be a string",
+      "stderr must be a string",
+    ]);
+  });
+
+  it("accepts a well-formed value against its own vocabulary and pushes no errors", () => {
+    const errors: string[] = [];
+    validateRunResultCore(
+      {
+        schemaVersion: "synthetic-v1",
+        runId: "run-1",
+        taskId: "task-1",
+        kind: "alpha",
+        failureReason: "ok",
+        exitCode: 0,
+        durationMs: 1,
+        truncated: false,
+        timedOut: false,
+        stdout: "",
+        stderr: "",
+      },
+      { schemaVersion: "synthetic-v1", kinds: ["alpha", "beta"], failureReasons: ["ok", "boom"] },
+      errors,
+    );
+    expect(errors).toEqual([]);
+  });
+
+  it("splices an executor's own afterKind field validator between kind and failureReason", () => {
+    // This is the exact mechanism container-runtime.ts uses to validate `engine` at the position
+    // container-runtime.test.ts's fixed-order test pins: immediately after `kind`, before
+    // `failureReason`. A regression here (e.g. running afterKind before kind, or after
+    // failureReason) would silently reorder container-runtime's error output.
+    const errors: string[] = [];
+    validateRunResultCore(
+      {
+        schemaVersion: "synthetic-v1",
+        runId: "run-1",
+        taskId: "task-1",
+        kind: "alpha",
+        failureReason: "not-a-real-reason",
+        exitCode: 0,
+        durationMs: 1,
+        truncated: false,
+        timedOut: false,
+        stdout: "",
+        stderr: "",
+      },
+      { schemaVersion: "synthetic-v1", kinds: ["alpha", "beta"], failureReasons: ["ok", "boom"] },
+      errors,
+      (_value, pushErrors) => {
+        pushErrors.push("engine is invalid");
+      },
+    );
+    expect(errors).toEqual(["engine is invalid", "failureReason is invalid"]);
   });
 });

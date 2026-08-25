@@ -390,6 +390,33 @@ describe("decideAtlassianConnectorAction — full D4 matrix (action × mode × s
     );
     expect(decision.disposition).toBe("allowed");
   });
+
+  it("does not gate connector-write on ATLASSIAN_CONNECTOR_SUPERVISED_ACTION_KIND in Full access (KEIKO-0701)", () => {
+    // An audit proposed composing `supervisedCodingActionRequiresApproval(supervisedKind)` into
+    // this function's effect chain, reasoning that the declared-but-unconsumed
+    // ATLASSIAN_CONNECTOR_SUPERVISED_ACTION_KIND table was a wiring bug. It was tried and reverted:
+    // supervisedCodingActionRequiresApproval("connector-write") is unconditionally true
+    // (mode-independent), so that composition forces "review-required" for every connector-write
+    // action in EVERY mode -- including autonomous-delivery (Full access) -- which directly
+    // contradicts ADR-0128 D4's own disposition-derivation formula ("autonomous-delivery (Full
+    // access) allows every internet risk tier, so every row is allowed, conditioned on the
+    // connector scope being present") and ADR-0138's explicit narrowing note ("Scope gating,
+    // envelope admission, risk tiers, and all other decisions remain unchanged"). This pin fails
+    // immediately if that composition is reintroduced -- see the follow-up note on
+    // ATLASSIAN_CONNECTOR_SUPERVISED_ACTION_KIND's declaration before changing this test.
+    const writeRows = D4_TABLE.filter((row) => row.actionClass === "connector-write");
+    expect(writeRows.length).toBeGreaterThan(0);
+    for (const row of writeRows) {
+      const decision = decideAtlassianConnectorAction(
+        row.action,
+        "autonomous-delivery",
+        ALL_SCOPES,
+      );
+      expect(decision.disposition, row.action).toBe("allowed");
+      expect(decision.denyReason, row.action).toBeUndefined();
+      expect(decision.reviewReason, row.action).toBeUndefined();
+    }
+  });
 });
 
 describe("D5 sync bound defaults (ADR-0128)", () => {

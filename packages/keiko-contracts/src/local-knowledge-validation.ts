@@ -161,7 +161,14 @@ function validatePositiveIntegerMax(
   }
 }
 
-function validateOnlyKeys(
+// Exported so the sibling Local Knowledge validators reuse this single allowlist-key check
+// instead of maintaining their own copy (audit KEIKO-0530). `local-knowledge-pods.ts` and
+// `local-knowledge-retrieval-activity.ts` import it directly (aliased to `onlyKeys` at the call
+// site so their existing call shape is unchanged). `local-knowledge-model-use-policy.ts` keeps a
+// private, algorithm-identical copy instead: this module already imports
+// `validateKnowledgePodModelUsePolicy` (a value import) from that file, so an import in the other
+// direction would form a circular module dependency between the two.
+export function validateOnlyKeys(
   record: Record<string, unknown>,
   allowedKeys: readonly string[],
   field: string,

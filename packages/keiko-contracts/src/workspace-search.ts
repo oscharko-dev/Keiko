@@ -4,7 +4,10 @@ import type { EditorPatchRejectionReason } from "./editor-patch-apply.js";
 
 export type WorkspaceSearchMode = "literal" | "regex";
 
-export const WORKSPACE_SEARCH_MODES: readonly WorkspaceSearchMode[] = ["literal", "regex"];
+export const WORKSPACE_SEARCH_MODES: readonly WorkspaceSearchMode[] = Object.freeze([
+  "literal",
+  "regex",
+]);
 
 export interface WorkspaceSearchRequest {
   readonly root: string;

@@ -31,7 +31,21 @@ export abstract class CodedHttpError extends Error {
  * so the lookup site is a single named, tested call rather than an inline `map[code]` that
  * silently returns `undefined` if a code was forgotten (the exhaustive `Record<C, number>`
  * key type makes the omission a compile error at the map's definition).
+ *
+ * KEIKO-0859: the doc used to claim this helper existed "to prevent a silent `undefined`", but
+ * the runtime path — an `as C` upcast at the caller, a prototype-chain read like `constructor`,
+ * or a missing entry in a hand-maintained map that the compiler cannot see — could still return
+ * `undefined` and be coerced into the response body. Fail closed at runtime: bracket-lookup with
+ * a plain-object own-key check and throw a TypeError naming the missing code. `500` would be
+ * silently wrong; a thrown error surfaces the caller's compile-time bypass.
  */
 export function httpStatusFor<C extends string>(map: Readonly<Record<C, number>>, code: C): number {
-  return map[code];
+  if (!Object.hasOwn(map, code)) {
+    throw new TypeError(`httpStatusFor: unknown code "${code.slice(0, 64)}"`);
+  }
+  const status = map[code];
+  if (typeof status !== "number") {
+    throw new TypeError(`httpStatusFor: non-numeric status for code "${code.slice(0, 64)}"`);
+  }
+  return status;
 }

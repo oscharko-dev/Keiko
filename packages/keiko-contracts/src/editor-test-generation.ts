@@ -279,8 +279,47 @@ function isWireSymbol(value: unknown): value is EditorTestGenerationWireSymbol {
   );
 }
 
+// KEIKO-0893: bounds for a changed-file-set target's `documents` array. `isLanguageDocumentOverlay`
+// deliberately does NOT bound `text` by byte length itself (language-service.ts: that job belongs
+// to `runLanguageOperation`, which measures against a CONFIGURABLE limit and returns the typed
+// `DOCUMENT_TOO_LARGE` the route maps to 413) -- but that downstream check exists only for the
+// single-document completion/inline-completion gateways. The test-generation route never calls
+// `runLanguageOperation` for a changed-file-set's documents (grep testGenerationRoutes.ts), so
+// without a bound here a single overlay's `text` has no byte ceiling anywhere in the stack; only
+// the outer ~2.1 MB whole-request body cap (`MAX_TEST_GENERATION_BODY_BYTES`) applies. The byte
+// ceiling below mirrors `DEFAULT_LANGUAGE_SERVICE_LIMITS.maxDocumentBytes` (language-service.ts),
+// the package's existing per-document bound for the same overlay shape.
+export const EDITOR_TEST_GENERATION_MAX_OVERLAY_TEXT_BYTES = 1_000_000;
+// Mirrors keiko-server's testGenerationRoutes.ts `MAX_CHANGED_SET_DOCUMENTS` (currently 32) so the
+// contract-layer bound and the route's own already-enforced count cap cannot silently diverge.
+export const EDITOR_TEST_GENERATION_MAX_OVERLAYS = 32;
+
+const EDITOR_TEST_GENERATION_TEXT_ENCODER = new TextEncoder();
+
+function isBoundedOverlayText(text: string): boolean {
+  return (
+    EDITOR_TEST_GENERATION_TEXT_ENCODER.encode(text).length <=
+    EDITOR_TEST_GENERATION_MAX_OVERLAY_TEXT_BYTES
+  );
+}
+
+// Reuses editor-verification.ts's isDenseArray guard pattern (a local equivalent, not an import:
+// this leaf module takes no new shared dependency for a five-line guard): reject a sparse array
+// (Object.keys shorter than .length -- a hostile payload can set holes past what it actually
+// populates) in addition to the max-count and per-entry shape/byte-length checks. Previously this
+// accepted an overlay array of ANY positive length with no density check and no text bound.
 function isOverlayArray(value: unknown): value is readonly LanguageDocumentOverlay[] {
-  return Array.isArray(value) && value.length > 0 && value.every(isLanguageDocumentOverlay);
+  if (
+    !Array.isArray(value) ||
+    value.length === 0 ||
+    value.length > EDITOR_TEST_GENERATION_MAX_OVERLAYS ||
+    Object.keys(value).length !== value.length
+  ) {
+    return false;
+  }
+  return value.every(
+    (entry) => isLanguageDocumentOverlay(entry) && isBoundedOverlayText(entry.text),
+  );
 }
 
 // Collects the shape errors for a single-document target (file/selection/symbol/frontend-component).

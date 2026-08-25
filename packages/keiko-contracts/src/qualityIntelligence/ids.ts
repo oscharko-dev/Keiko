@@ -34,6 +34,7 @@ declare const QualityIntelligenceExportBundleIdBrand: unique symbol;
 declare const QualityIntelligenceSourceEnvelopeIdBrand: unique symbol;
 declare const QualityIntelligenceEvidenceAtomIdBrand: unique symbol;
 declare const QualityIntelligenceAuditSummaryIdBrand: unique symbol;
+declare const QualityIntelligenceHandoffIdBrand: unique symbol;
 
 // ─── Branded types ─────────────────────────────────────────────────────────────
 export type QualityIntelligenceRunId = string & {
@@ -62,6 +63,13 @@ export type QualityIntelligenceEvidenceAtomId = string & {
 };
 export type QualityIntelligenceAuditSummaryId = string & {
   readonly [QualityIntelligenceAuditSummaryIdBrand]: true;
+};
+// KEIKO-0593: identifies a Conversation Center handoff envelope (handoffEnvelope.ts). A distinct
+// brand, not a reuse of QualityIntelligenceRunId or another existing brand -- it identifies a
+// different entity (the handoff request, minted by the Conversation Center before any run may
+// exist) per this file's own documented rule that each entity gets its own brand.
+export type QualityIntelligenceHandoffId = string & {
+  readonly [QualityIntelligenceHandoffIdBrand]: true;
 };
 
 // ─── Validation primitive ──────────────────────────────────────────────────────
@@ -187,3 +195,6 @@ export const asQualityIntelligenceAuditSummaryId = (
   value: string,
 ): QualityIntelligenceAuditSummaryId =>
   construct(value, "QualityIntelligenceAuditSummaryId") as QualityIntelligenceAuditSummaryId;
+
+export const asQualityIntelligenceHandoffId = (value: string): QualityIntelligenceHandoffId =>
+  construct(value, "QualityIntelligenceHandoffId") as QualityIntelligenceHandoffId;

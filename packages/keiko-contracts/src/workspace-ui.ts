@@ -60,7 +60,9 @@ export interface WorkspaceKeyChord {
 
 export interface WorkspaceCommandContext {
   readonly userConfirmed: boolean;
-  readonly sourceObjectId?: string;
+  // KEIKO-0773: `| undefined` matches the package's own exactOptionalPropertyTypes discipline so
+  // an explicit `undefined` value round-trips through the wire the way an omitted key does.
+  readonly sourceObjectId?: string | undefined;
 }
 
 export interface WorkspaceCommand {
@@ -68,8 +70,9 @@ export interface WorkspaceCommand {
   readonly label: string;
   readonly category: WorkspaceCommandCategory;
   readonly authority: WorkspaceCommandAuthority;
-  readonly shortcut?: WorkspaceKeyChord;
-  readonly disabled?: () => string | null;
+  // KEIKO-0773: same rationale as above.
+  readonly shortcut?: WorkspaceKeyChord | undefined;
+  readonly disabled?: (() => string | null) | undefined;
   readonly run: (ctx: WorkspaceCommandContext) => Promise<void> | void;
 }
 
@@ -190,7 +193,7 @@ export interface WorkspaceKeyboardShortcutConflict {
   readonly commandIds: readonly string[];
 }
 
-export const WORKSPACE_RESERVED_CHORDS: readonly WorkspaceKeyChord[] = [
+export const WORKSPACE_RESERVED_CHORDS: readonly WorkspaceKeyChord[] = Object.freeze([
   { key: "t", mod: ["cmd"] },
   { key: "t", mod: ["ctrl"] },
   { key: "r", mod: ["cmd"] },
@@ -199,7 +202,7 @@ export const WORKSPACE_RESERVED_CHORDS: readonly WorkspaceKeyChord[] = [
   { key: "n", mod: ["ctrl", "shift"] },
   { key: "w", mod: ["cmd"] },
   { key: "w", mod: ["ctrl"] },
-];
+]);
 
 // ─── Pure helpers ─────────────────────────────────────────────────────────
 

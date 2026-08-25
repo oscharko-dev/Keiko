@@ -16,6 +16,8 @@
 // pattern (which disables the rule) and the patterns shipped in the default policy are linear (no
 // nested quantifiers), avoiding catastrophic backtracking (the CodeQL ReDoS gate).
 
+import { deepFreeze } from "./deep-freeze.js";
+
 // Pinned schema version. A breaking change adds a NEW literal member; this one is never mutated.
 export const GIT_COMMIT_POLICY_SCHEMA_VERSION = "1" as const;
 
@@ -42,10 +44,9 @@ export interface GitCommitMessagePolicy {
 
 export type GitCommitMessagePolicyMode = "keiko-conventional" | "repository-native";
 
-export const GIT_COMMIT_MESSAGE_POLICY_MODES: readonly GitCommitMessagePolicyMode[] = [
-  "keiko-conventional",
-  "repository-native",
-] as const;
+export const GIT_COMMIT_MESSAGE_POLICY_MODES: readonly GitCommitMessagePolicyMode[] = Object.freeze(
+  ["keiko-conventional", "repository-native"] as const,
+);
 
 // ─── Violation vocabulary (AC2) ─────────────────────────────────────────────────────────────────
 
@@ -57,14 +58,15 @@ export type GitCommitMessageViolationCode =
   | "missing-issue-key"
   | "missing-signoff";
 
-export const GIT_COMMIT_MESSAGE_VIOLATION_CODES: readonly GitCommitMessageViolationCode[] = [
-  "empty-subject",
-  "missing-conventional-prefix",
-  "disallowed-type",
-  "subject-too-long",
-  "missing-issue-key",
-  "missing-signoff",
-] as const;
+export const GIT_COMMIT_MESSAGE_VIOLATION_CODES: readonly GitCommitMessageViolationCode[] =
+  Object.freeze([
+    "empty-subject",
+    "missing-conventional-prefix",
+    "disallowed-type",
+    "subject-too-long",
+    "missing-issue-key",
+    "missing-signoff",
+  ] as const);
 
 // ─── Validation result (content-free: codes only, never message text) ────────────────────────────
 
@@ -74,7 +76,7 @@ export type GitCommitMessageValidation =
 
 // ─── Default policy (matches this repository's own commit style) ──────────────────────────────────
 
-export const KEIKO_DEFAULT_COMMIT_MESSAGE_POLICY: GitCommitMessagePolicy = {
+export const KEIKO_DEFAULT_COMMIT_MESSAGE_POLICY: GitCommitMessagePolicy = deepFreeze({
   conventionalCommit: {
     enabled: true,
     allowedTypes: [
@@ -94,17 +96,17 @@ export const KEIKO_DEFAULT_COMMIT_MESSAGE_POLICY: GitCommitMessagePolicy = {
   requireIssueKey: { enabled: false, pattern: "" },
   requireSignoff: false,
   subjectMaxLength: 72,
-};
+});
 
 // Repository Native disables only Keiko's opinionated formatting checks. The route boundary still
 // rejects an empty message and credential-shaped input, while repository hooks remain authoritative.
 // It is intentionally a closed mode rather than a browser-authorable regex/rule surface.
-export const REPOSITORY_NATIVE_COMMIT_MESSAGE_POLICY: GitCommitMessagePolicy = {
+export const REPOSITORY_NATIVE_COMMIT_MESSAGE_POLICY: GitCommitMessagePolicy = deepFreeze({
   conventionalCommit: { enabled: false, allowedTypes: [] },
   requireIssueKey: { enabled: false, pattern: "" },
   requireSignoff: false,
   subjectMaxLength: Number.MAX_SAFE_INTEGER,
-};
+});
 
 export function resolveGitCommitMessagePolicyMode(value: unknown): GitCommitMessagePolicyMode {
   return value === "repository-native" ? "repository-native" : "keiko-conventional";

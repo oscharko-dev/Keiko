@@ -243,7 +243,12 @@ function canonicalWorkspaceRootBodyIsValid(
 }
 
 export function isCanonicalWorkspaceRoot(value: unknown): value is string {
-  if (typeof value !== "string" || value.length === 0 || value.length > 4096) return false;
+  if (typeof value !== "string" || value.length === 0) return false;
+  // KEIKO-0776: bound in UTF-8 bytes (the on-disk representation) using the same shared cap the
+  // sibling isPortableWorkspaceRelativePath already applies; a raw .length check counted UTF-16
+  // code units and let a canonical root exceed the documented 4096-byte on-disk budget as soon as
+  // it contained multi-code-unit characters.
+  if (utf8ByteLength(value) > WORKSPACE_PORTABLE_PATH_MAX_BYTES) return false;
   if (value.includes("\0")) return false;
   const style = canonicalWorkspaceRootStyle(value);
   if (style === undefined) return false;

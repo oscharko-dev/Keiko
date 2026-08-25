@@ -20,6 +20,7 @@ export {
   DEFAULT_LIMITS,
   HARNESS_CODES,
   TERMINAL_STATES,
+  isTerminalHarnessState,
   type EditorAgentTurnInput,
   type ExplainPlanInput,
   type GenerateUnitTestsInput,

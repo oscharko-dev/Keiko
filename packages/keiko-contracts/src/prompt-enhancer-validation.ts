@@ -54,6 +54,11 @@ import {
   buildRecency,
 } from "./prompt-enhancer-grounding.js";
 import {
+  ASSUMPTION_TEMPLATES,
+  CLARIFICATION_TEMPLATES,
+  STRUCTURED_FORMATS,
+} from "./prompt-enhancer-analyzer.js";
+import {
   PROMPT_CRITIC_DIMENSIONS,
   isPromptCandidateRejectionReason,
   type PromptCandidateScorecard,
@@ -65,7 +70,6 @@ import {
   validatePromptSafetyAssessment,
   type PromptSafetyAssessment,
 } from "./prompt-enhancer-safety.js";
-import { ASSUMPTION_TEMPLATES, CLARIFICATION_TEMPLATES } from "./prompt-enhancer-analyzer.js";
 
 // ─── Result types ────────────────────────────────────────────────────────────────
 export interface ValidationOk<T> {
@@ -87,8 +91,6 @@ const PROMPT_LOCALE_MAX_CHARS = 35;
 const PROMPT_SIGNAL_CODE_MAX_CHARS = 128;
 const ENHANCED_PROMPT_FIELD_MAX_CHARS = 20_000;
 const ENHANCED_PROMPT_LIST_MAX = 256;
-const STRUCTURED_OUTPUT_FORMATS: ReadonlySet<string> = new Set(["json", "yaml", "csv", "table"]);
-
 const REQUEST_KEYS: ReadonlySet<string> = new Set([
   "schemaVersion",
   "requestId",
@@ -292,7 +294,8 @@ function validateOutputSchema(value: unknown, errors: string[]): void {
   } else if (
     typeof value.format === "string" &&
     PROMPT_OUTPUT_FORMATS.includes(value.format as (typeof PROMPT_OUTPUT_FORMATS)[number]) &&
-    value.structured !== STRUCTURED_OUTPUT_FORMATS.has(value.format)
+    value.structured !==
+      STRUCTURED_FORMATS.has(value.format as (typeof PROMPT_OUTPUT_FORMATS)[number])
   ) {
     errors.push("outputSchema.structured must match the selected output format");
   }

@@ -77,18 +77,8 @@ function prState(over: Partial<GitDeliveryPullRequestState> = {}): GitDeliveryPu
 
 describe("metadata synthesis", () => {
   it("is deterministic for identical inputs", () => {
-    const a = synthesizePullRequestMetadata(
-      NARRATIVE,
-      RISK_READY,
-      "claude/issue-477-pr-center",
-      "dev",
-    );
-    const b = synthesizePullRequestMetadata(
-      NARRATIVE,
-      RISK_READY,
-      "claude/issue-477-pr-center",
-      "dev",
-    );
+    const a = synthesizePullRequestMetadata(NARRATIVE, RISK_READY, "claude/issue-477-pr-center");
+    const b = synthesizePullRequestMetadata(NARRATIVE, RISK_READY, "claude/issue-477-pr-center");
     expect(a).toEqual(b);
   });
 
@@ -97,7 +87,6 @@ describe("metadata synthesis", () => {
       NARRATIVE,
       RISK_READY,
       "claude/issue-477-github-pr-command-center",
-      "dev",
     );
     expect(draft.composedTitle).toBe("feat(keiko-server): github pr command center");
     expect(draft.composedTitle.length).toBeLessThanOrEqual(72);
@@ -111,7 +100,7 @@ describe("metadata synthesis", () => {
       areas: ["keiko-server", "keiko-ui"],
       changeType: "mixed",
     };
-    const draft = synthesizePullRequestMetadata(multi, RISK_READY, "fix/1234-thing", "dev");
+    const draft = synthesizePullRequestMetadata(multi, RISK_READY, "fix/1234-thing");
     expect(draft.composedTitle).toBe("mixed: thing");
     expect(draft.summarySection.primaryArea).toBeUndefined();
   });
@@ -121,10 +110,9 @@ describe("metadata synthesis", () => {
       NARRATIVE,
       { ...RISK_READY, policyOutcome: "approval-gated" },
       "x/y",
-      "main",
     );
     expect(gated.riskSection.requiresApproval).toBe(true);
-    const plain = synthesizePullRequestMetadata(NARRATIVE, RISK_READY, "x/y", "dev");
+    const plain = synthesizePullRequestMetadata(NARRATIVE, RISK_READY, "x/y");
     expect(plain.riskSection.requiresApproval).toBe(false);
   });
 
@@ -133,9 +121,25 @@ describe("metadata synthesis", () => {
       NARRATIVE,
       RISK_READY,
       "feat/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-      "dev",
     );
     expect(draft.composedTitle.length).toBeLessThanOrEqual(72);
+  });
+
+  // KEIKO-0829: a title whose 72nd UTF-16 unit lands INSIDE a surrogate pair used to be
+  // slice()-truncated at that unit and could emit a lone surrogate. Codepoint-splitting
+  // preserves whole graphemes; the last character of the returned title must never be a lone
+  // half of a surrogate pair.
+  it("does not emit a lone surrogate when the clamp cut point falls inside an astral character (KEIKO-0829)", () => {
+    // 66 ASCII chars + 4 astral chars (2 UTF-16 units each) = 74 UTF-16 units. UTF-16 slice(0, 72)
+    // would cut mid-pair inside the 3rd astral character.
+    const branch = `feat/${"a".repeat(60)}🎯🎯🎯🎯`;
+    const draft = synthesizePullRequestMetadata(NARRATIVE, RISK_READY, branch);
+    const last = draft.composedTitle.at(-1);
+    if (last !== undefined) {
+      const lastCode = last.codePointAt(0) ?? 0;
+      const isLoneSurrogate = lastCode >= 0xd800 && lastCode <= 0xdfff;
+      expect(isLoneSurrogate).toBe(false);
+    }
   });
 });
 

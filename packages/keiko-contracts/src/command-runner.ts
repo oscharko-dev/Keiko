@@ -9,6 +9,12 @@
 // never gains process, shell, or filesystem authority.
 
 import { deepFreeze } from "./deep-freeze.js";
+import {
+  isNonEmptyString,
+  isOneOf,
+  isRecord,
+  validateRunResultCore,
+} from "./run-result-validation.js";
 import type { CommandRule } from "./tools.js";
 
 export const COMMAND_RUNNER_SCHEMA_VERSION = "1" as const;
@@ -187,14 +193,6 @@ export interface CommandTaskRunResultParseFail {
 
 export type CommandTaskRunResultParse = CommandTaskRunResultParseOk | CommandTaskRunResultParseFail;
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function isOneOf<T extends string>(value: unknown, allowed: readonly T[]): value is T {
-  return typeof value === "string" && (allowed as readonly string[]).includes(value);
-}
-
 // Bound the identifier fields at the parse boundary so an oversized or non-token value cannot reach
 // the manager, the audit ledger, or the SSE fan-out. The 16 KB body cap is the outer backstop; these
 // are the precise per-field limits.
@@ -212,10 +210,6 @@ const TASK_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]*$/u;
 // line or an SSE `data:` field is a log-injection / frame-splitting primitive.
 // eslint-disable-next-line no-control-regex -- rejecting C0/DEL in an identifier is the point
 const CONTROL_CHAR_PATTERN = /[\u0000-\u001f\u007f]/u;
-
-function isNonEmptyString(value: unknown): value is string {
-  return typeof value === "string" && value.length > 0;
-}
 
 // Closed key sets. Every peer validator in this territory enforces one — an unexpected field on a
 // documented content-free contract must never ride through — and these four did not, so a payload
@@ -374,47 +368,26 @@ export function validateCommandTaskCatalog(value: unknown): CommandTaskCatalogPa
   return { ok: true, value: value as unknown as CommandTaskCatalog };
 }
 
-function validateResultScalars(value: Record<string, unknown>, errors: string[]): void {
-  if (value.schemaVersion !== COMMAND_RUNNER_SCHEMA_VERSION)
-    errors.push("schemaVersion is invalid");
-  if (!isNonEmptyString(value.runId)) errors.push("runId must be a non-empty string");
-  if (!isNonEmptyString(value.taskId)) errors.push("taskId must be a non-empty string");
-  if (!isOneOf(value.kind, COMMAND_TASK_KINDS)) errors.push("kind is invalid");
-  if (!isOneOf(value.failureReason, COMMAND_FAILURE_REASONS))
-    errors.push("failureReason is invalid");
-}
-
-function validateResultNumbers(value: Record<string, unknown>, errors: string[]): void {
-  const exitCode = value.exitCode;
-  if (exitCode !== null && (typeof exitCode !== "number" || !Number.isInteger(exitCode))) {
-    errors.push("exitCode must be an integer or null");
-  }
-  const durationMs = value.durationMs;
-  if (typeof durationMs !== "number" || !Number.isFinite(durationMs) || durationMs < 0) {
-    errors.push("durationMs must be a non-negative finite number");
-  }
-}
-
-function validateResultFlagsAndText(value: Record<string, unknown>, errors: string[]): void {
-  if (typeof value.truncated !== "boolean") errors.push("truncated must be a boolean");
-  if (typeof value.timedOut !== "boolean") errors.push("timedOut must be a boolean");
-  if (typeof value.stdout !== "string") errors.push("stdout must be a string");
-  if (typeof value.stderr !== "string") errors.push("stderr must be a string");
-}
-
-function validateResultRuntime(value: Record<string, unknown>, errors: string[]): void {
-  validateResultNumbers(value, errors);
-  validateResultFlagsAndText(value, errors);
-}
-
+// KEIKO-0601: the field-by-field scalar/runtime checks below (schemaVersion, runId, taskId, kind,
+// failureReason, exitCode, durationMs, truncated, timedOut, stdout, stderr) are shared with
+// container-runtime.ts's validateContainerRunResult via run-result-validation.ts's
+// validateRunResultCore, parameterized by this executor's own schema version, COMMAND_TASK_KINDS and
+// COMMAND_FAILURE_REASONS. Only the unknown-key rejection above is command-runner-specific.
 export function validateCommandTaskRunResult(value: unknown): CommandTaskRunResultParse {
   const errors: string[] = [];
   if (!isRecord(value)) {
     return { ok: false, errors: ["result must be an object"] };
   }
   errors.push(...unknownKeys(value, RUN_RESULT_KEYS, "result"));
-  validateResultScalars(value, errors);
-  validateResultRuntime(value, errors);
+  validateRunResultCore(
+    value,
+    {
+      schemaVersion: COMMAND_RUNNER_SCHEMA_VERSION,
+      kinds: COMMAND_TASK_KINDS,
+      failureReasons: COMMAND_FAILURE_REASONS,
+    },
+    errors,
+  );
   if (errors.length > 0) {
     return { ok: false, errors };
   }

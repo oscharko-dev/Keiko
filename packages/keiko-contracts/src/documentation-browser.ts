@@ -295,8 +295,11 @@ export function classifyDocumentationTarget(raw: unknown): DocumentationTargetCl
 
 // ─── Low-level error mapping ────────────────────────────────────────────────────────
 
+// KEIKO-0657: read the lookup on a null-prototype object so untrusted keys like `constructor`,
+// `toString`, or `__proto__` return undefined and fall through to the documented
+// "navigation-failed" default instead of resolving to a prototype method.
 const ERROR_CODE_TO_REASON: Readonly<Record<string, DocumentationNavigationReason>> = Object.freeze(
-  {
+  Object.assign(Object.create(null) as Record<string, DocumentationNavigationReason>, {
     // keiko-tools BrowserToolError codes
     BROWSER_UNAVAILABLE: "browser-backend-unavailable",
     CHROME_UNREACHABLE: "browser-backend-unavailable",
@@ -316,7 +319,7 @@ const ERROR_CODE_TO_REASON: Readonly<Record<string, DocumentationNavigationReaso
     ENETUNREACH: "proxy-or-firewall-blocked",
     ETIMEDOUT: "request-timed-out",
     UND_ERR_CONNECT_TIMEOUT: "request-timed-out",
-  },
+  } satisfies Record<string, DocumentationNavigationReason>),
 );
 
 /**

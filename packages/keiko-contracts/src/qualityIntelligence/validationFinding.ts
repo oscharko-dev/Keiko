@@ -16,56 +16,38 @@ import type {
 } from "./ids.js";
 import type { QualityIntelligenceConfidence } from "./coverageMap.js";
 
+// KEIKO-0522: const-first + `(typeof X)[number]` (matches retentionPolicy.ts / testQualityRubric.ts)
+// so each union type can never drift from the enumerable array it is derived from.
+export const QUALITY_INTELLIGENCE_VALIDATION_FINDING_KINDS = [
+  "logic-defect",
+  "faithfulness-defect",
+  "semantic-defect",
+  "mutation-defect",
+  "policy-violation",
+  "manual-rejection",
+  "coverage-gap",
+  "requirement-quality",
+  "test-quality",
+] as const;
+
 export type QualityIntelligenceValidationFindingKind =
-  | "logic-defect"
-  | "faithfulness-defect"
-  | "semantic-defect"
-  | "mutation-defect"
-  | "policy-violation"
-  | "manual-rejection"
-  | "coverage-gap"
-  | "requirement-quality"
-  | "test-quality";
+  (typeof QUALITY_INTELLIGENCE_VALIDATION_FINDING_KINDS)[number];
 
-export const QUALITY_INTELLIGENCE_VALIDATION_FINDING_KINDS: readonly QualityIntelligenceValidationFindingKind[] =
-  [
-    "logic-defect",
-    "faithfulness-defect",
-    "semantic-defect",
-    "mutation-defect",
-    "policy-violation",
-    "manual-rejection",
-    "coverage-gap",
-    "requirement-quality",
-    "test-quality",
-  ] as const;
-
-export type QualityIntelligenceSeverity = "critical" | "high" | "medium" | "low";
+export const QUALITY_INTELLIGENCE_REQUIREMENT_QUALITY_CATEGORIES = [
+  "ambiguity",
+  "non-verifiable",
+  "open-placeholder",
+  "compound-requirement",
+  "weak-modality",
+  "cross-atom-contradiction",
+] as const;
 
 export type QualityIntelligenceRequirementQualityCategory =
-  | "ambiguity"
-  | "non-verifiable"
-  | "open-placeholder"
-  | "compound-requirement"
-  | "weak-modality"
-  | "cross-atom-contradiction";
+  (typeof QUALITY_INTELLIGENCE_REQUIREMENT_QUALITY_CATEGORIES)[number];
 
-export const QUALITY_INTELLIGENCE_REQUIREMENT_QUALITY_CATEGORIES: readonly QualityIntelligenceRequirementQualityCategory[] =
-  [
-    "ambiguity",
-    "non-verifiable",
-    "open-placeholder",
-    "compound-requirement",
-    "weak-modality",
-    "cross-atom-contradiction",
-  ] as const;
+export const QUALITY_INTELLIGENCE_SEVERITIES = ["critical", "high", "medium", "low"] as const;
 
-export const QUALITY_INTELLIGENCE_SEVERITIES: readonly QualityIntelligenceSeverity[] = [
-  "critical",
-  "high",
-  "medium",
-  "low",
-] as const;
+export type QualityIntelligenceSeverity = (typeof QUALITY_INTELLIGENCE_SEVERITIES)[number];
 
 /**
  * Total ordering on severity, highest-first. `critical` < `high` < `medium` < `low`

@@ -26,6 +26,7 @@ export type {
   QualityIntelligenceSourceEnvelopeId,
   QualityIntelligenceEvidenceAtomId,
   QualityIntelligenceAuditSummaryId,
+  QualityIntelligenceHandoffId,
 } from "./ids.js";
 export {
   asQualityIntelligenceRunId,
@@ -37,6 +38,7 @@ export {
   asQualityIntelligenceSourceEnvelopeId,
   asQualityIntelligenceEvidenceAtomId,
   asQualityIntelligenceAuditSummaryId,
+  asQualityIntelligenceHandoffId,
   validateQualityIntelligenceIdString,
 } from "./ids.js";
 
@@ -193,6 +195,7 @@ export type {
 export {
   QUALITY_INTELLIGENCE_EXPORT_ADAPTERS,
   QUALITY_INTELLIGENCE_TMS_ADAPTERS,
+  QUALITY_INTELLIGENCE_MODEL_PARAMETER_ALLOWLIST,
   assertExportBundleInvariant,
 } from "./exportBundle.js";
 
@@ -210,7 +213,11 @@ export type {
   QualityIntelligenceHandoffChatMessageRef,
   QualityIntelligenceConversationCenterHandoff,
 } from "./handoffEnvelope.js";
-export { QUALITY_INTELLIGENCE_HANDOFF_PROMPTED_ACTIONS } from "./handoffEnvelope.js";
+export {
+  QUALITY_INTELLIGENCE_HANDOFF_PROMPTED_ACTIONS,
+  QUALITY_INTELLIGENCE_HANDOFF_MAX_SOURCE_ENVELOPE_IDS,
+  assertQualityIntelligenceConversationCenterHandoffInvariant,
+} from "./handoffEnvelope.js";
 
 // ─── Test-quality rubric (Epic #736, Issue #746) ─────────────────────────────
 export type {
@@ -238,7 +245,9 @@ export type {
   QualityIntelligenceUiDriftMetadata,
   QualityIntelligenceQualityDiagnostics,
   QualityIntelligenceUiCandidate,
+  QualityIntelligenceUiCandidateQualityVerdict,
   QualityIntelligenceInlineSourceKind,
+  QualityIntelligenceAdfNode,
   QualityIntelligenceRequirementsSource,
   QualityIntelligenceWorkspaceSource,
   QualityIntelligenceFileSource,

@@ -720,7 +720,9 @@ type PositionOperation = Extract<
   | "signatureHelp"
 >;
 
-type BaseDocumentOperation = Extract<LanguageServiceOperation, "diagnostics" | "symbols">;
+// KEIKO-0950: BaseDocumentOperation and its supporting BASE_DOCUMENT_OPERATIONS table were only
+// consumed by a dead if-branch in assembleValidatedRequest that returned the same shape as the
+// fallthrough. Removed with the branch.
 
 const POSITION_OPERATIONS: readonly PositionOperation[] = [
   "completion",
@@ -733,11 +735,6 @@ const POSITION_OPERATIONS: readonly PositionOperation[] = [
   "renamePrepare",
   "renameApply",
   "signatureHelp",
-] as const;
-
-const BASE_DOCUMENT_OPERATIONS: readonly BaseDocumentOperation[] = [
-  "diagnostics",
-  "symbols",
 ] as const;
 
 function collectBaseErrors(value: Record<string, unknown>): string[] {
@@ -760,12 +757,6 @@ function collectBaseErrors(value: Record<string, unknown>): string[] {
 
 function isPositionOperation(operation: LanguageServiceOperation): operation is PositionOperation {
   return POSITION_OPERATIONS.includes(operation as PositionOperation);
-}
-
-function isBaseDocumentOperation(
-  operation: LanguageServiceOperation,
-): operation is BaseDocumentOperation {
-  return BASE_DOCUMENT_OPERATIONS.includes(operation as BaseDocumentOperation);
 }
 
 function isLanguageDiagnostics(value: unknown): value is readonly LanguageDiagnostic[] {
@@ -891,9 +882,9 @@ function assembleValidatedRequest(
   if (operation === "formatting") {
     return assembleFormattingRequest(root, document, value);
   }
-  if (isBaseDocumentOperation(operation)) {
-    return { operation, root, document };
-  }
+  // KEIKO-0950: the previous `if (isBaseDocumentOperation(operation)) { return {...}; }` block
+  // returned the same shape as the fallthrough — a dead branch. Removed together with the
+  // unused BaseDocumentOperation type predicate and its supporting table.
   return { operation, root, document };
 }
 

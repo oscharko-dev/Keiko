@@ -88,6 +88,44 @@ function isNonNegativeInteger(input: unknown): input is number {
   return typeof input === "number" && Number.isInteger(input) && input >= 0;
 }
 
+// KEIKO-0904: bound a remote URL string on the wire in both length and content. Reject a URL
+// carrying embedded credentials (userinfo) so a leaked fetchUrl/pushUrl cannot cross the redaction
+// boundary the summary path already enforces by rejecting URLs outright. Length bounded at 2048
+// bytes — well above the longest real Git remote URL in the wild and short enough that the
+// validator cannot be turned into a DoS amplifier by a very long echoed string.
+const REMOTE_URL_MAX_CHARS = 2_048;
+
+function isSafeRemoteUrl(value: string): boolean {
+  if (value.length === 0 || value.length > REMOTE_URL_MAX_CHARS) return false;
+  let parsed: URL;
+  try {
+    parsed = new URL(value);
+  } catch {
+    return false;
+  }
+  if (parsed.username !== "" || parsed.password !== "") return false;
+  return true;
+}
+
+// KEIKO-0904: keep the per-field URL validation in its own helper so validateRemote stays under
+// the complexity cap.
+function validateRemoteUrl(
+  input: Record<string, unknown>,
+  field: "fetchUrl" | "pushUrl",
+  reasons: string[],
+  index: number,
+): void {
+  const value = input[field];
+  if (value === undefined) return;
+  if (!isString(value)) {
+    reasons.push(`remotes[${String(index)}].${field} must be a string when present`);
+    return;
+  }
+  if (!isSafeRemoteUrl(value)) {
+    reasons.push(`remotes[${String(index)}].${field} is not a redaction-safe URL`);
+  }
+}
+
 function validateRemote(
   input: unknown,
   reasons: string[],
@@ -108,12 +146,8 @@ function validateRemote(
     }
     return;
   }
-  if (input.fetchUrl !== undefined && !isString(input.fetchUrl)) {
-    reasons.push(`remotes[${String(index)}].fetchUrl must be a string when present`);
-  }
-  if (input.pushUrl !== undefined && !isString(input.pushUrl)) {
-    reasons.push(`remotes[${String(index)}].pushUrl must be a string when present`);
-  }
+  validateRemoteUrl(input, "fetchUrl", reasons, index);
+  validateRemoteUrl(input, "pushUrl", reasons, index);
 }
 
 function validateRemotesArray(

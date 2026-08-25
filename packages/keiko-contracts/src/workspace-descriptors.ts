@@ -103,7 +103,7 @@ export interface WorkspaceDescriptorMeta {
 
 // ─── Closed-set membership (for the validator) ────────────────────────────
 
-export const WORKSPACE_LIFECYCLE_STATES: readonly WorkspaceObjectLifecycleState[] = [
+export const WORKSPACE_LIFECYCLE_STATES: readonly WorkspaceObjectLifecycleState[] = Object.freeze([
   "idle",
   "live",
   "error",
@@ -142,9 +142,9 @@ export const WORKSPACE_LIFECYCLE_STATES: readonly WorkspaceObjectLifecycleState[
   "installed",
   "disabled",
   "enabled",
-];
+]);
 
-export const WORKSPACE_TRUST_BOUNDARIES: readonly WorkspaceObjectTrustBoundary[] = [
+export const WORKSPACE_TRUST_BOUNDARIES: readonly WorkspaceObjectTrustBoundary[] = Object.freeze([
   "ui",
   "fs",
   "tool",
@@ -152,23 +152,24 @@ export const WORKSPACE_TRUST_BOUNDARIES: readonly WorkspaceObjectTrustBoundary[]
   "evidence",
   "memory",
   "network",
-];
+]);
 
-export const WORKSPACE_AUTHORITY_REQUIREMENTS: readonly WorkspaceObjectAuthority[] = [
+export const WORKSPACE_AUTHORITY_REQUIREMENTS: readonly WorkspaceObjectAuthority[] = Object.freeze([
   "ui-only",
   "user",
   "user-confirm",
   "read-only",
-];
+]);
 
-export const WORKSPACE_PERSISTENCE_EXPECTATIONS: readonly WorkspaceObjectPersistence[] = [
-  "transient",
-  "durable.ui",
-  "durable.config",
-  "evidence-reference",
-  "fs-reference",
-  "memory-reference",
-];
+export const WORKSPACE_PERSISTENCE_EXPECTATIONS: readonly WorkspaceObjectPersistence[] =
+  Object.freeze([
+    "transient",
+    "durable.ui",
+    "durable.config",
+    "evidence-reference",
+    "fs-reference",
+    "memory-reference",
+  ]);
 
 // ─── Validation error type ────────────────────────────────────────────────
 

@@ -31,6 +31,13 @@ export interface GitCommitChangeSummary {
   readonly areaCount: number;
   readonly areas: readonly string[];
   readonly touchesTests: boolean;
+  /**
+   * KEIKO-0816: true when EVERY staged path is a test file (the change contains no production
+   * source). Optional so producers can be upgraded independently — the analyzer treats `undefined`
+   * as "unknown, fall back to the legacy touchesTests heuristic" and treats `false` as an explicit
+   * "at least one non-test file is staged", suppressing the `test` type suggestion.
+   */
+  readonly testsOnly?: boolean;
 }
 
 // ─── Quality-warning vocabulary ───────────────────────────────────────────────────────────────────
@@ -136,7 +143,13 @@ function suggestedTypeFor(
   if (scope === undefined) {
     return undefined;
   }
-  if (summary.touchesTests) {
+  // KEIKO-0816: `touchesTests: true` used to unconditionally suggest "test", contradicting the
+  // documented heuristic that reserves the "test" type for tests-ONLY changes. A mixed change that
+  // adds a production file and its test should suggest the type of the production change (e.g.
+  // "docs" or fall through to undefined), never "test". Respect an explicit testsOnly:false to
+  // suppress the suggestion; treat undefined as unknown and preserve the legacy behaviour so
+  // existing producers keep working.
+  if (summary.touchesTests && summary.testsOnly !== false) {
     return "test";
   }
   if (scope === "docs") {
@@ -289,7 +302,8 @@ export function isGitCommitChangeSummary(value: unknown): value is GitCommitChan
     isNonNegativeInteger(value.stagedFileCount) &&
     isNonNegativeInteger(value.areaCount) &&
     isStringArray(value.areas) &&
-    isBoolean(value.touchesTests)
+    isBoolean(value.touchesTests) &&
+    (value.testsOnly === undefined || isBoolean(value.testsOnly))
   );
 }
 

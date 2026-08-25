@@ -870,6 +870,22 @@ export function validateWorkspaceBoundRootV2(input: unknown): TaskWorkspaceValid
   }
 }
 
+// KEIKO-0952: the previous shape called boundRootsAreValid(input.roots) and
+// isWorkspaceRootRef(input.focusedRootRef) TWICE — once inside the array-literal check and again
+// inside the second guard. That doubled the deep guards' cost, and the `every(Boolean)` array
+// literal also erased TypeScript's control-flow narrowing. Sequential early returns run each
+// deep guard once and carry the narrowed input.roots/focusedRootRef into the final `some(...)`.
+function bindingV2ScalarFieldsAreValid(input: Readonly<Record<string, unknown>>): boolean {
+  if (input.schemaVersion !== WORKSPACE_BINDING_V2_SCHEMA_VERSION) return false;
+  if (typeof input.workspaceId !== "string" || input.workspaceId.length === 0) return false;
+  if (typeof input.taskId !== "string" || input.taskId.length === 0) return false;
+  if (!isWorkspaceManifestRef(input.manifestRef)) return false;
+  if (!Number.isSafeInteger(input.manifestRevision) || (input.manifestRevision as number) < 0) {
+    return false;
+  }
+  return isWorkspaceManifestDigest(input.manifestDigest);
+}
+
 function isWorkspaceBindingV2(input: unknown): input is WorkspaceBindingV2 {
   if (
     !isWorkspaceRecord(input) ||
@@ -877,23 +893,9 @@ function isWorkspaceBindingV2(input: unknown): input is WorkspaceBindingV2 {
   ) {
     return false;
   }
-  const fieldsValid = [
-    input.schemaVersion === WORKSPACE_BINDING_V2_SCHEMA_VERSION,
-    typeof input.workspaceId === "string" && input.workspaceId.length > 0,
-    typeof input.taskId === "string" && input.taskId.length > 0,
-    isWorkspaceManifestRef(input.manifestRef),
-    Number.isSafeInteger(input.manifestRevision) && (input.manifestRevision as number) >= 0,
-    isWorkspaceManifestDigest(input.manifestDigest),
-    boundRootsAreValid(input.roots),
-    isWorkspaceRootRef(input.focusedRootRef),
-  ].every(Boolean);
-  if (
-    !fieldsValid ||
-    !boundRootsAreValid(input.roots) ||
-    !isWorkspaceRootRef(input.focusedRootRef)
-  ) {
-    return false;
-  }
+  if (!bindingV2ScalarFieldsAreValid(input)) return false;
+  if (!boundRootsAreValid(input.roots)) return false;
+  if (!isWorkspaceRootRef(input.focusedRootRef)) return false;
   return input.roots.some((root): boolean => root.rootRef === input.focusedRootRef);
 }
 

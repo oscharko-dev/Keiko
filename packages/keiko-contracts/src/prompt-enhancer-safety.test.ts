@@ -10,6 +10,7 @@ import {
   assessEnhancedPromptStructuralSafety,
   collectProhibitedPromptTextFindings,
   leastPrivilegeForAnalysis,
+  BASELINE_LEAST_PRIVILEGE,
   requiresHumanReviewForAnalysis,
   summarizePromptSafety,
   validatePromptSafetyAssessment,
@@ -496,6 +497,20 @@ describe("validatePromptSafetyAssessment", () => {
       decision: "requires-human-review",
       verificationStatus: "passed-with-review",
       requiresHumanReview: false,
+    });
+    expect(result.ok).toBe(false);
+  });
+
+  it("rejects an assessment that carries require-human-approval while requiresHumanReview is false (KEIKO-0732)", () => {
+    // The converse of "rejects a human-review assessment missing the require-human-approval
+    // constraint" above: leastPrivilegeForAnalysis (the sole honest producer) never emits this
+    // combination, but the validator must still reject it if a wire payload claims it. Only
+    // leastPrivilege is overridden -- requiresHumanReview and decision stay at validAssessment()'s
+    // baseline (false / "accepted") so this exercises exactly the new converse branch and nothing
+    // else in validateHumanReviewConstraint.
+    const result = validatePromptSafetyAssessment({
+      ...validAssessment(),
+      leastPrivilege: [...BASELINE_LEAST_PRIVILEGE, "require-human-approval"],
     });
     expect(result.ok).toBe(false);
   });

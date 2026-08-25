@@ -4,6 +4,7 @@
 
 import { LANGUAGE_SERVICE_OPERATIONS, type LanguageServiceOperation } from "./language-service.js";
 import { MANAGED_LSP_LANGUAGES, type ManagedLspLanguage } from "./managed-lsp-activation.js";
+import { parseSafely } from "./managed-lsp-parse-safely.js";
 
 export const MANAGED_LSP_CAPABILITY_SCHEMA_VERSION = "1" as const;
 export const MANAGED_LSP_SEMANTIC_TOKEN_MAX_TYPES = 64;
@@ -199,21 +200,6 @@ function isOperationArray(value: unknown): value is readonly LanguageServiceOper
     value.every(isLanguageOperation) &&
     new Set(value).size === value.length
   );
-}
-
-function parseSafely<T>(
-  parser: () => ManagedLspCapabilityParseResult<T>,
-): ManagedLspCapabilityParseResult<T> {
-  try {
-    return parser();
-  } catch (error: unknown) {
-    return {
-      ok: false,
-      errors: [
-        `payload could not be inspected: ${error instanceof Error ? error.name : "unknown"}`,
-      ],
-    };
-  }
 }
 
 function parseCandidateUnsafe(

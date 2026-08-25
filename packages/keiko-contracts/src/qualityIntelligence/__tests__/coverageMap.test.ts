@@ -74,6 +74,32 @@ describe("assertCoverageMapInvariant", () => {
       assertCoverageMapInvariant(map);
     }).toThrow(RangeError);
   });
+
+  // KEIKO-0895: a duplicate atomId would double-count that atom's coverage in every downstream
+  // percentage. The invariant now rejects it explicitly at the naming boundary.
+  it("rejects a map whose mappings share the same atomId (KEIKO-0895)", () => {
+    const map: QualityIntelligenceCoverageMap = {
+      id: asQualityIntelligenceCoverageMapId("cov-1"),
+      runId: asQualityIntelligenceRunId("run-1"),
+      mappings: [
+        {
+          atomId: asQualityIntelligenceEvidenceAtomId("atom-dup"),
+          candidateIds: [asQualityIntelligenceTestCaseId("cand-1")],
+          coverageKind: "manual",
+          confidence: 1,
+        },
+        {
+          atomId: asQualityIntelligenceEvidenceAtomId("atom-dup"),
+          candidateIds: [asQualityIntelligenceTestCaseId("cand-2")],
+          coverageKind: "manual",
+          confidence: 0.5,
+        },
+      ],
+    };
+    expect(() => {
+      assertCoverageMapInvariant(map);
+    }).toThrow(/duplicates atomId/);
+  });
 });
 
 // KEIKO-0185: `isQualityIntelligenceConfidence` is the single exported guard shared by every

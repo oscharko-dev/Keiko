@@ -15,7 +15,11 @@ import type { GitUpstreamSummary } from "./git-repository-summary.js";
 export const GIT_SYNC_SCHEMA_VERSION = "1" as const;
 
 export type GitSyncOperation = "fetch" | "pull";
-export const GIT_SYNC_OPERATIONS: readonly GitSyncOperation[] = ["fetch", "pull"];
+// Object.freeze (KEIKO-0879): the `readonly GitSyncOperation[]` annotation is compile-time only.
+export const GIT_SYNC_OPERATIONS: readonly GitSyncOperation[] = Object.freeze([
+  "fetch",
+  "pull",
+] as const satisfies readonly GitSyncOperation[]);
 
 // Evidence-friendly outcome taxonomy:
 export type GitSyncOutcome =
@@ -34,7 +38,8 @@ export type GitSyncOutcome =
   | "git-missing"
   | "unsafe-repository"
   | "git-error";
-export const GIT_SYNC_OUTCOMES: readonly GitSyncOutcome[] = [
+// Object.freeze (KEIKO-0879): the `readonly GitSyncOutcome[]` annotation is compile-time only.
+export const GIT_SYNC_OUTCOMES: readonly GitSyncOutcome[] = Object.freeze([
   "succeeded",
   "up-to-date",
   "no-remote",
@@ -50,7 +55,7 @@ export const GIT_SYNC_OUTCOMES: readonly GitSyncOutcome[] = [
   "git-missing",
   "unsafe-repository",
   "git-error",
-];
+] as const satisfies readonly GitSyncOutcome[]);
 
 // Preview blocked reasons (read-only readiness):
 export type GitSyncBlockReason =
@@ -60,14 +65,15 @@ export type GitSyncBlockReason =
   | "git-missing"
   | "unsafe-repository"
   | "unavailable";
-export const GIT_SYNC_BLOCK_REASONS: readonly GitSyncBlockReason[] = [
+// Object.freeze (KEIKO-0879): the `readonly GitSyncBlockReason[]` annotation is compile-time only.
+export const GIT_SYNC_BLOCK_REASONS: readonly GitSyncBlockReason[] = Object.freeze([
   "no-remote",
   "no-upstream",
   "detached-head",
   "git-missing",
   "unsafe-repository",
   "unavailable",
-];
+] as const satisfies readonly GitSyncBlockReason[]);
 
 export interface GitSyncExecuteRequest {
   readonly schemaVersion: typeof GIT_SYNC_SCHEMA_VERSION;

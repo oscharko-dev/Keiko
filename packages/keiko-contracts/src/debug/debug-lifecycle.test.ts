@@ -73,6 +73,10 @@ describe("debug lifecycle evidence", () => {
     expect(isDebugLifecycleEvidence({ ...valid, ...replacement })).toBe(false);
   });
 
+  it("accepts a 128-character sessionId (SESSION_ID's documented max)", () => {
+    expect(isDebugLifecycleEvidence({ ...valid, sessionId: "a".repeat(128) })).toBe(true);
+  });
+
   it("accepts restart-throttled failure evidence as a closed terminal vocabulary", () => {
     expect(
       isDebugLifecycleEvidence({
@@ -121,12 +125,25 @@ describe("debug lifecycle evidence", () => {
     expect(isDebugLifecycleEvidence({ ...valid, [field]: value })).toBe(false);
   });
 
-  it.each(["eventKind", "state", "reason", "sessionId", "provisioningDigest"])(
-    "rejects a non-string %s",
-    (field) => {
-      expect(isDebugLifecycleEvidence({ ...valid, [field]: 1 })).toBe(false);
-    },
-  );
+  // All ten string-typed DebugLifecycleEvidence fields (KEIKO-0882) — the other four
+  // (timestampMs, activationRevision, outputAcceptedBytes, outputTruncatedEvents) are numeric and
+  // covered separately below.
+  it.each([
+    "schemaVersion",
+    "eventKind",
+    "sessionId",
+    "state",
+    "reason",
+    "targetKind",
+    "backend",
+    "network",
+    "filesystem",
+    "provisioningDigest",
+  ])("rejects a non-string %s", (field) => {
+    for (const value of [123, null, {}, []]) {
+      expect(isDebugLifecycleEvidence({ ...valid, [field]: value })).toBe(false);
+    }
+  });
 
   it.each(["timestampMs", "activationRevision", "outputAcceptedBytes", "outputTruncatedEvents"])(
     "requires a nonnegative safe integer for %s",

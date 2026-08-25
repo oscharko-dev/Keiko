@@ -16,7 +16,7 @@ import type {
   ContextProfile,
 } from "./context-engineering.js";
 import { validateContextAssemblyDiagnostics, validateContextCompactionRecord } from "./index.js";
-import { EVIDENCE_SCHEMA_VERSION } from "./evidence.js";
+import { DEFAULT_RETENTION, EVIDENCE_SCHEMA_VERSION } from "./evidence.js";
 import type { EvidenceManifest } from "./evidence.js";
 
 function happyProfile(): ContextProfile {
@@ -120,5 +120,24 @@ describe("EvidenceManifest contextAssembly? / compaction? additive fields", () =
   it("rejects an invalid compaction element via validateContextCompactionRecord", () => {
     const broken = { ...happyCompactionRecord(), laneId: "not-a-lane" };
     expect(validateContextCompactionRecord(broken).ok).toBe(false);
+  });
+});
+
+describe("KEIKO-0545 — DEFAULT_RETENTION is deeply frozen", () => {
+  // The module header calls DEFAULT_RETENTION a "frozen" table (line 2), but the object literal was
+  // only frozen at compile time; at runtime both the outer record and the nested maxRunsByPartition
+  // partition map were writable, so a caller of persist()/EvidenceStore (which default their
+  // `retention` parameter to this exact reference) could silently widen or shrink retention for the
+  // rest of the process.
+
+  it("freezes the outer record and the nested maxRunsByPartition map", () => {
+    expect(Object.isFrozen(DEFAULT_RETENTION)).toBe(true);
+    expect(Object.isFrozen(DEFAULT_RETENTION.maxRunsByPartition)).toBe(true);
+    expect(() => {
+      (DEFAULT_RETENTION as { maxRuns: number }).maxRuns = 999_999;
+    }).toThrow(TypeError);
+    expect(() => {
+      (DEFAULT_RETENTION.maxRunsByPartition as Record<string, number>)["chat-rag"] = 999_999;
+    }).toThrow(TypeError);
   });
 });

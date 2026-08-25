@@ -9,12 +9,14 @@ import {
 import {
   QUALITY_INTELLIGENCE_EXPORT_ADAPTER_TARGETS,
   QUALITY_INTELLIGENCE_EXPORT_ADAPTERS,
+  QUALITY_INTELLIGENCE_MODEL_PARAMETER_ALLOWLIST,
   QUALITY_INTELLIGENCE_TMS_ADAPTERS,
   assertExportBundleInvariant,
 } from "../exportBundle.js";
 import type {
   QualityIntelligenceExportAdapter,
   QualityIntelligenceExportBundle,
+  QualityIntelligenceExportModelProvenance,
 } from "../exportBundle.js";
 
 const HASH = "0".repeat(64);
@@ -129,5 +131,91 @@ describe("export adapter classification is total (KEIKO-0385)", () => {
         QUALITY_INTELLIGENCE_EXPORT_ADAPTER_TARGETS[adapter] === "tms",
       );
     }
+  });
+});
+
+// KEIKO-0603: seedUsed is now required (number | null, never absent) and modelParameters is
+// checked against an allow-list, following the completedAt required-nullable precedent
+// (bffWire.ts) and closing the redaction hole a bare Record<string, unknown> left open on the one
+// QI contract explicitly destined for an external TMS.
+describe("QualityIntelligenceExportModelProvenance (KEIKO-0603)", () => {
+  const bundleWithModelProvenance = (
+    modelProvenance: QualityIntelligenceExportModelProvenance,
+  ): QualityIntelligenceExportBundle => ({
+    ...makeBundle("csv", false),
+    modelProvenance,
+  });
+
+  const STAGE = { modelId: "m-1", provider: "test-provider", revision: "rev-1" } as const;
+
+  it("compiles and accepts seedUsed: null (no seed was used or recorded)", () => {
+    const bundle = bundleWithModelProvenance({
+      generation: STAGE,
+      judge: STAGE,
+      seedUsed: null,
+    });
+    expect(() => {
+      assertExportBundleInvariant(bundle);
+    }).not.toThrow();
+  });
+
+  it("compiles and accepts seedUsed: <number> (a specific seed was used)", () => {
+    const bundle = bundleWithModelProvenance({
+      generation: STAGE,
+      judge: STAGE,
+      seedUsed: 42,
+    });
+    expect(() => {
+      assertExportBundleInvariant(bundle);
+    }).not.toThrow();
+  });
+
+  it("accepts every real writer's key, both generation- and judge-side together (traced from generationPort.ts / judgePort.ts / modelRoutedTestDesign.ts)", () => {
+    const bundle = bundleWithModelProvenance({
+      generation: STAGE,
+      judge: STAGE,
+      seedUsed: 7,
+      modelParameters: {
+        temperature: 0,
+        topP: 1,
+        responseFormatEnforced: true,
+        responseFormat: "json_schema",
+        seed: 7,
+        judgeTemperature: 0,
+        judgeSeedUsed: true,
+        judgeSeed: 7,
+        judgeResponseFormat: "json_schema",
+        generationFallbackReason: "model routing unavailable",
+      },
+    });
+    expect(() => {
+      assertExportBundleInvariant(bundle);
+    }).not.toThrow();
+    // Every key exercised above must actually be on the allow-list this test relies on, or the
+    // test would be vacuous the moment the allow-list drifted out from under it.
+    for (const key of Object.keys(bundle.modelProvenance?.modelParameters ?? {})) {
+      expect(QUALITY_INTELLIGENCE_MODEL_PARAMETER_ALLOWLIST).toContain(key);
+    }
+  });
+
+  it("rejects a modelParameters key not on the allow-list (mustFailBeforeFix: apiKey)", () => {
+    // Before KEIKO-0603, modelParameters was an unconstrained Record<string, unknown> and this
+    // call did not throw at all -- any key, including one shaped like a credential, passed
+    // assertExportBundleInvariant unchanged.
+    const bundle = bundleWithModelProvenance({
+      generation: STAGE,
+      judge: STAGE,
+      seedUsed: null,
+      modelParameters: { apiKey: "x" },
+    });
+    expect(() => {
+      assertExportBundleInvariant(bundle);
+    }).toThrow(Error);
+  });
+
+  it("accepts a bundle with no modelProvenance at all (the field itself stays optional)", () => {
+    expect(() => {
+      assertExportBundleInvariant(makeBundle("csv", false));
+    }).not.toThrow();
   });
 });

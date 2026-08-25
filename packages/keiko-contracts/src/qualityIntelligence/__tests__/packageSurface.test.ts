@@ -64,6 +64,12 @@ const requiredValueExports: readonly string[] = [
   "hasCanonicalSha256Hash",
   "looksLikeBrowserSafeSourceEnvelope",
   "resolveQualityIntelligenceRetentionPolicyId",
+  // KEIKO-0593: handoff-id branding and length ceiling on sourceEnvelopeIds.
+  "asQualityIntelligenceHandoffId",
+  "QUALITY_INTELLIGENCE_HANDOFF_MAX_SOURCE_ENVELOPE_IDS",
+  "assertQualityIntelligenceConversationCenterHandoffInvariant",
+  // KEIKO-0603: modelParameters allow-list enforced by assertExportBundleInvariant.
+  "QUALITY_INTELLIGENCE_MODEL_PARAMETER_ALLOWLIST",
 ];
 
 const QI_SOURCE_FILES: readonly string[] = [
@@ -211,6 +217,24 @@ describe("Outer package barrel — namespace re-export", () => {
     expect(Contracts.TEST_QUALITY_JUDGE_RESPONSE_SCHEMA).toBe(
       Qi.TEST_QUALITY_JUDGE_RESPONSE_SCHEMA,
     );
+  });
+});
+
+describe("QI module barrel — type reachability (KEIKO-0605)", () => {
+  it("QualityIntelligenceUiCandidateQualityVerdict is reachable through both the QI barrel and the outer package barrel", () => {
+    // Phantom generic: references the type argument at the call site without producing a runtime
+    // value (the same reachability-pin idiom used across packages/keiko-contracts/src/index.test.ts),
+    // so `verbatimModuleSyntax` stays satisfied and the name stays load-bearing on the public
+    // surface. Before KEIKO-0605, the type was declared and used internally in bffWire.ts but
+    // re-exported from NEITHER `qualityIntelligence/index.ts` NOR the outer `index.ts` — reachable
+    // only via a deep relative import, invisible from `@oscharko-dev/keiko-contracts`. This test
+    // stops compiling if either barrel drops it again.
+    const pin = <T>(_value?: T): T | undefined => undefined;
+    pin<Qi.QualityIntelligenceUiCandidateQualityVerdict>();
+    pin<Contracts.QualityIntelligenceUiCandidateQualityVerdict>();
+    // KEIKO-0891's bounded ADF-tree type has the same barrel-reachability requirement.
+    pin<Qi.QualityIntelligenceAdfNode>();
+    expect(pin<Contracts.QualityIntelligenceAdfNode>()).toBeUndefined();
   });
 });
 

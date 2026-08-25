@@ -326,8 +326,13 @@ function humaniseBranchSlug(headBranch: string): string {
   return tokens.slice(start).join(" ").trim();
 }
 
+// KEIKO-0829: `String.prototype.slice(0, N)` cuts on UTF-16 code units and can split a surrogate
+// pair, producing a lone surrogate. Use an Array.from split so a single astral character (a two-
+// code-unit surrogate pair) is either kept whole or dropped whole, never bisected.
 function clampTitle(title: string): string {
-  return title.length <= TITLE_MAX ? title : title.slice(0, TITLE_MAX).trimEnd();
+  if (title.length <= TITLE_MAX) return title;
+  const codePoints = Array.from(title);
+  return codePoints.slice(0, TITLE_MAX).join("").trimEnd();
 }
 
 function composeTitle(narrative: GitPullRequestChangeNarrative, headBranch: string): string {
@@ -350,11 +355,13 @@ function composeRiskNarrative(
   );
 }
 
+// KEIKO-0829: the trailing `_baseBranch` parameter was never read — every consumer already
+// carries the base branch on GitPullRequestChangeNarrative when the narrative surface needs it.
+// Dropped from the signature so callers do not pass a value that is discarded on the wire.
 export function synthesizePullRequestMetadata(
   narrative: GitPullRequestChangeNarrative,
   riskDigest: GitPullRequestRiskDigest,
   headBranch: string,
-  _baseBranch: string,
 ): GitPullRequestMetadataDraft {
   const primaryArea = primaryAreaOf(narrative);
   const summarySection: GitPrSummarySection = {
@@ -532,13 +539,26 @@ export function gitPullRequestLabelSuggestionsFor(
   narrative: GitPullRequestChangeNarrative,
 ): GitPullRequestLabelSuggestion {
   const labels = new Set<string>();
-  labels.add(LABEL_BY_CHANGE_TYPE[narrative.changeType]);
+  const changeTypeLabel = LABEL_BY_CHANGE_TYPE[narrative.changeType];
+  let addedChangeTypeLabel = false;
+  if (changeTypeLabel.length > 0) {
+    labels.add(changeTypeLabel);
+    addedChangeTypeLabel = true;
+  }
+  let addedAreaLabel = false;
   for (const area of narrative.areas) {
     if (area.length > 0) {
       labels.add(`area:${area}`);
+      addedAreaLabel = true;
     }
   }
-  return { suggestedLabelNames: [...labels], basis: "change-type" };
+  // KEIKO-0829: the previous implementation hard-coded "change-type" as the basis regardless of
+  // what was actually produced, so the "area" and "none" basis members were unreachable — a
+  // consumer reading `basis` could never distinguish between the three shapes the type promises.
+  let basis: GitPrLabelSuggestionBasis = "none";
+  if (addedChangeTypeLabel) basis = "change-type";
+  else if (addedAreaLabel) basis = "area";
+  return { suggestedLabelNames: [...labels], basis };
 }
 
 // Extracts issue-ref tokens from the head branch name only (e.g. "claude/issue-477-..." → "#477",

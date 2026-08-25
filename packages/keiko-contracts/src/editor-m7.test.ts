@@ -820,6 +820,29 @@ describe("M7 malformed input rejection paths", () => {
     expect(plan.protected).toStrictEqual(["dirty", "pinned", "active", "pending"]);
   });
 
+  // KEIKO-0822: two entries sharing an `identity` used to make the second iteration's
+  // `retained.findIndex(...)` return -1, and `splice(-1, 1)` then removed the LAST retained
+  // entry — a possibly-protected entry that was never eligible to be evicted. Guard the splice
+  // so a missing match is a no-op and the evicted list stays honest.
+  it("does not remove a bystander when two entries share an identity (KEIKO-0822)", () => {
+    const entries: readonly EditorM7ModelEntry[] = [
+      model("dup", 1, 5, {}),
+      model("dup", 2, 5, {}),
+      model("safe", 3, 5, {}),
+    ];
+    const plan = planEditorM7ModelEviction({ entries, maximumCount: 1, maximumBytes: 5 });
+    // `safe` must survive: no entry with that identity was ever eligible / evicted.
+    expect(plan.retained).toContain("safe");
+    for (const evictedIdentity of plan.evicted) {
+      // Every identity claimed as evicted must have been in the original entries list.
+      expect(entries.some((entry) => entry.identity === evictedIdentity)).toBe(true);
+    }
+    // No entry in `retained` should ever be an identity that was never in the input.
+    for (const retainedIdentity of plan.retained) {
+      expect(entries.some((entry) => entry.identity === retainedIdentity)).toBe(true);
+    }
+  });
+
   it.each<[string, unknown]>([
     ["not an array", "not-array"],
     ["longer than the max", Array.from({ length: 65 }, () => "1|view.splitRight|CtrlOrMeta+Alt+/")],

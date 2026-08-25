@@ -130,6 +130,35 @@ describe("analyzeGitCommitIntent suggestions (deterministic)", () => {
     expect(tests.suggestedSubjectPrefix).toBe("test(keiko-ui): ");
   });
 
+  // KEIKO-0816: a mixed change (production file + its test) reports touchesTests:true AND
+  // testsOnly:false. The suggested type must not be "test" — that reserves the type for tests-only
+  // changes per the documented heuristic. undefined `testsOnly` preserves the legacy suggestion so
+  // producers can adopt the field incrementally.
+  it("suppresses the test suggestion when testsOnly is explicitly false (KEIKO-0816)", () => {
+    const mixed = analyzeGitCommitIntent({
+      summary: summary({
+        areaCount: 1,
+        areas: ["docs"],
+        touchesTests: true,
+        testsOnly: false,
+        stagedFileCount: 2,
+      }),
+    });
+    expect(mixed.suggestedType).toBe("docs");
+    expect(mixed.suggestedType).not.toBe("test");
+  });
+
+  it("keeps the test suggestion when testsOnly is true (KEIKO-0816)", () => {
+    const testsOnly = analyzeGitCommitIntent({
+      summary: summary({
+        areas: ["keiko-ui"],
+        touchesTests: true,
+        testsOnly: true,
+      }),
+    });
+    expect(testsOnly.suggestedType).toBe("test");
+  });
+
   it("omits scope/type/prefix for a mixed-scope change", () => {
     const mixed = analyzeGitCommitIntent({
       summary: summary({ areaCount: 2, areas: ["keiko-ui", "keiko-server"] }),

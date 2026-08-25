@@ -12,6 +12,8 @@ import {
   DEFAULT_CONTEXT_PROFILE,
   DEFAULT_CONTEXT_TOKEN_ACCOUNTING,
   DEFAULT_TOKEN_ESTIMATOR_ID,
+  __contextTokenCacheDiagnosticsForTests,
+  __resetContextTokenCacheForTests,
   countContextTokens,
   countContextTokensForSegments,
   deriveContextProfile,
@@ -927,5 +929,82 @@ describe("ContextPackDiagnostics.contextBudget? backward compatibility", () => {
     if (!result.ok) {
       expect(result.reasons.some((r) => r.includes("contextBudget"))).toBe(true);
     }
+  });
+});
+
+// ─── KEIKO-0880: runtime immutability of the frozen contract tables ────────────
+// `as const` / `readonly` are compile-time only and are erased at build time, so without
+// Object.freeze/deepFreeze a consumer holding one of these tables (or an unsafe cast) could rewrite
+// a lane/eviction/accounting/profile constant for the remaining lifetime of the process.
+describe("KEIKO-0880 frozen contract tables", () => {
+  it("freezes CONTEXT_LANE_IDS", () => {
+    expect(Object.isFrozen(CONTEXT_LANE_IDS)).toBe(true);
+    expect(() => {
+      (CONTEXT_LANE_IDS as string[])[0] = "bogus-lane";
+    }).toThrow(TypeError);
+  });
+
+  it("freezes CONTEXT_EVICTION_POLICIES", () => {
+    expect(Object.isFrozen(CONTEXT_EVICTION_POLICIES)).toBe(true);
+    expect(() => {
+      (CONTEXT_EVICTION_POLICIES as string[])[0] = "bogus-policy";
+    }).toThrow(TypeError);
+  });
+
+  it("freezes CONTEXT_TOKEN_ACCOUNTING_SOURCES", () => {
+    expect(Object.isFrozen(CONTEXT_TOKEN_ACCOUNTING_SOURCES)).toBe(true);
+    expect(() => {
+      (CONTEXT_TOKEN_ACCOUNTING_SOURCES as string[])[0] = "bogus-source";
+    }).toThrow(TypeError);
+  });
+
+  it("deep-freezes DEFAULT_CONTEXT_PROFILE including its nested tokenAccounting", () => {
+    expect(Object.isFrozen(DEFAULT_CONTEXT_PROFILE)).toBe(true);
+    expect(Object.isFrozen(DEFAULT_CONTEXT_PROFILE.tokenAccounting)).toBe(true);
+    expect(() => {
+      (DEFAULT_CONTEXT_PROFILE as { maxInputTokens: number }).maxInputTokens = 1;
+    }).toThrow(TypeError);
+    expect(() => {
+      (DEFAULT_CONTEXT_PROFILE.tokenAccounting as { counterId: string }).counterId = "tampered";
+    }).toThrow(TypeError);
+  });
+
+  it("freezes DEFAULT_CONTEXT_TOKEN_ACCOUNTING", () => {
+    expect(Object.isFrozen(DEFAULT_CONTEXT_TOKEN_ACCOUNTING)).toBe(true);
+    expect(() => {
+      (DEFAULT_CONTEXT_TOKEN_ACCOUNTING as { counterId: string }).counterId = "tampered";
+    }).toThrow(TypeError);
+  });
+});
+
+// ─── KEIKO-0797: token-estimate cache is bounded by bytes as well as entry count ─
+describe("KEIKO-0797 token-estimate cache byte cap", () => {
+  it("bounds retained cache bytes when many large distinct strings are estimated", () => {
+    __resetContextTokenCacheForTests();
+    expect(__contextTokenCacheDiagnosticsForTests()).toEqual({ entries: 0, bytesRetained: 0 });
+
+    // Mirrors the documented TOKEN_ESTIMATE_CACHE_MAX_BYTES cap in context-engineering.ts. Kept as
+    // an independent literal (not imported) so a change that only widens the production cap,
+    // without updating this expectation, is caught instead of silently passing.
+    const DOCUMENTED_CACHE_BYTE_CAP = 2_097_152;
+    const chunkBytes = 16 * 1024;
+    const distinctLargeStrings = 300; // 300 * 16 KiB ~= 4.7 MiB, over twice the documented cap.
+    for (let i = 0; i < distinctLargeStrings; i += 1) {
+      estimateTokens(`chunk-${String(i)}-${"x".repeat(chunkBytes)}`);
+    }
+
+    const diagnostics = __contextTokenCacheDiagnosticsForTests();
+    expect(diagnostics.bytesRetained).toBeLessThanOrEqual(DOCUMENTED_CACHE_BYTE_CAP);
+    // Sanity: the cap is actually being exercised (fewer than all 300 distinct entries survive),
+    // not vacuously true because nothing was cached.
+    expect(diagnostics.entries).toBeLessThan(distinctLargeStrings);
+  });
+
+  it("never retains an entry count above TOKEN_ESTIMATE_CACHE_MAX_ENTRIES either", () => {
+    __resetContextTokenCacheForTests();
+    for (let i = 0; i < 5_000; i += 1) {
+      estimateTokens(`small-distinct-${String(i)}`);
+    }
+    expect(__contextTokenCacheDiagnosticsForTests().entries).toBeLessThanOrEqual(4_096);
   });
 });

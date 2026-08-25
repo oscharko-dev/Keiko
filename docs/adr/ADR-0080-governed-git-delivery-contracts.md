@@ -188,9 +188,9 @@ not a free string, and carries an optional `partialDetail` (attempted/succeeded 
 - `{ kind: "provider-capability"; capability: GitDeliveryProviderCapability }` — the active
   provider must advertise the required capability (see D5).
 - `{ kind: "risk-class-ceiling"; maxRiskClass: GitDeliveryRiskClass }` — a genuine ceiling: an
-  action whose default risk-class severity **exceeds** `maxRiskClass` is out of bounds.
-  `gitDeliveryRiskClassWithinCeiling(actionKind, ceiling)` compares severities via the frozen
-  ordinal table. (This replaces the misnamed/circular `min-risk-class` constraint.)
+  action whose default risk-class severity **exceeds** `maxRiskClass` is out of bounds, decided by
+  comparing ordinals read from the frozen `GIT_DELIVERY_RISK_CLASS_SEVERITY` table (never inferred
+  from the action-kind string). (This replaces the misnamed/circular `min-risk-class` constraint.)
 
 There are no free-form string constraint payloads. Every constraint kind is a typed discriminant
 (AC3).

@@ -1167,7 +1167,7 @@ describe("handleQiRegenerateStale — no stale candidates still materialises a n
       ],
       editedRevisions: [
         {
-          candidateId: "cand-no-stale-login",
+          candidateId: QualityIntelligence.asQualityIntelligenceTestCaseId("cand-no-stale-login"),
           provenance: {
             editedAt: "2026-06-09T10:02:00.000Z",
             editedBy: "human",
@@ -1592,7 +1592,7 @@ describe("handleQiRegenerateStale — preserved candidates are materialised in t
       ],
       editedRevisions: [
         {
-          candidateId: "cand-preserved",
+          candidateId: QualityIntelligence.asQualityIntelligenceTestCaseId("cand-preserved"),
           provenance: {
             editedAt: "2026-06-09T10:02:00.000Z",
             editedBy: "human",
@@ -1899,7 +1899,7 @@ describe("handleQiRegenerateStale — requirement replacements are positional (#
         ],
         editedRevisions: [
           {
-            candidateId: "cand-doc-fresh",
+            candidateId: QualityIntelligence.asQualityIntelligenceTestCaseId("cand-doc-fresh"),
             provenance: {
               editedAt: "2026-06-09T10:02:00.000Z",
               editedBy: "human",
@@ -2294,7 +2294,7 @@ describe("handleQiRegenerateStale — edit history of STALE candidates is droppe
       ],
       editedRevisions: [
         {
-          candidateId: "cand-fresh",
+          candidateId: QualityIntelligence.asQualityIntelligenceTestCaseId("cand-fresh"),
           provenance: {
             editedAt: "2026-06-09T10:02:00.000Z",
             editedBy: "human",
@@ -2303,7 +2303,7 @@ describe("handleQiRegenerateStale — edit history of STALE candidates is droppe
           editedFields: { title: "Login test (edited)" },
         },
         {
-          candidateId: "cand-stale",
+          candidateId: QualityIntelligence.asQualityIntelligenceTestCaseId("cand-stale"),
           provenance: {
             editedAt: "2026-06-09T10:03:00.000Z",
             editedBy: "human",

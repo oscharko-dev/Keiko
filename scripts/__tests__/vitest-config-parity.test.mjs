@@ -144,8 +144,19 @@ describe("root suite collects the same component tests as the coverage gate (KEI
 // structural, and this is the pin that keeps it structural. A `coverage.thresholds` block
 // reappearing in any configuration re-creates both the sharding hazard and the two-engine split.
 describe("no vitest configuration reaches a coverage verdict (ADR-0157 D1, ADR-0158 D1)", () => {
-  for (const { name, path } of CONFIGS) {
-    it(`${name} (${path}) declares no coverage thresholds`, async () => {
+  // KEIKO-0883: the previous test iterated a hand-maintained CONFIGS list and therefore missed
+  // every packages/*/vitest.config.ts that was not on it. Discover the actual configuration set
+  // from the filesystem so a fresh package config is covered the moment it is added.
+  const discovered = new Set([
+    ...CONFIGS.map(({ path }) => path),
+    "vitest.config.ts",
+    JUDGING_COVERAGE_CONFIG,
+    ...globSync("vitest.coverage.*.config.ts", { cwd: repoRoot }),
+    ...globSync("packages/*/vitest.config.ts", { cwd: repoRoot }),
+    ...globSync("packages/*/vitest.coverage.config.ts", { cwd: repoRoot }),
+  ]);
+  for (const path of [...discovered].sort()) {
+    it(`${path} declares no coverage thresholds`, async () => {
       const config = await loadConfig(path);
       expect(
         config?.test?.coverage?.thresholds,

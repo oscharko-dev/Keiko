@@ -206,3 +206,50 @@ describe("git-commit-policy guards", () => {
     expect(isGitCommitMessageValidation(validateGitCommitMessage("nope", DEFAULT))).toBe(true);
   });
 });
+
+describe("KEIKO-0545 — commit-message policy tables are deeply frozen", () => {
+  // The module header calls these "frozen const tables" (line 13), but a plain object/array literal
+  // is only frozen at compile time (`readonly` / `as const` are erased by TypeScript); at runtime the
+  // reference was fully writable. A consumer holding KEIKO_DEFAULT_COMMIT_MESSAGE_POLICY could
+  // rewrite `.subjectMaxLength` or push a new entry onto `.conventionalCommit.allowedTypes`, silently
+  // changing what every future call to validateGitCommitMessage accepts for the rest of the process.
+
+  it("freezes KEIKO_DEFAULT_COMMIT_MESSAGE_POLICY and its nested conventionalCommit + allowedTypes", () => {
+    expect(Object.isFrozen(KEIKO_DEFAULT_COMMIT_MESSAGE_POLICY)).toBe(true);
+    expect(Object.isFrozen(KEIKO_DEFAULT_COMMIT_MESSAGE_POLICY.conventionalCommit)).toBe(true);
+    expect(
+      Object.isFrozen(KEIKO_DEFAULT_COMMIT_MESSAGE_POLICY.conventionalCommit.allowedTypes),
+    ).toBe(true);
+    expect(Object.isFrozen(KEIKO_DEFAULT_COMMIT_MESSAGE_POLICY.requireIssueKey)).toBe(true);
+    expect(() => {
+      (KEIKO_DEFAULT_COMMIT_MESSAGE_POLICY as { subjectMaxLength: number }).subjectMaxLength = 1;
+    }).toThrow(TypeError);
+    expect(() => {
+      (KEIKO_DEFAULT_COMMIT_MESSAGE_POLICY.conventionalCommit.allowedTypes as string[]).push("wip");
+    }).toThrow(TypeError);
+  });
+
+  it("freezes REPOSITORY_NATIVE_COMMIT_MESSAGE_POLICY and its nested conventionalCommit rule", () => {
+    const policy = gitCommitMessagePolicyForMode("repository-native");
+    expect(Object.isFrozen(policy)).toBe(true);
+    expect(Object.isFrozen(policy.conventionalCommit)).toBe(true);
+    expect(Object.isFrozen(policy.conventionalCommit.allowedTypes)).toBe(true);
+    expect(() => {
+      (policy as { requireSignoff: boolean }).requireSignoff = true;
+    }).toThrow(TypeError);
+  });
+
+  it("freezes GIT_COMMIT_MESSAGE_POLICY_MODES against a push", () => {
+    expect(Object.isFrozen(GIT_COMMIT_MESSAGE_POLICY_MODES)).toBe(true);
+    expect(() => {
+      (GIT_COMMIT_MESSAGE_POLICY_MODES as unknown as string[]).push("custom-mode");
+    }).toThrow(TypeError);
+  });
+
+  it("freezes GIT_COMMIT_MESSAGE_VIOLATION_CODES against a push", () => {
+    expect(Object.isFrozen(GIT_COMMIT_MESSAGE_VIOLATION_CODES)).toBe(true);
+    expect(() => {
+      (GIT_COMMIT_MESSAGE_VIOLATION_CODES as unknown as string[]).push("bogus-code");
+    }).toThrow(TypeError);
+  });
+});

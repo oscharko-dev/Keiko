@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 
 import {
@@ -338,5 +340,18 @@ describe("coding workbench runtime questions channel payload (#2478)", () => {
       validateCodingWorkbenchRuntimeQuestionsChannelPayload({ session: "active", questions: "x" })
         .ok,
     ).toBe(false);
+  });
+});
+
+describe("coding workbench runtime questions module structure (KEIKO-0532)", () => {
+  it("does not re-declare a local isQuestionId now that isCodeTaskQuestionId is imported from code-task-governance.ts", () => {
+    // isQuestionId used to be a local copy of code-task-governance.ts's isCodeTaskQuestionId
+    // (same `que_...` pattern). This module now imports the shared guard instead of keeping its
+    // own copy; a re-introduced local declaration must fail this pin.
+    const source = readFileSync(
+      fileURLToPath(new URL("./coding-workbench-runtime-questions.ts", import.meta.url)),
+      "utf8",
+    );
+    expect(/^function isQuestionId/m.test(source)).toBe(false);
   });
 });

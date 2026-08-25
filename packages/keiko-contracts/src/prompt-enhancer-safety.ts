@@ -645,9 +645,8 @@ function validateDecisionConsistency(
   }
 }
 
-function validateHumanReviewConstraint(
+function validateDecisionRequiresHumanReviewAgreement(
   input: Record<string, unknown>,
-  leastPrivilegeOk: boolean,
   errors: string[],
 ): void {
   if (input.decision === "accepted" && input.requiresHumanReview !== false) {
@@ -658,17 +657,43 @@ function validateHumanReviewConstraint(
       "assessment.decision requires-human-review requires requiresHumanReview to be true",
     );
   }
-  if (
-    input.requiresHumanReview === true &&
-    leastPrivilegeOk &&
-    !(input.leastPrivilege as readonly LeastPrivilegeConstraint[]).includes(
-      "require-human-approval",
-    )
-  ) {
+}
+
+// The two-way requiresHumanReview <-> leastPrivilege invariant: true implies the
+// require-human-approval constraint is present (forward), and false implies it is absent
+// (KEIKO-0732 converse). leastPrivilegeForAnalysis (the sole honest producer) only ever emits the
+// combination the forward check requires, so a well-formed assessment never trips the converse --
+// but this validator, whose own doc comment says it checks "the cross-field invariants that make
+// the assessment trustworthy," must reject that contradictory combination too rather than silently
+// accepting a wire payload that claims it.
+function validateLeastPrivilegeHumanReviewAgreement(
+  input: Record<string, unknown>,
+  leastPrivilegeOk: boolean,
+  errors: string[],
+): void {
+  if (!leastPrivilegeOk) return;
+  const hasHumanApproval = (input.leastPrivilege as readonly LeastPrivilegeConstraint[]).includes(
+    "require-human-approval",
+  );
+  if (input.requiresHumanReview === true && !hasHumanApproval) {
     errors.push(
       "assessment.leastPrivilege must include require-human-approval when human review is required",
     );
   }
+  if (input.requiresHumanReview === false && hasHumanApproval) {
+    errors.push(
+      "assessment.leastPrivilege must not include require-human-approval when human review is not required",
+    );
+  }
+}
+
+function validateHumanReviewConstraint(
+  input: Record<string, unknown>,
+  leastPrivilegeOk: boolean,
+  errors: string[],
+): void {
+  validateDecisionRequiresHumanReviewAgreement(input, errors);
+  validateLeastPrivilegeHumanReviewAgreement(input, leastPrivilegeOk, errors);
 }
 
 function validateAssessmentCrossFields(

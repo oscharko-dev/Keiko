@@ -51,4 +51,17 @@ describe("CodedHttpError (GEN-DUP-NEAR-008)", () => {
     expect(err.message).toBe("operation failed");
     expect(err.cause).toBe(cause);
   });
+
+  // KEIKO-0859: the doc-comment claim that this helper prevents a silent undefined only holds if
+  // the runtime path actually rejects an unknown code. An `as C` bypass at the caller or a hand-
+  // maintained map with a forgotten key must fail loud, not coerce undefined into the response.
+  it("throws when the code is missing from the map (KEIKO-0859)", () => {
+    expect(() => httpStatusFor(SAMPLE_STATUS_MAP, "does-not-exist" as SampleCode)).toThrow(
+      /httpStatusFor: unknown code/,
+    );
+    // Prototype-chain reads must fail: `map["constructor"]` and `map["toString"]` used to return
+    // undefined (via the prototype) and be coerced to NaN in status arithmetic.
+    expect(() => httpStatusFor(SAMPLE_STATUS_MAP, "constructor" as SampleCode)).toThrow(TypeError);
+    expect(() => httpStatusFor(SAMPLE_STATUS_MAP, "toString" as SampleCode)).toThrow(TypeError);
+  });
 });

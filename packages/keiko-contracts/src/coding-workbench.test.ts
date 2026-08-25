@@ -225,9 +225,9 @@ describe("coding workbench autonomy policy", () => {
     for (const mode of CODING_WORKBENCH_MODES) {
       const policy = CODING_WORKBENCH_MODE_POLICIES[mode];
       expect(policy.allowedActionClasses).toEqual(CODING_WORKBENCH_ACTION_CLASSES);
-      expect(policy.allowsWorkspaceWrites).toBe(true);
-      expect(policy.allowsCommandExecution).toBe(true);
-      expect(policy.allowsDeliverySubstrate).toBe(true);
+      // KEIKO-0831: the previous three coarse booleans on this policy were dead. The `effects`
+      // tri-state matrix below (asserted in the next test) carries the same information at a
+      // finer grain and is the sole consumer surface — no need to assert the removed fields.
     }
   });
 

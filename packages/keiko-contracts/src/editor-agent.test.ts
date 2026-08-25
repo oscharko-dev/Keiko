@@ -134,6 +134,36 @@ describe("editor agent contracts", () => {
     ).toMatchObject({ ok: true });
   });
 
+  // KEIKO-0747: a payload that also carries a `kind` discriminator must be routed by that
+  // discriminator, not through the bare-action branch. Before the fix, adding `kind:"action"`
+  // and `bridgeDecisionCapability:"invalid"` on top of a valid EditorAgentAction body was silently
+  // accepted (bare-action branch matched first and dropped both extra fields). The bridge branch
+  // now runs first and rejects an invalid bridgeDecisionCapability.
+  it("routes by the `kind` discriminator when present, not the bare-action branch (KEIKO-0747)", () => {
+    const validBareAction = {
+      schemaVersion: EDITOR_AGENT_SCHEMA_VERSION,
+      actionId: "action-1",
+      idempotencyKey: "idempotency-1", // gitleaks:allow — test fixture, not a real key
+      sessionId: "session-1",
+      type: "save" as const,
+      expectedContentHash: HASH,
+    };
+    // Bare action still accepted.
+    expect(parseEditorAgentActionsPostBody(validBareAction)).toMatchObject({ ok: true });
+    // Same body with kind:"action" but an invalid bridgeDecisionCapability must now fail — before
+    // the fix the bare-action branch matched first and returned {ok:true}.
+    const withInvalidBridge = {
+      ...validBareAction,
+      kind: "action" as const,
+      action: validBareAction,
+      bridgeDecisionCapability: "not-a-capability",
+    };
+    expect(parseEditorAgentActionsPostBody(withInvalidBridge)).toEqual({
+      ok: false,
+      errors: ["browser action request is invalid"],
+    });
+  });
+
   it("validates the additive browser bridge decision capability envelopes", () => {
     expect(isEditorAgentBridgeDecisionCapability(BRIDGE_CAPABILITY)).toBe(true);
     expect(
@@ -712,7 +742,7 @@ describe("isContainedAgentPath (Issue #1394)", () => {
 });
 
 describe("isEditorAgentConflictCode (Issue #1394)", () => {
-  it("returns true for all eight valid conflict codes", () => {
+  it("returns true for all nine hand-enumerated conflict codes", () => {
     expect(isEditorAgentConflictCode("DIRTY")).toBe(true);
     expect(isEditorAgentConflictCode("VERSION_MISMATCH")).toBe(true);
     expect(isEditorAgentConflictCode("CONTENT_HASH_MISMATCH")).toBe(true);

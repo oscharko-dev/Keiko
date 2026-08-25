@@ -194,6 +194,7 @@ function validateAvailableFeed(value: Record<string, unknown>, errors: string[])
 }
 
 function validatePlan(value: unknown, errors: string[]): void {
+  const before = errors.length;
   const path = "safeActivityFeed.plan";
   if (!isRecord(value)) {
     errors.push(`${path} must be an object`);
@@ -212,7 +213,13 @@ function validatePlan(value: unknown, errors: string[]): void {
   if (planHasTruncatedStep(value) && value.truncated !== true) {
     errors.push(`${path}.truncated must reflect truncated steps`);
   }
-  if (serializedBytes(value) > CODING_SAFE_ACTIVITY_MAX_PLAN_UTF8_BYTES) {
+  // KEIKO-0749: mirror validateFeed's guard — only serialise for the byte budget check when the
+  // structure is otherwise valid. serializedBytes runs JSON.stringify over the entire nested
+  // object; running it on a value the caller has already failed shape-validation on wastes work.
+  if (
+    errors.length === before &&
+    serializedBytes(value) > CODING_SAFE_ACTIVITY_MAX_PLAN_UTF8_BYTES
+  ) {
     errors.push(`${path} exceeds the plan UTF-8 byte budget`);
   }
 }
@@ -264,6 +271,7 @@ interface FeedIdentities {
 }
 
 function validateTurn(value: unknown, index: number, ids: FeedIdentities, errors: string[]): void {
+  const before = errors.length;
   const path = `safeActivityFeed.turns[${String(index)}]`;
   if (!isRecord(value)) {
     errors.push(`${path} must be an object`);
@@ -277,7 +285,12 @@ function validateTurn(value: unknown, index: number, ids: FeedIdentities, errors
   if (turnHasTruncatedMessage(value) && value.truncated !== true) {
     errors.push(`${path}.truncated must reflect truncated messages`);
   }
-  if (serializedBytes(value) > CODING_SAFE_ACTIVITY_MAX_TURN_UTF8_BYTES) {
+  // KEIKO-0749: only run the deep serializedBytes call when the structure is otherwise valid,
+  // mirroring validateFeed's own guard.
+  if (
+    errors.length === before &&
+    serializedBytes(value) > CODING_SAFE_ACTIVITY_MAX_TURN_UTF8_BYTES
+  ) {
     errors.push(`${path} exceeds the turn UTF-8 byte budget`);
   }
 }
@@ -293,6 +306,7 @@ function validateMessages(value: unknown, path: string, ids: Set<string>, errors
 }
 
 function validateMessage(value: unknown, path: string, ids: Set<string>, errors: string[]): void {
+  const before = errors.length;
   if (!isRecord(value)) {
     errors.push(`${path} must be an object`);
     return;
@@ -310,7 +324,11 @@ function validateMessage(value: unknown, path: string, ids: Set<string>, errors:
   if (messageHasTruncatedSegment(value) && value.truncated !== true) {
     errors.push(`${path}.truncated must reflect truncated segments`);
   }
-  if (serializedBytes(value) > CODING_SAFE_ACTIVITY_MAX_MESSAGE_UTF8_BYTES) {
+  // KEIKO-0749: only run the deep serializedBytes call when the structure is otherwise valid.
+  if (
+    errors.length === before &&
+    serializedBytes(value) > CODING_SAFE_ACTIVITY_MAX_MESSAGE_UTF8_BYTES
+  ) {
     errors.push(`${path} exceeds the message UTF-8 byte budget`);
   }
 }

@@ -166,4 +166,18 @@ describe("selectWorkspaceFileTarget", () => {
   it("does not derive a root from an absolute path that has no parent directory", () => {
     expect(selectWorkspaceFileTarget("", "/")).toBeNull();
   });
+
+  // KEIKO-0750: unexpanded shell tilde is not a real machine path. Returning `{ root: "~", file }`
+  // to the BFF would send an unresolvable root back over the wire.
+  it("rejects a tilde-prefixed offending path (KEIKO-0750)", () => {
+    expect(selectWorkspaceFileTarget("/w", "~/notes/a.ts")).toBeNull();
+    expect(selectWorkspaceFileTarget("/w", "~/a.ts")).toBeNull();
+    expect(selectWorkspaceFileTarget("", "~/notes/a.ts")).toBeNull();
+    expect(selectWorkspaceFileTarget("", "~")).toBeNull();
+  });
+
+  it("rejects a bare / as a containing root (KEIKO-0750)", () => {
+    // Both branches of the fix: absolute path whose dirname would collapse to bare `/`.
+    expect(selectWorkspaceFileTarget("/w", "/a.ts")).toBeNull();
+  });
 });

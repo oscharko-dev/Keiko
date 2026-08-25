@@ -18,20 +18,17 @@
 import { containsBidiOrZeroWidth } from "../text-safety.js";
 import type { QualityIntelligenceSourceEnvelopeId } from "./ids.js";
 
-export type QualityIntelligenceSourceKind =
-  | "repository-context"
-  | "local-knowledge-capsule"
-  | "figma-evidence"
-  | "human-context"
-  | "connector-document";
-
-export const QUALITY_INTELLIGENCE_SOURCE_KINDS: readonly QualityIntelligenceSourceKind[] = [
+// KEIKO-0522: const-first + `(typeof X)[number]` (matches retentionPolicy.ts / testQualityRubric.ts)
+// so the union type can never drift from the enumerable array it is derived from.
+export const QUALITY_INTELLIGENCE_SOURCE_KINDS = [
   "repository-context",
   "local-knowledge-capsule",
   "figma-evidence",
   "human-context",
   "connector-document",
 ] as const;
+
+export type QualityIntelligenceSourceKind = (typeof QUALITY_INTELLIGENCE_SOURCE_KINDS)[number];
 
 export interface QualityIntelligenceSourceProvenance {
   /** Free-form origin label (e.g. "workspace", "capsule:foo"). Display only. */
