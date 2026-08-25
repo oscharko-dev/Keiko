@@ -345,9 +345,13 @@ describe("aggregateVoiceActionQuality", () => {
 });
 
 describe("renderVoiceActionSummary", () => {
-  function scorecard(goNoGo: "GO" | "NO-GO", fullyPassed: boolean): VoiceActionScorecard {
+  function scorecard(
+    goNoGo: "GO" | "NO-GO",
+    fullyPassed: boolean,
+    dimensions: readonly VoiceActionDimension[] = ["capability-gating", "stale-intent-prevention"],
+  ): VoiceActionScorecard {
     const dimResults = scoreVoiceActionQuality(
-      fixture(["capability-gating", "stale-intent-prevention"], {
+      fixture(dimensions, {
         expectedGatingAllowed: fullyPassed,
         expectsProposal: true,
       }),
@@ -385,7 +389,15 @@ describe("renderVoiceActionSummary", () => {
   });
 
   it("renders a GO verdict when every dimension passes", () => {
-    const text = renderVoiceActionSummary(scorecard("GO", true));
+    // KEIKO-0736: the shared scorecard() default dimension set includes stale-intent-prevention,
+    // which scoreStaleIntentPrevention always fails against the default observation() (no staleness
+    // set) -- so the GO/true call used to render a scorecard that in fact contained a FAIL result.
+    // Narrow to a dimension set that genuinely passes, and assert dimResults directly instead of
+    // trusting the rendered text alone.
+    const card = scorecard("GO", true, ["capability-gating"]);
+    const dimResults = card.fixtureResults[0]?.dimensionResults ?? [];
+    expect(dimResults.every((d) => d.outcome !== "fail")).toBe(true);
+    const text = renderVoiceActionSummary(card);
     expect(text).toContain("Verdict: GO");
     expect(text).toContain("=PASS");
   });
