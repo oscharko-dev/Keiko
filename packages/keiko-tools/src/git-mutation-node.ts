@@ -25,6 +25,7 @@ import {
   buildStageArgv,
   buildUnstageArgv,
   GIT_MUTATION_COMMAND_RULES,
+  type GitCommitExecRequest,
   type GitLocalMutationAdapter,
   type GitMutationArgvPlan,
 } from "./git-mutation-adapter.js";
@@ -39,6 +40,7 @@ import {
 } from "./exec.js";
 import {
   GOVERNED_GIT_IDENTITY_SANDBOX_POLICY,
+  type CommandRule,
   type CommandResult,
   type SandboxPolicy,
 } from "./types.js";
@@ -136,10 +138,36 @@ const GOVERNED_GIT_MUTATION_CONFIG_ARGS: readonly string[] = [
   "-c",
   "alias.commit=",
   "-c",
+  "commit.gpgSign=false",
+  "-c",
   "protocol.ext.allow=never",
   "-c",
   "submodule.recurse=false",
 ];
+
+const GLOBAL_SIGNING_POLICY_ARGS: readonly string[] = [
+  "config",
+  "--global",
+  "--type=bool",
+  "--get",
+  "commit.gpgSign",
+];
+const GLOBAL_SIGNING_POLICY_COMMAND_RULES: readonly CommandRule[] = Object.freeze([
+  {
+    executable: "git",
+    allowedSubcommands: Object.freeze(["config"]),
+    valueFlags: Object.freeze([]),
+    denyFlags: Object.freeze([
+      "-c",
+      "-C",
+      "--config-env",
+      "--file",
+      "--blob",
+      "--local",
+      "--system",
+    ]),
+  },
+]);
 
 function runOne(ctx: RunContext, argv: readonly string[]): Promise<CommandResult> {
   return runCommand(
@@ -172,6 +200,41 @@ async function runPlan(
     }
   }
   return executionResult("succeeded", totalDuration);
+}
+
+async function globalSigningRequired(ctx: RunContext): Promise<boolean | undefined> {
+  let result: CommandResult;
+  try {
+    result = await runCommand(
+      {
+        command: "git",
+        args: GLOBAL_SIGNING_POLICY_ARGS,
+        cwd: undefined,
+        timeoutMs: ctx.timeoutMs,
+        signal: ctx.signal,
+      },
+      { ...ctx.runDeps, commandRules: GLOBAL_SIGNING_POLICY_COMMAND_RULES },
+    );
+  } catch {
+    return undefined;
+  }
+  if (result.exitCode === 1 && result.stdout.trim().length === 0) return false;
+  if (result.exitCode !== 0) return undefined;
+  const value = result.stdout.trim();
+  if (value === "true") return true;
+  if (value === "false") return false;
+  return undefined;
+}
+
+async function execCommit(
+  ctx: RunContext,
+  request: GitCommitExecRequest,
+): Promise<GitDeliveryExecutionResult> {
+  const signingRequired = await globalSigningRequired(ctx);
+  if (signingRequired !== false) {
+    return executionResult("failed", 0, { errorCode: "precondition-failed" });
+  }
+  return execPlan(ctx, () => buildCommitArgv(request));
 }
 
 // Builds the argv plan, then runs it. A builder throw (invalid operand) is an internal error that
@@ -217,7 +280,7 @@ export function createNodeGitMutationAdapter(
     switchBranch: (req) => execPlan(ctx, () => buildBranchSwitchArgv(req)),
     stage: (req) => execPlan(ctx, () => buildStageArgv(req)),
     unstage: (req) => execPlan(ctx, () => buildUnstageArgv(req)),
-    commit: (req) => execPlan(ctx, () => buildCommitArgv(req)),
+    commit: (req) => execCommit(ctx, req),
     abort: (req) => execPlan(ctx, () => buildAbortArgv(req)),
     recover: (req) => execPlan(ctx, () => buildRecoveryArgv(req)),
   };

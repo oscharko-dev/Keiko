@@ -28,7 +28,7 @@ import { buildCspHeader } from "../csp.js";
 import { buildRedactor, createInMemoryUiStore, type UiHandlerDeps } from "../index.js";
 import { createRunRegistry } from "../runs.js";
 import { createUiServer, UI_HOST } from "../server.js";
-import type { ServerDiagnosticRecord } from "../diagnostics-log.js";
+import type { ServerDiagnosticRecord, ServerDiagnosticSink } from "../diagnostics-log.js";
 import type { ServerLogEvent, ServerLogSink } from "../observability/server-log.js";
 import { atlassianCredentialMetadataPath } from "./credentialMetadataStore.js";
 import { buildAtlassianConnectorCredentialDeps } from "./wiring.js";
@@ -339,6 +339,40 @@ describe("POST /api/atlassian-connectors/credentials", () => {
     expect(rejection?.status).toBe(429);
     // Nothing about the request body — mirror the response-body no-secret check on the sink.
     expectNoSecretBytes(JSON.stringify(activityEvents));
+
+    const diagnostics: ServerDiagnosticRecord[] = [];
+    const diagnosticSink: ServerDiagnosticSink = {
+      record: (record): void => {
+        diagnostics.push(record);
+      },
+    };
+    await rebuild({
+      custody: stubCustody,
+      httpPortFactory: (): AtlassianHttpPort => stubHttpPort,
+      httpBodyPortFactory: (): AtlassianHttpBodyPort => stubHttpBodyPort,
+      activityLog: {
+        write: (): never => {
+          throw new Error("activity sink unavailable");
+        },
+      },
+      diagnostics: diagnosticSink,
+    });
+    const loggingFailureResponse = await fetch(
+      `${baseUrl()}/api/atlassian-connectors/credentials`,
+      {
+        method: "POST",
+        headers: csrfHeaders(),
+        body: createBody(),
+      },
+    );
+    expect(loggingFailureResponse.status).toBe(429);
+    expect(diagnostics).toMatchObject([
+      {
+        operation: "atlassian.credential.rejected",
+        message: "atlassian-credential-rejection-activity-log-failed",
+      },
+    ]);
+    expectNoSecretBytes(JSON.stringify(diagnostics));
   });
 
   it("answers 503 when custody is not configured", async () => {

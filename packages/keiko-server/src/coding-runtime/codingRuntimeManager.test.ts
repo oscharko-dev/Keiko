@@ -2752,6 +2752,64 @@ describe("coding runtime manager", () => {
     expect(JSON.stringify(events)).not.toContain(issued.approval.approvalToken);
   });
 
+  it("reuses the trusted metadata recorded when a task approval was issued", async (): Promise<void> => {
+    const fixture = createManagedFixture();
+    const harness = createSpawnHarness();
+    const events: CodingWorkbenchRuntimeEvent[] = [];
+    const manager = createTestCodingRuntimeManager({
+      supervisor: testSupervisor(harness.spawn),
+      processEnv: {},
+      now: () => 1_000,
+      onRuntimeEvent: (event) => {
+        events.push(event);
+      },
+      nowIso: () => "2026-07-07T13:00:00.000Z",
+    });
+
+    await manager.start(
+      launchRequest(fixture.workspaceRoot, fixture.managedRoot, fixture.executablePath),
+    );
+    const issued = manager.issueApproval({
+      runId: "run-1988",
+      requestId: "perm-task-verification",
+      actionKind: "verification-command",
+      grantScope: "task",
+      commandTemplateId: "governed-typecheck",
+      safeArgumentClasses: ["workspace-contained"],
+      approvedByUserId: "operator",
+    });
+    expect(issued.ok).toBe(true);
+    if (!issued.ok) throw new Error("expected task approval issue to succeed");
+
+    harness.children[0]?.stdout.write(
+      permissionLine({
+        requestId: "perm-task-verification",
+        kind: "command-execution",
+        actionClass: "command-execution",
+        reasonCode: "approval-required",
+        actionKind: "verification-command",
+        scopeLabel: "workspace-scope",
+        risk: "low",
+        policyReason: "approval-required",
+        commandLabel: "typecheck",
+        executable: "npm",
+        args: ["run", "typecheck"],
+        passedCount: 1,
+        failedCount: 0,
+        skippedCount: 0,
+        approvalToken: issued.approval,
+      }),
+    );
+    await settle();
+
+    expect(events.find((event) => event.kind === "verification-summarized")).toMatchObject({
+      verificationKind: "verification-command",
+      verificationStatus: "passed",
+    });
+    expect(events.some((event) => event.failureCode === "approval-proof-stale")).toBe(false);
+    expect(JSON.stringify(events)).not.toContain(issued.approval.approvalToken);
+  });
+
   it("binds supervised approvals to manager-computed action and connector scope", async () => {
     const fixture = createManagedFixture();
     const harness = createSpawnHarness();

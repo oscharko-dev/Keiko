@@ -93,6 +93,8 @@ const GOVERNED_GIT_PUBLISH_CONFIG_ARGS: readonly string[] = [
   "-c",
   "alias.push=",
   "-c",
+  "credential.helper=",
+  "-c",
   "protocol.ext.allow=never",
   "-c",
   "submodule.recurse=false",

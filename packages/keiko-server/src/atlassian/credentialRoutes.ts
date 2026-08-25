@@ -28,6 +28,12 @@ import {
   type AtlassianHttpPort,
 } from "@oscharko-dev/keiko-connectors";
 import { isAtlassianConnectorAuthRef } from "@oscharko-dev/keiko-contracts";
+import { UNKNOWN_CORRELATION_ID } from "../correlation.js";
+import {
+  contentFreeErrorClass,
+  emitServerDiagnostic,
+  type ServerDiagnosticSink,
+} from "../diagnostics-log.js";
 import type { ServerLogSink } from "../observability/server-log.js";
 import { errorBody, type RouteContext, type RouteResult } from "../routes.js";
 import type { UiHandlerDeps } from "../deps.js";
@@ -50,6 +56,7 @@ export interface AtlassianConnectorCredentialDeps {
   // in-file tests that build deps directly stay backward-compatible; the production wiring
   // always passes `processServerLogSink()`.
   readonly activityLog?: ServerLogSink | undefined;
+  readonly diagnostics?: ServerDiagnosticSink | undefined;
 }
 
 class BodyTooLargeError extends Error {
@@ -162,13 +169,24 @@ function recordCustodyRejection(
   errorCode: AtlassianCredentialCustodyError["code"],
   status: number,
 ): void {
-  deps.activityLog?.write({
-    category: "security",
-    op: "atlassian.credential.rejected",
-    ...(ctx.correlationId === undefined ? {} : { correlationId: ctx.correlationId }),
-    status,
-    errorKind: errorCode,
-  });
+  try {
+    deps.activityLog?.write({
+      category: "security",
+      op: "atlassian.credential.rejected",
+      ...(ctx.correlationId === undefined ? {} : { correlationId: ctx.correlationId }),
+      status,
+      errorKind: errorCode,
+    });
+  } catch (error) {
+    emitServerDiagnostic(deps.diagnostics, {
+      correlationId: ctx.correlationId ?? UNKNOWN_CORRELATION_ID,
+      timestamp: new Date().toISOString(),
+      operation: "atlassian.credential.rejected",
+      source: "atlassian.credential-routes.record-custody-rejection",
+      errorClass: contentFreeErrorClass(error),
+      message: "atlassian-credential-rejection-activity-log-failed",
+    });
+  }
 }
 
 async function runHandler(

@@ -350,7 +350,7 @@ describe("convertAdfToText — purity and determinism", () => {
     expect(elapsedMs).toBeLessThan(2_000);
   });
 
-  it("visits at most ADF_TO_TEXT_MAX_NODES + 1 nodes once the budget trips, regardless of input array length (KEIKO-0723 follow-up)", () => {
+  it("visits at most ADF_TO_TEXT_MAX_NODES + 1 nodes once the budget trips, regardless of input array length (KEIKO-0723 follow-up)", (): void => {
     // Regression for KEIKO-0944, replacing the earlier wall-clock + ~160 MB reference-fixture
     // shape (Codex P1 on #3279: allocation + GC pauses inside the 200 ms timed region are host-
     // dependent and produce OOM/flake on constrained CI runners). The property this pins is a

@@ -84,8 +84,12 @@ const ResourcesPanel = dynamic(
   () => import("./panels/ResourcesPanel").then((mod) => mod.ResourcesPanel),
   { ssr: false, loading: windowChunkFallback },
 );
+type TimelinePanelModule = typeof import("./panels/TimelinePanel");
 const TimelinePanel = dynamic(
-  () => import("./panels/TimelinePanel").then((mod) => mod.TimelinePanel),
+  (): Promise<TimelinePanelModule["TimelinePanel"]> =>
+    import("./panels/TimelinePanel").then(
+      (mod): TimelinePanelModule["TimelinePanel"] => mod.TimelinePanel,
+    ),
   {
     ssr: false,
     loading: windowChunkFallback,

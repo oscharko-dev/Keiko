@@ -333,6 +333,12 @@ function cancelled<TRef extends AtlassianSyncItemRef>(state: FetchRunState<TRef>
   return state.deps.signal?.aborted === true;
 }
 
+function removeItemsByKey(items: { readonly itemKey: string }[], itemKey: string): void {
+  for (let index = items.length - 1; index >= 0; index -= 1) {
+    if (items[index]?.itemKey === itemKey) items.splice(index, 1);
+  }
+}
+
 function applyItemOutcome<TRef extends AtlassianSyncItemRef>(
   state: FetchRunState<TRef>,
   ref: TRef,
@@ -358,8 +364,7 @@ function applyItemOutcome<TRef extends AtlassianSyncItemRef>(
     // removal signal, and pruned the freshly-indexed document, persisting a fingerprint that
     // permanently masked the item on subsequent unchanged syncs).
     state.enumeratedItemKeys.delete(ref.itemKey);
-    const orphanIndex = state.items.findIndex((existing) => existing.itemKey === ref.itemKey);
-    if (orphanIndex >= 0) state.items.splice(orphanIndex, 1);
+    removeItemsByKey(state.items, ref.itemKey);
     // `progress.fetchedItems` is intentionally NOT decremented here: it counts every ref whose
     // fetch returned an `item` outcome (a completion-accounting signal for the pipeline's
     // `dispatchedAll = fetched + skipped >= refs.length` check), not the size of state.items.

@@ -61,16 +61,17 @@ async function publishLaneArgs(): Promise<readonly string[]> {
   return rec.calls()[0]?.args ?? [];
 }
 
-describe("node git publish adapter — the push can authenticate", () => {
-  it("neutralizes executable repository config before the governed push", async () => {
+describe("node git publish adapter — the push can authenticate", (): void => {
+  it("neutralizes executable repository config before the governed push", async (): Promise<void> => {
     const args = await publishLaneArgs();
     expect(args).toContain("core.fsmonitor=false");
     expect(args).toContain(`core.hooksPath=${process.platform === "win32" ? "NUL" : "/dev/null"}`);
+    expect(args).toContain("credential.helper=");
     expect(args).toContain("protocol.ext.allow=never");
     expect(args.at(-2)).toBe("origin");
   });
 
-  it("forwards the real HOME so ~/.ssh and the credential helper are reachable", async () => {
+  it("forwards the real HOME so the user's SSH configuration is reachable", async () => {
     const env = await publishLaneEnv();
     expect(env.HOME).toBe("/Users/dev");
     expect(env.USERPROFILE).toBe("/Users/dev");

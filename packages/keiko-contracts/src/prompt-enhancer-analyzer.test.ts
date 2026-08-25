@@ -421,6 +421,7 @@ describe("analyzePrompt scope missing context", () => {
 
   it.each([
     "Design a software architecture for now.",
+    "Design a software architecture for the service.",
     "Design a software architecture. The platform must be scalable.",
     "Design a highly productive software architecture.",
   ])("does not accept generic or substring-only scope cues: %s", (text) => {

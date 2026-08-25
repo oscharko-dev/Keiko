@@ -236,7 +236,7 @@ describe("runAtlassianSyncFetch", () => {
     expect(outcome.enumeratedItemKeys).toEqual(["a", "b"]);
   });
 
-  it("drops the fetched item alongside the enumeration key when a duplicate ref's later fetch reports missing (KEIKO-0598 follow-up)", async () => {
+  it("drops every fetched item alongside the enumeration key when a duplicate ref's later fetch reports missing (KEIKO-0598 follow-up)", async (): Promise<void> => {
     // Regression for the KEIKO-0598 follow-up Codex identified on #3279: the earlier fix removed
     // every occurrence of a duplicated key from enumeratedItemKeys once a fetch reports it
     // missing, but the ITEM that the first fetch pushed to state.items stayed. That left the two
@@ -251,7 +251,13 @@ describe("runAtlassianSyncFetch", () => {
       enumerate: () =>
         Promise.resolve({
           ok: true,
-          refs: [{ itemKey: "a" }, { itemKey: dupKey }, { itemKey: dupKey }, { itemKey: "b" }],
+          refs: [
+            { itemKey: "a" },
+            { itemKey: dupKey },
+            { itemKey: dupKey },
+            { itemKey: dupKey },
+            { itemKey: "b" },
+          ],
           complete: true,
         }),
       fetchItem: (ref): Promise<AtlassianSyncItemFetchOutcome> => {
@@ -260,7 +266,7 @@ describe("runAtlassianSyncFetch", () => {
         }
         dupCalls += 1;
         return Promise.resolve(
-          dupCalls === 1 ? { kind: "item", item: item(dupKey) } : { kind: "missing" },
+          dupCalls < 3 ? { kind: "item", item: item(dupKey) } : { kind: "missing" },
         );
       },
     };
@@ -356,7 +362,7 @@ describe("runAtlassianSyncFetch", () => {
     expect(dispatched).toHaveLength(dispatchedCountAtSettle);
   });
 
-  it("fires the fetchItem AbortSignal on in-flight siblings once one worker throws (KEIKO-0758 follow-up)", async () => {
+  it("fires the fetchItem AbortSignal on in-flight siblings once one worker throws (KEIKO-0758 follow-up)", async (): Promise<void> => {
     // Codex flagged that the earlier KEIKO-0758 fix set `terminated=true` on a throw but never
     // aborted the in-flight siblings' fetches, so a slow-request sibling could carry the run
     // past `deadlineAt`. The lane-scoped AbortController now fires on first terminal error and
@@ -416,7 +422,7 @@ describe("runAtlassianSyncFetch", () => {
     expect(outcome).toMatchObject({ status: "truncated", reason: "bounds-exceeded" });
   });
 
-  it("stops dispatching new work once the run deadline is exceeded (KEIKO-0758 follow-up)", async () => {
+  it("stops dispatching new work once the run deadline is exceeded (KEIKO-0758 follow-up)", async (): Promise<void> => {
     // Companion to the abort-propagation test above: the deadline check inside the worker loop
     // prevents a slow-last-worker from pulling new refs off the shared cursor after the run
     // budget has already expired. A synthetic `now` clock advances past `maxDurationMs` between

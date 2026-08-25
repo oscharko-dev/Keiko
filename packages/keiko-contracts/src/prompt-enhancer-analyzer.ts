@@ -950,8 +950,17 @@ const CRITERIA_SENSITIVE_CLASSES: ReadonlySet<PromptTaskClass> = new Set([
 ]);
 const SCOPE_SENSITIVE_CLASSES: ReadonlySet<PromptTaskClass> = new Set(["code-architecture"]);
 const ARCHITECTURE_SCOPE_PREFIX_PATTERN = /\b(?:for|within|supporting|targeting)\s+/u;
-const ARCHITECTURE_SCOPE_TARGET_PATTERN =
-  /^(?:an?\s+)?(?:[\p{L}\p{N}-]+\s+){1,6}(?:application|service|platform|workspace|repository|product|system)\b/u;
+const ARCHITECTURE_SCOPE_DETERMINERS: ReadonlySet<string> = new Set(["a", "an", "the"]);
+const ARCHITECTURE_SCOPE_TARGETS: ReadonlySet<string> = new Set([
+  "application",
+  "service",
+  "platform",
+  "workspace",
+  "repository",
+  "product",
+  "system",
+]);
+const ARCHITECTURE_SCOPE_WORD_SEPARATOR_PATTERN = /[^\p{L}\p{N}-]/u;
 const MAX_MISSING_TOPICS = 4;
 
 const lacksSubject = (view: AnalysisView): boolean =>
@@ -959,10 +968,20 @@ const lacksSubject = (view: AnalysisView): boolean =>
 
 function hasArchitectureScope(lower: string): boolean {
   const prefix = ARCHITECTURE_SCOPE_PREFIX_PATTERN.exec(lower);
-  return (
-    prefix !== null &&
-    ARCHITECTURE_SCOPE_TARGET_PATTERN.test(lower.slice(prefix.index + prefix[0].length))
-  );
+  if (prefix === null) return false;
+
+  const scopeWords = lower.slice(prefix.index + prefix[0].length).split(/\s+/u);
+  const firstWord = scopeWords[0] ?? "";
+  const firstModifierIndex = ARCHITECTURE_SCOPE_DETERMINERS.has(firstWord) ? 1 : 0;
+  if (ARCHITECTURE_SCOPE_DETERMINERS.has(scopeWords[firstModifierIndex] ?? "")) return false;
+
+  return scopeWords
+    .slice(firstModifierIndex + 1, firstModifierIndex + 7)
+    .some((word) =>
+      ARCHITECTURE_SCOPE_TARGETS.has(
+        word.split(ARCHITECTURE_SCOPE_WORD_SEPARATOR_PATTERN, 1)[0] ?? "",
+      ),
+    );
 }
 
 const lacksScope = (view: AnalysisView, taskClass: PromptTaskClass): boolean =>

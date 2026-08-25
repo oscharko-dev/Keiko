@@ -25,6 +25,12 @@ function makeAdapter(rec: SpawnRecorder, signal?: AbortSignal): GitLocalMutation
   });
 }
 
+async function continuePastUnsignedSigningPolicy(rec: SpawnRecorder): Promise<void> {
+  rec.child.emit("close", 1, null);
+  await Promise.resolve();
+  await Promise.resolve();
+}
+
 describe("node git mutation adapter — governed argv reaches the spawn boundary", () => {
   it("spawns exactly the governed literalized `git add -- <path>` and reports success on exit 0", async () => {
     const rec = recordingSpawn();
@@ -47,6 +53,8 @@ describe("node git mutation adapter — governed argv reaches the spawn boundary
       "-c",
       "alias.commit=",
       "-c",
+      "commit.gpgSign=false",
+      "-c",
       "protocol.ext.allow=never",
       "-c",
       "submodule.recurse=false",
@@ -64,6 +72,7 @@ describe("node git mutation adapter — failure-classification branches", () => 
     const rec = recordingSpawn();
     const ad = makeAdapter(rec);
     const pending = ad.commit({ message: "m", allowEmpty: false });
+    await continuePastUnsignedSigningPolicy(rec);
     rec.child.emit("close", 1, null);
     const result = await pending;
     expect(result.outcome).toBe("failed");
@@ -133,9 +142,10 @@ async function identityLaneEnv(): Promise<Record<string, string>> {
   const rec = recordingSpawn();
   const ad = identityLaneAdapter(rec);
   const pending = ad.commit({ message: "feat: governed commit", allowEmpty: false });
+  await continuePastUnsignedSigningPolicy(rec);
   rec.child.emit("close", 0, null);
   await pending;
-  return rec.calls()[0]?.options.env ?? {};
+  return rec.calls().at(-1)?.options.env ?? {};
 }
 
 describe("node git mutation adapter — the user's git identity reaches the commit", () => {

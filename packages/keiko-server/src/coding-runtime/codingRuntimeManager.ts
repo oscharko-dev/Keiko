@@ -479,6 +479,7 @@ interface ActiveRuntime {
   readonly tree: RuntimeProcessTree;
   readonly shutdownTimeoutMs: number;
   readonly approvalStore: SupervisedCodingApprovalStore;
+  readonly issuedTaskApprovalMetadata: Map<string, IssuedTaskApprovalMetadata>;
   readonly codingToolApprovals: CodingToolApprovalBridge | undefined;
   readonly nowMs: () => number;
   readonly nowIso: () => string;
@@ -521,6 +522,11 @@ interface ActiveRuntime {
   paused: boolean;
   status: CodingRuntimeStatus;
   sequence: number;
+}
+
+interface IssuedTaskApprovalMetadata {
+  readonly commandTemplateId: string;
+  readonly safeArgumentClasses: readonly string[];
 }
 
 interface SupervisedRuntimeEvidenceContext {
@@ -906,6 +912,7 @@ class CodingRuntimeManagerImpl implements CodingRuntimeManager {
       rollbackIssuedApproval(this.deps.approvalStore, binding);
       return { ok: false, failureCode: "approval-activation-failed", retryable: false };
     }
+    rememberIssuedTaskApproval(active, binding, issued.approval.approvalId);
     return {
       ok: true,
       approval: issued.approval,
@@ -2062,6 +2069,7 @@ function createActiveRuntime(
     tree,
     shutdownTimeoutMs: request.shutdownTimeoutMs,
     approvalStore: deps.approvalStore,
+    issuedTaskApprovalMetadata: new Map(),
     codingToolApprovals: deps.codingToolApprovals,
     nowMs: deps.now,
     nowIso: deps.nowIso,
@@ -2101,6 +2109,7 @@ function createInactiveRuntime(
     tree: inertTree(),
     shutdownTimeoutMs: request.shutdownTimeoutMs,
     approvalStore,
+    issuedTaskApprovalMetadata: new Map(),
     codingToolApprovals: undefined,
     nowMs,
     nowIso,
@@ -2763,6 +2772,16 @@ function supervisedVerificationEvent(
   sequence: number,
   event: SidecarPermissionEvent,
 ): CodingWorkbenchRuntimeEvent {
+  const approvalFailure = invalidVerificationApprovalEvent(active, sequence, event);
+  if (approvalFailure !== undefined) return approvalFailure;
+  return supervisedVerificationOutcomeEvent(active, sequence, event);
+}
+
+function supervisedVerificationOutcomeEvent(
+  active: ActiveRuntime,
+  sequence: number,
+  event: SidecarPermissionEvent,
+): CodingWorkbenchRuntimeEvent {
   const decision = decideSupervisedVerificationCommand({
     ...supervisedEvidenceContext(active, "verification-command"),
     executable: event.executable ?? "",
@@ -2779,6 +2798,21 @@ function supervisedVerificationEvent(
     failedCount: decision.evidence.failedCount ?? 0,
     skippedCount: decision.evidence.skippedCount ?? 0,
   });
+}
+
+function invalidVerificationApprovalEvent(
+  active: ActiveRuntime,
+  sequence: number,
+  event: SidecarPermissionEvent,
+): CodingWorkbenchRuntimeEvent | undefined {
+  if (event.approvalTokenMalformed === true) {
+    return supervisedPolicyFailureEvent(active, sequence, "approval-proof-stale");
+  }
+  if (event.approvalToken === undefined) return undefined;
+  const bindings = approvalBindingsForEvent(active, event, "verification-command");
+  return consumePresentedApproval(active, event, bindings) === undefined
+    ? supervisedPolicyFailureEvent(active, sequence, "approval-proof-stale")
+    : undefined;
 }
 
 function supervisedMutationEvent(
@@ -2905,6 +2939,18 @@ function rollbackIssuedApproval(
   store.invalidateRun(binding.runId);
 }
 
+function rememberIssuedTaskApproval(
+  active: ActiveRuntime,
+  binding: SupervisedCodingApprovalBinding,
+  approvalId: string,
+): void {
+  if (binding.grantScope !== "task") return;
+  active.issuedTaskApprovalMetadata.set(approvalId, {
+    commandTemplateId: binding.commandTemplateId,
+    safeArgumentClasses: [...binding.safeArgumentClasses],
+  });
+}
+
 function approvalBindingsForEvent(
   active: ActiveRuntime,
   event: SidecarPermissionEvent,
@@ -2916,7 +2962,11 @@ function approvalBindingsForEvent(
     actionKind,
     connectorScopes: event.connectorScopes,
   });
-  return [binding, taskApprovalBinding(active, binding, event)];
+  const issuedMetadata =
+    event.approvalToken === undefined
+      ? undefined
+      : active.issuedTaskApprovalMetadata.get(event.approvalToken.approvalId);
+  return [binding, taskApprovalBinding(active, binding, issuedMetadata ?? event)];
 }
 
 function approvalBinding(input: {
@@ -2940,8 +2990,11 @@ function approvalBinding(input: {
 function taskApprovalBinding(
   active: ActiveRuntime,
   binding: SupervisedCodingApprovalBindingOnce,
-  input: Pick<CodingRuntimeApprovalIssueRequest, "commandTemplateId" | "safeArgumentClasses"> &
-    Pick<SidecarPermissionEvent, "commandLabel">,
+  input: {
+    readonly commandTemplateId?: string | undefined;
+    readonly safeArgumentClasses?: readonly string[] | undefined;
+    readonly commandLabel?: string | undefined;
+  },
 ): SupervisedCodingApprovalBindingTask {
   const context = active.context;
   return {
