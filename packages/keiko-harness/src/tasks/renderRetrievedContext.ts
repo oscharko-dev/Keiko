@@ -27,12 +27,31 @@ const HEADER =
 
 const MAX_REF_CHARS = 160;
 
+// Code points collapsed to a single space (or dropped at a boundary) before a citationRef is
+// echoed into a rendered prompt header (KEIKO-0740): ASCII C0 controls + space, DEL, the Unicode
+// C1 control block (U+0080-U+009F), bidi-override/zero-width format characters
+// (U+200B-U+200F, U+202A-U+202E), and the line/paragraph separators (U+2028/U+2029) that render as
+// a line break in many text renderers — every code point a hostile citationRef could use to fake a
+// fresh line or reorder rendered text, extending the original ASCII-only filter. Defence-in-depth
+// only: the hard guarantee is that the task plan keeps allowsTools false regardless of content.
+function isStrippableFormatCodePoint(code: number): boolean {
+  return (
+    code <= 0x20 ||
+    code === 0x7f ||
+    (code >= 0x80 && code <= 0x9f) ||
+    (code >= 0x200b && code <= 0x200f) ||
+    (code >= 0x202a && code <= 0x202e) ||
+    code === 0x2028 ||
+    code === 0x2029
+  );
+}
+
 function safeCitationRef(value: string): string {
   let out = "";
   let pendingSpace = false;
   for (const char of value) {
     const code = char.codePointAt(0) ?? 0;
-    if (code <= 0x20 || code === 0x7f) {
+    if (isStrippableFormatCodePoint(code)) {
       pendingSpace = out.length > 0;
       continue;
     }
