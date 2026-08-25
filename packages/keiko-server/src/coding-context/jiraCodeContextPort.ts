@@ -11,6 +11,12 @@ import { Buffer } from "node:buffer";
 import { URL } from "node:url";
 
 import type {
+  AtlassianCredentialCustody,
+  AtlassianCredentialMetadata,
+  AtlassianHttpBodyPort,
+} from "@oscharko-dev/keiko-connectors";
+
+import type {
   JiraCodeContextHttpPort,
   JiraCodeContextHttpRequest,
 } from "./jiraCodeContextConnector.js";
@@ -40,6 +46,65 @@ export interface JiraCodeContextPortConfig {
 export interface JiraCodeContextPortDeps {
   readonly fetchFn?: typeof globalThis.fetch | undefined;
   readonly timeoutMs?: number | undefined;
+}
+
+export interface GovernedJiraCodeContextPortDeps {
+  readonly custody: Pick<AtlassianCredentialCustody, "list">;
+  readonly httpBodyPortFactory: (metadata: AtlassianCredentialMetadata) => AtlassianHttpBodyPort;
+}
+
+/**
+ * The sole production Jira context transport. Credential selection and secret resolution stay in
+ * the ADR-0128 custody/transport layer; this adapter only selects one configured Jira credential
+ * and translates the bounded context read into its already-governed HTTP body port.
+ */
+export function createGovernedJiraCodeContextHttpPort(
+  deps: GovernedJiraCodeContextPortDeps,
+): JiraCodeContextHttpPort {
+  return {
+    readJson: async (request): Promise<unknown> => {
+      const metadata = singleJiraCredential(deps.custody);
+      const result = await deps.httpBodyPortFactory(metadata)({
+        method: request.method,
+        url: governedRequestUrl(metadata.baseUrl, request),
+        timeoutMs: JIRA_TIMEOUT_MS,
+        maxBodyBytes: JIRA_MAX_RESPONSE_BYTES,
+      });
+      if (
+        result.kind !== "response" ||
+        result.status < 200 ||
+        result.status >= 300 ||
+        result.truncated
+      ) {
+        throw new JiraCodeContextPortError("jira-failed");
+      }
+      try {
+        return JSON.parse(result.bodyText);
+      } catch {
+        throw new JiraCodeContextPortError("jira-invalid-json");
+      }
+    },
+  };
+}
+
+function singleJiraCredential(
+  custody: Pick<AtlassianCredentialCustody, "list">,
+): AtlassianCredentialMetadata {
+  const jira = custody.list().filter((metadata) => metadata.provider === "jira");
+  if (jira.length !== 1 || jira[0] === undefined) throw new JiraCodeContextPortError("jira-denied");
+  return jira[0];
+}
+
+function governedRequestUrl(baseUrl: string, request: JiraCodeContextHttpRequest): string {
+  if (!request.path.startsWith("/rest/api/")) throw new JiraCodeContextPortError("jira-denied");
+  let url: URL;
+  try {
+    url = new URL(request.path, baseUrl);
+  } catch {
+    throw new JiraCodeContextPortError("jira-denied");
+  }
+  for (const [key, value] of Object.entries(request.query)) url.searchParams.set(key, value);
+  return url.toString();
 }
 
 export function parseJiraCodeContextPortConfig(

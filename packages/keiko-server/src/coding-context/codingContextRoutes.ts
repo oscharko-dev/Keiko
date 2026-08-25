@@ -41,10 +41,6 @@ import {
 import { createGitHubCodeContextConnector } from "./githubCodeContextConnector.js";
 import { createJiraCodeContextConnector } from "./jiraCodeContextConnector.js";
 import { createGitHubCodeContextApiPort } from "./githubCodeContextPort.js";
-import {
-  createJiraCodeContextHttpPort,
-  parseJiraCodeContextPortConfig,
-} from "./jiraCodeContextPort.js";
 
 const TOP_LEVEL_KEYS: ReadonlySet<string> = new Set([
   "schemaVersion",
@@ -261,7 +257,7 @@ function connectorConfigFor(
   return {
     github_connector_authorized:
       deps.env.GITHUB_CONNECTOR_AUTHORIZED === "true" && githubConfigured,
-    jira_connector_authorized: deps.env.JIRA_CONNECTOR_AUTHORIZED === "true" && jiraConfigured,
+    jira_connector_authorized: jiraConfigured,
   };
 }
 
@@ -273,13 +269,6 @@ interface ComposedConnectors {
 const NO_CONNECTOR: CodeContextConnector = {
   read: () => Promise.reject(new Error("coding context connector is not configured")),
 };
-
-function fallbackJiraPort(
-  deps: UiHandlerDeps,
-): ReturnType<typeof createJiraCodeContextHttpPort> | undefined {
-  const config = parseJiraCodeContextPortConfig(deps.env);
-  return config === undefined ? undefined : createJiraCodeContextHttpPort(config);
-}
 
 export function composeCodingContextConnectors(deps: UiHandlerDeps): ComposedConnectors {
   const githubPort =
@@ -299,7 +288,7 @@ export function composeCodingContextConnectors(deps: UiHandlerDeps): ComposedCon
           },
           processEnv: process.env,
         }));
-  const jiraPort = deps.codingContextJiraPort ?? fallbackJiraPort(deps);
+  const jiraPort = deps.codingContextJiraPort;
   return {
     connectors: {
       github:

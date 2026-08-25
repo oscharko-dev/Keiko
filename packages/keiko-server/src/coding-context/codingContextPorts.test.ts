@@ -7,6 +7,7 @@ import {
   GitHubCodeContextPortError,
 } from "./githubCodeContextPort.js";
 import {
+  createGovernedJiraCodeContextHttpPort,
   createJiraCodeContextHttpPort,
   JiraCodeContextPortError,
   parseJiraCodeContextPortConfig,
@@ -186,6 +187,45 @@ describe("jira code context port", () => {
       text: () => Promise.resolve(JSON.stringify(body)),
     } as unknown as Response;
   }
+
+  it("reads through exactly one governed Jira credential", async () => {
+    const requests: unknown[] = [];
+    const port = createGovernedJiraCodeContextHttpPort({
+      custody: {
+        list: () => [
+          {
+            authRef: "atlassian-cred:AAAAAAAAAAAAAAAAAAAAAA",
+            provider: "jira",
+            baseUrl: "https://example.atlassian.net",
+          },
+        ],
+      } as never,
+      httpBodyPortFactory: () => (request) => {
+        requests.push(request);
+        return Promise.resolve({
+          kind: "response" as const,
+          status: 200,
+          bodyText: '{"fields":{"summary":"Issue"}}',
+          bodyBytes: 30,
+          truncated: false,
+        });
+      },
+    });
+
+    await expect(
+      port.readJson({
+        method: "GET",
+        path: "/rest/api/3/issue/PROJ-1",
+        query: { fields: "summary" },
+      }),
+    ).resolves.toMatchObject({ fields: { summary: "Issue" } });
+    expect(requests).toEqual([
+      expect.objectContaining({
+        method: "GET",
+        url: "https://example.atlassian.net/rest/api/3/issue/PROJ-1?fields=summary",
+      }),
+    ]);
+  });
 
   it("parses config only when every field is present", () => {
     expect(parseJiraCodeContextPortConfig({})).toBeUndefined();

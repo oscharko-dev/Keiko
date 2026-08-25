@@ -279,10 +279,7 @@ import { readProductionWorkspaceHead } from "./coding-runtime/productionWorkspac
 import type { GitHubCodeContextApiPort } from "./coding-context/githubCodeContextConnector.js";
 import type { JiraCodeContextHttpPort } from "./coding-context/jiraCodeContextConnector.js";
 import { createGitHubCodeContextApiPort } from "./coding-context/githubCodeContextPort.js";
-import {
-  createJiraCodeContextHttpPort,
-  parseJiraCodeContextPortConfig,
-} from "./coding-context/jiraCodeContextPort.js";
+import { createGovernedJiraCodeContextHttpPort } from "./coding-context/jiraCodeContextPort.js";
 import {
   createAutonomousDeliveryApprovalStore,
   type AutonomousDeliveryApprovalStore,
@@ -3684,6 +3681,7 @@ function buildRuntimeUiHandlerDeps(
 
 type IntegrationUiHandlerDeps = ReturnType<typeof autonomousDeliveryFields> &
   ReturnType<typeof atlassianConnectorCredentialFields> &
+  Pick<UiHandlerDeps, "codingContextJiraPort"> &
   Pick<
     UiHandlerDeps,
     | "redactionSecrets"
@@ -3700,9 +3698,17 @@ type IntegrationUiHandlerDeps = ReturnType<typeof autonomousDeliveryFields> &
   >;
 
 function buildIntegrationUiHandlerDeps(args: UiHandlerDepsAssemblyArgs): IntegrationUiHandlerDeps {
+  const atlassian = atlassianConnectorCredentialFields(args);
   return {
     ...autonomousDeliveryFields(args.options),
-    ...atlassianConnectorCredentialFields(args),
+    ...atlassian,
+    ...(atlassian.atlassianConnectorCredentials === undefined
+      ? {}
+      : {
+          codingContextJiraPort: createGovernedJiraCodeContextHttpPort(
+            atlassian.atlassianConnectorCredentials,
+          ),
+        }),
     redactionSecrets: runtimeRedactionSecrets(args.options.env, args.runtimeConfig, args.egress),
     gatewayConfig: args.runtimeConfig,
     gatewaySetupTester: args.options.gatewaySetupTester,
@@ -3748,7 +3754,7 @@ function buildOptionalUiHandlerDeps(
 
 function buildCodingContextPortsDependency(
   args: UiHandlerDepsAssemblyArgs,
-): Pick<UiHandlerDeps, "codingContextGitHubPort" | "codingContextJiraPort"> {
+): Pick<UiHandlerDeps, "codingContextGitHubPort"> {
   const githubPort =
     args.options.env.GITHUB_CONNECTOR_AUTHORIZED !== "true" ||
     args.bundle.preferredProjectPath === undefined
@@ -3766,21 +3772,8 @@ function buildCodingContextPortsDependency(
           },
           processEnv: args.options.env,
         });
-  let jiraPort: JiraCodeContextHttpPort | undefined;
-  try {
-    const jiraConfig = parseJiraCodeContextPortConfig(args.options.env);
-    jiraPort = jiraConfig === undefined ? undefined : createJiraCodeContextHttpPort(jiraConfig);
-  } catch (error) {
-    emitCompositionDiagnostic(
-      args.options.diagnostics,
-      "deps.codingContextJiraPort",
-      "server-operation-failed",
-      error,
-    );
-  }
   return {
     ...(githubPort === undefined ? {} : { codingContextGitHubPort: githubPort }),
-    ...(jiraPort === undefined ? {} : { codingContextJiraPort: jiraPort }),
   };
 }
 
