@@ -268,10 +268,6 @@ describe("DAP debug leaf contracts", () => {
       maxTypeBytes: 256,
       maxValueBytes: 4_096,
       maxOutputBytes: 16 * 1_024,
-      maxChildrenPerNode: 200,
-      maxValueChars: 4_096,
-      maxFrames: 64,
-      maxOutputChars: 16 * 1_024,
     });
   });
 
@@ -643,7 +639,7 @@ describe("UTF-8-safe debug projections", () => {
       name: "wide",
       value: "root",
       children: Array.from(
-        { length: DEFAULT_DEBUG_PAYLOAD_LIMITS.maxChildrenPerNode + 10 },
+        { length: DEFAULT_DEBUG_PAYLOAD_LIMITS.maxVariablesPerExpansion + 10 },
         (_, index) => ({
           name: `child-${String(index)}`,
           type: "x".repeat(300),
@@ -668,7 +664,9 @@ describe("UTF-8-safe debug projections", () => {
 
     const visit = (nodes: typeof tree.nodes, depth: number): void => {
       expect(depth).toBeLessThanOrEqual(DEFAULT_DEBUG_PAYLOAD_LIMITS.maxDepth);
-      expect(nodes.length).toBeLessThanOrEqual(DEFAULT_DEBUG_PAYLOAD_LIMITS.maxChildrenPerNode);
+      expect(nodes.length).toBeLessThanOrEqual(
+        DEFAULT_DEBUG_PAYLOAD_LIMITS.maxVariablesPerExpansion,
+      );
       for (const node of nodes) {
         if (node.kind === "truncated") {
           expect(node.truncated).toBe(true);
@@ -693,14 +691,63 @@ describe("UTF-8-safe debug projections", () => {
     expect(JSON.stringify(tree)).toContain('"kind":"truncated"');
   });
 
+  it("attributes truncation to the node-budget guard that actually tripped, not to array length", () => {
+    const { maxVariablesPerExpansion, maxGraphNodes } = DEFAULT_DEBUG_PAYLOAD_LIMITS;
+    const leaf = (name: string): DebugVariableInput => ({ name, value: "v" });
+    const fillerRoot = (rootIndex: number, childCount: number): DebugVariableInput => ({
+      name: `filler-${String(rootIndex)}`,
+      value: "root",
+      children: Array.from({ length: childCount }, (_, childIndex) =>
+        leaf(`filler-${String(rootIndex)}-${String(childIndex)}`),
+      ),
+    });
+    // Four roots of 200 nodes (1 root + 199 children) plus one root of 198 nodes (1 root + 197
+    // children) pin context.nodeCount at exactly maxGraphNodes - 2 (998) before the victim below
+    // is visited: 4 * 200 + 198 = 998.
+    const fillerRoots = [
+      fillerRoot(0, 199),
+      fillerRoot(1, 199),
+      fillerRoot(2, 199),
+      fillerRoot(3, 199),
+      fillerRoot(4, 197),
+    ];
+    // The victim's own child array (201) sits just past maxVariablesPerExpansion, so a reason
+    // recomputed from array length alone (the pre-fix heuristic) would call this "width". By the
+    // time these children are visited, nodeCount is already pinned at maxGraphNodes - 1: the guard
+    // that actually stops the loop below is the graph-wide node budget, not this array's own width
+    // (KEIKO-0845).
+    const victim: DebugVariableInput = {
+      name: "victim",
+      value: "root",
+      children: Array.from({ length: maxVariablesPerExpansion + 1 }, (_, childIndex) =>
+        leaf(`victim-${String(childIndex)}`),
+      ),
+    };
+    const tree = buildDebugVariableTree([...fillerRoots, victim]);
+    expect(tree.nodeCount).toBe(maxGraphNodes);
+    const victimNode = tree.nodes.at(-1);
+    expect(victimNode?.kind).toBe("variable");
+    if (victimNode?.kind === "variable") {
+      expect(victimNode.children).toHaveLength(1);
+      const sentinel = victimNode.children[0];
+      expect(sentinel?.kind).toBe("truncated");
+      if (sentinel?.kind === "truncated") {
+        expect(sentinel.reason).toBe("nodeLimit");
+        expect(sentinel.omittedCount).toBe(maxVariablesPerExpansion + 1);
+      }
+    }
+  });
+
   it("caps stack, scopes, watches, and output with honest metadata", () => {
-    const frames = Array.from({ length: 150 }, (_, index) => ({
+    const FRAME_FIXTURE_COUNT = 150;
+    const SCOPE_FIXTURE_COUNT = 40;
+    const frames = Array.from({ length: FRAME_FIXTURE_COUNT }, (_, index) => ({
       frameRef: `frame_${String(index)}`,
       name: "😀".repeat(300),
       line: 1,
       column: 1,
     }));
-    const scopes = Array.from({ length: 40 }, (_, index) => ({
+    const scopes = Array.from({ length: SCOPE_FIXTURE_COUNT }, (_, index) => ({
       scopeRef: `scope_${String(index)}`,
       name: "é".repeat(300),
       expensive: false,
@@ -717,10 +764,14 @@ describe("UTF-8-safe debug projections", () => {
     const output = buildDebugOutputEvent("session_1", "stdout", "😀".repeat(8_000));
     expect(stack.frames).toHaveLength(DEFAULT_DEBUG_PAYLOAD_LIMITS.maxFramesPerPage);
     expect(stack.retainedCount).toBe(DEFAULT_DEBUG_PAYLOAD_LIMITS.maxRetainedFrames);
-    expect(stack.omittedCount).toBe(22);
+    expect(stack.omittedCount).toBe(
+      FRAME_FIXTURE_COUNT - DEFAULT_DEBUG_PAYLOAD_LIMITS.maxRetainedFrames,
+    );
     expect(stack.truncated).toBe(true);
     expect(scopeProjection.scopes).toHaveLength(DEFAULT_DEBUG_PAYLOAD_LIMITS.maxScopesPerFrame);
-    expect(scopeProjection.omittedCount).toBe(8);
+    expect(scopeProjection.omittedCount).toBe(
+      SCOPE_FIXTURE_COUNT - DEFAULT_DEBUG_PAYLOAD_LIMITS.maxScopesPerFrame,
+    );
     expect(watchResult.value?.retainedBytes).toBeLessThanOrEqual(
       DEFAULT_DEBUG_PAYLOAD_LIMITS.maxWatchValueBytes,
     );

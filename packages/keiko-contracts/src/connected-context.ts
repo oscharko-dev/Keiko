@@ -16,11 +16,13 @@ export const CONNECTED_CONTEXT_SCHEMA_VERSION = "1" as const;
 // ─── Selected scope ───────────────────────────────────────────────────────────
 export type SelectedScopeKind = "workspace-root" | "directory" | "files";
 
-export const SELECTED_SCOPE_KINDS: readonly SelectedScopeKind[] = [
+// KEIKO-0880: Object.freeze — `as const` alone is compile-time only and left this table's backing
+// array writable at runtime.
+export const SELECTED_SCOPE_KINDS: readonly SelectedScopeKind[] = Object.freeze([
   "workspace-root",
   "directory",
   "files",
-] as const;
+] as const);
 
 export interface SelectedScope {
   readonly schemaVersion: typeof CONNECTED_CONTEXT_SCHEMA_VERSION;
@@ -63,7 +65,9 @@ export type EvidenceAtomProvenanceKind =
   // can label document-derived evidence separately from raw code/text excerpts.
   | "document-extract";
 
-export const EVIDENCE_ATOM_PROVENANCE_KINDS: readonly EvidenceAtomProvenanceKind[] = [
+// KEIKO-0880: Object.freeze — `as const` alone is compile-time only and left this table's backing
+// array writable at runtime.
+export const EVIDENCE_ATOM_PROVENANCE_KINDS: readonly EvidenceAtomProvenanceKind[] = Object.freeze([
   "lexical-search",
   "semantic-search",
   "file-listing",
@@ -72,7 +76,7 @@ export const EVIDENCE_ATOM_PROVENANCE_KINDS: readonly EvidenceAtomProvenanceKind
   "git-history",
   "model-rerank",
   "document-extract",
-] as const;
+] as const);
 
 export interface EvidenceAtomProvenance {
   readonly kind: EvidenceAtomProvenanceKind;
@@ -165,7 +169,8 @@ export interface ExplorationBudget {
   readonly rerankCallsMax: number;
 }
 
-export const DEFAULT_EXPLORATION_BUDGET: ExplorationBudget = {
+// KEIKO-0880: Object.freeze — flat record of numbers, so a shallow freeze is sufficient.
+export const DEFAULT_EXPLORATION_BUDGET: ExplorationBudget = Object.freeze({
   searchCallsMax: 16,
   filesReadMax: 32,
   excerptBytesMax: 131_072,
@@ -173,7 +178,7 @@ export const DEFAULT_EXPLORATION_BUDGET: ExplorationBudget = {
   modelOutputTokensMax: 4_096,
   elapsedMsMax: 30_000,
   rerankCallsMax: 1,
-} as const;
+});
 
 export interface ExplorationUsage {
   readonly searchCalls: number;
@@ -228,7 +233,9 @@ export type CandidateOmissionReason =
   // A password-protected / encrypted document that cannot be opened for text extraction.
   | "encrypted-document";
 
-export const CANDIDATE_OMISSION_REASONS: readonly CandidateOmissionReason[] = [
+// KEIKO-0880: Object.freeze — `as const` alone is compile-time only and left this table's backing
+// array writable at runtime.
+export const CANDIDATE_OMISSION_REASONS: readonly CandidateOmissionReason[] = Object.freeze([
   "outside-scope",
   "binary",
   "generated",
@@ -243,7 +250,7 @@ export const CANDIDATE_OMISSION_REASONS: readonly CandidateOmissionReason[] = [
   "no-text-layer",
   "malformed-document",
   "encrypted-document",
-] as const;
+] as const);
 
 export interface CandidateSignal {
   readonly name: string;
@@ -308,7 +315,9 @@ export type UncertaintyMarkerKind =
   // answer — fail-closed to a caveat, never silently reported as supported.
   | "entailment-unavailable";
 
-export const UNCERTAINTY_MARKER_KINDS: readonly UncertaintyMarkerKind[] = [
+// KEIKO-0880: Object.freeze — `as const` alone is compile-time only and left this table's backing
+// array writable at runtime.
+export const UNCERTAINTY_MARKER_KINDS: readonly UncertaintyMarkerKind[] = Object.freeze([
   "no-evidence",
   "stale-evidence",
   "scope-incomplete",
@@ -319,7 +328,7 @@ export const UNCERTAINTY_MARKER_KINDS: readonly UncertaintyMarkerKind[] = [
   "incomplete-answer",
   "unsupported-claim",
   "entailment-unavailable",
-] as const;
+] as const);
 
 export interface UncertaintyMarker {
   readonly kind: UncertaintyMarkerKind;
@@ -329,6 +338,16 @@ export interface UncertaintyMarker {
 }
 
 // ─── Omitted-context entry ────────────────────────────────────────────────────
+// KEIKO-0849: upper bound on how many omitted entries a pack may carry. validatePackOmitted's
+// overlap checks are O(n^2) in entries.length (each entry is checked for overlap against every
+// selected path and every previously-seen omitted path); above this cap the validator short-circuits
+// with a single reason instead of running that scan. 4_096 is 2x the default single-ring lexical
+// retrieval scan size — packages/keiko-workspace/src/repoSearch.ts DEFAULT_SEARCH_LIMITS.
+// maxFilesScanned = 2_000, and every scanned-but-excluded file becomes one omitted entry via
+// omittedFromSearchCandidates in grounded-orchestrator.ts — rounded up to match this package's own
+// TOKEN_ESTIMATE_CACHE_MAX_ENTRIES precedent for a similar order-of-magnitude cap.
+export const MAX_OMITTED_CONTEXT_ENTRIES = 4_096;
+
 export interface OmittedContextEntry {
   readonly scopePath: string;
   readonly reason: CandidateOmissionReason;
@@ -1056,6 +1075,12 @@ function validatePackOmitted(
 ): void {
   if (!Array.isArray(entries)) {
     reasons.push("pack.omitted invalid");
+    return;
+  }
+  // KEIKO-0849: cap BEFORE the O(n^2) overlap scan below, not after — return immediately instead
+  // of continuing on to run that scan over an oversized array.
+  if (entries.length > MAX_OMITTED_CONTEXT_ENTRIES) {
+    reasons.push(`pack.omitted exceeds ${String(MAX_OMITTED_CONTEXT_ENTRIES)}`);
     return;
   }
   const omittedPaths = new Set<string>();

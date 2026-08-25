@@ -413,6 +413,19 @@ function acceptedOutcomeErrors(value: Record<string, unknown>): string[] {
   if (!isChildResultCountFact(ownField(value, "childResultCount"))) {
     errors.push("auxiliaryOutcome.childResultCount must be a tagged non-negative-integer fact");
   }
+  // KEIKO-0626 (sub-fix on the auxiliary side): only a child-agent outcome may report a `known`
+  // childResultCount — a research or skill call has no children, so a known count on those
+  // capabilities is a producer defect that must not silently reach downstream consumers.
+  const capability = ownField(value, "capability");
+  const childResultCount = ownField(value, "childResultCount");
+  const childCountOutcome = isRecord(childResultCount)
+    ? ownField(childResultCount, "outcome")
+    : undefined;
+  if (childCountOutcome === "known" && capability !== "child-agent") {
+    errors.push(
+      `auxiliaryOutcome.childResultCount.outcome=known is only valid when capability is child-agent, got ${String(capability)}`,
+    );
+  }
   return errors;
 }
 

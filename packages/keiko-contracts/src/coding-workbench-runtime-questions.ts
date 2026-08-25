@@ -1,4 +1,5 @@
 import type { CodingWorkbenchValidationResult } from "./coding-workbench.js";
+import { isCodeTaskQuestionId } from "./code-task-governance.js";
 import { CODING_WORKBENCH_RUNTIME_API_ID_MAX_CHARS } from "./coding-workbench-runtime-api.js";
 import {
   exactKeys,
@@ -48,7 +49,8 @@ export interface CodingWorkbenchRuntimeQuestionsResponse {
  * Bound to the observed revision and the exact question-request id, matching the
  * approval-decision and research-revoke request contracts (KEIKO-0411): a stale or forged answer
  * fails closed the same way a stale or forged revoke does. `questionRequestId` is the `que_...`
- * id the question surface already mints (see `isQuestionId` below), carried back on the answer.
+ * id the question surface already mints (see `isCodeTaskQuestionId` in code-task-governance.ts),
+ * carried back on the answer.
  */
 export interface CodingWorkbenchRuntimeQuestionAnswerRequest {
   readonly requestId: string;
@@ -97,7 +99,7 @@ export function parseCodingWorkbenchRuntimeQuestionAnswerRequest(
   if (!Number.isSafeInteger(value.expectedRevision) || Number(value.expectedRevision) < 0) {
     errors.push("expectedRevision must be a non-negative safe integer");
   }
-  if (!isQuestionId(value.questionRequestId)) errors.push("questionRequestId is invalid");
+  if (!isCodeTaskQuestionId(value.questionRequestId)) errors.push("questionRequestId is invalid");
   validateAnswers(value.answers, errors);
   return result(value, errors);
 }
@@ -164,7 +166,7 @@ function validateQuestionRequests(values: readonly unknown[], errors: string[]):
       return;
     }
     errors.push(...exactKeys(value, ["id", "questions"], path));
-    if (!isQuestionId(value.id)) errors.push(`${path}.id is invalid`);
+    if (!isCodeTaskQuestionId(value.id)) errors.push(`${path}.id is invalid`);
     else if (ids.has(value.id)) errors.push("question request ids must be unique");
     else ids.add(value.id);
     validateQuestions(value.questions, path, errors);
@@ -288,8 +290,4 @@ function serializedBytes(value: object): number {
   } catch {
     return Number.POSITIVE_INFINITY;
   }
-}
-
-function isQuestionId(value: unknown): value is string {
-  return typeof value === "string" && /^que_[A-Za-z0-9_-]{1,251}$/u.test(value);
 }

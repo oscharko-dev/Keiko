@@ -49,10 +49,13 @@ export interface QualityIntelligenceCoverageMap {
 }
 
 /**
- * Throws `RangeError` on any out-of-range confidence (NaN, ±Infinity, < 0, > 1) and
- * on a mapping with an empty `candidateIds` list. Returns `void` on success.
+ * Throws `RangeError` on any out-of-range confidence (NaN, ±Infinity, < 0, > 1), on a mapping with
+ * an empty `candidateIds` list, and (KEIKO-0895) on any duplicate `atomId`. Returns `void` on
+ * success. A duplicate atomId would double-count the same atom's coverage in every downstream
+ * percentage — the producer must resolve the duplication upstream.
  */
 export const assertCoverageMapInvariant = (map: QualityIntelligenceCoverageMap): void => {
+  const seenAtomIds = new Set<QualityIntelligenceEvidenceAtomId>();
   for (let index = 0; index < map.mappings.length; index += 1) {
     const mapping = map.mappings[index];
     if (mapping === undefined) {
@@ -70,5 +73,11 @@ export const assertCoverageMapInvariant = (map: QualityIntelligenceCoverageMap):
         `Coverage map mapping[${String(index)}] must reference at least one candidate`,
       );
     }
+    if (seenAtomIds.has(mapping.atomId)) {
+      throw new RangeError(
+        `Coverage map mapping[${String(index)}] duplicates atomId ${String(mapping.atomId)}`,
+      );
+    }
+    seenAtomIds.add(mapping.atomId);
   }
 };

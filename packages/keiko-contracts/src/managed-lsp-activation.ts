@@ -3,6 +3,7 @@
 // process supervision remains owned by ADR-0069 and keiko-server.
 
 import type { WorkspaceTrustLevel } from "./workspace-trust.js";
+import { parseSafely } from "./managed-lsp-parse-safely.js";
 
 export const MANAGED_LSP_ACTIVATION_SCHEMA_VERSION = "1" as const;
 
@@ -229,21 +230,6 @@ function isConsistentStatus(value: UnknownRecord): boolean {
     REASONS_BY_STATE[state].includes(reason) &&
     (policyResult === "denied") === isDeniedReason(reason)
   );
-}
-
-function parseSafely<T>(
-  parser: () => ManagedLspActivationParseResult<T>,
-): ManagedLspActivationParseResult<T> {
-  try {
-    return parser();
-  } catch (error: unknown) {
-    return {
-      ok: false,
-      errors: [
-        `payload could not be inspected: ${error instanceof Error ? error.name : "unknown"}`,
-      ],
-    };
-  }
 }
 
 function canonicalActivationInput(value: UnknownRecord): ManagedLspActivationInput {

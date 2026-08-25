@@ -16,8 +16,33 @@ import {
   CODING_WORKBENCH_RUNTIME_SOURCES,
 } from "./coding-workbench.js";
 import { validateCodingWorkbenchAuthorityEnvelope } from "./coding-workbench-validation.js";
+// Shared runtime contract version + vocabularies live on a dependency-free leaf (KEIKO-0532) so
+// this module and coding-workbench-runtime-api-validation.ts can both depend on them without
+// depending on each other for it. Re-exported below so existing consumers of this module (index.ts,
+// coding-workbench-runtime-api.ts, code-task-governance.ts) see no change to the public surface.
+import {
+  CODING_WORKBENCH_RUNTIME_CONTRACT_VERSION,
+  CODING_WORKBENCH_RUNTIME_FAILURE_CODES,
+  CODING_WORKBENCH_RUNTIME_STATE_NAMES,
+  type CodingWorkbenchRuntimeFailureCode,
+  type CodingWorkbenchRuntimeStateName,
+} from "./coding-workbench-runtime-constants.js";
+// The object/enum-member/exact-key/result/strict-UTC-instant validation primitives are owned by
+// coding-workbench-runtime-api-validation.ts alone; this module no longer keeps its own copies.
+import {
+  exactKeys,
+  isOneOf,
+  isRecord,
+  result,
+  validateStrictUtcInstant,
+} from "./coding-workbench-runtime-api-validation.js";
 
-export const CODING_WORKBENCH_RUNTIME_CONTRACT_VERSION = "1" as const;
+export {
+  CODING_WORKBENCH_RUNTIME_CONTRACT_VERSION,
+  CODING_WORKBENCH_RUNTIME_FAILURE_CODES,
+  CODING_WORKBENCH_RUNTIME_STATE_NAMES,
+};
+export type { CodingWorkbenchRuntimeFailureCode, CodingWorkbenchRuntimeStateName };
 export const CODING_WORKBENCH_TASK_INTENT_MAX_CHARS = 65_536;
 
 export type CodingWorkbenchLifecycleCommand = "start" | "stop" | "takeover" | "recover";
@@ -41,38 +66,6 @@ export type CodingWorkbenchRuntimeIntent =
       readonly runId: string;
     };
 
-export type CodingWorkbenchRuntimeStateName =
-  | "unavailable"
-  | "idle"
-  | "starting"
-  | "ready"
-  | "running"
-  | "paused"
-  | "awaiting-approval"
-  | "stopping"
-  | "succeeded"
-  | "failed"
-  | "cancelled"
-  | "taken-over"
-  | "recovery-required";
-
-export const CODING_WORKBENCH_RUNTIME_STATE_NAMES: readonly CodingWorkbenchRuntimeStateName[] =
-  Object.freeze([
-    "unavailable",
-    "idle",
-    "starting",
-    "ready",
-    "running",
-    "paused",
-    "awaiting-approval",
-    "stopping",
-    "succeeded",
-    "failed",
-    "cancelled",
-    "taken-over",
-    "recovery-required",
-  ] as const);
-
 export interface CodingWorkbenchRuntimeState {
   readonly schemaVersion: typeof CODING_WORKBENCH_RUNTIME_CONTRACT_VERSION;
   readonly state: CodingWorkbenchRuntimeStateName;
@@ -85,48 +78,6 @@ export interface CodingWorkbenchRuntimeState {
   readonly modelSource?: CodingWorkbenchModelSource | undefined;
   readonly failureCode?: CodingWorkbenchRuntimeFailureCode | undefined;
 }
-
-export type CodingWorkbenchRuntimeFailureCode =
-  | "runtime-unavailable"
-  | "active-run-conflict"
-  | "invalid-intent"
-  | "approval-activation-failed"
-  | "authority-resolution-failed"
-  | "authority-expired"
-  | "authority-replayed"
-  | "task-drift"
-  | "workspace-drift"
-  | "project-drift"
-  | "branch-drift"
-  | "scope-drift"
-  | "budget-drift"
-  | "authority-budget-exceeded"
-  | "source-drift"
-  | "runtime-failed"
-  | "revoked"
-  | "recovery-required";
-
-export const CODING_WORKBENCH_RUNTIME_FAILURE_CODES: readonly CodingWorkbenchRuntimeFailureCode[] =
-  Object.freeze([
-    "runtime-unavailable",
-    "active-run-conflict",
-    "invalid-intent",
-    "approval-activation-failed",
-    "authority-resolution-failed",
-    "authority-expired",
-    "authority-replayed",
-    "task-drift",
-    "workspace-drift",
-    "project-drift",
-    "branch-drift",
-    "scope-drift",
-    "budget-drift",
-    "authority-budget-exceeded",
-    "source-drift",
-    "runtime-failed",
-    "revoked",
-    "recovery-required",
-  ] as const);
 
 export interface CodingWorkbenchRuntimeExecutionBinding {
   readonly taskId: string;
@@ -218,16 +169,8 @@ const LEGAL_TRANSITIONS: Readonly<
   "recovery-required": ["idle", "unavailable"],
 } as const);
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
 function isNonEmpty(value: unknown): value is string {
   return typeof value === "string" && value.length > 0;
-}
-
-function isOneOf<T extends string>(value: unknown, allowed: readonly T[]): value is T {
-  return typeof value === "string" && (allowed as readonly string[]).includes(value);
 }
 
 export function isLegalCodingWorkbenchRuntimeTransition(
@@ -274,7 +217,7 @@ export function validateCodingWorkbenchRuntimeAuthorityEnvelope(
   value: unknown,
 ): CodingWorkbenchValidationResult<CodingWorkbenchRuntimeAuthorityEnvelope> {
   if (!isRecord(value)) return { ok: false, errors: ["runtime authority must be an object"] };
-  const errors = unknownKeys(
+  const errors = exactKeys(
     value,
     ["schemaVersion", "authority", "binding", "intentDigest", "nonceDigest", "issuedAt"],
     "runtimeAuthority",
@@ -286,7 +229,7 @@ export function validateCodingWorkbenchRuntimeAuthorityEnvelope(
   validateBinding(value.binding, errors);
   validateDigest(value.intentDigest, "intentDigest", errors);
   validateDigest(value.nonceDigest, "nonceDigest", errors);
-  validateStrictIso(value.issuedAt, "issuedAt", errors);
+  validateStrictUtcInstant(value.issuedAt, "issuedAt", errors);
   if (authority.ok && authority.value.workspace.rootDigest !== bindingRootDigest(value.binding)) {
     errors.push("binding workspace root digest must match authority workspace");
   }
@@ -302,7 +245,7 @@ export function validateCodingWorkbenchRuntimeState(
   value: unknown,
 ): CodingWorkbenchValidationResult<CodingWorkbenchRuntimeState> {
   if (!isRecord(value)) return { ok: false, errors: ["runtime state must be an object"] };
-  const errors = unknownKeys(
+  const errors = exactKeys(
     value,
     [
       "schemaVersion",
@@ -323,7 +266,7 @@ export function validateCodingWorkbenchRuntimeState(
   if (!isOneOf(value.state, CODING_WORKBENCH_RUNTIME_STATE_NAMES)) errors.push("state is invalid");
   if (!Number.isSafeInteger(value.revision) || Number(value.revision) < 0)
     errors.push("revision must be non-negative");
-  validateStrictIso(value.updatedAt, "updatedAt", errors);
+  validateStrictUtcInstant(value.updatedAt, "updatedAt", errors);
   validateOptionalStateFields(value, errors);
   validateStateShape(value, errors);
   return result(value, errors);
@@ -333,7 +276,7 @@ export function validateCodingWorkbenchRuntimeMintConfirmation(
   value: unknown,
 ): CodingWorkbenchValidationResult<CodingWorkbenchRuntimeMintConfirmation> {
   if (!isRecord(value)) return { ok: false, errors: ["mint confirmation must be an object"] };
-  const errors = unknownKeys(
+  const errors = exactKeys(
     value,
     ["approvalId", "approvalToken", "taskId", "operatorId", "intentDigest", "expiresAt"],
     "mintConfirmation",
@@ -341,7 +284,7 @@ export function validateCodingWorkbenchRuntimeMintConfirmation(
   for (const key of ["approvalId", "approvalToken", "taskId", "operatorId"] as const)
     if (!isNonEmpty(value[key])) errors.push(`${key} is required`);
   validateDigest(value.intentDigest, "intentDigest", errors);
-  validateStrictIso(value.expiresAt, "expiresAt", errors);
+  validateStrictUtcInstant(value.expiresAt, "expiresAt", errors);
   return result(value, errors);
 }
 
@@ -362,7 +305,7 @@ export function validateCodingWorkbenchRuntimeAuthorityFacts(
     "branchConstraintsDigest",
     "modelProfileDigest",
   ];
-  const errors = unknownKeys(value, keys, "authorityFacts");
+  const errors = exactKeys(value, keys, "authorityFacts");
   validateBinding(value.binding, errors);
   for (const key of keys.filter((key) => key.endsWith("Digest")))
     validateDigest(value[key], key, errors);
@@ -385,7 +328,7 @@ export function validateCodingWorkbenchRuntimeAdapterStartRequest(
   value: unknown,
 ): CodingWorkbenchValidationResult<CodingWorkbenchRuntimeAdapterStartRequest> {
   if (!isRecord(value)) return { ok: false, errors: ["adapter request must be an object"] };
-  const errors = unknownKeys(
+  const errors = exactKeys(
     value,
     ["authorityRef", "delegationId", "idempotencyKey", "binding", "runtimeSource", "modelSource"],
     "adapterRequest",
@@ -393,7 +336,7 @@ export function validateCodingWorkbenchRuntimeAdapterStartRequest(
   validateBinding(value.binding, errors);
   if (!isRecord(value.authorityRef)) errors.push("authorityRef is required");
   else {
-    errors.push(...unknownKeys(value.authorityRef, ["runId", "envelopeDigest"], "authorityRef"));
+    errors.push(...exactKeys(value.authorityRef, ["runId", "envelopeDigest"], "authorityRef"));
     if (!isNonEmpty(value.authorityRef.runId)) errors.push("authorityRef.runId is required");
     validateDigest(value.authorityRef.envelopeDigest, "authorityRef.envelopeDigest", errors);
   }
@@ -404,10 +347,6 @@ export function validateCodingWorkbenchRuntimeAdapterStartRequest(
   if (!isOneOf(value.modelSource, CODING_WORKBENCH_MODEL_SOURCES))
     errors.push("modelSource is invalid");
   return result(value, errors);
-}
-
-function result<T>(value: unknown, errors: string[]): CodingWorkbenchValidationResult<T> {
-  return errors.length === 0 ? { ok: true, value: value as T } : { ok: false, errors };
 }
 
 function validateAuthorityBindingCorrelation(
@@ -431,23 +370,13 @@ function validateAuthorityBindingCorrelation(
   }
 }
 
-function unknownKeys(
-  value: Record<string, unknown>,
-  allowed: readonly string[],
-  path: string,
-): string[] {
-  return Object.keys(value)
-    .filter((key) => !allowed.includes(key))
-    .map((key) => `${path}.${key} is not allowed`);
-}
-
 function validateBinding(value: unknown, errors: string[]): void {
   if (!isRecord(value)) {
     errors.push("binding must be an object");
     return;
   }
   errors.push(
-    ...unknownKeys(
+    ...exactKeys(
       value,
       [
         "taskId",
@@ -476,21 +405,6 @@ function bindingRootDigest(value: unknown): unknown {
 function validateDigest(value: unknown, path: string, errors: string[]): void {
   if (typeof value !== "string" || !/^[a-f0-9]{64}$/u.test(value)) {
     errors.push(`${path} must be a 64-character lowercase hex digest`);
-  }
-}
-
-function validateStrictIso(value: unknown, path: string, errors: string[]): void {
-  const pattern = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{3})?Z$/u;
-  const parsed = typeof value === "string" ? Date.parse(value) : Number.NaN;
-  const normalized =
-    typeof value === "string" && !value.includes(".") ? `${value.slice(0, -1)}.000Z` : value;
-  if (
-    typeof value !== "string" ||
-    !pattern.test(value) ||
-    Number.isNaN(parsed) ||
-    new Date(parsed).toISOString() !== normalized
-  ) {
-    errors.push(`${path} must be a strict UTC instant`);
   }
 }
 

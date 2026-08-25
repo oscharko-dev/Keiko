@@ -18,20 +18,9 @@ import type {
   QualityIntelligenceValidationFindingId,
 } from "./ids.js";
 
-export type QualityIntelligenceExportAdapter =
-  | "jira-issues"
-  | "qtest"
-  | "xray"
-  | "polarion"
-  | "alm"
-  | "csv"
-  | "json"
-  | "spreadsheet-safe-csv"
-  | "markdown"
-  | "plain-text"
-  | "quality-center";
-
-export const QUALITY_INTELLIGENCE_EXPORT_ADAPTERS: readonly QualityIntelligenceExportAdapter[] = [
+// KEIKO-0522: const-first + `(typeof X)[number]` (matches retentionPolicy.ts / testQualityRubric.ts)
+// so the union type can never drift from the enumerable array it is derived from.
+export const QUALITY_INTELLIGENCE_EXPORT_ADAPTERS = [
   "jira-issues",
   "qtest",
   "xray",
@@ -44,6 +33,9 @@ export const QUALITY_INTELLIGENCE_EXPORT_ADAPTERS: readonly QualityIntelligenceE
   "plain-text",
   "quality-center",
 ] as const;
+
+export type QualityIntelligenceExportAdapter =
+  (typeof QUALITY_INTELLIGENCE_EXPORT_ADAPTERS)[number];
 
 /**
  * Every adapter classified by export target. This is a TOTAL Record, not a hand-listed Set: a Set
@@ -93,10 +85,37 @@ export interface QualityIntelligenceExportModelStageProvenance {
   readonly revision: string;
 }
 
+// KEIKO-0603: the complete, empirically-verified key universe `modelParameters` may carry, traced
+// from every current writer: generationPort.ts's buildModelParameters (temperature, topP,
+// responseFormatEnforced, responseFormat, seed), judgePort.ts's buildJudgeModelParameters
+// (judgeTemperature, judgeSeedUsed, judgeSeed, judgeResponseFormat), and
+// modelRoutedTestDesign.ts's deterministic-baseline fallback path (generationFallbackReason) --
+// generation's and judge's parameters are merged onto one manifest-level field
+// (modelRoutedTestDesign.ts's mergeModelParameters), so both namespaces can appear together.
+// assertExportBundleInvariant rejects any key outside this list, closing the redaction hole a bare
+// `Record<string, unknown>` left open on the one contract explicitly destined for an external TMS.
+export const QUALITY_INTELLIGENCE_MODEL_PARAMETER_ALLOWLIST = [
+  "temperature",
+  "topP",
+  "responseFormatEnforced",
+  "responseFormat",
+  "seed",
+  "judgeTemperature",
+  "judgeSeedUsed",
+  "judgeSeed",
+  "judgeResponseFormat",
+  "generationFallbackReason",
+] as const;
+
 export interface QualityIntelligenceExportModelProvenance {
   readonly generation: QualityIntelligenceExportModelStageProvenance;
   readonly judge: QualityIntelligenceExportModelStageProvenance;
-  readonly seedUsed?: number | null;
+  // Required (not optional) per bffWire.ts's completedAt precedent ("null, not undefined, when
+  // the run has not yet finished, so JSON serialisation is deterministic"): null means no seed was
+  // used or recorded; a number means that seed was used. The prior `seedUsed?: number | null` gave
+  // one concept three wire states (absent, null, number) with no documented meaning for the
+  // difference between the first two.
+  readonly seedUsed: number | null;
   readonly modelParameters?: Readonly<Record<string, unknown>>;
 }
 
@@ -119,6 +138,27 @@ export interface QualityIntelligenceExportBundle {
  * field is a well-formed sha256 hex string. Throws `Error` on violation; returns
  * `void` on success.
  */
+// KEIKO-0603: modelParameters is an open Record; this is the one runtime check standing between an
+// unlisted key (a provider request config routinely carries api-version, endpoint, or auth-adjacent
+// fields) and a manifest bound for an external TMS.
+//
+// KEIKO-0603 follow-up (reviewer P1): the rejected key itself is attacker-supplied and may carry
+// credential material, an endpoint, or customer data — echoing it verbatim into the thrown
+// Error would turn the redaction gate into an exfiltration path when the error propagates into
+// operator diagnostics or logs. Throw a fixed content-free reason code plus a count; the caller
+// gets the signal it needs (rejected, N unlisted keys) without a raw key crossing the boundary.
+const assertModelParametersAllowlisted = (bundle: QualityIntelligenceExportBundle): void => {
+  const modelParameters = bundle.modelProvenance?.modelParameters;
+  if (modelParameters === undefined) return;
+  const allowlist: readonly string[] = QUALITY_INTELLIGENCE_MODEL_PARAMETER_ALLOWLIST;
+  const unlistedCount = Object.keys(modelParameters).filter((k) => !allowlist.includes(k)).length;
+  if (unlistedCount > 0) {
+    throw new Error(
+      `Export bundle modelProvenance.modelParameters carries ${String(unlistedCount)} unlisted key(s) (id=${bundle.id})`,
+    );
+  }
+};
+
 export const assertExportBundleInvariant = (bundle: QualityIntelligenceExportBundle): void => {
   if (!/^[0-9a-f]{64}$/u.test(bundle.integrityHashSha256Hex)) {
     throw new Error(
@@ -130,4 +170,5 @@ export const assertExportBundleInvariant = (bundle: QualityIntelligenceExportBun
       `Export bundle targeting TMS adapter "${bundle.targetAdapter}" requires redactionAttested === true (id=${bundle.id})`,
     );
   }
+  assertModelParametersAllowlisted(bundle);
 };

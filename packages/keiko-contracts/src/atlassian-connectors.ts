@@ -526,6 +526,31 @@ export const ATLASSIAN_CONNECTOR_WORKBENCH_ACTION_CLASS: Readonly<
   "connector-write": "connector-access",
 } as const satisfies Readonly<Record<AtlassianConnectorActionClass, CodingWorkbenchActionClass>>);
 
+// KEIKO-0701 follow-up note: this table is intentionally NOT an input to
+// `decideAtlassianConnectorAction`'s disposition. An audit flagged the table as "declared but
+// never consumed" and proposed composing `supervisedCodingActionRequiresApproval(supervisedKind)`
+// into that function's `strictestCodingWorkbenchPolicyEffect` chain. That composition was tried
+// and reverted: `supervisedCodingActionRequiresApproval("connector-write")` is unconditionally
+// `true` (mode-independent), so folding it in would force `review-required` for every
+// connector-write action in EVERY mode, including `autonomous-delivery` (Full access) — directly
+// contradicting ADR-0128 D4's own disposition-derivation formula ("`autonomous-delivery` (Full
+// access) allows every `internet` risk tier, so every row is `allowed`, conditioned on the
+// connector scope being present") and ADR-0138's explicit narrowing note ("Scope gating, envelope
+// admission, risk tiers, and all other decisions remain unchanged"). Both are settled, accepted,
+// reasoned decisions, not oversights — see docs/adr/ADR-0128-atlassian-connector-authority-and-
+// security-design.md D4 and its ADR-0138 amendment banner. The
+// "reproduces every D4 disposition cell..." and "admits normally when the Authority Envelope grant
+// includes connector-access" tests below fail immediately if this composition is reintroduced —
+// see also the dedicated pin below this table.
+//
+// The table's real, still-unbuilt consumer is the OTHER supervised-action helper its own comment
+// names: `permissionKindForSupervisedCodingAction` (coding-workbench.ts), which labels a
+// `CodingWorkbenchPermissionRequest.kind` for a supervised-coding-style approval UI — the
+// "additional approval-risk signal on the supervised-action path" ADR-0128 D4 describes — not a
+// second disposition gate on this function's own tri-state output. No such permission-request path
+// exists yet for the Atlassian connector lane (only `supervisedCodingPolicy.ts`'s file-edit /
+// verification-command / generic-mutation flows consume `permissionKindForSupervisedCodingAction`
+// today); wiring one up is a genuine future capability, not a bug in this file.
 export const ATLASSIAN_CONNECTOR_SUPERVISED_ACTION_KIND: Readonly<
   Record<AtlassianConnectorActionClass, CodingWorkbenchSupervisedActionKind | null>
 > = Object.freeze({
@@ -640,6 +665,9 @@ function atlassianClassAdmission(
 //   2. Class admission via `decideCodingWorkbenchActionForMode` plus the envelope grant, composed
 //      stricter-wins with the shared mode × `internet` resource-scope × risk matrix, exactly as
 //      `editor-agent-governance.ts` composes `envelopeModeEffect`.
+// `ATLASSIAN_CONNECTOR_SUPERVISED_ACTION_KIND` is deliberately NOT a third input here — see the
+// KEIKO-0701 follow-up note on that table's declaration for why composing it would contradict
+// ADR-0128 D4 (as narrowed by ADR-0138).
 export function decideAtlassianConnectorAction(
   actionType: AtlassianConnectorActionType,
   mode: CodingWorkbenchMode,

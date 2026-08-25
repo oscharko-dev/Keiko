@@ -208,6 +208,16 @@ export interface GovernedActionEnvelope {
   readonly actionKind: GovernedActionActionKind;
 }
 
+// KEIKO-0755: `grantRefFactErrors` and `questionRefFactErrors` reject every outcome except
+// "known" and "absent" — but the field types below declared the full four-outcome CodeTaskFact
+// union, so at compile time a producer could construct a `{ outcome: "unknown" }` grant/question
+// that would still typecheck cleanly before being rejected at runtime. Narrow the type so an
+// unsupported outcome is a compile error at the producer.
+export type CodeTaskKnownOrAbsentFact<Value> = Extract<
+  CodeTaskFact<Value>,
+  { readonly outcome: "known" } | { readonly outcome: "absent" }
+>;
+
 /**
  * Discriminated on `decision`. Only "allowed" may carry a task grant; only "approval-required" may
  * carry a pending question; every other decision explicitly carries no reference on both axes.
@@ -215,13 +225,13 @@ export interface GovernedActionEnvelope {
 export type GovernedActionV1 =
   | (GovernedActionEnvelope & {
       readonly decision: "allowed";
-      readonly grant: CodeTaskFact<GovernedActionGrantRef>;
+      readonly grant: CodeTaskKnownOrAbsentFact<GovernedActionGrantRef>;
       readonly question: GovernedActionAbsent;
     })
   | (GovernedActionEnvelope & {
       readonly decision: "approval-required";
       readonly grant: GovernedActionAbsent;
-      readonly question: CodeTaskFact<GovernedActionQuestionRef>;
+      readonly question: CodeTaskKnownOrAbsentFact<GovernedActionQuestionRef>;
     })
   | (GovernedActionEnvelope & {
       readonly decision: Exclude<GovernedActionDecision, "allowed" | "approval-required">;
@@ -519,7 +529,10 @@ function executionFactErrors(value: Record<string, unknown>): string[] {
   if (!isCodeTaskIsoInstant(ownField(value, "updatedAt"))) {
     errors.push("updatedAt must be an ISO-8601 UTC instant");
   }
-  errors.push(...executionFailureFactErrors(ownField(value, "failure")));
+  // KEIKO-0626: pass the execution state into the failure-fact validator so the invariant is
+  // enforced at parse time — `failed` and `recovery-required` states MUST carry a known failure
+  // fact, and every other state MUST carry an absent/unknown/unavailable failure fact.
+  errors.push(...executionFailureFactErrors(ownField(value, "failure"), ownField(value, "state")));
   return errors;
 }
 
@@ -530,25 +543,52 @@ function executionFactErrors(value: Record<string, unknown>): string[] {
 // one pinned case; every other extra key is now also rejected via unknownKeys.
 // Round 3 (#2899): same early-return-vs-collect and per-key-vs-general-guard gaps as
 // grantRefFactErrors/questionRefFactErrors above, fixed the same way.
-function executionFailureFactErrors(value: unknown): string[] {
+// KEIKO-0626: the failure fact's outcome must correlate with the runtime state — a "failed" or
+// "recovery-required" state MUST carry a `known` failure, and every other state MUST carry a
+// non-known outcome. Previously the shapes were checked independently, so `state: "running"` with
+// `failure: { outcome: "known", value: "..." }` (or the reverse — `state: "failed"` with an
+// `absent` failure) validated cleanly.
+const FAILURE_STATES: ReadonlySet<string> = new Set(["failed", "recovery-required"]);
+
+function knownFailureFactErrors(value: Record<string, unknown>, state: unknown): string[] {
+  const errors = unknownKeys(value, ["outcome", "value"], "failure");
+  if (!isContentFreeReasonCode(ownField(value, "value"))) {
+    errors.push("failure.value must be a bounded content-free reason code");
+  }
+  if (typeof state === "string" && !FAILURE_STATES.has(state)) {
+    errors.push(
+      `failure.outcome=known is only valid when state is failed or recovery-required, got ${state}`,
+    );
+  }
+  return errors;
+}
+
+function nonKnownFailureFactErrors(
+  value: Record<string, unknown>,
+  outcome: "absent" | "unavailable" | "unknown",
+  state: unknown,
+): string[] {
+  const errors = unknownKeys(value, ["outcome"], "failure");
+  if (Object.hasOwn(value, "value")) {
+    errors.push(`failure must not carry a value for outcome ${outcome}`);
+  }
+  if (typeof state === "string" && FAILURE_STATES.has(state)) {
+    errors.push(
+      `failure.outcome=${outcome} is invalid when state is ${state}; expected outcome=known`,
+    );
+  }
+  return errors;
+}
+
+function executionFailureFactErrors(value: unknown, state: unknown): string[] {
   if (!isRecord(value)) return ["failure must be a tagged fact object"];
   if (hasInheritedEnumerableProperty(value)) {
     return ["failure must not resolve any field through its prototype chain"];
   }
   const outcome = ownField(value, "outcome");
-  if (outcome === "known") {
-    const errors = unknownKeys(value, ["outcome", "value"], "failure");
-    if (!isContentFreeReasonCode(ownField(value, "value"))) {
-      errors.push("failure.value must be a bounded content-free reason code");
-    }
-    return errors;
-  }
+  if (outcome === "known") return knownFailureFactErrors(value, state);
   if (outcome === "absent" || outcome === "unavailable" || outcome === "unknown") {
-    const errors = unknownKeys(value, ["outcome"], "failure");
-    if (Object.hasOwn(value, "value")) {
-      errors.push(`failure must not carry a value for outcome ${outcome}`);
-    }
-    return errors;
+    return nonKnownFailureFactErrors(value, outcome, state);
   }
   return ["failure.outcome must be known, absent, unavailable, or unknown"];
 }

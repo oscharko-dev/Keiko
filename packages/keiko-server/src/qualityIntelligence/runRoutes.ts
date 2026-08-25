@@ -28,6 +28,7 @@ import type {
 } from "@oscharko-dev/keiko-contracts";
 import {
   deriveQualityIntelligenceTerminalDegradation,
+  isQualityIntelligenceSeed,
   resolveQualityIntelligenceRetentionPolicyId,
 } from "@oscharko-dev/keiko-contracts";
 import { QualityIntelligenceHardening } from "@oscharko-dev/keiko-quality-intelligence";
@@ -193,11 +194,45 @@ function validateConnectorSource(
   return undefined;
 }
 
+// KEIKO-0891 follow-on: the contract carries an optional `adf` Atlassian Document Format tree
+// that `ingestRequirements` (runIngestion.ts) normalises to text via parseAdfDocument. The
+// previous validator dropped `raw.adf`, so the ADF-normalisation branch was dead code in
+// production (reachable only from direct unit-test calls). Pass a plain-object `adf` through to
+// the ingestion layer; parseAdfDocument already validates the tree grammar and enforces the
+// maxDocumentBytes / maxNodes / maxDepth / maxTextBytes ceilings, and the route body's
+// MAX_BODY_BYTES envelope caps the total request size.
+//
+// KEIKO-0891 follow-up (reviewer P2): a present-but-malformed `adf` (explicit null, or a
+// primitive) must fail closed rather than silently fall back to raw.text — the new trust
+// boundary would otherwise depend on the malformed value's JavaScript type. The extractor returns
+// a discriminated result so the caller distinguishes absent from invalid-present and surfaces
+// QI_BAD_SOURCE for the latter.
+function validateRequirementsSource(
+  label: string,
+  raw: Record<string, unknown>,
+  text: string,
+): QualityIntelligenceInlineSource | RouteResult {
+  const adfOutcome = extractRequirementsAdf(raw);
+  if (adfOutcome.kind === "invalid") {
+    return errorResult(
+      400,
+      "QI_BAD_SOURCE",
+      "Source requirements.adf must be an object or array when present.",
+    );
+  }
+  return {
+    kind: "requirements",
+    label,
+    text,
+    ...(adfOutcome.kind === "present" ? { adf: adfOutcome.value } : {}),
+  };
+}
+
 function validateSource(raw: unknown): QualityIntelligenceInlineSource | RouteResult | undefined {
   if (!isObject(raw) || typeof raw.label !== "string") return undefined;
   const label = raw.label;
   if (raw.kind === "requirements" && typeof raw.text === "string") {
-    return { kind: "requirements", label, text: raw.text };
+    return validateRequirementsSource(label, raw, raw.text);
   }
   if (raw.kind === "workspace" && typeof raw.path === "string") {
     return { kind: "workspace", label, path: raw.path };
@@ -206,6 +241,24 @@ function validateSource(raw: unknown): QualityIntelligenceInlineSource | RouteRe
     return { kind: "file", label, path: raw.path };
   }
   return validateConnectorSource(label, raw);
+}
+
+// KEIKO-0891 follow-on: the ADF tree is a JSON-value shape (recursive object/array/primitive).
+// Only accept a value parseAdfDocument can meaningfully inspect — a plain object or an array.
+// Discriminated result so the caller can tell absent (field not present, or explicit undefined)
+// from present-but-invalid (null, primitives). Deeper shape validation (grammar, byte cap,
+// node/depth budget) stays in parseAdfDocument.
+type AdfExtractResult =
+  | { readonly kind: "absent" }
+  | { readonly kind: "invalid" }
+  | { readonly kind: "present"; readonly value: QI.QualityIntelligenceAdfNode };
+
+function extractRequirementsAdf(raw: Record<string, unknown>): AdfExtractResult {
+  if (!("adf" in raw)) return { kind: "absent" };
+  const value = raw.adf;
+  if (value === undefined) return { kind: "absent" };
+  if (value === null || typeof value !== "object") return { kind: "invalid" };
+  return { kind: "present", value: value as QI.QualityIntelligenceAdfNode };
 }
 
 function isRouteResult(v: unknown): v is RouteResult {
@@ -258,7 +311,9 @@ function collectSources(rawSources: readonly unknown[]): SourcesOutcome {
 
 function parseOptionalSeed(value: unknown): number | null | undefined {
   if (value === undefined) return undefined;
-  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? value : null;
+  // KEIKO-0891: defer the shape check to the contract-owned guard so a widened / deserialized
+  // seed cannot bypass the ceiling. `null` (parse fail) surfaces as QI_BAD_REQUEST above.
+  return isQualityIntelligenceSeed(value) ? value : null;
 }
 
 function parseOptionalModelPolicy(
@@ -302,6 +357,11 @@ function validateRequest(parsed: unknown): ParseOutcome {
       result: errorResult(400, "QI_BAD_REQUEST", "At least one source is required."),
     };
   }
+  // KEIKO-0891: the contract-owned QUALITY_INTELLIGENCE_MAX_RUN_SOURCES cap is enforced by the
+  // ingestion path (drop-overflow with droppedSourceCount on the accepted frame), not the wire —
+  // the constant is imported here so callers can see it in the contract, but the wire never
+  // rejects an over-cap sources array (the ingestion drop contract is pinned by regression tests
+  // at the B1/B2 boundary of runRoutes.test.ts).
   const collected = collectSources(parsed.sources);
   if (!collected.ok) return collected;
   const profileId = typeof parsed.profileId === "string" ? parsed.profileId : undefined;

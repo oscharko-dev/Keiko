@@ -117,6 +117,19 @@ describe("workspace contract primitives", () => {
     }
   });
 
+  it("bounds canonical roots in UTF-8 bytes, not UTF-16 code units (KEIKO-0776)", () => {
+    // "中" is 3 UTF-8 bytes but a single UTF-16 code unit. 1400 of them is 4200 UTF-8 bytes
+    // (> WORKSPACE_PORTABLE_PATH_MAX_BYTES=4096) but only 1400 UTF-16 code units (well below the
+    // old bare 4096 .length bound). A bare `.length > 4096` guard accepts this; the sibling
+    // isPortableWorkspaceRelativePath already counted bytes correctly.
+    const asciiRoot = `/${"a".repeat(4096)}`; // 4097 UTF-8 bytes → must be rejected
+    expect(isCanonicalWorkspaceRoot(asciiRoot)).toBe(false);
+    const multibyteRoot = `/${"中".repeat(1400)}`; // 4201 UTF-8 bytes, 1401 UTF-16 code units
+    expect(isCanonicalWorkspaceRoot(multibyteRoot)).toBe(false);
+    const belowBudgetMultibyte = `/${"中".repeat(100)}`; // 301 UTF-8 bytes → still valid
+    expect(isCanonicalWorkspaceRoot(belowBudgetMultibyte)).toBe(true);
+  });
+
   it("distinguishes nested roots from path-prefix siblings", () => {
     expect(workspaceCanonicalRootsDoNotOverlap(["/work/app", "/work/application"])).toBe(true);
     expect(workspaceCanonicalRootsDoNotOverlap(["/work/app", "/work/app/packages/ui"])).toBe(false);

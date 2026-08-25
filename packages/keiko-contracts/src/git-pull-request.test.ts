@@ -77,18 +77,8 @@ function prState(over: Partial<GitDeliveryPullRequestState> = {}): GitDeliveryPu
 
 describe("metadata synthesis", () => {
   it("is deterministic for identical inputs", () => {
-    const a = synthesizePullRequestMetadata(
-      NARRATIVE,
-      RISK_READY,
-      "claude/issue-477-pr-center",
-      "dev",
-    );
-    const b = synthesizePullRequestMetadata(
-      NARRATIVE,
-      RISK_READY,
-      "claude/issue-477-pr-center",
-      "dev",
-    );
+    const a = synthesizePullRequestMetadata(NARRATIVE, RISK_READY, "claude/issue-477-pr-center");
+    const b = synthesizePullRequestMetadata(NARRATIVE, RISK_READY, "claude/issue-477-pr-center");
     expect(a).toEqual(b);
   });
 
@@ -97,7 +87,6 @@ describe("metadata synthesis", () => {
       NARRATIVE,
       RISK_READY,
       "claude/issue-477-github-pr-command-center",
-      "dev",
     );
     expect(draft.composedTitle).toBe("feat(keiko-server): github pr command center");
     expect(draft.composedTitle.length).toBeLessThanOrEqual(72);
@@ -111,7 +100,7 @@ describe("metadata synthesis", () => {
       areas: ["keiko-server", "keiko-ui"],
       changeType: "mixed",
     };
-    const draft = synthesizePullRequestMetadata(multi, RISK_READY, "fix/1234-thing", "dev");
+    const draft = synthesizePullRequestMetadata(multi, RISK_READY, "fix/1234-thing");
     expect(draft.composedTitle).toBe("mixed: thing");
     expect(draft.summarySection.primaryArea).toBeUndefined();
   });
@@ -121,10 +110,9 @@ describe("metadata synthesis", () => {
       NARRATIVE,
       { ...RISK_READY, policyOutcome: "approval-gated" },
       "x/y",
-      "main",
     );
     expect(gated.riskSection.requiresApproval).toBe(true);
-    const plain = synthesizePullRequestMetadata(NARRATIVE, RISK_READY, "x/y", "dev");
+    const plain = synthesizePullRequestMetadata(NARRATIVE, RISK_READY, "x/y");
     expect(plain.riskSection.requiresApproval).toBe(false);
   });
 
@@ -133,8 +121,36 @@ describe("metadata synthesis", () => {
       NARRATIVE,
       RISK_READY,
       "feat/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-      "dev",
     );
+    expect(draft.composedTitle.length).toBeLessThanOrEqual(72);
+  });
+
+  // KEIKO-0829: a title whose 72nd UTF-16 unit lands INSIDE a surrogate pair used to be
+  // slice()-truncated at that unit and could emit a lone surrogate. Codepoint-splitting
+  // preserves whole graphemes; the last character of the returned title must never be a lone
+  // half of a surrogate pair.
+  it("does not emit a lone surrogate when the clamp cut point falls inside an astral character (KEIKO-0829)", () => {
+    // 66 ASCII chars + 4 astral chars (2 UTF-16 units each) = 74 UTF-16 units. UTF-16 slice(0, 72)
+    // would cut mid-pair inside the 3rd astral character.
+    const branch = `feat/${"a".repeat(60)}🎯🎯🎯🎯`;
+    const draft = synthesizePullRequestMetadata(NARRATIVE, RISK_READY, branch);
+    const last = draft.composedTitle.at(-1);
+    if (last !== undefined) {
+      const lastCode = last.codePointAt(0) ?? 0;
+      const isLoneSurrogate = lastCode >= 0xd800 && lastCode <= 0xdfff;
+      expect(isLoneSurrogate).toBe(false);
+    }
+  });
+
+  // KEIKO-0829 follow-up (reviewer P2): the 72-unit contract is a UTF-16 code-unit budget, not a
+  // code-point budget. An earlier Array.from split truncated at 72 code points, so a title with
+  // enough astral characters could produce a string whose `.length` was up to 144 UTF-16 units,
+  // violating the contract while still avoiding lone surrogates. Pin the length invariant with an
+  // astral-heavy input.
+  it("clamps at the UTF-16 code-unit budget even for an astral-heavy title (KEIKO-0829 follow-up)", () => {
+    // 50 emojis (each 2 UTF-16 units) = 100 UTF-16 units after the branch prefix strips.
+    const branch = `feat/${"🎯".repeat(50)}`;
+    const draft = synthesizePullRequestMetadata(NARRATIVE, RISK_READY, branch);
     expect(draft.composedTitle.length).toBeLessThanOrEqual(72);
   });
 });
@@ -278,6 +294,32 @@ describe("suggestion derivations", () => {
     expect(s.basis).toBe("change-type");
     expect(s.suggestedLabelNames).toContain("enhancement");
     expect(s.suggestedLabelNames).toContain("area:keiko-server");
+  });
+
+  // KEIKO-0829: basis must reflect what was actually produced. `LABEL_BY_CHANGE_TYPE` covers
+  // every current GitPrChangeType, so `change-type` is the everyday answer, but a future
+  // changeType added to the union without a label mapping must degrade to `area` or `none` —
+  // the two members the old hardcoded `basis:"change-type"` made unreachable.
+  it("falls back to area when the change-type label is missing but areas are (KEIKO-0829)", () => {
+    const unmapped: GitPullRequestChangeNarrative = {
+      ...NARRATIVE,
+      changeType: "future-kind" as unknown as GitPullRequestChangeNarrative["changeType"],
+    };
+    const s = gitPullRequestLabelSuggestionsFor(unmapped);
+    expect(s.basis).toBe("area");
+    expect(s.suggestedLabelNames).toEqual(["area:keiko-server"]);
+  });
+
+  it("falls back to none when neither the change-type label nor any area applies (KEIKO-0829)", () => {
+    const bare: GitPullRequestChangeNarrative = {
+      ...NARRATIVE,
+      changeType: "future-kind" as unknown as GitPullRequestChangeNarrative["changeType"],
+      areas: [],
+      areaCount: 0,
+    };
+    const s = gitPullRequestLabelSuggestionsFor(bare);
+    expect(s.basis).toBe("none");
+    expect(s.suggestedLabelNames).toEqual([]);
   });
 
   it("extracts issue refs from the head branch name", () => {

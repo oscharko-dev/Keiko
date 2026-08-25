@@ -58,19 +58,22 @@ export const GIT_DELIVERY_RISK_CLASSES: readonly GitDeliveryRiskClass[] = [
 ] as const;
 
 // Ordinal severity. Higher ordinal = higher risk. Never compare ordinals by action name string.
-export const GIT_DELIVERY_RISK_CLASS_SEVERITY: Readonly<Record<GitDeliveryRiskClass, number>> = {
-  "local-mutation": 1,
-  publish: 2,
-  "protected-or-merge": 3,
-  "recovery-or-rewrite": 4,
-} as const;
+// Object.freeze (KEIKO-0879): the `Readonly<Record<...>>` annotation is compile-time only.
+export const GIT_DELIVERY_RISK_CLASS_SEVERITY: Readonly<Record<GitDeliveryRiskClass, number>> =
+  Object.freeze({
+    "local-mutation": 1,
+    publish: 2,
+    "protected-or-merge": 3,
+    "recovery-or-rewrite": 4,
+  } as const);
 
 // Default risk class per action kind. Keys are ordered to match GIT_DELIVERY_ACTION_KINDS exactly.
 // Unknown kinds (post-deserialization) default to the highest class via gitDeliveryDefaultRiskClass
 // — this table covers all known kinds exactly.
+// Object.freeze (KEIKO-0879): the `Readonly<Record<...>>` annotation is compile-time only.
 export const GIT_DELIVERY_ACTION_RISK_DEFAULTS: Readonly<
   Record<GitDeliveryActionKind, GitDeliveryRiskClass>
-> = {
+> = Object.freeze({
   "branch-create": "local-mutation",
   "branch-switch": "local-mutation",
   stage: "local-mutation",
@@ -82,7 +85,7 @@ export const GIT_DELIVERY_ACTION_RISK_DEFAULTS: Readonly<
   merge: "protected-or-merge",
   abort: "local-mutation",
   recovery: "recovery-or-rewrite",
-} as const;
+} as const);
 
 // ─── Per-kind resolved inputs (discriminated union) ─────────────────────────────
 // Each member is a separate readonly interface. Only fields semantically required for that kind
@@ -756,7 +759,11 @@ function isPrUpdateInputs(value: Record<string, unknown>): boolean {
     isNonNegativeInteger(value.titleByteLength) &&
     isNonNegativeInteger(value.bodyByteLength) &&
     isBoolean(value.convertToDraft) &&
-    isBoolean(value.convertFromDraft)
+    isBoolean(value.convertFromDraft) &&
+    // KEIKO-0805: convertToDraft and convertFromDraft are mutually exclusive — a single pr-update
+    // action cannot simultaneously ask to convert a PR to a draft and out of one. Both operands are
+    // already boolean-narrowed by the two isBoolean() guards above.
+    !(value.convertToDraft && value.convertFromDraft)
   );
 }
 
@@ -883,14 +890,12 @@ export function gitDeliveryRiskClassForInputs(
   return gitDeliveryDefaultRiskClass(inputs.kind);
 }
 
-// True when the action kind's default risk severity is at or below the ceiling severity.
-export function gitDeliveryRiskClassWithinCeiling(
-  actionKind: GitDeliveryActionKind,
-  ceiling: GitDeliveryRiskClass,
-): boolean {
-  const actionSeverity = GIT_DELIVERY_RISK_CLASS_SEVERITY[gitDeliveryDefaultRiskClass(actionKind)];
-  return actionSeverity <= GIT_DELIVERY_RISK_CLASS_SEVERITY[ceiling];
-}
+// KEIKO-0925: the ceiling comparison itself (severity <= GIT_DELIVERY_RISK_CLASS_SEVERITY[ceiling])
+// has exactly one implementation, in git-delivery-policy.ts's risk-class-ceiling constraint
+// evaluator, which reads GIT_DELIVERY_RISK_CLASS_SEVERITY directly. A same-shaped
+// gitDeliveryRiskClassWithinCeiling(actionKind, ceiling) export used to duplicate that comparison
+// here but was never called from it or from anywhere else outside its own test — removed rather
+// than kept as a second, unused way to ask the same question.
 
 // ─── Branch matchers ─────────────────────────────────────────────────────────────
 

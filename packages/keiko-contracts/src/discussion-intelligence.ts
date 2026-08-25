@@ -21,6 +21,7 @@
 // INDEPENDENT of every other schema version. Leaf-package rule (ADR-0019 direction 1): no
 // `@oscharko-dev/keiko-*` import may appear here; siblings are reached by relative path.
 
+import { deepFreeze } from "./deep-freeze.js";
 import type { VoiceProfile } from "./gateway.js";
 import type {
   CitationDiscipline,
@@ -134,27 +135,30 @@ export function assertNeverDiscussionDirective(value: never): never {
 
 // Fixed, content-free instruction templates. Bounded length; no raw input echo, no credential, provider
 // URL, system prompt, or tool/secret/egress authority encodable here. Keyed by directive for totality.
-export const DISCUSSION_DIRECTIVE_TEMPLATES: Readonly<Record<DiscussionDirective, string>> = {
-  "state-position-then-evidence": "State your position first, then the evidence that supports it.",
-  "challenge-stated-assumptions":
-    "Identify and challenge the assumptions the stated position depends on.",
-  "surface-counter-evidence":
-    "Surface evidence that weighs against the position, not only evidence for it.",
-  "list-explicit-assumptions":
-    "List the explicit assumptions you are making before drawing a conclusion.",
-  "disclose-uncertainty-and-confidence":
-    "Disclose your remaining uncertainty and your confidence level for each claim.",
-  "cite-evidence-or-state-none":
-    "Cite the evidence for each claim, or state plainly that no evidence is available.",
-  "offer-decision-with-tradeoffs":
-    "Offer a recommended next action and lay out the trade-offs of each option.",
-  "expand-option-space-before-converging":
-    "Expand the range of options before converging on a single recommendation.",
-  "verify-claims-against-evidence":
-    "Verify each claim against the available evidence before accepting it.",
-  "defer-to-user-on-unresolved-contradiction":
-    "When a contradiction cannot be resolved from evidence, defer the decision to the user.",
-} as const;
+// KEIKO-0880: Object.freeze — flat record of strings, so a shallow freeze is sufficient.
+export const DISCUSSION_DIRECTIVE_TEMPLATES: Readonly<Record<DiscussionDirective, string>> =
+  Object.freeze({
+    "state-position-then-evidence":
+      "State your position first, then the evidence that supports it.",
+    "challenge-stated-assumptions":
+      "Identify and challenge the assumptions the stated position depends on.",
+    "surface-counter-evidence":
+      "Surface evidence that weighs against the position, not only evidence for it.",
+    "list-explicit-assumptions":
+      "List the explicit assumptions you are making before drawing a conclusion.",
+    "disclose-uncertainty-and-confidence":
+      "Disclose your remaining uncertainty and your confidence level for each claim.",
+    "cite-evidence-or-state-none":
+      "Cite the evidence for each claim, or state plainly that no evidence is available.",
+    "offer-decision-with-tradeoffs":
+      "Offer a recommended next action and lay out the trade-offs of each option.",
+    "expand-option-space-before-converging":
+      "Expand the range of options before converging on a single recommendation.",
+    "verify-claims-against-evidence":
+      "Verify each claim against the available evidence before accepting it.",
+    "defer-to-user-on-unresolved-contradiction":
+      "When a contradiction cannot be resolved from evidence, defer the decision to the user.",
+  } as const);
 
 // Maps each directive to the disagreement facet(s) its template addresses (AC3). Keyed by directive for
 // totality (a new directive without an entry is a compile error). A directive whose template is about
@@ -163,9 +167,11 @@ export const DISCUSSION_DIRECTIVE_TEMPLATES: Readonly<Record<DiscussionDirective
 // guard `discussionDirectivesCoverFacets` proves every mode's directives actually instruct the model on
 // the facets the mode mandates (so e.g. an `evidence`-mandating mode cannot silently drop evidence from
 // its rendered prompt).
+// KEIKO-0880: deepFreeze — each value is itself an array, so a shallow freeze would leave those
+// nested arrays writable at runtime.
 export const DISCUSSION_DIRECTIVE_FACETS: Readonly<
   Record<DiscussionDirective, readonly DisagreementFacet[]>
-> = {
+> = deepFreeze({
   "state-position-then-evidence": ["evidence"],
   "challenge-stated-assumptions": ["assumptions"],
   "surface-counter-evidence": ["evidence"],
@@ -176,7 +182,7 @@ export const DISCUSSION_DIRECTIVE_FACETS: Readonly<
   "expand-option-space-before-converging": [],
   "verify-claims-against-evidence": ["evidence"],
   "defer-to-user-on-unresolved-contradiction": [],
-} as const;
+} as const);
 
 // ─── Discussion mode plan ───────────────────────────────────────────────────────
 // The per-mode behavioral plan. It reuses the prompt-enhancer citation / contradiction / grounding
@@ -198,107 +204,110 @@ export interface DiscussionModePlan {
 // Frozen TOTAL table keyed by mode (a new mode without a plan is a compile error). Invariant enforced in
 // tests: every disagreement-capable mode (challenge/review/decide/evidence-check) mandates ALL THREE
 // `DISAGREEMENT_FACETS`; `brainstorm` relaxes uncertainty (it expands options rather than disagreeing).
-export const DISCUSSION_MODE_PLANS: Readonly<Record<DiscussionMode, DiscussionModePlan>> = {
-  challenge: {
-    mode: "challenge",
-    challengesAssumptions: true,
-    requiresExplicitAssumptions: true,
-    requiresUncertaintyDisclosure: true,
-    citationDiscipline: "require-citations-or-state-no-evidence",
-    contradictionPolicy: "disclose-and-defer",
-    groundingDirectives: [
-      "stay-within-evidence",
-      "disclose-uncertainty",
-      "separate-known-from-retrieved",
-    ],
-    producesDecisionRecommendation: false,
-    mandatedFacets: ["evidence", "assumptions", "uncertainty"],
-    directives: [
-      "state-position-then-evidence",
-      "challenge-stated-assumptions",
-      "surface-counter-evidence",
-      "list-explicit-assumptions",
-      "disclose-uncertainty-and-confidence",
-    ],
-  },
-  review: {
-    mode: "review",
-    challengesAssumptions: true,
-    requiresExplicitAssumptions: true,
-    requiresUncertaintyDisclosure: true,
-    citationDiscipline: "require-citations-or-state-no-evidence",
-    contradictionPolicy: "disclose-and-defer",
-    groundingDirectives: [
-      "attribute-claims-to-sources",
-      "stay-within-evidence",
-      "disclose-uncertainty",
-    ],
-    producesDecisionRecommendation: false,
-    mandatedFacets: ["evidence", "assumptions", "uncertainty"],
-    directives: [
-      "verify-claims-against-evidence",
-      "surface-counter-evidence",
-      "list-explicit-assumptions",
-      "disclose-uncertainty-and-confidence",
-    ],
-  },
-  decide: {
-    mode: "decide",
-    challengesAssumptions: true,
-    requiresExplicitAssumptions: true,
-    requiresUncertaintyDisclosure: true,
-    citationDiscipline: "require-citations-or-state-no-evidence",
-    contradictionPolicy: "disclose-and-defer",
-    groundingDirectives: ["stay-within-evidence", "disclose-uncertainty"],
-    producesDecisionRecommendation: true,
-    mandatedFacets: ["evidence", "assumptions", "uncertainty"],
-    directives: [
-      "cite-evidence-or-state-none",
-      "list-explicit-assumptions",
-      "offer-decision-with-tradeoffs",
-      "disclose-uncertainty-and-confidence",
-      "defer-to-user-on-unresolved-contradiction",
-    ],
-  },
-  brainstorm: {
-    mode: "brainstorm",
-    challengesAssumptions: false,
-    requiresExplicitAssumptions: true,
-    requiresUncertaintyDisclosure: false,
-    citationDiscipline: "best-effort",
-    contradictionPolicy: "synthesize-with-caveats",
-    groundingDirectives: ["separate-known-from-retrieved"],
-    producesDecisionRecommendation: false,
-    mandatedFacets: ["evidence", "assumptions"],
-    directives: [
-      "expand-option-space-before-converging",
-      "state-position-then-evidence",
-      "list-explicit-assumptions",
-    ],
-  },
-  "evidence-check": {
-    mode: "evidence-check",
-    challengesAssumptions: true,
-    requiresExplicitAssumptions: true,
-    requiresUncertaintyDisclosure: true,
-    citationDiscipline: "require-citations",
-    contradictionPolicy: "disclose-and-defer",
-    groundingDirectives: [
-      "attribute-claims-to-sources",
-      "do-not-fabricate-sources",
-      "stay-within-evidence",
-      "disclose-uncertainty",
-    ],
-    producesDecisionRecommendation: false,
-    mandatedFacets: ["evidence", "assumptions", "uncertainty"],
-    directives: [
-      "verify-claims-against-evidence",
-      "cite-evidence-or-state-none",
-      "list-explicit-assumptions",
-      "disclose-uncertainty-and-confidence",
-    ],
-  },
-} as const;
+// KEIKO-0880: deepFreeze, not Object.freeze — each per-mode plan nests groundingDirectives,
+// mandatedFacets, and directives arrays that a shallow freeze would leave writable at runtime.
+export const DISCUSSION_MODE_PLANS: Readonly<Record<DiscussionMode, DiscussionModePlan>> =
+  deepFreeze({
+    challenge: {
+      mode: "challenge",
+      challengesAssumptions: true,
+      requiresExplicitAssumptions: true,
+      requiresUncertaintyDisclosure: true,
+      citationDiscipline: "require-citations-or-state-no-evidence",
+      contradictionPolicy: "disclose-and-defer",
+      groundingDirectives: [
+        "stay-within-evidence",
+        "disclose-uncertainty",
+        "separate-known-from-retrieved",
+      ],
+      producesDecisionRecommendation: false,
+      mandatedFacets: ["evidence", "assumptions", "uncertainty"],
+      directives: [
+        "state-position-then-evidence",
+        "challenge-stated-assumptions",
+        "surface-counter-evidence",
+        "list-explicit-assumptions",
+        "disclose-uncertainty-and-confidence",
+      ],
+    },
+    review: {
+      mode: "review",
+      challengesAssumptions: true,
+      requiresExplicitAssumptions: true,
+      requiresUncertaintyDisclosure: true,
+      citationDiscipline: "require-citations-or-state-no-evidence",
+      contradictionPolicy: "disclose-and-defer",
+      groundingDirectives: [
+        "attribute-claims-to-sources",
+        "stay-within-evidence",
+        "disclose-uncertainty",
+      ],
+      producesDecisionRecommendation: false,
+      mandatedFacets: ["evidence", "assumptions", "uncertainty"],
+      directives: [
+        "verify-claims-against-evidence",
+        "surface-counter-evidence",
+        "list-explicit-assumptions",
+        "disclose-uncertainty-and-confidence",
+      ],
+    },
+    decide: {
+      mode: "decide",
+      challengesAssumptions: true,
+      requiresExplicitAssumptions: true,
+      requiresUncertaintyDisclosure: true,
+      citationDiscipline: "require-citations-or-state-no-evidence",
+      contradictionPolicy: "disclose-and-defer",
+      groundingDirectives: ["stay-within-evidence", "disclose-uncertainty"],
+      producesDecisionRecommendation: true,
+      mandatedFacets: ["evidence", "assumptions", "uncertainty"],
+      directives: [
+        "cite-evidence-or-state-none",
+        "list-explicit-assumptions",
+        "offer-decision-with-tradeoffs",
+        "disclose-uncertainty-and-confidence",
+        "defer-to-user-on-unresolved-contradiction",
+      ],
+    },
+    brainstorm: {
+      mode: "brainstorm",
+      challengesAssumptions: false,
+      requiresExplicitAssumptions: true,
+      requiresUncertaintyDisclosure: false,
+      citationDiscipline: "best-effort",
+      contradictionPolicy: "synthesize-with-caveats",
+      groundingDirectives: ["separate-known-from-retrieved"],
+      producesDecisionRecommendation: false,
+      mandatedFacets: ["evidence", "assumptions"],
+      directives: [
+        "expand-option-space-before-converging",
+        "state-position-then-evidence",
+        "list-explicit-assumptions",
+      ],
+    },
+    "evidence-check": {
+      mode: "evidence-check",
+      challengesAssumptions: true,
+      requiresExplicitAssumptions: true,
+      requiresUncertaintyDisclosure: true,
+      citationDiscipline: "require-citations",
+      contradictionPolicy: "disclose-and-defer",
+      groundingDirectives: [
+        "attribute-claims-to-sources",
+        "do-not-fabricate-sources",
+        "stay-within-evidence",
+        "disclose-uncertainty",
+      ],
+      producesDecisionRecommendation: false,
+      mandatedFacets: ["evidence", "assumptions", "uncertainty"],
+      directives: [
+        "verify-claims-against-evidence",
+        "cite-evidence-or-state-none",
+        "list-explicit-assumptions",
+        "disclose-uncertainty-and-confidence",
+      ],
+    },
+  } as const);
 
 export function discussionModePlan(mode: DiscussionMode): DiscussionModePlan {
   return DISCUSSION_MODE_PLANS[mode];
@@ -345,14 +354,16 @@ export const DISCUSSION_TURN_STATUSES: readonly DiscussionTurnStatus[] = [
 // Legal state-changing transitions, keyed by status for totality. `active` may be interrupted or
 // resolved directly; an `interrupted` turn recovers or resolves; a `recovered` turn may be interrupted
 // again (repeated barge-in) or resolved; `resolved` is terminal.
+// KEIKO-0880: deepFreeze — each value is itself an array, so a shallow freeze would leave those
+// nested arrays writable at runtime.
 export const DISCUSSION_TURN_STATUS_TRANSITIONS: Readonly<
   Record<DiscussionTurnStatus, readonly DiscussionTurnStatus[]>
-> = {
+> = deepFreeze({
   active: ["interrupted", "resolved"],
   interrupted: ["recovered", "resolved"],
   recovered: ["interrupted", "resolved"],
   resolved: [],
-} as const;
+} as const);
 
 export function isDiscussionTurnStatus(value: unknown): value is DiscussionTurnStatus {
   return (

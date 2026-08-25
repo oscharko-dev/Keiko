@@ -30,7 +30,7 @@
       }
     },
     "keiko-contracts": {
-      "files": 188,
+      "files": 192,
       "uncoveredFiles": 0,
       "uncoveredLines": 857,
       "totalLines": 13919,
@@ -258,7 +258,7 @@
       }
     },
     "keiko-ui": {
-      "files": 421,
+      "files": 422,
       "uncoveredFiles": 3,
       "uncoveredLines": 2963,
       "totalLines": 39511,

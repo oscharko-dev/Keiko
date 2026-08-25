@@ -5,6 +5,7 @@
 // isRecord + predicate envelope and live in the sibling context-engineering-validation.ts to
 // keep both files under the 400-LOC budget (mirrors the memory-validation.ts split).
 
+import { deepFreeze } from "./deep-freeze.js";
 import type { ModelCapability } from "./gateway.js";
 
 export const CONTEXT_ENGINEERING_SCHEMA_VERSION = "1" as const;
@@ -15,10 +16,10 @@ export const DEFAULT_TOKEN_ESTIMATOR_ID = "keiko-conservative-content-v2" as con
 
 export type ContextTokenAccountingSource = "calibrated" | "fallback-estimated";
 
-export const CONTEXT_TOKEN_ACCOUNTING_SOURCES: readonly ContextTokenAccountingSource[] = [
-  "calibrated",
-  "fallback-estimated",
-] as const;
+// KEIKO-0880: Object.freeze — `as const` alone is compile-time only and left this table's backing
+// array writable at runtime.
+export const CONTEXT_TOKEN_ACCOUNTING_SOURCES: readonly ContextTokenAccountingSource[] =
+  Object.freeze(["calibrated", "fallback-estimated"] as const);
 
 export interface ContextTokenAccounting {
   readonly source: ContextTokenAccountingSource;
@@ -28,10 +29,12 @@ export interface ContextTokenAccounting {
   readonly offsetTokens?: number | undefined;
 }
 
-export const DEFAULT_CONTEXT_TOKEN_ACCOUNTING = {
+// KEIKO-0880: deepFreeze — this table is also embedded as DEFAULT_CONTEXT_PROFILE.tokenAccounting
+// below, so freezing it here keeps both references pointing at the one frozen object.
+export const DEFAULT_CONTEXT_TOKEN_ACCOUNTING = deepFreeze({
   source: "fallback-estimated",
   counterId: DEFAULT_TOKEN_ESTIMATOR_ID,
-} as const satisfies ContextTokenAccounting;
+} as const satisfies ContextTokenAccounting);
 
 // ─── Lane identity (the eight lanes) ──────────────────────────────────────── [PR1]
 export type ContextLaneId =
@@ -44,7 +47,9 @@ export type ContextLaneId =
   | "history-summary"
   | "verification-evidence";
 
-export const CONTEXT_LANE_IDS: readonly ContextLaneId[] = [
+// KEIKO-0880: Object.freeze — `as const` alone is compile-time only and left this table's backing
+// array writable at runtime.
+export const CONTEXT_LANE_IDS: readonly ContextLaneId[] = Object.freeze([
   "system-contract",
   "user-task",
   "active-plan",
@@ -53,18 +58,20 @@ export const CONTEXT_LANE_IDS: readonly ContextLaneId[] = [
   "working-memory",
   "history-summary",
   "verification-evidence",
-] as const;
+] as const);
 
 // Eviction policy per lane. "none" => non-evictable (reserved off the top).
 export type ContextEvictionPolicy =
   "none" | "summarize-then-drop" | "drop-oldest" | "drop-lowest-score";
 
-export const CONTEXT_EVICTION_POLICIES: readonly ContextEvictionPolicy[] = [
+// KEIKO-0880: Object.freeze — `as const` alone is compile-time only and left this table's backing
+// array writable at runtime.
+export const CONTEXT_EVICTION_POLICIES: readonly ContextEvictionPolicy[] = Object.freeze([
   "none",
   "summarize-then-drop",
   "drop-oldest",
   "drop-lowest-score",
-] as const;
+] as const);
 
 export type ContextBudgetPressure = "low" | "moderate" | "high" | "exceeded";
 
@@ -95,7 +102,9 @@ export interface ContextProfile {
 
 // Conservative defaults. 128k window, 8k reserved for output, 4k safety margin =>
 // 116k effective input budget. Frozen. `model` is intentionally omitted (optional).
-export const DEFAULT_CONTEXT_PROFILE: ContextProfile = {
+// KEIKO-0880: deepFreeze, not Object.freeze — this table nests a `tokenAccounting` object, and a
+// shallow freeze would have left that nested object writable at runtime.
+export const DEFAULT_CONTEXT_PROFILE: ContextProfile = deepFreeze({
   schemaVersion: CONTEXT_ENGINEERING_SCHEMA_VERSION,
   maxInputTokens: 128_000,
   reservedOutputTokens: 8_000,
@@ -103,7 +112,7 @@ export const DEFAULT_CONTEXT_PROFILE: ContextProfile = {
   effectiveInputBudget: 116_000,
   tokenEstimatorId: DEFAULT_TOKEN_ESTIMATOR_ID,
   tokenAccounting: DEFAULT_CONTEXT_TOKEN_ACCOUNTING,
-} as const;
+} as const);
 
 // ─── Per-lane budget allocation (one row per lane) ────────────────────────── [PR1]
 export interface ContextLaneBudget {
@@ -310,7 +319,12 @@ export interface ContextCompactionRecord {
   readonly itemsAfter: number;
   readonly tokensBefore: number;
   readonly tokensAfter: number;
-  // Stable hash of the summarized content so a reviewer can correlate without storing raw text.
+  // Stable hash of the dropped content (raw text of the excluded items), for correlation with a
+  // rehydration handle. This is NOT a hash of a summary — see `modelSummary` for the actual
+  // model-generated summary, when present. The compaction allocator populates this via
+  // `summaryHashOf(excluded)` in keiko-workflows/src/context-budget/compaction-helpers.ts, which
+  // hashes the concatenated raw text of the excluded items — no summarization step exists on that
+  // path. Keep field name unchanged: it is on the wire and consumed by evidence redactors.
   readonly summaryRefHash?: string | undefined;
   // Optional handle to rehydrate the original items (see ContextRehydrationHandle).
   readonly rehydration?: ContextRehydrationHandle | undefined;
@@ -407,11 +421,27 @@ const TOKEN_EMOJI_LIKE_CODE_POINT_RANGES: readonly (readonly [number, number])[]
   [0x1f000, 0x1faff],
   [0x2600, 0x27bf],
 ] as const;
-const TOKEN_WHITESPACE_CODE_POINTS: readonly number[] = [
+// KEIKO-0797: Set<number>, not a readonly array + `.includes` — O(1) membership instead of a
+// linear scan on every code point of every estimated string. Same six members, same order.
+const TOKEN_WHITESPACE_CODE_POINTS: ReadonlySet<number> = new Set([
   0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x20,
-] as const;
+]);
+// KEIKO-0797: Set<string>, not a string-literal + `.includes` — O(1) membership instead of a
+// linear scan on every code point of every estimated string. Built from the identical source
+// string so membership is byte-for-byte the same as the string it replaces.
+const TOKEN_STRUCTURAL_CHARACTERS: ReadonlySet<string> = new Set("{}[]()<>;:=+-*/%&|!?,.#`$@\\\"'");
 const TOKEN_ESTIMATE_CACHE_MAX_ENTRIES = 4_096;
+// KEIKO-0797: byte cap tracked ALONGSIDE the entry-count cap above. A cache of
+// TOKEN_ESTIMATE_CACHE_MAX_ENTRIES very large distinct strings would stay under the entry cap while
+// retaining unbounded memory, so retained bytes are charged and bounded independently. Documented
+// cap: 2 MiB, charged per entry as the UTF-8 byte length of the cached key (the estimated text)
+// plus a fixed small overhead for the numeric value and Map bookkeeping.
+const TOKEN_ESTIMATE_CACHE_MAX_BYTES = 2_097_152;
+const TOKEN_ESTIMATE_CACHE_ENTRY_OVERHEAD_BYTES = 48;
 const tokenEstimateCache = new Map<string, number>();
+// Running total of bytes currently retained by tokenEstimateCache, per the accounting above. Reset
+// to 0 whenever the cache is cleared so it never drifts from the Map's actual contents.
+let tokenEstimateCacheBytes = 0;
 const tokenTextEncoder: TextEncoder | undefined =
   typeof TextEncoder === "undefined" ? undefined : new TextEncoder();
 
@@ -463,7 +493,7 @@ function isEmojiLikeCodePoint(codePoint: number): boolean {
 }
 
 function isWhitespaceCodePoint(codePoint: number): boolean {
-  return TOKEN_WHITESPACE_CODE_POINTS.includes(codePoint);
+  return TOKEN_WHITESPACE_CODE_POINTS.has(codePoint);
 }
 
 function tokenShapeStats(text: string): TokenShapeStats {
@@ -478,7 +508,7 @@ function tokenShapeStats(text: string): TokenShapeStats {
     if (isCjkCodePoint(codePoint)) cjkChars += 1;
     if (isEmojiLikeCodePoint(codePoint)) emojiLikeChars += 1;
     if (codePoint === 0x0a) newlineChars += 1;
-    if ("{}[]()<>;:=+-*/%&|!?,.#`$@\\\"'".includes(char)) structuralChars += 1;
+    if (TOKEN_STRUCTURAL_CHARACTERS.has(char)) structuralChars += 1;
   }
   return { cjkChars, emojiLikeChars, structuralChars, newlineChars, nonWhitespaceChars };
 }
@@ -494,6 +524,27 @@ function requiresDenseTokenizerFloor(text: string): boolean {
   );
 }
 
+// KEIKO-0797: charges the new entry's byte weight (its key's UTF-8 length plus a fixed
+// bookkeeping overhead) and evicts — mirroring the pre-existing entry-count eviction below: a full
+// clear, not partial LRU — whenever EITHER cap would be exceeded, before inserting. A single entry
+// that alone exceeds the byte cap is never cached; estimateTokens already returned its correct
+// value to the caller regardless, so skipping the cache write changes nothing observable.
+function cacheTokenEstimate(text: string, textBytes: number, tokens: number): void {
+  const entryBytes = textBytes + TOKEN_ESTIMATE_CACHE_ENTRY_OVERHEAD_BYTES;
+  if (entryBytes > TOKEN_ESTIMATE_CACHE_MAX_BYTES) {
+    return;
+  }
+  if (
+    tokenEstimateCache.size >= TOKEN_ESTIMATE_CACHE_MAX_ENTRIES ||
+    tokenEstimateCacheBytes + entryBytes > TOKEN_ESTIMATE_CACHE_MAX_BYTES
+  ) {
+    tokenEstimateCache.clear();
+    tokenEstimateCacheBytes = 0;
+  }
+  tokenEstimateCache.set(text, tokens);
+  tokenEstimateCacheBytes += entryBytes;
+}
+
 export function estimateTokens(text: string): number {
   const cached = tokenEstimateCache.get(text);
   if (cached !== undefined) {
@@ -505,11 +556,22 @@ export function estimateTokens(text: string): number {
     ? Math.ceil(bytes / TOKEN_WORST_CASE_BYTES_PER_TOKEN_DIVISOR)
     : baseline;
   const tokens = TOKEN_STRUCTURAL_OVERHEAD + Math.max(baseline, denseFloor);
-  if (tokenEstimateCache.size >= TOKEN_ESTIMATE_CACHE_MAX_ENTRIES) {
-    tokenEstimateCache.clear();
-  }
-  tokenEstimateCache.set(text, tokens);
+  cacheTokenEstimate(text, bytes, tokens);
   return tokens;
+}
+
+// Exported test-only helpers so hermetic unit tests can observe and reset the token-estimate
+// cache's population without cross-test bleed. Product code never calls these.
+export function __resetContextTokenCacheForTests(): void {
+  tokenEstimateCache.clear();
+  tokenEstimateCacheBytes = 0;
+}
+
+export function __contextTokenCacheDiagnosticsForTests(): {
+  readonly entries: number;
+  readonly bytesRetained: number;
+} {
+  return { entries: tokenEstimateCache.size, bytesRetained: tokenEstimateCacheBytes };
 }
 
 // Sum estimateTokens over a set of segments (e.g. messages). The per-segment overhead models

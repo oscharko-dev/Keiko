@@ -289,9 +289,11 @@ export interface CodingWorkbenchModePolicy {
   // Capability admission is not pre-approval. Resource scope, risk, authority, and hard-deny gates
   // still determine the tri-state effect for each concrete action.
   readonly allowedActionClasses: readonly CodingWorkbenchActionClass[];
-  readonly allowsWorkspaceWrites: boolean;
-  readonly allowsCommandExecution: boolean;
-  readonly allowsDeliverySubstrate: boolean;
+  // KEIKO-0831: the previous boolean triple (allowsWorkspaceWrites / allowsCommandExecution /
+  // allowsDeliverySubstrate) was dead policy — every consumer already routes through the
+  // `effects` tri-state matrix below, which carries the same information at a finer grain.
+  // Removed from the interface and from every entry so drift between the coarse booleans and the
+  // matrix cannot arise.
   readonly display: CodingWorkbenchModeDisplay;
   readonly effects: CodingWorkbenchModeEffectMatrix;
 }
@@ -333,9 +335,6 @@ export const CODING_WORKBENCH_MODE_POLICIES: Readonly<
 > = deepFreeze({
   "governed-assist": {
     allowedActionClasses: CODING_WORKBENCH_ACTION_CLASSES,
-    allowsWorkspaceWrites: true,
-    allowsCommandExecution: true,
-    allowsDeliverySubstrate: true,
     display: {
       label: "Ask for approval",
       description:
@@ -370,9 +369,6 @@ export const CODING_WORKBENCH_MODE_POLICIES: Readonly<
   },
   "supervised-coding": {
     allowedActionClasses: CODING_WORKBENCH_ACTION_CLASSES,
-    allowsWorkspaceWrites: true,
-    allowsCommandExecution: true,
-    allowsDeliverySubstrate: true,
     display: {
       label: "Supervised workspace",
       description:
@@ -407,9 +403,6 @@ export const CODING_WORKBENCH_MODE_POLICIES: Readonly<
   },
   "autonomous-delivery": {
     allowedActionClasses: CODING_WORKBENCH_ACTION_CLASSES,
-    allowsWorkspaceWrites: true,
-    allowsCommandExecution: true,
-    allowsDeliverySubstrate: true,
     display: {
       label: "Full access",
       description:

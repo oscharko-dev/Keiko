@@ -556,7 +556,11 @@ export const applyQualityIntelligenceCandidateEdit = (
     editorLabel: input.redact(input.provenance.editorLabel) as string,
   };
   const revision: EditedRevision = {
-    candidateId: input.candidateId,
+    // KEIKO-0593: candidateId is now branded QualityIntelligenceTestCaseId. input.candidateId is
+    // matched (line 536) against `existing.id`, an already-validated QualityIntelligenceTestCaseId
+    // from the persisted artifact, so this construction can only be reached with a string that
+    // already carries the exact content of a once-validated id.
+    candidateId: QualityIntelligence.asQualityIntelligenceTestCaseId(input.candidateId),
     provenance: redactedProvenance,
     editedFields: redactedFields,
   };

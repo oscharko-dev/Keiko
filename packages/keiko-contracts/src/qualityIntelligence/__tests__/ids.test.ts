@@ -4,6 +4,7 @@ import {
   asQualityIntelligenceCoverageMapId,
   asQualityIntelligenceEvidenceAtomId,
   asQualityIntelligenceExportBundleId,
+  asQualityIntelligenceHandoffId,
   asQualityIntelligenceReviewRecordId,
   asQualityIntelligenceRunId,
   asQualityIntelligenceSourceEnvelopeId,
@@ -24,6 +25,8 @@ const constructors: readonly (readonly [string, Constructor])[] = [
   ["SourceEnvelopeId", asQualityIntelligenceSourceEnvelopeId],
   ["EvidenceAtomId", asQualityIntelligenceEvidenceAtomId],
   ["AuditSummaryId", asQualityIntelligenceAuditSummaryId],
+  // KEIKO-0593
+  ["HandoffId", asQualityIntelligenceHandoffId],
 ];
 
 // Control-character literals declared via explicit \u escapes so editors and
@@ -180,6 +183,7 @@ describe("bidi and zero-width rejection", () => {
     asQualityIntelligenceSourceEnvelopeId,
     asQualityIntelligenceEvidenceAtomId,
     asQualityIntelligenceAuditSummaryId,
+    asQualityIntelligenceHandoffId, // KEIKO-0593
   ];
 
   it.each([0x202e, 0x200b, 0x2066, 0x2060, 0x206f, 0x061c, 0xfeff])(
@@ -209,5 +213,20 @@ describe("Brand sanity", () => {
     const run = asQualityIntelligenceRunId("run-001");
     expect(typeof run).toBe("string");
     expect(JSON.parse(JSON.stringify({ run })) as { run: string }).toEqual({ run: "run-001" });
+  });
+});
+
+// KEIKO-0593: QualityIntelligenceConversationCenterHandoff.id was a bare `string` (no validation on
+// the audit link between a Conversation Center chat and the QI handoff it minted). This is the
+// finding's own named acceptance proof: before the brand + constructor existed, this call failed
+// with "asQualityIntelligenceHandoffId is not a function"; now it must throw TypeError for the
+// documented reason (forbidden path fragment), not silently accept a hostile value.
+describe("asQualityIntelligenceHandoffId (KEIKO-0593)", () => {
+  it("rejects a forbidden path-traversal fragment", () => {
+    expect(() => asQualityIntelligenceHandoffId("../etc/passwd")).toThrow(TypeError);
+  });
+
+  it("accepts a well-formed handoff id and returns it unchanged", () => {
+    expect(asQualityIntelligenceHandoffId("handoff-001")).toBe("handoff-001");
   });
 });

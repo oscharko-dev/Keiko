@@ -49,7 +49,12 @@ import {
   validateMemoryUnpin,
   validateMemoryUpdate,
 } from "./memory-operations-validation.js";
-import { isScopeReachable, validateMemoryRetrievalRequest } from "./memory-retrieval-validation.js";
+import {
+  isScopeReachable,
+  MEMORY_RETRIEVAL_MAX_BODY_CHARS,
+  MEMORY_RETRIEVAL_MAX_RESULTS,
+  validateMemoryRetrievalRequest,
+} from "./memory-retrieval-validation.js";
 import { validateMemoryAuditRecord } from "./memory-audit-validation.js";
 import {
   assertNeverMemoryType,
@@ -1003,6 +1008,25 @@ describe("operation validators", () => {
     expect(validateMemoryRetrievalRequest({ ...base, maxResults: 0 }).ok).toBe(false);
     expect(validateMemoryRetrievalRequest({ ...base, maxResults: 10 }).ok).toBe(true);
     expect(validateMemoryRetrievalRequest({ ...base, includeArchived: "yes" }).ok).toBe(false);
+    // KEIKO-1027: MEMORY_RETRIEVAL_MAX_RESULTS and MEMORY_RETRIEVAL_MAX_BODY_CHARS bound the
+    // retrieval budget hints at the naming boundary. A hostile producer asking the store to scan
+    // 100_000 rows or project a 10 MB body must be refused as a contract violation, not a request
+    // the store silently clamps.
+    expect(
+      validateMemoryRetrievalRequest({ ...base, maxResults: MEMORY_RETRIEVAL_MAX_RESULTS + 1 }).ok,
+    ).toBe(false);
+    expect(
+      validateMemoryRetrievalRequest({ ...base, maxResults: MEMORY_RETRIEVAL_MAX_RESULTS }).ok,
+    ).toBe(true);
+    expect(
+      validateMemoryRetrievalRequest({
+        ...base,
+        maxBodyChars: MEMORY_RETRIEVAL_MAX_BODY_CHARS + 1,
+      }).ok,
+    ).toBe(false);
+    expect(
+      validateMemoryRetrievalRequest({ ...base, maxBodyChars: MEMORY_RETRIEVAL_MAX_BODY_CHARS }).ok,
+    ).toBe(true);
   });
 });
 

@@ -107,6 +107,24 @@ describe("buildEditorProblemsSnapshot", () => {
     const snapshot = buildEditorProblemsSnapshot([problem()]);
     expect(isEditorProblemsSnapshot(snapshot)).toBe(true);
   });
+
+  // KEIKO-0800: every combination of {0, 1, cap, cap+overflow} for perFileCap/totalCap must yield
+  // a snapshot the guard accepts; before the fix, `buildEditorProblemsSnapshot(problems, 0, 0)`
+  // returned {perFileCap:0, totalCap:0} which hasValidSnapshotCaps rejected (positive-integer
+  // requirement), so the builder emitted a snapshot its own guard would drop.
+  it.each([
+    [0, 0],
+    [0, 1],
+    [1, 0],
+    [1, 1],
+    [100, 1000],
+    [200, 5000],
+    [-5, -1],
+    [Number.NaN, Number.NaN],
+  ])("cap: builds a guard-passing snapshot for perFileCap=%s, totalCap=%s", (per, total) => {
+    const snapshot = buildEditorProblemsSnapshot([problem()], per, total);
+    expect(isEditorProblemsSnapshot(snapshot)).toBe(true);
+  });
 });
 
 describe("editor-problems guards", () => {

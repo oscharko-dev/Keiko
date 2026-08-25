@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import {
   CODING_WORKBENCH_ACTION_CLASSES,
@@ -447,5 +449,21 @@ describe("Coding Workbench runtime contract failure branches", () => {
       ok: false,
       errors: ["modelSource is invalid"],
     });
+  });
+});
+
+describe("coding workbench runtime module structure (KEIKO-0532)", () => {
+  it("does not re-declare the validation primitives owned by coding-workbench-runtime-api-validation.ts", () => {
+    // isRecord, isOneOf, unknownKeys, result, and validateStrictIso used to be re-declared here
+    // byte-for-byte identical to their coding-workbench-runtime-api-validation.ts counterparts
+    // (exactKeys / validateStrictUtcInstant there). This module now imports them instead of
+    // keeping a second copy; a re-introduced local declaration must fail this pin.
+    const source = readFileSync(
+      fileURLToPath(new URL("./coding-workbench-runtime.ts", import.meta.url)),
+      "utf8",
+    );
+    const forbiddenLocalDeclaration =
+      /^function isRecord|^function isOneOf|^function unknownKeys|^function result|^function validateStrictIso/m;
+    expect(forbiddenLocalDeclaration.test(source)).toBe(false);
   });
 });

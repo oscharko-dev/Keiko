@@ -10,7 +10,7 @@ import { mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "n
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import type { QualityIntelligence } from "@oscharko-dev/keiko-contracts";
+import { QualityIntelligence } from "@oscharko-dev/keiko-contracts";
 import {
   applyQualityIntelligenceCandidateEdit,
   QUALITY_INTELLIGENCE_CANDIDATES_INTEGRITY_SCHEMA_VERSION,
@@ -543,7 +543,7 @@ describe("loadQualityIntelligenceCandidates — fail closed companion parsing", 
       ...current,
       editedRevisions: [
         {
-          candidateId: "tc-1",
+          candidateId: QualityIntelligence.asQualityIntelligenceTestCaseId("tc-1"),
           provenance: {
             editedAt: "2026-06-08T12:00:00.000Z",
             editedBy: "human" as const,

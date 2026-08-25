@@ -172,6 +172,24 @@ const parseSourceEnvelopeIds = (
   return ids;
 };
 
+// KEIKO-0593: QualityIntelligenceConversationCenterHandoff.id is now branded
+// QualityIntelligenceHandoffId. Mirrors parseOptionalRunId's try/catch-around-the-asX-constructor
+// shape immediately below -- the constructor throws TypeError on a forbidden path fragment,
+// control character, oversized, or non-NFKC-normalised value, which a bare isNonEmptyString check
+// would accept.
+const parseHandoffId = (
+  raw: unknown,
+):
+  | { readonly ok: true; readonly value: QualityIntelligence.QualityIntelligenceHandoffId }
+  | { readonly ok: false } => {
+  if (typeof raw !== "string") return { ok: false };
+  try {
+    return { ok: true, value: QualityIntelligence.asQualityIntelligenceHandoffId(raw) };
+  } catch {
+    return { ok: false };
+  }
+};
+
 const parseOptionalRunId = (
   raw: unknown,
 ):
@@ -194,29 +212,59 @@ const validatePayloadRef = (
   return parseSourceEnvelopeIds(raw.sourceEnvelopeIds);
 };
 
+interface ParsedEnvelopeFields {
+  readonly id: QualityIntelligence.QualityIntelligenceHandoffId;
+  readonly requestedByChatMessageId: string;
+  readonly promptedAction: QualityIntelligence.QualityIntelligenceHandoffPromptedAction;
+  readonly sourceEnvelopeIds: readonly QualityIntelligence.QualityIntelligenceSourceEnvelopeId[];
+  readonly runId: QualityIntelligence.QualityIntelligenceRunId | undefined;
+}
+
+// Split out of validateEnvelope (KEIKO-0593) to keep both functions under the complexity ceiling
+// once the handoff id gained its own branded-constructor validation step.
+const parseEnvelopeFields = (
+  parsed: Readonly<Record<string, unknown>>,
+): ParsedEnvelopeFields | undefined => {
+  const handoffIdResult = parseHandoffId(parsed.id);
+  if (!handoffIdResult.ok) return undefined;
+  if (!isNonEmptyString(parsed.requestedByChatMessageId)) return undefined;
+  if (!isAllowedAction(parsed.promptedAction)) return undefined;
+  const sourceEnvelopeIds = validatePayloadRef(parsed.payloadRef);
+  if (sourceEnvelopeIds === undefined) return undefined;
+  const runIdResult = parseOptionalRunId(parsed.runId);
+  if (!runIdResult.ok) return undefined;
+  return {
+    id: handoffIdResult.value,
+    requestedByChatMessageId: parsed.requestedByChatMessageId,
+    promptedAction: parsed.promptedAction,
+    sourceEnvelopeIds,
+    runId: runIdResult.value,
+  };
+};
+
 const validateEnvelope = (parsed: unknown): Validation => {
   if (!isPlainObject(parsed)) return fail();
   if (!hasOnlyAllowedKeys(parsed, ALLOWED_ENVELOPE_KEYS)) return fail();
-  if (!isNonEmptyString(parsed.id)) return fail();
-  if (!isNonEmptyString(parsed.requestedByChatMessageId)) return fail();
-  if (!isAllowedAction(parsed.promptedAction)) return fail();
-
-  const sourceEnvelopeIds = validatePayloadRef(parsed.payloadRef);
-  if (sourceEnvelopeIds === undefined) return fail();
-
-  const runIdResult = parseOptionalRunId(parsed.runId);
-  if (!runIdResult.ok) return fail();
+  const fields = parseEnvelopeFields(parsed);
+  if (fields === undefined) return fail();
 
   // Defence-in-depth: scrub every string value for credential-shaped substrings.
   if (scanForbiddenStrings(parsed)) return fail("QI_HANDOFF_FORBIDDEN_PAYLOAD");
 
   const envelope: QualityIntelligence.QualityIntelligenceConversationCenterHandoff = {
-    id: parsed.id,
-    requestedByChatMessageId: parsed.requestedByChatMessageId,
-    promptedAction: parsed.promptedAction,
-    payloadRef: { sourceEnvelopeIds },
-    ...(runIdResult.value !== undefined ? { runId: runIdResult.value } : {}),
+    id: fields.id,
+    requestedByChatMessageId: fields.requestedByChatMessageId,
+    promptedAction: fields.promptedAction,
+    payloadRef: { sourceEnvelopeIds: fields.sourceEnvelopeIds },
+    ...(fields.runId !== undefined ? { runId: fields.runId } : {}),
   };
+  // KEIKO-0593: payloadRef.sourceEnvelopeIds now has an enforced maximum
+  // (QUALITY_INTELLIGENCE_HANDOFF_MAX_SOURCE_ENVELOPE_IDS); this was previously unbounded here.
+  try {
+    QualityIntelligence.assertQualityIntelligenceConversationCenterHandoffInvariant(envelope);
+  } catch {
+    return fail();
+  }
   return { kind: "ok", envelope };
 };
 

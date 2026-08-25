@@ -266,12 +266,7 @@ function derivePrPreviewParts(
   );
   const narrative = narrativeFromSnapshot(command.headBranchName, snapshot);
   const riskDigest = riskDigestFor(command, effective.outcome);
-  const draft = synthesizePullRequestMetadata(
-    narrative,
-    riskDigest,
-    command.headBranchName,
-    command.baseBranchName,
-  );
+  const draft = synthesizePullRequestMetadata(narrative, riskDigest, command.headBranchName);
   const readiness = previewReadiness(command, snapshot);
   return {
     effectiveOutcome: effective.outcome,

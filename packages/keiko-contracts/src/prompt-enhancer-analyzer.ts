@@ -871,7 +871,14 @@ const DEFAULT_FORMAT_BY_CLASS: Readonly<Partial<Record<PromptTaskClass, OutputFo
   "decision-support": "markdown",
 };
 
-const STRUCTURED_FORMATS: ReadonlySet<OutputFormat> = new Set(["json", "yaml", "csv", "table"]);
+// KEIKO-0624: exported so prompt-enhancer-validation.ts's validateOutputSchema can consume the
+// single source of truth instead of maintaining a hand-mirrored ReadonlySet<string>.
+export const STRUCTURED_FORMATS: ReadonlySet<OutputFormat> = new Set([
+  "json",
+  "yaml",
+  "csv",
+  "table",
+]);
 
 function detectOutputSchema(lower: string, taskClass: PromptTaskClass): OutputSchemaDescriptor {
   const hints: OutputFormatHint[] = [];

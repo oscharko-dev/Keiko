@@ -176,20 +176,33 @@ const GOVERNED_GIT_PINNED_ENV: Readonly<Record<string, string>> = Object.freeze(
 });
 
 // Additional lane-2 pins, mirroring keiko-git `networkGitEnv`: every askpass/GUI credential prompt
-// is disabled (`/dev/null` is a non-executable path on POSIX and a non-existent one on Windows, so
-// the helper fails; GIT_ASKPASS also outranks a `core.askPass` from any config scope, and git then
-// falls back to the already-disabled terminal prompt), and SSH runs in batch mode with no
-// first-use host-key trust, so an unknown or changed host key fails closed.
+// is disabled (the platform null device is a non-executable path, so the helper fails; GIT_ASKPASS
+// also outranks a `core.askPass` from any config scope, and git then falls back to the
+// already-disabled terminal prompt), and SSH runs in batch mode with no first-use host-key trust,
+// so an unknown or changed host key fails closed.
 //
 // `networkGitEnv` additionally sets GIT_CONFIG_NOSYSTEM; this lane deliberately does NOT. On several
 // platforms the SYSTEM git config is where the platform credential helper is declared (macOS ships
 // `credential.helper = osxkeychain` there), so suppressing that scope would disable exactly the
 // credentials this lane exists to use. Nothing fail-closed depends on it: the prompt pins above
 // outrank every config scope.
-const GOVERNED_GIT_REMOTE_PINNED_ENV: Readonly<Record<string, string>> = Object.freeze({
+
+// Mirrors keiko-git's `devNullPath` (packages/keiko-git/src/env.ts): the null device is
+// `/dev/null` on POSIX and the reserved device name `NUL` on Windows — the literal string
+// "/dev/null" is not a valid Windows path, so pinning it unconditionally there relied on an
+// incidental "file not found" failure instead of the platform's own null device (KEIKO-0717).
+// keiko-contracts is the ADR-0019 leaf package and must not import keiko-git (direction-1), so the
+// primitive is duplicated here rather than shared. keiko-tools sits above both packages and pins
+// this table against keiko-git's `networkGitEnv()` for every key they both declare in
+// packages/keiko-tools/src/git-env-parity.test.ts, so the two copies cannot silently drift.
+function devNullPath(platform: NodeJS.Platform = process.platform): string {
+  return platform === "win32" ? "NUL" : "/dev/null";
+}
+
+export const GOVERNED_GIT_REMOTE_PINNED_ENV: Readonly<Record<string, string>> = Object.freeze({
   ...GOVERNED_GIT_PINNED_ENV,
-  GIT_ASKPASS: "/dev/null",
-  SSH_ASKPASS: "/dev/null",
+  GIT_ASKPASS: devNullPath(),
+  SSH_ASKPASS: devNullPath(),
   SSH_ASKPASS_REQUIRE: "never",
   GCM_INTERACTIVE: "never",
   GIT_SSH_COMMAND:

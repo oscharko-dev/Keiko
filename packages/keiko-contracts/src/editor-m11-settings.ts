@@ -456,7 +456,8 @@ function hasValidEventStoreState(value: unknown): boolean {
 function isM11SettingsEvent(value: unknown): value is EditorM11SettingsEvent {
   if (!isWorkspaceRecord(value) || !hasOnlyEventKeys(value)) return false;
   return [
-    value.schemaVersion === "1" && (value.kind === "changed" || value.kind === "snapshot"),
+    value.schemaVersion === EDITOR_M7_SCHEMA_VERSION &&
+      (value.kind === "changed" || value.kind === "snapshot"),
     hasValidEventRevisions(value),
     isM11EventScope(value.scope) && hasValidEventSettingIds(value.settingIds),
     hasValidEventStoreState(value.storeState),

@@ -54,12 +54,28 @@ function validateRetrievalEnumFilter(
   }
 }
 
-function validateRetrievalNumericLimit(field: string, value: unknown, errors: string[]): void {
+// KEIKO-1027: enforce contract-level ceilings on the two retrieval budget hints so a hostile
+// producer cannot ask the store for an unbounded scan (maxResults) or an unbounded body-byte
+// projection (maxBodyChars). Values are hints, not guarantees; the store may still clamp
+// tighter, but the contract now bounds the outer request shape at the naming boundary.
+export const MEMORY_RETRIEVAL_MAX_RESULTS = 1024 as const;
+export const MEMORY_RETRIEVAL_MAX_BODY_CHARS = MEMORY_BODY_MAX_CHARS;
+
+function validateRetrievalNumericLimit(
+  field: string,
+  value: unknown,
+  errors: string[],
+  ceiling: number,
+): void {
   if (value === undefined) {
     return;
   }
   if (!isFinitePositiveInteger(value)) {
     errors.push(`retrieval.${field} must be a positive integer when set`);
+    return;
+  }
+  if (value > ceiling) {
+    errors.push(`retrieval.${field} must be <= ${String(ceiling)} when set`);
   }
 }
 
@@ -75,8 +91,18 @@ function validateRetrievalFilters(input: Record<string, unknown>, errors: string
 }
 
 function validateRetrievalBudgetAndToggles(input: Record<string, unknown>, errors: string[]): void {
-  validateRetrievalNumericLimit("maxResults", input.maxResults, errors);
-  validateRetrievalNumericLimit("maxBodyChars", input.maxBodyChars, errors);
+  validateRetrievalNumericLimit(
+    "maxResults",
+    input.maxResults,
+    errors,
+    MEMORY_RETRIEVAL_MAX_RESULTS,
+  );
+  validateRetrievalNumericLimit(
+    "maxBodyChars",
+    input.maxBodyChars,
+    errors,
+    MEMORY_RETRIEVAL_MAX_BODY_CHARS,
+  );
   if (input.includeArchived !== undefined && typeof input.includeArchived !== "boolean") {
     errors.push("retrieval.includeArchived must be a boolean when set");
   }

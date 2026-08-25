@@ -52,4 +52,9 @@ export type {
   SinkDegradedEvent,
   HarnessEvent,
 } from "@oscharko-dev/keiko-contracts";
-export { TERMINAL_STATES, DEFAULT_LIMITS, HARNESS_CODES } from "@oscharko-dev/keiko-contracts";
+export {
+  TERMINAL_STATES,
+  isTerminalHarnessState,
+  DEFAULT_LIMITS,
+  HARNESS_CODES,
+} from "@oscharko-dev/keiko-contracts";

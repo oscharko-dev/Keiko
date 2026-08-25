@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
+  GIT_SYNC_BLOCK_REASONS,
+  GIT_SYNC_OPERATIONS,
   GIT_SYNC_OUTCOMES,
   GIT_SYNC_SCHEMA_VERSION,
   isGitSyncOperation,
@@ -8,6 +10,17 @@ import {
   validateGitSyncPreview,
   type GitSyncOutcome,
 } from "./git-sync.js";
+
+// Object.freeze throws on a mutation attempt in strict-mode ESM (which this file is), but the
+// assertion that matters is the post-attempt VALUE, not the throw — so a swallowed exception here
+// still leaves the real regression signal (the unchanged read below) intact.
+function attemptMutation(mutate: () => void): void {
+  try {
+    mutate();
+  } catch {
+    // Expected in strict mode: Object.freeze rejects the write.
+  }
+}
 
 function validPreview(): Record<string, unknown> {
   return {
@@ -42,6 +55,35 @@ function validExecute(): Record<string, unknown> {
     truncated: false,
   };
 }
+
+describe("frozen governance tables (KEIKO-0879)", () => {
+  it("GIT_SYNC_OPERATIONS is frozen and a mutation attempt leaves it unchanged", () => {
+    expect(Object.isFrozen(GIT_SYNC_OPERATIONS)).toBe(true);
+    const before = [...GIT_SYNC_OPERATIONS];
+    attemptMutation(() => {
+      (GIT_SYNC_OPERATIONS as unknown as string[]).push("clone");
+    });
+    expect([...GIT_SYNC_OPERATIONS]).toEqual(before);
+  });
+
+  it("GIT_SYNC_OUTCOMES is frozen and a mutation attempt leaves it unchanged", () => {
+    expect(Object.isFrozen(GIT_SYNC_OUTCOMES)).toBe(true);
+    const before = [...GIT_SYNC_OUTCOMES];
+    attemptMutation(() => {
+      (GIT_SYNC_OUTCOMES as unknown as string[]).push("bogus-outcome");
+    });
+    expect([...GIT_SYNC_OUTCOMES]).toEqual(before);
+  });
+
+  it("GIT_SYNC_BLOCK_REASONS is frozen and a mutation attempt leaves it unchanged", () => {
+    expect(Object.isFrozen(GIT_SYNC_BLOCK_REASONS)).toBe(true);
+    const before = [...GIT_SYNC_BLOCK_REASONS];
+    attemptMutation(() => {
+      (GIT_SYNC_BLOCK_REASONS as unknown as string[]).push("bogus-reason");
+    });
+    expect([...GIT_SYNC_BLOCK_REASONS]).toEqual(before);
+  });
+});
 
 describe("isGitSyncOperation", () => {
   it.each(["fetch", "pull"] as const)("accepts %s", (op) => {

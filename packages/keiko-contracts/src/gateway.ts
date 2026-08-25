@@ -35,11 +35,11 @@ export const MODEL_REASONING_EFFORTS: readonly ModelReasoningEffort[] = Object.f
   "xhigh",
 ] as const);
 
-export const MODEL_COST_RANK: Readonly<Record<CostClass, number>> = {
+export const MODEL_COST_RANK: Readonly<Record<CostClass, number>> = Object.freeze({
   low: 0,
   medium: 1,
   high: 2,
-};
+});
 
 export type LatencyClass = "fast" | "standard" | "slow";
 

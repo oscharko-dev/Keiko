@@ -136,12 +136,28 @@ export interface CreateEditorLayoutStateV2Input {
 const MIN_SPLIT_RATIO = 15;
 const MAX_SPLIT_RATIO = 85;
 
+// KEIKO-0769: the reducer clamps sidebarWidth on read (persistedSidebarWidth) but the write path
+// (set-sidebar and replace-root) accepted any number, silently letting a hostile action inject
+// NaN or a negative width into the persisted layout. These module-level bounds match the widest
+// legitimate CreateEditorLayoutStateV2Input range documented today (persistedSidebarWidth already
+// clamped incoming state into per-call min/max caps; the write path now defers to a static outer
+// bound that is at least as wide as any concrete configuration).
+const SIDEBAR_WIDTH_MIN_ABSOLUTE = 0;
+const SIDEBAR_WIDTH_MAX_ABSOLUTE = 4_096;
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function clampNumber(value: number, min: number, max: number): number {
+  // KEIKO-0769: NaN silently propagated through both Math.min and Math.max, so the returned value
+  // was NaN — the reducer's write path could then commit a NaN sidebarWidth without complaint.
+  if (!Number.isFinite(value)) return min;
   return Math.min(max, Math.max(min, value));
+}
+
+function clampSidebarWidth(width: number): number {
+  return clampNumber(width, SIDEBAR_WIDTH_MIN_ABSOLUTE, SIDEBAR_WIDTH_MAX_ABSOLUTE);
 }
 
 function clampRatio(value: number): number {
@@ -693,8 +709,15 @@ function moveTab(
   targetIndex?: number,
 ): EditorLayoutStateV2 {
   if (fromPaneId === toPaneId) {
-    return updatePane(layout, toPaneId, (pane) =>
-      withPaneFiles(pane, insertFile(pane.tabOrder, file, targetIndex), file),
+    // KEIKO-0781: the cross-pane branch below already refuses to move a file the source pane
+    // never opened. The same-pane branch used to skip that guard, so a move-tab or centre
+    // drop-tab targeting `file:"never-opened.ts"` would insert a phantom tab into the pane's
+    // tab order. Return `layout` unchanged when the target pane does not already list the file
+    // — reordering within a pane means changing the position of a tab that exists.
+    const pane = layout.panes[toPaneId];
+    if (!pane?.openFiles.includes(file)) return layout;
+    return updatePane(layout, toPaneId, (current) =>
+      withPaneFiles(current, insertFile(current.tabOrder, file, targetIndex), file),
     );
   }
   const fromPane = layout.panes[fromPaneId];
@@ -894,7 +917,11 @@ function replaceRoot(
     activePaneId: pane.id,
     tree: { type: "pane", paneId: pane.id },
     panes: paneRecordFrom({}, { [pane.id]: pane }),
-    sidebarWidth: action.sidebarWidth ?? layout.sidebarWidth,
+    // KEIKO-0769: clamp on write; see set-sidebar handler above.
+    sidebarWidth:
+      action.sidebarWidth === undefined
+        ? layout.sidebarWidth
+        : clampSidebarWidth(action.sidebarWidth),
     sidebarCollapsed: false,
     outlinePanelVisible: layout.outlinePanelVisible,
   };
@@ -932,7 +959,11 @@ function reduceLayoutPreferenceAction(
     case "set-sidebar":
       return {
         ...layout,
-        sidebarWidth: action.width ?? layout.sidebarWidth,
+        // KEIKO-0769: clamp on write so an action carrying NaN or a negative width never leaks
+        // into the persisted layout. Read-side clamp (persistedSidebarWidth) already applies its
+        // own per-caller bounds; this static outer cap fires when the reducer runs without one.
+        sidebarWidth:
+          action.width === undefined ? layout.sidebarWidth : clampSidebarWidth(action.width),
         sidebarCollapsed: action.collapsed ?? layout.sidebarCollapsed,
       };
     case "set-outline-panel":

@@ -239,7 +239,14 @@ function seedVectorIndexState(db: DatabaseSync, capsuleId: string): void {
 }
 
 function countRows(db: DatabaseSync, table: string): number {
-  // table is a server-controlled constant from KNOWLEDGE_CAPSULE_TABLES; no user input.
+  // KEIKO-1041: raise this to a runtime allowlist guard instead of a comment. The 21 call sites
+  // pass string literals from KNOWLEDGE_CAPSULE_TABLES, so this only fires on future misuse; a
+  // future refactor that starts constructing a table name from anywhere else — a config value, a
+  // computed identifier, an untrusted argument — now fails loud rather than silently interpolating
+  // arbitrary SQL into the prepared statement text.
+  if (!KNOWLEDGE_CAPSULE_TABLES.includes(table)) {
+    throw new Error(`countRows: "${table}" is not a member of KNOWLEDGE_CAPSULE_TABLES`);
+  }
   const row = db.prepare(`SELECT COUNT(*) AS n FROM ${table}`).get() as { n?: number };
   return typeof row.n === "number" ? row.n : 0;
 }
@@ -255,6 +262,24 @@ function listSqliteMaster(
 }
 
 // ─── Tests ───────────────────────────────────────────────────────────────────────
+describe("countRows guard (KEIKO-1041)", () => {
+  it("rejects a table name outside the KNOWLEDGE_CAPSULE_TABLES allowlist, including an injection-shaped payload", () => {
+    const db = openSchemaDb();
+    try {
+      expect(() => countRows(db, "capsules WHERE 1=1 OR 1=1")).toThrow(
+        /not a member of KNOWLEDGE_CAPSULE_TABLES/,
+      );
+      expect(() => countRows(db, "sqlite_master")).toThrow(
+        /not a member of KNOWLEDGE_CAPSULE_TABLES/,
+      );
+      // Sanity: a legitimate allowlisted table still counts.
+      expect(countRows(db, "capsules")).toBe(0);
+    } finally {
+      db.close();
+    }
+  });
+});
+
 describe("LOCAL_KNOWLEDGE_DB_SCHEMA_VERSION", () => {
   it("is the integer 33 and is distinct from the contract-surface string version", () => {
     expect(LOCAL_KNOWLEDGE_DB_SCHEMA_VERSION).toBe(33);

@@ -12,11 +12,13 @@ import {
   DEFAULT_VERIFICATION_LIMITS,
   EVAL_SCORECARD_SCHEMA_VERSION,
   TERMINAL_STATES,
+  isTerminalHarnessState,
   WORKFLOW_HANDOFF_SCHEMA_VERSION,
   DEFAULT_PATCH_SCOPE_LIMITS,
   EXPECTED_CHECKS,
   WORKFLOW_KINDS,
   CONNECTED_CONTEXT_SCHEMA_VERSION,
+  MAX_OMITTED_CONTEXT_ENTRIES,
   SELECTED_SCOPE_KINDS,
   isApprovalTokenShape,
   checkPatchAgainstScope,
@@ -150,6 +152,7 @@ import type {
   GitDeliveryExpectedBlocker,
   GitDeliveryActionSheetRequest,
   GitDeliveryWorktreeSnapshot,
+  GitDeliveryBranchSwitchInputs,
 } from "./index.js";
 import {
   GIT_DELIVERY_SCHEMA_VERSION,
@@ -266,8 +269,11 @@ describe("keiko-contracts package surface", () => {
   });
 
   it("TERMINAL_STATES contains 'completed' and 'failed'", () => {
-    expect(TERMINAL_STATES.has("completed")).toBe(true);
-    expect(TERMINAL_STATES.has("failed")).toBe(true);
+    expect(TERMINAL_STATES).toContain("completed");
+    expect(TERMINAL_STATES).toContain("failed");
+    expect(isTerminalHarnessState("completed")).toBe(true);
+    expect(isTerminalHarnessState("failed")).toBe(true);
+    expect(isTerminalHarnessState("planning")).toBe(false);
   });
 
   it("each new type-only export added by #162 is reachable by name at compile time", () => {
@@ -633,6 +639,8 @@ describe("keiko-contracts package surface", () => {
   it("connected-context barrel exports are reachable through the root surface (#178)", () => {
     expect(CONNECTED_CONTEXT_SCHEMA_VERSION).toBe("1");
     expect(SELECTED_SCOPE_KINDS).toContain("files");
+    // KEIKO-0849: the pack.omitted quadratic-scan cap is part of the public surface too.
+    expect(MAX_OMITTED_CONTEXT_ENTRIES).toBeGreaterThan(0);
     const scope: SelectedScope = {
       schemaVersion: CONNECTED_CONTEXT_SCHEMA_VERSION,
       scopeId: "scope-1",
@@ -921,7 +929,9 @@ describe("keiko-contracts package surface", () => {
     expect(gitDeliveryDefaultRiskClass("unknown-future-kind")).toBe("recovery-or-rewrite");
     expect(isGitDeliveryActionKind("commit")).toBe(true);
 
-    // Type pins (compile-time reachability).
+    // Type pins (compile-time reachability). GitDeliveryBranchSwitchInputs was the only per-kind
+    // input interface missing from the public barrel (KEIKO-0654); adding it here fails the
+    // typecheck if the barrel re-export is ever dropped again.
     const pin = <T>(_value?: T): T | undefined => undefined;
     pin<GitDeliveryActionEnvelope>();
     pin<GitDeliveryResolvedInputs>();
@@ -930,6 +940,7 @@ describe("keiko-contracts package surface", () => {
     pin<GitDeliveryBranchProtection>();
     pin<GitDeliveryMergeReadiness>();
     pin<GitDeliveryPullRequestState>();
+    pin<GitDeliveryBranchSwitchInputs>();
   });
 
   it("governed Git action-sheet contracts are reachable through the barrel (#473)", () => {

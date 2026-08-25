@@ -179,10 +179,6 @@ function isPositiveInteger(value: unknown): value is number {
   return typeof value === "number" && Number.isSafeInteger(value) && value > 0;
 }
 
-function isNonNegativeInteger(value: unknown): value is number {
-  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
-}
-
 function isOneOf<T extends string>(value: unknown, allowed: readonly T[]): value is T {
   return typeof value === "string" && (allowed as readonly string[]).includes(value);
 }
@@ -520,13 +516,11 @@ export function codeTaskAcceptanceQualificationFailures(
     }
   }
   if (contribution.cleanup.state === "incomplete") {
-    failures.push(
-      `incomplete cleanup: ${String(
-        isNonNegativeInteger(contribution.cleanup.residueCount)
-          ? contribution.cleanup.residueCount
-          : 0,
-      )} residues`,
-    );
+    // KEIKO-0833: contribution is a validated CodeTaskAcceptanceContributionV1; the "incomplete"
+    // arm's residueCount is a required number by construction (see the type at line 145 and the
+    // isPositiveInteger check at line 419), so the isNonNegativeInteger guard here was dead code
+    // whose 0-fallback branch was unreachable.
+    failures.push(`incomplete cleanup: ${String(contribution.cleanup.residueCount)} residues`);
   }
   return failures;
 }

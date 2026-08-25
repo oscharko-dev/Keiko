@@ -70,7 +70,7 @@ export interface WorkspaceRootDispatch {
  * The launcher-pairing markers the workspaces read may ASSERT on the wire (ADR-0141). The server is
  * the sole producer and asserts one of them on every outcome; a client never sends one.
  */
-export const WORKSPACE_MANIFEST_SESSION_ASSERTIONS = ["paired", "unpaired"] as const;
+export const WORKSPACE_MANIFEST_SESSION_ASSERTIONS = Object.freeze(["paired", "unpaired"] as const);
 
 export type WorkspaceManifestSessionAssertion =
   (typeof WORKSPACE_MANIFEST_SESSION_ASSERTIONS)[number];

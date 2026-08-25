@@ -20,6 +20,7 @@ import {
   isCodingWorkbenchModel,
   isVoiceCapability,
   listVoicePersonas,
+  MODEL_COST_RANK,
   modelSupportsInfilling,
   modelSupportsRealtimeVoice,
   modelSupportsSpeechInput,
@@ -599,5 +600,28 @@ describe("modelKindForDeclaredMode", () => {
     }
     expect(boundedUnsupportedReason("vendor-private-mode")).toBe("unrecognised-mode");
     expect(boundedUnsupportedReason("  REALTIME ")).toBe("unrecognised-mode");
+  });
+});
+
+describe("KEIKO-0545 — MODEL_COST_RANK is frozen", () => {
+  // MODEL_COST_RANK backs the cost-preference comparison used to pick between otherwise-equivalent
+  // model capabilities (see the "MODEL_COST_RANK[capability.costClass] < ..." selection below); a
+  // writable rank table would let a caller invert the low/medium/high ordering for the rest of the
+  // process. It is a flat Record<CostClass, number> with no nested objects/arrays, so a shallow
+  // Object.freeze fully protects it — deepFreeze is not required.
+
+  it("refuses a write to any rank entry", () => {
+    expect(Object.isFrozen(MODEL_COST_RANK)).toBe(true);
+    expect(() => {
+      (MODEL_COST_RANK as { low: number }).low = 5;
+    }).toThrow(TypeError);
+    expect(() => {
+      (MODEL_COST_RANK as { high: number }).high = -1;
+    }).toThrow(TypeError);
+  });
+
+  it("keeps the expected low < medium < high ordering", () => {
+    expect(MODEL_COST_RANK.low).toBeLessThan(MODEL_COST_RANK.medium);
+    expect(MODEL_COST_RANK.medium).toBeLessThan(MODEL_COST_RANK.high);
   });
 });

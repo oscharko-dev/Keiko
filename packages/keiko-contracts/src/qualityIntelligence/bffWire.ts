@@ -34,6 +34,7 @@ import type { TestQualityRubricDimension } from "./testQualityRubric.js";
 import type { ModelCapability } from "../gateway.js";
 import type { QualityIntelligenceRetentionPolicyId } from "./retentionPolicy.js";
 import type { QualityIntelligenceConfidence } from "./coverageMap.js";
+import type { QualityIntelligenceAuditTotals } from "./auditSummary.js";
 import type {
   QualityIntelligenceRunEventKind,
   QualityIntelligenceStageName,
@@ -46,19 +47,30 @@ import type {
 // subset `Exclude<QualityIntelligenceRunStatus, "running">`.
 export type QualityIntelligenceRunStatus = "running" | "succeeded" | "failed" | "cancelled";
 
+// KEIKO-0522: `satisfies` binds this array to the union declared above — an element that is not a
+// QualityIntelligenceRunStatus member (a typo, or a member removed from the union) now fails to
+// typecheck instead of silently drifting. This is a one-directional bind (it cannot detect a
+// member ADDED to the union and never added here); the exhaustive runtime pin in bffWire.test.ts
+// covers that direction.
 export const QUALITY_INTELLIGENCE_RUN_STATUSES = [
   "running",
   "succeeded",
   "failed",
   "cancelled",
-] as const;
+] as const satisfies readonly QualityIntelligenceRunStatus[];
 
-/** Counts-only totals carried on both the list-view and the detail view. */
-export interface QualityIntelligenceUiRunTotals {
-  readonly candidates: number;
-  readonly findings: number;
-  readonly exports: number;
-}
+/**
+ * Counts-only totals carried on both the list-view and the detail view. Structurally pinned
+ * (KEIKO-0924) to the three run-scoped fields of `QualityIntelligenceAuditTotals` instead of
+ * restating them: the two shapes used to be independently hand-written and coincidentally
+ * identical, so a rename or a field addition to the audit totals could drift here unnoticed
+ * because both sides use the field name `findings` for what could become two different things.
+ * `reviews` is deliberately excluded — this UI projection does not surface review counts.
+ */
+export type QualityIntelligenceUiRunTotals = Pick<
+  QualityIntelligenceAuditTotals,
+  "candidates" | "findings" | "exports"
+>;
 
 /** List-view projection — only what the run list needs. */
 export interface QualityIntelligenceUiRunSummary {
@@ -95,7 +107,7 @@ export interface QualityIntelligenceUiRunSummary {
  */
 export interface QualityIntelligenceUiRetentionNotice {
   /** Id of the enforced retention profile, e.g. `qi:short-30d`. */
-  readonly policyId: string;
+  readonly policyId: QualityIntelligenceRetentionPolicyId;
   /** Runs older than this many days are deleted automatically. */
   readonly retainedDays: number;
   /** Only the newest this many runs are kept; older ones are deleted automatically. */
@@ -327,6 +339,28 @@ export interface QualityIntelligenceUiRegenerateResult {
 export type QualityIntelligenceInlineSourceKind =
   "requirements" | "workspace" | "file" | "capsule" | "capsule-set" | "figma-snapshot" | "image";
 
+/**
+ * Bounded, structural shape for an inbound Atlassian Document Format (ADF) JSON tree (KEIKO-0891).
+ * `keiko-contracts` is the dependency leaf (ADR-0019) and must not import the real ADF grammar from
+ * `keiko-quality-intelligence`, so this is not the full ADF node set — it is a recursive JSON-value
+ * shape wide enough to carry a real ADF document while rejecting what a bare `unknown` let through
+ * unexamined (functions, class instances, `undefined`, and other non-JSON-serialisable shapes).
+ * The semantic authority stays server-side: `parseAdfDocument` (keiko-quality-intelligence)
+ * validates the node grammar against its own maxNodes/maxDepth/maxTextBytes bounds and now also
+ * rejects a serialised document over its `maxDocumentBytes` cap (2 MiB by default) — the same
+ * ceiling keiko-server's run-start route already enforces on the WHOLE request body
+ * (`runRoutes.ts` MAX_BODY_BYTES), so no currently-accepted payload is newly rejected; the
+ * per-field cap only closes the gap where an oversized value sits in a JSON property the
+ * node/depth walker never visits.
+ */
+export type QualityIntelligenceAdfNode =
+  | string
+  | number
+  | boolean
+  | null
+  | readonly QualityIntelligenceAdfNode[]
+  | { readonly [key: string]: QualityIntelligenceAdfNode };
+
 /** A pasted free-text requirement blob the server splits into requirement atoms. */
 export interface QualityIntelligenceRequirementsSource {
   readonly kind: "requirements";
@@ -335,7 +369,7 @@ export interface QualityIntelligenceRequirementsSource {
    * Optional Atlassian Document Format tree from Jira/Confluence. When present the server normalises
    * it into text before splitting; `text` remains for legacy/plain pasted requirements.
    */
-  readonly adf?: unknown;
+  readonly adf?: QualityIntelligenceAdfNode;
   readonly text: string;
 }
 
@@ -546,7 +580,15 @@ export interface QualityIntelligenceModelPolicyPreflightResponse {
   readonly modelRouting: QualityIntelligenceModelRouting;
 }
 
-/** Body of `POST /api/quality-intelligence/runs`. */
+/**
+ * Body of `POST /api/quality-intelligence/runs`.
+ *
+ * KEIKO-0891: two producer-side ceilings the browser must never widen. The sources array is
+ * capped by `QUALITY_INTELLIGENCE_MAX_RUN_SOURCES`; the seed is validated by
+ * `isQualityIntelligenceSeed`. Both are checked by keiko-server's runRoutes.ts before the
+ * request reaches ingestion, and by the shape validator here so a persisted-then-replayed
+ * request cannot bypass the check by side-loading a wider seed.
+ */
 export interface QualityIntelligenceStartRunRequest {
   readonly sources: readonly QualityIntelligenceInlineSource[];
   /** Policy profile id; defaults to the regression profile when omitted. */
@@ -559,6 +601,30 @@ export interface QualityIntelligenceStartRunRequest {
   readonly seed?: number;
   /** Persisted evidence-retention selection; malformed/unknown values fall back server-side. */
   readonly retentionPolicyId?: QualityIntelligenceRetentionPolicyId;
+}
+
+/**
+ * KEIKO-0891: maximum number of source atoms a single run may declare. Sixteen is the widest
+ * legitimate figma-snapshot + requirements + capsule mix any current caller assembles;
+ * `runRoutes.ts` refuses a request over the cap with a coded QI_BAD_REQUEST before entering
+ * ingestion, and the shape validator refuses it here so a replayed request cannot bypass the
+ * cap.
+ */
+export const QUALITY_INTELLIGENCE_MAX_RUN_SOURCES = 16 as const;
+
+/**
+ * KEIKO-0891: a valid sampling seed is a non-negative finite JS-safe integer.
+ * Deserialised inputs (Number.NaN, Number.POSITIVE_INFINITY, a negative, a float, a bigint) all
+ * fail — the caller must have provided a bounded producer-side seed or omitted the field.
+ */
+export function isQualityIntelligenceSeed(value: unknown): value is number {
+  return (
+    typeof value === "number" &&
+    Number.isFinite(value) &&
+    Number.isInteger(value) &&
+    value >= 0 &&
+    value <= Number.MAX_SAFE_INTEGER
+  );
 }
 
 // ─── Run progress stream (Issue #280) ────────────────────────────────────────────

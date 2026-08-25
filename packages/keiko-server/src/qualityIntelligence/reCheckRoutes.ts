@@ -238,11 +238,34 @@ function validateConnectorSource(
   return undefined;
 }
 
+// KEIKO-0891 follow-on: pass `adf` through so re-check + regenerate-stale run through the same
+// ingestion path handleStartQiRun uses. Without this, a caller re-checking an ADF-normalised
+// requirements source would silently fall back to the plain `text` field — the exact
+// reachability gap runRoutes.ts's own validateSource used to have.
+//
+// KEIKO-0891 follow-up (reviewer P2): fail closed on a present-but-malformed `adf` (explicit
+// null, or a primitive) — surface as an undefined source so the caller emits QI_BAD_SOURCE
+// rather than silently falling back to raw.text.
+function validateRequirementsSource(
+  label: string,
+  raw: Record<string, unknown>,
+  text: string,
+): QI.QualityIntelligenceInlineSource | undefined {
+  const adfOutcome = extractRequirementsAdf(raw);
+  if (adfOutcome.kind === "invalid") return undefined;
+  return {
+    kind: "requirements",
+    label,
+    text,
+    ...(adfOutcome.kind === "present" ? { adf: adfOutcome.value } : {}),
+  };
+}
+
 function validateSource(raw: unknown): QI.QualityIntelligenceInlineSource | undefined {
   if (!isObject(raw) || typeof raw.label !== "string") return undefined;
   const label = raw.label;
   if (raw.kind === "requirements" && typeof raw.text === "string") {
-    return { kind: "requirements", label, text: raw.text };
+    return validateRequirementsSource(label, raw, raw.text);
   }
   if (raw.kind === "workspace" && typeof raw.path === "string") {
     return { kind: "workspace", label, path: raw.path };
@@ -251,6 +274,19 @@ function validateSource(raw: unknown): QI.QualityIntelligenceInlineSource | unde
     return { kind: "file", label, path: raw.path };
   }
   return validateConnectorSource(label, raw);
+}
+
+type AdfExtractResult =
+  | { readonly kind: "absent" }
+  | { readonly kind: "invalid" }
+  | { readonly kind: "present"; readonly value: QI.QualityIntelligenceAdfNode };
+
+function extractRequirementsAdf(raw: Record<string, unknown>): AdfExtractResult {
+  if (!("adf" in raw)) return { kind: "absent" };
+  const value = raw.adf;
+  if (value === undefined) return { kind: "absent" };
+  if (value === null || typeof value !== "object") return { kind: "invalid" };
+  return { kind: "present", value: value as QI.QualityIntelligenceAdfNode };
 }
 
 type ParseSourcesOutcome =

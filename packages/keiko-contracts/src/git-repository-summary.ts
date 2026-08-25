@@ -88,6 +88,58 @@ function isNonNegativeInteger(input: unknown): input is number {
   return typeof input === "number" && Number.isInteger(input) && input >= 0;
 }
 
+// KEIKO-0904: bound a remote URL string on the wire in both length and content. Reject a URL
+// carrying embedded userinfo (username or password) so a leaked fetchUrl/pushUrl cannot cross
+// the redaction boundary the summary path already enforces by rejecting URLs outright. Length
+// bounded at 2048 bytes — well above the longest real Git remote URL in the wild and short
+// enough that the validator cannot be turned into a DoS amplifier by a very long echoed string.
+//
+// Two shapes `git remote -v` emits that `new URL()` cannot parse but ARE canonical and never
+// carry a secret:
+//   1. scp-like SSH:   git@github.com:org/repo.git    (git-scp form, RFC 3986 non-conformant)
+//   2. ssh:// with SVC user:   ssh://git@github.com/org/repo.git  (username is the well-known
+//      passwordless service account, not a credential)
+// Both are the DEFAULT shape produced by `git clone git@...` and `git clone ssh://git@...` —
+// rejecting them here would false-positive most SSH remotes.
+const REMOTE_URL_MAX_CHARS = 2_048;
+const SCP_LIKE_SSH_RE = /^[A-Za-z0-9._-]+@[A-Za-z0-9.-]+:[^\s]*$/u;
+const SSH_SERVICE_USERS: ReadonlySet<string> = new Set(["git", "hg", "svn"]);
+
+function isSafeRemoteUrl(value: string): boolean {
+  if (value.length === 0 || value.length > REMOTE_URL_MAX_CHARS) return false;
+  // scp-like SSH remotes never carry a password; the "user" part before `@` is always the
+  // service account. Accept and stop before new URL() throws.
+  if (SCP_LIKE_SSH_RE.test(value)) return true;
+  let parsed: URL;
+  try {
+    parsed = new URL(value);
+  } catch {
+    return false;
+  }
+  if (parsed.password !== "") return false;
+  if (parsed.username !== "" && !SSH_SERVICE_USERS.has(parsed.username)) return false;
+  return true;
+}
+
+// KEIKO-0904: keep the per-field URL validation in its own helper so validateRemote stays under
+// the complexity cap.
+function validateRemoteUrl(
+  input: Record<string, unknown>,
+  field: "fetchUrl" | "pushUrl",
+  reasons: string[],
+  index: number,
+): void {
+  const value = input[field];
+  if (value === undefined) return;
+  if (!isString(value)) {
+    reasons.push(`remotes[${String(index)}].${field} must be a string when present`);
+    return;
+  }
+  if (!isSafeRemoteUrl(value)) {
+    reasons.push(`remotes[${String(index)}].${field} is not a redaction-safe URL`);
+  }
+}
+
 function validateRemote(
   input: unknown,
   reasons: string[],
@@ -108,12 +160,8 @@ function validateRemote(
     }
     return;
   }
-  if (input.fetchUrl !== undefined && !isString(input.fetchUrl)) {
-    reasons.push(`remotes[${String(index)}].fetchUrl must be a string when present`);
-  }
-  if (input.pushUrl !== undefined && !isString(input.pushUrl)) {
-    reasons.push(`remotes[${String(index)}].pushUrl must be a string when present`);
-  }
+  validateRemoteUrl(input, "fetchUrl", reasons, index);
+  validateRemoteUrl(input, "pushUrl", reasons, index);
 }
 
 function validateRemotesArray(

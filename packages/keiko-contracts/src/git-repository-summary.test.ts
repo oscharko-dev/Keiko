@@ -35,7 +35,13 @@ function validRemotes(): Record<string, unknown> {
     repositoryRoot: "/repo",
     state: "available",
     available: true,
-    remotes: [{ name: "origin", fetchUrl: "u", pushUrl: "u" }],
+    remotes: [
+      {
+        name: "origin",
+        fetchUrl: "https://example.invalid/a.git",
+        pushUrl: "https://example.invalid/a.git",
+      },
+    ],
     truncated: false,
   };
 }
@@ -295,6 +301,85 @@ describe("validateGitRemotesResponse", () => {
     const result = validateGitRemotesResponse({ ...validRemotes(), remotes: ["origin"] });
     expect(result.ok).toBe(false);
     if (!result.ok) expect(result.reasons).toContain("remotes[0] must be an object");
+  });
+
+  // KEIKO-0904: a remote URL carrying userinfo (username or password) or exceeding the shared
+  // length cap must not cross this wire — the summary path already rejects URLs entirely, and the
+  // detailed path (allowUrls=true) is where the redaction discipline is enforced.
+  it("rejects a fetchUrl/pushUrl carrying embedded credentials (KEIKO-0904)", () => {
+    const withUser = validateGitRemotesResponse({
+      ...validRemotes(),
+      remotes: [{ name: "origin", fetchUrl: "https://user:token@example.invalid/a.git" }],
+    });
+    expect(withUser.ok).toBe(false);
+    if (!withUser.ok) {
+      expect(withUser.reasons).toContain("remotes[0].fetchUrl is not a redaction-safe URL");
+    }
+    const withPushCredential = validateGitRemotesResponse({
+      ...validRemotes(),
+      remotes: [
+        {
+          name: "origin",
+          fetchUrl: "https://example.invalid/a.git",
+          pushUrl: "https://:token@example.invalid/a.git",
+        },
+      ],
+    });
+    expect(withPushCredential.ok).toBe(false);
+    if (!withPushCredential.ok) {
+      expect(withPushCredential.reasons).toContain(
+        "remotes[0].pushUrl is not a redaction-safe URL",
+      );
+    }
+  });
+
+  it("rejects an unparseable or empty remote URL (KEIKO-0904)", () => {
+    const empty = validateGitRemotesResponse({
+      ...validRemotes(),
+      remotes: [{ name: "origin", fetchUrl: "" }],
+    });
+    expect(empty.ok).toBe(false);
+    const notAUrl = validateGitRemotesResponse({
+      ...validRemotes(),
+      remotes: [{ name: "origin", fetchUrl: "not a url with spaces" }],
+    });
+    expect(notAUrl.ok).toBe(false);
+  });
+
+  // KEIKO-0904: `git remote -v` emits two canonical no-secret shapes that `new URL()` either
+  // cannot parse or treats as credentialed; both must be accepted.
+  it("accepts the scp-like SSH remote form (KEIKO-0904)", () => {
+    for (const remote of [
+      "git@github.com:oscharko-dev/Keiko.git",
+      "user@gitlab.internal:group/subgroup/repo.git",
+    ]) {
+      const result = validateGitRemotesResponse({
+        ...validRemotes(),
+        remotes: [{ name: "origin", fetchUrl: remote }],
+      });
+      expect(result).toEqual({ ok: true });
+    }
+  });
+
+  it("accepts an ssh:// remote whose user is the well-known service account (KEIKO-0904)", () => {
+    for (const remote of [
+      "ssh://git@github.com/oscharko-dev/Keiko.git",
+      "ssh://git@ssh.dev.azure.com:22/org/proj/_git/repo",
+    ]) {
+      const result = validateGitRemotesResponse({
+        ...validRemotes(),
+        remotes: [{ name: "origin", fetchUrl: remote }],
+      });
+      expect(result).toEqual({ ok: true });
+    }
+  });
+
+  it("still rejects a non-service-user URL with an explicit password (KEIKO-0904)", () => {
+    const result = validateGitRemotesResponse({
+      ...validRemotes(),
+      remotes: [{ name: "origin", fetchUrl: "ssh://someuser:token@host.example/repo" }],
+    });
+    expect(result.ok).toBe(false);
   });
 
   it("accepts every declared unavailable reason (KEIKO-0310)", () => {

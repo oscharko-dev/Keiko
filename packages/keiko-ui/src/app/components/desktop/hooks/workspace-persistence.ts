@@ -1,7 +1,11 @@
 "use client";
 
-import { looksLikeSecretShape } from "@oscharko-dev/keiko-contracts";
 import { sanitizeEditorRootSessionsJson } from "@/lib/editor-root-sessions";
+// KEIKO-0628: isSecretShapedString + its helpers live in a leaf module so tests/qa's cross-package
+// parity test can consume them without pulling this file's WIN_TYPES/WIN_META imports into the
+// root suite's stricter node16 tsconfig. looksLikeSecretShape (from keiko-contracts) is imported
+// by the leaf, not here.
+import { isSecretShapedString } from "./isSecretShapedString";
 import { WIN_TYPES, type WindowType } from "../windows/WindowsRegistry";
 import { WIN_META } from "../windows/descriptor-meta";
 import { CHAT_TITLE_IS_DEFAULT_CFG_KEY } from "../windows/connectionUtils";
@@ -67,25 +71,10 @@ const CREDENTIAL_KEY_MARKERS = [
   "token",
 ] as const;
 
-const CREDENTIAL_ASSIGNMENT_MARKERS = [
-  "api_key=",
-  "apikey=",
-  "client_secret=",
-  "clientsecret=",
-  "credential=",
-  "authorization:",
-  "password=",
-  "secret=",
-  "token=",
-] as const;
-
-const ENV_CREDENTIAL_FILENAMES = [
-  ".env",
-  ".env.local",
-  ".env.development",
-  ".env.test",
-  ".env.production",
-] as const;
+// KEIKO-0628: CREDENTIAL_ASSIGNMENT_MARKERS and ENV_CREDENTIAL_FILENAMES moved to the leaf
+// isSecretShapedString.ts module together with containsBearerSecret / containsUrlCredentials /
+// containsCredentialPath, so tests/qa's cross-package parity test can consume the same detection
+// logic without also compiling this file (which brings in keiko-ui's own bundler resolution).
 
 const INTERNAL_CFG_KEYS: Readonly<Partial<Record<WindowType, readonly string[]>>> = {
   // 0.3.0 release audit — `titleIsDefault` is the structural, locale-independent record of "this
@@ -189,56 +178,6 @@ function alnumLower(value: string): string {
 function isCredentialKey(key: string): boolean {
   const normalized = alnumLower(key);
   return CREDENTIAL_KEY_MARKERS.some((marker) => normalized.includes(marker));
-}
-
-function containsBearerSecret(value: string): boolean {
-  const marker = "bearer ";
-  const at = value.toLowerCase().indexOf(marker);
-  if (at === -1) return false;
-  let length = 0;
-  for (let idx = at + marker.length; idx < value.length; idx += 1) {
-    const char = value[idx] ?? "";
-    if (char.trim().length === 0) break;
-    length += 1;
-  }
-  return length >= 8;
-}
-
-function containsUrlCredentials(value: string): boolean {
-  if (!value.includes("://")) return false;
-  try {
-    const parsed = new URL(value);
-    return parsed.username.length > 0 || parsed.password.length > 0;
-  } catch {
-    return false;
-  }
-}
-
-function containsCredentialPath(value: string): boolean {
-  const segments = value.toLowerCase().replaceAll("\\", "/").split("/");
-  for (let idx = 0; idx < segments.length; idx += 1) {
-    const segment = segments[idx] ?? "";
-    const next = segments[idx + 1] ?? "";
-    if (ENV_CREDENTIAL_FILENAMES.includes(segment as (typeof ENV_CREDENTIAL_FILENAMES)[number]))
-      return true;
-    if (segment === ".npmrc" || segment === "credentials.json") return true;
-    if (segment === ".aws" && next === "credentials") return true;
-    if (segment === ".ssh" && next.startsWith("id_")) return true;
-  }
-  return false;
-}
-
-function isSecretShapedString(value: string): boolean {
-  const trimmed = value.trim();
-  if (trimmed.length === 0) return false;
-  const lower = trimmed.toLowerCase();
-  return (
-    looksLikeSecretShape(trimmed) ||
-    containsBearerSecret(trimmed) ||
-    containsUrlCredentials(trimmed) ||
-    CREDENTIAL_ASSIGNMENT_MARKERS.some((marker) => lower.includes(marker)) ||
-    containsCredentialPath(trimmed)
-  );
 }
 
 function looksLikeLocalPath(value: string): boolean {

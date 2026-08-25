@@ -56,19 +56,15 @@ const VOICE_PROFILES: readonly VoiceProfile[] = [
   "full-realtime",
 ];
 
+// KEIKO-0919: share the base secret vocabulary with the voice pins; the discussion pin adds
+// providerconfig + the four tool-authority markers that are load-bearing for THIS module's
+// redaction contract, so those stay listed here.
+import { SHARED_FORBIDDEN_SECRET_VOCABULARY } from "./forbidden-substrings.test-support.js";
+
 const FORBIDDEN_SUBSTRINGS: readonly string[] = [
-  "apikey",
-  "secret",
-  "password",
-  "credential",
-  "bearer",
-  "baseurl",
-  "endpoint",
+  ...SHARED_FORBIDDEN_SECRET_VOCABULARY,
   "providerconfig",
   "systemprompt",
-  "authorization",
-  "privatekey",
-  "accesskey",
   "toolauthority",
   "grantedtools",
   "allowedtools",
@@ -648,5 +644,62 @@ describe("directive ↔ facet coverage (AC3 regression guard)", () => {
       broken.directives.every((d) => !DISCUSSION_DIRECTIVE_FACETS[d].includes("evidence")),
     ).toBe(true);
     expect(discussionDirectivesCoverFacets(broken)).toBe(false);
+  });
+});
+
+// ─── KEIKO-0880: runtime immutability of the frozen contract tables ────────────
+// `as const` / `readonly` are compile-time only and are erased at build time, so without
+// Object.freeze/deepFreeze a consumer holding one of these tables (or an unsafe cast) could rewrite
+// a discussion-mode policy for the remaining lifetime of the process.
+describe("KEIKO-0880 frozen contract tables", () => {
+  it("deep-freezes DISCUSSION_MODE_PLANS, every per-mode plan, and its nested arrays", () => {
+    expect(Object.isFrozen(DISCUSSION_MODE_PLANS)).toBe(true);
+    for (const mode of DISCUSSION_MODES) {
+      const plan = DISCUSSION_MODE_PLANS[mode];
+      expect(Object.isFrozen(plan)).toBe(true);
+      expect(Object.isFrozen(plan.groundingDirectives)).toBe(true);
+      expect(Object.isFrozen(plan.mandatedFacets)).toBe(true);
+      expect(Object.isFrozen(plan.directives)).toBe(true);
+    }
+    expect(() => {
+      (
+        DISCUSSION_MODE_PLANS.challenge as { challengesAssumptions: boolean }
+      ).challengesAssumptions = false;
+    }).toThrow(TypeError);
+    expect(() => {
+      (DISCUSSION_MODE_PLANS.challenge.directives as DiscussionDirective[]).push(
+        "cite-evidence-or-state-none",
+      );
+    }).toThrow(TypeError);
+  });
+
+  it("freezes DISCUSSION_DIRECTIVE_TEMPLATES", () => {
+    expect(Object.isFrozen(DISCUSSION_DIRECTIVE_TEMPLATES)).toBe(true);
+    expect(() => {
+      (DISCUSSION_DIRECTIVE_TEMPLATES as Record<string, string>)["state-position-then-evidence"] =
+        "tampered";
+    }).toThrow(TypeError);
+  });
+
+  it("deep-freezes DISCUSSION_DIRECTIVE_FACETS and its nested facet arrays", () => {
+    expect(Object.isFrozen(DISCUSSION_DIRECTIVE_FACETS)).toBe(true);
+    for (const directive of DISCUSSION_DIRECTIVES) {
+      expect(Object.isFrozen(DISCUSSION_DIRECTIVE_FACETS[directive])).toBe(true);
+    }
+    expect(() => {
+      (DISCUSSION_DIRECTIVE_FACETS["cite-evidence-or-state-none"] as DisagreementFacet[]).push(
+        "assumptions",
+      );
+    }).toThrow(TypeError);
+  });
+
+  it("deep-freezes DISCUSSION_TURN_STATUS_TRANSITIONS and its nested transition arrays", () => {
+    expect(Object.isFrozen(DISCUSSION_TURN_STATUS_TRANSITIONS)).toBe(true);
+    for (const status of DISCUSSION_TURN_STATUSES) {
+      expect(Object.isFrozen(DISCUSSION_TURN_STATUS_TRANSITIONS[status])).toBe(true);
+    }
+    expect(() => {
+      (DISCUSSION_TURN_STATUS_TRANSITIONS.active as DiscussionTurnStatus[]).push("resolved");
+    }).toThrow(TypeError);
   });
 });

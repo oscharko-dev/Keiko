@@ -1004,11 +1004,15 @@ export function planEditorM7ModelEviction(args: {
   for (const candidate of sorted) {
     if (!overBudget(retained, args.maximumCount, args.maximumBytes)) break;
     if (!evictionEligible(candidate)) continue;
+    // KEIKO-0822: `findIndex` returns -1 when the candidate's identity is not in `retained`
+    // (which happens on the second occurrence of two entries sharing an identity — the first
+    // splice already removed a matching entry, so the second lookup misses). splice(-1, 1) then
+    // removes the LAST retained entry, potentially one that was never evicted. Guard the splice
+    // so a missing match is a no-op and the identity is not double-recorded in `evicted`.
+    const index = retained.findIndex((entry) => entry.identity === candidate.identity);
+    if (index < 0) continue;
     evicted.push(candidate.identity);
-    retained.splice(
-      retained.findIndex((entry) => entry.identity === candidate.identity),
-      1,
-    );
+    retained.splice(index, 1);
   }
   const protectedEntries = args.entries.filter((entry) => !evictionEligible(entry));
   return {

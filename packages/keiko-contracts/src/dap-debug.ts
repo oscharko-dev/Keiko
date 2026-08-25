@@ -76,12 +76,6 @@ export const DEFAULT_DEBUG_PAYLOAD_LIMITS = Object.freeze({
   maxOpaqueIdChars: 128,
   maxFileIdBytes: 4_096,
   maxCoordinate: 2_147_483_647,
-  // Conservative character ceilings are named explicitly for browser consumers. Byte caps remain
-  // authoritative and can reduce the retained character count for multi-byte UTF-8 input.
-  maxChildrenPerNode: 200,
-  maxValueChars: 4_096,
-  maxFrames: 64,
-  maxOutputChars: 16 * 1_024,
 } as const);
 
 export interface BoundedDebugText {
@@ -980,7 +974,26 @@ function projectVariableFields(
 }
 
 function projectionReason(inputLength: number): DebugVariableTruncationReason {
-  return inputLength > DEFAULT_DEBUG_PAYLOAD_LIMITS.maxChildrenPerNode ? "width" : "nodeLimit";
+  return inputLength > DEFAULT_DEBUG_PAYLOAD_LIMITS.maxVariablesPerExpansion
+    ? "width"
+    : "nodeLimit";
+}
+
+function truncationReasonForChildren(
+  index: number,
+  regularLimit: number,
+  context: VariableProjectionContext,
+  inputs: readonly DebugVariableInput[],
+): DebugVariableTruncationReason {
+  // Attribute the reason to the guard that actually stopped the loop below, not to a
+  // recomputation from inputs.length: a wide array (`inputs.length` above the per-node limit)
+  // can still be cut short by the graph-wide node budget before its own width guard ever trips,
+  // and inputs.length alone cannot tell those two cases apart (KEIKO-0845).
+  if (index >= regularLimit) return "width";
+  if (context.nodeCount >= DEFAULT_DEBUG_PAYLOAD_LIMITS.maxGraphNodes - 1) return "nodeLimit";
+  // Neither guard is attributable (e.g. the loop exited via the defensive sparse-array break)
+  // even though items remain outstanding; fall back to the previous heuristic.
+  return projectionReason(inputs.length);
 }
 
 function projectVariableChildren(
@@ -989,12 +1002,12 @@ function projectVariableChildren(
   context: VariableProjectionContext,
 ): VariableChildrenProjection {
   const output: DebugVariableNode[] = [];
-  const widthLimited = inputs.length > DEFAULT_DEBUG_PAYLOAD_LIMITS.maxChildrenPerNode;
+  const widthLimited = inputs.length > DEFAULT_DEBUG_PAYLOAD_LIMITS.maxVariablesPerExpansion;
   const regularLimit = Math.min(
     inputs.length,
     widthLimited
-      ? DEFAULT_DEBUG_PAYLOAD_LIMITS.maxChildrenPerNode - 1
-      : DEFAULT_DEBUG_PAYLOAD_LIMITS.maxChildrenPerNode,
+      ? DEFAULT_DEBUG_PAYLOAD_LIMITS.maxVariablesPerExpansion - 1
+      : DEFAULT_DEBUG_PAYLOAD_LIMITS.maxVariablesPerExpansion,
   );
   let index = 0;
   while (
@@ -1008,8 +1021,12 @@ function projectVariableChildren(
   }
   const omittedCount = inputs.length - index;
   if (omittedCount > 0) {
-    const sentinel = variableSentinel(projectionReason(inputs.length), omittedCount, context);
-    if (sentinel !== undefined && output.length < DEFAULT_DEBUG_PAYLOAD_LIMITS.maxChildrenPerNode) {
+    const reason = truncationReasonForChildren(index, regularLimit, context, inputs);
+    const sentinel = variableSentinel(reason, omittedCount, context);
+    if (
+      sentinel !== undefined &&
+      output.length < DEFAULT_DEBUG_PAYLOAD_LIMITS.maxVariablesPerExpansion
+    ) {
       output.push(sentinel);
     }
   }

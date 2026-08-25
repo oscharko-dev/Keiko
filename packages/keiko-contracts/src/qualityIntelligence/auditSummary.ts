@@ -6,6 +6,7 @@
 // literal member rather than mutating the existing one.
 
 import type { QualityIntelligenceAuditSummaryId, QualityIntelligenceRunId } from "./ids.js";
+import type { QualityIntelligenceRetentionPolicyId } from "./retentionPolicy.js";
 
 export const QUALITY_INTELLIGENCE_AUDIT_MANIFEST_SCHEMA_VERSION = 1 as const;
 
@@ -17,6 +18,8 @@ export interface QualityIntelligenceAuditTotals {
 }
 
 export interface QualityIntelligenceEvidenceRetentionSummary {
+  /** Id of the enforced retention profile that produced this summary (KEIKO-0583). */
+  readonly policyId: QualityIntelligenceRetentionPolicyId;
   readonly retainedDays: number;
   readonly totalAtoms: number;
 }

@@ -131,6 +131,32 @@ describe("validateGovernedActionV1", () => {
       }),
     ).toMatchObject({ ok: true });
   });
+
+  // KEIKO-0755: GovernedActionV1.grant / .question are typed as CodeTaskKnownOrAbsentFact — an
+  // "unknown" or "unavailable" outcome must be a compile error at the producer, not merely a
+  // runtime rejection. Widening the field back to CodeTaskFact makes the directive unused, which
+  // fails typecheck.
+  it("rejects an unknown grant outcome at compile time (KEIKO-0755)", () => {
+    const action: GovernedActionV1 = {
+      ...allowedAction(),
+      // @ts-expect-error grant must be CodeTaskKnownOrAbsentFact — "unknown" is not permitted.
+      grant: { outcome: "unknown" },
+    };
+    // The runtime validator also rejects (defence-in-depth for a deserialised producer that
+    // slipped past the compile-time gate via a JSON parse or `as` cast).
+    expect(validateGovernedActionV1(action).ok).toBe(false);
+  });
+
+  it("rejects an unavailable question outcome at compile time (KEIKO-0755)", () => {
+    const action: GovernedActionV1 = {
+      ...allowedAction(),
+      decision: "approval-required",
+      grant: { outcome: "absent" },
+      // @ts-expect-error question must be CodeTaskKnownOrAbsentFact — "unavailable" is not permitted.
+      question: { outcome: "unavailable" },
+    };
+    expect(validateGovernedActionV1(action).ok).toBe(false);
+  });
 });
 
 describe("validateCodeTaskExecutionV1", () => {
@@ -511,7 +537,14 @@ describe("governance validator mutation robustness (#2386)", () => {
   });
 
   it("pins the four failure-fact outcomes and their value exclusions", () => {
-    const withFailure = (failure: unknown): unknown => ({ ...execution(), failure });
+    // KEIKO-0626: a `known` failure fact is only consistent with a failed / recovery-required
+    // state. Use "failed" for the known-outcome cases so they exercise the failure-fact validator
+    // without also tripping the new state/outcome invariant.
+    const withFailure = (failure: unknown): unknown => ({
+      ...execution(),
+      state: "failed",
+      failure,
+    });
     expect(validateCodeTaskExecutionV1(withFailure(null))).toEqual({
       ok: false,
       errors: ["failure must be a tagged fact object"],
@@ -525,12 +558,17 @@ describe("governance validator mutation robustness (#2386)", () => {
       ok: false,
       errors: ["failure.value must be a bounded content-free reason code"],
     });
+    // KEIKO-0626: absent/unavailable/unknown are only consistent with a non-failure state
+    // (default fixture is "running"), so run these cases without the state override.
+    const withFailureRunning = (failure: unknown): unknown => ({ ...execution(), failure });
     for (const outcome of ["absent", "unavailable", "unknown"] as const) {
-      expect(validateCodeTaskExecutionV1(withFailure({ outcome }))).toMatchObject({ ok: true });
+      expect(validateCodeTaskExecutionV1(withFailureRunning({ outcome }))).toMatchObject({
+        ok: true,
+      });
       // Round 3 (#2899): collects instead of early-returning, same shape as the grant/question
       // cases above -- an own "value" key is reported both generically (unknownKeys) and
       // specifically (the dedicated message).
-      expect(validateCodeTaskExecutionV1(withFailure({ outcome, value: "x" }))).toEqual({
+      expect(validateCodeTaskExecutionV1(withFailureRunning({ outcome, value: "x" }))).toEqual({
         ok: false,
         errors: [
           "failure.value is not allowed",
@@ -538,10 +576,54 @@ describe("governance validator mutation robustness (#2386)", () => {
         ],
       });
     }
-    expect(validateCodeTaskExecutionV1(withFailure({ outcome: "exploded" }))).toEqual({
+    expect(validateCodeTaskExecutionV1(withFailureRunning({ outcome: "exploded" }))).toEqual({
       ok: false,
       errors: ["failure.outcome must be known, absent, unavailable, or unknown"],
     });
+  });
+
+  // KEIKO-0626: the state and failure outcome must correlate — a "running" state may not carry a
+  // known failure; a "failed" or "recovery-required" state may not carry a non-known failure.
+  it("rejects state/failure combinations that violate the correlation invariant (KEIKO-0626)", () => {
+    const badKnownWhileRunning = validateCodeTaskExecutionV1({
+      ...execution(),
+      state: "running",
+      failure: { outcome: "known", value: "budget-exceeded" },
+    });
+    expect(badKnownWhileRunning.ok).toBe(false);
+    if (!badKnownWhileRunning.ok) {
+      expect(
+        badKnownWhileRunning.errors.some((error) => error.includes("outcome=known is only valid")),
+      ).toBe(true);
+    }
+    const badAbsentWhileFailed = validateCodeTaskExecutionV1({
+      ...execution(),
+      state: "failed",
+      failure: { outcome: "absent" },
+    });
+    expect(badAbsentWhileFailed.ok).toBe(false);
+    if (!badAbsentWhileFailed.ok) {
+      expect(
+        badAbsentWhileFailed.errors.some((error) =>
+          error.includes("is invalid when state is failed"),
+        ),
+      ).toBe(true);
+    }
+    // recovery-required state also requires a known failure.
+    expect(
+      validateCodeTaskExecutionV1({
+        ...execution(),
+        state: "recovery-required",
+        failure: { outcome: "absent" },
+      }).ok,
+    ).toBe(false);
+    expect(
+      validateCodeTaskExecutionV1({
+        ...execution(),
+        state: "recovery-required",
+        failure: { outcome: "known", value: "budget-exceeded" },
+      }).ok,
+    ).toBe(true);
   });
 
   // KEIKO-0302 follow-on: same gap as the grant/question facts above, in this module's third

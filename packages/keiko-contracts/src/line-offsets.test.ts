@@ -54,6 +54,17 @@ describe("positionToOffset", () => {
     const crStarts = computeLineStarts(loneCr);
     expect(positionToOffset(loneCr, crStarts, { line: 0, character: 999 })).toBe(2);
   });
+
+  it("clamps a NaN position/offset to a finite in-range value instead of propagating NaN (KEIKO-0811)", () => {
+    const starts = computeLineStarts("abc");
+    const offset = positionToOffset("abc", starts, { line: Number.NaN, character: Number.NaN });
+    expect(Number.isFinite(offset)).toBe(true);
+    expect(offset).toBeGreaterThanOrEqual(0);
+    expect(offset).toBeLessThanOrEqual(3);
+    const pos = offsetToPosition("abc", starts, Number.NaN);
+    expect(Number.isFinite(pos.line)).toBe(true);
+    expect(Number.isFinite(pos.character)).toBe(true);
+  });
 });
 
 describe("lineContentEnd", () => {

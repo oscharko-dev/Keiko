@@ -8,7 +8,7 @@ import {
   CODING_WORKBENCH_RUNTIME_CONTRACT_VERSION,
   CODING_WORKBENCH_RUNTIME_FAILURE_CODES,
   CODING_WORKBENCH_RUNTIME_STATE_NAMES,
-} from "./coding-workbench-runtime.js";
+} from "./coding-workbench-runtime-constants.js";
 import { stripUnsafeFormatChars } from "./text-safety.js";
 
 const SAFE_IDENTIFIER = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/u;

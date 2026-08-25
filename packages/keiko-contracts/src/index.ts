@@ -102,7 +102,13 @@ export type {
   SinkDegradedEvent,
   HarnessEvent,
 } from "./harness.js";
-export { TERMINAL_STATES, DEFAULT_LIMITS, HARNESS_CODES, HARNESS_VERSION } from "./harness.js";
+export {
+  TERMINAL_STATES,
+  isTerminalHarnessState,
+  DEFAULT_LIMITS,
+  HARNESS_CODES,
+  HARNESS_VERSION,
+} from "./harness.js";
 
 // ─── Workflow descriptor ────────────────────────────────────────────────────────
 export type { WorkflowDescriptor, WorkflowInputSpec } from "./workflow-descriptor.js";
@@ -1745,6 +1751,8 @@ export {
   EDITOR_TEST_GENERATION_STATUSES,
   EDITOR_TEST_GENERATION_ASSURANCES,
   EDITOR_TEST_GENERATION_GATE_STATES,
+  EDITOR_TEST_GENERATION_MAX_OVERLAYS,
+  EDITOR_TEST_GENERATION_MAX_OVERLAY_TEXT_BYTES,
   notRunTestGenerationFunnel,
   parseEditorTestGenerationRequest,
 } from "./editor-test-generation.js";
@@ -2079,6 +2087,7 @@ export {
   GOVERNED_GIT_IDENTITY_SANDBOX_POLICY,
   GOVERNED_GIT_REMOTE_CREDENTIAL_ENV_ALLOWLIST,
   GOVERNED_GIT_REMOTE_ENV_ALLOWLIST,
+  GOVERNED_GIT_REMOTE_PINNED_ENV,
   GOVERNED_GIT_REMOTE_SANDBOX_POLICY,
   SANDBOX_BACKENDS,
   DEFAULT_COMMAND_RULES,
@@ -2524,6 +2533,7 @@ export type {
 } from "./connected-context.js";
 export {
   CONNECTED_CONTEXT_SCHEMA_VERSION,
+  MAX_OMITTED_CONTEXT_ENTRIES,
   MAX_RANKED_CANDIDATE_DIAGNOSTICS,
   SELECTED_SCOPE_KINDS,
   EVIDENCE_ATOM_PROVENANCE_KINDS,
@@ -3259,6 +3269,7 @@ export type {
   QualityIntelligenceUiRunSummary,
   QualityIntelligenceUiRunTotals,
   QualityIntelligenceUiCandidate,
+  QualityIntelligenceUiCandidateQualityVerdict,
   QualityIntelligenceUiWeakTestFlag,
   QualityIntelligenceUiDriftMetadata,
   QualityIntelligenceQualityDiagnostics,
@@ -3267,6 +3278,7 @@ export type {
   QualityIntelligenceUiRegenerateResult,
   QualityIntelligenceInlineSource,
   QualityIntelligenceInlineSourceKind,
+  QualityIntelligenceAdfNode,
   QualityIntelligenceRequirementsSource,
   QualityIntelligenceWorkspaceSource,
   QualityIntelligenceFileSource,
@@ -3301,6 +3313,8 @@ export type {
 export {
   deriveQualityIntelligenceTerminalDegradation,
   isQualityIntelligenceJudgeEligible,
+  isQualityIntelligenceSeed,
+  QUALITY_INTELLIGENCE_MAX_RUN_SOURCES,
 } from "./qualityIntelligence/bffWire.js";
 // Issue #283 added flat export-adapter consumers.
 export type {
@@ -3660,6 +3674,7 @@ export type {
   GitDeliveryExecutionErrorCode,
   GitDeliveryPartialDetail,
   GitDeliveryBranchCreateInputs,
+  GitDeliveryBranchSwitchInputs,
   GitDeliveryStageInputs,
   GitDeliveryUnstageInputs,
   GitDeliveryCommitInputs,
@@ -3720,7 +3735,6 @@ export {
   parseGitDeliveryActionEnvelope,
   gitDeliveryDefaultRiskClass,
   gitDeliveryRiskClassForInputs,
-  gitDeliveryRiskClassWithinCeiling,
   gitDeliveryBranchNameMatchesPattern,
   gitDeliveryBranchNameMatchesAny,
   gitDeliveryTargetIsProtectedBranch,

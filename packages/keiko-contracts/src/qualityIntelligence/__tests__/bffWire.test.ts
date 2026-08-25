@@ -9,9 +9,17 @@ import {
   type QualityIntelligenceSkippedSource,
   type QualityIntelligenceSourceSummary,
   type QualityIntelligenceRunStreamError,
+  type QualityIntelligenceUiRetentionNotice,
+  type QualityIntelligenceRequirementsSource,
+  type QualityIntelligenceUiRunTotals,
 } from "../bffWire.js";
-import { isQualityIntelligenceJudgeEligible } from "../../index.js";
+import {
+  isQualityIntelligenceJudgeEligible,
+  QUALITY_INTELLIGENCE_DEFAULT_RETENTION_POLICY_ID,
+  type QualityIntelligenceRetentionPolicyId,
+} from "../../index.js";
 import type { ModelCapability } from "../../gateway.js";
+import type { QualityIntelligenceAuditTotals } from "../auditSummary.js";
 
 function chatCapability(overrides: Partial<ModelCapability> = {}): ModelCapability {
   return {
@@ -184,5 +192,90 @@ describe("QualityIntelligenceErrorCode (KEIKO-0274)", () => {
       message: "m",
     };
     expect(error.code).toBe("QI_SOME_FUTURE_CODE_NOT_YET_LISTED");
+  });
+});
+
+describe("QualityIntelligenceUiRetentionNotice.policyId is the branded retention-policy id, not a bare string (KEIKO-0583)", () => {
+  it("type-checks against QualityIntelligenceRetentionPolicyId", () => {
+    const notice: QualityIntelligenceUiRetentionNotice = {
+      policyId: QUALITY_INTELLIGENCE_DEFAULT_RETENTION_POLICY_ID,
+      retainedDays: 30,
+      maxRunArtifacts: 50,
+    };
+    expect(notice.policyId).toEqual<QualityIntelligenceRetentionPolicyId>(
+      QUALITY_INTELLIGENCE_DEFAULT_RETENTION_POLICY_ID,
+    );
+  });
+
+  it("rejects an arbitrary string at compile time", () => {
+    const bogus: QualityIntelligenceUiRetentionNotice = {
+      // @ts-expect-error — "not-a-real-policy" is not a QualityIntelligenceRetentionPolicyId
+      // member; this compiled fine when the field was a bare `string` before KEIKO-0583.
+      policyId: "not-a-real-policy",
+      retainedDays: 30,
+      maxRunArtifacts: 50,
+    };
+    expect(bogus.policyId).toBe("not-a-real-policy");
+  });
+});
+
+describe("QualityIntelligenceRequirementsSource.adf is a bounded JSON-value type, not `unknown` (KEIKO-0891)", () => {
+  it("accepts a realistic nested ADF-shaped document", () => {
+    const source: QualityIntelligenceRequirementsSource = {
+      kind: "requirements",
+      label: "Jira ADF",
+      text: "",
+      adf: {
+        type: "doc",
+        content: [
+          {
+            type: "heading",
+            attrs: { level: 2 },
+            content: [{ type: "text", text: "Title" }],
+          },
+        ],
+      },
+    };
+    expect(source.adf).toBeDefined();
+  });
+
+  it("rejects a non-JSON-serialisable value at compile time", () => {
+    const source: QualityIntelligenceRequirementsSource = {
+      kind: "requirements",
+      label: "bad",
+      text: "",
+      // @ts-expect-error — a Symbol is not assignable to QualityIntelligenceAdfNode; this
+      // compiled fine when the field was `unknown` before KEIKO-0891. Server-side, an oversized
+      // (rather than wrongly-shaped) document is rejected at runtime by parseAdfDocument's
+      // maxDocumentBytes bound — see packages/keiko-quality-intelligence's adfParser.test.ts.
+      adf: { note: Symbol("nope") },
+    };
+    expect(typeof source.adf).toBe("object");
+  });
+});
+
+describe("QualityIntelligenceUiRunTotals is structurally pinned to QualityIntelligenceAuditTotals (KEIKO-0924)", () => {
+  it("is a Pick of the three run-scoped audit-totals fields, not a hand-restated mirror", () => {
+    const auditTotals: QualityIntelligenceAuditTotals = {
+      candidates: 3,
+      findings: 5,
+      exports: 1,
+      reviews: 2,
+    };
+    // A named QualityIntelligenceAuditTotals value (not a fresh object literal, so excess-property
+    // checking does not apply) is directly assignable to QualityIntelligenceUiRunTotals only
+    // because the latter is declared as `Pick<QualityIntelligenceAuditTotals, "candidates" |
+    // "findings" | "exports">` — if a future edit reverted to a hand-restated interface with the
+    // same field names, this line would keep compiling too, but a rename of any of the three
+    // shared fields on QualityIntelligenceAuditTotals would then fail to surface here, silently
+    // recreating the drift KEIKO-0924 closed. The `Pick<>` declaration itself is what makes such a
+    // rename an immediate compile error at this type's declaration site in bffWire.ts.
+    const uiTotals: QualityIntelligenceUiRunTotals = auditTotals;
+    // `uiTotals` is the SAME runtime object as `auditTotals` (Pick is type-level only, so the
+    // `reviews` field is still present on the object) — assert the three shared scalars
+    // individually rather than a full deep-equal, which would fail on that extra field.
+    expect(uiTotals.candidates).toBe(3);
+    expect(uiTotals.findings).toBe(5);
+    expect(uiTotals.exports).toBe(1);
   });
 });

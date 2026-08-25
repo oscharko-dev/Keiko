@@ -1,7 +1,8 @@
 // Behavioral tests for git-delivery.ts (Issue #471, Epic #470). Covers every exported guard
 // (positive AND negative), every parser (ok path + each distinct error path), the risk-class
 // classifiers (incl. fail-closed and force-push escalation), the typed branch matchers, the
-// risk-class ceiling, and the envelope soundness invariant (kind === resolvedInputs.kind).
+// risk-class severity ordinal table, and the envelope soundness invariant
+// (kind === resolvedInputs.kind).
 
 import { describe, expect, it } from "vitest";
 
@@ -14,7 +15,6 @@ import {
   gitDeliveryBranchNameMatchesPattern,
   gitDeliveryDefaultRiskClass,
   gitDeliveryRiskClassForInputs,
-  gitDeliveryRiskClassWithinCeiling,
   gitDeliveryTargetIsProtectedBranch,
   isGitDeliveryAbortableOperation,
   isGitDeliveryActionKind,
@@ -45,6 +45,36 @@ import type {
 
 // A 64-char lowercase hex string for the approval-token-shape check.
 const TOKEN_HASH = "a".repeat(64);
+
+// Object.freeze throws on a mutation attempt in strict-mode ESM (which every file in this package
+// is), but the assertion that matters is the post-attempt VALUE, not the throw — so a swallowed
+// exception here still leaves the real regression signal (the unchanged read below) intact.
+function attemptMutation(mutate: () => void): void {
+  try {
+    mutate();
+  } catch {
+    // Expected in strict mode: Object.freeze rejects the write.
+  }
+}
+
+describe("frozen governance tables (KEIKO-0879)", () => {
+  it("GIT_DELIVERY_RISK_CLASS_SEVERITY is frozen and a mutation attempt leaves it unchanged", () => {
+    expect(Object.isFrozen(GIT_DELIVERY_RISK_CLASS_SEVERITY)).toBe(true);
+    attemptMutation(() => {
+      (GIT_DELIVERY_RISK_CLASS_SEVERITY as unknown as Record<string, number>).publish = 999;
+    });
+    expect(GIT_DELIVERY_RISK_CLASS_SEVERITY.publish).toBe(2);
+  });
+
+  it("GIT_DELIVERY_ACTION_RISK_DEFAULTS is frozen and a mutation attempt leaves it unchanged", () => {
+    expect(Object.isFrozen(GIT_DELIVERY_ACTION_RISK_DEFAULTS)).toBe(true);
+    attemptMutation(() => {
+      (GIT_DELIVERY_ACTION_RISK_DEFAULTS as unknown as Record<string, string>).commit =
+        "recovery-or-rewrite";
+    });
+    expect(GIT_DELIVERY_ACTION_RISK_DEFAULTS.commit).toBe("local-mutation");
+  });
+});
 
 describe("git-delivery action-kind / risk-class guards", () => {
   it("isGitDeliveryActionKind accepts known kinds and rejects unknowns", () => {
@@ -417,6 +447,49 @@ describe("parseGitDeliveryResolvedInputs", () => {
     const missing = parseGitDeliveryResolvedInputs({ kind: "branch-switch" });
     expect(missing.ok).toBe(false);
   });
+
+  it("rejects a pr-update that asks to convert both to and from draft (KEIKO-0805)", () => {
+    const base = {
+      kind: "pr-update",
+      prExternalId: "42",
+      headBranchName: "f",
+      baseBranchName: "main",
+      titleByteLength: 5,
+      bodyByteLength: 9,
+    };
+
+    const contradictory = parseGitDeliveryResolvedInputs({
+      ...base,
+      convertToDraft: true,
+      convertFromDraft: true,
+    });
+    expect(contradictory.ok).toBe(false);
+    if (!contradictory.ok) {
+      expect(contradictory.errors[0]).toContain('kind "pr-update"');
+    }
+
+    // Exactly one flag true (either direction), or neither, remains a legal request.
+    const toDraftOnly = parseGitDeliveryResolvedInputs({
+      ...base,
+      convertToDraft: true,
+      convertFromDraft: false,
+    });
+    expect(toDraftOnly.ok).toBe(true);
+
+    const fromDraftOnly = parseGitDeliveryResolvedInputs({
+      ...base,
+      convertToDraft: false,
+      convertFromDraft: true,
+    });
+    expect(fromDraftOnly.ok).toBe(true);
+
+    const neitherDraftFlag = parseGitDeliveryResolvedInputs({
+      ...base,
+      convertToDraft: false,
+      convertFromDraft: false,
+    });
+    expect(neitherDraftFlag.ok).toBe(true);
+  });
 });
 
 describe("parseGitDeliveryActionEnvelope (soundness: kind === resolvedInputs.kind)", () => {
@@ -592,18 +665,15 @@ describe("risk-class classifiers", () => {
     expect(gitDeliveryRiskClassForInputs(commit)).toBe("local-mutation");
   });
 
-  it("gitDeliveryRiskClassWithinCeiling compares severities via the frozen table", () => {
-    // commit (local-mutation, 1) within a publish ceiling (2).
-    expect(gitDeliveryRiskClassWithinCeiling("commit", "publish")).toBe(true);
-    // commit within its own class (equal severity).
-    expect(gitDeliveryRiskClassWithinCeiling("commit", "local-mutation")).toBe(true);
-    // merge (protected-or-merge, 3) exceeds a publish ceiling (2).
-    expect(gitDeliveryRiskClassWithinCeiling("merge", "publish")).toBe(false);
-    // recovery (4) exceeds protected-or-merge (3).
-    expect(gitDeliveryRiskClassWithinCeiling("recovery", "protected-or-merge")).toBe(false);
-    // The comparison reads ordinals, not action-name strings.
+  // KEIKO-0925: gitDeliveryRiskClassWithinCeiling duplicated this same ordinal comparison and was
+  // removed as dead API (unused outside this file); the ordinal table itself is still exercised via
+  // GIT_DELIVERY_RISK_CLASS_SEVERITY below and the risk-class-ceiling constraint tests.
+  it("GIT_DELIVERY_RISK_CLASS_SEVERITY orders classes strictly by ordinal", () => {
     expect(GIT_DELIVERY_RISK_CLASS_SEVERITY["recovery-or-rewrite"]).toBeGreaterThan(
       GIT_DELIVERY_RISK_CLASS_SEVERITY.publish,
+    );
+    expect(GIT_DELIVERY_RISK_CLASS_SEVERITY.publish).toBeGreaterThan(
+      GIT_DELIVERY_RISK_CLASS_SEVERITY["local-mutation"],
     );
   });
 });

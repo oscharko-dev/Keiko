@@ -5,7 +5,7 @@
 
 // ─── Detected workspace ─────────────────────────────────────────────────────────
 
-export const WORKSPACE_LANGUAGES = [
+export const WORKSPACE_LANGUAGES = Object.freeze([
   "typescript",
   "javascript",
   "java",
@@ -27,7 +27,7 @@ export const WORKSPACE_LANGUAGES = [
   "protobuf",
   "openapi",
   "graphql",
-] as const;
+] as const);
 
 export type WorkspaceLanguage = (typeof WORKSPACE_LANGUAGES)[number];
 
@@ -101,14 +101,14 @@ export type SelectionReason =
   "entrypoint" | "manifest" | "documentation" | "config" | "source" | "test";
 
 // Priority order used to rank candidates: lower index wins. Ties break on lexical path.
-export const SELECTION_REASON_PRIORITY: readonly SelectionReason[] = [
+export const SELECTION_REASON_PRIORITY: readonly SelectionReason[] = Object.freeze([
   "entrypoint",
   "source",
   "test",
   "manifest",
   "config",
   "documentation",
-] as const;
+] as const);
 
 export interface ContextRequest {
   readonly task: string | undefined;

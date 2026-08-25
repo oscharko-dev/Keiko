@@ -319,6 +319,37 @@ describe("EditorLayoutStateV2 contracts", () => {
     expect(collapsed.tree).toEqual({ type: "pane", paneId: "pane-1" });
   });
 
+  // KEIKO-0781: same-pane move-tab and centre drop-tab must not insert a phantom tab. The
+  // cross-pane branch already refuses to move a file the source pane does not list; the same-pane
+  // branch used to skip that guard, so referencing an un-opened file inserted a phantom entry
+  // into the pane's tabOrder.
+  it("returns the layout unchanged for a same-pane move-tab of an un-opened file (KEIKO-0781)", () => {
+    const base = layout();
+    const paneId = "pane-1";
+    const originalTabOrder = base.panes[paneId]?.tabOrder ?? [];
+    const noop = editorLayoutReducer(base, {
+      type: "move-tab",
+      fromPaneId: paneId,
+      toPaneId: paneId,
+      file: "never-opened.ts",
+    });
+    expect(noop).toBe(base);
+    expect(noop.panes[paneId]?.tabOrder).toEqual(originalTabOrder);
+    expect(noop.panes[paneId]?.openFiles).not.toContain("never-opened.ts");
+
+    const droppedCentre = editorLayoutReducer(base, {
+      type: "drop-tab",
+      intent: {
+        fromPaneId: paneId,
+        toPaneId: paneId,
+        file: "never-opened.ts",
+        zone: "center",
+      },
+    });
+    expect(droppedCentre.panes[paneId]?.openFiles).not.toContain("never-opened.ts");
+    expect(droppedCentre.panes[paneId]?.tabOrder).toEqual(originalTabOrder);
+  });
+
   it("keeps empty and missing structural actions safe", () => {
     const empty = layout({ file: "", openFiles: [] });
     expect(activeEditorPane(empty)).toEqual({
@@ -357,6 +388,16 @@ describe("EditorLayoutStateV2 contracts", () => {
         collapsed: true,
       }),
     ).toEqual(expect.objectContaining({ sidebarWidth: 320, sidebarCollapsed: true }));
+
+    // KEIKO-0769: an action carrying NaN or a negative width must yield a finite in-range
+    // sidebarWidth on the returned layout — the read-side clamp already handled persisted
+    // hostile state; the write path used to accept it verbatim.
+    const nanApplied = editorLayoutReducer(base, { type: "set-sidebar", width: Number.NaN });
+    expect(Number.isFinite(nanApplied.sidebarWidth)).toBe(true);
+    expect(nanApplied.sidebarWidth).toBeGreaterThanOrEqual(0);
+    const negativeApplied = editorLayoutReducer(base, { type: "set-sidebar", width: -1 });
+    expect(negativeApplied.sidebarWidth).toBeGreaterThanOrEqual(0);
+    expect(negativeApplied.sidebarWidth).toBeLessThan(5000);
     expect(editorLayoutReducer(base, { type: "replace-root", root: "/next" })).toEqual(
       expect.objectContaining({
         root: "/next",

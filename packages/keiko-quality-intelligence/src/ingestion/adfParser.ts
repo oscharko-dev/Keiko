@@ -18,10 +18,19 @@ import { normaliseUntrustedContent } from "./untrustedContentNormalisation.js";
 const DEFAULT_MAX_NODES = 5_000;
 const DEFAULT_MAX_DEPTH = 32;
 const DEFAULT_MAX_TEXT_BYTES = 64 * 1024;
+// KEIKO-0891: overall serialised-JSON ceiling for the whole ADF tree, independent of the
+// node/depth/text-run bounds above. Those bounds only examine fields the parser actually visits
+// (`type`, `content`, `attrs`, `marks`, `text`) — an oversized value sitting in an unvisited/unknown
+// JSON property (e.g. a bogus top-level key the whitelist never reads) would otherwise pass through
+// unexamined. Set at 2 MiB to match keiko-server's existing whole-request-body ceiling
+// (`runRoutes.ts` MAX_BODY_BYTES), so this can never reject a payload that would have been accepted
+// anyway — the `adf` field is always a strict subset of that request body.
+const DEFAULT_MAX_DOCUMENT_BYTES = 2 * 1024 * 1024;
 
 export type AdfParserErrorCode =
   | "ROOT_NOT_OBJECT"
   | "ROOT_TYPE_MISMATCH"
+  | "DOCUMENT_TOO_LARGE"
   | "UNKNOWN_NODE_TYPE"
   | "NODE_NOT_OBJECT"
   | "MAX_DEPTH_EXCEEDED"
@@ -44,6 +53,8 @@ export interface AdfParserOptions {
   readonly maxNodes?: number;
   readonly maxDepth?: number;
   readonly maxTextBytes?: number;
+  /** Maximum serialised-JSON UTF-8 byte length of the whole input tree. See KEIKO-0891. */
+  readonly maxDocumentBytes?: number;
 }
 
 export interface IngestedTextRun {
@@ -136,6 +147,20 @@ const markSeen = (state: ParserState, node: Record<string, unknown>, path: strin
     throw new AdfParserError("CIRCULAR_REFERENCE", path, "Node visited twice");
   }
   state.seen.add(node);
+};
+
+// KEIKO-0891: measures the whole root object, not just the fields the walk below visits, so a
+// huge value hiding in an unknown/unvisited JSON property is still caught. Returns `undefined`
+// (rather than throwing, or treating unmeasurable as oversized) when the value cannot be
+// serialised — a genuine cycle, for example — so that case is left to the existing per-node
+// `markSeen` walk below, which reports the more specific CIRCULAR_REFERENCE code instead of being
+// masked by a generic size failure here.
+const measureDocumentBytes = (raw: Record<string, unknown>): number | undefined => {
+  try {
+    return new TextEncoder().encode(JSON.stringify(raw)).length;
+  } catch {
+    return undefined;
+  }
 };
 
 const assertObjectNode = (raw: unknown, path: string): Record<string, unknown> => {
@@ -475,7 +500,8 @@ function parseBlock(raw: unknown, path: string, depth: number, state: ParserStat
 
 /**
  * Parse a JSON-decoded ADF tree into an `IngestedDocument`. Throws `AdfParserError` for
- * unknown node types, malformed structure, depth-bombs, or circular references. Pure.
+ * unknown node types, malformed structure, depth-bombs, an oversized document, or circular
+ * references. Pure.
  */
 export const parseAdfDocument = (
   raw: unknown,
@@ -486,6 +512,15 @@ export const parseAdfDocument = (
   }
   if (raw.type !== "doc") {
     throw new AdfParserError("ROOT_TYPE_MISMATCH", "$", 'ADF root type must be "doc"');
+  }
+  const maxDocumentBytes = options.maxDocumentBytes ?? DEFAULT_MAX_DOCUMENT_BYTES;
+  const documentBytes = measureDocumentBytes(raw);
+  if (documentBytes !== undefined && documentBytes > maxDocumentBytes) {
+    throw new AdfParserError(
+      "DOCUMENT_TOO_LARGE",
+      "$",
+      `Exceeded maxDocumentBytes (${String(maxDocumentBytes)})`,
+    );
   }
   const state: ParserState = {
     nodeCount: 0,
@@ -579,4 +614,5 @@ export const ADF_PARSER_DEFAULTS = {
   maxNodes: DEFAULT_MAX_NODES,
   maxDepth: DEFAULT_MAX_DEPTH,
   maxTextBytes: DEFAULT_MAX_TEXT_BYTES,
+  maxDocumentBytes: DEFAULT_MAX_DOCUMENT_BYTES,
 } as const;

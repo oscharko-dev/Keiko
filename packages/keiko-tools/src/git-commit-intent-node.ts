@@ -33,16 +33,23 @@ export function summarizeStagedChangeset(stagedPaths: readonly string[]): GitCom
   const areas = new Set<string>();
   let stagedFileCount = 0;
   let touchesTests = false;
+  let nonTestFileCount = 0;
   for (const path of stagedPaths) {
     if (path.length === 0) continue;
     stagedFileCount += 1;
     areas.add(topLevelArea(path));
-    if (TEST_PATH.test(path)) touchesTests = true;
+    if (TEST_PATH.test(path)) {
+      touchesTests = true;
+    } else {
+      nonTestFileCount += 1;
+    }
   }
   return {
     stagedFileCount,
     areaCount: areas.size,
     areas: [...areas].slice(0, MAX_COMMIT_SUMMARY_AREAS),
     touchesTests,
+    // KEIKO-0816: content-free — a boolean per staged inventory, not a path list.
+    testsOnly: stagedFileCount > 0 && nonTestFileCount === 0,
   };
 }

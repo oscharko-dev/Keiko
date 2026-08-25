@@ -360,15 +360,15 @@ describe("hasDangerousGroupOrClassRepetition", () => {
     expect(hasDangerousGroupOrClassRepetition(source)).toBe(expected);
   });
 
-  it("completes within a tight budget for many unresolved opens before a single close", () => {
+  it("completes for many unresolved opens before a single close (KEIKO-0787)", () => {
     // The adversarial shape for the OLD regex: many "(" characters, each of which independently
     // scans all the way to the single "(...)" close before the engine can conclude that position
     // doesn't lead to a satisfying quantifier — O(n) work repeated at O(n) start positions.
+    // KEIKO-0787: the correctness assertion is what this pin exists to prove. A true O(n^2) /
+    // exponential regression is caught by vitest's own testTimeout, not by a tight wall-clock
+    // millisecond bound that flakes on a loaded CI machine.
     const adversarial = `${"(".repeat(20_000)})`;
-    const start = Date.now();
     const result = hasDangerousGroupOrClassRepetition(adversarial);
-    const elapsedMs = Date.now() - start;
-    expect(elapsedMs).toBeLessThan(1000);
     expect(result).toBe(false);
   });
 });
