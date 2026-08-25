@@ -148,8 +148,8 @@ const safeFontFamily = (family: string): string => {
   return `"${cleaned}"`;
 };
 
-// Valid CSS hex color: 3, 4, 6, or 8 hex digits.
-const HEX_COLOR_RE = /^#[0-9a-fA-F]{3,8}$/u;
+// Valid CSS hex color: 3, 4, 6, or 8 hex digits (not any length in between).
+const HEX_COLOR_RE = /^#(?:[0-9a-fA-F]{3,4}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$/u;
 
 const isSafeColor = (value: string): boolean => HEX_COLOR_RE.test(value);
 
