@@ -12,6 +12,12 @@ action proposal. The deterministic contract and server checks remain accepted wh
 governed workflow handoff supplies `voiceOrigin`; all Authority Envelope, confirmation,
 approval-token, scope, and write gates remain independently binding.
 
+Amended by Issue #3105 (KEIKO-0138, KEIKO-0141, KEIKO-0202): the server-side governance seam exists,
+but is unreachable end-to-end. `governedHandoffVoiceOrigin` has no `keiko-ui` producer, and
+`createVoiceActionIntentBinding` has no production importer. The actual Twin sends settled Voice
+finals only through canonical chat. The missing D9 confirmation UI cannot be activated with a digest or
+nonce supplied through an untrusted client; D10 defines the required proof instead.
+
 ## Version
 
 0.2.0
@@ -122,6 +128,18 @@ The digest is computed **downstream** (Artifact 2) from a canonical representati
 only. The server always recomputes the expected digest and compares it to the client-provided value to
 prevent bypass via tampering.
 
+#### Issue #3105 amendment — a digest proves equality, not human confirmation
+
+The digest remains useful to detect stale or substituted proposal content, but equality with a
+client-provided digest is not evidence that a human confirmed anything. All digest inputs are available
+to the client, so an untrusted client can reproduce the value and return it without presenting a
+confirmation surface. The same is true of a server-issued, session-bound nonce: it proves possession
+of a value, not a genuine human-confirmation event. The digest must not authorize routing on its own.
+
+The prior split-binding description is amended accordingly: the existing approval-token and scope gates
+remain independently binding, and a later activation must add the trusted, proposal-bound, single-use
+confirmation proof specified in D10 before this path becomes reachable.
+
 **Split-binding design:** The confirmation digest binds the committed transcript (words + turn + effect),
 while the approval token (via `checkPatchAgainstScope`) binds the request shape. Together they bind both
 transcript and action. A documented potential future enhancement is to bind `contextPackStableId` and
@@ -137,6 +155,11 @@ enters the server via an optional `voiceOrigin` block on the `ParsedGroundedHand
 endpoint that text-originated requests already use). The server runs `evaluateSpokenActionGovernance`
 **in addition to** the existing `validateWorkflowHandoffRequest` and approval-token check. All gates
 must pass.
+
+In the shipped plane, no production client supplies that server-generated voice-origin block, so this
+route is not a live Voice action path. The canonical Voice path remains chat-only. Keeping the server
+seam unconnected is intentional until D10's confirmation proof is implemented; no request field,
+fallback, or client assertion may make it reachable earlier.
 
 **Critical boundary:** The spoken effect classification keys off the spoken **words** in the committed
 transcript, not the routed workflow's actual `workflowKind` or `patchScope` effect. The effect class is
@@ -258,8 +281,9 @@ The suite produces a GO/NO-GO scorecard.
 
 ### D9 — UI binding and deferred visible confirmation surface
 
-The keiko-ui hook (`packages/keiko-ui/src/app/components/desktop/hooks/voice-action-intent.ts`) is a
-pure deterministic binding that:
+The unreferenced keiko-ui factory
+(`packages/keiko-ui/src/app/components/desktop/hooks/voice-action-intent.ts`) is a pure deterministic
+binding that:
 
 - Creates a state-machine holder for a single spoken action proposal per turn.
 - Reads committed transcript via `selectCommittedVoiceTranscript` (AC2).
@@ -280,10 +304,38 @@ confirm or cancel a proposed action) is **deferred**. This mirrors the deferral 
 - ADR-0107 D10 (mode selector surface).
 
 The integration seams are documented in the voice binding module and in
-[`docs/voice/action-intent-governance.md`](../voice/action-intent-governance.md). The binding is fully
-functional; only the visible surface is deferred. When the UI surface is added, it will read the
-proposal and confirmation state from the binding, but no changes to the binding or server governance are
-required.
+[`docs/voice/action-intent-governance.md`](../voice/action-intent-governance.md). The factory has no
+production importer and the voice-origin route has no production producer, so the binding is not
+reachable in the shipped product. The visible confirmation surface is deferred, and its future
+implementation must include the D10 proof mechanism; wiring a UI to the existing digest comparison is
+explicitly insufficient.
+
+### D10 — Activation requires a trusted, exact-proposal, single-use confirmation proof
+
+A future activation creates a server-owned proposal record before it presents a confirmation surface.
+The record contains an opaque proposal id, authenticated session binding, expiry, and a canonical digest
+of the exact action: action kind, target, parameters, scope, and the committed-transcript projection.
+The server, not the client, recomputes and stores that binding.
+
+The only accepted confirmation source is a WebAuthn assertion with user verification. The confirmation
+surface receives the server-owned proposal id and a server-generated challenge derived from that record.
+It must present the exact action to the local human and invoke WebAuthn from that explicit confirmation
+gesture. The server verifies the assertion against the enrolled local-human credential and verifies user
+verification, session, proposal id, expiry, and exact proposal binding before minting the opaque proof.
+A client cannot mint this proof by replaying a digest or nonce: it needs a fresh authenticator assertion
+with user verification for the server's challenge.
+
+The proof is stored only server-side and is consumed atomically before routing. It is valid for one
+proposal, one session, and one request attempt. Any unknown, expired, already-consumed, mismatched, or
+failed-verification proof denies the action without fallback. A correction, interruption, turn advance,
+or change to action kind, target, parameters, or scope invalidates the proposal and all associated
+proofs. This prevents replay and prevents substituting a different action after confirmation.
+
+The existing digest remains an evidence-safe binding component, and the existing Authority Envelope,
+handoff validation, approval-token, and scope/write gates remain mandatory after proof consumption.
+Activation is a single deliverable: it must add the trusted confirmation surface, server verification,
+atomic proof consumption, body-free audit evidence, and regression tests together with the production
+producer. Until then, the binding and voice-origin route remain unreachable.
 
 ## Consequences
 
@@ -297,14 +349,15 @@ required.
 - Evidence is content-free: audit records carry only counts, enums, and a deterministic digest (AC5).
 - The existing governed-workflow path is the sole authority. Voice cannot weaken governance; all
   existing gates still apply independently (AC6).
-- The UI binding is fully functional and reusable for future confirmation surfaces; only the visible
-  render is deferred.
+- The server seam and pure binding are retained for a future proof-backed implementation, but neither is
+  reachable from the shipped Voice plane.
 - No new runtime dependency is introduced.
 
 ### Negative
 
 - The visible confirmation UI surface is deferred, so users cannot yet explicitly confirm a spoken
-  action from the UI. The binding and server path are ready; the picker surface is a future deliverable.
+  action from the UI. The current binding and digest comparison are deliberately insufficient for
+  activation; D10's proof-backed surface is a future deliverable.
 - Classification accuracy is intentionally limited to fail-closed defaults. A user who says "read the
   list" will get `unknown` and require confirmation even though the intent is read-only. This is
   deliberate: a false negative (deny when the action is read-only) is safer than a false positive
@@ -324,9 +377,9 @@ required.
 
 The following are explicitly not in scope for Issue #503:
 
-- **Visible confirmation UI surface**: the UI render path (button, modal, or gesture) that displays the
-  proposed action and confirmation state. The binding is fully functional; the visible surface is
-  deferred to a future issue (D9).
+- **Proof-backed visible confirmation UI surface**: the UI render path (button, modal, or gesture) must
+  display the exact proposal and mint the D10 confirmation proof. The current unreachable factory and
+  digest comparison must not be wired independently.
 - **Discussion turn integration**: discussion intelligence (#502) contributes only a content-free summary
   to the handoff evidence; routing discussion mode recommendations through this governance is #503's
   responsibility.
