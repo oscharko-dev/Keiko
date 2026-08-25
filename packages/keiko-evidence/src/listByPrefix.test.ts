@@ -4,7 +4,7 @@
 // and asserts the per-file stat is paid only for matching-prefix files — so a per-send prefix listing
 // costs O(matching), not O(directory). It fails on a stat-everything regression and passes on the fix.
 import { afterEach, describe, expect, it } from "vitest";
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { linkSync, mkdtempSync, writeFileSync } from "node:fs";
 import { rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -87,13 +87,20 @@ describe("createNodeEvidenceStore.listByPrefix (GEN-PERF-CHAT-005)", () => {
     expect(counting.statCount()).toBe(20);
   });
 
-  it("preserves the single-link containment guard on surfaced matches", () => {
+  it("excludes a hardlinked matching-prefix entry from listByPrefix results", () => {
+    // KEIKO-0702: this test previously wrote its second entry via a plain writeFileSync and
+    // asserted it WAS surfaced, contradicting its own name/comment (which claimed a rejected
+    // entry). It could not fail on a broken single-link containment guard. Mirror store.test.ts's
+    // "ignores hardlinked manifest-looking files for list/get/delete" so this test actually
+    // exercises isSingleLinkRegularFile for listByPrefix specifically.
     const dir = freshDir();
+    const outside = freshDir();
     const store: NodeEvidenceStore = createNodeEvidenceStore(dir);
     store.put("chat-guard-t1", "{}");
-    // A matching-prefix entry that is a directory (not a regular file) must not be surfaced.
-    writeFileSync(join(dir, "chat-guard-t2.json"), "{}\n", "utf8");
+    const victim = join(outside, "victim.json");
+    writeFileSync(victim, "{}\n", "utf8");
+    linkSync(victim, join(dir, "chat-guard-t2.json"));
     const matched = store.listByPrefix("chat-guard-t");
-    expect([...matched].sort()).toEqual(["chat-guard-t1", "chat-guard-t2"]);
+    expect([...matched].sort()).toEqual(["chat-guard-t1"]);
   });
 });
