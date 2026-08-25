@@ -258,23 +258,30 @@ describe("createGitProcessRunner", () => {
     },
   );
 
-  it("suppresses executable repository settings for network operations", async () => {
-    const hooksDir = join(root, "hostile-hooks");
-    mkdirSync(hooksDir);
-    execFileSync("git", ["config", "core.hooksPath", hooksDir], { cwd: root });
-    execFileSync("git", ["config", "core.sshCommand", `touch ${root}`], { cwd: root });
-    const hooksResult = await defaultGitNetworkProcessRunner(
-      ["config", "--get", "core.hooksPath"],
-      { cwd: root, timeoutMs: 1_000, maxBytes: 1_024 },
-    );
-    const sshResult = await defaultGitNetworkProcessRunner(["config", "--get", "core.sshCommand"], {
+  it.each([
+    ["core.fsmonitor", "hostile", "false"],
+    ["core.hooksPath", "hostile", process.platform === "win32" ? "NUL" : "/dev/null"],
+    ["core.sshCommand", "hostile", ""],
+    ["credential.helper", "hostile", ""],
+    ["core.pager", "hostile", "cat"],
+    ["pager.fetch", "true", "false"],
+    ["pager.pull", "true", "false"],
+    ["alias.fetch", "hostile", ""],
+    ["alias.pull", "hostile", ""],
+    ["protocol.ext.allow", "always", "never"],
+    ["fetch.recurseSubmodules", "true", "false"],
+    ["submodule.recurse", "true", "false"],
+  ] as const)("overrides repository network setting %s", async (key, configured, expected) => {
+    execFileSync("git", ["config", key, configured], { cwd: root });
+
+    const result = await defaultGitNetworkProcessRunner(["config", "--get", key], {
       cwd: root,
       timeoutMs: 1_000,
       maxBytes: 1_024,
     });
 
-    expect(hooksResult.stdout.trim()).toBe(process.platform === "win32" ? "NUL" : "/dev/null");
-    expect(sshResult.stdout).toBe("\n");
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout.trim()).toBe(expected);
   });
 
   it("does not execute a repository credential helper during network authentication", async () => {
@@ -295,6 +302,23 @@ describe("createGitProcessRunner", () => {
       await closeServer(server);
     }
   });
+
+  it.skipIf(process.platform === "win32")(
+    "does not execute an ext protocol remote during a network operation",
+    async () => {
+      const marker = join(root, "ext-protocol-executed");
+      execFileSync("git", ["remote", "add", "hostile", `ext::touch ${marker}`], { cwd: root });
+
+      const result = await defaultGitNetworkProcessRunner(["ls-remote", "hostile"], {
+        cwd: root,
+        timeoutMs: 5_000,
+        maxBytes: 4_096,
+      });
+
+      expect(result.exitCode).not.toBe(0);
+      expect(existsSync(marker)).toBe(false);
+    },
+  );
 
   it.skipIf(process.platform === "win32")(
     "kills a wedged process at the timeout and flags timedOut",
