@@ -1,20 +1,9 @@
 import { describe, expect, it } from "vitest";
 import { renderVoiceAcousticSummary } from "./render.js";
 import { runVoiceAcousticEvaluation } from "./runner.js";
-import { ALL_VOICE_ACOUSTIC_FIXTURES, voiceAcousticFixtureByName } from "./fixtures/index.js";
-import {
-  VOICE_ACOUSTIC_EVAL_SCHEMA_VERSION,
-  VOICE_ACOUSTIC_SCENARIOS,
-  type VoiceAcousticFixture,
-} from "./types.js";
-
-function fixture(name: string): VoiceAcousticFixture {
-  const found = voiceAcousticFixtureByName(name);
-  if (found === undefined) {
-    throw new Error(`missing fixture ${name}`);
-  }
-  return found;
-}
+import { ALL_VOICE_ACOUSTIC_FIXTURES } from "./fixtures/index.js";
+import { VOICE_ACOUSTIC_EVAL_SCHEMA_VERSION, VOICE_ACOUSTIC_SCENARIOS } from "./types.js";
+import { fixture } from "./test-fixture-lookup.js";
 
 describe("voice-acoustic suite", () => {
   it("runs the default fixture registry to a GO verdict", () => {
