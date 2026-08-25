@@ -173,5 +173,11 @@ describe("runRegressionProbes", () => {
     expect(result.skipped).toEqual(["declined-probe"]);
     expect(result.probed).toBe(1);
     expect(result.unresolved).toEqual([]);
+    // KEIKO-0720 follow-up: `ok` must also flip to false on a non-empty `skipped`, otherwise the
+    // primary caller (`runRetrievalQualityCheck`) — which gates only on `regression.ok` — still
+    // treats the run as passing after silently losing anti-tautology coverage. Without this
+    // assertion the partial-skip regression the earlier fix exposed via `skipped` would surface
+    // in telemetry but never fail the gate.
+    expect(result.ok).toBe(false);
   });
 });
