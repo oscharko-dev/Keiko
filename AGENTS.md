@@ -478,7 +478,11 @@ These cost real time when rediscovered. They are all real and current.
 - **A new long-lived integration branch (`feat/…`) must be added in THREE places in
   `.github/workflows/ci.yml`**: the `push:` trigger list, the `pull_request:` trigger list, AND
   the protected-branch-gate `case` allowlist (`refs/heads/<branch>:` and `*:<branch>` patterns) —
-  miss the third and CI runs but the gate still rejects the merge.
+  miss the third and CI runs but the gate still rejects the merge. Add the same branch to CodeQL's
+  `push:` and `pull_request:` lists and Dependency Review's `pull_request:` list. Verify the
+  three-workflow branch-list comparison with `npm run check:workflow-branch-parity`; it is the
+  repository-owned replacement for the audit's `awk`/`diff` check and fails on any missing or
+  extra branch.
 - **Coverage is ratcheted against a committed baseline** (`docs/qa/package-coverage-baseline.json`)
   with per-file floors across all four metrics. Lowering coverage fails the gate; if you add code,
   add tests. There is exactly ONE per-file floor store and ONE evaluation
