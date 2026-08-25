@@ -30,6 +30,7 @@ import {
   asString,
   atlassianApiEndpointsFor,
   atlassianApiUrl,
+  type AtlassianApiEndpoints,
 } from "./atlassian-sync-classify.js";
 import {
   executeAtlassianWriteRequest,
@@ -132,8 +133,22 @@ function failureOf(outcome: AtlassianWriteHttpOutcome): AtlassianWriteActionFail
   };
 }
 
+// KEIKO-0916: deps.baseUrl is immutable across the many write-action calls one connector session
+// makes, but atlassianApiEndpointsFor re-runs isSafeAtlassianConnectorBaseUrl and `new URL(...)`
+// on every call otherwise. isSafeAtlassianConnectorBaseUrl is a pure structural check (no
+// network, no time-dependent state), so caching its result for an identical, already-validated
+// baseUrl string is semantically equivalent to re-validating it — this is a cache, not a bypass:
+// a baseUrl this process has never seen is still fully validated, exactly once, on first use.
+const jiraEndpointsCache = new Map<string, AtlassianApiEndpoints>();
+
 function issueUrl(deps: JiraWriteActionDeps, relative: string): string {
-  return atlassianApiUrl(atlassianApiEndpointsFor(deps.baseUrl, JIRA_API_ROOT), relative);
+  const { baseUrl } = deps;
+  let endpoints = jiraEndpointsCache.get(baseUrl);
+  if (endpoints === undefined) {
+    endpoints = atlassianApiEndpointsFor(baseUrl, JIRA_API_ROOT);
+    jiraEndpointsCache.set(baseUrl, endpoints);
+  }
+  return atlassianApiUrl(endpoints, relative);
 }
 
 function issueTypeField(input: CreateJiraIssueInput): Record<string, string> | undefined {
