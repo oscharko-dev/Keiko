@@ -50,7 +50,11 @@ function stepCapability(
   if (requiresMemoryCeiling && !memoryProcessTreeEnforced) {
     denialReasons.push("memory-process-tree-unavailable");
   }
-  if (resolveStepNetwork(step.limits, networkEnforcement, networkEnforced).kind === "fail-closed") {
+  if (
+    requiresNetworkIsolation &&
+    (networkEnforcement === "inherit" ||
+      resolveStepNetwork(step.limits, networkEnforcement, networkEnforced).kind === "fail-closed")
+  ) {
     denialReasons.push("network-isolation-unavailable");
   }
   return {

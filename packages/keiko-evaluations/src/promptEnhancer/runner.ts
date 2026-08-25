@@ -33,7 +33,7 @@ function summarize(
     taskClassInvariantPassed: taskClassInvariantFailureCount === 0,
     taskClassInvariantFailureCount,
     safetyGatePassed,
-    goNoGo: allClean ? "GO" : "NO-GO",
+    goNoGo: allClean && taskClassInvariantFailureCount === 0 ? "GO" : "NO-GO",
   };
 }
 

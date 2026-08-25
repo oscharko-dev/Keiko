@@ -110,7 +110,7 @@ function selectNewestByTokenBudget(
   tokenBudget: number,
   tokenAccounting: ContextTokenAccounting | undefined,
 ): LaneFill {
-  const included = new Set<string>();
+  const includedIndexes = new Set<number>();
   let tokens = 0;
   for (let index = items.length - 1; index >= 0; index -= 1) {
     const item = items[index];
@@ -119,12 +119,16 @@ function selectNewestByTokenBudget(
     }
     const cost = countContextTokens(item.text, tokenAccounting);
     if (tokens + cost <= tokenBudget) {
-      included.add(item.id);
+      includedIndexes.add(index);
       tokens += cost;
     }
   }
-  const includedIds = items.filter((item) => included.has(item.id)).map((item) => item.id);
-  const excludedIds = items.filter((item) => !included.has(item.id)).map((item) => item.id);
+  const includedIds = items
+    .filter((_item, index) => includedIndexes.has(index))
+    .map((item) => item.id);
+  const excludedIds = items
+    .filter((_item, index) => !includedIndexes.has(index))
+    .map((item) => item.id);
   const droppedForBudget = excludedIds.length > 0;
   return {
     includedIds,
@@ -147,8 +151,11 @@ function selectByEvictionPolicy(
     case "drop-oldest":
       return selectNewestByTokenBudget(items, tokenBudget, tokenAccounting);
     case "drop-lowest-score":
-    case "summarize-then-drop":
       return selectScoredByTokenBudget(items, tokenBudget, tokenAccounting, eviction);
+    case "summarize-then-drop":
+      // This allocator does not produce summaries. Record the score-based drop it actually performs
+      // rather than claiming content was preserved by a summarization that never happened.
+      return selectScoredByTokenBudget(items, tokenBudget, tokenAccounting, "drop-lowest-score");
   }
 }
 

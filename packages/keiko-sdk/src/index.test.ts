@@ -42,5 +42,26 @@ describe("SDK package surface", () => {
     });
     expect(attested.networkIsolation).toEqual({ backend: "bubblewrap", enforced: true });
     expect(attested.defaultDenialReasons).not.toContain("network-isolation-unavailable");
+
+    const inherited = probeVerificationCapabilities(
+      {
+        steps: [
+          {
+            kind: "test",
+            scriptName: "test",
+            command: "npm",
+            args: ["test"],
+            limits: DEFAULT_VERIFICATION_LIMITS,
+          },
+        ],
+      },
+      "inherit",
+      { backend: "bubblewrap", enforced: true },
+    );
+    expect(inherited.steps[0]).toMatchObject({
+      requiresNetworkIsolation: true,
+      runnable: false,
+      denialReasons: ["network-isolation-unavailable"],
+    });
   });
 });

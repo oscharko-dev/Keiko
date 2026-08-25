@@ -250,10 +250,27 @@ describe("allocateContext — eviction policies", () => {
     expect(lowestScore.diagnostics.compactionReason).toBe("drop-lowest-score");
   });
 
-  it("records summarize-then-drop when score-based eviction creates a compaction candidate", () => {
+  it("records the score-based drop actually performed when summarization is unavailable", () => {
     const summarized = repoLane(allocateWithPolicy("summarize-then-drop"));
     expect(summarized.excludedItemIds).toEqual(["middle-low"]);
-    expect(summarized.diagnostics.compactionReason).toBe("summarize-then-drop");
+    expect(summarized.diagnostics.compactionReason).toBe("drop-lowest-score");
+  });
+
+  it("classifies duplicate ids by occurrence under drop-oldest", () => {
+    const cheap = "small";
+    const expensive = bulk("large ", 100);
+    const allocated = repoLane(
+      allocateContext({
+        profile: DEFAULT_CONTEXT_PROFILE,
+        budget: budgetWithEviction("drop-oldest", estimateTokens(cheap)),
+        lanes: [
+          lane("repo-evidence", [item("duplicate", expensive, 0.5), item("duplicate", cheap, 0.5)]),
+        ],
+      }),
+    );
+    expect(allocated.includedItemIds).toEqual(["duplicate"]);
+    expect(allocated.excludedItemIds).toEqual(["duplicate"]);
+    expect(allocated.diagnostics.provenanceCounts).toEqual({ included: 1, excluded: 1 });
   });
 
   it("keeps none-reserved lanes intact even when their configured cap is exceeded", () => {
@@ -311,7 +328,9 @@ describe("allocateContext — eviction policies", () => {
       );
       expect(allocated.includedItemIds).toEqual(["small"]);
       expect(allocated.excludedItemIds).toEqual(["oversized"]);
-      expect(allocated.diagnostics.compactionReason).toBe(eviction);
+      expect(allocated.diagnostics.compactionReason).toBe(
+        eviction === "summarize-then-drop" ? "drop-lowest-score" : eviction,
+      );
     },
   );
 });

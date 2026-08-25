@@ -112,7 +112,10 @@ function configRoot(cfg: Record<string, unknown> | undefined): string | null {
 }
 
 function lastPathSegment(value: string): string {
-  return value.split(/[/\\]/u).findLast((segment) => segment.length > 0) ?? value;
+  for (const segment of value.split(/[/\\]/u).reverse()) {
+    if (segment.length > 0) return segment;
+  }
+  return value;
 }
 
 function filesScopeLabel(cfg: Record<string, unknown> | undefined, root: string): string {

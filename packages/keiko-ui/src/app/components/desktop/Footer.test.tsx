@@ -45,11 +45,6 @@ function renderFooter(
       onToggleWindowPalette={vi.fn()}
       onSelectWindow={vi.fn()}
       onCloseWindowPalette={vi.fn()}
-      selectedModel={undefined}
-      projectName="Keiko"
-      branchLabel="main"
-      shellStatusLabel="Ready"
-      evidenceStatusLabel="No review open"
       {...patch}
     />,
   );
@@ -78,21 +73,6 @@ describe("Footer — window status trigger", () => {
     await waitFor(() => {
       expect(screen.getByText("Keiko | version unavailable")).toBeInTheDocument();
     });
-  });
-
-  it("does not render the connected-project indicator", () => {
-    renderFooter({ projectName: "Regulated Workspace" });
-    expect(screen.queryByText("Regulated Workspace")).not.toBeInTheDocument();
-  });
-
-  it("does not render the selected model indicator", () => {
-    renderFooter({ selectedModel: "claude-sonnet-4-6" });
-    expect(screen.queryByText("claude-sonnet-4-6")).not.toBeInTheDocument();
-  });
-
-  it("does not render an explicit no-model-selected state", () => {
-    renderFooter();
-    expect(screen.queryByText("No model selected")).not.toBeInTheDocument();
   });
 
   it("renders the workflow-readiness indicator showing the active window count", () => {
@@ -183,26 +163,6 @@ describe("Footer — window status trigger", () => {
     expect(onSelectWindow).toHaveBeenCalledWith("files-1");
   });
 
-  it("does not render the review and evidence-access indicator", () => {
-    renderFooter({ evidenceStatusLabel: "Evidence ready" });
-    expect(screen.queryByText("Evidence ready")).not.toBeInTheDocument();
-  });
-
-  it("does not render the shell trust-boundary status indicator", () => {
-    renderFooter({ shellStatusLabel: "Gateway setup required" });
-    expect(screen.queryByText("Gateway setup required")).not.toBeInTheDocument();
-  });
-
-  it("does not render the governance mode pill in manual mode", () => {
-    renderFooter();
-    expect(screen.queryByText(/You · manual/)).not.toBeInTheDocument();
-  });
-
-  it("does not render the governance mode pill in autonomous mode", () => {
-    renderFooter({ mode: "autonomous" });
-    expect(screen.queryByText("Keiko governing")).not.toBeInTheDocument();
-  });
-
   it("uses a single semantic footer landmark", () => {
     const { container } = renderFooter();
     const footers = container.querySelectorAll("footer");
@@ -241,11 +201,6 @@ describe("Footer — window status trigger", () => {
           onToggleWindowPalette={() => setOpen((value) => !value)}
           onSelectWindow={vi.fn()}
           onCloseWindowPalette={() => setOpen(false)}
-          selectedModel={undefined}
-          projectName="Keiko"
-          branchLabel="main"
-          shellStatusLabel="Ready"
-          evidenceStatusLabel="No review open"
           {...props}
         />
       );

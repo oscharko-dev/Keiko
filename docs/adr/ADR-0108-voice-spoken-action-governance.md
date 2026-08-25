@@ -384,7 +384,10 @@ The following are explicitly not in scope for Issue #503:
   to the handoff evidence; routing discussion mode recommendations through this governance is #503's
   responsibility.
 - **Recap and memory persistence**: persisting confirmed actions to a recap or memory store is #504's
-  responsibility.
+  responsibility. The later recap route may auto-promote content only when the server-composed,
+  bounded, single-use content-attestation store verifies a trusted transcript observation; missing,
+  expired, replayed, or mismatched attestations remain review-gated. This does not authorize or
+  execute a spoken external action.
 - **design-system/globals.css changes**: the confirmation surface, if any, reuses existing tokens; no
   CSS additions are permitted in this issue.
 

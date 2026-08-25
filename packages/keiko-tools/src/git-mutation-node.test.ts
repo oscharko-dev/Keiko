@@ -35,7 +35,25 @@ describe("node git mutation adapter — governed argv reaches the spawn boundary
     expect(result.outcome).toBe("succeeded");
     expect(rec.calls()).toHaveLength(1);
     expect(rec.calls()[0]?.command).toBe("git");
-    expect(rec.calls()[0]?.args).toEqual(["add", "--", ":(literal)src/x.ts"]);
+    expect(rec.calls()[0]?.args).toEqual([
+      "-c",
+      "core.fsmonitor=false",
+      "-c",
+      `core.hooksPath=${process.platform === "win32" ? "NUL" : "/dev/null"}`,
+      "-c",
+      "core.pager=cat",
+      "-c",
+      "pager.commit=false",
+      "-c",
+      "alias.commit=",
+      "-c",
+      "protocol.ext.allow=never",
+      "-c",
+      "submodule.recurse=false",
+      "add",
+      "--",
+      ":(literal)src/x.ts",
+    ]);
     // The spawn is shell-less by construction.
     expect(rec.calls()[0]?.options.shell).toBe(false);
   });

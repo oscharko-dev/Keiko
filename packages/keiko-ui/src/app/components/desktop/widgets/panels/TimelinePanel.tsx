@@ -94,5 +94,3 @@ export function TimelinePanel(): ReactElement {
     </section>
   );
 }
-
-export default TimelinePanel;

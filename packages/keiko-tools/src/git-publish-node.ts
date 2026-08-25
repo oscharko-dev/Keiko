@@ -81,6 +81,23 @@ interface RunContext {
   readonly timeoutMs: number | undefined;
 }
 
+const GOVERNED_GIT_PUBLISH_CONFIG_ARGS: readonly string[] = [
+  "-c",
+  "core.fsmonitor=false",
+  "-c",
+  `core.hooksPath=${process.platform === "win32" ? "NUL" : "/dev/null"}`,
+  "-c",
+  "core.pager=cat",
+  "-c",
+  "pager.push=false",
+  "-c",
+  "alias.push=",
+  "-c",
+  "protocol.ext.allow=never",
+  "-c",
+  "submodule.recurse=false",
+];
+
 function buildRunContext(deps: NodeGitPublishAdapterDeps): RunContext {
   return {
     runDeps: {
@@ -136,7 +153,13 @@ async function runPush(ctx: RunContext, argv: readonly string[]): Promise<GitPub
   let result: CommandResult;
   try {
     result = await runCommand(
-      { command: "git", args: argv, cwd: undefined, timeoutMs: ctx.timeoutMs, signal: ctx.signal },
+      {
+        command: "git",
+        args: [...GOVERNED_GIT_PUBLISH_CONFIG_ARGS, ...argv],
+        cwd: undefined,
+        timeoutMs: ctx.timeoutMs,
+        signal: ctx.signal,
+      },
       ctx.runDeps,
     );
   } catch (error) {

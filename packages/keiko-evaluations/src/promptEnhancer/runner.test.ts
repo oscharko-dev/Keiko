@@ -2,7 +2,11 @@
 // gate derivation, including the failure path, and scoped runs over an explicit fixture list.
 
 import { describe, expect, it } from "vitest";
-import { ALL_PROMPT_ENHANCER_FIXTURES, runPromptEnhancerEvaluation } from "./index.js";
+import {
+  ALL_PROMPT_ENHANCER_FIXTURES,
+  runPromptEnhancerEvaluation,
+  type PromptEnhancerEvalFixture,
+} from "./index.js";
 import { benignDraftExpectingInjectionSignals } from "./test-support.js";
 
 describe("runPromptEnhancerEvaluation aggregation", () => {
@@ -46,7 +50,7 @@ describe("runPromptEnhancerEvaluation aggregation", () => {
       actualTaskClass: "factual-qa",
     });
     expect(result?.fullyPassed).toBe(false);
-    expect(scorecard.summary.goNoGo).toBe("GO");
+    expect(scorecard.summary.goNoGo).toBe("NO-GO");
     expect(scorecard.summary.taskClassInvariantPassed).toBe(false);
     expect(scorecard.summary.taskClassInvariantFailureCount).toBe(1);
   });

@@ -5,7 +5,7 @@ import { useEffect, useReducer } from "react";
 
 import type { MessageKey } from "@/lib/i18n-messages.en";
 
-export type ActivityType =
+type ActivityType =
   "step" | "approval" | "approved" | "rejected" | "stopped" | "open" | "run" | "delivery";
 
 export interface ActivityEvent {

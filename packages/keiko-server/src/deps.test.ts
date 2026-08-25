@@ -405,6 +405,7 @@ describe("buildUiHandlerDeps — UiStore wiring (ADR-0013)", () => {
     });
     expect(deps.store).toBe(store);
     expect(deps.managedLspControl).toBeDefined();
+    expect(deps.voiceRecapContentAttestations).toBeDefined();
   }, 15000);
 
   it("materializes the managed root before content-bearing routes classify ordinary roots", async (): Promise<void> => {

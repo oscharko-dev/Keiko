@@ -903,7 +903,7 @@ class CodingRuntimeManagerImpl implements CodingRuntimeManager {
       return { ok: false, failureCode: "approval-activation-failed", retryable: false };
     }
     if (!activateIssuedToolApproval(this.deps.codingToolApprovals, request, issued)) {
-      rollbackIssuedApproval(this.deps.approvalStore, binding, issued);
+      rollbackIssuedApproval(this.deps.approvalStore, binding);
       return { ok: false, failureCode: "approval-activation-failed", retryable: false };
     }
     return {
@@ -2899,14 +2899,10 @@ function activateIssuedToolApproval(
 function rollbackIssuedApproval(
   store: SupervisedCodingApprovalStore,
   binding: SupervisedCodingApprovalBinding,
-  issued: SupervisedCodingIssuedApproval,
 ): void {
-  const rolledBack = store.consume({
-    approval: issued.approval,
-    binding,
-    nowMs: issued.approvedAtMs,
-  });
-  if (rolledBack === undefined) store.invalidateRun(binding.runId);
+  // Task grants deliberately survive consumption, so consume cannot roll them back. A failed bridge
+  // activation invalidates the run's approvals fail-closed; no just-issued reusable grant remains live.
+  store.invalidateRun(binding.runId);
 }
 
 function approvalBindingsForEvent(
@@ -2969,7 +2965,10 @@ function taskApprovalBinding(
     }),
     sourceDigest: supervisedCodingApprovalScopeDigest({
       runId: binding.runId,
-      requestId: context.workspaceRoot,
+      requestId: JSON.stringify({
+        runtimeSource: context.runtimeSource,
+        modelSource: context.modelSource,
+      }),
       actionKind: binding.actionKind,
       connectorScopes: binding.connectorScopes,
     }),

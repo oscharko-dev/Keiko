@@ -116,7 +116,6 @@ export const GIT_MUTATION_COMMAND_RULES: readonly CommandRule[] = Object.freeze(
     ]),
     denyFlags: Object.freeze([
       "-C",
-      "-c",
       "--config-env",
       "--git-dir",
       "--work-tree",

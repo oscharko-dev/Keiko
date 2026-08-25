@@ -302,6 +302,7 @@ const TASK_CLASS_RULES: readonly TaskClassRule[] = [
       "based on the provided",
       "according to the document",
       "from the attached",
+      "using the attached",
       "using the document",
       "in the provided text",
       "basierend auf der datei",
@@ -948,25 +949,15 @@ const CRITERIA_SENSITIVE_CLASSES: ReadonlySet<PromptTaskClass> = new Set([
   "research",
 ]);
 const SCOPE_SENSITIVE_CLASSES: ReadonlySet<PromptTaskClass> = new Set(["code-architecture"]);
-const SCOPE_CUES: readonly string[] = [
-  "for ",
-  "within ",
-  "supporting ",
-  "targeting ",
-  "application",
-  "service",
-  "platform",
-  "workspace",
-  "repository",
-  "product",
-];
+const ARCHITECTURE_SCOPE_PATTERN =
+  /\b(?:for|within|supporting|targeting)\s+(?:an?\s+)?(?:[\p{L}\p{N}-]+\s+){1,6}(?:application|service|platform|workspace|repository|product|system)\b/u;
 const MAX_MISSING_TOPICS = 4;
 
 const lacksSubject = (view: AnalysisView): boolean =>
   view.normalizedLength < 12 || view.meaningfulTokenCount < 3;
 
 const lacksScope = (view: AnalysisView, taskClass: PromptTaskClass): boolean =>
-  SCOPE_SENSITIVE_CLASSES.has(taskClass) && !containsAny(view.lower, SCOPE_CUES);
+  SCOPE_SENSITIVE_CLASSES.has(taskClass) && !ARCHITECTURE_SCOPE_PATTERN.test(view.lower);
 
 const lacksDataSource = (view: AnalysisView): boolean =>
   containsAny(view.lower, SCOPE_REFERENCE_CUES) && !view.hasConnectedContext;

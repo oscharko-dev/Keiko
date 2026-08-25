@@ -84,7 +84,10 @@ import {
   type ConversationAttachmentStore,
 } from "./conversation-attachment-store.js";
 import { createRunRegistry } from "./runs.js";
-import type { VoiceRecapContentAttestationStore } from "./voice-recap-provenance.js";
+import {
+  createVoiceRecapContentAttestationStore,
+  type VoiceRecapContentAttestationStore,
+} from "./voice-recap-provenance.js";
 import type { ChatTurnSerializer } from "./chat-turn-serializer.js";
 import {
   DEFAULT_SERVER_DIAGNOSTIC_SUMMARY,
@@ -4160,7 +4163,7 @@ export function buildUiHandlerDeps(options: BuildHandlerDepsOptions): UiHandlerD
   const bundle = buildPersistenceBundle(options, resolvedUiDbPath, redactString, evidenceStore);
   const contextProfileForModel = buildContextProfileResolver(() => runtimeConfig.current());
   reconcileNodeStoreAtStartup(options, bundle);
-  return assembleUiHandlerDeps({
+  const deps = assembleUiHandlerDeps({
     options,
     resolvedUiDbPath,
     resolvedEvidenceDir,
@@ -4176,4 +4179,8 @@ export function buildUiHandlerDeps(options: BuildHandlerDepsOptions): UiHandlerD
     bundle,
     contextProfileForModel,
   });
+  return {
+    ...deps,
+    voiceRecapContentAttestations: createVoiceRecapContentAttestationStore(),
+  };
 }

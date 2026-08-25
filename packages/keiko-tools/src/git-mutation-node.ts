@@ -124,9 +124,32 @@ interface RunContext {
   readonly timeoutMs: number | undefined;
 }
 
+const GOVERNED_GIT_MUTATION_CONFIG_ARGS: readonly string[] = [
+  "-c",
+  "core.fsmonitor=false",
+  "-c",
+  `core.hooksPath=${process.platform === "win32" ? "NUL" : "/dev/null"}`,
+  "-c",
+  "core.pager=cat",
+  "-c",
+  "pager.commit=false",
+  "-c",
+  "alias.commit=",
+  "-c",
+  "protocol.ext.allow=never",
+  "-c",
+  "submodule.recurse=false",
+];
+
 function runOne(ctx: RunContext, argv: readonly string[]): Promise<CommandResult> {
   return runCommand(
-    { command: "git", args: argv, cwd: undefined, timeoutMs: ctx.timeoutMs, signal: ctx.signal },
+    {
+      command: "git",
+      args: [...GOVERNED_GIT_MUTATION_CONFIG_ARGS, ...argv],
+      cwd: undefined,
+      timeoutMs: ctx.timeoutMs,
+      signal: ctx.signal,
+    },
     ctx.runDeps,
   );
 }

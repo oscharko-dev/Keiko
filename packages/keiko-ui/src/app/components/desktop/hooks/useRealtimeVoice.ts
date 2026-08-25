@@ -718,22 +718,20 @@ export function useRealtimeVoice(options: UseRealtimeVoiceOptions): RealtimeVoic
   }, [beginVoiceTurn]);
 
   const surfaceCanonicalAdmissionFailure = useCallback((): void => {
-    applyTurnSignal({ kind: "provider-failure", recoverable: true });
     dispatch({
       type: "error",
       reason: "connection-failed",
       message: CANONICAL_TURN_ADMISSION_ERROR_MESSAGE,
     });
-  }, [applyTurnSignal]);
+  }, []);
 
   const surfaceCanonicalCapacityReached = useCallback((): void => {
-    applyTurnSignal({ kind: "provider-failure", recoverable: true });
     dispatch({
       type: "error",
       reason: "connection-failed",
       message: CANONICAL_TURN_CAPACITY_REACHED_MESSAGE,
     });
-  }, [applyTurnSignal]);
+  }, []);
 
   const handoffCanonicalUserTurn = useCallback(
     (pending: PendingCanonicalUserTurn, suppressUiUpdates = false): CanonicalVoiceTurnHandoff => {
