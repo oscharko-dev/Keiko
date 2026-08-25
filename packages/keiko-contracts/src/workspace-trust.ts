@@ -252,6 +252,30 @@ function factsMatch(
   return left.outcome !== "known" || (right.outcome === "known" && left.value === right.value);
 }
 
+export interface WorkspaceTrustRootBinding {
+  readonly rootRef: string;
+  readonly rootIdentityDigest: string;
+  // Server-owned identity provenance, such as the durable filesystem-object digest. The public
+  // V1 binding intentionally omits it, but a store that has it must compare it here rather than
+  // maintain a second invalidation formula.
+  readonly rootIdentityProvenanceDigest?: string | null | undefined;
+}
+
+// KEIKO-0198: every layer that decides whether a root identity still authorizes trust uses this
+// predicate. Missing membership fails closed; an absent private provenance is comparable only to
+// the same absent provenance, preserving the persisted V1 compatibility state.
+export function workspaceTrustRootBindingsMatch(
+  left: WorkspaceTrustRootBinding | undefined,
+  right: WorkspaceTrustRootBinding | undefined,
+): boolean {
+  if (left === undefined || right === undefined) return false;
+  return (
+    left.rootRef === right.rootRef &&
+    left.rootIdentityDigest === right.rootIdentityDigest &&
+    left.rootIdentityProvenanceDigest === right.rootIdentityProvenanceDigest
+  );
+}
+
 /**
  * ADR-0155 narrows this comparison to the dimensions that describe the trusted root itself. The
  * manifest revision and digest are workspace-level and change on focus and reorder, which carry no
@@ -266,8 +290,7 @@ function factsMatch(
 function trustBindingsMatch(left: WorkspaceTrustBinding, right: WorkspaceTrustBinding): boolean {
   return (
     left.manifestRef === right.manifestRef &&
-    left.rootRef === right.rootRef &&
-    left.rootIdentityDigest === right.rootIdentityDigest &&
+    workspaceTrustRootBindingsMatch(left, right) &&
     factsMatch(left.trustBasisDigest, right.trustBasisDigest)
   );
 }

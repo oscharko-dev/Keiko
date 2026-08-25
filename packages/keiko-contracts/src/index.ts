@@ -4233,6 +4233,7 @@ export type {
   WorkspaceTrustAssessment,
   WorkspaceTrustOperationClass,
   WorkspaceTrustStatus,
+  WorkspaceTrustRootBinding,
 } from "./workspace-trust.js";
 export {
   WORKSPACE_TRUST_SCHEMA_VERSION,
@@ -4242,6 +4243,7 @@ export {
   validateWorkspaceTrustRecord,
   isWorkspaceTrustStatus,
   isWorkspaceRestrictedModeActive,
+  workspaceTrustRootBindingsMatch,
   projectCommandTaskTrustState,
   workspaceTrustPolicyEffect,
   strictestWorkspaceTrustPolicyEffect,

@@ -3,7 +3,10 @@
 // project registry reference and make membership/ordering constraints transactional.
 
 import type { DatabaseSync } from "node:sqlite";
-import { validateWorkspaceManifest } from "@oscharko-dev/keiko-contracts";
+import {
+  validateWorkspaceManifest,
+  workspaceTrustRootBindingsMatch,
+} from "@oscharko-dev/keiko-contracts";
 import type { WorkspaceManifest } from "@oscharko-dev/keiko-contracts";
 import {
   createSingleRootWorkspaceManifest,
@@ -116,19 +119,36 @@ function rootIdentities(
  * grant — invalidating the union of previous and next members revoked trust on every root for a
  * plain focus click, which made persisted trust (#2521) unobservable in practice.
  */
-function invalidatedRootRefs(
+function trustRootBinding(
+  rootRef: string,
+  identity: StoredRootIdentity | undefined,
+):
+  | {
+      readonly rootRef: string;
+      readonly rootIdentityDigest: string;
+      readonly rootIdentityProvenanceDigest: string | null;
+    }
+  | undefined {
+  return identity === undefined
+    ? undefined
+    : {
+        rootRef,
+        rootIdentityDigest: identity.identityDigest,
+        rootIdentityProvenanceDigest: identity.objectIdentityDigest,
+      };
+}
+
+export function invalidatedRootRefs(
   previous: ReadonlyMap<string, StoredRootIdentity>,
   next: ReadonlyMap<string, StoredRootIdentity>,
 ): ReadonlySet<string> {
   const invalidated = new Set<string>();
-  for (const rootRef of previous.keys()) {
-    if (!next.has(rootRef)) invalidated.add(rootRef);
-  }
-  for (const [rootRef, nextIdentity] of next) {
-    const previousIdentity = previous.get(rootRef);
+  for (const rootRef of new Set([...previous.keys(), ...next.keys()])) {
     if (
-      previousIdentity?.identityDigest !== nextIdentity.identityDigest ||
-      previousIdentity.objectIdentityDigest !== nextIdentity.objectIdentityDigest
+      !workspaceTrustRootBindingsMatch(
+        trustRootBinding(rootRef, previous.get(rootRef)),
+        trustRootBinding(rootRef, next.get(rootRef)),
+      )
     ) {
       invalidated.add(rootRef);
     }
