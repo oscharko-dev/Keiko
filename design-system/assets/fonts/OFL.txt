@@ -3,7 +3,13 @@ Copyright 2020 The JetBrains Mono Project Authors
 (https://github.com/JetBrains/JetBrainsMono)
 
 This Font Software is licensed under the SIL Open Font License, Version 1.1.
-The .woff2 files in this folder are redistributed unmodified under that licence.
+The .woff2 files in this folder are redistributed unmodified under that licence:
+  JetBrainsMono-Regular.woff2
+  JetBrainsMono-Medium.woff2
+  JetBrainsMono-SemiBold.woff2
+  JetBrainsMono-Bold.woff2
+  JetBrainsMono-Italic.woff2         (added 2026-08-25 — KEIKO-0714, v2.304)
+  JetBrainsMono-BoldItalic.woff2     (added 2026-08-25 — KEIKO-0714, v2.304)
 Full licence text: https://scripts.sil.org/OFL
 
 -----------------------------------------------------------
