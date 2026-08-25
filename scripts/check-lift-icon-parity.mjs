@@ -148,7 +148,13 @@ function splitTopLevelArgs(argsSrc) {
 // so ordinary lowercase locals cannot accidentally be substituted.
 function collectSharedConsts(source) {
   const consts = new Map();
-  const pattern = /^\s*var\s+([A-Z][A-Z0-9_]*)\s*=\s*([\s\S]*?);\s*$/gmu;
+  // Linear-time regex: `[^;]*` is a greedy negated class (no backtracking on failure) rather
+  // than `[\s\S]*?` which drove Sonar S8786 super-linear backtracking on inputs whose value
+  // expression contains no semicolon (the common case here — P("...") + P("...") sequences
+  // never use `;`). If a future shared const embeds a `;` inside a string literal this pattern
+  // will stop at the first one; that shape does not exist in lift-glyphs.js today and adding
+  // one would need a proper JS tokenizer regardless.
+  const pattern = /^\s*var\s+([A-Z][A-Z0-9_]*)\s*=\s*([^;]*);\s*$/gmu;
   let match;
   while ((match = pattern.exec(source)) !== null) {
     const name = match[1];

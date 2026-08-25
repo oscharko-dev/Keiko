@@ -332,7 +332,7 @@ describe("createSession", () => {
     // Yield one microtask + one task tick so any escaped cancel-triggered emit would land.
     await Promise.resolve();
     await new Promise((resolve) => setTimeout(resolve, 0));
-    expect(sink.events().length).toBe(eventsBefore);
+    expect(sink.events()).toHaveLength(eventsBefore);
     expect(result.outcome).toBe("completed");
     expect(result.failure).toBeUndefined();
   });

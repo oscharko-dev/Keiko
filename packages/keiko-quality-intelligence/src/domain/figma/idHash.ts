@@ -20,10 +20,10 @@ function fnv1a32(key: string, unicodeAware: boolean): number {
     }
   } else {
     for (let i = 0; i < key.length; i += 1) {
-      // NOSONAR typescript:S7758 — intentional: switching to codePointAt would change the hash
-      // for any string containing a surrogate pair, breaking the ids the three non-unicode-aware
-      // callers have already emitted. `unicodeAware: true` is the opt-in code-point path.
-      hash ^= key.charCodeAt(i);
+      // Intentional: switching to codePointAt would change the hash for any string containing a
+      // surrogate pair, breaking the ids the three non-unicode-aware callers have already
+      // emitted. `unicodeAware: true` is the opt-in code-point path.
+      hash ^= key.charCodeAt(i); // NOSONAR typescript:S7758
       hash = Math.imul(hash, 0x01000193);
     }
   }
