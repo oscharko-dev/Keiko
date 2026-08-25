@@ -311,16 +311,28 @@ describe("createSession", () => {
     },
   );
 
-  it("cancel() after the run has settled is a silent no-op", async () => {
+  it("cancel() after the run has settled emits no further events and does not mutate the RunResult", async () => {
+    // Strengthened from the earlier "does not throw" shape: that assertion was true on both the
+    // pre- and post-KEIKO-0774 code (cancel() has always been try/catch-safe). The load-bearing
+    // property is that no additional harness event escapes AFTER the run:completed sentinel and
+    // that ctx.failure cannot be back-filled onto the resolved RunResult. Assert both, so a
+    // future regression that reinstates the "cancel replays a run:cancelled after completion" bug
+    // (or the sibling race that back-fills failure) fails this test.
+    const sink = new MemoryEventSink();
     const session = createSession(
       EXPLAIN,
       CONFIG,
-      deps(scriptedModel([response({ content: "ok" })]).port, new MemoryEventSink()),
+      deps(scriptedModel([response({ content: "ok" })]).port, sink),
     );
     const result = await session.result;
+    const eventsBefore = sink.events().length;
     expect(() => {
       session.cancel("too late");
     }).not.toThrow();
+    // Yield one microtask + one task tick so any escaped cancel-triggered emit would land.
+    await Promise.resolve();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(sink.events().length).toBe(eventsBefore);
     expect(result.outcome).toBe("completed");
     expect(result.failure).toBeUndefined();
   });

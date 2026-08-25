@@ -310,11 +310,32 @@ describe("scoreDiscussionQuality - interruption-recovery", () => {
   });
 
   // KEIKO-0552: expectsRecoveredContext must actually gate the preservation outcome, not just be
-  // declared. A fixture that expects recovery to NOT preserve context but observes preservation
-  // anyway must fail -- proving the oracle field is read, not inert documentation.
+  // declared. Together these two tests pin all four (expected × observed) truth-table quadrants
+  // for the field — the (true, true) pass case is covered by the previous test and the
+  // (true, false) fail case by "fails when the fixture declares recovery but no trajectory is
+  // derived" below. A fixture that expects recovery to NOT preserve context but observes
+  // preservation anyway must fail (proves the field is READ, not inert documentation), and the
+  // symmetric quadrant — expects no-preservation and observes no-preservation — must pass
+  // (proves the field is honoured on the "agree" side, not defaulted to always-fail).
   it("fails when the oracle expects no preserved context but the recovery preserves it anyway", () => {
     const f = fixtureFor("decide", ["interruption-recovery"], { expectsRecoveredContext: false });
     expect(outcomeOf(f, recoveryObs(), "interruption-recovery")).toBe("fail");
+  });
+
+  it("passes when the oracle expects no preserved context and the recovery drops it (KEIKO-0552 symmetric)", () => {
+    const f = fixtureFor("decide", ["interruption-recovery"], { expectsRecoveredContext: false });
+    const obs = recoveryObs();
+    const recovery = obs.recovery;
+    if (recovery === undefined) throw new Error("recoveryObs must derive a trajectory");
+    // Drop the topicId on the recovered turn so preservation-check reports "context lost".
+    const notPreserved: DiscussionObservation = {
+      ...obs,
+      recovery: {
+        ...recovery,
+        recovered: { ...recovery.recovered, topicId: "different-topic" },
+      },
+    };
+    expect(outcomeOf(f, notPreserved, "interruption-recovery")).toBe("pass");
   });
 
   it("fails when the fixture declares recovery but no trajectory is derived", () => {

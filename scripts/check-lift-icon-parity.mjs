@@ -140,17 +140,43 @@ function splitTopLevelArgs(argsSrc) {
 //   P(helper(args))     → { kind: "call", helper, args }
 //   P("literal")        → { kind: "path", value }
 //   '<circle .../>'     → { kind: "circle", cx, cy, r, extras }
+// KEIKO-0935: lift-glyphs.js may hoist byte-identical glyph geometry into a shared module-
+// scope const (e.g. `var DEBUG_BUG_GLYPH = P(...) + P(...);`) that G entries reference by
+// name (`debug: DEBUG_BUG_GLYPH`). Collect every such `var UPPER_SNAKE = <expr>;` declaration
+// above `var G = {` and expand bare identifier references in G's operand chain to the
+// underlying expression source before the operand parser walks it. Restricted to UPPER_SNAKE
+// so ordinary lowercase locals cannot accidentally be substituted.
+function collectSharedConsts(source) {
+  const consts = new Map();
+  const pattern = /^\s*var\s+([A-Z][A-Z0-9_]*)\s*=\s*([\s\S]*?);\s*$/gmu;
+  let match;
+  while ((match = pattern.exec(source)) !== null) {
+    const name = match[1];
+    const exprSrc = match[2].trim();
+    if (name && exprSrc.length > 0) consts.set(name, exprSrc);
+  }
+  return consts;
+}
+
+function expandSharedConsts(valueSrc, consts) {
+  return valueSrc.replace(/\b([A-Z][A-Z0-9_]*)\b/gu, (whole, name) => {
+    const expansion = consts.get(name);
+    return expansion === undefined ? whole : expansion;
+  });
+}
+
 function extractOpsFromJs(customPath) {
   const source = readFileSync(customPath ?? jsPath, "utf8");
   const gStart = source.indexOf("var G = {");
   if (gStart < 0) throw new Error("could not locate `var G = {` in lift-glyphs.js");
+  const consts = collectSharedConsts(source.slice(0, gStart));
   const bodyStart = source.indexOf("{", gStart);
   const bodyEnd = matchClosingBrace(source, bodyStart);
   const body = source.slice(bodyStart + 1, bodyEnd);
   const props = splitObjectProperties(body);
   const result = new Map();
   for (const [key, valueSrc] of props) {
-    result.set(key, jsValueToOps(valueSrc));
+    result.set(key, jsValueToOps(expandSharedConsts(valueSrc, consts)));
   }
   return result;
 }
