@@ -137,10 +137,32 @@ export function supervisedCodingApprovalScopeDigest(input: {
   return sha256Hex(canonicalise({ schema: "supervised-coding-approval-scope-v1", ...input }));
 }
 
+export function supervisedCodingTaskScopeDigest(input: {
+  readonly runId: string;
+  readonly actionKind: CodingWorkbenchSupervisedActionKind;
+  readonly connectorScopes: readonly CodingWorkbenchConnectorScope[];
+}): string {
+  return sha256Hex(canonicalise({ schema: "supervised-coding-task-scope-v1", ...input }));
+}
+
 export function supervisedCodingApprovalBindingHash(
   binding: SupervisedCodingApprovalBinding,
 ): string {
-  return sha256Hex(canonicalise(binding));
+  return sha256Hex(
+    canonicalise(
+      binding.grantScope === "task"
+        ? taskBindingScope(binding)
+        : binding,
+    ),
+  );
+}
+
+function taskBindingScope(binding: SupervisedCodingApprovalBindingTask): Omit<
+  SupervisedCodingApprovalBindingTask,
+  "requestId"
+> {
+  const { requestId: _requestId, ...scope } = binding;
+  return scope;
 }
 
 export function parseSupervisedCodingApprovalClaim(

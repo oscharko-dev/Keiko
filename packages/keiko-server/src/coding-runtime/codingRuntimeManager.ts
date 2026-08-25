@@ -43,8 +43,10 @@ import {
 import {
   createInMemorySupervisedCodingApprovalStore,
   supervisedCodingApprovalScopeDigest,
+  supervisedCodingTaskScopeDigest,
   type SupervisedCodingApprovalBinding,
   type SupervisedCodingApprovalBindingOnce,
+  type SupervisedCodingApprovalBindingTask,
   type SupervisedCodingApprovalClaim,
   type SupervisedCodingApprovalStore,
   type SupervisedCodingConsumedApproval,
@@ -205,6 +207,12 @@ export interface CodingRuntimeApprovalIssueRequest {
   readonly connectorScopes?: readonly CodingWorkbenchConnectorScope[] | undefined;
   readonly approvedByUserId: string;
   readonly ttlMs?: number | undefined;
+  /** A reusable grant is limited to routine contained edits and verification commands. */
+  readonly grantScope?: "once" | "task" | undefined;
+  /** Stable server-approved command identity for a reusable verification grant. */
+  readonly commandTemplateId?: string | undefined;
+  /** Server-classified argument shapes for a reusable verification grant. */
+  readonly safeArgumentClasses?: readonly string[] | undefined;
   /**
    * The runtime revision the operator's decision was bound to (#2387). Informational for
    * downstream governed-action projections; deliberately NOT part of the approval scope digest,
@@ -885,12 +893,10 @@ class CodingRuntimeManagerImpl implements CodingRuntimeManager {
       return { ok: false, failureCode: "runtime-stopped", retryable: false };
     }
     const binding = approvalBindingForIssue(active, request);
-    const issued = this.deps.approvalStore.issue({
-      binding,
-      approvedByUserId: request.approvedByUserId,
-      nowMs: this.deps.now(),
-      ttlMs: request.ttlMs,
-    });
+    const issued = issueSupervisedApproval(this.deps.approvalStore, binding, request, this.deps.now());
+    if (issued === undefined) {
+      return { ok: false, failureCode: "approval-activation-failed", retryable: false };
+    }
     if (!activateIssuedToolApproval(this.deps.codingToolApprovals, request, issued)) {
       rollbackIssuedApproval(this.deps.approvalStore, binding, issued);
       return { ok: false, failureCode: "approval-activation-failed", retryable: false };
@@ -2782,8 +2788,8 @@ function supervisedMutationEvent(
   if (event.approvalTokenMalformed === true) {
     return supervisedPolicyFailureEvent(active, sequence, "approval-proof-stale");
   }
-  const binding = approvalBindingForEvent(active, event, actionKind);
-  const approval = consumePresentedApproval(active, event, binding);
+  const bindings = approvalBindingsForEvent(active, event, actionKind);
+  const approval = consumePresentedApproval(active, event, bindings);
   if (event.approvalToken !== undefined && approval === undefined) {
     return supervisedPolicyFailureEvent(active, sequence, "approval-proof-stale");
   }
@@ -2843,13 +2849,30 @@ function observeCodingToolApproval(
 function approvalBindingForIssue(
   active: ActiveRuntime,
   request: CodingRuntimeApprovalIssueRequest,
-): SupervisedCodingApprovalBindingOnce {
-  return approvalBinding({
+): SupervisedCodingApprovalBinding {
+  const binding = approvalBinding({
     runId: active.context.runId,
     requestId: request.requestId,
     actionKind: request.actionKind,
     connectorScopes: request.connectorScopes,
   });
+  return request.grantScope === "task" ? taskApprovalBinding(active, binding, request) : binding;
+}
+
+function issueSupervisedApproval(
+  store: SupervisedCodingApprovalStore,
+  binding: SupervisedCodingApprovalBinding,
+  request: CodingRuntimeApprovalIssueRequest,
+  nowMs: number,
+): SupervisedCodingIssuedApproval | undefined {
+  const input = {
+    approvedByUserId: request.approvedByUserId,
+    nowMs,
+    ttlMs: request.ttlMs,
+  };
+  return binding.grantScope === "task"
+    ? store.issueTaskGrant({ ...input, binding })
+    : store.issue({ ...input, binding });
 }
 
 function activateIssuedToolApproval(
@@ -2869,7 +2892,7 @@ function activateIssuedToolApproval(
 
 function rollbackIssuedApproval(
   store: SupervisedCodingApprovalStore,
-  binding: SupervisedCodingApprovalBindingOnce,
+  binding: SupervisedCodingApprovalBinding,
   issued: SupervisedCodingIssuedApproval,
 ): void {
   const rolledBack = store.consume({
@@ -2880,17 +2903,18 @@ function rollbackIssuedApproval(
   if (rolledBack === undefined) store.invalidateRun(binding.runId);
 }
 
-function approvalBindingForEvent(
+function approvalBindingsForEvent(
   active: ActiveRuntime,
   event: SidecarPermissionEvent,
   actionKind: CodingWorkbenchSupervisedActionKind,
-): SupervisedCodingApprovalBindingOnce {
-  return approvalBinding({
+): readonly SupervisedCodingApprovalBinding[] {
+  const binding = approvalBinding({
     runId: active.context.runId,
     requestId: event.requestId,
     actionKind,
     connectorScopes: event.connectorScopes,
   });
+  return [binding, taskApprovalBinding(active, binding, event)];
 }
 
 function approvalBinding(input: {
@@ -2911,17 +2935,73 @@ function approvalBinding(input: {
   };
 }
 
+function taskApprovalBinding(
+  active: ActiveRuntime,
+  binding: SupervisedCodingApprovalBindingOnce,
+  input: Pick<
+    CodingRuntimeApprovalIssueRequest,
+    "commandTemplateId" | "safeArgumentClasses"
+  > &
+    Pick<SidecarPermissionEvent, "commandLabel">,
+): SupervisedCodingApprovalBindingTask {
+  const context = active.context;
+  return {
+    grantScope: "task",
+    runId: binding.runId,
+    requestId: binding.requestId,
+    actionKind: binding.actionKind,
+    scopeDigest: supervisedCodingTaskScopeDigest({
+      runId: binding.runId,
+      actionKind: binding.actionKind,
+      connectorScopes: binding.connectorScopes,
+    }),
+    connectorScopes: binding.connectorScopes,
+    commandTemplateId: input.commandTemplateId ?? input.commandLabel ?? binding.actionKind,
+    safeArgumentClasses: input.safeArgumentClasses ?? [],
+    workspaceDigest: supervisedCodingApprovalScopeDigest({
+      runId: binding.runId,
+      requestId: context.workspaceRoot,
+      actionKind: binding.actionKind,
+      connectorScopes: binding.connectorScopes,
+    }),
+    sourceDigest: context.branchHeadDigest,
+    policyVersion: taskPolicyVersion(context, binding),
+  };
+}
+
+function taskPolicyVersion(
+  context: ActiveRuntime["context"],
+  binding: SupervisedCodingApprovalBindingOnce,
+): string {
+  return supervisedCodingApprovalScopeDigest({
+    runId: binding.runId,
+    requestId: JSON.stringify({
+      actionClasses: context.actionClasses,
+      commandPolicy: context.commandPolicy,
+      connectorScopes: context.connectorScopes,
+      deploymentCeiling: context.deploymentCeiling,
+      networkPolicy: context.networkPolicy,
+    }),
+    actionKind: binding.actionKind,
+    connectorScopes: binding.connectorScopes,
+  });
+}
+
 function consumePresentedApproval(
   active: ActiveRuntime,
   event: SidecarPermissionEvent,
-  binding: SupervisedCodingApprovalBinding,
+  bindings: readonly SupervisedCodingApprovalBinding[],
 ): SupervisedCodingConsumedApproval | undefined {
   if (event.approvalToken === undefined) return undefined;
-  return active.approvalStore.consume({
-    approval: event.approvalToken,
-    binding,
-    nowMs: active.nowMs(),
-  });
+  for (const binding of bindings) {
+    const consumed = active.approvalStore.consume({
+      approval: event.approvalToken,
+      binding,
+      nowMs: active.nowMs(),
+    });
+    if (consumed !== undefined) return consumed;
+  }
+  return undefined;
 }
 
 function normalizedConnectorScopes(

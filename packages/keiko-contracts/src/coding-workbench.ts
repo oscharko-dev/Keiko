@@ -327,6 +327,8 @@ export type CodingWorkbenchActionPolicyDecision =
       readonly reasonCode: CodingWorkbenchPolicyDenialReason;
     };
 
+// Every mode deliberately carries the complete action-class set: mode chooses approval posture,
+// while the validated Authority Envelope and deployment ceiling narrow actual admission.
 // deepFreeze, not Object.freeze: this is the authority matrix every tri-state effect in the product
 // is read from, and a shallow freeze left each per-mode policy and its nested `effects` matrix
 // writable at runtime.
