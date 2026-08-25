@@ -1,38 +1,6 @@
 import { describe, expect, it } from "vitest";
-import type { CodingContextExcerpt, CodingContextPack } from "@oscharko-dev/keiko-contracts";
+import { excerpt, pack } from "./_codingContextPack.js";
 import { buildGenerateUnitTests } from "./generate-unit-tests.js";
-
-function excerpt(
-  text: string,
-  overrides: Partial<CodingContextExcerpt["citation"]> = {},
-): CodingContextExcerpt {
-  return {
-    citation: {
-      sourceKind: "repo-search",
-      sourceTier: "first-party-workspace",
-      id: "a-1",
-      score: 0.9,
-      rank: 0,
-      citationRef: "foo.ts",
-      byteCount: text.length,
-      truncated: false,
-      ...overrides,
-    },
-    text,
-  };
-}
-
-function pack(excerpts: readonly CodingContextExcerpt[]): CodingContextPack {
-  return {
-    schemaVersion: "1",
-    purpose: "test-generation",
-    excerpts,
-    usedBytes: excerpts.reduce((sum, e) => sum + e.citation.byteCount, 0),
-    budgetBytes: 65_536,
-    droppedForBudget: 0,
-    omissions: [],
-  };
-}
 
 describe("buildGenerateUnitTests", () => {
   it("allows patch and verification but not free tool use", () => {

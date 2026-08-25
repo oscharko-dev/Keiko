@@ -1,38 +1,6 @@
 import { describe, expect, it } from "vitest";
-import type { CodingContextExcerpt, CodingContextPack } from "@oscharko-dev/keiko-contracts";
+import { excerpt, pack } from "./_codingContextPack.js";
 import { renderRetrievedContext } from "./renderRetrievedContext.js";
-
-function excerpt(
-  text: string,
-  overrides: Partial<CodingContextExcerpt["citation"]> = {},
-): CodingContextExcerpt {
-  return {
-    citation: {
-      sourceKind: "repo-search",
-      sourceTier: "first-party-workspace",
-      id: "a-1",
-      score: 0.9,
-      rank: 0,
-      citationRef: "foo.ts",
-      byteCount: text.length,
-      truncated: false,
-      ...overrides,
-    },
-    text,
-  };
-}
-
-function pack(excerpts: readonly CodingContextExcerpt[]): CodingContextPack {
-  return {
-    schemaVersion: "1",
-    purpose: "test-generation",
-    excerpts,
-    usedBytes: 0,
-    budgetBytes: 65_536,
-    droppedForBudget: 0,
-    omissions: [],
-  };
-}
 
 describe("renderRetrievedContext", () => {
   it("returns an empty string for an empty pack", () => {
