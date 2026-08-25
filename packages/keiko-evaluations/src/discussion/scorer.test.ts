@@ -254,6 +254,17 @@ describe("scoreDiscussionQuality - correction-handling", () => {
     expect(outcomeOf(f, observationFor("evidence-check"), "correction-handling")).toBe("fail");
   });
 
+  // KEIKO-0663: expectedContradictionPolicies is optional, so a fixture that declares
+  // correction-handling without setting it must fail closed, not pass vacuously. Explicitly
+  // unset the field (not merely omitted from overrides) to prove the check itself, independent
+  // of the sibling "assumptions facet mandated" check.
+  it("fails closed when the oracle omits expectedContradictionPolicies entirely", () => {
+    const f = fixtureFor("evidence-check", ["correction-handling"], {
+      expectedContradictionPolicies: undefined,
+    });
+    expect(outcomeOf(f, observationFor("evidence-check"), "correction-handling")).toBe("fail");
+  });
+
   // KEIKO-0258: isolate the `assumptions facet mandated for correction handling` check
   // (scorer.ts:183-184). Drop assumptions from mandatedFacets while leaving the contradiction-policy
   // sibling satisfied — the oracle still lists the plan's policy so line 178-181 passes; only the

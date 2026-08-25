@@ -175,9 +175,7 @@ function scoreCorrectionHandling(
   return gate("correction-handling", [
     {
       label: "contradiction policy matches oracle expectation",
-      ok:
-        oracle.expectedContradictionPolicies === undefined ||
-        oracle.expectedContradictionPolicies.includes(policy),
+      ok: oracle.expectedContradictionPolicies?.includes(policy) ?? false,
     },
     {
       label: "assumptions facet mandated for correction handling",
