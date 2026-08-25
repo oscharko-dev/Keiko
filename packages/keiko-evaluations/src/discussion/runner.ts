@@ -81,7 +81,11 @@ function summarize(
   dimensions: readonly DiscussionScorecardEntry[],
 ): DiscussionEvalSummary {
   const allClean = dimensions.every((d) => d.failCount === 0);
-  const coversNoVoiceProfile = fixtureResults.some((f) => f.category === "no-voice");
+  // KEIKO-0391: coversNoVoiceProfile must key off the actual voice-gating signal (mirror of
+  // coversVoiceProfile), not the fixture's topic category label. Category-scoped runs (via the public
+  // discussionFixturesForCategory helper) exposed a false NO-GO whenever the scoped set genuinely
+  // covered both profiles under a non-"no-voice" category.
+  const coversNoVoiceProfile = fixtureResults.some((f) => !f.observation.gatingAllowed);
   const coversVoiceProfile = fixtureResults.some((f) => f.observation.gatingAllowed);
   return {
     totalFixtures: fixtureResults.length,

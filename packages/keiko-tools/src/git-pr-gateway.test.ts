@@ -376,6 +376,35 @@ describe("runGitPullRequest lifecycle gates", () => {
     expect(create).not.toHaveBeenCalled();
   });
 
+  // KEIKO-0147 (round 2): the required-approver membership check originally landed only in
+  // git-merge-gateway. This gate resolved a valid token straight to proceed=true, so a deployment
+  // naming specific reviewers silently accepted ANY authenticated approval. The approver here is
+  // deliberately NOT the required one, so this can never pass by coincidence.
+  it("blocks the PR when the granting user is not in the decision's requiredApprovers set", async () => {
+    const { adapter, create } = fakeAdapter(SUCCESS);
+    const repoPack: GitDeliveryRepoPolicyPack = {
+      schemaVersion: GIT_DELIVERY_POLICY_SCHEMA_VERSION,
+      repoId: "repo",
+      rules: [{ actionKind: "pr-create", decision: "approval-gated", requiredApprovers: ["lead"] }],
+    };
+    const wrongApprover: GitDeliveryApprovalRequirement = {
+      required: true,
+      approvalTokenHash: "a".repeat(64),
+      approvedByUserId: "someone-else",
+      approvedAtMs: 1,
+    };
+    const result = await runGitPullRequest(
+      { command: createCommand(), approval: wrongApprover },
+      deps({ adapter, pack: repoPack }),
+    );
+
+    expect(result.lifecycle.outcome).toMatchObject({
+      status: "blocked",
+      blockReason: "approver-not-authorized",
+    });
+    expect(create).not.toHaveBeenCalled();
+  });
+
   it("executes a permitted create and returns the provider-assigned PR number", async () => {
     const { adapter, create } = fakeAdapter(SUCCESS);
     const result = await runGitPullRequest(

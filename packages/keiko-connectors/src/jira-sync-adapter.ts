@@ -89,6 +89,12 @@ export const JIRA_SEARCH_PAGE_SIZE = 100;
 // watermark, so provider-side commit-order jitter can never lose an update. Overlap re-fetches
 // are deduplicated by fingerprints downstream.
 export const JIRA_INCREMENTAL_SYNC_OVERLAP_MS = 300_000;
+// KEIKO-0435: absorb small provider/local clock skew, but treat an `updated` timestamp more than
+// this far in the future as poisoned. Folding a `9999-01-01` entry into the watermark would
+// permanently stop the next incremental run from observing content changes while it still
+// reported completed. The threshold is small enough to catch every practical bulk-import bug and
+// generous enough to accommodate legitimate clock drift.
+export const JIRA_WATERMARK_FUTURE_SKEW_MS = 300_000;
 // Hard ceilings on pagination loops: a hostile or looping token chain terminates as malformed
 // instead of spinning until the duration budget.
 const MAX_SEARCH_REQUESTS = 500;
@@ -124,6 +130,8 @@ export interface JiraSyncSourceOptions {
   // Fires once per COMPLETE enumeration (a truncated enumeration never snapshots — the lane
   // discards the run fail-closed anyway).
   readonly onEnumerated?: ((snapshot: JiraSyncEnumerationSnapshot) => void) | undefined;
+  // Clock source for watermark/skew comparisons. Defaults to `Date.now`; tests inject.
+  readonly now?: (() => number) | undefined;
 }
 
 export interface JiraIssueRef extends AtlassianSyncItemRef {
@@ -304,29 +312,49 @@ interface JiraEnumerationPartition {
 
 // Fetch when updated at/after `<watermark> - <overlap>` (UTC compare), when the timestamp is
 // unparseable (fail closed to re-fetch), or when the key left the persisted baseline (new issue,
-// or withheld for retry). Everything else carries forward.
+// or withheld for retry). Everything else carries forward. KEIKO-0435: a persisted watermark that
+// itself lies in the future (poisoned by a hostile or bulk-imported entry) is not usable — force
+// a full re-fetch rather than trust its cutoff.
+function resolveWatermarkCutoffMs(
+  incremental: JiraIncrementalSyncOptions | undefined,
+  now: () => number,
+): number | undefined {
+  const parsed =
+    incremental === undefined
+      ? undefined
+      : parseJiraProviderTimestampMs(incremental.providerWatermark);
+  if (parsed === undefined) return undefined;
+  if (parsed > now() + JIRA_WATERMARK_FUTURE_SKEW_MS) return undefined;
+  return parsed;
+}
+
+function entryIsCarried(
+  itemKey: string,
+  entryUpdated: string | undefined,
+  cutoffBaseMs: number | undefined,
+  known: ReadonlySet<string>,
+): boolean {
+  if (cutoffBaseMs === undefined) return false;
+  if (!known.has(itemKey)) return false;
+  const updatedMs =
+    entryUpdated === undefined ? undefined : parseJiraProviderTimestampMs(entryUpdated);
+  if (updatedMs === undefined) return false;
+  return updatedMs < cutoffBaseMs - JIRA_INCREMENTAL_SYNC_OVERLAP_MS;
+}
+
 function partitionForIncremental(
   entries: readonly JiraEnumeratedIssue[],
   connectorId: string,
   incremental: JiraIncrementalSyncOptions | undefined,
+  now: () => number,
 ): JiraEnumerationPartition {
-  const cutoffBaseMs =
-    incremental === undefined
-      ? undefined
-      : parseJiraProviderTimestampMs(incremental.providerWatermark);
+  const cutoffBaseMs = resolveWatermarkCutoffMs(incremental, now);
   const known = new Set(incremental?.knownItemKeys ?? []);
   const fetchRefs: JiraIssueRef[] = [];
   const carriedItemKeys: string[] = [];
   for (const entry of entries) {
     const itemKey = `jira:${connectorId}:${entry.issueId}`;
-    const updatedMs =
-      entry.updated === undefined ? undefined : parseJiraProviderTimestampMs(entry.updated);
-    const carried =
-      cutoffBaseMs !== undefined &&
-      known.has(itemKey) &&
-      updatedMs !== undefined &&
-      updatedMs < cutoffBaseMs - JIRA_INCREMENTAL_SYNC_OVERLAP_MS;
-    if (carried) {
+    if (entryIsCarried(itemKey, entry.updated, cutoffBaseMs, known)) {
       carriedItemKeys.push(itemKey);
     } else {
       fetchRefs.push({ itemKey, issueId: entry.issueId });
@@ -335,9 +363,20 @@ function partitionForIncremental(
   return { fetchRefs, carriedItemKeys };
 }
 
-function enumerationWatermark(entries: readonly JiraEnumeratedIssue[]): string | undefined {
+// KEIKO-0435: skip entries whose `updated` value lies more than JIRA_WATERMARK_FUTURE_SKEW_MS in
+// the future — folding them would poison the persisted providerWatermark and stop subsequent
+// incremental runs from observing content changes while still reporting completed. Unparseable
+// values continue to force re-fetch by their original path (they never advance the watermark).
+function enumerationWatermark(
+  entries: readonly JiraEnumeratedIssue[],
+  now: () => number,
+): string | undefined {
+  const skewCeilingMs = now() + JIRA_WATERMARK_FUTURE_SKEW_MS;
   let latest: string | undefined;
   for (const entry of entries) {
+    if (entry.updated === undefined) continue;
+    const parsedMs = parseJiraProviderTimestampMs(entry.updated);
+    if (parsedMs !== undefined && parsedMs > skewCeilingMs) continue;
     latest = laterJiraProviderTimestamp(latest, entry.updated);
   }
   return latest;
@@ -351,7 +390,13 @@ async function enumerateJiraIssues(
   const jql = composeJiraScopeJql(options.projectKeys, options.jql);
   const walk = await walkSearchPages(context, endpoints, jql);
   if (!walk.ok) return { ok: false, reason: walk.reason };
-  const partition = partitionForIncremental(walk.entries, options.connectorId, options.incremental);
+  const now = options.now ?? ((): number => Date.now());
+  const partition = partitionForIncremental(
+    walk.entries,
+    options.connectorId,
+    options.incremental,
+    now,
+  );
   if (!walk.complete) {
     // Truncated coverage: report the overflow (the lane fails the run closed) and never snapshot
     // a partial watermark or carried set.
@@ -359,7 +404,7 @@ async function enumerateJiraIssues(
   }
   options.onEnumerated?.({
     carriedItemKeys: partition.carriedItemKeys,
-    providerWatermark: enumerationWatermark(walk.entries),
+    providerWatermark: enumerationWatermark(walk.entries, now),
   });
   return { ok: true, refs: partition.fetchRefs, complete: true };
 }
@@ -426,7 +471,14 @@ async function fetchIssueComments(
     if (!listing.ok) return collected;
     const comments = asArray(listing.body.comments);
     if (comments === undefined || comments.length === 0) return collected;
-    collected.push(...comments);
+    // Iterate rather than `push(...comments)`: spreading a very large hostile array exceeds
+    // Node's argument-count limit and throws RangeError, which would escape the lane's
+    // fail-closed classification contract (KEIKO-0295, ADR-0128 D5).
+    const commentCeiling = MAX_COMMENT_PAGES_PER_ITEM * 100;
+    for (const entry of comments) {
+      if (collected.length >= commentCeiling) return collected;
+      collected.push(entry);
+    }
     const total = listing.body.total;
     if (typeof total === "number" && collected.length >= total) return collected;
   }

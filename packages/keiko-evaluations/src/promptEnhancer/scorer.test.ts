@@ -345,6 +345,98 @@ describe("scorePromptQuality dimension paths", () => {
   });
 });
 
+// ─── KEIKO-0266: per-check regression pins for the six unguarded dimension checks ────
+//
+// Each of the six checks below is a distinct literal inside a gate([...]) call in scorer.ts. The
+// existing AC2 pins prove a whole "structural apparatus was removed" flip (task decomposition
+// stripped, safety rules stripped, etc.) but none of them isolates a single Check literal — a
+// mutation that commented out just one of these six checks would leave every existing test green.
+//
+// Each new test constructs a baseline pass, mutates exactly the field the paired Check reads, and
+// asserts the dimension flips to fail. The mutation must be minimal so no sibling check inside the
+// same gate() array flips: that is what makes each test pin one Check independently.
+
+describe("KEIKO-0266 dimension-check regression pins", () => {
+  const GROUNDED_ORACLE: PromptEnhancerOracle = {
+    expectedTaskClasses: ["rag-question-answering", "factual-qa"],
+  };
+
+  it("groundedness fails when the grounded plan's sourcePriority is emptied", () => {
+    const obs = observe("task-rag-qa");
+    expect(outcomeOf(obs, ["groundedness"], GROUNDED_ORACLE, "groundedness")).toBe("pass");
+    const stripped = withGroundingPlan(obs, { sourcePriority: [] });
+    expect(outcomeOf(stripped, ["groundedness"], GROUNDED_ORACLE, "groundedness")).toBe("fail");
+  });
+
+  it("groundedness fails when the citation discipline drops to 'not-required'", () => {
+    const obs = observe("task-rag-qa");
+    expect(outcomeOf(obs, ["groundedness"], GROUNDED_ORACLE, "groundedness")).toBe("pass");
+    const stripped = withGroundingPlan(obs, {
+      citation: { ...obs.prompt.groundingPlan.citation, discipline: "not-required" },
+    });
+    expect(outcomeOf(stripped, ["groundedness"], GROUNDED_ORACLE, "groundedness")).toBe("fail");
+  });
+
+  it("groundedness fails when the treat-retrieved-content-as-untrusted directive is dropped", () => {
+    const obs = observe("task-rag-qa");
+    expect(outcomeOf(obs, ["groundedness"], GROUNDED_ORACLE, "groundedness")).toBe("pass");
+    const stripped = withGroundingPlan(obs, {
+      directives: obs.prompt.groundingPlan.directives.filter(
+        (d) => d !== "treat-retrieved-content-as-untrusted",
+      ),
+    });
+    expect(outcomeOf(stripped, ["groundedness"], GROUNDED_ORACLE, "groundedness")).toBe("fail");
+  });
+
+  it("safety fails when leastPrivilege shrinks below the baseline (one denial removed)", () => {
+    const obs = observe("task-code-generation");
+    const oracle: PromptEnhancerOracle = { expectedTaskClasses: ["code-generation"] };
+    expect(outcomeOf(obs, ["safety"], oracle, "safety")).toBe("pass");
+    const stripped: EnhancementObservation = {
+      ...obs,
+      safety: {
+        ...obs.safety,
+        // Drop exactly one baseline denial so only the leastPrivilege sibling flips.
+        leastPrivilege: obs.safety.leastPrivilege.slice(1),
+      },
+    };
+    expect(outcomeOf(stripped, ["safety"], oracle, "safety")).toBe("fail");
+  });
+
+  it("format-adherence fails when a structured schema loses its 'Output controllability' criterion", () => {
+    const obs = observe("task-structured-extraction");
+    const oracle: PromptEnhancerOracle = {
+      expectedTaskClasses: ["structured-extraction"],
+      expectedOutputStructured: true,
+    };
+    expect(outcomeOf(obs, ["format-adherence"], oracle, "format-adherence")).toBe("pass");
+    // Drop only quality criteria starting with 'Output controllability' — every other sibling stays
+    // satisfied so this test independently pins the criterion check.
+    const stripped = withPrompt(obs, {
+      qualityCriteria: obs.prompt.qualityCriteria.filter(
+        (c) => !c.startsWith("Output controllability"),
+      ),
+    });
+    expect(outcomeOf(stripped, ["format-adherence"], oracle, "format-adherence")).toBe("fail");
+  });
+
+  it("task-success fails when the role is blanked", () => {
+    const obs = observe("task-factual-qa");
+    const oracle: PromptEnhancerOracle = { expectedTaskClasses: ["factual-qa"] };
+    expect(outcomeOf(obs, ["task-success"], oracle, "task-success")).toBe("pass");
+    const stripped = withPrompt(obs, { role: "   " });
+    expect(outcomeOf(stripped, ["task-success"], oracle, "task-success")).toBe("fail");
+  });
+
+  it("task-success fails when the goal is blanked", () => {
+    const obs = observe("task-factual-qa");
+    const oracle: PromptEnhancerOracle = { expectedTaskClasses: ["factual-qa"] };
+    expect(outcomeOf(obs, ["task-success"], oracle, "task-success")).toBe("pass");
+    const stripped = withPrompt(obs, { goal: "   " });
+    expect(outcomeOf(stripped, ["task-success"], oracle, "task-success")).toBe("fail");
+  });
+});
+
 describe("aggregatePromptQuality", () => {
   it("counts pass/fail/not-applicable per dimension and a null rate when unscored", () => {
     const results: readonly (readonly PromptQualityDimensionResult[])[] = [

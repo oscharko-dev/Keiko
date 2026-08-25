@@ -228,6 +228,77 @@ describe("connected-context evidence", () => {
     expect(audit.files[0]?.excerpts[0]?.contentSha256).not.toBe(sha256Hex(PEM_FAKE));
   });
 
+  // KEIKO-1032: `plan.clarification.reason` used to be persisted as raw text — the sibling fields
+  // (planId, anchor terms, query text) all hash, but this one field bypassed redaction. The
+  // "never persist query text" invariant the module states in its header MUST hold for this field
+  // too. This pin fails if a future edit re-inlines the raw string into the audit.
+  it("persists clarification reason as a hash, never as raw text (KEIKO-1032)", () => {
+    const store = createInMemoryEvidenceStore();
+    const clarificationReasonText = `Ambiguous scope: ${SK_FAKE} and ${GHP_FAKE}`;
+    persistConnectedContextEvidence(
+      {
+        runId: "grounded-clarification-1",
+        modelId: "example-chat-model",
+        workspaceRoot: `/repo/${SK_FAKE}`,
+        chatId: "chat-1",
+        plan: {
+          planId: `plan-${SK_FAKE}`,
+          state: "clarify",
+          clarification: { reason: clarificationReasonText },
+        },
+        pack: pack(),
+        citationCount: 1,
+        elapsedMs: 42,
+        startedAt: NOW,
+        finishedAt: NOW + 42,
+      },
+      { store, env: {}, additionalSecrets: [SK_FAKE, GHP_FAKE, PEM_FAKE] },
+    );
+    const manifest = requireManifest(loadEvidence(store, "grounded-clarification-1"));
+    const audit = requireConnectedContext(manifest);
+    const plan = audit.plan;
+    if (plan === undefined) throw new Error("expected plan");
+    // The reason must never appear in serialized form — neither raw, nor with the secret words
+    // scrubbed but the surrounding sentence intact.
+    const serialized = JSON.stringify(manifest);
+    expect(serialized).not.toContain(clarificationReasonText);
+    expect(serialized).not.toContain("Ambiguous scope");
+    // The hash is present and shaped like the other hashes on the plan.
+    expect(plan.clarificationReasonHash).toBeDefined();
+    expect(plan.clarificationReasonHash).toMatch(/^[0-9a-f]{64}$/u);
+    // The hash is over the redacted text — a raw-text hash would leak. The redactor scrubs the
+    // secret substrings first (same treatment as planIdHash / anchorTermHashes).
+    const redactedReason = `Ambiguous scope: [REDACTED] and [REDACTED]`;
+    expect(plan.clarificationReasonHash).toBe(sha256Hex(redactedReason));
+    expect(plan.clarificationReasonHash).not.toBe(sha256Hex(clarificationReasonText));
+  });
+
+  it("omits clarificationReasonHash when the plan has no clarification (KEIKO-1032)", () => {
+    const store = createInMemoryEvidenceStore();
+    persistConnectedContextEvidence(
+      {
+        runId: "grounded-clarification-none",
+        modelId: "example-chat-model",
+        workspaceRoot: `/repo/${SK_FAKE}`,
+        chatId: "chat-1",
+        plan: {
+          planId: `plan-${SK_FAKE}`,
+          state: "ready",
+        },
+        pack: pack(),
+        citationCount: 1,
+        elapsedMs: 42,
+        startedAt: NOW,
+        finishedAt: NOW + 42,
+      },
+      { store, env: {}, additionalSecrets: [SK_FAKE, GHP_FAKE, PEM_FAKE] },
+    );
+    const audit = requireConnectedContext(
+      requireManifest(loadEvidence(store, "grounded-clarification-none")),
+    );
+    expect(audit.plan?.clarificationReasonHash).toBeUndefined();
+  });
+
   it("persists redacted ranking diagnostics when present, omits them otherwise (M2)", () => {
     const store = createInMemoryEvidenceStore();
     const withDiagnostics: ConnectedContextPack = {

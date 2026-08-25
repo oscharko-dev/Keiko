@@ -252,8 +252,16 @@ const RECOVERY_DISPOSITION_BY_BLOCK_REASON: Readonly<
   "provider-capability-absent": "policy-forbidden",
   // The approval grant expired: the operator can obtain a fresh approval.
   "approval-expired": "user-fixable",
+  // KEIKO-0147: the granting user is not in the decision's requiredApprovers set. The operator
+  // needs to obtain a fresh approval from one of the named approvers — user-fixable, not a
+  // permanent policy denial.
+  "approver-not-authorized": "user-fixable",
   // The action exceeds the risk-class ceiling: forbidden until the ceiling changes.
   "risk-class-ceiling": "policy-forbidden",
+  // KEIKO-0154: the readiness re-read reported a different head than the command's
+  // expectedHeadRefHash (or the command omitted the guard). The operator refreshes the
+  // readiness read and re-issues the merge with the new head — user-fixable.
+  "head-hash-mismatch": "user-fixable",
   // Fail-closed deny with no applicable rule: forbidden until a rule permits it.
   "no-applicable-rule": "policy-forbidden",
 } as const;

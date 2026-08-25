@@ -183,7 +183,10 @@ function defaultSleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-function retryDelayMs(attempt: number, retryAfterMs: number | undefined): number {
+// ADR-0128 D3 backoff formula. Exported as the single canonical helper so every retry surface
+// (sync lane, write-http executor) computes identical delays; a divergent local copy would allow
+// silent drift when the constants above are re-tuned.
+export function retryDelayMs(attempt: number, retryAfterMs: number | undefined): number {
   if (retryAfterMs !== undefined && Number.isFinite(retryAfterMs) && retryAfterMs >= 0) {
     return Math.min(Math.trunc(retryAfterMs), ATLASSIAN_SYNC_RETRY_MAX_DELAY_MS);
   }

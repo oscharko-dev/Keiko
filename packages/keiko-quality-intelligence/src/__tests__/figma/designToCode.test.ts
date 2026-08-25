@@ -535,6 +535,40 @@ describe("htmlCssAdapter — sanitized screen file names (Fix #7)", () => {
     expect(html).toContain('href="./s-home.html"');
     expect(html).not.toContain('href="s-home.html"');
   });
+
+  it("makes every emitted screen file path globally unique across late-collision suffixes (KEIKO-0414)", () => {
+    // Regression pin for KEIKO-0414: buildSafeNameIndex's counter-per-base scheme let a suffix
+    // collide with an earlier screen's already-emitted final name. Sanitize:
+    //   "12-34-1" → "12-34-1"        (count 0)  → final "12-34-1"
+    //   "12:34"   → "12-34"          (count 0)  → final "12-34"
+    //   "12;34"   → "12-34"          (count 1)  → final "12-34-1"   <-- collides with first
+    // and emitHtmlCss then writes two screens to `screens/12-34-1.html`, silently discarding
+    // one screen from the artifact when the two entries are later Map/Set-keyed by path.
+    const artifact = emitCode(
+      {
+        screens: [
+          screen("12-34-1", "First", node("root-a", "container")),
+          screen("12:34", "Second", node("root-b", "container")),
+          screen("12;34", "Third", node("root-c", "container")),
+        ],
+        tokens: NO_TOKENS,
+        hints: [],
+      },
+      htmlCssAdapter,
+    );
+    const screenPaths = artifact.files.map((f) => f.path).filter((p) => p.startsWith("screens/"));
+    expect(new Set(screenPaths).size).toBe(screenPaths.length);
+    // Each original screen id must be preserved as a data-attribute in exactly one file, so no
+    // screen has been dropped by the de-duplication.
+    const contents = artifact.files
+      .filter((f) => f.path.startsWith("screens/"))
+      .map((f) => f.contents);
+    const hasScreenId = (id: string): boolean =>
+      contents.filter((c) => c.includes(`data-screen-id="${id}"`)).length === 1;
+    expect(hasScreenId("12-34-1")).toBe(true);
+    expect(hasScreenId("12:34")).toBe(true);
+    expect(hasScreenId("12;34")).toBe(true);
+  });
 });
 
 // ─── Fix #8: CSS value injection prevention ──────────────────────────────────
@@ -569,6 +603,52 @@ describe("htmlCssAdapter — CSS value sanitization (Fix #8)", () => {
     expect(css).toContain("--font-1");
     // The curly braces and semicolons are stripped; the remainder is quoted.
     expect(css).toContain('"');
+  });
+
+  it("escapes backslashes in fontFamily so a trailing '\\' cannot swallow the closing quote (KEIKO-0455)", () => {
+    // Regression pin for KEIKO-0455: safeFontFamily only escaped '"' as `\22 `. A fontFamily
+    // ending in an ODD number of literal U+005C backslashes then emitted `"…\\"` where the last
+    // backslash escaped the closing quote, producing an unclosed CSS string that swallowed
+    // subsequent declarations. Emit two typography tokens: the first ending in ONE backslash,
+    // the second a plain family. After the fix both --font-1 and --font-2 must be present as
+    // their own declarations AND no raw backslash may survive into the emitted string.
+    const hostileTokens: DesignTokens = {
+      colors: [],
+      typography: [
+        {
+          id: "typo:evil",
+          kind: "typography",
+          // The JS source below is TWO backslashes so the actual runtime string contains
+          // exactly ONE trailing U+005C — the odd-count vulnerability class.
+          fontFamily: "evilFont\\",
+          fontSize: 16,
+          fontWeight: 400,
+          lineHeight: 24,
+        },
+        {
+          id: "typo:second",
+          kind: "typography",
+          fontFamily: "SecondFamily",
+          fontSize: 14,
+          fontWeight: 500,
+          lineHeight: 20,
+        },
+      ],
+      spacing: [],
+      radius: [],
+    };
+    const artifact = emitCode(
+      { screens: [loginScreen()], tokens: hostileTokens, hints: [] },
+      htmlCssAdapter,
+    );
+    const css = fileByPath(artifact, "tokens.css");
+    // The core invariant: after each font declaration the CSS string must be closed. A raw
+    // U+005C sitting immediately before the terminating `"` of a font-family literal is the
+    // fingerprint of the vulnerability — it escapes that closing quote and merges the next
+    // declaration into the current string. Assert it never appears.
+    expect(css).not.toMatch(/\\";/u);
+    // The second declaration must survive as its own line — proving the first's string closed.
+    expect(css).toMatch(/--font-2:[^;]*"SecondFamily"\s*;/u);
   });
 
   it("drops invalid (non-hex) color tokens rather than emitting them verbatim", () => {
@@ -749,6 +829,73 @@ describe("htmlCssAdapter — layout/sizing/cornerRadius/typography CSS (additive
       htmlCssAdapter,
     );
     expect(JSON.stringify(a)).toBe(JSON.stringify(b));
+  });
+});
+
+// ─── classHash pin (Issue #2903 audit) ─────────────────────────────────────────
+//
+// classHash (htmlCssAdapter.ts) moved from a UTF-16-code-unit `charCodeAt` loop to iterating
+// Unicode CODE POINTS via `codePointAt`, so a surrogate pair (an emoji, an astral character)
+// hashes as ONE unit instead of two. classHash itself is not exported, and is not exported purely
+// for this test — it is reached through the only place its output is externally observable: the
+// "-${classHash(id)}" suffix `nodeClass` appends to the SECOND of two Figma ids that sanitize to
+// the same class-name slug (see "keeps CSS classes distinct..." above). Golden values are captured
+// once from the real implementation and pinned as literals — deliberately, unlike the rest of this
+// file's fixtures — because the point of THIS pin is to freeze ordinary-input churn that would
+// otherwise silently rename every generated CSS class.
+
+describe("htmlCssAdapter — classHash pin (Issue #2903 audit)", () => {
+  // A node needs SOME CSS-affecting field (here: layout) before htmlCssAdapter assigns it a class
+  // at all — an id-only node with no layout/sizing/cornerRadius/typography emits no class
+  // attribute, so `nodeClass`/`classHash` are never reached (see "emits no <style> block and no
+  // class attribute..." below).
+  const collidingChild = (id: string): IrNode => node(id, "container", { layout: { mode: "row" } });
+
+  const collisionClassNames = (firstId: string, secondId: string): readonly string[] => {
+    const s = screen(
+      "s-hash",
+      "Hash",
+      node("root", "container", {
+        children: [collidingChild(firstId), collidingChild(secondId)],
+      }),
+    );
+    const artifact = emitCode({ screens: [s], tokens: NO_TOKENS, hints: [] }, htmlCssAdapter);
+    const html = fileByPath(artifact, "screens/s-hash.html");
+    return [...html.matchAll(/class="([^"]+)"/gu)].map((match) => match[1] ?? "");
+  };
+
+  it("pins classHash output for a few ASCII ids (ordinary-input churn guard)", () => {
+    // Three ids share one sanitized base ("n-alpha-one"): the first is unsuffixed, the second and
+    // third each get their OWN classHash(id) suffix.
+    const s = screen(
+      "s-hash-ascii",
+      "HashAscii",
+      node("root", "container", {
+        children: [
+          collidingChild("alpha:one"),
+          collidingChild("alpha;one"),
+          collidingChild("alpha/one"),
+        ],
+      }),
+    );
+    const artifact = emitCode({ screens: [s], tokens: NO_TOKENS, hints: [] }, htmlCssAdapter);
+    const html = fileByPath(artifact, "screens/s-hash-ascii.html");
+    const classNames = [...html.matchAll(/class="([^"]+)"/gu)].map((match) => match[1]);
+    expect(classNames).toHaveLength(3);
+    expect(classNames[0]).toBe("n-alpha-one");
+    expect(classNames[1]).toBe("n-alpha-one-13pyxh0");
+    expect(classNames[2]).toBe("n-alpha-one-ntm6fk");
+  });
+
+  it("hashes an id containing an astral character (emoji) without throwing, pinned and stable", () => {
+    const classNames = collisionClassNames("glyph:\u{1F642}", "glyph;\u{1F642}");
+    expect(classNames).toHaveLength(2);
+    expect(classNames[1]).toBe("n-glyph---jrlieg");
+
+    // Stable across two calls: re-running emitCode on an equivalent fixture is byte-identical, so
+    // the surrogate-pair id neither throws nor produces a non-deterministic hash.
+    const again = collisionClassNames("glyph:\u{1F642}", "glyph;\u{1F642}");
+    expect(again).toEqual(classNames);
   });
 });
 

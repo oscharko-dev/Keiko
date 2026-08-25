@@ -62,6 +62,13 @@ export interface EvaluationFixture {
   // Whether the runner should drive the workflow in apply mode (writes via a recording writer + fake
   // spawn) so the test-pass-rate and verification-completeness dimensions score real pass/fail.
   readonly apply?: boolean | undefined;
+  // KEIKO-0232 — the exit code the runner's fake verification spawn should return for this fixture.
+  // Undefined (or omitted) preserves the historical default of 0 (successful verification). Set to a
+  // non-zero value on an apply-mode fixture designed to prove the test-pass-rate dimension actually
+  // reports failure when the fake verification exits non-zero — without this hook the previous
+  // hardcoded `fakeSpawn(0, "ok")` constant made every apply-mode fixture score `test-pass-rate=pass`
+  // regardless, an anti-#2643 fixture-parity gap.
+  readonly applyVerificationExitCode?: number | undefined;
   // The scripted model transcript for offline mode. Each entry is a NormalizedResponse or an Error.
   // The runner builds a ScriptedModelPort from this array and injects it as deps.model.
   readonly mockTranscript: readonly (NormalizedResponse | Error)[];

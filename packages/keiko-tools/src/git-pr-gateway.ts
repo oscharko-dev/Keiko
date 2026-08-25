@@ -53,6 +53,7 @@ import type {
 } from "./git-mutation-orchestrator.js";
 import type { GitMutationFailureCategory } from "./git-mutation-taxonomy.js";
 import { gitMutationCategoryForExecutionResult } from "./git-mutation-taxonomy.js";
+import { approverIsNotAuthorized } from "./git-approval-gate.js";
 
 const UTF8 = new TextEncoder();
 
@@ -574,8 +575,25 @@ function resolvePrGate(
     }
   }
   if (decision.outcome === "constrained") return { proceed: true };
+  return resolvePrApprovalGate(decision, approval, now);
+}
+
+// Split out of resolvePrGate to keep that function under the repository complexity cap.
+function resolvePrApprovalGate(
+  decision: GitDeliveryPolicyDecision & { outcome: "approval-gated" },
+  approval: GitDeliveryApprovalRequirement,
+  now: number,
+): PrGate {
   const state = approvalState(approval, now);
-  if (state === "valid") return { proceed: true };
+  if (state === "valid") {
+    // KEIKO-0147: a valid token is not authority on its own — the granting identity must be in
+    // the decision's required-approver set when it names one. Same predicate as the merge,
+    // publish, and mutation gates.
+    if (approverIsNotAuthorized(decision, approval)) {
+      return { proceed: false, status: "policy-block", reason: "approver-not-authorized" };
+    }
+    return { proceed: true };
+  }
   if (state === "expired") {
     return { proceed: false, status: "policy-block", reason: "approval-expired" };
   }

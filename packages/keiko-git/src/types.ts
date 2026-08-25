@@ -15,6 +15,13 @@ export interface GitProcessResult {
    * always sets it.
    */
   readonly timedOut?: boolean | undefined;
+  /**
+   * The bounded caller aborted the run via the abortSignal. Also implies `truncated` at the
+   * runner (the child is killed to keep the caller unblocked), so `truncated`/`timedOut` alone
+   * cannot distinguish an aborted run from a byte-cap cut. Optional for the same reason as
+   * `timedOut`; the real runner always sets it.
+   */
+  readonly aborted?: boolean | undefined;
 }
 
 export interface GitProcessOptions {

@@ -41,7 +41,13 @@ export type GitRemoteFailureReason =
   | "git-missing"
   // Keiko's own wall-clock budget fired.
   | "timeout"
-  // Keiko's own byte cap cut the output and killed the child. NOT a timeout.
+  // The bounded caller aborted the run through the abortSignal. Distinct from the wall-clock
+  // timeout AND from the byte cap: an aborted run means the caller disconnected, not that the
+  // server ran out of time or that git produced too much output. Ranked before timeout/truncated
+  // in the classifier because the runner sets `truncated` on abort too — a classifier that
+  // read `truncated` alone would report every aborted run as `output-truncated`.
+  | "cancelled"
+  // Keiko's own byte cap cut the output and killed the child. NOT a timeout, NOT a cancellation.
   | "output-truncated"
   | "unsafe-repository"
   | "untrusted-host-key"
@@ -59,6 +65,7 @@ export const GIT_REMOTE_FAILURE_REASONS: readonly GitRemoteFailureReason[] = [
   "none",
   "git-missing",
   "timeout",
+  "cancelled",
   "output-truncated",
   "unsafe-repository",
   "untrusted-host-key",
@@ -154,6 +161,20 @@ function remoteFailurePhraseMatch(text: string): GitRemoteFailureReason | undefi
  */
 export function classifyGitRemoteFailure(result: GitProcessResult): GitRemoteFailureReason {
   if (result.exitCode === 127) return "git-missing";
+  // Abort outranks the deadline, the phrase match AND the truncated cap.
+  //
+  // Against `timedOut` this is a real race, not a theoretical one: `onAbort` sets `aborted` and
+  // starts the KILL_GRACE_MS escalation, but it does NOT clear the timeout timer — only `settle`
+  // does, and that runs when the child finally closes. A caller who aborts shortly before the
+  // deadline therefore lands with BOTH flags set, and ranking `timedOut` first reported that
+  // caller-initiated cancellation as a `timeout`, erasing the very distinction KEIKO-0184 added
+  // this reason for. The caller's cancellation is the first cause, so it wins.
+  //
+  // Against the phrase match and the cap: an aborted run typically has no discriminating remote
+  // output (the caller disconnected before git finished), and the runner also sets `truncated` on
+  // abort, so a bare truncated check would masquerade the cancellation as an output-cap event.
+  // See GitRemoteFailureReason above.
+  if (result.aborted === true) return "cancelled";
   if (result.timedOut === true) return "timeout";
   const matched = remoteFailurePhraseMatch(`${result.stdout}\n${result.stderr}`.toLowerCase());
   if (matched !== undefined) return matched;

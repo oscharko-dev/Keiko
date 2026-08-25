@@ -173,6 +173,28 @@ interface PersistAndCheckOptions {
   readonly finishedAt: number;
 }
 
+// KEIKO-0372: extract the WorkflowTerminalStatus collapse so runner.test.ts can drive a
+// synthesized status (including "cancelled") through it directly, and so the invariant lives in a
+// named, exported helper the server's statusOrFailed can be compared against side-by-side. Before
+// this extraction the runner's collapse was a two-way ternary that reported any non-rejected/failed
+// status as "completed" — including "cancelled" — diverging from packages/keiko-server/src/run-engine.ts
+// which preserves "cancelled" as its own terminal. That is exactly the #2643 anti-pattern (two
+// consumers restating the same formula until one drifts).
+export function collapseEvaluationRunStatus(
+  rawStatus: unknown,
+): "completed" | "cancelled" | "failed" {
+  const status = typeof rawStatus === "string" ? rawStatus : "failed";
+  if (status === "cancelled") {
+    return "cancelled";
+  }
+  if (status === "rejected" || status === "failed") {
+    return "failed";
+  }
+  return "completed";
+}
+
+// Module-private: `collapseEvaluationRunStatus` above is the seam the KEIKO-0372 regression test
+// needs, so this stays unexported rather than widening the package surface for nothing.
 function persistAndCheck(options: PersistAndCheckOptions): {
   readonly manifestValid: boolean;
   readonly evidenceRef: string;
@@ -189,14 +211,13 @@ function persistAndCheck(options: PersistAndCheckOptions): {
     startedAt,
     finishedAt,
   } = options;
-  const status = typeof report.status === "string" ? report.status : "failed";
   const evidence = persistWorkflowEvidence(
     {
       runId,
       fingerprint: evalFingerprint(fixture, workspaceRoot, modelId),
       modelId: typeof report.modelId === "string" ? report.modelId : "eval-model",
       kind: fixture.workflowKind,
-      status: status === "rejected" || status === "failed" ? "failed" : "completed",
+      status: collapseEvaluationRunStatus(report.status),
       startedAt,
       finishedAt,
       workspaceRoot,
@@ -275,7 +296,10 @@ async function runFixture(
       model: resolveModelPort(fixture, options, deps, modelId),
       writer,
       sink,
-      spawn: fixture.apply === true ? fakeSpawn(0, "ok") : undefined,
+      spawn:
+        fixture.apply === true
+          ? fakeSpawn(fixture.applyVerificationExitCode ?? 0, "ok")
+          : undefined,
       now,
       idSource,
     });

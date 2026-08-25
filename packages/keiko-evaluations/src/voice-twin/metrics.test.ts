@@ -10,7 +10,10 @@
 //   - deriveProviderFailureRecoveryMetric structural properties
 // Each assertion is mutation-robust.
 
-import { VOICE_TRANSCRIPT_CONSUMABLE_STATES } from "@oscharko-dev/keiko-contracts";
+import {
+  VOICE_REPLAY_CAPACITY,
+  VOICE_TRANSCRIPT_CONSUMABLE_STATES,
+} from "@oscharko-dev/keiko-contracts";
 import { describe, expect, it } from "vitest";
 import {
   VOICE_TWIN_REPLAY_CAPACITY,
@@ -26,6 +29,15 @@ describe("VOICE_TWIN_REPLAY_CAPACITY", () => {
   it("is 200 (mirroring the keiko-server and keiko-ui ring size)", () => {
     // Mutation guard: if the constant is changed, the buffer model no longer mirrors the runtime.
     expect(VOICE_TWIN_REPLAY_CAPACITY).toBe(200);
+  });
+
+  // KEIKO-0380 drift pin: the local constant must be the contract-owned value, not a restated literal.
+  // If the local definition is switched back to `= 200`, this test still passes today — but if the
+  // contract owner (keiko-contracts) ever changes `VOICE_REPLAY_CAPACITY`, the local restated literal
+  // would diverge and this identity assertion would go RED, which is the drift signal the fix exists
+  // to raise (previously the three consumers each restated `= 200` with no cross-consumer coupling).
+  it("is the same object identity as the contract-owned VOICE_REPLAY_CAPACITY (no local restatement)", () => {
+    expect(VOICE_TWIN_REPLAY_CAPACITY).toBe(VOICE_REPLAY_CAPACITY);
   });
 });
 
@@ -116,6 +128,39 @@ describe("deriveBufferBoundednessMetric", () => {
     expect(metric.admittedCount).toBe(3);
     expect(metric.ephemeralBuffered).toBe(false);
     expect(metric.maxObservedLength).toBe(3);
+  });
+
+  // ─── KEIKO-0170 — the ephemeralBuffered invariant is independently observable ───
+  // Under the default admission (the contract classifier), no ephemeral kind can enter the ring, so
+  // ephemeralBuffered is structurally false — that is the invariant the pure model enforces. To PROVE
+  // the check has real discriminating power over the ring's contents (and is not just a dead read of
+  // the same eligibility function that admitted the entry), a permissive admission override lets
+  // ephemeral kinds into the ring; the invariant check then MUST flip TRUE because it reads the ring
+  // against the fixed contract classifier, not against the injected admission predicate. If a future
+  // regression collapsed the two sources back onto one (e.g., re-reading the admission predicate for
+  // the invariant), this test would go GREEN even under a lax admission — the exact structural gap
+  // the previous derive suffered from. (Reproduces the mustFailBeforeFix guarantee for KEIKO-0170.)
+  it("flips ephemeralBuffered=true when an ephemeral kind is admitted by a lax override", () => {
+    const kinds: readonly ["transcript.partial", "transcript.committed"] = [
+      "transcript.partial",
+      "transcript.committed",
+    ];
+    // A permissive admission override that admits every kind, simulating a broken admission gate.
+    const metric = deriveBufferBoundednessMetric(kinds, 5, () => true);
+    // Both kinds enter the ring; the invariant check reads it against isVoiceReplayEligible and finds
+    // an ephemeral entry, flipping ephemeralBuffered true.
+    expect(metric.admittedCount).toBe(2);
+    expect(metric.ephemeralBuffered).toBe(true);
+  });
+
+  it("default admission (no override) never buffers an ephemeral kind, even under a large input", () => {
+    // Baseline: without the override the ephemeral guard fires as before.
+    const kinds = Array.from({ length: 12 }, (_, index) =>
+      index % 2 === 0 ? ("transcript.partial" as const) : ("transcript.committed" as const),
+    );
+    const metric = deriveBufferBoundednessMetric(kinds, 12);
+    expect(metric.ephemeralBuffered).toBe(false);
+    expect(metric.admittedCount).toBe(6);
   });
 });
 

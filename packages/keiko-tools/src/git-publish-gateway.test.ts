@@ -256,6 +256,22 @@ describe("classifyGitPublishRejection", () => {
     );
   });
 
+  // KEIKO-0215: the publish gateway used to carry its own drift-prone remote-unavailable phrase
+  // set (5 phrases) that had fallen behind keiko-git's authoritative set (10 phrases). These
+  // three phrases were absent from the local copy, so an unreachable host classified as
+  // "unknown" and the operator got a "provider-rejected" verdict for a network outage. The
+  // publish gateway now delegates to classifyGitRemoteFailure for the remote/auth/permission
+  // vocabulary so ONE table governs both clone/fetch/pull and push.
+  it("recognises the full remote-unavailable phrase set inherited from keiko-git", () => {
+    for (const stderr of [
+      "ssh: connect to host github.com port 22: Network is unreachable",
+      "ssh: connect to host github.com port 22: No route to host",
+      "ssh: Could not resolve hostname github.com: Temporary failure in name resolution",
+    ]) {
+      expect(classifyGitPublishRejection(stderr)).toBe("remote-unavailable");
+    }
+  });
+
   it("covers every rejection reason in the error-code + recovery maps", () => {
     for (const reason of GIT_PUBLISH_REJECTION_REASONS) {
       expect(typeof gitPublishRejectionToErrorCode(reason)).toBe("string");
@@ -435,6 +451,38 @@ describe("runGitPublish — policy gate (AC2/AC4)", () => {
     });
     expect(result.lifecycle.outcome.status).toBe("succeeded");
     expect(publish).toHaveBeenCalledOnce();
+  });
+
+  // KEIKO-0147 (round 2): the fix originally landed ONLY in git-merge-gateway. resolvePublishGate
+  // is Gate 2 of runGitPublish — it guards the actual push — and still returned proceed=true for
+  // ANY unexpired token. The test above passes only by coincidence: its approver happens to equal
+  // the single required approver. This pin uses a MISMATCHED identity, so it fails against the
+  // unguarded resolver and can never be satisfied by coincidence.
+  it("blocks the push when the granting user is not in the decision's requiredApprovers set", async () => {
+    const wrongApprover: GitDeliveryApprovalRequirement = {
+      required: true,
+      approvalTokenHash: "a".repeat(64),
+      approvedByUserId: "someone-else",
+      approvedAtMs: 0,
+    };
+    const { adapter, publish } = fakeAdapter(SUCCESS);
+    const result = await runGitPublish(
+      { command: command(), approval: wrongApprover },
+      {
+        adapter,
+        snapshot: snapshot(),
+        orgPolicyPack: approvalGateOrgPack(),
+        repoPolicyPack: approvalGateRepoPack(),
+        now: () => 1,
+        newActionId: () => "a1",
+      },
+    );
+
+    expect(result.lifecycle.outcome).toMatchObject({
+      status: "blocked",
+      blockReason: "approver-not-authorized",
+    });
+    expect(publish).not.toHaveBeenCalled();
   });
 
   it("keeps an org protected-branch denial when the repo adds an approval gate", async () => {

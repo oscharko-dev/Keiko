@@ -44,6 +44,7 @@ interface RunState {
   readonly stderr: OutputAccumulator;
   truncated: boolean;
   timedOut: boolean;
+  aborted: boolean;
   settled: boolean;
   killTimer: NodeJS.Timeout | undefined;
 }
@@ -54,6 +55,7 @@ function newRunState(): RunState {
     stderr: { chunks: [], bytes: 0 },
     truncated: false,
     timedOut: false,
+    aborted: false,
     settled: false,
     killTimer: undefined,
   };
@@ -98,14 +100,28 @@ function runResult(
     stderr: Buffer.concat(state.stderr.chunks).toString("utf8"),
     truncated: state.truncated,
     timedOut: state.timedOut,
+    aborted: state.aborted,
   };
 }
 
-const SPAWN_ERROR_RESULT: Omit<GitProcessResult, "truncated" | "timedOut"> = {
+const SPAWN_ERROR_RESULT: Omit<GitProcessResult, "truncated" | "timedOut" | "aborted"> = {
   exitCode: 127,
   signal: null,
   stdout: "",
   stderr: "git executable unavailable",
+};
+
+// KEIKO-0263: a resolver rejection whose cause is "an executable exists on PATH but it lives in
+// a location this process must not trust" (workspace-contained, group- or world-writable) is a
+// distinct operator concern from "git is not installed". Callers see the same exit-127 shape as
+// today (existing consumers unchanged), but the stderr now names the class so a planted-binary
+// indicator is not silently squashed into "git executable unavailable". No filesystem path is
+// leaked — the message states the class, never the location.
+const SPAWN_UNTRUSTED_RESULT: Omit<GitProcessResult, "truncated" | "timedOut" | "aborted"> = {
+  exitCode: 127,
+  signal: null,
+  stdout: "",
+  stderr: "git executable in untrusted location refused",
 };
 
 function refusedOptionResult(forbidden: string): GitProcessResult {
@@ -127,6 +143,7 @@ function abortedProcessResult(): GitProcessResult {
     stderr: "",
     truncated: true,
     timedOut: false,
+    aborted: true,
   };
 }
 
@@ -156,7 +173,12 @@ function wireGitProcessEvents(
     captureChunk(state, child, state.stderr, chunk, maxBytes);
   });
   child.on("error", () => {
-    settle({ ...SPAWN_ERROR_RESULT, truncated: state.truncated, timedOut: state.timedOut });
+    settle({
+      ...SPAWN_ERROR_RESULT,
+      truncated: state.truncated,
+      timedOut: state.timedOut,
+      aborted: state.aborted,
+    });
   });
   child.on("close", (exitCode, signal) => {
     settle(runResult(state, exitCode, signal));
@@ -178,12 +200,14 @@ function createGitProcessRunnerWithFixedArgs(
         return;
       }
       const env = buildEnv();
-      const executable = resolveGitExecutable(env, options.cwd);
-      if (executable === undefined) {
-        resolveResult({ ...SPAWN_ERROR_RESULT, truncated: false, timedOut: false });
+      const resolution = resolveGitExecutable(env, options.cwd);
+      if (!resolution.ok) {
+        const base =
+          resolution.reason === "untrusted-location" ? SPAWN_UNTRUSTED_RESULT : SPAWN_ERROR_RESULT;
+        resolveResult({ ...base, truncated: false, timedOut: false, aborted: false });
         return;
       }
-      const child = spawn(executable, [...fixedArgs, ...args], {
+      const child = spawn(resolution.path, [...fixedArgs, ...args], {
         cwd: options.cwd,
         env,
         shell: false,
@@ -193,6 +217,7 @@ function createGitProcessRunnerWithFixedArgs(
       const state = newRunState();
       const onAbort = (): void => {
         state.truncated = true;
+        state.aborted = true;
         terminateWithEscalation(state, child);
       };
       options.abortSignal?.addEventListener("abort", onAbort, { once: true });

@@ -273,7 +273,10 @@ export interface EvidenceConnectedContextPlan {
   readonly anchorKinds: Record<string, number>;
   readonly anchorTermHashes: readonly string[];
   readonly ringKinds: readonly string[];
-  readonly clarificationReason: string | undefined;
+  // KEIKO-1032: the clarification reason is captured as a SHA-256 hash of the redacted string
+  // (matching planIdHash / anchorTermHashes treatment). Raw reason text is never persisted — this
+  // module's "never persist query text" invariant applies to this field too.
+  readonly clarificationReasonHash: string | undefined;
 }
 
 export interface EvidenceConnectedContextAudit {

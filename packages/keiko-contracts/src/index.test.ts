@@ -894,7 +894,8 @@ describe("keiko-contracts package surface", () => {
     // Count assertions are intentional surface pins; bump deliberately when #472+ extends the surface.
     expect(GIT_DELIVERY_ACTION_KINDS).toHaveLength(11);
     expect(GIT_DELIVERY_RISK_CLASSES).toHaveLength(4);
-    expect(GIT_DELIVERY_BLOCK_REASONS).toHaveLength(6);
+    // KEIKO-0147 added approver-not-authorized; KEIKO-0154 added head-hash-mismatch.
+    expect(GIT_DELIVERY_BLOCK_REASONS).toHaveLength(8);
     expect(GIT_DELIVERY_PROVIDER_CAPABILITIES).toHaveLength(5);
     expect(GIT_DELIVERY_RULE_DECISIONS).toHaveLength(4);
     expect(GIT_DELIVERY_CHECKS_OVERALL_STATUSES).toHaveLength(4);

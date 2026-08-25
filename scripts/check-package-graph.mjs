@@ -168,6 +168,11 @@ const ALLOWED_WORKSPACE_DEPENDENCIES = new Map([
     "@oscharko-dev/keiko-tools",
     [
       "@oscharko-dev/keiko-contracts",
+      // KEIKO-0215: git-publish-gateway delegates its remote-unavailable/auth/permission phrase
+      // set to keiko-git's classifyGitRemoteFailure so one shared table governs clone/fetch/pull
+      // AND push (the local 5-phrase copy had drifted behind keiko-git's 10-phrase table).
+      // The dependency-cruiser boundary already permits this edge (adr-0019-direction-3c).
+      "@oscharko-dev/keiko-git",
       "@oscharko-dev/keiko-sandbox",
       "@oscharko-dev/keiko-security",
       "@oscharko-dev/keiko-workspace",

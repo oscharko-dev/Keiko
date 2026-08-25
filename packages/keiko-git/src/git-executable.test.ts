@@ -1,4 +1,12 @@
-import { chmodSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  mkdirSync,
+  mkdtempSync,
+  realpathSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -31,7 +39,10 @@ describe.skipIf(process.platform === "win32")("resolveGitExecutable", () => {
   it("returns the absolute real path of a trusted executable outside the workspace", () => {
     const bin = temporary("keiko-git-executable-bin-");
     const executable = writeGit(bin);
-    expect(resolveGitExecutable({ PATH: bin }, workspace)).toBe(executable);
+    expect(resolveGitExecutable({ PATH: bin }, workspace)).toEqual({
+      ok: true,
+      path: executable,
+    });
   });
 
   it("resolves a PATHEXT executable under simulated Windows trust semantics", () => {
@@ -39,36 +50,95 @@ describe.skipIf(process.platform === "win32")("resolveGitExecutable", () => {
     const executable = join(bin, "git.exe");
     writeFileSync(executable, "#!/bin/sh\nexit 0\n", { mode: 0o755 });
     chmodSync(bin, 0o777);
-    expect(resolveGitExecutable({ PATH: bin, PATHEXT: ".EXE" }, workspace, "win32")).toBe(
-      executable,
-    );
+    expect(resolveGitExecutable({ PATH: bin, PATHEXT: ".EXE" }, workspace, "win32")).toEqual({
+      ok: true,
+      path: executable,
+    });
   });
 
   it("rejects a workspace-contained executable", () => {
     const bin = join(workspace, "bin");
     mkdirSync(bin);
     writeGit(bin);
-    expect(resolveGitExecutable({ PATH: bin }, workspace)).toBeUndefined();
+    expect(resolveGitExecutable({ PATH: bin }, workspace)).toEqual({
+      ok: false,
+      reason: "untrusted-location",
+    });
   });
 
-  it("rejects a group-writable executable directory", () => {
+  // KEIKO-0263: the resolver now returns a discriminated union so the runner (and any other
+  // caller) can tell "an executable exists but lives in an untrusted location" apart from
+  // "no git on PATH at all". Both used to be a bare undefined mapping to the same operator
+  // message, which hid planted-binary indicators from diagnostics.
+  it("rejects a group-writable executable directory with the untrusted-location reason", () => {
     const bin = temporary("keiko-git-executable-bin-");
     writeGit(bin);
     chmodSync(bin, 0o775);
-    expect(resolveGitExecutable({ PATH: bin }, workspace)).toBeUndefined();
+    expect(resolveGitExecutable({ PATH: bin }, workspace)).toEqual({
+      ok: false,
+      reason: "untrusted-location",
+    });
+  });
+
+  it("reports not-found when no PATH entry carries a git executable", () => {
+    const bin = temporary("keiko-git-executable-empty-bin-");
+    expect(resolveGitExecutable({ PATH: bin }, workspace)).toEqual({
+      ok: false,
+      reason: "not-found",
+    });
   });
 
   it("accepts a group-writable toolcache owned by a group unavailable to the caller", () => {
     const bin = temporary("keiko-git-executable-bin-");
     const executable = writeGit(bin);
     chmodSync(bin, 0o775);
-    expect(resolveGitExecutable({ PATH: bin }, workspace, process.platform, new Set())).toBe(
-      executable,
-    );
+    expect(resolveGitExecutable({ PATH: bin }, workspace, process.platform, new Set())).toEqual({
+      ok: true,
+      path: executable,
+    });
   });
 
   it("ignores relative and missing PATH entries", () => {
-    expect(resolveGitExecutable({ PATH: "relative-bin" }, workspace)).toBeUndefined();
-    expect(resolveGitExecutable({ PATH: join(workspace, "missing") }, workspace)).toBeUndefined();
+    expect(resolveGitExecutable({ PATH: "relative-bin" }, workspace)).toEqual({
+      ok: false,
+      reason: "not-found",
+    });
+    expect(resolveGitExecutable({ PATH: join(workspace, "missing") }, workspace)).toEqual({
+      ok: false,
+      reason: "not-found",
+    });
+  });
+
+  // KEIKO-0296: the existing writability guard only exercises the `dirname(candidate)` entry of
+  // protectedPaths. These two pin the `real` and `dirname(real)` entries — the primary defense
+  // against PATH-based binary-planting via symlinks and against a candidate file whose own bits
+  // are group/world-writable even when its containing directory is not.
+  it("rejects a trusted-directory symlink whose resolved target lives in a writable directory", () => {
+    // Untrusted target directory (group-writable) holds the real git.
+    const targetBin = temporary("keiko-git-executable-target-");
+    const target = writeGit(targetBin);
+    chmodSync(targetBin, 0o775);
+
+    // The PATH entry itself is a trusted directory (0o755) with a symlink named `git` that
+    // points at the writable target — a classic binary-planting shape.
+    const linkBin = temporary("keiko-git-executable-link-");
+    symlinkSync(target, join(linkBin, "git"));
+
+    expect(resolveGitExecutable({ PATH: linkBin }, workspace)).toEqual({
+      ok: false,
+      reason: "untrusted-location",
+    });
+  });
+
+  it("rejects a group-writable executable file even when its directory is not writable", () => {
+    const bin = temporary("keiko-git-executable-bin-");
+    const executable = writeGit(bin);
+    // Directory: trusted (0o755). File itself: group-writable (0o775). The protectedPaths list
+    // has to include `real` for this check to bite — dropping it would silently ship this class.
+    chmodSync(executable, 0o775);
+    expect(resolveGitExecutable({ PATH: bin }, workspace)).toEqual({
+      ok: false,
+      reason: "untrusted-location",
+    });
   });
 });

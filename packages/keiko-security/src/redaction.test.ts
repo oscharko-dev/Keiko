@@ -460,6 +460,28 @@ describe("deepRedactStrings", () => {
     expect(original.a).toContain("z".repeat(20));
   });
 
+  // KEIKO-0188: JSON.parse'd input carrying `__proto__` is a prototype-pollution vector when the
+  // rebuilt object is seeded with a plain `{}` — the assignment `out.__proto__ = child` sets the
+  // reconstructed object's prototype instead of storing an own-property. The redactor now seeds
+  // with Object.create(null); the fields of the hostile `__proto__` payload therefore cannot end
+  // up on any other object's prototype chain.
+  it("does not let a __proto__ key in the input pollute the reconstructed prototype chain", () => {
+    const redactor = createAuditRedactor({}, {});
+    // JSON.parse (not an object literal) so the __proto__ key survives as an own-property on the
+    // input, faithfully modelling data that reached the redactor from a network read.
+    const rawJson = `{"a":"ok","__proto__":{"polluted":"ghp_${"x".repeat(30)}"}}`;
+    const input = JSON.parse(rawJson) as { a: string };
+    const result = deepRedactStrings(input, redactor) as { readonly a: string };
+    // The result must not carry the injected key on its prototype chain — the key never became
+    // a real prototype assignment, so the field cannot be read off any plain object via the
+    // prototype either.
+    expect((result as { polluted?: unknown }).polluted).toBeUndefined();
+    // And Object.prototype was not mutated for anyone else.
+    expect(({} as { polluted?: unknown }).polluted).toBeUndefined();
+    // The regular string leaf still redacts as normal — the fix does not skip content processing.
+    expect(result.a).toBe("ok");
+  });
+
   // #1573/#1606 — `/api/git/summary` and `/api/git/remotes` serialize `git remote -v` URLs as the
   // fetchUrl/pushUrl string leaves of a GitRemoteSummary[] and return the payload through
   // deepRedactStrings(body, createAuditRedactor(...)). This locks in that a colon-less

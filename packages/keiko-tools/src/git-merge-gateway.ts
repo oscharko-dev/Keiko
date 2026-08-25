@@ -63,6 +63,7 @@ import type {
 } from "./git-mutation-orchestrator.js";
 import type { GitMutationFailureCategory } from "./git-mutation-taxonomy.js";
 import { gitMutationCategoryForExecutionResult } from "./git-mutation-taxonomy.js";
+import { approverIsNotAuthorized } from "./git-approval-gate.js";
 
 // ─── Merge command + narrow adapter port (no generic exec) ───────────────────────────────────────────
 // The command carries the structured operands the content-free GitDeliveryMergeInputs deliberately omits
@@ -614,7 +615,15 @@ function resolveMergeGate(
     return { proceed: false, status: "policy-block", reason: effective.blockReason };
   }
   const state = approvalState(approval, now);
-  if (state === "valid") return { proceed: true };
+  if (state === "valid") {
+    // KEIKO-0147: an unexpired token is not enough — when the decision names a required-approver
+    // set, the identity that granted the approval must be a member. Shared with the publish, PR,
+    // and mutation gates so the rule cannot drift between them.
+    if (approverIsNotAuthorized(decision, approval)) {
+      return { proceed: false, status: "policy-block", reason: "approver-not-authorized" };
+    }
+    return { proceed: true };
+  }
   if (state === "expired") {
     return { proceed: false, status: "policy-block", reason: "approval-expired" };
   }
@@ -763,6 +772,30 @@ function providerPullRequestMatchesCommand(
   );
 }
 
+// KEIKO-0154: derive a head-hash mismatch verdict. Fail-closed in two cases:
+//   1) the command carries expectedHeadRefHash and the provider's readiness read reports a
+//      different head — the branch advanced between approval and execute.
+//   2) the provider reports a head hash but the command omits expectedHeadRefHash — the caller
+//      could have pinned the merge and didn't, so we refuse to merge against an unpinned head.
+// A provider that reports no head hash at all leaves this check inert (nothing to compare against);
+// the merge PUT's own -f sha= guard is not offered by the adapter in that case either.
+function mergeHeadHashMismatch(
+  command: GitMergeCommand,
+  provider: GitMergeProviderReadiness,
+): "mismatched" | "unpinned" | undefined {
+  const providerHead = provider.headRefHash;
+  if (providerHead === undefined) return undefined;
+  if (command.expectedHeadRefHash === undefined) return "unpinned";
+  // KEIKO-0154: compare case-insensitively. Git SHAs are hex and the merge route's own request
+  // validator accepts mixed case, while the provider always reports lowercase — so a correct but
+  // upper/mixed-case pin would otherwise be reported as "mismatched" and block a legitimate merge.
+  // Length equality is still required on purpose: prefix-matching an abbreviated SHA would WEAKEN
+  // the guard (a short hex prefix is far easier to collide), and this is a fail-closed gate.
+  return command.expectedHeadRefHash.toLowerCase() === providerHead.toLowerCase()
+    ? undefined
+    : "mismatched";
+}
+
 function providerMismatchReadiness(summary: GitMergeReadinessSummary): GitMergeReadinessSummary {
   return {
     ...summary,
@@ -840,6 +873,26 @@ async function runReadinessAndMerge(
     return {
       lifecycle: readinessBlockLifecycle(prep, request.approval, mismatchReadiness, true),
       readiness: mismatchReadiness,
+    };
+  }
+  // KEIKO-0154: the readiness re-read of the provider head must match the command's
+  // expectedHeadRefHash before the merge PUT is issued. Before this check the readiness read
+  // fetched provider.headRefHash but never compared it, so the guard on the adapter side
+  // (opportunistic -f sha=…) only bit when the caller happened to set the field — a merge
+  // command without expectedHeadRefHash silently succeeded against whatever head the branch had
+  // acquired since the approval was granted. Ranked AFTER the provider-PR-shape check so a
+  // completely mismatched PR still reports the shape mismatch, not a head-hash mismatch.
+  const headMismatch = mergeHeadHashMismatch(request.command, provider);
+  if (headMismatch !== undefined) {
+    return {
+      lifecycle: lifecycleFor(
+        prep,
+        request.approval,
+        { status: "blocked", category: "policy-block", blockReason: "head-hash-mismatch" },
+        "policy",
+        undefined,
+      ),
+      readiness: summary,
     };
   }
 

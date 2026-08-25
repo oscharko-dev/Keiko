@@ -388,4 +388,91 @@ describe("fetchItem — page bodies, comments, and the failure matrix", () => {
     expect(outcome.item.contentHtml).toContain("<p>small</p>");
     expect(outcome.item.contentHtml).not.toContain("ccccc");
   });
+
+  // KEIKO-0453: the file header states a 401 is always run-fatal. A 401 during the footer-comment
+  // fetch was previously swallowed (fetchCommentBodies ignored walkPaginatedList's outcome), so
+  // the page composed without comments and the run reported completed. The header invariant must
+  // hold — a 401 on the comment lane fails the run fatally with `auth-failed`.
+  it("propagates a 401 on the footer-comments fetch as run-fatal auth-failed (KEIKO-0453)", async () => {
+    const http = createInMemoryConfluenceFixture({
+      baseUrl: BASE_URL,
+      spaces: [space("ENG", "100", [fixturePage(13, { comments: ["<p>never served</p>"] })])],
+      override: (request) => {
+        if (new URL(request.url).pathname.endsWith("/footer-comments")) {
+          return { kind: "response", status: 401, bodyText: "", bodyBytes: 0, truncated: false };
+        }
+        return undefined;
+      },
+    });
+    expect(await fetchPage(http, "13")).toEqual({ kind: "fatal", reason: "auth-failed" });
+  });
+
+  // KEIKO-0467 (audit remediation): the flat `COMPOSED_HTML_ENVELOPE_BYTES = 1_024` allowance
+  // reservation under-counted this page's real envelope cost — a 500-char CJK title alone composes
+  // to 1_500 UTF-8 bytes, well past the flat guess once the rest of the envelope is added. With
+  // the old flat guess, this exact 48_600-byte comment fit the (too generous) remaining allowance,
+  // the enriched composition overflowed the 2 000 000-byte cap by ~320 bytes, and the OLD final
+  // check discarded the WHOLE page — losing a citable document over optional enrichment. The fix
+  // sizes the allowance from the real body-only composition, so the same comment is now correctly
+  // excluded up front and the page's body is still emitted.
+  it("emits the page body-only when comments would push a body-fitting page over the cap (KEIKO-0467)", async () => {
+    const title = "你".repeat(500);
+    const storageBody = "x".repeat(1_950_000);
+    const comment = "y".repeat(48_600);
+    const http = createInMemoryConfluenceFixture({
+      baseUrl: BASE_URL,
+      spaces: [space("ENG", "100", [fixturePage(40, { title, storageBody, comments: [comment] })])],
+    });
+    const outcome = await fetchPage(http, "40");
+    expect(outcome.kind).toBe("item");
+    if (outcome.kind !== "item") return;
+    expect(outcome.item.byteLength).toBeLessThanOrEqual(ATLASSIAN_SYNC_ITEM_MAX_BYTES);
+    expect(outcome.item.contentHtml).not.toContain("<h2>Comments</h2>");
+    expect(outcome.item.contentHtml).toContain("x".repeat(50));
+  });
+
+  // Guard against over-correcting: a page whose BODY ALONE (envelope + title + storage body, no
+  // comments at all) already exceeds the cap must still skip with the existing typed reason — the
+  // body-only fallback introduced above must never be mistaken for "an oversized page always
+  // succeeds." The 500-char "&"-heavy title (each "&" expands to "&amp;" once HTML-escaped) is
+  // what tips this specific body over the cap; a flat, unescaped magic number would not model that.
+  it("still skips a page whose body alone exceeds the cap (guard against over-correcting, KEIKO-0467)", async () => {
+    const title = "&".repeat(500);
+    const storageBody = "x".repeat(1_998_500);
+    const http = createInMemoryConfluenceFixture({
+      baseUrl: BASE_URL,
+      spaces: [space("ENG", "100", [fixturePage(41, { title, storageBody })])],
+    });
+    const outcome = await fetchPage(http, "41");
+    expect(outcome).toEqual({ kind: "skipped", reason: "bounds-exceeded" });
+  });
+
+  // KEIKO-0467: `page.payload.storageBody.length` was UTF-16 code-unit length. A CJK body of
+  // 3 bytes per character was under-reported by ~3x, over-budgeting the comment allowance and
+  // letting the composed item overflow the per-item byte ceiling. Strengthened by the audit
+  // remediation from an either/or into a strict "item" requirement: comments are supplementary
+  // enrichment (file header), and the body-only fallback now guarantees a body-fitting page is
+  // never skipped for oversized enrichment, so this must always be "item", never "skipped".
+  it("measures the composed item byteLength in UTF-8 bytes (CJK never overflows the per-item cap)", async () => {
+    // 500 000 CJK chars (each 3 UTF-8 bytes) = ~1.5 MB body — fits comfortably under the 2 MB cap.
+    // Plus one 200 000-char comment (~600 KB) that does not fit the remaining ~500 KB allowance and
+    // is correctly excluded. A `.length`-based (UTF-16) regression on the body would under-count it
+    // by ~3x here, inflating the allowance and wrongly admitting the comment — the byteLength
+    // equality assertion below catches that class even though the body-only fallback would
+    // otherwise mask it from the outcome `kind` alone.
+    const cjkBody = "你".repeat(500_000);
+    const cjkComment = "你".repeat(200_000);
+    const http = createInMemoryConfluenceFixture({
+      baseUrl: BASE_URL,
+      spaces: [
+        space("ENG", "100", [fixturePage(14, { storageBody: cjkBody, comments: [cjkComment] })]),
+      ],
+    });
+    const outcome = await fetchPage(http, "14");
+    expect(outcome.kind).toBe("item");
+    if (outcome.kind !== "item") return;
+    expect(outcome.item.byteLength).toBeLessThanOrEqual(ATLASSIAN_SYNC_ITEM_MAX_BYTES);
+    expect(outcome.item.byteLength).toBe(new TextEncoder().encode(outcome.item.contentHtml).length);
+    expect(outcome.item.contentHtml).not.toContain("<h2>Comments</h2>");
+  });
 });

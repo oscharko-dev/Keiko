@@ -311,6 +311,14 @@ const CLONE_FAILURE: Readonly<Record<Exclude<GitRemoteFailureReason, "none">, Cl
       code: "GIT_CLONE_TIMEOUT",
       message: "Repository clone did not finish within the bounded execution window.",
     },
+    cancelled: {
+      // The bounded caller aborted the clone (usually because the originating request
+      // disconnected). Not a byte-cap event and not a timeout — reported as a request-scope
+      // cancellation so operators do not misdiagnose it as an output-cap failure.
+      status: 499,
+      code: "GIT_CLONE_CANCELLED",
+      message: "Repository clone was cancelled before it finished.",
+    },
     "output-truncated": {
       status: 409,
       code: "GIT_CLONE_OUTPUT_TRUNCATED",

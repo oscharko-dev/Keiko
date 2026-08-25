@@ -48,6 +48,7 @@ import {
   ATLASSIAN_SYNC_ITEM_MAX_BYTES,
   ATLASSIAN_SYNC_PAGINATED_FETCH_TIMEOUT_MS,
   type AtlassianSyncFetchContext,
+  type AtlassianSyncItem,
   type AtlassianSyncItemFetchOutcome,
   type AtlassianSyncEnumerationOutcome,
   type AtlassianSyncItemRef,
@@ -61,6 +62,32 @@ export const CONFLUENCE_LIST_RESPONSE_MAX_BYTES = 1_000_000;
 // terminates the run as malformed instead of spinning until the duration budget. A repeated
 // cursor is also classified as `malformed-payload` immediately (below), so a self-referential
 // A→A or A→B→A chain fails closed after two requests rather than 500.
+// Shared UTF-8 accountant. `String.prototype.length` is UTF-16 code-unit length; ADR-0128 D5's
+// byte bounds are enforced in UTF-8 bytes because that is the transport encoding.
+const UTF8_ENCODER = new TextEncoder();
+
+// KEIKO-0467 (audit remediation): a flat `COMPOSED_HTML_ENVELOPE_BYTES = 1_024` guess for the
+// document envelope + escaped title under-counted long/CJK titles (a 500-char title alone can
+// reach 1500-3000 UTF-8 bytes), and `collectCommentBodies` charged only each comment's body
+// bytes, never its `<section>` wrapper markup — with up to MAX_COMMENT_PAGES_PER_ITEM * 100
+// comments that is tens of thousands of un-budgeted bytes. Both under-counts let the enriched
+// composition cross ATLASSIAN_SYNC_ITEM_MAX_BYTES even though the page body fit comfortably on
+// its own, and the final check then discarded the WHOLE page for what was only oversized
+// enrichment — contradicting this file's own "a comment-lane problem must never fail its page"
+// contract (see header).
+//
+// Fix: the envelope/title allowance is no longer estimated. `fetchConfluenceItem` (below) composes
+// the real body-only document (`composePageHtml` with an empty comment list) and measures its
+// actual UTF-8 byte length via `composeItem`, so the title and document shell are charged exactly
+// — never guessed. Each comment's `<section>` wrapper is charged alongside its body
+// (`COMMENT_WRAPPER_BYTES`, near `collectCommentBodies`) so the common case trims comments to fit
+// without needing a fallback. As defense in depth against any residual under-count (e.g. the
+// one-time `<h2>Comments</h2>` wrapper, present only when comments exist, which is deliberately
+// left uncharged to keep the accounting simple), an enriched composition that still exceeds the
+// cap is re-composed WITHOUT comments and that body-only document is emitted — never discarding
+// the page for oversized enrichment. Only a page whose BODY ALONE exceeds the cap still skips with
+// the existing `bounds-exceeded` reason.
+
 const MAX_PAGINATION_REQUESTS = 500;
 // Footer-comment pages harvested per item (bounded enrichment).
 const MAX_COMMENT_PAGES_PER_ITEM = 10;
@@ -344,6 +371,15 @@ async function fetchPagePayload(
   return parsePagePayload(result.bodyText, pageId);
 }
 
+// KEIKO-0467: the `<section data-connector-comment="true">...</section>` wrapper that
+// `commentsSection` adds around every comment body, derived from the actual markup so the
+// allowance charge always matches what gets composed — never a hand-maintained guess. Previously
+// uncharged: with up to MAX_COMMENT_PAGES_PER_ITEM * 100 comments per item that is tens of
+// thousands of un-budgeted bytes.
+const COMMENT_WRAPPER_BYTES = UTF8_ENCODER.encode(
+  '<section data-connector-comment="true"></section>',
+).length;
+
 function collectCommentBodies(
   results: readonly unknown[],
   into: string[],
@@ -353,7 +389,7 @@ function collectCommentBodies(
     const record = asRecord(entry);
     const body = record === undefined ? undefined : storageBodyOf(record);
     if (body === undefined || body.length === 0) continue;
-    const size = new TextEncoder().encode(body).length;
+    const size = UTF8_ENCODER.encode(body).length + COMMENT_WRAPPER_BYTES;
     if (size > byteAllowance.remaining) return false;
     byteAllowance.remaining -= size;
     into.push(body);
@@ -361,27 +397,36 @@ function collectCommentBodies(
   return true;
 }
 
+interface CommentFetchOutcome {
+  readonly bodies: readonly string[];
+  // Only 'auth-failed' propagates — the header contract makes 401 fatal for every lane, comment
+  // lane included (KEIKO-0453). Other comment-lane failures still degrade to a page-without-
+  // comments so the page body remains citable.
+  readonly fatalReason: AtlassianSyncFailureReason | undefined;
+}
+
 // Footer comments are bounded enrichment: harvested until the per-item byte allowance or page
-// ceiling is reached, and ANY comment-lane failure (except 401, which is run-fatal upstream via
-// the page fetch) degrades to "page without comments" rather than failing the page.
+// ceiling is reached. Non-auth comment-lane failures degrade to "page without comments" rather
+// than failing the page. A 401 during comment retrieval is propagated as run-fatal per the
+// file header (KEIKO-0453 — the header claim was previously not enforced for this lane).
 async function fetchCommentBodies(
   context: AtlassianSyncFetchContext,
   endpoints: ConfluenceEndpoints,
   pageId: string,
   byteAllowanceRemaining: number,
-): Promise<readonly string[]> {
+): Promise<CommentFetchOutcome> {
   const bodies: string[] = [];
   const allowance = { remaining: Math.max(0, byteAllowanceRemaining) };
-  if (allowance.remaining > 0) {
-    let pages = 0;
-    const url = apiUrl(endpoints, `pages/${pageId}/footer-comments?body-format=storage&limit=100`);
-    await walkPaginatedList(context, endpoints, url, (results) => {
-      pages += 1;
-      if (!collectCommentBodies(results, bodies, allowance)) return false;
-      return pages < MAX_COMMENT_PAGES_PER_ITEM;
-    });
-  }
-  return bodies;
+  if (allowance.remaining <= 0) return { bodies, fatalReason: undefined };
+  let pages = 0;
+  const url = apiUrl(endpoints, `pages/${pageId}/footer-comments?body-format=storage&limit=100`);
+  const walk = await walkPaginatedList(context, endpoints, url, (results) => {
+    pages += 1;
+    if (!collectCommentBodies(results, bodies, allowance)) return false;
+    return pages < MAX_COMMENT_PAGES_PER_ITEM;
+  });
+  const fatalReason = !walk.ok && walk.reason === "auth-failed" ? walk.reason : undefined;
+  return { bodies, fatalReason };
 }
 
 // ─── The AtlassianSyncSource implementation ───────────────────────────────────
@@ -420,6 +465,34 @@ async function enumerateConfluencePages(
   return { ok: true, refs, complete: true };
 }
 
+interface SizedItem {
+  readonly item: AtlassianSyncItem;
+  readonly byteLength: number;
+}
+
+// Composes one item candidate and measures its REAL UTF-8 byte length in the same step, so every
+// size decision in `fetchConfluenceItem` below is against actual composed bytes, never an
+// estimate (KEIKO-0467).
+function composeItem(
+  ref: ConfluencePageRef,
+  payload: PagePayload,
+  comments: readonly string[],
+): SizedItem {
+  const contentHtml = composePageHtml(payload.title, payload.storageBody, comments);
+  const byteLength = UTF8_ENCODER.encode(contentHtml).length;
+  return {
+    byteLength,
+    item: {
+      itemKey: ref.itemKey,
+      title: payload.title,
+      relativePath: `pages/${ref.pageId}.html`,
+      contentHtml,
+      byteLength,
+      ...(payload.webuiPath === undefined ? {} : { webuiPath: payload.webuiPath }),
+    },
+  };
+}
+
 async function fetchConfluenceItem(
   ref: ConfluencePageRef,
   context: AtlassianSyncFetchContext,
@@ -429,25 +502,31 @@ async function fetchConfluenceItem(
   if (page.kind === "missing") return { kind: "missing" };
   if (page.kind === "fatal") return { kind: "fatal", reason: page.reason };
   if (page.kind === "skipped") return { kind: "skipped", reason: page.reason };
-  const bodyBytes = page.payload.storageBody.length;
+  const bodyOnly = composeItem(ref, page.payload, []);
+  // The BODY ALONE (no enrichment) is the one part of this item that can never be dropped — if it
+  // alone exceeds the cap the page is skipped exactly like the pre-existing oversized-page
+  // contract (guards against over-correcting: enrichment fallback below must never mask this).
+  if (bodyOnly.byteLength > ATLASSIAN_SYNC_ITEM_MAX_BYTES) {
+    return { kind: "skipped", reason: "bounds-exceeded" };
+  }
   const comments = await fetchCommentBodies(
     context,
     endpoints,
     ref.pageId,
-    ATLASSIAN_SYNC_ITEM_MAX_BYTES - bodyBytes,
+    ATLASSIAN_SYNC_ITEM_MAX_BYTES - bodyOnly.byteLength,
   );
-  const contentHtml = composePageHtml(page.payload.title, page.payload.storageBody, comments);
-  return {
-    kind: "item",
-    item: {
-      itemKey: ref.itemKey,
-      title: page.payload.title,
-      relativePath: `pages/${ref.pageId}.html`,
-      contentHtml,
-      byteLength: new TextEncoder().encode(contentHtml).length,
-      ...(page.payload.webuiPath === undefined ? {} : { webuiPath: page.payload.webuiPath }),
-    },
-  };
+  // KEIKO-0453: propagate a 401 during comment retrieval as run-fatal per the file header
+  // (auth-failed is always fatal, regardless of which lane surfaced it).
+  if (comments.fatalReason !== undefined) {
+    return { kind: "fatal", reason: comments.fatalReason };
+  }
+  if (comments.bodies.length === 0) return { kind: "item", item: bodyOnly.item };
+  const enriched = composeItem(ref, page.payload, comments.bodies);
+  // KEIKO-0467: comments are supplementary enrichment (file header) — an enriched composition
+  // that still overflows the cap (a residual under-count, e.g. the one-time comments-section
+  // wrapper) degrades to the body-only document instead of discarding the whole page.
+  const sized = enriched.byteLength > ATLASSIAN_SYNC_ITEM_MAX_BYTES ? bodyOnly : enriched;
+  return { kind: "item", item: sized.item };
 }
 
 // Build the Confluence sync source for one connector scope. Transport, budget, deadline, retry,

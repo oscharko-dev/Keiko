@@ -98,6 +98,8 @@ export type {
   BrowserEvent,
   ToolShapingDegradedReason,
   ToolShapingDegradedEvent,
+  SinkDegradedReason,
+  SinkDegradedEvent,
   HarnessEvent,
 } from "./harness.js";
 export { TERMINAL_STATES, DEFAULT_LIMITS, HARNESS_CODES, HARNESS_VERSION } from "./harness.js";
@@ -1954,6 +1956,7 @@ export {
   VOICE_POLICY_DECISIONS,
   VOICE_PROTOCOL_ERROR_CODES,
   VOICE_CONTROL_MESSAGE_REPLAY,
+  VOICE_REPLAY_CAPACITY,
   VOICE_CONTROL_MESSAGE_REDACTION,
   VOICE_PROFILE_ALLOWED_MESSAGE_KINDS,
   VOICE_PROFILE_MEDIA_TRANSPORT,
@@ -3586,6 +3589,7 @@ export type {
   PromptSafetyAssessment,
 } from "./prompt-enhancer-safety.js";
 export {
+  BASELINE_LEAST_PRIVILEGE,
   PROMPT_SAFETY_RULE_IDS,
   PROMPT_SAFETY_VIOLATION_CODES,
   PROMPT_SAFETY_SEVERITIES,

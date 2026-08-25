@@ -4,6 +4,23 @@ import { delimiter, dirname, isAbsolute, join, relative } from "node:path";
 const GROUP_WRITE_BIT = 0o020;
 const WORLD_WRITE_BIT = 0o002;
 
+// KEIKO-0263: the resolver used to collapse "no git on PATH" and "found a candidate but it lives
+// in an untrusted location (workspace-contained OR group/world-writable)" into a bare undefined.
+// The runner mapped that bare undefined to a generic exit-127 "git executable unavailable"
+// result — losing the planted-binary indicator that operators need to tell "install git" apart
+// from "PATH has been salted". The discriminated union below keeps the two apart at the boundary
+// while remaining fully redacted (no filesystem path leaves this module).
+export type GitExecutableResolution =
+  | { readonly ok: true; readonly path: string }
+  | { readonly ok: false; readonly reason: "not-found" | "untrusted-location" };
+
+type TrustedCandidateResult =
+  | { readonly ok: true; readonly path: string }
+  // Distinguished so the outer loop can keep hunting past an ENOENT while still remembering that
+  // it rejected an actual candidate for security reasons — the first "untrusted" verdict wins
+  // over the fall-through "not-found".
+  | { readonly ok: false; readonly reason: "not-found" | "untrusted-location" };
+
 function executableNames(env: NodeJS.ProcessEnv, platform: NodeJS.Platform): readonly string[] {
   if (platform !== "win32") return ["git"];
   const extensions = (env.PATHEXT ?? ".COM;.EXE;.BAT;.CMD")
@@ -37,18 +54,30 @@ function trustedCandidate(
   cwd: string,
   platform: NodeJS.Platform,
   groupIds: ReadonlySet<number> | undefined,
-): string | undefined {
+): TrustedCandidateResult {
   try {
     accessSync(candidate, constants.X_OK);
+  } catch {
+    // The most common shape: this PATH entry does not carry a git executable. Keep looking.
+    return { ok: false, reason: "not-found" };
+  }
+  try {
     const real = realpathSync(candidate);
-    if (isContained(realpathSync(cwd), real)) return undefined;
+    if (isContained(realpathSync(cwd), real)) {
+      return { ok: false, reason: "untrusted-location" };
+    }
     if (platform !== "win32") {
       const protectedPaths = [dirname(candidate), real, dirname(real)];
-      if (protectedPaths.some((path) => isWritableByCaller(path, groupIds))) return undefined;
+      if (protectedPaths.some((path) => isWritableByCaller(path, groupIds))) {
+        return { ok: false, reason: "untrusted-location" };
+      }
     }
-    return real;
+    return { ok: true, path: real };
   } catch {
-    return undefined;
+    // realpath/stat threw on a candidate that was executable a moment ago: treat as not-found so
+    // the outer loop keeps scanning; a truly hostile disappearing entry cannot then hide behind
+    // an "untrusted-location" verdict.
+    return { ok: false, reason: "not-found" };
   }
 }
 
@@ -57,14 +86,16 @@ export function resolveGitExecutable(
   cwd: string,
   platform: NodeJS.Platform = process.platform,
   groupIds: ReadonlySet<number> | undefined = activeGroupIds(),
-): string | undefined {
+): GitExecutableResolution {
   const names = executableNames(env, platform);
+  let sawUntrusted = false;
   for (const entry of (env.PATH ?? "").split(delimiter)) {
     if (!isAbsolute(entry)) continue;
     for (const name of names) {
       const resolved = trustedCandidate(join(entry, name), cwd, platform, groupIds);
-      if (resolved !== undefined) return resolved;
+      if (resolved.ok) return resolved;
+      if (resolved.reason === "untrusted-location") sawUntrusted = true;
     }
   }
-  return undefined;
+  return { ok: false, reason: sawUntrusted ? "untrusted-location" : "not-found" };
 }

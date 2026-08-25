@@ -38,6 +38,7 @@
   },
   "dependencies": {
     "@oscharko-dev/keiko-contracts": "0.3.17",
+    "@oscharko-dev/keiko-git": "0.3.17",
     "@oscharko-dev/keiko-sandbox": "0.3.17",
     "@oscharko-dev/keiko-security": "0.3.17",
     "@oscharko-dev/keiko-workspace": "0.3.17",

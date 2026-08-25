@@ -442,4 +442,13 @@ describe("classifyCloneOutcome", () => {
     const outcome = classifyCloneOutcome(cloneResult({ stderr: secretish }));
     expect(JSON.stringify(outcome?.body)).not.toContain("hunter2");
   });
+
+  // KEIKO-0341/#2903: `aborted: true` (the bounded caller disconnected) must classify as its own
+  // request-scope cancellation, never as the output-truncation or generic-failure rows it would
+  // otherwise fall through to.
+  it("reports a caller-aborted clone as a 499 cancellation, not truncation or a generic failure", () => {
+    const outcome = classifyCloneOutcome(cloneResult({ truncated: true, aborted: true }));
+    expect(outcome?.status).toBe(499);
+    expect(cloneCode(cloneResult({ truncated: true, aborted: true }))).toBe("GIT_CLONE_CANCELLED");
+  });
 });

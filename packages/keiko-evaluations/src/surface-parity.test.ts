@@ -3,7 +3,12 @@
 // allPassed must be true on the real codebase (structural regression guard). No network or model.
 
 import { describe, expect, it } from "vitest";
-import { checkSurfaceParity, type SurfaceParityDeps } from "./surface-parity.js";
+import {
+  checkSurfaceParity,
+  type SurfaceParityCliIo,
+  type SurfaceParityCliRunner,
+  type SurfaceParityDeps,
+} from "./surface-parity.js";
 import {
   UNIT_TEST_WORKFLOW_DESCRIPTOR,
   BUG_INVESTIGATION_WORKFLOW_DESCRIPTOR,
@@ -173,6 +178,137 @@ describe("SDK exports", () => {
 });
 
 // ─── RunRequest shape ─────────────────────────────────────────────────────────
+
+// ─── KEIKO-0241: synthetic broken-input tests for the FAIL branches ────────────
+//
+// The real-codebase happy path proves the checker's PASS branch. Without exercising the FAIL
+// branches on synthetic broken inputs, the checker's own diagnostic correctness is unproven — a
+// mutation that inverts a `missing.length > 0` guard would leave the entire suite green. These
+// tests inject fakes through SurfaceParityDeps so the FAIL branches for cli-flags and
+// run-request-shape are covered. sdk-exports is not reachable via SurfaceParityDeps (it imports
+// @oscharko-dev/keiko-sdk directly, by design), so that branch is not covered here.
+
+function fakeCli(help: string): SurfaceParityCliRunner {
+  return (args, io, _env, _opts) => {
+    if (args.includes("--help")) {
+      io.out(help);
+    }
+    return undefined;
+  };
+}
+
+describe("KEIKO-0241 checkSurfaceParity FAIL branches (synthetic broken inputs)", () => {
+  // Full-help strings that satisfy each CLI's requiredTokens on their own. Dropping one token from
+  // one of the two CLIs should flip only that CLI's cli-flags check to failed.
+  const GEN_TESTS_FULL_HELP =
+    "usage: gen-tests --file --dir --changed --model --apply (dry-run by default)";
+  const INVESTIGATE_FULL_HELP =
+    "usage: investigate --description --output --output-file --stack --stack-file --file --model --apply (dry-run by default)";
+
+  it("cli-flags FAILS on gen-tests when --help output omits --file (only the affected check flips)", async () => {
+    const deps: SurfaceParityDeps = {
+      ...SURFACE_PARITY_DEPS,
+      runGenTestsCli: fakeCli(GEN_TESTS_FULL_HELP.replace(" --file", "")),
+      runInvestigateCli: fakeCli(INVESTIGATE_FULL_HELP),
+    };
+    const result = await checkSurfaceParity(deps);
+    expect(result.allPassed).toBe(false);
+    const cliFlags = result.checks.filter((c) => c.check === "cli-flags");
+    expect(cliFlags).toHaveLength(2);
+    const utFlags = cliFlags.find((c) => c.workflowKind === "unit-tests");
+    const bugFlags = cliFlags.find((c) => c.workflowKind === "bug-investigation");
+    expect(utFlags?.passed).toBe(false);
+    expect(utFlags?.reason).toContain("--file");
+    // Only the affected CLI check flips; the other stays green.
+    expect(bugFlags?.passed).toBe(true);
+  });
+
+  it("cli-flags FAILS on both CLIs when --help does not state 'dry-run by default'", async () => {
+    const deps: SurfaceParityDeps = {
+      ...SURFACE_PARITY_DEPS,
+      runGenTestsCli: fakeCli(GEN_TESTS_FULL_HELP.replace(" (dry-run by default)", "")),
+      runInvestigateCli: fakeCli(INVESTIGATE_FULL_HELP.replace(" (dry-run by default)", "")),
+    };
+    const result = await checkSurfaceParity(deps);
+    expect(result.allPassed).toBe(false);
+    const failedCli = result.checks.filter((c) => c.check === "cli-flags" && !c.passed);
+    expect(failedCli).toHaveLength(2);
+    for (const check of failedCli) {
+      expect(check.reason).toContain("dry-run");
+    }
+  });
+
+  it("run-request-shape FAILS when parseRunRequest returns an error envelope (code/message)", async () => {
+    const deps: SurfaceParityDeps = {
+      ...SURFACE_PARITY_DEPS,
+      parseRunRequest: (_input: string) => ({
+        code: "INVALID_RUN_REQUEST",
+        message: "synthetic parse error",
+      }),
+    };
+    const result = await checkSurfaceParity(deps);
+    expect(result.allPassed).toBe(false);
+    const shape = result.checks.filter((c) => c.check === "run-request-shape");
+    expect(shape).toHaveLength(2);
+    // Both workflow kinds go through the same faked parser, so both must fail with the error message.
+    for (const check of shape) {
+      expect(check.passed).toBe(false);
+      expect(check.reason).toBe("synthetic parse error");
+    }
+  });
+
+  it("run-request-shape FAILS when parseRunRequest returns a payload missing required fields", async () => {
+    const deps: SurfaceParityDeps = {
+      ...SURFACE_PARITY_DEPS,
+      // Missing `limits` and `input`.
+      parseRunRequest: (_input: string) => ({
+        kind: "unit-tests",
+        modelId: "m",
+        apply: false,
+      }),
+    };
+    const result = await checkSurfaceParity(deps);
+    expect(result.allPassed).toBe(false);
+    const shape = result.checks.filter((c) => c.check === "run-request-shape");
+    for (const check of shape) {
+      expect(check.passed).toBe(false);
+      expect(check.reason).toContain("missing fields");
+    }
+  });
+
+  it("run-request-shape FAILS when parseRunRequest returns wrong field types", async () => {
+    const deps: SurfaceParityDeps = {
+      ...SURFACE_PARITY_DEPS,
+      // All required fields present but modelId is a number instead of a string.
+      parseRunRequest: (_input: string) => ({
+        kind: "unit-tests",
+        modelId: 42,
+        apply: false,
+        input: { workspaceRoot: "/tmp" },
+        limits: { maxPromptBytes: 1 },
+      }),
+    };
+    const result = await checkSurfaceParity(deps);
+    expect(result.allPassed).toBe(false);
+    const shape = result.checks.filter((c) => c.check === "run-request-shape");
+    for (const check of shape) {
+      expect(check.passed).toBe(false);
+      expect(check.reason).toBe("RunRequest field types mismatch");
+    }
+  });
+
+  it("smoke: the SurfaceParityCliIo alias covers a chunked-string capture", () => {
+    // The alias is imported for readability of injected fakes; keep a use so the import stays needed.
+    const chunks: string[] = [];
+    const io: SurfaceParityCliIo = {
+      out: (t) => void chunks.push(t),
+      err: (t) => void chunks.push(t),
+    };
+    io.out("a");
+    io.err("b");
+    expect(chunks.join("")).toBe("ab");
+  });
+});
 
 describe("RunRequest shape (UI BFF contract)", () => {
   it("parseRunRequest accepts a valid unit-tests request and returns the required fields", async () => {

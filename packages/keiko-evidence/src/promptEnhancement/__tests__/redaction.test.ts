@@ -53,4 +53,16 @@ describe("redactPromptEnhancementEvidence", () => {
     expect(redacted.count).toBe(2);
     expect(summary.patternsMatched["opaque-secret"]).toBe(2);
   });
+
+  // KEIKO-0188: the deep-redactor rebuilds objects field-by-field, so a JSON.parse'd input
+  // carrying a `__proto__` key silently reassigned the reconstructed object's prototype when the
+  // rebuild seed was a plain `{}`. Seeding with Object.create(null) keeps the key as data.
+  it("does not let a __proto__ key in the input pollute the rebuilt prototype", () => {
+    const rawJson = `{"a":"ok","__proto__":{"polluted":"ghp_${"x".repeat(30)}"}}`;
+    const input = JSON.parse(rawJson) as { readonly a: string };
+    const { redacted } = redactPromptEnhancementEvidence(input);
+    expect((redacted as { polluted?: unknown }).polluted).toBeUndefined();
+    expect(({} as { polluted?: unknown }).polluted).toBeUndefined();
+    expect(redacted.a).toBe("ok");
+  });
 });

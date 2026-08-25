@@ -109,7 +109,12 @@ describe("recovery-disposition derivations (AC3)", () => {
       "protected-branch": "policy-forbidden",
       "provider-capability-absent": "policy-forbidden",
       "approval-expired": "user-fixable",
+      // KEIKO-0147 / KEIKO-0154: both new block reasons are user-fixable — the operator obtains
+      // a fresh approval or refreshes the readiness read, respectively. Neither is retryable
+      // (unbounded retry cannot lift the denial) and neither is policy-forbidden (fix is at hand).
+      "approver-not-authorized": "user-fixable",
       "risk-class-ceiling": "policy-forbidden",
+      "head-hash-mismatch": "user-fixable",
       "no-applicable-rule": "policy-forbidden",
     };
     for (const reason of GIT_DELIVERY_BLOCK_REASONS) {

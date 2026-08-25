@@ -123,6 +123,22 @@ describe("GatewayModelPort", () => {
     expect(received).toEqual([{ type: "done", response: response() }]);
   });
 
+  // KEIKO-0463 — SonarJS S7786: after a type check, throw a TypeError (not a bare Error) so the
+  // rule stays green whenever this file is touched and downstream `err instanceof TypeError`
+  // guards remain correct.
+  it("throws a TypeError (not a bare Error) when callStream is used but the gateway lacks chatStream", () => {
+    const port = new GatewayModelPort({
+      chat: (): Promise<NormalizedResponse> => Promise.resolve(response()),
+    });
+    let thrown: unknown;
+    try {
+      port.callStream({ modelId: "m", messages: [] }, new AbortController().signal);
+    } catch (err) {
+      thrown = err;
+    }
+    expect(thrown).toBeInstanceOf(TypeError);
+  });
+
   it("leaves logContext undefined when the caller supplies a plain GatewayRequest", async () => {
     let seen: ModelGatewayLogContext | undefined = { correlationId: "should-be-overwritten" };
     const port = new GatewayModelPort({

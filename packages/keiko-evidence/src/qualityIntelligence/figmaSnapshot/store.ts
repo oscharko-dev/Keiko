@@ -46,6 +46,7 @@ import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
 import { assertValidRunId } from "@oscharko-dev/keiko-security";
 import {
   fsyncDirectoryContaining,
+  PostRenameFsyncError,
   replaceViaDurableTempFile,
   writeDurableUtf8TempFile,
 } from "../../durable-write.js";
@@ -553,6 +554,14 @@ function atomicWriteMutable(target: string, json: string, randomSuffix: () => st
   try {
     replaceViaDurableTempFile(target, temp, json);
   } catch (error) {
+    // Post-rename fsync failure = content is durable on the target, only the parent-dir metadata
+    // fsync is unconfirmed. Do not clean the (already gone) temp; do not claim the write failed.
+    // See KEIKO-0388 / KEIKO-1034.
+    if (error instanceof PostRenameFsyncError) {
+      throw new EvidenceWriteError(
+        `Figma snapshot management metadata parent-directory fsync failed after durable rename: ${error.message}`,
+      );
+    }
     rmSync(temp, { force: true });
     throw new EvidenceWriteError(
       `Figma snapshot management metadata write failed: ${error instanceof Error ? error.message : "unknown"}`,
@@ -1153,8 +1162,13 @@ function updateUserMetadataOp(
     updatedAt: input.updatedAt ?? new Date().toISOString(),
   };
   const realBase = realBaseForWrite(ctx.qiDir, ctx.fs);
+  // KEIKO-0416: derive the management file's path from the AUTHENTICATED request runId, not
+  // from `record.runId` — a tampered on-disk record whose runId was flipped to another valid
+  // uuid would otherwise cause this write to land under a different filename, silently
+  // clobbering another run's management file while the caller's own update becomes unreadable
+  // (loadUserMetadata validates the embedded runId matches the requested key).
   atomicWriteMutable(
-    containedManagementPath(record.runId, realBase, ctx.fs),
+    containedManagementPath(runId, realBase, ctx.fs),
     metadataToJson(runId, next),
     ctx.randomSuffix,
   );

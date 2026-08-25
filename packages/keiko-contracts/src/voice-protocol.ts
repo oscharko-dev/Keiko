@@ -450,6 +450,14 @@ export type VoiceControlMessage =
 // ─── Per-kind classification tables ─────────────────────────────────────────────
 // Keyed by `VoiceControlMessageKind` so adding a kind without classifying it is a compile error
 // (totality). No control kind is ever `raw-media` — that classification is media-plane only (AC1).
+// The bounded replay-diagnostic ring size that host→client `replayable` events are held in for a
+// reconnecting client (AC5/AC6). The keiko-ui timebase engine, the keiko-server realtime session, and
+// the keiko-evaluations voice-twin buffer model all mirror this exact capacity — publishing it here
+// makes drift across those three consumers a compile-time property rather than a documentation
+// convention (KEIKO-0380). The value is a wire/contract concern because a reconnecting client's
+// replay envelope size depends on it.
+export const VOICE_REPLAY_CAPACITY = 200 as const;
+
 export const VOICE_CONTROL_MESSAGE_REPLAY: Record<VoiceControlMessageKind, VoiceReplayClass> = {
   "session.create": "replayable",
   "session.created": "replayable",

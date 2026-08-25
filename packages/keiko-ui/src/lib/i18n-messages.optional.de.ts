@@ -679,6 +679,10 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
   "gitDelivery.blockReason.risk-class-ceiling":
     "Überschreitet die erlaubte Risikoklassenobergrenze",
   "gitDelivery.blockReason.no-applicable-rule": "Keine anwendbare Richtlinienregel (Fail-Closed)",
+  "gitDelivery.blockReason.approver-not-authorized":
+    "Freigebende Identität steht nicht auf der Liste der zulässigen Freigeber",
+  "gitDelivery.blockReason.head-hash-mismatch":
+    "HEAD des Arbeitsbaums stimmt nicht mit dem erwarteten Commit überein",
   "gitDelivery.policyDecision.allowed": "Erlaubt",
   "gitDelivery.policyDecision.blocked": "Blockiert",
   "gitDelivery.policyDecision.approval-gated": "Genehmigung erforderlich",

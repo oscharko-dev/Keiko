@@ -103,6 +103,49 @@ describe("scoreDiscussionQuality - mode-appropriateness", () => {
     };
     expect(outcomeOf(f, mutated, "mode-appropriateness")).toBe("fail");
   });
+
+  // ─── KEIKO-0258 — isolated pins for the two remaining mode-appropriateness checks ───
+  // "decision-producing mode renders the decision directive" (scorer.ts:92-94)
+  it("fails when a decision-producing plan drops the offer-decision-with-tradeoffs directive", () => {
+    // `decide` produces a decision recommendation. Drop offer-decision-with-tradeoffs (a
+    // no-facet-covering directive) while keeping every other check satisfied:
+    //   - producesDecisionRecommendation stays true, oracle expects true → line 89 passes
+    //   - remaining directives (cite-evidence-or-state-none, list-explicit-assumptions,
+    //     disclose-uncertainty-and-confidence, defer-to-user-on-unresolved-contradiction) still cover
+    //     the mandated facets (evidence, assumptions, uncertainty) → line 101-106 passes
+    //   - renderedDirectives non-empty → line 101 passes
+    //   - plan.directives.length > 0 → line 95 passes
+    // The only check that fires is the decision-directive presence.
+    const f = fixtureFor("decide", ["mode-appropriateness"]);
+    const obs = observationFor("decide");
+    const directives = obs.plan.directives.filter(
+      (directive) => directive !== "offer-decision-with-tradeoffs",
+    );
+    const mutated: DiscussionObservation = {
+      ...obs,
+      plan: { ...obs.plan, directives },
+      renderedDirectives: directives.map(() => "rendered"),
+    };
+    expect(outcomeOf(f, mutated, "mode-appropriateness")).toBe("fail");
+  });
+
+  // "mode renders at least one directive" (scorer.ts:95) — isolate this specific check.
+  it("fails when plan.directives is empty while every other sibling check still passes", () => {
+    // Empty plan.directives forces line 95 (plan.directives.length > 0) to fail. To keep the sibling
+    // "rendered directives cover facets" check (line 101-106) passing, we ALSO empty mandatedFacets so
+    // discussionDirectivesCoverFacets returns true trivially; renderedDirectives stays non-empty. The
+    // decision-directive check is inert on `challenge` (producesDecisionRecommendation=false), and the
+    // oracle-vs-plan flag check trivially agrees (both false).
+    const f = fixtureFor("challenge", ["mode-appropriateness"]);
+    const obs = observationFor("challenge");
+    const mutated: DiscussionObservation = {
+      ...obs,
+      plan: { ...obs.plan, directives: [], mandatedFacets: [] },
+      // Keep renderedDirectives non-empty so line 101 (`renderedDirectives.length > 0`) still passes.
+      renderedDirectives: ["rendered"],
+    };
+    expect(outcomeOf(f, mutated, "mode-appropriateness")).toBe("fail");
+  });
 });
 
 describe("scoreDiscussionQuality - disagreement-completeness", () => {
@@ -149,6 +192,17 @@ describe("scoreDiscussionQuality - uncertainty-discipline", () => {
   it("passes for brainstorm which relaxes uncertainty disclosure", () => {
     const f = fixtureFor("brainstorm", ["uncertainty-discipline"]);
     expect(outcomeOf(f, observationFor("brainstorm"), "uncertainty-discipline")).toBe("pass");
+  });
+
+  // KEIKO-0258: isolate the `flag matches expectation` check (scorer.ts:136-138) by mutating ONLY the
+  // oracle's expected value away from the plan's actual value. The disclosure-directive sibling (line
+  // 141-142) and mandated-facet sibling (line 145-146) both still hold because we haven't changed the
+  // plan itself — only the oracle. Only the flag-match check fires.
+  it("fails when the oracle's expectedUncertaintyDisclosure disagrees with the plan", () => {
+    const f = fixtureFor("review", ["uncertainty-discipline"], {
+      expectedUncertaintyDisclosure: false,
+    });
+    expect(outcomeOf(f, observationFor("review"), "uncertainty-discipline")).toBe("fail");
   });
 });
 
@@ -197,6 +251,23 @@ describe("scoreDiscussionQuality - correction-handling", () => {
       expectedContradictionPolicies: ["synthesize-with-caveats"],
     });
     expect(outcomeOf(f, observationFor("evidence-check"), "correction-handling")).toBe("fail");
+  });
+
+  // KEIKO-0258: isolate the `assumptions facet mandated for correction handling` check
+  // (scorer.ts:183-184). Drop assumptions from mandatedFacets while leaving the contradiction-policy
+  // sibling satisfied — the oracle still lists the plan's policy so line 178-181 passes; only the
+  // assumptions-facet check fires.
+  it("fails when the mandatedFacets drop 'assumptions' for a correction-handling fixture", () => {
+    const f = fixtureFor("evidence-check", ["correction-handling"]);
+    const obs = observationFor("evidence-check");
+    const mutated: DiscussionObservation = {
+      ...obs,
+      plan: {
+        ...obs.plan,
+        mandatedFacets: obs.plan.mandatedFacets.filter((facet) => facet !== "assumptions"),
+      },
+    };
+    expect(outcomeOf(f, mutated, "correction-handling")).toBe("fail");
   });
 });
 
@@ -273,6 +344,54 @@ describe("scoreDiscussionQuality - interruption-recovery", () => {
         ...recovery,
         recovered: { ...recovery.recovered, turnIndex: recovery.initial.turnIndex + 1 },
       },
+    };
+    expect(outcomeOf(f, mutated, "interruption-recovery")).toBe("fail");
+  });
+
+  // KEIKO-0258: isolate the three trajectory-status checks (scorer.ts:204-206), each mutated one at a
+  // time. mode/topicId/turnIndex remain preserved so lines 207-209 all pass; the only failing check is
+  // the specific status the sub-test perturbs.
+  it("fails when the initial-turn status is not 'active'", () => {
+    const f = fixtureFor("decide", ["interruption-recovery"], { expectsRecoveredContext: true });
+    const obs = recoveryObs();
+    const recovery = obs.recovery;
+    expect(recovery).toBeDefined();
+    if (recovery === undefined) {
+      return;
+    }
+    const mutated: DiscussionObservation = {
+      ...obs,
+      recovery: { ...recovery, initial: { ...recovery.initial, status: "interrupted" } },
+    };
+    expect(outcomeOf(f, mutated, "interruption-recovery")).toBe("fail");
+  });
+
+  it("fails when the interrupted-turn status is not 'interrupted'", () => {
+    const f = fixtureFor("decide", ["interruption-recovery"], { expectsRecoveredContext: true });
+    const obs = recoveryObs();
+    const recovery = obs.recovery;
+    expect(recovery).toBeDefined();
+    if (recovery === undefined) {
+      return;
+    }
+    const mutated: DiscussionObservation = {
+      ...obs,
+      recovery: { ...recovery, interrupted: { ...recovery.interrupted, status: "active" } },
+    };
+    expect(outcomeOf(f, mutated, "interruption-recovery")).toBe("fail");
+  });
+
+  it("fails when the recovered-turn status is not 'recovered'", () => {
+    const f = fixtureFor("decide", ["interruption-recovery"], { expectsRecoveredContext: true });
+    const obs = recoveryObs();
+    const recovery = obs.recovery;
+    expect(recovery).toBeDefined();
+    if (recovery === undefined) {
+      return;
+    }
+    const mutated: DiscussionObservation = {
+      ...obs,
+      recovery: { ...recovery, recovered: { ...recovery.recovered, status: "active" } },
     };
     expect(outcomeOf(f, mutated, "interruption-recovery")).toBe("fail");
   });

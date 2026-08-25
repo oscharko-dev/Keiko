@@ -37,6 +37,18 @@ import {
 // this eval never computes the downstream sha256 (that is Artifact 2's `node:crypto`); the empty digest
 // is the contract-valid "no bound digest" sentinel, and the AC4 staleness proof works on the canonical
 // SEED (a plain string), which is what the digest is derived from.
+//
+// KEIKO-0242: outcome must branch on requiresConfirmation. A confirmation-requiring proposal that has
+// NOT been confirmed can never be `routed` — keiko-server's denyConfirmation reports `denied` in that
+// exact case, and the eval must mirror that governance verdict rather than misclaim `routed` for every
+// non-undefined proposal (which misrepresented six confirmation-required fixtures — voice-mutating,
+// voice-unknown-fail-closed, adversarial-{injection,misrecognition,correction,interruption}).
+function deriveOutcome(proposal: SpokenActionProposal | undefined): SpokenActionOutcome {
+  if (proposal === undefined) return "not-applicable";
+  if (proposal.requiresConfirmation) return "denied";
+  return "routed";
+}
+
 function buildAuditFor(
   proposal: SpokenActionProposal | undefined,
   fixture: VoiceActionEvalFixture,
@@ -44,12 +56,16 @@ function buildAuditFor(
   committedChars: number,
 ): SpokenActionAuditRecord {
   const effectClass: SpokenActionEffectClass = proposal?.effectClass ?? "unknown";
-  const outcome: SpokenActionOutcome = proposal === undefined ? "not-applicable" : "routed";
+  // KEIKO-0242: eval fixtures do not model confirmation; a confirmation-requiring proposal is
+  // therefore never confirmed here, so it maps to `denied` — mirroring keiko-server's
+  // denyConfirmation verdict rather than misclaiming `routed`.
+  const confirmed = false;
+  const outcome = deriveOutcome(proposal);
   return buildSpokenActionAuditRecord({
     effectClass,
     state: proposal?.state ?? "expired",
     confirmationRequired: proposal?.requiresConfirmation ?? false,
-    confirmed: false,
+    confirmed,
     outcome,
     source: fixture.source,
     turnIndex: fixture.turnIndex,

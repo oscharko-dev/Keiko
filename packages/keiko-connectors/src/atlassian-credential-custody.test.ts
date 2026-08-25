@@ -239,14 +239,67 @@ describe("createAtlassianCredentialCustody — create", () => {
 
 describe("createAtlassianCredentialCustody — list / getMetadata / delete", () => {
   it("lists metadata sorted by creation time and never the secret", () => {
-    const { custody } = custodyOverFakes();
-    custody.create(createInput());
-    custody.create(createInput({ displayName: "Confluence Docs", provider: "confluence" }));
+    // KEIKO-0403/#2903 audit: a stepping-forward clock alone is still tautological — when every
+    // create() call gets a LATER createdAt than the one before it, insertion order and
+    // createdAt-sorted order are identical, so `[...metadataStore.list()]` (i.e. deleting `.sort()`
+    // entirely) satisfies every assertion below just as well as a real sort does. The clock here
+    // steps BACKWARD for the second create(), so the record inserted SECOND gets an EARLIER
+    // createdAt than the record inserted FIRST: insertion order is [first, second] but the correct
+    // sorted order is [second, first]. Only a comparator that genuinely sorts by createdAt can
+    // produce that reversal.
+    const vault = inMemoryVault();
+    const metadataStore = inMemoryMetadataStore();
+    const clockSequence = [1_700_000_002_000, 1_700_000_000_000];
+    let callIndex = 0;
+    const { custody } = createAtlassianCredentialCustody({
+      vault,
+      metadataStore,
+      now: (): number => {
+        const value = clockSequence[callIndex];
+        callIndex += 1;
+        return value ?? 1_700_000_004_000;
+      },
+    });
+    const first = custody.create(createInput());
+    const second = custody.create(
+      createInput({ displayName: "Confluence Docs", provider: "confluence" }),
+    );
     const listed = custody.list();
     expect(listed).toHaveLength(2);
     expect(JSON.stringify(listed)).not.toContain(SYNTHETIC_TOKEN);
     expect(JSON.stringify(listed)).not.toContain(SYNTHETIC_EMAIL);
     expect(listed.every((entry) => isAtlassianCredentialMetadata(entry))).toBe(true);
+    // second.createdAt < first.createdAt (asserted from the create() return values, never a
+    // locally re-derived formula) — a real sort must therefore REVERSE insertion order.
+    expect(second.createdAt).toBeLessThan(first.createdAt);
+    expect(listed.map((entry) => entry.authRef)).toEqual([second.authRef, first.authRef]);
+    expect(listed[0]?.createdAt).toBeLessThan(listed[1]?.createdAt ?? Number.POSITIVE_INFINITY);
+
+    // Companion: the reversal is not an artifact of which provider is created first — swapping
+    // which credential receives the earlier timestamp still yields ascending-createdAt output.
+    const otherVault = inMemoryVault();
+    const otherStore = inMemoryMetadataStore();
+    const otherClockSequence = [1_800_000_002_000, 1_800_000_000_000];
+    let otherCallIndex = 0;
+    const { custody: otherCustody } = createAtlassianCredentialCustody({
+      vault: otherVault,
+      metadataStore: otherStore,
+      now: (): number => {
+        const value = otherClockSequence[otherCallIndex];
+        otherCallIndex += 1;
+        return value ?? 1_800_000_004_000;
+      },
+    });
+    const insertedFirst = otherCustody.create(
+      createInput({ displayName: "Confluence Docs", provider: "confluence" }),
+    );
+    const insertedSecond = otherCustody.create(createInput());
+    const otherListed = otherCustody.list();
+    expect(insertedSecond.createdAt).toBeLessThan(insertedFirst.createdAt);
+    expect(otherListed.map((entry) => entry.authRef)).toEqual([
+      insertedSecond.authRef,
+      insertedFirst.authRef,
+    ]);
   });
 
   it("getMetadata answers undefined for malformed and unknown refs", () => {

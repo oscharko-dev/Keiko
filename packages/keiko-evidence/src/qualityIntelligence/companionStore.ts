@@ -16,9 +16,13 @@ import { join, resolve } from "node:path";
 import { resolveWithinWorkspace, type WorkspaceFs } from "@oscharko-dev/keiko-workspace";
 import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
 import { assertValidRunId } from "@oscharko-dev/keiko-security";
-import { replaceViaDurableTempFile } from "../durable-write.js";
+import { PostRenameFsyncError, replaceViaDurableTempFile } from "../durable-write.js";
 import { EvidenceReadError, EvidenceWriteError } from "../errors.js";
-import { existingOwnedDirectory, prepareOwnedDirectory } from "../fs-safety.js";
+import {
+  existingOwnedDirectory,
+  isSingleLinkRegularFile,
+  prepareOwnedDirectory,
+} from "../fs-safety.js";
 import { QI_SUBDIR } from "./store.js";
 
 const QI_DIR_MODE = 0o700;
@@ -51,21 +55,18 @@ function lexicalArtifactPath(runId: string, suffix: string, realBase: string): s
   return resolveWithinWorkspace(realBase, name);
 }
 
-function isSingleLinkRegularFile(path: string, fs: WorkspaceFs): boolean {
-  try {
-    const stat = fs.stat(path);
-    return stat.isFile && (stat.hardLinkCount ?? 1) <= 1;
-  } catch (error) {
-    throw new EvidenceReadError(
-      `cannot inspect QI companion: ${error instanceof Error ? error.message : "unknown"}`,
-    );
-  }
+function toQiCompanionInspectionError(message: string): Error {
+  return new EvidenceReadError(`cannot inspect QI companion: ${message}`);
+}
+
+function isSingleLinkQiCompanion(path: string, fs: WorkspaceFs): boolean {
+  return isSingleLinkRegularFile(path, fs, toQiCompanionInspectionError);
 }
 
 function assertWritableArtifactEntry(target: string, fs: WorkspaceFs): void {
   const entry = lstatSync(target, { throwIfNoEntry: false });
   if (entry === undefined) return;
-  if (!entry.isFile() || !isSingleLinkRegularFile(target, fs)) {
+  if (!entry.isFile() || !isSingleLinkQiCompanion(target, fs)) {
     throw new EvidenceWriteError("cannot overwrite a non-ledger QI companion artifact");
   }
 }
@@ -75,6 +76,14 @@ function atomicWrite(target: string, json: string, randomSuffix: () => string): 
   try {
     replaceViaDurableTempFile(target, temp, json);
   } catch (error) {
+    // Post-rename fsync failure = content is durable on the target, only the parent-dir metadata
+    // fsync is unconfirmed. Do not clean the (already gone) temp; do not claim the write failed.
+    // See KEIKO-0388 / KEIKO-1034.
+    if (error instanceof PostRenameFsyncError) {
+      throw new EvidenceWriteError(
+        `QI companion parent-directory fsync failed after durable rename: ${error.message}`,
+      );
+    }
     rmSync(temp, { force: true });
     throw new EvidenceWriteError(
       `QI companion write failed: ${error instanceof Error ? error.message : "unknown"}`,
@@ -94,7 +103,7 @@ function readArtifactFile<T>(
   if (realBase === undefined) return undefined;
   const target = join(realBase, `${runId}${suffix}`);
   if (lstatSync(target, { throwIfNoEntry: false })?.isFile() !== true) return undefined;
-  if (!isSingleLinkRegularFile(target, fs)) return undefined;
+  if (!isSingleLinkQiCompanion(target, fs)) return undefined;
   let parsed: unknown;
   try {
     parsed = JSON.parse(readFileSync(target, "utf8"));
@@ -117,7 +126,7 @@ function deleteArtifactFile(
   if (realBase === undefined) return false;
   const target = lexicalArtifactPath(runId, suffix, realBase);
   if (lstatSync(target, { throwIfNoEntry: false })?.isFile() !== true) return false;
-  if (!isSingleLinkRegularFile(target, fs)) return false;
+  if (!isSingleLinkQiCompanion(target, fs)) return false;
   rmSync(target, { force: true });
   return true;
 }

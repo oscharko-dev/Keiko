@@ -80,6 +80,29 @@ export function ownedChildPath(realBase: string, name: string): string {
   return resolveWithinWorkspace(realBase, name);
 }
 
+/**
+ * Returns true when `path` is a regular file whose inode has at most one hard link — the guard every
+ * evidence sub-store applies before overwriting a persisted artefact, so a hard-linked outside file
+ * cannot be silently clobbered under the guise of an in-place update. Extracted (KEIKO-0195) from six
+ * byte-identical copies across the package: a future refinement of the hard-link check now lands in
+ * one place instead of drifting across six.
+ *
+ * Callers supply `toError` so each site keeps its own error class + wrapping message (EvidenceRead
+ * vs EvidenceWrite, `"cannot inspect QI manifest"` vs `"cannot inspect side-file target"`, etc.).
+ */
+export function isSingleLinkRegularFile(
+  path: string,
+  fs: WorkspaceFs,
+  toError: (message: string) => Error,
+): boolean {
+  try {
+    const stat = fs.stat(path);
+    return stat.isFile && (stat.hardLinkCount ?? 1) <= 1;
+  } catch (error) {
+    throw toError(error instanceof Error ? error.message : "unknown");
+  }
+}
+
 function assertDeletableOwnedTree(dir: string, label: string): void {
   const stat = lstatSync(dir, { throwIfNoEntry: false });
   if (stat === undefined) return;

@@ -10,7 +10,7 @@
         document.documentElement.dataset.theme = t === "light" || t === "dark" ? t : "dark";
         var c = localStorage.getItem("keiko-ds-contrast");
         if (c === "more") document.documentElement.dataset.hc = "more";
-      } catch (e) {
+      } catch {
         // localStorage can throw when storage is disabled or restricted (private browsing,
         // blocked cookies); the hardcoded fallback below is the complete, correct handling —
         // there is no logging sink on a static doc page to report to.
@@ -462,13 +462,27 @@
         ci.value = v;
         openList(false);
       }
+      // KEIKO-0489 helper: `active === -1` is the "nothing highlighted yet" sentinel — true
+      // when the list is closed AND when it was just opened by focus/typing with no
+      // selection made. Folding -1 through `(a + d + N) % N` makes ArrowUp land on N-2
+      // instead of N-1, so key on the sentinel directly and land on the correct end (0 for
+      // Down, N-1 for Up). Once real navigation has begun (current >= 0) wrap normally.
+      function nextActive(current, d, len) {
+        if (current < 0) return d > 0 ? 0 : len - 1;
+        return (current + d + len) % len;
+      }
       function move(d) {
+        // Open the list on the first arrow press if it isn't already (closed combobox).
+        // The index itself no longer depends on whether we just opened it here —
+        // nextActive keys off the active === -1 sentinel, which already covers the
+        // focus-opened and post-typing states too (the list is open but nothing is
+        // highlighted yet), so all three entry paths land on the correct end.
         if (cl.hidden) {
           openList(true);
           paintCombo();
         }
         if (!filtered.length) return;
-        active = (active + d + filtered.length) % filtered.length;
+        active = nextActive(active, d, filtered.length);
         paintCombo();
         var el = document.getElementById("copt-" + active);
         if (el) el.scrollIntoView({ block: "nearest" });
