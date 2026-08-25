@@ -9,7 +9,7 @@ import { newCounters, type RunContext } from "./context.js";
 import { Emitter } from "./emitter.js";
 import { HARNESS_CODES, toFailure } from "./errors.js";
 import { defaultFingerprinter, defaultIdSource } from "./fingerprint.js";
-import { runLoop } from "./loop.js";
+import { runLoop, terminalFailure } from "./loop.js";
 import type { EventSink, Fingerprinter, IdSource, ModelPort, ToolPort } from "./ports.js";
 import type { HarnessShaperPort } from "./shaper-port.js";
 import { MemoryEventSink } from "./sinks.js";
@@ -74,6 +74,11 @@ function buildResult(
   sink: MemoryEventSink,
   identity: ResultIdentity,
 ): RunResult {
+  // Gate on outcome via the same terminalFailure rule emitTerminal uses (loop.ts), not on
+  // ctx.failure's mere presence: a raced wall-time deadline callback can write ctx.failure after
+  // the run has already reached "completed"/"cancelled" (see armWallTimeDeadline below), and the
+  // returned RunResult must never contradict its own outcome (KEIKO-0774).
+  const failure = terminalFailure(ctx, outcome);
   return {
     runId: identity.runId,
     fingerprint: identity.fingerprint,
@@ -81,7 +86,7 @@ function buildResult(
     taskType: ctx.taskType,
     ...(ctx.report === undefined ? {} : { report: ctx.report }),
     ...(ctx.patchDiff === undefined ? {} : { patchDiff: ctx.patchDiff }),
-    ...(ctx.failure === undefined ? {} : { failure: ctx.failure }),
+    ...(failure === undefined ? {} : { failure }),
     startedAt: ctx.startedAt,
     finishedAt: ctx.clock.now(),
     events: sink.events(),
@@ -129,13 +134,20 @@ function armWallTimeDeadline(
   ctx: RunContext,
   controller: AbortController,
   clock: Clock,
+  isSettled: () => boolean,
 ): () => void {
   let cleared = false;
   const deadlineController = new AbortController();
   void clock
     .sleep(ctx.limits.maxWallTimeMs, deadlineController.signal)
     .then(() => {
-      if (cleared || controller.signal.aborted) {
+      // isSettled() bails out one tick earlier than `cleared` (set only once clearDeadline, a
+      // `.finally` reaction, actually runs) — see createSession's `settled` flag. This narrows,
+      // but per buildResult/terminalFailure above does not need to eliminate, the window in which
+      // a deadline callback already in flight when runLoop resolves can still write ctx.failure
+      // for a run that has already finished (KEIKO-0774): that write is harmless because
+      // buildResult never surfaces it for a non-failure outcome.
+      if (cleared || isSettled() || controller.signal.aborted) {
         return;
       }
       // Claim the failure slot only while it is unclaimed: a handler that already recorded why the
@@ -171,7 +183,11 @@ export function createSession(
   });
   const controller = new AbortController();
   const { ctx, memory } = buildContext(task, config, deps, controller.signal, runId, fingerprint);
-  const clearDeadline = armWallTimeDeadline(ctx, controller, ctx.clock);
+  // Flipped true as soon as runLoop's promise settles — one microtask ahead of clearDeadline
+  // (itself a `.finally` reaction) — so both the wall-time deadline guard and cancel() below have
+  // an earlier "the run is over" signal than `cleared` alone (KEIKO-0774).
+  let settled = false;
+  const clearDeadline = armWallTimeDeadline(ctx, controller, ctx.clock, () => settled);
   ctx.emitter.emit({
     type: "run:started",
     taskType: task.taskType,
@@ -182,13 +198,22 @@ export function createSession(
   // observed at the loop's first abort check, before any model or tool call is made.
   const result = Promise.resolve()
     .then(() => runLoop(ctx))
+    .then((outcome) => {
+      settled = true;
+      return outcome;
+    })
     .finally(clearDeadline)
     .then((outcome) => buildResult(ctx, outcome, memory, { runId, fingerprint }));
   return {
     runId,
     fingerprint,
     result,
+    // A silent no-op once the run has already reached a terminal state — matching cancel()'s
+    // existing best-effort character (it never throws) rather than relabeling a finished run.
     cancel: (reason?: string): void => {
+      if (settled) {
+        return;
+      }
       ctx.cancelReason = reason;
       controller.abort(reason);
     },

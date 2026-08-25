@@ -49,6 +49,7 @@ import type {
   EmissionRole,
   ScreenEmission,
 } from "./emissionPlan.js";
+import { fnv1aHex } from "./idHash.js";
 import type {
   AlignItems,
   ColorToken,
@@ -147,8 +148,8 @@ const safeFontFamily = (family: string): string => {
   return `"${cleaned}"`;
 };
 
-// Valid CSS hex color: 3, 4, 6, or 8 hex digits.
-const HEX_COLOR_RE = /^#[0-9a-fA-F]{3,8}$/u;
+// Valid CSS hex color: 3, 4, 6, or 8 hex digits (not any length in between).
+const HEX_COLOR_RE = /^#(?:[0-9a-fA-F]{3,4}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$/u;
 
 const isSafeColor = (value: string): boolean => HEX_COLOR_RE.test(value);
 
@@ -220,18 +221,9 @@ const buildTokenLookups = (tokens: DesignTokens): TokenLookups => {
 // hash to the later class so distinct Figma nodes cannot alias onto one CSS selector.
 
 const sanitizeIdForClass = (id: string): string => id.replace(/[^a-zA-Z0-9]/gu, "-");
-const classHash = (id: string): string => {
-  // FNV-1a over Unicode code points — codePointAt handles surrogate pairs as one unit while
-  // charCodeAt splits them, so a screen name containing an emoji or an astral character produced
-  // two different hashes on the two paths.
-  let hash = 0x811c9dc5;
-  for (const char of id) {
-    const cp = char.codePointAt(0) ?? 0;
-    hash ^= cp;
-    hash = Math.imul(hash, 0x01000193);
-  }
-  return (hash >>> 0).toString(36);
-};
+// unicodeAware=true: hash by Unicode code point, not UTF-16 code unit, so a screen name containing
+// an emoji or an astral character hashes the same regardless of surrogate-pair splitting.
+const classHash = (id: string): string => fnv1aHex(id, 36, true);
 const nodeClassBase = (id: string): string => `n-${sanitizeIdForClass(id) || "node"}`;
 const nodeClass = (id: string, ctx: ScreenStyleContext): string => {
   const existing = ctx.classMap.get(id);

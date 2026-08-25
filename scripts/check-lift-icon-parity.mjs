@@ -140,17 +140,86 @@ function splitTopLevelArgs(argsSrc) {
 //   P(helper(args))     → { kind: "call", helper, args }
 //   P("literal")        → { kind: "path", value }
 //   '<circle .../>'     → { kind: "circle", cx, cy, r, extras }
+// KEIKO-0935: lift-glyphs.js may hoist byte-identical glyph geometry into a shared module-
+// scope const (e.g. `var DEBUG_BUG_GLYPH = P(...) + P(...);`) that G entries reference by
+// name (`debug: DEBUG_BUG_GLYPH`). Collect every such `var UPPER_SNAKE = <expr>;` declaration
+// above `var G = {` and expand bare identifier references in G's operand chain to the
+// underlying expression source before the operand parser walks it. Restricted to UPPER_SNAKE
+// so ordinary lowercase locals cannot accidentally be substituted.
+const UPPER_SNAKE_CHAR = /[A-Z0-9_]/u;
+
+function isUpperSnake(text) {
+  if (text.length === 0) return false;
+  if (text[0] < "A" || text[0] > "Z") return false;
+  for (const char of text) {
+    if (!UPPER_SNAKE_CHAR.test(char)) return false;
+  }
+  return true;
+}
+
+// Returns { name, valueOnHeaderLine } for a `var UPPER_SNAKE = <expr>` line, else null. Pure
+// string parsing — no regex with multiple unbounded quantifiers that Sonar S8786 would flag as
+// super-linear. Only accepts an UPPER_SNAKE_CASE identifier immediately after `var`.
+function parseSharedConstHeader(line) {
+  const stripped = line.trimStart();
+  if (!stripped.startsWith("var ")) return null;
+  const afterVar = stripped.slice("var ".length).trimStart();
+  const eq = afterVar.indexOf("=");
+  if (eq < 1) return null;
+  const name = afterVar.slice(0, eq).trim();
+  if (!isUpperSnake(name)) return null;
+  return { name, valueOnHeaderLine: afterVar.slice(eq + 1).trimStart() };
+}
+
+function collectSharedConsts(source) {
+  // Pure string parsing replaces the earlier regex forms — Sonar S8786 kept flagging every
+  // shape with adjacent unbounded quantifiers (`\s*var\s+…\s*=\s*` alone was enough). The
+  // per-line header parse is bounded string ops; the body accumulator concatenates physical
+  // lines until `;` at end-of-line.
+  const consts = new Map();
+  const lines = source.split(/\r?\n/u);
+  let i = 0;
+  while (i < lines.length) {
+    const header = parseSharedConstHeader(lines[i]);
+    if (header === null) {
+      i += 1;
+      continue;
+    }
+    let expr = header.valueOnHeaderLine;
+    let cursor = i;
+    while (!expr.trimEnd().endsWith(";") && cursor + 1 < lines.length) {
+      cursor += 1;
+      expr = `${expr}\n${lines[cursor]}`;
+    }
+    const trimmed = expr.trim();
+    if (trimmed.endsWith(";")) {
+      const body = trimmed.slice(0, -1).trim();
+      if (body.length > 0) consts.set(header.name, body);
+    }
+    i = cursor + 1;
+  }
+  return consts;
+}
+
+function expandSharedConsts(valueSrc, consts) {
+  return valueSrc.replace(/\b([A-Z][A-Z0-9_]*)\b/gu, (whole, name) => {
+    const expansion = consts.get(name);
+    return expansion === undefined ? whole : expansion;
+  });
+}
+
 function extractOpsFromJs(customPath) {
   const source = readFileSync(customPath ?? jsPath, "utf8");
   const gStart = source.indexOf("var G = {");
   if (gStart < 0) throw new Error("could not locate `var G = {` in lift-glyphs.js");
+  const consts = collectSharedConsts(source.slice(0, gStart));
   const bodyStart = source.indexOf("{", gStart);
   const bodyEnd = matchClosingBrace(source, bodyStart);
   const body = source.slice(bodyStart + 1, bodyEnd);
   const props = splitObjectProperties(body);
   const result = new Map();
   for (const [key, valueSrc] of props) {
-    result.set(key, jsValueToOps(valueSrc));
+    result.set(key, jsValueToOps(expandSharedConsts(valueSrc, consts)));
   }
   return result;
 }

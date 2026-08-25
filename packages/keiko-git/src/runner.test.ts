@@ -130,12 +130,49 @@ describe("createGitProcessRunner", () => {
     expect(result.stderr).not.toContain("refused git option");
   });
 
-  it("maps a missing binary to exit 127 via the spawn error path", async () => {
+  it("maps an unresolvable git executable to exit 127 (resolver returns not-found)", async () => {
+    // KEIKO-0641: this test exercises the RESOLUTION-failure path (resolveGitExecutable returns
+    // { ok: false, reason: "not-found" }) — spawn() is never reached. The distinct child.on('error')
+    // branch (a resolved candidate that fails at execve, e.g. ENOEXEC) is covered separately below.
     const runner = createGitProcessRunner(() => ({ PATH: join(root, "no-binaries-here") }));
     const result = await runner(["--version"], { cwd: root, maxBytes: 1024, timeoutMs: 10_000 });
     expect(result.exitCode).toBe(127);
     expect(result.stderr).toBe("git executable unavailable");
   });
+
+  it.skipIf(process.platform === "win32")(
+    "settles a spawn-time execve failure via the child.on('error') handler (exit 127)",
+    async () => {
+      // KEIKO-0641: prior coverage gap — no test reached the wireGitProcessEvents child.on('error')
+      // handler because every negative case failed at resolveGitExecutable first. Here the resolver
+      // succeeds (an executable-permission-bit file in a trusted, non-workspace, non-writable dir),
+      // but the file's shebang points at a non-existent interpreter, so execve() returns ENOENT on
+      // the interpreter and Node emits an 'error' event on the child before any close. The runner
+      // must still return the SPAWN_ERROR_RESULT shape (exit 127 / "git executable unavailable")
+      // for parity with the resolver-failure branch — proving the fallthrough surface for a
+      // salted-binary indicator is intact. A bad shebang (rather than a naked non-binary file) is
+      // used because a naked non-binary file rejects synchronously as ENOEXEC on some platforms,
+      // which would test spawn()'s throw path, not the intended 'error'-event handler.
+      const bin = mkdtempSync(join(tmpdir(), "keiko-git-runner-badshebang-bin-"));
+      try {
+        const fakeGit = join(bin, "git");
+        writeFileSync(fakeGit, "#!/nonexistent-keiko-audit/interp\nnot reachable\n", {
+          mode: 0o755,
+        });
+        chmodSync(bin, 0o700);
+        const runner = createGitProcessRunner(() => ({ PATH: bin }));
+        const result = await runner(["--version"], {
+          cwd: root,
+          maxBytes: 1024,
+          timeoutMs: 10_000,
+        });
+        expect(result.exitCode).toBe(127);
+        expect(result.stderr).toBe("git executable unavailable");
+      } finally {
+        rmSync(bin, { force: true, recursive: true });
+      }
+    },
+  );
 
   it.skipIf(process.platform === "win32")(
     "refuses a repository-local git executable inherited through PATH",

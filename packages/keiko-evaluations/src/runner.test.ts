@@ -11,6 +11,7 @@ import {
   createScriptedModelPort,
   fixtureByName,
   fixturesForSuite,
+  scoreFixture,
   EVAL_SCORECARD_SCHEMA_VERSION,
 } from "./index.js";
 import { createInMemoryEvidenceStore } from "@oscharko-dev/keiko-evidence";
@@ -18,6 +19,7 @@ import { runGenTestsCli, runInvestigateCli } from "@oscharko-dev/keiko-cli";
 import { parseRunRequest } from "@oscharko-dev/keiko-server";
 import type { EvalRunOptions, EvalRunnerDeps } from "./runner.js";
 import type { SurfaceParityDeps } from "./surface-parity.js";
+import type { ScoringInput } from "./index.js";
 import { must } from "./_support.js";
 
 // Fixed clock and id source so test output is deterministic
@@ -314,6 +316,27 @@ describe("bug-investigation/happy-path fixture", () => {
   ] as const)("$title", async ({ dimension }) => {
     const sc = await run();
     expect(outcomeOf(sc, "happy-path", dimension)).toBe("pass");
+  });
+
+  // KEIKO-0779: the fixture's own FIX_DIFF touches exactly one file, so its
+  // maxExpectedChangedFiles ceiling must be exact (1), not loose (2) -- a patch that
+  // unexpectedly touches a second file must flip patch-size to FAIL.
+  it("patch-size fails a 2-file patch against the fixture's own (tightened) oracle", () => {
+    const f = must(fixtureByName("bug-investigation/happy-path"));
+    const twoFileInput: ScoringInput = {
+      status: "fix-applied",
+      proposedDiff: "--- a/src/buggy.ts\n+++ b/src/buggy.ts\n@@ -2 +2 @@\n-a\n+b\n",
+      changedFileCount: 2,
+      patchBytes: 100,
+      verificationStatus: "passed",
+      verificationPresent: true,
+      manifestValid: true,
+      recordedWriteCount: 2,
+      mode: "offline",
+    };
+    const results = scoreFixture(f, twoFileInput);
+    const patchSize = must(results.find((r) => r.dimension === "patch-size"));
+    expect(patchSize.outcome).toBe("fail");
   });
 });
 

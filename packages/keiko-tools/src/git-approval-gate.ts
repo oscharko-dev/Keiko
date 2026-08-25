@@ -1,4 +1,4 @@
-// Shared required-approver membership check for every governed git delivery gate (KEIKO-0147).
+// Shared approval-gate resolution for every governed git delivery gate (KEIKO-0147, KEIKO-0535).
 //
 // An unexpired approval token is NOT sufficient authority. When the policy decision names a
 // required-approver set, the identity that granted the approval must be a member of it —
@@ -20,6 +20,7 @@
 
 import type {
   GitDeliveryApprovalRequirement,
+  GitDeliveryBlockReason,
   GitDeliveryPolicyDecision,
 } from "@oscharko-dev/keiko-contracts";
 
@@ -36,4 +37,69 @@ export function approverIsNotAuthorized(
   if (decision.requiredApprovers.length === 0) return false;
   if (!approval.required) return false;
   return !decision.requiredApprovers.includes(approval.approvedByUserId);
+}
+
+// ─── Approval-gate resolution (KEIKO-0535) ───────────────────────────────────────────────────
+//
+// Below `approverIsNotAuthorized` sits the wider question each of the four gateways used to
+// answer with its own copy: given a policy decision that has already reached the approval-gated
+// branch (every allowed/blocked/constrained outcome is handled by the caller first), is the
+// supplied approval valid, expired, or absent — and if valid, is the granting identity authorized?
+// `resolveApprovalState` and `resolveGitDeliveryApprovalGate` are the one implementation of that
+// question; each gateway's own local Gate union (MergeGate/PublishGate/PrGate/PolicyGate) is kept
+// as-is and maps this function's canonical result onto its own field names at a single call site,
+// so no observable behavior changes for any of the four gateways' existing callers or tests.
+
+function resolveApprovalState(
+  approval: GitDeliveryApprovalRequirement,
+  now: number,
+): "valid" | "absent" | "expired" {
+  if (!approval.required) {
+    return "absent";
+  }
+  if (approval.expiresAtMs !== undefined && approval.expiresAtMs <= now) {
+    return "expired";
+  }
+  return "valid";
+}
+
+export type GitDeliveryApprovalGateResult =
+  | { readonly proceed: true }
+  | {
+      readonly proceed: false;
+      readonly status: "approval-required";
+      readonly approvers: readonly string[];
+    }
+  | {
+      readonly proceed: false;
+      readonly status: "policy-block";
+      readonly blockReason: GitDeliveryBlockReason;
+    };
+
+/**
+ * Resolves the approval-gated branch of a governed git delivery decision (KEIKO-0535): valid,
+ * expired, or absent, and — when valid — whether the granting identity is an authorized approver
+ * (KEIKO-0147). `decision` is expected to already be known `approval-gated` by the caller (every
+ * current caller reaches this only after handling `allowed`/`blocked`/`constrained`); if it is not,
+ * `approvers` simply resolves to an empty array rather than this function narrowing or asserting
+ * the decision's shape, so a caller may pass either the wide `GitDeliveryPolicyDecision` or an
+ * already branch-narrowed one.
+ */
+export function resolveGitDeliveryApprovalGate(
+  decision: GitDeliveryPolicyDecision,
+  approval: GitDeliveryApprovalRequirement,
+  now: number,
+): GitDeliveryApprovalGateResult {
+  const approvers = decision.outcome === "approval-gated" ? decision.requiredApprovers : [];
+  const state = resolveApprovalState(approval, now);
+  if (state === "valid") {
+    if (approverIsNotAuthorized(decision, approval)) {
+      return { proceed: false, status: "policy-block", blockReason: "approver-not-authorized" };
+    }
+    return { proceed: true };
+  }
+  if (state === "expired") {
+    return { proceed: false, status: "policy-block", blockReason: "approval-expired" };
+  }
+  return { proceed: false, status: "approval-required", approvers };
 }

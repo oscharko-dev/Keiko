@@ -360,10 +360,12 @@ function sanitizeManifestForPersistence(
 ): PromptEnhancementEvidenceManifest {
   assertValidRunId(manifest.runId);
   const { redacted, summary } = redactPromptEnhancementEvidence(withoutIntegrityHashes(manifest));
-  const redactionSummary =
-    summary.stringsRedacted > 0
-      ? foldRedactionSummary(redacted.redactionSummary, summary)
-      : redacted.redactionSummary;
+  // Always fold: the sanitize-pass scan runs unconditionally (every string leaf of the whole
+  // manifest), independent of whether it found anything new to redact -- gating the fold on
+  // `stringsRedacted > 0` silently dropped the sanitize-pass totalStringsScanned count in the
+  // common case where the backstop pass finds nothing new (KEIKO-0767). foldRedactionSummary adds
+  // zero-count deltas safely, so folding unconditionally changes no other behavior.
+  const redactionSummary = foldRedactionSummary(redacted.redactionSummary, summary);
   // Fail-closed backstop: the ceilings hold for every manifest that reaches a store, not only for
   // one built by `buildPromptEnhancementEvidenceManifest`. Re-applying is idempotent for a manifest
   // that already respects them, and the integrity hashes are recomputed over the bounded values.
@@ -593,7 +595,7 @@ function loadManifest(
   if (realBase === undefined) {
     return undefined;
   }
-  const target = join(realBase, `${runId}${PE_MANIFEST_SUFFIX}`);
+  const target = lexicalManifestPath(runId, realBase);
   try {
     if (lstatSync(target, { throwIfNoEntry: false })?.isFile() !== true) {
       return undefined;

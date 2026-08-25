@@ -175,9 +175,7 @@ function scoreCorrectionHandling(
   return gate("correction-handling", [
     {
       label: "contradiction policy matches oracle expectation",
-      ok:
-        oracle.expectedContradictionPolicies === undefined ||
-        oracle.expectedContradictionPolicies.includes(policy),
+      ok: oracle.expectedContradictionPolicies?.includes(policy) ?? false,
     },
     {
       label: "assumptions facet mandated for correction handling",
@@ -190,6 +188,7 @@ function scoreInterruptionRecovery(
   fixtureMode: DiscussionEvalFixture["mode"],
   fixtureTopicId: string,
   obs: DiscussionObservation,
+  oracle: DiscussionOracle,
 ): DiscussionDimensionResult {
   const recovery = obs.recovery;
   if (recovery === undefined) {
@@ -200,13 +199,18 @@ function scoreInterruptionRecovery(
     };
   }
   const { initial, interrupted, recovered } = recovery;
+  const preserved =
+    recovered.mode === fixtureMode &&
+    recovered.topicId === fixtureTopicId &&
+    recovered.turnIndex === initial.turnIndex;
   return gate("interruption-recovery", [
     { label: "initial turn is active", ok: initial.status === "active" },
     { label: "interrupted turn is interrupted", ok: interrupted.status === "interrupted" },
     { label: "recovered turn is recovered", ok: recovered.status === "recovered" },
-    { label: "recovered mode preserved", ok: recovered.mode === fixtureMode },
-    { label: "recovered topicId preserved", ok: recovered.topicId === fixtureTopicId },
-    { label: "recovered turnIndex preserved", ok: recovered.turnIndex === initial.turnIndex },
+    {
+      label: "context preservation matches oracle expectation",
+      ok: preserved === oracle.expectsRecoveredContext,
+    },
   ]);
 }
 
@@ -240,7 +244,7 @@ function scoreDimension(
     case "correction-handling":
       return scoreCorrectionHandling(obs, oracle);
     case "interruption-recovery":
-      return scoreInterruptionRecovery(fixture.mode, fixture.topicId, obs);
+      return scoreInterruptionRecovery(fixture.mode, fixture.topicId, obs, oracle);
     case "capability-gating":
       return scoreCapabilityGating(obs, oracle);
   }

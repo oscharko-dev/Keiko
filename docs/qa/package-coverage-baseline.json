@@ -18,7 +18,7 @@
       }
     },
     "keiko-connectors": {
-      "files": 19,
+      "files": 20,
       "uncoveredFiles": 0,
       "uncoveredLines": 32,
       "totalLines": 1335,
@@ -54,7 +54,7 @@
       }
     },
     "keiko-evaluations": {
-      "files": 82,
+      "files": 83,
       "uncoveredFiles": 0,
       "uncoveredLines": 40,
       "totalLines": 1519,
@@ -78,7 +78,7 @@
       }
     },
     "keiko-git": {
-      "files": 7,
+      "files": 8,
       "uncoveredFiles": 0,
       "uncoveredLines": 4,
       "totalLines": 145,
@@ -90,7 +90,7 @@
       }
     },
     "keiko-harness": {
-      "files": 23,
+      "files": 24,
       "uncoveredFiles": 0,
       "uncoveredLines": 36,
       "totalLines": 452,
@@ -186,7 +186,7 @@
       }
     },
     "keiko-quality-intelligence": {
-      "files": 67,
+      "files": 68,
       "uncoveredFiles": 0,
       "uncoveredLines": 113,
       "totalLines": 3185,

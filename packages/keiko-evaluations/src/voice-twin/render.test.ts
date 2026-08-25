@@ -79,6 +79,17 @@ describe("renderVoiceTwinSummary: yesNo false branches", () => {
     expect(text).toContain("stt=no");
   });
 
+  // KEIKO-0731: coversSpeechOutput materially gates goNoGo (runner.ts's coverageMet check) but was
+  // never printed on the Capability coverage line -- a NO-GO caused by this flag was invisible in the
+  // rendered text. Mutation guard: if the speech-output token is dropped again, this fails.
+  it('renders "no" for coversSpeechOutput=false', () => {
+    const scorecard = makeScorecard({
+      summary: { ...makeScorecard().summary, coversSpeechOutput: false, goNoGo: "NO-GO" },
+    });
+    const text = renderVoiceTwinSummary(scorecard);
+    expect(text).toContain("speech-output=no");
+  });
+
   it('renders "no" for coversFullRealtime=false', () => {
     const scorecard = makeScorecard({
       summary: { ...makeScorecard().summary, coversFullRealtime: false, goNoGo: "NO-GO" },

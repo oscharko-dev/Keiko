@@ -416,11 +416,16 @@ describe("runVerification — counts and report shape", () => {
     }).not.toThrow();
   });
 
-  it("empty plan → overallStatus passed, results empty, all counts zero", async () => {
+  // KEIKO-0848: this pin previously asserted overallStatus "passed" for a zero-step plan, relying
+  // on Array.prototype.every's vacuous truth on an empty array — a fail-open defect (verification
+  // "succeeded" while nothing ran). The invariant is deliberately inverted here, per AGENTS.md
+  // section 7 (a pin is strengthened or relocated, never silently relaxed): a plan that runs no
+  // steps must never report the best possible answer.
+  it("empty plan → overallStatus failed (fail-closed), results empty, all counts zero", async () => {
     const ws = makeWorkspace();
     const rec = recordingSpawn();
     const report = await runVerification(planOf([], ws.info.root), depsWith(ws, rec.fn));
-    expect(report.overallStatus).toBe("passed");
+    expect(report.overallStatus).toBe("failed");
     expect(report.results).toEqual([]);
     const total = Object.values(report.counts).reduce((a, b) => a + b, 0);
     expect(total).toBe(0);

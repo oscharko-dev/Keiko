@@ -165,7 +165,11 @@ describe("confirmation-discipline scorer", () => {
       outcomeFor("confirmation-discipline", fixture(["confirmation-discipline"], oracle), obs),
     ).toBe("fail");
   });
-  it("falls back to the taxonomy when the oracle omits expectedRequiresConfirmation", () => {
+  // KEIKO-0664: expectedRequiresConfirmation and expectedEffectClass must both be independently
+  // authored whenever confirmation-discipline is declared. Omitting either used to pass vacuously
+  // (expectedEffectClass) or tautologically re-derive the expectation from the very function under
+  // test (expectedRequiresConfirmation) -- both now fail closed instead.
+  it("fails closed when the oracle omits expectedRequiresConfirmation", () => {
     const looseOracle = {
       expectedGatingAllowed: true,
       expectsProposal: true,
@@ -177,7 +181,22 @@ describe("confirmation-discipline scorer", () => {
         fixture(["confirmation-discipline"], looseOracle),
         observation(),
       ),
-    ).toBe("pass");
+    ).toBe("fail");
+  });
+
+  it("fails closed when the oracle omits expectedEffectClass", () => {
+    const looseOracle = {
+      expectedGatingAllowed: true,
+      expectsProposal: true,
+      expectedRequiresConfirmation: true,
+    };
+    expect(
+      outcomeFor(
+        "confirmation-discipline",
+        fixture(["confirmation-discipline"], looseOracle),
+        observation(),
+      ),
+    ).toBe("fail");
   });
 
   it("passes a read-only proposal that needs no confirmation", () => {
@@ -326,9 +345,13 @@ describe("aggregateVoiceActionQuality", () => {
 });
 
 describe("renderVoiceActionSummary", () => {
-  function scorecard(goNoGo: "GO" | "NO-GO", fullyPassed: boolean): VoiceActionScorecard {
+  function scorecard(
+    goNoGo: "GO" | "NO-GO",
+    fullyPassed: boolean,
+    dimensions: readonly VoiceActionDimension[] = ["capability-gating", "stale-intent-prevention"],
+  ): VoiceActionScorecard {
     const dimResults = scoreVoiceActionQuality(
-      fixture(["capability-gating", "stale-intent-prevention"], {
+      fixture(dimensions, {
         expectedGatingAllowed: fullyPassed,
         expectsProposal: true,
       }),
@@ -366,7 +389,15 @@ describe("renderVoiceActionSummary", () => {
   });
 
   it("renders a GO verdict when every dimension passes", () => {
-    const text = renderVoiceActionSummary(scorecard("GO", true));
+    // KEIKO-0736: the shared scorecard() default dimension set includes stale-intent-prevention,
+    // which scoreStaleIntentPrevention always fails against the default observation() (no staleness
+    // set) -- so the GO/true call used to render a scorecard that in fact contained a FAIL result.
+    // Narrow to a dimension set that genuinely passes, and assert dimResults directly instead of
+    // trusting the rendered text alone.
+    const card = scorecard("GO", true, ["capability-gating"]);
+    const dimResults = card.fixtureResults[0]?.dimensionResults ?? [];
+    expect(dimResults.every((d) => d.outcome !== "fail")).toBe(true);
+    const text = renderVoiceActionSummary(card);
     expect(text).toContain("Verdict: GO");
     expect(text).toContain("=PASS");
   });

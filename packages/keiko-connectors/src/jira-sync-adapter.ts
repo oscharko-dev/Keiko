@@ -275,6 +275,37 @@ type JiraEnumerationWalk =
     }
   | { readonly ok: false; readonly reason: AtlassianSyncFailureReason };
 
+type JiraSearchPageStep =
+  | { readonly kind: "continue"; readonly nextToken: string }
+  | { readonly kind: "done"; readonly complete: boolean }
+  | { readonly kind: "fail"; readonly reason: AtlassianSyncFailureReason };
+
+async function fetchAndCollectSearchPage(
+  context: AtlassianSyncFetchContext,
+  endpoints: AtlassianApiEndpoints,
+  jql: string,
+  token: string | undefined,
+  entries: JiraEnumeratedIssue[],
+): Promise<JiraSearchPageStep> {
+  const result = await context.http({
+    method: "GET",
+    url: searchPageUrl(endpoints, jql, token),
+    timeoutMs: ATLASSIAN_SYNC_PAGINATED_FETCH_TIMEOUT_MS,
+    maxBodyBytes: JIRA_LIST_RESPONSE_MAX_BYTES,
+  });
+  const page = classifyListResult(result, JIRA_LIST_RESPONSE_MAX_BYTES);
+  if (!page.ok) return { kind: "fail", reason: page.reason };
+  const issues = asArray(page.body.issues);
+  if (issues === undefined) return { kind: "fail", reason: "malformed-payload" };
+  if (!collectSearchEntries(issues, entries, context.maxItems)) {
+    return { kind: "done", complete: false };
+  }
+  const next = nextSearchToken(page.body);
+  if (!next.ok) return { kind: "fail", reason: "malformed-payload" };
+  if (next.token === undefined) return { kind: "done", complete: true };
+  return { kind: "continue", nextToken: next.token };
+}
+
 async function walkSearchPages(
   context: AtlassianSyncFetchContext,
   endpoints: AtlassianApiEndpoints,
@@ -282,27 +313,22 @@ async function walkSearchPages(
 ): Promise<JiraEnumerationWalk> {
   const entries: JiraEnumeratedIssue[] = [];
   let token: string | undefined;
-  for (let requests = 0; ; requests += 1) {
-    if (requests >= MAX_SEARCH_REQUESTS) return { ok: false, reason: "malformed-payload" };
+  // Repeated-token guard (KEIKO-0598), mirroring the Confluence walk's seen-URL guard
+  // (confluence-sync-adapter.ts's walkPaginatedList): a token that repeats a previously-seen
+  // exact value indicates a self-referential chain — legitimate pagination never re-serves a
+  // token it already handed out — so the walk fails closed instead of looping (bounded, in the
+  // worst case, only by MAX_SEARCH_REQUESTS).
+  const seenTokens = new Set<string>();
+  for (let requests = 0; requests < MAX_SEARCH_REQUESTS; requests += 1) {
     if (context.deadlineExceeded()) return { ok: false, reason: "timeout" };
-    const result = await context.http({
-      method: "GET",
-      url: searchPageUrl(endpoints, jql, token),
-      timeoutMs: ATLASSIAN_SYNC_PAGINATED_FETCH_TIMEOUT_MS,
-      maxBodyBytes: JIRA_LIST_RESPONSE_MAX_BYTES,
-    });
-    const page = classifyListResult(result, JIRA_LIST_RESPONSE_MAX_BYTES);
-    if (!page.ok) return { ok: false, reason: page.reason };
-    const issues = asArray(page.body.issues);
-    if (issues === undefined) return { ok: false, reason: "malformed-payload" };
-    if (!collectSearchEntries(issues, entries, context.maxItems)) {
-      return { ok: true, entries, complete: false };
-    }
-    const next = nextSearchToken(page.body);
-    if (!next.ok) return { ok: false, reason: "malformed-payload" };
-    if (next.token === undefined) return { ok: true, entries, complete: true };
-    token = next.token;
+    const step = await fetchAndCollectSearchPage(context, endpoints, jql, token, entries);
+    if (step.kind === "fail") return { ok: false, reason: step.reason };
+    if (step.kind === "done") return { ok: true, entries, complete: step.complete };
+    if (seenTokens.has(step.nextToken)) return { ok: false, reason: "malformed-payload" };
+    seenTokens.add(step.nextToken);
+    token = step.nextToken;
   }
+  return { ok: false, reason: "malformed-payload" };
 }
 
 interface JiraEnumerationPartition {

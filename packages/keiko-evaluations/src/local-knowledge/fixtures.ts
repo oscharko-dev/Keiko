@@ -48,16 +48,16 @@ export const EVAL_ALT_EMBEDDING_IDENTITY: EmbeddingModelIdentity = {
 
 export const EVAL_TOPIC_BOOST = 1.0;
 
-function chunkId(value: string): ChunkId {
+export function chunkId(value: string): ChunkId {
   return value as ChunkId;
 }
-function documentId(value: string): DocumentId {
+export function documentId(value: string): DocumentId {
   return value as DocumentId;
 }
-function sourceId(value: string): KnowledgeSourceId {
+export function sourceId(value: string): KnowledgeSourceId {
   return value as KnowledgeSourceId;
 }
-function capsuleId(value: string): KnowledgeCapsuleId {
+export function capsuleId(value: string): KnowledgeCapsuleId {
   return value as KnowledgeCapsuleId;
 }
 

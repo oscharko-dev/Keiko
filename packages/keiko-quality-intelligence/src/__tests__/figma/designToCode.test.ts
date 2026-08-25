@@ -671,6 +671,29 @@ describe("htmlCssAdapter — CSS value sanitization (Fix #8)", () => {
     // Valid color token must still appear.
     expect(css).toContain("#aabbcc");
   });
+
+  it("drops 5- and 7-digit hex color tokens (not valid CSS <hex-color> lengths)", () => {
+    // Regression pin for KEIKO-0705: HEX_COLOR_RE was a contiguous {3,8} length range, which also
+    // (incorrectly) matched 5- and 7-digit hex strings alongside the four valid CSS lengths.
+    const badTokens: DesignTokens = {
+      colors: [
+        { id: "c:five", kind: "color", value: "#abcde" },
+        { id: "c:seven", kind: "color", value: "#aabbccd" },
+        { id: "c:good", kind: "color", value: "#aabbcc" },
+      ],
+      typography: [],
+      spacing: [],
+      radius: [],
+    };
+    const artifact = emitCode(
+      { screens: [loginScreen()], tokens: badTokens, hints: [] },
+      htmlCssAdapter,
+    );
+    const css = fileByPath(artifact, "tokens.css");
+    expect(css).not.toContain("#abcde");
+    expect(css).not.toContain("#aabbccd");
+    expect(css).toContain("#aabbcc");
+  });
 });
 
 // ─── Layout / sizing / cornerRadius / typography CSS emission ────────────────

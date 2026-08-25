@@ -9,9 +9,17 @@
 // matched text). The summary is what the audit cross-references; redaction is irreversible.
 
 import { redact } from "@oscharko-dev/keiko-security";
+import { EvidenceWriteError } from "../errors.js";
 import type { QualityIntelligenceRedactionSummary } from "./manifestSchema.js";
 
 const QI_REDACTED = "[REDACTED]";
+
+// KEIKO-0778 sibling: mirrors the depth ceiling + cycle guard already applied to
+// promptEnhancement/redaction.ts's deepRedact. Without these, a self-referential or excessively
+// deep QI evidence payload (Figma-derived node trees can nest through frame -> children arrays)
+// would crash the process with an uncaught RangeError instead of failing closed. 32 comfortably
+// covers this package's flat manifest shapes while still bounding worst-case recursion.
+const MAX_REDACT_DEPTH = 32;
 
 // QI-extension deny-list. Linear character classes with one bounded/open quantifier only — no
 // nesting, no backreferences — so the polynomial-ReDoS gate stays green. Each pattern has a stable
@@ -96,25 +104,56 @@ function redactString(
   return qiRedacted;
 }
 
+// Shared depth-ceiling + cycle guard for both container branches (array/object) of deepRedact.
+// Fails closed with a controlled EvidenceWriteError -- rather than an uncaught RangeError -- when
+// the ceiling is exceeded or `node` is already an ancestor in the current recursion path. `seen`
+// tracks only the current path (added before recursing into children, removed on the way back
+// out), so two independent, non-cyclic references to the same object are not mistaken for a cycle.
+function deepRedactContainer(
+  node: object,
+  depth: number,
+  seen: WeakSet<object>,
+  build: () => unknown,
+): unknown {
+  if (depth >= MAX_REDACT_DEPTH) {
+    throw new EvidenceWriteError("QI evidence payload exceeds the maximum redaction depth");
+  }
+  if (seen.has(node)) {
+    throw new EvidenceWriteError("QI evidence payload contains a circular reference");
+  }
+  seen.add(node);
+  try {
+    return build();
+  } finally {
+    seen.delete(node);
+  }
+}
+
 function deepRedact(
   value: unknown,
   additionalSecrets: readonly string[],
   counter: QualityIntelligenceCounterState,
+  depth = 0,
+  seen = new WeakSet(),
 ): unknown {
   if (typeof value === "string") {
     return redactString(value, additionalSecrets, counter);
   }
   if (Array.isArray(value)) {
-    return value.map((item): unknown => deepRedact(item, additionalSecrets, counter));
+    return deepRedactContainer(value, depth, seen, () =>
+      value.map((item): unknown => deepRedact(item, additionalSecrets, counter, depth + 1, seen)),
+    );
   }
   if (typeof value === "object" && value !== null) {
-    // KEIKO-0188: null-prototype seed keeps a `__proto__` key from a JSON.parse'd input as a
-    // plain own-property instead of silently mutating the reconstructed object's prototype.
-    const out: Record<string, unknown> = Object.create(null) as Record<string, unknown>;
-    for (const [key, child] of Object.entries(value)) {
-      out[key] = deepRedact(child, additionalSecrets, counter);
-    }
-    return out;
+    return deepRedactContainer(value, depth, seen, () => {
+      // KEIKO-0188: null-prototype seed keeps a `__proto__` key from a JSON.parse'd input as a
+      // plain own-property instead of silently mutating the reconstructed object's prototype.
+      const out: Record<string, unknown> = Object.create(null) as Record<string, unknown>;
+      for (const [key, child] of Object.entries(value)) {
+        out[key] = deepRedact(child, additionalSecrets, counter, depth + 1, seen);
+      }
+      return out;
+    });
   }
   return value;
 }

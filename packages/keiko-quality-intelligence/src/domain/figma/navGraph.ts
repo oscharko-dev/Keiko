@@ -22,6 +22,7 @@
 // MAX_NAV_FLOWS so a dense fully-connected graph cannot exhaust memory during QI ingestion.
 
 import { compareStrings } from "@oscharko-dev/keiko-contracts";
+import { fnv1aHex } from "./idHash.js";
 import type { InterScreenLink, IrNode, ScreenIr, ScreenIrResult } from "./irTypes.js";
 import type { StructuralTestItem } from "./screenIrTestBaseline.js";
 
@@ -329,13 +330,7 @@ const screenNameOf = (graph: NavGraph, screenId: string): string =>
   graph.nodes.find((n) => n.screenId === screenId)?.screenName ?? screenId;
 
 function navItemId(prefix: string, key: string): string {
-  // Deterministic non-cryptographic id (FNV-1a) — stable across runs, no IO. Mirrors #754's scheme.
-  let hash = 0x811c9dc5;
-  for (let i = 0; i < key.length; i += 1) {
-    hash ^= key.charCodeAt(i);
-    hash = Math.imul(hash, 0x01000193);
-  }
-  return `${prefix}-${(hash >>> 0).toString(16).padStart(8, "0")}`;
+  return `${prefix}-${fnv1aHex(key)}`;
 }
 
 function navigationItem(graph: NavGraph, edge: NavEdge): StructuralTestItem {

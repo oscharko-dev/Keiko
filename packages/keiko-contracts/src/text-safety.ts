@@ -49,6 +49,16 @@ function isBidiOrZeroWidthCodePoint(cp: number): boolean {
   );
 }
 
+// U+2028 LINE SEPARATOR and U+2029 PARAGRAPH SEPARATOR render as a line break in most text
+// renderers, Markdown/HTML pipelines, and JSON deserializers. They are neither C0/C1 controls nor
+// bidi/zero-width format characters, so the two predicates above miss them — leaving a spoofing
+// gap where untrusted evidence containing one of these separators can still smuggle a fresh line
+// (and therefore a fake `role:` header) into an LLM prompt or a citation wire. This predicate
+// closes that gap so stripUnsafeFormatChars removes them the same way it removes bidi overrides.
+function isUnsafeLineSeparatorCodePoint(cp: number): boolean {
+  return cp === 0x2028 || cp === 0x2029;
+}
+
 // The raw C0/DEL/C1 control range (0x00–0x1F, 0x7F–0x9F), no exception.
 function isControlCodePoint(cp: number): boolean {
   return cp <= 0x1f || (cp >= 0x7f && cp <= 0x9f);
@@ -76,17 +86,29 @@ export function hasControlCharacter(value: string): boolean {
   return false;
 }
 
+// Single "unsafe format" predicate covering every class stripUnsafeFormatChars removes:
+// bidi/zero-width/BOM/format overrides, C0/C1/DEL controls (except TAB/LF/CR), and the U+2028/
+// U+2029 line and paragraph separators. Consolidated so the scan and rebuild loops stay under the
+// complexity cap and, more importantly, so a future added class only needs one line to include.
+function isUnsafeFormatCodePoint(cp: number): boolean {
+  return (
+    isBidiOrZeroWidthCodePoint(cp) ||
+    isStrippableControlCodePoint(cp) ||
+    isUnsafeLineSeparatorCodePoint(cp)
+  );
+}
+
 /**
- * Remove Unicode bidi/zero-width/BOM/format spoofing code points and C0/C1/DEL control
- * characters from `value`, preserving TAB/LF/CR. Pure; returns the input unchanged (a no-op,
- * byte-identical) when it contains no unsafe code points.
+ * Remove Unicode bidi/zero-width/BOM/format spoofing code points, the U+2028/U+2029 line and
+ * paragraph separators, and C0/C1/DEL control characters from `value`, preserving TAB/LF/CR.
+ * Pure; returns the input unchanged (a no-op, byte-identical) when it contains no unsafe code
+ * points.
  */
 export function stripUnsafeFormatChars(value: string): string {
   // Fast path: scan once; only allocate a rebuilt string if something must be removed.
   let needsStrip = false;
   for (const ch of value) {
-    const cp = ch.codePointAt(0) ?? 0;
-    if (isBidiOrZeroWidthCodePoint(cp) || isStrippableControlCodePoint(cp)) {
+    if (isUnsafeFormatCodePoint(ch.codePointAt(0) ?? 0)) {
       needsStrip = true;
       break;
     }
@@ -94,8 +116,7 @@ export function stripUnsafeFormatChars(value: string): string {
   if (!needsStrip) return value;
   let out = "";
   for (const ch of value) {
-    const cp = ch.codePointAt(0) ?? 0;
-    if (isBidiOrZeroWidthCodePoint(cp) || isStrippableControlCodePoint(cp)) continue;
+    if (isUnsafeFormatCodePoint(ch.codePointAt(0) ?? 0)) continue;
     out += ch;
   }
   return out;

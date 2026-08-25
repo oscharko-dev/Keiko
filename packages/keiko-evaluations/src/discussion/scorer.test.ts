@@ -45,6 +45,7 @@ function fixtureFor(
       expectedUncertaintyDisclosure: plan.requiresUncertaintyDisclosure,
       expectedDecisionRecommendation: plan.producesDecisionRecommendation,
       expectedContradictionPolicies: [plan.contradictionPolicy],
+      expectsRecoveredContext: false,
       ...oracleOverrides,
     },
   };
@@ -253,6 +254,25 @@ describe("scoreDiscussionQuality - correction-handling", () => {
     expect(outcomeOf(f, observationFor("evidence-check"), "correction-handling")).toBe("fail");
   });
 
+  // KEIKO-0663: expectedContradictionPolicies is optional, so a fixture that declares
+  // correction-handling without setting it must fail closed, not pass vacuously. Explicitly
+  // unset the field (not merely omitted from overrides, and not set to `undefined` -- disallowed
+  // under exactOptionalPropertyTypes for an already-optional readonly field -- but genuinely
+  // absent, via rest-destructuring) to prove the check itself, independent of the sibling
+  // "assumptions facet mandated" check.
+  it("fails closed when the oracle omits expectedContradictionPolicies entirely", () => {
+    const f = fixtureFor("evidence-check", ["correction-handling"]);
+    const {
+      expectedContradictionPolicies: _expectedContradictionPolicies,
+      ...oracleWithoutPolicies
+    } = f.oracle;
+    void _expectedContradictionPolicies;
+    const fWithoutPolicies: DiscussionEvalFixture = { ...f, oracle: oracleWithoutPolicies };
+    expect(
+      outcomeOf(fWithoutPolicies, observationFor("evidence-check"), "correction-handling"),
+    ).toBe("fail");
+  });
+
   // KEIKO-0258: isolate the `assumptions facet mandated for correction handling` check
   // (scorer.ts:183-184). Drop assumptions from mandatedFacets while leaving the contradiction-policy
   // sibling satisfied — the oracle still lists the plan's policy so line 178-181 passes; only the
@@ -287,6 +307,35 @@ describe("scoreDiscussionQuality - interruption-recovery", () => {
   it("passes when the recovered context preserves mode/topicId/turnIndex", () => {
     const f = fixtureFor("decide", ["interruption-recovery"], { expectsRecoveredContext: true });
     expect(outcomeOf(f, recoveryObs(), "interruption-recovery")).toBe("pass");
+  });
+
+  // KEIKO-0552: expectsRecoveredContext must actually gate the preservation outcome, not just be
+  // declared. Together these two tests pin all four (expected × observed) truth-table quadrants
+  // for the field — the (true, true) pass case is covered by the previous test and the
+  // (true, false) fail case by "fails when the fixture declares recovery but no trajectory is
+  // derived" below. A fixture that expects recovery to NOT preserve context but observes
+  // preservation anyway must fail (proves the field is READ, not inert documentation), and the
+  // symmetric quadrant — expects no-preservation and observes no-preservation — must pass
+  // (proves the field is honoured on the "agree" side, not defaulted to always-fail).
+  it("fails when the oracle expects no preserved context but the recovery preserves it anyway", () => {
+    const f = fixtureFor("decide", ["interruption-recovery"], { expectsRecoveredContext: false });
+    expect(outcomeOf(f, recoveryObs(), "interruption-recovery")).toBe("fail");
+  });
+
+  it("passes when the oracle expects no preserved context and the recovery drops it (KEIKO-0552 symmetric)", () => {
+    const f = fixtureFor("decide", ["interruption-recovery"], { expectsRecoveredContext: false });
+    const obs = recoveryObs();
+    const recovery = obs.recovery;
+    if (recovery === undefined) throw new Error("recoveryObs must derive a trajectory");
+    // Drop the topicId on the recovered turn so preservation-check reports "context lost".
+    const notPreserved: DiscussionObservation = {
+      ...obs,
+      recovery: {
+        ...recovery,
+        recovered: { ...recovery.recovered, topicId: "different-topic" },
+      },
+    };
+    expect(outcomeOf(f, notPreserved, "interruption-recovery")).toBe("pass");
   });
 
   it("fails when the fixture declares recovery but no trajectory is derived", () => {

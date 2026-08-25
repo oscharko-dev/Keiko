@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { listEvidence, loadEvidence } from "./index-api.js";
 import { createInMemoryEvidenceStore, type EvidenceStore } from "./store.js";
 import { EvidenceReadError, EvidenceSchemaError } from "./errors.js";
@@ -49,6 +49,18 @@ describe("listEvidence", () => {
 
   it("returns an empty list for an empty store", () => {
     expect(listEvidence(createInMemoryEvidenceStore())).toEqual([]);
+  });
+
+  it("parses each stored manifest's JSON at most once (KEIKO-0945)", () => {
+    const store = seed();
+    const parseSpy = vi.spyOn(JSON, "parse");
+    try {
+      const entries = listEvidence(store);
+      expect(entries).toHaveLength(2);
+      expect(parseSpy).toHaveBeenCalledTimes(2);
+    } finally {
+      parseSpy.mockRestore();
+    }
   });
 
   it("ignores non-run JSON records that do not declare an evidence schema version", () => {

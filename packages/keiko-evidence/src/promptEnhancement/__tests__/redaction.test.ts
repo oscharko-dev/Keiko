@@ -65,4 +65,35 @@ describe("redactPromptEnhancementEvidence", () => {
     expect(({} as { polluted?: unknown }).polluted).toBeUndefined();
     expect(redacted.a).toBe("ok");
   });
+
+  // KEIKO-0778: deepRedact had no cycle guard, so a self-referential payload crashed the process
+  // with an uncaught "RangeError: Maximum call stack size exceeded" instead of failing closed.
+  it("throws a controlled error instead of overflowing the stack on a circular reference", () => {
+    const o: Record<string, unknown> = { a: "ok" };
+    o.self = o;
+    expect(() => redactPromptEnhancementEvidence(o)).toThrow(/circular/i);
+  });
+
+  it("throws a controlled error instead of overflowing the stack on a circular array reference", () => {
+    const a: unknown[] = ["ok"];
+    a.push(a);
+    expect(() => redactPromptEnhancementEvidence({ list: a })).toThrow(/circular/i);
+  });
+
+  it("does not mistake two independent references to the same object for a cycle", () => {
+    // A DIAMOND shape (the same object reachable via two sibling branches) is not a cycle: the
+    // guard tracks only the current ancestor path and must backtrack after each branch returns.
+    const shared = { v: `x ${SECRET}` };
+    const { redacted } = redactPromptEnhancementEvidence({ left: shared, right: shared });
+    expect(redacted.left).toEqual(redacted.right);
+    expect(JSON.stringify(redacted)).not.toContain(SECRET);
+  });
+
+  it("throws a controlled error instead of overflowing the stack on excessive nesting depth", () => {
+    let payload: Record<string, unknown> = { leaf: "ok" };
+    for (let i = 0; i < 64; i += 1) {
+      payload = { nested: payload };
+    }
+    expect(() => redactPromptEnhancementEvidence(payload)).toThrow(/depth/i);
+  });
 });

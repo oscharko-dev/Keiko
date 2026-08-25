@@ -7,7 +7,12 @@ import { contextBytes, type RunContext, type StateStep } from "./context.js";
 import { handleModelCall, handleToolCall } from "./executor.js";
 import { handlePatchProposal, handleReporting, handleVerification } from "./patcher.js";
 import { handleContextSelection, handlePlanning } from "./planner.js";
-import { isTerminalHarnessState, type HarnessStateName, type RunOutcome } from "./types.js";
+import {
+  isTerminalHarnessState,
+  type HarnessFailure,
+  type HarnessStateName,
+  type RunOutcome,
+} from "./types.js";
 
 const MAX_LOOP_STEPS = 10_000; // absolute safety net; bounded states make this unreachable.
 
@@ -148,6 +153,23 @@ function transition(ctx: RunContext, from: HarnessStateName, step: StateStep): H
   return step.to;
 }
 
+// Ties a terminal outcome to its failure record: only "failed"/"limit-exceeded" ever carry one,
+// synthesizing the HARNESS_INTERNAL fallback when that state was reached without ctx.failure being
+// set. Exported so session.ts's buildResult can apply the identical rule to the RunResult it
+// returns — the emitted event stream (emitTerminal, below) and the returned RunResult can then
+// never disagree about whether a run failed, even if something else (e.g. a raced wall-time
+// deadline callback) writes to ctx.failure after the run has already reached a non-failure
+// terminal state (KEIKO-0774).
+export function terminalFailure(
+  ctx: Pick<RunContext, "failure">,
+  state: HarnessStateName,
+): HarnessFailure | undefined {
+  if (state !== "failed" && state !== "limit-exceeded") {
+    return undefined;
+  }
+  return ctx.failure ?? toFailure(HARNESS_CODES.INTERNAL, "run failed without a failure record");
+}
+
 function emitTerminal(ctx: RunContext, state: HarnessStateName): void {
   if (state === "completed") {
     ctx.emitter.emit({
@@ -165,9 +187,11 @@ function emitTerminal(ctx: RunContext, state: HarnessStateName): void {
     });
     return;
   }
-  if (state === "failed" || state === "limit-exceeded") {
-    const failure =
-      ctx.failure ?? toFailure(HARNESS_CODES.INTERNAL, "run failed without a failure record");
+  const failure = terminalFailure(ctx, state);
+  // terminalFailure returns undefined only for a non-failure state; this branch is reached only
+  // for "failed"/"limit-exceeded" (the two states not handled above), so failure is always defined
+  // here. The check keeps the compiler honest without a non-null assertion.
+  if (failure !== undefined) {
     ctx.failure = failure;
     ctx.emitter.emit({ type: "run:failed", failure, atState: state });
   }

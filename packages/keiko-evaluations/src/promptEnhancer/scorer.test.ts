@@ -173,6 +173,26 @@ describe("scorePromptQuality regression gates (AC2)", () => {
     expect(outcomeOf(stripped, ["format-adherence"], oracle, "format-adherence")).toBe("fail");
   });
 
+  // KEIKO-0676: the task-data-analysis fixture's oracle previously left expectedOutputStructured/
+  // expectedOutputFormat undefined, so scoreFormatAdherence's first two checks passed vacuously
+  // regardless of the analyzer's actual output. Now that the fixture pins the pipeline's observed
+  // values, the same mutation that flips task-structured-extraction's outcome above must also flip
+  // this fixture's outcome, proving the checks are load-bearing here too.
+  it("format-adherence is load-bearing for task-data-analysis (KEIKO-0676)", () => {
+    const fixture = promptEnhancerFixtureByName("task-data-analysis");
+    if (fixture === undefined) {
+      throw new Error("unknown fixture: task-data-analysis");
+    }
+    const obs = observe("task-data-analysis");
+    expect(outcomeOf(obs, ["format-adherence"], fixture.oracle, "format-adherence")).toBe("pass");
+    const stripped = withPrompt(obs, {
+      outputSchema: { ...obs.prompt.outputSchema, structured: false },
+    });
+    expect(outcomeOf(stripped, ["format-adherence"], fixture.oracle, "format-adherence")).toBe(
+      "fail",
+    );
+  });
+
   it("format-adherence fails when a structured schema loses its format hints", () => {
     const obs = observe("task-structured-extraction");
     const oracle: PromptEnhancerOracle = {
@@ -418,6 +438,14 @@ describe("KEIKO-0266 dimension-check regression pins", () => {
       ),
     });
     expect(outcomeOf(stripped, ["format-adherence"], oracle, "format-adherence")).toBe("fail");
+    // KEIKO-0770 (partial): the inline `.startsWith("Output controllability")` literal moved to a
+    // named constant (OUTPUT_CONTROLLABILITY_CRITERION_PREFIX in scorer.ts) so keiko-evaluations has
+    // one place to update, but this is behaviourally a no-op refactor -- it does not decouple the
+    // check from keiko-model-gateway's own independent copies of the same literal (generator.ts's
+    // buildQualityCriteria and critic.ts's scoreOutputControllability), which this
+    // keiko-evaluations-only change cannot reach. No new pass/fail assertion is added here: a test
+    // that cannot distinguish the refactor from its absence would prove nothing (AGENTS.md §7). This
+    // existing pin (drop-the-criterion -> fail) is what continues to prove the check still functions.
   });
 
   it("task-success fails when the role is blanked", () => {

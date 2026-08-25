@@ -470,6 +470,15 @@ function overallStatus(
   if (cancelled) {
     return "cancelled";
   }
+  // Array.prototype.every is vacuously true on an empty array: without this guard, a plan with
+  // zero steps would report "passed" — the worst possible answer to "nothing ran" for a gate whose
+  // output decides whether generated code is considered correct (KEIKO-0848). Every caller reaches
+  // this function through finishReport (both the normal path and the root-mismatch path), so this
+  // one guard closes the gap for every runVerification caller, including SDK consumers that have
+  // no guard of their own.
+  if (results.length === 0) {
+    return "failed";
+  }
   const allOk = results.every((r) => r.status === "passed" || r.status === "skipped");
   return allOk ? "passed" : "failed";
 }

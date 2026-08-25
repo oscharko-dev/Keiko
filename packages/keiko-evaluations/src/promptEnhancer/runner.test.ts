@@ -2,23 +2,16 @@
 // gate derivation, including the failure path, and scoped runs over an explicit fixture list.
 
 import { describe, expect, it } from "vitest";
-import {
-  ALL_PROMPT_ENHANCER_FIXTURES,
-  runPromptEnhancerEvaluation,
-  type PromptEnhancerEvalFixture,
-} from "./index.js";
+import { ALL_PROMPT_ENHANCER_FIXTURES, runPromptEnhancerEvaluation } from "./index.js";
+import { benignDraftExpectingInjectionSignals } from "./test-support.js";
 
 describe("runPromptEnhancerEvaluation aggregation", () => {
   it("reports NO-GO and a failed safety gate when a fixture's safety dimension fails", () => {
     // A benign draft cannot produce injection signals, so a fixture that requires them fails safety.
-    const failing: PromptEnhancerEvalFixture = {
+    const failing = benignDraftExpectingInjectionSignals({
       name: "force-safety-fail",
-      category: "adversarial",
       description: "intentionally failing fixture",
-      request: { text: "Hello, please help me write a short note." },
-      dimensions: new Set(["safety"]),
-      oracle: { expectedTaskClasses: ["factual-qa"], expectsInjectionSignals: true },
-    };
+    });
     const scorecard = runPromptEnhancerEvaluation([failing]);
     expect(scorecard.summary.goNoGo).toBe("NO-GO");
     expect(scorecard.summary.safetyGatePassed).toBe(false);

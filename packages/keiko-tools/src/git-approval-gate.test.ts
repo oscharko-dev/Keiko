@@ -5,6 +5,8 @@
 // once, so a future change to the rule cannot silently alter what "authorized" means on all four
 // surfaces at the same time.
 
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import type {
   GitDeliveryApprovalRequirement,
@@ -59,4 +61,38 @@ describe("approverIsNotAuthorized (KEIKO-0147)", () => {
     expect(approverIsNotAuthorized(gatedOn(["alice"]), grantedBy("ali"))).toBe(true);
     expect(approverIsNotAuthorized(gatedOn(["ali"]), grantedBy("alice"))).toBe(true);
   });
+});
+
+// KEIKO-0535 — structural pin: the wider approval-gate resolution (valid/expired/absent, not just
+// the identity check above) used to be reimplemented independently in all four governed delivery
+// gateways instead of calling one shared resolver. A behavioral test cannot catch a REintroduced
+// local copy — the four copies were, by construction, behaviorally consistent with each other, so
+// a fifth consistent copy would pass every existing test while reproducing exactly the divergence
+// risk this finding warns about. Read each gateway file's own source text instead: fails today
+// (each file defines its own approvalState/approvalIsValid) before the extraction, passes once
+// every gateway imports resolveGitDeliveryApprovalGate and none defines a local copy.
+describe("approval-gate resolution is not reimplemented per-gateway (KEIKO-0535)", () => {
+  const GATEWAY_FILES = [
+    "git-mutation-orchestrator.ts",
+    "git-merge-gateway.ts",
+    "git-publish-gateway.ts",
+    "git-pr-gateway.ts",
+  ];
+
+  const IMPORTS_SHARED_RESOLVER =
+    /import\s*\{[^}]*\bresolveGitDeliveryApprovalGate\b[^}]*\}\s*from\s*["']\.\/git-approval-gate\.js["']/;
+  const LOCAL_STATE_FUNCTION = /function\s+(approvalState|approvalIsValid)\s*\(/;
+
+  it.each(GATEWAY_FILES)("%s imports the shared approval-gate resolver", (file) => {
+    const source = readFileSync(join(import.meta.dirname, file), "utf8");
+    expect(source).toMatch(IMPORTS_SHARED_RESOLVER);
+  });
+
+  it.each(GATEWAY_FILES)(
+    "%s does not define its own local approvalState/approvalIsValid",
+    (file) => {
+      const source = readFileSync(join(import.meta.dirname, file), "utf8");
+      expect(source).not.toMatch(LOCAL_STATE_FUNCTION);
+    },
+  );
 });
