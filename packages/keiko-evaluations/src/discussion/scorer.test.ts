@@ -45,6 +45,7 @@ function fixtureFor(
       expectedUncertaintyDisclosure: plan.requiresUncertaintyDisclosure,
       expectedDecisionRecommendation: plan.producesDecisionRecommendation,
       expectedContradictionPolicies: [plan.contradictionPolicy],
+      expectsRecoveredContext: false,
       ...oracleOverrides,
     },
   };
@@ -287,6 +288,14 @@ describe("scoreDiscussionQuality - interruption-recovery", () => {
   it("passes when the recovered context preserves mode/topicId/turnIndex", () => {
     const f = fixtureFor("decide", ["interruption-recovery"], { expectsRecoveredContext: true });
     expect(outcomeOf(f, recoveryObs(), "interruption-recovery")).toBe("pass");
+  });
+
+  // KEIKO-0552: expectsRecoveredContext must actually gate the preservation outcome, not just be
+  // declared. A fixture that expects recovery to NOT preserve context but observes preservation
+  // anyway must fail -- proving the oracle field is read, not inert documentation.
+  it("fails when the oracle expects no preserved context but the recovery preserves it anyway", () => {
+    const f = fixtureFor("decide", ["interruption-recovery"], { expectsRecoveredContext: false });
+    expect(outcomeOf(f, recoveryObs(), "interruption-recovery")).toBe("fail");
   });
 
   it("fails when the fixture declares recovery but no trajectory is derived", () => {
