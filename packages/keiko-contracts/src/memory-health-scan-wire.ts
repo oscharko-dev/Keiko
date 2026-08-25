@@ -6,7 +6,7 @@
 // and a bounded reason string only — never raw memory body or payload, consistent with
 // `MemoryAuditRecord`'s redaction contract (no free-form content, references by ID only).
 
-import type { MemoryId, MemoryStatus, MemoryType } from "./memory.js";
+import type { MemoryId, MemoryStatus, MemoryType } from "./memory-contracts.js";
 
 // Matches MEMORY_AUDIT_EVENT_SUMMARY_MAX_CHARS (memory-audit-events.ts) so every bounded-reason
 // surface in the memory subsystem shares one budget.

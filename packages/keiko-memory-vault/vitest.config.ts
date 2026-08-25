@@ -1,8 +1,8 @@
 import { fileURLToPath } from "node:url";
 import { defineConfig } from "vitest/config";
 
-const contractsMemoryBarrel = fileURLToPath(
-  new URL("../keiko-contracts/src/memory-barrel.ts", import.meta.url),
+const contractsMemorySubpath = fileURLToPath(
+  new URL("../keiko-contracts/src/memory.ts", import.meta.url),
 );
 
 // node:sqlite is a Node 22 built-in surfaced behind `--experimental-sqlite`. Surfacing the flag
@@ -11,7 +11,7 @@ const contractsMemoryBarrel = fileURLToPath(
 export default defineConfig({
   resolve: {
     alias: {
-      "@oscharko-dev/keiko-contracts/memory": contractsMemoryBarrel,
+      "@oscharko-dev/keiko-contracts/memory": contractsMemorySubpath,
     },
   },
   test: {

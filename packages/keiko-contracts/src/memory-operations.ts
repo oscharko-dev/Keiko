@@ -24,7 +24,7 @@ import type {
   MemorySensitivity,
   MemoryStatus,
   MemoryType,
-} from "./memory.js";
+} from "./memory-contracts.js";
 import type {
   MemoryProvenance,
   MemoryRetentionHint,

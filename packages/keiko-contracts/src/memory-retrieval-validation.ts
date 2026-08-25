@@ -8,8 +8,8 @@
 // it intends to query is in the authorized set. Both helpers are pure and clock-free.
 
 import type { MemoryRetrievalRequest } from "./memory-operations.js";
-import type { MemoryScope } from "./memory.js";
-import { MEMORY_STATUSES, MEMORY_TYPES } from "./memory.js";
+import type { MemoryScope } from "./memory-contracts.js";
+import { MEMORY_STATUSES, MEMORY_TYPES } from "./memory-contracts.js";
 import { validateMemoryScope, type MemoryValidation } from "./memory-validation.js";
 import {
   MEMORY_BODY_MAX_CHARS,

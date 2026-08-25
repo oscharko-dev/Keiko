@@ -572,8 +572,8 @@ describe("keiko-contracts package surface", () => {
     await expect(import("./index.js")).resolves.toBeDefined();
   });
 
-  it("memory subpath barrel is importable as @oscharko-dev/keiko-contracts/memory (#205)", async () => {
-    const subpath = await import("./memory-barrel.js");
+  it("memory subpath is importable as @oscharko-dev/keiko-contracts/memory (#205)", async () => {
+    const subpath = await import("./memory.js");
     expect(subpath.MEMORY_SCHEMA_VERSION).toBe("1");
     expect(typeof subpath.validateMemoryRecord).toBe("function");
     expect(typeof subpath.isScopeReachable).toBe("function");

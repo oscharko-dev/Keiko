@@ -4,7 +4,7 @@
 // projection consumed by MemoriaViva and produced by keiko-server, so the UI does not duplicate
 // partial copies of review evidence, conflict counters, or job lifecycle fields.
 
-import type { MemoryId, MemoryScope, MemoryStatus, MemoryType } from "./memory.js";
+import type { MemoryId, MemoryScope, MemoryStatus, MemoryType } from "./memory-contracts.js";
 import type { MemoryEdge } from "./memory-records.js";
 import type { MemoryUpdate } from "./memory-operations.js";
 

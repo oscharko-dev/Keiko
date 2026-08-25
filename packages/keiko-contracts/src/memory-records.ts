@@ -29,7 +29,7 @@ import type {
   MemoryStatus,
   MemoryType,
   WorkflowRunId,
-} from "./memory.js";
+} from "./memory-contracts.js";
 
 // ─── Model identity (completion model, not embedding model) ───────────────────
 // When a memory was authored or transformed with model assistance (e.g. a consolidation

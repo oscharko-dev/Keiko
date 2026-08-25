@@ -89,6 +89,10 @@ function assertCspHashesMatchStaticHtml() {
 }
 
 const WORKFLOW_HANDOFF_DIST_FILES = ["dist/workflow-handoff.js", "dist/workflow-handoff.d.ts"];
+const CONTRACTS_MEMORY_SUBPATH_EXPORT = {
+  types: "./dist/memory.d.ts",
+  import: "./dist/memory.js",
+};
 const ROOT_PACKAGE_SURFACE_CONTRACT_PATH = join("scripts", "root-package-surface.contract.json");
 
 function readRootPackageSurfaceContract() {
@@ -386,6 +390,22 @@ function assertWorkflowHandoffSubpath(vendorPackages) {
   }
 }
 
+function assertContractsMemorySubpath(vendorPackages) {
+  const workspace = workspaceManifestByName("@oscharko-dev/keiko-contracts");
+  const memorySubpath = workspace?.manifest.exports?.["./memory"];
+  if (stableJson(memorySubpath) !== stableJson(CONTRACTS_MEMORY_SUBPATH_EXPORT)) {
+    fail(
+      "@oscharko-dev/keiko-contracts ./memory must resolve to dist/memory, not an internal module.",
+    );
+  }
+  const files = vendorPackage(vendorPackages, "@oscharko-dev/keiko-contracts")?.files ?? [];
+  for (const target of ["dist/memory.js", "dist/memory.d.ts"]) {
+    if (!files.includes(target)) {
+      fail(`keiko-contracts memory subpath is missing ${target} from the packed artifact.`);
+    }
+  }
+}
+
 function assertLocalKnowledgeDistPath(vendorPackages) {
   const required = "dist/index.js";
   const files = vendorPackage(vendorPackages, "@oscharko-dev/keiko-local-knowledge")?.files ?? [];
@@ -493,6 +513,7 @@ if (process.env.KEIKO_PACKAGE_SURFACE_COVERAGE_IMPORT_ONLY === "1") {
     assertTypeScriptRuntimeSurface,
     assertVendoredPayload,
     assertVendoredWorkspaceExportArtifacts,
+    assertContractsMemorySubpath,
     assertWorkflowHandoffSubpath,
     collectBuildOutputs,
   });
@@ -552,6 +573,7 @@ assertRootWorkspaceContract();
 assertVendoredPayload(paths, vendorPackages);
 assertVendoredWorkspaceExportArtifacts(vendorPackages);
 assertWorkflowHandoffSubpath(vendorPackages);
+assertContractsMemorySubpath(vendorPackages);
 assertLocalKnowledgeDistPath(vendorPackages);
 assertBuiltArtifactsFresh(vendorPackages);
 

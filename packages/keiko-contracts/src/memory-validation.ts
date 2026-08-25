@@ -19,7 +19,7 @@ import type {
   MemoryStructuredPayload,
   MemoryValidityInterval,
 } from "./memory-records.js";
-import type { MemoryScope, MemoryStatus } from "./memory.js";
+import type { MemoryScope, MemoryStatus } from "./memory-contracts.js";
 import {
   MEMORY_EDGE_KINDS,
   MEMORY_SCOPE_KINDS,
@@ -27,7 +27,7 @@ import {
   MEMORY_SOURCE_KINDS,
   MEMORY_STATUSES,
   MEMORY_STATUS_TRANSITIONS,
-} from "./memory.js";
+} from "./memory-contracts.js";
 import { MEMORY_STRUCTURED_PAYLOAD_KINDS } from "./memory-records.js";
 import {
   FORBIDDEN_CONTROL_RE,

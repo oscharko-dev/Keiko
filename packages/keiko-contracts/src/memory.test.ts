@@ -14,7 +14,7 @@ import {
   MEMORY_STATUSES,
   MEMORY_STATUS_TRANSITIONS,
   MEMORY_TYPES,
-} from "./memory.js";
+} from "./memory-contracts.js";
 import { MEMORY_STRUCTURED_PAYLOAD_KINDS } from "./memory-records.js";
 import { MEMORY_AUDIT_INITIATOR_SURFACES, MEMORY_UPDATE_FIELDS } from "./memory-operations.js";
 import type {
@@ -25,8 +25,8 @@ import type {
   ProjectId,
   UserId,
   WorkspaceId,
-} from "./memory.js";
-import type { MemoryAuditRecordId } from "./memory.js";
+} from "./memory-contracts.js";
+import type { MemoryAuditRecordId } from "./memory-contracts.js";
 import type { MemoryRecord, MemoryEdge } from "./memory-records.js";
 import {
   checkStatusTransition,
@@ -1289,7 +1289,7 @@ describe("type-level scope coordinate invariants", () => {
     // object to a `MemoryScope` variable is the exact site that fails compilation.
     const userScopeMissingId = { kind: "user" as const };
     // @ts-expect-error — scope.kind="user" requires `userId`; the structural omission is rejected.
-    const assigned: import("./memory.js").MemoryScope = userScopeMissingId;
+    const assigned: import("./memory-contracts.js").MemoryScope = userScopeMissingId;
     expect(assigned.kind).toBe("user");
   });
 

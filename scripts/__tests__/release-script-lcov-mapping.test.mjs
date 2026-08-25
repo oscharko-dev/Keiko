@@ -53,6 +53,7 @@ describe("release script LCOV mapping seams", () => {
         surface.assertVendoredPayload(paths, staged.vendorPackages);
         surface.assertVendoredWorkspaceExportArtifacts(staged.vendorPackages);
         surface.assertWorkflowHandoffSubpath(staged.vendorPackages);
+        surface.assertContractsMemorySubpath(staged.vendorPackages);
         surface.assertLocalKnowledgeDistPath(staged.vendorPackages);
         expect(surface.collectBuildOutputs(staged.vendorPackages)).toContain(
           "packages/keiko-server/dist/index.js",
@@ -60,6 +61,7 @@ describe("release script LCOV mapping seams", () => {
         expect(() => surface.assertVendoredPayload(paths, [])).toThrow("process.exit(1)");
         expect(() => surface.assertVendoredWorkspaceExportArtifacts([])).toThrow("process.exit(1)");
         expect(() => surface.assertWorkflowHandoffSubpath([])).toThrow("process.exit(1)");
+        expect(() => surface.assertContractsMemorySubpath([])).toThrow("process.exit(1)");
         expect(() => surface.assertLocalKnowledgeDistPath([])).toThrow("process.exit(1)");
       } catch (error_) {
         seamError = error_;
