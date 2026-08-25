@@ -949,15 +949,24 @@ const CRITERIA_SENSITIVE_CLASSES: ReadonlySet<PromptTaskClass> = new Set([
   "research",
 ]);
 const SCOPE_SENSITIVE_CLASSES: ReadonlySet<PromptTaskClass> = new Set(["code-architecture"]);
-const ARCHITECTURE_SCOPE_PATTERN =
-  /\b(?:for|within|supporting|targeting)\s+(?:an?\s+)?(?:[\p{L}\p{N}-]+\s+){1,6}(?:application|service|platform|workspace|repository|product|system)\b/u;
+const ARCHITECTURE_SCOPE_PREFIX_PATTERN = /\b(?:for|within|supporting|targeting)\s+/u;
+const ARCHITECTURE_SCOPE_TARGET_PATTERN =
+  /^(?:an?\s+)?(?:[\p{L}\p{N}-]+\s+){1,6}(?:application|service|platform|workspace|repository|product|system)\b/u;
 const MAX_MISSING_TOPICS = 4;
 
 const lacksSubject = (view: AnalysisView): boolean =>
   view.normalizedLength < 12 || view.meaningfulTokenCount < 3;
 
+function hasArchitectureScope(lower: string): boolean {
+  const prefix = ARCHITECTURE_SCOPE_PREFIX_PATTERN.exec(lower);
+  return (
+    prefix !== null &&
+    ARCHITECTURE_SCOPE_TARGET_PATTERN.test(lower.slice(prefix.index + prefix[0].length))
+  );
+}
+
 const lacksScope = (view: AnalysisView, taskClass: PromptTaskClass): boolean =>
-  SCOPE_SENSITIVE_CLASSES.has(taskClass) && !ARCHITECTURE_SCOPE_PATTERN.test(view.lower);
+  SCOPE_SENSITIVE_CLASSES.has(taskClass) && !hasArchitectureScope(view.lower);
 
 const lacksDataSource = (view: AnalysisView): boolean =>
   containsAny(view.lower, SCOPE_REFERENCE_CUES) && !view.hasConnectedContext;

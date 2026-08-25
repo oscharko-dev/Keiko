@@ -390,7 +390,9 @@ function applyItemOutcome<TRef extends AtlassianSyncItemRef>(
 // port that honors AbortSignal cancels its in-flight HTTP request instead of waiting for its
 // bounded timeout. The old `allSettled` behavior on top still guarantees no orphaned mutation
 // after the pool returns.
-function forkLaneAbort(state: FetchRunState<AtlassianSyncItemRef>): {
+function forkLaneAbort<TRef extends AtlassianSyncItemRef>(
+  state: FetchRunState<TRef>,
+): {
   readonly signal: AbortSignal;
   readonly abort: () => void;
   readonly dispose: () => void;

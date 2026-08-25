@@ -84,10 +84,13 @@ const ResourcesPanel = dynamic(
   () => import("./panels/ResourcesPanel").then((mod) => mod.ResourcesPanel),
   { ssr: false, loading: windowChunkFallback },
 );
-const TimelinePanel = dynamic(() => import("./panels/TimelinePanel").then((mod) => mod.default), {
-  ssr: false,
-  loading: windowChunkFallback,
-});
+const TimelinePanel = dynamic(
+  () => import("./panels/TimelinePanel").then((mod) => mod.TimelinePanel),
+  {
+    ssr: false,
+    loading: windowChunkFallback,
+  },
+);
 const SettingsPanel = dynamic(
   () => import("./panels/SettingsPanel").then((mod) => mod.SettingsPanel),
   { ssr: false, loading: windowChunkFallback },
