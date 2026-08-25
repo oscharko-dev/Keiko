@@ -438,6 +438,14 @@ describe("KEIKO-0266 dimension-check regression pins", () => {
       ),
     });
     expect(outcomeOf(stripped, ["format-adherence"], oracle, "format-adherence")).toBe("fail");
+    // KEIKO-0770 (partial): the inline `.startsWith("Output controllability")` literal moved to a
+    // named constant (OUTPUT_CONTROLLABILITY_CRITERION_PREFIX in scorer.ts) so keiko-evaluations has
+    // one place to update, but this is behaviourally a no-op refactor -- it does not decouple the
+    // check from keiko-model-gateway's own independent copies of the same literal (generator.ts's
+    // buildQualityCriteria and critic.ts's scoreOutputControllability), which this
+    // keiko-evaluations-only change cannot reach. No new pass/fail assertion is added here: a test
+    // that cannot distinguish the refactor from its absence would prove nothing (AGENTS.md §7). This
+    // existing pin (drop-the-criterion -> fail) is what continues to prove the check still functions.
   });
 
   it("task-success fails when the role is blanked", () => {
