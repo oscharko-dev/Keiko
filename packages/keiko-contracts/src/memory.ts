@@ -191,19 +191,20 @@ export const MEMORY_STATUSES: readonly MemoryStatus[] = [
 // Allowed transitions. Read as: from-state → set of legal next-states.
 //
 // Design notes (encoded so future readers do not have to reverse-engineer):
-//  - "rejected" and "forgotten" are absorbing for normal operation (no outbound edges).
-//    "forgotten" is the destructive-delete terminus required by #209.
+//  - "forgotten" is the destructive-delete terminus required by #209. Rejected and
+//    proposed records may be forgotten only through the separately acknowledged human flow.
 //  - "superseded" can become "archived" (e.g. when its replacement is itself archived
 //    in a batch cleanup) but cannot return to "accepted" — supersession is monotonic.
 //  - "conflicted" and "expired" can be rehabilitated back to "accepted" once the
 //    conflict-resolution job (#209) or a re-validation pass clears the condition.
-//  - "archived" can be restored to "accepted" — archival is non-destructive.
+//  - "archived" can be restored to "accepted" or forgotten after separately acknowledged
+//    retention review — archival is non-destructive and never authorizes unattended deletion.
 //  - A "proposed" memory can also reach "expired" if its capture window elapses before
 //    review (proposal TTL is enforced by #207, not by this contract).
 export const MEMORY_STATUS_TRANSITIONS: Readonly<Record<MemoryStatus, readonly MemoryStatus[]>> = {
-  proposed: ["accepted", "rejected", "superseded", "conflicted", "expired"],
+  proposed: ["accepted", "rejected", "superseded", "conflicted", "expired", "forgotten"],
   accepted: ["superseded", "archived", "forgotten", "conflicted", "expired"],
-  rejected: [],
+  rejected: ["forgotten"],
   superseded: ["archived", "forgotten"],
   archived: ["accepted", "forgotten"],
   forgotten: [],

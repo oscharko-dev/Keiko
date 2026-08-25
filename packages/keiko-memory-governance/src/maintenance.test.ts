@@ -3,6 +3,7 @@ import type { MemoryId, MemoryRecord } from "@oscharko-dev/keiko-contracts/memor
 import { MEMORY_TYPE_DECAY_HALF_LIFE_MULTIPLIERS } from "@oscharko-dev/keiko-contracts/memory";
 import {
   effectiveStrength,
+  planAcknowledgedArchivedForgets,
   planMemoryMaintenance,
   MEMORY_MAINTENANCE_DEFAULTS,
   type MemoryAccessStatLike,
@@ -362,6 +363,28 @@ describe("planMemoryMaintenance — forget", () => {
       createdAt: NOW - 40 * DAY,
     });
     expect(planFor([r], emptyStats()).forget).toEqual([]);
+  });
+
+  it("surfaces old archived records only through the acknowledged retention planner", () => {
+    const archived = makeRecord({
+      id: "archived-old",
+      status: "archived",
+      createdAt: NOW - 90 * DAY,
+      updatedAt: NOW - 31 * DAY,
+    });
+    const recent = makeRecord({
+      id: "archived-recent",
+      status: "archived",
+      createdAt: NOW - 90 * DAY,
+      updatedAt: NOW - 29 * DAY,
+    });
+    const candidates = planAcknowledgedArchivedForgets([archived, recent], {
+      nowMs: NOW,
+      retentionAcknowledged: true,
+    });
+
+    expect(candidates).toEqual([{ id: "archived-old", reason: "archived-retention" }]);
+    expect(planFor([archived], emptyStats()).forget).toEqual([]);
   });
 
   it("EXPIRES rather than forgets a very faint, old, unaccessed proposed memory", () => {

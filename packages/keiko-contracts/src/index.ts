@@ -3147,6 +3147,7 @@ export type {
   WorkspaceId as MemoryWorkspaceId,
 } from "./memory-barrel.js";
 export {
+  MEMORY_FORGET_REASON_ARCHIVED_RETENTION,
   MEMORY_AUDIT_ACTION_KINDS,
   MEMORY_AUDIT_EVENT_KINDS,
   MEMORY_AUDIT_EVENT_SCHEMA_VERSION,

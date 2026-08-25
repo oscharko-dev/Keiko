@@ -270,14 +270,14 @@ describe("frozen-constant arrays", () => {
 
 // ─── Status transition matrix ─────────────────────────────────────────────────
 describe("MEMORY_STATUS_TRANSITIONS", () => {
-  it("rejected and forgotten are absorbing", () => {
-    expect(MEMORY_STATUS_TRANSITIONS.rejected).toEqual([]);
+  it("forgotten is absorbing while rejected can be acknowledged for deletion", () => {
+    expect(MEMORY_STATUS_TRANSITIONS.rejected).toEqual(["forgotten"]);
     expect(MEMORY_STATUS_TRANSITIONS.forgotten).toEqual([]);
   });
 
-  it("allows reviewed proposals to settle as superseded or conflicted", () => {
+  it("allows proposed captures to settle or be acknowledged for deletion", () => {
     expect([...MEMORY_STATUS_TRANSITIONS.proposed].sort()).toEqual(
-      ["accepted", "conflicted", "expired", "rejected", "superseded"].sort(),
+      ["accepted", "conflicted", "expired", "forgotten", "rejected", "superseded"].sort(),
     );
   });
 
@@ -293,8 +293,9 @@ describe("MEMORY_STATUS_TRANSITIONS", () => {
     );
   });
 
-  it("archived can be restored to accepted (non-destructive)", () => {
+  it("archived can be restored to accepted or acknowledged for deletion", () => {
     expect(MEMORY_STATUS_TRANSITIONS.archived).toContain("accepted");
+    expect(MEMORY_STATUS_TRANSITIONS.archived).toContain("forgotten");
   });
 
   it("conflicted and expired can return to accepted (rehabilitation)", () => {
