@@ -1,6 +1,6 @@
 // Builds the four-dimension appliedLimits record for a step (ADR-0007 D2), with HONEST `enforced`
-// flags: wall-time and output-size are enforced by #6; memory is enforced only on Linux with a
-// ceiling set; network egress is OS/container-enforced for a `network:"none"` run via keiko-sandbox
+// flags: wall-time and output-size are enforced by #6; memory is enforced only with a complete
+// process-tree sampler and a ceiling; network egress is OS/container-enforced for a `network:"none"` run via keiko-sandbox
 // (ADR-0043) and documented-not-enforced for an inherited-network run. `breached` is set only on the
 // single dimension that actually fired for the step. Pure — no IO; the caller passes the run's
 // network-enforcement attestation (false means this particular run had no enforcing attestation).
@@ -15,18 +15,26 @@ const NETWORK_OFF_NOTE =
   'run. A network:"none" run is OS/container-enforced via keiko-sandbox (ADR-0043).';
 const NETWORK_ON_NOTE =
   'OS/container-enforced via keiko-sandbox for a network:"none" run (ADR-0043)';
-const MEMORY_OFF_NOTE = "best-effort; Linux /proc sampler only — not enforced on this run";
+const MEMORY_OFF_NOTE =
+  "not enforced; complete process-tree memory sampling is unavailable on this run";
 
-function memoryEnforced(limits: VerificationResourceLimits): boolean {
-  return process.platform === "linux" && limits.maxMemoryBytes !== undefined;
+function memoryEnforced(
+  limits: VerificationResourceLimits,
+  processTreeMemoryEnforced: boolean | undefined,
+): boolean {
+  return (
+    limits.maxMemoryBytes !== undefined &&
+    (processTreeMemoryEnforced ?? process.platform === "linux")
+  );
 }
 
 export function buildAppliedLimits(
   limits: VerificationResourceLimits,
   breached: BreachedDimension,
   networkEnforced = false,
+  processTreeMemoryEnforced?: boolean,
 ): readonly ResourceLimitDecision[] {
-  const memEnforced = memoryEnforced(limits);
+  const memEnforced = memoryEnforced(limits, processTreeMemoryEnforced);
   return [
     {
       dimension: "wall-time",

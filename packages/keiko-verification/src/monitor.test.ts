@@ -1,6 +1,8 @@
+import { spawn } from "node:child_process";
+import { once } from "node:events";
 import { existsSync } from "node:fs";
 import { describe, expect, it } from "vitest";
-import { nodeResourceMonitor } from "./monitor.js";
+import { nodeResourceMonitor, readProcessTreeRssBytes } from "./monitor.js";
 
 describe("nodeResourceMonitor — documented no-op paths", () => {
   it("returns a no-op unwatch when no memory ceiling is requested", () => {
@@ -51,5 +53,36 @@ describe.skipIf(!linuxProc)("nodeResourceMonitor — Linux /proc sampler", () =>
       }, 2_000);
     });
     expect(fired).toBe(true);
+  });
+
+  it("detects a child-of-child allocation against the aggregate process-tree ceiling", async () => {
+    const worker =
+      "const memory = Buffer.alloc(64 * 1024 * 1024, 1); process.stdout.write('ready'); setInterval(() => {}, 1_000);";
+    const parent = spawn(
+      process.execPath,
+      [
+        "-e",
+        `const { spawn } = require('node:child_process'); spawn(process.execPath, ['-e', ${JSON.stringify(worker)}], { stdio: ['ignore', 'inherit', 'ignore'] }); setInterval(() => {}, 1_000);`,
+      ],
+      { stdio: ["ignore", "pipe", "ignore"] },
+    );
+    try {
+      await once(parent.stdout, "data");
+      expect(readProcessTreeRssBytes(parent.pid ?? 0)).toBeGreaterThan(64 * 1024 * 1024);
+      const breached = await new Promise<boolean>((resolve) => {
+        const unwatch = nodeResourceMonitor.watch(parent.pid, 64 * 1024 * 1024, () => {
+          unwatch();
+          resolve(true);
+        });
+        setTimeout(() => {
+          unwatch();
+          resolve(false);
+        }, 4_000).unref();
+      });
+      expect(breached).toBe(true);
+    } finally {
+      if (!parent.killed) parent.kill("SIGTERM");
+      await once(parent, "close");
+    }
   });
 });

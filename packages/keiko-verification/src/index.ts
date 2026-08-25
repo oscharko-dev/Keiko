@@ -36,13 +36,13 @@ export type { AbortReason, OutcomeInput } from "./classify.js";
 export { buildVerificationPlan, resolveTargetedTests, planDirectTargetedTests } from "./plan.js";
 export type { PlanOptions } from "./plan.js";
 
-export { nodeResourceMonitor } from "./monitor.js";
+export { nodeResourceMonitor, readProcessTreeRssBytes } from "./monitor.js";
 export type { ResourceMonitor } from "./monitor.js";
 
 export { buildAppliedLimits } from "./limits.js";
 export type { BreachedDimension } from "./limits.js";
 
-export { runVerification } from "./orchestrator.js";
+export { resolveStepNetwork, runVerification } from "./orchestrator.js";
 export type { NetworkEnforcementMode, VerificationDeps } from "./orchestrator.js";
 
 export { buildVerificationSummary, renderMarkdownSummary, summarizeForAudit } from "./summary.js";

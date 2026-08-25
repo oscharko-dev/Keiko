@@ -90,6 +90,7 @@ export function fakeMonitor(): FakeMonitor {
   let lastBreach: (() => void) | undefined;
   let stopCount = 0;
   return {
+    canEnforceProcessTreeMemory: (): boolean => true,
     watched: () => watched,
     stopped: () => stopCount,
     breach: (): void => lastBreach?.(),
