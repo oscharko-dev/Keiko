@@ -256,13 +256,21 @@ describe("scoreDiscussionQuality - correction-handling", () => {
 
   // KEIKO-0663: expectedContradictionPolicies is optional, so a fixture that declares
   // correction-handling without setting it must fail closed, not pass vacuously. Explicitly
-  // unset the field (not merely omitted from overrides) to prove the check itself, independent
-  // of the sibling "assumptions facet mandated" check.
+  // unset the field (not merely omitted from overrides, and not set to `undefined` -- disallowed
+  // under exactOptionalPropertyTypes for an already-optional readonly field -- but genuinely
+  // absent, via rest-destructuring) to prove the check itself, independent of the sibling
+  // "assumptions facet mandated" check.
   it("fails closed when the oracle omits expectedContradictionPolicies entirely", () => {
-    const f = fixtureFor("evidence-check", ["correction-handling"], {
-      expectedContradictionPolicies: undefined,
-    });
-    expect(outcomeOf(f, observationFor("evidence-check"), "correction-handling")).toBe("fail");
+    const f = fixtureFor("evidence-check", ["correction-handling"]);
+    const {
+      expectedContradictionPolicies: _expectedContradictionPolicies,
+      ...oracleWithoutPolicies
+    } = f.oracle;
+    void _expectedContradictionPolicies;
+    const fWithoutPolicies: DiscussionEvalFixture = { ...f, oracle: oracleWithoutPolicies };
+    expect(
+      outcomeOf(fWithoutPolicies, observationFor("evidence-check"), "correction-handling"),
+    ).toBe("fail");
   });
 
   // KEIKO-0258: isolate the `assumptions facet mandated for correction handling` check
