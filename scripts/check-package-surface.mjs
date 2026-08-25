@@ -390,9 +390,10 @@ function assertWorkflowHandoffSubpath(vendorPackages) {
   }
 }
 
-function assertContractsMemorySubpath(vendorPackages) {
-  const workspace = workspaceManifestByName("@oscharko-dev/keiko-contracts");
-  const memorySubpath = workspace?.manifest.exports?.["./memory"];
+function assertContractsMemorySubpath(vendorPackages, memorySubpathOverride) {
+  const memorySubpath =
+    memorySubpathOverride ??
+    workspaceManifestByName("@oscharko-dev/keiko-contracts")?.manifest.exports?.["./memory"];
   if (stableJson(memorySubpath) !== stableJson(CONTRACTS_MEMORY_SUBPATH_EXPORT)) {
     fail(
       "@oscharko-dev/keiko-contracts ./memory must resolve to dist/memory, not an internal module.",

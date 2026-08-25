@@ -160,6 +160,9 @@ export interface CodingWorkbenchRuntimeApprovalDecisionRequest {
   readonly requestId: string;
   readonly expectedRevision: number;
   readonly decision: CodingWorkbenchRuntimeApprovalDecision;
+  readonly grantScope?: "once" | "task" | undefined;
+  readonly commandTemplateId?: string | undefined;
+  readonly safeArgumentClasses?: readonly string[] | undefined;
 }
 
 // Body for POST /runs/:runId/research/revoke (#2387). Bound to the observed revision and the exact
@@ -372,7 +375,14 @@ export function parseCodingWorkbenchRuntimeApprovalDecisionRequest(
   if (!isRecord(value)) return invalid("approval decision must be an object");
   const errors = exactKeys(
     value,
-    ["requestId", "expectedRevision", "decision"],
+    [
+      "requestId",
+      "expectedRevision",
+      "decision",
+      "grantScope",
+      "commandTemplateId",
+      "safeArgumentClasses",
+    ],
     "approvalDecision",
   );
   validateRequestId(value.requestId, errors);
@@ -382,7 +392,52 @@ export function parseCodingWorkbenchRuntimeApprovalDecisionRequest(
   if (!isOneOf(value.decision, CODING_WORKBENCH_RUNTIME_APPROVAL_DECISIONS)) {
     errors.push("decision is invalid");
   }
+  validateApprovalGrantFields(value, errors);
   return result(value, errors);
+}
+
+function validateApprovalGrantFields(value: Record<string, unknown>, errors: string[]): void {
+  if (
+    value.grantScope !== undefined &&
+    value.grantScope !== "once" &&
+    value.grantScope !== "task"
+  ) {
+    errors.push("grantScope is invalid");
+  }
+  if (value.commandTemplateId !== undefined) {
+    validateSafeId(
+      value.commandTemplateId,
+      "commandTemplateId",
+      errors,
+      CODING_WORKBENCH_RUNTIME_API_ID_MAX_CHARS,
+    );
+  }
+  validateSafeArgumentClasses(value.safeArgumentClasses, errors);
+  if (
+    value.decision !== "approved" &&
+    (value.grantScope !== undefined ||
+      value.commandTemplateId !== undefined ||
+      value.safeArgumentClasses !== undefined)
+  ) {
+    errors.push("denied decisions cannot carry grant fields");
+  }
+}
+
+function validateSafeArgumentClasses(value: unknown, errors: string[]): void {
+  if (!Array.isArray(value)) {
+    if (value !== undefined) errors.push("safeArgumentClasses must be an array");
+  } else if (value.length > 16) {
+    errors.push("safeArgumentClasses exceeds 16 entries");
+  } else {
+    value.forEach((entry, index) => {
+      validateSafeId(
+        entry,
+        `safeArgumentClasses[${String(index)}]`,
+        errors,
+        CODING_WORKBENCH_RUNTIME_API_ID_MAX_CHARS,
+      );
+    });
+  }
 }
 
 export function parseCodingWorkbenchRuntimeResearchRevokeRequest(

@@ -391,7 +391,7 @@ describe("coding context pack route", () => {
     expect(blocked[0]).toMatchObject({ source: "jira", reason: "missing-credentials" });
   });
 
-  it("fails closed when an authorized connector has unusable complete configuration", async () => {
+  it("degrades unusable Jira configuration to missing credentials", async () => {
     const result = await handleCodingContextPack(
       ctxFor(packRequest()),
       depsFor({
@@ -408,10 +408,10 @@ describe("coding context pack route", () => {
       }),
     );
 
-    expect(result).toMatchObject({
-      status: 502,
-      body: { error: { code: "CODING_CONTEXT_UPSTREAM_FAILED" } },
-    });
+    expect(result.status).toBe(200);
+    expect(bodyOf(result).blocked).toContainEqual(
+      expect.objectContaining({ source: "jira", reason: "missing-credentials" }),
+    );
   });
 
   it("composes the governed GitHub fallback for an authorized launch project", () => {
@@ -426,7 +426,7 @@ describe("coding context pack route", () => {
     expect(composed.connectorConfig.github_connector_authorized).toBe(true);
   });
 
-  it("fails closed with a redacted diagnostic when fallback Jira configuration is invalid", async () => {
+  it("does not emit an upstream diagnostic for invalid fallback Jira configuration", async () => {
     const diagnostics: unknown[] = [];
 
     const result = await handleCodingContextPack(
@@ -443,19 +443,11 @@ describe("coding context pack route", () => {
       }),
     );
 
-    expect(result.status).toBe(502);
-    const responseError = bodyOf(result).error as Record<string, unknown>;
-    expect(responseError.code).toBe("CODING_CONTEXT_UPSTREAM_FAILED");
-    expect(typeof responseError.correlationId).toBe("string");
-    expect(diagnostics).toHaveLength(1);
-    expect(diagnostics[0]).toMatchObject({
-      correlationId: responseError.correlationId,
-      operation: "coding-context.pack",
-      source: "coding-context.handleCodingContextPack",
-    });
-    expect(JSON.stringify(diagnostics)).not.toContain("invalid.example.com");
-    expect(JSON.stringify(diagnostics)).not.toContain("operator@example.com");
-    expect(JSON.stringify(diagnostics)).not.toContain("secret-token");
+    expect(result.status).toBe(200);
+    expect(bodyOf(result).blocked).toContainEqual(
+      expect.objectContaining({ source: "jira", reason: "missing-credentials" }),
+    );
+    expect(diagnostics).toEqual([]);
   });
 
   it("rejects malformed bodies, unknown keys, hostile refs, and bad bounds", async () => {

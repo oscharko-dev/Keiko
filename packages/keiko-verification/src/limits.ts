@@ -22,10 +22,7 @@ function memoryEnforced(
   limits: VerificationResourceLimits,
   processTreeMemoryEnforced: boolean | undefined,
 ): boolean {
-  return (
-    limits.maxMemoryBytes !== undefined &&
-    (processTreeMemoryEnforced ?? process.platform === "linux")
-  );
+  return limits.maxMemoryBytes !== undefined && processTreeMemoryEnforced === true;
 }
 
 export function buildAppliedLimits(

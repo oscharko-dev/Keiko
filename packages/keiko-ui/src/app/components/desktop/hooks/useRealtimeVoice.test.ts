@@ -7,7 +7,7 @@ import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { DEFAULT_VOICE_PROTOCOL_TIMEOUTS } from "@oscharko-dev/keiko-contracts";
 import { MAX_DESKTOP_CHAT_INPUT_CHARS } from "@oscharko-dev/keiko-contracts/bff-wire";
 import { prepareCanonicalVoiceHasher } from "./canonical-voice-hasher";
-import { useRealtimeVoice } from "./useRealtimeVoice";
+import { executeVoiceTurnEffects, useRealtimeVoice } from "./useRealtimeVoice";
 import { VoiceControlError, type VoiceControlClient } from "./voice-realtime-client";
 import { VoiceRtcError, type VoiceRtcSession, type VoiceRtcTransport } from "./voice-rtc-transport";
 
@@ -286,6 +286,7 @@ describe("useRealtimeVoice media-only session", () => {
         createTransport: () => transport,
         createControl: () => client,
         onUserSpeechStart,
+        assistantSpeaking: true,
       }),
     );
     act(() => result.current.start());
@@ -301,7 +302,7 @@ describe("useRealtimeVoice media-only session", () => {
       fake.fireDataChannelEvent({ type: "input_audio_buffer.speech_stopped" });
       fake.fireDataChannelEvent({ type: "input_audio_buffer.speech_started" });
     });
-    expect(onUserSpeechStart).toHaveBeenCalledTimes(2);
+    expect(onUserSpeechStart).toHaveBeenCalledOnce();
   });
 
   it("starts the first barge-in of a new session after stopping during active speech", async () => {
@@ -309,12 +310,15 @@ describe("useRealtimeVoice media-only session", () => {
     const onUserSpeechStart = vi.fn();
     const transport = makeFakeTransport({ session: fake.session });
     const { client } = makeFakeControl();
-    const { result } = renderHook(() =>
-      useRealtimeVoice({
-        createTransport: () => transport,
-        createControl: () => client,
-        onUserSpeechStart,
-      }),
+    const { result, rerender } = renderHook(
+      ({ assistantSpeaking }: { readonly assistantSpeaking: boolean }) =>
+        useRealtimeVoice({
+          createTransport: () => transport,
+          createControl: () => client,
+          onUserSpeechStart,
+          assistantSpeaking,
+        }),
+      { initialProps: { assistantSpeaking: true } },
     );
     act(() => result.current.start());
     await waitFor(() => expect(result.current.phase).toBe("negotiating"));
@@ -323,8 +327,10 @@ describe("useRealtimeVoice media-only session", () => {
 
     act(() => {
       result.current.stop();
-      result.current.start();
     });
+    rerender({ assistantSpeaking: false });
+    act(() => result.current.start());
+    rerender({ assistantSpeaking: true });
     await waitFor(() => expect(transport.connect).toHaveBeenCalledTimes(2));
     act(() => fake.fireDataChannelEvent({ type: "input_audio_buffer.speech_started" }));
 
@@ -333,6 +339,56 @@ describe("useRealtimeVoice media-only session", () => {
 });
 
 describe("useRealtimeVoice canonical transcript delivery", () => {
+  it("executes interruption, preservation, backchannel, and recovery effects", () => {
+    const handlers = {
+      interruptAssistant: vi.fn(),
+      preserveUserTurn: vi.fn(),
+      emitBackchannel: vi.fn(),
+      beginRecovery: vi.fn(),
+    };
+
+    executeVoiceTurnEffects(
+      [
+        "stop-playback",
+        "cancel-speech-generation",
+        "preserve-user-turn",
+        "emit-backchannel",
+        "begin-recovery",
+      ],
+      handlers,
+    );
+
+    expect(handlers.interruptAssistant).toHaveBeenCalledOnce();
+    expect(handlers.preserveUserTurn).toHaveBeenCalledOnce();
+    expect(handlers.emitBackchannel).toHaveBeenCalledOnce();
+    expect(handlers.beginRecovery).toHaveBeenCalledOnce();
+  });
+
+  it("executes barge-in effects from the Chat-owned playback signal", async () => {
+    const fake = makeFakeSession();
+    const onUserSpeechStart = vi.fn();
+    const transport = makeFakeTransport({ session: fake.session });
+    const { client } = makeFakeControl();
+    const { result, rerender } = renderHook(
+      ({ assistantSpeaking }: { readonly assistantSpeaking: boolean }) =>
+        useRealtimeVoice({
+          createTransport: () => transport,
+          createControl: () => client,
+          onUserSpeechStart,
+          assistantSpeaking,
+        }),
+      { initialProps: { assistantSpeaking: false } },
+    );
+    act(() => result.current.start());
+    await waitFor(() => expect(result.current.phase).toBe("negotiating"));
+    rerender({ assistantSpeaking: true });
+
+    act(() => fake.fireDataChannelEvent({ type: "input_audio_buffer.speech_started" }));
+
+    expect(onUserSpeechStart).toHaveBeenCalledOnce();
+    expect(result.current.turnSnapshot.state).toBe("listening");
+  });
+
   it("dispatches one settled final transcript through the canonical chat callback", async () => {
     vi.useFakeTimers();
     const fake = makeFakeSession();

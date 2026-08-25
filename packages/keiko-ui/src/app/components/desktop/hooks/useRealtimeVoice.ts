@@ -10,6 +10,7 @@
 // Every failure resolves to a non-blocking `error` phase that leaves the composer fully usable (AC4).
 
 import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from "react";
+import { reportClientDiagnostic } from "@/lib/client-diagnostics";
 import {
   DEFAULT_VOICE_PROTOCOL_TIMEOUTS,
   type VoiceSessionChatContext,
@@ -233,6 +234,8 @@ export interface UseRealtimeVoiceOptions {
   // Local, content-free acknowledgement for a turn-manager backchannel effect. It cannot create a
   // model response, write a transcript, or cross the control-plane boundary.
   readonly onTurnBackchannel?: (() => void) | undefined;
+  /** Current Chat-owned playback state, projected into the shared turn manager. */
+  readonly assistantSpeaking?: boolean | undefined;
   // Live signal for whether a grounded retrieval is currently in flight for the pending canonical
   // voice turn (ADR-0154 D1/D5 — retrieval runs in the canonical chat pipeline AFTER the final
   // transcript is handed off, never inside Realtime itself, so Realtime holds no retrieval state
@@ -412,6 +415,33 @@ export interface RealtimeVoiceController {
   readonly toggleMute: () => void;
 }
 
+interface VoiceTurnEffectHandlers {
+  readonly interruptAssistant: () => void;
+  readonly preserveUserTurn: () => void;
+  readonly emitBackchannel: () => void;
+  readonly beginRecovery: () => void;
+}
+
+export function executeVoiceTurnEffects(
+  effects: readonly VoiceTurnEffect[],
+  handlers: VoiceTurnEffectHandlers,
+): void {
+  let interruptAssistant = false;
+  for (const effect of effects) {
+    reportClientDiagnostic(`[keiko] voice turn effect executed (effect=${effect})`);
+    if (effect === "stop-playback" || effect === "cancel-speech-generation") {
+      interruptAssistant = true;
+    } else if (effect === "preserve-user-turn") {
+      handlers.preserveUserTurn();
+    } else if (effect === "emit-backchannel") {
+      handlers.emitBackchannel();
+    } else {
+      handlers.beginRecovery();
+    }
+  }
+  if (interruptAssistant) handlers.interruptAssistant();
+}
+
 // Maps a thrown error from the transport or control step to a non-blocking error phase.
 function classifyError(error: unknown): {
   reason: RealtimeVoiceErrorReason;
@@ -542,7 +572,9 @@ export function useRealtimeVoice(options: UseRealtimeVoiceOptions): RealtimeVoic
   const flushPendingCanonicalUserTurnRef = useRef<() => void>(() => undefined);
   const preservePendingCanonicalUserTurnRef = useRef<() => void>(() => undefined);
   const beginRecoveryRef = useRef<() => void>(() => undefined);
-  const executeTurnEffectsRef = useRef<(effects: readonly VoiceTurnEffect[]) => void>(() => undefined);
+  const executeTurnEffectsRef = useRef<(effects: readonly VoiceTurnEffect[]) => void>(
+    () => undefined,
+  );
   const haltForCanonicalAdmissionFailureRef = useRef<() => void>(() => undefined);
   const currentVoiceTurnRef = useRef<VoiceTurnDraft | undefined>(undefined);
   const voiceTurnSeqRef = useRef(0);
@@ -778,28 +810,30 @@ export function useRealtimeVoice(options: UseRealtimeVoiceOptions): RealtimeVoic
   }, []);
   preservePendingCanonicalUserTurnRef.current = holdPendingCanonicalUserTurn;
 
-  const executeTurnEffects = useCallback((effects: readonly VoiceTurnEffect[]): void => {
-    let interruptAssistant = false;
-    for (const effect of effects) {
-      switch (effect) {
-        case "stop-playback":
-        case "cancel-speech-generation":
-          interruptAssistant = true;
-          break;
-        case "preserve-user-turn":
-          preservePendingCanonicalUserTurnRef.current();
-          break;
-        case "emit-backchannel":
-          options.onTurnBackchannel?.();
-          break;
-        case "begin-recovery":
-          beginRecoveryRef.current();
-          break;
-      }
-    }
-    if (interruptAssistant) onUserSpeechStartRef.current?.();
-  }, [options.onTurnBackchannel]);
+  const onTurnBackchannel = options.onTurnBackchannel;
+  const executeTurnEffects = useCallback(
+    (effects: readonly VoiceTurnEffect[]): void =>
+      executeVoiceTurnEffects(effects, {
+        interruptAssistant: () => onUserSpeechStartRef.current?.(),
+        preserveUserTurn: () => preservePendingCanonicalUserTurnRef.current(),
+        emitBackchannel: () => onTurnBackchannel?.(),
+        beginRecovery: () => beginRecoveryRef.current(),
+      }),
+    [onTurnBackchannel],
+  );
   executeTurnEffectsRef.current = executeTurnEffects;
+
+  const assistantSpeakingRef = useRef(false);
+  useEffect(() => {
+    const assistantSpeaking = options.assistantSpeaking === true;
+    if (assistantSpeaking === assistantSpeakingRef.current) return;
+    assistantSpeakingRef.current = assistantSpeaking;
+    applyTurnSignal(
+      assistantSpeaking
+        ? { kind: "assistant-speech-start" }
+        : { kind: "assistant-speech-end", how: "completed" },
+    );
+  }, [applyTurnSignal, options.assistantSpeaking]);
 
   const rejectOversizedCanonicalUserTurn = useCallback(
     (text: string): void => {
@@ -1506,8 +1540,8 @@ export function useRealtimeVoice(options: UseRealtimeVoiceOptions): RealtimeVoic
     turnSnapshot,
     listening:
       state.phase === "connected" && !muted && !inputRearming && turnSnapshot.state === "listening",
-    speaking: false,
-    canInterrupt: false,
+    speaking: turnSnapshot.state === "speaking",
+    canInterrupt: turnSnapshot.state === "speaking" || turnSnapshot.state === "thinking",
     muted,
     partialUserTranscript,
     retrieving: options.retrieving ?? false,

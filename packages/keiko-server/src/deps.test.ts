@@ -1086,7 +1086,7 @@ describe("buildUiHandlerDeps — UiStore wiring (ADR-0013)", () => {
     }
   });
 
-  it("keeps startup available when optional Jira connector configuration is invalid", async () => {
+  it("ignores retired Jira env fallback fields and keeps the custody port available", async () => {
     const diagnostics: ServerDiagnosticRecord[] = [];
     const deps = buildUiHandlerDeps({
       configPath: undefined,
@@ -1100,13 +1100,8 @@ describe("buildUiHandlerDeps — UiStore wiring (ADR-0013)", () => {
     });
 
     try {
-      expect(deps.codingContextJiraPort).toBeUndefined();
-      expect(diagnostics).toContainEqual(
-        expect.objectContaining({ source: "deps.codingContextJiraPort" }),
-      );
-      expect(JSON.stringify(diagnostics)).not.toContain("secret-token");
-      expect(JSON.stringify(diagnostics)).not.toContain("invalid.example.com");
-      expect(JSON.stringify(diagnostics)).not.toContain("operator@example.com");
+      expect(deps.codingContextJiraPort).toBeDefined();
+      expect(diagnostics).toEqual([]);
     } finally {
       await deps.dispose?.();
     }

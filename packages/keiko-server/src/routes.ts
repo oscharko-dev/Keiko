@@ -361,6 +361,13 @@ import {
   handleListAtlassianConnectorActivity,
   handleStartAtlassianConnectorSync,
 } from "./atlassian/syncRoutes.js";
+import {
+  handleApproveAtlassianConnectorActionApproval,
+  handleExecuteAtlassianConnectorAction,
+  handleGetAtlassianConnectorActionApproval,
+  handleListAtlassianConnectorActionApprovals,
+  handleRejectAtlassianConnectorActionApproval,
+} from "./atlassian/writeActionRoutes.js";
 import { GIT_DELIVERY_ACTION_SHEET_ROUTE_GROUP } from "./gitDelivery/actionSheetRoutes.js";
 import { GIT_DELIVERY_EVIDENCE_ROUTE_GROUP } from "./gitDelivery/evidenceRoutes.js";
 import { GIT_DELIVERY_LOCAL_MUTATION_ROUTE_GROUP } from "./gitDelivery/localMutationRoutes.js";
@@ -1316,6 +1323,31 @@ export const API_ROUTES: readonly RouteDefinition[] = [
     method: "GET",
     pattern: "/api/atlassian-connectors/credentials/:authRef/activity",
     handler: handleListAtlassianConnectorActivity,
+  },
+  {
+    method: "POST",
+    pattern: "/api/atlassian-connectors/credentials/:authRef/actions",
+    handler: handleExecuteAtlassianConnectorAction,
+  },
+  {
+    method: "GET",
+    pattern: "/api/atlassian-connectors/action-approvals",
+    handler: handleListAtlassianConnectorActionApprovals,
+  },
+  {
+    method: "GET",
+    pattern: "/api/atlassian-connectors/action-approvals/:approvalId",
+    handler: handleGetAtlassianConnectorActionApproval,
+  },
+  {
+    method: "POST",
+    pattern: "/api/atlassian-connectors/action-approvals/:approvalId/approve",
+    handler: handleApproveAtlassianConnectorActionApproval,
+  },
+  {
+    method: "POST",
+    pattern: "/api/atlassian-connectors/action-approvals/:approvalId/reject",
+    handler: handleRejectAtlassianConnectorActionApproval,
   },
   // Issue #278 (Epic #270) — Quality Intelligence connector routes (additive).
   // Authorisation defaults to FALSE; only flips on explicit gateway-config flags.

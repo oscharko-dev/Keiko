@@ -228,6 +228,59 @@ describe("jira code context port", () => {
     ]);
   });
 
+  it.each([
+    [[]],
+    [
+      [
+        {
+          authRef: "atlassian-cred:AAAAAAAAAAAAAAAAAAAAAA",
+          provider: "jira",
+          baseUrl: "https://one.example",
+        },
+        {
+          authRef: "atlassian-cred:BBBBBBBBBBBBBBBBBBBBBB",
+          provider: "jira",
+          baseUrl: "https://two.example",
+        },
+      ],
+    ],
+  ] as const)("rejects ambiguous Jira credential selection", async (credentials) => {
+    const port = createGovernedJiraCodeContextHttpPort({
+      custody: { list: (): typeof credentials => credentials } as never,
+      httpBodyPortFactory: (): AtlassianHttpBodyPort => () =>
+        Promise.reject(new Error("must not execute")),
+    });
+
+    await expect(
+      port.readJson({ method: "GET", path: "/rest/api/3/issue/PROJ-1", query: {} }),
+    ).rejects.toMatchObject({ code: "jira-denied" });
+  });
+
+  it.each([
+    "/rest/api/../admin",
+    "/rest/api/%2e%2e/admin",
+    "//evil.example/rest/api/3/issue/PROJ-1",
+    "not-a-path",
+  ])("rejects a path outside the normalized REST API boundary: %s", async (path) => {
+    const port = createGovernedJiraCodeContextHttpPort({
+      custody: {
+        list: () => [
+          {
+            authRef: "atlassian-cred:AAAAAAAAAAAAAAAAAAAAAA",
+            provider: "jira",
+            baseUrl: "https://example.atlassian.net",
+          },
+        ],
+      } as never,
+      httpBodyPortFactory: (): AtlassianHttpBodyPort => () =>
+        Promise.reject(new Error("must not execute")),
+    });
+
+    await expect(port.readJson({ method: "GET", path, query: {} })).rejects.toMatchObject({
+      code: "jira-denied",
+    });
+  });
+
   it("parses config only when every field is present", () => {
     expect(parseJiraCodeContextPortConfig({})).toBeUndefined();
     expect(parseJiraCodeContextPortConfig({ KEIKO_JIRA_BASE_URL: "https://x" })).toBeUndefined();

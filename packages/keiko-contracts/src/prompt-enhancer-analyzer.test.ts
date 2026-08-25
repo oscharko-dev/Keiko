@@ -413,6 +413,12 @@ describe("analyzePrompt scope missing context", () => {
     expect(topics).toContain("scope");
   });
 
+  it("does not treat a generic system reference as an architecture scope", () => {
+    const topics = analyze("Design the system.").missingContext.map((item) => item.topic);
+
+    expect(topics).toContain("scope");
+  });
+
   it("does not request scope when an architecture draft identifies its target system (#3112)", () => {
     const topics = analyze(
       "Design a software architecture for a multi-tenant document collaboration service.",

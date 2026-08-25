@@ -1,9 +1,8 @@
+import { type SandboxBackend } from "@oscharko-dev/keiko-contracts";
 import {
   DEFAULT_VERIFICATION_LIMITS,
   nodeResourceMonitor,
-  probeNetworkIsolation,
   resolveStepNetwork,
-  type NetworkIsolationCapability,
   type NetworkEnforcementMode,
   type VerificationPlan,
   type VerificationStep,
@@ -12,8 +11,15 @@ import {
 export type VerificationCapabilityDenialReason =
   "memory-process-tree-unavailable" | "network-isolation-unavailable";
 
-export type { NetworkIsolationCapability } from "@oscharko-dev/keiko-verification";
-export { probeNetworkIsolation };
+export interface NetworkIsolationCapability {
+  readonly backend: SandboxBackend;
+  readonly enforced: boolean;
+}
+
+const UNATTESTED_NETWORK_ISOLATION: NetworkIsolationCapability = {
+  backend: "none",
+  enforced: false,
+};
 
 export interface VerificationStepCapability {
   readonly kind: VerificationStep["kind"];
@@ -59,8 +65,8 @@ function stepCapability(
 export function probeVerificationCapabilities(
   plan: Pick<VerificationPlan, "steps">,
   networkEnforcement: NetworkEnforcementMode = "enforce-or-fail-closed",
+  networkIsolation: NetworkIsolationCapability = UNATTESTED_NETWORK_ISOLATION,
 ): VerificationCapabilities {
-  const networkIsolation = probeNetworkIsolation();
   const memoryProcessTreeEnforced = nodeResourceMonitor.canEnforceProcessTreeMemory();
   const defaultStep: VerificationStep = {
     kind: "test",

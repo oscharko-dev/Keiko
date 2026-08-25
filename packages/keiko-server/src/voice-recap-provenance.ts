@@ -2,6 +2,7 @@ import { createHash, randomUUID } from "node:crypto";
 import type { VoiceProfile } from "@oscharko-dev/keiko-contracts";
 
 const DEFAULT_ATTESTATION_TTL_MS = 5 * 60 * 1_000;
+const MAX_RETAINED_ATTESTATIONS = 1_024;
 
 interface StoredAttestation {
   readonly profile: "speech-to-text";
@@ -38,6 +39,26 @@ function spansDigest(spans: readonly string[]): string {
   return hash.digest("hex");
 }
 
+function pruneExpiredAttestations(
+  attestations: Map<string, StoredAttestation>,
+  nowMs: number,
+): void {
+  for (const [proof, attestation] of attestations) {
+    if (attestation.expiresAtMs < nowMs) attestations.delete(proof);
+  }
+}
+
+function ensureAttestationCapacity(attestations: Map<string, StoredAttestation>): void {
+  if (attestations.size < MAX_RETAINED_ATTESTATIONS) return;
+  for (const [proof, attestation] of attestations) {
+    if (!attestation.consumed) {
+      attestations.delete(proof);
+      return;
+    }
+  }
+  throw new TypeError("voice recap attestation capacity is exhausted");
+}
+
 export function createVoiceRecapContentAttestationStore(
   now: () => number = Date.now,
 ): VoiceRecapContentAttestationStore {
@@ -45,6 +66,8 @@ export function createVoiceRecapContentAttestationStore(
 
   return {
     attest(input): string {
+      pruneExpiredAttestations(attestations, now());
+      ensureAttestationCapacity(attestations);
       const proof = randomUUID();
       attestations.set(proof, {
         profile: input.profile,
@@ -56,10 +79,10 @@ export function createVoiceRecapContentAttestationStore(
       return proof;
     },
     consume(input): "attested" | "expired" | "invalid" | "replayed" {
+      pruneExpiredAttestations(attestations, now());
       const attestation = attestations.get(input.proof);
       if (attestation === undefined) return "invalid";
       if (attestation.consumed) return "replayed";
-      if (attestation.expiresAtMs < now()) return "expired";
       if (
         input.profile !== attestation.profile ||
         input.sessionId !== attestation.sessionId ||

@@ -57,10 +57,7 @@ function budgetForProfile(profile: ContextProfile): ContextBudget {
   return { ...DEFAULT_CONTEXT_BUDGET, profile };
 }
 
-function budgetWithEviction(
-  eviction: ContextEvictionPolicy,
-  maxTokens: number,
-): ContextBudget {
+function budgetWithEviction(eviction: ContextEvictionPolicy, maxTokens: number): ContextBudget {
   return {
     ...DEFAULT_CONTEXT_BUDGET,
     lanes: DEFAULT_CONTEXT_BUDGET.lanes.map((row) =>
@@ -265,6 +262,58 @@ describe("allocateContext — eviction policies", () => {
     expect(reserved.excludedItemIds).toEqual([]);
     expect(reserved.diagnostics.compactionReason).toBeUndefined();
   });
+
+  it.each(["none", "drop-oldest", "drop-lowest-score", "summarize-then-drop"] as const)(
+    "keeps an empty lane empty under %s",
+    (eviction) => {
+      const allocated = repoLane(
+        allocateContext({
+          profile: DEFAULT_CONTEXT_PROFILE,
+          budget: budgetWithEviction(eviction, 0),
+          lanes: [lane("repo-evidence", [])],
+        }),
+      );
+      expect(allocated.includedItemIds).toEqual([]);
+      expect(allocated.excludedItemIds).toEqual([]);
+      expect(allocated.diagnostics.compactionReason).toBeUndefined();
+    },
+  );
+
+  it.each(["drop-oldest", "drop-lowest-score", "summarize-then-drop"] as const)(
+    "includes an exact-capacity item under %s",
+    (eviction) => {
+      const exact = bulk("exact ", 20);
+      const allocated = repoLane(
+        allocateContext({
+          profile: DEFAULT_CONTEXT_PROFILE,
+          budget: budgetWithEviction(eviction, estimateTokens(exact)),
+          lanes: [lane("repo-evidence", [item("exact", exact, 0.9)])],
+        }),
+      );
+      expect(allocated.includedItemIds).toEqual(["exact"]);
+      expect(allocated.excludedItemIds).toEqual([]);
+    },
+  );
+
+  it.each(["drop-oldest", "drop-lowest-score", "summarize-then-drop"] as const)(
+    "excludes an oversized item while retaining a smaller item under %s",
+    (eviction) => {
+      const small = bulk("small ", 10);
+      const oversized = bulk("large ", 200);
+      const allocated = repoLane(
+        allocateContext({
+          profile: DEFAULT_CONTEXT_PROFILE,
+          budget: budgetWithEviction(eviction, estimateTokens(small)),
+          lanes: [
+            lane("repo-evidence", [item("oversized", oversized, 0.9), item("small", small, 0.1)]),
+          ],
+        }),
+      );
+      expect(allocated.includedItemIds).toEqual(["small"]);
+      expect(allocated.excludedItemIds).toEqual(["oversized"]);
+      expect(allocated.diagnostics.compactionReason).toBe(eviction);
+    },
+  );
 });
 
 describe("allocateContext — gate 5 (non-eviction + order + determinism)", () => {

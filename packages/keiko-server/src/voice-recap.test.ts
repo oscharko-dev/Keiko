@@ -342,6 +342,57 @@ describe("handleBuildVoiceRecap", () => {
     });
   });
 
+  it("does not consume an attestation before request validation succeeds", async () => {
+    const chat = createChat();
+    const attestations = createVoiceRecapContentAttestationStore();
+    const spans = ["remember that I prefer dark mode"];
+    const body = attestedRecapBody(chat, spans, attestations);
+    body.projectPath = "../outside";
+
+    expect(
+      (await handleBuildVoiceRecap(ctx(body), deps({ config: speechToTextConfig(), attestations })))
+        .status,
+    ).not.toBe(200);
+    body.projectPath = projectPath;
+    await expect(
+      handleBuildVoiceRecap(ctx(body), deps({ config: speechToTextConfig(), attestations })),
+    ).resolves.toMatchObject({ status: 200, body: { provenance: "attested" } });
+  });
+
+  it("bounds active attestation retention by evicting the oldest unconsumed proof", () => {
+    const attestations = createVoiceRecapContentAttestationStore(() => 1_000);
+    const oldest = attestations.attest({
+      profile: "speech-to-text",
+      sessionId: "oldest",
+      committedSpans: ["oldest"],
+    });
+    let newest = oldest;
+    for (let index = 0; index < 1_024; index += 1) {
+      newest = attestations.attest({
+        profile: "speech-to-text",
+        sessionId: `session-${String(index)}`,
+        committedSpans: [`span-${String(index)}`],
+      });
+    }
+
+    expect(
+      attestations.consume({
+        profile: "speech-to-text",
+        sessionId: "oldest",
+        committedSpans: ["oldest"],
+        proof: oldest,
+      }),
+    ).toBe("invalid");
+    expect(
+      attestations.consume({
+        profile: "speech-to-text",
+        sessionId: "session-1023",
+        committedSpans: ["span-1023"],
+        proof: newest,
+      }),
+    ).toBe("attested");
+  });
+
   it.each(["forged", "replayed", "expired", "content-substituted"] as const)(
     "rejects %s recap content attestations before capture",
     async (scenario) => {
@@ -349,7 +400,12 @@ describe("handleBuildVoiceRecap", () => {
       const chat = createChat();
       const attestations = createVoiceRecapContentAttestationStore(() => nowMs);
       const spans = ["remember that I prefer dark mode"];
-      const body = attestedRecapBody(chat, spans, attestations, scenario === "expired" ? 999 : undefined);
+      const body = attestedRecapBody(
+        chat,
+        spans,
+        attestations,
+        scenario === "expired" ? 999 : undefined,
+      );
       if (scenario === "forged") body.contentAttestation = "forged-proof";
       if (scenario === "content-substituted") {
         body.committedSpans = ["remember that I prefer light mode"];

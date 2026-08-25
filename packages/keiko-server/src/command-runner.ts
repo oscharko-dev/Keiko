@@ -69,6 +69,7 @@ export interface CommandRunInput {
   readonly taskId: string;
   readonly timeoutMs?: number | undefined;
   readonly requestId?: string | undefined;
+  readonly signal?: AbortSignal | undefined;
 }
 
 export type CommandRunnerEventEmitter = (event: CommandRunnerEvent) => void;
@@ -412,6 +413,11 @@ class CommandRunnerManagerImpl implements CommandRunnerManager {
     const runId = randomUUID();
     const controller = new AbortController();
     const entry: InFlightRun = { controller, cancelledByUser: false };
+    const relayAbort = (): void => {
+      controller.abort();
+    };
+    if (input.signal?.aborted === true) controller.abort();
+    else input.signal?.addEventListener("abort", relayAbort, { once: true });
     this.runs.set(runId, entry);
     const startedAt = this.now();
     this.emit({
@@ -422,6 +428,7 @@ class CommandRunnerManagerImpl implements CommandRunnerManager {
     try {
       return await this.invoke(runId, task, workspace, input, entry, startedAt);
     } finally {
+      input.signal?.removeEventListener("abort", relayAbort);
       this.runs.delete(runId);
     }
   }

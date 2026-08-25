@@ -89,7 +89,12 @@ export type CodingToolResult =
       readonly evidence: readonly CodingToolEvidence[];
       readonly read: CodingToolReadResult | CodingToolEgressReadResult;
     }
-  | { readonly status: "completed" | "failed"; readonly evidence: readonly CodingToolEvidence[] }
+  | { readonly status: "completed"; readonly evidence: readonly CodingToolEvidence[] }
+  | {
+      readonly status: "failed";
+      readonly evidence: readonly CodingToolEvidence[];
+      readonly reasonCode?: string | undefined;
+    }
   | {
       readonly status: "completed";
       readonly evidence: readonly CodingToolEvidence[];

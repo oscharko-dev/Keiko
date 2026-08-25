@@ -21,7 +21,6 @@ export {
 export { runAgent, type SdkAgentConfig, type SdkEvidenceOptions } from "./run-agent.js";
 
 export {
-  probeNetworkIsolation,
   probeVerificationCapabilities,
   type NetworkIsolationCapability,
   type VerificationCapabilities,

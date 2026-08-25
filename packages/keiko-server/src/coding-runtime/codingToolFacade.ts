@@ -42,6 +42,14 @@ const EDIT_FAILURE_REASON_CODES: ReadonlySet<string> = new Set<string>([
   ...EDITOR_AGENT_FAILURE_CODES,
   ...EDIT_TRANSPORT_REASON_CODES,
 ]);
+const GOVERNED_FAILURE_REASON_CODES: ReadonlySet<string> = new Set([
+  "capability-backend-unavailable",
+  "command-authority-revoked",
+  "command-execution-failed",
+  "git-authority-revoked",
+  "delivery-authority-revoked",
+  "connector-authority-revoked",
+]);
 import type {
   CodingToolAdmission,
   CodingToolFacade,
@@ -203,8 +211,8 @@ function project(request: CodingToolActionRequest, input: unknown): CodingToolRe
   if (value === undefined) return projected("failed");
   const editFailure = projectEditFailure(request, value);
   if (editFailure !== undefined) return editFailure;
-  const auxiliary =
-    value.outcome === "completed" ? projectAuxiliary(request, value.auxiliary) : undefined;
+  if (value.outcome === "failed") return projectGovernedFailure(value);
+  const auxiliary = projectAuxiliary(request, value.auxiliary);
   if (auxiliary !== undefined) {
     return {
       status: "completed",
@@ -213,10 +221,17 @@ function project(request: CodingToolActionRequest, input: unknown): CodingToolRe
     };
   }
   if (request.action === "skill" || request.action === "child-agent") return projected("failed");
-  const read = value.outcome === "completed" ? projectPayload(request, value.read) : undefined;
+  const read = projectPayload(request, value.read);
   return read === undefined
     ? projected(value.outcome)
     : { status: "completed", evidence: [{ kind: "governed-delegate", code: "completed" }], read };
+}
+
+function projectGovernedFailure(value: Record<string, unknown>): CodingToolResult {
+  const reasonCode = value.reasonCode;
+  return typeof reasonCode === "string" && GOVERNED_FAILURE_REASON_CODES.has(reasonCode)
+    ? projected("failed", reasonCode, true)
+    : projected("failed");
 }
 
 function projectEditFailure(
@@ -300,8 +315,18 @@ function projectEgressRead(value: unknown): CodingToolEgressReadResult | undefin
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
-function projected(status: "completed" | "failed", code: string = status): CodingToolResult {
-  return { status, evidence: [{ kind: "governed-delegate", code }] };
+function projected(
+  status: "completed" | "failed",
+  code: string = status,
+  exposeReasonCode = false,
+): CodingToolResult {
+  const evidence = [{ kind: "governed-delegate", code }] as const;
+  if (status === "failed") {
+    return exposeReasonCode && code !== status
+      ? { status, evidence, reasonCode: code }
+      : { status, evidence };
+  }
+  return { status, evidence };
 }
 function hasOrigin(headers: CodingToolFacadeInput["headers"]): boolean {
   return (

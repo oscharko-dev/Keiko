@@ -114,6 +114,15 @@ describe("workspace manifest registration (#2768)", () => {
 });
 
 describe("workspace trust identity invalidation (KEIKO-0198)", () => {
+  it("invalidates a root introduced only by the next manifest", () => {
+    const previous = new Map<string, RootIdentityFixture>();
+    const next = new Map<string, RootIdentityFixture>([
+      ["next-only-root", { identityDigest: "identity-a", objectIdentityDigest: "object-a" }],
+    ]);
+
+    expect(invalidatedRootRefs(previous, next)).toEqual(new Set(["next-only-root"]));
+  });
+
   it("keeps store invalidation and the contracts predicate in agreement for identity changes", () => {
     const rootRef = "root-fixture";
     const previous = new Map<string, RootIdentityFixture>([

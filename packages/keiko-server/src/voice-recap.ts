@@ -478,7 +478,10 @@ function dormantResponse(): RouteResult {
 function unavailableVoiceRecapResponse(): RouteResult {
   return {
     status: 503,
-    body: errorBody("VOICE_UNAVAILABLE", "Voice session recap is not available for this deployment."),
+    body: errorBody(
+      "VOICE_UNAVAILABLE",
+      "Voice session recap is not available for this deployment.",
+    ),
   };
 }
 
@@ -495,8 +498,6 @@ export async function handleBuildVoiceRecap(
   if (!voiceRecapAllowed(profile)) {
     return unavailableVoiceRecapResponse();
   }
-  const provenance = verifyContentAttestation(deps.voiceRecapContentAttestations, profile, request);
-  if (isRouteResult(provenance)) return provenance;
   const vault = deps.memoryVault;
   if (vault === undefined) {
     return {
@@ -516,6 +517,8 @@ export async function handleBuildVoiceRecap(
   }
   const runtime = resolveConversationMemoryContext(deps, projectPath, request.chatId);
   if (isRouteResult(runtime)) return runtime;
+  const provenance = verifyContentAttestation(deps.voiceRecapContentAttestations, profile, request);
+  if (isRouteResult(provenance)) return provenance;
 
   try {
     const response = await buildRecapResponse(

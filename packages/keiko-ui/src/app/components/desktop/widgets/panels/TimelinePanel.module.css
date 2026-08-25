@@ -15,6 +15,16 @@
   text-align: center;
   padding: 26px 16px;
   line-height: 1.6;
+  display: grid;
+  gap: 4px;
+}
+
+.timeline {
+  display: grid;
+  gap: 2px;
+  list-style: none;
+  margin: 0;
+  padding: 0;
 }
 
 .lazyWidgetScope :global(.tl-row) {
@@ -34,6 +44,7 @@
   border-radius: 50%;
   margin-top: 5px;
   flex: none;
+  background: var(--activity-color, currentColor);
 }
 
 .lazyWidgetScope :global(.tl-body) {
@@ -41,6 +52,10 @@
   flex-direction: column;
   gap: 1px;
   min-width: 0;
+}
+
+.kind {
+  color: var(--activity-color, currentColor);
 }
 
 .lazyWidgetScope :global(.tl-text) {

@@ -2133,7 +2133,7 @@ function settleGroundedChatTurn(
       ),
     };
   }
-  if (result.body.memory !== undefined) {
+  if (result.body.memory !== undefined || hasAnswerOnlyContext(prepared)) {
     deps.store.attachGroundedAnswer(result.body.assistantMessageId, result.body);
   }
   let completion;
@@ -2252,15 +2252,10 @@ async function attachGroundedMemory(
   }
   const memoryPreparation = prepared.memory;
   if (memoryPreparation === undefined) return result;
-  const marker = uncitedMemoryContextMarker(Date.now());
-  const body = {
-    ...result.body,
-    uncertainty: [
-      ...result.body.uncertainty,
-      { kind: marker.kind, claim: redactString(deps.redactor, marker.claim) },
-    ],
-  };
-  const markedResult: RouteResult = { ...result, body };
+  const body = hasAnswerOnlyContext(prepared)
+    ? groundedAnswerWithMemoryUncertainty(result.body, deps)
+    : result.body;
+  const markedResult: RouteResult = body === result.body ? result : { ...result, body };
   const chat = deps.store.findChatById(prepared.chat.id) ?? prepared.chat;
   try {
     const memory = await buildCanonicalTurnMemoryResult(
@@ -2280,6 +2275,20 @@ async function attachGroundedMemory(
     recordGroundedMemoryFailure(deps, result.body.assistantMessageId, contentFreeErrorClass(error));
     return markedResult;
   }
+}
+
+function groundedAnswerWithMemoryUncertainty(
+  body: GroundedAnswer,
+  deps: UiHandlerDeps,
+): GroundedAnswer {
+  const marker = uncitedMemoryContextMarker(Date.now());
+  return {
+    ...body,
+    uncertainty: [
+      ...body.uncertainty,
+      { kind: marker.kind, claim: redactString(deps.redactor, marker.claim) },
+    ],
+  };
 }
 
 export async function handleGroundedAsk(

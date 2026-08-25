@@ -3012,6 +3012,7 @@ function ComposerCoreImpl({
     canStartCapture: canStartCanonicalVoiceCapture,
     onCanonicalUserTurn: commitCanonicalVoiceTurn,
     onUserSpeechStart: interruptCanonicalVoiceTurn,
+    assistantSpeaking: playback.snapshot.speaking,
     retrieving: canonicalVoiceRetrieving,
   });
   const voiceDialogAvailable = voiceDialog.available && activeChat !== undefined;

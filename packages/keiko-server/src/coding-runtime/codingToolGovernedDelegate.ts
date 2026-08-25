@@ -27,8 +27,8 @@ type GovernedCodingToolResult =
       readonly read?: GovernedCodingToolRead | undefined;
       readonly auxiliary?: AuxiliaryCapabilityOutcomeV1 | undefined;
     }
-  // `reasonCode` is a closed-vocabulary marker (see codingToolReadEditPorts.ts's `EditOutcome`),
-  // populated only by the editor-changeset port; every other port's failure carries none.
+  // `reasonCode` is a closed-vocabulary marker. The facade forwards only its own allowlisted,
+  // body-free codes and collapses every unrecognized value to a bare failed outcome.
   | { readonly status: "failed"; readonly reasonCode?: string | undefined };
 
 export interface CodingToolGovernedPorts {

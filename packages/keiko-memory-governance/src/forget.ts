@@ -164,12 +164,26 @@ function assertForgettable(record: MemoryRecord): void {
   );
 }
 
+function assertArchivedForgetAcknowledged(
+  record: MemoryRecord,
+  options: BuildForgetOperationsOptions,
+): void {
+  if (record.status === "archived" && !options.acknowledgedArchivedMemoryIds?.includes(record.id)) {
+    throw new GovernanceError(
+      "destructive-acknowledgement-required",
+      "archived memory requires an explicit retention acknowledgement",
+      [`memoryId: ${record.id}`],
+    );
+  }
+}
+
 function buildForgetEnvelope(
   record: MemoryRecord,
   context: GovernanceContext,
   options: BuildForgetOperationsOptions,
 ): MemoryForget {
   assertForgettable(record);
+  assertArchivedForgetAcknowledged(record, options);
   const env: MemoryForget = {
     schemaVersion: "1",
     memoryId: record.id,

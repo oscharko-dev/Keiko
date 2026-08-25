@@ -893,7 +893,12 @@ class CodingRuntimeManagerImpl implements CodingRuntimeManager {
       return { ok: false, failureCode: "runtime-stopped", retryable: false };
     }
     const binding = approvalBindingForIssue(active, request);
-    const issued = issueSupervisedApproval(this.deps.approvalStore, binding, request, this.deps.now());
+    const issued = issueSupervisedApproval(
+      this.deps.approvalStore,
+      binding,
+      request,
+      this.deps.now(),
+    );
     if (issued === undefined) {
       return { ok: false, failureCode: "approval-activation-failed", retryable: false };
     }
@@ -2939,10 +2944,7 @@ function approvalBinding(input: {
 function taskApprovalBinding(
   active: ActiveRuntime,
   binding: SupervisedCodingApprovalBindingOnce,
-  input: Pick<
-    CodingRuntimeApprovalIssueRequest,
-    "commandTemplateId" | "safeArgumentClasses"
-  > &
+  input: Pick<CodingRuntimeApprovalIssueRequest, "commandTemplateId" | "safeArgumentClasses"> &
     Pick<SidecarPermissionEvent, "commandLabel">,
 ): SupervisedCodingApprovalBindingTask {
   const context = active.context;

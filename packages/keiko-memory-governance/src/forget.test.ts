@@ -198,13 +198,30 @@ describe("buildForgetOperations", () => {
     expect(buildForgetOperations([], ctx(), { writeTombstone: true })).toEqual([]);
   });
 
-  it.each(["proposed", "rejected", "archived"] as const)(
+  it.each(["proposed", "rejected"] as const)(
     "builds an acknowledged forget envelope for %s records allowed by the contract",
     (status) => {
       const record = makeRecord({ id: `m-${status}`, status });
       expect(buildForgetOperations([record], ctx(), { writeTombstone: true })).toHaveLength(1);
     },
   );
+
+  it("requires explicit retention acknowledgement for archived records", () => {
+    const archived = makeRecord({ id: "m-archived", status: "archived" });
+
+    expect(() => buildForgetOperations([archived], ctx(), { writeTombstone: true })).toThrow(
+      expect.objectContaining<Partial<GovernanceError>>({
+        code: "destructive-acknowledgement-required",
+      }),
+    );
+    expect(
+      buildForgetOperations([archived], ctx(), {
+        writeTombstone: true,
+        reason: "archived-retention",
+        acknowledgedArchivedMemoryIds: [archived.id],
+      }),
+    ).toHaveLength(1);
+  });
 
   it("fails closed when the contract forbids forgetting the source status", () => {
     const forgotten = makeRecord({ id: "m-forgotten", status: "forgotten" });

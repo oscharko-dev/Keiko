@@ -144,7 +144,14 @@ describe("git repository routes", () => {
         readonly args: readonly string[];
         readonly env: NodeJS.ProcessEnv;
       };
-      expect(capture.args).toEqual(["clone", "--", "https://github.com/acme/app.git", destination]);
+      expect(capture.args.slice(-4)).toEqual([
+        "clone",
+        "--",
+        "https://github.com/acme/app.git",
+        destination,
+      ]);
+      expect(capture.args).toContain("protocol.ext.allow=never");
+      expect(capture.args).toContain("credential.helper=");
       expect(capture.env.GIT_TERMINAL_PROMPT).toBe("0");
       expect(capture.env.GIT_SSH_COMMAND).toContain("StrictHostKeyChecking=yes");
       expect(capture.env.GIT_SSH_COMMAND).toContain("NumberOfPasswordPrompts=0");

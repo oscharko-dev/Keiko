@@ -316,8 +316,7 @@ export const DE_MESSAGES = {
   "window.type.agents.title": "Agenten",
   "window.type.agents.desc": "Coding-Agent auswählen",
   "window.type.integ.title": "Connector-Verwaltung",
-  "window.type.integ.desc":
-    "Serververwaltete Connectoren, Bereiche, Sync und Freigaben verwalten",
+  "window.type.integ.desc": "Serververwaltete Connectoren, Bereiche, Sync und Freigaben verwalten",
   "window.type.settings.title": "Einstellungen",
   "window.type.settings.desc": "Voreinstellungen",
   "window.type.workspaceTrust.title": "Workspace Trust",

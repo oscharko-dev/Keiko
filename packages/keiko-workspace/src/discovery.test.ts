@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { readWorkspaceFileForEditing as readViaPublishedSubpath } from "@oscharko-dev/keiko-workspace/internal/editor-read";
 import {
   discoverFiles,
+  discoverWithStatsAsync,
   discoverWithStats,
   readWorkspaceFile,
   readWorkspaceFileForEditing,
@@ -187,6 +188,24 @@ describe("discoverFiles", () => {
     expect(stats.ignored).toBeGreaterThanOrEqual(1);
     expect(stats.depthPruned).toBe(0);
     expect(stats.discovered).toBeGreaterThanOrEqual(1);
+  });
+
+  it("keeps async discovery identical across every filtering and pruning branch", async () => {
+    writeFileSync(join(dir, ".gitignore"), "*.tmp\n", "utf8");
+    file(".env", "SECRET=1");
+    file("ignored.tmp");
+    file("depth/one/two/deep.ts");
+    file("real.ts");
+    symlinkSync(join(dir, "real.ts"), join(dir, "alias.ts"));
+    file("z-one.ts");
+    file("z-two.ts");
+    file("z-three.ts");
+    const workspace = detectWorkspace(dir);
+    const options = { ...DEFAULT_DISCOVERY_OPTIONS, maxDepth: 1, maxFiles: 3 };
+
+    expect(await discoverWithStatsAsync(workspace, options)).toEqual(
+      discoverWithStats(workspace, options),
+    );
   });
 });
 

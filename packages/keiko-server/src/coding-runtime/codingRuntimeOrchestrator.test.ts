@@ -810,10 +810,11 @@ describe("CodingRuntimeOrchestrator", () => {
       kind: "permission-requested",
       permissionRequest: {
         requestId: "permission-1",
-        kind: "workspace-write",
-        actionClass: "workspace-write",
+        kind: "command-execution",
+        actionClass: "command-execution",
         reasonCode: "approval-required",
-        actionKind: "file-edit",
+        actionKind: "verification-command",
+        commandLabel: "typecheck",
         expiresAt: "2026-01-01T00:01:00.000Z",
       },
     });
@@ -823,6 +824,9 @@ describe("CodingRuntimeOrchestrator", () => {
           requestId: "permission-1",
           decision: "approved",
           expectedRevision: 4,
+          grantScope: "task",
+          commandTemplateId: "verify.typecheck",
+          safeArgumentClasses: ["frozen-argv"],
         })
       ).ok,
     ).toBe(true);
@@ -840,7 +844,10 @@ describe("CodingRuntimeOrchestrator", () => {
       expect.objectContaining({
         runId: "run-1",
         requestId: "permission-1",
-        actionKind: "file-edit",
+        actionKind: "verification-command",
+        grantScope: "task",
+        commandTemplateId: "verify.typecheck",
+        safeArgumentClasses: ["frozen-argv"],
         approvedByUserId: "server",
         ttlMs: 60_000,
       }),

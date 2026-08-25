@@ -97,12 +97,15 @@ function singleJiraCredential(
 
 function governedRequestUrl(baseUrl: string, request: JiraCodeContextHttpRequest): string {
   if (!request.path.startsWith("/rest/api/")) throw new JiraCodeContextPortError("jira-denied");
-  let url: URL;
+  let base: URL;
   try {
-    url = new URL(request.path, baseUrl);
+    base = new URL(baseUrl);
   } catch {
     throw new JiraCodeContextPortError("jira-denied");
   }
+  if (!isSecureJiraBase(base)) throw new JiraCodeContextPortError("jira-denied");
+  const url = new URL(request.path, base);
+  if (!isPinnedRestApiUrl(url, base)) throw new JiraCodeContextPortError("jira-denied");
   for (const [key, value] of Object.entries(request.query)) url.searchParams.set(key, value);
   return url.toString();
 }
@@ -125,10 +128,20 @@ function pinnedBaseUrl(config: JiraCodeContextPortConfig): URL {
   } catch {
     throw new JiraCodeContextPortError("jira-config-invalid");
   }
-  if (url.protocol !== "https:" || url.username !== "" || url.password !== "") {
+  if (!isSecureJiraBase(url)) {
     throw new JiraCodeContextPortError("jira-config-invalid");
   }
   return url;
+}
+
+function isSecureJiraBase(url: URL): boolean {
+  return url.protocol === "https:" && url.username === "" && url.password === "";
+}
+
+function isPinnedRestApiUrl(url: URL, base: URL): boolean {
+  return (
+    url.origin === base.origin && url.protocol === "https:" && url.pathname.startsWith("/rest/api/")
+  );
 }
 
 function requestUrl(base: URL, request: JiraCodeContextHttpRequest): URL {
@@ -140,7 +153,7 @@ function requestUrl(base: URL, request: JiraCodeContextHttpRequest): URL {
   for (const [key, value] of Object.entries(request.query)) {
     url.searchParams.set(key, value);
   }
-  if (url.origin !== base.origin || url.protocol !== "https:") {
+  if (!isPinnedRestApiUrl(url, base)) {
     throw new JiraCodeContextPortError("jira-denied");
   }
   return url;

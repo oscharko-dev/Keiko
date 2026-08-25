@@ -3,7 +3,6 @@ import { describe, expect, it } from "vitest";
 import { KEIKO_PRODUCT_VERSION } from "@oscharko-dev/keiko-contracts";
 import {
   DEFAULT_VERIFICATION_LIMITS,
-  probeNetworkIsolation,
   probeVerificationCapabilities,
   SDK_VERSION,
 } from "./index.js";
@@ -25,7 +24,7 @@ describe("SDK package surface", () => {
         },
       ],
     });
-    expect(probeNetworkIsolation().backend).toBe(capabilities.networkIsolation.backend);
+    expect(capabilities.networkIsolation).toEqual({ backend: "none", enforced: false });
     expect(typeof capabilities.memoryProcessTreeEnforced).toBe("boolean");
     expect(typeof capabilities.defaultRunnable).toBe("boolean");
     expect(capabilities.steps[0]).toMatchObject({
@@ -36,5 +35,12 @@ describe("SDK package surface", () => {
     if (!capabilities.defaultRunnable) {
       expect(capabilities.defaultDenialReasons).toContain("network-isolation-unavailable");
     }
+
+    const attested = probeVerificationCapabilities({ steps: [] }, "enforce-or-fail-closed", {
+      backend: "bubblewrap",
+      enforced: true,
+    });
+    expect(attested.networkIsolation).toEqual({ backend: "bubblewrap", enforced: true });
+    expect(attested.defaultDenialReasons).not.toContain("network-isolation-unavailable");
   });
 });

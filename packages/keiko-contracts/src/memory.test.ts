@@ -72,6 +72,15 @@ const user = (s: string): UserId => s as UserId;
 const ws = (s: string): WorkspaceId => s as WorkspaceId;
 const proj = (s: string): ProjectId => s as ProjectId;
 
+describe("memory status transitions", () => {
+  it("freezes the transition map and every destination list", () => {
+    expect(Object.isFrozen(MEMORY_STATUS_TRANSITIONS)).toBe(true);
+    for (const status of MEMORY_STATUSES) {
+      expect(Object.isFrozen(MEMORY_STATUS_TRANSITIONS[status])).toBe(true);
+    }
+  });
+});
+
 // ─── Fixtures ─────────────────────────────────────────────────────────────────
 function happyProvenance(): Record<string, unknown> {
   return {

@@ -147,8 +147,9 @@ compacted history on behalf of an action.
 The unreferenced voice integration factory
 (`packages/keiko-ui/src/app/components/desktop/hooks/discussion-voice.ts`) mirrors this design: it is a
 content-free observer. It reads committed voice transcript, maps voice signals to a `DiscussionMode`,
-and manages interruption-recovery context. It emits no side effects, makes no model calls, and produces
-no handoff. It has no production importer, so the shipped Twin does not invoke it. The same
+and manages interruption-recovery context. It emits no authority-bearing side effects, makes no model
+calls, and produces no handoff; its optional observer callbacks are limited to observability. It has
+no production importer, so the shipped Twin does not invoke it. The same
 no-authority guarantee documented in ADR-0104 D7 applies here.
 
 ### D6 — Voice reuse: committed-only transcript, existing turn manager, existing playback summary (AC2 / AC5)

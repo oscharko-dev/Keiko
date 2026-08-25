@@ -16,6 +16,7 @@ describe("activityBus", () => {
   });
 
   afterEach(() => {
+    delete window.__keikoActivity;
     vi.useRealTimers();
   });
 

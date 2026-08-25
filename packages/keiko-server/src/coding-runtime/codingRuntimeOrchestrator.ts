@@ -574,10 +574,15 @@ export class CodingRuntimeOrchestrator {
     return this.serial(async () => {
       const admitted = this.validateApprovalDecision(runId, input);
       if (admitted === undefined) return this.fail("invalid-intent");
-      const { decision, current, challenge, actionKind } = admitted;
+      const { decision, current, challenge, actionKind, request } = admitted;
       challenge.used = true;
       if (decision === "approved") {
-        const rejection = await this.issueApprovedAuthority(current, challenge, actionKind);
+        const rejection = await this.issueApprovedAuthority(
+          current,
+          challenge,
+          actionKind,
+          request,
+        );
         if (rejection !== undefined) return rejection;
       }
       const permissionSettled = await this.resolveRuntimePermission(
@@ -626,6 +631,7 @@ export class CodingRuntimeOrchestrator {
         readonly current: CodingRuntimeSnapshot;
         readonly challenge: ApprovalChallenge;
         readonly actionKind: NonNullable<CodingWorkbenchRuntimePendingPermission["actionKind"]>;
+        readonly request: CodingWorkbenchRuntimeApprovalDecisionRequest;
       }
     | undefined {
     const parsed = parseCodingWorkbenchRuntimeApprovalDecisionRequest(input);
@@ -644,6 +650,7 @@ export class CodingRuntimeOrchestrator {
       current,
       challenge,
       actionKind: challenge.permission.actionKind,
+      request: parsed.value,
     };
   }
 
@@ -664,6 +671,7 @@ export class CodingRuntimeOrchestrator {
     current: CodingRuntimeSnapshot,
     challenge: ApprovalChallenge,
     actionKind: NonNullable<CodingWorkbenchRuntimePendingPermission["actionKind"]>,
+    request: CodingWorkbenchRuntimeApprovalDecisionRequest,
   ): Promise<CodingRuntimeOrchestratorResult | undefined> {
     const principal = this.deps.serverPrincipal();
     if (!principal) return this.stopAfterIssueFailure(current, "authority-resolution-failed");
@@ -677,6 +685,13 @@ export class CodingRuntimeOrchestrator {
           ? { connectorScopes: challenge.permission.connectorScopes }
           : {}),
         approvedByUserId: principal,
+        grantScope: request.grantScope ?? "once",
+        ...(request.commandTemplateId === undefined
+          ? {}
+          : { commandTemplateId: request.commandTemplateId }),
+        ...(request.safeArgumentClasses === undefined
+          ? {}
+          : { safeArgumentClasses: request.safeArgumentClasses }),
         ttlMs: Math.max(1, challenge.expiresAt - this.now().getTime()),
         boundRevision: challenge.revision,
       });

@@ -350,6 +350,44 @@ describe("production runtime workspace authority", () => {
       }),
     ).toBe(false);
   });
+
+  it.each([
+    [
+      "governed-assist",
+      [],
+      ["command-execution", "delivery-substrate", "connector-access", "network-egress"],
+    ],
+    [
+      "supervised-coding",
+      ["command-execution"],
+      ["delivery-substrate", "connector-access", "network-egress"],
+    ],
+    [
+      "autonomous-delivery",
+      ["command-execution", "delivery-substrate", "connector-access", "network-egress"],
+      [],
+    ],
+  ] as const)("derives the production authority envelope for %s", (mode, included, excluded) => {
+    const fixture = liveFixture();
+    const context = resolveProductionRuntimeContext(
+      { ...fixture.input, deploymentCeiling: mode },
+      { ...fixture.request, requestedMode: mode },
+    );
+
+    for (const actionClass of included) expect(context.actionClasses).toContain(actionClass);
+    for (const actionClass of excluded) {
+      expect(context.actionClasses).not.toContain(actionClass);
+    }
+    expect(context.commandPolicy.requirePerCommandApproval).toBe(mode !== "autonomous-delivery");
+    if (mode === "autonomous-delivery") {
+      expect(context.connectorScopes).toEqual(["source-control.read", "source-control.write"]);
+      expect(context.networkPolicy).toEqual({
+        mode: "connector-scoped-egress",
+        allowLoopback: false,
+        connectorScopes: ["source-control.read", "source-control.write"],
+      });
+    }
+  });
 });
 
 function liveFixture() {

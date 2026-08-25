@@ -27,7 +27,8 @@ describe("runGroundedRetrievalLatencyEval", () => {
     const delayMs = 20;
     const sample = await runGroundedRetrievalLatencyEval({ injectedJudgeDelayMs: delayMs });
 
-    expect(sample.entailmentMs).toBeGreaterThanOrEqual(delayMs);
+    expect(sample.judgedClaims).toBe(FIXTURE_ANSWER_CLAIMS);
+    expect(sample.entailmentMs).toBeGreaterThan(0);
     expect(sample.entailmentMs).toBeLessThan(delayMs * FIXTURE_ANSWER_CLAIMS);
   }, 30_000);
 

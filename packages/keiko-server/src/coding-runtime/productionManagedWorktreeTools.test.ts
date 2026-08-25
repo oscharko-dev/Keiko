@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import type {
   CodeTaskGrantId,
+  CommandTaskRunResult,
   CodingWorkbenchMode,
   CodingWorkbenchRuntimeAuthorityFacts,
 } from "@oscharko-dev/keiko-contracts";
@@ -228,36 +229,43 @@ describe("production managed worktree tools", () => {
     });
   });
 
-  it.each([
-    ["command", { commandId: "npm-script:test" }],
-    ["git", { operation: "read" }],
-    ["delivery", { intent: "commit" }],
-    ["connector", { scope: "source-control.read" }],
-  ] as const)("completes the governed %s port through production wiring", async (action, detail) => {
-    const execute = vi.fn(() => Promise.resolve({ failureReason: "none" }));
+  it("completes a governed command through production wiring", async () => {
+    const execute = vi.fn((): Promise<CommandTaskRunResult> =>
+      Promise.resolve({
+        schemaVersion: "1",
+        runId: "command-run-1",
+        taskId: "npm-script:test",
+        kind: "test",
+        exitCode: 0,
+        durationMs: 1,
+        truncated: false,
+        timedOut: false,
+        failureReason: "none",
+        stdout: "",
+        stderr: "",
+      }),
+    );
+    const liveFacts: CodingWorkbenchRuntimeAuthorityFacts = {
+      ...FACTS,
+      actionClasses: ["workspace-read", "workspace-write", "verification", "command-execution"],
+    };
     const facade = createProductionManagedWorktreeToolFacade({
       authority: {
-        revalidateCapabilityForMutation: () => ({ ok: true as const, envelope: authorizedEnvelope() }),
-        resolveCapabilityForDelegation: () => ({ ok: true as const, envelope: authorizedEnvelope() }),
+        revalidateCapabilityForMutation: () => ({
+          ok: true as const,
+          envelope: authorizedEnvelope(true),
+        }),
+        resolveCapabilityForDelegation: () => ({
+          ok: true as const,
+          envelope: authorizedEnvelope(true),
+        }),
       },
       authorityRef: { runId: "run-1", envelopeDigest: DIGEST },
       workspaceRoot: "/managed/worktree",
       authorityExpiresAt: "2099-01-01T00:00:00.000Z",
       effectiveMode: "autonomous-delivery",
       deploymentCeiling: "autonomous-delivery",
-      liveFacts: () => ({
-        ...FACTS,
-        actionClasses: [
-          "workspace-read",
-          "workspace-write",
-          "verification",
-          "command-execution",
-          "delivery-substrate",
-          "connector-access",
-          "network-egress",
-        ],
-        connectorScopes: ["source-control.read", "source-control.write"],
-      }),
+      liveFacts: () => liveFacts,
       secureWorkspaceTextRead: { readText: () => Promise.resolve({ ok: false, reason: "denied" }) },
       editorAgentClient: {
         action: () =>
@@ -267,37 +275,107 @@ describe("production managed worktree tools", () => {
           }),
       },
       invocationRegistry: createCodingToolInvocationRegistry(),
-      commandRunner: { execute } as never,
+      commandRunner: { execute },
       verificationRunner: { runToReport: vi.fn() },
       onRuntimeEvent: vi.fn(),
     });
 
+    const controller = new AbortController();
     await expect(
       facade.execute({
         capability: "opaque-capability",
+        signal: controller.signal,
         body: JSON.stringify({
-          action,
-          actionId: `${action}-1`,
-          idempotencyKey: `${action}-key`,
-          ...detail,
+          action: "command",
+          actionId: "command-1",
+          idempotencyKey: "command-key",
+          commandId: "npm-script:test",
         }),
       }),
     ).resolves.toMatchObject({ status: "completed" });
-    if (action === "command") {
-      expect(execute).toHaveBeenCalledWith({
+    expect(execute).toHaveBeenCalledWith(
+      expect.objectContaining({
         projectId: "/managed/worktree",
         taskId: "npm-script:test",
         requestId: "command-1",
-      });
-    } else {
-      expect(execute).not.toHaveBeenCalled();
-    }
+        signal: controller.signal,
+        timeoutMs: 10_000,
+      }),
+    );
   });
+
+  it.each([
+    ["git", { operation: "read" }],
+    ["delivery", { intent: "commit" }],
+    ["connector", { scope: "source-control.read" }],
+  ] as const)(
+    "fails closed when the governed %s backend is unavailable",
+    async (action, detail) => {
+      const facade = createProductionManagedWorktreeToolFacade({
+        authority: {
+          revalidateCapabilityForMutation: () => ({
+            ok: true as const,
+            envelope: authorizedEnvelope(true),
+          }),
+          resolveCapabilityForDelegation: () => ({
+            ok: true as const,
+            envelope: authorizedEnvelope(true),
+          }),
+        },
+        authorityRef: { runId: "run-1", envelopeDigest: DIGEST },
+        workspaceRoot: "/managed/worktree",
+        authorityExpiresAt: "2099-01-01T00:00:00.000Z",
+        effectiveMode: "autonomous-delivery",
+        deploymentCeiling: "autonomous-delivery",
+        liveFacts: () => ({
+          ...FACTS,
+          actionClasses: [
+            "workspace-read",
+            "workspace-write",
+            "verification",
+            "delivery-substrate",
+            "connector-access",
+            "network-egress",
+          ],
+          connectorScopes: ["source-control.read", "source-control.write"],
+        }),
+        secureWorkspaceTextRead: {
+          readText: () => Promise.resolve({ ok: false, reason: "denied" }),
+        },
+        editorAgentClient: {
+          action: () =>
+            Promise.resolve({
+              ok: false as const,
+              error: { kind: "route" as const, code: "denied", message: "denied" },
+            }),
+        },
+        invocationRegistry: createCodingToolInvocationRegistry(),
+        verificationRunner: { runToReport: vi.fn() },
+        onRuntimeEvent: vi.fn(),
+      });
+
+      await expect(
+        facade.execute({
+          capability: "opaque-capability",
+          body: JSON.stringify({
+            action,
+            actionId: `${action}-1`,
+            idempotencyKey: `${action}-key`,
+            ...detail,
+          }),
+        }),
+      ).resolves.toMatchObject({
+        status: "failed",
+        reasonCode: "capability-backend-unavailable",
+      });
+    },
+  );
 });
 
 function authorizedEnvelope(network = false): never {
   return {
     authority: {
+      effectiveMode: "autonomous-delivery",
       actionClasses: [
         "workspace-read",
         "workspace-write",
@@ -308,10 +386,17 @@ function authorizedEnvelope(network = false): never {
         ...(network ? ["network-egress"] : []),
       ],
       connectorScopes: ["source-control.read", "source-control.write"],
-      commandPolicy: { mode: "allowlisted", allow: ["npm-script:test"], deny: [] },
+      commandPolicy: {
+        mode: "allowlisted",
+        allow: ["npm-script:test"],
+        deny: [],
+        maxCommandTimeoutMs: 10_000,
+        requirePerCommandApproval: false,
+      },
       networkPolicy: {
         mode: network ? "governed-egress" : "deny-all",
-        connectorScopes: [],
+        allowLoopback: false,
+        connectorScopes: network ? ["source-control.read", "source-control.write"] : [],
       },
     },
   } as never;

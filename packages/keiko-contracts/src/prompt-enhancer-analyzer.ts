@@ -955,7 +955,6 @@ const SCOPE_CUES: readonly string[] = [
   "targeting ",
   "application",
   "service",
-  "system",
   "platform",
   "workspace",
   "repository",

@@ -257,7 +257,7 @@ function connectorConfigFor(
   return {
     github_connector_authorized:
       deps.env.GITHUB_CONNECTOR_AUTHORIZED === "true" && githubConfigured,
-    jira_connector_authorized: jiraConfigured,
+    jira_connector_authorized: deps.env.JIRA_CONNECTOR_AUTHORIZED === "true" && jiraConfigured,
   };
 }
 
@@ -289,13 +289,19 @@ export function composeCodingContextConnectors(deps: UiHandlerDeps): ComposedCon
           processEnv: process.env,
         }));
   const jiraPort = deps.codingContextJiraPort;
+  const jiraConfigured =
+    jiraPort !== undefined &&
+    (deps.atlassianConnectorCredentials === undefined ||
+      deps.atlassianConnectorCredentials.custody
+        .list()
+        .some((credential) => credential.provider === "jira"));
   return {
     connectors: {
       github:
         githubPort === undefined ? NO_CONNECTOR : createGitHubCodeContextConnector(githubPort),
-      jira: jiraPort === undefined ? NO_CONNECTOR : createJiraCodeContextConnector(jiraPort),
+      jira: jiraConfigured ? createJiraCodeContextConnector(jiraPort) : NO_CONNECTOR,
     },
-    connectorConfig: connectorConfigFor(deps, githubPort !== undefined, jiraPort !== undefined),
+    connectorConfig: connectorConfigFor(deps, githubPort !== undefined, jiraConfigured),
   };
 }
 

@@ -162,10 +162,7 @@ function governedPorts(
     commandRunner: buildCommandRunner(input),
     verificationRunner: buildVerificationRunner(input),
     gitAuthority: buildSidecarCapabilityPort<"git">(input, "git-authority-revoked"),
-    deliveryAuthority: buildSidecarCapabilityPort<"delivery">(
-      input,
-      "delivery-authority-revoked",
-    ),
+    deliveryAuthority: buildSidecarCapabilityPort<"delivery">(input, "delivery-authority-revoked"),
     connectorAuthority: buildSidecarCapabilityPort<"connector">(
       input,
       "connector-authority-revoked",
@@ -182,22 +179,34 @@ function buildCommandRunner(
     return unavailablePort("command-backend-unavailable");
   }
   return {
-    execute: async (request, signal, guard): ReturnType<
-      CodingToolGovernedPorts["commandRunner"]["execute"]
-    > => {
-      if (signal?.aborted === true || !guard.check() || !live(input)) {
+    execute: async (
+      request,
+      signal,
+      guard,
+    ): ReturnType<CodingToolGovernedPorts["commandRunner"]["execute"]> => {
+      if (signalAborted(signal) || !guard.check() || !live(input)) {
         return { status: "failed", reasonCode: "command-authority-revoked" };
       }
       const result = await commandRunner.execute({
         projectId: input.workspaceRoot,
         taskId: request.commandId,
         requestId: request.actionId,
+        signal,
+        timeoutMs: guard.resolveParentAuthority?.()?.commandPolicy.maxCommandTimeoutMs,
       });
-      return result.failureReason === "none" && guard.check() && live(input)
-        ? { status: "completed" }
-        : { status: "failed", reasonCode: "command-execution-failed" };
+      if (result.failureReason !== "none") {
+        return { status: "failed", reasonCode: "command-execution-failed" };
+      }
+      if (signalAborted(signal) || !guard.check() || !live(input)) {
+        return { status: "failed", reasonCode: "command-authority-revoked" };
+      }
+      return { status: "completed" };
     },
   };
+}
+
+function signalAborted(signal: AbortSignal | undefined): boolean {
+  return signal?.aborted === true;
 }
 
 function buildSidecarCapabilityPort<Kind extends "git" | "delivery" | "connector">(
@@ -217,7 +226,10 @@ function buildSidecarCapabilityPort<Kind extends "git" | "delivery" | "connector
 function unavailablePort<Kind extends "command" | "git" | "delivery" | "connector">(
   reasonCode: string,
 ): GovernedCodingToolPort<Kind> {
-  return { execute: (): ReturnType<GovernedCodingToolPort<Kind>["execute"]> => Promise.resolve({ status: "failed", reasonCode }) };
+  return {
+    execute: (): ReturnType<GovernedCodingToolPort<Kind>["execute"]> =>
+      Promise.resolve({ status: "failed", reasonCode }),
+  };
 }
 
 // The #2387 skill and read-only child-agent ports. Every identity field is resolved from the live

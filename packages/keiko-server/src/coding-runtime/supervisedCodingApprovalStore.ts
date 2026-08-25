@@ -149,20 +149,14 @@ export function supervisedCodingApprovalBindingHash(
   binding: SupervisedCodingApprovalBinding,
 ): string {
   return sha256Hex(
-    canonicalise(
-      binding.grantScope === "task"
-        ? taskBindingScope(binding)
-        : binding,
-    ),
+    canonicalise(binding.grantScope === "task" ? taskBindingScope(binding) : binding),
   );
 }
 
-function taskBindingScope(binding: SupervisedCodingApprovalBindingTask): Omit<
-  SupervisedCodingApprovalBindingTask,
-  "requestId"
-> {
-  const { requestId, ...scope } = binding;
-  void requestId;
+function taskBindingScope({
+  requestId: _requestId,
+  ...scope
+}: SupervisedCodingApprovalBindingTask): Omit<SupervisedCodingApprovalBindingTask, "requestId"> {
   return scope;
 }
 

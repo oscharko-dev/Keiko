@@ -9,14 +9,14 @@ import { useActivitySubscription, type ActivityEvent } from "../shared/activityB
 import styles from "./TimelinePanel.module.css";
 
 const KIND_COLOR: Record<ActivityEvent["type"], string> = {
-  step: "var(--accent-cyan)",
-  approval: "var(--accent-amber)",
-  approved: "var(--state-success)",
-  rejected: "var(--state-danger)",
+  step: "var(--accent-cyan, #4fd1e5)",
+  approval: "var(--accent-amber, #e7b84b)",
+  approved: "var(--state-success, #55c68b)",
+  rejected: "var(--state-danger, #e46b6b)",
   stopped: "var(--text-tertiary)",
-  open: "var(--accent-violet)",
-  run: "var(--accent-cyan)",
-  delivery: "var(--state-success)",
+  open: "var(--accent-violet, #9b8cf0)",
+  run: "var(--accent-cyan, #4fd1e5)",
+  delivery: "var(--state-success, #55c68b)",
 };
 
 const KIND_LABEL_KEYS: Record<ActivityEvent["type"], MessageKey> = {
@@ -48,13 +48,16 @@ function TimelineEvent({
 }): ReactElement {
   const style = { "--activity-color": KIND_COLOR[event.type] } as CSSProperties;
   return (
-    <li className={styles.event} style={style}>
-      <span className={styles.dot} aria-hidden="true" />
-      <div className={styles.content}>
-        <span className={styles.kind}>{translate(KIND_LABEL_KEYS[event.type])}</span>
-        <span className={styles.text}>{eventText(event, translate)}</span>
-        <span className={styles.meta}>
+    <li className="tl-row" style={style}>
+      <span className="tl-dot" aria-hidden="true" />
+      <div className="tl-body">
+        <span className={`visually-hidden ${styles.kind}`}>
+          {translate(KIND_LABEL_KEYS[event.type])}
+        </span>
+        <span className="tl-text">{eventText(event, translate)}</span>
+        <span className="tl-meta">
           {event.agent ?? event.tool ?? translate("activity.actor.workspace")}
+          {" · "}
           <time dateTime={new Date(event.time).toISOString()}>{eventTime(event.time)}</time>
         </span>
       </div>
@@ -62,14 +65,18 @@ function TimelineEvent({
   );
 }
 
-export default function TimelinePanel(): ReactElement {
+export function TimelinePanel(): ReactElement {
   const events = useActivitySubscription();
   const translate = useTranslate();
 
   return (
-    <section className={styles.root} aria-label={translate("activity.timeline.label")}>
+    <section
+      className={`${styles.lazyWidgetScope} tl`}
+      role="log"
+      aria-label={translate("activity.timeline.label")}
+    >
       {events.length === 0 ? (
-        <div className={styles.empty}>
+        <div className="tl-empty">
           <strong>{translate("activity.empty.title")}</strong>
           <span>{translate("activity.empty.description")}</span>
         </div>
@@ -87,3 +94,5 @@ export default function TimelinePanel(): ReactElement {
     </section>
   );
 }
+
+export default TimelinePanel;

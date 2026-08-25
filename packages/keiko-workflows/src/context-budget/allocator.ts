@@ -55,7 +55,7 @@ interface LaneFill {
   readonly excludedIds: readonly string[];
   readonly tokens: number;
   readonly droppedForBudget: boolean;
-  readonly compactionReason?: Exclude<ContextEvictionPolicy, "none"> | undefined;
+  readonly compactionReason?: Exclude<ContextEvictionPolicy, "none"> | "budget" | undefined;
 }
 
 const CANONICAL_INDEX: ReadonlyMap<ContextLaneId, number> = new Map(
@@ -260,7 +260,11 @@ function fillEvictableLanes(
   for (const lane of ordered) {
     const cap = Math.min(lane.row.maxTokens, remaining);
     const fill = selectByEvictionPolicy(lane.items, cap, tokenAccounting, lane.row.eviction);
-    fills.set(lane.row.laneId, fill);
+    const globallyConstrained = fill.excludedIds.length > 0 && fill.tokens === 0;
+    fills.set(
+      lane.row.laneId,
+      globallyConstrained ? { ...fill, compactionReason: "budget" } : fill,
+    );
     remaining -= fill.tokens;
   }
   return fills;

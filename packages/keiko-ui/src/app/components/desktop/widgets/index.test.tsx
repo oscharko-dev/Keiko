@@ -1,5 +1,5 @@
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { StrictMode, useEffect, useRef, type ReactNode } from "react";
+import { StrictMode, useEffect, useRef, type ReactElement, type ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from "vitest";
 import type { Chat } from "@/lib/types";
 import type { WindowRenderContext } from "../windows/WindowsRegistry";
@@ -517,7 +517,7 @@ vi.mock("./cards/AgentRunWidget", () => ({
   ),
 }));
 vi.mock("./connectors/AtlassianConnectorsPanel", () => ({
-  AtlassianConnectorsPanel: () => <div>AtlassianConnectorsPanel</div>,
+  AtlassianConnectorsPanel: (): ReactElement => <div>AtlassianConnectorsPanel</div>,
 }));
 vi.mock("./cards/ConnectorPickerWidget", () => ({
   ConnectorPickerWidget: ({

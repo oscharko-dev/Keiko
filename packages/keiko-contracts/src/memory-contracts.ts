@@ -201,16 +201,30 @@ export const MEMORY_STATUSES: readonly MemoryStatus[] = [
 //    retention review — archival is non-destructive and never authorizes unattended deletion.
 //  - A "proposed" memory can also reach "expired" if its capture window elapses before
 //    review (proposal TTL is enforced by #207, not by this contract).
-export const MEMORY_STATUS_TRANSITIONS: Readonly<Record<MemoryStatus, readonly MemoryStatus[]>> = {
-  proposed: ["accepted", "rejected", "superseded", "conflicted", "expired", "forgotten"],
-  accepted: ["superseded", "archived", "forgotten", "conflicted", "expired"],
-  rejected: ["forgotten"],
-  superseded: ["archived", "forgotten"],
-  archived: ["accepted", "forgotten"],
-  forgotten: [],
-  conflicted: ["accepted", "superseded", "archived", "forgotten"],
-  expired: ["accepted", "archived", "forgotten"],
-} as const;
+export const MEMORY_STATUS_TRANSITIONS: Readonly<Record<MemoryStatus, readonly MemoryStatus[]>> =
+  Object.freeze({
+    proposed: Object.freeze([
+      "accepted",
+      "rejected",
+      "superseded",
+      "conflicted",
+      "expired",
+      "forgotten",
+    ] as const),
+    accepted: Object.freeze([
+      "superseded",
+      "archived",
+      "forgotten",
+      "conflicted",
+      "expired",
+    ] as const),
+    rejected: Object.freeze(["forgotten"] as const),
+    superseded: Object.freeze(["archived", "forgotten"] as const),
+    archived: Object.freeze(["accepted", "forgotten"] as const),
+    forgotten: Object.freeze([] as const),
+    conflicted: Object.freeze(["accepted", "superseded", "archived", "forgotten"] as const),
+    expired: Object.freeze(["accepted", "archived", "forgotten"] as const),
+  });
 
 // ─── Provenance source kinds ──────────────────────────────────────────────────
 // Pinned vocabulary so capture (#207), consolidation (#208), and audit (#214) cannot

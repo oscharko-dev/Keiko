@@ -114,6 +114,7 @@ describe("public barrel", () => {
         "findStaleNotArchived",
         "isMemorySuppressedFromRetrieval",
         "jaccardSimilarity",
+        "planAcknowledgedArchivedForgets",
         "planMemoryMaintenance",
         "scanMemoryHealth",
         "scopeCoordinateKey",

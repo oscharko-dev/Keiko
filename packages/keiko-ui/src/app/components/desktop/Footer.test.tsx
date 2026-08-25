@@ -146,7 +146,7 @@ describe("Footer — window status trigger", () => {
       ],
     });
 
-    expect(screen.getByRole("group", { name: "Open windows" })).toBeInTheDocument();
+    expect(screen.getByRole("region", { name: "Open windows" })).toBeInTheDocument();
     expect(
       screen.getByRole("button", { name: "Restore Chat window - Sprint triage" }),
     ).toBeInTheDocument();

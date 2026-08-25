@@ -47,6 +47,7 @@ import {
   decayHalfLifeMultiplierForType,
   MEMORY_FORGET_REASON_ARCHIVED_RETENTION,
 } from "@oscharko-dev/keiko-contracts/memory";
+import { GovernanceError } from "./errors.js";
 import type {
   MemoryForgetReason,
   MemoryId,
@@ -367,6 +368,12 @@ export function planAcknowledgedArchivedForgets(
   records: readonly MemoryRecord[],
   options: PlanAcknowledgedArchivedForgetsOptions,
 ): readonly AcknowledgedArchivedForgetCandidate[] {
+  if (!isRetentionAcknowledged(options.retentionAcknowledged)) {
+    throw new GovernanceError(
+      "destructive-acknowledgement-required",
+      "archived retention planning requires explicit acknowledgement",
+    );
+  }
   const policy: MemoryMaintenancePolicy = { ...MEMORY_MAINTENANCE_DEFAULTS, ...options.policy };
   return records
     .filter(
@@ -378,4 +385,8 @@ export function planAcknowledgedArchivedForgets(
     .sort((left, right) => left.id.localeCompare(right.id))
     .slice(0, policy.maxForgetPerRun)
     .map((record) => ({ id: record.id, reason: MEMORY_FORGET_REASON_ARCHIVED_RETENTION }));
+}
+
+function isRetentionAcknowledged(value: unknown): value is true {
+  return value === true;
 }

@@ -62,6 +62,30 @@ describe("release script LCOV mapping seams", () => {
         expect(() => surface.assertVendoredWorkspaceExportArtifacts([])).toThrow("process.exit(1)");
         expect(() => surface.assertWorkflowHandoffSubpath([])).toThrow("process.exit(1)");
         expect(() => surface.assertContractsMemorySubpath([])).toThrow("process.exit(1)");
+        expect(() =>
+          surface.assertContractsMemorySubpath(staged.vendorPackages, {
+            types: "./src/memory.ts",
+            import: "./src/memory.js",
+          }),
+        ).toThrow("process.exit(1)");
+        expect(() =>
+          surface.assertContractsMemorySubpath(staged.vendorPackages, {
+            types: "./dist/memory.d.ts",
+            import: "./dist/memory.js",
+            default: "./dist/memory.js",
+          }),
+        ).toThrow("process.exit(1)");
+        const withoutMemoryTypes = staged.vendorPackages.map((vendorPackage) =>
+          vendorPackage.name === "@oscharko-dev/keiko-contracts"
+            ? {
+                ...vendorPackage,
+                files: vendorPackage.files.filter((file) => file !== "dist/memory.d.ts"),
+              }
+            : vendorPackage,
+        );
+        expect(() => surface.assertContractsMemorySubpath(withoutMemoryTypes)).toThrow(
+          "process.exit(1)",
+        );
         expect(() => surface.assertLocalKnowledgeDistPath([])).toThrow("process.exit(1)");
       } catch (error_) {
         seamError = error_;
