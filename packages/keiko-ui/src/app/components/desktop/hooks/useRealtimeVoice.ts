@@ -40,6 +40,7 @@ import {
 import {
   createVoiceTurnManager,
   type VoiceTurnManagerEngine,
+  type VoiceTurnEffect,
   type VoiceTurnSnapshot,
 } from "./voice-turn-manager";
 import {
@@ -83,6 +84,8 @@ const TRANSCRIPT_OVERLAP_EDGE_CHARACTER = /[\p{P}\p{S}]/u;
 const TRANSCRIPT_NUMBER = /\p{N}/u;
 const TRANSCRIPT_IDENTIFIER = /(?:[_:.#/\\-]|[\p{Ll}\p{M}]\p{Lu}|^\p{Lu}{2,}$)/u;
 const TRANSCRIPT_PROPER_NAME = /^\p{Lu}[\p{L}\p{M}'\u2019.-]{2,}$/u;
+const TRANSCRIPT_SENTENCE_BOUNDARY = /[.!?\u2026][\p{Pe}\p{Pf}"']*$/u;
+const MAX_TRANSCRIPT_SEGMENT_OVERLAP_TOKENS = 8;
 
 // Turn-detection profiles (P6). Endpointing must adapt to the acoustic path: a close-mic headset can
 // end a turn far sooner than a laptop mic bleeding the assistant's own voice, and a noisy room needs a
@@ -227,6 +230,9 @@ export interface UseRealtimeVoiceOptions {
   // Raised once at the beginning of each user utterance so the canonical chat generation and local
   // speech playback can be interrupted before the final transcript arrives (barge-in).
   readonly onUserSpeechStart?: (() => void) | undefined;
+  // Local, content-free acknowledgement for a turn-manager backchannel effect. It cannot create a
+  // model response, write a transcript, or cross the control-plane boundary.
+  readonly onTurnBackchannel?: (() => void) | undefined;
   // Live signal for whether a grounded retrieval is currently in flight for the pending canonical
   // voice turn (ADR-0154 D1/D5 — retrieval runs in the canonical chat pipeline AFTER the final
   // transcript is handed off, never inside Realtime itself, so Realtime holds no retrieval state
@@ -324,7 +330,10 @@ function isDistinctiveSingleTokenOverlap(first: string, second: string): boolean
 }
 
 function transcriptSegmentOverlap(first: readonly string[], second: readonly string[]): number {
-  const limit = Math.min(first.length, second.length);
+  // A final sentence followed by the same words is a deliberate repetition, not a provider retry.
+  // Only trim a bounded suffix/prefix overlap within an open continuation at the segment seam.
+  if (TRANSCRIPT_SENTENCE_BOUNDARY.test(first.join(" "))) return 0;
+  const limit = Math.min(first.length, second.length, MAX_TRANSCRIPT_SEGMENT_OVERLAP_TOKENS);
   for (let size = limit; size >= 2; size -= 1) {
     const firstOffset = first.length - size;
     const matches = second
@@ -531,6 +540,9 @@ export function useRealtimeVoice(options: UseRealtimeVoiceOptions): RealtimeVoic
   const canonicalTurnOverflowedRef = useRef(false);
   const canonicalTurnTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const flushPendingCanonicalUserTurnRef = useRef<() => void>(() => undefined);
+  const preservePendingCanonicalUserTurnRef = useRef<() => void>(() => undefined);
+  const beginRecoveryRef = useRef<() => void>(() => undefined);
+  const executeTurnEffectsRef = useRef<(effects: readonly VoiceTurnEffect[]) => void>(() => undefined);
   const haltForCanonicalAdmissionFailureRef = useRef<() => void>(() => undefined);
   const currentVoiceTurnRef = useRef<VoiceTurnDraft | undefined>(undefined);
   const voiceTurnSeqRef = useRef(0);
@@ -549,6 +561,7 @@ export function useRealtimeVoice(options: UseRealtimeVoiceOptions): RealtimeVoic
     (signal: Parameters<VoiceTurnManagerEngine["apply"]>[0]): void => {
       const result = turnManagerRef.current.apply(signal);
       setTurnSnapshot(result.snapshot);
+      executeTurnEffectsRef.current(result.effects);
     },
     [],
   );
@@ -763,6 +776,30 @@ export function useRealtimeVoice(options: UseRealtimeVoiceOptions): RealtimeVoic
     }
     setPartialUserTranscript(pendingCanonicalUserTurnRef.current?.text);
   }, []);
+  preservePendingCanonicalUserTurnRef.current = holdPendingCanonicalUserTurn;
+
+  const executeTurnEffects = useCallback((effects: readonly VoiceTurnEffect[]): void => {
+    let interruptAssistant = false;
+    for (const effect of effects) {
+      switch (effect) {
+        case "stop-playback":
+        case "cancel-speech-generation":
+          interruptAssistant = true;
+          break;
+        case "preserve-user-turn":
+          preservePendingCanonicalUserTurnRef.current();
+          break;
+        case "emit-backchannel":
+          options.onTurnBackchannel?.();
+          break;
+        case "begin-recovery":
+          beginRecoveryRef.current();
+          break;
+      }
+    }
+    if (interruptAssistant) onUserSpeechStartRef.current?.();
+  }, [options.onTurnBackchannel]);
+  executeTurnEffectsRef.current = executeTurnEffects;
 
   const rejectOversizedCanonicalUserTurn = useCallback(
     (text: string): void => {
@@ -925,14 +962,12 @@ export function useRealtimeVoice(options: UseRealtimeVoiceOptions): RealtimeVoic
   const beginUserUtterance = useCallback((): void => {
     lastAnonymousFinalTextRef.current = undefined;
     canonicalTurnOverflowedRef.current = false;
-    holdPendingCanonicalUserTurn();
     if (!userSpeechActiveRef.current) {
       userSpeechActiveRef.current = true;
-      onUserSpeechStartRef.current?.();
     }
     beginVoiceTurn();
     applyTurnSignal({ kind: "user-speech-start" });
-  }, [applyTurnSignal, beginVoiceTurn, holdPendingCanonicalUserTurn]);
+  }, [applyTurnSignal, beginVoiceTurn]);
 
   const endUserUtterance = useCallback((): void => {
     userSpeechActiveRef.current = false;
@@ -1131,13 +1166,21 @@ export function useRealtimeVoice(options: UseRealtimeVoiceOptions): RealtimeVoic
     );
   }, [cleanupRefs, flushPendingCanonicalUserTurn]);
 
+  const beginTransportRecovery = useCallback((): void => {
+    graceTimerRef.current ??= setTimeout(runTransportRecovery, ICE_DISCONNECT_GRACE_MS);
+  }, [runTransportRecovery]);
+  beginRecoveryRef.current = beginTransportRecovery;
+
   const armTransportRecovery = useCallback((): void => {
     applyTurnSignal({ kind: "provider-failure", recoverable: true });
-    graceTimerRef.current ??= setTimeout(runTransportRecovery, ICE_DISCONNECT_GRACE_MS);
-  }, [applyTurnSignal, runTransportRecovery]);
+  }, [applyTurnSignal]);
 
   const recoverTransportNow = useCallback((): void => {
     applyTurnSignal({ kind: "provider-failure", recoverable: true });
+    if (graceTimerRef.current !== undefined) {
+      clearTimeout(graceTimerRef.current);
+      graceTimerRef.current = undefined;
+    }
     runTransportRecovery();
   }, [applyTurnSignal, runTransportRecovery]);
 

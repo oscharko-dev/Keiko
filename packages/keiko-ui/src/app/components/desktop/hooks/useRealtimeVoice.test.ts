@@ -502,6 +502,36 @@ describe("useRealtimeVoice canonical transcript delivery", () => {
     });
   });
 
+  it("preserves a deliberately repeated sentence across final transcript segments", async () => {
+    vi.useFakeTimers();
+    const fake = makeFakeSession();
+    const onCanonicalUserTurn = vi.fn().mockResolvedValue("completed");
+    const { result } = renderVoice({ fake, onCanonicalUserTurn });
+    act(() => result.current.start());
+    await vi.waitFor(() => expect(result.current.phase).toBe("negotiating"));
+
+    act(() => {
+      fake.fireDataChannelEvent({
+        type: "conversation.item.input_audio_transcription.completed",
+        item_id: "repeat-one",
+        transcript: "Deploy only after review.",
+      });
+      fake.fireDataChannelEvent({
+        type: "conversation.item.input_audio_transcription.completed",
+        item_id: "repeat-two",
+        transcript: "Deploy only after review before Friday.",
+      });
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(CANONICAL_TURN_CONTINUATION_GRACE_MS);
+    });
+
+    expect(onCanonicalUserTurn).toHaveBeenCalledWith({
+      turnId: expect.stringMatching(CANONICAL_TURN_ID_PATTERN),
+      text: "Deploy only after review. Deploy only after review before Friday.",
+    });
+  });
+
   it.each([
     ["The code is 42", "42 not 24", "The code is 42 not 24"],
     [
