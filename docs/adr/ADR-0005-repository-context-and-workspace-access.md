@@ -53,9 +53,10 @@ strategy, and the structured summary — must be typed interfaces defined now.
 All filesystem access goes through one port, `WorkspaceFs` (`readFileUtf8`, `stat`, `readDir`,
 `realPath`, `exists`), with a `nodeWorkspaceFs` adapter over `node:fs` (synchronous, mirroring the
 gateway's `readFileSync` usage). Detection, discovery, context-pack assembly, and reading all
-depend on the port, never on `node:fs` directly. This makes the security-relevant logic testable
-with an in-memory fake (no temp files), confines every real IO call to one auditable file, and
-keeps the rest of the module pure.
+depend on the port, never on `node:fs` directly. The async discovery facade uses that same port and
+yields between bounded entry batches; it does not create a second scanner or bypass containment.
+This makes the security-relevant logic testable with an in-memory fake (no temp files), confines
+every real IO call to one auditable file, and keeps the rest of the module pure.
 
 ### D2 — Lexical containment in `paths.ts`; realpath/symlink containment at the IO edge
 
@@ -148,8 +149,9 @@ session or call a model.
 - Lexical-only path containment in `paths.ts` is insufficient for symlinks; the realpath check must
   be applied at the IO edge. The split is documented but is a place a future caller could get wrong
   if it reads files without going through `readWorkspaceFile`.
-- Synchronous IO mirrors the existing gateway style but blocks the event loop on very large
-  repositories. The `maxFiles`/`maxDepth` caps bound this; an async port is a future option.
+- Individual `WorkspaceFs` calls remain synchronous for deterministic fakes, so an unusually slow
+  directory read can still occupy one turn. The async discovery facade yields between bounded entry
+  batches, keeping unrelated BFF requests responsive throughout the full repository walk.
 
 ### Neutral
 

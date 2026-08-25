@@ -14,7 +14,6 @@ import {
   writeFileSync,
 } from "node:fs";
 import { createServer, type Server } from "node:http";
-import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { classifyGitRemoteFailure } from "./classify.js";
@@ -40,14 +39,20 @@ function startCredentialChallengeServer(): Promise<{
       const address = server.address();
       if (address === null || typeof address === "string")
         throw new TypeError("expected TCP server");
-      resolve({ server, url: `http://127.0.0.1:${(address as AddressInfo).port}/remote.git` });
+      resolve({ server, url: `http://127.0.0.1:${String(address.port)}/remote.git` });
     });
   });
 }
 
 function closeServer(server: Server): Promise<void> {
   return new Promise((resolve, reject) => {
-    server.close((error) => (error === undefined ? resolve() : reject(error)));
+    server.close((error) => {
+      if (error === undefined) {
+        resolve();
+      } else {
+        reject(error);
+      }
+    });
   });
 }
 

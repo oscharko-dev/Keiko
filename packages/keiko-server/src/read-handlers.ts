@@ -33,10 +33,11 @@ import {
   buildWorkspaceSummary,
   DEFAULT_CONTEXT_REQUEST,
   detectWorkspace,
-  discoverWithStats,
+  discoverWithStatsAsync,
   WORKSPACE_CODES,
   WorkspaceError,
   type WorkspaceCode,
+  type DiscoveryResult,
   type WorkspaceSummary,
 } from "@oscharko-dev/keiko-workspace";
 import type { RouteContext, RouteResult } from "./routes.js";
@@ -301,14 +302,9 @@ function resolveRegisteredWorkspace(
   return { normalized };
 }
 
-// KEIKO-0253: discoverWithStats performs a full-tree filesystem walk synchronously. Every
-// GET /api/workspace call would re-walk the tree and, because Node's event loop serves both this
-// route and /api/health, a burst of overlapping requests could stall health probes. The walk
-// itself must stay synchronous (ADR-0005 D1 keeps WorkspaceFs synchronous), so we cache the walk
-// result under a short TTL — mirroring gitRepositoryReads.ts's cachedGitSummary — so overlapping
-// callers within the TTL window reuse one walk. Bytes and file counts of a real filesystem walk
-// change on a scale of seconds; a 2 s TTL matches gitRepositoryReads and stays well under any
-// human-visible latency budget.
+// KEIKO-0136: the workspace layer now yields during a full-tree walk. This cache preserves that
+// responsiveness on cold reads too: concurrent callers share the same in-flight walk rather than
+// starting duplicate scans. Completed results retain the short TTL used by gitRepositoryReads.
 // Exported (not just an internal literal) so hermetic tests assert the TTL-expiry and
 // max-entries-eviction behaviour against the value the production module actually owns, instead of
 // restating the numbers as a second, driftable copy.
@@ -316,38 +312,58 @@ export const WORKSPACE_WALK_CACHE_TTL_MS = 2_000;
 export const WORKSPACE_WALK_CACHE_MAX_ENTRIES = 32;
 
 interface WorkspaceWalkCacheEntry {
-  readonly expiresAt: number;
-  readonly value: ReturnType<typeof discoverWithStats>;
+  readonly expiresAt?: number | undefined;
+  readonly value?: DiscoveryResult | undefined;
+  readonly pending?: Promise<DiscoveryResult> | undefined;
 }
 
 const workspaceWalkCache = new Map<string, WorkspaceWalkCacheEntry>();
 
-function cachedWorkspaceWalk(
-  root: string,
-  now: number,
-): ReturnType<typeof discoverWithStats> | undefined {
+function cachedWorkspaceWalk(root: string, now: number): DiscoveryResult | undefined {
   const cached = workspaceWalkCache.get(root);
-  if (cached === undefined) return undefined;
-  if (cached.expiresAt > now) return cached.value;
+  if (cached?.value !== undefined && (cached.expiresAt ?? 0) > now) return cached.value;
+  if (cached?.pending !== undefined) return undefined;
   workspaceWalkCache.delete(root);
   return undefined;
 }
 
-function storeWorkspaceWalk(
-  root: string,
-  value: ReturnType<typeof discoverWithStats>,
-  now: number,
-): void {
+function storeWorkspaceWalk(root: string, value: DiscoveryResult, now: number): void {
   // Opportunistic sweep of expired entries and bounded-size eviction so a long-running server
   // with many roots never grows the cache without bound.
   for (const [key, entry] of workspaceWalkCache) {
-    if (entry.expiresAt <= now) workspaceWalkCache.delete(key);
+    if (entry.pending === undefined && (entry.expiresAt ?? 0) <= now)
+      workspaceWalkCache.delete(key);
   }
   if (workspaceWalkCache.size >= WORKSPACE_WALK_CACHE_MAX_ENTRIES) {
-    const oldest = workspaceWalkCache.keys().next().value;
+    const oldest = [...workspaceWalkCache.entries()].find(
+      ([, entry]) => entry.pending === undefined,
+    )?.[0];
     if (oldest !== undefined) workspaceWalkCache.delete(oldest);
   }
   workspaceWalkCache.set(root, { expiresAt: now + WORKSPACE_WALK_CACHE_TTL_MS, value });
+}
+
+function workspaceWalkFor(
+  workspace: ReturnType<typeof detectWorkspace>,
+  now: () => number,
+): Promise<DiscoveryResult> {
+  const root = workspace.root;
+  const cached = cachedWorkspaceWalk(root, now());
+  if (cached !== undefined) return Promise.resolve(cached);
+  const existing = workspaceWalkCache.get(root)?.pending;
+  if (existing !== undefined) return existing;
+  const pending = discoverWithStatsAsync(workspace, DEFAULT_CONTEXT_REQUEST.discovery);
+  workspaceWalkCache.set(root, { pending });
+  return pending.then(
+    (value) => {
+      storeWorkspaceWalk(root, value, now());
+      return value;
+    },
+    (error: unknown) => {
+      if (workspaceWalkCache.get(root)?.pending === pending) workspaceWalkCache.delete(root);
+      throw error;
+    },
+  );
 }
 
 // Exported test-only helpers so hermetic unit tests never see cross-suite bleed and can observe
@@ -358,29 +374,22 @@ export function __resetWorkspaceWalkCacheForTests(): void {
 export function __workspaceWalkCacheSizeForTests(): number {
   return workspaceWalkCache.size;
 }
-export function __workspaceWalkCacheEntryForTests(
-  root: string,
-): ReturnType<typeof discoverWithStats> | undefined {
+export function __workspaceWalkCacheEntryForTests(root: string): DiscoveryResult | undefined {
   return workspaceWalkCache.get(root)?.value;
 }
 
-function workspaceSummaryResult(
+async function workspaceSummaryResult(
   request: WorkspaceRequest,
   registeredRoot: string,
   deps: UiHandlerDeps,
   now: () => number = Date.now,
-): RouteResult {
+): Promise<RouteResult> {
   try {
     const workspace = detectWorkspace(registeredRoot);
     if (workspace.root !== registeredRoot) {
       return workspaceNotRegisteredResult();
     }
-    const nowMs = now();
-    let walk = cachedWorkspaceWalk(workspace.root, nowMs);
-    if (walk === undefined) {
-      walk = discoverWithStats(workspace, DEFAULT_CONTEXT_REQUEST.discovery);
-      storeWorkspaceWalk(workspace.root, walk, nowMs);
-    }
+    const walk = await workspaceWalkFor(workspace, now);
     const { files, stats } = walk;
     const wantsContext = request.task !== undefined || request.budget !== undefined;
     const pack = wantsContext
@@ -409,11 +418,11 @@ function workspaceSummaryResult(
 // Route 12 — workspace summary and optional context pack, built by the safe workspace layer. `now`
 // is an injectable clock for the walk-cache TTL (KEIKO-0253); it defaults to Date.now so the route
 // table's two-argument call is unchanged and only hermetic tests ever pass an override.
-export function handleWorkspace(
+export async function handleWorkspace(
   ctx: RouteContext,
   deps: UiHandlerDeps,
   now: () => number = Date.now,
-): RouteResult {
+): Promise<RouteResult> {
   const request = readWorkspaceRequest(ctx.url.searchParams);
   if ("status" in request) {
     return request;

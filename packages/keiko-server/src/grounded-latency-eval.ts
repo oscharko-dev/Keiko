@@ -38,8 +38,8 @@ const FIXTURE_NOW_MS = 1_700_000_000_000;
 
 /**
  * A cited answer whose claim count sits at the stage's `maxClaims` ceiling, so the measurement
- * covers the full sequential judge fan-out rather than a single call. Exported because the suite
- * asserts an injected per-judge delay lands once per claim: hard-coding the count there would
+ * covers the full bounded parallel judge fan-out rather than a single call. Exported because the
+ * suite asserts every cited claim reaches the judge: hard-coding the count there would
  * restate a number this module owns, and would silently weaken the moment the fixture changed.
  */
 export const FIXTURE_ANSWER_CLAIMS = 8;

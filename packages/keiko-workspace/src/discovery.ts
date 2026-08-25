@@ -42,6 +42,12 @@ interface Walk {
   maxFilesPruned: number;
 }
 
+interface AsyncWalkState {
+  entriesSinceYield: number;
+}
+
+const ASYNC_DISCOVERY_YIELD_EVERY_ENTRIES = 32;
+
 export interface DiscoveryResult {
   readonly files: readonly DiscoveredFile[];
   readonly directories: readonly string[];
@@ -154,8 +160,58 @@ function descend(walk: Walk, absoluteDir: string, depth: number): void {
   }
 }
 
-function runWalk(workspace: WorkspaceInfo, opts: DiscoveryOptions, fs: WorkspaceFs): Walk {
-  const walk: Walk = {
+function yieldToEventLoop(state: AsyncWalkState): Promise<void> | undefined {
+  state.entriesSinceYield += 1;
+  return state.entriesSinceYield % ASYNC_DISCOVERY_YIELD_EVERY_ENTRIES === 0
+    ? new Promise((resolve) => setImmediate(resolve))
+    : undefined;
+}
+
+async function handleEntryAsync(
+  walk: Walk,
+  state: AsyncWalkState,
+  absoluteDir: string,
+  entry: WorkspaceDirEntry,
+  depth: number,
+): Promise<void> {
+  await yieldToEventLoop(state);
+  const childAbs = resolveWithinWorkspace(
+    walk.root,
+    childRelative(walk.root, absoluteDir, entry.name),
+  );
+  const relPath = toRelative(walk.root, childAbs);
+  if (!isAllowed(walk, relPath, entry.isDirectory) || entry.isSymbolicLink) return;
+  if (entry.isDirectory) {
+    await descendAsync(walk, state, childAbs, depth + 1);
+  } else if (entry.isFile) {
+    if (walk.out.length >= walk.opts.maxFiles) {
+      walk.maxFilesPruned += 1;
+      return;
+    }
+    walk.out.push({ relativePath: relPath, sizeBytes: statSize(walk, childAbs) });
+  }
+}
+
+async function descendAsync(
+  walk: Walk,
+  state: AsyncWalkState,
+  absoluteDir: string,
+  depth: number,
+): Promise<void> {
+  if (depth > walk.opts.maxDepth) {
+    walk.depthPruned += 1;
+    return;
+  }
+  if (walk.out.length >= walk.opts.maxFiles) return;
+  walk.directories.push(toRelative(walk.root, absoluteDir));
+  const entries = [...readDirSafe(walk, absoluteDir)].sort((a, b) => (a.name < b.name ? -1 : 1));
+  for (const entry of entries) {
+    await handleEntryAsync(walk, state, absoluteDir, entry, depth);
+  }
+}
+
+function createWalk(workspace: WorkspaceInfo, opts: DiscoveryOptions, fs: WorkspaceFs): Walk {
+  return {
     fs,
     root: workspace.root,
     matcher: compileIgnore(workspace.ignoreLines),
@@ -168,21 +224,59 @@ function runWalk(workspace: WorkspaceInfo, opts: DiscoveryOptions, fs: Workspace
     depthPruned: 0,
     maxFilesPruned: 0,
   };
+}
+
+function refuseDeniedSymlinkRoot(walk: Walk): boolean {
+  let realRoot: string;
+  try {
+    realRoot = walk.fs.realPath(walk.root);
+  } catch {
+    realRoot = walk.root;
+  }
+  if (!realRootIsDeniedViaSymlink(realRoot, walk.root)) return false;
+  walk.denied += 1;
+  return true;
+}
+
+function runWalk(workspace: WorkspaceInfo, opts: DiscoveryOptions, fs: WorkspaceFs): Walk {
+  const walk = createWalk(workspace, opts, fs);
   // Refuse to walk a benign-named root that resolves into a denied location via a symlink: discovery
   // does not realpath-contain the ROOT, so it would otherwise list a symlinked credential dir's files.
   // Treated as denied (no throw — discovery filters rather than raises), consistent with per-entry deny.
-  let realRoot: string;
-  try {
-    realRoot = fs.realPath(workspace.root);
-  } catch {
-    realRoot = workspace.root;
-  }
-  if (realRootIsDeniedViaSymlink(realRoot, workspace.root)) {
-    walk.denied += 1;
-    return walk;
-  }
+  if (refuseDeniedSymlinkRoot(walk)) return walk;
   descend(walk, resolveWithinWorkspace(workspace.root, "."), 0);
   return walk;
+}
+
+async function runWalkAsync(
+  workspace: WorkspaceInfo,
+  opts: DiscoveryOptions,
+  fs: WorkspaceFs,
+): Promise<Walk> {
+  const walk = createWalk(workspace, opts, fs);
+  if (!refuseDeniedSymlinkRoot(walk)) {
+    await descendAsync(
+      walk,
+      { entriesSinceYield: 0 },
+      resolveWithinWorkspace(workspace.root, "."),
+      0,
+    );
+  }
+  return walk;
+}
+
+function discoveryResult(walk: Walk): DiscoveryResult {
+  return {
+    files: walk.out,
+    directories: [...new Set(walk.directories)].sort(compareStrings),
+    stats: {
+      discovered: walk.out.length,
+      denied: walk.denied,
+      ignored: walk.ignored,
+      depthPruned: walk.depthPruned,
+      maxFilesPruned: walk.maxFilesPruned,
+    },
+  };
 }
 
 export function discoverFiles(
@@ -198,18 +292,17 @@ export function discoverWithStats(
   opts: DiscoveryOptions,
   fs: WorkspaceFs = nodeWorkspaceFs,
 ): DiscoveryResult {
-  const walk = runWalk(workspace, opts, fs);
-  return {
-    files: walk.out,
-    directories: [...new Set(walk.directories)].sort(compareStrings),
-    stats: {
-      discovered: walk.out.length,
-      denied: walk.denied,
-      ignored: walk.ignored,
-      depthPruned: walk.depthPruned,
-      maxFilesPruned: walk.maxFilesPruned,
-    },
-  };
+  return discoveryResult(runWalk(workspace, opts, fs));
+}
+
+// Uses the same WorkspaceFs port and filtering rules as discoverWithStats, but yields after bounded
+// entry batches so the BFF can serve unrelated requests while a large workspace is being scanned.
+export async function discoverWithStatsAsync(
+  workspace: WorkspaceInfo,
+  opts: DiscoveryOptions,
+  fs: WorkspaceFs = nodeWorkspaceFs,
+): Promise<DiscoveryResult> {
+  return discoveryResult(await runWalkAsync(workspace, opts, fs));
 }
 
 function describe(error: unknown): string {

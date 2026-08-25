@@ -623,6 +623,32 @@ describe("reconcileClaimEntailment", () => {
     expect(twoBad.unentailed).toHaveLength(2);
   });
 
+  it("starts independent claim judges concurrently while preserving their verdicts", async () => {
+    const pending: ((verdict: EntailmentVerdict) => void)[] = [];
+    const delayedJudge: EntailmentJudge = {
+      judge: (): Promise<EntailmentVerdict> =>
+        new Promise((resolveVerdict) => {
+          pending.push(resolveVerdict);
+        }),
+    };
+    const result = reconcileClaimEntailment(
+      "A [src/a.ts:1-20]. B [src/a.ts:1-20].",
+      { unsupported: [], citedScopePaths: new Set(["src/a.ts"]) },
+      judgeFixturePack("retention period: 30 days"),
+      delayedJudge,
+      { maxClaims: 8, maxExcerptChars: 900, maxTotalMs: 20_000 },
+    );
+
+    await Promise.resolve();
+    expect(pending).toHaveLength(2);
+    for (const resolveVerdict of pending) resolveVerdict("supported");
+    await expect(result).resolves.toEqual({
+      unentailed: [],
+      judgedClaims: 2,
+      unavailableClaims: 0,
+    });
+  });
+
   it("honours the per-answer claim budget", async () => {
     const resolve = judgeFixturePack("[[CONTRADICTS]]");
     const answer = "A [src/a.ts:1-20]. B [src/a.ts:1-20]. C [src/a.ts:1-20].";

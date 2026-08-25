@@ -19,15 +19,16 @@ describe("runGroundedRetrievalLatencyEval", () => {
   // cited excerpt exceeds `maxExcerptChars`. An over-long fixture would therefore skip every judge
   // call and the injected delay would measure nothing — the gate would report PASS over an
   // entailment pass that never ran. This pins that the fixture stays on the judged side of that
-  // boundary: every cited claim must reach the judge, so the delay lands once per claim.
+  // boundary: every cited claim must reach the judge, even though their delays overlap.
   //
   // The claim count comes from the module under test, not a literal here: a hard-coded 8 would keep
   // passing at a lower expectation the moment the fixture shrank, which is the failure this guards.
-  it("routes every cited claim through the judge, so an injected delay is visible", async () => {
+  it("runs cited-claim judges in parallel within the bounded stage budget", async () => {
     const delayMs = 20;
     const sample = await runGroundedRetrievalLatencyEval({ injectedJudgeDelayMs: delayMs });
 
-    expect(sample.entailmentMs).toBeGreaterThanOrEqual(delayMs * FIXTURE_ANSWER_CLAIMS);
+    expect(sample.entailmentMs).toBeGreaterThanOrEqual(delayMs);
+    expect(sample.entailmentMs).toBeLessThan(delayMs * FIXTURE_ANSWER_CLAIMS);
   }, 30_000);
 
   // Relative, not an absolute millisecond ceiling: an absolute threshold is a wall-clock assertion
@@ -39,10 +40,8 @@ describe("runGroundedRetrievalLatencyEval", () => {
     const delayed = await runGroundedRetrievalLatencyEval({ injectedJudgeDelayMs: delayMs });
 
     // A DELTA assertion, not an absolute ceiling: the delayed run does strictly more work than the
-    // clean one, so machine load slows both and cancels out. The margin is half the injected total
-    // (delayMs x claims), which leaves the real gap — the full injected total — twice the headroom
-    // it needs, and is expressed against the producer's claim count rather than a bare multiplier.
-    const injectedTotalMs = delayMs * FIXTURE_ANSWER_CLAIMS;
-    expect(delayed.entailmentMs - clean.entailmentMs).toBeGreaterThan(injectedTotalMs / 2);
+    // clean one, so machine load slows both and cancels out. The parallel fan-out makes the delay
+    // visible once per stage rather than once per claim.
+    expect(delayed.entailmentMs - clean.entailmentMs).toBeGreaterThan(delayMs / 2);
   }, 30_000);
 });
