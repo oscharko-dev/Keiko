@@ -34,6 +34,13 @@ const HUMAN_APPROVAL_RULE =
   "Any action with side effects — running tools, writing files, making network calls, or other irreversible changes — requires explicit human approval first; never self-authorize.";
 const LEAST_PRIVILEGE_CONSTRAINT =
   "Do not assume authority to run tools, write files, or make external calls without explicit approval.";
+// KEIKO-0770 consolidated this string into the single producer constant
+// `OUTPUT_CONTROLLABILITY_CRITERION` exported from keiko-model-gateway's promptEnhancer/critic.
+// This copy survives here because keiko-contracts is the leaf package (ADR-0019) and cannot
+// import from keiko-model-gateway -- the direction is one-way inward. The producer-derived
+// regression pin lives in packages/keiko-evaluations/src/promptEnhancer/scorer-constants.test.ts
+// (which CAN import both), so a wording change is still caught in one place. Keep this literal in
+// sync with the producer constant.
 const OUTPUT_CONFORMANCE =
   "Output controllability: the response conforms exactly to the required format.";
 

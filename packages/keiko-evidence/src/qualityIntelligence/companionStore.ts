@@ -38,11 +38,20 @@ export interface ContainedJsonArtifactStoreOptions<T> {
   readonly fs?: WorkspaceFs;
   readonly randomSuffix?: () => string;
   /**
-   * Validates + narrows a parsed JSON value. Reject a corrupt artifact by THROWING (typically
-   * EvidenceReadError) -- this is the fail-closed pattern every current implementation uses, and
-   * `readArtifactFile` calls `parse` outside its own try/catch so a thrown error propagates as-is.
-   * A `parse` MAY still return `undefined` for a well-formed-but-absent optional shape; that is
-   * NOT the same as corruption and must not be conflated with it.
+   * Validates + narrows a parsed JSON value. Two dispositions are supported, chosen deliberately
+   * per caller because `readArtifactFile` returns `parse(parsed)` verbatim to its own caller:
+   * - **Fail-closed** -- throw (typically `EvidenceReadError`). Use when a corrupt artifact must
+   *   be surfaced up the stack rather than silently masked. `readArtifactFile` calls `parse`
+   *   outside its own try/catch so a thrown error propagates as-is
+   *   (`candidatesArtifact.ts` uses this -- scoring corruption must not be hidden).
+   * - **Silent heal** -- return `undefined`. Use when a corrupt (or well-formed-but-absent
+   *   optional) shape should read as "not there" so the caller can regenerate the artifact.
+   *   `readArtifactFile` translates that to `undefined` to its own caller, indistinguishable
+   *   from a missing file (`reviewStore.parseArtifact` and `figmaCodegenRoutes`' inline parse
+   *   use this -- a corrupt review state / codegen artifact is regenerated, not surfaced).
+   * Pick the one that matches your artifact's failure semantics; both are legitimate. Do NOT mix
+   * (throw for schema mismatch, return undefined for missing keys) -- a single artifact's parse
+   * should have one consistent disposition for corruption.
    */
   readonly parse: (value: unknown) => T | undefined;
 }

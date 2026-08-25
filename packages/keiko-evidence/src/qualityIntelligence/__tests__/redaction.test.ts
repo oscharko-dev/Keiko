@@ -106,6 +106,34 @@ describe("redactQualityIntelligenceEvidence", () => {
     expect(summaryJson).not.toContain("matchedPwd");
   });
 
+  // KEIKO-0778 sibling: this deepRedact used to have no depth ceiling or cycle guard, so a
+  // self-referential or deeply-nested QI evidence payload (Figma frame -> children arrays can
+  // recurse) would crash the process with an uncaught "RangeError: Maximum call stack size
+  // exceeded" instead of failing closed. Guards mirror the promptEnhancement/redaction.ts sibling
+  // (commit 52fc7a01) so a re-inlined copy in either place still throws a controlled
+  // EvidenceWriteError with a "QI evidence payload contains a circular reference" / "exceeds the
+  // maximum redaction depth" message rather than tearing down the process.
+  it("throws a controlled error instead of overflowing the stack on a circular object reference", () => {
+    const o: Record<string, unknown> = { a: "ok" };
+    o.self = o;
+    expect(() => redactQualityIntelligenceEvidence(o)).toThrow(/circular/i);
+  });
+
+  it("throws a controlled error instead of overflowing the stack on a circular array reference", () => {
+    const a: unknown[] = ["ok"];
+    a.push(a);
+    expect(() => redactQualityIntelligenceEvidence({ list: a })).toThrow(/circular/i);
+  });
+
+  it("throws a controlled error on a payload that exceeds the recursion depth ceiling", () => {
+    // Build a plain-tree (no cycle) chain 40 deep -- deeper than MAX_REDACT_DEPTH (32).
+    let deep: unknown = "leaf";
+    for (let i = 0; i < 40; i += 1) {
+      deep = { child: deep };
+    }
+    expect(() => redactQualityIntelligenceEvidence({ root: deep })).toThrow(/depth/i);
+  });
+
   // KEIKO-0188: the deep-redactor rebuilds objects field-by-field, so a JSON.parse'd input
   // carrying a `__proto__` key silently reassigned the reconstructed object's prototype when the
   // rebuild seed was a plain `{}`. Seeding with Object.create(null) keeps the key as data.
