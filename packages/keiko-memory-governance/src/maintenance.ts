@@ -43,7 +43,11 @@
 //     provenance stays intact and every run is idempotent.
 
 import { clampUnit } from "@oscharko-dev/keiko-contracts";
-import { decayHalfLifeMultiplierForType } from "@oscharko-dev/keiko-contracts/memory";
+import {
+  decayHalfLifeMultiplierForType,
+  MEMORY_FORGET_REASON_ARCHIVED_RETENTION,
+} from "@oscharko-dev/keiko-contracts/memory";
+import { GovernanceError } from "./errors.js";
 import type {
   MemoryForgetReason,
   MemoryId,
@@ -109,6 +113,17 @@ export interface MemoryMaintenancePlan {
 export interface PlanMaintenanceOptions {
   readonly nowMs: number;
   readonly policy?: Partial<MemoryMaintenancePolicy>;
+}
+
+export interface PlanAcknowledgedArchivedForgetsOptions extends PlanMaintenanceOptions {
+  // This planner is a review surface only. A caller must explicitly acknowledge the retention path
+  // before it receives candidates, and must still build human-acknowledged forget envelopes later.
+  readonly retentionAcknowledged: true;
+}
+
+export interface AcknowledgedArchivedForgetCandidate {
+  readonly id: MemoryId;
+  readonly reason: typeof MEMORY_FORGET_REASON_ARCHIVED_RETENTION;
 }
 
 // The disuse half-life this record decays at. Without a per-type multiplier map this is exactly the
@@ -334,6 +349,9 @@ export function planMemoryMaintenance(
     forgetCandidates: [],
   };
   for (const record of records) {
+    // Archived retention is deliberately excluded from unattended maintenance. It has its own
+    // acknowledged planner below; archival is never consent to an opportunistic tombstone.
+    if (record.status === "archived") continue;
     const stat = accessStats.get(record.id);
     const ctx = buildContext(record, stat, options.nowMs, policy);
     applyDecision(acc, ctx, decideForLive(ctx, policy, options.nowMs));
@@ -344,4 +362,31 @@ export function planMemoryMaintenance(
     expire: boundFade(acc.expireCandidates, policy.maxForgetPerRun),
     forget: boundFade(acc.forgetCandidates, policy.maxForgetPerRun),
   };
+}
+
+export function planAcknowledgedArchivedForgets(
+  records: readonly MemoryRecord[],
+  options: PlanAcknowledgedArchivedForgetsOptions,
+): readonly AcknowledgedArchivedForgetCandidate[] {
+  if (!isRetentionAcknowledged(options.retentionAcknowledged)) {
+    throw new GovernanceError(
+      "destructive-acknowledgement-required",
+      "archived retention planning requires explicit acknowledgement",
+    );
+  }
+  const policy: MemoryMaintenancePolicy = { ...MEMORY_MAINTENANCE_DEFAULTS, ...options.policy };
+  return records
+    .filter(
+      (record) =>
+        record.status === "archived" &&
+        !record.pinned &&
+        options.nowMs - record.updatedAt >= policy.forgetArchivedMinAgeMs,
+    )
+    .sort((left, right) => left.id.localeCompare(right.id))
+    .slice(0, policy.maxForgetPerRun)
+    .map((record) => ({ id: record.id, reason: MEMORY_FORGET_REASON_ARCHIVED_RETENTION }));
+}
+
+function isRetentionAcknowledged(value: unknown): value is true {
+  return value === true;
 }

@@ -436,6 +436,7 @@ const SERVER_DIAGNOSTIC_SUMMARIES = [
   "memory-consolidation-scheduled-job-failed",
   "functional-workspace-read-not-found",
   "functional-workspace-read-permission-denied",
+  "atlassian-credential-rejection-activity-log-failed",
 ] as const;
 
 export type ServerDiagnosticSummary = (typeof SERVER_DIAGNOSTIC_SUMMARIES)[number];

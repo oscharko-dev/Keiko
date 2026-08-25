@@ -15,12 +15,7 @@ const groundingSuppliedContext: PromptEnhancerEvalFixture = {
   },
   dimensions: new Set(["groundedness", "faithfulness", "clarity"]),
   oracle: {
-    expectedTaskClasses: [
-      "rag-question-answering",
-      "factual-qa",
-      "code-debugging",
-      "code-generation",
-    ],
+    expectedTaskClasses: ["rag-question-answering"],
     expectedGroundingRequired: true,
   },
 };

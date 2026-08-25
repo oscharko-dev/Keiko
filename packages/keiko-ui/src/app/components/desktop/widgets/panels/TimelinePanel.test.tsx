@@ -29,10 +29,10 @@ describe("TimelinePanel", () => {
     render(<TimelinePanel />);
 
     expect(screen.getByText("Opened run detail")).toBeInTheDocument();
-    expect(screen.getByText(/workspace ·/)).toBeInTheDocument();
+    expect(screen.getByText(/Workspace ·/)).toBeInTheDocument();
     expect(screen.getByText("Approve file write?")).toBeInTheDocument();
     expect(screen.getByText(/Verifier ·/)).toBeInTheDocument();
-    expect(screen.getByText("approval")).toHaveClass("visually-hidden");
-    expect(screen.getByText("open")).toHaveClass("visually-hidden");
+    expect(screen.getByText("Approval requested")).toHaveClass("visually-hidden");
+    expect(screen.getByText("Opened")).toHaveClass("visually-hidden");
   });
 });

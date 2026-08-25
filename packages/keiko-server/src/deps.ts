@@ -84,6 +84,10 @@ import {
   type ConversationAttachmentStore,
 } from "./conversation-attachment-store.js";
 import { createRunRegistry } from "./runs.js";
+import {
+  createVoiceRecapContentAttestationStore,
+  type VoiceRecapContentAttestationStore,
+} from "./voice-recap-provenance.js";
 import type { ChatTurnSerializer } from "./chat-turn-serializer.js";
 import {
   DEFAULT_SERVER_DIAGNOSTIC_SUMMARY,
@@ -279,10 +283,7 @@ import { readProductionWorkspaceHead } from "./coding-runtime/productionWorkspac
 import type { GitHubCodeContextApiPort } from "./coding-context/githubCodeContextConnector.js";
 import type { JiraCodeContextHttpPort } from "./coding-context/jiraCodeContextConnector.js";
 import { createGitHubCodeContextApiPort } from "./coding-context/githubCodeContextPort.js";
-import {
-  createJiraCodeContextHttpPort,
-  parseJiraCodeContextPortConfig,
-} from "./coding-context/jiraCodeContextPort.js";
+import { createGovernedJiraCodeContextHttpPort } from "./coding-context/jiraCodeContextPort.js";
 import {
   createAutonomousDeliveryApprovalStore,
   type AutonomousDeliveryApprovalStore,
@@ -619,6 +620,9 @@ export interface UiHandlerDeps {
   // Issue #211 — MemoriaViva vault. Optional so legacy tests that do not exercise /api/memory/*
   // keep their fixtures unchanged. Production wiring creates one at buildUiHandlerDeps time.
   readonly memoryVault?: MemoryVaultStore | undefined;
+  // Server-private, single-use content attestations minted only by a trusted transcript observer.
+  // Without this port, recap submissions remain review-gated and can never auto-accept.
+  readonly voiceRecapContentAttestations?: VoiceRecapContentAttestationStore | undefined;
   // Server-owned encrypted editor recovery storage. The browser stores only metadata and an opaque
   // reference in IndexedDB.
   readonly editorHotExitStore?: EditorHotExitStore | undefined;
@@ -3206,6 +3210,9 @@ function atlassianConnectorCredentialFields(
       env: args.options.env,
       egress: () => args.runtimeConfig.current()?.egress ?? args.egress,
       securityLogSink: processServerLogSink(),
+      // KEIKO-0826 follow-up: shared process activity log so typed custody-error paths surface
+      // through the same sink as every other server operation.
+      activityLog: processServerLogSink(),
     }),
   };
 }
@@ -3521,6 +3528,7 @@ function assembleUiHandlerRuntimeServices(
   const codingRuntimeCeiling = resolveCodingRuntimeDeploymentCeiling(args.options);
   const runtimeComposition = productionRuntimeResolver(
     args,
+    peripherals.commandRunner,
     peripherals.verificationRunner,
     codingRuntimeEvidenceAggregator,
     codingRuntimeCeiling,
@@ -3683,6 +3691,7 @@ function buildRuntimeUiHandlerDeps(
 
 type IntegrationUiHandlerDeps = ReturnType<typeof autonomousDeliveryFields> &
   ReturnType<typeof atlassianConnectorCredentialFields> &
+  Pick<UiHandlerDeps, "codingContextJiraPort"> &
   Pick<
     UiHandlerDeps,
     | "redactionSecrets"
@@ -3699,9 +3708,17 @@ type IntegrationUiHandlerDeps = ReturnType<typeof autonomousDeliveryFields> &
   >;
 
 function buildIntegrationUiHandlerDeps(args: UiHandlerDepsAssemblyArgs): IntegrationUiHandlerDeps {
+  const atlassian = atlassianConnectorCredentialFields(args);
   return {
     ...autonomousDeliveryFields(args.options),
-    ...atlassianConnectorCredentialFields(args),
+    ...atlassian,
+    ...(atlassian.atlassianConnectorCredentials === undefined
+      ? {}
+      : {
+          codingContextJiraPort: createGovernedJiraCodeContextHttpPort(
+            atlassian.atlassianConnectorCredentials,
+          ),
+        }),
     redactionSecrets: runtimeRedactionSecrets(args.options.env, args.runtimeConfig, args.egress),
     gatewayConfig: args.runtimeConfig,
     gatewaySetupTester: args.options.gatewaySetupTester,
@@ -3747,7 +3764,7 @@ function buildOptionalUiHandlerDeps(
 
 function buildCodingContextPortsDependency(
   args: UiHandlerDepsAssemblyArgs,
-): Pick<UiHandlerDeps, "codingContextGitHubPort" | "codingContextJiraPort"> {
+): Pick<UiHandlerDeps, "codingContextGitHubPort"> {
   const githubPort =
     args.options.env.GITHUB_CONNECTOR_AUTHORIZED !== "true" ||
     args.bundle.preferredProjectPath === undefined
@@ -3765,21 +3782,8 @@ function buildCodingContextPortsDependency(
           },
           processEnv: args.options.env,
         });
-  let jiraPort: JiraCodeContextHttpPort | undefined;
-  try {
-    const jiraConfig = parseJiraCodeContextPortConfig(args.options.env);
-    jiraPort = jiraConfig === undefined ? undefined : createJiraCodeContextHttpPort(jiraConfig);
-  } catch (error) {
-    emitCompositionDiagnostic(
-      args.options.diagnostics,
-      "deps.codingContextJiraPort",
-      "server-operation-failed",
-      error,
-    );
-  }
   return {
     ...(githubPort === undefined ? {} : { codingContextGitHubPort: githubPort }),
-    ...(jiraPort === undefined ? {} : { codingContextJiraPort: jiraPort }),
   };
 }
 
@@ -4026,6 +4030,7 @@ function runtimeStartConfirmationConsumer(
 
 function productionRuntimeResolver(
   args: UiHandlerDepsAssemblyArgs,
+  commandRunner: PeripheralManagers["commandRunner"],
   verificationRunner: PeripheralManagers["verificationRunner"],
   runtimeEvidence: Pick<CodingRuntimeEvidenceAggregator, "observe">,
   deploymentCeiling: CodingWorkbenchMode,
@@ -4058,6 +4063,7 @@ function productionRuntimeResolver(
       ports,
       activated: resolution.activated,
       runtimeMutationLeaseBroker,
+      commandRunner,
       verificationRunner,
       workspaceLifecycle,
     }),
@@ -4077,6 +4083,7 @@ interface QualifiedRuntimeResolverInput {
   readonly runtimeMutationLeaseBroker: ReturnType<
     typeof createCodingRuntimeEditorMutationLeaseBroker
   >;
+  readonly commandRunner: PeripheralManagers["commandRunner"];
   readonly verificationRunner: PeripheralManagers["verificationRunner"];
   readonly workspaceLifecycle: WorkspaceLifecycleService;
 }
@@ -4094,6 +4101,7 @@ function qualifiedRuntimeResolver(
       input.deploymentCeiling,
     ),
     ...input.ports,
+    commandRunner: input.commandRunner,
     verificationRunner: input.verificationRunner,
     runtimeMutationLeaseBroker: input.runtimeMutationLeaseBroker,
     gatewayEgress: () => args.runtimeConfig.current()?.egress ?? args.egress,
@@ -4158,7 +4166,7 @@ export function buildUiHandlerDeps(options: BuildHandlerDepsOptions): UiHandlerD
   const bundle = buildPersistenceBundle(options, resolvedUiDbPath, redactString, evidenceStore);
   const contextProfileForModel = buildContextProfileResolver(() => runtimeConfig.current());
   reconcileNodeStoreAtStartup(options, bundle);
-  return assembleUiHandlerDeps({
+  const deps = assembleUiHandlerDeps({
     options,
     resolvedUiDbPath,
     resolvedEvidenceDir,
@@ -4174,4 +4182,8 @@ export function buildUiHandlerDeps(options: BuildHandlerDepsOptions): UiHandlerD
     bundle,
     contextProfileForModel,
   });
+  return {
+    ...deps,
+    voiceRecapContentAttestations: createVoiceRecapContentAttestationStore(),
+  };
 }

@@ -124,6 +124,7 @@ export interface ProductionCodingRuntimeResolverInput {
   readonly secureWorkspaceTextRead: ProductionManagedWorktreeToolInput["secureWorkspaceTextRead"];
   readonly editorAgentClient: ProductionManagedWorktreeToolInput["editorAgentClient"];
   readonly verificationRunner: ProductionManagedWorktreeToolInput["verificationRunner"];
+  readonly commandRunner?: ProductionManagedWorktreeToolInput["commandRunner"] | undefined;
   readonly confirmationConsumer?: CodingRuntimeStartConfirmationConsumer | undefined;
   readonly authorityRegistry?: EditorAgentAuthorityRegistry | undefined;
   readonly runtimeMutationLeaseBroker?:
@@ -576,6 +577,7 @@ function createManagedToolFacade({
     skillCatalog,
     explicitSkillInvocations: explicitSkills,
     childModelPortFactory: input.childModelPortFactory,
+    ...(input.commandRunner === undefined ? {} : { commandRunner: input.commandRunner }),
     verificationRunner: input.verificationRunner,
     onRuntimeEvent,
     ...(input.diagnostics ? { diagnostics: input.diagnostics } : {}),

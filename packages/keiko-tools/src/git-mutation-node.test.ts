@@ -25,6 +25,11 @@ function makeAdapter(rec: SpawnRecorder, signal?: AbortSignal): GitLocalMutation
   });
 }
 
+async function continuePastUnsignedSigningPolicy(rec: SpawnRecorder): Promise<void> {
+  rec.child.emit("close", 1, null);
+  await expect.poll(() => rec.calls()).toHaveLength(2);
+}
+
 describe("node git mutation adapter — governed argv reaches the spawn boundary", () => {
   it("spawns exactly the governed literalized `git add -- <path>` and reports success on exit 0", async () => {
     const rec = recordingSpawn();
@@ -35,7 +40,27 @@ describe("node git mutation adapter — governed argv reaches the spawn boundary
     expect(result.outcome).toBe("succeeded");
     expect(rec.calls()).toHaveLength(1);
     expect(rec.calls()[0]?.command).toBe("git");
-    expect(rec.calls()[0]?.args).toEqual(["add", "--", ":(literal)src/x.ts"]);
+    expect(rec.calls()[0]?.args).toEqual([
+      "-c",
+      "core.fsmonitor=false",
+      "-c",
+      `core.hooksPath=${process.platform === "win32" ? "NUL" : "/dev/null"}`,
+      "-c",
+      "core.pager=cat",
+      "-c",
+      "pager.commit=false",
+      "-c",
+      "alias.commit=",
+      "-c",
+      "commit.gpgSign=false",
+      "-c",
+      "protocol.ext.allow=never",
+      "-c",
+      "submodule.recurse=false",
+      "add",
+      "--",
+      ":(literal)src/x.ts",
+    ]);
     // The spawn is shell-less by construction.
     expect(rec.calls()[0]?.options.shell).toBe(false);
   });
@@ -46,6 +71,7 @@ describe("node git mutation adapter — failure-classification branches", () => 
     const rec = recordingSpawn();
     const ad = makeAdapter(rec);
     const pending = ad.commit({ message: "m", allowEmpty: false });
+    await continuePastUnsignedSigningPolicy(rec);
     rec.child.emit("close", 1, null);
     const result = await pending;
     expect(result.outcome).toBe("failed");
@@ -72,6 +98,19 @@ describe("node git mutation adapter — failure-classification branches", () => 
     const result = await pending;
     expect(result.outcome).toBe("aborted");
     expect(result.errorCode).toBeUndefined();
+  });
+
+  it("maps cancellation during the signing-policy lookup to an aborted result", async () => {
+    const controller = new AbortController();
+    const rec = recordingSpawn();
+    const ad = makeAdapter(rec, controller.signal);
+    const pending = ad.commit({ message: "m", allowEmpty: false });
+    controller.abort();
+    rec.child.emit("close", null, "SIGTERM");
+    const result = await pending;
+    expect(result.outcome).toBe("aborted");
+    expect(result.errorCode).toBeUndefined();
+    expect(rec.calls()).toHaveLength(1);
   });
 
   it("rejects an invalid operand before any spawn", async () => {
@@ -115,9 +154,10 @@ async function identityLaneEnv(): Promise<Record<string, string>> {
   const rec = recordingSpawn();
   const ad = identityLaneAdapter(rec);
   const pending = ad.commit({ message: "feat: governed commit", allowEmpty: false });
+  await continuePastUnsignedSigningPolicy(rec);
   rec.child.emit("close", 0, null);
   await pending;
-  return rec.calls()[0]?.options.env ?? {};
+  return rec.calls().at(-1)?.options.env ?? {};
 }
 
 describe("node git mutation adapter — the user's git identity reaches the commit", () => {

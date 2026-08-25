@@ -1090,6 +1090,14 @@ describe("workspace-persistence", () => {
     expect(hostile[0]?.cfg["layoutJson"]).toBeUndefined();
   });
 
+  it("drops stale persisted Keiko Twin windows while preserving valid layout entries (#2950)", () => {
+    const raw = [win({ id: "good-1", type: "chat" }), hostileWindow("keiko")];
+
+    const persisted = sanitizePersistedWindows(raw as unknown as AppWindow[]);
+
+    expect(persisted.map((window) => window.id)).toEqual(["good-1"]);
+  });
+
   // F1/F1b — hasWindowType used `value in WIN_TYPES` rather than Object.hasOwn. The `in`
   // operator also matches inherited Object.prototype properties, so a persisted window
   // record whose type is "toString", "constructor", or "__proto__" was treated as a real,

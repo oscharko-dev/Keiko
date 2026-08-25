@@ -1,7 +1,7 @@
 // Epic #518 / Issue #527 — Shell-level undo apply dispatcher.
 //
 // Extracted from AppShell so the integration is unit-testable without mounting the full
-// AppShell (which depends on ChatSessionProvider, TwinProvider, WsContext, WebSocket, and
+// AppShell (which depends on ChatSessionProvider, WsContext, WebSocket, and
 // the workspace render tree).
 //
 // The shell's live keyboard binding table is NOT here: it is resolved from the user's keybinding

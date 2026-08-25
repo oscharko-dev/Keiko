@@ -32,7 +32,6 @@ export type WindowType =
   | "review"
   | "agents"
   | "integ"
-  | "keiko"
   | "settings"
   | "workspaceTrust"
   // Issue #1696 — governed package-update window. Opened only from Settings/startup notification,
@@ -563,24 +562,9 @@ const PARTIAL: Readonly<Record<WindowType, PartialDef>> = {
     titleKey: "window.type.integ.title",
     icon: "plugins",
     descKey: "window.type.integ.desc",
-    w: 320,
-    h: 300,
-    config: [
-      {
-        key: "provider",
-        labelKey: "window.field.provider",
-        type: "select",
-        options: ["GitHub", "Linear", "Slack", "Sentry"],
-        def: "GitHub",
-      },
-    ],
-  },
-  keiko: {
-    titleKey: "window.type.keiko.title",
-    icon: "spark",
-    descKey: "window.type.keiko.desc",
-    w: 344,
-    h: 520,
+    w: 720,
+    h: 600,
+    min: { w: 420, h: 360 },
     tool: true,
     singleton: true,
   },
@@ -1031,6 +1015,7 @@ export const TYPE_ORDER: readonly WindowType[] = [
   "memoria",
   "connector",
   "localKnowledge",
+  "integ",
   "problems",
   "figma",
   "figmaJson",

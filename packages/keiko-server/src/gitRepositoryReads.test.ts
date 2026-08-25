@@ -931,8 +931,12 @@ describe("git process env factories", () => {
         .trim()
         .split("\n")
         .map((line) => JSON.parse(line) as { args: readonly string[]; env: NodeJS.ProcessEnv });
-      expect(records.map((record) => record.args[0])).toEqual(["fetch", "pull"]);
+      expect(
+        records.map((record) => record.args.find((arg) => arg === "fetch" || arg === "pull")),
+      ).toEqual(["fetch", "pull"]);
       for (const record of records) {
+        expect(record.args).toContain("protocol.ext.allow=never");
+        expect(record.args).toContain("credential.helper=");
         expect(record.env.GIT_TERMINAL_PROMPT).toBe("0");
         expect(record.env.GIT_SSH_COMMAND).toContain("StrictHostKeyChecking=yes");
         expect(record.env.GIT_SSH_COMMAND).toContain("NumberOfPasswordPrompts=0");

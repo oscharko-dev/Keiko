@@ -3145,8 +3145,9 @@ export type {
   WorkflowDefinitionId as MemoryWorkflowDefinitionId,
   WorkflowRunId as MemoryWorkflowRunId,
   WorkspaceId as MemoryWorkspaceId,
-} from "./memory-barrel.js";
+} from "./memory.js";
 export {
+  MEMORY_FORGET_REASON_ARCHIVED_RETENTION,
   MEMORY_AUDIT_ACTION_KINDS,
   MEMORY_AUDIT_EVENT_KINDS,
   MEMORY_AUDIT_EVENT_SCHEMA_VERSION,
@@ -3197,7 +3198,7 @@ export {
   validateMemoryUnpin,
   validateMemoryUpdate,
   validateMemoryValidityInterval,
-} from "./memory-barrel.js";
+} from "./memory.js";
 
 export type {
   MemoryConsolidationApplicationWire,
@@ -4232,6 +4233,7 @@ export type {
   WorkspaceTrustAssessment,
   WorkspaceTrustOperationClass,
   WorkspaceTrustStatus,
+  WorkspaceTrustRootBinding,
 } from "./workspace-trust.js";
 export {
   WORKSPACE_TRUST_SCHEMA_VERSION,
@@ -4241,6 +4243,7 @@ export {
   validateWorkspaceTrustRecord,
   isWorkspaceTrustStatus,
   isWorkspaceRestrictedModeActive,
+  workspaceTrustRootBindingsMatch,
   projectCommandTaskTrustState,
   workspaceTrustPolicyEffect,
   strictestWorkspaceTrustPolicyEffect,

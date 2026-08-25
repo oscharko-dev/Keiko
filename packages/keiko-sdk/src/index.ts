@@ -20,6 +20,14 @@ export {
 
 export { runAgent, type SdkAgentConfig, type SdkEvidenceOptions } from "./run-agent.js";
 
+export {
+  probeVerificationCapabilities,
+  type NetworkIsolationCapability,
+  type VerificationCapabilities,
+  type VerificationCapabilityDenialReason,
+  type VerificationStepCapability,
+} from "./verification-capabilities.js";
+
 // Safe workspace context surface (ADR-0005). The only file-read path is the
 // boundary-checked one; no export returns raw arbitrary file content.
 export {
@@ -44,11 +52,13 @@ export {
   classifyOutcome,
   detectScripts,
   renderMarkdownSummary,
+  resolveStepNetwork,
   resolveTargetedTests,
   runVerification,
   summarizeForAudit as summarizeVerificationForAudit,
   DEFAULT_VERIFICATION_LIMITS,
   type ResourceLimitDecision,
+  type NetworkEnforcementMode,
   type VerificationAuditSummary,
   type VerificationDeps,
   type VerificationKind,

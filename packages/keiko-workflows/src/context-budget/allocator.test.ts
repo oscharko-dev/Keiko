@@ -11,6 +11,7 @@ import {
   deriveContextProfile,
   estimateTokens,
   type ContextBudget,
+  type ContextEvictionPolicy,
   type ContextLaneId,
   type ContextProfile,
 } from "@oscharko-dev/keiko-contracts";
@@ -54,6 +55,15 @@ const CALIBRATED_PROFILE: ContextProfile = deriveContextProfile({
 
 function budgetForProfile(profile: ContextProfile): ContextBudget {
   return { ...DEFAULT_CONTEXT_BUDGET, profile };
+}
+
+function budgetWithEviction(eviction: ContextEvictionPolicy, maxTokens: number): ContextBudget {
+  return {
+    ...DEFAULT_CONTEXT_BUDGET,
+    lanes: DEFAULT_CONTEXT_BUDGET.lanes.map((row) =>
+      row.laneId === "repo-evidence" ? { ...row, eviction, maxTokens } : row,
+    ),
+  };
 }
 
 describe("DEFAULT_CONTEXT_BUDGET", () => {
@@ -199,6 +209,130 @@ describe("allocateContext — gate 4 (no evictable overflow)", () => {
       }
     }
   });
+});
+
+describe("allocateContext — eviction policies", () => {
+  const unit = bulk("policy-token ", 100);
+  const maxTokens = estimateTokens(unit) * 2;
+
+  function allocateWithPolicy(eviction: ContextEvictionPolicy): ReturnType<typeof allocateContext> {
+    return allocateContext({
+      profile: DEFAULT_CONTEXT_PROFILE,
+      budget: budgetWithEviction(eviction, maxTokens),
+      lanes: [
+        lane("repo-evidence", [
+          item("old-high", unit, 0.9),
+          item("middle-low", unit, 0.1),
+          item("new-medium", unit, 0.2),
+        ]),
+      ],
+    });
+  }
+
+  function repoLane(
+    result: ReturnType<typeof allocateContext>,
+  ): ReturnType<typeof allocateContext>["lanes"][number] {
+    const allocated = result.lanes.find((lane) => lane.laneId === "repo-evidence");
+    if (allocated === undefined) {
+      throw new Error("expected repo-evidence allocation");
+    }
+    return allocated;
+  }
+
+  it("evicts different items for chronological and score-based policies", () => {
+    const oldest = repoLane(allocateWithPolicy("drop-oldest"));
+    const lowestScore = repoLane(allocateWithPolicy("drop-lowest-score"));
+    expect(oldest.includedItemIds).toEqual(["middle-low", "new-medium"]);
+    expect(oldest.excludedItemIds).toEqual(["old-high"]);
+    expect(oldest.diagnostics.compactionReason).toBe("drop-oldest");
+    expect(lowestScore.includedItemIds).toEqual(["old-high", "new-medium"]);
+    expect(lowestScore.excludedItemIds).toEqual(["middle-low"]);
+    expect(lowestScore.diagnostics.compactionReason).toBe("drop-lowest-score");
+  });
+
+  it("records the score-based drop actually performed when summarization is unavailable", () => {
+    const summarized = repoLane(allocateWithPolicy("summarize-then-drop"));
+    expect(summarized.excludedItemIds).toEqual(["middle-low"]);
+    expect(summarized.diagnostics.compactionReason).toBe("drop-lowest-score");
+  });
+
+  it("classifies duplicate ids by occurrence under drop-oldest", () => {
+    const cheap = "small";
+    const expensive = bulk("large ", 100);
+    const allocated = repoLane(
+      allocateContext({
+        profile: DEFAULT_CONTEXT_PROFILE,
+        budget: budgetWithEviction("drop-oldest", estimateTokens(cheap)),
+        lanes: [
+          lane("repo-evidence", [item("duplicate", expensive, 0.5), item("duplicate", cheap, 0.5)]),
+        ],
+      }),
+    );
+    expect(allocated.includedItemIds).toEqual(["duplicate"]);
+    expect(allocated.excludedItemIds).toEqual(["duplicate"]);
+    expect(allocated.diagnostics.provenanceCounts).toEqual({ included: 1, excluded: 1 });
+  });
+
+  it("keeps none-reserved lanes intact even when their configured cap is exceeded", () => {
+    const reserved = repoLane(allocateWithPolicy("none"));
+    expect(reserved.includedItemIds).toEqual(["old-high", "middle-low", "new-medium"]);
+    expect(reserved.excludedItemIds).toEqual([]);
+    expect(reserved.diagnostics.compactionReason).toBeUndefined();
+  });
+
+  it.each(["none", "drop-oldest", "drop-lowest-score", "summarize-then-drop"] as const)(
+    "keeps an empty lane empty under %s",
+    (eviction) => {
+      const allocated = repoLane(
+        allocateContext({
+          profile: DEFAULT_CONTEXT_PROFILE,
+          budget: budgetWithEviction(eviction, 0),
+          lanes: [lane("repo-evidence", [])],
+        }),
+      );
+      expect(allocated.includedItemIds).toEqual([]);
+      expect(allocated.excludedItemIds).toEqual([]);
+      expect(allocated.diagnostics.compactionReason).toBeUndefined();
+    },
+  );
+
+  it.each(["drop-oldest", "drop-lowest-score", "summarize-then-drop"] as const)(
+    "includes an exact-capacity item under %s",
+    (eviction) => {
+      const exact = bulk("exact ", 20);
+      const allocated = repoLane(
+        allocateContext({
+          profile: DEFAULT_CONTEXT_PROFILE,
+          budget: budgetWithEviction(eviction, estimateTokens(exact)),
+          lanes: [lane("repo-evidence", [item("exact", exact, 0.9)])],
+        }),
+      );
+      expect(allocated.includedItemIds).toEqual(["exact"]);
+      expect(allocated.excludedItemIds).toEqual([]);
+    },
+  );
+
+  it.each(["drop-oldest", "drop-lowest-score", "summarize-then-drop"] as const)(
+    "excludes an oversized item while retaining a smaller item under %s",
+    (eviction) => {
+      const small = bulk("small ", 10);
+      const oversized = bulk("large ", 200);
+      const allocated = repoLane(
+        allocateContext({
+          profile: DEFAULT_CONTEXT_PROFILE,
+          budget: budgetWithEviction(eviction, estimateTokens(small)),
+          lanes: [
+            lane("repo-evidence", [item("oversized", oversized, 0.9), item("small", small, 0.1)]),
+          ],
+        }),
+      );
+      expect(allocated.includedItemIds).toEqual(["small"]);
+      expect(allocated.excludedItemIds).toEqual(["oversized"]);
+      expect(allocated.diagnostics.compactionReason).toBe(
+        eviction === "summarize-then-drop" ? "drop-lowest-score" : eviction,
+      );
+    },
+  );
 });
 
 describe("allocateContext — gate 5 (non-eviction + order + determinism)", () => {

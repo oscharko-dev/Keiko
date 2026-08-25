@@ -6,7 +6,7 @@
   },
   "src/app/components/desktop/AppShell.grounding.test.tsx": {
     "@typescript-eslint/explicit-function-return-type": {
-      "count": 15
+      "count": 13
     },
     "complexity": {
       "count": 1
@@ -246,11 +246,6 @@
   },
   "src/app/components/desktop/context/ChatSessionContext.tsx": {
     "max-lines-per-function": {
-      "count": 1
-    }
-  },
-  "src/app/components/desktop/context/TwinContext.tsx": {
-    "complexity": {
       "count": 1
     }
   },
@@ -1408,7 +1403,7 @@
   },
   "src/app/components/desktop/widgets/index.test.tsx": {
     "@typescript-eslint/explicit-function-return-type": {
-      "count": 36
+      "count": 34
     },
     "complexity": {
       "count": 1
@@ -1711,11 +1706,6 @@
       "count": 1
     }
   },
-  "src/app/components/desktop/widgets/shared/activityBus.ts": {
-    "@typescript-eslint/explicit-function-return-type": {
-      "count": 1
-    }
-  },
   "src/app/components/desktop/windows/ConnectionsLayer.tsx": {
     "@typescript-eslint/explicit-function-return-type": {
       "count": 2
@@ -1750,7 +1740,7 @@
   },
   "src/app/components/desktop/windows/connectionUtils.ts": {
     "@typescript-eslint/explicit-function-return-type": {
-      "count": 9
+      "count": 8
     },
     "complexity": {
       "count": 1

@@ -15,7 +15,7 @@ import type {
   MemoryUpdate,
 } from "./memory-operations.js";
 import { MEMORY_FORGET_REASONS } from "./memory-operations.js";
-import { MEMORY_SENSITIVITIES, MEMORY_TYPES } from "./memory.js";
+import { MEMORY_SENSITIVITIES, MEMORY_TYPES } from "./memory-contracts.js";
 import {
   validateMemoryProvenance,
   validateMemoryScope,

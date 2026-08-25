@@ -2574,6 +2574,7 @@ describe("coding runtime manager", () => {
     const harness = createSpawnHarness();
     const approvalStore = createInMemorySupervisedCodingApprovalStore();
     const consume = vi.spyOn(approvalStore, "consume");
+    const invalidateRun = vi.spyOn(approvalStore, "invalidateRun");
     const manager = createTestCodingRuntimeManager({
       supervisor: testSupervisor(harness.spawn),
       processEnv: {},
@@ -2594,14 +2595,9 @@ describe("coding runtime manager", () => {
         approvedByUserId: "operator",
       }),
     ).toEqual({ ok: false, failureCode: "approval-activation-failed", retryable: false });
-    expect(consume).toHaveBeenCalledOnce();
-    const rollback = consume.mock.calls[0]?.[0];
-    expect(rollback?.approval.approvalId).toMatch(/^sca_/u);
-    expect(rollback?.binding).toMatchObject({
-      runId: "run-1991",
-      requestId: "permission-without-bridge-observation",
-    });
-    expect(rollback?.nowMs).toBe(Date.parse("2026-07-07T13:00:00.000Z"));
+    expect(consume).not.toHaveBeenCalled();
+    expect(invalidateRun).toHaveBeenCalledOnce();
+    expect(invalidateRun).toHaveBeenCalledWith("run-1991");
   });
 
   it("refuses approval issuance while paused and restores it on resume (#2386)", async () => {
@@ -2753,6 +2749,64 @@ describe("coding runtime manager", () => {
     });
     expect(events.some((event) => event.kind === "permission-requested")).toBe(false);
     expect(events.some((event) => event.kind === "artifact-produced")).toBe(false);
+    expect(JSON.stringify(events)).not.toContain(issued.approval.approvalToken);
+  });
+
+  it("reuses the trusted metadata recorded when a task approval was issued", async (): Promise<void> => {
+    const fixture = createManagedFixture();
+    const harness = createSpawnHarness();
+    const events: CodingWorkbenchRuntimeEvent[] = [];
+    const manager = createTestCodingRuntimeManager({
+      supervisor: testSupervisor(harness.spawn),
+      processEnv: {},
+      now: () => 1_000,
+      onRuntimeEvent: (event) => {
+        events.push(event);
+      },
+      nowIso: () => "2026-07-07T13:00:00.000Z",
+    });
+
+    await manager.start(
+      launchRequest(fixture.workspaceRoot, fixture.managedRoot, fixture.executablePath),
+    );
+    const issued = manager.issueApproval({
+      runId: "run-1988",
+      requestId: "perm-task-verification",
+      actionKind: "verification-command",
+      grantScope: "task",
+      commandTemplateId: "governed-typecheck",
+      safeArgumentClasses: ["workspace-contained"],
+      approvedByUserId: "operator",
+    });
+    expect(issued.ok).toBe(true);
+    if (!issued.ok) throw new Error("expected task approval issue to succeed");
+
+    harness.children[0]?.stdout.write(
+      permissionLine({
+        requestId: "perm-task-verification",
+        kind: "command-execution",
+        actionClass: "command-execution",
+        reasonCode: "approval-required",
+        actionKind: "verification-command",
+        scopeLabel: "workspace-scope",
+        risk: "low",
+        policyReason: "approval-required",
+        commandLabel: "typecheck",
+        executable: "npm",
+        args: ["run", "typecheck"],
+        passedCount: 1,
+        failedCount: 0,
+        skippedCount: 0,
+        approvalToken: issued.approval,
+      }),
+    );
+    await settle();
+
+    expect(events.find((event) => event.kind === "verification-summarized")).toMatchObject({
+      verificationKind: "verification-command",
+      verificationStatus: "passed",
+    });
+    expect(events.some((event) => event.failureCode === "approval-proof-stale")).toBe(false);
     expect(JSON.stringify(events)).not.toContain(issued.approval.approvalToken);
   });
 

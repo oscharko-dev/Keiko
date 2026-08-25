@@ -6,7 +6,6 @@
       "Connected",
       "Connecting",
       "Disconnected",
-      "No branch selected",
       "Setup required"
     ],
     "packages/keiko-ui/src/app/components/desktop/ChatWindow.tsx": [
@@ -17,13 +16,6 @@
       "Last grounded run: ${formatTokenCount(totalTokens)} tokens, ${String(usage.filesRead)} files"
     ],
     "packages/keiko-ui/src/app/components/desktop/ConnectorScopePill.tsx": ["Disconnect from chat"],
-    "packages/keiko-ui/src/app/components/desktop/context/TwinContext.tsx": [
-      "deploy · rm · db",
-      "feature branches",
-      "prod/** · infra/**",
-      "src/** · docs/**",
-      "test · build · lint"
-    ],
     "packages/keiko-ui/src/app/components/desktop/EditorMenu.tsx": ["Preferred editor for “"],
     "packages/keiko-ui/src/app/components/desktop/Footer.tsx": ["Keiko |"],
     "packages/keiko-ui/src/app/components/desktop/GroundedAnswer.tsx": [
@@ -170,7 +162,6 @@
       "Type",
       "Validating…"
     ],
-    "packages/keiko-ui/src/app/components/desktop/ModeSwitch.tsx": ["Keiko"],
     "packages/keiko-ui/src/app/components/desktop/repositoryReferences.tsx": [
       "Open in editor",
       "Select repository source"
@@ -484,15 +475,6 @@
       "Update",
       "Update Pull Request"
     ],
-    "packages/keiko-ui/src/app/components/desktop/widgets/cards/IntegrationsWidget.tsx": [
-      "Catch up on threads",
-      "Error tracking",
-      "Integrations",
-      "Not connected — coming soon",
-      "PRs, code & CI",
-      "Team channels",
-      "Track issues"
-    ],
     "packages/keiko-ui/src/app/components/desktop/widgets/cards/pdf-citation-preview-session.ts": [
       "Preview changed",
       "Preview not ready",
@@ -590,25 +572,6 @@
       "State maximized",
       "Trust",
       "Workspace"
-    ],
-    "packages/keiko-ui/src/app/components/desktop/widgets/panels/KeikoTwinPanel.tsx": [
-      "Autonomous",
-      "Digital twin sections",
-      "Email the customer",
-      "Keiko — Digital Twin",
-      "Keiko — Digital Twin mirroring ·",
-      "Keiko adapts behaviour &amp; tools to who is at the wheel.",
-      "Manual",
-      "mirroring ·",
-      "Mock scenarios against your policy before going autonomous.",
-      "Open pull request #142",
-      "Overwrite prod/secrets.env",
-      "Rights an agent inherits when Keiko governs. Tap a decision to cycle through Allow → Ask → Deny.",
-      "Run `kubectl apply` → prod",
-      "Run `npm test`",
-      "Run evaluation",
-      "What your twin can reach on your behalf.",
-      "Write src/windows.jsx"
     ],
     "packages/keiko-ui/src/app/components/desktop/widgets/panels/MobilePanel.tsx": [
       "Keiko Mobile",
@@ -724,13 +687,6 @@
     ],
     "packages/keiko-ui/src/app/components/desktop/widgets/panels/SearchResultList.tsx": [
       "Workspace search results"
-    ],
-    "packages/keiko-ui/src/app/components/desktop/widgets/panels/TimelinePanel.tsx": [
-      "Activity timeline",
-      "No activity yet.",
-      "No activity yet. Start an agent to see its actions stream here.",
-      "Start an agent to see its actions stream here.",
-      "workspace ·"
     ],
     "packages/keiko-ui/src/app/components/desktop/widgets/quality-intelligence/ExportBar.tsx": [
       "Jira (preview)",

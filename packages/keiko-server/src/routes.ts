@@ -1324,12 +1324,6 @@ export const API_ROUTES: readonly RouteDefinition[] = [
     pattern: "/api/atlassian-connectors/credentials/:authRef/activity",
     handler: handleListAtlassianConnectorActivity,
   },
-  // Issue #2244 (Epic #2238, ADR-0128 D4/D6) — governed Confluence/Jira write actions under the
-  // three-mode authority model. Every action request resolves the validated Authority Envelope
-  // (ADR-0125 registry: opaque run id + envelope digest) and is dispositioned by the shared D4
-  // matrix; review-required parks a bounded pending approval (approve executes, reject records —
-  // rendered by the #2245 UI), denied answers exactly one content-free reason, and every attempt
-  // emits one content-free activity record. POST inherits the server CSRF + JSON gate.
   {
     method: "POST",
     pattern: "/api/atlassian-connectors/credentials/:authRef/actions",

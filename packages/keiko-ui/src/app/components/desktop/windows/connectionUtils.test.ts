@@ -126,7 +126,6 @@ describe("connectionUtils — general workspace contracts", () => {
   it("labels common non-file relationship predicates with readable verbs", () => {
     expect(relLabel(snap("quality"), snap("figma"))).toBe("uses snapshot");
     expect(relLabel(snap("quality"), snap("figmaView"))).toBe("uses view");
-    expect(relLabel(snap("chat"), snap("keiko"))).toBe("governed by");
     expect(relLabel(snap("agents"), snap("agents"))).toBe("delegates");
     expect(relLabel(snap("agents"), snap("terminal"))).toBe("runs in");
     expect(relLabel(snap("plugins"), snap("chat"))).toBe("uses tools");

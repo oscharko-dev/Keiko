@@ -28,6 +28,13 @@ import {
   type AtlassianHttpPort,
 } from "@oscharko-dev/keiko-connectors";
 import { isAtlassianConnectorAuthRef } from "@oscharko-dev/keiko-contracts";
+import { UNKNOWN_CORRELATION_ID } from "../correlation.js";
+import {
+  contentFreeErrorClass,
+  emitServerDiagnostic,
+  type ServerDiagnosticSink,
+} from "../diagnostics-log.js";
+import type { ServerLogSink } from "../observability/server-log.js";
 import { errorBody, type RouteContext, type RouteResult } from "../routes.js";
 import type { UiHandlerDeps } from "../deps.js";
 
@@ -41,6 +48,15 @@ export interface AtlassianConnectorCredentialDeps {
   readonly custody: AtlassianCredentialCustody;
   readonly httpPortFactory: (metadata: AtlassianCredentialMetadata) => AtlassianHttpPort;
   readonly httpBodyPortFactory: (metadata: AtlassianCredentialMetadata) => AtlassianHttpBodyPort;
+  // KEIKO-0826 follow-up: optional sink for body-free activity events emitted on every typed
+  // custody-error path (`credential-not-found` 404, `unsupported-auth-scheme` 400, `invalid-input`
+  // 400, `credential-limit-exceeded` 429). Support bundles reconstruct why a credential operation
+  // was rejected from these lines; without them the analyzer sees an opaque client-visible 4xx
+  // and cannot tell a benign cap ceiling apart from a validation failure. Optional so the many
+  // in-file tests that build deps directly stay backward-compatible; the production wiring
+  // always passes `processServerLogSink()`.
+  readonly activityLog?: ServerLogSink | undefined;
+  readonly diagnostics?: ServerDiagnosticSink | undefined;
 }
 
 class BodyTooLargeError extends Error {
@@ -143,7 +159,41 @@ function custodyErrorResult(error: AtlassianCredentialCustodyError): RouteResult
   }
 }
 
-async function runHandler(work: () => Promise<RouteResult> | RouteResult): Promise<RouteResult> {
+// KEIKO-0826 follow-up: body-free activity event emitted on every typed custody-error path so a
+// support bundle can reconstruct why a credential operation was rejected. Never carries submitted
+// values — only the (already closed) `error.code`, the mapped HTTP `status`, and the request
+// correlationId. Silent no-op when no `activityLog` was wired (test builds, historical callers).
+function recordCustodyRejection(
+  deps: AtlassianConnectorCredentialDeps,
+  ctx: RouteContext,
+  errorCode: AtlassianCredentialCustodyError["code"],
+  status: number,
+): void {
+  try {
+    deps.activityLog?.write({
+      category: "security",
+      op: "atlassian.credential.rejected",
+      ...(ctx.correlationId === undefined ? {} : { correlationId: ctx.correlationId }),
+      status,
+      errorKind: errorCode,
+    });
+  } catch (error) {
+    emitServerDiagnostic(deps.diagnostics, {
+      correlationId: ctx.correlationId ?? UNKNOWN_CORRELATION_ID,
+      timestamp: new Date().toISOString(),
+      operation: "atlassian.credential.rejected",
+      source: "atlassian.credential-routes.record-custody-rejection",
+      errorClass: contentFreeErrorClass(error),
+      message: "atlassian-credential-rejection-activity-log-failed",
+    });
+  }
+}
+
+async function runHandler(
+  deps: AtlassianConnectorCredentialDeps,
+  ctx: RouteContext,
+  work: () => Promise<RouteResult> | RouteResult,
+): Promise<RouteResult> {
   try {
     return await work();
   } catch (error) {
@@ -155,7 +205,10 @@ async function runHandler(work: () => Promise<RouteResult> | RouteResult): Promi
     }
     if (error instanceof AtlassianCredentialCustodyError) {
       const mapped = custodyErrorResult(error);
-      if (mapped !== undefined) return mapped;
+      if (mapped !== undefined) {
+        recordCustodyRejection(deps, ctx, error.code, mapped.status);
+        return mapped;
+      }
     }
     throw error;
   }
@@ -191,7 +244,7 @@ export async function handleCreateAtlassianConnectorCredential(
 ): Promise<RouteResult> {
   const guard = requireCustody(deps);
   if (isRouteResult(guard)) return guard;
-  return runHandler(async () => {
+  return runHandler(guard, ctx, async () => {
     const body = await readJsonObject(ctx.req);
     return { status: 200, body: guard.custody.create(body) };
   });
@@ -199,12 +252,15 @@ export async function handleCreateAtlassianConnectorCredential(
 
 // GET /api/atlassian-connectors/credentials — non-secret metadata projection only.
 export function handleListAtlassianConnectorCredentials(
-  _ctx: RouteContext,
+  ctx: RouteContext,
   deps: UiHandlerDeps,
 ): Promise<RouteResult> | RouteResult {
   const guard = requireCustody(deps);
   if (isRouteResult(guard)) return guard;
-  return runHandler(() => ({ status: 200, body: { credentials: guard.custody.list() } }));
+  return runHandler(guard, ctx, () => ({
+    status: 200,
+    body: { credentials: guard.custody.list() },
+  }));
 }
 
 // DELETE /api/atlassian-connectors/credentials/:authRef — removes ciphertext and metadata in one
@@ -215,7 +271,7 @@ export function handleDeleteAtlassianConnectorCredential(
 ): Promise<RouteResult> | RouteResult {
   const guard = requireCustody(deps);
   if (isRouteResult(guard)) return guard;
-  return runHandler(() => {
+  return runHandler(guard, ctx, () => {
     const authRef = decodeAuthRefParam(ctx);
     if (authRef === undefined || !guard.custody.delete(authRef)) {
       return credentialNotFound();
@@ -233,7 +289,7 @@ export function handleVerifyAtlassianConnectorCredential(
 ): Promise<RouteResult> | RouteResult {
   const guard = requireCustody(deps);
   if (isRouteResult(guard)) return guard;
-  return runHandler(async () => {
+  return runHandler(guard, ctx, async () => {
     const authRef = decodeAuthRefParam(ctx);
     const metadata = authRef === undefined ? undefined : guard.custody.getMetadata(authRef);
     if (metadata === undefined) return credentialNotFound();

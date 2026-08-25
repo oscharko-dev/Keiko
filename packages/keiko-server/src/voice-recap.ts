@@ -70,6 +70,7 @@ import { embedAndStoreMemory } from "./memory-embedding.js";
 import { recordMemoryAudits } from "./memory-audit-handler.js";
 import { recordAutoAcceptedMemoryCaptureDecision } from "./memory-capture-audit.js";
 import { persistCapturedMemory } from "./memory-capture-persistence.js";
+import type { VoiceRecapContentAttestationStore } from "./voice-recap-provenance.js";
 
 const MAX_BODY_BYTES = 16_000;
 const MAX_SPANS = 200;
@@ -87,6 +88,8 @@ interface RecapRequest {
   readonly chatId: string;
   readonly projectPath: string;
   readonly committedSpans: readonly string[];
+  readonly voiceSessionId: string | undefined;
+  readonly contentAttestation: string | undefined;
 }
 
 interface RecapOutcome {
@@ -100,6 +103,8 @@ interface RecapOutcome {
 
 export interface RecapResponseBody extends RecapOutcome {
   readonly status: "ok";
+  readonly provenance: "attested" | "unattested";
+  readonly autoAcceptEligible: boolean;
 }
 
 function readBody(req: IncomingMessage): Promise<string> {
@@ -177,6 +182,15 @@ function readRequiredString(
   return value;
 }
 
+function readOptionalString(
+  body: Record<string, unknown>,
+  key: string,
+  maxChars: number,
+): string | undefined | RouteResult {
+  if (body[key] === undefined) return undefined;
+  return readRequiredString(body, key, maxChars);
+}
+
 // Committed spans are the per-utterance committed transcript text. Empty entries are dropped (they
 // carry nothing to extract); an oversize span is rejected outright rather than silently truncated.
 function readCommittedSpans(body: Record<string, unknown>): readonly string[] | RouteResult {
@@ -214,7 +228,20 @@ function parseRequest(body: Record<string, unknown>): RecapRequest | RouteResult
   if (isRouteResult(projectPath)) return projectPath;
   const committedSpans = readCommittedSpans(body);
   if (isRouteResult(committedSpans)) return committedSpans;
-  return { chatId, projectPath, committedSpans };
+  const voiceSessionId = readOptionalString(body, "voiceSessionId", MAX_ID_CHARS);
+  if (isRouteResult(voiceSessionId)) return voiceSessionId;
+  const contentAttestation = readOptionalString(body, "contentAttestation", MAX_ID_CHARS);
+  if (isRouteResult(contentAttestation)) return contentAttestation;
+  if (contentAttestation !== undefined && voiceSessionId === undefined) {
+    return {
+      status: 400,
+      body: errorBody(
+        "BAD_REQUEST",
+        "contentAttestation requires a server-observed voiceSessionId.",
+      ),
+    };
+  }
+  return { chatId, projectPath, committedSpans, voiceSessionId, contentAttestation };
 }
 
 // Effective deployment voice profile, resolved from the gateway config — never a client claim.
@@ -267,6 +294,36 @@ interface RecapPersistResult {
   readonly rejected: number;
 }
 
+interface RecapPersistedMemory {
+  readonly id: MemoryId;
+  readonly scope: MemoryScope;
+  readonly accepted: boolean;
+}
+
+async function persistRecapOutcome(
+  deps: UiHandlerDeps,
+  vault: MemoryVaultStore,
+  outcome: CaptureOutcome,
+  mode: ReturnType<typeof resolvePersistedMemoryAutonomyMode>,
+  autoAcceptEligible: boolean,
+): Promise<RecapPersistedMemory | null> {
+  if (!isPersistableMemoryCandidate(outcome)) return null;
+  const proposalId = outcome.proposal.proposalId as unknown as MemoryId;
+  const record = buildMemoryRecordFromProposal(proposalId, outcome);
+  if (exactCaptureSuppressionReason(vault, record) !== null) return null;
+  const candidate =
+    autoAcceptEligible && memoryCaptureAutoAcceptEligible(mode, outcome)
+      ? promoteEligibleMemoryRecord(record)
+      : record;
+  const result = persistCapturedMemory(vault, candidate, true);
+  if (!result.inserted && !result.promoted) return null;
+  const inserted = result.memory;
+  if (result.inserted) await embedAndStoreMemory(deps, vault, inserted.id, inserted.body);
+  if (inserted.status === "accepted")
+    recordAutoAcceptedMemoryCaptureDecision(deps, mode, "voice", inserted);
+  return { id: inserted.id, scope: inserted.scope, accepted: inserted.status === "accepted" };
+}
+
 // Persist only the persistable candidate outcomes as `proposed`, mirroring the chat capture path:
 // forget-tombstone suppression, `buildMemoryRecordFromProposal`, best-effort embed-on-capture.
 // Everything else (rejected, sensitive/approval-gated candidates, governance-action kinds) is
@@ -275,42 +332,23 @@ async function persistRecapOutcomes(
   deps: UiHandlerDeps,
   vault: MemoryVaultStore,
   outcomes: readonly CaptureOutcome[],
+  autoAcceptEligible: boolean,
 ): Promise<RecapPersistResult> {
   const proposed: { id: MemoryId; scope: MemoryScope }[] = [];
   const accepted: { id: MemoryId; scope: MemoryScope }[] = [];
   const mode = resolvePersistedMemoryAutonomyMode(deps);
   let rejected = 0;
   for (const outcome of outcomes) {
-    if (!isPersistableMemoryCandidate(outcome)) {
+    const persisted = await persistRecapOutcome(deps, vault, outcome, mode, autoAcceptEligible);
+    if (persisted === null) {
       rejected += 1;
       continue;
     }
-    const proposalId = outcome.proposal.proposalId as unknown as MemoryId;
-    const record = buildMemoryRecordFromProposal(proposalId, outcome);
-    // Recap capture is model-inferred, so it honours BOTH governed refusals: a forgotten body and a
-    // body the operator rejected in the review queue are equally "do not deduce this again".
-    if (exactCaptureSuppressionReason(vault, record) !== null) {
-      rejected += 1;
-      continue;
-    }
-    const candidate = memoryCaptureAutoAcceptEligible(mode, outcome)
-      ? promoteEligibleMemoryRecord(record)
-      : record;
-    const result = persistCapturedMemory(vault, candidate, true);
-    if (!result.inserted && !result.promoted) {
-      rejected += 1;
-      continue;
-    }
-    const inserted = result.memory;
-    if (result.inserted) {
-      await embedAndStoreMemory(deps, vault, inserted.id, inserted.body);
-    }
-    const persisted = { id: inserted.id, scope: inserted.scope };
-    if (inserted.status === "accepted") {
-      recordAutoAcceptedMemoryCaptureDecision(deps, mode, "voice", inserted);
-      accepted.push(persisted);
+    const memory = { id: persisted.id, scope: persisted.scope };
+    if (persisted.accepted) {
+      accepted.push(memory);
     } else {
-      proposed.push(persisted);
+      proposed.push(memory);
     }
   }
   return { proposed, accepted, extracted: outcomes.length, rejected };
@@ -364,6 +402,7 @@ async function buildRecapResponse(
   profile: VoiceProfile,
   request: RecapRequest,
   runtime: ConversationMemoryRuntimeContext,
+  provenance: RecapResponseBody["provenance"],
 ): Promise<RecapResponseBody> {
   const startedAtMs = Date.now();
   const captureContext = buildCaptureContext(runtime);
@@ -374,16 +413,46 @@ async function buildRecapResponse(
   for (const span of request.committedSpans) {
     outcomes.push(...extractCandidatesFromUserText(span, captureContext, policy));
   }
-  const persisted = await persistRecapOutcomes(deps, vault, outcomes);
+  const autoAcceptEligible = provenance === "attested";
+  const persisted = await persistRecapOutcomes(deps, vault, outcomes, autoAcceptEligible);
   recordRecapAudits(deps, profile, request, persisted, startedAtMs);
   return {
     status: "ok",
+    provenance,
+    autoAcceptEligible,
     candidatesExtracted: persisted.extracted,
     candidatesRejected: persisted.rejected,
     candidatesProposed: persisted.proposed.length,
     candidatesAccepted: persisted.accepted.length,
     proposalIds: persisted.proposed.map(({ id }) => String(id)),
     acceptedIds: persisted.accepted.map(({ id }) => String(id)),
+  };
+}
+
+function verifyContentAttestation(
+  attestations: VoiceRecapContentAttestationStore | undefined,
+  profile: VoiceProfile,
+  request: RecapRequest,
+): RecapResponseBody["provenance"] | RouteResult {
+  if (request.contentAttestation === undefined || request.voiceSessionId === undefined) {
+    return "unattested";
+  }
+  if (profile !== "speech-to-text" || attestations === undefined) {
+    return {
+      status: 403,
+      body: errorBody("VOICE_RECAP_UNATTESTED", "Voice recap content proof is not available."),
+    };
+  }
+  const outcome = attestations.consume({
+    profile,
+    sessionId: request.voiceSessionId,
+    committedSpans: request.committedSpans,
+    proof: request.contentAttestation,
+  });
+  if (outcome === "attested") return "attested";
+  return {
+    status: 403,
+    body: errorBody("VOICE_RECAP_UNATTESTED", "Voice recap content proof was not accepted."),
   };
 }
 
@@ -394,6 +463,8 @@ function dormantResponse(): RouteResult {
     status: 200,
     body: {
       status: "ok",
+      provenance: "unattested",
+      autoAcceptEligible: false,
       candidatesExtracted: 0,
       candidatesRejected: 0,
       candidatesProposed: 0,
@@ -401,6 +472,16 @@ function dormantResponse(): RouteResult {
       proposalIds: [],
       acceptedIds: [],
     } satisfies RecapResponseBody,
+  };
+}
+
+function unavailableVoiceRecapResponse(): RouteResult {
+  return {
+    status: 503,
+    body: errorBody(
+      "VOICE_UNAVAILABLE",
+      "Voice session recap is not available for this deployment.",
+    ),
   };
 }
 
@@ -415,13 +496,7 @@ export async function handleBuildVoiceRecap(
 
   const profile = serverVoiceProfile(deps);
   if (!voiceRecapAllowed(profile)) {
-    return {
-      status: 503,
-      body: errorBody(
-        "VOICE_UNAVAILABLE",
-        "Voice session recap is not available for this deployment.",
-      ),
-    };
+    return unavailableVoiceRecapResponse();
   }
   const vault = deps.memoryVault;
   if (vault === undefined) {
@@ -442,6 +517,8 @@ export async function handleBuildVoiceRecap(
   }
   const runtime = resolveConversationMemoryContext(deps, projectPath, request.chatId);
   if (isRouteResult(runtime)) return runtime;
+  const provenance = verifyContentAttestation(deps.voiceRecapContentAttestations, profile, request);
+  if (isRouteResult(provenance)) return provenance;
 
   try {
     const response = await buildRecapResponse(
@@ -450,6 +527,7 @@ export async function handleBuildVoiceRecap(
       profile,
       { ...request, projectPath },
       runtime,
+      provenance,
     );
     return { status: 200, body: response };
   } catch (error) {

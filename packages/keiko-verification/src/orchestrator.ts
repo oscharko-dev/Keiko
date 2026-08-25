@@ -178,7 +178,11 @@ interface StepRun {
   readonly durationMs: number;
 }
 
-function deniedResult(step: VerificationStep, reason: string): VerificationResult {
+function deniedResult(
+  step: VerificationStep,
+  reason: string,
+  processTreeMemoryEnforced?: boolean,
+): VerificationResult {
   return {
     kind: step.kind,
     scriptName: step.scriptName,
@@ -191,7 +195,12 @@ function deniedResult(step: VerificationStep, reason: string): VerificationResul
     truncated: false,
     redacted: true,
     outputSummary: "",
-    appliedLimits: buildAppliedLimits(step.limits, undefined),
+    appliedLimits: buildAppliedLimits(
+      step.limits,
+      undefined,
+      false,
+      processTreeMemoryEnforced ?? false,
+    ),
     detail: redact(reason),
   };
 }
@@ -371,7 +380,7 @@ function skippedResult(step: VerificationStep): VerificationResult {
     truncated: false,
     redacted: true,
     outputSummary: "",
-    appliedLimits: buildAppliedLimits(step.limits, undefined),
+    appliedLimits: buildAppliedLimits(step.limits, undefined, false, false),
     detail: redact(step.skipReason ?? "skipped"),
   };
 }
@@ -389,7 +398,7 @@ function cancelledResult(step: VerificationStep): VerificationResult {
     truncated: false,
     redacted: true,
     outputSummary: "",
-    appliedLimits: buildAppliedLimits(step.limits, undefined),
+    appliedLimits: buildAppliedLimits(step.limits, undefined, false, false),
     detail: "cancelled before execution",
   };
 }
@@ -401,7 +410,12 @@ function networkEnforcedOf(result: CommandResult | undefined): boolean {
   return result?.attestation?.networkEnforced ?? false;
 }
 
-function toResult(step: VerificationStep, run: StepRun, workspaceRoot: string): VerificationResult {
+function toResult(
+  step: VerificationStep,
+  run: StepRun,
+  workspaceRoot: string,
+  processTreeMemoryEnforced: boolean,
+): VerificationResult {
   const status = classifyOutcome({
     skipped: false,
     result: run.result,
@@ -426,7 +440,12 @@ function toResult(step: VerificationStep, run: StepRun, workspaceRoot: string): 
     truncated: run.result?.truncated ?? false,
     redacted: true,
     outputSummary: outputDigest(run.result),
-    appliedLimits: buildAppliedLimits(step.limits, breached, networkEnforced),
+    appliedLimits: buildAppliedLimits(
+      step.limits,
+      breached,
+      networkEnforced,
+      processTreeMemoryEnforced,
+    ),
     detail: detailFor(status, run),
     ...(locations.length > 0 ? { locations } : {}),
   };
@@ -544,6 +563,17 @@ async function runPlanSteps(
       cancelled = early.cancelled;
       continue;
     }
+    const processTreeMemoryEnforced = monitor.canEnforceProcessTreeMemory();
+    if (step.limits.maxMemoryBytes !== undefined && !processTreeMemoryEnforced) {
+      results.push(
+        deniedResult(
+          step,
+          "memory ceiling requires complete process-tree monitoring on this host; refusing to execute without enforcement",
+          false,
+        ),
+      );
+      continue;
+    }
     const resolution = resolveStepNetwork(step.limits, mode, available);
     if (resolution.kind === "fail-closed") {
       results.push(
@@ -558,6 +588,7 @@ async function runPlanSteps(
       step,
       await runStep(step, deps, baseSpawn, monitor, resolution.network),
       deps.workspace.root,
+      processTreeMemoryEnforced,
     );
     results.push(result);
     cancelled ||= result.status === "cancelled";

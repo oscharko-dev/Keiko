@@ -11,7 +11,6 @@ import { ChatSessionProvider } from "./context/ChatSessionContext";
 import { ActiveWorkspaceProvider } from "./context/ActiveWorkspaceContext";
 import { AnnouncerProvider } from "./context/AnnouncerContext";
 import { useActiveWorkspaceState } from "./hooks/useActiveWorkspaceState";
-import { TwinProvider, useTwin } from "./context/TwinContext";
 import { WsContext, type WsContextValue } from "./context/WsContext";
 import { Header, type HeaderStatusTone } from "./Header";
 import { LeftRail } from "./LeftRail";
@@ -383,34 +382,6 @@ export function chromeWindowsSignatureOf(wins: readonly AppWindow[] | null): str
     .join("|");
 }
 
-function branchLabelOrFallback(label: string | undefined): string {
-  return label !== undefined && label.trim().length > 0 ? label : "No branch selected";
-}
-
-function projectNameOrFallback(name: string | undefined, loading: boolean): string {
-  // uiux-fix F039 C401 — typographic ellipsis ("…", matching the footer's "You · manual"
-  // typography level) instead of three ASCII dots.
-  if (loading) return "Loading project…";
-  return name !== undefined && name.trim().length > 0 ? name : "No project selected";
-}
-
-function shellStatusLabel(args: {
-  readonly loading: boolean;
-  readonly error: string | undefined;
-  readonly hasProject: boolean;
-  readonly projectAvailable: boolean;
-  readonly noEligibleModels: boolean;
-}): string {
-  // uiux-fix F039 C401 — "Loading shell…" matches the header tab's "Loading project…" style
-  // (both visible at the same moment during boot).
-  if (args.loading) return "Loading shell…";
-  if (args.error !== undefined) return "Shell error";
-  if (!args.hasProject) return "No project selected";
-  if (!args.projectAvailable) return "Project unavailable";
-  if (args.noEligibleModels) return "Gateway setup required";
-  return "Ready";
-}
-
 // uiux-fix F008 C043/C118 — derive the header status pill from the real session state instead of
 // a hardcoded "connected" literal. Exported for unit tests.
 export function headerStatus(args: {
@@ -426,17 +397,6 @@ export function headerStatus(args: {
   }
   if (!args.hasProject || args.noEligibleModels) return { label: "Setup required", tone: "warn" };
   return { label: "Connected", tone: "ok" };
-}
-
-function evidenceStatusLabel(wins: readonly AppWindow[] | null): string {
-  const reviewWindows = (wins ?? []).filter((win) => win.type === "review");
-  // uiux-fix F008 C060 — the idle label was the imperative "Open review", which reads like a
-  // control but renders as static text in the footer status strip. Descriptive labels instead,
-  // consistent with "No branch selected" / "No model selected".
-  if (reviewWindows.length === 0) return "No review open";
-  return reviewWindows.some((win) => typeof win.cfg.runId === "string" && win.cfg.runId.length > 0)
-    ? "Evidence ready"
-    : "Review window open";
 }
 
 // `/\/+$/u`, `/^\/+/u`, `/^\/+|\/+$/gu`, and `/^\/+$/u` (leading/trailing slash-run stripping,
@@ -879,7 +839,6 @@ export function deepLinkToolFor(path: string): "relationships" | "localKnowledge
 function AppShellInner(): ReactNode {
   const t = useTranslate();
   const { theme, toggle: toggleTheme } = useTheme();
-  const twin = useTwin();
   const session = useChatSession({ autoCreate: false });
   // Issue #446 (ADR-0090) — the active task-workspace binding state machine. It is provided to the
   // whole shell so the Header switcher and every window's render context read one source of truth.
@@ -1628,18 +1587,6 @@ function AppShellInner(): ReactNode {
   const configuredModelsAvailable = session.configuredModelsAvailable ?? session.models.length > 0;
   const needsGatewaySetup =
     !session.loading && session.error === undefined && !configuredModelsAvailable;
-  const projectName = projectNameOrFallback(session.activeProject?.name, session.loading);
-  const hasProject = session.activeProject !== undefined;
-  const projectAvailable = session.activeProject?.available === true;
-  const footerShellStatusLabel = shellStatusLabel({
-    loading: session.loading,
-    error: session.error,
-    hasProject,
-    projectAvailable,
-    noEligibleModels: session.noEligibleModels,
-  });
-  const footerEvidenceStatusLabel = evidenceStatusLabel(ws.wins);
-  const branchLabel = branchLabelOrFallback(session.activeChat?.branchLabel);
   const updateStartupReady = ws.wins !== null && !session.loading && !needsGatewaySetup;
   const openUpdatesFromStartup = useCallback((): void => {
     const createdId = ws.api.add("updates", { entrypoint: "startup" });
@@ -1744,12 +1691,6 @@ function AppShellInner(): ReactNode {
                       onToggleWindowPalette={toggleWindowPalette}
                       onSelectWindow={selectFooterWindow}
                       onCloseWindowPalette={closeWindowPalette}
-                      mode={twin.mode}
-                      selectedModel={session.selectedModel}
-                      projectName={projectName}
-                      branchLabel={branchLabel}
-                      shellStatusLabel={footerShellStatusLabel}
-                      evidenceStatusLabel={footerEvidenceStatusLabel}
                       statusRef={setStatusRef}
                     />
                   </div>
@@ -1836,9 +1777,7 @@ export function AppShell(): ReactNode {
 export function AppShellFrame({ children }: { readonly children: ReactNode }): ReactNode {
   return (
     <I18nProvider>
-      <AppShellBoundary>
-        <TwinProvider>{children}</TwinProvider>
-      </AppShellBoundary>
+      <AppShellBoundary>{children}</AppShellBoundary>
     </I18nProvider>
   );
 }

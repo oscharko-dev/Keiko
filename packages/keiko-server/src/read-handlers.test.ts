@@ -537,17 +537,17 @@ describe("GET /api/workflows", () => {
 });
 
 describe("GET /api/workspace — walk cache (KEIKO-0253)", () => {
-  it("reuses the previous walk within the TTL window instead of re-walking the tree", () => {
+  it("reuses the previous walk within the TTL window instead of re-walking the tree", async () => {
     __resetWorkspaceWalkCacheForTests();
     const root = createWorkspaceFixture();
     try {
       const deps = depsWithRegisteredProject(root);
-      handleWorkspace(ctx(`/api/workspace?dir=${encodeURIComponent(root)}`), deps);
+      await handleWorkspace(ctx(`/api/workspace?dir=${encodeURIComponent(root)}`), deps);
       // Cache populated after the first call.
       expect(__workspaceWalkCacheSizeForTests()).toBe(1);
       const firstWalk = __workspaceWalkCacheEntryForTests(root);
       expect(firstWalk).toBeDefined();
-      handleWorkspace(ctx(`/api/workspace?dir=${encodeURIComponent(root)}`), deps);
+      await handleWorkspace(ctx(`/api/workspace?dir=${encodeURIComponent(root)}`), deps);
       // The second call must not repopulate the cache with a new walk — its cached entry stays
       // referentially identical, which is only true when the fs walk was skipped.
       const secondWalk = __workspaceWalkCacheEntryForTests(root);
@@ -559,20 +559,20 @@ describe("GET /api/workspace — walk cache (KEIKO-0253)", () => {
     }
   });
 
-  it("re-walks the tree once the TTL window has elapsed", () => {
+  it("re-walks the tree once the TTL window has elapsed", async () => {
     __resetWorkspaceWalkCacheForTests();
     const root = createWorkspaceFixture();
-    const walkSpy = vi.spyOn(keikoWorkspaceModule, "discoverWithStats");
+    const walkSpy = vi.spyOn(keikoWorkspaceModule, "discoverWithStatsAsync");
     let clock = 1_700_000_000_000;
     const now = (): number => clock;
     try {
       const deps = depsWithRegisteredProject(root);
-      handleWorkspace(ctx(`/api/workspace?dir=${encodeURIComponent(root)}`), deps, now);
+      await handleWorkspace(ctx(`/api/workspace?dir=${encodeURIComponent(root)}`), deps, now);
       expect(walkSpy).toHaveBeenCalledTimes(1);
       // Cross the TTL boundary: the entry stored at `clock` expires at `clock + TTL`, so landing
       // one millisecond past that must be treated as expired, never reused.
       clock += WORKSPACE_WALK_CACHE_TTL_MS + 1;
-      handleWorkspace(ctx(`/api/workspace?dir=${encodeURIComponent(root)}`), deps, now);
+      await handleWorkspace(ctx(`/api/workspace?dir=${encodeURIComponent(root)}`), deps, now);
       expect(walkSpy).toHaveBeenCalledTimes(2);
       // The cache still holds exactly one entry for this root — the stale one was replaced, not
       // appended alongside it.
@@ -584,7 +584,7 @@ describe("GET /api/workspace — walk cache (KEIKO-0253)", () => {
     }
   });
 
-  it("never lets the cache grow past WORKSPACE_WALK_CACHE_MAX_ENTRIES distinct roots", () => {
+  it("never lets the cache grow past WORKSPACE_WALK_CACHE_MAX_ENTRIES distinct roots", async () => {
     __resetWorkspaceWalkCacheForTests();
     const roots: string[] = [];
     try {
@@ -593,7 +593,7 @@ describe("GET /api/workspace — walk cache (KEIKO-0253)", () => {
         const root = createWorkspaceFixture();
         roots.push(root);
         const deps = depsWithRegisteredProject(root);
-        handleWorkspace(ctx(`/api/workspace?dir=${encodeURIComponent(root)}`), deps);
+        await handleWorkspace(ctx(`/api/workspace?dir=${encodeURIComponent(root)}`), deps);
         expect(__workspaceWalkCacheSizeForTests()).toBeLessThanOrEqual(
           WORKSPACE_WALK_CACHE_MAX_ENTRIES,
         );
@@ -606,13 +606,33 @@ describe("GET /api/workspace — walk cache (KEIKO-0253)", () => {
       for (const root of roots) rmSync(root, { recursive: true, force: true });
     }
   });
+
+  it("coalesces concurrent cache misses into one asynchronous workspace walk", async () => {
+    __resetWorkspaceWalkCacheForTests();
+    const root = createWorkspaceFixture();
+    const walkSpy = vi.spyOn(keikoWorkspaceModule, "discoverWithStatsAsync");
+    try {
+      const deps = depsWithRegisteredProject(root);
+      const [first, second] = await Promise.all([
+        handleWorkspace(ctx(`/api/workspace?dir=${encodeURIComponent(root)}`), deps),
+        handleWorkspace(ctx(`/api/workspace?dir=${encodeURIComponent(root)}`), deps),
+      ]);
+      expect(first.status).toBe(200);
+      expect(second.status).toBe(200);
+      expect(walkSpy).toHaveBeenCalledTimes(1);
+    } finally {
+      walkSpy.mockRestore();
+      __resetWorkspaceWalkCacheForTests();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
 });
 
 describe("GET /api/workspace", () => {
-  it("returns a workspace summary and redacts the response body", () => {
+  it("returns a workspace summary and redacts the response body", async () => {
     const root = createWorkspaceFixture();
     try {
-      const result = handleWorkspace(
+      const result = await handleWorkspace(
         ctx(`/api/workspace?dir=${encodeURIComponent(root)}`),
         depsWithRegisteredProject(root, { redactor: redactTopSecret }),
       );
@@ -633,10 +653,10 @@ describe("GET /api/workspace", () => {
     }
   });
 
-  it("includes a context pack when task or budget is provided", () => {
+  it("includes a context pack when task or budget is provided", async () => {
     const root = createWorkspaceFixture();
     try {
-      const result = handleWorkspace(
+      const result = await handleWorkspace(
         ctx(`/api/workspace?dir=${encodeURIComponent(root)}&task=src/index.ts&budget=128`),
         depsWithRegisteredProject(root, { redactor: redactTopSecret }),
       );
@@ -661,8 +681,8 @@ describe("GET /api/workspace", () => {
 
   it.each(["0", "00", "1.5", "+1", "１２", "9007199254740992"])(
     "rejects invalid or unsafe budget syntax: %s",
-    (budget) => {
-      const result = handleWorkspace(
+    async (budget) => {
+      const result = await handleWorkspace(
         ctx(`/api/workspace?budget=${encodeURIComponent(budget)}`),
         depsWith({}),
       );
@@ -671,16 +691,16 @@ describe("GET /api/workspace", () => {
     },
   );
 
-  it("requires an explicit workspace dir", () => {
-    const result = handleWorkspace(ctx("/api/workspace"), depsWith({}));
+  it("requires an explicit workspace dir", async () => {
+    const result = await handleWorkspace(ctx("/api/workspace"), depsWith({}));
     expect(result.status).toBe(400);
     expect(result.body).toMatchObject({ error: { code: "BAD_REQUEST" } });
   });
 
-  it("rejects workspace reads for unregistered projects", () => {
+  it("rejects workspace reads for unregistered projects", async () => {
     const root = createWorkspaceFixture();
     try {
-      const result = handleWorkspace(
+      const result = await handleWorkspace(
         ctx(`/api/workspace?dir=${encodeURIComponent(root)}`),
         depsWith({}),
       );
@@ -691,8 +711,8 @@ describe("GET /api/workspace", () => {
     }
   });
 
-  it("rejects non-local workspace path forms with BAD_REQUEST", () => {
-    const result = handleWorkspace(
+  it("rejects non-local workspace path forms with BAD_REQUEST", async () => {
+    const result = await handleWorkspace(
       ctx("/api/workspace?dir=https%3A%2F%2Fexample.test"),
       depsWith({}),
     );
@@ -700,12 +720,15 @@ describe("GET /api/workspace", () => {
     expect(result.body).toMatchObject({ error: { code: "BAD_REQUEST" } });
   });
 
-  it("surfaces safe workspace errors for missing workspaces", () => {
+  it("surfaces safe workspace errors for missing workspaces", async () => {
     const root = mkdtempSync(join(tmpdir(), "keiko-ui-missing-"));
     try {
       const deps = depsWithRegisteredProject(root);
       rmSync(root, { recursive: true, force: true });
-      const result = handleWorkspace(ctx(`/api/workspace?dir=${encodeURIComponent(root)}`), deps);
+      const result = await handleWorkspace(
+        ctx(`/api/workspace?dir=${encodeURIComponent(root)}`),
+        deps,
+      );
       expect(result.status).toBe(404);
       expect(result.body).toMatchObject({
         error: {
@@ -719,12 +742,12 @@ describe("GET /api/workspace", () => {
     }
   });
 
-  it("rejects a registered nested directory inside a parent workspace", () => {
+  it("rejects a registered nested directory inside a parent workspace", async () => {
     const root = createWorkspaceFixture();
     const nested = join(root, "nested");
     mkdirSync(nested, { recursive: true });
     try {
-      const result = handleWorkspace(
+      const result = await handleWorkspace(
         ctx(`/api/workspace?dir=${encodeURIComponent(nested)}`),
         depsWithRegisteredProject(nested),
       );

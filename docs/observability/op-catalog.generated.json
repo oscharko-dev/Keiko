@@ -723,6 +723,12 @@
       "package": "keiko-server"
     },
     {
+      "op": "atlassian.credential.rejected",
+      "category": "security",
+      "site": "packages/keiko-server/src/atlassian/credentialRoutes.ts:175",
+      "package": "keiko-server"
+    },
+    {
       "op": "chat.turn.started",
       "category": "gateway",
       "site": "packages/keiko-server/src/chat-handlers.ts:1688",

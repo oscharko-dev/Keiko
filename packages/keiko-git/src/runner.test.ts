@@ -13,12 +13,48 @@ import {
   rmSync,
   writeFileSync,
 } from "node:fs";
+import { createServer, type Server } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { classifyGitRemoteFailure } from "./classify.js";
-import { createGitProcessRunner, defaultGitProcessRunner, GIT_BASE_ARGS } from "./runner.js";
+import {
+  createGitProcessRunner,
+  defaultGitNetworkProcessRunner,
+  defaultGitProcessRunner,
+  GIT_BASE_ARGS,
+} from "./runner.js";
 
 let root: string;
+
+function startCredentialChallengeServer(): Promise<{
+  readonly server: Server;
+  readonly url: string;
+}> {
+  return new Promise((resolve) => {
+    const server = createServer((_request, response) => {
+      response.writeHead(401, { "WWW-Authenticate": 'Basic realm="Keiko"' });
+      response.end();
+    });
+    server.listen(0, "127.0.0.1", () => {
+      const address = server.address();
+      if (address === null || typeof address === "string")
+        throw new TypeError("expected TCP server");
+      resolve({ server, url: `http://127.0.0.1:${String(address.port)}/remote.git` });
+    });
+  });
+}
+
+function closeServer(server: Server): Promise<void> {
+  return new Promise((resolve, reject) => {
+    server.close((error) => {
+      if (error === undefined) {
+        resolve();
+      } else {
+        reject(error);
+      }
+    });
+  });
+}
 
 beforeEach(() => {
   root = realpathSync(mkdtempSync(join(tmpdir(), "keiko-git-runner-")));
@@ -166,6 +202,33 @@ describe("createGitProcessRunner", () => {
     expect(Buffer.byteLength(result.stdout, "utf8")).toBeLessThanOrEqual(1024);
   });
 
+  it.skipIf(process.platform === "win32")(
+    "shares the output cap across stdout and stderr",
+    async () => {
+      const binDir = mkdtempSync(join(tmpdir(), "keiko-git-output-bin-"));
+      const fakeGit = join(binDir, "git");
+      writeFileSync(fakeGit, "#!/bin/sh\nprintf 'abcdefgh'\nprintf 'ijklmnop' >&2\n", "utf8");
+      chmodSync(binDir, 0o700);
+      chmodSync(fakeGit, 0o700);
+
+      try {
+        const runner = createGitProcessRunner(() => ({ PATH: binDir }));
+        const result = await runner(["status"], {
+          cwd: root,
+          timeoutMs: 1_000,
+          maxBytes: 12,
+        });
+
+        expect(
+          Buffer.byteLength(result.stdout) + Buffer.byteLength(result.stderr),
+        ).toBeLessThanOrEqual(12);
+        expect(result.truncated).toBe(true);
+      } finally {
+        rmSync(binDir, { recursive: true, force: true });
+      }
+    },
+  );
+
   it("does not report truncation when output exactly fills the cap", async () => {
     const result = await defaultGitProcessRunner(
       [...GIT_BASE_ARGS, "-C", root, "rev-parse", "--is-inside-work-tree"],
@@ -191,6 +254,68 @@ describe("createGitProcessRunner", () => {
       );
 
       expect(result.exitCode).toBe(0);
+      expect(existsSync(marker)).toBe(false);
+    },
+  );
+
+  it.each([
+    ["core.fsmonitor", "hostile", "false"],
+    ["core.hooksPath", "hostile", process.platform === "win32" ? "NUL" : "/dev/null"],
+    ["core.sshCommand", "hostile", ""],
+    ["credential.helper", "hostile", ""],
+    ["core.pager", "hostile", "cat"],
+    ["pager.fetch", "true", "false"],
+    ["pager.pull", "true", "false"],
+    ["alias.fetch", "hostile", ""],
+    ["alias.pull", "hostile", ""],
+    ["protocol.ext.allow", "always", "never"],
+    ["fetch.recurseSubmodules", "true", "false"],
+    ["submodule.recurse", "true", "false"],
+  ] as const)("overrides repository network setting %s", async (key, configured, expected) => {
+    execFileSync("git", ["config", key, configured], { cwd: root });
+
+    const result = await defaultGitNetworkProcessRunner(["config", "--get", key], {
+      cwd: root,
+      timeoutMs: 1_000,
+      maxBytes: 1_024,
+    });
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout.trim()).toBe(expected);
+  });
+
+  it("does not execute a repository credential helper during network authentication", async () => {
+    const marker = join(root, "credential-helper-executed");
+    const { server, url } = await startCredentialChallengeServer();
+    execFileSync("git", ["config", "credential.helper", `!touch ${marker}`], { cwd: root });
+
+    try {
+      const result = await defaultGitNetworkProcessRunner([...GIT_BASE_ARGS, "ls-remote", url], {
+        cwd: root,
+        timeoutMs: 5_000,
+        maxBytes: 4_096,
+      });
+
+      expect(result.exitCode).not.toBe(0);
+      expect(existsSync(marker)).toBe(false);
+    } finally {
+      await closeServer(server);
+    }
+  });
+
+  it.skipIf(process.platform === "win32")(
+    "does not execute an ext protocol remote during a network operation",
+    async () => {
+      const marker = join(root, "ext-protocol-executed");
+      execFileSync("git", ["remote", "add", "hostile", `ext::touch ${marker}`], { cwd: root });
+
+      const result = await defaultGitNetworkProcessRunner(["ls-remote", "hostile"], {
+        cwd: root,
+        timeoutMs: 5_000,
+        maxBytes: 4_096,
+      });
+
+      expect(result.exitCode).not.toBe(0);
       expect(existsSync(marker)).toBe(false);
     },
   );

@@ -149,12 +149,6 @@ export const WIN_META: Readonly<Record<WindowType, WorkspaceDescriptorMeta>> = {
     authority: "user-confirm",
     persistence: "durable.config",
   },
-  keiko: {
-    lifecycle: ["live"],
-    trustBoundary: ["ui", "memory"],
-    authority: "user",
-    persistence: "memory-reference",
-  },
   settings: {
     lifecycle: ["viewing", "editing", "saved"],
     trustBoundary: ["ui"],
@@ -236,7 +230,7 @@ export const WIN_META: Readonly<Record<WindowType, WorkspaceDescriptorMeta>> = {
   },
   activity: {
     lifecycle: ["live", "archived"],
-    trustBoundary: ["ui"],
+    trustBoundary: ["ui", "tool", "evidence"],
     authority: "read-only",
     persistence: "transient",
   },

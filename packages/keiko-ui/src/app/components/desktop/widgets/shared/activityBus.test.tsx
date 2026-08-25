@@ -1,6 +1,12 @@
 import { act, renderHook } from "@testing-library/react";
+import type { CodingWorkbenchRuntimeSseEvent } from "@oscharko-dev/keiko-contracts";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { getActivity, logActivity, useActivitySubscription } from "./activityBus";
+import {
+  getActivity,
+  logActivity,
+  logRuntimeActivityEvents,
+  useActivitySubscription,
+} from "./activityBus";
 
 describe("activityBus", () => {
   beforeEach(() => {
@@ -10,6 +16,7 @@ describe("activityBus", () => {
   });
 
   afterEach(() => {
+    delete window.__keikoActivity;
     vi.useRealTimers();
   });
 
@@ -40,5 +47,30 @@ describe("activityBus", () => {
 
     unmount();
     expect(removeEventListener).toHaveBeenCalledWith("keiko-activity", expect.any(Function));
+  });
+
+  it("projects body-free runtime events once into the activity timeline (#3108)", () => {
+    const event: CodingWorkbenchRuntimeSseEvent = {
+      schemaVersion: "1",
+      cursor: "cursor-1",
+      sequence: 1,
+      occurredAt: "2026-06-15T10:00:01.000Z",
+      kind: "runtime-event",
+      runId: "run-1",
+      state: "awaiting-approval",
+      revision: 2,
+      eventKind: "permission-requested",
+    };
+
+    act(() => logRuntimeActivityEvents([event, event]));
+
+    expect(getActivity()).toHaveLength(1);
+    expect(getActivity()[0]).toMatchObject({
+      id: "run-1:cursor-1",
+      type: "approval",
+      labelKey: "activity.event.permissionRequested",
+      agent: "runtime",
+      time: Date.parse(event.occurredAt),
+    });
   });
 });

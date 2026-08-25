@@ -36,7 +36,7 @@ import type {
 } from "./local-knowledge.js";
 import type { HtmlManualSourceKind } from "./html-manual-source.js";
 import type { KnowledgePodRetrievalActivity } from "./local-knowledge-retrieval-activity.js";
-import type { MemorySensitivity, MemorySourceKind, MemoryStatus } from "./memory.js";
+import type { MemorySensitivity, MemorySourceKind, MemoryStatus } from "./memory-contracts.js";
 import type {
   MemoryForget,
   MemoryProposal,

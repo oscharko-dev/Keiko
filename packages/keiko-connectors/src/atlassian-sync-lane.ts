@@ -316,6 +316,9 @@ interface FetchRunState<TRef extends AtlassianSyncItemRef> {
   // than one positional occurrence (KEIKO-0598). Materialized to a readonly array only at the
   // terminal-outcome return points.
   readonly enumeratedItemKeys: Set<string>;
+  // A missing outcome is terminal for a logical key, including duplicate refs that are still in
+  // flight. Their later item outcomes count as settled work but must not resurrect deleted data.
+  readonly missingItemKeys: Set<string>;
   fatalReason: AtlassianSyncFailureReason | undefined;
   // Set once this run has produced its terminal outcome (KEIKO-0758). `emitProgress` becomes a
   // no-op past this point: a hard backstop so no `onProgress` callback can ever fire after
@@ -333,37 +336,49 @@ function cancelled<TRef extends AtlassianSyncItemRef>(state: FetchRunState<TRef>
   return state.deps.signal?.aborted === true;
 }
 
+function removeItemsByKey(items: { readonly itemKey: string }[], itemKey: string): void {
+  for (let index = items.length - 1; index >= 0; index -= 1) {
+    if (items[index]?.itemKey === itemKey) items.splice(index, 1);
+  }
+}
+
 function applyItemOutcome<TRef extends AtlassianSyncItemRef>(
   state: FetchRunState<TRef>,
   ref: TRef,
   outcome: AtlassianSyncItemFetchOutcome,
 ): void {
   if (outcome.kind === "item") {
-    state.items.push(outcome.item);
+    if (!state.missingItemKeys.has(ref.itemKey)) state.items.push(outcome.item);
     state.progress.fetchedItems += 1;
   } else if (outcome.kind === "skipped") {
     state.failures.push({ itemKey: ref.itemKey, reason: outcome.reason });
     state.progress.skippedItems += 1;
     state.progress.failedItems += 1;
   } else if (outcome.kind === "missing") {
+    state.missingItemKeys.add(ref.itemKey);
     // Vanished upstream between enumeration and fetch (404): drop it from the enumerated set so
     // the downstream diff reports it removed — a natural deletion, not a failure. `Set.delete` is
     // total (removes the one stored entry outright), unlike the former indexOf/splice pair which
-    // only removed a single positional occurrence and left a surviving duplicate behind.
+    // only removed a single positional occurrence and left a surviving duplicate behind
+    // (KEIKO-0598). ALSO drop any item this ref's key already contributed to state.items so a
+    // duplicate ref whose earlier fetch had returned `item` cannot leave that item stranded once
+    // the later fetch reports the key gone (KEIKO-0598 follow-up: without this the two states
+    // diverged — state.items kept the fetched item while enumeratedItemKeys deleted the key —
+    // and applyConnectorSyncRun then indexed the item, treated the absent enumeration key as a
+    // removal signal, and pruned the freshly-indexed document, persisting a fingerprint that
+    // permanently masked the item on subsequent unchanged syncs).
     state.enumeratedItemKeys.delete(ref.itemKey);
+    removeItemsByKey(state.items, ref.itemKey);
+    // `progress.fetchedItems` is intentionally NOT decremented here: it counts every ref whose
+    // fetch returned an `item` outcome (a completion-accounting signal for the pipeline's
+    // `dispatchedAll = fetched + skipped >= refs.length` check), not the size of state.items.
+    // Decrementing would make the pipeline classify the run as truncated even though every ref
+    // was dispatched and settled.
     state.progress.skippedItems += 1;
   } else {
     state.fatalReason ??= outcome.reason;
   }
   emitProgress(state);
-}
-
-async function fetchOne<TRef extends AtlassianSyncItemRef>(
-  state: FetchRunState<TRef>,
-  ref: TRef,
-): Promise<void> {
-  const outcome = await state.deps.source.fetchItem(ref, state.context);
-  applyItemOutcome(state, ref, outcome);
 }
 
 // Bounded worker pool: at most `maxConcurrency` fetches in flight; stops dispatching on
@@ -378,6 +393,39 @@ async function fetchOne<TRef extends AtlassianSyncItemRef>(
 // terminal outcome. The `terminated` flag additionally stops siblings from dispatching any NEW
 // fetch once the pool is known to be done, instead of letting each one discover the same
 // exhaustion independently.
+// KEIKO-0758 follow-up: build a lane-scoped AbortController that fires when any of the pool's
+// termination triggers strikes — the caller's own abort signal, a worker throw, or the run
+// deadline elapsing. The signal is exposed to `fetchItem` via the per-worker context, so any
+// port that honors AbortSignal cancels its in-flight HTTP request instead of waiting for its
+// bounded timeout. The old `allSettled` behavior on top still guarantees no orphaned mutation
+// after the pool returns.
+function forkLaneAbort<TRef extends AtlassianSyncItemRef>(
+  state: FetchRunState<TRef>,
+): {
+  readonly signal: AbortSignal;
+  readonly abort: () => void;
+  readonly dispose: () => void;
+} {
+  const controller = new AbortController();
+  const upstream = state.deps.signal;
+  const onUpstreamAbort = (): void => {
+    controller.abort();
+  };
+  if (upstream !== undefined) {
+    if (upstream.aborted) controller.abort();
+    else upstream.addEventListener("abort", onUpstreamAbort, { once: true });
+  }
+  return {
+    signal: controller.signal,
+    abort: (): void => {
+      controller.abort();
+    },
+    dispose: (): void => {
+      if (upstream !== undefined) upstream.removeEventListener("abort", onUpstreamAbort);
+    },
+  };
+}
+
 async function fetchAllItems<TRef extends AtlassianSyncItemRef>(
   state: FetchRunState<TRef>,
   refs: readonly TRef[],
@@ -386,16 +434,44 @@ async function fetchAllItems<TRef extends AtlassianSyncItemRef>(
   let cursor = 0;
   let terminated = false;
   let firstError: Error | undefined;
+  const laneAbort = forkLaneAbort(state);
+  // Per-worker context carries the lane-scoped signal so `fetchItem` — via any port that honors
+  // AbortSignal — cancels in-flight requests as soon as `laneAbort.abort()` fires. Ports that
+  // don't honor signal still block until their own timeout, but the terminated flag stops the
+  // pool from dispatching any NEW work regardless.
+  const workerContext: AtlassianSyncFetchContext = {
+    ...state.context,
+    signal: laneAbort.signal,
+  };
+  const fetchWithLaneSignal = async (ref: TRef): Promise<void> => {
+    const outcome = await state.deps.source.fetchItem(ref, workerContext);
+    applyItemOutcome(state, ref, outcome);
+  };
   const worker = async (): Promise<void> => {
     while (cursor < refs.length) {
       if (terminated || cancelled(state) || state.fatalReason !== undefined) return;
+      if (state.context.deadlineExceeded()) {
+        // KEIKO-0758 follow-up: stop dispatching new work once the run deadline is past, so a
+        // slow last-worker cannot keep pulling refs off the shared cursor after the caller's
+        // budget has already expired. Fire the lane abort so any sibling still awaiting a
+        // fetch that honors the signal wakes up too.
+        terminated = true;
+        laneAbort.abort();
+        return;
+      }
       const ref = refs[cursor];
       cursor += 1;
       if (ref === undefined) return;
       try {
-        await fetchOne(state, ref);
+        await fetchWithLaneSignal(ref);
       } catch (error) {
         terminated = true;
+        // KEIKO-0758 follow-up: fire the lane abort so in-flight siblings' fetches cancel on
+        // first terminal error — previously we set `terminated=true` (which only stopped NEW
+        // dispatches) but let each already-in-flight fetch run to completion on the port's own
+        // timeout. Ports that honor AbortSignal now short-circuit; those that don't fall back
+        // to the timeout as before.
+        laneAbort.abort();
         // Every throw on this path is an AtlassianSyncBudgetExhausted (an Error subclass) in
         // practice; the fallback keeps this total and type-safe if an injected port ever violates
         // that contract, without ever losing the caught instance's identity/type for the common
@@ -405,7 +481,11 @@ async function fetchAllItems<TRef extends AtlassianSyncItemRef>(
       }
     }
   };
-  await Promise.allSettled(Array.from({ length: concurrency }, () => worker()));
+  try {
+    await Promise.allSettled(Array.from({ length: concurrency }, () => worker()));
+  } finally {
+    laneAbort.dispose();
+  }
   if (firstError !== undefined) throw firstError;
 }
 
@@ -480,6 +560,7 @@ function buildRunState<TRef extends AtlassianSyncItemRef>(
     items: [],
     failures: [],
     enumeratedItemKeys: new Set(),
+    missingItemKeys: new Set(),
     fatalReason: undefined,
     terminal: false,
   };

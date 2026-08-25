@@ -1,17 +1,14 @@
 import type { ChildProcess } from "node:child_process";
 import { EventEmitter } from "node:events";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 
 import {
   createGitHubCodeContextApiPort,
   GitHubCodeContextPortError,
 } from "./githubCodeContextPort.js";
-import {
-  createJiraCodeContextHttpPort,
-  JiraCodeContextPortError,
-  parseJiraCodeContextPortConfig,
-} from "./jiraCodeContextPort.js";
+import { createGovernedJiraCodeContextHttpPort } from "./jiraCodeContextPort.js";
 import { DEFAULT_SANDBOX_POLICY, type SpawnFn } from "@oscharko-dev/keiko-tools";
+import type { AtlassianHttpBodyPort } from "@oscharko-dev/keiko-connectors";
 import type { WorkspaceInfo } from "@oscharko-dev/keiko-contracts";
 
 const WORKSPACE: WorkspaceInfo = {
@@ -176,116 +173,96 @@ function fakeChild(exitCode: number, stdout: string): unknown {
 }
 
 describe("jira code context port", () => {
-  const CONFIG = { baseUrl: "https://example.atlassian.net", email: "a@b.c", apiToken: "token-1" };
-
-  function jsonResponse(body: unknown, url = ""): Response {
-    return {
-      ok: true,
-      status: 200,
-      url,
-      text: () => Promise.resolve(JSON.stringify(body)),
-    } as unknown as Response;
-  }
-
-  it("parses config only when every field is present", () => {
-    expect(parseJiraCodeContextPortConfig({})).toBeUndefined();
-    expect(parseJiraCodeContextPortConfig({ KEIKO_JIRA_BASE_URL: "https://x" })).toBeUndefined();
-    expect(
-      parseJiraCodeContextPortConfig({
-        KEIKO_JIRA_BASE_URL: "https://example.atlassian.net",
-        KEIKO_JIRA_EMAIL: "a@b.c",
-        KEIKO_JIRA_API_TOKEN: "t",
-      }),
-    ).toMatchObject({ baseUrl: "https://example.atlassian.net" });
-  });
-
-  it("rejects non-https base urls and embedded credentials fail-closed", () => {
-    expect(() =>
-      createJiraCodeContextHttpPort({ ...CONFIG, baseUrl: "http://example.atlassian.net" }),
-    ).toThrow(JiraCodeContextPortError);
-    expect(() =>
-      createJiraCodeContextHttpPort({ ...CONFIG, baseUrl: "https://user:pw@example.net" }),
-    ).toThrow(JiraCodeContextPortError);
-  });
-
-  it("pins requests to the configured host and GET /rest/api/ paths", async () => {
-    const seen: string[] = [];
-    const port = createJiraCodeContextHttpPort(CONFIG, {
-      fetchFn: ((input: URL) => {
-        seen.push(String(input));
-        return Promise.resolve(jsonResponse({ fields: {} }));
-      }) as unknown as typeof fetch,
+  it("reads through exactly one governed Jira credential", async () => {
+    const requests: unknown[] = [];
+    const port = createGovernedJiraCodeContextHttpPort({
+      custody: {
+        list: () => [
+          {
+            authRef: "atlassian-cred:AAAAAAAAAAAAAAAAAAAAAA",
+            provider: "jira",
+            baseUrl: "https://example.atlassian.net",
+          },
+        ],
+      } as never,
+      httpBodyPortFactory: (): AtlassianHttpBodyPort => (request) => {
+        requests.push(request);
+        return Promise.resolve({
+          kind: "response" as const,
+          status: 200,
+          bodyText: '{"fields":{"summary":"Issue"}}',
+          bodyBytes: 30,
+          truncated: false,
+        });
+      },
     });
 
-    await port.readJson({ method: "GET", path: "/rest/api/3/issue/KEIKO-1", query: {} });
-    expect(seen[0]).toBe("https://example.atlassian.net/rest/api/3/issue/KEIKO-1");
+    await expect(
+      port.readJson({
+        method: "GET",
+        path: "/rest/api/3/issue/PROJ-1",
+        query: { fields: "summary" },
+      }),
+    ).resolves.toMatchObject({ fields: { summary: "Issue" } });
+    expect(requests).toEqual([
+      expect.objectContaining({
+        method: "GET",
+        url: "https://example.atlassian.net/rest/api/3/issue/PROJ-1?fields=summary",
+      }),
+    ]);
+  });
+
+  it.each([
+    [[]],
+    [
+      [
+        {
+          authRef: "atlassian-cred:AAAAAAAAAAAAAAAAAAAAAA",
+          provider: "jira",
+          baseUrl: "https://one.example",
+        },
+        {
+          authRef: "atlassian-cred:BBBBBBBBBBBBBBBBBBBBBB",
+          provider: "jira",
+          baseUrl: "https://two.example",
+        },
+      ],
+    ],
+  ] as const)("rejects ambiguous Jira credential selection", async (credentials) => {
+    const port = createGovernedJiraCodeContextHttpPort({
+      custody: { list: (): typeof credentials => credentials } as never,
+      httpBodyPortFactory: (): AtlassianHttpBodyPort => () =>
+        Promise.reject(new Error("must not execute")),
+    });
 
     await expect(
-      port.readJson({ method: "GET", path: "/other/path", query: {} }),
+      port.readJson({ method: "GET", path: "/rest/api/3/issue/PROJ-1", query: {} }),
     ).rejects.toMatchObject({ code: "jira-denied" });
   });
 
-  it("rejects cross-host redirects and keeps auth material off errors", async () => {
-    const fetchFn = vi.fn<typeof fetch>(() =>
-      Promise.resolve(
-        new Response(undefined, {
-          status: 302,
-          headers: { location: "https://evil.example.com/rest/api/3/issue/K-1" },
-        }),
-      ),
-    );
-    const port = createJiraCodeContextHttpPort(CONFIG, {
-      fetchFn,
+  it.each([
+    "/rest/api/../admin",
+    "/rest/api/%2e%2e/admin",
+    "//evil.example/rest/api/3/issue/PROJ-1",
+    "not-a-path",
+  ])("rejects a path outside the normalized REST API boundary: %s", async (path) => {
+    const port = createGovernedJiraCodeContextHttpPort({
+      custody: {
+        list: () => [
+          {
+            authRef: "atlassian-cred:AAAAAAAAAAAAAAAAAAAAAA",
+            provider: "jira",
+            baseUrl: "https://example.atlassian.net",
+          },
+        ],
+      } as never,
+      httpBodyPortFactory: (): AtlassianHttpBodyPort => () =>
+        Promise.reject(new Error("must not execute")),
     });
-    const failure = await port
-      .readJson({ method: "GET", path: "/rest/api/3/issue/K-1", query: {} })
-      .catch((error: unknown) => error);
-    expect(failure).toMatchObject({ code: "jira-denied" });
-    expect((failure as Error).message).not.toContain("token-1");
-    expect(fetchFn).toHaveBeenCalledOnce();
-    expect(fetchFn.mock.calls[0]?.[1]).toMatchObject({ redirect: "manual" });
-  });
 
-  it("follows only same-origin redirects and preserves the bounded request policy", async () => {
-    const cancelRedirectBody = vi.fn();
-    const fetchFn = vi
-      .fn<typeof fetch>()
-      .mockResolvedValueOnce(
-        new Response(new ReadableStream({ cancel: cancelRedirectBody }), {
-          status: 307,
-          headers: { location: "/rest/api/3/issue/K-1?redirected=true" },
-        }),
-      )
-      .mockResolvedValueOnce(jsonResponse({ fields: { summary: "ok" } }));
-    const port = createJiraCodeContextHttpPort(CONFIG, { fetchFn });
-
-    await expect(
-      port.readJson({ method: "GET", path: "/rest/api/3/issue/K-1", query: {} }),
-    ).resolves.toEqual({ fields: { summary: "ok" } });
-    expect(fetchFn).toHaveBeenCalledTimes(2);
-    const redirectedInput = fetchFn.mock.calls[1]?.[0];
-    expect(redirectedInput).toBeInstanceOf(URL);
-    if (!(redirectedInput instanceof URL)) throw new TypeError("expected redirected URL");
-    expect(redirectedInput.href).toBe(
-      "https://example.atlassian.net/rest/api/3/issue/K-1?redirected=true",
-    );
-    expect(fetchFn.mock.calls[1]?.[1]).toMatchObject({ redirect: "manual" });
-    expect(cancelRedirectBody).toHaveBeenCalledOnce();
-  });
-
-  it("bounds oversized responses fail-closed", async () => {
-    const port = createJiraCodeContextHttpPort(CONFIG, {
-      fetchFn: (() =>
-        Promise.resolve({
-          ok: true,
-          status: 200,
-          url: "",
-          text: () => Promise.resolve(`"${"x".repeat(5 * 1024 * 1024)}"`),
-        } as unknown as Response)) as unknown as typeof fetch,
+    await expect(port.readJson({ method: "GET", path, query: {} })).rejects.toMatchObject({
+      code: "jira-denied",
     });
-    await expect(
-      port.readJson({ method: "GET", path: "/rest/api/3/issue/K-1", query: {} }),
-    ).rejects.toMatchObject({ code: "jira-invalid-json" });
   });
 });
 

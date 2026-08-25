@@ -133,12 +133,6 @@ describe("Workspace shell accessibility", () => {
           onToggleWindowPalette={vi.fn()}
           onSelectWindow={vi.fn()}
           onCloseWindowPalette={vi.fn()}
-          mode="manual"
-          selectedModel="gpt-5.5"
-          projectName="Keiko"
-          branchLabel="codex/issue-530-audit"
-          shellStatusLabel="Ready"
-          evidenceStatusLabel="Evidence ready"
         />
         <WsContext.Provider value={wsContextValue}>
           <InspectorPanel />
@@ -194,12 +188,6 @@ describe("Workspace shell accessibility", () => {
             onToggleWindowPalette={vi.fn()}
             onSelectWindow={vi.fn()}
             onCloseWindowPalette={vi.fn()}
-            mode="manual"
-            selectedModel="gpt-5.5"
-            projectName="Keiko"
-            branchLabel="dev"
-            shellStatusLabel="Ready"
-            evidenceStatusLabel="Evidence ready"
           />
         </div>,
       );
@@ -219,12 +207,6 @@ describe("Workspace shell accessibility", () => {
         onToggleWindowPalette={vi.fn()}
         onSelectWindow={vi.fn()}
         onCloseWindowPalette={vi.fn()}
-        mode="autonomous"
-        selectedModel="gpt-5.5"
-        projectName="Keiko"
-        branchLabel="dev"
-        shellStatusLabel="Ready"
-        evidenceStatusLabel="Evidence ready"
       />,
     );
 

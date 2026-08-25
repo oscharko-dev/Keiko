@@ -20,7 +20,8 @@
 // non-secret; scope-coordinate strings are run through the audit redactor at persist time
 // in case a user-supplied identifier happens to match a credential shape.
 
-import type { MemoryAuditInitiatorSurface, MemoryId, MemoryScope } from "./memory-barrel.js";
+import type { MemoryId, MemoryScope } from "./memory-contracts.js";
+import type { MemoryAuditInitiatorSurface } from "./memory-operations.js";
 
 // ─── Schema version ───────────────────────────────────────────────────────────
 // Pinned to "1". A breaking change introduces a NEW literal member rather than mutating

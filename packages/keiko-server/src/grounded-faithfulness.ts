@@ -404,6 +404,21 @@ export function missingCitationMarker(nowMs: number): UncertaintyMarker {
   };
 }
 
+/**
+ * Body-free uncertainty for a grounded answer that received governed memory outside the evidence
+ * pack. A valid repository citation does not authenticate a separate memory-derived assertion.
+ */
+export function uncitedMemoryContextMarker(nowMs: number): UncertaintyMarker {
+  return {
+    kind: "unsupported-citation",
+    claim:
+      "The answer received governed memory context outside retrieved evidence. Treat claims " +
+      "derived from that memory as uncited and unverified.",
+    impactedAtomIds: [],
+    emittedAtMs: nowMs,
+  };
+}
+
 /** Marker for a truncated (finishReason "length") completion. */
 export function incompleteAnswerMarker(nowMs: number): UncertaintyMarker {
   return {
@@ -588,19 +603,18 @@ function collectExcerptText(
 // never reaches the judge (empty excerpt, truncated excerpt) — `judgedClaims` below must count only
 // the former, or the entailment-stage diagnostic ("unavailable for X of Y judged claims") reports
 // judge activity that never happened.
-interface ClaimVerdictOutcome {
-  readonly verdict: EntailmentVerdict;
-  readonly submittedToJudge: boolean;
+interface JudgeableClaim {
+  readonly claimText: string;
+  readonly excerptText: string;
+  readonly citedPaths: readonly string[];
 }
 
-async function verdictForClaim(
+function judgeableClaimFor(
   claim: CitedClaim,
   validCitations: readonly ParsedInlineCitation[],
   resolveExcerptText: ExcerptTextResolver,
-  judge: EntailmentJudge,
   maxExcerptChars: number,
-  signal: AbortSignal | undefined,
-): Promise<ClaimVerdictOutcome> {
+): JudgeableClaim | undefined {
   const { text: excerptText, truncated } = collectExcerptText(
     validCitations,
     resolveExcerptText,
@@ -608,16 +622,27 @@ async function verdictForClaim(
   );
   if (excerptText.length === 0 || claim.claimText.length === 0) {
     // No usable excerpt/claim text to judge against — undecidable, never assumed supported.
-    return { verdict: "unavailable", submittedToJudge: false };
+    return undefined;
   }
   if (truncated) {
     // The judge would only see a prefix of the cited evidence, exactly like an exhausted
     // maxClaims/maxTotalMs budget — count it unavailable rather than risk a "supported" verdict
     // that never saw the excerpt text past the cut.
-    return { verdict: "unavailable", submittedToJudge: false };
+    return undefined;
   }
-  const verdict = await judge.judge({ claimText: claim.claimText, excerptText }, signal);
-  return { verdict, submittedToJudge: true };
+  return {
+    claimText: claim.claimText,
+    excerptText,
+    citedPaths: [...new Set(validCitations.map((citation) => citation.scopePath))],
+  };
+}
+
+async function verdictForJudgeableClaim(
+  claim: JudgeableClaim,
+  judge: EntailmentJudge,
+  signal: AbortSignal | undefined,
+): Promise<EntailmentVerdict> {
+  return judge.judge({ claimText: claim.claimText, excerptText: claim.excerptText }, signal);
 }
 
 /**
@@ -639,6 +664,42 @@ function entailmentBudgetSignal(
   return signal === undefined ? deadline : AbortSignal.any([signal, deadline]);
 }
 
+interface ScheduledClaim {
+  readonly claim: JudgeableClaim;
+  readonly verdict: Promise<EntailmentVerdict>;
+}
+
+function scheduleClaimJudges(
+  answerText: string,
+  membership: CitationReconciliation,
+  resolveExcerptText: ExcerptTextResolver,
+  judge: EntailmentJudge,
+  options: EntailmentOptions,
+  budget: AbortSignal | undefined,
+): { readonly scheduled: readonly ScheduledClaim[]; readonly unavailableClaims: number } {
+  const membershipFailed = new Set(membership.unsupported.map(citationDedupKey));
+  let unavailableClaims = 0;
+  const scheduled: ScheduledClaim[] = [];
+  for (const claim of segmentCitedClaims(answerText)) {
+    const valid = claim.citations.filter((c) => !membershipFailed.has(citationDedupKey(c)));
+    if (valid.length === 0) continue;
+    if (scheduled.length >= options.maxClaims || budget?.aborted === true) {
+      unavailableClaims += 1;
+      continue;
+    }
+    const judgeable = judgeableClaimFor(claim, valid, resolveExcerptText, options.maxExcerptChars);
+    if (judgeable === undefined) {
+      unavailableClaims += 1;
+      continue;
+    }
+    scheduled.push({
+      claim: judgeable,
+      verdict: verdictForJudgeableClaim(judgeable, judge, budget),
+    });
+  }
+  return { scheduled, unavailableClaims };
+}
+
 export async function reconcileClaimEntailment(
   answerText: string,
   membership: CitationReconciliation,
@@ -647,42 +708,29 @@ export async function reconcileClaimEntailment(
   options: EntailmentOptions = DEFAULT_ENTAILMENT_OPTIONS,
   signal?: AbortSignal,
 ): Promise<EntailmentReconciliation> {
-  const membershipFailed = new Set(membership.unsupported.map(citationDedupKey));
   const budget = entailmentBudgetSignal(options.maxTotalMs, signal);
   const unentailed: UnentailedClaim[] = [];
-  let judgedClaims = 0;
-  let unavailableClaims = 0;
-  for (const claim of segmentCitedClaims(answerText)) {
-    const valid = claim.citations.filter((c) => !membershipFailed.has(citationDedupKey(c)));
-    if (valid.length === 0) {
-      continue;
-    }
-    // Budget exhausted (claim ceiling reached, deadline hit, or caller cancelled): stop calling the
-    // judge and count the claim as unavailable rather than dropping it silently or assuming
-    // support. The ceiling is checked AFTER the membership filter so a claim already reported by
-    // `unsupportedCitationMarker` is not counted a second time here.
-    if (judgedClaims >= options.maxClaims || budget?.aborted === true) {
-      unavailableClaims += 1;
-      continue;
-    }
-    const { verdict, submittedToJudge } = await verdictForClaim(
-      claim,
-      valid,
-      resolveExcerptText,
-      judge,
-      options.maxExcerptChars,
-      budget,
-    );
-    if (submittedToJudge) {
-      judgedClaims += 1;
-    }
-    if (verdict === "unsupported") {
-      unentailed.push({ citedPaths: [...new Set(valid.map((c) => c.scopePath))] });
-    } else if (verdict === "unavailable") {
+  const scheduledClaims = scheduleClaimJudges(
+    answerText,
+    membership,
+    resolveExcerptText,
+    judge,
+    options,
+    budget,
+  );
+  let unavailableClaims = scheduledClaims.unavailableClaims;
+  const { scheduled } = scheduledClaims;
+  const outcomes = await Promise.all(scheduled.map(({ verdict }) => verdict));
+  for (const [index, outcome] of outcomes.entries()) {
+    const claim = scheduled[index];
+    if (claim === undefined) continue;
+    if (outcome === "unsupported") {
+      unentailed.push({ citedPaths: claim.claim.citedPaths });
+    } else if (outcome === "unavailable") {
       unavailableClaims += 1;
     }
   }
-  return { unentailed, judgedClaims, unavailableClaims };
+  return { unentailed, judgedClaims: scheduled.length, unavailableClaims };
 }
 
 /**

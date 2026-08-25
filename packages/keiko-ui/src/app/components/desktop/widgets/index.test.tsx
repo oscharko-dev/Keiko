@@ -1,5 +1,5 @@
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { StrictMode, useEffect, useRef, type ReactNode } from "react";
+import { StrictMode, useEffect, useRef, type ReactElement, type ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from "vitest";
 import type { Chat } from "@/lib/types";
 import type { WindowRenderContext } from "../windows/WindowsRegistry";
@@ -224,7 +224,6 @@ vi.mock("./panels/NotificationsPanel", () => ({
 }));
 vi.mock("./panels/ResourcesPanel", () => ({ ResourcesPanel: () => <div>ResourcesPanel</div> }));
 vi.mock("./panels/TimelinePanel", () => ({ TimelinePanel: () => <div>TimelinePanel</div> }));
-vi.mock("./panels/KeikoTwinPanel", () => ({ KeikoTwinPanel: () => <div>KeikoTwinPanel</div> }));
 vi.mock("./panels/SettingsPanel", () => ({
   SettingsPanel: ({
     openUpdatesWindow,
@@ -517,8 +516,8 @@ vi.mock("./cards/AgentRunWidget", () => ({
     <div data-testid="agent-widget">{`${String(cfg.workflow)}:${linkedRoot ?? ""}:${linkedFilePath ?? ""}`}</div>
   ),
 }));
-vi.mock("./cards/IntegrationsWidget", () => ({
-  IntegrationsWidget: () => <div>IntegrationsWidget</div>,
+vi.mock("./connectors/AtlassianConnectorsPanel", () => ({
+  AtlassianConnectorsPanel: (): ReactElement => <div>AtlassianConnectorsPanel</div>,
 }));
 vi.mock("./cards/ConnectorPickerWidget", () => ({
   ConnectorPickerWidget: ({

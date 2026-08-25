@@ -182,7 +182,7 @@ describe("runGroundedRetrievalLatencyGate", () => {
     }
   }
 
-  const FAST = { warmupIterations: 0, iterations: 1, regressionProbe: { judgeDelayMs: 200 } };
+  const FAST = { warmupIterations: 0, iterations: 1, regressionProbe: { judgeDelayMs: 1300 } };
 
   it("measures the real pipeline, reports both percentiles, and proves the probe fires", async () => {
     await withBudgetFile(FAST, async (budgetPath) => {
@@ -277,14 +277,9 @@ describe("committed budget document", () => {
     expect(budget.p95BudgetMs).toBeGreaterThanOrEqual(budget.p50BudgetMs);
   });
 
-  // The probe's delay lands once per cited claim. If a future edit shrank either the delay or the
-  // fixture's claim count to something the budget absorbs, the gate would keep reporting PASS while
-  // proving nothing — so the claim count is read from the module that owns it, not written here.
-  it("sets a probe delay whose per-claim fan-out clears the p95 ceiling with margin", async () => {
-    const { FIXTURE_ANSWER_CLAIMS } = await import("@oscharko-dev/keiko-server");
-
-    expect(budget.regressionProbe.judgeDelayMs * FIXTURE_ANSWER_CLAIMS).toBeGreaterThan(
-      budget.p95BudgetMs * 1.5,
-    );
+  // Judge calls run in bounded parallel, so elapsed time includes one delay interval rather than
+  // their sum. The configured interval itself must clear the p95 ceiling with margin.
+  it("sets a parallel judge delay that clears the p95 ceiling with margin", () => {
+    expect(budget.regressionProbe.judgeDelayMs).toBeGreaterThan(budget.p95BudgetMs * 1.5);
   });
 });

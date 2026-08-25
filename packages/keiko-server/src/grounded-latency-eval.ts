@@ -38,8 +38,8 @@ const FIXTURE_NOW_MS = 1_700_000_000_000;
 
 /**
  * A cited answer whose claim count sits at the stage's `maxClaims` ceiling, so the measurement
- * covers the full sequential judge fan-out rather than a single call. Exported because the suite
- * asserts an injected per-judge delay lands once per claim: hard-coding the count there would
+ * covers the full bounded parallel judge fan-out rather than a single call. Exported because the
+ * suite asserts every cited claim reaches the judge: hard-coding the count there would
  * restate a number this module owns, and would silently weaken the moment the fixture changed.
  */
 export const FIXTURE_ANSWER_CLAIMS = 8;
@@ -49,6 +49,8 @@ export interface GroundedLatencySample {
   readonly retrievalMs: number;
   /** Real citation reconciliation + claim-entailment pass over the answer the model returned. */
   readonly entailmentMs: number;
+  /** Claims actually submitted to the judge; guards against a vacuous fixture. */
+  readonly judgedClaims: number;
   readonly totalMs: number;
 }
 
@@ -163,9 +165,10 @@ function latencyFixtureAnswer(): string {
 // A fixed judge: no network, no model, constant verdict. `injectedJudgeDelayMs` is the regression
 // probe's only lever, so a failing gate run means the measured code path got slower, not that a
 // provider did.
-function fixedJudge(injectedJudgeDelayMs: number): EntailmentJudge {
+function fixedJudge(injectedJudgeDelayMs: number, onJudge: () => void): EntailmentJudge {
   return {
     judge: async (): Promise<"supported"> => {
+      onJudge();
       if (injectedJudgeDelayMs > 0) {
         await new Promise((resolve) => setTimeout(resolve, injectedJudgeDelayMs));
       }
@@ -174,19 +177,24 @@ function fixedJudge(injectedJudgeDelayMs: number): EntailmentJudge {
   };
 }
 
-async function measureEntailmentMs(injectedJudgeDelayMs: number): Promise<number> {
+async function measureEntailment(
+  injectedJudgeDelayMs: number,
+): Promise<{ readonly entailmentMs: number; readonly judgedClaims: number }> {
   const packs = [latencyFixturePack()];
   const answerText = latencyFixtureAnswer();
+  let judgedClaims = 0;
   const started = performance.now();
   const membership = reconcileInlineCitations(answerText, buildPackCitationIndex(packs));
   await reconcileClaimEntailment(
     answerText,
     membership,
     buildPackExcerptTextResolver(packs),
-    fixedJudge(injectedJudgeDelayMs),
+    fixedJudge(injectedJudgeDelayMs, () => {
+      judgedClaims += 1;
+    }),
     DEFAULT_ENTAILMENT_OPTIONS,
   );
-  return performance.now() - started;
+  return { entailmentMs: performance.now() - started, judgedClaims };
 }
 
 /**
@@ -200,6 +208,6 @@ export async function runGroundedRetrievalLatencyEval(
   const retrievalStarted = performance.now();
   await runGroundedRetrievalQualityEval("baseline");
   const retrievalMs = performance.now() - retrievalStarted;
-  const entailmentMs = await measureEntailmentMs(options.injectedJudgeDelayMs ?? 0);
-  return { retrievalMs, entailmentMs, totalMs: retrievalMs + entailmentMs };
+  const { entailmentMs, judgedClaims } = await measureEntailment(options.injectedJudgeDelayMs ?? 0);
+  return { retrievalMs, entailmentMs, judgedClaims, totalMs: retrievalMs + entailmentMs };
 }

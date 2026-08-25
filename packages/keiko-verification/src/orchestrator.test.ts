@@ -292,6 +292,26 @@ describe("runVerification — cancellation (D5)", () => {
 });
 
 describe("runVerification — memory breach (D3) and no monitor-interval leak", () => {
+  it("refuses a requested ceiling when the monitor cannot enforce a complete process tree", async () => {
+    const ws = makeWorkspace();
+    const rec = recordingSpawn();
+    const monitor = { ...fakeMonitor(), canEnforceProcessTreeMemory: (): boolean => false };
+    const limits = { ...DEFAULT_VERIFICATION_LIMITS, maxMemoryBytes: 64 * 1024 * 1024 };
+    const report = await runVerification(planOf([step({ limits })], ws.info.root), {
+      workspace: ws.info,
+      spawn: rec.fn,
+      monitor,
+      now: () => 1,
+      networkEnforcement: "inherit",
+    });
+    expect(report.results[0]?.status).toBe("denied");
+    expect(report.results[0]?.detail).toContain("process-tree");
+    expect(
+      report.results[0]?.appliedLimits.find((limit) => limit.dimension === "memory")?.enforced,
+    ).toBe(false);
+    expect(rec.calls()).toHaveLength(0);
+  });
+
   it("a fired monitor breach → resource-exceeded with memory breached:true", async () => {
     const ws = makeWorkspace();
     const child = makeFakeChild();

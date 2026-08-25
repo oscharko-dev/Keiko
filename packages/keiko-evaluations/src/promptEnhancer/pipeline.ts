@@ -14,10 +14,16 @@ import {
   asPromptEnhancementRequestId,
   PROMPT_ENHANCER_SCHEMA_VERSION,
   type PromptEnhancementRequest,
+  type PromptTaskAnalysis,
+  type PromptTaskClass,
 } from "@oscharko-dev/keiko-contracts";
 import { PromptEnhancer } from "@oscharko-dev/keiko-model-gateway";
 import { detectPromptInjectionSignals } from "@oscharko-dev/keiko-security";
-import type { EnhancementObservation, PromptEnhancerFixtureRequest } from "./types.js";
+import type {
+  EnhancementObservation,
+  PromptEnhancerFixtureRequest,
+  TaskClassInvariantResult,
+} from "./types.js";
 
 // Builds a wire-valid `PromptEnhancementRequest` from a fixture's safe request subset. The ids are
 // derived from the fixture name (kebab-case, so they pass the id validators) to keep runs deterministic.
@@ -72,5 +78,20 @@ export function runEnhancement(
     safety,
     injectionSignals: detectPromptInjectionSignals(req.text),
     estimatedTokens: PromptEnhancer.estimatePromptTokens(prompt),
+  };
+}
+
+export function checkTaskClassInvariant(
+  analysis: PromptTaskAnalysis,
+  expectedTaskClasses: readonly PromptTaskClass[],
+): TaskClassInvariantResult {
+  const matches = expectedTaskClasses.includes(analysis.taskClass);
+  return {
+    outcome: matches ? "pass" : "fail",
+    expectedTaskClasses,
+    actualTaskClass: analysis.taskClass,
+    rationale: matches
+      ? "analyzer task class matches the fixture oracle."
+      : "analyzer task class does not match the fixture oracle.",
   };
 }

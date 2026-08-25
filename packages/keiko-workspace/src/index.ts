@@ -69,6 +69,7 @@ export { detectWorkspace, detectWorkspaceAt } from "./detect.js";
 export {
   discoverFiles,
   discoverWithStats,
+  discoverWithStatsAsync,
   readWorkspaceFile,
   type DiscoveryResult,
 } from "./discovery.js";

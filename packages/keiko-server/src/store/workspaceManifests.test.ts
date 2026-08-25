@@ -2,6 +2,7 @@ import { mkdirSync, mkdtempSync, rmSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
+import { workspaceTrustRootBindingsMatch } from "@oscharko-dev/keiko-contracts";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   createNodeUiStore,
@@ -10,10 +11,35 @@ import {
   UiStoreSchemaVersionError,
 } from "./index.js";
 import { restoreV13SchemaFixture } from "./legacySchemaTestFixture.js";
+import { invalidatedRootRefs } from "./workspaceManifests.js";
 
 let tmp: string;
 let project: string;
 let dbPath: string;
+
+interface RootIdentityFixture {
+  readonly identityDigest: string;
+  readonly objectIdentityDigest: string | null;
+}
+
+function trustRootBinding(
+  rootRef: string,
+  identity: RootIdentityFixture | undefined,
+):
+  | {
+      readonly rootRef: string;
+      readonly rootIdentityDigest: string;
+      readonly rootIdentityProvenanceDigest: string | null;
+    }
+  | undefined {
+  return identity === undefined
+    ? undefined
+    : {
+        rootRef,
+        rootIdentityDigest: identity.identityDigest,
+        rootIdentityProvenanceDigest: identity.objectIdentityDigest,
+      };
+}
 
 beforeEach(() => {
   tmp = mkdtempSync(join(tmpdir(), "keiko-manifest-migration-"));
@@ -84,5 +110,50 @@ describe("workspace manifest registration (#2768)", () => {
     expect(store.listProjects()).toHaveLength(1);
     expect(store.listWorkspaceManifestRecords()).toHaveLength(1);
     store.close();
+  });
+});
+
+describe("workspace trust identity invalidation (KEIKO-0198)", () => {
+  it("invalidates a root introduced only by the next manifest", () => {
+    const previous = new Map<string, RootIdentityFixture>();
+    const next = new Map<string, RootIdentityFixture>([
+      ["next-only-root", { identityDigest: "identity-a", objectIdentityDigest: "object-a" }],
+    ]);
+
+    expect(invalidatedRootRefs(previous, next)).toEqual(new Set(["next-only-root"]));
+  });
+
+  it("keeps store invalidation and the contracts predicate in agreement for identity changes", () => {
+    const rootRef = "root-fixture";
+    const previous = new Map<string, RootIdentityFixture>([
+      [rootRef, { identityDigest: "identity-a", objectIdentityDigest: "object-a" }],
+    ]);
+    const cases: readonly [string, ReadonlyMap<string, RootIdentityFixture>][] = [
+      [
+        "unchanged identity",
+        new Map([[rootRef, { identityDigest: "identity-a", objectIdentityDigest: "object-a" }]]),
+      ],
+      [
+        "public identity digest change",
+        new Map([[rootRef, { identityDigest: "identity-b", objectIdentityDigest: "object-a" }]]),
+      ],
+      [
+        "private identity provenance change",
+        new Map([[rootRef, { identityDigest: "identity-a", objectIdentityDigest: "object-b" }]]),
+      ],
+      ["root removal", new Map()],
+      [
+        "root re-registration",
+        new Map([[rootRef, { identityDigest: "identity-b", objectIdentityDigest: "object-b" }]]),
+      ],
+    ];
+
+    for (const [shape, next] of cases) {
+      const contractMatches = workspaceTrustRootBindingsMatch(
+        trustRootBinding(rootRef, previous.get(rootRef)),
+        trustRootBinding(rootRef, next.get(rootRef)),
+      );
+      expect(invalidatedRootRefs(previous, next).has(rootRef), shape).toBe(!contractMatches);
+    }
   });
 });

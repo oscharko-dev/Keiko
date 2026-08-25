@@ -41,10 +41,6 @@ import {
 import { createGitHubCodeContextConnector } from "./githubCodeContextConnector.js";
 import { createJiraCodeContextConnector } from "./jiraCodeContextConnector.js";
 import { createGitHubCodeContextApiPort } from "./githubCodeContextPort.js";
-import {
-  createJiraCodeContextHttpPort,
-  parseJiraCodeContextPortConfig,
-} from "./jiraCodeContextPort.js";
 
 const TOP_LEVEL_KEYS: ReadonlySet<string> = new Set([
   "schemaVersion",
@@ -274,13 +270,6 @@ const NO_CONNECTOR: CodeContextConnector = {
   read: () => Promise.reject(new Error("coding context connector is not configured")),
 };
 
-function fallbackJiraPort(
-  deps: UiHandlerDeps,
-): ReturnType<typeof createJiraCodeContextHttpPort> | undefined {
-  const config = parseJiraCodeContextPortConfig(deps.env);
-  return config === undefined ? undefined : createJiraCodeContextHttpPort(config);
-}
-
 export function composeCodingContextConnectors(deps: UiHandlerDeps): ComposedConnectors {
   const githubPort =
     deps.codingContextGitHubPort ??
@@ -299,14 +288,20 @@ export function composeCodingContextConnectors(deps: UiHandlerDeps): ComposedCon
           },
           processEnv: process.env,
         }));
-  const jiraPort = deps.codingContextJiraPort ?? fallbackJiraPort(deps);
+  const jiraPort = deps.codingContextJiraPort;
+  const jiraConfigured =
+    jiraPort !== undefined &&
+    (deps.atlassianConnectorCredentials === undefined ||
+      deps.atlassianConnectorCredentials.custody
+        .list()
+        .some((credential) => credential.provider === "jira"));
   return {
     connectors: {
       github:
         githubPort === undefined ? NO_CONNECTOR : createGitHubCodeContextConnector(githubPort),
-      jira: jiraPort === undefined ? NO_CONNECTOR : createJiraCodeContextConnector(jiraPort),
+      jira: jiraConfigured ? createJiraCodeContextConnector(jiraPort) : NO_CONNECTOR,
     },
-    connectorConfig: connectorConfigFor(deps, githubPort !== undefined, jiraPort !== undefined),
+    connectorConfig: connectorConfigFor(deps, githubPort !== undefined, jiraConfigured),
   };
 }
 

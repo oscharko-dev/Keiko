@@ -14,7 +14,7 @@ import {
   MEMORY_STATUSES,
   MEMORY_STATUS_TRANSITIONS,
   MEMORY_TYPES,
-} from "./memory.js";
+} from "./memory-contracts.js";
 import { MEMORY_STRUCTURED_PAYLOAD_KINDS } from "./memory-records.js";
 import { MEMORY_AUDIT_INITIATOR_SURFACES, MEMORY_UPDATE_FIELDS } from "./memory-operations.js";
 import type {
@@ -25,8 +25,8 @@ import type {
   ProjectId,
   UserId,
   WorkspaceId,
-} from "./memory.js";
-import type { MemoryAuditRecordId } from "./memory.js";
+} from "./memory-contracts.js";
+import type { MemoryAuditRecordId } from "./memory-contracts.js";
 import type { MemoryRecord, MemoryEdge } from "./memory-records.js";
 import {
   checkStatusTransition,
@@ -71,6 +71,15 @@ const audit = (s: string): MemoryAuditRecordId => s as MemoryAuditRecordId;
 const user = (s: string): UserId => s as UserId;
 const ws = (s: string): WorkspaceId => s as WorkspaceId;
 const proj = (s: string): ProjectId => s as ProjectId;
+
+describe("memory status transitions", () => {
+  it("freezes the transition map and every destination list", () => {
+    expect(Object.isFrozen(MEMORY_STATUS_TRANSITIONS)).toBe(true);
+    for (const status of MEMORY_STATUSES) {
+      expect(Object.isFrozen(MEMORY_STATUS_TRANSITIONS[status])).toBe(true);
+    }
+  });
+});
 
 // ─── Fixtures ─────────────────────────────────────────────────────────────────
 function happyProvenance(): Record<string, unknown> {
@@ -270,14 +279,14 @@ describe("frozen-constant arrays", () => {
 
 // ─── Status transition matrix ─────────────────────────────────────────────────
 describe("MEMORY_STATUS_TRANSITIONS", () => {
-  it("rejected and forgotten are absorbing", () => {
-    expect(MEMORY_STATUS_TRANSITIONS.rejected).toEqual([]);
+  it("forgotten is absorbing while rejected can be acknowledged for deletion", () => {
+    expect(MEMORY_STATUS_TRANSITIONS.rejected).toEqual(["forgotten"]);
     expect(MEMORY_STATUS_TRANSITIONS.forgotten).toEqual([]);
   });
 
-  it("allows reviewed proposals to settle as superseded or conflicted", () => {
+  it("allows proposed captures to settle or be acknowledged for deletion", () => {
     expect([...MEMORY_STATUS_TRANSITIONS.proposed].sort()).toEqual(
-      ["accepted", "conflicted", "expired", "rejected", "superseded"].sort(),
+      ["accepted", "conflicted", "expired", "forgotten", "rejected", "superseded"].sort(),
     );
   });
 
@@ -293,8 +302,9 @@ describe("MEMORY_STATUS_TRANSITIONS", () => {
     );
   });
 
-  it("archived can be restored to accepted (non-destructive)", () => {
+  it("archived can be restored to accepted or acknowledged for deletion", () => {
     expect(MEMORY_STATUS_TRANSITIONS.archived).toContain("accepted");
+    expect(MEMORY_STATUS_TRANSITIONS.archived).toContain("forgotten");
   });
 
   it("conflicted and expired can return to accepted (rehabilitation)", () => {
@@ -1288,7 +1298,7 @@ describe("type-level scope coordinate invariants", () => {
     // object to a `MemoryScope` variable is the exact site that fails compilation.
     const userScopeMissingId = { kind: "user" as const };
     // @ts-expect-error — scope.kind="user" requires `userId`; the structural omission is rejected.
-    const assigned: import("./memory.js").MemoryScope = userScopeMissingId;
+    const assigned: import("./memory-contracts.js").MemoryScope = userScopeMissingId;
     expect(assigned.kind).toBe("user");
   });
 

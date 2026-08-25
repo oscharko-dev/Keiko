@@ -18,6 +18,7 @@
 
 import {
   MEMORY_FORGET_REASON_USER_REQUEST,
+  checkStatusTransition,
   type MemoryForget,
   type MemoryRecord,
   type MemoryScope,
@@ -153,11 +154,36 @@ export function selectMemoriesForForget(
 // ─── Envelope construction ────────────────────────────────────────────────────
 const DEFAULT_FORGET_REASON = MEMORY_FORGET_REASON_USER_REQUEST;
 
+function assertForgettable(record: MemoryRecord): void {
+  const check = checkStatusTransition(record.status, "forgotten");
+  if (check.ok) return;
+  throw new GovernanceError(
+    "illegal-status-transition",
+    check.reason ?? `illegal transition: ${record.status} -> forgotten`,
+    [`memoryId: ${record.id}`, `from: ${record.status}`, "to: forgotten"],
+  );
+}
+
+function assertArchivedForgetAcknowledged(
+  record: MemoryRecord,
+  options: BuildForgetOperationsOptions,
+): void {
+  if (record.status === "archived" && !options.acknowledgedArchivedMemoryIds?.includes(record.id)) {
+    throw new GovernanceError(
+      "destructive-acknowledgement-required",
+      "archived memory requires an explicit retention acknowledgement",
+      [`memoryId: ${record.id}`],
+    );
+  }
+}
+
 function buildForgetEnvelope(
   record: MemoryRecord,
   context: GovernanceContext,
   options: BuildForgetOperationsOptions,
 ): MemoryForget {
+  assertForgettable(record);
+  assertArchivedForgetAcknowledged(record, options);
   const env: MemoryForget = {
     schemaVersion: "1",
     memoryId: record.id,

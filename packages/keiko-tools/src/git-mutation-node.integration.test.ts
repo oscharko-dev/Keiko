@@ -7,7 +7,7 @@
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { execFileSync } from "node:child_process";
-import { chmodSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type {
@@ -342,8 +342,9 @@ describe("node git mutation adapter — global identity and signing policy", () 
   });
 
   it("FAILS the commit when signing is required and the signer cannot sign", async () => {
+    const signerMarker = join(identityHome, "signer-invoked");
     const failingSigner = join(identityHome, "failing-signer.sh");
-    writeFileSync(failingSigner, "#!/bin/sh\nexit 1\n", "utf8");
+    writeFileSync(failingSigner, `#!/bin/sh\ntouch ${signerMarker}\nexit 1\n`, "utf8");
     chmodSync(failingSigner, 0o755);
     writeGlobalGitConfig(
       `[user]\n\tname = Global Dev\n\temail = global@example.com\n\tsigningkey = ABCDEF\n` +
@@ -359,5 +360,28 @@ describe("node git mutation adapter — global identity and signing policy", () 
     expect(committed.outcome).toBe("failed");
     expect(committed.errorCode).toBe("precondition-failed");
     expect(homeGit(["rev-list", "--count", "--all"]).trim()).toBe("0");
+    expect(existsSync(signerMarker)).toBe(false);
+  });
+
+  it("ignores repository-local signing executables while retaining the global identity", async () => {
+    const signerMarker = join(identityHome, "repository-signer-invoked");
+    const repositorySigner = join(identityRepo, "repository-signer.sh");
+    writeFileSync(repositorySigner, `#!/bin/sh\ntouch ${signerMarker}\nexit 1\n`, "utf8");
+    chmodSync(repositorySigner, 0o755);
+    writeGlobalGitConfig(
+      "[user]\n\tname = Global Dev\n\temail = global@example.com\n[commit]\n\tgpgsign = false\n",
+    );
+    execFileSync("git", ["config", "commit.gpgSign", "true"], { cwd: identityRepo });
+    execFileSync("git", ["config", "gpg.program", repositorySigner], { cwd: identityRepo });
+    const ad = identityAdapter();
+    expect((await ad.stage({ pathspecs: ["a.txt"] })).outcome).toBe("succeeded");
+
+    const committed = await ad.commit({ message: "feat: governed commit", allowEmpty: false });
+
+    expect(committed.outcome).toBe("succeeded");
+    expect(existsSync(signerMarker)).toBe(false);
+    expect(homeGit(["log", "-1", "--format=%an <%ae>"]).trim()).toBe(
+      "Global Dev <global@example.com>",
+    );
   });
 });

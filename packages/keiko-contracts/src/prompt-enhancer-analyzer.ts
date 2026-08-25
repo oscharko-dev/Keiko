@@ -302,6 +302,7 @@ const TASK_CLASS_RULES: readonly TaskClassRule[] = [
       "based on the provided",
       "according to the document",
       "from the attached",
+      "using the attached",
       "using the document",
       "in the provided text",
       "basierend auf der datei",
@@ -947,10 +948,55 @@ const CRITERIA_SENSITIVE_CLASSES: ReadonlySet<PromptTaskClass> = new Set([
   "decision-support",
   "research",
 ]);
+const SCOPE_SENSITIVE_CLASSES: ReadonlySet<PromptTaskClass> = new Set(["code-architecture"]);
+const ARCHITECTURE_SCOPE_PREFIX_PATTERN = /\b(?:for|within|supporting|targeting)\s+/u;
+const ARCHITECTURE_SCOPE_DETERMINERS: ReadonlySet<string> = new Set(["a", "an", "the"]);
+const ARCHITECTURE_SCOPE_TARGETS: ReadonlySet<string> = new Set([
+  "application",
+  "applications",
+  "service",
+  "services",
+  "platform",
+  "platforms",
+  "workspace",
+  "workspaces",
+  "repository",
+  "repositories",
+  "product",
+  "products",
+  "system",
+  "systems",
+]);
+const ARCHITECTURE_SCOPE_BOUNDARY_PATTERN = /[.!?;,:]/u;
+const ARCHITECTURE_SCOPE_WORD_SEPARATOR_PATTERN = /[^\p{L}\p{N}-]/u;
 const MAX_MISSING_TOPICS = 4;
 
 const lacksSubject = (view: AnalysisView): boolean =>
   view.normalizedLength < 12 || view.meaningfulTokenCount < 3;
+
+function hasArchitectureScope(lower: string): boolean {
+  const prefix = ARCHITECTURE_SCOPE_PREFIX_PATTERN.exec(lower);
+  if (prefix === null) return false;
+
+  const scopePhrase =
+    lower.slice(prefix.index + prefix[0].length).split(ARCHITECTURE_SCOPE_BOUNDARY_PATTERN, 1)[0] ??
+    "";
+  const scopeWords = scopePhrase.split(/\s+/u);
+  const firstWord = scopeWords[0] ?? "";
+  const firstModifierIndex = ARCHITECTURE_SCOPE_DETERMINERS.has(firstWord) ? 1 : 0;
+  if (ARCHITECTURE_SCOPE_DETERMINERS.has(scopeWords[firstModifierIndex] ?? "")) return false;
+
+  return scopeWords
+    .slice(firstModifierIndex + 1, firstModifierIndex + 7)
+    .some((word) =>
+      ARCHITECTURE_SCOPE_TARGETS.has(
+        word.split(ARCHITECTURE_SCOPE_WORD_SEPARATOR_PATTERN, 1)[0] ?? "",
+      ),
+    );
+}
+
+const lacksScope = (view: AnalysisView, taskClass: PromptTaskClass): boolean =>
+  SCOPE_SENSITIVE_CLASSES.has(taskClass) && !hasArchitectureScope(view.lower);
 
 const lacksDataSource = (view: AnalysisView): boolean =>
   containsAny(view.lower, SCOPE_REFERENCE_CUES) && !view.hasConnectedContext;
@@ -982,6 +1028,7 @@ function detectMissingTopics(
   const cls = classification.taskClass;
   const topics: MissingContextTopic[] = [];
   if (lacksSubject(view)) topics.push("subject");
+  if (lacksScope(view, cls)) topics.push("scope");
   if (lacksDataSource(view)) topics.push("data-source");
   if (lacksOutputFormat(cls, outputSchema)) topics.push("output-format");
   if (lacksAudience(view, cls)) topics.push("audience");

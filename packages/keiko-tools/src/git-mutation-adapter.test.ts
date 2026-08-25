@@ -176,9 +176,9 @@ describe("no-generic-fallback property (AC3)", () => {
     }
   });
 
-  it("the dedicated command rules deny global config / cwd-shifting flags", () => {
+  it("the dedicated command rules deny ambient config and cwd-shifting flags", (): void => {
     expect(
-      isCommandAllowed(GIT_MUTATION_COMMAND_RULES, "git", ["-c", "core.x=1", "commit"]).allowed,
+      isCommandAllowed(GIT_MUTATION_COMMAND_RULES, "git", ["--config-env=x=y", "commit"]).allowed,
     ).toBe(false);
     expect(
       isCommandAllowed(GIT_MUTATION_COMMAND_RULES, "git", ["--exec-path=/x", "add"]).allowed,

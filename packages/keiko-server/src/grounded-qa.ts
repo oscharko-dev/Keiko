@@ -99,6 +99,7 @@ import {
   type HybridAnswerer,
 } from "./grounded-qa-hybrid.js";
 import { GROUNDED_SYSTEM_PROMPT } from "./grounded-prompt.js";
+import { uncitedMemoryContextMarker } from "./grounded-faithfulness.js";
 import {
   commitGroundedTurn,
   discardGroundedTurn,
@@ -2132,7 +2133,7 @@ function settleGroundedChatTurn(
       ),
     };
   }
-  if (result.body.memory !== undefined) {
+  if (result.body.memory !== undefined || hasAnswerOnlyContext(prepared)) {
     deps.store.attachGroundedAnswer(result.body.assistantMessageId, result.body);
   }
   let completion;
@@ -2251,6 +2252,10 @@ async function attachGroundedMemory(
   }
   const memoryPreparation = prepared.memory;
   if (memoryPreparation === undefined) return result;
+  const body = hasAnswerOnlyContext(prepared)
+    ? groundedAnswerWithMemoryUncertainty(result.body, deps)
+    : result.body;
+  const markedResult: RouteResult = body === result.body ? result : { ...result, body };
   const chat = deps.store.findChatById(prepared.chat.id) ?? prepared.chat;
   try {
     const memory = await buildCanonicalTurnMemoryResult(
@@ -2265,11 +2270,25 @@ async function attachGroundedMemory(
         precomputedMemory: memoryPreparation.result,
       },
     );
-    return memory === undefined ? result : { ...result, body: { ...result.body, memory } };
+    return memory === undefined ? markedResult : { ...markedResult, body: { ...body, memory } };
   } catch (error) {
     recordGroundedMemoryFailure(deps, result.body.assistantMessageId, contentFreeErrorClass(error));
-    return result;
+    return markedResult;
   }
+}
+
+function groundedAnswerWithMemoryUncertainty(
+  body: GroundedAnswer,
+  deps: UiHandlerDeps,
+): GroundedAnswer {
+  const marker = uncitedMemoryContextMarker(Date.now());
+  return {
+    ...body,
+    uncertainty: [
+      ...body.uncertainty,
+      { kind: marker.kind, claim: redactString(deps.redactor, marker.claim) },
+    ],
+  };
 }
 
 export async function handleGroundedAsk(

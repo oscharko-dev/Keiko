@@ -392,12 +392,6 @@ describe("Footer selectedModel visibility", () => {
         onToggleWindowPalette={vi.fn()}
         onSelectWindow={vi.fn()}
         onCloseWindowPalette={vi.fn()}
-        mode="autonomous"
-        selectedModel="gpt-4o"
-        projectName="Keiko"
-        branchLabel="main"
-        shellStatusLabel="Ready"
-        evidenceStatusLabel="No review open"
       />,
     );
     expect(screen.queryByText(/gpt-4o/i)).not.toBeInTheDocument();
@@ -413,12 +407,6 @@ describe("Footer selectedModel visibility", () => {
         onToggleWindowPalette={vi.fn()}
         onSelectWindow={vi.fn()}
         onCloseWindowPalette={vi.fn()}
-        mode="autonomous"
-        selectedModel={undefined}
-        projectName="Keiko"
-        branchLabel="main"
-        shellStatusLabel="Ready"
-        evidenceStatusLabel="No review open"
       />,
     );
     expect(screen.queryByText(/No model selected/i)).not.toBeInTheDocument();

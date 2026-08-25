@@ -86,6 +86,34 @@ describe("Coding Workbench runtime API contracts", () => {
       parseCodingWorkbenchRuntimeApprovalDecisionRequest({
         requestId: "permission-1",
         expectedRevision: 3,
+        decision: "approved",
+        grantScope: "task",
+        commandTemplateId: "verify.typecheck",
+        safeArgumentClasses: ["frozen-argv"],
+      }),
+    ).toEqual({
+      ok: true,
+      value: {
+        requestId: "permission-1",
+        expectedRevision: 3,
+        decision: "approved",
+        grantScope: "task",
+        commandTemplateId: "verify.typecheck",
+        safeArgumentClasses: ["frozen-argv"],
+      },
+    });
+    expect(
+      parseCodingWorkbenchRuntimeApprovalDecisionRequest({
+        requestId: "permission-1",
+        expectedRevision: 3,
+        decision: "denied",
+        grantScope: "task",
+      }),
+    ).toMatchObject({ ok: false });
+    expect(
+      parseCodingWorkbenchRuntimeApprovalDecisionRequest({
+        requestId: "permission-1",
+        expectedRevision: 3,
         decision: "denied",
         reason: "unbounded browser text is forbidden",
       }),

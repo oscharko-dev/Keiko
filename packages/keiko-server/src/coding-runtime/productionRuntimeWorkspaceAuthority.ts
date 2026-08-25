@@ -4,6 +4,7 @@ import { isAbsolute, relative, sep } from "node:path";
 
 import type {
   CodingWorkbenchActionClass,
+  CodingWorkbenchConnectorScope,
   CodingWorkbenchMode,
   CodingWorkbenchNetworkPolicy,
   CodingWorkbenchRuntimeAuthorityFacts,
@@ -50,20 +51,41 @@ export interface ProductionWorkspaceAuthorityInput {
 // The base workspace action classes, plus network-egress only when research egress is activated.
 // Kept in lock-step with the network policy below so validateNetworkPolicyActionClassConsistency
 // holds (mode !== "deny-all" iff the action classes include network-egress).
-function researchActionClasses(
+function runtimeActionClasses(
+  mode: CodingWorkbenchMode,
   researchEgressEnabled: boolean | undefined,
 ): readonly CodingWorkbenchActionClass[] {
-  const base: readonly CodingWorkbenchActionClass[] = [
+  const actionClasses: CodingWorkbenchActionClass[] = [
     "workspace-read",
     "workspace-write",
     "verification",
   ];
-  return researchEgressEnabled === true ? [...base, "network-egress"] : base;
+  if (mode !== "governed-assist") actionClasses.push("command-execution");
+  if (mode === "autonomous-delivery") {
+    actionClasses.push("delivery-substrate", "connector-access");
+  }
+  if (researchEgressEnabled === true || mode === "autonomous-delivery") {
+    actionClasses.push("network-egress");
+  }
+  return actionClasses;
 }
 
-function researchNetworkPolicy(
+const DELIVERY_CONNECTOR_SCOPES: readonly CodingWorkbenchConnectorScope[] = [
+  "source-control.read",
+  "source-control.write",
+];
+
+function runtimeNetworkPolicy(
+  mode: CodingWorkbenchMode,
   researchEgressEnabled: boolean | undefined,
 ): CodingWorkbenchNetworkPolicy {
+  if (mode === "autonomous-delivery") {
+    return {
+      mode: "connector-scoped-egress",
+      allowLoopback: false,
+      connectorScopes: DELIVERY_CONNECTOR_SCOPES,
+    };
+  }
   return researchEgressEnabled === true
     ? { mode: "governed-egress", allowLoopback: false, connectorScopes: [] }
     : { mode: "deny-all", allowLoopback: false, connectorScopes: [] };
@@ -113,8 +135,9 @@ function contextFromActive(
     },
     deploymentCeiling: input.deploymentCeiling,
     runtimeSource: runtimeProfile.runtimeSource,
-    actionClasses: researchActionClasses(input.researchEgressEnabled),
-    connectorScopes: [],
+    actionClasses: runtimeActionClasses(request.requestedMode, input.researchEgressEnabled),
+    connectorScopes:
+      request.requestedMode === "autonomous-delivery" ? DELIVERY_CONNECTOR_SCOPES : [],
     modelProfile: {
       profileId: runtimeProfile.profileId,
       source: runtimeProfile.modelSource,
@@ -125,13 +148,13 @@ function contextFromActive(
         : { reasoningEffort: runtimeProfile.reasoningEffort }),
     },
     commandPolicy: {
-      mode: "deny",
+      mode: request.requestedMode === "governed-assist" ? "deny" : "governed",
       allow: [],
       deny: [],
-      maxCommandTimeoutMs: 1,
-      requirePerCommandApproval: true,
+      maxCommandTimeoutMs: 120_000,
+      requirePerCommandApproval: request.requestedMode !== "autonomous-delivery",
     },
-    networkPolicy: researchNetworkPolicy(input.researchEgressEnabled),
+    networkPolicy: runtimeNetworkPolicy(request.requestedMode, input.researchEgressEnabled),
     gates: ["human-approval"],
     budget: {
       maxRuntimeMs: RUNTIME_TTL_MS,
