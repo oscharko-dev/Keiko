@@ -280,6 +280,51 @@ describe("createSession", () => {
     expect(result.failure?.category).toBe("HARNESS_MODEL_ERROR");
   });
 
+  it(
+    "never attaches a failure record to a completed RunResult even when the wall-time " +
+      "deadline callback is already in flight when the run finishes (KEIKO-0774)",
+    async () => {
+      // Expire the deadline synchronously from inside the run:completed emit — i.e. from within
+      // runLoop's own synchronous execution, strictly before runLoop's promise (and therefore
+      // `settled`/`cleared`) can possibly have flipped. This deterministically reproduces the race:
+      // the deadline callback's job is enqueued before either guard is set, so on unfixed code it
+      // still writes ctx.failure for a run that outcome-wise completed successfully. The invariant
+      // this pins is enforced at buildResult (via terminalFailure), not by preventing that write.
+      const deadline = manualDeadlineClock();
+      const trigger: EventSink = {
+        emit: (event): void => {
+          if (event.type === "run:completed") deadline.expire();
+        },
+      };
+      const session = createSession(
+        EXPLAIN,
+        { ...CONFIG, limits: { maxWallTimeMs: 50 } },
+        {
+          ...deps(scriptedModel([response({ content: "ok" })]).port, new MemoryEventSink()),
+          sink: trigger,
+          clock: deadline.clock,
+        },
+      );
+      const result = await session.result;
+      expect(result.outcome).toBe("completed");
+      expect(result.failure).toBeUndefined();
+    },
+  );
+
+  it("cancel() after the run has settled is a silent no-op", async () => {
+    const session = createSession(
+      EXPLAIN,
+      CONFIG,
+      deps(scriptedModel([response({ content: "ok" })]).port, new MemoryEventSink()),
+    );
+    const result = await session.result;
+    expect(() => {
+      session.cancel("too late");
+    }).not.toThrow();
+    expect(result.outcome).toBe("completed");
+    expect(result.failure).toBeUndefined();
+  });
+
   it("reaches a terminal state when an auxiliary sink throws (KEIKO-0205)", async () => {
     // A downstream sink throws on emit; the run must still resolve to a RunResult and
     // the primary (in-memory) sink must still receive every subsequent event. Today
