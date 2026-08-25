@@ -100,6 +100,7 @@ describe("buildCompactionRecords — accounting", () => {
     expect(records).toHaveLength(1);
     const record = firstRecord(records);
     expect(record.laneId).toBe("repo-evidence");
+    expect(record.reason).toBe("drop-lowest-score");
     expect(record.itemsBefore).toBe(3);
     expect(record.itemsAfter).toBe(2);
     const unitTokens = estimateTokens(bulk("z ", 200));

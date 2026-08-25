@@ -11,6 +11,7 @@ import {
   type ContextAssemblyDiagnostics,
   type ContextBudget,
   type ContextBudgetPressure,
+  type ContextEvictionPolicy,
   type ContextLaneBudget,
   type ContextLaneDiagnostics,
   type ContextLaneId,
@@ -54,6 +55,7 @@ interface LaneFill {
   readonly excludedIds: readonly string[];
   readonly tokens: number;
   readonly droppedForBudget: boolean;
+  readonly compactionReason?: Exclude<ContextEvictionPolicy, "none"> | undefined;
 }
 
 const CANONICAL_INDEX: ReadonlyMap<ContextLaneId, number> = new Map(
@@ -73,6 +75,7 @@ function selectScoredByTokenBudget(
   items: readonly ContextLaneItemInput[],
   tokenBudget: number,
   tokenAccounting: ContextTokenAccounting | undefined,
+  compactionReason: Exclude<ContextEvictionPolicy, "none">,
 ): LaneFill {
   const ordered = [...items].sort((a, b) => {
     const byScore = b.score - a.score;
@@ -90,7 +93,63 @@ function selectScoredByTokenBudget(
     includedIds.push(item.id);
     tokens += cost;
   }
-  return { includedIds, excludedIds, tokens, droppedForBudget: excludedIds.length > 0 };
+  const droppedForBudget = excludedIds.length > 0;
+  return {
+    includedIds,
+    excludedIds,
+    tokens,
+    droppedForBudget,
+    ...(droppedForBudget ? { compactionReason } : {}),
+  };
+}
+
+// Input order is chronology: the oldest observation is first. Retain the newest items that fit,
+// preserving their original order for downstream prompt assembly.
+function selectNewestByTokenBudget(
+  items: readonly ContextLaneItemInput[],
+  tokenBudget: number,
+  tokenAccounting: ContextTokenAccounting | undefined,
+): LaneFill {
+  const included = new Set<string>();
+  let tokens = 0;
+  for (let index = items.length - 1; index >= 0; index -= 1) {
+    const item = items[index];
+    if (item === undefined) {
+      continue;
+    }
+    const cost = countContextTokens(item.text, tokenAccounting);
+    if (tokens + cost <= tokenBudget) {
+      included.add(item.id);
+      tokens += cost;
+    }
+  }
+  const includedIds = items.filter((item) => included.has(item.id)).map((item) => item.id);
+  const excludedIds = items.filter((item) => !included.has(item.id)).map((item) => item.id);
+  const droppedForBudget = excludedIds.length > 0;
+  return {
+    includedIds,
+    excludedIds,
+    tokens,
+    droppedForBudget,
+    ...(droppedForBudget ? { compactionReason: "drop-oldest" as const } : {}),
+  };
+}
+
+function selectByEvictionPolicy(
+  items: readonly ContextLaneItemInput[],
+  tokenBudget: number,
+  tokenAccounting: ContextTokenAccounting | undefined,
+  eviction: ContextEvictionPolicy,
+): LaneFill {
+  switch (eviction) {
+    case "none":
+      return includeAll(items, tokenAccounting);
+    case "drop-oldest":
+      return selectNewestByTokenBudget(items, tokenBudget, tokenAccounting);
+    case "drop-lowest-score":
+    case "summarize-then-drop":
+      return selectScoredByTokenBudget(items, tokenBudget, tokenAccounting, eviction);
+  }
 }
 
 // Non-evictable lanes include EVERY item (reserved off the top, never dropped) even if their
@@ -140,7 +199,9 @@ function laneDiagnostics(
       excluded: fill.excludedIds.length,
     },
   };
-  return fill.droppedForBudget ? { ...base, compactionReason: "budget" } : base;
+  return fill.compactionReason === undefined
+    ? base
+    : { ...base, compactionReason: fill.compactionReason };
 }
 
 function toAllocatedLane(laneId: ContextLaneId, fill: LaneFill, cap: number): AllocatedContextLane {
@@ -198,7 +259,7 @@ function fillEvictableLanes(
   let remaining = Math.max(0, budgetAfterReserved);
   for (const lane of ordered) {
     const cap = Math.min(lane.row.maxTokens, remaining);
-    const fill = selectScoredByTokenBudget(lane.items, cap, tokenAccounting);
+    const fill = selectByEvictionPolicy(lane.items, cap, tokenAccounting, lane.row.eviction);
     fills.set(lane.row.laneId, fill);
     remaining -= fill.tokens;
   }

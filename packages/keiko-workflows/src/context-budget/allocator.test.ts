@@ -11,6 +11,7 @@ import {
   deriveContextProfile,
   estimateTokens,
   type ContextBudget,
+  type ContextEvictionPolicy,
   type ContextLaneId,
   type ContextProfile,
 } from "@oscharko-dev/keiko-contracts";
@@ -54,6 +55,18 @@ const CALIBRATED_PROFILE: ContextProfile = deriveContextProfile({
 
 function budgetForProfile(profile: ContextProfile): ContextBudget {
   return { ...DEFAULT_CONTEXT_BUDGET, profile };
+}
+
+function budgetWithEviction(
+  eviction: ContextEvictionPolicy,
+  maxTokens: number,
+): ContextBudget {
+  return {
+    ...DEFAULT_CONTEXT_BUDGET,
+    lanes: DEFAULT_CONTEXT_BUDGET.lanes.map((row) =>
+      row.laneId === "repo-evidence" ? { ...row, eviction, maxTokens } : row,
+    ),
+  };
 }
 
 describe("DEFAULT_CONTEXT_BUDGET", () => {
@@ -198,6 +211,57 @@ describe("allocateContext — gate 4 (no evictable overflow)", () => {
         expect(nonEvictableTokens(result)).toBeGreaterThan(budget);
       }
     }
+  });
+});
+
+describe("allocateContext — eviction policies", () => {
+  const unit = bulk("policy-token ", 100);
+  const maxTokens = estimateTokens(unit) * 2;
+
+  function allocateWithPolicy(eviction: ContextEvictionPolicy) {
+    return allocateContext({
+      profile: DEFAULT_CONTEXT_PROFILE,
+      budget: budgetWithEviction(eviction, maxTokens),
+      lanes: [
+        lane("repo-evidence", [
+          item("old-high", unit, 0.9),
+          item("middle-low", unit, 0.1),
+          item("new-medium", unit, 0.2),
+        ]),
+      ],
+    });
+  }
+
+  function repoLane(result: ReturnType<typeof allocateContext>) {
+    const allocated = result.lanes.find((lane) => lane.laneId === "repo-evidence");
+    if (allocated === undefined) {
+      throw new Error("expected repo-evidence allocation");
+    }
+    return allocated;
+  }
+
+  it("evicts different items for chronological and score-based policies", () => {
+    const oldest = repoLane(allocateWithPolicy("drop-oldest"));
+    const lowestScore = repoLane(allocateWithPolicy("drop-lowest-score"));
+    expect(oldest.includedItemIds).toEqual(["middle-low", "new-medium"]);
+    expect(oldest.excludedItemIds).toEqual(["old-high"]);
+    expect(oldest.diagnostics.compactionReason).toBe("drop-oldest");
+    expect(lowestScore.includedItemIds).toEqual(["old-high", "new-medium"]);
+    expect(lowestScore.excludedItemIds).toEqual(["middle-low"]);
+    expect(lowestScore.diagnostics.compactionReason).toBe("drop-lowest-score");
+  });
+
+  it("records summarize-then-drop when score-based eviction creates a compaction candidate", () => {
+    const summarized = repoLane(allocateWithPolicy("summarize-then-drop"));
+    expect(summarized.excludedItemIds).toEqual(["middle-low"]);
+    expect(summarized.diagnostics.compactionReason).toBe("summarize-then-drop");
+  });
+
+  it("keeps none-reserved lanes intact even when their configured cap is exceeded", () => {
+    const reserved = repoLane(allocateWithPolicy("none"));
+    expect(reserved.includedItemIds).toEqual(["old-high", "middle-low", "new-medium"]);
+    expect(reserved.excludedItemIds).toEqual([]);
+    expect(reserved.diagnostics.compactionReason).toBeUndefined();
   });
 });
 
