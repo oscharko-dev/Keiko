@@ -350,41 +350,38 @@ describe("convertAdfToText — purity and determinism", () => {
     expect(elapsedMs).toBeLessThan(2_000);
   });
 
-  it("keeps conversion time roughly independent of input array length once far past the node budget", () => {
-    // Regression for KEIKO-0944: the module header claims conversion is "linear in the node
-    // budget regardless of input shape". Before the fix, renderChildren's loop (and the
-    // list/table iteration helpers) kept dispatching every remaining sibling into renderNode even
-    // after the budget had already tripped — each such call is cheap on its own, but a top-level
-    // content array far larger than the budget still made total work scale with the ARRAY LENGTH,
-    // not the budget. A single shared, non-recursive paragraph object is reused across every array
-    // slot (safe: the converter has no identity-based cycle tracking, only count/depth caps — see
-    // the module header's own note on the depth cap terminating self-referencing graphs) so a
-    // 1000x-larger input can be built and converted without object-allocation overhead that isn't
-    // what this test is measuring.
+  it("visits at most ADF_TO_TEXT_MAX_NODES + 1 nodes once the budget trips, regardless of input array length (KEIKO-0723 follow-up)", () => {
+    // Regression for KEIKO-0944, replacing the earlier wall-clock + ~160 MB reference-fixture
+    // shape (Codex P1 on #3279: allocation + GC pauses inside the 200 ms timed region are host-
+    // dependent and produce OOM/flake on constrained CI runners). The property this pins is a
+    // count invariant, not a timing one: "no further sibling walking once nodesVisited passes
+    // the budget". The deterministic observable is `outcome.nodesVisited`; if renderChildren
+    // (or any of the list/table iteration helpers) regresses to dispatching every remaining
+    // sibling into renderNode after the budget trips, `nodesVisited` grows with the array
+    // length instead of stopping at the budget + 1, and this assertion fails.
+    //
+    // A single shared, non-recursive paragraph object is reused across every array slot (safe:
+    // the converter has no identity-based cycle tracking, only count/depth caps — see the
+    // module header's own note on the depth cap terminating self-referencing graphs); the array
+    // now only needs to be a bit past the budget to prove the point, not 1000× larger, so peak
+    // memory is a few hundred KB, not ~160 MB.
     const trivialParagraph: Json = { type: "paragraph", content: [] };
-    const atBudgetDoc = doc(...new Array<Json>(ADF_TO_TEXT_MAX_NODES).fill(trivialParagraph));
-    const startAtBudget = performance.now();
-    convertAdfToText(atBudgetDoc);
-    const atBudgetMs = performance.now() - startAtBudget;
-
-    const farOverBudgetDoc = {
+    const OVER_BUDGET_MARGIN = 100;
+    const overBudgetDoc = {
       type: "doc",
       version: 1,
-      content: new Array<Json>(20_000_000).fill(trivialParagraph),
+      content: new Array<Json>(ADF_TO_TEXT_MAX_NODES + OVER_BUDGET_MARGIN).fill(trivialParagraph),
     };
-    const startOverBudget = performance.now();
-    const outcome = convertAdfToText(farOverBudgetDoc);
-    const overBudgetMs = performance.now() - startOverBudget;
-
+    const outcome = convertAdfToText(overBudgetDoc);
     expect(outcome.truncated).toBe(true);
     expect(outcome.truncationReasons).toStrictEqual(["node-budget-exceeded"]);
-    // The far-over-budget input has ~1000x more array entries than the at-budget one but must not
-    // take proportionally longer to convert. A relative bound (not an absolute millisecond cap)
-    // self-calibrates to the host machine's speed: a generous 25x multiplier — with a 200ms floor,
-    // since atBudgetMs itself can be a couple of milliseconds and timer/GC noise dominates at that
-    // scale — sits far from both the ~1x ratio a bounded implementation produces and the ~1000x
-    // ratio a linear-in-array-length one would.
-    expect(overBudgetMs).toBeLessThan(Math.max(atBudgetMs * 25, 200));
+    // Upper bound: ADF_TO_TEXT_MAX_NODES + 1 (the +1 counts the visit that trips the check).
+    // A bounded implementation stops here; a regressed one visits every one of the
+    // OVER_BUDGET_MARGIN extra siblings and blows past this cap deterministically.
+    expect(outcome.nodesVisited).toBeLessThanOrEqual(ADF_TO_TEXT_MAX_NODES + 1);
+    // Lower bound: at least the whole budget was actually visited (guards against the opposite
+    // regression where the budget trips too early and the invariant becomes vacuously true).
+    expect(outcome.nodesVisited).toBeGreaterThan(ADF_TO_TEXT_MAX_NODES / 2);
   });
 
   it("produces identical output for a JSON round-tripped clone of the same document", () => {

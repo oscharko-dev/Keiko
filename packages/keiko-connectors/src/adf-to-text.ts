@@ -62,6 +62,13 @@ export interface AdfConversionOutcome {
   readonly truncated: boolean;
   readonly truncationReasons: readonly AdfTruncationReason[];
   readonly unknownNodeTypes: readonly string[];
+  // Number of nodes actually visited by the traversal. Bounded above by
+  // `ADF_TO_TEXT_MAX_NODES + 1` (the +1 records the visit that trips the budget). Exposed so the
+  // "no further sibling walking after node-budget trips" invariant (KEIKO-0944) can be pinned
+  // deterministically instead of via a wall-clock relative-timing assertion over an allocated
+  // ~160 MB reference fixture (which is subject to OOM and GC-pause flakes on constrained CI
+  // runners). Also useful in diagnostics for large-doc classification.
+  readonly nodesVisited: number;
 }
 
 interface ConversionState {
@@ -479,5 +486,6 @@ export function convertAdfToText(value: unknown): AdfConversionOutcome {
     truncated: state.truncationReasons.size > 0,
     truncationReasons: [...state.truncationReasons].sort(compareByCodeUnit),
     unknownNodeTypes: [...state.unknownNodeTypes].sort(compareByCodeUnit),
+    nodesVisited: state.nodesVisited,
   };
 }
