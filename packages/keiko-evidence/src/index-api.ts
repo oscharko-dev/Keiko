@@ -131,11 +131,11 @@ function validateManifestShape(parsed: Record<string, unknown>, runId: string): 
   requireOptionalArray(parsed, "compaction", runId);
 }
 
-function parseManifest(json: string, runId: string): EvidenceManifest {
-  const parsed: unknown = parseJson(json, runId);
-  if (!isRecord(parsed)) {
-    throw new EvidenceSchemaError(`evidence manifest is not an object: ${runId}`, "none");
-  }
+// Validates an ALREADY-parsed manifest value (schema version + shape) and narrows it to
+// EvidenceManifest. Split out from parseManifest so a caller that already parsed the JSON for its
+// own purposes (listEntryOrSkip's evidenceSchemaVersion pre-check) can reuse that parse instead of
+// paying for a second JSON.parse of the same string (KEIKO-0945).
+function manifestFromParsed(parsed: Record<string, unknown>, runId: string): EvidenceManifest {
   const version = parsed.evidenceSchemaVersion;
   if (version !== EVIDENCE_SCHEMA_VERSION) {
     throw new EvidenceSchemaError(
@@ -145,6 +145,14 @@ function parseManifest(json: string, runId: string): EvidenceManifest {
   }
   validateManifestShape(parsed, runId);
   return parsed as unknown as EvidenceManifest;
+}
+
+function parseManifest(json: string, runId: string): EvidenceManifest {
+  const parsed: unknown = parseJson(json, runId);
+  if (!isRecord(parsed)) {
+    throw new EvidenceSchemaError(`evidence manifest is not an object: ${runId}`, "none");
+  }
+  return manifestFromParsed(parsed, runId);
 }
 
 function toListEntry(manifest: EvidenceManifest): EvidenceListEntry {
@@ -179,7 +187,7 @@ function listEntryOrSkip(store: EvidenceStore, runId: string): EvidenceListEntry
     if (!isRecord(parsed) || typeof parsed.evidenceSchemaVersion !== "string") {
       return undefined;
     }
-    return toListEntry(parseManifest(json, runId));
+    return toListEntry(manifestFromParsed(parsed, runId));
   } catch (error) {
     if (error instanceof EvidenceReadError || error instanceof EvidenceSchemaError) {
       return undefined;

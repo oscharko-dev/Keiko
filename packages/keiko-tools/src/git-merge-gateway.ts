@@ -63,7 +63,7 @@ import type {
 } from "./git-mutation-orchestrator.js";
 import type { GitMutationFailureCategory } from "./git-mutation-taxonomy.js";
 import { gitMutationCategoryForExecutionResult } from "./git-mutation-taxonomy.js";
-import { approverIsNotAuthorized } from "./git-approval-gate.js";
+import { resolveGitDeliveryApprovalGate } from "./git-approval-gate.js";
 
 // ─── Merge command + narrow adapter port (no generic exec) ───────────────────────────────────────────
 // The command carries the structured operands the content-free GitDeliveryMergeInputs deliberately omits
@@ -587,19 +587,10 @@ type MergeGate =
       readonly reason: GitDeliveryBlockReason;
     };
 
-function approvalState(
-  approval: GitDeliveryApprovalRequirement,
-  now: number,
-): "valid" | "absent" | "expired" {
-  if (!approval.required) {
-    return "absent";
-  }
-  if (approval.expiresAtMs !== undefined && approval.expiresAtMs <= now) {
-    return "expired";
-  }
-  return "valid";
-}
-
+// KEIKO-0535: delegates the approval-gated branch to the one shared resolver
+// (git-approval-gate.ts) instead of re-deriving valid/expired/absent + KEIKO-0147's identity check
+// locally, then maps the canonical result onto this file's own MergeGate shape — the same shape
+// every existing caller already consumes, so behavior is unchanged.
 function resolveMergeGate(
   decision: GitDeliveryPolicyDecision,
   approval: GitDeliveryApprovalRequirement,
@@ -614,24 +605,14 @@ function resolveMergeGate(
   if (effective.outcome === "blocked") {
     return { proceed: false, status: "policy-block", reason: effective.blockReason };
   }
-  const state = approvalState(approval, now);
-  if (state === "valid") {
-    // KEIKO-0147: an unexpired token is not enough — when the decision names a required-approver
-    // set, the identity that granted the approval must be a member. Shared with the publish, PR,
-    // and mutation gates so the rule cannot drift between them.
-    if (approverIsNotAuthorized(decision, approval)) {
-      return { proceed: false, status: "policy-block", reason: "approver-not-authorized" };
-    }
+  const gate = resolveGitDeliveryApprovalGate(decision, approval, now);
+  if (gate.proceed) {
     return { proceed: true };
   }
-  if (state === "expired") {
-    return { proceed: false, status: "policy-block", reason: "approval-expired" };
+  if (gate.status === "approval-required") {
+    return { proceed: false, status: "approval-required", approvers: gate.approvers };
   }
-  return {
-    proceed: false,
-    status: "approval-required",
-    approvers: decision.outcome === "approval-gated" ? decision.requiredApprovers : [],
-  };
+  return { proceed: false, status: "policy-block", reason: gate.blockReason };
 }
 
 function mergeOutcomeFor(result: GitDeliveryExecutionResult): GitMutationOutcome {

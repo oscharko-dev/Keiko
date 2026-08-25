@@ -189,6 +189,15 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
+// A minimal field-level shape guard, not a full schema validator: the sole documented consumer
+// (report.ts's verificationStatus()) reads only overallStatus, so that is the one field write-time
+// validation must confirm before this object is embedded into the typed manifest. Narrower than
+// index-api.ts's requireString/requireRecord family (which validates a manifest being READ back and
+// throws), because a malformed verificationSummary must degrade to `undefined`, not fail the run.
+function hasValidOverallStatus(value: Record<string, unknown>): boolean {
+  return typeof value.overallStatus === "string";
+}
+
 // Extracts the verification audit summary from a workflow report when present. The summary is already
 // the audit shape; the deep redact in persist re-scrubs every string leaf for defense in depth.
 function verificationOf(report: unknown): EvidenceManifest["verification"] {
@@ -196,7 +205,9 @@ function verificationOf(report: unknown): EvidenceManifest["verification"] {
     return undefined;
   }
   const summary = report.verificationSummary ?? verifiedVerificationOf(report);
-  return isRecord(summary) ? (summary as unknown as EvidenceManifest["verification"]) : undefined;
+  return isRecord(summary) && hasValidOverallStatus(summary)
+    ? (summary as unknown as EvidenceManifest["verification"])
+    : undefined;
 }
 
 function verifiedVerificationOf(report: Record<string, unknown>): unknown {

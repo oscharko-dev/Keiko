@@ -52,6 +52,16 @@ const TOKEN_EFFICIENCY_FLOOR = 0.2;
 // the #2643 fixture-parity rule applies to constants too.
 export const GROUNDING_READINESS_MIN_RULES = 3;
 
+// KEIKO-0770: single source of truth for the "output controllability" quality criterion. The
+// generator writes OUTPUT_CONTROLLABILITY_CRITERION verbatim into EnhancedPrompt.qualityCriteria;
+// both scoreOutputControllability (below) and the evaluator's scoreFormatAdherence match on the
+// PREFIX so an intentFrame-supplied full-detail criterion sharing the same subject still counts.
+// Before this constant existed, three files independently duplicated the literal "Output
+// controllability" prefix; a wording change would silently break both scoring paths at once.
+export const OUTPUT_CONTROLLABILITY_CRITERION_PREFIX = "Output controllability";
+export const OUTPUT_CONTROLLABILITY_CRITERION =
+  `${OUTPUT_CONTROLLABILITY_CRITERION_PREFIX}: the response conforms exactly to the required format.` as const;
+
 // Weighted aggregate. Safety carries the most weight (it is the floor candidate generation must never
 // relax, AC5); completeness is next; the remaining quality dimensions are balanced. Sums to 1.0.
 export const PROMPT_CRITIC_DIMENSION_WEIGHTS: Readonly<Record<PromptCriticDimension, number>> =
@@ -211,7 +221,7 @@ function scoreSafety(prompt: EnhancedPrompt, plan: PromptEnhancementPlan): Dimen
 function scoreOutputControllability(prompt: EnhancedPrompt): DimensionAssessment {
   const schema = prompt.outputSchema;
   const hasControllabilityCriterion = prompt.qualityCriteria.some((criterion) =>
-    criterion.startsWith("Output controllability"),
+    criterion.startsWith(OUTPUT_CONTROLLABILITY_CRITERION_PREFIX),
   );
   const checks: readonly boolean[] = [
     schema.structured,

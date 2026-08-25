@@ -41,6 +41,14 @@ const BASELINE_LEAST_PRIVILEGE_DENIALS = BASELINE_LEAST_PRIVILEGE.length;
 // Derived from the producer (`GROUNDING_READINESS_MIN_RULES` in keiko-model-gateway's critic) so the
 // scorer's structural gate matches the critic's continuous grading — same #2643 discipline.
 const GROUNDED_MIN_RULES = PromptEnhancer.GROUNDING_READINESS_MIN_RULES;
+// KEIKO-0770: the "output controllability" quality criterion is now anchored on a single shared
+// constant exported by keiko-model-gateway's promptEnhancer critic. The generator writes
+// OUTPUT_CONTROLLABILITY_CRITERION verbatim; the critic scores on the prefix; the evaluator
+// (below) matches on the same prefix — so a wording change in the producer propagates to both
+// checks in one edit, with no drift. Follows the same #2643 fixture-parity discipline as
+// GROUNDED_MIN_RULES above.
+const OUTPUT_CONTROLLABILITY_CRITERION_PREFIX =
+  PromptEnhancer.OUTPUT_CONTROLLABILITY_CRITERION_PREFIX;
 
 interface Check {
   readonly label: string;
@@ -215,7 +223,9 @@ function scoreFormatAdherence(
       { label: "format hints present", ok: s.hints.length > 0 },
       {
         label: "output-controllability criterion present",
-        ok: obs.prompt.qualityCriteria.some((c) => c.startsWith("Output controllability")),
+        ok: obs.prompt.qualityCriteria.some((c) =>
+          c.startsWith(OUTPUT_CONTROLLABILITY_CRITERION_PREFIX),
+        ),
       },
     );
   }

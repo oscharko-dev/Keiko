@@ -312,7 +312,7 @@ describe("enumerate — full id-set walk with token pagination", () => {
     expect(outcome).toStrictEqual({ ok: true, refs: [], complete: true });
   });
 
-  it("terminates a never-ending token chain at the request ceiling as malformed-payload", async () => {
+  it("fails closed on a never-ending token chain as malformed-payload", async () => {
     const body = JSON.stringify({ issues: [], nextPageToken: "again" });
     const source = createJiraSyncSource({
       baseUrl: BASE_URL,
@@ -331,6 +331,36 @@ describe("enumerate — full id-set walk with token pagination", () => {
       ),
     );
     expect(outcome).toStrictEqual({ ok: false, reason: "malformed-payload" });
+  });
+
+  it("fails closed on a self-referential nextPageToken chain after two requests, not the request ceiling", async () => {
+    // Regression for KEIKO-0598: a `nextPageToken` that repeats a previously-seen exact value
+    // (here, every page hands back the same token) indicates a self-referential loop rather than
+    // legitimate large pagination, mirroring the Confluence walk's seen-URL guard
+    // (confluence-sync-adapter.ts's walkPaginatedList). The repeated-token guard must fire on the
+    // second repeat rather than spinning to the 500-request MAX_SEARCH_REQUESTS ceiling.
+    const requests: AtlassianHttpBodyRequest[] = [];
+    const body = JSON.stringify({ issues: [], nextPageToken: "loop-token" });
+    const http: AtlassianHttpBodyPort = (request) => {
+      requests.push(request);
+      return Promise.resolve({
+        kind: "response",
+        status: 200,
+        bodyText: body,
+        bodyBytes: body.length,
+        truncated: false,
+      });
+    };
+    const source = createJiraSyncSource({
+      baseUrl: BASE_URL,
+      connectorId: "cred-test",
+      projectKeys: ["PLAT"],
+    });
+    const outcome = await source.enumerate(contextFor(http));
+    expect(outcome).toStrictEqual({ ok: false, reason: "malformed-payload" });
+    // A generous cap (< 10) captures the regression without pinning the exact request count to an
+    // internal implementation detail — the point is "long before the 500-request ceiling".
+    expect(requests.length).toBeLessThan(10);
   });
 
   it("fails enumeration with timeout once the run deadline is exceeded", async () => {
@@ -726,6 +756,35 @@ describe("fetchItem — issue documents, metadata, and the failure matrix", () =
     const harness = sourceFor([project("PLAT", [issue])]);
     const item = await fetchedItem(harness, issue.issueId);
     expect(item.contentHtml).toContain("[Content truncated: conversion limits reached]");
+  });
+});
+
+// Recursively counts every object carrying a `type` property, mirroring how the fixture's own
+// header describes its contents ("a deterministic >= totalNodes-node ADF document").
+function countAdfTypedNodes(value: unknown): number {
+  if (Array.isArray(value)) {
+    return value.reduce((sum: number, entry) => sum + countAdfTypedNodes(entry), 0);
+  }
+  if (typeof value !== "object" || value === null) return 0;
+  const record = value as Record<string, unknown>;
+  let count = "type" in record ? 1 : 0;
+  for (const key of Object.keys(record)) {
+    count += countAdfTypedNodes(record[key]);
+  }
+  return count;
+}
+
+describe("buildHostileJiraAdfDocument — node-count floor", () => {
+  it("returns at least the requested node count for the hostile ADF document (KEIKO-0723)", () => {
+    // Regression for KEIKO-0723: the header claims ">= totalNodes nodes"; the former 120-node
+    // reservation for the 102-node depth chain, combined with floor-rounding the breadth-pair
+    // remainder, produced 17 fewer nodes than requested for every input (e.g. exactly 9,983 for
+    // totalNodes=10,000, verified against the pre-fix formula) — silently failing the very
+    // "10k-node hostile document" acceptance criterion this fixture exists to satisfy.
+    for (const totalNodes of [1_000, 10_000, 20_000]) {
+      const count = countAdfTypedNodes(buildHostileJiraAdfDocument(totalNodes));
+      expect(count).toBeGreaterThanOrEqual(totalNodes);
+    }
   });
 });
 

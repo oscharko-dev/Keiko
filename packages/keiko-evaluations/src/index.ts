@@ -18,6 +18,7 @@ export { evaluateFloors, runRegressionProbes } from "./quality-helpers.js";
 export type {
   MinimumFloorResult,
   RegressionProbeObservation,
+  RegressionProbeRunResult,
   RunRegressionProbesOptions,
 } from "./quality-helpers.js";
 // Local Knowledge retrieval evaluation suite (Issue #2568; ADR-0152 D5). A namespace avoids

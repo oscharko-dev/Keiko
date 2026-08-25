@@ -27,6 +27,7 @@
   <body class="ds">
     <a class="skip-link" href="#main">Skip to content</a>
     <nav class="nav" data-ds-nav aria-label="Design system"></nav>
+    <script src="lift-glyphs.js"></script>
     <script src="ds-nav.js"></script>
 
     <main class="main" id="main">
@@ -400,6 +401,10 @@
       // indeterminate
       document.getElementById("indet").indeterminate = true;
       // combobox — full WAI-ARIA combobox + listbox keyboard pattern
+      // KEIKO-1007: MODELS is a trusted, hardcoded literal — paintCombo() below
+      // interpolates each entry into innerHTML unescaped. If this list is ever sourced
+      // dynamically (user input, an API response), escape `m` before interpolating or
+      // switch to textContent/createElement instead.
       var MODELS = [
         "gpt-oss-120b",
         "gpt-oss-20b",

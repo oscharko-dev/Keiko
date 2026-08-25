@@ -29,6 +29,7 @@ import {
 } from "@oscharko-dev/keiko-local-knowledge/testing";
 
 import { citationRequirementForUnit, type CitationRequirementKey } from "./dimensions.js";
+import { EVAL_TOPIC_BOOST } from "./fixtures.js";
 import type {
   EvalCapsuleSpec,
   EvalDocumentSpec,
@@ -184,7 +185,7 @@ function seedChunks(
 
 function addTopicBoost(boosts: Record<string, number>, topic: string | undefined): void {
   if (topic === undefined) return;
-  boosts[topic] = 1.0;
+  boosts[topic] = EVAL_TOPIC_BOOST;
 }
 
 function collectDocumentTopicBoosts(boosts: Record<string, number>, doc: EvalDocumentSpec): void {

@@ -83,6 +83,14 @@ function deriveStaleness(
   fixture: VoiceActionEvalFixture,
   proposal: SpokenActionProposal,
 ): VoiceActionStalenessTrajectory | undefined {
+  // KEIKO-0629: the two staleness triggers are independently optional fields, not a discriminated
+  // union, so nothing at the type level stops a fixture from declaring both. Fail loudly instead of
+  // silently deriving only the "correction" trajectory and dropping "turn-advance".
+  if (fixture.correctedSegments !== undefined && fixture.turnAdvance === true) {
+    throw new Error(
+      `fixture ${fixture.name} declares both correctedSegments and turnAdvance; at most one staleness trigger is allowed`,
+    );
+  }
   const originalCanonical = canonicalizeSpokenActionConfirmation(proposal.confirmationInput);
   if (fixture.correctedSegments !== undefined) {
     const changed = projectionConfirmationSeed(

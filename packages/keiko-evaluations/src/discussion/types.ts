@@ -69,9 +69,10 @@ export interface DiscussionOracle {
   readonly expectedDecisionRecommendation: boolean;
   // correction-handling: when present, the plan's contradictionPolicy must be one of these.
   readonly expectedContradictionPolicies?: readonly DiscussionModePlan["contradictionPolicy"][];
-  // interruption-recovery: present only for fixtures with an interruption trajectory. The recovered
-  // context must preserve the same mode/topicId/turnIndex (the AC4 no-context-loss proof).
-  readonly expectsRecoveredContext?: boolean;
+  // interruption-recovery: gates whether the recovered turn must preserve the same
+  // mode/topicId/turnIndex (the AC4 no-context-loss proof). Only meaningful for fixtures that declare
+  // the "interruption-recovery" dimension; set `false` on every other fixture.
+  readonly expectsRecoveredContext: boolean;
 }
 
 // A discussion-evaluation fixture. `interruption` opts the fixture into a begin -> interrupt -> recover

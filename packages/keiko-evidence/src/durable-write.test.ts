@@ -211,6 +211,22 @@ describe("writeDurableUtf8TempFile", () => {
 });
 
 describe("replaceViaDurableTempFile", () => {
+  it("writes, fsyncs, renames, and fsyncs the containing directory on success", async () => {
+    const fs = createFsMock();
+    const { replaceViaDurableTempFile } = await importDurableWriteWithFs(fs);
+
+    replaceViaDurableTempFile("/evidence/run.json", "/evidence/.run.tmp", "content");
+
+    expect(fs.openSync).toHaveBeenCalledWith("/evidence/.run.tmp", "wx", 0o600);
+    expect(fs.writeSync).toHaveBeenCalled();
+    expect(fs.fsyncSync).toHaveBeenCalledWith(17);
+    expect(fs.renameSync).toHaveBeenCalledWith("/evidence/.run.tmp", "/evidence/run.json");
+    // Post-rename: the containing directory is opened+fsynced+closed too (durability of the
+    // rename itself, not just the file content).
+    expect(fs.openSync).toHaveBeenCalledWith("/evidence", "r");
+    expect(fs.rmSync).not.toHaveBeenCalled();
+  });
+
   it("removes the temporary file with force=true when replacement fails", async () => {
     const error = new Error("rename failed");
     const fs = createFsMock();

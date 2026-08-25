@@ -16,6 +16,13 @@
 # and messages match; the quality PROFILE is SonarQube's built-in "Sonar way" rather than the
 # organisation's, so treat a clean local run as "no known rule violation", not as a gate verdict.
 # The verdict stays CI's (docs/qa/local-gates.md).
+#
+# KEIKO-0578: explicit Compose project name for direct/manual invocations. run-sonar.sh exports its
+# own COMPOSE_PROJECT_NAME (keiko-sonar-<repository_id>-<sonar_port>) which still takes precedence
+# per Compose rules; this file-level name is the fallback identity that prevents a bare
+# `docker compose -f sonar-compose.yml` from colliding with docker-compose.yml's `keiko-gates`
+# project (containers, network, volumes).
+name: keiko-gates-sonar
 services:
   sonarqube:
     # Digest-pinned like every GitHub Action in this repository: a floating tag would silently

@@ -20,6 +20,7 @@ const baseFixture: DiscussionEvalFixture = {
     expectedGatingAllowed: false,
     expectedUncertaintyDisclosure: true,
     expectedDecisionRecommendation: false,
+    expectsRecoveredContext: false,
   },
 };
 

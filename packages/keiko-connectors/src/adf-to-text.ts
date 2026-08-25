@@ -149,6 +149,16 @@ function renderNode(value: unknown, state: ConversionState, depth: number): stri
   return renderUnknown(node, state, depth, type);
 }
 
+// KEIKO-0944: once the node or output budget has already tripped (the first over-budget
+// renderNode call below already recorded the reason), every remaining sibling is skipped rather
+// than dispatched into renderNode only to immediately return "" — otherwise conversion is linear
+// in node.content.length rather than in the node budget, contradicting the module header's own
+// "linear in the node budget regardless of input shape" claim. Documents within budget are
+// unaffected: the check only trips once nodesVisited or outputChars is already past its ceiling.
+function budgetTripped(state: ConversionState): boolean {
+  return state.nodesVisited > ADF_TO_TEXT_MAX_NODES || budgetExhausted(state);
+}
+
 function renderChildren(
   node: AdfNode,
   state: ConversionState,
@@ -157,6 +167,7 @@ function renderChildren(
 ): string {
   const parts: string[] = [];
   for (const child of asArray(node.content)) {
+    if (budgetTripped(state)) break;
     const text = renderNode(child, state, childDepth);
     if (text.length > 0) parts.push(text);
   }
@@ -313,20 +324,29 @@ function renderListItemWithMarker(
 }
 
 function renderBulletList(node: AdfNode, state: ConversionState, depth: number): string {
-  const items = asArray(node.content).map((item) =>
-    renderListItemWithMarker(item, state, depth + 1, "- "),
-  );
-  return items.filter((item) => item.length > 0).join("\n");
+  const items: string[] = [];
+  for (const item of asArray(node.content)) {
+    if (budgetTripped(state)) break;
+    const rendered = renderListItemWithMarker(item, state, depth + 1, "- ");
+    if (rendered.length > 0) items.push(rendered);
+  }
+  return items.join("\n");
 }
 
 function renderOrderedList(node: AdfNode, state: ConversionState, depth: number): string {
   const rawStart = attrsOf(node).order;
   const start =
     typeof rawStart === "number" && Number.isInteger(rawStart) && rawStart >= 0 ? rawStart : 1;
-  const items = asArray(node.content).map((item, index) =>
-    renderListItemWithMarker(item, state, depth + 1, `${String(start + index)}. `),
-  );
-  return items.filter((item) => item.length > 0).join("\n");
+  const items: string[] = [];
+  let index = 0;
+  for (const item of asArray(node.content)) {
+    if (budgetTripped(state)) break;
+    const marker = `${String(start + index)}. `;
+    const rendered = renderListItemWithMarker(item, state, depth + 1, marker);
+    if (rendered.length > 0) items.push(rendered);
+    index += 1;
+  }
+  return items.join("\n");
 }
 
 function renderListItem(node: AdfNode, state: ConversionState, depth: number): string {
@@ -336,6 +356,7 @@ function renderListItem(node: AdfNode, state: ConversionState, depth: number): s
 function renderTaskList(node: AdfNode, state: ConversionState, depth: number): string {
   const items: string[] = [];
   for (const child of asArray(node.content)) {
+    if (budgetTripped(state)) break;
     const record = asRecord(child);
     const isDone = record !== undefined && asString(attrsOf(record).state) === "DONE";
     const marker = isDone ? "[x] " : "[ ] ";
@@ -351,10 +372,16 @@ function renderTaskItem(node: AdfNode, state: ConversionState, depth: number): s
 }
 
 function renderDecisionList(node: AdfNode, state: ConversionState, depth: number): string {
-  const items = asArray(node.content).map((item) =>
-    renderListItemWithMarker(item, state, depth + 1, "Decision: "),
-  );
-  return items.filter((item) => item.length > 0).join("\n");
+  // Same structural defect as the other .map()-based list helpers (not itself named in the
+  // KEIKO-0944 finding, but identical pattern — fixed here for the same reason, per AGENTS.md §7
+  // "fix the whole class, at the owning layer").
+  const items: string[] = [];
+  for (const item of asArray(node.content)) {
+    if (budgetTripped(state)) break;
+    const rendered = renderListItemWithMarker(item, state, depth + 1, "Decision: ");
+    if (rendered.length > 0) items.push(rendered);
+  }
+  return items.join("\n");
 }
 
 // ─── Tables (linearized: one row per line, cells separated by ` | `) ───────────
@@ -363,14 +390,24 @@ function renderTableCell(node: AdfNode, state: ConversionState, depth: number): 
 }
 
 function renderTableRow(node: AdfNode, state: ConversionState, depth: number): string {
-  const cells = asArray(node.content).map((cell) => renderNode(cell, state, depth + 1));
+  // Every cell (even one that renders empty) keeps its column position, so — unlike the list
+  // helpers above — no filtering happens here; only trailing cells past an already-tripped budget
+  // are skipped, which is the already-truncated path this fix targets.
+  const cells: string[] = [];
+  for (const cell of asArray(node.content)) {
+    if (budgetTripped(state)) break;
+    cells.push(renderNode(cell, state, depth + 1));
+  }
   return cells.join(" | ");
 }
 
 function renderTable(node: AdfNode, state: ConversionState, depth: number): string {
-  const rows = asArray(node.content)
-    .map((row) => renderNode(row, state, depth + 1))
-    .filter((row) => row.length > 0);
+  const rows: string[] = [];
+  for (const row of asArray(node.content)) {
+    if (budgetTripped(state)) break;
+    const rendered = renderNode(row, state, depth + 1);
+    if (rendered.length > 0) rows.push(rendered);
+  }
   return rows.join("\n");
 }
 

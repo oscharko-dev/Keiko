@@ -30,6 +30,7 @@ import {
   asString,
   atlassianApiEndpointsFor,
   atlassianApiUrl,
+  type AtlassianApiEndpoints,
 } from "./atlassian-sync-classify.js";
 import {
   executeAtlassianWriteRequest,
@@ -132,11 +133,29 @@ function failureOf(outcome: AtlassianWriteHttpOutcome): AtlassianWriteActionFail
   };
 }
 
+// KEIKO-0916: deps.baseUrl is immutable across the many write-action calls one connector session
+// makes, but atlassianApiEndpointsFor re-runs isSafeAtlassianConnectorBaseUrl and `new URL(...)`
+// on every call otherwise. isSafeAtlassianConnectorBaseUrl is a pure structural check (no
+// network, no time-dependent state), so caching its result for an identical, already-validated
+// baseUrl string is semantically equivalent to re-validating it — this is a cache, not a bypass:
+// a baseUrl this process has never seen is still fully validated, exactly once, on first use.
+const jiraEndpointsCache = new Map<string, AtlassianApiEndpoints>();
+
 function issueUrl(deps: JiraWriteActionDeps, relative: string): string {
-  return atlassianApiUrl(atlassianApiEndpointsFor(deps.baseUrl, JIRA_API_ROOT), relative);
+  const { baseUrl } = deps;
+  let endpoints = jiraEndpointsCache.get(baseUrl);
+  if (endpoints === undefined) {
+    endpoints = atlassianApiEndpointsFor(baseUrl, JIRA_API_ROOT);
+    jiraEndpointsCache.set(baseUrl, endpoints);
+  }
+  return atlassianApiUrl(endpoints, relative);
 }
 
 function issueTypeField(input: CreateJiraIssueInput): Record<string, string> | undefined {
+  // "Exactly one of the two selects the issue type" (documented above on CreateJiraIssueInput):
+  // both supplied together is a contradiction, not an id-wins fallthrough (KEIKO-0806) — mirrors
+  // resolveJiraLiveSearchJql's both-or-neither rejection in jira-live-search.ts.
+  if (input.issueTypeId !== undefined && input.issueTypeName !== undefined) return undefined;
   if (input.issueTypeId !== undefined) {
     return NUMERIC_ID_PATTERN.test(input.issueTypeId) ? { id: input.issueTypeId } : undefined;
   }
@@ -284,7 +303,16 @@ export async function transitionJiraIssue(
     bodyJson: JSON.stringify({ transition: { id: input.transitionId } }),
     expect: "none",
   });
-  return outcome.ok ? { ok: true, transitionId: input.transitionId } : failureOf(outcome);
+  if (outcome.ok) return { ok: true, transitionId: input.transitionId };
+  // KEIKO-0814: a 400/404 on THIS specific POST, immediately after a GET that just listed the
+  // transition as available, means it became unavailable in the race window between the two
+  // requests — the same typed reason the pre-check above already returns, not the generic
+  // status-derived one (Jira still correctly rejected the mutation; only the reported reason's
+  // precision changes).
+  if (outcome.httpStatus === 400 || outcome.httpStatus === 404) {
+    return { ok: false, reason: "invalid-transition" };
+  }
+  return failureOf(outcome);
 }
 
 // POST /rest/api/3/issue/{issueKey}/comment — additive comment composed as ADF.

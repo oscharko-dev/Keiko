@@ -1,7 +1,8 @@
 // ADF-to-text converter tests (Issue #2243). Golden output per node type, hostile-input
 // degradation, purity/determinism (byte-identical repeat runs), and depth/node/output caps at
-// their exact boundary values. Hermetic and clock-free except the explicit wall-clock bound on
-// the 10k-node hostile corpus, which the acceptance criteria demand.
+// their exact boundary values. Hermetic and clock-free except two explicit wall-clock bounds: the
+// 10k-node hostile corpus the acceptance criteria demand, and the KEIKO-0944 node-budget early-exit
+// regression (a relative bound calibrated against the same run, not an absolute machine-speed one).
 
 import { describe, expect, it } from "vitest";
 import {
@@ -347,6 +348,43 @@ describe("convertAdfToText — purity and determinism", () => {
     expect(second.truncationReasons).toStrictEqual(first.truncationReasons);
     expect(second.unknownNodeTypes).toStrictEqual(first.unknownNodeTypes);
     expect(elapsedMs).toBeLessThan(2_000);
+  });
+
+  it("keeps conversion time roughly independent of input array length once far past the node budget", () => {
+    // Regression for KEIKO-0944: the module header claims conversion is "linear in the node
+    // budget regardless of input shape". Before the fix, renderChildren's loop (and the
+    // list/table iteration helpers) kept dispatching every remaining sibling into renderNode even
+    // after the budget had already tripped — each such call is cheap on its own, but a top-level
+    // content array far larger than the budget still made total work scale with the ARRAY LENGTH,
+    // not the budget. A single shared, non-recursive paragraph object is reused across every array
+    // slot (safe: the converter has no identity-based cycle tracking, only count/depth caps — see
+    // the module header's own note on the depth cap terminating self-referencing graphs) so a
+    // 1000x-larger input can be built and converted without object-allocation overhead that isn't
+    // what this test is measuring.
+    const trivialParagraph: Json = { type: "paragraph", content: [] };
+    const atBudgetDoc = doc(...new Array<Json>(ADF_TO_TEXT_MAX_NODES).fill(trivialParagraph));
+    const startAtBudget = performance.now();
+    convertAdfToText(atBudgetDoc);
+    const atBudgetMs = performance.now() - startAtBudget;
+
+    const farOverBudgetDoc = {
+      type: "doc",
+      version: 1,
+      content: new Array<Json>(20_000_000).fill(trivialParagraph),
+    };
+    const startOverBudget = performance.now();
+    const outcome = convertAdfToText(farOverBudgetDoc);
+    const overBudgetMs = performance.now() - startOverBudget;
+
+    expect(outcome.truncated).toBe(true);
+    expect(outcome.truncationReasons).toStrictEqual(["node-budget-exceeded"]);
+    // The far-over-budget input has ~1000x more array entries than the at-budget one but must not
+    // take proportionally longer to convert. A relative bound (not an absolute millisecond cap)
+    // self-calibrates to the host machine's speed: a generous 25x multiplier — with a 200ms floor,
+    // since atBudgetMs itself can be a couple of milliseconds and timer/GC noise dominates at that
+    // scale — sits far from both the ~1x ratio a bounded implementation produces and the ~1000x
+    // ratio a linear-in-array-length one would.
+    expect(overBudgetMs).toBeLessThan(Math.max(atBudgetMs * 25, 200));
   });
 
   it("produces identical output for a JSON round-tripped clone of the same document", () => {

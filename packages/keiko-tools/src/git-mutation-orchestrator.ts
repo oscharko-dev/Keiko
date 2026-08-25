@@ -40,7 +40,7 @@ import type {
   GitWorktreeSnapshot,
 } from "./git-mutation-preflight.js";
 import { evaluateGitPreflight } from "./git-mutation-preflight.js";
-import { approverIsNotAuthorized } from "./git-approval-gate.js";
+import { resolveGitDeliveryApprovalGate } from "./git-approval-gate.js";
 import type {
   GitMutationFailureCategory,
   GitMutationLifecyclePhase,
@@ -308,39 +308,23 @@ type PolicyGate =
       readonly blockReason: GitDeliveryBlockReason;
     };
 
-function approvalIsValid(
-  approval: GitDeliveryApprovalRequirement,
-  now: number,
-): "valid" | "absent" | "expired" {
-  if (!approval.required) {
-    return "absent";
-  }
-  if (approval.expiresAtMs !== undefined && approval.expiresAtMs <= now) {
-    return "expired";
-  }
-  return "valid";
-}
-
+// KEIKO-0535: delegates to the one shared approval-gate resolver (git-approval-gate.ts) instead of
+// re-deriving valid/expired/absent + KEIKO-0147's identity check locally, then maps the canonical
+// result onto this file's own PolicyGate shape — the same shape every existing caller already
+// consumes, so behavior is unchanged.
 function resolveApprovalGate(
   decision: GitDeliveryPolicyDecision,
   approval: GitDeliveryApprovalRequirement,
   now: number,
 ): PolicyGate {
-  const approvers = decision.outcome === "approval-gated" ? decision.requiredApprovers : [];
-  const state = approvalIsValid(approval, now);
-  if (state === "valid") {
-    // KEIKO-0147: a valid token is not authority on its own — the granting identity must be in
-    // the decision's required-approver set when it names one. Same predicate as the merge,
-    // publish, and PR gates.
-    if (approverIsNotAuthorized(decision, approval)) {
-      return { proceed: false, status: "policy-block", blockReason: "approver-not-authorized" };
-    }
+  const gate = resolveGitDeliveryApprovalGate(decision, approval, now);
+  if (gate.proceed) {
     return { proceed: true };
   }
-  if (state === "expired") {
-    return { proceed: false, status: "policy-block", blockReason: "approval-expired" };
+  if (gate.status === "approval-required") {
+    return { proceed: false, status: "approval-required", requiredApprovers: gate.approvers };
   }
-  return { proceed: false, status: "approval-required", requiredApprovers: approvers };
+  return { proceed: false, status: "policy-block", blockReason: gate.blockReason };
 }
 
 // Delegates effective constraint resolution to the contract-owned evaluator so every execution and

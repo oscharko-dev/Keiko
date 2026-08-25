@@ -223,6 +223,26 @@ describe("composeJiraIssueDocument", () => {
     expect(result.contentHtml.endsWith("</main></body></html>")).toBe(true);
   });
 
+  it("never truncates mid-entity: a byte cut inside an escaped &amp; never leaves a bare fragment", () => {
+    // Regression for KEIKO-0766: descriptionSectionHtml used to escape THEN byte-slice, so the cut
+    // could land inside the 5-byte replacement escapeHtmlText introduces for "&" ("&amp;"). A long
+    // run of raw "&" makes every cut position that is not an exact multiple of 5 escaped bytes land
+    // mid-entity; with an empty title/metadataLine the fixed pipeline overhead computes an allowance
+    // of 1,999,529 bytes into the escaped description (verified: 1,999,529 mod 5 === 4), i.e. 4
+    // bytes into an "&amp;" run — right after "&amp" with the terminating ";" cut off.
+    const result = composeJiraIssueDocument({
+      title: "",
+      metadataLine: "",
+      descriptionText: "&".repeat(500_000),
+      comments: [],
+    });
+    expect(result.truncated).toBe(true);
+    expect(result.byteLength).toBeLessThanOrEqual(JIRA_COMPOSED_DOCUMENT_MAX_BYTES);
+    // No "&" anywhere in the document may be followed by anything other than a complete, closed
+    // entity — a bare "&amp" (or "&l", "&quo", etc.) fragment would match this pattern.
+    expect(result.contentHtml).not.toMatch(/&(?!(amp|lt|gt|quot);)/);
+  });
+
   it("omits over-budget comments with an explicit counted marker", () => {
     const bigComment = { headerLine: "A — t", bodyText: "c".repeat(900_000) };
     const result = composeJiraIssueDocument({

@@ -249,7 +249,14 @@ export function createInMemoryJiraFixture(
 // path: the document indexes with an explicit conversion-truncation marker, never a crash or
 // hang.
 export function buildHostileJiraAdfDocument(totalNodes: number): unknown {
-  const breadthPairs = Math.max(1, Math.floor((totalNodes - 120) / 2));
+  // The depth chain contributes exactly 102 typed nodes (100 blockquotes + 1 tail paragraph + 1
+  // tail text node) plus the 1 root "doc" node added below — 103 fixed nodes total. Each breadth
+  // pair contributes 2 (a paragraph + its one text node), and the remainder is rounded UP so the
+  // document always contains at least `totalNodes` nodes (KEIKO-0723: the former 120-node
+  // reservation for the 102-node chain, combined with floor-rounding, undercounted every input by
+  // 17 nodes, silently failing this function's own ">= totalNodes" contract).
+  const FIXED_NODE_COUNT = 103;
+  const breadthPairs = Math.max(1, Math.ceil((totalNodes - FIXED_NODE_COUNT) / 2));
   const paragraphs = Array.from({ length: breadthPairs }, (_, index) => ({
     type: "paragraph",
     content: [{ type: "text", text: `hostile breadth node ${String(index)}` }],

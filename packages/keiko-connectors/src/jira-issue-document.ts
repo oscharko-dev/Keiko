@@ -326,6 +326,32 @@ function commentSectionHtml(comment: JiraComposedComment): string {
   ].join("");
 }
 
+// Finds the longest raw-text prefix of `text` (UTF-8-boundary-safe) whose ESCAPED form fits
+// within `allowanceBytes`, so a byte-budget cut can never land inside an HTML entity that
+// `escapeHtmlText` introduces (KEIKO-0766: slicing the already-escaped string can cut `&amp;`
+// etc. in half). `escapeHtmlText` only ever maps one character to itself or to a longer verbatim
+// replacement, applied left-to-right, so escaped byte length is monotonically non-decreasing in
+// the raw prefix length — and never shorter than the raw prefix's own byte length. That gives a
+// safe upper bound (`allowanceBytes`) for a binary search over the raw byte cut point, which
+// converges in O(log budgetBytes) probes instead of shrinking the candidate one byte at a time.
+function largestSafePrefixUnderEscapedBudget(text: string, allowanceBytes: number): string {
+  if (allowanceBytes <= 0) return "";
+  let lo = 0;
+  let hi = allowanceBytes;
+  let best = "";
+  while (lo <= hi) {
+    const mid = Math.floor((lo + hi) / 2);
+    const candidate = sliceToBytes(text, mid);
+    if (byteLengthOf(escapeHtmlText(candidate)) <= allowanceBytes) {
+      best = candidate;
+      lo = mid + 1;
+    } else {
+      hi = mid - 1;
+    }
+  }
+  return best;
+}
+
 function descriptionSectionHtml(
   descriptionText: string,
   budgetBytes: number,
@@ -343,7 +369,9 @@ function descriptionSectionHtml(
   }
   const marker = `\n${JIRA_DOCUMENT_TRUNCATION_MARKER}`;
   const allowance = Math.max(0, budgetBytes - overhead - byteLengthOf(marker));
-  const sliced = sliceToBytes(escaped, allowance);
+  // Slice the RAW text to a raw-byte allowance and escape afterward — never the already-escaped
+  // string — so the cut point is always chosen with entity boundaries in view.
+  const sliced = escapeHtmlText(largestSafePrefixUnderEscapedBudget(descriptionText, allowance));
   return { html: `${open}${sliced}${escapeHtmlText(marker)}${close}`, truncated: true };
 }
 

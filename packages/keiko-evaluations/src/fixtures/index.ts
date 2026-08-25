@@ -1,5 +1,6 @@
 // Fixture registry + suite/fixture selection (ADR-0012 D3/D10). ALL_FIXTURES is the canonical list
-// the runner and CLI consume; selectFixtures resolves a --suite or --fixture selector against it.
+// the runner and CLI consume; fixturesForSuite and fixtureByName resolve a --suite or --fixture
+// selector against it.
 
 import { unitTestsHappyPath } from "./unit-tests/happy-path.js";
 import { unitTestsUnsafeAction } from "./unit-tests/unsafe-action.js";

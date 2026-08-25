@@ -87,6 +87,38 @@ describe("KEIKO-0173 producer-derived scorer thresholds", () => {
     expect(failRes?.rationale).toContain("baseline least-privilege denials present");
   });
 
+  // KEIKO-0770 producer-derived output-controllability pin: three files (generator, critic, and
+  // this scorer) all keyed off the same literal "Output controllability" prefix. The producer
+  // now owns the single canonical constant; if the wording ever drifts, every consumer either
+  // still matches (constant intact) or every consumer flips together — never one silently.
+  it("exports OUTPUT_CONTROLLABILITY_CRITERION_PREFIX from keiko-model-gateway as a non-empty string", () => {
+    expect(typeof PromptEnhancer.OUTPUT_CONTROLLABILITY_CRITERION_PREFIX).toBe("string");
+    expect(PromptEnhancer.OUTPUT_CONTROLLABILITY_CRITERION_PREFIX.length).toBeGreaterThan(0);
+    expect(
+      PromptEnhancer.OUTPUT_CONTROLLABILITY_CRITERION.startsWith(
+        PromptEnhancer.OUTPUT_CONTROLLABILITY_CRITERION_PREFIX,
+      ),
+    ).toBe(true);
+  });
+
+  it("generator writes a criterion whose prefix matches the producer constant (no drift)", () => {
+    // A structured-extraction fixture forces the generator's buildQualityCriteria path that pushes
+    // the output-controllability criterion. Observation: at least one written criterion must start
+    // with the producer's canonical prefix — proves the writer and the checker share one source.
+    const obs = observe("task-structured-extraction");
+    const written = obs.prompt.qualityCriteria.some((criterion) =>
+      criterion.startsWith(PromptEnhancer.OUTPUT_CONTROLLABILITY_CRITERION_PREFIX),
+    );
+    expect(written).toBe(true);
+    // Symmetric: the OUTPUT_CONTROLLABILITY_CRITERION full text must itself pass the prefix check
+    // so a wording change AFTER the colon still flows through both consumers unchanged.
+    expect(
+      PromptEnhancer.OUTPUT_CONTROLLABILITY_CRITERION.startsWith(
+        PromptEnhancer.OUTPUT_CONTROLLABILITY_CRITERION_PREFIX,
+      ),
+    ).toBe(true);
+  });
+
   it("scorer grounded-task gate flips at exactly GROUNDING_READINESS_MIN_RULES (producer-owned)", () => {
     const groundedObs = observe("task-rag-qa");
     expect(groundedObs.prompt.groundingPlan.required).toBe(true);

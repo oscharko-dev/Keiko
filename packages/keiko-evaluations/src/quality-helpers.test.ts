@@ -1,7 +1,6 @@
 import { describe, expect, it } from "vitest";
 
 import {
-  evaluateCeilings,
   evaluateFloors,
   meetsFiniteCeiling,
   meetsFiniteFloor,
@@ -67,17 +66,12 @@ describe("evaluateFloors", () => {
   );
 });
 
-describe("evaluateCeilings", () => {
-  it("reports strict, missing, and non-finite failures through the shared evaluator", () => {
-    expect(
-      evaluateCeilings(
-        { within: 1, over: 3, nonFinite: Number.POSITIVE_INFINITY },
-        { within: 1, over: 2, missing: 1, nonFinite: 10 },
-      ),
-    ).toEqual({
-      ok: false,
-      failures: ["over", "missing", "nonFinite"],
-    });
+// KEIKO-0866: the evaluateFloors-mirroring ceiling wrapper this block used to exercise was dead code
+// -- no production path or the public SDK barrel ever called it -- and was deleted per AGENTS.md §6.
+// meetsFiniteCeiling is a separate, actively-used helper (scorer.ts:scorePatchSize and the
+// token-efficiency check), so its coverage is preserved here as a standalone case.
+describe("meetsFiniteCeiling", () => {
+  it("accepts at the ceiling and rejects a non-finite value or ceiling", () => {
     expect(meetsFiniteCeiling(1, 1)).toBe(true);
     expect(meetsFiniteCeiling(1, Number.POSITIVE_INFINITY)).toBe(false);
   });
@@ -104,7 +98,13 @@ describe("runRegressionProbes", () => {
       observe: (observation) => observations.push(observation.fixtureId),
     });
 
-    expect(result).toEqual({ ok: true, tautological: [], probed: 1, unresolved: [] });
+    expect(result).toEqual({
+      ok: true,
+      tautological: [],
+      probed: 1,
+      unresolved: [],
+      skipped: [],
+    });
     expect(observations).toEqual(["probe"]);
   });
 
@@ -133,6 +133,7 @@ describe("runRegressionProbes", () => {
       tautological: [],
       probed: 1,
       unresolved: ["missing"],
+      skipped: [],
     });
   });
 
@@ -145,6 +146,32 @@ describe("runRegressionProbes", () => {
       runFixture: () => run(0),
       droppedBelowFloors: (scorecard) => scorecard.score < 1,
     });
-    expect(result).toEqual({ ok: false, tautological: [], probed: 0, unresolved: [] });
+    expect(result).toEqual({
+      ok: false,
+      tautological: [],
+      probed: 0,
+      unresolved: [],
+      skipped: ["probe"],
+    });
+  });
+
+  // KEIKO-0720: a PARTIAL drop (some selected+available fixtures declined by regressFixture, others
+  // genuinely probed) must surface the declined id in `skipped` rather than vanishing silently --
+  // distinct from the all-skipped case above, and distinct from `unresolved` (not-in-availableIds).
+  it("records a partially-skipped fixture without hiding it from the result", async () => {
+    const result = await runRegressionProbes({
+      fixtures: [
+        { id: "runnable-probe", runnable: true },
+        { id: "declined-probe", runnable: false },
+      ],
+      probeFixtureIds: ["runnable-probe", "declined-probe"],
+      fixtureId: (item) => item.id,
+      regressFixture: (item) => (item.runnable ? item : undefined),
+      runFixture: () => run(0),
+      droppedBelowFloors: (scorecard) => scorecard.score < 1,
+    });
+    expect(result.skipped).toEqual(["declined-probe"]);
+    expect(result.probed).toBe(1);
+    expect(result.unresolved).toEqual([]);
   });
 });

@@ -5,16 +5,9 @@ import {
   scoreVoiceAcousticFixture,
   wordErrorRate,
 } from "./scorer.js";
-import { voiceAcousticFixtureByName, voiceAcousticFixturesForScenario } from "./fixtures/index.js";
+import { voiceAcousticFixturesForScenario } from "./fixtures/index.js";
+import { fixture } from "./test-fixture-lookup.js";
 import type { VoiceAcousticFixture } from "./types.js";
-
-function fixture(name: string): VoiceAcousticFixture {
-  const found = voiceAcousticFixtureByName(name);
-  if (found === undefined) {
-    throw new Error(`missing fixture ${name}`);
-  }
-  return found;
-}
 
 function check(result: ReturnType<typeof scoreVoiceAcousticFixture>, metric: string): boolean {
   const found = result.checks.find((candidate) => candidate.metric === metric);
