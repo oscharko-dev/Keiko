@@ -14,6 +14,7 @@ import type {
 import {
   ATLASSIAN_SYNC_RETRY_MAX_ATTEMPTS,
   ATLASSIAN_SYNC_RETRY_MAX_DELAY_MS,
+  AtlassianSyncBudgetExhausted,
   runAtlassianSyncFetch,
   type AtlassianSyncFetchContext,
   type AtlassianSyncItem,
@@ -310,6 +311,97 @@ describe("runAtlassianSyncFetch", () => {
     await Promise.resolve();
     expect(progressCalls).toHaveLength(progressCountAtSettle);
     expect(dispatched).toHaveLength(dispatchedCountAtSettle);
+  });
+
+  it("fires the fetchItem AbortSignal on in-flight siblings once one worker throws (KEIKO-0758 follow-up)", async () => {
+    // Codex flagged that the earlier KEIKO-0758 fix set `terminated=true` on a throw but never
+    // aborted the in-flight siblings' fetches, so a slow-request sibling could carry the run
+    // past `deadlineAt`. The lane-scoped AbortController now fires on first terminal error and
+    // the combined signal is delivered to `fetchItem` via context.signal. This test observes
+    // the signal directly: two workers race, "fast" throws immediately, "slow" awaits its own
+    // abort — a cooperating port sees the signal fire and can settle before the pool's timeout.
+    let releaseFast: (() => void) | undefined;
+    const fastGate = new Promise<void>((resolve) => {
+      releaseFast = resolve;
+    });
+    let slowSignalAborted = false;
+    let slowResolve: (() => void) | undefined;
+    const slowSettled = new Promise<void>((resolve) => {
+      slowResolve = resolve;
+    });
+    const source: AtlassianSyncSource = {
+      enumerate: () =>
+        Promise.resolve({
+          ok: true,
+          refs: [{ itemKey: "fast" }, { itemKey: "slow" }],
+          complete: true,
+        }),
+      fetchItem: async (ref, context): Promise<AtlassianSyncItemFetchOutcome> => {
+        if (ref.itemKey === "fast") {
+          await fastGate;
+          throw new AtlassianSyncBudgetExhausted("bounds-exceeded");
+        }
+        // Slow worker: attach to context.signal (the lane-scoped combined signal) and settle
+        // when it aborts. A port that does NOT honor signal would hang indefinitely; this test
+        // proves the wire-up so a cooperating port can short-circuit.
+        expect(context.signal).toBeDefined();
+        context.signal?.addEventListener(
+          "abort",
+          () => {
+            slowSignalAborted = true;
+            slowResolve?.();
+          },
+          { once: true },
+        );
+        await slowSettled;
+        return { kind: "skipped", reason: "unavailable" };
+      },
+    };
+    const promise = runAtlassianSyncFetch({
+      source,
+      http: idleHttp,
+      bounds: bounds({ maxConcurrency: 2 }),
+    });
+    // Yield so both workers are in-flight, then release fast to trigger the throw.
+    await Promise.resolve();
+    await Promise.resolve();
+    releaseFast?.();
+    const outcome = await promise;
+    expect(slowSignalAborted).toBe(true);
+    // The run surfaces the throw as truncated / bounds-exceeded via the
+    // AtlassianSyncBudgetExhausted classification path.
+    expect(outcome).toMatchObject({ status: "truncated", reason: "bounds-exceeded" });
+  });
+
+  it("stops dispatching new work once the run deadline is exceeded (KEIKO-0758 follow-up)", async () => {
+    // Companion to the abort-propagation test above: the deadline check inside the worker loop
+    // prevents a slow-last-worker from pulling new refs off the shared cursor after the run
+    // budget has already expired. A synthetic `now` clock advances past `maxDurationMs` between
+    // the first two fetches; workers must not dispatch a third even though refs remain.
+    const dispatched: string[] = [];
+    let clock = 0;
+    const source: AtlassianSyncSource = {
+      enumerate: () =>
+        Promise.resolve({
+          ok: true,
+          refs: [{ itemKey: "a" }, { itemKey: "b" }, { itemKey: "c" }],
+          complete: true,
+        }),
+      fetchItem: (ref): Promise<AtlassianSyncItemFetchOutcome> => {
+        dispatched.push(ref.itemKey);
+        // Advance the clock so `deadlineExceeded()` starts returning true after the second call.
+        if (dispatched.length === 2) clock = 10_000;
+        return Promise.resolve({ kind: "item", item: item(ref.itemKey) });
+      },
+    };
+    await runAtlassianSyncFetch({
+      source,
+      http: idleHttp,
+      bounds: bounds({ maxConcurrency: 1, maxDurationMs: 5_000 }),
+      now: () => clock,
+    });
+    // The third ref must NEVER dispatch because deadlineExceeded() flipped true first.
+    expect(dispatched.includes("c")).toBe(false);
   });
 
   it("never exceeds maxConcurrency in-flight fetches — boundary exact", async () => {
