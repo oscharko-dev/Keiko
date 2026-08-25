@@ -318,6 +318,15 @@
         ["AI response", "10000111011"],
         ["File / sync item", "10000110111"],
       ];
+      // KEIKO-1006: each ROWS bitmask is positionally indexed by STATES (see the
+      // STATES[index] lookup below) — a future edit that adds/removes a state without
+      // updating every row's bitmask would otherwise silently mis-render or throw an
+      // unrelated TypeError deep in stateChip(). Fail loudly and immediately instead.
+      ROWS.forEach(function (r) {
+        if (r[1].length !== STATES.length) {
+          throw new Error("states.html: bitmask length mismatch for " + r[0]);
+        }
+      });
       var metaByKey = STATE_META.reduce(function (acc, meta) {
         acc[meta.key] = meta;
         return acc;
