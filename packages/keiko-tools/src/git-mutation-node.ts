@@ -203,21 +203,16 @@ async function runPlan(
 }
 
 async function globalSigningRequired(ctx: RunContext): Promise<boolean | undefined> {
-  let result: CommandResult;
-  try {
-    result = await runCommand(
-      {
-        command: "git",
-        args: GLOBAL_SIGNING_POLICY_ARGS,
-        cwd: undefined,
-        timeoutMs: ctx.timeoutMs,
-        signal: ctx.signal,
-      },
-      { ...ctx.runDeps, commandRules: GLOBAL_SIGNING_POLICY_COMMAND_RULES },
-    );
-  } catch {
-    return undefined;
-  }
+  const result = await runCommand(
+    {
+      command: "git",
+      args: GLOBAL_SIGNING_POLICY_ARGS,
+      cwd: undefined,
+      timeoutMs: ctx.timeoutMs,
+      signal: ctx.signal,
+    },
+    { ...ctx.runDeps, commandRules: GLOBAL_SIGNING_POLICY_COMMAND_RULES },
+  );
   if (result.exitCode === 1 && result.stdout.trim().length === 0) return false;
   if (result.exitCode !== 0) return undefined;
   const value = result.stdout.trim();
@@ -230,7 +225,12 @@ async function execCommit(
   ctx: RunContext,
   request: GitCommitExecRequest,
 ): Promise<GitDeliveryExecutionResult> {
-  const signingRequired = await globalSigningRequired(ctx);
+  let signingRequired: boolean | undefined;
+  try {
+    signingRequired = await globalSigningRequired(ctx);
+  } catch (error) {
+    return failureFromThrow(error, 0, 0);
+  }
   if (signingRequired !== false) {
     return executionResult("failed", 0, { errorCode: "precondition-failed" });
   }

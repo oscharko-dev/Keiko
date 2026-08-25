@@ -285,6 +285,44 @@ describe("runAtlassianSyncFetch", () => {
     expect(outcome.items.some((it) => it.itemKey === dupKey)).toBe(false);
   });
 
+  it("does not resurrect a missing duplicate when an earlier item fetch settles later", async (): Promise<void> => {
+    const dupKey = "missing-before-held-item";
+    let duplicateFetchCount = 0;
+    let releaseHeldItem: () => void = () => undefined;
+    const heldItem = new Promise<void>((resolve) => {
+      releaseHeldItem = resolve;
+    });
+    const source: AtlassianSyncSource = {
+      enumerate: () =>
+        Promise.resolve({
+          ok: true,
+          refs: [{ itemKey: dupKey }, { itemKey: dupKey }],
+          complete: true,
+        }),
+      fetchItem: async (): Promise<AtlassianSyncItemFetchOutcome> => {
+        duplicateFetchCount += 1;
+        if (duplicateFetchCount === 1) {
+          await heldItem;
+          return { kind: "item", item: item(dupKey) };
+        }
+        return { kind: "missing" };
+      },
+    };
+    const outcome = await runAtlassianSyncFetch({
+      source,
+      http: idleHttp,
+      bounds: bounds({ maxConcurrency: 2 }),
+      onProgress: (progress): void => {
+        if (progress.skippedItems === 1) releaseHeldItem();
+      },
+    });
+    expect(outcome.status).toBe("completed");
+    if (outcome.status !== "completed") return;
+    expect(outcome.enumeratedItemKeys).toEqual([]);
+    expect(outcome.items).toEqual([]);
+    expect(outcome.progress).toMatchObject({ fetchedItems: 1, skippedItems: 1 });
+  });
+
   it("waits for every dispatched fetch to settle before returning, so no fetch or onProgress callback fires after the run's promise has settled (budget exhaustion mid-run)", async () => {
     // Regression for KEIKO-0758: `Promise.all` used to settle on the FIRST worker rejection and
     // abandon its still-running siblings. Two refs race at maxConcurrency 2: "fast" exhausts the

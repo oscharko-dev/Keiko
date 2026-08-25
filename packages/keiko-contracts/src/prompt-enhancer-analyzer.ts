@@ -953,13 +953,21 @@ const ARCHITECTURE_SCOPE_PREFIX_PATTERN = /\b(?:for|within|supporting|targeting)
 const ARCHITECTURE_SCOPE_DETERMINERS: ReadonlySet<string> = new Set(["a", "an", "the"]);
 const ARCHITECTURE_SCOPE_TARGETS: ReadonlySet<string> = new Set([
   "application",
+  "applications",
   "service",
+  "services",
   "platform",
+  "platforms",
   "workspace",
+  "workspaces",
   "repository",
+  "repositories",
   "product",
+  "products",
   "system",
+  "systems",
 ]);
+const ARCHITECTURE_SCOPE_BOUNDARY_PATTERN = /[.!?;,:]/u;
 const ARCHITECTURE_SCOPE_WORD_SEPARATOR_PATTERN = /[^\p{L}\p{N}-]/u;
 const MAX_MISSING_TOPICS = 4;
 
@@ -970,7 +978,10 @@ function hasArchitectureScope(lower: string): boolean {
   const prefix = ARCHITECTURE_SCOPE_PREFIX_PATTERN.exec(lower);
   if (prefix === null) return false;
 
-  const scopeWords = lower.slice(prefix.index + prefix[0].length).split(/\s+/u);
+  const scopePhrase =
+    lower.slice(prefix.index + prefix[0].length).split(ARCHITECTURE_SCOPE_BOUNDARY_PATTERN, 1)[0] ??
+    "";
+  const scopeWords = scopePhrase.split(/\s+/u);
   const firstWord = scopeWords[0] ?? "";
   const firstModifierIndex = ARCHITECTURE_SCOPE_DETERMINERS.has(firstWord) ? 1 : 0;
   if (ARCHITECTURE_SCOPE_DETERMINERS.has(scopeWords[firstModifierIndex] ?? "")) return false;

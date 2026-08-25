@@ -316,6 +316,9 @@ interface FetchRunState<TRef extends AtlassianSyncItemRef> {
   // than one positional occurrence (KEIKO-0598). Materialized to a readonly array only at the
   // terminal-outcome return points.
   readonly enumeratedItemKeys: Set<string>;
+  // A missing outcome is terminal for a logical key, including duplicate refs that are still in
+  // flight. Their later item outcomes count as settled work but must not resurrect deleted data.
+  readonly missingItemKeys: Set<string>;
   fatalReason: AtlassianSyncFailureReason | undefined;
   // Set once this run has produced its terminal outcome (KEIKO-0758). `emitProgress` becomes a
   // no-op past this point: a hard backstop so no `onProgress` callback can ever fire after
@@ -345,13 +348,14 @@ function applyItemOutcome<TRef extends AtlassianSyncItemRef>(
   outcome: AtlassianSyncItemFetchOutcome,
 ): void {
   if (outcome.kind === "item") {
-    state.items.push(outcome.item);
+    if (!state.missingItemKeys.has(ref.itemKey)) state.items.push(outcome.item);
     state.progress.fetchedItems += 1;
   } else if (outcome.kind === "skipped") {
     state.failures.push({ itemKey: ref.itemKey, reason: outcome.reason });
     state.progress.skippedItems += 1;
     state.progress.failedItems += 1;
   } else if (outcome.kind === "missing") {
+    state.missingItemKeys.add(ref.itemKey);
     // Vanished upstream between enumeration and fetch (404): drop it from the enumerated set so
     // the downstream diff reports it removed — a natural deletion, not a failure. `Set.delete` is
     // total (removes the one stored entry outright), unlike the former indexOf/splice pair which
@@ -556,6 +560,7 @@ function buildRunState<TRef extends AtlassianSyncItemRef>(
     items: [],
     failures: [],
     enumeratedItemKeys: new Set(),
+    missingItemKeys: new Set(),
     fatalReason: undefined,
     terminal: false,
   };

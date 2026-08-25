@@ -70,5 +70,18 @@ describe("SDK package surface", () => {
         enforced: true,
       } as never),
     ).toThrow(TypeError);
+
+    expect(() =>
+      probeVerificationCapabilities({ steps: [] }, "enforce-or-fail-closed", {
+        backend: "unknown",
+        enforced: true,
+      } as never),
+    ).toThrow(TypeError);
+    expect(() =>
+      probeVerificationCapabilities({ steps: [] }, "enforce-or-fail-closed", {
+        backend: "bubblewrap",
+        enforced: "yes",
+      } as never),
+    ).toThrow(TypeError);
   });
 });

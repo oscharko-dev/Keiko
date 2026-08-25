@@ -1,4 +1,4 @@
-import { type SandboxBackend } from "@oscharko-dev/keiko-contracts";
+import { SANDBOX_BACKENDS, type SandboxBackend } from "@oscharko-dev/keiko-contracts";
 import {
   DEFAULT_VERIFICATION_LIMITS,
   nodeResourceMonitor,
@@ -19,9 +19,17 @@ const UNATTESTED_NETWORK_ISOLATION: NetworkIsolationCapability = {
   backend: "none",
   enforced: false,
 };
+const SANDBOX_BACKEND_SET: ReadonlySet<string> = new Set(SANDBOX_BACKENDS);
 
 function assertNetworkIsolationCapability(capability: NetworkIsolationCapability): void {
-  const candidate: { readonly backend: SandboxBackend; readonly enforced: boolean } = capability;
+  const candidate: { readonly backend?: unknown; readonly enforced?: unknown } = capability;
+  if (
+    typeof candidate.backend !== "string" ||
+    !SANDBOX_BACKEND_SET.has(candidate.backend) ||
+    typeof candidate.enforced !== "boolean"
+  ) {
+    throw new TypeError("network isolation capability has an invalid runtime shape");
+  }
   if (candidate.backend === "none" && candidate.enforced) {
     throw new TypeError("network isolation cannot be enforced without a sandbox backend");
   }

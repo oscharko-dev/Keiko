@@ -422,6 +422,7 @@ describe("analyzePrompt scope missing context", () => {
   it.each([
     "Design a software architecture for now.",
     "Design a software architecture for the service.",
+    "Design a software architecture for now. We need to modernize the platform.",
     "Design a software architecture. The platform must be scalable.",
     "Design a highly productive software architecture.",
   ])("does not accept generic or substring-only scope cues: %s", (text) => {
@@ -431,6 +432,14 @@ describe("analyzePrompt scope missing context", () => {
   it("does not request scope when an architecture draft identifies its target system (#3112)", () => {
     const topics = analyze(
       "Design a software architecture for a multi-tenant document collaboration service.",
+    ).missingContext.map((item) => item.topic);
+
+    expect(topics).not.toContain("scope");
+  });
+
+  it("accepts a supported plural architecture target", () => {
+    const topics = analyze(
+      "Design a software architecture for distributed systems.",
     ).missingContext.map((item) => item.topic);
 
     expect(topics).not.toContain("scope");

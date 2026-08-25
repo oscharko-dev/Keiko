@@ -27,8 +27,7 @@ function makeAdapter(rec: SpawnRecorder, signal?: AbortSignal): GitLocalMutation
 
 async function continuePastUnsignedSigningPolicy(rec: SpawnRecorder): Promise<void> {
   rec.child.emit("close", 1, null);
-  await Promise.resolve();
-  await Promise.resolve();
+  await expect.poll(() => rec.calls()).toHaveLength(2);
 }
 
 describe("node git mutation adapter — governed argv reaches the spawn boundary", () => {
@@ -99,6 +98,19 @@ describe("node git mutation adapter — failure-classification branches", () => 
     const result = await pending;
     expect(result.outcome).toBe("aborted");
     expect(result.errorCode).toBeUndefined();
+  });
+
+  it("maps cancellation during the signing-policy lookup to an aborted result", async () => {
+    const controller = new AbortController();
+    const rec = recordingSpawn();
+    const ad = makeAdapter(rec, controller.signal);
+    const pending = ad.commit({ message: "m", allowEmpty: false });
+    controller.abort();
+    rec.child.emit("close", null, "SIGTERM");
+    const result = await pending;
+    expect(result.outcome).toBe("aborted");
+    expect(result.errorCode).toBeUndefined();
+    expect(rec.calls()).toHaveLength(1);
   });
 
   it("rejects an invalid operand before any spawn", async () => {
