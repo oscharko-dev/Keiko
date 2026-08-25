@@ -146,20 +146,36 @@ function splitTopLevelArgs(argsSrc) {
 // above `var G = {` and expand bare identifier references in G's operand chain to the
 // underlying expression source before the operand parser walks it. Restricted to UPPER_SNAKE
 // so ordinary lowercase locals cannot accidentally be substituted.
+const SHARED_CONST_HEADER = /^\s*var\s+([A-Z][A-Z0-9_]*)\s*=\s*(.*)$/u;
+
 function collectSharedConsts(source) {
+  // Line-by-line scan replaces the earlier regex (Sonar S8786: any `[\s\S]*?;` or `[^;]*;\s*$`
+  // shape carries super-linear-backtracking risk on inputs that dodge the terminator). The
+  // header regex is anchored + bounded (no unbounded quantifier that can backtrack past `;`),
+  // and the body accumulates whole physical lines until it sees a `;` at end-of-line — zero
+  // regex risk in the multi-line accumulator.
   const consts = new Map();
-  // Linear-time regex: `[^;]*` is a greedy negated class (no backtracking on failure) rather
-  // than `[\s\S]*?` which drove Sonar S8786 super-linear backtracking on inputs whose value
-  // expression contains no semicolon (the common case here — P("...") + P("...") sequences
-  // never use `;`). If a future shared const embeds a `;` inside a string literal this pattern
-  // will stop at the first one; that shape does not exist in lift-glyphs.js today and adding
-  // one would need a proper JS tokenizer regardless.
-  const pattern = /^\s*var\s+([A-Z][A-Z0-9_]*)\s*=\s*([^;]*);\s*$/gmu;
-  let match;
-  while ((match = pattern.exec(source)) !== null) {
-    const name = match[1];
-    const exprSrc = match[2].trim();
-    if (name && exprSrc.length > 0) consts.set(name, exprSrc);
+  const lines = source.split(/\r?\n/u);
+  let i = 0;
+  while (i < lines.length) {
+    const header = SHARED_CONST_HEADER.exec(lines[i]);
+    if (!header) {
+      i += 1;
+      continue;
+    }
+    const name = header[1];
+    let expr = header[2];
+    let cursor = i;
+    while (!expr.trimEnd().endsWith(";") && cursor + 1 < lines.length) {
+      cursor += 1;
+      expr = `${expr}\n${lines[cursor]}`;
+    }
+    const trimmed = expr.trim();
+    if (trimmed.endsWith(";")) {
+      const body = trimmed.slice(0, -1).trim();
+      if (name && body.length > 0) consts.set(name, body);
+    }
+    i = cursor + 1;
   }
   return consts;
 }
