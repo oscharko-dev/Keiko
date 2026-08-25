@@ -562,6 +562,29 @@ function cacheExcerptIdentity(input: AssembleInput): readonly object[] | readonl
   return cacheExcerpts(input.excerpts);
 }
 
+// Compile-time exhaustiveness guard (KEIKO-0998): every AssembleInput key must be listed below,
+// mapped to a short note on how buildCacheAtomIds' fingerprint covers it (directly as a same-named
+// fingerprint key, or indirectly — cacheIdentity and excerpts both feed cacheExcerptIdentity, and
+// cacheIdentity additionally gates whether initialUncertainty is folded in). `satisfies
+// Record<keyof AssembleInput, string>` makes TypeScript reject this object if AssembleInput gains,
+// loses, or renames a field without a matching update here, instead of relying solely on
+// docs/context-engineering/decision-log.md's "Critical gotchas" note and code review to catch the
+// omission. `void` marks the binding as intentionally compile-time-only (no runtime consumer).
+const ASSEMBLE_INPUT_CACHE_FIELD_COVERAGE = {
+  scope: "fingerprint key `scope` (via cacheScope)",
+  query: "fingerprint key `query` (via cacheQuery)",
+  budget: "fingerprint key `budget`",
+  atoms: "fingerprint key `atoms` (via cacheAtom)",
+  ranked: "fingerprint key `ranked` (via cacheCandidate)",
+  omittedFromRanking: "fingerprint key `omittedFromRanking` (via cacheOmitted)",
+  excerpts: "fingerprint key `excerpts` (via cacheExcerptIdentity)",
+  cacheIdentity: "folded into `excerpts`/`initialUncertainty` via cacheExcerptIdentity",
+  initialUsage: "fingerprint key `initialUsage` (via cacheUsage)",
+  initialUncertainty: "fingerprint key `initialUncertainty` (via cacheUncertainty)",
+  diagnostics: "fingerprint key `diagnostics` (via cacheDiagnostics)",
+} satisfies Record<keyof AssembleInput, string>;
+void ASSEMBLE_INPUT_CACHE_FIELD_COVERAGE;
+
 function buildCacheAtomIds(input: AssembleInput, resolved: ResolvedOptions): readonly string[] {
   const fingerprintSource = JSON.stringify({
     scope: cacheScope(input.scope),
