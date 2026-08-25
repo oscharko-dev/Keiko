@@ -248,7 +248,7 @@
     "@vitest/coverage-v8": "^4.1.10",
     "acorn": "^8.16.0",
     "dependency-cruiser": "^18.0.0",
-    "eslint": "^9.39.5",
+    "eslint": "^10.8.1",
     "eslint-config-prettier": "^10.1.8",
     "eslint-plugin-sonarjs": "^4.2.0",
     "fallow": "3.9.1",
