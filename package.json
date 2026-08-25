@@ -239,7 +239,7 @@
     "@oscharko-dev/keiko-editor": "0.3.17",
     "@playwright/test": "^1.61.1",
     "@stryker-mutator/core": "9.6.1",
-    "@stryker-mutator/vitest-runner": "9.6.1",
+    "@stryker-mutator/vitest-runner": "10.0.0",
     "@types/node": "^26.2.0",
     "@types/ws": "^8.18.1",
     "@types/yauzl": "^3.4.0",
