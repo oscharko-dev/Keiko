@@ -12,6 +12,7 @@ import {
   PROMPT_ENHANCEMENT_EVIDENCE_SCHEMA_VERSION,
   validatePromptEnhancementEvidenceManifest,
 } from "./manifestSchema.js";
+import { redactPromptEnhancementEvidence } from "./redaction.js";
 import {
   buildPromptEnhancementEvidenceManifest,
   createInMemoryPromptEnhancementLocalStore,
@@ -304,7 +305,22 @@ describe("createInMemoryPromptEnhancementLocalStore", () => {
   it("records, loads, lists, and deletes a run", () => {
     const store = createInMemoryPromptEnhancementLocalStore();
     const { manifest } = recordPromptEnhancementRun(recordInput(), { store });
-    expect(store.load("pe-run-1")).toEqual(manifest);
+    const loaded = store.load("pe-run-1");
+    // redactionSummary.totalStringsScanned and integrityHashes.record legitimately differ between
+    // the build-time manifest and the persisted one: sanitizeManifestForPersistence's backstop
+    // pass unconditionally folds its own full-manifest scan count in (KEIKO-0767), and the record
+    // hash is computed over that folded summary. Everything else round-trips byte-for-byte.
+    expect(loaded).toEqual({
+      ...manifest,
+      redactionSummary: {
+        ...manifest.redactionSummary,
+        totalStringsScanned: expect.any(Number) as number,
+      },
+      integrityHashes: { ...manifest.integrityHashes, record: expect.any(String) as string },
+    });
+    expect(loaded?.redactionSummary.totalStringsScanned).toBeGreaterThan(
+      manifest.redactionSummary.totalStringsScanned,
+    );
     expect(store.list()).toEqual(["pe-run-1"]);
     expect(store.location("pe-run-1")).toBe("pe-run-1.pe.json");
     expect(store.delete("pe-run-1")).toBe(true);
@@ -314,6 +330,27 @@ describe("createInMemoryPromptEnhancementLocalStore", () => {
 
   it("requires a store or evidenceDir", () => {
     expect(() => recordPromptEnhancementRun(recordInput())).toThrow(/requires/);
+  });
+
+  it("folds the sanitize-pass scan count even when it finds nothing new to redact (KEIKO-0767)", () => {
+    const store = createInMemoryPromptEnhancementLocalStore();
+    const { manifest: built } = recordPromptEnhancementRun(recordInput(), { store });
+    // Independently derive the expected sanitize-pass count from the SAME production redactor
+    // sanitizeManifestForPersistence calls (redactPromptEnhancementEvidence), over the same input
+    // shape it uses (the manifest minus integrityHashes, mirroring store.ts's private
+    // withoutIntegrityHashes) -- not a hand-rolled formula, so this cannot drift from the fold it
+    // is pinning.
+    const withoutHashes: Record<string, unknown> = { ...built };
+    delete withoutHashes.integrityHashes;
+    const { summary: sanitizePassSummary } = redactPromptEnhancementEvidence(withoutHashes);
+    // The build-time pass already redacted every secret in this fixture, so the sanitize-pass
+    // backstop finds nothing NEW to redact -- the common case KEIKO-0767 is about.
+    expect(sanitizePassSummary.stringsRedacted).toBe(0);
+    expect(sanitizePassSummary.totalStringsScanned).toBeGreaterThan(0);
+    const loaded = store.load("pe-run-1");
+    expect(loaded?.redactionSummary.totalStringsScanned).toBe(
+      built.redactionSummary.totalStringsScanned + sanitizePassSummary.totalStringsScanned,
+    );
   });
 
   it("redacts and rehashes caller-supplied manifests at the store boundary", () => {
@@ -343,7 +380,20 @@ describe("createNodePromptEnhancementLocalStore", () => {
     const evidenceDir = tempEvidenceDir();
     const { manifest, location } = recordPromptEnhancementRun(recordInput(), { evidenceDir });
     expect(location).toContain(join("pe", "pe-run-1.pe.json"));
-    expect(loadPromptEnhancementRun("pe-run-1", { evidenceDir })).toEqual(manifest);
+    const loaded = loadPromptEnhancementRun("pe-run-1", { evidenceDir });
+    // See the in-memory-store test above: totalStringsScanned/integrityHashes.record legitimately
+    // differ from the build-time manifest once the sanitize-pass fold runs (KEIKO-0767).
+    expect(loaded).toEqual({
+      ...manifest,
+      redactionSummary: {
+        ...manifest.redactionSummary,
+        totalStringsScanned: expect.any(Number) as number,
+      },
+      integrityHashes: { ...manifest.integrityHashes, record: expect.any(String) as string },
+    });
+    expect(loaded?.redactionSummary.totalStringsScanned).toBeGreaterThan(
+      manifest.redactionSummary.totalStringsScanned,
+    );
     expect(listPromptEnhancementRuns({ evidenceDir })).toEqual(["pe-run-1"]);
     const store = createNodePromptEnhancementLocalStore(evidenceDir);
     expect(store.delete("pe-run-1")).toBe(true);
