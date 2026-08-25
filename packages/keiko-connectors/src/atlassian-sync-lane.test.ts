@@ -235,6 +235,49 @@ describe("runAtlassianSyncFetch", () => {
     expect(outcome.enumeratedItemKeys).toEqual(["a", "b"]);
   });
 
+  it("drops the fetched item alongside the enumeration key when a duplicate ref's later fetch reports missing (KEIKO-0598 follow-up)", async () => {
+    // Regression for the KEIKO-0598 follow-up Codex identified on #3279: the earlier fix removed
+    // every occurrence of a duplicated key from enumeratedItemKeys once a fetch reports it
+    // missing, but the ITEM that the first fetch pushed to state.items stayed. That left the two
+    // states inconsistent — applyConnectorSyncRun then indexed the fetched item, saw the absent
+    // enumeration key as a removal signal, pruned the freshly-indexed document, and persisted a
+    // fingerprint that permanently masked the item on subsequent unchanged syncs. This test
+    // asserts BOTH states now agree: the missing outcome for a duplicate drops the item AND the
+    // key, so the diff downstream sees a clean removal (no phantom index → prune → mask race).
+    const dupKey = "dup-item-then-missing";
+    let dupCalls = 0;
+    const source: AtlassianSyncSource = {
+      enumerate: () =>
+        Promise.resolve({
+          ok: true,
+          refs: [{ itemKey: "a" }, { itemKey: dupKey }, { itemKey: dupKey }, { itemKey: "b" }],
+          complete: true,
+        }),
+      fetchItem: (ref): Promise<AtlassianSyncItemFetchOutcome> => {
+        if (ref.itemKey !== dupKey) {
+          return Promise.resolve({ kind: "item", item: item(ref.itemKey) });
+        }
+        dupCalls += 1;
+        return Promise.resolve(
+          dupCalls === 1 ? { kind: "item", item: item(dupKey) } : { kind: "missing" },
+        );
+      },
+    };
+    const outcome = await runAtlassianSyncFetch({
+      source,
+      http: idleHttp,
+      bounds: bounds({ maxConcurrency: 1 }),
+    });
+    expect(outcome.status).toBe("completed");
+    if (outcome.status !== "completed") return;
+    // enumeration key removed by the earlier KEIKO-0598 fix — inherited invariant.
+    expect(outcome.enumeratedItemKeys).toEqual(["a", "b"]);
+    // NEW invariant: state.items agrees — no orphan for the missing key. The two other real
+    // items (a, b) are still there.
+    expect(outcome.items.map((it) => it.itemKey).sort()).toEqual(["a", "b"]);
+    expect(outcome.items.some((it) => it.itemKey === dupKey)).toBe(false);
+  });
+
   it("waits for every dispatched fetch to settle before returning, so no fetch or onProgress callback fires after the run's promise has settled (budget exhaustion mid-run)", async () => {
     // Regression for KEIKO-0758: `Promise.all` used to settle on the FIRST worker rejection and
     // abandon its still-running siblings. Two refs race at maxConcurrency 2: "fast" exhausts the

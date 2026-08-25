@@ -349,8 +349,22 @@ function applyItemOutcome<TRef extends AtlassianSyncItemRef>(
     // Vanished upstream between enumeration and fetch (404): drop it from the enumerated set so
     // the downstream diff reports it removed — a natural deletion, not a failure. `Set.delete` is
     // total (removes the one stored entry outright), unlike the former indexOf/splice pair which
-    // only removed a single positional occurrence and left a surviving duplicate behind.
+    // only removed a single positional occurrence and left a surviving duplicate behind
+    // (KEIKO-0598). ALSO drop any item this ref's key already contributed to state.items so a
+    // duplicate ref whose earlier fetch had returned `item` cannot leave that item stranded once
+    // the later fetch reports the key gone (KEIKO-0598 follow-up: without this the two states
+    // diverged — state.items kept the fetched item while enumeratedItemKeys deleted the key —
+    // and applyConnectorSyncRun then indexed the item, treated the absent enumeration key as a
+    // removal signal, and pruned the freshly-indexed document, persisting a fingerprint that
+    // permanently masked the item on subsequent unchanged syncs).
     state.enumeratedItemKeys.delete(ref.itemKey);
+    const orphanIndex = state.items.findIndex((existing) => existing.itemKey === ref.itemKey);
+    if (orphanIndex >= 0) state.items.splice(orphanIndex, 1);
+    // `progress.fetchedItems` is intentionally NOT decremented here: it counts every ref whose
+    // fetch returned an `item` outcome (a completion-accounting signal for the pipeline's
+    // `dispatchedAll = fetched + skipped >= refs.length` check), not the size of state.items.
+    // Decrementing would make the pipeline classify the run as truncated even though every ref
+    // was dispatched and settled.
     state.progress.skippedItems += 1;
   } else {
     state.fatalReason ??= outcome.reason;
