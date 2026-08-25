@@ -76,7 +76,10 @@ function governedPort(backendAvailable: boolean): GovernedPort {
       workspace: args.workspace,
       signal: args.signal,
       spawn,
-      monitor: { watch: (): (() => void) => (): void => undefined },
+      monitor: {
+        canEnforceProcessTreeMemory: (): boolean => true,
+        watch: (): (() => void) => (): void => undefined,
+      },
       networkEnforcement: "enforce-or-fail-closed",
       enforcedNetworkAvailable: backendAvailable,
       sandboxAvailability: backendAvailable ? BUBBLEWRAP_BACKEND : NO_BACKENDS,

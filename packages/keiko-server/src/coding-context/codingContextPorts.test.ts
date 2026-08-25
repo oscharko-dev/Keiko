@@ -13,6 +13,7 @@ import {
   parseJiraCodeContextPortConfig,
 } from "./jiraCodeContextPort.js";
 import { DEFAULT_SANDBOX_POLICY, type SpawnFn } from "@oscharko-dev/keiko-tools";
+import type { AtlassianHttpBodyPort } from "@oscharko-dev/keiko-connectors";
 import type { WorkspaceInfo } from "@oscharko-dev/keiko-contracts";
 
 const WORKSPACE: WorkspaceInfo = {
@@ -200,7 +201,7 @@ describe("jira code context port", () => {
           },
         ],
       } as never,
-      httpBodyPortFactory: () => (request) => {
+      httpBodyPortFactory: (): AtlassianHttpBodyPort => (request) => {
         requests.push(request);
         return Promise.resolve({
           kind: "response" as const,

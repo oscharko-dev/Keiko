@@ -327,6 +327,11 @@
       "tolerance": 0.5,
       "lines": 49.5
     },
+    "packages/keiko-git/src/runner.ts": {
+      "governance": "absolute",
+      "tolerance": 0,
+      "lines": 95
+    },
     "packages/keiko-local-knowledge/src/crawl/manual-page-fs.ts": {
       "governance": "ratcheted",
       "tolerance": 0.5,
@@ -338,6 +343,26 @@
       "lines": 39.5
     },
     "packages/keiko-sandbox/src/debug-capsule.ts": {
+      "governance": "absolute",
+      "tolerance": 0,
+      "lines": 90
+    },
+    "packages/keiko-server/src/atlassian/writeActionRoutes.ts": {
+      "governance": "absolute",
+      "tolerance": 0,
+      "lines": 90
+    },
+    "packages/keiko-server/src/coding-app-session/appSessionReadAuthority.ts": {
+      "governance": "absolute",
+      "tolerance": 0,
+      "lines": 100
+    },
+    "packages/keiko-server/src/coding-runtime/autonomousDeliveryApprovalStore.ts": {
+      "governance": "absolute",
+      "tolerance": 0,
+      "lines": 100
+    },
+    "packages/keiko-server/src/coding-runtime/supervisedCodingApprovalStore.ts": {
       "governance": "absolute",
       "tolerance": 0,
       "lines": 90

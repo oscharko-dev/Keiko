@@ -182,7 +182,9 @@ function buildCommandRunner(
     return unavailablePort("command-backend-unavailable");
   }
   return {
-    execute: async (request, signal, guard) => {
+    execute: async (request, signal, guard): ReturnType<
+      CodingToolGovernedPorts["commandRunner"]["execute"]
+    > => {
       if (signal?.aborted === true || !guard.check() || !live(input)) {
         return { status: "failed", reasonCode: "command-authority-revoked" };
       }
@@ -203,11 +205,11 @@ function buildSidecarCapabilityPort<Kind extends "git" | "delivery" | "connector
   revokedReason: string,
 ): GovernedCodingToolPort<Kind> {
   return {
-    execute: async (_request, signal, guard) => {
+    execute: (_request, signal, guard): ReturnType<GovernedCodingToolPort<Kind>["execute"]> => {
       if (signal?.aborted === true || !guard.check() || !live(input)) {
-        return { status: "failed", reasonCode: revokedReason };
+        return Promise.resolve({ status: "failed", reasonCode: revokedReason });
       }
-      return { status: "completed" };
+      return Promise.resolve({ status: "failed", reasonCode: "capability-backend-unavailable" });
     },
   };
 }
@@ -215,7 +217,7 @@ function buildSidecarCapabilityPort<Kind extends "git" | "delivery" | "connector
 function unavailablePort<Kind extends "command" | "git" | "delivery" | "connector">(
   reasonCode: string,
 ): GovernedCodingToolPort<Kind> {
-  return { execute: async () => ({ status: "failed", reasonCode }) };
+  return { execute: (): ReturnType<GovernedCodingToolPort<Kind>["execute"]> => Promise.resolve({ status: "failed", reasonCode }) };
 }
 
 // The #2387 skill and read-only child-agent ports. Every identity field is resolved from the live

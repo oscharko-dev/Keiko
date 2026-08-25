@@ -475,6 +475,13 @@ function dormantResponse(): RouteResult {
   };
 }
 
+function unavailableVoiceRecapResponse(): RouteResult {
+  return {
+    status: 503,
+    body: errorBody("VOICE_UNAVAILABLE", "Voice session recap is not available for this deployment."),
+  };
+}
+
 export async function handleBuildVoiceRecap(
   ctx: RouteContext,
   deps: UiHandlerDeps,
@@ -486,13 +493,7 @@ export async function handleBuildVoiceRecap(
 
   const profile = serverVoiceProfile(deps);
   if (!voiceRecapAllowed(profile)) {
-    return {
-      status: 503,
-      body: errorBody(
-        "VOICE_UNAVAILABLE",
-        "Voice session recap is not available for this deployment.",
-      ),
-    };
+    return unavailableVoiceRecapResponse();
   }
   const provenance = verifyContentAttestation(deps.voiceRecapContentAttestations, profile, request);
   if (isRouteResult(provenance)) return provenance;

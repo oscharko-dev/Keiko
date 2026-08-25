@@ -39,6 +39,9 @@ export type { PlanOptions } from "./plan.js";
 export { nodeResourceMonitor, readProcessTreeRssBytes } from "./monitor.js";
 export type { ResourceMonitor } from "./monitor.js";
 
+export { probeNetworkIsolation } from "./capabilities.js";
+export type { NetworkIsolationCapability } from "./capabilities.js";
+
 export { buildAppliedLimits } from "./limits.js";
 export type { BreachedDimension } from "./limits.js";
 

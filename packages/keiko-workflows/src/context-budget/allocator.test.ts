@@ -218,7 +218,7 @@ describe("allocateContext — eviction policies", () => {
   const unit = bulk("policy-token ", 100);
   const maxTokens = estimateTokens(unit) * 2;
 
-  function allocateWithPolicy(eviction: ContextEvictionPolicy) {
+  function allocateWithPolicy(eviction: ContextEvictionPolicy): ReturnType<typeof allocateContext> {
     return allocateContext({
       profile: DEFAULT_CONTEXT_PROFILE,
       budget: budgetWithEviction(eviction, maxTokens),
@@ -232,7 +232,9 @@ describe("allocateContext — eviction policies", () => {
     });
   }
 
-  function repoLane(result: ReturnType<typeof allocateContext>) {
+  function repoLane(
+    result: ReturnType<typeof allocateContext>,
+  ): ReturnType<typeof allocateContext>["lanes"][number] {
     const allocated = result.lanes.find((lane) => lane.laneId === "repo-evidence");
     if (allocated === undefined) {
       throw new Error("expected repo-evidence allocation");

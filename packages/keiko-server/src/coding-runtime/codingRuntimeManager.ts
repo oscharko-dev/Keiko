@@ -2789,6 +2789,7 @@ function supervisedMutationEvent(
     return supervisedPolicyFailureEvent(active, sequence, "approval-proof-stale");
   }
   const bindings = approvalBindingsForEvent(active, event, actionKind);
+  const [binding] = bindings;
   const approval = consumePresentedApproval(active, event, bindings);
   if (event.approvalToken !== undefined && approval === undefined) {
     return supervisedPolicyFailureEvent(active, sequence, "approval-proof-stale");
@@ -2907,7 +2908,7 @@ function approvalBindingsForEvent(
   active: ActiveRuntime,
   event: SidecarPermissionEvent,
   actionKind: CodingWorkbenchSupervisedActionKind,
-): readonly SupervisedCodingApprovalBinding[] {
+): readonly [SupervisedCodingApprovalBindingOnce, SupervisedCodingApprovalBindingTask] {
   const binding = approvalBinding({
     runId: active.context.runId,
     requestId: event.requestId,
@@ -2964,7 +2965,12 @@ function taskApprovalBinding(
       actionKind: binding.actionKind,
       connectorScopes: binding.connectorScopes,
     }),
-    sourceDigest: context.branchHeadDigest,
+    sourceDigest: supervisedCodingApprovalScopeDigest({
+      runId: binding.runId,
+      requestId: context.workspaceRoot,
+      actionKind: binding.actionKind,
+      connectorScopes: binding.connectorScopes,
+    }),
     policyVersion: taskPolicyVersion(context, binding),
   };
 }
@@ -2976,11 +2982,8 @@ function taskPolicyVersion(
   return supervisedCodingApprovalScopeDigest({
     runId: binding.runId,
     requestId: JSON.stringify({
-      actionClasses: context.actionClasses,
-      commandPolicy: context.commandPolicy,
-      connectorScopes: context.connectorScopes,
-      deploymentCeiling: context.deploymentCeiling,
-      networkPolicy: context.networkPolicy,
+      effectiveMode: context.effectiveMode,
+      workspaceRoot: context.workspaceRoot,
     }),
     actionKind: binding.actionKind,
     connectorScopes: binding.connectorScopes,

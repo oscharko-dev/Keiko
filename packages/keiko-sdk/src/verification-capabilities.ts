@@ -1,24 +1,19 @@
 import {
   DEFAULT_VERIFICATION_LIMITS,
   nodeResourceMonitor,
+  probeNetworkIsolation,
   resolveStepNetwork,
+  type NetworkIsolationCapability,
   type NetworkEnforcementMode,
   type VerificationPlan,
   type VerificationStep,
 } from "@oscharko-dev/keiko-verification";
-import {
-  probeBackends,
-  selectEnforcingBackend,
-  type SandboxBackend,
-} from "@oscharko-dev/keiko-sandbox";
 
 export type VerificationCapabilityDenialReason =
   "memory-process-tree-unavailable" | "network-isolation-unavailable";
 
-export interface NetworkIsolationCapability {
-  readonly backend: SandboxBackend;
-  readonly enforced: boolean;
-}
+export type { NetworkIsolationCapability } from "@oscharko-dev/keiko-verification";
+export { probeNetworkIsolation };
 
 export interface VerificationStepCapability {
   readonly kind: VerificationStep["kind"];
@@ -35,11 +30,6 @@ export interface VerificationCapabilities {
   readonly defaultRunnable: boolean;
   readonly defaultDenialReasons: readonly VerificationCapabilityDenialReason[];
   readonly steps: readonly VerificationStepCapability[];
-}
-
-export function probeNetworkIsolation(): NetworkIsolationCapability {
-  const backend = selectEnforcingBackend(process.platform, probeBackends());
-  return { backend, enforced: backend !== "none" };
 }
 
 function stepCapability(

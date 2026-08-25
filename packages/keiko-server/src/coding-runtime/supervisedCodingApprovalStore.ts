@@ -161,7 +161,8 @@ function taskBindingScope(binding: SupervisedCodingApprovalBindingTask): Omit<
   SupervisedCodingApprovalBindingTask,
   "requestId"
 > {
-  const { requestId: _requestId, ...scope } = binding;
+  const { requestId, ...scope } = binding;
+  void requestId;
   return scope;
 }
 
