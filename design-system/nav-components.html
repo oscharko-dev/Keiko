@@ -197,7 +197,7 @@
             <!-- #2721 — the horizontal rule is the element that owns the separator role. Its
                  class already overrides the user-agent margin and paints the rule with height
                  plus background; only the inset border it does not set has to be dropped
-                 inline, because keiko-nav.css is sha256-pinned by the #1300 fidelity proof. -->
+                 inline, to keep this one rule minimal rather than adding a border-override class. -->
             <hr class="c-ctx-sep" style="border: 0" />
             <button class="c-ctx-item danger" role="menuitem" tabindex="-1">
               <svg
