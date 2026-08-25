@@ -14,8 +14,11 @@ import type { AddressInfo } from "node:net";
 import type { Server } from "node:http";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
+  AtlassianCredentialCustodyError,
   createAtlassianCredentialCustody,
+  type AtlassianCredentialCustody,
   type AtlassianCredentialMetadata,
+  type AtlassianHttpBodyPort,
   type AtlassianHttpPort,
   type AtlassianHttpRequest,
   type AtlassianHttpResult,
@@ -273,6 +276,41 @@ describe("POST /api/atlassian-connectors/credentials", () => {
       body: createBody(),
     });
     expect(noJson.status).toBe(415);
+  });
+
+  // KEIKO-0826: the domain layer caps stored credentials at
+  // ATLASSIAN_CREDENTIAL_CUSTODY_MAX_ENTRIES and throws credential-limit-exceeded once the cap is
+  // reached. The BFF must surface that as 429 (Too Many Requests) with a typed error code, not
+  // rethrow into the opaque-500 top-level catch — a 500 would misdiagnose a benign capacity
+  // ceiling as a server fault. Uses a stub custody instead of filling 64 real vault entries.
+  it("answers 429 CREDENTIAL_LIMIT_EXCEEDED when custody has hit the storage cap", async () => {
+    const stubCustody: AtlassianCredentialCustody = {
+      create: (): never => {
+        throw new AtlassianCredentialCustodyError("credential-limit-exceeded");
+      },
+      getMetadata: (): undefined => undefined,
+      list: (): readonly AtlassianCredentialMetadata[] => [],
+      delete: (): boolean => false,
+    };
+    const stubHttpPort: AtlassianHttpPort = (): Promise<AtlassianHttpResult> =>
+      Promise.resolve({ kind: "response", status: 200 });
+    const stubHttpBodyPort: AtlassianHttpBodyPort = (): Promise<AtlassianHttpResult> =>
+      Promise.resolve({ kind: "response", status: 200 });
+    await rebuild({
+      custody: stubCustody,
+      httpPortFactory: (): AtlassianHttpPort => stubHttpPort,
+      httpBodyPortFactory: (): AtlassianHttpBodyPort => stubHttpBodyPort,
+    });
+    const res = await fetch(`${baseUrl()}/api/atlassian-connectors/credentials`, {
+      method: "POST",
+      headers: csrfHeaders(),
+      body: createBody(),
+    });
+    expect(res.status).toBe(429);
+    const text = await res.text();
+    expectNoSecretBytes(text);
+    const body = JSON.parse(text) as { error: { code: string } };
+    expect(body.error.code).toBe("CREDENTIAL_LIMIT_EXCEEDED");
   });
 
   it("answers 503 when custody is not configured", async () => {

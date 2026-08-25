@@ -130,6 +130,13 @@ function custodyErrorResult(error: AtlassianCredentialCustodyError): RouteResult
       return { status: 400, body: errorBody("AUTH_SCHEME_UNSUPPORTED", error.message) };
     case "credential-not-found":
       return { status: 404, body: errorBody("CREDENTIAL_NOT_FOUND", error.message) };
+    // KEIKO-0826: reject once the custody storage cap
+    // (ATLASSIAN_CREDENTIAL_CUSTODY_MAX_ENTRIES) is reached. 429 (Too Many Requests) is the
+    // conventional shape for a per-resource rate/cap ceiling — distinct from a validation
+    // failure (400) or a not-found (404), and safe for a client to surface as "try again after
+    // freeing a slot" rather than as a permanent failure.
+    case "credential-limit-exceeded":
+      return { status: 429, body: errorBody("CREDENTIAL_LIMIT_EXCEEDED", error.message) };
     case "credential-unreadable":
     case "vault-unavailable":
       return undefined;
