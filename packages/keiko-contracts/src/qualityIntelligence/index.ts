@@ -288,4 +288,7 @@ export {
   QUALITY_INTELLIGENCE_RUN_STATUSES,
   QUALITY_INTELLIGENCE_ERROR_CODES,
   deriveQualityIntelligenceTerminalDegradation,
+  // KEIKO-0891: producer-side ceilings on the run-start request the browser must never widen.
+  QUALITY_INTELLIGENCE_MAX_RUN_SOURCES,
+  isQualityIntelligenceSeed,
 } from "./bffWire.js";

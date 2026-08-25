@@ -89,21 +89,35 @@ function isNonNegativeInteger(input: unknown): input is number {
 }
 
 // KEIKO-0904: bound a remote URL string on the wire in both length and content. Reject a URL
-// carrying embedded credentials (userinfo) so a leaked fetchUrl/pushUrl cannot cross the redaction
-// boundary the summary path already enforces by rejecting URLs outright. Length bounded at 2048
-// bytes — well above the longest real Git remote URL in the wild and short enough that the
-// validator cannot be turned into a DoS amplifier by a very long echoed string.
+// carrying embedded userinfo (username or password) so a leaked fetchUrl/pushUrl cannot cross
+// the redaction boundary the summary path already enforces by rejecting URLs outright. Length
+// bounded at 2048 bytes — well above the longest real Git remote URL in the wild and short
+// enough that the validator cannot be turned into a DoS amplifier by a very long echoed string.
+//
+// Two shapes `git remote -v` emits that `new URL()` cannot parse but ARE canonical and never
+// carry a secret:
+//   1. scp-like SSH:   git@github.com:org/repo.git    (git-scp form, RFC 3986 non-conformant)
+//   2. ssh:// with SVC user:   ssh://git@github.com/org/repo.git  (username is the well-known
+//      passwordless service account, not a credential)
+// Both are the DEFAULT shape produced by `git clone git@...` and `git clone ssh://git@...` —
+// rejecting them here would false-positive most SSH remotes.
 const REMOTE_URL_MAX_CHARS = 2_048;
+const SCP_LIKE_SSH_RE = /^[A-Za-z0-9._-]+@[A-Za-z0-9.-]+:[^\s]*$/u;
+const SSH_SERVICE_USERS: ReadonlySet<string> = new Set(["git", "hg", "svn"]);
 
 function isSafeRemoteUrl(value: string): boolean {
   if (value.length === 0 || value.length > REMOTE_URL_MAX_CHARS) return false;
+  // scp-like SSH remotes never carry a password; the "user" part before `@` is always the
+  // service account. Accept and stop before new URL() throws.
+  if (SCP_LIKE_SSH_RE.test(value)) return true;
   let parsed: URL;
   try {
     parsed = new URL(value);
   } catch {
     return false;
   }
-  if (parsed.username !== "" || parsed.password !== "") return false;
+  if (parsed.password !== "") return false;
+  if (parsed.username !== "" && !SSH_SERVICE_USERS.has(parsed.username)) return false;
   return true;
 }
 

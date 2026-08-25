@@ -131,6 +131,32 @@ describe("validateGovernedActionV1", () => {
       }),
     ).toMatchObject({ ok: true });
   });
+
+  // KEIKO-0755: GovernedActionV1.grant / .question are typed as CodeTaskKnownOrAbsentFact — an
+  // "unknown" or "unavailable" outcome must be a compile error at the producer, not merely a
+  // runtime rejection. Widening the field back to CodeTaskFact makes the directive unused, which
+  // fails typecheck.
+  it("rejects an unknown grant outcome at compile time (KEIKO-0755)", () => {
+    const action: GovernedActionV1 = {
+      ...allowedAction(),
+      // @ts-expect-error grant must be CodeTaskKnownOrAbsentFact — "unknown" is not permitted.
+      grant: { outcome: "unknown" },
+    };
+    // The runtime validator also rejects (defence-in-depth for a deserialised producer that
+    // slipped past the compile-time gate via a JSON parse or `as` cast).
+    expect(validateGovernedActionV1(action).ok).toBe(false);
+  });
+
+  it("rejects an unavailable question outcome at compile time (KEIKO-0755)", () => {
+    const action: GovernedActionV1 = {
+      ...allowedAction(),
+      decision: "approval-required",
+      grant: { outcome: "absent" },
+      // @ts-expect-error question must be CodeTaskKnownOrAbsentFact — "unavailable" is not permitted.
+      question: { outcome: "unavailable" },
+    };
+    expect(validateGovernedActionV1(action).ok).toBe(false);
+  });
 });
 
 describe("validateCodeTaskExecutionV1", () => {

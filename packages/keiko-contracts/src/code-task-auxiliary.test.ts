@@ -250,6 +250,29 @@ describe("validateAuxiliaryCapabilityOutcomeV1", () => {
     ).toMatchObject({ ok: false });
   });
 
+  // KEIKO-0626 (auxiliary half): a research or skill outcome has no children, so a `known`
+  // childResultCount on either is a producer defect that must not silently reach downstream
+  // consumers. Only capability=child-agent may carry a known count.
+  it("rejects a known childResultCount when capability is not child-agent (KEIKO-0626)", () => {
+    for (const capability of ["research", "skill"] as const) {
+      const result = validateAuxiliaryCapabilityOutcomeV1({
+        schemaVersion: CODE_TASK_AUXILIARY_SCHEMA_VERSION,
+        status: "accepted",
+        capability,
+        resultDigest: { outcome: "known", value: DIGEST },
+        childResultCount: { outcome: "known", value: 3 },
+      });
+      expect(result.ok).toBe(false);
+      if (!result.ok) {
+        expect(
+          result.errors.some((error) =>
+            error.includes("outcome=known is only valid when capability is child-agent"),
+          ),
+        ).toBe(true);
+      }
+    }
+  });
+
   // KEIKO-0302 follow-on: same gap as the research queryTextDigest above, exercised through the
   // other two consumers of the shared factErrors helper (resultDigest and childResultCount).
   it("rejects a result digest or child result count fact wrapper padded with an extra field", () => {

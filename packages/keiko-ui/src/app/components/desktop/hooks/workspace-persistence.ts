@@ -5,7 +5,7 @@ import { sanitizeEditorRootSessionsJson } from "@/lib/editor-root-sessions";
 // parity test can consume them without pulling this file's WIN_TYPES/WIN_META imports into the
 // root suite's stricter node16 tsconfig. looksLikeSecretShape (from keiko-contracts) is imported
 // by the leaf, not here.
-import { isSecretShapedString as isSecretShapedStringLeaf } from "./isSecretShapedString";
+import { isSecretShapedString } from "./isSecretShapedString";
 import { WIN_TYPES, type WindowType } from "../windows/WindowsRegistry";
 import { WIN_META } from "../windows/descriptor-meta";
 import { CHAT_TITLE_IS_DEFAULT_CFG_KEY } from "../windows/connectionUtils";
@@ -179,13 +179,6 @@ function isCredentialKey(key: string): boolean {
   const normalized = alnumLower(key);
   return CREDENTIAL_KEY_MARKERS.some((marker) => normalized.includes(marker));
 }
-
-// KEIKO-0628: the detection logic (isSecretShapedString + helpers) lives in the ./isSecretShapedString
-// leaf so tests/qa's cross-package parity test can consume it under the root tsconfig's stricter
-// module resolution without pulling in this file's WIN_TYPES/WIN_META imports. Internal call sites
-// in this file use `isSecretShapedStringLeaf` (aliased at import); no consumer imports it from
-// this module, so the re-export was removed to avoid knip's dead-export finding.
-const isSecretShapedString = isSecretShapedStringLeaf;
 
 function looksLikeLocalPath(value: string): boolean {
   const trimmed = value.trim();

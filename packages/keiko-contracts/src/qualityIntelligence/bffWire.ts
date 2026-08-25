@@ -580,7 +580,15 @@ export interface QualityIntelligenceModelPolicyPreflightResponse {
   readonly modelRouting: QualityIntelligenceModelRouting;
 }
 
-/** Body of `POST /api/quality-intelligence/runs`. */
+/**
+ * Body of `POST /api/quality-intelligence/runs`.
+ *
+ * KEIKO-0891: two producer-side ceilings the browser must never widen. The sources array is
+ * capped by `QUALITY_INTELLIGENCE_MAX_RUN_SOURCES`; the seed is validated by
+ * `isQualityIntelligenceSeed`. Both are checked by keiko-server's runRoutes.ts before the
+ * request reaches ingestion, and by the shape validator here so a persisted-then-replayed
+ * request cannot bypass the check by side-loading a wider seed.
+ */
 export interface QualityIntelligenceStartRunRequest {
   readonly sources: readonly QualityIntelligenceInlineSource[];
   /** Policy profile id; defaults to the regression profile when omitted. */
@@ -593,6 +601,30 @@ export interface QualityIntelligenceStartRunRequest {
   readonly seed?: number;
   /** Persisted evidence-retention selection; malformed/unknown values fall back server-side. */
   readonly retentionPolicyId?: QualityIntelligenceRetentionPolicyId;
+}
+
+/**
+ * KEIKO-0891: maximum number of source atoms a single run may declare. Sixteen is the widest
+ * legitimate figma-snapshot + requirements + capsule mix any current caller assembles;
+ * `runRoutes.ts` refuses a request over the cap with a coded QI_BAD_REQUEST before entering
+ * ingestion, and the shape validator refuses it here so a replayed request cannot bypass the
+ * cap.
+ */
+export const QUALITY_INTELLIGENCE_MAX_RUN_SOURCES = 16 as const;
+
+/**
+ * KEIKO-0891: a valid sampling seed is a non-negative finite JS-safe integer.
+ * Deserialised inputs (Number.NaN, Number.POSITIVE_INFINITY, a negative, a float, a bigint) all
+ * fail — the caller must have provided a bounded producer-side seed or omitted the field.
+ */
+export function isQualityIntelligenceSeed(value: unknown): value is number {
+  return (
+    typeof value === "number" &&
+    Number.isFinite(value) &&
+    Number.isInteger(value) &&
+    value >= 0 &&
+    value <= Number.MAX_SAFE_INTEGER
+  );
 }
 
 // ─── Run progress stream (Issue #280) ────────────────────────────────────────────

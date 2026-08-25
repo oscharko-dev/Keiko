@@ -213,6 +213,30 @@ describe("QualityIntelligenceExportModelProvenance (KEIKO-0603)", () => {
     }).toThrow(Error);
   });
 
+  // KEIKO-0603 follow-up (reviewer P1): the rejected key itself is attacker-supplied and may
+  // carry credential material. The thrown Error must NOT interpolate the raw key — a fixed
+  // content-free reason code plus a count keeps the redaction gate intact when the error
+  // propagates into operator diagnostics or logs.
+  it("does not echo the rejected key name into the thrown Error message (KEIKO-0603 follow-up)", () => {
+    const sensitiveKey = "sk-live-token-2ab3f9e1";
+    const bundle = bundleWithModelProvenance({
+      generation: STAGE,
+      judge: STAGE,
+      seedUsed: null,
+      modelParameters: { [sensitiveKey]: "x" },
+    });
+    let caught: unknown;
+    try {
+      assertExportBundleInvariant(bundle);
+    } catch (e) {
+      caught = e;
+    }
+    expect(caught).toBeInstanceOf(Error);
+    const message = (caught as Error).message;
+    expect(message).not.toContain(sensitiveKey);
+    expect(message).not.toContain("sk-live");
+  });
+
   it("accepts a bundle with no modelProvenance at all (the field itself stays optional)", () => {
     expect(() => {
       assertExportBundleInvariant(makeBundle("csv", false));

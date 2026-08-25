@@ -326,13 +326,23 @@ function humaniseBranchSlug(headBranch: string): string {
   return tokens.slice(start).join(" ").trim();
 }
 
-// KEIKO-0829: `String.prototype.slice(0, N)` cuts on UTF-16 code units and can split a surrogate
-// pair, producing a lone surrogate. Use an Array.from split so a single astral character (a two-
-// code-unit surrogate pair) is either kept whole or dropped whole, never bisected.
+// KEIKO-0829: keep the 72-UTF-16-unit contract (TITLE_MAX is a code-unit budget, matching
+// GitHub's own PR-title length count). `String.prototype.slice(0, N)` cuts on UTF-16 code units
+// and can split a surrogate pair, producing a lone surrogate — back off one unit when the cut
+// falls between a high and low surrogate so a two-code-unit astral character is either kept
+// whole or dropped whole, never bisected. Pinned by both a lone-surrogate regression and an
+// astral-input regression asserting `.length <= TITLE_MAX`.
+//
+// `codePointAt` here is used strictly for the surrogate-half detection at the cut boundary — a
+// high surrogate (0xD800–0xDBFF) as an ISOLATED unit reads back as itself even from
+// `codePointAt`, which is exactly what we need. We only look at one code unit; there is no
+// astral-value shift to consider.
 function clampTitle(title: string): string {
   if (title.length <= TITLE_MAX) return title;
-  const codePoints = Array.from(title);
-  return codePoints.slice(0, TITLE_MAX).join("").trimEnd();
+  let cut = TITLE_MAX;
+  const boundary = title.codePointAt(cut - 1) ?? 0;
+  if (boundary >= 0xd800 && boundary <= 0xdbff) cut -= 1;
+  return title.slice(0, cut).trimEnd();
 }
 
 function composeTitle(narrative: GitPullRequestChangeNarrative, headBranch: string): string {
@@ -538,27 +548,29 @@ export function gitPullRequestReviewerSuggestionsFor(
 export function gitPullRequestLabelSuggestionsFor(
   narrative: GitPullRequestChangeNarrative,
 ): GitPullRequestLabelSuggestion {
-  const labels = new Set<string>();
+  const areaLabels = narrative.areas
+    .filter((area) => area.length > 0)
+    .map((area) => `area:${area}`);
   const changeTypeLabel = LABEL_BY_CHANGE_TYPE[narrative.changeType];
-  let addedChangeTypeLabel = false;
-  if (changeTypeLabel.length > 0) {
-    labels.add(changeTypeLabel);
-    addedChangeTypeLabel = true;
-  }
-  let addedAreaLabel = false;
-  for (const area of narrative.areas) {
-    if (area.length > 0) {
-      labels.add(`area:${area}`);
-      addedAreaLabel = true;
-    }
-  }
-  // KEIKO-0829: the previous implementation hard-coded "change-type" as the basis regardless of
-  // what was actually produced, so the "area" and "none" basis members were unreachable — a
-  // consumer reading `basis` could never distinguish between the three shapes the type promises.
-  let basis: GitPrLabelSuggestionBasis = "none";
-  if (addedChangeTypeLabel) basis = "change-type";
-  else if (addedAreaLabel) basis = "area";
-  return { suggestedLabelNames: [...labels], basis };
+  const includeChangeType = typeof changeTypeLabel === "string" && changeTypeLabel.length > 0;
+  const suggestedLabelNames = [
+    ...new Set([...(includeChangeType ? [changeTypeLabel] : []), ...areaLabels]),
+  ];
+  // KEIKO-0829: the previous implementation hard-coded "change-type" regardless of what was
+  // actually produced, so the "area" and "none" basis members were unreachable. Derive from
+  // what LABEL_BY_CHANGE_TYPE actually returned: unknown-future changeType → "" (unmapped) so
+  // basis falls to "area" (if any) or "none" (if the narrative also had no area).
+  const basis: GitPrLabelSuggestionBasis = deriveLabelBasis(includeChangeType, areaLabels.length);
+  return { suggestedLabelNames, basis };
+}
+
+function deriveLabelBasis(
+  includeChangeType: boolean,
+  areaLabelCount: number,
+): GitPrLabelSuggestionBasis {
+  if (includeChangeType) return "change-type";
+  if (areaLabelCount > 0) return "area";
+  return "none";
 }
 
 // Extracts issue-ref tokens from the head branch name only (e.g. "claude/issue-477-..." → "#477",

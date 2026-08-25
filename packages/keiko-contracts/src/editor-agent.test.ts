@@ -690,6 +690,31 @@ describe("validateAgentTextEdits (Issue #1394)", () => {
     ]);
     expect(result).toBeNull();
   });
+
+  // KEIKO-0756: the comparator used to return ±1 always (never 0 for equal starts). That
+  // violates the ECMAScript sort contract for equal elements. A stable-comparator regression
+  // proves the fix: many edits with an identical range.start must produce a deterministic
+  // "Edits I and J overlap" error string (lo/hi indices in input order) instead of a
+  // non-deterministic pair.
+  it("comparePositions returns a stable total order for identical range.start (KEIKO-0756)", () => {
+    const edits = Array.from({ length: 4 }, (_, index) => ({
+      range: {
+        start: { line: 0, character: 0 },
+        end: { line: 0, character: 1 },
+      },
+      newText: `edit-${String(index)}`,
+    }));
+    // Same array many times — comparator must produce the same error every run.
+    const results = new Set<string>();
+    for (let i = 0; i < 8; i += 1) {
+      const r = validateAgentTextEdits(edits);
+      if (r !== null) results.add(r);
+    }
+    expect(results.size).toBe(1);
+    const only = [...results][0] ?? "";
+    // First overlapping pair is (0, 1): the sort must have placed index 0 before index 1.
+    expect(only).toMatch(/Edits 0 and 1/);
+  });
 });
 
 describe("isContainedAgentPath (Issue #1394)", () => {

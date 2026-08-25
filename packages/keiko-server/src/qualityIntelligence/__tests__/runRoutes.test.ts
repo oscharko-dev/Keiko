@@ -1180,6 +1180,48 @@ describe("handleStartQiRun — ADF requirements source (KEIKO-0891 follow-on)", 
     const stream = res.chunks.join("");
     expect(stream).toContain("QI_SOURCE_EMPTY");
   });
+
+  // KEIKO-0891 follow-up (reviewer P2): a present-but-malformed `adf` (explicit null or a
+  // primitive) must fail closed at the validator, not silently fall back to raw.text. Prove the
+  // three shapes that used to slip through:
+  //   - adf: null              → QI_BAD_SOURCE  (typeof null === "object", needs its own guard)
+  //   - adf: "not-a-tree"      → QI_BAD_SOURCE  (a string that would parse as JSON but is not ADF)
+  //   - adf: 42                → QI_BAD_SOURCE  (a primitive)
+  //
+  // A well-formed absent `adf` (field simply not present) still succeeds and falls back to text —
+  // the "empty ADF" test above already covers the well-formed path.
+  it.each([
+    ["explicit null", null],
+    ["primitive string", "not-a-tree"],
+    ["primitive number", 42],
+  ])(
+    "rejects a present-but-malformed adf (%s) with QI_BAD_SOURCE before streaming",
+    async (_label, adfValue) => {
+      const res = new MockResponse();
+      const outcome = await handleStartQiRun(
+        ctx(
+          makeReq({
+            sources: [
+              {
+                kind: "requirements",
+                label: "malformed adf",
+                text: "plaintext fallback",
+                adf: adfValue,
+              },
+            ],
+          }),
+          res,
+        ),
+        depsWithEvidence(),
+      );
+      // Not streaming — the validation error is returned as a pre-stream RouteResult, no
+      // ADF-normalisation branch runs.
+      expect(outcome).not.toBe(STREAMING);
+      const result = outcome as { status: number; body: { error: { code: string } } };
+      expect(result.status).toBe(400);
+      expect(result.body.error.code).toBe("QI_BAD_SOURCE");
+    },
+  );
 });
 
 // ─── SSE backpressure (write returns false → destroy) ────────────────────────────────────────────

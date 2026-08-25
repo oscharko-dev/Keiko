@@ -3313,6 +3313,8 @@ export type {
 export {
   deriveQualityIntelligenceTerminalDegradation,
   isQualityIntelligenceJudgeEligible,
+  isQualityIntelligenceSeed,
+  QUALITY_INTELLIGENCE_MAX_RUN_SOURCES,
 } from "./qualityIntelligence/bffWire.js";
 // Issue #283 added flat export-adapter consumers.
 export type {

@@ -346,6 +346,42 @@ describe("validateGitRemotesResponse", () => {
     expect(notAUrl.ok).toBe(false);
   });
 
+  // KEIKO-0904: `git remote -v` emits two canonical no-secret shapes that `new URL()` either
+  // cannot parse or treats as credentialed; both must be accepted.
+  it("accepts the scp-like SSH remote form (KEIKO-0904)", () => {
+    for (const remote of [
+      "git@github.com:oscharko-dev/Keiko.git",
+      "user@gitlab.internal:group/subgroup/repo.git",
+    ]) {
+      const result = validateGitRemotesResponse({
+        ...validRemotes(),
+        remotes: [{ name: "origin", fetchUrl: remote }],
+      });
+      expect(result).toEqual({ ok: true });
+    }
+  });
+
+  it("accepts an ssh:// remote whose user is the well-known service account (KEIKO-0904)", () => {
+    for (const remote of [
+      "ssh://git@github.com/oscharko-dev/Keiko.git",
+      "ssh://git@ssh.dev.azure.com:22/org/proj/_git/repo",
+    ]) {
+      const result = validateGitRemotesResponse({
+        ...validRemotes(),
+        remotes: [{ name: "origin", fetchUrl: remote }],
+      });
+      expect(result).toEqual({ ok: true });
+    }
+  });
+
+  it("still rejects a non-service-user URL with an explicit password (KEIKO-0904)", () => {
+    const result = validateGitRemotesResponse({
+      ...validRemotes(),
+      remotes: [{ name: "origin", fetchUrl: "ssh://someuser:token@host.example/repo" }],
+    });
+    expect(result.ok).toBe(false);
+  });
+
   it("accepts every declared unavailable reason (KEIKO-0310)", () => {
     for (const reason of ["not-a-repository", "unsafe-repository", "git-error"] as const) {
       expect(

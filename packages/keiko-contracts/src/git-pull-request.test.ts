@@ -141,6 +141,18 @@ describe("metadata synthesis", () => {
       expect(isLoneSurrogate).toBe(false);
     }
   });
+
+  // KEIKO-0829 follow-up (reviewer P2): the 72-unit contract is a UTF-16 code-unit budget, not a
+  // code-point budget. An earlier Array.from split truncated at 72 code points, so a title with
+  // enough astral characters could produce a string whose `.length` was up to 144 UTF-16 units,
+  // violating the contract while still avoiding lone surrogates. Pin the length invariant with an
+  // astral-heavy input.
+  it("clamps at the UTF-16 code-unit budget even for an astral-heavy title (KEIKO-0829 follow-up)", () => {
+    // 50 emojis (each 2 UTF-16 units) = 100 UTF-16 units after the branch prefix strips.
+    const branch = `feat/${"🎯".repeat(50)}`;
+    const draft = synthesizePullRequestMetadata(NARRATIVE, RISK_READY, branch);
+    expect(draft.composedTitle.length).toBeLessThanOrEqual(72);
+  });
 });
 
 describe("readiness derivation", () => {
@@ -282,6 +294,32 @@ describe("suggestion derivations", () => {
     expect(s.basis).toBe("change-type");
     expect(s.suggestedLabelNames).toContain("enhancement");
     expect(s.suggestedLabelNames).toContain("area:keiko-server");
+  });
+
+  // KEIKO-0829: basis must reflect what was actually produced. `LABEL_BY_CHANGE_TYPE` covers
+  // every current GitPrChangeType, so `change-type` is the everyday answer, but a future
+  // changeType added to the union without a label mapping must degrade to `area` or `none` —
+  // the two members the old hardcoded `basis:"change-type"` made unreachable.
+  it("falls back to area when the change-type label is missing but areas are (KEIKO-0829)", () => {
+    const unmapped: GitPullRequestChangeNarrative = {
+      ...NARRATIVE,
+      changeType: "future-kind" as unknown as GitPullRequestChangeNarrative["changeType"],
+    };
+    const s = gitPullRequestLabelSuggestionsFor(unmapped);
+    expect(s.basis).toBe("area");
+    expect(s.suggestedLabelNames).toEqual(["area:keiko-server"]);
+  });
+
+  it("falls back to none when neither the change-type label nor any area applies (KEIKO-0829)", () => {
+    const bare: GitPullRequestChangeNarrative = {
+      ...NARRATIVE,
+      changeType: "future-kind" as unknown as GitPullRequestChangeNarrative["changeType"],
+      areas: [],
+      areaCount: 0,
+    };
+    const s = gitPullRequestLabelSuggestionsFor(bare);
+    expect(s.basis).toBe("none");
+    expect(s.suggestedLabelNames).toEqual([]);
   });
 
   it("extracts issue refs from the head branch name", () => {

@@ -141,16 +141,21 @@ export interface QualityIntelligenceExportBundle {
 // KEIKO-0603: modelParameters is an open Record; this is the one runtime check standing between an
 // unlisted key (a provider request config routinely carries api-version, endpoint, or auth-adjacent
 // fields) and a manifest bound for an external TMS.
+//
+// KEIKO-0603 follow-up (reviewer P1): the rejected key itself is attacker-supplied and may carry
+// credential material, an endpoint, or customer data — echoing it verbatim into the thrown
+// Error would turn the redaction gate into an exfiltration path when the error propagates into
+// operator diagnostics or logs. Throw a fixed content-free reason code plus a count; the caller
+// gets the signal it needs (rejected, N unlisted keys) without a raw key crossing the boundary.
 const assertModelParametersAllowlisted = (bundle: QualityIntelligenceExportBundle): void => {
   const modelParameters = bundle.modelProvenance?.modelParameters;
   if (modelParameters === undefined) return;
   const allowlist: readonly string[] = QUALITY_INTELLIGENCE_MODEL_PARAMETER_ALLOWLIST;
-  for (const key of Object.keys(modelParameters)) {
-    if (!allowlist.includes(key)) {
-      throw new Error(
-        `Export bundle modelProvenance.modelParameters key "${key}" is not on the allow-list (id=${bundle.id})`,
-      );
-    }
+  const unlistedCount = Object.keys(modelParameters).filter((k) => !allowlist.includes(k)).length;
+  if (unlistedCount > 0) {
+    throw new Error(
+      `Export bundle modelProvenance.modelParameters carries ${String(unlistedCount)} unlisted key(s) (id=${bundle.id})`,
+    );
   }
 };
 

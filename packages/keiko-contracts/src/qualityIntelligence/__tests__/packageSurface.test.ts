@@ -70,6 +70,9 @@ const requiredValueExports: readonly string[] = [
   "assertQualityIntelligenceConversationCenterHandoffInvariant",
   // KEIKO-0603: modelParameters allow-list enforced by assertExportBundleInvariant.
   "QUALITY_INTELLIGENCE_MODEL_PARAMETER_ALLOWLIST",
+  // KEIKO-0891: producer-side ceilings on the run-start request the browser must never widen.
+  "QUALITY_INTELLIGENCE_MAX_RUN_SOURCES",
+  "isQualityIntelligenceSeed",
 ];
 
 const QI_SOURCE_FILES: readonly string[] = [
