@@ -137,6 +137,10 @@ function issueUrl(deps: JiraWriteActionDeps, relative: string): string {
 }
 
 function issueTypeField(input: CreateJiraIssueInput): Record<string, string> | undefined {
+  // "Exactly one of the two selects the issue type" (documented above on CreateJiraIssueInput):
+  // both supplied together is a contradiction, not an id-wins fallthrough (KEIKO-0806) — mirrors
+  // resolveJiraLiveSearchJql's both-or-neither rejection in jira-live-search.ts.
+  if (input.issueTypeId !== undefined && input.issueTypeName !== undefined) return undefined;
   if (input.issueTypeId !== undefined) {
     return NUMERIC_ID_PATTERN.test(input.issueTypeId) ? { id: input.issueTypeId } : undefined;
   }
@@ -284,7 +288,16 @@ export async function transitionJiraIssue(
     bodyJson: JSON.stringify({ transition: { id: input.transitionId } }),
     expect: "none",
   });
-  return outcome.ok ? { ok: true, transitionId: input.transitionId } : failureOf(outcome);
+  if (outcome.ok) return { ok: true, transitionId: input.transitionId };
+  // KEIKO-0814: a 400/404 on THIS specific POST, immediately after a GET that just listed the
+  // transition as available, means it became unavailable in the race window between the two
+  // requests — the same typed reason the pre-check above already returns, not the generic
+  // status-derived one (Jira still correctly rejected the mutation; only the reported reason's
+  // precision changes).
+  if (outcome.httpStatus === 400 || outcome.httpStatus === 404) {
+    return { ok: false, reason: "invalid-transition" };
+  }
+  return failureOf(outcome);
 }
 
 // POST /rest/api/3/issue/{issueKey}/comment — additive comment composed as ADF.
