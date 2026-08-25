@@ -19,6 +19,7 @@ import {
   type AtlassianCredentialCustody,
   type AtlassianCredentialMetadata,
   type AtlassianHttpBodyPort,
+  type AtlassianHttpBodyResult,
   type AtlassianHttpPort,
   type AtlassianHttpRequest,
   type AtlassianHttpResult,
@@ -294,8 +295,17 @@ describe("POST /api/atlassian-connectors/credentials", () => {
     };
     const stubHttpPort: AtlassianHttpPort = (): Promise<AtlassianHttpResult> =>
       Promise.resolve({ kind: "response", status: 200 });
-    const stubHttpBodyPort: AtlassianHttpBodyPort = (): Promise<AtlassianHttpResult> =>
-      Promise.resolve({ kind: "response", status: 200 });
+    // The body-carrying port returns AtlassianHttpBodyResult, which extends the response shape
+    // with bodyText/bodyBytes/truncated — the create() flow never reaches this stub (custody
+    // rejects at the cap first), so the values are inert placeholders that keep the type honest.
+    const stubHttpBodyPort: AtlassianHttpBodyPort = (): Promise<AtlassianHttpBodyResult> =>
+      Promise.resolve({
+        kind: "response",
+        status: 200,
+        bodyText: "",
+        bodyBytes: 0,
+        truncated: false,
+      });
     await rebuild({
       custody: stubCustody,
       httpPortFactory: (): AtlassianHttpPort => stubHttpPort,

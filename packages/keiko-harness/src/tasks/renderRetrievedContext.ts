@@ -28,19 +28,38 @@ const HEADER =
 const MAX_REF_CHARS = 160;
 
 // Code points collapsed to a single space (or dropped at a boundary) before a citationRef is
-// echoed into a rendered prompt header (KEIKO-0740): ASCII C0 controls + space, DEL, the Unicode
-// C1 control block (U+0080-U+009F), bidi-override/zero-width format characters
-// (U+200B-U+200F, U+202A-U+202E), and the line/paragraph separators (U+2028/U+2029) that render as
-// a line break in many text renderers — every code point a hostile citationRef could use to fake a
-// fresh line or reorder rendered text, extending the original ASCII-only filter. Defence-in-depth
-// only: the hard guarantee is that the task plan keeps allowsTools false regardless of content.
-function isStrippableFormatCodePoint(code: number): boolean {
+// echoed into a rendered prompt header (KEIKO-0740). This is a superset of
+// keiko-contracts/text-safety.ts::stripUnsafeFormatChars's coverage (bidi/zero-width/BOM/format,
+// C0/C1/DEL, U+2028/U+2029) plus ASCII space and TAB, because a citation ref must fold to one
+// logical token — an embedded newline or tab would break the "# [n] label — ref" line shape the
+// renderer emits. Kept as a local predicate rather than delegating to stripUnsafeFormatChars
+// because THIS function inserts a single boundary space where the canonical stripper drops the
+// char outright: "a<U+2028>b" must render as "a b" here (so the two sides can't fuse into a single
+// visually joined token), whereas stripUnsafeFormatChars is designed for continuous prose where
+// TAB/LF/CR carry legitimate structure. If the canonical stripper's coverage widens again, mirror
+// it here to keep this superset relationship intact. Defence-in-depth only: the hard guarantee is
+// that the task plan keeps allowsTools false regardless of content.
+function isControlOrWhitespace(code: number): boolean {
+  // ASCII 0x00-0x20 (controls + space + tab + LF + CR), DEL, and the C1 control block.
+  return code <= 0x20 || code === 0x7f || (code >= 0x80 && code <= 0x9f);
+}
+
+function isBidiZeroWidthOrFormat(code: number): boolean {
+  // Bidi overrides / isolates, zero-width joiners, BOM, LRM/RLM, word joiner + U+2060-U+206F,
+  // Arabic letter mark — mirrors keiko-contracts::isBidiOrZeroWidthCodePoint.
   return (
-    code <= 0x20 ||
-    code === 0x7f ||
-    (code >= 0x80 && code <= 0x9f) ||
+    code === 0x061c ||
     (code >= 0x200b && code <= 0x200f) ||
     (code >= 0x202a && code <= 0x202e) ||
+    (code >= 0x2060 && code <= 0x206f) ||
+    code === 0xfeff
+  );
+}
+
+function isStrippableFormatCodePoint(code: number): boolean {
+  return (
+    isControlOrWhitespace(code) ||
+    isBidiZeroWidthOrFormat(code) ||
     code === 0x2028 ||
     code === 0x2029
   );

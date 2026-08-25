@@ -569,8 +569,9 @@ function cacheExcerptIdentity(input: AssembleInput): readonly object[] | readonl
 // Record<keyof AssembleInput, string>` makes TypeScript reject this object if AssembleInput gains,
 // loses, or renames a field without a matching update here, instead of relying solely on
 // docs/context-engineering/decision-log.md's "Critical gotchas" note and code review to catch the
-// omission. `void` marks the binding as intentionally compile-time-only (no runtime consumer).
-const ASSEMBLE_INPUT_CACHE_FIELD_COVERAGE = {
+// omission. Exported so the guard is a real module reference (no compiler "unused" concern) and
+// so tests can pin the field-coverage documentation without duplicating it.
+export const ASSEMBLE_INPUT_CACHE_FIELD_COVERAGE = {
   scope: "fingerprint key `scope` (via cacheScope)",
   query: "fingerprint key `query` (via cacheQuery)",
   budget: "fingerprint key `budget`",
@@ -582,8 +583,7 @@ const ASSEMBLE_INPUT_CACHE_FIELD_COVERAGE = {
   initialUsage: "fingerprint key `initialUsage` (via cacheUsage)",
   initialUncertainty: "fingerprint key `initialUncertainty` (via cacheUncertainty)",
   diagnostics: "fingerprint key `diagnostics` (via cacheDiagnostics)",
-} satisfies Record<keyof AssembleInput, string>;
-void ASSEMBLE_INPUT_CACHE_FIELD_COVERAGE;
+} as const satisfies Record<keyof AssembleInput, string>;
 
 function buildCacheAtomIds(input: AssembleInput, resolved: ResolvedOptions): readonly string[] {
   const fingerprintSource = JSON.stringify({
