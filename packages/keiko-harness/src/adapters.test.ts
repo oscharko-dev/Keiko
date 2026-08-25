@@ -126,6 +126,9 @@ describe("GatewayModelPort", () => {
   // KEIKO-0463 — SonarJS S7786: after a type check, throw a TypeError (not a bare Error) so the
   // rule stays green whenever this file is touched and downstream `err instanceof TypeError`
   // guards remain correct.
+  // KEIKO-0594: this is also the only test exercising the unsupported-streaming guard itself
+  // (a ChatModel structurally lacking chatStream — the documented "structural fakes may omit it"
+  // case), so it additionally pins the exact message text, the externally observable contract.
   it("throws a TypeError (not a bare Error) when callStream is used but the gateway lacks chatStream", () => {
     const port = new GatewayModelPort({
       chat: (): Promise<NormalizedResponse> => Promise.resolve(response()),
@@ -137,6 +140,7 @@ describe("GatewayModelPort", () => {
       thrown = err;
     }
     expect(thrown).toBeInstanceOf(TypeError);
+    expect((thrown as Error).message).toBe("gateway does not support streaming");
   });
 
   it("leaves logContext undefined when the caller supplies a plain GatewayRequest", async () => {
