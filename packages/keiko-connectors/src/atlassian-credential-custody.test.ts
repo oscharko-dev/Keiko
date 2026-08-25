@@ -12,7 +12,9 @@ import { isAtlassianConnectorAuthRef } from "@oscharko-dev/keiko-contracts";
 import { createLocalSecretVault } from "@oscharko-dev/keiko-security/secret-vault";
 import {
   AtlassianCredentialCustodyError,
+  ATLASSIAN_CREDENTIAL_CUSTODY_MAX_ENTRIES,
   atlassianAuthorizationHeaderValue,
+  compareAtlassianCredentialMetadata,
   createAtlassianCredentialCustody,
   isAtlassianCredentialMetadata,
   type AtlassianCredentialMetadata,
@@ -235,6 +237,52 @@ describe("createAtlassianCredentialCustody — create", () => {
     expect(() => custody.create(createInput())).toThrow("metadata store unavailable");
     expect(vault.entries.size).toBe(0);
   });
+
+  // KEIKO-0826: no cap previously existed on the number of stored credentials/connectors a caller
+  // who can already reach the credential-creation route could create. The cap check reads only
+  // deps.metadataStore.list().length, so a length-only stub (not schema-valid rows) is sufficient
+  // and keeps these tests independent of the metadata shape.
+  it("rejects create() once the storage cap is reached, without writing to the vault or metadata store", () => {
+    const vault = inMemoryVault();
+    const atCapStore: AtlassianCredentialMetadataStore = {
+      insert: (): void => {
+        throw new Error("create() must reject before ever calling insert() once at the cap");
+      },
+      get: (): undefined => undefined,
+      list: (): readonly AtlassianCredentialMetadata[] =>
+        Array.from(
+          { length: ATLASSIAN_CREDENTIAL_CUSTODY_MAX_ENTRIES },
+          () => ({}) as AtlassianCredentialMetadata,
+        ),
+      delete: (): boolean => false,
+    };
+    const { custody } = createAtlassianCredentialCustody({ vault, metadataStore: atCapStore });
+    expect(
+      custodyErrorCode(() => {
+        custody.create(createInput());
+      }),
+    ).toBe("credential-limit-exceeded");
+    expect(vault.entries.size).toBe(0);
+  });
+
+  it("allows create() one entry below the cap — boundary exact", () => {
+    const vault = inMemoryVault();
+    const belowCapStore: AtlassianCredentialMetadataStore = {
+      insert: (): void => {
+        /* accepted */
+      },
+      get: (): undefined => undefined,
+      list: (): readonly AtlassianCredentialMetadata[] =>
+        Array.from(
+          { length: ATLASSIAN_CREDENTIAL_CUSTODY_MAX_ENTRIES - 1 },
+          () => ({}) as AtlassianCredentialMetadata,
+        ),
+      delete: (): boolean => false,
+    };
+    const { custody } = createAtlassianCredentialCustody({ vault, metadataStore: belowCapStore });
+    expect(() => custody.create(createInput())).not.toThrow();
+    expect(vault.entries.size).toBe(1);
+  });
 });
 
 describe("createAtlassianCredentialCustody — list / getMetadata / delete", () => {
@@ -306,6 +354,22 @@ describe("createAtlassianCredentialCustody — list / getMetadata / delete", () 
     const { custody } = custodyOverFakes();
     expect(custody.getMetadata("not-a-ref")).toBeUndefined();
     expect(custody.getMetadata(`atlassian-cred:${"A".repeat(22)}`)).toBeUndefined();
+  });
+
+  it("list's comparator reports a record equal to itself as 0, not 1 (KEIKO-0810)", () => {
+    // The former two-way ternary tie-breaker (left.authRef < right.authRef ? -1 : 1) evaluated
+    // compare(a, a) as 1 — "a is greater than itself" — which is not a valid total order and
+    // risks an implementation-defined Array.prototype.sort outcome. Direct assertion on the
+    // extracted comparator, since sorting a 2-element array of identical objects does not
+    // reliably reproduce the defect under every engine's sort implementation (V8's TimSort in
+    // particular tolerates the inconsistency at small sizes, per the finding's own analysis).
+    const metadata = custodyOverFakes().custody.create(createInput());
+    expect(compareAtlassianCredentialMetadata(metadata, metadata)).toBe(0);
+    // Two independent, structurally-equal records (same createdAt and authRef by construction)
+    // must also compare equal.
+    const clone: AtlassianCredentialMetadata = { ...metadata };
+    expect(compareAtlassianCredentialMetadata(metadata, clone)).toBe(0);
+    expect(compareAtlassianCredentialMetadata(clone, metadata)).toBe(0);
   });
 
   it("delete removes ciphertext and metadata; the authRef is invalidated", () => {
@@ -390,6 +454,41 @@ describe("createAtlassianCredentialCustody — resolveForExecution", () => {
     expect(custodyErrorCode(() => executionResolver.resolveForExecution(metadata.authRef))).toBe(
       "credential-unreadable",
     );
+  });
+});
+
+describe("createAtlassianCredentialCustody — metadata re-validation on read (KEIKO-0894)", () => {
+  it("never lets a tainted stored metadata record (extra key) through getMetadata, list, or resolveForExecution", () => {
+    // The vault side (parseSecretEnvelope) already re-validates the sealed envelope on every read;
+    // the metadata side previously trusted deps.metadataStore unconditionally. Simulates a
+    // corrupted, hand-edited, or non-conforming store by directly writing a record carrying an
+    // extra key that fails isAtlassianCredentialMetadata's fail-closed key allowlist — the exact
+    // carrier class the allowlist exists to stop.
+    const { custody, executionResolver, vault, metadataStore } = custodyOverFakes();
+    const metadata = custody.create(createInput());
+    const tainted = {
+      ...metadata,
+      apiToken: "should-never-reach-a-metadata-projection",
+    } as AtlassianCredentialMetadata;
+    metadataStore.rows.set(metadata.authRef, tainted);
+
+    expect(custody.getMetadata(metadata.authRef)).toBeUndefined();
+    // list() silently drops the tainted row rather than failing every other credential closed
+    // too (the documented choice for this UI-facing surface — see the list() comment in source).
+    expect(custody.list()).toHaveLength(0);
+    expect(custodyErrorCode(() => executionResolver.resolveForExecution(metadata.authRef))).toBe(
+      "credential-not-found",
+    );
+    // The vault/secret side is untouched by this corruption and never leaks through the failure.
+    expect(vault.entries.has(metadata.authRef)).toBe(true);
+  });
+
+  it("still returns a well-formed stored record unchanged (no false positive)", () => {
+    const { custody, executionResolver } = custodyOverFakes();
+    const metadata = custody.create(createInput());
+    expect(custody.getMetadata(metadata.authRef)).toStrictEqual(metadata);
+    expect(custody.list()).toStrictEqual([metadata]);
+    expect(executionResolver.resolveForExecution(metadata.authRef).scheme).toBe("basic-api-token");
   });
 });
 
