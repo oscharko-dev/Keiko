@@ -3210,6 +3210,9 @@ function atlassianConnectorCredentialFields(
       env: args.options.env,
       egress: () => args.runtimeConfig.current()?.egress ?? args.egress,
       securityLogSink: processServerLogSink(),
+      // KEIKO-0826 follow-up: shared process activity log so typed custody-error paths surface
+      // through the same sink as every other server operation.
+      activityLog: processServerLogSink(),
     }),
   };
 }

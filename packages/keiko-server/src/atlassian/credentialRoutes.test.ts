@@ -29,6 +29,7 @@ import { buildRedactor, createInMemoryUiStore, type UiHandlerDeps } from "../ind
 import { createRunRegistry } from "../runs.js";
 import { createUiServer, UI_HOST } from "../server.js";
 import type { ServerDiagnosticRecord } from "../diagnostics-log.js";
+import type { ServerLogEvent, ServerLogSink } from "../observability/server-log.js";
 import { atlassianCredentialMetadataPath } from "./credentialMetadataStore.js";
 import { buildAtlassianConnectorCredentialDeps } from "./wiring.js";
 import type { AtlassianConnectorCredentialDeps } from "./credentialRoutes.js";
@@ -306,10 +307,19 @@ describe("POST /api/atlassian-connectors/credentials", () => {
         bodyBytes: 0,
         truncated: false,
       });
+    // KEIKO-0826 follow-up: assert the typed 4xx also emits a body-free activity-log line so a
+    // support bundle can reconstruct why the request was rejected. Codex flagged that the
+    // original KEIKO-0826 fix mapped the code but did NOT log — the analyzer saw an opaque 429
+    // indistinguishable from any other client-visible failure.
+    const activityEvents: ServerLogEvent[] = [];
+    const activityLog: ServerLogSink = {
+      write: (event) => activityEvents.push(event),
+    };
     await rebuild({
       custody: stubCustody,
       httpPortFactory: (): AtlassianHttpPort => stubHttpPort,
       httpBodyPortFactory: (): AtlassianHttpBodyPort => stubHttpBodyPort,
+      activityLog,
     });
     const res = await fetch(`${baseUrl()}/api/atlassian-connectors/credentials`, {
       method: "POST",
@@ -321,6 +331,14 @@ describe("POST /api/atlassian-connectors/credentials", () => {
     expectNoSecretBytes(text);
     const body = JSON.parse(text) as { error: { code: string } };
     expect(body.error.code).toBe("CREDENTIAL_LIMIT_EXCEEDED");
+    // Activity log emitted with the closed error code + status; body-free (no submitted values).
+    const rejection = activityEvents.find((e) => e.op === "atlassian.credential.rejected");
+    expect(rejection).toBeDefined();
+    expect(rejection?.category).toBe("security");
+    expect(rejection?.errorKind).toBe("credential-limit-exceeded");
+    expect(rejection?.status).toBe(429);
+    // Nothing about the request body — mirror the response-body no-secret check on the sink.
+    expectNoSecretBytes(JSON.stringify(activityEvents));
   });
 
   it("answers 503 when custody is not configured", async () => {
