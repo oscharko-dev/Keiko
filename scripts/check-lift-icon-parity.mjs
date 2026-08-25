@@ -146,25 +146,46 @@ function splitTopLevelArgs(argsSrc) {
 // above `var G = {` and expand bare identifier references in G's operand chain to the
 // underlying expression source before the operand parser walks it. Restricted to UPPER_SNAKE
 // so ordinary lowercase locals cannot accidentally be substituted.
-const SHARED_CONST_HEADER = /^\s*var\s+([A-Z][A-Z0-9_]*)\s*=\s*(.*)$/u;
+const UPPER_SNAKE_CHAR = /[A-Z0-9_]/u;
+
+function isUpperSnake(text) {
+  if (text.length === 0) return false;
+  if (text[0] < "A" || text[0] > "Z") return false;
+  for (const char of text) {
+    if (!UPPER_SNAKE_CHAR.test(char)) return false;
+  }
+  return true;
+}
+
+// Returns { name, valueOnHeaderLine } for a `var UPPER_SNAKE = <expr>` line, else null. Pure
+// string parsing — no regex with multiple unbounded quantifiers that Sonar S8786 would flag as
+// super-linear. Only accepts an UPPER_SNAKE_CASE identifier immediately after `var`.
+function parseSharedConstHeader(line) {
+  const stripped = line.trimStart();
+  if (!stripped.startsWith("var ")) return null;
+  const afterVar = stripped.slice("var ".length).trimStart();
+  const eq = afterVar.indexOf("=");
+  if (eq < 1) return null;
+  const name = afterVar.slice(0, eq).trim();
+  if (!isUpperSnake(name)) return null;
+  return { name, valueOnHeaderLine: afterVar.slice(eq + 1).trimStart() };
+}
 
 function collectSharedConsts(source) {
-  // Line-by-line scan replaces the earlier regex (Sonar S8786: any `[\s\S]*?;` or `[^;]*;\s*$`
-  // shape carries super-linear-backtracking risk on inputs that dodge the terminator). The
-  // header regex is anchored + bounded (no unbounded quantifier that can backtrack past `;`),
-  // and the body accumulates whole physical lines until it sees a `;` at end-of-line — zero
-  // regex risk in the multi-line accumulator.
+  // Pure string parsing replaces the earlier regex forms — Sonar S8786 kept flagging every
+  // shape with adjacent unbounded quantifiers (`\s*var\s+…\s*=\s*` alone was enough). The
+  // per-line header parse is bounded string ops; the body accumulator concatenates physical
+  // lines until `;` at end-of-line.
   const consts = new Map();
   const lines = source.split(/\r?\n/u);
   let i = 0;
   while (i < lines.length) {
-    const header = SHARED_CONST_HEADER.exec(lines[i]);
-    if (!header) {
+    const header = parseSharedConstHeader(lines[i]);
+    if (header === null) {
       i += 1;
       continue;
     }
-    const name = header[1];
-    let expr = header[2];
+    let expr = header.valueOnHeaderLine;
     let cursor = i;
     while (!expr.trimEnd().endsWith(";") && cursor + 1 < lines.length) {
       cursor += 1;
@@ -173,7 +194,7 @@ function collectSharedConsts(source) {
     const trimmed = expr.trim();
     if (trimmed.endsWith(";")) {
       const body = trimmed.slice(0, -1).trim();
-      if (name && body.length > 0) consts.set(name, body);
+      if (body.length > 0) consts.set(header.name, body);
     }
     i = cursor + 1;
   }
