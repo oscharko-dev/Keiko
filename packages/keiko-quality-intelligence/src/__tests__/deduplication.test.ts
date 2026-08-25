@@ -1,9 +1,8 @@
 import { describe, expect, it } from "vitest";
 
-import { QualityIntelligence } from "@oscharko-dev/keiko-contracts";
+import { compareStrings, QualityIntelligence } from "@oscharko-dev/keiko-contracts";
 
 import {
-  compareString,
   computeCandidateEquivalenceSignature,
   deduplicateCandidates,
 } from "../domain/deduplication.js";
@@ -221,12 +220,12 @@ describe("deduplicateCandidates", () => {
   });
 });
 
-describe("compareString", () => {
+describe("compareStrings", () => {
   it("returns 1 when the left value sorts after the right value", () => {
-    expect(compareString("b", "a")).toBe(1);
+    expect(compareStrings("b", "a")).toBe(1);
   });
 
   it("returns 0 for equal values", () => {
-    expect(compareString("a", "a")).toBe(0);
+    expect(compareStrings("a", "a")).toBe(0);
   });
 });

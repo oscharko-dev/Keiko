@@ -11,7 +11,7 @@
 // reference scores UI element coverage; our Keiko port scores atom-to-
 // candidate provenance coverage.
 
-import { QualityIntelligence } from "@oscharko-dev/keiko-contracts";
+import { compareStrings, QualityIntelligence } from "@oscharko-dev/keiko-contracts";
 import { sha256Hex } from "@oscharko-dev/keiko-security";
 
 // ─── Coverage classification ────────────────────────────────────────────────────
@@ -77,16 +77,6 @@ export function classifyAtomCoverage(
   return { atomId: atom.id, ...classifyCoverageMapping(mapping) };
 }
 
-const compareString = (left: string, right: string): number => {
-  if (left < right) {
-    return -1;
-  }
-  if (left > right) {
-    return 1;
-  }
-  return 0;
-};
-
 /**
  * Classify every atom in `atoms` against the supplied coverage map. Atoms with no
  * mapping are classified as "uncovered". The result is sorted by atomId ascending.
@@ -102,7 +92,7 @@ export function buildAtomCoverageStatuses(
   const statuses: AtomCoverageStatus[] = atoms.map((atom) =>
     classifyAtomCoverage(atom, byAtomId.get(String(atom.id))),
   );
-  statuses.sort((a, b) => compareString(String(a.atomId), String(b.atomId)));
+  statuses.sort((a, b) => compareStrings(String(a.atomId), String(b.atomId)));
   return Object.freeze(statuses);
 }
 
@@ -211,7 +201,7 @@ const tokensFromText = (value: string): readonly string[] =>
     ?.filter((token) => token.length >= 3 && !STOPWORDS.has(token)) ?? [];
 
 const uniqueTokens = (tokens: readonly string[]): readonly string[] =>
-  Object.freeze([...new Set(tokens)].sort(compareString));
+  Object.freeze([...new Set(tokens)].sort(compareStrings));
 
 const candidateCoverageText = (
   candidate: QualityIntelligence.QualityIntelligenceTestCaseCandidate,
@@ -289,8 +279,8 @@ const deriveCoverageMapIdString = (
   const payload = [
     "v1",
     String(runId),
-    [...atomHashes].sort(compareString).join(""),
-    [...candidateIds].sort(compareString).join(""),
+    [...atomHashes].sort(compareStrings).join(""),
+    [...candidateIds].sort(compareStrings).join(""),
   ].join("");
   return `qi-coverage-${sha256Hex(payload).slice(0, 32)}`;
 };
@@ -347,7 +337,7 @@ const coverageMappingForAtom = (
   if (confidence <= 0) return undefined;
   return Object.freeze({
     atomId: atom.id,
-    candidateIds: Object.freeze([...stats.candidateIds].sort(compareString)),
+    candidateIds: Object.freeze([...stats.candidateIds].sort(compareStrings)),
     coverageKind: "derived" as const,
     confidence,
   });
@@ -371,7 +361,7 @@ export const buildCoverageMap = (
   const { runId, atoms, candidates, atomTextById } = input;
 
   const sortedAtoms = [...atoms].sort((left, right) =>
-    compareString(left.canonicalHashSha256Hex, right.canonicalHashSha256Hex),
+    compareStrings(left.canonicalHashSha256Hex, right.canonicalHashSha256Hex),
   );
 
   const mappings = sortedAtoms
