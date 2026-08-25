@@ -165,7 +165,11 @@ describe("confirmation-discipline scorer", () => {
       outcomeFor("confirmation-discipline", fixture(["confirmation-discipline"], oracle), obs),
     ).toBe("fail");
   });
-  it("falls back to the taxonomy when the oracle omits expectedRequiresConfirmation", () => {
+  // KEIKO-0664: expectedRequiresConfirmation and expectedEffectClass must both be independently
+  // authored whenever confirmation-discipline is declared. Omitting either used to pass vacuously
+  // (expectedEffectClass) or tautologically re-derive the expectation from the very function under
+  // test (expectedRequiresConfirmation) -- both now fail closed instead.
+  it("fails closed when the oracle omits expectedRequiresConfirmation", () => {
     const looseOracle = {
       expectedGatingAllowed: true,
       expectsProposal: true,
@@ -177,7 +181,22 @@ describe("confirmation-discipline scorer", () => {
         fixture(["confirmation-discipline"], looseOracle),
         observation(),
       ),
-    ).toBe("pass");
+    ).toBe("fail");
+  });
+
+  it("fails closed when the oracle omits expectedEffectClass", () => {
+    const looseOracle = {
+      expectedGatingAllowed: true,
+      expectsProposal: true,
+      expectedRequiresConfirmation: true,
+    };
+    expect(
+      outcomeFor(
+        "confirmation-discipline",
+        fixture(["confirmation-discipline"], looseOracle),
+        observation(),
+      ),
+    ).toBe("fail");
   });
 
   it("passes a read-only proposal that needs no confirmation", () => {

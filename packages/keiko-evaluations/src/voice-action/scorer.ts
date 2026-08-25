@@ -123,13 +123,17 @@ function scoreConfirmationDiscipline(
       rationale: "failed: confirmation-discipline declared but no proposal was derived.",
     };
   }
-  const expectedRequires =
-    oracle.expectedRequiresConfirmation ?? spokenActionRequiresConfirmation(proposal.effectClass);
+  // KEIKO-0664: both oracle fields must be independently authored whenever this dimension is
+  // scored. An omitted expectedEffectClass used to pass vacuously; an omitted
+  // expectedRequiresConfirmation used to fall back to re-deriving the expectation from
+  // spokenActionRequiresConfirmation -- the very function under test on the neighboring "fail-closed
+  // taxonomy" check -- making that check and this one a tautology against the same bug. Both fields
+  // now fail closed when absent instead of silently opting the fixture out of verification.
   return gate("confirmation-discipline", [
     {
       label: "effect class matches oracle expectation",
       ok:
-        oracle.expectedEffectClass === undefined ||
+        oracle.expectedEffectClass !== undefined &&
         proposal.effectClass === oracle.expectedEffectClass,
     },
     {
@@ -138,7 +142,9 @@ function scoreConfirmationDiscipline(
     },
     {
       label: "requiresConfirmation matches oracle expectation",
-      ok: proposal.requiresConfirmation === expectedRequires,
+      ok:
+        oracle.expectedRequiresConfirmation !== undefined &&
+        proposal.requiresConfirmation === oracle.expectedRequiresConfirmation,
     },
     {
       // A confirmation-requiring proposal must START in `awaiting-confirmation`, never `proposed` — it
