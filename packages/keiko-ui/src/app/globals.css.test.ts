@@ -149,14 +149,6 @@ const terminalStyleConsumerComponents = [
   readFileSync(resolve(here, "components/desktop/widgets/cards/RuntimeHubWidget.tsx"), "utf8"),
   readFileSync(resolve(here, "components/desktop/widgets/cards/ContainerStatusWidget.tsx"), "utf8"),
 ];
-const integrationsWidgetModuleCss = readFileSync(
-  resolve(here, "components/desktop/widgets/cards/IntegrationsWidget.module.css"),
-  "utf8",
-).replace(/\r\n?/g, "\n");
-const integrationsWidgetComponent = readFileSync(
-  resolve(here, "components/desktop/widgets/cards/IntegrationsWidget.tsx"),
-  "utf8",
-);
 const figmaImageSourceModuleCss = readFileSync(
   resolve(here, "components/desktop/widgets/figma/FigmaImageSourceWindow.module.css"),
   "utf8",
@@ -194,7 +186,6 @@ const lazyWidgetCss = [
   browserWidgetModuleCss,
   connectorPickerModuleCss,
   terminalWidgetModuleCss,
-  integrationsWidgetModuleCss,
   figmaImageSourceModuleCss,
   timelinePanelModuleCss,
   notificationsPanelModuleCss,
@@ -395,16 +386,6 @@ describe("BUNDLE-09 — lazy widget CSS split", () => {
     for (const component of terminalStyleConsumerComponents) {
       expectLazyCssModuleImport(component, "TerminalWidget.module.css");
     }
-  });
-
-  it("keeps Integrations widget styles out of render-blocking globals.css", () => {
-    expect(css).not.toContain("\n.integ {");
-    expect(css).not.toContain("\nul.integ {");
-    expect(css).not.toContain(".integ-status");
-    expect(integrationsWidgetModuleCss).toContain(":global(.integ)");
-    expect(integrationsWidgetModuleCss).toContain(":global(ul.integ)");
-    expect(integrationsWidgetModuleCss).toContain(":global(.integ-status)");
-    expectLazyCssModuleImport(integrationsWidgetComponent, "IntegrationsWidget.module.css");
   });
 
   it("keeps Figma image source styles out of render-blocking globals.css", () => {
@@ -1189,9 +1170,8 @@ describe("Fix 5 — mobile root toolbar compression", () => {
     expect(ruleBlockAfter(mediaIdx, ".tb-btn {")).toContain("display: none");
   });
 
-  it("keeps the tab strip and mode switch shrinkable", () => {
+  it("keeps the tab strip shrinkable", () => {
     expect(ruleBlockAfter(mediaIdx, ".tb-tabs {")).toContain("min-width: 0");
-    expect(ruleBlockAfter(mediaIdx, ".modesw {")).toContain("min-width: 0");
   });
 });
 

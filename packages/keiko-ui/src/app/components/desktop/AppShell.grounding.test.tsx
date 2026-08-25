@@ -151,11 +151,6 @@ vi.mock("./context/ChatSessionContext", () => ({
   ChatSessionProvider: ({ children }: { readonly children: ReactNode }) => <>{children}</>,
 }));
 
-vi.mock("./context/TwinContext", () => ({
-  TwinProvider: ({ children }: { readonly children: ReactNode }) => <>{children}</>,
-  useTwin: () => ({ mode: "manual", setMode: vi.fn() }),
-}));
-
 vi.mock("./hooks/useTheme", () => ({
   useTheme: () => ({ theme: "dark", toggle: vi.fn() }),
 }));

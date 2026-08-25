@@ -88,10 +88,6 @@ const TimelinePanel = dynamic(
   () => import("./panels/TimelinePanel").then((mod) => mod.TimelinePanel),
   { ssr: false, loading: windowChunkFallback },
 );
-const KeikoTwinPanel = dynamic(
-  () => import("./panels/KeikoTwinPanel").then((mod) => mod.KeikoTwinPanel),
-  { ssr: false, loading: windowChunkFallback },
-);
 const SettingsPanel = dynamic(
   () => import("./panels/SettingsPanel").then((mod) => mod.SettingsPanel),
   { ssr: false, loading: windowChunkFallback },
@@ -160,8 +156,11 @@ const AgentRunWidget = dynamic(
   () => import("./cards/AgentRunWidget").then((mod) => mod.AgentRunWidget),
   { ssr: false, loading: windowChunkFallback },
 );
-const IntegrationsWidget = dynamic(
-  () => import("./cards/IntegrationsWidget").then((mod) => mod.IntegrationsWidget),
+const AtlassianConnectorsPanel = dynamic(
+  () =>
+    import("./connectors/AtlassianConnectorsPanel").then(
+      (mod) => mod.AtlassianConnectorsPanel,
+    ),
   { ssr: false, loading: windowChunkFallback },
 );
 const ConnectorPickerWidget = dynamic(
@@ -387,7 +386,6 @@ registerWindowRender("inspector", () => <InspectorPanel />);
 registerWindowRender("notifications", () => <NotificationsPanel />);
 registerWindowRender("resources", () => <ResourcesPanel />);
 registerWindowRender("activity", () => <TimelinePanel />);
-registerWindowRender("keiko", () => <KeikoTwinPanel />);
 function SettingsPanelSessionHost({ ctx }: { readonly ctx: WindowRenderContext }): ReactNode {
   const { activeProject } = useChatSessionContext();
   return (
@@ -721,9 +719,9 @@ registerWindowRender("agents", (cfg, ctx) => (
   />
 ));
 registerWindowRender("memoria", () => <MemoriaVivaWindow />);
-// uiux-fix F023 C054 — no real integrations exist yet; the widget renders an honest
-// static list, so the legacy `provider` cfg (fabricated "connected" state) is ignored.
-registerWindowRender("integ", () => <IntegrationsWidget />);
+// Issues #2950/#3108 — the former prototype integration/twin state is gone. This shipped window
+// renders the existing BFF-owned connector, scope, sync, and approval surface from ADR-0128.
+registerWindowRender("integ", () => <AtlassianConnectorsPanel />);
 // Epic #750 #756 — Figma Snapshot Workspace window. snapshotRunId is persisted into cfg by the
 // component after a successful build so the connected QI hub can read it via linkedFigmaSnapshotRunIds.
 registerWindowRender("figma", (cfg, ctx) => {

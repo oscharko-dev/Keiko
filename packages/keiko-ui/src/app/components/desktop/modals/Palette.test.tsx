@@ -81,16 +81,12 @@ describe("Palette", () => {
     expect(TYPE_ORDER).not.toContain("project");
   });
 
-  it("does not expose the hidden Keiko Digital Twin surface in the default window order", () => {
-    expect(TYPE_ORDER).not.toContain("keiko");
-  });
-
   it("keeps Agents out of the broad default order while the curated picker can expose it", () => {
     expect(TYPE_ORDER).not.toContain("agents");
   });
 
-  it("does not expose the hidden Integrations surface in the default window order", () => {
-    expect(TYPE_ORDER).not.toContain("integ");
+  it("exposes server-owned connector management in the default window order (#3108)", () => {
+    expect(TYPE_ORDER).toContain("integ");
   });
 
   it("exposes the Editor surface in the default window order", () => {

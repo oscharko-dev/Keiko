@@ -43,9 +43,9 @@ export interface WinSnapshot {
 }
 
 export const CONNECTABLE: Readonly<Partial<Record<WindowType, readonly WindowType[]>>> = {
-  agents: ["files", "terminal", "plugins", "review", "browser", "agents", "keiko"],
+  agents: ["files", "terminal", "plugins", "review", "browser", "agents"],
   // Epic #189 Slice 3 M3 — a Chat window can bind to a Connector window via a relationship edge.
-  chat: ["files", "browser", "plugins", "keiko", "connector"],
+  chat: ["files", "browser", "plugins", "connector"],
   files: ["agents", "chat", "quality", "editor", "promptEnhancer"],
   // Issue #1199 — an Editor can bind to Files for focused file context and to Connector for
   // selected Local Knowledge scope. Completion still posts only to the governed BFF route.
@@ -54,7 +54,6 @@ export const CONNECTABLE: Readonly<Partial<Record<WindowType, readonly WindowTyp
   plugins: ["agents", "chat"],
   review: ["agents"],
   browser: ["agents", "chat"],
-  keiko: ["agents", "chat"],
   // A Connector window can bind to a Chat window (triggers localKnowledgeScopes binding) or to a
   // Quality Intelligence hub (the selected capsule / capsule-set becomes the Generate source — Epic
   // #710, Issue #718).
@@ -177,7 +176,6 @@ const PAIR_LABEL_RESOLVERS: readonly (readonly [WindowType, PairLabelResolver])[
   ["figmaImage", () => "uses image"],
   ["figmaView", () => "uses view"],
   ["figma", figmaRelLabel],
-  ["keiko", () => "governed by"],
   ["terminal", () => "runs in"],
   // Every label must read as a mini-sentence predicate ("Chat uses tools Plugins");
   // bare "tools" / "linked" carried no relationship meaning (uiux-fix F048, C409).

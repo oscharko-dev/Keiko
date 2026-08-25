@@ -40,6 +40,7 @@ export const QUICK_ACCESS_TOOL_TYPES: readonly WindowType[] = [
   "notifications",
   "resources",
   "localKnowledge",
+  "integ",
   "governedGit",
   // Issue #2476 — Code task reachability. The Coding Workbench is a `singleton: true, tool: true`
   // window, so it belongs on the palette's tool list (the idempotent `toggleTool` seam the Left Rail

@@ -11,7 +11,6 @@ import { ChatSessionProvider } from "./context/ChatSessionContext";
 import { ActiveWorkspaceProvider } from "./context/ActiveWorkspaceContext";
 import { AnnouncerProvider } from "./context/AnnouncerContext";
 import { useActiveWorkspaceState } from "./hooks/useActiveWorkspaceState";
-import { TwinProvider, useTwin } from "./context/TwinContext";
 import { WsContext, type WsContextValue } from "./context/WsContext";
 import { Header, type HeaderStatusTone } from "./Header";
 import { LeftRail } from "./LeftRail";
@@ -879,7 +878,6 @@ export function deepLinkToolFor(path: string): "relationships" | "localKnowledge
 function AppShellInner(): ReactNode {
   const t = useTranslate();
   const { theme, toggle: toggleTheme } = useTheme();
-  const twin = useTwin();
   const session = useChatSession({ autoCreate: false });
   // Issue #446 (ADR-0090) — the active task-workspace binding state machine. It is provided to the
   // whole shell so the Header switcher and every window's render context read one source of truth.
@@ -1744,7 +1742,6 @@ function AppShellInner(): ReactNode {
                       onToggleWindowPalette={toggleWindowPalette}
                       onSelectWindow={selectFooterWindow}
                       onCloseWindowPalette={closeWindowPalette}
-                      mode={twin.mode}
                       selectedModel={session.selectedModel}
                       projectName={projectName}
                       branchLabel={branchLabel}
@@ -1837,7 +1834,7 @@ export function AppShellFrame({ children }: { readonly children: ReactNode }): R
   return (
     <I18nProvider>
       <AppShellBoundary>
-        <TwinProvider>{children}</TwinProvider>
+        {children}
       </AppShellBoundary>
     </I18nProvider>
   );

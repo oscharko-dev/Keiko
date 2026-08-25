@@ -1,6 +1,7 @@
 import { useEffect, type Dispatch, type RefObject, type SetStateAction } from "react";
 import type { CodingWorkbenchRuntimeStateName } from "@oscharko-dev/keiko-contracts";
 import type { ActiveWorkspaceApi } from "@/app/components/desktop/context/ActiveWorkspaceContext";
+import { logRuntimeActivityEvents } from "@/app/components/desktop/widgets/shared/activityBus";
 import { codingWorkbenchRuntimeApiError } from "./coding-workbench-runtime-api";
 import { useCodingWorkbenchRuntimeEventStream } from "./coding-workbench-event-retention";
 import { fetchWorkspaceManifestAccess } from "./workspace-manifest-api";
@@ -140,6 +141,7 @@ export function useCodingWorkbenchRuntimeStream({
     },
     onEvents: (events, cursor, resnapshot) => {
       if (!runId) return;
+      logRuntimeActivityEvents(events);
       dispatch({ kind: "events-received", events });
       dispatch({ kind: "stream-set", stream: { runId, cursor, connected: true } });
       if (resnapshot) void refreshRun();

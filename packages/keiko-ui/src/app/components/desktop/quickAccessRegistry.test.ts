@@ -142,4 +142,11 @@ describe("quick access registry", () => {
     expect(tools).toContain("coding");
     expect(cards).not.toContain("coding");
   });
+
+  it("exposes server-owned connector management through the tool list (#3108)", () => {
+    const { cards, tools } = appCommandWindowTypes();
+
+    expect(tools).toContain("integ");
+    expect(cards).not.toContain("integ");
+  });
 });

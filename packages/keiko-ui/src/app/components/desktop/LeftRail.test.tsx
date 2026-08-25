@@ -42,11 +42,6 @@ describe("LeftRail — workspace tool buttons", () => {
       name: "Project",
     },
     {
-      title:
-        "does not expose Keiko Digital Twin in the left rail while the product surface is hidden",
-      name: "Keiko",
-    },
-    {
       title: "does not expose Automations in the left rail while the product surface is hidden",
       name: "Automations",
     },

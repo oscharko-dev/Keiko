@@ -8,7 +8,7 @@
 //
 // Mirrors WindowBodyBoundary (the repo's per-window boundary): class component,
 // getDerivedStateFromError, a fallback with zero heavy dependencies. It renders inside I18nProvider
-// but above TwinProvider and the shell, so every string still goes through the i18n API.
+// but above the shell, so every string still goes through the i18n API.
 
 import { Component, type ReactNode } from "react";
 import { useTranslate, type I18nTranslate } from "@/lib/i18n";

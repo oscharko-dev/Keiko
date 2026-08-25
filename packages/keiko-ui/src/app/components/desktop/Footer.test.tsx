@@ -45,7 +45,6 @@ function renderFooter(
       onToggleWindowPalette={vi.fn()}
       onSelectWindow={vi.fn()}
       onCloseWindowPalette={vi.fn()}
-      mode="manual"
       selectedModel={undefined}
       projectName="Keiko"
       branchLabel="main"
@@ -242,7 +241,6 @@ describe("Footer — window status trigger", () => {
           onToggleWindowPalette={() => setOpen((value) => !value)}
           onSelectWindow={vi.fn()}
           onCloseWindowPalette={() => setOpen(false)}
-          mode="manual"
           selectedModel={undefined}
           projectName="Keiko"
           branchLabel="main"

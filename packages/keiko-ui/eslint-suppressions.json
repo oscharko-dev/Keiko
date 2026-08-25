@@ -249,11 +249,6 @@
       "count": 1
     }
   },
-  "src/app/components/desktop/context/TwinContext.tsx": {
-    "complexity": {
-      "count": 1
-    }
-  },
   "src/app/components/desktop/figma-image-drag.ts": {
     "complexity": {
       "count": 1
@@ -1708,11 +1703,6 @@
   },
   "src/app/components/desktop/widgets/quality-intelligence/connectedSources.ts": {
     "complexity": {
-      "count": 1
-    }
-  },
-  "src/app/components/desktop/widgets/shared/activityBus.ts": {
-    "@typescript-eslint/explicit-function-return-type": {
       "count": 1
     }
   },

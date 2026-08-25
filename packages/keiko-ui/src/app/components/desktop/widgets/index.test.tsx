@@ -224,7 +224,6 @@ vi.mock("./panels/NotificationsPanel", () => ({
 }));
 vi.mock("./panels/ResourcesPanel", () => ({ ResourcesPanel: () => <div>ResourcesPanel</div> }));
 vi.mock("./panels/TimelinePanel", () => ({ TimelinePanel: () => <div>TimelinePanel</div> }));
-vi.mock("./panels/KeikoTwinPanel", () => ({ KeikoTwinPanel: () => <div>KeikoTwinPanel</div> }));
 vi.mock("./panels/SettingsPanel", () => ({
   SettingsPanel: ({
     openUpdatesWindow,
@@ -517,8 +516,8 @@ vi.mock("./cards/AgentRunWidget", () => ({
     <div data-testid="agent-widget">{`${String(cfg.workflow)}:${linkedRoot ?? ""}:${linkedFilePath ?? ""}`}</div>
   ),
 }));
-vi.mock("./cards/IntegrationsWidget", () => ({
-  IntegrationsWidget: () => <div>IntegrationsWidget</div>,
+vi.mock("./connectors/AtlassianConnectorsPanel", () => ({
+  AtlassianConnectorsPanel: () => <div>AtlassianConnectorsPanel</div>,
 }));
 vi.mock("./cards/ConnectorPickerWidget", () => ({
   ConnectorPickerWidget: ({
