@@ -81,7 +81,13 @@ export async function runRegressionProbes<Fixture, Scorecard>(
     if (!droppedBelowFloors) tautological.push(fixtureId);
   }
   return {
-    ok: tautological.length === 0 && probed > 0 && unresolved.length === 0,
+    // KEIKO-0720 follow-up: a non-empty `skipped` bucket must fail the verdict. The earlier fix
+    // exposed the bucket for observability but left `ok` blind to it, so a `regressFixture` that
+    // silently declines one of two selected fixtures still passed the gate — defeating the exact
+    // anti-tautology coverage `runRegressionProbes` exists to defend. Including `skipped.length
+    // === 0` in `ok` makes the drop fatal; the caller (`runRetrievalQualityCheck`) gates only on
+    // `regression.ok`, so nothing else needs to change to close the gap.
+    ok: tautological.length === 0 && probed > 0 && unresolved.length === 0 && skipped.length === 0,
     tautological,
     probed,
     unresolved,
