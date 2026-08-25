@@ -20,7 +20,11 @@ export interface TaskPlan {
   readonly targetFile: string;
   // Initial messages seeding the first model call. SENSITIVE content — never logged raw.
   readonly messages: readonly ChatMessage[];
-  // Short, non-sensitive rationale describing the plan, surfaced as a reasoning:trace.
+  // SENSITIVE: derived from caller-supplied task input (free-form bug descriptions,
+  // session IDs, file paths — see investigate-bug.ts/editor-agent-turn.ts/
+  // generate-unit-tests.ts/explain-plan.ts). Treated as SENSITIVE and redacted by
+  // default, matching emitter.ts/sinks.ts/ports.ts — never assume it is safe to log
+  // or surface unredacted.
   readonly rationale: string;
 }
 
