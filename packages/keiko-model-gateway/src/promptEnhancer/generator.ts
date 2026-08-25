@@ -39,6 +39,7 @@ import {
   type PromptTaskClass,
   type RawPromptInput,
 } from "@oscharko-dev/keiko-contracts";
+import { OUTPUT_CONTROLLABILITY_CRITERION } from "./critic.js";
 import type { PromptEnhancementPlan } from "./planner.js";
 import { getPromptEnhancerExecutionProfile } from "./profiles.js";
 import type { PromptEnhancerExecutionProfile, ReasoningStrategy } from "./profiles.js";
@@ -1005,7 +1006,7 @@ function buildQualityCriteria(
     optional.push("Token efficiency: the response is concise and free of padding.");
   }
   if (plan.selectedProfile === "technical" || plan.outputSchema.structured) {
-    optional.push("Output controllability: the response conforms exactly to the required format.");
+    optional.push(OUTPUT_CONTROLLABILITY_CRITERION);
   }
   if (plan.groundingMandatory || plan.executionProfile.emphasizeGrounding) {
     optional.push("Grounding: claims are supported and traceable to evidence.");

@@ -41,21 +41,14 @@ const BASELINE_LEAST_PRIVILEGE_DENIALS = BASELINE_LEAST_PRIVILEGE.length;
 // Derived from the producer (`GROUNDING_READINESS_MIN_RULES` in keiko-model-gateway's critic) so the
 // scorer's structural gate matches the critic's continuous grading — same #2643 discipline.
 const GROUNDED_MIN_RULES = PromptEnhancer.GROUNDING_READINESS_MIN_RULES;
-// KEIKO-0770: the "output controllability" quality criterion is free text with no typed/structural
-// signal, unlike GROUNDED_MIN_RULES above -- keiko-model-gateway does not export a shared constant or
-// tagged field for it (checked: packages/keiko-model-gateway/src/promptEnhancer/index.ts's public
-// surface carries no such export), so there is nothing to import here to close the coupling per the
-// #2643 discipline. This constant is a keiko-evaluations-local partial mitigation: it centralizes the
-// literal to ONE place in this package (this file previously matched it inline) so a wording change
-// only needs updating here, not hunted down. It does NOT fully resolve the finding: the generator
-// (packages/keiko-model-gateway/src/promptEnhancer/generator.ts, buildQualityCriteria) and the
-// critic's own identical match (packages/keiko-model-gateway/src/promptEnhancer/critic.ts,
-// scoreOutputControllability) still hold their own independent copies of this same literal and can
-// drift from this one silently. Full remediation needs a shared typed signal exported by
-// keiko-model-gateway (or a contract-level tag on EnhancedPrompt.qualityCriteria in keiko-contracts)
-// that both the generator and every consumer key off instead -- out of scope for a
-// keiko-evaluations-only change.
-const OUTPUT_CONTROLLABILITY_CRITERION_PREFIX = "Output controllability";
+// KEIKO-0770: the "output controllability" quality criterion is now anchored on a single shared
+// constant exported by keiko-model-gateway's promptEnhancer critic. The generator writes
+// OUTPUT_CONTROLLABILITY_CRITERION verbatim; the critic scores on the prefix; the evaluator
+// (below) matches on the same prefix — so a wording change in the producer propagates to both
+// checks in one edit, with no drift. Follows the same #2643 fixture-parity discipline as
+// GROUNDED_MIN_RULES above.
+const OUTPUT_CONTROLLABILITY_CRITERION_PREFIX =
+  PromptEnhancer.OUTPUT_CONTROLLABILITY_CRITERION_PREFIX;
 
 interface Check {
   readonly label: string;
