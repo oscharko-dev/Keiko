@@ -16,9 +16,13 @@
   var CONTRAST_KEY = "keiko-ds-contrast";
   var root = document.documentElement;
 
+  /* moon/sun are sourced from lift-glyphs.js (window.LiftGlyph), the single source of
+     truth for icon paths — see KEIKO-0911. lift-glyphs.js is required to load before
+     this script on every page that loads theme-control.js, so window.LiftGlyph is
+     always available here. auto/high have no lift-glyphs.js equivalent and stay local. */
   var ICON = {
-    moon: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M19.5 13.5 A8 8 0 1 1 10.5 4.2 a6.5 6.5 0 0 0 9.3 9.1"/></svg>',
-    sun: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="4"/><path d="M12 2.5 V5 M12 19 V21.5 M2.5 12 H5 M19 12 H21.5 M5.1 5.1 L6.9 6.9 M17.1 17.1 l1.8 1.8 M18.9 5.1 L17.1 6.9 M6.9 17.1 L5.1 18.9"/></svg>',
+    moon: window.LiftGlyph ? window.LiftGlyph.svg("moon", 16) : "",
+    sun: window.LiftGlyph ? window.LiftGlyph.svg("sun", 16) : "",
     auto: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="8.4"/><path d="M12 3.6 v16.8" /><path d="M12 3.6 a8.4 8.4 0 0 1 0 16.8 z" fill="currentColor" stroke="none"/></svg>',
     high: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="8.4"/><path d="M12 3.6 a8.4 8.4 0 0 0 0 16.8 z" fill="currentColor" stroke="none"/></svg>',
   };
