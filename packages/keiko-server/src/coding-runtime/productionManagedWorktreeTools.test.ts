@@ -227,6 +227,72 @@ describe("production managed worktree tools", () => {
       denyLoopback: true,
     });
   });
+
+  it.each([
+    ["command", { commandId: "npm-script:test" }],
+    ["git", { operation: "read" }],
+    ["delivery", { intent: "commit" }],
+    ["connector", { scope: "source-control.read" }],
+  ] as const)("completes the governed %s port through production wiring", async (action, detail) => {
+    const execute = vi.fn(() => Promise.resolve({ failureReason: "none" }));
+    const facade = createProductionManagedWorktreeToolFacade({
+      authority: {
+        revalidateCapabilityForMutation: () => ({ ok: true as const, envelope: authorizedEnvelope() }),
+        resolveCapabilityForDelegation: () => ({ ok: true as const, envelope: authorizedEnvelope() }),
+      },
+      authorityRef: { runId: "run-1", envelopeDigest: DIGEST },
+      workspaceRoot: "/managed/worktree",
+      authorityExpiresAt: "2099-01-01T00:00:00.000Z",
+      effectiveMode: "autonomous-delivery",
+      deploymentCeiling: "autonomous-delivery",
+      liveFacts: () => ({
+        ...FACTS,
+        actionClasses: [
+          "workspace-read",
+          "workspace-write",
+          "verification",
+          "command-execution",
+          "delivery-substrate",
+          "connector-access",
+          "network-egress",
+        ],
+        connectorScopes: ["source-control.read", "source-control.write"],
+      }),
+      secureWorkspaceTextRead: { readText: () => Promise.resolve({ ok: false, reason: "denied" }) },
+      editorAgentClient: {
+        action: () =>
+          Promise.resolve({
+            ok: false as const,
+            error: { kind: "route" as const, code: "denied", message: "denied" },
+          }),
+      },
+      invocationRegistry: createCodingToolInvocationRegistry(),
+      commandRunner: { execute } as never,
+      verificationRunner: { runToReport: vi.fn() },
+      onRuntimeEvent: vi.fn(),
+    });
+
+    await expect(
+      facade.execute({
+        capability: "opaque-capability",
+        body: JSON.stringify({
+          action,
+          actionId: `${action}-1`,
+          idempotencyKey: `${action}-key`,
+          ...detail,
+        }),
+      }),
+    ).resolves.toMatchObject({ status: "completed" });
+    if (action === "command") {
+      expect(execute).toHaveBeenCalledWith({
+        projectId: "/managed/worktree",
+        taskId: "npm-script:test",
+        requestId: "command-1",
+      });
+    } else {
+      expect(execute).not.toHaveBeenCalled();
+    }
+  });
 });
 
 function authorizedEnvelope(network = false): never {
@@ -236,10 +302,13 @@ function authorizedEnvelope(network = false): never {
         "workspace-read",
         "workspace-write",
         "verification",
+        "command-execution",
+        "delivery-substrate",
+        "connector-access",
         ...(network ? ["network-egress"] : []),
       ],
-      connectorScopes: [],
-      commandPolicy: { mode: "deny", allow: [], deny: [] },
+      connectorScopes: ["source-control.read", "source-control.write"],
+      commandPolicy: { mode: "allowlisted", allow: ["npm-script:test"], deny: [] },
       networkPolicy: {
         mode: network ? "governed-egress" : "deny-all",
         connectorScopes: [],

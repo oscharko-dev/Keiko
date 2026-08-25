@@ -3521,6 +3521,7 @@ function assembleUiHandlerRuntimeServices(
   const codingRuntimeCeiling = resolveCodingRuntimeDeploymentCeiling(args.options);
   const runtimeComposition = productionRuntimeResolver(
     args,
+    peripherals.commandRunner,
     peripherals.verificationRunner,
     codingRuntimeEvidenceAggregator,
     codingRuntimeCeiling,
@@ -4026,6 +4027,7 @@ function runtimeStartConfirmationConsumer(
 
 function productionRuntimeResolver(
   args: UiHandlerDepsAssemblyArgs,
+  commandRunner: PeripheralManagers["commandRunner"],
   verificationRunner: PeripheralManagers["verificationRunner"],
   runtimeEvidence: Pick<CodingRuntimeEvidenceAggregator, "observe">,
   deploymentCeiling: CodingWorkbenchMode,
@@ -4058,6 +4060,7 @@ function productionRuntimeResolver(
       ports,
       activated: resolution.activated,
       runtimeMutationLeaseBroker,
+      commandRunner,
       verificationRunner,
       workspaceLifecycle,
     }),
@@ -4077,6 +4080,7 @@ interface QualifiedRuntimeResolverInput {
   readonly runtimeMutationLeaseBroker: ReturnType<
     typeof createCodingRuntimeEditorMutationLeaseBroker
   >;
+  readonly commandRunner: PeripheralManagers["commandRunner"];
   readonly verificationRunner: PeripheralManagers["verificationRunner"];
   readonly workspaceLifecycle: WorkspaceLifecycleService;
 }
@@ -4094,6 +4098,7 @@ function qualifiedRuntimeResolver(
       input.deploymentCeiling,
     ),
     ...input.ports,
+    commandRunner: input.commandRunner,
     verificationRunner: input.verificationRunner,
     runtimeMutationLeaseBroker: input.runtimeMutationLeaseBroker,
     gatewayEgress: () => args.runtimeConfig.current()?.egress ?? args.egress,

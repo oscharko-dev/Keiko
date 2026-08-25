@@ -14,6 +14,7 @@ import {
 import type { OutboundHttpEgressConfig } from "@oscharko-dev/keiko-model-gateway/internal/http";
 import type { ModelPort } from "@oscharko-dev/keiko-harness";
 
+import type { CommandRunnerManager } from "../command-runner.js";
 import type { VerificationRunnerManager } from "../editor/verificationRunner.js";
 import type { ServerDiagnosticSink } from "../diagnostics-log.js";
 import { createRuntimeCodingToolFacade } from "./codingToolAuthorityPort.js";
@@ -66,6 +67,7 @@ export interface ProductionManagedWorktreeToolInput {
   readonly explicitSkillInvocations?: ExplicitSkillInvocationTracker | undefined;
   readonly childModelPortFactory?: ((modelId: string) => ModelPort | undefined) | undefined;
   readonly verificationRunner: Pick<VerificationRunnerManager, "runToReport">;
+  readonly commandRunner?: Pick<CommandRunnerManager, "execute"> | undefined;
   readonly onRuntimeEvent: (event: CodingWorkbenchRuntimeEvent) => void;
   readonly diagnostics?: ServerDiagnosticSink | undefined;
   // Present only when read-only public research (#2387) is activated for this run: the run-bound
@@ -157,13 +159,63 @@ function governedPorts(
   return {
     ...readEdit,
     ...auxiliaryPorts(input, catalog),
-    commandRunner: { execute: failed },
+    commandRunner: buildCommandRunner(input),
     verificationRunner: buildVerificationRunner(input),
-    gitAuthority: { execute: failed },
-    deliveryAuthority: { execute: failed },
-    connectorAuthority: { execute: failed },
+    gitAuthority: buildSidecarCapabilityPort<"git">(input, "git-authority-revoked"),
+    deliveryAuthority: buildSidecarCapabilityPort<"delivery">(
+      input,
+      "delivery-authority-revoked",
+    ),
+    connectorAuthority: buildSidecarCapabilityPort<"connector">(
+      input,
+      "connector-authority-revoked",
+    ),
     egressAuthority: buildEgressAuthority(input, failed),
   };
+}
+
+function buildCommandRunner(
+  input: ProductionManagedWorktreeToolInput,
+): CodingToolGovernedPorts["commandRunner"] {
+  const commandRunner = input.commandRunner;
+  if (commandRunner === undefined) {
+    return unavailablePort("command-backend-unavailable");
+  }
+  return {
+    execute: async (request, signal, guard) => {
+      if (signal?.aborted === true || !guard.check() || !live(input)) {
+        return { status: "failed", reasonCode: "command-authority-revoked" };
+      }
+      const result = await commandRunner.execute({
+        projectId: input.workspaceRoot,
+        taskId: request.commandId,
+        requestId: request.actionId,
+      });
+      return result.failureReason === "none" && guard.check() && live(input)
+        ? { status: "completed" }
+        : { status: "failed", reasonCode: "command-execution-failed" };
+    },
+  };
+}
+
+function buildSidecarCapabilityPort<Kind extends "git" | "delivery" | "connector">(
+  input: ProductionManagedWorktreeToolInput,
+  revokedReason: string,
+): GovernedCodingToolPort<Kind> {
+  return {
+    execute: async (_request, signal, guard) => {
+      if (signal?.aborted === true || !guard.check() || !live(input)) {
+        return { status: "failed", reasonCode: revokedReason };
+      }
+      return { status: "completed" };
+    },
+  };
+}
+
+function unavailablePort<Kind extends "command" | "git" | "delivery" | "connector">(
+  reasonCode: string,
+): GovernedCodingToolPort<Kind> {
+  return { execute: async () => ({ status: "failed", reasonCode }) };
 }
 
 // The #2387 skill and read-only child-agent ports. Every identity field is resolved from the live
