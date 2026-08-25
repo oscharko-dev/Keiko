@@ -26,13 +26,6 @@ interface FooterProps {
   readonly onToggleWindowPalette: () => void;
   readonly onSelectWindow: (id: string) => void;
   readonly onCloseWindowPalette: () => void;
-  // AC #4: the currently selected model id, undefined when no eligible model is
-  // configured. Passed by value from AppShell so no Context provider is needed.
-  readonly selectedModel: string | undefined;
-  readonly projectName: string;
-  readonly branchLabel: string;
-  readonly shellStatusLabel: string;
-  readonly evidenceStatusLabel: string;
   readonly statusRef?: (node: HTMLElement | null) => void;
 }
 
@@ -146,11 +139,10 @@ function FooterImpl({
           <TileIcon size={13} /> {windowLabel}
         </button>
         {windowPaletteOpen && winCount > 0 ? (
-          <div
+          <section
             ref={windowPanelRef}
             id="footer-window-palette"
             className="ft-window-palette"
-            role="group"
             aria-label={t("footer.openWindows")}
             // GEN-UI-FOCUS-011 — focusable fallback target so focus can move into the palette on open
             // even when no window card exists to receive it.
@@ -198,7 +190,7 @@ function FooterImpl({
                 );
               })}
             </div>
-          </div>
+          </section>
         ) : null}
       </span>
     </footer>

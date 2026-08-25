@@ -11,7 +11,7 @@ const formatTable: PromptEnhancerEvalFixture = {
   request: { text: "Present a comparison of three caching strategies as a table." },
   dimensions: new Set(["format-adherence", "clarity"]),
   oracle: {
-    expectedTaskClasses: ["factual-qa", "decision-support", "data-analysis"],
+    expectedTaskClasses: ["factual-qa"],
     expectedOutputStructured: true,
     expectedOutputFormat: "table",
   },
@@ -24,7 +24,7 @@ const formatYaml: PromptEnhancerEvalFixture = {
   request: { text: "Produce the service deployment configuration in yaml." },
   dimensions: new Set(["format-adherence", "clarity"]),
   oracle: {
-    expectedTaskClasses: ["factual-qa", "code-generation", "structured-extraction"],
+    expectedTaskClasses: ["factual-qa"],
     expectedOutputStructured: true,
     expectedOutputFormat: "yaml",
   },

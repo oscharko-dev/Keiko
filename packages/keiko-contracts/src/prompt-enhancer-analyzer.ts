@@ -947,10 +947,27 @@ const CRITERIA_SENSITIVE_CLASSES: ReadonlySet<PromptTaskClass> = new Set([
   "decision-support",
   "research",
 ]);
+const SCOPE_SENSITIVE_CLASSES: ReadonlySet<PromptTaskClass> = new Set(["code-architecture"]);
+const SCOPE_CUES: readonly string[] = [
+  "for ",
+  "within ",
+  "supporting ",
+  "targeting ",
+  "application",
+  "service",
+  "system",
+  "platform",
+  "workspace",
+  "repository",
+  "product",
+];
 const MAX_MISSING_TOPICS = 4;
 
 const lacksSubject = (view: AnalysisView): boolean =>
   view.normalizedLength < 12 || view.meaningfulTokenCount < 3;
+
+const lacksScope = (view: AnalysisView, taskClass: PromptTaskClass): boolean =>
+  SCOPE_SENSITIVE_CLASSES.has(taskClass) && !containsAny(view.lower, SCOPE_CUES);
 
 const lacksDataSource = (view: AnalysisView): boolean =>
   containsAny(view.lower, SCOPE_REFERENCE_CUES) && !view.hasConnectedContext;
@@ -982,6 +999,7 @@ function detectMissingTopics(
   const cls = classification.taskClass;
   const topics: MissingContextTopic[] = [];
   if (lacksSubject(view)) topics.push("subject");
+  if (lacksScope(view, cls)) topics.push("scope");
   if (lacksDataSource(view)) topics.push("data-source");
   if (lacksOutputFormat(cls, outputSchema)) topics.push("output-format");
   if (lacksAudience(view, cls)) topics.push("audience");

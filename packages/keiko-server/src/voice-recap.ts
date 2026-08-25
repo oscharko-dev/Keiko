@@ -294,6 +294,36 @@ interface RecapPersistResult {
   readonly rejected: number;
 }
 
+interface RecapPersistedMemory {
+  readonly id: MemoryId;
+  readonly scope: MemoryScope;
+  readonly accepted: boolean;
+}
+
+async function persistRecapOutcome(
+  deps: UiHandlerDeps,
+  vault: MemoryVaultStore,
+  outcome: CaptureOutcome,
+  mode: ReturnType<typeof resolvePersistedMemoryAutonomyMode>,
+  autoAcceptEligible: boolean,
+): Promise<RecapPersistedMemory | null> {
+  if (!isPersistableMemoryCandidate(outcome)) return null;
+  const proposalId = outcome.proposal.proposalId as unknown as MemoryId;
+  const record = buildMemoryRecordFromProposal(proposalId, outcome);
+  if (exactCaptureSuppressionReason(vault, record) !== null) return null;
+  const candidate =
+    autoAcceptEligible && memoryCaptureAutoAcceptEligible(mode, outcome)
+      ? promoteEligibleMemoryRecord(record)
+      : record;
+  const result = persistCapturedMemory(vault, candidate, true);
+  if (!result.inserted && !result.promoted) return null;
+  const inserted = result.memory;
+  if (result.inserted) await embedAndStoreMemory(deps, vault, inserted.id, inserted.body);
+  if (inserted.status === "accepted")
+    recordAutoAcceptedMemoryCaptureDecision(deps, mode, "voice", inserted);
+  return { id: inserted.id, scope: inserted.scope, accepted: inserted.status === "accepted" };
+}
+
 // Persist only the persistable candidate outcomes as `proposed`, mirroring the chat capture path:
 // forget-tombstone suppression, `buildMemoryRecordFromProposal`, best-effort embed-on-capture.
 // Everything else (rejected, sensitive/approval-gated candidates, governance-action kinds) is
@@ -309,36 +339,16 @@ async function persistRecapOutcomes(
   const mode = resolvePersistedMemoryAutonomyMode(deps);
   let rejected = 0;
   for (const outcome of outcomes) {
-    if (!isPersistableMemoryCandidate(outcome)) {
+    const persisted = await persistRecapOutcome(deps, vault, outcome, mode, autoAcceptEligible);
+    if (persisted === null) {
       rejected += 1;
       continue;
     }
-    const proposalId = outcome.proposal.proposalId as unknown as MemoryId;
-    const record = buildMemoryRecordFromProposal(proposalId, outcome);
-    // Recap capture is model-inferred, so it honours BOTH governed refusals: a forgotten body and a
-    // body the operator rejected in the review queue are equally "do not deduce this again".
-    if (exactCaptureSuppressionReason(vault, record) !== null) {
-      rejected += 1;
-      continue;
-    }
-    const candidate = autoAcceptEligible && memoryCaptureAutoAcceptEligible(mode, outcome)
-      ? promoteEligibleMemoryRecord(record)
-      : record;
-    const result = persistCapturedMemory(vault, candidate, true);
-    if (!result.inserted && !result.promoted) {
-      rejected += 1;
-      continue;
-    }
-    const inserted = result.memory;
-    if (result.inserted) {
-      await embedAndStoreMemory(deps, vault, inserted.id, inserted.body);
-    }
-    const persisted = { id: inserted.id, scope: inserted.scope };
-    if (inserted.status === "accepted") {
-      recordAutoAcceptedMemoryCaptureDecision(deps, mode, "voice", inserted);
-      accepted.push(persisted);
+    const memory = { id: persisted.id, scope: persisted.scope };
+    if (persisted.accepted) {
+      accepted.push(memory);
     } else {
-      proposed.push(persisted);
+      proposed.push(memory);
     }
   }
   return { proposed, accepted, extracted: outcomes.length, rejected };
@@ -484,11 +494,7 @@ export async function handleBuildVoiceRecap(
       ),
     };
   }
-  const provenance = verifyContentAttestation(
-    deps.voiceRecapContentAttestations,
-    profile,
-    request,
-  );
+  const provenance = verifyContentAttestation(deps.voiceRecapContentAttestations, profile, request);
   if (isRouteResult(provenance)) return provenance;
   const vault = deps.memoryVault;
   if (vault === undefined) {

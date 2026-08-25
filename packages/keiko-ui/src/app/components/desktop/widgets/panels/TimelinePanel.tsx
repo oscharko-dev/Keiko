@@ -5,10 +5,7 @@ import type { CSSProperties, ReactElement } from "react";
 import { useTranslate, type I18nTranslate } from "@/lib/i18n";
 import type { MessageKey } from "@/lib/i18n-messages.en";
 
-import {
-  useActivitySubscription,
-  type ActivityEvent,
-} from "../shared/activityBus";
+import { useActivitySubscription, type ActivityEvent } from "../shared/activityBus";
 import styles from "./TimelinePanel.module.css";
 
 const KIND_COLOR: Record<ActivityEvent["type"], string> = {
@@ -46,8 +43,8 @@ function TimelineEvent({
   event,
   translate,
 }: {
-  event: ActivityEvent;
-  translate: I18nTranslate;
+  readonly event: ActivityEvent;
+  readonly translate: I18nTranslate;
 }): ReactElement {
   const style = { "--activity-color": KIND_COLOR[event.type] } as CSSProperties;
   return (

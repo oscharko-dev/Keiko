@@ -31,4 +31,30 @@ describe("runPromptEnhancerEvaluation aggregation", () => {
     expect(scorecard.summary.totalFixtures).toBe(2);
     expect(scorecard.fixtureResults).toHaveLength(2);
   });
+
+  it("fails the task-class invariant even when task-success is not a scored dimension (#3112)", () => {
+    const unchecked: PromptEnhancerEvalFixture = {
+      name: "force-task-class-invariant-fail",
+      category: "grounding",
+      description: "intentionally mismatched analyzer oracle",
+      request: { text: "What is the boiling point of water at sea level?" },
+      dimensions: new Set(["groundedness"]),
+      oracle: {
+        expectedTaskClasses: ["code-generation"],
+        expectedGroundingRequired: false,
+      },
+    };
+
+    const scorecard = runPromptEnhancerEvaluation([unchecked]);
+    const [result] = scorecard.fixtureResults;
+
+    expect(result?.taskClassInvariant).toMatchObject({
+      outcome: "fail",
+      actualTaskClass: "factual-qa",
+    });
+    expect(result?.fullyPassed).toBe(false);
+    expect(scorecard.summary.goNoGo).toBe("GO");
+    expect(scorecard.summary.taskClassInvariantPassed).toBe(false);
+    expect(scorecard.summary.taskClassInvariantFailureCount).toBe(1);
+  });
 });

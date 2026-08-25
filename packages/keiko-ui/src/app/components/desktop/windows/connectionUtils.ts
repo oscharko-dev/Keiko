@@ -111,16 +111,20 @@ function configRoot(cfg: Record<string, unknown> | undefined): string | null {
   return typeof value === "string" && value.length > 0 ? value : null;
 }
 
+function lastPathSegment(value: string): string {
+  return value.split(/[/\\]/u).findLast((segment) => segment.length > 0) ?? value;
+}
+
 function filesScopeLabel(cfg: Record<string, unknown> | undefined, root: string): string {
   const activeFile = cfg?.["activeFilePath"];
   if (typeof activeFile === "string" && activeFile.length > 0) {
-    return activeFile.split(/[/\\]/u).filter(Boolean).pop() ?? activeFile;
+    return lastPathSegment(activeFile);
   }
   const activeDirectory = cfg?.["activeDirectoryPath"];
   if (typeof activeDirectory === "string" && activeDirectory.length > 0) {
-    return `${activeDirectory.split(/[/\\]/u).filter(Boolean).pop() ?? activeDirectory}/`;
+    return `${lastPathSegment(activeDirectory)}/`;
   }
-  return `${root.split(/[/\\]/u).filter(Boolean).pop() ?? root}/`;
+  return `${lastPathSegment(root)}/`;
 }
 
 // The window in the pair whose type matches, or null when neither does.

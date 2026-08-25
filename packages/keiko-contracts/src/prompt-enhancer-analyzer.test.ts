@@ -404,6 +404,24 @@ describe("analyzePrompt output-format missing context", () => {
   });
 });
 
+describe("analyzePrompt scope missing context", () => {
+  it("requests scope for an architecture draft without a target system (#3112)", () => {
+    const topics = analyze("Design a software architecture.").missingContext.map(
+      (item) => item.topic,
+    );
+
+    expect(topics).toContain("scope");
+  });
+
+  it("does not request scope when an architecture draft identifies its target system (#3112)", () => {
+    const topics = analyze(
+      "Design a software architecture for a multi-tenant document collaboration service.",
+    ).missingContext.map((item) => item.topic);
+
+    expect(topics).not.toContain("scope");
+  });
+});
+
 // ─── Determinism + content-light output ──────────────────────────────────────────
 describe("analyzePrompt determinism and safety", () => {
   it("is deterministic for identical input", () => {
