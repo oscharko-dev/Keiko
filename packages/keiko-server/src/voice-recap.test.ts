@@ -20,6 +20,10 @@ import { buildRedactor, type UiHandlerDeps } from "./deps.js";
 import type { RouteContext } from "./routes.js";
 import { createInMemoryUiStore, type Chat, type UiStore } from "./store/index.js";
 import { handleBuildVoiceRecap, type RecapResponseBody } from "./voice-recap.js";
+import {
+  createVoiceRecapContentAttestationStore,
+  type VoiceRecapContentAttestationStore,
+} from "./voice-recap-provenance.js";
 
 const CHAT_MODEL = "chat-model";
 const VOICE_MODEL = "keiko-realtime";
@@ -103,11 +107,22 @@ function chatOnlyConfig(): GatewayConfig {
   };
 }
 
+function speechToTextConfig(): GatewayConfig {
+  const config = realtimeConfig();
+  const capability = config.capabilities?.[0];
+  if (capability === undefined) throw new TypeError("voice test capability is missing");
+  return {
+    ...config,
+    capabilities: [{ ...capability, supportsRealtimeVoice: false }],
+  };
+}
+
 function deps(
   options: {
     config?: GatewayConfig;
     includeVault?: boolean;
     mode?: UiHandlerDeps["codingRuntimeDeploymentCeiling"];
+    attestations?: VoiceRecapContentAttestationStore;
   } = {},
 ): UiHandlerDeps {
   return {
@@ -120,6 +135,9 @@ function deps(
     modelPortFactory: () => undefined,
     store,
     ...(options.mode === undefined ? {} : { codingRuntimeDeploymentCeiling: options.mode }),
+    ...(options.attestations === undefined
+      ? {}
+      : { voiceRecapContentAttestations: options.attestations }),
     ...(options.includeVault === false ? {} : { memoryVault: vault }),
   };
 }
@@ -153,6 +171,25 @@ function recapBody(chat: Chat, committedSpans: readonly string[]): Record<string
   return { chatId: chat.id, projectPath, committedSpans };
 }
 
+function attestedRecapBody(
+  chat: Chat,
+  committedSpans: readonly string[],
+  attestations: VoiceRecapContentAttestationStore,
+  expiresAtMs?: number,
+): Record<string, unknown> {
+  const voiceSessionId = "voice-session-1";
+  return {
+    ...recapBody(chat, committedSpans),
+    voiceSessionId,
+    contentAttestation: attestations.attest({
+      profile: "speech-to-text",
+      sessionId: voiceSessionId,
+      committedSpans,
+      ...(expiresAtMs === undefined ? {} : { expiresAtMs }),
+    }),
+  };
+}
+
 function proposedCount(): number {
   const scopes = vault.listMemoryScopes();
   return vault.listMemoriesAcrossScopes(scopes, { status: ["proposed"], includeExpired: true })
@@ -184,6 +221,8 @@ describe("handleBuildVoiceRecap", () => {
     expect(result.status).toBe(200);
     const body = result.body as RecapResponseBody;
     expect(body).toMatchObject({
+      provenance: "unattested",
+      autoAcceptEligible: false,
       candidatesProposed: 0,
       candidatesAccepted: 0,
       candidatesExtracted: 0,
@@ -241,7 +280,7 @@ describe("handleBuildVoiceRecap", () => {
     expect(proposedEvents).toHaveLength(2);
   });
 
-  it("reports and audits mode-eligible recap memories as accepted", async () => {
+  it("keeps unattested recap memories review-gated even in an auto-accept posture", async () => {
     const chat = createChat();
     store.updateMemoryAutonomyPolicy("supervised-coding", 0);
     const result = await handleBuildVoiceRecap(
@@ -252,24 +291,26 @@ describe("handleBuildVoiceRecap", () => {
     expect(result.status).toBe(200);
     const body = result.body as RecapResponseBody;
     expect(body).toMatchObject({
-      candidatesAccepted: 1,
-      candidatesProposed: 0,
-      proposalIds: [],
+      provenance: "unattested",
+      autoAcceptEligible: false,
+      candidatesAccepted: 0,
+      candidatesProposed: 1,
+      acceptedIds: [],
     });
-    expect(body.acceptedIds).toHaveLength(1);
-    const accepted = vault.listMemoriesAcrossScopes(vault.listMemoryScopes(), {
-      status: ["accepted"],
+    expect(body.proposalIds).toHaveLength(1);
+    const proposed = vault.listMemoriesAcrossScopes(vault.listMemoryScopes(), {
+      status: ["proposed"],
       includeExpired: true,
     });
-    expect(accepted).toHaveLength(1);
-    expect(body.acceptedIds).toEqual(accepted.map(({ id }) => String(id)));
+    expect(proposed).toHaveLength(1);
+    expect(body.proposalIds).toEqual(proposed.map(({ id }) => String(id)));
 
     const entries = evidenceStore.list().map((runId) => ({ runId, raw: evidenceStore.get(runId) }));
     const rollupEntry = entries.find((entry) => entry.runId.startsWith("voice-recap-"));
     expect(rollupEntry).toBeDefined();
     expect(JSON.parse(rollupEntry?.raw ?? "{}")).toMatchObject({
-      candidatesAccepted: 1,
-      candidatesProposed: 0,
+      candidatesAccepted: 0,
+      candidatesProposed: 1,
     });
     const auditEvents = entries
       .filter((entry) => !entry.runId.startsWith("voice-recap-"))
@@ -277,20 +318,74 @@ describe("handleBuildVoiceRecap", () => {
         const parsed = JSON.parse(entry.raw ?? "[]") as unknown;
         return Array.isArray(parsed) ? (parsed as readonly { kind?: string }[]) : [];
       });
-    expect(auditEvents.filter((event) => event.kind === "memory:accepted")).toHaveLength(2);
-    expect(entries.map((entry) => entry.raw).join("\n")).toContain("governance-auto-accepted");
-    expect(auditEvents.filter((event) => event.kind === "memory:proposed")).toHaveLength(0);
+    expect(auditEvents.filter((event) => event.kind === "memory:accepted")).toHaveLength(0);
+    expect(auditEvents.filter((event) => event.kind === "memory:proposed")).toHaveLength(1);
   });
+
+  it("auto-accepts only spans attested by the server-observed speech-to-text path", async () => {
+    const chat = createChat();
+    const attestations = createVoiceRecapContentAttestationStore();
+    const spans = ["remember that I prefer dark mode"];
+    store.updateMemoryAutonomyPolicy("supervised-coding", 0);
+
+    const result = await handleBuildVoiceRecap(
+      ctx(attestedRecapBody(chat, spans, attestations)),
+      deps({ config: speechToTextConfig(), mode: "supervised-coding", attestations }),
+    );
+
+    expect(result.status).toBe(200);
+    expect(result.body).toMatchObject({
+      provenance: "attested",
+      autoAcceptEligible: true,
+      candidatesAccepted: 1,
+      candidatesProposed: 0,
+    });
+  });
+
+  it.each(["forged", "replayed", "expired", "content-substituted"] as const)(
+    "rejects %s recap content attestations before capture",
+    async (scenario) => {
+      let nowMs = 1_000;
+      const chat = createChat();
+      const attestations = createVoiceRecapContentAttestationStore(() => nowMs);
+      const spans = ["remember that I prefer dark mode"];
+      const body = attestedRecapBody(chat, spans, attestations, scenario === "expired" ? 999 : undefined);
+      if (scenario === "forged") body.contentAttestation = "forged-proof";
+      if (scenario === "content-substituted") {
+        body.committedSpans = ["remember that I prefer light mode"];
+      }
+      if (scenario === "replayed") {
+        const first = await handleBuildVoiceRecap(
+          ctx(body),
+          deps({ config: speechToTextConfig(), attestations }),
+        );
+        expect(first.status).toBe(200);
+      }
+      if (scenario === "expired") nowMs = 1_001;
+
+      const result = await handleBuildVoiceRecap(
+        ctx(body),
+        deps({ config: speechToTextConfig(), attestations }),
+      );
+
+      expect(result.status).toBe(403);
+      expect(proposedCount()).toBe(scenario === "replayed" ? 1 : 0);
+    },
+  );
 
   it("deduplicates an exact scoped recap candidate before auto-acceptance", async () => {
     const chat = createChat();
+    const attestations = createVoiceRecapContentAttestationStore();
     store.updateMemoryAutonomyPolicy("supervised-coding", 0);
-    const request = ctx(recapBody(chat, ["remember that I prefer dark mode"]));
+    const spans = ["remember that I prefer dark mode"];
 
-    const first = await handleBuildVoiceRecap(request, deps({ mode: "supervised-coding" }));
+    const first = await handleBuildVoiceRecap(
+      ctx(attestedRecapBody(chat, spans, attestations)),
+      deps({ config: speechToTextConfig(), mode: "supervised-coding", attestations }),
+    );
     const repeated = await handleBuildVoiceRecap(
-      ctx(recapBody(chat, ["remember that I prefer dark mode"])),
-      deps({ mode: "supervised-coding" }),
+      ctx(attestedRecapBody(chat, spans, attestations)),
+      deps({ config: speechToTextConfig(), mode: "supervised-coding", attestations }),
     );
 
     expect(first.body).toMatchObject({ candidatesAccepted: 1, candidatesRejected: 0 });

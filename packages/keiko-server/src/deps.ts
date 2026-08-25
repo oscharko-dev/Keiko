@@ -84,6 +84,7 @@ import {
   type ConversationAttachmentStore,
 } from "./conversation-attachment-store.js";
 import { createRunRegistry } from "./runs.js";
+import type { VoiceRecapContentAttestationStore } from "./voice-recap-provenance.js";
 import type { ChatTurnSerializer } from "./chat-turn-serializer.js";
 import {
   DEFAULT_SERVER_DIAGNOSTIC_SUMMARY,
@@ -616,6 +617,9 @@ export interface UiHandlerDeps {
   // Issue #211 — MemoriaViva vault. Optional so legacy tests that do not exercise /api/memory/*
   // keep their fixtures unchanged. Production wiring creates one at buildUiHandlerDeps time.
   readonly memoryVault?: MemoryVaultStore | undefined;
+  // Server-private, single-use content attestations minted only by a trusted transcript observer.
+  // Without this port, recap submissions remain review-gated and can never auto-accept.
+  readonly voiceRecapContentAttestations?: VoiceRecapContentAttestationStore | undefined;
   // Server-owned encrypted editor recovery storage. The browser stores only metadata and an opaque
   // reference in IndexedDB.
   readonly editorHotExitStore?: EditorHotExitStore | undefined;
