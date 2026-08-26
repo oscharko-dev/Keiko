@@ -30,7 +30,6 @@ import {
 } from "@oscharko-dev/keiko-contracts";
 import type { FilesContentResponse } from "../../../../../lib/types";
 import {
-  fetchEditorLanguageCapabilities,
   fetchEditorSettings,
   fetchFilesContent,
   fetchGitStatus,

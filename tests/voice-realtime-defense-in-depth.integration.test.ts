@@ -262,8 +262,12 @@ describe("KEIKO-0525 — realtime voice defense-in-depth composition", () => {
     expect(JSON.stringify(socket.sent)).not.toContain(sentinel);
     expect(session.replay.some((message) => message.kind.startsWith("transcript."))).toBe(false);
 
-    // The connection stays usable afterward: an allowlist rejection is a business-logic decision,
-    // not a protocol violation, so it must not have torn down the session as a side effect.
-    expect(socket.closes).toHaveLength(0);
+    // A transcript-bearing client control-plane frame is a protocol-shape violation, so the
+    // server closes the socket with policy code 1008 after emitting the rejection frame. That
+    // is a stronger outcome than the earlier "connection stays usable" comment implied for the
+    // business-rule allowlist path — treat it as the intended teardown for a hostile injection
+    // attempt and pin the close code so a regression to a silent tolerate is caught here too.
+    expect(socket.closes).toHaveLength(1);
+    expect(socket.closes[0]?.code).toBe(1008);
   });
 });

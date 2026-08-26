@@ -9,7 +9,7 @@
 //
 // WCAG: focus-visible rings, aria-live on status regions, role="status" on counters.
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import Link from "next/link";
 import type { MemoryRecord } from "@oscharko-dev/keiko-contracts";
