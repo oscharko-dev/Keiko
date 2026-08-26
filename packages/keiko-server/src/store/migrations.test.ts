@@ -12,6 +12,39 @@ function openMem(): DatabaseSync {
   return new DatabaseSync(":memory:");
 }
 
+// The real column set V10 gives coding_runtime_snapshots (schema.ts's V10_SQL), without the CHECK
+// constraint or indexes. #2906 round-3 review: V20 rebuilds this table (CREATE + INSERT...SELECT +
+// DROP + RENAME) to widen the failure_code CHECK, so every fixture claiming a pre-v19 snapshot
+// ledger must carry the real column set the SELECT reads from -- a bare `run_id`-only stand-in
+// (sufficient while every prior migration touching this table was only ALTER TABLE ADD COLUMN) now
+// fails "no such column" once a forward migration runs a table rebuild.
+const V10_CODING_RUNTIME_SNAPSHOTS_COLUMNS_SQL = `
+    CREATE TABLE coding_runtime_snapshots (
+      run_id TEXT NOT NULL PRIMARY KEY,
+      schema_version TEXT NOT NULL,
+      state TEXT NOT NULL,
+      revision INTEGER NOT NULL,
+      requested_mode TEXT NOT NULL,
+      runtime_source TEXT NOT NULL,
+      model_source TEXT NOT NULL,
+      failure_code TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      terminal_at TEXT,
+      recovery_acknowledged_at TEXT,
+      predecessor_run_id TEXT,
+      task_digest TEXT NOT NULL,
+      workspace_digest TEXT NOT NULL,
+      operator_digest TEXT NOT NULL,
+      authority_digest TEXT NOT NULL,
+      binding_digest TEXT NOT NULL,
+      provenance_digest TEXT NOT NULL,
+      tool_call_count INTEGER NOT NULL DEFAULT 0,
+      patch_byte_count INTEGER NOT NULL DEFAULT 0,
+      model_request_count INTEGER NOT NULL DEFAULT 0,
+      recovery_handle TEXT
+    ) STRICT;`;
+
 function userVersion(db: DatabaseSync): number {
   const row = db.prepare("PRAGMA user_version").get() as { user_version?: number };
   return typeof row.user_version === "number" ? row.user_version : 0;
@@ -29,9 +62,7 @@ function seedV16WorkspaceTables(db: DatabaseSync): void {
     CREATE TABLE chat_messages (
       id TEXT NOT NULL PRIMARY KEY
     ) STRICT;
-    CREATE TABLE coding_runtime_snapshots (
-      run_id TEXT NOT NULL PRIMARY KEY
-    ) STRICT;
+    ${V10_CODING_RUNTIME_SNAPSHOTS_COLUMNS_SQL}
     CREATE TABLE workspace_manifest_roots (
       workspace_id TEXT NOT NULL,
       root_ref TEXT NOT NULL UNIQUE,
@@ -418,11 +449,11 @@ describe("runMigrations", () => {
     expect(index.sql).toContain("WHERE terminal_at IS NULL");
   });
 
-  it("migrates a v17 database through chat v18 and body-free runtime-result v19", () => {
+  it("migrates a v17 database through chat v18, body-free runtime-result v19, and widened failure_code v20", () => {
     const db = openMem();
     db.exec(`
       CREATE TABLE chat_messages (id TEXT PRIMARY KEY) STRICT;
-      CREATE TABLE coding_runtime_snapshots (run_id TEXT PRIMARY KEY) STRICT;
+      ${V10_CODING_RUNTIME_SNAPSHOTS_COLUMNS_SQL}
       PRAGMA user_version = 17;
     `);
 
@@ -448,6 +479,26 @@ describe("runMigrations", () => {
     );
     expect(runtimeColumns).not.toContain("stdout_body");
     expect(runtimeColumns).not.toContain("stderr_body");
+
+    // #2906 round-3 review (KEIKO-0532): v20 rebuilds the table to widen the failure_code CHECK.
+    // A database that migrated forward through the rebuild -- not only a fresh from-empty one --
+    // must accept a literal the pre-v20 constraint rejected, proving the rebuild (not just a fresh
+    // CREATE TABLE) carries the widened list for real, already-provisioned installs.
+    const digest = "a".repeat(64);
+    expect(() => {
+      db.exec(`
+        INSERT INTO coding_runtime_snapshots (
+          run_id, schema_version, state, revision, requested_mode, runtime_source, model_source,
+          failure_code, created_at, updated_at, task_digest, workspace_digest, operator_digest,
+          authority_digest, binding_digest, provenance_digest
+        ) VALUES (
+          'run-migrated-v20', '1', 'failed', 1, 'governed-assist', 'keiko-sidecar',
+          'keiko-model-gateway', 'replay-cap-exhausted', '2026-01-01T00:00:00.000Z',
+          '2026-01-01T00:00:00.000Z', '${digest}', '${digest}', '${digest}', '${digest}',
+          '${digest}', '${digest}'
+        );
+      `);
+    }).not.toThrow();
   });
 
   it("creates the v1 schema and bumps user_version", () => {

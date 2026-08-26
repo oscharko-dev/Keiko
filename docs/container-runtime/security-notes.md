@@ -146,12 +146,23 @@ operation is one reason both engines are first-class in `ContainerEngineId`.
 
 The pilot image referenced by `containerRunner.ts`'s code comment is intentionally pinned by TAG
 (`docker.io/library/alpine:3.20`), not by digest, because no Keiko-vetted digest has been
-published yet (KEIKO-0964). The current shape is safe by construction:
+published yet (KEIKO-0964). **This tag pin is a residual local-image trust boundary, not a
+safe-by-construction guarantee:**
 
-- `--pull never` blocks a network fetch on a missing image, so a tag re-mapping upstream cannot
-  silently replace the local image at request time.
-- The `imageAllowlist` is a closed literal set of one entry, so an image outside it is rejected
-  with `IMAGE_NOT_ALLOWED`.
+- `--pull never` blocks a network _fetch_ when the image is missing locally, so a tag re-mapping
+  published upstream cannot silently replace the local image at request time. It does **not**
+  verify the identity of whatever image currently owns the `docker.io/library/alpine:3.20` tag in
+  the local image store — a locally retagged or substituted image under that same tag name is
+  pulled and run without detection.
+- The `imageAllowlist` is a closed literal set of one entry, so an image _name_ outside it is
+  rejected with `IMAGE_NOT_ALLOWED`. The allowlist validates the requested name string, not image
+  content or provenance, so it cannot distinguish the vetted Alpine 3.20 build from a locally
+  substituted image carrying the same tag.
+
+Until a Keiko-vetted digest lands (below), this surface's image integrity depends on the
+trustworthiness of whatever local Docker/Podman image store the host operator maintains. That is an
+explicit, accepted limitation of tag pinning — not a closed gap — and callers of this document must
+not describe the current state as pinned or safe against local image substitution.
 
 A **Keiko-vetted digest** is one that has been:
 

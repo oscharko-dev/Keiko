@@ -130,7 +130,7 @@ export function createKeikoDefinitionProvider(
       sequence += 1;
       const request = buildRequest(deps, documentUri, position, sequence);
       latest = request.request;
-      const controller = controllerForToken(token);
+      const { controller, dispose } = controllerForToken(token);
       const query: EditorDefinitionQuery = { request, documentText: model.getValue() };
       return runLanguageBridgeCall<EditorDefinitionResponse, readonly MonacoLocation[] | undefined>(
         {
@@ -144,7 +144,9 @@ export function createKeikoDefinitionProvider(
             definitionResponseToMonaco(response, model.uri, deps.uriForPath ?? defaultUriForPath),
           report: deps.report,
         },
-      );
+      ).finally(() => {
+        dispose();
+      });
     },
   };
 }

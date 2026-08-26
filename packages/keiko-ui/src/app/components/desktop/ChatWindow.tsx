@@ -970,7 +970,7 @@ function KeikoMessageMark({ pulsing = false }: { readonly pulsing?: boolean }): 
       role="img"
       aria-label={t("chat.keikoLogo")}
     >
-      <Image src="/assets/keiko-logo.svg" width={22} height={22} alt="" aria-hidden="true" />
+      <Image src="/keiko-logo.svg" width={22} height={22} alt="" aria-hidden="true" />
     </div>
   );
 }

@@ -71,7 +71,13 @@ export function buildWorkspaceReplacePatchModel(
     ...model,
     omittedFileCount,
     totalFileCount: model.totalFileCount + response.omittedFileCount,
-    truncated: model.truncated || omittedFileCount > 0,
+    // #2906 round-3 review: response.truncated is the union of every upstream search
+    // incompleteness cause (see WorkspaceReplacePreviewResponse.searchTruncationReasons's doc
+    // comment) -- not only omittedFileCount, which counts solely the files this preview's own
+    // maxFiles cap dropped. A response can be truncated (e.g. "match-cap" mid-file) with
+    // omittedFileCount === 0; without folding response.truncated in here too, that read as a
+    // complete preview and could be applied without warning even though a match may be missing.
+    truncated: model.truncated || omittedFileCount > 0 || response.truncated,
   };
 }
 

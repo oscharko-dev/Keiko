@@ -475,15 +475,25 @@ describe("createBrowserVoiceRtcTransport", () => {
     expect(channel?.send).not.toHaveBeenCalled();
   });
 
-  // KEIKO-0525 (VOICE-REALTIME-ADDENDUM-05) class 3 — one of four hostile-payload classes composed
-  // into a single defense-in-depth proof by tests/voice-realtime-defense-in-depth.integration.test.ts
-  // (see that file's header for the other three: a provider-native response.create-equivalent event
-  // and a tool/function-call event, both rejected by voice-realtime-events.ts's inbound parser; and a
-  // transcript-bearing WS control-plane frame, rejected by keiko-server's voice-realtime.ts). This one
-  // lives here instead of in that root-level file because pulling voice-rtc-transport.ts's module
-  // graph into the root tsconfig's stricter "nodenext" moduleResolution fails on this package's own
-  // deliberate, repo-wide "Bundler"-style extensionless relative imports — a real cross-package
-  // boundary, not a defect to patch. This test does not replace or weaken the
+  // KEIKO-0525 (VOICE-REALTIME-ADDENDUM-05) — one of four independently-owned defense-in-depth
+  // layers enforcing the realtime voice plane's "cannot bypass canonical chat" invariant, each
+  // pinned in isolation next to its own module: this outbound data-channel allowlist here; a
+  // provider-native response.create-equivalent event and a tool/function-call event, both rejected
+  // by voice-realtime-events.ts's inbound parser (voice-realtime-events.test.ts); the
+  // realtimeTurnDetection response-suppression override (realtime-voice-adapter.test.ts); and a
+  // transcript-bearing WS control-plane frame, rejected by keiko-server's voice-realtime.ts
+  // (voice-realtime.test.ts). A prior suite (tests/voice-realtime-defense-in-depth.integration.
+  // test.ts) claimed to compose all four into one proof but actually called three of the four real
+  // entry points independently, never through an actual composed session boundary; it was removed
+  // per review (#2906 KEIKO-0525) because the four layers span two different runtimes (browser
+  // WebRTC/data-channel vs. server WebSocket control-plane and HTTP negotiation) with no single
+  // production call chain able to carry one hostile payload through all four, so true composition
+  // was not achievable and the suite's coverage was already fully duplicated by these four isolated
+  // pins. This test lives here instead of in a root-level file because pulling
+  // voice-rtc-transport.ts's module graph into the root tsconfig's stricter "nodenext"
+  // moduleResolution fails on this package's own deliberate, repo-wide "Bundler"-style
+  // extensionless relative imports — a real cross-package boundary, not a defect to patch. This
+  // test does not replace or weaken the
   // "rejects provider-assistant commands and unsafe session mutations" pin directly above; it adds
   // coverage of a differently-shaped attack (a fabricated assistant conversation item, rather than a
   // response.create/response.cancel/instructed-session-update) against the same allowlist mechanism.

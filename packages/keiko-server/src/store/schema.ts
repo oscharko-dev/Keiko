@@ -8,7 +8,7 @@ import {
   migrateWorkspaceRootObjectIdentities,
 } from "./workspaceManifests.js";
 
-export const SCHEMA_VERSION = 19;
+export const SCHEMA_VERSION = 20;
 
 interface Migration {
   readonly version: number;
@@ -515,6 +515,123 @@ ALTER TABLE coding_runtime_snapshots ADD COLUMN stderr_truncated INTEGER
   CHECK (stderr_truncated IS NULL OR stderr_truncated IN (0,1));
 `;
 
+// V20 (#2906 KEIKO-0532 P1 round-3 review) -- coding_runtime_snapshots.failure_code is a
+// table-level CHECK constraint, so SQLite cannot widen it with ALTER TABLE; the table is rebuilt.
+// This closes two literals CODING_WORKBENCH_RUNTIME_FAILURE_CODES already admitted but the
+// constraint rejected -- 'approval-activation-failed' (pre-existing gap, only surfaced once a
+// snapshot-store round trip was pinned for every contract literal) and 'replay-cap-exhausted'
+// (KEIKO-0722, the finding that prompted this migration). Both left a statically valid terminal
+// snapshot failing with SQLITE_CONSTRAINT instead of recording the failure. Column set, column
+// order, and every other CHECK clause are carried over unchanged from V10 + the V19 result columns
+// -- IMPORTANT: the V19 result columns keep their own per-column CHECK (as V19 declared them)
+// rather than folding into the trailing table-level CHECK. SQLite's ALTER TABLE DROP COLUMN can
+// drop a column together with a CHECK declared inline on that column, but refuses to drop a column
+// referenced anywhere in a table-level CHECK constraint (verified empirically: same clause, moved
+// from column-level to table-level, turns a working DROP COLUMN into "no such column" on the very
+// column being dropped). restoreV13SchemaFixture (legacySchemaTestFixture.ts) individually drops
+// each V19 result column, so folding them into the table-level CHECK would silently break that
+// fixture the next time a real on-disk database (not the in-memory migration-only tests) exercises
+// this table -- keep them column-level.
+const V20_SQL = `
+CREATE TABLE coding_runtime_snapshots_v20 (
+  run_id TEXT NOT NULL PRIMARY KEY,
+  schema_version TEXT NOT NULL,
+  state TEXT NOT NULL,
+  revision INTEGER NOT NULL,
+  requested_mode TEXT NOT NULL,
+  runtime_source TEXT NOT NULL,
+  model_source TEXT NOT NULL,
+  failure_code TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  terminal_at TEXT,
+  recovery_acknowledged_at TEXT,
+  predecessor_run_id TEXT,
+  task_digest TEXT NOT NULL,
+  workspace_digest TEXT NOT NULL,
+  operator_digest TEXT NOT NULL,
+  authority_digest TEXT NOT NULL,
+  binding_digest TEXT NOT NULL,
+  provenance_digest TEXT NOT NULL,
+  tool_call_count INTEGER NOT NULL DEFAULT 0,
+  patch_byte_count INTEGER NOT NULL DEFAULT 0,
+  model_request_count INTEGER NOT NULL DEFAULT 0,
+  recovery_handle TEXT,
+  result_status TEXT
+    CHECK (result_status IS NULL OR result_status IN ('cancelled','failed','signalled','succeeded')),
+  exit_code INTEGER
+    CHECK (exit_code IS NULL OR exit_code BETWEEN 0 AND 255),
+  stdout_byte_count INTEGER
+    CHECK (stdout_byte_count IS NULL OR stdout_byte_count BETWEEN 0 AND 1073741824),
+  stdout_line_count INTEGER
+    CHECK (stdout_line_count IS NULL OR stdout_line_count BETWEEN 0 AND 1000000),
+  stdout_sha256 TEXT
+    CHECK (stdout_sha256 IS NULL OR length(stdout_sha256) = 64),
+  stdout_truncated INTEGER
+    CHECK (stdout_truncated IS NULL OR stdout_truncated IN (0,1)),
+  stderr_byte_count INTEGER
+    CHECK (stderr_byte_count IS NULL OR stderr_byte_count BETWEEN 0 AND 1073741824),
+  stderr_line_count INTEGER
+    CHECK (stderr_line_count IS NULL OR stderr_line_count BETWEEN 0 AND 1000000),
+  stderr_sha256 TEXT
+    CHECK (stderr_sha256 IS NULL OR length(stderr_sha256) = 64),
+  stderr_truncated INTEGER
+    CHECK (stderr_truncated IS NULL OR stderr_truncated IN (0,1)),
+  CHECK (
+    schema_version = '1'
+    AND state IN ('starting','ready','running','paused','awaiting-approval','stopping','succeeded','failed','cancelled','taken-over','recovery-required')
+    AND requested_mode IN ('governed-assist','supervised-coding','autonomous-delivery')
+    AND runtime_source IN ('keiko-sidecar','codex-cli-adapter','delivery-runner')
+    AND model_source IN ('keiko-model-gateway','openai-api-key-through-gateway','chatgpt-codex-subscription-profile')
+    AND (failure_code IS NULL OR failure_code IN ('runtime-unavailable','active-run-conflict','invalid-intent','approval-activation-failed','authority-resolution-failed','authority-expired','authority-replayed','task-drift','workspace-drift','project-drift','branch-drift','scope-drift','budget-drift','authority-budget-exceeded','source-drift','runtime-failed','revoked','recovery-required','replay-cap-exhausted'))
+    AND revision >= 0
+    AND tool_call_count BETWEEN 0 AND 1000000
+    AND patch_byte_count BETWEEN 0 AND 1073741824
+    AND model_request_count BETWEEN 0 AND 1000000
+    AND length(run_id) BETWEEN 1 AND 128
+    AND length(task_digest) BETWEEN 1 AND 128
+    AND length(workspace_digest) BETWEEN 1 AND 128
+    AND length(operator_digest) BETWEEN 1 AND 128
+    AND length(authority_digest) BETWEEN 1 AND 128
+    AND length(binding_digest) BETWEEN 1 AND 128
+    AND length(provenance_digest) BETWEEN 1 AND 128
+    AND (recovery_handle IS NULL OR length(recovery_handle) BETWEEN 1 AND 128)
+  )
+) STRICT;
+
+INSERT INTO coding_runtime_snapshots_v20 (
+  run_id, schema_version, state, revision, requested_mode, runtime_source, model_source,
+  failure_code, created_at, updated_at, terminal_at, recovery_acknowledged_at,
+  predecessor_run_id, task_digest, workspace_digest, operator_digest, authority_digest,
+  binding_digest, provenance_digest, tool_call_count, patch_byte_count, model_request_count,
+  recovery_handle, result_status, exit_code, stdout_byte_count, stdout_line_count,
+  stdout_sha256, stdout_truncated, stderr_byte_count, stderr_line_count, stderr_sha256,
+  stderr_truncated
+)
+SELECT
+  run_id, schema_version, state, revision, requested_mode, runtime_source, model_source,
+  failure_code, created_at, updated_at, terminal_at, recovery_acknowledged_at,
+  predecessor_run_id, task_digest, workspace_digest, operator_digest, authority_digest,
+  binding_digest, provenance_digest, tool_call_count, patch_byte_count, model_request_count,
+  recovery_handle, result_status, exit_code, stdout_byte_count, stdout_line_count,
+  stdout_sha256, stdout_truncated, stderr_byte_count, stderr_line_count, stderr_sha256,
+  stderr_truncated
+FROM coding_runtime_snapshots;
+
+DROP TABLE coding_runtime_snapshots;
+
+ALTER TABLE coding_runtime_snapshots_v20 RENAME TO coding_runtime_snapshots;
+
+CREATE UNIQUE INDEX uniq_coding_runtime_active_slot
+  ON coding_runtime_snapshots((1))
+  WHERE terminal_at IS NULL;
+CREATE INDEX idx_coding_runtime_recent_active
+  ON coding_runtime_snapshots(terminal_at, updated_at DESC, run_id);
+CREATE INDEX idx_coding_runtime_settled_oldest
+  ON coding_runtime_snapshots(terminal_at, updated_at, run_id)
+  WHERE terminal_at IS NOT NULL;
+`;
+
 // KEIKO-0573: exported so a co-located test can assert strict ascending version order across the
 // array. Not re-exported through packages/keiko-server/src/store/index.ts, so no packaged surface
 // change.
@@ -538,6 +655,7 @@ export const MIGRATIONS: readonly Migration[] = [
   { version: 17, sql: V17_SQL, apply: migrateWorkspaceRootObjectIdentities },
   { version: 18, sql: V18_SQL },
   { version: 19, sql: V19_SQL },
+  { version: 20, sql: V20_SQL },
 ];
 
 function currentUserVersion(db: DatabaseSync): number {

@@ -1467,6 +1467,18 @@ function persistMergedRun(args: PersistMergedRunArgs): readonly QiTestCaseCandid
     args.preservedCandidates,
     args.regeneratedCandidates,
   );
+  // KEIKO-0839-r3: deduplicateCandidates (inside buildMergedCandidates) keeps only the
+  // lexicographically-smallest id among content-equivalent candidates, so a PRESERVED candidate
+  // can lose its own tie-break to an equivalent REGENERATED one and be dropped from
+  // mergedCandidates entirely. Its edited revision -- keyed by that now-absent candidateId -- must
+  // not be persisted into the same artifact: an editedRevisions[] entry with no matching candidate
+  // is orphaned and internally inconsistent. Apply the identical post-dedup survivor filter
+  // persistRegenerationResult already uses for the review-state migration, here too, before the
+  // artifact is ever written.
+  const mergedCandidateIds = new Set(mergedCandidates.map((candidate) => String(candidate.id)));
+  const survivingEditedRevisions = args.preservedEditedRevisions.filter((revision) =>
+    mergedCandidateIds.has(String(revision.candidateId)),
+  );
   const runId = QualityIntelligence.asQualityIntelligenceRunId(args.newRunId);
   const coverage = buildCoverageArtifacts(runId, args.ingestion, mergedCandidates);
   const findings = buildMergedFindings({
@@ -1484,7 +1496,7 @@ function persistMergedRun(args: PersistMergedRunArgs): readonly QiTestCaseCandid
     newRunId: args.newRunId,
     completedAt: args.completedAt,
     mergedCandidates,
-    preservedEditedRevisions: args.preservedEditedRevisions,
+    preservedEditedRevisions: survivingEditedRevisions,
   });
   recordMergedManifest(
     args.evidenceDir,

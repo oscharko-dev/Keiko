@@ -383,16 +383,112 @@ async function listen(server: Server, port: number): Promise<void> {
   });
 }
 
-// KEIKO-0858: after listen() resolves, attach a DURABLE server-lifetime error listener
-// that writes a body-free redacted line (error CLASS only, never .message) to io.err.
-// Without this, an error emitted during the server's post-startup lifetime — dropped
-// connection, TCP RST, filesystem descriptor exhaustion — has no listener at all, so
-// Node throws and crashes the process with a raw stack. Guarded so a stub Server (from
-// tests) without `.on` does not throw.
-export function attachDurableServerErrorListener(server: Server, io: CliIo): void {
+// #2906 round 3 (comment 3865273692): the content-free class only, never the writable/attacker-
+// controlled `Error.name` own-property this handler used to read directly — the SAME
+// classification (`describeError`) `process-guards.ts`'s fatal path and every other diagnostics
+// producer in this repository already goes through. Loaded lazily, exactly like every other
+// keiko-server access from this file, so a healthy run never pays for it.
+interface DurableServerErrorClassification {
+  readonly errorClass: string;
+  readonly code?: string | undefined;
+  readonly frames?: readonly string[] | undefined;
+  readonly causeChain?: readonly string[] | undefined;
+}
+
+async function classifyServerError(error: Error): Promise<DurableServerErrorClassification> {
+  try {
+    const { describeError } = await loadServerModule();
+    return describeError(error);
+  } catch {
+    // The classifier itself failing to load must not prevent the fatal path below from running.
+    return { errorClass: "Error" };
+  }
+}
+
+function writeDurableServerErrorLog(
+  activityLog: ServerLogSink | undefined,
+  described: DurableServerErrorClassification,
+): void {
+  if (activityLog === undefined) return;
+  activityLog.write({
+    level: "error",
+    category: "process",
+    op: "process.fatal",
+    errorKind: described.code ?? described.errorClass,
+    extra: {
+      kind: "server-error",
+      ...(described.frames === undefined ? {} : { frames: described.frames }),
+      ...(described.causeChain === undefined ? {} : { causeChain: described.causeChain }),
+    },
+  });
+}
+
+// Bounded close, mirroring `waitForShutdown`'s SIGINT/SIGTERM grace-then-force sequence: idle
+// connections drop immediately, any still-active connection is force-terminated once the grace
+// window passes, and `onDone` fires exactly once either way. Guarded per-method so the ui.test.ts
+// stub Server (`.listen`/`.once` only) degrades to calling `onDone` immediately instead of
+// throwing on a missing `.close`.
+function closeServerBounded(server: Server, onDone: () => void, graceMs: number): void {
+  if (typeof server.close !== "function") {
+    onDone();
+    return;
+  }
+  let settled = false;
+  const finish = (): void => {
+    if (settled) return;
+    settled = true;
+    onDone();
+  };
+  const timer = setTimeout(() => {
+    if (typeof server.closeAllConnections === "function") server.closeAllConnections();
+    finish();
+  }, graceMs);
+  timer.unref();
+  if (typeof server.closeIdleConnections === "function") server.closeIdleConnections();
+  server.close(() => {
+    finish();
+  });
+}
+
+async function handleDurableServerError(
+  server: Server,
+  io: CliIo,
+  activityLog: ServerLogSink | undefined,
+  error: Error,
+  exit: (code: number) => void,
+  graceMs: number,
+): Promise<void> {
+  const described = await classifyServerError(error);
+  io.err(`keiko ui: server error (${described.errorClass}).\n`);
+  writeDurableServerErrorLog(activityLog, described);
+  closeServerBounded(
+    server,
+    () => {
+      exit(1);
+    },
+    graceMs,
+  );
+}
+
+// KEIKO-0858 / #2906 round 3 (comment 3865273692): after listen() resolves, attach a DURABLE
+// server-lifetime error listener. A post-listen `Server` 'error' event (descriptor exhaustion, an
+// accept()-loop fault — distinct from a per-connection socket 'error', which this never sees)
+// means the process can no longer be trusted to accept new work, so this no longer logs and
+// leaves a falsely healthy process running: it writes the sanitized class through the existing
+// activity/process log (when one is in scope) and drives the SAME bounded close-then-exit
+// sequence `waitForShutdown`'s SIGINT/SIGTERM path already uses, tagged as a fatal, non-zero
+// process end rather than a graceful one. Guarded so a stub Server (from tests) without `.on`
+// does not throw; `exit` defaults to the real `process.exit` and is a test seam otherwise.
+export function attachDurableServerErrorListener(
+  server: Server,
+  io: CliIo,
+  activityLog?: ServerLogSink,
+  exit: (code: number) => void = (code): void => process.exit(code),
+  graceMs: number = SHUTDOWN_FORCE_CLOSE_GRACE_MS,
+): void {
   if (typeof server.on !== "function") return;
   server.on("error", (error: Error) => {
-    io.err(`keiko ui: server error (${error.name}).\n`);
+    void handleDurableServerError(server, io, activityLog, error, exit, graceMs);
   });
 }
 
@@ -902,10 +998,11 @@ async function startUiServer(options: StartUiServerOptions): Promise<void> {
   });
   applyServerTimeouts(server);
   await listen(server, parsed.port);
-  // KEIKO-0858: durable server-lifetime error listener replaces the settled-rejection
-  // one-shot listen() removes. A post-listen error now reaches io.err (body-free) instead
-  // of being silently swallowed / crashing the process with a raw stack.
-  attachDurableServerErrorListener(server, io);
+  // KEIKO-0858 / #2906 round 3 (comment 3865273692): durable server-lifetime error listener
+  // replaces the settled-rejection one-shot listen() removes. A post-listen error now reaches
+  // io.err (body-free) AND the activity log, then drives a bounded fatal shutdown, instead of
+  // being logged and left running, or crashing the process with a raw stack.
+  attachDurableServerErrorListener(server, io, activityLog);
   const startedAt = Date.now();
   // Printed before the (possibly filesystem-probing, on the real launch path) `process.started`
   // write below, so the operator's terminal reports "listening" the instant it is true rather

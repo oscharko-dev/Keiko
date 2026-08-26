@@ -776,6 +776,8 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
   "searchPanel.replace.noPreviewComputed": "No replace preview has been computed.",
   "searchPanel.replace.omittedSuffix": " {count} files omitted.",
   "searchPanel.replace.rootPrefixedStatus": "{rootLabel}: {message}",
+  "searchPanel.replace.searchLimitSuffix":
+    " Search did not scan every match; this preview may be incomplete.",
   "searchPanel.replace.summary": "{editCount} replacements across {fileCount} files.{omitted}",
   "searchPanel.rootErrors.one": "One root could not be {operation}.",
   "searchPanel.rootErrors.operationPreviewed": "previewed",

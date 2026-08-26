@@ -161,7 +161,7 @@ export function createKeikoSignatureHelpProvider(
       sequence += 1;
       const request = buildRequest(deps, documentUri, position, context, sequence);
       latest = request.request;
-      const controller = controllerForToken(token);
+      const { controller, dispose } = controllerForToken(token);
       const query: EditorSignatureHelpQuery = { request, documentText: model.getValue() };
       return runLanguageBridgeCall<
         EditorSignatureHelpResponse,
@@ -175,6 +175,8 @@ export function createKeikoSignatureHelpProvider(
         classify: (response) => classifyResultKind(response.signatures.length, response.truncated),
         present: signatureHelpResponseToMonaco,
         report: deps.report,
+      }).finally(() => {
+        dispose();
       });
     },
   };

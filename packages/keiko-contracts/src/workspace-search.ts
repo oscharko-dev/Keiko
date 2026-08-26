@@ -1,4 +1,8 @@
-import type { LineRange, ValidationResult } from "./connected-context.js";
+import type {
+  ContextCoverageTruncationReason,
+  LineRange,
+  ValidationResult,
+} from "./connected-context.js";
 import { isValidLineRange, isValidScopePath } from "./connected-context.js";
 import type { EditorPatchRejectionReason } from "./editor-patch-apply.js";
 
@@ -97,15 +101,18 @@ export interface WorkspaceReplacePreviewResponse {
   readonly editCount: number;
   readonly truncated: boolean;
   readonly omittedFileCount: number;
-  // KEIKO-0645: distinguishes the cause of `truncated`. `omittedFileCount` counts files that
-  // matched the query but were dropped by the per-request `maxFiles` cap inside
-  // buildReplacePreviewFiles. `filesOmittedBySearchLimit` reports whether the upstream candidate-
-  // file selection in searchText itself hit its own maxFilesScanned / maxMatchesReturned budget,
-  // so a caller can tell whether the replace preview is bounded by "you asked for too few files
-  // to be edited" (omittedFileCount > 0) or by "the underlying query fanned out too broadly for
-  // us to enumerate every file that matches" (filesOmittedBySearchLimit === true). Both may be
-  // set together; either alone still sets `truncated`.
-  readonly filesOmittedBySearchLimit: boolean;
+  // KEIKO-0645/KEIKO-0645-r3: distinguishes the cause of `truncated`. `omittedFileCount` counts
+  // files that matched the query but were dropped by the per-request `maxFiles` cap inside
+  // buildReplacePreviewFiles -- a precise "replace-file-omitted" signal. `searchTruncationReasons`
+  // is the upstream `searchText` coverage cause list (see `ContextCoverageTruncationReason`): it
+  // covers bounded-search exits generally, not just a distinct matching file being dropped -- for
+  // example "match-cap" fires when the overall match budget is exhausted while still inside one
+  // already-enumerated file, with no other matching file omitted. A caller that wants "was a
+  // distinct matching file left out of the upstream search" checks
+  // `searchTruncationReasons.includes("file-cap")`, not the presence of any reason. An empty array
+  // means the upstream search itself did not truncate; `truncated` is still the union with
+  // `omittedFileCount > 0`.
+  readonly searchTruncationReasons: readonly ContextCoverageTruncationReason[];
 }
 
 export interface WorkspaceReplaceApplyFile {

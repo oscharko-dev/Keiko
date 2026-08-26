@@ -16,6 +16,7 @@
 
 import { PROVIDER_ENDPOINT_STYLES, REALTIME_AUTH_MODES } from "@/lib/types";
 import type { SafeCircuitBreakerConfig, VoiceProviderLocality } from "@/lib/types";
+import { DEFAULT_SAFE_CIRCUIT_BREAKER_CONFIG } from "@oscharko-dev/keiko-contracts/bff-wire";
 
 export const MAX_GATEWAY_CONFIG_BYTES = 256 * 1024;
 
@@ -102,17 +103,15 @@ const VOICE_LOCALITIES: ReadonlySet<VoiceProviderLocality> = new Set([
  * `packages/keiko-model-gateway/src/config.ts` — the shared default the server-side call sites
  * (`gateway-setup.ts`, `grounded-retrieval-eval.ts`) import directly. `keiko-ui` cannot import
  * that VALUE across the package boundary (ADR-0019 reserves `keiko-model-gateway` for
- * provider-SDK isolation; the UI talks to the server only across `keiko-contracts` wire types),
- * so the literal is restated here and typed against `SafeCircuitBreakerConfig` — the contracts
- * package's wire projection of the same shape — to keep the SHAPE compiler-checked even though
- * the VALUES cannot be. If `DEFAULT_CIRCUIT_BREAKER_CONFIG` ever changes, update this literal to
- * match (KEIKO-0572).
+ * provider-SDK isolation; the UI talks to the server only across `keiko-contracts` wire types).
+ * #2906 round 3 (KEIKO-0572): rather than restating the literal with only its SHAPE
+ * compiler-checked (a `SafeCircuitBreakerConfig` annotation cannot catch a VALUE drifting away
+ * from `DEFAULT_CIRCUIT_BREAKER_CONFIG`), this now imports the shared contracts-owned default —
+ * `DEFAULT_SAFE_CIRCUIT_BREAKER_CONFIG` from `@oscharko-dev/keiko-contracts/bff-wire` — which
+ * `keiko-model-gateway`'s own `DEFAULT_CIRCUIT_BREAKER_CONFIG` derives its numbers from too, so
+ * the two packages share one source of truth instead of two independently-maintained copies.
  */
-const REBUILT_CIRCUIT_BREAKER: SafeCircuitBreakerConfig = {
-  failureThreshold: 5,
-  cooldownMs: 30_000,
-  halfOpenProbes: 2,
-};
+const REBUILT_CIRCUIT_BREAKER: SafeCircuitBreakerConfig = DEFAULT_SAFE_CIRCUIT_BREAKER_CONFIG;
 /**
  * The rebuild writes exactly these retry values onto generic providers; a file tuning them
  * differently would be silently rewritten on save (review finding on #3031). Voice providers

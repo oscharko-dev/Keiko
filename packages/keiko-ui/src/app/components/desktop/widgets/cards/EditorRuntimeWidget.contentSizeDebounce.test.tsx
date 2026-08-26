@@ -1,5 +1,6 @@
 /**
- * Per-keystroke UTF-8 encode cost of the content-size/hash bookkeeping (KEIKO-0819).
+ * Per-keystroke UTF-8 encode cost of EditorRuntimeWidget's OWN content-size/hash bookkeeping
+ * (KEIKO-0819).
  *
  * `contentBytes` used to be a `useMemo(() => UTF8_ENCODER.encode(content), [content])`, which reruns
  * a full UTF-8 encode of the entire buffer on every keystroke since `content` changes every
@@ -11,13 +12,20 @@
  * per-keystroke large-file signal from the cheap `content.length` upper... i.e. lower-bound proxy
  * instead (UTF-8 byte length is always >= UTF-16 code-unit length for the same string).
  *
- * This test spies on the global `TextEncoder.prototype.encode` (call-through, not faked — the real
- * bytes still have to reach `crypto.subtle.digest`) and simulates several rapid content edits, all
- * well inside one CONTENT_HASH_DEBOUNCE_MS window. Against the pre-fix code, each edit synchronously
- * re-runs the memo, so the encode count already reaches N immediately after typing, before any timer
- * fires. After the fix, no encode runs synchronously from typing at all — only the debounced effect's
- * timer produces exactly one encode call per settled window, real timers required (matches the
- * harness pattern in EditorRuntimeWidget.hotExitFlush.test.tsx).
+ * MOCK-SCOPE LIMIT (#2906 round 3): `next/dynamic` is mocked below, so the real `EditorSurface` /
+ * Monaco / keiko-editor chain never mounts here; the "keystrokes" below call the captured
+ * `onContentChange` prop directly, which is the SAME entry point keiko-editor's real
+ * `useChangeHandler` calls only AFTER doing its own, separate `TextEncoder.encode(value)` per edit
+ * (packages/keiko-editor/src/components/use-editor-handlers.ts). That handler's own per-keystroke
+ * encode cost is independently covered by
+ * packages/keiko-editor/src/components/use-change-handler.test.tsx — proven not to run per
+ * keystroke there, not here. This test proves ONLY that EditorRuntimeWidget itself does not ALSO
+ * duplicate a full-buffer encode on top of that: against the pre-fix widget code, each simulated
+ * edit synchronously re-runs the memo here, so the encode count already reaches N immediately after
+ * the calls below, before any timer fires. After the fix, no encode runs synchronously from this
+ * widget at all — only its debounced effect's timer produces exactly one encode call per settled
+ * window, real timers required (matches the harness pattern in
+ * EditorRuntimeWidget.hotExitFlush.test.tsx).
  */
 import { act, render, screen, waitFor } from "@testing-library/react";
 import type { ReactElement } from "react";
@@ -157,20 +165,24 @@ afterEach(() => {
   vi.clearAllMocks();
 });
 
-describe("EditorRuntimeWidget content-size encode debouncing (KEIKO-0819)", () => {
-  it("does not re-run the full UTF-8 encode synchronously on every keystroke, only once per settled debounce window", async () => {
+describe("EditorRuntimeWidget's own content-size encode debouncing, host-only (KEIKO-0819)", () => {
+  it("does not ALSO re-run a full UTF-8 encode synchronously per simulated onContentChange call, only once per settled debounce window", async () => {
+    // Scope reminder (see file header): `onContentChange` below is called directly, bypassing
+    // keiko-editor's real useChangeHandler and its own independent per-edit encode entirely. This
+    // proves EditorRuntimeWidget's bookkeeping alone, not an end-to-end keystroke cost.
     render(<EditorRuntimeWidget windowId="content-size-debounce" root="/repo" file="src/app.ts" />);
     await screen.findByTestId("editor-surface");
 
     // Let the initial-load content settle its own debounced hash/size encode first, so it cannot be
-    // mistaken for one produced by the simulated keystrokes below.
+    // mistaken for one produced by the simulated onContentChange calls below.
     await waitFor(() => {
       expect(encodeSpy?.mock.calls.length ?? 0).toBeGreaterThanOrEqual(1);
     });
     encodeSpy?.mockClear();
 
-    // Five rapid "keystrokes", each strictly faster than CONTENT_HASH_DEBOUNCE_MS (150ms) apart —
-    // synchronous act() calls in a tight loop take microseconds, nowhere near 150ms of real time.
+    // Five rapid onContentChange calls, each strictly faster than CONTENT_HASH_DEBOUNCE_MS (150ms)
+    // apart — synchronous act() calls in a tight loop take microseconds, nowhere near 150ms of real
+    // time. NOT real keystrokes: see the mock-scope note in the file header and describe block.
     const base = DISK_CONTENT;
     for (let index = 1; index <= 5; index += 1) {
       const next = `${base}// edit ${"x".repeat(index)}\n`;
@@ -179,9 +191,10 @@ describe("EditorRuntimeWidget content-size encode debouncing (KEIKO-0819)", () =
       });
     }
 
-    // The regression: against the pre-fix code, the `contentBytes` useMemo re-runs synchronously on
-    // every one of the 5 content changes above (no timer involved), so the encode count would already
-    // be 5 here. The fix defers the full-buffer encode entirely into the debounced effect's timer.
+    // The regression: against the pre-fix widget code, the `contentBytes` useMemo re-runs
+    // synchronously on every one of the 5 onContentChange calls above (no timer involved), so the
+    // encode count would already be 5 here. The fix defers the full-buffer encode entirely into the
+    // widget's debounced effect timer.
     expect(encodeSpy?.mock.calls.length ?? -1).toBe(0);
 
     // After the debounce window elapses (real timer), exactly one encode call lands — for the final
@@ -190,8 +203,13 @@ describe("EditorRuntimeWidget content-size encode debouncing (KEIKO-0819)", () =
       expect(encodeSpy?.mock.calls.length ?? 0).toBe(1);
     });
 
-    // Give any (incorrect) extra per-edit timers a chance to fire too, then confirm the count holds at
-    // exactly one rather than climbing to 5.
+    // Give any (incorrect) extra per-edit timers a chance to fire too, then confirm the count holds
+    // at exactly one rather than climbing to 5. Deliberately real time, not fake timers: a buggy
+    // widget that left N separate per-edit timers pending (rather than replacing/clearing the prior
+    // one, per debounce semantics) would still be scheduled on the REAL clock, and switching to
+    // vi.useFakeTimers() here would not observe timers that were already armed on the real one --
+    // it would silently stop testing for exactly the multi-timer regression this margin exists to
+    // catch.
     await new Promise((resolve) => {
       setTimeout(resolve, 250);
     });

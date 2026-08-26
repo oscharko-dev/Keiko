@@ -104,7 +104,7 @@ describe("VoiceDialogModeSwitch", () => {
     render(<VoiceDialogModeSwitch active={false} onToggle={() => undefined} />);
     const logo = screen.getByRole("switch").querySelector("img");
     expect(logo).not.toBeNull();
-    expect(logo).toHaveAttribute("src", "/assets/keiko-logo.svg");
+    expect(logo).toHaveAttribute("src", "/keiko-logo.svg");
     expect(logo).toHaveAttribute("alt", "");
     expect(logo).toHaveAttribute("aria-hidden", "true");
     expect(logo).toHaveAttribute("width", "34");

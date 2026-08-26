@@ -30,7 +30,7 @@
 // With no scope flag every step runs; `--state` / `--launchers` / `--scripts` narrow
 // it. `--dry-run` reports `would-...` without changing anything.
 
-import { existsSync, readFileSync, rmdirSync, unlinkSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, rmdirSync, unlinkSync } from "node:fs";
 import { homedir as defaultHomedir } from "node:os";
 import { join, resolve } from "node:path";
 import type { EnvSource } from "@oscharko-dev/keiko-model-gateway";
@@ -42,6 +42,7 @@ import {
   KEIKO_STOP_SCRIPT,
   detectPackageJsonIndent,
   stringifyPackageJson,
+  writePackageJsonAtomically,
 } from "./init.js";
 import { localPackageRoot } from "./install-layout.js";
 import { attestedPortableInstallRecord } from "./portable-install.js";
@@ -356,10 +357,12 @@ function removeScriptsStep(opts: UninstallOptions, io: CliIo): void {
   const { next, removed } = pruneKeikoScripts(scripts, io, opts.dryRun);
   if (removed > 0 && !opts.dryRun) {
     const indent = detectPackageJsonIndent(raw);
-    writeFileSync(
+    // #2906 round 3 (comment 3865273714): reuses init.ts's temp-file-plus-rename writer
+    // instead of a direct writeFileSync, which could truncate/corrupt package.json if the
+    // process or filesystem fails mid-write.
+    writePackageJsonAtomically(
       opts.packagePath,
       stringifyPackageJson({ ...pkg, scripts: next }, indent),
-      "utf8",
     );
   }
 }

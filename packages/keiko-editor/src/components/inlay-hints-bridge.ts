@@ -135,10 +135,10 @@ export function createKeikoInlayHintsProvider(
         document: { uri, language: deps.documentLanguage, version: sequence },
         range: editorRange(range),
       };
-      const signal = controllerForToken(token).signal;
+      const { controller, dispose } = controllerForToken(token);
       return runLanguageBridgeCall<EditorInlayHintsResponse, MonacoInlayHintList | undefined>({
         operation: "inlay-hints",
-        resolve: () => deps.resolve({ request, documentText: model.getValue() }, signal),
+        resolve: () => deps.resolve({ request, documentText: model.getValue() }, controller.signal),
         isDiscarded: (response) => shouldDiscardAgainstLatest(response.request, latest),
         discardedValue: undefined,
         failedValue: { hints: [], dispose: (): void => undefined },
@@ -148,6 +148,8 @@ export function createKeikoInlayHintsProvider(
           dispose: (): void => undefined,
         }),
         report: deps.report,
+      }).finally(() => {
+        dispose();
       });
     },
   };

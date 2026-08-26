@@ -995,7 +995,10 @@ describe("performance guardrail", () => {
 describe("flushPlaintextResidue (KEIKO-0877)", () => {
   type CheckpointOutcome =
     | Partial<{ busy: number; log: number; checkpointed: number }>
-    | { readonly kind: "throw"; readonly cause: Error };
+    | { readonly kind: "throw"; readonly cause: Error }
+    // #2906 round-3 review: a real DatabaseSync's .get() can also return `undefined` (no row) --
+    // exercised directly rather than only object shapes with missing/non-numeric columns.
+    | undefined;
 
   interface FakeDb {
     readonly db: DatabaseSync;
@@ -1015,7 +1018,7 @@ describe("flushPlaintextResidue (KEIKO-0877)", () => {
           get(): unknown {
             checkpointCalls.count += 1;
             const outcome = nextOutcome();
-            if ((outcome as { kind?: string }).kind === "throw") {
+            if (typeof outcome === "object" && (outcome as { kind?: string }).kind === "throw") {
               throw (outcome as { cause: Error }).cause;
             }
             return outcome;
@@ -1086,6 +1089,8 @@ describe("flushPlaintextResidue (KEIKO-0877)", () => {
     expect(degraded?.level).toBe("error");
     expect(degraded?.extra?.attempts).toBe(3);
     expect(degraded?.extra?.busy).toBe(true);
+    // #2906 round-3 review: persistent busy is now classified, not just thrown-PRAGMA failures.
+    expect(degraded?.errorKind).toBe("checkpoint-busy");
   });
 
   it("throws KnowledgeStoreError when the checkpoint reports a partial checkpoint (busy=0, checkpointed < log)", () => {
@@ -1096,8 +1101,37 @@ describe("flushPlaintextResidue (KEIKO-0877)", () => {
     }).toThrow(/held-open reader prevented a full checkpoint/);
     expect(fake.checkpointCalls.count).toBe(3);
     expect(fake.vacuumCalls.count).toBe(0);
-    expect(events.find((e) => e.op === "store.encryption-checkpoint-degraded")).toBeDefined();
+    const degraded = events.find((e) => e.op === "store.encryption-checkpoint-degraded");
+    expect(degraded).toBeDefined();
+    // #2906 round-3 review: a partial checkpoint is now classified too, distinctly from busy.
+    expect(degraded?.errorKind).toBe("checkpoint-partial");
   });
+
+  // #2906 round-3 review (P1): an undefined row, `{}`, or non-numeric columns were previously
+  // coerced to a trivially-satisfied `{ busy: 0, log: 0, checkpointed: 0 }`, which vacuously passes
+  // `busy === 0 && checkpointed >= log` -- migration would then write the encryption marker without
+  // any verified WAL truncation. Each malformed shape must retry and fail closed instead, exactly
+  // like a genuinely incomplete checkpoint, and be classified distinctly for reconstruction.
+  it.each([
+    ["an undefined row", undefined],
+    ["an empty object", {}],
+    ["non-numeric columns", { busy: "0", log: "0", checkpointed: "0" }],
+  ])(
+    "fails closed on a malformed checkpoint row (%s) instead of a vacuous 0/0/0 success",
+    (_label, row) => {
+      const fake = fakeDbFor(() => row as CheckpointOutcome);
+      const { sink, events } = collectingSink();
+      expect(() => {
+        flushPlaintextResidue(fake.db, sink);
+      }).toThrow(/missing or non-numeric result row/);
+      expect(fake.checkpointCalls.count).toBe(3);
+      expect(fake.vacuumCalls.count).toBe(0);
+      const degraded = events.find((e) => e.op === "store.encryption-checkpoint-degraded");
+      expect(degraded).toBeDefined();
+      expect(degraded?.errorKind).toBe("checkpoint-malformed");
+      expect(degraded?.extra?.busy).toBe(true);
+    },
+  );
 
   it("retries through a thrown checkpoint-statement exception and throws on exhaustion, never silently swallowing it", () => {
     const fake = fakeDbFor(() => ({

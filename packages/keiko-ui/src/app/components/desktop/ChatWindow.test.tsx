@@ -3406,7 +3406,7 @@ describe("ChatWindow message copy", () => {
     expect(screen.getByRole("img", { name: "Keiko logo" })).toBeInTheDocument();
     expect(assistantBubble?.querySelector(".chat-msg-brand img")).toHaveAttribute(
       "src",
-      "/assets/keiko-logo.svg",
+      "/keiko-logo.svg",
     );
     expect(assistantBubble?.querySelector(".chat-msg-brand")).toHaveAttribute(
       "data-pulsing",

@@ -15,6 +15,8 @@ import { join } from "node:path";
 
 import { afterEach, describe, expect, it } from "vitest";
 
+import { UNKNOWN_CORRELATION_ID } from "./correlation.js";
+import type { ServerDiagnosticRecord } from "./diagnostics-log.js";
 import { createFileUpdateSessionLock, pruneCorruptLockQuarantine } from "./update-session-lock.js";
 
 const roots: string[] = [];
@@ -60,9 +62,9 @@ describe("pruneCorruptLockQuarantine (KEIKO-0812)", () => {
     const unrelated = join(root, "readme.txt");
     writeFileSync(unrelated, "keep", "utf8");
 
-    const removed = pruneCorruptLockQuarantine(lockPath);
+    const result = pruneCorruptLockQuarantine(lockPath);
 
-    expect(removed).toBe(1);
+    expect(result).toEqual({ removed: 1, failed: 0 });
     expect(existsSync(oldPath)).toBe(false);
     expect(existsSync(recentPath)).toBe(true);
     expect(existsSync(unrelated)).toBe(true);
@@ -99,7 +101,7 @@ describe("pruneCorruptLockQuarantine (KEIKO-0812)", () => {
   it("is a no-op when the lock's parent directory does not exist", () => {
     const root = temporary();
     const lockPath = join(root, "nonexistent", "update-session.lock");
-    expect(pruneCorruptLockQuarantine(lockPath)).toBe(0);
+    expect(pruneCorruptLockQuarantine(lockPath)).toEqual({ removed: 0, failed: 0 });
   });
 
   it("keeps a file that lies inside the retention window even when its ISO-stamped name is old", () => {
@@ -109,7 +111,92 @@ describe("pruneCorruptLockQuarantine (KEIKO-0812)", () => {
     const lockPath = join(root, "update-session.lock");
     // Very old-looking name, but touched to right now.
     const path = makeQuarantineFile(root, "update-session.lock", "2020-01-01T00-00-00-000Z", 0);
-    expect(pruneCorruptLockQuarantine(lockPath)).toBe(0);
+    expect(pruneCorruptLockQuarantine(lockPath)).toEqual({ removed: 0, failed: 0 });
     expect(existsSync(path)).toBe(true);
+  });
+
+  it("counts a stat/unlink failure instead of swallowing it, and leaves the entry in place", () => {
+    // A "quarantine" entry that is actually a directory: statSync succeeds (directories carry an
+    // mtime too), but unlinkSync on a directory fails (EISDIR on Linux, EPERM on macOS) -- a real,
+    // portable stat/unlink failure without mocking fs or permissions.
+    const root = temporary();
+    const lockPath = join(root, "update-session.lock");
+    const trap = join(root, "update-session.lock.corrupt.2020-01-01T00-00-00-000Z");
+    mkdirSync(trap);
+    const oldSecs = (Date.now() - 8 * 24 * 60 * 60_000) / 1_000;
+    utimesSync(trap, oldSecs, oldSecs);
+
+    const result = pruneCorruptLockQuarantine(lockPath);
+
+    expect(result).toEqual({ removed: 0, failed: 1 });
+    expect(existsSync(trap)).toBe(true);
+  });
+
+  it("emits a bounded diagnostic through the injected sink reporting both counts (#2906 round 3)", () => {
+    const root = temporary();
+    const lockPath = join(root, "update-session.lock");
+    makeQuarantineFile(
+      root,
+      "update-session.lock",
+      "2020-01-01T00-00-00-000Z",
+      8 * 24 * 60 * 60_000,
+    );
+    const trap = join(root, "update-session.lock.corrupt.2020-01-02T00-00-00-000Z");
+    mkdirSync(trap);
+    const oldSecs = (Date.now() - 8 * 24 * 60 * 60_000) / 1_000;
+    utimesSync(trap, oldSecs, oldSecs);
+    const records: ServerDiagnosticRecord[] = [];
+
+    const result = pruneCorruptLockQuarantine(lockPath, Date.now, undefined, {
+      record: (record) => records.push(record),
+    });
+
+    expect(result).toEqual({ removed: 1, failed: 1 });
+    expect(records).toHaveLength(1);
+    expect(records[0]?.occurrenceCount).toBe(1);
+    expect(records[0]?.quarantinePruneFailedCount).toBe(1);
+    expect(records[0]?.correlationId).toBe(UNKNOWN_CORRELATION_ID);
+    expect(records[0]?.message).toBe("update-session-quarantine-prune-degraded");
+  });
+
+  it("does not emit when nothing was pruned and nothing failed", () => {
+    const root = temporary();
+    const lockPath = join(root, "update-session.lock");
+    const records: ServerDiagnosticRecord[] = [];
+
+    pruneCorruptLockQuarantine(lockPath, Date.now, undefined, {
+      record: (record) => records.push(record),
+    });
+
+    expect(records).toEqual([]);
+  });
+
+  it("threads the injected diagnostics sink through acquire()'s opportunistic prune", () => {
+    const root = temporary();
+    const lockDir = join(root, "updates");
+    mkdirSync(lockDir, { recursive: true });
+    const lockPath = join(lockDir, "update-session.lock");
+    makeQuarantineFile(
+      lockDir,
+      "update-session.lock",
+      "2026-01-02T00-00-00-000Z",
+      10 * 24 * 60 * 60_000,
+    );
+    const records: ServerDiagnosticRecord[] = [];
+
+    const lock = createFileUpdateSessionLock(lockPath, {
+      diagnostics: { record: (record) => records.push(record) },
+    });
+    lock.acquire({
+      sessionId: "s1",
+      targetVersion: "0.2.13",
+      startedAt: new Date().toISOString(),
+      pid: process.pid,
+    });
+
+    expect(records).toHaveLength(1);
+    expect(records[0]?.message).toBe("update-session-quarantine-pruned");
+    expect(records[0]?.occurrenceCount).toBe(1);
+    lock.release("s1");
   });
 });

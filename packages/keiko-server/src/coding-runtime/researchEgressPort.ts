@@ -454,11 +454,7 @@ async function safeFetch(
     // fetch closed; the error text is dropped so no upstream detail rides into diagnostics. Which
     // of the three composed signals actually fired identifies the fail-closed reason so the
     // caller can emit the correctly-audited outcome instead of a silent, unaudited FAILED.
-    const reason: SafeFetchFailureReason = expiry.signal.aborted
-      ? "expired"
-      : controller.signal.aborted
-        ? "revoked"
-        : "transport-failed";
+    const reason: SafeFetchFailureReason = classifyFetchFailure(expiry.signal, controller.signal);
     disposeAll();
     return { ok: false, reason };
   }
@@ -466,6 +462,17 @@ async function safeFetch(
 
 function isSignal(value: AbortSignal | undefined): value is AbortSignal {
   return value !== undefined;
+}
+
+// Sonar S3358: nested-ternary avoidance — expiry takes precedence over revocation, both take
+// precedence over transport failure. Extracted so the branch is a plain if/else chain.
+function classifyFetchFailure(
+  expirySignal: AbortSignal,
+  revokeSignal: AbortSignal,
+): SafeFetchFailureReason {
+  if (expirySignal.aborted) return "expired";
+  if (revokeSignal.aborted) return "revoked";
+  return "transport-failed";
 }
 
 interface ExpiryAbort {

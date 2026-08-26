@@ -377,6 +377,14 @@ export const EN_MESSAGES = {
   "chat.history.action.save": "Save {title}",
   "chat.history.action.cancel": "Cancel {title}",
   "chat.history.action.restore": "Restore {title}",
+  // #2906 round 3: terse, title-free labels for the SAME actions' visible button text (the
+  // aria-labels above stay title-bearing for KEIKO-0452 per-row uniqueness). Visible text must be
+  // localized too, or a German-locale screen-reader user gets a German accessible name with no
+  // German text printed anywhere on the button (WCAG 2.5.3 Label in Name).
+  "chat.history.action.renameLabel": "Rename",
+  "chat.history.action.restoreLabel": "Restore",
+  "chat.history.tab.active": "Active",
+  "chat.history.tab.deleted": "Deleted",
   "window.type.resources.title": "Resources",
   "window.type.resources.desc": "Shared assets & references — coming soon.",
   "window.type.connector.title": "Knowledge Pod",

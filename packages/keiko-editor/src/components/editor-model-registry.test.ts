@@ -724,38 +724,38 @@ describe("EditorModelRegistry", () => {
   });
 
   it("hashes keys containing astral characters without truncating the surrogate pair", () => {
-    // KEIKO-0680: the format-only /^[0-9a-f]{8}$/ assertion is unconditional — `fnv1a32` always
-    // returns eight hex chars regardless of whether the surrogate-pair skip is present. Strengthen
-    // with two discriminating assertions: (1) equivalence — the astral construction via the
-    // code-point escape must produce the SAME identityHash as the raw UTF-16 surrogate-pair escape
-    // (they are the same JS string, so this proves the test harness constructs what it claims);
-    // (2) surrogate-pair vs lone-surrogate — a key containing only the lone high surrogate must
-    // produce a DIFFERENT identityHash than the paired form, proving the hash sees the surrogate
-    // structure at all rather than collapsing every non-ASCII to the same digest.
-    const pairViaCodePoint = "notes-\u{1F600}.ts";
-    const pairViaSurrogates = "notes-😀.ts";
-    const loneHighSurrogate = "notes-\uD83D.ts";
-
+    // KEIKO-0680, strengthened #2906 round 3: neither the format-only /^[0-9a-f]{8}$/ assertion
+    // nor an equivalence check between two constructions of the SAME JS string (code-point escape
+    // vs raw UTF-16 surrogate pair -- they are byte-identical, so equal hashes prove nothing about
+    // the skip) nor a pair-vs-lone-surrogate inequality (different STRINGS of different lengths,
+    // so of course they hash differently regardless of whether fnv1a32 understands surrogates)
+    // can fail if `if (code > 0xffff) index += 1` is deleted: every one of those assertions stays
+    // green either way. Pin the exact digest fnv1a32 produces for two DISTINCT astral characters
+    // instead. Without the skip, `codePointAt` still correctly reads the full code point at the
+    // high-surrogate position, but the loop's own `index += 1` then revisits the low-surrogate
+    // unit as a second, phantom "character" and XORs its raw code unit in again -- verified by
+    // deleting the skip locally and confirming both digests below change completely (5f546c35 ->
+    // f2fc8769, 437e84d8 -> fa85b593), which is exactly the discriminating failure this pin exists
+    // to catch.
     const registry1 = new EditorModelRegistry({ countBudget: 8, byteBudget: 1_000_000 });
     const namespace1 = new FakeNamespace();
-    const emojiA = attach(registry1, namespace1, pairViaCodePoint);
-    const pairHashA = registry1.diagnostics().entries[0]?.identityHash;
-    expect(pairHashA).toMatch(/^[0-9a-f]{8}$/);
-    emojiA.attachment.detach();
+    const emoji = attach(registry1, namespace1, "notes-\u{1F600}.ts"); // 😀 U+1F600
+    expect(registry1.diagnostics().entries[0]?.identityHash).toBe("5f546c35");
+    emoji.attachment.detach();
 
     const registry2 = new EditorModelRegistry({ countBudget: 8, byteBudget: 1_000_000 });
     const namespace2 = new FakeNamespace();
-    const emojiB = attach(registry2, namespace2, pairViaSurrogates);
-    const pairHashB = registry2.diagnostics().entries[0]?.identityHash;
-    expect(pairHashB).toBe(pairHashA);
-    emojiB.attachment.detach();
+    const party = attach(registry2, namespace2, "notes-\u{1F389}.ts"); // 🎉 U+1F389
+    expect(registry2.diagnostics().entries[0]?.identityHash).toBe("437e84d8");
+    party.attachment.detach();
 
+    // The lone (unpaired) high surrogate remains a distinct string from the paired form -- kept
+    // as a shape/crash-safety check, not as evidence about the skip (see comment above).
     const registry3 = new EditorModelRegistry({ countBudget: 8, byteBudget: 1_000_000 });
     const namespace3 = new FakeNamespace();
-    const emojiC = attach(registry3, namespace3, loneHighSurrogate);
-    const loneHash = registry3.diagnostics().entries[0]?.identityHash;
-    expect(loneHash).not.toBe(pairHashA);
-    emojiC.attachment.detach();
+    const lone = attach(registry3, namespace3, "notes-\uD83D.ts");
+    expect(lone.attachment).toBeDefined();
+    lone.attachment.detach();
   });
 });
 

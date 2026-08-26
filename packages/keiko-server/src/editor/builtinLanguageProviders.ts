@@ -141,11 +141,58 @@ function opensHtmlIndentScope(line: string): boolean {
   return tagEnd === line.length - 1 && !line.slice(0, tagEnd).includes("</");
 }
 
+// KEIKO-0712-r3: `formatHtml` used to pre-split with `/>\s*</gu` BEFORE any line boundaries exist,
+// so it saw the whole document as one string with no notion of "inside a quoted attribute value".
+// A value containing a literal `> <` (e.g. `<div data-value="> <">`) matched the regex exactly like
+// a real tag boundary and was split mid-quote, corrupting the document. This mirrors
+// firstUnquotedTagEnd's quote tracking, but as a single linear pass over the WHOLE text (this runs
+// before any splitting), toggling in/out of a `"`- or `'`-quoted region and only ever collapsing a
+// `>`-whitespace-`<` run to a single `\n` when it sits outside any quote. Every character inside a
+// quote (of either kind) is copied through untouched, so a literal `> <` in an attribute value
+// never becomes a line break, regardless of which quote style wraps it.
+// Looks ahead from `start` past any run of whitespace; returns the index of a `<` immediately
+// following that run, or undefined when the run is followed by anything else (or ends the text).
+// Split out of insertHtmlLineBreaksAtTagBoundaries so the caller's own branching stays simple.
+function tagBoundaryAfter(text: string, start: number): number | undefined {
+  let j = start;
+  while (j < text.length && /\s/u.test(text[j] ?? "")) j += 1;
+  return j < text.length && text[j] === "<" ? j : undefined;
+}
+
+function insertHtmlLineBreaksAtTagBoundaries(text: string): string {
+  let result = "";
+  let inQuote: '"' | "'" | undefined;
+  let i = 0;
+  while (i < text.length) {
+    const ch = text[i];
+    if (ch === undefined) break;
+    if (inQuote !== undefined) {
+      result += ch;
+      if (ch === inQuote) inQuote = undefined;
+      i += 1;
+      continue;
+    }
+    if (ch === '"' || ch === "'") {
+      inQuote = ch;
+      result += ch;
+      i += 1;
+      continue;
+    }
+    const boundary = ch === ">" ? tagBoundaryAfter(text, i + 1) : undefined;
+    if (boundary !== undefined) {
+      result += ">\n";
+      i = boundary;
+      continue;
+    }
+    result += ch;
+    i += 1;
+  }
+  return result;
+}
+
 function formatHtml(text: string, options: LanguageFormattingOptions | undefined): string {
   const indentUnit = options?.insertSpaces === false ? "\t" : " ".repeat(options?.tabSize ?? 2);
-  const tokens = text
-    .replace(/\r\n?/gu, "\n")
-    .replace(/>\s*</gu, ">\n<")
+  const tokens = insertHtmlLineBreaksAtTagBoundaries(text.replace(/\r\n?/gu, "\n"))
     .split("\n")
     .map((line) => line.trim())
     .filter((line) => line.length > 0);

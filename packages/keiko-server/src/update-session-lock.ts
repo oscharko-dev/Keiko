@@ -11,6 +11,8 @@ import {
 } from "node:fs";
 import { createHash, randomUUID } from "node:crypto";
 import { basename, dirname, join } from "node:path";
+import { UNKNOWN_CORRELATION_ID } from "./correlation.js";
+import { emitServerDiagnostic, type ServerDiagnosticSink } from "./diagnostics-log.js";
 import { publishFileWithoutReplacement } from "./publish-file-without-replacement.js";
 import {
   isOptionalProcessIdentity,
@@ -50,6 +52,10 @@ export interface FileUpdateSessionLockOptions {
   readonly now?: (() => number) | undefined;
   readonly pidAlive?: ((pid: number) => boolean) | undefined;
   readonly processIdentity?: string | undefined;
+  // KEIKO-0812 follow-up (#2906 round 3): optional sink for the corrupt-lock quarantine prune's
+  // bounded removal/failure evidence. Absent means the prune stays silent on success exactly as
+  // before (most callers, including tests, never wire this) -- see emitQuarantinePruneDiagnostic.
+  readonly diagnostics?: ServerDiagnosticSink | undefined;
 }
 
 interface ResolvedFileUpdateSessionLockOptions {
@@ -57,6 +63,7 @@ interface ResolvedFileUpdateSessionLockOptions {
   readonly now: () => number;
   readonly pidAlive: (pid: number) => boolean;
   readonly processIdentity: string;
+  readonly diagnostics: ServerDiagnosticSink | undefined;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -385,6 +392,7 @@ function resolveLockOptions(
     now: input.now ?? Date.now,
     pidAlive: input.pidAlive ?? defaultPidAlive,
     processIdentity: input.processIdentity ?? PROCESS_START_IDENTITY,
+    diagnostics: input.diagnostics,
   };
 }
 
@@ -485,27 +493,67 @@ function releaseFileLock(lockPath: string, sessionId: string): void {
   }
 }
 
+export interface QuarantinePruneResult {
+  readonly removed: number;
+  readonly failed: number;
+}
+
+// No single request owns a prune sweep (it can run opportunistically inside any acquire() call),
+// so there is no per-request correlation id to thread -- UNKNOWN_CORRELATION_ID is the sanctioned
+// shape-valid stand-in (see codingAppSessionRoutes.ts's identical rationale for its own aggregate
+// diagnostic).
+function emitQuarantinePruneDiagnostic(
+  diagnostics: ServerDiagnosticSink | undefined,
+  result: QuarantinePruneResult,
+): void {
+  if (diagnostics === undefined || (result.removed === 0 && result.failed === 0)) return;
+  emitServerDiagnostic(diagnostics, {
+    correlationId: UNKNOWN_CORRELATION_ID,
+    timestamp: new Date().toISOString(),
+    operation: "update-session.lock-quarantine-prune",
+    source: "update-session-lock",
+    errorClass:
+      result.failed > 0
+        ? "UpdateSessionLockQuarantinePruneDegraded"
+        : "UpdateSessionLockQuarantinePruned",
+    message:
+      result.failed > 0
+        ? "update-session-quarantine-prune-degraded"
+        : "update-session-quarantine-pruned",
+    occurrenceCount: result.removed,
+    ...(result.failed > 0 ? { quarantinePruneFailedCount: result.failed } : {}),
+  });
+}
+
 // KEIKO-0812: prunes quarantined `${lockPath}.corrupt.<iso-stamp>` files older than the
 // retention window. Modeled on pruneOlderSnapshots in update-local-state-snapshot.ts. Uses the
 // file's own mtime (statSync().mtimeMs) rather than the ISO stamp in its name so a clock skew
 // between the original quarantine and today does not falsely evict a recent forensic file. A
-// prune failure is swallowed: the surrounding acquire() must not fail closed on best-effort
-// housekeeping. Exported so tests and future `keiko repair` scans can drive it directly.
+// prune failure stays non-fatal -- the surrounding acquire() must not fail closed on best-effort
+// housekeeping -- but is now counted rather than swallowed (#2906 round 3): a directory read
+// failure counts as one failure (the sweep could not even enumerate its candidates), and each
+// stat/unlink failure counts individually, so a caller-supplied diagnostics sink can see when
+// forensic quarantine evidence is piling up instead of losing that signal outright. Exported so
+// tests and future `keiko repair` scans can drive it directly.
 export function pruneCorruptLockQuarantine(
   lockPath: string,
   now: () => number = Date.now,
   retentionMs: number = DEFAULT_CORRUPT_LOCK_RETENTION_MS,
-): number {
+  diagnostics?: ServerDiagnosticSink,
+): QuarantinePruneResult {
   const parent = dirname(lockPath);
-  if (!existsSync(parent)) return 0;
+  if (!existsSync(parent)) return { removed: 0, failed: 0 };
   const prefix = `${basename(lockPath)}.corrupt.`;
   const cutoffMs = now() - retentionMs;
   let removed = 0;
+  let failed = 0;
   let names: readonly string[];
   try {
     names = readdirSync(parent);
   } catch {
-    return 0;
+    const result: QuarantinePruneResult = { removed: 0, failed: 1 };
+    emitQuarantinePruneDiagnostic(diagnostics, result);
+    return result;
   }
   for (const name of names) {
     if (!name.startsWith(prefix)) continue;
@@ -516,10 +564,14 @@ export function pruneCorruptLockQuarantine(
       unlinkSync(path);
       removed += 1;
     } catch {
-      // A prune failure is non-fatal: forensic evidence stays intact and the next acquire retries.
+      // Non-fatal: forensic evidence stays intact and the next acquire retries. Counted (not
+      // silently swallowed) so emitQuarantinePruneDiagnostic can surface repeated failures.
+      failed += 1;
     }
   }
-  return removed;
+  const result: QuarantinePruneResult = { removed, failed };
+  emitQuarantinePruneDiagnostic(diagnostics, result);
+  return result;
 }
 
 export function createFileUpdateSessionLock(
@@ -531,9 +583,9 @@ export function createFileUpdateSessionLock(
     isLocked: () => fileLockIsActive(lockPath, options),
     acquire: (record): boolean => {
       // KEIKO-0812: opportunistic prune runs BEFORE the acquire attempt so a long-running
-      // deployment does not accumulate `.corrupt.*` files. Prune is best-effort (swallows
-      // errors) and never blocks the acquire itself.
-      pruneCorruptLockQuarantine(lockPath, options.now);
+      // deployment does not accumulate `.corrupt.*` files. Prune is best-effort (never throws,
+      // never blocks the acquire itself) but reports through options.diagnostics when wired.
+      pruneCorruptLockQuarantine(lockPath, options.now, undefined, options.diagnostics);
       return acquireFileLock(
         lockPath,
         { ...record, processIdentity: options.processIdentity },

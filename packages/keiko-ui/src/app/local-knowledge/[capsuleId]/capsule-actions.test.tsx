@@ -314,6 +314,47 @@ describe("CapsuleActions — connect source", () => {
     });
   });
 
+  it("retains the valid picked subset and shows the localized partial-selection notice on a mixed pick (#2906 round 3)", async () => {
+    // Component-level regression for a mixed native pick (rejectedCount > 0): the transport-only
+    // count test (native-file-dialog.test.ts) proves rejectedCount is computed correctly, but not
+    // that this UI wiring surfaces it, or that it keeps the valid subset instead of discarding it.
+    const user = userEvent.setup();
+    const connectCapsuleSourceImpl = vi.fn().mockResolvedValue(connectedCapsuleResponse());
+    mockPickWithNativeDialog.mockResolvedValueOnce({
+      kind: "picked",
+      paths: ["/repo/README.md", "/repo/CHANGELOG.md"],
+      rejectedCount: 1,
+    });
+
+    render(<CapsuleActions {...defaultProps({ connectCapsuleSourceImpl })} />);
+
+    const browse = screen.getByRole("button", { name: /^select documents$/i });
+    await waitFor(() => expect(browse).not.toBeDisabled());
+    await user.click(browse);
+
+    // The valid subset is retained, not discarded, alongside the notice.
+    await waitFor(() => {
+      expect(screen.getByLabelText(/source path/i)).toHaveValue("/repo");
+    });
+    expect(screen.getByLabelText(/relative document paths/i)).toHaveValue(
+      "README.md\nCHANGELOG.md",
+    );
+    // Real singular grammar for rejectedCount === 1 (#2906 round 3): not "1 selected item(s) ...
+    // were skipped".
+    expect(screen.getByRole("alert")).toHaveTextContent(
+      "1 selected item could not be added and was skipped.",
+    );
+
+    await user.click(screen.getByRole("button", { name: /^connect$/i }));
+    await waitFor(() => {
+      expect(connectCapsuleSourceImpl).toHaveBeenCalledWith(DEFAULT_ID, {
+        kind: "files",
+        rootPath: "/repo",
+        files: ["README.md", "CHANGELOG.md"],
+      });
+    });
+  });
+
   it("uses the picked file's parent folder as the shared root for the files scope", async () => {
     const user = userEvent.setup();
     const connectCapsuleSourceImpl = vi.fn().mockResolvedValue(connectedCapsuleResponse());

@@ -974,7 +974,16 @@ describe("verificationAuthorityDenyReason", () => {
     expect(verificationAuthorityDenyReason("budget-exceeded")).toBe("authority-budget-exceeded");
   });
 
-  it.each(["invalid", "revoked"] satisfies EditorAgentAuthorityFailureReason[])(
+  // #2906 round-3 review: a revoked authority previously fell back to the generic
+  // authority-invalid bucket alongside a genuinely-invalid envelope, even though
+  // EditorAgentActionDenyReason has carried a dedicated "authority-revoked" literal since this PR's
+  // registry-revocation contract expansion. Pinned separately from the true fallback below so a
+  // regression back to collapsing revocation into "invalid" is caught here.
+  it("maps a revoked authority to authority-revoked", () => {
+    expect(verificationAuthorityDenyReason("revoked")).toBe("authority-revoked");
+  });
+
+  it.each(["invalid"] satisfies EditorAgentAuthorityFailureReason[])(
     "falls back to authority-invalid for %s",
     (reason) => {
       expect(verificationAuthorityDenyReason(reason)).toBe("authority-invalid");

@@ -484,11 +484,13 @@ function applyNativeDialogOutcome(
     // returned N items, the response carried fewer, and nothing told the user why. Surface it
     // instead of clearing the notice, without blocking the valid subset that WAS picked.
     const rejectedCount = outcome.rejectedCount ?? 0;
-    setConnectError(
-      rejectedCount > 0
-        ? t("localKnowledge.nativeDialog.partialSelection", { count: rejectedCount })
-        : null,
-    );
+    // #2906 round 3: real singular/plural variants -- "1 selected item(s) ... were skipped" was
+    // grammatically wrong for the count === 1 case in both English and German.
+    const partialSelectionKey =
+      rejectedCount === 1
+        ? "localKnowledge.nativeDialog.partialSelection.singular"
+        : "localKnowledge.nativeDialog.partialSelection.plural";
+    setConnectError(rejectedCount > 0 ? t(partialSelectionKey, { count: rejectedCount }) : null);
     return;
   }
   if (outcome.kind === "busy") setConnectError(t("localKnowledge.nativeDialog.busy"));

@@ -1756,7 +1756,7 @@ export function AppShell(): ReactNode {
       <div className="app" aria-hidden="true">
         <div className="app-boot">
           {/* eslint-disable-next-line @next/next/no-img-element -- design CSS sizes the raw SVG; next/image would inject a wrapper that breaks the centered placeholder */}
-          <img className="app-boot-logo" src="/assets/keiko-logo.svg" alt="" />
+          <img className="app-boot-logo" src="/keiko-logo.svg" alt="" />
         </div>
       </div>
     );

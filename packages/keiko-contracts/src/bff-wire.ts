@@ -818,6 +818,21 @@ export interface SafeCircuitBreakerConfig {
   readonly halfOpenProbes: number;
 }
 
+// #2906 round 3 (KEIKO-0572 follow-up): the single source of VALUES for the gateway's default
+// circuit breaker, not just its shape. keiko-model-gateway/src/config.ts's own
+// DEFAULT_CIRCUIT_BREAKER_CONFIG derives its three exported numbers from this constant, and
+// keiko-ui's gatewayConfigParsing.ts (which cannot import keiko-model-gateway directly -- ADR-0019
+// reserves it for provider-SDK isolation) imports this SAME constant for its REBUILT_CIRCUIT_BREAKER
+// literal instead of hand-copying the numbers. Previously each package independently restated
+// `{ failureThreshold: 5, cooldownMs: 30_000, halfOpenProbes: 2 }`, typed against
+// SafeCircuitBreakerConfig so the SHAPE stayed compiler-checked while the VALUES could silently
+// drift apart with no error anywhere.
+export const DEFAULT_SAFE_CIRCUIT_BREAKER_CONFIG: SafeCircuitBreakerConfig = Object.freeze({
+  failureThreshold: 5,
+  cooldownMs: 30_000,
+  halfOpenProbes: 2,
+});
+
 /** Wire mirror of the gateway's credential-free reranker projection (model-gateway config.ts). */
 export interface SafeRerankerConfig {
   readonly modelId: string;

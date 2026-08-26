@@ -73,7 +73,16 @@ export type CodingSafeActivitySignal =
     });
 
 export type CodingSafeActivityPurgeReason =
-  "stop" | "takeover" | "shutdown" | "workspace-switch" | "expiry";
+  | "stop"
+  | "takeover"
+  | "shutdown"
+  | "workspace-switch"
+  // #2906 round 3: reserved for finalizeIngest's KEIKO-0878 invariant-violation branch -- validate
+  // rejected a post-mutation feed that isFeedNearProjectionLimit's pre-mutation check believed
+  // could not fail. Distinct from TTL/authority expiry (which never reaches purgeCurrent at all --
+  // see expireCurrent, which purges silently with no diagnostic) so the timeline never collapses a
+  // genuine invariant bug into an unrelated, diagnostic-free expiry code.
+  | "invariant-violation";
 export type CodingSafeActivityDropReason =
   | "validation-rejected"
   | "redactor-collapsed"
@@ -298,9 +307,12 @@ class SafeActivityProjection implements CodingSafeActivityProjection {
       return this.reject(runId, "capacity-rejected");
     }
     // KEIKO-0878: pre-mutation state was in the safe zone yet validate rejected -- indicates
-    // a bug in isFeedNearProjectionLimit's threshold. Purge so a caller reading the feed after
-    // this cannot see the invalid state; the next signal will start from a fresh entry.
-    this.purgeCurrent("expiry");
+    // a bug in isFeedNearProjectionLimit's threshold, not TTL/authority expiry. Purge so a caller
+    // reading the feed after this cannot see the invalid state; the next signal will start from a
+    // fresh entry. #2906 round 3: reason is the distinct "invariant-violation" code (never
+    // "expiry", which this path is not) so the activity timeline can tell a genuine
+    // validation/invariant bug apart from every other purge cause instead of collapsing them all.
+    this.purgeCurrent("invariant-violation");
     return false;
   }
 
@@ -970,7 +982,7 @@ const SAFE_ACTIVITY_PURGE_SUMMARY: Readonly<
   takeover: "safe-activity-purged-takeover",
   shutdown: "safe-activity-purged-shutdown",
   "workspace-switch": "safe-activity-purged-workspace-switch",
-  expiry: "safe-activity-purged-expiry",
+  "invariant-violation": "safe-activity-purged-invariant-violation",
 };
 
 function emitDropDiagnostic(

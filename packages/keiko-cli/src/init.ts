@@ -295,7 +295,11 @@ const INIT_STAGING_PREFIX = ".keiko-init-";
 // .keiko-init-XXXXXX prefix+suffix shape stays untouched even if it's older than the cutoff.
 const INIT_STAGING_MARKER = ".keiko-init-owned";
 
-function writePackageJsonAtomically(packagePath: string, content: string): void {
+// #2906 round 3 (comment 3865273714): exported so `uninstall.ts`'s script-removal step reuses
+// this SAME temp-file-plus-rename writer instead of a direct `writeFileSync` — one
+// package-manifest write invariant (staging dir, mode preservation, symlinked-target
+// resolution, atomic rename) shared by both writers, instead of two.
+export function writePackageJsonAtomically(packagePath: string, content: string): void {
   // PR-review follow-up: if the caller passed a symlink to package.json, replace the REAL
   // target atomically instead of the symlink entry itself. `renameSync` operates on
   // directory entries, so writing "next to the symlink" and renaming it in place would

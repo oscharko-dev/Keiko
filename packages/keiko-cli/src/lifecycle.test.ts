@@ -12,6 +12,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { execFileSync } from "node:child_process";
 import type { ChildProcess, SpawnOptions } from "node:child_process";
 import { EventEmitter } from "node:events";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
@@ -1461,5 +1462,132 @@ describe("keiko start — refuses symlinked ui.log and ui.pid (KEIKO-0886)", () 
     expect(code).toBe(0);
     expect(readFileSync(join(stateDir, "ui.pid"), "utf8")).toBe("12345\n");
     expect(lstatSync(join(stateDir, "ui.pid")).nlink).toBe(1);
+  });
+});
+
+// #2906 round 3 (comment 3865329050): O_NOFOLLOW refuses only a SYMLINK at the final path
+// component. A hard link to another user's file has no symlink component (the syscall that
+// blocks symlinks has nothing to object to), so it would receive every byte of the child's
+// stdout/stderr; a FIFO can block the O_WRONLY open indefinitely before any post-open validation
+// could ever run; a directory (or other non-regular entry) is accepted outright. The fix opens
+// O_NONBLOCK (so a FIFO's open() fails fast instead of hanging) and fstat-verifies the OPENED
+// descriptor is a regular, single-link file before it is ever handed to the child.
+describe("keiko start — refuses a hard-linked/FIFO/non-regular ui.log (comment 3865329050)", () => {
+  it("detects a hard-linked ui.log and never writes through the hardlink's target file", async (ctx) => {
+    if (process.platform === "win32") ctx.skip();
+    const root = makeRoot();
+    const stateDir = join(root, ".keiko");
+    mkdirSync(stateDir, { recursive: true, mode: 0o700 });
+    const victim = join(root, "victim-log.txt");
+    const original = "unchanged\n";
+    writeFileSync(victim, original, "utf8");
+    // Pre-plant the hard link BEFORE start runs: unlike ui.pid (written after spawn succeeds),
+    // ui.log is opened by openUiLogStdio BEFORE spawnFn is ever invoked, so there is no
+    // "inside spawnFn" window to plant it in — it must already be there.
+    linkSync(victim, join(stateDir, "ui.log"));
+
+    const c = makeIo();
+    const spawned: unknown[] = [];
+    const child = { pid: 12345, unref: vi.fn(), once: vi.fn() } as unknown as ChildProcess;
+    const code = await runLifecycleCli(
+      "start",
+      ["--state-dir", ".keiko"],
+      c.io,
+      {},
+      {
+        cwd: root,
+        homedir: () => root,
+        spawnFn: (command, args, opts) => {
+          spawned.push({ command, args, opts });
+          return child;
+        },
+        fetchImpl: () => Promise.resolve(Response.json({ version: SDK_VERSION }, { status: 200 })),
+        isProcessAlive: () => true,
+        isPortAvailable: () => Promise.resolve(true),
+        killProcess: vi.fn(),
+        sleep: () => Promise.resolve(),
+      },
+    );
+
+    // The refusal happens before spawn: no child process is ever launched, and the victim
+    // file's content is byte-identical before and after.
+    expect(spawned).toEqual([]);
+    expect(code).toBe(1);
+    expect(readFileSync(victim, "utf8")).toBe(original);
+    // The hard link itself is left in place — never unlinked, unlike the pid file's
+    // unlink-and-recreate self-heal (ui.log has no such self-heal path).
+    expect(lstatSync(join(stateDir, "ui.log")).nlink).toBeGreaterThan(1);
+  });
+
+  it("refuses a FIFO planted at ui.log without hanging (O_NONBLOCK)", async (ctx) => {
+    if (process.platform === "win32") ctx.skip();
+    const root = makeRoot();
+    const stateDir = join(root, ".keiko");
+    mkdirSync(stateDir, { recursive: true, mode: 0o700 });
+    execFileSync("mkfifo", [join(stateDir, "ui.log")]);
+
+    const c = makeIo();
+    const spawned: unknown[] = [];
+    const child = { pid: 12345, unref: vi.fn(), once: vi.fn() } as unknown as ChildProcess;
+    const code = await runLifecycleCli(
+      "start",
+      ["--state-dir", ".keiko"],
+      c.io,
+      {},
+      {
+        cwd: root,
+        homedir: () => root,
+        spawnFn: (command, args, opts) => {
+          spawned.push({ command, args, opts });
+          return child;
+        },
+        fetchImpl: () => Promise.resolve(Response.json({ version: SDK_VERSION }, { status: 200 })),
+        isProcessAlive: () => true,
+        isPortAvailable: () => Promise.resolve(true),
+        killProcess: vi.fn(),
+        sleep: () => Promise.resolve(),
+      },
+    );
+
+    // A blocking open() with no reader present would hang this test forever; reaching this
+    // assertion at all proves the open failed fast instead. No child is ever launched.
+    expect(spawned).toEqual([]);
+    expect(code).toBe(1);
+  }, 10_000);
+
+  it("refuses a directory planted at ui.log", async (ctx) => {
+    if (process.platform === "win32") ctx.skip();
+    const root = makeRoot();
+    const stateDir = join(root, ".keiko");
+    mkdirSync(stateDir, { recursive: true, mode: 0o700 });
+    mkdirSync(join(stateDir, "ui.log"));
+
+    const c = makeIo();
+    const spawned: unknown[] = [];
+    const child = { pid: 12345, unref: vi.fn(), once: vi.fn() } as unknown as ChildProcess;
+    const code = await runLifecycleCli(
+      "start",
+      ["--state-dir", ".keiko"],
+      c.io,
+      {},
+      {
+        cwd: root,
+        homedir: () => root,
+        spawnFn: (command, args, opts) => {
+          spawned.push({ command, args, opts });
+          return child;
+        },
+        fetchImpl: () => Promise.resolve(Response.json({ version: SDK_VERSION }, { status: 200 })),
+        isProcessAlive: () => true,
+        isPortAvailable: () => Promise.resolve(true),
+        killProcess: vi.fn(),
+        sleep: () => Promise.resolve(),
+      },
+    );
+
+    expect(spawned).toEqual([]);
+    expect(code).toBe(1);
+    // The directory is left exactly as planted — never removed or written into.
+    expect(lstatSync(join(stateDir, "ui.log")).isDirectory()).toBe(true);
   });
 });

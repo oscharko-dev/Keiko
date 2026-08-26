@@ -135,10 +135,11 @@ different transport, per §5 of `AGENTS.md`.
 is behaviourally true today because `shouldPromote` is access-history-blind. The two invocations of
 `planMemoryMaintenance`, however, ask the same question against different-shaped state:
 
-- Capture-time promotion (`memory-salience.ts::promoteEligibleRecord`, called by
-  `persistCandidate`) invokes `planMemoryMaintenance([record], EMPTY_SALIENCE_ACCESS_STATS,
-  { nowMs: record.createdAt })` — a synthetic single-record context with an always-empty access-stats
-  map and `nowMs` pinned to the record's own `createdAt` (age always zero).
+- Capture-time promotion (`memory-capture-policy.ts::promoteEligibleMemoryRecord`, called by
+  `memory-salience.ts::persistCandidate`) invokes `planMemoryMaintenance([record],
+  EMPTY_CAPTURE_ACCESS_STATS, { nowMs: record.createdAt })` — a synthetic single-record context with
+  an always-empty access-stats map and `nowMs` pinned to the record's own `createdAt` (age always
+  zero).
 - The standing maintenance sweep (`memory-maintenance-handlers.ts::runPromotionPhase`, Phase 1 of
   `runMemoryMaintenance`) invokes `planMemoryMaintenance(beforePromote, promoteStats,
   { nowMs, policy: planPolicy })` over the full vault snapshot with real access-stats and the

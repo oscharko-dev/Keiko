@@ -160,6 +160,21 @@ describe("retrieveMemoryContext — input validation", () => {
     }
   });
 
+  // #2906 round-3 review — finiteness alone still accepted a negative epoch. With nowMs = -1,
+  // every normal positive validUntil reads as "in the future" (re-admitting an already-expired
+  // memory) and recency treats every record as future/fresh, instead of failing closed at the
+  // same boundary the NaN/+Infinity cases above already guard.
+  it("throws RetrievalError('invalid-clock') when nowMs is negative", () => {
+    const { port } = portReturning({});
+    try {
+      retrieveMemoryContext({ scopes: [userScope()], nowMs: -1 }, port);
+      throw new Error("expected throw");
+    } catch (e) {
+      expect(e).toBeInstanceOf(RetrievalError);
+      expect((e as RetrievalError).code).toBe("invalid-clock");
+    }
+  });
+
   // #2906 KEIKO-0696 — mmrLambda was the only numeric tuning field without validation; NaN
   // silently degraded reorderByMmr to always-pick-first-remaining instead of failing closed.
   it("throws RetrievalError('invalid-threshold') when mmrLambda is NaN", () => {

@@ -274,6 +274,7 @@ import {
 import { createSessionRegistry } from "./coding-app-session/sessionRegistry.js";
 import type { SessionPairingPort } from "./coding-app-session/sessionPairingPort.js";
 import { resolveLauncherSessionPairingPort } from "./coding-app-session/launcherSessionPairingPort.js";
+import { CodingAppSessionDenialWindows } from "./coding-app-session/denialWindows.js";
 import {
   createOpenCodeGatewayReadinessRegistry,
   type OpenCodeGatewayReadinessRegistry,
@@ -527,6 +528,12 @@ export interface UiHandlerDeps {
    * present, in which case it fails closed to a content-free projection.
    */
   readonly codingAppSessionChannel?: CodingAppSessionChannel | undefined;
+  // KEIKO-0838 follow-up (#2906 round 3): graph-scoped pairing/rotate denial-window counters for
+  // the aggregate diagnostic in codingAppSessionRoutes.ts. One instance per composed deps graph
+  // (see assembleUiHandlerDeps), reset on disposal, so two independently composed `UiHandlerDeps`
+  // instances never share or cross-pollute denial counts. Every real consumer resolves through
+  // resolveCodingAppSessionDenialWindows -- never a bare module-level instance.
+  readonly codingAppSessionDenialWindows?: CodingAppSessionDenialWindows | undefined;
   /** Process-memory #2479 feed; never part of persistence or unauthenticated runtime SSE. */
   readonly codingSafeActivityProjection?: CodingSafeActivityProjection | undefined;
   /** Content-free control-plane capability; false/absent means no qualified runtime host. */
@@ -1638,11 +1645,14 @@ function buildUpdateSession(options: {
   readonly updateLocalState: UpdateLocalStateManager;
   readonly updateRemediation: UpdateRemediationManager;
   readonly runtimeConfig: RuntimeGatewayConfig;
+  readonly diagnostics: ServerDiagnosticSink | undefined;
 }): UpdateSessionManager {
   if (options.injected !== undefined) return options.injected;
   return createUpdateSessionManager({
     processEnv: options.env,
-    lock: createStateDirUpdateSessionLock(resolveUpdateStateDir(options.env)),
+    lock: createStateDirUpdateSessionLock(resolveUpdateStateDir(options.env), {
+      diagnostics: options.diagnostics,
+    }),
     portableStager: createPortableUpdateStager({
       env: options.env,
       localState: options.updateLocalState,
@@ -2798,6 +2808,7 @@ function buildPeripherals(args: BuildPeripheralsArgs): PeripheralManagers {
       updateLocalState,
       updateRemediation,
       runtimeConfig: args.runtimeConfig,
+      diagnostics: args.options.diagnostics,
     }),
     updatePreflight: args.options.updatePreflight,
     updateLocalState,
@@ -3546,13 +3557,23 @@ function assembleUiHandlerDeps(args: UiHandlerDepsAssemblyArgs): UiHandlerDeps {
   // instances this graph's deps object exposes -- see its own comment for why disposal must reach
   // these registries, not just construct them fresh per graph.
   const atlassianRegistries = atlassianConnectorRegistryFields(args.options);
+  // #2906 round 3: constructed once per composed deps graph (mirrors atlassianRegistries above)
+  // so createUiHandlerDispose can reset the SAME instance this graph's deps object exposes --
+  // see denialWindows.ts for why this must not be a module singleton.
+  const codingAppSessionDenialWindows = new CodingAppSessionDenialWindows();
   return {
     ...buildBaseUiHandlerDeps(args),
     ...buildRuntimeUiHandlerDeps(args, services),
     ...buildIntegrationUiHandlerDeps(args),
     ...buildOptionalUiHandlerDeps(args, services),
     ...atlassianRegistries,
-    dispose: createUiHandlerDispose(args, services, atlassianRegistries),
+    codingAppSessionDenialWindows,
+    dispose: createUiHandlerDispose(
+      args,
+      services,
+      atlassianRegistries,
+      codingAppSessionDenialWindows,
+    ),
   };
 }
 
@@ -3839,6 +3860,7 @@ function createUiHandlerDispose(
   args: UiHandlerDepsAssemblyArgs,
   services: UiHandlerRuntimeServices,
   atlassianRegistries: ReturnType<typeof atlassianConnectorRegistryFields>,
+  codingAppSessionDenialWindows: CodingAppSessionDenialWindows,
 ): UiHandlerDeps["dispose"] {
   return async (): Promise<void> => {
     try {
@@ -3861,6 +3883,9 @@ function createUiHandlerDispose(
       // away, so nothing on this graph outlives it as observable state on the NEXT graph.
       atlassianRegistries.atlassianActionApprovalRegistry?.reset();
       atlassianRegistries.atlassianSyncJobRegistry?.reset();
+      // #2906 round 3: same rationale as the Atlassian registries above -- drop this graph's
+      // denial-window counters so nothing outlives it as observable state on the next graph.
+      codingAppSessionDenialWindows.reset();
       args.bundle.dispose?.();
     }
   };

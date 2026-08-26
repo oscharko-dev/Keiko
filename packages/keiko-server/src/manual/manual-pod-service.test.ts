@@ -172,6 +172,35 @@ describe("ManualPodJobRegistry", () => {
     expect(registry.get("old-terminal")).toBeUndefined();
     expect(registry.get(`run-${String(MAX_RETAINED_JOBS - 1)}`)?.state).toBe("running");
   });
+
+  it("aborts the oldest running victim's controller when every retained slot is still active", () => {
+    // Regression for the round-3 finding: when no terminal job exists to evict, evictIfFull()
+    // previously dropped the oldest RUNNING entry's registry record without touching its
+    // controller. The underlying crawl/index pipeline (which cooperatively honors
+    // controller.signal -- see refreshRun/createRun) kept running invisibly: no longer reachable
+    // via get()/patch(), so it could not be polled or cancelled, and its eventual terminal patch
+    // would silently no-op. Fill the registry to capacity with only running jobs, then register
+    // one more and assert the evicted victim's controller was actually aborted.
+    const registry = new ManualPodJobRegistry();
+    const controllers: AbortController[] = [];
+    for (let i = 0; i < MAX_RETAINED_JOBS; i += 1) {
+      const controller = new AbortController();
+      controllers.push(controller);
+      registry.register(initialJob(`run-${String(i)}`, "refresh", "c", "s"), controller);
+    }
+    expect(controllers[0]?.signal.aborted).toBe(false);
+
+    registry.register(initialJob("run-new", "refresh", "c", "s"), new AbortController());
+
+    // The oldest running job (insertion order) is the fallback victim: its registry entry is gone
+    // AND its work was actually stopped, not merely forgotten.
+    expect(registry.get("run-0")).toBeUndefined();
+    expect(controllers[0]?.signal.aborted).toBe(true);
+    // Every other running job survives untouched, and the new registration succeeded.
+    expect(registry.get(`run-${String(MAX_RETAINED_JOBS - 1)}`)?.state).toBe("running");
+    expect(controllers[1]?.signal.aborted).toBe(false);
+    expect(registry.get("run-new")?.state).toBe("running");
+  });
 });
 
 describe("initialJob", () => {

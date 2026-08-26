@@ -133,7 +133,7 @@ export function createKeikoReferencesProvider(
       }
       sequence += 1;
       const request = buildRequest(deps, documentUri, position, context, sequence);
-      const controller = controllerForToken(token);
+      const { controller, dispose } = controllerForToken(token);
       const query: EditorReferencesQuery = { request, documentText: model.getValue() };
       return runLanguageBridgeCall<EditorReferencesResponse, readonly MonacoReferenceLocation[]>({
         operation: "references",
@@ -144,6 +144,8 @@ export function createKeikoReferencesProvider(
         present: (response) =>
           referencesResponseToMonaco(response, model.uri, deps.uriForPath ?? defaultUriForPath),
         report: deps.report,
+      }).finally(() => {
+        dispose();
       });
     },
   };

@@ -134,6 +134,7 @@ export function verificationAuthorityDenyReason(
 ): EditorAgentActionDenyReason {
   if (reason === "expired") return "authority-expired";
   if (reason === "budget-exceeded") return "authority-budget-exceeded";
+  if (reason === "revoked") return "authority-revoked";
   return "authority-invalid";
 }
 

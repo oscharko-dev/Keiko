@@ -88,17 +88,13 @@ describe("browser icon assets", () => {
     expect(favicon).not.toContain("<rect");
   });
 
-  it("keeps the root and /assets keiko-logo.svg copies byte-for-byte identical (KEIKO-0627)", () => {
-    // packages/keiko-ui/public/keiko-logo.svg (ADR-0024 D5's PWA-icon source of truth) and
-    // packages/keiko-ui/public/assets/keiko-logo.svg (referenced at runtime by Header.tsx,
-    // AppShell.tsx, and other desktop components) are two independent, committed copies of the
-    // same mark with no build step keeping them in sync. This pins the invariant so a future
-    // edit to only one path is caught before it ships a stale PWA-icon source or a stale
-    // runtime logo out of sync with the other.
-    const root = readFileSync(resolve(PUBLIC_DIR, "keiko-logo.svg"));
-    const assets = readFileSync(resolve(PUBLIC_DIR, "assets", "keiko-logo.svg"));
-    expect(assets.equals(root)).toBe(true);
-  });
+  // #2906 round 3 (comment 3865329060): KEIKO-0627's premise — two independent, committed
+  // copies of keiko-logo.svg with no build step keeping them in sync — no longer holds.
+  // packages/keiko-ui/public/assets/keiko-logo.svg is gone; every runtime reference (Header.tsx,
+  // AppShell.tsx, ChatWindow.tsx, VoiceDialogMode.tsx, PermControl.tsx) now points at the one
+  // committed file this suite already exercises above (ADR-0024 D5's PWA-icon source of truth).
+  // scripts/__tests__/keiko-logo-single-source.test.mjs pins that the duplicate stays gone and
+  // no source file regresses to referencing its old path.
 
   it("ships every legacy manifest icon path on disk", () => {
     interface IconEntry {

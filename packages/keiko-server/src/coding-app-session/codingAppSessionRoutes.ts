@@ -14,6 +14,7 @@ import {
 } from "./channelContract.js";
 import type { UiHandlerDeps } from "../deps.js";
 import { emitServerDiagnostic, DEFAULT_SERVER_DIAGNOSTIC_SUMMARY } from "../diagnostics-log.js";
+import { UNKNOWN_CORRELATION_ID } from "../correlation.js";
 import {
   STREAMING,
   type HandlerOutcome,
@@ -22,6 +23,7 @@ import {
   type RouteResult,
 } from "../routes.js";
 import { SSE_HEADERS } from "../sse.js";
+import { resolveCodingAppSessionDenialWindows } from "./denialWindows.js";
 import {
   APP_SESSION_COOKIE_MAX_AGE_SECONDS,
   clearSessionCookies,
@@ -37,30 +39,9 @@ const MAX_PAIRING_BODY_BYTES = 8 * 1_024;
 // oracle. The window is coarse (60 s) and the threshold is high enough to avoid emitting on
 // isolated retries; only when denials cluster (>= DENIAL_ALERT_THRESHOLD in one window) do we
 // emit ONE aggregate ServerDiagnosticRecord carrying just the occurrenceCount -- never per-
-// attempt detail (no attestation content, no cookie tokens, no session ids, no timestamps).
-const DENIAL_WINDOW_MS = 60_000;
-const DENIAL_ALERT_THRESHOLD = 10;
-interface DenialWindow {
-  windowStartMs: number;
-  count: number;
-  emitted: boolean;
-}
-const pairingDenials: DenialWindow = { windowStartMs: 0, count: 0, emitted: false };
-const rotateDenials: DenialWindow = { windowStartMs: 0, count: 0, emitted: false };
-
-function recordDenial(window: DenialWindow, now: number, emit: (count: number) => void): void {
-  if (now - window.windowStartMs >= DENIAL_WINDOW_MS) {
-    window.windowStartMs = now;
-    window.count = 0;
-    window.emitted = false;
-  }
-  window.count += 1;
-  if (!window.emitted && window.count >= DENIAL_ALERT_THRESHOLD) {
-    window.emitted = true;
-    emit(window.count);
-  }
-}
-
+// attempt detail (no attestation content, no cookie tokens, no session ids, no timestamps). The
+// window counters themselves are graph-scoped (denialWindows.ts, #2906 round 3) rather than module
+// globals, so two independently composed `UiHandlerDeps` graphs never share or cross-pollute counts.
 function emitPairingDenialAggregate(
   deps: UiHandlerDeps,
   operation: "coding-app-session.pair" | "coding-app-session.rotate",
@@ -68,7 +49,12 @@ function emitPairingDenialAggregate(
 ): void {
   if (deps.diagnostics === undefined) return;
   emitServerDiagnostic(deps.diagnostics, {
-    correlationId: "",
+    // No single request owns this aggregate (it summarizes many denied attempts across the
+    // window), so there is no per-request correlation id to thread -- UNKNOWN_CORRELATION_ID is
+    // the sanctioned shape-valid stand-in. An empty string is not a valid correlation id and is
+    // rewritten to INVALID_CORRELATION_ID_MARKER by the sanitizer, which is indistinguishable from
+    // a hostile producer value and breaks support-timeline joins for this diagnostic.
+    correlationId: UNKNOWN_CORRELATION_ID,
     timestamp: new Date().toISOString(),
     operation,
     source: "coding-app-session-routes",
@@ -145,7 +131,7 @@ export async function handleCodingAppSessionPair(
   const result = channel.pair(attestation);
   if (!result.paired) {
     // KEIKO-0838: aggregate denials into one rate-limited, count-only diagnostic per window.
-    recordDenial(pairingDenials, Date.now(), (count) => {
+    resolveCodingAppSessionDenialWindows(deps).recordPairingDenial(Date.now(), (count) => {
       emitPairingDenialAggregate(deps, "coding-app-session.pair", count);
     });
   }
@@ -233,7 +219,7 @@ export function handleCodingAppSessionRotate(ctx: RouteContext, deps: UiHandlerD
   const result = channel.rotate(readSessionCookie(ctx.req));
   if (!result.rotated) {
     // KEIKO-0838: same aggregate-diagnostic pattern as pair(), independent window/counter.
-    recordDenial(rotateDenials, Date.now(), (count) => {
+    resolveCodingAppSessionDenialWindows(deps).recordRotateDenial(Date.now(), (count) => {
       emitPairingDenialAggregate(deps, "coding-app-session.rotate", count);
     });
   }

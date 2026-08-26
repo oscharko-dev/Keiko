@@ -479,6 +479,16 @@ export class VoiceControlConnection {
         if (message.profile !== this.session.profile) {
           // No reason field: VoiceUnavailableReason is a fixed vocabulary in gateway.ts (no
           // "profile-mismatch" member), and a policy.decision with just "deny" is valid.
+          // #2906 round 3: the WS frame alone is ephemeral -- record the denial on the activity
+          // log too (body-free: a fixed reason code only, never the requested or negotiated
+          // profile) so the timeline can reconstruct why capability selection failed, not just
+          // that this particular client session saw a "deny".
+          getServerLogger().info({
+            category: "http",
+            op: "voice.realtime.policy-decision",
+            correlationId: this.correlationId,
+            extra: { decision: "deny", reason: "profile-mismatch" },
+          });
           this.emit({ kind: "policy.decision", decision: "deny" });
           return;
         }

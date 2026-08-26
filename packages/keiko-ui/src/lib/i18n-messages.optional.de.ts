@@ -807,6 +807,8 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
   "searchPanel.replace.noPreviewComputed": "Es wurde noch keine Ersetzungsvorschau berechnet.",
   "searchPanel.replace.omittedSuffix": " {count} Dateien ausgelassen.",
   "searchPanel.replace.rootPrefixedStatus": "{rootLabel}: {message}",
+  "searchPanel.replace.searchLimitSuffix":
+    " Die Suche hat nicht jeden Treffer erfasst; diese Vorschau ist möglicherweise unvollständig.",
   "searchPanel.replace.summary": "{editCount} Ersetzungen in {fileCount} Dateien.{omitted}",
   "searchPanel.rootErrors.one": "Ein Root konnte nicht {operation} werden.",
   "searchPanel.rootErrors.operationPreviewed": "in der Vorschau geprüft",

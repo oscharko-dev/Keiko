@@ -43,14 +43,7 @@ export function personaLabel(persona: VoicePersona): string {
 function KeikoLogoGlyph(): ReactNode {
   return (
     // eslint-disable-next-line @next/next/no-img-element -- this matches the header logo treatment and keeps the icon unwrapped inside the fixed-size button.
-    <img
-      src="/assets/keiko-logo.svg"
-      alt=""
-      width={34}
-      height={34}
-      aria-hidden="true"
-      decoding="async"
-    />
+    <img src="/keiko-logo.svg" alt="" width={34} height={34} aria-hidden="true" decoding="async" />
   );
 }
 

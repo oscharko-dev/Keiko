@@ -80,11 +80,11 @@ export function createLocationNavigationProvider(
       const request = requestFor(deps, documentUri, position, sequence);
       latest = request.request;
       const query: EditorDefinitionQuery = { request, documentText: model.getValue() };
-      const signal = controllerForToken(token).signal;
+      const { controller, dispose } = controllerForToken(token);
       return runLanguageBridgeCall<EditorDefinitionResponse, readonly MonacoLocation[] | undefined>(
         {
           operation: deps.operation,
-          resolve: () => deps.resolve(query, signal),
+          resolve: () => deps.resolve(query, controller.signal),
           isDiscarded: (response) => shouldDiscardAgainstLatest(response.request, latest),
           discardedValue: undefined,
           failedValue: EMPTY_LOCATIONS,
@@ -97,7 +97,9 @@ export function createLocationNavigationProvider(
             ),
           report: deps.report,
         },
-      );
+      ).finally(() => {
+        dispose();
+      });
     },
   };
 }

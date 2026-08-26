@@ -84,8 +84,13 @@ const LOCAL_KNOWLEDGE_EN_MESSAGES = {
   "localKnowledge.nativeDialog.busy": "A native dialog is already open. Close it first.",
   "localKnowledge.nativeDialog.unavailable":
     "Native dialogs are unavailable on this platform. Enter the path manually.",
-  "localKnowledge.nativeDialog.partialSelection":
-    "{count} selected item(s) could not be added and were skipped.",
+  // #2906 round 3: "{count} selected item(s)" was wrong for count === 1 ("1 selected item(s)
+  // ... were skipped" -- wrong article and wrong verb number). Branch on count like the
+  // established quickAccess.result.singular/.plural pair instead of a fake plural marker.
+  "localKnowledge.nativeDialog.partialSelection.singular":
+    "{count} selected item could not be added and was skipped.",
+  "localKnowledge.nativeDialog.partialSelection.plural":
+    "{count} selected items could not be added and were skipped.",
   "localKnowledge.detail.loading": "Loading Knowledge Pod…",
   "localKnowledge.detail.pageLabel": "Knowledge Pod detail",
   "localKnowledge.detail.noSelection":
@@ -579,7 +584,9 @@ const LOCAL_KNOWLEDGE_DE_MESSAGES: LocalKnowledgeMessageCatalog = {
     "Es ist bereits ein nativer Dialog geöffnet. Schließe ihn zuerst.",
   "localKnowledge.nativeDialog.unavailable":
     "Native Dialoge sind auf dieser Plattform nicht verfügbar. Gib den Pfad manuell ein.",
-  "localKnowledge.nativeDialog.partialSelection":
+  "localKnowledge.nativeDialog.partialSelection.singular":
+    "{count} ausgewähltes Element konnte nicht hinzugefügt werden und wurde übersprungen.",
+  "localKnowledge.nativeDialog.partialSelection.plural":
     "{count} ausgewählte Elemente konnten nicht hinzugefügt werden und wurden übersprungen.",
   "localKnowledge.detail.loading": "Knowledge Pod wird geladen…",
   "localKnowledge.detail.pageLabel": "Knowledge Pod-Detailansicht",

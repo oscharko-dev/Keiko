@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { DatabaseSync } from "node:sqlite";
+import { CODING_WORKBENCH_RUNTIME_FAILURE_CODES } from "@oscharko-dev/keiko-contracts";
 import { runMigrations } from "../store/schema.js";
 import {
   createCodingRuntimeSnapshotStore,
@@ -50,6 +51,26 @@ describe("CodingRuntimeSnapshotStore", () => {
 
     expect(s.get("run-1")?.result).toEqual(result);
     expect(JSON.stringify(s.get("run-1"))).not.toContain("stdout body");
+  });
+
+  // #2906 round-3 review (KEIKO-0532): coding_runtime_snapshots.failure_code is a hand-maintained
+  // CHECK constraint copy of CODING_WORKBENCH_RUNTIME_FAILURE_CODES. A contract literal the
+  // constraint does not also list makes an otherwise-valid terminal transition fail with
+  // SQLITE_CONSTRAINT instead of recording the failure. Round-trip every literal so the two lists
+  // are pinned in sync, not just the ones a hand-picked example happens to cover.
+  it("round-trips every CODING_WORKBENCH_RUNTIME_FAILURE_CODES literal as a terminal failure_code", () => {
+    for (const failureCode of CODING_WORKBENCH_RUNTIME_FAILURE_CODES) {
+      const s = store();
+      s.create(snapshot());
+      const failed = s.transition("run-1", {
+        state: "failed",
+        revision: 1,
+        updatedAt: at,
+        failureCode,
+      });
+      expect(failed.failureCode).toBe(failureCode);
+      expect(s.get("run-1")?.failureCode).toBe(failureCode);
+    }
   });
 
   it("persists only lifecycle snapshots and holds the recovery slot after acknowledgement", () => {

@@ -9,6 +9,7 @@ import {
   type DebugProvisionalReservationInput,
   type DebugReservationPromotion,
   type DebugReservationInput,
+  type DebugSessionAbandonedEvidence,
   type DebugSessionRegistry,
 } from "./debugSessionRegistry.js";
 
@@ -932,6 +933,47 @@ describe("DebugSessionRegistry canonical lifecycle", () => {
     fail = false;
     await stopping;
     expect(registry.session("session_a")).toBeUndefined();
+  });
+
+  it("bounds the evidence-append retry and abandons the session instead of retrying forever (#2906 round 3, P1)", async () => {
+    vi.useFakeTimers();
+    try {
+      const abandoned: DebugSessionAbandonedEvidence[] = [];
+      const registry = createDebugSessionRegistry({
+        appendEvidence: (_partition, evidence) =>
+          evidence.eventKind === "stop" ? Promise.reject(new Error("private")) : Promise.resolve(),
+        now: () => 1,
+        emitOutputLimit: ignoreOutputLimit,
+        onEvidenceAbandoned: (input) => {
+          abandoned.push(input);
+        },
+      });
+      await registry.reserve(identity());
+      const stopping = registry.stop("session_a");
+      await vi.waitFor(() => {
+        expect(registry.session("session_a")?.health).toBe("evidencePending");
+      });
+
+      // appendEvidence never recovers (a permanently broken evidence store). Advance far past the
+      // full exponential-backoff budget (~92s across 9 scheduled retries) instead of retrying
+      // forever -- without the bound, this would never settle and the test would time out.
+      await vi.advanceTimersByTimeAsync(200_000);
+      await stopping;
+
+      expect(registry.session("session_a")).toBeUndefined();
+      expect(registry.health()).toBe("ready");
+      expect(abandoned).toEqual([
+        { sessionId: "session_a", workspacePartitionKey: "partition_a", attempts: 10 },
+      ]);
+
+      // Capacity is no longer blocked by the abandoned session (the original bug: registry health
+      // stayed evidencePending forever, so EVERY new session was rejected indefinitely).
+      await expect(
+        registry.reserve({ ...identity("session_b", "partition_b"), planId: "plan_b" }),
+      ).resolves.toBeDefined();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("distinguishes workspace capacity from replay and preserves the first partition", async () => {

@@ -838,10 +838,13 @@ function decodedApprovalIdParam(ctx: RouteContext): string | undefined {
 
 // GET /api/atlassian-connectors/action-approvals
 export function handleListAtlassianConnectorActionApprovals(
-  _ctx: RouteContext,
+  ctx: RouteContext,
   deps: UiHandlerDeps,
 ): Promise<RouteResult> | RouteResult {
-  const guard = requireConnectorDeps(deps);
+  // #2906 round 3: this was the one remaining approval endpoint that dropped the request's own
+  // correlation id from its unavailable-guard 503, so that failure alone could not be joined to
+  // its support-bundle record while every sibling approval handler already threads ctx.correlationId.
+  const guard = requireConnectorDeps(deps, ctx.correlationId);
   if (isRouteResult(guard)) return guard;
   return {
     status: 200,
@@ -903,6 +906,33 @@ function pendingEntryJqlDigest(entry: PendingAtlassianActionEntry): string | und
   return entry.payload.kind === "live-search" ? entry.payload.liveSearch.jqlDigest : undefined;
 }
 
+// KEIKO-0565-r3 (round-3 review, PR #3289): registry.consume() already made the single-use
+// approval claim atomic BEFORE executeApprovedEntry runs, so every early exit in this function --
+// not only the reservation-denied branch below -- must finalize a closed terminal outcome using
+// the approval's OWN correlationId. Without this, a prerequisite that vanished between approval
+// and execute (credential expired/revoked/deleted mid-flight) left the consumed approval
+// irretrievably gone with no terminal record at all: an operator reconstructing the trail from
+// the activity log would see the pending-review record and then nothing, never learning the
+// approved action was attempted and failed.
+function recordApprovedEntryPrerequisiteFailure(
+  deps: UiHandlerDeps,
+  entry: PendingAtlassianActionEntry,
+  reasonCode: AtlassianConnectorActivityReasonCode,
+): void {
+  const jqlDigest = pendingEntryJqlDigest(entry);
+  recordAtlassianActionActivity(deps, {
+    connectorId: entry.approval.connectorId,
+    actionType: entry.approval.actionType,
+    disposition: "review-required",
+    outcome: "failed",
+    reasonCode,
+    ...(entry.approval.targetRef === undefined ? {} : { targetRef: entry.approval.targetRef }),
+    correlationId: entry.approval.correlationId,
+    durationMs: 0,
+    ...(jqlDigest === undefined ? {} : { jqlDigest }),
+  });
+}
+
 async function executeApprovedEntry(
   deps: UiHandlerDeps,
   guard: AtlassianConnectorCredentialDeps,
@@ -910,6 +940,11 @@ async function executeApprovedEntry(
 ): Promise<RouteResult> {
   const credential = guard.custody.getMetadata(entry.authRef);
   if (credential === undefined) {
+    // The credential backing this already-approved, already-consumed entry vanished (revoked,
+    // expired, or deleted) between approval and this execute call. The single-use claim stays
+    // atomic -- the approval is not retried or resurrected -- but the outcome is still finalized
+    // as a closed `failed`/`auth-failed` activity record instead of being silently dropped.
+    recordApprovedEntryPrerequisiteFailure(deps, entry, "auth-failed");
     throw new AtlassianSyncRequestError(
       404,
       "CREDENTIAL_NOT_FOUND",

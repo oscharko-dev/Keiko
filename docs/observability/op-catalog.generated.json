@@ -11,25 +11,31 @@
     {
       "op": "process.exiting",
       "category": "process",
-      "site": "packages/keiko-cli/src/ui.ts:473",
+      "site": "packages/keiko-cli/src/ui.ts:569",
       "package": "keiko-cli"
     },
     {
       "op": "process.fatal",
       "category": "process",
-      "site": "packages/keiko-cli/src/process-guards.ts:119",
+      "site": "packages/keiko-cli/src/process-guards.ts:132",
+      "package": "keiko-cli"
+    },
+    {
+      "op": "process.fatal",
+      "category": "process",
+      "site": "packages/keiko-cli/src/ui.ts:416",
       "package": "keiko-cli"
     },
     {
       "op": "process.heartbeat",
       "category": "process",
-      "site": "packages/keiko-cli/src/ui.ts:726",
+      "site": "packages/keiko-cli/src/ui.ts:822",
       "package": "keiko-cli"
     },
     {
       "op": "process.started",
       "category": "process",
-      "site": "packages/keiko-cli/src/ui.ts:841",
+      "site": "packages/keiko-cli/src/ui.ts:937",
       "package": "keiko-cli"
     },
     {
@@ -329,13 +335,13 @@
     {
       "op": "store.encryption-checkpoint-degraded",
       "category": "diagnostic",
-      "site": "packages/keiko-local-knowledge/src/store-content-encryption.ts:342",
+      "site": "packages/keiko-local-knowledge/src/store-content-encryption.ts:362",
       "package": "keiko-local-knowledge"
     },
     {
       "op": "store.encryption-migrated",
       "category": "diagnostic",
-      "site": "packages/keiko-local-knowledge/src/store-content-encryption.ts:400",
+      "site": "packages/keiko-local-knowledge/src/store-content-encryption.ts:423",
       "package": "keiko-local-knowledge"
     },
     {
@@ -707,7 +713,7 @@
     {
       "op": "<dynamic>",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/diagnostics-log.ts:299",
+      "site": "packages/keiko-server/src/diagnostics-log.ts:308",
       "package": "keiko-server"
     },
     {
@@ -1002,6 +1008,12 @@
       "op": "store.opened",
       "category": "setup",
       "site": "packages/keiko-server/src/store/db.ts:929",
+      "package": "keiko-server"
+    },
+    {
+      "op": "voice.realtime.policy-decision",
+      "category": "http",
+      "site": "packages/keiko-server/src/voice-realtime.ts:488",
       "package": "keiko-server"
     },
     {

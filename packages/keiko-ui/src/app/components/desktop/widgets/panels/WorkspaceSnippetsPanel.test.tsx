@@ -3,6 +3,7 @@ import { axe } from "jest-axe";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
+  EDITOR_M7_SNIPPET_BODY_MAX_UTF8_BYTES,
   EDITOR_M7_SNIPPET_COLLECTION_VERSION,
   type EditorM7WorkspaceSnippet,
   type EditorM7WorkspaceSnippetSnapshot,
@@ -18,6 +19,19 @@ const snippetsView = vi.hoisted(() => ({
 vi.mock("../cards/useWorkspaceSnippets", () => ({
   useWorkspaceSnippets: (): WorkspaceSnippetsView => snippetsView.current,
 }));
+
+// #2906 round 3: a spy that still calls through to the real compiler, so every OTHER test in this
+// file keeps its real behavior — this only adds observability for the preflight-bound/memoization
+// assertions below (never invoking, or not re-invoking, the full compiler).
+const contractsSpies = vi.hoisted(() => ({
+  compileEditorM7SnippetBody: vi.fn(),
+}));
+
+vi.mock("@oscharko-dev/keiko-contracts", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@oscharko-dev/keiko-contracts")>();
+  contractsSpies.compileEditorM7SnippetBody.mockImplementation(actual.compileEditorM7SnippetBody);
+  return { ...actual, compileEditorM7SnippetBody: contractsSpies.compileEditorM7SnippetBody };
+});
 
 const WORKSPACE_FINGERPRINT = "abcdef1234567890";
 
@@ -71,6 +85,7 @@ describe("WorkspaceSnippetsPanel", () => {
   beforeEach(() => {
     vi.spyOn(Date, "now").mockReturnValue(1_700_000_000_000);
     snippetsView.current = view();
+    contractsSpies.compileEditorM7SnippetBody.mockClear();
   });
 
   afterEach(() => {
@@ -144,6 +159,45 @@ describe("WorkspaceSnippetsPanel", () => {
       "This snippet body was rejected as unsafe or too large.",
     );
     expect(screen.getByRole("button", { name: "Save snippet" })).toBeDisabled();
+  });
+
+  it("rejects an oversized body via the cheap preflight bound without invoking the full compiler (#2906 round 3)", () => {
+    renderPanel("/repo");
+    contractsSpies.compileEditorM7SnippetBody.mockClear();
+
+    fireEvent.change(screen.getByLabelText("Name"), { target: { value: "Huge" } });
+    fireEvent.change(screen.getByLabelText("Prefix"), { target: { value: "huge" } });
+    const oversized = "x".repeat(EDITOR_M7_SNIPPET_BODY_MAX_UTF8_BYTES + 1);
+    fireEvent.change(screen.getByLabelText("Body"), { target: { value: oversized } });
+
+    // Same rejection contract as a body the full compiler rejects (UNSAFE_SNIPPET), reached
+    // WITHOUT ever calling split() + full snippet validation/UTF-8 accounting on the oversized
+    // string.
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument(); // no Preview click yet
+    expect(screen.getByRole("button", { name: "Save snippet" })).toBeDisabled();
+    expect(contractsSpies.compileEditorM7SnippetBody).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole("button", { name: "Preview" }));
+    expect(screen.getByRole("alert")).toHaveTextContent(
+      "This snippet body was rejected as unsafe or too large.",
+    );
+    // The click-triggered Preview path shares the same preflight helper, so it also never reaches
+    // the full compiler for this oversized body.
+    expect(contractsSpies.compileEditorM7SnippetBody).not.toHaveBeenCalled();
+  });
+
+  it("does not recompile the body when an unrelated field changes (memoized by draft.body, #2906 round 3)", () => {
+    renderPanel("/repo");
+    fireEvent.change(screen.getByLabelText("Body"), {
+      target: { value: "const safe = 1;\n$0" },
+    });
+    contractsSpies.compileEditorM7SnippetBody.mockClear();
+
+    fireEvent.change(screen.getByLabelText("Name"), { target: { value: "Renamed" } });
+    fireEvent.change(screen.getByLabelText("Prefix"), { target: { value: "renamed" } });
+    fireEvent.change(screen.getByLabelText("Include glob"), { target: { value: "src/**" } });
+
+    expect(contractsSpies.compileEditorM7SnippetBody).not.toHaveBeenCalled();
   });
 
   it("clears a stale preview once the body is edited again", () => {

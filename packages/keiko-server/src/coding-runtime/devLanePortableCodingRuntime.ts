@@ -157,15 +157,20 @@ interface ApprovedDevLaneSidecar {
   readonly executableTreeSha256: string;
   readonly licenseSha256: string;
   readonly protocolSchemaSha256: string;
-  // KEIKO-0763: catalog-approved SBOM digest for this target. When present, verifiedPayload
+  // KEIKO-0763/KEIKO-0763-r3: catalog-approved SBOM digest for this target. verifiedPayload
   // compares it against the SBOM file's freshly-hashed contents so a tampered SBOM cannot slip
   // past the dev lane's payload-verification step. Sourced from the catalog's runtime.archives
-  // [target] entry alongside executableTreeSha256. Optional today: the checked-in catalog does
-  // not yet carry sbomSha256 entries (the dev lane is a functional-only, non-release-qualified
-  // path per ADR-0140); when it does, this check activates automatically and refuses
-  // "payload-tampered" on mismatch. A missing sbomSha256 keeps today's behavior (SBOM file
-  // written into the response verbatim as evidence but not compared to a catalog anchor).
-  readonly sbomSha256?: string | undefined;
+  // [target] entry alongside executableTreeSha256. REQUIRED, not optional: an earlier revision
+  // let a catalog entry that omitted sbomSha256 skip the comparison entirely, so a modified SBOM
+  // was silently accepted (its freshly-computed digest reported back as if it had been verified)
+  // for every real target, since the checked-in catalog carries no sbomSha256 entries. A target
+  // whose catalog entry has no sbomSha256 now fails approvedSidecarShape and is treated exactly
+  // like any other incomplete catalog entry -- refused "payload-unapproved" by the existing
+  // `approved === undefined` check in discoverDevLaneOpenCode, never silently downgraded to
+  // "compare what we can". Restoring the dev lane on the real catalog requires a human,
+  // PR-reviewed addition of the real upstream SBOM digest to portable-runtime-approvals.json (see
+  // that file's own header: digest changes there are the release-approval act).
+  readonly sbomSha256: string;
 }
 
 /** The checked-in redistribution catalog is the dev lane's review-approved trust anchor. */
@@ -212,7 +217,7 @@ function approvedSidecarShape(
     isSha256(candidate.executableTreeSha256) &&
     isSha256(candidate.licenseSha256) &&
     isSha256(candidate.protocolSchemaSha256) &&
-    (candidate.sbomSha256 === undefined || isSha256(candidate.sbomSha256))
+    isSha256(candidate.sbomSha256)
   );
 }
 
@@ -241,18 +246,16 @@ function verifiedPayload(
   if (!files.every(isRegularFile)) return { ok: false, refusal: "payload-missing" };
   const executableSha256 = sha256File(join(installRoot, executablePath));
   const executableTreeSha256 = digestText(`bin/opencode\0${executableSha256}\0`);
-  // KEIKO-0763: when the catalog carries an sbomSha256 for this target, verify the SBOM's
-  // on-disk contents against it the same way the executable-tree and license checks work. A
-  // drift-only SBOM (identical binary, mutated provenance) previously flowed through as
-  // "verified" because the sbomSha256 was hashed from the file itself and stamped back onto
-  // the response without any comparison. The catalog is not required to carry sbomSha256 today
-  // (see the field's doc-comment); when a future catalog entry does, the check activates
-  // automatically.
+  // KEIKO-0763/KEIKO-0763-r3: verify the SBOM's on-disk contents against the catalog-approved
+  // digest the same way the executable-tree and license checks work. approved.sbomSha256 is
+  // REQUIRED (approvedSidecarShape refuses "payload-unapproved" before this function is ever
+  // reached without one), so this comparison always runs -- a drift-only SBOM (identical binary,
+  // mutated provenance) can no longer flow through as "verified" by skipping the comparison.
   const sbomEvidenceSha256 = sha256File(join(installRoot, sbomPath));
   if (
     executableTreeSha256 !== approved.executableTreeSha256 ||
     sha256File(join(installRoot, licensePath)) !== approved.licenseSha256 ||
-    (approved.sbomSha256 !== undefined && sbomEvidenceSha256 !== approved.sbomSha256)
+    sbomEvidenceSha256 !== approved.sbomSha256
   ) {
     return { ok: false, refusal: "payload-tampered" };
   }

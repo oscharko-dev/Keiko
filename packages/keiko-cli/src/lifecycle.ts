@@ -1,11 +1,8 @@
 import {
   closeSync,
   constants as fsConstants,
-  fstatSync,
-  lstatSync,
   mkdirSync,
   openSync,
-  readSync,
   rmSync,
   writeSync,
 } from "node:fs";
@@ -33,7 +30,13 @@ import { absoluteExistingPath, resolvePreferredInstallLayout } from "./install-l
 import { LauncherError } from "./launcher-platforms.js";
 import { resolveLoopbackEndpoint } from "./loopback-endpoint.js";
 import type { CliIo } from "./runner.js";
-import { resolveContainedStateDir } from "./state-paths.js";
+import {
+  assertNotSymlink,
+  assertRegularSingleLinkFile,
+  openPidFileNoFollow,
+  readPidFile,
+  resolveContainedStateDir,
+} from "./state-paths.js";
 
 type LifecycleCommand = "start" | "stop" | "status" | "restart";
 type SpawnFn = (command: string, args: readonly string[], opts: SpawnOptions) => ChildProcess;
@@ -288,77 +291,18 @@ async function fetchHealthProbe(url: string, fetchImpl: FetchFn): Promise<Health
   }
 }
 
-// Small bound on <stateDir>/ui.pid: it holds one decimal pid plus a newline, never more.
-const MAX_PID_FILE_BYTES = 64;
-
-// KEIKO-0886 follow-up (#2906 review, comment 3863185744 then comment 3865159294): the pid file
-// used to be opened via a separate `lstatSync` CHECK followed by a SEPARATE
-// `writeFileSync`/`readFileSync` USE -- a symlink planted in the window between the two was
-// followed (readPid had no check at all; readFileSync always follows symlinks). `readPid` then
-// feeds whatever it parsed straight to `isProcessAlive`/`process.kill`, so a followed symlink
-// could steer a real signal at an attacker-chosen pid. Opening the descriptor with `O_NOFOLLOW`
-// makes the check and the use the SAME syscall on POSIX, closing the symlink window entirely: a
-// symlink at the final path component fails the open() itself (ELOOP), whether it was there from
-// the start or planted a moment before.
-//
-// O_NOFOLLOW alone was still exploitable, though: it refuses only a SYMLINK, not a HARD LINK (a
-// hard link IS a plain directory entry pointing at a real, non-symlink inode, so the syscall that
-// blocks symlinks has nothing to object to), and the old write path's O_TRUNC overwrote whatever
-// inode the pid-file NAME currently pointed at -- including a hard-linked victim file -- BEFORE
-// fstat ever ran to reject it. A FIFO planted at the path is a second, independent problem: a
-// blocking open (no O_NONBLOCK) can hang forever waiting for a peer that never arrives, before
-// fstat ever gets a chance to reject the non-regular file. Both are closed below:
-//   * every open additionally passes O_NONBLOCK so a planted FIFO can never hang the open() call
-//     itself -- the non-regular-file rejection below then refuses it same as any other special
-//     file, immediately rather than after an indefinite hang.
-//   * every reader and writer verifies `nlink === 1` in addition to `isFile()`, so a hard-linked
-//     inode (which always reports nlink > 1: the original name plus this one) is refused exactly
-//     like a symlinked one, regardless of which direction it was opened from.
-//   * the write path (`createPidFileSlot` below) never opens an EXISTING inode for writing at
-//     all: it only ever succeeds by creating a brand-new inode via O_CREAT|O_EXCL, so there is no
-//     victim inode left to truncate in place.
-// Windows has no `O_NOFOLLOW`; this falls back to the same lstatSync-then-open pattern
-// `openLogAppendNoFollow` already established for ui.log (KEIKO-0886) -- a residual, documented
-// TOCTOU window on that platform only.
-function openPidFileNoFollow(path: string, flags: number): number {
-  const nofollow = (fsConstants as { O_NOFOLLOW?: number }).O_NOFOLLOW ?? 0;
-  const nonblock = (fsConstants as { O_NONBLOCK?: number }).O_NONBLOCK ?? 0;
-  if (nofollow === 0) assertNotSymlink(path);
-  return openSync(path, flags | nofollow | nonblock, 0o600);
-}
-
-// Defense in depth beyond O_NOFOLLOW/O_EXCL: neither refuses a HARD LINK (a hard link has no
-// symlink component, and a fresh O_EXCL create has no pre-existing path to collide with), so
-// every reader and writer independently verifies the descriptor it actually opened is a regular,
-// SINGLE-LINK file -- never trusting or writing through a hard-linked inode -- before doing
-// anything with its content.
-function assertRegularSingleLinkFile(fd: number, path: string): void {
-  const stats = fstatSync(fd);
-  if (!stats.isFile() || stats.nlink !== 1) {
-    throw new Error(`keiko start: refusing to use non-regular or hard-linked ${path}`);
-  }
-}
-
-function readPid(path: string): number | undefined {
-  let fd: number;
-  try {
-    fd = openPidFileNoFollow(path, fsConstants.O_RDONLY);
-  } catch {
-    return undefined;
-  }
-  try {
-    assertRegularSingleLinkFile(fd, path);
-    const buffer = Buffer.alloc(MAX_PID_FILE_BYTES);
-    const bytesRead = readSync(fd, buffer, 0, buffer.length, 0);
-    const raw = buffer.subarray(0, bytesRead).toString("utf8").trim();
-    if (!/^[1-9]\d*$/.test(raw)) return undefined;
-    return Number(raw);
-  } catch {
-    return undefined;
-  } finally {
-    closeSync(fd);
-  }
-}
+// KEIKO-0886 follow-up (#2906 round 3, comment 3865273699): the descriptor-safe pid-file
+// invariant (O_NOFOLLOW+O_NONBLOCK at open, then fstat-verified regular-single-link-file before
+// trusting the content — full rationale in state-paths.ts's doc comment on `readPidFile`) used
+// to be duplicated here as a private `readPid`, while `state-paths.ts::readPidFile` — reached by
+// `classifyPid`, and therefore by `keiko uninstall --force` and `keiko repair` too — still
+// followed plain `existsSync`/`readFileSync`. A symlinked `ui.pid` could steer THOSE commands at
+// an unrelated process even though `start`/`stop`/`status`/`restart` here were already hardened.
+// `readPid` is gone; every reader in this file and every other consumer now goes through the
+// ONE shared `readPidFile`. `openPidFileNoFollow` / `assertRegularSingleLinkFile` are imported
+// from the same module because the WRITE path below (`createPidFileSlot`/`writePid`) still needs
+// them — `keiko start` is the only writer, so writing stays here, but it reuses the same
+// primitives rather than keeping a second copy.
 
 function isEexist(error: unknown): boolean {
   return typeof error === "object" && error !== null && "code" in error && error.code === "EEXIST";
@@ -452,7 +396,7 @@ function runningPid(
   isAlive: (pid: number) => boolean,
 ): number | undefined {
   const path = pidFile(options);
-  const pid = readPid(path);
+  const pid = readPidFile(path);
   if (pid === undefined) {
     rmSync(path, { force: true });
     return undefined;
@@ -590,40 +534,39 @@ async function reportHealthyStart(
   return 0;
 }
 
-// KEIKO-0886: refuse to follow a symlink at `<stateDir>/ui.log`. The launcher state file
-// insists on O_NOFOLLOW at every open; the append-mode ui.log write in the same state dir
-// used to accept a symlinked target, letting a state-dir actor steer stdout/stderr into
-// any user-writable file. Match launcher-state.ts's O_NOFOLLOW pattern: read the flag
-// defensively (undefined on Windows), and on Windows fall back to an lstat refusal since
-// NTFS reparse points cannot be blocked at open time in a single syscall.
+// KEIKO-0886 / #2906 round 3 (comment 3865329050): refuse to write `<stateDir>/ui.log` through
+// a symlink, hard link, FIFO, or device. O_NOFOLLOW alone only rejects a SYMLINK at the final
+// path component — a HARD LINK to another user's file has no symlink component, so the syscall
+// that blocks symlinks has nothing to object to, and would receive every byte of this process's
+// child stdout/stderr. Worse, a FIFO planted at the path can block this open() (O_WRONLY)
+// indefinitely waiting for a reader that never arrives, before any POST-open validation could
+// ever run. Both are closed the same way the pid file already is (state-paths.ts):
+//   * O_NONBLOCK on every platform that has it, so a planted FIFO can never hang the open()
+//     call itself.
+//   * the OPENED descriptor is fstat-verified via the shared `assertRegularSingleLinkFile`
+//     (isFile() + nlink === 1) before it is ever handed to the child — the same
+//     regular-single-link-file policy the pid file enforces, reused rather than re-derived.
+// Windows has no O_NOFOLLOW; `assertNotSymlink` is the documented, residual-TOCTOU fallback for
+// its reparse-point case, and the post-open fstat check below still runs unconditionally on
+// every platform, including that fallback.
 function openLogAppendNoFollow(logPath: string): number {
   const nofollow = (fsConstants as { O_NOFOLLOW?: number }).O_NOFOLLOW ?? 0;
+  const nonblock = (fsConstants as { O_NONBLOCK?: number }).O_NONBLOCK ?? 0;
   if (nofollow === 0) {
     assertNotSymlink(logPath);
   }
-  return openSync(
+  const fd = openSync(
     logPath,
-    fsConstants.O_WRONLY | fsConstants.O_CREAT | fsConstants.O_APPEND | nofollow,
+    fsConstants.O_WRONLY | fsConstants.O_CREAT | fsConstants.O_APPEND | nofollow | nonblock,
     0o600,
   );
-}
-
-function assertNotSymlink(path: string): void {
   try {
-    if (lstatSync(path).isSymbolicLink()) {
-      throw new Error(`keiko start: refusing to write to symlinked ${path}`);
-    }
+    assertRegularSingleLinkFile(fd, logPath);
   } catch (error) {
-    if (
-      typeof error === "object" &&
-      error !== null &&
-      "code" in error &&
-      (error as { readonly code?: unknown }).code === "ENOENT"
-    ) {
-      return; // path does not exist yet — nothing to follow
-    }
+    closeSync(fd);
     throw error;
   }
+  return fd;
 }
 
 function openUiLogStdio(options: LifecycleOptions): UiLogStdio {

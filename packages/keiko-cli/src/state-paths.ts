@@ -11,7 +11,17 @@
 // `--state-dir`/KEIKO_STATE_DIR can never escalate into data loss outside Keiko's
 // own files.
 
-import { existsSync, lstatSync, readFileSync, readdirSync } from "node:fs";
+import {
+  closeSync,
+  constants as fsConstants,
+  existsSync,
+  fstatSync,
+  lstatSync,
+  openSync,
+  readdirSync,
+  readSync,
+} from "node:fs";
+import { Buffer } from "node:buffer";
 import { isAbsolute, join, resolve, sep } from "node:path";
 import type { EnvSource } from "@oscharko-dev/keiko-model-gateway";
 import { assertValidRunId } from "@oscharko-dev/keiko-security";
@@ -118,13 +128,76 @@ function explicitStateDirSource(
   return undefined;
 }
 
-// Reads a pid file written by `lifecycle.ts`. Returns the integer pid, or undefined
-// when the file is absent or does not contain a positive integer.
+// #2906 round 3 (comment 3865273699): the descriptor-safe pid-read invariant, formerly
+// duplicated as `lifecycle.ts`'s own private `readPid` while THIS function (reached by
+// `classifyPid`, and therefore by `keiko uninstall --force` and `keiko repair` too) still
+// followed `existsSync`/`readFileSync` — a symlinked `ui.pid` could steer those commands at an
+// unrelated process even though `keiko start`/`stop`/`status`/`restart` were already hardened.
+// `lifecycle.ts` now imports and reuses this SAME implementation instead of keeping a second
+// copy, so every consumer gets the identical guarantee:
+//   * O_NOFOLLOW makes the symlink check and the read the SAME syscall on POSIX — a symlink at
+//     the final path component fails ELOOP, whether it was there from the start or planted a
+//     moment before this call.
+//   * O_NOFOLLOW alone does not refuse a HARD LINK (a hard link has no symlink component), so
+//     `assertRegularSingleLinkFile` independently verifies the OPENED descriptor is a regular,
+//     single-link file before its content is trusted.
+//   * O_NONBLOCK keeps a planted FIFO from hanging this call indefinitely.
+//   * Windows has no O_NOFOLLOW; `assertNotSymlink` is the documented, residual-TOCTOU fallback.
+export function assertNotSymlink(path: string): void {
+  try {
+    if (lstatSync(path).isSymbolicLink()) {
+      throw new Error(`keiko: refusing to use symlinked ${path}`);
+    }
+  } catch (error) {
+    if (typeof error === "object" && error !== null && "code" in error && error.code === "ENOENT") {
+      return; // path does not exist yet — nothing to follow
+    }
+    throw error;
+  }
+}
+
+export function openPidFileNoFollow(path: string, flags: number): number {
+  const nofollow = (fsConstants as { O_NOFOLLOW?: number }).O_NOFOLLOW ?? 0;
+  const nonblock = (fsConstants as { O_NONBLOCK?: number }).O_NONBLOCK ?? 0;
+  if (nofollow === 0) assertNotSymlink(path);
+  return openSync(path, flags | nofollow | nonblock, 0o600);
+}
+
+// Defense in depth beyond O_NOFOLLOW/O_EXCL: neither refuses a HARD LINK, so every reader and
+// writer independently verifies the descriptor it actually opened is a regular, SINGLE-LINK
+// file — never trusting or writing through a hard-linked inode — before doing anything with it.
+export function assertRegularSingleLinkFile(fd: number, path: string): void {
+  const stats = fstatSync(fd);
+  if (!stats.isFile() || stats.nlink !== 1) {
+    throw new Error(`keiko: refusing to use non-regular or hard-linked ${path}`);
+  }
+}
+
+// Small bound on <stateDir>/ui.pid: it holds one decimal pid plus a newline, never more.
+const MAX_PID_FILE_BYTES = 64;
+
+// Reads a pid file written by `lifecycle.ts`. Returns the integer pid, or undefined when the
+// file is absent, unsafe (symlink / hard-link / FIFO / device), or does not contain a positive
+// integer — see the invariant comment above.
 export function readPidFile(path: string): number | undefined {
-  if (!existsSync(path)) return undefined;
-  const raw = readFileSync(path, "utf8").trim();
-  if (!/^[1-9]\d*$/.test(raw)) return undefined;
-  return Number(raw);
+  let fd: number;
+  try {
+    fd = openPidFileNoFollow(path, fsConstants.O_RDONLY);
+  } catch {
+    return undefined;
+  }
+  try {
+    assertRegularSingleLinkFile(fd, path);
+    const buffer = Buffer.alloc(MAX_PID_FILE_BYTES);
+    const bytesRead = readSync(fd, buffer, 0, buffer.length, 0);
+    const raw = buffer.subarray(0, bytesRead).toString("utf8").trim();
+    if (!/^[1-9]\d*$/.test(raw)) return undefined;
+    return Number(raw);
+  } catch {
+    return undefined;
+  } finally {
+    closeSync(fd);
+  }
 }
 
 // Liveness probe identical in semantics to the lifecycle handler: a successful

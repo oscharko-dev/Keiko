@@ -300,7 +300,20 @@ interface WalCheckpointResult {
 
 type WalCheckpointAttempt =
   | { readonly kind: "ok"; readonly result: WalCheckpointResult }
-  | { readonly kind: "threw"; readonly cause: unknown };
+  | { readonly kind: "threw"; readonly cause: unknown }
+  // #2906 round-3 review: an undefined row, `{}`, or non-numeric columns must fail closed into the
+  // retry/report path rather than being coerced to a trivially-satisfied 0/0/0 result -- otherwise
+  // `busy === 0 && checkpointed >= log` is vacuously true and migration can write the encryption
+  // marker without a verified WAL truncation. Mirrors keiko-memory-vault's schema.ts "malformed" kind.
+  | { readonly kind: "malformed" };
+
+function isWellFormedCheckpointRow(
+  row: Partial<WalCheckpointResult> | undefined,
+): row is WalCheckpointResult {
+  return (
+    Number.isInteger(row?.busy) && Number.isInteger(row?.log) && Number.isInteger(row?.checkpointed)
+  );
+}
 
 // The PRAGMA itself is also a possible failure mode, not only its returned `busy` row: depending on
 // the connection's busy-timeout configuration, SQLite can raise SQLITE_BUSY as a thrown error
@@ -310,14 +323,8 @@ function attemptWalCheckpointTruncate(db: DatabaseSync): WalCheckpointAttempt {
   try {
     const row = db.prepare("PRAGMA wal_checkpoint(TRUNCATE)").get() as
       Partial<WalCheckpointResult> | undefined;
-    return {
-      kind: "ok",
-      result: {
-        busy: typeof row?.busy === "number" ? row.busy : 0,
-        log: typeof row?.log === "number" ? row.log : 0,
-        checkpointed: typeof row?.checkpointed === "number" ? row.checkpointed : 0,
-      },
-    };
+    if (!isWellFormedCheckpointRow(row)) return { kind: "malformed" };
+    return { kind: "ok", result: row };
   } catch (cause) {
     return { kind: "threw", cause };
   }
@@ -331,6 +338,19 @@ function isCheckpointComplete(attempt: WalCheckpointAttempt): boolean {
   );
 }
 
+// #2906 round-3 review: errorKind was previously present only when the PRAGMA itself threw, so the
+// two primary new failure modes -- a persistently busy/partial checkpoint and a malformed result
+// row -- had no closed, body-free kind to cluster or reconstruct through the structured log
+// contract (AGENTS.md §8). Every non-complete outcome now gets one: the real cause's classified
+// code/name when the statement threw, and a literal, stable identifier for each of the three
+// still-incomplete "ok" shapes otherwise, so busy-exhaustion, a partial flush, and a malformed row
+// are distinguishable from each other in the log alone.
+function checkpointErrorKind(attempt: WalCheckpointAttempt): string {
+  if (attempt.kind === "threw") return knowledgeErrorKind(attempt.cause);
+  if (attempt.kind === "malformed") return "checkpoint-malformed";
+  return attempt.result.busy === 1 ? "checkpoint-busy" : "checkpoint-partial";
+}
+
 function reportCheckpointDegraded(
   logSink: KnowledgeLogSink | undefined,
   attempts: number,
@@ -340,16 +360,19 @@ function reportCheckpointDegraded(
     level: "error",
     category: "diagnostic",
     op: "store.encryption-checkpoint-degraded",
-    ...(last.kind === "threw" ? { errorKind: knowledgeErrorKind(last.cause) } : {}),
-    extra: { attempts, busy: last.kind === "threw" || last.result.busy === 1 },
+    errorKind: checkpointErrorKind(last),
+    extra: { attempts, busy: last.kind === "ok" ? last.result.busy === 1 : true },
   });
 }
 
 function checkpointDegradedError(last: WalCheckpointAttempt): KnowledgeStoreError {
+  const cause =
+    last.kind === "malformed"
+      ? "the checkpoint returned a missing or non-numeric result row"
+      : "a held-open reader prevented a full checkpoint";
   const message =
     "failed to flush plaintext residue from the Local Knowledge store WAL after encrypting " +
-    "content: a held-open reader prevented a full checkpoint after " +
-    `${String(WAL_CHECKPOINT_MAX_ATTEMPTS)} attempts`;
+    `content: ${cause} after ${String(WAL_CHECKPOINT_MAX_ATTEMPTS)} attempts`;
   return last.kind === "threw"
     ? new KnowledgeStoreError(message, { cause: last.cause })
     : new KnowledgeStoreError(message);

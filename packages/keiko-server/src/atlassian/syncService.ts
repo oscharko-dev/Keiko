@@ -196,6 +196,22 @@ export function resolveAtlassianSyncJobRegistry(
   return deps.atlassianSyncJobRegistry ?? atlassianSyncJobRegistry;
 }
 
+// #2906 round 3 (PR #3289 review, follow-up to KEIKO-0565): startAtlassianSyncJob schedules
+// executeSyncJob via a detached `setImmediate` that captures this run's `deps`/registry by
+// closure. If the owning `UiHandlerDeps` graph is disposed (createUiHandlerDispose in deps.ts
+// calls `registry.reset()`) before that callback runs -- or while it is still awaiting the
+// provider fetch -- the job must not resurrect the cleared registry via `recordActivity`, nor
+// reopen/mutate persistence on a graph that no longer owns it. `reset()` removes every job from
+// the registry's map, so membership IS the disposal signal: a job cancelled through the ordinary
+// `cancel()` route stays registered (only its controller aborts), so this guard never interferes
+// with normal cancellation, only with a graph that has gone away out from under a running job.
+export function syncJobStillOwned(
+  deps: Pick<UiHandlerDeps, "atlassianSyncJobRegistry">,
+  jobId: string,
+): boolean {
+  return resolveAtlassianSyncJobRegistry(deps).get(jobId) !== undefined;
+}
+
 // ─── Job state projection ──────────────────────────────────────────────────────
 type JobCommonFields = Pick<
   AtlassianSyncJobState,
@@ -724,6 +740,8 @@ function failJobClosed(context: SyncRunContext): void {
 }
 
 async function executeSyncJob(context: SyncRunContext): Promise<void> {
+  // The graph may already be disposed before this detached setImmediate callback ever runs.
+  if (!syncJobStillOwned(context.deps, context.job.jobId)) return;
   try {
     context.job.startedAt = context.now();
     updateRunningProgress(context, zeroProgress());
@@ -742,8 +760,12 @@ async function executeSyncJob(context: SyncRunContext): Promise<void> {
         context.enumeration.snapshot = snapshot;
       },
     });
+    // ...or disposal can race the in-flight fetch itself (abort does not guarantee the provider
+    // settles synchronously). Re-check before finalize reopens/mutates persistence.
+    if (!syncJobStillOwned(context.deps, context.job.jobId)) return;
     await finalizeRun(context, outcome);
   } catch (error) {
+    if (!syncJobStillOwned(context.deps, context.job.jobId)) return;
     emitServerDiagnostic(
       context.deps.diagnostics,
       serverDiagnosticFromError({

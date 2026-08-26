@@ -4,6 +4,8 @@ import { useMemo, useState, type ReactNode } from "react";
 
 import {
   compileEditorM7SnippetBody,
+  EDITOR_M7_SNIPPET_BODY_MAX_UTF8_BYTES,
+  type EditorM7ParseResult,
   type EditorM7ReasonCode,
   type EditorM7WorkspaceSnippet,
   type EditorM7WorkspaceSnippetInput,
@@ -105,6 +107,21 @@ function defaultDraft(): SnippetDraft {
   };
 }
 
+// #2906 round 3: draft.body is a single, textarea-bound string with no maxLength -- an unbounded
+// paste must never reach split()/full snippet validation/UTF-8 accounting before the contract's own
+// 8 KiB body limit gets a chance to reject it. UTF-8 byte length is always >= UTF-16 code-unit
+// length for the same string (the same relationship WorkspaceSnippetsPanel's sibling widgets use
+// for their own cheap oversized-input proxies), so a code-unit-length preflight against the SAME
+// exported limit compileEditorM7SnippetBody enforces is a safe, cheap lower bound: whenever it
+// rejects, the real UTF-8 byte length can only be larger, so the full compiler would have rejected
+// it too -- just after paying for the split() + per-line validation this preflight skips entirely.
+function compileDraftBody(body: string): EditorM7ParseResult<string> {
+  if (body.length > EDITOR_M7_SNIPPET_BODY_MAX_UTF8_BYTES) {
+    return { ok: false, reasonCode: "UNSAFE_SNIPPET" };
+  }
+  return compileEditorM7SnippetBody(body.split(/\r?\n/u));
+}
+
 function SnippetEditor({
   disabled,
   draft,
@@ -124,8 +141,12 @@ function SnippetEditor({
 }): ReactNode {
   // Gates Save on the CURRENT draft body's compile result, continuously — not only on whatever
   // the last Preview click happened to return — so a body already known locally to be invalid
-  // cannot be sent even if the user edits it again after previewing (KEIKO-0619).
-  const bodyCompileResult = compileEditorM7SnippetBody(draft.body.split(/\r?\n/u));
+  // cannot be sent even if the user edits it again after previewing (KEIKO-0619). Memoized by
+  // draft.body (#2906 round 3): this component re-renders on every keystroke across ANY field
+  // (name/prefix/language/include too), and without the memo the compile — including the
+  // preflight bound in compileDraftBody — reran on every one of those renders even when the body
+  // itself had not changed.
+  const bodyCompileResult = useMemo(() => compileDraftBody(draft.body), [draft.body]);
   const saveDisabled =
     disabled ||
     draft.name.trim().length === 0 ||
@@ -247,7 +268,7 @@ type SnippetPreviewResult =
   | { readonly ok: false; readonly reasonCode: EditorM7ReasonCode };
 
 function previewDraft(draft: SnippetDraft): SnippetPreviewResult {
-  const compiled = compileEditorM7SnippetBody(draft.body.split(/\r?\n/u));
+  const compiled = compileDraftBody(draft.body);
   return compiled.ok
     ? { ok: true, preview: compiled.value }
     : { ok: false, reasonCode: compiled.reasonCode };

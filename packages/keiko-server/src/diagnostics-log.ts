@@ -122,6 +122,14 @@ export interface ServerDiagnosticRecord {
   // it did. Bounded counts only; never a memory id, model id, or embedding vector.
   readonly semanticSkippedCount?: number | undefined;
   readonly semanticCandidateCount?: number | undefined;
+  // How many corrupt-lock quarantine files (update-session-lock.ts's `.corrupt.<iso-stamp>`
+  // forensic evidence) a prune sweep could not remove -- a directory/stat/unlink failure that used
+  // to be swallowed outright (#2906 round 3). The successful removal count for the SAME sweep
+  // reuses `occurrenceCount`, matching `emitEvidenceRetentionDiagnostic`'s existing convention for
+  // "how many things this retention pass removed"; this field is present only when at least one
+  // entry could not be removed, so support can tell "nothing left to prune" apart from "pruning is
+  // failing repeatedly" (the latter can otherwise accumulate indefinitely with no operator signal).
+  readonly quarantinePruneFailedCount?: number | undefined;
   // Keiko-code stack frames the error passed through, nearest-to-throw-site first, reduced by
   // `keikoStackFrames` (ADR-0173 D3) to their dist/src-anchored form — never an absolute path, never
   // a `node_modules`/`node:internal` frame. Capped at 8; absent when the error carried no `.stack`
@@ -247,6 +255,7 @@ function diagnosticActivityLogFields(record: ServerDiagnosticRecord): Record<str
   addBoundedField(fields, "droppedEmbeddingModelCount", record.droppedEmbeddingModelCount);
   addBoundedField(fields, "semanticSkippedCount", record.semanticSkippedCount);
   addBoundedField(fields, "semanticCandidateCount", record.semanticCandidateCount);
+  addBoundedField(fields, "quarantinePruneFailedCount", record.quarantinePruneFailedCount);
   addBoundedField(fields, "diagnosticSummary", allowlistedSummary(record.message));
   if (record.unsupportedReasons !== undefined) {
     fields.unsupportedReasons = record.unsupportedReasons.map((reason) =>
@@ -401,7 +410,11 @@ const SERVER_DIAGNOSTIC_SUMMARIES = [
   "safe-activity-purged-takeover",
   "safe-activity-purged-shutdown",
   "safe-activity-purged-workspace-switch",
-  "safe-activity-purged-expiry",
+  // #2906 round 3: replaces the former "safe-activity-purged-expiry" -- that code was only ever
+  // used by codingSafeActivityProjection.ts's KEIKO-0878 invariant-violation branch (real TTL
+  // expiry purges silently via expireCurrent(), with no diagnostic at all), so the label
+  // misreported every invariant/projection failure it fired for as an expiry.
+  "safe-activity-purged-invariant-violation",
   "workspace-discovery-failed",
   "edit-transport-failed",
   "prepare-bridge-close",
@@ -437,6 +450,16 @@ const SERVER_DIAGNOSTIC_SUMMARIES = [
   "functional-workspace-read-not-found",
   "functional-workspace-read-permission-denied",
   "atlassian-credential-rejection-activity-log-failed",
+  // #2906 round 3: update-session-lock.ts's corrupt-lock quarantine prune used to swallow
+  // directory/stat/unlink failures outright. "-pruned" reports a clean sweep (occurrenceCount is
+  // the removed count); "-prune-degraded" reports one where at least one entry could not be
+  // removed (occurrenceCount stays the removed count, quarantinePruneFailedCount carries the rest).
+  "update-session-quarantine-pruned",
+  "update-session-quarantine-prune-degraded",
+  // #2906 round 3 (P1): debugSessionRegistry.ts's terminal-evidence reconciliation gives up after
+  // a bounded number of appendEvidence() failures rather than retrying forever -- see
+  // dapProductionService.ts's reportEvidenceAbandoned.
+  "dap-session-terminal-evidence-abandoned",
 ] as const;
 
 export type ServerDiagnosticSummary = (typeof SERVER_DIAGNOSTIC_SUMMARIES)[number];

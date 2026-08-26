@@ -131,10 +131,16 @@ function validateAndResolve(request: MemoryRetrievalRequest): ResolvedRequest {
   // validated here. exponentialDecay's `ageMs <= 0` guard is false for NaN, so an invalid
   // clock silently produces a NaN decay score that propagates into the ranking sort
   // comparator instead of failing closed at the boundary.
-  if (!Number.isFinite(request.nowMs)) {
+  // #2906 round-3 review — finiteness alone still accepted a negative epoch (e.g. nowMs = -1):
+  // every normal positive validUntil then reads as "in the future" and every record reads as
+  // future/fresh for recency, silently re-admitting already-expired memories. Require a finite,
+  // non-negative timestamp, matching the same "finite non-negative number" contract every other
+  // durable memory timestamp is held to (see isFiniteNonNegativeNumber's callers across
+  // keiko-contracts's memory-*-validation modules).
+  if (!Number.isFinite(request.nowMs) || request.nowMs < 0) {
     throw new RetrievalError(
       "invalid-clock",
-      `nowMs must be a finite number (got ${String(request.nowMs)})`,
+      `nowMs must be a finite non-negative number (got ${String(request.nowMs)})`,
     );
   }
   const budgetTokens = request.budgetTokens ?? DEFAULT_BUDGET_TOKENS;

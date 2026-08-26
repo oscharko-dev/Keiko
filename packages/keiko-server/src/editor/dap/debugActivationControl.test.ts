@@ -329,6 +329,55 @@ describe("debug activation control", () => {
     control.dispose();
   });
 
+  it("KEIKO-0642-r3: a synchronous resolve() during synchronize()'s dispose await is not clobbered by the stale write", async () => {
+    // Regression for the round-3 finding: synchronizeTracked reads `prior` and computes `next`
+    // BEFORE its `await disposeActiveSession(...)`, then previously committed that stale `next`
+    // unconditionally once the await resolved. A synchronous resolve() landing inside that await
+    // window publishes a newer revision straight into `tracked` (protected only by the
+    // single-threaded event loop, never the mutex); the old code's final `tracked.set` in
+    // synchronizeTracked then overwrote it, silently regressing the cache to older information.
+    const root = temporaryDirectory("debug-interleaved-write");
+    let releaseDispose: (() => void) | undefined;
+    const control = createDebugActivationControlService({
+      mutex: createWorkspaceMutexRegistry(),
+      productSupport: () => "supported",
+      deploymentPolicy: () => "allowed",
+      provisioning: () => "provisioned",
+      disposeActiveSession: () =>
+        new Promise<void>((resolve) => {
+          releaseDispose = resolve;
+        }),
+    });
+
+    // Seed the cache with an available revision-7 activation, then start a deactivate sync that
+    // will revoke it -- this suspends on disposeActiveSession before committing anything.
+    expect(control.resolve(context(root, "enabled", 7))).toMatchObject({ state: "available" });
+    const pending = control.synchronize({
+      action: "deactivate",
+      changed: true,
+      context: context(root, "disabled", 7),
+    });
+    await Promise.resolve();
+
+    // While the deactivate sync is still suspended, an unrelated synchronous resolve() call
+    // (e.g. addDebuggingProjection reading a fresh M7 snapshot) observes revision 9 re-enabled
+    // and publishes it straight into `tracked`.
+    expect(control.resolve(context(root, "enabled", 9))).toMatchObject({ state: "available" });
+    expect(control.isCurrent(root, 9)).toBe(true);
+
+    // Now let the deactivate sync's dispose resolve and finish committing.
+    releaseDispose?.();
+    await expect(pending).resolves.toMatchObject({
+      state: "disabled",
+      reasonCode: "WORKSPACE_DISABLED",
+    });
+
+    // The newer revision-9 entry published mid-flight must survive: the deactivate sync's own
+    // stale (revision-7) write must not have overwritten it.
+    expect(control.isCurrent(root, 9)).toBe(true);
+    control.dispose();
+  });
+
   it("evicts an idle-tracked workspace after the retention window instead of watching it forever", async () => {
     vi.useFakeTimers();
     const root = temporaryDirectory("debug-idle-eviction");

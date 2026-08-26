@@ -1533,10 +1533,14 @@ function denyByAuthority(
   };
 }
 
-function authorityDenyReason(
+// Exported for direct regression coverage (mirrors verificationAuthorityDenyReason, Issue #2723):
+// otherwise only reachable by forcing a real authority resolution failure (expiry, revocation, or
+// budget exhaustion) through the full governed action route.
+export function authorityDenyReason(
   resolution: Extract<EditorAgentAuthorityResolution, { readonly ok: false }>,
 ): EditorAgentActionDenyReason {
   if (resolution.reason === "expired") return "authority-expired";
+  if (resolution.reason === "revoked") return "authority-revoked";
   return resolution.reason === "budget-exceeded"
     ? "authority-budget-exceeded"
     : "authority-invalid";

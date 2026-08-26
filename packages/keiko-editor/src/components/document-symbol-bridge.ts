@@ -206,7 +206,7 @@ export function createKeikoDocumentSymbolProvider(
       }
       sequence += 1;
       const request = buildRequest(deps, documentUri, sequence);
-      const controller = controllerForToken(token);
+      const { controller, dispose } = controllerForToken(token);
       const query: EditorSymbolsQuery = { request, documentText: model.getValue() };
       return runLanguageBridgeCall<EditorSymbolsResponse, readonly MonacoDocumentSymbol[]>({
         operation: "symbols",
@@ -216,6 +216,8 @@ export function createKeikoDocumentSymbolProvider(
         classify: (response) => classifyResultKind(response.symbols.length, response.truncated),
         present: (response) => symbolsToMonaco(response.symbols, deps.symbolKinds),
         report: deps.report,
+      }).finally(() => {
+        dispose();
       });
     },
   };

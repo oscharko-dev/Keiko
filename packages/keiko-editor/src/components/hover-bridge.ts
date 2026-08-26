@@ -175,7 +175,7 @@ export function createKeikoHoverProvider(deps: KeikoHoverProviderDeps): MonacoHo
       sequence += 1;
       const request = buildRequest(deps, documentUri, position, sequence);
       latest = request.request;
-      const controller = controllerForToken(token);
+      const { controller, dispose } = controllerForToken(token);
       const query: EditorHoverQuery = { request, documentText: model.getValue() };
       return runLanguageBridgeCall<EditorHoverResponse, MonacoHover | undefined>({
         operation: "hover",
@@ -186,6 +186,8 @@ export function createKeikoHoverProvider(deps: KeikoHoverProviderDeps): MonacoHo
         classify: (response) => classifyResultKind((response.hover.contents ?? "").length),
         present: hoverResponseToMonaco,
         report: deps.report,
+      }).finally(() => {
+        dispose();
       });
     },
   };

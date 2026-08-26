@@ -463,7 +463,10 @@ describe("sw.js cache policy — sandboxed fetch-handler evaluation", () => {
     expect(sandbox.respondWithCalls).toHaveLength(0);
   });
 
-  it("deletes only stale caches on activate and keeps the current cache (KEIKO-1016)", async () => {
+  it("deletes only stale Keiko-owned caches on activate, never an unrelated origin cache (#2906 round 3, KEIKO-1016)", async () => {
+    // CacheStorage is shared across the whole origin. Before the fix this test locked in
+    // deleting `some-other-cache` as EXPECTED behavior; a real unrelated cache under the same
+    // origin (another feature, a dev tool, a future SW) must survive activation.
     const { context, sandbox } = makeSandbox();
     const deleteCalls: string[] = [];
     context.caches = {
@@ -494,6 +497,7 @@ describe("sw.js cache policy — sandboxed fetch-handler evaluation", () => {
 
     await waited;
 
-    expect(deleteCalls.sort()).toStrictEqual(["keiko-shell-v3", "some-other-cache"]);
+    expect(deleteCalls).toStrictEqual(["keiko-shell-v3"]);
+    expect(deleteCalls).not.toContain("some-other-cache");
   });
 });

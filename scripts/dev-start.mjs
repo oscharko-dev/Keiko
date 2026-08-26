@@ -359,8 +359,11 @@ async function devServerHealth(port) {
       },
     },
     {
-      name: "assets",
-      url: `${baseUrl}/assets/keiko-logo.svg`,
+      // #2906 round 3 (comment 3865329060): the duplicate /assets/keiko-logo.svg copy was
+      // dropped in favor of the one committed SVG at the root of public/ — every runtime
+      // reference (and this smoke check) now points at it.
+      name: "static-asset",
+      url: `${baseUrl}/keiko-logo.svg`,
       validate: async (response) => {
         const contentType = response.headers.get("content-type") ?? "";
         const body = await response.text();

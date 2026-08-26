@@ -668,6 +668,31 @@ describe("VoiceControlConnection diagnostics (w4b-voice-realtime)", () => {
     });
   });
 
+  it("records a profile-mismatch policy denial on the activity log alongside the WS frame (#2906 round 3)", async () => {
+    // KEIKO-0661 denies capability.select for a profile the session did not negotiate, but the
+    // decision previously lived only on the ephemeral WS frame -- the activity timeline could not
+    // reconstruct why selection failed. This must be body-free: no profile identifiers.
+    const sink = captureServerLog();
+    const { socket, conn } = connect({ correlationId: "diag-policy-deny-1" });
+    conn.start(false);
+    socket.sent.length = 0;
+    sink.clear();
+
+    await conn.receive(clientMessage("capability.select", 1, { profile: "speech-to-text" }));
+
+    const decision = socket.sent[0] as unknown as Record<string, unknown>;
+    expect(decision).toMatchObject({ kind: "policy.decision", decision: "deny" });
+    expect(sink.events.map((event) => event.op)).toEqual(["voice.realtime.policy-decision"]);
+    expect(sink.events[0]).toMatchObject({
+      category: "http",
+      op: "voice.realtime.policy-decision",
+      correlationId: "diag-policy-deny-1",
+      extra: { decision: "deny", reason: "profile-mismatch" },
+    });
+    expect(JSON.stringify(sink.events[0])).not.toContain("speech-to-text");
+    expect(JSON.stringify(sink.events[0])).not.toContain("full-realtime");
+  });
+
   it("brackets a normal session lifecycle with a session-start and a session-end line", () => {
     const sink = captureServerLog();
     const { conn } = connect({ correlationId: "diag-lifecycle-1" });

@@ -523,6 +523,16 @@ function metadataFreeDirectoryEntry(
   };
 }
 
+// Sonar S3358: nested-ternary avoidance for the target-kind classification below.
+function classifySymlinkTargetKind(targetStats: {
+  readonly isDirectory: () => boolean;
+  readonly isFile: () => boolean;
+}): FilesSymlinkTargetKind {
+  if (targetStats.isDirectory()) return "directory";
+  if (targetStats.isFile()) return "file";
+  return "unknown";
+}
+
 // #2906 review (comment 3863185718) / PR #3289 review (comment 3865167775): a symlink whose target
 // is a directory used to be reported as `kind: "directory"` WITH the symlink's own lstat metadata
 // attached, contradicting the "a directory entry is metadata-free" invariant
@@ -543,11 +553,7 @@ async function classifySymlinkEntry(
     const contained = isContained(root, target);
     const denied = contained && pathIsDenied(rootRelativePosixPath(root, target));
     const readable = contained && !denied;
-    const symlinkTargetKind: FilesSymlinkTargetKind = targetStats.isDirectory()
-      ? "directory"
-      : targetStats.isFile()
-        ? "file"
-        : "unknown";
+    const symlinkTargetKind: FilesSymlinkTargetKind = classifySymlinkTargetKind(targetStats);
     return { ...meta, kind: "symlink", symlinkTargetKind, readable };
   } catch {
     return { ...meta, kind: "symlink", symlinkTargetKind: "unknown", readable: false };

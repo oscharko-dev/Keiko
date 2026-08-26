@@ -14,14 +14,8 @@ import { tmpdir, platform as osPlatform } from "node:os";
 import { dirname, join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { runLauncherCli, type LauncherCliDeps } from "./launcher.js";
-import type { CliIo } from "./runner.js";
-import { hashContent, loadState } from "./launcher-state.js";
-
-interface Captured {
-  readonly io: CliIo;
-  readonly out: () => string;
-  readonly err: () => string;
-}
+import { hashContent, loadState, saveState, upsertEntry } from "./launcher-state.js";
+import { makeCapturedIo } from "./test-support/cli-io.js";
 
 function withEnvVar<T>(key: string, value: string | undefined, run: () => T): T {
   const previous = process.env[key];
@@ -41,22 +35,10 @@ function withEnvVar<T>(key: string, value: string | undefined, run: () => T): T 
   }
 }
 
-function makeIo(): Captured {
-  const outChunks: string[] = [];
-  const errChunks: string[] = [];
-  return {
-    io: {
-      out: (text: string): void => {
-        outChunks.push(text);
-      },
-      err: (text: string): void => {
-        errChunks.push(text);
-      },
-    },
-    out: (): string => outChunks.join(""),
-    err: (): string => errChunks.join(""),
-  };
-}
+// #2906 round 3 (comment 3865329066): reuses the shared fixture instead of a byte-identical
+// local copy (aliased, not just re-exported, so every existing makeIo() call site keeps
+// working unchanged).
+const makeIo = makeCapturedIo;
 
 const tempRoots: string[] = [];
 
@@ -523,6 +505,12 @@ describe("runLauncherCli — state-file tamper regression (F1/F2)", () => {
   // KEIKO-0795: `remove` used to throw mid-iteration on the first unreadable shortcut
   // and abort every remaining entry. processRemoveEntry's catch now converts that into
   // a "refused" outcome so the loop keeps processing.
+  //
+  // #2906 round 3 (comment 3865273720): `cmdRemove` returns `result.refused > 0 ? 1 : 0` —
+  // deterministic, not "may still exit 0 or 1". A single-entry fixture also cannot prove the
+  // loop CONTINUES past a refusal (a loop that aborts on the first refusal and a loop that
+  // keeps going both produce the exact same one refused-and-nothing-else outcome). Seed a
+  // second, valid shortcut after the refused one so only a loop that truly continues removes it.
   it("KEIKO-0795 — remove reports 'refused' for an unreadable shortcut and keeps processing the rest", (ctx) => {
     if (osPlatform() === "win32") ctx.skip();
     const h = makeHarness();
@@ -531,13 +519,30 @@ describe("runLauncherCli — state-file tamper regression (F1/F2)", () => {
     runLauncherCli(["install"], makeIo().io, {}, h.deps);
     rmSync(h.targetPath);
     mkdirSync(h.targetPath);
+    // A second, valid, readable shortcut recorded AFTER the refused one.
+    const secondPath = join(h.approvedDir, "keiko-second.desktop");
+    const secondContent = "[Desktop Entry]\nExec=/usr/local/bin/keiko start --open\n";
+    writeFileSync(secondPath, secondContent, "utf8");
+    saveState(
+      h.stateDir,
+      upsertEntry(loadState(h.stateDir), {
+        path: secondPath,
+        platform: "linux",
+        contentSha256: hashContent(secondContent),
+        createdAt: "2026-06-05T00:00:00.000Z",
+      }),
+    );
     const c = makeIo();
     const code = runLauncherCli(["remove"], c.io, {}, h.deps);
-    // A single-entry state may still exit 0 or 1 depending on how the runner classifies
-    // partial refusals; the important guarantee is (a) no unhandled throw, (b) the
-    // shortcut line is reported as "refusing:" on stderr with the path.
-    expect([0, 1]).toContain(code);
+    // cmdRemove is deterministic: any refusal forces exit 1. Accepting [0, 1] masked exactly
+    // the regression this test protects against.
+    expect(code).toBe(1);
     expect(c.err()).toContain(`refusing: ${h.targetPath}`);
+    // The loop must have continued past the refusal and removed the second, valid entry.
+    expect(c.out()).toContain(`removed: ${secondPath}`);
+    expect(existsSync(secondPath)).toBe(false);
+    // The refused entry is retained (never unlinked); the removed one is pruned from state.
+    expect(loadState(h.stateDir).entries.map((entry) => entry.path)).toEqual([h.targetPath]);
   });
 });
 

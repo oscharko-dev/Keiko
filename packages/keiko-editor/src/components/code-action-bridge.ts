@@ -242,7 +242,7 @@ export function createKeikoCodeActionProvider(
       }
       sequence += 1;
       const request = buildRequest(deps, documentUri, range, context, sequence);
-      const controller = controllerForToken(token);
+      const { controller, dispose } = controllerForToken(token);
       const query: EditorCodeActionsQuery = { request, documentText: model.getValue() };
       return runLanguageBridgeCall<EditorCodeActionsResponse, MonacoCodeActionList>({
         operation: "code-actions",
@@ -253,6 +253,8 @@ export function createKeikoCodeActionProvider(
         present: (response) =>
           codeActionsResponseToMonaco(response, model.uri, context.markers, deps.codeActionKinds),
         report: deps.report,
+      }).finally(() => {
+        dispose();
       });
     },
   };

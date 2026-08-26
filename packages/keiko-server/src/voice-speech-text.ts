@@ -18,17 +18,86 @@ const FENCE = /^\s{0,3}(`{3,}|~{3,})/u;
 const MARKDOWN_IMAGE = /!\[[^\]\n]*\]\([^\n)]*\)/gu;
 const AUTOLINK_URL = /<https?:\/\/[^\s<>]+>/giu;
 const BARE_URL = /https?:\/\/[^\s<>]+/giu;
-// Citation numbers/labels are bounded to 100 characters each, and the leading whitespace run is
-// bounded to 20 characters: all were unbounded quantifiers whose backtracking was retried at
-// every whitespace offset by the global flag, giving confirmed O(n^2) behaviour on an unclosed
-// "[123...]" run. 100 characters is far beyond any digit run or letter label a real citation
-// marker would ever use (citation numbers and reference labels run to at most a handful of
-// characters) -- an earlier, tighter bound of 32 was still small enough that an unusually long
-// but real marker (e.g. a 33-digit number) would silently stop being recognized and stripped,
-// leaving the raw bracketed marker to be read aloud instead of removed. A generous-but-finite
-// bound keeps the quantifier shape Sonar (S8786) accepts while not regressing that case.
-const CITATION_MARKER = /\s{0,20}\[(?:\^?\d{1,100}|[A-Za-z]{1,100}-?\d{1,100})\]/gu;
 const REFERENCE_DEFINITION = /^\s*\[(?:\^?\d+|[^\]]+)\]:\s+/u;
+
+function isAsciiDigit(character: string): boolean {
+  return character >= "0" && character <= "9";
+}
+
+function isAsciiLetter(character: string): boolean {
+  return (character >= "A" && character <= "Z") || (character >= "a" && character <= "z");
+}
+
+// Consumes a run of one-or-more characters satisfying `test`, starting at `start`. Returns the
+// index just past the run, or `start` unchanged when no character matched (a zero-length run).
+function consumeRun(text: string, start: number, test: (character: string) => boolean): number {
+  let index = start;
+  while (index < text.length && test(text[index] ?? "")) index += 1;
+  return index;
+}
+
+// The citation-marker body grammar (former CITATION_MARKER regex, now a manual scanner -- see
+// stripCitationMarkers below for why): `\^?\d+` (a footnote number, optionally caret-prefixed) or
+// `[A-Za-z]+-?\d+` (a letter label, optionally hyphenated, followed by mandatory digits). Returns
+// the index just past the matched body, or undefined when `start` does not open either shape.
+function citationMarkerBodyEnd(text: string, start: number): number | undefined {
+  const first = text[start];
+  if (first === undefined) return undefined;
+  if (first === "^" || isAsciiDigit(first)) {
+    const digitsStart = first === "^" ? start + 1 : start;
+    const digitsEnd = consumeRun(text, digitsStart, isAsciiDigit);
+    return digitsEnd > digitsStart ? digitsEnd : undefined;
+  }
+  if (isAsciiLetter(first)) {
+    const lettersEnd = consumeRun(text, start, isAsciiLetter);
+    const afterHyphen = text[lettersEnd] === "-" ? lettersEnd + 1 : lettersEnd;
+    const digitsEnd = consumeRun(text, afterHyphen, isAsciiDigit);
+    return digitsEnd > afterHyphen ? digitsEnd : undefined;
+  }
+  return undefined;
+}
+
+// Returns the index just past the closing `]` of a citation marker opening at `text[open] ===
+// "["`, or undefined when `open` does not open one.
+function citationMarkerEnd(text: string, open: number): number | undefined {
+  const bodyEnd = citationMarkerBodyEnd(text, open + 1);
+  return bodyEnd !== undefined && text[bodyEnd] === "]" ? bodyEnd + 1 : undefined;
+}
+
+/**
+ * Removes every citation marker (`[1]`, `[^12]`, `[A-1]`, ...) from `text`, in one linear
+ * left-to-right pass. Deliberately not the former bounded regex
+ * (`/\s{0,20}\[(?:\^?\d{1,100}|[A-Za-z]{1,100}-?\d{1,100})\]/gu`): that bound kept the match O(n)
+ * but silently stopped RECOGNIZING (and thus stripping) any marker whose digit run or letter label
+ * exceeded 100 characters, leaving the raw bracketed marker to be spoken aloud verbatim -- a
+ * regression of the exact suppression guarantee this module exists to enforce (a citation marker
+ * must never reach TTS, regardless of length). This scanner has no such bound: `citationMarkerEnd`
+ * fails fast in O(1) on a `[` whose very next character cannot start either shape (unlike the
+ * markdown-link scanner below, which must search ahead for a terminator because a link label is
+ * shape-unconstrained), and every character `consumeRun` DOES scan is consumed by the enclosing
+ * `cursor`, so no character is ever rescanned by a later attempt from an earlier offset -- the same
+ * amortized-O(n) argument `stripMarkdownLinks` relies on, without needing its bounded window.
+ */
+function stripCitationMarkers(text: string): string {
+  const parts: string[] = [];
+  let cursor = 0;
+  while (cursor < text.length) {
+    const open = text.indexOf("[", cursor);
+    if (open < 0) {
+      parts.push(text.slice(cursor));
+      break;
+    }
+    parts.push(text.slice(cursor, open));
+    const end = citationMarkerEnd(text, open);
+    if (end === undefined) {
+      parts.push("[");
+      cursor = open + 1;
+      continue;
+    }
+    cursor = end;
+  }
+  return parts.join("");
+}
 
 function isTagBoundary(value: string | undefined): boolean {
   return value === undefined || value === ">" || value === "/" || value.trim().length === 0;
@@ -147,10 +216,11 @@ function stripMarkdownLinks(text: string): string {
 }
 
 function stripMarkdown(line: string): string {
-  const withoutMarkdown = stripMarkdownLinks(line.replace(MARKDOWN_IMAGE, ""))
-    .replace(AUTOLINK_URL, "")
-    .replace(BARE_URL, "")
-    .replace(CITATION_MARKER, "")
+  const withoutMarkdown = stripCitationMarkers(
+    stripMarkdownLinks(line.replace(MARKDOWN_IMAGE, ""))
+      .replace(AUTOLINK_URL, "")
+      .replace(BARE_URL, ""),
+  )
     .replace(/`([^`\n]+)`/gu, "$1")
     .replace(/^\s{0,3}#{1,6}\s+/u, "")
     .replace(/^\s*(?:[-+*]|\d+[.)])\s+/u, "");

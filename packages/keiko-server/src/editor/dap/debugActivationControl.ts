@@ -160,19 +160,17 @@ function revocationRequired(
 // addDebuggingProjection in editorSettingsControl.ts calls it from the synchronous portion of
 // loadSnapshot; making it async is a breaking ripple across callers.
 //
-// The mismatch is safe today ONLY because trackResolution and pruneIdleTracked are fully
-// synchronous. Node's single-threaded event loop means the read/set/delete sequence inside them
-// runs atomically against any concurrent synchronizeTracked -- which does have an `await`
-// (disposeActiveSession) between reading `prior` and writing `next`. Any future change that
-// introduced an `await` here (a genuinely async gate.resolve, an async provisioning provider, an
-// async cache adapter) would silently reintroduce an interleaving race with the mutex-protected
-// writer. Do not add `await` to this function or to pruneIdleTracked without one of:
-//   (a) making the caller of resolve() async and routing this write through options.mutex the
-//       same way synchronizeTracked already does, or
-//   (b) documenting explicitly that the cache is now best-effort and non-authoritative and
-//       adjusting synchronizeTracked so it no longer relies on `prior` being visible.
-// The debugActivationControl.test.ts's write-discipline pin locks in the current synchronous-
-// visibility contract so a future change cannot break it silently.
+// trackResolution and pruneIdleTracked are fully synchronous, so Node's single-threaded event
+// loop makes the read/set/delete sequence inside them atomic against any concurrent
+// synchronizeTracked -- which does have `await`s (disposeActiveSession, writeEvidence) between
+// reading `prior` and writing `next`. That gap does NOT make the map corrupt (JS map writes are
+// always atomic), but it does mean a synchronous resolve() call landing inside the gap can publish
+// a newer entry that synchronizeTracked's own final write would otherwise clobber with the stale
+// `next` it captured before the gap (KEIKO-0642-r3). synchronizeTracked closes that race itself,
+// by re-checking the map entry's identity immediately before its final commit -- see the comment
+// there. Do not add a NEW unlocked writer here without the same before/after identity check.
+// The debugActivationControl.test.ts's write-discipline pin locks in the synchronous-visibility
+// contract this relies on, and its deferred-interleaving regression pins the anti-clobber guard.
 function trackResolution(
   context: DebugActivationContext & { readonly realRoot: string },
   next: DebugActivationSummary,
@@ -259,16 +257,30 @@ async function synchronizeTracked(
   const realRoot = input.context.realRoot;
   const next = summaryFor(input.context, options, gate);
   if (realRoot === undefined) return next;
-  const prior = tracked.get(realRoot)?.summary;
+  // KEIKO-0642-r3: capture the exact entry object (not just its `.summary`) so the final commit
+  // below can detect whether anyone else wrote -- or deleted -- this key while we were suspended
+  // on the awaits. Map values are always fresh object literals on every write (trackResolution,
+  // this function, never mutated in place), so reference identity is a reliable "nobody wrote
+  // since I looked" check without threading a separate generation counter through every writer.
+  const observedEntry = tracked.get(realRoot);
+  const prior = observedEntry?.summary;
   const revoke = revocationRequired(input.action, input.changed, prior, next);
   if (revoke) await options.disposeActiveSession(realRoot);
   await writeEvidence(options, input, prior, next, revoke);
   const now = options.now ?? Date.now;
-  tracked.set(realRoot, {
-    context: { ...input.context, realRoot },
-    summary: next,
-    lastTouchedMs: nextTouchMs(input, tracked, realRoot, now),
-  });
+  // A synchronous resolve() (or another synchronizeTracked, or pruneIdleTracked's eviction) may
+  // have replaced or removed this entry during the awaits above; `next` was computed from the
+  // context this call started with and is stale relative to that later write. Committing here
+  // would silently regress the cache to older information (the exact bug this guards against).
+  // The caller of THIS synchronize() still gets its own outcome via the return value below --
+  // only the shared cache write is skipped.
+  if (tracked.get(realRoot) === observedEntry) {
+    tracked.set(realRoot, {
+      context: { ...input.context, realRoot },
+      summary: next,
+      lastTouchedMs: nextTouchMs(input, tracked, realRoot, now),
+    });
+  }
   return next;
 }
 

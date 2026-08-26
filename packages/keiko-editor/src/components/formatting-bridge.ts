@@ -153,7 +153,7 @@ export function createKeikoFormattingProvider(
       sequence += 1;
       const versionBefore = model.getVersionId();
       const request = buildRequest(deps, documentUri, options, sequence, versionBefore);
-      const controller = controllerForToken(token);
+      const { controller, dispose } = controllerForToken(token);
       const query: EditorFormattingQuery = { request, documentText: model.getValue() };
       return runLanguageBridgeCall<EditorFormattingResponse, readonly MonacoTextEdit[]>({
         operation: "formatting",
@@ -175,6 +175,8 @@ export function createKeikoFormattingProvider(
           return decision.status === "apply" ? editsToMonaco(decision.edits) : EMPTY_EDITS;
         },
         report: deps.report,
+      }).finally(() => {
+        dispose();
       });
     },
   };

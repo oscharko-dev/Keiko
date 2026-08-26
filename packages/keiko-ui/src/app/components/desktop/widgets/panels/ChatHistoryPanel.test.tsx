@@ -623,13 +623,18 @@ describe("ChatHistoryPanel localized failure messages (KEIKO-0820)", () => {
     renderGermanPanel();
     await waitFor(() => expect(document.documentElement.lang).toBe("de"));
 
-    // Once German is active, aria-label (which wins over visible text for the accessible name) is
-    // itself German — t("chat.history.action.rename"/"action.save", { title }) — so the queries below
-    // match the German labels, not the still-English visible button copy ("Rename"/"Save").
-    await user.click(screen.getByRole("button", { name: /umbenennen/i }));
+    // #2906 round 3: the accessible name (aria-label, t("chat.history.action.rename", { title }))
+    // and the VISIBLE button copy (t("chat.history.action.renameLabel")) are both German now — a
+    // sighted user and a screen-reader user see/hear the same language (WCAG 2.5.3 Label in
+    // Name), so this asserts both rather than only the accessible name the query happens to match.
+    const renameButton = screen.getByRole("button", { name: /umbenennen/i });
+    expect(renameButton).toHaveTextContent("Umbenennen");
+    await user.click(renameButton);
     const renameInput = screen.getByDisplayValue("Sprint triage");
     await user.clear(renameInput);
-    await user.click(screen.getByRole("button", { name: /speichern/i }));
+    const saveButton = screen.getByRole("button", { name: /speichern/i });
+    expect(saveButton).toHaveTextContent("Speichern");
+    await user.click(saveButton);
 
     const describedById = renameInput.getAttribute("aria-describedby");
     const errorEl = document.getElementById(describedById as string);
@@ -676,9 +681,12 @@ describe("ChatHistoryPanel localized failure messages (KEIKO-0820)", () => {
     renderGermanPanel(makeSession({ chats: [makeChat({ status: "closed" })] }));
     await waitFor(() => expect(document.documentElement.lang).toBe("de"));
 
-    // The "Active"/"Deleted" tab labels are hardcoded JSX text, not routed through t(...), so they
-    // stay in English regardless of locale — this query is intentionally unchanged.
-    await user.click(screen.getByRole("tab", { name: /deleted/i }));
+    // #2906 round 3: the "Active"/"Deleted" tab labels now route through t("chat.history.tab.*"),
+    // so their accessible name (there is no separate aria-label — the visible text IS the name) is
+    // German too. Assert both the query match and the visible text explicitly.
+    const deletedTab = screen.getByRole("tab", { name: /gelöscht/i });
+    expect(deletedTab).toHaveTextContent("Gelöscht");
+    await user.click(deletedTab);
     await user.click(screen.getByRole("button", { name: /wiederherstellen/i }));
 
     const alert = await screen.findByRole("alert");

@@ -46,11 +46,14 @@ export type FatalDiagnosticsModule = Pick<
 >;
 
 export interface ProcessGuardSink {
-  // KEIKO-0837: err may return a Promise so the caller can drain the stderr write
-  // BEFORE process.exit() is invoked. The default sink still returns void (Node's
-  // process.stderr.write is synchronous for TTY/pipes on POSIX), but a test seam or a
-  // consumer that pipes stderr through an async transport can now be sure the fatal line
-  // actually reached its destination.
+  // KEIKO-0837 / #2906 round 3 (comment 3865273680): err may return a Promise so the caller can
+  // drain the write BEFORE process.exit() is invoked. Node's stdout/stderr streams are
+  // synchronous ONLY for a POSIX TTY or a regular file: a POSIX PIPE (`keiko ... | other-cmd`)
+  // and EVERY Windows stream (TTY included) are documented as asynchronous, so the default sink
+  // below resolves from the write's own flush callback instead of assuming a synchronous write.
+  // `finish()` additionally races this against a short bounded fallback (`boundedSinkWrite`) so a
+  // sink whose returned Promise never settles still lets the process exit — instead of hanging
+  // forever, or worse, falling out through Node's empty-event-loop exit with code 0.
   readonly err: (text: string) => void | Promise<void>;
   readonly exit: (code: number) => void;
   // Test seam: injects a fake (or deliberately hanging) keiko-server module without exercising
@@ -63,10 +66,20 @@ function loadServerModule(): Promise<FatalDiagnosticsModule> {
   return import("@oscharko-dev/keiko-server");
 }
 
+// #2906 round 3 (comment 3865273680): resolves once `process.stderr.write`'s own flush
+// callback fires, never before — see the ProcessGuardSink.err doc comment above for why this
+// matters on a POSIX pipe or any Windows stream. Exported so a regression can drive it directly
+// against a real piped subprocess without going through the full crash-classification pipeline.
+export function writeStderrDrained(text: string): Promise<void> {
+  return new Promise((resolveWrite) => {
+    process.stderr.write(text, () => {
+      resolveWrite();
+    });
+  });
+}
+
 const DEFAULT_PROCESS_GUARD_SINK: ProcessGuardSink = {
-  err: (text: string): void => {
-    process.stderr.write(text);
-  },
+  err: writeStderrDrained,
   exit: (code: number): void => {
     process.exit(code);
   },
@@ -141,6 +154,46 @@ async function writeFatalLine(
   return fatalProcessLine(humanKind, described.errorClass);
 }
 
+// #2906 round 3 (comment 3865273680): a sink's write is itself untrusted — a Promise-returning
+// sink that never settles would otherwise block `finish()` forever, so `sink.exit(1)` would never
+// run (and if nothing else keeps the event loop alive, Node's empty-event-loop exit fires with
+// code 0 first, silently dropping the crash report). Bounds `invoke()` the same way
+// `handleFatalReason` already bounds the classifier import: whichever of the real write or the
+// timeout settles first wins, and a write that throws synchronously is treated the same as one
+// that never settles — never propagated, never blocking the exit.
+const SINK_WRITE_TIMEOUT_MS = 500;
+
+function boundedSinkWrite(invoke: () => void | Promise<void>): Promise<void> {
+  return new Promise((resolveWrite) => {
+    let settled = false;
+    const settle = (): void => {
+      if (settled) return;
+      settled = true;
+      resolveWrite();
+    };
+    const timer = setTimeout(settle, SINK_WRITE_TIMEOUT_MS);
+    let result: void | Promise<void>;
+    try {
+      result = invoke();
+    } catch {
+      clearTimeout(timer);
+      settle();
+      return;
+    }
+    if (!(result instanceof Promise)) {
+      clearTimeout(timer);
+      settle();
+      return;
+    }
+    result
+      .then(settle)
+      .catch(settle)
+      .finally(() => {
+        clearTimeout(timer);
+      });
+  });
+}
+
 // Races the classifier import against the bounded timeout above. Exactly one of the two paths
 // calls `finish()` for real (the guard makes the other a no-op), so stderr is written and the
 // process exits exactly once, whichever settles first. Returned as a Promise (rather than
@@ -162,11 +215,9 @@ async function handleFatalReason(
   const finish = async (): Promise<void> => {
     if (settled) return;
     settled = true;
-    try {
-      await sink.err(line);
-    } catch {
-      // A sink whose write itself throws should not prevent the process from exiting.
-    }
+    // boundedSinkWrite never throws and never hangs past SINK_WRITE_TIMEOUT_MS — see its doc
+    // comment above — so sink.exit is always reached, whether the sink drained in time or not.
+    await boundedSinkWrite(() => sink.err(line));
     sink.exit(1);
   };
   await new Promise<void>((resolve) => {

@@ -78,10 +78,20 @@ export class ManualPodJobRegistry {
 
   private evictIfFull(): void {
     if (this.runs.size < MAX_RETAINED_JOBS) return;
-    // Evict the oldest terminal job first; if none is terminal, evict the oldest entry.
+    // Evict the oldest terminal job first; if none is terminal, every retained slot is still
+    // actively running and the oldest one is the fallback victim. Round-3 finding: dropping a
+    // still-running victim's registry entry without stopping its work let the crawl/index
+    // pipeline keep consuming resources invisibly -- unregistered (so unpollable), with no
+    // reachable controller (so uncancellable), and its eventual terminal patch() silently
+    // discarded since patch() no-ops on an unknown jobId. Abort the victim's controller first:
+    // refreshRun/createRun already pass `signal: controller.signal` into the domain pipeline
+    // cooperatively, so this actually stops the work through its normal (fail-closed) lifecycle
+    // instead of just forgetting about it.
     const oldestTerminal = [...this.runs.values()].find((run) => run.job.state !== "running");
     const victim = oldestTerminal ?? this.runs.values().next().value;
-    if (victim !== undefined) this.runs.delete(victim.job.jobId);
+    if (victim === undefined) return;
+    if (victim.job.state === "running") victim.controller.abort();
+    this.runs.delete(victim.job.jobId);
   }
 }
 

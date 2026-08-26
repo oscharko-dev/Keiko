@@ -8,6 +8,7 @@ import { isIP } from "node:net";
 import { ConfigInvalidError } from "@oscharko-dev/keiko-security/errors/gateway";
 import {
   DEFAULT_GROUNDING_LIMITS,
+  DEFAULT_SAFE_CIRCUIT_BREAKER_CONFIG,
   resolveGroundingLimits,
   type GroundingLimits,
 } from "@oscharko-dev/keiko-contracts/bff-wire";
@@ -48,10 +49,13 @@ const DEFAULT_MAX_RETRIES = 3;
 const DEFAULT_RETRY_BASE_DELAY_MS = 500;
 // KEIKO-0572: exported so gateway-setup.ts / grounded-retrieval-eval.ts can import the shared
 // defaults instead of restating the literal `{ failureThreshold: 5, cooldownMs: 30_000,
-// halfOpenProbes: 2 }` at three call sites.
-export const DEFAULT_FAILURE_THRESHOLD = 5;
-export const DEFAULT_COOLDOWN_MS = 30_000;
-export const DEFAULT_HALF_OPEN_PROBES = 2;
+// halfOpenProbes: 2 }` at three call sites. #2906 round 3: the VALUES themselves now come from
+// keiko-contracts's DEFAULT_SAFE_CIRCUIT_BREAKER_CONFIG (the one place keiko-ui's
+// gatewayConfigParsing.ts can also reach across the ADR-0019 package boundary), so this package no
+// longer holds an independent copy that could drift from the wire default silently.
+export const DEFAULT_FAILURE_THRESHOLD = DEFAULT_SAFE_CIRCUIT_BREAKER_CONFIG.failureThreshold;
+export const DEFAULT_COOLDOWN_MS = DEFAULT_SAFE_CIRCUIT_BREAKER_CONFIG.cooldownMs;
+export const DEFAULT_HALF_OPEN_PROBES = DEFAULT_SAFE_CIRCUIT_BREAKER_CONFIG.halfOpenProbes;
 export const DEFAULT_CIRCUIT_BREAKER_CONFIG = {
   failureThreshold: DEFAULT_FAILURE_THRESHOLD,
   cooldownMs: DEFAULT_COOLDOWN_MS,
