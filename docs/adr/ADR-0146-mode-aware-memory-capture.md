@@ -131,6 +131,25 @@ mode and delegates eligible records to `promoteEligibleMemoryRecord` in
 a private acceptance rule or remain permanently `proposed` merely because it entered through a
 different transport, per §5 of `AGENTS.md`.
 
+**Latent capture-time vs. maintenance divergence (KEIKO-0555).** D4's "one promotion lever" framing
+is behaviourally true today because `shouldPromote` is access-history-blind. The two invocations of
+`planMemoryMaintenance`, however, ask the same question against different-shaped state:
+
+- Capture-time promotion (`memory-salience.ts::promoteEligibleRecord`, called by
+  `persistCandidate`) invokes `planMemoryMaintenance([record], EMPTY_SALIENCE_ACCESS_STATS,
+  { nowMs: record.createdAt })` — a synthetic single-record context with an always-empty access-stats
+  map and `nowMs` pinned to the record's own `createdAt` (age always zero).
+- The standing maintenance sweep (`memory-maintenance-handlers.ts::runPromotionPhase`, Phase 1 of
+  `runMemoryMaintenance`) invokes `planMemoryMaintenance(beforePromote, promoteStats,
+  { nowMs, policy: planPolicy })` over the full vault snapshot with real access-stats and the
+  actual current `nowMs`.
+
+The two calls therefore evaluate the same predicate against different inputs. A future change that
+adds an access-history- or age-sensitive term to `shouldPromote` must be checked against BOTH call
+sites for behavioural parity — sharing the planner function alone does not currently guarantee that
+capture-time and maintenance-time promotion make the same decision. Do not describe the two call
+sites as "unified"; the divergence is latent, not resolved.
+
 ### D4a — Maintenance promotion uses the same unattended-acceptance gate
 
 Both the explicit maintenance route and the bounded opportunistic maintenance pass resolve the

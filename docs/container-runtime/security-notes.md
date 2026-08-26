@@ -142,6 +142,33 @@ Running the engine itself in rootless mode (Docker/Podman rootless) is the recom
 the controls above are independent of, and additive to, a rootless daemon. Podman's default rootless
 operation is one reason both engines are first-class in `ContainerEngineId`.
 
+## Pilot-image pinning (tag today; digest migration path)
+
+The pilot image referenced by `containerRunner.ts`'s code comment is intentionally pinned by TAG
+(`docker.io/library/alpine:3.20`), not by digest, because no Keiko-vetted digest has been
+published yet (KEIKO-0964). The current shape is safe by construction:
+
+- `--pull never` blocks a network fetch on a missing image, so a tag re-mapping upstream cannot
+  silently replace the local image at request time.
+- The `imageAllowlist` is a closed literal set of one entry, so an image outside it is rejected
+  with `IMAGE_NOT_ALLOWED`.
+
+A **Keiko-vetted digest** is one that has been:
+
+1. Pulled from a Keiko-controlled or Keiko-mirrored registry.
+2. Recorded in a Keiko-signed provenance manifest (SBOM + scanner report attached).
+3. Reviewed against this document's security controls (rootless, `--cap-drop ALL`, `--read-only`,
+   `--network none`, resource limits).
+
+Once such a digest exists, the switch is a one-line change in `containerRunner.ts`: change the
+`PILOT_IMAGE` constant from `docker.io/library/alpine:3.20` to a digest reference of the form
+`docker.io/library/alpine@sha256:<64-hex>`. `--pull never` and the closed `imageAllowlist`
+remain unchanged; no runtime behaviour changes beyond the stricter image-identity check the
+digest gives.
+
+**Do not** paste an unvetted digest here or into the code as a placeholder -- the value is
+load-bearing operator evidence.
+
 ## Out of scope
 
 The following are explicitly **not** provided by this surface and are deferred behind their own issues

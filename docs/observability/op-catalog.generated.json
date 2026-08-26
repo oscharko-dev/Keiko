@@ -11,25 +11,25 @@
     {
       "op": "process.exiting",
       "category": "process",
-      "site": "packages/keiko-cli/src/ui.ts:448",
+      "site": "packages/keiko-cli/src/ui.ts:473",
       "package": "keiko-cli"
     },
     {
       "op": "process.fatal",
       "category": "process",
-      "site": "packages/keiko-cli/src/process-guards.ts:114",
+      "site": "packages/keiko-cli/src/process-guards.ts:119",
       "package": "keiko-cli"
     },
     {
       "op": "process.heartbeat",
       "category": "process",
-      "site": "packages/keiko-cli/src/ui.ts:701",
+      "site": "packages/keiko-cli/src/ui.ts:726",
       "package": "keiko-cli"
     },
     {
       "op": "process.started",
       "category": "process",
-      "site": "packages/keiko-cli/src/ui.ts:816",
+      "site": "packages/keiko-cli/src/ui.ts:841",
       "package": "keiko-cli"
     },
     {
@@ -299,13 +299,13 @@
     {
       "op": "knowledge.store.encryption-rejected",
       "category": "diagnostic",
-      "site": "packages/keiko-local-knowledge/src/store.ts:514",
+      "site": "packages/keiko-local-knowledge/src/store.ts:516",
       "package": "keiko-local-knowledge"
     },
     {
       "op": "knowledge.store.quarantined",
       "category": "diagnostic",
-      "site": "packages/keiko-local-knowledge/src/store.ts:477",
+      "site": "packages/keiko-local-knowledge/src/store.ts:479",
       "package": "keiko-local-knowledge"
     },
     {
@@ -323,13 +323,19 @@
     {
       "op": "search.native-runtime-resolved",
       "category": "search",
-      "site": "packages/keiko-local-knowledge/src/retrieval/usearch-ann-index.ts:411",
+      "site": "packages/keiko-local-knowledge/src/retrieval/usearch-ann-index.ts:364",
+      "package": "keiko-local-knowledge"
+    },
+    {
+      "op": "store.encryption-checkpoint-degraded",
+      "category": "diagnostic",
+      "site": "packages/keiko-local-knowledge/src/store-content-encryption.ts:342",
       "package": "keiko-local-knowledge"
     },
     {
       "op": "store.encryption-migrated",
       "category": "diagnostic",
-      "site": "packages/keiko-local-knowledge/src/store-content-encryption.ts:305",
+      "site": "packages/keiko-local-knowledge/src/store-content-encryption.ts:400",
       "package": "keiko-local-knowledge"
     },
     {
@@ -347,7 +353,7 @@
     {
       "op": "memory-vault.log.sink-failed",
       "category": "diagnostic",
-      "site": "packages/keiko-memory-vault/src/vault-log.ts:174",
+      "site": "packages/keiko-memory-vault/src/vault-log.ts:179",
       "package": "keiko-memory-vault"
     },
     {
@@ -360,6 +366,12 @@
       "op": "memory-vault.store.quarantined",
       "category": "diagnostic",
       "site": "packages/keiko-memory-vault/src/db.ts:127",
+      "package": "keiko-memory-vault"
+    },
+    {
+      "op": "store.encryption-checkpoint-degraded",
+      "category": "diagnostic",
+      "site": "packages/keiko-memory-vault/src/schema.ts:369",
       "package": "keiko-memory-vault"
     },
     {
@@ -725,7 +737,7 @@
     {
       "op": "atlassian.credential.rejected",
       "category": "security",
-      "site": "packages/keiko-server/src/atlassian/credentialRoutes.ts:175",
+      "site": "packages/keiko-server/src/atlassian/credentialRoutes.ts:188",
       "package": "keiko-server"
     },
     {
@@ -809,19 +821,19 @@
     {
       "op": "git.commit.preview.completed",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/gitDelivery/commitRoutes.ts:419",
+      "site": "packages/keiko-server/src/gitDelivery/commitRoutes.ts:420",
       "package": "keiko-server"
     },
     {
       "op": "git.delivery.mutation.completed",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/gitDelivery/execution.ts:235",
+      "site": "packages/keiko-server/src/gitDelivery/execution.ts:236",
       "package": "keiko-server"
     },
     {
       "op": "git.delivery.mutation.failed",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/gitDelivery/execution.ts:264",
+      "site": "packages/keiko-server/src/gitDelivery/execution.ts:265",
       "package": "keiko-server"
     },
     {
@@ -941,7 +953,7 @@
     {
       "op": "request",
       "category": "http",
-      "site": "packages/keiko-server/src/server.ts:480",
+      "site": "packages/keiko-server/src/server.ts:489",
       "package": "keiko-server"
     },
     {
