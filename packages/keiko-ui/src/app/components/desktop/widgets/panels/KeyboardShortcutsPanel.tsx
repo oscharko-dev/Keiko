@@ -396,7 +396,7 @@ function RecordingControls({
   readonly onCapture: (event: KeyboardEvent<HTMLButtonElement>) => void;
 }): ReactNode {
   const pressButtonRef = useRef<HTMLButtonElement | null>(null);
-  const controlRef = useRef<HTMLDivElement | null>(null);
+  const controlRef = useRef<HTMLFieldSetElement | null>(null);
   useEffect(() => {
     const handle = requestAnimationFrame((): void => pressButtonRef.current?.focus());
     return (): void => cancelAnimationFrame(handle);
@@ -408,7 +408,7 @@ function RecordingControls({
   // Mirrors Palette.tsx's onBlur pattern: relatedTarget is only set when focus demonstrably
   // moved to another DOM node (not e.g. a window blur), and controlRef.contains() distinguishes
   // moving between the two buttons IN this row (no cancel) from focus leaving it entirely.
-  const onBlur = (event: FocusEvent<HTMLDivElement>): void => {
+  const onBlur = (event: FocusEvent<HTMLFieldSetElement>): void => {
     if (
       event.relatedTarget instanceof Node &&
       controlRef.current?.contains(event.relatedTarget) !== true
