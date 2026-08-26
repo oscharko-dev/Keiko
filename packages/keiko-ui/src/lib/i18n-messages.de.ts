@@ -384,7 +384,7 @@ export const DE_MESSAGES = {
   "chat.history.action.cancel": "{title} abbrechen",
   "chat.history.action.restore": "{title} wiederherstellen",
   "window.type.resources.title": "Ressourcen",
-  "window.type.resources.desc": "Geteilte Assets & Referenzen",
+  "window.type.resources.desc": "Geteilte Assets & Referenzen — bald verfügbar.",
   "window.type.connector.title": "Knowledge Pod",
   "window.type.connector.desc": "Knowledge-Pod-Quelle auswählen",
   "window.type.localKnowledge.title": "Lokales Wissen",

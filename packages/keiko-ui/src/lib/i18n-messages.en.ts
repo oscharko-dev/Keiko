@@ -369,7 +369,7 @@ export const EN_MESSAGES = {
   "chat.history.action.cancel": "Cancel {title}",
   "chat.history.action.restore": "Restore {title}",
   "window.type.resources.title": "Resources",
-  "window.type.resources.desc": "Shared assets & references",
+  "window.type.resources.desc": "Shared assets & references — coming soon.",
   "window.type.connector.title": "Knowledge Pod",
   "window.type.connector.desc": "Pick a Knowledge Pod source",
   "window.type.localKnowledge.title": "Local Knowledge",

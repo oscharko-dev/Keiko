@@ -75,7 +75,6 @@ describe("buildEditorAgentChangesetPatch", () => {
       modifiedCount: 1,
       deletedCount: 1,
       omittedFileCount: 0,
-      filesOmittedBySearchLimit: false,
       truncated: false,
     });
     expect(model.files).toEqual([

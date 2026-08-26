@@ -2,17 +2,17 @@
   "releaseEvidenceVersion": 1,
   "staticExport": {
     "root": "dist/ui/static",
-    "fileCount": 289
+    "fileCount": 290
   },
   "b1": {
-    "firstLoadScriptCount": 18,
+    "firstLoadScriptCount": 19,
     "monacoMarkersInFirstLoad": 0,
     "ok": true
   },
   "b2": {
     "budgetBytes": 2621440,
-    "shipsTotalBytes": 1406597,
-    "loadedTotalBytes": 1406597,
+    "shipsTotalBytes": 1406633,
+    "loadedTotalBytes": 1406633,
     "ok": true,
     "shipsOk": true,
     "loadedOk": true
@@ -59,15 +59,15 @@
       "workerLabel": null
     },
     {
-      "path": "dist/ui/static/_next/static/chunks/1vw7oo5hltkzg.js",
-      "gzipBytes": 288709,
-      "rawBytes": 1216156,
+      "path": "dist/ui/static/_next/static/chunks/2er8hc1l-wnz8.js",
+      "gzipBytes": 288726,
+      "rawBytes": 1215761,
       "workerLabel": null
     },
     {
-      "path": "dist/ui/static/_next/static/chunks/1_x579f2fgjyr.js",
-      "gzipBytes": 288304,
-      "rawBytes": 1216156,
+      "path": "dist/ui/static/_next/static/chunks/0d31gl_19sx7z.js",
+      "gzipBytes": 288323,
+      "rawBytes": 1215761,
       "workerLabel": null
     },
     {
@@ -95,5 +95,5 @@
       "workerLabel": "editor"
     }
   ],
-  "measurementSha256": "a47f06fb143a0d8e7f256b6121646b9d3d11fec72cf7b1b7a319820a55df29c8"
+  "measurementSha256": "b6af493da9b48c7179a43ae9a26beac123977be4d6fef19ba58161329d2bc080"
 }

@@ -166,6 +166,7 @@ export type EditorAgentActionDenyReason =
   | "authority-invalid"
   | "authority-expired"
   | "authority-budget-exceeded"
+  | "authority-revoked"
   | "approval-reference-invalid"
   | "approval-reference-expired"
   | "approval-reference-consumed"
@@ -185,6 +186,7 @@ export const EDITOR_AGENT_ACTION_DENY_REASONS: readonly EditorAgentActionDenyRea
   "authority-invalid",
   "authority-expired",
   "authority-budget-exceeded",
+  "authority-revoked",
   "approval-reference-invalid",
   "approval-reference-expired",
   "approval-reference-consumed",
