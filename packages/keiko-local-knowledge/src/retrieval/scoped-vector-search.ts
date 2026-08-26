@@ -62,6 +62,7 @@ import {
   type VectorIndexCandidate,
   type VectorIndexOptions,
 } from "./vector-index.js";
+import { dotProduct, scoreVector, vectorNorm } from "./vector-scoring.js";
 
 const LEXICAL_RECALL_MAX_TERMS = 12;
 const LEXICAL_RECALL_MIN_TOKEN_LENGTH = 3;
@@ -596,17 +597,6 @@ function normalizeVectorForIdentity(
   return shouldL2Normalize(identity) ? l2NormalizeVector(vector) : new Float32Array(vector);
 }
 
-// Same ascending-index accumulation as the `na`/`nb` sums inside `cosineSimilarity`, so a
-// cosine computed as dot / (norm(a) * norm(b)) from precomputed norms is bit-identical to the
-// single-pass form (IEEE-754 float ops are deterministic for a fixed operation order).
-function vectorNorm(vector: Float32Array): number {
-  let sum = 0;
-  for (const value of vector) {
-    sum += value * value;
-  }
-  return Math.sqrt(sum);
-}
-
 function decodeVectorRowForIdentity(
   row: VectorRow,
   cipher: StoreContentCipher,
@@ -616,54 +606,9 @@ function decodeVectorRowForIdentity(
   return { ...row, vector, norm: vectorNorm(vector) };
 }
 
-// `noUncheckedIndexedAccess` widens `Float32Array[i]` to `number | undefined`; the loop
-// stays in-bounds by construction (`i < a.length`), so we narrow with `?? 0` rather than
-// a `!` assertion (forbidden by the project's lint rule) — at this index the value is
-// always a real Float32 lane, never absent.
-function cosineSimilarity(a: Float32Array, b: Float32Array): number {
-  let dot = 0;
-  let na = 0;
-  let nb = 0;
-  for (let i = 0; i < a.length; i += 1) {
-    const av = a[i] ?? 0;
-    const bv = b[i] ?? 0;
-    dot += av * bv;
-    na += av * av;
-    nb += bv * bv;
-  }
-  if (na === 0 || nb === 0) return 0;
-  return dot / (Math.sqrt(na) * Math.sqrt(nb));
-}
-
-function dotProduct(a: Float32Array, b: Float32Array): number {
-  let dot = 0;
-  for (let i = 0; i < a.length; i += 1) {
-    dot += (a[i] ?? 0) * (b[i] ?? 0);
-  }
-  return dot;
-}
-
-// Negated Euclidean distance so higher = closer (uniform "score-desc" sort with the
-// other two metrics). Documented in the function name; consumers never see the raw
-// distance — only the unified score.
-function negativeEuclideanDistance(a: Float32Array, b: Float32Array): number {
-  let sum = 0;
-  for (let i = 0; i < a.length; i += 1) {
-    const d = (a[i] ?? 0) - (b[i] ?? 0);
-    sum += d * d;
-  }
-  return -Math.sqrt(sum);
-}
-
-function scoreFor(
-  metric: EmbeddingVectorMetric,
-  query: Float32Array,
-  vector: Float32Array,
-): number {
-  if (metric === "cosine") return cosineSimilarity(query, vector);
-  if (metric === "dot") return dotProduct(query, vector);
-  return negativeEuclideanDistance(query, vector);
-}
+// Local `scoreFor` alias so the fast-path cosine call site below (which needs the
+// combined dispatcher for non-cosine metrics) keeps its historical name.
+const scoreFor = scoreVector;
 
 // ─── Query embedding ─────────────────────────────────────────────────────────
 // Embeds the query once per distinct embedding identity in scope. Different capsules can

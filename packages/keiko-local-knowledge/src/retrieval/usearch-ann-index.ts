@@ -3,11 +3,7 @@ import { existsSync, readFileSync, statSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { Worker } from "node:worker_threads";
 
-import {
-  embeddingIdentityKey,
-  type EmbeddingModelIdentity,
-  type EmbeddingVectorMetric,
-} from "@oscharko-dev/keiko-contracts";
+import { embeddingIdentityKey, type EmbeddingModelIdentity } from "@oscharko-dev/keiko-contracts";
 
 import { emitKnowledgeLogEvent, type KnowledgeLogSink } from "../knowledge-log.js";
 
@@ -25,6 +21,7 @@ import {
   type UsearchWorkerData,
   type UsearchWorkerMessage,
 } from "./usearch-worker-protocol.js";
+import { scoreVectorWithNorms, vectorNorm } from "./vector-scoring.js";
 
 export interface UsearchVectorEntry {
   readonly id: string;
@@ -194,50 +191,6 @@ function finiteVector(vector: Float32Array): boolean {
   return true;
 }
 
-function vectorNorm(vector: Float32Array): number {
-  let squared = 0;
-  for (const value of vector) squared += value * value;
-  return Math.sqrt(squared);
-}
-
-function dotProduct(left: Float32Array, right: Float32Array): number {
-  let score = 0;
-  for (let index = 0; index < left.length; index += 1) {
-    score += (left[index] ?? 0) * (right[index] ?? 0);
-  }
-  return score;
-}
-
-function cosineScore(
-  query: Float32Array,
-  queryNorm: number,
-  vector: Float32Array,
-  vectorNormValue: number,
-): number {
-  return dotProduct(query, vector) / (queryNorm * vectorNormValue);
-}
-
-function euclideanScore(query: Float32Array, vector: Float32Array): number {
-  let squared = 0;
-  for (let index = 0; index < query.length; index += 1) {
-    const delta = (query[index] ?? 0) - (vector[index] ?? 0);
-    squared += delta * delta;
-  }
-  return -Math.sqrt(squared);
-}
-
-function scoreVector(
-  metric: EmbeddingVectorMetric,
-  query: Float32Array,
-  queryNorm: number,
-  vector: Float32Array,
-  vectorNormValue: number,
-): number {
-  if (metric === "cosine") return cosineScore(query, queryNorm, vector, vectorNormValue);
-  if (metric === "dot") return dotProduct(query, vector);
-  return euclideanScore(query, vector);
-}
-
 function vectorAt(vectors: SharedVectors, dimensions: number, index: number): Float32Array {
   return new Float32Array(
     vectors.buffer,
@@ -259,7 +212,7 @@ function scoreIndexes(
     const entry = index.vectors.entries[rowIndex];
     if (entry === undefined) continue;
     const vector = vectorAt(index.vectors, identity.vectorDimensions, rowIndex);
-    const score = scoreVector(identity.vectorMetric, query, queryNorm, vector, entry.norm);
+    const score = scoreVectorWithNorms(identity.vectorMetric, query, queryNorm, vector, entry.norm);
     if (Number.isFinite(score)) candidates.push({ id: entry.id, score });
   }
   candidates.sort((left, right) => right.score - left.score || compareIds(left.id, right.id));

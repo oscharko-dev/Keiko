@@ -27,9 +27,14 @@ import {
 } from "./discovery/persist.js";
 import { listCapsuleDocumentTexts } from "./qualityIntelligence/capsuleCorpus.js";
 import { searchVectorsForScope } from "./retrieval/scoped-vector-search.js";
+import type { KnowledgeLogEvent, KnowledgeLogSink } from "./knowledge-log.js";
+import { KnowledgeStoreError } from "./errors.js";
 import { openKnowledgeStore, type KnowledgeStoreKeyProvider } from "./store.js";
 import { createEncryptedContentCipher, PLAINTEXT_CONTENT_CIPHER } from "./store-content-cipher.js";
-import { STORE_CONTENT_ENCRYPTION_TEST_CONSTANTS } from "./store-content-encryption.js";
+import {
+  flushPlaintextResidue,
+  STORE_CONTENT_ENCRYPTION_TEST_CONSTANTS,
+} from "./store-content-encryption.js";
 import { scriptedAdapter, seedCapsuleWithVectors, type SeedVectorsOptions } from "./testing.js";
 import type { CitationReference } from "@oscharko-dev/keiko-contracts";
 
@@ -971,5 +976,147 @@ describe("performance guardrail", () => {
 
   it("the plaintext identity cipher adds no measurable overhead", () => {
     expect(PLAINTEXT_CONTENT_CIPHER.sealText("free")).toBe("free");
+  });
+});
+
+// ─── Post-migration WAL checkpoint hardening (#2906 KEIKO-0877) ────────────────────────────────────
+// Both migrateToEncrypted and upgradeEncryptedScope call `PRAGMA wal_checkpoint(TRUNCATE)` outside
+// their migration transaction to reclaim pages that held plaintext, and write the encryption-scope
+// marker only AFTER that flush returns (ADR-0047 D4). Unlike keiko-memory-vault's sibling flush
+// (warn-and-continue, #2906 KEIKO-0713 -- its marker had already been committed before its flush
+// runs), this package's marker write is gated BEHIND the flush, so a persistently busy or partial
+// checkpoint must fail the whole migration closed instead of being silently discarded.
+//
+// The helper is exercised directly with a fake DatabaseSync that only implements the one call the
+// flush issues (`db.prepare("PRAGMA wal_checkpoint(TRUNCATE)").get()`, plus `exec("VACUUM")` on the
+// success path), so the retry/report/throw behavior is tested against exactly the shape SQLite would
+// return without reconstructing an end-to-end migration timeline -- mirrors
+// packages/keiko-memory-vault/src/schema.test.ts's `flushPlaintextResidueWithRetry` suite.
+describe("flushPlaintextResidue (KEIKO-0877)", () => {
+  type CheckpointOutcome =
+    | Partial<{ busy: number; log: number; checkpointed: number }>
+    | { readonly kind: "throw"; readonly cause: Error };
+
+  interface FakeDb {
+    readonly db: DatabaseSync;
+    readonly checkpointCalls: { count: number };
+    readonly vacuumCalls: { count: number };
+  }
+
+  function fakeDbFor(nextOutcome: () => CheckpointOutcome): FakeDb {
+    const checkpointCalls = { count: 0 };
+    const vacuumCalls = { count: 0 };
+    const fake: unknown = {
+      prepare(sql: string): unknown {
+        if (sql !== "PRAGMA wal_checkpoint(TRUNCATE)") {
+          throw new Error(`unexpected prepare: ${sql}`);
+        }
+        return {
+          get(): unknown {
+            checkpointCalls.count += 1;
+            const outcome = nextOutcome();
+            if ((outcome as { kind?: string }).kind === "throw") {
+              throw (outcome as { cause: Error }).cause;
+            }
+            return outcome;
+          },
+        };
+      },
+      exec(sql: string): void {
+        if (sql !== "VACUUM") throw new Error(`unexpected exec: ${sql}`);
+        vacuumCalls.count += 1;
+      },
+    };
+    return { db: fake as DatabaseSync, checkpointCalls, vacuumCalls };
+  }
+
+  function collectingSink(): {
+    readonly sink: KnowledgeLogSink;
+    readonly events: KnowledgeLogEvent[];
+  } {
+    const events: KnowledgeLogEvent[] = [];
+    return {
+      sink: {
+        write(event: KnowledgeLogEvent): void {
+          events.push(event);
+        },
+      },
+      events,
+    };
+  }
+
+  it("checkpoints then VACUUMs and returns when busy=0 on the first attempt", () => {
+    const fake = fakeDbFor(() => ({ busy: 0, log: 0, checkpointed: 0 }));
+    const { sink, events } = collectingSink();
+    expect(() => {
+      flushPlaintextResidue(fake.db, sink);
+    }).not.toThrow();
+    expect(fake.checkpointCalls.count).toBe(1);
+    expect(fake.vacuumCalls.count).toBe(1);
+    expect(events).toEqual([]);
+  });
+
+  it("stops retrying after the first fully-checkpointed success (busy=1 then busy=0)", () => {
+    const outcomes: CheckpointOutcome[] = [
+      { busy: 1, log: 42, checkpointed: 0 },
+      { busy: 0, log: 42, checkpointed: 42 },
+      { busy: 0, log: 0, checkpointed: 0 },
+    ];
+    let index = 0;
+    const fake = fakeDbFor(() => outcomes[index++] ?? { busy: 0, log: 0, checkpointed: 0 });
+    const { sink, events } = collectingSink();
+    flushPlaintextResidue(fake.db, sink);
+    expect(fake.checkpointCalls.count).toBe(2);
+    expect(fake.vacuumCalls.count).toBe(1);
+    expect(events).toEqual([]);
+  });
+
+  // The mustFailBeforeFix scenario: a second connection holding the WAL open reports busy=1 on
+  // every attempt (indistinguishable, from this flush's perspective, from a real held-open reader).
+  it("throws KnowledgeStoreError and reports a degraded checkpoint when busy=1 persists", () => {
+    const fake = fakeDbFor(() => ({ busy: 1, log: 42, checkpointed: 0 }));
+    const { sink, events } = collectingSink();
+    expect(() => {
+      flushPlaintextResidue(fake.db, sink);
+    }).toThrow(KnowledgeStoreError);
+    expect(fake.checkpointCalls.count).toBe(3);
+    expect(fake.vacuumCalls.count).toBe(0);
+    const degraded = events.find((e) => e.op === "store.encryption-checkpoint-degraded");
+    expect(degraded).toBeDefined();
+    expect(degraded?.level).toBe("error");
+    expect(degraded?.extra?.attempts).toBe(3);
+    expect(degraded?.extra?.busy).toBe(true);
+  });
+
+  it("throws KnowledgeStoreError when the checkpoint reports a partial checkpoint (busy=0, checkpointed < log)", () => {
+    const fake = fakeDbFor(() => ({ busy: 0, log: 42, checkpointed: 10 }));
+    const { sink, events } = collectingSink();
+    expect(() => {
+      flushPlaintextResidue(fake.db, sink);
+    }).toThrow(/held-open reader prevented a full checkpoint/);
+    expect(fake.checkpointCalls.count).toBe(3);
+    expect(fake.vacuumCalls.count).toBe(0);
+    expect(events.find((e) => e.op === "store.encryption-checkpoint-degraded")).toBeDefined();
+  });
+
+  it("retries through a thrown checkpoint-statement exception and throws on exhaustion, never silently swallowing it", () => {
+    const fake = fakeDbFor(() => ({
+      kind: "throw",
+      cause: new Error("simulated wal_checkpoint hiccup"),
+    }));
+    const { sink, events } = collectingSink();
+    let thrown: unknown;
+    try {
+      flushPlaintextResidue(fake.db, sink);
+    } catch (error) {
+      thrown = error;
+    }
+    expect(thrown).toBeInstanceOf(KnowledgeStoreError);
+    expect((thrown as { cause?: unknown }).cause).toBeInstanceOf(Error);
+    expect(fake.checkpointCalls.count).toBe(3);
+    expect(fake.vacuumCalls.count).toBe(0);
+    const degraded = events.find((e) => e.op === "store.encryption-checkpoint-degraded");
+    expect(degraded).toBeDefined();
+    expect(degraded?.extra?.busy).toBe(true);
   });
 });

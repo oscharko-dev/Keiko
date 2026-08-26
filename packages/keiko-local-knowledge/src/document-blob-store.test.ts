@@ -326,4 +326,76 @@ describe("PDF document blob store", () => {
       fresh.cleanup();
     }
   });
+
+  // #2906 KEIKO-0739 — document_blobs deduplicates by (capsule_id, content_hash) via
+  // INSERT OR IGNORE, so only the FIRST writer's created_document_id/created_source_id
+  // survives. When a caller reads by content-hash WITHOUT an override, blobByHashReadOk
+  // returns that original writer's identity as documentId/sourceId and the opaque
+  // created_document_id as fileName (there is no per-document display name on the blobs
+  // table). Every current production caller passes a full override, so this fallback path
+  // is unreachable today — pin the exact fallback shape so a future accidental change is
+  // a deliberate, reviewed decision rather than a silent one.
+  it("falls back to the first writer's identity and opaque documentId as fileName when override is omitted", () => {
+    const fresh = freshStore();
+    try {
+      const seeded = seedPdfDocument(fresh.store);
+      writePdfDocumentBlob(fresh.store, {
+        capsuleId: seeded.capsuleId,
+        sourceId: seeded.sourceId,
+        documentId: seeded.documentId,
+        contentHash: seeded.contentHash,
+        byteLength: PDF_BYTES.byteLength,
+        mediaType: PDF_DOCUMENT_BLOB_MEDIA_TYPE,
+        bytes: PDF_BYTES,
+      });
+
+      // A second document sharing the exact same content hash. INSERT OR IGNORE keeps the
+      // first writer's identity — this second write is a no-op at the blob level.
+      const secondSource = addSourceToCapsule(
+        fresh.store,
+        seeded.capsuleId,
+        sampleSourceInput("src-second"),
+      );
+      const secondDocumentId = "doc-second" as DocumentId;
+      insertDocumentRow(fresh.store._internal.db, {
+        id: secondDocumentId,
+        capsuleId: seeded.capsuleId,
+        sourceId: String(secondSource.id),
+        documentPath: "docs/policy-copy.pdf",
+        sizeBytes: PDF_BYTES.byteLength,
+        mediaType: PDF_DOCUMENT_BLOB_MEDIA_TYPE,
+        contentHash: seeded.contentHash,
+        parserId: "pdf",
+        parserVersion: "1.0.0",
+        lastExtractedAt: 3000,
+        status: "extracted",
+        safeDisplayName: "policy-copy.pdf",
+      });
+      writePdfDocumentBlob(fresh.store, {
+        capsuleId: seeded.capsuleId,
+        sourceId: secondSource.id,
+        documentId: secondDocumentId,
+        contentHash: seeded.contentHash,
+        byteLength: PDF_BYTES.byteLength,
+        mediaType: PDF_DOCUMENT_BLOB_MEDIA_TYPE,
+        bytes: PDF_BYTES,
+      });
+
+      const result = readPdfDocumentBlobByContentHash(
+        fresh.store,
+        seeded.capsuleId,
+        seeded.contentHash,
+      );
+      expect(result.kind).toBe("ok");
+      if (result.kind !== "ok") return;
+      // Documented, intentional fallback: the first writer's identity survives on the blob
+      // row, and the fileName defaults to the opaque documentId itself (no safe_display_name
+      // column exists on document_blobs).
+      expect(result.blob.documentId).toBe(String(seeded.documentId));
+      expect(result.blob.sourceId).toBe(String(seeded.sourceId));
+      expect(result.blob.fileName).toBe(String(seeded.documentId));
+    } finally {
+      fresh.cleanup();
+    }
+  });
 });

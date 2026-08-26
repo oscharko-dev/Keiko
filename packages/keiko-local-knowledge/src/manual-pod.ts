@@ -200,9 +200,12 @@ function runManualIndexing(
 }
 
 // Create a local Knowledge Pod from an approved HTML manual: crawl → index reachable pages → build a
-// redacted pod summary. The pod is created even when the crawl is empty (it is reported as a
-// degraded pod with safe counts), so failures surface through lifecycle state rather than an
-// exception.
+// redacted pod summary. The pod is created even when the crawl is empty (it is left in its
+// create-time "draft" readiness with safe/zero counts, since nothing transitions the capsule
+// out of "draft" for a zero-page crawl — attachManualSource returns null and skips indexing;
+// capsuleReadiness in knowledge-pods.ts returns lifecycleState verbatim for every state
+// except "ready" and "deleting"). Failures surface through lifecycle state rather than an
+// exception (#2906 KEIKO-0644).
 export async function createHtmlManualPod(
   deps: CreateHtmlManualPodDeps,
   source: HtmlManualSource,

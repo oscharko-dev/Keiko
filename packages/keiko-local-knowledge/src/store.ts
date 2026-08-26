@@ -123,7 +123,9 @@ function applyDurabilityPragmas(db: DatabaseSync): void {
   db.exec("PRAGMA journal_mode = WAL");
   // synchronous=NORMAL: fsyncs on commit boundaries but skips the fsync between WAL
   // appends. Standard durability/latency choice for embedded apps where the user controls
-  // the host process; matches keiko-server's #62 store.
+  // the host process. keiko-server's own store (store/db.ts) does not set this pragma and
+  // relies on SQLite's compiled-in FULL default instead -- that is a separate, deliberately
+  // more conservative choice for the primary UI store, not parity with this one.
   db.exec("PRAGMA synchronous = NORMAL");
   db.exec("PRAGMA foreign_keys = ON");
   db.exec(`PRAGMA busy_timeout = ${String(LK_STORE_BUSY_TIMEOUT_MS)}`);

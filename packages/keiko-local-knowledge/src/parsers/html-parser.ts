@@ -993,7 +993,12 @@ function handleHeadingOpen(state: ScanState, tag: Tag, level: number): number {
 }
 
 function handleHeadingClose(state: ScanState, tag: Tag): number {
-  const label = (state.pendingHeadingLabel ?? "").trim();
+  // #2906 KEIKO-0775 — collapse internal whitespace once at close time so the heading
+  // label reads as flowing prose (source indentation, embedded newlines/tabs between
+  // inline tags, or multiple runs never survive into headingPath). Matches how
+  // flushBlock/pushCleanedBlock normalize ordinary body text; kept OUT of appendTextRun
+  // per the audit's guidance (accumulate raw, collapse the full label once).
+  const label = collapseWhitespace(state.pendingHeadingLabel ?? "").trim();
   if (label.length > 0 && state.pendingHeadingLevel > 0) {
     pushHeading(state.heading, state.pendingHeadingLevel, label);
   }
