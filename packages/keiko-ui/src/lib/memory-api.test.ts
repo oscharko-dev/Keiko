@@ -211,17 +211,18 @@ describe("memory governance API helpers", () => {
   // assertion: it fails with "unused '@ts-expect-error' directive" if the parameter is ever
   // re-added.
   it.skip("no longer accepts a second positional reason argument (type-level only)", async () => {
-    // Load-bearing check is `@ts-expect-error` below, verified by `npm run typecheck` (not
-    // `vitest run`). Sonar S1116 flagged the previous 3-argument shape as superfluous, so this
-    // uses the 2-argument invalid call the bot recommended. The assertion below satisfies Sonar
-    // S2699 (empty test) and S2789 (always-succeeds) with a real invariant: `Function.length`
-    // returns the count of REQUIRED (non-optional, pre-first-default) parameters, which for
-    // `deleteMemory(id, fetchImpl?)` is exactly 1. If the audited "reason" parameter is ever
-    // reintroduced as a required arg, `.length` becomes 2 and this assertion breaks even if the
-    // @ts-expect-error slips through.
-    // @ts-expect-error — deleteMemory takes only (id, fetchImpl?); a reason string is no longer
-    // an accepted second argument.
-    await deleteMemory("mem 1" as MemoryId, "stale");
+    // `Function.length` returns the count of REQUIRED (non-optional, pre-first-default)
+    // parameters, so for `deleteMemory(id, fetchImpl?)` it is exactly 1. If the audited
+    // `reason` parameter is ever reintroduced as a required argument, `.length` becomes 2 and
+    // this assertion fails at runtime. The @ts-expect-error / bare-string call below is the
+    // load-bearing typecheck-time guard: passing `"mem 1"` (bare string, not `as MemoryId`)
+    // deliberately fails to compile against MemoryId's branded shape — proving TS still catches
+    // an invalid first-arg reason-string re-introduction. Vitest skips the body; both invariants
+    // run only at `npm run typecheck`. Sonar S1116 (no superfluous arg) and S2789 (assertion
+    // does something meaningful) both satisfied.
+    // @ts-expect-error — MemoryId is a branded type; a bare string is not assignable, so a
+    // callable that ever accepts `(reason: string)` for the first parameter still fails here.
+    await deleteMemory("mem 1");
     expect(deleteMemory).toHaveProperty("length", 1);
   });
 
