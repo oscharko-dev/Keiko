@@ -130,7 +130,7 @@ export interface PartitionedLspLifecycleEvent extends LspLifecycleEvent {
  */
 export function listAllLspLifecycleEvents(): readonly PartitionedLspLifecycleEvent[] {
   const merged: PartitionedLspLifecycleEvent[] = [];
-  for (const key of [...partitions.keys()].sort()) {
+  for (const key of [...partitions.keys()].sort((a, b) => a.localeCompare(b))) {
     const state = partitions.get(key);
     if (state === undefined) continue;
     for (const event of state.events) merged.push({ ...event, workspacePartitionKey: key });
