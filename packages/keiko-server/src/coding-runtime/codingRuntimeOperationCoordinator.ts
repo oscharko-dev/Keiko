@@ -392,15 +392,18 @@ class RuntimeOperationReplayCoordinator {
 
   // A requestId committed at revision N is only ever reachable again by a caller that ALSO
   // supplies expectedRevision === N: admitRuntimeOperation enforces that match against the live
-  // snapshot before this coordinator is even consulted. Once the run's live revision has moved
-  // past N, no future call can present that combination again, so retaining the id no longer
-  // prevents anything -- it only occupies a slot in the per-run cap forever. Dropping it here is
-  // what keeps a long-lived run from eventually locking out every further operation once 512
-  // distinct requests have ever committed (#2906).
+  // snapshot before this coordinator is even consulted. The stored revision N is the PRE-op
+  // revision at commit time, so the op that owned it advanced live to N+1. A legitimate direct
+  // replay attempt therefore arrives with `expectedRevision: N+1` — dropping at `revision < live`
+  // (i.e. as soon as live > N) evicts before the very next op can be checked for that requestId,
+  // silently admitting `answer` + `reject` reuse of the same requestId across the same advance.
+  // The correct condition retains a committed record until live has moved beyond that op's own
+  // post-revision (live > N + 1). That still bounds unbounded polling once live truly overtakes,
+  // but preserves duplicate detection for the immediate next admission window (#2906).
   private evictSuperseded(runId: string, liveRevision: number): Map<string, number> {
     const committed = this.committed.get(runId) ?? new Map<string, number>();
     for (const [requestId, revision] of committed) {
-      if (revision < liveRevision) committed.delete(requestId);
+      if (revision + 1 < liveRevision) committed.delete(requestId);
     }
     return committed;
   }
