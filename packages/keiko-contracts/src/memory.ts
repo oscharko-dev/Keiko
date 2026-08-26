@@ -131,7 +131,11 @@ export {
 } from "./memory-operations-validation.js";
 
 // ─── Retrieval validator + scope reachability ────────────────────────────────
-export { isScopeReachable, validateMemoryRetrievalRequest } from "./memory-retrieval-validation.js";
+export {
+  isScopeReachable,
+  scopeCoordinateKey,
+  validateMemoryRetrievalRequest,
+} from "./memory-retrieval-validation.js";
 
 // ─── Audit record validator ──────────────────────────────────────────────────
 export { validateMemoryAuditRecord } from "./memory-audit-validation.js";

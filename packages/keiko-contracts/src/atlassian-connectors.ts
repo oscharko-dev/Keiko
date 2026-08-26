@@ -750,14 +750,20 @@ export const ATLASSIAN_CONNECTOR_WRITE_FAILURE_REASONS: readonly AtlassianConnec
 // `invalid | expired | budget-exceeded` map 1:1 onto these literals. An expired, digest-
 // mismatched, or budget-exhausted envelope is `denied` with exactly one of these codes in every
 // mode, including Full access.
+// KEIKO-0547: adds `authority-revoked` so a mid-flight-revoked envelope reads distinctly from a
+// malformed/unregistered `authority-invalid` in the audit trail. The editor lane already carries a
+// distinct `revoked` reason (agentAuthorityRegistry.ts:143-149); the Atlassian lane was collapsing
+// that state into `authority-invalid`. The disposition remains `denied` in every mode — only the
+// reason CODE gains precision.
 export type AtlassianConnectorAuthorityFailureReason =
-  "authority-invalid" | "authority-expired" | "authority-budget-exceeded";
+  "authority-invalid" | "authority-expired" | "authority-budget-exceeded" | "authority-revoked";
 
 export const ATLASSIAN_CONNECTOR_AUTHORITY_FAILURE_REASONS: readonly AtlassianConnectorAuthorityFailureReason[] =
   Object.freeze([
     "authority-invalid",
     "authority-expired",
     "authority-budget-exceeded",
+    "authority-revoked",
   ] as const satisfies readonly AtlassianConnectorAuthorityFailureReason[]);
 
 // The bounded server-side pending-approval registry (default cap: 64 in flight) rejects a

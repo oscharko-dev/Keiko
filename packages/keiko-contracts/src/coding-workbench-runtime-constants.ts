@@ -63,7 +63,12 @@ export type CodingWorkbenchRuntimeFailureCode =
   | "source-drift"
   | "runtime-failed"
   | "revoked"
-  | "recovery-required";
+  | "recovery-required"
+  // KEIKO-0722: distinct code for the per-run replay-dedup bookkeeping cap being exhausted
+  // (RuntimeOperationReplayCoordinator.reserve returns undefined at committed.size >= 512).
+  // Distinct from "invalid-intent" so callers can distinguish a malformed request from a
+  // long-lived run whose replay budget is spent.
+  | "replay-cap-exhausted";
 
 export const CODING_WORKBENCH_RUNTIME_FAILURE_CODES: readonly CodingWorkbenchRuntimeFailureCode[] =
   Object.freeze([
@@ -85,4 +90,5 @@ export const CODING_WORKBENCH_RUNTIME_FAILURE_CODES: readonly CodingWorkbenchRun
     "runtime-failed",
     "revoked",
     "recovery-required",
+    "replay-cap-exhausted",
   ] as const);

@@ -1504,8 +1504,13 @@ export interface FilesTreeEntry {
   readonly name: string;
   readonly path: string;
   readonly kind: FilesEntryKind;
-  readonly sizeBytes: number;
-  readonly modifiedAt: number;
+  // sizeBytes and modifiedAt are `undefined` for directory entries (KEIKO-0633). Directories are
+  // returned from a readdir walk and are deliberately not stat'd per entry (one syscall per
+  // directory would dominate the walk cost), so the wire type makes the "not measured" distinction
+  // explicit rather than surfacing a `0` sentinel that looks like a real measurement. File and
+  // symlink entries always carry the real lstat-derived values.
+  readonly sizeBytes?: number | undefined;
+  readonly modifiedAt?: number | undefined;
   readonly extension: string | null;
   readonly symlink: boolean;
   readonly readable: boolean;

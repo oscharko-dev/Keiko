@@ -97,6 +97,15 @@ export interface WorkspaceReplacePreviewResponse {
   readonly editCount: number;
   readonly truncated: boolean;
   readonly omittedFileCount: number;
+  // KEIKO-0645: distinguishes the cause of `truncated`. `omittedFileCount` counts files that
+  // matched the query but were dropped by the per-request `maxFiles` cap inside
+  // buildReplacePreviewFiles. `filesOmittedBySearchLimit` reports whether the upstream candidate-
+  // file selection in searchText itself hit its own maxFilesScanned / maxMatchesReturned budget,
+  // so a caller can tell whether the replace preview is bounded by "you asked for too few files
+  // to be edited" (omittedFileCount > 0) or by "the underlying query fanned out too broadly for
+  // us to enumerate every file that matches" (filesOmittedBySearchLimit === true). Both may be
+  // set together; either alone still sets `truncated`.
+  readonly filesOmittedBySearchLimit: boolean;
 }
 
 export interface WorkspaceReplaceApplyFile {
