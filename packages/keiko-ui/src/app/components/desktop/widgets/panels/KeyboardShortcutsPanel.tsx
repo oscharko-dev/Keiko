@@ -405,14 +405,18 @@ function RecordingControls({
   // click or a successful capture (clicking elsewhere, Tab out, the window losing focus) must
   // still cancel recording — otherwise recordingId stays stuck and the row is left announcing
   // "Recording keyboard shortcut." with no way to dismiss it but a full keystroke capture.
-  // Mirrors Palette.tsx's onBlur pattern: relatedTarget is only set when focus demonstrably
-  // moved to another DOM node (not e.g. a window blur), and controlRef.contains() distinguishes
-  // moving between the two buttons IN this row (no cancel) from focus leaving it entirely.
+  // controlRef.contains() distinguishes moving between the two buttons IN this row (no cancel)
+  // from focus leaving it entirely (cancel). A window/tab blur reports relatedTarget === null
+  // with no Node to check containment against -- the Node-only check alone skips that case, so it
+  // is handled separately: null relatedTarget cancels only when the document itself has also lost
+  // focus (PR #3289 review, comment 3865167756), the window/tab-blur signature, not every
+  // null-relatedTarget blur.
   const onBlur = (event: FocusEvent<HTMLFieldSetElement>): void => {
-    if (
-      event.relatedTarget instanceof Node &&
-      controlRef.current?.contains(event.relatedTarget) !== true
-    ) {
+    if (event.relatedTarget instanceof Node) {
+      if (controlRef.current?.contains(event.relatedTarget) !== true) onCancel();
+      return;
+    }
+    if (event.relatedTarget === null && !document.hasFocus()) {
       onCancel();
     }
   };

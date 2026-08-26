@@ -232,6 +232,59 @@ describe("editor local-history store", () => {
     void oldAbs;
   });
 
+  // Regression: #2906 round 2. handleFilesRename invokes reKey for DIRECTORY renames too, but a
+  // directory has no checkpoint of its own -- every affected entry's relativePath is a path INSIDE
+  // the renamed directory. The old exact-digest filter matched only a bare file rename, so renaming
+  // a directory reported rewrittenCount: 0 and stranded every descendant's history under its old
+  // path. Pins the exact scenario from the review: two checkpoints for two different files inside
+  // the same subdirectory, both must surface under the new path after the directory itself renames.
+  it("#2906 round 2: reKey re-keys every descendant of a renamed DIRECTORY, not just an exact file match", () => {
+    const fx = fixture();
+    const store = createEditorLocalHistoryStore(storeOptions(fx));
+    mkdirSync(join(fx.root, "src", "sub"), { recursive: true });
+
+    // Two checkpoints, each for a DIFFERENT file inside the directory being renamed.
+    const first = store.capture(
+      captureInput(fx, "alpha\n", "user-save", 1_000, "src/sub/a.ts"),
+    ).entry;
+    const second = store.capture(
+      captureInput(fx, "beta\n", "user-save", 1_010, "src/sub/b.ts"),
+    ).entry;
+    expect(store.list(fx.scope, "src/sub/a.ts", 1_100)).toHaveLength(1);
+    expect(store.list(fx.scope, "src/sub/b.ts", 1_100)).toHaveLength(1);
+
+    // Rename the DIRECTORY, not either file: its own previous/next paths match NEITHER
+    // checkpoint's relativePath exactly.
+    mkdirSync(join(fx.root, "src", "moved"), { recursive: true });
+    writeFileSync(join(fx.root, "src", "moved", "a.ts"), "alpha\n", "utf8");
+    writeFileSync(join(fx.root, "src", "moved", "b.ts"), "beta\n", "utf8");
+
+    const rewritten = store.reKey(fx.scope, "src/sub", "src/moved");
+    expect(rewritten).toBe(2);
+
+    // Both entries surface under their OWN new descendant path (not the directory's bare name).
+    const afterA = store.list(fx.scope, "src/moved/a.ts", 1_200);
+    expect(afterA.map((e) => e.entryRef)).toEqual([first.entryRef]);
+    expect(afterA[0]?.relativePath).toBe("src/moved/a.ts");
+    const afterB = store.list(fx.scope, "src/moved/b.ts", 1_200);
+    expect(afterB.map((e) => e.entryRef)).toEqual([second.entryRef]);
+    expect(afterB[0]?.relativePath).toBe("src/moved/b.ts");
+
+    // Invisible under the old directory's paths.
+    expect(store.list(fx.scope, "src/sub/a.ts", 1_200)).toEqual([]);
+    expect(store.list(fx.scope, "src/sub/b.ts", 1_200)).toEqual([]);
+
+    // Bodies still open correctly: payloadBindingDigest was recomputed against each entry's OWN
+    // new relativePathDigest, not a single shared one.
+    expect(store.read(fx.scope, first.entryRef, 1_300).content).toBe("alpha\n");
+    expect(store.read(fx.scope, second.entryRef, 1_300).content).toBe("beta\n");
+
+    // Survives a reopen: both entries are keyed by the persisted index, not memory.
+    const reopened = createEditorLocalHistoryStore(storeOptions(fx));
+    expect(reopened.list(fx.scope, "src/moved/a.ts", 1_400)).toHaveLength(1);
+    expect(reopened.list(fx.scope, "src/moved/b.ts", 1_400)).toHaveLength(1);
+  });
+
   it("#2906 review (comment 3863185700): rolls back a mid-batch reKey vault failure so every ORIGINAL checkpoint stays readable after reopen", () => {
     const fx = fixture();
     let failOnNthSet: number | undefined;

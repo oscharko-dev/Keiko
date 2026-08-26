@@ -226,4 +226,68 @@ describe("reKeyEditorLocalHistorySafely", () => {
     });
     expect(typeof activity[0]?.errorKind).toBe("string");
   });
+
+  // #2906 review (comment 3865159301): with NO caller-supplied correlationId, the failure path
+  // used to pass `input.correlationId` (undefined) straight to emitEditorLocalHistoryCaptureFailure,
+  // which then minted its OWN fresh `local-history-<uuid>` -- while the activity-log line right
+  // below it used the already-resolved UNKNOWN_CORRELATION_ID. The two records for the SAME
+  // failure carried two different ids and could never be joined by a support-analyze pass. Both
+  // must now carry the identical resolved id.
+  it("joins the diagnostic and the activity-log line under one correlation id when the caller supplies none", () => {
+    const diagnostics: ServerDiagnosticRecord[] = [];
+    const activity: ServerLogEvent[] = [];
+    const unregisteredRoot = join(root, "not-a-registered-project-root");
+
+    const rewrittenCount = reKeyEditorLocalHistorySafely({
+      deps: depsWithActivityLog(diagnostics, activity),
+      realRoot: unregisteredRoot,
+      previousRelativePath: "src/app.ts",
+      nextRelativePath: "src/renamed.ts",
+    });
+
+    expect(rewrittenCount).toBe(0);
+    expect(diagnostics).toHaveLength(1);
+    expect(activity).toHaveLength(1);
+    const diagnosticCorrelationId = diagnostics[0]?.correlationId;
+    const activityCorrelationId = activity[0]?.correlationId;
+    expect(diagnosticCorrelationId).toBe("unknown-correlation-id");
+    expect(diagnosticCorrelationId).toBe(activityCorrelationId);
+    // Guards against a regression that reintroduces a disconnected mint: the diagnostic's id must
+    // never be a freshly minted local-history-* value once a resolved id exists.
+    expect(String(diagnosticCorrelationId)).not.toMatch(/^local-history-/);
+  });
+
+  // #2906 review (comment 3865159301): the store-unavailable early return used to be entirely
+  // silent -- no diagnostic, no activity-log line -- so an unavailable Local History subsystem was
+  // indistinguishable from a genuine zero-rewrite success.
+  it("emits a failed diagnostic and activity-log line when the local-history store is unavailable", () => {
+    const diagnostics: ServerDiagnosticRecord[] = [];
+    const activity: ServerLogEvent[] = [];
+    const unavailableDeps: UiHandlerDeps = {
+      ...depsWithActivityLog(diagnostics, activity),
+      editorLocalHistoryStore: undefined,
+    };
+
+    const rewrittenCount = reKeyEditorLocalHistorySafely({
+      deps: unavailableDeps,
+      realRoot: root,
+      previousRelativePath: "src/app.ts",
+      nextRelativePath: "src/renamed.ts",
+      correlationId: "req-rekey-unavailable",
+    });
+
+    expect(rewrittenCount).toBe(0);
+    expect(diagnostics).toHaveLength(1);
+    expect(diagnostics[0]).toMatchObject({
+      operation: "editor.local-history.rekey",
+      correlationId: "req-rekey-unavailable",
+    });
+    expect(activity).toHaveLength(1);
+    expect(activity[0]).toMatchObject({
+      category: "diagnostic",
+      op: "editor.local-history.rekey.failed",
+      correlationId: "req-rekey-unavailable",
+      extra: { outcome: "failed", rewrittenCount: 0 },
+    });
+  });
 });

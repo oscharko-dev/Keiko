@@ -51,7 +51,6 @@ const entryBase = {
   sizeBytes: 1,
   modifiedAt: 1,
   extension: null,
-  symlink: false,
   readable: true,
 } as const;
 

@@ -35,11 +35,22 @@ function ariaLiveForRole(role: EditorStatusRole): EditorStatusAriaLive {
   return role === "alert" ? "assertive" : "polite";
 }
 
+// The largest timestamp magnitude ECMAScript's Date can represent (+/-100,000,000 days from the
+// epoch, per the spec's "time value" range). A value beyond this is still a finite `number` but
+// `new Date(value)` produces an Invalid Date whose `toISOString()` throws `RangeError`.
+const ECMA_DATE_RANGE_LIMIT_MS = 8_640_000_000_000_000;
+
 function formatModifiedAt(modifiedAt: number | undefined): string {
-  // KEIKO-0721: `Date.prototype.toISOString()` throws `RangeError: Invalid time value` for NaN or
-  // +/-Infinity; the undefined-only guard let a non-finite timestamp throw out of the render path.
-  // Fail safe with the same "Saved" fallback the undefined case already uses.
-  if (modifiedAt === undefined || !Number.isFinite(modifiedAt)) {
+  // PR #3289 review (comment 3865167748): `Number.isFinite` alone does not guarantee
+  // `new Date(value).toISOString()` succeeds -- a finite value outside the ECMA Date range (e.g.
+  // 8_640_000_000_000_001 or Number.MAX_VALUE) still throws `RangeError: Invalid time value`.
+  // KEIKO-0721: the ORIGINAL undefined-only guard let a non-finite timestamp (NaN, +/-Infinity)
+  // throw out of the render path; both classes fail safe with the same "Saved" fallback.
+  if (
+    modifiedAt === undefined ||
+    !Number.isFinite(modifiedAt) ||
+    Math.abs(modifiedAt) > ECMA_DATE_RANGE_LIMIT_MS
+  ) {
     return "Saved";
   }
   return `Saved at ${new Date(modifiedAt).toISOString()}`;

@@ -1,6 +1,6 @@
 /**
- * Regression coverage for two PR #3289 review findings, both rooted in the same
- * `activeContentDigest` debounce window (CONTENT_HASH_DEBOUNCE_MS, 150ms):
+ * Regression coverage for PR #3289 review findings rooted in the same `activeContentDigest`
+ * debounce window (CONTENT_HASH_DEBOUNCE_MS, 150ms):
  *
  * 1. [P1] The buffer's `content.sizeBytes` used to read `activeContentDigest?.sizeBytes ?? 0`
  *    directly — the STALE digest for whatever content last settled, not necessarily the CURRENT
@@ -8,18 +8,26 @@
  *    small size for the whole debounce window, so the hard size-limit gate (`isMaxSizeExceeded` /
  *    `effectiveReadOnly` in `@oscharko-dev/keiko-editor`'s `save-state.ts`, which reads exactly
  *    `buffer.content.sizeBytes`) would see the buffer as well under budget immediately after the
- *    paste.
+ *    paste. Fixed with `writeGateSizeBytesEstimate`: byte-exact once settled, a conservative
+ *    (never-under) `content.length * 4` UPPER-bound estimate otherwise — this gate must fail safe.
  *
- * 2. [P2] `largeFileMode` was derived from raw `content.length` (UTF-16 code units) forever —
- *    never the exact, debounced `readyContentDigest.sizeBytes` — so a buffer whose UTF-16 length
- *    stays under the 500,000-byte degraded threshold while its real UTF-8 byte size is over it
- *    (any heavy multibyte content, e.g. CJK) never enters degraded mode, no matter how long the
- *    debounce has had to settle.
+ * 2. [P2, round 1] `largeFileMode` was derived from raw `content.length` (UTF-16 code units)
+ *    forever — never the exact, debounced `readyContentDigest.sizeBytes` — so a buffer whose
+ *    UTF-16 length stays under the 500,000-byte degraded threshold while its real UTF-8 byte size
+ *    is over it (any heavy multibyte content, e.g. CJK) never entered degraded mode, no matter how
+ *    long the debounce had settled.
  *
- * Both are fixed by a single value (`currentSizeBytesEstimate`): byte-exact once
- * `freshContentDigest` has resolved for the CURRENT content, a conservative (never-under)
- * `content.length * 4` estimate otherwise — fed to both the buffer's `sizeBytes` (1) and
- * `largeFileMode` (2) instead of a stale digest or a raw, encoding-blind length.
+ * 3. [P1, round 2 — comment 3865167711] The round-1 fix over-corrected (2) by feeding the SAME
+ *    conservative `content.length * 4` UPPER-bound estimate used for the write gate (1) into the
+ *    BEHAVIORAL largeFileMode/read-only gate too. That gate must fail PERMISSIVE during the
+ *    debounce window, not safe: a 125,001-byte ASCII buffer is comfortably under the 500,000-byte
+ *    threshold, but `125,001 * 4 = 500,004` marked it read-only until the debounce settled — a UX
+ *    regression on every sub-500KB file, self-correcting only once the exact digest resolved.
+ *    Fixed with `modeSelectionSizeBytesEstimate`: byte-exact once settled (identical to (1) once
+ *    `readyContentDigest` is non-null), a LOWER-bound `content.length` estimate otherwise — this
+ *    gate under-classifies during the debounce (never locks down a small file), then resolves to
+ *    the exact value the moment the digest settles, still correctly degrading heavy multibyte
+ *    content like the (2) case once settled.
  */
 import { act, render, screen, waitFor } from "@testing-library/react";
 import type { ReactElement } from "react";
@@ -198,13 +206,12 @@ describe("EditorRuntimeWidget buffer sizeBytes vs. stale digest (PR #3289 review
 });
 
 describe("EditorRuntimeWidget largeFileMode vs. UTF-16 length (PR #3289 review, P2)", () => {
-  it("enters degraded mode for heavy multibyte content whose UTF-16 length understates its UTF-8 byte size", async () => {
+  it("eventually enters degraded mode for heavy multibyte content whose UTF-16 length understates its UTF-8 byte size", async () => {
     await renderAndSettleInitialDigest();
 
     // 200,000 CJK characters: ~600 KB of UTF-8 (3 bytes each) but a UTF-16 length of 200,000 —
-    // under the 500,000-byte LARGE_FILE_DEGRADED_BYTES threshold if length were mistaken for
-    // bytes (the review's own example). No newlines, so only the byte threshold is exercised, not
-    // the separate line-count one.
+    // under the 500,000-byte LARGE_FILE_DEGRADED_BYTES threshold either way you estimate from
+    // length alone. No newlines, so only the byte threshold is exercised, not the line-count one.
     const cjkText = "中".repeat(200_000);
     act(() => {
       surface.props?.onContentChange({ text: cjkText, sizeBytes: cjkText.length }, "human");
@@ -213,16 +220,41 @@ describe("EditorRuntimeWidget largeFileMode vs. UTF-16 length (PR #3289 review, 
     // `buffer.readOnly` is `editorReadOnlyBySettings`, driven purely by largeFileMode under the
     // default "default" largeFileMode setting (see largeFileSettings) — an isolated, directly
     // observable proxy for the mode without reaching into @oscharko-dev/keiko-editor internals.
-    // Immediately: the conservative estimate (200,000 * 4 = 800,000) already exceeds 500,000, so
-    // the fix degrades right away instead of waiting out the debounce.
-    expect(surface.props?.buffer.readOnly).toBe(true);
+    // Round 2 (comment 3865167711): the mode-selection gate now estimates with the LOWER bound
+    // (content.length = 200,000), which stays under the 500,000 threshold — so immediately after
+    // the edit the buffer is NOT yet degraded. It fails permissive during the debounce window
+    // instead of falsely locking down a file that turns out to be fine.
+    expect(surface.props?.buffer.readOnly).toBe(false);
 
-    // THE regression assertion: pre-fix, largeFileMode is derived from content.length alone
-    // (200,000 < 500,000) and NEVER switches to the exact, debounced byte count (600,000) — this
-    // would stay false forever, no matter how long the debounce has settled.
+    // Once the debounce settles with the exact byte count (600,000, over threshold), the mode
+    // resolves to degraded — the invariant the round-1 fix existed to pin, preserved here.
     await waitFor(() => {
       expect(surface.props?.buffer.content.sizeBytes).toBe(cjkText.length * 3);
     });
     expect(surface.props?.buffer.readOnly).toBe(true);
+  });
+
+  // PR #3289 review (comment 3865167711): the exact repro named in the finding. A 125,001-byte
+  // pure-ASCII buffer is comfortably under the 500,000-byte threshold, but the round-1 fix's
+  // conservative `content.length * 4` estimate (500,004) marked it read-only until the debounce
+  // settled — a UX regression on effectively every sub-500KB file being edited or pasted.
+  it("stays writable for a sub-threshold ASCII buffer, both immediately and after digest settlement", async () => {
+    await renderAndSettleInitialDigest();
+
+    const asciiText = "x".repeat(125_001);
+    act(() => {
+      surface.props?.onContentChange({ text: asciiText, sizeBytes: asciiText.length }, "human");
+    });
+
+    // THE regression assertion: pre-fix (round 2 bug), 125,001 * 4 = 500,004 > 500,000 marks this
+    // read-only immediately, even though the true byte count is nowhere near the threshold.
+    expect(surface.props?.buffer.readOnly).toBe(false);
+
+    // And it stays writable once the debounce settles with the exact (still under-threshold)
+    // byte count — never locked down at any point in this buffer's lifecycle.
+    await waitFor(() => {
+      expect(surface.props?.buffer.content.sizeBytes).toBe(asciiText.length);
+    });
+    expect(surface.props?.buffer.readOnly).toBe(false);
   });
 });

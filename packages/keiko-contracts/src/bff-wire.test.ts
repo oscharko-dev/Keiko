@@ -5,6 +5,7 @@
 
 import { describe, expect, it } from "vitest";
 import {
+  assertNeverFilesTreeEntryKind,
   buildGroundedAnswerContextPackSummary,
   canonicalDesktopChatTurnReferenceSeed,
   classifyAttachmentMime,
@@ -14,6 +15,7 @@ import {
   GROUNDED_RERANKER_FAILURE_KINDS,
   eventIsDesktopChatStreamTerminal,
   GROUNDING_LIMIT_CEILINGS,
+  isExpandableDirectory,
   isGroundedRerankerFailureKind,
   isDesktopChatStreamEvent,
   MAX_ATTACHMENT_BYTES,
@@ -992,14 +994,16 @@ describe("classifyAttachmentMime (GEN-DUP-SEMANTIC-013 / -014)", () => {
   });
 });
 
-// #2906 review (comment 3863185718): FilesTreeEntry used to be one shape with independently
-// optional sizeBytes/modifiedAt, so a "directory" entry carrying real stat metadata -- exactly
-// what a symlink-to-directory entry did before the server-side fix -- type-checked even though it
-// was never a value the contract actually meant to allow. It is now a discriminated union: this
-// suite pins BOTH halves of that invariant at compile time (a real number is rejected on the
-// "directory" variant; the "file"/"symlink" variant still requires one) alongside the new
-// symlinkTargetKind field a symlink-to-directory carries at runtime.
-describe("FilesTreeEntry (KEIKO-0633 follow-up, #2906 review)", () => {
+// #2906 review (comment 3863185718) / PR #3289 review (comment 3865167775): FilesTreeEntry used to
+// be one shape with independently optional sizeBytes/modifiedAt, so a "directory" entry carrying
+// real stat metadata -- exactly what a symlink-to-directory entry did before the server-side fix
+// -- type-checked even though it was never a value the contract actually meant to allow. A first
+// discriminated-union pass (two variants: "directory" vs "file" | "symlink") pinned that, but still
+// carried a separate `symlink: boolean` field that could disagree with `kind`, and let a "file"
+// entry carry `symlinkTargetKind`. It is now THREE full variants with `kind` as the sole
+// discriminant -- no `symlink` field on any variant, `symlinkTargetKind` on "symlink" only -- so
+// this suite pins every combination the type must reject alongside the ones it must accept.
+describe("FilesTreeEntry (KEIKO-0633 follow-up, #2906 review, PR #3289 review)", () => {
   it("rejects a directory-kind entry that claims real stat metadata", () => {
     // @ts-expect-error — sizeBytes/modifiedAt must be `undefined` (or omitted) on a "directory"
     // entry; a real directory is never stat'd per entry, so the type no longer permits a number.
@@ -1010,7 +1014,6 @@ describe("FilesTreeEntry (KEIKO-0633 follow-up, #2906 review)", () => {
       sizeBytes: 42,
       modifiedAt: 1_700_000_000_000,
       extension: null,
-      symlink: false,
       readable: true,
     };
     // The runtime shape is exactly what was written -- the compile-time rejection above is the
@@ -1020,14 +1023,13 @@ describe("FilesTreeEntry (KEIKO-0633 follow-up, #2906 review)", () => {
   });
 
   it("requires sizeBytes and modifiedAt on a file-kind entry", () => {
-    // @ts-expect-error — sizeBytes/modifiedAt are REQUIRED on the "file"/"symlink" variant; a file
-    // entry is always lstat'd, so the type no longer permits omitting them.
+    // @ts-expect-error — sizeBytes/modifiedAt are REQUIRED on the "file" variant; a file entry is
+    // always lstat'd, so the type no longer permits omitting them.
     const incomplete: FilesTreeEntry = {
       name: "app.ts",
       path: "src/app.ts",
       kind: "file",
       extension: "ts",
-      symlink: false,
       readable: true,
     };
     expect(incomplete.kind).toBe("file");
@@ -1041,7 +1043,6 @@ describe("FilesTreeEntry (KEIKO-0633 follow-up, #2906 review)", () => {
       sizeBytes: 96,
       modifiedAt: 1_700_000_000_000,
       extension: null,
-      symlink: true,
       readable: true,
       symlinkTargetKind: "directory",
     };
@@ -1050,5 +1051,161 @@ describe("FilesTreeEntry (KEIKO-0633 follow-up, #2906 review)", () => {
     // Metadata-bearing even though it BEHAVES like a directory -- unlike a real "directory" entry,
     // whose sizeBytes/modifiedAt the type above pins as unavailable.
     expect(entry.sizeBytes).toBe(96);
+  });
+
+  // PR #3289 review (comment 3865167775): the two-variant shape still accepted every one of these
+  // three contradictions -- `kind` and `symlink` disagreeing in either direction, and a "file"
+  // entry carrying `symlinkTargetKind`. There is no `symlink` field left on ANY variant (kind alone
+  // is the discriminant), so all three are now excess-property errors.
+  it("rejects a directory-kind entry claiming a symlink field", () => {
+    const hostile: FilesTreeEntry = {
+      name: "src",
+      path: "src",
+      kind: "directory",
+      extension: null,
+      readable: true,
+      // @ts-expect-error — the "directory" variant has no `symlink` field at all; `kind` alone
+      // says whether an entry is a symlink. (Excess-property errors anchor to the offending
+      // property's own line, not the object literal's opening line — unlike the missing/wrong-type
+      // cases above.)
+      symlink: true,
+    };
+    expect(hostile.kind).toBe("directory");
+  });
+
+  it("rejects a symlink-kind entry claiming a symlink field", () => {
+    const hostile: FilesTreeEntry = {
+      name: "link",
+      path: "link",
+      kind: "symlink",
+      sizeBytes: 1,
+      modifiedAt: 1,
+      extension: null,
+      readable: true,
+      symlinkTargetKind: "file",
+      // @ts-expect-error — the "symlink" variant has no `symlink` field either; it would always be
+      // `true` and is redundant with `kind`, so the type does not carry it.
+      symlink: false,
+    };
+    expect(hostile.kind).toBe("symlink");
+  });
+
+  it("rejects a file-kind entry claiming symlinkTargetKind", () => {
+    const hostile: FilesTreeEntry = {
+      name: "app.ts",
+      path: "src/app.ts",
+      kind: "file",
+      sizeBytes: 1,
+      modifiedAt: 1,
+      extension: "ts",
+      readable: true,
+      // @ts-expect-error — symlinkTargetKind belongs only to the "symlink" variant; a "file" entry
+      // (by definition not a symlink) cannot carry it.
+      symlinkTargetKind: "directory",
+    };
+    expect(hostile.kind).toBe("file");
+  });
+
+  // Compile-time exhaustiveness pin: if a fourth FilesTreeEntry variant is ever added without
+  // updating this switch, the `default` branch's call to assertNeverFilesTreeEntryKind fails to
+  // compile (its parameter type is `never`, and the un-narrowed remainder would no longer be).
+  it("exhausts every FilesTreeEntry variant through its kind discriminant", () => {
+    function describeKind(entry: FilesTreeEntry): string {
+      switch (entry.kind) {
+        case "directory":
+          return "directory";
+        case "file":
+          return "file";
+        case "symlink":
+          return entry.symlinkTargetKind;
+        default:
+          return assertNeverFilesTreeEntryKind(entry);
+      }
+    }
+    expect(
+      describeKind({
+        name: "src",
+        path: "src",
+        kind: "directory",
+        extension: null,
+        readable: true,
+      }),
+    ).toBe("directory");
+  });
+});
+
+// #2906 review (comment 3865167721): the one predicate the server and the UI both import to
+// decide whether a tree entry behaves like a navigable directory, so FilesWidget's
+// expansion/navigation/context-menu/drag-drop gating can never drift from what the walk allows.
+describe("isExpandableDirectory (#2906 review)", () => {
+  it("is true for a real directory entry", () => {
+    expect(
+      isExpandableDirectory({
+        name: "src",
+        path: "src",
+        kind: "directory",
+        extension: null,
+        readable: true,
+      }),
+    ).toBe(true);
+  });
+
+  it("is true for a symlink whose target resolved to a directory", () => {
+    expect(
+      isExpandableDirectory({
+        name: "link",
+        path: "link",
+        kind: "symlink",
+        sizeBytes: 0,
+        modifiedAt: 1,
+        extension: null,
+        readable: true,
+        symlinkTargetKind: "directory",
+      }),
+    ).toBe(true);
+  });
+
+  it("is false for a symlink whose target resolved to a file", () => {
+    expect(
+      isExpandableDirectory({
+        name: "link",
+        path: "link",
+        kind: "symlink",
+        sizeBytes: 0,
+        modifiedAt: 1,
+        extension: null,
+        readable: true,
+        symlinkTargetKind: "file",
+      }),
+    ).toBe(false);
+  });
+
+  it("is false for a symlink whose target could not be resolved", () => {
+    expect(
+      isExpandableDirectory({
+        name: "link",
+        path: "link",
+        kind: "symlink",
+        sizeBytes: 0,
+        modifiedAt: 1,
+        extension: null,
+        readable: true,
+        symlinkTargetKind: "unknown",
+      }),
+    ).toBe(false);
+  });
+
+  it("is false for a plain file entry", () => {
+    expect(
+      isExpandableDirectory({
+        name: "app.ts",
+        path: "src/app.ts",
+        kind: "file",
+        sizeBytes: 0,
+        modifiedAt: 1,
+        extension: "ts",
+        readable: true,
+      }),
+    ).toBe(false);
   });
 });

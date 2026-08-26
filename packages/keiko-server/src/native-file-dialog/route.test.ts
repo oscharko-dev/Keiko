@@ -303,6 +303,43 @@ describe("native file dialog route", () => {
     expect(state.active).toBe(false);
   });
 
+  // Regression: #2906 round 2. `cancelTarget?.cancel()` alone cannot observe a disconnect that
+  // lands before `cancelTarget` is even assigned (body still being read) -- the optional call is
+  // simply never made, so the signal is dropped and adapter.open() still starts. This drives the
+  // reviewer's exact repro: the client disconnects before the request body finishes, and pins that
+  // the adapter is never opened at all (not merely cancelled after the fact).
+  it("refuses to start the adapter when the client disconnects before the body finishes reading (#2906 round 2)", async () => {
+    const state = createNativeFileDialogRouteState();
+    let opens = 0;
+    const adapter: NativeFileDialogAdapter = {
+      open: () => {
+        opens += 1;
+        return Promise.resolve({ cancelled: false, paths: ["/should/never/be/reached"] });
+      },
+      cancel: (): void => {
+        // Not expected to fire in this window -- cancelTarget is still undefined when the
+        // disconnect lands, which is exactly the gap this regression closes.
+      },
+    };
+    const { deps } = buildDeps({ adapter, state });
+
+    const ctx = openContext({ mode: "open-file" });
+    const call = handleNativeFileDialogOpen(ctx, deps);
+    // The disconnect listeners are registered synchronously before the handler's first `await`, so
+    // they are already attached here -- but the request body (a real Readable) has not yet emitted
+    // 'data'/'end', so this fires strictly BEFORE cancelTarget is ever assigned.
+    ctx.req.emit("aborted");
+
+    const result = await call;
+
+    expect(opens).toBe(0);
+    expect(result).toMatchObject({
+      status: 200,
+      body: { cancelled: true, selections: [], rejectedSelectionCount: 0, partial: false },
+    });
+    expect(state.active).toBe(false);
+  });
+
   it("releases the single-flight slot when the adapter fails", async () => {
     const state = createNativeFileDialogRouteState();
     const failing: NativeFileDialogAdapter = {

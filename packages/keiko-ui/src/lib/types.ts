@@ -422,6 +422,11 @@ export type {
   GatewayReadinessRequest,
   GatewayReadinessVerifiedCapabilities,
 } from "@oscharko-dev/keiko-contracts/bff-wire";
+// #2906 review (comment 3865167721): the one predicate for "does this entry behave like a
+// navigable directory" -- a real directory, or a symlink the walk resolved to one -- so
+// FilesWidget's expansion/navigation/context-menu/drag-drop gating can never define "expandable"
+// differently than the server does.
+export { isExpandableDirectory } from "@oscharko-dev/keiko-contracts/bff-wire";
 
 // Governed documentation browser contracts (Epic #1851, ADR-0113). Re-exported from the contract
 // package so the widget and API wrapper share the canonical wire types rather than redeclaring them.

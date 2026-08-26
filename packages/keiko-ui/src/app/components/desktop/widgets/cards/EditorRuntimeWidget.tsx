@@ -1628,23 +1628,42 @@ function freshContentDigest(
   return digest?.content === content ? digest : null;
 }
 
-// Cheap, allocation-free upper bound on the UTF-8 byte length of `content`. Every UTF-16 code unit
+// Cheap, allocation-free UPPER bound on the UTF-8 byte length of `content`. Every UTF-16 code unit
 // encodes to at most 4 UTF-8 bytes, so this can only ever OVER-estimate — safe as a stand-in while
 // the exact, debounced digest for this content has not settled yet, never as a substitute for it.
-function conservativeByteEstimate(content: string): number {
+function conservativeByteEstimateUpperBound(content: string): number {
   return content.length * 4;
 }
 
-// The best byte count currently available for `content`: byte-exact once the debounced digest has
-// settled for this exact content (`readyDigest` non-null), a conservative (never-under) estimate
-// otherwise. Both the large-file-mode signal and the hard size-limit gate must read this instead of
-// pairing a stale `ActiveContentDigest.sizeBytes` — which describes whatever content last settled,
-// not necessarily `content` — with the current text (PR #3289 review).
-function currentSizeBytesEstimate(
+// The byte count the HARD size-limit / write gate must read (`isMaxSizeExceeded` /
+// `effectiveReadOnly` in `@oscharko-dev/keiko-editor`'s save-state.ts, via `buffer.content.
+// sizeBytes`): byte-exact once the debounced digest has settled for this exact content
+// (`readyDigest` non-null), a conservative (never-under) UPPER-bound estimate otherwise. This gate
+// must fail SAFE — it must never let an over-limit buffer look smaller than it truly is — instead
+// of pairing a stale `ActiveContentDigest.sizeBytes` (whatever content last settled, not
+// necessarily `content`) with the current text (PR #3289 review).
+function writeGateSizeBytesEstimate(
   readyDigest: ActiveContentDigest | null,
   content: string,
 ): number {
-  return readyDigest?.sizeBytes ?? conservativeByteEstimate(content);
+  return readyDigest?.sizeBytes ?? conservativeByteEstimateUpperBound(content);
+}
+
+// The byte count the BEHAVIORAL large-file-mode / automatic-read-only signal must read: byte-exact
+// once settled (identical to the write gate above once `readyDigest` is non-null), a conservative
+// (never-OVER) LOWER-bound estimate otherwise — `content.length` (UTF-16 code units), which can
+// only ever UNDER-estimate the true UTF-8 byte count (minimum 1 byte per code unit). Unlike the
+// write gate, this signal must fail PERMISSIVE during the debounce window: feeding it the SAME *4
+// upper bound as the write gate marked an actually sub-500KB ASCII file read-only until the
+// debounce settled (PR #3289 review, comment 3865167711 — round-2 correction of the round-1 fix
+// above). Under-classifying here only ever means a large file stays fully-interactive a little too
+// long, never that a small one gets locked down; it resolves to the exact value the moment the
+// digest settles.
+function modeSelectionSizeBytesEstimate(
+  readyDigest: ActiveContentDigest | null,
+  content: string,
+): number {
+  return readyDigest?.sizeBytes ?? content.length;
 }
 
 function hasEditorTarget(root: string | undefined, file: string | undefined): boolean {
@@ -2370,15 +2389,16 @@ function EditorRuntimeWidget({
   });
   const activeContentHash = activeDigestHash(activeContentDigest, content);
   const readyContentDigest = freshContentDigest(activeContentDigest, content);
-  // PR #3289 review (was KEIKO-0819's content.length): content.length (UTF-16 code units) alone is
-  // only a LOWER bound on the UTF-8 byte length — 200,000 CJK characters is ~600 KB of UTF-8 but a
-  // length of 200,000 — so it must never stand in for the byte count directly. This is byte-exact
-  // whenever readyContentDigest has settled for the CURRENT content; otherwise it is a conservative
-  // (never-under) estimate, so neither the large-file-mode signal below nor the hard size-limit gate
-  // on the buffer can ever underestimate a buffer that has outrun its last settled digest (e.g. a
-  // paste while the debounce is still pending). Must never feed sha256HexBytes, which needs the
-  // exact, debounced activeContentDigest instead.
-  const contentSizeBytesEstimate = currentSizeBytesEstimate(readyContentDigest, content);
+  // PR #3289 review: content.length (UTF-16 code units) alone is only a LOWER bound on the UTF-8
+  // byte length — 200,000 CJK characters is ~600 KB of UTF-8 but a length of 200,000 — so it must
+  // never stand in for the byte count directly. Both estimates below are byte-exact whenever
+  // readyContentDigest has settled for the CURRENT content; they diverge only for the pending
+  // (unsettled) case, where the write gate needs a never-under UPPER bound and the behavioral
+  // mode-selection gate needs a never-over LOWER bound instead (see the two functions' docs) — a
+  // single shared conservative estimate fed BOTH gates fails one of them. Neither may feed
+  // sha256HexBytes, which needs the exact, debounced activeContentDigest instead.
+  const writeGateSizeBytes = writeGateSizeBytesEstimate(readyContentDigest, content);
+  const modeSelectionSizeBytes = modeSelectionSizeBytesEstimate(readyContentDigest, content);
   const activeContentDigestRef = useRef(activeContentDigest);
   activeContentDigestRef.current = activeContentDigest;
   const lastHotExitSnapshotKeyRef = useRef<string | null>(null);
@@ -3963,8 +3983,8 @@ function EditorRuntimeWidget({
   );
 
   const largeFileMode = useMemo(
-    () => deriveLargeFileMode({ sizeBytes: contentSizeBytesEstimate, text: content }),
-    [content, contentSizeBytesEstimate],
+    () => deriveLargeFileMode({ sizeBytes: modeSelectionSizeBytes, text: content }),
+    [content, modeSelectionSizeBytes],
   );
   const preferenceLargeFileMode = editorSettings.applied.largeFileMode;
   const largeFilePolicy = largeFileSettings(largeFileMode, preferenceLargeFileMode);
@@ -4001,10 +4021,14 @@ function EditorRuntimeWidget({
         deleted: sourceControlT("gitGutter.deleted"),
         openHunk: sourceControlT("gitGutter.openHunk"),
       },
-      resolve: async () => {
+      // #2906 review (comment 3865167732): the resolver used to ignore the AbortSignal
+      // git-gutter-bridge.ts passes into it, so a superseded refresh (or dispose) left both
+      // in-flight requests running to completion underneath the discarded result. Both hops now
+      // carry the SAME signal the bridge gave this call.
+      resolve: async (signal) => {
         const [staged, unstaged] = await Promise.all([
-          fetchGitStructuredDiff({ root, path: file, scope: "staged" }),
-          fetchGitStructuredDiff({ root, path: file, scope: "unstaged" }),
+          fetchGitStructuredDiff({ root, path: file, scope: "staged" }, signal),
+          fetchGitStructuredDiff({ root, path: file, scope: "unstaged" }, signal),
         ]);
         return {
           staged: hunksForPath(staged, file),
@@ -4403,20 +4427,22 @@ function EditorRuntimeWidget({
               relativePath: file ?? "",
               text: content,
               // PR #3289 review: byte-exact once readyContentDigest has settled for this exact
-              // content; otherwise contentSizeBytesEstimate's conservative (never-under) estimate.
-              // Must NEVER pair the current text with a stale, smaller settled sizeBytes (the old
-              // `activeContentDigest?.sizeBytes ?? 0`, which stays at whatever content last settled
-              // regardless of `content` above) — isMaxSizeExceeded / effectiveReadOnly
+              // content; otherwise writeGateSizeBytes's conservative (never-under) UPPER-bound
+              // estimate. Must NEVER pair the current text with a stale, smaller settled sizeBytes
+              // (the old `activeContentDigest?.sizeBytes ?? 0`, which stays at whatever content
+              // last settled regardless of `content` above) — isMaxSizeExceeded / effectiveReadOnly
               // (@oscharko-dev/keiko-editor's save-state.ts) is a hard size-limit / read-only gate
               // and must never see this buffer look smaller than it actually is, e.g. immediately
               // after a paste that pushes a small file over budget, while the debounce is pending.
-              sizeBytes: contentSizeBytesEstimate,
+              // (This is deliberately the UPPER-bound estimate, unlike largeFileMode's below —
+              // see modeSelectionSizeBytesEstimate's doc for why the two gates diverge.)
+              sizeBytes: writeGateSizeBytes,
               truncated: false,
             },
           },
     [
       content,
-      contentSizeBytesEstimate,
+      writeGateSizeBytes,
       editorReadOnlyBySettings,
       file,
       fileModel,

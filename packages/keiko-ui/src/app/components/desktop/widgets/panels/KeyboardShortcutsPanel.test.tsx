@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { axe } from "jest-axe";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -267,6 +269,75 @@ describe("KeyboardShortcutsPanel", () => {
 
     expect(screen.getByText("Recording keyboard shortcut.")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Cancel" })).toBeInTheDocument();
+  });
+
+  // PR #3289 review (comment 3865167756): a window/tab blur reports relatedTarget === null, which
+  // the Node-only check skipped entirely -- leaving recordingId stuck with no way to dismiss it
+  // but a full keystroke capture. Cancel when relatedTarget is null AND the document itself has
+  // lost focus (the window/tab-blur signature), not on every null-relatedTarget blur.
+  it("cancels recording on a window/tab blur (relatedTarget null, document loses focus)", async () => {
+    renderPanel(view());
+
+    fireEvent.change(screen.getByRole("textbox", { name: "Search keyboard shortcuts" }), {
+      target: { value: "Quick Access: files" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Record" }));
+    expect(screen.getByText("Recording keyboard shortcut.")).toBeInTheDocument();
+
+    const hasFocusSpy = vi.spyOn(document, "hasFocus").mockReturnValue(false);
+    try {
+      fireEvent.blur(screen.getByRole("button", { name: "Press shortcut" }), {
+        relatedTarget: null,
+      });
+    } finally {
+      hasFocusSpy.mockRestore();
+    }
+
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: "Record" })).toBeInTheDocument();
+    });
+    expect(screen.queryByText("Recording keyboard shortcut.")).not.toBeInTheDocument();
+  });
+
+  // Pins the AND condition: a null relatedTarget alone (document still focused) must not
+  // spuriously cancel -- only the window/tab-blur signature (null + document unfocused) does.
+  it("does not cancel recording when relatedTarget is null but the document still has focus", () => {
+    renderPanel(view());
+
+    fireEvent.change(screen.getByRole("textbox", { name: "Search keyboard shortcuts" }), {
+      target: { value: "Quick Access: files" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Record" }));
+
+    const hasFocusSpy = vi.spyOn(document, "hasFocus").mockReturnValue(true);
+    try {
+      fireEvent.blur(screen.getByRole("button", { name: "Press shortcut" }), {
+        relatedTarget: null,
+      });
+    } finally {
+      hasFocusSpy.mockRestore();
+    }
+
+    expect(screen.getByText("Recording keyboard shortcut.")).toBeInTheDocument();
+  });
+
+  // PR #3289 review (comment 3865167763): styles.control only defined flex/wrap/align/gap -- the
+  // prior fix's comment claimed switching the recording row's container from <div> to <fieldset>
+  // was "no visual change", but never reset the fieldset's user-agent border/padding/margin/
+  // min-inline-size. jsdom does not apply real CSS-module stylesheets, so this scans the actual
+  // source file rather than asserting on a rendered getComputedStyle.
+  it("resets the fieldset's user-agent box styles on .control", () => {
+    const css = readFileSync(join(import.meta.dirname, "EditorSettingsPanel.module.css"), "utf8");
+    const start = css.indexOf(".control {");
+    expect(start, "missing CSS rule .control").toBeGreaterThanOrEqual(0);
+    const end = css.indexOf("}", start);
+    expect(end, "unterminated CSS rule .control").toBeGreaterThan(start);
+    const block = css.slice(start, end + 1);
+
+    expect(block).toContain("border: 0");
+    expect(block).toContain("padding: 0");
+    expect(block).toContain("margin: 0");
+    expect(block).toContain("min-inline-size: 0");
   });
 
   it("disables Remove for an unmodified shortcut and enables it once overridden", () => {

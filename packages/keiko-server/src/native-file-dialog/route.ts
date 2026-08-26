@@ -276,11 +276,19 @@ function mapAdapterError(
   );
 }
 
+const CANCELLED_RESPONSE: NativeFileDialogResponse = {
+  cancelled: true,
+  selections: [],
+  rejectedSelectionCount: 0,
+  partial: false,
+};
+
 async function openAndProject(
   ctx: RouteContext,
   deps: UiHandlerDeps & { readonly activityLog?: ServerLogSink | undefined },
   request: NativeFileDialogRequest,
   adapter: NativeFileDialogAdapter,
+  isDisconnected: () => boolean,
 ): Promise<RouteResult> {
   const defaultPath = await normalizeDefaultPath(request.defaultPath);
   const adapterRequest: NativeFileDialogRequest = {
@@ -289,13 +297,18 @@ async function openAndProject(
     ...(defaultPath !== undefined ? { defaultPath } : {}),
     ...(request.filters !== undefined ? { filters: request.filters } : {}),
   };
+  // #2906 round 2: default-path normalization above is an `await` -- the one other yield point,
+  // besides the request-body read latched the same way by the caller, between the disconnect
+  // listener being armed and adapter.open() actually starting. `cancelTarget?.cancel()` alone
+  // cannot observe either window: it is either still undefined (body read) or, even once assigned,
+  // `cancellableAdapter` has not created ITS OWN internal AbortController yet (open() hasn't run),
+  // so cancel() would be a no-op against it. Checking the latched flag here refuses to start the
+  // platform dialog process at all for a client that is already gone, in both windows.
+  if (isDisconnected()) return { status: 200, body: CANCELLED_RESPONSE };
   try {
     const adapterResult = await adapter.open(adapterRequest);
     if (adapterResult.cancelled) {
-      return {
-        status: 200,
-        body: { cancelled: true, selections: [], rejectedSelectionCount: 0, partial: false },
-      };
+      return { status: 200, body: CANCELLED_RESPONSE };
     }
     return {
       status: 200,
@@ -368,10 +381,17 @@ export async function handleNativeFileDialogOpen(
   // fires only 'close', never 'aborted'. Nothing in this handler ever writes ctx.res itself (the
   // caller does, from the returned RouteResult, once this promise settles), so a 'close' observed
   // while we are still running can only mean the underlying connection was torn down early.
-  // `cancelTarget` stays undefined until an adapter is actually open()-ing, so a disconnect
-  // during body reading or gate admission is a safe no-op -- there is nothing to cancel yet.
+  // #2906 round 2: `cancelTarget?.cancel()` alone is NOT a safe no-op during body reading or gate
+  // admission -- it silently drops the signal instead of merely having nothing to do yet, because
+  // (a) `cancelTarget` is undefined so the optional call never fires at all, and (b) even once it
+  // is assigned, cancel() targets `cancellableAdapter`'s per-open() AbortController, which does not
+  // exist until adapter.open() itself runs. `disconnected` is latched independently of
+  // `cancelTarget` so openAndProject can refuse to start the adapter at all once the client is
+  // already gone, regardless of which of those two windows the disconnect landed in.
   let cancelTarget: NativeFileDialogAdapter | undefined;
+  let disconnected = false;
   const onDisconnect = (): void => {
+    disconnected = true;
     cancelTarget?.cancel();
   };
   ctx.req.on("aborted", onDisconnect);
@@ -394,7 +414,7 @@ export async function handleNativeFileDialogOpen(
     // the gate for the full 10-minute interaction timeout, AND the orphaned dialog process is
     // actually torn down instead of merely being forgotten about.
     try {
-      return await openAndProject(ctx, deps, parsed.value, gate.adapter);
+      return await openAndProject(ctx, deps, parsed.value, gate.adapter, () => disconnected);
     } finally {
       gate.state.active = false;
     }

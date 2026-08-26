@@ -299,8 +299,21 @@ describe("EditorRuntimeWidget Git gutter", () => {
     expect(gutter).toBeDefined();
     // KEIKO-0897: the resolver signature now carries an AbortSignal; hand the test a fresh
     // controller signal so the type matches the production port.
-    await gutter?.resolve(new AbortController().signal);
+    const controller = new AbortController();
+    await gutter?.resolve(controller.signal);
     expect(fetchGitStructuredDiff).toHaveBeenCalledTimes(2);
+    // #2906 review (comment 3865167732): the resolver used to be `async () => ...`, so TypeScript
+    // silently permitted it to ignore the signal it was given -- refresh/dispose only suppressed
+    // the stale result on arrival and left both requests running underneath it. Both hops must
+    // now receive the EXACT signal the resolver itself was called with.
+    expect(fetchGitStructuredDiff).toHaveBeenCalledWith(
+      { root: "/repo", path: "src/app.ts", scope: "staged" },
+      controller.signal,
+    );
+    expect(fetchGitStructuredDiff).toHaveBeenCalledWith(
+      { root: "/repo", path: "src/app.ts", scope: "unstaged" },
+      controller.signal,
+    );
 
     act(() => {
       surface.props?.onContentChange({ text: "typed", sizeBytes: 5 }, "human");

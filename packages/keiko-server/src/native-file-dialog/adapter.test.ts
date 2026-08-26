@@ -276,6 +276,39 @@ describe("runNativeDialogProcess", () => {
     expect(Date.now() - startedAt).toBeLessThan(8_000);
   }, 10_000);
 
+  // Regression: #2906 round 2. Passing `signal` to child_process.spawn makes Node send SIGTERM and
+  // emit 'error' (an AbortError) as soon as the signal aborts -- well before the child has actually
+  // exited. The old handler treated any 'error' as a genuine spawn failure and settled immediately
+  // with exitCode 127, clearing the only kill escalation armed so far; a helper that ignores
+  // SIGTERM (like this one) was then orphaned with nothing left to finish it off, and the caller
+  // learned "done" while the process was still alive. This pins that an aborted signal instead
+  // keeps the promise pending, arms the SIGKILL escalation, and only settles once the child has
+  // actually exited.
+  it("keeps the promise pending through an aborted signal until the child actually exits (SIGKILL escalation)", async () => {
+    const controller = new AbortController();
+    const startedAt = Date.now();
+    const resultPromise = runNativeDialogProcess(
+      process.execPath,
+      ["-e", "process.on('SIGTERM', () => {}); setInterval(() => {}, 1000);"],
+      "",
+      30_000,
+      controller.signal,
+    );
+    // Give the child time to actually install its SIGTERM handler before aborting, so the abort's
+    // SIGTERM is genuinely ignored rather than killing it via the default disposition.
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    controller.abort();
+
+    const result = await resultPromise;
+
+    // Before the fix this resolved almost immediately (~300ms, exitCode 127) from the abort-driven
+    // 'error' event alone, while the child was still alive. Now it can only settle once the SIGKILL
+    // escalation (armed by the abort) has actually terminated the child via 'close'.
+    expect(Date.now() - startedAt).toBeGreaterThanOrEqual(2_000);
+    expect(result.exitCode).toBeNull();
+    expect(result.timedOut).toBe(false);
+  }, 10_000);
+
   it("spawns the helper with a minimal, allowlisted environment instead of full inheritance", async () => {
     const sentinelName = "KEIKO_TEST_NATIVE_DIALOG_SECRET";
     vi.stubEnv(sentinelName, "super-secret-value");

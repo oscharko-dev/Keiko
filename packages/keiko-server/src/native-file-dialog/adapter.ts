@@ -172,6 +172,28 @@ function buildDialogEnv(processEnv: NodeJS.ProcessEnv = process.env): NodeJS.Pro
   return buildSandboxEnv(processEnv, NATIVE_DIALOG_ENV_ALLOWLIST);
 }
 
+// #2906 round 2: passing `signal` to spawn() makes Node send SIGTERM AND emit 'error' (an
+// AbortError) as soon as an aborted signal is observed -- well before the child has actually
+// exited. Settling immediately here, as a genuine spawn failure does, would report cancellation as
+// "done" while the process may still be alive: escalation.clear() inside settle() cancels the only
+// kill escalation armed so far, so a helper that ignores SIGTERM would be orphaned with nothing
+// left to finish it off. Instead, arm the same immediate SIGKILL escalation the output-cap path
+// uses (idempotent if one is already scheduled) and let the 'close' handler produce the real
+// settlement once the child has actually exited -- never fabricate a settlement from the abort
+// signal alone. A genuine spawn failure (binary missing / not executable) still settles 127
+// immediately, like the git runner.
+function handleChildSpawnError(
+  escalation: KillEscalation,
+  signal: AbortSignal | undefined,
+  settle: (exitCode: number | null) => void,
+): void {
+  if (signal?.aborted === true) {
+    escalation.triggerOutputCapKill();
+    return;
+  }
+  settle(127);
+}
+
 // Bounded runner for the dialog helper process. Modeled on the git route runner (shell:false,
 // windowsHide, timeout, byte caps, curated env) plus stdin delivery. `signal`, when aborted (the
 // BFF route's cancel() seam, #2906), makes Node kill the child immediately instead of waiting out
@@ -215,10 +237,10 @@ export function runNativeDialogProcess(
     child.stderr.on("data", (chunk: Buffer) => {
       appendBounded(stderr, chunk, MAX_STDERR_BYTES);
     });
-    // Spawn failure (binary missing / not executable) surfaces as exit 127 like the git runner;
-    // the adapter maps it to a typed error, never a throw into the route.
+    // Spawn failure (binary missing / not executable) surfaces as exit 127 like the git runner,
+    // UNLESS this 'error' is a byproduct of our own cancel() -- see handleChildSpawnError above.
     child.on("error", () => {
-      settle(127);
+      handleChildSpawnError(escalation, signal, settle);
     });
     child.on("close", (exitCode) => {
       settle(exitCode);

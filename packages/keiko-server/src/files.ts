@@ -492,16 +492,17 @@ function extensionOf(name: string): string | null {
   return ext.length > 0 ? ext : null;
 }
 
-// Metadata a stat'd (non-directory-dirent) entry always carries -- the common fields BOTH the
+// Metadata a stat'd (non-directory-dirent) entry always carries -- the common fields both the
 // "file" and "symlink" FilesTreeEntry variants share, still missing only the discriminant `kind`
-// and the containment-derived `readable`.
+// and the containment-derived `readable`. No `symlink` field: PR #3289 review (comment
+// 3865167775) removed it from the wire type entirely -- `kind` alone is the discriminant now, so
+// there is nothing left for a local `symlink` boolean to contradict.
 interface FilesTreeEntryMetadata {
   readonly name: string;
   readonly path: string;
   readonly sizeBytes: number;
   readonly modifiedAt: number;
   readonly extension: string | null;
-  readonly symlink: boolean;
 }
 
 function metadataFreeDirectoryEntry(
@@ -518,17 +519,19 @@ function metadataFreeDirectoryEntry(
     path: meta.path,
     kind: "directory",
     extension: meta.extension,
-    symlink: false,
     readable,
   };
 }
 
-// #2906 review (comment 3863185718): a symlink whose target is a directory used to be reported as
-// `kind: "directory"` WITH the symlink's own lstat metadata attached, contradicting the "a
-// directory entry is metadata-free" invariant metadataFreeDirectoryEntry encodes above. It is now
-// `kind: "symlink"` (the metadata-bearing union member) with `symlinkTargetKind` naming what the
-// walk resolved the target to, so a consumer that still wants directory-like treatment for it can
-// opt in explicitly instead of the server silently asserting it.
+// #2906 review (comment 3863185718) / PR #3289 review (comment 3865167775): a symlink whose target
+// is a directory used to be reported as `kind: "directory"` WITH the symlink's own lstat metadata
+// attached, contradicting the "a directory entry is metadata-free" invariant
+// metadataFreeDirectoryEntry encodes above. A symlink whose target is a FILE had the mirror-image
+// bug: it collapsed to `kind: "file"` while STILL carrying `symlinkTargetKind: "file"`, a field the
+// type now declares only on the "symlink" variant. Both are `kind: "symlink"` uniformly -- never
+// collapsed into whatever the target happens to be -- with `symlinkTargetKind` naming what the walk
+// resolved the target to, so a consumer that wants target-aware treatment can opt in explicitly
+// instead of the server silently asserting it.
 async function classifySymlinkEntry(
   root: string,
   entryPath: string,
@@ -540,12 +543,12 @@ async function classifySymlinkEntry(
     const contained = isContained(root, target);
     const denied = contained && pathIsDenied(rootRelativePosixPath(root, target));
     const readable = contained && !denied;
-    if (targetStats.isDirectory()) {
-      return { ...meta, kind: "symlink", symlinkTargetKind: "directory", readable };
-    }
-    const symlinkTargetKind: FilesSymlinkTargetKind = targetStats.isFile() ? "file" : "unknown";
-    const kind: FilesEntryKind = symlinkTargetKind === "file" ? "file" : "symlink";
-    return { ...meta, kind, symlinkTargetKind, readable };
+    const symlinkTargetKind: FilesSymlinkTargetKind = targetStats.isDirectory()
+      ? "directory"
+      : targetStats.isFile()
+        ? "file"
+        : "unknown";
+    return { ...meta, kind: "symlink", symlinkTargetKind, readable };
   } catch {
     return { ...meta, kind: "symlink", symlinkTargetKind: "unknown", readable: false };
   }
@@ -569,16 +572,14 @@ async function classifyEntry(
     );
   }
   const linkStats = await lstat(entryPath);
-  const symlink = linkStats.isSymbolicLink();
   const meta: FilesTreeEntryMetadata = {
     name: entry.name,
     path: childRelativePath,
     sizeBytes: linkStats.size,
     modifiedAt: linkStats.mtimeMs,
     extension: extensionOf(entry.name),
-    symlink,
   };
-  if (symlink) return classifySymlinkEntry(root, entryPath, meta);
+  if (linkStats.isSymbolicLink()) return classifySymlinkEntry(root, entryPath, meta);
   if (linkStats.isDirectory()) {
     // TOCTOU fallback: the dirent's own type (read at readdir time) disagreed with this FRESH
     // lstat (rare -- e.g. the entry was replaced between the readdir call and here). A real

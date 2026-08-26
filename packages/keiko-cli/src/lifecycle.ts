@@ -291,26 +291,54 @@ async function fetchHealthProbe(url: string, fetchImpl: FetchFn): Promise<Health
 // Small bound on <stateDir>/ui.pid: it holds one decimal pid plus a newline, never more.
 const MAX_PID_FILE_BYTES = 64;
 
-// KEIKO-0886 follow-up (#2906 review, comment 3863185744): the pid file used to be opened via a
-// separate `lstatSync` CHECK followed by a SEPARATE `writeFileSync`/`readFileSync` USE -- a
-// symlink planted in the window between the two was followed (readPid had no check at all;
-// readFileSync always follows symlinks). `readPid` then feeds whatever it parsed straight to
-// `isProcessAlive`/`process.kill`, so a followed symlink could steer a real signal at an
-// attacker-chosen pid. Opening the descriptor with `O_NOFOLLOW` makes the check and the use the
-// SAME syscall on POSIX, closing the window entirely: a symlink at the final path component
-// fails the open() itself (ELOOP), whether it was there from the start or planted a moment
-// before. Windows has no `O_NOFOLLOW`; this falls back to the same lstatSync-then-open pattern
+// KEIKO-0886 follow-up (#2906 review, comment 3863185744 then comment 3865159294): the pid file
+// used to be opened via a separate `lstatSync` CHECK followed by a SEPARATE
+// `writeFileSync`/`readFileSync` USE -- a symlink planted in the window between the two was
+// followed (readPid had no check at all; readFileSync always follows symlinks). `readPid` then
+// feeds whatever it parsed straight to `isProcessAlive`/`process.kill`, so a followed symlink
+// could steer a real signal at an attacker-chosen pid. Opening the descriptor with `O_NOFOLLOW`
+// makes the check and the use the SAME syscall on POSIX, closing the symlink window entirely: a
+// symlink at the final path component fails the open() itself (ELOOP), whether it was there from
+// the start or planted a moment before.
+//
+// O_NOFOLLOW alone was still exploitable, though: it refuses only a SYMLINK, not a HARD LINK (a
+// hard link IS a plain directory entry pointing at a real, non-symlink inode, so the syscall that
+// blocks symlinks has nothing to object to), and the old write path's O_TRUNC overwrote whatever
+// inode the pid-file NAME currently pointed at -- including a hard-linked victim file -- BEFORE
+// fstat ever ran to reject it. A FIFO planted at the path is a second, independent problem: a
+// blocking open (no O_NONBLOCK) can hang forever waiting for a peer that never arrives, before
+// fstat ever gets a chance to reject the non-regular file. Both are closed below:
+//   * every open additionally passes O_NONBLOCK so a planted FIFO can never hang the open() call
+//     itself -- the non-regular-file rejection below then refuses it same as any other special
+//     file, immediately rather than after an indefinite hang.
+//   * every reader and writer verifies `nlink === 1` in addition to `isFile()`, so a hard-linked
+//     inode (which always reports nlink > 1: the original name plus this one) is refused exactly
+//     like a symlinked one, regardless of which direction it was opened from.
+//   * the write path (`createPidFileSlot` below) never opens an EXISTING inode for writing at
+//     all: it only ever succeeds by creating a brand-new inode via O_CREAT|O_EXCL, so there is no
+//     victim inode left to truncate in place.
+// Windows has no `O_NOFOLLOW`; this falls back to the same lstatSync-then-open pattern
 // `openLogAppendNoFollow` already established for ui.log (KEIKO-0886) -- a residual, documented
 // TOCTOU window on that platform only.
 function openPidFileNoFollow(path: string, flags: number): number {
   const nofollow = (fsConstants as { O_NOFOLLOW?: number }).O_NOFOLLOW ?? 0;
+  const nonblock = (fsConstants as { O_NONBLOCK?: number }).O_NONBLOCK ?? 0;
   if (nofollow === 0) assertNotSymlink(path);
-  return openSync(path, flags | nofollow, 0o600);
+  return openSync(path, flags | nofollow | nonblock, 0o600);
 }
 
-// `fstatSync(fd).isFile()` is defense in depth beyond O_NOFOLLOW: O_NOFOLLOW only refuses a
-// SYMLINK at the final component, not another non-regular target (FIFO, device) a state-dir actor
-// could otherwise plant and have this block on, or read attacker-controlled bytes from.
+// Defense in depth beyond O_NOFOLLOW/O_EXCL: neither refuses a HARD LINK (a hard link has no
+// symlink component, and a fresh O_EXCL create has no pre-existing path to collide with), so
+// every reader and writer independently verifies the descriptor it actually opened is a regular,
+// SINGLE-LINK file -- never trusting or writing through a hard-linked inode -- before doing
+// anything with its content.
+function assertRegularSingleLinkFile(fd: number, path: string): void {
+  const stats = fstatSync(fd);
+  if (!stats.isFile() || stats.nlink !== 1) {
+    throw new Error(`keiko start: refusing to use non-regular or hard-linked ${path}`);
+  }
+}
+
 function readPid(path: string): number | undefined {
   let fd: number;
   try {
@@ -319,7 +347,7 @@ function readPid(path: string): number | undefined {
     return undefined;
   }
   try {
-    if (!fstatSync(fd).isFile()) return undefined;
+    assertRegularSingleLinkFile(fd, path);
     const buffer = Buffer.alloc(MAX_PID_FILE_BYTES);
     const bytesRead = readSync(fd, buffer, 0, buffer.length, 0);
     const raw = buffer.subarray(0, bytesRead).toString("utf8").trim();
@@ -332,19 +360,36 @@ function readPid(path: string): number | undefined {
   }
 }
 
-// Companion write path for the same descriptor-based invariant (`keiko start`'s writePid call
-// site below): stages the write behind the identical O_NOFOLLOW-at-open / isFile() guard readPid
-// uses, so neither direction of the pid file's lifecycle ever completes a check separately from
-// the use it protects.
-function writePid(path: string, pid: number): void {
-  const fd = openPidFileNoFollow(
-    path,
-    fsConstants.O_WRONLY | fsConstants.O_CREAT | fsConstants.O_TRUNC,
-  );
+function isEexist(error: unknown): boolean {
+  return typeof error === "object" && error !== null && "code" in error && error.code === "EEXIST";
+}
+
+// #2906 review (comment 3865159294): publishing a pid now NEVER opens an existing inode for
+// writing. The initial attempt is O_CREAT|O_EXCL, which can only ever succeed by creating a
+// brand-new, empty inode at this name. On EEXIST (a stale pid file left by an unclean exit, or a
+// hostile pre-planted node of any kind -- symlink, hard link, FIFO) the stale directory entry is
+// unlinked -- removing only the NAME, never touching a hard-linked target's content -- and the
+// exclusive create is retried exactly once. If the slot is still occupied after that (an actor
+// recreating the name faster than this loop can), the write fails closed instead of retrying
+// forever or ever falling back to a truncating open.
+function createPidFileSlot(path: string): number {
+  const exclusive = fsConstants.O_WRONLY | fsConstants.O_CREAT | fsConstants.O_EXCL;
   try {
-    if (!fstatSync(fd).isFile()) {
-      throw new Error(`keiko start: refusing to write to non-regular ${path}`);
-    }
+    return openPidFileNoFollow(path, exclusive);
+  } catch (error) {
+    if (!isEexist(error)) throw error;
+  }
+  rmSync(path, { force: true });
+  return openPidFileNoFollow(path, exclusive);
+}
+
+// Companion write path for the same descriptor-based invariant `readPid` uses: stages the write
+// behind the identical O_NOFOLLOW-at-open / regular-single-link-file guard, so neither direction
+// of the pid file's lifecycle ever completes a check separately from the use it protects.
+function writePid(path: string, pid: number): void {
+  const fd = createPidFileSlot(path);
+  try {
+    assertRegularSingleLinkFile(fd, path);
     writeSync(fd, `${String(pid)}\n`, null, "utf8");
   } finally {
     closeSync(fd);
@@ -732,6 +777,31 @@ async function reportUnhealthyStart(
   return 1;
 }
 
+// #2906 review (comment 3865159294): terminates the just-spawned child if pid publication fails,
+// so a hostile state-dir actor who wins the exclusive-create race in `createPidFileSlot` (or any
+// other publish failure) can never leave an unmanaged, unkillable-by-`keiko stop` child running.
+// SIGKILL immediately rather than the graceful SIGTERM-then-escalate `terminateAndConfirm` uses
+// elsewhere: the child was spawned moments ago and has not yet published a health endpoint, so
+// there is nothing graceful to wait for and no pid file yet for a concurrent `keiko stop` to
+// contend with.
+function publishPidOrKillChild(
+  options: LifecycleOptions,
+  io: CliIo,
+  deps: Pick<LifecycleRuntimeDeps, "killProcess">,
+  pid: number,
+): boolean {
+  try {
+    writePid(pidFile(options), pid);
+    return true;
+  } catch (error) {
+    deps.killProcess(pid, "SIGKILL");
+    io.err(
+      `keiko start: failed to publish the UI process pid (${error instanceof Error ? error.message : String(error)}).\n`,
+    );
+    return false;
+  }
+}
+
 async function cmdStart(
   options: LifecycleOptions,
   io: CliIo,
@@ -770,11 +840,14 @@ async function cmdStart(
     return 1;
   }
   child.unref();
-  // KEIKO-0886 / #2906 review (comment 3863185744): refuse to write to a symlinked
-  // <stateDir>/ui.pid so a hostile state-dir actor cannot re-point the pid file (which
-  // process.kill reads) at any user-writable path outside home. writePid opens with O_NOFOLLOW so
-  // the refusal check and the write are one syscall, not a separate lstat followed by a write.
-  writePid(pidFile(options), child.pid);
+  // KEIKO-0886 / #2906 review (comment 3863185744, then comment 3865159294): refuse to write to a
+  // symlinked/hard-linked/FIFO <stateDir>/ui.pid so a hostile state-dir actor cannot re-point the
+  // pid file (which process.kill reads) at any user-writable path outside home, or corrupt one.
+  // writePid's exclusive-create pid slot can still fail closed (e.g. an actor winning every
+  // create-retry race) -- a spawned-but-unpublished child must never be left running headless
+  // with no pid file `keiko stop` can find it by, so a publish failure kills the child immediately
+  // and fails the command closed instead of leaking an unmanaged process.
+  if (!publishPidOrKillChild(options, io, deps, child.pid)) return 1;
   io.out(`Starting Keiko UI on ${lifecycleBaseUrl(options)} ...\n`);
 
   const healthy = await waitForHealth(options, child.pid, deps);

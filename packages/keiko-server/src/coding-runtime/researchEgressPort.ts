@@ -244,6 +244,24 @@ function auxiliaryOutcomeForCharge(
   }
 }
 
+// #2906 review (comment 3865173889): maps a safeFetch fail-closed reason onto the SAME audit
+// vocabulary auxiliaryOutcomeForCharge above already uses -- a grant that stopped being valid
+// (naturally expired, or explicitly revoked) is the policy outcome "denied"; a fetch that could
+// not be completed for any other reason (network/TLS/DNS/timeout, or the caller's own signal) is
+// "unavailable", matching the precedent set by an "unknown" (registry no longer holds the grant)
+// charge result above.
+function auxiliaryOutcomeForFetchFailure(
+  reason: SafeFetchFailureReason,
+): CodingWorkbenchAuxiliaryStatus {
+  switch (reason) {
+    case "expired":
+    case "revoked":
+      return "denied";
+    case "transport-failed":
+      return "unavailable";
+  }
+}
+
 // https only, no embedded credentials, no explicit non-default port (the URL API strips :443).
 function parseHttpsResearchUrl(target: string): URL | undefined {
   let url: URL;
@@ -350,15 +368,26 @@ async function followResearch(
     if (reserved !== "ok") {
       return denyResearch(ctx, state.runId, auxiliaryOutcomeForCharge(reserved));
     }
-    const response = await safeFetch(ctx, current, state);
-    if (response === undefined) return FAILED;
-    if (isRedirect(response.status)) {
-      const next = await redirectTarget(response, current, state.grant);
-      if (next === undefined) return denyResearch(ctx, state.runId, "denied");
-      current = next;
-      continue;
+    const fetched = await safeFetch(ctx, current, state);
+    if (!fetched.ok) {
+      return denyResearch(ctx, state.runId, auxiliaryOutcomeForFetchFailure(fetched.reason));
     }
-    return finalizeResearch(ctx, response, state);
+    // #2906 round 2: the revoke registration and expiry timer stay armed (via `fetched.release`,
+    // deferred to this `finally`) for the ENTIRE hop, including redirect-body discard and the
+    // final `readBytesCapped` read below -- not merely until fetchImpl's headers-only resolution.
+    // Releasing any earlier would let a grant that expires (or is revoked) mid-body-stream keep
+    // streaming to completion instead of aborting.
+    try {
+      if (isRedirect(fetched.response.status)) {
+        const next = await redirectTarget(fetched.response, current, state.grant);
+        if (next === undefined) return await denyResearch(ctx, state.runId, "denied");
+        current = next;
+        continue;
+      }
+      return await finalizeResearch(ctx, fetched.response, state);
+    } finally {
+      fetched.release();
+    }
   }
   return FAILED;
 }
@@ -371,11 +400,32 @@ function isAllowlistedResearchTarget(url: URL, grant: ResolvedResearchGrant): bo
   return grant.domains.includes(normalizeResearchHost(url.hostname));
 }
 
+// #2906 review (comment 3865173889): the three ways this hop can fail to complete, so the caller
+// can emit a correctly-audited fail-closed outcome instead of a silent, unaudited FAILED.
+// "expired"/"revoked" mirror the analogous auxiliaryOutcomeForCharge mapping below (both are the
+// grant no longer being valid); "transport-failed" covers a real network/TLS/DNS/timeout error and
+// the caller's own signal aborting the whole run, neither of which the audit vocabulary can
+// distinguish further.
+type SafeFetchFailureReason = "expired" | "revoked" | "transport-failed";
+
+type SafeFetchResult =
+  | {
+      readonly ok: true;
+      readonly response: Response;
+      // Unregisters the revoke controller AND clears the expiry timer. Must be called exactly
+      // once, and only after the caller has finished consuming (or discarding) the response body
+      // -- see the `finally` in `followResearch`. `fetch()` itself resolves as soon as response
+      // HEADERS arrive; calling this any earlier would disarm both grant-expiry and revoke abort
+      // for the remainder of a still-streaming body (#2906 round 2).
+      readonly release: () => void;
+    }
+  | { readonly ok: false; readonly reason: SafeFetchFailureReason };
+
 async function safeFetch(
   ctx: ResearchEgressContext,
   url: URL,
   state: ResearchFollowState,
-): Promise<Response | undefined> {
+): Promise<SafeFetchResult> {
   // KEIKO-0586: register an AbortController per outbound fetch so revokeResearch can abort
   // in-flight requests instead of waiting for them to run to completion and discarding the body.
   // The AbortSignal passed to fetchImpl combines the caller's own signal (which cancels the
@@ -389,15 +439,28 @@ async function safeFetch(
   const combined = AbortSignal.any(
     [controller.signal, expiry.signal, state.signal].filter(isSignal),
   );
-  try {
-    return await ctx.fetchImpl(url.toString(), buildFetchOptions(ctx, state.cfg, combined));
-  } catch {
-    // Any transport-class failure (blocked target, DNS, TLS, timeout, redirect-policy) fails the
-    // fetch closed; the error text is dropped so no upstream detail rides into diagnostics.
-    return undefined;
-  } finally {
+  const disposeAll = (): void => {
     release();
     expiry.dispose();
+  };
+  try {
+    const response = await ctx.fetchImpl(
+      url.toString(),
+      buildFetchOptions(ctx, state.cfg, combined),
+    );
+    return { ok: true, response, release: disposeAll };
+  } catch {
+    // Any transport-class failure (blocked target, DNS, TLS, timeout, redirect-policy) fails the
+    // fetch closed; the error text is dropped so no upstream detail rides into diagnostics. Which
+    // of the three composed signals actually fired identifies the fail-closed reason so the
+    // caller can emit the correctly-audited outcome instead of a silent, unaudited FAILED.
+    const reason: SafeFetchFailureReason = expiry.signal.aborted
+      ? "expired"
+      : controller.signal.aborted
+        ? "revoked"
+        : "transport-failed";
+    disposeAll();
+    return { ok: false, reason };
   }
 }
 

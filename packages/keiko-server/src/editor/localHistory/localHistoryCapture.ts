@@ -147,6 +147,35 @@ function protectionForCaptureFailure(
 // checkpoint-capture origin "user-save", making a rename-triggered failure indistinguishable from
 // an ordinary user-save capture failure in both the diagnostic and (via its activity-log bridge)
 // the activity log.
+// #2906 review (comment 3865159301): both failure records for the SAME rekey failure must carry
+// the identical, already-resolved correlationId -- never a freshly minted one -- so a
+// support-analyze pass can join them. Shared by the store-unavailable early return and the catch
+// branch below, which used to pass the caller's possibly-undefined `input.correlationId` straight
+// through and let emitEditorLocalHistoryCaptureFailure mint its own disconnected id.
+function reKeyFailureOutcome(
+  deps: Pick<UiHandlerDeps, "diagnostics">,
+  activityLog: ServerLogSink,
+  correlationId: string,
+  error: unknown,
+): number {
+  emitEditorLocalHistoryCaptureFailure(
+    deps,
+    REKEY_DIAGNOSTIC_ORIGIN,
+    error,
+    Date.now(),
+    correlationId,
+  );
+  activityLog.write({
+    level: "error",
+    category: "diagnostic",
+    op: "editor.local-history.rekey.failed",
+    correlationId,
+    errorKind: errorKindOf(error),
+    extra: { outcome: "failed", rewrittenCount: 0 },
+  });
+  return 0;
+}
+
 export function reKeyEditorLocalHistorySafely(input: {
   readonly deps: Pick<UiHandlerDeps, "store" | "editorLocalHistoryStore" | "diagnostics"> & {
     readonly activityLog?: ServerLogSink | undefined;
@@ -156,9 +185,19 @@ export function reKeyEditorLocalHistorySafely(input: {
   readonly nextRelativePath: string;
   readonly correlationId?: string | undefined;
 }): number {
-  if (input.deps.editorLocalHistoryStore === undefined) return 0;
   const activityLog = input.deps.activityLog ?? processServerLogSink();
   const correlationId = input.correlationId ?? UNKNOWN_CORRELATION_ID;
+  if (input.deps.editorLocalHistoryStore === undefined) {
+    // #2906 review (comment 3865159301): this used to return 0 with no diagnostic and no
+    // activity-log line at all, making an unavailable subsystem indistinguishable from a genuine
+    // zero-rewrite success.
+    const error = new EditorLocalHistoryError(
+      "INDEX_UNAVAILABLE",
+      "Editor Local History is unavailable.",
+      "STORE_UNAVAILABLE",
+    );
+    return reKeyFailureOutcome(input.deps, activityLog, correlationId, error);
+  }
   try {
     const identity = resolveEditorLocalHistoryRoot(input.deps, input.realRoot);
     const rewrittenCount = input.deps.editorLocalHistoryStore.reKey(
@@ -174,22 +213,7 @@ export function reKeyEditorLocalHistorySafely(input: {
     });
     return rewrittenCount;
   } catch (error) {
-    emitEditorLocalHistoryCaptureFailure(
-      input.deps,
-      REKEY_DIAGNOSTIC_ORIGIN,
-      error,
-      Date.now(),
-      input.correlationId,
-    );
-    activityLog.write({
-      level: "error",
-      category: "diagnostic",
-      op: "editor.local-history.rekey.failed",
-      correlationId,
-      errorKind: errorKindOf(error),
-      extra: { outcome: "failed", rewrittenCount: 0 },
-    });
-    return 0;
+    return reKeyFailureOutcome(input.deps, activityLog, correlationId, error);
   }
 }
 

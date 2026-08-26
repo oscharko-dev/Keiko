@@ -1738,18 +1738,29 @@ export async function fetchGitStatus(
   );
 }
 
-export async function fetchGitStructuredDiff(input: {
-  readonly root: string;
-  readonly path?: string | undefined;
-  readonly scope: GitEditorDiffScope;
-}): Promise<GitEditorDiffResponse> {
+// #2906 review (comment 3865167732): KEIKO-0897 threaded an AbortSignal through
+// EditorGitGutterResolver so a superseded/disposed gutter refresh can stop its host call early
+// instead of merely having its stale result ignored on arrival, but this helper had no `signal`
+// parameter at all -- TypeScript silently permitted the production `async () => ...` resolver, so
+// refresh/dispose left both the staged and unstaged fetches running to completion underneath the
+// discarded result. The optional second `signal` param matches every other two-arg API helper in
+// this file (e.g. requestEditorHover, requestEditorSymbols) and is forwarded straight into
+// fetchJson's RequestInit, which already combines a caller signal with its own read deadline.
+export async function fetchGitStructuredDiff(
+  input: {
+    readonly root: string;
+    readonly path?: string | undefined;
+    readonly scope: GitEditorDiffScope;
+  },
+  signal?: AbortSignal,
+): Promise<GitEditorDiffResponse> {
   const params = new URLSearchParams();
   params.set("root", input.root);
   params.set("scope", input.scope);
   if (input.path !== undefined) params.set("path", input.path);
   const path = `/api/git/diff/structured?${params.toString()}`;
   const [value, contracts] = await Promise.all([
-    fetchJson<unknown>(path),
+    fetchJson<unknown>(path, signal === undefined ? undefined : { signal }),
     import("@oscharko-dev/keiko-contracts/git-editor"),
   ]);
   const result = contracts.parseGitEditorDiffResponse(value);

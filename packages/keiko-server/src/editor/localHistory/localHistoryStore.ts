@@ -143,10 +143,13 @@ export interface EditorLocalHistoryStore {
     nowMs?: number,
   ) => EditorLocalHistoryEntry;
   readonly delete: (scope: EditorLocalHistoryRootScope, entryRef: string) => void;
-  // KEIKO-0675: rename awareness. Rewrites every index entry whose path matches
-  // previousRelativePath onto nextRelativePath (updating relativePath, relativePathDigest, and
-  // the vault payload's mirror of relativePathDigest + payloadBindingDigest). Returns the number
-  // of index entries rewritten so a caller can log a body-free count. entryRef is intentionally
+  // KEIKO-0675: rename awareness. Rewrites every index entry whose path is EITHER exactly
+  // previousRelativePath (a file rename) OR nested inside it (a directory rename -- #2906 round
+  // 2: handleFilesRename invokes this for directories too, and a directory has no checkpoint of
+  // its own, so the exact-match case alone stranded every descendant), onto its own computed
+  // destination path (updating relativePath, relativePathDigest, and the vault payload's mirror
+  // of relativePathDigest + payloadBindingDigest). Returns the number of index entries rewritten
+  // so a caller can log a body-free count. entryRef is intentionally
   // NOT rotated: it is the opaque identifier captured at write time and held by the UI, evidence,
   // and audit trail across the rename, so rotating it would invalidate every persisted reference
   // to that checkpoint. vaultEntryRef — a purely internal storage handle, already re-minted on
@@ -209,6 +212,16 @@ interface StagedRekeyedEntry {
   readonly vaultEntryRef: WorkspaceVaultEntryRef;
 }
 
+// An index entry affected by a reKey, paired with ITS OWN destination path/digest (#2906 round 2):
+// a directory rename affects many entries at once, and each descendant's destination differs from
+// every other's (only the renamed-directory PREFIX is shared), unlike the single shared
+// nextRelativePath a plain file rename uses.
+interface RekeyTarget {
+  readonly entry: EditorLocalHistoryEntry;
+  readonly nextRelativePath: string;
+  readonly nextDigest: WorkspacePathDigest;
+}
+
 // The object binding stays outside the public contract and encrypted payload. This lets a matching
 // legacy index acquire durable filesystem-object authority without rewriting or resealing any
 // checkpoint body; the contract index schema remains unchanged inside this private envelope.
@@ -261,6 +274,25 @@ function contentDigest(content: string): WorkspaceContentDigest {
 
 function pathDigest(path: string): WorkspacePathDigest {
   return digest("keiko.editor-local-history.path.v1", [path]) as WorkspacePathDigest;
+}
+
+// #2906 round 2: maps one entry's relativePath -- the exact previous path, or a path nested inside
+// a renamed directory -- to its post-rename relativePath. `undefined` means this entry is
+// unaffected by the rename. Mirrors files.ts's renamedBreakpointFileId (KEIKO-0179), which solves
+// the identical "a directory rename affects many descendant paths at once" problem for breakpoint
+// fileIds; duplicated here (rather than imported) because localHistoryStore.ts sits below files.ts
+// in the import graph (files.ts -> localHistoryCapture.ts -> localHistoryStore.ts) and importing
+// the other way would cycle.
+function rekeyedRelativePath(
+  relativePath: string,
+  previousRelativePath: string,
+  nextRelativePath: string,
+): string | undefined {
+  if (relativePath === previousRelativePath) return nextRelativePath;
+  if (relativePath.startsWith(`${previousRelativePath}/`)) {
+    return `${nextRelativePath}${relativePath.slice(previousRelativePath.length)}`;
+  }
+  return undefined;
 }
 
 function instant(nowMs: number): WorkspaceIsoInstant {
@@ -1192,14 +1224,23 @@ export function createEditorLocalHistoryStore(
       // payload.relativePathDigest and payload.payloadBindingDigest depend on the path digest.
       if (previousRelativePath === nextRelativePath) return 0;
       const state = stateFor(scope);
-      const previousDigest = pathDigest(previousRelativePath);
-      const nextDigest = pathDigest(nextRelativePath);
-      const affected = state.index.entries.filter(
-        (candidate): boolean =>
-          scopeMatches(candidate, scope) && candidate.relativePathDigest === previousDigest,
-      );
-      if (affected.length === 0) return 0;
-      const staged = stageRekeyedPayloads(state, affected, nextRelativePath, nextDigest);
+      const targets: RekeyTarget[] = [];
+      for (const candidate of state.index.entries) {
+        if (!scopeMatches(candidate, scope)) continue;
+        const destination = rekeyedRelativePath(
+          candidate.relativePath,
+          previousRelativePath,
+          nextRelativePath,
+        );
+        if (destination === undefined) continue;
+        targets.push({
+          entry: candidate,
+          nextRelativePath: destination,
+          nextDigest: pathDigest(destination),
+        });
+      }
+      if (targets.length === 0) return 0;
+      const staged = stageRekeyedPayloads(state, targets);
       commitRekeyedPayloads(state, staged);
       reconcileBodies(state);
       return staged.length;
@@ -1224,14 +1265,17 @@ export function createEditorLocalHistoryStore(
   // plaintext.
   function stageRekeyedPayloads(
     state: WorkspaceState,
-    affected: readonly EditorLocalHistoryEntry[],
-    nextRelativePath: string,
-    nextDigest: WorkspacePathDigest,
+    targets: readonly RekeyTarget[],
   ): readonly StagedRekeyedEntry[] {
     const staged: StagedRekeyedEntry[] = [];
     try {
-      for (const entry of affected) {
-        const built = rekeyedPayloadFor(state, entry, nextRelativePath, nextDigest);
+      for (const target of targets) {
+        const built = rekeyedPayloadFor(
+          state,
+          target.entry,
+          target.nextRelativePath,
+          target.nextDigest,
+        );
         try {
           state.vault.set(built.payload.vaultEntryRef, JSON.stringify(built.payload));
         } catch {

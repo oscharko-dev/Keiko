@@ -1,6 +1,7 @@
 import {
   existsSync,
   fstatSync,
+  linkSync,
   lstatSync,
   mkdirSync,
   mkdtempSync,
@@ -1408,5 +1409,57 @@ describe("keiko start — refuses symlinked ui.log and ui.pid (KEIKO-0886)", () 
     // The symlink itself is what gets cleaned up; its target is never read or touched.
     expect(existsSync(join(stateDir, "ui.pid"))).toBe(false);
     expect(readFileSync(decoyPidFile, "utf8")).toBe("999999\n");
+  });
+
+  // #2906 review (comment 3865159294): O_NOFOLLOW rejects only a SYMLINK at the final path
+  // component; a HARD LINK is a plain directory entry pointing at a real, non-symlink inode, so
+  // O_NOFOLLOW has nothing to object to. The pre-fix write path opened with O_TRUNC, which
+  // overwrote whatever inode `ui.pid` currently named -- including a hard-linked victim file --
+  // before fstat ever ran to reject it (the reviewer reproduced this: "an injected spawnFn
+  // hardlink made keiko start return success after replacing the victim content with the PID").
+  // Deterministic, no real race needed: the hardlink is planted from INSIDE the injected spawnFn
+  // callback, which cmdStart invokes after runningPid's stale-file cleanup has already run but
+  // strictly before writePid ever opens the path -- exactly reproducing the reviewer's repro
+  // technique without relying on real filesystem timing.
+  it("detects a hard-linked ui.pid at write time and never corrupts the hardlink's target file", async (ctx) => {
+    if (process.platform === "win32") ctx.skip();
+    const root = makeRoot();
+    const stateDir = join(root, ".keiko");
+    mkdirSync(stateDir, { recursive: true, mode: 0o700 });
+    const victim = join(root, "victim-file.txt");
+    const original = "unchanged\n";
+    writeFileSync(victim, original, "utf8");
+
+    const c = makeIo();
+    const child = { pid: 12345, unref: vi.fn(), once: vi.fn() } as unknown as ChildProcess;
+    const code = await runLifecycleCli(
+      "start",
+      ["--state-dir", ".keiko"],
+      c.io,
+      {},
+      {
+        cwd: root,
+        homedir: () => root,
+        spawnFn: () => {
+          linkSync(victim, join(stateDir, "ui.pid"));
+          return child;
+        },
+        fetchImpl: () => Promise.resolve(Response.json({ version: SDK_VERSION }, { status: 200 })),
+        isProcessAlive: () => true,
+        isPortAvailable: () => Promise.resolve(true),
+        killProcess: vi.fn(),
+        sleep: () => Promise.resolve(),
+      },
+    );
+
+    // The victim file's content is byte-identical before and after: the write path never wrote
+    // through the hard-linked inode.
+    expect(readFileSync(victim, "utf8")).toBe(original);
+    // `keiko start` self-heals per the reviewer's "unlink+recreate" instruction: it unlinks the
+    // hostile name and creates a brand-new, single-link inode there instead of refusing outright,
+    // so the command still succeeds and the real pid is published safely.
+    expect(code).toBe(0);
+    expect(readFileSync(join(stateDir, "ui.pid"), "utf8")).toBe("12345\n");
+    expect(lstatSync(join(stateDir, "ui.pid")).nlink).toBe(1);
   });
 });

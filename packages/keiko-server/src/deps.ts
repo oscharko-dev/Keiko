@@ -3541,12 +3541,18 @@ interface UiHandlerRuntimeServices {
 function assembleUiHandlerDeps(args: UiHandlerDepsAssemblyArgs): UiHandlerDeps {
   const dapRuntime = createDapRuntimeReference(args.options);
   const services = assembleUiHandlerRuntimeServices(args, dapRuntime);
+  // #2906 round 2: constructed here (once per composed deps graph) rather than inline inside
+  // buildIntegrationUiHandlerDeps, so createUiHandlerDispose can capture and reset the SAME
+  // instances this graph's deps object exposes -- see its own comment for why disposal must reach
+  // these registries, not just construct them fresh per graph.
+  const atlassianRegistries = atlassianConnectorRegistryFields(args.options);
   return {
     ...buildBaseUiHandlerDeps(args),
     ...buildRuntimeUiHandlerDeps(args, services),
     ...buildIntegrationUiHandlerDeps(args),
     ...buildOptionalUiHandlerDeps(args, services),
-    dispose: createUiHandlerDispose(args, services),
+    ...atlassianRegistries,
+    dispose: createUiHandlerDispose(args, services, atlassianRegistries),
   };
 }
 
@@ -3753,7 +3759,6 @@ function buildIntegrationUiHandlerDeps(args: UiHandlerDepsAssemblyArgs): Integra
   const atlassian = atlassianConnectorCredentialFields(args);
   return {
     ...autonomousDeliveryFields(args.options),
-    ...atlassianConnectorRegistryFields(args.options),
     ...atlassian,
     ...(atlassian.atlassianConnectorCredentials === undefined
       ? {}
@@ -3833,6 +3838,7 @@ function buildCodingContextPortsDependency(
 function createUiHandlerDispose(
   args: UiHandlerDepsAssemblyArgs,
   services: UiHandlerRuntimeServices,
+  atlassianRegistries: ReturnType<typeof atlassianConnectorRegistryFields>,
 ): UiHandlerDeps["dispose"] {
   return async (): Promise<void> => {
     try {
@@ -3845,6 +3851,16 @@ function createUiHandlerDispose(
       services.peripherals.disposeTrustLspBridge();
       services.peripherals.debugActivationControl.dispose();
       services.peripherals.workspaceWatchService.disposeAll();
+      // #2906 round 2: these graph-owned registries (atlassianConnectorRegistryFields, one
+      // instance per composed deps graph) were never disposed with the graph. A sync job started
+      // via startAtlassianSyncJob continues in a detached setImmediate closure that captures THIS
+      // graph's deps/registry and keeps mutating it after disposal, while a newly composed graph's
+      // OWN fresh registry has no record of that still-running job and could admit a duplicate for
+      // the same capsule (hasActiveRunForCapsule sees an empty registry). reset() aborts every
+      // active job's controller and drops pending approvals/activity before the bundle itself goes
+      // away, so nothing on this graph outlives it as observable state on the NEXT graph.
+      atlassianRegistries.atlassianActionApprovalRegistry?.reset();
+      atlassianRegistries.atlassianSyncJobRegistry?.reset();
       args.bundle.dispose?.();
     }
   };

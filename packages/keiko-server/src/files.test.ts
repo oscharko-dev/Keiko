@@ -498,11 +498,12 @@ describe("desktop files browser", () => {
     // #2906 review (comment 3863185718): a symlink-to-directory is `kind: "symlink"` (with
     // symlinkTargetKind: "directory"), never `kind: "directory"` -- it is not a real directory and
     // carries real lstat metadata, unlike the metadata-free "directory" variant FilesTreeEntry now
-    // enforces at the type level. readable/symlink stay the security invariant this test pins.
+    // enforces at the type level. `readable` stays the security invariant this test pins; there is
+    // no separate `symlink` field to assert on since PR #3289 review (comment 3865167775) removed
+    // it from the wire type -- `kind` alone is the discriminant.
     expect(listing.entries.find((entry) => entry.name === "escape")).toMatchObject({
       kind: "symlink",
       symlinkTargetKind: "directory",
-      symlink: true,
       readable: false,
     });
     await expect(readFilesTree(store, root, "escape")).rejects.toMatchObject({
@@ -524,15 +525,18 @@ describe("desktop files browser", () => {
     }
 
     const listing = await readFilesTree(store, root, "");
+    // PR #3289 review (comment 3865167775): config.txt is a symlink whose target (.env) is a FILE
+    // -- the mirror-image case of the directory-target collapse bug below. It must stay
+    // `kind: "symlink"` too, never collapsed into `kind: "file"` just because its target is one.
     expect(listing.entries.find((entry) => entry.name === "config.txt")).toMatchObject({
-      symlink: true,
+      kind: "symlink",
+      symlinkTargetKind: "file",
       readable: false,
     });
     // Same symlink-to-directory relabeling as the escape case above.
     expect(listing.entries.find((entry) => entry.name === "git-cache")).toMatchObject({
       kind: "symlink",
       symlinkTargetKind: "directory",
-      symlink: true,
       readable: false,
     });
 
@@ -562,7 +566,6 @@ describe("desktop files browser", () => {
     expect(entry).toMatchObject({
       kind: "symlink",
       symlinkTargetKind: "directory",
-      symlink: true,
       readable: true,
     });
     expect(typeof entry?.sizeBytes).toBe("number");
@@ -571,6 +574,25 @@ describe("desktop files browser", () => {
     // Genuinely readable: the tree can be listed through it, unlike the denied/escaped cases above.
     const throughLink = await readFilesTree(store, root, "link-to-src");
     expect(throughLink.entries.map((candidate) => candidate.name)).toContain("app.ts");
+  });
+
+  // PR #3289 review (comment 3865167775): the mirror-image positive case -- a READABLE symlink
+  // whose target is a FILE. Before this fix, classifySymlinkEntry special-cased this to report
+  // `kind: "file"` while STILL attaching `symlinkTargetKind: "file"`, a field the wire type now
+  // declares only on the "symlink" variant. It must report `kind: "symlink"` uniformly, exactly
+  // like the symlink-to-directory case above, regardless of what the target turns out to be.
+  it("reports a readable symlink-to-file as kind symlink with symlinkTargetKind file, never collapsed into kind file", async () => {
+    await symlink(join(root, "src", "app.ts"), join(root, "link-to-file.ts"));
+
+    const listing = await readFilesTree(store, root, "");
+    const entry = listing.entries.find((candidate) => candidate.name === "link-to-file.ts");
+    expect(entry).toMatchObject({
+      kind: "symlink",
+      symlinkTargetKind: "file",
+      readable: true,
+    });
+    expect(typeof entry?.sizeBytes).toBe("number");
+    expect(typeof entry?.modifiedAt).toBe("number");
   });
 
   it("returns redacted text previews", async () => {

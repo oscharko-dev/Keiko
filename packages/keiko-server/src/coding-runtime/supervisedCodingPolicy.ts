@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { existsSync, realpathSync } from "node:fs";
-import { isAbsolute, join, relative, resolve } from "node:path";
+import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 
 import {
   CODING_WORKBENCH_SCHEMA_VERSION,
@@ -178,9 +178,58 @@ export function resolveEditTargetRealPath(
   workspaceRoot: string,
   targetPath: string,
 ): EditTargetRealPath {
-  const resolved = resolveEditTargetAbsolute(workspaceRoot, targetPath);
-  if (resolved === undefined) return { contained: false, realRelative: undefined };
-  return { contained: true, realRelative: relative(resolved.root, resolved.target) };
+  if (!candidatePathSyntaxAllowed(targetPath)) return { contained: false, realRelative: undefined };
+  const root = realPath(workspaceRoot);
+  if (root === undefined) return { contained: false, realRelative: undefined };
+  const absolute = isAbsolute(targetPath) ? resolve(targetPath) : resolve(join(root, targetPath));
+  const info = containedRealPathInfoOrUndefined(root, absolute);
+  if (info === undefined || !pathInside(root, info.path)) {
+    return { contained: false, realRelative: undefined };
+  }
+  return { contained: true, realRelative: canonicalRealRelative(info, absolute) };
+}
+
+function containedRealPathInfoOrUndefined(
+  root: string,
+  absolute: string,
+): ReturnType<typeof containedRealPathInfo> | undefined {
+  try {
+    return containedRealPathInfo(nodeWorkspaceFs, root, absolute);
+  } catch (error) {
+    if (error instanceof PathEscapeError) return undefined;
+    throw error;
+  }
+}
+
+// #2906 round 2: for a not-yet-existing (create) target, containedRealPathInfo's own
+// `.realRelative` is only the resolved NEAREST EXISTING ancestor -- the trailing segments that
+// don't exist yet (so there is nothing to symlink-resolve) are not included. Appending them back
+// makes a create target under a symlinked parent classify under its REAL location, not the
+// resolved parent alone (missing the target's own name) and not the unresolved lexical spelling
+// this function previously derived its result from via resolveEditTargetAbsolute's `.path`
+// (`safe-alias/hooks/new-hook` with `safe-alias -> .git` used to classify under the benign
+// lexical spelling and be admitted).
+function canonicalRealRelative(
+  info: ReturnType<typeof containedRealPathInfo>,
+  absolute: string,
+): string {
+  const suffix = untouchedSuffix(absolute);
+  return suffix === "" ? info.realRelative : join(info.realRelative, suffix);
+}
+
+// Walks up from `absolutePath` to the nearest ancestor that exists on disk -- the same ground
+// containedRealPathInfo's own create-target branch covers -- and returns the path below that
+// ancestor. Empty when `absolutePath` itself exists: containedRealPathInfo's `.realRelative` is
+// already the complete resolved path in that case. Terminates at `root`, which `realPath` above
+// already proved exists, so the walk can never reach the filesystem root empty-handed.
+function untouchedSuffix(absolutePath: string): string {
+  let current = absolutePath;
+  for (;;) {
+    if (existsSync(current)) return relative(current, absolutePath);
+    const parent = dirname(current);
+    if (parent === current) return relative(current, absolutePath);
+    current = parent;
+  }
 }
 
 function resolveContainedEditTarget(request: SupervisedCodingFileEditRequest): boolean {

@@ -1510,18 +1510,21 @@ export type FilesSymlinkTargetKind = "directory" | "file" | "unknown";
 // type even though only one was ever produced at runtime. A real directory is returned from a
 // readdir walk and is deliberately never stat'd per entry (one syscall per directory would
 // dominate the walk cost), so it is metadata-free BY CONSTRUCTION; a file or symlink entry is
-// always lstat'd and always carries real values. `sizeBytes`/`modifiedAt` stay declared — as
-// `undefined` — on the "directory" variant rather than omitted from its shape entirely, so a
-// reader can keep writing `entry.sizeBytes` across the WHOLE union without narrowing on `kind`
-// first (TypeScript only requires narrowing when a property is absent from a member, not merely
-// typed `undefined`); constructing a "directory" entry with a real number is what the type now
-// rejects.
+// always lstat'd and always carries real values.
 //
-// A symlink whose target is a directory is `kind: "symlink"`, never `kind: "directory"`: unlike a
-// real directory it DOES carry real lstat metadata (of the symlink itself), so collapsing it into
-// "directory" silently violated the metadata-free invariant above — the runtime used to do exactly
-// that. `symlinkTargetKind` carries what the walk resolved the target to, for a consumer (e.g. a
-// tree-view icon) that wants to render a symlinked directory differently from a symlinked file.
+// Three FULL variants, not two (PR #3289 review, comment 3865167775, finishing what the previous
+// round started): the earlier two-variant shape still let `kind` and `symlink` disagree —
+// `{kind: "directory", symlink: true}`, `{kind: "symlink", symlink: false}` both type-checked —
+// and let a "file" entry carry `symlinkTargetKind`, which belongs only to a symlink. `kind` alone
+// is now the ENTIRE discriminant: there is no separate `symlink: boolean` field to contradict it,
+// and `symlinkTargetKind` exists ONLY on the "symlink" variant. A symlink whose target is a
+// directory is `kind: "symlink"`, never `kind: "directory"` — unlike a real directory it DOES
+// carry real lstat metadata (of the symlink itself), so collapsing it into "directory" silently
+// violated the metadata-free invariant above. Symmetrically, a symlink whose target is a FILE
+// stays `kind: "symlink"` too, never collapsed into "file" — the runtime used to do exactly that
+// for both cases, contradicting this type. `symlinkTargetKind` carries what the walk resolved the
+// target to, for a consumer (e.g. a tree-view icon) that wants to render a symlinked directory
+// differently from a symlinked file.
 export type FilesTreeEntry =
   | {
       readonly kind: "directory";
@@ -1530,21 +1533,51 @@ export type FilesTreeEntry =
       readonly sizeBytes?: undefined;
       readonly modifiedAt?: undefined;
       readonly extension: string | null;
-      readonly symlink: boolean;
       readonly readable: boolean;
-      readonly symlinkTargetKind?: undefined;
     }
   | {
-      readonly kind: "file" | "symlink";
+      readonly kind: "file";
       readonly name: string;
       readonly path: string;
       readonly sizeBytes: number;
       readonly modifiedAt: number;
       readonly extension: string | null;
-      readonly symlink: boolean;
       readonly readable: boolean;
-      readonly symlinkTargetKind?: FilesSymlinkTargetKind | undefined;
+    }
+  | {
+      readonly kind: "symlink";
+      readonly name: string;
+      readonly path: string;
+      readonly sizeBytes: number;
+      readonly modifiedAt: number;
+      readonly extension: string | null;
+      readonly readable: boolean;
+      readonly symlinkTargetKind: FilesSymlinkTargetKind;
     };
+
+/**
+ * Compile-time exhaustiveness pin for {@link FilesTreeEntry}'s discriminant (PR #3289 review,
+ * comment 3865167775): a `switch (entry.kind)` that calls this in its `default` case fails to
+ * compile the moment a new variant is added to the union without also being handled at that call
+ * site, instead of silently falling through. Never called at runtime.
+ */
+export function assertNeverFilesTreeEntryKind(entry: never): never {
+  throw new TypeError(`Unhandled FilesTreeEntry.kind: ${JSON.stringify(entry)}`);
+}
+
+// Whether a tree entry should be treated as a navigable/expandable directory: a real directory, or
+// a symlink the walk resolved to one (`kind: "symlink"` + `symlinkTargetKind: "directory"`).
+// #2906 review (comment 3865167721): FilesWidget used to gate expansion, navigation, context
+// menus, and drag/drop on `kind === "directory"` alone, so once a symlink-to-directory stopped
+// being reported as `kind: "directory"` (the discriminated-union fix above), it silently stopped
+// being navigable in the UI even though the server can still list through it. Both the server and
+// the UI consumer import this ONE predicate so "expandable" can never drift between what the walk
+// allows and what the tree renders. Narrows on `kind` explicitly rather than reading
+// `symlinkTargetKind` off the raw union: only the "symlink" variant declares that property.
+export function isExpandableDirectory(entry: FilesTreeEntry): boolean {
+  if (entry.kind === "directory") return true;
+  return entry.kind === "symlink" && entry.symlinkTargetKind === "directory";
+}
 
 export interface FilesTreeResponse {
   readonly root: string;
