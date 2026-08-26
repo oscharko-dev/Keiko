@@ -12,12 +12,15 @@
  * mount time. The dispatch logic that selects a factory is the pure, unit-tested `./workers.ts`.
  */
 
-import { MONACO_WORKER_MODULES, type MonacoWorkerFactories } from "./workers.js";
+import { type MonacoWorkerFactories } from "./workers.js";
 
 function createEditorWorker(): Worker {
-  // Read the worker specifier from the single source of truth (`./workers.ts`) so the runtime
-  // constructor and the build/test verification checks cannot drift by construction (KEIKO-0584).
-  return new Worker(new URL(MONACO_WORKER_MODULES.editor, import.meta.url), {
+  // KEIKO-0584: Turbopack (and every ESM bundler) requires the URL argument to be a static string
+  // literal so it can resolve and rewrite the worker asset at build time; a variable reference —
+  // even a readonly typed constant — is rejected with "Module not found: Can't resolve <dynamic>".
+  // The specifier is duplicated at MONACO_WORKER_MODULES.editor in ./workers.ts and pinned equal
+  // to this literal by workers.test.ts so the two cannot drift.
+  return new Worker(new URL("monaco-editor/editor/editor.worker.js", import.meta.url), {
     type: "module",
   });
 }
