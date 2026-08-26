@@ -1628,6 +1628,25 @@ function freshContentDigest(
   return digest?.content === content ? digest : null;
 }
 
+// Cheap, allocation-free upper bound on the UTF-8 byte length of `content`. Every UTF-16 code unit
+// encodes to at most 4 UTF-8 bytes, so this can only ever OVER-estimate — safe as a stand-in while
+// the exact, debounced digest for this content has not settled yet, never as a substitute for it.
+function conservativeByteEstimate(content: string): number {
+  return content.length * 4;
+}
+
+// The best byte count currently available for `content`: byte-exact once the debounced digest has
+// settled for this exact content (`readyDigest` non-null), a conservative (never-under) estimate
+// otherwise. Both the large-file-mode signal and the hard size-limit gate must read this instead of
+// pairing a stale `ActiveContentDigest.sizeBytes` — which describes whatever content last settled,
+// not necessarily `content` — with the current text (PR #3289 review).
+function currentSizeBytesEstimate(
+  readyDigest: ActiveContentDigest | null,
+  content: string,
+): number {
+  return readyDigest?.sizeBytes ?? conservativeByteEstimate(content);
+}
+
 function hasEditorTarget(root: string | undefined, file: string | undefined): boolean {
   return root !== undefined && root.length > 0 && file !== undefined && file.length > 0;
 }
@@ -2349,13 +2368,17 @@ function EditorRuntimeWidget({
     tabSize: 2,
     insertSpaces: true,
   });
-  // KEIKO-0819: content.length (UTF-16 code units) is always <= the UTF-8 byte length of the same
-  // string, so it is a cheap, immediate, per-keystroke proxy safe for the large-file-mode signal
-  // only. It must never feed sha256HexBytes or a byte-exact size-limit check — those read the exact,
-  // debounced activeContentDigest below instead.
-  const contentSizeBytesEstimate = content.length;
   const activeContentHash = activeDigestHash(activeContentDigest, content);
   const readyContentDigest = freshContentDigest(activeContentDigest, content);
+  // PR #3289 review (was KEIKO-0819's content.length): content.length (UTF-16 code units) alone is
+  // only a LOWER bound on the UTF-8 byte length — 200,000 CJK characters is ~600 KB of UTF-8 but a
+  // length of 200,000 — so it must never stand in for the byte count directly. This is byte-exact
+  // whenever readyContentDigest has settled for the CURRENT content; otherwise it is a conservative
+  // (never-under) estimate, so neither the large-file-mode signal below nor the hard size-limit gate
+  // on the buffer can ever underestimate a buffer that has outrun its last settled digest (e.g. a
+  // paste while the debounce is still pending). Must never feed sha256HexBytes, which needs the
+  // exact, debounced activeContentDigest instead.
+  const contentSizeBytesEstimate = currentSizeBytesEstimate(readyContentDigest, content);
   const activeContentDigestRef = useRef(activeContentDigest);
   activeContentDigestRef.current = activeContentDigest;
   const lastHotExitSnapshotKeyRef = useRef<string | null>(null);
@@ -4379,17 +4402,21 @@ function EditorRuntimeWidget({
             content: {
               relativePath: file ?? "",
               text: content,
-              // KEIKO-0819: byte-exact (isMaxSizeExceeded is a hard size-limit check), sourced from
-              // the debounced activeContentDigest rather than a per-keystroke encode. Falls back to 0
-              // only for the brief window before the very first debounce settles (e.g. immediately
-              // after a file opens), exactly mirroring activeContentHash's own availability window.
-              sizeBytes: activeContentDigest?.sizeBytes ?? 0,
+              // PR #3289 review: byte-exact once readyContentDigest has settled for this exact
+              // content; otherwise contentSizeBytesEstimate's conservative (never-under) estimate.
+              // Must NEVER pair the current text with a stale, smaller settled sizeBytes (the old
+              // `activeContentDigest?.sizeBytes ?? 0`, which stays at whatever content last settled
+              // regardless of `content` above) — isMaxSizeExceeded / effectiveReadOnly
+              // (@oscharko-dev/keiko-editor's save-state.ts) is a hard size-limit / read-only gate
+              // and must never see this buffer look smaller than it actually is, e.g. immediately
+              // after a paste that pushes a small file over budget, while the debounce is pending.
+              sizeBytes: contentSizeBytesEstimate,
               truncated: false,
             },
           },
     [
-      activeContentDigest,
       content,
+      contentSizeBytesEstimate,
       editorReadOnlyBySettings,
       file,
       fileModel,

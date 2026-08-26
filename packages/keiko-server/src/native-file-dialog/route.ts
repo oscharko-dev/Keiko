@@ -24,9 +24,12 @@ import {
   validateNativeFileDialogRequest,
 } from "@oscharko-dev/keiko-contracts";
 import type { UiHandlerDeps } from "../deps.js";
+import { UNKNOWN_CORRELATION_ID } from "../correlation.js";
 import { emitServerDiagnostic, serverDiagnosticFromError } from "../diagnostics-log.js";
 import { pathIsDenied } from "../files-deny.js";
 import { FilesError, metadataIsSafe, readJsonObject, resolveRoot } from "../files.js";
+import type { ServerLogSink } from "../observability/index.js";
+import { processServerLogSink } from "../process-log-sink.js";
 import { errorBody, type RouteContext, type RouteResult } from "../routes.js";
 import {
   createNativeFileDialogAdapter,
@@ -154,10 +157,33 @@ async function validateSelection(
   return { path, kind };
 }
 
+// #2906 review (comment 3863185762): the response used to return only the valid subset with no
+// indication anything was rejected — a mixed pick silently shrank with no client-observable signal
+// (a rejected path never reaches the wire, so the client cannot even infer it from a count
+// mismatch against what the user selected). `rejectedSelectionCount`/`partial` close that gap.
+function emitSelectionProjected(
+  activityLog: ServerLogSink,
+  correlationId: string | undefined,
+  selectionCount: number,
+  rejectedSelectionCount: number,
+): void {
+  activityLog.write({
+    category: "diagnostic",
+    op: "native-file-dialog.selection.projected",
+    correlationId: correlationId ?? UNKNOWN_CORRELATION_ID,
+    extra: {
+      outcome: rejectedSelectionCount > 0 ? "partial" : "complete",
+      selectionCount,
+      rejectedSelectionCount,
+    },
+  });
+}
+
 async function projectSelections(
   request: NativeFileDialogRequest,
   adapterResult: NativeFileDialogAdapterResult,
-  deps: UiHandlerDeps,
+  deps: UiHandlerDeps & { readonly activityLog?: ServerLogSink | undefined },
+  correlationId: string | undefined,
 ): Promise<NativeFileDialogResponse> {
   const bounds = nativeFileDialogSelectionBounds(request.mode);
   if (adapterResult.paths.length < bounds.min || adapterResult.paths.length > bounds.max) {
@@ -171,12 +197,14 @@ async function projectSelections(
   // the existing all-or-nothing fail-closed behaviour for empty results.
   const selections: NativeFileDialogSelection[] = [];
   let firstRejection: SelectionRejection | undefined;
+  let rejectedSelectionCount = 0;
   for (const path of adapterResult.paths) {
     try {
       selections.push(await validateSelection(path, kind, deps));
     } catch (error) {
       if (error instanceof SelectionRejection) {
         firstRejection ??= error;
+        rejectedSelectionCount += 1;
         continue;
       }
       throw error;
@@ -185,7 +213,18 @@ async function projectSelections(
   if (selections.length === 0) {
     throw firstRejection ?? new SelectionRejection(INVALID_SELECTION_MESSAGE);
   }
-  return { cancelled: false, selections };
+  emitSelectionProjected(
+    deps.activityLog ?? processServerLogSink(),
+    correlationId,
+    selections.length,
+    rejectedSelectionCount,
+  );
+  return {
+    cancelled: false,
+    selections,
+    rejectedSelectionCount,
+    partial: rejectedSelectionCount > 0,
+  };
 }
 
 function emitAdapterDiagnostic(
@@ -239,7 +278,7 @@ function mapAdapterError(
 
 async function openAndProject(
   ctx: RouteContext,
-  deps: UiHandlerDeps,
+  deps: UiHandlerDeps & { readonly activityLog?: ServerLogSink | undefined },
   request: NativeFileDialogRequest,
   adapter: NativeFileDialogAdapter,
 ): Promise<RouteResult> {
@@ -253,9 +292,15 @@ async function openAndProject(
   try {
     const adapterResult = await adapter.open(adapterRequest);
     if (adapterResult.cancelled) {
-      return { status: 200, body: { cancelled: true, selections: [] } };
+      return {
+        status: 200,
+        body: { cancelled: true, selections: [], rejectedSelectionCount: 0, partial: false },
+      };
     }
-    return { status: 200, body: await projectSelections(request, adapterResult, deps) };
+    return {
+      status: 200,
+      body: await projectSelections(request, adapterResult, deps, ctx.correlationId),
+    };
   } catch (error) {
     if (error instanceof NativeFileDialogAdapterError) return mapAdapterError(ctx, deps, error);
     if (error instanceof SelectionRejection) {
@@ -315,40 +360,47 @@ export async function handleNativeFileDialogOpen(
   ctx: RouteContext,
   deps: UiHandlerDeps,
 ): Promise<RouteResult> {
-  const body = await readJsonObject(ctx.req, MAX_NATIVE_FILE_DIALOG_BODY_BYTES);
-  if (isRouteResult(body)) return body;
-  const parsed = validateNativeFileDialogRequest(body);
-  if (!parsed.ok) {
-    return dialogError(400, "BAD_REQUEST", parsed.error, ctx.correlationId);
-  }
-  const gate = gateOpen(ctx, deps.nativeFileDialog);
-  if (!gate.ok) return gate.result;
-  gate.state.active = true;
-  let released = false;
-  const releaseGate = (): void => {
-    if (!released) {
-      released = true;
+  // KEIKO-0599 / #2906: registered BEFORE any body consumption, and on both the request's
+  // 'aborted' and the response's own 'close' -- 'aborted' fires only for a premature BODY
+  // termination (so a listener attached after readJsonObject has already consumed the body can
+  // never see it at all), while a client that disconnects once the body is long since read and
+  // the dialog is genuinely open (the common case: a slow interactive pick, then the tab closes)
+  // fires only 'close', never 'aborted'. Nothing in this handler ever writes ctx.res itself (the
+  // caller does, from the returned RouteResult, once this promise settles), so a 'close' observed
+  // while we are still running can only mean the underlying connection was torn down early.
+  // `cancelTarget` stays undefined until an adapter is actually open()-ing, so a disconnect
+  // during body reading or gate admission is a safe no-op -- there is nothing to cancel yet.
+  let cancelTarget: NativeFileDialogAdapter | undefined;
+  const onDisconnect = (): void => {
+    cancelTarget?.cancel();
+  };
+  ctx.req.on("aborted", onDisconnect);
+  ctx.res.on("close", onDisconnect);
+  try {
+    const body = await readJsonObject(ctx.req, MAX_NATIVE_FILE_DIALOG_BODY_BYTES);
+    if (isRouteResult(body)) return body;
+    const parsed = validateNativeFileDialogRequest(body);
+    if (!parsed.ok) {
+      return dialogError(400, "BAD_REQUEST", parsed.error, ctx.correlationId);
+    }
+    const gate = gateOpen(ctx, deps.nativeFileDialog);
+    if (!gate.ok) return gate.result;
+    gate.state.active = true;
+    cancelTarget = gate.adapter;
+    // #2906: the single-flight lock is released ONLY here, once openAndProject's awaited
+    // adapter.open() call has itself settled -- including the case where onDisconnect just fired
+    // adapter.cancel() above. A real adapter's cancel() kills the underlying platform process,
+    // which settles open() (as a rejection) promptly; an abandoned tab therefore no longer holds
+    // the gate for the full 10-minute interaction timeout, AND the orphaned dialog process is
+    // actually torn down instead of merely being forgotten about.
+    try {
+      return await openAndProject(ctx, deps, parsed.value, gate.adapter);
+    } finally {
       gate.state.active = false;
     }
-  };
-  // KEIKO-0599: release the single-flight lock if the client aborts before the adapter promise
-  // settles, so an abandoned tab does not hold the gate for the full 10-minute interaction
-  // timeout. The adapter's own promise still resolves at its own pace (child process termination
-  // on client disconnect is tracked as a follow-up), but a second concurrent open call no longer
-  // sees 409 NATIVE_DIALOG_ALREADY_OPEN once the client is gone. We listen for 'aborted' rather
-  // than 'close': 'close' fires as part of the routine stream-end sequence Node emits on every
-  // fully-consumed request body too, whereas 'aborted' is only emitted when the underlying
-  // socket is closed by the peer before the request finished (Node's own signal for a real
-  // mid-request disconnect).
-  const onAborted = (): void => {
-    releaseGate();
-  };
-  ctx.req.on("aborted", onAborted);
-  try {
-    return await openAndProject(ctx, deps, parsed.value, gate.adapter);
   } finally {
-    ctx.req.off("aborted", onAborted);
-    releaseGate();
+    ctx.req.off("aborted", onDisconnect);
+    ctx.res.off("close", onDisconnect);
   }
 }
 

@@ -28,6 +28,7 @@ import {
   type ChatLocalKnowledgeScope,
   type DesktopChatSendRequestWire,
   type DesktopChatStreamTerminalEvent,
+  type FilesTreeEntry,
   type GroundedAnswer,
   type GroundedAnswerContextPackSummary,
   type GroundedAnswerContextSummary,
@@ -988,5 +989,66 @@ describe("classifyAttachmentMime (GEN-DUP-SEMANTIC-013 / -014)", () => {
 
   it("pins the per-attachment ceiling at 8 MiB", () => {
     expect(MAX_ATTACHMENT_BYTES).toBe(8_388_608);
+  });
+});
+
+// #2906 review (comment 3863185718): FilesTreeEntry used to be one shape with independently
+// optional sizeBytes/modifiedAt, so a "directory" entry carrying real stat metadata -- exactly
+// what a symlink-to-directory entry did before the server-side fix -- type-checked even though it
+// was never a value the contract actually meant to allow. It is now a discriminated union: this
+// suite pins BOTH halves of that invariant at compile time (a real number is rejected on the
+// "directory" variant; the "file"/"symlink" variant still requires one) alongside the new
+// symlinkTargetKind field a symlink-to-directory carries at runtime.
+describe("FilesTreeEntry (KEIKO-0633 follow-up, #2906 review)", () => {
+  it("rejects a directory-kind entry that claims real stat metadata", () => {
+    // @ts-expect-error — sizeBytes/modifiedAt must be `undefined` (or omitted) on a "directory"
+    // entry; a real directory is never stat'd per entry, so the type no longer permits a number.
+    const hostile: FilesTreeEntry = {
+      name: "src",
+      path: "src",
+      kind: "directory",
+      sizeBytes: 42,
+      modifiedAt: 1_700_000_000_000,
+      extension: null,
+      symlink: false,
+      readable: true,
+    };
+    // The runtime shape is exactly what was written -- the compile-time rejection above is the
+    // proof this suite exists to pin; @ts-expect-error only suppresses the type ERROR, not
+    // construction of the (still hostile-shaped) value.
+    expect(hostile.sizeBytes).toBe(42);
+  });
+
+  it("requires sizeBytes and modifiedAt on a file-kind entry", () => {
+    // @ts-expect-error — sizeBytes/modifiedAt are REQUIRED on the "file"/"symlink" variant; a file
+    // entry is always lstat'd, so the type no longer permits omitting them.
+    const incomplete: FilesTreeEntry = {
+      name: "app.ts",
+      path: "src/app.ts",
+      kind: "file",
+      extension: "ts",
+      symlink: false,
+      readable: true,
+    };
+    expect(incomplete.kind).toBe("file");
+  });
+
+  it("carries symlinkTargetKind on a symlink whose target resolved to a directory", () => {
+    const entry: FilesTreeEntry = {
+      name: "link",
+      path: "link",
+      kind: "symlink",
+      sizeBytes: 96,
+      modifiedAt: 1_700_000_000_000,
+      extension: null,
+      symlink: true,
+      readable: true,
+      symlinkTargetKind: "directory",
+    };
+    expect(entry.kind).toBe("symlink");
+    expect(entry.symlinkTargetKind).toBe("directory");
+    // Metadata-bearing even though it BEHAVES like a directory -- unlike a real "directory" entry,
+    // whose sizeBytes/modifiedAt the type above pins as unavailable.
+    expect(entry.sizeBytes).toBe(96);
   });
 });

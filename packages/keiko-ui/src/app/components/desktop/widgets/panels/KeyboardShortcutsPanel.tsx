@@ -419,15 +419,18 @@ function RecordingControls({
   // Focus-out on the group container mirrors the Cancel button for keyboard/mouse users leaving
   // the row by any other means; the two buttons inside remain the actual interactive targets.
   return (
+    // Sonar S6819 prefers a native <fieldset> over role="group" on a <div> so screen readers get
+    // the semantics without an ARIA override. We suppress <fieldset>'s default UA border via the
+    // existing styles.control class (see KeyboardShortcutsPanel.module.css); no visual change.
     // eslint-disable-next-line jsx-a11y/no-noninteractive-element-interactions -- see comment above
-    <div className={styles.control} ref={controlRef} role="group" onBlur={onBlur}>
+    <fieldset className={styles.control} ref={controlRef} onBlur={onBlur}>
       <button ref={pressButtonRef} type="button" className={styles.button} onKeyDown={onCapture}>
         {t("settings.keyboard.pressShortcut")}
       </button>
       <button type="button" className={styles.button} onClick={onCancel}>
         {t("settings.keyboard.cancel")}
       </button>
-    </div>
+    </fieldset>
   );
 }
 

@@ -1,4 +1,5 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
+import { EventEmitter } from "node:events";
 import { mkdir, mkdtemp, realpath, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -8,6 +9,7 @@ import type { NativeFileDialogRequest } from "@oscharko-dev/keiko-contracts";
 import type { UiHandlerDeps } from "../deps.js";
 import type { ServerDiagnosticRecord } from "../diagnostics-log.js";
 import { buildRedactor, createInMemoryUiStore } from "../index.js";
+import type { ServerLogEvent } from "../observability/index.js";
 import type { RouteContext } from "../routes.js";
 import {
   NativeFileDialogAdapterError,
@@ -28,9 +30,13 @@ function openContext(body: unknown): RouteContext {
     Buffer.from(typeof body === "string" ? body : JSON.stringify(body), "utf8"),
   ]) as unknown as IncomingMessage;
   (req as { method?: string }).method = "POST";
+  // A real EventEmitter (not `{}`) so tests can drive `ctx.res.emit("close")` -- the route's own
+  // disconnect listener (#2906) needs `.on`/`.off` to exist. Nothing else in the route ever reads
+  // or writes `ctx.res`, so this is safe for every other test in this file.
+  const res = new EventEmitter() as unknown as ServerResponse;
   return {
     req,
-    res: {} as unknown as ServerResponse,
+    res,
     params: {},
     url: new URL("http://localhost/api/native-file-dialog/open"),
     correlationId: CORRELATION_ID,
@@ -38,16 +44,25 @@ function openContext(body: unknown): RouteContext {
 }
 
 function fakeAdapter(result: NativeFileDialogAdapterResult): NativeFileDialogAdapter {
-  return { open: () => Promise.resolve(result) };
+  return {
+    open: () => Promise.resolve(result),
+    // Never exercised by tests using this fixture; the real seam is covered by the dedicated
+    // cancel() tests below.
+    cancel: (): void => {
+      /* no-op — test fake, nothing in flight */
+    },
+  };
 }
 
 interface TestDeps {
   readonly deps: UiHandlerDeps;
   readonly diagnostics: ServerDiagnosticRecord[];
+  readonly activity: ServerLogEvent[];
 }
 
 function buildDeps(options: NativeFileDialogRouteOptions): TestDeps {
   const diagnostics: ServerDiagnosticRecord[] = [];
+  const activity: ServerLogEvent[] = [];
   const deps = {
     store: createInMemoryUiStore(),
     redactor: buildRedactor({}),
@@ -56,9 +71,14 @@ function buildDeps(options: NativeFileDialogRouteOptions): TestDeps {
         diagnostics.push(record);
       },
     },
+    activityLog: {
+      write: (event: ServerLogEvent) => {
+        activity.push(event);
+      },
+    },
     nativeFileDialog: options,
   } as unknown as UiHandlerDeps;
-  return { deps, diagnostics };
+  return { deps, diagnostics, activity };
 }
 
 function errorOf(body: unknown): { code: string; message: string; correlationId?: string } {
@@ -89,6 +109,8 @@ describe("native file dialog route", () => {
     expect(result.body).toEqual({
       cancelled: false,
       selections: [{ path: root, kind: "directory" }],
+      rejectedSelectionCount: 0,
+      partial: false,
     });
   });
 
@@ -111,6 +133,8 @@ describe("native file dialog route", () => {
         { path: second, kind: "file" },
         { path: first, kind: "file" },
       ],
+      rejectedSelectionCount: 0,
+      partial: false,
     });
   });
 
@@ -122,7 +146,12 @@ describe("native file dialog route", () => {
     const result = await handleNativeFileDialogOpen(openContext({ mode: "open-file" }), deps);
 
     expect(result.status).toBe(200);
-    expect(result.body).toEqual({ cancelled: true, selections: [] });
+    expect(result.body).toEqual({
+      cancelled: true,
+      selections: [],
+      rejectedSelectionCount: 0,
+      partial: false,
+    });
   });
 
   it("rejects malformed requests with the correlation id in the envelope", async () => {
@@ -170,6 +199,9 @@ describe("native file dialog route", () => {
             resolve({ cancelled: true, paths: [] });
           };
         }),
+      cancel: (): void => {
+        /* no-op — test fake, nothing in flight */
+      },
     };
     const { deps } = buildDeps({ adapter: blocking, state });
 
@@ -187,9 +219,10 @@ describe("native file dialog route", () => {
     expect(state.active).toBe(false);
   });
 
-  it("releases the single-flight lock when the client aborts before the adapter settles (KEIKO-0599)", async () => {
+  it("cancels the adapter and releases the single-flight lock when the client aborts (KEIKO-0599, #2906)", async () => {
     const state = createNativeFileDialogRouteState();
     let releaseFirst: (() => void) | undefined;
+    let cancelCalls = 0;
     const blocking: NativeFileDialogAdapter = {
       open: () =>
         new Promise((resolve) => {
@@ -197,6 +230,13 @@ describe("native file dialog route", () => {
             resolve({ cancelled: true, paths: [] });
           };
         }),
+      // #2906: a real adapter's cancel() kills the underlying platform process, which settles
+      // open() on its own; mirror that here so the route's "release only after the adapter has
+      // confirmed cancellation or settled" contract can be observed end-to-end.
+      cancel: (): void => {
+        cancelCalls += 1;
+        releaseFirst?.();
+      },
     };
     const { deps } = buildDeps({ adapter: blocking, state });
 
@@ -206,9 +246,12 @@ describe("native file dialog route", () => {
       expect(state.active).toBe(true);
     });
     // Simulate a real mid-request client abort — Node's IncomingMessage emits 'aborted' only
-    // when the underlying socket is closed by the peer before the request finished. The route
-    // must release the single-flight gate on this signal.
+    // when the underlying socket is closed by the peer before the request finished.
     ctx.req.emit("aborted");
+    expect(cancelCalls).toBe(1);
+    // The gate is released only once the adapter's open() promise has actually settled (here,
+    // as a direct effect of cancel() above) — never synchronously on the disconnect alone.
+    await firstCall;
     expect(state.active).toBe(false);
     // Second concurrent open is admitted (no 409) because the gate is free.
     const secondCtx = openContext({ mode: "open-file" });
@@ -218,14 +261,55 @@ describe("native file dialog route", () => {
     });
     const second = await handleNativeFileDialogOpen(secondCtx, freshDeps);
     expect(second.status).toBe(200);
-    releaseFirst?.();
-    await firstCall;
+  });
+
+  // Regression: #2906. The KEIKO-0599 listener above was attached AFTER readJsonObject had
+  // already consumed the body, and only ever watched IncomingMessage 'aborted' -- which fires
+  // solely for a premature BODY termination. A client that disconnects once the body is long
+  // since read and the dialog is genuinely open (the realistic case: the interaction is slow,
+  // then the tab closes) never emits 'aborted' at all, so that listener could never see it. This
+  // drives a REAL completed request (the body stream is actually consumed) followed by a
+  // response-level disconnect, and asserts the adapter's cancel() fires and the lock is released.
+  it("cancels the adapter and releases the lock on a response disconnect after the body was already fully read (#2906)", async () => {
+    const state = createNativeFileDialogRouteState();
+    let releaseFirst: (() => void) | undefined;
+    let cancelCalls = 0;
+    const blocking: NativeFileDialogAdapter = {
+      open: () =>
+        new Promise((resolve) => {
+          releaseFirst = (): void => {
+            resolve({ cancelled: true, paths: [] });
+          };
+        }),
+      cancel: (): void => {
+        cancelCalls += 1;
+        releaseFirst?.();
+      },
+    };
+    const { deps } = buildDeps({ adapter: blocking, state });
+
+    const ctx = openContext({ mode: "open-file" });
+    const call = handleNativeFileDialogOpen(ctx, deps);
+    // Let the request body finish being read and the dialog reach the single-flight-held,
+    // adapter.open()-pending state -- a REAL completed request, not a mid-body abort.
+    await vi.waitFor(() => {
+      expect(state.active).toBe(true);
+    });
+    // The client tab closes once the dialog is already open, long after the body was consumed:
+    // Node emits this on the response/socket, never as IncomingMessage 'aborted'.
+    ctx.res.emit("close");
+    expect(cancelCalls).toBe(1);
+    await call;
+    expect(state.active).toBe(false);
   });
 
   it("releases the single-flight slot when the adapter fails", async () => {
     const state = createNativeFileDialogRouteState();
     const failing: NativeFileDialogAdapter = {
       open: () => Promise.reject(new NativeFileDialogAdapterError("failed", "helper failed")),
+      cancel: (): void => {
+        /* no-op — test fake, nothing in flight */
+      },
     };
     const { deps } = buildDeps({ adapter: failing, state });
 
@@ -234,22 +318,42 @@ describe("native file dialog route", () => {
     expect(state.active).toBe(false);
   });
 
-  it("returns the valid subset of a mixed multi-file pick (KEIKO-0817)", async () => {
+  it("returns the valid subset of a mixed multi-file pick, with rejectedSelectionCount/partial and a correlated activity-log line (KEIKO-0817, #2906 review comment 3863185762)", async () => {
     const root = await tempDir("keiko-native-partial-");
     const a = join(root, "a.txt");
     const b = join(root, "b.txt");
     await writeFile(a, "a", "utf8");
     await writeFile(b, "b", "utf8");
     const invalid = "relative/nope.txt"; // rejected in validateSelection before the fs chain
-    const { deps } = buildDeps({
+    const { deps, activity } = buildDeps({
       adapter: fakeAdapter({ cancelled: false, paths: [a, invalid, b] }),
     });
 
     const result = await handleNativeFileDialogOpen(openContext({ mode: "open-files" }), deps);
 
     expect(result.status).toBe(200);
-    const body = result.body as { selections: readonly { path: string }[] };
+    const body = result.body as {
+      selections: readonly { path: string }[];
+      rejectedSelectionCount: number;
+      partial: boolean;
+    };
     expect(body.selections.map((s) => s.path)).toEqual([a, b]);
+    // The response now SURFACES that a selection was dropped instead of silently shrinking.
+    expect(body.rejectedSelectionCount).toBe(1);
+    expect(body.partial).toBe(true);
+
+    // A body-free, correlated activity-log line records the same outcome -- counts only, never
+    // the rejected (or accepted) paths.
+    expect(activity).toHaveLength(1);
+    expect(activity[0]).toMatchObject({
+      category: "diagnostic",
+      op: "native-file-dialog.selection.projected",
+      correlationId: CORRELATION_ID,
+      extra: { outcome: "partial", selectionCount: 2, rejectedSelectionCount: 1 },
+    });
+    expect(JSON.stringify(activity)).not.toContain(a);
+    expect(JSON.stringify(activity)).not.toContain(b);
+    expect(JSON.stringify(activity)).not.toContain(invalid);
   });
 
   it.each([
@@ -410,6 +514,8 @@ describe("native file dialog route", () => {
     expect(result.body).toEqual({
       cancelled: false,
       selections: [{ path: link, kind: "directory" }],
+      rejectedSelectionCount: 0,
+      partial: false,
     });
   });
 
@@ -422,6 +528,9 @@ describe("native file dialog route", () => {
             "native dialog timed out (exitCode=null stderrBytes=0 outputExceeded=false)",
           ),
         ),
+      cancel: (): void => {
+        /* no-op — test fake, nothing in flight */
+      },
     };
     const { deps, diagnostics } = buildDeps({ adapter: timingOut });
 
@@ -438,6 +547,9 @@ describe("native file dialog route", () => {
     const failing: NativeFileDialogAdapter = {
       open: () =>
         Promise.reject(new NativeFileDialogAdapterError("failed", "exitCode=1 stderrBytes=42")),
+      cancel: (): void => {
+        /* no-op — test fake, nothing in flight */
+      },
     };
     const { deps, diagnostics } = buildDeps({ adapter: failing });
 
@@ -458,6 +570,9 @@ describe("native file dialog route", () => {
       open: (request) => {
         seen.push(request);
         return Promise.resolve({ cancelled: true, paths: [] });
+      },
+      cancel: (): void => {
+        /* no-op — test fake, nothing in flight */
       },
     };
     const { deps } = buildDeps({ adapter: capturing });

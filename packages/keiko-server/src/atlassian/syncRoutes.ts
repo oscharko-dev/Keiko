@@ -65,8 +65,8 @@ import {
 import type { AtlassianConnectorCredentialDeps } from "./credentialRoutes.js";
 import {
   AtlassianSyncRequestError,
-  atlassianSyncJobRegistry,
   connectorIdForAuthRef,
+  resolveAtlassianSyncJobRegistry,
   startAtlassianSyncJob,
 } from "./syncService.js";
 
@@ -400,7 +400,13 @@ async function startSyncGoverned(
   const targetRef = syncScopeTargetRef(body);
   const outcome = decideGovernedAtlassianAction(actionType, authority, deps);
   const denied = (reasonCode: AtlassianConnectorActivityReasonCode): RouteResult =>
-    deniedAtlassianActionResult({ connectorId, actionType, reasonCode, targetRef, correlationId });
+    deniedAtlassianActionResult(deps, {
+      connectorId,
+      actionType,
+      reasonCode,
+      targetRef,
+      correlationId,
+    });
   if (outcome.kind === "authority-denied") return denied(outcome.reason);
   if (outcome.kind === "policy-denied") {
     return denied(outcome.decision.denyReason ?? "connector-access-denied");
@@ -410,7 +416,7 @@ async function startSyncGoverned(
     // pending-approval payload; peel it off and forward only the sync-start fields.
     // eslint-disable-next-line @typescript-eslint/no-unused-vars -- rest-sibling omit of body.authority
     const { authority: _authority, ...syncStart } = body;
-    return createAtlassianPendingApprovalResult({
+    return createAtlassianPendingApprovalResult(deps, {
       connectorId,
       actionType,
       reviewReason: outcome.decision.reviewReason ?? "mode-approval-required",
@@ -485,7 +491,7 @@ export function handleGetAtlassianConnectorSyncJob(
   if (isRouteResult(guard)) return guard;
   return runHandler(() => {
     const jobId = decodedJobIdParam(ctx);
-    const job = jobId === undefined ? undefined : atlassianSyncJobRegistry.get(jobId);
+    const job = jobId === undefined ? undefined : resolveAtlassianSyncJobRegistry(deps).get(jobId);
     if (job === undefined) return jobNotFound(ctx.correlationId);
     return { status: 200, body: { job: job.state } };
   }, ctx.correlationId);
@@ -502,7 +508,8 @@ export function handleCancelAtlassianConnectorSyncJob(
   if (isRouteResult(guard)) return guard;
   return runHandler(() => {
     const jobId = decodedJobIdParam(ctx);
-    const job = jobId === undefined ? undefined : atlassianSyncJobRegistry.cancel(jobId);
+    const job =
+      jobId === undefined ? undefined : resolveAtlassianSyncJobRegistry(deps).cancel(jobId);
     if (job === undefined) return jobNotFound(ctx.correlationId);
     return { status: 202, body: { job: job.state } };
   }, ctx.correlationId);
@@ -518,7 +525,7 @@ export function handleListAtlassianConnectorActivity(
   if (isRouteResult(guard)) return guard;
   return runHandler(() => {
     const credential = requireAtlassianCredential(ctx, guard);
-    const activity = atlassianSyncJobRegistry.listActivity(
+    const activity = resolveAtlassianSyncJobRegistry(deps).listActivity(
       connectorIdForAuthRef(credential.authRef),
     );
     return { status: 200, body: { activity } };

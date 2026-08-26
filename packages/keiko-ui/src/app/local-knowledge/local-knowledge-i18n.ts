@@ -84,6 +84,8 @@ const LOCAL_KNOWLEDGE_EN_MESSAGES = {
   "localKnowledge.nativeDialog.busy": "A native dialog is already open. Close it first.",
   "localKnowledge.nativeDialog.unavailable":
     "Native dialogs are unavailable on this platform. Enter the path manually.",
+  "localKnowledge.nativeDialog.partialSelection":
+    "{count} selected item(s) could not be added and were skipped.",
   "localKnowledge.detail.loading": "Loading Knowledge Pod…",
   "localKnowledge.detail.pageLabel": "Knowledge Pod detail",
   "localKnowledge.detail.noSelection":
@@ -577,6 +579,8 @@ const LOCAL_KNOWLEDGE_DE_MESSAGES: LocalKnowledgeMessageCatalog = {
     "Es ist bereits ein nativer Dialog geöffnet. Schließe ihn zuerst.",
   "localKnowledge.nativeDialog.unavailable":
     "Native Dialoge sind auf dieser Plattform nicht verfügbar. Gib den Pfad manuell ein.",
+  "localKnowledge.nativeDialog.partialSelection":
+    "{count} ausgewählte Elemente konnten nicht hinzugefügt werden und wurden übersprungen.",
   "localKnowledge.detail.loading": "Knowledge Pod wird geladen…",
   "localKnowledge.detail.pageLabel": "Knowledge Pod-Detailansicht",
   "localKnowledge.detail.noSelection":

@@ -1366,4 +1366,47 @@ describe("keiko start — refuses symlinked ui.log and ui.pid (KEIKO-0886)", () 
     // The symlink itself is still a symlink (not replaced with a real file).
     expect(lstatSync(join(stateDir, "ui.log")).isSymbolicLink()).toBe(true);
   });
+
+  // #2906 review (comment 3863185744): readPid had NO symlink guard at all (unlike the write
+  // side's assertNotSymlink) -- readFileSync always follows a symlink. A symlinked ui.pid pointing
+  // at an unrelated pid file would have `keiko stop` read THAT file's number and feed it straight
+  // to isProcessAlive/process.kill, letting a state-dir actor steer a real signal at an
+  // attacker-chosen process. Deterministic (no race needed): the pre-fix code follows a symlink
+  // regardless of when it was planted, so a plain pre-planted one already proves the gap.
+  it("refuses to follow a symlinked ui.pid on stop, so it never signals the symlink's target", async (ctx) => {
+    if (process.platform === "win32") ctx.skip();
+    const root = makeRoot();
+    const stateDir = join(root, ".keiko");
+    mkdirSync(stateDir, { recursive: true, mode: 0o700 });
+    // A decoy pid file naming a real, unrelated process id an attacker wants signaled.
+    const decoyPidFile = join(root, "decoy-target.pid");
+    writeFileSync(decoyPidFile, "999999\n", "utf8");
+    symlinkSync(decoyPidFile, join(stateDir, "ui.pid"));
+
+    const c = makeIo();
+    const killProcess = vi.fn();
+    const code = await runLifecycleCli(
+      "stop",
+      [],
+      c.io,
+      {},
+      {
+        cwd: root,
+        homedir: () => root,
+        isProcessAlive: () => true,
+        killProcess,
+        sleep: () => Promise.resolve(),
+      },
+    );
+
+    // The symlink must never be followed: nothing gets signalled, and stop reports "not running"
+    // (the fail-safe outcome for an unreadable/refused pid file) rather than treating the decoy's
+    // pid as the real one.
+    expect(killProcess).not.toHaveBeenCalled();
+    expect(code).toBe(0);
+    expect(c.out()).toContain("not running");
+    // The symlink itself is what gets cleaned up; its target is never read or touched.
+    expect(existsSync(join(stateDir, "ui.pid"))).toBe(false);
+    expect(readFileSync(decoyPidFile, "utf8")).toBe("999999\n");
+  });
 });

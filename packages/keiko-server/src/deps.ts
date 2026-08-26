@@ -550,12 +550,13 @@ export interface UiHandlerDeps {
   readonly autonomousDeliveryApprovalStore?: AutonomousDeliveryApprovalStore | undefined;
   // KEIKO-0565: DI-scoped Atlassian connector approval and sync registries. Optional so
   // pre-existing fixture-heavy test wiring stays byte-for-byte compatible; production wiring in
-  // buildUiHandlerDeps constructs one instance per BFF process so two independently-built
-  // UiHandlerDeps instances no longer share the module-level singleton. Callers that read
-  // `deps.atlassianActionApprovalRegistry` / `deps.atlassianSyncJobRegistry` see the injected
-  // instance; callers that still import the module-level singleton read the process-wide default
-  // that buildUiHandlerDeps points to, preserving current behaviour until every consumer is
-  // migrated.
+  // buildUiHandlerDeps constructs one instance per composed deps graph so two independently-built
+  // UiHandlerDeps instances no longer share the module-level singleton. Every real consumer
+  // (syncRoutes.ts, writeActionRoutes.ts, actionActivity.ts, syncService.ts) resolves through
+  // resolveAtlassianActionApprovalRegistry / resolveAtlassianSyncJobRegistry — never the bare
+  // module-level singleton — so it always reads THIS field's injected instance; the resolvers fall
+  // back to the process-wide singleton only when this field is left undefined (e.g. a test double
+  // built without buildUiHandlerDeps), which is the one case current behaviour is preserved for.
   readonly atlassianActionApprovalRegistry?: AtlassianActionApprovalRegistry | undefined;
   readonly atlassianSyncJobRegistry?: AtlassianSyncJobRegistry | undefined;
   // Server-owned deployment ceiling for Autonomous Delivery requests. Undefined fails closed to the
@@ -3218,9 +3219,15 @@ function autonomousDeliveryFields(
   };
 }
 
-// KEIKO-0565: DI-scoped Atlassian action-approval and sync-job registries. buildUiHandlerDeps now
-// constructs one instance of each per BFF process so two independently-built handler deps no longer
-// share the module-level singleton. Callers migrated to `deps.*` see the injected instance.
+// KEIKO-0565: DI-scoped Atlassian action-approval and sync-job registries. buildUiHandlerDeps
+// constructs one instance of each per composed deps graph, and every real consumer —
+// syncRoutes.ts, writeActionRoutes.ts, actionActivity.ts, syncService.ts — resolves its registry
+// through resolveAtlassianActionApprovalRegistry / resolveAtlassianSyncJobRegistry (never the bare
+// `atlassianActionApprovalRegistry` / `atlassianSyncJobRegistry` module singletons in
+// actionApprovals.ts / syncService.ts) so two independently composed `UiHandlerDeps` graphs never
+// share approvals, sync jobs, or activity records (PR #3289 review; see deps.test.ts's isolation
+// coverage). The resolvers fall back to the module singleton only for a `UiHandlerDeps`-shaped
+// value that skips this factory (e.g. a hand-rolled test double).
 function atlassianConnectorRegistryFields(
   options: BuildHandlerDepsOptions,
 ): Pick<UiHandlerDeps, "atlassianActionApprovalRegistry" | "atlassianSyncJobRegistry"> {

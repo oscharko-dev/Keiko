@@ -125,9 +125,13 @@ export class CodingRuntimeOperationCoordinator {
         operation.reservation.release();
         return failure("authority-resolution-failed");
       }
-      operation.reservation.commit();
-      // Listing is a read: the revision must NOT advance, or any background question refresh
-      // would race concurrent operator actions (pause/answer/follow-up) into revision conflicts.
+      // #2906: release, never commit -- listing is a read. It must not advance the revision (or
+      // any background question refresh would race concurrent operator actions into revision
+      // conflicts), and for the exact same reason it must not occupy a permanent slot in the
+      // per-run replay cap either: nothing here ever moves the live revision, so a committed read
+      // id could never become supersede-and-evictable, and unbounded polling would otherwise
+      // exhaust the same 512-id budget real mutations share.
+      operation.reservation.release();
       return { ok: true, snapshot: this.deps.publicSnapshot(operation.current), questions };
     });
   }
@@ -146,7 +150,11 @@ export class CodingRuntimeOperationCoordinator {
     readonly expectedRevision: number;
     readonly taskIntent: string;
   }): Promise<"accepted" | "failed" | "recovery-required"> {
-    const reserveOutcome = this.replay.reserve(input.runId, input.requestId);
+    const reserveOutcome = this.replay.reserve(
+      input.runId,
+      input.requestId,
+      input.expectedRevision,
+    );
     if ("rejection" in reserveOutcome) return "recovery-required";
     const { reservation } = reserveOutcome;
     let dispatched: Awaited<ReturnType<CodingRuntimeTaskDispatcher["dispatch"]>>;
@@ -273,7 +281,11 @@ export class CodingRuntimeOperationCoordinator {
   ): PreparedRuntimeOperation {
     const admitted = admitRuntimeOperation(input, keys, this.deps.current(), runId);
     if (admitted === undefined) return { ok: false };
-    const reserveOutcome = this.replay.reserve(runId, admitted.value.requestId);
+    const reserveOutcome = this.replay.reserve(
+      runId,
+      admitted.value.requestId,
+      admitted.current.revision,
+    );
     if ("rejection" in reserveOutcome) {
       // KEIKO-0722: distinguish the cap-exhausted case so callers emit "replay-cap-exhausted";
       // an ordinary duplicate/pending stays "invalid-intent" as before.
@@ -334,19 +346,27 @@ function admitRuntimeOperation(
   };
 }
 
+// Per-run replay/duplicate-detection budget. Sized well above any plausible single-run operation
+// count; #2906: exhausting it no longer permanently locks a live run (see evictSuperseded below),
+// so this only bounds how many requestIds still relevant to the CURRENT revision may be tracked
+// at once.
+const REPLAY_COMMITTED_CAP = 512;
+
 class RuntimeOperationReplayCoordinator {
-  private readonly committed = new Map<string, Set<string>>();
+  // requestId -> the live revision at the moment it was committed.
+  private readonly committed = new Map<string, Map<string, number>>();
   private readonly pending = new Map<string, Set<string>>();
 
   public reserve(
     runId: string,
     requestId: string,
+    liveRevision: number,
   ):
     | { readonly reservation: RuntimeOperationReservation }
     | { readonly rejection: "cap-exhausted" | "duplicate" } {
-    const committed = this.committed.get(runId) ?? new Set<string>();
+    const committed = this.evictSuperseded(runId, liveRevision);
     const pending = this.pending.get(runId) ?? new Set<string>();
-    if (committed.size >= 512) return { rejection: "cap-exhausted" };
+    if (committed.size >= REPLAY_COMMITTED_CAP) return { rejection: "cap-exhausted" };
     if (committed.has(requestId) || pending.has(requestId)) return { rejection: "duplicate" };
     pending.add(requestId);
     this.pending.set(runId, pending);
@@ -361,13 +381,28 @@ class RuntimeOperationReplayCoordinator {
       requestId,
       commit: (): void => {
         if (!active) return;
-        committed.add(requestId);
+        committed.set(requestId, liveRevision);
         this.committed.set(runId, committed);
         release();
       },
       release,
     };
     return { reservation };
+  }
+
+  // A requestId committed at revision N is only ever reachable again by a caller that ALSO
+  // supplies expectedRevision === N: admitRuntimeOperation enforces that match against the live
+  // snapshot before this coordinator is even consulted. Once the run's live revision has moved
+  // past N, no future call can present that combination again, so retaining the id no longer
+  // prevents anything -- it only occupies a slot in the per-run cap forever. Dropping it here is
+  // what keeps a long-lived run from eventually locking out every further operation once 512
+  // distinct requests have ever committed (#2906).
+  private evictSuperseded(runId: string, liveRevision: number): Map<string, number> {
+    const committed = this.committed.get(runId) ?? new Map<string, number>();
+    for (const [requestId, revision] of committed) {
+      if (revision < liveRevision) committed.delete(requestId);
+    }
+    return committed;
   }
 
   public clear(runId: string): void {

@@ -84,25 +84,32 @@ class KeikoPlaybackProcessor extends AudioWorkletProcessor {
     this.ended = false;
   }
 
-  handle(data) {
-    if (data === null || (typeof data === "object" && data.type === "flush")) {
+  handleControl(data) {
+    if (data === null || data.type === "flush") {
       this.reset();
-      return;
+      return true;
     }
-    if (typeof data === "object" && data.type === "config") {
+    if (data.type === "config") {
       if (typeof data.primeFrames === "number" && data.primeFrames >= 0) {
         this.primeFrames = data.primeFrames;
       }
-      return;
+      return true;
     }
-    if (typeof data === "object" && data.type === "end") {
+    if (data.type === "end") {
       this.draining = true;
       // Force any sub-prime remainder to play out, then complete once drained.
       this.primed = true;
       if (this.size === 0) {
         this.finish();
       }
-      return;
+      return true;
+    }
+    return false;
+  }
+
+  handle(data) {
+    if (data === null || typeof data === "object") {
+      if (this.handleControl(data)) return;
     }
     // Otherwise: an Int16Array of PCM samples. Guard the shape before touching any ring-buffer
     // state (KEIKO-0735 / KEIKO-1009): the only sender (assistant-speech-streaming.ts) always

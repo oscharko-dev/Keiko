@@ -480,7 +480,15 @@ function applyNativeDialogOutcome(
 ): void {
   if (outcome.kind === "picked") {
     onPicked(outcome.paths);
-    setConnectError(null);
+    // #2906 review (comment 3863185762): a mixed pick used to shrink silently -- the picker
+    // returned N items, the response carried fewer, and nothing told the user why. Surface it
+    // instead of clearing the notice, without blocking the valid subset that WAS picked.
+    const rejectedCount = outcome.rejectedCount ?? 0;
+    setConnectError(
+      rejectedCount > 0
+        ? t("localKnowledge.nativeDialog.partialSelection", { count: rejectedCount })
+        : null,
+    );
     return;
   }
   if (outcome.kind === "busy") setConnectError(t("localKnowledge.nativeDialog.busy"));

@@ -1,13 +1,13 @@
 import {
   closeSync,
   constants as fsConstants,
-  existsSync,
+  fstatSync,
   lstatSync,
   mkdirSync,
   openSync,
-  readFileSync,
+  readSync,
   rmSync,
-  writeFileSync,
+  writeSync,
 } from "node:fs";
 import { Buffer } from "node:buffer";
 import { spawn, type ChildProcess, type SpawnOptions, type StdioOptions } from "node:child_process";
@@ -288,11 +288,67 @@ async function fetchHealthProbe(url: string, fetchImpl: FetchFn): Promise<Health
   }
 }
 
+// Small bound on <stateDir>/ui.pid: it holds one decimal pid plus a newline, never more.
+const MAX_PID_FILE_BYTES = 64;
+
+// KEIKO-0886 follow-up (#2906 review, comment 3863185744): the pid file used to be opened via a
+// separate `lstatSync` CHECK followed by a SEPARATE `writeFileSync`/`readFileSync` USE -- a
+// symlink planted in the window between the two was followed (readPid had no check at all;
+// readFileSync always follows symlinks). `readPid` then feeds whatever it parsed straight to
+// `isProcessAlive`/`process.kill`, so a followed symlink could steer a real signal at an
+// attacker-chosen pid. Opening the descriptor with `O_NOFOLLOW` makes the check and the use the
+// SAME syscall on POSIX, closing the window entirely: a symlink at the final path component
+// fails the open() itself (ELOOP), whether it was there from the start or planted a moment
+// before. Windows has no `O_NOFOLLOW`; this falls back to the same lstatSync-then-open pattern
+// `openLogAppendNoFollow` already established for ui.log (KEIKO-0886) -- a residual, documented
+// TOCTOU window on that platform only.
+function openPidFileNoFollow(path: string, flags: number): number {
+  const nofollow = (fsConstants as { O_NOFOLLOW?: number }).O_NOFOLLOW ?? 0;
+  if (nofollow === 0) assertNotSymlink(path);
+  return openSync(path, flags | nofollow, 0o600);
+}
+
+// `fstatSync(fd).isFile()` is defense in depth beyond O_NOFOLLOW: O_NOFOLLOW only refuses a
+// SYMLINK at the final component, not another non-regular target (FIFO, device) a state-dir actor
+// could otherwise plant and have this block on, or read attacker-controlled bytes from.
 function readPid(path: string): number | undefined {
-  if (!existsSync(path)) return undefined;
-  const raw = readFileSync(path, "utf8").trim();
-  if (!/^[1-9]\d*$/.test(raw)) return undefined;
-  return Number(raw);
+  let fd: number;
+  try {
+    fd = openPidFileNoFollow(path, fsConstants.O_RDONLY);
+  } catch {
+    return undefined;
+  }
+  try {
+    if (!fstatSync(fd).isFile()) return undefined;
+    const buffer = Buffer.alloc(MAX_PID_FILE_BYTES);
+    const bytesRead = readSync(fd, buffer, 0, buffer.length, 0);
+    const raw = buffer.subarray(0, bytesRead).toString("utf8").trim();
+    if (!/^[1-9]\d*$/.test(raw)) return undefined;
+    return Number(raw);
+  } catch {
+    return undefined;
+  } finally {
+    closeSync(fd);
+  }
+}
+
+// Companion write path for the same descriptor-based invariant (`keiko start`'s writePid call
+// site below): stages the write behind the identical O_NOFOLLOW-at-open / isFile() guard readPid
+// uses, so neither direction of the pid file's lifecycle ever completes a check separately from
+// the use it protects.
+function writePid(path: string, pid: number): void {
+  const fd = openPidFileNoFollow(
+    path,
+    fsConstants.O_WRONLY | fsConstants.O_CREAT | fsConstants.O_TRUNC,
+  );
+  try {
+    if (!fstatSync(fd).isFile()) {
+      throw new Error(`keiko start: refusing to write to non-regular ${path}`);
+    }
+    writeSync(fd, `${String(pid)}\n`, null, "utf8");
+  } finally {
+    closeSync(fd);
+  }
 }
 
 function defaultIsProcessAlive(pid: number): boolean {
@@ -714,12 +770,11 @@ async function cmdStart(
     return 1;
   }
   child.unref();
-  // KEIKO-0886: match the ui.log open pattern — refuse to write to a symlinked
+  // KEIKO-0886 / #2906 review (comment 3863185744): refuse to write to a symlinked
   // <stateDir>/ui.pid so a hostile state-dir actor cannot re-point the pid file (which
-  // process.kill reads) at any user-writable path outside home.
-  const pidPath = pidFile(options);
-  assertNotSymlink(pidPath);
-  writeFileSync(pidPath, `${String(child.pid)}\n`, { encoding: "utf8", mode: 0o600 });
+  // process.kill reads) at any user-writable path outside home. writePid opens with O_NOFOLLOW so
+  // the refusal check and the write are one syscall, not a separate lstat followed by a write.
+  writePid(pidFile(options), child.pid);
   io.out(`Starting Keiko UI on ${lifecycleBaseUrl(options)} ...\n`);
 
   const healthy = await waitForHealth(options, child.pid, deps);

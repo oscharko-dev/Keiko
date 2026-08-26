@@ -3,9 +3,15 @@ import type { CodingWorkbenchRuntimeSnapshot } from "@oscharko-dev/keiko-contrac
 
 import { CodingRuntimeOperationCoordinator } from "./codingRuntimeOperationCoordinator.js";
 import type { CodingRuntimeManager } from "./codingRuntimeManager.js";
+import type { CodingRuntimeOrchestratorResult } from "./codingRuntimeOrchestratorTypes.js";
 import type { CodingRuntimeQuestionPort } from "./codingRuntimeQuestionPort.js";
 import type { CodingRuntimeSnapshot } from "./codingRuntimeSnapshotStore.js";
 import type { CodingRuntimeTaskDispatcher } from "./productionCodingRuntimeHost.js";
+
+type CodingRuntimePublicSnapshot = Extract<
+  CodingRuntimeOrchestratorResult,
+  { readonly ok: true }
+>["snapshot"];
 
 const AT = "2026-07-13T12:00:00.000Z";
 const DIGEST = "a".repeat(64);
@@ -103,8 +109,8 @@ function coordinator(input: {
   });
 }
 
-function followUp(requestId = "req-1"): Record<string, unknown> {
-  return { requestId, expectedRevision: 3, taskIntent: "Continue the bounded task" };
+function followUp(requestId = "req-1", expectedRevision = 3): Record<string, unknown> {
+  return { requestId, expectedRevision, taskIntent: "Continue the bounded task" };
 }
 
 describe("CodingRuntimeOperationCoordinator", () => {
@@ -305,5 +311,82 @@ describe("CodingRuntimeOperationCoordinator", () => {
     await expect(subject.submitFollowUp("run-1", followUp())).resolves.toMatchObject({ ok: true });
     subject.clear("run-1");
     await expect(subject.submitFollowUp("run-1", followUp())).resolves.toMatchObject({ ok: true });
+  });
+
+  // #2906: the fixed `coordinator()` fixture above always reports revision 3, so it cannot
+  // exercise eviction (nothing ever supersedes a committed id). This one tracks a REAL advancing
+  // revision, one bump per successful mutation, so 512 prior requests actually leave the live
+  // revision far ahead of every one of them.
+  function statefulCoordinator(): {
+    readonly subject: CodingRuntimeOperationCoordinator;
+    readonly revision: () => number;
+  } {
+    let revision = 3;
+    const subject = new CodingRuntimeOperationCoordinator({
+      current: (): CodingRuntimeSnapshot => ({ ...runningSnapshot(), revision }),
+      serial: <T>(work: () => Promise<T>): Promise<T> => work(),
+      advanceRevision: (current): CodingRuntimeOrchestratorResult => {
+        revision = current.revision + 1;
+        return { ok: true, snapshot: { ...publicSnapshot(), revision } };
+      },
+      publicSnapshot: (current): CodingRuntimePublicSnapshot => ({
+        schemaVersion: "1",
+        state: current.state,
+        revision: current.revision,
+        updatedAt: current.updatedAt,
+        runId: current.runId,
+      }),
+      taskDispatcher: dispatcher(),
+      settleTask: vi.fn(),
+      questionPort: questionPort(),
+      manager: manager(
+        vi.fn(() => Promise.resolve({ ok: true as const, status: "stopped" as const })),
+      ),
+    });
+    return { subject, revision: () => revision };
+  }
+
+  it("#2906: evicts replay ids superseded by the live revision, so 512 prior requests never permanently lock a live run", async () => {
+    const { subject, revision } = statefulCoordinator();
+
+    for (let i = 0; i < 512; i += 1) {
+      const result = await subject.submitFollowUp(
+        "run-1",
+        followUp(`req-${String(i)}`, revision()),
+      );
+      expect(result).toMatchObject({ ok: true });
+    }
+
+    // Every one of the 512 committed ids is now bound to a revision strictly behind the live one
+    // (the run advances by exactly one revision per successful operation): a fresh, distinct
+    // request must be admitted instead of being denied on a cap that would otherwise never shrink.
+    const freshRevision = revision();
+    const fresh = await subject.submitFollowUp("run-1", followUp("req-fresh", freshRevision));
+    expect(fresh).toMatchObject({ ok: true });
+
+    // An immediate duplicate submission of that SAME request id, at the SAME expectedRevision it
+    // was just admitted at, must still be denied: eviction frees capacity, it never re-admits an
+    // actual replay of a request that was just accepted.
+    const duplicate = await subject.submitFollowUp("run-1", followUp("req-fresh", freshRevision));
+    expect(duplicate).toEqual({ ok: false, failureCode: "invalid-intent" });
+  });
+
+  it("#2906: listQuestions never commits a replay-cap slot, so polling cannot lock out real operations", async () => {
+    const port = questionPort();
+    const subject = coordinator({ port });
+
+    for (let i = 0; i < 600; i += 1) {
+      const result = await subject.listQuestions("run-1", {
+        requestId: `poll-${String(i)}`,
+        expectedRevision: 3,
+      });
+      expect(result).toMatchObject({ ok: true });
+    }
+
+    // None of the 600 reads should have occupied a slot in the 512-entry replay cap: a genuine
+    // mutating operation must still be admitted.
+    await expect(subject.submitFollowUp("run-1", followUp("req-mutate"))).resolves.toMatchObject({
+      ok: true,
+    });
   });
 });

@@ -76,7 +76,7 @@ import {
   recordAtlassianActionActivity,
 } from "./actionActivity.js";
 import {
-  atlassianActionApprovalRegistry,
+  resolveAtlassianActionApprovalRegistry,
   type AtlassianLiveSearchPayload,
   type AtlassianWriteActionInput,
   type PendingAtlassianActionEntry,
@@ -568,6 +568,7 @@ function executeWriteAction(
 // disposition) and no reason for a directly allowed one; a failed execution always carries the
 // closed provider failure reason.
 async function executeAndRespond(
+  deps: UiHandlerDeps,
   guard: AtlassianConnectorCredentialDeps,
   credential: AtlassianCredentialMetadata,
   action: AtlassianWriteActionInput,
@@ -582,7 +583,7 @@ async function executeAndRespond(
   );
   const reasonCode: AtlassianConnectorActivityReasonCode | undefined =
     result.status === "failed" ? result.reason : reviewReason;
-  recordAtlassianActionActivity({
+  recordAtlassianActionActivity(deps, {
     connectorId: connectorIdForAuthRef(credential.authRef),
     actionType: action.type,
     disposition,
@@ -602,19 +603,22 @@ async function executeAndRespond(
 // One content-free record per live attempt: the disposition and review rationale exactly like
 // the write path, the JQL digest on EVERY record (ADR-0128 D6 — never the query text), and the
 // returned count plus issue keys on success.
-function recordLiveSearchActivity(input: {
-  readonly credential: AtlassianCredentialMetadata;
-  readonly liveSearch: AtlassianLiveSearchPayload;
-  readonly disposition: "allowed" | "review-required";
-  readonly reviewReason: AtlassianConnectorActionReviewReason | undefined;
-  readonly correlationId: string;
-  readonly durationMs: number;
-  readonly outcome: JiraLiveSearchOutcome;
-}): void {
+function recordLiveSearchActivity(
+  deps: UiHandlerDeps,
+  input: {
+    readonly credential: AtlassianCredentialMetadata;
+    readonly liveSearch: AtlassianLiveSearchPayload;
+    readonly disposition: "allowed" | "review-required";
+    readonly reviewReason: AtlassianConnectorActionReviewReason | undefined;
+    readonly correlationId: string;
+    readonly durationMs: number;
+    readonly outcome: JiraLiveSearchOutcome;
+  },
+): void {
   const { outcome, reviewReason } = input;
   const reasonCode = outcome.ok ? reviewReason : outcome.reason;
   const templateId = input.liveSearch.request.templateId;
-  recordAtlassianActionActivity({
+  recordAtlassianActionActivity(deps, {
     connectorId: connectorIdForAuthRef(input.credential.authRef),
     actionType: "search-issues-live",
     disposition: input.disposition,
@@ -638,6 +642,7 @@ function recordLiveSearchActivity(input: {
 // fingerprinted — the executor is pure transport orchestration with no store access, and the
 // store-inspection test pins that no capsule, fingerprint, or connector_sources row changes.
 async function executeLiveSearchAndRespond(
+  deps: UiHandlerDeps,
   guard: AtlassianConnectorCredentialDeps,
   credential: AtlassianCredentialMetadata,
   liveSearch: AtlassianLiveSearchPayload,
@@ -655,7 +660,7 @@ async function executeLiveSearchAndRespond(
       ...(request.maxResults === undefined ? {} : { maxResults: request.maxResults }),
     },
   );
-  recordLiveSearchActivity({
+  recordLiveSearchActivity(deps, {
     credential,
     liveSearch,
     disposition,
@@ -703,7 +708,7 @@ function governedActionResult(
 ): Promise<RouteResult> | RouteResult {
   const connectorId = connectorIdForAuthRef(credential.authRef);
   const denied = (reasonCode: AtlassianConnectorActivityReasonCode): RouteResult =>
-    deniedAtlassianActionResult({
+    deniedAtlassianActionResult(deps, {
       connectorId,
       actionType: plan.actionType,
       reasonCode,
@@ -720,7 +725,7 @@ function governedActionResult(
     );
   }
   if (outcome.kind === "review-required") {
-    return createAtlassianPendingApprovalResult({
+    return createAtlassianPendingApprovalResult(deps, {
       connectorId,
       actionType: plan.actionType,
       reviewReason: outcome.decision.reviewReason ?? "mode-approval-required",
@@ -741,6 +746,7 @@ function governedActionResult(
 // query the targetRef is the template id — a safe identifier naming WHAT would run; free-form
 // JQL has no identifier-shaped target and records none (the digest is the correlation surface).
 function actionPlanFor(
+  deps: UiHandlerDeps,
   guard: AtlassianConnectorCredentialDeps,
   credential: AtlassianCredentialMetadata,
   input: AtlassianGovernedActionInput,
@@ -754,6 +760,7 @@ function actionPlanFor(
       payload: { kind: "live-search", liveSearch },
       execute: (correlationId: string): Promise<RouteResult> =>
         executeLiveSearchAndRespond(
+          deps,
           guard,
           credential,
           liveSearch,
@@ -769,7 +776,7 @@ function actionPlanFor(
     targetRef: targetRefOf(action),
     payload: { kind: "write-action", action },
     execute: (correlationId: string): Promise<RouteResult> =>
-      executeAndRespond(guard, credential, action, "allowed", undefined, correlationId),
+      executeAndRespond(deps, guard, credential, action, "allowed", undefined, correlationId),
   };
 }
 
@@ -800,7 +807,7 @@ export function handleExecuteAtlassianConnectorAction(
       deps,
       credential,
       authority,
-      actionPlanFor(guard, credential, input),
+      actionPlanFor(deps, guard, credential, input),
       ctx.correlationId ?? randomUUID(),
     );
   }, ctx.correlationId);
@@ -836,7 +843,10 @@ export function handleListAtlassianConnectorActionApprovals(
 ): Promise<RouteResult> | RouteResult {
   const guard = requireConnectorDeps(deps);
   if (isRouteResult(guard)) return guard;
-  return { status: 200, body: { approvals: atlassianActionApprovalRegistry.listPending() } };
+  return {
+    status: 200,
+    body: { approvals: resolveAtlassianActionApprovalRegistry(deps).listPending() },
+  };
 }
 
 // GET /api/atlassian-connectors/action-approvals/:approvalId
@@ -848,7 +858,9 @@ export function handleGetAtlassianConnectorActionApproval(
   if (isRouteResult(guard)) return guard;
   const approvalId = decodedApprovalIdParam(ctx);
   const entry =
-    approvalId === undefined ? undefined : atlassianActionApprovalRegistry.get(approvalId);
+    approvalId === undefined
+      ? undefined
+      : resolveAtlassianActionApprovalRegistry(deps).get(approvalId);
   if (entry === undefined) return approvalNotFound(ctx.correlationId);
   return { status: 200, body: { approval: entry.approval } };
 }
@@ -909,7 +921,7 @@ async function executeApprovedEntry(
   const reservation = reserveGovernedAtlassianAction(entry.authority, deps);
   if (!reservation.ok) {
     const jqlDigest = pendingEntryJqlDigest(entry);
-    return deniedAtlassianActionResult({
+    return deniedAtlassianActionResult(deps, {
       connectorId: entry.approval.connectorId,
       actionType: entry.approval.actionType,
       reasonCode: reservation.reason,
@@ -923,6 +935,7 @@ async function executeApprovedEntry(
   }
   if (entry.payload.kind === "live-search") {
     return executeLiveSearchAndRespond(
+      deps,
       guard,
       credential,
       entry.payload.liveSearch,
@@ -932,6 +945,7 @@ async function executeApprovedEntry(
     );
   }
   return executeAndRespond(
+    deps,
     guard,
     credential,
     entry.payload.action,
@@ -953,7 +967,9 @@ export function handleApproveAtlassianConnectorActionApproval(
   return runHandler(() => {
     const approvalId = decodedApprovalIdParam(ctx);
     const entry =
-      approvalId === undefined ? undefined : atlassianActionApprovalRegistry.consume(approvalId);
+      approvalId === undefined
+        ? undefined
+        : resolveAtlassianActionApprovalRegistry(deps).consume(approvalId);
     if (entry === undefined) return approvalNotFound(ctx.correlationId);
     return executeApprovedEntry(deps, guard, entry);
   }, ctx.correlationId);
@@ -970,10 +986,12 @@ export function handleRejectAtlassianConnectorActionApproval(
   return runHandler(() => {
     const approvalId = decodedApprovalIdParam(ctx);
     const entry =
-      approvalId === undefined ? undefined : atlassianActionApprovalRegistry.reject(approvalId);
+      approvalId === undefined
+        ? undefined
+        : resolveAtlassianActionApprovalRegistry(deps).reject(approvalId);
     if (entry === undefined) return approvalNotFound(ctx.correlationId);
     const jqlDigest = pendingEntryJqlDigest(entry);
-    recordAtlassianActionActivity({
+    recordAtlassianActionActivity(deps, {
       connectorId: entry.approval.connectorId,
       actionType: entry.approval.actionType,
       disposition: "review-required",

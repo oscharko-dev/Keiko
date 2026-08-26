@@ -317,4 +317,37 @@ describe("flushPlaintextResidueWithRetry", () => {
     expect(fake.calls.count).toBe(2);
     expect(events.find((e) => e.op === "store.encryption-checkpoint-degraded")).toBeUndefined();
   });
+
+  // #2906 KEIKO-0877 follow-up: SQLite can report busy=0 for a PARTIAL checkpoint -- fewer frames
+  // checkpointed than the WAL currently holds. Treating busy===0 alone as "done" (the pre-fix
+  // behavior) would return immediately here and never reclaim the remaining plaintext-holding WAL
+  // frames. This must retry exactly like a busy=1 result and, once the retry budget is exhausted,
+  // report the same degraded diagnostic.
+  it("retries a partial checkpoint (busy=0 but checkpointed < log) and reports it degraded", () => {
+    const fake = fakeDbFor(() => ({ busy: 0, log: 42, checkpointed: 10 }));
+    const { sink, events } = collectingSink();
+    flushPlaintextResidueWithRetry(fake.db, sink);
+    expect(fake.calls.count).toBe(3);
+    const degraded = events.find((e) => e.op === "store.encryption-checkpoint-degraded");
+    expect(degraded).toBeDefined();
+    expect(degraded?.extra?.attempts).toBe(3);
+    // busy===0 on every attempt, so the degraded report's own "busy" summary must reflect that
+    // (not misreport a partial checkpoint as a busy-contention one).
+    expect(degraded?.extra?.busy).toBe(false);
+  });
+
+  // A malformed/short PRAGMA result row (missing or non-integer columns) must fail closed into
+  // the retry/report path instead of being parsed as a trivially-satisfied busy=0/log=0/
+  // checkpointed=0 result -- the pre-fix `typeof row?.busy === "number" ? row.busy : 0` fallback
+  // would have silently treated this as a complete checkpoint on the very first attempt.
+  it("treats a malformed checkpoint row as degraded rather than a trivially-satisfied success", () => {
+    const fake = fakeDbFor(() => ({}));
+    const { sink, events } = collectingSink();
+    flushPlaintextResidueWithRetry(fake.db, sink);
+    expect(fake.calls.count).toBe(3);
+    const degraded = events.find((e) => e.op === "store.encryption-checkpoint-degraded");
+    expect(degraded).toBeDefined();
+    expect(degraded?.extra?.attempts).toBe(3);
+    expect(degraded?.extra?.busy).toBe(true);
+  });
 });

@@ -379,12 +379,16 @@ async function safeFetch(
   // KEIKO-0586: register an AbortController per outbound fetch so revokeResearch can abort
   // in-flight requests instead of waiting for them to run to completion and discarding the body.
   // The AbortSignal passed to fetchImpl combines the caller's own signal (which cancels the
-  // whole followResearch loop) with the revoke-driven controller (which stops this one hop).
+  // whole followResearch loop), the revoke-driven controller (which stops this one hop), and the
+  // grant's own natural expiry (#2906: a grant that simply times out -- nobody calls
+  // invalidateRun -- must still abort a fetch already in flight for it; reserveFetch only gates
+  // the START of a hop, so without this a slow response can keep running well past expiresAtMs).
   const controller = new AbortController();
   const release = ctx.deps.registry.registerInFlightFetch(state.runId, controller);
-  const signals: AbortSignal[] = [controller.signal];
-  if (state.signal !== undefined) signals.push(state.signal);
-  const combined = signals.length === 1 ? signals[0] : AbortSignal.any(signals);
+  const expiry = expiryAbort(state.grant.expiresAtMs, ctx.now());
+  const combined = AbortSignal.any(
+    [controller.signal, expiry.signal, state.signal].filter(isSignal),
+  );
   try {
     return await ctx.fetchImpl(url.toString(), buildFetchOptions(ctx, state.cfg, combined));
   } catch {
@@ -393,7 +397,37 @@ async function safeFetch(
     return undefined;
   } finally {
     release();
+    expiry.dispose();
   }
+}
+
+function isSignal(value: AbortSignal | undefined): value is AbortSignal {
+  return value !== undefined;
+}
+
+interface ExpiryAbort {
+  readonly signal: AbortSignal;
+  readonly dispose: () => void;
+}
+
+// Aborts once the grant's own expiresAtMs elapses, independent of any explicit revoke. Uses the
+// global (fake-timer-mockable) setTimeout rather than AbortSignal.timeout so this stays testable
+// without a real wall-clock wait, and is unref'd so a pending research fetch never keeps the
+// process alive on its own. Disposed by the caller once the fetch this instance guards has itself
+// settled, so an already-completed hop never leaves a stray timer behind.
+function expiryAbort(expiresAtMs: number, nowMs: number): ExpiryAbort {
+  const controller = new AbortController();
+  const delayMs = Math.max(0, expiresAtMs - nowMs);
+  const timer = setTimeout(() => {
+    controller.abort();
+  }, delayMs);
+  timer.unref();
+  return {
+    signal: controller.signal,
+    dispose: (): void => {
+      clearTimeout(timer);
+    },
+  };
 }
 
 function buildFetchOptions(

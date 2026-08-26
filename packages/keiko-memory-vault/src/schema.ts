@@ -329,7 +329,7 @@ export function flushPlaintextResidueWithRetry(
 ): void {
   for (let attempt = 1; attempt <= WAL_CHECKPOINT_MAX_ATTEMPTS; attempt += 1) {
     const outcome = attemptWalCheckpointTruncate(db);
-    if (outcome.kind === "ok" && outcome.result.busy === 0) return;
+    if (isCheckpointComplete(outcome)) return;
     if (attempt === WAL_CHECKPOINT_MAX_ATTEMPTS) {
       emitCheckpointDegraded(sink, attempt, outcome);
       return;
@@ -339,23 +339,42 @@ export function flushPlaintextResidueWithRetry(
 
 type WalCheckpointAttempt =
   | { readonly kind: "ok"; readonly result: WalCheckpointResult }
-  | { readonly kind: "threw"; readonly errorKind: string };
+  | { readonly kind: "threw"; readonly errorKind: string }
+  // #2906: SQLite can return busy=0 with checkpointed < log (a PARTIAL checkpoint that still
+  // reports success on the busy flag alone) or, in principle, a malformed/short row (missing or
+  // non-integer columns). Both must fail closed into the retry/report path rather than being
+  // parsed as a trivially-satisfied 0/0/0 result, so a bogus row can never be mistaken for a
+  // completed checkpoint.
+  | { readonly kind: "malformed" };
 
 function attemptWalCheckpointTruncate(db: DatabaseSync): WalCheckpointAttempt {
   try {
     const row = db.prepare("PRAGMA wal_checkpoint(TRUNCATE)").get() as
       Partial<WalCheckpointResult> | undefined;
-    return {
-      kind: "ok",
-      result: {
-        busy: typeof row?.busy === "number" ? row.busy : 0,
-        log: typeof row?.log === "number" ? row.log : 0,
-        checkpointed: typeof row?.checkpointed === "number" ? row.checkpointed : 0,
-      },
-    };
+    if (!isWellFormedCheckpointRow(row)) return { kind: "malformed" };
+    return { kind: "ok", result: row };
   } catch (error) {
     return { kind: "threw", errorKind: memoryVaultErrorKind(error) };
   }
+}
+
+function isWellFormedCheckpointRow(
+  row: Partial<WalCheckpointResult> | undefined,
+): row is WalCheckpointResult {
+  return (
+    Number.isInteger(row?.busy) && Number.isInteger(row?.log) && Number.isInteger(row?.checkpointed)
+  );
+}
+
+// Mirrors keiko-local-knowledge/store-content-encryption.ts's isCheckpointComplete: busy=0 alone
+// is not sufficient, since SQLite can report a PARTIAL checkpoint (fewer frames checkpointed than
+// the WAL currently holds) while still clearing the busy flag.
+function isCheckpointComplete(outcome: WalCheckpointAttempt): boolean {
+  return (
+    outcome.kind === "ok" &&
+    outcome.result.busy === 0 &&
+    outcome.result.checkpointed >= outcome.result.log
+  );
 }
 
 function emitCheckpointDegraded(

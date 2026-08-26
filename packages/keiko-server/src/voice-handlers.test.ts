@@ -380,7 +380,7 @@ describe("POST /api/voice/transcribe — successful dictation (AC3/AC4/AC6)", ()
     const asciiPrefix = "a".repeat(499);
     const emoji = "\u{1F600}";
     const smuggledPrompt = `${asciiPrefix}${emoji}`;
-    expect(smuggledPrompt.length).toBe(501);
+    expect(smuggledPrompt).toHaveLength(501);
 
     const { deps, seen } = sttDeps();
     await handleVoiceTranscribe(

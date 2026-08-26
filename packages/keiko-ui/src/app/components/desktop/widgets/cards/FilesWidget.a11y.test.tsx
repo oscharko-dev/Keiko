@@ -28,8 +28,6 @@ describe("FilesWidget Git decoration accessibility", () => {
           name: "src",
           path: "src",
           kind: "directory",
-          sizeBytes: 0,
-          modifiedAt: 1,
           extension: null,
           symlink: false,
           readable: true,

@@ -30,6 +30,12 @@ export interface NativeFileDialogAdapterResult {
 
 export interface NativeFileDialogAdapter {
   open(request: NativeFileDialogRequest): Promise<NativeFileDialogAdapterResult>;
+  // #2906: cancels the in-flight open() call, if any -- a no-op when no open() is running or it
+  // has already settled. Does not itself resolve/reject the open() promise; a real adapter's
+  // cancel() causes the underlying platform process to be killed, which then settles open() (as
+  // a rejection) on its own. A caller must still await the original open() promise to know
+  // cancellation has actually finished.
+  cancel(): void;
 }
 
 export type NativeFileDialogAdapterFailureReason = "timeout" | "failed" | "unsupported";
@@ -59,6 +65,10 @@ export type NativeDialogProcessRunner = (
   args: readonly string[],
   stdin: string,
   timeoutMs: number,
+  // #2906: an optional cancellation signal, independent of the interaction timeout above -- the
+  // BFF route uses this to kill an orphaned dialog process as soon as the client disconnects,
+  // instead of waiting out the full 10-minute interaction budget.
+  signal?: AbortSignal,
 ) => Promise<NativeDialogProcessResult>;
 
 interface BoundedCapture {
@@ -163,12 +173,16 @@ function buildDialogEnv(processEnv: NodeJS.ProcessEnv = process.env): NodeJS.Pro
 }
 
 // Bounded runner for the dialog helper process. Modeled on the git route runner (shell:false,
-// windowsHide, timeout, byte caps, curated env) plus stdin delivery.
+// windowsHide, timeout, byte caps, curated env) plus stdin delivery. `signal`, when aborted (the
+// BFF route's cancel() seam, #2906), makes Node kill the child immediately instead of waiting out
+// the full interaction timeout -- the same `settle()` path handles both, so an aborted run still
+// resolves (never hangs the caller) via the ordinary 'error'/'close' handlers below.
 export function runNativeDialogProcess(
   command: string,
   args: readonly string[],
   stdin: string,
   timeoutMs: number,
+  signal?: AbortSignal,
 ): Promise<NativeDialogProcessResult> {
   return new Promise<NativeDialogProcessResult>((resolveProcess) => {
     const child = spawn(command, [...args], {
@@ -176,6 +190,7 @@ export function runNativeDialogProcess(
       windowsHide: true,
       stdio: ["pipe", "pipe", "pipe"],
       env: buildDialogEnv(),
+      ...(signal === undefined ? {} : { signal }),
     });
     const stdout: BoundedCapture = { value: "", exceeded: false };
     const stderr: BoundedCapture = { value: "", exceeded: false };
@@ -281,8 +296,9 @@ async function runAdapterScript(
   command: string,
   args: readonly string[],
   stdin: string,
+  signal?: AbortSignal,
 ): Promise<NativeFileDialogAdapterResult> {
-  const result = await runProcess(command, args, stdin, NATIVE_FILE_DIALOG_TIMEOUT_MS);
+  const result = await runProcess(command, args, stdin, NATIVE_FILE_DIALOG_TIMEOUT_MS, signal);
   if (result.timedOut) {
     throw new NativeFileDialogAdapterError(
       "timeout",
@@ -333,20 +349,45 @@ function stdinConfig(request: NativeFileDialogRequest): AdapterStdinConfig {
   };
 }
 
+// #2906: shared cancellation bookkeeping for the two spawning adapters below. Each open() call
+// gets its own AbortController; cancel() aborts whichever one is currently active. The route
+// enforces single-flight (at most one open() per adapter instance), but a settled call still
+// clears its own controller so a stale cancel() from an already-finished call can never reach a
+// later, unrelated open().
+function cancellableAdapter(
+  run: (
+    signal: AbortSignal,
+    request: NativeFileDialogRequest,
+  ) => Promise<NativeFileDialogAdapterResult>,
+): NativeFileDialogAdapter {
+  let active: AbortController | undefined;
+  return {
+    open(request): Promise<NativeFileDialogAdapterResult> {
+      const controller = new AbortController();
+      active = controller;
+      return run(controller.signal, request).finally(() => {
+        if (active === controller) active = undefined;
+      });
+    },
+    cancel(): void {
+      active?.abort();
+    },
+  };
+}
+
 // macOS: fixed SIP-protected binary, static JXA program as the only script argument.
 export function createMacosNativeFileDialogAdapter(
   runProcess: NativeDialogProcessRunner = runNativeDialogProcess,
 ): NativeFileDialogAdapter {
-  return {
-    open(request): Promise<NativeFileDialogAdapterResult> {
-      return runAdapterScript(
-        runProcess,
-        "/usr/bin/osascript",
-        ["-l", "JavaScript", "-e", MACOS_NATIVE_FILE_DIALOG_SCRIPT],
-        JSON.stringify(stdinConfig(request)),
-      );
-    },
-  };
+  return cancellableAdapter((signal, request) =>
+    runAdapterScript(
+      runProcess,
+      "/usr/bin/osascript",
+      ["-l", "JavaScript", "-e", MACOS_NATIVE_FILE_DIALOG_SCRIPT],
+      JSON.stringify(stdinConfig(request)),
+      signal,
+    ),
+  );
 }
 
 // Windows PowerShell 5.1 ships with every supported Windows; the absolute path avoids PATH
@@ -364,17 +405,16 @@ export function createWindowsNativeFileDialogAdapter(
   const encodedScript = Buffer.from(WINDOWS_NATIVE_FILE_DIALOG_SCRIPT, "utf16le").toString(
     "base64",
   );
-  return {
-    open(request): Promise<NativeFileDialogAdapterResult> {
-      const config = Buffer.from(JSON.stringify(stdinConfig(request)), "utf8").toString("base64");
-      return runAdapterScript(
-        runProcess,
-        windowsPowershellPath(),
-        ["-NoProfile", "-STA", "-EncodedCommand", encodedScript],
-        config,
-      );
-    },
-  };
+  return cancellableAdapter((signal, request) => {
+    const config = Buffer.from(JSON.stringify(stdinConfig(request)), "utf8").toString("base64");
+    return runAdapterScript(
+      runProcess,
+      windowsPowershellPath(),
+      ["-NoProfile", "-STA", "-EncodedCommand", encodedScript],
+      config,
+      signal,
+    );
+  });
 }
 
 // Platform dispatch. Unsupported platforms get an adapter that fails typed-`unsupported`, so the
@@ -393,6 +433,9 @@ export function createNativeFileDialogAdapter(
           "native dialogs are unsupported on this platform",
         ),
       );
+    },
+    cancel(): void {
+      // Nothing is ever in flight on an unsupported platform -- open() always rejects immediately.
     },
   };
 }

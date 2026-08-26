@@ -1500,21 +1500,51 @@ export interface TerminalEventEnvelope {
 
 export type FilesEntryKind = "directory" | "file" | "symlink";
 
-export interface FilesTreeEntry {
-  readonly name: string;
-  readonly path: string;
-  readonly kind: FilesEntryKind;
-  // sizeBytes and modifiedAt are `undefined` for directory entries (KEIKO-0633). Directories are
-  // returned from a readdir walk and are deliberately not stat'd per entry (one syscall per
-  // directory would dominate the walk cost), so the wire type makes the "not measured" distinction
-  // explicit rather than surfacing a `0` sentinel that looks like a real measurement. File and
-  // symlink entries always carry the real lstat-derived values.
-  readonly sizeBytes?: number | undefined;
-  readonly modifiedAt?: number | undefined;
-  readonly extension: string | null;
-  readonly symlink: boolean;
-  readonly readable: boolean;
-}
+// What a symlink entry's target resolved to, carried ONLY on a "symlink" entry (#2906 review,
+// comment 3863185718). "unknown" covers a target the walk could not resolve at all (broken link,
+// permission error) or one that is neither a regular file nor a directory (socket, FIFO, device).
+export type FilesSymlinkTargetKind = "directory" | "file" | "unknown";
+
+// A discriminated union, not one shape with independently-optional fields (KEIKO-0633 follow-up,
+// #2906 review): every impossible sizeBytes/modifiedAt combination used to be permitted by the
+// type even though only one was ever produced at runtime. A real directory is returned from a
+// readdir walk and is deliberately never stat'd per entry (one syscall per directory would
+// dominate the walk cost), so it is metadata-free BY CONSTRUCTION; a file or symlink entry is
+// always lstat'd and always carries real values. `sizeBytes`/`modifiedAt` stay declared — as
+// `undefined` — on the "directory" variant rather than omitted from its shape entirely, so a
+// reader can keep writing `entry.sizeBytes` across the WHOLE union without narrowing on `kind`
+// first (TypeScript only requires narrowing when a property is absent from a member, not merely
+// typed `undefined`); constructing a "directory" entry with a real number is what the type now
+// rejects.
+//
+// A symlink whose target is a directory is `kind: "symlink"`, never `kind: "directory"`: unlike a
+// real directory it DOES carry real lstat metadata (of the symlink itself), so collapsing it into
+// "directory" silently violated the metadata-free invariant above — the runtime used to do exactly
+// that. `symlinkTargetKind` carries what the walk resolved the target to, for a consumer (e.g. a
+// tree-view icon) that wants to render a symlinked directory differently from a symlinked file.
+export type FilesTreeEntry =
+  | {
+      readonly kind: "directory";
+      readonly name: string;
+      readonly path: string;
+      readonly sizeBytes?: undefined;
+      readonly modifiedAt?: undefined;
+      readonly extension: string | null;
+      readonly symlink: boolean;
+      readonly readable: boolean;
+      readonly symlinkTargetKind?: undefined;
+    }
+  | {
+      readonly kind: "file" | "symlink";
+      readonly name: string;
+      readonly path: string;
+      readonly sizeBytes: number;
+      readonly modifiedAt: number;
+      readonly extension: string | null;
+      readonly symlink: boolean;
+      readonly readable: boolean;
+      readonly symlinkTargetKind?: FilesSymlinkTargetKind | undefined;
+    };
 
 export interface FilesTreeResponse {
   readonly root: string;

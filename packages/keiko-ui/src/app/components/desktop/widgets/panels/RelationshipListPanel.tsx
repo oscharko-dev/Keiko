@@ -226,6 +226,26 @@ function formatActivityLabel(activity: RelationshipActivityState, count: number)
   return label;
 }
 
+// #2906 (Sonar S4624): split the row aria-label out of the JSX so the interpolation is a plain
+// string, not a template literal-in-template-literal expression that trips the nested-literal rule.
+function buildRelationshipRowLabel(input: {
+  readonly item: {
+    readonly type: string;
+    readonly source: { readonly kind: string; readonly id: string };
+    readonly target: { readonly kind: string; readonly id: string };
+    readonly lifecycle: string;
+  };
+  readonly activityLabel: string;
+  readonly evictedSuffix: string;
+}): string {
+  const { item, activityLabel, evictedSuffix } = input;
+  const base =
+    `${item.type} relationship from ${item.source.kind} ${item.source.id} to ` +
+    `${item.target.kind} ${item.target.id}, lifecycle: ${item.lifecycle}, ` +
+    `activity: ${activityLabel}`;
+  return evictedSuffix === "" ? base : `${base} ${evictedSuffix}`;
+}
+
 // #2723 (S3358): the truncated/count message combined an outer ternary with a second,
 // unrelated pluralization ternary embedded in the non-truncated branch's template literal;
 // extracted to a named if/else so only one (non-nested) ternary remains.
@@ -751,7 +771,11 @@ export function RelationshipListPanel({
                   // button — GEN-UI-A11Y-012). KEIKO-0665: an evicted id's activity is only a
                   // lifecycle-derived fallback, not a live report — say so explicitly instead of
                   // presenting it with the same confidence as a real SSE-reported state.
-                  aria-label={`${item.type} relationship from ${item.source.kind} ${item.source.id} to ${item.target.kind} ${item.target.id}, lifecycle: ${item.lifecycle}, activity: ${ACTIVITY_VISUALS[activity].label}${evicted ? ` ${t("relationships.tracking.evicted.parenthetical")}` : ""}`}
+                  aria-label={buildRelationshipRowLabel({
+                    item,
+                    activityLabel: ACTIVITY_VISUALS[activity].label,
+                    evictedSuffix: evicted ? t("relationships.tracking.evicted.parenthetical") : "",
+                  })}
                   title={`${item.source.id} → ${item.target.id}`}
                   onClick={() => onSelect(item.id)}
                   onKeyDown={(e) => onRowKeyDown(e, item.id)}

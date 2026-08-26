@@ -371,7 +371,7 @@
     {
       "op": "store.encryption-checkpoint-degraded",
       "category": "diagnostic",
-      "site": "packages/keiko-memory-vault/src/schema.ts:369",
+      "site": "packages/keiko-memory-vault/src/schema.ts:388",
       "package": "keiko-memory-vault"
     },
     {
@@ -771,6 +771,18 @@
       "package": "keiko-server"
     },
     {
+      "op": "editor.local-history.rekey.completed",
+      "category": "diagnostic",
+      "site": "packages/keiko-server/src/editor/localHistory/localHistoryCapture.ts:170",
+      "package": "keiko-server"
+    },
+    {
+      "op": "editor.local-history.rekey.failed",
+      "category": "diagnostic",
+      "site": "packages/keiko-server/src/editor/localHistory/localHistoryCapture.ts:186",
+      "package": "keiko-server"
+    },
+    {
       "op": "embedding.memory.failed",
       "category": "embedding",
       "site": "packages/keiko-server/src/memory-embedding.ts:174",
@@ -942,6 +954,12 @@
       "op": "memory.embedding.store-rejected",
       "category": "memory",
       "site": "packages/keiko-server/src/memory-embedding.ts:721",
+      "package": "keiko-server"
+    },
+    {
+      "op": "native-file-dialog.selection.projected",
+      "category": "diagnostic",
+      "site": "packages/keiko-server/src/native-file-dialog/route.ts:172",
       "package": "keiko-server"
     },
     {

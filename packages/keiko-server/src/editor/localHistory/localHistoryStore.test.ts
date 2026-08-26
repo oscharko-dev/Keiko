@@ -232,6 +232,67 @@ describe("editor local-history store", () => {
     void oldAbs;
   });
 
+  it("#2906 review (comment 3863185700): rolls back a mid-batch reKey vault failure so every ORIGINAL checkpoint stays readable after reopen", () => {
+    const fx = fixture();
+    let failOnNthSet: number | undefined;
+    let setCalls = 0;
+    const store = createEditorLocalHistoryStore({
+      ...storeOptions(fx),
+      limits: { coalesceMs: 0 },
+      vaultFactory: (workspaceDir) => {
+        const inner = createShardedLocalSecretVault({
+          key: Buffer.from(VAULT_KEY, "base64"),
+          storeDir: join(workspaceDir, "checkpoints"),
+        });
+        return {
+          ...inner,
+          set: (reference: string, secret: string): void => {
+            setCalls += 1;
+            if (failOnNthSet !== undefined && setCalls === failOnNthSet) {
+              throw new Error("simulated vault failure");
+            }
+            inner.set(reference, secret);
+          },
+        };
+      },
+    });
+
+    // Two checkpoints for the SAME file, so reKey must stage two rewritten bodies.
+    const first = store.capture(captureInput(fx, "v1\n", "user-save", 1_000)).entry;
+    const second = store.capture(captureInput(fx, "v2\n", "user-save", 1_010)).entry;
+    expect(store.list(fx.scope, "src/app.ts", 1_100)).toHaveLength(2);
+    writeFileSync(join(fx.root, "src", "renamed.ts"), "v2\n", "utf8");
+
+    // Arm failure on the SECOND vault.set call reKey issues: the first checkpoint's staged write
+    // succeeds, the second must fail. Pre-fix, the first checkpoint's body was already overwritten
+    // IN PLACE (new relativePathDigest) before the second write's failure aborted the whole
+    // operation before the index was ever touched -- leaving the (uncommitted-index) first entry's
+    // body permanently mismatched against its still-old index record. Post-fix, both checkpoints'
+    // bodies are staged under NEW vault refs, so neither original ref is ever touched.
+    setCalls = 0;
+    failOnNthSet = 2;
+    expect(() => store.reKey(fx.scope, "src/app.ts", "src/renamed.ts")).toThrow();
+    failOnNthSet = undefined;
+
+    // Both ORIGINAL checkpoints remain fully readable under their ORIGINAL path.
+    expect(store.read(fx.scope, first.entryRef, 1_200)).toMatchObject({
+      content: "v1\n",
+      entry: { relativePath: "src/app.ts" },
+    });
+    expect(store.read(fx.scope, second.entryRef, 1_200)).toMatchObject({
+      content: "v2\n",
+      entry: { relativePath: "src/app.ts" },
+    });
+    expect(store.list(fx.scope, "src/app.ts", 1_200)).toHaveLength(2);
+    expect(store.list(fx.scope, "src/renamed.ts", 1_200)).toEqual([]);
+
+    // Survives a reopen too: the rollback left the ON-DISK index and bodies consistent, not just
+    // the in-memory store.
+    const reopened = createEditorLocalHistoryStore(storeOptions(fx));
+    expect(reopened.read(fx.scope, first.entryRef, 1_300).content).toBe("v1\n");
+    expect(reopened.read(fx.scope, second.entryRef, 1_300).content).toBe("v2\n");
+  });
+
   it("coalesces only rapid identical saves", () => {
     const fx = fixture();
     const store = createEditorLocalHistoryStore(storeOptions(fx));

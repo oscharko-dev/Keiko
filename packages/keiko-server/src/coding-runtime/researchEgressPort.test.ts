@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
   validateCodingWorkbenchRuntimeEvent,
@@ -783,5 +783,60 @@ describe("researchEgressPort real-registry mid-flight revoke (KEIKO-0284)", () =
     expect(events[0]?.auxiliaryOutcome).toBe("denied");
     // And no residual read/content escapes.
     expect(JSON.stringify(result)).not.toContain("secret");
+  });
+});
+
+// Regression: #2906. The in-flight AbortController registered per fetch was previously wired
+// ONLY to revokeResearch (registry.invalidateRun); a grant that simply reaches its own
+// expiresAtMs with nobody calling invalidateRun never aborted the fetch already in flight for
+// it -- reserveFetch only gates the START of a hop, so a slow response could keep running well
+// past the grant's expiry. This pins the fetch's own AbortSignal aborting purely from the
+// grant's natural expiry elapsing, with no explicit revoke anywhere in the test.
+describe("researchEgressPort abort-on-grant-expiry (regression, #2906)", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("aborts the in-flight fetch signal once the grant's own expiry elapses, without an explicit revoke", async () => {
+    vi.useFakeTimers();
+    const registry: ResearchGrantRegistry = {
+      register: () => undefined,
+      activeGrants: () => [makeGrant({ expiresAtMs: 5_050 })],
+      registerInFlightFetch: () => () => undefined,
+      reserveFetch: () => "ok",
+      chargeFetch: () => "ok",
+      // Deliberately never called by this test -- the abort must come from expiry alone.
+      invalidateRun: () => undefined,
+      saturateBytes: () => undefined,
+    };
+    let capturedSignal: AbortSignal | null | undefined;
+    const port = createResearchEgressPort({
+      registry,
+      resolveRunId: () => "run-1",
+      gatewayEgress: () => undefined,
+      emitEvent: () => undefined,
+      now: () => 5_000,
+      fetchImpl: (_url, options): Promise<Response> => {
+        capturedSignal = options.signal;
+        return new Promise<Response>(() => {
+          // Never settles within this test; production fetch would reject on signal abort.
+        });
+      },
+    });
+
+    // Intentionally not awaited: fetchImpl's promise never settles in this test, and only the
+    // AbortSignal it was called with is under test here.
+    void port.execute(egressRequest("https://docs.example.com/"), undefined, LIVE_GUARD);
+    // Flush microtasks so safeFetch has run its synchronous prefix (register, compose the
+    // signal, call fetchImpl) before we assert on the captured signal.
+    await vi.advanceTimersByTimeAsync(0);
+    expect(capturedSignal).toBeDefined();
+    expect(capturedSignal?.aborted).toBe(false);
+
+    // Advance the clock PAST the grant's expiresAtMs (5_050) -- 50ms of "wall time" -- without
+    // ever touching registry.invalidateRun.
+    await vi.advanceTimersByTimeAsync(60);
+
+    expect(capturedSignal?.aborted).toBe(true);
   });
 });

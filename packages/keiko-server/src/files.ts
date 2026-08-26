@@ -42,7 +42,13 @@ import {
   type EditorDocumentSession,
   type EditorDocumentVersion,
 } from "@oscharko-dev/keiko-contracts";
-import type { FilesContentResponse as FilesContentWireResponse } from "@oscharko-dev/keiko-contracts/bff-wire";
+import type {
+  FilesContentResponse as FilesContentWireResponse,
+  FilesEntryKind,
+  FilesSymlinkTargetKind,
+  FilesTreeEntry,
+  FilesTreeResponse,
+} from "@oscharko-dev/keiko-contracts/bff-wire";
 import { containsPath } from "@oscharko-dev/keiko-git";
 import { notifyHostLspWorkspaceFileChanged } from "./editor/lsp/hostLanguageOperation.js";
 import {
@@ -80,30 +86,12 @@ type FilesMetadataRedactor = UiHandlerDeps["redactor"];
 const staticFilesMetadataRedactor: FilesMetadataRedactor = (value: unknown): unknown =>
   typeof value === "string" ? redact(value) : value;
 
-export type FilesEntryKind = "directory" | "file" | "symlink";
-
-export interface FilesTreeEntry {
-  readonly name: string;
-  readonly path: string;
-  readonly kind: FilesEntryKind;
-  // sizeBytes and modifiedAt are `undefined` for directory entries (KEIKO-0633). Directories are
-  // returned from a readdir walk and are deliberately not stat'd per entry (one syscall per
-  // directory would dominate the walk cost), so the wire type makes the "not measured" distinction
-  // explicit rather than surfacing a `0` sentinel that looks like a real measurement. File and
-  // symlink entries always carry the real lstat-derived values.
-  readonly sizeBytes?: number | undefined;
-  readonly modifiedAt?: number | undefined;
-  readonly extension: string | null;
-  readonly symlink: boolean;
-  readonly readable: boolean;
-}
-
-export interface FilesTreeResponse {
-  readonly root: string;
-  readonly path: string;
-  readonly entries: readonly FilesTreeEntry[];
-  readonly truncated: boolean;
-}
+// #2906 review (comment 3863185718): FilesEntryKind / FilesTreeEntry / FilesTreeResponse used to
+// be redeclared here as a second, independently-drifting copy of the SAME shared wire contract
+// (@oscharko-dev/keiko-contracts/bff-wire owns the canonical one, consumed directly by keiko-ui).
+// Re-exported (not just imported) so every existing `from "./files.js"` import site — including
+// the package barrel (index.ts) — keeps working unchanged.
+export type { FilesEntryKind, FilesSymlinkTargetKind, FilesTreeEntry, FilesTreeResponse };
 
 export interface FilesSearchResult {
   readonly root: string;
@@ -504,23 +492,62 @@ function extensionOf(name: string): string | null {
   return ext.length > 0 ? ext : null;
 }
 
-type FilesTreeEntryBase = Omit<FilesTreeEntry, "kind" | "readable">;
+// Metadata a stat'd (non-directory-dirent) entry always carries -- the common fields BOTH the
+// "file" and "symlink" FilesTreeEntry variants share, still missing only the discriminant `kind`
+// and the containment-derived `readable`.
+interface FilesTreeEntryMetadata {
+  readonly name: string;
+  readonly path: string;
+  readonly sizeBytes: number;
+  readonly modifiedAt: number;
+  readonly extension: string | null;
+  readonly symlink: boolean;
+}
 
+function metadataFreeDirectoryEntry(
+  meta: Pick<FilesTreeEntryMetadata, "name" | "path" | "extension">,
+  readable: boolean,
+): FilesTreeEntry {
+  // KEIKO-0633: a real directory deliberately does NOT carry sizeBytes/modifiedAt on the wire --
+  // the readdir walk skips per-entry stat to avoid one syscall per directory, and emitting a `0`
+  // sentinel would masquerade as a real measurement to any downstream consumer. The discriminated
+  // union (#2906 review, comment 3863185718) now enforces this at the type level too: this is the
+  // ONLY shape a "directory"-kind entry may take.
+  return {
+    name: meta.name,
+    path: meta.path,
+    kind: "directory",
+    extension: meta.extension,
+    symlink: false,
+    readable,
+  };
+}
+
+// #2906 review (comment 3863185718): a symlink whose target is a directory used to be reported as
+// `kind: "directory"` WITH the symlink's own lstat metadata attached, contradicting the "a
+// directory entry is metadata-free" invariant metadataFreeDirectoryEntry encodes above. It is now
+// `kind: "symlink"` (the metadata-bearing union member) with `symlinkTargetKind` naming what the
+// walk resolved the target to, so a consumer that still wants directory-like treatment for it can
+// opt in explicitly instead of the server silently asserting it.
 async function classifySymlinkEntry(
   root: string,
   entryPath: string,
-  base: FilesTreeEntryBase,
+  meta: FilesTreeEntryMetadata,
 ): Promise<FilesTreeEntry> {
   try {
     const target = await realpath(entryPath);
     const targetStats = await stat(target);
     const contained = isContained(root, target);
     const denied = contained && pathIsDenied(rootRelativePosixPath(root, target));
-    const leafKind: FilesEntryKind = targetStats.isFile() ? "file" : "symlink";
-    const kind: FilesEntryKind = targetStats.isDirectory() ? "directory" : leafKind;
-    return { ...base, kind, readable: contained && !denied };
+    const readable = contained && !denied;
+    if (targetStats.isDirectory()) {
+      return { ...meta, kind: "symlink", symlinkTargetKind: "directory", readable };
+    }
+    const symlinkTargetKind: FilesSymlinkTargetKind = targetStats.isFile() ? "file" : "unknown";
+    const kind: FilesEntryKind = symlinkTargetKind === "file" ? "file" : "symlink";
+    return { ...meta, kind, symlinkTargetKind, readable };
   } catch {
-    return { ...base, kind: "symlink", readable: false };
+    return { ...meta, kind: "symlink", symlinkTargetKind: "unknown", readable: false };
   }
 }
 
@@ -536,21 +563,14 @@ async function classifyEntry(
   assertMetadataSafe(childRelativePath, redactor);
   const entryPath = join(parentNativePath, entry.name);
   if (entry.isDirectory() && !entry.isSymbolicLink()) {
-    // KEIKO-0633: directories deliberately do NOT carry sizeBytes/modifiedAt on the wire -- the
-    // readdir walk skips per-entry stat to avoid one syscall per directory, and emitting a `0`
-    // sentinel would masquerade as a real measurement to any downstream consumer.
-    return {
-      name: entry.name,
-      path: childRelativePath,
-      kind: "directory",
-      extension: extensionOf(entry.name),
-      symlink: false,
-      readable: true,
-    };
+    return metadataFreeDirectoryEntry(
+      { name: entry.name, path: childRelativePath, extension: extensionOf(entry.name) },
+      true,
+    );
   }
   const linkStats = await lstat(entryPath);
   const symlink = linkStats.isSymbolicLink();
-  const base = {
+  const meta: FilesTreeEntryMetadata = {
     name: entry.name,
     path: childRelativePath,
     sizeBytes: linkStats.size,
@@ -558,11 +578,14 @@ async function classifyEntry(
     extension: extensionOf(entry.name),
     symlink,
   };
-  if (!symlink) {
-    const kind: FilesEntryKind = linkStats.isDirectory() ? "directory" : "file";
-    return { ...base, kind, readable: true };
+  if (symlink) return classifySymlinkEntry(root, entryPath, meta);
+  if (linkStats.isDirectory()) {
+    // TOCTOU fallback: the dirent's own type (read at readdir time) disagreed with this FRESH
+    // lstat (rare -- e.g. the entry was replaced between the readdir call and here). A real
+    // directory stays metadata-free regardless of which check noticed it was one.
+    return metadataFreeDirectoryEntry(meta, true);
   }
-  return classifySymlinkEntry(root, entryPath, base);
+  return { ...meta, kind: "file", readable: true };
 }
 
 function entryRank(entry: FilesTreeEntry): number {
@@ -2864,7 +2887,12 @@ export async function handleFilesRename(
       );
       // KEIKO-0675: Local History reKey so a renamed file's history surfaces under the new name
       // instead of silently disappearing. Fail-safe: reKeyEditorLocalHistorySafely never rejects
-      // (a failure downgrades to a body-free diagnostic and 0 rewritten entries).
+      // (a failure downgrades to a body-free diagnostic and 0 rewritten entries). The rewritten
+      // count is not re-captured here (#2906 review, comment 3863185711): reKeyEditorLocalHistorySafely
+      // is the only caller that knows whether the store call actually threw, so it OWNS emitting the
+      // body-free activity-log line (outcome + rewrittenCount, correlated to this request) itself —
+      // capturing the return value again here would either duplicate that line or, worse, be unable
+      // to tell "nothing to rewrite" apart from "the reKey failed and was swallowed" (both return 0).
       reKeyEditorLocalHistorySafely({
         deps,
         realRoot: resolvedRoot.realRoot,

@@ -495,8 +495,13 @@ describe("desktop files browser", () => {
     }
 
     const listing = await readFilesTree(store, root, "");
+    // #2906 review (comment 3863185718): a symlink-to-directory is `kind: "symlink"` (with
+    // symlinkTargetKind: "directory"), never `kind: "directory"` -- it is not a real directory and
+    // carries real lstat metadata, unlike the metadata-free "directory" variant FilesTreeEntry now
+    // enforces at the type level. readable/symlink stay the security invariant this test pins.
     expect(listing.entries.find((entry) => entry.name === "escape")).toMatchObject({
-      kind: "directory",
+      kind: "symlink",
+      symlinkTargetKind: "directory",
       symlink: true,
       readable: false,
     });
@@ -523,8 +528,10 @@ describe("desktop files browser", () => {
       symlink: true,
       readable: false,
     });
+    // Same symlink-to-directory relabeling as the escape case above.
     expect(listing.entries.find((entry) => entry.name === "git-cache")).toMatchObject({
-      kind: "directory",
+      kind: "symlink",
+      symlinkTargetKind: "directory",
       symlink: true,
       readable: false,
     });
@@ -539,6 +546,31 @@ describe("desktop files browser", () => {
       status: 403,
       code: "DENIED",
     });
+  });
+
+  // #2906 review (comment 3863185718): the positive case the two symlink-to-directory tests above
+  // don't cover -- a READABLE symlink whose target is a directory. Before the fix this reported
+  // `kind: "directory"` while ALSO carrying the symlink's own real lstat sizeBytes/modifiedAt,
+  // contradicting the "a directory entry is metadata-free" invariant the wire TYPE now enforces
+  // (KEIKO-0633). It must report `kind: "symlink"` with `symlinkTargetKind: "directory"` instead,
+  // still carrying real (not undefined) metadata.
+  it("reports a readable symlink-to-directory as kind symlink with symlinkTargetKind directory, never as a metadata-free directory", async () => {
+    await symlink(join(root, "src"), join(root, "link-to-src"), "dir");
+
+    const listing = await readFilesTree(store, root, "");
+    const entry = listing.entries.find((candidate) => candidate.name === "link-to-src");
+    expect(entry).toMatchObject({
+      kind: "symlink",
+      symlinkTargetKind: "directory",
+      symlink: true,
+      readable: true,
+    });
+    expect(typeof entry?.sizeBytes).toBe("number");
+    expect(typeof entry?.modifiedAt).toBe("number");
+
+    // Genuinely readable: the tree can be listed through it, unlike the denied/escaped cases above.
+    const throughLink = await readFilesTree(store, root, "link-to-src");
+    expect(throughLink.entries.map((candidate) => candidate.name)).toContain("app.ts");
   });
 
   it("returns redacted text previews", async () => {

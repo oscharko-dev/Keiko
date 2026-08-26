@@ -6,12 +6,27 @@ import type {
 } from "@oscharko-dev/keiko-contracts";
 import type { FilesContentResponse } from "@oscharko-dev/keiko-contracts/bff-wire";
 import type { UiHandlerDeps } from "../../deps.js";
+import { UNKNOWN_CORRELATION_ID } from "../../correlation.js";
 import { emitServerDiagnostic } from "../../diagnostics-log.js";
+import { errorKindOf, type ServerLogSink } from "../../observability/index.js";
+import { processServerLogSink } from "../../process-log-sink.js";
 import {
   resolveCurrentWorkspaceRootMembership,
   WorkspaceRootMembershipError,
 } from "../../workspace-root-membership.js";
 import { EditorLocalHistoryError, editorLocalHistoryWorkspaceId } from "./localHistoryStore.js";
+
+// #2906 review (comment 3863185711): a rename-triggered reKey failure is not a checkpoint
+// capture, so it must never be mislabeled under a real EditorLocalHistoryOrigin (a rename can hit
+// this failure path no matter which origin captured the checkpoints being renamed). Kept as a
+// sibling union rather than widening EditorLocalHistoryOrigin itself: that contract type is the
+// closed vocabulary a PERSISTED checkpoint's `origin` field is validated against
+// (isHistoryOrigin/EDITOR_LOCAL_HISTORY_ORIGINS in localHistoryStore.ts's contract), and a reKey
+// never produces a new checkpoint, so it has no `origin` of that kind to report.
+export type EditorLocalHistoryDiagnosticOrigin =
+  EditorLocalHistoryOrigin | "editor.local-history.rekey";
+
+const REKEY_DIAGNOSTIC_ORIGIN: EditorLocalHistoryDiagnosticOrigin = "editor.local-history.rekey";
 
 export interface EditorLocalHistoryResolvedRoot {
   readonly workspaceId: string;
@@ -63,7 +78,7 @@ function captureFailureCode(error: unknown): string {
 
 export function emitEditorLocalHistoryCaptureFailure(
   deps: Pick<UiHandlerDeps, "diagnostics">,
-  origin: EditorLocalHistoryOrigin,
+  origin: EditorLocalHistoryDiagnosticOrigin,
   error: unknown,
   nowMs = Date.now(),
   // Threads the request's own correlation id (ADR-0173 D5 / g12) when the caller has one in
@@ -121,30 +136,59 @@ function protectionForCaptureFailure(
 
 // KEIKO-0675: rename-driven re-key wrapper mirroring captureEditorLocalHistorySafely's shape.
 // Fail-safe: a re-key failure never breaks the rename response; it emits a body-free diagnostic
-// and returns 0 rewritten entries so the caller can log a bounded count.
+// AND a body-free activity-log line (#2906 review, comment 3863185711), then returns 0 rewritten
+// entries. `activityLog` defaults to the same process-wide ServerLogSink every other server
+// operation writes through (mirrors gitDelivery/execution.ts's `seams.activityLog ??
+// processServerLogSink()` seam) so production observability holds with zero composition-root
+// wiring, while a test can still inject a capturing sink to assert on the emitted line.
+//
+// Before this fix the returned rewritten-entry count was silently discarded by the rename route
+// (files.ts) — never logged anywhere — and the failure path mislabeled itself under the real
+// checkpoint-capture origin "user-save", making a rename-triggered failure indistinguishable from
+// an ordinary user-save capture failure in both the diagnostic and (via its activity-log bridge)
+// the activity log.
 export function reKeyEditorLocalHistorySafely(input: {
-  readonly deps: Pick<UiHandlerDeps, "store" | "editorLocalHistoryStore" | "diagnostics">;
+  readonly deps: Pick<UiHandlerDeps, "store" | "editorLocalHistoryStore" | "diagnostics"> & {
+    readonly activityLog?: ServerLogSink | undefined;
+  };
   readonly realRoot: string;
   readonly previousRelativePath: string;
   readonly nextRelativePath: string;
   readonly correlationId?: string | undefined;
 }): number {
   if (input.deps.editorLocalHistoryStore === undefined) return 0;
+  const activityLog = input.deps.activityLog ?? processServerLogSink();
+  const correlationId = input.correlationId ?? UNKNOWN_CORRELATION_ID;
   try {
     const identity = resolveEditorLocalHistoryRoot(input.deps, input.realRoot);
-    return input.deps.editorLocalHistoryStore.reKey(
+    const rewrittenCount = input.deps.editorLocalHistoryStore.reKey(
       identity,
       input.previousRelativePath,
       input.nextRelativePath,
     );
+    activityLog.write({
+      category: "diagnostic",
+      op: "editor.local-history.rekey.completed",
+      correlationId,
+      extra: { outcome: "succeeded", rewrittenCount },
+    });
+    return rewrittenCount;
   } catch (error) {
     emitEditorLocalHistoryCaptureFailure(
       input.deps,
-      "user-save",
+      REKEY_DIAGNOSTIC_ORIGIN,
       error,
       Date.now(),
       input.correlationId,
     );
+    activityLog.write({
+      level: "error",
+      category: "diagnostic",
+      op: "editor.local-history.rekey.failed",
+      correlationId,
+      errorKind: errorKindOf(error),
+      extra: { outcome: "failed", rewrittenCount: 0 },
+    });
     return 0;
   }
 }

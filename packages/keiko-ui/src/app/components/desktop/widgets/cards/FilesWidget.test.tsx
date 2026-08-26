@@ -277,7 +277,14 @@ describe("FilesWidget", () => {
       path: "",
       truncated: false,
       entries: [
-        { ...treeEntryBase, name: "src", path: "src", kind: "directory" },
+        {
+          ...treeEntryBase,
+          name: "src",
+          path: "src",
+          kind: "directory",
+          sizeBytes: undefined,
+          modifiedAt: undefined,
+        },
         {
           ...treeEntryBase,
           name: "package.json",
@@ -468,7 +475,16 @@ describe("FilesWidget", () => {
         root: "/repo",
         path: "",
         truncated: false,
-        entries: [{ ...treeEntryBase, name: "src", path: "src", kind: "directory" }],
+        entries: [
+          {
+            ...treeEntryBase,
+            name: "src",
+            path: "src",
+            kind: "directory",
+            sizeBytes: undefined,
+            modifiedAt: undefined,
+          },
+        ],
       })
       .mockResolvedValueOnce({
         root: "/repo",
@@ -611,6 +627,8 @@ describe("FilesWidget", () => {
                   name: "SpringAI Showcase",
                   path: "SpringAI Showcase",
                   kind: "directory",
+                  sizeBytes: undefined,
+                  modifiedAt: undefined,
                 },
               ]
             : [
@@ -816,8 +834,22 @@ describe("FilesWidget", () => {
       path: "",
       truncated: false,
       entries: [
-        { ...treeEntryBase, name: "src", path: "src", kind: "directory" },
-        { ...treeEntryBase, name: "removed", path: "removed", kind: "directory" },
+        {
+          ...treeEntryBase,
+          name: "src",
+          path: "src",
+          kind: "directory",
+          sizeBytes: undefined,
+          modifiedAt: undefined,
+        },
+        {
+          ...treeEntryBase,
+          name: "removed",
+          path: "removed",
+          kind: "directory",
+          sizeBytes: undefined,
+          modifiedAt: undefined,
+        },
         { ...treeEntryBase, name: "modified.ts", path: "modified.ts", kind: "file" },
         { ...treeEntryBase, name: "added.ts", path: "added.ts", kind: "file" },
         { ...treeEntryBase, name: "untracked.ts", path: "untracked.ts", kind: "file" },
@@ -1117,7 +1149,14 @@ describe("FilesWidget", () => {
       path: "",
       truncated: false,
       entries: [
-        { ...treeEntryBase, name: "src", path: "src", kind: "directory" },
+        {
+          ...treeEntryBase,
+          name: "src",
+          path: "src",
+          kind: "directory",
+          sizeBytes: undefined,
+          modifiedAt: undefined,
+        },
         { ...treeEntryBase, name: "package.json", path: "package.json", kind: "file" },
       ],
     });
@@ -1160,7 +1199,14 @@ describe("FilesWidget", () => {
         path: "",
         truncated: false,
         entries: [
-          { ...treeEntryBase, name: "src", path: "src", kind: "directory" },
+          {
+            ...treeEntryBase,
+            name: "src",
+            path: "src",
+            kind: "directory",
+            sizeBytes: undefined,
+            modifiedAt: undefined,
+          },
           { ...treeEntryBase, name: "package.json", path: "package.json", kind: "file" },
         ],
       })
@@ -1216,7 +1262,14 @@ describe("FilesWidget", () => {
       path: "",
       truncated: false,
       entries: [
-        { ...treeEntryBase, name: "src", path: "src", kind: "directory" },
+        {
+          ...treeEntryBase,
+          name: "src",
+          path: "src",
+          kind: "directory",
+          sizeBytes: undefined,
+          modifiedAt: undefined,
+        },
         { ...treeEntryBase, name: "package.json", path: "package.json", kind: "file" },
       ],
     });
@@ -1373,7 +1426,14 @@ describe("FilesWidget", () => {
       path: "",
       truncated: false,
       entries: [
-        { ...treeEntryBase, name: "src", path: "src", kind: "directory" },
+        {
+          ...treeEntryBase,
+          name: "src",
+          path: "src",
+          kind: "directory",
+          sizeBytes: undefined,
+          modifiedAt: undefined,
+        },
         {
           ...treeEntryBase,
           name: "broken",
@@ -1421,7 +1481,14 @@ describe("FilesWidget", () => {
       path: "",
       truncated: false,
       entries: [
-        { ...treeEntryBase, name: "src", path: "src", kind: "directory" },
+        {
+          ...treeEntryBase,
+          name: "src",
+          path: "src",
+          kind: "directory",
+          sizeBytes: undefined,
+          modifiedAt: undefined,
+        },
         {
           ...treeEntryBase,
           name: "package-lock.json",
@@ -1884,7 +1951,14 @@ describe("FilesWidget file operations", () => {
       path: "",
       truncated: false,
       entries: [
-        { ...treeEntryBase, name: "src", path: "src", kind: "directory" },
+        {
+          ...treeEntryBase,
+          name: "src",
+          path: "src",
+          kind: "directory",
+          sizeBytes: undefined,
+          modifiedAt: undefined,
+        },
         {
           ...treeEntryBase,
           name: "app.ts",
@@ -2491,7 +2565,14 @@ describe("FilesWidget context-menu and git-decoration helpers", () => {
 
   it("contextMenuParentPath targets a directory row's own path", () => {
     const { contextMenuParentPath } = filesWidgetTestInternals;
-    const dir = { ...treeEntryBase, name: "src", path: "src", kind: "directory" as const };
+    const dir = {
+      ...treeEntryBase,
+      name: "src",
+      path: "src",
+      kind: "directory" as const,
+      sizeBytes: undefined,
+      modifiedAt: undefined,
+    };
     expect(contextMenuParentPath(dir, "some/other/dir")).toBe("src");
   });
 

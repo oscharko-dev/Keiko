@@ -296,9 +296,12 @@ function ActivitySection({
           // the lifecycle-derived fallback, not a live SSE report.
           <div className="rb-row">
             <span className="rb-row-k">{trackingLabel}</span>
-            <span className="rb-row-v" style={{ color: "var(--warn)" }} role="status">
+            {/* Sonar S6819: use <output> so screen readers get live-region semantics without an
+                ARIA role override. output is a valid child of a block-level row and defaults to
+                `role="status"` under the hood. */}
+            <output className="rb-row-v" style={{ color: "var(--warn)" }}>
               {trackingEvictedLong}
-            </span>
+            </output>
           </div>
         )}
         {visibleTransitions.length > 0 && (

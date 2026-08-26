@@ -107,7 +107,6 @@ function markerTopPercent(marker: DiagnosticOverviewMarker, lineCount: number): 
 function EditorDiagnosticMarkerButton(props: {
   readonly marker: DiagnosticOverviewMarker;
   readonly lineCount: number;
-  readonly index: number;
   readonly onActivate: (marker: DiagnosticOverviewMarker) => void;
 }): ReactElement {
   const marker = props.marker;
@@ -174,7 +173,6 @@ function EditorDiagnosticOverview(props: {
           }`}
           marker={marker}
           lineCount={props.lineCount}
-          index={index}
           onActivate={props.onActivate}
         />
       ))}

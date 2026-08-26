@@ -36,6 +36,9 @@ import {
   PROVIDER_ENDPOINT_STYLES,
   REALTIME_AUTH_MODES,
   VOICE_PROVIDER_LOCALITIES,
+  // KEIKO-0572: shared circuitBreaker defaults; hoisted into this import block instead of the
+  // separate `import { DEFAULT_CIRCUIT_BREAKER_CONFIG } from ...` line Sonar S3863 flagged.
+  DEFAULT_CIRCUIT_BREAKER_CONFIG,
 } from "@oscharko-dev/keiko-model-gateway";
 import {
   boundedUnsupportedReason,
@@ -56,10 +59,6 @@ import {
   gatewayFetch,
   readJsonCapped,
 } from "@oscharko-dev/keiko-model-gateway/internal/http";
-// KEIKO-0572: import the shared circuitBreaker defaults so gateway-setup.ts and
-// grounded-retrieval-eval.ts no longer restate `{ failureThreshold: 5, cooldownMs: 30_000,
-// halfOpenProbes: 2 }` at three call sites.
-import { DEFAULT_CIRCUIT_BREAKER_CONFIG } from "@oscharko-dev/keiko-model-gateway";
 import type {
   EnvSource,
   GatewayConfig,

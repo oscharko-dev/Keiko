@@ -173,13 +173,7 @@ function SnippetEditor({
           {t("settings.snippets.save")}
         </button>
       </div>
-      {preview === undefined ? null : preview.ok ? (
-        <pre className={styles.meta}>{preview.preview}</pre>
-      ) : (
-        <div className={styles.alert} role="alert">
-          {snippetPreviewErrorMessage(preview.reasonCode, t)}
-        </div>
-      )}
+      {renderPreviewResult(preview, styles, t)}
     </article>
   );
 }
@@ -264,6 +258,22 @@ function previewDraft(draft: SnippetDraft): SnippetPreviewResult {
 // EditorM7ReasonCode union. Every code this path can produce needs a translated message — never a
 // silent fallback to the raw machine token — so unrecognized codes still resolve to a translated,
 // generic message rather than leaking the reasonCode string itself.
+// Sonar S3358: extract nested ternary — the outer `preview === undefined` was combined with an
+// inner `preview.ok` branch. This flat helper renders each of the three states explicitly.
+function renderPreviewResult(
+  preview: SnippetPreviewResult | undefined,
+  styles: Record<string, string>,
+  t: I18nTranslate,
+): ReactNode {
+  if (preview === undefined) return null;
+  if (preview.ok) return <pre className={styles.meta}>{preview.preview}</pre>;
+  return (
+    <div className={styles.alert} role="alert">
+      {snippetPreviewErrorMessage(preview.reasonCode, t)}
+    </div>
+  );
+}
+
 function snippetPreviewErrorMessage(reasonCode: EditorM7ReasonCode, t: I18nTranslate): string {
   if (reasonCode === "UNSAFE_SNIPPET") return t("settings.snippets.previewUnsafe");
   return t("settings.snippets.previewFailed");

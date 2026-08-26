@@ -23,14 +23,24 @@ import {
   type AtlassianConnectorPendingApproval,
 } from "@oscharko-dev/keiko-contracts";
 import { errorBody, type RouteResult } from "../routes.js";
+import type { UiHandlerDeps } from "../deps.js";
 import {
-  atlassianActionApprovalRegistry,
   contentPreviewFor,
+  resolveAtlassianActionApprovalRegistry,
   ATLASSIAN_ACTION_APPROVAL_TTL_MS,
   type PendingAtlassianActionPayload,
 } from "./actionApprovals.js";
 import type { AtlassianActionAuthorityContext } from "./actionPolicy.js";
-import { atlassianSyncJobRegistry } from "./syncService.js";
+import { resolveAtlassianSyncJobRegistry } from "./syncService.js";
+
+// KEIKO-0565 (PR #3289 review): every helper below takes the caller's own DI-scoped registries
+// instead of reaching for the module-level singletons in actionApprovals.ts/syncService.ts — see
+// resolveAtlassianActionApprovalRegistry's doc comment for why. Route handlers pass their own
+// `UiHandlerDeps` directly; it structurally satisfies this narrower Pick.
+export type AtlassianActivityRegistryDeps = Pick<
+  UiHandlerDeps,
+  "atlassianActionApprovalRegistry" | "atlassianSyncJobRegistry"
+>;
 
 export interface AtlassianActionActivityInput {
   readonly connectorId: string;
@@ -51,8 +61,11 @@ export interface AtlassianActionActivityInput {
 
 // One record per attempt; provider and action class are pinned by the D4 tables so a record can
 // never mislabel a write as a read.
-export function recordAtlassianActionActivity(input: AtlassianActionActivityInput): void {
-  atlassianSyncJobRegistry.recordActivity({
+export function recordAtlassianActionActivity(
+  deps: AtlassianActivityRegistryDeps,
+  input: AtlassianActionActivityInput,
+): void {
+  resolveAtlassianSyncJobRegistry(deps).recordActivity({
     schemaVersion: ATLASSIAN_CONNECTOR_SCHEMA_VERSION,
     activityId: randomUUID(),
     occurredAt: input.occurredAt ?? Date.now(),
@@ -122,15 +135,18 @@ export function buildAtlassianPendingApproval(
 // Records the one denied-attempt activity record and answers the disposition as 200-level data
 // (mirroring the editor lane's not-run responses: a policy denial is an expected, renderable
 // outcome, not a transport error).
-export function deniedAtlassianActionResult(input: {
-  readonly connectorId: string;
-  readonly actionType: AtlassianConnectorActionType;
-  readonly reasonCode: AtlassianConnectorActivityReasonCode;
-  readonly targetRef?: string | undefined;
-  readonly correlationId: string;
-  readonly jqlDigest?: string | undefined;
-}): RouteResult {
-  recordAtlassianActionActivity({
+export function deniedAtlassianActionResult(
+  deps: AtlassianActivityRegistryDeps,
+  input: {
+    readonly connectorId: string;
+    readonly actionType: AtlassianConnectorActionType;
+    readonly reasonCode: AtlassianConnectorActivityReasonCode;
+    readonly targetRef?: string | undefined;
+    readonly correlationId: string;
+    readonly jqlDigest?: string | undefined;
+  },
+): RouteResult {
+  recordAtlassianActionActivity(deps, {
     connectorId: input.connectorId,
     actionType: input.actionType,
     disposition: "denied",
@@ -170,8 +186,11 @@ export interface CreatePendingApprovalResultInput {
 // response so the "one record per attempt" invariant survives registry-capacity denials.
 // The closed `approvals-registry-exhausted` reason distinguishes this from policy/authority
 // denials in the D6 audit vocabulary.
-function recordApprovalsExhausted(input: CreatePendingApprovalResultInput): RouteResult {
-  recordAtlassianActionActivity({
+function recordApprovalsExhausted(
+  deps: AtlassianActivityRegistryDeps,
+  input: CreatePendingApprovalResultInput,
+): RouteResult {
+  recordAtlassianActionActivity(deps, {
     connectorId: input.connectorId,
     actionType: input.actionType,
     disposition: "denied",
@@ -192,6 +211,7 @@ function recordApprovalsExhausted(input: CreatePendingApprovalResultInput): Rout
 }
 
 export function createAtlassianPendingApprovalResult(
+  deps: AtlassianActivityRegistryDeps,
   input: CreatePendingApprovalResultInput,
 ): RouteResult {
   const preview =
@@ -208,16 +228,16 @@ export function createAtlassianPendingApprovalResult(
     ...(preview.status === "available" ? { contentPreview: preview.text } : {}),
     ...(preview.status === "unavailable" ? { contentPreviewUnavailable: true as const } : {}),
   });
-  const created = atlassianActionApprovalRegistry.create({
+  const created = resolveAtlassianActionApprovalRegistry(deps).create({
     approval,
     authority: input.authority,
     authRef: input.authRef,
     payload: input.payload,
   });
   if (!created.ok) {
-    return recordApprovalsExhausted(input);
+    return recordApprovalsExhausted(deps, input);
   }
-  recordAtlassianActionActivity({
+  recordAtlassianActionActivity(deps, {
     connectorId: input.connectorId,
     actionType: input.actionType,
     disposition: "review-required",

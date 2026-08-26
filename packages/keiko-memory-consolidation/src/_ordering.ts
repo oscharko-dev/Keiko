@@ -3,15 +3,15 @@
 // caller diffing two runs sees structural changes, not input-order noise.
 
 import type { MemoryEdge, MemoryRecord } from "@oscharko-dev/keiko-contracts/memory";
-import { scopeCoordinateKey } from "@oscharko-dev/keiko-contracts/memory";
 
 import type { ReviewItem, StaleFlag } from "./types.js";
 
 // Re-export the shared partition-key projection so this package's callers (dedupe.ts and
 // conflicts.ts) keep their existing local import path unchanged. The canonical definition
 // lives in @oscharko-dev/keiko-contracts/memory (#2906 KEIKO-0546); consolidation must not
-// re-implement it.
-export { scopeCoordinateKey };
+// re-implement it. `export ... from` (Sonar S3512) is a direct pass-through and avoids the
+// intermediate local binding of the value import above.
+export { scopeCoordinateKey } from "@oscharko-dev/keiko-contracts/memory";
 
 // Three-way comparator returning -1 / 0 / +1. Keeps sort callbacks lint-clean and
 // total-order-correct (a < b < c implies cmp(a, c) === -1).

@@ -4,15 +4,13 @@ import {
   existsSync,
   mkdirSync,
   mkdtempSync,
-  readFileSync,
   realpathSync,
   rmSync,
   symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, isAbsolute, join, relative, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
+import { dirname, isAbsolute, join, relative } from "node:path";
 import { PassThrough } from "node:stream";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ServerDiagnosticRecord } from "../diagnostics-log.js";
@@ -2419,20 +2417,67 @@ describe("coding runtime manager", () => {
     expect(JSON.stringify(events)).not.toContain(fixture.workspaceRoot);
   });
 
-  it("wires isDenied into decideSupervisedFileEdit's targetSensitive flag at the supervised call site (KEIKO-0557)", () => {
-    // Machine-checked wiring pin: the type-level targetSensitive branch in
-    // supervisedCodingPolicy.ts is only load-bearing if the production call site populates it
-    // via the shared classifier. Regressing the wiring to `targetSensitive: undefined` turns
-    // the sensitive-path defense into a no-op with no test failure elsewhere in this file
-    // (the sidecar boundary rejects some but not all deny-listed strings, so this line owns
-    // the invariant). Grep the source directly so a future rewrite either preserves the
-    // isDenied call in the request object literal or trips this pin.
-    const managerSource = readFileSync(
-      resolve(dirname(fileURLToPath(import.meta.url)), "codingRuntimeManager.ts"),
-      "utf8",
+  // Behavioral replacement for the former KEIKO-0557 source-text-grep pin (#2906): a benign-
+  // looking in-workspace symlink whose REAL target is deny-listed, but which stays inside the
+  // sidecar's own approved scope after symlink resolution -- so the pre-existing containment
+  // check (resolveContainedEditTarget, which already realpath-resolves the target to test scope
+  // membership) would ADMIT it on scope grounds alone. Only the classification this finding adds
+  // -- checking isDenied against the REAL resolved relative path, not just the lexical
+  // targetPath -- catches it. (A symlink whose real target escapes the scope entirely, e.g.
+  // pointing above the workspace root, is already denied by that pre-existing containment check
+  // for an unrelated reason and would not distinguish the fix from its absence.)
+  it("classifies a symlink's real resolved target for sensitivity, not just its lexical name (#2906)", async () => {
+    const fixture = createManagedFixture();
+    mkdirSync(join(fixture.workspaceRoot, "src"), { recursive: true });
+    // The sensitive file AND the symlink both live inside the approved "src" scope, so
+    // resolveContainedEditTarget's own scope-membership check passes either way -- isolating the
+    // sensitivity classification as the only thing that can still deny this.
+    writeFileSync(join(fixture.workspaceRoot, "src", ".env"), "SECRET=1\n");
+    // The symlink's own lexical name ("config-alias") matches no deny pattern; only its REAL
+    // resolved target, "src/.env", does.
+    symlinkSync(
+      join(fixture.workspaceRoot, "src", ".env"),
+      join(fixture.workspaceRoot, "src", "config-alias"),
     );
-    expect(managerSource).toContain('import { isDenied } from "@oscharko-dev/keiko-workspace"');
-    expect(managerSource).toMatch(/targetSensitive: isDenied\(targetPath\)/u);
+    const harness = createSpawnHarness();
+    const events: CodingWorkbenchRuntimeEvent[] = [];
+    const manager = createTestCodingRuntimeManager({
+      supervisor: testSupervisor(harness.spawn),
+      processEnv: {},
+      onRuntimeEvent: (event) => {
+        events.push(event);
+      },
+      nowIso: () => "2026-07-07T13:00:00.000Z",
+    });
+
+    await manager.start(
+      launchRequest(fixture.workspaceRoot, fixture.managedRoot, fixture.executablePath),
+    );
+    harness.children[0]?.stdout.write(
+      permissionLine({
+        requestId: "perm-2906-file-denied",
+        kind: "workspace-write",
+        actionClass: "workspace-write",
+        reasonCode: "scoped-file-edit",
+        actionKind: "file-edit",
+        scopeLabel: "workspace-scope",
+        risk: "medium",
+        policyReason: "scoped-file-edit",
+        targetPath: "src/config-alias",
+        allowedRelativePaths: ["src"],
+        fileCount: 1,
+        addedLines: 2,
+        deletedLines: 0,
+      }),
+    );
+    await settle();
+
+    expect(events.find((event) => event.failureCode === "out-of-scope-file-edit")).toMatchObject({
+      kind: "failure-redacted",
+      failureSummary: "out-of-scope-file-edit",
+      retryable: false,
+    });
+    expect(events.some((event) => event.kind === "diff-summarized")).toBe(false);
   });
 
   it("enforces supervised verification command allowlist before emitting summaries", async () => {

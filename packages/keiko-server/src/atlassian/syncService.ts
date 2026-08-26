@@ -186,6 +186,16 @@ export class AtlassianSyncJobRegistry {
 
 export const atlassianSyncJobRegistry = new AtlassianSyncJobRegistry();
 
+// KEIKO-0565 remediation (PR #3289 review): see resolveAtlassianActionApprovalRegistry's doc
+// comment in actionApprovals.ts — the same rule applies here. Every consumer resolves through this
+// function; reading the bare `atlassianSyncJobRegistry` import directly is the bug that let two
+// independently composed `UiHandlerDeps` graphs share one job/activity registry.
+export function resolveAtlassianSyncJobRegistry(
+  deps: Pick<UiHandlerDeps, "atlassianSyncJobRegistry">,
+): AtlassianSyncJobRegistry {
+  return deps.atlassianSyncJobRegistry ?? atlassianSyncJobRegistry;
+}
+
 // ─── Job state projection ──────────────────────────────────────────────────────
 type JobCommonFields = Pick<
   AtlassianSyncJobState,
@@ -631,7 +641,9 @@ function recordSyncActivity(
 ): void {
   const outcome = ACTIVITY_OUTCOME_BY_SUMMARY[summary.outcome];
   const recordedReason = syncActivityReasonCode(context, outcome, reasonCode);
-  atlassianSyncJobRegistry.recordActivity({
+  // KEIKO-0565: resolve context.deps's OWN registry, not the process-wide singleton (PR #3289
+  // review) — context.deps is the same UiHandlerDeps the run started under (see startAtlassianSyncJob).
+  resolveAtlassianSyncJobRegistry(context.deps).recordActivity({
     schemaVersion: ATLASSIAN_CONNECTOR_SCHEMA_VERSION,
     activityId: randomUUID(),
     occurredAt: completedAt,
@@ -796,7 +808,10 @@ export async function startAtlassianSyncJob(
   } finally {
     opened.close();
   }
-  if (atlassianSyncJobRegistry.hasActiveRunForCapsule(String(target.capsuleId))) {
+  // KEIKO-0565: resolve THIS call's own deps-scoped registry once and reuse it for both the
+  // capacity check and the registration below, so they observe the same instance (PR #3289 review).
+  const syncJobRegistry = resolveAtlassianSyncJobRegistry(deps);
+  if (syncJobRegistry.hasActiveRunForCapsule(String(target.capsuleId))) {
     throw new AtlassianSyncRequestError(
       409,
       "SYNC_ALREADY_RUNNING",
@@ -804,7 +819,7 @@ export async function startAtlassianSyncJob(
     );
   }
   const job = buildPendingJob(input, target, now());
-  atlassianSyncJobRegistry.register(job);
+  syncJobRegistry.register(job);
   const context: SyncRunContext = {
     deps,
     job,

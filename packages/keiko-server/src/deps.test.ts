@@ -17,11 +17,14 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { WorkspaceFs, WorkspaceStat } from "@oscharko-dev/keiko-workspace";
 import {
+  ATLASSIAN_CONNECTOR_SCHEMA_VERSION,
   DEFAULT_CONTEXT_PROFILE,
   standardPodModelUsePolicy,
   type KnowledgeCapsuleId,
   type KnowledgeSourceId,
 } from "@oscharko-dev/keiko-contracts";
+import { resolveAtlassianActionApprovalRegistry } from "./atlassian/actionApprovals.js";
+import { resolveAtlassianSyncJobRegistry } from "./atlassian/syncService.js";
 import {
   addSourceToCapsule,
   createCapsule,
@@ -1976,6 +1979,95 @@ describe("buildUiHandlerDeps — workspace-trust revocation stops managed langua
       expect(lsp.restricted).toEqual([canonicalRoot]);
     } finally {
       await deps.dispose?.();
+    }
+  }, 15000);
+});
+
+describe("buildUiHandlerDeps — Atlassian registry isolation (KEIKO-0565, PR #3289 review)", () => {
+  it("keeps two independently composed deps graphs from sharing approvals, sync jobs, or activity", async () => {
+    const depsA = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir: tmp("atlassian-isolation-a-"),
+      env: {},
+      store: createInMemoryUiStore(),
+    });
+    const depsB = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir: tmp("atlassian-isolation-b-"),
+      env: {},
+      store: createInMemoryUiStore(),
+    });
+    try {
+      // The composition root already builds two distinct instances per graph...
+      expect(depsA.atlassianActionApprovalRegistry).toBeDefined();
+      expect(depsA.atlassianActionApprovalRegistry).not.toBe(depsB.atlassianActionApprovalRegistry);
+      expect(depsA.atlassianSyncJobRegistry).toBeDefined();
+      expect(depsA.atlassianSyncJobRegistry).not.toBe(depsB.atlassianSyncJobRegistry);
+
+      // ...and THE regression assertion: the resolver every real consumer (syncRoutes.ts,
+      // writeActionRoutes.ts, actionActivity.ts, syncService.ts) actually calls at runtime must
+      // pick each graph's OWN instance, never the process-wide module singleton — that mismatch
+      // (consumers bypassing these already-isolated fields) was the actual KEIKO-0565 gap.
+      expect(resolveAtlassianActionApprovalRegistry(depsA)).toBe(
+        depsA.atlassianActionApprovalRegistry,
+      );
+      expect(resolveAtlassianSyncJobRegistry(depsA)).toBe(depsA.atlassianSyncJobRegistry);
+
+      // Create an approval through depsA's resolved registry only; depsB's must not see it.
+      const created = resolveAtlassianActionApprovalRegistry(depsA).create({
+        approval: {
+          schemaVersion: "1",
+          approvalId: "apr_isolation-test",
+          connectorId: "jira:isolation-test",
+          provider: "jira",
+          actionType: "add-issue-comment",
+          actionClass: "connector-write",
+          requiredScope: "issue-tracker.write",
+          risk: "low",
+          reviewReason: "deterministic-risk-approval-required",
+          correlationId: "req_isolation-test",
+          requestedAt: 1,
+          expiresAt: Number.MAX_SAFE_INTEGER,
+        },
+        authority: {
+          runId: "run-isolation-test",
+          envelopeDigest: "digest-isolation-test",
+          workspaceRoot: "/repo",
+        },
+        authRef: "atlassian:jira:isolation-test",
+        payload: {
+          kind: "write-action",
+          action: { type: "add-issue-comment", issueKey: "PROJ-1", commentText: "isolation" },
+        },
+      });
+      expect(created.ok).toBe(true);
+      expect(resolveAtlassianActionApprovalRegistry(depsA).listPending()).toHaveLength(1);
+      expect(resolveAtlassianActionApprovalRegistry(depsB).listPending()).toHaveLength(0);
+
+      // Record a sync-activity entry through depsA's resolved registry only; depsB's must not
+      // see it either — the same registry backs both jobs and the activity ring.
+      resolveAtlassianSyncJobRegistry(depsA).recordActivity({
+        schemaVersion: ATLASSIAN_CONNECTOR_SCHEMA_VERSION,
+        activityId: "act_isolation-test",
+        occurredAt: Date.now(),
+        connectorId: "jira:isolation-test",
+        provider: "jira",
+        actionType: "add-issue-comment",
+        actionClass: "connector-write",
+        disposition: "allowed",
+        outcome: "succeeded",
+        correlationId: "req_isolation-test",
+        durationMs: 0,
+      });
+      expect(
+        resolveAtlassianSyncJobRegistry(depsA).listActivity("jira:isolation-test"),
+      ).toHaveLength(1);
+      expect(
+        resolveAtlassianSyncJobRegistry(depsB).listActivity("jira:isolation-test"),
+      ).toHaveLength(0);
+    } finally {
+      await depsA.dispose?.();
+      await depsB.dispose?.();
     }
   }, 15000);
 });

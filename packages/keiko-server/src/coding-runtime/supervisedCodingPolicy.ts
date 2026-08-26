@@ -133,14 +133,61 @@ export function decideSupervisedMutation(
   return mutationApprovalRequiredDecision(request);
 }
 
+interface ResolvedEditTarget {
+  readonly root: string;
+  readonly target: string;
+}
+
+// Syntax gate, workspace-root realpath, symlink-aware resolution (containedPath/
+// containedRealPathInfo), and root-containment -- the resolution chain shared by
+// resolveContainedEditTarget's scope check below and resolveEditTargetRealPath's sensitivity
+// classification. containedRealPathInfo rejects a target whose symlink chain escapes the
+// workspace root entirely; it does NOT (and must not) reject a target that stays contained but
+// resolves somewhere other than its lexical name suggests -- that classification is the caller's
+// job (see resolveEditTargetRealPath).
+function resolveEditTargetAbsolute(
+  workspaceRoot: string,
+  targetPath: string,
+): ResolvedEditTarget | undefined {
+  if (!candidatePathSyntaxAllowed(targetPath)) return undefined;
+  const root = realPath(workspaceRoot);
+  if (root === undefined) return undefined;
+  const target = resolveCandidatePath(root, targetPath);
+  if (target === undefined || !pathInside(root, target)) return undefined;
+  return { root, target };
+}
+
+export interface EditTargetRealPath {
+  readonly contained: boolean;
+  // The workspace-root-relative path the target resolves to after following symlinks, present
+  // whenever `contained` is true.
+  readonly realRelative: string | undefined;
+}
+
+// #2906: exposes the root-containment half of the resolution chain above WITHOUT the
+// allowedRelativePaths scope narrowing that only decideSupervisedFileEdit's own containment check
+// needs. A caller that must classify a target's SENSITIVITY -- a check KEIKO-0557 deliberately
+// keeps independent of the sidecar's own declared scope -- runs it against the REAL,
+// symlink-resolved target this returns instead of the lexical targetPath string alone. A
+// benign-looking in-workspace symlink (e.g. `src/config-alias` -> `../.env`, which stays
+// root-contained since `../` from `src/` lands back on the workspace root) would otherwise pass
+// every check: it is syntactically fine, it resolves inside the root, and its own lexical name
+// matches no deny pattern -- only the REAL target name (`.env`) does. See
+// codingRuntimeManager.ts's supervisedFileEditEvent.
+export function resolveEditTargetRealPath(
+  workspaceRoot: string,
+  targetPath: string,
+): EditTargetRealPath {
+  const resolved = resolveEditTargetAbsolute(workspaceRoot, targetPath);
+  if (resolved === undefined) return { contained: false, realRelative: undefined };
+  return { contained: true, realRelative: relative(resolved.root, resolved.target) };
+}
+
 function resolveContainedEditTarget(request: SupervisedCodingFileEditRequest): boolean {
-  if (!candidatePathSyntaxAllowed(request.targetPath)) return false;
-  const root = realPath(request.workspaceRoot);
-  if (root === undefined) return false;
-  const target = resolveCandidatePath(root, request.targetPath);
-  if (target === undefined || !pathInside(root, target)) return false;
-  const scopes = resolveAllowedScopes(root, request.allowedRelativePaths);
-  return scopes?.some((scope) => pathInside(scope, target)) ?? false;
+  const resolved = resolveEditTargetAbsolute(request.workspaceRoot, request.targetPath);
+  if (resolved === undefined) return false;
+  const scopes = resolveAllowedScopes(resolved.root, request.allowedRelativePaths);
+  return scopes?.some((scope) => pathInside(scope, resolved.target)) ?? false;
 }
 
 function candidatePathSyntaxAllowed(targetPath: string): boolean {
