@@ -3,7 +3,12 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ConfigInvalidError } from "@oscharko-dev/keiko-security/errors/gateway";
+import { DEFAULT_SAFE_CIRCUIT_BREAKER_CONFIG } from "@oscharko-dev/keiko-contracts/bff-wire";
 import {
+  DEFAULT_CIRCUIT_BREAKER_CONFIG,
+  DEFAULT_COOLDOWN_MS,
+  DEFAULT_FAILURE_THRESHOLD,
+  DEFAULT_HALF_OPEN_PROBES,
   loadConfigFromFile,
   loadEgressConfigFromFile,
   migrateLegacyChatContextWindows,
@@ -103,6 +108,28 @@ describe("parseGatewayConfig", () => {
     expect(() =>
       parseGatewayConfig(rawWithProvider((p) => ({ ...p, realtimeAuthMode: "magic-token" }))),
     ).toThrow(/realtimeAuthMode must be one of/u);
+  });
+
+  // #2906 KEIKO-0567 — Gateway's constructor keys providers by modelId in a Map; a duplicate
+  // silently lets the later entry win. Reject it at the config-parse boundary so a
+  // chat/embedding modelId that collides with a later voice-role deployment name never
+  // silently redirects chat traffic to the voice provider.
+  it("rejects a config with two provider entries sharing the same modelId", () => {
+    const raw = {
+      providers: [
+        { ...validProvider(), modelId: "shared-model" },
+        { ...validProvider(), modelId: "shared-model" },
+      ],
+      circuitBreaker: { failureThreshold: 5, cooldownMs: 30000, halfOpenProbes: 2 },
+    };
+    let caught: unknown = undefined;
+    try {
+      parseGatewayConfig(raw);
+    } catch (error) {
+      caught = error;
+    }
+    expect(caught).toBeInstanceOf(ConfigInvalidError);
+    expect((caught as Error).message).toContain("shared-model");
   });
 
   it("parses and validates the provider output-token parameter", () => {
@@ -2762,5 +2789,22 @@ describe("secret-reference resolution (#1320)", () => {
     const config = parseGatewayConfig(raw, {}, options);
     expect(called).toBe(false);
     expect(config.providers[0]?.apiKey).toBe("file-key");
+  });
+});
+
+// #2906 round 3 (KEIKO-0572 follow-up): keiko-ui's gatewayConfigParsing.ts cannot import this
+// package directly (ADR-0019), so its own REBUILT_CIRCUIT_BREAKER literal used to be a
+// hand-maintained copy of DEFAULT_CIRCUIT_BREAKER_CONFIG's VALUES, typed against the shared
+// SafeCircuitBreakerConfig shape but with no check that the numbers actually matched. Both sides
+// now import DEFAULT_SAFE_CIRCUIT_BREAKER_CONFIG from keiko-contracts/bff-wire -- this pins that
+// this package's own exported defaults still equal the contracts-owned value, so a future edit to
+// config.ts that reintroduces an independent literal for one of the three fields fails here rather
+// than silently drifting apart from the value keiko-ui also reads.
+describe("circuit breaker defaults stay pinned to the contracts-owned value", () => {
+  it("derives DEFAULT_CIRCUIT_BREAKER_CONFIG and its three exported numbers from DEFAULT_SAFE_CIRCUIT_BREAKER_CONFIG", () => {
+    expect(DEFAULT_CIRCUIT_BREAKER_CONFIG).toEqual(DEFAULT_SAFE_CIRCUIT_BREAKER_CONFIG);
+    expect(DEFAULT_FAILURE_THRESHOLD).toBe(DEFAULT_SAFE_CIRCUIT_BREAKER_CONFIG.failureThreshold);
+    expect(DEFAULT_COOLDOWN_MS).toBe(DEFAULT_SAFE_CIRCUIT_BREAKER_CONFIG.cooldownMs);
+    expect(DEFAULT_HALF_OPEN_PROBES).toBe(DEFAULT_SAFE_CIRCUIT_BREAKER_CONFIG.halfOpenProbes);
   });
 });

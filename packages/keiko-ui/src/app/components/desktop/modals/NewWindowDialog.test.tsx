@@ -42,7 +42,12 @@ vi.mock("@/lib/api", () => ({
       : `${response.warning.message} Support ID: ${response.warning.correlationId}`,
   updateProject: vi.fn(),
   fetchNativeFileDialogCapability: vi.fn(async () => ({ supported: true })),
-  openNativeFileDialog: vi.fn(async () => ({ cancelled: true, selections: [] })),
+  openNativeFileDialog: vi.fn(async () => ({
+    cancelled: true,
+    selections: [],
+    rejectedSelectionCount: 0,
+    partial: false,
+  })),
 }));
 
 beforeEach(() => {
@@ -51,7 +56,12 @@ beforeEach(() => {
   // clearAllMocks() keeps implementations, so persistent mockResolvedValue overrides from one
   // test would leak into the next — pin the defaults here instead.
   vi.mocked(fetchNativeFileDialogCapability).mockResolvedValue({ supported: true });
-  vi.mocked(openNativeFileDialog).mockResolvedValue({ cancelled: true, selections: [] });
+  vi.mocked(openNativeFileDialog).mockResolvedValue({
+    cancelled: true,
+    selections: [],
+    rejectedSelectionCount: 0,
+    partial: false,
+  });
 });
 
 afterEach(() => {
@@ -413,6 +423,8 @@ describe("NewWindowDialog agents: start-run contract", () => {
     vi.mocked(openNativeFileDialog).mockResolvedValueOnce({
       cancelled: false,
       selections: [{ path: "/repo/src/app.ts", kind: "file" }],
+      rejectedSelectionCount: 0,
+      partial: false,
     });
 
     const sourceBrowse = screen.getByRole("button", { name: "Browse source file" });
@@ -448,6 +460,8 @@ describe("NewWindowDialog agents: start-run contract", () => {
     vi.mocked(openNativeFileDialog).mockResolvedValueOnce({
       cancelled: false,
       selections: [{ path: "/elsewhere/main.ts", kind: "file" }],
+      rejectedSelectionCount: 0,
+      partial: false,
     });
 
     const sourceBrowse = screen.getByRole("button", { name: "Browse source file" });
@@ -507,6 +521,8 @@ describe("NewWindowDialog agents: start-run contract", () => {
     vi.mocked(openNativeFileDialog).mockResolvedValueOnce({
       cancelled: false,
       selections: [{ path: "/repo/nested", kind: "directory" }],
+      rejectedSelectionCount: 0,
+      partial: false,
     });
 
     render(
@@ -551,7 +567,12 @@ describe("NewWindowDialog agents: start-run contract", () => {
     });
 
     await waitFor(() => expect(sourceBrowse).not.toBeDisabled());
-    vi.mocked(openNativeFileDialog).mockResolvedValueOnce({ cancelled: true, selections: [] });
+    vi.mocked(openNativeFileDialog).mockResolvedValueOnce({
+      cancelled: true,
+      selections: [],
+      rejectedSelectionCount: 0,
+      partial: false,
+    });
     await user.click(sourceBrowse);
 
     await waitFor(() =>
@@ -765,6 +786,8 @@ describe("NewWindowDialog native directory browse", () => {
     vi.mocked(openNativeFileDialog).mockResolvedValueOnce({
       cancelled: false,
       selections: [{ path: "/repo-root", kind: "directory" }],
+      rejectedSelectionCount: 0,
+      partial: false,
     });
     const onConfirm = vi.fn();
 
@@ -797,7 +820,12 @@ describe("NewWindowDialog native directory browse", () => {
   it("treats native cancellation as a non-event", async () => {
     const user = userEvent.setup();
     vi.mocked(fetchProjects).mockResolvedValue({ projects: [project()] });
-    vi.mocked(openNativeFileDialog).mockResolvedValueOnce({ cancelled: true, selections: [] });
+    vi.mocked(openNativeFileDialog).mockResolvedValueOnce({
+      cancelled: true,
+      selections: [],
+      rejectedSelectionCount: 0,
+      partial: false,
+    });
 
     render(
       <NewWindowDialog type="files" types={WIN_TYPES} onConfirm={vi.fn()} onClose={vi.fn()} />,

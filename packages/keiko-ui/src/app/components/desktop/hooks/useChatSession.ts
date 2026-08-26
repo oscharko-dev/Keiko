@@ -325,6 +325,29 @@ const CANONICAL_VOICE_SCOPE_IDENTITY_ERROR =
   "The chat grounding scope could not be frozen for this spoken turn. Reload the chat and try again.";
 const CANONICAL_VOICE_HASHING_ERROR =
   "The spoken transcript could not be added to chat. Restart Voice and try again.";
+// KEIKO-0608: the typed-specific equivalent of CANONICAL_VOICE_INPUT_ERROR, used when
+// desktopChatInputSizeCheck rejects typed content in resolveSendMessageAdmission. Exported (like
+// GROUNDED_ATTACHMENT_NOTICE) so the test can pin the exact string without duplicating it.
+export const DESKTOP_CHAT_INPUT_TOO_LARGE_ERROR =
+  "The message is outside the supported size limit. Shorten it and try again.";
+
+// KEIKO-0608: the one place both admission paths — resolveSendMessageAdmission (typed, and the
+// dequeue-time re-check for a queued spoken turn) and enqueueCanonicalVoiceTurn (voice, at
+// enqueue-time) — decide whether content fits MAX_DESKTOP_CHAT_INPUT_CHARS/BYTES. Before this,
+// only the voice path checked; a typed paste over the limit was accepted client-side and
+// discovered only after the server round trip rejected it and the draft had already been
+// cleared (the same "content silently lost from visible input" class the voice-only guard
+// exists to prevent). Returns the computed UTF-8 byte length so a caller that needs it again
+// (enqueueCanonicalVoiceTurn, for outbox-capacity accounting) does not encode the content twice.
+function desktopChatInputSizeCheck(content: string): {
+  readonly withinLimits: boolean;
+  readonly byteLength: number;
+} {
+  const byteLength = new TextEncoder().encode(content).byteLength;
+  const withinLimits =
+    content.length <= MAX_DESKTOP_CHAT_INPUT_CHARS && byteLength <= MAX_DESKTOP_CHAT_INPUT_BYTES;
+  return { withinLimits, byteLength };
+}
 
 function raceUiAbort<T>(work: Promise<T>, signal: AbortSignal): Promise<T> {
   return new Promise<T>((resolve, reject) => {
@@ -387,6 +410,15 @@ export const CONTEXT_OVERSIZED_USER_MESSAGE =
   "The conversation context exceeded the model's window. Open a new chat or pick a larger-context model.";
 export const GROUNDED_ATTACHMENT_NOTICE =
   "Attachments are not supported for grounded chats. Remove the attachment or switch to a non-grounded chat.";
+// KEIKO-0793: the voice "admit-and-drop" case (executeSendAttempt's grounded branch, when a
+// spoken turn arrives with staged attachments) is NOT a rejection — ADR-0154 D1 requires a
+// settled final transcript to always be sent, never discarded. It is a materially different
+// outcome from GROUNDED_ATTACHMENT_NOTICE's true pre-admission full-reject (typed path,
+// resolveSendMessageAdmission), which sends nothing at all. Reusing the same string for both
+// described two different outcomes identically, so this is a distinct notice for the
+// admit-and-drop case only.
+export const GROUNDED_ATTACHMENT_DROPPED_NOTICE =
+  "The turn was sent, but its attachments are not supported for grounded chats and were not included.";
 export const EMPTY_MODEL_RESPONSE_USER_MESSAGE =
   "The model request completed, but the provider did not return any answer text. Retry once; if it happens again, check the selected model deployment in Settings.";
 
@@ -2202,6 +2234,14 @@ function resolveSendMessageAdmission(input: {
   ) {
     return { kind: "rejected" };
   }
+  // KEIKO-0608: applies to both the typed path and the dequeue-time re-check of an already-queued
+  // spoken turn (canonicalTarget defined) — the latter was already validated once by
+  // enqueueCanonicalVoiceTurn at enqueue-time, so this is a harmless redundant check there and
+  // the FIRST client-side check at all for a typed paste, which previously reached the server
+  // before being rejected.
+  if (!desktopChatInputSizeCheck(content).withinLimits) {
+    return { kind: "rejected", error: DESKTOP_CHAT_INPUT_TOO_LARGE_ERROR };
+  }
   if (canonicalTarget === undefined && hasGroundingScope(chat) && pendingAttachmentCount > 0) {
     return { kind: "rejected", error: GROUNDED_ATTACHMENT_NOTICE };
   }
@@ -3653,10 +3693,12 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
       if (grounded) {
         // A typed send in this state is rejected before admission (resolveSendMessageAdmission), so
         // only a spoken turn can reach here with files staged. A settled final transcript must never
-        // be discarded (ADR-0154 D1), so the turn proceeds on the grounded route and the SAME notice
-        // states that the staged attachments were not part of it. Unconditional on purpose: whichever
-        // caller arrives here with staged files, the user is told rather than silently ignored.
-        if (staged.length > 0) setError(GROUNDED_ATTACHMENT_NOTICE);
+        // be discarded (ADR-0154 D1), so the turn proceeds on the grounded route and a DISTINCT
+        // notice (GROUNDED_ATTACHMENT_DROPPED_NOTICE, not the typed path's full-reject
+        // GROUNDED_ATTACHMENT_NOTICE — see KEIKO-0793) states that the staged attachments were not
+        // part of it. Unconditional on purpose: whichever caller arrives here with staged files,
+        // the user is told rather than silently ignored.
+        if (staged.length > 0) setError(GROUNDED_ATTACHMENT_DROPPED_NOTICE);
         const terminal = await sendGrounded(
           chat,
           request.content,
@@ -4160,17 +4202,32 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
       // server still validates compatibility and fails closed, while the optimistic user row stays
       // visible instead of being silently discarded by a client-only no-model guard.
       const modelId = input.target.modelId;
-      const byteLength = new TextEncoder().encode(content).byteLength;
+      // KEIKO-0608: shared with resolveSendMessageAdmission's typed-path check.
+      const { withinLimits, byteLength } = desktopChatInputSizeCheck(content);
       if (
         content.length === 0 ||
-        content.length > MAX_DESKTOP_CHAT_INPUT_CHARS ||
-        byteLength > MAX_DESKTOP_CHAT_INPUT_BYTES ||
+        !withinLimits ||
         clientTurnId.length === 0 ||
         clientTurnId.length > MAX_DESKTOP_CHAT_CLIENT_TURN_ID_CHARS
       ) {
         setError(CANONICAL_VOICE_INPUT_ERROR);
         return undefined;
       }
+      // KEIKO-0692: voice-only precondition, with no equivalent in resolveSendMessageAdmission
+      // (the typed path). `chat` here is the frozen snapshot captured at enqueue time and reused
+      // verbatim when the FIFO queue eventually drains this item — its groundingScopeIdentity is
+      // what sendGrounded/sendUngrounded later forward as expectedGroundingScopeIdentity (see the
+      // `chat.groundingScopeIdentity === undefined ? {} : { expectedGroundingScopeIdentity: ... }`
+      // shape near askGrounded's call site), the optimistic-concurrency proof the server's
+      // serializer lane checks against the chat's CURRENT identity at actual send time. If that
+      // value were undefined or malformed, the request-builder's ternary would just omit the
+      // field — no error, no rejection — silently sending the delayed turn with no race proof at
+      // all. A typed send has no such gap to bridge: admission and the request it produces happen
+      // synchronously in the same call, using a freshly-read `chat`, so there is no delay window
+      // in which the scope could change out from under it and nothing to omit-and-silently-lose.
+      // A queued spoken turn can sit for an arbitrary time before the outbox drains it, during
+      // which another client could change the chat's grounding scope, so voice must fail closed
+      // here, at enqueue time, on a value the typed path never needs to pre-validate.
       if (!isGroundingScopeIdentity(chat.groundingScopeIdentity)) {
         setError(CANONICAL_VOICE_SCOPE_IDENTITY_ERROR);
         return undefined;

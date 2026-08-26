@@ -742,10 +742,14 @@ describe("write-action failure and authority reason vocabulary (Issue #2244)", (
   });
 
   it("reuses the EXISTING envelope reason codes: the authority failure literals are editor deny reasons", () => {
+    // KEIKO-0547 added "authority-revoked" so a revoked grant is not silently collapsed into
+    // "authority-invalid" — it is a distinct operator-visible failure with the same deny-lane
+    // reuse contract as the sibling reasons.
     expect(ATLASSIAN_CONNECTOR_AUTHORITY_FAILURE_REASONS).toEqual([
       "authority-invalid",
       "authority-expired",
       "authority-budget-exceeded",
+      "authority-revoked",
     ]);
     for (const reason of ATLASSIAN_CONNECTOR_AUTHORITY_FAILURE_REASONS) {
       expect(isAtlassianConnectorAuthorityFailureReason(reason)).toBe(true);

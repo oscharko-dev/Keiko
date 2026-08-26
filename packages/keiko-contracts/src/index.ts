@@ -4779,6 +4779,7 @@ export type {
 } from "./debug-activation.js";
 export {
   EDITOR_M7_SNIPPET_COLLECTION_VERSION,
+  EDITOR_M7_SNIPPET_BODY_MAX_UTF8_BYTES,
   parseEditorM7WorkspaceSnippetCollection,
   compileEditorM7SnippetBody,
   editorM7SnippetDiagnostics,

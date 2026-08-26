@@ -961,9 +961,21 @@ export function useRealtimeVoice(options: UseRealtimeVoiceOptions): RealtimeVoic
         userTranscriptDeltaItemsRef.current.set(key, reviewText);
         userTranscriptDeltaBytesRef.current.set(key, realtimeTranscriptByteLength(reviewText));
         latestUserTranscriptDeltaKeyRef.current = key;
-        rejectOversizedCanonicalUserTurn(
-          joinTranscriptSegments(pendingCanonicalUserTurnRef.current?.text, reviewText),
-        );
+        // KEIKO-0585: an already-staged pending turn (a DIFFERENT item_id's provider final,
+        // scheduled via scheduleCanonicalUserTurn) must not be silently discarded by
+        // rejectOversizedCanonicalUserTurn's unconditional `pendingCanonicalUserTurnRef.current =
+        // undefined` below. Flush it first — mirroring scheduleCanonicalUserTurn (line ~893) and
+        // handleFailedUserTranscript (line ~1030) — so it is still delivered via
+        // onCanonicalUserTurn instead of being wiped out from under this unrelated delta overflow.
+        // Guard the reject with the same canonicalAdmissionBlockedRef check those two sites use so
+        // a hard-capacity flush failure (which already surfaces its own admission failure) does
+        // not double-fire the oversized rejection.
+        if (pendingCanonicalUserTurnRef.current !== undefined) flushPendingCanonicalUserTurn();
+        if (!canonicalAdmissionBlockedRef.current) {
+          rejectOversizedCanonicalUserTurn(
+            joinTranscriptSegments(pendingCanonicalUserTurnRef.current?.text, reviewText),
+          );
+        }
         return;
       }
       latestUserTranscriptDeltaKeyRef.current = key;
@@ -977,7 +989,12 @@ export function useRealtimeVoice(options: UseRealtimeVoiceOptions): RealtimeVoic
         ensureVoiceTurn();
       }
     },
-    [ensureVoiceTurn, rejectOversizedCanonicalUserTurn, surfaceCanonicalAdmissionFailure],
+    [
+      ensureVoiceTurn,
+      flushPendingCanonicalUserTurn,
+      rejectOversizedCanonicalUserTurn,
+      surfaceCanonicalAdmissionFailure,
+    ],
   );
 
   const retainPartialUserTranscript = useCallback((itemId?: string | undefined): void => {

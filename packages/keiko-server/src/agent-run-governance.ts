@@ -88,20 +88,25 @@ export interface CreateAgentRunGovernanceInput {
 
 export type CreateAgentRunGovernanceResult =
   | { readonly ok: true; readonly binding: AgentRunGovernanceBinding }
-  | { readonly ok: false; readonly reason: "authority-invalid" | "authority-expired" };
+  | {
+      readonly ok: false;
+      readonly reason: "authority-invalid" | "authority-expired" | "authority-revoked";
+    };
 
 export type AgentRunMutationAuthorization =
   | { readonly ok: true; readonly effect: CodingWorkbenchPolicyEffect }
   | {
       readonly ok: false;
-      readonly reason: "session-invalid" | "authority-invalid" | "authority-expired";
+      readonly reason:
+        "session-invalid" | "authority-invalid" | "authority-expired" | "authority-revoked";
     };
 
 export type AgentRunBudgetReservation =
   | { readonly ok: true }
   | {
       readonly ok: false;
-      readonly reason: "authority-invalid" | "authority-expired" | "budget-exceeded";
+      readonly reason:
+        "authority-invalid" | "authority-expired" | "authority-revoked" | "budget-exceeded";
     };
 
 interface AgentRunBudgetedPortInput {
@@ -194,6 +199,20 @@ function mutationRisk(workflow: GovernedAgentRunKind): CodingWorkbenchApprovalRi
   return workflow === "unit-tests" ? "medium" : "high";
 }
 
+// Shared base mapping for every agent-run governance producer that surfaces a registry failure
+// reason (#2906 round-3 review, KEIKO-0532 sibling finding): a revoked authority previously
+// collapsed into the same generic "authority-invalid" bucket as a genuinely malformed envelope in
+// createAgentRunGovernance, authorizeAgentRunMutation, and agentRunBudgetFailureReason alike. One
+// shared mapping keeps all three producers in sync instead of three independently hand-maintained
+// copies of the same expired/revoked/invalid triage.
+function authorityFailureReason(
+  reason: EditorAgentAuthorityFailureReason,
+): "authority-invalid" | "authority-expired" | "authority-revoked" {
+  if (reason === "expired") return "authority-expired";
+  if (reason === "revoked") return "authority-revoked";
+  return "authority-invalid";
+}
+
 export function createAgentRunGovernance(
   input: CreateAgentRunGovernanceInput,
 ): CreateAgentRunGovernanceResult {
@@ -207,10 +226,7 @@ export function createAgentRunGovernance(
     input.nowIso,
   );
   if (!registration.ok) {
-    return {
-      ok: false,
-      reason: registration.reason === "expired" ? "authority-expired" : "authority-invalid",
-    };
+    return { ok: false, reason: authorityFailureReason(registration.reason) };
   }
   return {
     ok: true,
@@ -248,8 +264,7 @@ export function agentRunGovernanceFingerprintProjection(
 function agentRunBudgetFailureReason(
   reason: EditorAgentAuthorityFailureReason,
 ): Exclude<AgentRunBudgetReservation, { readonly ok: true }>["reason"] {
-  if (reason === "expired") return "authority-expired";
-  return reason === "budget-exceeded" ? "budget-exceeded" : "authority-invalid";
+  return reason === "budget-exceeded" ? "budget-exceeded" : authorityFailureReason(reason);
 }
 
 export function reserveAgentRunBudget(input: {
@@ -374,10 +389,7 @@ export function authorizeAgentRunMutation(input: {
     input.nowIso,
   );
   if (!resolved.ok) {
-    return {
-      ok: false,
-      reason: resolved.reason === "expired" ? "authority-expired" : "authority-invalid",
-    };
+    return { ok: false, reason: authorityFailureReason(resolved.reason) };
   }
   if (
     resolved.envelope.requestedMode !== input.binding.requestedMode ||

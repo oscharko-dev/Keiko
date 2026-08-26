@@ -1,6 +1,14 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
+import {
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type FocusEvent,
+  type KeyboardEvent,
+  type ReactNode,
+} from "react";
 
 import type {
   EditorM7CommandDefinition,
@@ -308,7 +316,11 @@ function ShortcutSummary({
       </div>
       <div className={styles.help}>{commandDescription(entry.command, t)}</div>
       <div className={styles.meta}>
-        <kbd className={styles.kbd}>{shortcutLabel(entry.binding, platform)}</kbd>
+        <kbd className={styles.kbd}>
+          {entry.binding === null
+            ? t("settings.keyboard.unbound")
+            : shortcutLabel(entry.binding, platform)}
+        </kbd>
         {" · "}
         {scopeLabel(entry.command, t)}
         {" · "}
@@ -384,19 +396,45 @@ function RecordingControls({
   readonly onCapture: (event: KeyboardEvent<HTMLButtonElement>) => void;
 }): ReactNode {
   const pressButtonRef = useRef<HTMLButtonElement | null>(null);
+  const controlRef = useRef<HTMLFieldSetElement | null>(null);
   useEffect(() => {
     const handle = requestAnimationFrame((): void => pressButtonRef.current?.focus());
     return (): void => cancelAnimationFrame(handle);
   }, []);
+  // KEIKO-0757: focus leaving the recording row by any means other than the explicit Cancel
+  // click or a successful capture (clicking elsewhere, Tab out, the window losing focus) must
+  // still cancel recording — otherwise recordingId stays stuck and the row is left announcing
+  // "Recording keyboard shortcut." with no way to dismiss it but a full keystroke capture.
+  // controlRef.contains() distinguishes moving between the two buttons IN this row (no cancel)
+  // from focus leaving it entirely (cancel). A window/tab blur reports relatedTarget === null
+  // with no Node to check containment against -- the Node-only check alone skips that case, so it
+  // is handled separately: null relatedTarget cancels only when the document itself has also lost
+  // focus (PR #3289 review, comment 3865167756), the window/tab-blur signature, not every
+  // null-relatedTarget blur.
+  const onBlur = (event: FocusEvent<HTMLFieldSetElement>): void => {
+    if (event.relatedTarget instanceof Node) {
+      if (controlRef.current?.contains(event.relatedTarget) !== true) onCancel();
+      return;
+    }
+    if (event.relatedTarget === null && !document.hasFocus()) {
+      onCancel();
+    }
+  };
+  // Focus-out on the group container mirrors the Cancel button for keyboard/mouse users leaving
+  // the row by any other means; the two buttons inside remain the actual interactive targets.
   return (
-    <div className={styles.control}>
+    // Sonar S6819 prefers a native <fieldset> over role="group" on a <div> so screen readers get
+    // the semantics without an ARIA override. We suppress <fieldset>'s default UA border via the
+    // existing styles.control class (see KeyboardShortcutsPanel.module.css); no visual change.
+    // eslint-disable-next-line jsx-a11y/no-noninteractive-element-interactions -- see comment above
+    <fieldset className={styles.control} ref={controlRef} onBlur={onBlur}>
       <button ref={pressButtonRef} type="button" className={styles.button} onKeyDown={onCapture}>
         {t("settings.keyboard.pressShortcut")}
       </button>
       <button type="button" className={styles.button} onClick={onCancel}>
         {t("settings.keyboard.cancel")}
       </button>
-    </div>
+    </fieldset>
   );
 }
 

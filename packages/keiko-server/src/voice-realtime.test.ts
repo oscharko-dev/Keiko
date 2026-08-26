@@ -527,6 +527,23 @@ describe("VoiceControlConnection protocol gating & idempotency", () => {
       "not-allowed-for-profile",
     );
   });
+
+  it("KEIKO-0661: denies a capability.select for a profile the session did not negotiate", async () => {
+    // The realtime transport binds one session to one profile ("full-realtime"). Before the fix,
+    // any capability.select (even for a different profile the session was never negotiated for)
+    // returned {decision: "allow"} unconditionally. Now the response must be {decision: "deny"}
+    // for a mismatched profile.
+    const { socket, conn } = connect();
+    conn.start(false);
+    socket.sent.length = 0;
+
+    await conn.receive(clientMessage("capability.select", 1, { profile: "speech-to-text" }));
+
+    expect(socket.sent).toHaveLength(1);
+    const decision = socket.sent[0] as unknown as Record<string, unknown>;
+    expect(decision.kind).toBe("policy.decision");
+    expect(decision.decision).toBe("deny");
+  });
 });
 
 describe("VoiceControlConnection replay & teardown", () => {
@@ -649,6 +666,31 @@ describe("VoiceControlConnection diagnostics (w4b-voice-realtime)", () => {
       source: "voice.realtime",
       code: "transport",
     });
+  });
+
+  it("records a profile-mismatch policy denial on the activity log alongside the WS frame (#2906 round 3)", async () => {
+    // KEIKO-0661 denies capability.select for a profile the session did not negotiate, but the
+    // decision previously lived only on the ephemeral WS frame -- the activity timeline could not
+    // reconstruct why selection failed. This must be body-free: no profile identifiers.
+    const sink = captureServerLog();
+    const { socket, conn } = connect({ correlationId: "diag-policy-deny-1" });
+    conn.start(false);
+    socket.sent.length = 0;
+    sink.clear();
+
+    await conn.receive(clientMessage("capability.select", 1, { profile: "speech-to-text" }));
+
+    const decision = socket.sent[0] as unknown as Record<string, unknown>;
+    expect(decision).toMatchObject({ kind: "policy.decision", decision: "deny" });
+    expect(sink.events.map((event) => event.op)).toEqual(["voice.realtime.policy-decision"]);
+    expect(sink.events[0]).toMatchObject({
+      category: "http",
+      op: "voice.realtime.policy-decision",
+      correlationId: "diag-policy-deny-1",
+      extra: { decision: "deny", reason: "profile-mismatch" },
+    });
+    expect(JSON.stringify(sink.events[0])).not.toContain("speech-to-text");
+    expect(JSON.stringify(sink.events[0])).not.toContain("full-realtime");
   });
 
   it("brackets a normal session lifecycle with a session-start and a session-end line", () => {

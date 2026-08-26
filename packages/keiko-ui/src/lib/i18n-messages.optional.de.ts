@@ -171,6 +171,10 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
   "chat.history.purgeWarning":
     "Diese Konversation und ihre gespeicherten Nachrichten dauerhaft löschen? Dies kann nicht rückgängig gemacht werden.",
   "chat.history.purgeFailed": "Dauerhaftes Löschen fehlgeschlagen: {detail}",
+  "chat.history.renameEmptyTitle": "Titel darf nicht leer sein.",
+  "chat.history.renameFailed": "Umbenennen fehlgeschlagen.",
+  "chat.history.deleteFailed": "Löschen fehlgeschlagen: {detail}",
+  "chat.history.restoreFailed": "Wiederherstellen fehlgeschlagen: {detail}",
   "chat.regenerate.versionSelector": "Antwortversion",
   "chat.regenerate.version": "Version {version}",
   "chat.regenerate.versionCurrent": "Version {version} (aktuell)",
@@ -803,6 +807,8 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
   "searchPanel.replace.noPreviewComputed": "Es wurde noch keine Ersetzungsvorschau berechnet.",
   "searchPanel.replace.omittedSuffix": " {count} Dateien ausgelassen.",
   "searchPanel.replace.rootPrefixedStatus": "{rootLabel}: {message}",
+  "searchPanel.replace.searchLimitSuffix":
+    " Die Suche hat nicht jeden Treffer erfasst; diese Vorschau ist möglicherweise unvollständig.",
   "searchPanel.replace.summary": "{editCount} Ersetzungen in {fileCount} Dateien.{omitted}",
   "searchPanel.rootErrors.one": "Ein Root konnte nicht {operation} werden.",
   "searchPanel.rootErrors.operationPreviewed": "in der Vorschau geprüft",

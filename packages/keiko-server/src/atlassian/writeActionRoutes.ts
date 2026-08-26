@@ -76,7 +76,7 @@ import {
   recordAtlassianActionActivity,
 } from "./actionActivity.js";
 import {
-  atlassianActionApprovalRegistry,
+  resolveAtlassianActionApprovalRegistry,
   type AtlassianLiveSearchPayload,
   type AtlassianWriteActionInput,
   type PendingAtlassianActionEntry,
@@ -107,32 +107,41 @@ const NUMERIC_ID_PATTERN = /^\d{1,32}$/u;
 // eslint-disable-next-line no-control-regex -- intentionally matches control chars to REJECT them
 const CONTROL_CHARS_PATTERN = /[\u0000-\u001F\u007F-\u009F]/u;
 
-function unavailable(): RouteResult {
+// KEIKO-0534: guard helpers thread the request's correlation id into 4xx/503 error bodies so
+// support bundles can trace each rejected write-action call back to a single operator record.
+function unavailable(correlationId?: string): RouteResult {
   return {
     status: 503,
     body: errorBody(
       "ATLASSIAN_CONNECTORS_UNAVAILABLE",
       "Atlassian connector credential custody is not configured for this BFF.",
+      correlationId,
     ),
   };
 }
 
 type DepsOrResult = AtlassianConnectorCredentialDeps | RouteResult;
 
-function requireConnectorDeps(deps: UiHandlerDeps): DepsOrResult {
-  return deps.atlassianConnectorCredentials ?? unavailable();
+function requireConnectorDeps(deps: UiHandlerDeps, correlationId?: string): DepsOrResult {
+  return deps.atlassianConnectorCredentials ?? unavailable(correlationId);
 }
 
 function isRouteResult(value: DepsOrResult | Record<string, unknown>): value is RouteResult {
   return typeof (value as { status?: unknown }).status === "number";
 }
 
-async function runHandler(work: () => Promise<RouteResult> | RouteResult): Promise<RouteResult> {
+async function runHandler(
+  work: () => Promise<RouteResult> | RouteResult,
+  correlationId?: string,
+): Promise<RouteResult> {
   try {
     return await work();
   } catch (error) {
     if (error instanceof AtlassianSyncRequestError) {
-      return { status: error.status, body: errorBody(error.code, error.message) };
+      return {
+        status: error.status,
+        body: errorBody(error.code, error.message, correlationId),
+      };
     }
     throw error;
   }
@@ -559,6 +568,7 @@ function executeWriteAction(
 // disposition) and no reason for a directly allowed one; a failed execution always carries the
 // closed provider failure reason.
 async function executeAndRespond(
+  deps: UiHandlerDeps,
   guard: AtlassianConnectorCredentialDeps,
   credential: AtlassianCredentialMetadata,
   action: AtlassianWriteActionInput,
@@ -573,7 +583,7 @@ async function executeAndRespond(
   );
   const reasonCode: AtlassianConnectorActivityReasonCode | undefined =
     result.status === "failed" ? result.reason : reviewReason;
-  recordAtlassianActionActivity({
+  recordAtlassianActionActivity(deps, {
     connectorId: connectorIdForAuthRef(credential.authRef),
     actionType: action.type,
     disposition,
@@ -593,19 +603,22 @@ async function executeAndRespond(
 // One content-free record per live attempt: the disposition and review rationale exactly like
 // the write path, the JQL digest on EVERY record (ADR-0128 D6 — never the query text), and the
 // returned count plus issue keys on success.
-function recordLiveSearchActivity(input: {
-  readonly credential: AtlassianCredentialMetadata;
-  readonly liveSearch: AtlassianLiveSearchPayload;
-  readonly disposition: "allowed" | "review-required";
-  readonly reviewReason: AtlassianConnectorActionReviewReason | undefined;
-  readonly correlationId: string;
-  readonly durationMs: number;
-  readonly outcome: JiraLiveSearchOutcome;
-}): void {
+function recordLiveSearchActivity(
+  deps: UiHandlerDeps,
+  input: {
+    readonly credential: AtlassianCredentialMetadata;
+    readonly liveSearch: AtlassianLiveSearchPayload;
+    readonly disposition: "allowed" | "review-required";
+    readonly reviewReason: AtlassianConnectorActionReviewReason | undefined;
+    readonly correlationId: string;
+    readonly durationMs: number;
+    readonly outcome: JiraLiveSearchOutcome;
+  },
+): void {
   const { outcome, reviewReason } = input;
   const reasonCode = outcome.ok ? reviewReason : outcome.reason;
   const templateId = input.liveSearch.request.templateId;
-  recordAtlassianActionActivity({
+  recordAtlassianActionActivity(deps, {
     connectorId: connectorIdForAuthRef(input.credential.authRef),
     actionType: "search-issues-live",
     disposition: input.disposition,
@@ -629,6 +642,7 @@ function recordLiveSearchActivity(input: {
 // fingerprinted — the executor is pure transport orchestration with no store access, and the
 // store-inspection test pins that no capsule, fingerprint, or connector_sources row changes.
 async function executeLiveSearchAndRespond(
+  deps: UiHandlerDeps,
   guard: AtlassianConnectorCredentialDeps,
   credential: AtlassianCredentialMetadata,
   liveSearch: AtlassianLiveSearchPayload,
@@ -646,7 +660,7 @@ async function executeLiveSearchAndRespond(
       ...(request.maxResults === undefined ? {} : { maxResults: request.maxResults }),
     },
   );
-  recordLiveSearchActivity({
+  recordLiveSearchActivity(deps, {
     credential,
     liveSearch,
     disposition,
@@ -694,7 +708,7 @@ function governedActionResult(
 ): Promise<RouteResult> | RouteResult {
   const connectorId = connectorIdForAuthRef(credential.authRef);
   const denied = (reasonCode: AtlassianConnectorActivityReasonCode): RouteResult =>
-    deniedAtlassianActionResult({
+    deniedAtlassianActionResult(deps, {
       connectorId,
       actionType: plan.actionType,
       reasonCode,
@@ -711,7 +725,7 @@ function governedActionResult(
     );
   }
   if (outcome.kind === "review-required") {
-    return createAtlassianPendingApprovalResult({
+    return createAtlassianPendingApprovalResult(deps, {
       connectorId,
       actionType: plan.actionType,
       reviewReason: outcome.decision.reviewReason ?? "mode-approval-required",
@@ -732,6 +746,7 @@ function governedActionResult(
 // query the targetRef is the template id — a safe identifier naming WHAT would run; free-form
 // JQL has no identifier-shaped target and records none (the digest is the correlation surface).
 function actionPlanFor(
+  deps: UiHandlerDeps,
   guard: AtlassianConnectorCredentialDeps,
   credential: AtlassianCredentialMetadata,
   input: AtlassianGovernedActionInput,
@@ -745,6 +760,7 @@ function actionPlanFor(
       payload: { kind: "live-search", liveSearch },
       execute: (correlationId: string): Promise<RouteResult> =>
         executeLiveSearchAndRespond(
+          deps,
           guard,
           credential,
           liveSearch,
@@ -760,7 +776,7 @@ function actionPlanFor(
     targetRef: targetRefOf(action),
     payload: { kind: "write-action", action },
     execute: (correlationId: string): Promise<RouteResult> =>
-      executeAndRespond(guard, credential, action, "allowed", undefined, correlationId),
+      executeAndRespond(deps, guard, credential, action, "allowed", undefined, correlationId),
   };
 }
 
@@ -774,7 +790,7 @@ export function handleExecuteAtlassianConnectorAction(
   ctx: RouteContext,
   deps: UiHandlerDeps,
 ): Promise<RouteResult> | RouteResult {
-  const guard = requireConnectorDeps(deps);
+  const guard = requireConnectorDeps(deps, ctx.correlationId);
   if (isRouteResult(guard)) return guard;
   return runHandler(async () => {
     const credential = requireAtlassianCredential(ctx, guard);
@@ -791,17 +807,21 @@ export function handleExecuteAtlassianConnectorAction(
       deps,
       credential,
       authority,
-      actionPlanFor(guard, credential, input),
+      actionPlanFor(deps, guard, credential, input),
       ctx.correlationId ?? randomUUID(),
     );
-  });
+  }, ctx.correlationId);
 }
 
 // ─── Pending-approval endpoints (#2245 renders these) ─────────────────────────
-function approvalNotFound(): RouteResult {
+function approvalNotFound(correlationId?: string): RouteResult {
   return {
     status: 404,
-    body: errorBody("APPROVAL_NOT_FOUND", "Atlassian connector action approval is not available."),
+    body: errorBody(
+      "APPROVAL_NOT_FOUND",
+      "Atlassian connector action approval is not available.",
+      correlationId,
+    ),
   };
 }
 
@@ -818,12 +838,18 @@ function decodedApprovalIdParam(ctx: RouteContext): string | undefined {
 
 // GET /api/atlassian-connectors/action-approvals
 export function handleListAtlassianConnectorActionApprovals(
-  _ctx: RouteContext,
+  ctx: RouteContext,
   deps: UiHandlerDeps,
 ): Promise<RouteResult> | RouteResult {
-  const guard = requireConnectorDeps(deps);
+  // #2906 round 3: this was the one remaining approval endpoint that dropped the request's own
+  // correlation id from its unavailable-guard 503, so that failure alone could not be joined to
+  // its support-bundle record while every sibling approval handler already threads ctx.correlationId.
+  const guard = requireConnectorDeps(deps, ctx.correlationId);
   if (isRouteResult(guard)) return guard;
-  return { status: 200, body: { approvals: atlassianActionApprovalRegistry.listPending() } };
+  return {
+    status: 200,
+    body: { approvals: resolveAtlassianActionApprovalRegistry(deps).listPending() },
+  };
 }
 
 // GET /api/atlassian-connectors/action-approvals/:approvalId
@@ -831,12 +857,14 @@ export function handleGetAtlassianConnectorActionApproval(
   ctx: RouteContext,
   deps: UiHandlerDeps,
 ): Promise<RouteResult> | RouteResult {
-  const guard = requireConnectorDeps(deps);
+  const guard = requireConnectorDeps(deps, ctx.correlationId);
   if (isRouteResult(guard)) return guard;
   const approvalId = decodedApprovalIdParam(ctx);
   const entry =
-    approvalId === undefined ? undefined : atlassianActionApprovalRegistry.get(approvalId);
-  if (entry === undefined) return approvalNotFound();
+    approvalId === undefined
+      ? undefined
+      : resolveAtlassianActionApprovalRegistry(deps).get(approvalId);
+  if (entry === undefined) return approvalNotFound(ctx.correlationId);
   return { status: 200, body: { approval: entry.approval } };
 }
 
@@ -878,6 +906,33 @@ function pendingEntryJqlDigest(entry: PendingAtlassianActionEntry): string | und
   return entry.payload.kind === "live-search" ? entry.payload.liveSearch.jqlDigest : undefined;
 }
 
+// KEIKO-0565-r3 (round-3 review, PR #3289): registry.consume() already made the single-use
+// approval claim atomic BEFORE executeApprovedEntry runs, so every early exit in this function --
+// not only the reservation-denied branch below -- must finalize a closed terminal outcome using
+// the approval's OWN correlationId. Without this, a prerequisite that vanished between approval
+// and execute (credential expired/revoked/deleted mid-flight) left the consumed approval
+// irretrievably gone with no terminal record at all: an operator reconstructing the trail from
+// the activity log would see the pending-review record and then nothing, never learning the
+// approved action was attempted and failed.
+function recordApprovedEntryPrerequisiteFailure(
+  deps: UiHandlerDeps,
+  entry: PendingAtlassianActionEntry,
+  reasonCode: AtlassianConnectorActivityReasonCode,
+): void {
+  const jqlDigest = pendingEntryJqlDigest(entry);
+  recordAtlassianActionActivity(deps, {
+    connectorId: entry.approval.connectorId,
+    actionType: entry.approval.actionType,
+    disposition: "review-required",
+    outcome: "failed",
+    reasonCode,
+    ...(entry.approval.targetRef === undefined ? {} : { targetRef: entry.approval.targetRef }),
+    correlationId: entry.approval.correlationId,
+    durationMs: 0,
+    ...(jqlDigest === undefined ? {} : { jqlDigest }),
+  });
+}
+
 async function executeApprovedEntry(
   deps: UiHandlerDeps,
   guard: AtlassianConnectorCredentialDeps,
@@ -885,6 +940,11 @@ async function executeApprovedEntry(
 ): Promise<RouteResult> {
   const credential = guard.custody.getMetadata(entry.authRef);
   if (credential === undefined) {
+    // The credential backing this already-approved, already-consumed entry vanished (revoked,
+    // expired, or deleted) between approval and this execute call. The single-use claim stays
+    // atomic -- the approval is not retried or resurrected -- but the outcome is still finalized
+    // as a closed `failed`/`auth-failed` activity record instead of being silently dropped.
+    recordApprovedEntryPrerequisiteFailure(deps, entry, "auth-failed");
     throw new AtlassianSyncRequestError(
       404,
       "CREDENTIAL_NOT_FOUND",
@@ -896,7 +956,7 @@ async function executeApprovedEntry(
   const reservation = reserveGovernedAtlassianAction(entry.authority, deps);
   if (!reservation.ok) {
     const jqlDigest = pendingEntryJqlDigest(entry);
-    return deniedAtlassianActionResult({
+    return deniedAtlassianActionResult(deps, {
       connectorId: entry.approval.connectorId,
       actionType: entry.approval.actionType,
       reasonCode: reservation.reason,
@@ -910,6 +970,7 @@ async function executeApprovedEntry(
   }
   if (entry.payload.kind === "live-search") {
     return executeLiveSearchAndRespond(
+      deps,
       guard,
       credential,
       entry.payload.liveSearch,
@@ -919,6 +980,7 @@ async function executeApprovedEntry(
     );
   }
   return executeAndRespond(
+    deps,
     guard,
     credential,
     entry.payload.action,
@@ -935,15 +997,17 @@ export function handleApproveAtlassianConnectorActionApproval(
   ctx: RouteContext,
   deps: UiHandlerDeps,
 ): Promise<RouteResult> | RouteResult {
-  const guard = requireConnectorDeps(deps);
+  const guard = requireConnectorDeps(deps, ctx.correlationId);
   if (isRouteResult(guard)) return guard;
   return runHandler(() => {
     const approvalId = decodedApprovalIdParam(ctx);
     const entry =
-      approvalId === undefined ? undefined : atlassianActionApprovalRegistry.consume(approvalId);
-    if (entry === undefined) return approvalNotFound();
+      approvalId === undefined
+        ? undefined
+        : resolveAtlassianActionApprovalRegistry(deps).consume(approvalId);
+    if (entry === undefined) return approvalNotFound(ctx.correlationId);
     return executeApprovedEntry(deps, guard, entry);
-  });
+  }, ctx.correlationId);
 }
 
 // POST /api/atlassian-connectors/action-approvals/:approvalId/reject — records the rejection
@@ -952,15 +1016,17 @@ export function handleRejectAtlassianConnectorActionApproval(
   ctx: RouteContext,
   deps: UiHandlerDeps,
 ): Promise<RouteResult> | RouteResult {
-  const guard = requireConnectorDeps(deps);
+  const guard = requireConnectorDeps(deps, ctx.correlationId);
   if (isRouteResult(guard)) return guard;
   return runHandler(() => {
     const approvalId = decodedApprovalIdParam(ctx);
     const entry =
-      approvalId === undefined ? undefined : atlassianActionApprovalRegistry.reject(approvalId);
-    if (entry === undefined) return approvalNotFound();
+      approvalId === undefined
+        ? undefined
+        : resolveAtlassianActionApprovalRegistry(deps).reject(approvalId);
+    if (entry === undefined) return approvalNotFound(ctx.correlationId);
     const jqlDigest = pendingEntryJqlDigest(entry);
-    recordAtlassianActionActivity({
+    recordAtlassianActionActivity(deps, {
       connectorId: entry.approval.connectorId,
       actionType: entry.approval.actionType,
       disposition: "review-required",
@@ -980,5 +1046,5 @@ export function handleRejectAtlassianConnectorActionApproval(
         correlationId: entry.approval.correlationId,
       },
     };
-  });
+  }, ctx.correlationId);
 }

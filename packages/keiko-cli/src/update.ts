@@ -300,6 +300,12 @@ function terminalSessionFor(
   return undefined;
 }
 
+// KEIKO-0809: the loop used `pollIntervalMs` as both the sleep interval AND the loop
+// counter increment, so a 0 (or negative) poll interval — trivially reachable from a
+// test's injected deps — meant `elapsed += 0` and an unbounded spin. Clamp the sleep
+// interval to a minimum of 1 ms so the wall-clock bound (`maxWaitMs`) actually ticks.
+const MIN_POLL_INTERVAL_MS = 1;
+
 async function waitForTerminalSession(
   manager: UpdateSessionManager,
   sessionId: string,
@@ -307,10 +313,11 @@ async function waitForTerminalSession(
   pollIntervalMs: number,
   maxWaitMs: number,
 ): Promise<UpdateSession | undefined> {
-  for (let elapsed = 0; elapsed <= maxWaitMs; elapsed += pollIntervalMs) {
+  const effectiveInterval = Math.max(pollIntervalMs, MIN_POLL_INTERVAL_MS);
+  for (let elapsed = 0; elapsed <= maxWaitMs; elapsed += effectiveInterval) {
     const session = terminalSessionFor(manager.getStatus(), sessionId);
     if (session !== undefined && isTerminalUpdateSession(session)) return session;
-    await sleep(pollIntervalMs);
+    await sleep(effectiveInterval);
   }
   return terminalSessionFor(manager.getStatus(), sessionId);
 }

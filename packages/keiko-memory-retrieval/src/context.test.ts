@@ -166,14 +166,19 @@ describe("assembleContextBlock — empty / clean cases", () => {
 });
 
 describe("assembleContextBlock — caps and pressure", () => {
-  it("omits ranked entries beyond maxIncluded with reason budget-exceeded", () => {
+  // #2906 KEIKO-0697 — the count-cap branch (`included.length >= maxIncluded`) now reports
+  // "max-included-exceeded" so operators can tell it apart from the genuine token-exhaustion
+  // branch (which still reports "budget-exceeded" — see the "under heavy budget pressure"
+  // test below). Isolate the count-cap branch by giving every candidate more than enough
+  // budget to fit.
+  it("omits ranked entries beyond maxIncluded with reason max-included-exceeded", () => {
     const ids = ["a", "b", "c", "d", "e"];
     const records = ids.map((id) => buildRecord({ id, body: `body ${id}` }));
     const ranked = ids.map((id) => included(id));
     const result = assembleContextBlock(ranked, records, { budgetTokens: 10_000, maxIncluded: 2 });
     expect(result.included).toHaveLength(2);
     expect(result.omitted).toHaveLength(3);
-    expect(result.omitted.every((o) => o.reason === "budget-exceeded")).toBe(true);
+    expect(result.omitted.every((o) => o.reason === "max-included-exceeded")).toBe(true);
   });
 
   it("omits a ranked memory whose record is absent (out-of-scope)", () => {

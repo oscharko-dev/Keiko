@@ -134,7 +134,12 @@ export function validateMemoryRetrievalRequest(
 // A canonical coordinate string per scope. Distinct scope kinds always produce strings
 // with distinct kind prefixes, so a `userId` equal to a `workspaceId` cannot collide.
 // `global` carries a fixed coordinate so set membership remains a pure string compare.
-function scopeCoordinateKey(scope: MemoryScope): string {
+// Exported as the single source of truth for the scope→partition-key projection used by
+// keiko-memory-governance's conflict/forget scans and keiko-memory-consolidation's
+// dedupe/conflict ordering (#2906 KEIKO-0546). The encoding "kind:coordinate" is
+// load-bearing — two callers that partition with one function and compare with another
+// would silently mismatch on global-scoped memories if the encoding diverged.
+export function scopeCoordinateKey(scope: MemoryScope): string {
   switch (scope.kind) {
     case "global":
       return "global:";

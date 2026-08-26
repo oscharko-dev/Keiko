@@ -1604,11 +1604,66 @@ function initialEditorLoadState(hasTarget: boolean): KeikoEditorLoadState {
   return hasTarget ? { status: "loading" } : { status: "ready" };
 }
 
-function activeDigestHash(
-  digest: { readonly content: string; readonly hash: string } | null,
-  content: string,
-): string | null {
+// KEIKO-0819: sizeBytes rides along with hash so both are computed from the same single
+// UTF8_ENCODER.encode(content) pass inside the debounced effect below, instead of a separate
+// per-keystroke encode.
+interface ActiveContentDigest {
+  readonly content: string;
+  readonly hash: string;
+  readonly sizeBytes: number;
+}
+
+function activeDigestHash(digest: ActiveContentDigest | null, content: string): string | null {
   return digest?.content === content ? digest.hash : null;
+}
+
+// The digest object itself, only when it matches the CURRENT content — null while the debounce
+// window has not yet settled for the latest edit. hash/sizeBytes read off the result are exact for
+// `content`, never stale or estimated (unlike activeContentDigest?.sizeBytes read directly, which
+// stays at its last resolved value instead of resetting to unknown on every keystroke).
+function freshContentDigest(
+  digest: ActiveContentDigest | null,
+  content: string,
+): ActiveContentDigest | null {
+  return digest?.content === content ? digest : null;
+}
+
+// Cheap, allocation-free UPPER bound on the UTF-8 byte length of `content`. Every UTF-16 code unit
+// encodes to at most 4 UTF-8 bytes, so this can only ever OVER-estimate — safe as a stand-in while
+// the exact, debounced digest for this content has not settled yet, never as a substitute for it.
+function conservativeByteEstimateUpperBound(content: string): number {
+  return content.length * 4;
+}
+
+// The byte count the HARD size-limit / write gate must read (`isMaxSizeExceeded` /
+// `effectiveReadOnly` in `@oscharko-dev/keiko-editor`'s save-state.ts, via `buffer.content.
+// sizeBytes`): byte-exact once the debounced digest has settled for this exact content
+// (`readyDigest` non-null), a conservative (never-under) UPPER-bound estimate otherwise. This gate
+// must fail SAFE — it must never let an over-limit buffer look smaller than it truly is — instead
+// of pairing a stale `ActiveContentDigest.sizeBytes` (whatever content last settled, not
+// necessarily `content`) with the current text (PR #3289 review).
+function writeGateSizeBytesEstimate(
+  readyDigest: ActiveContentDigest | null,
+  content: string,
+): number {
+  return readyDigest?.sizeBytes ?? conservativeByteEstimateUpperBound(content);
+}
+
+// The byte count the BEHAVIORAL large-file-mode / automatic-read-only signal must read: byte-exact
+// once settled (identical to the write gate above once `readyDigest` is non-null), a conservative
+// (never-OVER) LOWER-bound estimate otherwise — `content.length` (UTF-16 code units), which can
+// only ever UNDER-estimate the true UTF-8 byte count (minimum 1 byte per code unit). Unlike the
+// write gate, this signal must fail PERMISSIVE during the debounce window: feeding it the SAME *4
+// upper bound as the write gate marked an actually sub-500KB ASCII file read-only until the
+// debounce settled (PR #3289 review, comment 3865167711 — round-2 correction of the round-1 fix
+// above). Under-classifying here only ever means a large file stays fully-interactive a little too
+// long, never that a small one gets locked down; it resolves to the exact value the moment the
+// digest settles.
+function modeSelectionSizeBytesEstimate(
+  readyDigest: ActiveContentDigest | null,
+  content: string,
+): number {
+  return readyDigest?.sizeBytes ?? content.length;
 }
 
 function hasEditorTarget(root: string | undefined, file: string | undefined): boolean {
@@ -2217,10 +2272,7 @@ function EditorRuntimeWidget({
     IDLE_EXTERNAL_CHANGE_STATE,
   );
   const [externalCompareBaseline, setExternalCompareBaseline] = useState<string | null>(null);
-  const [activeContentDigest, setActiveContentDigest] = useState<{
-    readonly content: string;
-    readonly hash: string;
-  } | null>(null);
+  const [activeContentDigest, setActiveContentDigest] = useState<ActiveContentDigest | null>(null);
   // Issue #1394 (ADR-0058 D3/D4): conflict banner and applyPatch review state.
   const [agentConflict, setAgentConflict] = useState<{
     readonly code: AgentConflictCode;
@@ -2335,9 +2387,18 @@ function EditorRuntimeWidget({
     tabSize: 2,
     insertSpaces: true,
   });
-  const contentBytes = useMemo(() => UTF8_ENCODER.encode(content), [content]);
-  const contentSizeBytes = contentBytes.length;
   const activeContentHash = activeDigestHash(activeContentDigest, content);
+  const readyContentDigest = freshContentDigest(activeContentDigest, content);
+  // PR #3289 review: content.length (UTF-16 code units) alone is only a LOWER bound on the UTF-8
+  // byte length — 200,000 CJK characters is ~600 KB of UTF-8 but a length of 200,000 — so it must
+  // never stand in for the byte count directly. Both estimates below are byte-exact whenever
+  // readyContentDigest has settled for the CURRENT content; they diverge only for the pending
+  // (unsettled) case, where the write gate needs a never-under UPPER bound and the behavioral
+  // mode-selection gate needs a never-over LOWER bound instead (see the two functions' docs) — a
+  // single shared conservative estimate fed BOTH gates fails one of them. Neither may feed
+  // sha256HexBytes, which needs the exact, debounced activeContentDigest instead.
+  const writeGateSizeBytes = writeGateSizeBytesEstimate(readyContentDigest, content);
+  const modeSelectionSizeBytes = modeSelectionSizeBytesEstimate(readyContentDigest, content);
   const activeContentDigestRef = useRef(activeContentDigest);
   activeContentDigestRef.current = activeContentDigest;
   const lastHotExitSnapshotKeyRef = useRef<string | null>(null);
@@ -2364,15 +2425,20 @@ function EditorRuntimeWidget({
   useEffect(() => {
     let cancelled = false;
     const timer = window.setTimeout(() => {
-      void sha256HexBytes(contentBytes, content).then((hash) => {
-        if (!cancelled) setActiveContentDigest({ content, hash });
+      // KEIKO-0819: the full-buffer UTF-8 encode happens here, at most once per settled debounce
+      // window, not once per keystroke — the resulting byte count rides along with the hash so every
+      // byte-exact consumer (hot-exit maxBytes check, the buffer's reported sizeBytes) reads it back
+      // from activeContentDigest instead of re-encoding.
+      const bytes = UTF8_ENCODER.encode(content);
+      void sha256HexBytes(bytes, content).then((hash) => {
+        if (!cancelled) setActiveContentDigest({ content, hash, sizeBytes: bytes.length });
       });
     }, CONTENT_HASH_DEBOUNCE_MS);
     return () => {
       cancelled = true;
       window.clearTimeout(timer);
     };
-  }, [content, contentBytes]);
+  }, [content]);
 
   useEffect(() => {
     let cancelled = false;
@@ -2524,8 +2590,16 @@ function EditorRuntimeWidget({
       }
       return;
     }
-    if (maxBytes !== null && contentSizeBytes > maxBytes) return;
-    if (activeContentHash === null) return;
+    // KEIKO-0819: readyContentDigest is null until the debounced hash/size effect above has settled
+    // for this exact content, exactly as activeContentHash === null used to gate this write alone —
+    // the size check below is byte-exact for the CURRENT content whenever it runs, never stale or
+    // estimated, since content.length is never used here (see freshContentDigest).
+    if (readyContentDigest === null) return;
+    if (maxBytes !== null && readyContentDigest.sizeBytes > maxBytes) return;
+    // KEIKO-0819: readyContentDigest.hash is byte-exact for the current content and non-null by
+    // the guard above; activeContentHash is a wider `string | null` derived through activeDigestHash
+    // and does not narrow across the guard, so read the hash off the settled digest object directly.
+    const readyContentHash = readyContentDigest.hash;
     const flushHotExitSnapshot = (): void => {
       const snapshot: EditorHotExitSnapshotV1 = {
         schemaVersion: EDITOR_HOT_EXIT_SCHEMA_VERSION,
@@ -2533,7 +2607,7 @@ function EditorRuntimeWidget({
         relativePath: file,
         content,
         baseVersion: version,
-        contentHash: activeContentHash,
+        contentHash: readyContentHash,
         savedContentHash: version?.contentHash ?? null,
         updatedAt: Date.now(),
         paneId: paneId ?? "pane-1",
@@ -2561,13 +2635,13 @@ function EditorRuntimeWidget({
   }, [
     activeContentHash,
     content,
-    contentSizeBytes,
     dirty,
     file,
     fileModelMatchesTarget,
     hasTarget,
     maxBytes,
     paneId,
+    readyContentDigest,
     root,
     version,
     windowId,
@@ -3909,8 +3983,8 @@ function EditorRuntimeWidget({
   );
 
   const largeFileMode = useMemo(
-    () => deriveLargeFileMode({ sizeBytes: contentSizeBytes, text: content }),
-    [content, contentSizeBytes],
+    () => deriveLargeFileMode({ sizeBytes: modeSelectionSizeBytes, text: content }),
+    [content, modeSelectionSizeBytes],
   );
   const preferenceLargeFileMode = editorSettings.applied.largeFileMode;
   const largeFilePolicy = largeFileSettings(largeFileMode, preferenceLargeFileMode);
@@ -3947,10 +4021,14 @@ function EditorRuntimeWidget({
         deleted: sourceControlT("gitGutter.deleted"),
         openHunk: sourceControlT("gitGutter.openHunk"),
       },
-      resolve: async () => {
+      // #2906 review (comment 3865167732): the resolver used to ignore the AbortSignal
+      // git-gutter-bridge.ts passes into it, so a superseded refresh (or dispose) left both
+      // in-flight requests running to completion underneath the discarded result. Both hops now
+      // carry the SAME signal the bridge gave this call.
+      resolve: async (signal) => {
         const [staged, unstaged] = await Promise.all([
-          fetchGitStructuredDiff({ root, path: file, scope: "staged" }),
-          fetchGitStructuredDiff({ root, path: file, scope: "unstaged" }),
+          fetchGitStructuredDiff({ root, path: file, scope: "staged" }, signal),
+          fetchGitStructuredDiff({ root, path: file, scope: "unstaged" }, signal),
         ]);
         return {
           staged: hunksForPath(staged, file),
@@ -4348,11 +4426,28 @@ function EditorRuntimeWidget({
             content: {
               relativePath: file ?? "",
               text: content,
-              sizeBytes: contentSizeBytes,
+              // PR #3289 review: byte-exact once readyContentDigest has settled for this exact
+              // content; otherwise writeGateSizeBytes's conservative (never-under) UPPER-bound
+              // estimate. Must NEVER pair the current text with a stale, smaller settled sizeBytes
+              // (the old `activeContentDigest?.sizeBytes ?? 0`, which stays at whatever content
+              // last settled regardless of `content` above) — isMaxSizeExceeded / effectiveReadOnly
+              // (@oscharko-dev/keiko-editor's save-state.ts) is a hard size-limit / read-only gate
+              // and must never see this buffer look smaller than it actually is, e.g. immediately
+              // after a paste that pushes a small file over budget, while the debounce is pending.
+              // (This is deliberately the UPPER-bound estimate, unlike largeFileMode's below —
+              // see modeSelectionSizeBytesEstimate's doc for why the two gates diverge.)
+              sizeBytes: writeGateSizeBytes,
               truncated: false,
             },
           },
-    [content, contentSizeBytes, editorReadOnlyBySettings, file, fileModel, fileModelMatchesTarget],
+    [
+      content,
+      writeGateSizeBytes,
+      editorReadOnlyBySettings,
+      file,
+      fileModel,
+      fileModelMatchesTarget,
+    ],
   );
   const modelViewStateKey = editorModelViewStateKey(
     hasTarget,

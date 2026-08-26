@@ -27,6 +27,12 @@ import {
   runHostLanguageOperation,
   shutdownHostLspPool,
 } from "./hostLanguageOperation.js";
+import {
+  _resetLspLifecycleLedgerForTests,
+  listAllLspLifecycleEvents,
+  listLspLifecycleEvents,
+} from "./lspLifecycleLedger.js";
+import { managedLspWorkspaceFingerprint } from "./managedLspActivationStore.js";
 
 let binDir = "";
 let workspaceRoot = "";
@@ -286,6 +292,47 @@ describe("runHostLanguageOperation pooling (GEN-PERF-EDITOR-007)", () => {
     } finally {
       rmSync(otherRoot, { recursive: true, force: true });
     }
+  });
+});
+
+// Round-3 review finding: createPooledEntry never supplied onLifecycleEvent, so the content-free
+// lspLifecycleLedger (KEIKO-0556) never received a single production event -- only a test calling
+// recordLspLifecycleEvent directly could populate it, and the read-only status route always
+// reported an empty ledger for real workspaces. This proves a REAL pooled manager, driven through
+// the same runHostLanguageOperation entry point every other test in this file uses, actually
+// reaches the ledger under the same opaque per-workspace partition key
+// managedLspActivationStore already uses for its own on-disk record.
+describe("pooled LSP manager lifecycle events reach the content-free ledger (round-3 KEIKO-0556-r3)", () => {
+  beforeEach(() => {
+    _resetLspLifecycleLedgerForTests();
+  });
+  afterEach(() => {
+    _resetLspLifecycleLedgerForTests();
+  });
+
+  it("records a real READY transition on the workspace's partition, observable through the status-route projection", async () => {
+    makeExecutable("gopls");
+    const { spawn } = countingSpawn();
+    const partitionKey = managedLspWorkspaceFingerprint(workspaceRoot);
+
+    // Before any operation, the ledger has never heard from this (or any) workspace.
+    expect(listLspLifecycleEvents(partitionKey)).toEqual([]);
+
+    const result = await runAt(workspaceRoot, spawn);
+
+    expect(result).toMatchObject({ kind: "diagnostics" });
+    // The pooled manager's real spawn->initialize handshake must have recorded at least a READY
+    // transition on the fingerprint-derived partition -- not the default/no-op partition.
+    const partitioned = listLspLifecycleEvents(partitionKey);
+    expect(partitioned.length).toBeGreaterThan(0);
+    expect(partitioned.some((e) => e.status === "READY")).toBe(true);
+    // Content-free: no raw workspace root ever appears in a stored event.
+    expect(JSON.stringify(partitioned)).not.toContain(workspaceRoot);
+    // The status route's union projection carries the same events, tagged with this partition.
+    const merged = listAllLspLifecycleEvents();
+    expect(
+      merged.some((e) => e.workspacePartitionKey === partitionKey && e.status === "READY"),
+    ).toBe(true);
   });
 });
 

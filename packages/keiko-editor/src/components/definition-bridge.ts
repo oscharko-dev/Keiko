@@ -26,6 +26,8 @@ import {
 } from "./completion-bridge.js";
 import {
   classifyResultKind,
+  composeDisposers,
+  controllerForToken,
   runLanguageBridgeCall,
   type EditorLanguageIntelligenceReporter,
 } from "./language-intelligence.js";
@@ -111,17 +113,6 @@ function buildRequest(
   };
 }
 
-function controllerForToken(token: MonacoCancellationToken): AbortController {
-  const controller = new AbortController();
-  if (token.isCancellationRequested) {
-    controller.abort();
-  }
-  token.onCancellationRequested(() => {
-    controller.abort();
-  });
-  return controller;
-}
-
 const defaultUriForPath: MonacoUriForPath = (_path, currentModelUri) => currentModelUri;
 const EMPTY_LOCATIONS: readonly MonacoLocation[] = [];
 
@@ -139,7 +130,7 @@ export function createKeikoDefinitionProvider(
       sequence += 1;
       const request = buildRequest(deps, documentUri, position, sequence);
       latest = request.request;
-      const controller = controllerForToken(token);
+      const { controller, dispose } = controllerForToken(token);
       const query: EditorDefinitionQuery = { request, documentText: model.getValue() };
       return runLanguageBridgeCall<EditorDefinitionResponse, readonly MonacoLocation[] | undefined>(
         {
@@ -153,7 +144,9 @@ export function createKeikoDefinitionProvider(
             definitionResponseToMonaco(response, model.uri, deps.uriForPath ?? defaultUriForPath),
           report: deps.report,
         },
-      );
+      ).finally(() => {
+        dispose();
+      });
     },
   };
 }
@@ -167,16 +160,6 @@ export interface RegisterKeikoDefinitionProviderArgs {
   readonly newRequestId: () => string;
   readonly uriForPath?: MonacoUriForPath | undefined;
   readonly report?: EditorLanguageIntelligenceReporter | undefined;
-}
-
-function composeDisposers(disposers: readonly MonacoDisposable[]): MonacoDisposable {
-  return {
-    dispose(): void {
-      for (const disposer of disposers) {
-        disposer.dispose();
-      }
-    },
-  };
 }
 
 export function registerKeikoDefinitionProvider(

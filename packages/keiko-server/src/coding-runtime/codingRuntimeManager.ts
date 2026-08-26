@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { isDenied } from "@oscharko-dev/keiko-workspace";
 import { accessSync, constants, realpathSync, statSync } from "node:fs";
 import { basename, dirname, isAbsolute, join, relative } from "node:path";
 import { Readable } from "node:stream";
@@ -38,6 +39,7 @@ import {
   decideSupervisedFileEdit,
   decideSupervisedMutation,
   decideSupervisedVerificationCommand,
+  resolveEditTargetRealPath,
   type SupervisedCodingDecision,
 } from "./supervisedCodingPolicy.js";
 import {
@@ -2745,15 +2747,27 @@ function governedActionRuntimeEvent(
   return supervisedMutationEvent(active, sequence, event, request.actionKind);
 }
 
+// KEIKO-0557/#2906: classify BOTH the lexical sidecar-declared path AND the real,
+// symlink-resolved target within the workspace. A benign-looking in-workspace symlink (e.g.
+// `src/config-alias` -> `../.env`) stays root-contained -- so the containment gate alone would
+// admit it -- while pointing at a deny-listed file the lexical name never reveals.
+function classifySupervisedTargetSensitive(workspaceRoot: string, targetPath: string): boolean {
+  if (isDenied(targetPath)) return true;
+  const real = resolveEditTargetRealPath(workspaceRoot, targetPath);
+  return real.realRelative !== undefined && isDenied(real.realRelative);
+}
+
 function supervisedFileEditEvent(
   active: ActiveRuntime,
   sequence: number,
   event: SidecarPermissionEvent,
 ): CodingWorkbenchRuntimeEvent {
+  const targetPath = event.targetPath ?? "";
   const decision = decideSupervisedFileEdit({
     ...supervisedEvidenceContext(active, "file-edit"),
     workspaceRoot: active.context.workspaceRoot,
-    targetPath: event.targetPath ?? "",
+    targetPath,
+    targetSensitive: classifySupervisedTargetSensitive(active.context.workspaceRoot, targetPath),
     allowedRelativePaths: event.allowedRelativePaths ?? [".."],
     fileCount: event.fileCount ?? 0,
     addedLines: event.addedLines ?? 0,

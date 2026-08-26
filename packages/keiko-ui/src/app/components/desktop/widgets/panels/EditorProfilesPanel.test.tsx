@@ -6,6 +6,7 @@ import {
   EDITOR_M7_SCHEMA_VERSION,
   EDITOR_M7_SETTING_REGISTRY,
   EDITOR_M11_DEFAULT_PROFILE_REF,
+  WORKSPACE_PROFILE_DISPLAY_NAME_MAX_CHARS,
   isWorkspaceProfileRef,
   resolveEditorM11Settings,
   type EditorM11ProfileSummary,
@@ -137,6 +138,24 @@ function selectProfile(name: string): void {
   });
 }
 
+// KEIKO-0727: the profiles sub-snapshot is genuinely optional on EditorM11SettingsSnapshot (not
+// yet loaded, or an older schema) — this mirrors that state without any profiles data at all.
+function viewWithoutProfilesSnapshot(): EditorSettingsView {
+  const base = view(EDITOR_M11_DEFAULT_PROFILE_REF);
+  const snapshot: EditorM11SettingsSnapshot = {
+    schemaVersion: EDITOR_M7_SCHEMA_VERSION,
+    storeState: "ready",
+    userRevision: 0,
+    workspaceRevision: 0,
+    revision: 0,
+    etag: '"edm7-0-0-no-profiles"',
+    definitions: EDITOR_M7_SETTING_REGISTRY,
+    settings: resolveEditorM11Settings({}),
+    eventSequence: 0,
+  };
+  return { ...base, snapshot };
+}
+
 describe("EditorProfilesPanel", () => {
   it("has no axe violations in its normal rendered state", async () => {
     const { container } = renderPanel(view(EDITOR_M11_DEFAULT_PROFILE_REF));
@@ -265,5 +284,80 @@ describe("EditorProfilesPanel", () => {
     fireEvent.click(screen.getByRole("button", { name: "Rename" }));
 
     expect(currentView.renameProfile).toHaveBeenCalledWith(WORK.profileRef, "Deep Work");
+  });
+
+  // KEIKO-0727: a reserved name used to collapse into the same silent "buttons stay disabled"
+  // signal as every other rejection reason, with no error identification on the field itself.
+  it("marks the name input invalid with a translated, non-empty error for a reserved name", () => {
+    renderPanel(view(FOCUS.profileRef));
+
+    fireEvent.change(screen.getByLabelText("Profile name"), { target: { value: "default" } });
+
+    const input = screen.getByLabelText("Profile name");
+    expect(input).toHaveAttribute("aria-invalid", "true");
+    const describedBy = input.getAttribute("aria-describedby");
+    expect(describedBy).toBeTruthy();
+    const message = describedBy === null ? null : document.getElementById(describedBy);
+    expect(message?.textContent).toBe('"Default" is reserved. Choose a different name.');
+  });
+
+  it("has no axe violations while the name input is in an error state", async () => {
+    const { container } = renderPanel(view(FOCUS.profileRef));
+    fireEvent.change(screen.getByLabelText("Profile name"), { target: { value: "default" } });
+
+    expect(await axe(container)).toHaveNoViolations();
+  });
+
+  it("reports the too-long reason for a name over the character limit, distinct from 'reserved'/'invalid'", () => {
+    renderPanel(view(FOCUS.profileRef));
+    const overLong = "x".repeat(WORKSPACE_PROFILE_DISPLAY_NAME_MAX_CHARS + 1);
+
+    fireEvent.change(screen.getByLabelText("Profile name"), { target: { value: overLong } });
+
+    expect(screen.getByLabelText("Profile name")).toHaveAttribute("aria-invalid", "true");
+    expect(screen.getByRole("alert")).toHaveTextContent(
+      `The name is too long (max ${String(WORKSPACE_PROFILE_DISPLAY_NAME_MAX_CHARS)} characters).`,
+    );
+  });
+
+  it("clears the error and re-enables the buttons once the name becomes valid again", () => {
+    renderPanel(view(FOCUS.profileRef));
+    const input = screen.getByLabelText("Profile name");
+    fireEvent.change(input, { target: { value: "default" } });
+    expect(input).toHaveAttribute("aria-invalid", "true");
+
+    fireEvent.change(input, { target: { value: "Focused M11" } });
+
+    expect(input).toHaveAttribute("aria-invalid", "false");
+    expect(input).not.toHaveAttribute("aria-describedby");
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Create" })).toBeEnabled();
+  });
+
+  it("resolves the current-profile fallback label through i18n instead of a hardcoded English literal", async () => {
+    window.localStorage.setItem("keiko.locale", "de");
+    // No profile in the list matches this activeProfileRef, so `active` resolves to undefined and
+    // the panel falls back to the translated "Default" label rather than a real profile name.
+    renderPanel(view(profileRef("profile-ghost")));
+
+    expect(await screen.findByText("Aktuelles Profil: Standard")).toBeInTheDocument();
+  });
+
+  // KEIKO-0727: value={selectedRef} against zero <option> elements (no profiles snapshot loaded
+  // yet) is an invalid controlled-<select> state that both misrenders and logs a React warning.
+  it("does not render an invalid controlled <select> value while the profiles snapshot has not loaded", () => {
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    renderPanel(viewWithoutProfilesSnapshot());
+
+    const select = screen.getByLabelText("Profile");
+    const options = select.querySelectorAll("option");
+    expect(options).toHaveLength(1);
+    expect(options[0]).toBeDisabled();
+    expect(select).toHaveValue(EDITOR_M11_DEFAULT_PROFILE_REF);
+    expect(
+      consoleError.mock.calls.some((call) => String(call[0]).includes("does not match any option")),
+    ).toBe(false);
+
+    consoleError.mockRestore();
   });
 });

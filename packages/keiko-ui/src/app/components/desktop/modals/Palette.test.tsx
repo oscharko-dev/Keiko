@@ -251,4 +251,36 @@ describe("Palette", () => {
     fireEvent.click(cards()[2] as HTMLElement);
     expect(onAdd).toHaveBeenCalledWith(ORDER[2]);
   });
+
+  // PR #3289 review (follow-up to comment 3865167756's KeyboardShortcutsPanel fix): a window/tab
+  // blur reports relatedTarget === null, which the Node-only instanceof check on onBlur skipped
+  // entirely — leaving the palette dialog open after the window loses focus. Close on the
+  // relatedTarget === null && !document.hasFocus() signature, matching the sibling
+  // KeyboardShortcutsPanel RecordingControls onBlur behavior.
+  it("closes on a window/tab blur (relatedTarget null, document loses focus)", () => {
+    const { onClose } = renderPalette();
+    const dialog = screen.getByRole("dialog");
+    const hasFocusSpy = vi.spyOn(document, "hasFocus").mockReturnValue(false);
+    try {
+      fireEvent.blur(dialog, { relatedTarget: null });
+    } finally {
+      hasFocusSpy.mockRestore();
+    }
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  // Pins the AND condition: a null relatedTarget alone (document still focused) must not
+  // spuriously close the palette — only the window/tab-blur signature (null + document unfocused)
+  // does. Prevents a regression to "unconditionally treat every null relatedTarget as outside".
+  it("does not close when relatedTarget is null but the document still has focus", () => {
+    const { onClose } = renderPalette();
+    const dialog = screen.getByRole("dialog");
+    const hasFocusSpy = vi.spyOn(document, "hasFocus").mockReturnValue(true);
+    try {
+      fireEvent.blur(dialog, { relatedTarget: null });
+    } finally {
+      hasFocusSpy.mockRestore();
+    }
+    expect(onClose).not.toHaveBeenCalled();
+  });
 });

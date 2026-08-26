@@ -56,6 +56,7 @@ import {
   _resetEditorAgentStateForTests,
   _setEditorAgentPatchWriterForTests,
   applyChangesetErrorMessage,
+  authorityDenyReason,
   handleEditorAgentActions as handleEditorAgentActionsRoute,
   handleEditorAgentAuthority,
   handleEditorAgentAudit,
@@ -4610,6 +4611,30 @@ describe("applyChangesetErrorMessage (Issue #2117)", () => {
     expect(applyChangesetErrorMessage("not an Error instance")).toBe(
       "The changeset could not be applied atomically.",
     );
+  });
+});
+
+// #2906 round-3 review: authorityDenyReason previously collapsed a revoked authority into the same
+// generic authority-invalid bucket as a genuinely malformed one, even though
+// EditorAgentActionDenyReason has carried a dedicated "authority-revoked" literal since this PR's
+// registry-revocation contract expansion -- mirrors verificationAuthorityDenyReason's own coverage.
+describe("authorityDenyReason", () => {
+  it("maps an expired authority to authority-expired", () => {
+    expect(authorityDenyReason({ ok: false, reason: "expired" })).toBe("authority-expired");
+  });
+
+  it("maps an exhausted budget to authority-budget-exceeded", () => {
+    expect(authorityDenyReason({ ok: false, reason: "budget-exceeded" })).toBe(
+      "authority-budget-exceeded",
+    );
+  });
+
+  it("maps a revoked authority to authority-revoked", () => {
+    expect(authorityDenyReason({ ok: false, reason: "revoked" })).toBe("authority-revoked");
+  });
+
+  it("falls back to authority-invalid for a malformed envelope", () => {
+    expect(authorityDenyReason({ ok: false, reason: "invalid" })).toBe("authority-invalid");
   });
 });
 

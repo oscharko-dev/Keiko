@@ -239,6 +239,29 @@ class UpdateSessionManagerImpl implements UpdateSessionManager {
         message: "Cancellation requested. Waiting for the update operation to stop.",
       });
     }
+    // KEIKO-0637: extend cancel() to accept phase === "restart-required" as a documented exit.
+    // The package mutation has already completed successfully by the time we are in this phase
+    // (settleResult set restartRequired:true on exitCode===0); the only thing left is the
+    // out-of-band restart that would have flipped this to "succeeded". If that restart never
+    // happens (portable relaunch failed, user chose not to restart, or the launcher cannot
+    // provide a restartCommandPreview), the session would otherwise pin this.active forever and
+    // block every future `start`/`retry`. Allowing cancel() out of this phase clears the session
+    // slot without misreporting what happened -- the installed update remains on disk; only the
+    // session tracking is abandoned. The user-visible message states this explicitly so the
+    // caller cannot mistake it for an install rollback.
+    if (session.phase === "restart-required") {
+      return this.finish(
+        this.replace(session, {
+          phase: "cancelled",
+          failureReason: "cancelled",
+          cancelable: false,
+          retryable: false,
+          restartRequired: false,
+          message:
+            "Update tracking abandoned before restart verification. Restart Keiko manually to load the installed version.",
+        }),
+      );
+    }
     if (session.phase !== "preparing") {
       throw new UpdateSessionError(
         "UPDATE_NOT_CANCELABLE",

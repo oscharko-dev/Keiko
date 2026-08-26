@@ -24,6 +24,8 @@ import {
 import type { MonacoUriLike } from "./definition-bridge.js";
 import {
   classifyResultKind,
+  composeDisposers,
+  controllerForToken,
   runLanguageBridgeCall,
   type EditorLanguageIntelligenceReporter,
 } from "./language-intelligence.js";
@@ -138,17 +140,6 @@ function buildRequest(
   };
 }
 
-function controllerForToken(token: MonacoCancellationToken): AbortController {
-  const controller = new AbortController();
-  if (token.isCancellationRequested) {
-    controller.abort();
-  }
-  token.onCancellationRequested(() => {
-    controller.abort();
-  });
-  return controller;
-}
-
 export function createKeikoSignatureHelpProvider(
   deps: KeikoSignatureHelpProviderDeps,
 ): MonacoSignatureHelpProvider {
@@ -170,7 +161,7 @@ export function createKeikoSignatureHelpProvider(
       sequence += 1;
       const request = buildRequest(deps, documentUri, position, context, sequence);
       latest = request.request;
-      const controller = controllerForToken(token);
+      const { controller, dispose } = controllerForToken(token);
       const query: EditorSignatureHelpQuery = { request, documentText: model.getValue() };
       return runLanguageBridgeCall<
         EditorSignatureHelpResponse,
@@ -184,6 +175,8 @@ export function createKeikoSignatureHelpProvider(
         classify: (response) => classifyResultKind(response.signatures.length, response.truncated),
         present: signatureHelpResponseToMonaco,
         report: deps.report,
+      }).finally(() => {
+        dispose();
       });
     },
   };
@@ -199,16 +192,6 @@ export interface RegisterKeikoSignatureHelpProviderArgs {
   readonly triggerCharacters?: readonly string[] | undefined;
   readonly retriggerCharacters?: readonly string[] | undefined;
   readonly report?: EditorLanguageIntelligenceReporter | undefined;
-}
-
-function composeDisposers(disposers: readonly MonacoDisposable[]): MonacoDisposable {
-  return {
-    dispose(): void {
-      for (const disposer of disposers) {
-        disposer.dispose();
-      }
-    },
-  };
 }
 
 export const DEFAULT_SIGNATURE_HELP_TRIGGER_CHARACTERS: readonly string[] = ["(", ","];

@@ -167,6 +167,10 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
   "chat.history.purgeWarning":
     "Permanently delete this conversation and its stored messages? This cannot be undone.",
   "chat.history.purgeFailed": "Permanent delete failed: {detail}",
+  "chat.history.renameEmptyTitle": "Title cannot be empty.",
+  "chat.history.renameFailed": "Rename failed.",
+  "chat.history.deleteFailed": "Delete failed: {detail}",
+  "chat.history.restoreFailed": "Restore failed: {detail}",
   "chat.regenerate.versionSelector": "Response version",
   "chat.regenerate.version": "Version {version}",
   "chat.regenerate.versionCurrent": "Version {version} (current)",
@@ -772,6 +776,8 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
   "searchPanel.replace.noPreviewComputed": "No replace preview has been computed.",
   "searchPanel.replace.omittedSuffix": " {count} files omitted.",
   "searchPanel.replace.rootPrefixedStatus": "{rootLabel}: {message}",
+  "searchPanel.replace.searchLimitSuffix":
+    " Search did not scan every match; this preview may be incomplete.",
   "searchPanel.replace.summary": "{editCount} replacements across {fileCount} files.{omitted}",
   "searchPanel.rootErrors.one": "One root could not be {operation}.",
   "searchPanel.rootErrors.operationPreviewed": "previewed",

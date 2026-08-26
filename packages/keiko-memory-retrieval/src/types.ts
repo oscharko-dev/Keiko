@@ -206,7 +206,12 @@ export interface IncludedMemory {
 }
 
 export type OmittedReason =
-  "suppressed-by-status" | "below-threshold" | "budget-exceeded" | "out-of-scope" | "type-filtered";
+  | "suppressed-by-status"
+  | "below-threshold"
+  | "budget-exceeded"
+  | "max-included-exceeded"
+  | "out-of-scope"
+  | "type-filtered";
 
 export interface OmittedMemory {
   readonly memoryId: MemoryId;

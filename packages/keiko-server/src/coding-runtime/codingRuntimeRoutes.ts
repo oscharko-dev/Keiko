@@ -40,18 +40,22 @@ interface RuntimeDeps {
   readonly eventHub: CodingRuntimeEventHub;
 }
 
-function unavailable(): RouteResult {
+// KEIKO-0534: helper wrappers now accept the request's correlation id so 4xx/404/503 error
+// bodies match manual-pod-routes.ts's convention (errorBody(code, message, ctx.correlationId)).
+function unavailable(correlationId?: string): RouteResult {
   return {
     status: 503,
     body: errorBody(
       "CODING_RUNTIME_UNAVAILABLE",
       "Coding runtime is not configured for this server.",
+      correlationId,
     ),
   };
 }
 
-function requireRuntime(deps: UiHandlerDeps): RuntimeDeps | RouteResult {
-  if (!deps.codingRuntimeOrchestrator || !deps.codingRuntimeEventHub) return unavailable();
+function requireRuntime(deps: UiHandlerDeps, correlationId?: string): RuntimeDeps | RouteResult {
+  if (!deps.codingRuntimeOrchestrator || !deps.codingRuntimeEventHub)
+    return unavailable(correlationId);
   return { orchestrator: deps.codingRuntimeOrchestrator, eventHub: deps.codingRuntimeEventHub };
 }
 
@@ -65,21 +69,25 @@ function failureStatus(failureCode: CodingWorkbenchRuntimeFailureCode): number {
   return 400;
 }
 
-function failureResult(failureCode: CodingWorkbenchRuntimeFailureCode): RouteResult {
+function failureResult(
+  failureCode: CodingWorkbenchRuntimeFailureCode,
+  correlationId?: string,
+): RouteResult {
   const status = failureStatus(failureCode);
   return {
     status,
     body: errorBody(
       `CODING_RUNTIME_${failureCode.replaceAll("-", "_").toUpperCase()}`,
       "Runtime request was rejected.",
+      correlationId,
     ),
   };
 }
 
-function notFound(): RouteResult {
+function notFound(correlationId?: string): RouteResult {
   return {
     status: 404,
-    body: errorBody("CODING_RUNTIME_RUN_NOT_FOUND", "Runtime run was not found."),
+    body: errorBody("CODING_RUNTIME_RUN_NOT_FOUND", "Runtime run was not found.", correlationId),
   };
 }
 
@@ -123,14 +131,17 @@ function readBody(req: IncomingMessage): Promise<unknown> {
   });
 }
 
-async function withBody(work: () => Promise<RouteResult>): Promise<RouteResult> {
+async function withBody(
+  work: () => Promise<RouteResult>,
+  correlationId?: string,
+): Promise<RouteResult> {
   try {
     return await work();
   } catch (error) {
     if (error instanceof BodyTooLargeError)
       return {
         status: 413,
-        body: errorBody("PAYLOAD_TOO_LARGE", "Request body exceeds the size limit."),
+        body: errorBody("PAYLOAD_TOO_LARGE", "Request body exceeds the size limit.", correlationId),
       };
     throw error;
   }
@@ -164,7 +175,9 @@ function requireMutationAuthority(
   runId: string | undefined,
 ): RouteResult | undefined {
   if (resolveAppSessionReadAuthority(deps, ctx.req) !== undefined) return undefined;
-  return runId === undefined ? failureResult("authority-resolution-failed") : notFound();
+  return runId === undefined
+    ? failureResult("authority-resolution-failed", ctx.correlationId)
+    : notFound(ctx.correlationId);
 }
 
 async function mutation(
@@ -178,15 +191,18 @@ async function mutation(
 ): Promise<RouteResult> {
   const denied = requireMutationAuthority(ctx, deps, runId);
   if (denied !== undefined) return denied;
-  const required = requireRuntime(deps);
+  const required = requireRuntime(deps, ctx.correlationId);
   if (isRouteResult(required)) return required;
-  if (runId !== undefined && !required.orchestrator.getSnapshot(runId)) return notFound();
+  if (runId !== undefined && !required.orchestrator.getSnapshot(runId))
+    return notFound(ctx.correlationId);
   return withBody(async () => {
     const body = await readBody(ctx.req);
-    if (body === undefined) return failureResult("invalid-intent");
+    if (body === undefined) return failureResult("invalid-intent", ctx.correlationId);
     const result = await operation(required.orchestrator, body);
-    return result.ok ? { status: 200, body: result.snapshot } : failureResult(result.failureCode);
-  });
+    return result.ok
+      ? { status: 200, body: result.snapshot }
+      : failureResult(result.failureCode, ctx.correlationId);
+  }, ctx.correlationId);
 }
 
 export function handleCreateCodingRuntimeRun(
@@ -200,8 +216,8 @@ export function handleCodingRuntimeStatus(ctx: RouteContext, deps: UiHandlerDeps
   // The status request has no input surface. Rejecting every query parameter both makes the
   // transport contract exact and ensures this handler cannot silently grow a caller-controlled
   // selector that turns the otherwise content-free projection into an existence oracle (#2644).
-  if (ctx.url.searchParams.size !== 0) return failureResult("invalid-intent");
-  const required = requireRuntime(deps);
+  if (ctx.url.searchParams.size !== 0) return failureResult("invalid-intent", ctx.correlationId);
+  const required = requireRuntime(deps, ctx.correlationId);
   return isRouteResult(required) ? required : { status: 200, body: required.orchestrator.status() };
 }
 
@@ -212,9 +228,9 @@ export function handleCodingRuntimeReadiness(ctx: RouteContext, deps: UiHandlerD
     values.length !== 1 ||
     [...ctx.url.searchParams.keys()].some((key) => key !== "requestedMode")
   ) {
-    return failureResult("invalid-intent");
+    return failureResult("invalid-intent", ctx.correlationId);
   }
-  if (!parsed.ok) return failureResult("invalid-intent");
+  if (!parsed.ok) return failureResult("invalid-intent", ctx.correlationId);
   // The readiness projection must report the same ceiling the coding-runtime mint clamp
   // enforces; the autonomous-delivery ceiling is a separate authority knob (#2475).
   const deploymentCeiling = deps.codingRuntimeDeploymentCeiling ?? "governed-assist";
@@ -282,10 +298,10 @@ function confirmedEffectiveMode(
 }
 
 export function handleGetCodingRuntimeRun(ctx: RouteContext, deps: UiHandlerDeps): RouteResult {
-  const required = requireRuntime(deps);
+  const required = requireRuntime(deps, ctx.correlationId);
   if (isRouteResult(required)) return required;
   const snapshot = required.orchestrator.getSnapshot(ctx.params.runId ?? "");
-  return snapshot ? { status: 200, body: snapshot } : notFound();
+  return snapshot ? { status: 200, body: snapshot } : notFound(ctx.correlationId);
 }
 
 export function handleCodingRuntimeApproval(
@@ -294,7 +310,7 @@ export function handleCodingRuntimeApproval(
 ): Promise<RouteResult> {
   const runId = ctx.params.runId;
   return runId === undefined
-    ? Promise.resolve(notFound())
+    ? Promise.resolve(notFound(ctx.correlationId))
     : mutation(ctx, deps, runId, (runtime, body) => runtime.decideApproval(runId, body));
 }
 export function handleCodingRuntimeStop(
@@ -303,7 +319,7 @@ export function handleCodingRuntimeStop(
 ): Promise<RouteResult> {
   const runId = ctx.params.runId;
   return runId === undefined
-    ? Promise.resolve(notFound())
+    ? Promise.resolve(notFound(ctx.correlationId))
     : mutation(ctx, deps, runId, (runtime, body) => runtime.stop(runId, body));
 }
 export function handleCodingRuntimeTakeover(
@@ -312,7 +328,7 @@ export function handleCodingRuntimeTakeover(
 ): Promise<RouteResult> {
   const runId = ctx.params.runId;
   return runId === undefined
-    ? Promise.resolve(notFound())
+    ? Promise.resolve(notFound(ctx.correlationId))
     : mutation(ctx, deps, runId, (runtime, body) => runtime.takeover(runId, body));
 }
 export function handleCodingRuntimeRetry(
@@ -321,7 +337,7 @@ export function handleCodingRuntimeRetry(
 ): Promise<RouteResult> {
   const runId = ctx.params.runId;
   return runId === undefined
-    ? Promise.resolve(notFound())
+    ? Promise.resolve(notFound(ctx.correlationId))
     : mutation(ctx, deps, runId, (runtime, body) => runtime.retry(runId, body));
 }
 export function handleCodingRuntimeRecoveryAcknowledgement(
@@ -330,7 +346,7 @@ export function handleCodingRuntimeRecoveryAcknowledgement(
 ): Promise<RouteResult> {
   const runId = ctx.params.runId;
   return runId === undefined
-    ? Promise.resolve(notFound())
+    ? Promise.resolve(notFound(ctx.correlationId))
     : mutation(ctx, deps, runId, (runtime, body) => runtime.acknowledgeRecovery(runId, body));
 }
 
@@ -340,7 +356,7 @@ export function handleCodingRuntimePause(
 ): Promise<RouteResult> {
   const runId = ctx.params.runId;
   return runId === undefined
-    ? Promise.resolve(notFound())
+    ? Promise.resolve(notFound(ctx.correlationId))
     : mutation(ctx, deps, runId, (runtime, body) => runtime.pause(runId, body));
 }
 
@@ -350,7 +366,7 @@ export function handleCodingRuntimeResume(
 ): Promise<RouteResult> {
   const runId = ctx.params.runId;
   return runId === undefined
-    ? Promise.resolve(notFound())
+    ? Promise.resolve(notFound(ctx.correlationId))
     : mutation(ctx, deps, runId, (runtime, body) => runtime.resume(runId, body));
 }
 
@@ -363,7 +379,7 @@ export function handleCodingRuntimeResearchRevoke(
 ): Promise<RouteResult> {
   const runId = ctx.params.runId;
   return runId === undefined
-    ? Promise.resolve(notFound())
+    ? Promise.resolve(notFound(ctx.correlationId))
     : mutation(ctx, deps, runId, (runtime, body) => runtime.revokeResearch(runId, body));
 }
 
@@ -376,7 +392,7 @@ export function handleCodingRuntimeFollowUp(
 ): Promise<RouteResult> {
   const runId = ctx.params.runId;
   return runId === undefined
-    ? Promise.resolve(notFound())
+    ? Promise.resolve(notFound(ctx.correlationId))
     : mutation(ctx, deps, runId, (runtime, body) => runtime.submitFollowUp(runId, body));
 }
 
@@ -395,11 +411,11 @@ export function handleCodingRuntimeQuestionAnswer(
   deps: UiHandlerDeps,
 ): Promise<RouteResult> {
   if (resolveAppSessionReadAuthority(deps, ctx.req) === undefined) {
-    return Promise.resolve(notFound());
+    return Promise.resolve(notFound(ctx.correlationId));
   }
   const runId = ctx.params.runId;
   return runId === undefined
-    ? Promise.resolve(notFound())
+    ? Promise.resolve(notFound(ctx.correlationId))
     : mutation(ctx, deps, runId, (runtime, body) => runtime.answerQuestion(runId, body));
 }
 
@@ -408,11 +424,11 @@ export function handleCodingRuntimeQuestionReject(
   deps: UiHandlerDeps,
 ): Promise<RouteResult> {
   if (resolveAppSessionReadAuthority(deps, ctx.req) === undefined) {
-    return Promise.resolve(notFound());
+    return Promise.resolve(notFound(ctx.correlationId));
   }
   const runId = ctx.params.runId;
   return runId === undefined
-    ? Promise.resolve(notFound())
+    ? Promise.resolve(notFound(ctx.correlationId))
     : mutation(ctx, deps, runId, (runtime, body) => runtime.rejectQuestion(runId, body));
 }
 
@@ -427,21 +443,22 @@ export function handleCodingRuntimeQuestionList(
     });
   }
   const runId = ctx.params.runId;
-  if (runId === undefined) return Promise.resolve(notFound());
-  const required = requireRuntime(deps);
+  if (runId === undefined) return Promise.resolve(notFound(ctx.correlationId));
+  const required = requireRuntime(deps, ctx.correlationId);
   if (isRouteResult(required)) return Promise.resolve(required);
-  if (!required.orchestrator.getSnapshot(runId)) return Promise.resolve(notFound());
+  if (!required.orchestrator.getSnapshot(runId))
+    return Promise.resolve(notFound(ctx.correlationId));
   return withBody(async () => {
     const body = await readBody(ctx.req);
-    if (body === undefined) return failureResult("invalid-intent");
+    if (body === undefined) return failureResult("invalid-intent", ctx.correlationId);
     const result = await required.orchestrator.listQuestions(runId, body);
-    if (!result.ok) return failureResult(result.failureCode);
+    if (!result.ok) return failureResult(result.failureCode, ctx.correlationId);
     const payload: CodingWorkbenchRuntimeQuestionsChannelPayload = {
       session: "active",
       questions: result.questions.questions,
     };
     return { status: 200, body: payload };
-  });
+  }, ctx.correlationId);
 }
 
 /**
@@ -455,10 +472,10 @@ export function handleCodingRuntimeResearch(ctx: RouteContext, deps: UiHandlerDe
     return { status: 200, body: unpairedCodingWorkbenchRuntimeResearchChannelPayload() };
   }
   const runId = ctx.params.runId;
-  if (runId === undefined) return notFound();
-  const required = requireRuntime(deps);
+  if (runId === undefined) return notFound(ctx.correlationId);
+  const required = requireRuntime(deps, ctx.correlationId);
   if (isRouteResult(required)) return required;
-  if (!required.orchestrator.getSnapshot(runId)) return notFound();
+  if (!required.orchestrator.getSnapshot(runId)) return notFound(ctx.correlationId);
   const pending = required.orchestrator.pendingResearchAsk(runId);
   const grant = required.orchestrator.researchGrant(runId);
   const payload: CodingWorkbenchRuntimeResearchChannelPayload = {
@@ -485,10 +502,10 @@ export function handleCodingRuntimeApprovalReview(
     return { status: 200, body: unpairedCodingWorkbenchRuntimeApprovalReviewChannelPayload() };
   }
   const runId = ctx.params.runId;
-  if (runId === undefined) return notFound();
-  const required = requireRuntime(deps);
+  if (runId === undefined) return notFound(ctx.correlationId);
+  const required = requireRuntime(deps, ctx.correlationId);
   if (isRouteResult(required)) return required;
-  if (!required.orchestrator.getSnapshot(runId)) return notFound();
+  if (!required.orchestrator.getSnapshot(runId)) return notFound(ctx.correlationId);
   const pending = required.orchestrator.pendingApprovalReview(runId);
   const payload: CodingWorkbenchRuntimeApprovalReviewChannelPayload = {
     session: "active",
@@ -515,10 +532,10 @@ function resolveEventCursor(
 }
 
 export function handleCodingRuntimeEvents(ctx: RouteContext, deps: UiHandlerDeps): HandlerOutcome {
-  const required = requireRuntime(deps);
+  const required = requireRuntime(deps, ctx.correlationId);
   if (isRouteResult(required)) return required;
   const runId = ctx.params.runId ?? "";
-  if (!required.orchestrator.getSnapshot(runId)) return notFound();
+  if (!required.orchestrator.getSnapshot(runId)) return notFound(ctx.correlationId);
   const lastEventId = ctx.req.headers["last-event-id"];
   const queryCursor = ctx.url.searchParams.get("cursor");
   const cursor = resolveEventCursor(lastEventId, queryCursor);

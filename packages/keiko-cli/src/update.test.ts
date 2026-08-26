@@ -228,18 +228,37 @@ function fakeRemediation(report = baseRemediation()): UpdateRemediationManager {
 function fakeSessionManager(
   initial: UpdateSessionStatus,
   terminal = updateSession(),
+  // #2906 round 3 (comment 3865273709): the number of getStatus() calls that must report the
+  // session as still "running" before it flips to `terminal`. Defaults to 0 (the original,
+  // immediately-terminal behavior every other call site relies on) — only a test that wants to
+  // reach waitForTerminalSession's polling loop itself passes a positive value.
+  nonTerminalPolls = 0,
 ): {
   readonly manager: UpdateSessionManager;
   readonly startedTargets: () => readonly string[];
+  readonly getStatusCallCount: () => number;
 } {
   let status = initial;
+  let started = false;
+  let statusCalls = 0;
   const startedTargets: string[] = [];
   const manager: UpdateSessionManager = {
-    getStatus: () => status,
+    getStatus: (): UpdateSessionStatus => {
+      if (!started) return status;
+      statusCalls += 1;
+      const stillPending = statusCalls <= nonTerminalPolls;
+      return {
+        ...status,
+        lastSession: stillPending ? { ...terminal, phase: "running" } : terminal,
+      };
+    },
     start: (input): UpdateSessionStartOutcome => {
       startedTargets.push(input.targetVersion);
-      status = { ...status, lastSession: terminal };
-      return { session: terminal, reused: false };
+      started = true;
+      const outcomeSession =
+        nonTerminalPolls > 0 ? { ...terminal, phase: "running" as const } : terminal;
+      status = { ...status, lastSession: outcomeSession };
+      return { session: outcomeSession, reused: false };
     },
     retry: (): never => {
       throw new Error("retry not used");
@@ -251,7 +270,7 @@ function fakeSessionManager(
       throw new Error("verifyRestart not used");
     },
   };
-  return { manager, startedTargets: () => startedTargets };
+  return { manager, startedTargets: () => startedTargets, getStatusCallCount: () => statusCalls };
 }
 
 function output(captured: Captured): string {
@@ -434,6 +453,46 @@ describe("keiko update CLI", () => {
     expect(output(c)).toContain("keep using the current version");
     expect(output(c)).not.toContain("Use your package manager outside Keiko");
     expect(output(c)).not.toContain("manual path");
+  });
+
+  // KEIKO-0809: `waitForTerminalSession` used pollIntervalMs as both the sleep interval
+  // AND the loop's `elapsed +=` increment, so a caller-supplied `pollIntervalMs: 0`
+  // produced `elapsed += 0` and looped forever. The clamp forces a positive tick so the
+  // maxWaitMs bound applies even when the caller passes 0.
+  //
+  // #2906 round 3 (comment 3865273709): the ORIGINAL fixture here stored the terminal session
+  // inside `start()` itself, so `waitForTerminalSession` found it terminal on its very first
+  // probe — sleep was never called, elapsed was never incremented, and the clamp this test
+  // claims to protect never ran at all. It passed identically against the pre-fix
+  // zero-increment loop, because that loop never got a chance to iterate either way. Holding
+  // the session "running" for a few polls forces the loop to actually iterate — and therefore
+  // to actually exercise the pollIntervalMs=0 clamp — before it resolves.
+  it("bounds the apply wait even when the poll interval is zero", async () => {
+    const c = makeIo();
+    const session = fakeSessionManager(baseStatus(), updateSession(), 3);
+    const sleepIntervals: number[] = [];
+    const code = await runUpdate(["apply"], c, {
+      preflight: fakePreflight(baseReport()).preflight,
+      session: session.manager,
+      remediation: fakeRemediation(),
+      sleep: (ms: number): Promise<void> => {
+        sleepIntervals.push(ms);
+        return Promise.resolve();
+      },
+      pollIntervalMs: 0,
+      maxWaitMs: 10,
+    });
+
+    expect(code).toBe(0);
+    // The loop must actually have run: at least one sleep, driven by the non-terminal polls
+    // above. The pre-fix bug produced `elapsed += 0` — every requested interval must be
+    // strictly positive, which the clamp guarantees and the bug did not.
+    expect(sleepIntervals.length).toBeGreaterThan(0);
+    expect(sleepIntervals.every((ms) => ms > 0)).toBe(true);
+    // A hard upper bound well below the previous infinite-spin behavior.
+    expect(sleepIntervals.length).toBeLessThan(100);
+    // The session must have actually reached the terminal phase (not merely timed out).
+    expect(session.getStatusCallCount()).toBeGreaterThan(0);
   });
 
   it("starts safe apply and reports restart-required without raw logs", async () => {

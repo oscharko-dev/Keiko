@@ -5,6 +5,7 @@ import {
   lstatSync,
   mkdirSync,
   mkdtempSync,
+  opendirSync,
   readdirSync,
   readFileSync,
   realpathSync,
@@ -278,21 +279,132 @@ export function sameRealPath(left: string, right: string): boolean {
   }
 }
 
-function readdirSafe(path: string): readonly string[] {
-  return existsSync(path) ? [...new Set(readdirSync(path))].sort((a, b) => a.localeCompare(b)) : [];
+// KEIKO-0901: bounded copy budgets. The previous recursive copyTreeSafe had no depth,
+// entry-count, or byte cap, so a hostile portable payload (deep symlink-free directory
+// tree, huge fanout, or a compressed-but-expands-catastrophically archive) could OOM
+// the CLI or exhaust the recursion stack. Each bound throws a named Error that
+// setupPortable's existing catch converts into a fail-closed registration, matching
+// how "unsafe links" / "unsupported filesystem entries" already surface.
+const PORTABLE_PAYLOAD_MAX_DEPTH = 32;
+// #2906 round 3 (comment 3865273684): 1,000,000 was itself an impractical CPU/inode ceiling —
+// enforcing it still meant walking (and inode-allocating) up to a million entries before
+// refusing. 200,000 is a realistically derived cap: this repo's own full development
+// `node_modules` (every workspace's devDependencies included, never itself a copy source) tops
+// out at ~34,000 files, and the payload this function actually copies is the ALREADY-PRUNED
+// `portable:stage` runtime (bundleDependencies only) — a small fraction of that. 200,000 keeps
+// ~6x headroom over the measured upper bound while cutting the worst-case enumeration/copy work
+// by 5x.
+const PORTABLE_PAYLOAD_MAX_ENTRIES = 200_000;
+const PORTABLE_PAYLOAD_MAX_BYTES = 4 * 1024 * 1024 * 1024; // 4 GiB
+
+interface PortableCopyBudget {
+  entries: number;
+  bytes: number;
+}
+
+// #2906 round 3 (comment 3865273684) / KEIKO-0901 test seam: overridable ONLY through
+// _copyTreeSafeForTests below — every production call site uses DEFAULT_PORTABLE_COPY_LIMITS —
+// so entry-count and cumulative-byte regressions can exercise the cap-exceeded path with a
+// handful of small fixtures instead of hundreds of thousands of files or gigabytes of data.
+interface PortableCopyLimits {
+  readonly maxEntries: number;
+  readonly maxBytes: number;
+}
+
+const DEFAULT_PORTABLE_COPY_LIMITS: PortableCopyLimits = {
+  maxEntries: PORTABLE_PAYLOAD_MAX_ENTRIES,
+  maxBytes: PORTABLE_PAYLOAD_MAX_BYTES,
+};
+
+// KEIKO-0901 test seam: exported under an underscore prefix so unit tests can exercise
+// the depth/entry/byte cap directly without setting up the full setupPortable pipeline.
+// Not part of the CLI's advertised public surface — production callers use setupPortable
+// or upgradeManagedInstall.
+export function _copyTreeSafeForTests(
+  source: string,
+  destination: string,
+  limits: PortableCopyLimits = DEFAULT_PORTABLE_COPY_LIMITS,
+): void {
+  copyTreeBounded(source, destination, 0, { entries: 0, bytes: 0 }, limits);
 }
 
 function copyTreeSafe(source: string, destination: string): void {
+  copyTreeBounded(source, destination, 0, { entries: 0, bytes: 0 }, DEFAULT_PORTABLE_COPY_LIMITS);
+}
+
+function isEnoent(error: unknown): boolean {
+  return (error as NodeJS.ErrnoException).code === "ENOENT";
+}
+
+// #2906 round 3 (comment 3865273684): streams directory entries with opendirSync/readSync
+// instead of materializing the full listing (the previous readdirSafe read the ENTIRE directory
+// into an array via readdirSync before this loop ever incremented the budget, so a hostile
+// huge-fanout directory could exhaust memory before the entry-count guard was ever evaluated).
+// Each entry is fed to copyTreeBounded — and therefore counted against the budget — as soon as
+// it is read, so enumeration itself aborts the instant the cap is exceeded rather than after
+// the whole directory has been read into memory.
+function copyDirectoryEntriesBounded(
+  source: string,
+  destination: string,
+  depth: number,
+  budget: PortableCopyBudget,
+  limits: PortableCopyLimits,
+): void {
+  let dir: ReturnType<typeof opendirSync>;
+  try {
+    dir = opendirSync(source);
+  } catch (error) {
+    // Matches readdirSafe's original tolerance: a directory that vanished between the caller's
+    // lstatSync and this open (or was never there) has nothing to copy — not a hard failure.
+    if (isEnoent(error)) return;
+    throw error;
+  }
+  try {
+    for (let entry = dir.readSync(); entry !== null; entry = dir.readSync()) {
+      copyTreeBounded(
+        join(source, entry.name),
+        join(destination, entry.name),
+        depth + 1,
+        budget,
+        limits,
+      );
+    }
+  } finally {
+    dir.closeSync();
+  }
+}
+
+function copyTreeBounded(
+  source: string,
+  destination: string,
+  depth: number,
+  budget: PortableCopyBudget,
+  limits: PortableCopyLimits,
+): void {
+  if (depth > PORTABLE_PAYLOAD_MAX_DEPTH) {
+    throw new Error(
+      `portable payload exceeds maximum depth (${String(PORTABLE_PAYLOAD_MAX_DEPTH)})`,
+    );
+  }
+  budget.entries += 1;
+  if (budget.entries > limits.maxEntries) {
+    throw new Error(`portable payload exceeds maximum entry count (${String(limits.maxEntries)})`);
+  }
   const file = lstatSync(source);
   if (file.isSymbolicLink()) throw new Error("portable payload contains unsafe links");
   if (file.isDirectory()) {
     mkdirSync(destination, { recursive: true });
-    for (const entry of readdirSafe(source))
-      copyTreeSafe(join(source, entry), join(destination, entry));
+    copyDirectoryEntriesBounded(source, destination, depth, budget, limits);
     return;
   }
   if (!file.isFile()) throw new Error("portable payload contains unsupported filesystem entries");
   if (file.nlink > 1) throw new Error("portable payload contains unsafe links");
+  budget.bytes += file.size;
+  if (budget.bytes > limits.maxBytes) {
+    throw new Error(
+      `portable payload exceeds maximum cumulative size (${String(limits.maxBytes)} bytes)`,
+    );
+  }
   mkdirSync(dirname(destination), { recursive: true });
   copyFileSync(source, destination);
 }

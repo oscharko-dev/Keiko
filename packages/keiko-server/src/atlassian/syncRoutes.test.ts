@@ -47,7 +47,11 @@ import {
   handleListAtlassianConnectorActivity,
   handleStartAtlassianConnectorSync,
 } from "./syncRoutes.js";
-import { atlassianSyncJobRegistry, connectorSourceIdFor } from "./syncService.js";
+import {
+  atlassianSyncJobRegistry,
+  connectorIdForAuthRef,
+  connectorSourceIdFor,
+} from "./syncService.js";
 
 const BASE_URL = "https://tenant.example";
 const SYNTHETIC_TOKEN = ["ATATT", "sync", "route", "0123456789", "abcdefghij"].join("");
@@ -485,6 +489,54 @@ describe("Confluence sync — degradation and redaction", () => {
     expect(terminal.changeSummary.counts.addedItems).toBe(0);
 
     // The pod shell survives untouched as a draft with its approved scope.
+    const opened = openKnowledgeStoreForDeps(deps);
+    try {
+      const capsule = getCapsule(opened.store, started.capsuleId as KnowledgeCapsuleId);
+      expect(capsule?.lifecycleState).toBe("draft");
+    } finally {
+      opened.close();
+    }
+  });
+
+  it("does not resurrect the registry when graph disposal races an in-flight run (#2906 round 3)", async () => {
+    // Regression for the detached-setImmediate bug: startAtlassianSyncJob schedules executeSyncJob
+    // via setImmediate, capturing this run's deps/registry by closure. createUiHandlerDispose
+    // (deps.ts) calls registry.reset() on graph disposal; before the fix, a still-in-flight job
+    // would resurrect the cleared registry (recordActivity) once its aborted fetch unwound.
+    let firstRequestStarted: (() => void) | undefined;
+    const gate = new Promise<void>((resolve) => {
+      firstRequestStarted = resolve;
+    });
+    const blockingPort: AtlassianHttpBodyPort = (request) =>
+      new Promise<AtlassianHttpBodyResult>((resolve) => {
+        firstRequestStarted?.();
+        // Not retried (only a `{kind:"response"}` with a 429/5xx status is retried -- see
+        // createBudgetedRetryingPort), so this unwinds without any real backoff timer.
+        request.signal?.addEventListener("abort", () => {
+          resolve({ kind: "timeout" });
+        });
+      });
+    const { deps, credential } = depsFor(blockingPort);
+    const started = await startSync(deps, credential, { spaceKeys: ["ENG"] });
+    await gate;
+
+    // Simulate the graph being disposed while the run is still mid-flight -- exactly what
+    // createUiHandlerDispose does to atlassianSyncJobRegistry on dispose().
+    atlassianSyncJobRegistry.reset();
+
+    // Let the aborted fetch unwind and (pre-fix) resurrect the registry. No real timers are
+    // involved (see above), so draining already-queued turns is sufficient and deterministic.
+    for (let turn = 0; turn < 25; turn += 1) {
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
+    }
+
+    expect(atlassianSyncJobRegistry.jobCount).toBe(0);
+    const connectorId = connectorIdForAuthRef(credential.authRef);
+    expect(atlassianSyncJobRegistry.listActivity(connectorId)).toEqual([]);
+
+    // Persistence must stay untouched too: the pod shell survives as an unmodified draft.
     const opened = openKnowledgeStoreForDeps(deps);
     try {
       const capsule = getCapsule(opened.store, started.capsuleId as KnowledgeCapsuleId);

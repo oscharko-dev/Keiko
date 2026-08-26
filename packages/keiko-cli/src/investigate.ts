@@ -34,7 +34,13 @@ import type {
   BugReportInput,
   BugWorkflowEventSink,
 } from "@oscharko-dev/keiko-workflows";
-import { loadGatewayConfigFromFile } from "./gateway-config.js";
+// KEIKO-0655: shared argv-parsing helper replaces the byte-identical flagValue copy and the
+// structurally-identical readValueFlags loop this file, evaluate.ts, and gen-tests.ts held —
+// flagValue itself is used only inside readNamedValueFlags now, so only that is imported here.
+import { readNamedValueFlags } from "./cli-arg-parsing.js";
+// KEIKO-0655: shared model-resolution helpers replace the byte-identical buildModel /
+// resolveConfiguredModelId / resolveModel copies this file and gen-tests.ts held.
+import { resolveModelOrExitCode } from "./cli-model-resolution.js";
 // GEN-PERF-CLI-001 — heavy graphs load at dispatch; module scope stays type-only.
 import {
   loadEvidence,
@@ -45,9 +51,7 @@ import {
 } from "./lazy-modules.js";
 import type { CliIo } from "./runner.js";
 import type { LogTimeline, ServerLogLineView } from "./support-analyze.js";
-
 type GatewayModule = typeof import("@oscharko-dev/keiko-model-gateway");
-type HarnessModule = typeof import("@oscharko-dev/keiko-harness");
 type WorkspacePackage = typeof import("@oscharko-dev/keiko-workspace");
 type EvidenceModule = typeof import("@oscharko-dev/keiko-evidence");
 type WorkflowsModule = typeof import("@oscharko-dev/keiko-workflows");
@@ -101,17 +105,6 @@ interface InvestigateArgs {
   readonly evidenceDir: string | undefined;
 }
 
-// Returns the value of a `--flag value` pair, undefined if absent, or null if present without a
-// value (a usage error) — identical contract to runGenTestsCli's flagValue.
-function flagValue(args: readonly string[], name: string): string | undefined | null {
-  const i = args.indexOf(name);
-  if (i === -1) {
-    return undefined;
-  }
-  const value = args[i + 1];
-  return value === undefined || value.startsWith("--") ? null : value;
-}
-
 const VALUE_FLAGS = [
   "--description",
   "--output",
@@ -129,15 +122,7 @@ type ValueFlag = (typeof VALUE_FLAGS)[number];
 type FlagValues = Record<ValueFlag, string | undefined>;
 
 function readValueFlags(args: readonly string[]): FlagValues | null {
-  const values = {} as FlagValues;
-  for (const flag of VALUE_FLAGS) {
-    const value = flagValue(args, flag);
-    if (value === null) {
-      return null;
-    }
-    values[flag] = value;
-  }
-  return values;
+  return readNamedValueFlags(args, VALUE_FLAGS);
 }
 
 function parseFiles(raw: string | undefined): readonly string[] | undefined {
@@ -371,95 +356,10 @@ function workspaceEvidenceReader(
   return (path: string): string => readWorkspaceFile(workspace, path).text;
 }
 
-async function buildModel(
-  parsed: InvestigateArgs,
-  io: CliIo,
-  env: EnvSource,
-  gateway: GatewayModule,
-  harness: HarnessModule,
-): Promise<{ port: ModelPort; modelId: string } | number> {
-  try {
-    const path = parsed.config ?? env.KEIKO_CONFIG_FILE;
-    if (path === undefined) {
-      throw new gateway.ConfigInvalidError(
-        "no config source; pass --config PATH or set KEIKO_CONFIG_FILE",
-      );
-    }
-    const config = await loadGatewayConfigFromFile(path, env);
-    if (parsed.model !== undefined) {
-      gateway.assertConfiguredModel(config, parsed.model);
-    }
-    const modelId =
-      parsed.model ??
-      gateway.selectConfiguredModel(config, {
-        kind: "chat",
-        toolCalling: true,
-        structuredOutput: true,
-      });
-    if (modelId === undefined) {
-      io.err("Error: no configured workflow-capable chat model is available.\n");
-      return 1;
-    }
-    return { port: new harness.GatewayModelPort(new gateway.Gateway(config)), modelId };
-  } catch (error) {
-    if (error instanceof gateway.GatewayError) {
-      io.err(
-        `Error: model gateway configuration problem — ${gateway.redact(error.message)}\n` +
-          `Provide a gateway config with --config PATH or KEIKO_CONFIG_FILE.\n`,
-      );
-      return 1;
-    }
-    throw error;
-  }
-}
-
-async function resolveConfiguredModelId(
-  parsed: InvestigateArgs,
-  env: EnvSource,
-  gateway: GatewayModule,
-): Promise<string | undefined> {
-  const path = parsed.config ?? env.KEIKO_CONFIG_FILE;
-  if (path === undefined) {
-    return parsed.model ?? "default";
-  }
-  const config = await loadGatewayConfigFromFile(path, env);
-  if (parsed.model !== undefined) {
-    gateway.assertConfiguredModel(config, parsed.model);
-    return parsed.model;
-  }
-  return gateway.selectConfiguredModel(config, {
-    kind: "chat",
-    toolCalling: true,
-    structuredOutput: true,
-  });
-}
-
-async function resolveModel(
-  parsed: InvestigateArgs,
-  io: CliIo,
-  env: EnvSource,
-  deps: InvestigateDeps,
-  gateway: GatewayModule,
-  harness: HarnessModule,
-): Promise<{ port: ModelPort; modelId: string } | number> {
-  if (deps.model !== undefined) {
-    try {
-      const modelId = await resolveConfiguredModelId(parsed, env, gateway);
-      if (modelId === undefined) {
-        io.err("Error: no configured workflow-capable chat model is available.\n");
-        return 1;
-      }
-      return { port: deps.model, modelId };
-    } catch (error) {
-      if (error instanceof gateway.GatewayError) {
-        io.err(`Error: model gateway configuration problem — ${gateway.redact(error.message)}\n`);
-        return 1;
-      }
-      throw error;
-    }
-  }
-  return buildModel(parsed, io, env, gateway, harness);
-}
+// KEIKO-0655: model-resolution helpers moved to cli-model-resolution.ts. gen-tests and
+// investigate now share the same buildWorkflowCapableModel / resolveConfiguredModelId /
+// resolveModelOrExitCode surface — a change to the resolution rules (workflow-capable
+// selector, config source precedence, GatewayError → exit-1 mapping) happens in one place.
 
 function printText(
   report: BugInvestigationReport,
@@ -521,6 +421,9 @@ function handleCliError(
     return 1;
   }
   if (error instanceof Error && isFileReadError(error)) {
+    // KEIKO-0910: keep gateway.redact here — a raw fs error's `error.message` is NOT a
+    // RedactingError (ADR-0003 only covers GatewayError et al.) and its text can carry
+    // absolute filesystem paths, so the redaction is load-bearing rather than redundant.
     io.err(`Error: could not read an evidence file — ${gateway.redact(error.message)}\n`);
     return 1;
   }
@@ -736,7 +639,7 @@ export async function runInvestigateCli(
     loadWorkspaceModule(),
     loadEvidence(),
   ]);
-  const model = await resolveModel(parsed, io, env, deps, gateway, harness);
+  const model = await resolveModelOrExitCode(parsed, io, env, deps.model, gateway, harness);
   if (typeof model === "number") {
     return model;
   }

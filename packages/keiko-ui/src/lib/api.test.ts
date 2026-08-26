@@ -1687,6 +1687,45 @@ describe("files API helpers", () => {
     );
   });
 
+  // #2906 review (comment 3865167732): fetchGitStructuredDiff had no `signal` parameter at all,
+  // so the git-gutter bridge's per-refresh AbortController could never stop an in-flight
+  // structured-diff request early -- a superseded refresh just had its stale result ignored on
+  // arrival while the request kept running underneath it. This is a GET (read) request, so
+  // fetchJson's withReadDeadline composes the caller's signal with its own read-deadline signal
+  // (AbortSignal.any) rather than forwarding it verbatim -- same as the "abortable no-store reads"
+  // case above -- so the assertion is that the composed signal reacts to the caller aborting, not
+  // strict object identity.
+  it("forwards an abort signal from fetchGitStructuredDiff to the underlying fetch", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      jsonResponse({
+        schemaVersion: "1",
+        scope: "staged",
+        files: [],
+        truncated: false,
+        totalFiles: 0,
+        totalBytes: 0,
+        maxBytes: 524288,
+        maxFiles: 400,
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const controller = new AbortController();
+
+    await fetchGitStructuredDiff(
+      { root: "/repo", path: "src/a.ts", scope: "staged" },
+      controller.signal,
+    );
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/git/diff/structured?root=%2Frepo&scope=staged&path=src%2Fa.ts",
+      expect.any(Object),
+    );
+    const init = fetchMock.mock.calls[0]?.[1] as RequestInit;
+    expect(init.signal?.aborted).toBe(false);
+    controller.abort();
+    expect(init.signal?.aborted).toBe(true);
+  });
+
   it("encodes Git summary, history, and remotes requests", async () => {
     const fetchMock = vi
       .fn()

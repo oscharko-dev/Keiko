@@ -13,6 +13,8 @@ import {
   type CodingAppSessionChannelSnapshot,
 } from "./channelContract.js";
 import type { UiHandlerDeps } from "../deps.js";
+import { emitServerDiagnostic, DEFAULT_SERVER_DIAGNOSTIC_SUMMARY } from "../diagnostics-log.js";
+import { UNKNOWN_CORRELATION_ID } from "../correlation.js";
 import {
   STREAMING,
   type HandlerOutcome,
@@ -21,6 +23,7 @@ import {
   type RouteResult,
 } from "../routes.js";
 import { SSE_HEADERS } from "../sse.js";
+import { resolveCodingAppSessionDenialWindows } from "./denialWindows.js";
 import {
   APP_SESSION_COOKIE_MAX_AGE_SECONDS,
   clearSessionCookies,
@@ -30,6 +33,36 @@ import {
 } from "./sessionCookie.js";
 
 const MAX_PAIRING_BODY_BYTES = 8 * 1_024;
+
+// KEIKO-0838: rate-limited aggregate diagnostic for pairing/rotate denials so an operator can
+// notice a systemic launcher-pairing failure without turning each attempt into a pairing-attempt
+// oracle. The window is coarse (60 s) and the threshold is high enough to avoid emitting on
+// isolated retries; only when denials cluster (>= DENIAL_ALERT_THRESHOLD in one window) do we
+// emit ONE aggregate ServerDiagnosticRecord carrying just the occurrenceCount -- never per-
+// attempt detail (no attestation content, no cookie tokens, no session ids, no timestamps). The
+// window counters themselves are graph-scoped (denialWindows.ts, #2906 round 3) rather than module
+// globals, so two independently composed `UiHandlerDeps` graphs never share or cross-pollute counts.
+function emitPairingDenialAggregate(
+  deps: UiHandlerDeps,
+  operation: "coding-app-session.pair" | "coding-app-session.rotate",
+  count: number,
+): void {
+  if (deps.diagnostics === undefined) return;
+  emitServerDiagnostic(deps.diagnostics, {
+    // No single request owns this aggregate (it summarizes many denied attempts across the
+    // window), so there is no per-request correlation id to thread -- UNKNOWN_CORRELATION_ID is
+    // the sanctioned shape-valid stand-in. An empty string is not a valid correlation id and is
+    // rewritten to INVALID_CORRELATION_ID_MARKER by the sanitizer, which is indistinguishable from
+    // a hostile producer value and breaks support-timeline joins for this diagnostic.
+    correlationId: UNKNOWN_CORRELATION_ID,
+    timestamp: new Date().toISOString(),
+    operation,
+    source: "coding-app-session-routes",
+    errorClass: "PairingDenialsExceeded",
+    message: DEFAULT_SERVER_DIAGNOSTIC_SUMMARY,
+    occurrenceCount: count,
+  });
+}
 
 /** Read and JSON-parse a bounded request body, resolving `undefined` on any failure (fail closed). */
 export function readPairingBody(req: IncomingMessage): Promise<unknown> {
@@ -96,6 +129,12 @@ export async function handleCodingAppSessionPair(
   if (channel === undefined) return ackResult();
   const attestation = await readPairingBody(ctx.req);
   const result = channel.pair(attestation);
+  if (!result.paired) {
+    // KEIKO-0838: aggregate denials into one rate-limited, count-only diagnostic per window.
+    resolveCodingAppSessionDenialWindows(deps).recordPairingDenial(Date.now(), (count) => {
+      emitPairingDenialAggregate(deps, "coding-app-session.pair", count);
+    });
+  }
   return result.paired ? ackResult(issuedCookie(ctx.req, result.cookieToken)) : ackResult();
 }
 
@@ -178,6 +217,12 @@ export function handleCodingAppSessionRotate(ctx: RouteContext, deps: UiHandlerD
   const channel = deps.codingAppSessionChannel;
   if (channel === undefined) return ackResult();
   const result = channel.rotate(readSessionCookie(ctx.req));
+  if (!result.rotated) {
+    // KEIKO-0838: same aggregate-diagnostic pattern as pair(), independent window/counter.
+    resolveCodingAppSessionDenialWindows(deps).recordRotateDenial(Date.now(), (count) => {
+      emitPairingDenialAggregate(deps, "coding-app-session.rotate", count);
+    });
+  }
   return result.rotated ? ackResult(issuedCookie(ctx.req, result.cookieToken)) : ackResult();
 }
 

@@ -186,6 +186,32 @@ export class AtlassianSyncJobRegistry {
 
 export const atlassianSyncJobRegistry = new AtlassianSyncJobRegistry();
 
+// KEIKO-0565 remediation (PR #3289 review): see resolveAtlassianActionApprovalRegistry's doc
+// comment in actionApprovals.ts — the same rule applies here. Every consumer resolves through this
+// function; reading the bare `atlassianSyncJobRegistry` import directly is the bug that let two
+// independently composed `UiHandlerDeps` graphs share one job/activity registry.
+export function resolveAtlassianSyncJobRegistry(
+  deps: Pick<UiHandlerDeps, "atlassianSyncJobRegistry">,
+): AtlassianSyncJobRegistry {
+  return deps.atlassianSyncJobRegistry ?? atlassianSyncJobRegistry;
+}
+
+// #2906 round 3 (PR #3289 review, follow-up to KEIKO-0565): startAtlassianSyncJob schedules
+// executeSyncJob via a detached `setImmediate` that captures this run's `deps`/registry by
+// closure. If the owning `UiHandlerDeps` graph is disposed (createUiHandlerDispose in deps.ts
+// calls `registry.reset()`) before that callback runs -- or while it is still awaiting the
+// provider fetch -- the job must not resurrect the cleared registry via `recordActivity`, nor
+// reopen/mutate persistence on a graph that no longer owns it. `reset()` removes every job from
+// the registry's map, so membership IS the disposal signal: a job cancelled through the ordinary
+// `cancel()` route stays registered (only its controller aborts), so this guard never interferes
+// with normal cancellation, only with a graph that has gone away out from under a running job.
+export function syncJobStillOwned(
+  deps: Pick<UiHandlerDeps, "atlassianSyncJobRegistry">,
+  jobId: string,
+): boolean {
+  return resolveAtlassianSyncJobRegistry(deps).get(jobId) !== undefined;
+}
+
 // ─── Job state projection ──────────────────────────────────────────────────────
 type JobCommonFields = Pick<
   AtlassianSyncJobState,
@@ -631,7 +657,9 @@ function recordSyncActivity(
 ): void {
   const outcome = ACTIVITY_OUTCOME_BY_SUMMARY[summary.outcome];
   const recordedReason = syncActivityReasonCode(context, outcome, reasonCode);
-  atlassianSyncJobRegistry.recordActivity({
+  // KEIKO-0565: resolve context.deps's OWN registry, not the process-wide singleton (PR #3289
+  // review) — context.deps is the same UiHandlerDeps the run started under (see startAtlassianSyncJob).
+  resolveAtlassianSyncJobRegistry(context.deps).recordActivity({
     schemaVersion: ATLASSIAN_CONNECTOR_SCHEMA_VERSION,
     activityId: randomUUID(),
     occurredAt: completedAt,
@@ -712,6 +740,8 @@ function failJobClosed(context: SyncRunContext): void {
 }
 
 async function executeSyncJob(context: SyncRunContext): Promise<void> {
+  // The graph may already be disposed before this detached setImmediate callback ever runs.
+  if (!syncJobStillOwned(context.deps, context.job.jobId)) return;
   try {
     context.job.startedAt = context.now();
     updateRunningProgress(context, zeroProgress());
@@ -730,8 +760,12 @@ async function executeSyncJob(context: SyncRunContext): Promise<void> {
         context.enumeration.snapshot = snapshot;
       },
     });
+    // ...or disposal can race the in-flight fetch itself (abort does not guarantee the provider
+    // settles synchronously). Re-check before finalize reopens/mutates persistence.
+    if (!syncJobStillOwned(context.deps, context.job.jobId)) return;
     await finalizeRun(context, outcome);
   } catch (error) {
+    if (!syncJobStillOwned(context.deps, context.job.jobId)) return;
     emitServerDiagnostic(
       context.deps.diagnostics,
       serverDiagnosticFromError({
@@ -796,7 +830,10 @@ export async function startAtlassianSyncJob(
   } finally {
     opened.close();
   }
-  if (atlassianSyncJobRegistry.hasActiveRunForCapsule(String(target.capsuleId))) {
+  // KEIKO-0565: resolve THIS call's own deps-scoped registry once and reuse it for both the
+  // capacity check and the registration below, so they observe the same instance (PR #3289 review).
+  const syncJobRegistry = resolveAtlassianSyncJobRegistry(deps);
+  if (syncJobRegistry.hasActiveRunForCapsule(String(target.capsuleId))) {
     throw new AtlassianSyncRequestError(
       409,
       "SYNC_ALREADY_RUNNING",
@@ -804,7 +841,7 @@ export async function startAtlassianSyncJob(
     );
   }
   const job = buildPendingJob(input, target, now());
-  atlassianSyncJobRegistry.register(job);
+  syncJobRegistry.register(job);
   const context: SyncRunContext = {
     deps,
     job,

@@ -552,11 +552,101 @@ describe("POST /api/editor/workspace-search/replace-preview", () => {
       fileCount: number;
       omittedFileCount: number;
       truncated: boolean;
+      searchTruncationReasons: readonly string[];
     };
     expect(body.files).toHaveLength(1);
     expect(body.fileCount).toBe(1);
     expect(body.omittedFileCount).toBeGreaterThan(0);
     expect(body.truncated).toBe(true);
+    // KEIKO-0645-r3: this truncation is entirely from the per-request maxFiles cap; the upstream
+    // search selection did not itself truncate, so searchTruncationReasons must be empty.
+    expect(body.searchTruncationReasons).toEqual([]);
+  });
+
+  it("KEIKO-0645-r3: emits searchTruncationReasons on the response so callers can distinguish the truncation cause", async () => {
+    // Prove the field is present and always reflects searchText's own result.coverage.reasons --
+    // so a caller can tell whether `truncated: true` was caused by the upstream candidate-file
+    // selection (maxFilesScanned/maxMatchesReturned/timeout/depth-pruning) or by the per-request
+    // `maxFiles` cap (omittedFileCount > 0). This shape test locks the field in; the maxFiles-only
+    // test above covers the "search did not truncate" branch (searchTruncationReasons: []), and
+    // this one asserts the field is always emitted on the wire even in the trivial no-truncation
+    // case.
+    const result = await handleEditorWorkspaceReplacePreview(
+      postContext(
+        replaceBody({ includeGlobs: ["src/a.ts"] }),
+        "/api/editor/workspace-search/replace-preview",
+      ),
+      deps(),
+    );
+
+    expect(result.status).toBe(200);
+    const body = result.body as {
+      truncated: boolean;
+      omittedFileCount: number;
+      searchTruncationReasons: readonly string[];
+    };
+    expect(body.truncated).toBe(false);
+    expect(body.omittedFileCount).toBe(0);
+    expect(body.searchTruncationReasons).toEqual([]);
+    // Distinctness: the response must expose both fields as separate wire shape entries so a
+    // future caller can bind on either one without inspecting `truncated`.
+    expect(Object.keys(body)).toEqual(
+      expect.arrayContaining(["truncated", "omittedFileCount", "searchTruncationReasons"]),
+    );
+  });
+
+  it("KEIKO-0645-r3: an upstream match-cap truncation is reported as match-cap, not conflated with a file omission", async () => {
+    // Regression for the round-3 finding: the pre-fix field (`filesOmittedBySearchLimit:
+    // result.truncated`) was set whenever the upstream search truncated for ANY reason -- so a
+    // caller could not tell "the query fanned out across too many distinct files to enumerate them
+    // all" (a genuine per-file omission, reason "file-cap") apart from "the total match-return
+    // budget (200) was exhausted while emitting results" (reason "match-cap"), which can happen
+    // with plenty of scanned files and zero files dropped by the route's own maxFiles cap. Build
+    // more distinct matching files than DEFAULT_SEARCH_LIMITS.maxMatchesReturned (200), each
+    // contributing one match, so searchText's emission-time cap (repoSearchScan.ts hitEmissionLimit)
+    // fires with reason "match-cap" -- never "file-cap" (maxFilesScanned is 2,000, far above 250).
+    const manyDir = join(root, "src", "many");
+    await mkdir(manyDir, { recursive: true });
+    await Promise.all(
+      Array.from({ length: 250 }, (_, i) =>
+        writeFile(
+          join(manyDir, `file-${String(i).padStart(3, "0")}.ts`),
+          "needle_marker\n",
+          "utf8",
+        ),
+      ),
+    );
+
+    const result = await handleEditorWorkspaceReplacePreview(
+      postContext(
+        replaceBody({
+          query: "needle_marker",
+          mode: "literal",
+          includeGlobs: ["src/many/**"],
+          // WORKSPACE_REPLACE_MAX_FILES is 200 -- the contract-validated ceiling for this field --
+          // which happens to equal DEFAULT_SEARCH_LIMITS.maxMatchesReturned, so the route's own
+          // per-request cap never binds ahead of the upstream search's match-cap in this scenario.
+          maxFiles: 200,
+        }),
+        "/api/editor/workspace-search/replace-preview",
+      ),
+      deps(),
+    );
+
+    expect(result.status).toBe(200);
+    const body = result.body as {
+      omittedFileCount: number;
+      truncated: boolean;
+      searchTruncationReasons: readonly string[];
+    };
+    // The route's own maxFiles cap (300) never bound the response -- every file that made it into
+    // the upstream search's result set was processed, so the route-local omission count is 0.
+    expect(body.omittedFileCount).toBe(0);
+    // The upstream search itself still truncated (match-cap), so `truncated` stays true --
+    // but the precise cause must be "match-cap", never "file-cap".
+    expect(body.truncated).toBe(true);
+    expect(body.searchTruncationReasons).toContain("match-cap");
+    expect(body.searchTruncationReasons).not.toContain("file-cap");
   });
 
   it("accepts a validator-approved regex containing an unescaped quantifier-like character instead of crashing", async () => {

@@ -39,11 +39,18 @@ export function EditorProfilesPanel({
   // A draft belongs to the profile it was typed for. The selection can also move on its own — the
   // chosen profile gets deleted and the fallback takes over — and carrying the draft across that
   // would rename or duplicate a profile the text was never meant for.
-  const displayName =
-    nameDraft?.profileRef === selectedRef ? nameDraft.text : projectedDisplayName(selected);
-  const validName =
-    isAssignableWorkspaceProfileDisplayName(displayName) &&
-    !isReservedWorkspaceProfileDisplayName(displayName);
+  const isEditingName = nameDraft?.profileRef === selectedRef;
+  const displayName = isEditingName ? nameDraft.text : projectedDisplayName(selected);
+  const nameValidity = validateProfileDisplayName(displayName);
+  // The alert is scoped to an ACTIVE edit, not the field's mere display value: the built-in
+  // profile's field is deliberately seeded empty (see projectedDisplayName below), and an empty,
+  // untouched field fails validation the same way a typed one would — showing "this name isn't
+  // allowed" for a field nobody has typed into yet would be a false alarm on every fresh load.
+  // Buttons still gate on `nameValidity.ok` unconditionally below (unchanged): only the visible
+  // alert/aria-invalid/aria-describedby wait for the user to actually start editing.
+  const showNameError = !nameValidity.ok && isEditingName;
+  const nameErrorId = showNameError ? "editor-profile-name-error" : undefined;
+  const profileOptions = snapshot?.profiles ?? [];
   return (
     <section className={styles.section} aria-labelledby="editor-profiles-title">
       <header className={styles.header}>
@@ -53,7 +60,9 @@ export function EditorProfilesPanel({
         <p className={styles.description}>{t("settings.profiles.description")}</p>
       </header>
       <output className={styles.profileCurrent} aria-live="polite">
-        {t("settings.profiles.current", { name: active?.displayName ?? "Default" })}
+        {t("settings.profiles.current", {
+          name: active?.displayName ?? t("settings.profiles.defaultName"),
+        })}
       </output>
       {snapshot?.storeState === "unavailable" ? (
         <div className={styles.alert} role="alert">
@@ -75,31 +84,47 @@ export function EditorProfilesPanel({
               setChosenRef(next.profileRef);
             }}
           >
-            {(snapshot?.profiles ?? []).map((profile) => (
-              <option key={profile.profileRef} value={profile.profileRef}>
-                {profile.displayName}
-              </option>
-            ))}
+            {profileOptions.length === 0 ? (
+              // No profile is loaded yet (snapshot === undefined, or an empty list): a
+              // populated `value={selectedRef}` with zero <option> elements is an invalid
+              // controlled-select state. This disabled placeholder keeps `value` matching a
+              // real option until the real list arrives.
+              <option value={selectedRef} disabled />
+            ) : (
+              profileOptions.map((profile) => (
+                <option key={profile.profileRef} value={profile.profileRef}>
+                  {profile.displayName}
+                </option>
+              ))
+            )}
           </select>
         </label>
         <label className={styles.field}>
           {t("settings.profiles.name")}
           <input
+            id="editor-profile-name"
             className={styles.input}
             value={displayName}
             maxLength={WORKSPACE_PROFILE_DISPLAY_NAME_MAX_CHARS}
+            aria-invalid={showNameError}
+            aria-describedby={nameErrorId}
             onChange={(event) =>
               setNameDraft({ profileRef: selectedRef, text: event.target.value })
             }
           />
         </label>
+        {showNameError && !nameValidity.ok ? (
+          <div className={styles.alert} role="alert" id={nameErrorId}>
+            {profileNameErrorMessage(nameValidity.reason, t)}
+          </div>
+        ) : null}
         <ProfileActions
           activeRef={snapshot?.activeProfileRef}
           disabled={view.mutating || snapshot === undefined}
           displayName={displayName}
           selected={selected}
           t={t}
-          validName={validName}
+          validName={nameValidity.ok}
           view={view}
         />
       </div>
@@ -111,6 +136,40 @@ export function EditorProfilesPanel({
 interface NameDraft {
   readonly profileRef: WorkspaceProfileRef;
   readonly text: string;
+}
+
+type ProfileNameReasonCode = "reserved" | "invalid" | "tooLong";
+
+type ProfileNameValidity =
+  { readonly ok: true } | { readonly ok: false; readonly reason: ProfileNameReasonCode };
+
+// KEIKO-0727: a bare boolean collapsed every rejection reason (reserved name, disallowed
+// characters/padding, over the length cap) into the same silent "buttons stay disabled" signal,
+// with no way for the user to tell which one applied. Order matters here: "reserved" is checked
+// first since it is the most specific, actionable diagnosis; "tooLong" next since it is the most
+// common way to fail the underlying isAssignableWorkspaceProfileDisplayName check; anything else
+// that check rejects (empty, control characters, leading/trailing whitespace) falls to "invalid".
+function validateProfileDisplayName(value: string): ProfileNameValidity {
+  if (isReservedWorkspaceProfileDisplayName(value)) {
+    return { ok: false, reason: "reserved" };
+  }
+  if (value.length > WORKSPACE_PROFILE_DISPLAY_NAME_MAX_CHARS) {
+    return { ok: false, reason: "tooLong" };
+  }
+  if (!isAssignableWorkspaceProfileDisplayName(value)) {
+    return { ok: false, reason: "invalid" };
+  }
+  return { ok: true };
+}
+
+function profileNameErrorMessage(reason: ProfileNameReasonCode, t: I18nTranslate): string {
+  if (reason === "reserved") return t("settings.profiles.name.reserved");
+  if (reason === "tooLong") {
+    return t("settings.profiles.name.tooLong", {
+      max: WORKSPACE_PROFILE_DISPLAY_NAME_MAX_CHARS,
+    });
+  }
+  return t("settings.profiles.name.invalid");
 }
 
 /**

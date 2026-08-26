@@ -1,3 +1,5 @@
+// KEIKO-0695: hoisted from the very last line of the file up to the top-of-file import block.
+import { CODING_WORKBENCH_RUNTIME_QUESTIONS_MAX_UTF8_BYTES } from "@oscharko-dev/keiko-contracts";
 import {
   createOpenCodeSseDecoder,
   parseOpenCodeJson,
@@ -941,4 +943,3 @@ function parseEndpoint(value: string): URL | undefined {
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
-import { CODING_WORKBENCH_RUNTIME_QUESTIONS_MAX_UTF8_BYTES } from "@oscharko-dev/keiko-contracts";

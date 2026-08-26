@@ -36,6 +36,7 @@ import { createDebugLaunchLayer2Validator } from "./debugLaunchPlan.js";
 import {
   createDebugSessionRegistry,
   type DebugOutputLimitEvent,
+  type DebugSessionAbandonedEvidence,
   type DebugSessionRegistry,
 } from "./debugSessionRegistry.js";
 import {
@@ -195,6 +196,9 @@ function composeDapProductionService(
       lifecycleLedger.append(partition, evidence).then(() => undefined),
     now: deps.now,
     emitOutputLimit: deps.emitOutputLimit,
+    onEvidenceAbandoned: (input) => {
+      reportEvidenceAbandoned(deps, input);
+    },
   });
   const validateCapsulePlan = factories.createLayer2Validator({
     now: deps.now,
@@ -268,6 +272,29 @@ function reportProjectionFailure(
     }),
   );
   deps.onProjectionFailure?.(error);
+}
+
+// Same "never vanish silently" invariant as reportRuntimeFailure/reportProjectionFailure, applied
+// to the bounded terminal-evidence retry in debugSessionRegistry.ts (#2906 round 3, P1): once a
+// session's appendEvidence() has failed enough times in a row, the registry gives up and drops the
+// session rather than blocking registryHealth() forever (see TERMINATION_RECONCILE_MAX_ATTEMPTS).
+// That give-up is a genuine evidence-durability loss, not a benign retry outcome, so it is always
+// reported here -- body-free (attempts count only; no session/workspace identifier, matching the
+// sibling reporters above) -- so an operator can tell "recovered after a transient blip" apart
+// from "this session's terminal evidence is gone for good".
+function reportEvidenceAbandoned(
+  deps: DapProductionServiceDeps,
+  input: DebugSessionAbandonedEvidence,
+): void {
+  emitServerDiagnostic(deps.diagnosticSink, {
+    correlationId: `dap-evidence-abandoned-${randomUUID()}`,
+    timestamp: new Date().toISOString(),
+    operation: "dap.production.evidence-abandoned",
+    source: "dapProductionService.registry",
+    errorClass: "DebugSessionTerminalEvidenceAbandoned",
+    message: "dap-session-terminal-evidence-abandoned",
+    occurrenceCount: input.attempts,
+  });
 }
 
 function createDapServiceDisposer(

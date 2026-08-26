@@ -1,4 +1,7 @@
 import { describe, expect, it } from "vitest";
+
+import { KEIKO_PRODUCT_VERSION } from "@oscharko-dev/keiko-contracts";
+
 import {
   CodexAppServerClient,
   type CodexAppServerScheduler,
@@ -91,7 +94,7 @@ describe("Codex app-server client", () => {
       },
     });
     const initialize = client.request("initialize", {
-      clientInfo: { name: "keiko", version: "0.2.15" },
+      clientInfo: { name: "keiko", version: KEIKO_PRODUCT_VERSION },
       capabilities: {
         experimentalApi: false,
         requestAttestation: false,

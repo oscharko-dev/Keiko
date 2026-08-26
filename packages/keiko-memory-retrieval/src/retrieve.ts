@@ -127,6 +127,22 @@ function validateAndResolve(request: MemoryRetrievalRequest): ResolvedRequest {
   if (request.scopes.length === 0) {
     throw new RetrievalError("empty-scopes", "request.scopes must contain at least one scope");
   }
+  // #2906 KEIKO-0574 — nowMs is a REQUIRED field on MemoryRetrievalRequest but was never
+  // validated here. exponentialDecay's `ageMs <= 0` guard is false for NaN, so an invalid
+  // clock silently produces a NaN decay score that propagates into the ranking sort
+  // comparator instead of failing closed at the boundary.
+  // #2906 round-3 review — finiteness alone still accepted a negative epoch (e.g. nowMs = -1):
+  // every normal positive validUntil then reads as "in the future" and every record reads as
+  // future/fresh for recency, silently re-admitting already-expired memories. Require a finite,
+  // non-negative timestamp, matching the same "finite non-negative number" contract every other
+  // durable memory timestamp is held to (see isFiniteNonNegativeNumber's callers across
+  // keiko-contracts's memory-*-validation modules).
+  if (!Number.isFinite(request.nowMs) || request.nowMs < 0) {
+    throw new RetrievalError(
+      "invalid-clock",
+      `nowMs must be a finite non-negative number (got ${String(request.nowMs)})`,
+    );
+  }
   const budgetTokens = request.budgetTokens ?? DEFAULT_BUDGET_TOKENS;
   const maxIncluded = request.maxIncluded ?? DEFAULT_MAX_INCLUDED;
   assertNonNegativeBudget(budgetTokens, maxIncluded);
@@ -137,6 +153,13 @@ function validateAndResolve(request: MemoryRetrievalRequest): ResolvedRequest {
   assertUnitThreshold("staleConfidenceThreshold", staleConfidenceThreshold);
   const semanticMinScore = request.semanticMinScore ?? DEFAULT_SEMANTIC_MIN_SCORE;
   assertUnitThreshold("semanticMinScore", semanticMinScore);
+  // #2906 KEIKO-0696 — mmrLambda is optional (defaults to DEFAULT_MMR_LAMBDA at the read site)
+  // but must be a unit threshold when supplied so NaN cannot silently degrade reorderByMmr
+  // to always-pick-first-remaining. Mirrors the staleConfidenceThreshold/semanticMinScore
+  // pattern above.
+  if (request.mmrLambda !== undefined) {
+    assertUnitThreshold("mmrLambda", request.mmrLambda);
+  }
   return {
     budgetTokens,
     maxIncluded,

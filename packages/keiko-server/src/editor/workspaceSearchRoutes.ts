@@ -435,8 +435,14 @@ async function buildReplacePreviewResponse(
     files,
     fileCount: files.length,
     editCount,
+    // KEIKO-0645/KEIKO-0645-r3: `truncated` is the union of both truncation causes; `omittedFileCount`
+    // and `searchTruncationReasons` let a caller reason about each cause independently.
+    // `searchTruncationReasons` is `result.coverage.reasons` verbatim -- it may report "match-cap",
+    // "timeout", "depth-pruned", or "aborted" without any distinct matching file having been
+    // omitted from the upstream search; only "file-cap" means a matching file was actually dropped.
     truncated: result.truncated || omittedFileCount > 0,
     omittedFileCount,
+    searchTruncationReasons: result.coverage.reasons,
   };
 }
 

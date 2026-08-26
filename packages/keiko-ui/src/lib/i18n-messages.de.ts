@@ -334,6 +334,15 @@ export const DE_MESSAGES = {
   "window.type.mobile.title": "Keiko Mobile",
   "window.type.mobile.desc": "Mobiler Begleiter",
   "mobile.previewNotice": "Vorschau — Kopplung noch nicht verdrahtet",
+  "mobile.subtitle": "Mobiler Begleiter — noch nicht verfügbar.",
+  "relationships.tracking.label": "Tracking",
+  "relationships.tracking.evicted.long":
+    "Tracking-Limit erreicht — es wird nur der letzte bekannte Lifecycle-Zustand angezeigt.",
+  "relationships.tracking.evicted.short": "Tracking-Limit erreicht",
+  "relationships.tracking.evicted.parenthetical":
+    "(Tracking-Limit erreicht — nur letzter bekannter Lifecycle wird angezeigt)",
+  "relationships.tracking.evicted.title":
+    "Live-Aktivitäts-Tracking hat für diese Beziehung sein Limit erreicht — es wird nur der letzte bekannte Lifecycle-Zustand angezeigt.",
   "window.type.inspector.title": "Inspektor",
   "window.type.inspector.desc": "Arbeitsbereich inspizieren",
   "window.type.activity.title": "Aktivität",
@@ -383,8 +392,12 @@ export const DE_MESSAGES = {
   "chat.history.action.save": "{title} speichern",
   "chat.history.action.cancel": "{title} abbrechen",
   "chat.history.action.restore": "{title} wiederherstellen",
+  "chat.history.action.renameLabel": "Umbenennen",
+  "chat.history.action.restoreLabel": "Wiederherstellen",
+  "chat.history.tab.active": "Aktiv",
+  "chat.history.tab.deleted": "Gelöscht",
   "window.type.resources.title": "Ressourcen",
-  "window.type.resources.desc": "Systemressourcen",
+  "window.type.resources.desc": "Geteilte Assets & Referenzen — bald verfügbar.",
   "window.type.connector.title": "Knowledge Pod",
   "window.type.connector.desc": "Knowledge-Pod-Quelle auswählen",
   "window.type.localKnowledge.title": "Lokales Wissen",
@@ -1702,6 +1715,8 @@ export const DE_MESSAGES = {
     "Die Autorisierung für diese Aktion ist abgelaufen.",
   "atlassianConnectors.denied.reason.authority-budget-exceeded":
     "Das Autorisierungsbudget für diese Aktion ist aufgebraucht.",
+  "atlassianConnectors.denied.reason.authority-revoked":
+    "Die Autorisierung für diese Aktion wurde während der Ausführung widerrufen.",
   "atlassianConnectors.denied.reason.connector-access-denied":
     "Connector-Zugriff ist für diese Aktion nicht zulässig.",
   "atlassianConnectors.denied.reason.connector-write-denied":

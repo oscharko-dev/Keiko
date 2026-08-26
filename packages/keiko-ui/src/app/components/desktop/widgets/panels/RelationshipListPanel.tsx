@@ -187,12 +187,30 @@ const ACTIVITY_PRIORITY: Record<RelationshipActivityState, number> = {
   inactive: 8,
 };
 
+// Module-scope constant so callers that don't need eviction visibility (filter matching, the
+// overflow-count summary) can omit the last argument without allocating a new empty Set per call.
+const EMPTY_EVICTED_IDS: ReadonlySet<string> = new Set();
+
+interface ResolvedRelationshipActivity {
+  readonly activity: RelationshipActivityState;
+  /**
+   * True when `id` was removed from the SSE hook's activityMap by capacity eviction (not just
+   * "never reported") — see useRelationshipActivityStream's evictedIds (KEIKO-0665). `activity`
+   * is still populated with the lifecycle-derived fallback in this case; callers that render a
+   * distinguishable "tracking limit reached" state check this flag alongside it.
+   */
+  readonly evicted: boolean;
+}
+
 function resolveRelationshipActivity(
   id: string,
   lifecycle: RelationshipLifecycleState,
   activityMap: ReadonlyMap<string, RelationshipActivityState>,
-): RelationshipActivityState {
-  return activityMap.get(id) ?? lifecycleToActivity(lifecycle);
+  evictedIds: ReadonlySet<string> = EMPTY_EVICTED_IDS,
+): ResolvedRelationshipActivity {
+  const known = activityMap.get(id);
+  if (known !== undefined) return { activity: known, evicted: false };
+  return { activity: lifecycleToActivity(lifecycle), evicted: evictedIds.has(id) };
 }
 
 // #2723 (S1301): only one case is meaningfully distinct from the default fallback — a
@@ -206,6 +224,26 @@ function formatActivityLabel(activity: RelationshipActivityState, count: number)
     label = `${count} ${activity} ${relationshipNoun}`;
   }
   return label;
+}
+
+// #2906 (Sonar S4624): split the row aria-label out of the JSX so the interpolation is a plain
+// string, not a template literal-in-template-literal expression that trips the nested-literal rule.
+function buildRelationshipRowLabel(input: {
+  readonly item: {
+    readonly type: string;
+    readonly source: { readonly kind: string; readonly id: string };
+    readonly target: { readonly kind: string; readonly id: string };
+    readonly lifecycle: string;
+  };
+  readonly activityLabel: string;
+  readonly evictedSuffix: string;
+}): string {
+  const { item, activityLabel, evictedSuffix } = input;
+  const base =
+    `${item.type} relationship from ${item.source.kind} ${item.source.id} to ` +
+    `${item.target.kind} ${item.target.id}, lifecycle: ${item.lifecycle}, ` +
+    `activity: ${activityLabel}`;
+  return evictedSuffix === "" ? base : `${base} ${evictedSuffix}`;
 }
 
 // #2723 (S3358): the truncated/count message combined an outer ternary with a second,
@@ -228,7 +266,7 @@ function summarizeOverflowActivities(
 ): string {
   const counts = new Map<RelationshipActivityState, number>();
   for (const item of items) {
-    const activity = resolveRelationshipActivity(item.id, item.lifecycle, activityMap);
+    const { activity } = resolveRelationshipActivity(item.id, item.lifecycle, activityMap);
     counts.set(activity, (counts.get(activity) ?? 0) + 1);
   }
 
@@ -256,6 +294,11 @@ export interface RelationshipListPanelProps {
   readonly onFilterChange: (newParams: Partial<RelationshipFilters>) => void;
   /** Current transient activity state keyed by relationship id. */
   readonly activityMap?: ReadonlyMap<string, RelationshipActivityState>;
+  /**
+   * Relationship ids evicted from activityMap by useRelationshipActivityStream's capacity cap
+   * (KEIKO-0665) — distinct from an id simply never having been reported.
+   */
+  readonly evictedIds?: ReadonlySet<string>;
   /** Throughput counts for high-throughput badges. */
   readonly throughputMap?: ReadonlyMap<string, number>;
   /** True when motion is allowed for activity badges. */
@@ -272,6 +315,7 @@ export function RelationshipListPanel({
   onSelect,
   onFilterChange,
   activityMap = new Map(),
+  evictedIds = EMPTY_EVICTED_IDS,
   throughputMap = new Map(),
   animateBadges = true,
   highContrast = false,
@@ -462,7 +506,7 @@ export function RelationshipListPanel({
         ? typeFiltered
         : typeFiltered.filter((item) =>
             parsed.activities.includes(
-              resolveRelationshipActivity(item.id, item.lifecycle, activityMap),
+              resolveRelationshipActivity(item.id, item.lifecycle, activityMap).activity,
             ),
           );
     // Density cap (visual-density-rules.md §"Per-density rendering caps")
@@ -709,7 +753,12 @@ export function RelationshipListPanel({
         >
           {animatedItems.map((item) => {
             const isSelected = item.id === selectedId;
-            const activity = resolveRelationshipActivity(item.id, item.lifecycle, activityMap);
+            const { activity, evicted } = resolveRelationshipActivity(
+              item.id,
+              item.lifecycle,
+              activityMap,
+              evictedIds,
+            );
             const isFocusedNeighbour = focusMode && isSelected;
             const dimmed = focusMode && !isSelected;
             return (
@@ -719,8 +768,14 @@ export function RelationshipListPanel({
                   aria-pressed={isSelected}
                   // The activity is folded into the row's own accessible name so the
                   // nested badge can render presentational (no live region inside the
-                  // button — GEN-UI-A11Y-012).
-                  aria-label={`${item.type} relationship from ${item.source.kind} ${item.source.id} to ${item.target.kind} ${item.target.id}, lifecycle: ${item.lifecycle}, activity: ${ACTIVITY_VISUALS[activity].label}`}
+                  // button — GEN-UI-A11Y-012). KEIKO-0665: an evicted id's activity is only a
+                  // lifecycle-derived fallback, not a live report — say so explicitly instead of
+                  // presenting it with the same confidence as a real SSE-reported state.
+                  aria-label={buildRelationshipRowLabel({
+                    item,
+                    activityLabel: ACTIVITY_VISUALS[activity].label,
+                    evictedSuffix: evicted ? t("relationships.tracking.evicted.parenthetical") : "",
+                  })}
                   title={`${item.source.id} → ${item.target.id}`}
                   onClick={() => onSelect(item.id)}
                   onKeyDown={(e) => onRowKeyDown(e, item.id)}
@@ -770,6 +825,16 @@ export function RelationshipListPanel({
                   <span style={{ fontSize: 11, color: "var(--fg-muted)", whiteSpace: "nowrap" }}>
                     {item.lifecycle}
                   </span>
+                  {/* KEIKO-0665: distinguishable from a normal activity badge — the id was
+                      dropped from live tracking by capacity eviction, not "never reported". */}
+                  {evicted ? (
+                    <span
+                      style={{ fontSize: 10, color: "var(--warn)", whiteSpace: "nowrap" }}
+                      title={t("relationships.tracking.evicted.title")}
+                    >
+                      {t("relationships.tracking.evicted.short")}
+                    </span>
+                  ) : null}
                 </button>
               </li>
             );

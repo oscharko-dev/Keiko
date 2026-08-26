@@ -154,6 +154,23 @@ function revocationRequired(
   return prior?.state === "available" && next.state !== "available";
 }
 
+// KEIKO-0642: three different disciplines write the shared `tracked` map -- the mutex-protected
+// synchronize/sweep path (async), the unlocked resolve() cache write (this function, sync), and
+// the unlocked pruneIdleTracked eviction (also sync). resolve() must stay synchronous because
+// addDebuggingProjection in editorSettingsControl.ts calls it from the synchronous portion of
+// loadSnapshot; making it async is a breaking ripple across callers.
+//
+// trackResolution and pruneIdleTracked are fully synchronous, so Node's single-threaded event
+// loop makes the read/set/delete sequence inside them atomic against any concurrent
+// synchronizeTracked -- which does have `await`s (disposeActiveSession, writeEvidence) between
+// reading `prior` and writing `next`. That gap does NOT make the map corrupt (JS map writes are
+// always atomic), but it does mean a synchronous resolve() call landing inside the gap can publish
+// a newer entry that synchronizeTracked's own final write would otherwise clobber with the stale
+// `next` it captured before the gap (KEIKO-0642-r3). synchronizeTracked closes that race itself,
+// by re-checking the map entry's identity immediately before its final commit -- see the comment
+// there. Do not add a NEW unlocked writer here without the same before/after identity check.
+// The debugActivationControl.test.ts's write-discipline pin locks in the synchronous-visibility
+// contract this relies on, and its deferred-interleaving regression pins the anti-clobber guard.
 function trackResolution(
   context: DebugActivationContext & { readonly realRoot: string },
   next: DebugActivationSummary,
@@ -240,16 +257,30 @@ async function synchronizeTracked(
   const realRoot = input.context.realRoot;
   const next = summaryFor(input.context, options, gate);
   if (realRoot === undefined) return next;
-  const prior = tracked.get(realRoot)?.summary;
+  // KEIKO-0642-r3: capture the exact entry object (not just its `.summary`) so the final commit
+  // below can detect whether anyone else wrote -- or deleted -- this key while we were suspended
+  // on the awaits. Map values are always fresh object literals on every write (trackResolution,
+  // this function, never mutated in place), so reference identity is a reliable "nobody wrote
+  // since I looked" check without threading a separate generation counter through every writer.
+  const observedEntry = tracked.get(realRoot);
+  const prior = observedEntry?.summary;
   const revoke = revocationRequired(input.action, input.changed, prior, next);
   if (revoke) await options.disposeActiveSession(realRoot);
   await writeEvidence(options, input, prior, next, revoke);
   const now = options.now ?? Date.now;
-  tracked.set(realRoot, {
-    context: { ...input.context, realRoot },
-    summary: next,
-    lastTouchedMs: nextTouchMs(input, tracked, realRoot, now),
-  });
+  // A synchronous resolve() (or another synchronizeTracked, or pruneIdleTracked's eviction) may
+  // have replaced or removed this entry during the awaits above; `next` was computed from the
+  // context this call started with and is stale relative to that later write. Committing here
+  // would silently regress the cache to older information (the exact bug this guards against).
+  // The caller of THIS synchronize() still gets its own outcome via the return value below --
+  // only the shared cache write is skipped.
+  if (tracked.get(realRoot) === observedEntry) {
+    tracked.set(realRoot, {
+      context: { ...input.context, realRoot },
+      summary: next,
+      lastTouchedMs: nextTouchMs(input, tracked, realRoot, now),
+    });
+  }
   return next;
 }
 
@@ -292,6 +323,10 @@ function sweepWorkspace(
 // mutates. A workspace that is never touched again (closed project, stale tab) ages out instead of
 // being watched -- and having its evidence/provisioning re-derived every second -- for the
 // remaining lifetime of the BFF process (issue #2347 audit finding).
+//
+// KEIKO-0642: this delete runs unlocked, alongside the mutex-protected synchronize/sweep writers.
+// Safe today ONLY because it is fully synchronous (see the write-discipline note on
+// trackResolution). Do not add `await` here without upgrading to the mutex-protected discipline.
 function pruneIdleTracked(
   tracked: Map<string, TrackedActivation>,
   options: DebugActivationControlOptions,

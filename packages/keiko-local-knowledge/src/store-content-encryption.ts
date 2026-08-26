@@ -24,6 +24,7 @@ import type { DatabaseSync } from "node:sqlite";
 import { KnowledgeStoreError } from "./errors.js";
 import {
   emitKnowledgeLogEvent,
+  knowledgeErrorKind,
   startKnowledgeLogTimer,
   type KnowledgeLogSink,
 } from "./knowledge-log.js";
@@ -284,9 +285,126 @@ function sealReconstructiveContent(db: DatabaseSync, cipher: StoreContentCipher)
   sealBlobColumn(db, cipher);
 }
 
-function flushPlaintextResidue(db: DatabaseSync): void {
-  db.exec("PRAGMA wal_checkpoint(TRUNCATE)");
-  db.exec("VACUUM");
+// The number of times the post-migration WAL TRUNCATE checkpoint is retried when SQLite reports
+// `busy=1` (another connection holds an open read/write) or a partial checkpoint (fewer frames
+// checkpointed than the WAL holds). Bounded on purpose so a sustained contending reader cannot hang
+// the store-open call indefinitely; mirrors keiko-memory-vault's schema.ts retry bound (#2906
+// KEIKO-0877).
+const WAL_CHECKPOINT_MAX_ATTEMPTS = 3;
+
+interface WalCheckpointResult {
+  readonly busy: number;
+  readonly log: number;
+  readonly checkpointed: number;
+}
+
+type WalCheckpointAttempt =
+  | { readonly kind: "ok"; readonly result: WalCheckpointResult }
+  | { readonly kind: "threw"; readonly cause: unknown }
+  // #2906 round-3 review: an undefined row, `{}`, or non-numeric columns must fail closed into the
+  // retry/report path rather than being coerced to a trivially-satisfied 0/0/0 result -- otherwise
+  // `busy === 0 && checkpointed >= log` is vacuously true and migration can write the encryption
+  // marker without a verified WAL truncation. Mirrors keiko-memory-vault's schema.ts "malformed" kind.
+  | { readonly kind: "malformed" };
+
+function isWellFormedCheckpointRow(
+  row: Partial<WalCheckpointResult> | undefined,
+): row is WalCheckpointResult {
+  return (
+    Number.isInteger(row?.busy) && Number.isInteger(row?.log) && Number.isInteger(row?.checkpointed)
+  );
+}
+
+// The PRAGMA itself is also a possible failure mode, not only its returned `busy` row: depending on
+// the connection's busy-timeout configuration, SQLite can raise SQLITE_BUSY as a thrown error
+// instead of returning `{ busy: 1, ... }`. Both are transient-contention shapes and both are retried
+// identically below.
+function attemptWalCheckpointTruncate(db: DatabaseSync): WalCheckpointAttempt {
+  try {
+    const row = db.prepare("PRAGMA wal_checkpoint(TRUNCATE)").get() as
+      Partial<WalCheckpointResult> | undefined;
+    if (!isWellFormedCheckpointRow(row)) return { kind: "malformed" };
+    return { kind: "ok", result: row };
+  } catch (cause) {
+    return { kind: "threw", cause };
+  }
+}
+
+function isCheckpointComplete(attempt: WalCheckpointAttempt): boolean {
+  return (
+    attempt.kind === "ok" &&
+    attempt.result.busy === 0 &&
+    attempt.result.checkpointed >= attempt.result.log
+  );
+}
+
+// #2906 round-3 review: errorKind was previously present only when the PRAGMA itself threw, so the
+// two primary new failure modes -- a persistently busy/partial checkpoint and a malformed result
+// row -- had no closed, body-free kind to cluster or reconstruct through the structured log
+// contract (AGENTS.md §8). Every non-complete outcome now gets one: the real cause's classified
+// code/name when the statement threw, and a literal, stable identifier for each of the three
+// still-incomplete "ok" shapes otherwise, so busy-exhaustion, a partial flush, and a malformed row
+// are distinguishable from each other in the log alone.
+function checkpointErrorKind(attempt: WalCheckpointAttempt): string {
+  if (attempt.kind === "threw") return knowledgeErrorKind(attempt.cause);
+  if (attempt.kind === "malformed") return "checkpoint-malformed";
+  return attempt.result.busy === 1 ? "checkpoint-busy" : "checkpoint-partial";
+}
+
+function reportCheckpointDegraded(
+  logSink: KnowledgeLogSink | undefined,
+  attempts: number,
+  last: WalCheckpointAttempt,
+): void {
+  emitKnowledgeLogEvent(logSink, {
+    level: "error",
+    category: "diagnostic",
+    op: "store.encryption-checkpoint-degraded",
+    errorKind: checkpointErrorKind(last),
+    extra: { attempts, busy: last.kind === "ok" ? last.result.busy === 1 : true },
+  });
+}
+
+function checkpointDegradedError(last: WalCheckpointAttempt): KnowledgeStoreError {
+  const cause =
+    last.kind === "malformed"
+      ? "the checkpoint returned a missing or non-numeric result row"
+      : "a held-open reader prevented a full checkpoint";
+  const message =
+    "failed to flush plaintext residue from the Local Knowledge store WAL after encrypting " +
+    `content: ${cause} after ${String(WAL_CHECKPOINT_MAX_ATTEMPTS)} attempts`;
+  return last.kind === "threw"
+    ? new KnowledgeStoreError(message, { cause: last.cause })
+    : new KnowledgeStoreError(message);
+}
+
+// Per ADR-0047 D4, the encryption-scope marker must only be written after this rewrite has fully
+// completed. Unlike keiko-memory-vault's sibling flush (#2906 KEIKO-0713: warn-and-continue, because
+// its marker had already been committed before that flush runs), this package's callers write the
+// marker AFTER flushPlaintextResidue returns -- see migrateToEncrypted's and upgradeEncryptedScope's
+// phase-3 comments. So a persistently busy or partial TRUNCATE checkpoint here must fail the whole
+// migration CLOSED: throwing leaves the marker unset, and the next store-open retries the idempotent
+// migration instead of silently accepting a WAL that may still hold plaintext (AGENTS.md §7 forbids
+// swallowing this with an empty catch).
+//
+// Exported so store-content-encryption.test.ts can exercise the retry/report path directly against
+// a fake DatabaseSync, without reconstructing an end-to-end migration timeline. Not part of the
+// public package surface -- consumed only by migrateToEncrypted/upgradeEncryptedScope above and by
+// co-located tests.
+export function flushPlaintextResidue(
+  db: DatabaseSync,
+  logSink: KnowledgeLogSink | undefined,
+): void {
+  let last: WalCheckpointAttempt = { kind: "threw", cause: undefined };
+  for (let attempt = 1; attempt <= WAL_CHECKPOINT_MAX_ATTEMPTS; attempt += 1) {
+    last = attemptWalCheckpointTruncate(db);
+    if (isCheckpointComplete(last)) {
+      db.exec("VACUUM");
+      return;
+    }
+  }
+  reportCheckpointDegraded(logSink, WAL_CHECKPOINT_MAX_ATTEMPTS, last);
+  throw checkpointDegradedError(last);
 }
 
 // Fires only after the migration function it is called from has ALREADY returned without
@@ -336,7 +454,7 @@ function migrateToEncrypted(
   // next open re-runs the idempotent migration instead of skipping it over a WAL that still holds
   // plaintext. The seal sweep is a no-op on the already-sealed rows, so the retry only re-checkpoints
   // and re-VACUUMs.
-  flushPlaintextResidue(db);
+  flushPlaintextResidue(db, logSink);
   writeSchemaMeta(db, ENCRYPTION_MARKER_KEY, ENCRYPTION_MARKER_VALUE);
   writeSchemaMeta(db, ENCRYPTION_SCOPE_KEY, ENCRYPTION_SCOPE_VALUE);
   logEncryptionMigrated(logSink, UNENCRYPTED_SCOPE_LABEL, ENCRYPTION_SCOPE_VALUE, elapsed());
@@ -364,7 +482,7 @@ function upgradeEncryptedScope(
       cause,
     });
   }
-  flushPlaintextResidue(db);
+  flushPlaintextResidue(db, logSink);
   writeSchemaMeta(db, ENCRYPTION_SCOPE_KEY, ENCRYPTION_SCOPE_VALUE);
   logEncryptionMigrated(logSink, fromScope, ENCRYPTION_SCOPE_VALUE, elapsed());
 }

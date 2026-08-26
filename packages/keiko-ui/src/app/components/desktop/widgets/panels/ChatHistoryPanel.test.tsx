@@ -1,8 +1,9 @@
 import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Chat } from "@/lib/types";
 import { deleteChat, updateChat } from "@/lib/api";
+import { I18nProvider } from "@/lib/i18n";
 import { ChatSessionProvider } from "../../context/ChatSessionContext";
 import type { ChatSessionApi } from "../../hooks/useChatSession";
 import { notifyChatDeleted } from "../../hooks/useChatSession";
@@ -579,6 +580,118 @@ describe("ChatHistoryPanel", () => {
     await user.click(screen.getByRole("button", { name: /^Rename\b/ }));
 
     expect(screen.getByDisplayValue("Sprint triage")).toBeInTheDocument();
+  });
+});
+
+// KEIKO-0820 — rename/delete/restore failure messages were hardcoded English, unlike the sibling
+// purge path (setError(optionalT("chat.history.purgeFailed", { detail }))). Locale set to German
+// (matching the window.localStorage.setItem("keiko.locale", "de") pattern established by
+// KeyboardShortcutsPanel.test.tsx) proves each of the four paths now renders through the optional
+// widget catalog instead of the literal English string.
+//
+// useLocale()/useOptionalWidgetTranslate() read from I18nProvider's LocaleContext, which the shared
+// module-level `renderPanel` above does not wrap (it only needs ChatSessionProvider for its other 29
+// tests, and adding I18nProvider there would change their harness too) — so these tests wrap
+// I18nProvider locally instead. The context's exposed locale starts on English and only flips to the
+// stored "de" once I18nProvider's `ready`/`catalogReady` effect settles (see
+// packages/keiko-ui/src/lib/i18n.test.tsx's "keeps locale ... until German is ready" pin for the same
+// two-phase transition), so every test below waits on document.documentElement.lang before
+// interacting — the same signal I18nProvider's own effect updates once it is truly on German.
+describe("ChatHistoryPanel localized failure messages (KEIKO-0820)", () => {
+  function renderGermanPanel(session: ChatSessionApi = makeSession()): void {
+    render(
+      <I18nProvider>
+        <ChatSessionProvider value={session}>
+          <ChatHistoryPanel openChatWindow={vi.fn()} />
+        </ChatSessionProvider>
+      </I18nProvider>,
+    );
+  }
+
+  beforeEach(() => {
+    window.localStorage.setItem("keiko.locale", "de");
+  });
+
+  afterEach(() => {
+    window.localStorage.removeItem("keiko.locale");
+    document.documentElement.lang = "en";
+    document.documentElement.removeAttribute("data-locale");
+  });
+
+  it("shows the German empty-title rename error, not the English literal", async () => {
+    const user = userEvent.setup();
+    renderGermanPanel();
+    await waitFor(() => expect(document.documentElement.lang).toBe("de"));
+
+    // #2906 round 3: the accessible name (aria-label, t("chat.history.action.rename", { title }))
+    // and the VISIBLE button copy (t("chat.history.action.renameLabel")) are both German now — a
+    // sighted user and a screen-reader user see/hear the same language (WCAG 2.5.3 Label in
+    // Name), so this asserts both rather than only the accessible name the query happens to match.
+    const renameButton = screen.getByRole("button", { name: /umbenennen/i });
+    expect(renameButton).toHaveTextContent("Umbenennen");
+    await user.click(renameButton);
+    const renameInput = screen.getByDisplayValue("Sprint triage");
+    await user.clear(renameInput);
+    const saveButton = screen.getByRole("button", { name: /speichern/i });
+    expect(saveButton).toHaveTextContent("Speichern");
+    await user.click(saveButton);
+
+    const describedById = renameInput.getAttribute("aria-describedby");
+    const errorEl = document.getElementById(describedById as string);
+    expect(errorEl?.textContent).toBe("Titel darf nicht leer sein.");
+    expect(errorEl?.textContent).not.toBe("Title cannot be empty.");
+  });
+
+  it("shows the German rename-failed error, not the English literal", async () => {
+    vi.mocked(updateChat).mockRejectedValueOnce(new Error("network down"));
+    const user = userEvent.setup();
+    renderGermanPanel();
+    await waitFor(() => expect(document.documentElement.lang).toBe("de"));
+
+    await user.click(screen.getByRole("button", { name: /umbenennen/i }));
+    const renameInput = screen.getByDisplayValue("Sprint triage");
+    await user.clear(renameInput);
+    await user.type(renameInput, "New title");
+    await user.click(screen.getByRole("button", { name: /speichern/i }));
+
+    const alert = await screen.findByRole("alert");
+    expect(alert).toHaveTextContent("Umbenennen fehlgeschlagen.");
+    expect(alert).not.toHaveTextContent("Rename failed.");
+  });
+
+  it("shows the German delete-failed error with the caught detail, not the English literal", async () => {
+    vi.mocked(updateChat).mockRejectedValueOnce(new Error("disk busy"));
+    const user = userEvent.setup();
+    renderGermanPanel();
+    await waitFor(() => expect(document.documentElement.lang).toBe("de"));
+
+    // Both the trigger and the confirm button share the same aria-label pattern
+    // (t("chat.history.action.delete", { title })) for the non-deleted (moveToTrash) row.
+    await user.click(screen.getByRole("button", { name: /löschen/i }));
+    await user.click(screen.getByRole("button", { name: /löschen/i }));
+
+    const alert = await screen.findByRole("alert");
+    expect(alert).toHaveTextContent("Löschen fehlgeschlagen: disk busy");
+    expect(alert).not.toHaveTextContent("Delete failed:");
+  });
+
+  it("shows the German restore-failed error with the caught detail, not the English literal", async () => {
+    vi.mocked(updateChat).mockRejectedValueOnce(new Error("disk busy"));
+    const user = userEvent.setup();
+    renderGermanPanel(makeSession({ chats: [makeChat({ status: "closed" })] }));
+    await waitFor(() => expect(document.documentElement.lang).toBe("de"));
+
+    // #2906 round 3: the "Active"/"Deleted" tab labels now route through t("chat.history.tab.*"),
+    // so their accessible name (there is no separate aria-label — the visible text IS the name) is
+    // German too. Assert both the query match and the visible text explicitly.
+    const deletedTab = screen.getByRole("tab", { name: /gelöscht/i });
+    expect(deletedTab).toHaveTextContent("Gelöscht");
+    await user.click(deletedTab);
+    await user.click(screen.getByRole("button", { name: /wiederherstellen/i }));
+
+    const alert = await screen.findByRole("alert");
+    expect(alert).toHaveTextContent("Wiederherstellen fehlgeschlagen: disk busy");
+    expect(alert).not.toHaveTextContent("Restore failed:");
   });
 });
 

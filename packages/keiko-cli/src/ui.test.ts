@@ -871,6 +871,146 @@ describe("runUiCli", () => {
   });
 });
 
+describe("attachDurableServerErrorListener (KEIKO-0858 / #2906 round 3, comment 3865273692)", () => {
+  // A closeable fake Server: an EventEmitter (for `.on("error", ...)`) plus the three methods
+  // `closeServerBounded` calls, mirroring the fake `waitForShutdown` itself is tested against.
+  function fakeCloseableServer(): {
+    readonly server: Server;
+    readonly emitter: EventEmitter;
+    readonly close: ReturnType<typeof vi.fn>;
+    readonly closeIdleConnections: ReturnType<typeof vi.fn>;
+    readonly closeAllConnections: ReturnType<typeof vi.fn>;
+  } {
+    const emitter = new EventEmitter();
+    const close = vi.fn((cb?: () => void) => cb?.());
+    const closeIdleConnections = vi.fn();
+    const closeAllConnections = vi.fn();
+    const server = Object.assign(emitter, {
+      close,
+      closeIdleConnections,
+      closeAllConnections,
+    }) as unknown as Server;
+    return { server, emitter, close, closeIdleConnections, closeAllConnections };
+  }
+
+  it("surfaces a server error raised after listen with a body-free redacted line", async () => {
+    const { attachDurableServerErrorListener } = await import("./ui.js");
+    const { server, emitter } = fakeCloseableServer();
+    let stderr = "";
+    const io: CliIo = {
+      out: (): void => undefined,
+      err: (text: string): void => {
+        stderr += text;
+      },
+    };
+    const exit = vi.fn();
+    // A REAL sink (undefined) — never inject the production process.exit into a test.
+    attachDurableServerErrorListener(server, io, undefined, exit);
+    // A body-carrying error with a distinctive message; the listener must NOT echo the
+    // message text — only the class name — so the redacted-diagnostics rule holds.
+    emitter.emit(
+      "error",
+      Object.assign(new TypeError("sensitive-message-do-not-leak"), {
+        name: "TypeError",
+      }),
+    );
+    await vi.waitFor(() => {
+      expect(stderr).toContain("server error (TypeError)");
+    });
+    expect(stderr).not.toContain("sensitive-message-do-not-leak");
+  });
+
+  // `Error.name` is a writable own property: a hostile or buggy thrown value can set it to
+  // anything, including content that would inject a fake log line or leak data if echoed
+  // verbatim. A plain `Error` is NOT one of contentFreeErrorClass's specific-built-in names, so
+  // the classifier must fall back to the DECLARED class ("Error") and never surface the planted
+  // name.
+  it("never surfaces a hostile custom .name — only the declared, content-free class", async () => {
+    const { attachDurableServerErrorListener } = await import("./ui.js");
+    const { server, emitter } = fakeCloseableServer();
+    let stderr = "";
+    const io: CliIo = {
+      out: (): void => undefined,
+      err: (text: string): void => {
+        stderr += text;
+      },
+    };
+    const exit = vi.fn();
+    attachDurableServerErrorListener(server, io, undefined, exit);
+    const hostile = Object.assign(new Error("do-not-leak"), {
+      name: "INJECTED\nfake-log-line: sensitive-token",
+    });
+    emitter.emit("error", hostile);
+    await vi.waitFor(() => {
+      expect(stderr).toContain("server error (Error)");
+    });
+    expect(stderr).not.toContain("INJECTED");
+    expect(stderr).not.toContain("sensitive-token");
+    expect(stderr).not.toContain("do-not-leak");
+  });
+
+  // The core of this finding: a fatal post-listen error must not be logged-and-continued. The
+  // process must be driven toward a bounded, non-zero exit — never left running as a falsely
+  // healthy process — and the sanitized class/code must reach the existing activity log.
+  it("routes the error through the activity log and drives a bounded fatal exit(1)", async () => {
+    const { attachDurableServerErrorListener } = await import("./ui.js");
+    const { server, emitter, close, closeIdleConnections } = fakeCloseableServer();
+    const io: CliIo = { out: (): void => undefined, err: (): void => undefined };
+    const exit = vi.fn();
+    const sink = createRecordingSink();
+    attachDurableServerErrorListener(server, io, sink, exit);
+    emitter.emit("error", new RangeError("descriptor exhaustion"));
+    await vi.waitFor(() => {
+      expect(exit).toHaveBeenCalledWith(1);
+    });
+    // The process must actually be torn down, not merely logged about: idle connections drop
+    // immediately and close() is invoked as part of the same fatal sequence.
+    expect(closeIdleConnections).toHaveBeenCalledTimes(1);
+    expect(close).toHaveBeenCalledTimes(1);
+    expect(sink.events).toHaveLength(1);
+    const [event] = sink.events;
+    // Only the specific fields this finding is about: the real classifier also attaches
+    // dist/src-anchored stack frames (ADR-0173 D3), which is expected but not this test's
+    // concern and would make an exact deep-equal brittle against call-site line numbers.
+    expect(event?.level).toBe("error");
+    expect(event?.category).toBe("process");
+    expect(event?.op).toBe("process.fatal");
+    expect(event?.errorKind).toBe("RangeError");
+    expect(extraOf(event).kind).toBe("server-error");
+  });
+
+  // A sink whose write never settles, or a close() that never calls back, must not hang the
+  // fatal path forever — the bounded grace timer forces the exit exactly like the SIGINT/SIGTERM
+  // path already does for a lingering connection.
+  it("still exits(1) on a bounded grace timeout when close() never calls back", async () => {
+    vi.useFakeTimers();
+    try {
+      const { attachDurableServerErrorListener } = await import("./ui.js");
+      const emitter = new EventEmitter();
+      const closeIdleConnections = vi.fn();
+      const closeAllConnections = vi.fn();
+      const close = vi.fn(); // never invokes its callback
+      const server = Object.assign(emitter, {
+        close,
+        closeIdleConnections,
+        closeAllConnections,
+      }) as unknown as Server;
+      const io: CliIo = { out: (): void => undefined, err: (): void => undefined };
+      const exit = vi.fn();
+      attachDurableServerErrorListener(server, io, undefined, exit, 3_000);
+      emitter.emit("error", new Error("stuck"));
+      // Let the classifier's microtask chain resolve before advancing the grace timer.
+      await vi.advanceTimersByTimeAsync(0);
+      expect(exit).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(3_000);
+      expect(closeAllConnections).toHaveBeenCalledTimes(1);
+      expect(exit).toHaveBeenCalledWith(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
 describe("createLiveCspSource", () => {
   // Regression pin (KEIKO-0439): the original assertions were identical before and after the
   // watcher was supposed to fire — both reads landed in the runtime-hash fallback branch of
@@ -906,7 +1046,16 @@ describe("createLiveCspSource", () => {
       if (nextHash === undefined) throw new Error("expected next inline script hash");
       expect(nextHash).not.toBe(initialHash);
       await writeFile(hashesFile, JSON.stringify([nextHash]), "utf8");
-      await sleep(700);
+
+      // KEIKO-0842: poll for the CSP to actually reflect the new hash, up to a generous
+      // multi-second cap. The previous fixed `await sleep(700)` raced the watcher's
+      // 500ms watchFile interval and produced flakes when the OS scheduler happened to
+      // delay the callback. Poll on the meaningful post-condition (csp() reports the new
+      // hash) rather than on a wall-clock guess.
+      const deadline = Date.now() + 5_000;
+      while (!runtime.csp().includes(nextHash) && Date.now() < deadline) {
+        await sleep(50);
+      }
 
       // The header must have actually changed — before/after assertions differ.
       expect(runtime.csp()).toContain(nextHash);

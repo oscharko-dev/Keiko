@@ -179,7 +179,7 @@ export function ChatHistoryPanel({ openChatWindow }: ChatHistoryPanelProps): Rea
     const title = editingTitle.trim();
     // Empty input: keep edit mode open and surface an accessible error (PA-05).
     if (title.length === 0) {
-      setRenameError("Title cannot be empty.");
+      setRenameError(optionalT("chat.history.renameEmptyTitle"));
       renameInputRef.current?.focus({ preventScroll: true });
       return;
     }
@@ -197,7 +197,7 @@ export function ChatHistoryPanel({ openChatWindow }: ChatHistoryPanelProps): Rea
       actions.replaceChat(response.chat);
       setEditingId(null);
     } catch {
-      setError("Rename failed.");
+      setError(optionalT("chat.history.renameFailed"));
     } finally {
       setBusyId(null);
     }
@@ -212,7 +212,7 @@ export function ChatHistoryPanel({ openChatWindow }: ChatHistoryPanelProps): Rea
       setDeleteConfirmId(null);
     } catch (caughtError) {
       const detail = caughtError instanceof Error ? caughtError.message : "Request failed.";
-      setError(`Delete failed: ${detail}`);
+      setError(optionalT("chat.history.deleteFailed", { detail }));
     } finally {
       setBusyId(null);
     }
@@ -227,7 +227,7 @@ export function ChatHistoryPanel({ openChatWindow }: ChatHistoryPanelProps): Rea
       setDeleteConfirmId(null);
     } catch (caughtError) {
       const detail = caughtError instanceof Error ? caughtError.message : "Request failed.";
-      setError(`Restore failed: ${detail}`);
+      setError(optionalT("chat.history.restoreFailed", { detail }));
     } finally {
       setBusyId(null);
     }
@@ -268,7 +268,7 @@ export function ChatHistoryPanel({ openChatWindow }: ChatHistoryPanelProps): Rea
         aria-label={t("chat.history.action.save", { title: chat.title })}
         onClick={() => void commitRename(chat)}
       >
-        Save
+        {t("common.save")}
       </button>
       <button
         type="button"
@@ -280,7 +280,7 @@ export function ChatHistoryPanel({ openChatWindow }: ChatHistoryPanelProps): Rea
           setRenameError(null);
         }}
       >
-        Cancel
+        {t("common.cancel")}
       </button>
     </>
   );
@@ -313,7 +313,7 @@ export function ChatHistoryPanel({ openChatWindow }: ChatHistoryPanelProps): Rea
           if (event.key === "Escape") setDeleteConfirmId(null);
         }}
       >
-        {deleted ? optionalT("chat.history.purgeConfirm") : "Delete"}
+        {deleted ? optionalT("chat.history.purgeConfirm") : t("common.delete")}
       </button>
       <button
         type="button"
@@ -325,7 +325,7 @@ export function ChatHistoryPanel({ openChatWindow }: ChatHistoryPanelProps): Rea
           if (event.key === "Escape") setDeleteConfirmId(null);
         }}
       >
-        Cancel
+        {t("common.cancel")}
       </button>
     </>
   );
@@ -340,7 +340,7 @@ export function ChatHistoryPanel({ openChatWindow }: ChatHistoryPanelProps): Rea
         onClick={() => void restoreChat(chat)}
       >
         <RestoreIcon size={14} />
-        Restore
+        {t("chat.history.action.restoreLabel")}
       </button>
       <button
         type="button"
@@ -348,7 +348,7 @@ export function ChatHistoryPanel({ openChatWindow }: ChatHistoryPanelProps): Rea
         aria-label={t("chat.history.action.rename", { title: chat.title })}
         onClick={() => startRename(chat)}
       >
-        Rename
+        {t("chat.history.action.renameLabel")}
       </button>
       <button
         type="button"
@@ -373,7 +373,7 @@ export function ChatHistoryPanel({ openChatWindow }: ChatHistoryPanelProps): Rea
         aria-label={t("chat.history.action.rename", { title: chat.title })}
         onClick={() => startRename(chat)}
       >
-        Rename
+        {t("chat.history.action.renameLabel")}
       </button>
       <button
         type="button"
@@ -384,7 +384,7 @@ export function ChatHistoryPanel({ openChatWindow }: ChatHistoryPanelProps): Rea
           setEditingId(null);
         }}
       >
-        Delete
+        {t("common.delete")}
       </button>
     </>
   );
@@ -453,7 +453,7 @@ export function ChatHistoryPanel({ openChatWindow }: ChatHistoryPanelProps): Rea
             setDeleteConfirmId(null);
           }}
         >
-          Active <span>{activeCount}</span>
+          {t("chat.history.tab.active")} <span>{activeCount}</span>
         </button>
         <button
           type="button"
@@ -468,7 +468,7 @@ export function ChatHistoryPanel({ openChatWindow }: ChatHistoryPanelProps): Rea
             setDeleteConfirmId(null);
           }}
         >
-          Deleted <span>{deletedCount}</span>
+          {t("chat.history.tab.deleted")} <span>{deletedCount}</span>
         </button>
       </div>
       {error !== null ? (

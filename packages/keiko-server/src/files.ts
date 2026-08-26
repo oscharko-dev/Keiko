@@ -42,10 +42,19 @@ import {
   type EditorDocumentSession,
   type EditorDocumentVersion,
 } from "@oscharko-dev/keiko-contracts";
-import type { FilesContentResponse as FilesContentWireResponse } from "@oscharko-dev/keiko-contracts/bff-wire";
+import type {
+  FilesContentResponse as FilesContentWireResponse,
+  FilesEntryKind,
+  FilesSymlinkTargetKind,
+  FilesTreeEntry,
+  FilesTreeResponse,
+} from "@oscharko-dev/keiko-contracts/bff-wire";
 import { containsPath } from "@oscharko-dev/keiko-git";
 import { notifyHostLspWorkspaceFileChanged } from "./editor/lsp/hostLanguageOperation.js";
-import { captureEditorLocalHistorySafely } from "./editor/localHistory/localHistoryCapture.js";
+import {
+  captureEditorLocalHistorySafely,
+  reKeyEditorLocalHistorySafely,
+} from "./editor/localHistory/localHistoryCapture.js";
 import { emitServerDiagnostic, serverDiagnosticFromError } from "./diagnostics-log.js";
 import { DENIED_MESSAGE, pathIsDenied } from "./files-deny.js";
 import {
@@ -77,25 +86,12 @@ type FilesMetadataRedactor = UiHandlerDeps["redactor"];
 const staticFilesMetadataRedactor: FilesMetadataRedactor = (value: unknown): unknown =>
   typeof value === "string" ? redact(value) : value;
 
-export type FilesEntryKind = "directory" | "file" | "symlink";
-
-export interface FilesTreeEntry {
-  readonly name: string;
-  readonly path: string;
-  readonly kind: FilesEntryKind;
-  readonly sizeBytes: number;
-  readonly modifiedAt: number;
-  readonly extension: string | null;
-  readonly symlink: boolean;
-  readonly readable: boolean;
-}
-
-export interface FilesTreeResponse {
-  readonly root: string;
-  readonly path: string;
-  readonly entries: readonly FilesTreeEntry[];
-  readonly truncated: boolean;
-}
+// #2906 review (comment 3863185718): FilesEntryKind / FilesTreeEntry / FilesTreeResponse used to
+// be redeclared here as a second, independently-drifting copy of the SAME shared wire contract
+// (@oscharko-dev/keiko-contracts/bff-wire owns the canonical one, consumed directly by keiko-ui).
+// Re-exported (not just imported) so every existing `from "./files.js"` import site — including
+// the package barrel (index.ts) — keeps working unchanged.
+export type { FilesEntryKind, FilesSymlinkTargetKind, FilesTreeEntry, FilesTreeResponse };
 
 export interface FilesSearchResult {
   readonly root: string;
@@ -496,23 +492,71 @@ function extensionOf(name: string): string | null {
   return ext.length > 0 ? ext : null;
 }
 
-type FilesTreeEntryBase = Omit<FilesTreeEntry, "kind" | "readable">;
+// Metadata a stat'd (non-directory-dirent) entry always carries -- the common fields both the
+// "file" and "symlink" FilesTreeEntry variants share, still missing only the discriminant `kind`
+// and the containment-derived `readable`. No `symlink` field: PR #3289 review (comment
+// 3865167775) removed it from the wire type entirely -- `kind` alone is the discriminant now, so
+// there is nothing left for a local `symlink` boolean to contradict.
+interface FilesTreeEntryMetadata {
+  readonly name: string;
+  readonly path: string;
+  readonly sizeBytes: number;
+  readonly modifiedAt: number;
+  readonly extension: string | null;
+}
 
+function metadataFreeDirectoryEntry(
+  meta: Pick<FilesTreeEntryMetadata, "name" | "path" | "extension">,
+  readable: boolean,
+): FilesTreeEntry {
+  // KEIKO-0633: a real directory deliberately does NOT carry sizeBytes/modifiedAt on the wire --
+  // the readdir walk skips per-entry stat to avoid one syscall per directory, and emitting a `0`
+  // sentinel would masquerade as a real measurement to any downstream consumer. The discriminated
+  // union (#2906 review, comment 3863185718) now enforces this at the type level too: this is the
+  // ONLY shape a "directory"-kind entry may take.
+  return {
+    name: meta.name,
+    path: meta.path,
+    kind: "directory",
+    extension: meta.extension,
+    readable,
+  };
+}
+
+// Sonar S3358: nested-ternary avoidance for the target-kind classification below.
+function classifySymlinkTargetKind(targetStats: {
+  readonly isDirectory: () => boolean;
+  readonly isFile: () => boolean;
+}): FilesSymlinkTargetKind {
+  if (targetStats.isDirectory()) return "directory";
+  if (targetStats.isFile()) return "file";
+  return "unknown";
+}
+
+// #2906 review (comment 3863185718) / PR #3289 review (comment 3865167775): a symlink whose target
+// is a directory used to be reported as `kind: "directory"` WITH the symlink's own lstat metadata
+// attached, contradicting the "a directory entry is metadata-free" invariant
+// metadataFreeDirectoryEntry encodes above. A symlink whose target is a FILE had the mirror-image
+// bug: it collapsed to `kind: "file"` while STILL carrying `symlinkTargetKind: "file"`, a field the
+// type now declares only on the "symlink" variant. Both are `kind: "symlink"` uniformly -- never
+// collapsed into whatever the target happens to be -- with `symlinkTargetKind` naming what the walk
+// resolved the target to, so a consumer that wants target-aware treatment can opt in explicitly
+// instead of the server silently asserting it.
 async function classifySymlinkEntry(
   root: string,
   entryPath: string,
-  base: FilesTreeEntryBase,
+  meta: FilesTreeEntryMetadata,
 ): Promise<FilesTreeEntry> {
   try {
     const target = await realpath(entryPath);
     const targetStats = await stat(target);
     const contained = isContained(root, target);
     const denied = contained && pathIsDenied(rootRelativePosixPath(root, target));
-    const leafKind: FilesEntryKind = targetStats.isFile() ? "file" : "symlink";
-    const kind: FilesEntryKind = targetStats.isDirectory() ? "directory" : leafKind;
-    return { ...base, kind, readable: contained && !denied };
+    const readable = contained && !denied;
+    const symlinkTargetKind: FilesSymlinkTargetKind = classifySymlinkTargetKind(targetStats);
+    return { ...meta, kind: "symlink", symlinkTargetKind, readable };
   } catch {
-    return { ...base, kind: "symlink", readable: false };
+    return { ...meta, kind: "symlink", symlinkTargetKind: "unknown", readable: false };
   }
 }
 
@@ -528,32 +572,27 @@ async function classifyEntry(
   assertMetadataSafe(childRelativePath, redactor);
   const entryPath = join(parentNativePath, entry.name);
   if (entry.isDirectory() && !entry.isSymbolicLink()) {
-    return {
-      name: entry.name,
-      path: childRelativePath,
-      kind: "directory",
-      sizeBytes: 0,
-      modifiedAt: 0,
-      extension: extensionOf(entry.name),
-      symlink: false,
-      readable: true,
-    };
+    return metadataFreeDirectoryEntry(
+      { name: entry.name, path: childRelativePath, extension: extensionOf(entry.name) },
+      true,
+    );
   }
   const linkStats = await lstat(entryPath);
-  const symlink = linkStats.isSymbolicLink();
-  const base = {
+  const meta: FilesTreeEntryMetadata = {
     name: entry.name,
     path: childRelativePath,
     sizeBytes: linkStats.size,
     modifiedAt: linkStats.mtimeMs,
     extension: extensionOf(entry.name),
-    symlink,
   };
-  if (!symlink) {
-    const kind: FilesEntryKind = linkStats.isDirectory() ? "directory" : "file";
-    return { ...base, kind, readable: true };
+  if (linkStats.isSymbolicLink()) return classifySymlinkEntry(root, entryPath, meta);
+  if (linkStats.isDirectory()) {
+    // TOCTOU fallback: the dirent's own type (read at readdir time) disagreed with this FRESH
+    // lstat (rare -- e.g. the entry was replaced between the readdir call and here). A real
+    // directory stays metadata-free regardless of which check noticed it was one.
+    return metadataFreeDirectoryEntry(meta, true);
   }
-  return classifySymlinkEntry(root, entryPath, base);
+  return { ...meta, kind: "file", readable: true };
 }
 
 function entryRank(entry: FilesTreeEntry): number {
@@ -1590,8 +1629,12 @@ export async function resolveContainedEditorFilePath(
   rootInput: string | null,
   pathInput: string | null,
   redactor: FilesMetadataRedactor = staticFilesMetadataRedactor,
+  // KEIKO-0927: optional pre-resolved root -- callers that already resolved the root for a
+  // different check (e.g. rootScope() derivation) can pass it here to avoid the second
+  // resolveRoot syscall for the same rootInput within one request.
+  resolvedRoot?: ResolvedProjectRoot,
 ): Promise<ContainedEditorFilePath> {
-  const root = await resolveRoot(store, rootInput, redactor);
+  const root = resolvedRoot ?? (await resolveRoot(store, rootInput, redactor));
   const relativePath = normalizeRelativePath(pathInput);
   assertMetadataSafe(relativePath, redactor);
   if (relativePath.length === 0) {
@@ -2569,6 +2612,59 @@ function captureNormalFileSave(
   });
 }
 
+type WriteFilesContentBodyFields =
+  | {
+      readonly ok: true;
+      readonly baseVersion: EditorDocumentVersion | undefined;
+      readonly expectedModifiedAt: number | undefined;
+    }
+  | { readonly ok: false; readonly result: RouteResult };
+
+/**
+ * Validates the optional baseVersion and expectedModifiedAt fields of a file-save request body.
+ * KEIKO-0799: fails closed if either is present-but-malformed rather than silently coercing it
+ * away, which would drop the caller's concurrency check without them knowing. Non-finite numbers
+ * (NaN / +/-Infinity) for expectedModifiedAt are also rejected -- `typeof NaN === "number"` would
+ * pass a typeof-only check while still skipping the downstream `Math.abs(...) > 1` gate in
+ * assertNoWriteConflict.
+ */
+function parseWriteFilesContentBodyFields(
+  body: Record<string, unknown>,
+): WriteFilesContentBodyFields {
+  let baseVersion: EditorDocumentVersion | undefined;
+  if (body.baseVersion !== undefined) {
+    const parsed = parseEditorDocumentVersion(body.baseVersion);
+    if (!parsed.ok) {
+      return {
+        ok: false,
+        result: {
+          status: 400,
+          body: errorBody("BAD_REQUEST", "baseVersion is not a valid version."),
+        },
+      };
+    }
+    baseVersion = parsed.value;
+  }
+  if (
+    body.expectedModifiedAt !== undefined &&
+    (typeof body.expectedModifiedAt !== "number" || !Number.isFinite(body.expectedModifiedAt))
+  ) {
+    return {
+      ok: false,
+      result: {
+        status: 400,
+        body: errorBody("BAD_REQUEST", "expectedModifiedAt is not a valid number."),
+      },
+    };
+  }
+  return {
+    ok: true,
+    baseVersion,
+    expectedModifiedAt:
+      typeof body.expectedModifiedAt === "number" ? body.expectedModifiedAt : undefined,
+  };
+}
+
 async function writeFilesContentRoute(
   ctx: RouteContext,
   deps: UiHandlerDeps,
@@ -2580,6 +2676,9 @@ async function writeFilesContentRoute(
     const message = "root, path, and content are required for a file save request.";
     return { status: 400, body: errorBody("BAD_REQUEST", message) };
   }
+  // Path-denial precedence: resolveInsideRoot must run (and, for a denied path, throw the
+  // FilesError that runFilesHandler turns into 403 DENIED) before any body-field validation below
+  // can return its own 4xx, so a denied path is reported as denied rather than as a bad request.
   const resolvedRoot = await resolveRequestRoot(ctx, deps, fields.rootInput);
   const target = await resolveInsideRoot(
     deps.store,
@@ -2588,20 +2687,13 @@ async function writeFilesContentRoute(
     deps.redactor,
     resolvedRoot,
   );
-  let baseVersion: EditorDocumentVersion | undefined;
-  if (body.baseVersion !== undefined) {
-    const parsed = parseEditorDocumentVersion(body.baseVersion);
-    if (!parsed.ok) {
-      return { status: 400, body: errorBody("BAD_REQUEST", "baseVersion is not a valid version.") };
-    }
-    baseVersion = parsed.value;
-  }
+  const bodyFields = parseWriteFilesContentBodyFields(body);
+  if (!bodyFields.ok) return bodyFields.result;
   const response = await writeResolvedFilesContent({
     target,
     content: fields.content,
-    expectedModifiedAt:
-      typeof body.expectedModifiedAt === "number" ? body.expectedModifiedAt : undefined,
-    baseVersion,
+    expectedModifiedAt: bodyFields.expectedModifiedAt,
+    baseVersion: bodyFields.baseVersion,
     beforeWrite:
       fields.historyOrigin === "pre-restore"
         ? createPreRestoreCapture(deps, target, ctx.correlationId)
@@ -2800,6 +2892,21 @@ export async function handleFilesRename(
         result.path,
         ctx.correlationId,
       );
+      // KEIKO-0675: Local History reKey so a renamed file's history surfaces under the new name
+      // instead of silently disappearing. Fail-safe: reKeyEditorLocalHistorySafely never rejects
+      // (a failure downgrades to a body-free diagnostic and 0 rewritten entries). The rewritten
+      // count is not re-captured here (#2906 review, comment 3863185711): reKeyEditorLocalHistorySafely
+      // is the only caller that knows whether the store call actually threw, so it OWNS emitting the
+      // body-free activity-log line (outcome + rewrittenCount, correlated to this request) itself —
+      // capturing the return value again here would either duplicate that line or, worse, be unable
+      // to tell "nothing to rewrite" apart from "the reKey failed and was swallowed" (both return 0).
+      reKeyEditorLocalHistorySafely({
+        deps,
+        realRoot: resolvedRoot.realRoot,
+        previousRelativePath: result.previousPath,
+        nextRelativePath: result.path,
+        correlationId: ctx.correlationId,
+      });
     }
     return { status: 200, body: result };
   });

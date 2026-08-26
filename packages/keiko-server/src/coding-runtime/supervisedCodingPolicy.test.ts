@@ -7,11 +7,13 @@ import {
   EDITOR_AGENT_TARGET_PATH_MAX_BYTES,
   validateCodingWorkbenchEvidenceRecord,
 } from "@oscharko-dev/keiko-contracts";
+import { isDenied } from "@oscharko-dev/keiko-workspace";
 
 import {
   decideSupervisedFileEdit,
   decideSupervisedMutation,
   decideSupervisedVerificationCommand,
+  resolveEditTargetRealPath,
   type SupervisedCodingCommandRequest,
   type SupervisedCodingFileEditRequest,
   type SupervisedCodingMutationRequest,
@@ -198,6 +200,18 @@ describe("supervised coding policy", () => {
     expect(result).toMatchObject({ status: "denied", reason: "out-of-scope-file-edit" });
   });
 
+  it("denies a targetSensitive file edit even when the sidecar-declared scope contains it (KEIKO-0557)", () => {
+    // Parity with classifyContentMutation: an in-scope, in-worktree edit whose target sits on
+    // the shared sensitive-path deny list is rejected. Before the fix the containment check
+    // would have allowed this edit even though the request explicitly names it sensitive.
+    const { root } = workspaceFixture();
+    const result = decideSupervisedFileEdit({
+      ...fileRequest(root, "src/allowed.ts"),
+      targetSensitive: true,
+    });
+    expect(result).toMatchObject({ status: "denied", reason: "out-of-scope-file-edit" });
+  });
+
   it("fails closed for file edits outside the worktree, scope, or through escaping symlinks", () => {
     const { root, outside } = workspaceFixture();
 
@@ -276,6 +290,27 @@ describe("supervised coding policy", () => {
     ).toMatchObject({ status: "denied", reason: "mutating-command-denied" });
     expect(
       decideSupervisedVerificationCommand(commandRequest("gh", ["pr", "create"])),
+    ).toMatchObject({ status: "denied", reason: "mutating-command-denied" });
+  });
+
+  it("labels newly-recognised mutating git/npm subcommands as mutating-command-denied (KEIKO-0764)", () => {
+    // Before the fix, these commands were denied but recorded under the less-alarming
+    // 'unknown-command-denied' reason. The evidence label now matches the actual risk class.
+    expect(
+      decideSupervisedVerificationCommand(commandRequest("git", ["branch", "-D", "x"])),
+    ).toMatchObject({ status: "denied", reason: "mutating-command-denied" });
+    expect(
+      decideSupervisedVerificationCommand(commandRequest("git", ["worktree", "remove", "x"])),
+    ).toMatchObject({ status: "denied", reason: "mutating-command-denied" });
+    expect(
+      decideSupervisedVerificationCommand(commandRequest("git", ["config", "user.email", "x"])),
+    ).toMatchObject({ status: "denied", reason: "mutating-command-denied" });
+    expect(decideSupervisedVerificationCommand(commandRequest("npm", ["dedupe"]))).toMatchObject({
+      status: "denied",
+      reason: "mutating-command-denied",
+    });
+    expect(
+      decideSupervisedVerificationCommand(commandRequest("npm", ["audit", "fix"])),
     ).toMatchObject({ status: "denied", reason: "mutating-command-denied" });
   });
 
@@ -378,5 +413,42 @@ describe("supervised coding policy", () => {
 
     expect(store.consume({ approval: issued.approval, binding, nowMs: 1_101 })).toBeUndefined();
     expect(JSON.stringify(issued)).not.toContain(`"tokenDigest"`);
+  });
+});
+
+// Regression: #2906 round 2. For a not-yet-existing (create) target, containedRealPathInfo
+// resolves only the nearest EXISTING ancestor -- resolveEditTargetRealPath previously derived its
+// `.realRelative` from the lexical `.path` alone (via resolveEditTargetAbsolute), so a create
+// target under a symlinked directory classified under its benign lexical spelling instead of its
+// real location. This pins the reviewer's exact repro: writing `src/link/.env` where
+// `src/link -> ../` really lands at the workspace root's own `.env`.
+describe("resolveEditTargetRealPath create-through-symlink (#2906 round 2)", () => {
+  it("resolves a not-yet-existing target through a symlinked parent to its canonical real path", () => {
+    const root = tempDir("keiko-supervised-create-root-");
+    mkdirSync(join(root, "src"), { recursive: true });
+    // "src/link" lexically reads like an ordinary nested directory; it actually resolves to the
+    // workspace root itself.
+    symlinkSync("..", join(root, "src", "link"));
+
+    // "src/link/.env" does not exist yet -- a pure create target for a file that, once written,
+    // would really land at the workspace root's OWN ".env", not anywhere under "src/".
+    const result = resolveEditTargetRealPath(root, "src/link/.env");
+
+    expect(result.contained).toBe(true);
+    expect(result.realRelative).toBe(".env");
+    // The real consequence this feeds: classifySupervisedTargetSensitive (codingRuntimeManager.ts)
+    // runs isDenied against exactly this realRelative value.
+    expect(isDenied(result.realRelative ?? "")).toBe(true);
+  });
+
+  it("still resolves an existing target's real path unchanged (no regression on the non-create case)", () => {
+    const { root } = workspaceFixture();
+
+    // "src/escape.ts" (from workspaceFixture) is a symlink to a file OUTSIDE the workspace, so it
+    // is EXISTING (not a create target) and must still be rejected as escaping containment.
+    const result = resolveEditTargetRealPath(root, "src/escape.ts");
+
+    expect(result.contained).toBe(false);
+    expect(result.realRelative).toBeUndefined();
   });
 });

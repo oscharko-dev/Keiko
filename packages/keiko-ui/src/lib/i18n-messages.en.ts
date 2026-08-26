@@ -320,6 +320,15 @@ export const EN_MESSAGES = {
   "window.type.mobile.title": "Keiko Mobile",
   "window.type.mobile.desc": "Mobile companion",
   "mobile.previewNotice": "Preview — no pairing is wired yet",
+  "mobile.subtitle": "Mobile companion — not yet available.",
+  "relationships.tracking.label": "Tracking",
+  "relationships.tracking.evicted.long":
+    "Tracking limit reached — showing the last known lifecycle-derived state only.",
+  "relationships.tracking.evicted.short": "tracking limit reached",
+  "relationships.tracking.evicted.parenthetical":
+    "(tracking limit reached — showing last known lifecycle only)",
+  "relationships.tracking.evicted.title":
+    "Live activity tracking reached its limit for this relationship — showing the last known lifecycle-derived state only.",
   "window.type.inspector.title": "Inspector",
   "window.type.inspector.desc": "Inspect the workspace",
   "window.type.activity.title": "Activity",
@@ -368,8 +377,16 @@ export const EN_MESSAGES = {
   "chat.history.action.save": "Save {title}",
   "chat.history.action.cancel": "Cancel {title}",
   "chat.history.action.restore": "Restore {title}",
+  // #2906 round 3: terse, title-free labels for the SAME actions' visible button text (the
+  // aria-labels above stay title-bearing for KEIKO-0452 per-row uniqueness). Visible text must be
+  // localized too, or a German-locale screen-reader user gets a German accessible name with no
+  // German text printed anywhere on the button (WCAG 2.5.3 Label in Name).
+  "chat.history.action.renameLabel": "Rename",
+  "chat.history.action.restoreLabel": "Restore",
+  "chat.history.tab.active": "Active",
+  "chat.history.tab.deleted": "Deleted",
   "window.type.resources.title": "Resources",
-  "window.type.resources.desc": "System resources",
+  "window.type.resources.desc": "Shared assets & references — coming soon.",
   "window.type.connector.title": "Knowledge Pod",
   "window.type.connector.desc": "Pick a Knowledge Pod source",
   "window.type.localKnowledge.title": "Local Knowledge",
@@ -1656,6 +1673,8 @@ export const EN_MESSAGES = {
     "The authority for this action has expired.",
   "atlassianConnectors.denied.reason.authority-budget-exceeded":
     "The authority budget for this action is exhausted.",
+  "atlassianConnectors.denied.reason.authority-revoked":
+    "The authority for this action was revoked while the run was in flight.",
   "atlassianConnectors.denied.reason.connector-access-denied":
     "Connector access is not permitted for this action.",
   "atlassianConnectors.denied.reason.connector-write-denied":

@@ -6,22 +6,28 @@
 
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { ReactNode } from "react";
 import type { MemoryId, MemoryRecord } from "@oscharko-dev/keiko-contracts";
-import { MemoryList } from "./components/MemoryList";
+import { MemoryListContent } from "./components/MemoryList";
+import type { MemoryFilterState } from "./components/MemoryFilters";
 import { ReviewQueue } from "./components/ReviewQueue";
 import { EditMemoryDialog } from "./components/EditMemoryDialog";
 import { MemoryActions } from "./components/MemoryActions";
 import type { MemoryListResponse, MemoryReviewQueueResponse } from "@/lib/memory-api";
 
-const pushMock = vi.fn();
-let currentSearchParams: { get: (key: string) => string | null } = { get: () => null };
+// KEIKO-0650: the earlier MemoryList URL-state-sync wrapper (router.push on filter change) was
+// removed as dead code once every production caller moved to MemoryListContent with explicit
+// filters/onFilterChange props — none of ReviewQueue/EditMemoryDialog/MemoryActions use
+// next/navigation, so the router/searchParams mock this file used only for MemoryList is gone too.
 
-vi.mock("next/navigation", () => ({
-  useRouter: () => ({ push: pushMock }),
-  useSearchParams: () => currentSearchParams,
-}));
+const emptyFilters: MemoryFilterState = {
+  query: "",
+  scope: [],
+  type: [],
+  status: [],
+  sensitivity: [],
+};
 
 vi.mock("next/link", () => ({
   default: ({
@@ -70,28 +76,33 @@ function queueResponse(records: readonly MemoryRecord[]): MemoryReviewQueueRespo
   return { memories: records, total: records.length };
 }
 
-beforeEach(() => {
-  pushMock.mockReset();
-  currentSearchParams = { get: () => null };
-});
-
 describe("MemoriaViva browser-tier flows", () => {
   it("covers filtering and empty-state behavior on the MemoriaViva route", async () => {
     const user = userEvent.setup();
     const fetchMemoriesImpl = vi.fn().mockResolvedValue(listResponse([]));
+    const onFilterChange = vi.fn();
 
-    render(<MemoryList fetchMemoriesImpl={fetchMemoriesImpl} />);
+    render(
+      <MemoryListContent
+        filters={emptyFilters}
+        onFilterChange={onFilterChange}
+        fetchMemoriesImpl={fetchMemoriesImpl}
+        showWorkspaceBackLink
+      />,
+    );
 
     await waitFor(() => {
       expect(screen.getByTestId("memory-empty-state")).toBeInTheDocument();
     });
     expect(screen.getByText("No memories found")).toBeInTheDocument();
 
+    // The filter chips still dispatch through onFilterChange — MemoryListContent's caller (a
+    // desktop window today) owns what happens next, no longer a router.push URL sync.
     await user.click(screen.getByRole("button", { name: "Global" }));
-    expect(pushMock).toHaveBeenLastCalledWith("/memoriaviva?scope=global");
+    expect(onFilterChange).toHaveBeenLastCalledWith({ ...emptyFilters, scope: ["global"] });
 
     await user.click(screen.getByRole("button", { name: "Proposed" }));
-    expect(pushMock).toHaveBeenLastCalledWith("/memoriaviva?status=proposed");
+    expect(onFilterChange).toHaveBeenLastCalledWith({ ...emptyFilters, status: ["proposed"] });
   });
 
   it("covers review actions, conflict display, stale display, and stale archival", async () => {
@@ -237,10 +248,9 @@ describe("MemoriaViva browser-tier flows", () => {
     await user.click(screen.getByRole("button", { name: "Delete record" }));
 
     await waitFor(() => {
-      expect(deleteImpl).toHaveBeenCalledWith(
-        "mem-browser-1",
-        "user-initiated delete from MemoriaViva",
-      );
+      // KEIKO-0563: ForgetConfirmDialog (rendered inside MemoryActions) now calls deleteImpl with
+      // only the id — the dead reason-string argument was removed.
+      expect(deleteImpl).toHaveBeenCalledExactlyOnceWith("mem-browser-1");
       expect(onRecordChange).toHaveBeenCalledWith(null);
     });
   });

@@ -73,7 +73,16 @@ export type CodingSafeActivitySignal =
     });
 
 export type CodingSafeActivityPurgeReason =
-  "stop" | "takeover" | "shutdown" | "workspace-switch" | "expiry";
+  | "stop"
+  | "takeover"
+  | "shutdown"
+  | "workspace-switch"
+  // #2906 round 3: reserved for finalizeIngest's KEIKO-0878 invariant-violation branch -- validate
+  // rejected a post-mutation feed that isFeedNearProjectionLimit's pre-mutation check believed
+  // could not fail. Distinct from TTL/authority expiry (which never reaches purgeCurrent at all --
+  // see expireCurrent, which purges silently with no diagnostic) so the timeline never collapses a
+  // genuine invariant bug into an unrelated, diagnostic-free expiry code.
+  | "invariant-violation";
 export type CodingSafeActivityDropReason =
   | "validation-rejected"
   | "redactor-collapsed"
@@ -256,8 +265,15 @@ class SafeActivityProjection implements CodingSafeActivityProjection {
     const rejected = signalDropReason(signal);
     if (rejected !== undefined) return this.reject(runId, rejected);
     if (signal.signalId !== undefined && entry.signalIds.has(signal.signalId)) return true;
-    const priorFeed = structuredClone(entry.feed);
-    const priorMessageTurns = new Map(entry.messageTurns);
+    // KEIKO-0878: only take the rollback snapshot when the pre-mutation state is close enough to
+    // a projection limit that validateCodingSafeActivityFeed could plausibly reject the
+    // post-mutation state. The overwhelming common case is well below every limit (early in a
+    // run) and never trips validate; skipping the structuredClone on that path replaces per-
+    // signal deep-clone allocation with a cheap 3-field integer comparison. Validate is still
+    // run every time, so a bug in enforceFeedBounds cannot slip past silently.
+    const rollbackNeeded = isFeedNearProjectionLimit(entry, this.limits);
+    const priorFeed = rollbackNeeded ? structuredClone(entry.feed) : undefined;
+    const priorMessageTurns = rollbackNeeded ? new Map(entry.messageTurns) : undefined;
     const accepted = applySignal(entry, signal, this.limits);
     if (!accepted) return this.reject(runId, "projection-rejected");
     if (signal.signalId !== undefined) {
@@ -265,13 +281,39 @@ class SafeActivityProjection implements CodingSafeActivityProjection {
     }
     entry.feed.updatedAt = signal.occurredAt;
     enforceFeedBounds(entry, this.limits);
-    if (!validateCodingSafeActivityFeed(entry.feed).ok) {
+    return this.finalizeIngest(runId, entry, priorFeed, priorMessageTurns);
+  }
+
+  /**
+   * Validates the feed after a signal has been applied and bounds enforced, and settles the
+   * ingest() call: notifies subscribers on success; on failure, rolls back to the pre-mutation
+   * snapshot when one was taken (capacity rejection), or purges the entry entirely when validate
+   * rejected state that isFeedNearProjectionLimit believed was within limits (a bug signal for
+   * that threshold, per KEIKO-0878).
+   */
+  private finalizeIngest(
+    runId: string,
+    entry: ProjectionEntry,
+    priorFeed: StoredFeed | undefined,
+    priorMessageTurns: Map<string, string> | undefined,
+  ): boolean {
+    if (validateCodingSafeActivityFeed(entry.feed).ok) {
+      this.notify();
+      return true;
+    }
+    if (priorFeed !== undefined && priorMessageTurns !== undefined) {
       entry.feed = priorFeed;
       replaceMap(entry.messageTurns, priorMessageTurns);
       return this.reject(runId, "capacity-rejected");
     }
-    this.notify();
-    return true;
+    // KEIKO-0878: pre-mutation state was in the safe zone yet validate rejected -- indicates
+    // a bug in isFeedNearProjectionLimit's threshold, not TTL/authority expiry. Purge so a caller
+    // reading the feed after this cannot see the invalid state; the next signal will start from a
+    // fresh entry. #2906 round 3: reason is the distinct "invariant-violation" code (never
+    // "expiry", which this path is not) so the activity timeline can tell a genuine
+    // validation/invariant bug apart from every other purge cause instead of collapsing them all.
+    this.purgeCurrent("invariant-violation");
+    return false;
   }
 
   public recordDrop(runId: string, reason: CodingSafeActivityDropReason): void {
@@ -661,6 +703,28 @@ function locateMessage(
   return turn === undefined || message === undefined ? undefined : { turn, message };
 }
 
+// KEIKO-0878: cheap safe-zone check. Returns true when the pre-mutation entry is close enough to
+// any projection limit that a single applySignal + enforceFeedBounds pass could still leave the
+// feed above bounds when validate runs. If false, ingest() may skip the rollback snapshot
+// entirely -- an inexpensive integer comparison replaces a per-signal structuredClone + Map copy.
+// Threshold is 75%: a signal cannot double any of these counters, so 75% headroom keeps a
+// generous safety margin against ANY single-signal growth pushing past the limit.
+function isFeedNearProjectionLimit(entry: ProjectionEntry, limits: ResolvedLimits): boolean {
+  if (entry.feed.availability !== "available") return true;
+  const feed = entry.feed;
+  const turnThreshold = Math.max(1, Math.floor(limits.maxTurns * 3) / 4);
+  if (feed.turns.length >= turnThreshold) return true;
+  for (const turn of feed.turns) {
+    if (turn.messages.length >= Math.max(1, Math.floor(limits.maxMessagesPerTurn * 3) / 4)) {
+      return true;
+    }
+    if (turn.tools.length >= Math.max(1, Math.floor(limits.maxToolsPerTurn * 3) / 4)) {
+      return true;
+    }
+  }
+  return false;
+}
+
 function enforceFeedBounds(entry: ProjectionEntry, limits: ResolvedLimits): void {
   if (entry.feed.availability !== "available") return;
   for (const turn of entry.feed.turns) shrinkTurn(entry, turn, limits.maxTurnBytes);
@@ -918,7 +982,7 @@ const SAFE_ACTIVITY_PURGE_SUMMARY: Readonly<
   takeover: "safe-activity-purged-takeover",
   shutdown: "safe-activity-purged-shutdown",
   "workspace-switch": "safe-activity-purged-workspace-switch",
-  expiry: "safe-activity-purged-expiry",
+  "invariant-violation": "safe-activity-purged-invariant-violation",
 };
 
 function emitDropDiagnostic(

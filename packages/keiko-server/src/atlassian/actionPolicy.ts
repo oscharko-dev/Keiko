@@ -80,13 +80,15 @@ export function parseAtlassianActionAuthorityContext(
   };
 }
 
+// KEIKO-0547: `revoked` now maps to the dedicated `authority-revoked` wire code rather than
+// collapsing into `authority-invalid`, matching the distinction the editor lane already carries.
 export const ATLASSIAN_AUTHORITY_FAILURE_REASON: Readonly<
   Record<EditorAgentAuthorityFailureReason, AtlassianConnectorAuthorityFailureReason>
 > = Object.freeze({
   invalid: "authority-invalid",
   expired: "authority-expired",
   "budget-exceeded": "authority-budget-exceeded",
-  revoked: "authority-invalid",
+  revoked: "authority-revoked",
 } as const satisfies Readonly<
   Record<EditorAgentAuthorityFailureReason, AtlassianConnectorAuthorityFailureReason>
 >);

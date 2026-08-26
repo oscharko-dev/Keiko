@@ -1459,11 +1459,25 @@ interface PersistMergedRunArgs {
   readonly completedAt: string;
 }
 
-function persistMergedRun(args: PersistMergedRunArgs): void {
+// KEIKO-0839: return the post-dedup merged candidate set so persistRegenerationResult can compute
+// preservedCandidateIds from what was actually persisted (not from the pre-dedup input).
+function persistMergedRun(args: PersistMergedRunArgs): readonly QiTestCaseCandidate[] {
   const mergedCandidates = buildMergedCandidates(
     args.newRunId,
     args.preservedCandidates,
     args.regeneratedCandidates,
+  );
+  // KEIKO-0839-r3: deduplicateCandidates (inside buildMergedCandidates) keeps only the
+  // lexicographically-smallest id among content-equivalent candidates, so a PRESERVED candidate
+  // can lose its own tie-break to an equivalent REGENERATED one and be dropped from
+  // mergedCandidates entirely. Its edited revision -- keyed by that now-absent candidateId -- must
+  // not be persisted into the same artifact: an editedRevisions[] entry with no matching candidate
+  // is orphaned and internally inconsistent. Apply the identical post-dedup survivor filter
+  // persistRegenerationResult already uses for the review-state migration, here too, before the
+  // artifact is ever written.
+  const mergedCandidateIds = new Set(mergedCandidates.map((candidate) => String(candidate.id)));
+  const survivingEditedRevisions = args.preservedEditedRevisions.filter((revision) =>
+    mergedCandidateIds.has(String(revision.candidateId)),
   );
   const runId = QualityIntelligence.asQualityIntelligenceRunId(args.newRunId);
   const coverage = buildCoverageArtifacts(runId, args.ingestion, mergedCandidates);
@@ -1482,7 +1496,7 @@ function persistMergedRun(args: PersistMergedRunArgs): void {
     newRunId: args.newRunId,
     completedAt: args.completedAt,
     mergedCandidates,
-    preservedEditedRevisions: args.preservedEditedRevisions,
+    preservedEditedRevisions: survivingEditedRevisions,
   });
   recordMergedManifest(
     args.evidenceDir,
@@ -1501,6 +1515,7 @@ function persistMergedRun(args: PersistMergedRunArgs): void {
     },
     currentRedactionSecrets(args.deps),
   );
+  return mergedCandidates;
 }
 
 interface RegeneratedSlice {
@@ -1593,7 +1608,7 @@ function persistRegenerationResult(args: {
   readonly profile: PolicyProfile;
   readonly regenerated: RegeneratedSlice;
 }): void {
-  persistMergedRun({
+  const mergedCandidates = persistMergedRun({
     deps: args.deps,
     evidenceDir: args.evidenceDir,
     newRunId: args.newRunId,
@@ -1607,19 +1622,21 @@ function persistRegenerationResult(args: {
     regeneratedManifest: args.regenerated.manifest,
     completedAt: args.regenerated.completedAt,
   });
-  // The MERGED, post-dedup candidate id set the new run actually persisted (KEIKO-0344): the
-  // review runState is derived from these ids, so the review store must see exactly what the
-  // candidate artifact does.
-  const mergedCandidateIds = buildMergedCandidates(
-    args.newRunId,
-    args.narrowed.preservedCandidates,
-    args.regenerated.candidates,
-  ).map((candidate) => String(candidate.id));
+  // KEIKO-0839: the review runState must see exactly the ids persistMergedRun actually
+  // persisted. Compute preservedCandidateIds from the POST-dedup merged set intersected with the
+  // original preserved-candidate ids: a preserved candidate that deduplicateCandidates dropped
+  // (id-tied with a regenerated one, tie-break lost) must NOT be reported as preserved to the
+  // review store, or a migrated review state would target an id that does not exist in the run.
+  const mergedCandidateIds = mergedCandidates.map((candidate) => String(candidate.id));
+  const mergedIdSet = new Set(mergedCandidateIds);
+  const preservedCandidateIds = args.narrowed.preservedCandidates
+    .map((candidate) => candidate.id)
+    .filter((id) => mergedIdSet.has(id));
   migrateReviewStateForRegeneration({
     oldRunId: args.drift.manifest.runId,
     newRunId: args.newRunId,
     evidenceDir: args.evidenceDir,
-    preservedCandidateIds: args.narrowed.preservedCandidates.map((candidate) => candidate.id),
+    preservedCandidateIds,
     staleCandidateIds: [...args.narrowed.staleIds],
     allCandidateIds: mergedCandidateIds,
     now: args.regenerated.completedAt,

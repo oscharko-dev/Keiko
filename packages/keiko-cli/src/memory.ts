@@ -67,6 +67,13 @@ export interface MemoryCliDeps {
   readonly embedText?: MemoryEmbedder | null | undefined;
 }
 
+// KEIKO-0655: intentionally NOT the shared ./cli-arg-parsing.js flagValue. That version returns
+// `null` (distinct from `undefined`) when a flag is present but missing its value, signalling a
+// usage error; every caller below instead treats "present without a value" the same as "absent"
+// (falls back to a default), so this local copy folds both into `undefined`. None of this file's
+// call sites branch on the null/undefined distinction, so switching to the shared, null-returning
+// contract would newly turn e.g. `--memory-dir --evidence-dir X` into a usage error here — a
+// user-visible behavior change out of scope for a duplication cleanup.
 function flagValue(args: readonly string[], name: string): string | undefined {
   const i = args.indexOf(name);
   if (i === -1) return undefined;

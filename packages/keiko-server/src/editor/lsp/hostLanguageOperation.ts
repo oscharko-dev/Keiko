@@ -70,6 +70,8 @@ import {
   type HostLanguageProviderSpec,
 } from "./hostLanguageProviders.js";
 import { sanitizeSemanticTokenResponse } from "./lspSemanticTokens.js";
+import { recordLspLifecycleEvent } from "./lspLifecycleLedger.js";
+import { managedLspWorkspaceFingerprint } from "./managedLspActivationStore.js";
 
 export interface HostLanguageOperationOptions {
   readonly workspace: WorkspaceInfo;
@@ -1327,6 +1329,12 @@ function createPooledEntry(
     options.protocolConfiguration?.resourceBudget,
     options.lspProcessConfig,
   );
+  // KEIKO-0556-r3: wire the content-free lifecycle ledger into the real pooled manager. The
+  // partition key is the same opaque per-workspace digest managedLspActivationStore already uses
+  // for its own on-disk record, never the raw root -- so the ledger's KEIKO-0556 partitioning
+  // (and its round-3 partition bound / chronological merge) actually receives production events
+  // instead of only ones a test recorded directly.
+  const partitionKey = managedLspWorkspaceFingerprint(options.workspace.root);
   const manager = createLspProcessManager({
     config,
     workspace: options.workspace,
@@ -1334,6 +1342,9 @@ function createPooledEntry(
     commandRules: options.commandRules,
     now: options.now,
     protocol: managerProtocol(spec, options),
+    onLifecycleEvent: (event) => {
+      recordLspLifecycleEvent(event, partitionKey);
+    },
     ...managerOverrides(spec, options),
   });
   return {

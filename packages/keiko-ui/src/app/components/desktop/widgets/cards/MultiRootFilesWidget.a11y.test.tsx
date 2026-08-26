@@ -51,7 +51,6 @@ const entryBase = {
   sizeBytes: 1,
   modifiedAt: 1,
   extension: null,
-  symlink: false,
   readable: true,
 } as const;
 
@@ -142,7 +141,14 @@ beforeEach(() => {
     entries:
       treeRoot === POPULATED_ROOT && path === ""
         ? [
-            { ...entryBase, name: "src", path: "src", kind: "directory", sizeBytes: 0 },
+            {
+              ...entryBase,
+              name: "src",
+              path: "src",
+              kind: "directory",
+              sizeBytes: undefined,
+              modifiedAt: undefined,
+            },
             { ...entryBase, name: "app.ts", path: "app.ts", kind: "file", extension: "ts" },
           ]
         : [],

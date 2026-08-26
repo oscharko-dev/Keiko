@@ -16,6 +16,8 @@ import { KEIKO_PRODUCT_VERSION } from "@oscharko-dev/keiko-contracts";
 import type { EvidenceStore } from "@oscharko-dev/keiko-evidence";
 import type { EnvSource } from "@oscharko-dev/keiko-model-gateway";
 import { type AuditCliDeps, AuditLoadError, auditLocalStateResult } from "./audit.js";
+// KEIKO-0655: shared argv-parsing helper replaces the byte-identical flagValue copy this file held.
+import { flagValue } from "./cli-arg-parsing.js";
 // GEN-PERF-CLI-001 — the evidence graph (and, below, the server module graph) load at dispatch,
 // and only for `export`; `analyze` never needs either. Store-fingerprint collection (ui,
 // local-knowledge, memory-vault) is owned by keiko-server (ADR-0019 direction rule 7: keiko-cli
@@ -145,16 +147,6 @@ type ParseResult<T> =
   | { readonly kind: "help" }
   | { readonly kind: "usage"; readonly message: string }
   | { readonly kind: "ok"; readonly value: T };
-
-// Returns the value of a `--flag value` pair: undefined when the flag is absent, null when it is
-// present but missing (or immediately followed by another flag) its value — same contract as
-// investigate.ts's flagValue.
-function flagValue(args: readonly string[], name: string): string | undefined | null {
-  const index = args.indexOf(name);
-  if (index === -1) return undefined;
-  const value = args[index + 1];
-  return value === undefined || value.startsWith("--") ? null : value;
-}
 
 function parsePositiveInteger(value: string): number | undefined {
   if (!/^\d+$/.test(value)) return undefined;

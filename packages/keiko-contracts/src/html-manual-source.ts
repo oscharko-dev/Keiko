@@ -48,6 +48,16 @@ export const HTML_MANUAL_INCLUDE_GLOBS: readonly string[] = Object.freeze(
 // ─── Internal (unredacted) crawl scope ──────────────────────────────────────────
 // `kind` is intentionally the same literal set as `DocumentationManualSourceKind` so the
 // approval's `sourceKind` and the scope discriminant cannot drift.
+//
+// The `html-manual-local` variant is intentionally NOT exposed by any live server route
+// for this release (#2906 KEIKO-0554). The domain-layer fetcher exists in keiko-local-knowledge
+// (`createWorkspaceFsManualFetcher`) with TOCTOU-hardening comments and unit tests, but
+// keiko-server's `fetcherFor` unconditionally constructs the HTTP fetcher and manual-pod-routes
+// exposes no local-root selection input. Wiring the local kind through a live route requires
+// (1) branching in `fetcherFor` on the scope discriminant, (2) route-layer workspace
+// authorization equivalent to `resolveRegisteredOrManagedWorkspaceRoot`, and (3) an
+// end-to-end symlink-escape negative test. Until all three land, the local variant is
+// declaration-only.
 export type HtmlManualCrawlScope =
   | {
       readonly kind: "html-manual-local";

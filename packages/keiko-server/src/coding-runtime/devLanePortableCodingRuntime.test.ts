@@ -141,6 +141,13 @@ describe("dev-lane OpenCode discovery", () => {
     writeFileSync(licenseTampered.paths.license, "forged license\n");
     expectRefusal(discover(licenseTampered), "payload-tampered");
 
+    // Round-3 KEIKO-0763-r3: a modified SBOM (identical binary, mutated/forged provenance) must be
+    // caught the same way a tampered LICENSE or executable is -- this exercises the fixture's own
+    // matching sbomSha256 anchor, proving the comparison actually runs (not merely present).
+    const sbomTampered = fixture();
+    writeFileSync(sbomTampered.paths.sbom, '{"bomFormat":"CycloneDX","components":["forged"]}\n');
+    expectRefusal(discover(sbomTampered), "payload-tampered");
+
     const unapproved = fixture();
     unlinkSync(unapproved.paths.catalog);
     expectRefusal(discover(unapproved), "payload-unapproved");
@@ -154,6 +161,32 @@ describe("dev-lane OpenCode discovery", () => {
     runtime.releaseApproval = { redistribution: { status: "revoked" } };
     writeFileSync(revoked.paths.catalog, JSON.stringify(catalog));
     expectRefusal(discover(revoked), "payload-unapproved");
+  });
+
+  // Round-3 finding (KEIKO-0763-r3): the CHECKED-IN portable-runtime-approvals.json carries no
+  // sbomSha256 entries for either macOS target -- this is the shape production actually ships
+  // today, not a hypothetical. Before this fix, an archive entry with no sbomSha256 made
+  // verifiedPayload SKIP the SBOM comparison entirely (treated as "nothing to compare against"),
+  // so a modified SBOM was silently accepted on the real dev lane and its freshly-computed digest
+  // reported back as if it had been verified. sbomSha256 is now a REQUIRED field: a catalog archive
+  // entry that omits it fails approvedSidecarShape exactly like an entry missing
+  // executableTreeSha256 always did, and is refused "payload-unapproved" before any file comparison
+  // happens -- fail closed instead of silently downgrading to a partial check.
+  it("refuses the payload when the catalog's archive entry has no sbomSha256 anchor, matching the real checked-in catalog", () => {
+    const noSbomAnchor = fixture();
+    const catalog = JSON.parse(readFileSync(noSbomAnchor.paths.catalog, "utf8")) as {
+      sidecarRuntimes: { archives: Record<string, { sbomSha256?: string }> }[];
+    };
+    const runtime = catalog.sidecarRuntimes[0];
+    if (runtime === undefined) throw new Error("fixture-catalog-missing-runtime");
+    const archive = runtime.archives["macos-arm64"];
+    if (archive === undefined) throw new Error("fixture-catalog-missing-archive-entry");
+    delete archive.sbomSha256;
+    writeFileSync(noSbomAnchor.paths.catalog, JSON.stringify(catalog));
+
+    // A genuinely valid, untampered payload on disk -- the refusal must come purely from the
+    // catalog omitting the anchor, not from any file mismatch.
+    expectRefusal(discover(noSbomAnchor), "payload-unapproved");
   });
 
   // Gitar finding (#2475 review): the helper source-tree digest crosses a process boundary

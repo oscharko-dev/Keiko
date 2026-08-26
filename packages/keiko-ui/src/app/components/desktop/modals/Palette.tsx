@@ -134,7 +134,18 @@ export function Palette({ types, order, onAdd, onClose }: PaletteProps): ReactNo
   };
 
   const onBlur = (e: FocusEvent<HTMLDivElement>): void => {
+    // Outside-the-palette focus move: relatedTarget is a Node that is not inside the dialog.
     if (e.relatedTarget instanceof Node && ref.current?.contains(e.relatedTarget) !== true) {
+      onClose();
+      return;
+    }
+    // Window/tab blur signature: relatedTarget === null AND the document itself has lost focus.
+    // The KEIKO-0757 sibling fix on KeyboardShortcutsPanel established this shape; without it a
+    // window blur left the palette dialog open (no relatedTarget Node to distinguish "focus moved
+    // to a real element outside the palette" from "focus left the tab entirely"). A benign
+    // null-relatedTarget blur while the document still has focus (e.g. focus moved to a native
+    // dialog owned by the same document) must NOT close the palette.
+    if (e.relatedTarget === null && !document.hasFocus()) {
       onClose();
     }
   };

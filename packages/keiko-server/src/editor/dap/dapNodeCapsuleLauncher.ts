@@ -292,9 +292,15 @@ function reachesRoot(
   start: number,
   rootPid: number,
 ): boolean {
+  // KEIKO-0928: the loop only needs an upper bound on the number of walk steps; iterating
+  // parents.keys() to derive it allocated an iterator and touched every key on every call. Use
+  // parents.size directly. The Number.isSafeInteger check that used to live inside this loop is
+  // now enforced at insertion in descendantIdentities so a synthetic table with a NaN pid is
+  // rejected before it can reach this walk (regression test:
+  // dapNodeCapsuleLauncher.test.ts "fails closed when a process table contains an invalid
+  // ancestor identity").
   let current = start;
-  for (const ancestor of parents.keys()) {
-    if (!Number.isSafeInteger(ancestor)) return false;
+  for (let step = 0; step < parents.size; step += 1) {
     if (current === rootPid) return true;
     current = parents.get(current) ?? -1;
   }
@@ -306,7 +312,13 @@ function descendantIdentities(
   rootPid: number,
 ): readonly LinuxProcessIdentity[] {
   const parents = new Map<number, number>();
-  for (const process of processes.values()) parents.set(process.pid, process.parentPid);
+  for (const process of processes.values()) {
+    // KEIKO-0928 (defense preserved at the insertion boundary): a synthetic process table (test
+    // seam) may contain non-safe-integer ids; refuse to enter them into the parent graph so the
+    // walk in reachesRoot cannot follow a NaN.
+    if (!Number.isSafeInteger(process.pid) || !Number.isSafeInteger(process.parentPid)) return [];
+    parents.set(process.pid, process.parentPid);
+  }
   const descendants: LinuxProcessIdentity[] = [];
   for (const process of processes.values()) {
     if (process.pid !== rootPid && reachesRoot(parents, process.pid, rootPid)) {

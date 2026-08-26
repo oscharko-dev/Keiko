@@ -43,6 +43,7 @@ export type MemoryVaultLogOp =
   | "memory-vault.store.opened"
   | "memory-vault.store.quarantined"
   | "store.encryption-migrated"
+  | "store.encryption-checkpoint-degraded"
   | "memory-vault.log.sink-failed";
 
 // A closed mirror of cipher.ts's `VaultKeySource` ("env" | "keychain" | "keyfile"), duplicated
@@ -54,8 +55,10 @@ export type MemoryVaultLogKeySource = "env" | "keychain" | "keyfile";
 
 // The closed, body-free `extra` schema: every field this package's producers have ever needed —
 // the retained key-resolution tier, whether a quarantine reopen succeeded, the encryption sweep's
-// scope transition and row count, and the op name a failed sink dropped. Never a memory body, a
-// tag, a scope coordinate, a vault key, or a filesystem path.
+// scope transition and row count, the op name a failed sink dropped, and the bounded-retry
+// attempts + busy signal from a post-migration WAL checkpoint that could not fully truncate
+// (#2906 KEIKO-0713 / KEIKO-0877). Never a memory body, a tag, a scope coordinate, a vault
+// key, or a filesystem path.
 export interface MemoryVaultLogExtra {
   readonly keySource?: MemoryVaultLogKeySource | undefined;
   readonly reopened?: boolean | undefined;
@@ -63,6 +66,8 @@ export interface MemoryVaultLogExtra {
   readonly toScope?: "encrypted" | undefined;
   readonly rowsMigrated?: number | undefined;
   readonly droppedOp?: MemoryVaultLogOp | undefined;
+  readonly attempts?: number | undefined;
+  readonly busy?: boolean | undefined;
 }
 
 export interface MemoryVaultLogEvent {

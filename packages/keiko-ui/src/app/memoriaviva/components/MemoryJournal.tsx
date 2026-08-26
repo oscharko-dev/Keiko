@@ -483,7 +483,7 @@ function useForgetAction(
       if (busyId !== null || forgottenIds.current.has(capture.memoryId)) return;
       setBusyId(capture.memoryId);
       options.setActionError(null);
-      void forgetImpl(capture.memoryId, "forgotten from the Memory Journal")
+      void forgetImpl(capture.memoryId)
         .then(() => {
           const target = focusTargetAfterRemoval(options.rows, capture.memoryId);
           forgottenIds.current.add(capture.memoryId);

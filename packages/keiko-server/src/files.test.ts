@@ -272,6 +272,22 @@ describe("desktop files browser", () => {
     });
   });
 
+  it("KEIKO-0633: does not emit a fabricated 0 sentinel for a directory's sizeBytes/modifiedAt", async () => {
+    const listing = await readFilesTree(store, root, "");
+    const srcDir = listing.entries.find((entry) => entry.name === "src");
+    expect(srcDir?.kind).toBe("directory");
+    // Directories are not stat'd per-entry (perf shortcut), so the wire must say "not measured"
+    // (undefined) rather than surfacing a `0` that looks like a real measurement.
+    expect(srcDir?.sizeBytes).toBeUndefined();
+    expect(srcDir?.modifiedAt).toBeUndefined();
+    // File entries continue to carry the real lstat-derived values.
+    const pkgFile = listing.entries.find((entry) => entry.name === "package.json");
+    expect(pkgFile?.kind).toBe("file");
+    expect(typeof pkgFile?.sizeBytes).toBe("number");
+    expect(pkgFile?.sizeBytes ?? 0).toBeGreaterThan(0);
+    expect(typeof pkgFile?.modifiedAt).toBe("number");
+  });
+
   it("searches repository file paths without reading file contents", async () => {
     await mkdir(join(root, "src", "context"));
     await writeFile(join(root, "src", "context", "coding-context.ts"), "export const x = 1;\n");
@@ -479,9 +495,15 @@ describe("desktop files browser", () => {
     }
 
     const listing = await readFilesTree(store, root, "");
+    // #2906 review (comment 3863185718): a symlink-to-directory is `kind: "symlink"` (with
+    // symlinkTargetKind: "directory"), never `kind: "directory"` -- it is not a real directory and
+    // carries real lstat metadata, unlike the metadata-free "directory" variant FilesTreeEntry now
+    // enforces at the type level. `readable` stays the security invariant this test pins; there is
+    // no separate `symlink` field to assert on since PR #3289 review (comment 3865167775) removed
+    // it from the wire type -- `kind` alone is the discriminant.
     expect(listing.entries.find((entry) => entry.name === "escape")).toMatchObject({
-      kind: "directory",
-      symlink: true,
+      kind: "symlink",
+      symlinkTargetKind: "directory",
       readable: false,
     });
     await expect(readFilesTree(store, root, "escape")).rejects.toMatchObject({
@@ -503,13 +525,18 @@ describe("desktop files browser", () => {
     }
 
     const listing = await readFilesTree(store, root, "");
+    // PR #3289 review (comment 3865167775): config.txt is a symlink whose target (.env) is a FILE
+    // -- the mirror-image case of the directory-target collapse bug below. It must stay
+    // `kind: "symlink"` too, never collapsed into `kind: "file"` just because its target is one.
     expect(listing.entries.find((entry) => entry.name === "config.txt")).toMatchObject({
-      symlink: true,
+      kind: "symlink",
+      symlinkTargetKind: "file",
       readable: false,
     });
+    // Same symlink-to-directory relabeling as the escape case above.
     expect(listing.entries.find((entry) => entry.name === "git-cache")).toMatchObject({
-      kind: "directory",
-      symlink: true,
+      kind: "symlink",
+      symlinkTargetKind: "directory",
       readable: false,
     });
 
@@ -523,6 +550,49 @@ describe("desktop files browser", () => {
       status: 403,
       code: "DENIED",
     });
+  });
+
+  // #2906 review (comment 3863185718): the positive case the two symlink-to-directory tests above
+  // don't cover -- a READABLE symlink whose target is a directory. Before the fix this reported
+  // `kind: "directory"` while ALSO carrying the symlink's own real lstat sizeBytes/modifiedAt,
+  // contradicting the "a directory entry is metadata-free" invariant the wire TYPE now enforces
+  // (KEIKO-0633). It must report `kind: "symlink"` with `symlinkTargetKind: "directory"` instead,
+  // still carrying real (not undefined) metadata.
+  it("reports a readable symlink-to-directory as kind symlink with symlinkTargetKind directory, never as a metadata-free directory", async () => {
+    await symlink(join(root, "src"), join(root, "link-to-src"), "dir");
+
+    const listing = await readFilesTree(store, root, "");
+    const entry = listing.entries.find((candidate) => candidate.name === "link-to-src");
+    expect(entry).toMatchObject({
+      kind: "symlink",
+      symlinkTargetKind: "directory",
+      readable: true,
+    });
+    expect(typeof entry?.sizeBytes).toBe("number");
+    expect(typeof entry?.modifiedAt).toBe("number");
+
+    // Genuinely readable: the tree can be listed through it, unlike the denied/escaped cases above.
+    const throughLink = await readFilesTree(store, root, "link-to-src");
+    expect(throughLink.entries.map((candidate) => candidate.name)).toContain("app.ts");
+  });
+
+  // PR #3289 review (comment 3865167775): the mirror-image positive case -- a READABLE symlink
+  // whose target is a FILE. Before this fix, classifySymlinkEntry special-cased this to report
+  // `kind: "file"` while STILL attaching `symlinkTargetKind: "file"`, a field the wire type now
+  // declares only on the "symlink" variant. It must report `kind: "symlink"` uniformly, exactly
+  // like the symlink-to-directory case above, regardless of what the target turns out to be.
+  it("reports a readable symlink-to-file as kind symlink with symlinkTargetKind file, never collapsed into kind file", async () => {
+    await symlink(join(root, "src", "app.ts"), join(root, "link-to-file.ts"));
+
+    const listing = await readFilesTree(store, root, "");
+    const entry = listing.entries.find((candidate) => candidate.name === "link-to-file.ts");
+    expect(entry).toMatchObject({
+      kind: "symlink",
+      symlinkTargetKind: "file",
+      readable: true,
+    });
+    expect(typeof entry?.sizeBytes).toBe("number");
+    expect(typeof entry?.modifiedAt).toBe("number");
   });
 
   it("returns redacted text previews", async () => {
@@ -921,6 +991,42 @@ describe("desktop files browser", () => {
         path: "src/app.ts",
         content: "export const value = 1;\n",
         baseVersion: { sizeBytes: 1, modifiedAt: 1, contentHash: "not-a-valid-hash" },
+      }),
+      { store, redactor: buildRedactor({}) } as unknown as UiHandlerDeps,
+    );
+
+    expect(result.status).toBe(400);
+    expect(result.body).toMatchObject({ error: { code: "BAD_REQUEST" } });
+  });
+
+  it("KEIKO-0799: rejects a non-number expectedModifiedAt with a 400 instead of silently coercing to undefined", async () => {
+    const result = await handleFilesContent(
+      patchContentContext({
+        root,
+        path: "src/app.ts",
+        content: "export const value = 1;\n",
+        expectedModifiedAt: "not-a-number",
+      }),
+      { store, redactor: buildRedactor({}) } as unknown as UiHandlerDeps,
+    );
+
+    expect(result.status).toBe(400);
+    expect(result.body).toMatchObject({ error: { code: "BAD_REQUEST" } });
+    // The file on disk must be unchanged when the concurrency check was skipped for a malformed value.
+    await expect(readFile(join(root, "src", "app.ts"), "utf8")).resolves.toBe(
+      'const value: string = "ok";\n',
+    );
+  });
+
+  it("KEIKO-0799: rejects a null expectedModifiedAt with a 400 (the JSON coerce of NaN via JSON.stringify)", async () => {
+    // JSON.stringify(NaN) emits `null`, and a naive `typeof body.expectedModifiedAt === "number"`
+    // check would treat that as undefined and skip the concurrency check silently. Fail closed.
+    const result = await handleFilesContent(
+      patchContentContext({
+        root,
+        path: "src/app.ts",
+        content: "x",
+        expectedModifiedAt: null,
       }),
       { store, redactor: buildRedactor({}) } as unknown as UiHandlerDeps,
     );

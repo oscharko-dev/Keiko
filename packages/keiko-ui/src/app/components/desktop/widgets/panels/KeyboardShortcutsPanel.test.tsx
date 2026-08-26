@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { axe } from "jest-axe";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -229,6 +231,115 @@ describe("KeyboardShortcutsPanel", () => {
     });
   });
 
+  // KEIKO-0757: focus leaving the recording row by any means other than the explicit Cancel
+  // click or a successful capture must still cancel recording — otherwise recordingId sticks
+  // and the row is left announcing "Recording keyboard shortcut." indefinitely.
+  it("cancels recording when focus leaves the row by any means other than Cancel", async () => {
+    renderPanel(view());
+
+    fireEvent.change(screen.getByRole("textbox", { name: "Search keyboard shortcuts" }), {
+      target: { value: "Quick Access: files" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Record" }));
+    expect(screen.getByText("Recording keyboard shortcut.")).toBeInTheDocument();
+
+    fireEvent.blur(screen.getByRole("button", { name: "Press shortcut" }), {
+      relatedTarget: screen.getByRole("textbox", { name: "Search keyboard shortcuts" }),
+    });
+
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: "Record" })).toBeInTheDocument();
+    });
+    expect(screen.queryByText("Recording keyboard shortcut.")).not.toBeInTheDocument();
+  });
+
+  // The two buttons inside one recording row are one logical control — moving focus between
+  // them (Tab from "Press shortcut" to "Cancel") must NOT spuriously cancel recording.
+  it("does not cancel recording when focus moves between Press shortcut and Cancel in the same row", () => {
+    renderPanel(view());
+
+    fireEvent.change(screen.getByRole("textbox", { name: "Search keyboard shortcuts" }), {
+      target: { value: "Quick Access: files" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Record" }));
+
+    fireEvent.blur(screen.getByRole("button", { name: "Press shortcut" }), {
+      relatedTarget: screen.getByRole("button", { name: "Cancel" }),
+    });
+
+    expect(screen.getByText("Recording keyboard shortcut.")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Cancel" })).toBeInTheDocument();
+  });
+
+  // PR #3289 review (comment 3865167756): a window/tab blur reports relatedTarget === null, which
+  // the Node-only check skipped entirely -- leaving recordingId stuck with no way to dismiss it
+  // but a full keystroke capture. Cancel when relatedTarget is null AND the document itself has
+  // lost focus (the window/tab-blur signature), not on every null-relatedTarget blur.
+  it("cancels recording on a window/tab blur (relatedTarget null, document loses focus)", async () => {
+    renderPanel(view());
+
+    fireEvent.change(screen.getByRole("textbox", { name: "Search keyboard shortcuts" }), {
+      target: { value: "Quick Access: files" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Record" }));
+    expect(screen.getByText("Recording keyboard shortcut.")).toBeInTheDocument();
+
+    const hasFocusSpy = vi.spyOn(document, "hasFocus").mockReturnValue(false);
+    try {
+      fireEvent.blur(screen.getByRole("button", { name: "Press shortcut" }), {
+        relatedTarget: null,
+      });
+    } finally {
+      hasFocusSpy.mockRestore();
+    }
+
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: "Record" })).toBeInTheDocument();
+    });
+    expect(screen.queryByText("Recording keyboard shortcut.")).not.toBeInTheDocument();
+  });
+
+  // Pins the AND condition: a null relatedTarget alone (document still focused) must not
+  // spuriously cancel -- only the window/tab-blur signature (null + document unfocused) does.
+  it("does not cancel recording when relatedTarget is null but the document still has focus", () => {
+    renderPanel(view());
+
+    fireEvent.change(screen.getByRole("textbox", { name: "Search keyboard shortcuts" }), {
+      target: { value: "Quick Access: files" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Record" }));
+
+    const hasFocusSpy = vi.spyOn(document, "hasFocus").mockReturnValue(true);
+    try {
+      fireEvent.blur(screen.getByRole("button", { name: "Press shortcut" }), {
+        relatedTarget: null,
+      });
+    } finally {
+      hasFocusSpy.mockRestore();
+    }
+
+    expect(screen.getByText("Recording keyboard shortcut.")).toBeInTheDocument();
+  });
+
+  // PR #3289 review (comment 3865167763): styles.control only defined flex/wrap/align/gap -- the
+  // prior fix's comment claimed switching the recording row's container from <div> to <fieldset>
+  // was "no visual change", but never reset the fieldset's user-agent border/padding/margin/
+  // min-inline-size. jsdom does not apply real CSS-module stylesheets, so this scans the actual
+  // source file rather than asserting on a rendered getComputedStyle.
+  it("resets the fieldset's user-agent box styles on .control", () => {
+    const css = readFileSync(join(import.meta.dirname, "EditorSettingsPanel.module.css"), "utf8");
+    const start = css.indexOf(".control {");
+    expect(start, "missing CSS rule .control").toBeGreaterThanOrEqual(0);
+    const end = css.indexOf("}", start);
+    expect(end, "unterminated CSS rule .control").toBeGreaterThan(start);
+    const block = css.slice(start, end + 1);
+
+    expect(block).toContain("border: 0");
+    expect(block).toContain("padding: 0");
+    expect(block).toContain("margin: 0");
+    expect(block).toContain("min-inline-size: 0");
+  });
+
   it("disables Remove for an unmodified shortcut and enables it once overridden", () => {
     const overriddenView = view({
       snapshot: snapshot({ keybindingOverrides: ["1|quick-access.files|CtrlOrMeta+Shift+O"] }),
@@ -288,6 +399,25 @@ describe("KeyboardShortcutsPanel", () => {
       "Dieses gespeicherte Tastenkürzel kann nicht verwendet werden. Das Standardkürzel bleibt aktiv.",
     );
     expect(refusal).not.toHaveTextContent("INVALID_INPUT");
+  });
+
+  // KEIKO-0660: shortcutLabelForPlatform's "Unbound" fallback is hardcoded English by design (it
+  // has no I18nTranslate access) — the caller must substitute a localized string for the
+  // null-binding case, which ShortcutSummary did not do.
+  it("localizes the unbound-shortcut label instead of the hardcoded English fallback", async () => {
+    window.localStorage.setItem("keiko.locale", "de");
+    renderPanel(view());
+
+    const row = await screen.findByRole("article", { name: "Editor nach unten teilen" });
+    expect(within(row).queryByText("Unbound")).not.toBeInTheDocument();
+    expect(within(row).getByText("Nicht zugewiesen")).toBeInTheDocument();
+  });
+
+  it("shows the English 'Unbound' label for a command with no default binding in English locale", () => {
+    renderPanel(view());
+
+    const row = screen.getByRole("article", { name: "Split editor down" });
+    expect(within(row).getByText("Unbound")).toBeInTheDocument();
   });
 
   it.each([

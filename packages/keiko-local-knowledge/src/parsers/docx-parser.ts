@@ -445,10 +445,15 @@ function isListParagraph(paragraphXml: string): boolean {
 }
 
 function paragraphText(paragraphXml: string): string {
+  // #2906 KEIKO-0759 — OOXML break tags may carry attributes: `<w:br w:type="page"/>`,
+  // `<w:br w:type="column"/>`, `<w:tab w:val="…"/>`. The previous patterns required a
+  // bare self-closing tag and silently merged adjacent text runs when the break was
+  // attributed. `\b[^>]*` tolerates any attribute list before `/>` while keeping the
+  // match anchored to self-closing form (never a stray `<w:br>` opener).
   const withBreaks = paragraphXml
-    .replaceAll(/<w:tab\s*\/>/gi, "\t")
-    .replaceAll(/<w:br\s*\/>/gi, "\n")
-    .replaceAll(/<w:cr\s*\/>/gi, "\n");
+    .replaceAll(/<w:tab\b[^>]*\/>/gi, "\t")
+    .replaceAll(/<w:br\b[^>]*\/>/gi, "\n")
+    .replaceAll(/<w:cr\b[^>]*\/>/gi, "\n");
   const parts = Array.from(withBreaks.matchAll(TEXT_RUN_PATTERN))
     .map((match) => decodeXmlEntities(match[1] ?? ""))
     .filter((part) => part.length > 0);

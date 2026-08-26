@@ -21,30 +21,12 @@ import { runLauncherCli } from "./launcher.js";
 import { runPortableCli } from "./portable.js";
 import { KEIKO_START_SCRIPT, KEIKO_STOP_SCRIPT } from "./init.js";
 import { ATLASSIAN_CREDENTIAL_ARTIFACTS, defaultUiDataDir } from "./state-paths.js";
-import type { CliIo } from "./runner.js";
+import { makeCapturedIo } from "./test-support/cli-io.js";
 
-interface Captured {
-  readonly io: CliIo;
-  readonly out: () => string;
-  readonly err: () => string;
-}
-
-function makeIo(): Captured {
-  const outChunks: string[] = [];
-  const errChunks: string[] = [];
-  return {
-    io: {
-      out: (text: string): void => {
-        outChunks.push(text);
-      },
-      err: (text: string): void => {
-        errChunks.push(text);
-      },
-    },
-    out: (): string => outChunks.join(""),
-    err: (): string => errChunks.join(""),
-  };
-}
+// #2906 round 3 (comment 3865329066): reuses the shared fixture instead of a byte-identical
+// local copy (aliased, not just re-exported, so every existing makeIo() call site keeps
+// working unchanged).
+const makeIo = makeCapturedIo;
 
 const tempRoots: string[] = [];
 const NOW = new Date("2026-07-06T00:00:00.000Z");
@@ -458,18 +440,60 @@ describe("runUninstallCli — scripts edge cases", () => {
     expect(c.out()).toContain("no keiko:start / keiko:stop scripts");
   });
 
-  it("exits 1 gracefully when package.json cannot be written", async (ctx) => {
+  // KEIKO-0752: previously the writer hardcoded `null, 2` and reformatted a four-space
+  // (or tab-indented) package.json whole, even though uninstall's own scope is only the
+  // two `keiko:*` scripts. Detect the raw file's indentation before serializing so the
+  // surviving lines keep their original indent.
+  it("preserves package.json indentation when removing keiko scripts", async () => {
+    const root = makeRoot();
+    const path = join(root, "package.json");
+    const original = {
+      name: "keiko-consumer",
+      scripts: {
+        "keiko:start": KEIKO_START_SCRIPT,
+        "keiko:stop": KEIKO_STOP_SCRIPT,
+        "build:app": "tsc -b",
+      },
+    };
+    // Four-space indented input with an LF trailing newline.
+    writeFileSync(path, `${JSON.stringify(original, null, 4)}\n`, "utf8");
+
+    const c = makeIo();
+    const code = await runUninstallCli(["--scripts"], c.io, {}, { cwd: root, homedir: () => root });
+    expect(code).toBe(0);
+
+    const rewritten = readFileSync(path, "utf8");
+    // The surviving script line must still be four-space indented, not two.
+    expect(rewritten).toContain('    "build:app": "tsc -b"');
+    // The Keiko scripts are gone.
+    expect(rewritten).not.toContain("keiko:start");
+    expect(rewritten).not.toContain("keiko:stop");
+    // Trailing newline is preserved.
+    expect(rewritten.endsWith("\n")).toBe(true);
+  });
+
+  // #2906 round 3 (comment 3865273714): removeScriptsStep now reuses init.ts's temp-file-plus-
+  // rename writer, which replaces the target via renameSync — that only needs WRITE permission
+  // on the containing DIRECTORY, not on the target file itself (a read-only package.json no
+  // longer blocks the write the way a direct writeFileSync did). Deny write on the directory
+  // instead, so mkdtempSync itself fails before any content is touched — proving both that the
+  // command still fails closed AND that a write/rename failure never corrupts the original file.
+  it("exits 1 gracefully and leaves the original package.json intact when the write cannot complete", async (ctx) => {
     // Skip where the read-only bit does not block the owner (Windows, or running as root).
     if (process.platform === "win32") ctx.skip();
     if (typeof process.getuid === "function" && process.getuid() === 0) return;
     const root = makeRoot();
     const pkg = seedPackageJson(root);
-    chmodSync(pkg, 0o444);
+    const original = readFileSync(pkg, "utf8");
+    chmodSync(root, 0o555);
     const c = makeIo();
     const code = await runUninstallCli(["--scripts"], c.io, {}, { cwd: root, homedir: () => root });
-    chmodSync(pkg, 0o644); // restore so afterEach cleanup can remove it
+    chmodSync(root, 0o755); // restore so afterEach cleanup can remove it
     expect(code).toBe(1);
     expect(c.err()).toContain("keiko uninstall:");
+    // The original manifest — including the keiko:start/stop scripts the (failed) removal was
+    // supposed to prune — survives byte-for-byte.
+    expect(readFileSync(pkg, "utf8")).toBe(original);
   });
 
   it("honors a custom --package path", async () => {
@@ -684,6 +708,45 @@ describe("runUninstallCli — running server guard", () => {
     const c = makeIo();
     await expect(runUninstallCli(["--scripts"], c.io, {}, deps)).resolves.toBe(0);
     expect(killCount).toBe(0);
+  });
+
+  // #2906 round 3 (comment 3865273699): classifyPid (via state-paths.ts::readPidFile) used to
+  // follow a symlinked ui.pid through plain existsSync/readFileSync -- only lifecycle.ts's own
+  // start/stop/status/restart went through the descriptor-safe reader. A symlinked ui.pid
+  // pointing at a decoy file naming a real, unrelated pid would make `uninstall --force` signal
+  // THAT pid instead of refusing the file outright. Deterministic: a pre-planted symlink is
+  // followed regardless of timing, so this needs no real race.
+  it("refuses a symlinked ui.pid instead of signalling its target (shared reader hardening)", async (ctx) => {
+    if (process.platform === "win32") ctx.skip();
+    const root = makeRoot();
+    const stateDir = join(root, ".keiko");
+    mkdirSync(stateDir, { recursive: true });
+    writeFileSync(join(stateDir, "ui.log"), "log line\n", "utf8");
+    const decoyPidFile = join(root, "decoy-target.pid");
+    writeFileSync(decoyPidFile, "999999\n", "utf8");
+    symlinkSync(decoyPidFile, join(stateDir, "ui.pid"));
+    const killed: number[] = [];
+    let aliveCalls = 0;
+    const deps: UninstallCliDeps = {
+      cwd: root,
+      homedir: () => root,
+      // Alive on any probe — if the symlink were ever followed, classifyPid would report
+      // "running" and ensureServerStoppable would signal the decoy's pid.
+      isProcessAlive: () => {
+        aliveCalls += 1;
+        return true;
+      },
+      killProcess: (pid) => {
+        killed.push(pid);
+      },
+    };
+    const c = makeIo();
+    await expect(runUninstallCli(["--state", "--force"], c.io, {}, deps)).resolves.toBe(0);
+    // The symlink must never be followed: classifyPid reports "absent" for an unreadable/refused
+    // pid file, so ensureServerStoppable finds nothing to stop and never signals anything.
+    expect(killed).toEqual([]);
+    expect(aliveCalls).toBe(0);
+    expect(readFileSync(decoyPidFile, "utf8")).toBe("999999\n");
   });
 });
 

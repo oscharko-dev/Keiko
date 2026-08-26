@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
   validateCodingWorkbenchRuntimeEvent,
@@ -93,7 +93,7 @@ function harness(config: HarnessConfig): Harness {
   const registry: ResearchGrantRegistry = {
     register: () => undefined,
     activeGrants: () => config.grants,
-    resolveForHost: () => undefined,
+    registerInFlightFetch: () => () => undefined,
     reserveFetch: (_runId, grantId) => {
       reserves.push({ grantId });
       if (config.reserve !== undefined) return config.reserve;
@@ -397,7 +397,13 @@ describe("researchEgressPort redirect handling", () => {
 });
 
 describe("researchEgressPort transport and budget failures", () => {
-  it("fails closed when the fetch transport throws and drops the body", async () => {
+  // #2906 review (comment 3865173889): safeFetch used to collapse a transport-class failure to a
+  // bare `undefined`, and followResearch then returned FAILED directly without ever calling
+  // denyResearch/emitResearchOutcome -- a failed result with ZERO research-performed events,
+  // contradicting this file's own header contract ("every failure ... emits a content-free
+  // research-performed event"). This pin used to assert zero events; it now asserts the required
+  // one, matching the fixed contract.
+  it("fails closed, drops the body, and emits an unavailable-outcome event when the fetch transport throws", async () => {
     const test = harness({
       grants: [makeGrant()],
       responses: [new Error("blocked by egress policy")],
@@ -406,7 +412,11 @@ describe("researchEgressPort transport and budget failures", () => {
       test.execute(egressRequest("https://docs.example.com/"), undefined, LIVE_GUARD),
     ).resolves.toEqual({ status: "failed" });
     expect(test.charges).toHaveLength(0);
-    expect(test.events).toHaveLength(0);
+    expect(test.events).toHaveLength(1);
+    expect(test.events[0]?.kind).toBe("research-performed");
+    expect(test.events[0]?.auxiliaryOutcome).toBe("unavailable");
+    expect(test.events[0]).not.toHaveProperty("byteCount");
+    expect(test.events[0]).not.toHaveProperty("contentTrust");
   });
 
   it("makes no fetchImpl call at all when the grant's fetch budget is already exhausted", async () => {
@@ -783,5 +793,173 @@ describe("researchEgressPort real-registry mid-flight revoke (KEIKO-0284)", () =
     expect(events[0]?.auxiliaryOutcome).toBe("denied");
     // And no residual read/content escapes.
     expect(JSON.stringify(result)).not.toContain("secret");
+  });
+});
+
+// Regression: #2906. The in-flight AbortController registered per fetch was previously wired
+// ONLY to revokeResearch (registry.invalidateRun); a grant that simply reaches its own
+// expiresAtMs with nobody calling invalidateRun never aborted the fetch already in flight for
+// it -- reserveFetch only gates the START of a hop, so a slow response could keep running well
+// past the grant's expiry. This pins the fetch's own AbortSignal aborting purely from the
+// grant's natural expiry elapsing, with no explicit revoke anywhere in the test.
+describe("researchEgressPort abort-on-grant-expiry (regression, #2906)", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("aborts the in-flight fetch signal once the grant's own expiry elapses, without an explicit revoke", async () => {
+    vi.useFakeTimers();
+    const registry: ResearchGrantRegistry = {
+      register: () => undefined,
+      activeGrants: () => [makeGrant({ expiresAtMs: 5_050 })],
+      registerInFlightFetch: () => () => undefined,
+      reserveFetch: () => "ok",
+      chargeFetch: () => "ok",
+      // Deliberately never called by this test -- the abort must come from expiry alone.
+      invalidateRun: () => undefined,
+      saturateBytes: () => undefined,
+    };
+    let capturedSignal: AbortSignal | null | undefined;
+    const port = createResearchEgressPort({
+      registry,
+      resolveRunId: () => "run-1",
+      gatewayEgress: () => undefined,
+      emitEvent: () => undefined,
+      now: () => 5_000,
+      fetchImpl: (_url, options): Promise<Response> => {
+        capturedSignal = options.signal;
+        return new Promise<Response>(() => {
+          // Never settles within this test; production fetch would reject on signal abort.
+        });
+      },
+    });
+
+    // Intentionally not awaited: fetchImpl's promise never settles in this test, and only the
+    // AbortSignal it was called with is under test here.
+    void port.execute(egressRequest("https://docs.example.com/"), undefined, LIVE_GUARD);
+    // Flush microtasks so safeFetch has run its synchronous prefix (register, compose the
+    // signal, call fetchImpl) before we assert on the captured signal.
+    await vi.advanceTimersByTimeAsync(0);
+    expect(capturedSignal).toBeDefined();
+    expect(capturedSignal?.aborted).toBe(false);
+
+    // Advance the clock PAST the grant's expiresAtMs (5_050) -- 50ms of "wall time" -- without
+    // ever touching registry.invalidateRun.
+    await vi.advanceTimersByTimeAsync(60);
+
+    expect(capturedSignal?.aborted).toBe(true);
+  });
+
+  // #2906 review (comment 3865173889): the sibling test above pins that the composed signal
+  // aborts once the grant's own expiry elapses mid-flight, but its fetchImpl deliberately never
+  // settles, so it never exercised what followResearch actually DOES once that abort reaches
+  // safeFetch's catch. Before the fix, safeFetch collapsed the resulting AbortError to a bare
+  // `undefined` and followResearch returned FAILED directly -- a failed result with ZERO
+  // research-performed events. This drives a realistic fetchImpl (rejects on its signal's "abort"
+  // event, exactly like a real `fetch`) through that same expiry-after-start path and asserts the
+  // required correlated, body-free denied outcome is emitted.
+  it("emits a denied research-performed event when the grant's expiry aborts a fetch already in flight", async () => {
+    vi.useFakeTimers();
+    const events: CodingWorkbenchRuntimeEvent[] = [];
+    const registry: ResearchGrantRegistry = {
+      register: () => undefined,
+      activeGrants: () => [makeGrant({ expiresAtMs: 5_050 })],
+      registerInFlightFetch: () => () => undefined,
+      reserveFetch: () => "ok",
+      chargeFetch: () => "ok",
+      // Deliberately never called by this test -- the abort must come from expiry alone.
+      invalidateRun: () => undefined,
+      saturateBytes: () => undefined,
+    };
+    const port = createResearchEgressPort({
+      registry,
+      resolveRunId: () => "run-1",
+      gatewayEgress: () => undefined,
+      emitEvent: (event) => events.push(event),
+      now: () => 5_000,
+      fetchImpl: (_url, options): Promise<Response> =>
+        new Promise<Response>((_resolve, reject) => {
+          options.signal?.addEventListener("abort", () => {
+            reject(new DOMException("This operation was aborted", "AbortError"));
+          });
+        }),
+    });
+
+    const pending = port.execute(egressRequest("https://docs.example.com/"), undefined, LIVE_GUARD);
+    await vi.advanceTimersByTimeAsync(0);
+    // Advance the clock PAST the grant's expiresAtMs (5_050), same as the sibling test, but this
+    // fetchImpl actually rejects when its composed signal aborts -- driving the flow to completion.
+    await vi.advanceTimersByTimeAsync(60);
+    const result = await pending;
+
+    expect(result).toEqual({ status: "failed" });
+    expect(events).toHaveLength(1);
+    expect(events[0]?.kind).toBe("research-performed");
+    expect(events[0]?.auxiliaryOutcome).toBe("denied");
+    expect(events[0]).not.toHaveProperty("byteCount");
+    expect(events[0]).not.toHaveProperty("contentTrust");
+  });
+});
+
+// Regression: #2906 round 2. `fetch()` resolves as soon as response HEADERS arrive; the body
+// (read via `readBytesCapped`) is consumed strictly AFTER that. `safeFetch`'s previous `finally`
+// unregistered the revoke controller and cleared the expiry timer the instant fetchImpl's promise
+// resolved -- i.e. at headers time -- so a grant reaching its own `expiresAtMs` while the body was
+// still streaming no longer aborted anything. This pins the reviewer's exact repro: an
+// immediately-resolved `Response` backed by a delayed `ReadableStream`, with the clock advanced
+// past `expiresAtMs` while that stream is still open (body read still pending).
+describe("researchEgressPort abort-on-grant-expiry-during-body-read (regression, #2906 round 2)", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("keeps the expiry-abort signal armed through body consumption, not just until headers resolve", async () => {
+    vi.useFakeTimers();
+    const registry: ResearchGrantRegistry = {
+      register: () => undefined,
+      activeGrants: () => [makeGrant({ expiresAtMs: 5_050 })],
+      registerInFlightFetch: () => () => undefined,
+      reserveFetch: () => "ok",
+      chargeFetch: () => "ok",
+      // Deliberately never called by this test -- the abort must come from expiry alone.
+      invalidateRun: () => undefined,
+      saturateBytes: () => undefined,
+    };
+    let capturedSignal: AbortSignal | null | undefined;
+    // A body stream that never enqueues or closes on its own: readBytesCapped stays pending on
+    // it, simulating headers-resolved-but-body-still-streaming.
+    const body = new ReadableStream<Uint8Array>({
+      start(): void {
+        // Deliberately left open for the lifetime of this test.
+      },
+    });
+    const port = createResearchEgressPort({
+      registry,
+      resolveRunId: () => "run-1",
+      gatewayEgress: () => undefined,
+      emitEvent: () => undefined,
+      now: () => 5_000,
+      fetchImpl: (_url, options): Promise<Response> => {
+        capturedSignal = options.signal;
+        // Headers resolve immediately; the body stream stays open (still streaming).
+        return Promise.resolve(new Response(body, { status: 200 }));
+      },
+    });
+
+    // Intentionally not awaited: the body never closes in this test, so execute() never settles.
+    void port.execute(egressRequest("https://docs.example.com/"), undefined, LIVE_GUARD);
+    // Flush microtasks: fetchImpl resolves (headers arrive) and finalizeResearch begins reading
+    // the body via readBytesCapped, which is now pending on the still-open stream.
+    await vi.advanceTimersByTimeAsync(0);
+    expect(capturedSignal).toBeDefined();
+    expect(capturedSignal?.aborted).toBe(false);
+
+    // Advance the clock PAST the grant's expiresAtMs (5_050) while the body read is still
+    // pending. Before the fix, safeFetch's `finally` had already unregistered the controller and
+    // cleared the expiry timer the instant fetchImpl's promise (headers) resolved, so this
+    // elapsed expiry would never reach the signal used for the still-in-flight body read.
+    await vi.advanceTimersByTimeAsync(60);
+
+    expect(capturedSignal?.aborted).toBe(true);
   });
 });

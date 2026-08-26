@@ -6,6 +6,7 @@ import {
   KEIKO_PRODUCT_VERSION,
   validateCodingWorkbenchCodexSubscriptionProfile,
   validateCodingWorkbenchRuntimeEvent,
+  type CodingWorkbenchMode,
   type CodingWorkbenchRuntimeEvent,
 } from "@oscharko-dev/keiko-contracts";
 
@@ -163,6 +164,13 @@ export interface CodexRuntimeCompositionInput {
   readonly onTransientDelta?:
     ((delta: Extract<CodexAppServerProjection, { kind: "delta" }>) => void) | undefined;
   readonly onAdapterFailure: (runId: string, code: CodexAppServerClientFailureCode) => void;
+  // KEIKO-0679: accessors for the run's actual mode state (same source as
+  // codingRuntimeOrchestratorState.ts's publicSnapshot). Before this fix the "task-submitted"
+  // event hardcoded requestedMode/effectiveMode to "governed-assist" regardless of the run's
+  // real mode. Both are optional (undefined => defaults to "governed-assist") so existing test
+  // fixtures do not need to change.
+  readonly requestedMode?: ((runId: string) => CodingWorkbenchMode | undefined) | undefined;
+  readonly effectiveMode?: ((runId: string) => CodingWorkbenchMode | undefined) | undefined;
 }
 
 export interface CodexRuntimeComposition {
@@ -455,10 +463,15 @@ async function project(
     return;
   }
   if (projection.event === "turn/started" && projection.turnId !== undefined) {
+    // KEIKO-0679: derive the run's real modes from the injected accessors instead of hardcoding
+    // "governed-assist" for every turn. Fall back to "governed-assist" only when a fixture (or a
+    // legacy caller that has not yet threaded the accessors) leaves them unset.
+    const requestedMode = input.requestedMode?.(runId) ?? "governed-assist";
+    const effectiveMode = input.effectiveMode?.(runId) ?? requestedMode;
     emit(input, runId, run, "task-submitted", {
       taskRef: "codex-task",
-      requestedMode: "governed-assist",
-      effectiveMode: "governed-assist",
+      requestedMode,
+      effectiveMode,
     });
   }
   if (projection.terminalStatus !== undefined && projection.turnId !== undefined) {

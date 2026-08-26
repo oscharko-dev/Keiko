@@ -14,14 +14,8 @@ import { tmpdir, platform as osPlatform } from "node:os";
 import { dirname, join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { runLauncherCli, type LauncherCliDeps } from "./launcher.js";
-import type { CliIo } from "./runner.js";
-import { hashContent, loadState } from "./launcher-state.js";
-
-interface Captured {
-  readonly io: CliIo;
-  readonly out: () => string;
-  readonly err: () => string;
-}
+import { hashContent, loadState, saveState, upsertEntry } from "./launcher-state.js";
+import { makeCapturedIo } from "./test-support/cli-io.js";
 
 function withEnvVar<T>(key: string, value: string | undefined, run: () => T): T {
   const previous = process.env[key];
@@ -41,22 +35,10 @@ function withEnvVar<T>(key: string, value: string | undefined, run: () => T): T 
   }
 }
 
-function makeIo(): Captured {
-  const outChunks: string[] = [];
-  const errChunks: string[] = [];
-  return {
-    io: {
-      out: (text: string): void => {
-        outChunks.push(text);
-      },
-      err: (text: string): void => {
-        errChunks.push(text);
-      },
-    },
-    out: (): string => outChunks.join(""),
-    err: (): string => errChunks.join(""),
-  };
-}
+// #2906 round 3 (comment 3865329066): reuses the shared fixture instead of a byte-identical
+// local copy (aliased, not just re-exported, so every existing makeIo() call site keeps
+// working unchanged).
+const makeIo = makeCapturedIo;
 
 const tempRoots: string[] = [];
 
@@ -501,6 +483,66 @@ describe("runLauncherCli — state-file tamper regression (F1/F2)", () => {
     expect(runLauncherCli(["status"], c.io, {}, h.deps)).toBe(0);
     expect(c.out()).toContain(`${h.targetPath}\tunreadable`);
     expect(c.err()).toBe("");
+  });
+
+  // KEIKO-0795: `install` used to let a raw ErrnoException escape when the shortcut path
+  // was a directory or otherwise unreadable. The handleExistingTarget catch converts that
+  // into a typed LauncherError("TARGET_UNREADABLE") that runLauncherCli's own catch
+  // surfaces as exit 1 with a launcher-prefixed stderr line.
+  it("KEIKO-0795 — install returns 1 and reports a clean stderr line when the shortcut path is a directory", (ctx) => {
+    if (osPlatform() === "win32") ctx.skip();
+    const h = makeHarness();
+    mkdirSync(h.approvedDir, { recursive: true });
+    // Plant a DIRECTORY at the shortcut path so existsSync says "yes" but readFileSync
+    // throws EISDIR.
+    mkdirSync(h.targetPath);
+    const c = makeIo();
+    expect(runLauncherCli(["install"], c.io, {}, h.deps)).toBe(1);
+    expect(c.err()).toContain("keiko launcher");
+    expect(c.err()).toContain(h.targetPath);
+  });
+
+  // KEIKO-0795: `remove` used to throw mid-iteration on the first unreadable shortcut
+  // and abort every remaining entry. processRemoveEntry's catch now converts that into
+  // a "refused" outcome so the loop keeps processing.
+  //
+  // #2906 round 3 (comment 3865273720): `cmdRemove` returns `result.refused > 0 ? 1 : 0` —
+  // deterministic, not "may still exit 0 or 1". A single-entry fixture also cannot prove the
+  // loop CONTINUES past a refusal (a loop that aborts on the first refusal and a loop that
+  // keeps going both produce the exact same one refused-and-nothing-else outcome). Seed a
+  // second, valid shortcut after the refused one so only a loop that truly continues removes it.
+  it("KEIKO-0795 — remove reports 'refused' for an unreadable shortcut and keeps processing the rest", (ctx) => {
+    if (osPlatform() === "win32") ctx.skip();
+    const h = makeHarness();
+    // Install one real shortcut, then swap the underlying file for a directory so
+    // readFileSync fails when processRemoveEntry visits it.
+    runLauncherCli(["install"], makeIo().io, {}, h.deps);
+    rmSync(h.targetPath);
+    mkdirSync(h.targetPath);
+    // A second, valid, readable shortcut recorded AFTER the refused one.
+    const secondPath = join(h.approvedDir, "keiko-second.desktop");
+    const secondContent = "[Desktop Entry]\nExec=/usr/local/bin/keiko start --open\n";
+    writeFileSync(secondPath, secondContent, "utf8");
+    saveState(
+      h.stateDir,
+      upsertEntry(loadState(h.stateDir), {
+        path: secondPath,
+        platform: "linux",
+        contentSha256: hashContent(secondContent),
+        createdAt: "2026-06-05T00:00:00.000Z",
+      }),
+    );
+    const c = makeIo();
+    const code = runLauncherCli(["remove"], c.io, {}, h.deps);
+    // cmdRemove is deterministic: any refusal forces exit 1. Accepting [0, 1] masked exactly
+    // the regression this test protects against.
+    expect(code).toBe(1);
+    expect(c.err()).toContain(`refusing: ${h.targetPath}`);
+    // The loop must have continued past the refusal and removed the second, valid entry.
+    expect(c.out()).toContain(`removed: ${secondPath}`);
+    expect(existsSync(secondPath)).toBe(false);
+    // The refused entry is retained (never unlinked); the removed one is pruned from state.
+    expect(loadState(h.stateDir).entries.map((entry) => entry.path)).toEqual([h.targetPath]);
   });
 });
 

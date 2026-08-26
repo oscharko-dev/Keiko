@@ -12,6 +12,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { buildCspHeader } from "../csp.js";
 import { buildUiHandlerDeps, type UiHandlerDeps } from "../deps.js";
+import type { ServerDiagnosticSink } from "../diagnostics-log.js";
 import { UI_HOST } from "../server.js";
 import { createInMemoryUiStore } from "../store/index.js";
 import { startUiTestServer } from "../ui-test-server/_support.js";
@@ -78,6 +79,8 @@ export function createStaticContentSource(
 export interface AppSessionTestServerOptions {
   readonly sessionPairingPort?: SessionPairingPort | undefined;
   readonly contentSource?: CodingAppSessionContentSource | undefined;
+  /** Injected diagnostic sink, e.g. to observe the KEIKO-0838 pairing-denial aggregate directly. */
+  readonly diagnostics?: ServerDiagnosticSink | undefined;
 }
 
 export interface AppSessionTestServer {
@@ -106,6 +109,7 @@ export async function startAppSessionTestServer(
     store: createInMemoryUiStore(),
     sessionPairingPort: options.sessionPairingPort,
     codingAppSessionContentSource: options.contentSource,
+    diagnostics: options.diagnostics,
   });
   const started = await startUiTestServer({
     staticRoot,

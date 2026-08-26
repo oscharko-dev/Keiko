@@ -56,6 +56,11 @@ const RECONNECT_JITTER_MS = 500;
 /** Hard cap for in-memory activity tracking. */
 const MAX_TRACKED_RELATIONSHIPS = 512;
 
+// PR #3289 review: evictedIds retained every one-off evicted id indefinitely unless that exact id
+// emitted again, moving the unbounded growth MAX_TRACKED_RELATIONSHIPS prevents on activityMap
+// into this tombstone Set instead on a high-cardinality stream. Bound it to the same cap.
+const MAX_EVICTED_TOMBSTONES = MAX_TRACKED_RELATIONSHIPS;
+
 // ─── SSE event payload allowlist ───────────────────────────────────────────────
 // Only these keys are accepted from inbound SSE data. Everything else is dropped.
 // (activity-state.md §4 / retention-and-privacy.md §5.1)
@@ -153,6 +158,15 @@ export interface RelationshipActivityStreamState {
    * this flag.
    */
   readonly animate: boolean;
+  /**
+   * Relationship ids that were removed by evictOverCapacity's MAX_TRACKED_RELATIONSHIPS cap —
+   * distinct from an id simply never having been reported. A consumer looking up an id absent
+   * from `activityMap` cannot otherwise tell "never seen an event for this id" apart from
+   * "was tracked, then evicted for capacity" (KEIKO-0665); both silently fell back to the same
+   * default display. An id is removed from this set again once a new event for it is applied
+   * (see applyEvent) — it is live-tracked again at that point, not evicted.
+   */
+  readonly evictedIds: ReadonlySet<string>;
   /** Disable all animations (user-level opt-out; also used by tests). */
   disable(): void;
 }
@@ -248,6 +262,24 @@ function evictOverCapacity(
   return { deletedIds, throughputIdsToClear, activityChanged };
 }
 
+// Set iteration order is insertion order (ES2015+), so the first value is the oldest surviving
+// tombstone -- dropping it on overflow gives simple, deterministic oldest-first eviction (a
+// generational/FIFO tombstone policy) without tracking separate timestamps for evictedIds itself.
+function boundedEvictedIds(
+  current: ReadonlySet<string>,
+  idsToAdd: ReadonlySet<string>,
+  cap: number,
+): Set<string> {
+  const next = new Set(current);
+  for (const id of idsToAdd) next.add(id);
+  while (next.size > cap) {
+    const oldest = next.values().next().value;
+    if (oldest === undefined) break;
+    next.delete(oldest);
+  }
+  return next;
+}
+
 /** Removes `idsToClear` from a throughput map, returning the next map only if it changed. */
 function clearThroughputIds(
   throughputMap: ReadonlyMap<string, number>,
@@ -286,6 +318,8 @@ export function useRelationshipActivityStream(
   const [throughputMap, setThroughputMap] = useState<ReadonlyMap<string, number>>(new Map());
   const activityMapRef = useRef<ReadonlyMap<string, RelationshipActivityState>>(new Map());
   const throughputMapRef = useRef<ReadonlyMap<string, number>>(new Map());
+  const [evictedIds, setEvictedIds] = useState<ReadonlySet<string>>(new Set());
+  const evictedIdsRef = useRef<ReadonlySet<string>>(new Set());
 
   // animate: true when reduced-motion is NOT requested and disable() has not been called.
   const [reducedMotion, setReducedMotion] = useState<boolean>(() => {
@@ -317,6 +351,19 @@ export function useRelationshipActivityStream(
     if (activityChanged) {
       activityMapRef.current = nextActivityMap;
       setActivityMap(nextActivityMap);
+    }
+
+    // Only ids evictOverCapacity actually deleted count as "evicted" — expireStaleActivity's
+    // inactive/expiry deletions are a distinct, already-visible lifecycle transition and must
+    // not be conflated with the capacity-eviction signal (KEIKO-0665).
+    if (eviction.deletedIds.size > 0) {
+      const nextEvictedIds = boundedEvictedIds(
+        evictedIdsRef.current,
+        eviction.deletedIds,
+        MAX_EVICTED_TOMBSTONES,
+      );
+      evictedIdsRef.current = nextEvictedIds;
+      setEvictedIds(nextEvictedIds);
     }
 
     if (deletedIds.size > 0) {
@@ -368,6 +415,15 @@ export function useRelationshipActivityStream(
       activityMapRef.current = next;
       return next;
     });
+
+    // A new event for a previously evicted id means it is live-tracked again — no longer
+    // usefully "evicted for capacity" (KEIKO-0665).
+    if (evictedIdsRef.current.has(event.id)) {
+      const nextEvictedIds = new Set(evictedIdsRef.current);
+      nextEvictedIds.delete(event.id);
+      evictedIdsRef.current = nextEvictedIds;
+      setEvictedIds(nextEvictedIds);
+    }
 
     if (event.state === "high-throughput" && event.count !== undefined) {
       setThroughputMap((prev) => {
@@ -515,6 +571,7 @@ export function useRelationshipActivityStream(
     activityMap,
     throughputMap,
     animate,
+    evictedIds,
     disable,
   };
 }

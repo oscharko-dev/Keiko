@@ -58,6 +58,16 @@ export interface NativeFileDialogResponse {
   // and must not be rendered as a failure.
   readonly cancelled: boolean;
   readonly selections: readonly NativeFileDialogSelection[];
+  // KEIKO-0817 follow-up (#2906 review, comment 3863185762): how many adapter-returned paths were
+  // rejected (denied, missing, wrong kind, malformed) and silently dropped from `selections`.
+  // Always present — 0 when nothing was rejected — so a client can distinguish "the picker
+  // returned exactly this" from "some selections were dropped" without a signal it cannot
+  // otherwise observe (a rejected path never reaches the wire at all). A count only; never a path
+  // or any other adapter detail.
+  readonly rejectedSelectionCount: number;
+  // True exactly when rejectedSelectionCount > 0, carried explicitly (mirrors `cancelled`) so a
+  // renderer can branch on outcome without re-deriving it from the count.
+  readonly partial: boolean;
 }
 
 // `GET /api/native-file-dialog/capability` — whether the BFF host platform has a native adapter.

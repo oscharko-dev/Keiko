@@ -30,6 +30,7 @@ import type {
   GitRepositoryDiffResponse,
   GitRepositoryStatusResponse,
 } from "../../../../../lib/types";
+import { isExpandableDirectory } from "../../../../../lib/types";
 import { useTranslate, type I18nTranslate } from "@/lib/i18n";
 import { useDialogTabTrap } from "../../hooks/useDialogTabTrap";
 import { Icons } from "../../Icons";
@@ -294,7 +295,10 @@ function contextMenuParentPath(
   currentDirectoryPath: string | null,
 ): string | null {
   if (entry === null) return currentDirectoryPath;
-  if (entry.kind === "directory") return entry.path;
+  // #2906 review (comment 3865167721): a readable symlink-to-directory is expandable/navigable
+  // like a real directory (see isExpandableDirectory), so a "New File"/"New Folder" launched from
+  // its context-menu row targets ITS path too, not its parent.
+  if (isExpandableDirectory(entry)) return entry.path;
   return entryParent(entry.path);
 }
 
@@ -1554,9 +1558,6 @@ export function FilesWidget({
               <FolderIcon size={14} />
             </span>
             <span className="tr-name tr-folder">{entry.name}</span>
-            {entry.symlink ? (
-              <span className="tr-badge">{t("filesWidget.tree.symlinkBadge")}</span>
-            ) : null}
             {gitAggregate !== undefined ? (
               <span
                 className="tr-badge tr-git"
@@ -1590,7 +1591,7 @@ export function FilesWidget({
     const metaId = `${labelIdBase}-meta`;
     const labelledBy = [
       nameId,
-      ...(entry.symlink ? [symlinkId] : []),
+      ...(entry.kind === "symlink" ? [symlinkId] : []),
       ...(decoration === null ? [] : [gitBadgeId]),
       metaId,
     ].join(" ");
@@ -1642,7 +1643,7 @@ export function FilesWidget({
         <span className="tr-name" id={nameId}>
           {entry.name}
         </span>
-        {entry.symlink ? (
+        {entry.kind === "symlink" ? (
           <span className="tr-badge" id={symlinkId}>
             {t("filesWidget.tree.symlinkBadge")}
           </span>
@@ -1664,7 +1665,7 @@ export function FilesWidget({
           </span>
         ) : null}
         <span className="tr-meta mono" id={metaId}>
-          {formatBytes(entry.sizeBytes)}
+          {formatBytes(entry.sizeBytes ?? 0)}
         </span>
         {change !== undefined && entry.readable ? (
           <button
@@ -1685,14 +1686,13 @@ export function FilesWidget({
 
   const renderEntry = (entry: FilesTreeEntry, depth: number): ReactNode => {
     if (pendingEntry?.kind === "rename" && pendingEntry.path === entry.path) {
-      const icon =
-        entry.kind === "directory" ? (
-          <span className="fi-fallback" style={{ color: "var(--accent)" }}>
-            <FolderIcon size={14} />
-          </span>
-        ) : (
-          <FileIcon name={entryDraft.length > 0 ? entryDraft : entry.name} />
-        );
+      const icon = isExpandableDirectory(entry) ? (
+        <span className="fi-fallback" style={{ color: "var(--accent)" }}>
+          <FolderIcon size={14} />
+        </span>
+      ) : (
+        <FileIcon name={entryDraft.length > 0 ? entryDraft : entry.name} />
+      );
       return renderInlineEditor(
         depth,
         icon,
@@ -1701,7 +1701,12 @@ export function FilesWidget({
     }
     const unreadableTitle = t("filesWidget.tree.unreadableLinkReason");
     const entryTip = entry.readable ? entry.path : unreadableTitle;
-    return entry.kind === "directory"
+    // #2906 review (comment 3865167721): a readable symlink-to-directory (kind: "symlink",
+    // symlinkTargetKind: "directory") is server-listable exactly like a real directory, so it must
+    // route through renderDirectoryEntry -- which is already written generically against `entry`
+    // (path/readable/symlink), not `entry.kind` -- for expansion, click-to-enter, context menu,
+    // and drag/drop. Routing it into renderFileEntry instead turned it into a broken file-open.
+    return isExpandableDirectory(entry)
       ? renderDirectoryEntry(entry, depth, entryTip)
       : renderFileEntry(entry, depth, entryTip);
   };

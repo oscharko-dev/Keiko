@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { existsSync, realpathSync } from "node:fs";
-import { isAbsolute, join, relative, resolve } from "node:path";
+import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 
 import {
   CODING_WORKBENCH_SCHEMA_VERSION,
@@ -58,6 +58,11 @@ export interface SupervisedCodingFileEditRequest extends EvidenceContext {
   readonly fileCount: number;
   readonly addedLines: number;
   readonly deletedLines: number;
+  // KEIKO-0557: parity with classifyContentMutation (editor-agent-governance.ts). When the caller
+  // has already resolved the sensitive-path deny classification for `targetPath`, threading it
+  // through here lets decideSupervisedFileEdit deny even when the sidecar-declared
+  // allowedRelativePaths would otherwise contain the path.
+  readonly targetSensitive?: boolean;
 }
 
 export interface SupervisedCodingCommandRequest extends EvidenceContext {
@@ -95,6 +100,13 @@ export const DEFAULT_SUPERVISED_VERIFICATION_COMMANDS: readonly SupervisedCoding
 export function decideSupervisedFileEdit(
   request: SupervisedCodingFileEditRequest,
 ): SupervisedCodingDecision {
+  // KEIKO-0557: sensitive-path deny takes precedence over the sidecar's self-declared
+  // allowedRelativePaths — a mutation whose target sits on the shared sensitive deny list is
+  // rejected even if the sidecar would otherwise contain it. Mirrors classifyContentMutation's
+  // context.targetSensitive gate.
+  if (request.targetSensitive === true) {
+    return fileEditDecision(request, "denied", "out-of-scope-file-edit", true);
+  }
   const contained = resolveContainedEditTarget(request);
   return contained
     ? fileEditDecision(request, "allowed", "scoped-file-edit", false)
@@ -121,14 +133,110 @@ export function decideSupervisedMutation(
   return mutationApprovalRequiredDecision(request);
 }
 
+interface ResolvedEditTarget {
+  readonly root: string;
+  readonly target: string;
+}
+
+// Syntax gate, workspace-root realpath, symlink-aware resolution (containedPath/
+// containedRealPathInfo), and root-containment -- the resolution chain shared by
+// resolveContainedEditTarget's scope check below and resolveEditTargetRealPath's sensitivity
+// classification. containedRealPathInfo rejects a target whose symlink chain escapes the
+// workspace root entirely; it does NOT (and must not) reject a target that stays contained but
+// resolves somewhere other than its lexical name suggests -- that classification is the caller's
+// job (see resolveEditTargetRealPath).
+function resolveEditTargetAbsolute(
+  workspaceRoot: string,
+  targetPath: string,
+): ResolvedEditTarget | undefined {
+  if (!candidatePathSyntaxAllowed(targetPath)) return undefined;
+  const root = realPath(workspaceRoot);
+  if (root === undefined) return undefined;
+  const target = resolveCandidatePath(root, targetPath);
+  if (target === undefined || !pathInside(root, target)) return undefined;
+  return { root, target };
+}
+
+export interface EditTargetRealPath {
+  readonly contained: boolean;
+  // The workspace-root-relative path the target resolves to after following symlinks, present
+  // whenever `contained` is true.
+  readonly realRelative: string | undefined;
+}
+
+// #2906: exposes the root-containment half of the resolution chain above WITHOUT the
+// allowedRelativePaths scope narrowing that only decideSupervisedFileEdit's own containment check
+// needs. A caller that must classify a target's SENSITIVITY -- a check KEIKO-0557 deliberately
+// keeps independent of the sidecar's own declared scope -- runs it against the REAL,
+// symlink-resolved target this returns instead of the lexical targetPath string alone. A
+// benign-looking in-workspace symlink (e.g. `src/config-alias` -> `../.env`, which stays
+// root-contained since `../` from `src/` lands back on the workspace root) would otherwise pass
+// every check: it is syntactically fine, it resolves inside the root, and its own lexical name
+// matches no deny pattern -- only the REAL target name (`.env`) does. See
+// codingRuntimeManager.ts's supervisedFileEditEvent.
+export function resolveEditTargetRealPath(
+  workspaceRoot: string,
+  targetPath: string,
+): EditTargetRealPath {
+  if (!candidatePathSyntaxAllowed(targetPath)) return { contained: false, realRelative: undefined };
+  const root = realPath(workspaceRoot);
+  if (root === undefined) return { contained: false, realRelative: undefined };
+  const absolute = isAbsolute(targetPath) ? resolve(targetPath) : resolve(join(root, targetPath));
+  const info = containedRealPathInfoOrUndefined(root, absolute);
+  if (info === undefined || !pathInside(root, info.path)) {
+    return { contained: false, realRelative: undefined };
+  }
+  return { contained: true, realRelative: canonicalRealRelative(info, absolute) };
+}
+
+function containedRealPathInfoOrUndefined(
+  root: string,
+  absolute: string,
+): ReturnType<typeof containedRealPathInfo> | undefined {
+  try {
+    return containedRealPathInfo(nodeWorkspaceFs, root, absolute);
+  } catch (error) {
+    if (error instanceof PathEscapeError) return undefined;
+    throw error;
+  }
+}
+
+// #2906 round 2: for a not-yet-existing (create) target, containedRealPathInfo's own
+// `.realRelative` is only the resolved NEAREST EXISTING ancestor -- the trailing segments that
+// don't exist yet (so there is nothing to symlink-resolve) are not included. Appending them back
+// makes a create target under a symlinked parent classify under its REAL location, not the
+// resolved parent alone (missing the target's own name) and not the unresolved lexical spelling
+// this function previously derived its result from via resolveEditTargetAbsolute's `.path`
+// (`safe-alias/hooks/new-hook` with `safe-alias -> .git` used to classify under the benign
+// lexical spelling and be admitted).
+function canonicalRealRelative(
+  info: ReturnType<typeof containedRealPathInfo>,
+  absolute: string,
+): string {
+  const suffix = untouchedSuffix(absolute);
+  return suffix === "" ? info.realRelative : join(info.realRelative, suffix);
+}
+
+// Walks up from `absolutePath` to the nearest ancestor that exists on disk -- the same ground
+// containedRealPathInfo's own create-target branch covers -- and returns the path below that
+// ancestor. Empty when `absolutePath` itself exists: containedRealPathInfo's `.realRelative` is
+// already the complete resolved path in that case. Terminates at `root`, which `realPath` above
+// already proved exists, so the walk can never reach the filesystem root empty-handed.
+function untouchedSuffix(absolutePath: string): string {
+  let current = absolutePath;
+  for (;;) {
+    if (existsSync(current)) return relative(current, absolutePath);
+    const parent = dirname(current);
+    if (parent === current) return relative(current, absolutePath);
+    current = parent;
+  }
+}
+
 function resolveContainedEditTarget(request: SupervisedCodingFileEditRequest): boolean {
-  if (!candidatePathSyntaxAllowed(request.targetPath)) return false;
-  const root = realPath(request.workspaceRoot);
-  if (root === undefined) return false;
-  const target = resolveCandidatePath(root, request.targetPath);
-  if (target === undefined || !pathInside(root, target)) return false;
-  const scopes = resolveAllowedScopes(root, request.allowedRelativePaths);
-  return scopes?.some((scope) => pathInside(scope, target)) ?? false;
+  const resolved = resolveEditTargetAbsolute(request.workspaceRoot, request.targetPath);
+  if (resolved === undefined) return false;
+  const scopes = resolveAllowedScopes(resolved.root, request.allowedRelativePaths);
+  return scopes?.some((scope) => pathInside(scope, resolved.target)) ?? false;
 }
 
 function candidatePathSyntaxAllowed(targetPath: string): boolean {
@@ -211,12 +319,45 @@ function isMutatingCommand(request: SupervisedCodingCommandRequest): boolean {
   return request.executable === "npm" && npmSubcommandMutates(subcommand);
 }
 
+// KEIKO-0764: broadened to recognise the mutating subcommands the audit identified so a denied
+// command outside the allowlist is labeled 'mutating-command-denied' rather than the less-alarming
+// 'unknown-command-denied' in audit evidence whenever it actually mutates state. This changes only
+// the evidence-reason CLASSIFICATION, not the allow/deny DECISION — decideSupervisedVerificationCommand
+// remains fail-closed via the fixed allowlist.
 function gitSubcommandMutates(subcommand: string): boolean {
-  return ["commit", "push", "merge", "rebase", "reset", "checkout", "clean"].includes(subcommand);
+  return [
+    "commit",
+    "push",
+    "merge",
+    "rebase",
+    "reset",
+    "checkout",
+    "clean",
+    "branch",
+    "tag",
+    "stash",
+    "worktree",
+    "remote",
+    "config",
+    "gc",
+  ].includes(subcommand);
 }
 
 function npmSubcommandMutates(subcommand: string): boolean {
-  return ["install", "ci", "publish", "version", "add", "remove", "uninstall"].includes(subcommand);
+  return [
+    "install",
+    "ci",
+    "publish",
+    "version",
+    "add",
+    "remove",
+    "uninstall",
+    "dedupe",
+    "link",
+    "rebuild",
+    "pkg",
+    "audit",
+  ].includes(subcommand);
 }
 
 function ghSubcommandMutates(args: readonly string[]): boolean {

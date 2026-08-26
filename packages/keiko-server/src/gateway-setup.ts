@@ -36,6 +36,9 @@ import {
   PROVIDER_ENDPOINT_STYLES,
   REALTIME_AUTH_MODES,
   VOICE_PROVIDER_LOCALITIES,
+  // KEIKO-0572: shared circuitBreaker defaults; hoisted into this import block instead of the
+  // separate `import { DEFAULT_CIRCUIT_BREAKER_CONFIG } from ...` line Sonar S3863 flagged.
+  DEFAULT_CIRCUIT_BREAKER_CONFIG,
 } from "@oscharko-dev/keiko-model-gateway";
 import {
   boundedUnsupportedReason,
@@ -921,7 +924,7 @@ function buildRawConfig(
 ): Record<string, unknown> {
   return {
     providers: modelIds.map((modelId) => providerRaw(modelId, baseUrl, apiKey, options)),
-    circuitBreaker: { failureThreshold: 5, cooldownMs: 30_000, halfOpenProbes: 2 },
+    circuitBreaker: DEFAULT_CIRCUIT_BREAKER_CONFIG,
   };
 }
 
@@ -2702,7 +2705,7 @@ function validateVoiceProviderConnection(
               : { circuitBreaker: provider.circuitBreaker }),
           }),
         ],
-        circuitBreaker: { failureThreshold: 5, cooldownMs: 30_000, halfOpenProbes: 2 },
+        circuitBreaker: DEFAULT_CIRCUIT_BREAKER_CONFIG,
       },
       env,
       linkLocalGatewayOverrideOptions(env),

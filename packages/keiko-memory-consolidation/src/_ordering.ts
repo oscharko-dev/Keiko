@@ -6,25 +6,12 @@ import type { MemoryEdge, MemoryRecord } from "@oscharko-dev/keiko-contracts/mem
 
 import type { ReviewItem, StaleFlag } from "./types.js";
 
-// Canonical coordinate string for a memory scope. Distinct kinds prefix-disambiguate so a
-// userId equal to a workspaceId cannot collide. Mirrors the private helper in
-// keiko-contracts/src/memory-retrieval-validation.ts. Not exported from contracts, so a
-// near-duplicate is unavoidable here — pin via a comment so future readers know to keep
-// the two in sync if a new scope kind lands.
-export function scopeCoordinateKey(scope: MemoryRecord["scope"]): string {
-  switch (scope.kind) {
-    case "global":
-      return "global:";
-    case "user":
-      return `user:${scope.userId}`;
-    case "workspace":
-      return `workspace:${scope.workspaceId}`;
-    case "project":
-      return `project:${scope.projectId}`;
-    case "workflow":
-      return `workflow:${scope.workflowDefinitionId}`;
-  }
-}
+// Re-export the shared partition-key projection so this package's callers (dedupe.ts and
+// conflicts.ts) keep their existing local import path unchanged. The canonical definition
+// lives in @oscharko-dev/keiko-contracts/memory (#2906 KEIKO-0546); consolidation must not
+// re-implement it. `export ... from` (Sonar S3512) is a direct pass-through and avoids the
+// intermediate local binding of the value import above.
+export { scopeCoordinateKey } from "@oscharko-dev/keiko-contracts/memory";
 
 // Three-way comparator returning -1 / 0 / +1. Keeps sort callbacks lint-clean and
 // total-order-correct (a < b < c implies cmp(a, c) === -1).

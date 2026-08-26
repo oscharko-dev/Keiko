@@ -46,6 +46,7 @@ import type { GatewayConfig } from "@oscharko-dev/keiko-model-gateway";
 import { errorBody, type RouteContext, type RouteResult } from "../routes.js";
 import { currentGateway, currentGatewayConfig, type UiHandlerDeps } from "../deps.js";
 import { readJsonObject, resolveRequestRoot, runFilesHandler } from "../files.js";
+import { MODEL_AS_YOU_TYPE_TIMEOUT_MS } from "./asYouTypeTimeout.js";
 import { assembleCodingContext } from "./codingContext.js";
 import { recordCodingContextEvidence } from "./codingContextEvidence.js";
 import { recordEditorCompletionModelEvidence } from "./completionModelEvidence.js";
@@ -81,7 +82,8 @@ export const COMPLETION_LANGUAGE_SERVICE_LIMITS = {
   ...DEFAULT_LANGUAGE_SERVICE_LIMITS,
   deadlineMs: 500,
 } as const;
-const MODEL_AS_YOU_TYPE_TIMEOUT_MS = 750;
+// KEIKO-0667: MODEL_AS_YOU_TYPE_TIMEOUT_MS now lives in ./asYouTypeTimeout.js, shared with
+// inlineCompletionRoutes.ts, so a change to the number cannot silently split the two routes.
 
 /** Builds the chat function for the elected model. Injectable so tests avoid a live model call. */
 export type CompletionChatFactory = (config: GatewayConfig, modelId: string) => ModelChatFn;

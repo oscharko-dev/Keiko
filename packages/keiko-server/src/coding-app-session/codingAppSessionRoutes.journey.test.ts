@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 
+import { UNKNOWN_CORRELATION_ID } from "../correlation.js";
+import type { ServerDiagnosticRecord } from "../diagnostics-log.js";
 import type { CodingAppSessionChannelSnapshot } from "./channelContract.js";
+import { DENIAL_ALERT_THRESHOLD } from "./denialWindows.js";
 import {
   APP_SESSION_PATHS,
   createFakeSessionPairingPort,
@@ -137,6 +140,78 @@ describe("authenticated app-session channel journey (ADR-0141, #2477)", () => {
       expect(await snapshotContent(restarted, cookie)).toBeNull();
     } finally {
       await restarted.close();
+    }
+  });
+});
+
+function deniedPairingPort(): ReturnType<typeof createFakeSessionPairingPort> {
+  return createFakeSessionPairingPort({ shouldApprove: () => false });
+}
+
+function capturingDiagnosticsSink(): {
+  readonly sink: { record: (record: ServerDiagnosticRecord) => void };
+  readonly records: ServerDiagnosticRecord[];
+} {
+  const records: ServerDiagnosticRecord[] = [];
+  return { sink: { record: (record) => records.push(record) }, records };
+}
+
+async function attemptPair(server: AppSessionTestServer): Promise<Response> {
+  return fetch(`${server.baseUrl}${APP_SESSION_PATHS.pair}`, {
+    method: "POST",
+    headers: postHeaders(),
+    body: JSON.stringify(fakePairingRequestBody()),
+  });
+}
+
+describe("pairing denial-aggregate diagnostic (KEIKO-0838, #2906 round 3)", () => {
+  it("threads UNKNOWN_CORRELATION_ID, never an empty string, once denials cross the threshold", async () => {
+    const { sink, records } = capturingDiagnosticsSink();
+    const server = await startAppSessionTestServer({
+      sessionPairingPort: deniedPairingPort(),
+      diagnostics: sink,
+    });
+    try {
+      for (let attempt = 0; attempt < DENIAL_ALERT_THRESHOLD; attempt += 1) {
+        // Denied pairing still acknowledges with a content-free 200 (fail-closed; never a 401/403
+        // that would reveal whether protected content exists -- see this file's top comment).
+        expect((await attemptPair(server)).status).toBe(200);
+      }
+      expect(records).toHaveLength(1);
+      expect(records[0]?.correlationId).toBe(UNKNOWN_CORRELATION_ID);
+      expect(records[0]?.correlationId).not.toBe("");
+      expect(records[0]?.occurrenceCount).toBe(DENIAL_ALERT_THRESHOLD);
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("scopes denial windows to the composed graph: an independent server's count never merges into another's", async () => {
+    const a = capturingDiagnosticsSink();
+    const b = capturingDiagnosticsSink();
+    const serverA = await startAppSessionTestServer({
+      sessionPairingPort: deniedPairingPort(),
+      diagnostics: a.sink,
+    });
+    const serverB = await startAppSessionTestServer({
+      sessionPairingPort: deniedPairingPort(),
+      diagnostics: b.sink,
+    });
+    try {
+      // One below threshold on A: must not emit yet.
+      for (let attempt = 0; attempt < DENIAL_ALERT_THRESHOLD - 1; attempt += 1) {
+        await attemptPair(serverA);
+      }
+      expect(a.records).toHaveLength(0);
+
+      // A single denial on B must not observe A's near-threshold count (a module-global counter
+      // would combine them and cross the threshold here) and must not emit on its own either.
+      await attemptPair(serverB);
+      expect(b.records).toHaveLength(0);
+      expect(a.records).toHaveLength(0);
+    } finally {
+      await serverA.close();
+      await serverB.close();
     }
   });
 });

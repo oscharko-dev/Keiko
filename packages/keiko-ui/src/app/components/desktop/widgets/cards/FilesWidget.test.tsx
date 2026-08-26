@@ -52,7 +52,6 @@ const treeEntryBase = {
   sizeBytes: 0,
   modifiedAt: 1,
   extension: null,
-  symlink: false,
   readable: true,
 };
 
@@ -277,7 +276,14 @@ describe("FilesWidget", () => {
       path: "",
       truncated: false,
       entries: [
-        { ...treeEntryBase, name: "src", path: "src", kind: "directory" },
+        {
+          ...treeEntryBase,
+          name: "src",
+          path: "src",
+          kind: "directory",
+          sizeBytes: undefined,
+          modifiedAt: undefined,
+        },
         {
           ...treeEntryBase,
           name: "package.json",
@@ -468,7 +474,16 @@ describe("FilesWidget", () => {
         root: "/repo",
         path: "",
         truncated: false,
-        entries: [{ ...treeEntryBase, name: "src", path: "src", kind: "directory" }],
+        entries: [
+          {
+            ...treeEntryBase,
+            name: "src",
+            path: "src",
+            kind: "directory",
+            sizeBytes: undefined,
+            modifiedAt: undefined,
+          },
+        ],
       })
       .mockResolvedValueOnce({
         root: "/repo",
@@ -611,6 +626,8 @@ describe("FilesWidget", () => {
                   name: "SpringAI Showcase",
                   path: "SpringAI Showcase",
                   kind: "directory",
+                  sizeBytes: undefined,
+                  modifiedAt: undefined,
                 },
               ]
             : [
@@ -816,8 +833,22 @@ describe("FilesWidget", () => {
       path: "",
       truncated: false,
       entries: [
-        { ...treeEntryBase, name: "src", path: "src", kind: "directory" },
-        { ...treeEntryBase, name: "removed", path: "removed", kind: "directory" },
+        {
+          ...treeEntryBase,
+          name: "src",
+          path: "src",
+          kind: "directory",
+          sizeBytes: undefined,
+          modifiedAt: undefined,
+        },
+        {
+          ...treeEntryBase,
+          name: "removed",
+          path: "removed",
+          kind: "directory",
+          sizeBytes: undefined,
+          modifiedAt: undefined,
+        },
         { ...treeEntryBase, name: "modified.ts", path: "modified.ts", kind: "file" },
         { ...treeEntryBase, name: "added.ts", path: "added.ts", kind: "file" },
         { ...treeEntryBase, name: "untracked.ts", path: "untracked.ts", kind: "file" },
@@ -1117,7 +1148,14 @@ describe("FilesWidget", () => {
       path: "",
       truncated: false,
       entries: [
-        { ...treeEntryBase, name: "src", path: "src", kind: "directory" },
+        {
+          ...treeEntryBase,
+          name: "src",
+          path: "src",
+          kind: "directory",
+          sizeBytes: undefined,
+          modifiedAt: undefined,
+        },
         { ...treeEntryBase, name: "package.json", path: "package.json", kind: "file" },
       ],
     });
@@ -1160,7 +1198,14 @@ describe("FilesWidget", () => {
         path: "",
         truncated: false,
         entries: [
-          { ...treeEntryBase, name: "src", path: "src", kind: "directory" },
+          {
+            ...treeEntryBase,
+            name: "src",
+            path: "src",
+            kind: "directory",
+            sizeBytes: undefined,
+            modifiedAt: undefined,
+          },
           { ...treeEntryBase, name: "package.json", path: "package.json", kind: "file" },
         ],
       })
@@ -1216,7 +1261,14 @@ describe("FilesWidget", () => {
       path: "",
       truncated: false,
       entries: [
-        { ...treeEntryBase, name: "src", path: "src", kind: "directory" },
+        {
+          ...treeEntryBase,
+          name: "src",
+          path: "src",
+          kind: "directory",
+          sizeBytes: undefined,
+          modifiedAt: undefined,
+        },
         { ...treeEntryBase, name: "package.json", path: "package.json", kind: "file" },
       ],
     });
@@ -1373,13 +1425,20 @@ describe("FilesWidget", () => {
       path: "",
       truncated: false,
       entries: [
-        { ...treeEntryBase, name: "src", path: "src", kind: "directory" },
+        {
+          ...treeEntryBase,
+          name: "src",
+          path: "src",
+          kind: "directory",
+          sizeBytes: undefined,
+          modifiedAt: undefined,
+        },
         {
           ...treeEntryBase,
           name: "broken",
           path: "broken",
-          kind: "file",
-          symlink: true,
+          kind: "symlink",
+          symlinkTargetKind: "unknown",
           readable: false,
         },
         { ...treeEntryBase, name: "a.txt", path: "a.txt", kind: "file" },
@@ -1402,6 +1461,12 @@ describe("FilesWidget", () => {
     await userEvent.click(brokenRow);
     expect(fetchFilesPreview).not.toHaveBeenCalled();
 
+    // PR #3289 review (comment 3865167775): the symlink badge is driven by `entry.kind ===
+    // "symlink"` now, not the removed `entry.symlink` boolean field -- pin that it still renders
+    // for a symlink row and does NOT render for a plain file row.
+    expect(brokenRow.querySelector(".tr-badge")).not.toBeNull();
+    expect(screen.getByRole("treeitem", { name: /a\.txt/i }).querySelector(".tr-badge")).toBeNull();
+
     // Arrow keys traverse the visible rows (audit C215)
     const fileRow = screen.getByRole("treeitem", { name: /a\.txt/i });
     dirRow.focus();
@@ -1415,13 +1480,62 @@ describe("FilesWidget", () => {
     expect(fileRow).toHaveFocus();
   });
 
+  // #2906 review (comment 3865167721): the KEIKO-0718 wire-shape change reports a symlink whose
+  // target is a directory as `kind: "symlink"` + `symlinkTargetKind: "directory"` (never `kind:
+  // "directory"`), but FilesWidget used to gate expansion on `kind === "directory"` alone. A
+  // readable directory-symlink therefore regressed from navigable to a broken file-open even
+  // though the server can still list through it. This pins that it renders with the SAME
+  // expand/navigate affordances as a real directory: a caret button, `aria-expanded`, and a
+  // successful expansion that fetches and shows its children.
+  it("treats a readable symlink-to-directory as expandable, matching a real directory", async () => {
+    vi.mocked(fetchFilesTree)
+      .mockResolvedValueOnce({
+        root: "/repo",
+        path: "",
+        truncated: false,
+        entries: [
+          {
+            ...treeEntryBase,
+            name: "linked-src",
+            path: "linked-src",
+            kind: "symlink",
+            symlinkTargetKind: "directory",
+          },
+        ],
+      })
+      .mockResolvedValueOnce({
+        root: "/repo",
+        path: "linked-src",
+        truncated: false,
+        entries: [{ ...treeEntryBase, name: "app.ts", path: "linked-src/app.ts", kind: "file" }],
+      });
+
+    render(<FilesWidget root="/repo" />);
+
+    const row = await screen.findByRole("treeitem", { name: /linked-src/i });
+    expect(row).toHaveAttribute("aria-expanded", "false");
+
+    await userEvent.click(caretButton("linked-src"));
+
+    expect(await screen.findByRole("treeitem", { name: /app\.ts/i })).toBeInTheDocument();
+    expect(row).toHaveAttribute("aria-expanded", "true");
+    expect(fetchFilesTree).toHaveBeenLastCalledWith("/repo", "linked-src");
+  });
+
   it("removes native browser titles from project-tree rows", async () => {
     vi.mocked(fetchFilesTree).mockResolvedValueOnce({
       root: "/repo",
       path: "",
       truncated: false,
       entries: [
-        { ...treeEntryBase, name: "src", path: "src", kind: "directory" },
+        {
+          ...treeEntryBase,
+          name: "src",
+          path: "src",
+          kind: "directory",
+          sizeBytes: undefined,
+          modifiedAt: undefined,
+        },
         {
           ...treeEntryBase,
           name: "package-lock.json",
@@ -1433,8 +1547,8 @@ describe("FilesWidget", () => {
           ...treeEntryBase,
           name: "linked-secret",
           path: "linked-secret",
-          kind: "file",
-          symlink: true,
+          kind: "symlink",
+          symlinkTargetKind: "unknown",
           readable: false,
         },
       ],
@@ -1884,7 +1998,14 @@ describe("FilesWidget file operations", () => {
       path: "",
       truncated: false,
       entries: [
-        { ...treeEntryBase, name: "src", path: "src", kind: "directory" },
+        {
+          ...treeEntryBase,
+          name: "src",
+          path: "src",
+          kind: "directory",
+          sizeBytes: undefined,
+          modifiedAt: undefined,
+        },
         {
           ...treeEntryBase,
           name: "app.ts",
@@ -2491,7 +2612,14 @@ describe("FilesWidget context-menu and git-decoration helpers", () => {
 
   it("contextMenuParentPath targets a directory row's own path", () => {
     const { contextMenuParentPath } = filesWidgetTestInternals;
-    const dir = { ...treeEntryBase, name: "src", path: "src", kind: "directory" as const };
+    const dir = {
+      ...treeEntryBase,
+      name: "src",
+      path: "src",
+      kind: "directory" as const,
+      sizeBytes: undefined,
+      modifiedAt: undefined,
+    };
     expect(contextMenuParentPath(dir, "some/other/dir")).toBe("src");
   });
 

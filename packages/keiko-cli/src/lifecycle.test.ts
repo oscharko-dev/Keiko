@@ -1,14 +1,18 @@
 import {
   existsSync,
   fstatSync,
+  linkSync,
+  lstatSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
   rmSync,
+  symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { execFileSync } from "node:child_process";
 import type { ChildProcess, SpawnOptions } from "node:child_process";
 import { EventEmitter } from "node:events";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
@@ -360,32 +364,34 @@ describe("runLifecycleCli", () => {
     // instead of returned verbatim. Anchor the fixture to a real file inside the test root
     // so the "env override is honored when valid" behavior is exercised without conflating
     // it with the unvalidated pass-through that #KEIKO-0285 removed.
+    //
+    // KEIKO-0553: cliEntryPath now reads KEIKO_CLI_BIN_PATH from the caller-supplied
+    // EnvSource only (no per-key process.env fallback). Pass the value through the env
+    // argument rather than by stubbing process.env — that ambient value is the exact
+    // leak the fix closes.
     const binPath = join(root, "published-keiko-bin.js");
     writeFileSync(binPath, "#!/usr/bin/env node\n", "utf8");
     const c = makeIo();
     const spawned: { command: string; args: readonly string[]; opts: SpawnOptions }[] = [];
     const child = { pid: 12345, unref: vi.fn(), once: vi.fn() } as unknown as ChildProcess;
 
-    const code = await withEnvVar("KEIKO_CLI_BIN_PATH", binPath, async () =>
-      runLifecycleCli(
-        "start",
-        [],
-        c.io,
-        {},
-        {
-          cwd: root,
-          spawnFn: (command, args, opts) => {
-            spawned.push({ command, args, opts });
-            return child;
-          },
-          fetchImpl: () =>
-            Promise.resolve(Response.json({ version: SDK_VERSION }, { status: 200 })),
-          isProcessAlive: () => true,
-          isPortAvailable: () => Promise.resolve(true),
-          killProcess: vi.fn(),
-          sleep: () => Promise.resolve(),
+    const code = await runLifecycleCli(
+      "start",
+      [],
+      c.io,
+      { KEIKO_CLI_BIN_PATH: binPath },
+      {
+        cwd: root,
+        spawnFn: (command, args, opts) => {
+          spawned.push({ command, args, opts });
+          return child;
         },
-      ),
+        fetchImpl: () => Promise.resolve(Response.json({ version: SDK_VERSION }, { status: 200 })),
+        isProcessAlive: () => true,
+        isPortAvailable: () => Promise.resolve(true),
+        killProcess: vi.fn(),
+        sleep: () => Promise.resolve(),
+      },
     );
 
     expect(code).toBe(0);
@@ -1312,5 +1318,276 @@ describe("safeKillProcess (ESRCH-safe default killer)", () => {
     const spy = vi.spyOn(process, "kill").mockImplementation((): true => true);
     safeKillProcess(4242, "SIGTERM");
     expect(spy).toHaveBeenCalledWith(4242, "SIGTERM");
+  });
+});
+
+// KEIKO-0886: <stateDir>/ui.log and <stateDir>/ui.pid must refuse to write through a
+// pre-planted symlink so a state-dir actor cannot re-point them at any user-writable
+// path. Skipped on Windows: NTFS symlink semantics differ and the fallback lstat
+// refusal is exercised via cross-platform code review, not test.
+describe("keiko start — refuses symlinked ui.log and ui.pid (KEIKO-0886)", () => {
+  it("refuses to open a pre-planted symlinked ui.log without corrupting the target file", async (ctx) => {
+    if (process.platform === "win32") ctx.skip();
+    const root = makeRoot();
+    const stateDir = join(root, ".keiko");
+    mkdirSync(stateDir, { recursive: true, mode: 0o700 });
+    const decoy = join(root, "victim-file.txt");
+    const original = "unchanged\n";
+    writeFileSync(decoy, original, "utf8");
+    // Plant ui.log as a symlink pointing at the decoy.
+    symlinkSync(decoy, join(stateDir, "ui.log"));
+
+    const c = makeIo();
+    const spawned: unknown[] = [];
+    const child = { pid: 12345, unref: vi.fn(), once: vi.fn() } as unknown as ChildProcess;
+    const code = await runLifecycleCli(
+      "start",
+      ["--state-dir", ".keiko"],
+      c.io,
+      {},
+      {
+        cwd: root,
+        homedir: () => root,
+        spawnFn: (command, args, opts) => {
+          spawned.push({ command, args, opts });
+          return child;
+        },
+        fetchImpl: () => Promise.resolve(Response.json({ version: SDK_VERSION }, { status: 200 })),
+        isProcessAlive: () => true,
+        isPortAvailable: () => Promise.resolve(true),
+        killProcess: vi.fn(),
+        sleep: () => Promise.resolve(),
+      },
+    );
+
+    // The symlinked-log branch fails the start with a spawn-fail message (openUiLogStdio
+    // throws before spawn runs) and never writes through the symlink.
+    expect(code).toBe(1);
+    // The decoy file is byte-identical before and after the attempt.
+    expect(readFileSync(decoy, "utf8")).toBe(original);
+    // The symlink itself is still a symlink (not replaced with a real file).
+    expect(lstatSync(join(stateDir, "ui.log")).isSymbolicLink()).toBe(true);
+  });
+
+  // #2906 review (comment 3863185744): readPid had NO symlink guard at all (unlike the write
+  // side's assertNotSymlink) -- readFileSync always follows a symlink. A symlinked ui.pid pointing
+  // at an unrelated pid file would have `keiko stop` read THAT file's number and feed it straight
+  // to isProcessAlive/process.kill, letting a state-dir actor steer a real signal at an
+  // attacker-chosen process. Deterministic (no race needed): the pre-fix code follows a symlink
+  // regardless of when it was planted, so a plain pre-planted one already proves the gap.
+  it("refuses to follow a symlinked ui.pid on stop, so it never signals the symlink's target", async (ctx) => {
+    if (process.platform === "win32") ctx.skip();
+    const root = makeRoot();
+    const stateDir = join(root, ".keiko");
+    mkdirSync(stateDir, { recursive: true, mode: 0o700 });
+    // A decoy pid file naming a real, unrelated process id an attacker wants signaled.
+    const decoyPidFile = join(root, "decoy-target.pid");
+    writeFileSync(decoyPidFile, "999999\n", "utf8");
+    symlinkSync(decoyPidFile, join(stateDir, "ui.pid"));
+
+    const c = makeIo();
+    const killProcess = vi.fn();
+    const code = await runLifecycleCli(
+      "stop",
+      [],
+      c.io,
+      {},
+      {
+        cwd: root,
+        homedir: () => root,
+        isProcessAlive: () => true,
+        killProcess,
+        sleep: () => Promise.resolve(),
+      },
+    );
+
+    // The symlink must never be followed: nothing gets signalled, and stop reports "not running"
+    // (the fail-safe outcome for an unreadable/refused pid file) rather than treating the decoy's
+    // pid as the real one.
+    expect(killProcess).not.toHaveBeenCalled();
+    expect(code).toBe(0);
+    expect(c.out()).toContain("not running");
+    // The symlink itself is what gets cleaned up; its target is never read or touched.
+    expect(existsSync(join(stateDir, "ui.pid"))).toBe(false);
+    expect(readFileSync(decoyPidFile, "utf8")).toBe("999999\n");
+  });
+
+  // #2906 review (comment 3865159294): O_NOFOLLOW rejects only a SYMLINK at the final path
+  // component; a HARD LINK is a plain directory entry pointing at a real, non-symlink inode, so
+  // O_NOFOLLOW has nothing to object to. The pre-fix write path opened with O_TRUNC, which
+  // overwrote whatever inode `ui.pid` currently named -- including a hard-linked victim file --
+  // before fstat ever ran to reject it (the reviewer reproduced this: "an injected spawnFn
+  // hardlink made keiko start return success after replacing the victim content with the PID").
+  // Deterministic, no real race needed: the hardlink is planted from INSIDE the injected spawnFn
+  // callback, which cmdStart invokes after runningPid's stale-file cleanup has already run but
+  // strictly before writePid ever opens the path -- exactly reproducing the reviewer's repro
+  // technique without relying on real filesystem timing.
+  it("detects a hard-linked ui.pid at write time and never corrupts the hardlink's target file", async (ctx) => {
+    if (process.platform === "win32") ctx.skip();
+    const root = makeRoot();
+    const stateDir = join(root, ".keiko");
+    mkdirSync(stateDir, { recursive: true, mode: 0o700 });
+    const victim = join(root, "victim-file.txt");
+    const original = "unchanged\n";
+    writeFileSync(victim, original, "utf8");
+
+    const c = makeIo();
+    const child = { pid: 12345, unref: vi.fn(), once: vi.fn() } as unknown as ChildProcess;
+    const code = await runLifecycleCli(
+      "start",
+      ["--state-dir", ".keiko"],
+      c.io,
+      {},
+      {
+        cwd: root,
+        homedir: () => root,
+        spawnFn: () => {
+          linkSync(victim, join(stateDir, "ui.pid"));
+          return child;
+        },
+        fetchImpl: () => Promise.resolve(Response.json({ version: SDK_VERSION }, { status: 200 })),
+        isProcessAlive: () => true,
+        isPortAvailable: () => Promise.resolve(true),
+        killProcess: vi.fn(),
+        sleep: () => Promise.resolve(),
+      },
+    );
+
+    // The victim file's content is byte-identical before and after: the write path never wrote
+    // through the hard-linked inode.
+    expect(readFileSync(victim, "utf8")).toBe(original);
+    // `keiko start` self-heals per the reviewer's "unlink+recreate" instruction: it unlinks the
+    // hostile name and creates a brand-new, single-link inode there instead of refusing outright,
+    // so the command still succeeds and the real pid is published safely.
+    expect(code).toBe(0);
+    expect(readFileSync(join(stateDir, "ui.pid"), "utf8")).toBe("12345\n");
+    expect(lstatSync(join(stateDir, "ui.pid")).nlink).toBe(1);
+  });
+});
+
+// #2906 round 3 (comment 3865329050): O_NOFOLLOW refuses only a SYMLINK at the final path
+// component. A hard link to another user's file has no symlink component (the syscall that
+// blocks symlinks has nothing to object to), so it would receive every byte of the child's
+// stdout/stderr; a FIFO can block the O_WRONLY open indefinitely before any post-open validation
+// could ever run; a directory (or other non-regular entry) is accepted outright. The fix opens
+// O_NONBLOCK (so a FIFO's open() fails fast instead of hanging) and fstat-verifies the OPENED
+// descriptor is a regular, single-link file before it is ever handed to the child.
+describe("keiko start — refuses a hard-linked/FIFO/non-regular ui.log (comment 3865329050)", () => {
+  it("detects a hard-linked ui.log and never writes through the hardlink's target file", async (ctx) => {
+    if (process.platform === "win32") ctx.skip();
+    const root = makeRoot();
+    const stateDir = join(root, ".keiko");
+    mkdirSync(stateDir, { recursive: true, mode: 0o700 });
+    const victim = join(root, "victim-log.txt");
+    const original = "unchanged\n";
+    writeFileSync(victim, original, "utf8");
+    // Pre-plant the hard link BEFORE start runs: unlike ui.pid (written after spawn succeeds),
+    // ui.log is opened by openUiLogStdio BEFORE spawnFn is ever invoked, so there is no
+    // "inside spawnFn" window to plant it in — it must already be there.
+    linkSync(victim, join(stateDir, "ui.log"));
+
+    const c = makeIo();
+    const spawned: unknown[] = [];
+    const child = { pid: 12345, unref: vi.fn(), once: vi.fn() } as unknown as ChildProcess;
+    const code = await runLifecycleCli(
+      "start",
+      ["--state-dir", ".keiko"],
+      c.io,
+      {},
+      {
+        cwd: root,
+        homedir: () => root,
+        spawnFn: (command, args, opts) => {
+          spawned.push({ command, args, opts });
+          return child;
+        },
+        fetchImpl: () => Promise.resolve(Response.json({ version: SDK_VERSION }, { status: 200 })),
+        isProcessAlive: () => true,
+        isPortAvailable: () => Promise.resolve(true),
+        killProcess: vi.fn(),
+        sleep: () => Promise.resolve(),
+      },
+    );
+
+    // The refusal happens before spawn: no child process is ever launched, and the victim
+    // file's content is byte-identical before and after.
+    expect(spawned).toEqual([]);
+    expect(code).toBe(1);
+    expect(readFileSync(victim, "utf8")).toBe(original);
+    // The hard link itself is left in place — never unlinked, unlike the pid file's
+    // unlink-and-recreate self-heal (ui.log has no such self-heal path).
+    expect(lstatSync(join(stateDir, "ui.log")).nlink).toBeGreaterThan(1);
+  });
+
+  it("refuses a FIFO planted at ui.log without hanging (O_NONBLOCK)", async (ctx) => {
+    if (process.platform === "win32") ctx.skip();
+    const root = makeRoot();
+    const stateDir = join(root, ".keiko");
+    mkdirSync(stateDir, { recursive: true, mode: 0o700 });
+    execFileSync("mkfifo", [join(stateDir, "ui.log")]);
+
+    const c = makeIo();
+    const spawned: unknown[] = [];
+    const child = { pid: 12345, unref: vi.fn(), once: vi.fn() } as unknown as ChildProcess;
+    const code = await runLifecycleCli(
+      "start",
+      ["--state-dir", ".keiko"],
+      c.io,
+      {},
+      {
+        cwd: root,
+        homedir: () => root,
+        spawnFn: (command, args, opts) => {
+          spawned.push({ command, args, opts });
+          return child;
+        },
+        fetchImpl: () => Promise.resolve(Response.json({ version: SDK_VERSION }, { status: 200 })),
+        isProcessAlive: () => true,
+        isPortAvailable: () => Promise.resolve(true),
+        killProcess: vi.fn(),
+        sleep: () => Promise.resolve(),
+      },
+    );
+
+    // A blocking open() with no reader present would hang this test forever; reaching this
+    // assertion at all proves the open failed fast instead. No child is ever launched.
+    expect(spawned).toEqual([]);
+    expect(code).toBe(1);
+  }, 10_000);
+
+  it("refuses a directory planted at ui.log", async (ctx) => {
+    if (process.platform === "win32") ctx.skip();
+    const root = makeRoot();
+    const stateDir = join(root, ".keiko");
+    mkdirSync(stateDir, { recursive: true, mode: 0o700 });
+    mkdirSync(join(stateDir, "ui.log"));
+
+    const c = makeIo();
+    const spawned: unknown[] = [];
+    const child = { pid: 12345, unref: vi.fn(), once: vi.fn() } as unknown as ChildProcess;
+    const code = await runLifecycleCli(
+      "start",
+      ["--state-dir", ".keiko"],
+      c.io,
+      {},
+      {
+        cwd: root,
+        homedir: () => root,
+        spawnFn: (command, args, opts) => {
+          spawned.push({ command, args, opts });
+          return child;
+        },
+        fetchImpl: () => Promise.resolve(Response.json({ version: SDK_VERSION }, { status: 200 })),
+        isProcessAlive: () => true,
+        isPortAvailable: () => Promise.resolve(true),
+        killProcess: vi.fn(),
+        sleep: () => Promise.resolve(),
+      },
+    );
+
+    expect(spawned).toEqual([]);
+    expect(code).toBe(1);
+    // The directory is left exactly as planted — never removed or written into.
+    expect(lstatSync(join(stateDir, "ui.log")).isDirectory()).toBe(true);
   });
 });

@@ -48,6 +48,7 @@ vi.mock("node:fs", async (importOriginal) => {
 });
 
 import {
+  _copyTreeSafeForTests,
   attestedExistingPortableInstall,
   portableManagedSetupLockPath,
   portableSourceCanReplaceManaged,
@@ -344,5 +345,96 @@ describe("portable install decisions", () => {
     } finally {
       localeCompare.mockRestore();
     }
+  });
+});
+
+// KEIKO-0901: bounded copyTreeSafe (depth / entry / byte caps). Each cap surfaces as a
+// named Error, so setupPortable's existing catch converts it into a fail-closed
+// registration — same shape as the pre-existing "unsafe links" refusal.
+//
+// The entry-count and byte-count tests below inject a small budget via _copyTreeSafeForTests'
+// third parameter (comment 3865273684) rather than exceeding the real production caps, which
+// would require hundreds of thousands of files or gigabytes of fixture data. "Huge" limits stand
+// in for "effectively unbounded" on the dimension a given test is not exercising.
+const PORTABLE_TEST_HUGE_ENTRIES = 1_000_000;
+const PORTABLE_TEST_HUGE_BYTES = 4 * 1024 * 1024 * 1024;
+
+describe("copyTreeSafe payload budgets (KEIKO-0901)", () => {
+  it("throws a named error when the payload exceeds the maximum depth", () => {
+    const source = makePolicyAllowedRoot();
+    const dest = makePolicyAllowedRoot();
+    rmSync(dest, { recursive: true, force: true });
+    // Build 40 nested directories with a leaf file — comfortably over the 32-depth cap.
+    let cursor = source;
+    for (let i = 0; i < 40; i += 1) {
+      cursor = join(cursor, `d${String(i)}`);
+      mkdirSync(cursor, { recursive: true });
+    }
+    writeFileSync(join(cursor, "leaf.txt"), "leaf", "utf8");
+    expect(() => {
+      _copyTreeSafeForTests(source, dest);
+    }).toThrow(/exceeds maximum depth/);
+  });
+
+  it("copies a shallow tree successfully within the budget", () => {
+    const source = makePolicyAllowedRoot();
+    const dest = makePolicyAllowedRoot();
+    rmSync(dest, { recursive: true, force: true });
+    mkdirSync(join(source, "a"), { recursive: true });
+    writeFileSync(join(source, "a", "leaf.txt"), "leaf", "utf8");
+    expect(() => {
+      _copyTreeSafeForTests(source, dest);
+    }).not.toThrow();
+    expect(readFileSync(join(dest, "a", "leaf.txt"), "utf8")).toBe("leaf");
+  });
+
+  // #2906 round 3 (comment 3865273684): the previous readdirSafe materialized the FULL
+  // directory listing via readdirSync before the loop ever incremented the budget, so the
+  // entry-count guard could only ever fire AFTER the whole (potentially huge) listing had
+  // already been read into memory. A small injected `maxEntries` proves the cap is honored
+  // without needing hundreds of thousands of real files on disk: the pre-fix implementation
+  // ignores this third parameter entirely (its budget was hardwired to the real 200,000/1,000,000
+  // constant), so this fixture — four entries against a cap of three — never trips it and the
+  // expected throw never happens.
+  it("throws a named error when the payload exceeds a small injected entry-count budget", () => {
+    const source = makePolicyAllowedRoot();
+    const dest = makePolicyAllowedRoot();
+    rmSync(dest, { recursive: true, force: true });
+    for (let i = 0; i < 4; i += 1) {
+      writeFileSync(join(source, `f${String(i)}.txt`), "x", "utf8");
+    }
+    expect(() => {
+      _copyTreeSafeForTests(source, dest, { maxEntries: 3, maxBytes: PORTABLE_TEST_HUGE_BYTES });
+    }).toThrow(/exceeds maximum entry count \(3\)/);
+  });
+
+  // The enumeration must abort AS SOON AS the cap is exceeded, not after copying everything and
+  // checking at the end: with a 3-entry cap and 4 source files, at most 3 files may have been
+  // copied before the throw.
+  it("stops copying once the injected entry-count budget is exceeded, mid-directory", () => {
+    const source = makePolicyAllowedRoot();
+    const dest = makePolicyAllowedRoot();
+    rmSync(dest, { recursive: true, force: true });
+    for (let i = 0; i < 4; i += 1) {
+      writeFileSync(join(source, `f${String(i)}.txt`), "x", "utf8");
+    }
+    expect(() => {
+      _copyTreeSafeForTests(source, dest, { maxEntries: 3, maxBytes: PORTABLE_TEST_HUGE_BYTES });
+    }).toThrow();
+    const copied = existsSync(dest) ? readdirSync(dest).length : 0;
+    expect(copied).toBeLessThanOrEqual(3);
+  });
+
+  // #2906 round 3 (comment 3865273684): the cumulative-byte cap (unaffected by the entries-cap
+  // change) had no dedicated regression at all. A small injected `maxBytes` proves it without
+  // writing gigabytes of fixture data.
+  it("throws a named error when the payload exceeds a small injected byte budget", () => {
+    const source = makePolicyAllowedRoot();
+    const dest = makePolicyAllowedRoot();
+    rmSync(dest, { recursive: true, force: true });
+    writeFileSync(join(source, "big.txt"), "0123456789", "utf8"); // 10 bytes
+    expect(() => {
+      _copyTreeSafeForTests(source, dest, { maxEntries: PORTABLE_TEST_HUGE_ENTRIES, maxBytes: 5 });
+    }).toThrow(/exceeds maximum cumulative size \(5 bytes\)/);
   });
 });

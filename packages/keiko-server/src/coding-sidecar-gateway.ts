@@ -39,6 +39,29 @@ import { startSseHeartbeat } from "./sse.js";
 
 const ENABLE_TOKENS = new Set(["1", "true", "on", "yes", "enabled"]);
 const CODING_SIDECAR_DISABLED_ENV = "KEIKO_CODING_SIDECAR_DISABLED";
+// KEIKO-0681: bounded concurrency for the coding-sidecar gateway chat/completions route,
+// mirroring MAX_ACTIVE_CHAT_STREAMS_ENV in chat-stream-handlers.ts. Independent counter
+// (not shared with desktop chat) so a bulkhead on one path does not starve the other. Rejected
+// callers get a JSON 429 BEFORE any SSE header, so an SDK client can transparently retry.
+export const MAX_ACTIVE_CODING_GATEWAY_REQUESTS_ENV = "KEIKO_CODING_SIDECAR_MAX_ACTIVE_REQUESTS";
+const DEFAULT_MAX_ACTIVE_CODING_GATEWAY_REQUESTS = 16;
+const HARD_MAX_ACTIVE_CODING_GATEWAY_REQUESTS = 64;
+let activeCodingGatewayRequests = 0;
+
+function maxActiveCodingGatewayRequests(env: NodeJS.ProcessEnv = process.env): number {
+  const raw = env[MAX_ACTIVE_CODING_GATEWAY_REQUESTS_ENV];
+  if (raw === undefined || raw.trim().length === 0)
+    return DEFAULT_MAX_ACTIVE_CODING_GATEWAY_REQUESTS;
+  const parsed = Number.parseInt(raw, 10);
+  if (!Number.isFinite(parsed) || parsed < 1) return DEFAULT_MAX_ACTIVE_CODING_GATEWAY_REQUESTS;
+  return Math.min(parsed, HARD_MAX_ACTIVE_CODING_GATEWAY_REQUESTS);
+}
+
+// Test seam: not exported via index.ts. Module state; parallel test files each get their own
+// module instance, so a reset keeps cases order-independent.
+export function _resetActiveCodingGatewayRequestsForTests(): void {
+  activeCodingGatewayRequests = 0;
+}
 const CODING_SIDECAR_GATEWAY_ERROR_CODE = "CODING_SIDECAR_UNAVAILABLE";
 const CODING_SIDECAR_GATEWAY_ROUTE = "POST /api/coding-sidecar/gateway/chat/completions";
 const CODING_SAFE_SIDECAR_GATEWAY_PROFILE_ID = "coding-safe-openai-compatible";
@@ -1542,6 +1565,32 @@ function runtimeGatewayAdmissionResponse(
 }
 
 export async function handleCodingSidecarGatewayChatCompletions(
+  ctx: RouteContext,
+  deps: UiHandlerDeps,
+): Promise<RouteResult | typeof STREAMING> {
+  // KEIKO-0681: fail-closed concurrency bulkhead. Reject with a JSON 429 BEFORE any SSE header,
+  // BEFORE authentication, and BEFORE any upstream connection so a burst of requests cannot fan
+  // out unbounded upstream connections. Defense-in-depth on top of the singleton-run governance
+  // gate in codingRuntimeOrchestrator.ts.
+  if (activeCodingGatewayRequests >= maxActiveCodingGatewayRequests()) {
+    return {
+      status: 429,
+      body: errorBody(
+        "TOO_MANY_CODING_GATEWAY_REQUESTS",
+        "Too many concurrent coding-sidecar gateway requests; retry shortly.",
+        ctx.correlationId,
+      ),
+    };
+  }
+  activeCodingGatewayRequests += 1;
+  try {
+    return await runHandleCodingSidecarGatewayChatCompletions(ctx, deps);
+  } finally {
+    activeCodingGatewayRequests -= 1;
+  }
+}
+
+async function runHandleCodingSidecarGatewayChatCompletions(
   ctx: RouteContext,
   deps: UiHandlerDeps,
 ): Promise<RouteResult | typeof STREAMING> {

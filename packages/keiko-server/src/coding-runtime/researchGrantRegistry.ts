@@ -63,11 +63,11 @@ export interface ResearchGrantRegistry {
     nowMs: number,
   ) => ResolvedResearchGrant | undefined;
   readonly activeGrants: (runId: string, nowMs: number) => readonly ResolvedResearchGrant[];
-  readonly resolveForHost: (
-    runId: string,
-    host: string,
-    nowMs: number,
-  ) => ResolvedResearchGrant | undefined;
+  // KEIKO-0595: `resolveForHost` was removed from the registry interface. The one production
+  // consumer (`researchEgressPort.ts::grantForRequest`) needs request-line-binding-aware
+  // selection on top of host normalisation, so it reads `activeGrants` and applies the richer
+  // rule locally. Keeping a separate host-only resolver here invited silent drift and offered a
+  // shape a future caller could reach for and lose the request-line-binding gate.
   // Reserves one fetch against the grant's fetch-count budget BEFORE any network call is made, so
   // the executor calls this ahead of every outbound hop (initial request and each redirect) and
   // performs zero outbound requests once the budget is exhausted. Increments `usedFetches` on "ok".
@@ -81,6 +81,15 @@ export interface ResearchGrantRegistry {
     nowMs: number,
   ) => ResearchChargeResult;
   readonly invalidateRun: (runId: string) => void;
+  /**
+   * KEIKO-0586: registers an AbortController that the executor is about to use for one outbound
+   * fetch. The registration is dropped automatically once the returned `release()` is called
+   * (finally block on the fetch), and every registered controller for a runId is fired when the
+   * run's grants are invalidated (revokeResearch or expiry sweep). This narrows the
+   * time-bounded gap between "operator clicked Revoke" and "underlying HTTP request actually
+   * stops" — previously the fetch continued running to completion with its body merely discarded.
+   */
+  readonly registerInFlightFetch: (runId: string, controller: AbortController) => () => void;
   /**
    * Saturates a specific grant's cumulative byte budget so `reserveFetch`'s byte gate fails
    * closed on the next call. #3099 R7 P1: used by the research egress port on an over-cap or
@@ -217,14 +226,8 @@ class InMemoryResearchGrantRegistry implements ResearchGrantRegistry {
     return [...this.pruned(runId, nowMs)];
   }
 
-  public resolveForHost(
-    runId: string,
-    host: string,
-    nowMs: number,
-  ): ResolvedResearchGrant | undefined {
-    const normalized = normalizeResearchHost(host);
-    return this.pruned(runId, nowMs).find((grant) => grant.domains.includes(normalized));
-  }
+  // KEIKO-0595: resolveForHost was removed; grantForRequest in researchEgressPort.ts owns the
+  // one production host-resolution path (activeGrants + request-line-binding preference).
 
   // Reserves one fetch against the fetch-count budget BEFORE the caller makes any network call.
   // Expiry is checked before pruning would remove the grant so "expired" stays distinguishable
@@ -270,8 +273,38 @@ class InMemoryResearchGrantRegistry implements ResearchGrantRegistry {
     return this.grantsByRun.get(runId)?.find((candidate) => candidate.grantId === grantId);
   }
 
+  // KEIKO-0586: in-flight AbortControllers keyed by runId. When invalidateRun fires (revoke or
+  // expiry), every controller registered for that runId is aborted so the underlying HTTP
+  // request stops immediately instead of running to completion with its body discarded.
+  private readonly abortControllersByRun = new Map<string, Set<AbortController>>();
+
+  public registerInFlightFetch(runId: string, controller: AbortController): () => void {
+    const existing = this.abortControllersByRun.get(runId) ?? new Set<AbortController>();
+    existing.add(controller);
+    this.abortControllersByRun.set(runId, existing);
+    return (): void => {
+      const set = this.abortControllersByRun.get(runId);
+      if (set === undefined) return;
+      set.delete(controller);
+      if (set.size === 0) this.abortControllersByRun.delete(runId);
+    };
+  }
+
   public invalidateRun(runId: string): void {
     this.grantsByRun.delete(runId);
+    // KEIKO-0586: abort any in-flight fetches for the run so the underlying HTTP request stops
+    // immediately rather than running to completion and having its body discarded.
+    const controllers = this.abortControllersByRun.get(runId);
+    if (controllers !== undefined) {
+      for (const controller of controllers) {
+        try {
+          controller.abort();
+        } catch {
+          /* aborting a controller must never throw into the invalidation path */
+        }
+      }
+      this.abortControllersByRun.delete(runId);
+    }
   }
 
   public saturateBytes(runId: string, grantId: string): void {

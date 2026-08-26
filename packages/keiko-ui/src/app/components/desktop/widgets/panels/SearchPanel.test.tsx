@@ -203,6 +203,7 @@ describe("SearchPanel", () => {
       editCount: 1,
       truncated: false,
       omittedFileCount: 0,
+      searchTruncationReasons: [],
     });
     fetchFilesContentMock.mockResolvedValue({
       root: "/repo",
@@ -434,6 +435,40 @@ describe("SearchPanel", () => {
     });
   });
 
+  // #2906 round-3 review: response.truncated can be true while omittedFileCount stays 0 -- the
+  // upstream search hit its own bound (e.g. "match-cap" mid-file) without a distinct matching file
+  // being dropped. Before this fix the visible replace summary only ever mentioned omittedFileCount,
+  // so this exact response shape read as a complete preview with no warning at all.
+  it("warns that search did not scan every match when the response is truncated with zero omitted files", async (): Promise<void> => {
+    fetchWorkspaceReplacePreviewMock.mockResolvedValueOnce({
+      files: [
+        {
+          path: "src/app.ts",
+          baseContentHash: "a".repeat(64),
+          edits: [
+            {
+              range: { startLine: 1, startColumn: 7, endLine: 1, endColumn: 13 },
+              originalText: "needle",
+              newText: "thread",
+            },
+          ],
+        },
+      ],
+      fileCount: 1,
+      editCount: 1,
+      truncated: true,
+      omittedFileCount: 0,
+      searchTruncationReasons: ["match-cap"],
+    });
+    renderPanel();
+    await searchFor("needle");
+    fireEvent.change(screen.getByLabelText("Replacement"), { target: { value: "thread" } });
+
+    fireEvent.click(screen.getByRole("button", { name: "Preview replace" }));
+
+    await screen.findByText(/Search did not scan every match/u);
+  });
+
   it("discards an existing replacement preview when the workspace root changes", async (): Promise<void> => {
     const view = render(<SearchPanel root="/repo/a" />);
     await searchFor("needle");
@@ -502,6 +537,7 @@ describe("SearchPanel", () => {
         editCount: 0,
         truncated: false,
         omittedFileCount: 0,
+        searchTruncationReasons: [],
       });
       await pending.promise;
     });
@@ -531,6 +567,7 @@ describe("SearchPanel", () => {
         editCount: 0,
         truncated: false,
         omittedFileCount: 0,
+        searchTruncationReasons: [],
       });
       await pending.promise;
     });
@@ -751,6 +788,7 @@ describe("SearchPanel", () => {
       editCount: 2,
       truncated: false,
       omittedFileCount: 0,
+      searchTruncationReasons: [],
     });
     fetchFilesContentMock.mockImplementation((_root, path) =>
       Promise.resolve({

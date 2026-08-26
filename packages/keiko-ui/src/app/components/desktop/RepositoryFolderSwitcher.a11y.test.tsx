@@ -6,7 +6,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ProjectWithAvailability } from "@/lib/types";
 import { ATTACHMENT_CLEANUP_DEFERRED_ERROR } from "@/lib/chat-session-error";
 import { ActiveWorkspaceProvider, type ActiveWorkspaceApi } from "./context/ActiveWorkspaceContext";
-import { TaskWorkspaceSwitcher } from "./TaskWorkspaceSwitcher";
+import { RepositoryFolderSwitcher } from "./RepositoryFolderSwitcher";
 
 const catalogState = vi.hoisted(() => ({
   activeProject: undefined as ProjectWithAvailability | undefined,
@@ -24,8 +24,12 @@ vi.mock("./context/ChatSessionContext", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./context/ChatSessionContext")>();
   return {
     ...actual,
-    useOptionalChatSessionActions: () => chatActions,
-    useOptionalChatSessionCatalog: () => ({
+    useOptionalChatSessionActions: (): typeof chatActions => chatActions,
+    useOptionalChatSessionCatalog: (): {
+      activeProject: ProjectWithAvailability | undefined;
+      projects: ProjectWithAvailability[];
+      error: string | undefined;
+    } => ({
       activeProject: catalogState.activeProject,
       projects: catalogState.projects,
       error: catalogState.error,
@@ -77,13 +81,13 @@ function api(overrides: Partial<ActiveWorkspaceApi> = {}): ActiveWorkspaceApi {
 function renderSwitcher(value: ActiveWorkspaceApi): HTMLElement {
   const { container } = render(
     <ActiveWorkspaceProvider value={value}>
-      <TaskWorkspaceSwitcher />
+      <RepositoryFolderSwitcher />
     </ActiveWorkspaceProvider>,
   );
   return container;
 }
 
-describe("TaskWorkspaceSwitcher a11y", () => {
+describe("RepositoryFolderSwitcher a11y", () => {
   beforeEach(() => {
     catalogState.activeProject = undefined;
     catalogState.projects = [];

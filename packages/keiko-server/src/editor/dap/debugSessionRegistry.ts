@@ -132,6 +132,12 @@ interface DebugRegistryError extends Error {
     | "INVALID_CAPSULE_PLAN"
   >;
 }
+export interface DebugSessionAbandonedEvidence {
+  readonly sessionId: string;
+  readonly workspacePartitionKey: string;
+  readonly attempts: number;
+}
+
 export interface DebugSessionRegistryDeps {
   readonly appendEvidence: (
     workspacePartitionKey: string,
@@ -139,6 +145,14 @@ export interface DebugSessionRegistryDeps {
   ) => Promise<void>;
   readonly now: () => number;
   readonly emitOutputLimit: (event: DebugOutputLimitEvent) => Promise<void> | void;
+  // KEIKO-0592 follow-up (#2906 round 3, P1): invoked exactly once when a session's terminal
+  // evidence append has failed TERMINATION_RECONCILE_MAX_ATTEMPTS times in a row and the registry
+  // gives up on it -- see abandonTerminalEvidence. The session is dropped from the live registry
+  // and its teardown promise resolves either way; this callback is the durable, operator-visible
+  // signal that its terminal lifecycle evidence was never recorded, so a composition can raise a
+  // body-free alert instead of the loss going unnoticed. Optional so existing compositions/tests
+  // keep working unchanged -- leaving it unset loses only the alert, not the bounded-retry itself.
+  readonly onEvidenceAbandoned?: (input: DebugSessionAbandonedEvidence) => void;
 }
 export interface DebugSessionRegistry {
   reserveProvisional(input: DebugProvisionalReservationInput): DebugSessionProjection;
@@ -246,6 +260,9 @@ interface SessionRuntime {
   resolveTeardown: () => void;
   reconcilePromise: Promise<void> | undefined;
   terminationRetryScheduled: boolean;
+  // Consecutive appendTerminalEvidence() failures for this teardown (#2906 round 3, P1). Counts
+  // ONLY evidence-append retries, never resource-cleanup retries -- see runReconcile.
+  terminationRetryAttempts: number;
 }
 
 interface ReplayEntry {
@@ -503,6 +520,7 @@ function reserveProvisional(
     resolveTeardown: noopResolve,
     reconcilePromise: undefined,
     terminationRetryScheduled: false,
+    terminationRetryAttempts: 0,
   };
   sessions.set(input.sessionId, session);
   return projection(session);
@@ -930,31 +948,95 @@ async function runReconcile(
     session.capsules.length !== capsuleCount
   ) {
     session.state = "terminationPending";
-    scheduleTerminationReconcile(sessions, deps, session);
+    // Resource cleanup (killing a still-running capsule/process) must never give up -- leaking a
+    // runaway container is worse than a blocked registry slot -- so this branch keeps the flat,
+    // unbounded retry cadence; only the evidence-append branch below is bounded (#2906 round 3).
+    scheduleTerminationReconcile(sessions, deps, session, TERMINATION_RECONCILE_RETRY_MS);
     return;
   }
   session.capsules.length = 0;
   session.projectTerminal(deps.now());
-  if (!(await appendTerminalEvidence(deps, session))) return;
+  if (!(await appendTerminalEvidence(deps, session))) {
+    session.terminationRetryAttempts += 1;
+    if (session.terminationRetryAttempts >= TERMINATION_RECONCILE_MAX_ATTEMPTS) {
+      abandonTerminalEvidence(sessions, deps, session);
+      return;
+    }
+    // KEIKO-0592: mirror the resource-cleanup-failure branch above and self-schedule the retry,
+    // so a session stuck in evidencePending recovers independent of the external 1000ms sweep in
+    // dapProductionService.ts. Without this the session sits indefinitely under any composition
+    // that omits the periodic sweep (a real risk when the registry is reused outside production
+    // wiring). Bounded exponential backoff (#2906 round 3, P1): a PERMANENTLY failing
+    // appendEvidence() must not re-arm this forever -- see abandonTerminalEvidence for the
+    // give-up path once TERMINATION_RECONCILE_MAX_ATTEMPTS is reached.
+    scheduleTerminationReconcile(
+      sessions,
+      deps,
+      session,
+      terminationReconcileDelayMs(session.terminationRetryAttempts),
+    );
+    return;
+  }
+  session.terminationRetryAttempts = 0;
   sessions.delete(session.input.sessionId);
   session.resolveTeardown();
   session.resolveTeardown = noopResolve;
 }
 
 const TERMINATION_RECONCILE_RETRY_MS = 250;
+const TERMINATION_RECONCILE_BASE_DELAY_MS = 250;
+const TERMINATION_RECONCILE_MAX_DELAY_MS = 30_000;
+// Bounded so a permanently failing appendEvidence() (disk-full, permission-denied evidence store,
+// a store that never recovers, ...) cannot re-arm the reconciliation forever: unbounded retry left
+// the session stuck `evidencePending`, which blocks registryHealth() for EVERY session (not just
+// this one -- see assertCapacity) indefinitely, while the process kept repeating doomed work every
+// 250ms. Ten attempts at the backoff below spans roughly 90s of real time before giving up -- long
+// enough to absorb a genuinely transient outage without leaving capacity blocked indefinitely on a
+// session that will never recover. No jitter: DEBUG_MAX_SESSIONS_PER_SERVER caps concurrent
+// sessions at 2, far too few for synchronized retries to matter.
+const TERMINATION_RECONCILE_MAX_ATTEMPTS = 10;
+
+function terminationReconcileDelayMs(attempt: number): number {
+  const exponential = TERMINATION_RECONCILE_BASE_DELAY_MS * 2 ** (attempt - 1);
+  return Math.min(exponential, TERMINATION_RECONCILE_MAX_DELAY_MS);
+}
 
 function scheduleTerminationReconcile(
   sessions: Map<string, SessionRuntime>,
   deps: DebugSessionRegistryDeps,
   session: SessionRuntime,
+  delayMs: number,
 ): void {
   if (session.terminationRetryScheduled) return;
   session.terminationRetryScheduled = true;
   const timer = setTimeout(() => {
     session.terminationRetryScheduled = false;
     void reconcileSession(sessions, deps, session);
-  }, TERMINATION_RECONCILE_RETRY_MS);
+  }, delayMs);
   timer.unref();
+}
+
+// The evidence-append retry budget is exhausted: continuing to retry will never durably record
+// this session's terminal lifecycle evidence. Preserving fail-closed EVIDENCE semantics means
+// never silently treating this as success: the session is dropped from the live registry (so
+// registryHealth()/assertCapacity stop blocking on a session that can never recover) and its
+// teardown promise resolves (so any caller awaiting stop()/transitionTerminal() is not left
+// hanging forever either), but deps.onEvidenceAbandoned fires so the composition can raise a
+// durable, operator-visible alert -- the one remaining signal that this evidence was lost rather
+// than merely delayed.
+function abandonTerminalEvidence(
+  sessions: Map<string, SessionRuntime>,
+  deps: DebugSessionRegistryDeps,
+  session: SessionRuntime,
+): void {
+  sessions.delete(session.input.sessionId);
+  session.resolveTeardown();
+  session.resolveTeardown = noopResolve;
+  deps.onEvidenceAbandoned?.({
+    sessionId: session.input.sessionId,
+    workspacePartitionKey: session.input.workspacePartitionKey,
+    attempts: session.terminationRetryAttempts,
+  });
 }
 
 async function terminateCapsules(session: SessionRuntime): Promise<boolean> {

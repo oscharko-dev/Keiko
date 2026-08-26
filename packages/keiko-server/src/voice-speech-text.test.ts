@@ -130,24 +130,36 @@ describe("toSpeakableText", () => {
     expect(spoken).not.toContain("More citation text");
   });
 
-  it("strips citation markers with an unusually long digit run", () => {
-    // Regression test: a bounded `\d{1,32}` stops matching (and thus stops stripping) a citation
-    // marker whose number exceeds 32 digits, leaving the raw bracketed marker to be spoken aloud.
-    const longDigits = "1".repeat(33);
+  it("strips citation markers with an arbitrarily long digit run -- never leaves the marker unstripped (#2906 round 3)", () => {
+    // Regression test: the module's own contract is that citation syntax must never reach TTS,
+    // regardless of length. An earlier fix bounded the digit run to `\d{1,100}` for S8786
+    // (quadratic-regex) compliance, which "solved" the backtracking but silently stopped
+    // RECOGNIZING -- and thus stopped stripping -- any marker whose number exceeded 100 digits,
+    // blessing a 101+ character marker being spoken aloud verbatim. The replacement is a linear
+    // scanner (stripCitationMarkers), not a bounded quantifier, so it strips a marker far past the
+    // old bound while staying fast (still no `[`/`]` in the output, still well under the S8786
+    // budget this file's other tests probe).
+    const huge = "1".repeat(50_000);
+    const start = Date.now();
+    const spoken = toSpeakableText(`The answer is here [${huge}] and that's it.`);
+    const elapsed = Date.now() - start;
 
-    expect(toSpeakableText(`The answer is here [${longDigits}] and that's it.`)).toBe(
-      "The answer is here and that's it.",
-    );
+    expect(spoken).toBe("The answer is here and that's it.");
+    expect(spoken).not.toContain("[");
+    expect(spoken).not.toContain("]");
+    expect(elapsed).toBeLessThan(2000);
   });
 
-  it("strips citation markers with an unusually long letter-label prefix", () => {
-    // Regression test: a bounded `[A-Za-z]{1,32}` stops matching (and thus stops stripping) a
-    // citation marker whose letter prefix exceeds 32 characters, leaving it to be spoken aloud.
-    const longLabel = "A".repeat(33);
+  it("strips citation markers with an arbitrarily long letter-label prefix -- never leaves the marker unstripped (#2906 round 3)", () => {
+    const huge = "A".repeat(50_000);
+    const start = Date.now();
+    const spoken = toSpeakableText(`The answer is here [${huge}-1] and that's it.`);
+    const elapsed = Date.now() - start;
 
-    expect(toSpeakableText(`The answer is here [${longLabel}-1] and that's it.`)).toBe(
-      "The answer is here and that's it.",
-    );
+    expect(spoken).toBe("The answer is here and that's it.");
+    expect(spoken).not.toContain("[");
+    expect(spoken).not.toContain("]");
+    expect(elapsed).toBeLessThan(2000);
   });
 });
 

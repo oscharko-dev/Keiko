@@ -539,23 +539,13 @@
       "Open a run from the Quality Intelligence hub."
     ],
     "packages/keiko-ui/src/app/components/desktop/widgets/panels/ChatHistoryPanel.tsx": [
-      "Active",
-      "Cancel",
       "Chat History",
       "Conversation state",
       "Conversations",
-      "Delete",
-      "Deleted",
       "New",
       "No conversations",
-      "Rename",
-      "Restore",
-      "Save",
       "Search",
       "Search chat history"
-    ],
-    "packages/keiko-ui/src/app/components/desktop/widgets/panels/EditorProfilesPanel.tsx": [
-      "Default"
     ],
     "packages/keiko-ui/src/app/components/desktop/widgets/panels/InspectorPanel.tsx": [
       "Active window",
@@ -572,10 +562,6 @@
       "State maximized",
       "Trust",
       "Workspace"
-    ],
-    "packages/keiko-ui/src/app/components/desktop/widgets/panels/MobilePanel.tsx": [
-      "Keiko Mobile",
-      "Scan to continue this workspace on your phone."
     ],
     "packages/keiko-ui/src/app/components/desktop/widgets/panels/PluginsPanel.tsx": [
       "Browser automation",
@@ -677,13 +663,9 @@
       "No active relationships yet. Create one with \"+ New relationship\", or connect a source — connections appear here automatically.",
       "No relationships match the current filter.",
       "Relationship density",
-      "relationship from to , lifecycle: , activity:",
       "Relationships",
       "Retry",
       "Toggle focus mode (F)"
-    ],
-    "packages/keiko-ui/src/app/components/desktop/widgets/panels/ResourcesPanel.tsx": [
-      "Shared assets &amp; references — coming soon."
     ],
     "packages/keiko-ui/src/app/components/desktop/widgets/panels/SearchResultList.tsx": [
       "Workspace search results"
@@ -767,11 +749,6 @@
       "Start indexing Knowledge Pod"
     ],
     "packages/keiko-ui/src/app/memoriaviva/components/MemoryList.tsx": ["MemoriaViva"],
-    "packages/keiko-ui/src/app/memoriaviva/detail/MemoryDetailClient.tsx": [
-      "Back to MemoriaViva",
-      "No memory selected",
-      "This link is missing a memory id. Open a memory from the list instead."
-    ],
     "packages/keiko-ui/src/lib/local-knowledge-api.ts": [
       "Embedding mismatch",
       "Embedding opaque",

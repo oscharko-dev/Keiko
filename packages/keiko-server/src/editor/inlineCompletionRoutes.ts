@@ -49,6 +49,7 @@ import { currentGateway, currentGatewayConfig, type UiHandlerDeps } from "../dep
 import { newCorrelationId } from "../correlation.js";
 import { emitServerDiagnostic, serverDiagnosticFromError } from "../diagnostics-log.js";
 import { readJsonObject, resolveRequestRoot, runFilesHandler } from "../files.js";
+import { MODEL_AS_YOU_TYPE_TIMEOUT_MS } from "./asYouTypeTimeout.js";
 import { assembleCodingContext } from "./codingContext.js";
 import { recordCodingContextEvidence } from "./codingContextEvidence.js";
 import { recordEditorCompletionModelEvidence } from "./completionModelEvidence.js";
@@ -82,8 +83,8 @@ const INLINE_COMPLETION_GATEWAY_POLICY_VERSION = "editor-inline-completion/1";
 const MAX_INLINE_INSERT_TEXT_CHARS = 2_000;
 const APPROX_CHARS_PER_TOKEN = 4;
 const MAX_CONTEXT_CHANGED_FILES = 64;
-// p95 latency budget for as-you-type ghost text (ADR-0042 D5): a fast FIM call self-cancels past it.
-const MODEL_AS_YOU_TYPE_TIMEOUT_MS = 750;
+// KEIKO-0667: MODEL_AS_YOU_TYPE_TIMEOUT_MS is imported from ./asYouTypeTimeout.js, shared with
+// completionRoutes.ts, so a change to the number cannot silently split the two routes.
 // Policy/configuration gate (Acceptance Criterion 7). The feature is ENABLED by default; a deployment
 // disables it by setting this env var to a falsy token.
 const INLINE_COMPLETION_POLICY_ENV = "KEIKO_EDITOR_INLINE_COMPLETION";

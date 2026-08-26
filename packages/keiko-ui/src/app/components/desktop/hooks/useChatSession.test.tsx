@@ -22,6 +22,8 @@ import {
 } from "@/lib/api";
 import {
   CONTEXT_OVERSIZED_USER_MESSAGE,
+  DESKTOP_CHAT_INPUT_TOO_LARGE_ERROR,
+  GROUNDED_ATTACHMENT_DROPPED_NOTICE,
   GROUNDED_ATTACHMENT_NOTICE,
   MAX_ATTACHMENT_BYTES,
   canonicalVoicePageOutboxRetainsPlaintextForTests,
@@ -1802,10 +1804,13 @@ describe("useChatSession sendMessage — grounded attachment guard", () => {
 
   // #2843 — the grounded route has no attachment channel, so a grounded chat drops staged attachments
   // for typed AND spoken turns. A typed send is rejected before admission; a settled final transcript
-  // must never be discarded (ADR-0154 D1), so the spoken turn proceeds and the SAME notice states that
-  // the staged attachments were not part of it. Before this pin the spoken turn was silent: the user
-  // saw an answer with no indication their attachment had been ignored.
-  it("surfaces the grounded attachment notice for a spoken turn instead of dropping it silently", async (): Promise<void> => {
+  // must never be discarded (ADR-0154 D1), so the spoken turn proceeds and a DISTINCT notice states
+  // that the staged attachments were not part of it (KEIKO-0793: this used to reuse the typed path's
+  // full-reject GROUNDED_ATTACHMENT_NOTICE verbatim, describing two materially different outcomes —
+  // "nothing was sent" vs. "the turn was sent, attachments dropped" — identically). Before the #2843
+  // pin, the spoken turn was silent: the user saw an answer with no indication their attachment had
+  // been ignored.
+  it("surfaces a distinct dropped-attachment notice for a spoken turn instead of dropping it silently", async (): Promise<void> => {
     const { result } = await setupGroundedSession();
     vi.mocked(fetchChatMessages).mockResolvedValue({
       messages: [
@@ -1847,7 +1852,10 @@ describe("useChatSession sendMessage — grounded attachment guard", () => {
 
     expect(outcome).toEqual({ status: "completed", assistantMessageId: "grounded-assistant" });
     expect(askGrounded).toHaveBeenCalledTimes(1);
-    expect(result.current.error).toBe(GROUNDED_ATTACHMENT_NOTICE);
+    // KEIKO-0793: the voice admit-and-drop notice must be distinct from the typed path's true
+    // pre-admission full-reject notice — they describe materially different outcomes.
+    expect(result.current.error).toBe(GROUNDED_ATTACHMENT_DROPPED_NOTICE);
+    expect(result.current.error).not.toBe(GROUNDED_ATTACHMENT_NOTICE);
     // Nothing was consumed, so the file stays staged and the user can remove it or move it to a
     // non-grounded chat rather than silently losing it.
     expect(result.current.pendingAttachments).toHaveLength(1);
@@ -2493,6 +2501,44 @@ describe("useChatSession sendMessage — explicit text option (Issue #1561)", ()
 
     expect(sendDesktopChat).not.toHaveBeenCalled();
     expect(result.current.messages).toHaveLength(0);
+  });
+
+  // KEIKO-0608: resolveSendMessageAdmission (typed path) used to perform no check against
+  // MAX_DESKTOP_CHAT_INPUT_CHARS/BYTES at all — only enqueueCanonicalVoiceTurn (voice) did. An
+  // oversized typed paste was accepted client-side, discovered only after a wasted round trip when
+  // the server's own cap rejected it, by which point the draft had already been cleared.
+  it("rejects an oversized typed draft client-side without a network round trip or clearing the draft", async () => {
+    const { result } = await setupUngroundedSession();
+    const oversized = "x".repeat(MAX_DESKTOP_CHAT_INPUT_CHARS + 1);
+    act(() => {
+      result.current.setDraft(oversized);
+    });
+
+    await act(async () => {
+      await result.current.sendMessage();
+    });
+
+    expect(sendDesktopChat).not.toHaveBeenCalled();
+    expect(result.current.error).toBe(DESKTOP_CHAT_INPUT_TOO_LARGE_ERROR);
+    // The oversized draft must survive the rejected attempt so the user can trim and resend
+    // instead of retyping it from scratch.
+    expect(result.current.draft).toBe(oversized);
+    expect(result.current.messages).toHaveLength(0);
+  });
+
+  it("accepts a draft at exactly MAX_DESKTOP_CHAT_INPUT_CHARS", async () => {
+    const { result } = await setupUngroundedSession();
+    const maximal = "x".repeat(MAX_DESKTOP_CHAT_INPUT_CHARS);
+    act(() => {
+      result.current.setDraft(maximal);
+    });
+
+    await act(async () => {
+      await result.current.sendMessage();
+    });
+
+    expect(sendDesktopChat).toHaveBeenCalledTimes(1);
+    expect(result.current.error).toBeUndefined();
   });
 
   it("is idempotent for the explicit-text path — a same-tick double send fires once", async () => {

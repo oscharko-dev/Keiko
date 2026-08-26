@@ -157,6 +157,20 @@ interface ApprovedDevLaneSidecar {
   readonly executableTreeSha256: string;
   readonly licenseSha256: string;
   readonly protocolSchemaSha256: string;
+  // KEIKO-0763/KEIKO-0763-r3: catalog-approved SBOM digest for this target. verifiedPayload
+  // compares it against the SBOM file's freshly-hashed contents so a tampered SBOM cannot slip
+  // past the dev lane's payload-verification step. Sourced from the catalog's runtime.archives
+  // [target] entry alongside executableTreeSha256. REQUIRED, not optional: an earlier revision
+  // let a catalog entry that omitted sbomSha256 skip the comparison entirely, so a modified SBOM
+  // was silently accepted (its freshly-computed digest reported back as if it had been verified)
+  // for every real target, since the checked-in catalog carries no sbomSha256 entries. A target
+  // whose catalog entry has no sbomSha256 now fails approvedSidecarShape and is treated exactly
+  // like any other incomplete catalog entry -- refused "payload-unapproved" by the existing
+  // `approved === undefined` check in discoverDevLaneOpenCode, never silently downgraded to
+  // "compare what we can". Restoring the dev lane on the real catalog requires a human,
+  // PR-reviewed addition of the real upstream SBOM digest to portable-runtime-approvals.json (see
+  // that file's own header: digest changes there are the release-approval act).
+  readonly sbomSha256: string;
 }
 
 /** The checked-in redistribution catalog is the dev lane's review-approved trust anchor. */
@@ -166,20 +180,35 @@ function approvedSidecar(
 ): ApprovedDevLaneSidecar | undefined {
   const runtime = approvedCatalogRuntime(join(root, APPROVALS_CATALOG_FILE));
   if (runtime === undefined) return undefined;
-  const adapter = record(runtime.adapterCompatibility);
-  const candidate = {
-    upstreamVersion: record(runtime.upstream)?.version,
-    adapterName: adapter?.adapterName,
-    adapterVersion: adapter?.adapterVersion,
-    executableTreeSha256: record(record(runtime.archives)?.[target])?.executableTreeSha256,
-    licenseSha256: record(runtime.license)?.sha256,
-    protocolSchemaSha256: record(runtime.protocolSchema)?.sha256,
-  };
+  const candidate = candidateSidecarFromCatalog(runtime, target);
   return approvedSidecarShape(candidate) ? candidate : undefined;
 }
 
+/**
+ * Reads the per-target candidate sidecar fields out of the catalog's runtime record. Each field
+ * is read via optional chaining through possibly-absent nested records, so a missing or malformed
+ * catalog entry surfaces here as `undefined` rather than a throw; approvedSidecarShape is the one
+ * place that decides whether the result is complete enough to trust.
+ */
+function candidateSidecarFromCatalog(
+  runtime: Record<string, unknown>,
+  target: DevLaneOpenCodeTarget,
+): Partial<Record<keyof ApprovedDevLaneSidecar, unknown>> {
+  const adapter = record(runtime.adapterCompatibility);
+  const archiveEntry = record(record(runtime.archives)?.[target]);
+  return {
+    upstreamVersion: record(runtime.upstream)?.version,
+    adapterName: adapter?.adapterName,
+    adapterVersion: adapter?.adapterVersion,
+    executableTreeSha256: archiveEntry?.executableTreeSha256,
+    licenseSha256: record(runtime.license)?.sha256,
+    protocolSchemaSha256: record(runtime.protocolSchema)?.sha256,
+    sbomSha256: archiveEntry?.sbomSha256,
+  };
+}
+
 function approvedSidecarShape(
-  candidate: Record<keyof ApprovedDevLaneSidecar, unknown>,
+  candidate: Partial<Record<keyof ApprovedDevLaneSidecar, unknown>>,
 ): candidate is ApprovedDevLaneSidecar {
   return (
     typeof candidate.upstreamVersion === "string" &&
@@ -187,7 +216,8 @@ function approvedSidecarShape(
     typeof candidate.adapterVersion === "string" &&
     isSha256(candidate.executableTreeSha256) &&
     isSha256(candidate.licenseSha256) &&
-    isSha256(candidate.protocolSchemaSha256)
+    isSha256(candidate.protocolSchemaSha256) &&
+    isSha256(candidate.sbomSha256)
   );
 }
 
@@ -216,9 +246,16 @@ function verifiedPayload(
   if (!files.every(isRegularFile)) return { ok: false, refusal: "payload-missing" };
   const executableSha256 = sha256File(join(installRoot, executablePath));
   const executableTreeSha256 = digestText(`bin/opencode\0${executableSha256}\0`);
+  // KEIKO-0763/KEIKO-0763-r3: verify the SBOM's on-disk contents against the catalog-approved
+  // digest the same way the executable-tree and license checks work. approved.sbomSha256 is
+  // REQUIRED (approvedSidecarShape refuses "payload-unapproved" before this function is ever
+  // reached without one), so this comparison always runs -- a drift-only SBOM (identical binary,
+  // mutated provenance) can no longer flow through as "verified" by skipping the comparison.
+  const sbomEvidenceSha256 = sha256File(join(installRoot, sbomPath));
   if (
     executableTreeSha256 !== approved.executableTreeSha256 ||
-    sha256File(join(installRoot, licensePath)) !== approved.licenseSha256
+    sha256File(join(installRoot, licensePath)) !== approved.licenseSha256 ||
+    sbomEvidenceSha256 !== approved.sbomSha256
   ) {
     return { ok: false, refusal: "payload-tampered" };
   }
@@ -233,7 +270,7 @@ function verifiedPayload(
       licenseEvidencePath: licensePath,
       licenseEvidenceSha256: approved.licenseSha256,
       sbomEvidencePath: sbomPath,
-      sbomEvidenceSha256: sha256File(join(installRoot, sbomPath)),
+      sbomEvidenceSha256,
       protocolSchemaRawSha256: approved.protocolSchemaSha256,
       protocolHandshakeDigest: OPEN_CODE_PINNED_PROTOCOL_SURFACE_SHA256,
       protocolHandshakeAlgorithm: OPEN_CODE_PROTOCOL_SURFACE_ALGORITHM,

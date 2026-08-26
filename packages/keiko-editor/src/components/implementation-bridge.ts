@@ -11,7 +11,10 @@ import type {
   MonacoUriForPath,
 } from "./definition-bridge.js";
 import { createLocationNavigationProvider } from "./location-navigation-bridge.js";
-import type { EditorLanguageIntelligenceReporter } from "./language-intelligence.js";
+import {
+  composeDisposers,
+  type EditorLanguageIntelligenceReporter,
+} from "./language-intelligence.js";
 
 export interface MonacoImplementationProvider {
   provideImplementation(
@@ -53,13 +56,7 @@ export function registerKeikoImplementationProvider(
         base.provideLocation(model, position, token),
     });
   });
-  return {
-    dispose(): void {
-      disposers.forEach((disposer) => {
-        disposer.dispose();
-      });
-    },
-  };
+  return composeDisposers(disposers);
 }
 
 export const IMPLEMENTATION_ELIGIBLE_LANGUAGES: readonly EditorLanguageId[] = [

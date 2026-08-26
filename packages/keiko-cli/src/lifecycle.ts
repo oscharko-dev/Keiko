@@ -1,11 +1,10 @@
 import {
   closeSync,
-  existsSync,
+  constants as fsConstants,
   mkdirSync,
   openSync,
-  readFileSync,
   rmSync,
-  writeFileSync,
+  writeSync,
 } from "node:fs";
 import { Buffer } from "node:buffer";
 import { spawn, type ChildProcess, type SpawnOptions, type StdioOptions } from "node:child_process";
@@ -31,7 +30,13 @@ import { absoluteExistingPath, resolvePreferredInstallLayout } from "./install-l
 import { LauncherError } from "./launcher-platforms.js";
 import { resolveLoopbackEndpoint } from "./loopback-endpoint.js";
 import type { CliIo } from "./runner.js";
-import { resolveContainedStateDir } from "./state-paths.js";
+import {
+  assertNotSymlink,
+  assertRegularSingleLinkFile,
+  openPidFileNoFollow,
+  readPidFile,
+  resolveContainedStateDir,
+} from "./state-paths.js";
 
 type LifecycleCommand = "start" | "stop" | "status" | "restart";
 type SpawnFn = (command: string, args: readonly string[], opts: SpawnOptions) => ChildProcess;
@@ -286,11 +291,53 @@ async function fetchHealthProbe(url: string, fetchImpl: FetchFn): Promise<Health
   }
 }
 
-function readPid(path: string): number | undefined {
-  if (!existsSync(path)) return undefined;
-  const raw = readFileSync(path, "utf8").trim();
-  if (!/^[1-9]\d*$/.test(raw)) return undefined;
-  return Number(raw);
+// KEIKO-0886 follow-up (#2906 round 3, comment 3865273699): the descriptor-safe pid-file
+// invariant (O_NOFOLLOW+O_NONBLOCK at open, then fstat-verified regular-single-link-file before
+// trusting the content — full rationale in state-paths.ts's doc comment on `readPidFile`) used
+// to be duplicated here as a private `readPid`, while `state-paths.ts::readPidFile` — reached by
+// `classifyPid`, and therefore by `keiko uninstall --force` and `keiko repair` too — still
+// followed plain `existsSync`/`readFileSync`. A symlinked `ui.pid` could steer THOSE commands at
+// an unrelated process even though `start`/`stop`/`status`/`restart` here were already hardened.
+// `readPid` is gone; every reader in this file and every other consumer now goes through the
+// ONE shared `readPidFile`. `openPidFileNoFollow` / `assertRegularSingleLinkFile` are imported
+// from the same module because the WRITE path below (`createPidFileSlot`/`writePid`) still needs
+// them — `keiko start` is the only writer, so writing stays here, but it reuses the same
+// primitives rather than keeping a second copy.
+
+function isEexist(error: unknown): boolean {
+  return typeof error === "object" && error !== null && "code" in error && error.code === "EEXIST";
+}
+
+// #2906 review (comment 3865159294): publishing a pid now NEVER opens an existing inode for
+// writing. The initial attempt is O_CREAT|O_EXCL, which can only ever succeed by creating a
+// brand-new, empty inode at this name. On EEXIST (a stale pid file left by an unclean exit, or a
+// hostile pre-planted node of any kind -- symlink, hard link, FIFO) the stale directory entry is
+// unlinked -- removing only the NAME, never touching a hard-linked target's content -- and the
+// exclusive create is retried exactly once. If the slot is still occupied after that (an actor
+// recreating the name faster than this loop can), the write fails closed instead of retrying
+// forever or ever falling back to a truncating open.
+function createPidFileSlot(path: string): number {
+  const exclusive = fsConstants.O_WRONLY | fsConstants.O_CREAT | fsConstants.O_EXCL;
+  try {
+    return openPidFileNoFollow(path, exclusive);
+  } catch (error) {
+    if (!isEexist(error)) throw error;
+  }
+  rmSync(path, { force: true });
+  return openPidFileNoFollow(path, exclusive);
+}
+
+// Companion write path for the same descriptor-based invariant `readPid` uses: stages the write
+// behind the identical O_NOFOLLOW-at-open / regular-single-link-file guard, so neither direction
+// of the pid file's lifecycle ever completes a check separately from the use it protects.
+function writePid(path: string, pid: number): void {
+  const fd = createPidFileSlot(path);
+  try {
+    assertRegularSingleLinkFile(fd, path);
+    writeSync(fd, `${String(pid)}\n`, null, "utf8");
+  } finally {
+    closeSync(fd);
+  }
 }
 
 function defaultIsProcessAlive(pid: number): boolean {
@@ -349,7 +396,7 @@ function runningPid(
   isAlive: (pid: number) => boolean,
 ): number | undefined {
   const path = pidFile(options);
-  const pid = readPid(path);
+  const pid = readPidFile(path);
   if (pid === undefined) {
     rmSync(path, { force: true });
     return undefined;
@@ -412,10 +459,11 @@ function cliEntryPath(cwd: string, env: EnvSource): string {
   // than the cli package barrel (which is not executable). Route through
   // `absoluteExistingPath` — the same validation `install-layout.ts` applies to
   // this variable — so a relative or non-existent value is refused instead of
-  // spawned (#KEIKO-0285). Read via the injected EnvSource first, matching the
-  // rest of this file's `optionOrEnv` pattern; `process.env` is only the
-  // documented last resort for callers who did not thread the env through.
-  const fromEnv = absoluteExistingPath(env.KEIKO_CLI_BIN_PATH ?? process.env.KEIKO_CLI_BIN_PATH);
+  // spawned (#KEIKO-0285). Read from the caller-supplied EnvSource only; the
+  // parameter itself defaults to `process.env` at the call site, so no per-key
+  // `?? process.env.X` fallback here — a test that passes `{}` must be able to
+  // suppress an ambient KEIKO_CLI_BIN_PATH (KEIKO-0553).
+  const fromEnv = absoluteExistingPath(env.KEIKO_CLI_BIN_PATH);
   if (fromEnv !== undefined) return fromEnv;
   return join(dirname(fileURLToPath(import.meta.url)), "index.js");
 }
@@ -486,12 +534,47 @@ async function reportHealthyStart(
   return 0;
 }
 
+// KEIKO-0886 / #2906 round 3 (comment 3865329050): refuse to write `<stateDir>/ui.log` through
+// a symlink, hard link, FIFO, or device. O_NOFOLLOW alone only rejects a SYMLINK at the final
+// path component — a HARD LINK to another user's file has no symlink component, so the syscall
+// that blocks symlinks has nothing to object to, and would receive every byte of this process's
+// child stdout/stderr. Worse, a FIFO planted at the path can block this open() (O_WRONLY)
+// indefinitely waiting for a reader that never arrives, before any POST-open validation could
+// ever run. Both are closed the same way the pid file already is (state-paths.ts):
+//   * O_NONBLOCK on every platform that has it, so a planted FIFO can never hang the open()
+//     call itself.
+//   * the OPENED descriptor is fstat-verified via the shared `assertRegularSingleLinkFile`
+//     (isFile() + nlink === 1) before it is ever handed to the child — the same
+//     regular-single-link-file policy the pid file enforces, reused rather than re-derived.
+// Windows has no O_NOFOLLOW; `assertNotSymlink` is the documented, residual-TOCTOU fallback for
+// its reparse-point case, and the post-open fstat check below still runs unconditionally on
+// every platform, including that fallback.
+function openLogAppendNoFollow(logPath: string): number {
+  const nofollow = (fsConstants as { O_NOFOLLOW?: number }).O_NOFOLLOW ?? 0;
+  const nonblock = (fsConstants as { O_NONBLOCK?: number }).O_NONBLOCK ?? 0;
+  if (nofollow === 0) {
+    assertNotSymlink(logPath);
+  }
+  const fd = openSync(
+    logPath,
+    fsConstants.O_WRONLY | fsConstants.O_CREAT | fsConstants.O_APPEND | nofollow | nonblock,
+    0o600,
+  );
+  try {
+    assertRegularSingleLinkFile(fd, logPath);
+  } catch (error) {
+    closeSync(fd);
+    throw error;
+  }
+  return fd;
+}
+
 function openUiLogStdio(options: LifecycleOptions): UiLogStdio {
   mkdirSync(options.stateDir, { recursive: true, mode: 0o700 });
   const logPath = logFile(options);
-  const stdoutFd = openSync(logPath, "a", 0o600);
+  const stdoutFd = openLogAppendNoFollow(logPath);
   try {
-    const stderrLogFd = openSync(logPath, "a", 0o600);
+    const stderrLogFd = openLogAppendNoFollow(logPath);
     return {
       logPath,
       stdio: ["ignore", stdoutFd, stderrLogFd],
@@ -637,6 +720,31 @@ async function reportUnhealthyStart(
   return 1;
 }
 
+// #2906 review (comment 3865159294): terminates the just-spawned child if pid publication fails,
+// so a hostile state-dir actor who wins the exclusive-create race in `createPidFileSlot` (or any
+// other publish failure) can never leave an unmanaged, unkillable-by-`keiko stop` child running.
+// SIGKILL immediately rather than the graceful SIGTERM-then-escalate `terminateAndConfirm` uses
+// elsewhere: the child was spawned moments ago and has not yet published a health endpoint, so
+// there is nothing graceful to wait for and no pid file yet for a concurrent `keiko stop` to
+// contend with.
+function publishPidOrKillChild(
+  options: LifecycleOptions,
+  io: CliIo,
+  deps: Pick<LifecycleRuntimeDeps, "killProcess">,
+  pid: number,
+): boolean {
+  try {
+    writePid(pidFile(options), pid);
+    return true;
+  } catch (error) {
+    deps.killProcess(pid, "SIGKILL");
+    io.err(
+      `keiko start: failed to publish the UI process pid (${error instanceof Error ? error.message : String(error)}).\n`,
+    );
+    return false;
+  }
+}
+
 async function cmdStart(
   options: LifecycleOptions,
   io: CliIo,
@@ -675,7 +783,14 @@ async function cmdStart(
     return 1;
   }
   child.unref();
-  writeFileSync(pidFile(options), `${String(child.pid)}\n`, { encoding: "utf8", mode: 0o600 });
+  // KEIKO-0886 / #2906 review (comment 3863185744, then comment 3865159294): refuse to write to a
+  // symlinked/hard-linked/FIFO <stateDir>/ui.pid so a hostile state-dir actor cannot re-point the
+  // pid file (which process.kill reads) at any user-writable path outside home, or corrupt one.
+  // writePid's exclusive-create pid slot can still fail closed (e.g. an actor winning every
+  // create-retry race) -- a spawned-but-unpublished child must never be left running headless
+  // with no pid file `keiko stop` can find it by, so a publish failure kills the child immediately
+  // and fails the command closed instead of leaking an unmanaged process.
+  if (!publishPidOrKillChild(options, io, deps, child.pid)) return 1;
   io.out(`Starting Keiko UI on ${lifecycleBaseUrl(options)} ...\n`);
 
   const healthy = await waitForHealth(options, child.pid, deps);

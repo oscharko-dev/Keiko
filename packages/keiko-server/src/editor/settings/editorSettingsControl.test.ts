@@ -30,6 +30,7 @@ import type { EditorProfilesControlMutation } from "./editorSettingsControl.js";
 import {
   createEditorSettingsStore,
   editorSettingsUserRecordPath,
+  editorSettingsWorkspaceFingerprint,
   editorSettingsWorkspaceRecordPath,
 } from "./editorSettingsStore.js";
 
@@ -619,6 +620,50 @@ describe("editor settings control service", () => {
     expect(first).toMatchObject({ kind: "ok", changed: true });
     expect(replayFromOtherRoot).toMatchObject({ kind: "ok", changed: true });
     expect(lockedKeys).toEqual([["editor-settings:user:global"], ["editor-settings:user:global"]]);
+  });
+
+  // KEIKO-0596: read() reaches loadSnapshot -> reconcileRootBinding, which performs a real disk
+  // write (root-identity adoption) outside any lock unless read() itself acquires the same mutex
+  // key(s) mutate() does. This must FAIL if read()'s `options.mutex.runExclusive(...)` wrap is ever
+  // removed: without it, `lockedKeys` would stay empty across the read() call below.
+  it("read() acquires the same per-root mutex keys mutate() does", async () => {
+    const stateDir = temporaryDirectory("editor-settings-read-mutex-state");
+    const root = temporaryDirectory("editor-settings-read-mutex-root");
+    const lockedKeys: string[][] = [];
+    const mutex: WorkspaceMutexRegistry = {
+      runExclusive: async (keys, fn) => {
+        lockedKeys.push([...keys]);
+        return await fn();
+      },
+    };
+    const control = createEditorSettingsControlService({
+      store: createEditorSettingsStore({ stateDir }),
+      mutex,
+    });
+    const fingerprint = editorSettingsWorkspaceFingerprint(root);
+
+    await control.read(root);
+
+    expect(lockedKeys).toEqual([
+      [`editor-settings:workspace:${fingerprint}`, `editor-settings:root:${fingerprint}`],
+    ]);
+
+    lockedKeys.length = 0;
+    const mutation = {
+      action: "set" as const,
+      expectedRevision: 0,
+      idempotencyKey: "read-mutex-parity",
+      realRoot: root,
+      scope: "workspace" as const,
+      values: { fontSize: 16 },
+    };
+    await control.mutate(mutation);
+
+    // mutate() locks on a single combined key (`editor-settings:${scope}:${rootKey}`), so it does
+    // not reproduce read()'s exact two-key array -- but both use the SAME rootKey (the workspace
+    // fingerprint), the property this test pins: a concurrent read() and mutate() for the same root
+    // contend on overlapping keys instead of running fully unguarded against each other.
+    expect(lockedKeys).toEqual([[`editor-settings:workspace:${fingerprint}`]]);
   });
 
   it("resets scoped values without leaking workspace-denied settings", async () => {

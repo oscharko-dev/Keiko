@@ -11,6 +11,9 @@ import {
 } from "./diagnostics-log.js";
 import { errorBody } from "./routes.js";
 import type { RouteContext, RouteDefinition, RouteResult } from "./routes.js";
+// KEIKO-0622: errorStatus lives in ./workspace-manifest-error-status.js so unit tests can import
+// it without triggering the routes.ts <-> workspace-manifest-routes.ts import cycle.
+import { errorStatus } from "./workspace-manifest-error-status.js";
 import { WorkspaceManifestError, WorkspaceManifestService } from "./workspace-manifests.js";
 import type { WorkspaceManifestMutationResult } from "./workspace-manifests.js";
 import { resolveAppSessionReadAuthority } from "./coding-app-session/appSessionReadAuthority.js";
@@ -36,14 +39,6 @@ function unpairedWorkspaceRequest(correlationId: string | undefined): RouteResul
     status: 403,
     body: errorBody("APP_SESSION_REQUIRED", "The local app session is not paired.", correlationId),
   };
-}
-
-function errorStatus(error: WorkspaceManifestError): number {
-  if (error.code === "WORKSPACE_MANIFEST_UNAVAILABLE") return 404;
-  if (error.code === "WORKSPACE_PROJECT_NOT_FOUND") return 404;
-  if (error.code === "WORKSPACE_ROOT_NOT_MEMBER") return 403;
-  if (error.code === "WORKSPACE_DISPATCH_INVALID") return 400;
-  return 409;
 }
 
 function failure(error: unknown, correlationId: string | undefined): RouteResult {
@@ -265,7 +260,11 @@ export function handleGetWorkspaceManifest(ctx: RouteContext, deps: UiHandlerDep
   try {
     const service = new WorkspaceManifestService(deps.store);
     const manifest = service.get(ctx.params.workspaceId ?? "");
-    return { status: 200, body: { manifest, binding: service.binding(manifest.workspaceId) } };
+    // KEIKO-0538: the previous `binding` field repurposed WorkspaceBindingV2.taskId to hold the
+    // plain workspaceId (via WorkspaceManifestService.binding), a latent trap for any future
+    // consumer expecting a genuine Coding Workbench task id. No UI consumer reads it today, so
+    // we drop it rather than propagate the ambiguity.
+    return { status: 200, body: { manifest } };
   } catch (error) {
     return failure(error, ctx.correlationId);
   }

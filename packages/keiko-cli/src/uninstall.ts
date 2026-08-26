@@ -30,14 +30,20 @@
 // With no scope flag every step runs; `--state` / `--launchers` / `--scripts` narrow
 // it. `--dry-run` reports `would-...` without changing anything.
 
-import { existsSync, readFileSync, rmdirSync, unlinkSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, rmdirSync, unlinkSync } from "node:fs";
 import { homedir as defaultHomedir } from "node:os";
 import { join, resolve } from "node:path";
 import type { EnvSource } from "@oscharko-dev/keiko-model-gateway";
 import type { CliIo } from "./runner.js";
 import { LauncherError } from "./launcher-platforms.js";
 import { removeLauncherShortcuts } from "./launcher.js";
-import { KEIKO_START_SCRIPT, KEIKO_STOP_SCRIPT } from "./init.js";
+import {
+  KEIKO_START_SCRIPT,
+  KEIKO_STOP_SCRIPT,
+  detectPackageJsonIndent,
+  stringifyPackageJson,
+  writePackageJsonAtomically,
+} from "./init.js";
 import { localPackageRoot } from "./install-layout.js";
 import { attestedPortableInstallRecord } from "./portable-install.js";
 import {
@@ -320,9 +326,23 @@ function removeScriptsStep(opts: UninstallOptions, io: CliIo): void {
     io.out(`scripts: package.json not found at ${opts.packagePath} (nothing to remove)\n`);
     return;
   }
+  // KEIKO-0752: read RAW so we can detect the file's own indentation before we parse it,
+  // then re-serialize with the SAME indent init.ts uses when it originally wrote scripts.
+  // Previously we hardcoded `null, 2` and clobbered every non-two-space file — a
+  // four-space or tab-indented package.json was silently reformatted whole even though
+  // uninstall's own scope is `keiko:start` / `keiko:stop` only.
+  let raw: string;
+  try {
+    raw = readFileSync(opts.packagePath, "utf8");
+  } catch {
+    io.err(
+      `keiko uninstall: package.json at ${opts.packagePath} is not readable; skipping scripts.\n`,
+    );
+    return;
+  }
   let pkg: unknown;
   try {
-    pkg = JSON.parse(readFileSync(opts.packagePath, "utf8"));
+    pkg = JSON.parse(raw);
   } catch {
     io.err(
       `keiko uninstall: package.json at ${opts.packagePath} is not valid JSON; skipping scripts.\n`,
@@ -336,10 +356,13 @@ function removeScriptsStep(opts: UninstallOptions, io: CliIo): void {
   }
   const { next, removed } = pruneKeikoScripts(scripts, io, opts.dryRun);
   if (removed > 0 && !opts.dryRun) {
-    writeFileSync(
+    const indent = detectPackageJsonIndent(raw);
+    // #2906 round 3 (comment 3865273714): reuses init.ts's temp-file-plus-rename writer
+    // instead of a direct writeFileSync, which could truncate/corrupt package.json if the
+    // process or filesystem fails mid-write.
+    writePackageJsonAtomically(
       opts.packagePath,
-      `${JSON.stringify({ ...pkg, scripts: next }, null, 2)}\n`,
-      "utf8",
+      stringifyPackageJson({ ...pkg, scripts: next }, indent),
     );
   }
 }

@@ -46,7 +46,15 @@ export type FatalDiagnosticsModule = Pick<
 >;
 
 export interface ProcessGuardSink {
-  readonly err: (text: string) => void;
+  // KEIKO-0837 / #2906 round 3 (comment 3865273680): err may return a Promise so the caller can
+  // drain the write BEFORE process.exit() is invoked. Node's stdout/stderr streams are
+  // synchronous ONLY for a POSIX TTY or a regular file: a POSIX PIPE (`keiko ... | other-cmd`)
+  // and EVERY Windows stream (TTY included) are documented as asynchronous, so the default sink
+  // below resolves from the write's own flush callback instead of assuming a synchronous write.
+  // `finish()` additionally races this against a short bounded fallback (`boundedSinkWrite`) so a
+  // sink whose returned Promise never settles still lets the process exit — instead of hanging
+  // forever, or worse, falling out through Node's empty-event-loop exit with code 0.
+  readonly err: (text: string) => void | Promise<void>;
   readonly exit: (code: number) => void;
   // Test seam: injects a fake (or deliberately hanging) keiko-server module without exercising
   // the real dynamic import. Defaults to it in production — see `loadServerModule` below — so no
@@ -58,10 +66,20 @@ function loadServerModule(): Promise<FatalDiagnosticsModule> {
   return import("@oscharko-dev/keiko-server");
 }
 
+// #2906 round 3 (comment 3865273680): resolves once `process.stderr.write`'s own flush
+// callback fires, never before — see the ProcessGuardSink.err doc comment above for why this
+// matters on a POSIX pipe or any Windows stream. Exported so a regression can drive it directly
+// against a real piped subprocess without going through the full crash-classification pipeline.
+export function writeStderrDrained(text: string): Promise<void> {
+  return new Promise((resolveWrite) => {
+    process.stderr.write(text, () => {
+      resolveWrite();
+    });
+  });
+}
+
 const DEFAULT_PROCESS_GUARD_SINK: ProcessGuardSink = {
-  err: (text: string): void => {
-    process.stderr.write(text);
-  },
+  err: writeStderrDrained,
   exit: (code: number): void => {
     process.exit(code);
   },
@@ -136,6 +154,46 @@ async function writeFatalLine(
   return fatalProcessLine(humanKind, described.errorClass);
 }
 
+// #2906 round 3 (comment 3865273680): a sink's write is itself untrusted — a Promise-returning
+// sink that never settles would otherwise block `finish()` forever, so `sink.exit(1)` would never
+// run (and if nothing else keeps the event loop alive, Node's empty-event-loop exit fires with
+// code 0 first, silently dropping the crash report). Bounds `invoke()` the same way
+// `handleFatalReason` already bounds the classifier import: whichever of the real write or the
+// timeout settles first wins, and a write that throws synchronously is treated the same as one
+// that never settles — never propagated, never blocking the exit.
+const SINK_WRITE_TIMEOUT_MS = 500;
+
+function boundedSinkWrite(invoke: () => void | Promise<void>): Promise<void> {
+  return new Promise((resolveWrite) => {
+    let settled = false;
+    const settle = (): void => {
+      if (settled) return;
+      settled = true;
+      resolveWrite();
+    };
+    const timer = setTimeout(settle, SINK_WRITE_TIMEOUT_MS);
+    let result: void | Promise<void>;
+    try {
+      result = invoke();
+    } catch {
+      clearTimeout(timer);
+      settle();
+      return;
+    }
+    if (!(result instanceof Promise)) {
+      clearTimeout(timer);
+      settle();
+      return;
+    }
+    result
+      .then(settle)
+      .catch(settle)
+      .finally(() => {
+        clearTimeout(timer);
+      });
+  });
+}
+
 // Races the classifier import against the bounded timeout above. Exactly one of the two paths
 // calls `finish()` for real (the guard makes the other a no-op), so stderr is written and the
 // process exits exactly once, whichever settles first. Returned as a Promise (rather than
@@ -150,10 +208,16 @@ async function handleFatalReason(
   const loadServer = sink.loadServer ?? loadServerModule;
   let line = fatalProcessLine(humanKind, fallbackErrorKind(reason));
   let settled = false;
-  const finish = (): void => {
+  // KEIKO-0837: await the sink.err write BEFORE sink.exit so an async stderr transport
+  // (or a slow pipe on macOS) is guaranteed to flush the fatal line before the process
+  // is instructed to exit. Node's process.stderr.write is synchronous for TTY/pipes on
+  // POSIX; awaiting a plain-void return is a no-op, so this only affects the async path.
+  const finish = async (): Promise<void> => {
     if (settled) return;
     settled = true;
-    sink.err(line);
+    // boundedSinkWrite never throws and never hangs past SINK_WRITE_TIMEOUT_MS — see its doc
+    // comment above — so sink.exit is always reached, whether the sink drained in time or not.
+    await boundedSinkWrite(() => sink.err(line));
     sink.exit(1);
   };
   await new Promise<void>((resolve) => {
@@ -166,8 +230,7 @@ async function handleFatalReason(
     // timeout callback ever runs, so the process would exit 0 with no stderr line and no
     // `process.fatal` record — silently swallowing the very crash this file exists to report.
     const timer = setTimeout(() => {
-      finish();
-      resolve();
+      void finish().finally(resolve);
     }, FATAL_IMPORT_TIMEOUT_MS);
     writeFatalLine(humanKind, machineKind, reason, loadServer)
       .then((resolvedLine) => {
@@ -179,13 +242,22 @@ async function handleFatalReason(
       })
       .finally(() => {
         clearTimeout(timer);
-        finish();
-        resolve();
+        void finish().finally(resolve);
       });
   });
 }
 
+// KEIKO-0837: installProcessGuards must be idempotent. A second call (e.g. because the
+// entrypoint re-runs a bootstrapping helper, or a test invokes it twice) previously
+// registered a second copy of each listener, so a single crash produced duplicate stderr
+// lines AND double-called process.exit. This module-level flag makes the second (and
+// every subsequent) call a no-op — matching what real bootstrapping code needs from a
+// crash handler.
+let processGuardsInstalled = false;
+
 export function installProcessGuards(sink: ProcessGuardSink = DEFAULT_PROCESS_GUARD_SINK): void {
+  if (processGuardsInstalled) return;
+  processGuardsInstalled = true;
   // Node never awaits an event listener's return value, so each listener stays void-returning and
   // explicitly floats its async work with `void` — the same fire-and-forget shape every other
   // process-signal listener in this codebase already uses.
@@ -195,4 +267,10 @@ export function installProcessGuards(sink: ProcessGuardSink = DEFAULT_PROCESS_GU
   process.on("unhandledRejection", (reason: unknown): void => {
     void handleFatalReason("unhandled rejection", "unhandled-rejection", reason, sink);
   });
+}
+
+// Test seam: resets the "already installed" latch so unit tests can exercise both the
+// first-install and idempotent-noop paths. Never called from production code.
+export function _resetInstalledProcessGuardsForTests(): void {
+  processGuardsInstalled = false;
 }

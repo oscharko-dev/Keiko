@@ -220,6 +220,30 @@ describe("dapNodeAdapter", () => {
     expect(createHome).not.toHaveBeenCalled();
   });
 
+  it("pins the createEphemeralHome / createEphemeralTemp coupling (KEIKO-0576)", () => {
+    // KEIKO-0576: the two test seams are independently pluggable. Production wiring
+    // (dapOperatorProvisioningFactory.ts::adapterPreflight) supplies neither, so the invariant
+    // that matters is: with neither hook overridden, <result.temp.path>/tmp exists as 0700.
+    // A future caller that supplies createEphemeralHome alone (its own home-provisioning
+    // strategy) bypasses nestedHome() and must guarantee this subdirectory itself; that
+    // coupling is now documented on DapAdapterPreflightDeps. This test pins the currently-live
+    // invariant that no override exists.
+    const workspace = temp("keiko-dap-workspace-");
+    const trusted = temp("keiko-dap-trusted-");
+    executable(join(trusted, "fake-dap"));
+    const result = preflightDapAdapter(provider(trusted), {
+      workspaceRoot: workspace,
+      processEnv: { PATH: trusted },
+      approvedPath: trusted,
+      commandAllowed: () => true,
+    });
+    const tmpPath = join(result.temp.path, "tmp");
+    expect(fs.existsSync(tmpPath)).toBe(true);
+    expect(fs.statSync(tmpPath).mode & 0o777).toBe(0o700);
+    result.home.cleanup();
+    result.temp.cleanup();
+  });
+
   it("creates one private runtime tree with reachable fixed capsule HOME and temp paths", () => {
     const workspace = temp("keiko-dap-workspace-");
     const trusted = temp("keiko-dap-trusted-");

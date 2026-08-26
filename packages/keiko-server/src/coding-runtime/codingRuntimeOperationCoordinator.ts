@@ -49,7 +49,13 @@ type PreparedRuntimeOperation =
         readonly expectedRevision: number;
       };
     }
-  | { readonly ok: false };
+  // KEIKO-0722: distinguish the replay-cap exhaustion path from every other invalid-intent
+  // rejection so callers can emit a dedicated failureCode instead of the generic "invalid-intent".
+  | { readonly ok: false; readonly reason?: "replay-cap-exhausted" | undefined };
+
+type QuestionMutationOutcome =
+  | { readonly ok: true }
+  | { readonly ok: false; readonly reason: "invalid-intent" | "authority-resolution-failed" };
 
 const FOLLOW_UP_STATES: ReadonlySet<CodingRuntimeSnapshot["state"]> = new Set([
   "running",
@@ -70,7 +76,12 @@ export class CodingRuntimeOperationCoordinator {
         !validTaskIntent(operation.value.taskIntent)
       ) {
         if (operation.ok) operation.reservation.release();
-        return failure("invalid-intent");
+        // KEIKO-0722: distinguish the cap-exhausted case from an ordinary invalid-intent.
+        return failure(
+          !operation.ok && operation.reason === "replay-cap-exhausted"
+            ? "replay-cap-exhausted"
+            : "invalid-intent",
+        );
       }
       let dispatched: Awaited<ReturnType<CodingRuntimeTaskDispatcher["dispatch"]>>;
       try {
@@ -99,7 +110,11 @@ export class CodingRuntimeOperationCoordinator {
   ): Promise<CodingRuntimeQuestionOperationResult> {
     return this.deps.serial<CodingRuntimeQuestionOperationResult>(async () => {
       const operation = this.prepare(runId, input, ["requestId", "expectedRevision"]);
-      if (!operation.ok) return failure("invalid-intent");
+      if (!operation.ok) {
+        return failure(
+          operation.reason === "replay-cap-exhausted" ? "replay-cap-exhausted" : "invalid-intent",
+        );
+      }
       let questions: CodingWorkbenchRuntimeQuestionsResponse | undefined;
       try {
         questions = await this.deps.questionPort.list(operationRequest(runId, operation));
@@ -110,9 +125,13 @@ export class CodingRuntimeOperationCoordinator {
         operation.reservation.release();
         return failure("authority-resolution-failed");
       }
-      operation.reservation.commit();
-      // Listing is a read: the revision must NOT advance, or any background question refresh
-      // would race concurrent operator actions (pause/answer/follow-up) into revision conflicts.
+      // #2906: release, never commit -- listing is a read. It must not advance the revision (or
+      // any background question refresh would race concurrent operator actions into revision
+      // conflicts), and for the exact same reason it must not occupy a permanent slot in the
+      // per-run replay cap either: nothing here ever moves the live revision, so a committed read
+      // id could never become supersede-and-evictable, and unbounded polling would otherwise
+      // exhaust the same 512-id budget real mutations share.
+      operation.reservation.release();
       return { ok: true, snapshot: this.deps.publicSnapshot(operation.current), questions };
     });
   }
@@ -131,8 +150,13 @@ export class CodingRuntimeOperationCoordinator {
     readonly expectedRevision: number;
     readonly taskIntent: string;
   }): Promise<"accepted" | "failed" | "recovery-required"> {
-    const reservation = this.replay.reserve(input.runId, input.requestId);
-    if (reservation === undefined) return "recovery-required";
+    const reserveOutcome = this.replay.reserve(
+      input.runId,
+      input.requestId,
+      input.expectedRevision,
+    );
+    if ("rejection" in reserveOutcome) return "recovery-required";
+    const { reservation } = reserveOutcome;
     let dispatched: Awaited<ReturnType<CodingRuntimeTaskDispatcher["dispatch"]>>;
     try {
       dispatched = await this.deps.taskDispatcher.dispatch(input);
@@ -184,48 +208,70 @@ export class CodingRuntimeOperationCoordinator {
       const operation = this.prepare(runId, input, keys);
       if (!operation.ok || !validQuestionId(operation.value.questionId)) {
         if (operation.ok) operation.reservation.release();
-        return failure("invalid-intent");
+        return failure(
+          !operation.ok && operation.reason === "replay-cap-exhausted"
+            ? "replay-cap-exhausted"
+            : "invalid-intent",
+        );
       }
-      let accepted: boolean;
-      try {
-        if (action === "answer") {
-          // requestId/expectedRevision/questionId are already bound and verified by prepare()
-          // above (isExactRecord + expectedRevision-vs-current.revision + the one-use requestId
-          // replay reservation) and by validQuestionId just above — this is a consolidation of
-          // that existing binding into the shared contract type (KEIKO-0411), not a new check at
-          // this call site. The values are already known-valid; the aggregate answers byte budget
-          // below is the one genuinely new protection this parse call adds here.
-          const answers = parseCodingWorkbenchRuntimeQuestionAnswerRequest({
-            requestId: operation.value.requestId,
-            expectedRevision: operation.value.expectedRevision,
-            questionRequestId: operation.value.questionId,
-            answers: operation.value.answers,
-          });
-          if (!answers.ok) {
-            operation.reservation.release();
-            return failure("invalid-intent");
-          }
-          accepted = await this.deps.questionPort.answer({
-            ...operationRequest(runId, operation),
-            questionId: operation.value.questionId,
-            answers: answers.value.answers,
-          });
-        } else {
-          accepted = await this.deps.questionPort.reject({
-            ...operationRequest(runId, operation),
-            questionId: operation.value.questionId,
-          });
-        }
-      } catch {
-        accepted = false;
-      }
-      if (!accepted) {
+      const outcome = await this.applyQuestionMutation(
+        runId,
+        action,
+        operation,
+        operation.value.questionId,
+      );
+      if (!outcome.ok) {
         operation.reservation.release();
-        return failure("authority-resolution-failed");
+        return failure(outcome.reason);
       }
       operation.reservation.commit();
       return this.deps.advanceRevision(operation.current);
     });
+  }
+
+  // Issues the answer/reject port call for an already-admitted question operation. Split out of
+  // mutateQuestion() so that method stays under the line/complexity ceiling; behaviour (including
+  // which failureCode each path maps to) is unchanged from the inline version it replaced.
+  private async applyQuestionMutation(
+    runId: string,
+    action: "answer" | "reject",
+    operation: Extract<PreparedRuntimeOperation, { readonly ok: true }>,
+    // Already validated by validQuestionId(operation.value.questionId) at the mutateQuestion()
+    // call site: `operation.value` types every field but requestId/expectedRevision as unknown
+    // (it is shared across every operation kind, not just answer/reject), so that narrowing
+    // cannot survive the call into this method and questionId is threaded through explicitly.
+    questionId: string,
+  ): Promise<QuestionMutationOutcome> {
+    try {
+      if (action !== "answer") {
+        const accepted = await this.deps.questionPort.reject({
+          ...operationRequest(runId, operation),
+          questionId,
+        });
+        return accepted ? { ok: true } : { ok: false, reason: "authority-resolution-failed" };
+      }
+      // requestId/expectedRevision are already bound and verified by prepare() above
+      // (isExactRecord + expectedRevision-vs-current.revision + the one-use requestId replay
+      // reservation) — this is a consolidation of that existing binding into the shared contract
+      // type (KEIKO-0411), not a new check at this call site. The values are already known-valid;
+      // the aggregate answers byte budget below is the one genuinely new protection this parse
+      // call adds here.
+      const answers = parseCodingWorkbenchRuntimeQuestionAnswerRequest({
+        requestId: operation.value.requestId,
+        expectedRevision: operation.value.expectedRevision,
+        questionRequestId: questionId,
+        answers: operation.value.answers,
+      });
+      if (!answers.ok) return { ok: false, reason: "invalid-intent" };
+      const accepted = await this.deps.questionPort.answer({
+        ...operationRequest(runId, operation),
+        questionId,
+        answers: answers.value.answers,
+      });
+      return accepted ? { ok: true } : { ok: false, reason: "authority-resolution-failed" };
+    } catch {
+      return { ok: false, reason: "authority-resolution-failed" };
+    }
   }
 
   private prepare(
@@ -233,49 +279,95 @@ export class CodingRuntimeOperationCoordinator {
     input: unknown,
     keys: readonly string[],
   ): PreparedRuntimeOperation {
-    const current = this.deps.current();
-    // Inline answer/reject operations are admitted while the run is running or paused; follow-up
-    // additionally requires running, so a paused run cannot queue new work. Every other lifecycle
-    // state fails closed. The one-use request id plus monotonic revision reservation admit exactly
-    // one turn per revision, so a second concurrent follow-up fails closed instead of queueing.
-    if (
-      !isExactRecord(input, keys) ||
-      current?.runId !== runId ||
-      !(current.state === "running" || current.state === "paused")
-    ) {
-      return { ok: false };
+    const admitted = admitRuntimeOperation(input, keys, this.deps.current(), runId);
+    if (admitted === undefined) return { ok: false };
+    const reserveOutcome = this.replay.reserve(
+      runId,
+      admitted.value.requestId,
+      admitted.current.revision,
+    );
+    if ("rejection" in reserveOutcome) {
+      // KEIKO-0722: distinguish the cap-exhausted case so callers emit "replay-cap-exhausted";
+      // an ordinary duplicate/pending stays "invalid-intent" as before.
+      return reserveOutcome.rejection === "cap-exhausted"
+        ? { ok: false, reason: "replay-cap-exhausted" }
+        : { ok: false };
     }
-    if (
-      !validRequestId(input.requestId) ||
-      !Number.isSafeInteger(input.expectedRevision) ||
-      input.expectedRevision !== current.revision
-    ) {
-      return { ok: false };
-    }
-    const reservation = this.replay.reserve(runId, input.requestId);
-    return reservation === undefined
-      ? { ok: false }
-      : {
-          ok: true,
-          current,
-          reservation,
-          value: input as Readonly<Record<string, unknown>> & {
-            readonly requestId: string;
-            readonly expectedRevision: number;
-          },
-        };
+    return {
+      ok: true,
+      current: admitted.current,
+      reservation: reserveOutcome.reservation,
+      value: admitted.value,
+    };
   }
 }
 
+// Inline answer/reject operations are admitted while the run is running or paused; follow-up
+// additionally requires running, so a paused run cannot queue new work. Every other lifecycle
+// state fails closed. Split out of prepare() so that method stays under the complexity ceiling;
+// returns the narrowed snapshot and input together so a successful admission cannot be reported
+// with a stale/undefined current snapshot.
+function admitRuntimeOperation(
+  input: unknown,
+  keys: readonly string[],
+  current: CodingRuntimeSnapshot | undefined,
+  runId: string,
+):
+  | {
+      readonly current: CodingRuntimeSnapshot;
+      readonly value: Readonly<Record<string, unknown>> & {
+        readonly requestId: string;
+        readonly expectedRevision: number;
+      };
+    }
+  | undefined {
+  if (
+    !isExactRecord(input, keys) ||
+    current?.runId !== runId ||
+    !(current.state === "running" || current.state === "paused")
+  ) {
+    return undefined;
+  }
+  // The one-use request id plus monotonic revision reservation admit exactly one turn per
+  // revision, so a second concurrent follow-up fails closed instead of queueing.
+  if (
+    !validRequestId(input.requestId) ||
+    !Number.isSafeInteger(input.expectedRevision) ||
+    input.expectedRevision !== current.revision
+  ) {
+    return undefined;
+  }
+  return {
+    current,
+    value: input as Readonly<Record<string, unknown>> & {
+      readonly requestId: string;
+      readonly expectedRevision: number;
+    },
+  };
+}
+
+// Per-run replay/duplicate-detection budget. Sized well above any plausible single-run operation
+// count; #2906: exhausting it no longer permanently locks a live run (see evictSuperseded below),
+// so this only bounds how many requestIds still relevant to the CURRENT revision may be tracked
+// at once.
+const REPLAY_COMMITTED_CAP = 512;
+
 class RuntimeOperationReplayCoordinator {
-  private readonly committed = new Map<string, Set<string>>();
+  // requestId -> the live revision at the moment it was committed.
+  private readonly committed = new Map<string, Map<string, number>>();
   private readonly pending = new Map<string, Set<string>>();
 
-  public reserve(runId: string, requestId: string): RuntimeOperationReservation | undefined {
-    const committed = this.committed.get(runId) ?? new Set<string>();
+  public reserve(
+    runId: string,
+    requestId: string,
+    liveRevision: number,
+  ):
+    | { readonly reservation: RuntimeOperationReservation }
+    | { readonly rejection: "cap-exhausted" | "duplicate" } {
+    const committed = this.evictSuperseded(runId, liveRevision);
     const pending = this.pending.get(runId) ?? new Set<string>();
-    if (committed.size >= 512 || committed.has(requestId) || pending.has(requestId))
-      return undefined;
+    if (committed.size >= REPLAY_COMMITTED_CAP) return { rejection: "cap-exhausted" };
+    if (committed.has(requestId) || pending.has(requestId)) return { rejection: "duplicate" };
     pending.add(requestId);
     this.pending.set(runId, pending);
     let active = true;
@@ -285,16 +377,35 @@ class RuntimeOperationReplayCoordinator {
       pending.delete(requestId);
       if (pending.size === 0) this.pending.delete(runId);
     };
-    return {
+    const reservation: RuntimeOperationReservation = {
       requestId,
       commit: (): void => {
         if (!active) return;
-        committed.add(requestId);
+        committed.set(requestId, liveRevision);
         this.committed.set(runId, committed);
         release();
       },
       release,
     };
+    return { reservation };
+  }
+
+  // A requestId committed at revision N is only ever reachable again by a caller that ALSO
+  // supplies expectedRevision === N: admitRuntimeOperation enforces that match against the live
+  // snapshot before this coordinator is even consulted. The stored revision N is the PRE-op
+  // revision at commit time, so the op that owned it advanced live to N+1. A legitimate direct
+  // replay attempt therefore arrives with `expectedRevision: N+1` — dropping at `revision < live`
+  // (i.e. as soon as live > N) evicts before the very next op can be checked for that requestId,
+  // silently admitting `answer` + `reject` reuse of the same requestId across the same advance.
+  // The correct condition retains a committed record until live has moved beyond that op's own
+  // post-revision (live > N + 1). That still bounds unbounded polling once live truly overtakes,
+  // but preserves duplicate detection for the immediate next admission window (#2906).
+  private evictSuperseded(runId: string, liveRevision: number): Map<string, number> {
+    const committed = this.committed.get(runId) ?? new Map<string, number>();
+    for (const [requestId, revision] of committed) {
+      if (revision + 1 < liveRevision) committed.delete(requestId);
+    }
+    return committed;
   }
 
   public clear(runId: string): void {

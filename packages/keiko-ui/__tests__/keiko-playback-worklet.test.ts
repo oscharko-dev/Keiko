@@ -221,3 +221,44 @@ describe("keiko-playback-worklet — postMessage signalling on drain/end", () =>
     expect(messagesOfType(processor, "position")).toEqual([{ type: "position", frames: 1300 }]);
   });
 });
+
+describe("keiko-playback-worklet — malformed message shape guard (KEIKO-0735 / KEIKO-1009)", () => {
+  const malformedShapes: Array<[string, unknown]> = [
+    ["a plain object with a numeric length", { length: 5 }],
+    ["a bare number", 5],
+    ["a bare string", "not-pcm"],
+    ["a Float32Array (wrong typed-array kind)", new Float32Array([1, 2, 3])],
+    ["a plain Array (has .length but is not a typed array)", [1, 2, 3]],
+  ];
+
+  it.each(malformedShapes)(
+    "ignores %s without corrupting size to NaN or posting any message",
+    (_label, malformed) => {
+      const processor = makeProcessor();
+      send(processor, { type: "config", primeFrames: 1 });
+
+      // Before the fix, any of these shapes fell through the "otherwise treat as PCM" branch,
+      // read `.length` (or `undefined`) as a sample count, and corrupted `this.size`/
+      // `this.capacity` toward NaN via ensureCapacity's arithmetic. The guard in handle() now
+      // requires `data instanceof Int16Array` before that branch is reached at all.
+      send(processor, malformed);
+
+      expect(Number.isFinite(processor.size)).toBe(true);
+      expect(processor.size).toBe(0);
+      expect(processor.capacity).toBe(0);
+      expect(processor.port.postMessage).not.toHaveBeenCalled();
+    },
+  );
+
+  it("still plays real PCM correctly after a malformed message was silently ignored", () => {
+    const processor = makeProcessor();
+    send(processor, { type: "config", primeFrames: 1 });
+
+    send(processor, { length: 5 }); // ignored: not an Int16Array
+    send(processor, new Int16Array([16384, -16384]));
+
+    expect(processor.primed).toBe(true);
+    const audible = runQuantum(processor, 2);
+    expect(Array.from(audible)).toEqual([16384 / 32768, -16384 / 32768]);
+  });
+});

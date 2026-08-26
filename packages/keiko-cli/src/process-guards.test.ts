@@ -7,6 +7,7 @@
 import { spawn } from "node:child_process";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  _resetInstalledProcessGuardsForTests,
   fatalProcessLine,
   installProcessGuards,
   type FatalDiagnosticsModule,
@@ -40,6 +41,9 @@ function installAndCapture(sink: ProcessGuardSink): {
 afterEach(() => {
   vi.unstubAllEnvs();
   vi.useRealTimers();
+  // KEIKO-0837: reset the module-level idempotency latch so every test starts from a
+  // clean slate; production code never calls this helper.
+  _resetInstalledProcessGuardsForTests();
 });
 
 describe("fatalProcessLine", () => {
@@ -378,4 +382,131 @@ describe("installProcessGuards — a hung classifier import against the real eve
     expect(stderr).toContain("keiko: fatal unhandled rejection (Error). The process will exit.");
     expect(exitCode).toBe(1);
   }, 10_000);
+});
+
+describe("boundedSinkWrite — a never-settling sink must not block sink.exit (comment 3865273680)", () => {
+  it("still calls exit(1) after the bounded timeout when sink.err never resolves", async () => {
+    vi.useFakeTimers();
+    const err = vi.fn(
+      (): Promise<void> =>
+        new Promise<void>(() => {
+          // Never settles: models a sink stuck behind a dead transport.
+        }),
+    );
+    const exit = vi.fn();
+    const sink: ProcessGuardSink = {
+      err,
+      exit,
+      loadServer: (): Promise<FatalDiagnosticsModule> =>
+        Promise.resolve({
+          createFileServerLogSink: vi.fn(() => ({ write: (): void => undefined })),
+          describeError: (): { readonly errorClass: string } => ({ errorClass: "Error" }),
+        } as unknown as FatalDiagnosticsModule),
+    };
+    const { uncaught, cleanup } = installAndCapture(sink);
+    try {
+      uncaught?.(new Error("boom"));
+      // Let the (fast, in-memory) classifier import settle first so `finish()` reaches the
+      // sink write — advancing by the classifier's own 2s bound would race two independent
+      // timers, so drive microtasks to completion before advancing the sink-write timeout.
+      await vi.advanceTimersByTimeAsync(0);
+      expect(err).toHaveBeenCalledTimes(1);
+      // Without a bound, this would await sink.err forever and exit would never be called —
+      // that is exactly what this test must fail against (pre-fix: hangs, never resolves).
+      expect(exit).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(500);
+      expect(exit).toHaveBeenCalledWith(1);
+    } finally {
+      cleanup();
+    }
+  });
+});
+
+describe("writeStderrDrained — the default sink actually drains (comment 3865273680)", () => {
+  // Uses a REAL child process with a PIPED stderr (not the injected fake `err` the rest of this
+  // suite uses) so this pins the production DEFAULT_PROCESS_GUARD_SINK's actual
+  // `process.stderr.write` behaviour, not a mock built to agree with the assertion. A payload
+  // larger than one pipe buffer (empirically 64KB on this platform) forces the documented
+  // async-pipe-write behaviour: a fire-and-forget `process.stderr.write` followed immediately by
+  // `process.exit()` reliably truncates to one buffer's worth, while draining through the write's
+  // own callback (as `writeStderrDrained` does) reliably delivers every byte.
+  it("delivers a full multi-megabyte write to a piped child before resolving", async () => {
+    const modulePath = JSON.stringify(new URL("./process-guards.ts", import.meta.url).pathname);
+    const script = [
+      `import { writeStderrDrained } from ${modulePath};`,
+      "const big = Buffer.alloc(5 * 1024 * 1024, 88);", // 5 MiB of 'X'
+      "writeStderrDrained(big.toString()).then(() => { process.exit(1); });",
+    ].join("\n");
+    const child = spawn(process.execPath, ["--input-type=module", "-e", script], {
+      stdio: ["ignore", "ignore", "pipe"],
+    });
+    let received = 0;
+    child.stderr.on("data", (chunk: Buffer): void => {
+      received += chunk.length;
+    });
+    const exitCode = await new Promise<number | null>((resolve, reject) => {
+      child.on("error", reject);
+      child.on("exit", resolve);
+    });
+    expect(exitCode).toBe(1);
+    expect(received).toBe(5 * 1024 * 1024);
+  }, 10_000);
+});
+
+describe("installProcessGuards — idempotency (KEIKO-0837)", () => {
+  it("registers exactly one listener even when called twice", () => {
+    const before = {
+      uncaught: process.listenerCount("uncaughtException"),
+      rejection: process.listenerCount("unhandledRejection"),
+    };
+    installProcessGuards({ err: vi.fn(), exit: vi.fn() });
+    installProcessGuards({ err: vi.fn(), exit: vi.fn() });
+    const after = {
+      uncaught: process.listenerCount("uncaughtException"),
+      rejection: process.listenerCount("unhandledRejection"),
+    };
+    // Only ONE additional listener per event, not two.
+    expect(after.uncaught - before.uncaught).toBe(1);
+    expect(after.rejection - before.rejection).toBe(1);
+  });
+});
+
+describe("installProcessGuards — flushes the fatal line before exiting (KEIKO-0837)", () => {
+  it("awaits an async sink.err before calling sink.exit", async () => {
+    let errResolved = false;
+    let exitSeenErrResolved: boolean | undefined;
+    const err = vi.fn(async (_text: string): Promise<void> => {
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      errResolved = true;
+    });
+    const exit = vi.fn((_code: number): void => {
+      exitSeenErrResolved = errResolved;
+    });
+    const loadServer = vi.fn((): Promise<FatalDiagnosticsModule> =>
+      Promise.resolve({
+        createFileServerLogSink: (): { write: () => void; close: () => void } => ({
+          write: (): void => undefined,
+          close: (): void => undefined,
+        }),
+        describeError: (): {
+          readonly errorClass: string;
+          readonly code?: string;
+          readonly frames?: readonly string[];
+          readonly causeChain?: readonly string[];
+        } => ({ errorClass: "TypeError" }),
+      } as unknown as FatalDiagnosticsModule),
+    );
+
+    const { uncaught, cleanup } = installAndCapture({ err, exit, loadServer });
+    try {
+      // Await a microtask cycle plus the sink.err's 10ms sleep before asserting.
+      uncaught?.(new Error("boom"));
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      expect(err).toHaveBeenCalled();
+      expect(exit).toHaveBeenCalledWith(1);
+      expect(exitSeenErrResolved).toBe(true);
+    } finally {
+      cleanup();
+    }
+  });
 });

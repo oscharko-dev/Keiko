@@ -36,7 +36,18 @@ export function resetNativeFileDialogCapabilityCacheForTests(): void {
 }
 
 export type NativeDialogPickOutcome =
-  | { readonly kind: "picked"; readonly paths: readonly string[] }
+  | {
+      readonly kind: "picked";
+      readonly paths: readonly string[];
+      // #2906 review (comment 3863185762): how many adapter-returned selections the server
+      // rejected (denied, missing, wrong kind) and dropped before `paths` reached the browser.
+      // Optional (rather than required) so the many single-selection callers whose mode bounds
+      // make a nonzero count impossible (`open-file`/`open-directory`: min=max=1, so a rejection
+      // there fails the WHOLE request instead of ever reaching a "picked" outcome) don't all need
+      // an inert `rejectedCount: 0` on every existing fixture -- only `pickWithNativeDialog`
+      // itself sets it, always. Absent is exactly equivalent to 0.
+      readonly rejectedCount?: number | undefined;
+    }
   | { readonly kind: "cancelled" }
   | { readonly kind: "busy" }
   | { readonly kind: "unsupported" }
@@ -81,7 +92,11 @@ export async function pickWithNativeDialog(
   try {
     const response = await openNativeFileDialog(request);
     if (response.cancelled) return { kind: "cancelled" };
-    return { kind: "picked", paths: response.selections.map((selection) => selection.path) };
+    return {
+      kind: "picked",
+      paths: response.selections.map((selection) => selection.path),
+      rejectedCount: response.rejectedSelectionCount,
+    };
   } catch (error) {
     if (error instanceof ApiError) {
       if (error.code === "NATIVE_DIALOG_ALREADY_OPEN") return { kind: "busy" };

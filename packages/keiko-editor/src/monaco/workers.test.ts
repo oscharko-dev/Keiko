@@ -120,7 +120,13 @@ describe("defaultMonacoWorkerFactories", () => {
 
   it("ships the local editor worker used by the default factory, never a CDN", () => {
     const source = readFileSync(resolve(here, "worker-entries.ts"), "utf8");
+    // KEIKO-0584: Turbopack requires a static string literal inside `new URL(..., import.meta.url)`
+    // for build-time worker resolution, so worker-entries.ts inlines the specifier verbatim. The
+    // duplicate constant lives at MONACO_WORKER_MODULES.editor in workers.ts and this pin asserts
+    // the two stay byte-identical so a change in either surface is caught immediately.
+    const workersSource = readFileSync(resolve(here, "workers.ts"), "utf8");
     for (const specifier of Object.values(MONACO_WORKER_MODULES)) {
+      expect(workersSource).toContain(specifier);
       expect(source).toContain(specifier);
     }
     for (const disallowed of [

@@ -5,14 +5,14 @@
     "fileCount": 289
   },
   "b1": {
-    "firstLoadScriptCount": 18,
+    "firstLoadScriptCount": 19,
     "monacoMarkersInFirstLoad": 0,
     "ok": true
   },
   "b2": {
     "budgetBytes": 2621440,
-    "shipsTotalBytes": 1406597,
-    "loadedTotalBytes": 1406597,
+    "shipsTotalBytes": 1406639,
+    "loadedTotalBytes": 1406639,
     "ok": true,
     "shipsOk": true,
     "loadedOk": true
@@ -59,15 +59,15 @@
       "workerLabel": null
     },
     {
-      "path": "dist/ui/static/_next/static/chunks/1vw7oo5hltkzg.js",
-      "gzipBytes": 288709,
-      "rawBytes": 1216156,
+      "path": "dist/ui/static/_next/static/chunks/3to4q8irxmqbt.js",
+      "gzipBytes": 288726,
+      "rawBytes": 1216056,
       "workerLabel": null
     },
     {
-      "path": "dist/ui/static/_next/static/chunks/1_x579f2fgjyr.js",
-      "gzipBytes": 288304,
-      "rawBytes": 1216156,
+      "path": "dist/ui/static/_next/static/chunks/2kalmxt68eyg8.js",
+      "gzipBytes": 288329,
+      "rawBytes": 1216056,
       "workerLabel": null
     },
     {
@@ -95,5 +95,5 @@
       "workerLabel": "editor"
     }
   ],
-  "measurementSha256": "a47f06fb143a0d8e7f256b6121646b9d3d11fec72cf7b1b7a319820a55df29c8"
+  "measurementSha256": "28773196b43c990ddc48b893a9f8cfcc7e525e10d41b048f9900655722fc7afe"
 }

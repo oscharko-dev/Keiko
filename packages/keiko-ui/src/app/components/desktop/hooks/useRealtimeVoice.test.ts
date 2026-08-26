@@ -8,6 +8,7 @@ import { DEFAULT_VOICE_PROTOCOL_TIMEOUTS } from "@oscharko-dev/keiko-contracts";
 import { MAX_DESKTOP_CHAT_INPUT_CHARS } from "@oscharko-dev/keiko-contracts/bff-wire";
 import { prepareCanonicalVoiceHasher } from "./canonical-voice-hasher";
 import { executeVoiceTurnEffects, useRealtimeVoice } from "./useRealtimeVoice";
+import { MAX_REVIEWABLE_REALTIME_TRANSCRIPT_BYTES } from "./voice-realtime-events";
 import { VoiceControlError, type VoiceControlClient } from "./voice-realtime-client";
 import { VoiceRtcError, type VoiceRtcSession, type VoiceRtcTransport } from "./voice-rtc-transport";
 
@@ -415,6 +416,63 @@ describe("useRealtimeVoice canonical transcript delivery", () => {
       text: "Search the connected repository.",
     });
     expect(result.current.partialUserTranscript).toBeUndefined();
+  });
+
+  // KEIKO-0585: appendUserTranscriptDelta's overflow branch used to call
+  // rejectOversizedCanonicalUserTurn without first flushing any already-staged pending turn.
+  // rejectOversizedCanonicalUserTurn unconditionally wipes pendingCanonicalUserTurnRef, so a
+  // valid, already-settled provider final on a DIFFERENT item_id was silently discarded — never
+  // delivered via onCanonicalUserTurn — whenever an unrelated item's delta stream overflowed.
+  it("flushes an already-staged pending turn before rejecting an unrelated item's oversized delta", async () => {
+    vi.useFakeTimers();
+    const fake = makeFakeSession();
+    const onCanonicalUserTurn = vi.fn().mockResolvedValue("completed");
+    const { result } = renderVoice({ fake, onCanonicalUserTurn });
+    act(() => result.current.start());
+    await vi.waitFor(() => expect(result.current.phase).toBe("negotiating"));
+
+    // item A's final settles into pendingCanonicalUserTurnRef but is deliberately NOT flushed yet
+    // — timers are not advanced past CANONICAL_TURN_CONTINUATION_GRACE_MS.
+    const pendingText = "q".repeat(100);
+    act(() =>
+      fake.fireDataChannelEvent({
+        type: "conversation.item.input_audio_transcription.completed",
+        item_id: "item-a-pending",
+        transcript: pendingText,
+      }),
+    );
+    expect(result.current.partialUserTranscript).toBe(pendingText);
+    expect(onCanonicalUserTurn).not.toHaveBeenCalled();
+
+    // item B (a different item_id) streams enough delta bytes to exceed
+    // MAX_REVIEWABLE_REALTIME_TRANSCRIPT_BYTES — unrelated to item A's already-settled turn.
+    const oversizedChunk = "b".repeat(90_000);
+    expect(oversizedChunk.length * 3).toBeGreaterThan(MAX_REVIEWABLE_REALTIME_TRANSCRIPT_BYTES);
+    act(() => {
+      fake.fireDataChannelEvent({
+        type: "conversation.item.input_audio_transcription.delta",
+        item_id: "item-b-oversized",
+        delta: oversizedChunk,
+      });
+      fake.fireDataChannelEvent({
+        type: "conversation.item.input_audio_transcription.delta",
+        item_id: "item-b-oversized",
+        delta: oversizedChunk,
+      });
+      fake.fireDataChannelEvent({
+        type: "conversation.item.input_audio_transcription.delta",
+        item_id: "item-b-oversized",
+        delta: oversizedChunk,
+      });
+    });
+
+    // item A's pending turn must have been flushed and delivered — not silently discarded by
+    // item B's unrelated oversized-delta rejection.
+    expect(onCanonicalUserTurn).toHaveBeenCalledOnce();
+    expect(onCanonicalUserTurn).toHaveBeenCalledWith({
+      turnId: expect.stringMatching(CANONICAL_TURN_ID_PATTERN),
+      text: pendingText,
+    });
   });
 
   it("coalesces final segments across a natural speaking pause", async () => {

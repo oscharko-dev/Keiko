@@ -23,6 +23,17 @@ export interface DapAdapterPreflightDeps {
   readonly workspaceRoot: string;
   readonly processEnv: NodeJS.ProcessEnv;
   readonly approvedPath: string;
+  /**
+   * KEIKO-0576: `createEphemeralHome` and `createEphemeralTemp` are two independently pluggable
+   * test seams. A caller that overrides `createEphemeralHome` alone must still guarantee that a
+   * `<temp>/tmp` directory (0700, owned by the current uid) exists inside whatever `createEphemeralTemp`
+   * — including the default `createDebugRuntimeDirectory` — returns; the downstream
+   * `assertRuntimeLayout` in `debugLaunchContext.ts` requires it and throws INVALID_DEBUG_RUNTIME
+   * otherwise. Without an override, `nestedHome` creates that subdirectory. Supplying
+   * `createEphemeralHome` alone bypasses `nestedHome`, so the coupling only works because the
+   * default `createEphemeralTemp` (`createDebugRuntimeDirectory`) creates the tmp subdirectory
+   * itself.
+   */
   readonly createEphemeralHome?: (() => DapEphemeralDirectory) | undefined;
   readonly createEphemeralTemp?: (() => DapEphemeralDirectory) | undefined;
   readonly commandAllowed: (executableName: string, args: readonly string[]) => boolean;

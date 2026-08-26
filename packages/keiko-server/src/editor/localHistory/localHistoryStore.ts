@@ -143,6 +143,27 @@ export interface EditorLocalHistoryStore {
     nowMs?: number,
   ) => EditorLocalHistoryEntry;
   readonly delete: (scope: EditorLocalHistoryRootScope, entryRef: string) => void;
+  // KEIKO-0675: rename awareness. Rewrites every index entry whose path is EITHER exactly
+  // previousRelativePath (a file rename) OR nested inside it (a directory rename -- #2906 round
+  // 2: handleFilesRename invokes this for directories too, and a directory has no checkpoint of
+  // its own, so the exact-match case alone stranded every descendant), onto its own computed
+  // destination path (updating relativePath, relativePathDigest, and the vault payload's mirror
+  // of relativePathDigest + payloadBindingDigest). Returns the number of index entries rewritten
+  // so a caller can log a body-free count. entryRef is intentionally
+  // NOT rotated: it is the opaque identifier captured at write time and held by the UI, evidence,
+  // and audit trail across the rename, so rotating it would invalidate every persisted reference
+  // to that checkpoint. vaultEntryRef — a purely internal storage handle, already re-minted on
+  // every capture() — DOES rotate as of #2906 review (comment 3863185700): the rewritten body is
+  // staged under a new vault slot and the OLD slot is reclaimed only after the new index commits,
+  // so a mid-batch failure can never leave a body's on-disk relativePathDigest ahead of the index
+  // entry that is supposed to describe it (see stageRekeyedPayloads/commitRekeyedPayloads below).
+  // The public listing is keyed on relativePathDigest for filter matching, so the renamed entries
+  // surface under the new path after this call.
+  readonly reKey: (
+    scope: EditorLocalHistoryRootScope,
+    previousRelativePath: string,
+    nextRelativePath: string,
+  ) => number;
 }
 
 interface EditorLocalHistoryLimits {
@@ -181,6 +202,24 @@ interface WorkspaceState {
   readonly vault: LocalSecretVault;
   readonly objectIdentityDigest: string;
   index: EditorLocalHistoryIndex;
+}
+
+// One re-keyed checkpoint staged during reKey (#2906 review): its rewritten entry (still to be
+// committed to the index) paired with the NEW vault ref its body was just staged under, so a
+// mid-batch failure can roll back exactly the staged, unindexed bodies and nothing else.
+interface StagedRekeyedEntry {
+  readonly entry: EditorLocalHistoryEntry;
+  readonly vaultEntryRef: WorkspaceVaultEntryRef;
+}
+
+// An index entry affected by a reKey, paired with ITS OWN destination path/digest (#2906 round 2):
+// a directory rename affects many entries at once, and each descendant's destination differs from
+// every other's (only the renamed-directory PREFIX is shared), unlike the single shared
+// nextRelativePath a plain file rename uses.
+interface RekeyTarget {
+  readonly entry: EditorLocalHistoryEntry;
+  readonly nextRelativePath: string;
+  readonly nextDigest: WorkspacePathDigest;
 }
 
 // The object binding stays outside the public contract and encrypted payload. This lets a matching
@@ -235,6 +274,25 @@ function contentDigest(content: string): WorkspaceContentDigest {
 
 function pathDigest(path: string): WorkspacePathDigest {
   return digest("keiko.editor-local-history.path.v1", [path]) as WorkspacePathDigest;
+}
+
+// #2906 round 2: maps one entry's relativePath -- the exact previous path, or a path nested inside
+// a renamed directory -- to its post-rename relativePath. `undefined` means this entry is
+// unaffected by the rename. Mirrors files.ts's renamedBreakpointFileId (KEIKO-0179), which solves
+// the identical "a directory rename affects many descendant paths at once" problem for breakpoint
+// fileIds; duplicated here (rather than imported) because localHistoryStore.ts sits below files.ts
+// in the import graph (files.ts -> localHistoryCapture.ts -> localHistoryStore.ts) and importing
+// the other way would cycle.
+function rekeyedRelativePath(
+  relativePath: string,
+  previousRelativePath: string,
+  nextRelativePath: string,
+): string | undefined {
+  if (relativePath === previousRelativePath) return nextRelativePath;
+  if (relativePath.startsWith(`${previousRelativePath}/`)) {
+    return `${nextRelativePath}${relativePath.slice(previousRelativePath.length)}`;
+  }
+  return undefined;
 }
 
 function instant(nowMs: number): WorkspaceIsoInstant {
@@ -604,6 +662,23 @@ function opaqueReferences(input: {
     entryRef: `history-${suffix}` as WorkspaceHistoryEntryRef,
     vaultEntryRef: `vault-${suffix}` as WorkspaceVaultEntryRef,
   };
+}
+
+// A fresh, deterministic vault slot for a re-keyed checkpoint (#2906 review, comment
+// 3863185700). Deterministic (not random) so a retried reKey after a transient failure targets
+// the SAME staged ref rather than piling up a new orphan on every attempt; derived from the
+// PREVIOUS ref rather than any content field so it can never collide with the ref opaqueReferences
+// would mint for a genuinely new capture. Only the vault SLOT moves — entryRef (the identifier
+// the UI, evidence, and audit trail hold across the rename) never rotates.
+function rekeyedVaultEntryRef(
+  previous: WorkspaceVaultEntryRef,
+  nextRelativePathDigest: WorkspacePathDigest,
+): WorkspaceVaultEntryRef {
+  const suffix = digest("keiko.editor-local-history.rekey-vault.v1", [
+    previous,
+    nextRelativePathDigest,
+  ]).slice(0, 48);
+  return `vault-${suffix}` as WorkspaceVaultEntryRef;
 }
 
 function latestForFile(
@@ -1140,5 +1215,156 @@ export function createEditorLocalHistoryStore(
       persist(state, indexWithEntries(state.index, entries));
       reconcileBodies(state);
     },
+
+    reKey(scope, previousRelativePath, nextRelativePath): number {
+      // KEIKO-0675: called from the rename route so a renamed file's Local History surfaces
+      // under the new name instead of silently disappearing (list() filters on the freshly-
+      // computed pathDigest(nextRelativePath), which no legacy entry would match). Same-path
+      // rename is a no-op; every mismatch requires re-vaulting the encrypted body because both
+      // payload.relativePathDigest and payload.payloadBindingDigest depend on the path digest.
+      if (previousRelativePath === nextRelativePath) return 0;
+      const state = stateFor(scope);
+      const targets: RekeyTarget[] = [];
+      for (const candidate of state.index.entries) {
+        if (!scopeMatches(candidate, scope)) continue;
+        const destination = rekeyedRelativePath(
+          candidate.relativePath,
+          previousRelativePath,
+          nextRelativePath,
+        );
+        if (destination === undefined) continue;
+        targets.push({
+          entry: candidate,
+          nextRelativePath: destination,
+          nextDigest: pathDigest(destination),
+        });
+      }
+      if (targets.length === 0) return 0;
+      const staged = stageRekeyedPayloads(state, targets);
+      commitRekeyedPayloads(state, staged);
+      reconcileBodies(state);
+      return staged.length;
+    },
   };
+
+  // #2906 review (comment 3863185700): follows the SAME capture-transaction shape `capture()`
+  // uses above — stage every rewritten body under a NEW vault ref first (entryRef stays fixed,
+  // the opaque identifier the UI/evidence/audit trail hold across the rename; vaultEntryRef is
+  // purely an internal storage handle, already re-minted on every capture(), so rotating it here
+  // too is not a break in that contract), commit the index once every staged write has
+  // succeeded, then let reconcileBodies reclaim the now-unreferenced OLD bodies. The OLD refs are
+  // never touched until the new index is durable, so a mid-batch failure — one payload's vault
+  // write throws, or the index itself fails validation — rolls back only the staged (unindexed)
+  // bodies and leaves every original checkpoint, index entry included, exactly as it was.
+  //
+  // Before this fix, each entry's body was overwritten IN PLACE under its EXISTING vaultEntryRef
+  // before the index was ever touched: a failure partway through left some bodies carrying the
+  // NEW relativePathDigest/payloadBindingDigest while the still-uncommitted index (and therefore
+  // every OTHER entry's on-disk record) still named the OLD ones — checkedPayload's mirror check
+  // then permanently rejected those checkpoints on read, with no way to recover the overwritten
+  // plaintext.
+  function stageRekeyedPayloads(
+    state: WorkspaceState,
+    targets: readonly RekeyTarget[],
+  ): readonly StagedRekeyedEntry[] {
+    const staged: StagedRekeyedEntry[] = [];
+    try {
+      for (const target of targets) {
+        const built = rekeyedPayloadFor(
+          state,
+          target.entry,
+          target.nextRelativePath,
+          target.nextDigest,
+        );
+        try {
+          state.vault.set(built.payload.vaultEntryRef, JSON.stringify(built.payload));
+        } catch {
+          throw new EditorLocalHistoryError(
+            "VAULT_WRITE_FAILED",
+            "Local-history encrypted content could not be stored.",
+          );
+        }
+        staged.push({ entry: built.entry, vaultEntryRef: built.payload.vaultEntryRef });
+      }
+    } catch (error) {
+      rollbackStagedRekeys(state, staged);
+      throw error;
+    }
+    return staged;
+  }
+
+  function commitRekeyedPayloads(
+    state: WorkspaceState,
+    staged: readonly StagedRekeyedEntry[],
+  ): void {
+    const rewrittenByRef = new Map(
+      staged.map((item): readonly [string, EditorLocalHistoryEntry] => [
+        item.entry.entryRef,
+        item.entry,
+      ]),
+    );
+    const nextEntries = state.index.entries.map(
+      (candidate): EditorLocalHistoryEntry => rewrittenByRef.get(candidate.entryRef) ?? candidate,
+    );
+    try {
+      persist(state, indexWithEntries(state.index, nextEntries));
+    } catch (error) {
+      rollbackStagedRekeys(state, staged);
+      throw error;
+    }
+  }
+
+  function rollbackStagedRekeys(
+    state: WorkspaceState,
+    staged: readonly StagedRekeyedEntry[],
+  ): void {
+    for (const item of staged) {
+      try {
+        state.vault.delete(item.vaultEntryRef);
+      } catch {
+        // Best-effort rollback of a staged, unindexed body: the committed index never referenced
+        // it, so the next reconcileBodies pass (or retention pass) retries reclaiming it.
+      }
+    }
+  }
+
+  function rekeyedPayloadFor(
+    state: WorkspaceState,
+    entry: EditorLocalHistoryEntry,
+    nextRelativePath: string,
+    nextDigest: WorkspacePathDigest,
+  ): { readonly entry: EditorLocalHistoryEntry; readonly payload: HistoryPayload } {
+    const payload = checkedPayload(state.vault.get(entry.encryptedContent.vaultEntryRef), entry);
+    const nextVaultEntryRef = rekeyedVaultEntryRef(payload.vaultEntryRef, nextDigest);
+    const nextBase: HistoryPayloadBase = {
+      kind: payload.kind,
+      schemaVersion: payload.schemaVersion,
+      vaultEntryRef: nextVaultEntryRef,
+      entryRef: payload.entryRef,
+      workspaceId: payload.workspaceId,
+      rootRef: payload.rootRef,
+      rootIdentityDigest: payload.rootIdentityDigest,
+      relativePathDigest: nextDigest,
+      predecessor: payload.predecessor,
+      sequence: payload.sequence,
+      origin: payload.origin,
+      recordedAt: payload.recordedAt,
+      plaintextContentDigest: payload.plaintextContentDigest,
+      plaintextByteLength: payload.plaintextByteLength,
+    };
+    const nextBinding = payloadBinding(nextBase);
+    const nextPayload: HistoryPayload = {
+      ...nextBase,
+      payloadBindingDigest: nextBinding,
+      content: payload.content,
+    };
+    const nextEntry: EditorLocalHistoryEntry = {
+      ...entry,
+      relativePath: nextRelativePath,
+      relativePathDigest: nextDigest,
+      payloadBindingDigest: nextBinding,
+      encryptedContent: { ...entry.encryptedContent, vaultEntryRef: nextVaultEntryRef },
+    };
+    return { entry: nextEntry, payload: nextPayload };
+  }
 }

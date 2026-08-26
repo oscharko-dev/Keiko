@@ -24,6 +24,7 @@ import {
   type JiraLiveSearchRequest,
   type KnowledgeCapsuleId,
 } from "@oscharko-dev/keiko-contracts";
+import type { UiHandlerDeps } from "../deps.js";
 import type { AtlassianActionAuthorityContext } from "./actionPolicy.js";
 
 export const ATLASSIAN_ACTION_APPROVAL_TTL_MS = 600_000;
@@ -238,3 +239,17 @@ export class AtlassianActionApprovalRegistry {
 }
 
 export const atlassianActionApprovalRegistry = new AtlassianActionApprovalRegistry();
+
+// KEIKO-0565 remediation (PR #3289 review): every consumer must resolve the registry through this
+// function, never through the bare `atlassianActionApprovalRegistry` import above — reading the
+// module-level singleton directly is exactly the bug that let two independently composed
+// `UiHandlerDeps` graphs share one approval registry even though `buildUiHandlerDeps` already
+// constructs a fresh instance per graph. Falls back to the process-wide singleton only for a
+// `UiHandlerDeps`-shaped value that was not built through that real composition root (e.g. a
+// hand-rolled test double that omits the field) — a deliberate, narrow compat shim, not the
+// primary path.
+export function resolveAtlassianActionApprovalRegistry(
+  deps: Pick<UiHandlerDeps, "atlassianActionApprovalRegistry">,
+): AtlassianActionApprovalRegistry {
+  return deps.atlassianActionApprovalRegistry ?? atlassianActionApprovalRegistry;
+}

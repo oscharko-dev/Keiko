@@ -467,6 +467,56 @@ describe("write-action route — pending approvals (AC2)", () => {
     );
     expect(records.map((record) => record.outcome)).toEqual(["pending-review", "cancelled"]);
   });
+
+  // Round-3 review finding (PR #3289): registry.consume() atomically claims the pending entry
+  // BEFORE executeApprovedEntry runs, so once that claim succeeds the approval can never be
+  // retried -- it is gone from the registry either way. Before this fix, a credential that vanished
+  // (revoked/expired/deleted) between approval-creation and the approve click left NO terminal
+  // activity record at all: the pending-review record stood alone forever, and an operator
+  // reconstructing the trail from the activity log would see the action was pending review and
+  // then simply nothing -- never learning it was attempted and failed.
+  it("finalizes a failed/auth-failed activity record when the credential vanishes between approval and execute", async () => {
+    const counter: FetchCounter = { count: 0, requests: [] };
+    const availableGuard = guardWith(counter);
+    const authority = registerEnvelope("governed-assist", BOTH_WRITE_SCOPES);
+    const { body } = await postAction("create-issue", authority, "governed-assist", availableGuard);
+    const approval = body.approval as AtlassianConnectorPendingApproval;
+
+    // Simulates the credential being revoked/expired/deleted while the approval sat pending: the
+    // SAME guard shape, but getMetadata now reports nothing for any auth ref.
+    const vanishedGuard: AtlassianConnectorCredentialDeps = {
+      ...availableGuard,
+      custody: { ...availableGuard.custody, getMetadata: (): undefined => undefined },
+    };
+
+    const approved = (await handleApproveAtlassianConnectorActionApproval(
+      ctx({}, { approvalId: approval.approvalId }),
+      deps(vanishedGuard, "governed-assist"),
+    )) as { status: number; body: { error: { code: string } } };
+    expect(approved.status).toBe(404);
+    expect(approved.body.error.code).toBe("CREDENTIAL_NOT_FOUND");
+    expect(counter.count).toBe(0);
+
+    // The single-use claim stayed atomic -- a retry (even with the credential restored) finds
+    // nothing, exactly like the reject-then-approve and approve-then-approve cases above.
+    const replayed = (await handleApproveAtlassianConnectorActionApproval(
+      ctx({}, { approvalId: approval.approvalId }),
+      deps(availableGuard, "governed-assist"),
+    )) as { status: number };
+    expect(replayed.status).toBe(404);
+    expect(counter.count).toBe(0);
+
+    // The actual fix: the terminal outcome is finalized, not silently dropped, and carries the
+    // approval's own correlationId (not a fresh/unrelated one).
+    const records = atlassianSyncJobRegistry.listActivity(connectorIdForAuthRef(JIRA_AUTH_REF));
+    expect(records.map((record) => record.outcome)).toEqual(["pending-review", "failed"]);
+    const terminal = records[1];
+    if (terminal === undefined) throw new Error("expected a terminal activity record");
+    expect(validateAtlassianConnectorActivityRecord(terminal).ok).toBe(true);
+    expect(terminal.disposition).toBe("review-required");
+    expect(terminal.reasonCode).toBe("auth-failed");
+    expect(terminal.correlationId).toBe(approval.correlationId);
+  });
 });
 
 // KEIKO-0186: a human approving a governed Atlassian write could see only the action type and a
@@ -1209,6 +1259,25 @@ describe("write-action route — governed action correlation", () => {
     expect(result.body).toMatchObject({
       disposition: "denied",
       correlationId: "req-write-thread-01",
+    });
+  });
+
+  it("threads the request's correlation id into the list-approvals unavailable guard too (#2906 round 3)", async () => {
+    // Every sibling approval handler (get/approve/reject) already threads ctx.correlationId into
+    // requireConnectorDeps; the list endpoint was the one holdout that dropped it (and even took
+    // an unused `_ctx` parameter), so its 503 could not be joined to a support-bundle record.
+    const unavailableDeps = { atlassianConnectorCredentials: undefined } as UiHandlerDeps;
+    const result = (await handleListAtlassianConnectorActionApprovals(
+      { ...ctx({}, {}), correlationId: "req-list-approvals-01" },
+      unavailableDeps,
+    )) as { status: number; body: Record<string, unknown> };
+
+    expect(result.status).toBe(503);
+    expect(result.body).toMatchObject({
+      error: {
+        code: "ATLASSIAN_CONNECTORS_UNAVAILABLE",
+        correlationId: "req-list-approvals-01",
+      },
     });
   });
 });

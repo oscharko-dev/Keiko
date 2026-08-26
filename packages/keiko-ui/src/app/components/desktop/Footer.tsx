@@ -84,8 +84,8 @@ function FooterImpl({
     const onKeyDown = (event: KeyboardEvent): void => {
       if (event.key === "Escape") {
         // GEN-UI-FOCUS-011 — Escape closes the palette AND returns focus to the trigger button
-        // (mirrors TaskWorkspaceSwitcher's Escape→triggerRef.focus()), so a keyboard user is never
-        // stranded on a removed palette element after dismissal.
+        // (mirrors RepositoryFolderSwitcher's Escape→triggerRef.focus()), so a keyboard user is
+        // never stranded on a removed palette element after dismissal.
         onCloseWindowPalette();
         windowTriggerRef.current?.focus();
       }

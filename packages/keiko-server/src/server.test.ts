@@ -634,6 +634,41 @@ describe("unknown API routes", () => {
     expect(await response.json()).toMatchObject({ error: { code: "FORBIDDEN_CSRF" } });
   });
 
+  it("KEIKO-0885: CSRF-exempt POST route list is pinned to exactly one entry", async () => {
+    // Pin the CSRF-exempt state-changing route allowlist to a single entry so a future
+    // maintainer cannot silently add a second route without a compensating auth (see the
+    // comment on isCsrfExemptStateChange in server.ts naming authenticateGatewayRequest as the
+    // required per-request authenticator). Every other POST to state-changing routes must
+    // continue to fail closed at 403 FORBIDDEN_CSRF. Uses the beforeEach-bound server.
+
+    const exemptRoute = "/api/coding-sidecar/gateway/chat/completions";
+    // Second-place candidates that reviewers might reach for; each is a known state-changing
+    // POST route that MUST still require CSRF (proven by the pre-existing tests above).
+    const candidates: readonly string[] = ["/api/runs", "/api/editor/language"];
+
+    for (const path of candidates) {
+      const res = await fetch(`${baseUrl()}${path}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: "{}",
+      });
+      expect(res.status).toBe(403);
+      expect(await res.json()).toMatchObject({ error: { code: "FORBIDDEN_CSRF" } });
+    }
+    // The exempt route stays reachable without X-Keiko-CSRF; other checks (bad payload, auth
+    // failure) may still reject it later, but not with FORBIDDEN_CSRF.
+    const exempt = await fetch(`${baseUrl()}${exemptRoute}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: "{}",
+    });
+    expect(exempt.status).not.toBe(403);
+    if (exempt.status === 403) {
+      const body = (await exempt.json()) as { readonly error?: { readonly code?: string } };
+      expect(body.error?.code).not.toBe("FORBIDDEN_CSRF");
+    }
+  });
+
   it("allows POST /api/coding-sidecar/gateway/chat/completions without X-Keiko-CSRF when JSON is used", async () => {
     const store = createInMemoryUiStore();
     const handlerDeps: UiHandlerDeps = {

@@ -274,6 +274,7 @@ import {
 import { createSessionRegistry } from "./coding-app-session/sessionRegistry.js";
 import type { SessionPairingPort } from "./coding-app-session/sessionPairingPort.js";
 import { resolveLauncherSessionPairingPort } from "./coding-app-session/launcherSessionPairingPort.js";
+import { CodingAppSessionDenialWindows } from "./coding-app-session/denialWindows.js";
 import {
   createOpenCodeGatewayReadinessRegistry,
   type OpenCodeGatewayReadinessRegistry,
@@ -290,6 +291,11 @@ import {
 } from "./coding-runtime/autonomousDeliveryApprovalStore.js";
 import type { AtlassianConnectorCredentialDeps } from "./atlassian/credentialRoutes.js";
 import { buildAtlassianConnectorCredentialDeps } from "./atlassian/wiring.js";
+// KEIKO-0565: DI-scoped Atlassian connector registries. The classes are imported (not just their
+// types) so buildUiHandlerDeps can construct one instance per BFF process without depending on
+// the module-level singleton.
+import { AtlassianActionApprovalRegistry } from "./atlassian/actionApprovals.js";
+import { AtlassianSyncJobRegistry } from "./atlassian/syncService.js";
 import { createNodeManagedLspControl } from "./editor/lsp/managedLspControlFactory.js";
 import { shutdownHostLspPool } from "./editor/lsp/hostLanguageOperation.js";
 import type { ManagedLspControlService } from "./editor/lsp/managedLspControl.js";
@@ -522,6 +528,12 @@ export interface UiHandlerDeps {
    * present, in which case it fails closed to a content-free projection.
    */
   readonly codingAppSessionChannel?: CodingAppSessionChannel | undefined;
+  // KEIKO-0838 follow-up (#2906 round 3): graph-scoped pairing/rotate denial-window counters for
+  // the aggregate diagnostic in codingAppSessionRoutes.ts. One instance per composed deps graph
+  // (see assembleUiHandlerDeps), reset on disposal, so two independently composed `UiHandlerDeps`
+  // instances never share or cross-pollute denial counts. Every real consumer resolves through
+  // resolveCodingAppSessionDenialWindows -- never a bare module-level instance.
+  readonly codingAppSessionDenialWindows?: CodingAppSessionDenialWindows | undefined;
   /** Process-memory #2479 feed; never part of persistence or unauthenticated runtime SSE. */
   readonly codingSafeActivityProjection?: CodingSafeActivityProjection | undefined;
   /** Content-free control-plane capability; false/absent means no qualified runtime host. */
@@ -543,6 +555,17 @@ export interface UiHandlerDeps {
   // Server-owned approval proof store for Autonomous Delivery. The execute route consumes a proof
   // minted by the confirm route instead of trusting a client-supplied digest.
   readonly autonomousDeliveryApprovalStore?: AutonomousDeliveryApprovalStore | undefined;
+  // KEIKO-0565: DI-scoped Atlassian connector approval and sync registries. Optional so
+  // pre-existing fixture-heavy test wiring stays byte-for-byte compatible; production wiring in
+  // buildUiHandlerDeps constructs one instance per composed deps graph so two independently-built
+  // UiHandlerDeps instances no longer share the module-level singleton. Every real consumer
+  // (syncRoutes.ts, writeActionRoutes.ts, actionActivity.ts, syncService.ts) resolves through
+  // resolveAtlassianActionApprovalRegistry / resolveAtlassianSyncJobRegistry — never the bare
+  // module-level singleton — so it always reads THIS field's injected instance; the resolvers fall
+  // back to the process-wide singleton only when this field is left undefined (e.g. a test double
+  // built without buildUiHandlerDeps), which is the one case current behaviour is preserved for.
+  readonly atlassianActionApprovalRegistry?: AtlassianActionApprovalRegistry | undefined;
+  readonly atlassianSyncJobRegistry?: AtlassianSyncJobRegistry | undefined;
   // Server-owned deployment ceiling for Autonomous Delivery requests. Undefined fails closed to the
   // lowest authority posture instead of accepting the request-supplied ceiling.
   readonly autonomousDeliveryDeploymentCeiling?: CodingWorkbenchMode | undefined;
@@ -868,6 +891,11 @@ export interface BuildHandlerDepsOptions {
   // execution fail closed to governed-assist.
   readonly autonomousDeliveryDeploymentCeiling?: CodingWorkbenchMode | undefined;
   readonly autonomousDeliveryStopState?: UiHandlerDeps["autonomousDeliveryStopState"] | undefined;
+  // KEIKO-0565: injectable Atlassian action-approval and sync-job registries. Production wiring
+  // constructs one instance per BFF process; test wiring can inject fresh instances to keep test
+  // isolation clean instead of resetting a module-level singleton.
+  readonly atlassianActionApprovalRegistry?: AtlassianActionApprovalRegistry | undefined;
+  readonly atlassianSyncJobRegistry?: AtlassianSyncJobRegistry | undefined;
   // UI-local SQLite DB path (`keiko ui --ui-db`); resolved via UI-store precedence (explicit →
   // KEIKO_UI_DATA_DIR → homedir/.keiko/keiko-ui.db). Mirrors evidenceDir's shape.
   readonly uiDbPath?: string | undefined;
@@ -1617,11 +1645,14 @@ function buildUpdateSession(options: {
   readonly updateLocalState: UpdateLocalStateManager;
   readonly updateRemediation: UpdateRemediationManager;
   readonly runtimeConfig: RuntimeGatewayConfig;
+  readonly diagnostics: ServerDiagnosticSink | undefined;
 }): UpdateSessionManager {
   if (options.injected !== undefined) return options.injected;
   return createUpdateSessionManager({
     processEnv: options.env,
-    lock: createStateDirUpdateSessionLock(resolveUpdateStateDir(options.env)),
+    lock: createStateDirUpdateSessionLock(resolveUpdateStateDir(options.env), {
+      diagnostics: options.diagnostics,
+    }),
     portableStager: createPortableUpdateStager({
       env: options.env,
       localState: options.updateLocalState,
@@ -2777,6 +2808,7 @@ function buildPeripherals(args: BuildPeripheralsArgs): PeripheralManagers {
       updateLocalState,
       updateRemediation,
       runtimeConfig: args.runtimeConfig,
+      diagnostics: args.options.diagnostics,
     }),
     updatePreflight: args.options.updatePreflight,
     updateLocalState,
@@ -3198,6 +3230,27 @@ function autonomousDeliveryFields(
   };
 }
 
+// KEIKO-0565: DI-scoped Atlassian action-approval and sync-job registries. buildUiHandlerDeps
+// constructs one instance of each per composed deps graph, and every real consumer —
+// syncRoutes.ts, writeActionRoutes.ts, actionActivity.ts, syncService.ts — resolves its registry
+// through resolveAtlassianActionApprovalRegistry / resolveAtlassianSyncJobRegistry (never the bare
+// `atlassianActionApprovalRegistry` / `atlassianSyncJobRegistry` module singletons in
+// actionApprovals.ts / syncService.ts) so two independently composed `UiHandlerDeps` graphs never
+// share approvals, sync jobs, or activity records (PR #3289 review; see deps.test.ts's isolation
+// coverage). The resolvers fall back to the module singleton only for a `UiHandlerDeps`-shaped
+// value that skips this factory (e.g. a hand-rolled test double).
+function atlassianConnectorRegistryFields(
+  options: BuildHandlerDepsOptions,
+): Pick<UiHandlerDeps, "atlassianActionApprovalRegistry" | "atlassianSyncJobRegistry"> {
+  const approvalRegistry =
+    options.atlassianActionApprovalRegistry ?? new AtlassianActionApprovalRegistry();
+  const syncRegistry = options.atlassianSyncJobRegistry ?? new AtlassianSyncJobRegistry();
+  return {
+    atlassianActionApprovalRegistry: approvalRegistry,
+    atlassianSyncJobRegistry: syncRegistry,
+  };
+}
+
 // Issue #2241 — lazy Atlassian custody wiring: no vault key, keychain entry, or metadata file is
 // created until the first /api/atlassian-connectors/* custody operation. Egress is resolved per
 // outbound request from the live runtime config (first-run onboarding updates are honored).
@@ -3499,12 +3552,28 @@ interface UiHandlerRuntimeServices {
 function assembleUiHandlerDeps(args: UiHandlerDepsAssemblyArgs): UiHandlerDeps {
   const dapRuntime = createDapRuntimeReference(args.options);
   const services = assembleUiHandlerRuntimeServices(args, dapRuntime);
+  // #2906 round 2: constructed here (once per composed deps graph) rather than inline inside
+  // buildIntegrationUiHandlerDeps, so createUiHandlerDispose can capture and reset the SAME
+  // instances this graph's deps object exposes -- see its own comment for why disposal must reach
+  // these registries, not just construct them fresh per graph.
+  const atlassianRegistries = atlassianConnectorRegistryFields(args.options);
+  // #2906 round 3: constructed once per composed deps graph (mirrors atlassianRegistries above)
+  // so createUiHandlerDispose can reset the SAME instance this graph's deps object exposes --
+  // see denialWindows.ts for why this must not be a module singleton.
+  const codingAppSessionDenialWindows = new CodingAppSessionDenialWindows();
   return {
     ...buildBaseUiHandlerDeps(args),
     ...buildRuntimeUiHandlerDeps(args, services),
     ...buildIntegrationUiHandlerDeps(args),
     ...buildOptionalUiHandlerDeps(args, services),
-    dispose: createUiHandlerDispose(args, services),
+    ...atlassianRegistries,
+    codingAppSessionDenialWindows,
+    dispose: createUiHandlerDispose(
+      args,
+      services,
+      atlassianRegistries,
+      codingAppSessionDenialWindows,
+    ),
   };
 }
 
@@ -3790,6 +3859,8 @@ function buildCodingContextPortsDependency(
 function createUiHandlerDispose(
   args: UiHandlerDepsAssemblyArgs,
   services: UiHandlerRuntimeServices,
+  atlassianRegistries: ReturnType<typeof atlassianConnectorRegistryFields>,
+  codingAppSessionDenialWindows: CodingAppSessionDenialWindows,
 ): UiHandlerDeps["dispose"] {
   return async (): Promise<void> => {
     try {
@@ -3802,6 +3873,19 @@ function createUiHandlerDispose(
       services.peripherals.disposeTrustLspBridge();
       services.peripherals.debugActivationControl.dispose();
       services.peripherals.workspaceWatchService.disposeAll();
+      // #2906 round 2: these graph-owned registries (atlassianConnectorRegistryFields, one
+      // instance per composed deps graph) were never disposed with the graph. A sync job started
+      // via startAtlassianSyncJob continues in a detached setImmediate closure that captures THIS
+      // graph's deps/registry and keeps mutating it after disposal, while a newly composed graph's
+      // OWN fresh registry has no record of that still-running job and could admit a duplicate for
+      // the same capsule (hasActiveRunForCapsule sees an empty registry). reset() aborts every
+      // active job's controller and drops pending approvals/activity before the bundle itself goes
+      // away, so nothing on this graph outlives it as observable state on the NEXT graph.
+      atlassianRegistries.atlassianActionApprovalRegistry?.reset();
+      atlassianRegistries.atlassianSyncJobRegistry?.reset();
+      // #2906 round 3: same rationale as the Atlassian registries above -- drop this graph's
+      // denial-window counters so nothing outlives it as observable state on the next graph.
+      codingAppSessionDenialWindows.reset();
       args.bundle.dispose?.();
     }
   };

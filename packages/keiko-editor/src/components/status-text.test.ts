@@ -134,4 +134,71 @@ describe("deriveStatusViewModel", () => {
         " File is truncated (read-only): it exceeds the display limit.",
     );
   });
+
+  // KEIKO-0721: `Date.prototype.toISOString()` throws `RangeError: Invalid time value` for NaN,
+  // +/-Infinity, or any value that produces an out-of-range Date. The undefined-only guard the
+  // function shipped with therefore let a non-finite `modifiedAt` throw out of the render path.
+  it("returns the absent-timestamp fallback for a non-finite modifiedAt (KEIKO-0721)", () => {
+    for (const modifiedAt of [Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY]) {
+      const vm = deriveStatusViewModel({
+        loadState: ready,
+        saveStatus: "saved",
+        dirty: false,
+        truncated: false,
+        overLimit: false,
+        modifiedAt,
+      });
+      expect(vm.role).toBe("status");
+      expect(vm.message).toBe("Saved");
+    }
+  });
+
+  // PR #3289 review (comment 3865167748): `Number.isFinite` alone is not enough -- ECMAScript
+  // Date only represents +/-8_640_000_000_000_000 ms from the epoch. A finite value one past that
+  // limit (or any other finite-but-out-of-range value, e.g. Number.MAX_VALUE) still makes
+  // `new Date(value).toISOString()` throw `RangeError: Invalid time value`, so the finiteness-only
+  // guard let this exact class of value crash the render path.
+  it("returns the absent-timestamp fallback for a finite but out-of-ECMA-range modifiedAt", () => {
+    for (const modifiedAt of [
+      8_640_000_000_000_001,
+      -8_640_000_000_000_001,
+      Number.MAX_VALUE,
+      -Number.MAX_VALUE,
+    ]) {
+      expect(() =>
+        deriveStatusViewModel({
+          loadState: ready,
+          saveStatus: "saved",
+          dirty: false,
+          truncated: false,
+          overLimit: false,
+          modifiedAt,
+        }),
+      ).not.toThrow();
+      const vm = deriveStatusViewModel({
+        loadState: ready,
+        saveStatus: "saved",
+        dirty: false,
+        truncated: false,
+        overLimit: false,
+        modifiedAt,
+      });
+      expect(vm.role).toBe("status");
+      expect(vm.message).toBe("Saved");
+    }
+  });
+
+  // The boundary itself is a VALID Date and must keep formatting normally -- only values strictly
+  // beyond the ECMA range fall back.
+  it("formats a modifiedAt exactly at the ECMA Date range boundary", () => {
+    const vm = deriveStatusViewModel({
+      loadState: ready,
+      saveStatus: "saved",
+      dirty: false,
+      truncated: false,
+      overLimit: false,
+      modifiedAt: 8_640_000_000_000_000,
+    });
+    expect(vm.message).toBe(`Saved at ${new Date(8_640_000_000_000_000).toISOString()}`);
+  });
 });

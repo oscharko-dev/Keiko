@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import type { GitEditorDiffHunk } from "@oscharko-dev/keiko-contracts";
 
-import { LARGE_FILE_DEGRADED_BYTES } from "./large-file-mode.js";
+import { LARGE_FILE_DEGRADED_BYTES, deriveLargeFileMode } from "./large-file-mode.js";
 import {
   registerEditorGitGutter,
   type EditorGitGutterChanges,
@@ -130,10 +130,12 @@ async function flush(): Promise<void> {
 describe("registerEditorGitGutter", () => {
   it("keeps staged and unstaged ids separate with shape and accessible metadata", async () => {
     const fixture = editorFixture();
-    const resolve = vi.fn<() => Promise<EditorGitGutterChanges>>().mockResolvedValue({
-      staged: [hunk("add", 2)],
-      unstaged: [hunk("del", 4)],
-    });
+    const resolve = vi
+      .fn<(signal: AbortSignal) => Promise<EditorGitGutterChanges>>()
+      .mockResolvedValue({
+        staged: [hunk("add", 2)],
+        unstaged: [hunk("del", 4)],
+      });
     registerEditorGitGutter({
       editor: fixture.editor,
       resolve,
@@ -246,7 +248,11 @@ describe("registerEditorGitGutter", () => {
   it("does zero work in degraded mode at the large-file boundary", async () => {
     const fixture = editorFixture();
     const resolve = vi.fn().mockResolvedValue({ staged: [], unstaged: [] });
-    const degraded = LARGE_FILE_DEGRADED_BYTES + 1 > LARGE_FILE_DEGRADED_BYTES;
+    // KEIKO-0815: derive `degraded` from the production threshold function rather than the
+    // tautology `LARGE_FILE_DEGRADED_BYTES + 1 > LARGE_FILE_DEGRADED_BYTES`, so the test actually
+    // exercises the large-file boundary its title claims.
+    const degraded =
+      deriveLargeFileMode({ sizeBytes: LARGE_FILE_DEGRADED_BYTES + 1, text: "" }) === "degraded";
     const bridge = registerEditorGitGutter({
       editor: fixture.editor,
       resolve,
@@ -312,6 +318,70 @@ describe("registerEditorGitGutter", () => {
     expect(onError).toHaveBeenNthCalledWith(1, "diff unavailable");
     expect(onError).toHaveBeenNthCalledWith(2, "Git gutter refresh failed");
     expect(onError).toHaveBeenCalledTimes(2);
+  });
+
+  // KEIKO-0897: EditorGitGutterResolver now carries an AbortSignal so the underlying host call
+  // can stop early rather than merely having its result ignored on arrival. A fresh refresh()
+  // aborts the previous in-flight signal, and dispose() aborts the active one.
+  it("aborts an in-flight resolve on the next refresh and on dispose (KEIKO-0897)", async () => {
+    const fixture = editorFixture();
+    const signals: AbortSignal[] = [];
+    let block: () => void = () => undefined;
+    const gate = new Promise<EditorGitGutterChanges>((resolve) => {
+      block = (): void => {
+        resolve({ staged: [], unstaged: [] });
+      };
+    });
+    const resolve = vi.fn<(signal: AbortSignal) => Promise<EditorGitGutterChanges>>((signal) => {
+      signals.push(signal);
+      return gate;
+    });
+    const bridge = registerEditorGitGutter({
+      editor: fixture.editor,
+      resolve,
+      labels: LABELS,
+      glyphMarginTargetType: 7,
+      degraded: false,
+      onPeek: vi.fn(),
+    });
+    // The mount refresh armed the first controller and its signal is still live.
+    expect(signals[0]?.aborted).toBe(false);
+    // A fresh refresh must abort the previous signal and hand the resolver a fresh one.
+    bridge.refresh();
+    expect(signals[0]?.aborted).toBe(true);
+    expect(signals[1]?.aborted).toBe(false);
+    // dispose() must abort the active signal so the host resolver can stop early.
+    bridge.dispose();
+    expect(signals[1]?.aborted).toBe(true);
+    block();
+    await flush();
+  });
+
+  it("does not surface an AbortError as onError (KEIKO-0897)", async () => {
+    const fixture = editorFixture();
+    const onError = vi.fn();
+    const resolve = vi.fn<(signal: AbortSignal) => Promise<EditorGitGutterChanges>>(
+      (signal) =>
+        new Promise((_resolveInner, rejectInner) => {
+          signal.addEventListener("abort", () => {
+            const abortError = new Error("aborted");
+            abortError.name = "AbortError";
+            rejectInner(abortError);
+          });
+        }),
+    );
+    const bridge = registerEditorGitGutter({
+      editor: fixture.editor,
+      resolve,
+      labels: LABELS,
+      glyphMarginTargetType: 7,
+      degraded: false,
+      onPeek: vi.fn(),
+      onError,
+    });
+    bridge.dispose();
+    await flush();
+    expect(onError).not.toHaveBeenCalled();
   });
 
   it("supports editors without an optional palette action", async () => {

@@ -107,7 +107,6 @@ function markerTopPercent(marker: DiagnosticOverviewMarker, lineCount: number): 
 function EditorDiagnosticMarkerButton(props: {
   readonly marker: DiagnosticOverviewMarker;
   readonly lineCount: number;
-  readonly index: number;
   readonly onActivate: (marker: DiagnosticOverviewMarker) => void;
 }): ReactElement {
   const marker = props.marker;
@@ -117,9 +116,6 @@ function EditorDiagnosticMarkerButton(props: {
   return (
     <button
       type="button"
-      key={`${String(props.index)}:${String(marker.severity)}:${String(marker.startLineNumber)}:${
-        marker.message
-      }`}
       className="keiko-editor-diagnostic-marker"
       aria-label={`${severityLabel} diagnostic on ${meta}: ${marker.message}`}
       data-severity={markerDataSeverity(marker.severity)}
@@ -177,7 +173,6 @@ function EditorDiagnosticOverview(props: {
           }`}
           marker={marker}
           lineCount={props.lineCount}
-          index={index}
           onActivate={props.onActivate}
         />
       ))}

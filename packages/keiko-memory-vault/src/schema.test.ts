@@ -1,7 +1,13 @@
 import { describe, expect, it } from "vitest";
 import { DatabaseSync } from "node:sqlite";
-import { MEMORY_VAULT_SCHEMA_VERSION, runMigrations } from "./schema.js";
+import {
+  MEMORY_VAULT_SCHEMA_VERSION,
+  MIGRATIONS,
+  flushPlaintextResidueWithRetry,
+  runMigrations,
+} from "./schema.js";
 import { TEST_CIPHER } from "./_support.js";
+import type { MemoryVaultLogEvent, MemoryVaultLogSink } from "./vault-log.js";
 
 function openMemDb(): DatabaseSync {
   const db = new DatabaseSync(":memory:");
@@ -13,6 +19,22 @@ function userVersion(db: DatabaseSync): number {
   const row = db.prepare("PRAGMA user_version").get() as { user_version?: number };
   return row.user_version ?? 0;
 }
+
+// KEIKO-0573: runMigrations filters and applies pending migrations in declaration order (no
+// .sort()), so the array's order-of-declaration is trusted to equal ascending version order.
+// This test pins the invariant so a future migration added out of position fails here before it
+// can reach a real on-disk database.
+describe("MEMORY_VAULT MIGRATIONS ordering (KEIKO-0573)", () => {
+  it("starts at version 1 and is strictly increasing", () => {
+    expect(MIGRATIONS.length).toBeGreaterThan(0);
+    expect(MIGRATIONS[0]?.version).toBe(1);
+    let previous = 0;
+    for (const m of MIGRATIONS) {
+      expect(m.version).toBeGreaterThan(previous);
+      previous = m.version;
+    }
+  });
+});
 
 describe("runMigrations", () => {
   it("brings a fresh DB to the current schema version", () => {
@@ -184,5 +206,148 @@ describe("STRICT-table type enforcement", () => {
         ),
     ).toThrow();
     db.close();
+  });
+});
+
+// ─── Post-migration WAL checkpoint hardening (#2906 KEIKO-0713, KEIKO-0877) ─────
+// The v1→v2 encryption upgrade path calls `PRAGMA wal_checkpoint(TRUNCATE)` outside the
+// migration transaction to reclaim pages that held plaintext. A transient checkpoint
+// failure (a busy contending reader, or the checkpoint statement itself throwing) must
+// not turn a successful encryption upgrade into a spurious vault-open error, but it
+// also must not be swallowed silently.
+//
+// The helper is exercised directly with a fake DatabaseSync that only implements the one
+// call the flush issues (`db.prepare("PRAGMA wal_checkpoint(TRUNCATE)").get()`), so the
+// retry + report behavior is tested against exactly the shape SQLite would return without
+// reconstructing an end-to-end v1→v-current migration timeline.
+describe("flushPlaintextResidueWithRetry", () => {
+  type CheckpointOutcome =
+    | Partial<{ busy: number; log: number; checkpointed: number }>
+    | { readonly kind: "throw"; readonly cause: Error };
+
+  interface FakeDb {
+    readonly db: DatabaseSync;
+    readonly calls: { count: number };
+  }
+
+  function fakeDbFor(nextOutcome: () => CheckpointOutcome): FakeDb {
+    const calls = { count: 0 };
+    const fake: unknown = {
+      prepare(sql: string): unknown {
+        if (sql !== "PRAGMA wal_checkpoint(TRUNCATE)") {
+          throw new Error(`unexpected prepare: ${sql}`);
+        }
+        return {
+          get(): unknown {
+            calls.count += 1;
+            const outcome = nextOutcome();
+            if ((outcome as { kind?: string }).kind === "throw") {
+              throw (outcome as { cause: Error }).cause;
+            }
+            return outcome;
+          },
+        };
+      },
+    };
+    return { db: fake as DatabaseSync, calls };
+  }
+
+  function collectingSink(): {
+    readonly sink: MemoryVaultLogSink;
+    readonly events: MemoryVaultLogEvent[];
+  } {
+    const events: MemoryVaultLogEvent[] = [];
+    return {
+      sink: {
+        write(event: MemoryVaultLogEvent): void {
+          events.push(event);
+        },
+      },
+      events,
+    };
+  }
+
+  it("returns immediately when the checkpoint reports busy=0 on the first attempt", () => {
+    const fake = fakeDbFor(() => ({ busy: 0, log: 0, checkpointed: 0 }));
+    const { sink, events } = collectingSink();
+    expect(() => {
+      flushPlaintextResidueWithRetry(fake.db, sink);
+    }).not.toThrow();
+    expect(fake.calls.count).toBe(1);
+    expect(events.find((e) => e.op === "store.encryption-checkpoint-degraded")).toBeUndefined();
+  });
+
+  it("does not propagate a checkpoint-statement exception out of the flush", () => {
+    const fake = fakeDbFor(() => ({
+      kind: "throw",
+      cause: new Error("simulated wal_checkpoint hiccup"),
+    }));
+    const { sink, events } = collectingSink();
+    expect(() => {
+      flushPlaintextResidueWithRetry(fake.db, sink);
+    }).not.toThrow();
+    const degraded = events.find((e) => e.op === "store.encryption-checkpoint-degraded");
+    expect(degraded).toBeDefined();
+    expect(degraded?.extra?.attempts).toBe(3);
+    expect(degraded?.extra?.busy).toBe(true);
+    expect(fake.calls.count).toBe(3);
+  });
+
+  it("retries on busy=1 and reports a degraded checkpoint once retries are exhausted", () => {
+    const fake = fakeDbFor(() => ({ busy: 1, log: 42, checkpointed: 0 }));
+    const { sink, events } = collectingSink();
+    flushPlaintextResidueWithRetry(fake.db, sink);
+    expect(fake.calls.count).toBe(3);
+    const degraded = events.find((e) => e.op === "store.encryption-checkpoint-degraded");
+    expect(degraded).toBeDefined();
+    expect(degraded?.extra?.attempts).toBe(3);
+    expect(degraded?.extra?.busy).toBe(true);
+  });
+
+  it("stops retrying after the first non-busy success (busy=1 then busy=0)", () => {
+    const outcomes: CheckpointOutcome[] = [
+      { busy: 1, log: 42, checkpointed: 0 },
+      { busy: 0, log: 42, checkpointed: 42 },
+      { busy: 0, log: 0, checkpointed: 0 },
+    ];
+    let index = 0;
+    const fake = fakeDbFor(() => outcomes[index++] ?? { busy: 0, log: 0, checkpointed: 0 });
+    const { sink, events } = collectingSink();
+    flushPlaintextResidueWithRetry(fake.db, sink);
+    expect(fake.calls.count).toBe(2);
+    expect(events.find((e) => e.op === "store.encryption-checkpoint-degraded")).toBeUndefined();
+  });
+
+  // #2906 KEIKO-0877 follow-up: SQLite can report busy=0 for a PARTIAL checkpoint -- fewer frames
+  // checkpointed than the WAL currently holds. Treating busy===0 alone as "done" (the pre-fix
+  // behavior) would return immediately here and never reclaim the remaining plaintext-holding WAL
+  // frames. This must retry exactly like a busy=1 result and, once the retry budget is exhausted,
+  // report the same degraded diagnostic.
+  it("retries a partial checkpoint (busy=0 but checkpointed < log) and reports it degraded", () => {
+    const fake = fakeDbFor(() => ({ busy: 0, log: 42, checkpointed: 10 }));
+    const { sink, events } = collectingSink();
+    flushPlaintextResidueWithRetry(fake.db, sink);
+    expect(fake.calls.count).toBe(3);
+    const degraded = events.find((e) => e.op === "store.encryption-checkpoint-degraded");
+    expect(degraded).toBeDefined();
+    expect(degraded?.extra?.attempts).toBe(3);
+    // busy===0 on every attempt, so the degraded report's own "busy" summary must reflect that
+    // (not misreport a partial checkpoint as a busy-contention one).
+    expect(degraded?.extra?.busy).toBe(false);
+  });
+
+  // A malformed/short PRAGMA result row (missing or non-integer columns) must fail closed into
+  // the retry/report path instead of being parsed as a trivially-satisfied busy=0/log=0/
+  // checkpointed=0 result -- the pre-fix `typeof row?.busy === "number" ? row.busy : 0` fallback
+  // would have silently treated this as a complete checkpoint on the very first attempt.
+  it("treats a malformed checkpoint row as degraded rather than a trivially-satisfied success", () => {
+    const fake = fakeDbFor(() => ({}));
+    const { sink, events } = collectingSink();
+    flushPlaintextResidueWithRetry(fake.db, sink);
+    expect(fake.calls.count).toBe(3);
+    const degraded = events.find((e) => e.op === "store.encryption-checkpoint-degraded");
+    expect(degraded).toBeDefined();
+    expect(degraded?.extra?.attempts).toBe(3);
+    expect(degraded?.extra?.busy).toBe(true);
   });
 });

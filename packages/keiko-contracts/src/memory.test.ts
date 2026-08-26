@@ -24,6 +24,7 @@ import type {
   MemoryStatus,
   ProjectId,
   UserId,
+  WorkflowDefinitionId,
   WorkspaceId,
 } from "./memory-contracts.js";
 import type { MemoryAuditRecordId } from "./memory-contracts.js";
@@ -53,6 +54,7 @@ import {
   isScopeReachable,
   MEMORY_RETRIEVAL_MAX_BODY_CHARS,
   MEMORY_RETRIEVAL_MAX_RESULTS,
+  scopeCoordinateKey,
   validateMemoryRetrievalRequest,
 } from "./memory-retrieval-validation.js";
 import { validateMemoryAuditRecord } from "./memory-audit-validation.js";
@@ -847,6 +849,31 @@ describe("isScopeReachable", () => {
 
   it("returns false when authorized set is empty", () => {
     expect(isScopeReachable({ kind: "user", userId: user("u-1") }, [])).toBe(false);
+  });
+});
+
+// ─── scopeCoordinateKey (#2906 KEIKO-0546) ───────────────────────────────────
+// Pins the exact string encoding for every MemoryScopeKind so the shared partition-key
+// projection cannot silently diverge between callers (governance conflict/forget scans and
+// consolidation dedupe/ordering all read this one function).
+describe("scopeCoordinateKey", () => {
+  it("uses the shared 'kind:coordinate' encoding for every scope kind", () => {
+    expect(scopeCoordinateKey({ kind: "global" })).toBe("global:");
+    expect(scopeCoordinateKey({ kind: "user", userId: user("u-1") })).toBe("user:u-1");
+    expect(scopeCoordinateKey({ kind: "workspace", workspaceId: ws("w-1") })).toBe("workspace:w-1");
+    expect(scopeCoordinateKey({ kind: "project", projectId: proj("p-1") })).toBe("project:p-1");
+    expect(
+      scopeCoordinateKey({
+        kind: "workflow",
+        workflowDefinitionId: "wf-1" as WorkflowDefinitionId,
+      }),
+    ).toBe("workflow:wf-1");
+  });
+
+  it("yields distinct kind prefixes so two coordinates cannot collide across kinds", () => {
+    const userKey = scopeCoordinateKey({ kind: "user", userId: user("shared") });
+    const wsKey = scopeCoordinateKey({ kind: "workspace", workspaceId: ws("shared") });
+    expect(userKey).not.toBe(wsKey);
   });
 });
 

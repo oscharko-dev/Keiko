@@ -185,7 +185,7 @@ describe("memory governance API helpers", () => {
       );
     vi.stubGlobal("fetch", fetchMock);
 
-    await deleteMemory("mem 1" as MemoryId, "stale");
+    await deleteMemory("mem 1" as MemoryId);
 
     expect(fetchMock).toHaveBeenCalledWith(
       "/api/memory/mem%201",
@@ -199,6 +199,31 @@ describe("memory governance API helpers", () => {
         }),
       }),
     );
+  });
+
+  // KEIKO-0563: forgetMemory/deleteMemory's dead `_reason` parameter was removed — the server's
+  // parseDestructiveInput never read any client-supplied reason and unconditionally returned
+  // MEMORY_FORGET_REASON_USER_REQUEST, so the parameter was vestigial at every hop. This is a
+  // type-level-only regression pin, deliberately `it.skip`ped: JS has no runtime parameter-type
+  // enforcement, so actually calling this at runtime would pass the literal string "stale" as
+  // `fetchImpl` and throw "fetchImpl is not a function". `tsc` still fully type-checks a skipped
+  // test body, so `npm run typecheck` (not `vitest run`) is this pin's real, load-bearing
+  // assertion: it fails with "unused '@ts-expect-error' directive" if the parameter is ever
+  // re-added.
+  it.skip("no longer accepts a second positional reason argument (type-level only)", async () => {
+    // `Function.length` returns the count of REQUIRED (non-optional, pre-first-default)
+    // parameters, so for `deleteMemory(id, fetchImpl?)` it is exactly 1. If the audited
+    // `reason` parameter is ever reintroduced as a required argument, `.length` becomes 2 and
+    // this assertion fails at runtime. The @ts-expect-error / bare-string call below is the
+    // load-bearing typecheck-time guard: passing `"mem 1"` (bare string, not `as MemoryId`)
+    // deliberately fails to compile against MemoryId's branded shape — proving TS still catches
+    // an invalid first-arg reason-string re-introduction. Vitest skips the body; both invariants
+    // run only at `npm run typecheck`. Sonar S1116 (no superfluous arg) and S2789 (assertion
+    // does something meaningful) both satisfied.
+    // @ts-expect-error — MemoryId is a branded type; a bare string is not assignable, so a
+    // callable that ever accepts `(reason: string)` for the first parameter still fails here.
+    await deleteMemory("mem 1");
+    expect(deleteMemory).toHaveProperty("length", 1);
   });
 
   it("posts conflict-resolution requests to the literal conflict route", async () => {

@@ -818,6 +818,21 @@ export interface SafeCircuitBreakerConfig {
   readonly halfOpenProbes: number;
 }
 
+// #2906 round 3 (KEIKO-0572 follow-up): the single source of VALUES for the gateway's default
+// circuit breaker, not just its shape. keiko-model-gateway/src/config.ts's own
+// DEFAULT_CIRCUIT_BREAKER_CONFIG derives its three exported numbers from this constant, and
+// keiko-ui's gatewayConfigParsing.ts (which cannot import keiko-model-gateway directly -- ADR-0019
+// reserves it for provider-SDK isolation) imports this SAME constant for its REBUILT_CIRCUIT_BREAKER
+// literal instead of hand-copying the numbers. Previously each package independently restated
+// `{ failureThreshold: 5, cooldownMs: 30_000, halfOpenProbes: 2 }`, typed against
+// SafeCircuitBreakerConfig so the SHAPE stayed compiler-checked while the VALUES could silently
+// drift apart with no error anywhere.
+export const DEFAULT_SAFE_CIRCUIT_BREAKER_CONFIG: SafeCircuitBreakerConfig = Object.freeze({
+  failureThreshold: 5,
+  cooldownMs: 30_000,
+  halfOpenProbes: 2,
+});
+
 /** Wire mirror of the gateway's credential-free reranker projection (model-gateway config.ts). */
 export interface SafeRerankerConfig {
   readonly modelId: string;
@@ -1500,15 +1515,83 @@ export interface TerminalEventEnvelope {
 
 export type FilesEntryKind = "directory" | "file" | "symlink";
 
-export interface FilesTreeEntry {
-  readonly name: string;
-  readonly path: string;
-  readonly kind: FilesEntryKind;
-  readonly sizeBytes: number;
-  readonly modifiedAt: number;
-  readonly extension: string | null;
-  readonly symlink: boolean;
-  readonly readable: boolean;
+// What a symlink entry's target resolved to, carried ONLY on a "symlink" entry (#2906 review,
+// comment 3863185718). "unknown" covers a target the walk could not resolve at all (broken link,
+// permission error) or one that is neither a regular file nor a directory (socket, FIFO, device).
+export type FilesSymlinkTargetKind = "directory" | "file" | "unknown";
+
+// A discriminated union, not one shape with independently-optional fields (KEIKO-0633 follow-up,
+// #2906 review): every impossible sizeBytes/modifiedAt combination used to be permitted by the
+// type even though only one was ever produced at runtime. A real directory is returned from a
+// readdir walk and is deliberately never stat'd per entry (one syscall per directory would
+// dominate the walk cost), so it is metadata-free BY CONSTRUCTION; a file or symlink entry is
+// always lstat'd and always carries real values.
+//
+// Three FULL variants, not two (PR #3289 review, comment 3865167775, finishing what the previous
+// round started): the earlier two-variant shape still let `kind` and `symlink` disagree —
+// `{kind: "directory", symlink: true}`, `{kind: "symlink", symlink: false}` both type-checked —
+// and let a "file" entry carry `symlinkTargetKind`, which belongs only to a symlink. `kind` alone
+// is now the ENTIRE discriminant: there is no separate `symlink: boolean` field to contradict it,
+// and `symlinkTargetKind` exists ONLY on the "symlink" variant. A symlink whose target is a
+// directory is `kind: "symlink"`, never `kind: "directory"` — unlike a real directory it DOES
+// carry real lstat metadata (of the symlink itself), so collapsing it into "directory" silently
+// violated the metadata-free invariant above. Symmetrically, a symlink whose target is a FILE
+// stays `kind: "symlink"` too, never collapsed into "file" — the runtime used to do exactly that
+// for both cases, contradicting this type. `symlinkTargetKind` carries what the walk resolved the
+// target to, for a consumer (e.g. a tree-view icon) that wants to render a symlinked directory
+// differently from a symlinked file.
+export type FilesTreeEntry =
+  | {
+      readonly kind: "directory";
+      readonly name: string;
+      readonly path: string;
+      readonly sizeBytes?: undefined;
+      readonly modifiedAt?: undefined;
+      readonly extension: string | null;
+      readonly readable: boolean;
+    }
+  | {
+      readonly kind: "file";
+      readonly name: string;
+      readonly path: string;
+      readonly sizeBytes: number;
+      readonly modifiedAt: number;
+      readonly extension: string | null;
+      readonly readable: boolean;
+    }
+  | {
+      readonly kind: "symlink";
+      readonly name: string;
+      readonly path: string;
+      readonly sizeBytes: number;
+      readonly modifiedAt: number;
+      readonly extension: string | null;
+      readonly readable: boolean;
+      readonly symlinkTargetKind: FilesSymlinkTargetKind;
+    };
+
+/**
+ * Compile-time exhaustiveness pin for {@link FilesTreeEntry}'s discriminant (PR #3289 review,
+ * comment 3865167775): a `switch (entry.kind)` that calls this in its `default` case fails to
+ * compile the moment a new variant is added to the union without also being handled at that call
+ * site, instead of silently falling through. Never called at runtime.
+ */
+export function assertNeverFilesTreeEntryKind(entry: never): never {
+  throw new TypeError(`Unhandled FilesTreeEntry.kind: ${JSON.stringify(entry)}`);
+}
+
+// Whether a tree entry should be treated as a navigable/expandable directory: a real directory, or
+// a symlink the walk resolved to one (`kind: "symlink"` + `symlinkTargetKind: "directory"`).
+// #2906 review (comment 3865167721): FilesWidget used to gate expansion, navigation, context
+// menus, and drag/drop on `kind === "directory"` alone, so once a symlink-to-directory stopped
+// being reported as `kind: "directory"` (the discriminated-union fix above), it silently stopped
+// being navigable in the UI even though the server can still list through it. Both the server and
+// the UI consumer import this ONE predicate so "expandable" can never drift between what the walk
+// allows and what the tree renders. Narrows on `kind` explicitly rather than reading
+// `symlinkTargetKind` off the raw union: only the "symlink" variant declares that property.
+export function isExpandableDirectory(entry: FilesTreeEntry): boolean {
+  if (entry.kind === "directory") return true;
+  return entry.kind === "symlink" && entry.symlinkTargetKind === "directory";
 }
 
 export interface FilesTreeResponse {

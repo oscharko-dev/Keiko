@@ -34,6 +34,7 @@ import {
   type SyntheticEvent,
 } from "react";
 import type { VoiceSessionChatContext } from "@oscharko-dev/keiko-contracts";
+import { MAX_DESKTOP_CHAT_INPUT_CHARS } from "@oscharko-dev/keiko-contracts/bff-wire";
 import {
   useChatSessionCatalog,
   useChatSessionComposer,
@@ -969,7 +970,7 @@ function KeikoMessageMark({ pulsing = false }: { readonly pulsing?: boolean }): 
       role="img"
       aria-label={t("chat.keikoLogo")}
     >
-      <Image src="/assets/keiko-logo.svg" width={22} height={22} alt="" aria-hidden="true" />
+      <Image src="/keiko-logo.svg" width={22} height={22} alt="" aria-hidden="true" />
     </div>
   );
 }
@@ -3308,6 +3309,11 @@ function ComposerCoreImpl({
           placeholder={placeholder}
           textareaRef={taRef}
           ariaLabel={t("chat.messageLabel")}
+          // KEIKO-0608: client-side parity with the voice admission path's size guard (enforced
+          // authoritatively by the server either way — see resolveSendMessageAdmission in
+          // useChatSession.ts and chat-handlers.ts). maxLength is a character count, consistent
+          // with MAX_DESKTOP_CHAT_INPUT_CHARS.
+          maxLength={MAX_DESKTOP_CHAT_INPUT_CHARS}
           // The textarea remains a native textbox. When repository suggestions exist,
           // aria-controls points to their visible semantic list; the adjacent polite status
           // announces result-count changes. Arrow keys update the visible highlight and Enter
