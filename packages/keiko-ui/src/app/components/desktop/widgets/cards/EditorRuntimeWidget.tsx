@@ -2553,6 +2553,10 @@ function EditorRuntimeWidget({
     // estimated, since content.length is never used here (see freshContentDigest).
     if (readyContentDigest === null) return;
     if (maxBytes !== null && readyContentDigest.sizeBytes > maxBytes) return;
+    // KEIKO-0819: readyContentDigest.hash is byte-exact for the current content and non-null by
+    // the guard above; activeContentHash is a wider `string | null` derived through activeDigestHash
+    // and does not narrow across the guard, so read the hash off the settled digest object directly.
+    const readyContentHash = readyContentDigest.hash;
     const flushHotExitSnapshot = (): void => {
       const snapshot: EditorHotExitSnapshotV1 = {
         schemaVersion: EDITOR_HOT_EXIT_SCHEMA_VERSION,
@@ -2560,7 +2564,7 @@ function EditorRuntimeWidget({
         relativePath: file,
         content,
         baseVersion: version,
-        contentHash: activeContentHash,
+        contentHash: readyContentHash,
         savedContentHash: version?.contentHash ?? null,
         updatedAt: Date.now(),
         paneId: paneId ?? "pane-1",

@@ -49,6 +49,7 @@ function response(
     editCount: overrides.files.reduce((count, file) => count + file.edits.length, 0),
     truncated: false,
     omittedFileCount: 0,
+    filesOmittedBySearchLimit: false,
     ...overrides,
   };
 }
@@ -145,6 +146,7 @@ describe("buildWorkspaceReplacePatchModel — omitted file count merge", () => {
           }),
         ],
         omittedFileCount: 2,
+        filesOmittedBySearchLimit: false,
       }),
       { "src/only.ts": source("src/only.ts", original) },
     );

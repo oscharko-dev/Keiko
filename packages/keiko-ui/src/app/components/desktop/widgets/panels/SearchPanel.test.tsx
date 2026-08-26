@@ -203,6 +203,7 @@ describe("SearchPanel", () => {
       editCount: 1,
       truncated: false,
       omittedFileCount: 0,
+      filesOmittedBySearchLimit: false,
     });
     fetchFilesContentMock.mockResolvedValue({
       root: "/repo",
@@ -502,6 +503,7 @@ describe("SearchPanel", () => {
         editCount: 0,
         truncated: false,
         omittedFileCount: 0,
+        filesOmittedBySearchLimit: false,
       });
       await pending.promise;
     });
@@ -531,6 +533,7 @@ describe("SearchPanel", () => {
         editCount: 0,
         truncated: false,
         omittedFileCount: 0,
+        filesOmittedBySearchLimit: false,
       });
       await pending.promise;
     });
@@ -751,6 +754,7 @@ describe("SearchPanel", () => {
       editCount: 2,
       truncated: false,
       omittedFileCount: 0,
+      filesOmittedBySearchLimit: false,
     });
     fetchFilesContentMock.mockImplementation((_root, path) =>
       Promise.resolve({
