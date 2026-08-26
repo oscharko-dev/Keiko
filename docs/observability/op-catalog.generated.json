@@ -773,13 +773,13 @@
     {
       "op": "editor.local-history.rekey.completed",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/editor/localHistory/localHistoryCapture.ts:171",
+      "site": "packages/keiko-server/src/editor/localHistory/localHistoryCapture.ts:210",
       "package": "keiko-server"
     },
     {
       "op": "editor.local-history.rekey.failed",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/editor/localHistory/localHistoryCapture.ts:187",
+      "site": "packages/keiko-server/src/editor/localHistory/localHistoryCapture.ts:171",
       "package": "keiko-server"
     },
     {
