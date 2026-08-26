@@ -297,7 +297,9 @@ describe("EditorRuntimeWidget Git gutter", () => {
     await renderEditor();
     const gutter = surface.props?.editorGitGutter;
     expect(gutter).toBeDefined();
-    await gutter?.resolve();
+    // KEIKO-0897: the resolver signature now carries an AbortSignal; hand the test a fresh
+    // controller signal so the type matches the production port.
+    await gutter?.resolve(new AbortController().signal);
     expect(fetchGitStructuredDiff).toHaveBeenCalledTimes(2);
 
     act(() => {

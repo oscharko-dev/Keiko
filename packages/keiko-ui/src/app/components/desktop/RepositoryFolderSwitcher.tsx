@@ -2,6 +2,22 @@
 
 // One shared folder/repository selector for the whole desktop workspace. Managed task-workspace
 // lifecycle remains on its dedicated surface; this header control owns only the base folder.
+//
+// KEIKO-0559: renamed from TaskWorkspaceSwitcher, which this header comment already contradicted
+// (it is a folder/repository picker, not a Task Workspace lifecycle control — no pause/resume/
+// handoff, no ws_<hash> id, no /task-workspace/* route). "Workspace" names at least four distinct
+// things in this codebase; know which one you are in before reading further:
+//   1. This file (RepositoryFolderSwitcher) — the shared base-folder/repository picker for the
+//      whole desktop shell.
+//   2. context/ActiveWorkspaceContext.tsx — the managed Task Workspace lifecycle binding (the
+//      active WorkspaceBinding, instance inventory, pause/resume/handoff). The one real touch
+//      point between the two is clearTaskOverride below, which clears an active Task Workspace
+//      override when the user picks a different repo folder here.
+//   3. Workspace.tsx (+ hooks/useWorkspace) — the desktop pan/zoom canvas component windows are
+//      arranged on.
+//   4. WorkspaceProfileRef / "editor workspace profiles" (keiko-contracts editor-m11-settings,
+//      EditorProfilesPanel.tsx) — named bundles of editor settings (font size, tab size,
+//      keybinding overrides), unrelated to folders, Task Workspace lifecycle, or the canvas.
 
 import {
   memo,
@@ -10,8 +26,10 @@ import {
   useId,
   useRef,
   useState,
+  type Dispatch,
   type ReactNode,
   type RefObject,
+  type SetStateAction,
   type SyntheticEvent,
 } from "react";
 import type { ProjectWithAvailability } from "@/lib/types";
@@ -79,7 +97,7 @@ function useCloseOnEscape(
       triggerRef.current?.focus();
     };
     document.addEventListener("keydown", onKey);
-    return () => {
+    return (): void => {
       document.removeEventListener("keydown", onKey);
     };
   }, [close, open, triggerRef]);
@@ -99,7 +117,7 @@ function useCloseOnOutsideClick(
       }
     };
     document.addEventListener("pointerdown", onPointerDown);
-    return () => {
+    return (): void => {
       document.removeEventListener("pointerdown", onPointerDown);
     };
   }, [close, open, rootRef]);
@@ -117,7 +135,7 @@ function useFocusPickerOnOpen(
       if (nativeSupported) pickerRef.current?.focus();
       else pathRef.current?.focus();
     });
-    return () => cancelAnimationFrame(frame);
+    return (): void => cancelAnimationFrame(frame);
   }, [nativeSupported, open, pathRef, pickerRef]);
 }
 
@@ -130,6 +148,10 @@ interface FolderSelection {
   readonly submitManualPath: (event: SyntheticEvent<HTMLFormElement>) => void;
 }
 
+// The one real touch point between folder selection and Task Workspace lifecycle (see the header
+// comment's meaning #2): picking a different base folder here must not leave a Task Workspace
+// override bound to the folder the user is leaving, so an active override is cleared explicitly
+// before the new folder is applied.
 async function clearTaskOverride(api: ActiveWorkspaceApi): Promise<void> {
   if (api.activeInstance !== null) await api.clearActive();
 }
@@ -147,30 +169,17 @@ function useFolderSelection(input: {
   const [manualPath, setManualPath] = useState("");
 
   const selectPath = useCallback(
-    async (path: string): Promise<void> => {
-      const selectedPath = path.trim();
-      if (selectedPath.length === 0) return;
-      if (chatActions === null) {
-        setError(t("workspaceContext.selectionFailed"));
-        return;
-      }
-      setBusy(true);
-      setError(null);
-      try {
-        await clearTaskOverride(workspaceApi);
-        const selected = await chatActions.addProject(selectedPath);
-        if (selected === undefined) {
-          setError(t("workspaceContext.selectionFailed"));
-          return;
-        }
-        setManualPath("");
-        close();
-      } catch (cause) {
-        setError(reportSelectionFailure(cause, t));
-      } finally {
-        setBusy(false);
-      }
-    },
+    (path: string): Promise<void> =>
+      applyFolderSelection({
+        path,
+        workspaceApi,
+        chatActions,
+        close,
+        t,
+        setBusy,
+        setError,
+        setManualPath,
+      }),
     [chatActions, close, t, workspaceApi],
   );
 
@@ -178,24 +187,7 @@ function useFolderSelection(input: {
     if (!nativeSupported || busy) return;
     setBusy(true);
     setError(null);
-    void pickWithNativeDialog({
-      mode: "open-directory",
-      title: t("workspaceContext.chooseDialogTitle"),
-    })
-      .then(async (outcome): Promise<void> => {
-        if (outcome.kind === "picked") {
-          setBusy(false);
-          await selectPath(outcome.paths[0] ?? "");
-          return;
-        }
-        if (outcome.kind === "busy") setError(t("workspaceContext.dialogBusy"));
-        else if (outcome.kind === "unsupported") {
-          setError(t("workspaceContext.dialogUnsupported"));
-        } else if (outcome.kind === "error") setError(outcome.message);
-      })
-      .finally(() => {
-        setBusy(false);
-      });
+    void runNativeFolderPick({ selectPath, setBusy, setError, t });
   }, [busy, nativeSupported, selectPath, t]);
 
   return {
@@ -209,6 +201,74 @@ function useFolderSelection(input: {
       void selectPath(manualPath);
     },
   };
+}
+
+// Extracted from useFolderSelection's selectPath callback (max-lines-per-function, KEIKO-0559
+// rename pass): applies a picked/typed path as the new base folder, clearing any active Task
+// Workspace override first. Same logic as before the extraction — only moved, not changed.
+async function applyFolderSelection(input: {
+  readonly path: string;
+  readonly workspaceApi: ActiveWorkspaceApi;
+  readonly chatActions: ChatSessionActions | null;
+  readonly close: () => void;
+  readonly t: I18nTranslate;
+  readonly setBusy: (busy: boolean) => void;
+  readonly setError: (error: string | null) => void;
+  readonly setManualPath: (path: string) => void;
+}): Promise<void> {
+  const { path, workspaceApi, chatActions, close, t, setBusy, setError, setManualPath } = input;
+  const selectedPath = path.trim();
+  if (selectedPath.length === 0) return;
+  if (chatActions === null) {
+    setError(t("workspaceContext.selectionFailed"));
+    return;
+  }
+  setBusy(true);
+  setError(null);
+  try {
+    await clearTaskOverride(workspaceApi);
+    const selected = await chatActions.addProject(selectedPath);
+    if (selected === undefined) {
+      setError(t("workspaceContext.selectionFailed"));
+      return;
+    }
+    setManualPath("");
+    close();
+  } catch (cause) {
+    setError(reportSelectionFailure(cause, t));
+  } finally {
+    setBusy(false);
+  }
+}
+
+// Extracted from useFolderSelection's browse callback (max-lines-per-function, KEIKO-0559 rename
+// pass): runs the native directory picker and updates busy/error state from its outcome. Same
+// promise-chain shape as before the extraction — only moved, not changed.
+function runNativeFolderPick(input: {
+  readonly selectPath: (path: string) => Promise<void>;
+  readonly setBusy: (busy: boolean) => void;
+  readonly setError: (error: string | null) => void;
+  readonly t: I18nTranslate;
+}): Promise<void> {
+  const { selectPath, setBusy, setError, t } = input;
+  return pickWithNativeDialog({
+    mode: "open-directory",
+    title: t("workspaceContext.chooseDialogTitle"),
+  })
+    .then(async (outcome): Promise<void> => {
+      if (outcome.kind === "picked") {
+        setBusy(false);
+        await selectPath(outcome.paths[0] ?? "");
+        return;
+      }
+      if (outcome.kind === "busy") setError(t("workspaceContext.dialogBusy"));
+      else if (outcome.kind === "unsupported") {
+        setError(t("workspaceContext.dialogUnsupported"));
+      } else if (outcome.kind === "error") setError(outcome.message);
+    })
+    .finally(() => {
+      setBusy(false);
+    });
 }
 
 function Trigger(props: {
@@ -346,14 +406,29 @@ function FolderPanel(props: {
   );
 }
 
-function SwitcherContent(props: {
+interface SwitcherState {
+  readonly open: boolean;
+  readonly setOpen: Dispatch<SetStateAction<boolean>>;
+  readonly panelId: string;
+  readonly titleId: string;
+  readonly statusId: string;
+  readonly rootRef: RefObject<HTMLDivElement | null>;
+  readonly triggerRef: RefObject<HTMLButtonElement | null>;
+  readonly pickerRef: RefObject<HTMLButtonElement | null>;
+  readonly pathRef: RefObject<HTMLInputElement | null>;
+  readonly selection: FolderSelection;
+}
+
+// Extracted from SwitcherContent (max-lines-per-function, KEIKO-0559 rename pass): the panel's
+// open/close state, ids, refs, and the close-on-escape/close-on-outside-click/focus-on-open
+// behavior wiring, plus the folder-selection state itself. Same logic as before the extraction —
+// only moved into its own controller hook, not changed.
+function useSwitcherState(props: {
   readonly api: ActiveWorkspaceApi;
-  readonly project: ProjectWithAvailability | undefined;
   readonly chatActions: ChatSessionActions | null;
   readonly nativeSupported: boolean;
-  readonly sessionError: string | undefined;
   readonly t: I18nTranslate;
-}): ReactNode {
+}): SwitcherState {
   const [open, setOpen] = useState(false);
   const panelId = useId();
   const titleId = useId();
@@ -373,36 +448,59 @@ function SwitcherContent(props: {
     close,
     t: props.t,
   });
+  return {
+    open,
+    setOpen,
+    panelId,
+    titleId,
+    statusId,
+    rootRef,
+    triggerRef,
+    pickerRef,
+    pathRef,
+    selection,
+  };
+}
+
+function SwitcherContent(props: {
+  readonly api: ActiveWorkspaceApi;
+  readonly project: ProjectWithAvailability | undefined;
+  readonly chatActions: ChatSessionActions | null;
+  readonly nativeSupported: boolean;
+  readonly sessionError: string | undefined;
+  readonly t: I18nTranslate;
+}): ReactNode {
+  const state = useSwitcherState(props);
   const name = projectName(props.project, props.t);
   const workspaceError = props.api.error ?? props.sessionError ?? null;
 
   return (
-    <div ref={rootRef} className={styles["cmp-r"]}>
+    <div ref={state.rootRef} className={styles["cmp-r"]}>
       <Trigger
-        triggerRef={triggerRef}
-        panelId={panelId}
-        statusId={statusId}
-        open={open}
-        busy={props.api.switching || selection.busy}
+        triggerRef={state.triggerRef}
+        panelId={state.panelId}
+        statusId={state.statusId}
+        open={state.open}
+        busy={props.api.switching || state.selection.busy}
         name={name}
         selected={props.project !== undefined}
-        toggle={() => setOpen((value) => !value)}
+        toggle={() => state.setOpen((value) => !value)}
         t={props.t}
       />
-      <span id={statusId} role="status" aria-live="polite" className={styles["cmp-sr"]}>
+      <span id={state.statusId} role="status" aria-live="polite" className={styles["cmp-sr"]}>
         {props.project === undefined
           ? props.t("workspaceContext.status.none")
           : props.t("workspaceContext.status.project", { name })}
       </span>
-      {open ? (
+      {state.open ? (
         <FolderPanel
-          panelId={panelId}
-          titleId={titleId}
+          panelId={state.panelId}
+          titleId={state.titleId}
           project={props.project}
           nativeSupported={props.nativeSupported}
-          pickerRef={pickerRef}
-          pathRef={pathRef}
-          selection={selection}
+          pickerRef={state.pickerRef}
+          pathRef={state.pathRef}
+          selection={state.selection}
           workspaceError={workspaceError}
           t={props.t}
         />
@@ -411,7 +509,7 @@ function SwitcherContent(props: {
   );
 }
 
-function TaskWorkspaceSwitcherImpl(): ReactNode {
+function RepositoryFolderSwitcherImpl(): ReactNode {
   const t = useTranslate();
   const optionalT = useOptionalWidgetTranslate();
   const api = useActiveWorkspace();
@@ -430,4 +528,4 @@ function TaskWorkspaceSwitcherImpl(): ReactNode {
   );
 }
 
-export const TaskWorkspaceSwitcher = memo(TaskWorkspaceSwitcherImpl);
+export const RepositoryFolderSwitcher = memo(RepositoryFolderSwitcherImpl);

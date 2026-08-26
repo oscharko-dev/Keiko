@@ -107,6 +107,14 @@ describe("sw.js cache policy — static source analysis (issue #126, ADR-0024 D6
     const body = match === null ? "" : (match[1] ?? "");
     expect(body).toContain("/fonts/");
   });
+
+  it("purges stale caches by filtering, not by wrapping a no-op Promise.resolve(false) (KEIKO-1016)", () => {
+    // The activate handler used to map every cache name to a Promise — Promise.resolve(false)
+    // for the current cache, caches.delete(name) for stale ones — purely to keep the
+    // Promise.all() array homogeneous. Filtering out CACHE_NAME before mapping to
+    // caches.delete(...) is more direct and carries no functional difference.
+    expect(SW_SOURCE).not.toMatch(/Promise\.resolve\(false\)/);
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -453,5 +461,39 @@ describe("sw.js cache policy — sandboxed fetch-handler evaluation", () => {
 
     expect(skipWaiting).not.toHaveBeenCalled();
     expect(sandbox.respondWithCalls).toHaveLength(0);
+  });
+
+  it("deletes only stale caches on activate and keeps the current cache (KEIKO-1016)", async () => {
+    const { context, sandbox } = makeSandbox();
+    const deleteCalls: string[] = [];
+    context.caches = {
+      ...(context.caches as object),
+      keys: (): Promise<readonly string[]> =>
+        Promise.resolve(["keiko-shell-v3", "keiko-shell-v4", "some-other-cache"]),
+      delete: (name: string): Promise<boolean> => {
+        deleteCalls.push(name);
+        return Promise.resolve(true);
+      },
+    };
+    vm.runInContext(SW_SOURCE, context);
+
+    const activateHandler = sandbox.handlers.get("activate");
+    expect(activateHandler).toBeDefined();
+
+    let waited: Promise<unknown> | undefined;
+    activateHandler?.({
+      type: "activate",
+      request: { method: "GET", url: "http://localhost:3000/" },
+      respondWith(): void {
+        // not used by the activate handler
+      },
+      waitUntil(value: Promise<unknown>): void {
+        waited = value;
+      },
+    });
+
+    await waited;
+
+    expect(deleteCalls.sort()).toStrictEqual(["keiko-shell-v3", "some-other-cache"]);
   });
 });

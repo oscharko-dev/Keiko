@@ -369,7 +369,7 @@ export const EN_MESSAGES = {
   "chat.history.action.cancel": "Cancel {title}",
   "chat.history.action.restore": "Restore {title}",
   "window.type.resources.title": "Resources",
-  "window.type.resources.desc": "System resources",
+  "window.type.resources.desc": "Shared assets & references",
   "window.type.connector.title": "Knowledge Pod",
   "window.type.connector.desc": "Pick a Knowledge Pod source",
   "window.type.localKnowledge.title": "Local Knowledge",
@@ -1656,6 +1656,8 @@ export const EN_MESSAGES = {
     "The authority for this action has expired.",
   "atlassianConnectors.denied.reason.authority-budget-exceeded":
     "The authority budget for this action is exhausted.",
+  "atlassianConnectors.denied.reason.authority-revoked":
+    "The authority for this action was revoked while the run was in flight.",
   "atlassianConnectors.denied.reason.connector-access-denied":
     "Connector access is not permitted for this action.",
   "atlassianConnectors.denied.reason.connector-write-denied":

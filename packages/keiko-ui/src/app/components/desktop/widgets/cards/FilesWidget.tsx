@@ -1664,7 +1664,7 @@ export function FilesWidget({
           </span>
         ) : null}
         <span className="tr-meta mono" id={metaId}>
-          {formatBytes(entry.sizeBytes)}
+          {formatBytes(entry.sizeBytes ?? 0)}
         </span>
         {change !== undefined && entry.readable ? (
           <button

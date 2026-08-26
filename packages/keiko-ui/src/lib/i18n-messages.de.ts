@@ -384,7 +384,7 @@ export const DE_MESSAGES = {
   "chat.history.action.cancel": "{title} abbrechen",
   "chat.history.action.restore": "{title} wiederherstellen",
   "window.type.resources.title": "Ressourcen",
-  "window.type.resources.desc": "Systemressourcen",
+  "window.type.resources.desc": "Geteilte Assets & Referenzen",
   "window.type.connector.title": "Knowledge Pod",
   "window.type.connector.desc": "Knowledge-Pod-Quelle auswählen",
   "window.type.localKnowledge.title": "Lokales Wissen",
@@ -1702,6 +1702,8 @@ export const DE_MESSAGES = {
     "Die Autorisierung für diese Aktion ist abgelaufen.",
   "atlassianConnectors.denied.reason.authority-budget-exceeded":
     "Das Autorisierungsbudget für diese Aktion ist aufgebraucht.",
+  "atlassianConnectors.denied.reason.authority-revoked":
+    "Die Autorisierung für diese Aktion wurde während der Ausführung widerrufen.",
   "atlassianConnectors.denied.reason.connector-access-denied":
     "Connector-Zugriff ist für diese Aktion nicht zulässig.",
   "atlassianConnectors.denied.reason.connector-write-denied":

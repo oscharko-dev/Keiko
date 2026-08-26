@@ -393,7 +393,6 @@ export async function archiveMemory(
 
 export async function forgetMemory(
   id: MemoryId,
-  _reason?: string,
   fetchImpl = fetchJson<MemoryForgetResponse>,
 ): Promise<MemoryForgetResponse> {
   return fetchImpl(`/api/memory/${encodeURIComponent(id)}/forget`, {
@@ -423,7 +422,6 @@ export async function forgetMemories(
 
 export async function deleteMemory(
   id: MemoryId,
-  _reason?: string,
   fetchImpl = fetchJson<MemoryDeleteResponse>,
 ): Promise<MemoryDeleteResponse> {
   return fetchImpl(`/api/memory/${encodeURIComponent(id)}`, {

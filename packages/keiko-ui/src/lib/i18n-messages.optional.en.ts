@@ -167,6 +167,10 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
   "chat.history.purgeWarning":
     "Permanently delete this conversation and its stored messages? This cannot be undone.",
   "chat.history.purgeFailed": "Permanent delete failed: {detail}",
+  "chat.history.renameEmptyTitle": "Title cannot be empty.",
+  "chat.history.renameFailed": "Rename failed.",
+  "chat.history.deleteFailed": "Delete failed: {detail}",
+  "chat.history.restoreFailed": "Restore failed: {detail}",
   "chat.regenerate.versionSelector": "Response version",
   "chat.regenerate.version": "Version {version}",
   "chat.regenerate.versionCurrent": "Version {version} (current)",

@@ -1604,11 +1604,28 @@ function initialEditorLoadState(hasTarget: boolean): KeikoEditorLoadState {
   return hasTarget ? { status: "loading" } : { status: "ready" };
 }
 
-function activeDigestHash(
-  digest: { readonly content: string; readonly hash: string } | null,
-  content: string,
-): string | null {
+// KEIKO-0819: sizeBytes rides along with hash so both are computed from the same single
+// UTF8_ENCODER.encode(content) pass inside the debounced effect below, instead of a separate
+// per-keystroke encode.
+interface ActiveContentDigest {
+  readonly content: string;
+  readonly hash: string;
+  readonly sizeBytes: number;
+}
+
+function activeDigestHash(digest: ActiveContentDigest | null, content: string): string | null {
   return digest?.content === content ? digest.hash : null;
+}
+
+// The digest object itself, only when it matches the CURRENT content — null while the debounce
+// window has not yet settled for the latest edit. hash/sizeBytes read off the result are exact for
+// `content`, never stale or estimated (unlike activeContentDigest?.sizeBytes read directly, which
+// stays at its last resolved value instead of resetting to unknown on every keystroke).
+function freshContentDigest(
+  digest: ActiveContentDigest | null,
+  content: string,
+): ActiveContentDigest | null {
+  return digest?.content === content ? digest : null;
 }
 
 function hasEditorTarget(root: string | undefined, file: string | undefined): boolean {
@@ -2217,10 +2234,7 @@ function EditorRuntimeWidget({
     IDLE_EXTERNAL_CHANGE_STATE,
   );
   const [externalCompareBaseline, setExternalCompareBaseline] = useState<string | null>(null);
-  const [activeContentDigest, setActiveContentDigest] = useState<{
-    readonly content: string;
-    readonly hash: string;
-  } | null>(null);
+  const [activeContentDigest, setActiveContentDigest] = useState<ActiveContentDigest | null>(null);
   // Issue #1394 (ADR-0058 D3/D4): conflict banner and applyPatch review state.
   const [agentConflict, setAgentConflict] = useState<{
     readonly code: AgentConflictCode;
@@ -2335,9 +2349,13 @@ function EditorRuntimeWidget({
     tabSize: 2,
     insertSpaces: true,
   });
-  const contentBytes = useMemo(() => UTF8_ENCODER.encode(content), [content]);
-  const contentSizeBytes = contentBytes.length;
+  // KEIKO-0819: content.length (UTF-16 code units) is always <= the UTF-8 byte length of the same
+  // string, so it is a cheap, immediate, per-keystroke proxy safe for the large-file-mode signal
+  // only. It must never feed sha256HexBytes or a byte-exact size-limit check — those read the exact,
+  // debounced activeContentDigest below instead.
+  const contentSizeBytesEstimate = content.length;
   const activeContentHash = activeDigestHash(activeContentDigest, content);
+  const readyContentDigest = freshContentDigest(activeContentDigest, content);
   const activeContentDigestRef = useRef(activeContentDigest);
   activeContentDigestRef.current = activeContentDigest;
   const lastHotExitSnapshotKeyRef = useRef<string | null>(null);
@@ -2364,15 +2382,20 @@ function EditorRuntimeWidget({
   useEffect(() => {
     let cancelled = false;
     const timer = window.setTimeout(() => {
-      void sha256HexBytes(contentBytes, content).then((hash) => {
-        if (!cancelled) setActiveContentDigest({ content, hash });
+      // KEIKO-0819: the full-buffer UTF-8 encode happens here, at most once per settled debounce
+      // window, not once per keystroke — the resulting byte count rides along with the hash so every
+      // byte-exact consumer (hot-exit maxBytes check, the buffer's reported sizeBytes) reads it back
+      // from activeContentDigest instead of re-encoding.
+      const bytes = UTF8_ENCODER.encode(content);
+      void sha256HexBytes(bytes, content).then((hash) => {
+        if (!cancelled) setActiveContentDigest({ content, hash, sizeBytes: bytes.length });
       });
     }, CONTENT_HASH_DEBOUNCE_MS);
     return () => {
       cancelled = true;
       window.clearTimeout(timer);
     };
-  }, [content, contentBytes]);
+  }, [content]);
 
   useEffect(() => {
     let cancelled = false;
@@ -2524,8 +2547,12 @@ function EditorRuntimeWidget({
       }
       return;
     }
-    if (maxBytes !== null && contentSizeBytes > maxBytes) return;
-    if (activeContentHash === null) return;
+    // KEIKO-0819: readyContentDigest is null until the debounced hash/size effect above has settled
+    // for this exact content, exactly as activeContentHash === null used to gate this write alone —
+    // the size check below is byte-exact for the CURRENT content whenever it runs, never stale or
+    // estimated, since content.length is never used here (see freshContentDigest).
+    if (readyContentDigest === null) return;
+    if (maxBytes !== null && readyContentDigest.sizeBytes > maxBytes) return;
     const flushHotExitSnapshot = (): void => {
       const snapshot: EditorHotExitSnapshotV1 = {
         schemaVersion: EDITOR_HOT_EXIT_SCHEMA_VERSION,
@@ -2561,13 +2588,13 @@ function EditorRuntimeWidget({
   }, [
     activeContentHash,
     content,
-    contentSizeBytes,
     dirty,
     file,
     fileModelMatchesTarget,
     hasTarget,
     maxBytes,
     paneId,
+    readyContentDigest,
     root,
     version,
     windowId,
@@ -3909,8 +3936,8 @@ function EditorRuntimeWidget({
   );
 
   const largeFileMode = useMemo(
-    () => deriveLargeFileMode({ sizeBytes: contentSizeBytes, text: content }),
-    [content, contentSizeBytes],
+    () => deriveLargeFileMode({ sizeBytes: contentSizeBytesEstimate, text: content }),
+    [content, contentSizeBytesEstimate],
   );
   const preferenceLargeFileMode = editorSettings.applied.largeFileMode;
   const largeFilePolicy = largeFileSettings(largeFileMode, preferenceLargeFileMode);
@@ -4348,11 +4375,22 @@ function EditorRuntimeWidget({
             content: {
               relativePath: file ?? "",
               text: content,
-              sizeBytes: contentSizeBytes,
+              // KEIKO-0819: byte-exact (isMaxSizeExceeded is a hard size-limit check), sourced from
+              // the debounced activeContentDigest rather than a per-keystroke encode. Falls back to 0
+              // only for the brief window before the very first debounce settles (e.g. immediately
+              // after a file opens), exactly mirroring activeContentHash's own availability window.
+              sizeBytes: activeContentDigest?.sizeBytes ?? 0,
               truncated: false,
             },
           },
-    [content, contentSizeBytes, editorReadOnlyBySettings, file, fileModel, fileModelMatchesTarget],
+    [
+      activeContentDigest,
+      content,
+      editorReadOnlyBySettings,
+      file,
+      fileModel,
+      fileModelMatchesTarget,
+    ],
   );
   const modelViewStateKey = editorModelViewStateKey(
     hasTarget,

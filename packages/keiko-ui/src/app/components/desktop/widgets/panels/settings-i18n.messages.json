@@ -371,6 +371,22 @@
     "en": "Profile name",
     "de": "Profilname"
   },
+  "settings.profiles.name.reserved": {
+    "en": "\"Default\" is reserved. Choose a different name.",
+    "de": "„Default“ ist reserviert. Wähle einen anderen Namen."
+  },
+  "settings.profiles.name.invalid": {
+    "en": "This name isn't allowed. Remove leading or trailing spaces, or use different characters.",
+    "de": "Dieser Name ist nicht zulässig. Entferne führende oder nachgestellte Leerzeichen oder verwende andere Zeichen."
+  },
+  "settings.profiles.name.tooLong": {
+    "en": "The name is too long (max {max} characters).",
+    "de": "Der Name ist zu lang (max. {max} Zeichen)."
+  },
+  "settings.profiles.defaultName": {
+    "en": "Default",
+    "de": "Standard"
+  },
   "settings.profiles.create": {
     "en": "Create",
     "de": "Erstellen"
@@ -751,6 +767,10 @@
     "en": "modified",
     "de": "geändert"
   },
+  "settings.keyboard.unbound": {
+    "en": "Unbound",
+    "de": "Nicht zugewiesen"
+  },
   "settings.keyboard.scopeGlobal": {
     "en": "global",
     "de": "global"
@@ -1010,6 +1030,14 @@
   "settings.snippets.preview": {
     "en": "Preview",
     "de": "Vorschau"
+  },
+  "settings.snippets.previewUnsafe": {
+    "en": "This snippet body was rejected as unsafe or too large. Remove script-like markers or active HTML, or shorten it, then try again.",
+    "de": "Dieser Snippet-Body wurde als unsicher oder zu groß abgelehnt. Entferne skriptartige Marker oder aktives HTML, oder kürze ihn, und versuche es erneut."
+  },
+  "settings.snippets.previewFailed": {
+    "en": "The snippet preview failed. Adjust the body and try again.",
+    "de": "Die Snippet-Vorschau ist fehlgeschlagen. Passe den Body an und versuche es erneut."
   },
   "settings.snippets.save": {
     "en": "Save snippet",

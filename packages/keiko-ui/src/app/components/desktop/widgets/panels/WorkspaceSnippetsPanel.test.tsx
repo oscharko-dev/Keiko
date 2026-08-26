@@ -125,6 +125,65 @@ describe("WorkspaceSnippetsPanel", () => {
     ]);
   });
 
+  // KEIKO-0619: previewDraft used to collapse compileEditorM7SnippetBody's discriminated result to
+  // a bare string, so a rejected body rendered its raw EditorM7ReasonCode ("UNSAFE_SNIPPET")
+  // directly as preview text, and Save stayed enabled for a body already known locally to be
+  // invalid.
+  it("never renders the raw reasonCode token for an unsafe body and disables Save", () => {
+    renderPanel("/repo");
+
+    fireEvent.change(screen.getByLabelText("Name"), { target: { value: "Unsafe" } });
+    fireEvent.change(screen.getByLabelText("Prefix"), { target: { value: "unsafe" } });
+    fireEvent.change(screen.getByLabelText("Body"), {
+      target: { value: "javascript:alert(1)" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Preview" }));
+
+    expect(screen.queryByText("UNSAFE_SNIPPET")).not.toBeInTheDocument();
+    expect(screen.getByRole("alert")).toHaveTextContent(
+      "This snippet body was rejected as unsafe or too large.",
+    );
+    expect(screen.getByRole("button", { name: "Save snippet" })).toBeDisabled();
+  });
+
+  it("clears a stale preview once the body is edited again", () => {
+    renderPanel("/repo");
+
+    fireEvent.change(screen.getByLabelText("Name"), { target: { value: "Unsafe" } });
+    fireEvent.change(screen.getByLabelText("Prefix"), { target: { value: "unsafe" } });
+    fireEvent.change(screen.getByLabelText("Body"), {
+      target: { value: "javascript:alert(1)" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Preview" }));
+    expect(screen.getByRole("alert")).toBeInTheDocument();
+
+    fireEvent.change(screen.getByLabelText("Body"), {
+      target: { value: "const safe = 1;\n$0" },
+    });
+
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Save snippet" })).toBeEnabled();
+  });
+
+  it("keeps Save enabled and the compiled preview visible for a safe body", () => {
+    renderPanel("/repo");
+
+    fireEvent.change(screen.getByLabelText("Name"), { target: { value: "Safe" } });
+    fireEvent.change(screen.getByLabelText("Prefix"), { target: { value: "safe" } });
+    fireEvent.click(screen.getByRole("button", { name: "Preview" }));
+
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    // Scoped to the <pre> preview specifically — the draft <textarea> contains the same default
+    // body text, so an unscoped query would match both.
+    expect(
+      screen.getByText(
+        (content, element) =>
+          element?.tagName.toLowerCase() === "pre" && content.includes("const ${1:name}"),
+      ),
+    ).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Save snippet" })).toBeEnabled();
+  });
+
   it("surfaces missing workspace, mutation issue, empty state, and reset disablement", () => {
     snippetsView.current = view({
       snapshot: snapshot([]),

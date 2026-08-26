@@ -714,6 +714,57 @@ describe("useRelationshipActivityStream", () => {
       expect(state.activityMap.has("rel-0")).toBe(false);
       // Most recent entries survive.
       expect(state.activityMap.has("rel-512")).toBe(true);
+
+      // KEIKO-0665: the hook must distinguish "evicted for capacity" from "never reported" — a
+      // consumer looking up an id absent from activityMap could not otherwise tell them apart.
+      expect(state.evictedIds.has("inactive-victim")).toBe(true);
+      expect(state.evictedIds.has("rel-0")).toBe(true);
+      // A surviving (non-evicted) id must not be marked evicted.
+      expect(state.evictedIds.has("rel-512")).toBe(false);
+      // An id that was never reported at all is not "evicted" either — the two are distinct.
+      expect(state.evictedIds.has("rel-never-reported")).toBe(false);
+    });
+
+    it("clears evictedIds for an id once a new event re-tracks it", async () => {
+      vi.useFakeTimers({ now: 1_000_000 });
+      let captured: ReturnType<typeof useRelationshipActivityStream> | null = null;
+
+      render(
+        <HookHarness
+          onState={(state) => {
+            captured = state;
+          }}
+        />,
+      );
+      const source = FakeEventSource.last;
+      expect(source).not.toBeNull();
+
+      act(() => {
+        for (let i = 0; i < 513; i += 1) {
+          vi.advanceTimersByTime(1);
+          source?.dispatch(
+            "relationship:activity",
+            makeActivityEvent(`rel-${String(i)}`, "active"),
+          );
+        }
+      });
+      act(() => {
+        vi.advanceTimersByTime(15_000);
+      });
+
+      expect(requireCapturedState(captured).evictedIds.has("rel-0")).toBe(true);
+      expect(requireCapturedState(captured).activityMap.has("rel-0")).toBe(false);
+
+      // A fresh event for the evicted id means it is live-tracked again — no longer usefully
+      // "evicted", since a real current state now exists for it.
+      act(() => {
+        vi.advanceTimersByTime(1);
+        source?.dispatch("relationship:activity", makeActivityEvent("rel-0", "active"));
+      });
+
+      const state = requireCapturedState(captured);
+      expect(state.activityMap.has("rel-0")).toBe(true);
+      expect(state.evictedIds.has("rel-0")).toBe(false);
     });
   });
 });

@@ -1,8 +1,9 @@
 import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Chat } from "@/lib/types";
 import { deleteChat, updateChat } from "@/lib/api";
+import { I18nProvider } from "@/lib/i18n";
 import { ChatSessionProvider } from "../../context/ChatSessionContext";
 import type { ChatSessionApi } from "../../hooks/useChatSession";
 import { notifyChatDeleted } from "../../hooks/useChatSession";
@@ -579,6 +580,110 @@ describe("ChatHistoryPanel", () => {
     await user.click(screen.getByRole("button", { name: /^Rename\b/ }));
 
     expect(screen.getByDisplayValue("Sprint triage")).toBeInTheDocument();
+  });
+});
+
+// KEIKO-0820 — rename/delete/restore failure messages were hardcoded English, unlike the sibling
+// purge path (setError(optionalT("chat.history.purgeFailed", { detail }))). Locale set to German
+// (matching the window.localStorage.setItem("keiko.locale", "de") pattern established by
+// KeyboardShortcutsPanel.test.tsx) proves each of the four paths now renders through the optional
+// widget catalog instead of the literal English string.
+//
+// useLocale()/useOptionalWidgetTranslate() read from I18nProvider's LocaleContext, which the shared
+// module-level `renderPanel` above does not wrap (it only needs ChatSessionProvider for its other 29
+// tests, and adding I18nProvider there would change their harness too) — so these tests wrap
+// I18nProvider locally instead. The context's exposed locale starts on English and only flips to the
+// stored "de" once I18nProvider's `ready`/`catalogReady` effect settles (see
+// packages/keiko-ui/src/lib/i18n.test.tsx's "keeps locale ... until German is ready" pin for the same
+// two-phase transition), so every test below waits on document.documentElement.lang before
+// interacting — the same signal I18nProvider's own effect updates once it is truly on German.
+describe("ChatHistoryPanel localized failure messages (KEIKO-0820)", () => {
+  function renderGermanPanel(session: ChatSessionApi = makeSession()): void {
+    render(
+      <I18nProvider>
+        <ChatSessionProvider value={session}>
+          <ChatHistoryPanel openChatWindow={vi.fn()} />
+        </ChatSessionProvider>
+      </I18nProvider>,
+    );
+  }
+
+  beforeEach(() => {
+    window.localStorage.setItem("keiko.locale", "de");
+  });
+
+  afterEach(() => {
+    window.localStorage.removeItem("keiko.locale");
+    document.documentElement.lang = "en";
+    document.documentElement.removeAttribute("data-locale");
+  });
+
+  it("shows the German empty-title rename error, not the English literal", async () => {
+    const user = userEvent.setup();
+    renderGermanPanel();
+    await waitFor(() => expect(document.documentElement.lang).toBe("de"));
+
+    // Once German is active, aria-label (which wins over visible text for the accessible name) is
+    // itself German — t("chat.history.action.rename"/"action.save", { title }) — so the queries below
+    // match the German labels, not the still-English visible button copy ("Rename"/"Save").
+    await user.click(screen.getByRole("button", { name: /umbenennen/i }));
+    const renameInput = screen.getByDisplayValue("Sprint triage");
+    await user.clear(renameInput);
+    await user.click(screen.getByRole("button", { name: /speichern/i }));
+
+    const describedById = renameInput.getAttribute("aria-describedby");
+    const errorEl = document.getElementById(describedById as string);
+    expect(errorEl?.textContent).toBe("Titel darf nicht leer sein.");
+    expect(errorEl?.textContent).not.toBe("Title cannot be empty.");
+  });
+
+  it("shows the German rename-failed error, not the English literal", async () => {
+    vi.mocked(updateChat).mockRejectedValueOnce(new Error("network down"));
+    const user = userEvent.setup();
+    renderGermanPanel();
+    await waitFor(() => expect(document.documentElement.lang).toBe("de"));
+
+    await user.click(screen.getByRole("button", { name: /umbenennen/i }));
+    const renameInput = screen.getByDisplayValue("Sprint triage");
+    await user.clear(renameInput);
+    await user.type(renameInput, "New title");
+    await user.click(screen.getByRole("button", { name: /speichern/i }));
+
+    const alert = await screen.findByRole("alert");
+    expect(alert).toHaveTextContent("Umbenennen fehlgeschlagen.");
+    expect(alert).not.toHaveTextContent("Rename failed.");
+  });
+
+  it("shows the German delete-failed error with the caught detail, not the English literal", async () => {
+    vi.mocked(updateChat).mockRejectedValueOnce(new Error("disk busy"));
+    const user = userEvent.setup();
+    renderGermanPanel();
+    await waitFor(() => expect(document.documentElement.lang).toBe("de"));
+
+    // Both the trigger and the confirm button share the same aria-label pattern
+    // (t("chat.history.action.delete", { title })) for the non-deleted (moveToTrash) row.
+    await user.click(screen.getByRole("button", { name: /löschen/i }));
+    await user.click(screen.getByRole("button", { name: /löschen/i }));
+
+    const alert = await screen.findByRole("alert");
+    expect(alert).toHaveTextContent("Löschen fehlgeschlagen: disk busy");
+    expect(alert).not.toHaveTextContent("Delete failed:");
+  });
+
+  it("shows the German restore-failed error with the caught detail, not the English literal", async () => {
+    vi.mocked(updateChat).mockRejectedValueOnce(new Error("disk busy"));
+    const user = userEvent.setup();
+    renderGermanPanel(makeSession({ chats: [makeChat({ status: "closed" })] }));
+    await waitFor(() => expect(document.documentElement.lang).toBe("de"));
+
+    // The "Active"/"Deleted" tab labels are hardcoded JSX text, not routed through t(...), so they
+    // stay in English regardless of locale — this query is intentionally unchanged.
+    await user.click(screen.getByRole("tab", { name: /deleted/i }));
+    await user.click(screen.getByRole("button", { name: /wiederherstellen/i }));
+
+    const alert = await screen.findByRole("alert");
+    expect(alert).toHaveTextContent("Wiederherstellen fehlgeschlagen: disk busy");
+    expect(alert).not.toHaveTextContent("Restore failed:");
   });
 });
 

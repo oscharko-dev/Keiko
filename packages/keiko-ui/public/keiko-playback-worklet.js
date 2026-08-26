@@ -42,7 +42,6 @@ class KeikoPlaybackProcessor extends AudioWorkletProcessor {
     this.primeFrames = 2400; // ~100ms at 24kHz; overridden by the config message
     this.primed = false;
     this.draining = false;
-    this.everPlayed = false;
     this.ended = false;
     this.framesPlayed = 0;
     this.sinceReport = 0;
@@ -105,7 +104,18 @@ class KeikoPlaybackProcessor extends AudioWorkletProcessor {
       }
       return;
     }
-    // Otherwise: an Int16Array of PCM samples.
+    // Otherwise: an Int16Array of PCM samples. Guard the shape before touching any ring-buffer
+    // state (KEIKO-0735 / KEIKO-1009): the only sender (assistant-speech-streaming.ts) always
+    // constructs a real Int16Array over this same-origin, first-party MessagePort — it is not an
+    // externally-reachable trust boundary — but without this guard a malformed message (e.g. a
+    // plain object with no numeric `.length`) would fall through to `pcm.length` as `undefined`,
+    // corrupting `this.size`/`this.capacity` to `NaN` via `ensureCapacity`. On a shape that is not
+    // an Int16Array, ignore the message the same way this function already ignores other
+    // malformed/empty input (see the `n === 0` early return below): a silent defensive return,
+    // not error propagation back across the render-thread boundary.
+    if (!(data instanceof Int16Array)) {
+      return;
+    }
     const pcm = data;
     const n = pcm.length;
     if (n === 0) {
@@ -175,7 +185,6 @@ class KeikoPlaybackProcessor extends AudioWorkletProcessor {
 
   recordProduced(produced) {
     if (produced <= 0) return;
-    this.everPlayed = true;
     this.framesPlayed += produced;
     this.sinceReport += produced;
     // Report position roughly every ~50ms so the main thread has a fresh media offset.

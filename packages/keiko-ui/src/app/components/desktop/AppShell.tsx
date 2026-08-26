@@ -203,8 +203,8 @@ const GatewaySetupDialog = dynamic(
   { ssr: false, loading: GatewaySetupLoading },
 );
 
-const TaskWorkspaceSwitcher = dynamic(
-  () => import("./TaskWorkspaceSwitcher").then((mod) => mod.TaskWorkspaceSwitcher),
+const RepositoryFolderSwitcher = dynamic(
+  () => import("./RepositoryFolderSwitcher").then((mod) => mod.RepositoryFolderSwitcher),
   { ssr: false, loading: () => null },
 );
 
@@ -1356,10 +1356,11 @@ function AppShellInner(): ReactNode {
     [chromeWindowsSignature, workspaceLinkRevision],
   );
   const wsContextValue: WsContextValue = useMemo(() => ({ active, winCount }), [active, winCount]);
-  // GEN-PERF-RENDER-002 — Header is memoized, but passing a freshly-constructed <TaskWorkspaceSwitcher/>
-  // element inline defeated that memo (new element identity every AppShell render). Memoizing the
-  // element keeps Header's props referentially stable so it only re-renders on real input changes.
-  const contextControl = useMemo(() => <TaskWorkspaceSwitcher />, []);
+  // GEN-PERF-RENDER-002 — Header is memoized, but passing a freshly-constructed
+  // <RepositoryFolderSwitcher/> element inline defeated that memo (new element identity every
+  // AppShell render). Memoizing the element keeps Header's props referentially stable so it only
+  // re-renders on real input changes.
+  const contextControl = useMemo(() => <RepositoryFolderSwitcher />, []);
 
   const openPalette = useCallback((): void => setPalOpen(true), []);
   const closePalette = useCallback((): void => setPalOpen(false), []);

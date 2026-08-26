@@ -91,6 +91,7 @@ function renderPanel(
       string,
       import("@oscharko-dev/keiko-contracts").RelationshipActivityState
     >;
+    evictedIds: ReadonlySet<string>;
     throughputMap: ReadonlyMap<string, number>;
     animateBadges: boolean;
     highContrast: boolean;
@@ -108,6 +109,7 @@ function renderPanel(
         onSelect={onSelect}
         onFilterChange={onFilterChange}
         {...(overrides.activityMap !== undefined ? { activityMap: overrides.activityMap } : {})}
+        {...(overrides.evictedIds !== undefined ? { evictedIds: overrides.evictedIds } : {})}
         {...(overrides.throughputMap !== undefined
           ? { throughputMap: overrides.throughputMap }
           : {})}
@@ -381,6 +383,43 @@ describe("RelationshipListPanel", () => {
       });
       const rowBtn = listItemsOf(container)[0]?.querySelector("button.rel-row") ?? null;
       expect(rowBtn?.getAttribute("aria-label")).toContain("activity: Processing");
+    });
+
+    // KEIKO-0665: an id absent from activityMap used to always resolve through
+    // lifecycleToActivity with no way to tell "never reported" apart from "evicted for
+    // capacity" — this pins the visible, distinguishable "tracking limit reached" state.
+    it("renders a distinguishable tracking-limit-reached state for an evicted id", async () => {
+      const rel = makeRelationship("rel-evicted");
+      mockListRelationships.mockResolvedValue({
+        entries: [rel],
+        truncated: false,
+        nextCursor: null,
+      });
+      const { container } = renderPanel({
+        // Not present in activityMap — resolveRelationshipActivity must fall back through
+        // lifecycleToActivity, but since the id IS in evictedIds it must render distinguishably.
+        evictedIds: new Set(["rel-evicted"]),
+      });
+      await waitFor(() => {
+        expect(listItemsOf(container).length).toBeGreaterThan(0);
+      });
+      expect(screen.getByText("tracking limit reached")).toBeInTheDocument();
+      const rowBtn = listItemsOf(container)[0]?.querySelector("button.rel-row") ?? null;
+      expect(rowBtn?.getAttribute("aria-label")).toContain("tracking limit reached");
+    });
+
+    it("does not render the tracking-limit-reached state for an id simply never reported", async () => {
+      const rel = makeRelationship("rel-never-reported");
+      mockListRelationships.mockResolvedValue({
+        entries: [rel],
+        truncated: false,
+        nextCursor: null,
+      });
+      const { container } = renderPanel({ evictedIds: new Set() });
+      await waitFor(() => {
+        expect(listItemsOf(container).length).toBeGreaterThan(0);
+      });
+      expect(screen.queryByText("tracking limit reached")).not.toBeInTheDocument();
     });
   });
 

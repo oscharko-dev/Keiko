@@ -229,6 +229,46 @@ describe("KeyboardShortcutsPanel", () => {
     });
   });
 
+  // KEIKO-0757: focus leaving the recording row by any means other than the explicit Cancel
+  // click or a successful capture must still cancel recording — otherwise recordingId sticks
+  // and the row is left announcing "Recording keyboard shortcut." indefinitely.
+  it("cancels recording when focus leaves the row by any means other than Cancel", async () => {
+    renderPanel(view());
+
+    fireEvent.change(screen.getByRole("textbox", { name: "Search keyboard shortcuts" }), {
+      target: { value: "Quick Access: files" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Record" }));
+    expect(screen.getByText("Recording keyboard shortcut.")).toBeInTheDocument();
+
+    fireEvent.blur(screen.getByRole("button", { name: "Press shortcut" }), {
+      relatedTarget: screen.getByRole("textbox", { name: "Search keyboard shortcuts" }),
+    });
+
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: "Record" })).toBeInTheDocument();
+    });
+    expect(screen.queryByText("Recording keyboard shortcut.")).not.toBeInTheDocument();
+  });
+
+  // The two buttons inside one recording row are one logical control — moving focus between
+  // them (Tab from "Press shortcut" to "Cancel") must NOT spuriously cancel recording.
+  it("does not cancel recording when focus moves between Press shortcut and Cancel in the same row", () => {
+    renderPanel(view());
+
+    fireEvent.change(screen.getByRole("textbox", { name: "Search keyboard shortcuts" }), {
+      target: { value: "Quick Access: files" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Record" }));
+
+    fireEvent.blur(screen.getByRole("button", { name: "Press shortcut" }), {
+      relatedTarget: screen.getByRole("button", { name: "Cancel" }),
+    });
+
+    expect(screen.getByText("Recording keyboard shortcut.")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Cancel" })).toBeInTheDocument();
+  });
+
   it("disables Remove for an unmodified shortcut and enables it once overridden", () => {
     const overriddenView = view({
       snapshot: snapshot({ keybindingOverrides: ["1|quick-access.files|CtrlOrMeta+Shift+O"] }),
@@ -288,6 +328,25 @@ describe("KeyboardShortcutsPanel", () => {
       "Dieses gespeicherte Tastenkürzel kann nicht verwendet werden. Das Standardkürzel bleibt aktiv.",
     );
     expect(refusal).not.toHaveTextContent("INVALID_INPUT");
+  });
+
+  // KEIKO-0660: shortcutLabelForPlatform's "Unbound" fallback is hardcoded English by design (it
+  // has no I18nTranslate access) — the caller must substitute a localized string for the
+  // null-binding case, which ShortcutSummary did not do.
+  it("localizes the unbound-shortcut label instead of the hardcoded English fallback", async () => {
+    window.localStorage.setItem("keiko.locale", "de");
+    renderPanel(view());
+
+    const row = await screen.findByRole("article", { name: "Editor nach unten teilen" });
+    expect(within(row).queryByText("Unbound")).not.toBeInTheDocument();
+    expect(within(row).getByText("Nicht zugewiesen")).toBeInTheDocument();
+  });
+
+  it("shows the English 'Unbound' label for a command with no default binding in English locale", () => {
+    renderPanel(view());
+
+    const row = screen.getByRole("article", { name: "Split editor down" });
+    expect(within(row).getByText("Unbound")).toBeInTheDocument();
   });
 
   it.each([

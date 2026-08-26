@@ -35,7 +35,7 @@ import { ApiError } from "./api";
 import { buildBffHeaders, CORRELATION_HEADER, newClientCorrelationId } from "./bff-correlation";
 
 // Re-exported for the existing consumers that import these two from "./http"
-// (AppShell.tsx, TaskWorkspaceSwitcher.tsx, SelectionAwareWorkspaceHosts.tsx,
+// (AppShell.tsx, RepositoryFolderSwitcher.tsx, SelectionAwareWorkspaceHosts.tsx,
 // coding-app-session-channel-api.ts). The implementation lives in ./bff-correlation so this file
 // and ./api can both depend on it without the module cycle documented above.
 export { CORRELATION_HEADER, newClientCorrelationId };

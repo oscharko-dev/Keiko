@@ -1,17 +1,16 @@
 "use client";
 
-// Issue #211 — MemoriaViva list with URL-state filter sync.
-// Uses useSearchParams (wrapped in Suspense by the parent page) to keep filters
-// deep-linkable. Filter state is read from / written to URL query params.
+// Issue #211 — MemoriaViva list content. Filter state is owned by the caller (a desktop window,
+// e.g. MemoriaVivaWindow.tsx, which holds it in local React state) and passed in as `filters` /
+// `onFilterChange` props — this file has no URL-state sync of its own (KEIKO-0650: the earlier
+// useSearchParams-backed `MemoryList` route wrapper and its filtersFromParams/filtersToParams
+// URL-param helpers were removed as dead code once every production caller moved to the
+// prop-driven MemoryListContent below).
 //
 // WCAG: focus-visible rings, aria-live on status regions, role="status" on counters.
-// Static export: useSearchParams requires Suspense wrapper (applied in page.tsx).
-// URL encoding: URLSearchParams.set already encodes; useSearchParams.get already decodes
-// — no double encode/decode (#64 lesson).
 
-import { useCallback, useEffect, useMemo, useRef, useState, useTransition } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
-import { useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
 import type { MemoryRecord } from "@oscharko-dev/keiko-contracts";
 import { fetchMemories, type MemoryListFilters, type MemoryListResponse } from "@/lib/memory-api";
@@ -26,44 +25,6 @@ import {
   statusLabel,
   typeLabel,
 } from "./MemoryFilters";
-import {
-  MEMORY_SCOPE_KINDS,
-  MEMORY_TYPES,
-  MEMORY_STATUSES,
-  MEMORY_SENSITIVITIES,
-} from "@oscharko-dev/keiko-contracts";
-
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
-function parseCsvParam<T extends string>(raw: string | null, allowed: readonly T[]): readonly T[] {
-  if (raw === null || raw.trim().length === 0) return [];
-  return raw
-    .split(",")
-    .map((s) => s.trim())
-    .filter((s): s is T => (allowed as readonly string[]).includes(s));
-}
-
-function filtersFromParams(params: ReturnType<typeof useSearchParams>): MemoryFilterState {
-  return {
-    query: params.get("q") ?? "",
-    scope: parseCsvParam(params.get("scope"), MEMORY_SCOPE_KINDS),
-    type: parseCsvParam(params.get("type"), MEMORY_TYPES),
-    status: parseCsvParam(params.get("status"), MEMORY_STATUSES),
-    sensitivity: parseCsvParam(params.get("sensitivity"), MEMORY_SENSITIVITIES),
-  };
-}
-
-function filtersToParams(filters: MemoryFilterState): URLSearchParams {
-  const p = new URLSearchParams();
-  if (filters.query.trim().length > 0) p.set("q", filters.query.trim());
-  if (filters.scope.length > 0) p.set("scope", filters.scope.join(","));
-  if (filters.type.length > 0) p.set("type", filters.type.join(","));
-  if (filters.status.length > 0) p.set("status", filters.status.join(","));
-  if (filters.sensitivity.length > 0) p.set("sensitivity", filters.sensitivity.join(","));
-  return p;
-}
 
 // ---------------------------------------------------------------------------
 // StatusBadge
@@ -329,41 +290,6 @@ function MemoryListBody({
         ))}
       </ul>
     </MemoryListState>
-  );
-}
-
-// ---------------------------------------------------------------------------
-// MemoryList
-// ---------------------------------------------------------------------------
-
-interface MemoryListProps {
-  readonly fetchMemoriesImpl?: typeof fetchMemories;
-}
-
-export function MemoryList({ fetchMemoriesImpl = fetchMemories }: MemoryListProps): ReactNode {
-  const searchParams = useSearchParams();
-  const router = useRouter();
-  const [, startTransition] = useTransition();
-  const filters = useMemo(() => filtersFromParams(searchParams), [searchParams]);
-
-  const handleFilterChange = useCallback(
-    (next: MemoryFilterState): void => {
-      const qs = filtersToParams(next).toString();
-      const queryString = qs.length > 0 ? `?${qs}` : "";
-      startTransition(() => {
-        router.push(`/memoriaviva${queryString}`);
-      });
-    },
-    [router, startTransition],
-  );
-
-  return (
-    <MemoryListContent
-      filters={filters}
-      onFilterChange={handleFilterChange}
-      fetchMemoriesImpl={fetchMemoriesImpl}
-      showWorkspaceBackLink
-    />
   );
 }
 

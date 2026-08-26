@@ -4,6 +4,7 @@ import { useMemo, useState, type ReactNode } from "react";
 
 import {
   compileEditorM7SnippetBody,
+  type EditorM7ReasonCode,
   type EditorM7WorkspaceSnippet,
   type EditorM7WorkspaceSnippetInput,
 } from "@oscharko-dev/keiko-contracts";
@@ -20,7 +21,7 @@ export function WorkspaceSnippetsPanel({
   const t = useTranslate();
   const view = useWorkspaceSnippets(root);
   const [draft, setDraft] = useState(defaultDraft());
-  const [preview, setPreview] = useState<string | undefined>();
+  const [preview, setPreview] = useState<SnippetPreviewResult | undefined>();
   const snippets = view.snapshot?.snippets ?? [];
   const disabled = root === undefined || view.mutating;
   return (
@@ -44,7 +45,12 @@ export function WorkspaceSnippetsPanel({
         draft={draft}
         preview={preview}
         t={t}
-        onDraft={setDraft}
+        onDraft={(next) => {
+          // A preview computed for the previous body would otherwise keep showing stale,
+          // possibly-invalid content (or a stale error) after the user keeps typing.
+          if (next.body !== draft.body) setPreview(undefined);
+          setDraft(next);
+        }}
         onPreview={() => setPreview(previewDraft(draft))}
         onSave={() => {
           const next = [...snippets.map(snippetToInput), draftToInput(draft)];
@@ -110,14 +116,21 @@ function SnippetEditor({
 }: {
   readonly disabled: boolean;
   readonly draft: SnippetDraft;
-  readonly preview: string | undefined;
+  readonly preview: SnippetPreviewResult | undefined;
   readonly t: I18nTranslate;
   readonly onDraft: (draft: SnippetDraft) => void;
   readonly onPreview: () => void;
   readonly onSave: () => void;
 }): ReactNode {
+  // Gates Save on the CURRENT draft body's compile result, continuously — not only on whatever
+  // the last Preview click happened to return — so a body already known locally to be invalid
+  // cannot be sent even if the user edits it again after previewing (KEIKO-0619).
+  const bodyCompileResult = compileEditorM7SnippetBody(draft.body.split(/\r?\n/u));
   const saveDisabled =
-    disabled || draft.name.trim().length === 0 || draft.prefix.trim().length === 0;
+    disabled ||
+    draft.name.trim().length === 0 ||
+    draft.prefix.trim().length === 0 ||
+    !bodyCompileResult.ok;
   return (
     <article className={styles.card}>
       <div className={styles.control}>
@@ -160,7 +173,13 @@ function SnippetEditor({
           {t("settings.snippets.save")}
         </button>
       </div>
-      {preview === undefined ? null : <pre className={styles.meta}>{preview}</pre>}
+      {preview === undefined ? null : preview.ok ? (
+        <pre className={styles.meta}>{preview.preview}</pre>
+      ) : (
+        <div className={styles.alert} role="alert">
+          {snippetPreviewErrorMessage(preview.reasonCode, t)}
+        </div>
+      )}
     </article>
   );
 }
@@ -229,9 +248,25 @@ function SnippetList({
   );
 }
 
-function previewDraft(draft: SnippetDraft): string {
+type SnippetPreviewResult =
+  | { readonly ok: true; readonly preview: string }
+  | { readonly ok: false; readonly reasonCode: EditorM7ReasonCode };
+
+function previewDraft(draft: SnippetDraft): SnippetPreviewResult {
   const compiled = compileEditorM7SnippetBody(draft.body.split(/\r?\n/u));
-  return compiled.ok ? compiled.value : compiled.reasonCode;
+  return compiled.ok
+    ? { ok: true, preview: compiled.value }
+    : { ok: false, reasonCode: compiled.reasonCode };
+}
+
+// compileEditorM7SnippetBody only ever produces "UNSAFE_SNIPPET" today (its single ok:false
+// return site), but EditorM7ParseResult<string>.reasonCode is typed to the full, shared
+// EditorM7ReasonCode union. Every code this path can produce needs a translated message — never a
+// silent fallback to the raw machine token — so unrecognized codes still resolve to a translated,
+// generic message rather than leaking the reasonCode string itself.
+function snippetPreviewErrorMessage(reasonCode: EditorM7ReasonCode, t: I18nTranslate): string {
+  if (reasonCode === "UNSAFE_SNIPPET") return t("settings.snippets.previewUnsafe");
+  return t("settings.snippets.previewFailed");
 }
 
 function draftToInput(draft: SnippetDraft): EditorM7WorkspaceSnippetInput {

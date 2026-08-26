@@ -179,7 +179,7 @@ export function ChatHistoryPanel({ openChatWindow }: ChatHistoryPanelProps): Rea
     const title = editingTitle.trim();
     // Empty input: keep edit mode open and surface an accessible error (PA-05).
     if (title.length === 0) {
-      setRenameError("Title cannot be empty.");
+      setRenameError(optionalT("chat.history.renameEmptyTitle"));
       renameInputRef.current?.focus({ preventScroll: true });
       return;
     }
@@ -197,7 +197,7 @@ export function ChatHistoryPanel({ openChatWindow }: ChatHistoryPanelProps): Rea
       actions.replaceChat(response.chat);
       setEditingId(null);
     } catch {
-      setError("Rename failed.");
+      setError(optionalT("chat.history.renameFailed"));
     } finally {
       setBusyId(null);
     }
@@ -212,7 +212,7 @@ export function ChatHistoryPanel({ openChatWindow }: ChatHistoryPanelProps): Rea
       setDeleteConfirmId(null);
     } catch (caughtError) {
       const detail = caughtError instanceof Error ? caughtError.message : "Request failed.";
-      setError(`Delete failed: ${detail}`);
+      setError(optionalT("chat.history.deleteFailed", { detail }));
     } finally {
       setBusyId(null);
     }
@@ -227,7 +227,7 @@ export function ChatHistoryPanel({ openChatWindow }: ChatHistoryPanelProps): Rea
       setDeleteConfirmId(null);
     } catch (caughtError) {
       const detail = caughtError instanceof Error ? caughtError.message : "Request failed.";
-      setError(`Restore failed: ${detail}`);
+      setError(optionalT("chat.history.restoreFailed", { detail }));
     } finally {
       setBusyId(null);
     }

@@ -245,6 +245,7 @@ function ActivitySection({
   type,
   lifecycle,
   activity,
+  evicted,
   throughputCount,
   animateBadges,
   highContrast,
@@ -254,6 +255,11 @@ function ActivitySection({
   readonly type: RelationshipType;
   readonly lifecycle: RelationshipLifecycleState;
   readonly activity: RelationshipActivityState;
+  /**
+   * True when this id was dropped from live tracking by capacity eviction (KEIKO-0665), not
+   * simply never reported — `activity` is still the lifecycle-derived fallback in that case.
+   */
+  readonly evicted?: boolean;
   readonly throughputCount?: number | undefined;
   readonly animateBadges: boolean;
   readonly highContrast: boolean;
@@ -282,6 +288,16 @@ function ActivitySection({
             />
           </span>
         </div>
+        {evicted === true && (
+          // Distinguishable from a normal activity state (KEIKO-0665): the badge above is only
+          // the lifecycle-derived fallback, not a live SSE report.
+          <div className="rb-row">
+            <span className="rb-row-k">Tracking</span>
+            <span className="rb-row-v" style={{ color: "var(--warn)" }} role="status">
+              Tracking limit reached — showing the last known lifecycle-derived state only.
+            </span>
+          </div>
+        )}
         {visibleTransitions.length > 0 && (
           <div
             className="rb-row"
@@ -606,6 +622,10 @@ interface DenialDetails {
   readonly messages: readonly string[];
 }
 
+// Module-scope constant so the default prop value does not allocate a new empty Set on every
+// render that omits evictedIds.
+const EMPTY_EVICTED_IDS: ReadonlySet<string> = new Set();
+
 // Fallback activity when the live SSE stream has no entry for this relationship. Mirrors the
 // server's activityStateFromLifecycle: a durable lifecycle is not a transient activity. Only
 // blocked/stale imply a derived activity; everything else (incl. active) is "inactive" until a
@@ -748,6 +768,11 @@ export interface RelationshipInspectorPanelProps {
   readonly onViewImpact?: (id: string) => void;
   /** Current transient activity state keyed by relationship id. */
   readonly activityMap?: ReadonlyMap<string, RelationshipActivityState>;
+  /**
+   * Relationship ids evicted from activityMap by useRelationshipActivityStream's capacity cap
+   * (KEIKO-0665) — distinct from an id simply never having been reported.
+   */
+  readonly evictedIds?: ReadonlySet<string>;
   /** Throughput counts for high-throughput badges. */
   readonly throughputMap?: ReadonlyMap<string, number>;
   /** True when motion is allowed for activity badges. */
@@ -764,6 +789,7 @@ export function RelationshipInspectorPanel({
   onClearFocus,
   onViewImpact,
   activityMap = new Map(),
+  evictedIds = EMPTY_EVICTED_IDS,
   throughputMap = new Map(),
   animateBadges = true,
   highContrast = false,
@@ -1019,8 +1045,13 @@ export function RelationshipInspectorPanel({
   const showDenialSection =
     visibleDenial !== null &&
     (rel?.lifecycle === "blocked" || rel?.lifecycle === "revoked" || mutationDenial !== null);
+  // KEIKO-0665: an id absent from activityMap is either "never reported" or "evicted for
+  // capacity" (useRelationshipActivityStream.evictedIds) — distinguish them instead of always
+  // silently falling back to the lifecycle-derived activity with no indication either way.
+  const knownActivity = rel !== null ? activityMap.get(rel.id) : undefined;
   const activity =
-    rel !== null ? (activityMap.get(rel.id) ?? lifecycleToActivity(rel.lifecycle)) : "inactive";
+    knownActivity ?? (rel !== null ? lifecycleToActivity(rel.lifecycle) : "inactive");
+  const activityEvicted = knownActivity === undefined && rel !== null && evictedIds.has(rel.id);
   const throughputCount = rel !== null ? throughputMap.get(rel.id) : undefined;
 
   // ─── Aria-busy container while loading ────────────────────────────────────
@@ -1103,6 +1134,7 @@ export function RelationshipInspectorPanel({
             type={rel.type}
             lifecycle={rel.lifecycle}
             activity={activity}
+            evicted={activityEvicted}
             throughputCount={throughputCount}
             animateBadges={animateBadges}
             highContrast={highContrast}

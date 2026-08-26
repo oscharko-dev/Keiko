@@ -16,7 +16,7 @@ import type { NativeDialogPickOutcome } from "@/lib/native-file-dialog";
 import type { ProjectWithAvailability } from "@/lib/types";
 import { ActiveWorkspaceProvider, type ActiveWorkspaceApi } from "./context/ActiveWorkspaceContext";
 import { ATTACHMENT_CLEANUP_DEFERRED_ERROR } from "@/lib/chat-session-error";
-import { TaskWorkspaceSwitcher } from "./TaskWorkspaceSwitcher";
+import { RepositoryFolderSwitcher } from "./RepositoryFolderSwitcher";
 
 const SELECTED_ROOT = "/Users/oscharko-dev/Projects/Keiko";
 
@@ -41,8 +41,13 @@ vi.mock("./context/ChatSessionContext", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./context/ChatSessionContext")>();
   return {
     ...actual,
-    useOptionalChatSessionActions: () => (catalogState.actionsAvailable ? chatActions : null),
-    useOptionalChatSessionCatalog: () => ({
+    useOptionalChatSessionActions: (): typeof chatActions | null =>
+      catalogState.actionsAvailable ? chatActions : null,
+    useOptionalChatSessionCatalog: (): {
+      activeProject: ProjectWithAvailability | undefined;
+      projects: ProjectWithAvailability[];
+      error: string | undefined;
+    } => ({
       activeProject: catalogState.activeProject,
       projects: catalogState.projects,
       error: catalogState.error,
@@ -120,7 +125,7 @@ function api(overrides: Partial<ActiveWorkspaceApi> = {}): ActiveWorkspaceApi {
 function switcher(value: ActiveWorkspaceApi): ReactNode {
   return (
     <ActiveWorkspaceProvider value={value}>
-      <TaskWorkspaceSwitcher />
+      <RepositoryFolderSwitcher />
     </ActiveWorkspaceProvider>
   );
 }
@@ -140,7 +145,7 @@ function registerSelectedProject(path: string): void {
   catalogState.projects = [selected];
 }
 
-describe("TaskWorkspaceSwitcher", () => {
+describe("RepositoryFolderSwitcher", () => {
   beforeEach(() => {
     catalogState.activeProject = undefined;
     catalogState.projects = [];

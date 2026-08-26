@@ -15,7 +15,7 @@
  */
 
 import { PROVIDER_ENDPOINT_STYLES, REALTIME_AUTH_MODES } from "@/lib/types";
-import type { VoiceProviderLocality } from "@/lib/types";
+import type { SafeCircuitBreakerConfig, VoiceProviderLocality } from "@/lib/types";
 
 export const MAX_GATEWAY_CONFIG_BYTES = 256 * 1024;
 
@@ -97,8 +97,22 @@ const VOICE_LOCALITIES: ReadonlySet<VoiceProviderLocality> = new Set([
  * The setup route rebuilds the circuit breaker with exactly these values and the form has no
  * field for them — a file that tunes them differently cannot be represented without silently
  * changing retry-isolation behavior (review finding on #3031).
+ *
+ * These VALUES mirror `DEFAULT_CIRCUIT_BREAKER_CONFIG` in
+ * `packages/keiko-model-gateway/src/config.ts` — the shared default the server-side call sites
+ * (`gateway-setup.ts`, `grounded-retrieval-eval.ts`) import directly. `keiko-ui` cannot import
+ * that VALUE across the package boundary (ADR-0019 reserves `keiko-model-gateway` for
+ * provider-SDK isolation; the UI talks to the server only across `keiko-contracts` wire types),
+ * so the literal is restated here and typed against `SafeCircuitBreakerConfig` — the contracts
+ * package's wire projection of the same shape — to keep the SHAPE compiler-checked even though
+ * the VALUES cannot be. If `DEFAULT_CIRCUIT_BREAKER_CONFIG` ever changes, update this literal to
+ * match (KEIKO-0572).
  */
-const REBUILT_CIRCUIT_BREAKER = { failureThreshold: 5, cooldownMs: 30_000, halfOpenProbes: 2 };
+const REBUILT_CIRCUIT_BREAKER: SafeCircuitBreakerConfig = {
+  failureThreshold: 5,
+  cooldownMs: 30_000,
+  halfOpenProbes: 2,
+};
 /**
  * The rebuild writes exactly these retry values onto generic providers; a file tuning them
  * differently would be silently rewritten on save (review finding on #3031). Voice providers

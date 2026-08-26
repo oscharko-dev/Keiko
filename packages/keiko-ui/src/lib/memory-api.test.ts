@@ -185,7 +185,7 @@ describe("memory governance API helpers", () => {
       );
     vi.stubGlobal("fetch", fetchMock);
 
-    await deleteMemory("mem 1" as MemoryId, "stale");
+    await deleteMemory("mem 1" as MemoryId);
 
     expect(fetchMock).toHaveBeenCalledWith(
       "/api/memory/mem%201",
@@ -199,6 +199,21 @@ describe("memory governance API helpers", () => {
         }),
       }),
     );
+  });
+
+  // KEIKO-0563: forgetMemory/deleteMemory's dead `_reason` parameter was removed — the server's
+  // parseDestructiveInput never read any client-supplied reason and unconditionally returned
+  // MEMORY_FORGET_REASON_USER_REQUEST, so the parameter was vestigial at every hop. This is a
+  // type-level-only regression pin, deliberately `it.skip`ped: JS has no runtime parameter-type
+  // enforcement, so actually calling this at runtime would pass the literal string "stale" as
+  // `fetchImpl` and throw "fetchImpl is not a function". `tsc` still fully type-checks a skipped
+  // test body, so `npm run typecheck` (not `vitest run`) is this pin's real, load-bearing
+  // assertion: it fails with "unused '@ts-expect-error' directive" if the parameter is ever
+  // re-added.
+  it.skip("no longer accepts a second positional reason argument (type-level only)", async () => {
+    // @ts-expect-error — deleteMemory takes only (id, fetchImpl?); a reason string is no longer
+    // an accepted second argument.
+    await deleteMemory("mem 1" as MemoryId, "stale");
   });
 
   it("posts conflict-resolution requests to the literal conflict route", async () => {

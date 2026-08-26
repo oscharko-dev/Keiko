@@ -1,6 +1,14 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
+import {
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type FocusEvent,
+  type KeyboardEvent,
+  type ReactNode,
+} from "react";
 
 import type {
   EditorM7CommandDefinition,
@@ -308,7 +316,11 @@ function ShortcutSummary({
       </div>
       <div className={styles.help}>{commandDescription(entry.command, t)}</div>
       <div className={styles.meta}>
-        <kbd className={styles.kbd}>{shortcutLabel(entry.binding, platform)}</kbd>
+        <kbd className={styles.kbd}>
+          {entry.binding === null
+            ? t("settings.keyboard.unbound")
+            : shortcutLabel(entry.binding, platform)}
+        </kbd>
         {" · "}
         {scopeLabel(entry.command, t)}
         {" · "}
@@ -384,12 +396,31 @@ function RecordingControls({
   readonly onCapture: (event: KeyboardEvent<HTMLButtonElement>) => void;
 }): ReactNode {
   const pressButtonRef = useRef<HTMLButtonElement | null>(null);
+  const controlRef = useRef<HTMLDivElement | null>(null);
   useEffect(() => {
     const handle = requestAnimationFrame((): void => pressButtonRef.current?.focus());
     return (): void => cancelAnimationFrame(handle);
   }, []);
+  // KEIKO-0757: focus leaving the recording row by any means other than the explicit Cancel
+  // click or a successful capture (clicking elsewhere, Tab out, the window losing focus) must
+  // still cancel recording — otherwise recordingId stays stuck and the row is left announcing
+  // "Recording keyboard shortcut." with no way to dismiss it but a full keystroke capture.
+  // Mirrors Palette.tsx's onBlur pattern: relatedTarget is only set when focus demonstrably
+  // moved to another DOM node (not e.g. a window blur), and controlRef.contains() distinguishes
+  // moving between the two buttons IN this row (no cancel) from focus leaving it entirely.
+  const onBlur = (event: FocusEvent<HTMLDivElement>): void => {
+    if (
+      event.relatedTarget instanceof Node &&
+      controlRef.current?.contains(event.relatedTarget) !== true
+    ) {
+      onCancel();
+    }
+  };
+  // Focus-out on the group container mirrors the Cancel button for keyboard/mouse users leaving
+  // the row by any other means; the two buttons inside remain the actual interactive targets.
   return (
-    <div className={styles.control}>
+    // eslint-disable-next-line jsx-a11y/no-noninteractive-element-interactions -- see comment above
+    <div className={styles.control} ref={controlRef} role="group" onBlur={onBlur}>
       <button ref={pressButtonRef} type="button" className={styles.button} onKeyDown={onCapture}>
         {t("settings.keyboard.pressShortcut")}
       </button>

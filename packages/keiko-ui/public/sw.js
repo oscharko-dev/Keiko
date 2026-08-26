@@ -172,7 +172,7 @@ self.addEventListener("activate", (event) => {
       if (typeof caches === "undefined") return;
       const names = await caches.keys();
       await Promise.all(
-        names.map((name) => (name === CACHE_NAME ? Promise.resolve(false) : caches.delete(name))),
+        names.filter((name) => name !== CACHE_NAME).map((name) => caches.delete(name)),
       );
     })(),
   );

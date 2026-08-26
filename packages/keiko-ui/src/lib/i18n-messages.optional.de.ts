@@ -171,6 +171,10 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
   "chat.history.purgeWarning":
     "Diese Konversation und ihre gespeicherten Nachrichten dauerhaft löschen? Dies kann nicht rückgängig gemacht werden.",
   "chat.history.purgeFailed": "Dauerhaftes Löschen fehlgeschlagen: {detail}",
+  "chat.history.renameEmptyTitle": "Titel darf nicht leer sein.",
+  "chat.history.renameFailed": "Umbenennen fehlgeschlagen.",
+  "chat.history.deleteFailed": "Löschen fehlgeschlagen: {detail}",
+  "chat.history.restoreFailed": "Wiederherstellen fehlgeschlagen: {detail}",
   "chat.regenerate.versionSelector": "Antwortversion",
   "chat.regenerate.version": "Version {version}",
   "chat.regenerate.versionCurrent": "Version {version} (aktuell)",

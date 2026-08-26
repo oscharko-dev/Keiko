@@ -1,6 +1,6 @@
 // RB-6 / ADR-0173 D5 — the chat error banner gains a copyable "Support ID: <id>" line whenever the
 // underlying failure carried a correlation id, using the same "{feature}.supportId" i18n key
-// pattern already proven at VoiceDictation.tsx, WorkspaceTrustSurfaces.tsx, TaskWorkspaceSwitcher.tsx.
+// pattern already proven at VoiceDictation.tsx, WorkspaceTrustSurfaces.tsx, RepositoryFolderSwitcher.tsx.
 
 import { fireEvent, render, screen } from "@testing-library/react";
 import { axe } from "jest-axe";

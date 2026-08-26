@@ -155,24 +155,6 @@
       "count": 1
     }
   },
-  "src/app/components/desktop/TaskWorkspaceSwitcher.a11y.test.tsx": {
-    "@typescript-eslint/explicit-function-return-type": {
-      "count": 2
-    }
-  },
-  "src/app/components/desktop/TaskWorkspaceSwitcher.test.tsx": {
-    "@typescript-eslint/explicit-function-return-type": {
-      "count": 2
-    }
-  },
-  "src/app/components/desktop/TaskWorkspaceSwitcher.tsx": {
-    "@typescript-eslint/explicit-function-return-type": {
-      "count": 3
-    },
-    "max-lines-per-function": {
-      "count": 2
-    }
-  },
   "src/app/components/desktop/VoiceDialogMode.test.tsx": {
     "@typescript-eslint/explicit-function-return-type": {
       "count": 2
@@ -1891,7 +1873,7 @@
   },
   "src/app/memoriaviva/MemoriaVivaBrowserFlows.test.tsx": {
     "@typescript-eslint/explicit-function-return-type": {
-      "count": 4
+      "count": 1
     }
   },
   "src/app/memoriaviva/components/EditMemoryDialog.tsx": {
@@ -1992,7 +1974,7 @@
   },
   "src/app/memoriaviva/components/MemoryList.test.tsx": {
     "@typescript-eslint/explicit-function-return-type": {
-      "count": 7
+      "count": 2
     }
   },
   "src/app/memoriaviva/components/MemoryList.tsx": {
@@ -2008,11 +1990,6 @@
   "src/app/memoriaviva/components/ReviewQueue.tsx": {
     "max-lines-per-function": {
       "count": 3
-    }
-  },
-  "src/app/memoriaviva/detail/MemoryDetailClient.test.tsx": {
-    "@typescript-eslint/explicit-function-return-type": {
-      "count": 4
     }
   },
   "src/app/relationships/RelationshipsView.test.tsx": {
