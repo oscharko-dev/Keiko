@@ -539,18 +539,11 @@
       "Open a run from the Quality Intelligence hub."
     ],
     "packages/keiko-ui/src/app/components/desktop/widgets/panels/ChatHistoryPanel.tsx": [
-      "Active",
-      "Cancel",
       "Chat History",
       "Conversation state",
       "Conversations",
-      "Delete",
-      "Deleted",
       "New",
       "No conversations",
-      "Rename",
-      "Restore",
-      "Save",
       "Search",
       "Search chat history"
     ],
