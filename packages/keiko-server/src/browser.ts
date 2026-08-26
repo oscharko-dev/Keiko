@@ -14,6 +14,7 @@ import {
   type BrowserSessionManager,
 } from "@oscharko-dev/keiko-tools";
 import type { UiHandlerDeps } from "./deps.js";
+import { redactedEventJson } from "./sse-frame-cache.js";
 import { SSE_HEADERS, readyMessage, startSseHeartbeat } from "./sse.js";
 import {
   errorBody,
@@ -336,8 +337,11 @@ function writeBrowserEvent(
   controller: AbortController,
   onBackpressure?: (signal: SseBackpressureSignal) => void,
 ): void {
-  const redacted = redactor(event);
-  const data = JSON.stringify(redacted);
+  // KEIKO-0674: reuse the WeakMap-keyed redactedEventJson helper (GEN-PERF-FANOUT-001) so a fan-
+  // out of the same browser event to K subscribers pays the redact+serialize cost once, not K
+  // times. Every other SSE fan-out path (agent-run/container/command-runner/terminal) already
+  // routes through this helper; this one was the last inline call to redactor()+JSON.stringify.
+  const data = redactedEventJson(redactor, event);
   const frame = `id: ${String(seq)}\nevent: browser:${event.kind}\ndata: ${data}\n\n`;
   writeOrDestroy(res, frame, controller, onBackpressure);
 }

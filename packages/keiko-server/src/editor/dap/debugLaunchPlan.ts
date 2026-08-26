@@ -319,16 +319,19 @@ function validateAdapterBinding(
   input: DebugCapsuleLayer2Input,
   context: DebugLaunchRuntimeContext,
 ): void {
-  const bindingValid =
+  // KEIKO-0715: the two expressions below encode "true == the binding/arguments are WRONG" (a
+  // rejection is thrown when they're true). The file-wide convention (pathsValid/identityValid)
+  // is "...Valid == the thing holds", so rename to the correct polarity. Behaviour is unchanged.
+  const bindingInvalid =
     input.adapter.providerId.length === 0 ||
     input.adapter.executable !== context.adapter.hostPath ||
     input.adapter.temp !== context.hostRuntimeDirectory ||
     !sameRecord(input.adapter.env, context.environment);
-  const argumentsValid =
+  const argumentsInvalid =
     input.adapter.args.length !== 2 ||
     input.adapter.args[0] !== "--server" ||
     input.adapter.args[1] !== context.capsuleSocketPath;
-  if (bindingValid || argumentsValid) throw new DebugCapsulePlanError();
+  if (bindingInvalid || argumentsInvalid) throw new DebugCapsulePlanError();
 }
 
 /** @internal Direct security-boundary entry point used by strict mutation tests. */

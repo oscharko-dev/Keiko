@@ -48,6 +48,9 @@ import type {
   WorkspaceFs,
   WorkspaceStat,
 } from "@oscharko-dev/keiko-workspace";
+// KEIKO-0572: share the circuitBreaker defaults with the model-gateway package rather than
+// restating the object literal locally.
+import { DEFAULT_CIRCUIT_BREAKER_CONFIG } from "@oscharko-dev/keiko-model-gateway";
 
 import type { UiHandlerDeps } from "./deps.js";
 import { buildRedactor } from "./deps.js";
@@ -393,7 +396,7 @@ function evalGatewayConfig(): GatewayConfig {
       apiKey: "redacted-eval-rerank-key",
       timeoutMs: 30_000,
     },
-    circuitBreaker: { failureThreshold: 5, cooldownMs: 30_000, halfOpenProbes: 2 },
+    circuitBreaker: DEFAULT_CIRCUIT_BREAKER_CONFIG,
   };
 }
 

@@ -20,6 +20,7 @@ import {
   type AutonomousDeliveryApprovalStore,
 } from "./autonomousDeliveryApprovalStore.js";
 import {
+  AUTONOMOUS_DELIVERY_ROUTE_GROUP,
   handleAutonomousDeliveryConfirm,
   handleAutonomousDeliveryExecute,
 } from "./autonomousDeliveryRoutes.js";
@@ -214,12 +215,10 @@ afterEach(() => {
 
 describe("POST /api/coding-workbench/autonomous-delivery/execute", () => {
   it("keeps browser-owned authority confirmation and execution unmounted", () => {
-    for (const pattern of [
-      "/api/coding-workbench/autonomous-delivery/confirm",
-      "/api/coding-workbench/autonomous-delivery/execute",
-    ]) {
-      expect(matchRoute("POST", pattern)).toBeUndefined();
-      expect(matchRoute("GET", pattern)).toBeUndefined();
+    expect(AUTONOMOUS_DELIVERY_ROUTE_GROUP.length).toBeGreaterThan(0);
+    for (const route of AUTONOMOUS_DELIVERY_ROUTE_GROUP) {
+      expect(matchRoute(route.method, route.pattern)).toBeUndefined();
+      expect(matchRoute("GET", route.pattern)).toBeUndefined();
     }
   });
 

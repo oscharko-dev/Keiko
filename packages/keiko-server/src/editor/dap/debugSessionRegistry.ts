@@ -935,7 +935,15 @@ async function runReconcile(
   }
   session.capsules.length = 0;
   session.projectTerminal(deps.now());
-  if (!(await appendTerminalEvidence(deps, session))) return;
+  if (!(await appendTerminalEvidence(deps, session))) {
+    // KEIKO-0592: mirror the resource-cleanup-failure branch above and self-schedule the retry,
+    // so a session stuck in evidencePending recovers independent of the external 1000ms sweep in
+    // dapProductionService.ts. Without this the session sits indefinitely under any composition
+    // that omits the periodic sweep (a real risk when the registry is reused outside production
+    // wiring).
+    scheduleTerminationReconcile(sessions, deps, session);
+    return;
+  }
   sessions.delete(session.input.sessionId);
   session.resolveTeardown();
   session.resolveTeardown = noopResolve;

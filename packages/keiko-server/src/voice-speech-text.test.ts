@@ -130,23 +130,37 @@ describe("toSpeakableText", () => {
     expect(spoken).not.toContain("More citation text");
   });
 
-  it("strips citation markers with an unusually long digit run", () => {
-    // Regression test: a bounded `\d{1,32}` stops matching (and thus stops stripping) a citation
-    // marker whose number exceeds 32 digits, leaving the raw bracketed marker to be spoken aloud.
-    const longDigits = "1".repeat(33);
+  it("strips citation markers with an unusually long digit run, up to the shipped 100-char bound", () => {
+    // Regression test: a bounded `\d{1,100}` stops matching (and thus stops stripping) a citation
+    // marker whose number exceeds 100 digits, leaving the raw bracketed marker to be spoken aloud.
+    // Probes the actual shipped bound (100, still stripped) and one past it (101, left unstripped --
+    // the documented, accepted worst case per voice-speech-text.ts's CITATION_MARKER comment; a
+    // fixed quantifier cannot consume an arbitrarily long run, so beyond the bound the marker is
+    // read aloud verbatim rather than silently swallowed).
+    const atBound = "1".repeat(100);
+    const overBound = "1".repeat(101);
 
-    expect(toSpeakableText(`The answer is here [${longDigits}] and that's it.`)).toBe(
+    expect(toSpeakableText(`The answer is here [${atBound}] and that's it.`)).toBe(
       "The answer is here and that's it.",
+    );
+    expect(toSpeakableText(`The answer is here [${overBound}] and that's it.`)).toBe(
+      `The answer is here [${overBound}] and that's it.`,
     );
   });
 
-  it("strips citation markers with an unusually long letter-label prefix", () => {
-    // Regression test: a bounded `[A-Za-z]{1,32}` stops matching (and thus stops stripping) a
-    // citation marker whose letter prefix exceeds 32 characters, leaving it to be spoken aloud.
-    const longLabel = "A".repeat(33);
+  it("strips citation markers with an unusually long letter-label prefix, up to the shipped 100-char bound", () => {
+    // Regression test: a bounded `[A-Za-z]{1,100}` stops matching (and thus stops stripping) a
+    // citation marker whose letter prefix exceeds 100 characters, leaving it to be spoken aloud.
+    // Probes the actual shipped bound (100, still stripped) and one past it (101, left unstripped --
+    // the documented, accepted worst case).
+    const atBound = "A".repeat(100);
+    const overBound = "A".repeat(101);
 
-    expect(toSpeakableText(`The answer is here [${longLabel}-1] and that's it.`)).toBe(
+    expect(toSpeakableText(`The answer is here [${atBound}-1] and that's it.`)).toBe(
       "The answer is here and that's it.",
+    );
+    expect(toSpeakableText(`The answer is here [${overBound}-1] and that's it.`)).toBe(
+      `The answer is here [${overBound}-1] and that's it.`,
     );
   });
 });

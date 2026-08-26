@@ -1593,7 +1593,9 @@ async function handleControlDebugSession(
     request.action === "pause"
       ? await firstThreadId(service, request.sessionId)
       : await stoppedThreadId(service, request.sessionId, request.pauseGeneration);
-  const command = request.action === "continue" ? "continue" : request.action;
+  // KEIKO-0943: the ternary was a no-op -- DebugSessionControlAction's literal union already
+  // matches the DAP request names 1:1, so the "continue" alias mapping produced the same value.
+  const command = request.action;
   await service.manager.request(request.sessionId, command, { threadId }, "control");
   if (request.action !== "pause") service.references.clearSession(request.sessionId);
   return {

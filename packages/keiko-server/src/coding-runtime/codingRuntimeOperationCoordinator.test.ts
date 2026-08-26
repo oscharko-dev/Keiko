@@ -108,6 +108,22 @@ function followUp(requestId = "req-1"): Record<string, unknown> {
 }
 
 describe("CodingRuntimeOperationCoordinator", () => {
+  it("KEIKO-0722: exhausting the per-run replay cap yields replay-cap-exhausted, not invalid-intent", async () => {
+    const taskDispatcher = dispatcher();
+    const subject = coordinator({ taskDispatcher });
+    // Fill the 512-slot replay-dedup budget with unique request ids on the same run.
+    for (let i = 0; i < 512; i += 1) {
+      const result = await subject.submitFollowUp("run-1", followUp(`req-${String(i)}`));
+      expect(result).toMatchObject({ ok: true });
+    }
+    // The 513th unique request id must not be classified as an ordinary invalid-intent
+    // rejection; it must carry the distinct replay-cap-exhausted failure code.
+    await expect(subject.submitFollowUp("run-1", followUp("req-513"))).resolves.toEqual({
+      ok: false,
+      failureCode: "replay-cap-exhausted",
+    });
+  });
+
   it("dispatches a valid follow-up exactly once per request id", async () => {
     const taskDispatcher = dispatcher();
     const subject = coordinator({ taskDispatcher });

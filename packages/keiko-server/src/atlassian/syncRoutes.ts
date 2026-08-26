@@ -72,20 +72,23 @@ import {
 
 const MAX_SYNC_BODY_BYTES = 16_000;
 
-function unavailable(): RouteResult {
+// KEIKO-0534: connector-guard helpers thread the request's correlation id into 503/4xx error
+// bodies, matching manual-pod-routes.ts's convention.
+function unavailable(correlationId?: string): RouteResult {
   return {
     status: 503,
     body: errorBody(
       "ATLASSIAN_CONNECTORS_UNAVAILABLE",
       "Atlassian connector credential custody is not configured for this BFF.",
+      correlationId,
     ),
   };
 }
 
 type DepsOrResult = AtlassianConnectorCredentialDeps | RouteResult;
 
-function requireConnectorDeps(deps: UiHandlerDeps): DepsOrResult {
-  return deps.atlassianConnectorCredentials ?? unavailable();
+function requireConnectorDeps(deps: UiHandlerDeps, correlationId?: string): DepsOrResult {
+  return deps.atlassianConnectorCredentials ?? unavailable(correlationId);
 }
 
 function isRouteResult(value: DepsOrResult): value is RouteResult {
@@ -147,18 +150,24 @@ async function readJsonObject(req: IncomingMessage): Promise<Record<string, unkn
   return parsed as Record<string, unknown>;
 }
 
-async function runHandler(work: () => Promise<RouteResult> | RouteResult): Promise<RouteResult> {
+async function runHandler(
+  work: () => Promise<RouteResult> | RouteResult,
+  correlationId?: string,
+): Promise<RouteResult> {
   try {
     return await work();
   } catch (error) {
     if (error instanceof BodyTooLargeError) {
       return {
         status: 413,
-        body: errorBody("PAYLOAD_TOO_LARGE", "Request body exceeds the size limit."),
+        body: errorBody("PAYLOAD_TOO_LARGE", "Request body exceeds the size limit.", correlationId),
       };
     }
     if (error instanceof AtlassianSyncRequestError) {
-      return { status: error.status, body: errorBody(error.code, error.message) };
+      return {
+        status: error.status,
+        body: errorBody(error.code, error.message, correlationId),
+      };
     }
     throw error;
   }
@@ -422,7 +431,7 @@ export function handleStartAtlassianConnectorSync(
   ctx: RouteContext,
   deps: UiHandlerDeps,
 ): Promise<RouteResult> | RouteResult {
-  const guard = requireConnectorDeps(deps);
+  const guard = requireConnectorDeps(deps, ctx.correlationId);
   if (isRouteResult(guard)) return guard;
   return runHandler(async () => {
     const credential = requireAtlassianCredential(ctx, guard);
@@ -442,13 +451,17 @@ export function handleStartAtlassianConnectorSync(
     // Direct human-triggered start: human-approved by construction (ADR-0129; ADR-0128 D5) —
     // recorded as `allowed` + `human-initiated` on the run's activity record.
     return startSyncAllowed(deps, guard, credential, body);
-  });
+  }, ctx.correlationId);
 }
 
-function jobNotFound(): RouteResult {
+function jobNotFound(correlationId?: string): RouteResult {
   return {
     status: 404,
-    body: errorBody("SYNC_JOB_NOT_FOUND", "Atlassian connector sync job is not available."),
+    body: errorBody(
+      "SYNC_JOB_NOT_FOUND",
+      "Atlassian connector sync job is not available.",
+      correlationId,
+    ),
   };
 }
 
@@ -468,14 +481,14 @@ export function handleGetAtlassianConnectorSyncJob(
   ctx: RouteContext,
   deps: UiHandlerDeps,
 ): Promise<RouteResult> | RouteResult {
-  const guard = requireConnectorDeps(deps);
+  const guard = requireConnectorDeps(deps, ctx.correlationId);
   if (isRouteResult(guard)) return guard;
   return runHandler(() => {
     const jobId = decodedJobIdParam(ctx);
     const job = jobId === undefined ? undefined : atlassianSyncJobRegistry.get(jobId);
-    if (job === undefined) return jobNotFound();
+    if (job === undefined) return jobNotFound(ctx.correlationId);
     return { status: 200, body: { job: job.state } };
-  });
+  }, ctx.correlationId);
 }
 
 // POST /api/atlassian-connectors/sync-jobs/:jobId/cancel — aborts the run's signal; the job
@@ -485,14 +498,14 @@ export function handleCancelAtlassianConnectorSyncJob(
   ctx: RouteContext,
   deps: UiHandlerDeps,
 ): Promise<RouteResult> | RouteResult {
-  const guard = requireConnectorDeps(deps);
+  const guard = requireConnectorDeps(deps, ctx.correlationId);
   if (isRouteResult(guard)) return guard;
   return runHandler(() => {
     const jobId = decodedJobIdParam(ctx);
     const job = jobId === undefined ? undefined : atlassianSyncJobRegistry.cancel(jobId);
-    if (job === undefined) return jobNotFound();
+    if (job === undefined) return jobNotFound(ctx.correlationId);
     return { status: 202, body: { job: job.state } };
-  });
+  }, ctx.correlationId);
 }
 
 // GET /api/atlassian-connectors/credentials/:authRef/activity — the bounded, content-free
@@ -501,7 +514,7 @@ export function handleListAtlassianConnectorActivity(
   ctx: RouteContext,
   deps: UiHandlerDeps,
 ): Promise<RouteResult> | RouteResult {
-  const guard = requireConnectorDeps(deps);
+  const guard = requireConnectorDeps(deps, ctx.correlationId);
   if (isRouteResult(guard)) return guard;
   return runHandler(() => {
     const credential = requireAtlassianCredential(ctx, guard);
@@ -509,5 +522,5 @@ export function handleListAtlassianConnectorActivity(
       connectorIdForAuthRef(credential.authRef),
     );
     return { status: 200, body: { activity } };
-  });
+  }, ctx.correlationId);
 }

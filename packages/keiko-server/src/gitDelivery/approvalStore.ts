@@ -7,8 +7,11 @@ import {
 } from "@oscharko-dev/keiko-contracts";
 import { canonicalise, sha256Hex } from "@oscharko-dev/keiko-security";
 
-export type GitDeliveryApprovalOperation =
-  "local-mutation" | "commit" | "push" | "pr" | "merge" | "action-sheet";
+// KEIKO-0693: "action-sheet" was removed from this union -- action-sheet is read-only and never
+// approval-gated (actionSheetRoutes.ts always sets `approvalRequirement: { required: false }`
+// and never touches the approval store), so the member was pure type-noise that suggested a
+// non-existent binding could be constructed.
+export type GitDeliveryApprovalOperation = "local-mutation" | "commit" | "push" | "pr" | "merge";
 
 export interface GitDeliveryApprovalBinding {
   readonly projectId: string;

@@ -58,6 +58,11 @@ export interface SupervisedCodingFileEditRequest extends EvidenceContext {
   readonly fileCount: number;
   readonly addedLines: number;
   readonly deletedLines: number;
+  // KEIKO-0557: parity with classifyContentMutation (editor-agent-governance.ts). When the caller
+  // has already resolved the sensitive-path deny classification for `targetPath`, threading it
+  // through here lets decideSupervisedFileEdit deny even when the sidecar-declared
+  // allowedRelativePaths would otherwise contain the path.
+  readonly targetSensitive?: boolean;
 }
 
 export interface SupervisedCodingCommandRequest extends EvidenceContext {
@@ -95,6 +100,13 @@ export const DEFAULT_SUPERVISED_VERIFICATION_COMMANDS: readonly SupervisedCoding
 export function decideSupervisedFileEdit(
   request: SupervisedCodingFileEditRequest,
 ): SupervisedCodingDecision {
+  // KEIKO-0557: sensitive-path deny takes precedence over the sidecar's self-declared
+  // allowedRelativePaths — a mutation whose target sits on the shared sensitive deny list is
+  // rejected even if the sidecar would otherwise contain it. Mirrors classifyContentMutation's
+  // context.targetSensitive gate.
+  if (request.targetSensitive === true) {
+    return fileEditDecision(request, "denied", "out-of-scope-file-edit", true);
+  }
   const contained = resolveContainedEditTarget(request);
   return contained
     ? fileEditDecision(request, "allowed", "scoped-file-edit", false)
@@ -211,12 +223,45 @@ function isMutatingCommand(request: SupervisedCodingCommandRequest): boolean {
   return request.executable === "npm" && npmSubcommandMutates(subcommand);
 }
 
+// KEIKO-0764: broadened to recognise the mutating subcommands the audit identified so a denied
+// command outside the allowlist is labeled 'mutating-command-denied' rather than the less-alarming
+// 'unknown-command-denied' in audit evidence whenever it actually mutates state. This changes only
+// the evidence-reason CLASSIFICATION, not the allow/deny DECISION — decideSupervisedVerificationCommand
+// remains fail-closed via the fixed allowlist.
 function gitSubcommandMutates(subcommand: string): boolean {
-  return ["commit", "push", "merge", "rebase", "reset", "checkout", "clean"].includes(subcommand);
+  return [
+    "commit",
+    "push",
+    "merge",
+    "rebase",
+    "reset",
+    "checkout",
+    "clean",
+    "branch",
+    "tag",
+    "stash",
+    "worktree",
+    "remote",
+    "config",
+    "gc",
+  ].includes(subcommand);
 }
 
 function npmSubcommandMutates(subcommand: string): boolean {
-  return ["install", "ci", "publish", "version", "add", "remove", "uninstall"].includes(subcommand);
+  return [
+    "install",
+    "ci",
+    "publish",
+    "version",
+    "add",
+    "remove",
+    "uninstall",
+    "dedupe",
+    "link",
+    "rebuild",
+    "pkg",
+    "audit",
+  ].includes(subcommand);
 }
 
 function ghSubcommandMutates(args: readonly string[]): boolean {

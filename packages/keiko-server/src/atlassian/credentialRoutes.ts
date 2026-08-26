@@ -66,20 +66,23 @@ class BodyTooLargeError extends Error {
   }
 }
 
-function unavailable(): RouteResult {
+// KEIKO-0534: unavailable/requireCustody thread the request's correlation id into the 503
+// response body, matching manual-pod-routes.ts's convention.
+function unavailable(correlationId?: string): RouteResult {
   return {
     status: 503,
     body: errorBody(
       "ATLASSIAN_CONNECTORS_UNAVAILABLE",
       "Atlassian connector credential custody is not configured for this BFF.",
+      correlationId,
     ),
   };
 }
 
 type DepsOrResult = AtlassianConnectorCredentialDeps | RouteResult;
 
-function requireCustody(deps: UiHandlerDeps): DepsOrResult {
-  return deps.atlassianConnectorCredentials ?? unavailable();
+function requireCustody(deps: UiHandlerDeps, correlationId?: string): DepsOrResult {
+  return deps.atlassianConnectorCredentials ?? unavailable(correlationId);
 }
 
 function isRouteResult(value: DepsOrResult): value is RouteResult {
@@ -132,7 +135,10 @@ async function readJsonObject(req: IncomingMessage): Promise<Record<string, unkn
 // field-level details (field names + rules only — never submitted values). Custody-storage health
 // codes are NOT mapped: they rethrow to the top-level catch (opaque 500 + correlation id +
 // redacted operator diagnostic).
-function custodyErrorResult(error: AtlassianCredentialCustodyError): RouteResult | undefined {
+function custodyErrorResult(
+  error: AtlassianCredentialCustodyError,
+  correlationId?: string,
+): RouteResult | undefined {
   switch (error.code) {
     case "invalid-input":
       return {
@@ -140,19 +146,26 @@ function custodyErrorResult(error: AtlassianCredentialCustodyError): RouteResult
         body: errorBody(
           "VALIDATION_FAILED",
           error.details.length > 0 ? error.details.join("; ") : error.message,
+          correlationId,
         ),
       };
     case "unsupported-auth-scheme":
-      return { status: 400, body: errorBody("AUTH_SCHEME_UNSUPPORTED", error.message) };
+      return {
+        status: 400,
+        body: errorBody("AUTH_SCHEME_UNSUPPORTED", error.message, correlationId),
+      };
     case "credential-not-found":
-      return { status: 404, body: errorBody("CREDENTIAL_NOT_FOUND", error.message) };
+      return { status: 404, body: errorBody("CREDENTIAL_NOT_FOUND", error.message, correlationId) };
     // KEIKO-0826: reject once the custody storage cap
     // (ATLASSIAN_CREDENTIAL_CUSTODY_MAX_ENTRIES) is reached. 429 (Too Many Requests) is the
     // conventional shape for a per-resource rate/cap ceiling — distinct from a validation
     // failure (400) or a not-found (404), and safe for a client to surface as "try again after
     // freeing a slot" rather than as a permanent failure.
     case "credential-limit-exceeded":
-      return { status: 429, body: errorBody("CREDENTIAL_LIMIT_EXCEEDED", error.message) };
+      return {
+        status: 429,
+        body: errorBody("CREDENTIAL_LIMIT_EXCEEDED", error.message, correlationId),
+      };
     case "credential-unreadable":
     case "vault-unavailable":
       return undefined;
@@ -200,11 +213,15 @@ async function runHandler(
     if (error instanceof BodyTooLargeError) {
       return {
         status: 413,
-        body: errorBody("PAYLOAD_TOO_LARGE", "Request body exceeds the size limit."),
+        body: errorBody(
+          "PAYLOAD_TOO_LARGE",
+          "Request body exceeds the size limit.",
+          ctx.correlationId,
+        ),
       };
     }
     if (error instanceof AtlassianCredentialCustodyError) {
-      const mapped = custodyErrorResult(error);
+      const mapped = custodyErrorResult(error, ctx.correlationId);
       if (mapped !== undefined) {
         recordCustodyRejection(deps, ctx, error.code, mapped.status);
         return mapped;
@@ -228,10 +245,14 @@ function decodeAuthRefParam(ctx: RouteContext): string | undefined {
   return isAtlassianConnectorAuthRef(decoded) ? decoded : undefined;
 }
 
-function credentialNotFound(): RouteResult {
+function credentialNotFound(correlationId?: string): RouteResult {
   return {
     status: 404,
-    body: errorBody("CREDENTIAL_NOT_FOUND", "Atlassian connector credential is not available."),
+    body: errorBody(
+      "CREDENTIAL_NOT_FOUND",
+      "Atlassian connector credential is not available.",
+      correlationId,
+    ),
   };
 }
 
@@ -242,7 +263,7 @@ export async function handleCreateAtlassianConnectorCredential(
   ctx: RouteContext,
   deps: UiHandlerDeps,
 ): Promise<RouteResult> {
-  const guard = requireCustody(deps);
+  const guard = requireCustody(deps, ctx.correlationId);
   if (isRouteResult(guard)) return guard;
   return runHandler(guard, ctx, async () => {
     const body = await readJsonObject(ctx.req);
@@ -255,7 +276,7 @@ export function handleListAtlassianConnectorCredentials(
   ctx: RouteContext,
   deps: UiHandlerDeps,
 ): Promise<RouteResult> | RouteResult {
-  const guard = requireCustody(deps);
+  const guard = requireCustody(deps, ctx.correlationId);
   if (isRouteResult(guard)) return guard;
   return runHandler(guard, ctx, () => ({
     status: 200,
@@ -269,12 +290,12 @@ export function handleDeleteAtlassianConnectorCredential(
   ctx: RouteContext,
   deps: UiHandlerDeps,
 ): Promise<RouteResult> | RouteResult {
-  const guard = requireCustody(deps);
+  const guard = requireCustody(deps, ctx.correlationId);
   if (isRouteResult(guard)) return guard;
   return runHandler(guard, ctx, () => {
     const authRef = decodeAuthRefParam(ctx);
     if (authRef === undefined || !guard.custody.delete(authRef)) {
-      return credentialNotFound();
+      return credentialNotFound(ctx.correlationId);
     }
     return { status: 200, body: { ok: true } };
   });
@@ -287,12 +308,12 @@ export function handleVerifyAtlassianConnectorCredential(
   ctx: RouteContext,
   deps: UiHandlerDeps,
 ): Promise<RouteResult> | RouteResult {
-  const guard = requireCustody(deps);
+  const guard = requireCustody(deps, ctx.correlationId);
   if (isRouteResult(guard)) return guard;
   return runHandler(guard, ctx, async () => {
     const authRef = decodeAuthRefParam(ctx);
     const metadata = authRef === undefined ? undefined : guard.custody.getMetadata(authRef);
-    if (metadata === undefined) return credentialNotFound();
+    if (metadata === undefined) return credentialNotFound(ctx.correlationId);
     const status = await verifyAtlassianConnection(guard.httpPortFactory(metadata), {
       provider: metadata.provider,
       baseUrl: metadata.baseUrl,

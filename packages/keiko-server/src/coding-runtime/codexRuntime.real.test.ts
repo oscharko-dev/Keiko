@@ -17,6 +17,8 @@ import type { Readable, Writable } from "node:stream";
 
 import { describe, expect, it } from "vitest";
 
+import { KEIKO_PRODUCT_VERSION } from "@oscharko-dev/keiko-contracts";
+
 import { CodexAppServerClient, type CodexAppServerTransport } from "./codexAppServerClient.js";
 import { CODEX_APP_SERVER_SCHEMA } from "./codexAppServerProtocol.js";
 
@@ -300,7 +302,7 @@ describe("[functional-only] real Codex app-server", () => {
         expect(harness.child.spawnfile).toBe(executable);
         expect(harness.child.spawnargs).toEqual([executable]);
         const initialized = await client.request("initialize", {
-          clientInfo: { name: "keiko", version: "0.2.15" },
+          clientInfo: { name: "keiko", version: KEIKO_PRODUCT_VERSION },
           capabilities: {
             experimentalApi: false,
             requestAttestation: false,

@@ -119,6 +119,36 @@ function protectionForCaptureFailure(
   return degradedProtection(error, correlationId);
 }
 
+// KEIKO-0675: rename-driven re-key wrapper mirroring captureEditorLocalHistorySafely's shape.
+// Fail-safe: a re-key failure never breaks the rename response; it emits a body-free diagnostic
+// and returns 0 rewritten entries so the caller can log a bounded count.
+export function reKeyEditorLocalHistorySafely(input: {
+  readonly deps: Pick<UiHandlerDeps, "store" | "editorLocalHistoryStore" | "diagnostics">;
+  readonly realRoot: string;
+  readonly previousRelativePath: string;
+  readonly nextRelativePath: string;
+  readonly correlationId?: string | undefined;
+}): number {
+  if (input.deps.editorLocalHistoryStore === undefined) return 0;
+  try {
+    const identity = resolveEditorLocalHistoryRoot(input.deps, input.realRoot);
+    return input.deps.editorLocalHistoryStore.reKey(
+      identity,
+      input.previousRelativePath,
+      input.nextRelativePath,
+    );
+  } catch (error) {
+    emitEditorLocalHistoryCaptureFailure(
+      input.deps,
+      "user-save",
+      error,
+      Date.now(),
+      input.correlationId,
+    );
+    return 0;
+  }
+}
+
 export function captureEditorLocalHistorySafely(input: {
   readonly deps: Pick<UiHandlerDeps, "store" | "editorLocalHistoryStore" | "diagnostics">;
   readonly realRoot: string;

@@ -435,8 +435,11 @@ async function buildReplacePreviewResponse(
     files,
     fileCount: files.length,
     editCount,
+    // KEIKO-0645: `truncated` is the union of both truncation causes; the two boolean/count fields
+    // below let a caller reason about each cause independently.
     truncated: result.truncated || omittedFileCount > 0,
     omittedFileCount,
+    filesOmittedBySearchLimit: result.truncated,
   };
 }
 

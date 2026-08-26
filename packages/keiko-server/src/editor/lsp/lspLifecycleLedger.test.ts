@@ -4,6 +4,7 @@ import type { LspLifecycleEvent } from "@oscharko-dev/keiko-contracts";
 
 import {
   _resetLspLifecycleLedgerForTests,
+  listAllLspLifecycleEvents,
   listLspLifecycleEvents,
   recordLspLifecycleEvent,
 } from "./lspLifecycleLedger.js";
@@ -84,5 +85,22 @@ describe("lspLifecycleLedger", () => {
     _resetLspLifecycleLedgerForTests();
 
     expect(listLspLifecycleEvents()).toEqual([]);
+  });
+
+  it("partitions events by workspace key so two roots stay disjoint (KEIKO-0556)", () => {
+    // Two workspace partitions running the same managerId (language) must produce disjoint
+    // per-partition views yet remain observable through the union projection the status route
+    // uses. Before the fix, a single module-level FIFO interleaved both partitions with nothing
+    // in the wire shape to tell them apart.
+    recordLspLifecycleEvent(event({ status: "STARTING", timestampMs: 1 }), "partition-A");
+    recordLspLifecycleEvent(event({ status: "READY", timestampMs: 2 }), "partition-A");
+    recordLspLifecycleEvent(event({ status: "CRASHED", timestampMs: 3 }), "partition-B");
+
+    expect(listLspLifecycleEvents("partition-A").map((e) => e.status)).toEqual([
+      "STARTING",
+      "READY",
+    ]);
+    expect(listLspLifecycleEvents("partition-B").map((e) => e.status)).toEqual(["CRASHED"]);
+    expect(listAllLspLifecycleEvents()).toHaveLength(3);
   });
 });

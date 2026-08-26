@@ -179,6 +179,15 @@ function isStateChangingMethod(method: string): boolean {
   return method === "POST" || method === "PATCH" || method === "PUT" || method === "DELETE";
 }
 
+// KEIKO-0885: this exemption skips the X-Keiko-CSRF header requirement for the coding-sidecar
+// gateway's OpenAI-compatible chat/completions POST -- an SDK client that speaks the OpenAI
+// wire format cannot send a Keiko-defined header. The compensating control is
+// authenticateGatewayRequest in packages/keiko-server/src/coding-sidecar-gateway.ts (session-
+// pairing + attestation) which authenticates every request to this route before any state
+// change happens; the loopback Host/Origin check (host-check.ts:isAllowedHost) runs
+// unconditionally upstream of both. DO NOT add a second route to this exemption without
+// verifying it carries an equivalent per-request authenticator, and update the pin test in
+// server.test.ts that captures the exempt-route allowlist at exactly one entry.
 function isCsrfExemptStateChange(method: string, pathname: string): boolean {
   return method === "POST" && pathname === "/api/coding-sidecar/gateway/chat/completions";
 }

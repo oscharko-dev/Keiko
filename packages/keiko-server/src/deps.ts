@@ -290,6 +290,11 @@ import {
 } from "./coding-runtime/autonomousDeliveryApprovalStore.js";
 import type { AtlassianConnectorCredentialDeps } from "./atlassian/credentialRoutes.js";
 import { buildAtlassianConnectorCredentialDeps } from "./atlassian/wiring.js";
+// KEIKO-0565: DI-scoped Atlassian connector registries. The classes are imported (not just their
+// types) so buildUiHandlerDeps can construct one instance per BFF process without depending on
+// the module-level singleton.
+import { AtlassianActionApprovalRegistry } from "./atlassian/actionApprovals.js";
+import { AtlassianSyncJobRegistry } from "./atlassian/syncService.js";
 import { createNodeManagedLspControl } from "./editor/lsp/managedLspControlFactory.js";
 import { shutdownHostLspPool } from "./editor/lsp/hostLanguageOperation.js";
 import type { ManagedLspControlService } from "./editor/lsp/managedLspControl.js";
@@ -543,6 +548,16 @@ export interface UiHandlerDeps {
   // Server-owned approval proof store for Autonomous Delivery. The execute route consumes a proof
   // minted by the confirm route instead of trusting a client-supplied digest.
   readonly autonomousDeliveryApprovalStore?: AutonomousDeliveryApprovalStore | undefined;
+  // KEIKO-0565: DI-scoped Atlassian connector approval and sync registries. Optional so
+  // pre-existing fixture-heavy test wiring stays byte-for-byte compatible; production wiring in
+  // buildUiHandlerDeps constructs one instance per BFF process so two independently-built
+  // UiHandlerDeps instances no longer share the module-level singleton. Callers that read
+  // `deps.atlassianActionApprovalRegistry` / `deps.atlassianSyncJobRegistry` see the injected
+  // instance; callers that still import the module-level singleton read the process-wide default
+  // that buildUiHandlerDeps points to, preserving current behaviour until every consumer is
+  // migrated.
+  readonly atlassianActionApprovalRegistry?: AtlassianActionApprovalRegistry | undefined;
+  readonly atlassianSyncJobRegistry?: AtlassianSyncJobRegistry | undefined;
   // Server-owned deployment ceiling for Autonomous Delivery requests. Undefined fails closed to the
   // lowest authority posture instead of accepting the request-supplied ceiling.
   readonly autonomousDeliveryDeploymentCeiling?: CodingWorkbenchMode | undefined;
@@ -868,6 +883,11 @@ export interface BuildHandlerDepsOptions {
   // execution fail closed to governed-assist.
   readonly autonomousDeliveryDeploymentCeiling?: CodingWorkbenchMode | undefined;
   readonly autonomousDeliveryStopState?: UiHandlerDeps["autonomousDeliveryStopState"] | undefined;
+  // KEIKO-0565: injectable Atlassian action-approval and sync-job registries. Production wiring
+  // constructs one instance per BFF process; test wiring can inject fresh instances to keep test
+  // isolation clean instead of resetting a module-level singleton.
+  readonly atlassianActionApprovalRegistry?: AtlassianActionApprovalRegistry | undefined;
+  readonly atlassianSyncJobRegistry?: AtlassianSyncJobRegistry | undefined;
   // UI-local SQLite DB path (`keiko ui --ui-db`); resolved via UI-store precedence (explicit →
   // KEIKO_UI_DATA_DIR → homedir/.keiko/keiko-ui.db). Mirrors evidenceDir's shape.
   readonly uiDbPath?: string | undefined;
@@ -3198,6 +3218,21 @@ function autonomousDeliveryFields(
   };
 }
 
+// KEIKO-0565: DI-scoped Atlassian action-approval and sync-job registries. buildUiHandlerDeps now
+// constructs one instance of each per BFF process so two independently-built handler deps no longer
+// share the module-level singleton. Callers migrated to `deps.*` see the injected instance.
+function atlassianConnectorRegistryFields(
+  options: BuildHandlerDepsOptions,
+): Pick<UiHandlerDeps, "atlassianActionApprovalRegistry" | "atlassianSyncJobRegistry"> {
+  const approvalRegistry =
+    options.atlassianActionApprovalRegistry ?? new AtlassianActionApprovalRegistry();
+  const syncRegistry = options.atlassianSyncJobRegistry ?? new AtlassianSyncJobRegistry();
+  return {
+    atlassianActionApprovalRegistry: approvalRegistry,
+    atlassianSyncJobRegistry: syncRegistry,
+  };
+}
+
 // Issue #2241 — lazy Atlassian custody wiring: no vault key, keychain entry, or metadata file is
 // created until the first /api/atlassian-connectors/* custody operation. Egress is resolved per
 // outbound request from the live runtime config (first-run onboarding updates are honored).
@@ -3711,6 +3746,7 @@ function buildIntegrationUiHandlerDeps(args: UiHandlerDepsAssemblyArgs): Integra
   const atlassian = atlassianConnectorCredentialFields(args);
   return {
     ...autonomousDeliveryFields(args.options),
+    ...atlassianConnectorRegistryFields(args.options),
     ...atlassian,
     ...(atlassian.atlassianConnectorCredentials === undefined
       ? {}

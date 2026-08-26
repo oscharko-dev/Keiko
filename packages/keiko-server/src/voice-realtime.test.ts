@@ -527,6 +527,23 @@ describe("VoiceControlConnection protocol gating & idempotency", () => {
       "not-allowed-for-profile",
     );
   });
+
+  it("KEIKO-0661: denies a capability.select for a profile the session did not negotiate", async () => {
+    // The realtime transport binds one session to one profile ("full-realtime"). Before the fix,
+    // any capability.select (even for a different profile the session was never negotiated for)
+    // returned {decision: "allow"} unconditionally. Now the response must be {decision: "deny"}
+    // for a mismatched profile.
+    const { socket, conn } = connect();
+    conn.start(false);
+    socket.sent.length = 0;
+
+    await conn.receive(clientMessage("capability.select", 1, { profile: "speech-to-text" }));
+
+    expect(socket.sent).toHaveLength(1);
+    const decision = socket.sent[0] as unknown as Record<string, unknown>;
+    expect(decision.kind).toBe("policy.decision");
+    expect(decision.decision).toBe("deny");
+  });
 });
 
 describe("VoiceControlConnection replay & teardown", () => {

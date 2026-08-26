@@ -37,6 +37,22 @@ describe("macOS portable code identity", (): void => {
     expect((): string => macosDeveloperIdRequirement("invalid")).toThrow(TypeError);
   });
 
+  it("KEIKO-0788: rejects a bundleIdentifier containing characters outside the safe reverse-DNS charset", (): void => {
+    // A quote or backslash would close the surrounding identifier and inject arbitrary
+    // requirement text before this fix; the guard must throw TypeError to match the
+    // team-identifier check's convention.
+    expect((): string =>
+      macosDeveloperIdRequirement("AB12CD34EF", 'dev.oscharko.keiko." and delete "'),
+    ).toThrow(TypeError);
+    // Backslash-escaped quote is not a valid bundle-id character either.
+    expect((): string => macosDeveloperIdRequirement("AB12CD34EF", "keiko\\quote")).toThrow(
+      TypeError,
+    );
+    // Empty bundleIdentifier is not "undefined" -- an empty string collapses the anchor clause
+    // to a syntactically valid but semantically empty identifier requirement; fail closed too.
+    expect((): string => macosDeveloperIdRequirement("AB12CD34EF", "")).toThrow(TypeError);
+  });
+
   it("keeps an unbound development build unqualified", (): void => {
     expect(macosReleaseTeamIdentifier()).toBeUndefined();
   });

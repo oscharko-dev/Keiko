@@ -1675,7 +1675,21 @@ export function createEditorSettingsControlService(
   const profileImportSigningKey = randomBytes(32);
   return {
     stateDir: options.store.stateDir,
-    read: (realRoot): Promise<EditorM11SettingsSnapshot> => loadSnapshot(realRoot, options),
+    // KEIKO-0596: wrap the read path in the same per-scope mutex mutate() uses. loadSnapshot
+    // reaches reconcileRootBinding, which performs a disk write when a record's
+    // rootObjectIdentityDigest has never been adopted. Without the mutex, that adoption write
+    // can land between a concurrent mutate() call's initial read and its later write; the commit
+    // path's fail-closed identity check turns that into a transient
+    // STATE_UNAVAILABLE/EditorSettingsRootIdentityError a retry resolves, but read() writing to
+    // the same file mutate() treats as mutex-protected is a real architectural inconsistency.
+    read: (realRoot): Promise<EditorM11SettingsSnapshot> => {
+      const rootKey =
+        realRoot === undefined ? "global" : editorSettingsWorkspaceFingerprint(realRoot);
+      return options.mutex.runExclusive(
+        [`editor-settings:workspace:${rootKey}`, `editor-settings:root:${rootKey}`],
+        () => loadSnapshot(realRoot, options),
+      );
+    },
     readProfiles: (): Promise<EditorM11ProfilesSnapshot> =>
       Promise.resolve(profilesSnapshot(profilesStoreFor(options).load())),
     mutate: (mutation): Promise<EditorM11SettingsMutationResult> => {

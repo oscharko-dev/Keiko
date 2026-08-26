@@ -372,6 +372,38 @@ describe("POST /api/voice/transcribe — successful dictation (AC3/AC4/AC6)", ()
     expect(withOverride.seen[0]?.prompt).toBe("custom domain terms");
   });
 
+  it("KEIKO-0649: truncates the caller prompt on code-point boundaries, never on a lone surrogate", async () => {
+    // 499 ASCII chars + one four-byte astral code point (U+1F600, encoded as two UTF-16 units)
+    // is 501 UTF-16 units = trimmed.length 501, > MAX_DICTATION_PROMPT_LENGTH (500). A
+    // UTF-16-unit-based slice would keep 500 units and split the surrogate pair, leaving a lone
+    // high surrogate at the end -- corrupting the JSON serialization to the ASR provider.
+    const asciiPrefix = "a".repeat(499);
+    const emoji = "\u{1F600}";
+    const smuggledPrompt = `${asciiPrefix}${emoji}`;
+    expect(smuggledPrompt.length).toBe(501);
+
+    const { deps, seen } = sttDeps();
+    await handleVoiceTranscribe(
+      ctx({ audio: VALID_AUDIO, mimeType: "audio/webm", prompt: smuggledPrompt }),
+      deps,
+    );
+    const forwarded = seen[0]?.prompt;
+    expect(forwarded).toBeDefined();
+    // Every code point in the forwarded prompt is a well-formed character; no lone surrogates.
+    const codePoints = Array.from(forwarded ?? "");
+    for (const cp of codePoints) {
+      const code = cp.codePointAt(0);
+      expect(code).toBeDefined();
+      // A well-formed code point is either below the surrogate range or a full pair (code point
+      // > 0xFFFF, which iterating with [...] resolves as one code point of length 2).
+      const isLoneSurrogate =
+        code !== undefined && code >= 0xd800 && code <= 0xdfff && cp.length === 1;
+      expect(isLoneSurrogate).toBe(false);
+    }
+    // The forwarded prompt round-trips cleanly through JSON.
+    expect(() => JSON.parse(JSON.stringify(forwarded)) as unknown).not.toThrow();
+  });
+
   it("surfaces content-free provider metadata when present", async () => {
     const { deps } = sttDeps(
       {},

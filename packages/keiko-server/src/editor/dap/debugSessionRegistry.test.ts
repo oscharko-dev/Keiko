@@ -912,6 +912,28 @@ describe("DebugSessionRegistry canonical lifecycle", () => {
     await stopping;
   });
 
+  it("self-heals from evidence-pending without an external reconcile() (KEIKO-0592)", async () => {
+    let fail = true;
+    const registry = createDebugSessionRegistry({
+      appendEvidence: (_partition, evidence) =>
+        fail && evidence.eventKind === "stop"
+          ? Promise.reject(new Error("private"))
+          : Promise.resolve(),
+      now: () => 1,
+      emitOutputLimit: ignoreOutputLimit,
+    });
+    await registry.reserve(identity());
+    const stopping = registry.stop("session_a");
+    await vi.waitFor(() => {
+      expect(registry.session("session_a")?.health).toBe("evidencePending");
+    });
+    // Drop the failing gate; without any external reconcile() call, the self-scheduled retry
+    // that runReconcile now arms on the evidence-append-failure branch must recover the session.
+    fail = false;
+    await stopping;
+    expect(registry.session("session_a")).toBeUndefined();
+  });
+
   it("distinguishes workspace capacity from replay and preserves the first partition", async () => {
     const { registry } = setup();
     await registry.reserve(identity());

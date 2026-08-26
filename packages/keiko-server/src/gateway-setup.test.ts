@@ -750,6 +750,44 @@ describe("handleGatewaySetup", () => {
     }
   });
 
+  it("KEIKO-0691: fails deterministically instead of crashing when the smoke-test fetch rejects with an ECONNREFUSED-shaped error", async () => {
+    // Unreachable proxy simulation: every gateway fetch fails with an ECONNREFUSED-shaped
+    // Error. handleGatewaySetup must return a deterministic RouteResult (non-2xx, non-crashing);
+    // it must NEVER let the underlying fetch rejection propagate as an uncaught throw.
+    const uiDir = await tempDir("keiko-gw-unreachable-ui-");
+    const evidenceDir = await tempDir("keiko-gw-unreachable-ev-");
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (): Promise<Response> => {
+      const error = new Error("connect ECONNREFUSED 127.0.0.1:80") as Error & { code?: string };
+      error.code = "ECONNREFUSED";
+      return Promise.reject(error);
+    };
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir,
+      env: { ...VAULT_ENV },
+      uiDbPath: join(uiDir, "keiko-ui.db"),
+    });
+    try {
+      const result = await handleGatewaySetup(
+        ctx(
+          { baseUrl: "https://unreachable-proxy.example.invalid", apiKey: "example-secret-token" },
+          "corr-unreachable-proxy",
+        ),
+        deps,
+      );
+      // The exact failure code is a downstream classification concern; the invariant this test
+      // pins is that the handler completes with a deterministic 4xx/5xx RouteResult carrying an
+      // error body (never an uncaught throw / 2xx-plus-empty body).
+      expect(result.status).toBeGreaterThanOrEqual(400);
+      const errorBody = result.body as { readonly error?: { readonly code?: unknown } };
+      expect(errorBody.error?.code).toEqual(expect.any(String));
+    } finally {
+      globalThis.fetch = originalFetch;
+      deps.store.close();
+    }
+  });
+
   it("includes the request correlation id when the setup body is not an object", async () => {
     const uiDir = await tempDir("keiko-gw-invalid-ui-");
     const evidenceDir = await tempDir("keiko-gw-invalid-ev-");

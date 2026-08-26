@@ -955,7 +955,9 @@ describe("CodingRuntimeAuthorityService", () => {
     );
     const minted = mint(authority);
     if (!minted.ok) throw new Error("expected mint");
-    authority.revoke(minted.authorityRef.runId, NOW);
+    // KEIKO-0737: revoke() was a dead combinator; call its two primitives directly instead.
+    authority.revokeBeforeTerminate(minted.authorityRef.runId);
+    authority.transition(minted.authorityRef.runId, "taken-over", NOW);
     expect(resolve(authority, minted.authorityRef)).toEqual({
       ok: false,
       reason: "revoked",

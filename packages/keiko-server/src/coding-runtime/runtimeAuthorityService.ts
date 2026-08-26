@@ -1,4 +1,8 @@
-import { createHash, randomBytes } from "node:crypto";
+import { randomBytes } from "node:crypto";
+// KEIKO-0577: replace the file-local digest()/canonicalJson() with the shared, architecturally
+// correct helpers from @oscharko-dev/keiko-security so a second silently-diverging
+// implementation of a security-relevant hashing primitive cannot drift further.
+import { canonicalise, sha256Hex } from "@oscharko-dev/keiko-security";
 import {
   CODING_WORKBENCH_RUNTIME_CONTRACT_VERSION,
   isCodingWorkbenchModeWidening,
@@ -445,10 +449,11 @@ export class CodingRuntimeAuthorityService {
     );
   }
 
-  public revoke(runId: string, nowIso: string): void {
-    this.revokeBeforeTerminate(runId);
-    this.transition(runId, "taken-over", nowIso);
-  }
+  // KEIKO-0737: the combined revoke(runId, nowIso) was only ever exercised by its own unit test
+  // (production called revokeBeforeTerminate directly), and because "taken-over" is a terminal
+  // state, transition()'s applyTransition already calls revokeBeforeTerminate a second time,
+  // masking a latent double-invocation defect that no production path exercised. The method has
+  // been removed; the one caller now calls the two primitives directly and inline.
 
   /** Synchronously closes every server-owned authority before process termination is signalled. */
   public revokeBeforeTerminate(runId: string): boolean {
@@ -750,7 +755,7 @@ function mintApprovalBinding(
     runId: "coding-runtime-mint",
     requestId: intent.requestId,
     actionKind: "system-mutation",
-    scopeDigest: digest(canonicalJson({ taskId, operatorId, startIntent: intent })),
+    scopeDigest: sha256Hex(canonicalise({ taskId, operatorId, startIntent: intent })),
     connectorScopes: [],
   };
 }
@@ -758,7 +763,7 @@ function mintApprovalBinding(
 function startIntentDigest(
   intent: Extract<CodingWorkbenchRuntimeIntent, { readonly command: "start" }>,
 ): string {
-  return digest(canonicalJson(intent));
+  return sha256Hex(canonicalise(intent));
 }
 
 function stateForMint(
@@ -787,7 +792,7 @@ function buildRuntimeAuthority(
   nonce: string,
   approvalDigest: string,
 ): CodingWorkbenchRuntimeAuthorityEnvelope {
-  const rootDigest = digest(context.workspaceRoot);
+  const rootDigest = sha256Hex(context.workspaceRoot);
   const identity = projectedIdentity(context, rootDigest);
   const branch = projectedBranch(context.branch);
   const modelProfile = {
@@ -823,7 +828,7 @@ function buildRuntimeAuthority(
     authority,
     binding: identity.binding,
     intentDigest: startIntentDigest(intent),
-    nonceDigest: digest(nonce),
+    nonceDigest: sha256Hex(nonce),
     issuedAt,
   };
 }
@@ -867,10 +872,6 @@ function projectedBranch(
   };
 }
 
-function digest(value: string): string {
-  return createHash("sha256").update(value, "utf8").digest("hex");
-}
-
 function runtimeAdapterKind(
   runtimeSource: CodingWorkbenchRuntimeAuthorityEnvelope["authority"]["runtimeSource"],
 ): CodingWorkbenchRuntimeAdapterKind | undefined {
@@ -888,26 +889,12 @@ function capabilityFailure(reason: "invalid" | "expired" | "revoked"): {
   return { ok: false, reason: "authority-resolution-failed" };
 }
 
-function canonicalJson(value: unknown): string {
-  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(",")}]`;
-  if (value !== null && typeof value === "object") {
-    const entries = Object.entries(value as Record<string, unknown>).sort(([a], [b]) =>
-      a.localeCompare(b),
-    );
-    const body = entries
-      .map(([key, entry]) => `${JSON.stringify(key)}:${canonicalJson(entry)}`)
-      .join(",");
-    return `{${body}}`;
-  }
-  return JSON.stringify(value);
-}
-
 export function codingRuntimeBudgetDigest(budget: CodingWorkbenchBudget): string {
-  return digest(canonicalJson(budget));
+  return sha256Hex(canonicalise(budget));
 }
 
 export function codingRuntimeFactDigest(value: unknown): string {
-  return digest(canonicalJson(value));
+  return sha256Hex(canonicalise(value));
 }
 
 export function codingRuntimeAuthorityEnvelopeDigest(

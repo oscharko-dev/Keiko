@@ -272,6 +272,22 @@ describe("desktop files browser", () => {
     });
   });
 
+  it("KEIKO-0633: does not emit a fabricated 0 sentinel for a directory's sizeBytes/modifiedAt", async () => {
+    const listing = await readFilesTree(store, root, "");
+    const srcDir = listing.entries.find((entry) => entry.name === "src");
+    expect(srcDir?.kind).toBe("directory");
+    // Directories are not stat'd per-entry (perf shortcut), so the wire must say "not measured"
+    // (undefined) rather than surfacing a `0` that looks like a real measurement.
+    expect(srcDir?.sizeBytes).toBeUndefined();
+    expect(srcDir?.modifiedAt).toBeUndefined();
+    // File entries continue to carry the real lstat-derived values.
+    const pkgFile = listing.entries.find((entry) => entry.name === "package.json");
+    expect(pkgFile?.kind).toBe("file");
+    expect(typeof pkgFile?.sizeBytes).toBe("number");
+    expect(pkgFile?.sizeBytes ?? 0).toBeGreaterThan(0);
+    expect(typeof pkgFile?.modifiedAt).toBe("number");
+  });
+
   it("searches repository file paths without reading file contents", async () => {
     await mkdir(join(root, "src", "context"));
     await writeFile(join(root, "src", "context", "coding-context.ts"), "export const x = 1;\n");
@@ -921,6 +937,42 @@ describe("desktop files browser", () => {
         path: "src/app.ts",
         content: "export const value = 1;\n",
         baseVersion: { sizeBytes: 1, modifiedAt: 1, contentHash: "not-a-valid-hash" },
+      }),
+      { store, redactor: buildRedactor({}) } as unknown as UiHandlerDeps,
+    );
+
+    expect(result.status).toBe(400);
+    expect(result.body).toMatchObject({ error: { code: "BAD_REQUEST" } });
+  });
+
+  it("KEIKO-0799: rejects a non-number expectedModifiedAt with a 400 instead of silently coercing to undefined", async () => {
+    const result = await handleFilesContent(
+      patchContentContext({
+        root,
+        path: "src/app.ts",
+        content: "export const value = 1;\n",
+        expectedModifiedAt: "not-a-number",
+      }),
+      { store, redactor: buildRedactor({}) } as unknown as UiHandlerDeps,
+    );
+
+    expect(result.status).toBe(400);
+    expect(result.body).toMatchObject({ error: { code: "BAD_REQUEST" } });
+    // The file on disk must be unchanged when the concurrency check was skipped for a malformed value.
+    await expect(readFile(join(root, "src", "app.ts"), "utf8")).resolves.toBe(
+      'const value: string = "ok";\n',
+    );
+  });
+
+  it("KEIKO-0799: rejects a null expectedModifiedAt with a 400 (the JSON coerce of NaN via JSON.stringify)", async () => {
+    // JSON.stringify(NaN) emits `null`, and a naive `typeof body.expectedModifiedAt === "number"`
+    // check would treat that as undefined and skip the concurrency check silently. Fail closed.
+    const result = await handleFilesContent(
+      patchContentContext({
+        root,
+        path: "src/app.ts",
+        content: "x",
+        expectedModifiedAt: null,
       }),
       { store, redactor: buildRedactor({}) } as unknown as UiHandlerDeps,
     );

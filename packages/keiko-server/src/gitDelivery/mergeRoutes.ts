@@ -38,6 +38,7 @@ import {
   resolveGitDeliveryApprovalRequirement,
   type ParsedGitDeliveryApprovalRequest,
 } from "./approvalStore.js";
+import { defaultMintableRepoPack } from "./policyPackMintability.js";
 import {
   buildGitDeliveryMergePreview,
   executeGovernedMerge,
@@ -201,7 +202,7 @@ export const createHandleMergePreview = (
     if (!prepared.ok) return prepared.result;
     const { workspace } = prepared;
     const { command } = prepared.value;
-    const packs = seams.policyPacks ?? { repoPack: KEIKO_DEFAULT_MERGE_POLICY_PACK };
+    const packs = seams.policyPacks ?? defaultMintableRepoPack(KEIKO_DEFAULT_MERGE_POLICY_PACK);
     const strategyPolicy = seams.strategyPolicy ?? {
       allowedStrategies: ["squash", "rebase", "merge-commit", "provider-default"],
     };

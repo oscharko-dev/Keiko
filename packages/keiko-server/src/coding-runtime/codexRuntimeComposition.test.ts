@@ -252,6 +252,25 @@ describe("Codex runtime composition", () => {
     });
   });
 
+  it("KEIKO-0679: task-submitted event carries the run's injected requestedMode/effectiveMode", async () => {
+    const harness = createHarness(undefined, undefined, undefined, undefined, undefined, {
+      requestedMode: () => "autonomous-delivery" as const,
+      effectiveMode: () => "autonomous-delivery" as const,
+    });
+    await prepare(harness);
+    await attach(harness);
+    harness.stdout.write(`${JSON.stringify(turnNotification("turn/started", "inProgress"))}\n`);
+    await tick();
+
+    const submitted = harness.events.find((event) => event.kind === "task-submitted");
+    expect(submitted).toBeDefined();
+    expect(submitted).toMatchObject({
+      kind: "task-submitted",
+      requestedMode: "autonomous-delivery",
+      effectiveMode: "autonomous-delivery",
+    });
+  });
+
   it("fails the adapter on built-in methods and maps terminal/delta events monotonically", async () => {
     const harness = createHarness();
     await prepare(harness);
@@ -489,6 +508,10 @@ function createHarness(
     platformFamily: "unix",
     platformOs: "darwin",
   },
+  modeOverrides?: {
+    readonly requestedMode?: CodexRuntimeCompositionInput["requestedMode"];
+    readonly effectiveMode?: CodexRuntimeCompositionInput["effectiveMode"];
+  },
 ) {
   const stdout = new PassThrough();
   const stdin = new PassThrough();
@@ -581,6 +604,12 @@ function createHarness(
     onRuntimeEvent: (event) => events.push(event),
     onTransientDelta: (delta) => deltas.push(delta),
     onAdapterFailure: (runId, code) => failures.push([runId, code]),
+    ...(modeOverrides?.requestedMode === undefined
+      ? {}
+      : { requestedMode: modeOverrides.requestedMode }),
+    ...(modeOverrides?.effectiveMode === undefined
+      ? {}
+      : { effectiveMode: modeOverrides.effectiveMode }),
   };
   const composition = createCodexRuntimeComposition(input);
   return {

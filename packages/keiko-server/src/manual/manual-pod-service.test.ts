@@ -10,10 +10,12 @@ import type {
 } from "@oscharko-dev/keiko-local-knowledge";
 import type { UiHandlerDeps } from "../deps.js";
 import {
+  MAX_RETAINED_JOBS,
   ManualPodJobRegistry,
   applyCrawlEvent,
   buildHttpManualSource,
   createTerminalState,
+  currentManualPodEgressConfig,
   executeJob,
   getManualPodJob,
   initialJob,
@@ -82,6 +84,69 @@ function stubContextWithThrowingQuery(): ManualPodJobContext {
 
 const flush = (): Promise<void> => new Promise((resolve) => setImmediate(resolve));
 
+describe("KEIKO-0647: currentManualPodEgressConfig is independent of the model-gateway egress flag", () => {
+  it("does NOT inherit allowPrivateNetwork: true from the gateway's egress config", () => {
+    // The gateway is configured to permit private-network egress for LLM traffic (e.g. a
+    // corporate proxy). The manual-pod crawler must NOT inherit that flag -- crossing that
+    // trust boundary requires its own manual-pod-specific opt-in.
+    const deps = {
+      env: {},
+      gatewayConfig: {
+        current: (): { readonly egress: { readonly allowPrivateNetwork: boolean } } => ({
+          egress: { allowPrivateNetwork: true },
+        }),
+      },
+    } as unknown as UiHandlerDeps;
+
+    const resolved = currentManualPodEgressConfig(deps);
+
+    expect(resolved).toBeDefined();
+    expect(resolved?.allowPrivateNetwork).toBe(false);
+  });
+
+  it("re-enables private-network egress only when KEIKO_MANUAL_POD_ALLOW_PRIVATE_NETWORK=true", () => {
+    const depsAllowed = {
+      env: { KEIKO_MANUAL_POD_ALLOW_PRIVATE_NETWORK: "true" },
+      gatewayConfig: {
+        current: (): { readonly egress: { readonly allowPrivateNetwork: boolean } } => ({
+          egress: { allowPrivateNetwork: false },
+        }),
+      },
+    } as unknown as UiHandlerDeps;
+
+    const resolved = currentManualPodEgressConfig(depsAllowed);
+
+    expect(resolved?.allowPrivateNetwork).toBe(true);
+  });
+
+  it("still inherits proxy / CA / other transport settings from the gateway config", () => {
+    const deps = {
+      env: {},
+      gatewayConfig: {
+        current: (): {
+          readonly egress: {
+            readonly allowPrivateNetwork: boolean;
+            readonly httpsProxy: string;
+            readonly caBundlePath: string;
+          };
+        } => ({
+          egress: {
+            allowPrivateNetwork: true,
+            httpsProxy: "http://proxy.internal:3128",
+            caBundlePath: "/etc/ssl/certs/corporate.pem",
+          },
+        }),
+      },
+    } as unknown as UiHandlerDeps;
+
+    const resolved = currentManualPodEgressConfig(deps);
+
+    expect(resolved?.httpsProxy).toBe("http://proxy.internal:3128");
+    expect(resolved?.caBundlePath).toBe("/etc/ssl/certs/corporate.pem");
+    expect(resolved?.allowPrivateNetwork).toBe(false);
+  });
+});
+
 describe("ManualPodJobRegistry", () => {
   it("registers, reads back, and patches a job", () => {
     const registry = new ManualPodJobRegistry();
@@ -100,12 +165,12 @@ describe("ManualPodJobRegistry", () => {
       { ...initialJob("old-terminal", "refresh", "c", "s"), state: "succeeded" },
       new AbortController(),
     );
-    for (let i = 0; i < 64; i += 1) {
+    for (let i = 0; i < MAX_RETAINED_JOBS; i += 1) {
       registry.register(initialJob(`run-${String(i)}`, "refresh", "c", "s"), new AbortController());
     }
     // The terminal job is evicted first; a running job survives.
     expect(registry.get("old-terminal")).toBeUndefined();
-    expect(registry.get("run-63")?.state).toBe("running");
+    expect(registry.get(`run-${String(MAX_RETAINED_JOBS - 1)}`)?.state).toBe("running");
   });
 });
 

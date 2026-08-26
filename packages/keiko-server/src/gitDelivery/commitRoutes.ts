@@ -71,6 +71,7 @@ import {
   type GitDeliveryParsedBody,
 } from "./requestGuards.js";
 import { resolveGovernedCommitMessagePolicy } from "./commitPolicySettings.js";
+import { defaultMintableRepoPack } from "./policyPackMintability.js";
 import {
   readTrustedGitDeliveryBranchProtection,
   signatureRequirementOf,
@@ -529,7 +530,7 @@ function previewEffectivePolicy(
   commitInputs: GitDeliveryResolvedInputs,
   seams: GitDeliveryExecutionSeams,
 ): ReturnType<typeof evaluateGitDeliveryEffectivePolicy> {
-  const packs = seams.policyPacks ?? { repoPack: KEIKO_DEFAULT_LOCAL_GIT_POLICY_PACK };
+  const packs = seams.policyPacks ?? defaultMintableRepoPack(KEIKO_DEFAULT_LOCAL_GIT_POLICY_PACK);
   const targetBranchName = snapshot.currentBranchName;
   const decision = evaluateGitPolicy(packs.orgPack, packs.repoPack, {
     actionKind: "commit",

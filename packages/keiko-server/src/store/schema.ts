@@ -515,7 +515,10 @@ ALTER TABLE coding_runtime_snapshots ADD COLUMN stderr_truncated INTEGER
   CHECK (stderr_truncated IS NULL OR stderr_truncated IN (0,1));
 `;
 
-const MIGRATIONS: readonly Migration[] = [
+// KEIKO-0573: exported so a co-located test can assert strict ascending version order across the
+// array. Not re-exported through packages/keiko-server/src/store/index.ts, so no packaged surface
+// change.
+export const MIGRATIONS: readonly Migration[] = [
   { version: 1, sql: V1_SQL },
   { version: 2, sql: V2_SQL },
   { version: 3, sql: V3_SQL },

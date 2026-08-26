@@ -156,7 +156,11 @@ describe("ResearchGrantRegistry registration", () => {
 });
 
 describe("ResearchGrantRegistry resolution and pruning", () => {
-  it("matches a host exactly and never widens to a subdomain or sibling", () => {
+  // KEIKO-0595: resolveForHost was removed; host normalisation is now exercised through the
+  // single production path (activeGrants + grantForRequest in researchEgressPort). These pins
+  // guard that activeGrants still returns pruned grants whose domain set is normalised
+  // consistently — a future refactor cannot silently reintroduce a second resolver here.
+  it("registers a grant with the normalised domain set the executor consumes", () => {
     const store = registry();
     store.register(
       RUN,
@@ -166,16 +170,12 @@ describe("ResearchGrantRegistry resolution and pruning", () => {
       NOW,
     );
 
-    expect(store.resolveForHost(RUN, "example.com", NOW)?.grantId).toBe("grant-1");
-    expect(store.resolveForHost(RUN, "EXAMPLE.COM", NOW)?.grantId).toBe("grant-1");
-    expect(store.resolveForHost(RUN, "example.com.", NOW)?.grantId).toBe("grant-1");
-    expect(store.resolveForHost(RUN, "docs.example.com", NOW)?.grantId).toBe("grant-1");
-    expect(store.resolveForHost(RUN, "api.example.com", NOW)).toBeUndefined();
-    expect(store.resolveForHost(RUN, "evilexample.com", NOW)).toBeUndefined();
-    expect(store.resolveForHost(RUN, "example.com.evil.com", NOW)).toBeUndefined();
+    const active = store.activeGrants(RUN, NOW);
+    expect(active).toHaveLength(1);
+    expect(active[0]?.domains).toEqual(["example.com", "docs.example.com"]);
   });
 
-  it("prunes expired grants from activeGrants and resolveForHost", () => {
+  it("prunes expired grants from activeGrants", () => {
     const store = registry();
     store.register(
       RUN,
@@ -187,7 +187,6 @@ describe("ResearchGrantRegistry resolution and pruning", () => {
 
     expect(store.activeGrants(RUN, NOW + 4_999)).toHaveLength(1);
     expect(store.activeGrants(RUN, NOW + 6_000)).toHaveLength(0);
-    expect(store.resolveForHost(RUN, "example.com", NOW + 6_000)).toBeUndefined();
   });
 });
 
@@ -346,6 +345,34 @@ describe("ResearchGrantRegistry byte-budget reconciliation", () => {
 
     expect(store.activeGrants(RUN, NOW)).toHaveLength(0);
     expect(store.chargeFetch(RUN, "grant-1", 1, NOW)).toBe("unknown");
+  });
+
+  it("invalidateRun aborts every registered in-flight AbortController (KEIKO-0586)", () => {
+    const store = registry();
+    store.register(RUN, makeScope(), undefined, APPROVAL, NOW);
+    const controllerA = new AbortController();
+    const controllerB = new AbortController();
+    store.registerInFlightFetch(RUN, controllerA);
+    store.registerInFlightFetch(RUN, controllerB);
+    // A different run's controller must NOT be aborted.
+    const foreign = new AbortController();
+    store.registerInFlightFetch("other-run", foreign);
+
+    store.invalidateRun(RUN);
+
+    expect(controllerA.signal.aborted).toBe(true);
+    expect(controllerB.signal.aborted).toBe(true);
+    expect(foreign.signal.aborted).toBe(false);
+  });
+
+  it("release() unregisters the controller so invalidateRun does not abort it (KEIKO-0586)", () => {
+    const store = registry();
+    store.register(RUN, makeScope(), undefined, APPROVAL, NOW);
+    const controller = new AbortController();
+    const release = store.registerInFlightFetch(RUN, controller);
+    release();
+    store.invalidateRun(RUN);
+    expect(controller.signal.aborted).toBe(false);
   });
 });
 

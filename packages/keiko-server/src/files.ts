@@ -45,7 +45,10 @@ import {
 import type { FilesContentResponse as FilesContentWireResponse } from "@oscharko-dev/keiko-contracts/bff-wire";
 import { containsPath } from "@oscharko-dev/keiko-git";
 import { notifyHostLspWorkspaceFileChanged } from "./editor/lsp/hostLanguageOperation.js";
-import { captureEditorLocalHistorySafely } from "./editor/localHistory/localHistoryCapture.js";
+import {
+  captureEditorLocalHistorySafely,
+  reKeyEditorLocalHistorySafely,
+} from "./editor/localHistory/localHistoryCapture.js";
 import { emitServerDiagnostic, serverDiagnosticFromError } from "./diagnostics-log.js";
 import { DENIED_MESSAGE, pathIsDenied } from "./files-deny.js";
 import {
@@ -83,8 +86,13 @@ export interface FilesTreeEntry {
   readonly name: string;
   readonly path: string;
   readonly kind: FilesEntryKind;
-  readonly sizeBytes: number;
-  readonly modifiedAt: number;
+  // sizeBytes and modifiedAt are `undefined` for directory entries (KEIKO-0633). Directories are
+  // returned from a readdir walk and are deliberately not stat'd per entry (one syscall per
+  // directory would dominate the walk cost), so the wire type makes the "not measured" distinction
+  // explicit rather than surfacing a `0` sentinel that looks like a real measurement. File and
+  // symlink entries always carry the real lstat-derived values.
+  readonly sizeBytes?: number | undefined;
+  readonly modifiedAt?: number | undefined;
   readonly extension: string | null;
   readonly symlink: boolean;
   readonly readable: boolean;
@@ -528,12 +536,13 @@ async function classifyEntry(
   assertMetadataSafe(childRelativePath, redactor);
   const entryPath = join(parentNativePath, entry.name);
   if (entry.isDirectory() && !entry.isSymbolicLink()) {
+    // KEIKO-0633: directories deliberately do NOT carry sizeBytes/modifiedAt on the wire -- the
+    // readdir walk skips per-entry stat to avoid one syscall per directory, and emitting a `0`
+    // sentinel would masquerade as a real measurement to any downstream consumer.
     return {
       name: entry.name,
       path: childRelativePath,
       kind: "directory",
-      sizeBytes: 0,
-      modifiedAt: 0,
       extension: extensionOf(entry.name),
       symlink: false,
       readable: true,
@@ -1590,8 +1599,12 @@ export async function resolveContainedEditorFilePath(
   rootInput: string | null,
   pathInput: string | null,
   redactor: FilesMetadataRedactor = staticFilesMetadataRedactor,
+  // KEIKO-0927: optional pre-resolved root -- callers that already resolved the root for a
+  // different check (e.g. rootScope() derivation) can pass it here to avoid the second
+  // resolveRoot syscall for the same rootInput within one request.
+  resolvedRoot?: ResolvedProjectRoot,
 ): Promise<ContainedEditorFilePath> {
-  const root = await resolveRoot(store, rootInput, redactor);
+  const root = resolvedRoot ?? (await resolveRoot(store, rootInput, redactor));
   const relativePath = normalizeRelativePath(pathInput);
   assertMetadataSafe(relativePath, redactor);
   if (relativePath.length === 0) {
@@ -2569,6 +2582,59 @@ function captureNormalFileSave(
   });
 }
 
+type WriteFilesContentBodyFields =
+  | {
+      readonly ok: true;
+      readonly baseVersion: EditorDocumentVersion | undefined;
+      readonly expectedModifiedAt: number | undefined;
+    }
+  | { readonly ok: false; readonly result: RouteResult };
+
+/**
+ * Validates the optional baseVersion and expectedModifiedAt fields of a file-save request body.
+ * KEIKO-0799: fails closed if either is present-but-malformed rather than silently coercing it
+ * away, which would drop the caller's concurrency check without them knowing. Non-finite numbers
+ * (NaN / +/-Infinity) for expectedModifiedAt are also rejected -- `typeof NaN === "number"` would
+ * pass a typeof-only check while still skipping the downstream `Math.abs(...) > 1` gate in
+ * assertNoWriteConflict.
+ */
+function parseWriteFilesContentBodyFields(
+  body: Record<string, unknown>,
+): WriteFilesContentBodyFields {
+  let baseVersion: EditorDocumentVersion | undefined;
+  if (body.baseVersion !== undefined) {
+    const parsed = parseEditorDocumentVersion(body.baseVersion);
+    if (!parsed.ok) {
+      return {
+        ok: false,
+        result: {
+          status: 400,
+          body: errorBody("BAD_REQUEST", "baseVersion is not a valid version."),
+        },
+      };
+    }
+    baseVersion = parsed.value;
+  }
+  if (
+    body.expectedModifiedAt !== undefined &&
+    (typeof body.expectedModifiedAt !== "number" || !Number.isFinite(body.expectedModifiedAt))
+  ) {
+    return {
+      ok: false,
+      result: {
+        status: 400,
+        body: errorBody("BAD_REQUEST", "expectedModifiedAt is not a valid number."),
+      },
+    };
+  }
+  return {
+    ok: true,
+    baseVersion,
+    expectedModifiedAt:
+      typeof body.expectedModifiedAt === "number" ? body.expectedModifiedAt : undefined,
+  };
+}
+
 async function writeFilesContentRoute(
   ctx: RouteContext,
   deps: UiHandlerDeps,
@@ -2580,6 +2646,9 @@ async function writeFilesContentRoute(
     const message = "root, path, and content are required for a file save request.";
     return { status: 400, body: errorBody("BAD_REQUEST", message) };
   }
+  // Path-denial precedence: resolveInsideRoot must run (and, for a denied path, throw the
+  // FilesError that runFilesHandler turns into 403 DENIED) before any body-field validation below
+  // can return its own 4xx, so a denied path is reported as denied rather than as a bad request.
   const resolvedRoot = await resolveRequestRoot(ctx, deps, fields.rootInput);
   const target = await resolveInsideRoot(
     deps.store,
@@ -2588,20 +2657,13 @@ async function writeFilesContentRoute(
     deps.redactor,
     resolvedRoot,
   );
-  let baseVersion: EditorDocumentVersion | undefined;
-  if (body.baseVersion !== undefined) {
-    const parsed = parseEditorDocumentVersion(body.baseVersion);
-    if (!parsed.ok) {
-      return { status: 400, body: errorBody("BAD_REQUEST", "baseVersion is not a valid version.") };
-    }
-    baseVersion = parsed.value;
-  }
+  const bodyFields = parseWriteFilesContentBodyFields(body);
+  if (!bodyFields.ok) return bodyFields.result;
   const response = await writeResolvedFilesContent({
     target,
     content: fields.content,
-    expectedModifiedAt:
-      typeof body.expectedModifiedAt === "number" ? body.expectedModifiedAt : undefined,
-    baseVersion,
+    expectedModifiedAt: bodyFields.expectedModifiedAt,
+    baseVersion: bodyFields.baseVersion,
     beforeWrite:
       fields.historyOrigin === "pre-restore"
         ? createPreRestoreCapture(deps, target, ctx.correlationId)
@@ -2800,6 +2862,16 @@ export async function handleFilesRename(
         result.path,
         ctx.correlationId,
       );
+      // KEIKO-0675: Local History reKey so a renamed file's history surfaces under the new name
+      // instead of silently disappearing. Fail-safe: reKeyEditorLocalHistorySafely never rejects
+      // (a failure downgrades to a body-free diagnostic and 0 rewritten entries).
+      reKeyEditorLocalHistorySafely({
+        deps,
+        realRoot: resolvedRoot.realRoot,
+        previousRelativePath: result.previousPath,
+        nextRelativePath: result.path,
+        correlationId: ctx.correlationId,
+      });
     }
     return { status: 200, body: result };
   });

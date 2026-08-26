@@ -50,7 +50,7 @@ import { createGatewayManualFetcher } from "./manual-crawl-fetcher.js";
 
 // Terminal jobs are retained so a poll after completion still resolves; the registry is capped so a
 // long-lived server cannot accumulate unbounded job records.
-const MAX_RETAINED_JOBS = 64;
+export const MAX_RETAINED_JOBS = 64;
 
 interface ManualPodJobRun {
   job: HtmlManualPodJob;
@@ -268,8 +268,41 @@ export function buildHttpManualSource(
   return validateHtmlManualSource(source).ok ? { ok: true, source } : { ok: false };
 }
 
+// KEIKO-0647: manual-pod-specific egress resolver, independent of currentGatewayEgressConfig.
+// Before this fix the crawler reused the model-gateway's global egress config wholesale, so
+// enabling `allowPrivateNetwork` for a model-gateway proxy also opened the SSRF surface for the
+// manual HTML crawler. That coupling is wrong: LLM traffic and Manual Pod HTML crawling are
+// independent trust boundaries with independent operator-decisions.
+//
+// The independent resolver INHERITS proxy/CA/other transport settings from the gateway config
+// (a corporate deployment already tunes these once), but takes its own `allowPrivateNetwork`
+// decision from a manual-pod-specific env var (KEIKO_MANUAL_POD_ALLOW_PRIVATE_NETWORK). The
+// default is FALSE -- an intranet manual only reaches private hosts when the operator opts in
+// explicitly for the manual-pod surface, never as a side effect of a model-gateway proxy setting.
+// This gives no MORE reach than the shared config used to (private-network access still requires
+// an explicit opt-in) and does not silently DENY the documented on-prem/intranet use case (the
+// operator still has one flag they can turn on).
+export function currentManualPodEgressConfig(
+  deps: UiHandlerDeps,
+): ReturnType<typeof currentGatewayEgressConfig> {
+  const base = currentGatewayEgressConfig(deps);
+  const allowPrivate = (deps.env.KEIKO_MANUAL_POD_ALLOW_PRIVATE_NETWORK ?? "").trim() === "true";
+  if (base === undefined) {
+    return allowPrivate ? { allowPrivateNetwork: true } : undefined;
+  }
+  return { ...base, allowPrivateNetwork: allowPrivate };
+}
+
+// Only the HTTP (`html-manual-http`) manual-fetch strategy is wired up here today. The
+// domain layer also ships a `html-manual-local` (WorkspaceFs) fetcher in keiko-local-knowledge,
+// but no live server route exposes it: neither manual-pod-routes.ts nor the request shapes
+// accept a local-root selection input. Keeping the local strategy intentionally-unexposed
+// for this release avoids the risk of wiring a filesystem-touching route without the
+// route-level authorization equivalent to resolveRegisteredOrManagedWorkspaceRoot and the
+// route-level TOCTOU/symlink-escape negative test that the local fetcher's own comments
+// require (#2906 KEIKO-0554). See html-manual-source.ts for the matching contract note.
 function fetcherFor(deps: UiHandlerDeps): ReturnType<typeof createGatewayManualFetcher> {
-  return createGatewayManualFetcher({ egress: () => currentGatewayEgressConfig(deps) });
+  return createGatewayManualFetcher({ egress: () => currentManualPodEgressConfig(deps) });
 }
 
 export type StartManualPodJobResult =

@@ -326,6 +326,14 @@ function persistRevision(
   projects: ReadonlyMap<string, string>,
   absorbedWorkspaceIds: readonly string[] = [],
 ): WorkspaceManifestMutationResult {
+  // KEIKO-0931: second authorizeDispatch call is intentional and load-bearing (TOCTOU close).
+  // The caller already ran authorizeDispatch when it prepared the dispatch input; between that
+  // check and this commit, the underlying root_identity_digest may have changed on disk. Running
+  // it again here just before the store.replaceWorkspaceManifest commit ensures we never persist
+  // a revision under a root identity that no longer matches. The return value is deliberately
+  // discarded -- authorizeDispatch throws WORKSPACE_ROOT_IDENTITY_CHANGED on mismatch, and the
+  // control-flow effect (the throw) is what makes this call load-bearing. Do NOT simplify this
+  // call away; that is the exact TOCTOU regression this pattern exists to prevent.
   authorizeDispatch(store, dispatch);
   const released = releasedProjectPaths(current, next, projects);
   const restoreFailureClasses: string[] = [];

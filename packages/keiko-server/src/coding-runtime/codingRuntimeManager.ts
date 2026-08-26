@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { isDenied } from "@oscharko-dev/keiko-workspace";
 import { accessSync, constants, realpathSync, statSync } from "node:fs";
 import { basename, dirname, isAbsolute, join, relative } from "node:path";
 import { Readable } from "node:stream";
@@ -2750,10 +2751,14 @@ function supervisedFileEditEvent(
   sequence: number,
   event: SidecarPermissionEvent,
 ): CodingWorkbenchRuntimeEvent {
+  const targetPath = event.targetPath ?? "";
+  // KEIKO-0557: without the targetSensitive classification the deny check in
+  // decideSupervisedFileEdit can never fire on the real supervised path.
   const decision = decideSupervisedFileEdit({
     ...supervisedEvidenceContext(active, "file-edit"),
     workspaceRoot: active.context.workspaceRoot,
-    targetPath: event.targetPath ?? "",
+    targetPath,
+    targetSensitive: isDenied(targetPath),
     allowedRelativePaths: event.allowedRelativePaths ?? [".."],
     fileCount: event.fileCount ?? 0,
     addedLines: event.addedLines ?? 0,

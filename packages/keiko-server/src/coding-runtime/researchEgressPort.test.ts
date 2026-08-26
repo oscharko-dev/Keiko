@@ -93,7 +93,7 @@ function harness(config: HarnessConfig): Harness {
   const registry: ResearchGrantRegistry = {
     register: () => undefined,
     activeGrants: () => config.grants,
-    resolveForHost: () => undefined,
+    registerInFlightFetch: () => () => undefined,
     reserveFetch: (_runId, grantId) => {
       reserves.push({ grantId });
       if (config.reserve !== undefined) return config.reserve;

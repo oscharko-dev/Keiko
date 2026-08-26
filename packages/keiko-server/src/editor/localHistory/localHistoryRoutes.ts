@@ -47,6 +47,10 @@ function historyError(error: unknown): RouteResult {
   const statusByCode: Partial<Record<typeof error.code, number>> = {
     ENTRY_NOT_FOUND: 404,
     PATH_OUTSIDE_WORKSPACE: 403,
+    // KEIKO-0823: identity-drift rejections thrown by staleEntryAuthorization() are containment
+    // failures (the root identity changed between resolve and act), which is authorization-scope
+    // and belongs alongside PATH_OUTSIDE_WORKSPACE's 403 -- not the generic 503 default.
+    INVALID_CAPTURE: 403,
     PINNED_BYTE_LIMIT: 409,
     PINNED_CAPACITY_EXHAUSTED: 409,
     ENTRY_TOO_LARGE: 413,
@@ -68,7 +72,16 @@ async function rootScope(
   rootInput: string | null,
 ): Promise<EditorLocalHistoryRootScope> {
   const root = await resolveRoot(deps.store, rootInput, deps.redactor);
-  const identity = resolveEditorLocalHistoryRoot(deps, root.realRoot);
+  return scopeFromRealRoot(deps, root.realRoot);
+}
+
+// KEIKO-0927: derive the scope from a realRoot the caller already resolved, so authorizedEntry
+// does not have to call resolveRoot(deps.store, rootInput, deps.redactor) a second time inside
+// resolveContainedEditorFilePath for the same rootInput. Both containment checks (deny-list
+// pass and realpath resolution) still run inside resolveContainedEditorFilePath as before -- the
+// dedup only removes the redundant per-request resolveRoot syscall for the SAME rootInput.
+function scopeFromRealRoot(deps: UiHandlerDeps, realRoot: string): EditorLocalHistoryRootScope {
+  const identity = resolveEditorLocalHistoryRoot(deps, realRoot);
   return {
     workspaceId: identity.workspaceId,
     rootRef: identity.rootRef,
@@ -85,13 +98,19 @@ async function fileScope(
   rootInput: string | null,
   pathInput: string | null,
 ): Promise<{ readonly scope: EditorLocalHistoryRootScope; readonly relativePath: string }> {
+  // KEIKO-0927: resolveContainedEditorFilePath already resolves rootInput once (no resolvedRoot
+  // is passed here, so it falls back to its own resolveRoot call). Deriving the scope from its
+  // returned realRoot via scopeFromRealRoot -- instead of the previous rootScope(deps,
+  // file.realRoot), which re-resolved by treating file.realRoot as if it were a fresh rootInput
+  // -- keeps this to a single resolveRoot call per request, matching authorizedEntry. Both
+  // containment guards (deny-list + realpath) still run inside resolveContainedEditorFilePath.
   const file = await resolveContainedEditorFilePath(
     deps.store,
     rootInput,
     pathInput,
     deps.redactor,
   );
-  return { scope: await rootScope(deps, file.realRoot), relativePath: file.relativePath };
+  return { scope: scopeFromRealRoot(deps, file.realRoot), relativePath: file.relativePath };
 }
 
 function scopeMatches(
@@ -124,7 +143,14 @@ async function authorizedEntry(
   readonly store: EditorLocalHistoryStore;
 }> {
   const rootInput = ctx.url.searchParams.get("root");
-  const scope = await rootScope(deps, rootInput);
+  // KEIKO-0927: resolve the workspace root ONCE and pass it to both the scope derivation and
+  // the contained-path check, instead of letting each independently call resolveRoot on the
+  // same rootInput. Both containment guards (deny-list + realpath) still run inside
+  // resolveContainedEditorFilePath. If the same rootInput ever resolves to a DIFFERENT
+  // realRoot between the two calls (a race we already treat as identity drift), the mismatch
+  // is caught by the scopeMatches check below.
+  const root = await resolveRoot(deps.store, rootInput, deps.redactor);
+  const scope = scopeFromRealRoot(deps, root.realRoot);
   const store = historyStore(deps);
   const entry = store.entry(scope, ctx.params.entryRef ?? "");
   const contained = await resolveContainedEditorFilePath(
@@ -132,6 +158,7 @@ async function authorizedEntry(
     rootInput,
     entry.relativePath,
     deps.redactor,
+    root,
   );
   const current = resolveEditorLocalHistoryRoot(deps, contained.realRoot);
   if (!scopeMatches(scope, current)) return staleEntryAuthorization();

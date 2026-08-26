@@ -19,8 +19,12 @@ import {
 } from "./actionPolicy.js";
 
 describe("Atlassian governed action authority mapping", () => {
-  it("fails closed with the existing invalid-authority connector reason after revocation", () => {
-    expect(ATLASSIAN_AUTHORITY_FAILURE_REASON.revoked).toBe("authority-invalid");
+  it("emits the dedicated authority-revoked reason on mid-flight revocation (KEIKO-0547)", () => {
+    // The disposition remains `denied` (fail-closed) in every mode; only the reason CODE gains
+    // precision so operators reading the connector activity trail can tell a mid-flight-revoked
+    // envelope apart from a malformed/unregistered one. Editor lane has always carried this
+    // distinction (agentAuthorityRegistry.ts:143-149); the Atlassian lane now matches.
+    expect(ATLASSIAN_AUTHORITY_FAILURE_REASON.revoked).toBe("authority-revoked");
   });
 });
 

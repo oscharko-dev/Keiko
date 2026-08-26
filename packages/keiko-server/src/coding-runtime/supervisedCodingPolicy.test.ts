@@ -198,6 +198,18 @@ describe("supervised coding policy", () => {
     expect(result).toMatchObject({ status: "denied", reason: "out-of-scope-file-edit" });
   });
 
+  it("denies a targetSensitive file edit even when the sidecar-declared scope contains it (KEIKO-0557)", () => {
+    // Parity with classifyContentMutation: an in-scope, in-worktree edit whose target sits on
+    // the shared sensitive-path deny list is rejected. Before the fix the containment check
+    // would have allowed this edit even though the request explicitly names it sensitive.
+    const { root } = workspaceFixture();
+    const result = decideSupervisedFileEdit({
+      ...fileRequest(root, "src/allowed.ts"),
+      targetSensitive: true,
+    });
+    expect(result).toMatchObject({ status: "denied", reason: "out-of-scope-file-edit" });
+  });
+
   it("fails closed for file edits outside the worktree, scope, or through escaping symlinks", () => {
     const { root, outside } = workspaceFixture();
 
@@ -276,6 +288,27 @@ describe("supervised coding policy", () => {
     ).toMatchObject({ status: "denied", reason: "mutating-command-denied" });
     expect(
       decideSupervisedVerificationCommand(commandRequest("gh", ["pr", "create"])),
+    ).toMatchObject({ status: "denied", reason: "mutating-command-denied" });
+  });
+
+  it("labels newly-recognised mutating git/npm subcommands as mutating-command-denied (KEIKO-0764)", () => {
+    // Before the fix, these commands were denied but recorded under the less-alarming
+    // 'unknown-command-denied' reason. The evidence label now matches the actual risk class.
+    expect(
+      decideSupervisedVerificationCommand(commandRequest("git", ["branch", "-D", "x"])),
+    ).toMatchObject({ status: "denied", reason: "mutating-command-denied" });
+    expect(
+      decideSupervisedVerificationCommand(commandRequest("git", ["worktree", "remove", "x"])),
+    ).toMatchObject({ status: "denied", reason: "mutating-command-denied" });
+    expect(
+      decideSupervisedVerificationCommand(commandRequest("git", ["config", "user.email", "x"])),
+    ).toMatchObject({ status: "denied", reason: "mutating-command-denied" });
+    expect(decideSupervisedVerificationCommand(commandRequest("npm", ["dedupe"]))).toMatchObject({
+      status: "denied",
+      reason: "mutating-command-denied",
+    });
+    expect(
+      decideSupervisedVerificationCommand(commandRequest("npm", ["audit", "fix"])),
     ).toMatchObject({ status: "denied", reason: "mutating-command-denied" });
   });
 

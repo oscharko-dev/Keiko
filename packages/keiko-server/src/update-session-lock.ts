@@ -3,12 +3,14 @@ import {
   existsSync,
   mkdirSync,
   readFileSync,
+  readdirSync,
   renameSync,
+  statSync,
   unlinkSync,
   writeFileSync,
 } from "node:fs";
 import { createHash, randomUUID } from "node:crypto";
-import { dirname, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { publishFileWithoutReplacement } from "./publish-file-without-replacement.js";
 import {
   isOptionalProcessIdentity,
@@ -17,6 +19,11 @@ import {
 } from "./process-identity.js";
 
 const DEFAULT_STALE_LOCK_MS = 10 * 60_000;
+// KEIKO-0812: forensic-evidence retention window for `*.corrupt.*` quarantine files. A file
+// older than this is pruned from the lock's parent directory the next time acquire() runs so
+// they cannot accumulate unboundedly across many upgrade sessions. Seven days matches the
+// retention shape ADR-0173 D5 pinned for other operator-diagnostic artifacts.
+const DEFAULT_CORRUPT_LOCK_RETENTION_MS = 7 * 24 * 60 * 60_000;
 const LOCK_DIR_MODE = 0o700;
 const LOCK_FILE_MODE = 0o600;
 const UPDATE_SESSION_LOCK_FILE = "update-session.lock";
@@ -478,6 +485,43 @@ function releaseFileLock(lockPath: string, sessionId: string): void {
   }
 }
 
+// KEIKO-0812: prunes quarantined `${lockPath}.corrupt.<iso-stamp>` files older than the
+// retention window. Modeled on pruneOlderSnapshots in update-local-state-snapshot.ts. Uses the
+// file's own mtime (statSync().mtimeMs) rather than the ISO stamp in its name so a clock skew
+// between the original quarantine and today does not falsely evict a recent forensic file. A
+// prune failure is swallowed: the surrounding acquire() must not fail closed on best-effort
+// housekeeping. Exported so tests and future `keiko repair` scans can drive it directly.
+export function pruneCorruptLockQuarantine(
+  lockPath: string,
+  now: () => number = Date.now,
+  retentionMs: number = DEFAULT_CORRUPT_LOCK_RETENTION_MS,
+): number {
+  const parent = dirname(lockPath);
+  if (!existsSync(parent)) return 0;
+  const prefix = `${basename(lockPath)}.corrupt.`;
+  const cutoffMs = now() - retentionMs;
+  let removed = 0;
+  let names: readonly string[];
+  try {
+    names = readdirSync(parent);
+  } catch {
+    return 0;
+  }
+  for (const name of names) {
+    if (!name.startsWith(prefix)) continue;
+    const path = join(parent, name);
+    try {
+      const stat = statSync(path);
+      if (stat.mtimeMs >= cutoffMs) continue;
+      unlinkSync(path);
+      removed += 1;
+    } catch {
+      // A prune failure is non-fatal: forensic evidence stays intact and the next acquire retries.
+    }
+  }
+  return removed;
+}
+
 export function createFileUpdateSessionLock(
   lockPath: string,
   inputOptions: FileUpdateSessionLockOptions = {},
@@ -485,8 +529,17 @@ export function createFileUpdateSessionLock(
   const options = resolveLockOptions(inputOptions);
   return {
     isLocked: () => fileLockIsActive(lockPath, options),
-    acquire: (record) =>
-      acquireFileLock(lockPath, { ...record, processIdentity: options.processIdentity }, options),
+    acquire: (record): boolean => {
+      // KEIKO-0812: opportunistic prune runs BEFORE the acquire attempt so a long-running
+      // deployment does not accumulate `.corrupt.*` files. Prune is best-effort (swallows
+      // errors) and never blocks the acquire itself.
+      pruneCorruptLockQuarantine(lockPath, options.now);
+      return acquireFileLock(
+        lockPath,
+        { ...record, processIdentity: options.processIdentity },
+        options,
+      );
+    },
     updateChildPid: (sessionId, childPid) => updateFileLockChildPid(lockPath, sessionId, childPid),
     release: (sessionId): void => {
       releaseFileLock(lockPath, sessionId);

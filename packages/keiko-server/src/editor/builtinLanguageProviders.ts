@@ -105,8 +105,40 @@ function isHtmlSelfClosingToken(line: string): boolean {
   return line.endsWith("/>") || line.startsWith("<!") || line.startsWith("<?");
 }
 
+// KEIKO-0712: the pre-fix `^<[^/!][^>]*>$` treated any `>` as tag-end, so an attribute value
+// containing a literal `>` (e.g. `<div *ngIf="a > b">`) failed the test and produced flat output.
+/**
+ * Scans `line` from index 1, tracking whether the scan is inside a quoted attribute value, and
+ * returns the index of the first `>` that sits outside any quote — quote-aware so a literal `>`
+ * inside `"..."`/`'...'` is never mistaken for tag-end. Returns undefined when the line has no
+ * such `>`.
+ */
+function firstUnquotedTagEnd(line: string): number | undefined {
+  let inQuote: '"' | "'" | undefined;
+  for (let i = 1; i < line.length; i += 1) {
+    const ch = line[i];
+    if (inQuote !== undefined) {
+      if (ch === inQuote) inQuote = undefined;
+      continue;
+    }
+    if (ch === '"' || ch === "'") {
+      inQuote = ch;
+      continue;
+    }
+    if (ch === ">") return i;
+  }
+  return undefined;
+}
+
 function opensHtmlIndentScope(line: string): boolean {
-  return /^<[^/!][^>]*>$/u.test(line) && !line.includes("</");
+  if (line.length < 2 || !line.startsWith("<")) return false;
+  const second = line[1];
+  if (second === "/" || second === "!") return false;
+  // The first unquoted `>` must be the last character on the line for this to be an
+  // indent-opening tag, and the tag itself must not already be a closing tag.
+  const tagEnd = firstUnquotedTagEnd(line);
+  if (tagEnd === undefined) return false;
+  return tagEnd === line.length - 1 && !line.slice(0, tagEnd).includes("</");
 }
 
 function formatHtml(text: string, options: LanguageFormattingOptions | undefined): string {

@@ -95,6 +95,17 @@ describe("formatByLanguage", () => {
     expect(result).toBe("<div>\n  <span>hi</span>\n</div>\n");
   });
 
+  it("KEIKO-0712: indents content nested inside an opening tag whose attribute value contains a literal '>'", () => {
+    // opensHtmlIndentScope's previous `^<[^/!][^>]*>$` treated any `>` as tag-end, so this line
+    // read as "not an opening tag" and the <span> stayed at depth 0. Quote-aware scanning
+    // recognizes the `>` inside `"a > b"` as part of the attribute value.
+    const result = formatByLanguage(
+      ctx("html", '<div *ngIf="a > b"><span>x</span></div>'),
+      undefined,
+    );
+    expect(result).toBe('<div *ngIf="a > b">\n  <span>x</span>\n</div>\n');
+  });
+
   it("falls back to trailing-whitespace normalization for other builtin text languages", () => {
     const result = formatByLanguage(ctx("markdown", "Title  \nBody\t\n"), undefined);
     expect(result).toBe("Title\nBody\n");

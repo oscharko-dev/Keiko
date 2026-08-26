@@ -442,6 +442,35 @@ describe("UpdateSessionManager", () => {
     });
   });
 
+  it("KEIKO-0637: cancel() abandons a session stuck in restart-required and clears the active slot", async () => {
+    // The package mutation completed (settleResult set phase=restart-required on exitCode 0), and
+    // the automated restart never happened. Before the fix, cancel() threw UPDATE_NOT_CANCELABLE
+    // and start()/retry() were pinned by isTerminal(restart-required)=false. Now cancel() must
+    // move the session to a terminal state and free `active` so a new session can be started.
+    const manager = createUpdateSessionManager({
+      detector: () => supportedMode(),
+      runCommandImpl: () => Promise.resolve(commandResult()),
+    });
+    manager.start({ targetVersion: "0.2.12" });
+    await waitForPhase(manager, "restart-required");
+    expect(manager.getStatus().activeSession?.phase).toBe("restart-required");
+
+    const cancelled = manager.cancel();
+
+    expect(cancelled.phase).toBe("cancelled");
+    expect(cancelled.failureReason).toBe("cancelled");
+    expect(cancelled.restartRequired).toBe(false);
+    // The message must clearly state the install remains on disk -- this is not an install rollback.
+    expect(cancelled.message).toContain("Restart Keiko manually");
+    // The active slot is cleared, so a follow-up start() is not blocked by UPDATE_SESSION_ACTIVE.
+    expect(manager.getStatus().activeSession).toBeUndefined();
+    expect(manager.getStatus().lastSession?.phase).toBe("cancelled");
+    // A subsequent start() (e.g. for a newer version) is now allowed:
+    const restarted = manager.start({ targetVersion: "0.2.13" });
+    expect(restarted.reused).toBe(false);
+    expect(restarted.session.targetVersion).toBe("0.2.13");
+  });
+
   it("uses a durable lock to block overlapping package mutation across managers", async () => {
     const lock = new MemoryUpdateSessionLock();
     const running = deferred();

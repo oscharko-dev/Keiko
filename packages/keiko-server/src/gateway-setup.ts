@@ -56,6 +56,10 @@ import {
   gatewayFetch,
   readJsonCapped,
 } from "@oscharko-dev/keiko-model-gateway/internal/http";
+// KEIKO-0572: import the shared circuitBreaker defaults so gateway-setup.ts and
+// grounded-retrieval-eval.ts no longer restate `{ failureThreshold: 5, cooldownMs: 30_000,
+// halfOpenProbes: 2 }` at three call sites.
+import { DEFAULT_CIRCUIT_BREAKER_CONFIG } from "@oscharko-dev/keiko-model-gateway";
 import type {
   EnvSource,
   GatewayConfig,
@@ -921,7 +925,7 @@ function buildRawConfig(
 ): Record<string, unknown> {
   return {
     providers: modelIds.map((modelId) => providerRaw(modelId, baseUrl, apiKey, options)),
-    circuitBreaker: { failureThreshold: 5, cooldownMs: 30_000, halfOpenProbes: 2 },
+    circuitBreaker: DEFAULT_CIRCUIT_BREAKER_CONFIG,
   };
 }
 
@@ -2702,7 +2706,7 @@ function validateVoiceProviderConnection(
               : { circuitBreaker: provider.circuitBreaker }),
           }),
         ],
-        circuitBreaker: { failureThreshold: 5, cooldownMs: 30_000, halfOpenProbes: 2 },
+        circuitBreaker: DEFAULT_CIRCUIT_BREAKER_CONFIG,
       },
       env,
       linkLocalGatewayOverrideOptions(env),

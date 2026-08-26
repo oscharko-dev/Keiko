@@ -107,32 +107,41 @@ const NUMERIC_ID_PATTERN = /^\d{1,32}$/u;
 // eslint-disable-next-line no-control-regex -- intentionally matches control chars to REJECT them
 const CONTROL_CHARS_PATTERN = /[\u0000-\u001F\u007F-\u009F]/u;
 
-function unavailable(): RouteResult {
+// KEIKO-0534: guard helpers thread the request's correlation id into 4xx/503 error bodies so
+// support bundles can trace each rejected write-action call back to a single operator record.
+function unavailable(correlationId?: string): RouteResult {
   return {
     status: 503,
     body: errorBody(
       "ATLASSIAN_CONNECTORS_UNAVAILABLE",
       "Atlassian connector credential custody is not configured for this BFF.",
+      correlationId,
     ),
   };
 }
 
 type DepsOrResult = AtlassianConnectorCredentialDeps | RouteResult;
 
-function requireConnectorDeps(deps: UiHandlerDeps): DepsOrResult {
-  return deps.atlassianConnectorCredentials ?? unavailable();
+function requireConnectorDeps(deps: UiHandlerDeps, correlationId?: string): DepsOrResult {
+  return deps.atlassianConnectorCredentials ?? unavailable(correlationId);
 }
 
 function isRouteResult(value: DepsOrResult | Record<string, unknown>): value is RouteResult {
   return typeof (value as { status?: unknown }).status === "number";
 }
 
-async function runHandler(work: () => Promise<RouteResult> | RouteResult): Promise<RouteResult> {
+async function runHandler(
+  work: () => Promise<RouteResult> | RouteResult,
+  correlationId?: string,
+): Promise<RouteResult> {
   try {
     return await work();
   } catch (error) {
     if (error instanceof AtlassianSyncRequestError) {
-      return { status: error.status, body: errorBody(error.code, error.message) };
+      return {
+        status: error.status,
+        body: errorBody(error.code, error.message, correlationId),
+      };
     }
     throw error;
   }
@@ -774,7 +783,7 @@ export function handleExecuteAtlassianConnectorAction(
   ctx: RouteContext,
   deps: UiHandlerDeps,
 ): Promise<RouteResult> | RouteResult {
-  const guard = requireConnectorDeps(deps);
+  const guard = requireConnectorDeps(deps, ctx.correlationId);
   if (isRouteResult(guard)) return guard;
   return runHandler(async () => {
     const credential = requireAtlassianCredential(ctx, guard);
@@ -794,14 +803,18 @@ export function handleExecuteAtlassianConnectorAction(
       actionPlanFor(guard, credential, input),
       ctx.correlationId ?? randomUUID(),
     );
-  });
+  }, ctx.correlationId);
 }
 
 // ─── Pending-approval endpoints (#2245 renders these) ─────────────────────────
-function approvalNotFound(): RouteResult {
+function approvalNotFound(correlationId?: string): RouteResult {
   return {
     status: 404,
-    body: errorBody("APPROVAL_NOT_FOUND", "Atlassian connector action approval is not available."),
+    body: errorBody(
+      "APPROVAL_NOT_FOUND",
+      "Atlassian connector action approval is not available.",
+      correlationId,
+    ),
   };
 }
 
@@ -831,12 +844,12 @@ export function handleGetAtlassianConnectorActionApproval(
   ctx: RouteContext,
   deps: UiHandlerDeps,
 ): Promise<RouteResult> | RouteResult {
-  const guard = requireConnectorDeps(deps);
+  const guard = requireConnectorDeps(deps, ctx.correlationId);
   if (isRouteResult(guard)) return guard;
   const approvalId = decodedApprovalIdParam(ctx);
   const entry =
     approvalId === undefined ? undefined : atlassianActionApprovalRegistry.get(approvalId);
-  if (entry === undefined) return approvalNotFound();
+  if (entry === undefined) return approvalNotFound(ctx.correlationId);
   return { status: 200, body: { approval: entry.approval } };
 }
 
@@ -935,15 +948,15 @@ export function handleApproveAtlassianConnectorActionApproval(
   ctx: RouteContext,
   deps: UiHandlerDeps,
 ): Promise<RouteResult> | RouteResult {
-  const guard = requireConnectorDeps(deps);
+  const guard = requireConnectorDeps(deps, ctx.correlationId);
   if (isRouteResult(guard)) return guard;
   return runHandler(() => {
     const approvalId = decodedApprovalIdParam(ctx);
     const entry =
       approvalId === undefined ? undefined : atlassianActionApprovalRegistry.consume(approvalId);
-    if (entry === undefined) return approvalNotFound();
+    if (entry === undefined) return approvalNotFound(ctx.correlationId);
     return executeApprovedEntry(deps, guard, entry);
-  });
+  }, ctx.correlationId);
 }
 
 // POST /api/atlassian-connectors/action-approvals/:approvalId/reject — records the rejection
@@ -952,13 +965,13 @@ export function handleRejectAtlassianConnectorActionApproval(
   ctx: RouteContext,
   deps: UiHandlerDeps,
 ): Promise<RouteResult> | RouteResult {
-  const guard = requireConnectorDeps(deps);
+  const guard = requireConnectorDeps(deps, ctx.correlationId);
   if (isRouteResult(guard)) return guard;
   return runHandler(() => {
     const approvalId = decodedApprovalIdParam(ctx);
     const entry =
       approvalId === undefined ? undefined : atlassianActionApprovalRegistry.reject(approvalId);
-    if (entry === undefined) return approvalNotFound();
+    if (entry === undefined) return approvalNotFound(ctx.correlationId);
     const jqlDigest = pendingEntryJqlDigest(entry);
     recordAtlassianActionActivity({
       connectorId: entry.approval.connectorId,
@@ -980,5 +993,5 @@ export function handleRejectAtlassianConnectorActionApproval(
         correlationId: entry.approval.correlationId,
       },
     };
-  });
+  }, ctx.correlationId);
 }

@@ -4,13 +4,15 @@ import {
   existsSync,
   mkdirSync,
   mkdtempSync,
+  readFileSync,
   realpathSync,
   rmSync,
   symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, isAbsolute, join, relative } from "node:path";
+import { dirname, isAbsolute, join, relative, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import { PassThrough } from "node:stream";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ServerDiagnosticRecord } from "../diagnostics-log.js";
@@ -2415,6 +2417,22 @@ describe("coding runtime manager", () => {
     });
     expect(events.some((event) => event.kind === "permission-requested")).toBe(false);
     expect(JSON.stringify(events)).not.toContain(fixture.workspaceRoot);
+  });
+
+  it("wires isDenied into decideSupervisedFileEdit's targetSensitive flag at the supervised call site (KEIKO-0557)", () => {
+    // Machine-checked wiring pin: the type-level targetSensitive branch in
+    // supervisedCodingPolicy.ts is only load-bearing if the production call site populates it
+    // via the shared classifier. Regressing the wiring to `targetSensitive: undefined` turns
+    // the sensitive-path defense into a no-op with no test failure elsewhere in this file
+    // (the sidecar boundary rejects some but not all deny-listed strings, so this line owns
+    // the invariant). Grep the source directly so a future rewrite either preserves the
+    // isDenied call in the request object literal or trips this pin.
+    const managerSource = readFileSync(
+      resolve(dirname(fileURLToPath(import.meta.url)), "codingRuntimeManager.ts"),
+      "utf8",
+    );
+    expect(managerSource).toContain('import { isDenied } from "@oscharko-dev/keiko-workspace"');
+    expect(managerSource).toMatch(/targetSensitive: isDenied\(targetPath\)/u);
   });
 
   it("enforces supervised verification command allowlist before emitting summaries", async () => {

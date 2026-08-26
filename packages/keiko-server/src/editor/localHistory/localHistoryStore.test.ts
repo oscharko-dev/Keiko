@@ -187,6 +187,51 @@ describe("editor local-history store", () => {
     for (const content of contents) expect(index).not.toContain(content.trim());
   });
 
+  it("KEIKO-0675: reKey rewrites index+payload so a renamed file's Local History surfaces under the new name", () => {
+    const fx = fixture();
+    const store = createEditorLocalHistoryStore(storeOptions(fx));
+
+    // Capture a history entry under the original path.
+    const captured = store.capture(captureInput(fx, "before rename\n", "user-save", 1_000)).entry;
+    expect(store.list(fx.scope, "src/app.ts", 1_100).map((e) => e.entryRef)).toEqual([
+      captured.entryRef,
+    ]);
+    // Before reKey: the same entry is invisible under the new name.
+    expect(store.list(fx.scope, "src/renamed.ts", 1_100)).toEqual([]);
+
+    // Rename the on-disk file so the read path can still find it (reKey does not touch disk).
+    const oldAbs = join(fx.root, "src", "app.ts");
+    const newAbs = join(fx.root, "src", "renamed.ts");
+    const content = "before rename\n";
+    writeFileSync(newAbs, content, "utf8");
+
+    // Re-key: 1 entry should be rewritten.
+    const rewritten = store.reKey(fx.scope, "src/app.ts", "src/renamed.ts");
+    expect(rewritten).toBe(1);
+
+    // After reKey: the entry is visible under the new name and invisible under the old one.
+    const afterUnderNew = store.list(fx.scope, "src/renamed.ts", 1_100);
+    expect(afterUnderNew.map((e) => e.entryRef)).toEqual([captured.entryRef]);
+    expect(afterUnderNew[0]?.relativePath).toBe("src/renamed.ts");
+    expect(store.list(fx.scope, "src/app.ts", 1_100)).toEqual([]);
+
+    // The rewritten payload still opens (payloadBindingDigest was recomputed against the new
+    // relativePathDigest, and checkedPayload's mirror equality still holds).
+    const read = store.read(fx.scope, captured.entryRef, 1_200);
+    expect(read.content).toBe("before rename\n");
+    expect(read.entry.relativePath).toBe("src/renamed.ts");
+
+    // Rebuild the store from disk: rename survives a restart because it was persisted, not held
+    // in memory.
+    const reopened = createEditorLocalHistoryStore(storeOptions(fx));
+    expect(reopened.list(fx.scope, "src/renamed.ts", 1_300)).toHaveLength(1);
+
+    // A same-path re-key is a no-op.
+    expect(store.reKey(fx.scope, "src/renamed.ts", "src/renamed.ts")).toBe(0);
+    // Referencing oldAbs suppresses the unused-var lint.
+    void oldAbs;
+  });
+
   it("coalesces only rapid identical saves", () => {
     const fx = fixture();
     const store = createEditorLocalHistoryStore(storeOptions(fx));

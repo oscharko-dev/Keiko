@@ -183,6 +183,41 @@ describe("editor local-history routes", () => {
     expect(missing).toMatchObject({ status: 404, body: { error: { code: "ENTRY_NOT_FOUND" } } });
   });
 
+  it("resolves the workspace root exactly once for a fileScope-backed and an authorizedEntry-backed request", async () => {
+    // KEIKO-0927: resolveRoot's underlying store lookup (projectFor -> store.listProjects()) is
+    // the cheapest reliable proxy for a resolveRoot invocation. fileScope() used to resolve the
+    // root twice for the same rootInput -- once inside resolveContainedEditorFilePath, once more
+    // inside rootScope() by re-resolving file.realRoot as if it were a fresh rootInput.
+    // authorizedEntry() was already fixed the same way and is pinned here so it cannot regress.
+    const entryRef = capture();
+    const originalStore = store;
+    const countingStore = (counter: { calls: number }): UiStore => ({
+      ...originalStore,
+      listProjects: (): ReturnType<UiStore["listProjects"]> => {
+        counter.calls += 1;
+        return originalStore.listProjects();
+      },
+    });
+
+    const listCounter = { calls: 0 };
+    const listed = await handleListEditorLocalHistory(
+      context("GET", `/api/editor/local-history?root=${encodeURIComponent(root)}&path=src/app.ts`),
+      { ...deps, store: countingStore(listCounter) },
+    );
+    expect(listed).toMatchObject({ status: 200, body: { entries: [{ entryRef }] } });
+    expect(listCounter.calls).toBe(1);
+
+    const readCounter = { calls: 0 };
+    const read = await handleReadEditorLocalHistory(
+      context("GET", `/api/editor/local-history/${entryRef}?root=${encodeURIComponent(root)}`, {
+        entryRef,
+      }),
+      { ...deps, store: countingStore(readCounter) },
+    );
+    expect(read).toMatchObject({ status: 200, body: { content: "checkpoint marker\n" } });
+    expect(readCounter.calls).toBe(1);
+  });
+
   it("keeps a checkpoint readable, pinnable and deletable after its file is deleted", async () => {
     const entryRef = capture();
     rmSync(join(root, "src", "app.ts"));
@@ -362,8 +397,10 @@ describe("editor local-history routes", () => {
                 deps,
               );
 
+      // KEIKO-0823: INVALID_CAPTURE identity-drift rejections are containment-scope failures
+      // (mirror PATH_OUTSIDE_WORKSPACE's 403) and no longer fall through to the generic 503.
       expect(result).toMatchObject({
-        status: 503,
+        status: 403,
         body: { error: { code: "INVALID_CAPTURE" } },
       });
       expect(

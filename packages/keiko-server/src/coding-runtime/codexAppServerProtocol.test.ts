@@ -1,4 +1,7 @@
 import { describe, expect, it } from "vitest";
+
+import { KEIKO_PRODUCT_VERSION } from "@oscharko-dev/keiko-contracts";
+
 import {
   CODEX_APP_SERVER_CLIENT_METHODS,
   CODEX_APP_SERVER_SCHEMA,
@@ -343,7 +346,7 @@ describe("Codex app-server 0.144.1 protocol boundary", () => {
 
 function initializeParams(): Record<string, unknown> {
   return {
-    clientInfo: { name: "keiko", version: "0.2.15" },
+    clientInfo: { name: "keiko", version: KEIKO_PRODUCT_VERSION },
     capabilities: {
       experimentalApi: false,
       requestAttestation: false,

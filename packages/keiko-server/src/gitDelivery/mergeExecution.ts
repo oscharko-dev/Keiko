@@ -39,6 +39,7 @@ import { createNodeGitMergeAdapter } from "@oscharko-dev/keiko-tools/internal/gi
 import type { UiHandlerDeps } from "../deps.js";
 import type { GitDeliveryApprovalStore } from "./approvalStore.js";
 import type { GitDeliveryTrustedPolicyPacks } from "./actionSheetProjection.js";
+import { defaultMintableRepoPack } from "./policyPackMintability.js";
 import {
   defaultGitDeliveryActionId,
   gitDeliveryMutationResponse,
@@ -116,7 +117,7 @@ export async function executeGovernedMerge(
   const now = seams.now ?? Date.now;
   const snapshot = await readWorktreeSnapshotFor(workspace, seams, now);
   const adapter = mergeAdapterFor(workspace, seams, now);
-  const packs = seams.policyPacks ?? { repoPack: KEIKO_DEFAULT_MERGE_POLICY_PACK };
+  const packs = seams.policyPacks ?? defaultMintableRepoPack(KEIKO_DEFAULT_MERGE_POLICY_PACK);
   const newActionId =
     seams.newActionId ?? ((): string => defaultGitDeliveryActionId(command, now()));
   const result = await runGitMerge(

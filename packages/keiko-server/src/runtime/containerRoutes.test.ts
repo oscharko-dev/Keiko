@@ -280,6 +280,17 @@ describe("GET /api/containers/catalog", () => {
     const res = await fetch(`${baseUrl()}/api/containers/catalog`);
     expect(res.status).toBe(400);
   });
+
+  it("KEIKO-0783: returns 403 WORKSPACE_NOT_REGISTERED for an unregistered projectId", async () => {
+    // Mirror handleContainerCapability's registered-project check: an unregistered path must not
+    // reach guard.listCatalog.
+    const res = await fetch(
+      `${baseUrl()}/api/containers/catalog?projectId=${encodeURIComponent("/not/a/registered/project")}`,
+    );
+    expect(res.status).toBe(403);
+    const body = (await res.json()) as { error: { code: string } };
+    expect(body.error.code).toBe("WORKSPACE_NOT_REGISTERED");
+  });
 });
 
 describe("POST /api/containers/runs", () => {

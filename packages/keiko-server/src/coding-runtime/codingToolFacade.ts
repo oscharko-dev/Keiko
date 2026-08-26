@@ -19,6 +19,14 @@ import {
   type CodingToolReadResult,
   type CodingToolResult,
 } from "./codingToolIpc.js";
+// KEIKO-0695: hoisted from below EDIT_FAILURE_REASON_CODES to the top-of-file import block.
+import type {
+  CodingToolAdmission,
+  CodingToolFacade,
+  CodingToolFacadeInput,
+  CodingToolFacadeOptions,
+  CodingToolFacadePorts,
+} from "./codingToolFacadePorts.js";
 
 const READ_DIGEST = /^[a-f0-9]{64}$/u;
 
@@ -51,13 +59,6 @@ const GOVERNED_FAILURE_REASON_CODES: ReadonlySet<string> = new Set([
   "delivery-authority-revoked",
   "connector-authority-revoked",
 ]);
-import type {
-  CodingToolAdmission,
-  CodingToolFacade,
-  CodingToolFacadeInput,
-  CodingToolFacadeOptions,
-  CodingToolFacadePorts,
-} from "./codingToolFacadePorts.js";
 import type {
   CodingToolInvocationRegistry,
   CodingToolInvocationTakeResult,

@@ -187,6 +187,41 @@ describe("native file dialog route", () => {
     expect(state.active).toBe(false);
   });
 
+  it("releases the single-flight lock when the client aborts before the adapter settles (KEIKO-0599)", async () => {
+    const state = createNativeFileDialogRouteState();
+    let releaseFirst: (() => void) | undefined;
+    const blocking: NativeFileDialogAdapter = {
+      open: () =>
+        new Promise((resolve) => {
+          releaseFirst = (): void => {
+            resolve({ cancelled: true, paths: [] });
+          };
+        }),
+    };
+    const { deps } = buildDeps({ adapter: blocking, state });
+
+    const ctx = openContext({ mode: "open-file" });
+    const firstCall = handleNativeFileDialogOpen(ctx, deps);
+    await vi.waitFor(() => {
+      expect(state.active).toBe(true);
+    });
+    // Simulate a real mid-request client abort — Node's IncomingMessage emits 'aborted' only
+    // when the underlying socket is closed by the peer before the request finished. The route
+    // must release the single-flight gate on this signal.
+    ctx.req.emit("aborted");
+    expect(state.active).toBe(false);
+    // Second concurrent open is admitted (no 409) because the gate is free.
+    const secondCtx = openContext({ mode: "open-file" });
+    const { deps: freshDeps } = buildDeps({
+      adapter: fakeAdapter({ cancelled: true, paths: [] }),
+      state,
+    });
+    const second = await handleNativeFileDialogOpen(secondCtx, freshDeps);
+    expect(second.status).toBe(200);
+    releaseFirst?.();
+    await firstCall;
+  });
+
   it("releases the single-flight slot when the adapter fails", async () => {
     const state = createNativeFileDialogRouteState();
     const failing: NativeFileDialogAdapter = {
@@ -197,6 +232,24 @@ describe("native file dialog route", () => {
     const first = await handleNativeFileDialogOpen(openContext({ mode: "open-file" }), deps);
     expect(first.status).toBe(502);
     expect(state.active).toBe(false);
+  });
+
+  it("returns the valid subset of a mixed multi-file pick (KEIKO-0817)", async () => {
+    const root = await tempDir("keiko-native-partial-");
+    const a = join(root, "a.txt");
+    const b = join(root, "b.txt");
+    await writeFile(a, "a", "utf8");
+    await writeFile(b, "b", "utf8");
+    const invalid = "relative/nope.txt"; // rejected in validateSelection before the fs chain
+    const { deps } = buildDeps({
+      adapter: fakeAdapter({ cancelled: false, paths: [a, invalid, b] }),
+    });
+
+    const result = await handleNativeFileDialogOpen(openContext({ mode: "open-files" }), deps);
+
+    expect(result.status).toBe(200);
+    const body = result.body as { selections: readonly { path: string }[] };
+    expect(body.selections.map((s) => s.path)).toEqual([a, b]);
   });
 
   it.each([

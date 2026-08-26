@@ -303,6 +303,32 @@ describe("debug activation control", () => {
     control.dispose();
   });
 
+  it("KEIKO-0642: resolve()'s tracked-cache write is synchronous and visible to the very next call", () => {
+    // Pin the write discipline documented on trackResolution/pruneIdleTracked: resolve() writes
+    // to `tracked` synchronously and its result MUST be visible to the very next call before any
+    // microtask boundary. This is what makes the unlocked-writers-plus-mutex-protected-writer
+    // pattern safe in practice today. A future change that introduces an `await` inside
+    // trackResolution (say, an async gate.resolve or an async provisioning provider) would break
+    // this pin and force the design to move to a mutex-protected cache write.
+    const root = temporaryDirectory("debug-write-discipline");
+    const control = createDebugActivationControlService({
+      mutex: createWorkspaceMutexRegistry(),
+      productSupport: () => "supported",
+      deploymentPolicy: () => "allowed",
+      provisioning: () => "provisioned",
+      disposeActiveSession: () => Promise.resolve(),
+    });
+
+    // Before the resolve, isCurrent has no cached entry and returns false.
+    expect(control.isCurrent(root, 7)).toBe(false);
+    const summary = control.resolve(context(root, "enabled", 7));
+    expect(summary.state).toBe("available");
+    // No `await`, no timer advance -- the write must already be visible synchronously via the
+    // tracked map that isCurrent reads.
+    expect(control.isCurrent(root, 7)).toBe(true);
+    control.dispose();
+  });
+
   it("evicts an idle-tracked workspace after the retention window instead of watching it forever", async () => {
     vi.useFakeTimers();
     const root = temporaryDirectory("debug-idle-eviction");

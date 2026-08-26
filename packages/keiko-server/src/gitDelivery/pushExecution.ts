@@ -43,6 +43,7 @@ import {
   readWorktreeSnapshotFor,
   type GitDeliveryMutationResponseBody,
 } from "./execution.js";
+import { defaultMintableRepoPack } from "./policyPackMintability.js";
 
 // The shared/protected remote branches a governed push may never target directly. This is the
 // enforcement of the "no direct push to dev" hard denial (and its equivalents in a repository that
@@ -142,7 +143,7 @@ export async function executeGovernedPublish(
   const now = seams.now ?? Date.now;
   const snapshot = await readWorktreeSnapshotFor(workspace, seams, now);
   const adapter = publishAdapterFor(workspace, seams, now);
-  const packs = seams.policyPacks ?? { repoPack: KEIKO_DEFAULT_PUBLISH_POLICY_PACK };
+  const packs = seams.policyPacks ?? defaultMintableRepoPack(KEIKO_DEFAULT_PUBLISH_POLICY_PACK);
   const newActionId =
     seams.newActionId ?? ((): string => defaultGitDeliveryActionId(command, now()));
   const result = await runGitPublish(

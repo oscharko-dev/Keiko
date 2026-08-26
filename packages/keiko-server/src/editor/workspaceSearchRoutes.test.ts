@@ -552,11 +552,46 @@ describe("POST /api/editor/workspace-search/replace-preview", () => {
       fileCount: number;
       omittedFileCount: number;
       truncated: boolean;
+      filesOmittedBySearchLimit: boolean;
     };
     expect(body.files).toHaveLength(1);
     expect(body.fileCount).toBe(1);
     expect(body.omittedFileCount).toBeGreaterThan(0);
     expect(body.truncated).toBe(true);
+    // KEIKO-0645: this truncation is entirely from the per-request maxFiles cap; the upstream
+    // search selection did not itself truncate, so filesOmittedBySearchLimit must be false.
+    expect(body.filesOmittedBySearchLimit).toBe(false);
+  });
+
+  it("KEIKO-0645: emits filesOmittedBySearchLimit on the response so callers can distinguish the truncation cause", async () => {
+    // Prove the field is present and always reflects searchText's own result.truncated -- so a
+    // caller can tell whether `truncated: true` was caused by the upstream candidate-file
+    // selection (maxFilesScanned/maxMatchesReturned) or by the per-request `maxFiles` cap
+    // (omittedFileCount > 0). This shape test locks the field in; the maxFiles-only test above
+    // covers the "search did not truncate" branch (filesOmittedBySearchLimit: false), and this
+    // one asserts the field is always emitted on the wire even in the trivial no-truncation case.
+    const result = await handleEditorWorkspaceReplacePreview(
+      postContext(
+        replaceBody({ includeGlobs: ["src/a.ts"] }),
+        "/api/editor/workspace-search/replace-preview",
+      ),
+      deps(),
+    );
+
+    expect(result.status).toBe(200);
+    const body = result.body as {
+      truncated: boolean;
+      omittedFileCount: number;
+      filesOmittedBySearchLimit: boolean;
+    };
+    expect(body.truncated).toBe(false);
+    expect(body.omittedFileCount).toBe(0);
+    expect(body.filesOmittedBySearchLimit).toBe(false);
+    // Distinctness: the response must expose both fields as separate wire shape entries so a
+    // future caller can bind on either one without inspecting `truncated`.
+    expect(Object.keys(body)).toEqual(
+      expect.arrayContaining(["truncated", "omittedFileCount", "filesOmittedBySearchLimit"]),
+    );
   });
 
   it("accepts a validator-approved regex containing an unescaped quantifier-like character instead of crashing", async () => {

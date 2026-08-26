@@ -154,6 +154,25 @@ function revocationRequired(
   return prior?.state === "available" && next.state !== "available";
 }
 
+// KEIKO-0642: three different disciplines write the shared `tracked` map -- the mutex-protected
+// synchronize/sweep path (async), the unlocked resolve() cache write (this function, sync), and
+// the unlocked pruneIdleTracked eviction (also sync). resolve() must stay synchronous because
+// addDebuggingProjection in editorSettingsControl.ts calls it from the synchronous portion of
+// loadSnapshot; making it async is a breaking ripple across callers.
+//
+// The mismatch is safe today ONLY because trackResolution and pruneIdleTracked are fully
+// synchronous. Node's single-threaded event loop means the read/set/delete sequence inside them
+// runs atomically against any concurrent synchronizeTracked -- which does have an `await`
+// (disposeActiveSession) between reading `prior` and writing `next`. Any future change that
+// introduced an `await` here (a genuinely async gate.resolve, an async provisioning provider, an
+// async cache adapter) would silently reintroduce an interleaving race with the mutex-protected
+// writer. Do not add `await` to this function or to pruneIdleTracked without one of:
+//   (a) making the caller of resolve() async and routing this write through options.mutex the
+//       same way synchronizeTracked already does, or
+//   (b) documenting explicitly that the cache is now best-effort and non-authoritative and
+//       adjusting synchronizeTracked so it no longer relies on `prior` being visible.
+// The debugActivationControl.test.ts's write-discipline pin locks in the current synchronous-
+// visibility contract so a future change cannot break it silently.
 function trackResolution(
   context: DebugActivationContext & { readonly realRoot: string },
   next: DebugActivationSummary,
@@ -292,6 +311,10 @@ function sweepWorkspace(
 // mutates. A workspace that is never touched again (closed project, stale tab) ages out instead of
 // being watched -- and having its evidence/provisioning re-derived every second -- for the
 // remaining lifetime of the BFF process (issue #2347 audit finding).
+//
+// KEIKO-0642: this delete runs unlocked, alongside the mutex-protected synchronize/sweep writers.
+// Safe today ONLY because it is fully synchronous (see the write-discipline note on
+// trackResolution). Do not add `await` here without upgrading to the mutex-protected discipline.
 function pruneIdleTracked(
   tracked: Map<string, TrackedActivation>,
   options: DebugActivationControlOptions,

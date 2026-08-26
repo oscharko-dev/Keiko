@@ -457,11 +457,16 @@ function idempotentEventSink(
   authorityDigest: string,
   evidence: Pick<CodingRuntimeEvidenceAggregator, "observe">,
 ): OpenCodeRuntimeCompositionInput["governedEventSink"] {
-  const identities = new Set<string>();
+  // KEIKO-0707: use the same bounded-correlation primitive the governed-tool call path uses so
+  // idempotency identity retention is capped at MAX_SAFE_ACTIVITY_TOOL_CORRELATIONS instead of
+  // growing without bound for the lifetime of the run. Repeated identities within the retained
+  // window still short-circuit as duplicate; only identities older than the window may be seen
+  // as "applied" a second time -- an acceptable trade for a bounded memory footprint.
+  const identities = boundedCorrelations<true>();
   return {
     execute: (identity, event): Promise<"duplicate" | "applied"> => {
-      const duplicate = identities.has(identity);
-      identities.add(identity);
+      const duplicate = identities.values.has(identity);
+      rememberBoundedCorrelation(identities, identity, true);
       if (!duplicate) {
         evidence.observe(runId, {
           kind: event.kind === "tool" ? "tool-call" : "model-request",
@@ -486,11 +491,12 @@ function liveQuestionSignal(
   evidence: Pick<CodingRuntimeEvidenceAggregator, "observe">,
   onRuntimeEvent: (event: CodingWorkbenchRuntimeEvent) => void,
 ): (identity: string) => void {
-  const identities = new Set<string>();
+  // KEIKO-0707: bounded identity retention, same reasoning as idempotentEventSink above.
+  const identities = boundedCorrelations<true>();
   let questionSignalSequence = 0;
   return (identity): void => {
-    if (identities.has(identity)) return;
-    identities.add(identity);
+    if (identities.values.has(identity)) return;
+    rememberBoundedCorrelation(identities, identity, true);
     evidence.observe(runId, {
       kind: "model-request",
       state: "running",

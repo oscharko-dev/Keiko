@@ -412,6 +412,12 @@ export function reconnectProjectWorkspaceManifest(
 }
 
 export function migrateLegacyProjectManifests(db: DatabaseSync): void {
+  // KEIKO-0803: `LIMIT 1` is deliberate per ADR-0147 D9. The V15 migration backfills a workspace
+  // manifest only for the SINGLE most-recently-opened legacy project row so a large store does
+  // not do bulk-schema work at startup. Every other pre-existing project intentionally stays
+  // pre-manifest and is served by the governed WORKSPACE_STATE_UNAVAILABLE fallback downstream --
+  // it is NOT backfilled here, and the ORDER BY / LIMIT 1 shape is the migration behavior, not
+  // just documentation. Do NOT widen the LIMIT or drop the ORDER BY without amending ADR-0147.
   const projects = db
     .prepare("SELECT path, name FROM projects ORDER BY last_opened_at DESC, path LIMIT 1")
     .all() as unknown as readonly ProjectRow[];

@@ -143,6 +143,20 @@ export interface EditorLocalHistoryStore {
     nowMs?: number,
   ) => EditorLocalHistoryEntry;
   readonly delete: (scope: EditorLocalHistoryRootScope, entryRef: string) => void;
+  // KEIKO-0675: rename awareness. Rewrites every index entry whose path matches
+  // previousRelativePath onto nextRelativePath (updating relativePath, relativePathDigest, and
+  // the vault payload's mirror of relativePathDigest + payloadBindingDigest). Returns the number
+  // of index entries rewritten so a caller can log a body-free count. entryRef / vaultEntryRef
+  // are intentionally NOT rotated: they are opaque identifiers captured at write time (their
+  // suffix's `relativePathDigest` input is a stable historical fact for that checkpoint), and
+  // rotating them would invalidate every persisted reference held by the UI, evidence, and
+  // audit trail. The public listing is keyed on relativePathDigest for filter matching, so the
+  // renamed entries surface under the new path after this call.
+  readonly reKey: (
+    scope: EditorLocalHistoryRootScope,
+    previousRelativePath: string,
+    nextRelativePath: string,
+  ) => number;
 }
 
 interface EditorLocalHistoryLimits {
@@ -1140,5 +1154,78 @@ export function createEditorLocalHistoryStore(
       persist(state, indexWithEntries(state.index, entries));
       reconcileBodies(state);
     },
+
+    reKey(scope, previousRelativePath, nextRelativePath): number {
+      // KEIKO-0675: called from the rename route so a renamed file's Local History surfaces
+      // under the new name instead of silently disappearing (list() filters on the freshly-
+      // computed pathDigest(nextRelativePath), which no legacy entry would match). Same-path
+      // rename is a no-op; every mismatch requires re-vaulting the encrypted body because both
+      // payload.relativePathDigest and payload.payloadBindingDigest depend on the path digest.
+      if (previousRelativePath === nextRelativePath) return 0;
+      const state = stateFor(scope);
+      const previousDigest = pathDigest(previousRelativePath);
+      const nextDigest = pathDigest(nextRelativePath);
+      const affected = state.index.entries.filter(
+        (candidate): boolean =>
+          scopeMatches(candidate, scope) && candidate.relativePathDigest === previousDigest,
+      );
+      if (affected.length === 0) return 0;
+      const rewritten: EditorLocalHistoryEntry[] = [];
+      for (const entry of affected) {
+        rewritten.push(rewritePayloadForPath(state, entry, nextRelativePath, nextDigest));
+      }
+      const affectedRefs = new Set(rewritten.map((e): string => e.entryRef));
+      const nextEntries = state.index.entries.map((candidate): EditorLocalHistoryEntry => {
+        if (!affectedRefs.has(candidate.entryRef)) return candidate;
+        return rewritten.find((r): boolean => r.entryRef === candidate.entryRef) ?? candidate;
+      });
+      persist(state, indexWithEntries(state.index, nextEntries));
+      return rewritten.length;
+    },
   };
+
+  function rewritePayloadForPath(
+    state: WorkspaceState,
+    entry: EditorLocalHistoryEntry,
+    nextRelativePath: string,
+    nextDigest: WorkspacePathDigest,
+  ): EditorLocalHistoryEntry {
+    const payload = checkedPayload(state.vault.get(entry.encryptedContent.vaultEntryRef), entry);
+    const nextBase: HistoryPayloadBase = {
+      kind: payload.kind,
+      schemaVersion: payload.schemaVersion,
+      vaultEntryRef: payload.vaultEntryRef,
+      entryRef: payload.entryRef,
+      workspaceId: payload.workspaceId,
+      rootRef: payload.rootRef,
+      rootIdentityDigest: payload.rootIdentityDigest,
+      relativePathDigest: nextDigest,
+      predecessor: payload.predecessor,
+      sequence: payload.sequence,
+      origin: payload.origin,
+      recordedAt: payload.recordedAt,
+      plaintextContentDigest: payload.plaintextContentDigest,
+      plaintextByteLength: payload.plaintextByteLength,
+    };
+    const nextBinding = payloadBinding(nextBase);
+    const nextPayload: HistoryPayload = {
+      ...nextBase,
+      payloadBindingDigest: nextBinding,
+      content: payload.content,
+    };
+    try {
+      state.vault.set(payload.vaultEntryRef, JSON.stringify(nextPayload));
+    } catch {
+      throw new EditorLocalHistoryError(
+        "VAULT_WRITE_FAILED",
+        "Local-history encrypted content could not be stored.",
+      );
+    }
+    return {
+      ...entry,
+      relativePath: nextRelativePath,
+      relativePathDigest: nextDigest,
+      payloadBindingDigest: nextBinding,
+    };
+  }
 }

@@ -459,15 +459,29 @@ export class VoiceControlConnection {
     // Only the kinds that drive a host action are handled. Every other permitted kind is an
     // observable no-op: a repeated session.create (start() already announced the session), a late
     // signal.ice.candidate (proxied single-shot SDP carries ICE in the offer/answer — no provider
-    // trickle channel), and client-reported media.track.state / playback.state. The productive
-    // direction allowlist above rejects transcript-bearing, host-originated, and future kinds before
-    // this switch, so an ignored branch can never acquire authority by generic contract expansion.
+    // trickle channel), client-reported media.track.state / playback.state, and control.interrupt
+    // (KEIKO-0661: added to the enumeration when the interrupt kind was introduced). The
+    // productive direction allowlist above rejects transcript-bearing, host-originated, and
+    // future kinds before this switch, so an ignored branch can never acquire authority by
+    // generic contract expansion.
     switch (message.kind) {
       case "signal.sdp.offer":
         await this.handleOffer(message.sdp);
         return;
       case "capability.select":
-        // The only selectable profile is the resolved full-realtime profile; acknowledge by policy.
+        // KEIKO-0661: validate the selected profile matches the negotiated one before acknowledging.
+        // Before this fix any capability.select was answered with unconditional "allow" -- a
+        // future or hand-crafted client selecting a profile the session was never negotiated for
+        // would get an "allow" back. The realtime transport only negotiates one profile per
+        // session, so a mismatched select must be denied. VoicePolicyDecision permits "deny"
+        // (voice-protocol.ts:266), so this uses the contract's own vocabulary rather than
+        // inventing a value.
+        if (message.profile !== this.session.profile) {
+          // No reason field: VoiceUnavailableReason is a fixed vocabulary in gateway.ts (no
+          // "profile-mismatch" member), and a policy.decision with just "deny" is valid.
+          this.emit({ kind: "policy.decision", decision: "deny" });
+          return;
+        }
         this.emit({ kind: "policy.decision", decision: "allow" });
         return;
       case "control.cancel":

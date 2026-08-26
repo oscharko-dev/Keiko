@@ -39,6 +39,7 @@ import { createNodeGitPullRequestAdapter } from "@oscharko-dev/keiko-tools/inter
 import type { UiHandlerDeps } from "../deps.js";
 import type { GitDeliveryApprovalStore } from "./approvalStore.js";
 import type { GitDeliveryTrustedPolicyPacks } from "./actionSheetProjection.js";
+import { defaultMintableRepoPack } from "./policyPackMintability.js";
 import {
   defaultGitDeliveryActionId,
   gitDeliveryMutationResponse,
@@ -111,7 +112,7 @@ export async function executeGovernedPullRequest(
   const now = seams.now ?? Date.now;
   const snapshot = await readWorktreeSnapshotFor(workspace, seams, now);
   const adapter = prAdapterFor(workspace, seams, now);
-  const packs = seams.policyPacks ?? { repoPack: KEIKO_DEFAULT_PR_POLICY_PACK };
+  const packs = seams.policyPacks ?? defaultMintableRepoPack(KEIKO_DEFAULT_PR_POLICY_PACK);
   const newActionId =
     seams.newActionId ?? ((): string => defaultGitDeliveryActionId(command, now()));
   const result = await runGitPullRequest(

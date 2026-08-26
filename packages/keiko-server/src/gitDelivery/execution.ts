@@ -37,6 +37,7 @@ import type { GitDeliveryApprovalStore } from "./approvalStore.js";
 import type { GitDeliveryTrustedPolicyPacks } from "./actionSheetProjection.js";
 import type { GitDeliveryBranchProtectionReader } from "./branchProtectionPreflight.js";
 import { recordGitDeliveryMutationEvidence } from "./mutationEvidenceLedger.js";
+import { defaultMintableRepoPack } from "./policyPackMintability.js";
 import { errorKindOf, type ServerLogSink } from "../observability/server-log.js";
 import { processServerLogSink } from "../process-log-sink.js";
 
@@ -205,7 +206,7 @@ export async function executeGovernedMutation(
     throw error;
   }
   const adapter = adapterFor(workspace, seams, now);
-  const packs = seams.policyPacks ?? { repoPack: KEIKO_DEFAULT_LOCAL_GIT_POLICY_PACK };
+  const packs = seams.policyPacks ?? defaultMintableRepoPack(KEIKO_DEFAULT_LOCAL_GIT_POLICY_PACK);
   const newActionId =
     seams.newActionId ?? ((): string => defaultGitDeliveryActionId(command, now()));
   const result = await runGitMutation(

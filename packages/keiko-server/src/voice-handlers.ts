@@ -228,6 +228,10 @@ const DEFAULT_DICTATION_PROMPT =
 
 // Accepts a caller-supplied domain prompt: trims, drops empty, and length-bounds it so it cannot smuggle
 // a large payload. Non-strings become undefined (the default prompt then applies).
+// KEIKO-0649: length-bound is measured in Unicode code points (matches
+// DERIVED_SOURCE_DISPLAY_NAME_MAX_CHARS in local-knowledge-handlers.ts) so a surrogate pair
+// falling on the boundary is never split into a lone high surrogate, which would corrupt the
+// downstream JSON serialization and the ASR provider's payload.
 function validatePrompt(raw: unknown): string | undefined {
   if (typeof raw !== "string") {
     return undefined;
@@ -236,8 +240,9 @@ function validatePrompt(raw: unknown): string | undefined {
   if (trimmed.length === 0) {
     return undefined;
   }
-  return trimmed.length > MAX_DICTATION_PROMPT_LENGTH
-    ? trimmed.slice(0, MAX_DICTATION_PROMPT_LENGTH)
+  const codePoints = Array.from(trimmed);
+  return codePoints.length > MAX_DICTATION_PROMPT_LENGTH
+    ? codePoints.slice(0, MAX_DICTATION_PROMPT_LENGTH).join("")
     : trimmed;
 }
 
@@ -293,7 +298,12 @@ function validateLanguage(raw: unknown): LanguageResult {
 }
 
 // Validates and normalizes the request fields, returning either the audio payload to transcribe or a
-// deterministic 4xx RouteResult. Order: size → MIME → audio → duration → language.
+// deterministic 4xx RouteResult.
+// KEIKO-0874: the actual implemented order is: MIME format check, then audio decode
+// (invalid/empty), then decoded byte-size cap, then durationMs, then language, then prompt. The
+// prompt is validated but never rejects the request (an invalid prompt is silently dropped and the
+// default prompt applies), so it does not contribute an early return.
+// Order: MIME → audio (decode) → size (post-decode) → duration → language → prompt (non-fatal).
 function validateRequest(
   body: Record<string, unknown>,
   deps: UiHandlerDeps,

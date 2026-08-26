@@ -66,6 +66,24 @@ describe("coding runtime process I/O", () => {
     expect(records).toEqual(["😀", "last"]);
   });
 
+  it("KEIKO-0741: a stderr chunk exactly filling the remaining byte budget is NOT marked truncated", () => {
+    // addCount's boundary was `<` -- a chunk exactly equal to the remaining budget fell through
+    // to `this.truncated = true`. It must be `<=` so the exact-fit case fits without being marked
+    // truncated or overflowed. saturatingCount's overflow check (`>`) is unchanged.
+    const drainer = createCodingRuntimeStderrDrainer({ maxBytes: 64, maxLines: 4 });
+    drainer.push(Buffer.alloc(64, "x"));
+    const state = drainer.snapshot();
+    expect(state.bytes).toBe(64);
+    expect(state.truncated).toBe(false);
+    expect(state.overflowed).toBe(false);
+    // One-byte overflow past the budget still trips both flags.
+    drainer.push(Buffer.from("y"));
+    const overflowed = drainer.snapshot();
+    expect(overflowed.bytes).toBe(64);
+    expect(overflowed.truncated).toBe(true);
+    expect(overflowed.overflowed).toBe(true);
+  });
+
   it("drains a 1 MiB stderr producer without retaining producer content or buffering it", () => {
     const summaries: unknown[] = [];
     const drainer = createCodingRuntimeStderrDrainer({

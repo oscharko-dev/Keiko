@@ -22,9 +22,13 @@
 //     every mutation route (storage.md §4).
 //   • every response payload is run through the live redactor at the SINGLE call site
 //     `respond()` below (api-contract.md §8 / audit-events.md §7).
-//   • idempotency replay store is process-local LRU `Map<string, IdempotencyRecord>`
-//     bounded to 1024 entries with TTL 10 min; oldest-key eviction. The single Map lives
-//     in module scope so test fixtures can spy via the public seam if needed in #543.
+//   • idempotency replay store is a process-local insertion-order FIFO
+//     `Map<string, IdempotencyRecord>` bounded to 1024 entries with TTL 10 min; oldest-key
+//     eviction (KEIKO-0857: the previous comment said LRU, but a cache hit in
+//     handleCreateImpl's replay branch never re-`.set`s the key, so nothing is promoted on
+//     access — correctness is governed by the 10-minute TTL, not by access-order recency).
+//     The single Map lives in module scope so test fixtures can spy via the public seam if
+//     needed in #543.
 //
 // This file deliberately avoids new abstractions: no router, no DI container, no parser
 // framework — just `node:http` IncomingMessage + the existing readJsonObject pattern from
@@ -238,7 +242,8 @@ interface RelationshipActivitySnapshot {
   readonly count?: number | undefined;
 }
 
-// ─── Idempotency LRU (api-contract.md §5) ─────────────────────────────────────
+// ─── Idempotency FIFO (api-contract.md §5) ─────────────────────────────────────
+// KEIKO-0857: FIFO, not LRU -- no access-time promotion; TTL governs correctness.
 interface IdempotencyRecord {
   readonly bodyHash: string;
   readonly status: number;

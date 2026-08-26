@@ -155,11 +155,26 @@ export async function handleContainerCatalog(
 ): Promise<RouteResult> {
   const guard = requireRunner(deps);
   if (isRouteResult(guard)) return guard;
+  const projectId = ctx.url.searchParams.get("projectId");
+  if (projectId === null || projectId.length === 0) {
+    return {
+      status: 400,
+      body: errorBody("BAD_REQUEST", "Query parameter 'projectId' is required."),
+    };
+  }
+  // KEIKO-0783: mirror handleContainerCapability's registered-project check. Before this fix the
+  // handler proceeded to guard.listCatalog for any projectId string; now an unregistered
+  // projectId fails closed with 403 WORKSPACE_NOT_REGISTERED before any runtime work.
+  if (!deps.store.listProjects().some((project) => project.path === projectId)) {
+    return {
+      status: 403,
+      body: errorBody(
+        "WORKSPACE_NOT_REGISTERED",
+        "The workspace directory is not a registered project.",
+      ),
+    };
+  }
   return runHandler(async () => {
-    const projectId = ctx.url.searchParams.get("projectId");
-    if (projectId === null || projectId.length === 0) {
-      throw new ContainerRunnerError("BAD_REQUEST", "Query parameter 'projectId' is required.");
-    }
     const catalog = await guard.listCatalog(projectId);
     if (!catalog.engineAvailable) {
       throw new ContainerRunnerError(

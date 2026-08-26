@@ -164,9 +164,26 @@ async function projectSelections(
     throw new SelectionRejection(INVALID_SELECTION_MESSAGE);
   }
   const kind = nativeFileDialogExpectedKind(request.mode);
+  // KEIKO-0817: keep validating every selection independently instead of aborting the whole batch
+  // on the first SelectionRejection. A multi-file pick where one entry is deny-listed no longer
+  // discards every already-validated entry behind one generic 422. When every entry fails the
+  // request still reports a rejection (rather than "success with zero selections") to preserve
+  // the existing all-or-nothing fail-closed behaviour for empty results.
   const selections: NativeFileDialogSelection[] = [];
+  let firstRejection: SelectionRejection | undefined;
   for (const path of adapterResult.paths) {
-    selections.push(await validateSelection(path, kind, deps));
+    try {
+      selections.push(await validateSelection(path, kind, deps));
+    } catch (error) {
+      if (error instanceof SelectionRejection) {
+        firstRejection ??= error;
+        continue;
+      }
+      throw error;
+    }
+  }
+  if (selections.length === 0) {
+    throw firstRejection ?? new SelectionRejection(INVALID_SELECTION_MESSAGE);
   }
   return { cancelled: false, selections };
 }
@@ -307,10 +324,31 @@ export async function handleNativeFileDialogOpen(
   const gate = gateOpen(ctx, deps.nativeFileDialog);
   if (!gate.ok) return gate.result;
   gate.state.active = true;
+  let released = false;
+  const releaseGate = (): void => {
+    if (!released) {
+      released = true;
+      gate.state.active = false;
+    }
+  };
+  // KEIKO-0599: release the single-flight lock if the client aborts before the adapter promise
+  // settles, so an abandoned tab does not hold the gate for the full 10-minute interaction
+  // timeout. The adapter's own promise still resolves at its own pace (child process termination
+  // on client disconnect is tracked as a follow-up), but a second concurrent open call no longer
+  // sees 409 NATIVE_DIALOG_ALREADY_OPEN once the client is gone. We listen for 'aborted' rather
+  // than 'close': 'close' fires as part of the routine stream-end sequence Node emits on every
+  // fully-consumed request body too, whereas 'aborted' is only emitted when the underlying
+  // socket is closed by the peer before the request finished (Node's own signal for a real
+  // mid-request disconnect).
+  const onAborted = (): void => {
+    releaseGate();
+  };
+  ctx.req.on("aborted", onAborted);
   try {
     return await openAndProject(ctx, deps, parsed.value, gate.adapter);
   } finally {
-    gate.state.active = false;
+    ctx.req.off("aborted", onAborted);
+    releaseGate();
   }
 }
 

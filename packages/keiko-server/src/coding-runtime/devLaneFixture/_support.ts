@@ -104,6 +104,10 @@ function fixtureCatalog(): Record<string, unknown> {
             sha256: sha256Text("fixture-archive"),
             sizeBytes: FIXTURE_EXECUTABLE.length,
             executableTreeSha256: sha256Text(`bin/opencode\0${sha256Text(FIXTURE_EXECUTABLE)}\0`),
+            // KEIKO-0763: catalog-approved SBOM digest that verifiedPayload compares against
+            // the on-disk sbom.cdx.json's sha256. Uses the fixture's own SBOM contents so a
+            // matching payload activates, while a tampered SBOM would refuse as "payload-tampered".
+            sbomSha256: sha256Text(FIXTURE_SBOM),
           },
         },
       },

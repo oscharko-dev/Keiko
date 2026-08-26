@@ -376,12 +376,23 @@ async function safeFetch(
   url: URL,
   state: ResearchFollowState,
 ): Promise<Response | undefined> {
+  // KEIKO-0586: register an AbortController per outbound fetch so revokeResearch can abort
+  // in-flight requests instead of waiting for them to run to completion and discarding the body.
+  // The AbortSignal passed to fetchImpl combines the caller's own signal (which cancels the
+  // whole followResearch loop) with the revoke-driven controller (which stops this one hop).
+  const controller = new AbortController();
+  const release = ctx.deps.registry.registerInFlightFetch(state.runId, controller);
+  const signals: AbortSignal[] = [controller.signal];
+  if (state.signal !== undefined) signals.push(state.signal);
+  const combined = signals.length === 1 ? signals[0] : AbortSignal.any(signals);
   try {
-    return await ctx.fetchImpl(url.toString(), buildFetchOptions(ctx, state.cfg, state.signal));
+    return await ctx.fetchImpl(url.toString(), buildFetchOptions(ctx, state.cfg, combined));
   } catch {
     // Any transport-class failure (blocked target, DNS, TLS, timeout, redirect-policy) fails the
     // fetch closed; the error text is dropped so no upstream detail rides into diagnostics.
     return undefined;
+  } finally {
+    release();
   }
 }
 

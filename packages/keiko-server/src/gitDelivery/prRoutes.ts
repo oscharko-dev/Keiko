@@ -22,6 +22,7 @@ import {
   type ParsedGitDeliveryApprovalRequest,
 } from "./approvalStore.js";
 import { readWorktreeSnapshotFor } from "./execution.js";
+import { defaultMintableRepoPack } from "./policyPackMintability.js";
 import {
   buildGitDeliveryPrPreview,
   executeGovernedPullRequest,
@@ -236,7 +237,7 @@ export const createHandlePrPreview = (
     if (!prepared.ok) return prepared.result;
     const { workspace } = prepared;
     const { command } = prepared.value;
-    const packs = seams.policyPacks ?? { repoPack: KEIKO_DEFAULT_PR_POLICY_PACK };
+    const packs = seams.policyPacks ?? defaultMintableRepoPack(KEIKO_DEFAULT_PR_POLICY_PACK);
     try {
       const snapshot = await readWorktreeSnapshotFor(workspace, seams, now);
       return {
