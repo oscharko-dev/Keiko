@@ -9,6 +9,7 @@ import type {
 } from "../types.js";
 import {
   classifyResultKind,
+  controllerForToken,
   runLanguageBridgeCall,
   type EditorLanguageIntelligenceReporter,
   type EditorLanguageOperation,
@@ -64,15 +65,6 @@ function requestFor(
   };
 }
 
-function abortControllerFor(token: MonacoCancellationToken): AbortController {
-  const controller = new AbortController();
-  if (token.isCancellationRequested) controller.abort();
-  token.onCancellationRequested(() => {
-    controller.abort();
-  });
-  return controller;
-}
-
 const EMPTY_LOCATIONS: readonly MonacoLocation[] = [];
 
 export function createLocationNavigationProvider(
@@ -88,7 +80,7 @@ export function createLocationNavigationProvider(
       const request = requestFor(deps, documentUri, position, sequence);
       latest = request.request;
       const query: EditorDefinitionQuery = { request, documentText: model.getValue() };
-      const signal = abortControllerFor(token).signal;
+      const signal = controllerForToken(token).signal;
       return runLanguageBridgeCall<EditorDefinitionResponse, readonly MonacoLocation[] | undefined>(
         {
           operation: deps.operation,

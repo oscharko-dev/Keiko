@@ -10,6 +10,8 @@ import type {
 import type { MonacoUriLike } from "./definition-bridge.js";
 import {
   classifyResultKind,
+  composeDisposers,
+  controllerForToken,
   runLanguageBridgeCall,
   type EditorLanguageIntelligenceReporter,
 } from "./language-intelligence.js";
@@ -105,15 +107,6 @@ function editorRange(range: MonacoRange): EditorRange {
   };
 }
 
-function controllerFor(token: MonacoCancellationToken): AbortController {
-  const controller = new AbortController();
-  if (token.isCancellationRequested) controller.abort();
-  token.onCancellationRequested(() => {
-    controller.abort();
-  });
-  return controller;
-}
-
 function toMonacoHint(hint: EditorInlayHint): MonacoInlayHint {
   return {
     label: hint.label,
@@ -142,7 +135,7 @@ export function createKeikoInlayHintsProvider(
         document: { uri, language: deps.documentLanguage, version: sequence },
         range: editorRange(range),
       };
-      const signal = controllerFor(token).signal;
+      const signal = controllerForToken(token).signal;
       return runLanguageBridgeCall<EditorInlayHintsResponse, MonacoInlayHintList | undefined>({
         operation: "inlay-hints",
         resolve: () => deps.resolve({ request, documentText: model.getValue() }, signal),
@@ -179,13 +172,7 @@ export function registerKeikoInlayHintsProvider(
       createKeikoInlayHintsProvider({ ...args, documentLanguage }),
     ),
   );
-  return {
-    dispose(): void {
-      disposers.forEach((disposer) => {
-        disposer.dispose();
-      });
-    },
-  };
+  return composeDisposers(disposers);
 }
 
 export const INLAY_HINTS_ELIGIBLE_LANGUAGES: readonly EditorLanguageId[] = [

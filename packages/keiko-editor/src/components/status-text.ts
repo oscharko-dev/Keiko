@@ -36,7 +36,10 @@ function ariaLiveForRole(role: EditorStatusRole): EditorStatusAriaLive {
 }
 
 function formatModifiedAt(modifiedAt: number | undefined): string {
-  if (modifiedAt === undefined) {
+  // KEIKO-0721: `Date.prototype.toISOString()` throws `RangeError: Invalid time value` for NaN or
+  // +/-Infinity; the undefined-only guard let a non-finite timestamp throw out of the render path.
+  // Fail safe with the same "Saved" fallback the undefined case already uses.
+  if (modifiedAt === undefined || !Number.isFinite(modifiedAt)) {
     return "Saved";
   }
   return `Saved at ${new Date(modifiedAt).toISOString()}`;

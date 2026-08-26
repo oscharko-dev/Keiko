@@ -18,6 +18,7 @@ import {
   type EditorThemeVariant,
   type ResolvedEditorThemeTokens,
 } from "./theme.js";
+import { stripBlockComments } from "./test-support.js";
 
 const require = createRequire(import.meta.url);
 
@@ -288,11 +289,6 @@ describe("registerKeikoEditorTheme", () => {
     ]);
   });
 });
-
-/** Remove block/JSDoc comments so the scan inspects code, not documentation prose. */
-function stripBlockComments(source: string): string {
-  return source.replace(/\/\*[\s\S]*?\*\//g, "");
-}
 
 describe("theme code carries no colour literals (Issue #1193 AC)", () => {
   it("theme.ts maps tokens only — no hex/oklch/rgb/color-mix literal", () => {

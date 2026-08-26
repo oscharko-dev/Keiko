@@ -120,8 +120,16 @@ describe("defaultMonacoWorkerFactories", () => {
 
   it("ships the local editor worker used by the default factory, never a CDN", () => {
     const source = readFileSync(resolve(here, "worker-entries.ts"), "utf8");
+    // KEIKO-0584: worker-entries.ts now derives its worker path from MONACO_WORKER_MODULES rather
+    // than inlining a duplicate string literal, so the file cannot silently diverge from the single
+    // source of truth in workers.ts. Verify the structural reference is present as
+    // defense-in-depth alongside the existing CDN / disallowed-worker scans.
+    expect(source).toContain("MONACO_WORKER_MODULES");
+    const workersSource = readFileSync(resolve(here, "workers.ts"), "utf8");
     for (const specifier of Object.values(MONACO_WORKER_MODULES)) {
-      expect(source).toContain(specifier);
+      // The specifier literal lives in exactly one place now: workers.ts.
+      expect(workersSource).toContain(specifier);
+      expect(source).not.toContain(specifier);
     }
     for (const disallowed of [
       "monaco-editor/esm/vs/language/typescript/ts.worker.js",

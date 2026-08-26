@@ -17,6 +17,7 @@ import { shouldDiscardAgainstLatest } from "../completion-identity.js";
 import type { EditorLanguageId } from "../languages.js";
 import {
   classifyResultKind,
+  composeDisposers,
   runLanguageBridgeCall,
   type EditorLanguageIntelligenceReporter,
 } from "./language-intelligence.js";
@@ -399,16 +400,6 @@ export interface RegisterKeikoCompletionProviderArgs {
   readonly streamId: string;
   readonly newRequestId: () => string;
   readonly report?: EditorLanguageIntelligenceReporter | undefined;
-}
-
-function composeDisposers(disposers: readonly MonacoDisposable[]): MonacoDisposable {
-  return {
-    dispose(): void {
-      for (const disposer of disposers) {
-        disposer.dispose();
-      }
-    },
-  };
 }
 
 /**

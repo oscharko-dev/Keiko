@@ -134,4 +134,22 @@ describe("deriveStatusViewModel", () => {
         " File is truncated (read-only): it exceeds the display limit.",
     );
   });
+
+  // KEIKO-0721: `Date.prototype.toISOString()` throws `RangeError: Invalid time value` for NaN,
+  // +/-Infinity, or any value that produces an out-of-range Date. The undefined-only guard the
+  // function shipped with therefore let a non-finite `modifiedAt` throw out of the render path.
+  it("returns the absent-timestamp fallback for a non-finite modifiedAt (KEIKO-0721)", () => {
+    for (const modifiedAt of [Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY]) {
+      const vm = deriveStatusViewModel({
+        loadState: ready,
+        saveStatus: "saved",
+        dirty: false,
+        truncated: false,
+        overLimit: false,
+        modifiedAt,
+      });
+      expect(vm.role).toBe("status");
+      expect(vm.message).toBe("Saved");
+    }
+  });
 });

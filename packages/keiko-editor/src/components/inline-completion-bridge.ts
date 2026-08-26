@@ -45,6 +45,7 @@ import type {
 } from "./inline-completion-telemetry.js";
 import {
   classifyResultKind,
+  composeDisposers,
   runLanguageBridgeCall,
   type EditorLanguageIntelligenceReporter,
 } from "./language-intelligence.js";
@@ -219,8 +220,12 @@ interface InlineProviderState {
   activeController: AbortController | null;
 }
 
-// Wires an AbortController to Monaco's cancellation token (immediate + on-request abort).
-function controllerForToken(token: MonacoCancellationToken): {
+// Wires an AbortController to Monaco's cancellation token (immediate + on-request abort). Kept
+// LOCAL (rather than delegating to the shared language-intelligence controllerForToken) because
+// this variant also returns the token subscription so the caller can dispose it separately when
+// the completion request settles — the shared helper only returns the controller. Renamed to
+// disambiguate from the shared helper of the same name (KEIKO-0908 / KEIKO-0912).
+function wireAbortController(token: MonacoCancellationToken): {
   readonly controller: AbortController;
   readonly cancellationSub: MonacoDisposable;
 } {
@@ -265,7 +270,7 @@ function provideInline(
   const request = buildRequest(deps, model, position, context, state.sequence);
   state.latest = request.request;
   state.activeController?.abort();
-  const { controller, cancellationSub } = controllerForToken(token);
+  const { controller, cancellationSub } = wireAbortController(token);
   state.activeController = controller;
   const now = deps.now ?? Date.now;
   const startedAt = now();
@@ -362,16 +367,6 @@ export interface RegisterKeikoInlineCompletionProviderArgs {
   readonly debounceDelayMs: number;
   readonly telemetry?: InlineCompletionTelemetry | undefined;
   readonly report?: EditorLanguageIntelligenceReporter | undefined;
-}
-
-function composeDisposers(disposers: readonly MonacoDisposable[]): MonacoDisposable {
-  return {
-    dispose(): void {
-      for (const disposer of disposers) {
-        disposer.dispose();
-      }
-    },
-  };
 }
 
 /**

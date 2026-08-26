@@ -28,6 +28,8 @@ import {
 import type { MonacoUriLike } from "./definition-bridge.js";
 import {
   classifyResultKind,
+  composeDisposers,
+  controllerForToken,
   runLanguageBridgeCall,
   type EditorLanguageIntelligenceReporter,
 } from "./language-intelligence.js";
@@ -226,17 +228,6 @@ function buildRequest(
   };
 }
 
-function controllerForToken(token: MonacoCancellationToken): AbortController {
-  const controller = new AbortController();
-  if (token.isCancellationRequested) {
-    controller.abort();
-  }
-  token.onCancellationRequested(() => {
-    controller.abort();
-  });
-  return controller;
-}
-
 const EMPTY_ACTIONS: MonacoCodeActionList = { actions: [], dispose: (): void => undefined };
 
 export function createKeikoCodeActionProvider(
@@ -275,16 +266,6 @@ export interface RegisterKeikoCodeActionProviderArgs {
   readonly streamId: string;
   readonly newRequestId: () => string;
   readonly report?: EditorLanguageIntelligenceReporter | undefined;
-}
-
-function composeDisposers(disposers: readonly MonacoDisposable[]): MonacoDisposable {
-  return {
-    dispose(): void {
-      for (const disposer of disposers) {
-        disposer.dispose();
-      }
-    },
-  };
 }
 
 export function registerKeikoCodeActionProvider(

@@ -294,3 +294,49 @@ export function languageIntelligenceNotice(
   }
   return null;
 }
+
+// ─── Bridge helpers shared across every host-resolver bridge (KEIKO-0908 / KEIKO-0912) ─────────
+
+/** Minimal structural shape of the disposable object every bridge already holds. */
+export interface LanguageBridgeDisposer {
+  dispose(): void;
+}
+
+/**
+ * Minimal structural shape of the Monaco cancellation token every bridge already receives. Kept
+ * local (rather than importing `MonacoCancellationToken` from `completion-bridge.ts`) so this
+ * lower-level module never cycles back into the bridges that depend on it.
+ */
+export interface LanguageBridgeCancellationToken {
+  readonly isCancellationRequested: boolean;
+  onCancellationRequested(listener: () => void): LanguageBridgeDisposer;
+}
+
+/** Compose several disposables into a single one; each is disposed in registration order. */
+export function composeDisposers(
+  disposers: readonly LanguageBridgeDisposer[],
+): LanguageBridgeDisposer {
+  return {
+    dispose(): void {
+      for (const disposer of disposers) {
+        disposer.dispose();
+      }
+    },
+  };
+}
+
+/**
+ * Wire an AbortController to a Monaco cancellation token: abort immediately if the token has
+ * already fired, and abort on the token's cancellation event otherwise. The returned controller's
+ * signal is what a host resolver receives so it can stop early.
+ */
+export function controllerForToken(token: LanguageBridgeCancellationToken): AbortController {
+  const controller = new AbortController();
+  if (token.isCancellationRequested) {
+    controller.abort();
+  }
+  token.onCancellationRequested(() => {
+    controller.abort();
+  });
+  return controller;
+}

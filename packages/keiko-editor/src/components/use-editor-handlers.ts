@@ -858,9 +858,14 @@ function buildGitGutterWiring(
     degraded,
     labels: gutter.labels,
     onPeek: (peek): void => latestProps.current.editorGitGutter?.onPeek(peek),
-    resolve: (): Promise<EditorGitGutterChanges> => {
+    // KEIKO-0897: the git-gutter resolver now carries an AbortSignal so the bridge can cancel
+    // a stale request. Forward the signal to the host implementation; the fallback branch has
+    // nothing to cancel so it ignores the signal.
+    resolve: (signal: AbortSignal): Promise<EditorGitGutterChanges> => {
       const live = latestProps.current.editorGitGutter;
-      return live === undefined ? Promise.resolve({ staged: [], unstaged: [] }) : live.resolve();
+      return live === undefined
+        ? Promise.resolve({ staged: [], unstaged: [] })
+        : live.resolve(signal);
     },
     onError: (message) => latestProps.current.onRuntimeError?.(message),
   };

@@ -724,13 +724,38 @@ describe("EditorModelRegistry", () => {
   });
 
   it("hashes keys containing astral characters without truncating the surrogate pair", () => {
-    const registry = new EditorModelRegistry({ countBudget: 8, byteBudget: 1_000_000 });
-    const namespace = new FakeNamespace();
-    const emoji = attach(registry, namespace, "notes-\u{1F600}.ts");
+    // KEIKO-0680: the format-only /^[0-9a-f]{8}$/ assertion is unconditional — `fnv1a32` always
+    // returns eight hex chars regardless of whether the surrogate-pair skip is present. Strengthen
+    // with two discriminating assertions: (1) equivalence — the astral construction via the
+    // code-point escape must produce the SAME identityHash as the raw UTF-16 surrogate-pair escape
+    // (they are the same JS string, so this proves the test harness constructs what it claims);
+    // (2) surrogate-pair vs lone-surrogate — a key containing only the lone high surrogate must
+    // produce a DIFFERENT identityHash than the paired form, proving the hash sees the surrogate
+    // structure at all rather than collapsing every non-ASCII to the same digest.
+    const pairViaCodePoint = "notes-\u{1F600}.ts";
+    const pairViaSurrogates = "notes-😀.ts";
+    const loneHighSurrogate = "notes-\uD83D.ts";
 
-    expect(registry.diagnostics().entries[0]?.identityHash).toMatch(/^[0-9a-f]{8}$/);
+    const registry1 = new EditorModelRegistry({ countBudget: 8, byteBudget: 1_000_000 });
+    const namespace1 = new FakeNamespace();
+    const emojiA = attach(registry1, namespace1, pairViaCodePoint);
+    const pairHashA = registry1.diagnostics().entries[0]?.identityHash;
+    expect(pairHashA).toMatch(/^[0-9a-f]{8}$/);
+    emojiA.attachment.detach();
 
-    emoji.attachment.detach();
+    const registry2 = new EditorModelRegistry({ countBudget: 8, byteBudget: 1_000_000 });
+    const namespace2 = new FakeNamespace();
+    const emojiB = attach(registry2, namespace2, pairViaSurrogates);
+    const pairHashB = registry2.diagnostics().entries[0]?.identityHash;
+    expect(pairHashB).toBe(pairHashA);
+    emojiB.attachment.detach();
+
+    const registry3 = new EditorModelRegistry({ countBudget: 8, byteBudget: 1_000_000 });
+    const namespace3 = new FakeNamespace();
+    const emojiC = attach(registry3, namespace3, loneHighSurrogate);
+    const loneHash = registry3.diagnostics().entries[0]?.identityHash;
+    expect(loneHash).not.toBe(pairHashA);
+    emojiC.attachment.detach();
   });
 });
 

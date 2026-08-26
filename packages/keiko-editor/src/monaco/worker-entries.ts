@@ -12,10 +12,12 @@
  * mount time. The dispatch logic that selects a factory is the pure, unit-tested `./workers.ts`.
  */
 
-import type { MonacoWorkerFactories } from "./workers.js";
+import { MONACO_WORKER_MODULES, type MonacoWorkerFactories } from "./workers.js";
 
 function createEditorWorker(): Worker {
-  return new Worker(new URL("monaco-editor/editor/editor.worker.js", import.meta.url), {
+  // Read the worker specifier from the single source of truth (`./workers.ts`) so the runtime
+  // constructor and the build/test verification checks cannot drift by construction (KEIKO-0584).
+  return new Worker(new URL(MONACO_WORKER_MODULES.editor, import.meta.url), {
     type: "module",
   });
 }

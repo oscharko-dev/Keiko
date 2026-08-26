@@ -20,6 +20,7 @@ import type { FileContent } from "@oscharko-dev/keiko-contracts";
 import {
   applyTextEditsToTextWithinLimit,
   isOverlappingPatchEditError,
+  utf8ByteLength,
 } from "./apply-text-edits.js";
 import { inferMonacoLanguageId, type MonacoLanguageId } from "./monaco/language-inference.js";
 import type {
@@ -175,14 +176,6 @@ function containsNul(text: string): boolean {
 
 function isBinarySource(source: PatchPreviewSource | undefined): boolean {
   return source?.binary === true || (source !== undefined && containsNul(source.content.text));
-}
-
-/** Byte length of a single Unicode code point when encoded as UTF-8. */
-function utf8ByteLength(codePoint: number): number {
-  if (codePoint <= 0x7f) return 1;
-  if (codePoint <= 0x7ff) return 2;
-  if (codePoint <= 0xffff) return 3;
-  return 4;
 }
 
 function clampToLimit(

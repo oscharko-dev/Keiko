@@ -117,9 +117,6 @@ function EditorDiagnosticMarkerButton(props: {
   return (
     <button
       type="button"
-      key={`${String(props.index)}:${String(marker.severity)}:${String(marker.startLineNumber)}:${
-        marker.message
-      }`}
       className="keiko-editor-diagnostic-marker"
       aria-label={`${severityLabel} diagnostic on ${meta}: ${marker.message}`}
       data-severity={markerDataSeverity(marker.severity)}

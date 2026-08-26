@@ -10,7 +10,12 @@ export interface EditorGitGutterChanges {
   readonly unstaged: readonly GitEditorDiffHunk[];
 }
 
-export type EditorGitGutterResolver = () => Promise<EditorGitGutterChanges>;
+// KEIKO-0897: every other host-resolver in this territory threads an AbortSignal wired to a
+// Monaco cancellation token / AbortController so the underlying host call can be told to stop early
+// rather than merely having its result ignored on arrival. The git-gutter resolver now matches
+// that shape; this is a breaking type change on the public host-port surface, so consumers of
+// KeikoCodeEditorProps.editorGitGutter must update accordingly.
+export type EditorGitGutterResolver = (signal: AbortSignal) => Promise<EditorGitGutterChanges>;
 
 export interface EditorGitGutterPeek {
   readonly hunk: GitEditorDiffHunk;
@@ -186,13 +191,57 @@ function installInteractions(
   return action === undefined ? [focus, mouse] : [focus, mouse, action];
 }
 
+// KEIKO-0897: distinguish an aborted resolve() from a real failure — mirrors the pattern in the
+// sibling bridges (hover-bridge.ts, inline-completion-bridge.ts) so an in-flight refresh that is
+// cancelled by a fresh refresh() or by dispose() does not surface as an error to the host.
+function isAbortError(error: unknown): boolean {
+  return error instanceof Error && error.name === "AbortError";
+}
+
+// Per-refresh AbortController: a fresh refresh() aborts any still-active previous one so the host
+// resolver can stop early instead of relying purely on a post-hoc sequence/disposed guard. Shared
+// as one mutable object (rather than separate closure `let`s) so both the refresh closure built by
+// makeGitGutterRefresh and dispose() observe and mutate the same state.
+interface GitGutterRefreshState {
+  disposed: boolean;
+  sequence: number;
+  activeController: AbortController | null;
+}
+
+/**
+ * Builds the refresh() callback: aborts any in-flight resolve, issues a fresh one guarded by a
+ * per-call sequence number, and applies the result or reports the error unless a later refresh or
+ * dispose() has already superseded this call.
+ */
+function makeGitGutterRefresh(
+  args: RegisterEditorGitGutterArgs,
+  apply: (next: EditorGitGutterChanges) => void,
+  state: GitGutterRefreshState,
+): () => void {
+  return (): void => {
+    const request = ++state.sequence;
+    state.activeController?.abort();
+    const controller = new AbortController();
+    state.activeController = controller;
+    void args
+      .resolve(controller.signal)
+      .then((next) => {
+        if (!state.disposed && request === state.sequence) apply(next);
+      })
+      .catch((error: unknown) => {
+        if (state.disposed || request !== state.sequence || isAbortError(error)) return;
+        const message = error instanceof Error ? error.message : "Git gutter refresh failed";
+        args.onError?.(message);
+      });
+  };
+}
+
 export function registerEditorGitGutter(args: RegisterEditorGitGutterArgs): EditorGitGutterBridge {
   if (args.degraded) return degradedBridge();
-  let disposed = false;
-  let sequence = 0;
   let changes = EMPTY_CHANGES;
   let stagedIds: string[] = [];
   let unstagedIds: string[] = [];
+  const state: GitGutterRefreshState = { disposed: false, sequence: 0, activeController: null };
 
   const apply = (next: EditorGitGutterChanges): void => {
     changes = next;
@@ -205,26 +254,16 @@ export function registerEditorGitGutter(args: RegisterEditorGitGutterArgs): Edit
       next.unstaged.flatMap((hunk) => decorationsForHunk(hunk, "unstaged", args.labels)),
     );
   };
-  const refresh = (): void => {
-    const request = ++sequence;
-    void args
-      .resolve()
-      .then((next) => {
-        if (!disposed && request === sequence) apply(next);
-      })
-      .catch((error: unknown) => {
-        if (disposed || request !== sequence) return;
-        const message = error instanceof Error ? error.message : "Git gutter refresh failed";
-        args.onError?.(message);
-      });
-  };
+  const refresh = makeGitGutterRefresh(args, apply, state);
   const interactions = installInteractions(args, () => changes, refresh);
   refresh();
   return {
     refresh,
     dispose(): void {
-      disposed = true;
-      sequence += 1;
+      state.disposed = true;
+      state.sequence += 1;
+      state.activeController?.abort();
+      state.activeController = null;
       for (const interaction of interactions) interaction.dispose();
       stagedIds = args.editor.deltaDecorations(stagedIds, []);
       unstagedIds = args.editor.deltaDecorations(unstagedIds, []);
