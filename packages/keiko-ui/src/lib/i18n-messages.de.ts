@@ -334,6 +334,15 @@ export const DE_MESSAGES = {
   "window.type.mobile.title": "Keiko Mobile",
   "window.type.mobile.desc": "Mobiler Begleiter",
   "mobile.previewNotice": "Vorschau — Kopplung noch nicht verdrahtet",
+  "mobile.subtitle": "Mobiler Begleiter — noch nicht verfügbar.",
+  "relationships.tracking.label": "Tracking",
+  "relationships.tracking.evicted.long":
+    "Tracking-Limit erreicht — es wird nur der letzte bekannte Lifecycle-Zustand angezeigt.",
+  "relationships.tracking.evicted.short": "Tracking-Limit erreicht",
+  "relationships.tracking.evicted.parenthetical":
+    "(Tracking-Limit erreicht — nur letzter bekannter Lifecycle wird angezeigt)",
+  "relationships.tracking.evicted.title":
+    "Live-Aktivitäts-Tracking hat für diese Beziehung sein Limit erreicht — es wird nur der letzte bekannte Lifecycle-Zustand angezeigt.",
   "window.type.inspector.title": "Inspektor",
   "window.type.inspector.desc": "Arbeitsbereich inspizieren",
   "window.type.activity.title": "Aktivität",

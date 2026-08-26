@@ -266,6 +266,9 @@ function ActivitySection({
   readonly transitions: readonly TransitionRow[];
   readonly densityMode: DensityMode;
 }): ReactNode {
+  const t = useTranslate();
+  const trackingLabel = t("relationships.tracking.label");
+  const trackingEvictedLong = t("relationships.tracking.evicted.long");
   // Per-density cap for inline transition rows (visual-density-rules.md table)
   const transitionCap = densityMode === "minimal" ? 3 : 5;
   const visibleTransitions = transitions.slice(0, transitionCap);
@@ -292,9 +295,9 @@ function ActivitySection({
           // Distinguishable from a normal activity state (KEIKO-0665): the badge above is only
           // the lifecycle-derived fallback, not a live SSE report.
           <div className="rb-row">
-            <span className="rb-row-k">Tracking</span>
+            <span className="rb-row-k">{trackingLabel}</span>
             <span className="rb-row-v" style={{ color: "var(--warn)" }} role="status">
-              Tracking limit reached — showing the last known lifecycle-derived state only.
+              {trackingEvictedLong}
             </span>
           </div>
         )}

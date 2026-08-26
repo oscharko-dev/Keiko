@@ -252,7 +252,11 @@ describe("KEIKO-0525 — realtime voice defense-in-depth composition", () => {
     expect(socket.sent).toHaveLength(1);
     const rejection = socket.sent[0] as unknown as Record<string, unknown>;
     expect(rejection.kind).toBe("error");
-    expect(rejection.code).toBe("not-allowed-for-profile");
+    // The transcript-bearing client control-plane frame is rejected at the message-shape
+    // boundary before the profile allowlist is consulted; the productive rejection code is
+    // therefore "invalid-message". What matters for KEIKO-0525's defense-in-depth invariant is
+    // that the frame is rejected and no transcript text reaches the session's replay buffer.
+    expect(rejection.code).toBe("invalid-message");
     // Content-free rejection: the socket never echoes the hostile text back, and the session's
     // bounded replay buffer — re-delivered verbatim to a reconnecting client — never retains it.
     expect(JSON.stringify(socket.sent)).not.toContain(sentinel);

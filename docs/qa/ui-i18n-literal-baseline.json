@@ -1,7 +1,9 @@
 {
   "$comment": "Ratcheted ledger of pre-existing untranslated user-facing literals in the Keiko UI, one entry per file (see scripts/check-ui-i18n-guard.mjs). A literal listed here is known debt the check:ui-i18n gate tolerates; ANY literal not listed fails the gate. The ledger only shrinks - regenerate it with `npm run check:ui-i18n -- --write-baseline` after removing literals, and never add an entry to silence a new one. For a literal that is genuinely not user-facing, mark the source line `// i18n-exempt: <reason>` instead, so the claim is visible in the diff.",
   "files": {
-    "packages/keiko-ui/src/app/atlassian-connectors/page.tsx": ["Keiko | Atlassian connectors"],
+    "packages/keiko-ui/src/app/atlassian-connectors/page.tsx": [
+      "Keiko | Atlassian connectors"
+    ],
     "packages/keiko-ui/src/app/components/desktop/AppShell.tsx": [
       "Connected",
       "Connecting",
@@ -15,9 +17,15 @@
     "packages/keiko-ui/src/app/components/desktop/ConnectedScopePill.tsx": [
       "Last grounded run: ${formatTokenCount(totalTokens)} tokens, ${String(usage.filesRead)} files"
     ],
-    "packages/keiko-ui/src/app/components/desktop/ConnectorScopePill.tsx": ["Disconnect from chat"],
-    "packages/keiko-ui/src/app/components/desktop/EditorMenu.tsx": ["Preferred editor for “"],
-    "packages/keiko-ui/src/app/components/desktop/Footer.tsx": ["Keiko |"],
+    "packages/keiko-ui/src/app/components/desktop/ConnectorScopePill.tsx": [
+      "Disconnect from chat"
+    ],
+    "packages/keiko-ui/src/app/components/desktop/EditorMenu.tsx": [
+      "Preferred editor for “"
+    ],
+    "packages/keiko-ui/src/app/components/desktop/Footer.tsx": [
+      "Keiko |"
+    ],
     "packages/keiko-ui/src/app/components/desktop/GroundedAnswer.tsx": [
       "(opens in new tab)",
       "a malformed document",
@@ -75,7 +83,9 @@
       "Why these files were selected",
       "Why these files?"
     ],
-    "packages/keiko-ui/src/app/components/desktop/Header.tsx": ["Keiko"],
+    "packages/keiko-ui/src/app/components/desktop/Header.tsx": [
+      "Keiko"
+    ],
     "packages/keiko-ui/src/app/components/desktop/hooks/voice-dialogue-evaluation/index.ts": [
       "Deprecated STT+TTS fallback deployment (full-realtime without browser WebRTC media)",
       "No-voice deployment (no voice model configured)",
@@ -83,7 +93,9 @@
       "Speech-output-only deployment (spoken answer, no capture)",
       "Speech-to-text-only deployment (dictation, no spoken answer)"
     ],
-    "packages/keiko-ui/src/app/components/desktop/LeftRail.tsx": ["Git"],
+    "packages/keiko-ui/src/app/components/desktop/LeftRail.tsx": [
+      "Git"
+    ],
     "packages/keiko-ui/src/app/components/desktop/modals/GatewaySetupDialog.tsx": [
       "API key header",
       "API key header authorization",
@@ -554,9 +566,6 @@
       "Search",
       "Search chat history"
     ],
-    "packages/keiko-ui/src/app/components/desktop/widgets/panels/EditorProfilesPanel.tsx": [
-      "Default"
-    ],
     "packages/keiko-ui/src/app/components/desktop/widgets/panels/InspectorPanel.tsx": [
       "Active window",
       "Authority",
@@ -572,10 +581,6 @@
       "State maximized",
       "Trust",
       "Workspace"
-    ],
-    "packages/keiko-ui/src/app/components/desktop/widgets/panels/MobilePanel.tsx": [
-      "Keiko Mobile",
-      "Scan to continue this workspace on your phone."
     ],
     "packages/keiko-ui/src/app/components/desktop/widgets/panels/PluginsPanel.tsx": [
       "Browser automation",
@@ -682,9 +687,6 @@
       "Retry",
       "Toggle focus mode (F)"
     ],
-    "packages/keiko-ui/src/app/components/desktop/widgets/panels/ResourcesPanel.tsx": [
-      "Shared assets &amp; references — coming soon."
-    ],
     "packages/keiko-ui/src/app/components/desktop/widgets/panels/SearchResultList.tsx": [
       "Workspace search results"
     ],
@@ -742,8 +744,12 @@
     "packages/keiko-ui/src/app/local-knowledge/[capsuleId]/capsule-actions.tsx": [
       "src/app.ts README.md"
     ],
-    "packages/keiko-ui/src/app/local-knowledge/capsule-set-compose.tsx": ["Creating..."],
-    "packages/keiko-ui/src/app/local-knowledge/capsule/page.tsx": ["Knowledge Pod Detail — Keiko"],
+    "packages/keiko-ui/src/app/local-knowledge/capsule-set-compose.tsx": [
+      "Creating..."
+    ],
+    "packages/keiko-ui/src/app/local-knowledge/capsule/page.tsx": [
+      "Knowledge Pod Detail — Keiko"
+    ],
     "packages/keiko-ui/src/app/local-knowledge/connector-graph.tsx": [
       "Actions for Knowledge Pod",
       "Add Knowledge Pod to workspace",
@@ -766,11 +772,8 @@
       "Removed pages could not be detected this run (the crawl reached its page limit).",
       "Start indexing Knowledge Pod"
     ],
-    "packages/keiko-ui/src/app/memoriaviva/components/MemoryList.tsx": ["MemoriaViva"],
-    "packages/keiko-ui/src/app/memoriaviva/detail/MemoryDetailClient.tsx": [
-      "Back to MemoriaViva",
-      "No memory selected",
-      "This link is missing a memory id. Open a memory from the list instead."
+    "packages/keiko-ui/src/app/memoriaviva/components/MemoryList.tsx": [
+      "MemoriaViva"
     ],
     "packages/keiko-ui/src/lib/local-knowledge-api.ts": [
       "Embedding mismatch",

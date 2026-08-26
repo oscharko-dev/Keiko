@@ -751,7 +751,7 @@ export function RelationshipListPanel({
                   // button — GEN-UI-A11Y-012). KEIKO-0665: an evicted id's activity is only a
                   // lifecycle-derived fallback, not a live report — say so explicitly instead of
                   // presenting it with the same confidence as a real SSE-reported state.
-                  aria-label={`${item.type} relationship from ${item.source.kind} ${item.source.id} to ${item.target.kind} ${item.target.id}, lifecycle: ${item.lifecycle}, activity: ${ACTIVITY_VISUALS[activity].label}${evicted ? " (tracking limit reached — showing last known lifecycle only)" : ""}`}
+                  aria-label={`${item.type} relationship from ${item.source.kind} ${item.source.id} to ${item.target.kind} ${item.target.id}, lifecycle: ${item.lifecycle}, activity: ${ACTIVITY_VISUALS[activity].label}${evicted ? ` ${t("relationships.tracking.evicted.parenthetical")}` : ""}`}
                   title={`${item.source.id} → ${item.target.id}`}
                   onClick={() => onSelect(item.id)}
                   onKeyDown={(e) => onRowKeyDown(e, item.id)}
@@ -806,9 +806,9 @@ export function RelationshipListPanel({
                   {evicted ? (
                     <span
                       style={{ fontSize: 10, color: "var(--warn)", whiteSpace: "nowrap" }}
-                      title="Live activity tracking reached its limit for this relationship — showing the last known lifecycle-derived state only."
+                      title={t("relationships.tracking.evicted.title")}
                     >
-                      tracking limit reached
+                      {t("relationships.tracking.evicted.short")}
                     </span>
                   ) : null}
                 </button>

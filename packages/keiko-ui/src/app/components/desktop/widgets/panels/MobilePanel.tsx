@@ -25,13 +25,16 @@ export function MobilePanel(): ReactNode {
   // role="region" — see ExportBar.tsx and TerminalWidget.tsx for the same tradeoff already made
   // in this codebase).
   return (
-    <section className={`tw-pad mob ${styles.lazyWidgetScope}`} aria-label="Keiko Mobile">
+    <section
+      className={`tw-pad mob ${styles.lazyWidgetScope}`}
+      aria-label={t("window.type.mobile.title")}
+    >
       <div className="mob-qr">
         <div className="ph-stripes" />
         <MobileIcon size={28} style={{ position: "relative", color: "var(--fg-dim)" }} />
       </div>
-      <div className="mob-title">Keiko Mobile</div>
-      <div className="mob-sub">Mobile companion — not yet available.</div>
+      <div className="mob-title">{t("window.type.mobile.title")}</div>
+      <div className="mob-sub">{t("mobile.subtitle")}</div>
       <div className="mob-sub mono" data-state="preview">
         {t("mobile.previewNotice")}
       </div>
