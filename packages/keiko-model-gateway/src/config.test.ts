@@ -105,6 +105,28 @@ describe("parseGatewayConfig", () => {
     ).toThrow(/realtimeAuthMode must be one of/u);
   });
 
+  // #2906 KEIKO-0567 — Gateway's constructor keys providers by modelId in a Map; a duplicate
+  // silently lets the later entry win. Reject it at the config-parse boundary so a
+  // chat/embedding modelId that collides with a later voice-role deployment name never
+  // silently redirects chat traffic to the voice provider.
+  it("rejects a config with two provider entries sharing the same modelId", () => {
+    const raw = {
+      providers: [
+        { ...validProvider(), modelId: "shared-model" },
+        { ...validProvider(), modelId: "shared-model" },
+      ],
+      circuitBreaker: { failureThreshold: 5, cooldownMs: 30000, halfOpenProbes: 2 },
+    };
+    let caught: unknown = undefined;
+    try {
+      parseGatewayConfig(raw);
+    } catch (error) {
+      caught = error;
+    }
+    expect(caught).toBeInstanceOf(ConfigInvalidError);
+    expect((caught as Error).message).toContain("shared-model");
+  });
+
   it("parses and validates the provider output-token parameter", () => {
     const config = parseGatewayConfig(
       rawWithProvider((p) => ({ ...p, outputTokenParameter: "max_completion_tokens" })),

@@ -22,6 +22,7 @@ import {
   type MemoryForget,
   type MemoryRecord,
   type MemoryScope,
+  scopeCoordinateKey,
   validateMemoryForget,
 } from "@oscharko-dev/keiko-contracts/memory";
 
@@ -35,29 +36,9 @@ import type {
 
 // ─── Scope coordinate equality ────────────────────────────────────────────────
 // Pure: two scopes match when their discriminator AND coordinate field match exactly.
-// Implemented via a canonical "kind:coordinate" string projection to collapse the
-// per-kind branching (memory pattern from issue #205 scopeCoordinateKey).
-function unsupportedScope(_scope: never): never {
-  throw new GovernanceError("unsupported-selector", "unknown MemoryScope kind");
-}
-
-function scopeCoordinateKey(scope: MemoryScope): string {
-  switch (scope.kind) {
-    case "user":
-      return `user:${scope.userId}`;
-    case "workspace":
-      return `workspace:${scope.workspaceId}`;
-    case "project":
-      return `project:${scope.projectId}`;
-    case "workflow":
-      return `workflow:${scope.workflowDefinitionId}`;
-    case "global":
-      return "global:";
-    default:
-      return unsupportedScope(scope);
-  }
-}
-
+// Delegates to the shared scopeCoordinateKey in @oscharko-dev/keiko-contracts/memory
+// (#2906 KEIKO-0546 — one canonical projection for governance + consolidation +
+// retrieval-validation callers).
 function scopeEquals(a: MemoryScope, b: MemoryScope): boolean {
   return scopeCoordinateKey(a) === scopeCoordinateKey(b);
 }

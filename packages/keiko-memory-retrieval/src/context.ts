@@ -253,7 +253,11 @@ function greedyAssemble(
   const perEntry = Math.max(1, Math.floor(options.budgetTokens / effectiveSlots));
   for (const rank of ranked) {
     if (included.length >= options.maxIncluded) {
-      omitted.push({ memoryId: rank.memoryId, reason: "budget-exceeded" });
+      // #2906 KEIKO-0697 — distinct reason from the genuine token-exhaustion branch below,
+      // so operators/dashboards can tell whether to raise maxIncluded or budgetTokens to
+      // recover the omission. The closed OmittedReason vocabulary exists precisely so
+      // consumers can bucket suppressions without ambiguity.
+      omitted.push({ memoryId: rank.memoryId, reason: "max-included-exceeded" });
       continue;
     }
     const record = recordById.get(rank.memoryId);

@@ -136,6 +136,54 @@ describe("retrieveMemoryContext — input validation", () => {
     }
   });
 
+  // #2906 KEIKO-0574 — nowMs is required, but exponentialDecay's ageMs<=0 guard is false for
+  // NaN so an invalid clock silently produces a NaN decay score. Validate at the boundary.
+  it("throws RetrievalError('invalid-clock') when nowMs is NaN", () => {
+    const { port } = portReturning({});
+    try {
+      retrieveMemoryContext({ scopes: [userScope()], nowMs: Number.NaN }, port);
+      throw new Error("expected throw");
+    } catch (e) {
+      expect(e).toBeInstanceOf(RetrievalError);
+      expect((e as RetrievalError).code).toBe("invalid-clock");
+    }
+  });
+
+  it("throws RetrievalError('invalid-clock') when nowMs is +Infinity", () => {
+    const { port } = portReturning({});
+    try {
+      retrieveMemoryContext({ scopes: [userScope()], nowMs: Number.POSITIVE_INFINITY }, port);
+      throw new Error("expected throw");
+    } catch (e) {
+      expect(e).toBeInstanceOf(RetrievalError);
+      expect((e as RetrievalError).code).toBe("invalid-clock");
+    }
+  });
+
+  // #2906 KEIKO-0696 — mmrLambda was the only numeric tuning field without validation; NaN
+  // silently degraded reorderByMmr to always-pick-first-remaining instead of failing closed.
+  it("throws RetrievalError('invalid-threshold') when mmrLambda is NaN", () => {
+    const { port } = portReturning({});
+    try {
+      retrieveMemoryContext(baseRequest({ mmrLambda: Number.NaN, embeddingById: new Map() }), port);
+      throw new Error("expected throw");
+    } catch (e) {
+      expect(e).toBeInstanceOf(RetrievalError);
+      expect((e as RetrievalError).code).toBe("invalid-threshold");
+    }
+  });
+
+  it("throws RetrievalError('invalid-threshold') when mmrLambda is out of [0, 1]", () => {
+    const { port } = portReturning({});
+    try {
+      retrieveMemoryContext(baseRequest({ mmrLambda: 1.5 }), port);
+      throw new Error("expected throw");
+    } catch (e) {
+      expect(e).toBeInstanceOf(RetrievalError);
+      expect((e as RetrievalError).code).toBe("invalid-threshold");
+    }
+  });
+
   it("wraps port failures as RetrievalError('port-failure') with cause preserved", () => {
     const root = new Error("port boom");
     const port: MemoryQueryPort = {

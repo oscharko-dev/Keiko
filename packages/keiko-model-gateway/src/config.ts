@@ -46,9 +46,17 @@ import type {
 const DEFAULT_TIMEOUT_MS = 30_000;
 const DEFAULT_MAX_RETRIES = 3;
 const DEFAULT_RETRY_BASE_DELAY_MS = 500;
-const DEFAULT_FAILURE_THRESHOLD = 5;
-const DEFAULT_COOLDOWN_MS = 30_000;
-const DEFAULT_HALF_OPEN_PROBES = 2;
+// KEIKO-0572: exported so gateway-setup.ts / grounded-retrieval-eval.ts can import the shared
+// defaults instead of restating the literal `{ failureThreshold: 5, cooldownMs: 30_000,
+// halfOpenProbes: 2 }` at three call sites.
+export const DEFAULT_FAILURE_THRESHOLD = 5;
+export const DEFAULT_COOLDOWN_MS = 30_000;
+export const DEFAULT_HALF_OPEN_PROBES = 2;
+export const DEFAULT_CIRCUIT_BREAKER_CONFIG = {
+  failureThreshold: DEFAULT_FAILURE_THRESHOLD,
+  cooldownMs: DEFAULT_COOLDOWN_MS,
+  halfOpenProbes: DEFAULT_HALF_OPEN_PROBES,
+} as const;
 export const DEFAULT_API_KEY_HEADER_NAME = "authorization";
 const MAX_API_KEY_HEADER_NAME_LENGTH = 64;
 const API_KEY_HEADER_NAME_RE = /^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$/u;
@@ -1739,6 +1747,20 @@ function applyVoicePersonaDerivation(
   return [...byId.values()];
 }
 
+// Rejects a config in which any two provider entries share the same modelId across the
+// merged chat/embedding/voice set (#2906 KEIKO-0567). Gateway's constructor builds a
+// modelId→provider Map — a duplicate silently lets the later entry win and routes chat
+// requests to the wrong (e.g. voice) provider with no error at setup time.
+function assertUniqueProviderModelIds(providers: readonly { readonly modelId: string }[]): void {
+  const seen = new Set<string>();
+  for (const provider of providers) {
+    if (seen.has(provider.modelId)) {
+      throw new ConfigInvalidError(`duplicate provider modelId '${provider.modelId}'`);
+    }
+    seen.add(provider.modelId);
+  }
+}
+
 function buildGatewayConfig(
   raw: Record<string, unknown>,
   providersRaw: readonly unknown[],
@@ -1750,6 +1772,7 @@ function buildGatewayConfig(
     parseProvider(item, index, env, egress, options),
   );
   const providers = providersWithEgress(parsed, egress);
+  assertUniqueProviderModelIds(providers);
   const merged = mergeCapabilities(inlineCapabilities(parsed), topLevelCapabilities(raw));
   const capabilities = applyVoicePersonaDerivation(merged, providers);
   const grounding = parseGroundingLimits(raw);

@@ -20,7 +20,12 @@
 import type { DatabaseSync } from "node:sqlite";
 import type { MemoryContentCipher } from "./cipher.js";
 import { emitEncryptionMigrated, sweepExistingContent } from "./migrate-encrypt.js";
-import { startMemoryVaultLogTimer, type MemoryVaultLogSink } from "./vault-log.js";
+import {
+  emitMemoryVaultLogEvent,
+  memoryVaultErrorKind,
+  startMemoryVaultLogTimer,
+  type MemoryVaultLogSink,
+} from "./vault-log.js";
 
 // v2 = encryption-at-rest (ADR-0035). v1 stored content columns in plaintext; v2 seals them via an
 // eager code sweep (no column changes). The bump is one-way: a v2 DB is unreadable by v1 code.
@@ -210,7 +215,9 @@ CREATE INDEX IF NOT EXISTS idx_tombstones_scope_forgotten
   ON memory_tombstones(scope_kind, scope_coordinate, forgotten_at DESC, id ASC);
 `;
 
-const MIGRATIONS: readonly Migration[] = [
+// KEIKO-0573: exported so a co-located test can assert strict ascending version order across the
+// array. Not re-exported through the package's public entry point, so no packaged surface change.
+export const MIGRATIONS: readonly Migration[] = [
   { version: 1, sql: V1_SQL },
   { version: 3, sql: V3_SQL },
   { version: 4, sql: V4_SQL },
@@ -286,8 +293,84 @@ export function runMigrations(
   // re-run over already-sealed content).
   emitEncryptionMigrated(sink, rowsMigrated, elapsedMs());
   if (upgradedExistingDb) {
-    // Outside the transaction (checkpoint cannot run inside one): truncate the WAL so pages that
-    // held the now-re-encrypted plaintext are reclaimed immediately, not at the next close.
-    db.exec("PRAGMA wal_checkpoint(TRUNCATE)");
+    flushPlaintextResidueWithRetry(db, sink);
   }
+}
+
+// The number of times the post-migration WAL TRUNCATE checkpoint is retried when SQLite
+// reports `busy=1` (another connection holds an open read/write). Bounded on purpose so a
+// sustained reader cannot hang vault open indefinitely; three attempts covers a transient
+// contending reader without turning the migration open into a spin loop (#2906 KEIKO-0877).
+const WAL_CHECKPOINT_MAX_ATTEMPTS = 3;
+
+interface WalCheckpointResult {
+  readonly busy: number;
+  readonly log: number;
+  readonly checkpointed: number;
+}
+
+// Post-migration WAL flush: truncates the WAL so pages that held the now-re-encrypted
+// plaintext are reclaimed immediately instead of at the next natural close. The migration
+// transaction has already committed, so any failure here — a busy contending reader, an
+// exception thrown by the checkpoint statement itself — must NOT propagate out of
+// runMigrations()/openMemoryDatabase() (#2906 KEIKO-0713): a transient hiccup would
+// otherwise turn a successful encryption upgrade into a spurious vault-open failure, and a
+// process restart would repair itself since the migration is idempotent. But per AGENTS.md
+// §7 a silent swallow is forbidden — a persistently busy or throwing checkpoint is emitted
+// as a body-free diagnostic through the log sink so an operator can see plaintext pages
+// were not immediately reclaimed (#2906 KEIKO-0877).
+//
+// Exported so schema.test.ts can exercise the retry/report path directly without having
+// to reconstruct a real v1→v-current migration timeline. Not part of the public package
+// surface — consumed only by runMigrations above and by co-located tests.
+export function flushPlaintextResidueWithRetry(
+  db: DatabaseSync,
+  sink: MemoryVaultLogSink | undefined,
+): void {
+  for (let attempt = 1; attempt <= WAL_CHECKPOINT_MAX_ATTEMPTS; attempt += 1) {
+    const outcome = attemptWalCheckpointTruncate(db);
+    if (outcome.kind === "ok" && outcome.result.busy === 0) return;
+    if (attempt === WAL_CHECKPOINT_MAX_ATTEMPTS) {
+      emitCheckpointDegraded(sink, attempt, outcome);
+      return;
+    }
+  }
+}
+
+type WalCheckpointAttempt =
+  | { readonly kind: "ok"; readonly result: WalCheckpointResult }
+  | { readonly kind: "threw"; readonly errorKind: string };
+
+function attemptWalCheckpointTruncate(db: DatabaseSync): WalCheckpointAttempt {
+  try {
+    const row = db.prepare("PRAGMA wal_checkpoint(TRUNCATE)").get() as
+      Partial<WalCheckpointResult> | undefined;
+    return {
+      kind: "ok",
+      result: {
+        busy: typeof row?.busy === "number" ? row.busy : 0,
+        log: typeof row?.log === "number" ? row.log : 0,
+        checkpointed: typeof row?.checkpointed === "number" ? row.checkpointed : 0,
+      },
+    };
+  } catch (error) {
+    return { kind: "threw", errorKind: memoryVaultErrorKind(error) };
+  }
+}
+
+function emitCheckpointDegraded(
+  sink: MemoryVaultLogSink | undefined,
+  attempts: number,
+  outcome: WalCheckpointAttempt,
+): void {
+  emitMemoryVaultLogEvent(sink, {
+    level: "warn",
+    category: "diagnostic",
+    op: "store.encryption-checkpoint-degraded",
+    ...(outcome.kind === "threw" ? { errorKind: outcome.errorKind } : {}),
+    extra: {
+      attempts,
+      busy: outcome.kind === "ok" ? outcome.result.busy === 1 : true,
+    },
+  });
 }
