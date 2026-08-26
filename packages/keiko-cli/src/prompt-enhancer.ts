@@ -300,23 +300,21 @@ function renderScorecards(result: PromptEnhancementWireResponse, io: CliIo): voi
   }
 }
 
-type PromptEnhancerCliPreparation =
+type PromptEnhancerCliParse =
   | {
       readonly ok: true;
       readonly flags: ParsedFlags;
       readonly rawInput: string;
       readonly request: PromptEnhancementWireRequest;
-      readonly config: GatewayConfig | undefined;
     }
   | { readonly ok: false; readonly code: number };
 
-function preparePromptEnhancerCliRun(
-  args: readonly string[],
-  io: CliIo,
-  env: EnvSource,
-  deps: PromptEnhancerCliDeps,
-  gateway: GatewayModule,
-): PromptEnhancerCliPreparation {
+/**
+ * Parses and validates CLI args, `--help`, `--input`, and the wire request shape. Touches no
+ * module graph beyond the static contracts/security imports, so `--help` and any usage error can
+ * return before `loadModelGateway` (and the heavier harness/workflows/evidence graphs) ever load.
+ */
+function parsePromptEnhancerCliArgs(args: readonly string[], io: CliIo): PromptEnhancerCliParse {
   const parsed = parseArgs(args);
   if (!parsed.ok) {
     io.err(`Error: ${parsed.error}\n\n${USAGE}`);
@@ -336,20 +334,18 @@ function preparePromptEnhancerCliRun(
     io.err(`Error: invalid request:\n  - ${wire.errors.join("\n  - ")}\n`);
     return { ok: false, code: 2 };
   }
-  const config = resolveGatewayConfig(parsed.flags, env, io, deps, gateway);
-  if (!config.ok) return { ok: false, code: config.code };
-  return {
-    ok: true,
-    flags: parsed.flags,
-    rawInput,
-    request: wire.request,
-    config: config.config,
-  };
+  return { ok: true, flags: parsed.flags, rawInput, request: wire.request };
 }
 
 /**
  * `keiko prompt-enhancer` entrypoint. Returns 0 on success, 1 on a runtime/config error, 2 on usage
  * error. Pure apart from optional config-file reads and optional model-assisted refinement.
+ *
+ * KEIKO-0947: argument parsing and the `--help` / usage-error paths run BEFORE any heavy
+ * module graph loads (mirrors run.ts). Only `loadModelGateway` is needed for
+ * `resolveGatewayConfig`; `loadHarness` / `loadWorkflows` / `loadEvidence` load only once
+ * the enhancement is actually about to run, so `--help` and `--bogus` pay the parse cost
+ * only — not the full four-graph startup.
  */
 export async function runPromptEnhancerCli(
   args: readonly string[],
@@ -357,21 +353,27 @@ export async function runPromptEnhancerCli(
   env: EnvSource,
   deps: PromptEnhancerCliDeps = {},
 ): Promise<number> {
-  const [gateway, harness, workflows, evidence] = await Promise.all([
-    loadModelGateway(),
+  // Cheap parse-only pass — no module graph loads. `--help`, `--bogus`, and any purely
+  // structural usage error return here before we touch loadModelGateway.
+  const parsed = parsePromptEnhancerCliArgs(args, io);
+  if (!parsed.ok) return parsed.code;
+  // Gateway is needed for resolveGatewayConfig only (no harness/workflows/evidence yet).
+  const gateway = await loadModelGateway();
+  const config = resolveGatewayConfig(parsed.flags, env, io, deps, gateway);
+  if (!config.ok) return config.code;
+  // A real enhancement is about to run — now load the remaining three graphs.
+  const [harness, workflows, evidence] = await Promise.all([
     loadHarness(),
     loadWorkflows(),
     loadEvidence(),
   ]);
-  const prepared = preparePromptEnhancerCliRun(args, io, env, deps, gateway);
-  if (!prepared.ok) return prepared.code;
   const run = deps.run ?? workflows.runPromptEnhancement;
   let result: PromptEnhancementWireResponse;
   try {
-    result = await run(prepared.request, {
-      gatewayRoutingConfig: workflows.promptEnhancementGatewayRoutingConfig(prepared.config),
+    result = await run(parsed.request, {
+      gatewayRoutingConfig: workflows.promptEnhancementGatewayRoutingConfig(config.config),
       modelPortFactory:
-        deps.modelPortFactory ?? promptEnhancerModelPortFactory(prepared.config, gateway, harness),
+        deps.modelPortFactory ?? promptEnhancerModelPortFactory(config.config, gateway, harness),
     });
   } catch (error) {
     if (error instanceof workflows.PromptEnhancementInputError) {
@@ -381,7 +383,7 @@ export async function runPromptEnhancerCli(
     throw error;
   }
 
-  emitResult(prepared.flags, result, prepared.rawInput, env, prepared.config, io, {
+  emitResult(parsed.flags, result, parsed.rawInput, env, config.config, io, {
     workflows,
     evidence,
   });

@@ -366,8 +366,33 @@ function applyServerTimeouts(server: Server): void {
 
 async function listen(server: Server, port: number): Promise<void> {
   await new Promise<void>((res, rej) => {
-    server.once("error", rej);
-    server.listen(port, UI_HOST, res);
+    // KEIKO-0858: the one-shot rejection listener must be removed once listen succeeds,
+    // otherwise it stays wired as the server's ONLY 'error' listener — a settled
+    // Promise's reject is a no-op, so a post-listen 'error' event was silently swallowed.
+    // Guard removeListener: some test fakes stub Server with only `listen`/`once`.
+    const onError = (error: Error): void => {
+      rej(error);
+    };
+    server.once("error", onError);
+    server.listen(port, UI_HOST, () => {
+      if (typeof server.removeListener === "function") {
+        server.removeListener("error", onError);
+      }
+      res();
+    });
+  });
+}
+
+// KEIKO-0858: after listen() resolves, attach a DURABLE server-lifetime error listener
+// that writes a body-free redacted line (error CLASS only, never .message) to io.err.
+// Without this, an error emitted during the server's post-startup lifetime — dropped
+// connection, TCP RST, filesystem descriptor exhaustion — has no listener at all, so
+// Node throws and crashes the process with a raw stack. Guarded so a stub Server (from
+// tests) without `.on` does not throw.
+export function attachDurableServerErrorListener(server: Server, io: CliIo): void {
+  if (typeof server.on !== "function") return;
+  server.on("error", (error: Error) => {
+    io.err(`keiko ui: server error (${error.name}).\n`);
   });
 }
 
@@ -877,6 +902,10 @@ async function startUiServer(options: StartUiServerOptions): Promise<void> {
   });
   applyServerTimeouts(server);
   await listen(server, parsed.port);
+  // KEIKO-0858: durable server-lifetime error listener replaces the settled-rejection
+  // one-shot listen() removes. A post-listen error now reaches io.err (body-free) instead
+  // of being silently swallowed / crashing the process with a raw stack.
+  attachDurableServerErrorListener(server, io);
   const startedAt = Date.now();
   // Printed before the (possibly filesystem-probing, on the real launch path) `process.started`
   // write below, so the operator's terminal reports "listening" the instant it is true rather

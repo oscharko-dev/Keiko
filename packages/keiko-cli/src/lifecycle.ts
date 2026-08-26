@@ -1,6 +1,8 @@
 import {
   closeSync,
+  constants as fsConstants,
   existsSync,
+  lstatSync,
   mkdirSync,
   openSync,
   readFileSync,
@@ -412,10 +414,11 @@ function cliEntryPath(cwd: string, env: EnvSource): string {
   // than the cli package barrel (which is not executable). Route through
   // `absoluteExistingPath` — the same validation `install-layout.ts` applies to
   // this variable — so a relative or non-existent value is refused instead of
-  // spawned (#KEIKO-0285). Read via the injected EnvSource first, matching the
-  // rest of this file's `optionOrEnv` pattern; `process.env` is only the
-  // documented last resort for callers who did not thread the env through.
-  const fromEnv = absoluteExistingPath(env.KEIKO_CLI_BIN_PATH ?? process.env.KEIKO_CLI_BIN_PATH);
+  // spawned (#KEIKO-0285). Read from the caller-supplied EnvSource only; the
+  // parameter itself defaults to `process.env` at the call site, so no per-key
+  // `?? process.env.X` fallback here — a test that passes `{}` must be able to
+  // suppress an ambient KEIKO_CLI_BIN_PATH (KEIKO-0553).
+  const fromEnv = absoluteExistingPath(env.KEIKO_CLI_BIN_PATH);
   if (fromEnv !== undefined) return fromEnv;
   return join(dirname(fileURLToPath(import.meta.url)), "index.js");
 }
@@ -486,12 +489,48 @@ async function reportHealthyStart(
   return 0;
 }
 
+// KEIKO-0886: refuse to follow a symlink at `<stateDir>/ui.log`. The launcher state file
+// insists on O_NOFOLLOW at every open; the append-mode ui.log write in the same state dir
+// used to accept a symlinked target, letting a state-dir actor steer stdout/stderr into
+// any user-writable file. Match launcher-state.ts's O_NOFOLLOW pattern: read the flag
+// defensively (undefined on Windows), and on Windows fall back to an lstat refusal since
+// NTFS reparse points cannot be blocked at open time in a single syscall.
+function openLogAppendNoFollow(logPath: string): number {
+  const nofollow = (fsConstants as { O_NOFOLLOW?: number }).O_NOFOLLOW ?? 0;
+  if (nofollow === 0) {
+    assertNotSymlink(logPath);
+  }
+  return openSync(
+    logPath,
+    fsConstants.O_WRONLY | fsConstants.O_CREAT | fsConstants.O_APPEND | nofollow,
+    0o600,
+  );
+}
+
+function assertNotSymlink(path: string): void {
+  try {
+    if (lstatSync(path).isSymbolicLink()) {
+      throw new Error(`keiko start: refusing to write to symlinked ${path}`);
+    }
+  } catch (error) {
+    if (
+      typeof error === "object" &&
+      error !== null &&
+      "code" in error &&
+      (error as { readonly code?: unknown }).code === "ENOENT"
+    ) {
+      return; // path does not exist yet — nothing to follow
+    }
+    throw error;
+  }
+}
+
 function openUiLogStdio(options: LifecycleOptions): UiLogStdio {
   mkdirSync(options.stateDir, { recursive: true, mode: 0o700 });
   const logPath = logFile(options);
-  const stdoutFd = openSync(logPath, "a", 0o600);
+  const stdoutFd = openLogAppendNoFollow(logPath);
   try {
-    const stderrLogFd = openSync(logPath, "a", 0o600);
+    const stderrLogFd = openLogAppendNoFollow(logPath);
     return {
       logPath,
       stdio: ["ignore", stdoutFd, stderrLogFd],
@@ -675,7 +714,12 @@ async function cmdStart(
     return 1;
   }
   child.unref();
-  writeFileSync(pidFile(options), `${String(child.pid)}\n`, { encoding: "utf8", mode: 0o600 });
+  // KEIKO-0886: match the ui.log open pattern — refuse to write to a symlinked
+  // <stateDir>/ui.pid so a hostile state-dir actor cannot re-point the pid file (which
+  // process.kill reads) at any user-writable path outside home.
+  const pidPath = pidFile(options);
+  assertNotSymlink(pidPath);
+  writeFileSync(pidPath, `${String(child.pid)}\n`, { encoding: "utf8", mode: 0o600 });
   io.out(`Starting Keiko UI on ${lifecycleBaseUrl(options)} ...\n`);
 
   const healthy = await waitForHealth(options, child.pid, deps);

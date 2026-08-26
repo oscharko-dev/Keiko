@@ -48,6 +48,7 @@ vi.mock("node:fs", async (importOriginal) => {
 });
 
 import {
+  _copyTreeSafeForTests,
   attestedExistingPortableInstall,
   portableManagedSetupLockPath,
   portableSourceCanReplaceManaged,
@@ -344,5 +345,38 @@ describe("portable install decisions", () => {
     } finally {
       localeCompare.mockRestore();
     }
+  });
+});
+
+// KEIKO-0901: bounded copyTreeSafe (depth / entry / byte caps). Each cap surfaces as a
+// named Error, so setupPortable's existing catch converts it into a fail-closed
+// registration — same shape as the pre-existing "unsafe links" refusal.
+describe("copyTreeSafe payload budgets (KEIKO-0901)", () => {
+  it("throws a named error when the payload exceeds the maximum depth", () => {
+    const source = makePolicyAllowedRoot();
+    const dest = makePolicyAllowedRoot();
+    rmSync(dest, { recursive: true, force: true });
+    // Build 40 nested directories with a leaf file — comfortably over the 32-depth cap.
+    let cursor = source;
+    for (let i = 0; i < 40; i += 1) {
+      cursor = join(cursor, `d${String(i)}`);
+      mkdirSync(cursor, { recursive: true });
+    }
+    writeFileSync(join(cursor, "leaf.txt"), "leaf", "utf8");
+    expect(() => {
+      _copyTreeSafeForTests(source, dest);
+    }).toThrow(/exceeds maximum depth/);
+  });
+
+  it("copies a shallow tree successfully within the budget", () => {
+    const source = makePolicyAllowedRoot();
+    const dest = makePolicyAllowedRoot();
+    rmSync(dest, { recursive: true, force: true });
+    mkdirSync(join(source, "a"), { recursive: true });
+    writeFileSync(join(source, "a", "leaf.txt"), "leaf", "utf8");
+    expect(() => {
+      _copyTreeSafeForTests(source, dest);
+    }).not.toThrow();
+    expect(readFileSync(join(dest, "a", "leaf.txt"), "utf8")).toBe("leaf");
   });
 });

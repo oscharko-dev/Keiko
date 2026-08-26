@@ -224,7 +224,11 @@ function detectTopLevelSpaceIndent(raw: string): number | undefined {
   return undefined;
 }
 
-function detectIndent(raw: string): string | number {
+// KEIKO-0752: exported so `keiko uninstall --scripts` can reproduce the same detected
+// indentation `keiko init` used when it originally wrote the file — the pair keeps
+// install and uninstall symmetric so a user's four-space file is never reformatted to
+// two spaces just because Keiko touched a couple of scripts.
+export function detectPackageJsonIndent(raw: string): string | number {
   const { tab, spaceDepths } = detectIndentSignals(raw);
   const total = tab + spaceDepths.length;
   if (total === 0) return 2;
@@ -236,8 +240,15 @@ function detectIndent(raw: string): string | number {
   return detectTopLevelSpaceIndent(raw) ?? 2;
 }
 
-function stringifyPackageJson(data: unknown, indent: string | number): string {
+// KEIKO-0752: exported alongside detectPackageJsonIndent so uninstall.ts uses the same
+// serializer as init.ts (single source of truth for the trailing-newline convention).
+export function stringifyPackageJson(data: unknown, indent: string | number): string {
   return `${JSON.stringify(data, null, indent)}\n`;
+}
+
+// Backwards-compat alias for the private call sites inside this module.
+function detectIndent(raw: string): string | number {
+  return detectPackageJsonIndent(raw);
 }
 
 function loadPackageJson(packagePath: string): LoadedPackageJson | InitError {

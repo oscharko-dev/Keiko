@@ -282,17 +282,66 @@ function readdirSafe(path: string): readonly string[] {
   return existsSync(path) ? [...new Set(readdirSync(path))].sort((a, b) => a.localeCompare(b)) : [];
 }
 
+// KEIKO-0901: bounded copy budgets. The previous recursive copyTreeSafe had no depth,
+// entry-count, or byte cap, so a hostile portable payload (deep symlink-free directory
+// tree, huge fanout, or a compressed-but-expands-catastrophically archive) could OOM
+// the CLI or exhaust the recursion stack. Each bound throws a named Error that
+// setupPortable's existing catch converts into a fail-closed registration, matching
+// how "unsafe links" / "unsupported filesystem entries" already surface.
+const PORTABLE_PAYLOAD_MAX_DEPTH = 32;
+const PORTABLE_PAYLOAD_MAX_ENTRIES = 1_000_000;
+const PORTABLE_PAYLOAD_MAX_BYTES = 4 * 1024 * 1024 * 1024; // 4 GiB
+
+interface PortableCopyBudget {
+  entries: number;
+  bytes: number;
+}
+
+// KEIKO-0901 test seam: exported under an underscore prefix so unit tests can exercise
+// the depth/entry/byte cap directly without setting up the full setupPortable pipeline.
+// Not part of the CLI's advertised public surface — production callers use setupPortable
+// or upgradeManagedInstall.
+export function _copyTreeSafeForTests(source: string, destination: string): void {
+  copyTreeSafe(source, destination);
+}
+
 function copyTreeSafe(source: string, destination: string): void {
+  copyTreeBounded(source, destination, 0, { entries: 0, bytes: 0 });
+}
+
+function copyTreeBounded(
+  source: string,
+  destination: string,
+  depth: number,
+  budget: PortableCopyBudget,
+): void {
+  if (depth > PORTABLE_PAYLOAD_MAX_DEPTH) {
+    throw new Error(
+      `portable payload exceeds maximum depth (${String(PORTABLE_PAYLOAD_MAX_DEPTH)})`,
+    );
+  }
+  budget.entries += 1;
+  if (budget.entries > PORTABLE_PAYLOAD_MAX_ENTRIES) {
+    throw new Error(
+      `portable payload exceeds maximum entry count (${String(PORTABLE_PAYLOAD_MAX_ENTRIES)})`,
+    );
+  }
   const file = lstatSync(source);
   if (file.isSymbolicLink()) throw new Error("portable payload contains unsafe links");
   if (file.isDirectory()) {
     mkdirSync(destination, { recursive: true });
     for (const entry of readdirSafe(source))
-      copyTreeSafe(join(source, entry), join(destination, entry));
+      copyTreeBounded(join(source, entry), join(destination, entry), depth + 1, budget);
     return;
   }
   if (!file.isFile()) throw new Error("portable payload contains unsupported filesystem entries");
   if (file.nlink > 1) throw new Error("portable payload contains unsafe links");
+  budget.bytes += file.size;
+  if (budget.bytes > PORTABLE_PAYLOAD_MAX_BYTES) {
+    throw new Error(
+      `portable payload exceeds maximum cumulative size (${String(PORTABLE_PAYLOAD_MAX_BYTES)} bytes)`,
+    );
+  }
   mkdirSync(dirname(destination), { recursive: true });
   copyFileSync(source, destination);
 }

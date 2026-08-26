@@ -7,6 +7,7 @@
 import { spawn } from "node:child_process";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  _resetInstalledProcessGuardsForTests,
   fatalProcessLine,
   installProcessGuards,
   type FatalDiagnosticsModule,
@@ -40,6 +41,9 @@ function installAndCapture(sink: ProcessGuardSink): {
 afterEach(() => {
   vi.unstubAllEnvs();
   vi.useRealTimers();
+  // KEIKO-0837: reset the module-level idempotency latch so every test starts from a
+  // clean slate; production code never calls this helper.
+  _resetInstalledProcessGuardsForTests();
 });
 
 describe("fatalProcessLine", () => {
@@ -378,4 +382,62 @@ describe("installProcessGuards — a hung classifier import against the real eve
     expect(stderr).toContain("keiko: fatal unhandled rejection (Error). The process will exit.");
     expect(exitCode).toBe(1);
   }, 10_000);
+});
+
+describe("installProcessGuards — idempotency (KEIKO-0837)", () => {
+  it("registers exactly one listener even when called twice", () => {
+    const before = {
+      uncaught: process.listenerCount("uncaughtException"),
+      rejection: process.listenerCount("unhandledRejection"),
+    };
+    installProcessGuards({ err: vi.fn(), exit: vi.fn() });
+    installProcessGuards({ err: vi.fn(), exit: vi.fn() });
+    const after = {
+      uncaught: process.listenerCount("uncaughtException"),
+      rejection: process.listenerCount("unhandledRejection"),
+    };
+    // Only ONE additional listener per event, not two.
+    expect(after.uncaught - before.uncaught).toBe(1);
+    expect(after.rejection - before.rejection).toBe(1);
+  });
+});
+
+describe("installProcessGuards — flushes the fatal line before exiting (KEIKO-0837)", () => {
+  it("awaits an async sink.err before calling sink.exit", async () => {
+    let errResolved = false;
+    let exitSeenErrResolved: boolean | undefined;
+    const err = vi.fn(async (_text: string): Promise<void> => {
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      errResolved = true;
+    });
+    const exit = vi.fn((_code: number): void => {
+      exitSeenErrResolved = errResolved;
+    });
+    const loadServer = vi.fn((): Promise<FatalDiagnosticsModule> =>
+      Promise.resolve({
+        createFileServerLogSink: (): { write: () => void; close: () => void } => ({
+          write: (): void => undefined,
+          close: (): void => undefined,
+        }),
+        describeError: (): {
+          readonly errorClass: string;
+          readonly code?: string;
+          readonly frames?: readonly string[];
+          readonly causeChain?: readonly string[];
+        } => ({ errorClass: "TypeError" }),
+      } as unknown as FatalDiagnosticsModule),
+    );
+
+    const { uncaught, cleanup } = installAndCapture({ err, exit, loadServer });
+    try {
+      // Await a microtask cycle plus the sink.err's 10ms sleep before asserting.
+      uncaught?.(new Error("boom"));
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      expect(err).toHaveBeenCalled();
+      expect(exit).toHaveBeenCalledWith(1);
+      expect(exitSeenErrResolved).toBe(true);
+    } finally {
+      cleanup();
+    }
+  });
 });

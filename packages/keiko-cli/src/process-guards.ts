@@ -46,7 +46,12 @@ export type FatalDiagnosticsModule = Pick<
 >;
 
 export interface ProcessGuardSink {
-  readonly err: (text: string) => void;
+  // KEIKO-0837: err may return a Promise so the caller can drain the stderr write
+  // BEFORE process.exit() is invoked. The default sink still returns void (Node's
+  // process.stderr.write is synchronous for TTY/pipes on POSIX), but a test seam or a
+  // consumer that pipes stderr through an async transport can now be sure the fatal line
+  // actually reached its destination.
+  readonly err: (text: string) => void | Promise<void>;
   readonly exit: (code: number) => void;
   // Test seam: injects a fake (or deliberately hanging) keiko-server module without exercising
   // the real dynamic import. Defaults to it in production — see `loadServerModule` below — so no
@@ -150,10 +155,18 @@ async function handleFatalReason(
   const loadServer = sink.loadServer ?? loadServerModule;
   let line = fatalProcessLine(humanKind, fallbackErrorKind(reason));
   let settled = false;
-  const finish = (): void => {
+  // KEIKO-0837: await the sink.err write BEFORE sink.exit so an async stderr transport
+  // (or a slow pipe on macOS) is guaranteed to flush the fatal line before the process
+  // is instructed to exit. Node's process.stderr.write is synchronous for TTY/pipes on
+  // POSIX; awaiting a plain-void return is a no-op, so this only affects the async path.
+  const finish = async (): Promise<void> => {
     if (settled) return;
     settled = true;
-    sink.err(line);
+    try {
+      await sink.err(line);
+    } catch {
+      // A sink whose write itself throws should not prevent the process from exiting.
+    }
     sink.exit(1);
   };
   await new Promise<void>((resolve) => {
@@ -166,8 +179,7 @@ async function handleFatalReason(
     // timeout callback ever runs, so the process would exit 0 with no stderr line and no
     // `process.fatal` record — silently swallowing the very crash this file exists to report.
     const timer = setTimeout(() => {
-      finish();
-      resolve();
+      void finish().finally(resolve);
     }, FATAL_IMPORT_TIMEOUT_MS);
     writeFatalLine(humanKind, machineKind, reason, loadServer)
       .then((resolvedLine) => {
@@ -179,13 +191,22 @@ async function handleFatalReason(
       })
       .finally(() => {
         clearTimeout(timer);
-        finish();
-        resolve();
+        void finish().finally(resolve);
       });
   });
 }
 
+// KEIKO-0837: installProcessGuards must be idempotent. A second call (e.g. because the
+// entrypoint re-runs a bootstrapping helper, or a test invokes it twice) previously
+// registered a second copy of each listener, so a single crash produced duplicate stderr
+// lines AND double-called process.exit. This module-level flag makes the second (and
+// every subsequent) call a no-op — matching what real bootstrapping code needs from a
+// crash handler.
+let processGuardsInstalled = false;
+
 export function installProcessGuards(sink: ProcessGuardSink = DEFAULT_PROCESS_GUARD_SINK): void {
+  if (processGuardsInstalled) return;
+  processGuardsInstalled = true;
   // Node never awaits an event listener's return value, so each listener stays void-returning and
   // explicitly floats its async work with `void` — the same fire-and-forget shape every other
   // process-signal listener in this codebase already uses.
@@ -195,4 +216,10 @@ export function installProcessGuards(sink: ProcessGuardSink = DEFAULT_PROCESS_GU
   process.on("unhandledRejection", (reason: unknown): void => {
     void handleFatalReason("unhandled rejection", "unhandled-rejection", reason, sink);
   });
+}
+
+// Test seam: resets the "already installed" latch so unit tests can exercise both the
+// first-install and idempotent-noop paths. Never called from production code.
+export function _resetInstalledProcessGuardsForTests(): void {
+  processGuardsInstalled = false;
 }

@@ -502,6 +502,43 @@ describe("runLauncherCli — state-file tamper regression (F1/F2)", () => {
     expect(c.out()).toContain(`${h.targetPath}\tunreadable`);
     expect(c.err()).toBe("");
   });
+
+  // KEIKO-0795: `install` used to let a raw ErrnoException escape when the shortcut path
+  // was a directory or otherwise unreadable. The handleExistingTarget catch converts that
+  // into a typed LauncherError("TARGET_UNREADABLE") that runLauncherCli's own catch
+  // surfaces as exit 1 with a launcher-prefixed stderr line.
+  it("KEIKO-0795 — install returns 1 and reports a clean stderr line when the shortcut path is a directory", (ctx) => {
+    if (osPlatform() === "win32") ctx.skip();
+    const h = makeHarness();
+    mkdirSync(h.approvedDir, { recursive: true });
+    // Plant a DIRECTORY at the shortcut path so existsSync says "yes" but readFileSync
+    // throws EISDIR.
+    mkdirSync(h.targetPath);
+    const c = makeIo();
+    expect(runLauncherCli(["install"], c.io, {}, h.deps)).toBe(1);
+    expect(c.err()).toContain("keiko launcher");
+    expect(c.err()).toContain(h.targetPath);
+  });
+
+  // KEIKO-0795: `remove` used to throw mid-iteration on the first unreadable shortcut
+  // and abort every remaining entry. processRemoveEntry's catch now converts that into
+  // a "refused" outcome so the loop keeps processing.
+  it("KEIKO-0795 — remove reports 'refused' for an unreadable shortcut and keeps processing the rest", (ctx) => {
+    if (osPlatform() === "win32") ctx.skip();
+    const h = makeHarness();
+    // Install one real shortcut, then swap the underlying file for a directory so
+    // readFileSync fails when processRemoveEntry visits it.
+    runLauncherCli(["install"], makeIo().io, {}, h.deps);
+    rmSync(h.targetPath);
+    mkdirSync(h.targetPath);
+    const c = makeIo();
+    const code = runLauncherCli(["remove"], c.io, {}, h.deps);
+    // A single-entry state may still exit 0 or 1 depending on how the runner classifies
+    // partial refusals; the important guarantee is (a) no unhandled throw, (b) the
+    // shortcut line is reported as "refusing:" on stderr with the path.
+    expect([0, 1]).toContain(code);
+    expect(c.err()).toContain(`refusing: ${h.targetPath}`);
+  });
 });
 
 describe("runLauncherCli — KEIKO_STATE_DIR containment (F4)", () => {

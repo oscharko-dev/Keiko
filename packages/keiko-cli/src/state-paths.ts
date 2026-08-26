@@ -107,7 +107,11 @@ function explicitStateDirSource(
   if (stateDirArg !== undefined && stateDirArg.length > 0) {
     return { source: "--state-dir", value: stateDirArg };
   }
-  const fromEnv = env.KEIKO_STATE_DIR ?? process.env.KEIKO_STATE_DIR;
+  // KEIKO-0553: no `?? process.env.X` fallback — callers own their EnvSource. Every
+  // production caller threads an env through (launcher.ts, lifecycle.ts); a test that
+  // passes `{}` MUST be able to suppress an ambient KEIKO_STATE_DIR that would otherwise
+  // steer the pid/log/state files outside the user's homedir (F4).
+  const fromEnv = env.KEIKO_STATE_DIR;
   if (typeof fromEnv === "string" && fromEnv.length > 0) {
     return { source: "KEIKO_STATE_DIR", value: fromEnv };
   }

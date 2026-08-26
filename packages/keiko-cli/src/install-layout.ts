@@ -79,9 +79,12 @@ export function resolveKeikoBinary(
     readonly source: KeikoBinarySource;
     readonly binPath: string | undefined;
   }[] = [
+    // KEIKO-0553: `env` defaults to `process.env` at the parameter site (line above), so
+    // an explicit caller-supplied EnvSource is authoritative — no per-key `?? process.env.X`
+    // fallback here or the ambient shell leaks back into isolated tests and F5-style overrides.
     {
       source: "env-override",
-      binPath: absoluteExistingPath(env.KEIKO_CLI_BIN_PATH ?? process.env.KEIKO_CLI_BIN_PATH),
+      binPath: absoluteExistingPath(env.KEIKO_CLI_BIN_PATH),
     },
     { source: "argv", binPath: absoluteExistingPath(argv[1]) },
     { source: "local-build", binPath: builtCheckoutLayout(cwd)?.binPath },
@@ -94,7 +97,7 @@ export function resolveKeikoBinary(
     }
   }
 
-  const pathHit = resolveKeikoBinaryFromPath(process.platform, env.PATH ?? process.env.PATH);
+  const pathHit = resolveKeikoBinaryFromPath(process.platform, env.PATH);
   if (pathHit !== undefined) {
     return { source: "path", binPath: pathHit };
   }

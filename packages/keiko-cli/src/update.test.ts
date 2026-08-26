@@ -436,6 +436,33 @@ describe("keiko update CLI", () => {
     expect(output(c)).not.toContain("manual path");
   });
 
+  // KEIKO-0809: `waitForTerminalSession` used pollIntervalMs as both the sleep interval
+  // AND the loop's `elapsed +=` increment, so a caller-supplied `pollIntervalMs: 0`
+  // produced `elapsed += 0` and looped forever. The clamp forces a positive tick so the
+  // maxWaitMs bound applies even when the caller passes 0.
+  it("bounds the apply wait even when the poll interval is zero", async () => {
+    const c = makeIo();
+    const session = fakeSessionManager(baseStatus(), updateSession());
+    let sleepCalls = 0;
+    const code = await runUpdate(["apply"], c, {
+      preflight: fakePreflight(baseReport()).preflight,
+      session: session.manager,
+      remediation: fakeRemediation(),
+      sleep: (_ms: number): Promise<void> => {
+        sleepCalls += 1;
+        return Promise.resolve();
+      },
+      pollIntervalMs: 0,
+      maxWaitMs: 10,
+    });
+
+    expect(code).toBe(0);
+    // A single terminal-session probe should suffice; the important guarantee is finite
+    // sleep calls (no infinite loop). Assert a hard upper bound well below the previous
+    // infinite-spin behavior.
+    expect(sleepCalls).toBeLessThan(100);
+  });
+
   it("starts safe apply and reports restart-required without raw logs", async () => {
     const c = makeIo();
     const session = fakeSessionManager(baseStatus(), updateSession());

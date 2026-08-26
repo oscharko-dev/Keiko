@@ -335,7 +335,19 @@ function handleExistingTarget(
   homedir: string,
   io: CliIo,
 ): number {
-  const existing = readFileSync(plan.targetPath, "utf8");
+  // KEIKO-0795: mirror cmdStatus's try/catch — a directory or unreadable file at the
+  // shortcut path used to let a raw ErrnoException escape as an uncaught throw. Convert
+  // it into a typed LauncherError so runLauncherCli's existing catch (568-573) surfaces a
+  // launcher-prefixed exit-1 message instead of a stack trace.
+  let existing: string;
+  try {
+    existing = readFileSync(plan.targetPath, "utf8");
+  } catch (error) {
+    throw new LauncherError(
+      "TARGET_UNREADABLE",
+      `keiko launcher: cannot read the existing file at ${plan.targetPath} to compare content — ${errorCodeOf(error)}. Move or remove it manually before re-running.`,
+    );
+  }
   if (existing !== plan.content) {
     throw new LauncherError(
       "TARGET_FOREIGN",
@@ -346,6 +358,16 @@ function handleExistingTarget(
   saveState(stateDir, upsertEntry(loadState(stateDir, loadOpts), planToEntry(plan)));
   io.out(`Keiko launcher already installed at ${plan.targetPath} (idempotent).\n`);
   return 0;
+}
+
+// KEIKO-0795: extract only the errno code from an unknown fs failure. Never include the
+// full ErrnoException message (which can quote absolute paths) in the LauncherError line.
+function errorCodeOf(error: unknown): string {
+  if (typeof error === "object" && error !== null && "code" in error) {
+    const code = (error as { readonly code?: unknown }).code;
+    if (typeof code === "string" && code.length > 0) return code;
+  }
+  return "unreadable";
 }
 
 function cmdInstall(
@@ -399,7 +421,16 @@ function processRemoveEntry(
     io.out(`missing: ${entry.path} (already gone — state cleared)\n`);
     return "missing";
   }
-  const existing = readFileSync(entry.path, "utf8");
+  // KEIKO-0795: an unreadable recorded shortcut (directory, permissions, EIO) used to
+  // throw mid-iteration and abort every remaining entry. Convert into a "refused" outcome
+  // so removeLauncherShortcuts's loop counts it and continues processing.
+  let existing: string;
+  try {
+    existing = readFileSync(entry.path, "utf8");
+  } catch (error) {
+    io.err(`refusing: ${entry.path} (unreadable — ${errorCodeOf(error)}; not deleted)\n`);
+    return "refused";
+  }
   if (hashContent(existing) !== entry.contentSha256) {
     io.err(
       `refusing: ${entry.path} (content does not match the launcher Keiko generated; not deleted)\n`,

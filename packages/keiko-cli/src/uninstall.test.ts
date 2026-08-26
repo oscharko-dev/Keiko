@@ -458,6 +458,38 @@ describe("runUninstallCli — scripts edge cases", () => {
     expect(c.out()).toContain("no keiko:start / keiko:stop scripts");
   });
 
+  // KEIKO-0752: previously the writer hardcoded `null, 2` and reformatted a four-space
+  // (or tab-indented) package.json whole, even though uninstall's own scope is only the
+  // two `keiko:*` scripts. Detect the raw file's indentation before serializing so the
+  // surviving lines keep their original indent.
+  it("preserves package.json indentation when removing keiko scripts", async () => {
+    const root = makeRoot();
+    const path = join(root, "package.json");
+    const original = {
+      name: "keiko-consumer",
+      scripts: {
+        "keiko:start": KEIKO_START_SCRIPT,
+        "keiko:stop": KEIKO_STOP_SCRIPT,
+        "build:app": "tsc -b",
+      },
+    };
+    // Four-space indented input with an LF trailing newline.
+    writeFileSync(path, `${JSON.stringify(original, null, 4)}\n`, "utf8");
+
+    const c = makeIo();
+    const code = await runUninstallCli(["--scripts"], c.io, {}, { cwd: root, homedir: () => root });
+    expect(code).toBe(0);
+
+    const rewritten = readFileSync(path, "utf8");
+    // The surviving script line must still be four-space indented, not two.
+    expect(rewritten).toContain('    "build:app": "tsc -b"');
+    // The Keiko scripts are gone.
+    expect(rewritten).not.toContain("keiko:start");
+    expect(rewritten).not.toContain("keiko:stop");
+    // Trailing newline is preserved.
+    expect(rewritten.endsWith("\n")).toBe(true);
+  });
+
   it("exits 1 gracefully when package.json cannot be written", async (ctx) => {
     // Skip where the read-only bit does not block the owner (Windows, or running as root).
     if (process.platform === "win32") ctx.skip();

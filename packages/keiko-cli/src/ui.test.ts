@@ -871,6 +871,32 @@ describe("runUiCli", () => {
   });
 });
 
+describe("attachDurableServerErrorListener (KEIKO-0858)", () => {
+  it("surfaces a server error raised after listen with a body-free redacted line", async () => {
+    const { attachDurableServerErrorListener } = await import("./ui.js");
+    const emitter = new EventEmitter();
+    const server = emitter as unknown as Server;
+    let stderr = "";
+    const io: CliIo = {
+      out: (): void => undefined,
+      err: (text: string): void => {
+        stderr += text;
+      },
+    };
+    attachDurableServerErrorListener(server, io);
+    // A body-carrying error with a distinctive message; the listener must NOT echo the
+    // message text — only the class name — so the redacted-diagnostics rule holds.
+    emitter.emit(
+      "error",
+      Object.assign(new TypeError("sensitive-message-do-not-leak"), {
+        name: "TypeError",
+      }),
+    );
+    expect(stderr).toContain("server error (TypeError)");
+    expect(stderr).not.toContain("sensitive-message-do-not-leak");
+  });
+});
+
 describe("createLiveCspSource", () => {
   // Regression pin (KEIKO-0439): the original assertions were identical before and after the
   // watcher was supposed to fire — both reads landed in the runtime-hash fallback branch of
@@ -906,7 +932,16 @@ describe("createLiveCspSource", () => {
       if (nextHash === undefined) throw new Error("expected next inline script hash");
       expect(nextHash).not.toBe(initialHash);
       await writeFile(hashesFile, JSON.stringify([nextHash]), "utf8");
-      await sleep(700);
+
+      // KEIKO-0842: poll for the CSP to actually reflect the new hash, up to a generous
+      // multi-second cap. The previous fixed `await sleep(700)` raced the watcher's
+      // 500ms watchFile interval and produced flakes when the OS scheduler happened to
+      // delay the callback. Poll on the meaningful post-condition (csp() reports the new
+      // hash) rather than on a wall-clock guess.
+      const deadline = Date.now() + 5_000;
+      while (!runtime.csp().includes(nextHash) && Date.now() < deadline) {
+        await sleep(50);
+      }
 
       // The header must have actually changed — before/after assertions differ.
       expect(runtime.csp()).toContain(nextHash);

@@ -1,10 +1,12 @@
 import {
   existsSync,
   fstatSync,
+  lstatSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
   rmSync,
+  symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -360,32 +362,34 @@ describe("runLifecycleCli", () => {
     // instead of returned verbatim. Anchor the fixture to a real file inside the test root
     // so the "env override is honored when valid" behavior is exercised without conflating
     // it with the unvalidated pass-through that #KEIKO-0285 removed.
+    //
+    // KEIKO-0553: cliEntryPath now reads KEIKO_CLI_BIN_PATH from the caller-supplied
+    // EnvSource only (no per-key process.env fallback). Pass the value through the env
+    // argument rather than by stubbing process.env — that ambient value is the exact
+    // leak the fix closes.
     const binPath = join(root, "published-keiko-bin.js");
     writeFileSync(binPath, "#!/usr/bin/env node\n", "utf8");
     const c = makeIo();
     const spawned: { command: string; args: readonly string[]; opts: SpawnOptions }[] = [];
     const child = { pid: 12345, unref: vi.fn(), once: vi.fn() } as unknown as ChildProcess;
 
-    const code = await withEnvVar("KEIKO_CLI_BIN_PATH", binPath, async () =>
-      runLifecycleCli(
-        "start",
-        [],
-        c.io,
-        {},
-        {
-          cwd: root,
-          spawnFn: (command, args, opts) => {
-            spawned.push({ command, args, opts });
-            return child;
-          },
-          fetchImpl: () =>
-            Promise.resolve(Response.json({ version: SDK_VERSION }, { status: 200 })),
-          isProcessAlive: () => true,
-          isPortAvailable: () => Promise.resolve(true),
-          killProcess: vi.fn(),
-          sleep: () => Promise.resolve(),
+    const code = await runLifecycleCli(
+      "start",
+      [],
+      c.io,
+      { KEIKO_CLI_BIN_PATH: binPath },
+      {
+        cwd: root,
+        spawnFn: (command, args, opts) => {
+          spawned.push({ command, args, opts });
+          return child;
         },
-      ),
+        fetchImpl: () => Promise.resolve(Response.json({ version: SDK_VERSION }, { status: 200 })),
+        isProcessAlive: () => true,
+        isPortAvailable: () => Promise.resolve(true),
+        killProcess: vi.fn(),
+        sleep: () => Promise.resolve(),
+      },
     );
 
     expect(code).toBe(0);
@@ -1312,5 +1316,54 @@ describe("safeKillProcess (ESRCH-safe default killer)", () => {
     const spy = vi.spyOn(process, "kill").mockImplementation((): true => true);
     safeKillProcess(4242, "SIGTERM");
     expect(spy).toHaveBeenCalledWith(4242, "SIGTERM");
+  });
+});
+
+// KEIKO-0886: <stateDir>/ui.log and <stateDir>/ui.pid must refuse to write through a
+// pre-planted symlink so a state-dir actor cannot re-point them at any user-writable
+// path. Skipped on Windows: NTFS symlink semantics differ and the fallback lstat
+// refusal is exercised via cross-platform code review, not test.
+describe("keiko start — refuses symlinked ui.log and ui.pid (KEIKO-0886)", () => {
+  it("refuses to open a pre-planted symlinked ui.log without corrupting the target file", async (ctx) => {
+    if (process.platform === "win32") ctx.skip();
+    const root = makeRoot();
+    const stateDir = join(root, ".keiko");
+    mkdirSync(stateDir, { recursive: true, mode: 0o700 });
+    const decoy = join(root, "victim-file.txt");
+    const original = "unchanged\n";
+    writeFileSync(decoy, original, "utf8");
+    // Plant ui.log as a symlink pointing at the decoy.
+    symlinkSync(decoy, join(stateDir, "ui.log"));
+
+    const c = makeIo();
+    const spawned: unknown[] = [];
+    const child = { pid: 12345, unref: vi.fn(), once: vi.fn() } as unknown as ChildProcess;
+    const code = await runLifecycleCli(
+      "start",
+      ["--state-dir", ".keiko"],
+      c.io,
+      {},
+      {
+        cwd: root,
+        homedir: () => root,
+        spawnFn: (command, args, opts) => {
+          spawned.push({ command, args, opts });
+          return child;
+        },
+        fetchImpl: () => Promise.resolve(Response.json({ version: SDK_VERSION }, { status: 200 })),
+        isProcessAlive: () => true,
+        isPortAvailable: () => Promise.resolve(true),
+        killProcess: vi.fn(),
+        sleep: () => Promise.resolve(),
+      },
+    );
+
+    // The symlinked-log branch fails the start with a spawn-fail message (openUiLogStdio
+    // throws before spawn runs) and never writes through the symlink.
+    expect(code).toBe(1);
+    // The decoy file is byte-identical before and after the attempt.
+    expect(readFileSync(decoy, "utf8")).toBe(original);
+    // The symlink itself is still a symlink (not replaced with a real file).
+    expect(lstatSync(join(stateDir, "ui.log")).isSymbolicLink()).toBe(true);
   });
 });

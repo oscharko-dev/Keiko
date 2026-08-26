@@ -14,6 +14,10 @@ import type {
   EvalScorecard,
   EvaluationFixture,
 } from "@oscharko-dev/keiko-evaluations";
+// KEIKO-0655: shared argv-parsing helper replaces the byte-identical flagValue copy and the
+// structurally-identical readValueFlags loop this file, gen-tests.ts, and investigate.ts held —
+// flagValue itself is used only inside readNamedValueFlags now, so only that is imported here.
+import { readNamedValueFlags } from "./cli-arg-parsing.js";
 import { runGenTestsCli } from "./gen-tests.js";
 import { gatewayConfigFileLoader } from "./gateway-config.js";
 import { runInvestigateCli } from "./investigate.js";
@@ -48,29 +52,12 @@ interface EvaluateArgs {
   readonly output: string | undefined;
 }
 
-function flagValue(args: readonly string[], name: string): string | undefined | null {
-  const i = args.indexOf(name);
-  if (i === -1) {
-    return undefined;
-  }
-  const value = args[i + 1];
-  return value === undefined || value.startsWith("--") ? null : value;
-}
-
 const VALUE_FLAGS = ["--suite", "--fixture", "--model", "--config", "--output"] as const;
 type ValueFlag = (typeof VALUE_FLAGS)[number];
 const BOOLEAN_FLAGS = ["--live", "--json"] as const;
 
 function readValueFlags(args: readonly string[]): Record<ValueFlag, string | undefined> | null {
-  const values = {} as Record<ValueFlag, string | undefined>;
-  for (const flag of VALUE_FLAGS) {
-    const value = flagValue(args, flag);
-    if (value === null) {
-      return null;
-    }
-    values[flag] = value;
-  }
-  return values;
+  return readNamedValueFlags(args, VALUE_FLAGS);
 }
 
 function isValueFlag(value: string): value is ValueFlag {
@@ -317,7 +304,7 @@ function resolveLiveModelId(
   } catch (error) {
     if (error instanceof gateway.GatewayError) {
       io.err(
-        `Error: model gateway configuration problem — ${gateway.redact(error.message)}\n` +
+        `Error: model gateway configuration problem — ${error.message /* KEIKO-0910: GatewayError self-redacts (ADR-0003) */}\n` +
           `Provide a gateway config with --config PATH or KEIKO_CONFIG_FILE.\n`,
       );
       return 1;
@@ -385,7 +372,7 @@ function handleRunError(
 ): number {
   if (error instanceof gateway.GatewayError) {
     io.err(
-      `Error: model gateway configuration problem — ${gateway.redact(error.message)}\n` +
+      `Error: model gateway configuration problem — ${error.message /* KEIKO-0910: GatewayError self-redacts (ADR-0003) */}\n` +
         (parsed.live
           ? "Live evaluation requires a configured provider. Pass --config PATH or set " +
             "KEIKO_CONFIG_FILE.\n"
