@@ -15,6 +15,7 @@ import type {
   WorkspaceSymbolSearchResult,
 } from "@oscharko-dev/keiko-contracts";
 import {
+  compileSafeWorkspaceSearchRegex,
   validateWorkspaceReplaceApplyRequest,
   validateWorkspaceReplacePreviewRequest,
   validateWorkspaceSearchRequest,
@@ -216,13 +217,8 @@ function searchRouteErrorResult(error: unknown): RouteResult | undefined {
   return undefined;
 }
 
-// Flags must match `regexSafetyIssue`'s validity check (`new RegExp(source)`, no flags) and
-// `buildRegexMatcher`'s actual matching flags (`repoSearchMatchers.ts`: "g" / "gi") exactly. A
-// stricter flag set here (e.g. "u") can make `new RegExp` throw on a pattern the shared validator
-// already approved as safe (for example an unescaped "{" that is valid Annex-B syntax without "u"
-// but a SyntaxError under it), crashing this route instead of previewing or cleanly rejecting.
 function buildMatchRegex(request: WorkspaceSearchRequest | WorkspaceReplacePreviewRequest): RegExp {
-  return new RegExp(patternForRequest(request), request.caseSensitive ? "g" : "gi");
+  return compileSafeWorkspaceSearchRegex(patternForRequest(request), request.caseSensitive);
 }
 
 async function snippetForMatch(

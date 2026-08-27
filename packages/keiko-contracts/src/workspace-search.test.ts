@@ -13,7 +13,11 @@ import {
   validateWorkspaceSearchRequest,
   validateWorkspaceSymbolSearchRequest,
 } from "./workspace-search.js";
-import { hasDangerousGroupOrClassRepetition, regexSafetyIssue } from "./workspace-search.js";
+import {
+  compileSafeWorkspaceSearchRegex,
+  hasDangerousGroupOrClassRepetition,
+  regexSafetyIssue,
+} from "./workspace-search.js";
 
 function expectInvalidWithReason(result: ValidationResult, fragment: string): void {
   expect(result.ok).toBe(false);
@@ -395,6 +399,21 @@ describe("regexSafetyIssue adjacent quantified atoms", () => {
       expect(regexSafetyIssue(source)).toBe("query regex unsafe");
     },
   );
+});
+
+describe("compileSafeWorkspaceSearchRegex", () => {
+  it("preserves the supported regex grammar while literalizing unsupported metacharacters", () => {
+    const expression = compileSafeWorkspaceSearchRegex(String.raw`^(parse\w+)\(\)$`, false);
+    const literalPipe = compileSafeWorkspaceSearchRegex("parse|config", false);
+
+    expect(expression.test("parseConfig()")).toBe(true);
+    expect(literalPipe.test("parse|config")).toBe(true);
+    expect(literalPipe.test("parse")).toBe(false);
+  });
+
+  it("rejects unsafe input before compiling a regular expression", () => {
+    expect(() => compileSafeWorkspaceSearchRegex("(a+)+", false)).toThrow("query regex unsafe");
+  });
 });
 
 // KEIKO-0273 — the path-traversal and size-ceiling branches of these validators had no coverage at

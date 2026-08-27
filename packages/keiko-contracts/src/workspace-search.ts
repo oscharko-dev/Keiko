@@ -6,6 +6,12 @@ import type {
 import { isValidLineRange, isValidScopePath } from "./connected-context.js";
 import type { EditorPatchRejectionReason } from "./editor-patch-apply.js";
 
+declare global {
+  interface RegExpConstructor {
+    escape(value: string): string;
+  }
+}
+
 export type WorkspaceSearchMode = "literal" | "regex";
 
 export const WORKSPACE_SEARCH_MODES: readonly WorkspaceSearchMode[] = Object.freeze([
@@ -348,12 +354,129 @@ export function regexSafetyIssue(source: string): string | undefined {
   if (hasDangerousGroupOrClassRepetition(source)) return "query regex unsafe";
   if (hasAdjacentQuantifiedAtoms(source)) return "query regex unsafe";
   if (hasConcatenatedQuantifiedGroups(source)) return "query regex unsafe";
+  const safeSource = safeRegexSource(source);
+  if (safeSource === undefined) return "query regex invalid";
   try {
-    new RegExp(source);
+    new RegExp(safeSource);
   } catch {
     return "query regex invalid";
   }
   return undefined;
+}
+
+function regexEscapeToken(character: string): string | undefined {
+  switch (character) {
+    case "b":
+      return String.raw`\b`;
+    case "B":
+      return String.raw`\B`;
+    case "d":
+      return String.raw`\d`;
+    case "D":
+      return String.raw`\D`;
+    case "s":
+      return String.raw`\s`;
+    case "S":
+      return String.raw`\S`;
+    case "w":
+      return String.raw`\w`;
+    case "W":
+      return String.raw`\W`;
+    default:
+      return undefined;
+  }
+}
+
+function regexOperatorToken(character: string): string | undefined {
+  switch (character) {
+    case ".":
+      return ".";
+    case "(":
+      return "(";
+    case ")":
+      return ")";
+    case "*":
+      return "*";
+    case "+":
+      return "+";
+    case "?":
+      return "?";
+    case "^":
+      return "^";
+    case "$":
+      return "$";
+    default:
+      return undefined;
+  }
+}
+
+interface SafeRegexCharacterClass {
+  readonly end: number;
+  readonly source: string;
+}
+
+function safeRegexCharacterClass(
+  source: string,
+  start: number,
+): SafeRegexCharacterClass | undefined {
+  let output = "[";
+  for (let index = start + 1; index < source.length; index += 1) {
+    const character = source[index] ?? "";
+    if (character === "]") return { end: index, source: `${output}]` };
+    if (character === "\\") {
+      const escapedCharacter = source[index + 1];
+      if (escapedCharacter === undefined) return undefined;
+      output += regexEscapeToken(escapedCharacter) ?? RegExp.escape(escapedCharacter);
+      index += 1;
+    } else if (character === "^" && index === start + 1) {
+      output += "^";
+    } else {
+      output += RegExp.escape(character);
+    }
+  }
+  return undefined;
+}
+
+function safeRegexSource(source: string): string | undefined {
+  let output = "";
+  let index = 0;
+  while (index < source.length) {
+    const character = source[index] ?? "";
+    if (source.startsWith("(?:", index)) {
+      output += "(?:";
+      index += 3;
+      continue;
+    }
+    if (character === "[") {
+      const characterClass = safeRegexCharacterClass(source, index);
+      if (characterClass === undefined) return undefined;
+      output += characterClass.source;
+      index = characterClass.end + 1;
+      continue;
+    }
+    if (character === "\\") {
+      const escapedCharacter = source[index + 1];
+      if (escapedCharacter === undefined) return undefined;
+      output += regexEscapeToken(escapedCharacter) ?? RegExp.escape(escapedCharacter);
+      index += 1;
+    } else {
+      output += regexOperatorToken(character) ?? RegExp.escape(character);
+    }
+    index += 1;
+  }
+  return output;
+}
+
+/**
+ * Compiles the supported, ReDoS-checked workspace-search grammar without ever passing the raw
+ * request text to the RegExp constructor. Unsupported metacharacters are literal search text.
+ */
+export function compileSafeWorkspaceSearchRegex(source: string, caseSensitive: boolean): RegExp {
+  const issue = regexSafetyIssue(source);
+  if (issue !== undefined) throw new TypeError(issue);
+  const safeSource = safeRegexSource(source);
+  if (safeSource === undefined) throw new TypeError("query regex invalid");
+  return new RegExp(safeSource, caseSensitive ? "g" : "gi");
 }
 
 function validateRoot(root: unknown, reasons: string[]): void {

@@ -12,7 +12,7 @@ import {
 } from "./ecosystems.js";
 import { RepoSearchInvalidQueryError } from "./errors.js";
 import { expandedQueryTermGroups, expandedQueryTerms } from "./repoSearchQueryTerms.js";
-import { regexSafetyIssue } from "./repoSearchRegexSafety.js";
+import { compileSafeWorkspaceSearchRegex, regexSafetyIssue } from "./repoSearchRegexSafety.js";
 import { repositoryRouteDeclarationMatches, repositoryRouteQuery } from "./repoSearchRoutes.js";
 import {
   repositorySourceLines,
@@ -718,12 +718,15 @@ function buildRegexMatcher(query: RetrievalQuery): LineMatcher {
   if (issue !== undefined) {
     throw new RepoSearchInvalidQueryError(issue);
   }
-  let regex: RegExp;
   try {
-    regex = new RegExp(query.text, query.caseSensitive ? "g" : "gi");
+    const regex = compileSafeWorkspaceSearchRegex(query.text, query.caseSensitive);
+    return regexLineMatcher(regex);
   } catch {
     throw new RepoSearchInvalidQueryError(`invalid regex: ${query.text}`);
   }
+}
+
+function regexLineMatcher(regex: RegExp): LineMatcher {
   const cap = 100;
   return {
     match: (line: string): number => {
