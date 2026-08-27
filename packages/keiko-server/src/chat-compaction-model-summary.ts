@@ -4,6 +4,7 @@ import {
   CONTEXT_COMPACTION_MODEL_SUMMARY_MAX_ITEMS,
   CONTEXT_COMPACTION_MODEL_SUMMARY_PROMPT_VERSION,
   containsPseudoRoleMarker,
+  partitionContextPreservedFacts,
   redactAbsolutePaths,
   stripUnsafeFormatChars,
   validateContextCompactionRecord,
@@ -321,10 +322,16 @@ function buildSummaryPrompt(
 
 function recordSignalLines(record: ContextCompactionRecord): string[] {
   const lines = ["Structured deterministic signals:"];
+  const facts = partitionContextPreservedFacts(record.preservedFacts);
   addList(
     lines,
     "Facts",
-    record.preservedFacts?.map((fact) => fact.statement),
+    facts.verbatim.map((fact) => fact.statement),
+  );
+  addList(
+    lines,
+    "Inferred statements (not facts)",
+    facts.inferred.map((fact) => fact.statement),
   );
   addList(
     lines,

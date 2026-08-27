@@ -256,6 +256,33 @@ afterEach(() => {
 });
 
 describe("enrichChatCompactionWithModelSummary", () => {
+  it("labels inferred preserved facts instead of presenting them to the model as facts", async () => {
+    const store = createInMemoryEvidenceStore();
+    const calls: GatewayRequest[] = [];
+    const input = defaultEnrichmentInput();
+    await enrichChatCompactionWithModelSummary(deps(store, structuredSummaryModel(calls)), {
+      ...input,
+      compaction: {
+        ...compactionRecord(),
+        preservedFacts: [
+          {
+            statement: "the compaction plan has verified evidence",
+            sourceRef: { kind: "message", stableId: "history-msg-0" },
+          },
+          { statement: "the plan likely needs no further review", inferred: true },
+        ],
+      },
+    });
+
+    const prompt = requireSummaryPrompt(requireFirstRequest(calls));
+
+    expect(prompt).toContain("Facts:\n- the compaction plan has verified evidence");
+    expect(prompt).toContain(
+      "Inferred statements (not facts):\n- the plan likely needs no further review",
+    );
+    expect(prompt).not.toContain("Facts:\n- the plan likely needs no further review");
+  });
+
   it("persists a redacted bounded structured model-written summary for future resurfacing", async () => {
     const store = createInMemoryEvidenceStore();
     const calls: GatewayRequest[] = [];

@@ -80,8 +80,11 @@ before PR2 is merged.
 > every factual claim points to a source or is explicitly an inference. (3) `ContextUserConstraint`'s
 > field is `statement` (not `constraint`). (4) `ContextPreservedFact` and `ContextAssumption` carry
 > mutually-exclusive `?: never` discriminants (`rationale`/`confidence` on the fact; `sourceRef`/
-> `inferred` on the assumption) so neither is structurally assignable to the other — the anti-poisoning
-> separation is compile-time enforced, not merely "no shared base".
+> `inferred` on the assumption), so the two record types remain structurally separate. The shipped
+> `inferred` marker nevertheless makes a `ContextPreservedFact` non-verbatim; every fact-labeled
+> consumer therefore uses the shared `partitionContextPreservedFacts` projection, which routes only
+> `inferred !== true` entries to a fact label and labels the remaining entries as inferred. The flag is
+> explicit provenance, not sufficient anti-poisoning enforcement by itself.
 
 The PR1 stub (`context-engineering.ts:134–147`) carries `schemaVersion`, `laneId`, `reason`,
 `itemsBefore`, `itemsAfter`, `tokensBefore`, `tokensAfter`, `summaryRefHash?`, and
@@ -187,8 +190,9 @@ export interface ContextCompactionRecord {
   readonly orderedAt?: number | undefined;
   // Source spans that were compacted: message ids, tool-result ids, file paths + hashes, evidence ids.
   readonly sourceSpans?: readonly ContextProvenanceRef[] | undefined;
-  // Durable facts extracted from the compacted content. Typed ContextPreservedFact[] — cannot
-  // accidentally contain ContextAssumption (separate type, not a discriminated union).
+  // Durable entries extracted from the compacted content. Typed ContextPreservedFact[] — cannot
+  // accidentally contain ContextAssumption (separate type, not a discriminated union). An entry
+  // marked inferred is not a verbatim fact and must be projected through the shared partition.
   readonly preservedFacts?: readonly ContextPreservedFact[] | undefined;
   // Uncertain model-derived inferences. Structurally separate from preservedFacts.
   readonly assumptions?: readonly ContextAssumption[] | undefined;
@@ -502,10 +506,14 @@ and assumptions share one array.
   A caller that iterates over "preserved facts" and doesn't check the flag silently treats
   assumptions as authoritative. The milestone requirement explicitly states that assumptions
   "MUST NEVER be promoted to trusted facts." A boolean flag is convention, not enforcement.
-- **Why rejected**: structural separation is the load-bearing guarantee. Two distinct types
-  (`ContextPreservedFact` and `ContextAssumption`) make the compiler reject a misassignment.
-  The cost is two type definitions instead of one; the benefit is a compile-time invariant
-  rather than a runtime-checked convention.
+- **Why rejected**: structural separation remains the load-bearing guarantee for actual
+  `ContextAssumption` values. Two distinct types (`ContextPreservedFact` and
+  `ContextAssumption`) make the compiler reject that misassignment. The shipped additive
+  `ContextPreservedFact.inferred` provenance marker is not this rejected union: it retains the
+  separate assumption type for compatibility while representing an unsourced inferred entry. Its
+  presence creates a consumer-side trust boundary, so the shared `partitionContextPreservedFacts`
+  projection is mandatory before every fact-labeled presentation. The flag is therefore not relied
+  on as a convention; the shared projection enforces its presentation semantics for every consumer.
 
 ### Alternative 2: Store compaction records as workspace files under .keiko/compaction/
 

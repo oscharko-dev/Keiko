@@ -119,6 +119,32 @@ describe("buildChatCompactionResurfacingContext", () => {
     expect(context).toContain("re-verify");
   });
 
+  it("labels inferred preserved facts instead of resurfacing them as pinned facts", () => {
+    const store = persist({
+      chatId: CHAT_ID,
+      turn: 5,
+      records: [
+        record({
+          preservedFacts: [
+            {
+              statement: "the repository uses deterministic manifests",
+              sourceRef: { kind: "message", stableId: "m1" },
+            },
+            { statement: "the deployment likely remains healthy", inferred: true },
+          ],
+        }),
+      ],
+    });
+
+    const context = buildChatCompactionResurfacingContext(store, CHAT_ID);
+
+    expect(context).toContain("Pinned facts:\n- the repository uses deterministic manifests");
+    expect(context).toContain(
+      "Inferred statements (not facts):\n- the deployment likely remains healthy",
+    );
+    expect(context).not.toContain("Pinned facts:\n- the deployment likely remains healthy");
+  });
+
   it("ignores compaction manifests from other chats", () => {
     const store = persist({ chatId: OTHER_CHAT_ID, turn: 2, records: [record()] });
 

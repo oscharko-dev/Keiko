@@ -18,7 +18,10 @@ import {
   validateContextCompactionRecord,
 } from "@oscharko-dev/keiko-contracts";
 import { ContextOverflowError } from "@oscharko-dev/keiko-security/errors/gateway";
-import { conversationForGatewayWithCompaction } from "./conversation-compaction.js";
+import {
+  conversationForGatewayWithCompaction,
+  renderStructuredSummaryLines,
+} from "./conversation-compaction.js";
 import {
   conversationForGateway,
   MAX_CONTEXT_MESSAGES,
@@ -111,6 +114,24 @@ function zeroBudgetProfile(): ContextProfile {
 }
 
 describe("conversationForGatewayWithCompaction — fast path (unchanged guarantee)", () => {
+  it("labels inferred digest entries instead of presenting them as pinned facts", () => {
+    const summary = renderStructuredSummaryLines(1, {
+      preservedFacts: [
+        {
+          statement: "the service has a verified health endpoint",
+          sourceRef: { kind: "message", stableId: "m1" },
+        },
+        { statement: "the service likely has no active incidents", inferred: true },
+      ],
+    }).join("\n");
+
+    expect(summary).toContain("Pinned facts:\n- the service has a verified health endpoint");
+    expect(summary).toContain(
+      "Inferred statements (not facts):\n- the service likely has no active incidents",
+    );
+    expect(summary).not.toContain("Pinned facts:\n- the service likely has no active incidents");
+  });
+
   it("profile-backed many short turns stay verbatim above the legacy 24-turn threshold", () => {
     const messages = history(40);
     const outcome = conversationForGatewayWithCompaction(messages, {

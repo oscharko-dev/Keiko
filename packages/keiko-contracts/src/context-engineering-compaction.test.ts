@@ -12,6 +12,7 @@ import {
   CONTEXT_COMPACTION_MODEL_SUMMARY_MAX_ITEMS,
   CONTEXT_COMPACTION_MODEL_SUMMARY_PROMPT_VERSION,
   CONTEXT_ENGINEERING_SCHEMA_VERSION,
+  partitionContextPreservedFacts,
 } from "./context-engineering.js";
 import type {
   ContextAssumption,
@@ -49,6 +50,20 @@ function happyRef(): ContextProvenanceRef {
 function happyFact(): ContextPreservedFact {
   return { statement: "the allocator is pure", sourceRef: happyRef() };
 }
+
+describe("partitionContextPreservedFacts", () => {
+  it("keeps inferred entries out of the verbatim fact projection", () => {
+    const inferred: ContextPreservedFact = {
+      statement: "the cache likely survives restarts",
+      inferred: true,
+    };
+
+    expect(partitionContextPreservedFacts([happyFact(), inferred])).toEqual({
+      verbatim: [happyFact()],
+      inferred: [inferred],
+    });
+  });
+});
 
 function happyAssumption(): ContextAssumption {
   return {

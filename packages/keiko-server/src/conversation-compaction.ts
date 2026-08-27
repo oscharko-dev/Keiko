@@ -21,6 +21,7 @@ import {
   DEFAULT_CONTEXT_PROFILE,
   countContextTokens,
   countContextTokensForSegments,
+  partitionContextPreservedFacts,
   validateContextCompactionRecord,
   type ContextCompactionRecord,
   type ContextProfile,
@@ -180,7 +181,7 @@ function selectCompaction(
 function buildTokenPrefix(prepared: readonly DroppedTurn[]): number[] {
   const tokenPrefix: number[] = [0];
   for (const turn of prepared) {
-    const previousTotal = tokenPrefix[tokenPrefix.length - 1] ?? 0;
+    const previousTotal = tokenPrefix.at(-1) ?? 0;
     tokenPrefix.push(previousTotal + turn.contentTokens);
   }
   return tokenPrefix;
@@ -197,8 +198,7 @@ function selectCompactionCandidate(
 ): CompactionSelection | undefined {
   const retained = prepared.slice(dropCount);
   const retainedContents = retained.map((turn) => turn.content);
-  const retainedContentTokens =
-    (tokenPrefix[tokenPrefix.length - 1] ?? 0) - (tokenPrefix[dropCount] ?? 0);
+  const retainedContentTokens = (tokenPrefix.at(-1) ?? 0) - (tokenPrefix[dropCount] ?? 0);
   const systemTokens =
     systemContent === undefined ? 0 : countContextTokens(systemContent, tokenAccounting);
   if (systemTokens + retainedContentTokens > effectiveInputBudget) {
@@ -294,7 +294,7 @@ function buildSummaryContent(
   return content === undefined ? undefined : { content, digest };
 }
 
-function renderStructuredSummaryLines(
+export function renderStructuredSummaryLines(
   droppedCount: number,
   digest: CompactionDigest,
 ): readonly string[] {
@@ -302,10 +302,16 @@ function renderStructuredSummaryLines(
     SUMMARY_HEADER,
     `Dropped ${String(droppedCount)} earlier turn(s); structured continuity fields are recorded in the compaction record.`,
   ];
+  const facts = partitionContextPreservedFacts(digest.preservedFacts);
   addSection(
     lines,
     "Pinned facts",
-    digest.preservedFacts?.map((fact) => fact.statement),
+    facts.verbatim.map((fact) => fact.statement),
+  );
+  addSection(
+    lines,
+    "Inferred statements (not facts)",
+    facts.inferred.map((fact) => fact.statement),
   );
   addSection(
     lines,

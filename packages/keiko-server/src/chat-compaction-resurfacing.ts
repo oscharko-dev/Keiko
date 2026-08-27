@@ -1,5 +1,6 @@
 import {
   containsAbsolutePath,
+  partitionContextPreservedFacts,
   containsPseudoRoleMarker,
   stripUnsafeFormatChars,
   validateContextCompactionRecord,
@@ -36,6 +37,7 @@ interface TurnRunIdEntry {
 interface ResurfacingBuckets {
   readonly modelSummaries: string[];
   readonly facts: string[];
+  readonly inferredFacts: string[];
   readonly constraints: string[];
   readonly decisions: string[];
   readonly questions: string[];
@@ -160,6 +162,7 @@ function renderRecords(records: readonly TimedRecord[]): string | undefined {
   ];
   addSection(lines, "Model-written continuity summary", buckets.modelSummaries);
   addSection(lines, "Pinned facts", buckets.facts);
+  addSection(lines, "Inferred statements (not facts)", buckets.inferredFacts);
   addSection(lines, "Constraints", buckets.constraints);
   addSection(lines, "Decisions", buckets.decisions);
   addSection(lines, "Files and symbols", buckets.filesAndSymbols);
@@ -183,6 +186,7 @@ function collectBuckets(records: readonly ContextCompactionRecord[]): Resurfacin
 function emptyBuckets(): ResurfacingBuckets {
   return {
     modelSummaries: [],
+    inferredFacts: [],
     facts: [],
     constraints: [],
     decisions: [],
@@ -245,7 +249,9 @@ function pushSafeMany(bucket: string[], values: readonly string[] | undefined): 
 }
 
 function collectFactBuckets(buckets: ResurfacingBuckets, record: ContextCompactionRecord): void {
-  for (const fact of record.preservedFacts ?? []) pushSafe(buckets.facts, fact.statement);
+  const facts = partitionContextPreservedFacts(record.preservedFacts);
+  for (const fact of facts.verbatim) pushSafe(buckets.facts, fact.statement);
+  for (const fact of facts.inferred) pushSafe(buckets.inferredFacts, fact.statement);
   for (const constraint of record.userConstraints ?? []) {
     pushSafe(buckets.constraints, constraint.statement);
   }

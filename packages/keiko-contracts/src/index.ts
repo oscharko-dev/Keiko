@@ -2635,7 +2635,9 @@ export {
   maxUtf8BytesForTokenBudget,
   deriveContextProfile,
   deriveContextProfileFromCapability,
+  partitionContextPreservedFacts,
 } from "./context-engineering.js";
+export type { ContextPreservedFactPartition } from "./context-engineering.js";
 export type { ContextValidationResult } from "./context-engineering-validation.js";
 export {
   isContextLaneId,
