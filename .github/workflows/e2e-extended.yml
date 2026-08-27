@@ -96,6 +96,61 @@ jobs:
         uses: ./.github/actions/setup-sandbox-isolation
       - name: Build internal packages
         run: npm run build:packages
+      - name: Install Playwright browser
+        run: node node_modules/playwright/cli.js install --with-deps chromium
+      - name: Run ${{ matrix.suite }}
+        run: npm run ${{ matrix.suite }}
+      # #2485: without retained traces/screenshots a nightly red is undiagnosable from logs alone
+      # (git-changes-1575 stayed unexplained for 13 nights). Retention is short: these are debug
+      # aids, not evidence artifacts.
+      - name: Derive artifact-safe suite name
+        if: failure()
+        env:
+          SUITE: ${{ matrix.suite }}
+        run: echo "SUITE_SLUG=${SUITE//:/-}" >> "$GITHUB_ENV"
+      - name: Upload failure artifacts (traces, screenshots)
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: extended-e2e-failure-${{ env.SUITE_SLUG }}
+          path: test-results/
+          retention-days: 14
+
+  # Issue #2474 — the Code-task journeys (#2385 tracer, #2386 authority, #2387 research/skills/
+  # subagents) boot dedicated TEST-ONLY server entries through owned Playwright configs and are
+  # excluded from the generic collection, so no other lane exercises them. One sequential job
+  # instead of separate matrix entries: each journey boot re-runs build:packages/build:ui, so
+  # pre-building once here keeps every boot incremental against the same artifacts instead of
+  # paying the full rebuild per journey. The `!cancelled()` guard keeps each journey's result
+  # independent of the ones before it (same intent as fail-fast: false above); a red journey turns
+  # this lane red. Every new Code-task journey is appended here — a journey that runs in no lane is
+  # exactly the state #2474 exists to prevent.
+  code-task-e2e:
+    if: ${{ github.event_name != 'workflow_dispatch' || !inputs.code_task_real_binary }}
+    name: code-task e2e (scripted engine)
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "24.18.0"
+          cache: "npm"
+      - name: Verify governed Node.js and npm toolchain
+        run: node scripts/check-runtime-toolchain.mjs --exact
+      - name: Install workspaces
+        run: npm ci --ignore-scripts
+      # KEIKO-1020: both journeys execute the vetted verification step through the real
+      # verification runner, which always enforces the mandatory network:none boundary
+      # (enforce-or-fail-closed). Ubuntu 24.04 restricts unprivileged user namespaces via
+      # AppArmor, so enable the proven Bubblewrap path exactly as the required ci job does;
+      # never weaken the verification runner to inherited networking for tests.
+      - name: Setup Linux sandbox isolation
+        uses: ./.github/actions/setup-sandbox-isolation
+      - name: Build internal packages
+        run: npm run build:packages
       - name: Build UI static export
         run: npm run build:ui
       - name: Install Playwright browser
