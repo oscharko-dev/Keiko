@@ -70,6 +70,13 @@ async function qualify(helper, fixture, root) {
     child.once("error", reject);
     child.once("close", resolve);
   });
+  // KEIKO-0636 (mirrors qualifyWindows): without this listener a supervisor that exits between
+  // spawn and our first write() ends stdio[3] before we hand it a launchPacket, and the
+  // resulting EPIPE surfaces as an uncaught stream error instead of a stage-annotated failure.
+  let controlPipeError;
+  child.stdio[3].on("error", (streamError) => {
+    controlPipeError ??= streamError;
+  });
   const deadline = setTimeout(() => child.kill(), DEADLINE_MS);
   let completed = false;
   try {
@@ -78,7 +85,14 @@ async function qualify(helper, fixture, root) {
     const observation = await readBytes(output, 12);
     assert.equal(observation.subarray(0, 4).toString("ascii"), "KRQ1");
     const pids = [observation.readUInt32LE(4), observation.readUInt32LE(8)];
-    child.stdio[3].write(header("KRC1", 3, 0));
+    // KEIKO-0604: mirror the Windows harness split write to prove the macOS supervisor's
+    // consume_control (keiko_runtime_supervisor.c) blocks for the remaining bytes rather than
+    // rejecting a header it received in two reads. The Windows split is 5 + 7 (bytes 0..4 and
+    // 5..11); do the same here so both harnesses exercise the split-header path.
+    const controlFrame = header("KRC1", 3, 0);
+    child.stdio[3].write(controlFrame.subarray(0, 5));
+    await new Promise((resolveDelay) => setTimeout(resolveDelay, 10));
+    child.stdio[3].write(controlFrame.subarray(5));
     const proof = await response(responses);
     assert.equal(proof.kind, 2);
     assert.equal(proof.payload.readUInt32LE(4), 0);
@@ -90,6 +104,75 @@ async function qualify(helper, fixture, root) {
     clearTimeout(deadline);
     if (!completed) child.kill("SIGKILL");
     await exited.catch(() => undefined);
+    if (controlPipeError && completed === false) {
+      throw new Error(
+        `qualify: control pipe error before completion — ${controlPipeError.message}`,
+        { cause: controlPipeError },
+      );
+    }
+  }
+}
+
+/**
+ * KEIKO-0604: mirror the Windows harness's `assertControlEofFailsClosed`. Prove that the macOS
+ * supervisor's control-channel EOF handling is fail-closed — after `stdio[3].end()` the supervisor
+ * must send a KRS1 error frame (kind 3) and exit non-zero, without leaking anything on stderr.
+ */
+async function assertControlEofFailsClosed(helper, fixture, root) {
+  const child = spawn(helper, [], {
+    env: {},
+    stdio: ["pipe", "pipe", "pipe", "pipe", "pipe"],
+  });
+  const responses = streamReader(child.stdio[4]);
+  const output = streamReader(child.stdout);
+  const errors = [];
+  child.stderr.on("data", (chunk) => errors.push(chunk));
+  const exited = new Promise((resolve, reject) => {
+    child.once("error", reject);
+    child.once("close", resolve);
+  });
+  let controlPipeError;
+  child.stdio[3].on("error", (streamError) => {
+    controlPipeError ??= streamError;
+  });
+  const deadline = setTimeout(() => child.kill(), DEADLINE_MS);
+  let completed = false;
+  try {
+    child.stdio[3].write(launchPacket(fixture, root));
+    const acknowledgement = await response(responses);
+    assert.equal(acknowledgement.kind, 1);
+    const observation = await readBytes(output, 12);
+    assert.equal(observation.subarray(0, 4).toString("ascii"), "KRQ1");
+    const pids = [observation.readUInt32LE(4), observation.readUInt32LE(8)];
+    child.stdio[3].end();
+    const closure = await response(responses);
+    assert.equal(closure.kind, 3);
+    await Promise.all(pids.map(waitGone));
+    const exitCode = await exited;
+    // KEIKO-0730 (macOS parallel): the supervisor must exit non-zero on the control-EOF fail-
+    // closed path AND must not leak stderr diagnostics. The exact non-zero value differs from the
+    // Windows contract (macOS wmain returns EXIT_MONITOR_UNAVAILABLE or similar); assert non-zero.
+    assert.notEqual(
+      exitCode,
+      0,
+      "supervisor must exit non-zero on control EOF (send_error(ERROR_JOB_OBSERVE))",
+    );
+    assert.equal(
+      Buffer.concat(errors).length,
+      0,
+      "supervisor must not leak stderr diagnostics on the EOF fail-closed path",
+    );
+    completed = true;
+  } finally {
+    clearTimeout(deadline);
+    if (!completed) child.kill("SIGKILL");
+    await exited.catch(() => undefined);
+    if (controlPipeError && completed === false) {
+      throw new Error(
+        `assertControlEofFailsClosed: control pipe error before completion — ${controlPipeError.message}`,
+        { cause: controlPipeError },
+      );
+    }
   }
 }
 
@@ -639,6 +722,7 @@ if (process.platform === "darwin") {
         await compileSupervisor(staged, architecture);
       }
       await qualify(staged, fixture, root);
+      await assertControlEofFailsClosed(staged, fixture, root);
     } finally {
       await rm(root, { recursive: true, force: true });
     }

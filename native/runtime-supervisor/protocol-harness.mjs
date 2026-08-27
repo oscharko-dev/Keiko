@@ -139,14 +139,41 @@ export function readBytes(reader, length) {
  * The 64-byte cap is deliberate: both supervisors only ever emit reap proofs shorter than that,
  * so a longer length is a protocol confusion this rejects rather than reads.
  */
+// KEIKO-0690: keep the per-kind payload contract in one place. Both Windows and macOS
+// supervisors emit the exact same three response kinds through the shared KRS1 codec:
+//   kind 1 RESPONSE_LAUNCHED  → 0 bytes
+//   kind 2 RESPONSE_REAPED    → exactly 8 bytes (JOBOBJECT_BASIC_ACCOUNTING_INFORMATION excerpt)
+//   kind 3 RESPONSE_ERROR     → exactly 2 bytes (little-endian error code)
+// Confirmed against `enum response_kind` in native/runtime-supervisor/{windows,macos}/keiko_
+// runtime_supervisor.c. A pre-fix short frame would drop past the `length <= 64` upper bound and
+// throw ERR_OUT_OF_RANGE inside Buffer.readUInt32LE instead of producing a protocol assertion
+// that names the observed length.
+const EXPECTED_PAYLOAD_LENGTH_BY_KIND = new Map([
+  [1, 0],
+  [2, 8],
+  [3, 2],
+]);
+
 export async function response(reader) {
   const responseHeader = await readBytes(reader, 12);
   assert.equal(responseHeader.subarray(0, 4).toString("ascii"), "KRS1");
   assert.equal(responseHeader.readUInt16LE(4), 1);
+  const kind = responseHeader.readUInt16LE(6);
   const length = responseHeader.readUInt32LE(8);
   assert.ok(length <= 64);
+  const expected = EXPECTED_PAYLOAD_LENGTH_BY_KIND.get(kind);
+  assert.notEqual(
+    expected,
+    undefined,
+    `unknown KRS1 response kind ${String(kind)} (length=${String(length)})`,
+  );
+  assert.equal(
+    length,
+    expected,
+    `KRS1 response kind ${String(kind)} must carry ${String(expected)} bytes, observed ${String(length)}`,
+  );
   return {
-    kind: responseHeader.readUInt16LE(6),
+    kind,
     payload: length === 0 ? Buffer.alloc(0) : await readBytes(reader, length),
   };
 }
@@ -194,9 +221,18 @@ export const waitGone = waitForExit;
  */
 export async function explained(stage, promise, exited, stderr) {
   const exitCode = Symbol("exited");
+  // KEIKO-0850: neutralise `exited`'s rejection before the race — a rejected `exited` (child
+  // spawn error, unusual exit sequence) used to reject the whole race and propagate the raw
+  // error, dropping the stage annotation this wrapper exists to preserve. Map both settlement
+  // paths of `exited` to a resolution with the `exitCode` marker so the race can never reject
+  // through that leg. `promise.catch(...)` already handles the other leg.
+  const neutralisedExited = exited.then(
+    (code) => ({ [exitCode]: code }),
+    (exitError) => ({ [exitCode]: `errored:${String(exitError?.code ?? exitError)}` }),
+  );
   const raced = await Promise.race([
     promise.catch((error) => ({ error })),
-    exited.then((code) => ({ [exitCode]: code })),
+    neutralisedExited,
   ]);
   if (raced && exitCode in raced) {
     const stderrBytes = Buffer.concat(stderr).length;

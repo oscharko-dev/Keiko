@@ -184,6 +184,18 @@ function spawnHelper(binary, input, paused, mutate) {
     const deadline = setTimeout(() => child.kill("SIGKILL"), HELPER_DEADLINE_MS);
     child.stdout.on("data", (chunk) => stdout.push(chunk));
     child.stderr.on("data", (chunk) => stderr.push(chunk));
+    // KEIKO-0905: without these listeners, an EPIPE / ERR_STREAM_DESTROYED raised while writing
+    // to a SIGKILLed child's pipe surfaces as an uncaught stream error and crashes the harness
+    // instead of resolving as the deliberate deadline failure the close handler already
+    // produces. Route both into mutationError so the deadline failure path takes precedence.
+    child.stdin.once("error", (streamError) => {
+      mutationError ??= streamError;
+    });
+    if (paused) {
+      child.stdio[4].once("error", (streamError) => {
+        mutationError ??= streamError;
+      });
+    }
     if (paused) {
       child.stdio[3].once("data", async (signal) => {
         try {
@@ -203,8 +215,8 @@ function spawnHelper(binary, input, paused, mutate) {
     });
     child.once("close", (code, signal) => {
       clearTimeout(deadline);
-      if (mutationError !== undefined) return reject(mutationError);
       if (signal !== null) return reject(new Error("helper exceeded its execution deadline"));
+      if (mutationError !== undefined) return reject(mutationError);
       resolveResult({
         code,
         durationMs: performance.now() - started,
@@ -222,7 +234,13 @@ const runPaused = (binary, input, mutate) => spawnHelper(binary, input, true, mu
 
 function response(result) {
   assert.equal(result.code, 0);
-  assert.ok(result.durationMs < HELPER_DEADLINE_MS);
+  // KEIKO-0853: dropped `assert.ok(result.durationMs < HELPER_DEADLINE_MS)`. spawnHelper
+  // already SIGKILLs any child that outlives HELPER_DEADLINE_MS and rejects the resulting close
+  // with "helper exceeded its execution deadline" (via signal !== null), so this second, parent-
+  // side wall-clock comparison could only ever add noise: the 100-way concurrent batch in
+  // assertLoadEvidence spawns 100 helpers whose parent-side durationMs measures wall-clock and
+  // legitimately drifts above HELPER_DEADLINE_MS on a loaded runner while every helper itself
+  // exited well within budget. The kill-based path is authoritative.
   assert.equal(result.stderr.length, 0, "helper must never write stderr");
   assert.ok(result.stdout.length >= 12);
   assert.equal(result.stdout.subarray(0, 4).toString("ascii"), "KSS1");
@@ -1760,8 +1778,16 @@ async function setupFixture(fixture, outside) {
   );
   await symlink(fixture, join(outside, "root-alias"), isWindows ? "junction" : "dir");
   await link(join(fixture, "hard-source.txt"), join(fixture, "hard-link.txt"));
+  // KEIKO-0710: the outer loop used to create d0..d64 (65 directory levels), the first `deep.txt`
+  // sat at d0..d62 (63 components — reached by `deepRelativePath(63)`, the at-limit case), but the
+  // second `deep.txt` was written at d0..d64, one level BELOW where `deepRelativePath(64)` (the
+  // over-limit case) actually addresses (d0..d63). The over-limit assertion therefore hit a
+  // "file not found" (status 4) instead of the depth guard the case exists to pin (status 3),
+  // and the d64 directory + its file were referenced nowhere. Create d0..d63 (64 levels total),
+  // write the over-limit `deep.txt` at d0..d63 where `deepRelativePath(64)` addresses it, and
+  // keep the at-limit fixture at d0..d62.
   let deep = fixture;
-  for (let index = 0; index < 65; index += 1) {
+  for (let index = 0; index < 64; index += 1) {
     deep = join(deep, `d${index}`);
     await mkdir(deep);
   }
@@ -1815,6 +1841,29 @@ async function assertProtocolCases(binary, fixture, outside) {
   else {
     assert.equal(response(await run(binary, request("/", "dev/null"))).status, 4);
     assert.equal(response(await run(binary, request("/dev", "null"))).status, 5);
+    // KEIKO-0825: pin the three non-Windows root-policy negatives the Windows branch covers
+    // via assertWindowsPolicies. The C helper's secure_read opens root with O_DIRECTORY|
+    // O_NOFOLLOW then verifies S_ISDIR before descending; each failure mode below trips one
+    // named guard: (a) a relative root is not an absolute path — the malformed-frame guard
+    // rejects it with KSR_MALFORMED_REQUEST (status 1); (b) an existing regular file breaks
+    // O_DIRECTORY / S_ISDIR — the root-not-directory path rejects with KSR_ROOT_INVALID
+    // (status 4); (c) a missing root path also fails the open — same KSR_ROOT_INVALID
+    // (status 4). Together they close the non-Windows coverage gap.
+    assert.equal(
+      response(await run(binary, request("relative", "safe.txt"))).status,
+      1,
+      "relative root must reject as malformed (status 1)",
+    );
+    assert.equal(
+      response(await run(binary, request(join(fixture, "nested/good.txt"), "safe.txt"))).status,
+      4,
+      "root pointing at a regular file must reject as root-invalid (status 4)",
+    );
+    assert.equal(
+      response(await run(binary, request(join(fixture, "no-such-root"), "safe.txt"))).status,
+      4,
+      "missing root must reject as root-invalid (status 4)",
+    );
   }
 
   await assertMalformedFrameGuards(binary, fixture);
@@ -2030,13 +2079,37 @@ async function assertAdversarialRaces(binary, fixture) {
   await resetRaceFile(fixture);
   assertRaceResult(await race(() => writeFile(target, "x".repeat(65_537))), "size growth");
   await resetRaceFile(fixture);
+  // KEIKO-0855: the pre-fix path keyed the status-8 assertion on spawnHelper's generic
+  // `mutationDenied` — which fires for a sharing denial on EITHER the staging `writeFile` OR
+  // the `rename`. On Windows the staging write could get EACCES/EBUSY/EPERM under load, and
+  // the helper never even saw the mutation attempt on `target`; the assertion would then check
+  // status 8 against a case that should not have that expectation. Track denial per step, key
+  // the assertion on a rename-denied flag, and always drop the staged file in a finally.
+  let replacementRenameDenied = false;
   const replacementResult = await race(async () => {
     const replacement = join(fixture, "replacement.txt");
-    await writeFile(replacement, "replacement\n");
-    await rename(replacement, target);
+    try {
+      try {
+        await writeFile(replacement, "replacement\n");
+      } catch (writeError) {
+        if (isSharingDenied(writeError)) return;
+        throw writeError;
+      }
+      try {
+        await rename(replacement, target);
+      } catch (renameError) {
+        if (isSharingDenied(renameError)) {
+          replacementRenameDenied = true;
+          return;
+        }
+        throw renameError;
+      }
+    } finally {
+      await rm(replacement, { force: true }).catch(() => undefined);
+    }
   });
   const replacementResponse = assertRaceResult(replacementResult, "replacement");
-  if (replacementResult.mutationDenied)
+  if (replacementRenameDenied)
     assert.equal(
       replacementResponse.status,
       8,
@@ -2045,8 +2118,21 @@ async function assertAdversarialRaces(binary, fixture) {
   await resetRaceFile(fixture);
   assertRaceResult(
     await race(async () => {
+      // KEIKO-0843: wrap in try/finally so that a Windows sharing denial on the second
+      // rename(moved, nested) — EBUSY / EACCES / EPERM when the just-open helper still
+      // holds an open handle on `nested` — cannot leave the fixture without its `nested`
+      // directory. Every later case (ancestor substitution, load evidence) reads through
+      // `nested` and would cascade ENOENT otherwise. Mirrors the restoration pattern of
+      // the "ancestor substitution" case immediately below.
       await rename(nested, moved);
-      await rename(moved, nested);
+      try {
+        await rename(moved, nested);
+      } finally {
+        // If the direct rename above did not settle, spin through the sharing-denied
+        // retry loop the harness already uses for these Windows quirks (up to 500 x 5ms).
+        // On success this is a no-op; on failure it makes at most one restoration pass.
+        await restoreRename(moved, nested).catch(() => undefined);
+      }
     }),
     "ancestor rename round trip",
   );
@@ -2241,10 +2327,18 @@ async function assertExternalBinaryConsistency(binary, fixture, outside) {
 }
 
 async function stableResourceCount() {
+  // KEIKO-0941: seven near-simultaneous reads of the same descriptor set produced a median that
+  // could not filter a transient the strict `assert.equal(after, before, ...)` leak assertion
+  // in assertLoadEvidence is sensitive to — every sample landed inside one Node event-loop
+  // burst. Space them with a 10ms delay so the median observes seven genuinely distinct
+  // moments and a lingering descriptor from a transient close-in-flight cannot masquerade as
+  // stable. `delay` is the same setTimeout(node:timers/promises) already used by
+  // restoreRename below.
   const samples = [];
   for (let index = 0; index < 7; index += 1) {
     if (isWindows) samples.push(await windowsHandleCount());
     else samples.push((await readdir("/dev/fd")).length);
+    if (index < 6) await delay(10);
   }
   samples.sort((left, right) => left - right);
   return samples[Math.floor(samples.length / 2)];
@@ -2289,8 +2383,14 @@ async function assertLoadEvidence(binary, fixture) {
   assert.ok(batchMs <= 10_000, `concurrent batch exceeded 10s: ${batchMs.toFixed(1)}ms`);
   const after = await stableResourceCount();
   assert.equal(after, before, "helper load test leaked parent resources");
+  // KEIKO-0753: the printed evidence line used to hardcode `resourceDelta=0` even though the
+  // adjacent strict `assert.equal(after, before, ...)` already guarantees the delta IS zero on a
+  // green run. That worked as evidence of the assertion, but stopped being evidence of the
+  // measurement: any harness change that stopped observing the delta (or measured the wrong
+  // pair) would leave the evidence line saying `resourceDelta=0` regardless. Interpolate the
+  // real value so the evidence carries the actual measurement, not a static claim.
   console.log(
-    `secure-workspace-read load: sequential=1000 p95Ms=${p95Ms.toFixed(1)} concurrent=100 batchMs=${batchMs.toFixed(1)} resourceDelta=0`,
+    `secure-workspace-read load: sequential=1000 p95Ms=${p95Ms.toFixed(1)} concurrent=100 batchMs=${batchMs.toFixed(1)} resourceDelta=${after - before}`,
   );
 }
 

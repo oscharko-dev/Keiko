@@ -65,17 +65,43 @@ async function compile(sourcePath, output) {
     `/Fo:${objectPath}`,
     sourcePath,
   ]);
-  assert.equal(result.code, 0, `native compile failed: ${result.stderr.toString("utf8")}`);
+  assert.equal(
+    result.code,
+    0,
+    `native compile failed:\n  ${boundedDiagnostic("stdout", result.stdout)}\n  ${boundedDiagnostic(
+      "stderr",
+      result.stderr,
+    )}`,
+  );
 }
 
 function runProcess(command, env, args) {
   return new Promise((resolveResult, reject) => {
-    const child = spawn(command, args, { env, stdio: ["ignore", "ignore", "pipe"] });
+    // KEIKO-0802: MSVC's `cl.exe` writes `error C####` diagnostics to STDOUT, not stderr, so the
+    // pre-fix stdio: ["ignore", "ignore", "pipe"] tuple threw them away and every compile failure
+    // reported an empty `${result.stderr.toString("utf8")}` — a "native compile failed:" with no
+    // clue what failed. Capture both streams and hand both back for the assertion message.
+    const child = spawn(command, args, { env, stdio: ["ignore", "pipe", "pipe"] });
+    const stdout = [];
     const stderr = [];
+    child.stdout.on("data", (chunk) => stdout.push(chunk));
     child.stderr.on("data", (chunk) => stderr.push(chunk));
     child.once("error", reject);
-    child.once("close", (code) => resolveResult({ code, stderr: Buffer.concat(stderr) }));
+    child.once("close", (code) =>
+      resolveResult({ code, stdout: Buffer.concat(stdout), stderr: Buffer.concat(stderr) }),
+    );
   });
+}
+
+// Bounded diagnostic slice for the compile-failed assertion message. cl.exe can produce many KB
+// of `error C####` output on a bad file; the whole thing hitting the exception message is
+// unhelpful noise, and a bare truncation drops the leading errors that actually name the fault.
+// Take the first 4 KB and mark the truncation, so the assertion carries the FIRST diagnostics.
+function boundedDiagnostic(label, buffer) {
+  const cap = 4096;
+  const text = buffer.toString("utf8");
+  if (text.length <= cap) return text.length === 0 ? "" : `${label}=${text}`;
+  return `${label}=${text.slice(0, cap)}<truncated, ${String(text.length - cap)} more bytes>`;
 }
 
 /* Windows children need SystemRoot for Win32/CRT plumbing; everything else stays withheld. */
@@ -96,6 +122,15 @@ async function qualifyWindows(helper, runtime, root) {
   child.stderr.on("data", (chunk) => stderr.push(chunk));
   const responses = streamReader(child.stdio[4]);
   const output = streamReader(child.stdout);
+  // KEIKO-0636: without this listener a supervisor that exits between spawn and our first
+  // write() ends stdio[3] before we hand it a launchPacket, and the EPIPE/ERR_STREAM_DESTROYED
+  // reaches the harness as an uncaught stream error instead of a stage-annotated failure. The
+  // error is remembered in a closure variable so the failure-reporting `finally` can surface it
+  // through the same `explained`-style attribution the successful path uses.
+  let controlPipeError;
+  child.stdio[3].on("error", (streamError) => {
+    controlPipeError ??= streamError;
+  });
   // KEIKO-0278: the same lifecycle guard the macOS `qualify` carries. Without the finally, a
   // supervisor that never answers leaves this function awaiting forever and DEADLINE_MS's bare
   // `child.kill()` only bounds the hang — the whole native-quality lane still waits out the job
@@ -118,8 +153,7 @@ async function qualifyWindows(helper, runtime, root) {
       stderr,
     );
     assert.equal(observation.subarray(0, 4).toString("ascii"), "KRQ1");
-    const rootProcess = processHandle(observation.readUInt32LE(4));
-    const descendant = processHandle(observation.readUInt32LE(8));
+    const [rootProcess, descendant] = [observation.readUInt32LE(4), observation.readUInt32LE(8)];
     await writeSplitControlFrame(child.stdio[3]);
     const reap = await explained("reap response", response(responses), exited, stderr);
     assert.equal(reap.kind, 2);
@@ -133,6 +167,14 @@ async function qualifyWindows(helper, runtime, root) {
     clearTimeout(deadline);
     if (!completed) child.kill("SIGKILL");
     await exited.catch(() => undefined);
+    if (controlPipeError && completed === false) {
+      // Attribute the crash back to the stage in flight — the alternative is an EPIPE at the
+      // top level with no indication of what the harness was trying to do (KEIKO-0636).
+      throw new Error(
+        `qualifyWindows: control pipe error before completion — ${controlPipeError.message}`,
+        { cause: controlPipeError },
+      );
+    }
   }
 }
 
@@ -143,10 +185,6 @@ async function writeSplitControlFrame(control) {
   control.write(frameBytes.subarray(0, 5));
   await new Promise((resolveDelay) => setTimeout(resolveDelay, 10));
   control.write(frameBytes.subarray(5));
-}
-
-function processHandle(pid) {
-  return pid;
 }
 
 async function assertControlEofFailsClosed(helper, runtime, root) {
@@ -162,6 +200,12 @@ async function assertControlEofFailsClosed(helper, runtime, root) {
   child.stderr.on("data", (chunk) => stderr.push(chunk));
   const responses = streamReader(child.stdio[4]);
   const output = streamReader(child.stdout);
+  // KEIKO-0636 (mirrors qualifyWindows above): keep an early supervisor exit from surfacing as an
+  // uncaught EPIPE/ERR_STREAM_DESTROYED on stdio[3].
+  let controlPipeError;
+  child.stdio[3].on("error", (streamError) => {
+    controlPipeError ??= streamError;
+  });
   // KEIKO-0278: this probe had NO watchdog at all. It exists to prove the supervisor fails closed
   // on control EOF, so the failure it is most likely to meet is precisely a supervisor that hangs
   // instead — the one case that used to hang the lane rather than report it.
@@ -188,12 +232,34 @@ async function assertControlEofFailsClosed(helper, runtime, root) {
     assert.equal(closure.kind, 3);
     await Promise.all(pids.map(waitForExit));
     // The supervisor must have fully exited before cleanup unlinks its executable (Windows lock).
-    await exited;
+    // KEIKO-0730: assert the fail-closed contract — the supervisor's wmain returns 1 after
+    // send_error(ERROR_JOB_OBSERVE) on the PeekNamedPipe failure branch (windows/keiko_runtime
+    // _supervisor.c:389-392, 494-496, 502-508), and its stderr stays empty because the error is
+    // reported through the KRS1 error frame, never through a stderr write. The pre-fix bare
+    // `await exited` observed both but asserted neither — a supervisor that silently returned 0
+    // or leaked a `fprintf(stderr, …)` diagnostic on the failure branch went undetected here.
+    const eofExitCode = await exited;
+    assert.equal(
+      eofExitCode,
+      1,
+      "supervisor must exit with 1 on control EOF (send_error(ERROR_JOB_OBSERVE))",
+    );
+    assert.equal(
+      Buffer.concat(stderr).length,
+      0,
+      "supervisor must not leak stderr diagnostics on the EOF fail-closed path",
+    );
     completed = true;
   } finally {
     clearTimeout(deadline);
     if (!completed) child.kill("SIGKILL");
     await exited.catch(() => undefined);
+    if (controlPipeError && completed === false) {
+      throw new Error(
+        `assertControlEofFailsClosed: control pipe error before completion — ${controlPipeError.message}`,
+        { cause: controlPipeError },
+      );
+    }
   }
 }
 
