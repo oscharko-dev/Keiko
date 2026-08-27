@@ -190,7 +190,9 @@ function conditionAllowsPullRequest(condition) {
 }
 
 function conditionExpression(condition) {
-  const unwrapped = /^\$\{\{\s*(.*?)\s*\}\}$/u.exec(condition)?.[1] ?? condition;
+  const trimmed = condition.trim();
+  const unwrapped =
+    trimmed.startsWith("${{") && trimmed.endsWith("}}") ? trimmed.slice(3, -2).trim() : condition;
   const withEventValues = unwrapped
     .replace(EVENT_COMPARISON, (_match, operator, _quote, value) => {
       return String(compareKnownValue("pull_request", operator, value));
@@ -304,7 +306,7 @@ function sequenceItemIndent(raw) {
 
 function mappingValue(raw, key) {
   const body = raw.trimStart();
-  const keyExpression = new RegExp(`^(?:-[ \\t]+)?${key}:(.*)$`, "u");
+  const keyExpression = new RegExp(String.raw`^(?:-[ \t]+)?${key}:(.*)$`, "u");
   const value = keyExpression.exec(body)?.[1];
   return value === undefined ? undefined : stripInlineComment(value).trim();
 }
