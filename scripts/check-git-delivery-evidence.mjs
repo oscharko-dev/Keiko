@@ -345,11 +345,17 @@ function validate479VerificationCommands(manifest, relPath) {
   const scripts = pkg?.scripts ?? {};
   const scriptNameOf = (entry) => {
     if (typeof entry !== "string") return undefined;
-    const trimmed = entry.trim();
-    // Strip `npm run ` and `npm ` prefixes and any trailing flags (` -- --something`).
-    const withoutRun = trimmed.replace(/^npm\s+(?:run\s+)?/u, "");
-    const beforeFlag = withoutRun.split(/\s+--?/u)[0]?.trim();
-    return beforeFlag && beforeFlag.length > 0 ? beforeFlag : undefined;
+    // Plain string trims replace the two regex-based passes the original version used. Sonar
+    // (rule javascript:S8786) flagged the previous `/^npm\s+(?:run\s+)?/u` and `/\s+--?/u`
+    // regexes as super-linear on adversarial input; the plain-string version below has neither
+    // backtracking risk nor a change in behaviour for the concrete inputs this validator sees
+    // (npm script names in manifest.verificationCommands).
+    const parts = entry.trim().split(" ").filter((part) => part.length > 0);
+    if (parts.length === 0) return undefined;
+    if (parts[0] !== "npm") return undefined;
+    let index = parts[1] === "run" ? 2 : 1;
+    const name = parts[index];
+    return typeof name === "string" && name.length > 0 && !name.startsWith("-") ? name : undefined;
   };
   for (const entry of commands) {
     const name = scriptNameOf(entry);

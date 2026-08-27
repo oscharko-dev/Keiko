@@ -35,7 +35,7 @@ describe("#2348 D12 cap evidence harness", () => {
     expect(adapter).toContain("CONTENT_LENGTH_HEADER");
     // Two occurrences: the module-level `const` declaration + the drain() consumer.
     const references = adapter.match(/CONTENT_LENGTH_HEADER/g) ?? [];
-    expect(references.length).toBe(2);
+    expect(references).toHaveLength(2);
   });
 
   // KEIKO-0990/0991/0992: the fixture must write diagnostics to stderr on protocol errors and
