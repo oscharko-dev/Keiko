@@ -112,6 +112,14 @@ function terminateProcessTree(pid: number): void {
   process.kill(pid, "SIGKILL");
 }
 
+function suspendProcess(pid: number): void {
+  if (process.platform !== "win32") process.kill(pid, "SIGSTOP");
+}
+
+function resumeProcess(pid: number): void {
+  if (process.platform !== "win32") process.kill(pid, "SIGCONT");
+}
+
 function killProcessTree(child: ChildProcess | undefined): void {
   if (child?.pid === undefined) return;
   try {
@@ -255,8 +263,6 @@ describe("scripts/dev-runner.mjs readiness gate", () => {
           KEIKO_DEV_UI_PORT: String(publicPort),
           KEIKO_DEV_BFF_PORT: String(bffPort),
           KEIKO_DEV_NEXT_PORT: String(nextPort),
-          // Keep the respawn window open long enough to deterministically claim the old port.
-          KEIKO_DEV_RESTART_DELAY_MS: "10_000",
           KEIKO_DEV_PID_FILE: stateFile,
           KEIKO_DEV_TEST_SKIP_PACKAGE_WATCH: "1",
           KEIKO_STATE_DIR: stateDir,
@@ -274,20 +280,26 @@ describe("scripts/dev-runner.mjs readiness gate", () => {
       const initialState = readRunnerState(stateFile);
       const nextPid = initialState.children?.at(-1);
       expect(Number.isInteger(nextPid)).toBe(true);
-      terminateProcessTree(nextPid as number);
-
-      childPortCollision = await waitFor(
-        async () => {
-          try {
-            return await listenOnPort(nextPort);
-          } catch {
-            return undefined;
-          }
-        },
-        (server) => server !== undefined,
-        10_000,
-        "could not occupy the terminated Next.js child port",
-      );
+      const runnerPid = child.pid;
+      if (runnerPid === undefined) throw new Error("dev runner PID is unavailable");
+      suspendProcess(runnerPid);
+      try {
+        terminateProcessTree(nextPid as number);
+        childPortCollision = await waitFor(
+          async () => {
+            try {
+              return await listenOnPort(nextPort);
+            } catch {
+              return undefined;
+            }
+          },
+          (server) => server !== undefined,
+          10_000,
+          "could not occupy the terminated Next.js child port",
+        );
+      } finally {
+        resumeProcess(runnerPid);
+      }
 
       const recoveredState = await waitFor(
         () => readRunnerState(stateFile),
