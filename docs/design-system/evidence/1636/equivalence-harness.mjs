@@ -273,11 +273,11 @@ try {
     await page.evaluate(
       ({ hc, theme }) => {
         const root = document.documentElement;
-        root.removeAttribute("data-theme");
-        root.removeAttribute("data-hc");
-        root.setAttribute("data-input-modality", "keyboard");
-        if (theme) root.setAttribute("data-theme", theme);
-        if (hc) root.setAttribute("data-hc", hc);
+        delete root.dataset.theme;
+        delete root.dataset.hc;
+        root.dataset.inputModality = "keyboard";
+        if (theme) root.dataset.theme = theme;
+        if (hc) root.dataset.hc = hc;
       },
       { hc: capture.hc, theme: capture.theme },
     );

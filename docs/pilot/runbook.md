@@ -31,7 +31,7 @@ Use a small set of representative repositories and cases.
 | Explain Plan    | Keiko produces a reviewable plan before changes.                    |
 | Verify          | Keiko runs configured checks and records redacted evidence.         |
 
-Keiko selects only configured chat models that pass the gateway smoke test (a basic reachability and response check run against each configured model). Keep local gateway configs out of version control.
+Keiko selects only configured chat models that pass the gateway smoke test. The smoke test is a basic reachability and response check run against each configured model. Keep local gateway configs out of version control.
 
 `keiko gen-tests` and `keiko investigate` print a reviewable report to stdout and do not persist a manifest. Use the UI, `keiko run`, or `keiko verify` when stored evidence is required.
 

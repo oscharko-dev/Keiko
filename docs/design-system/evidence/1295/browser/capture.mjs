@@ -159,9 +159,9 @@ for (const vp of VIEWPORTS) {
       await page.evaluate(
         ({ theme, hc }) => {
           const r = document.documentElement;
-          r.setAttribute("data-theme", theme);
-          r.removeAttribute("data-hc");
-          if (hc) r.setAttribute("data-hc", hc);
+          r.dataset.theme = theme;
+          delete r.dataset.hc;
+          if (hc) r.dataset.hc = hc;
         },
         { theme: mode.theme, hc: mode.hc },
       );

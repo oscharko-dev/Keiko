@@ -218,7 +218,7 @@ function ratio(foreground, background, backdrop) {
   const composedFg = composite(fg, composedBg);
   const lighter = Math.max(luminance(composedFg), luminance(composedBg));
   const darker = Math.min(luminance(composedFg), luminance(composedBg));
-  return Number(((lighter + 0.05) / (darker + 0.05)).toFixed(2));
+  return { ratio: Number(((lighter + 0.05) / (darker + 0.05)).toFixed(2)) };
 }
 
 async function setFrames(page, mode) {

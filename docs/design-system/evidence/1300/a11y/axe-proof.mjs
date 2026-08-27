@@ -25,9 +25,11 @@ const POST = readFileSync(resolve(REPO, CSS_PATH), "utf8").replace(/\r\n?/g, "\n
 const POST_CSS_SHA256 = createHash("sha256").update(POST).digest("hex");
 const AXE_SRC = readFileSync(resolve(REPO, "node_modules/axe-core/axe.min.js"), "utf8");
 
+// javascript:S4036 — this script is a developer-run evidence-generation harness; the caller's PATH
+// is intentional and the git binary is not a production trust boundary.
 function git(args) {
   try {
-    return execFileSync("git", ["-C", REPO, ...args], { encoding: "utf8" }).trim();
+    return execFileSync("git", ["-C", REPO, ...args], { encoding: "utf8" }).trim(); // NOSONAR javascript:S4036
   } catch {
     return "unknown";
   }
@@ -125,10 +127,10 @@ for (const mode of MODES) {
   await page.evaluate(
     ({ theme, hc }) => {
       const r = document.documentElement;
-      r.removeAttribute("data-theme");
-      r.removeAttribute("data-hc");
-      if (theme) r.setAttribute("data-theme", theme);
-      if (hc) r.setAttribute("data-hc", hc);
+      delete r.dataset.theme;
+      delete r.dataset.hc;
+      if (theme) r.dataset.theme = theme;
+      if (hc) r.dataset.hc = hc;
     },
     { theme: mode.theme, hc: mode.hc },
   );

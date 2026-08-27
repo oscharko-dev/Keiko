@@ -26,8 +26,10 @@ const REPO = resolve(HERE, "../../../..");
 const CSS_PATH = "packages/keiko-ui/src/app/globals.css";
 const AXE_PATH = resolve(REPO, "node_modules/axe-core/axe.min.js");
 
+// javascript:S4036 — this script is a developer-run evidence-generation harness; the caller's PATH
+// is intentional and the git binary is not a production trust boundary.
 function git(args) {
-  return execFileSync("git", ["-C", REPO, ...args], { encoding: "utf8" }).trim();
+  return execFileSync("git", ["-C", REPO, ...args], { encoding: "utf8" }).trim(); // NOSONAR javascript:S4036
 }
 
 const cssText = readFileSync(resolve(REPO, CSS_PATH), "utf8");
@@ -229,10 +231,10 @@ try {
       await page.evaluate(
         ({ attr, hc }) => {
           const r = document.documentElement;
-          r.removeAttribute("data-theme");
-          r.removeAttribute("data-hc");
-          if (attr) r.setAttribute("data-theme", attr);
-          if (hc) r.setAttribute("data-hc", hc);
+          delete r.dataset.theme;
+          delete r.dataset.hc;
+          if (attr) r.dataset.theme = attr;
+          if (hc) r.dataset.hc = hc;
         },
         { attr: theme.attr, hc: theme.hc },
       );
