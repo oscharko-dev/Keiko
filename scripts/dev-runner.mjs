@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { readFile } from "node:fs/promises";
+import { access, readFile, rm } from "node:fs/promises";
 import { createServer, request } from "node:http";
 import { connect } from "node:net";
 import { createRequire } from "node:module";
@@ -18,11 +18,12 @@ const host = "127.0.0.1";
 const publicBrowserHost = "localhost";
 const publicPort = Number(process.env.KEIKO_DEV_UI_PORT ?? process.env.KEIKO_UI_PORT ?? "1983");
 const bffPort = Number(process.env.KEIKO_DEV_BFF_PORT ?? "1984");
-const nextPort = Number(process.env.KEIKO_DEV_NEXT_PORT ?? "3000");
+let nextPort = Number(process.env.KEIKO_DEV_NEXT_PORT ?? "3000");
 const stateDir = resolve(process.env.KEIKO_STATE_DIR ?? join(repoRoot, ".keiko", "dev"));
 const pidFile = resolve(process.env.KEIKO_DEV_PID_FILE ?? join(stateDir, "dev-ui.pid.json"));
 const bffScript = join(repoRoot, "scripts", "dev-bff.mjs");
 const nextBin = requireFromUi.resolve("next/dist/bin/next");
+const nextLockPath = join(uiDir, ".next", "lock");
 const children = new Map();
 const restartCounts = new Map();
 const maxRestarts = Number(process.env.KEIKO_DEV_MAX_RESTARTS ?? "3");
@@ -181,6 +182,62 @@ export async function readNextLockInfo(lockPath) {
   }
 }
 
+async function pathExists(path) {
+  try {
+    await access(path);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function processIsAlive(pid) {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+export async function findAvailableNextPort(startPort, checkPortFree = checkNextPortFree) {
+  for (let port = startPort; port < startPort + 100; port += 1) {
+    if (await checkPortFree(host, port)) return port;
+  }
+  throw new Error(`No free Next.js port found at or above ${String(startPort)}`);
+}
+
+function resolveNextRespawnIo(overrides = {}) {
+  return {
+    checkPortFree: overrides.checkPortFree ?? checkNextPortFree,
+    lockExists: overrides.lockExists ?? pathExists,
+    processIsAlive: overrides.processIsAlive ?? processIsAlive,
+    readLock: overrides.readLock ?? readNextLockInfo,
+    removeLock: overrides.removeLock ?? ((path) => rm(path, { force: true })),
+  };
+}
+
+async function releaseStaleNextLock(lockPath, lockInfo, io) {
+  if (lockInfo !== undefined && io.processIsAlive(lockInfo.pid)) {
+    throw new Error(`Next.js lock is held by live process ${String(lockInfo.pid)}`);
+  }
+  await io.removeLock(lockPath);
+}
+
+export async function preflightNextRespawn(currentPort, lockPath, overrides = {}) {
+  const io = resolveNextRespawnIo(overrides);
+  const [portFree, lockPresent, lockInfo] = await Promise.all([
+    io.checkPortFree(host, currentPort),
+    io.lockExists(lockPath),
+    io.readLock(lockPath),
+  ]);
+  if (lockPresent) await releaseStaleNextLock(lockPath, lockInfo, io);
+  const selectedPort = portFree
+    ? currentPort
+    : await findAvailableNextPort(currentPort + 1, io.checkPortFree);
+  return { nextPort: selectedPort, reselected: selectedPort !== currentPort };
+}
+
 function writeState(extra = {}) {
   mkdirSync(dirname(pidFile), { recursive: true });
   writeFileSync(
@@ -220,12 +277,34 @@ function restartChild(label) {
     `[dev] restarting ${label} in ${String(delayMs)}ms (${String(count)}/${String(maxRestarts)}) ...`,
   );
   setTimeout(() => {
-    if (shuttingDown) return;
-    if (label === "bff") startBff();
-    else if (label === "packages") startPackageBuildWatch();
-    else startNext();
-    void waitForPublicReadiness();
+    restartChildAfterDelay(label);
   }, delayMs).unref();
+}
+
+function restartChildAfterDelay(label) {
+  if (shuttingDown) return;
+  if (label === "bff") startBff();
+  else if (label === "packages") startPackageBuildWatch();
+  else {
+    void restartNextChild();
+    return;
+  }
+  void waitForPublicReadiness();
+}
+
+async function restartNextChild() {
+  try {
+    const result = await preflightNextRespawn(nextPort, nextLockPath);
+    if (result.reselected) {
+      nextPort = result.nextPort;
+      console.error(`[dev] Next.js port was busy; respawning on ${String(nextPort)}.`);
+    }
+    startNext();
+    void waitForPublicReadiness();
+  } catch (error) {
+    console.error(`[dev] Next.js respawn preflight failed: ${String(error)}`);
+    restartChild("next");
+  }
 }
 
 function spawnChild(label, command, args, options) {
@@ -586,7 +665,6 @@ const invokedDirectly = process.argv[1] && resolve(process.argv[1]).endsWith("de
 
 if (invokedDirectly) {
   // PREFLIGHT: fail fast if next dev is already running on the configured port.
-  const nextLockPath = join(uiDir, ".next", "lock");
   const [portFree, publicPortFree, lockInfo] = await Promise.all([
     checkNextPortFree(host, nextPort),
     // The public port had NO bind-time check: dev-start's probe runs before the

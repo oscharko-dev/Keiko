@@ -23,9 +23,11 @@ import {
   canonicalLocalhostRedirectLocation,
   checkNextPortFree,
   copyHeadersSafely,
+  findAvailableNextPort,
   forwardedUpstreamHeaders,
   normalizeUpstreamLocation,
   packageBuildWatchArgs,
+  preflightNextRespawn,
   proxyHttp,
   publicBrowserUrl,
   readNextLockInfo,
@@ -254,6 +256,59 @@ describe("checkNextPortFree — port is in use", () => {
   it("resolves false when a server is already listening on the port", async () => {
     const free = await checkNextPortFree("127.0.0.1", assignedPort, 500);
     expect(free).toBe(false);
+  });
+});
+
+describe("Next.js respawn preflight", () => {
+  it("reselects a contended child port without probing the public proxy port", async () => {
+    const checkPortFree = vi.fn(async (_host, port) => port === 3001);
+
+    const result = await preflightNextRespawn(3000, "/tmp/next-lock", {
+      checkPortFree,
+      lockExists: async () => false,
+      readLock: async () => undefined,
+    });
+
+    expect(result).toEqual({ nextPort: 3001, reselected: true });
+    expect(checkPortFree).toHaveBeenCalledWith("127.0.0.1", 3000);
+    expect(checkPortFree).toHaveBeenCalledWith("127.0.0.1", 3001);
+    expect(checkPortFree).not.toHaveBeenCalledWith("127.0.0.1", 1983);
+  });
+
+  it("removes a stale Next.js lock before reusing the child port", async () => {
+    const removeLock = vi.fn(async () => undefined);
+
+    const result = await preflightNextRespawn(3000, "/tmp/next-lock", {
+      checkPortFree: async () => true,
+      lockExists: async () => true,
+      processIsAlive: () => false,
+      readLock: async () => ({ pid: 12345, port: 3000 }),
+      removeLock,
+    });
+
+    expect(result).toEqual({ nextPort: 3000, reselected: false });
+    expect(removeLock).toHaveBeenCalledWith("/tmp/next-lock");
+  });
+
+  it("refuses to remove a lock owned by a live Next.js process", async () => {
+    const removeLock = vi.fn(async () => undefined);
+
+    await expect(
+      preflightNextRespawn(3000, "/tmp/next-lock", {
+        checkPortFree: async () => true,
+        lockExists: async () => true,
+        processIsAlive: () => true,
+        readLock: async () => ({ pid: 12345, port: 3000 }),
+        removeLock,
+      }),
+    ).rejects.toThrow("Next.js lock is held by live process 12345");
+    expect(removeLock).not.toHaveBeenCalled();
+  });
+
+  it("fails closed after one hundred unavailable child-port candidates", async () => {
+    await expect(findAvailableNextPort(3000, async () => false)).rejects.toThrow(
+      "No free Next.js port found at or above 3000",
+    );
   });
 });
 

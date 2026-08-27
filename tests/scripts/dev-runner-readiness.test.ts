@@ -1,4 +1,4 @@
-import { spawn, type ChildProcess } from "node:child_process";
+import { execFileSync, spawn, type ChildProcess } from "node:child_process";
 import {
   existsSync,
   mkdtempSync,
@@ -7,7 +7,7 @@ import {
   rmSync,
   writeFileSync,
 } from "node:fs";
-import { createServer } from "node:net";
+import { createServer, type Server } from "node:net";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
@@ -53,6 +53,65 @@ async function statusOf(port: number, path = "/"): Promise<number> {
   }
 }
 
+async function listenOnPort(port: number): Promise<Server> {
+  const server = createServer();
+  await new Promise<void>((resolvePromise, reject) => {
+    server.once("error", reject);
+    server.listen(port, "127.0.0.1", resolvePromise);
+  });
+  return server;
+}
+
+async function waitFor<T>(
+  action: () => T | Promise<T>,
+  predicate: (value: T) => boolean,
+  timeoutMs: number,
+  errorMessage: string,
+): Promise<T> {
+  const deadline = Date.now() + timeoutMs;
+  let value = await action();
+  while (!predicate(value) && Date.now() < deadline) {
+    await sleep(PUBLIC_READY_POLL_MS);
+    value = await action();
+  }
+  if (!predicate(value)) throw new Error(errorMessage);
+  return value;
+}
+
+function readRunnerState(stateFile: string): {
+  readonly children?: readonly unknown[];
+  readonly nextPort?: unknown;
+} {
+  return JSON.parse(readFileSync(stateFile, "utf8")) as {
+    readonly children?: readonly unknown[];
+    readonly nextPort?: unknown;
+  };
+}
+
+function childProcessIds(pid: number): readonly number[] {
+  try {
+    const output = execFileSync("pgrep", ["-P", String(pid)], { encoding: "utf8" });
+    return output
+      .split("\n")
+      .filter((value) => value.length > 0)
+      .map((value) => Number(value))
+      .filter((value) => Number.isInteger(value));
+  } catch {
+    return [];
+  }
+}
+
+function terminateProcessTree(pid: number): void {
+  if (process.platform === "win32") {
+    execFileSync("taskkill", ["/pid", String(pid), "/T", "/F"]);
+    return;
+  }
+  for (const childPid of childProcessIds(pid)) {
+    terminateProcessTree(childPid);
+  }
+  process.kill(pid, "SIGKILL");
+}
+
 function killProcessTree(child: ChildProcess | undefined): void {
   if (child?.pid === undefined) return;
   try {
@@ -91,10 +150,20 @@ function defaultDevUiIsRunning(): boolean {
 describe("scripts/dev-runner.mjs readiness gate", () => {
   let stateDir: string | undefined;
   let child: ChildProcess | undefined;
+  let childPortCollision: Server | undefined;
   let uiTsconfigBefore: string | undefined;
 
   afterEach(async () => {
     killProcessTree(child);
+    if (childPortCollision !== undefined) {
+      const collision = childPortCollision;
+      await new Promise<void>((resolvePromise) => {
+        collision.close(() => {
+          resolvePromise();
+        });
+      });
+      childPortCollision = undefined;
+    }
     await sleep(500);
     if (stateDir !== undefined) {
       rmSync(stateDir, { recursive: true, force: true });
@@ -160,6 +229,77 @@ describe("scripts/dev-runner.mjs readiness gate", () => {
         healthStatus = await statusOf(publicPort, "/api/health");
       }
       expect(healthStatus).toBe(200);
+    },
+    DEV_RUNNER_TEST_TIMEOUT_MS,
+  );
+
+  it(
+    "recovers the public proxy after a Next.js respawn selects a new child port",
+    async () => {
+      if (defaultDevUiIsRunning()) {
+        return;
+      }
+
+      uiTsconfigBefore = readFileSync(UI_TSCONFIG, "utf8");
+      stateDir = mkdtempSync(join(realpathSync(tmpdir()), "keiko-dev-runner-"));
+      const stateFile = join(stateDir, "dev-ui.pid.json");
+      const publicPort = await freePort();
+      const bffPort = await freePort();
+      const nextPort = await freePort();
+
+      child = spawn(process.execPath, [RUNNER], {
+        cwd: REPO_ROOT,
+        detached: true,
+        env: {
+          ...process.env,
+          KEIKO_DEV_UI_PORT: String(publicPort),
+          KEIKO_DEV_BFF_PORT: String(bffPort),
+          KEIKO_DEV_NEXT_PORT: String(nextPort),
+          KEIKO_DEV_PID_FILE: stateFile,
+          KEIKO_DEV_TEST_SKIP_PACKAGE_WATCH: "1",
+          KEIKO_STATE_DIR: stateDir,
+          NODE_ENV: "test",
+        },
+        stdio: "ignore",
+      });
+
+      await waitFor(
+        async () => statusOf(publicPort),
+        (status) => status === 200,
+        PUBLIC_READY_TIMEOUT_MS,
+        "public proxy did not become ready",
+      );
+      const initialState = readRunnerState(stateFile);
+      const nextPid = initialState.children?.at(-1);
+      expect(Number.isInteger(nextPid)).toBe(true);
+      terminateProcessTree(nextPid as number);
+
+      childPortCollision = await waitFor(
+        async () => {
+          try {
+            return await listenOnPort(nextPort);
+          } catch {
+            return undefined;
+          }
+        },
+        (server) => server !== undefined,
+        10_000,
+        "could not occupy the terminated Next.js child port",
+      );
+
+      const recoveredState = await waitFor(
+        () => readRunnerState(stateFile),
+        (state) => typeof state.nextPort === "number" && state.nextPort !== nextPort,
+        PUBLIC_READY_TIMEOUT_MS,
+        "Next.js did not select a replacement child port",
+      );
+      expect(recoveredState.nextPort).not.toBe(nextPort);
+      await waitFor(
+        async () => statusOf(publicPort),
+        (status) => status === 200,
+        PUBLIC_READY_TIMEOUT_MS,
+        "public proxy did not recover after the Next.js child port changed",
+      );
     },
     DEV_RUNNER_TEST_TIMEOUT_MS,
   );
