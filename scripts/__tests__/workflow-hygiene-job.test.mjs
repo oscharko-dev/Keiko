@@ -115,7 +115,7 @@ const TOOL_INVOCATIONS = [
   {
     tool: "OSV Scanner",
     fingerprints: [
-      "google/osv-scanner-action/osv-scanner-action@9a498708959aeaef5ef730655706c5a1df1edbc2",
+      "google/osv-scanner-action/osv-scanner-action@6e4298ebc4db23e847df9b2e2de2939d6f066c67",
       "--config=osv-scanner.toml",
       "--recursive",
     ],

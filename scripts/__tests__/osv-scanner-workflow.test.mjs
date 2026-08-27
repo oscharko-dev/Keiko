@@ -7,7 +7,7 @@ const here = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(here, "..", "..");
 const workflow = readFileSync(resolve(repoRoot, ".github/workflows/osv-scanner.yml"), "utf8");
 
-const OSV_SCANNER_RELEASE_SHA = "9a498708959aeaef5ef730655706c5a1df1edbc2";
+const OSV_SCANNER_RELEASE_SHA = "6e4298ebc4db23e847df9b2e2de2939d6f066c67";
 const ci = readFileSync(resolve(repoRoot, ".github/workflows/ci.yml"), "utf8");
 // ADR-0159: the pull-request and merge-queue executions of this scan moved into the single required
 // `workflow hygiene` context. The branch-coverage property below did not move with them - it is
