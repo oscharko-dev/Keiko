@@ -1023,6 +1023,9 @@ export function planEditorM7ModelEviction(args: {
 }
 
 export type EditorM7CommandScope = "global" | "editor" | "explorer" | "git" | "settings";
+// Contexts identify the runtime listener that receives a Keiko-owned keybinding. AppShell dispatches
+// both "global" and "settings" contexts, while EditorWidget owns the capturing "editor" context.
+// A command must not be advertised in a context until that listener exists.
 export type EditorM7CommandContext = "global" | "editor" | "monaco" | "settings" | "explorer";
 export type EditorM7CommandDispatchOwner = "keiko" | "monaco";
 

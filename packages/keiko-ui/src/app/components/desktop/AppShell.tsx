@@ -813,12 +813,7 @@ export function buildAppShellCommands(
     label: t("command.openEditorSettings"),
     group: t("command.group.tools"),
     icon: "settings",
-    run: () => {
-      toggleTool("settings");
-      if (typeof window !== "undefined") {
-        window.dispatchEvent(new CustomEvent(OPEN_EDITOR_SETTINGS_EVENT));
-      }
-    },
+    run: () => openEditorSettingsPanel(toggleTool),
   };
   return [
     ...createCommands,
@@ -827,6 +822,13 @@ export function buildAppShellCommands(
     ...layoutAndViewCommands(api, theme, toggleTheme, t),
     ...undoRedoCommands(undoStack, t),
   ];
+}
+
+function openEditorSettingsPanel(toggleTool: (type: WindowType) => void): void {
+  toggleTool("settings");
+  if (typeof window !== "undefined") {
+    window.dispatchEvent(new CustomEvent(OPEN_EDITOR_SETTINGS_EVENT));
+  }
 }
 
 // S3358 — the two deep-linked tool routes each map to a fixed singleton window type.
@@ -1532,11 +1534,13 @@ function AppShellInner(): ReactNode {
         openOrFocusSearchWindow(ws.api, resolveSearchRoot(activeWorkspace.activeRoot, searchOwner));
       } else if (commandId === "quick-access.files") openQuickAccessFiles();
       else if (commandId === "quick-access.commands") openQuickAccessCommands();
+      else if (commandId === "open-editor-settings") openEditorSettingsPanel(onTool);
     },
     [
       activeWorkspace.activeRoot,
       openQuickAccessCommands,
       openQuickAccessFiles,
+      onTool,
       searchOwner,
       undoStack,
       ws.api,
