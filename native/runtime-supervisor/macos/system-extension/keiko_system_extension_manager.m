@@ -11,6 +11,8 @@
 #include <sys/socket.h>
 #include <sys/un.h>
 #include <sys/wait.h>
+#include <os/log.h>
+#include <errno.h>
 #include <unistd.h>
 
 static NSString *const KEIKO_EXTENSION_IDENTIFIER =
@@ -18,28 +20,6 @@ static NSString *const KEIKO_EXTENSION_IDENTIFIER =
 
 #define KEIKO_ACTIVATION_TIMEOUT_SECONDS 600u
 #define KEIKO_MONITOR_ATTEMPTS 2400u
-
-static int write_exact(int descriptor, const void *buffer, size_t length) {
-  const unsigned char *bytes = buffer;
-  size_t offset = 0;
-  while (offset < length) {
-    ssize_t result = write(descriptor, bytes + offset, length - offset);
-    if (result <= 0) return 0;
-    offset += (size_t)result;
-  }
-  return 1;
-}
-
-static int read_exact(int descriptor, void *buffer, size_t length) {
-  unsigned char *bytes = buffer;
-  size_t offset = 0;
-  while (offset < length) {
-    ssize_t result = read(descriptor, bytes + offset, length - offset);
-    if (result <= 0) return 0;
-    offset += (size_t)result;
-  }
-  return 1;
-}
 
 static uint16_t monitor_status(void) {
   struct sockaddr_un address;
@@ -89,7 +69,25 @@ static void open_full_disk_access_settings(void) {
   pid_t process = 0;
   if (posix_spawn(&process, "/usr/bin/open", NULL, NULL, arguments, environment) == 0) {
     int status = 0;
-    (void)waitpid(process, &status, 0);
+    // KEIKO-0968: the (void)waitpid(...) return-cast used to silently discard both waitpid()
+    // failures AND non-zero exits of `/usr/bin/open`, so a broken settings-launch was invisible
+    // to any diagnostic — the user's "System Settings does not open" turned into "the extension
+    // will never activate" with no trace. Route both signals to the shared os_log line the rest
+    // of the manager uses.
+    pid_t waited = waitpid(process, &status, 0);
+    if (waited == -1) {
+      os_log_error(OS_LOG_DEFAULT,
+                   "keiko system-extension manager: waitpid(/usr/bin/open) failed: errno=%d",
+                   errno);
+    } else if (WIFEXITED(status) && WEXITSTATUS(status) != 0) {
+      os_log_error(OS_LOG_DEFAULT,
+                   "keiko system-extension manager: /usr/bin/open exited with %d",
+                   WEXITSTATUS(status));
+    } else if (WIFSIGNALED(status)) {
+      os_log_error(OS_LOG_DEFAULT,
+                   "keiko system-extension manager: /usr/bin/open terminated by signal %d",
+                   WTERMSIG(status));
+    }
   }
 }
 
