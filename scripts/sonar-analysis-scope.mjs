@@ -114,7 +114,7 @@ const approvedScopeValueDigests = new Map([
   // inclusions. Both are imported ONLY by the three test-protocol.mjs files that already sit
   // in those lists, so they carry the same Sonar disposition. Re-computed the SHA-256 of the
   // raw value after `=` via `createHash("sha256").update(value).digest("hex")`.
-  ["sonar.exclusions", "28dbb80db07631cfe6f0a3a35633ea19d2fa152cdf60a67ecfb77ec1249122f4"],
+  ["sonar.exclusions", "7ec1d1787799c77e199ee4561aba1a1d6ce204e42009d76515b653f1ae033348"],
   ["sonar.test.inclusions", "fc189ed7f62a535e41c6175c2893fe3bd3d690ce4bd85c65683db13cb8c2ec58"],
   ["sonar.test.exclusions", "5a01270e497c669e4f0abd5cef680f9eb0139bb8b82da51719b443b076fcd638"],
   [
