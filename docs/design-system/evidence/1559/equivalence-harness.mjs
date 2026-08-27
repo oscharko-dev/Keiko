@@ -46,7 +46,6 @@ const HEADLINE = {
   thinking: "The assistant is thinking.",
   speaking: "The assistant is speaking.",
   muted: "The assistant is speaking. Playback is muted.",
-  interrupted: "Voice dialogue interrupted.",
   error: "Voice dialogue could not continue. You can keep chatting in text.",
 };
 const LIVE = new Set(["listening", "speaking", "muted"]);
@@ -130,9 +129,17 @@ const STATES = [
   },
 ];
 
+// Mirror the sibling harness matrices (see 1298/equivalence-harness.mjs): dark, light, dark-hc,
+// light-hc, forced-colors, reduced-motion. Adding hc + forced-colors + reduced-motion coverage lets
+// this dialog-mode proof capture the same theme/contrast/motion surface as the DS component
+// harnesses, and applies the identical zero-serious/critical axe gate to each new mode.
 const THEMES = [
-  { id: "dark", attr: null },
-  { id: "light", attr: "light" },
+  { id: "dark", attr: null, hc: null, media: {} },
+  { id: "light", attr: "light", hc: null, media: {} },
+  { id: "dark-hc", attr: null, hc: "more", media: { contrast: "more" } },
+  { id: "light-hc", attr: "light", hc: "more", media: { contrast: "more" } },
+  { id: "forced-colors", attr: null, hc: null, media: { forcedColors: "active" } },
+  { id: "reduced-motion", attr: null, hc: null, media: { reducedMotion: "reduce" } },
 ];
 
 function escapeHtml(value) {
@@ -210,14 +217,25 @@ try {
       deviceScaleFactor: 2,
     });
     const page = await ctx.newPage();
-    await page.emulateMedia({ colorScheme: theme.id === "dark" ? "dark" : "light" });
+    await page.emulateMedia({
+      colorScheme: theme.attr === "light" ? "light" : "dark",
+      contrast: "no-preference",
+      forcedColors: "none",
+      reducedMotion: "no-preference",
+      ...theme.media,
+    });
     for (const spec of STATES) {
       await page.setContent(pageHtml(spec), { waitUntil: "load" });
-      await page.evaluate((attr) => {
-        const r = document.documentElement;
-        r.removeAttribute("data-theme");
-        if (attr) r.setAttribute("data-theme", attr);
-      }, theme.attr);
+      await page.evaluate(
+        ({ attr, hc }) => {
+          const r = document.documentElement;
+          r.removeAttribute("data-theme");
+          r.removeAttribute("data-hc");
+          if (attr) r.setAttribute("data-theme", attr);
+          if (hc) r.setAttribute("data-hc", hc);
+        },
+        { attr: theme.attr, hc: theme.hc },
+      );
       const file = `${spec.id}-${theme.id}.png`;
       await page.screenshot({ path: resolve(HERE, file), fullPage: true });
       rendered += 1;

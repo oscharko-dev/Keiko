@@ -1,6 +1,6 @@
 import { chromium } from "playwright";
 import { createHash } from "node:crypto";
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -12,8 +12,6 @@ const AXE_PATH = resolve(REPO, "node_modules/axe-core/axe.min.js");
 const cssText = readFileSync(resolve(REPO, CSS_PATH), "utf8");
 const cssSha256 = createHash("sha256").update(cssText).digest("hex");
 const axeSource = readFileSync(AXE_PATH, "utf8");
-
-mkdirSync(HERE, { recursive: true });
 
 const CAPTURES = [
   { file: "01-dark.png", theme: null, hc: null, forcedColors: "none", state: "loaded" },
@@ -269,15 +267,17 @@ try {
 const verdict = seriousViolations === 0 ? "PASS" : "FAIL";
 
 writeFileSync(
-  resolve(HERE, "pdf-viewer-fidelity-proof.json"),
+  resolve(HERE, "pdf-viewer-axe-gate-summary.json"),
   `${JSON.stringify(
     {
       issue: 1634,
       verdict,
+      verdictScope:
+        "axe accessibility gate only (serious/critical violations across the captured viewer states and modes); no computed-style fidelity comparison against the DS reference CSS is performed by this artifact.",
       cssSha256,
       captures: fidelityResults,
       summary:
-        "Component-level browser evidence for the passive PDF viewer window foundation: token-backed chrome, toolbar, page well, responsive mobile width, high-contrast, and forced-colors coverage.",
+        "Component-level browser evidence for the passive PDF viewer window foundation: token-backed chrome, toolbar, page well, responsive mobile width, high-contrast, and forced-colors coverage. Verdict reflects the axe accessibility gate only — this file does not carry a fidelity/equivalence comparison.",
     },
     null,
     2,

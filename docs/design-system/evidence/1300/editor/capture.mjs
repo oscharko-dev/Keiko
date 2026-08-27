@@ -218,7 +218,7 @@ for (const mode of MODES) {
   let accent = 0;
   let refOnly = 0;
   for (const t of EDITOR_TOKENS) {
-    if (reference[t].rgba === "__MISSING__") {
+    if (!reference[t].defined) {
       missing.add(`${mode.id}:${t}`);
       continue;
     }

@@ -36,7 +36,7 @@ It writes:
 - `07-loading.png`
 - `08-error.png`
 - `09-focus-visible.png`
-- `pdf-viewer-fidelity-proof.json`
+- `pdf-viewer-axe-gate-summary.json`
 - `a11y-proof.json`
 
 The JSON receipts include the `globals.css` SHA-256 digest, the capture matrix,
@@ -47,7 +47,7 @@ critical axe violation is found.
 
 Latest local run: `PASS`
 
-- `pdf-viewer-fidelity-proof.json`: PASS
+- `pdf-viewer-axe-gate-summary.json`: PASS
 - `a11y-proof.json`: PASS
 - Screenshot coverage: 9 captures across dark, light, dark-HC, light-HC,
   forced-colors, responsive, loading, error, and focus-visible states

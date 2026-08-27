@@ -202,14 +202,15 @@ for (const mode of MODES) {
     const focusResults = visibleFocusTargets.map((node) => {
       node.focus();
       const cs = getComputedStyle(node);
+      const focusVisible = visibleFocus(node);
       return {
         tag: node.tagName.toLowerCase(),
         role: node.getAttribute("role"),
         ariaLabel: node.getAttribute("aria-label"),
         outlineStyle: cs.outlineStyle,
         boxShadow: cs.boxShadow,
-        wrapperFocus: visibleFocus(node),
-        hasVisibleFocus: visibleFocus(node),
+        wrapperFocus: focusVisible,
+        hasVisibleFocus: focusVisible,
       };
     });
     const namedControls = [

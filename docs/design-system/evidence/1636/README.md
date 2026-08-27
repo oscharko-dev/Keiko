@@ -46,7 +46,7 @@ Focused issue #1636 verification: `PASS`.
   `04-back-disabled.png`, `05-chat-highlight.png`, `06-responsive.png`, and
   `07-forced-colors.png`.
 - `docs/design-system/evidence/1636/a11y-proof.json`: PASS.
-- `docs/design-system/evidence/1636/citation-context-back-to-chat-fidelity-proof.json`:
+- `docs/design-system/evidence/1636/citation-context-back-to-chat-axe-gate-summary.json`:
   PASS.
 
 The broader viewer window chrome remains covered by

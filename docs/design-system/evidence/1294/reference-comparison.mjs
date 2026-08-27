@@ -144,17 +144,18 @@ function pageHtml() {
 function parseRgb(value) {
   const match = value.match(/rgba?\(([^)]+)\)/);
   if (!match) return null;
-  const [r, g, b, a = "1"] = match[1]
-    .split(/[,\s/]+/)
-    .filter(Boolean)
-    .map(Number);
+  const parts = match[1].split(/[,\s/]+/).filter(Boolean);
+  const [r, g, b] = parts.map(Number);
+  const a = parts.length > 3 ? Number(parts[3]) : 1;
   return { r, g, b, a };
 }
 
 function parseOklch(value) {
   const match = value.match(/oklch\(([^)]+)\)/);
   if (!match) return null;
-  const [rawL, rawC, rawH, rawA = "1"] = match[1].split(/[,\s/]+/).filter(Boolean);
+  const parts = match[1].split(/[,\s/]+/).filter(Boolean);
+  const [rawL, rawC, rawH] = parts;
+  const rawA = parts.length > 3 ? parts[3] : "1";
   const L = rawL.endsWith("%") ? Number(rawL.slice(0, -1)) / 100 : Number(rawL);
   const C = Number(rawC);
   const h = rawH === "none" ? 0 : (Number(rawH) * Math.PI) / 180;
@@ -176,7 +177,9 @@ function parseOklch(value) {
     const srgb = clamped <= 0.0031308 ? 12.92 * clamped : 1.055 * clamped ** (1 / 2.4) - 0.055;
     return Math.round(Math.min(1, Math.max(0, srgb)) * 255);
   };
-  return { r: toByte(linear.r), g: toByte(linear.g), b: toByte(linear.b), a: Number(rawA) };
+  const alpha = rawA.endsWith("%") ? Number(rawA.slice(0, -1)) / 100 : Number(rawA);
+  if (!Number.isFinite(alpha)) return null;
+  return { r: toByte(linear.r), g: toByte(linear.g), b: toByte(linear.b), a: alpha };
 }
 
 function parseColor(value) {
@@ -205,7 +208,12 @@ function ratio(foreground, background, backdrop) {
   const base = parseColor(backdrop) ?? { r: 255, g: 255, b: 255, a: 1 };
   const bg = parseColor(background);
   const fg = parseColor(foreground);
-  if (!fg || !bg) return null;
+  if (!fg || !bg) {
+    // A parse failure is a distinct outcome from a legitimately-unparseable colour reaching us as
+    // `null` in earlier stages: report the unparsed value so it survives the JSON round-trip
+    // instead of collapsing to the same `null` a legitimate absence would produce.
+    return { error: "unparseable", foreground, background, backdrop };
+  }
   const composedBg = composite(bg, base);
   const composedFg = composite(fg, composedBg);
   const lighter = Math.max(luminance(composedFg), luminance(composedBg));
@@ -228,11 +236,15 @@ async function setFrames(page, mode) {
     frameHtml(productCss, productMarkup, mode),
   );
   await page.waitForLoadState("domcontentloaded");
-  await page.waitForTimeout(100);
+  // Wait for each child iframe's own body to appear instead of a fixed sleep. This avoids racing a
+  // still-parsing srcdoc while never sleeping longer than needed.
+  await page.frameLocator("#reference").locator("body").waitFor();
+  await page.frameLocator("#product").locator("body").waitFor();
 }
 
-async function measureProduct(page, mode) {
-  await setFrames(page, mode);
+async function measureProduct(page) {
+  // The main loop is responsible for calling setFrames(page, mode) before invoking measureProduct;
+  // we reuse those already-prepared frames instead of re-preparing them here.
   const product = page.frameLocator("#product");
   const productFrame = page.frame({ name: "product" });
   if (!productFrame) throw new Error("Product evidence iframe failed to load.");
@@ -271,6 +283,9 @@ async function measureProduct(page, mode) {
       const focusRing = getComputedStyle(focusProbe).color;
       focusProbe.remove();
       const node = document.querySelector(selector);
+      if (!node) {
+        return { selector, error: "not-found" };
+      }
       const cs = getComputedStyle(node);
       return {
         selector,
@@ -302,31 +317,36 @@ const evidence = {
   modes: {},
 };
 
-for (const mode of MODES) {
-  await setFrames(page, mode);
-  await page.screenshot({
-    path: resolve(HERE, `reference-side-by-side-${mode.id}.png`),
-    fullPage: true,
-  });
-  const observations = await measureProduct(page, mode);
-  evidence.modes[mode.id] = {
-    label: mode.label,
-    observations,
-    notes: [
-      "Reference and product markup are isolated in iframes to avoid CSS cross-contamination.",
-      "Hover and focus observations are driven through Playwright before computed-style capture.",
-      "Loading and active are representative static states because no app runtime is launched by this artifact generator.",
-    ],
-  };
-}
-
-for (const modeEvidence of Object.values(evidence.modes)) {
-  for (const row of Object.values(modeEvidence.observations)) {
-    row.contrastRatio = ratio(row.color, row.backgroundColor, row.pageBackgroundColor);
-    row.focusRingContrastRatio = row.focusRingApplicable
-      ? ratio(row.focusRing, row.pageBackgroundColor, row.pageBackgroundColor)
-      : null;
+try {
+  for (const mode of MODES) {
+    await setFrames(page, mode);
+    await page.screenshot({
+      path: resolve(HERE, `reference-side-by-side-${mode.id}.png`),
+      fullPage: true,
+    });
+    const observations = await measureProduct(page);
+    evidence.modes[mode.id] = {
+      label: mode.label,
+      observations,
+      notes: [
+        "Reference and product markup are isolated in iframes to avoid CSS cross-contamination.",
+        "Hover and focus observations are driven through Playwright before computed-style capture.",
+        "Loading and active are representative static states because no app runtime is launched by this artifact generator.",
+      ],
+    };
   }
+
+  for (const modeEvidence of Object.values(evidence.modes)) {
+    for (const row of Object.values(modeEvidence.observations)) {
+      if (row.error) continue;
+      row.contrastRatio = ratio(row.color, row.backgroundColor, row.pageBackgroundColor);
+      row.focusRingContrastRatio = row.focusRingApplicable
+        ? ratio(row.focusRing, row.pageBackgroundColor, row.pageBackgroundColor)
+        : null;
+    }
+  }
+} finally {
+  await browser.close();
 }
 
 writeFileSync(resolve(HERE, "focus-contrast-evidence.json"), JSON.stringify(evidence, null, 2));
@@ -349,5 +369,3 @@ Generated artifacts:
 - \`focus-contrast-evidence.json\`
 `,
 );
-
-await browser.close();
