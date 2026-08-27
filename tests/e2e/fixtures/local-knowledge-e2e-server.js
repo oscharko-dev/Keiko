@@ -1,6 +1,7 @@
 import { spawn } from "node:child_process";
 import { mkdirSync } from "node:fs";
 import { createServer } from "node:http";
+import { clearTimeout, setTimeout } from "node:timers";
 
 const DEFAULT_PORT = 42186;
 const VECTOR_DIMENSIONS = 8;
@@ -172,17 +173,45 @@ const child = spawn(process.execPath, ["scripts/dev-runner.mjs"], {
 // leak the idle keep-alive drain. Track the first path to run and short-circuit the second.
 // closeAllConnections() before close() drops any idle keep-alive connection so an idle
 // `curl --http1.1` client cannot delay process exit for the keep-alive timeout.
+// The bounded grace before the fixture escalates its child to SIGKILL. Mirrors
+// dev-runner.mjs's own shutdown pattern so this fixture cannot orphan the runner and its
+// descendants — a fixture that exits first leaves child processes bound to their ports, the
+// exact regression that scripts/dev-stop.mjs KEIKO-0734 hardened against.
+const CHILD_SHUTDOWN_GRACE_MS = 5_000;
 let shutdownStarted = false;
+function waitForChildExit(timeoutMs) {
+  return new Promise((resolveWait) => {
+    if (child.exitCode !== null || child.signalCode !== null) {
+      resolveWait();
+      return;
+    }
+    const timer = setTimeout(() => {
+      child.kill("SIGKILL");
+    }, timeoutMs);
+    timer.unref?.();
+    child.once("exit", () => {
+      clearTimeout(timer);
+      resolveWait();
+    });
+  });
+}
 function shutdown(reason, exitCode) {
   if (shutdownStarted) return;
   shutdownStarted = true;
-  if (reason === "signal") child.kill(exitCode.signal);
+  const childDrained =
+    reason === "signal"
+      ? Promise.resolve(child.kill(exitCode.signal)).then(() =>
+          waitForChildExit(CHILD_SHUTDOWN_GRACE_MS),
+        )
+      : Promise.resolve();
   server.closeAllConnections?.();
   server.close(() => {
-    if (reason === "child-exit" && exitCode.signal !== null) {
-      process.kill(process.pid, exitCode.signal);
-    }
-    process.exit(exitCode.code);
+    childDrained.finally(() => {
+      if (reason === "child-exit" && exitCode.signal !== null) {
+        process.kill(process.pid, exitCode.signal);
+      }
+      process.exit(exitCode.code);
+    });
   });
 }
 

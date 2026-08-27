@@ -74,7 +74,12 @@ static void open_full_disk_access_settings(void) {
     // to any diagnostic — the user's "System Settings does not open" turned into "the extension
     // will never activate" with no trace. Route both signals to the shared os_log line the rest
     // of the manager uses.
-    pid_t waited = waitpid(process, &status, 0);
+    // waitpid can return -1 with errno=EINTR before it reaps `/usr/bin/open`; retry so a signal
+    // during launch does not leave the child unreaped and misreport a failure.
+    pid_t waited;
+    do {
+      waited = waitpid(process, &status, 0);
+    } while (waited == -1 && errno == EINTR);
     if (waited == -1) {
       os_log_error(OS_LOG_DEFAULT,
                    "keiko system-extension manager: waitpid(/usr/bin/open) failed: errno=%d",

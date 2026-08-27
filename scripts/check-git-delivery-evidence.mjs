@@ -372,7 +372,11 @@ function validate479VerificationCommands(manifest, relPath) {
     // package.json convention) as always valid because npm ships an implicit `test` behaviour
     // when the script is absent — but a lint-oriented gate should still flag drift, so we do
     // require the key to exist in scripts.
-    if (!(name in scripts)) {
+    // Object.hasOwn guards against a script name that collides with an Object.prototype
+    // member (`toString`, `constructor`, `hasOwnProperty`, …). `name in scripts` walks the
+    // prototype chain and would silently accept such a name even though `package.json` has no
+    // such script; fail-closed manifests need the own-property check.
+    if (!Object.hasOwn(scripts, name)) {
       failures.push(
         `${relPath}: verificationCommands entry names an npm script that does not exist: ${JSON.stringify(entry)} (resolved to ${JSON.stringify(name)})`,
       );

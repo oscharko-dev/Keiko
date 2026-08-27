@@ -660,6 +660,12 @@ export async function withDevStartLock(work) {
 
 async function launchDevelopmentRunner() {
   return withDevStartLock(async () => {
+    // KEIKO-0719 (extended): repeat the existing-runner check INSIDE the lock. Two concurrent
+    // `npm run dev:start` invocations can both clear the pre-lock check, then only one acquires
+    // the lock — the second would otherwise start a duplicate runner and overwrite `pidFile`,
+    // leaving the first unmanaged. Recheck under the mutex to close that race.
+    await restartExistingRunnerIfNeeded();
+    rmSync(pidFile, { force: true });
     ensureDependencies();
     ensureDevGatewayConfig();
     run(npmCommand(), ["run", "build"], repoRoot);
@@ -696,9 +702,9 @@ async function launchDevelopmentRunner() {
 
 export async function main() {
   validatePublicPort();
-  await restartExistingRunnerIfNeeded();
-  rmSync(pidFile, { force: true });
-
+  // The runner check and stale-state cleanup live inside launchDevelopmentRunner's lock so
+  // concurrent invocations cannot both start a runner and clobber pidFile. Keeping the pre-lock
+  // fast path removed avoids the redundant unlocked scan whose result could not be trusted.
   try {
     await launchDevelopmentRunner();
   } catch (error) {
