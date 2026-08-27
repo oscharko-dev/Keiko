@@ -1847,13 +1847,13 @@
   },
   "src/app/local-knowledge/connector-graph.tsx": {
     "@typescript-eslint/explicit-function-return-type": {
-      "count": 7
+      "count": 5
     },
     "complexity": {
       "count": 2
     },
     "max-lines-per-function": {
-      "count": 13
+      "count": 11
     }
   },
   "src/app/local-knowledge/html-manual-pod-create.tsx": {

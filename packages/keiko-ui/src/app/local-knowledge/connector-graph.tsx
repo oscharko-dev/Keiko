@@ -139,6 +139,33 @@ function retainDialogFocus(event: KeyboardEvent, dialog: HTMLElement): void {
   }
 }
 
+function useConfirmDialogFocus(
+  dialogRef: RefObject<HTMLDialogElement | null>,
+  onCancel: () => void,
+): void {
+  useEffect(() => {
+    const trigger = document.activeElement as HTMLElement | null;
+    const dialog = dialogRef.current;
+    if (dialog !== null) focusablesIn(dialog)[0]?.focus();
+    return () => trigger?.focus?.();
+  }, [dialogRef]);
+
+  useEffect(() => {
+    const dialog = dialogRef.current;
+    if (dialog === null) return undefined;
+    const handleKeyDown = (event: KeyboardEvent): void => {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        onCancel();
+        return;
+      }
+      retainDialogFocus(event, dialog);
+    };
+    dialog.addEventListener("keydown", handleKeyDown);
+    return () => dialog.removeEventListener("keydown", handleKeyDown);
+  }, [dialogRef, onCancel]);
+}
+
 type CreateCapsuleAccessMode = "local" | "shareable";
 
 interface CreateCapsuleAccessOption {
@@ -610,27 +637,7 @@ function DisconnectConfirmDialog({
   useModalInteractionLock();
 
   // Focus the first control on open; restore the opener on close (WCAG 2.4.3).
-  useEffect(() => {
-    const trigger = document.activeElement as HTMLElement | null;
-    const dialog = dialogRef.current;
-    if (dialog !== null) focusablesIn(dialog)[0]?.focus();
-    return () => trigger?.focus?.();
-  }, []);
-
-  useEffect(() => {
-    const dialog = dialogRef.current;
-    if (dialog === null) return undefined;
-    const handleKeyDown = (event: KeyboardEvent): void => {
-      if (event.key === "Escape") {
-        event.preventDefault();
-        onCancel();
-        return;
-      }
-      retainDialogFocus(event, dialog);
-    };
-    dialog.addEventListener("keydown", handleKeyDown);
-    return () => dialog.removeEventListener("keydown", handleKeyDown);
-  }, [onCancel]);
+  useConfirmDialogFocus(dialogRef, onCancel);
 
   return createPortal(
     <div className="mc-dialog-backdrop">
@@ -686,27 +693,7 @@ function DeleteCapsuleSetConfirmDialog({
   const dialogRef = useRef<HTMLDialogElement>(null);
   useModalInteractionLock();
 
-  useEffect(() => {
-    const trigger = document.activeElement as HTMLElement | null;
-    const dialog = dialogRef.current;
-    if (dialog !== null) focusablesIn(dialog)[0]?.focus();
-    return () => trigger?.focus?.();
-  }, []);
-
-  useEffect(() => {
-    const dialog = dialogRef.current;
-    if (dialog === null) return undefined;
-    const handleKeyDown = (event: KeyboardEvent): void => {
-      if (event.key === "Escape") {
-        event.preventDefault();
-        onCancel();
-        return;
-      }
-      retainDialogFocus(event, dialog);
-    };
-    dialog.addEventListener("keydown", handleKeyDown);
-    return () => dialog.removeEventListener("keydown", handleKeyDown);
-  }, [onCancel]);
+  useConfirmDialogFocus(dialogRef, onCancel);
 
   return createPortal(
     <div className="mc-dialog-backdrop">
