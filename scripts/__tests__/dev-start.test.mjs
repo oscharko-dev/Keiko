@@ -609,4 +609,13 @@ describe("prepareRunnerCriticalSection (KEIKO-0719 race close)", () => {
     ).rejects.toThrow(/restart failed/);
     expect(removePidFile).not.toHaveBeenCalled();
   });
+
+  it("falls through to the default seams when none are provided", async () => {
+    // On a fresh checkout the pidFile does not exist, so the default `restartExistingRunnerIfNeeded`
+    // returns immediately and the default `removePidFile` is a no-op force-remove. This exercise
+    // covers the nullish-coalescing default paths and asserts the helper accepts an empty seams
+    // object (or none at all) without throwing.
+    await expect(prepareRunnerCriticalSection({})).resolves.toBeUndefined();
+    await expect(prepareRunnerCriticalSection()).resolves.toBeUndefined();
+  });
 });
