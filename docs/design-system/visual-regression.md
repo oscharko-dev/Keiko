@@ -18,7 +18,8 @@ reproducible historical migration evidence, **not standing CI or pull-request ga
 immutable migration-era baselines, so later intentional design evolution can legitimately change their result.
 The CI-enforced vitest block pins the documented artifact shape and the current product contracts; it does not
 execute these browser harnesses. Current release protection is provided by the applicable UI and Playwright
-regression suites.
+regression suites. In particular, `test:e2e:editor-fidelity-1296` proves only its static evidence fixture; it
+does not exercise the live Monaco editor, tabs, diagnostics, find UI, ghost text, or agent prompts.
 
 ---
 

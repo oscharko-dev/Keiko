@@ -183,9 +183,85 @@ function collectNestedWorkflowTrigger(triggers, body, inTriggerBlock) {
 }
 
 function conditionAllowsPullRequest(condition) {
-  if (condition === undefined || !condition.includes("github.event_name")) return true;
-  if (condition.includes("github.event_name == 'pull_request'")) return true;
-  return condition.includes("github.event_name != 'pull_request'") && condition.includes("||");
+  if (condition === undefined) return true;
+  const expression = conditionExpression(condition);
+  if (expression === undefined) return false;
+  return evaluateBooleanExpression(expression);
+}
+
+function conditionExpression(condition) {
+  const unwrapped = /^\$\{\{\s*(.*?)\s*\}\}$/u.exec(condition)?.[1] ?? condition;
+  const withEventValues = unwrapped
+    .replace(EVENT_COMPARISON, (_match, operator, _quote, value) => {
+      return String(compareKnownValue("pull_request", operator, value));
+    })
+    .replace(BASE_REF_COMPARISON, (_match, operator, _quote, value) => {
+      return String(compareKnownValue("dev", operator, value));
+    })
+    .replace(/\balways\(\)|\bsuccess\(\)|!cancelled\(\)/gu, "true")
+    .trim();
+  return BOOLEAN_EXPRESSION.test(withEventValues) ? withEventValues : undefined;
+}
+
+const EVENT_COMPARISON = /github\.event_name\s*(==|!=)\s*(['"])([^'"]+)\2/gu;
+const BASE_REF_COMPARISON = /github\.base_ref\s*(==|!=)\s*(['"])([^'"]+)\2/gu;
+const BOOLEAN_EXPRESSION = /^(?:\s|true|false|&&|\|\||!|\(|\))+$/u;
+
+function compareKnownValue(actual, operator, expected) {
+  return operator === "==" ? actual === expected : actual !== expected;
+}
+
+function evaluateBooleanExpression(expression) {
+  const tokens = expression.match(/true|false|&&|\|\||!|\(|\)/gu);
+  if (tokens === null) return false;
+  const state = { index: 0, tokens };
+  const value = parseBooleanOr(state);
+  return value !== undefined && state.index === tokens.length ? value : false;
+}
+
+function parseBooleanOr(state) {
+  let value = parseBooleanAnd(state);
+  while (value !== undefined && state.tokens[state.index] === "||") {
+    state.index += 1;
+    const right = parseBooleanAnd(state);
+    if (right === undefined) return undefined;
+    value ||= right;
+  }
+  return value;
+}
+
+function parseBooleanAnd(state) {
+  let value = parseBooleanPrimary(state);
+  while (value !== undefined && state.tokens[state.index] === "&&") {
+    state.index += 1;
+    const right = parseBooleanPrimary(state);
+    if (right === undefined) return undefined;
+    value &&= right;
+  }
+  return value;
+}
+
+function parseBooleanPrimary(state) {
+  const token = state.tokens[state.index];
+  if (token === "!") {
+    state.index += 1;
+    const value = parseBooleanPrimary(state);
+    return value === undefined ? undefined : !value;
+  }
+  if (token === "(") return parseParenthesizedBoolean(state);
+  if (token === "true" || token === "false") {
+    state.index += 1;
+    return token === "true";
+  }
+  return undefined;
+}
+
+function parseParenthesizedBoolean(state) {
+  state.index += 1;
+  const value = parseBooleanOr(state);
+  if (value === undefined || state.tokens[state.index] !== ")") return undefined;
+  state.index += 1;
+  return value;
 }
 
 function segmentRunsScript(segment, script) {
@@ -218,24 +294,141 @@ function runStepHasSuite(lines, index, script) {
   return blockRunHasSuite(lines, index, raw.length - body.length, script);
 }
 
-function conditionBeforeStep(lines, index) {
-  const previous = lines[index - 1];
-  if (previous === undefined) return undefined;
-  const body = previous.trimStart();
-  const condition = /^(?:-[ \t]+)?if:(.*)$/u.exec(body)?.[1];
-  return condition === undefined ? undefined : stripInlineComment(condition).trim();
+function lineIndent(raw) {
+  return raw.length - raw.trimStart().length;
+}
+
+function sequenceItemIndent(raw) {
+  return /^-[ \t]+/u.test(raw.trimStart()) ? lineIndent(raw) : undefined;
+}
+
+function mappingValue(raw, key) {
+  const body = raw.trimStart();
+  const keyExpression = new RegExp(`^(?:-[ \\t]+)?${key}:(.*)$`, "u");
+  const value = keyExpression.exec(body)?.[1];
+  return value === undefined ? undefined : stripInlineComment(value).trim();
+}
+
+function stepStart(lines, runIndex) {
+  const run = lines[runIndex];
+  if (run === undefined) return undefined;
+  const runIndent = lineIndent(run);
+  if (sequenceItemIndent(run) !== undefined) return runIndex;
+  for (let index = runIndex - 1; index >= 0; index -= 1) {
+    const candidate = lines[index];
+    if (candidate === undefined) continue;
+    const indent = sequenceItemIndent(candidate);
+    if (indent !== undefined && indent < runIndent) return index;
+  }
+  return undefined;
+}
+
+function stepEnd(lines, start) {
+  const first = lines[start];
+  if (first === undefined) return start;
+  const indent = sequenceItemIndent(first);
+  if (indent === undefined) return start;
+  for (let index = start + 1; index < lines.length; index += 1) {
+    const candidate = lines[index];
+    if (candidate !== undefined && sequenceItemIndent(candidate) === indent) return index;
+  }
+  return lines.length;
+}
+
+function conditionsAtIndent(lines, start, end, indent) {
+  const conditions = [];
+  for (let index = start; index < end; index += 1) {
+    const raw = lines[index];
+    if (raw !== undefined && lineIndent(raw) === indent) {
+      const condition = mappingValue(raw, "if");
+      if (condition !== undefined) conditions.push(condition);
+    }
+  }
+  return conditions;
+}
+
+function jobStart(lines, step) {
+  const first = lines[step];
+  if (first === undefined) return undefined;
+  const stepIndent = sequenceItemIndent(first);
+  if (stepIndent === undefined) return undefined;
+  const stepsIndent = stepIndent - 2;
+  for (let index = step - 1; index >= 0; index -= 1) {
+    const raw = lines[index];
+    if (raw === undefined) continue;
+    if (lineIndent(raw) === stepsIndent && raw.trim() === "steps:") {
+      return findJobStart(lines, index, stepsIndent - 2);
+    }
+  }
+  return undefined;
+}
+
+function findJobStart(lines, before, indent) {
+  for (let index = before - 1; index >= 0; index -= 1) {
+    const raw = lines[index];
+    if (raw === undefined || lineIndent(raw) !== indent) continue;
+    if (/^[A-Za-z][A-Za-z0-9_-]*:[ \t]*(?:#.*)?$/u.test(raw.trim())) return index;
+  }
+  return undefined;
+}
+
+function jobEnd(lines, start) {
+  const raw = lines[start];
+  if (raw === undefined) return start;
+  const indent = lineIndent(raw);
+  for (let index = start + 1; index < lines.length; index += 1) {
+    const candidate = lines[index];
+    if (candidate !== undefined && candidate.trim() !== "" && lineIndent(candidate) <= indent) {
+      return index;
+    }
+  }
+  return lines.length;
+}
+
+function directSuiteStepConditions(lines, runIndex) {
+  const start = stepStart(lines, runIndex);
+  if (start === undefined) return undefined;
+  const raw = lines[start];
+  if (raw === undefined) return undefined;
+  const stepIndent = sequenceItemIndent(raw);
+  if (stepIndent === undefined) return undefined;
+  const initialCondition = mappingValue(raw, "if");
+  const stepConditions = [
+    ...(initialCondition === undefined ? [] : [initialCondition]),
+    ...conditionsAtIndent(lines, start + 1, stepEnd(lines, start), stepIndent + 2),
+  ];
+  const job = jobStart(lines, start);
+  if (job === undefined) return undefined;
+  const jobConditions = conditionsAtIndent(
+    lines,
+    job,
+    jobEnd(lines, job),
+    lineIndent(lines[job]) + 2,
+  );
+  return [...stepConditions, ...jobConditions];
 }
 
 function suiteStepConditions(script, workflowText) {
   const lines = workflowText.split(/\r?\n/u);
   return lines.flatMap((_, index) => {
-    return runStepHasSuite(lines, index, script) ? [conditionBeforeStep(lines, index)] : [];
+    const raw = lines[index];
+    if (raw === undefined || !runStepHasSuite(lines, index, script)) return [];
+    const conditions = directSuiteStepConditions(lines, index);
+    return conditions === undefined ? [undefined] : [conditions];
   });
 }
 
 function workflowRunsSuiteOnPullRequest(script, workflowText) {
   if (!isWiredInWorkflows(script, workflowText)) return false;
-  return suiteStepConditions(script, workflowText).every(conditionAllowsPullRequest);
+  const conditions = suiteStepConditions(script, workflowText);
+  return (
+    conditions.length > 0 &&
+    conditions.every(
+      (stepConditions) =>
+        stepConditions !== undefined &&
+        stepConditions.every((condition) => conditionAllowsPullRequest(condition)),
+    )
+  );
 }
 
 /**

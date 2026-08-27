@@ -3,7 +3,8 @@
 // not fail) used to purge with the "expiry" reason -- a code that otherwise means TTL/authority
 // expiry (which purges silently via expireCurrent(), with no diagnostic at all) and is completely
 // unrelated to a validation/invariant failure. Isolated into its own file because it mocks
-// @oscharko-dev/keiko-contracts's validateCodingSafeActivityFeed to force the branch that is, by
+// @oscharko-dev/keiko-contracts/runtime/coding-safe-activity's validateCodingSafeActivityFeed to
+// force the branch that is, by
 // design, unreachable through any legitimate signal (every projection limit is already enforced at
 // signal-apply time, so validate never legitimately disagrees with the pre-mutation heuristic) --
 // the mock must not leak into the rest of the (real-validator) suite in codingSafeActivityProjection.test.ts.
@@ -15,8 +16,11 @@ const { validateMock } = vi.hoisted(() => ({
   validateMock: vi.fn(),
 }));
 
-vi.mock("@oscharko-dev/keiko-contracts", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("@oscharko-dev/keiko-contracts")>();
+vi.mock("@oscharko-dev/keiko-contracts/runtime/coding-safe-activity", async (importOriginal) => {
+  const actual =
+    await importOriginal<
+      typeof import("@oscharko-dev/keiko-contracts/runtime/coding-safe-activity")
+    >();
   return { ...actual, validateCodingSafeActivityFeed: validateMock };
 });
 

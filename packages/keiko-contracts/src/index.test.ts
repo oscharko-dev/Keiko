@@ -309,7 +309,7 @@ describe("keiko-contracts package surface", () => {
     expect(pin<SideFileWriteResult>()).toBeUndefined();
   });
 
-  it("workflow-handoff value re-exports are reachable through the barrel (#186)", () => {
+  it("workflow-handoff values remain available at their declared public surface (#186)", () => {
     expect(WORKFLOW_HANDOFF_SCHEMA_VERSION).toBe("1");
     expect(DEFAULT_PATCH_SCOPE_LIMITS.maxFileCount).toBeGreaterThan(0);
     expect(EXPECTED_CHECKS).toContain("verify");
@@ -320,7 +320,7 @@ describe("keiko-contracts package surface", () => {
     expect(typeof checkPatchAgainstScope).toBe("function");
   });
 
-  it("workflow-handoff type re-exports are reachable through the barrel (#186)", () => {
+  it("workflow-handoff types remain available at their declared public surface (#186)", () => {
     // Phantom generic keeps verbatimModuleSyntax happy without producing runtime values; if a
     // future refactor drops one of the names from the package surface, this test stops
     // compiling — the same guard pattern used for the #162 tool ports above.
@@ -336,7 +336,7 @@ describe("keiko-contracts package surface", () => {
     expect(pin<ExpectedCheck>()).toBeUndefined();
   });
 
-  it("FIM completion value re-exports are reachable through the barrel (#1210)", () => {
+  it("FIM completion values remain available at their declared public surface (#1210)", () => {
     const fastAligned: ModelCapability = {
       id: "fast-instruct",
       kind: "chat",
@@ -369,7 +369,7 @@ describe("keiko-contracts package surface", () => {
     expect(isAsYouTypeCompletionModel(fastAligned)).toBe(true);
   });
 
-  it("FIM completion type re-exports are reachable through the barrel (#1210)", () => {
+  it("FIM completion types remain available at their declared public surface (#1210)", () => {
     const pin = <T>(_value?: T): T | undefined => undefined;
     pin<InfillingAlignment>();
     pin<CompletionInteractionMode>();
@@ -377,7 +377,7 @@ describe("keiko-contracts package surface", () => {
     expect(pin<CompletionModelSelection>()).toBeUndefined();
   });
 
-  it("local-knowledge value re-exports are reachable through the barrel (#191)", () => {
+  it("local-knowledge values remain available at their declared public surface (#191)", () => {
     expect(LOCAL_KNOWLEDGE_SCHEMA_VERSION).toBe("1");
     expect(EMBEDDING_VECTOR_METRICS).toContain("cosine");
     expect(KNOWLEDGE_SOURCE_SCOPE_KINDS).toContain("folder");
@@ -419,7 +419,7 @@ describe("keiko-contracts package surface", () => {
     expect(normalizePdfCitationPreviewMarkerIndex(0)).toBeUndefined();
   });
 
-  it("local-knowledge type re-exports are reachable through the barrel (#191)", () => {
+  it("local-knowledge types remain available at their declared public surface (#191)", () => {
     // Phantom generic pins each new local-knowledge type onto the barrel surface; a future
     // refactor that drops one of these names fails this test at compile time. See #186 above
     // for the same pattern. The lineage pins below assert KnowledgeCapsuleId, KnowledgeSourceId,
@@ -462,7 +462,7 @@ describe("keiko-contracts package surface", () => {
     expect(pin<LocalKnowledgeValidationFail>()).toBeUndefined();
   });
 
-  it("knowledge-capsule schema value re-exports are reachable through the barrel (#265)", () => {
+  it("knowledge-capsule schema values remain available at their declared public surface (#265)", () => {
     expect(LOCAL_KNOWLEDGE_DB_SCHEMA_VERSION).toBe(33);
     // The string contract version and the integer DB version must remain distinct so the
     // contract surface and the on-disk DDL can evolve independently.
@@ -484,7 +484,7 @@ describe("keiko-contracts package surface", () => {
     expect(typeof redactPathInDiagnostic).toBe("function");
   });
 
-  it("knowledge-capsule schema type re-exports are reachable through the barrel (#265)", () => {
+  it("knowledge-capsule schema types remain available at their declared public surface (#265)", () => {
     const pin = <T>(_value?: T): T | undefined => undefined;
     pin<KnowledgeCapsuleMigration>();
     pin<CapsuleRowShape>();
@@ -510,7 +510,7 @@ describe("keiko-contracts package surface", () => {
     pin<EvidenceConnectedContextUncertainty>();
   });
 
-  it("memory contract value re-exports are reachable through the barrel (#205)", async () => {
+  it("memory contract values remain available at their declared public surface (#205)", async () => {
     const mod = await import("./memory.js");
     expect(mod.MEMORY_SCHEMA_VERSION).toBe("1");
     expect(mod.MEMORY_SCOPE_KINDS).toContain("user");
@@ -540,7 +540,7 @@ describe("keiko-contracts package surface", () => {
     expect(typeof mod.hasStaleModelMetadata).toBe("function");
   });
 
-  it("memory contract type re-exports are reachable through the barrel (#205)", async () => {
+  it("memory contract types remain available at their declared public surface (#205)", async () => {
     type Mod = typeof import("./memory.js");
     const pin = <T>(_value?: T): T | undefined => undefined;
     pin<Mod["MEMORY_SCOPE_KINDS"]>();
@@ -600,7 +600,7 @@ describe("keiko-contracts package surface", () => {
     expect(typeof subpath.isScopeReachable).toBe("function");
   });
 
-  it("memory workflow port re-exports are reachable through the barrel (#213)", async () => {
+  it("memory workflow-port contracts remain available at their declared public surface (#213)", async () => {
     const pin = <T>(_value?: T): T | undefined => undefined;
     type _MemoryWorkflowPort = import("./index.js").MemoryWorkflowPort;
     type _MemoryWorkflowContext = import("./index.js").MemoryWorkflowContext;
@@ -625,7 +625,7 @@ describe("keiko-contracts package surface", () => {
     expect(Object.keys(subpath)).toHaveLength(0);
   });
 
-  it("memory audit event surface re-exports are reachable through the barrel (#214)", async () => {
+  it("memory audit-event contracts remain available at their declared public surface (#214)", async () => {
     const mod = await import("./memory.js");
     expect(mod.MEMORY_AUDIT_EVENT_SCHEMA_VERSION).toBe("1");
     expect(mod.MEMORY_AUDIT_EVENT_SUMMARY_MAX_CHARS).toBe(240);
@@ -657,7 +657,7 @@ describe("keiko-contracts package surface", () => {
     expect(subpath.MEMORY_AUDIT_EVENT_SUMMARY_MAX_CHARS).toBe(240);
   });
 
-  it("connected-context barrel exports are reachable through the root surface (#178)", () => {
+  it("connected-context contracts remain available at their declared public surface (#178)", () => {
     expect(CONNECTED_CONTEXT_SCHEMA_VERSION).toBe("1");
     expect(SELECTED_SCOPE_KINDS).toContain("files");
     // KEIKO-0849: the pack.omitted quadratic-scan cap is part of the public surface too.
@@ -676,7 +676,7 @@ describe("keiko-contracts package surface", () => {
     pin<ConnectedContextPack>();
   });
 
-  it("editor-agent contract value re-exports are reachable through the barrel (#1391)", async () => {
+  it("editor-agent values remain available at their declared public surface (#1391)", async () => {
     const mod = {
       ...(await import("./editor-agent.js")),
       ...(await import("./editor-agent-governance.js")),
@@ -755,7 +755,7 @@ describe("keiko-contracts package surface", () => {
     expect(typeof mod.editorAgentRootBindingDenyReason).toBe("function");
   });
 
-  it("editor-agent contract type re-exports are reachable through the barrel (#1391)", async () => {
+  it("editor-agent types remain available at their declared public surface (#1391)", async () => {
     // Phantom generics pin the public contract types onto the barrel surface; a future refactor that
     // drops one of these names stops this test compiling (same guard pattern as #186/#205 above).
     const pin = <T>(_value?: T): T | undefined => undefined;
@@ -809,7 +809,7 @@ describe("keiko-contracts package surface", () => {
     await expect(import("./index.js")).resolves.toBeDefined();
   });
 
-  it("coding workbench mode-policy contracts are reachable through the barrel (#2091)", async () => {
+  it("coding-workbench mode-policy contracts remain available at their declared public surface (#2091)", async () => {
     const mod = await import("./coding-workbench.js");
     expect(mod.CODING_WORKBENCH_POLICY_EFFECTS).toEqual(["allowed", "approval-required", "denied"]);
     expect(mod.CODING_WORKBENCH_POLICY_RESOURCE_SCOPES).toEqual([
@@ -832,7 +832,7 @@ describe("keiko-contracts package surface", () => {
     pin<import("./index.js").CodingWorkbenchModeEffectMatrix>();
   });
 
-  it("code task acceptance contracts are reachable through the barrel (#2385)", async () => {
+  it("code-task acceptance contracts remain available at their declared public surface (#2385)", async () => {
     const mod = await import("./code-task-acceptance.js");
     expect(mod.CODE_TASK_ACCEPTANCE_SCHEMA_VERSION).toBe(1);
     expect(mod.CODE_TASK_ACCEPTANCE_CONTRIBUTION_KIND).toBe("code-task-acceptance-contribution");
@@ -869,7 +869,7 @@ describe("keiko-contracts package surface", () => {
     pin<import("./index.js").CodeTaskIsoInstant>();
   });
 
-  it("code task governance contracts are reachable through the barrel (#2386)", async () => {
+  it("code-task governance contracts remain available at their declared public surface (#2386)", async () => {
     const mod = {
       ...(await import("./code-task-governance.js")),
       ...(await import("./code-task-run-control.js")),
@@ -920,7 +920,7 @@ describe("keiko-contracts package surface", () => {
     pin<import("./index.js").RuntimeGovernanceLifecycleEventV1>();
   });
 
-  it("governed Git delivery contracts are reachable through the barrel (#471)", () => {
+  it("governed Git-delivery contracts remain available at their declared public surface (#471)", () => {
     // Schema versions.
     expect(GIT_DELIVERY_SCHEMA_VERSION).toBe("1");
     expect(GIT_DELIVERY_POLICY_SCHEMA_VERSION).toBe("1");
@@ -970,7 +970,7 @@ describe("keiko-contracts package surface", () => {
     pin<GitDeliveryBranchSwitchInputs>();
   });
 
-  it("governed Git action-sheet contracts are reachable through the barrel (#473)", () => {
+  it("governed Git action-sheet contracts remain available at their declared public surface (#473)", () => {
     expect(GIT_DELIVERY_ACTION_SHEET_SCHEMA_VERSION).toBe("1");
     // Count assertions are intentional surface pins; bump deliberately when the surface changes.
     expect(GIT_DELIVERY_ACTION_SHEET_STATES).toHaveLength(3);
@@ -1013,7 +1013,7 @@ describe("keiko-contracts package surface", () => {
     pin<GitDeliveryWorktreeSnapshot>();
   });
 
-  it("governed GitHub pull request contracts are reachable through the barrel (#477)", async () => {
+  it("governed GitHub pull-request contracts remain available at their declared public surface (#477)", async () => {
     const m = await import("./git-pull-request.js");
     expect(m.GIT_PULL_REQUEST_SCHEMA_VERSION).toBe("1");
     // Count assertions are intentional surface pins; bump deliberately when the surface changes.
@@ -1039,7 +1039,7 @@ describe("keiko-contracts package surface", () => {
     expect(readiness.objectExists).toBe(false);
   });
 
-  it("managed LSP activation contracts are reachable through the barrel (#2271)", async () => {
+  it("managed-LSP activation contracts remain available at their declared public surface (#2271)", async () => {
     const m = await import("./managed-lsp-activation.js");
     expect(m.MANAGED_LSP_ACTIVATION_SCHEMA_VERSION).toBe("1");
     expect(m.MANAGED_LSP_LANGUAGES).toEqual(["python", "go", "shell", "java", "rust"]);
@@ -1071,7 +1071,7 @@ describe("keiko-contracts package surface", () => {
     pin<import("./index.js").ManagedLspActivationParseResult<unknown>>();
   });
 
-  it("managed LSP runtime configuration contracts are reachable through the barrel (#2271)", async () => {
+  it("managed-LSP runtime configuration remains available at its declared public surface (#2271)", async () => {
     const m = await import("./managed-lsp-runtime.js");
     expect(m.MANAGED_LSP_RUNTIME_SCHEMA_VERSION).toBe("1");
     expect(m.MANAGED_LSP_RUNTIME_ID_MAX_CHARS).toBe(128);
@@ -1135,7 +1135,7 @@ describe("keiko-contracts package surface", () => {
     pin<import("./index.js").ManagedLspRuntimeParseResult>();
   });
 
-  it("managed LSP capability negotiation contracts are reachable through the barrel (#2271)", async () => {
+  it("managed-LSP capability negotiation remains available at its declared public surface (#2271)", async () => {
     const m = await import("./managed-lsp-capabilities.js");
     expect(m.MANAGED_LSP_CAPABILITY_SCHEMA_VERSION).toBe("1");
     expect(m.MANAGED_LSP_SEMANTIC_TOKEN_MAX_TYPES).toBe(64);
@@ -1168,7 +1168,7 @@ describe("keiko-contracts package surface", () => {
     pin<import("./index.js").ManagedLspCapabilityParseResult<unknown>>();
   });
 
-  it("managed LSP evidence contracts are reachable through the barrel (#2271)", async () => {
+  it("managed-LSP evidence contracts remain available at their declared public surface (#2271)", async () => {
     const m = await import("./managed-lsp-evidence.js");
     expect(m.MANAGED_LSP_EVIDENCE_SCHEMA_VERSION).toBe("1");
     expect(m.MANAGED_LSP_EVIDENCE_ACTOR_CLASSES).toEqual([
@@ -1206,7 +1206,7 @@ describe("keiko-contracts package surface", () => {
     pin<import("./index.js").ManagedLspEvidenceParseResult>();
   });
 
-  it("governed debug lifecycle contracts are reachable through the barrel (#2343)", async () => {
+  it("governed debug-lifecycle contracts remain available at their declared public surface (#2343)", async () => {
     const m = await import("./debug/debug-lifecycle.js");
     expect(m.DEBUG_LIFECYCLE_SCHEMA_VERSION).toBe("1");
     expect(typeof m.isDebugLifecycleEvidence).toBe("function");
@@ -1219,7 +1219,7 @@ describe("keiko-contracts package surface", () => {
     pin<import("./index.js").DebugLifecycleEvent>();
   });
 
-  it("governed debug browser contracts are reachable through the barrel (#2345)", async () => {
+  it("governed debug-browser contracts remain available at their declared public surface (#2345)", async () => {
     const m = await import("./dap-debug.js");
     expect(m.DAP_DEBUG_CONTRACT_SCHEMA_VERSION).toBe("1");
     expect(m.DEBUG_SESSION_STATUSES).toContain("revoked");
@@ -1257,7 +1257,7 @@ describe("keiko-contracts package surface", () => {
     pin<import("./index.js").EvaluateWatchRequest>();
   });
 
-  it("M7 editor platform contracts are reachable through the barrel (#2317)", async () => {
+  it("M7 editor-platform contracts remain available at their declared public surface (#2317)", async () => {
     const m = await import("./editor-m7.js");
     expect(m.EDITOR_M7_SCHEMA_VERSION).toBe("1");
     expect(m.EDITOR_M7_SETTING_REGISTRY.map((entry) => entry.id)).toContain("fontSize");
@@ -1294,7 +1294,7 @@ describe("keiko-contracts package surface", () => {
     pin<import("./index.js").EditorM7AiActivationSummary>();
   });
 
-  it("HTML manual pod job contracts are reachable + enforced through the barrel (#2063)", async () => {
+  it("HTML manual pod-job contracts remain available and fail closed at their public surface (#2063)", async () => {
     const m = await import("./html-manual-job.js");
     expect(m.HTML_MANUAL_POD_JOB_SCHEMA_VERSION).toBe("1");
     expect(m.HTML_MANUAL_POD_JOB_OPERATIONS).toStrictEqual(["create", "refresh"]);
@@ -1334,7 +1334,7 @@ describe("keiko-contracts package surface", () => {
     pin<import("./index.js").HtmlManualPodCreateRequest>();
   });
 
-  it("M11 workspace foundation contracts are reachable through the barrel (#2520)", async (): Promise<void> => {
+  it("M11 workspace-foundation contracts remain available at their declared public surface (#2520)", async (): Promise<void> => {
     const m = {
       ...(await import("./workspace-contract-primitives.js")),
       ...(await import("./task-workspace.js")),
@@ -1385,7 +1385,7 @@ describe("keiko-contracts package surface", () => {
     pin<import("./index.js").VersionedWorkspaceBinding>();
   });
 
-  it("the one vector-index port is reachable + fails closed through the barrel (#2556, ADR-0152 D1)", async () => {
+  it("the vector-index port remains available and fails closed at its public surface (#2556, ADR-0152 D1)", async () => {
     const m = await import("./vector-index-port.js");
     expect(m.VECTOR_INDEX_NAMESPACES).toStrictEqual(["knowledge", "memory", "repo"]);
     expect(Object.isFrozen(m.VECTOR_INDEX_NAMESPACES)).toBe(true);
@@ -1444,7 +1444,7 @@ describe("keiko-contracts package surface", () => {
     pin<import("./index.js").VectorIndexPort>();
   });
 
-  it("pillar-neutral retrieval context stays body-free through the barrel (#2570, ADR-0152 D6)", async () => {
+  it("pillar-neutral retrieval context stays body-free at its public surface (#2570, ADR-0152 D6)", async () => {
     const m = await import("./retrieval-context.js");
     expect(m.RETRIEVAL_CONTEXT_SCHEMA_VERSION).toBe("1");
     expect(m.RETRIEVAL_CONTEXT_PURPOSES.length).toBeGreaterThan(0);

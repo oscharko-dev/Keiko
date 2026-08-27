@@ -8,6 +8,9 @@ const DOMAIN = "keiko-workspace-performance-measurement-toolchain-v1\0";
 // judges that subject, so ordinary product changes do not demand a re-measurement.
 export const WORKSPACE_PERFORMANCE_MEASUREMENT_TOOLCHAIN_PATHS = Object.freeze([
   "scripts/check-perf-evidence.mjs",
+  "scripts/lib/git-changed-paths.mjs",
+  "scripts/lib/host-executable.mjs",
+  "scripts/lib/is-main-module.mjs",
   "scripts/workspace-performance-evidence-gate.mjs",
   "scripts/workspace-performance-measurement-toolchain.mjs",
   "tests/e2e/config/playwright.workspace-performance.config.ts",

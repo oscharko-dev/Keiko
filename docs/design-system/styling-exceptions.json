@@ -1,0 +1,159 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "schemaVersion": 1,
+  "canonicalLocalClassPrefix": "cmp",
+  "exceptions": [
+    {
+      "source": "packages/keiko-ui/src/app/components/desktop/AppShell.module.css",
+      "kinds": ["unprefixed-local-classes"]
+    },
+    {
+      "source": "packages/keiko-ui/src/app/components/desktop/AppShellBoundary.module.css",
+      "kinds": ["unprefixed-local-classes"]
+    },
+    {
+      "source": "packages/keiko-ui/src/app/components/desktop/ChatWindow.module.css",
+      "kinds": ["unprefixed-local-classes", "global-selector-coupling"]
+    },
+    {
+      "source": "packages/keiko-ui/src/app/components/desktop/GroundedAnswer.module.css",
+      "kinds": ["unprefixed-local-classes", "global-selector-coupling"]
+    },
+    {
+      "source": "packages/keiko-ui/src/app/components/desktop/WorkspaceSelection.module.css",
+      "kinds": ["unprefixed-local-classes"]
+    },
+    {
+      "source": "packages/keiko-ui/src/app/components/desktop/update/UpdateWindow.module.css",
+      "kinds": ["unprefixed-local-classes", "global-selector-coupling"]
+    },
+    {
+      "source": "packages/keiko-ui/src/app/components/desktop/widgets/cards/BrowserWidget.module.css",
+      "kinds": ["unprefixed-local-classes", "global-selector-coupling"]
+    },
+    {
+      "source": "packages/keiko-ui/src/app/components/desktop/widgets/cards/ConnectorPickerWidget.module.css",
+      "kinds": ["unprefixed-local-classes", "global-selector-coupling"]
+    },
+    {
+      "source": "packages/keiko-ui/src/app/components/desktop/widgets/cards/DocumentationBrowserWidget.module.css",
+      "kinds": ["unprefixed-local-classes", "global-selector-coupling"]
+    },
+    {
+      "source": "packages/keiko-ui/src/app/components/desktop/widgets/cards/EditorConflicts.module.css",
+      "kinds": ["unprefixed-local-classes", "global-selector-coupling"]
+    },
+    {
+      "source": "packages/keiko-ui/src/app/components/desktop/widgets/cards/EditorEmptyState.module.css",
+      "kinds": ["unprefixed-local-classes"]
+    },
+    {
+      "source": "packages/keiko-ui/src/app/components/desktop/widgets/cards/EditorFileHistoryPanel.module.css",
+      "kinds": ["unprefixed-local-classes"]
+    },
+    {
+      "source": "packages/keiko-ui/src/app/components/desktop/widgets/cards/EditorGitHunkPeek.module.css",
+      "kinds": ["unprefixed-local-classes", "global-selector-coupling"]
+    },
+    {
+      "source": "packages/keiko-ui/src/app/components/desktop/widgets/cards/EditorOutline.module.css",
+      "kinds": ["unprefixed-local-classes"]
+    },
+    {
+      "source": "packages/keiko-ui/src/app/components/desktop/widgets/cards/EditorRuntimeWidget.module.css",
+      "kinds": ["unprefixed-local-classes"]
+    },
+    {
+      "source": "packages/keiko-ui/src/app/components/desktop/widgets/cards/EditorWidget.module.css",
+      "kinds": ["unprefixed-local-classes"]
+    },
+    {
+      "source": "packages/keiko-ui/src/app/components/desktop/widgets/cards/ManagedTaskWorkspaceUnavailable.module.css",
+      "kinds": ["unprefixed-local-classes"]
+    },
+    {
+      "source": "packages/keiko-ui/src/app/components/desktop/widgets/cards/MultiRootFilesWidget.module.css",
+      "kinds": ["global-selector-coupling"]
+    },
+    {
+      "source": "packages/keiko-ui/src/app/components/desktop/widgets/cards/PdfCitationPreviewWindow.module.css",
+      "kinds": ["unprefixed-local-classes", "global-selector-coupling"]
+    },
+    {
+      "source": "packages/keiko-ui/src/app/components/desktop/widgets/cards/TerminalWidget.module.css",
+      "kinds": ["unprefixed-local-classes", "global-selector-coupling"]
+    },
+    {
+      "source": "packages/keiko-ui/src/app/components/desktop/widgets/coding-workbench/CodingWorkbenchWindow.module.css",
+      "kinds": ["unprefixed-local-classes", "global-selector-coupling"]
+    },
+    {
+      "source": "packages/keiko-ui/src/app/components/desktop/widgets/connectors/connectors.module.css",
+      "kinds": ["unprefixed-local-classes", "global-selector-coupling"]
+    },
+    {
+      "source": "packages/keiko-ui/src/app/components/desktop/widgets/figma/FigmaImageSourceWindow.module.css",
+      "kinds": ["unprefixed-local-classes", "global-selector-coupling"]
+    },
+    {
+      "source": "packages/keiko-ui/src/app/components/desktop/widgets/panels/AutonomySettings.module.css",
+      "kinds": ["unprefixed-local-classes"]
+    },
+    {
+      "source": "packages/keiko-ui/src/app/components/desktop/widgets/panels/DebuggingSettings.module.css",
+      "kinds": ["unprefixed-local-classes"]
+    },
+    {
+      "source": "packages/keiko-ui/src/app/components/desktop/widgets/panels/EditorSettingsPanel.module.css",
+      "kinds": ["unprefixed-local-classes"]
+    },
+    {
+      "source": "packages/keiko-ui/src/app/components/desktop/widgets/panels/ManagedLanguageSettings.module.css",
+      "kinds": ["unprefixed-local-classes"]
+    },
+    {
+      "source": "packages/keiko-ui/src/app/components/desktop/widgets/panels/MobilePanel.module.css",
+      "kinds": ["unprefixed-local-classes", "global-selector-coupling"]
+    },
+    {
+      "source": "packages/keiko-ui/src/app/components/desktop/widgets/panels/NotificationsPanel.module.css",
+      "kinds": ["unprefixed-local-classes", "global-selector-coupling"]
+    },
+    {
+      "source": "packages/keiko-ui/src/app/components/desktop/widgets/panels/PluginsPanel.module.css",
+      "kinds": ["unprefixed-local-classes"]
+    },
+    {
+      "source": "packages/keiko-ui/src/app/components/desktop/widgets/panels/SearchPanel.module.css",
+      "kinds": ["unprefixed-local-classes"]
+    },
+    {
+      "source": "packages/keiko-ui/src/app/components/desktop/widgets/panels/TimelinePanel.module.css",
+      "kinds": ["unprefixed-local-classes", "global-selector-coupling"]
+    },
+    {
+      "source": "packages/keiko-ui/src/app/local-knowledge/capsule-detail.module.css",
+      "kinds": ["unprefixed-local-classes", "global-selector-coupling"]
+    },
+    {
+      "source": "packages/keiko-ui/src/app/local-knowledge/create-capsule-dialog.module.css",
+      "kinds": ["unprefixed-local-classes"]
+    },
+    {
+      "source": "packages/keiko-ui/src/app/local-knowledge/manual-refresh-panel.module.css",
+      "kinds": ["unprefixed-local-classes", "global-selector-coupling"]
+    },
+    {
+      "source": "packages/keiko-ui/src/app/local-knowledge/set-counts.module.css",
+      "kinds": ["unprefixed-local-classes", "global-selector-coupling"]
+    },
+    {
+      "source": "packages/keiko-ui/src/app/memoriaviva/components/MemoryJournal.module.css",
+      "kinds": ["unprefixed-local-classes"]
+    },
+    {
+      "source": "packages/keiko-ui/src/app/memoriaviva/components/memory-autonomy-control.module.css",
+      "kinds": ["unprefixed-local-classes"]
+    }
+  ]
+}

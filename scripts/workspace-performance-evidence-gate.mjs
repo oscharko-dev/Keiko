@@ -1,13 +1,13 @@
-import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 
 import {
   computePerformanceSubjectDigest,
   listDirtyPerformanceSubjectPaths,
+  subjectDriftFinding,
 } from "./check-perf-evidence.mjs";
 import { isMainModule } from "./lib/is-main-module.mjs";
-import { resolveHostExecutable } from "./lib/host-executable.mjs";
+import { listChangedGitPaths } from "./lib/git-changed-paths.mjs";
 import {
   computeWorkspacePerformanceMeasurementToolchainDigest,
   selectWorkspacePerformanceMeasurementToolchainPaths,
@@ -23,19 +23,10 @@ function defaultComputeMeasurementHarnessSha256() {
   );
 }
 
-function changedPathsAgainst(baseRef, root) {
-  const output = execFileSync(
-    resolveHostExecutable("git"),
-    ["diff", "--name-only", "-z", `${baseRef}...HEAD`, "--"],
-    { cwd: root, encoding: "utf8" },
-  );
-  return output.split("\0").filter((path) => path.length > 0);
-}
-
 export function workspaceToolchainTouchedAgainst(
   baseRef,
   root = repoRoot,
-  listChangedPaths = changedPathsAgainst,
+  listChangedPaths = listChangedGitPaths,
 ) {
   if (typeof baseRef !== "string" || baseRef.length === 0) return false;
   try {
@@ -86,7 +77,9 @@ function measurementHarnessFailures(evidence, computeMeasurementHarnessSha256) {
           `measurementHarnessSha256 ${recorded} != current committed ${current} (stale workspace measurement toolchain evidence)`,
         ];
   } catch (error) {
-    return [`could not recompute workspace measurement harness: ${String(error)}`];
+    return [
+      `could not recompute workspace measurement harness: ${error instanceof Error ? error.name : "unknown error"}`,
+    ];
   }
 }
 
@@ -98,11 +91,15 @@ function sourceTreeFailures(evidence, computeSourceTreeSha256, dirtySubjectPaths
       return ["current performance subject did not produce a SHA-256 digest"];
     if (current !== evidence.sourceTreeSha256) {
       failures.push(
-        `sourceTreeSha256 ${evidence.sourceTreeSha256} != current ${current} (stale performance evidence)`,
+        subjectDriftFinding(
+          `sourceTreeSha256 ${evidence.sourceTreeSha256} != current ${current} (stale performance evidence)`,
+        ),
       );
     }
   } catch (error) {
-    failures.push(`could not recompute performance subject: ${String(error)}`);
+    failures.push(
+      `could not recompute performance subject: ${error instanceof Error ? error.name : "unknown error"}`,
+    );
   }
   if (dirtySubjectPaths.length > 0) {
     failures.push(
@@ -117,16 +114,13 @@ export function evaluateWorkspaceEvidenceFreshness(evidence, options = {}) {
     return { passed: false, failures: ["evidence is not an object"] };
   }
   const enforce = options.enforceSourceFreshness === true;
-  const toolchainTouched = options.toolchainTouched === true;
   const failures = stampFailures(evidence);
-  if (enforce || toolchainTouched) {
-    failures.push(
-      ...measurementHarnessFailures(
-        evidence,
-        options.computeMeasurementHarnessSha256 ?? defaultComputeMeasurementHarnessSha256,
-      ),
-    );
-  }
+  failures.push(
+    ...measurementHarnessFailures(
+      evidence,
+      options.computeMeasurementHarnessSha256 ?? defaultComputeMeasurementHarnessSha256,
+    ),
+  );
   if (enforce) {
     failures.push(
       ...sourceTreeFailures(

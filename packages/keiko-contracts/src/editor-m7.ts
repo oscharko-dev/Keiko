@@ -1097,7 +1097,7 @@ export const EDITOR_M7_COMMAND_REGISTRY: readonly EditorM7CommandDefinition[] = 
     "open-editor-settings",
     "command.openEditorSettings",
     "settings",
-    ["settings"],
+    ["settings", "editor"],
     ["CtrlOrMeta+,"],
     true,
   ),

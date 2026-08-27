@@ -27,6 +27,7 @@ const nextLockPath = join(uiDir, ".next", "lock");
 const children = new Map();
 const restartCounts = new Map();
 const maxRestarts = Number(process.env.KEIKO_DEV_MAX_RESTARTS ?? "3");
+const restartDelayMs = Number(process.env.KEIKO_DEV_RESTART_DELAY_MS ?? "500");
 const nextBundlerPreference = process.env.KEIKO_DEV_NEXT_BUNDLER ?? "auto";
 const skipPackageWatchForTest =
   process.env.NODE_ENV === "test" && process.env.KEIKO_DEV_TEST_SKIP_PACKAGE_WATCH === "1";
@@ -134,6 +135,13 @@ if (!Number.isInteger(maxRestarts) || maxRestarts < 0) {
   process.exit(2);
 }
 
+if (!Number.isSafeInteger(restartDelayMs) || restartDelayMs < 0 || restartDelayMs > 60_000) {
+  console.error(
+    `Invalid KEIKO_DEV_RESTART_DELAY_MS: ${String(process.env.KEIKO_DEV_RESTART_DELAY_MS)}`,
+  );
+  process.exit(2);
+}
+
 /**
  * Checks whether the given TCP port is free by attempting a connection.
  * Resolves to `true` when the port is free, `false` when something is already listening.
@@ -171,8 +179,8 @@ export async function readNextLockInfo(lockPath) {
     if (
       parsed !== null &&
       typeof parsed === "object" &&
-      typeof parsed["pid"] === "number" &&
-      typeof parsed["port"] === "number"
+      isValidProcessId(parsed["pid"]) &&
+      isValidTcpPort(parsed["port"])
     ) {
       return /** @type {{ pid: number; port: number; appUrl: string }} */ (parsed);
     }
@@ -191,7 +199,16 @@ async function pathExists(path) {
   }
 }
 
+function isValidProcessId(pid) {
+  return Number.isSafeInteger(pid) && pid > 0;
+}
+
+function isValidTcpPort(port) {
+  return Number.isSafeInteger(port) && port >= 1 && port <= 65_535;
+}
+
 function processIsAlive(pid) {
+  if (!isValidProcessId(pid)) return false;
   try {
     process.kill(pid, 0);
     return true;
@@ -201,7 +218,11 @@ function processIsAlive(pid) {
 }
 
 export async function findAvailableNextPort(startPort, checkPortFree = checkNextPortFree) {
-  for (let port = startPort; port < startPort + 100; port += 1) {
+  if (!isValidTcpPort(startPort)) {
+    throw new TypeError(`Invalid Next.js port: ${String(startPort)}`);
+  }
+  const finalPort = Math.min(65_535, startPort + 99);
+  for (let port = startPort; port <= finalPort; port += 1) {
     if (await checkPortFree(host, port)) return port;
   }
   throw new Error(`No free Next.js port found at or above ${String(startPort)}`);
@@ -217,21 +238,38 @@ function resolveNextRespawnIo(overrides = {}) {
   };
 }
 
-async function releaseStaleNextLock(lockPath, lockInfo, io) {
-  if (lockInfo !== undefined && io.processIsAlive(lockInfo.pid)) {
+function isSameLockOwner(left, right) {
+  return left?.pid === right?.pid && left?.port === right?.port;
+}
+
+async function releaseStaleNextLock(lockPath, lockInfo, currentPort, io) {
+  if (lockInfo === undefined) {
+    throw new Error("Next.js lock ownership could not be validated");
+  }
+  if (io.processIsAlive(lockInfo.pid) && lockInfo.port !== currentPort) {
+    return;
+  }
+  if (io.processIsAlive(lockInfo.pid)) {
     throw new Error(`Next.js lock is held by live process ${String(lockInfo.pid)}`);
+  }
+  const currentLockInfo = await io.readLock(lockPath);
+  if (!isSameLockOwner(lockInfo, currentLockInfo)) {
+    throw new Error("Next.js lock changed before stale-lock removal");
   }
   await io.removeLock(lockPath);
 }
 
 export async function preflightNextRespawn(currentPort, lockPath, overrides = {}) {
+  if (!isValidTcpPort(currentPort)) {
+    throw new TypeError(`Invalid Next.js port: ${String(currentPort)}`);
+  }
   const io = resolveNextRespawnIo(overrides);
   const [portFree, lockPresent, lockInfo] = await Promise.all([
     io.checkPortFree(host, currentPort),
     io.lockExists(lockPath),
     io.readLock(lockPath),
   ]);
-  if (lockPresent) await releaseStaleNextLock(lockPath, lockInfo, io);
+  if (lockPresent) await releaseStaleNextLock(lockPath, lockInfo, currentPort, io);
   const selectedPort = portFree
     ? currentPort
     : await findAvailableNextPort(currentPort + 1, io.checkPortFree);
@@ -272,7 +310,7 @@ function restartChild(label) {
     shutdown(1);
     return;
   }
-  const delayMs = Math.min(5_000, 500 * count);
+  const delayMs = Math.min(60_000, restartDelayMs * count);
   console.error(
     `[dev] restarting ${label} in ${String(delayMs)}ms (${String(count)}/${String(maxRestarts)}) ...`,
   );
@@ -295,6 +333,7 @@ function restartChildAfterDelay(label) {
 async function restartNextChild() {
   try {
     const result = await preflightNextRespawn(nextPort, nextLockPath);
+    if (shuttingDown) return;
     if (result.reselected) {
       nextPort = result.nextPort;
       console.error(`[dev] Next.js port was busy; respawning on ${String(nextPort)}.`);

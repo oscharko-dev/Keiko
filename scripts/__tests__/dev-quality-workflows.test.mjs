@@ -15,6 +15,7 @@ const visualRegression = readFileSync(
   "utf8",
 );
 const ciWorkflow = parse(ci, { maxAliasCount: 0 });
+const mutationWorkflow = parse(mutation, { maxAliasCount: 0 });
 const mutationScope = readFileSync(resolve(root, "scripts/check-mutation-scope.mjs"), "utf8");
 const localSonar = readFileSync(resolve(root, "docker/gates/run-sonar.sh"), "utf8");
 const localSonarCompose = readFileSync(resolve(root, "docker/gates/sonar-compose.yml"), "utf8");
@@ -43,14 +44,39 @@ describe("dev quality workflows", () => {
       "npm run test:mutation:debug-launch-security",
     );
 
-    const install = mutation.indexOf("npm ci --ignore-scripts");
-    const buildPackages = mutation.indexOf("npm run build:packages");
-    const mutationRun = mutation.indexOf("npm run test:mutation:security");
-    expect(buildPackages).toBeGreaterThan(install);
-    expect(buildPackages).toBeLessThan(mutationRun);
     expect(mutationScope).toContain('"--diff-filter=ACMR"');
     expect(mutationScope).toContain('"packages/keiko-server/src/editor/dap/"');
     expect(mutationScope).toContain('"packages/keiko-server/src/editor/processHardening.ts"');
+  });
+
+  it("wires mutation failure reporting and the terminal failure to the measured suite", () => {
+    const steps = mutationWorkflow.jobs["mutation-quality-gate"].steps;
+    const installAt = steps.findIndex((step) => step.run === "npm ci --ignore-scripts");
+    const buildAt = steps.findIndex((step) => step.run === "npm run build:packages");
+    const mutationAt = steps.findIndex((step) => step.id === "mutation");
+    const reportAt = steps.findIndex(
+      (step) => step.name === "Report mutation failure as a tracking issue",
+    );
+    const failureAt = steps.findIndex((step) => step.name === "Fail the lane after reporting");
+    const mutationStep = steps[mutationAt];
+    const reportStep = steps[reportAt];
+    const failureStep = steps[failureAt];
+
+    expect(installAt).toBeGreaterThan(-1);
+    expect(buildAt).toBeGreaterThan(installAt);
+    expect(mutationAt).toBeGreaterThan(buildAt);
+    expect(reportAt).toBeGreaterThan(mutationAt);
+    expect(failureAt).toBeGreaterThan(reportAt);
+    expect(mutationStep).toMatchObject({
+      id: "mutation",
+      name: "Run security mutation suite",
+      run: "npm run test:mutation:security",
+    });
+    expect(mutationStep["continue-on-error"]).toBe(true);
+    expect(reportStep.if).toBe("${{ steps.mutation.outcome == 'failure' }}");
+    expect(reportStep.run).toContain("gh issue");
+    expect(failureStep.if).toBe(reportStep.if);
+    expect(failureStep.run).toContain("exit 1");
   });
 
   it("checks out complete history before validating immutable editor evidence", () => {
@@ -266,9 +292,18 @@ describe("dev quality workflows", () => {
     // ci.yml cannot silently change what each iteration asserts.
     for (const job of ["coverage-packages", "coverage-ui", "coverage-scripts"]) {
       const block = ci.match(new RegExp(` {2}${job}:\\n[\\s\\S]*?(?=\\n {2}\\S)`, "u"))?.[0];
+      const steps = ciWorkflow.jobs[job].steps;
+      const sandboxAt = steps.findIndex(
+        (step) => step.uses === "./.github/actions/setup-sandbox-isolation",
+      );
+      const provisionAt = steps.findIndex((step) => step.run === "npm run provision:usearch");
+      const measureAt = steps.findIndex((step) => step.run?.startsWith("npm run test:coverage:"));
       expect(block, `${job} job block must exist`).toBeDefined();
       expect(block).toContain("uses: ./.github/actions/setup-sandbox-isolation");
       expect(block).toContain("npm run provision:usearch");
+      expect(sandboxAt).toBeGreaterThan(-1);
+      expect(provisionAt).toBeGreaterThan(sandboxAt);
+      expect(measureAt).toBeGreaterThan(provisionAt);
     }
     // The composite action itself must still install bubblewrap AND relax AppArmor — this pin
     // moved from the caller to the callee, and losing it defeats the whole isolation proof.

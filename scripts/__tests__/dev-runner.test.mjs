@@ -305,10 +305,88 @@ describe("Next.js respawn preflight", () => {
     expect(removeLock).not.toHaveBeenCalled();
   });
 
+  it("keeps a live lock owned by a different Next.js port", async () => {
+    const removeLock = vi.fn(async () => undefined);
+
+    const result = await preflightNextRespawn(3000, "/tmp/next-lock", {
+      checkPortFree: async () => true,
+      lockExists: async () => true,
+      processIsAlive: () => true,
+      readLock: async () => ({ pid: 12345, port: 3001 }),
+      removeLock,
+    });
+
+    expect(result).toEqual({ nextPort: 3000, reselected: false });
+    expect(removeLock).not.toHaveBeenCalled();
+  });
+
+  it("fails closed for an unreadable lock instead of deleting unknown ownership", async () => {
+    const removeLock = vi.fn(async () => undefined);
+
+    await expect(
+      preflightNextRespawn(3000, "/tmp/next-lock", {
+        checkPortFree: async () => true,
+        lockExists: async () => true,
+        readLock: async () => undefined,
+        removeLock,
+      }),
+    ).rejects.toThrow("Next.js lock ownership could not be validated");
+    expect(removeLock).not.toHaveBeenCalled();
+  });
+
+  it("refuses stale-lock removal when the validated lock has been replaced", async () => {
+    const removeLock = vi.fn(async () => undefined);
+    const readLock = vi
+      .fn()
+      .mockResolvedValueOnce({ pid: 12345, port: 3000 })
+      .mockResolvedValueOnce({ pid: 67890, port: 3000 });
+
+    await expect(
+      preflightNextRespawn(3000, "/tmp/next-lock", {
+        checkPortFree: async () => true,
+        lockExists: async () => true,
+        processIsAlive: () => false,
+        readLock,
+        removeLock,
+      }),
+    ).rejects.toThrow("Next.js lock changed before stale-lock removal");
+    expect(removeLock).not.toHaveBeenCalled();
+  });
+
+  it("treats PID zero as stale without signalling the process group", async () => {
+    const removeLock = vi.fn(async () => undefined);
+
+    await preflightNextRespawn(3000, "/tmp/next-lock", {
+      checkPortFree: async () => true,
+      lockExists: async () => true,
+      readLock: async () => ({ pid: 0, port: 3000 }),
+      removeLock,
+    });
+
+    expect(removeLock).toHaveBeenCalledWith("/tmp/next-lock");
+  });
+
   it("fails closed after one hundred unavailable child-port candidates", async () => {
     await expect(findAvailableNextPort(3000, async () => false)).rejects.toThrow(
       "No free Next.js port found at or above 3000",
     );
+  });
+
+  it("does not probe invalid TCP ports", async () => {
+    const checkPortFree = vi.fn(async () => true);
+
+    await expect(findAvailableNextPort(65_536, checkPortFree)).rejects.toThrow(
+      "Invalid Next.js port: 65536",
+    );
+    expect(checkPortFree).not.toHaveBeenCalled();
+  });
+
+  it("probes the valid upper TCP boundary once", async () => {
+    const checkPortFree = vi.fn(async () => true);
+
+    await expect(findAvailableNextPort(65_535, checkPortFree)).resolves.toBe(65_535);
+    expect(checkPortFree).toHaveBeenCalledTimes(1);
+    expect(checkPortFree).toHaveBeenCalledWith("127.0.0.1", 65_535);
   });
 });
 
@@ -351,6 +429,17 @@ describe("readNextLockInfo", () => {
     writeFileSync(lockPath, JSON.stringify({ pid: "12345", port: 3000 }), "utf8");
     const result = await readNextLockInfo(lockPath);
     expect(result).toBeUndefined();
+  });
+
+  it.each([
+    { pid: 0, port: 3000 },
+    { pid: 12345, port: 0 },
+    { pid: 12345, port: 65_536 },
+  ])("returns undefined for invalid lock ownership %j", async (content) => {
+    const lockPath = join(tmpDir, "lock");
+    writeFileSync(lockPath, JSON.stringify(content), "utf8");
+
+    await expect(readNextLockInfo(lockPath)).resolves.toBeUndefined();
   });
 
   it("returns the parsed object when the lock file contains valid Next.js dev-server JSON", async () => {

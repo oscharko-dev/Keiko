@@ -1091,6 +1091,7 @@ jobs:
 
   ui:
     name: ui
+    timeout-minutes: 45
     runs-on: ubuntu-latest
     permissions:
       attestations: write

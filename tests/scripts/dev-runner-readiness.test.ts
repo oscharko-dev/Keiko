@@ -255,6 +255,8 @@ describe("scripts/dev-runner.mjs readiness gate", () => {
           KEIKO_DEV_UI_PORT: String(publicPort),
           KEIKO_DEV_BFF_PORT: String(bffPort),
           KEIKO_DEV_NEXT_PORT: String(nextPort),
+          // Keep the respawn window open long enough to deterministically claim the old port.
+          KEIKO_DEV_RESTART_DELAY_MS: "10_000",
           KEIKO_DEV_PID_FILE: stateFile,
           KEIKO_DEV_TEST_SKIP_PACKAGE_WATCH: "1",
           KEIKO_STATE_DIR: stateDir,

@@ -68,6 +68,21 @@ jobs:
 `,
 };
 
+const REQUIRED_PULL_REQUEST_LANE = {
+  name: "required-pull-request.yml",
+  text: `
+on:
+  pull_request:
+jobs:
+  e2e:
+    if: \${{ github.event_name == 'pull_request' && github.base_ref == 'dev' }}
+    steps:
+      - if: \${{ github.event_name == 'pull_request' }}
+        name: Run the required suite
+        run: npm run test:e2e:required
+`,
+};
+
 function problemsFor(scripts, workflowText, baseline = []) {
   return checkE2eSuiteWiring({ scripts, workflowText, baseline });
 }
@@ -198,6 +213,131 @@ describe("e2e suite wiring gate (#2629)", () => {
     });
     expect(result.problems).toEqual([
       "test:e2e:nonblocking protection downgraded from required-per-pr to scheduled-nonblocking. " +
+        "Update its lane or the baseline through an explicit reviewed change.",
+    ]);
+  });
+
+  // A workflow's PR trigger is insufficient on its own: the exact job and step that run the suite
+  // must execute for a dev-targeted pull request. The parser intentionally models only this small,
+  // auditable condition language and treats every other expression as non-blocking.
+  it("recognizes a direct suite run guarded for the required pull-request context", () => {
+    expect(suiteProtectionClass("test:e2e:required", [REQUIRED_PULL_REQUEST_LANE])).toBe(
+      "required-per-pr",
+    );
+  });
+
+  it.each([
+    [
+      "a condition separated from run by a comment",
+      `
+on:
+  pull_request:
+jobs:
+  e2e:
+    steps:
+      - if: github.event_name == 'push'
+        # This comment must not hide the step condition from the classifier.
+        run: npm run test:e2e:unsafe
+`,
+    ],
+    [
+      "a condition before the step name",
+      `
+on:
+  pull_request:
+jobs:
+  e2e:
+    steps:
+      - if: github.event_name == 'push'
+        name: Run conditionally
+        run: npm run test:e2e:unsafe
+`,
+    ],
+    [
+      "a job-level condition",
+      `
+on:
+  pull_request:
+jobs:
+  e2e:
+    if: github.event_name == 'push'
+    steps:
+      - run: npm run test:e2e:unsafe
+`,
+    ],
+    [
+      "a false pull-request/base-ref OR condition",
+      `
+on:
+  pull_request:
+jobs:
+  e2e:
+    steps:
+      - if: \${{ github.event_name != 'pull_request' || github.base_ref != 'dev' }}
+        run: npm run test:e2e:unsafe
+`,
+    ],
+    [
+      "an expression the classifier cannot prove",
+      `
+on:
+  pull_request:
+jobs:
+  e2e:
+    steps:
+      - if: inputs.run_e2e
+        run: npm run test:e2e:unsafe
+`,
+    ],
+  ])("does not classify %s as required per PR", (_label, text) => {
+    expect(suiteProtectionClass("test:e2e:unsafe", [{ name: "unsafe.yml", text }])).toBe(
+      "event-nonblocking",
+    );
+  });
+
+  it("does not infer a required direct run from a matrix suite item", () => {
+    const matrixOnPullRequest = {
+      name: "matrix-on-pr.yml",
+      text: `
+on:
+  pull_request:
+jobs:
+  e2e:
+    strategy:
+      matrix:
+        suite:
+          - test:e2e:matrix-only
+    steps:
+      - run: npm run \${{ matrix.suite }}
+`,
+    };
+    expect(suiteProtectionClass("test:e2e:matrix-only", [matrixOnPullRequest])).toBe(
+      "event-nonblocking",
+    );
+  });
+
+  it("ratchets a formerly required suite down when its direct PR execution is no longer provable", () => {
+    const result = checkE2eProtectionBaseline({
+      scripts: ["test:e2e:unsafe"],
+      workflows: [
+        {
+          name: "unsafe.yml",
+          text: `
+on:
+  pull_request:
+jobs:
+  e2e:
+    steps:
+      - if: github.event_name == 'push'
+        name: Run conditionally
+        run: npm run test:e2e:unsafe
+`,
+        },
+      ],
+      protectionBaseline: { "test:e2e:unsafe": "required-per-pr" },
+    });
+    expect(result.problems).toEqual([
+      "test:e2e:unsafe protection downgraded from required-per-pr to event-nonblocking. " +
         "Update its lane or the baseline through an explicit reviewed change.",
     ]);
   });

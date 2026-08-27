@@ -275,6 +275,11 @@ describe("M7 keybinding, snippet, and AI activation contracts", () => {
   it("keeps a closed command registry and rejects reserved, malformed, unknown, and colliding bindings", () => {
     expect(EDITOR_M7_COMMAND_REGISTRY.map((entry) => entry.id)).toContain("editor.save");
     expect(
+      EDITOR_M7_COMMAND_REGISTRY.find((entry) => entry.id === "open-editor-settings"),
+    ).toMatchObject({
+      contexts: ["settings", "editor"],
+    });
+    expect(
       validateEditorM7Keybinding({
         commandId: "quick-access.files",
         binding: "CtrlOrMeta+Shift+O",

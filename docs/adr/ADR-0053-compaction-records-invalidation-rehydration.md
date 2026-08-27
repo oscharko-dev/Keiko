@@ -79,8 +79,8 @@ before PR2 is merged.
 > validator requires `sourceRef` OR `inferred===true` (an unsourced, non-inferred fact is rejected) —
 > every factual claim points to a source or is explicitly an inference. (3) `ContextUserConstraint`'s
 > field is `statement` (not `constraint`). (4) `ContextPreservedFact` and `ContextAssumption` carry
-> mutually-exclusive `?: never` discriminants (`rationale`/`confidence` on the fact; `sourceRef`/
-> `inferred` on the assumption), so the two record types remain structurally separate. The shipped
+> mutually-exclusive `?: never` discriminants (`rationale`/`confidence` on the assumption; `sourceRef`/
+> `inferred` on the fact), so the two record types remain structurally separate. The shipped
 > `inferred` marker nevertheless makes a `ContextPreservedFact` non-verbatim; every fact-labeled
 > consumer therefore uses the shared `partitionContextPreservedFacts` projection, which routes only
 > `inferred !== true` entries to a fact label and labels the remaining entries as inferred. The flag is

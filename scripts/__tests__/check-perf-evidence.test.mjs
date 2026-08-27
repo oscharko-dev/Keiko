@@ -1997,6 +1997,22 @@ describe("evaluateFreshness — pull-request mode (source freshness owned by the
     );
   });
 
+  it("rejects stale workspace evidence even when no toolchain path changed in the diff", () => {
+    const currentDigest = "e".repeat(64);
+    const failures = evaluateWorkspaceEvidenceFreshness(
+      { ...workspaceEvidence(), measurementHarnessSha256: MEASUREMENT_HARNESS_SHA_256 },
+      {
+        computeMeasurementHarnessSha256: () => currentDigest,
+        toolchainTouched: false,
+      },
+    ).failures;
+
+    expect(failures).toContain(
+      `measurementHarnessSha256 ${MEASUREMENT_HARNESS_SHA_256} != current committed ${currentDigest} ` +
+        "(stale workspace measurement toolchain evidence)",
+    );
+  });
+
   // The other half of the same invariant: a diff that leaves the toolchain alone cannot be the
   // reason evidence was measured with a different ruler, and must not be failed for it. Without
   // this, one pull request editing a D12_MEASUREMENT_TOOLCHAIN_PATHS member turns the required

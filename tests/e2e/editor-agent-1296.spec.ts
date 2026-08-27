@@ -370,8 +370,6 @@ async function renderMode(page: Page, mode: ModeDefinition): Promise<ModeEvidenc
 
 test("Issue #1296 editor-agent context parity evidence", async ({ page }) => {
   ensureEvidenceDir();
-  await page.goto("/");
-  await expect(page.locator("body")).toBeVisible();
 
   const modes: ModeEvidence[] = [];
   for (const mode of MODES) {

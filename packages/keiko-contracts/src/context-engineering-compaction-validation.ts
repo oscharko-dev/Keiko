@@ -148,7 +148,11 @@ function collectPreservedFact(value: unknown, prefix: string): string[] {
     return [`${prefix} invalid`];
   }
   const reasons: string[] = [];
-  pushIf(reasons, !isNonEmptyTrimmed(value.statement), `${prefix}.statement invalid`);
+  pushIf(
+    reasons,
+    !isNonEmptyTrimmed(value.statement) || /[\r\n]/u.test(value.statement),
+    `${prefix}.statement invalid`,
+  );
   pushIf(
     reasons,
     value.inferred !== undefined && typeof value.inferred !== "boolean",

@@ -105,7 +105,7 @@ describe("Issue #12 docs drift", () => {
     expect(ciAggregate).toContain("      - core-quality");
     expect(ciAggregate).toContain('if [ "$result" != "success" ]');
     expect(sdkIndex).toMatch(
-      /^import\s+\{\s*KEIKO_PRODUCT_VERSION\s*\}\s+from\s+"@oscharko-dev\/keiko-contracts";$/m,
+      /^import\s+\{\s*KEIKO_PRODUCT_VERSION\s*\}\s+from\s+"@oscharko-dev\/keiko-contracts\/runtime\/version";$/m,
     );
     expect(sdkIndex).toMatch(
       /^export\s+const\s+SDK_VERSION(?:\s*:\s*string)?\s*=\s*KEIKO_PRODUCT_VERSION;$/m,

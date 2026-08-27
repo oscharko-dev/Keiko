@@ -34,7 +34,7 @@ const contribution = buildCodeTaskAcceptanceContribution({
 });
 
 const contracts = await import(
-  pathToFileURL(resolve("packages/keiko-contracts/dist/index.js")).href
+  pathToFileURL(resolve("packages/keiko-contracts/dist/code-task-acceptance.js")).href
 );
 const validated = contracts.validateCodeTaskAcceptanceContribution(contribution);
 if (!validated.ok) throw new Error(validated.errors.join("; "));

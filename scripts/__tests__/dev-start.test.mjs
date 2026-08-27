@@ -433,7 +433,7 @@ describe("dev-start app-session pairing launcher", () => {
     const url = await pairedDevBrowserUrl(secret, "http://localhost:1983");
     expect(url.startsWith("http://localhost:1983/#keiko-app-session=")).toBe(true);
     const { decodeCodingAppSessionPairingFragment } =
-      await import("../../packages/keiko-contracts/dist/index.js");
+      await import("../../packages/keiko-contracts/dist/coding-app-session.js");
     const { computeLauncherPairingClaim } =
       await import("../../packages/keiko-server/dist/index.js");
     const attestation = decodeCodingAppSessionPairingFragment(
