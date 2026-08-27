@@ -7,6 +7,7 @@ import {
   stopOrphanedChildren,
   stopStaleRunner,
   trackedChildPids,
+  trackedListeningPorts,
   waitForPidsToExit,
 } from "../dev-stop.mjs";
 
@@ -190,5 +191,67 @@ describe("dev-stop tracked process cleanup", () => {
     ).resolves.toBe(0);
     expect(stopLive).toHaveBeenCalledTimes(expectedAlive ? 1 : 0);
     expect(stopStale).toHaveBeenCalledTimes(expectedAlive ? 0 : 1);
+  });
+});
+
+
+// KEIKO-0734: report "stopped cleanly" ONLY when the tracked BFF/Next ports are actually
+// released. An orphaned dev-bff.mjs child spawned via `node --watch` can keep the BFF port
+// bound even after the tracked pids are gone; the pre-fix path would then declare the runner
+// stopped and let the next `npm run dev:start` immediately collide.
+describe("dev-stop port release check (KEIKO-0734)", () => {
+  it("collects tracked listening ports from the pid file state", () => {
+    expect(trackedListeningPorts({ publicPort: 1983, bffPort: 3005, nextPort: 3006 })).toEqual([
+      1983, 3005, 3006,
+    ]);
+    expect(trackedListeningPorts({ publicPort: "abc", bffPort: null, nextPort: -1 })).toEqual([]);
+    expect(trackedListeningPorts(undefined)).toEqual([]);
+  });
+
+  it("stopLiveRunner returns 1 when a tracked port is still bound after every pid has exited", async () => {
+    const alive = () => false;
+    const wait = vi.fn().mockResolvedValue(undefined);
+    const errors = [];
+    const logs = [];
+    const removePidFile = vi.fn();
+    const result = await stopLiveRunner(
+      { runnerPid: 10, children: [], publicPort: 1983, bffPort: 3005 },
+      false,
+      {
+        killPid: vi.fn(),
+        // waitForPidsToExit resolves empty (all pids dead).
+        waitForPidsToExit: vi.fn().mockResolvedValue([]),
+        // But the port check reports 3005 is still bound.
+        checkPortsReleased: vi.fn().mockResolvedValue([3005]),
+        removePidFile,
+        log: (message) => logs.push(message),
+        error: (message) => errors.push(message),
+        sleep: wait,
+        isAlive: alive,
+      },
+    );
+    expect(result).toBe(1);
+    expect(removePidFile).not.toHaveBeenCalled();
+    expect(errors.join("\n")).toMatch(/still bound.*3005/u);
+  });
+
+  it("stopStaleRunner returns 1 when a tracked port is still bound after tracked children have exited", async () => {
+    const errors = [];
+    const removePidFile = vi.fn();
+    const result = await stopStaleRunner(
+      { children: [11, 12], publicPort: 1983 },
+      false,
+      {
+        killPid: vi.fn(),
+        stopOrphanedChildren: vi.fn().mockResolvedValue([]),
+        checkPortsReleased: vi.fn().mockResolvedValue([1983]),
+        removePidFile,
+        log: () => {},
+        error: (message) => errors.push(message),
+      },
+    );
+    expect(result).toBe(1);
+    expect(removePidFile).not.toHaveBeenCalled();
+    expect(errors.join("\n")).toMatch(/still bound.*1983/u);
   });
 });

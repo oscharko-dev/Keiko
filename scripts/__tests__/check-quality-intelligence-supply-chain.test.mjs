@@ -1098,6 +1098,42 @@ describe("findForbiddenImportHits — dynamic template-literal evasion", () => {
     );
     expect(findForbiddenImportHits(listScannableSourceFiles(root))).toEqual([]);
   });
+
+  // KEIKO-0900: prior to this fix the evasion detector only caught the template-literal case.
+  // A string-concatenation form (`import("@oscharko-dev/" + n)`) and an array-join form
+  // (`import(["@oscharko-dev", n].join("/"))`) both slipped past. The new heuristic flags any
+  // dynamic import()/require() whose argument is NOT a plain literal AND the same file also
+  // carries a token capable of assembling to a forbidden namespace.
+  it("flags a string-concatenation obfuscation of the forbidden package name (KEIKO-0900)", () => {
+    writeFile(
+      root,
+      "packages/keiko-contracts/src/concat.ts",
+      'const n = "test-intelligence";\nconst m = await import("@oscharko-dev/" + n);\n',
+    );
+    const hits = findForbiddenImportHits(listScannableSourceFiles(root));
+    expect(hits.some((h) => h.pattern.includes("non-literal argument"))).toBe(true);
+  });
+
+  it("flags an array-join obfuscation of the forbidden package name (KEIKO-0900)", () => {
+    writeFile(
+      root,
+      "packages/keiko-contracts/src/array-join.ts",
+      'const n = "test-intelligence";\nconst m = await import(["@oscharko-dev", n].join("/"));\n',
+    );
+    const hits = findForbiddenImportHits(listScannableSourceFiles(root));
+    expect(hits.some((h) => h.pattern.includes("non-literal argument"))).toBe(true);
+  });
+
+  it("does NOT flag a routine non-literal dynamic import unrelated to the forbidden namespace (KEIKO-0900)", () => {
+    // The heuristic is gated on the file also containing a token capable of assembling to a
+    // forbidden namespace, so an ordinary dynamic import elsewhere stays clean.
+    writeFile(
+      root,
+      "packages/keiko-contracts/src/routine-dynamic.ts",
+      'const path = process.env.X;\nconst m = await import(path);\n',
+    );
+    expect(findForbiddenImportHits(listScannableSourceFiles(root))).toEqual([]);
+  });
 });
 
 // ---------------------------------------------------------------------------

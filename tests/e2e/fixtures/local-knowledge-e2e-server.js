@@ -121,12 +121,40 @@ async function handleRequest(req, res) {
   }
 }
 
-const port = Number(process.env.KEIKO_LK_E2E_MOCK_GATEWAY_PORT ?? DEFAULT_PORT);
+// KEIKO-0999: name the offending env var and its observed value in the error message so a
+// misconfigured invocation (`KEIKO_LK_E2E_MOCK_GATEWAY_PORT=abc node …`) tells the operator
+// which variable to fix, rather than surfacing Node's generic ERR_SOCKET_BAD_PORT.
+function resolveGatewayPort(raw) {
+  if (raw === undefined) return DEFAULT_PORT;
+  const parsed = Number(raw);
+  if (!Number.isInteger(parsed) || parsed < 0 || parsed > 65_535) {
+    throw new Error(
+      `KEIKO_LK_E2E_MOCK_GATEWAY_PORT must be an integer in [0, 65535]; received ${JSON.stringify(raw)}`,
+    );
+  }
+  return parsed;
+}
+const port = resolveGatewayPort(process.env.KEIKO_LK_E2E_MOCK_GATEWAY_PORT);
 const server = createServer((req, res) => {
   void handleRequest(req, res);
 });
-await new Promise((resolve) => {
-  server.listen(port, "127.0.0.1", resolve);
+// KEIKO-0748: a bind failure (EADDRINUSE, EACCES) used to reach the top-level as an uncaught
+// exception with no fixture context. Wire a one-shot 'error' listener before listen so a bind
+// failure rejects the awaited promise with a message that names the port and the fixture.
+await new Promise((resolve, reject) => {
+  const onListenError = (listenError) => {
+    reject(
+      new Error(
+        `local-knowledge-e2e-server: bind failed on 127.0.0.1:${String(port)} — ${listenError instanceof Error ? listenError.message : String(listenError)}`,
+        { cause: listenError },
+      ),
+    );
+  };
+  server.once("error", onListenError);
+  server.listen(port, "127.0.0.1", () => {
+    server.off("error", onListenError);
+    resolve();
+  });
 });
 
 if (process.env.KEIKO_INITIAL_PROJECT_PATH !== undefined) {
@@ -138,18 +166,28 @@ const child = spawn(process.execPath, ["scripts/dev-runner.mjs"], {
   stdio: "inherit",
 });
 
-function shutdown(signal) {
-  child.kill(signal);
+// KEIKO-0700: single-shot shutdown guard. The pre-fix code let both the signal handler and the
+// child's 'exit' handler run their own close+exit sequences, so a signal received AFTER the
+// child had already exited would call server.close() twice, double-count the exit code, and
+// leak the idle keep-alive drain. Track the first path to run and short-circuit the second.
+// closeAllConnections() before close() drops any idle keep-alive connection so an idle
+// `curl --http1.1` client cannot delay process exit for the keep-alive timeout.
+let shutdownStarted = false;
+function shutdown(reason, exitCode) {
+  if (shutdownStarted) return;
+  shutdownStarted = true;
+  if (reason === "signal") child.kill(exitCode.signal);
+  server.closeAllConnections?.();
   server.close(() => {
-    process.exit(signal === "SIGTERM" ? 0 : 130);
+    if (reason === "child-exit" && exitCode.signal !== null) {
+      process.kill(process.pid, exitCode.signal);
+    }
+    process.exit(exitCode.code);
   });
 }
 
-process.on("SIGTERM", () => shutdown("SIGTERM"));
-process.on("SIGINT", () => shutdown("SIGINT"));
-child.on("exit", (code, signal) => {
-  server.close(() => {
-    if (signal !== null) process.kill(process.pid, signal);
-    process.exit(code ?? 1);
-  });
-});
+process.on("SIGTERM", () => shutdown("signal", { signal: "SIGTERM", code: 0 }));
+process.on("SIGINT", () => shutdown("signal", { signal: "SIGINT", code: 130 }));
+child.on("exit", (code, signal) =>
+  shutdown("child-exit", { code: code ?? 1, signal }),
+);

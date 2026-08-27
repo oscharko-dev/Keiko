@@ -331,6 +331,45 @@ function validate479EvidenceLists(manifest, relPath) {
   return failures;
 }
 
+// KEIKO-1011: `manifest.verificationCommands` lists the exact npm scripts a reviewer is
+// expected to run to reproduce the evidence. Nothing pinned that these strings actually name
+// scripts that exist in package.json — a rename of `test:e2e:git-status-1386` used to land
+// silently, leaving reviewers to discover the missing script only when they tried to run it.
+// This helper cross-references every listed entry against package.json's scripts object and
+// fails the gate for any absent name. Bare `test` is always valid (that's `npm test` itself).
+function validate479VerificationCommands(manifest, relPath) {
+  const failures = [];
+  const commands = manifest.verificationCommands;
+  if (!Array.isArray(commands)) return failures;
+  const pkg = readJson(REPO_ROOT, "package.json");
+  const scripts = pkg?.scripts ?? {};
+  const scriptNameOf = (entry) => {
+    if (typeof entry !== "string") return undefined;
+    const trimmed = entry.trim();
+    // Strip `npm run ` and `npm ` prefixes and any trailing flags (` -- --something`).
+    const withoutRun = trimmed.replace(/^npm\s+(?:run\s+)?/u, "");
+    const beforeFlag = withoutRun.split(/\s+--?/u)[0]?.trim();
+    return beforeFlag && beforeFlag.length > 0 ? beforeFlag : undefined;
+  };
+  for (const entry of commands) {
+    const name = scriptNameOf(entry);
+    if (name === undefined) {
+      failures.push(`${relPath}: verificationCommands entry is not a string: ${JSON.stringify(entry)}`);
+      continue;
+    }
+    // Bare `npm test` corresponds to `scripts.test` if declared; treat bare `test` (matches the
+    // package.json convention) as always valid because npm ships an implicit `test` behaviour
+    // when the script is absent — but a lint-oriented gate should still flag drift, so we do
+    // require the key to exist in scripts.
+    if (!(name in scripts)) {
+      failures.push(
+        `${relPath}: verificationCommands entry names an npm script that does not exist: ${JSON.stringify(entry)} (resolved to ${JSON.stringify(name)})`,
+      );
+    }
+  }
+  return failures;
+}
+
 function validate479Manifest(root) {
   const relPath = "docs/git-delivery/evidence/479/manifest.json";
   if (!existsFile(root, relPath)) {
@@ -342,6 +381,7 @@ function validate479Manifest(root) {
     ...validate479Identity(manifest, relPath),
     ...validate479Statuses(manifest, relPath),
     ...validate479EvidenceLists(manifest, relPath),
+    ...validate479VerificationCommands(manifest, relPath),
   ];
 }
 

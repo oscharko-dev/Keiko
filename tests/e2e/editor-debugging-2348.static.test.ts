@@ -28,6 +28,39 @@ describe("#2348 D12 cap evidence harness", () => {
     expect(adapter).toContain("CAP_GRAPH_NODE_COUNT = 1_000");
   });
 
+  // KEIKO-1017: the Content-Length header regex must be hoisted to a module constant so the
+  // drain() loop does not re-evaluate the literal on every message.
+  it("hoists the Content-Length header regex out of the drain loop (KEIKO-1017)", () => {
+    const adapter = readFileSync(ADAPTER_PATH, "utf8");
+    expect(adapter).toContain("CONTENT_LENGTH_HEADER");
+    // Two occurrences: the module-level `const` declaration + the drain() consumer.
+    const references = adapter.match(/CONTENT_LENGTH_HEADER/g) ?? [];
+    expect(references.length).toBe(2);
+  });
+
+  // KEIKO-0990/0991/0992: the fixture must write diagnostics to stderr on protocol errors and
+  // must register `error` handlers on both the accepted connection and the listening server so
+  // an I/O or listen() failure does not crash the fixture with no diagnostic.
+  it("writes a stderr diagnostic on malformed Content-Length before exiting (KEIKO-0990)", () => {
+    const adapter = readFileSync(ADAPTER_PATH, "utf8");
+    expect(adapter).toMatch(/process\.stderr\.write[\s\S]*malformed Content-Length header/u);
+  });
+
+  it("writes a stderr diagnostic on JSON parse error before exiting (KEIKO-0990)", () => {
+    const adapter = readFileSync(ADAPTER_PATH, "utf8");
+    expect(adapter).toMatch(/process\.stderr\.write[\s\S]*JSON parse error/u);
+  });
+
+  it("registers an error handler on the accepted DAP connection (KEIKO-0991)", () => {
+    const adapter = readFileSync(ADAPTER_PATH, "utf8");
+    expect(adapter).toContain('connection.on("error"');
+  });
+
+  it("registers an error handler on the listening server (KEIKO-0992)", () => {
+    const adapter = readFileSync(ADAPTER_PATH, "utf8");
+    expect(adapter).toContain('server.on("error"');
+  });
+
   it("keeps cap artifacts opt-in, closed, and bound to both mandatory scenarios", () => {
     const spec = readFileSync(SPEC_PATH, "utf8");
 

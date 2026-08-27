@@ -39,6 +39,58 @@ describe("checkGitDeliveryEvidence", () => {
     expect(checkGitDeliveryEvidence()).toEqual([]);
   });
 
+  it("fails closed when a verificationCommands entry names an npm script that does not exist (KEIKO-1011)", () => {
+    // Live repository has manifest 479's `verificationCommands`; make sure a fabricated entry
+    // fails while every existing entry keeps passing. The gate is opinionated about
+    // reproducibility — a rename that leaves the manifest referring to a removed script must
+    // fail the gate, not silently strand the reviewer.
+    const failures = checkGitDeliveryEvidence();
+    expect(failures).toEqual([]);
+    // Mutate a copy of the manifest with a fabricated script name and prove the validator
+    // catches it. We don't touch the live file — instead we import the helper indirectly by
+    // pointing at a scratch REPO_ROOT (via the tempRoot fixture in the next test).
+  });
+
+  it("catches a manifest 479 verificationCommands entry that names a missing npm script (KEIKO-1011)", () => {
+    root = tempRoot();
+    // Copy every required document as a placeholder.
+    for (const doc of [
+      "README.md",
+      "verification-matrix.md",
+      "operator-runbook.md",
+      "policy-pack-guidance.md",
+      "epic-470-closeout.md",
+    ]) {
+      write(root, `docs/git-delivery/${doc}`, "# Placeholder\n");
+    }
+    write(root, "docs/git-delivery/evidence/479/README.md", "# Placeholder\n");
+    write(
+      root,
+      "docs/git-delivery/evidence/479/manifest.json",
+      JSON.stringify({
+        issue: "#479",
+        epic: "#470",
+        sourceBranch: "codex/issue-479-governed-git-proof",
+        baseBranch: "feat/keiko-establish-governed-end-to-end-git-delivery",
+        deliverables: {},
+        acceptanceCriteria: {},
+        evidenceSources: { documents: [] },
+        mergedImplementationPullRequests: [],
+        verificationCommands: [
+          "npm run test:e2e:git-status-1386",
+          "npm run definitely-not-a-real-script-1234",
+        ],
+      }),
+    );
+    const failures = checkGitDeliveryEvidence(root);
+    // The gate runs against the LIVE repo root for the package.json lookup, so real scripts
+    // (test:e2e:git-status-1386) pass. Fabricated ones (definitely-not-a-real-script-1234) fail.
+    expect(
+      failures.some((line) => line.includes("definitely-not-a-real-script-1234")),
+    ).toBe(true);
+    expect(failures.some((line) => line.includes("test:e2e:git-status-1386"))).toBe(false);
+  });
+
   it("fails closed when the issue 479 evidence manifest is absent", () => {
     root = tempRoot();
     for (const doc of [

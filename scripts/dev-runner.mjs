@@ -435,6 +435,43 @@ export function normalizeUpstreamLocation(
   }
 }
 
+// KEIKO-0607: the documented default dev workflow (`npm run dev:start`) served the entire app
+// shell (every response the dev-runner routed to the Next.js dev process) with zero CSP or
+// security headers — only the BFF-routed /api/* traffic was hardened by packages/keiko-server/
+// src/headers.ts. That left the dev-lane completely open to reflected-XSS, clickjacking, and
+// mixed-origin content, and it silently drifted farther from production every time a Studio
+// page was edited without live coverage. Mirror the production baseline on every proxied
+// response — including the Next.js-routed ones. The CSP is deliberately relaxed for the two
+// directives Next.js Fast Refresh/HMR requires; every other production header stays as-is.
+//
+// The relaxations are scoped to the specific directives HMR needs, NOT the whole policy:
+//   `script-src 'self' 'unsafe-eval' 'unsafe-inline'` — Fast Refresh injects HMR runtime
+//     modules and inline error overlays.
+//   `style-src 'self' 'unsafe-inline'` — Fast Refresh writes style tags for CSS module updates.
+//   `connect-src 'self' ws: wss:` — the HMR web socket used to signal a rebuild.
+//   `img-src 'self' data: blob:` — Studio and Fast Refresh both source images from data: URIs.
+// Every other production directive (`default-src 'self'`, `object-src 'none'`, `frame-ancestors 'none'`,
+// `base-uri 'self'`, `form-action 'self'`) is kept unchanged.
+const DEV_SECURITY_HEADERS = Object.freeze({
+  "content-security-policy":
+    "default-src 'self'; " +
+    "script-src 'self' 'unsafe-eval' 'unsafe-inline'; " +
+    "style-src 'self' 'unsafe-inline'; " +
+    "connect-src 'self' ws: wss:; " +
+    "img-src 'self' data: blob:; " +
+    "font-src 'self' data:; " +
+    "object-src 'none'; " +
+    "base-uri 'self'; " +
+    "form-action 'self'; " +
+    "frame-ancestors 'none'",
+  "x-content-type-options": "nosniff",
+  "x-frame-options": "DENY",
+  "referrer-policy": "no-referrer",
+  "cross-origin-opener-policy": "same-origin",
+  "cross-origin-resource-policy": "same-origin",
+  "permissions-policy": "camera=(), geolocation=(), microphone=(), payment=(), usb=()",
+});
+
 export function forwardedUpstreamHeaders(upstreamHeaders, targetPort) {
   const safe = copyHeadersSafely(upstreamHeaders);
   if ("location" in safe) {
@@ -444,6 +481,12 @@ export function forwardedUpstreamHeaders(upstreamHeaders, targetPort) {
     } else {
       safe.location = normalized;
     }
+  }
+  // KEIKO-0607: apply the dev security header baseline to every proxied response, overriding
+  // any upstream-supplied variant (the BFF may set its own; the dev-runner is the last edge
+  // that touches the byte stream on its way back to the browser, so it owns the final say).
+  for (const [name, value] of Object.entries(DEV_SECURITY_HEADERS)) {
+    safe[name] = value;
   }
   return safe;
 }

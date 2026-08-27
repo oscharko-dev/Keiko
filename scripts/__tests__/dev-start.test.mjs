@@ -466,3 +466,70 @@ describe("dev-start app-session pairing launcher", () => {
     );
   });
 });
+
+// KEIKO-0542: the dev-config seed used to copy only the config file. A sibling `credentials/`
+// directory next to a seed candidate (mirroring the credentialVault convention on-disk) was
+// silently left behind, so a well-configured seed ended up as "not configured" in the running
+// gateway with no diagnostic surfaced anywhere. Extend ensureDevGatewayConfig so a
+// `credentials/` sibling is copied alongside the seed and the outcome is announced through the
+// existing notice channel.
+describe("dev-start gateway config credentials seed (KEIKO-0542)", () => {
+  it("copies a sibling credentials/ directory when the seed has one", async () => {
+    const { ensureDevGatewayConfig } = await import("../dev-start.mjs");
+    // The seed candidates ensureDevGatewayConfig checks are hardcoded from module scope; the
+    // fileExists seam names them for us. We approve one seed candidate (the first) and its
+    // credentials/ sibling; every other path returns false (including the dev-config file, so
+    // the seed path is entered).
+    const copyCalls = [];
+    const notices = [];
+    let approvedSeed;
+    const seams = {
+      fileExists: (path) => {
+        // Approve the first seed candidate (repoRoot/.keiko/ui/keiko.config.json) whose exact
+        // form we cannot know here — approve the first ".keiko/ui/keiko.config.json" path.
+        if (typeof path === "string" && path.endsWith("/.keiko/ui/keiko.config.json") && !path.includes("/ui/ui/")) {
+          approvedSeed = path;
+          return true;
+        }
+        return false;
+      },
+      directoryExists: (path) =>
+        approvedSeed !== undefined && path === approvedSeed.replace(/keiko\.config\.json$/u, "credentials"),
+      mkdir: () => {},
+      copyFile: (source, target) => copyCalls.push({ kind: "file", source, target }),
+      copyDirectory: (source, target) =>
+        copyCalls.push({ kind: "directory", source, target }),
+      chmod: () => {},
+      notify: (message) => notices.push(message),
+      env: {},
+    };
+    ensureDevGatewayConfig(seams);
+    expect(copyCalls.some((call) => call.kind === "directory" && /credentials$/u.test(call.target))).toBe(
+      true,
+    );
+    expect(notices.join("\n")).toMatch(/seeded credentials\/ from/u);
+  });
+
+  it("surfaces a distinct notice when the seed has no credentials/ directory", async () => {
+    const { ensureDevGatewayConfig } = await import("../dev-start.mjs");
+    const notices = [];
+    const seams = {
+      // Approve the first .keiko/ui/keiko.config.json seed candidate.
+      fileExists: (path) =>
+        typeof path === "string" &&
+        path.endsWith("/.keiko/ui/keiko.config.json") &&
+        !path.includes("/ui/ui/"),
+      directoryExists: () => false,
+      mkdir: () => {},
+      copyFile: () => {},
+      copyDirectory: () => {
+        throw new Error("credentials/ must not be copied when it does not exist");
+      },
+      chmod: () => {},
+      notify: (message) => notices.push(message),
+      env: {},
+    };
+    ensureDevGatewayConfig(seams);
+    expect(notices.join("\n")).toMatch(/no credentials\/ subdirectory next to/u);
+  });
+});

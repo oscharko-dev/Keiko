@@ -138,8 +138,13 @@ interface JourneyComposition {
   readonly scripted?: ScriptedOpenCodeHarness | undefined;
 }
 
+// KEIKO-1010: bound git invocations defensively even though today's only caller
+// (createRepositoryFixture: init/config/add/commit -q -m) is local-only and non-interactive.
+// A stray interactive prompt or a fs-level hang must not keep the e2e server startup pinned
+// indefinitely — a 30-second ceiling is generous relative to the sub-second local-only cost.
+const GIT_HELPER_TIMEOUT_MS = 30_000;
 function git(cwd: string, args: readonly string[]): void {
-  execFileSync("git", [...args], { cwd, encoding: "utf8" });
+  execFileSync("git", [...args], { cwd, encoding: "utf8", timeout: GIT_HELPER_TIMEOUT_MS });
 }
 
 function createRepositoryFixture(config: CodingRuntimeJourneyServerConfig, stateDir: string): void {
@@ -224,13 +229,29 @@ function verificationRunner(fixtureLabel: string): Pick<VerificationRunnerManage
   };
 }
 
+// KEIKO-0902: a script-mode regression that emits back-to-back `question` tool calls used to
+// spin this loop indefinitely — the harness cannot make progress, no error is surfaced, and
+// the e2e run times out at the Playwright outer deadline with no diagnostic naming which
+// script exhausted the retry. Bound the retry with a small ceiling that is orders of magnitude
+// above the observed 1-2 skips a healthy script would produce, and fail with a message that
+// names the invariant.
+const SCRIPTED_QUESTION_SKIP_CEILING = 8;
 function nextScriptedTurn(
   script: ScriptState,
   includeQuestion: boolean,
   transcript: string,
 ): NormalizedResponse {
   let response = scriptedResponse(script, transcript);
+  let skips = 0;
   while (!includeQuestion && response.toolCalls.some((call) => call.name === "question")) {
+    skips += 1;
+    if (skips > SCRIPTED_QUESTION_SKIP_CEILING) {
+      throw new Error(
+        "nextScriptedTurn: scripted transcript exceeded question-skip bound " +
+          `(${String(SCRIPTED_QUESTION_SKIP_CEILING)}) — check the ScriptState for a run that ` +
+          "emits consecutive `question` tool calls when includeQuestion is false.",
+      );
+    }
     response = scriptedResponse(script, transcript);
   }
   return response;
