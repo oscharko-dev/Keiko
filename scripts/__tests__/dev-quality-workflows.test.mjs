@@ -33,7 +33,12 @@ describe("dev quality workflows", () => {
     expect(mutation).toContain("node scripts/check-runtime-toolchain.mjs --exact");
     expect(mutation).toContain("npm run test:mutation:security");
     expect(mutation).not.toContain("check-mutation-scope.mjs");
-    expect(mutation).not.toContain("continue-on-error: true");
+    // KEIKO-0588: the mutation step now runs with continue-on-error so a failure files a
+    // tracking issue (mirrors nightly-perf-evidence.yml). The lane must STILL fail — assert
+    // the companion `Fail the lane after reporting` step exists and fires on the same outcome.
+    expect(mutation).toContain("continue-on-error: true");
+    expect(mutation).toMatch(/Fail the lane after reporting/u);
+    expect(mutation).toMatch(/steps\.mutation\.outcome == 'failure'/u);
     expect(packageJson.scripts["test:mutation:security"]).toContain(
       "npm run test:mutation:debug-launch-security",
     );
@@ -251,16 +256,28 @@ describe("dev quality workflows", () => {
 
   // The live isolation proof the coverage run depends on moved with the suites. Asserting it on all
   // three jobs is stricter than the single assertion it replaces.
+  // KEIKO-1020: the identical `Install sandbox isolation backend (bubblewrap)` + AppArmor-relax
+  // block that was previously inlined 7 times was extracted into
+  // `.github/actions/setup-sandbox-isolation`. The invariant this test pins is unchanged:
+  // every coverage suite job must call for the sandbox backend before running its coverage
+  // command; the assertion targets the composite-action invocation rather than the inline shell.
   it("gives every coverage suite job a real bubblewrap isolation backend", () => {
     // Sliced to the NEXT top-level job key rather than to a named follower, so reordering jobs in
     // ci.yml cannot silently change what each iteration asserts.
     for (const job of ["coverage-packages", "coverage-ui", "coverage-scripts"]) {
       const block = ci.match(new RegExp(` {2}${job}:\\n[\\s\\S]*?(?=\\n {2}\\S)`, "u"))?.[0];
       expect(block, `${job} job block must exist`).toBeDefined();
-      expect(block).toContain("Install sandbox isolation backend (bubblewrap)");
-      expect(block).toContain("kernel.apparmor_restrict_unprivileged_userns=0");
+      expect(block).toContain("uses: ./.github/actions/setup-sandbox-isolation");
       expect(block).toContain("npm run provision:usearch");
     }
+    // The composite action itself must still install bubblewrap AND relax AppArmor — this pin
+    // moved from the caller to the callee, and losing it defeats the whole isolation proof.
+    const compositeAction = readFileSync(
+      resolve(root, ".github/actions/setup-sandbox-isolation/action.yml"),
+      "utf8",
+    );
+    expect(compositeAction).toContain("sudo apt-get install -y bubblewrap");
+    expect(compositeAction).toContain("kernel.apparmor_restrict_unprivileged_userns=0");
   });
 
   it("aggregates required CI fail closed", () => {

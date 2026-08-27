@@ -139,14 +139,41 @@ export function readBytes(reader, length) {
  * The 64-byte cap is deliberate: both supervisors only ever emit reap proofs shorter than that,
  * so a longer length is a protocol confusion this rejects rather than reads.
  */
+// KEIKO-0690: keep the per-kind payload contract in one place. Both Windows and macOS
+// supervisors emit the exact same three response kinds through the shared KRS1 codec:
+//   kind 1 RESPONSE_LAUNCHED  → 0 bytes
+//   kind 2 RESPONSE_REAPED    → exactly 8 bytes (JOBOBJECT_BASIC_ACCOUNTING_INFORMATION excerpt)
+//   kind 3 RESPONSE_ERROR     → exactly 2 bytes (little-endian error code)
+// Confirmed against `enum response_kind` in native/runtime-supervisor/{windows,macos}/keiko_
+// runtime_supervisor.c. A pre-fix short frame would drop past the `length <= 64` upper bound and
+// throw ERR_OUT_OF_RANGE inside Buffer.readUInt32LE instead of producing a protocol assertion
+// that names the observed length.
+const EXPECTED_PAYLOAD_LENGTH_BY_KIND = new Map([
+  [1, 0],
+  [2, 8],
+  [3, 2],
+]);
+
 export async function response(reader) {
   const responseHeader = await readBytes(reader, 12);
   assert.equal(responseHeader.subarray(0, 4).toString("ascii"), "KRS1");
   assert.equal(responseHeader.readUInt16LE(4), 1);
+  const kind = responseHeader.readUInt16LE(6);
   const length = responseHeader.readUInt32LE(8);
   assert.ok(length <= 64);
+  const expected = EXPECTED_PAYLOAD_LENGTH_BY_KIND.get(kind);
+  assert.notEqual(
+    expected,
+    undefined,
+    `unknown KRS1 response kind ${String(kind)} (length=${String(length)})`,
+  );
+  assert.equal(
+    length,
+    expected,
+    `KRS1 response kind ${String(kind)} must carry ${String(expected)} bytes, observed ${String(length)}`,
+  );
   return {
-    kind: responseHeader.readUInt16LE(6),
+    kind,
     payload: length === 0 ? Buffer.alloc(0) : await readBytes(reader, length),
   };
 }
@@ -194,10 +221,16 @@ export const waitGone = waitForExit;
  */
 export async function explained(stage, promise, exited, stderr) {
   const exitCode = Symbol("exited");
-  const raced = await Promise.race([
-    promise.catch((error) => ({ error })),
-    exited.then((code) => ({ [exitCode]: code })),
-  ]);
+  // KEIKO-0850: neutralise `exited`'s rejection before the race — a rejected `exited` (child
+  // spawn error, unusual exit sequence) used to reject the whole race and propagate the raw
+  // error, dropping the stage annotation this wrapper exists to preserve. Map both settlement
+  // paths of `exited` to a resolution with the `exitCode` marker so the race can never reject
+  // through that leg. `promise.catch(...)` already handles the other leg.
+  const neutralisedExited = exited.then(
+    (code) => ({ [exitCode]: code }),
+    (exitError) => ({ [exitCode]: `errored:${String(exitError?.code ?? exitError)}` }),
+  );
+  const raced = await Promise.race([promise.catch((error) => ({ error })), neutralisedExited]);
   if (raced && exitCode in raced) {
     const stderrBytes = Buffer.concat(stderr).length;
     throw new Error(
@@ -216,4 +249,31 @@ export async function explained(stage, promise, exited, stderr) {
     throw raced.error;
   }
   return raced;
+}
+
+// KEIKO-0636 shared helpers: without this listener a supervisor that exits between spawn and the
+// harness's first write() ends stdio[3] before we hand it a launchPacket, and the EPIPE/
+// ERR_STREAM_DESTROYED reaches the harness as an uncaught stream error instead of a stage-
+// annotated failure. Extracted here so both Windows and macOS harnesses share the same
+// attribution logic (previously duplicated across three qualify functions).
+export function installControlPipeErrorGuard(child) {
+  const state = { error: undefined };
+  child.stdio[3].on("error", (streamError) => {
+    state.error ??= streamError;
+  });
+  return state;
+}
+
+// After the try/finally block, surface the pipe error attributed to the stage in flight, but
+// only if the try body did not complete. `completed` is set at the last line of the try body
+// so any early throw carries the original error, not this one. Kept OUT of the finally block:
+// `no-unsafe-finally` forbids throwing from finally because a pending exception from the try
+// body would be shadowed.
+export function raiseControlPipeErrorIfIncomplete(stage, controlPipeErrorState, completed) {
+  const streamError = controlPipeErrorState.error;
+  if (streamError && !completed) {
+    throw new Error(`${stage}: control pipe error before completion — ${streamError.message}`, {
+      cause: streamError,
+    });
+  }
 }

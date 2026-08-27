@@ -331,6 +331,60 @@ function validate479EvidenceLists(manifest, relPath) {
   return failures;
 }
 
+// KEIKO-1011: `manifest.verificationCommands` lists the exact npm scripts a reviewer is
+// expected to run to reproduce the evidence. Nothing pinned that these strings actually name
+// scripts that exist in package.json — a rename of `test:e2e:git-status-1386` used to land
+// silently, leaving reviewers to discover the missing script only when they tried to run it.
+// This helper cross-references every listed entry against package.json's scripts object and
+// fails the gate for any absent name. Bare `test` is always valid (that's `npm test` itself).
+function validate479VerificationCommands(manifest, relPath) {
+  const failures = [];
+  const commands = manifest.verificationCommands;
+  if (!Array.isArray(commands)) return failures;
+  const pkg = readJson(REPO_ROOT, "package.json");
+  const scripts = pkg?.scripts ?? {};
+  const scriptNameOf = (entry) => {
+    if (typeof entry !== "string") return undefined;
+    // Plain string trims replace the two regex-based passes the original version used. Sonar
+    // (rule javascript:S8786) flagged the previous `/^npm\s+(?:run\s+)?/u` and `/\s+--?/u`
+    // regexes as super-linear on adversarial input; the plain-string version below has neither
+    // backtracking risk nor a change in behaviour for the concrete inputs this validator sees
+    // (npm script names in manifest.verificationCommands).
+    const parts = entry
+      .trim()
+      .split(" ")
+      .filter((part) => part.length > 0);
+    if (parts.length === 0) return undefined;
+    if (parts[0] !== "npm") return undefined;
+    let index = parts[1] === "run" ? 2 : 1;
+    const name = parts[index];
+    return typeof name === "string" && name.length > 0 && !name.startsWith("-") ? name : undefined;
+  };
+  for (const entry of commands) {
+    const name = scriptNameOf(entry);
+    if (name === undefined) {
+      failures.push(
+        `${relPath}: verificationCommands entry is not a string: ${JSON.stringify(entry)}`,
+      );
+      continue;
+    }
+    // Bare `npm test` corresponds to `scripts.test` if declared; treat bare `test` (matches the
+    // package.json convention) as always valid because npm ships an implicit `test` behaviour
+    // when the script is absent — but a lint-oriented gate should still flag drift, so we do
+    // require the key to exist in scripts.
+    // Object.hasOwn guards against a script name that collides with an Object.prototype
+    // member (`toString`, `constructor`, `hasOwnProperty`, …). `name in scripts` walks the
+    // prototype chain and would silently accept such a name even though `package.json` has no
+    // such script; fail-closed manifests need the own-property check.
+    if (!Object.hasOwn(scripts, name)) {
+      failures.push(
+        `${relPath}: verificationCommands entry names an npm script that does not exist: ${JSON.stringify(entry)} (resolved to ${JSON.stringify(name)})`,
+      );
+    }
+  }
+  return failures;
+}
+
 function validate479Manifest(root) {
   const relPath = "docs/git-delivery/evidence/479/manifest.json";
   if (!existsFile(root, relPath)) {
@@ -342,6 +396,7 @@ function validate479Manifest(root) {
     ...validate479Identity(manifest, relPath),
     ...validate479Statuses(manifest, relPath),
     ...validate479EvidenceLists(manifest, relPath),
+    ...validate479VerificationCommands(manifest, relPath),
   ];
 }
 

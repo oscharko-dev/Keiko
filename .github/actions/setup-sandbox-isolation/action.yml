@@ -1,0 +1,24 @@
+name: Setup Linux sandbox isolation
+description: >
+  Installs the Bubblewrap sandbox backend and relaxes the Ubuntu 24.04 AppArmor restriction on
+  unprivileged user namespaces so the verification runner's mandatory network:none boundary
+  (enforce-or-fail-closed) can be reached on hosted Linux runners. Every CI job that runs a
+  Playwright suite, a verification-runner-driven test, or a code-task lane must call this action
+  before the suite runs, or every verification silently fails closed under `bwrap: setting up
+  uid map: Permission denied` and the suite cannot pass. Extracted per KEIKO-1020 so a future
+  change to the install line touches ONE file instead of the eight duplicated sites in ci.yml
+  and e2e-extended.yml.
+runs:
+  using: composite
+  steps:
+    - name: Install bubblewrap
+      shell: bash
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y bubblewrap
+        # Ubuntu 24.04 restricts unprivileged user namespaces via AppArmor, blocking Bubblewrap's
+        # own uid-map setup. `|| true` keeps the step green on runner images that already carry a
+        # permissive sysctl (older images and non-Ubuntu Linux runners): the test surface is
+        # exercised uniformly, and a hardened surface that refuses the write is not a CI failure
+        # here (KEIKO-0724).
+        sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true

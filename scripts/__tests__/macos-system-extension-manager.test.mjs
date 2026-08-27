@@ -307,4 +307,24 @@ describe("macOS system-extension activation manager", () => {
       );
     });
   });
+
+  // KEIKO-0771: session_for_pid used to answer against the first session whose recorded
+  // supervisor_pid matched the queried pid, so after an OS pid-number reuse the daemon could
+  // misattribute a fork to a different session. allocate_session now refuses the ARM when
+  // another active session already owns supervisor_pid, parallel to the existing recovery-
+  // handle uniqueness rejection.
+  describe("allocate_session supervisor_pid uniqueness (KEIKO-0771)", () => {
+    it("refuses ARM when another active session already owns supervisor_pid", () => {
+      const body = functionBody(monitorSource, "static struct monitor_session *allocate_session(");
+      expect(body).toMatch(
+        /existing->active[\s\S]{0,200}existing->supervisor_pid\s*==\s*\(pid_t\)request->supervisor_pid/u,
+      );
+      expect(body).toMatch(/return NULL;/u);
+      const uniquenessGuardAt = body.search(/existing->supervisor_pid\s*==/u);
+      const freeSlotAt = body.search(/session->active\)\s*continue;/u);
+      expect(uniquenessGuardAt).toBeGreaterThan(-1);
+      expect(freeSlotAt).toBeGreaterThan(-1);
+      expect(uniquenessGuardAt).toBeLessThan(freeSlotAt);
+    });
+  });
 });

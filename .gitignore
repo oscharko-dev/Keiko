@@ -174,7 +174,7 @@ workspace-index-*.json.*.tmp
 packages/keiko-ui/out/
 packages/keiko-ui/next-env.d.ts
 
-# TypeScript project-references incremental cache (ADR-0020 D3). Generated when `tsc -b` or/Users/oscharko-dev/Projects/Keiko/CLAUDE.md
+# TypeScript project-references incremental cache (ADR-0020 D3). Generated when `tsc -b` or
 # `tsc --build` runs in any workspace package; never commit it.
 *.tsbuildinfo
 

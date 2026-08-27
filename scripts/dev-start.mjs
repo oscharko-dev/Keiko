@@ -1,11 +1,11 @@
 import { Buffer } from "node:buffer";
 import { spawn, spawnSync } from "node:child_process";
 import { randomBytes, randomUUID } from "node:crypto";
-import { createServer } from "node:net";
 import {
   closeSync,
   chmodSync,
   copyFileSync,
+  cpSync,
   existsSync,
   mkdirSync,
   openSync,
@@ -19,6 +19,7 @@ import { setTimeout as sleep } from "node:timers/promises";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 import { hostDevLaneTarget, stageDevCodingRuntime } from "./stage-dev-coding-runtime.mjs";
+import { probePortFree } from "./lib/port-probe.mjs";
 
 const scriptPath = fileURLToPath(import.meta.url);
 const repoRoot = resolve(dirname(scriptPath), "..");
@@ -247,30 +248,73 @@ export function resolveDevGatewayConfigAction({
   return { ...result, seedFrom, notices };
 }
 
-function ensureDevGatewayConfig() {
+// KEIKO-0542: mirror packages/keiko-server/src/credentialVault.ts's on-disk convention when
+// seeding a fresh dev config: a `credentials/` subdirectory sits next to the config file so the
+// gateway can find the vault it references. When the seed source has one, copy it beside the
+// seeded config; when it doesn't, the gateway will still start (unprovisioned) exactly the way
+// it did before this fix — and we surface both outcomes as notices so a silent degrade to "not
+// configured" no longer looks the same as a successful seed.
+function statIsDirectory(path) {
+  try {
+    return statSync(path).isDirectory();
+  } catch {
+    return false;
+  }
+}
+
+function copyDirectoryTree(source, target) {
+  // Directory tree copy: recursive, preserve mode, follow no symlinks (a credentials dir is
+  // regular files).
+  cpSync(source, target, { recursive: true, errorOnExist: false, dereference: false });
+}
+
+const DEFAULT_ENSURE_DEV_GATEWAY_CONFIG_SEAMS = {
+  fileExists: existsSync,
+  directoryExists: statIsDirectory,
+  mkdir: (path) => mkdirSync(path, { recursive: true }),
+  copyFile: copyFileSync,
+  copyDirectory: copyDirectoryTree,
+  chmod: chmodSync,
+  notify: (message) => console.log(message),
+  env: process.env,
+};
+
+function seedGatewayCredentials(seams, seedFrom, notices) {
+  const seedCredentialsDir = join(dirname(seedFrom), "credentials");
+  const destinationCredentialsDir = join(dirname(devGatewayConfigFile), "credentials");
+  if (seams.directoryExists(seedCredentialsDir)) {
+    seams.copyDirectory(seedCredentialsDir, destinationCredentialsDir);
+    notices.push(
+      `[dev:start] seeded credentials/ from ${seedCredentialsDir} (${destinationCredentialsDir})`,
+    );
+    return;
+  }
+  notices.push(
+    `[dev:start] no credentials/ subdirectory next to ${seedFrom} — the gateway will start ` +
+      "with the seeded config but no vault; add a credentials/ directory beside the seed " +
+      "or configure a model in Settings",
+  );
+}
+
+export function ensureDevGatewayConfig(seams = DEFAULT_ENSURE_DEV_GATEWAY_CONFIG_SEAMS) {
   const { repointTo, seedFrom, notices } = resolveDevGatewayConfigAction({
-    configuredPath: process.env.KEIKO_CONFIG_FILE,
+    configuredPath: seams.env.KEIKO_CONFIG_FILE,
     devConfigFile: devGatewayConfigFile,
     seedCandidates: gatewayConfigSeedCandidates,
-    fileExists: existsSync,
+    fileExists: seams.fileExists,
   });
-  if (repointTo !== undefined) process.env.KEIKO_CONFIG_FILE = repointTo;
+  if (repointTo !== undefined) seams.env.KEIKO_CONFIG_FILE = repointTo;
   if (seedFrom !== undefined) {
-    mkdirSync(dirname(devGatewayConfigFile), { recursive: true });
-    copyFileSync(seedFrom, devGatewayConfigFile);
-    chmodSync(devGatewayConfigFile, 0o600);
+    seams.mkdir(dirname(devGatewayConfigFile));
+    seams.copyFile(seedFrom, devGatewayConfigFile);
+    seams.chmod(devGatewayConfigFile, 0o600);
+    seedGatewayCredentials(seams, seedFrom, notices);
   }
-  for (const notice of notices) console.log(notice);
+  for (const notice of notices) seams.notify(notice);
 }
 
 function checkPortAvailable(port) {
-  return new Promise((resolveAvailable) => {
-    const server = createServer();
-    server.once("error", () => resolveAvailable(false));
-    server.listen(port, host, () => {
-      server.close(() => resolveAvailable(true));
-    });
-  });
+  return probePortFree(port, host);
 }
 
 async function findAvailablePort(start) {
@@ -578,45 +622,96 @@ function stopSpawnedChild(child) {
   }
 }
 
-async function launchDevelopmentRunner() {
-  ensureDependencies();
-  ensureDevGatewayConfig();
-  run(npmCommand(), ["run", "build"], repoRoot);
-  await ensureDevCodingRuntime();
-  const { bffPort, nextPort } = await resolveDevPorts();
-  const pairingSecret = resolveDevPairingSecret();
-  const child = spawnDevelopmentRunner(bffPort, nextPort, pairingSecret);
+// KEIKO-0719: bound a second `npm run dev:start` against the same repoRoot so it either
+// waits for the in-progress instance's build+port-claim to finish or fails fast with a clear
+// message that names the first instance's stateDir. Two concurrent invocations otherwise both
+// run `npm run build` in the shared repo tree and race to bind the same ports; the loser
+// crashes with a stack that never mentions the collision.
+export const DEV_START_LOCK_FILE = join(stateDir, "dev-start.lock");
+export const DEV_START_LOCK_WAIT_MS = 60_000;
 
-  let runtimeNote;
+export async function withDevStartLock(work) {
+  mkdirSync(stateDir, { recursive: true });
+  const started = Date.now();
+  let fd;
+  for (;;) {
+    try {
+      // O_EXCL | O_CREAT is atomic across processes on POSIX and NTFS.
+      fd = openSync(DEV_START_LOCK_FILE, "wx");
+      break;
+    } catch (openError) {
+      if (openError?.code !== "EEXIST") throw openError;
+      if (Date.now() - started > DEV_START_LOCK_WAIT_MS) {
+        throw new Error(
+          `[dev:start] another dev-start is holding ${DEV_START_LOCK_FILE} — either wait for it ` +
+            "or `npm run dev:stop` first (use a distinct KEIKO_STATE_DIR to run in parallel)",
+        );
+      }
+      await sleep(200);
+    }
+  }
   try {
-    runtimeNote = await waitForHealth(publicPort, child);
-  } catch (error) {
-    stopSpawnedChild(child);
-    throw error;
+    return await work();
+  } finally {
+    closeSync(fd);
+    rmSync(DEV_START_LOCK_FILE, { force: true });
   }
-  // ADR-0163 D9: the launcher's success line must not imply platform qualification. The detail is
-  // printed beside the success, never folded into the word the health gates compare against.
-  if (runtimeNote !== undefined) console.log(`Coding runtime: ${runtimeNote}`);
+}
 
-  console.log(
-    `Keiko dev UI running on ${publicBrowserUrl(publicPort)} (pid ${String(child.pid)}).`,
-  );
-  console.log(`State: ${stateDir}`);
-  console.log(`Logs: ${logFile}`);
-  console.log(`Stop: npm run dev:stop`);
-  if (!openBrowserRequested) {
+// KEIKO-0719 (extended): repeat the existing-runner check INSIDE the lock. Two concurrent
+// `npm run dev:start` invocations can both clear a pre-lock check; only the runner check under
+// the mutex prevents the second acquirer from starting a duplicate runner and clobbering
+// pidFile. Extracted as a seamed helper so the race-window semantics can be tested without
+// spawning a real Node runner.
+export async function prepareRunnerCriticalSection(seams = {}) {
+  const restart = seams.restartExistingRunnerIfNeeded ?? restartExistingRunnerIfNeeded;
+  const remove = seams.removePidFile ?? (() => rmSync(pidFile, { force: true }));
+  await restart();
+  remove();
+}
+
+async function launchDevelopmentRunner() {
+  return withDevStartLock(async () => {
+    await prepareRunnerCriticalSection();
+    ensureDependencies();
+    ensureDevGatewayConfig();
+    run(npmCommand(), ["run", "build"], repoRoot);
+    await ensureDevCodingRuntime();
+    const { bffPort, nextPort } = await resolveDevPorts();
+    const pairingSecret = resolveDevPairingSecret();
+    const child = spawnDevelopmentRunner(bffPort, nextPort, pairingSecret);
+
+    let runtimeNote;
+    try {
+      runtimeNote = await waitForHealth(publicPort, child);
+    } catch (error) {
+      stopSpawnedChild(child);
+      throw error;
+    }
+    // ADR-0163 D9: the launcher's success line must not imply platform qualification. The detail is
+    // printed beside the success, never folded into the word the health gates compare against.
+    if (runtimeNote !== undefined) console.log(`Coding runtime: ${runtimeNote}`);
+
     console.log(
-      "Pairing: run `npm run dev:start -- --open` to open a browser window paired for coding question content.",
+      `Keiko dev UI running on ${publicBrowserUrl(publicPort)} (pid ${String(child.pid)}).`,
     );
-  }
-  await maybeOpenPairedBrowser(pairingSecret);
+    console.log(`State: ${stateDir}`);
+    console.log(`Logs: ${logFile}`);
+    console.log(`Stop: npm run dev:stop`);
+    if (!openBrowserRequested) {
+      console.log(
+        "Pairing: run `npm run dev:start -- --open` to open a browser window paired for coding question content.",
+      );
+    }
+    await maybeOpenPairedBrowser(pairingSecret);
+  });
 }
 
 export async function main() {
   validatePublicPort();
-  await restartExistingRunnerIfNeeded();
-  rmSync(pidFile, { force: true });
-
+  // The runner check and stale-state cleanup live inside launchDevelopmentRunner's lock so
+  // concurrent invocations cannot both start a runner and clobber pidFile. Keeping the pre-lock
+  // fast path removed avoids the redundant unlocked scan whose result could not be trusted.
   try {
     await launchDevelopmentRunner();
   } catch (error) {

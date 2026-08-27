@@ -56,17 +56,6 @@ static enum endpoint_state endpoint_state = ENDPOINT_STATE_STARTING;
 _Static_assert(sizeof(struct keiko_monitor_request) == 44, "monitor request layout");
 _Static_assert(sizeof(struct keiko_monitor_reply) == 12, "monitor reply layout");
 
-static int read_exact(int descriptor, void *buffer, size_t length) {
-  unsigned char *bytes = buffer;
-  size_t offset = 0;
-  while (offset < length) {
-    ssize_t result = read(descriptor, bytes + offset, length - offset);
-    if (result <= 0) return 0;
-    offset += (size_t)result;
-  }
-  return 1;
-}
-
 static void kill_session_processes(const struct monitor_session *session);
 
 static int reply_to(struct monitor_session *session, uint16_t kind) {
@@ -169,6 +158,12 @@ static int session_contains(const struct monitor_session *session, pid_t pid) {
 }
 
 static void kill_session_processes(const struct monitor_session *session) {
+  // KEIKO-1005: a SIGKILL fan-out is a security-relevant decision. Log the session's
+  // supervisor_pid and the process count so an operator can reconstruct which supervisor
+  // triggered the kill, without leaking the actual pids of the supervised runtimes.
+  os_log(keiko_monitor_log(),
+         "kill_session_processes: SIGKILL fan-out for supervisor_pid=%{public}d, processes=%{public}zu",
+         (int)session->supervisor_pid, session->process_count);
   size_t index;
   for (index = 0; index < session->process_count; ++index)
     (void)kill(session->processes[index], SIGKILL);
@@ -342,6 +337,17 @@ static struct monitor_session *allocate_session(int descriptor, uid_t uid,
                                                 const struct keiko_monitor_request *request) {
   size_t index;
   if (session_for_handle(request->recovery_handle) != NULL) return NULL;
+  // KEIKO-0771: also refuse the ARM when another active session already owns the same
+  // supervisor_pid. session_for_pid used to answer against the FIRST match it found and could
+  // therefore misattribute a fork to the wrong session after an OS pid-number reuse. Fail the
+  // arm here (caller turns NULL into KEIKO_MONITOR_ERROR) instead of silently letting a second
+  // session claim a pid another active session already owns.
+  for (index = 0; index < KEIKO_MAX_SESSIONS; ++index) {
+    const struct monitor_session *existing = &sessions[index];
+    if (existing->active && existing->supervisor_pid == (pid_t)request->supervisor_pid) {
+      return NULL;
+    }
+  }
   for (index = 0; index < KEIKO_MAX_SESSIONS; ++index) {
     struct monitor_session *session = &sessions[index];
     if (session->active) continue;
@@ -451,10 +457,23 @@ static void *serve_client(void *opaque) {
   pthread_mutex_unlock(&sessions_lock);
   if (session == NULL) {
     if (request.command == KEIKO_MONITOR_RECONCILE) {
+      // KEIKO-1005: name the reconcile outcome so an operator can distinguish "already
+      // owned by a live connection" from "no such session" — both take this branch but with
+      // opposite meaning.
+      os_log(keiko_monitor_log(),
+             "RECONCILE outcome=%{public}s for supervisor_pid=%{public}d",
+             reconcile_outcome == RECONCILE_ALREADY_LIVE ? "ALREADY_LIVE" : "UNKNOWN_HANDLE",
+             (int)peer);
       (void)reply_to(&transient, reconcile_outcome == RECONCILE_ALREADY_LIVE
                                      ? KEIKO_MONITOR_ALREADY_ACTIVE
                                      : KEIKO_MONITOR_ZERO_LIVE);
     } else {
+      // KEIKO-1005: an ARM that returned NULL either lost the recovery-handle race or clashed
+      // with an existing session's supervisor_pid (KEIKO-0771). Both are refused with the same
+      // wire response; the log line separates them from a downstream diagnostic view.
+      os_log(keiko_monitor_log(),
+             "ARM refused (handle or supervisor_pid collision) for peer_pid=%{public}d",
+             (int)peer);
       (void)reply_to(&transient, KEIKO_MONITOR_ERROR);
     }
     goto complete;

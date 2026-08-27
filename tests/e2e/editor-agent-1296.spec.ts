@@ -122,7 +122,6 @@ function artifactPath(name: ArtifactName): string {
   return resolved;
 }
 
-// eslint-disable-next-line max-lines-per-function -- static browser evidence fixture markup.
 function sceneHtml(): string {
   const globals = readFileSync(GLOBALS_CSS, "utf8");
   return `<!doctype html>

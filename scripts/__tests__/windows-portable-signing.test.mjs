@@ -92,6 +92,27 @@ function validStage() {
     portableExecutable(5),
   );
   write(join(payload, "runtime", "native", "keiko-runtime-supervisor.exe"), portableExecutable(6));
+  // KEIKO-0658: inventoryCommand now cross-checks manifest.sidecarRuntimes[].executablePath
+  // against the PE inventory, mirroring the macOS side. Write a minimal manifest so the check
+  // has something to compare against; the two sidecars named here match the payload above.
+  write(
+    join(stage, "manifest", "portable-manifest.json"),
+    Buffer.from(
+      JSON.stringify({
+        sidecarRuntimes: [
+          {
+            name: "keiko-secure-workspace-read",
+            executablePath: "runtime/native/keiko-secure-workspace-read.exe",
+          },
+          {
+            name: "keiko-runtime-supervisor",
+            executablePath: "runtime/native/keiko-runtime-supervisor.exe",
+          },
+        ],
+      }),
+      "utf8",
+    ),
+  );
   return { payload, stage };
 }
 
@@ -926,5 +947,63 @@ describe("Windows portable PE signing inventory", () => {
     ).rejects.toThrow(/verification input contains unsupported keys/u);
 
     expect(paths.map((path) => readFileSync(path))).toEqual(before);
+  });
+});
+
+// KEIKO-0658: inventoryCommand must reject a manifest whose sidecarRuntimes list names an
+// executablePath that the PE inventory did not observe. Without this cross-check, a
+// hand-authored manifest that referenced a sidecar the payload does not carry could be signed
+// and shipped downstream. The regression is a minimal manifest that names one present sidecar
+// (must not fail) and one absent sidecar (must fail with a message naming the offender).
+import {
+  describe as _keiko0658Describe,
+  expect as _keiko0658Expect,
+  it as _keiko0658It,
+} from "vitest";
+_keiko0658Describe("windows-portable-signing inventory cross-check (KEIKO-0658)", () => {
+  _keiko0658It("rejects a manifest naming a sidecar the PE inventory does not carry", async () => {
+    const stage = root();
+    const payload = join(stage, "payload", "Keiko");
+    write(join(payload, "Keiko.exe"), portableExecutable(1));
+    write(join(payload, "runtime", "node", "node.exe"), portableExecutable(2));
+    write(
+      join(payload, "runtime", "native", "keiko-secure-workspace-read.exe"),
+      portableExecutable(5),
+    );
+    write(
+      join(payload, "runtime", "native", "keiko-runtime-supervisor.exe"),
+      portableExecutable(6),
+    );
+    write(
+      join(stage, "manifest", "portable-manifest.json"),
+      Buffer.from(
+        JSON.stringify({
+          sidecarRuntimes: [
+            {
+              name: "keiko-secure-workspace-read",
+              executablePath: "runtime/native/keiko-secure-workspace-read.exe",
+            },
+            {
+              name: "keiko-does-not-exist",
+              executablePath: "runtime/native/keiko-does-not-exist.exe",
+            },
+          ],
+        }),
+        "utf8",
+      ),
+    );
+    const inventoryPath = join(stage, "inventory.json");
+    const catalogPath = join(stage, "catalog.txt");
+    await _keiko0658Expect(
+      main([
+        "inventory",
+        "--stage-root",
+        stage,
+        "--inventory",
+        inventoryPath,
+        "--catalog",
+        catalogPath,
+      ]),
+    ).rejects.toThrow(/keiko-does-not-exist/);
   });
 });

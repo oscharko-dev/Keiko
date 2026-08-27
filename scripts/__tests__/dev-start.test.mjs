@@ -1,19 +1,24 @@
 import { Buffer } from "node:buffer";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+import { existsSync } from "node:fs";
+
 import {
   codingRuntimeHealth,
   codingRuntimeRequired,
+  DEV_START_LOCK_FILE,
   ensureDevCodingRuntime,
   maybeOpenPairedBrowser,
   npmCommand,
   pairedDevBrowserUrl,
+  prepareRunnerCriticalSection,
   resolveDevPairingSecret,
   requiredRuntimeHealth,
   resolveDevGatewayConfigAction,
   resolveExternalOpener,
   run,
   shouldShellNpmCommand,
+  withDevStartLock,
 } from "../dev-start.mjs";
 
 // KEIKO-0286: a stale KEIKO_CONFIG_FILE inherited from a sourced operator .env used to suppress the
@@ -464,5 +469,153 @@ describe("dev-start app-session pairing launcher", () => {
     expect(error).toHaveBeenCalledWith(
       "[dev:start] could not open a paired browser window: dist missing",
     );
+  });
+});
+
+// KEIKO-0542: the dev-config seed used to copy only the config file. A sibling `credentials/`
+// directory next to a seed candidate (mirroring the credentialVault convention on-disk) was
+// silently left behind, so a well-configured seed ended up as "not configured" in the running
+// gateway with no diagnostic surfaced anywhere. Extend ensureDevGatewayConfig so a
+// `credentials/` sibling is copied alongside the seed and the outcome is announced through the
+// existing notice channel.
+describe("dev-start gateway config credentials seed (KEIKO-0542)", () => {
+  it("copies a sibling credentials/ directory when the seed has one", async () => {
+    const { ensureDevGatewayConfig } = await import("../dev-start.mjs");
+    // The seed candidates ensureDevGatewayConfig checks are hardcoded from module scope; the
+    // fileExists seam names them for us. We approve one seed candidate (the first) and its
+    // credentials/ sibling; every other path returns false (including the dev-config file, so
+    // the seed path is entered).
+    const copyCalls = [];
+    const notices = [];
+    let approvedSeed;
+    const seams = {
+      fileExists: (path) => {
+        // Approve the first seed candidate (repoRoot/.keiko/ui/keiko.config.json) whose exact
+        // form we cannot know here — approve the first ".keiko/ui/keiko.config.json" path.
+        if (
+          typeof path === "string" &&
+          path.endsWith("/.keiko/ui/keiko.config.json") &&
+          !path.includes("/ui/ui/")
+        ) {
+          approvedSeed = path;
+          return true;
+        }
+        return false;
+      },
+      directoryExists: (path) =>
+        approvedSeed !== undefined &&
+        path === approvedSeed.replace(/keiko\.config\.json$/u, "credentials"),
+      mkdir: vi.fn(),
+      copyFile: (source, target) => copyCalls.push({ kind: "file", source, target }),
+      copyDirectory: (source, target) => copyCalls.push({ kind: "directory", source, target }),
+      chmod: vi.fn(),
+      notify: (message) => notices.push(message),
+      env: {},
+    };
+    ensureDevGatewayConfig(seams);
+    expect(
+      copyCalls.some((call) => call.kind === "directory" && /credentials$/u.test(call.target)),
+    ).toBe(true);
+    expect(notices.join("\n")).toMatch(/seeded credentials\/ from/u);
+  });
+
+  it("surfaces a distinct notice when the seed has no credentials/ directory", async () => {
+    const { ensureDevGatewayConfig } = await import("../dev-start.mjs");
+    const notices = [];
+    const seams = {
+      // Approve the first .keiko/ui/keiko.config.json seed candidate.
+      fileExists: (path) =>
+        typeof path === "string" &&
+        path.endsWith("/.keiko/ui/keiko.config.json") &&
+        !path.includes("/ui/ui/"),
+      directoryExists: () => false,
+      mkdir: vi.fn(),
+      copyFile: vi.fn(),
+      copyDirectory: () => {
+        throw new Error("credentials/ must not be copied when it does not exist");
+      },
+      chmod: vi.fn(),
+      notify: (message) => notices.push(message),
+      env: {},
+    };
+    ensureDevGatewayConfig(seams);
+    expect(notices.join("\n")).toMatch(/no credentials\/ subdirectory next to/u);
+  });
+});
+
+// KEIKO-0719: `npm run dev:start` acquires a per-stateDir lockfile so two concurrent invocations
+// serialise instead of colliding in `npm run build` and racing for the same ports. The lock file
+// is an atomic O_EXCL|O_CREAT create at `$stateDir/dev-start.lock`. Regression: prove serialization
+// by holding the lock in one call while a second call queues behind it.
+describe("dev-start concurrency lock (KEIKO-0719)", () => {
+  it("serialises two concurrent withDevStartLock calls in FIFO order", async () => {
+    const order = [];
+    const first = withDevStartLock(async () => {
+      order.push("A-start");
+      await new Promise((resolveDelay) => globalThis.setTimeout(resolveDelay, 50));
+      order.push("A-end");
+    });
+    // Give A a tick to acquire the lock and start work.
+    await new Promise((resolveTick) => globalThis.setImmediate(resolveTick));
+    const second = withDevStartLock(async () => {
+      order.push("B-start");
+      order.push("B-end");
+    });
+    await Promise.all([first, second]);
+    expect(order).toEqual(["A-start", "A-end", "B-start", "B-end"]);
+    // Lock file removed after both settle.
+    expect(existsSync(DEV_START_LOCK_FILE)).toBe(false);
+  });
+
+  it("releases the lock even when the wrapped work throws", async () => {
+    await expect(
+      withDevStartLock(async () => {
+        throw new Error("boom");
+      }),
+    ).rejects.toThrow(/boom/);
+    expect(existsSync(DEV_START_LOCK_FILE)).toBe(false);
+    // A subsequent call must succeed (proves the lock file was released).
+    const marker = { ran: false };
+    await withDevStartLock(async () => {
+      marker.ran = true;
+    });
+    expect(marker.ran).toBe(true);
+  });
+});
+
+// KEIKO-0719 (extended): the two-step "stop any prior runner, then clear pidFile" sequence used
+// to live outside the dev-start lock; two concurrent `dev:start` invocations could both clear
+// the check and then race to overwrite pidFile. The extracted `prepareRunnerCriticalSection`
+// helper runs inside `withDevStartLock` so the sequence executes only once per acquirer.
+describe("prepareRunnerCriticalSection (KEIKO-0719 race close)", () => {
+  it("runs restartExistingRunnerIfNeeded before removing the pid file", async () => {
+    const order = [];
+    await prepareRunnerCriticalSection({
+      restartExistingRunnerIfNeeded: async () => order.push("restart"),
+      removePidFile: () => order.push("remove"),
+    });
+    expect(order).toEqual(["restart", "remove"]);
+  });
+
+  it("propagates a restart failure without removing the pid file", async () => {
+    const removePidFile = vi.fn();
+    await expect(
+      prepareRunnerCriticalSection({
+        restartExistingRunnerIfNeeded: async () => {
+          throw new Error("restart failed");
+        },
+        removePidFile,
+      }),
+    ).rejects.toThrow(/restart failed/);
+    expect(removePidFile).not.toHaveBeenCalled();
+  });
+
+  it("falls through to the default seams when none are provided", async () => {
+    // On a fresh checkout the pidFile does not exist, so the default `restartExistingRunnerIfNeeded`
+    // returns immediately and the default `removePidFile` is a no-op force-remove. This exercise
+    // covers the nullish-coalescing default paths and asserts the helper accepts an empty seams
+    // object (or none at all) without throwing.
+    await expect(prepareRunnerCriticalSection({})).resolves.toBeUndefined();
+    await expect(prepareRunnerCriticalSection()).resolves.toBeUndefined();
   });
 });

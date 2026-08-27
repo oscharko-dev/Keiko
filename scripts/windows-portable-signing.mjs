@@ -274,11 +274,33 @@ function required(options, name) {
   return value;
 }
 
+// KEIKO-0658: parallel the macOS assertManifestCodeObjects cross-check. The Windows PE
+// inventory step previously wrote the inventory + catalog without verifying that every
+// manifest.sidecarRuntimes[].executablePath entry is actually PRESENT among the inventoried
+// PE files. A future manifest that names a sidecar the payload does not carry would then be
+// signed and shipped anyway, and the divergence would only be caught downstream — or never.
+// Read portable-manifest.json (matching macOS's inventoryCommand at scripts/macos-portable-
+// signing.mjs:168-172) and assert set membership before writing the inventory artifact.
+function assertWindowsManifestSidecarInventory(manifest, paths) {
+  for (const sidecar of manifest.sidecarRuntimes ?? []) {
+    if (typeof sidecar?.executablePath !== "string") continue;
+    if (!paths.has(sidecar.executablePath)) {
+      fail(
+        `manifest sidecar executable is missing from the Windows PE inventory: ${sidecar.executablePath}`,
+      );
+    }
+  }
+}
+
 function inventoryCommand(options) {
   const stageRoot = resolve(required(options, "stage-root"));
   const inventoryPath = resolve(required(options, "inventory"));
   const catalogPath = resolve(required(options, "catalog"));
   const inventory = inventoryWindowsPortablePeFiles(join(stageRoot, "payload", "Keiko"));
+  const manifestPath = join(stageRoot, "manifest", "portable-manifest.json");
+  const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
+  const paths = new Set(inventory.files.map((entry) => entry.relativePath ?? entry.path ?? entry));
+  assertWindowsManifestSidecarInventory(manifest, paths);
   writeFileSync(inventoryPath, `${JSON.stringify(inventory, null, 2)}\n`, { mode: 0o600 });
   writeFileSync(catalogPath, catalogForInventory(inventory), { mode: 0o600 });
   console.log(`windows-portable-signing: inventoried ${String(inventory.files.length)} PE files`);

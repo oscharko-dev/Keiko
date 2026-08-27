@@ -69,7 +69,36 @@ jobs:
       - name: Confirm dev branch gate
         run: |
           case "${GITHUB_REF}:${GITHUB_BASE_REF}" in
-            refs/heads/dev: | refs/heads/feat/dev: | refs/heads/feat/epic-open-code-engine-in-keiko-2473: | refs/heads/feat/keiko-editor: | refs/heads/feat/keiko-agent-native-editor-foundation-and-runtime: | refs/heads/feat/prompt-enhancer-1307: | refs/heads/feat/keiko-establish-governed-end-to-end-git-delivery: | refs/heads/feat/keiko-voice-digital-twin: | refs/heads/feat/keiko-isolated-task-workspaces: | refs/heads/feat/keiko-colleague-like-voice-dialogue-mode: | refs/heads/feat/keiko-repository-centered-desktop-workflow: | refs/heads/feat/epic-built-in-editor-2285-M11: | refs/heads/feat/epic-memoria-viva-2538: | refs/heads/epic/coding-workbench-opencode-codex: | refs/heads/release/*: | *:dev | *:feat/dev | *:feat/epic-open-code-engine-in-keiko-2473 | *:feat/keiko-editor | *:feat/keiko-agent-native-editor-foundation-and-runtime | *:feat/prompt-enhancer-1307 | *:feat/keiko-establish-governed-end-to-end-git-delivery | *:feat/keiko-voice-digital-twin | *:feat/keiko-isolated-task-workspaces | *:feat/keiko-colleague-like-voice-dialogue-mode | *:feat/keiko-repository-centered-desktop-workflow | *:feat/epic-built-in-editor-2285-M11 | *:feat/epic-memoria-viva-2538 | *:epic/coding-workbench-opencode-codex | *:release/*)
+            refs/heads/dev: \
+            | refs/heads/feat/dev: \
+            | refs/heads/feat/epic-open-code-engine-in-keiko-2473: \
+            | refs/heads/feat/keiko-editor: \
+            | refs/heads/feat/keiko-agent-native-editor-foundation-and-runtime: \
+            | refs/heads/feat/prompt-enhancer-1307: \
+            | refs/heads/feat/keiko-establish-governed-end-to-end-git-delivery: \
+            | refs/heads/feat/keiko-voice-digital-twin: \
+            | refs/heads/feat/keiko-isolated-task-workspaces: \
+            | refs/heads/feat/keiko-colleague-like-voice-dialogue-mode: \
+            | refs/heads/feat/keiko-repository-centered-desktop-workflow: \
+            | refs/heads/feat/epic-built-in-editor-2285-M11: \
+            | refs/heads/feat/epic-memoria-viva-2538: \
+            | refs/heads/epic/coding-workbench-opencode-codex: \
+            | refs/heads/release/*: \
+            | *:dev \
+            | *:feat/dev \
+            | *:feat/epic-open-code-engine-in-keiko-2473 \
+            | *:feat/keiko-editor \
+            | *:feat/keiko-agent-native-editor-foundation-and-runtime \
+            | *:feat/prompt-enhancer-1307 \
+            | *:feat/keiko-establish-governed-end-to-end-git-delivery \
+            | *:feat/keiko-voice-digital-twin \
+            | *:feat/keiko-isolated-task-workspaces \
+            | *:feat/keiko-colleague-like-voice-dialogue-mode \
+            | *:feat/keiko-repository-centered-desktop-workflow \
+            | *:feat/epic-built-in-editor-2285-M11 \
+            | *:feat/epic-memoria-viva-2538 \
+            | *:epic/coding-workbench-opencode-codex \
+            | *:release/*)
               echo "Protected or integration branch gate satisfied."
               ;;
             *)
@@ -227,14 +256,11 @@ jobs:
       - name: Verify governed Node.js and npm toolchain
         run: node scripts/check-runtime-toolchain.mjs --exact
       - run: npm ci --ignore-scripts
-      - name: Install sandbox isolation backend (bubblewrap)
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y bubblewrap
-          # Ubuntu 24.04 restricts unprivileged user namespaces via AppArmor; bubblewrap (and the
-          # unshare fallback) need them to create the network namespace. Relax it for the runner so
-          # the enforced-egress proof below actually exercises the isolation boundary (ADR-0043).
-          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
+      # Ubuntu 24.04 restricts unprivileged user namespaces via AppArmor; bubblewrap (and the
+      # unshare fallback) need them to create the network namespace. Relax it for the runner so
+      # the enforced-egress proof below actually exercises the isolation boundary (ADR-0043).
+      - name: Setup Linux sandbox isolation
+        uses: ./.github/actions/setup-sandbox-isolation
       - name: Enforced sandbox egress proof (ADR-0043 / #1202)
         # NOT gated by the feat/keiko-editor branch skip: the assured pre-filter executes untrusted
         # model-generated code, so the deny-by-default egress boundary must be proven on every run.
@@ -417,13 +443,10 @@ jobs:
           path: ~/.npm
           key: npm-cache-${{ runner.os }}-node24.18.0-${{ hashFiles('package-lock.json') }}
       - run: npm ci --ignore-scripts
-      - name: Install sandbox isolation backend (bubblewrap)
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y bubblewrap
-          # Coverage executes the same live isolation proofs as the core test job. Ubuntu 24.04
-          # otherwise exposes bubblewrap while AppArmor prevents it from creating the namespace.
-          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
+      # Coverage executes the same live isolation proofs as the core test job. Ubuntu 24.04
+      # otherwise exposes bubblewrap while AppArmor prevents it from creating the namespace.
+      - name: Setup Linux sandbox isolation
+        uses: ./.github/actions/setup-sandbox-isolation
       - name: Restore the provisioned USearch runtime
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
@@ -509,11 +532,8 @@ jobs:
           path: ~/.npm
           key: npm-cache-${{ runner.os }}-node24.18.0-${{ hashFiles('package-lock.json') }}
       - run: npm ci --ignore-scripts
-      - name: Install sandbox isolation backend (bubblewrap)
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y bubblewrap
-          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
+      - name: Setup Linux sandbox isolation
+        uses: ./.github/actions/setup-sandbox-isolation
       - name: Restore the provisioned USearch runtime
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
@@ -575,11 +595,8 @@ jobs:
           path: ~/.npm
           key: npm-cache-${{ runner.os }}-node24.18.0-${{ hashFiles('package-lock.json') }}
       - run: npm ci --ignore-scripts
-      - name: Install sandbox isolation backend (bubblewrap)
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y bubblewrap
-          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
+      - name: Setup Linux sandbox isolation
+        uses: ./.github/actions/setup-sandbox-isolation
       - name: Restore the provisioned USearch runtime
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
@@ -605,6 +622,11 @@ jobs:
           if-no-files-found: error
           retention-days: 1
 
+  # KEIKO-1021: the SonarCloud-scope `if:` condition is duplicated at ci.yml:755, 770, 782,
+  # and 796 (four coupled sites in this job). GitHub Actions has no `if:`-level variable
+  # interpolation, so the four expressions must be edited together. Any change to one — adding a
+  # trigger, restricting a branch, or narrowing a base_ref — must be applied to all four to keep
+  # the coverage-sonar scope coherent across the job's four gated steps.
   coverage-sonar:
     name: Coverage and SonarCloud
     # `always()` is load-bearing. Without it a failing shard would leave this job SKIPPED, and a
@@ -1035,12 +1057,9 @@ jobs:
       - name: Verify productive native sources on Windows
         if: runner.os == 'Windows'
         run: npm run check:native:windows
-      - name: Install Linux sandbox isolation backend
+      - name: Setup Linux sandbox isolation
         if: runner.os == 'Linux'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y bubblewrap
-          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+        uses: ./.github/actions/setup-sandbox-isolation
       - name: Typecheck the complete package graph
         run: npm run typecheck
       - name: Build
@@ -1092,15 +1111,12 @@ jobs:
         run: node scripts/check-runtime-toolchain.mjs --exact
       - name: Install workspaces (single root lockfile after #167)
         run: npm ci --ignore-scripts
-      - name: Install sandbox isolation backend (bubblewrap)
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y bubblewrap
-          # The #2215 real-BFF E2E executes verification commands through the same mandatory
-          # network:none boundary as production. Ubuntu 24.04 restricts unprivileged user
-          # namespaces via AppArmor, so enable the proven Bubblewrap path exactly as the required
-          # ci job does; never weaken the verification runner to inherited networking for tests.
-          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
+      # The #2215 real-BFF E2E executes verification commands through the same mandatory
+      # network:none boundary as production. Ubuntu 24.04 restricts unprivileged user
+      # namespaces via AppArmor, so enable the proven Bubblewrap path exactly as the required
+      # ci job does; never weaken the verification runner to inherited networking for tests.
+      - name: Setup Linux sandbox isolation
+        uses: ./.github/actions/setup-sandbox-isolation
       - name: Build internal packages so contracts dist resolves for UI tsc
         run: npm run build:packages
       - name: Security audit UI dependencies (moderate and above)

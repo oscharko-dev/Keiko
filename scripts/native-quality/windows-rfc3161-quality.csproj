@@ -9,9 +9,19 @@
     <Nullable>enable</Nullable>
     <ImplicitUsings>disable</ImplicitUsings>
     <Deterministic>true</Deterministic>
+    <!-- KEIKO-0899: Deterministic=true above is unsound without a NuGet lock file — a floating
+         transitive dependency would still let a rebuild resolve a different set of assemblies
+         under an identical .csproj/lock-free tree, which defeats the reproducibility contract.
+         RestorePackagesWithLockFile=true pins every transitive dependency into
+         packages.lock.json; that file is committed and treated as the authoritative resolution
+         graph on every subsequent restore. -->
+    <RestorePackagesWithLockFile>true</RestorePackagesWithLockFile>
   </PropertyGroup>
   <ItemGroup>
-    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+    <!-- KEIKO-0934: removed <FrameworkReference Include="Microsoft.AspNetCore.App" />.
+         windows-portable-rfc3161.cs is an offline RFC 3161 timestamp responder verifier and
+         does not touch any ASP.NET Core surface — the framework reference bloated the
+         restore graph with the ASP.NET Core targeting pack for no compiler benefit. -->
     <PackageReference Include="System.Security.Cryptography.Pkcs" Version="10.0.9" />
     <Compile Include="../windows-portable-rfc3161.cs" Link="windows-portable-rfc3161.cs" />
   </ItemGroup>
