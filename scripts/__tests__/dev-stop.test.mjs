@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import {
   DEV_STOP_GRACE_MS,
+  checkPortReleased,
   main,
   stopLiveRunner,
   stopOrphanedChildren,
@@ -290,5 +291,21 @@ describe("checkPortsReleased parallel probing (KEIKO-0734)", () => {
     };
     const result = await stopStaleRunner({ children: [11], publicPort: 1983 }, false, seams);
     expect(result).toBe(0);
+  });
+});
+
+// KEIKO-0734 (validator): checkPortReleased is the guard around probePortFree. A malformed port
+// must resolve to `true` without touching the network stack — the four rejection conditions
+// (typeof, integer, positive, ≤65535) exist so a corrupted state file never spawns a real socket
+// probe against a bogus value.
+describe("checkPortReleased input validation (KEIKO-0734)", () => {
+  it.each([
+    ["non-number (string)", "3005"],
+    ["non-integer (float)", 3005.5],
+    ["non-positive (zero)", 0],
+    ["non-positive (negative)", -1],
+    ["above the port ceiling", 65_536],
+  ])("resolves to true for a %s value without probing", async (_label, port) => {
+    await expect(checkPortReleased(port)).resolves.toBe(true);
   });
 });
