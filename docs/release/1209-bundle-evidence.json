@@ -2,7 +2,7 @@
   "releaseEvidenceVersion": 1,
   "staticExport": {
     "root": "dist/ui/static",
-    "fileCount": 289
+    "fileCount": 274
   },
   "b1": {
     "firstLoadScriptCount": 19,
@@ -11,17 +11,17 @@
   },
   "b2": {
     "budgetBytes": 2621440,
-    "shipsTotalBytes": 1406639,
-    "loadedTotalBytes": 1406639,
+    "shipsTotalBytes": 1008262,
+    "loadedTotalBytes": 1008262,
     "ok": true,
     "shipsOk": true,
     "loadedOk": true
   },
   "b3": {
     "budgetBytes": 768000,
-    "largestWorkerBytes": 111593,
+    "largestWorkerBytes": 112323,
     "largestWorkerLabel": "editor",
-    "largestLoadedWorkerBytes": 111593,
+    "largestLoadedWorkerBytes": 112323,
     "largestLoadedWorkerLabel": "editor",
     "ok": true,
     "shipsOk": true,
@@ -30,13 +30,8 @@
   "workers": [
     {
       "label": "editor",
-      "gzipBytes": 111593,
-      "path": "dist/ui/static/_next/static/chunks/3nzj1g_suy_cs.js"
-    },
-    {
-      "label": "editor",
-      "gzipBytes": 110748,
-      "path": "dist/ui/static/_next/static/chunks/3tftoas-byv_b.js"
+      "gzipBytes": 112323,
+      "path": "dist/ui/static/_next/static/chunks/1xnshc3pan0as.js"
     },
     {
       "label": "editor",
@@ -50,36 +45,24 @@
     }
   ],
   "disabledLanguageWorkers": [],
-  "editorRuntimeChunkCount": 7,
+  "editorRuntimeChunkCount": 5,
   "editorRuntimeChunks": [
     {
-      "path": "dist/ui/static/_next/static/chunks/0mbdm3_1syk7-.js",
-      "gzipBytes": 606969,
-      "rawBytes": 2466918,
+      "path": "dist/ui/static/_next/static/chunks/1gb4enm09z949.js",
+      "gzipBytes": 607030,
+      "rawBytes": 2467072,
       "workerLabel": null
     },
     {
-      "path": "dist/ui/static/_next/static/chunks/3to4q8irxmqbt.js",
-      "gzipBytes": 288726,
-      "rawBytes": 1216056,
+      "path": "dist/ui/static/_next/static/chunks/00012vp6kzw-s.js",
+      "gzipBytes": 288635,
+      "rawBytes": 1216526,
       "workerLabel": null
     },
     {
-      "path": "dist/ui/static/_next/static/chunks/2kalmxt68eyg8.js",
-      "gzipBytes": 288329,
-      "rawBytes": 1216056,
-      "workerLabel": null
-    },
-    {
-      "path": "dist/ui/static/_next/static/chunks/3nzj1g_suy_cs.js",
-      "gzipBytes": 111593,
-      "rawBytes": 366819,
-      "workerLabel": "editor"
-    },
-    {
-      "path": "dist/ui/static/_next/static/chunks/3tftoas-byv_b.js",
-      "gzipBytes": 110748,
-      "rawBytes": 366819,
+      "path": "dist/ui/static/_next/static/chunks/1xnshc3pan0as.js",
+      "gzipBytes": 112323,
+      "rawBytes": 368689,
       "workerLabel": "editor"
     },
     {
@@ -95,5 +78,5 @@
       "workerLabel": "editor"
     }
   ],
-  "measurementSha256": "28773196b43c990ddc48b893a9f8cfcc7e525e10d41b048f9900655722fc7afe"
+  "measurementSha256": "f43ad67738b8ce74fa7412570fb4a65332844f73328f18ddce7c8a1f47ddfcd3"
 }

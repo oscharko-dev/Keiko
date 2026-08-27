@@ -159,7 +159,7 @@ jobs:
           annotations: true
       - name: Scan dependency manifests with OSV Scanner
         if: ${{ !cancelled() && steps.checkout.outcome != 'failure' }}
-        uses: google/osv-scanner-action/osv-scanner-action@9a498708959aeaef5ef730655706c5a1df1edbc2 # v2.3.8
+        uses: google/osv-scanner-action/osv-scanner-action@6e4298ebc4db23e847df9b2e2de2939d6f066c67 # v2.5.1
         with:
           # `--config` is passed explicitly rather than relying on directory auto-discovery, so the
           # committed triage record in osv-scanner.toml is the single, reviewable source of every
