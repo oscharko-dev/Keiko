@@ -119,6 +119,7 @@ const EXPECTED_DEPCRUISER_RULE_COUNTS = {
   "adr-0019-trust-6-evidence-allowed-callers": 1,
   "adr-0019-trust-7-cli-server-no-port-bypass": 1,
   "adr-0019-trust-8-no-do-not-follow-in-prod": 1,
+  "adr-0165-editor-read-allowed-callers": 1,
 };
 
 // Representative module paths spanning every alternative of the production `includeOnly`.

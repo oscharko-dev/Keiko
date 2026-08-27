@@ -1003,6 +1003,34 @@ module.exports = {
       },
       to: { path: "(^|/)(__tests__|__test-support__|test-support)(/|$)" },
     },
+    {
+      name: "adr-0165-editor-read-allowed-callers",
+      comment:
+        "ADR-0165 D2: the raw, unredacted editor read lane is a review-time containment " +
+        "boundary, not a runtime one; this rule makes it machine-enforced. The read lane is " +
+        "the `./internal/editor-read` subpath of keiko-workspace (source: " +
+        "packages/keiko-workspace/src/editorRead.ts). Only editor-owned callers under " +
+        "keiko-server/src/editor and the module's own package (keiko-workspace/src/) may " +
+        "import it — every other production caller must go through the default " +
+        "readWorkspaceFile export, which routes the redacting barrel (ADR-0005). The " +
+        "negative-test fixture under tests/architecture/fixtures/editor-read-allowed-callers/ " +
+        "proves the gate is live by name.",
+      severity: "error",
+      from: {
+        path:
+          "^(packages/keiko-[^/]+/src/|" +
+          "tests/architecture/fixtures/editor-read-allowed-callers/|" +
+          "src/)",
+        pathNot:
+          "^(packages/keiko-server/src/editor/|packages/keiko-workspace/src/)|" +
+          PRODUCTION_SOURCE_PATH_NOT,
+      },
+      to: {
+        path:
+          "^packages/keiko-workspace/src/editorRead\\.ts$|" +
+          "^packages/keiko-workspace/dist/editorRead\\.js$",
+      },
+    },
   ],
   options: {
     doNotFollow: { path: "node_modules" },
