@@ -22,6 +22,10 @@
     "./testing": {
       "types": "./dist/testing.d.ts",
       "import": "./dist/testing.js"
+    },
+    "./code-intelligence": {
+      "types": "./dist/codeIntelligenceSurface.d.ts",
+      "import": "./dist/codeIntelligenceSurface.js"
     }
   },
   "scripts": {

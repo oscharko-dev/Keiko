@@ -188,22 +188,6 @@ export {
 } from "./stableId.js";
 export type { ImportEdgeStableIdInput, SymbolGraphRecordStableIdInput } from "./stableId.js";
 
-// ─── Structural adapters (Issue #180 / Epic #177) ──────────────────────────
-export type {
-  AdapterError,
-  RunAllResult,
-  StructuralAdapter,
-  StructuralCoverageDiagnostics,
-  StructuralAdapterDeps,
-  StructuralAdapterRegistry,
-  StructuralAdapterRegistryOptions,
-  StructuralParserCoverage,
-} from "./structuralAdapters.js";
-export {
-  createDefaultStructuralRegistry,
-  createEcosystemStructureAdapters,
-  runStructuralAdapters,
-} from "./structuralAdapters.js";
 export type {
   ImportEdgeKind,
   ImportGraph,
@@ -257,27 +241,11 @@ export type {
   FollowSymbolTraceRequest,
 } from "./followSymbolTrace.js";
 export { followSymbolTrace } from "./followSymbolTrace.js";
-export { testSourcePairingAdapter } from "./testSourcePairing.js";
-export { importGraphAdapter } from "./importGraph.js";
 export { gitHistoryAdapter } from "./gitHistory.js";
-export {
-  buildCodeIntelligenceIndex,
-  lookupCodeIntelligenceAtoms,
-  queryCodeIntelligenceIndex,
-  type ApiContractEdge,
-  type ApiEndpoint,
-  type CodeCallEdge,
-  type CodeImportEdge,
-  type CodeIntelligenceIndex,
-  type CodeLanguage,
-  type CodeParserCoverage,
-  type CodeParserKind,
-  type CodeReferenceEdge,
-  type CodeSymbol,
-  type CodeSymbolKind,
-  type DtoContractEdge,
-} from "./codeIntelligence.js";
 
+// TypeScript-backed code intelligence is intentionally published only through the
+// `@oscharko-dev/keiko-workspace/code-intelligence` subpath. Loading it from this root barrel
+// would instantiate the compiler for every lightweight workspace consumer.
 export { KEIKO_WORKSPACE_VERSION } from "./version.js";
 
 // ─── Safe document context extraction (Issue #148 / Epic #142) ─────────────────
