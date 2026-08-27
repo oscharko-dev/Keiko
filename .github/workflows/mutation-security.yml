@@ -18,6 +18,7 @@ jobs:
     timeout-minutes: 180
     permissions:
       contents: read
+      issues: write
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
@@ -32,4 +33,33 @@ jobs:
       - run: npm ci --ignore-scripts
       - run: npm run build:packages
       - name: Run security mutation suite
+        id: mutation
+        continue-on-error: true
         run: npm run test:mutation:security
+      # A scheduled quality lane that fails silently is worse than no lane: an unnoticed failure lets
+      # security-mutation regressions accumulate on `dev` invisibly. Mirroring the failure-persistence
+      # pattern from nightly-perf-evidence.yml so a broken run files (or updates) a tracking issue
+      # instead of scrolling by in Actions history unseen. KEIKO-0588.
+      - name: Report mutation failure as a tracking issue
+        if: ${{ steps.mutation.outcome == 'failure' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          title="Security mutation suite failed on ${GITHUB_REF_NAME}"
+          # Marker in the body, never in the title (issue #2740 mode) — a search that matches prose
+          # opens duplicates the moment the title is reworded.
+          marker="<!-- mutation-security:${GITHUB_REF_NAME} -->"
+          existing=$(gh issue list --repo "${GITHUB_REPOSITORY}" --state open --search "\"${marker}\" in:body" --json number --jq '.[0].number // empty')
+          # shellcheck disable=SC2016
+          body=$(printf '%s\n\nThe scheduled full security mutation regression suite (`npm run test:mutation:security`) failed on `%s`. The mutation score has regressed or the suite crashed; both are release-blocking on the security-critical modules the suite covers (ADR-0148).\n\nRun: %s\n\nInvestigate locally with the same command, and land the repair before the next scheduled run. If the regression is intentional (e.g. a covered module was removed), update the mutation manifest in the same PR.' "${marker}" "${GITHUB_REF_NAME}" "${RUN_URL}")
+          if [ -n "${existing}" ]; then
+            gh issue comment "${existing}" --repo "${GITHUB_REPOSITORY}" --body "${body}"
+          else
+            gh issue create --repo "${GITHUB_REPOSITORY}" --title "${title}" --body "${body}"
+          fi
+      - name: Fail the lane after reporting
+        if: ${{ steps.mutation.outcome == 'failure' }}
+        run: |
+          echo "Security mutation suite failed on ${GITHUB_REF_NAME}; a tracking issue was filed."
+          exit 1

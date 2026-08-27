@@ -57,6 +57,9 @@ monotonic semantics fixed by
 - **Full access** (`autonomous-delivery`) allows file and internet work inside the validated
   Authority Envelope without per-action approval. Accepted `dev` delivery follows ADR-0135 and is
   integrated automatically only once the auto-merge preconditions in the invariant above hold.
+  (A mode's `allowed` disposition is a policy ceiling — see ADR-0138 D4 for the same-day
+  capability-availability clarification: a surface still needs an implemented execution path
+  before a given mode's `allowed` verdict can act.)
 
 Hard denials remain mode-independent: invalid or expired authority, workspace escape, denied
 sensitive paths, secret exfiltration, unsupported actions, exhausted budgets, and platform

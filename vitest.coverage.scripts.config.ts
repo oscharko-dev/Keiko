@@ -1,14 +1,9 @@
 import { defineConfig } from "vitest/config";
 
+import { PACKAGE_COVERAGE_GATE_SCRIPTS } from "./scripts/lib/package-coverage-gate-scripts.mjs";
+
 const packageCoverageGateScripts = [
-  "scripts/check-lcov-source-mapping.mjs",
-  "scripts/check-mutation-quality.mjs",
-  "scripts/check-mutation-scope.mjs",
-  "scripts/check-sonar-analysis-log.mjs",
-  "scripts/check-sonar-main-quality-gate.mjs",
-  "scripts/check-sonar-pr-quality-gate.mjs",
-  "scripts/sonar-analysis-scope.mjs",
-  "scripts/sonar-quality-gate-contract.mjs",
+  ...PACKAGE_COVERAGE_GATE_SCRIPTS,
   // Wave-2 audit #2627: arch-check-negative.mjs is a top-level orchestration script that runs
   // dep-cruiser and the import-policy checker via `spawnSync`; v8 coverage never crosses the
   // subprocess boundary, so a unit-test harness cannot exercise its lines directly. Its testable

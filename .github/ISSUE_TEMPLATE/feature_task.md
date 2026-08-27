@@ -66,8 +66,6 @@ Describe the goal of this issue and the user, developer, platform, or governance
 - [ ] Studio performance and memory gates when editor performance, Monaco, rendering, or large-output behavior changes.
 - [ ] Studio visual regression when visible UI structure changes.
 - [ ] Markdown link check when documentation changes.
-- [ ] W0.2 release gate when W0.2 product-path semantics change.
-- [ ] W0.3 release gate when W0.3 workflow or Studio hardening semantics change.
 - [ ] Security review when trust boundaries, auth/session, secrets, CSP, model access, execution, patch application, or external calls change.
 - [ ] `Keiko for Quality` review settled and `npm run gates:sonar` run locally when security-sensitive or shared control-plane code changes.
 

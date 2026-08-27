@@ -39,11 +39,22 @@ export default defineConfig({
     testTimeout: 15_000,
     coverage: {
       provider: "v8",
-      // lcov is additive: check-lcov-source-mapping.mjs reads coverage/lcov.info to prove
-      // changed root-level scripts/*.mjs sources (outside packages/, which has its own scoped
-      // coverage run) are exercised by their scripts/__tests__/*.test.mjs harness.
-      reporter: ["text", "json", "lcov"],
-      exclude: ["dist/**", "node_modules/**", "**/*.config.ts"],
+      // The root vitest config's coverage output is not consumed by any gate — the three LCOV
+      // reports SonarCloud and check-lcov-source-mapping.mjs ingest are produced by the scoped
+      // configs vitest.coverage.packages.config.ts, packages/keiko-ui/vitest.coverage.config.ts,
+      // and vitest.coverage.scripts.config.ts (see scripts/check-lcov-source-mapping.mjs's
+      // defaultReports and sonar-project.properties). Pin the reports directory so an unscoped
+      // `vitest run --coverage` against this config cannot recursively delete `coverage/packages`
+      // or `coverage/scripts` (KEIKO-0580).
+      reportsDirectory: "coverage/root",
+      reporter: ["text", "json"],
+      exclude: [
+        "dist/**",
+        "node_modules/**",
+        "**/*.config.ts",
+        "**/*.test.*",
+        "**/__tests__/**",
+      ],
     },
   },
 });

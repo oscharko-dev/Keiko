@@ -11,12 +11,18 @@ ADR recorded it, and do not create a new ADR merely to correct existing text.
 ## Local development
 
 ```bash
-npm install        # install dev tooling and generate package-lock.json
-npm run build      # compile TypeScript outputs
-npm test           # run the unit test suite
-npm run lint       # ESLint, zero-warning policy
-npm run typecheck  # strict type-checking for src + tests
+npm install                # install all workspaces from the single root lockfile
+npm run provision:usearch  # ONCE per checkout — see AGENTS.md §2
+npm run build              # compile TypeScript outputs
+npm run typecheck          # strict type-checking for src + tests
+npm run lint               # ESLint, zero-warning policy
+npm run format:check       # Prettier check
+npm test                   # run the unit test suite
+npm run arch:check         # dependency-cruiser + import-policy + contract-boundaries
+npm run arch:check:negative
 ```
+
+See [AGENTS.md §3](AGENTS.md) for the full local gate loop and the touched-area gate table.
 
 ## Pull requests
 

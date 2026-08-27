@@ -265,7 +265,7 @@ export function isGeneratedOrBinaryPath(input) {
 }
 
 // Top-level subprocess gates whose behavior cannot cross the Linux v8 coverage boundary.
-const NON_LCOV_SCRIPTS = new Set(["scripts/arch-check-negative.mjs"]);
+export const NON_LCOV_SCRIPTS = new Set(["scripts/arch-check-negative.mjs"]);
 
 export function isCoverableProductSource(input) {
   const path = normalizePath(input);

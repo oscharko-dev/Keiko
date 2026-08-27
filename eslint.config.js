@@ -134,10 +134,21 @@ export default defineConfig(
   // it() cases. Covers both TypeScript suites and the .mjs harnesses for the Node build/gate scripts
   // (e.g. scripts/__tests__/*.test.mjs, which test the .mjs supply-chain and package-surface gates).
   {
-    files: ["**/*.test.ts", "**/*.test.tsx", "**/*.test.mjs"],
+    files: [
+      "**/*.test.ts",
+      "**/*.test.tsx",
+      "**/*.test.mjs",
+      "**/*.spec.ts",
+      "**/*.spec.tsx",
+    ],
     rules: { "max-lines-per-function": "off" },
   },
   { files: ["**/*.{js,cjs}"], ...tseslint.configs.disableTypeChecked },
+  // The design-system pages are legacy static-HTML measurement fixtures whose JS runs feature
+  // detection under try/catch to survive being loaded in a browser that lacks the API. An empty
+  // catch there is a deliberate probe-and-continue, not a swallowed error — the alternative would
+  // wrap every measurement in an availability preamble. Product runtime code is out of scope of
+  // this override and remains subject to the repository-wide "no silent failures" rule.
   {
     files: ["design-system/**/*.js"],
     languageOptions: {
