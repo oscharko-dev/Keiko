@@ -48,8 +48,11 @@ same commit and capture its output.
 
 ## Result
 
-Latest tracked run (against `a11y-proof.json`'s committed `cssSha256`): `PASS`
-
-- `a11y-proof.json`: PASS (tracked)
-- Screenshot coverage: 9 captures across dark, light, dark-HC, light-HC,
-  forced-colors, responsive, loading, error, and focus-visible states
+**Tracked receipts (previous run):** `a11y-proof.json` recorded **PASS** — 9 captures across dark,
+light, dark-HC, light-HC, forced-colors, responsive, loading, error, and focus-visible states with
+0 serious/critical axe violations. That receipt's `cssSha256` reflects the reference CSS at the
+time of the run and no longer matches the current
+[`globals.css`](../../../../packages/keiko-ui/src/app/globals.css); re-run the harness locally
+against the current commit to obtain a fresh, self-consistent verdict. `pdf-viewer-axe-gate-summary.json`
+is intentionally not committed (see above) — it and `a11y-proof.json` are the receipts to
+regenerate together.

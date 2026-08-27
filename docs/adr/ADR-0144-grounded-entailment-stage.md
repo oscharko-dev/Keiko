@@ -135,8 +135,10 @@ unchanged at 1.0.
   compatible judge model is configured and policy allows it; otherwise the path is byte-identical
   (pinned by the existing grounded regression suites, which run with no judge configured). For the
   hybrid topology specifically, NLI verification covers only `[path:line]`-cited folder evidence;
-  connector-`[n]`-marker-cited claims remain on the existing membership/reconciliation check (see
-  ADD-01/RAG-RETRIEVAL-ADD-01) pending a follow-up.
+  connector-`[n]`-marker-cited claims stay on the existing `citationPassesFaithfulness` token-overlap
+  citation-support check (see D1 above and ADD-01/RAG-RETRIEVAL-ADD-01) pending a follow-up. The
+  reconciliation check is a separate downstream stage that reads the same verdict — it is not
+  itself the verification layer.
 - A richer `keiko-evidence` verdict-tally manifest (beyond the operator diagnostic and the persisted
   uncertainty markers) and the System-B NLI unification are explicit K M2 follow-ups.
 - New contract surface is limited to two additive `UncertaintyMarkerKind` values; no capsule-store

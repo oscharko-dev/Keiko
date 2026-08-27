@@ -66,6 +66,15 @@ inside a target repository and must use restrictive file permissions.
 
 ## Decision
 
+> **Reading these sections as a historical record.** D1–D9 are written at Node 22, `src/ui/**` /
+> `ui/lib/**` layout. The storage-engine choice (`node:sqlite`, D1) and the DB-path precedence and
+> migration-discipline decisions (D4/D5/D9) remain the live precedent; the D2 flag-enablement /
+> re-exec branch is vestigial under the current `engines.node` `>=24.18.0 <25` floor per the
+> Status header. Implementation paths have moved to `packages/keiko-server/src/store/**` and
+> `packages/keiko-cli/src/ui.ts` per ADR-0019. The original section text is preserved so the
+> reasoning at the time is legible; treat any `src/ui/**` / `ui/lib/**` path and the Node 22
+> experimental-flag apparatus as documentation of what was decided then, not a current contract.
+
 ### D1 — Storage engine: `node:sqlite` (built-in), zero new runtime dependencies
 
 We will use the **built-in `node:sqlite` module** (`DatabaseSync`, `StatementSync`) as the

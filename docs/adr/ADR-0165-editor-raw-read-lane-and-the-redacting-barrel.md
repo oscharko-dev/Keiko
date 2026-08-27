@@ -85,13 +85,31 @@ re-exports it). Both paths reach the same raw function, so both files are target
 `packages/keiko-server/src/editor/**` (today: `workspaceSearchRoutes.ts`) and the
 `packages/keiko-workspace/src/**` package's own files may import either; any other production
 import fires the rule and turns `npm run arch:check` red. This does not weaken the review-time
-framing — it just refuses to trust silence on a boundary a hostile add could otherwise cross
-undetected between reviews. The rule name is registered in
+framing — it just refuses to trust silence on a boundary an unreviewed code change could otherwise
+cross undetected between reviews. The rule name is registered in
 [`scripts/arch-check-negative.mjs`](../../scripts/arch-check-negative.mjs)'s expected count (`2`, one
 per fixture) and in
 [`tests/architecture/severity-gate.test.ts`](../../tests/architecture/severity-gate.test.ts)'s
 required-trust-rules list so a downgrade or accidental removal shows up as a named failure, not a
 silent drift.
+
+**Scope of what the rule covers, said plainly.** The dependency-cruiser rule is a **module-graph**
+check: it fires on `import` (and static require) edges that reach `editorRead.ts` or `discovery.ts`
+from outside the allowlist. It does **not** cover the runtime-flag alternative to importing the raw
+read, and the containment claim above is limited to the import path accordingly. In particular,
+`searchText` and `readExcerpt` on the public barrel accept an optional `deps.contentLane` (see
+[`packages/keiko-workspace/src/repoSearch.ts`](../../packages/keiko-workspace/src/repoSearch.ts)):
+passing `contentLane: "editor"` from an allowed dependency returns raw, unredacted excerpts through
+the same result type as the redacted lane, without importing any guarded file. The only production
+site that does this today is
+[`packages/keiko-server/src/editor/workspaceSearchRoutes.ts`](../../packages/keiko-server/src/editor/workspaceSearchRoutes.ts),
+itself a legitimate editor caller; a future caller in an evidence-adjacent package could set the
+same flag and leak raw bytes into an evidence atom without ever tripping the rule. This is a
+**known, tracked gap** — machine-enforcing the flag pattern requires either moving the editor-lane
+variants behind the `./internal/editor-read` subpath (mirroring `readWorkspaceFileForEditing`) or
+adding an AST literal-value check for `contentLane: "editor"` outside the allowlist. It is out of
+scope for the import-graph rule this section describes and is left for a follow-up (see issue
+#2908 / PR #3295 review round for the discovery trail).
 
 ### D3 — Importing the subpath is a scoped assertion
 

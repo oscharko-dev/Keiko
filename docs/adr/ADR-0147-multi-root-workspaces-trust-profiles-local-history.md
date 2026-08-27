@@ -15,8 +15,11 @@ Amended by Issue #2774 (Epic #2285, 2026-07-27) to bound the private history ind
 and repeat root identity validation immediately before history effects.
 
 Amended by [ADR-0155](ADR-0155-root-scoped-workspace-trust-binding.md) to narrow the trust validity
-comparison to root-describing dimensions only; manifest reference, revision, and digest remain
-recorded as provenance but are excluded from the equality check that governs re-authorization.
+comparison to root-describing dimensions and the workspace-authority `manifestRef` — a root moving
+to a different workspace is a different authority context and still invalidates. Only `manifestRevision`
+and `manifestDigest` are excluded from the equality check that governs re-authorization; they remain
+recorded as provenance but change on ordinary focus/reorder within the same workspace and were the
+false-positive drivers ADR-0155 removed.
 
 The independent architecture, security, and contract-test reviews required by Issue #2520 were
 completed before implementation. The maintainer clarified on
