@@ -342,13 +342,18 @@ export function renderStructuredSummaryLines(
 }
 
 function addSection(lines: string[], title: string, values: readonly string[] | undefined): void {
-  if (values === undefined || values.length === 0) {
+  const singleLineValues = values?.filter(isSafeListItem) ?? [];
+  if (singleLineValues.length === 0) {
     return;
   }
   lines.push(`${title}:`);
-  for (const value of values) {
+  for (const value of singleLineValues) {
     lines.push(`- ${value}`);
   }
+}
+
+function isSafeListItem(value: string): boolean {
+  return !/[\r\n]/u.test(value);
 }
 
 function fitSummaryLines(

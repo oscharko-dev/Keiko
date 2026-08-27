@@ -254,6 +254,7 @@ function dispatchEditorShortcut(
 ): boolean {
   if (commandId === "quick-access.files") return dispatchQuickAccess(trigger, "files");
   if (commandId === "quick-access.commands") return dispatchQuickAccess(trigger, "commands");
+  if (commandId === "open-editor-settings") return dispatchOpenEditorSettings(trigger);
   if (commandId === "view.splitRight") host.splitActive("row");
   else if (commandId === "view.splitDown") host.splitActive("column");
   else if (commandId === "view.closeSplit") host.closeActiveSplit();
@@ -263,6 +264,12 @@ function dispatchEditorShortcut(
   else if (commandId === "tab.reopenClosed") host.reopenClosed();
   else if (commandId === "files.saveAll") host.saveAll();
   else return false;
+  return true;
+}
+
+function dispatchOpenEditorSettings(trigger: EditorQuickAccessTrigger | null): boolean {
+  if (trigger === null) return false;
+  trigger.openEditorSettings();
   return true;
 }
 

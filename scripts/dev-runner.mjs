@@ -25,9 +25,9 @@ const bffScript = join(repoRoot, "scripts", "dev-bff.mjs");
 const nextBin = requireFromUi.resolve("next/dist/bin/next");
 const nextLockPath = join(uiDir, ".next", "lock");
 const children = new Map();
-const restartCounts = new Map();
 const maxRestarts = Number(process.env.KEIKO_DEV_MAX_RESTARTS ?? "3");
 const restartDelayMs = Number(process.env.KEIKO_DEV_RESTART_DELAY_MS ?? "500");
+const restartStabilityMs = Number(process.env.KEIKO_DEV_RESTART_STABILITY_MS ?? "300000");
 const nextBundlerPreference = process.env.KEIKO_DEV_NEXT_BUNDLER ?? "auto";
 const skipPackageWatchForTest =
   process.env.NODE_ENV === "test" && process.env.KEIKO_DEV_TEST_SKIP_PACKAGE_WATCH === "1";
@@ -141,6 +141,49 @@ if (!Number.isSafeInteger(restartDelayMs) || restartDelayMs < 0 || restartDelayM
   );
   process.exit(2);
 }
+
+if (
+  !Number.isSafeInteger(restartStabilityMs) ||
+  restartStabilityMs < 1_000 ||
+  restartStabilityMs > 3_600_000
+) {
+  console.error(
+    `Invalid KEIKO_DEV_RESTART_STABILITY_MS: ${String(process.env.KEIKO_DEV_RESTART_STABILITY_MS)}`,
+  );
+  process.exit(2);
+}
+
+export function createRestartBudget(maximumRestarts, stabilityMs, schedule = setTimeout) {
+  const counts = new Map();
+  const stabilityTimers = new Map();
+
+  const cancelStabilityTimer = (label) => {
+    const timer = stabilityTimers.get(label);
+    if (timer !== undefined) clearTimeout(timer);
+    stabilityTimers.delete(label);
+  };
+
+  return {
+    recordExit(label) {
+      cancelStabilityTimer(label);
+      const count = (counts.get(label) ?? 0) + 1;
+      counts.set(label, count);
+      return { count, allowed: count <= maximumRestarts };
+    },
+    recordStableRestart(label) {
+      if (!counts.has(label)) return;
+      cancelStabilityTimer(label);
+      const timer = schedule(() => {
+        counts.delete(label);
+        stabilityTimers.delete(label);
+      }, stabilityMs);
+      timer.unref?.();
+      stabilityTimers.set(label, timer);
+    },
+  };
+}
+
+const restartBudget = createRestartBudget(maxRestarts, restartStabilityMs);
 
 /**
  * Checks whether the given TCP port is free by attempting a connection.
@@ -303,16 +346,19 @@ function writeState(extra = {}) {
 }
 
 function restartChild(label) {
-  const count = (restartCounts.get(label) ?? 0) + 1;
-  restartCounts.set(label, count);
-  if (count > maxRestarts) {
-    console.error(`[dev] ${label} exceeded restart limit (${String(maxRestarts)}).`);
+  const { allowed, count } = restartBudget.recordExit(label);
+  if (!allowed) {
+    console.error(
+      `[dev] ${label} exceeded restart limit (${String(maxRestarts)}) within the ` +
+        `${String(restartStabilityMs)}ms stability window.`,
+    );
     shutdown(1);
     return;
   }
   const delayMs = Math.min(60_000, restartDelayMs * count);
   console.error(
-    `[dev] restarting ${label} in ${String(delayMs)}ms (${String(count)}/${String(maxRestarts)}) ...`,
+    `[dev] restarting ${label} in ${String(delayMs)}ms ` +
+      `(${String(count)}/${String(maxRestarts)} before stability reset) ...`,
   );
   setTimeout(() => {
     restartChildAfterDelay(label);
@@ -330,20 +376,49 @@ function restartChildAfterDelay(label) {
   void waitForPublicReadiness();
 }
 
-async function restartNextChild() {
+export async function restartNextChildWithRetry({
+  currentPort,
+  lockPath,
+  preflight = preflightNextRespawn,
+  isShuttingDown,
+  selectPort,
+  start,
+  waitForReadiness,
+  retry,
+  reportError,
+}) {
   try {
-    const result = await preflightNextRespawn(nextPort, nextLockPath);
-    if (shuttingDown) return;
+    const result = await preflight(currentPort, lockPath);
+    if (isShuttingDown()) return { retried: false, started: false };
     if (result.reselected) {
-      nextPort = result.nextPort;
-      console.error(`[dev] Next.js port was busy; respawning on ${String(nextPort)}.`);
+      selectPort(result.nextPort);
     }
-    startNext();
-    void waitForPublicReadiness();
+    start();
+    void waitForReadiness();
+    return { retried: false, started: true };
   } catch (error) {
-    console.error(`[dev] Next.js respawn preflight failed: ${String(error)}`);
-    restartChild("next");
+    reportError(error);
+    retry();
+    return { retried: true, started: false };
   }
+}
+
+async function restartNextChild() {
+  await restartNextChildWithRetry({
+    currentPort: nextPort,
+    lockPath: nextLockPath,
+    isShuttingDown: () => shuttingDown,
+    selectPort: (selectedPort) => {
+      nextPort = selectedPort;
+      console.error(`[dev] Next.js port was busy; respawning on ${String(nextPort)}.`);
+    },
+    start: startNext,
+    waitForReadiness: waitForPublicReadiness,
+    retry: () => restartChild("next"),
+    reportError: (error) => {
+      console.error(`[dev] Next.js respawn preflight failed: ${String(error)}`);
+    },
+  });
 }
 
 function spawnChild(label, command, args, options) {
@@ -356,6 +431,7 @@ function spawnChild(label, command, args, options) {
     },
   });
   children.set(label, child);
+  restartBudget.recordStableRestart(label);
   writeState();
   child.on("exit", (code, signal) => {
     if (children.get(label) !== child) return;
@@ -366,7 +442,6 @@ function spawnChild(label, command, args, options) {
     console.error(`[dev] ${label} exited unexpectedly.`);
     if (label === "next" && nextBundler === "turbopack" && nextBundlerPreference === "auto") {
       nextBundler = "webpack";
-      restartCounts.set(label, 0);
       console.error("[dev] Turbopack dev server exited; falling back to webpack dev server.");
     }
     restartChild(label);

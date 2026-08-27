@@ -23,10 +23,7 @@ import {
   toolchainTouchedAgainst,
 } from "../check-perf-evidence.mjs";
 import { readEvidence } from "../perf-evidence-gate.mjs";
-import {
-  evaluateWorkspaceEvidenceFreshness,
-  workspaceToolchainTouchedAgainst,
-} from "../workspace-performance-evidence-gate.mjs";
+import { evaluateWorkspaceEvidenceFreshness } from "../workspace-performance-evidence-gate.mjs";
 
 const BASELINE_COMMIT = "18750d079e2a61c7d7044f3f6ec977a104b9884f";
 const CANDIDATE_COMMIT = "6c3d061e6c3d061e6c3d061e6c3d061e6c3d061e";
@@ -1997,6 +1994,113 @@ describe("evaluateFreshness — pull-request mode (source freshness owned by the
     );
   });
 
+  it("accepts a fully bound workspace evidence document when every supplier agrees", () => {
+    const result = evaluateWorkspaceEvidenceFreshness(
+      {
+        ...workspaceEvidence(),
+        freshnessBinding: "source-tree-v1",
+        measurementHarnessSha256: MEASUREMENT_HARNESS_SHA_256,
+      },
+      {
+        computeMeasurementHarnessSha256: () => MEASUREMENT_HARNESS_SHA_256,
+        computeSourceTreeSha256: () => SOURCE_TREE_SHA_256,
+        dirtySubjectPaths: [],
+        enforceSourceFreshness: true,
+      },
+    );
+
+    expect(result).toEqual({ passed: true, failures: [] });
+  });
+
+  it.each([
+    ["a non-object document", null, {}, "evidence is not an object"],
+    [
+      "an invalid recorded toolchain digest",
+      {
+        ...workspaceEvidence(),
+        freshnessBinding: "source-tree-v1",
+        measurementHarnessSha256: "invalid",
+      },
+      {},
+      "evidence is missing a valid measurementHarnessSha256 binding",
+    ],
+    [
+      "an invalid recomputed toolchain digest",
+      {
+        ...workspaceEvidence(),
+        freshnessBinding: "source-tree-v1",
+        measurementHarnessSha256: MEASUREMENT_HARNESS_SHA_256,
+      },
+      { computeMeasurementHarnessSha256: () => "invalid" },
+      "current measurement harness did not produce a SHA-256 digest",
+    ],
+  ])("rejects %s", (_label, evidence, options, expected) => {
+    const result = evaluateWorkspaceEvidenceFreshness(evidence, options);
+    expect(result.passed).toBe(false);
+    expect(result.failures).toContain(expected);
+  });
+
+  it("redacts supplier failures while preserving the evidence class", () => {
+    const result = evaluateWorkspaceEvidenceFreshness(
+      {
+        ...workspaceEvidence(),
+        freshnessBinding: "source-tree-v1",
+        measurementHarnessSha256: MEASUREMENT_HARNESS_SHA_256,
+      },
+      {
+        computeMeasurementHarnessSha256: () => {
+          throw new TypeError("private detail");
+        },
+      },
+    );
+
+    expect(result.failures).toContain(
+      "could not recompute workspace measurement harness: TypeError",
+    );
+  });
+
+  it.each([
+    [
+      "an invalid subject digest",
+      () => "invalid",
+      [],
+      "current performance subject did not produce a SHA-256 digest",
+    ],
+    [
+      "a throwing subject supplier",
+      () => {
+        throw new TypeError("private detail");
+      },
+      [],
+      "could not recompute performance subject: TypeError",
+    ],
+    [
+      "dirty subject inputs",
+      () => SOURCE_TREE_SHA_256,
+      ["packages/keiko-ui/src/app.tsx"],
+      "performance measurement subject has dirty inputs: packages/keiko-ui/src/app.tsx",
+    ],
+  ])(
+    "rejects %s during enforced source freshness",
+    (_label, computeSourceTreeSha256, dirtySubjectPaths, expected) => {
+      const result = evaluateWorkspaceEvidenceFreshness(
+        {
+          ...workspaceEvidence(),
+          freshnessBinding: "source-tree-v1",
+          measurementHarnessSha256: MEASUREMENT_HARNESS_SHA_256,
+        },
+        {
+          computeMeasurementHarnessSha256: () => MEASUREMENT_HARNESS_SHA_256,
+          computeSourceTreeSha256,
+          dirtySubjectPaths,
+          enforceSourceFreshness: true,
+        },
+      );
+
+      expect(result.failures).toContain(expected);
+    },
+  );
+
   it("rejects stale workspace evidence even when no toolchain path changed in the diff", () => {
     const currentDigest = "e".repeat(64);
     const failures = evaluateWorkspaceEvidenceFreshness(
@@ -2160,21 +2264,6 @@ describe("toolchainTouchedAgainst", () => {
 
   it("resolves the real change set through git when no lister is injected", () => {
     expect(toolchainTouchedAgainst("HEAD")).toBe(false);
-  });
-});
-
-describe("workspaceToolchainTouchedAgainst", () => {
-  it("is true when the workspace measurement ruler changes", () => {
-    expect(
-      workspaceToolchainTouchedAgainst("base", ".", () => [
-        "README.md",
-        "tests/e2e/workspace-performance.spec.ts",
-      ]),
-    ).toBe(true);
-  });
-
-  it("is false for a change outside the workspace measurement ruler", () => {
-    expect(workspaceToolchainTouchedAgainst("base", ".", () => ["README.md"])).toBe(false);
   });
 });
 

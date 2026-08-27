@@ -6,7 +6,9 @@ import { describe, expect, it } from "vitest";
 const appDirectory = dirname(fileURLToPath(import.meta.url));
 const repositoryRoot = resolve(appDirectory, "../../../..");
 const styleExceptionsPath = resolve(repositoryRoot, "docs/design-system/styling-exceptions.json");
-const MAX_COMPATIBILITY_EXCEPTION_SOURCES = 38;
+// This is intentionally an equality pin rather than a capacity: every compatibility migration
+// must lower it in the same change, and any new exception needs an explicit governance decision.
+const EXPECTED_COMPATIBILITY_EXCEPTION_SOURCES = 38;
 
 type ExceptionKind = "global-selector-coupling" | "unprefixed-local-classes";
 
@@ -34,9 +36,31 @@ function cssModulePaths(directory: string): readonly string[] {
   return paths;
 }
 
+function withoutGlobalSelectors(source: string): string {
+  let result = "";
+  let index = 0;
+  while (index < source.length) {
+    const globalStart = source.indexOf(":global(", index);
+    if (globalStart === -1) return result + source.slice(index);
+    result += source.slice(index, globalStart);
+    index = globalStart + ":global(".length;
+    let depth = 1;
+    while (index < source.length && depth > 0) {
+      const character = source[index];
+      if (character === "(") depth += 1;
+      if (character === ")") depth -= 1;
+      index += 1;
+    }
+  }
+  return result;
+}
+
 function localClassNames(source: string): ReadonlySet<string> {
   return new Set(
-    Array.from(source.matchAll(/(?:^|[,{]\s*)\.([A-Za-z_][\w-]*)/gmu), (match) => match[1]!),
+    Array.from(
+      withoutGlobalSelectors(source).matchAll(/(?<![\w-])\.([A-Za-z_][\w-]*)/gmu),
+      (match) => match[1]!,
+    ),
   );
 }
 
@@ -75,7 +99,7 @@ describe("Design-system styling exception register", () => {
     expect(new Set(register.exceptions.map((entry) => entry.source)).size).toBe(
       register.exceptions.length,
     );
-    expect(register.exceptions.length).toBeLessThanOrEqual(MAX_COMPATIBILITY_EXCEPTION_SOURCES);
+    expect(register.exceptions.length).toBe(EXPECTED_COMPATIBILITY_EXCEPTION_SOURCES);
     expect([...registered.keys()].sort()).toStrictEqual([...actual.keys()].sort());
     for (const [source, kinds] of actual) {
       expect(registered.get(source)).toStrictEqual(kinds);
@@ -103,6 +127,15 @@ describe("Design-system styling exception register", () => {
       "unprefixed-local-classes",
       "global-selector-coupling",
     ]);
+  });
+
+  it("detects local classes in combinator positions without treating global selectors as local", () => {
+    expect(localClassNames(".cmpCard .legacyIcon > .cmpBadge { color: red; }")).toStrictEqual(
+      new Set(["cmpCard", "legacyIcon", "cmpBadge"]),
+    );
+    expect(
+      localClassNames(":global(.thirdParty .legacyIcon) .cmpCard { color: red; }"),
+    ).toStrictEqual(new Set(["cmpCard"]));
   });
 
   it("does not permit new bare native-control rules in the global stylesheet", () => {

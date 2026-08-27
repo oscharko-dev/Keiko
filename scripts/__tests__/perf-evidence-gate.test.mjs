@@ -8,6 +8,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   D12_PINNED_BASELINE_SOURCE_TREE_SHA256,
   evaluateGateTarget,
+  evaluateWorkspaceEvidenceDocument,
   executePerfEvidenceCli,
   freshnessOptionsFor,
   gateModeLines,
@@ -78,6 +79,52 @@ describe("per-target gate evaluation", () => {
   });
 });
 
+describe("workspace evidence document shape", () => {
+  function run(project) {
+    return {
+      project,
+      gestures: [
+        {
+          label: "workspace pan",
+          frameGapBudgetP75Ms: 34,
+          frameGapBudgetMaxMs: 120,
+          frameGapSamples: 4,
+          frameGapP75Ms: 8,
+          frameGapMaxMs: 10,
+          longTaskObserverInstalled: true,
+          longTaskCount: 0,
+          maxLongTaskMs: 0,
+          viewWrites: 0,
+          workspaceWrites: 0,
+          workspacePuts: 0,
+        },
+      ],
+    };
+  }
+
+  it("requires the complete Chromium evidence set and matching project identities", () => {
+    const complete = {
+      runs: {
+        chromium: run("chromium"),
+        "chromium-mixed-windows": run("chromium-mixed-windows"),
+      },
+    };
+
+    expect(evaluateWorkspaceEvidenceDocument(complete)).toEqual({ passed: true, failures: [] });
+    expect(
+      evaluateWorkspaceEvidenceDocument({ runs: { chromium: run("chromium") } }).failures,
+    ).toContain("workspace evidence runs chromium != required chromium, chromium-mixed-windows");
+    expect(
+      evaluateWorkspaceEvidenceDocument({
+        runs: {
+          chromium: run("webkit"),
+          "chromium-mixed-windows": run("chromium-mixed-windows"),
+        },
+      }).failures,
+    ).toContain("workspace evidence run chromium is missing its matching project identity");
+  });
+});
+
 describe("freshness options", () => {
   it("evaluates the toolchain digest unconditionally when there is no base ref", () => {
     const previous = process.env.KEIKO_PERF_EVIDENCE_BASE_REF;
@@ -86,7 +133,6 @@ describe("freshness options", () => {
     const options = freshnessOptionsFor(false);
 
     expect(options.toolchainTouched).toBe(true);
-    expect(options.workspaceToolchainTouched).toBe(true);
     expect(options.enforceSourceFreshness).toBe(false);
     expect(options.dirtySubjectPaths).toEqual([]);
     expect(options.computeBaselineSourceTreeSha256()).toBe(D12_PINNED_BASELINE_SOURCE_TREE_SHA256);
@@ -100,7 +146,6 @@ describe("freshness options", () => {
     const options = freshnessOptionsFor(true);
 
     expect(options.toolchainTouched).toBe(true);
-    expect(options.workspaceToolchainTouched).toBe(true);
 
     if (previous === undefined) delete process.env.KEIKO_PERF_EVIDENCE_BASE_REF;
     else process.env.KEIKO_PERF_EVIDENCE_BASE_REF = previous;

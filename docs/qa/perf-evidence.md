@@ -55,6 +55,14 @@ rm -f docs/release/1580-workspace-perf-evidence.json
 npm run test:e2e:workspace-perf
 ```
 
+The committed document has an exact, intentionally Chromium-only run set: `chromium` and
+`chromium-mixed-windows`. The first is the representative workspace journey and the second proves
+the heavy-widget fixture. `webkit` remains a local cross-browser functional aid, but is deliberately
+not committed as timing evidence: its headless renderer does not produce comparable frame-gap or
+write-coalescing measurements, and CI installs and runs Chromium only. The gate rejects both a
+missing required run and an additional stale project entry, so deleting the prior document before
+the Chromium producer cannot silently narrow the evidence contract.
+
 Commit the resulting document as the final change that moves the workspace measurement ruler.
 
 ## How to regenerate (one command)

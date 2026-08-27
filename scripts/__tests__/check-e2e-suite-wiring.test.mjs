@@ -56,8 +56,10 @@ const REQUIRED_AND_SCHEDULED_LANE = {
   text: `
 on:
   pull_request:
+  push:
   schedule:
     - cron: "0 6 * * *"
+  workflow_dispatch:
 jobs:
   e2e:
     steps:
@@ -65,6 +67,8 @@ jobs:
       - if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
         run: |
           npm run test:e2e:nonblocking
+      - if: github.event_name == 'schedule'
+        run: npm run test:e2e:scheduled
 `,
 };
 
@@ -193,26 +197,32 @@ describe("e2e suite wiring gate (#2629)", () => {
     expect(report).toContain("  - test:e2e:orphan runs nowhere");
   });
 
-  // KEIKO-0151: being mentioned by any workflow is not enough. This fixture models the exact
-  // regression: the same workflow has a PR trigger, but the step itself excludes pull requests.
-  it("records whether each suite actually blocks a pull request", () => {
+  // KEIKO-0151: a workflow's trigger is insufficient. Every class is attributed to the concrete
+  // step that runs the suite, rather than to an unrelated sibling in the same workflow file.
+  it("records the strongest event on which each suite step actually runs", () => {
     expect(suiteProtectionClass("test:e2e:required", [REQUIRED_AND_SCHEDULED_LANE])).toBe(
-      "required-per-pr",
+      "runs-per-pr",
     );
     expect(suiteProtectionClass("test:e2e:nonblocking", [REQUIRED_AND_SCHEDULED_LANE])).toBe(
+      "push-nonblocking",
+    );
+    expect(suiteProtectionClass("test:e2e:scheduled", [REQUIRED_AND_SCHEDULED_LANE])).toBe(
       "scheduled-nonblocking",
     );
 
     const result = checkE2eProtectionBaseline({
-      scripts: ["test:e2e:required", "test:e2e:nonblocking"],
+      scripts: ["test:e2e:required", "test:e2e:nonblocking", "test:e2e:scheduled"],
       workflows: [REQUIRED_AND_SCHEDULED_LANE],
       protectionBaseline: {
-        "test:e2e:required": "required-per-pr",
-        "test:e2e:nonblocking": "required-per-pr",
+        "test:e2e:required": "runs-per-pr",
+        "test:e2e:nonblocking": "runs-per-pr",
+        "test:e2e:scheduled": "push-nonblocking",
       },
     });
     expect(result.problems).toEqual([
-      "test:e2e:nonblocking protection downgraded from required-per-pr to scheduled-nonblocking. " +
+      "test:e2e:nonblocking protection downgraded from runs-per-pr to push-nonblocking. " +
+        "Update its lane or the baseline through an explicit reviewed change.",
+      "test:e2e:scheduled protection downgraded from push-nonblocking to scheduled-nonblocking. " +
         "Update its lane or the baseline through an explicit reviewed change.",
     ]);
   });
@@ -222,7 +232,7 @@ describe("e2e suite wiring gate (#2629)", () => {
   // auditable condition language and treats every other expression as non-blocking.
   it("recognizes a direct suite run guarded for the required pull-request context", () => {
     expect(suiteProtectionClass("test:e2e:required", [REQUIRED_PULL_REQUEST_LANE])).toBe(
-      "required-per-pr",
+      "runs-per-pr",
     );
   });
 
@@ -290,12 +300,10 @@ jobs:
 `,
     ],
   ])("does not classify %s as required per PR", (_label, text) => {
-    expect(suiteProtectionClass("test:e2e:unsafe", [{ name: "unsafe.yml", text }])).toBe(
-      "event-nonblocking",
-    );
+    expect(suiteProtectionClass("test:e2e:unsafe", [{ name: "unsafe.yml", text }])).toBe("unwired");
   });
 
-  it("does not infer a required direct run from a matrix suite item", () => {
+  it("attributes a matrix suite to the concrete matrix execution step", () => {
     const matrixOnPullRequest = {
       name: "matrix-on-pr.yml",
       text: `
@@ -311,9 +319,74 @@ jobs:
       - run: npm run \${{ matrix.suite }}
 `,
     };
-    expect(suiteProtectionClass("test:e2e:matrix-only", [matrixOnPullRequest])).toBe(
-      "event-nonblocking",
+    expect(suiteProtectionClass("test:e2e:matrix-only", [matrixOnPullRequest])).toBe("runs-per-pr");
+    expect(isWiredInWorkflows("test:e2e:matrix-only", matrixOnPullRequest.text)).toBe(true);
+  });
+
+  it("leaves an untraceable matrix reference unattributed", () => {
+    const untraceableMatrix = {
+      name: "untraceable-matrix.yml",
+      text: `
+on:
+  schedule:
+    - cron: "0 6 * * *"
+jobs:
+  e2e:
+    strategy:
+      matrix:
+        suite:
+          - test:e2e:matrix-only
+    steps:
+      - run: npm run \${{ matrix.another_value }}
+`,
+    };
+
+    expect(suiteProtectionClass("test:e2e:matrix-only", [untraceableMatrix])).toBe("unwired");
+  });
+
+  it("does not turn an inline comment on the trigger declaration into a PR trigger", () => {
+    const dispatchOnly = {
+      name: "dispatch-only.yml",
+      text: `
+on: # pull_request disabled
+  workflow_dispatch:
+jobs:
+  e2e:
+    steps:
+      - run: npm run test:e2e:demo-suite
+`,
+    };
+
+    expect(suiteProtectionClass("test:e2e:demo-suite", [dispatchOnly])).toBe("manual-nonblocking");
+  });
+
+  it("reads quoted trigger keys but never promotes nested filters into triggers", () => {
+    const quotedTrigger = {
+      name: "quoted-trigger.yml",
+      text: `
+"on":
+  push:
+    branches: [dev]
+  workflow_dispatch:
+jobs:
+  e2e:
+    steps:
+      - if: github.event_name == 'push'
+        run: npm run test:e2e:quoted-trigger
+`,
+    };
+
+    expect(suiteProtectionClass("test:e2e:quoted-trigger", [quotedTrigger])).toBe(
+      "push-nonblocking",
     );
+  });
+
+  it("does not classify suite names embedded in a shell string as executable", () => {
+    const nightly = readFileSync(".github/workflows/nightly-perf-evidence.yml", "utf8");
+    expect(isWiredInWorkflows("test:e2e:workspace-perf", nightly)).toBe(false);
+    expect(
+      suiteProtectionClass("test:e2e:workspace-perf", [{ name: "nightly.yml", text: nightly }]),
+    ).toBe("unwired");
   });
 
   it("ratchets a formerly required suite down when its direct PR execution is no longer provable", () => {
@@ -334,10 +407,10 @@ jobs:
 `,
         },
       ],
-      protectionBaseline: { "test:e2e:unsafe": "required-per-pr" },
+      protectionBaseline: { "test:e2e:unsafe": "runs-per-pr" },
     });
     expect(result.problems).toEqual([
-      "test:e2e:unsafe protection downgraded from required-per-pr to event-nonblocking. " +
+      "test:e2e:unsafe protection downgraded from runs-per-pr to unwired. " +
         "Update its lane or the baseline through an explicit reviewed change.",
     ]);
   });

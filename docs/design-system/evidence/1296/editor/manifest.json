@@ -1,105 +1,83 @@
 {
   "issue": 1296,
   "harness": "tests/e2e/config/playwright.issue-1296-editor-agent.config.ts",
-  "appPath": "static-evidence-fixture",
-  "route": null,
+  "appPath": "packaged-cli-ui",
+  "route": "/",
+  "workspace": "synthetic-temp-project",
   "evidencePath": "docs/design-system/evidence/1296/editor",
-  "generatedAt": "2026-08-27T08:49:18.262Z",
+  "generatedAt": "2026-08-27T17:58:51.787Z",
   "designReference": "design-system/editor-agent.html",
   "productCss": "packages/keiko-ui/src/app/globals.css",
   "assertions": {
-    "fixtureUsesProductCssTokens": true,
-    "fixtureGhostTokenAliasesLegacyGhost": true,
-    "screenshotsCaptured": 3,
-    "fixtureAuthorityPrimitivesVisible": true
+    "packagedAppBooted": true,
+    "liveMonacoVisible": true,
+    "liveInlineGhostVisible": true,
+    "inlineCompletionRequests": 3,
+    "screenshotsCaptured": 3
   },
   "modes": [
     {
       "mode": "dark",
       "artifact": "dark-editor-agent.png",
-      "dataTheme": null,
-      "dataHc": null,
       "tokenValues": {
         "--ed-agent-line": "color-mix(in oklch, #4eba87 12%, transparent)",
         "--ed-agent-gutter": "#4eba87",
-        "--ed-agent-ghost": "oklch(0.66 0.004 160)",
-        "--ed-agent-accept": "oklch(0.72 0.13 150)",
-        "--ed-agent-reject": "oklch(0.68 0.16 25)",
-        "--ed-agent-chip-bg": "color-mix(in oklch, #4eba87 18%, transparent)",
-        "--ed-agent-chip-line": "color-mix(in oklch, #4eba87 40%, transparent)",
-        "--ed-ghost": "oklch(0.66 0.004 160)",
-        "--ai-permission-surface": "color-mix(in oklch, oklch(0.78 0.13 75) 12%, transparent)",
-        "--ai-permission-border": "color-mix(in oklch, oklch(0.78 0.13 75) 40%, transparent)",
-        "--feedback-danger": "oklch(0.68 0.16 25)"
+        "--ed-agent-ghost": "lab(60.6144% -1.27894 .508761)",
+        "--ed-agent-accept": "lab(69.1791% -39.0255 25.483)",
+        "--ed-agent-reject": "lab(61.3079% 50.1954 28.9223)",
+        "--ed-agent-chip-bg": "lab(68.2884% -41.5409 16.2592/.18)",
+        "--ed-agent-chip-line": "lab(68.2884% -41.5409 16.2592/.4)",
+        "--ed-ghost": "lab(60.6144% -1.27894 .508761)"
       },
-      "resolved": {
-        "agentGhostColor": "oklch(0.66 0.004 160)",
-        "legacyGhostColor": "oklch(0.66 0.004 160)",
-        "agentLineBackground": "oklch(0.712291 0.125417 160.091 / 0.12)",
-        "agentGutterColor": "rgb(78, 186, 135)",
-        "chipBackground": "oklch(0.712291 0.125417 160.091 / 0.18)",
-        "chipBorderColor": "oklch(0.712291 0.125417 160.091 / 0.4)"
+      "monaco": {
+        "backgroundColor": "rgb(12, 14, 13)",
+        "lineColor": "rgb(197, 205, 217)",
+        "gutterBackground": "rgb(12, 14, 13)"
       }
     },
     {
       "mode": "light",
       "artifact": "light-editor-agent.png",
-      "dataTheme": "light",
-      "dataHc": null,
       "tokenValues": {
         "--ed-agent-line": "color-mix(in oklch, #4eba87 12%, transparent)",
-        "--ed-agent-gutter": "oklch(0.48 0.13 160)",
-        "--ed-agent-ghost": "oklch(0.55 0.02 160)",
-        "--ed-agent-accept": "oklch(0.5 0.13 150)",
-        "--ed-agent-reject": "oklch(0.5 0.18 25)",
-        "--ed-agent-chip-bg": "color-mix(in oklch, #4eba87 18%, transparent)",
-        "--ed-agent-chip-line": "color-mix(in oklch, #4eba87 40%, transparent)",
-        "--ed-ghost": "oklch(0.55 0.02 160)",
-        "--ai-permission-surface": "color-mix(in oklch, oklch(0.43 0.14 75) 12%, transparent)",
-        "--ai-permission-border": "color-mix(in oklch, oklch(0.43 0.14 75) 40%, transparent)",
-        "--feedback-danger": "oklch(0.5 0.18 25)"
+        "--ed-agent-gutter": "lab(41.3781% -44.0935 17.2352)",
+        "--ed-agent-ghost": "lab(48.0707% -6.42881 2.5532)",
+        "--ed-agent-accept": "lab(43.6193% -39.4536 26.2495)",
+        "--ed-agent-reject": "lab(40.1691% 57.0293 36.0154)",
+        "--ed-agent-chip-bg": "lab(68.2884% -41.5409 16.2592/.18)",
+        "--ed-agent-chip-line": "lab(68.2884% -41.5409 16.2592/.4)",
+        "--ed-ghost": "lab(48.0707% -6.42881 2.5532)"
       },
-      "resolved": {
-        "agentGhostColor": "oklch(0.55 0.02 160)",
-        "legacyGhostColor": "oklch(0.55 0.02 160)",
-        "agentLineBackground": "oklch(0.712291 0.125417 160.091 / 0.12)",
-        "agentGutterColor": "oklch(0.48 0.13 160)",
-        "chipBackground": "oklch(0.712291 0.125417 160.091 / 0.18)",
-        "chipBorderColor": "oklch(0.712291 0.125417 160.091 / 0.4)"
+      "monaco": {
+        "backgroundColor": "rgb(248, 251, 249)",
+        "lineColor": "rgb(43, 52, 64)",
+        "gutterBackground": "rgb(248, 251, 249)"
       }
     },
     {
       "mode": "high-contrast",
       "artifact": "high-contrast-editor-agent.png",
-      "dataTheme": null,
-      "dataHc": "more",
       "tokenValues": {
         "--ed-agent-line": "color-mix(in oklch, #4eba87 12%, transparent)",
-        "--ed-agent-gutter": "oklch(0.86 0.16 160)",
-        "--ed-agent-ghost": "oklch(0.74 0.004 160)",
-        "--ed-agent-accept": "oklch(0.72 0.13 150)",
-        "--ed-agent-reject": "oklch(0.78 0.17 25)",
+        "--ed-agent-gutter": "lab(85.8762% -53.07 20.88)",
+        "--ed-agent-ghost": "lab(69.8944% -1.27876 .508702)",
+        "--ed-agent-accept": "lab(69.1791% -39.0255 25.483)",
+        "--ed-agent-reject": "lab(72.818% 53.2479 30.4177)",
         "--ed-agent-chip-bg": "color-mix(in oklch, #4eba87 28%, transparent)",
         "--ed-agent-chip-line": "color-mix(in oklch, #4eba87 72%, transparent)",
-        "--ed-ghost": "oklch(0.74 0.004 160)",
-        "--ai-permission-surface": "color-mix(in oklch, oklch(0.88 0.14 80) 12%, transparent)",
-        "--ai-permission-border": "color-mix(in oklch, oklch(0.88 0.14 80) 40%, transparent)",
-        "--feedback-danger": "oklch(0.78 0.17 25)"
+        "--ed-ghost": "lab(69.8944% -1.27876 .508702)"
       },
-      "resolved": {
-        "agentGhostColor": "oklch(0.74 0.004 160)",
-        "legacyGhostColor": "oklch(0.74 0.004 160)",
-        "agentLineBackground": "oklch(0.712291 0.125417 160.091 / 0.12)",
-        "agentGutterColor": "oklch(0.86 0.16 160)",
-        "chipBackground": "oklch(0.712291 0.125417 160.091 / 0.28)",
-        "chipBorderColor": "oklch(0.712291 0.125417 160.091 / 0.72)"
+      "monaco": {
+        "backgroundColor": "rgb(1, 1, 1)",
+        "lineColor": "rgb(255, 255, 255)",
+        "gutterBackground": "rgb(1, 1, 1)"
       }
     }
   ],
   "notes": [
-    "Screenshots cover a static editor-context fixture in Dark, Light, and High Contrast.",
-    "The fixture imports product CSS and verifies --ed-agent-ghost aliases --ed-ghost.",
-    "The fixture renders authority-related primitives but does not exercise live authority flows."
+    "Screenshots capture the packaged CLI UI's running Monaco editor in Dark, Light, and High Contrast.",
+    "The proof drives the live inline-completion route and verifies its editor ghost-text alert.",
+    "Permissioned agent mutation flows remain separately governed by #1405."
   ],
   "artifacts": [
     "dark-editor-agent.png",

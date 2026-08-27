@@ -5,7 +5,7 @@ import { describe, expect, it } from "vitest";
 import * as contractsRoot from "./index.js";
 import { KEIKO_CONTRACTS_VERSION } from "./version.js";
 
-const unreferencedRuntimeSubpaths = [
+const runtimeContractSubpaths = [
   "./runtime/evaluation-gates",
   "./runtime/figma-codegen",
   "./runtime/git-delivery-provider",
@@ -24,13 +24,13 @@ describe("contracts runtime surface", () => {
     expect(KEIKO_CONTRACTS_VERSION).toBe(manifest.version);
   });
 
-  it("does not publish unreferenced runtime-only subpaths", () => {
+  it("publishes every type-only runtime contract on its stable runtime subpath", () => {
     const manifest = JSON.parse(
       readFileSync(new URL("../package.json", import.meta.url), "utf8"),
     ) as { exports: Record<string, unknown> };
 
-    for (const subpath of unreferencedRuntimeSubpaths) {
-      expect(manifest.exports).not.toHaveProperty(subpath);
+    for (const subpath of runtimeContractSubpaths) {
+      expect(manifest.exports).toHaveProperty(subpath);
     }
   });
 });

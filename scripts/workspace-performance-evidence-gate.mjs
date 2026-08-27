@@ -7,11 +7,7 @@ import {
   subjectDriftFinding,
 } from "./check-perf-evidence.mjs";
 import { isMainModule } from "./lib/is-main-module.mjs";
-import { listChangedGitPaths } from "./lib/git-changed-paths.mjs";
-import {
-  computeWorkspacePerformanceMeasurementToolchainDigest,
-  selectWorkspacePerformanceMeasurementToolchainPaths,
-} from "./workspace-performance-measurement-toolchain.mjs";
+import { computeWorkspacePerformanceMeasurementToolchainDigest } from "./workspace-performance-measurement-toolchain.mjs";
 
 const repoRoot = resolve(import.meta.dirname, "..");
 const COMMIT_SHA = /^[0-9a-f]{7,40}$/u;
@@ -21,26 +17,6 @@ function defaultComputeMeasurementHarnessSha256() {
   return computeWorkspacePerformanceMeasurementToolchainDigest((path) =>
     readFileSync(join(repoRoot, path)),
   );
-}
-
-export function workspaceToolchainTouchedAgainst(
-  baseRef,
-  root = repoRoot,
-  listChangedPaths = listChangedGitPaths,
-) {
-  if (typeof baseRef !== "string" || baseRef.length === 0) return false;
-  try {
-    return (
-      selectWorkspacePerformanceMeasurementToolchainPaths(listChangedPaths(baseRef, root)).length >
-      0
-    );
-  } catch (error) {
-    console.error(
-      `perf-evidence: could not resolve the workspace measurement-toolchain change set; ` +
-        `evaluating it unconditionally (${error instanceof Error ? error.name : "unknown error"})`,
-    );
-    return true;
-  }
 }
 
 function stampFailures(evidence) {

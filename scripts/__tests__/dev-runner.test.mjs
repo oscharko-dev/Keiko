@@ -31,6 +31,8 @@ import {
   proxyHttp,
   publicBrowserUrl,
   readNextLockInfo,
+  createRestartBudget,
+  restartNextChildWithRetry,
   resolveConfiguredNextBundler,
   resolveNextBundler,
 } from "../dev-runner.mjs";
@@ -216,6 +218,49 @@ describe("bffChildEnv", () => {
 
   it("gives runtime disposal its complete bounded shutdown window", () => {
     expect(DEV_RUNNER_SHUTDOWN_GRACE_MS).toBeGreaterThan(30_000);
+  });
+});
+
+describe("restart supervision", () => {
+  it("resets a component restart budget only after a stable restarted child", () => {
+    const scheduled = [];
+    const budget = createRestartBudget(1, 60_000, (callback) => {
+      scheduled.push(callback);
+      return { unref: () => undefined };
+    });
+
+    expect(budget.recordExit("next")).toEqual({ allowed: true, count: 1 });
+    expect(budget.recordExit("next")).toEqual({ allowed: false, count: 2 });
+
+    budget.recordStableRestart("next");
+    scheduled[0]();
+
+    expect(budget.recordExit("next")).toEqual({ allowed: true, count: 1 });
+  });
+
+  it("retries an actual Next preflight failure instead of dropping the respawn loop", async () => {
+    const retry = vi.fn();
+    const start = vi.fn();
+    const waitForReadiness = vi.fn();
+    const reportError = vi.fn();
+
+    const result = await restartNextChildWithRetry({
+      currentPort: 3000,
+      lockPath: "/tmp/next-lock",
+      preflight: async () => Promise.reject(new Error("lock changed")),
+      isShuttingDown: () => false,
+      selectPort: vi.fn(),
+      start,
+      waitForReadiness,
+      retry,
+      reportError,
+    });
+
+    expect(result).toEqual({ retried: true, started: false });
+    expect(retry).toHaveBeenCalledOnce();
+    expect(reportError).toHaveBeenCalledWith(expect.any(Error));
+    expect(start).not.toHaveBeenCalled();
+    expect(waitForReadiness).not.toHaveBeenCalled();
   });
 });
 

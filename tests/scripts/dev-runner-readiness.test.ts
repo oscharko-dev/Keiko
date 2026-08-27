@@ -264,6 +264,9 @@ describe("scripts/dev-runner.mjs readiness gate", () => {
           KEIKO_DEV_BFF_PORT: String(bffPort),
           KEIKO_DEV_NEXT_PORT: String(nextPort),
           KEIKO_DEV_PID_FILE: stateFile,
+          // SIGSTOP/SIGCONT freezes the POSIX runner while the old port is occupied. Windows
+          // cannot suspend the process this way, so retain a long deterministic delay there.
+          KEIKO_DEV_RESTART_DELAY_MS: "5000",
           KEIKO_DEV_TEST_SKIP_PACKAGE_WATCH: "1",
           KEIKO_STATE_DIR: stateDir,
           NODE_ENV: "test",

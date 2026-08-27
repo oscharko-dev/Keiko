@@ -31,16 +31,40 @@ import {
 } from "./check-perf-evidence.mjs";
 import { isMainModule } from "./lib/is-main-module.mjs";
 import { computeWorkspacePerformanceMeasurementToolchainDigest } from "./workspace-performance-measurement-toolchain.mjs";
-import {
-  evaluateWorkspaceEvidenceFreshness,
-  workspaceToolchainTouchedAgainst,
-} from "./workspace-performance-evidence-gate.mjs";
+import { evaluateWorkspaceEvidenceFreshness } from "./workspace-performance-evidence-gate.mjs";
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const WORKSPACE_EVIDENCE = join(repoRoot, "docs", "release", "1580-workspace-perf-evidence.json");
 const EDITOR_EVIDENCE = join(repoRoot, "docs", "release", "1209-perf-evidence.json");
+// The CI producer intentionally selects Chromium, which emits the representative workspace run
+// and the mixed-heavy-window run. WebKit is a local functional aid, not comparable timing evidence
+// on the headless CI renderer. The judge owns this document-shape policy, rather than the
+// measurement helper, so changing it cannot invalidate measured timings.
+const REQUIRED_WORKSPACE_EVIDENCE_RUNS = Object.freeze(["chromium", "chromium-mixed-windows"]);
 export const D12_PINNED_BASELINE_SOURCE_TREE_SHA256 =
   "0dd8c879889c3449157e6527c651f30b6481422a0ade0bfed36e354ec5ba1664";
+
+export function evaluateWorkspaceEvidenceDocument(evidence) {
+  const evaluated = evaluateWorkspaceEvidence(evidence);
+  if (typeof evidence !== "object" || evidence === null) return evaluated;
+  const runs = evidence.runs;
+  if (typeof runs !== "object" || runs === null || Array.isArray(runs)) return evaluated;
+  const actual = Object.keys(runs).sort();
+  const expected = [...REQUIRED_WORKSPACE_EVIDENCE_RUNS].sort();
+  const failures = [...evaluated.failures];
+  if (actual.join("\0") !== expected.join("\0")) {
+    failures.push(
+      `workspace evidence runs ${actual.join(", ") || "(none)"} != required ${expected.join(", ")}`,
+    );
+  }
+  for (const name of REQUIRED_WORKSPACE_EVIDENCE_RUNS) {
+    const run = runs[name];
+    if (typeof run !== "object" || run === null || run.project !== name) {
+      failures.push(`workspace evidence run ${name} is missing its matching project identity`);
+    }
+  }
+  return { passed: failures.length === 0, failures };
+}
 
 export function readEvidence(path) {
   if (!existsSync(path)) return { error: `missing evidence file: ${path}` };
@@ -64,12 +88,11 @@ function selectGateTargets(targetName) {
     {
       name: "workspace",
       path: WORKSPACE_EVIDENCE,
-      evaluate: evaluateWorkspaceEvidence,
+      evaluate: evaluateWorkspaceEvidenceDocument,
       evaluateFreshness: evaluateWorkspaceEvidenceFreshness,
       freshnessOptions: (options) => ({
         ...options,
         computeMeasurementHarnessSha256: defaultComputeWorkspaceMeasurementHarnessSha256,
-        toolchainTouched: options.workspaceToolchainTouched,
       }),
     },
     { name: "editor", path: EDITOR_EVIDENCE, evaluate: evaluateEditorEvidence },
@@ -149,8 +172,6 @@ export function freshnessOptionsFor(enforceSourceFreshness) {
     dirtySubjectPaths: enforceSourceFreshness ? listDirtyPerformanceSubjectPaths() : [],
     enforceSourceFreshness,
     toolchainTouched: enforceSourceFreshness || baseRef === "" || toolchainTouchedAgainst(baseRef),
-    workspaceToolchainTouched:
-      enforceSourceFreshness || baseRef === "" || workspaceToolchainTouchedAgainst(baseRef),
   };
 }
 

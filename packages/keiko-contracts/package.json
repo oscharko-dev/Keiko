@@ -327,6 +327,10 @@
       "types": "./dist/eval-metrics.d.ts",
       "import": "./dist/eval-metrics.js"
     },
+    "./runtime/evaluation-gates": {
+      "types": "./dist/evaluation-gates.d.ts",
+      "import": "./dist/evaluation-gates.js"
+    },
     "./runtime/evaluations": {
       "types": "./dist/evaluations.d.ts",
       "import": "./dist/evaluations.js"
@@ -334,6 +338,10 @@
     "./runtime/evidence": {
       "types": "./dist/evidence.d.ts",
       "import": "./dist/evidence.js"
+    },
+    "./runtime/figma-codegen": {
+      "types": "./dist/figma-codegen.d.ts",
+      "import": "./dist/figma-codegen.js"
     },
     "./runtime/gateway": {
       "types": "./dist/gateway.d.ts",
@@ -370,6 +378,10 @@
     "./runtime/git-delivery-policy": {
       "types": "./dist/git-delivery-policy.d.ts",
       "import": "./dist/git-delivery-policy.js"
+    },
+    "./runtime/git-delivery-provider": {
+      "types": "./dist/git-delivery-provider.d.ts",
+      "import": "./dist/git-delivery-provider.js"
     },
     "./runtime/git-editor": {
       "types": "./dist/git-editor.d.ts",
@@ -571,6 +583,10 @@
       "types": "./dist/qualityIntelligence/bffWire.d.ts",
       "import": "./dist/qualityIntelligence/bffWire.js"
     },
+    "./runtime/qualityIntelligence/editableRevision": {
+      "types": "./dist/qualityIntelligence/editableRevision.d.ts",
+      "import": "./dist/qualityIntelligence/editableRevision.js"
+    },
     "./runtime/qualityIntelligence/index": {
       "types": "./dist/qualityIntelligence/index.d.ts",
       "import": "./dist/qualityIntelligence/index.js"
@@ -643,6 +659,10 @@
       "types": "./dist/verification.d.ts",
       "import": "./dist/verification.js"
     },
+    "./runtime/verification-summary": {
+      "types": "./dist/verification-summary.d.ts",
+      "import": "./dist/verification-summary.js"
+    },
     "./runtime/version": {
       "types": "./dist/version.d.ts",
       "import": "./dist/version.js"
@@ -666,6 +686,14 @@
     "./runtime/voice-transcript": {
       "types": "./dist/voice-transcript.d.ts",
       "import": "./dist/voice-transcript.js"
+    },
+    "./runtime/workflow-descriptor": {
+      "types": "./dist/workflow-descriptor.d.ts",
+      "import": "./dist/workflow-descriptor.js"
+    },
+    "./runtime/workflow-handoff": {
+      "types": "./dist/workflow-handoff.d.ts",
+      "import": "./dist/workflow-handoff.js"
     },
     "./runtime/workspace": {
       "types": "./dist/workspace.d.ts",

@@ -1369,13 +1369,6 @@ function AppShellInner(): ReactNode {
   const openQuickAccessFiles = useCallback((): void => setQuickAccessMode("files"), []);
   const openQuickAccessCommands = useCallback((): void => setQuickAccessMode("commands"), []);
   const closeQuickAccess = useCallback((): void => setQuickAccessMode(null), []);
-  // Lets the editor's own capturing keydown listener (EditorWidget.tsx) open the unified
-  // quick-access palette directly, so Cmd/Ctrl+P still works while the cursor is inside a file —
-  // see EditorQuickAccessTriggerContext.tsx for why this must bypass useKeyboardShortcuts.
-  const editorQuickAccessTrigger = useMemo(
-    () => ({ openFiles: openQuickAccessFiles, openCommands: openQuickAccessCommands }),
-    [openQuickAccessFiles, openQuickAccessCommands],
-  );
   const registerEditorHost = useCallback(
     (windowId: string, host: EditorPaletteHost): (() => void) => {
       setEditorHosts((current) => {
@@ -1506,6 +1499,19 @@ function AppShellInner(): ReactNode {
     [activeWorkspace.activeRoot, searchOwner, shortcutRoot, undoStack, ws.api, ws.wins],
   );
 
+  const openEditorSettings = useCallback((): void => openEditorSettingsPanel(onTool), [onTool]);
+  // Lets the editor's own capturing keydown listener (EditorWidget.tsx) invoke the shell action
+  // directly, so Cmd/Ctrl+P and Cmd/Ctrl+, work while the cursor is inside Monaco. The shell keeps
+  // ownership of opening the window and selecting its tab; the editor only owns chord recognition.
+  const editorQuickAccessTrigger = useMemo(
+    () => ({
+      openFiles: openQuickAccessFiles,
+      openCommands: openQuickAccessCommands,
+      openEditorSettings,
+    }),
+    [openEditorSettings, openQuickAccessCommands, openQuickAccessFiles],
+  );
+
   const onNewChat = useCallback((): void => pick("chat"), [pick]);
 
   // uiux-fix F008 C220 — some tool surfaces used to be full pages. Once the workspace is hydrated,
@@ -1534,13 +1540,13 @@ function AppShellInner(): ReactNode {
         openOrFocusSearchWindow(ws.api, resolveSearchRoot(activeWorkspace.activeRoot, searchOwner));
       } else if (commandId === "quick-access.files") openQuickAccessFiles();
       else if (commandId === "quick-access.commands") openQuickAccessCommands();
-      else if (commandId === "open-editor-settings") openEditorSettingsPanel(onTool);
+      else if (commandId === "open-editor-settings") openEditorSettings();
     },
     [
       activeWorkspace.activeRoot,
+      openEditorSettings,
       openQuickAccessCommands,
       openQuickAccessFiles,
-      onTool,
       searchOwner,
       undoStack,
       ws.api,

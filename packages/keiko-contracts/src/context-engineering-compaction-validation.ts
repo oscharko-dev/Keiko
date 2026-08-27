@@ -48,6 +48,13 @@ function isNonEmptyTrimmed(value: unknown): value is string {
   return typeof value === "string" && value.trim().length > 0;
 }
 
+// Every validated compaction value that is rendered as a Markdown-like list item must occupy one
+// physical line. Otherwise a persisted value can create a sibling section when it is rehydrated
+// into a future prompt.
+function isNonEmptySingleLine(value: unknown): value is string {
+  return isNonEmptyTrimmed(value) && !/[\r\n]/u.test(value);
+}
+
 function isOptionalNonEmptyString(value: unknown): boolean {
   return value === undefined || isNonEmptyTrimmed(value);
 }
@@ -148,11 +155,7 @@ function collectPreservedFact(value: unknown, prefix: string): string[] {
     return [`${prefix} invalid`];
   }
   const reasons: string[] = [];
-  pushIf(
-    reasons,
-    !isNonEmptyTrimmed(value.statement) || /[\r\n]/u.test(value.statement),
-    `${prefix}.statement invalid`,
-  );
+  pushIf(reasons, !isNonEmptySingleLine(value.statement), `${prefix}.statement invalid`);
   pushIf(
     reasons,
     value.inferred !== undefined && typeof value.inferred !== "boolean",
@@ -178,7 +181,7 @@ function collectAssumption(value: unknown, prefix: string): string[] {
     return [`${prefix} invalid`];
   }
   const reasons: string[] = [];
-  pushIf(reasons, !isNonEmptyTrimmed(value.statement), `${prefix}.statement invalid`);
+  pushIf(reasons, !isNonEmptySingleLine(value.statement), `${prefix}.statement invalid`);
   pushIf(reasons, !isNonEmptyTrimmed(value.rationale), `${prefix}.rationale invalid`);
   pushIf(
     reasons,
@@ -198,7 +201,7 @@ function collectUserConstraint(value: unknown, prefix: string): string[] {
     return [`${prefix} invalid`];
   }
   const reasons: string[] = [];
-  pushIf(reasons, !isNonEmptyTrimmed(value.statement), `${prefix}.statement invalid`);
+  pushIf(reasons, !isNonEmptySingleLine(value.statement), `${prefix}.statement invalid`);
   reasons.push(...collectOptionalRef(value.sourceRef, `${prefix}.sourceRef`));
   return reasons;
 }
@@ -209,7 +212,7 @@ function collectCommandOutcome(value: unknown, prefix: string): string[] {
     return [`${prefix} invalid`];
   }
   const reasons: string[] = [];
-  pushIf(reasons, !isNonEmptyTrimmed(value.command), `${prefix}.command invalid`);
+  pushIf(reasons, !isNonEmptySingleLine(value.command), `${prefix}.command invalid`);
   pushIf(reasons, !isFiniteNumber(value.exitCode), `${prefix}.exitCode invalid`);
   const summary = value.summary;
   pushIf(
@@ -524,7 +527,11 @@ function collectPathArray(value: unknown, prefix: string): string[] {
   }
   const reasons: string[] = [];
   value.forEach((entry, index) => {
-    pushIf(reasons, !isRelativeScopePath(entry), `${prefix}[${String(index)}] invalid`);
+    pushIf(
+      reasons,
+      !isNonEmptySingleLine(entry) || !isRelativeScopePath(entry),
+      `${prefix}[${String(index)}] invalid`,
+    );
   });
   return reasons;
 }
@@ -538,7 +545,7 @@ function collectStringArray(value: unknown, prefix: string): string[] {
   }
   const reasons: string[] = [];
   value.forEach((entry, index) => {
-    pushIf(reasons, typeof entry !== "string", `${prefix}[${String(index)}] invalid`);
+    pushIf(reasons, !isNonEmptySingleLine(entry), `${prefix}[${String(index)}] invalid`);
   });
   return reasons;
 }
