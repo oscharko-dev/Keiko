@@ -308,4 +308,26 @@ describe("checkPortReleased input validation (KEIKO-0734)", () => {
   ])("resolves to true for a %s value without probing", async (_label, port) => {
     await expect(checkPortReleased(port)).resolves.toBe(true);
   });
+
+  it("routes a valid port through probePortFree", async () => {
+    const { createServer } = await import("node:net");
+    // Pick a real, momentarily bound port, close it, then probe — the guard must delegate to
+    // probePortFree instead of short-circuiting to `true`, and the released port must come back
+    // free. This is the only path in checkPortReleased that actually touches the network stack.
+    const port = await new Promise((resolveWithPort, rejectPromise) => {
+      const server = createServer();
+      server.once("error", rejectPromise);
+      server.listen(0, "127.0.0.1", () => {
+        const address = server.address();
+        if (address === null || typeof address === "string") {
+          server.close();
+          rejectPromise(new Error("could not obtain a bound loopback port"));
+          return;
+        }
+        const boundPort = address.port;
+        server.close(() => resolveWithPort(boundPort));
+      });
+    });
+    await expect(checkPortReleased(port)).resolves.toBe(true);
+  });
 });
