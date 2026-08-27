@@ -104,12 +104,11 @@ async function qualify(helper, fixture, root) {
     clearTimeout(deadline);
     if (!completed) child.kill("SIGKILL");
     await exited.catch(() => undefined);
-    if (controlPipeError && completed === false) {
-      throw new Error(
-        `qualify: control pipe error before completion — ${controlPipeError.message}`,
-        { cause: controlPipeError },
-      );
-    }
+  }
+  if (controlPipeError && !completed) {
+    throw new Error(`qualify: control pipe error before completion — ${controlPipeError.message}`, {
+      cause: controlPipeError,
+    });
   }
 }
 
@@ -118,11 +117,25 @@ async function qualify(helper, fixture, root) {
  * supervisor's control-channel EOF handling is fail-closed — after `stdio[3].end()` the supervisor
  * must send a KRS1 error frame (kind 3) and exit non-zero, without leaking anything on stderr.
  */
+// KEIKO-0730 (macOS parallel): the supervisor must exit non-zero on the control-EOF fail-
+// closed path AND must not leak stderr diagnostics. Extracted so assertControlEofFailsClosed
+// stays inside max-lines-per-function.
+async function assertMacControlEofFinalization(exited, errors) {
+  const exitCode = await exited;
+  assert.notEqual(
+    exitCode,
+    0,
+    "supervisor must exit non-zero on control EOF (send_error(ERROR_JOB_OBSERVE))",
+  );
+  assert.equal(
+    Buffer.concat(errors).length,
+    0,
+    "supervisor must not leak stderr diagnostics on the EOF fail-closed path",
+  );
+}
+
 async function assertControlEofFailsClosed(helper, fixture, root) {
-  const child = spawn(helper, [], {
-    env: {},
-    stdio: ["pipe", "pipe", "pipe", "pipe", "pipe"],
-  });
+  const child = spawn(helper, [], { env: {}, stdio: ["pipe", "pipe", "pipe", "pipe", "pipe"] });
   const responses = streamReader(child.stdio[4]);
   const output = streamReader(child.stdout);
   const errors = [];
@@ -148,31 +161,18 @@ async function assertControlEofFailsClosed(helper, fixture, root) {
     const closure = await response(responses);
     assert.equal(closure.kind, 3);
     await Promise.all(pids.map(waitGone));
-    const exitCode = await exited;
-    // KEIKO-0730 (macOS parallel): the supervisor must exit non-zero on the control-EOF fail-
-    // closed path AND must not leak stderr diagnostics. The exact non-zero value differs from the
-    // Windows contract (macOS wmain returns EXIT_MONITOR_UNAVAILABLE or similar); assert non-zero.
-    assert.notEqual(
-      exitCode,
-      0,
-      "supervisor must exit non-zero on control EOF (send_error(ERROR_JOB_OBSERVE))",
-    );
-    assert.equal(
-      Buffer.concat(errors).length,
-      0,
-      "supervisor must not leak stderr diagnostics on the EOF fail-closed path",
-    );
+    await assertMacControlEofFinalization(exited, errors);
     completed = true;
   } finally {
     clearTimeout(deadline);
     if (!completed) child.kill("SIGKILL");
     await exited.catch(() => undefined);
-    if (controlPipeError && completed === false) {
-      throw new Error(
-        `assertControlEofFailsClosed: control pipe error before completion — ${controlPipeError.message}`,
-        { cause: controlPipeError },
-      );
-    }
+  }
+  if (controlPipeError && !completed) {
+    throw new Error(
+      `assertControlEofFailsClosed: control pipe error before completion — ${controlPipeError.message}`,
+      { cause: controlPipeError },
+    );
   }
 }
 

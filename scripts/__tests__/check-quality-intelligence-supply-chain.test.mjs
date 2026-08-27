@@ -1130,7 +1130,7 @@ describe("findForbiddenImportHits — dynamic template-literal evasion", () => {
     writeFile(
       root,
       "packages/keiko-contracts/src/routine-dynamic.ts",
-      'const path = process.env.X;\nconst m = await import(path);\n',
+      "const path = process.env.X;\nconst m = await import(path);\n",
     );
     expect(findForbiddenImportHits(listScannableSourceFiles(root))).toEqual([]);
   });

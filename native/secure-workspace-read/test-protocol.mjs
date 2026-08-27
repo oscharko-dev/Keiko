@@ -172,6 +172,27 @@ function malformedRequest(overrides = {}) {
 const HARNESS_KSR_MAX_ROOT = 32 * 1024;
 const HARNESS_KSR_MAX_PATH = 4 * 1024;
 
+// KEIKO-0905: EPIPE / ERR_STREAM_DESTROYED raised while writing to a SIGKILLed child's pipe
+// used to surface as an uncaught stream error and crash the harness instead of resolving as
+// the deliberate deadline failure the close handler already produces. Route both into
+// mutationError so the deadline failure path takes precedence.
+function attachPauseSeams(child, state, mutate) {
+  child.stdio[4].once("error", (streamError) => {
+    state.mutationError ??= streamError;
+  });
+  child.stdio[3].once("data", async (signal) => {
+    try {
+      assert.deepEqual(signal, Buffer.of(1));
+      await mutate();
+    } catch (error) {
+      if (isWindows && ["EACCES", "EBUSY", "EPERM"].includes(error?.code))
+        state.mutationDenied = true;
+      else state.mutationError = error;
+    }
+    child.stdio[4].end(Buffer.of(1));
+  });
+}
+
 function spawnHelper(binary, input, paused, mutate) {
   const started = performance.now();
   return new Promise((resolveResult, reject) => {
@@ -179,36 +200,14 @@ function spawnHelper(binary, input, paused, mutate) {
     const child = spawn(binary, [], { stdio, env: {} });
     const stdout = [];
     const stderr = [];
-    let mutationDenied = false;
-    let mutationError;
+    const state = { mutationDenied: false, mutationError: undefined };
     const deadline = setTimeout(() => child.kill("SIGKILL"), HELPER_DEADLINE_MS);
     child.stdout.on("data", (chunk) => stdout.push(chunk));
     child.stderr.on("data", (chunk) => stderr.push(chunk));
-    // KEIKO-0905: without these listeners, an EPIPE / ERR_STREAM_DESTROYED raised while writing
-    // to a SIGKILLed child's pipe surfaces as an uncaught stream error and crashes the harness
-    // instead of resolving as the deliberate deadline failure the close handler already
-    // produces. Route both into mutationError so the deadline failure path takes precedence.
     child.stdin.once("error", (streamError) => {
-      mutationError ??= streamError;
+      state.mutationError ??= streamError;
     });
-    if (paused) {
-      child.stdio[4].once("error", (streamError) => {
-        mutationError ??= streamError;
-      });
-    }
-    if (paused) {
-      child.stdio[3].once("data", async (signal) => {
-        try {
-          assert.deepEqual(signal, Buffer.of(1));
-          await mutate();
-        } catch (error) {
-          if (isWindows && ["EACCES", "EBUSY", "EPERM"].includes(error?.code))
-            mutationDenied = true;
-          else mutationError = error;
-        }
-        child.stdio[4].end(Buffer.of(1));
-      });
-    }
+    if (paused) attachPauseSeams(child, state, mutate);
     child.once("error", (error) => {
       clearTimeout(deadline);
       reject(error);
@@ -216,11 +215,11 @@ function spawnHelper(binary, input, paused, mutate) {
     child.once("close", (code, signal) => {
       clearTimeout(deadline);
       if (signal !== null) return reject(new Error("helper exceeded its execution deadline"));
-      if (mutationError !== undefined) return reject(mutationError);
+      if (state.mutationError !== undefined) return reject(state.mutationError);
       resolveResult({
         code,
         durationMs: performance.now() - started,
-        mutationDenied,
+        mutationDenied: state.mutationDenied,
         stderr: Buffer.concat(stderr),
         stdout: Buffer.concat(stdout),
       });
@@ -1838,36 +1837,38 @@ async function assertProtocolCases(binary, fixture, outside) {
   assert.equal(response(await run(binary, request(fixture, path64))).status, 0);
   assert.equal(response(await run(binary, request(fixture, path65))).status, 3);
   if (isWindows) await assertWindowsPolicies(binary, fixture);
-  else {
-    assert.equal(response(await run(binary, request("/", "dev/null"))).status, 4);
-    assert.equal(response(await run(binary, request("/dev", "null"))).status, 5);
-    // KEIKO-0825: pin the three non-Windows root-policy negatives the Windows branch covers
-    // via assertWindowsPolicies. The C helper's secure_read opens root with O_DIRECTORY|
-    // O_NOFOLLOW then verifies S_ISDIR before descending; each failure mode below trips one
-    // named guard: (a) a relative root is not an absolute path — the malformed-frame guard
-    // rejects it with KSR_MALFORMED_REQUEST (status 1); (b) an existing regular file breaks
-    // O_DIRECTORY / S_ISDIR — the root-not-directory path rejects with KSR_ROOT_INVALID
-    // (status 4); (c) a missing root path also fails the open — same KSR_ROOT_INVALID
-    // (status 4). Together they close the non-Windows coverage gap.
-    assert.equal(
-      response(await run(binary, request("relative", "safe.txt"))).status,
-      1,
-      "relative root must reject as malformed (status 1)",
-    );
-    assert.equal(
-      response(await run(binary, request(join(fixture, "nested/good.txt"), "safe.txt"))).status,
-      4,
-      "root pointing at a regular file must reject as root-invalid (status 4)",
-    );
-    assert.equal(
-      response(await run(binary, request(join(fixture, "no-such-root"), "safe.txt"))).status,
-      4,
-      "missing root must reject as root-invalid (status 4)",
-    );
-  }
+  else await assertNonWindowsRootPolicies(binary, fixture);
 
   await assertMalformedFrameGuards(binary, fixture);
   await assertSizeCapBoundaryProbes(binary, fixture);
+}
+
+// KEIKO-0825: pin the three non-Windows root-policy negatives the Windows branch covers via
+// assertWindowsPolicies. The C helper's secure_read opens root with O_DIRECTORY|O_NOFOLLOW then
+// verifies S_ISDIR before descending; each failure mode below trips one named guard: (a) a
+// relative root is not an absolute path — the malformed-frame guard rejects it with
+// KSR_MALFORMED_REQUEST (status 1); (b) an existing regular file breaks O_DIRECTORY / S_ISDIR
+// — the root-not-directory path rejects with KSR_ROOT_INVALID (status 4); (c) a missing root
+// path also fails the open — same KSR_ROOT_INVALID (status 4). Together they close the
+// non-Windows coverage gap.
+async function assertNonWindowsRootPolicies(binary, fixture) {
+  assert.equal(response(await run(binary, request("/", "dev/null"))).status, 4);
+  assert.equal(response(await run(binary, request("/dev", "null"))).status, 5);
+  assert.equal(
+    response(await run(binary, request("relative", "safe.txt"))).status,
+    1,
+    "relative root must reject as malformed (status 1)",
+  );
+  assert.equal(
+    response(await run(binary, request(join(fixture, "nested/good.txt"), "safe.txt"))).status,
+    4,
+    "root pointing at a regular file must reject as root-invalid (status 4)",
+  );
+  assert.equal(
+    response(await run(binary, request(join(fixture, "no-such-root"), "safe.txt"))).status,
+    4,
+    "missing root must reject as root-invalid (status 4)",
+  );
 }
 
 // Codex 3793028202 on #3202: the over-cap probes on their own let a smaller C constant pass
@@ -2069,22 +2070,10 @@ async function resetRaceFile(fixture) {
   await writeFile(join(fixture, "nested", "race.txt"), SAFE_TEXT);
 }
 
-async function assertAdversarialRaces(binary, fixture) {
-  const nested = join(fixture, "nested");
-  const target = join(nested, "race.txt");
-  const moved = join(fixture, "moved-nested");
-  const race = (mutate) => runPaused(binary, request(fixture, "nested/race.txt"), mutate);
-  await resetRaceFile(fixture);
-  assertRaceResult(await race(() => writeFile(target, "evil text\n")), "in-place rewrite");
-  await resetRaceFile(fixture);
-  assertRaceResult(await race(() => writeFile(target, "x".repeat(65_537))), "size growth");
-  await resetRaceFile(fixture);
-  // KEIKO-0855: the pre-fix path keyed the status-8 assertion on spawnHelper's generic
-  // `mutationDenied` — which fires for a sharing denial on EITHER the staging `writeFile` OR
-  // the `rename`. On Windows the staging write could get EACCES/EBUSY/EPERM under load, and
-  // the helper never even saw the mutation attempt on `target`; the assertion would then check
-  // status 8 against a case that should not have that expectation. Track denial per step, key
-  // the assertion on a rename-denied flag, and always drop the staged file in a finally.
+// KEIKO-0855: the pre-fix path keyed the status-8 assertion on spawnHelper's generic
+// `mutationDenied` — which fires for a sharing denial on EITHER the staging `writeFile` OR
+// the `rename`. Track denial per step and always drop the staged file in a finally.
+async function raceReplacement(race, fixture, target) {
   let replacementRenameDenied = false;
   const replacementResult = await race(async () => {
     const replacement = join(fixture, "replacement.txt");
@@ -2115,28 +2104,26 @@ async function assertAdversarialRaces(binary, fixture) {
       8,
       "replacement: root mutation before denied target rename must close",
     );
-  await resetRaceFile(fixture);
+}
+
+// KEIKO-0843: wrap the second rename in try/finally so a Windows sharing denial cannot leave
+// the fixture without its `nested` directory. restoreRename spins the harness's own sharing-
+// denied retry loop; on success this is a no-op, on failure it makes at most one pass.
+async function raceAncestorRenameRoundTrip(race, nested, moved) {
   assertRaceResult(
     await race(async () => {
-      // KEIKO-0843: wrap in try/finally so that a Windows sharing denial on the second
-      // rename(moved, nested) — EBUSY / EACCES / EPERM when the just-open helper still
-      // holds an open handle on `nested` — cannot leave the fixture without its `nested`
-      // directory. Every later case (ancestor substitution, load evidence) reads through
-      // `nested` and would cascade ENOENT otherwise. Mirrors the restoration pattern of
-      // the "ancestor substitution" case immediately below.
       await rename(nested, moved);
       try {
         await rename(moved, nested);
       } finally {
-        // If the direct rename above did not settle, spin through the sharing-denied
-        // retry loop the harness already uses for these Windows quirks (up to 500 x 5ms).
-        // On success this is a no-op; on failure it makes at most one restoration pass.
         await restoreRename(moved, nested).catch(() => undefined);
       }
     }),
     "ancestor rename round trip",
   );
-  await resetRaceFile(fixture);
+}
+
+async function raceAncestorSubstitution(race, nested, moved, target) {
   let movedAway = false;
   try {
     assertRaceResult(
@@ -2154,6 +2141,23 @@ async function assertAdversarialRaces(binary, fixture) {
       await rename(moved, nested);
     }
   }
+}
+
+async function assertAdversarialRaces(binary, fixture) {
+  const nested = join(fixture, "nested");
+  const target = join(nested, "race.txt");
+  const moved = join(fixture, "moved-nested");
+  const race = (mutate) => runPaused(binary, request(fixture, "nested/race.txt"), mutate);
+  await resetRaceFile(fixture);
+  assertRaceResult(await race(() => writeFile(target, "evil text\n")), "in-place rewrite");
+  await resetRaceFile(fixture);
+  assertRaceResult(await race(() => writeFile(target, "x".repeat(65_537))), "size growth");
+  await resetRaceFile(fixture);
+  await raceReplacement(race, fixture, target);
+  await resetRaceFile(fixture);
+  await raceAncestorRenameRoundTrip(race, nested, moved);
+  await resetRaceFile(fixture);
+  await raceAncestorSubstitution(race, nested, moved, target);
 }
 
 function isSharingDenied(error) {

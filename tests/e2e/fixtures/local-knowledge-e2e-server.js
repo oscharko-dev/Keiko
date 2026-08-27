@@ -188,6 +188,4 @@ function shutdown(reason, exitCode) {
 
 process.on("SIGTERM", () => shutdown("signal", { signal: "SIGTERM", code: 0 }));
 process.on("SIGINT", () => shutdown("signal", { signal: "SIGINT", code: 130 }));
-child.on("exit", (code, signal) =>
-  shutdown("child-exit", { code: code ?? 1, signal }),
-);
+child.on("exit", (code, signal) => shutdown("child-exit", { code: code ?? 1, signal }));

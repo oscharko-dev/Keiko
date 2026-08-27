@@ -194,7 +194,6 @@ describe("dev-stop tracked process cleanup", () => {
   });
 });
 
-
 // KEIKO-0734: report "stopped cleanly" ONLY when the tracked BFF/Next ports are actually
 // released. An orphaned dev-bff.mjs child spawned via `node --watch` can keep the BFF port
 // bound even after the tracked pids are gone; the pre-fix path would then declare the runner
@@ -238,18 +237,14 @@ describe("dev-stop port release check (KEIKO-0734)", () => {
   it("stopStaleRunner returns 1 when a tracked port is still bound after tracked children have exited", async () => {
     const errors = [];
     const removePidFile = vi.fn();
-    const result = await stopStaleRunner(
-      { children: [11, 12], publicPort: 1983 },
-      false,
-      {
-        killPid: vi.fn(),
-        stopOrphanedChildren: vi.fn().mockResolvedValue([]),
-        checkPortsReleased: vi.fn().mockResolvedValue([1983]),
-        removePidFile,
-        log: () => {},
-        error: (message) => errors.push(message),
-      },
-    );
+    const result = await stopStaleRunner({ children: [11, 12], publicPort: 1983 }, false, {
+      killPid: vi.fn(),
+      stopOrphanedChildren: vi.fn().mockResolvedValue([]),
+      checkPortsReleased: vi.fn().mockResolvedValue([1983]),
+      removePidFile,
+      log: vi.fn(),
+      error: (message) => errors.push(message),
+    });
     expect(result).toBe(1);
     expect(removePidFile).not.toHaveBeenCalled();
     expect(errors.join("\n")).toMatch(/still bound.*1983/u);

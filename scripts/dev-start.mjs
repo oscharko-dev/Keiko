@@ -254,33 +254,49 @@ export function resolveDevGatewayConfigAction({
 // seeded config; when it doesn't, the gateway will still start (unprovisioned) exactly the way
 // it did before this fix — and we surface both outcomes as notices so a silent degrade to "not
 // configured" no longer looks the same as a successful seed.
-export function ensureDevGatewayConfig(
-  seams = {
-    fileExists: existsSync,
-    directoryExists: (path) => {
-      try {
-        return statSync(path).isDirectory();
-      } catch {
-        return false;
-      }
-    },
-    mkdir: (path) => mkdirSync(path, { recursive: true }),
-    copyFile: copyFileSync,
-    copyDirectory: (source, target) => {
-      // Use cpSync via a dynamic require-style import so the seam remains overridable in tests.
-      // Directory tree copy: recursive, preserve mode, follow no symlinks (a credentials dir is
-      // regular files).
-      cpSync(source, target, {
-        recursive: true,
-        errorOnExist: false,
-        dereference: false,
-      });
-    },
-    chmod: chmodSync,
-    notify: (message) => console.log(message),
-    env: process.env,
-  },
-) {
+function statIsDirectory(path) {
+  try {
+    return statSync(path).isDirectory();
+  } catch {
+    return false;
+  }
+}
+
+function copyDirectoryTree(source, target) {
+  // Directory tree copy: recursive, preserve mode, follow no symlinks (a credentials dir is
+  // regular files).
+  cpSync(source, target, { recursive: true, errorOnExist: false, dereference: false });
+}
+
+const DEFAULT_ENSURE_DEV_GATEWAY_CONFIG_SEAMS = {
+  fileExists: existsSync,
+  directoryExists: statIsDirectory,
+  mkdir: (path) => mkdirSync(path, { recursive: true }),
+  copyFile: copyFileSync,
+  copyDirectory: copyDirectoryTree,
+  chmod: chmodSync,
+  notify: (message) => console.log(message),
+  env: process.env,
+};
+
+function seedGatewayCredentials(seams, seedFrom, notices) {
+  const seedCredentialsDir = join(dirname(seedFrom), "credentials");
+  const destinationCredentialsDir = join(dirname(devGatewayConfigFile), "credentials");
+  if (seams.directoryExists(seedCredentialsDir)) {
+    seams.copyDirectory(seedCredentialsDir, destinationCredentialsDir);
+    notices.push(
+      `[dev:start] seeded credentials/ from ${seedCredentialsDir} (${destinationCredentialsDir})`,
+    );
+    return;
+  }
+  notices.push(
+    `[dev:start] no credentials/ subdirectory next to ${seedFrom} — the gateway will start ` +
+      "with the seeded config but no vault; add a credentials/ directory beside the seed " +
+      "or configure a model in Settings",
+  );
+}
+
+export function ensureDevGatewayConfig(seams = DEFAULT_ENSURE_DEV_GATEWAY_CONFIG_SEAMS) {
   const { repointTo, seedFrom, notices } = resolveDevGatewayConfigAction({
     configuredPath: seams.env.KEIKO_CONFIG_FILE,
     devConfigFile: devGatewayConfigFile,
@@ -292,20 +308,7 @@ export function ensureDevGatewayConfig(
     seams.mkdir(dirname(devGatewayConfigFile));
     seams.copyFile(seedFrom, devGatewayConfigFile);
     seams.chmod(devGatewayConfigFile, 0o600);
-    const seedCredentialsDir = join(dirname(seedFrom), "credentials");
-    const destinationCredentialsDir = join(dirname(devGatewayConfigFile), "credentials");
-    if (seams.directoryExists(seedCredentialsDir)) {
-      seams.copyDirectory(seedCredentialsDir, destinationCredentialsDir);
-      notices.push(
-        `[dev:start] seeded credentials/ from ${seedCredentialsDir} (${destinationCredentialsDir})`,
-      );
-    } else {
-      notices.push(
-        `[dev:start] no credentials/ subdirectory next to ${seedFrom} — the gateway will start ` +
-          "with the seeded config but no vault; add a credentials/ directory beside the seed " +
-          "or configure a model in Settings",
-      );
-    }
+    seedGatewayCredentials(seams, seedFrom, notices);
   }
   for (const notice of notices) seams.notify(notice);
 }

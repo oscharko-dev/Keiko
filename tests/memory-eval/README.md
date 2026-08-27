@@ -86,19 +86,19 @@ kind requires its matching coordinate field (e.g. `userId` for `user`).
 
 ## What each fixture is for
 
-| File                         | Scenarios that consume it                  |
-| ---------------------------- | ------------------------------------------ |
+| File                         | Scenarios that consume it                      |
+| ---------------------------- | ---------------------------------------------- |
 | `user-preferences.json`      | accurate-retrieval, no-memory-mode, abstention |
-| `project-decisions.json`     | long-range-understanding                   |
-| `workflow-lessons.json`      | test-time-learning, reinforcement-ranking  |
-| `correction-pairs.json`      | correction-handling                        |
-| `stale-memories.json`        | suppressed-memory, forgetting-accuracy     |
-| `forget-targets.json`        | selective-forgetting                       |
-| `cross-scope-collision.json` | cross-scope-isolation                      |
-| `workspace-scale.json`       | workspace-scale-boundary                   |
-| `graded-relevance.json`      | graded-retrieval-quality                   |
-| `knowledge-update.json`      | forgetting-accuracy                        |
-| `invalid-scope.json`         | `_support.test.ts` (fixture validation)    |
+| `project-decisions.json`     | long-range-understanding                       |
+| `workflow-lessons.json`      | test-time-learning, reinforcement-ranking      |
+| `correction-pairs.json`      | correction-handling                            |
+| `stale-memories.json`        | suppressed-memory, forgetting-accuracy         |
+| `forget-targets.json`        | selective-forgetting                           |
+| `cross-scope-collision.json` | cross-scope-isolation                          |
+| `workspace-scale.json`       | workspace-scale-boundary                       |
+| `graded-relevance.json`      | graded-retrieval-quality                       |
+| `knowledge-update.json`      | forgetting-accuracy                            |
+| `invalid-scope.json`         | `_support.test.ts` (fixture validation)        |
 
 `error-propagation` does not load a fixture; it constructs a malformed record
 inline because the assertion is that the validator REJECTS it.

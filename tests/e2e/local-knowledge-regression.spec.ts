@@ -1,4 +1,3 @@
-/* eslint-disable max-lines-per-function */
 import { expect, test, type APIRequestContext, type Page } from "@playwright/test";
 import { createHash } from "node:crypto";
 import {

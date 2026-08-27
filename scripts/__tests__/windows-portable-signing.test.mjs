@@ -100,8 +100,14 @@ function validStage() {
     Buffer.from(
       JSON.stringify({
         sidecarRuntimes: [
-          { name: "keiko-secure-workspace-read", executablePath: "runtime/native/keiko-secure-workspace-read.exe" },
-          { name: "keiko-runtime-supervisor", executablePath: "runtime/native/keiko-runtime-supervisor.exe" },
+          {
+            name: "keiko-secure-workspace-read",
+            executablePath: "runtime/native/keiko-secure-workspace-read.exe",
+          },
+          {
+            name: "keiko-runtime-supervisor",
+            executablePath: "runtime/native/keiko-runtime-supervisor.exe",
+          },
         ],
       }),
       "utf8",
@@ -944,13 +950,16 @@ describe("Windows portable PE signing inventory", () => {
   });
 });
 
-
 // KEIKO-0658: inventoryCommand must reject a manifest whose sidecarRuntimes list names an
 // executablePath that the PE inventory did not observe. Without this cross-check, a
 // hand-authored manifest that referenced a sidecar the payload does not carry could be signed
 // and shipped downstream. The regression is a minimal manifest that names one present sidecar
 // (must not fail) and one absent sidecar (must fail with a message naming the offender).
-import { describe as _keiko0658Describe, expect as _keiko0658Expect, it as _keiko0658It } from "vitest";
+import {
+  describe as _keiko0658Describe,
+  expect as _keiko0658Expect,
+  it as _keiko0658It,
+} from "vitest";
 _keiko0658Describe("windows-portable-signing inventory cross-check (KEIKO-0658)", () => {
   _keiko0658It("rejects a manifest naming a sidecar the PE inventory does not carry", async () => {
     const stage = root();
@@ -970,8 +979,14 @@ _keiko0658Describe("windows-portable-signing inventory cross-check (KEIKO-0658)"
       Buffer.from(
         JSON.stringify({
           sidecarRuntimes: [
-            { name: "keiko-secure-workspace-read", executablePath: "runtime/native/keiko-secure-workspace-read.exe" },
-            { name: "keiko-does-not-exist", executablePath: "runtime/native/keiko-does-not-exist.exe" },
+            {
+              name: "keiko-secure-workspace-read",
+              executablePath: "runtime/native/keiko-secure-workspace-read.exe",
+            },
+            {
+              name: "keiko-does-not-exist",
+              executablePath: "runtime/native/keiko-does-not-exist.exe",
+            },
           ],
         }),
         "utf8",

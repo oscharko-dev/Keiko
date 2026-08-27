@@ -247,7 +247,8 @@ function findForbiddenImportHits(files) {
     ) {
       hits.push({
         file,
-        pattern: "dynamic import()/require() with non-literal argument alongside a forbidden-namespace token",
+        pattern:
+          "dynamic import()/require() with non-literal argument alongside a forbidden-namespace token",
       });
     }
   }

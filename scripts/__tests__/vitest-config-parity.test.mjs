@@ -166,7 +166,6 @@ describe("no vitest configuration reaches a coverage verdict (ADR-0157 D1, ADR-0
   }
 });
 
-
 // KEIKO-0540: the eight package-coverage gate scripts sit in coverage.include of the packages run
 // AND in coverage.exclude of the scripts run — expressing one partition as two independently
 // edited literal arrays lets a new entry drift into just one and be silently measured by both
@@ -190,27 +189,23 @@ describe("package coverage gate-script partition (KEIKO-0540)", () => {
     for (const entry of pkgInclude) {
       if (!entry.endsWith(".mjs")) continue;
       const partitioned = scrExclude.has(entry) || NON_LCOV_SCRIPTS.has(entry);
-      expect(partitioned, `${entry} must be partitioned (in scripts.exclude or NON_LCOV_SCRIPTS)`).toBe(true);
+      expect(
+        partitioned,
+        `${entry} must be partitioned (in scripts.exclude or NON_LCOV_SCRIPTS)`,
+      ).toBe(true);
     }
   });
 
   it("both configs reference the shared PACKAGE_COVERAGE_GATE_SCRIPTS constant", () => {
-    const pkgSource = readFileSync(
-      resolve(repoRoot, "vitest.coverage.packages.config.ts"),
-      "utf8",
-    );
-    const scrSource = readFileSync(
-      resolve(repoRoot, "vitest.coverage.scripts.config.ts"),
-      "utf8",
-    );
+    const pkgSource = readFileSync(resolve(repoRoot, "vitest.coverage.packages.config.ts"), "utf8");
+    const scrSource = readFileSync(resolve(repoRoot, "vitest.coverage.scripts.config.ts"), "utf8");
     expect(pkgSource).toMatch(/PACKAGE_COVERAGE_GATE_SCRIPTS/u);
     expect(scrSource).toMatch(/PACKAGE_COVERAGE_GATE_SCRIPTS/u);
     // The shared constant is the ONE edge; neither config may reintroduce its own literal array
     // of the eight gate scripts alongside the import (would defeat the partition test above).
     for (const source of [pkgSource, scrSource]) {
-      const literalCount = (
-        source.match(/scripts\/check-sonar-main-quality-gate\.mjs/gu) ?? []
-      ).length;
+      const literalCount = (source.match(/scripts\/check-sonar-main-quality-gate\.mjs/gu) ?? [])
+        .length;
       expect(literalCount, "gate-script paths must only appear in the shared module").toBe(0);
     }
   });
@@ -227,7 +222,10 @@ describe("package coverage gate-script partition (KEIKO-0540)", () => {
     for (const entry of scr.test.coverage.exclude) {
       if (!entry.endsWith(".mjs")) continue;
       const covered = pkgInclude.has(entry) || NON_LCOV_SCRIPTS.has(entry);
-      expect(covered, `${entry} excluded from scripts run must have an owner in packages.include or NON_LCOV_SCRIPTS`).toBe(true);
+      expect(
+        covered,
+        `${entry} excluded from scripts run must have an owner in packages.include or NON_LCOV_SCRIPTS`,
+      ).toBe(true);
     }
   });
 });

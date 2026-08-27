@@ -134,13 +134,7 @@ export default defineConfig(
   // it() cases. Covers both TypeScript suites and the .mjs harnesses for the Node build/gate scripts
   // (e.g. scripts/__tests__/*.test.mjs, which test the .mjs supply-chain and package-surface gates).
   {
-    files: [
-      "**/*.test.ts",
-      "**/*.test.tsx",
-      "**/*.test.mjs",
-      "**/*.spec.ts",
-      "**/*.spec.tsx",
-    ],
+    files: ["**/*.test.ts", "**/*.test.tsx", "**/*.test.mjs", "**/*.spec.ts", "**/*.spec.tsx"],
     rules: { "max-lines-per-function": "off" },
   },
   { files: ["**/*.{js,cjs}"], ...tseslint.configs.disableTypeChecked },

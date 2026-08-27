@@ -48,13 +48,7 @@ export default defineConfig({
       // or `coverage/scripts` (KEIKO-0580).
       reportsDirectory: "coverage/root",
       reporter: ["text", "json"],
-      exclude: [
-        "dist/**",
-        "node_modules/**",
-        "**/*.config.ts",
-        "**/*.test.*",
-        "**/__tests__/**",
-      ],
+      exclude: ["dist/**", "node_modules/**", "**/*.config.ts", "**/*.test.*", "**/__tests__/**"],
     },
   },
 });

@@ -85,9 +85,7 @@ describe("checkGitDeliveryEvidence", () => {
     const failures = checkGitDeliveryEvidence(root);
     // The gate runs against the LIVE repo root for the package.json lookup, so real scripts
     // (test:e2e:git-status-1386) pass. Fabricated ones (definitely-not-a-real-script-1234) fail.
-    expect(
-      failures.some((line) => line.includes("definitely-not-a-real-script-1234")),
-    ).toBe(true);
+    expect(failures.some((line) => line.includes("definitely-not-a-real-script-1234"))).toBe(true);
     expect(failures.some((line) => line.includes("test:e2e:git-status-1386"))).toBe(false);
   });
 

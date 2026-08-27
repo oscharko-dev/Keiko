@@ -354,7 +354,9 @@ function validate479VerificationCommands(manifest, relPath) {
   for (const entry of commands) {
     const name = scriptNameOf(entry);
     if (name === undefined) {
-      failures.push(`${relPath}: verificationCommands entry is not a string: ${JSON.stringify(entry)}`);
+      failures.push(
+        `${relPath}: verificationCommands entry is not a string: ${JSON.stringify(entry)}`,
+      );
       continue;
     }
     // Bare `npm test` corresponds to `scripts.test` if declared; treat bare `test` (matches the

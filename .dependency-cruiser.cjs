@@ -34,9 +34,7 @@
 function siblingPackageSourcePattern(packageNames) {
   const patterns = [];
   for (const packageName of packageNames) {
-    patterns.push(
-      `(\\.\\./)*packages/keiko-${packageName}/src/`,
-    );
+    patterns.push(`(\\.\\./)*packages/keiko-${packageName}/src/`);
   }
   return patterns.join("|");
 }
@@ -930,7 +928,8 @@ module.exports = {
         path:
           "^(packages/keiko-(tools|harness|workflows)/src/|src/(tools|harness|workflows)/|" +
           "tests/architecture/fixtures/direct-fs-outside-workspace/)",
-        pathNot: "^(packages/keiko-tools/src/(_support|exec|writer)\\.ts$)|" + PRODUCTION_SOURCE_PATH_NOT,
+        pathNot:
+          "^(packages/keiko-tools/src/(_support|exec|writer)\\.ts$)|" + PRODUCTION_SOURCE_PATH_NOT,
       },
       to: { path: "^node:fs$|^fs$" },
     },

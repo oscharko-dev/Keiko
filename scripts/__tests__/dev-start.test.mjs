@@ -487,26 +487,30 @@ describe("dev-start gateway config credentials seed (KEIKO-0542)", () => {
       fileExists: (path) => {
         // Approve the first seed candidate (repoRoot/.keiko/ui/keiko.config.json) whose exact
         // form we cannot know here — approve the first ".keiko/ui/keiko.config.json" path.
-        if (typeof path === "string" && path.endsWith("/.keiko/ui/keiko.config.json") && !path.includes("/ui/ui/")) {
+        if (
+          typeof path === "string" &&
+          path.endsWith("/.keiko/ui/keiko.config.json") &&
+          !path.includes("/ui/ui/")
+        ) {
           approvedSeed = path;
           return true;
         }
         return false;
       },
       directoryExists: (path) =>
-        approvedSeed !== undefined && path === approvedSeed.replace(/keiko\.config\.json$/u, "credentials"),
-      mkdir: () => {},
+        approvedSeed !== undefined &&
+        path === approvedSeed.replace(/keiko\.config\.json$/u, "credentials"),
+      mkdir: vi.fn(),
       copyFile: (source, target) => copyCalls.push({ kind: "file", source, target }),
-      copyDirectory: (source, target) =>
-        copyCalls.push({ kind: "directory", source, target }),
-      chmod: () => {},
+      copyDirectory: (source, target) => copyCalls.push({ kind: "directory", source, target }),
+      chmod: vi.fn(),
       notify: (message) => notices.push(message),
       env: {},
     };
     ensureDevGatewayConfig(seams);
-    expect(copyCalls.some((call) => call.kind === "directory" && /credentials$/u.test(call.target))).toBe(
-      true,
-    );
+    expect(
+      copyCalls.some((call) => call.kind === "directory" && /credentials$/u.test(call.target)),
+    ).toBe(true);
     expect(notices.join("\n")).toMatch(/seeded credentials\/ from/u);
   });
 
@@ -520,12 +524,12 @@ describe("dev-start gateway config credentials seed (KEIKO-0542)", () => {
         path.endsWith("/.keiko/ui/keiko.config.json") &&
         !path.includes("/ui/ui/"),
       directoryExists: () => false,
-      mkdir: () => {},
-      copyFile: () => {},
+      mkdir: vi.fn(),
+      copyFile: vi.fn(),
       copyDirectory: () => {
         throw new Error("credentials/ must not be copied when it does not exist");
       },
-      chmod: () => {},
+      chmod: vi.fn(),
       notify: (message) => notices.push(message),
       env: {},
     };

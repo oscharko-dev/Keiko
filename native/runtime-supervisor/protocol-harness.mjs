@@ -230,10 +230,7 @@ export async function explained(stage, promise, exited, stderr) {
     (code) => ({ [exitCode]: code }),
     (exitError) => ({ [exitCode]: `errored:${String(exitError?.code ?? exitError)}` }),
   );
-  const raced = await Promise.race([
-    promise.catch((error) => ({ error })),
-    neutralisedExited,
-  ]);
+  const raced = await Promise.race([promise.catch((error) => ({ error })), neutralisedExited]);
   if (raced && exitCode in raced) {
     const stderrBytes = Buffer.concat(stderr).length;
     throw new Error(
