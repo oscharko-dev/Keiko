@@ -394,7 +394,7 @@ function a11yProof(captures: readonly CaptureRecord[], cssProof: JsonObject): Js
 
 function manifest(captures: readonly CaptureRecord[], generatedAt: string): JsonObject {
   return {
-    issue: "#2060",
+    issue: 2060,
     epic: "#2055",
     generatedAt,
     command: "KEIKO_WRITE_TRACKED_EVIDENCE=1 npm run test:e2e:workspace-selection-2060",
@@ -406,6 +406,18 @@ function manifest(captures: readonly CaptureRecord[], generatedAt: string): Json
       "The behavior proof for Files-window marquee/group-drag/clipboard lives in workspace-multi-selection-2055.spec.ts.",
     ],
     captureCount: captures.length,
+    // Seven-boolean redactionBoundary shape, matching the sibling 1990/2253 manifests (KEIKO-0960).
+    // Deterministic assertions, accessibility counts, hashes, and visible product copy only —
+    // never a customer repo file, secret, private path, raw diff, model prompt/output, or token.
+    redactionBoundary: {
+      customerRepositoryFilesIncluded: false,
+      secretsIncluded: false,
+      privatePathsIncluded: false,
+      rawDiffsIncluded: false,
+      rawModelPromptsIncluded: false,
+      rawModelOutputsIncluded: false,
+      tokensIncluded: false,
+    },
   };
 }
 

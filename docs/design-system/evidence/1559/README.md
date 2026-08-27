@@ -24,8 +24,12 @@ the existing Issue #1300 visual-regression proof gate is unaffected.
 
 ## Result
 
-`dialog-mode-proof.json`: **PASS** — 16 screenshots (8 states × dark/light), **0 serious/critical
-axe violations** on the component DOM.
+`dialog-mode-proof.json`: **PASS** — 56 screenshots (8 states × the 7 canonical theme/contrast/motion
+modes from [`state-matrix.md`](../../state-matrix.md): `dark` (01), `light` (02), `dark-hc` (03),
+`light-hc` (04), `prefers-contrast` (05), `forced-colors` (06), `reduced-motion` (07)), **0
+serious/critical axe violations** on the component DOM. Re-run the harness (
+`node docs/design-system/evidence/1559/equivalence-harness.mjs`) to regenerate PNGs and the receipt
+after any product change that affects the dialog-mode surfaces or the seven canonical modes.
 
 ## States captured (maps to the issue's required visual-regression states)
 

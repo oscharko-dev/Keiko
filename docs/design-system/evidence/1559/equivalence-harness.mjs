@@ -131,15 +131,19 @@ const STATES = [
   },
 ];
 
-// Mirror the sibling harness matrices (see 1298/equivalence-harness.mjs): dark, light, dark-hc,
-// light-hc, forced-colors, reduced-motion. Adding hc + forced-colors + reduced-motion coverage lets
-// this dialog-mode proof capture the same theme/contrast/motion surface as the DS component
-// harnesses, and applies the identical zero-serious/critical axe gate to each new mode.
+// Mirror the seven canonical theme/contrast/motion modes from
+// docs/design-system/state-matrix.md: dark (01), light (02), dark-hc (03, in-app HC via
+// `data-hc`), light-hc (04, in-app HC via `data-hc`), prefers-contrast (05, browser-forced contrast
+// via the prefers-contrast media query only), forced-colors (06), reduced-motion (07). The
+// `data-hc` path and the `prefers-contrast` media query are kept independent modes — combining
+// them in one mode would let a regression on one path be masked by the other. Applies the identical
+// zero-serious/critical axe gate to each mode.
 const THEMES = [
   { id: "dark", attr: null, hc: null, media: {} },
   { id: "light", attr: "light", hc: null, media: {} },
-  { id: "dark-hc", attr: null, hc: "more", media: { contrast: "more" } },
-  { id: "light-hc", attr: "light", hc: "more", media: { contrast: "more" } },
+  { id: "dark-hc", attr: null, hc: "more", media: {} },
+  { id: "light-hc", attr: "light", hc: "more", media: {} },
+  { id: "prefers-contrast", attr: null, hc: null, media: { contrast: "more" } },
   { id: "forced-colors", attr: null, hc: null, media: { forcedColors: "active" } },
   { id: "reduced-motion", attr: null, hc: null, media: { reducedMotion: "reduce" } },
 ];

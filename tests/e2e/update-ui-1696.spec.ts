@@ -1194,7 +1194,7 @@ function writeA11yProof(a11yCaptures: readonly A11yCapture[], cssHash: string): 
 
 function writeManifest(ledgers: readonly UpdateRouteLedger[]): void {
   writeJsonArtifact("manifest.json", {
-    issue: "#1696",
+    issue: 1696,
     epic: "#1687",
     generatedAt: EVIDENCE_GENERATED_AT,
     command: "npm run test:e2e:update-ui-1696",

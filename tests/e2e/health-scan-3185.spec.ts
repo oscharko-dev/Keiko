@@ -404,7 +404,7 @@ function writeA11yProof(captures: readonly CaptureRecord[], globalsCssSha256: st
 
 function writeManifest(generatedAt: string): void {
   writeJsonArtifact("manifest.json", {
-    issue: "#3185",
+    issue: 3185,
     epic: "#3179",
     generatedAt,
     command: `KEIKO_WRITE_TRACKED_EVIDENCE=1 ${PLAYWRIGHT_PLAN_COMMAND}`,

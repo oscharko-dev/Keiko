@@ -45,9 +45,11 @@ Focused issue #1636 verification: `PASS`.
   `01-context-dark.png`, `02-context-light.png`, `03-sibling-active.png`,
   `04-back-disabled.png`, `05-chat-highlight.png`, `06-responsive.png`, and
   `07-forced-colors.png`.
-- `docs/design-system/evidence/1636/a11y-proof.json`: PASS.
-- `docs/design-system/evidence/1636/citation-context-back-to-chat-axe-gate-summary.json`:
-  PASS.
+- `docs/design-system/evidence/1636/a11y-proof.json`: PASS (tracked).
+- `docs/design-system/evidence/1636/citation-context-back-to-chat-axe-gate-summary.json`
+  is harness-regenerated per run and is intentionally not committed alongside
+  the PNGs; run the harness locally in the same commit if you need the receipt
+  for a bug report or bisect.
 
 The broader viewer window chrome remains covered by
 `docs/design-system/evidence/1634/`. Issue #1636 captures its changed contextual

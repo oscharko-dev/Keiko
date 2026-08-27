@@ -69,14 +69,17 @@ The standalone template above accepts six user-impact values that predate the Gi
 GitHub form uses four normalized values. When transferring a standalone report, map the reporter's
 selection to the closest GitHub-form value using the table below:
 
-| Standalone report option         | GitHub issue-form value       |
-| -------------------------------- | ----------------------------- |
-| Blocks installation or startup   | Data loss or security concern |
-| Blocks model or credential setup | Data loss or security concern |
-| Blocks core workflow             | Degrades core workflow        |
-| Degrades core workflow           | Degrades core workflow        |
-| Visual or usability issue        | Cosmetic or minor             |
-| Unknown                          | Degrades secondary workflow   |
+| Standalone report option         | GitHub issue-form value     |
+| -------------------------------- | --------------------------- |
+| Blocks installation or startup   | Degrades core workflow      |
+| Blocks model or credential setup | Degrades core workflow      |
+| Blocks core workflow             | Degrades core workflow      |
+| Degrades core workflow           | Degrades core workflow      |
+| Visual or usability issue        | Cosmetic or minor           |
+| Unknown                          | Degrades secondary workflow |
 
-If the mapping is uncertain, prefer the more severe GitHub-form value and note the reporter's
-original wording in the issue body.
+`Data loss or security concern` is reserved for reports whose security relevance is what makes them
+severe (a leak, a bypass, corrupted or lost data) — not for a routine setup or startup outage. If a
+startup or setup failure exposes a secret or corrupts state, promote it to `Data loss or security
+concern`; otherwise it belongs in `Degrades core workflow`. If the mapping is uncertain, prefer the
+more severe GitHub-form value and note the reporter's original wording in the issue body.
