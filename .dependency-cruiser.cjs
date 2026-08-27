@@ -1009,12 +1009,16 @@ module.exports = {
         "ADR-0165 D2: the raw, unredacted editor read lane is a review-time containment " +
         "boundary, not a runtime one; this rule makes it machine-enforced. The read lane is " +
         "the `./internal/editor-read` subpath of keiko-workspace (source: " +
-        "packages/keiko-workspace/src/editorRead.ts). Only editor-owned callers under " +
+        "packages/keiko-workspace/src/editorRead.ts, which re-exports the raw function " +
+        "`readWorkspaceFileForEditing` from packages/keiko-workspace/src/discovery.ts — the " +
+        "same symbol reachable through either path bypasses the containment if only one is " +
+        "guarded, so both files are targets). Only editor-owned callers under " +
         "keiko-server/src/editor and the module's own package (keiko-workspace/src/) may " +
-        "import it — every other production caller must go through the default " +
+        "import either — every other production caller must go through the default " +
         "readWorkspaceFile export, which routes the redacting barrel (ADR-0005). The " +
-        "negative-test fixture under tests/architecture/fixtures/editor-read-allowed-callers/ " +
-        "proves the gate is live by name.",
+        "negative-test fixtures under tests/architecture/fixtures/editor-read-allowed-callers/ " +
+        "prove the gate is live by name against both the editorRead.ts import and the " +
+        "discovery.ts deep-import that would otherwise reach the same raw function.",
       severity: "error",
       from: {
         path:
@@ -1027,8 +1031,8 @@ module.exports = {
       },
       to: {
         path:
-          "^packages/keiko-workspace/src/editorRead\\.ts$|" +
-          "^packages/keiko-workspace/dist/editorRead\\.js$",
+          "^packages/keiko-workspace/src/(editorRead|discovery)\\.ts$|" +
+          "^packages/keiko-workspace/dist/(editorRead|discovery)\\.js$",
       },
     },
   ],

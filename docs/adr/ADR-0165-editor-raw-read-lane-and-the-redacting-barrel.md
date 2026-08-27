@@ -76,14 +76,19 @@ it. Containment here is a review-time property enforced by the module graph and 
 not a runtime one.
 
 The module-graph half of that containment is machine-enforced by the
-`adr-0165-editor-read-allowed-callers` dependency-cruiser rule, alongside its negative fixture at
-[`tests/architecture/fixtures/editor-read-allowed-callers/bad-import.ts`](../../tests/architecture/fixtures/editor-read-allowed-callers/bad-import.ts).
-Only `packages/keiko-server/src/editor/**` (today: `workspaceSearchRoutes.ts`) and the
-`packages/keiko-workspace/src/**` package's own files may import `editorRead.ts`; any other
-production import fires the rule and turns `npm run arch:check` red. This does not weaken the
-review-time framing — it just refuses to trust silence on a boundary a hostile add could otherwise
-cross undetected between reviews. The rule name is registered in
-[`scripts/arch-check-negative.mjs`](../../scripts/arch-check-negative.mjs)'s expected count and in
+`adr-0165-editor-read-allowed-callers` dependency-cruiser rule, alongside its two negative fixtures
+under
+[`tests/architecture/fixtures/editor-read-allowed-callers/`](../../tests/architecture/fixtures/editor-read-allowed-callers/):
+`bad-import.ts` (imports through `editorRead.ts`) and `bad-discovery-import.ts` (deep-imports
+`discovery.ts`, where `readWorkspaceFileForEditing` is actually defined and from which `editorRead.ts`
+re-exports it). Both paths reach the same raw function, so both files are targets of the rule: only
+`packages/keiko-server/src/editor/**` (today: `workspaceSearchRoutes.ts`) and the
+`packages/keiko-workspace/src/**` package's own files may import either; any other production
+import fires the rule and turns `npm run arch:check` red. This does not weaken the review-time
+framing — it just refuses to trust silence on a boundary a hostile add could otherwise cross
+undetected between reviews. The rule name is registered in
+[`scripts/arch-check-negative.mjs`](../../scripts/arch-check-negative.mjs)'s expected count (`2`, one
+per fixture) and in
 [`tests/architecture/severity-gate.test.ts`](../../tests/architecture/severity-gate.test.ts)'s
 required-trust-rules list so a downgrade or accidental removal shows up as a named failure, not a
 silent drift.
