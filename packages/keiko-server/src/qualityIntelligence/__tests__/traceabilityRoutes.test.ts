@@ -9,7 +9,8 @@ import { join } from "node:path";
 import { Readable } from "node:stream";
 import type { IncomingMessage } from "node:http";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { QualityIntelligence, type QualityIntelligence as QI } from "@oscharko-dev/keiko-contracts";
+import type { QualityIntelligence as QI } from "@oscharko-dev/keiko-contracts";
+import * as QualityIntelligence from "@oscharko-dev/keiko-contracts/runtime/qualityIntelligence/index";
 import {
   deleteQualityIntelligenceCandidates,
   recordQualityIntelligenceCandidates,

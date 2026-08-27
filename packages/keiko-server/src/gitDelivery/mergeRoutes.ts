@@ -27,7 +27,7 @@
 // ledger. CSRF + JSON content type are enforced centrally by server.ts.
 
 import type { GitDeliveryApprovalClaim } from "@oscharko-dev/keiko-contracts";
-import { isGitDeliveryMergeStrategyHint } from "@oscharko-dev/keiko-contracts";
+import { isGitDeliveryMergeStrategyHint } from "@oscharko-dev/keiko-contracts/runtime/git-delivery";
 import type { GitMergeCommand } from "@oscharko-dev/keiko-tools";
 import type { RouteContext, RouteDefinition, RouteResult } from "../routes.js";
 import type { UiHandlerDeps } from "../deps.js";

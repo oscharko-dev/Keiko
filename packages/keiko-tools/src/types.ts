@@ -3,11 +3,8 @@
 // here because contracts contains type/data only — no runtime functions. `verbatimModuleSyntax`
 // is on, so type-only names use `export type` and value-emitting frozen constants use `export`.
 
-import {
-  DEFAULT_TOOL_HOST_CONFIG,
-  type ToolHostConfig,
-  type ToolHostConfigInput,
-} from "@oscharko-dev/keiko-contracts";
+import type { ToolHostConfig, ToolHostConfigInput } from "@oscharko-dev/keiko-contracts";
+import { DEFAULT_TOOL_HOST_CONFIG } from "@oscharko-dev/keiko-contracts/runtime/tools";
 
 export type {
   NetworkPolicy,
@@ -41,7 +38,7 @@ export {
   GOVERNED_GIT_REMOTE_CREDENTIAL_ENV_ALLOWLIST,
   GOVERNED_GIT_REMOTE_ENV_ALLOWLIST,
   GOVERNED_GIT_REMOTE_SANDBOX_POLICY,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/tools";
 
 // Deep-merges a caller override over the defaults: the nested sandbox/patchLimits objects merge
 // field-by-field so a partial override never drops an unspecified default (S-M2).

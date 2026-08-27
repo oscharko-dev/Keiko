@@ -25,6 +25,10 @@
 
 import { randomBytes } from "node:crypto";
 import { Buffer } from "node:buffer";
+import type {
+  AtlassianConnectorAuthScheme,
+  AtlassianConnectorProvider,
+} from "@oscharko-dev/keiko-contracts";
 import {
   ATLASSIAN_CONNECTOR_AUTH_REF_PREFIX,
   ATLASSIAN_CONNECTOR_SCHEMA_VERSION,
@@ -32,9 +36,7 @@ import {
   isAtlassianConnectorProvider,
   isSafeAtlassianConnectorBaseUrl,
   isSafeAtlassianDisplayName,
-  type AtlassianConnectorAuthScheme,
-  type AtlassianConnectorProvider,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import type { LocalSecretVault } from "@oscharko-dev/keiko-security/secret-vault";
 
 // ─── Bounds for the credential material itself (hostile-input guards) ─────────

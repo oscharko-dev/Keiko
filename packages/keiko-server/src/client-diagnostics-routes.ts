@@ -29,10 +29,8 @@
 
 import type { IncomingMessage } from "node:http";
 
-import {
-  isClientDiagnosticIngestRequest,
-  type ClientDiagnosticIngestRequest,
-} from "@oscharko-dev/keiko-contracts";
+import type { ClientDiagnosticIngestRequest } from "@oscharko-dev/keiko-contracts";
+import { isClientDiagnosticIngestRequest } from "@oscharko-dev/keiko-contracts/runtime/diagnostics";
 
 import {
   RequestBodyCancelledError,

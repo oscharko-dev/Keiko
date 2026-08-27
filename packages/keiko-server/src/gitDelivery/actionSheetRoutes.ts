@@ -25,14 +25,16 @@
 
 import type { IncomingMessage } from "node:http";
 import { sha256Hex } from "@oscharko-dev/keiko-security";
+import type {
+  GitDeliveryActionKind,
+  GitDeliveryApprovalRequirement,
+  GitDeliveryProviderCapability,
+  GitDeliveryResolvedInputs,
+} from "@oscharko-dev/keiko-contracts";
 import {
   isGitDeliveryProviderCapability,
   parseGitDeliveryResolvedInputs,
-  type GitDeliveryActionKind,
-  type GitDeliveryApprovalRequirement,
-  type GitDeliveryProviderCapability,
-  type GitDeliveryResolvedInputs,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/git-delivery";
 import type { GitWorktreeSnapshot } from "@oscharko-dev/keiko-tools";
 import type { RouteContext, RouteDefinition, RouteResult } from "../routes.js";
 import type { UiHandlerDeps } from "../deps.js";

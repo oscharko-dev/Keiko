@@ -2,7 +2,10 @@
 // observation derivation and the suite summary's profile-coverage gates. Pure inputs.
 
 import { describe, expect, it } from "vitest";
-import { DISCUSSION_DIRECTIVE_TEMPLATES, discussionModePlan } from "@oscharko-dev/keiko-contracts";
+import {
+  DISCUSSION_DIRECTIVE_TEMPLATES,
+  discussionModePlan,
+} from "@oscharko-dev/keiko-contracts/runtime/discussion-intelligence";
 import { deriveDiscussionObservation, runDiscussionEvaluation } from "./runner.js";
 import { discussionFixtureByName, discussionFixturesForCategory } from "./fixtures/index.js";
 import type { DiscussionEvalFixture } from "./types.js";

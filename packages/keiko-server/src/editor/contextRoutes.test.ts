@@ -4,11 +4,8 @@ import { join } from "node:path";
 import { Readable } from "node:stream";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import {
-  EDITOR_AGENT_SCHEMA_VERSION,
-  type EditorAgentSessionSnapshot,
-  type KnowledgeCapsuleId,
-} from "@oscharko-dev/keiko-contracts";
+import type { EditorAgentSessionSnapshot, KnowledgeCapsuleId } from "@oscharko-dev/keiko-contracts";
+import { EDITOR_AGENT_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts/runtime/editor-agent";
 import { createInMemoryEvidenceStore } from "@oscharko-dev/keiko-evidence";
 import {
   createCapsule,

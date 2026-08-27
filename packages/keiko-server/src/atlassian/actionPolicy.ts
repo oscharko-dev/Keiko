@@ -22,14 +22,14 @@
 // management, not D4 connector actions — the D4 table has no row for them — so they carry no
 // disposition at all.
 
-import {
-  decideAtlassianConnectorAction,
-  type AtlassianConnectorActionDecision,
-  type AtlassianConnectorActionType,
-  type AtlassianConnectorAuthorityFailureReason,
-  type CodingWorkbenchAuthorityEnvelope,
-  type CodingWorkbenchMode,
+import type {
+  AtlassianConnectorActionDecision,
+  AtlassianConnectorActionType,
+  AtlassianConnectorAuthorityFailureReason,
+  CodingWorkbenchAuthorityEnvelope,
+  CodingWorkbenchMode,
 } from "@oscharko-dev/keiko-contracts";
+import { decideAtlassianConnectorAction } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import {
   editorAgentAuthorityRegistry,
   type EditorAgentAuthorityFailureReason,

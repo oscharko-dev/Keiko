@@ -4,12 +4,12 @@ import { fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { axe } from "jest-axe";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import {
-  WORKSPACE_TRUST_SCHEMA_VERSION,
-  type WorkspaceManifest,
-  type WorkspaceRootDescriptor,
-  type WorkspaceRootRef,
+import type {
+  WorkspaceManifest,
+  WorkspaceRootDescriptor,
+  WorkspaceRootRef,
 } from "@oscharko-dev/keiko-contracts";
+import { WORKSPACE_TRUST_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts/runtime/workspace-trust";
 import { I18nProvider } from "@/lib/i18n";
 import type { WorkspaceManifestView } from "../../hooks/useWorkspaceManifest";
 import { MultiRootFilesWidget } from "./MultiRootFilesWidget";

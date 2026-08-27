@@ -23,7 +23,7 @@
 // counts, and hashes only). A keychain service/account name, a vault reference, a shard file path,
 // and secret material never reach a field on this event.
 
-import { classifyErrorKind } from "@oscharko-dev/keiko-contracts";
+import { classifyErrorKind } from "@oscharko-dev/keiko-contracts/runtime/observability";
 
 export type SecurityLogLevel = "debug" | "info" | "warn" | "error";
 

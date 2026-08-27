@@ -1,9 +1,7 @@
 import { describe, expect, it } from "vitest";
 
-import {
-  validateCodingWorkbenchRuntimeEvent,
-  type GovernedActionV1,
-} from "@oscharko-dev/keiko-contracts";
+import type { GovernedActionV1 } from "@oscharko-dev/keiko-contracts";
+import { validateCodingWorkbenchRuntimeEvent } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-validation";
 
 import {
   RESEARCH_APPROVAL_TTL_MS,

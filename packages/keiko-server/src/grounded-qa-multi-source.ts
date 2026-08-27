@@ -16,11 +16,8 @@ import {
 } from "@oscharko-dev/keiko-model-gateway";
 import type { ModelPort } from "@oscharko-dev/keiko-harness";
 import { persistConnectedContextEvidence } from "@oscharko-dev/keiko-evidence";
-import {
-  CONTEXT_LANE_IDS,
-  type ContextBudgetPressure,
-  type ContextLaneId,
-} from "@oscharko-dev/keiko-contracts";
+import type { ContextBudgetPressure, ContextLaneId } from "@oscharko-dev/keiko-contracts";
+import { CONTEXT_LANE_IDS } from "@oscharko-dev/keiko-contracts/runtime/context-engineering";
 
 import {
   CANDIDATE_OMISSION_REASONS,

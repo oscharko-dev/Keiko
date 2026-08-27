@@ -196,7 +196,9 @@ describe("Issue #12 docs drift", () => {
     expect(uiCli).toContain('new Set(["127.0.0.1", "localhost"])');
     expect(wireContracts).toContain('export const UI_HOST = "127.0.0.1"');
     expect(uiServer).toContain("export { UI_HOST };");
-    expect(uiServer).toContain('export { DEFAULT_UI_PORT } from "@oscharko-dev/keiko-contracts";');
+    expect(uiServer).toContain(
+      'export { DEFAULT_UI_PORT } from "@oscharko-dev/keiko-contracts/runtime/bff-wire";',
+    );
   });
 
   it("keeps the shipped default UI port aligned", () => {

@@ -10,10 +10,8 @@
 // inconsistency. The unit test in descriptor-meta.test.ts is the
 // production assertion that the table is consistent.
 
-import {
-  type WorkspaceDescriptorMeta,
-  validateWorkspaceDescriptorMeta,
-} from "@oscharko-dev/keiko-contracts";
+import type { WorkspaceDescriptorMeta } from "@oscharko-dev/keiko-contracts";
+import { validateWorkspaceDescriptorMeta } from "@oscharko-dev/keiko-contracts/runtime/workspace-descriptors";
 import type { WindowType } from "./WindowsRegistry";
 
 // ─── Meta table: one entry per WindowType ─────────────────────────────────

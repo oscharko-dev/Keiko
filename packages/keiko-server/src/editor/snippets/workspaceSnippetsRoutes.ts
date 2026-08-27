@@ -1,10 +1,12 @@
+import type {
+  EditorM7WorkspaceSnippetInput,
+  EditorM7WorkspaceSnippetMutationResult,
+} from "@oscharko-dev/keiko-contracts";
 import {
   EDITOR_M7_SNIPPET_COLLECTION_VERSION,
   compileEditorM7SnippetBody,
   parseEditorM7WorkspaceSnippetCollection,
-  type EditorM7WorkspaceSnippetInput,
-  type EditorM7WorkspaceSnippetMutationResult,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/editor-snippets";
 
 import type { UiHandlerDeps } from "../../deps.js";
 import { readJsonObject, resolveRequestRoot, runFilesHandler } from "../../files.js";

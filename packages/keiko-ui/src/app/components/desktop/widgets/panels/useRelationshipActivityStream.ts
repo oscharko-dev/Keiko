@@ -27,7 +27,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { RelationshipActivityState } from "@oscharko-dev/keiko-contracts";
-import { RELATIONSHIP_FORBIDDEN_METADATA_KEY_SUBSTRINGS } from "@oscharko-dev/keiko-contracts";
+import { RELATIONSHIP_FORBIDDEN_METADATA_KEY_SUBSTRINGS } from "@oscharko-dev/keiko-contracts/runtime/relationships";
 import {
   reportClientDiagnostic,
   sseStreamErrorDiagnostic,

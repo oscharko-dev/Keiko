@@ -13,7 +13,7 @@ import type {
   CodingContextWirePack,
   EvidenceStore,
 } from "@oscharko-dev/keiko-contracts";
-import { CODING_CONTEXT_SOURCE_TIERS } from "@oscharko-dev/keiko-contracts";
+import { CODING_CONTEXT_SOURCE_TIERS } from "@oscharko-dev/keiko-contracts/runtime/coding-context";
 import type { Redactor } from "../deps.js";
 
 export const CODING_CONTEXT_EVIDENCE_SCHEMA_VERSION = "1" as const;

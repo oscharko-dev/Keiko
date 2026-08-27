@@ -7,21 +7,25 @@ import { EventEmitter } from "node:events";
 import type { IncomingMessage } from "node:http";
 import type { ServerResponse } from "node:http";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import type {
+  CodingWorkbenchActionClass,
+  CodingWorkbenchAuthorityEnvelope,
+  EditorAgentActionPolicyDecision,
+  EditorAgentRootBinding,
+  EditorAgentSessionSnapshot,
+  VerificationReport,
+} from "@oscharko-dev/keiko-contracts";
 import {
   CODING_WORKBENCH_ACTION_CLASSES,
   CODING_WORKBENCH_SCHEMA_VERSION,
-  EDITOR_AGENT_SCHEMA_VERSION,
+} from "@oscharko-dev/keiko-contracts/runtime/coding-workbench";
+import { EDITOR_AGENT_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts/runtime/editor-agent";
+import {
   isWorkspaceManifestDigest,
   isWorkspaceManifestRef,
   isWorkspaceRootIdentityDigest,
   isWorkspaceRootRef,
-  type CodingWorkbenchActionClass,
-  type CodingWorkbenchAuthorityEnvelope,
-  type EditorAgentActionPolicyDecision,
-  type EditorAgentRootBinding,
-  type EditorAgentSessionSnapshot,
-  type VerificationReport,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/workspace-contract-primitives";
 import type { RouteContext } from "../routes.js";
 import type { UiHandlerDeps } from "../deps.js";
 import {

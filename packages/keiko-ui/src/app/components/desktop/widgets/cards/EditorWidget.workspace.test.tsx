@@ -16,8 +16,8 @@ import type { ReactNode } from "react";
 import {
   EDITOR_VERIFICATION_KINDS,
   EDITOR_VERIFICATION_SCHEMA_VERSION,
-  WORKSPACE_TRUST_SCHEMA_VERSION,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/editor-verification";
+import { WORKSPACE_TRUST_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts/runtime/workspace-trust";
 import type { EditorRuntimeWidgetProps } from "./EditorRuntimeWidget";
 import type { FilesMutationEvent } from "./FilesWidget";
 import { EditorWidget } from "./EditorWidget";

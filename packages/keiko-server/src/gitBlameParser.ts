@@ -1,8 +1,8 @@
+import type { GitEditorBlameLine } from "@oscharko-dev/keiko-contracts";
 import {
   GIT_EDITOR_BLAME_AUTHOR_MAX_CHARS,
   GIT_EDITOR_BLAME_SUMMARY_MAX_CHARS,
-  type GitEditorBlameLine,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/git-editor";
 
 export interface GitBlameParseOptions {
   readonly maxLines: number;

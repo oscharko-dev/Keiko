@@ -41,13 +41,13 @@
 // truncated payload bounds-exceeded, unparseable payload malformed-payload. Comment retrieval is
 // supplementary enrichment — a failed comments read never fails its issue.
 
+import type { AtlassianSyncFailureReason } from "@oscharko-dev/keiko-contracts";
 import {
   ATLASSIAN_JQL_MAX_CHARS,
   hasBalancedJqlNesting,
   isSafeAtlassianIdentifier,
   isSafeJiraProjectKey,
-  type AtlassianSyncFailureReason,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import { AtlassianCredentialCustodyError } from "./atlassian-credential-custody.js";
 import {
   asArray,

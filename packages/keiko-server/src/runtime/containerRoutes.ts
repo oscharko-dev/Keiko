@@ -11,7 +11,7 @@
 //   GET    /api/containers/events               SSE stream of run lifecycle events (redacted)
 
 import type { IncomingMessage, ServerResponse } from "node:http";
-import { parseContainerRunRequest } from "@oscharko-dev/keiko-contracts";
+import { parseContainerRunRequest } from "@oscharko-dev/keiko-contracts/runtime/container-runtime";
 import type { ContainerRunnerEvent } from "@oscharko-dev/keiko-contracts";
 import { ContainerRunnerError } from "./containerRunner-errors.js";
 import type { ContainerRunInput, ContainerRunnerManager } from "./containerRunner.js";

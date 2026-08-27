@@ -12,17 +12,17 @@
 // postApplyVerification.ts). Runs always use `networkEnforcement: "enforce-or-fail-closed"`.
 
 import { randomUUID } from "node:crypto";
-import {
-  EDITOR_VERIFICATION_SCHEMA_VERSION,
-  type EditorVerificationCatalog,
-  type EditorVerificationCatalogEntry,
-  type EditorVerificationEvent,
-  type EditorVerificationRun,
-  type EditorVerificationTrustState,
-  type VerificationKind,
-  type VerificationPlan,
-  type VerificationReport,
+import type {
+  EditorVerificationCatalog,
+  EditorVerificationCatalogEntry,
+  EditorVerificationEvent,
+  EditorVerificationRun,
+  EditorVerificationTrustState,
+  VerificationKind,
+  VerificationPlan,
+  VerificationReport,
 } from "@oscharko-dev/keiko-contracts";
+import { EDITOR_VERIFICATION_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts/runtime/editor-verification";
 import { DEFAULT_RETENTION, type EvidenceStore } from "@oscharko-dev/keiko-evidence";
 import {
   buildVerificationPlan,

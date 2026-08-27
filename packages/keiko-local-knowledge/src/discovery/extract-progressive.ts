@@ -26,7 +26,7 @@ import {
   checkpointCompatibility,
   LARGE_DOCUMENT_DIAGNOSTIC_CODES,
   largeDocumentPolicyFingerprint,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/local-knowledge-large-document";
 
 import { getCapsule } from "../capsule-lifecycle.js";
 import {

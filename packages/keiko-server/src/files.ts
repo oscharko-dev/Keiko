@@ -36,12 +36,11 @@ import {
   resolve,
 } from "node:path";
 import { redact, sha256Hex } from "@oscharko-dev/keiko-security";
+import type { EditorDocumentSession, EditorDocumentVersion } from "@oscharko-dev/keiko-contracts";
 import {
   EDITOR_SESSION_SCHEMA_VERSION,
   parseEditorDocumentVersion,
-  type EditorDocumentSession,
-  type EditorDocumentVersion,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/editor-session";
 import type {
   FilesContentResponse as FilesContentWireResponse,
   FilesEntryKind,

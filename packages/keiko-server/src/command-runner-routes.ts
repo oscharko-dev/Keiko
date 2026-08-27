@@ -8,7 +8,7 @@
 //   GET    /api/commands/events                SSE stream of run lifecycle events
 
 import type { IncomingMessage, ServerResponse } from "node:http";
-import { parseCommandTaskRunRequest } from "@oscharko-dev/keiko-contracts";
+import { parseCommandTaskRunRequest } from "@oscharko-dev/keiko-contracts/runtime/command-runner";
 import { CommandRunnerError } from "./command-runner-errors.js";
 import type { CommandRunInput, CommandRunnerManager } from "./command-runner.js";
 import type { CommandRunnerEvent } from "@oscharko-dev/keiko-contracts";

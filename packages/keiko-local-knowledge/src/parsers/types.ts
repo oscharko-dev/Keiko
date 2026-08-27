@@ -10,7 +10,7 @@ import type {
   ParserDependencyVersion,
   ParserResult,
 } from "@oscharko-dev/keiko-contracts";
-import { DEFAULT_LARGE_DOCUMENT_RESOURCE_POLICY } from "@oscharko-dev/keiko-contracts";
+import { DEFAULT_LARGE_DOCUMENT_RESOURCE_POLICY } from "@oscharko-dev/keiko-contracts/runtime/local-knowledge-large-document";
 
 // ─── Limits + cancellation ───────────────────────────────────────────────────
 

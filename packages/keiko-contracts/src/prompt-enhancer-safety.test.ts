@@ -4,9 +4,18 @@
 // and the wire validator's cross-field invariants.
 
 import { describe, it, expect } from "vitest";
+import type {
+  EnhancedPrompt,
+  PromptSafetyAssessment,
+  PromptSafetyFinding,
+  PromptTaskAnalysis,
+} from "./index.js";
 import {
   asEnhancedPromptId,
   asPromptEnhancementRequestId,
+  PROMPT_ENHANCER_SCHEMA_VERSION,
+} from "./prompt-enhancer.js";
+import {
   assessEnhancedPromptStructuralSafety,
   collectProhibitedPromptTextFindings,
   leastPrivilegeForAnalysis,
@@ -14,13 +23,8 @@ import {
   requiresHumanReviewForAnalysis,
   summarizePromptSafety,
   validatePromptSafetyAssessment,
-  PROMPT_ENHANCER_SCHEMA_VERSION,
   PROMPT_SAFETY_VIOLATION_DETAILS,
-  type EnhancedPrompt,
-  type PromptSafetyAssessment,
-  type PromptSafetyFinding,
-  type PromptTaskAnalysis,
-} from "./index.js";
+} from "./prompt-enhancer-safety.js";
 
 // The actual safeguard strings the gateway generator emits, so the concept predicates are exercised
 // against production wording rather than a synthetic stand-in.

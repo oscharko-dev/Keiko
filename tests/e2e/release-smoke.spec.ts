@@ -5,8 +5,8 @@ import { join } from "node:path";
 import {
   EDITOR_M7_SCHEMA_VERSION,
   EDITOR_M7_SETTING_REGISTRY,
-  resolveEditorM11Settings,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/editor-m7";
+import { resolveEditorM11Settings } from "@oscharko-dev/keiko-contracts/runtime/editor-m11-settings";
 import { expectViewportModal } from "./support/modal.js";
 
 const CHAT_MODEL_ID = "e2e-chat-model";

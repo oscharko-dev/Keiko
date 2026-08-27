@@ -21,7 +21,7 @@ import type {
   EvidenceStore,
   QualityIntelligenceEvidenceManifest,
 } from "@oscharko-dev/keiko-evidence";
-import { QualityIntelligence } from "@oscharko-dev/keiko-contracts";
+import * as QualityIntelligence from "@oscharko-dev/keiko-contracts/runtime/qualityIntelligence/index";
 import type { QualityIntelligence as QI } from "@oscharko-dev/keiko-contracts";
 import type { RouteContext, RouteResult } from "../../routes.js";
 import { STREAMING } from "../../routes.js";

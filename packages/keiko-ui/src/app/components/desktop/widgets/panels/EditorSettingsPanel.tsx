@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 
-import { EDITOR_M11_DEFAULT_PROFILE_REF } from "@oscharko-dev/keiko-contracts";
+import { EDITOR_M11_DEFAULT_PROFILE_REF } from "@oscharko-dev/keiko-contracts/runtime/editor-m11-settings";
 import type {
   EditorM7AiActivationStatus,
   EditorM7SettingDefinition,

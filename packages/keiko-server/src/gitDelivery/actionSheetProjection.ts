@@ -14,29 +14,33 @@
 // Content-free: every value produced here is a count, flag, branch name, or typed/closed-vocabulary
 // code. Never diff content, file paths, secrets, command strings, or raw subprocess output.
 
+import type {
+  GitDeliveryActionKind,
+  GitDeliveryActionSheet,
+  GitDeliveryApprovalRequirement,
+  GitDeliveryBranchProtection,
+  GitDeliveryChecksState,
+  GitDeliveryExpectedBlocker,
+  GitDeliveryMergeReadiness,
+  GitDeliveryOrgPolicyPack,
+  GitDeliveryPolicyDecision,
+  GitDeliveryProviderCapability,
+  GitDeliveryPullRequestState,
+  GitDeliveryRecoveryActionHint,
+  GitDeliveryRecoveryHint,
+  GitDeliveryRepoPolicyPack,
+  GitDeliveryResolvedInputs,
+} from "@oscharko-dev/keiko-contracts";
 import {
   buildGitDeliveryActionSheet,
   gitDeliverySuggestedRecoveryStrategy,
-  type GitDeliveryActionKind,
-  type GitDeliveryActionSheet,
-  type GitDeliveryApprovalRequirement,
-  type GitDeliveryBranchProtection,
-  type GitDeliveryChecksState,
-  type GitDeliveryExpectedBlocker,
-  type GitDeliveryMergeReadiness,
-  type GitDeliveryOrgPolicyPack,
-  type GitDeliveryPolicyDecision,
-  type GitDeliveryProviderCapability,
-  type GitDeliveryPullRequestState,
-  type GitDeliveryRecoveryActionHint,
-  type GitDeliveryRecoveryHint,
-  type GitDeliveryRepoPolicyPack,
-  type GitDeliveryResolvedInputs,
+} from "@oscharko-dev/keiko-contracts/runtime/git-delivery-action-sheet";
+import {
   evaluateGitDeliveryEffectivePolicy,
   evaluateGitPolicy,
   gitDeliveryPolicyTargetBranchName,
-  gitDeliveryRiskClassForInputs,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/git-delivery-policy";
+import { gitDeliveryRiskClassForInputs } from "@oscharko-dev/keiko-contracts/runtime/git-delivery";
 import {
   evaluateGitPreflight,
   type GitPreflightFinding,

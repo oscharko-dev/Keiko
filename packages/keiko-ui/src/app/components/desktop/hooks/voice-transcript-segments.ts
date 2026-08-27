@@ -21,20 +21,22 @@
 // never become workflow input, a memory candidate, or an evidence summary.
 
 import type { VoiceProfile } from "@/lib/types";
+import type {
+  CommittedVoiceTranscriptProjection,
+  VoiceTranscriptEvidenceSummary,
+  VoiceTranscriptProviderErrorKind,
+  VoiceTranscriptSegment,
+  VoiceTranscriptSegmentState,
+  VoiceTranscriptSource,
+} from "@oscharko-dev/keiko-contracts";
 import {
-  type CommittedVoiceTranscriptProjection,
-  type VoiceTranscriptEvidenceSummary,
-  type VoiceTranscriptProviderErrorKind,
-  type VoiceTranscriptSegment,
-  type VoiceTranscriptSegmentState,
-  type VoiceTranscriptSource,
   isCommittedVoiceTranscriptState,
   selectCommittedVoiceTranscript,
   summarizeVoiceTranscript,
   voiceTranscriptCaptureAllowed,
   voiceTranscriptSegmentRedactionClass,
   voiceTranscriptSegmentReplayClass,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/voice-transcript";
 import { type VoiceClock, createBrowserVoiceClock } from "./voice-timebase";
 
 // Re-export the clock seam type so a consumer constructs the transcript store from the same

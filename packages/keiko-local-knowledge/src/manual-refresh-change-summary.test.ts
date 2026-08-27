@@ -2,7 +2,7 @@
 
 import { describe, expect, it } from "vitest";
 
-import { validateManualRefreshChangeSummary } from "@oscharko-dev/keiko-contracts";
+import { validateManualRefreshChangeSummary } from "@oscharko-dev/keiko-contracts/runtime/html-manual-refresh";
 
 import type {
   ManualCrawlDeniedTally,

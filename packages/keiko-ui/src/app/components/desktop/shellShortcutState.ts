@@ -27,12 +27,12 @@
 // AppShell → useKeyboardShortcuts, and in the "editor" context through EditorWidget's capturing
 // listener. Every labelled binding therefore has a runtime dispatcher.
 
-import {
-  EDITOR_M7_COMMAND_REGISTRY,
-  type EditorM7CommandContext,
-  type EditorM7ReasonCode,
-  type WorkspaceKeyboardShortcutBinding,
+import type {
+  EditorM7CommandContext,
+  EditorM7ReasonCode,
+  WorkspaceKeyboardShortcutBinding,
 } from "@oscharko-dev/keiko-contracts";
+import { EDITOR_M7_COMMAND_REGISTRY } from "@oscharko-dev/keiko-contracts/runtime/editor-m7";
 import {
   detectKeyboardShortcutPlatform,
   dispatchableWorkspaceShortcutsForContext,

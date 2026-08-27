@@ -1,12 +1,12 @@
-import {
-  codingWorkbenchPolicyEffectFor,
-  type CodingWorkbenchAuthorityEnvelope,
-  type CodingWorkbenchMode,
-  type CodingWorkbenchRuntimeAdapterKind,
-  type CodingWorkbenchRuntimeAuthorityFacts,
-  type CodingWorkbenchRuntimeAuthorityEnvelope,
-  type CodingWorkbenchRuntimeDelegationUsage,
+import type {
+  CodingWorkbenchAuthorityEnvelope,
+  CodingWorkbenchMode,
+  CodingWorkbenchRuntimeAdapterKind,
+  CodingWorkbenchRuntimeAuthorityFacts,
+  CodingWorkbenchRuntimeAuthorityEnvelope,
+  CodingWorkbenchRuntimeDelegationUsage,
 } from "@oscharko-dev/keiko-contracts";
+import { codingWorkbenchPolicyEffectFor } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench";
 
 import type {
   CodingToolAuthorityPort,

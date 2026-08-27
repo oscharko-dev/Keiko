@@ -25,7 +25,7 @@ import {
   UPDATE_HEALTH_LABELS,
   UPDATE_LOCAL_STATE_SCHEMA_VERSION,
   UPDATE_STATE_STORES,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/update-local-state";
 import {
   CATEGORY_STORE,
   UPDATE_DIR,

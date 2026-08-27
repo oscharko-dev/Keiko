@@ -8,7 +8,8 @@ import type {
   QualityIntelligenceExportBundle,
   QualityIntelligenceTestCaseCandidate,
 } from "@oscharko-dev/keiko-contracts";
-import { assertExportBundleInvariant, compareStrings } from "@oscharko-dev/keiko-contracts";
+import { assertExportBundleInvariant } from "@oscharko-dev/keiko-contracts/runtime/qualityIntelligence/index";
+import { compareStrings } from "@oscharko-dev/keiko-contracts/runtime/comparators";
 import { encodeSpreadsheetSafeRow } from "./spreadsheetSafeCsv.js";
 
 /** Schema headers for the Keiko-native CSV format. */

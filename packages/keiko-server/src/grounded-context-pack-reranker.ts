@@ -1,4 +1,4 @@
-import { stripUnsafeFormatChars } from "@oscharko-dev/keiko-contracts";
+import { stripUnsafeFormatChars } from "@oscharko-dev/keiko-contracts/runtime/text-safety";
 import type {
   CandidateFile,
   EvidenceAtom,

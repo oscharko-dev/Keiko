@@ -5,18 +5,20 @@
 // package barrel so the public surface is validated alongside the behaviour.
 
 import { describe, it, expect } from "vitest";
+import type {
+  MissingInformationStrategy,
+  PromptEnhancementProfileId,
+  PromptEnhancementRequest,
+  PromptTaskAnalysis,
+  PromptTaskClass,
+} from "./index.js";
+import { analyzePrompt } from "./prompt-enhancer-analyzer.js";
 import {
-  analyzePrompt,
   asPromptEnhancementRequestId,
   normalizePromptDraft,
   PROMPT_ENHANCER_SCHEMA_VERSION,
   PROMPT_TASK_CLASSES,
-  type MissingInformationStrategy,
-  type PromptEnhancementProfileId,
-  type PromptEnhancementRequest,
-  type PromptTaskAnalysis,
-  type PromptTaskClass,
-} from "./index.js";
+} from "./prompt-enhancer.js";
 
 function makeRequest(
   text: string,

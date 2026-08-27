@@ -1,8 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
-import {
-  CODE_TASK_AUXILIARY_SCHEMA_VERSION,
-  validateCodingWorkbenchRuntimeEvent,
-} from "@oscharko-dev/keiko-contracts";
+import { CODE_TASK_AUXILIARY_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts/runtime/code-task-auxiliary";
+import { validateCodingWorkbenchRuntimeEvent } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-validation";
 import type {
   AuxiliaryCapabilityRequestV1,
   CodeTaskChildRunId,

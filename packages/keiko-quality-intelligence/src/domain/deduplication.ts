@@ -21,7 +21,8 @@
 // path that issue #279 owns; the deterministic canonical-signature path is
 // what we port here.
 
-import { compareStrings, type QualityIntelligence } from "@oscharko-dev/keiko-contracts";
+import type { QualityIntelligence } from "@oscharko-dev/keiko-contracts";
+import { compareStrings } from "@oscharko-dev/keiko-contracts/runtime/comparators";
 import { sha256Hex } from "@oscharko-dev/keiko-security";
 
 import { normaliseCandidateText, normaliseGermanComparisonText } from "./assertions.js";

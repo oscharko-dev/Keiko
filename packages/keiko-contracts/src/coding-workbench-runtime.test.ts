@@ -1,8 +1,12 @@
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
+import type {
+  CodingWorkbenchAuthorityEnvelope,
+  CodingWorkbenchRuntimeAuthorityEnvelope,
+} from "./index.js";
+import { CODING_WORKBENCH_ACTION_CLASSES } from "./coding-workbench.js";
 import {
-  CODING_WORKBENCH_ACTION_CLASSES,
   CODING_WORKBENCH_RUNTIME_STATE_NAMES,
   isLegalCodingWorkbenchRuntimeTransition,
   validateCodingWorkbenchRuntimeAuthorityEnvelope,
@@ -11,9 +15,7 @@ import {
   validateCodingWorkbenchRuntimeIntent,
   validateCodingWorkbenchRuntimeMintConfirmation,
   validateCodingWorkbenchRuntimeState,
-  type CodingWorkbenchAuthorityEnvelope,
-  type CodingWorkbenchRuntimeAuthorityEnvelope,
-} from "./index.js";
+} from "./coding-workbench-runtime.js";
 
 const DIGEST = "a".repeat(64);
 

@@ -22,19 +22,23 @@
 
 import type { IncomingMessage } from "node:http";
 import type { WorkspaceInfo } from "@oscharko-dev/keiko-workspace";
+import type {
+  GitCommitChangeSummary,
+  GitCommitIntentAnalysis,
+  GitCommitMessagePolicy,
+  GitCommitMessageValidation,
+  GitDeliveryResolvedInputs,
+} from "@oscharko-dev/keiko-contracts";
 import {
   analyzeGitCommitIntent,
+  suggestGitCommitMessage,
+} from "@oscharko-dev/keiko-contracts/runtime/git-commit-intent";
+import {
   evaluateGitDeliveryEffectivePolicy,
   evaluateGitPolicy,
-  gitDeliveryRiskClassForInputs,
-  suggestGitCommitMessage,
-  validateGitCommitMessage,
-  type GitCommitChangeSummary,
-  type GitCommitIntentAnalysis,
-  type GitCommitMessagePolicy,
-  type GitCommitMessageValidation,
-  type GitDeliveryResolvedInputs,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/git-delivery-policy";
+import { gitDeliveryRiskClassForInputs } from "@oscharko-dev/keiko-contracts/runtime/git-delivery";
+import { validateGitCommitMessage } from "@oscharko-dev/keiko-contracts/runtime/git-commit-policy";
 import {
   evaluateGitPreflight,
   summarizeStagedChangeset,

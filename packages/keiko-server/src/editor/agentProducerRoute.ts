@@ -24,11 +24,11 @@ import {
   EditorAgentToolHost,
   type EditorAgentToolOutput,
 } from "@oscharko-dev/keiko-tools";
+import type { EditorAgentSessionSnapshot } from "@oscharko-dev/keiko-contracts";
 import {
   EDITOR_AGENT_SCHEMA_VERSION,
   isEditorAgentGovernedAuthorityReference,
-  type EditorAgentSessionSnapshot,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/editor-agent";
 import type { UiHandlerDeps } from "../deps.js";
 import { readJsonObject } from "../files.js";
 import { errorBody, type RouteContext, type RouteResult } from "../routes.js";

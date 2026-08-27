@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { validateCodingWorkbenchPermissionRequest } from "@oscharko-dev/keiko-contracts";
+import { validateCodingWorkbenchPermissionRequest } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-validation";
 
 import {
   OPENCODE_APPROVED_ENDPOINTS,

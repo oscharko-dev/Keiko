@@ -34,7 +34,7 @@ import {
   RELATIONSHIP_QUERY_BOUNDS,
   RELATIONSHIP_TYPES,
   RELATIONSHIP_OBJECT_KINDS,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/relationships";
 import {
   listRelationships,
   RelationshipApiError,

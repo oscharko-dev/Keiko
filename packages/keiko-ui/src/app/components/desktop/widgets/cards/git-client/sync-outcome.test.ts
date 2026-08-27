@@ -3,7 +3,7 @@
 // presentation row fails here rather than silently rendering a raw wire token in the success pill.
 
 import { describe, expect, it } from "vitest";
-import { GIT_SYNC_OUTCOMES } from "@oscharko-dev/keiko-contracts";
+import { GIT_SYNC_OUTCOMES } from "@oscharko-dev/keiko-contracts/runtime/git-sync";
 import { translate, loadLocaleMessages, type I18nTranslate } from "@/lib/i18n";
 import { DE_MESSAGES } from "@/lib/i18n-messages.de";
 import type { GitDeliveryMutationStatus } from "@/lib/api";

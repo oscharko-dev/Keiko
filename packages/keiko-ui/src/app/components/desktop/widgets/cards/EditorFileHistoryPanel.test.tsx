@@ -3,9 +3,12 @@ import userEvent from "@testing-library/user-event";
 import { axe } from "jest-axe";
 import type { ReactElement } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { EditorLocalHistoryEntry } from "@oscharko-dev/keiko-contracts";
 import {
   EDITOR_LOCAL_HISTORY_ENCRYPTION,
   EDITOR_LOCAL_HISTORY_SCHEMA_VERSION,
+} from "@oscharko-dev/keiko-contracts/runtime/editor-local-history";
+import {
   isWorkspaceContentDigest,
   isWorkspaceHistoryEntryRef,
   isWorkspaceIsoInstant,
@@ -13,8 +16,7 @@ import {
   isWorkspaceRootIdentityDigest,
   isWorkspaceRootRef,
   isWorkspaceVaultEntryRef,
-  type EditorLocalHistoryEntry,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/workspace-contract-primitives";
 
 import {
   deleteEditorLocalHistory,

@@ -1,4 +1,10 @@
 import { expect, type Page, type Route } from "@playwright/test";
+import type {
+  CodingWorkbenchMode,
+  CodingWorkbenchRuntimeReadiness,
+  CodingWorkbenchValidationResult,
+  MemoryAutonomyPolicyWire,
+} from "@oscharko-dev/keiko-contracts";
 import {
   parseCodingWorkbenchRuntimeApprovalDecisionRequest,
   parseCodingWorkbenchRuntimeRecoveryAcknowledgementRequest,
@@ -6,15 +12,13 @@ import {
   parseCodingWorkbenchRuntimeStartRequest,
   parseCodingWorkbenchRuntimeStopRequest,
   parseCodingWorkbenchRuntimeTakeoverRequest,
+  validateCodingWorkbenchRuntimeReadiness,
+} from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime-api";
+import {
   compareCodingWorkbenchModeAuthority,
   resolveEffectiveCodingWorkbenchMode,
-  validateCodingWorkbenchCodexAuthSetupRequest,
-  validateCodingWorkbenchRuntimeReadiness,
-  type CodingWorkbenchMode,
-  type CodingWorkbenchRuntimeReadiness,
-  type CodingWorkbenchValidationResult,
-  type MemoryAutonomyPolicyWire,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/coding-workbench";
+import { validateCodingWorkbenchCodexAuthSetupRequest } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-codex-auth";
 import type { LiveRuntimeFixtureOptions } from "./coding-workbench-live-runtime.js";
 import { parsedAutonomyPolicyUpdate } from "./autonomyPolicyRequest.js";
 import {

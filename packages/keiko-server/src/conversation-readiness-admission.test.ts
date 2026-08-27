@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { GatewayRequest, NormalizedResponse } from "@oscharko-dev/keiko-contracts";
-import { UNVERIFIED_GATEWAY } from "@oscharko-dev/keiko-contracts";
+import { UNVERIFIED_GATEWAY } from "@oscharko-dev/keiko-contracts/runtime/gateway-verification";
 import type { GatewayStreamChunk } from "@oscharko-dev/keiko-model-gateway";
 import type { ModelPort } from "@oscharko-dev/keiko-harness";
 import { withConversationReadinessAdmission } from "./conversation-readiness-admission.js";

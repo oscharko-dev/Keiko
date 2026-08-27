@@ -46,15 +46,19 @@ import type {
 } from "@oscharko-dev/keiko-contracts";
 import {
   deriveEligibleMergeStrategies,
+  gitMergeReadinessFor,
+  gitMergeRejectionFor,
+} from "@oscharko-dev/keiko-contracts/runtime/git-merge";
+import {
   evaluateGitDeliveryEffectivePolicy,
   evaluateGitPolicy,
+  gitDeliveryPolicyTargetBranchName,
+} from "@oscharko-dev/keiko-contracts/runtime/git-delivery-policy";
+import {
   GIT_DELIVERY_MERGE_STRATEGY_HINTS,
   GIT_DELIVERY_SCHEMA_VERSION,
   gitDeliveryDefaultRiskClass,
-  gitDeliveryPolicyTargetBranchName,
-  gitMergeReadinessFor,
-  gitMergeRejectionFor,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/git-delivery";
 import type { GitWorktreeSnapshot } from "./git-mutation-preflight.js";
 import { evaluateGitPreflight } from "./git-mutation-preflight.js";
 import type {
@@ -926,4 +930,4 @@ export async function runGitMerge(
 
 // Re-export the contract bridge so the server/UI consume the error-code mapping from this gateway,
 // keeping the publish/PR/merge gateway surfaces symmetric.
-export { gitMergeRejectionToErrorCode } from "@oscharko-dev/keiko-contracts";
+export { gitMergeRejectionToErrorCode } from "@oscharko-dev/keiko-contracts/runtime/git-merge";

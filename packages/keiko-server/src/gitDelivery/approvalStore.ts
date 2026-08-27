@@ -1,10 +1,12 @@
 import { randomBytes, timingSafeEqual } from "node:crypto";
+import type {
+  GitDeliveryApprovalClaim,
+  GitDeliveryApprovalRequirement,
+} from "@oscharko-dev/keiko-contracts";
 import {
   GIT_DELIVERY_SCHEMA_VERSION,
   isGitDeliveryApprovalClaim,
-  type GitDeliveryApprovalClaim,
-  type GitDeliveryApprovalRequirement,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/git-delivery";
 import { canonicalise, sha256Hex } from "@oscharko-dev/keiko-security";
 
 // KEIKO-0693: "action-sheet" was removed from this union -- action-sheet is read-only and never

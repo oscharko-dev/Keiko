@@ -21,10 +21,10 @@ import {
   GIT_EDITOR_DIFF_MAX_BYTES,
   GIT_EDITOR_DIFF_MAX_FILES,
   GIT_EDITOR_SCHEMA_VERSION,
-  GIT_REPOSITORY_SCHEMA_VERSION,
-  isRootRelativeFileIdentifier,
   parseGitEditorBlameRequest,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/git-editor";
+import { GIT_REPOSITORY_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts/runtime/git-repository";
+import { isRootRelativeFileIdentifier } from "@oscharko-dev/keiko-contracts/runtime/editor-workspace-path";
 import {
   classifyGitFailure,
   containsPath,

@@ -10,10 +10,8 @@
 //   GET    /api/editor/verification/events                SSE stream of content-free lifecycle events
 
 import type { IncomingMessage, ServerResponse } from "node:http";
-import {
-  parseEditorVerificationRunRequest,
-  type EditorVerificationEvent,
-} from "@oscharko-dev/keiko-contracts";
+import type { EditorVerificationEvent } from "@oscharko-dev/keiko-contracts";
+import { parseEditorVerificationRunRequest } from "@oscharko-dev/keiko-contracts/runtime/editor-verification";
 import { redactedEventJson } from "../sse-frame-cache.js";
 import { SSE_HEADERS, readyMessage, startSseHeartbeat } from "../sse.js";
 import { writeOrDestroy, type SseBackpressureSignal } from "../sse-write.js";

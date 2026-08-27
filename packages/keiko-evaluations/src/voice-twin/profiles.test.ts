@@ -5,7 +5,7 @@
 // environment descriptor field and both branches of effectiveVoiceProfile /
 // egressDestinationClassFor. Each assertion is mutation-robust.
 
-import { VOICE_PROFILE_MEDIA_TRANSPORT } from "@oscharko-dev/keiko-contracts";
+import { VOICE_PROFILE_MEDIA_TRANSPORT } from "@oscharko-dev/keiko-contracts/runtime/voice-protocol";
 import { describe, expect, it } from "vitest";
 import {
   ALL_VOICE_PROFILES,

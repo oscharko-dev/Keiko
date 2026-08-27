@@ -15,7 +15,8 @@ import type {
   ContextLaneDiagnostics,
   ContextProfile,
 } from "./context-engineering.js";
-import { validateContextAssemblyDiagnostics, validateContextCompactionRecord } from "./index.js";
+import { validateContextAssemblyDiagnostics } from "./context-engineering-validation.js";
+import { validateContextCompactionRecord } from "./context-engineering-compaction-validation.js";
 import { DEFAULT_RETENTION, EVIDENCE_SCHEMA_VERSION } from "./evidence.js";
 import type { EvidenceManifest } from "./evidence.js";
 

@@ -1,22 +1,26 @@
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
+import type {
+  CodingWorkbenchAuthorityEnvelope,
+  CodingWorkbenchConnectorScope,
+  CodingWorkbenchMode,
+  CodingWorkbenchRuntimeAuthorityEnvelope,
+  CodingWorkbenchRuntimeAuthorityFacts,
+  CodingWorkbenchRuntimeDelegationUsage,
+  CodingWorkbenchRuntimeFailureCode,
+  EditorAgentAction,
+  EditorAgentGovernedAuthorityReference,
+  EditorAgentSessionSnapshot,
+} from "@oscharko-dev/keiko-contracts";
 import {
   CODING_WORKBENCH_SCHEMA_VERSION,
   codingWorkbenchPolicyEffectFor,
   resolveEffectiveCodingWorkbenchMode,
+} from "@oscharko-dev/keiko-contracts/runtime/coding-workbench";
+import {
   validateCodingWorkbenchRuntimeAuthorityEnvelope,
   validateCodingWorkbenchRuntimeAuthorityFacts,
-  validateCodingWorkbenchAuthorityEnvelope,
-  type CodingWorkbenchAuthorityEnvelope,
-  type CodingWorkbenchConnectorScope,
-  type CodingWorkbenchMode,
-  type CodingWorkbenchRuntimeAuthorityEnvelope,
-  type CodingWorkbenchRuntimeAuthorityFacts,
-  type CodingWorkbenchRuntimeDelegationUsage,
-  type CodingWorkbenchRuntimeFailureCode,
-  type EditorAgentAction,
-  type EditorAgentGovernedAuthorityReference,
-  type EditorAgentSessionSnapshot,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime";
+import { validateCodingWorkbenchAuthorityEnvelope } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-validation";
 
 export const EDITOR_AGENT_AUTHORITY_MAX_RECORDS = 64;
 export const EDITOR_AGENT_LOCAL_AUTHORITY_LIFETIME_MS = 31 * 60 * 1_000;

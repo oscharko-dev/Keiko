@@ -31,6 +31,15 @@ import type {
   GitWorktreeAdapter,
   WorktreeListEntry,
 } from "@oscharko-dev/keiko-tools/internal/git-mutation";
+import type {
+  TaskWorkspaceLifecycleState,
+  WorkspaceEventType,
+  WorkspaceInstance,
+  WorkspaceReconciliationEntry,
+  WorkspaceReconciliationFacts,
+  WorkspaceReconciliationOutcome,
+  WorkspaceReconciliationReport,
+} from "@oscharko-dev/keiko-contracts";
 import {
   TASK_WORKSPACE_SCHEMA_VERSION,
   classifyWorkspaceReconciliation,
@@ -39,14 +48,7 @@ import {
   reconciliationRequiresRecoveryFlag,
   resolveActiveRestoration,
   validateTaskWorkspaceTransition,
-  type TaskWorkspaceLifecycleState,
-  type WorkspaceEventType,
-  type WorkspaceInstance,
-  type WorkspaceReconciliationEntry,
-  type WorkspaceReconciliationFacts,
-  type WorkspaceReconciliationOutcome,
-  type WorkspaceReconciliationReport,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/task-workspace";
 import { deriveRepositoryId } from "./naming.js";
 import { lockIsLive, resolveLockTtl } from "./locks.js";
 import {

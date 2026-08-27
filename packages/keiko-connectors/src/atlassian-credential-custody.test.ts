@@ -8,7 +8,7 @@ import { randomBytes } from "node:crypto";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { isAtlassianConnectorAuthRef } from "@oscharko-dev/keiko-contracts";
+import { isAtlassianConnectorAuthRef } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import { createLocalSecretVault } from "@oscharko-dev/keiko-security/secret-vault";
 import {
   AtlassianCredentialCustodyError,

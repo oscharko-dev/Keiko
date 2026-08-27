@@ -17,7 +17,7 @@
 
 import type { DatabaseSync } from "node:sqlite";
 import { deepRedactStrings } from "@oscharko-dev/keiko-security";
-import { RELATIONSHIP_FORBIDDEN_METADATA_KEY_SUBSTRINGS } from "@oscharko-dev/keiko-contracts";
+import { RELATIONSHIP_FORBIDDEN_METADATA_KEY_SUBSTRINGS } from "@oscharko-dev/keiko-contracts/runtime/relationships";
 import { invalidRequest } from "./errors.js";
 
 export const RELATIONSHIP_AUDIT_SCHEMA_VERSION = "1" as const;

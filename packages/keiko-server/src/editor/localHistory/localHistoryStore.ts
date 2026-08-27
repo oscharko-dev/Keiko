@@ -26,11 +26,11 @@ import {
   EDITOR_LOCAL_HISTORY_MAX_VERSIONS_PER_FILE,
   EDITOR_LOCAL_HISTORY_SCHEMA_VERSION,
   EDITOR_LOCAL_HISTORY_TTL_DAYS,
-  isPortableWorkspaceRelativePath,
   planEditorLocalHistoryRetention,
   validateEditorLocalHistoryEntry,
   validateEditorLocalHistoryIndex,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/editor-local-history";
+import { isPortableWorkspaceRelativePath } from "@oscharko-dev/keiko-contracts/runtime/workspace-contract-primitives";
 import type {
   EditorLocalHistoryEntry,
   EditorLocalHistoryIndex,

@@ -11,7 +11,7 @@ import type {
   MemoryScope,
   MemoryStatus,
 } from "@oscharko-dev/keiko-contracts";
-import { MEMORY_AUDIT_EVENT_SUMMARY_MAX_CHARS } from "@oscharko-dev/keiko-contracts";
+import { MEMORY_AUDIT_EVENT_SUMMARY_MAX_CHARS } from "@oscharko-dev/keiko-contracts/runtime/memory";
 import type { MemoryTombstone } from "@oscharko-dev/keiko-memory-vault";
 
 // ─── Constants ────────────────────────────────────────────────────────────────

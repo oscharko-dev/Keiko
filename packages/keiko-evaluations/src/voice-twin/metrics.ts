@@ -8,26 +8,32 @@
 // interruption, end-of-turn, transcript correction, provider-failure recovery, and the bounded-FIFO
 // buffer model. Pure — no IO, clock, randomness.
 
+import type {
+  VoiceControlMessageKind,
+  VoiceMediaTransport,
+  VoiceProfile,
+  VoiceTranscriptSegment,
+  VoiceTranscriptSegmentState,
+} from "@oscharko-dev/keiko-contracts";
 import {
   VOICE_PLAYBACK_SETTLED_PHASES,
   VOICE_PLAYBACK_TRANSITIONS,
+  canTransitionVoicePlayback,
+  voicePlaybackInterruptAllowedForProfile,
+} from "@oscharko-dev/keiko-contracts/runtime/voice-playback";
+import {
   VOICE_PROFILE_MEDIA_TRANSPORT,
   VOICE_REPLAY_CAPACITY,
+  isVoiceReplayEligible,
+  voiceMessageAllowedForProfile,
+} from "@oscharko-dev/keiko-contracts/runtime/voice-protocol";
+import {
   VOICE_TRANSCRIPT_CONSUMABLE_STATES,
   VOICE_TRANSCRIPT_SEGMENT_STATES,
   VOICE_TRANSCRIPT_SEGMENT_TRANSITIONS,
-  canTransitionVoicePlayback,
-  isVoiceReplayEligible,
   selectCommittedVoiceTranscript,
-  voiceMessageAllowedForProfile,
-  voicePlaybackInterruptAllowedForProfile,
   voiceTranscriptCaptureAllowed,
-  type VoiceControlMessageKind,
-  type VoiceMediaTransport,
-  type VoiceProfile,
-  type VoiceTranscriptSegment,
-  type VoiceTranscriptSegmentState,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/voice-transcript";
 import type {
   BufferBoundednessMetricRecord,
   EndOfTurnMetricRecord,

@@ -11,7 +11,8 @@
 
 import { useEffect, useId, useRef, useState, type ReactNode, type SubmitEvent } from "react";
 import { createPortal } from "react-dom";
-import { CAPSULE_SET_MAX_MEMBERS, type KnowledgeCapsuleId } from "@oscharko-dev/keiko-contracts";
+import type { KnowledgeCapsuleId } from "@oscharko-dev/keiko-contracts";
+import { CAPSULE_SET_MAX_MEMBERS } from "@oscharko-dev/keiko-contracts/runtime/local-knowledge";
 import { useModalInteractionLock } from "@/app/components/desktop/hooks/useModalInteractionLock";
 import {
   useLocalKnowledgeTranslate as useTranslate,

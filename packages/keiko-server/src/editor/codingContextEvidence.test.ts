@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { createInMemoryEvidenceStore, listEvidence } from "@oscharko-dev/keiko-evidence";
 import type { CodingContextWirePack, EvidenceStore } from "@oscharko-dev/keiko-contracts";
-import { CODING_CONTEXT_SOURCE_TIERS } from "@oscharko-dev/keiko-contracts";
+import { CODING_CONTEXT_SOURCE_TIERS } from "@oscharko-dev/keiko-contracts/runtime/coding-context";
 import {
   codingContextEvidenceRunId,
   recordCodingContextEvidence,

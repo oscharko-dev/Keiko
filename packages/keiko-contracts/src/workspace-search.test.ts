@@ -1,16 +1,18 @@
 import { describe, expect, it } from "vitest";
+import type {
+  ValidationResult,
+  WorkspaceReplaceApplyRequest,
+  WorkspaceReplacePreviewRequest,
+  WorkspaceSearchRequest,
+  WorkspaceSymbolSearchRequest,
+} from "./index.js";
 import {
   isWorkspaceSearchResultMatch,
   validateWorkspaceReplaceApplyRequest,
   validateWorkspaceReplacePreviewRequest,
   validateWorkspaceSearchRequest,
   validateWorkspaceSymbolSearchRequest,
-  type ValidationResult,
-  type WorkspaceReplaceApplyRequest,
-  type WorkspaceReplacePreviewRequest,
-  type WorkspaceSearchRequest,
-  type WorkspaceSymbolSearchRequest,
-} from "./index.js";
+} from "./workspace-search.js";
 import { hasDangerousGroupOrClassRepetition, regexSafetyIssue } from "./workspace-search.js";
 
 function expectInvalidWithReason(result: ValidationResult, fragment: string): void {

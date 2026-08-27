@@ -1,7 +1,7 @@
 import {
   DEFAULT_LARGE_DOCUMENT_RESOURCE_POLICY,
   largeDocumentPolicyFingerprint,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/local-knowledge-large-document";
 import type {
   ChunkId,
   CheckpointFingerprint,

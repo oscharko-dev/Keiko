@@ -5,13 +5,13 @@
 // content-free over the already-redacted excerpt text. A rehydration handle is attached only when
 // output was truncated; production callers may inject an evidence-layer artifact writer.
 
-import {
-  MAX_OBSERVATION_EXCERPT_BYTES,
-  type CommandResult,
-  type ContextToolRehydrationHandle,
-  type ShapedCommandObservation,
-  type ShapedStreamExcerpt,
+import type {
+  CommandResult,
+  ContextToolRehydrationHandle,
+  ShapedCommandObservation,
+  ShapedStreamExcerpt,
 } from "@oscharko-dev/keiko-contracts";
+import { MAX_OBSERVATION_EXCERPT_BYTES } from "@oscharko-dev/keiko-contracts/runtime/context-observations";
 
 import {
   boundExcerpt,

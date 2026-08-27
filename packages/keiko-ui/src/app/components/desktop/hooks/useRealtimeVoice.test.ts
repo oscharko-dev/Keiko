@@ -4,7 +4,7 @@
 import { act, renderHook, waitFor } from "@testing-library/react";
 import { useLayoutEffect } from "react";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
-import { DEFAULT_VOICE_PROTOCOL_TIMEOUTS } from "@oscharko-dev/keiko-contracts";
+import { DEFAULT_VOICE_PROTOCOL_TIMEOUTS } from "@oscharko-dev/keiko-contracts/runtime/voice-protocol";
 import { MAX_DESKTOP_CHAT_INPUT_CHARS } from "@oscharko-dev/keiko-contracts/bff-wire";
 import { prepareCanonicalVoiceHasher } from "./canonical-voice-hasher";
 import { executeVoiceTurnEffects, useRealtimeVoice } from "./useRealtimeVoice";

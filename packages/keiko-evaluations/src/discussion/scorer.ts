@@ -14,13 +14,15 @@
 // Determinism: pure. Rationales are harness-authored and content-free (counts, closed-vocabulary
 // labels, numbers) — they never echo a topicId or any raw text.
 
+import type {
+  DisagreementFacet,
+  DiscussionDirective,
+  DiscussionModePlan,
+} from "@oscharko-dev/keiko-contracts";
 import {
   DISAGREEMENT_FACETS,
   discussionDirectivesCoverFacets,
-  type DisagreementFacet,
-  type DiscussionDirective,
-  type DiscussionModePlan,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/discussion-intelligence";
 import {
   DISCUSSION_QUALITY_DIMENSIONS,
   type DiscussionDimensionResult,

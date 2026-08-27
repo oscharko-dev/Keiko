@@ -12,18 +12,20 @@ import {
   type RefObject,
   type SetStateAction,
 } from "react";
+import type {
+  WorkspaceReplaceApplyConflict,
+  WorkspaceReplaceApplyFile,
+  WorkspaceReplacePreviewFileEdit,
+  WorkspaceReplacePreviewResponse,
+  WorkspaceSearchMode,
+  WorkspaceSearchRequest,
+  WorkspaceSearchResponse,
+  WorkspaceSymbolSearchResponse,
+} from "@oscharko-dev/keiko-contracts";
 import {
   WORKSPACE_REPLACE_MAX_FILES,
   WORKSPACE_SEARCH_MAX_RESULTS,
-  type WorkspaceReplaceApplyConflict,
-  type WorkspaceReplaceApplyFile,
-  type WorkspaceReplacePreviewFileEdit,
-  type WorkspaceReplacePreviewResponse,
-  type WorkspaceSearchMode,
-  type WorkspaceSearchRequest,
-  type WorkspaceSearchResponse,
-  type WorkspaceSymbolSearchResponse,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/workspace-search";
 import type { PatchPreviewModel, PatchPreviewSource } from "@oscharko-dev/keiko-editor";
 import {
   applyWorkspaceReplace,

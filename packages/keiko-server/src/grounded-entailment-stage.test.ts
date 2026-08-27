@@ -2,11 +2,8 @@
 // degradation, and the body-free operator diagnostic. All model calls hit a fake ModelPort.
 
 import { describe, expect, it, vi } from "vitest";
-import {
-  KNOWLEDGE_POD_MODEL_USE_POLICY_SCHEMA_VERSION,
-  type ConnectedContextPack,
-  type KnowledgeCapsule,
-} from "@oscharko-dev/keiko-contracts";
+import type { ConnectedContextPack, KnowledgeCapsule } from "@oscharko-dev/keiko-contracts";
+import { KNOWLEDGE_POD_MODEL_USE_POLICY_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts/runtime/local-knowledge-model-use-policy";
 import type {
   GatewayRequest,
   ModelCapability,

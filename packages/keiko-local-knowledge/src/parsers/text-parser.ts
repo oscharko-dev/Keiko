@@ -9,7 +9,7 @@
 // limit (deadline / cancellation / unit count) trips.
 
 import type { ParsedUnit, ParserDiagnostic } from "@oscharko-dev/keiko-contracts";
-import { LOCAL_KNOWLEDGE_TEXT_FILE_EXTENSIONS } from "@oscharko-dev/keiko-contracts";
+import { LOCAL_KNOWLEDGE_TEXT_FILE_EXTENSIONS } from "@oscharko-dev/keiko-contracts/runtime/local-knowledge-file-selection";
 
 import {
   decodeUtf8,

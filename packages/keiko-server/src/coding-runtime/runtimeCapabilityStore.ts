@@ -1,9 +1,9 @@
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
-import {
-  MODEL_REASONING_EFFORTS,
-  type CodingWorkbenchRuntimeAdapterKind,
-  type ModelReasoningEffort,
+import type {
+  CodingWorkbenchRuntimeAdapterKind,
+  ModelReasoningEffort,
 } from "@oscharko-dev/keiko-contracts";
+import { MODEL_REASONING_EFFORTS } from "@oscharko-dev/keiko-contracts/runtime/gateway";
 
 export type RuntimeCapabilityAudience = "model-gateway" | "tool-facade";
 

@@ -1,16 +1,20 @@
+import type {
+  ContextCompactionModelSummary,
+  ContextCompactionRecord,
+} from "@oscharko-dev/keiko-contracts";
 import {
   CONTEXT_COMPACTION_MODEL_SUMMARY_MAX_CHARS,
   CONTEXT_COMPACTION_MODEL_SUMMARY_MAX_ITEM_CHARS,
   CONTEXT_COMPACTION_MODEL_SUMMARY_MAX_ITEMS,
   CONTEXT_COMPACTION_MODEL_SUMMARY_PROMPT_VERSION,
-  containsPseudoRoleMarker,
   partitionContextPreservedFacts,
+} from "@oscharko-dev/keiko-contracts/runtime/context-engineering";
+import {
+  containsPseudoRoleMarker,
   redactAbsolutePaths,
   stripUnsafeFormatChars,
-  validateContextCompactionRecord,
-  type ContextCompactionModelSummary,
-  type ContextCompactionRecord,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/text-safety";
+import { validateContextCompactionRecord } from "@oscharko-dev/keiko-contracts/runtime/context-engineering-compaction-validation";
 import {
   findConfiguredCapability,
   type NormalizedResponse,

@@ -23,8 +23,8 @@ import {
   RELATIONSHIP_TYPES,
   RELATIONSHIP_SUPPORTED_OBJECT_KINDS,
   RELATIONSHIP_TYPE_DEFINITIONS,
-  validateRelationship,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/relationships";
+import { validateRelationship } from "@oscharko-dev/keiko-contracts/runtime/relationships-validation";
 import {
   createRelationship,
   validateRelationshipProposal,

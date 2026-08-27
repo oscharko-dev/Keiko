@@ -1,3 +1,10 @@
+import type {
+  EditorAgentAction,
+  EditorAgentActionResult,
+  EditorAgentConflictCode,
+  EditorAgentSessionSnapshot,
+  EditorDocumentVersion,
+} from "@oscharko-dev/keiko-contracts";
 import {
   EDITOR_AGENT_ACTION_ID_MAX_BYTES,
   EDITOR_AGENT_IDEMPOTENCY_KEY_MAX_BYTES,
@@ -6,12 +13,7 @@ import {
   EDITOR_AGENT_TARGET_PATH_MAX_BYTES,
   EDITOR_AGENT_WINDOW_ID_MAX_BYTES,
   isEditorAgentAction,
-  type EditorAgentAction,
-  type EditorAgentActionResult,
-  type EditorAgentConflictCode,
-  type EditorAgentSessionSnapshot,
-  type EditorDocumentVersion,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/editor-agent";
 import { applyPatch as applyUnifiedPatch } from "diff";
 import { describe, expect, it } from "vitest";
 

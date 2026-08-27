@@ -1,12 +1,12 @@
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ReactNode } from "react";
-import {
-  WORKSPACE_SEARCH_MAX_RESULTS,
-  type WorkspaceReplaceApplyResponse,
-  type WorkspaceReplacePreviewResponse,
-  type WorkspaceSearchResponse,
+import type {
+  WorkspaceReplaceApplyResponse,
+  WorkspaceReplacePreviewResponse,
+  WorkspaceSearchResponse,
 } from "@oscharko-dev/keiko-contracts";
+import { WORKSPACE_SEARCH_MAX_RESULTS } from "@oscharko-dev/keiko-contracts/runtime/workspace-search";
 import {
   applyWorkspaceReplace,
   fetchFilesContent,

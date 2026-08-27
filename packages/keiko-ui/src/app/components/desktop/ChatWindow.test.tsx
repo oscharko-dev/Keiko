@@ -4,16 +4,18 @@ import { fireEvent, render, screen, waitFor, within } from "@testing-library/rea
 import userEvent from "@testing-library/user-event";
 import { useState, type ComponentProps, type Dispatch, type SetStateAction } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type {
+  CapsuleSetId,
+  KnowledgeCapsuleId,
+  KnowledgePodSummary,
+} from "@oscharko-dev/keiko-contracts";
+import { LOCAL_KNOWLEDGE_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts/runtime/local-knowledge";
+import { KNOWLEDGE_POD_SUMMARY_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts/runtime/local-knowledge-pods";
 import {
-  LOCAL_KNOWLEDGE_SCHEMA_VERSION,
-  KNOWLEDGE_POD_SUMMARY_SCHEMA_VERSION,
   resolveKnowledgePodModelUsePolicy,
   sealedLocalPodModelUsePolicy,
   standardPodModelUsePolicy,
-  type CapsuleSetId,
-  type KnowledgeCapsuleId,
-  type KnowledgePodSummary,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/local-knowledge-model-use-policy";
 import {
   ChatWindow,
   clearKnowledgeCatalogCacheForTests,

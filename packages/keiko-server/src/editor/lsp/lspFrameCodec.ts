@@ -14,7 +14,7 @@
 // several complete frames arriving coalesced into one physical read, costs O(n) total copy, not
 // O(n^2) or O(frames x n).
 
-import { parseLspFrameHeader } from "@oscharko-dev/keiko-contracts";
+import { parseLspFrameHeader } from "@oscharko-dev/keiko-contracts/runtime/lsp-process";
 import type { LspFrameRejectReason } from "@oscharko-dev/keiko-contracts";
 
 const HEADER_DELIMITER = Buffer.from("\r\n\r\n", "ascii");

@@ -9,12 +9,12 @@ import { EventEmitter } from "node:events";
 import type { AddressInfo } from "node:net";
 import type { Server, ServerResponse } from "node:http";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import {
-  COMMAND_RUNNER_SCHEMA_VERSION,
-  type CommandRunnerEvent,
-  type CommandTaskCatalog,
-  type CommandTaskRunResult,
+import type {
+  CommandRunnerEvent,
+  CommandTaskCatalog,
+  CommandTaskRunResult,
 } from "@oscharko-dev/keiko-contracts";
+import { COMMAND_RUNNER_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts/runtime/command-runner";
 import { buildCspHeader } from "./csp.js";
 import { buildRedactor, createInMemoryUiStore, type UiHandlerDeps } from "./index.js";
 import { createRunRegistry } from "./runs.js";

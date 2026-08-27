@@ -7,32 +7,34 @@
 // fail-safe path: model unavailability, invalid JSON, unsafe model output, and cancellations are all
 // surfaced through browser-safe routing metadata without leaking provider details.
 
+import type {
+  EnhancedPrompt,
+  MissingInformationStrategy,
+  ModelCapability,
+  PromptCandidateRejection,
+  PromptSafetyAssessment,
+  PromptCandidateScorecard,
+  PromptEnhancementGroundingReadiness,
+  PromptEnhancementModelFallbackReason,
+  PromptEnhancementModelRouting,
+  PromptEnhancementModelRoutingReason,
+  PromptEnhancementProfileId,
+  PromptEnhancementRequest,
+  PromptEnhancementWireRequest,
+  PromptEnhancementWireResponse,
+  RawPromptInput,
+} from "@oscharko-dev/keiko-contracts";
+import { analyzePrompt } from "@oscharko-dev/keiko-contracts/runtime/prompt-enhancer-analyzer";
 import {
-  analyzePrompt,
   asEnhancedPromptId,
   asPromptEnhancementRequestId,
-  estimateTokens,
   normalizePromptDraft,
-  stripUnsafeFormatChars,
-  validatePromptEnhancementRequest,
-  PROMPT_ENHANCEMENT_DEFAULT_CANDIDATE_COUNT,
   PROMPT_ENHANCER_SCHEMA_VERSION,
-  type EnhancedPrompt,
-  type MissingInformationStrategy,
-  type ModelCapability,
-  type PromptCandidateRejection,
-  type PromptSafetyAssessment,
-  type PromptCandidateScorecard,
-  type PromptEnhancementGroundingReadiness,
-  type PromptEnhancementModelFallbackReason,
-  type PromptEnhancementModelRouting,
-  type PromptEnhancementModelRoutingReason,
-  type PromptEnhancementProfileId,
-  type PromptEnhancementRequest,
-  type PromptEnhancementWireRequest,
-  type PromptEnhancementWireResponse,
-  type RawPromptInput,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/prompt-enhancer";
+import { estimateTokens } from "@oscharko-dev/keiko-contracts/runtime/context-engineering";
+import { stripUnsafeFormatChars } from "@oscharko-dev/keiko-contracts/runtime/text-safety";
+import { validatePromptEnhancementRequest } from "@oscharko-dev/keiko-contracts/runtime/prompt-enhancer-validation";
+import { PROMPT_ENHANCEMENT_DEFAULT_CANDIDATE_COUNT } from "@oscharko-dev/keiko-contracts/runtime/prompt-enhancer-bff";
 import {
   findConfiguredCapability,
   PromptEnhancer,

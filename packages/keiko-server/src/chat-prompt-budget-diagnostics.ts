@@ -1,13 +1,15 @@
+import type {
+  ContextAssemblyDiagnostics,
+  ContextBudgetPressure,
+  ContextLaneDiagnostics,
+  ContextProfile,
+  ConversationDocumentContextWire,
+  DiscussionMode,
+} from "@oscharko-dev/keiko-contracts";
 import {
   CONTEXT_ENGINEERING_SCHEMA_VERSION,
   resolveContextTokenAccounting,
-  type ContextAssemblyDiagnostics,
-  type ContextBudgetPressure,
-  type ContextLaneDiagnostics,
-  type ContextProfile,
-  type ConversationDocumentContextWire,
-  type DiscussionMode,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/context-engineering";
 import type { ConversationMemoryContextEntryWire } from "@oscharko-dev/keiko-contracts/bff-wire";
 import type { GatewayConversationMessage } from "./conversation-gateway.js";
 import type { ConversationCompactionOutcome } from "./conversation-compaction.js";

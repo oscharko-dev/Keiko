@@ -53,19 +53,21 @@ import {
   JIRA_SUMMARY_MAX_CHARS,
   MARKDOWN_LITE_MAX_INPUT_CHARS,
 } from "@oscharko-dev/keiko-connectors";
+import type {
+  AtlassianConnectorActionExecutionResult,
+  AtlassianConnectorActionType,
+  AtlassianConnectorActivityReasonCode,
+  AtlassianConnectorActionReviewReason,
+  JiraLiveSearchRequest,
+} from "@oscharko-dev/keiko-contracts";
 import {
   ATLASSIAN_CONNECTOR_ACTION_CLASS,
   ATLASSIAN_CONNECTOR_ACTION_PROVIDER,
   ATLASSIAN_CONNECTOR_SCOPE_DENY_REASON,
   isSafeAtlassianIdentifier,
   isSafeJiraProjectKey,
-  validateJiraLiveSearchRequest,
-  type AtlassianConnectorActionExecutionResult,
-  type AtlassianConnectorActionType,
-  type AtlassianConnectorActivityReasonCode,
-  type AtlassianConnectorActionReviewReason,
-  type JiraLiveSearchRequest,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
+import { validateJiraLiveSearchRequest } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors-validation";
 import { sha256Hex } from "@oscharko-dev/keiko-security";
 import { errorBody, type RouteContext, type RouteResult } from "../routes.js";
 import { readJsonObject } from "../files.js";

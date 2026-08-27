@@ -1,23 +1,25 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useSyncExternalStore } from "react";
+import type {
+  DebugEvent,
+  DebugLaunchTarget,
+  DebugSession,
+  DebugSessionControlAction,
+  DebugVariableNode,
+  BoundedDebugText,
+  ExceptionBreakpointFilter,
+  InstrumentationSnapshot,
+  SourceBreakpoint,
+  Scope,
+  StackFrame,
+  WatchEvaluationResult,
+  WatchExpression,
+} from "@oscharko-dev/keiko-contracts";
 import {
   DAP_DEBUG_CONTRACT_SCHEMA_VERSION,
   DEFAULT_DEBUG_PAYLOAD_LIMITS,
-  type DebugEvent,
-  type DebugLaunchTarget,
-  type DebugSession,
-  type DebugSessionControlAction,
-  type DebugVariableNode,
-  type BoundedDebugText,
-  type ExceptionBreakpointFilter,
-  type InstrumentationSnapshot,
-  type SourceBreakpoint,
-  type Scope,
-  type StackFrame,
-  type WatchEvaluationResult,
-  type WatchExpression,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/dap-debug";
 import { sharedEventSourceGeneration, subscribeSharedEventSource } from "./sharedEventSource";
 import {
   abandonDebugStreamResync,

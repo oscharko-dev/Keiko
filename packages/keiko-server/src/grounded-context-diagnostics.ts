@@ -14,12 +14,12 @@ import type {
   ConnectedContextPack,
   ContextPackDiagnostics,
 } from "@oscharko-dev/keiko-contracts/connected-context";
-import {
-  CONTEXT_ENGINEERING_SCHEMA_VERSION,
-  type ContextAssemblyDiagnostics,
-  type ContextBudget,
-  type ContextProfile,
+import type {
+  ContextAssemblyDiagnostics,
+  ContextBudget,
+  ContextProfile,
 } from "@oscharko-dev/keiko-contracts";
+import { CONTEXT_ENGINEERING_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts/runtime/context-engineering";
 import {
   allocateContext,
   DEFAULT_CONTEXT_BUDGET,

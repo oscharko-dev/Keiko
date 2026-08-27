@@ -14,17 +14,19 @@
 
 import { createHash } from "node:crypto";
 
+import type {
+  KnowledgeCapsuleId,
+  KnowledgeSourceId,
+  VectorIndexCandidateRef,
+  VectorIndexDiagnostics,
+  VectorIndexPort,
+  VectorIndexQuery,
+  VectorIndexResult,
+} from "@oscharko-dev/keiko-contracts";
 import {
   embeddingIdentityKey,
   isValidVectorIndexQuery,
-  type KnowledgeCapsuleId,
-  type KnowledgeSourceId,
-  type VectorIndexCandidateRef,
-  type VectorIndexDiagnostics,
-  type VectorIndexPort,
-  type VectorIndexQuery,
-  type VectorIndexResult,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/vector-index-port";
 
 import { getCapsule } from "../capsule-lifecycle.js";
 import { emitKnowledgeLogEvent, type KnowledgeLogSink } from "../knowledge-log.js";

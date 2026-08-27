@@ -16,7 +16,10 @@ import type {
   VectorIndexPort,
   VectorIndexQuery,
 } from "@oscharko-dev/keiko-contracts";
-import { VECTOR_INDEX_NAMESPACES, isValidVectorIndexQuery } from "@oscharko-dev/keiko-contracts";
+import {
+  VECTOR_INDEX_NAMESPACES,
+  isValidVectorIndexQuery,
+} from "@oscharko-dev/keiko-contracts/runtime/vector-index-port";
 import type { VectorIndexUnexpectedFailureDiagnostic as PublicUnexpectedFailureDiagnostic } from "@oscharko-dev/keiko-local-knowledge";
 import { describe, expect, it } from "vitest";
 

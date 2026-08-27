@@ -21,7 +21,7 @@ import {
   type SetStateAction,
 } from "react";
 import { createPortal } from "react-dom";
-import { LOCAL_KNOWLEDGE_FILE_FILTERS } from "@oscharko-dev/keiko-contracts";
+import { LOCAL_KNOWLEDGE_FILE_FILTERS } from "@oscharko-dev/keiko-contracts/runtime/local-knowledge-file-selection";
 import type {
   KnowledgeCapsuleId,
   CapsuleLifecycleState,

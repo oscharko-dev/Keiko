@@ -3,7 +3,8 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import * as Qi from "../index.js";
-import * as Contracts from "../../index.js";
+import * as ContractsRuntime from "../../index.js";
+import type * as Contracts from "../../index.js";
 
 const QI_SRC_DIR = dirname(dirname(fileURLToPath(import.meta.url)));
 
@@ -192,34 +193,9 @@ describe("QI module barrel — value exports", () => {
   });
 });
 
-describe("Outer package barrel — namespace re-export", () => {
-  it("re-exports QI as the QualityIntelligence namespace", () => {
-    expect(Contracts.QualityIntelligence).toBeDefined();
-  });
-
-  it("the namespace surfaces the same shape as the QI barrel", () => {
-    for (const name of requiredValueExports) {
-      expect(Object.keys(Contracts.QualityIntelligence)).toContain(name);
-    }
-  });
-
-  it("the Contracts.QualityIntelligence namespace exports EXACTLY the required value set", () => {
-    // Symmetrical exactness check for the outer-barrel namespace re-export.
-    // Mutation killed: a name accidentally dropped from the outer re-export shifts the count.
-    const actual = new Set(Object.keys(Contracts.QualityIntelligence));
-    const expected = new Set(requiredValueExports);
-    const undeclared = [...actual].filter((n) => !expected.has(n));
-    const missing = [...expected].filter((n) => !actual.has(n));
-    expect(undeclared).toEqual([]);
-    expect(missing).toEqual([]);
-    expect(actual.size).toBe(requiredValueExports.length);
-  });
-
-  it("flat-exports the test-quality judge schema contract", () => {
-    expect(Contracts.TEST_QUALITY_RUBRIC_DIMENSIONS).toBe(Qi.TEST_QUALITY_RUBRIC_DIMENSIONS);
-    expect(Contracts.TEST_QUALITY_JUDGE_RESPONSE_SCHEMA).toBe(
-      Qi.TEST_QUALITY_JUDGE_RESPONSE_SCHEMA,
-    );
+describe("Outer package barrel", () => {
+  it("keeps runtime values out of the outer type-only entrypoint", () => {
+    expect(Object.keys(ContractsRuntime)).toEqual([]);
   });
 });
 

@@ -14,7 +14,7 @@ import type {
   QualityIntelligenceCandidateEditableFields,
   QualityIntelligenceReviewAction,
 } from "@oscharko-dev/keiko-contracts";
-import { isTerminalReviewState } from "@oscharko-dev/keiko-contracts";
+import { isTerminalReviewState } from "@oscharko-dev/keiko-contracts/runtime/qualityIntelligence/index";
 import { useQiTranslate as useTranslate } from "./qi-i18n";
 import { CandidateEditForm } from "./CandidateEditForm";
 import {

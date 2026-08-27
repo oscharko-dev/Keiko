@@ -16,7 +16,7 @@ import { compileIgnore, isDenied, isIgnored, type IgnoreMatcher } from "./ignore
 import { resolveWithinWorkspace } from "./paths.js";
 import { containedRealPathInfo } from "./realpath.js";
 import { FileTooLargeError, PathDeniedError, WorkspaceReadError } from "./errors.js";
-import { compareStrings } from "@oscharko-dev/keiko-contracts";
+import { compareStrings } from "@oscharko-dev/keiko-contracts/runtime/comparators";
 import { redact } from "@oscharko-dev/keiko-security";
 import {
   DEFAULT_READ_OPTIONS,

@@ -8,13 +8,13 @@
 
 import { realpathSync } from "node:fs";
 import { dirname, isAbsolute, relative, resolve } from "node:path";
-import {
-  compareStrings,
-  QualityIntelligence,
-  type QualityIntelligence as QI,
-  type QualityIntelligenceInlineSource,
-  type QualityIntelligenceStartRunRequest,
+import type {
+  QualityIntelligence as QI,
+  QualityIntelligenceInlineSource,
+  QualityIntelligenceStartRunRequest,
 } from "@oscharko-dev/keiko-contracts";
+import { compareStrings } from "@oscharko-dev/keiko-contracts/runtime/comparators";
+import * as QualityIntelligence from "@oscharko-dev/keiko-contracts/runtime/qualityIntelligence/index";
 import { redact, sha256Hex } from "@oscharko-dev/keiko-security";
 import {
   QualityIntelligenceGeneration,

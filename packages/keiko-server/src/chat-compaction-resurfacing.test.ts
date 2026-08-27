@@ -1,9 +1,9 @@
 import { describe, expect, it } from "vitest";
+import type { ContextCompactionRecord } from "@oscharko-dev/keiko-contracts";
 import {
   CONTEXT_COMPACTION_MODEL_SUMMARY_PROMPT_VERSION,
   CONTEXT_ENGINEERING_SCHEMA_VERSION,
-  type ContextCompactionRecord,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/context-engineering";
 import {
   createInMemoryEvidenceStore,
   persistCompactionEvidence,

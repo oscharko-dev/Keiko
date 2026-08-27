@@ -18,7 +18,7 @@ import type {
   ParserDependencyVersion,
   ParserDiagnostic,
 } from "@oscharko-dev/keiko-contracts";
-import { LARGE_DOCUMENT_DIAGNOSTIC_CODES } from "@oscharko-dev/keiko-contracts";
+import { LARGE_DOCUMENT_DIAGNOSTIC_CODES } from "@oscharko-dev/keiko-contracts/runtime/local-knowledge-large-document";
 
 import { buildParserOptions } from "../registry.js";
 import { loadPdfDocumentFromSource, readPageText, type PdfDocumentLike } from "../pdf-parser.js";

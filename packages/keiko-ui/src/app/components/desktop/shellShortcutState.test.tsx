@@ -16,11 +16,9 @@
 import type { ReactNode } from "react";
 import { fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from "vitest";
-import {
-  EDITOR_VERIFICATION_SCHEMA_VERSION,
-  WORKSPACE_TRUST_SCHEMA_VERSION,
-  workspaceChordKey,
-} from "@oscharko-dev/keiko-contracts";
+import { EDITOR_VERIFICATION_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts/runtime/editor-verification";
+import { WORKSPACE_TRUST_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts/runtime/workspace-trust";
+import { workspaceChordKey } from "@oscharko-dev/keiko-contracts/runtime/workspace-ui";
 
 import {
   readShellShortcutRefusalCount,

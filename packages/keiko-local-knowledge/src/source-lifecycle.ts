@@ -5,13 +5,13 @@
 // deletes of the parent capsule, but the verify+delete sequence is correct under WAL's
 // single-writer semantics).
 
-import {
-  validateKnowledgeSourceScope,
-  type KnowledgeCapsuleId,
-  type KnowledgeSource,
-  type KnowledgeSourceId,
-  type KnowledgeSourceScope,
+import type {
+  KnowledgeCapsuleId,
+  KnowledgeSource,
+  KnowledgeSourceId,
+  KnowledgeSourceScope,
 } from "@oscharko-dev/keiko-contracts";
+import { validateKnowledgeSourceScope } from "@oscharko-dev/keiko-contracts/runtime/local-knowledge-validation";
 
 import { assertSafeDisplayField, assertSafeOptionalDisplayField } from "./display-validation.js";
 import { KnowledgeNotFoundError, KnowledgeStoreError } from "./errors.js";

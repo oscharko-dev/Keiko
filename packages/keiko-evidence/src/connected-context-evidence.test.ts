@@ -1,10 +1,10 @@
 import { createHash } from "node:crypto";
 import { describe, expect, it } from "vitest";
+import type { ContextAssemblyDiagnostics } from "@oscharko-dev/keiko-contracts";
 import {
   CONTEXT_ENGINEERING_SCHEMA_VERSION,
   DEFAULT_CONTEXT_PROFILE,
-  type ContextAssemblyDiagnostics,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/context-engineering";
 import {
   CONNECTED_CONTEXT_SCHEMA_VERSION,
   type ConnectedContextPack,

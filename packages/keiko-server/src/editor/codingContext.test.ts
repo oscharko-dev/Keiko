@@ -2,16 +2,18 @@ import { mkdtemp, mkdir, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type {
+  CodingContextPack,
+  CodingContextRequest,
+  EditorAgentSessionSnapshot,
+} from "@oscharko-dev/keiko-contracts";
 import {
   CODING_CONTEXT_BUDGETS,
-  UNVERIFIED_GATEWAY,
   CODING_CONTEXT_PURPOSES,
-  EDITOR_AGENT_SCHEMA_VERSION,
   toCodingContextWirePack,
-  type CodingContextPack,
-  type CodingContextRequest,
-  type EditorAgentSessionSnapshot,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/coding-context";
+import { UNVERIFIED_GATEWAY } from "@oscharko-dev/keiko-contracts/runtime/gateway-verification";
+import { EDITOR_AGENT_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts/runtime/editor-agent";
 import type {
   GatewayConfig,
   LiteLLMRerankRequest,

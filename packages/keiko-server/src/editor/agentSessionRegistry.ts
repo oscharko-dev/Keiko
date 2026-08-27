@@ -21,15 +21,15 @@
 // state record plus module-level operations, so each operation stays short and explicitly typed.
 
 import { timingSafeEqual } from "node:crypto";
-import {
-  EDITOR_AGENT_SCHEMA_VERSION,
-  isMutatingEditorAgentAction,
-  type EditorAgentAction,
-  type EditorAgentActionResult,
-  type EditorAgentEvent,
-  type EditorAgentFailureCode,
-  type EditorAgentSessionSnapshot,
+import type {
+  EditorAgentAction,
+  EditorAgentActionResult,
+  EditorAgentEvent,
+  EditorAgentFailureCode,
+  EditorAgentSessionSnapshot,
 } from "@oscharko-dev/keiko-contracts";
+import { EDITOR_AGENT_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts/runtime/editor-agent";
+import { isMutatingEditorAgentAction } from "@oscharko-dev/keiko-contracts/runtime/editor-agent-governance";
 
 // A queued action the bridge never acknowledges within ACTION_TIMEOUT_MS is failed and evicted so the
 // bounded queue self-heals (AC2). MAX_QUEUED_PER_SESSION bounds the in-flight depth per session;

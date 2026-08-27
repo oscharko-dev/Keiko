@@ -31,7 +31,7 @@ import type {
   ManualRefreshChangeSummary,
   ManualRefreshReasonCode,
 } from "@oscharko-dev/keiko-contracts";
-import { MANUAL_REFRESH_REASON_GUIDANCE } from "@oscharko-dev/keiko-contracts";
+import { MANUAL_REFRESH_REASON_GUIDANCE } from "@oscharko-dev/keiko-contracts/runtime/html-manual-refresh";
 import { Icons } from "@/app/components/desktop/Icons";
 import { isPrimaryActivationPointer } from "@/app/components/desktop/interactionGuards";
 import { useModalInteractionLock } from "@/app/components/desktop/hooks/useModalInteractionLock";

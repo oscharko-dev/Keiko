@@ -21,21 +21,25 @@
 // Containment reuses the files routes' realpath resolution; the response is redacted (D9) and
 // content-free apart from the reviewable patch `newText`. The browser never reaches a model directly.
 
+import type {
+  CodingContextPack,
+  CodingContextRequest,
+  CodingContextWirePack,
+  EditorTestGenerationWireRequest,
+  EditorTestGenerationWireResponse,
+  EditorTestGenerationWireTarget,
+} from "@oscharko-dev/keiko-contracts";
 import {
   CODING_CONTEXT_BUDGETS,
   CODING_CONTEXT_SCHEMA_VERSION,
+  toCodingContextWirePack,
+} from "@oscharko-dev/keiko-contracts/runtime/coding-context";
+import {
   EDITOR_TEST_GENERATION_SCHEMA_VERSION,
-  isValidScopePath,
   notRunTestGenerationFunnel,
   parseEditorTestGenerationRequest,
-  toCodingContextWirePack,
-  type CodingContextPack,
-  type CodingContextRequest,
-  type CodingContextWirePack,
-  type EditorTestGenerationWireRequest,
-  type EditorTestGenerationWireResponse,
-  type EditorTestGenerationWireTarget,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/editor-test-generation";
+import { isValidScopePath } from "@oscharko-dev/keiko-contracts/runtime/connected-context";
 import type { EnvSource } from "@oscharko-dev/keiko-model-gateway";
 import { errorBody, type RouteContext, type RouteResult } from "../routes.js";
 import type { UiHandlerDeps } from "../deps.js";

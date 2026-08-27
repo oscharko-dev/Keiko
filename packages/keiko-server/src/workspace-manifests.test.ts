@@ -2,10 +2,8 @@ import { mkdirSync, mkdtempSync, realpathSync, renameSync, rmSync, writeFileSync
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import {
-  validateWorkspaceBinding,
-  WORKSPACE_MANIFEST_MAX_ROOTS,
-} from "@oscharko-dev/keiko-contracts";
+import { validateWorkspaceBinding } from "@oscharko-dev/keiko-contracts/runtime/task-workspace";
+import { WORKSPACE_MANIFEST_MAX_ROOTS } from "@oscharko-dev/keiko-contracts/runtime/workspace-manifest";
 import type {
   WorkspaceManifest,
   WorkspaceRootDispatch,

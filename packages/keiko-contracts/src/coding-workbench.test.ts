@@ -1,39 +1,47 @@
 import { describe, expect, it } from "vitest";
+import type {
+  CodingWorkbenchAuthorityEnvelope,
+  CodingWorkbenchCodexAuthSetupPlan,
+  CodingWorkbenchCodexSubscriptionProfile,
+  CodingWorkbenchEvidenceRecord,
+  CodingWorkbenchPermissionRequest,
+  CodingWorkbenchRuntimeEvent,
+} from "./index.js";
 import {
   CODING_WORKBENCH_ACTION_CLASSES,
-  CODING_WORKBENCH_CODEX_AUTH_METHODS,
-  CODING_WORKBENCH_CODEX_AUTH_STATE_ROOTS,
-  CODING_WORKBENCH_CODEX_AUTH_STATUSES,
-  CODING_WORKBENCH_CODEX_CREDENTIAL_STORES,
-  CODING_WORKBENCH_CODEX_RUNTIME_BINARY_SOURCES,
   CODING_WORKBENCH_MODEL_SOURCES,
   CODING_WORKBENCH_MODES,
   CODING_WORKBENCH_RUNTIME_EVENT_KINDS,
   CODING_WORKBENCH_RUNTIME_SOURCES,
   CODING_WORKBENCH_SCHEMA_VERSION,
   CODING_WORKBENCH_SUPERVISED_ACTION_KINDS,
-  codingWorkbenchCodexAuthMethodRowFor,
   decideCodingWorkbenchActionForMode,
-  isCodingWorkbenchEvidenceSafeText,
   permissionKindForSupervisedCodingAction,
-  redactCodingWorkbenchEvidenceText,
   resolveEffectiveCodingWorkbenchMode,
-  selectCodingWorkbenchRuntimeProfile,
   supervisedCodingActionRequiresApproval,
-  validateCodingWorkbenchAuthorityEnvelope,
+} from "./coding-workbench.js";
+import {
+  CODING_WORKBENCH_CODEX_AUTH_METHODS,
+  CODING_WORKBENCH_CODEX_AUTH_STATE_ROOTS,
+  CODING_WORKBENCH_CODEX_AUTH_STATUSES,
+  CODING_WORKBENCH_CODEX_CREDENTIAL_STORES,
+  CODING_WORKBENCH_CODEX_RUNTIME_BINARY_SOURCES,
+  codingWorkbenchCodexAuthMethodRowFor,
+  selectCodingWorkbenchRuntimeProfile,
   validateCodingWorkbenchCodexAuthSetupPlan,
   validateCodingWorkbenchCodexAuthSetupRequest,
   validateCodingWorkbenchCodexSubscriptionProfile,
+} from "./coding-workbench-codex-auth.js";
+import {
+  isCodingWorkbenchEvidenceSafeText,
+  redactCodingWorkbenchEvidenceText,
   validateCodingWorkbenchEvidenceRecord,
+} from "./coding-workbench-evidence.js";
+import {
+  validateCodingWorkbenchAuthorityEnvelope,
   validateCodingWorkbenchPermissionRequest,
   validateCodingWorkbenchRuntimeEvent,
-  type CodingWorkbenchAuthorityEnvelope,
-  type CodingWorkbenchCodexAuthSetupPlan,
-  type CodingWorkbenchCodexSubscriptionProfile,
-  type CodingWorkbenchEvidenceRecord,
-  type CodingWorkbenchPermissionRequest,
-  type CodingWorkbenchRuntimeEvent,
-} from "./index.js";
+} from "./coding-workbench-validation.js";
 import {
   CODING_WORKBENCH_APPROVAL_RISKS,
   CODING_WORKBENCH_MODE_POLICIES,

@@ -16,17 +16,19 @@
 // model-written enrichment is handled by chat-compaction-model-summary.ts and resurfaced on later
 // turns through chat-compaction-resurfacing.ts.
 
+import type {
+  ContextCompactionRecord,
+  ContextProfile,
+  ContextTokenAccounting,
+} from "@oscharko-dev/keiko-contracts";
 import {
   CONTEXT_ENGINEERING_SCHEMA_VERSION,
   DEFAULT_CONTEXT_PROFILE,
   countContextTokens,
   countContextTokensForSegments,
   partitionContextPreservedFacts,
-  validateContextCompactionRecord,
-  type ContextCompactionRecord,
-  type ContextProfile,
-  type ContextTokenAccounting,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/context-engineering";
+import { validateContextCompactionRecord } from "@oscharko-dev/keiko-contracts/runtime/context-engineering-compaction-validation";
 import { ContextOverflowError } from "@oscharko-dev/keiko-security/errors/gateway";
 import {
   buildStructuredCompactionDigest,

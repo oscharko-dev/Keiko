@@ -13,7 +13,7 @@ import type {
   GitDeliveryAuditPacket,
   GitDeliveryEvidenceRecord,
 } from "@oscharko-dev/keiko-contracts";
-import { GIT_DELIVERY_EVIDENCE_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts";
+import { GIT_DELIVERY_EVIDENCE_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts/runtime/git-delivery-evidence";
 import { buildRedactor, createRunRegistry, type UiHandlerDeps } from "../index.js";
 import { createInMemoryUiStore } from "../store/index.js";
 import type { RouteContext } from "../routes.js";

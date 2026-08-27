@@ -20,15 +20,14 @@
 // The v1 mapping is metadata-only for relationships: parent/subtask/link KEYS are captured as
 // citation metadata (community-feedback extension), with no graph modeling.
 
+import type { JiraIssueCitationMetadata, JiraIssueLinkRef } from "@oscharko-dev/keiko-contracts";
 import {
   ATLASSIAN_CITATION_LIST_MAX_ENTRIES,
   ATLASSIAN_CITATION_METADATA_MAX_CHARS,
   isJiraIssueCitationMetadata,
   isSafeAtlassianIdentifier,
   isSafeJiraCitationFieldText,
-  type JiraIssueCitationMetadata,
-  type JiraIssueLinkRef,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import { convertAdfToText, type AdfConversionOutcome } from "./adf-to-text.js";
 import { ATLASSIAN_SYNC_ITEM_MAX_BYTES } from "./atlassian-sync-lane.js";
 

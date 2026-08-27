@@ -20,7 +20,7 @@ import { join } from "node:path";
 import { Readable } from "node:stream";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { IncomingMessage } from "node:http";
-import { QualityIntelligence } from "@oscharko-dev/keiko-contracts";
+import * as QualityIntelligence from "@oscharko-dev/keiko-contracts/runtime/qualityIntelligence/index";
 import {
   listQualityIntelligenceRuns,
   loadQualityIntelligenceCandidates,

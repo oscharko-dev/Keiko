@@ -17,7 +17,10 @@
 // All caps are duplicated client-side in keiko-ui; the server is the trust boundary. UI changes
 // are out of scope for #149 — the existing gw-error surface from #146 renders these codes.
 
-import { classifyAttachmentMime, MAX_ATTACHMENT_BYTES } from "@oscharko-dev/keiko-contracts";
+import {
+  classifyAttachmentMime,
+  MAX_ATTACHMENT_BYTES,
+} from "@oscharko-dev/keiko-contracts/runtime/bff-wire";
 import type {
   BffErrorCode,
   ConversationDocumentContextWire,

@@ -10,10 +10,8 @@
 "use client";
 
 import { useId, useState, type ReactNode, type SubmitEvent } from "react";
-import {
-  isSafeAtlassianConnectorBaseUrl,
-  type AtlassianConnectorProvider,
-} from "@oscharko-dev/keiko-contracts";
+import type { AtlassianConnectorProvider } from "@oscharko-dev/keiko-contracts";
+import { isSafeAtlassianConnectorBaseUrl } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import { ApiError } from "@/lib/api";
 import { useTranslate } from "@/lib/i18n";
 import type { MessageKey } from "@/lib/i18n-messages.en";

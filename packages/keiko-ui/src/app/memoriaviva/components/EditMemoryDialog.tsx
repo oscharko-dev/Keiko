@@ -10,7 +10,7 @@
 import { useCallback, useEffect, useId, useRef, useState } from "react";
 import type { ChangeEvent, KeyboardEvent, ReactNode } from "react";
 import type { MemoryId, MemoryRecord, MemorySensitivity } from "@oscharko-dev/keiko-contracts";
-import { MEMORY_SENSITIVITIES } from "@oscharko-dev/keiko-contracts";
+import { MEMORY_SENSITIVITIES } from "@oscharko-dev/keiko-contracts/runtime/memory";
 import { correctMemory, editMemory } from "@/lib/memory-api";
 import { useTranslate } from "@/lib/i18n";
 import { formatError } from "./format-error";

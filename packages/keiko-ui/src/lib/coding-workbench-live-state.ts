@@ -1,7 +1,7 @@
 import {
   gatewayVerificationContradictsReadiness,
   UNVERIFIED_GATEWAY,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/gateway-verification";
 import type {
   CodingWorkbenchCodexAuthSetupPlan,
   CodingWorkbenchCodexSubscriptionProfile,

@@ -16,7 +16,7 @@ import {
   type MemoryVaultStore,
 } from "@oscharko-dev/keiko-memory-vault";
 import { runConsolidation } from "@oscharko-dev/keiko-memory-consolidation";
-import { MEMORY_STATUS_TRANSITIONS } from "@oscharko-dev/keiko-contracts";
+import { MEMORY_STATUS_TRANSITIONS } from "@oscharko-dev/keiko-contracts/runtime/memory";
 import type {
   MemoryAuditEvent,
   MemoryConversationId,

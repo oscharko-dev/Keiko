@@ -2,7 +2,7 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { QualityIntelligence } from "@oscharko-dev/keiko-contracts";
+import * as QualityIntelligence from "@oscharko-dev/keiko-contracts/runtime/qualityIntelligence/index";
 import type { RouteContext, RouteResult } from "../../routes.js";
 import { STREAMING } from "../../routes.js";
 import { buildRedactor, createRunRegistry, type UiHandlerDeps } from "../../index.js";

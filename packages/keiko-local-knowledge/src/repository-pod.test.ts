@@ -11,14 +11,14 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import {
-  SHARED_POD_REFRESH_TERMINALS,
-  type DocumentId,
-  type KnowledgeCapsuleId,
-  type KnowledgeSourceId,
-  type ManualRefreshOutcome,
-  type SharedPodRefreshTerminal,
+import type {
+  DocumentId,
+  KnowledgeCapsuleId,
+  KnowledgeSourceId,
+  ManualRefreshOutcome,
+  SharedPodRefreshTerminal,
 } from "@oscharko-dev/keiko-contracts";
+import { SHARED_POD_REFRESH_TERMINALS } from "@oscharko-dev/keiko-contracts/runtime/local-knowledge";
 import type {
   GatewayRequest,
   NormalizedResponse,

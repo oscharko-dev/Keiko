@@ -45,19 +45,21 @@ import {
   saveFilesContent,
   mutateWorkspaceSnippets,
 } from "../../../../../lib/api";
+import type {
+  EditorM7CommandDefinition,
+  EditorM7SettingId,
+  EditorM7SettingValue,
+  EditorM11SettingsSnapshot,
+  EditorM7WorkspaceSnippetSnapshot,
+  EditorHotExitSnapshotV1,
+} from "@oscharko-dev/keiko-contracts";
 import {
   EDITOR_M7_SCHEMA_VERSION,
-  EDITOR_M7_SNIPPET_COLLECTION_VERSION,
   EDITOR_M7_SETTING_REGISTRY,
-  EDITOR_HOT_EXIT_SCHEMA_VERSION,
-  resolveEditorM11Settings,
-  type EditorM7CommandDefinition,
-  type EditorM7SettingId,
-  type EditorM7SettingValue,
-  type EditorM11SettingsSnapshot,
-  type EditorM7WorkspaceSnippetSnapshot,
-  type EditorHotExitSnapshotV1,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/editor-m7";
+import { EDITOR_M7_SNIPPET_COLLECTION_VERSION } from "@oscharko-dev/keiko-contracts/runtime/editor-snippets";
+import { EDITOR_HOT_EXIT_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts/runtime/editor-hot-exit";
+import { resolveEditorM11Settings } from "@oscharko-dev/keiko-contracts/runtime/editor-m11-settings";
 import { I18N_STORAGE_KEY, I18nProvider, loadLocaleMessages } from "@/lib/i18n";
 import type { EditorSurfaceProps } from "./EditorSurface";
 import type { EditorDiffSurfaceProps } from "./EditorDiffSurface";

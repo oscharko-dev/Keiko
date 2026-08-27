@@ -1,10 +1,10 @@
 import { readFileSync } from "node:fs";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import {
-  CONTEXT_ENGINEERING_SCHEMA_VERSION,
-  type ContextCompactionModelSummary,
-  type ContextCompactionRecord,
+import type {
+  ContextCompactionModelSummary,
+  ContextCompactionRecord,
 } from "@oscharko-dev/keiko-contracts";
+import { CONTEXT_ENGINEERING_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts/runtime/context-engineering";
 import {
   createInMemoryEvidenceStore,
   type EvidenceManifest,

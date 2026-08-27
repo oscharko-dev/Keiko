@@ -1,41 +1,47 @@
 import { createHash, createHmac, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
 
+import type {
+  EditorM7AiActivationSummary,
+  EditorM7PolicyCeiling,
+  EditorM7ReasonCode,
+  EditorM7SettingId,
+  EditorM7SettingScope,
+  EditorM7SettingValue,
+  EditorM7SettingsMutationAction,
+  EditorM7StoreState,
+  EditorM11ResolvedSetting,
+  EditorM11ProfileMutation,
+  EditorM11ProfileReasonCode,
+  EditorM11ProfileMutationResult,
+  EditorM11ProfilesSnapshot,
+  EditorM11RootSettingsLayer,
+  EditorM11SettingScope,
+  EditorM11SettingsMutationResult,
+  EditorM11SettingsSnapshot,
+  WorkspaceProfileManifest,
+  WorkspaceProfileExportResult,
+  WorkspaceProfileImportFailureCode,
+  WorkspaceProfileImportPreview,
+  WorkspaceProfileRef,
+} from "@oscharko-dev/keiko-contracts";
 import {
   EDITOR_M7_SCHEMA_VERSION,
   EDITOR_M7_SETTING_REGISTRY,
+  parseEditorM7SettingPatch,
+} from "@oscharko-dev/keiko-contracts/runtime/editor-m7";
+import {
   EDITOR_M11_DEFAULT_PROFILE_REF,
   EDITOR_M11_SETTINGS_SCHEMA_VERSION,
-  WORKSPACE_PROFILE_SCHEMA_VERSION,
   editorM11RootSettingIsMonotonic,
+  resolveEditorM11Settings,
+} from "@oscharko-dev/keiko-contracts/runtime/editor-m11-settings";
+import {
+  WORKSPACE_PROFILE_SCHEMA_VERSION,
   isAssignableWorkspaceProfileDisplayName,
   isReservedWorkspaceProfileDisplayName,
-  isWorkspaceProfileRef,
   workspaceProfileDisplayNameKey,
-  parseEditorM7SettingPatch,
-  resolveEditorM11Settings,
-  type EditorM7AiActivationSummary,
-  type EditorM7PolicyCeiling,
-  type EditorM7ReasonCode,
-  type EditorM7SettingId,
-  type EditorM7SettingScope,
-  type EditorM7SettingValue,
-  type EditorM7SettingsMutationAction,
-  type EditorM7StoreState,
-  type EditorM11ResolvedSetting,
-  type EditorM11ProfileMutation,
-  type EditorM11ProfileReasonCode,
-  type EditorM11ProfileMutationResult,
-  type EditorM11ProfilesSnapshot,
-  type EditorM11RootSettingsLayer,
-  type EditorM11SettingScope,
-  type EditorM11SettingsMutationResult,
-  type EditorM11SettingsSnapshot,
-  type WorkspaceProfileManifest,
-  type WorkspaceProfileExportResult,
-  type WorkspaceProfileImportFailureCode,
-  type WorkspaceProfileImportPreview,
-  type WorkspaceProfileRef,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/workspace-profile";
+import { isWorkspaceProfileRef } from "@oscharko-dev/keiko-contracts/runtime/workspace-contract-primitives";
 
 import type { WorkspaceMutexRegistry } from "../../task-workspace/mutex.js";
 import type {

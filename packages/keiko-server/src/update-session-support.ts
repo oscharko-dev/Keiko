@@ -18,7 +18,7 @@ import type {
   UpdateSessionLogPreview,
   UpdateSessionPhase,
 } from "@oscharko-dev/keiko-contracts";
-import { UPDATE_SESSION_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts";
+import { UPDATE_SESSION_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts/runtime/update-session";
 import {
   detectUpdateInstallMode,
   productionUpdateFacts,

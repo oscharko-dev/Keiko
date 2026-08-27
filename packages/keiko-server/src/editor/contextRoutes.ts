@@ -13,16 +13,18 @@
 // redacted (D9). The browser never gains direct retrieval, embedding, or model access.
 
 import { isAbsolute, resolve } from "node:path";
+import type {
+  CodingContextPurpose,
+  CodingContextRequest,
+  RetrievalQuery,
+  RetrievalQueryKind,
+} from "@oscharko-dev/keiko-contracts";
 import {
   CODING_CONTEXT_SCHEMA_VERSION,
-  isValidScopePath,
   toCodingContextWirePack,
   validateCodingContextRequest,
-  type CodingContextPurpose,
-  type CodingContextRequest,
-  type RetrievalQuery,
-  type RetrievalQueryKind,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/coding-context";
+import { isValidScopePath } from "@oscharko-dev/keiko-contracts/runtime/connected-context";
 import {
   DEFAULT_SEARCH_LIMITS,
   containedRealPathInfo,

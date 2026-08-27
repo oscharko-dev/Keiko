@@ -33,7 +33,7 @@ import type {
 import {
   KNOWLEDGE_POD_MODEL_USE_POLICY_SCHEMA_VERSION,
   standardPodModelUsePolicy,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/local-knowledge-model-use-policy";
 
 import {
   openKnowledgeStore,

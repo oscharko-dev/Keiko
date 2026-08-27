@@ -15,15 +15,17 @@
 // invariant); only the STATE it feeds is partitioned.
 
 import { useCallback, useEffect, useMemo, useState, useSyncExternalStore } from "react";
+import type {
+  EditorVerificationCatalog,
+  EditorVerificationEvent,
+  VerificationKind,
+} from "@oscharko-dev/keiko-contracts";
 import {
   EDITOR_VERIFICATION_EVENT_KINDS,
   isEditorVerificationCatalog,
   isEditorVerificationEvent,
   isEditorVerificationRun,
-  type EditorVerificationCatalog,
-  type EditorVerificationEvent,
-  type VerificationKind,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/editor-verification";
 import { createSameOriginApiEventSource } from "../../../../../lib/safe-event-source";
 import {
   mutateWorkspaceTrust,

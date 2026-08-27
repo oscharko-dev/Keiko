@@ -1,11 +1,11 @@
-import {
-  DEBUG_ACTIVATION_SCHEMA_VERSION,
-  type DebugActivationSummary,
-  type DebugDeploymentPolicy,
-  type DebugProductSupport,
-  type DebugProvisioning,
-  type DebugWorkspaceActivation,
+import type {
+  DebugActivationSummary,
+  DebugDeploymentPolicy,
+  DebugProductSupport,
+  DebugProvisioning,
+  DebugWorkspaceActivation,
 } from "@oscharko-dev/keiko-contracts";
+import { DEBUG_ACTIVATION_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts/runtime/debug-activation";
 
 import type { WorkspaceMutexRegistry } from "../../task-workspace/mutex.js";
 import {

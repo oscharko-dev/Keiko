@@ -1,16 +1,18 @@
 // Closed coding-context wrapper over the pillar-neutral assembly pipeline (Issue #2570,
 // ADR-0152 D6). Provider behavior and the public assembleCodingContext signature stay unchanged.
 
+import type {
+  CodingContextExcerpt,
+  CodingContextPack,
+  CodingContextRequest,
+  CodingContextSourceKind,
+  RetrievalContextBudget,
+} from "@oscharko-dev/keiko-contracts";
 import {
   CODING_CONTEXT_BUDGETS,
   embeddingProvidersAllowed,
   tierForCodingContextSource,
-  type CodingContextExcerpt,
-  type CodingContextPack,
-  type CodingContextRequest,
-  type CodingContextSourceKind,
-  type RetrievalContextBudget,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/coding-context";
 import type { GatewayConfig } from "@oscharko-dev/keiko-model-gateway";
 import { currentGatewayConfig, type UiHandlerDeps } from "../deps.js";
 import { rerankSelection } from "../grounded-rerank-facade.js";

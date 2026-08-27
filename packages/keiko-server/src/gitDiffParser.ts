@@ -1,16 +1,18 @@
+import type {
+  GitEditorDiffFile,
+  GitEditorDiffFileStatus,
+  GitEditorDiffHunk,
+  GitEditorDiffLine,
+  GitEditorDiffScope,
+} from "@oscharko-dev/keiko-contracts";
 import {
   GIT_EDITOR_DIFF_MAX_FILES,
   GIT_EDITOR_DIFF_MAX_HEADER_CHARS,
   GIT_EDITOR_DIFF_MAX_HUNKS_PER_FILE,
   GIT_EDITOR_DIFF_MAX_LINE_CHARS,
   GIT_EDITOR_DIFF_MAX_LINES_PER_HUNK,
-  isRootRelativeFileIdentifier,
-  type GitEditorDiffFile,
-  type GitEditorDiffFileStatus,
-  type GitEditorDiffHunk,
-  type GitEditorDiffLine,
-  type GitEditorDiffScope,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/git-editor";
+import { isRootRelativeFileIdentifier } from "@oscharko-dev/keiko-contracts/runtime/editor-workspace-path";
 
 export interface GitUnifiedDiffParseOptions {
   readonly scope: GitEditorDiffScope;

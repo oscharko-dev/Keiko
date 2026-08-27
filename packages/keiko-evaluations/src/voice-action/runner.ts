@@ -6,19 +6,21 @@
 // boundary is exercised for real — every fixture's segments pass through `selectCommittedVoiceTranscript`
 // before any proposal can form, so partial / discarded / superseded text is excluded structurally.
 
+import type {
+  SpokenActionAuditRecord,
+  SpokenActionConfirmationInput,
+  SpokenActionEffectClass,
+  SpokenActionOutcome,
+  SpokenActionProposal,
+  VoiceTranscriptSegment,
+} from "@oscharko-dev/keiko-contracts";
 import {
   buildSpokenActionAuditRecord,
   canonicalizeSpokenActionConfirmation,
   normalizeSpokenActionProposal,
-  selectCommittedVoiceTranscript,
   voiceCanProposeAction,
-  type SpokenActionAuditRecord,
-  type SpokenActionConfirmationInput,
-  type SpokenActionEffectClass,
-  type SpokenActionOutcome,
-  type SpokenActionProposal,
-  type VoiceTranscriptSegment,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/voice-action-intent";
+import { selectCommittedVoiceTranscript } from "@oscharko-dev/keiko-contracts/runtime/voice-transcript";
 import { ALL_VOICE_ACTION_FIXTURES } from "./fixtures/index.js";
 import { aggregateVoiceActionQuality, scoreVoiceActionQuality } from "./scorer.js";
 import {

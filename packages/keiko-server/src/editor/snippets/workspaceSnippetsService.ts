@@ -2,18 +2,20 @@ import { createHash } from "node:crypto";
 import { existsSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 
+import type {
+  EditorM7ReasonCode,
+  EditorM7SnippetCompletion,
+  EditorM7WorkspaceSnippet,
+  EditorM7WorkspaceSnippetInput,
+  EditorM7WorkspaceSnippetMutationResult,
+  EditorM7WorkspaceSnippetSnapshot,
+} from "@oscharko-dev/keiko-contracts";
 import {
   EDITOR_M7_SNIPPET_COLLECTION_VERSION,
   compileEditorM7SnippetBody,
   matchingEditorM7Snippets,
   parseEditorM7WorkspaceSnippetCollection,
-  type EditorM7ReasonCode,
-  type EditorM7SnippetCompletion,
-  type EditorM7WorkspaceSnippet,
-  type EditorM7WorkspaceSnippetInput,
-  type EditorM7WorkspaceSnippetMutationResult,
-  type EditorM7WorkspaceSnippetSnapshot,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/editor-snippets";
 
 import { assertNoSymlinkedPathSegments, savePrivateJson } from "../../private-json.js";
 import type { WorkspaceMutexRegistry } from "../../task-workspace/mutex.js";

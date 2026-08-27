@@ -19,7 +19,7 @@ import {
   MEMORY_TYPES,
   MEMORY_STATUSES,
   MEMORY_SENSITIVITIES,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/memory";
 import { useTranslate, type I18nTranslate } from "@/lib/i18n";
 
 export interface MemoryFilterState {

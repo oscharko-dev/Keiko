@@ -123,7 +123,7 @@ describe("managed language settings API", () => {
     expect(API_SOURCE).toContain('import("./managed-lsp-response-validators")');
 
     const adapterImport = MANAGED_LSP_VALIDATORS_SOURCE.match(
-      /import\s*\{([\s\S]*?)\}\s*from\s*"@oscharko-dev\/keiko-contracts";/u,
+      /import\s*\{([\s\S]*?)\}\s*from\s*"@oscharko-dev\/keiko-contracts\/runtime\/managed-lsp-route";/u,
     );
     expect(
       (adapterImport?.[1] ?? "")

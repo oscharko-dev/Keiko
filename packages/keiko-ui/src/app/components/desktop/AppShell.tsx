@@ -62,7 +62,7 @@ import { useUndoStack } from "./hooks/useUndoStack";
 import { useKeyboardShortcuts } from "./hooks/useKeyboardShortcuts";
 import { useModalInteractionLockState } from "./hooks/useModalInteractionLock";
 import type { WorkspaceUiAction, WorkspaceUndoStackApi } from "@oscharko-dev/keiko-contracts";
-import { resolveWorkspaceFileIdentifier } from "@oscharko-dev/keiko-contracts";
+import { resolveWorkspaceFileIdentifier } from "@oscharko-dev/keiko-contracts/runtime/editor-workspace-path";
 import { applyShellUndoAction, shellPanelIsOpen } from "./shell-undo-bindings";
 import type { ShellShortcutState } from "./shellShortcutState";
 import { WORKSPACE_SEARCH_FOCUS_EVENT } from "./widgets/panels/searchPanelEvents";

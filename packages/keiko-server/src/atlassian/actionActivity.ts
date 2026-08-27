@@ -9,19 +9,21 @@
 // is an issue key/page id/scope key (never a body), and the reason is exactly one closed code.
 
 import { randomUUID } from "node:crypto";
+import type {
+  AtlassianConnectorActionDisposition,
+  AtlassianConnectorActionReviewReason,
+  AtlassianConnectorActionType,
+  AtlassianConnectorActivityOutcome,
+  AtlassianConnectorActivityReasonCode,
+  AtlassianConnectorPendingApproval,
+} from "@oscharko-dev/keiko-contracts";
 import {
   ATLASSIAN_CONNECTOR_ACTION_APPROVAL_RISK,
   ATLASSIAN_CONNECTOR_ACTION_CLASS,
   ATLASSIAN_CONNECTOR_ACTION_PROVIDER,
   ATLASSIAN_CONNECTOR_ACTION_REQUIRED_SCOPE,
   ATLASSIAN_CONNECTOR_SCHEMA_VERSION,
-  type AtlassianConnectorActionDisposition,
-  type AtlassianConnectorActionReviewReason,
-  type AtlassianConnectorActionType,
-  type AtlassianConnectorActivityOutcome,
-  type AtlassianConnectorActivityReasonCode,
-  type AtlassianConnectorPendingApproval,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import { errorBody, type RouteResult } from "../routes.js";
 import type { UiHandlerDeps } from "../deps.js";
 import {

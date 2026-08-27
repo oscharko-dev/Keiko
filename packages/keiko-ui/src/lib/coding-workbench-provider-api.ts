@@ -24,11 +24,11 @@ import type {
   CodingWorkbenchCodexSubscriptionProfile,
   CodingWorkbenchSidecarGatewayResult,
 } from "@oscharko-dev/keiko-contracts";
+import { isGatewayVerificationState } from "@oscharko-dev/keiko-contracts/runtime/gateway-verification";
 import {
-  isGatewayVerificationState,
   validateCodingWorkbenchCodexAuthSetupPlan,
   validateCodingWorkbenchCodexSubscriptionProfile,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-codex-auth";
 import { ApiError } from "./api";
 import { bffFetchJson } from "./http";
 

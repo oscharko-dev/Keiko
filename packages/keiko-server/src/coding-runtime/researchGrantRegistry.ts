@@ -9,10 +9,8 @@
 // zero network calls; the cumulative byte budget is reconciled via `chargeFetch` after each read.
 // Every stored value is content-free except the in-memory-only `sanitizedQuery`, which is retained
 // for local re-hashing and is NEVER persisted, evidenced, or emitted.
-import {
-  isCodeTaskPublicDomain,
-  type AuxiliaryResearchScopeV1,
-} from "@oscharko-dev/keiko-contracts";
+import type { AuxiliaryResearchScopeV1 } from "@oscharko-dev/keiko-contracts";
+import { isCodeTaskPublicDomain } from "@oscharko-dev/keiko-contracts/runtime/code-task-auxiliary";
 
 // Defaults are bounded and fail-closed: a grant lives at most ten minutes, permits a small number
 // of fetches, and never streams more than the gateway's own per-response ceiling in aggregate.

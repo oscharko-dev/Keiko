@@ -37,7 +37,8 @@ import {
   type WorkspaceStat,
 } from "@oscharko-dev/keiko-workspace";
 import type { MicroIndex, RerankerSeam } from "@oscharko-dev/keiko-workflows";
-import { DEFAULT_CONTEXT_PROFILE, validateContextBudget } from "@oscharko-dev/keiko-contracts";
+import { DEFAULT_CONTEXT_PROFILE } from "@oscharko-dev/keiko-contracts/runtime/context-engineering";
+import { validateContextBudget } from "@oscharko-dev/keiko-contracts/runtime/context-engineering-validation";
 
 import { CancelledError } from "@oscharko-dev/keiko-model-gateway";
 

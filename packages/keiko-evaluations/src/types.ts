@@ -17,6 +17,8 @@ export type {
   ScorecardSummary,
   EvalScorecard,
   EvaluationMode,
+} from "@oscharko-dev/keiko-contracts";
+export type {
   EvalBudget,
   EvalFloorResult,
   RegressionProbeResult,
@@ -24,4 +26,4 @@ export type {
 export {
   EVALUATION_DIMENSIONS,
   EVAL_SCORECARD_SCHEMA_VERSION,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/evaluations";

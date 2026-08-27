@@ -14,7 +14,7 @@
 
 import { lstatSync, readdirSync, renameSync, rmSync } from "node:fs";
 import { join } from "node:path";
-import { sortedStrings } from "@oscharko-dev/keiko-contracts";
+import { sortedStrings } from "@oscharko-dev/keiko-contracts/runtime/stable-order";
 import { assertValidRunId } from "@oscharko-dev/keiko-security";
 import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
 import { removeOwnedRunDirectory } from "../fs-safety.js";

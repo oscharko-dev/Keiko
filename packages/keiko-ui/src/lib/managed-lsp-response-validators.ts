@@ -1,7 +1,7 @@
 import {
   parseManagedLspControlMutationResponse,
   parseManagedLspControlResponse,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/managed-lsp-route";
 
 type ManagedLspResponseValidation =
   { readonly ok: true } | { readonly ok: false; readonly reasons: readonly string[] };

@@ -25,7 +25,7 @@ import type { BugWorkflowEventSink } from "./events.js";
 // @oscharko-dev/keiko-contracts in issue #158. Re-exported here so consumers of "./types.js"
 // continue to resolve them unchanged.
 export type { BugWorkflowStatus, BugWorkflowLimits } from "@oscharko-dev/keiko-contracts";
-export { DEFAULT_BUG_WORKFLOW_LIMITS } from "@oscharko-dev/keiko-contracts";
+export { DEFAULT_BUG_WORKFLOW_LIMITS } from "@oscharko-dev/keiko-contracts/runtime/bug-investigation-events";
 
 // ─── Failure evidence (D7) ──────────────────────────────────────────────────────────
 

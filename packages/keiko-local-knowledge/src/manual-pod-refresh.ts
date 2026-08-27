@@ -17,18 +17,20 @@
 
 import { randomUUID } from "node:crypto";
 
+import type {
+  HtmlManualCrawlScope,
+  HtmlManualSource,
+  KnowledgeCapsuleId,
+  KnowledgePodSummary,
+  KnowledgeSourceId,
+  ManualRefreshChangeSummary,
+} from "@oscharko-dev/keiko-contracts";
+import { DEFAULT_DOCUMENTATION_MANUAL_SCOPE_LIMITS } from "@oscharko-dev/keiko-contracts/runtime/documentation-manual-proposal";
 import {
-  DEFAULT_DOCUMENTATION_MANUAL_SCOPE_LIMITS,
   HTML_MANUAL_SOURCE_SCHEMA_VERSION,
   htmlManualReachableFilesScope,
   validateHtmlManualSource,
-  type HtmlManualCrawlScope,
-  type HtmlManualSource,
-  type KnowledgeCapsuleId,
-  type KnowledgePodSummary,
-  type KnowledgeSourceId,
-  type ManualRefreshChangeSummary,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/html-manual-source";
 import type { OpenAIEmbeddingAdapter } from "@oscharko-dev/keiko-model-gateway";
 
 import { getCapsule } from "./capsule-lifecycle.js";

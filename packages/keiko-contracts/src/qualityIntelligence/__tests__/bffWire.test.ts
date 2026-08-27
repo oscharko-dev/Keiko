@@ -13,11 +13,9 @@ import {
   type QualityIntelligenceRequirementsSource,
   type QualityIntelligenceUiRunTotals,
 } from "../bffWire.js";
-import {
-  isQualityIntelligenceJudgeEligible,
-  QUALITY_INTELLIGENCE_DEFAULT_RETENTION_POLICY_ID,
-  type QualityIntelligenceRetentionPolicyId,
-} from "../../index.js";
+import type { QualityIntelligenceRetentionPolicyId } from "../../index.js";
+import { isQualityIntelligenceJudgeEligible } from "../bffWire.js";
+import { QUALITY_INTELLIGENCE_DEFAULT_RETENTION_POLICY_ID } from "../index.js";
 import type { ModelCapability } from "../../gateway.js";
 import type { QualityIntelligenceAuditTotals } from "../auditSummary.js";
 

@@ -4,7 +4,7 @@
 // and voice-enabled profiles present, and a reproducible result.
 
 import { describe, expect, it } from "vitest";
-import { DISCUSSION_MODES } from "@oscharko-dev/keiko-contracts";
+import { DISCUSSION_MODES } from "@oscharko-dev/keiko-contracts/runtime/discussion-intelligence";
 import {
   DISCUSSION_FIXTURE_CATEGORIES,
   DISCUSSION_QUALITY_DIMENSIONS,

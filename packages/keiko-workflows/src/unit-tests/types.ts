@@ -31,7 +31,7 @@ export type {
   FileNamingStyle,
   WorkflowLimits,
 } from "@oscharko-dev/keiko-contracts";
-export { DEFAULT_WORKFLOW_LIMITS } from "@oscharko-dev/keiko-contracts";
+export { DEFAULT_WORKFLOW_LIMITS } from "@oscharko-dev/keiko-contracts/runtime/unit-test-events";
 
 // Frontend test-stack detection and convention-driven test-style selection (Issue #1203). Re-exported
 // here so consumers of "./types.js" resolve them alongside the existing convention types.

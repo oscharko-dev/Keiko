@@ -6,14 +6,14 @@
 // that no raw content/path/origin ever leaks into the change summary or pod summary. It reuses the
 // first-crawl fixtures + fetcher rather than re-testing crawl primitives.
 
-import {
-  DEFAULT_DOCUMENTATION_MANUAL_SCOPE_LIMITS,
-  sealedLocalPodModelUsePolicy,
-  validateManualRefreshChangeSummary,
-  type HtmlManualSource,
-  type KnowledgeCapsuleId,
-  type KnowledgeSourceId,
+import type {
+  HtmlManualSource,
+  KnowledgeCapsuleId,
+  KnowledgeSourceId,
 } from "@oscharko-dev/keiko-contracts";
+import { DEFAULT_DOCUMENTATION_MANUAL_SCOPE_LIMITS } from "@oscharko-dev/keiko-contracts/runtime/documentation-manual-proposal";
+import { sealedLocalPodModelUsePolicy } from "@oscharko-dev/keiko-contracts/runtime/local-knowledge-model-use-policy";
+import { validateManualRefreshChangeSummary } from "@oscharko-dev/keiko-contracts/runtime/html-manual-refresh";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { createCapsule, updateCapsuleDetails } from "./capsule-lifecycle.js";

@@ -11,7 +11,7 @@ import {
   VOICE_PROFILE_NEGOTIATION_MODE,
   VOICE_PROTOCOL_VERSION,
   VOICE_REALTIME_CONTROL_TRANSPORT,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/voice-protocol";
 
 type WsListener = (event: unknown) => void;
 

@@ -1,30 +1,35 @@
 import { describe, it, expect } from "vitest";
 
 import { createRequire } from "node:module";
+import { KEIKO_CONTRACTS_VERSION } from "./version.js";
 import {
-  KEIKO_CONTRACTS_VERSION,
   HARNESS_CODES,
   DEFAULT_LIMITS,
   HARNESS_VERSION,
-  EVIDENCE_SCHEMA_VERSION,
-  DEFAULT_RETENTION,
-  DEFAULT_PATCH_LIMITS,
-  DEFAULT_VERIFICATION_LIMITS,
-  EVAL_SCORECARD_SCHEMA_VERSION,
   TERMINAL_STATES,
   isTerminalHarnessState,
+} from "./harness.js";
+import { EVIDENCE_SCHEMA_VERSION, DEFAULT_RETENTION } from "./evidence.js";
+import { DEFAULT_PATCH_LIMITS } from "./tools.js";
+import { DEFAULT_VERIFICATION_LIMITS } from "./verification.js";
+import { EVAL_SCORECARD_SCHEMA_VERSION } from "./evaluations.js";
+import {
   WORKFLOW_HANDOFF_SCHEMA_VERSION,
   DEFAULT_PATCH_SCOPE_LIMITS,
   EXPECTED_CHECKS,
   WORKFLOW_KINDS,
+  isApprovalTokenShape,
+  checkPatchAgainstScope,
+  validatePatchScope,
+  validateWorkflowHandoffRequest,
+} from "./workflow-handoff.js";
+import {
   CONNECTED_CONTEXT_SCHEMA_VERSION,
   MAX_OMITTED_CONTEXT_ENTRIES,
   SELECTED_SCOPE_KINDS,
-  isApprovalTokenShape,
-  checkPatchAgainstScope,
   validateSelectedScope,
-  validatePatchScope,
-  validateWorkflowHandoffRequest,
+} from "./connected-context.js";
+import {
   LOCAL_KNOWLEDGE_SCHEMA_VERSION,
   EMBEDDING_VECTOR_METRICS,
   KNOWLEDGE_SOURCE_SCOPE_KINDS,
@@ -33,23 +38,30 @@ import {
   CAPSULE_OUTPUT_MODES,
   CAPSULE_ANSWER_GROUNDING_POLICIES,
   CONNECTOR_NODE_KINDS,
+} from "./local-knowledge.js";
+import {
   DOCUMENT_STATUSES,
   PARSED_UNIT_KINDS,
   PARSER_DIAGNOSTIC_SEVERITIES,
   INDEXING_JOB_STATUSES,
   CAPSULE_REINDEX_MODES,
-  isSafeScopePath,
-  isSafeStorageReference,
+} from "./local-knowledge-records.js";
+import { isSafeScopePath, isSafeStorageReference } from "./local-knowledge-paths.js";
+import {
   isSafeDisplaySummary,
-  KNOWLEDGE_POD_SUMMARY_SCHEMA_VERSION,
-  isKnowledgePodEvidenceSafeText,
-  validateKnowledgePodSummary,
   validateEmbeddingModelIdentity,
   validateKnowledgeSourceScope,
   validateKnowledgeCapsule,
   validateCapsuleSet,
   validateCapsuleReindexRequest,
   validateConnectorGraphState,
+} from "./local-knowledge-validation.js";
+import {
+  KNOWLEDGE_POD_SUMMARY_SCHEMA_VERSION,
+  isKnowledgePodEvidenceSafeText,
+  validateKnowledgePodSummary,
+} from "./local-knowledge-pods.js";
+import {
   LOCAL_KNOWLEDGE_DB_SCHEMA_VERSION,
   KNOWLEDGE_CAPSULE_DDL,
   KNOWLEDGE_CAPSULE_INDEXES,
@@ -57,19 +69,22 @@ import {
   KNOWLEDGE_CAPSULE_TABLES,
   KNOWLEDGE_CAPSULE_INDEX_NAMES,
   DELETE_CAPSULE_SQL,
+} from "./local-knowledge-schema.js";
+import {
   INFILLING_ALIGNMENTS,
   modelSupportsInfilling,
   isAlignedInfillingModel,
   isAsYouTypeCompletionModel,
-  validateCapsuleRowShape,
-  redactPathInDiagnostic,
-  normalizePdfCitationPreviewMarkerIndex,
   assertValidGatewaySamplingParameters,
   isValidGatewaySamplingParameters,
   validateGatewaySamplingParameters,
-  MAX_ATTACHMENT_MIME_BYTES,
-  normalizeAttachmentMime,
-} from "./index.js";
+} from "./gateway.js";
+import {
+  validateCapsuleRowShape,
+  redactPathInDiagnostic,
+} from "./local-knowledge-schema-validation.js";
+import { normalizePdfCitationPreviewMarkerIndex } from "./local-knowledge-preview.js";
+import { MAX_ATTACHMENT_MIME_BYTES, normalizeAttachmentMime } from "./bff-wire.js";
 import type {
   ConnectedContextPack,
   ToolPort,
@@ -156,26 +171,32 @@ import type {
 } from "./index.js";
 import {
   GIT_DELIVERY_SCHEMA_VERSION,
-  GIT_DELIVERY_POLICY_SCHEMA_VERSION,
-  GIT_DELIVERY_PROVIDER_SCHEMA_VERSION,
   GIT_DELIVERY_ACTION_KINDS,
   GIT_DELIVERY_RISK_CLASSES,
   GIT_DELIVERY_RISK_CLASS_SEVERITY,
   GIT_DELIVERY_ACTION_RISK_DEFAULTS,
   GIT_DELIVERY_BLOCK_REASONS,
   GIT_DELIVERY_PROVIDER_CAPABILITIES,
-  GIT_DELIVERY_RULE_DECISIONS,
-  GIT_DELIVERY_CHECKS_OVERALL_STATUSES,
-  GIT_DELIVERY_PULL_REQUEST_STATUSES,
   GIT_DELIVERY_BRANCH_MATCH_KINDS,
   GIT_DELIVERY_EXECUTION_ERROR_CODES,
   GIT_DELIVERY_EXECUTION_OUTCOMES,
   GIT_DELIVERY_MERGE_BLOCK_REASONS,
   isGitDeliveryActionKind,
-  isGitDeliveryRemoteTargetPolicy,
   gitDeliveryDefaultRiskClass,
-  evaluateGitPolicy,
   parseGitDeliveryActionEnvelope,
+} from "./git-delivery.js";
+import {
+  GIT_DELIVERY_POLICY_SCHEMA_VERSION,
+  GIT_DELIVERY_RULE_DECISIONS,
+  evaluateGitPolicy,
+} from "./git-delivery-policy.js";
+import {
+  GIT_DELIVERY_PROVIDER_SCHEMA_VERSION,
+  GIT_DELIVERY_CHECKS_OVERALL_STATUSES,
+  GIT_DELIVERY_PULL_REQUEST_STATUSES,
+  isGitDeliveryRemoteTargetPolicy,
+} from "./git-delivery-provider.js";
+import {
   GIT_DELIVERY_ACTION_SHEET_SCHEMA_VERSION,
   GIT_DELIVERY_ACTION_SHEET_STATES,
   GIT_DELIVERY_APPROVAL_NECESSITIES,
@@ -186,7 +207,7 @@ import {
   gitDeliverySuggestedRecoveryStrategy,
   GIT_DELIVERY_POLICY_DECISION_OUTCOMES,
   isGitDeliveryPolicyDecisionOutcome,
-} from "./index.js";
+} from "./git-delivery-action-sheet.js";
 
 // The packaged manifest owns the version; a literal here re-states it and goes
 // stale on every release cut (KfQ findings on #3055).
@@ -490,7 +511,7 @@ describe("keiko-contracts package surface", () => {
   });
 
   it("memory contract value re-exports are reachable through the barrel (#205)", async () => {
-    const mod = await import("./index.js");
+    const mod = await import("./memory.js");
     expect(mod.MEMORY_SCHEMA_VERSION).toBe("1");
     expect(mod.MEMORY_SCOPE_KINDS).toContain("user");
     expect(mod.MEMORY_SCOPE_KINDS).toContain("global");
@@ -520,7 +541,7 @@ describe("keiko-contracts package surface", () => {
   });
 
   it("memory contract type re-exports are reachable through the barrel (#205)", async () => {
-    type Mod = typeof import("./index.js");
+    type Mod = typeof import("./memory.js");
     const pin = <T>(_value?: T): T | undefined => undefined;
     pin<Mod["MEMORY_SCOPE_KINDS"]>();
     // Phantom imports to pin the type-only surface added by #205. A future refactor that
@@ -605,7 +626,7 @@ describe("keiko-contracts package surface", () => {
   });
 
   it("memory audit event surface re-exports are reachable through the barrel (#214)", async () => {
-    const mod = await import("./index.js");
+    const mod = await import("./memory.js");
     expect(mod.MEMORY_AUDIT_EVENT_SCHEMA_VERSION).toBe("1");
     expect(mod.MEMORY_AUDIT_EVENT_SUMMARY_MAX_CHARS).toBe(240);
     expect(mod.MEMORY_AUDIT_EVENT_KINDS).toContain("memory:proposed");
@@ -656,7 +677,10 @@ describe("keiko-contracts package surface", () => {
   });
 
   it("editor-agent contract value re-exports are reachable through the barrel (#1391)", async () => {
-    const mod = await import("./index.js");
+    const mod = {
+      ...(await import("./editor-agent.js")),
+      ...(await import("./editor-agent-governance.js")),
+    };
     // Compatibility pin for the schema version constant: the public agent-editor contract is v1.
     expect(mod.EDITOR_AGENT_SCHEMA_VERSION).toBe("1");
     expect(mod.EDITOR_AGENT_DIAGNOSTICS_MAX_ITEMS).toBe(128);
@@ -786,7 +810,7 @@ describe("keiko-contracts package surface", () => {
   });
 
   it("coding workbench mode-policy contracts are reachable through the barrel (#2091)", async () => {
-    const mod = await import("./index.js");
+    const mod = await import("./coding-workbench.js");
     expect(mod.CODING_WORKBENCH_POLICY_EFFECTS).toEqual(["allowed", "approval-required", "denied"]);
     expect(mod.CODING_WORKBENCH_POLICY_RESOURCE_SCOPES).toEqual([
       "workspace-contained",
@@ -809,7 +833,7 @@ describe("keiko-contracts package surface", () => {
   });
 
   it("code task acceptance contracts are reachable through the barrel (#2385)", async () => {
-    const mod = await import("./index.js");
+    const mod = await import("./code-task-acceptance.js");
     expect(mod.CODE_TASK_ACCEPTANCE_SCHEMA_VERSION).toBe(1);
     expect(mod.CODE_TASK_ACCEPTANCE_CONTRIBUTION_KIND).toBe("code-task-acceptance-contribution");
     expect(mod.CODE_TASK_EVIDENCE_CLASSES).toHaveLength(5);
@@ -846,7 +870,10 @@ describe("keiko-contracts package surface", () => {
   });
 
   it("code task governance contracts are reachable through the barrel (#2386)", async () => {
-    const mod = await import("./index.js");
+    const mod = {
+      ...(await import("./code-task-governance.js")),
+      ...(await import("./code-task-run-control.js")),
+    };
     expect(mod.CODE_TASK_GOVERNANCE_SCHEMA_VERSION).toBe(1);
     expect(mod.CODE_TASK_GRANT_SCOPES).toEqual(["once", "task"]);
     expect(mod.GOVERNED_ACTION_KIND).toBe("governed-action");
@@ -987,7 +1014,7 @@ describe("keiko-contracts package surface", () => {
   });
 
   it("governed GitHub pull request contracts are reachable through the barrel (#477)", async () => {
-    const m = await import("./index.js");
+    const m = await import("./git-pull-request.js");
     expect(m.GIT_PULL_REQUEST_SCHEMA_VERSION).toBe("1");
     // Count assertions are intentional surface pins; bump deliberately when the surface changes.
     expect(m.GIT_PR_CHANGE_TYPES).toHaveLength(7);
@@ -1013,7 +1040,7 @@ describe("keiko-contracts package surface", () => {
   });
 
   it("managed LSP activation contracts are reachable through the barrel (#2271)", async () => {
-    const m = await import("./index.js");
+    const m = await import("./managed-lsp-activation.js");
     expect(m.MANAGED_LSP_ACTIVATION_SCHEMA_VERSION).toBe("1");
     expect(m.MANAGED_LSP_LANGUAGES).toEqual(["python", "go", "shell", "java", "rust"]);
     // Count assertions are intentional surface pins; bump deliberately when the surface changes.
@@ -1045,7 +1072,7 @@ describe("keiko-contracts package surface", () => {
   });
 
   it("managed LSP runtime configuration contracts are reachable through the barrel (#2271)", async () => {
-    const m = await import("./index.js");
+    const m = await import("./managed-lsp-runtime.js");
     expect(m.MANAGED_LSP_RUNTIME_SCHEMA_VERSION).toBe("1");
     expect(m.MANAGED_LSP_RUNTIME_ID_MAX_CHARS).toBe(128);
     expect(m.MANAGED_LSP_ETAG_MAX_CHARS).toBe(96);
@@ -1109,7 +1136,7 @@ describe("keiko-contracts package surface", () => {
   });
 
   it("managed LSP capability negotiation contracts are reachable through the barrel (#2271)", async () => {
-    const m = await import("./index.js");
+    const m = await import("./managed-lsp-capabilities.js");
     expect(m.MANAGED_LSP_CAPABILITY_SCHEMA_VERSION).toBe("1");
     expect(m.MANAGED_LSP_SEMANTIC_TOKEN_MAX_TYPES).toBe(64);
     expect(m.MANAGED_LSP_SEMANTIC_TOKEN_MAX_MODIFIERS).toBe(16);
@@ -1142,7 +1169,7 @@ describe("keiko-contracts package surface", () => {
   });
 
   it("managed LSP evidence contracts are reachable through the barrel (#2271)", async () => {
-    const m = await import("./index.js");
+    const m = await import("./managed-lsp-evidence.js");
     expect(m.MANAGED_LSP_EVIDENCE_SCHEMA_VERSION).toBe("1");
     expect(m.MANAGED_LSP_EVIDENCE_ACTOR_CLASSES).toEqual([
       "localHuman",
@@ -1180,7 +1207,7 @@ describe("keiko-contracts package surface", () => {
   });
 
   it("governed debug lifecycle contracts are reachable through the barrel (#2343)", async () => {
-    const m = await import("./index.js");
+    const m = await import("./debug/debug-lifecycle.js");
     expect(m.DEBUG_LIFECYCLE_SCHEMA_VERSION).toBe("1");
     expect(typeof m.isDebugLifecycleEvidence).toBe("function");
     const pin = <T>(_value?: T): T | undefined => undefined;
@@ -1193,7 +1220,7 @@ describe("keiko-contracts package surface", () => {
   });
 
   it("governed debug browser contracts are reachable through the barrel (#2345)", async () => {
-    const m = await import("./index.js");
+    const m = await import("./dap-debug.js");
     expect(m.DAP_DEBUG_CONTRACT_SCHEMA_VERSION).toBe("1");
     expect(m.DEBUG_SESSION_STATUSES).toContain("revoked");
     expect(m.DEBUG_EVENT_KINDS).toContain("output");
@@ -1231,7 +1258,7 @@ describe("keiko-contracts package surface", () => {
   });
 
   it("M7 editor platform contracts are reachable through the barrel (#2317)", async () => {
-    const m = await import("./index.js");
+    const m = await import("./editor-m7.js");
     expect(m.EDITOR_M7_SCHEMA_VERSION).toBe("1");
     expect(m.EDITOR_M7_SETTING_REGISTRY.map((entry) => entry.id)).toContain("fontSize");
     expect(m.EDITOR_M7_COMMAND_REGISTRY.map((entry) => entry.id)).toContain("editor.save");
@@ -1268,7 +1295,7 @@ describe("keiko-contracts package surface", () => {
   });
 
   it("HTML manual pod job contracts are reachable + enforced through the barrel (#2063)", async () => {
-    const m = await import("./index.js");
+    const m = await import("./html-manual-job.js");
     expect(m.HTML_MANUAL_POD_JOB_SCHEMA_VERSION).toBe("1");
     expect(m.HTML_MANUAL_POD_JOB_OPERATIONS).toStrictEqual(["create", "refresh"]);
     expect(m.HTML_MANUAL_POD_JOB_STATES).toContain("running");
@@ -1308,7 +1335,15 @@ describe("keiko-contracts package surface", () => {
   });
 
   it("M11 workspace foundation contracts are reachable through the barrel (#2520)", async (): Promise<void> => {
-    const m = await import("./index.js");
+    const m = {
+      ...(await import("./workspace-contract-primitives.js")),
+      ...(await import("./task-workspace.js")),
+      ...(await import("./workspace-trust.js")),
+      ...(await import("./editor-local-history.js")),
+      ...(await import("./workspace-manifest.js")),
+      ...(await import("./editor-m11-settings.js")),
+      ...(await import("./workspace-profile.js")),
+    };
     expect(m.WORKSPACE_CONTRACT_SCHEMA_VERSION).toBe(1);
     expect(m.WORKSPACE_BINDING_V2_SCHEMA_VERSION).toBe("2");
     expect(m.WORKSPACE_TRUST_LEVELS).toEqual(["trusted", "restricted"]);
@@ -1351,7 +1386,7 @@ describe("keiko-contracts package surface", () => {
   });
 
   it("the one vector-index port is reachable + fails closed through the barrel (#2556, ADR-0152 D1)", async () => {
-    const m = await import("./index.js");
+    const m = await import("./vector-index-port.js");
     expect(m.VECTOR_INDEX_NAMESPACES).toStrictEqual(["knowledge", "memory", "repo"]);
     expect(Object.isFrozen(m.VECTOR_INDEX_NAMESPACES)).toBe(true);
 
@@ -1410,7 +1445,7 @@ describe("keiko-contracts package surface", () => {
   });
 
   it("pillar-neutral retrieval context stays body-free through the barrel (#2570, ADR-0152 D6)", async () => {
-    const m = await import("./index.js");
+    const m = await import("./retrieval-context.js");
     expect(m.RETRIEVAL_CONTEXT_SCHEMA_VERSION).toBe("1");
     expect(m.RETRIEVAL_CONTEXT_PURPOSES.length).toBeGreaterThan(0);
     expect(m.RETRIEVAL_CONTEXT_SOURCE_KINDS.length).toBeGreaterThan(0);

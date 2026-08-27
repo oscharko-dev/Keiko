@@ -42,7 +42,8 @@ import {
   type OptionalWidgetTranslate,
 } from "@/lib/optional-widget-i18n";
 import type { OptionalWidgetMessageKey } from "@/lib/i18n-messages.optional.en";
-import { CODING_WORKBENCH_MODES, type CodingWorkbenchMode } from "@oscharko-dev/keiko-contracts";
+import type { CodingWorkbenchMode } from "@oscharko-dev/keiko-contracts";
+import { CODING_WORKBENCH_MODES } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench";
 
 // PascalCase aliases so the JSX tag itself signals "component", not member access (S6770).
 const FilesIcon = Icons.files;

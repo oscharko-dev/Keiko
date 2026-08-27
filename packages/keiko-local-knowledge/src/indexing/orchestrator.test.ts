@@ -17,13 +17,13 @@ import type {
   KnowledgeSourceId,
   NormalizedResponse,
 } from "@oscharko-dev/keiko-contracts";
+import type { KnowledgePodModelUsePolicy } from "@oscharko-dev/keiko-contracts";
+import { DEFAULT_LARGE_DOCUMENT_RESOURCE_POLICY } from "@oscharko-dev/keiko-contracts/runtime/local-knowledge-large-document";
 import {
-  DEFAULT_LARGE_DOCUMENT_RESOURCE_POLICY,
   KNOWLEDGE_POD_MODEL_USE_POLICY_SCHEMA_VERSION,
   sealedLocalPodModelUsePolicy,
   standardPodModelUsePolicy,
-  type KnowledgePodModelUsePolicy,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/local-knowledge-model-use-policy";
 import type { OpenAIEmbeddingOutcome } from "@oscharko-dev/keiko-model-gateway";
 import type { WorkspaceFs } from "@oscharko-dev/keiko-workspace";
 

@@ -5,18 +5,18 @@ import {
 } from "@oscharko-dev/keiko-tools";
 import { nodeSpawnFn } from "@oscharko-dev/keiko-tools/internal/exec";
 import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
-import {
-  UPDATE_SESSION_SCHEMA_VERSION,
-  type UpdateInstallMode,
-  type UpdateInstallPackageManager,
-  type UpdatePortableActivationSummary,
-  type UpdatePortableStagingSummary,
-  type UpdateRestartCommandPreview,
-  type UpdateSession,
-  type UpdateSessionFailureReason,
-  type UpdateSessionStartRequest,
-  type UpdateSessionStatus,
+import type {
+  UpdateInstallMode,
+  UpdateInstallPackageManager,
+  UpdatePortableActivationSummary,
+  UpdatePortableStagingSummary,
+  UpdateRestartCommandPreview,
+  UpdateSession,
+  UpdateSessionFailureReason,
+  UpdateSessionStartRequest,
+  UpdateSessionStatus,
 } from "@oscharko-dev/keiko-contracts";
+import { UPDATE_SESSION_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts/runtime/update-session";
 import {
   PACKAGE_NAME,
   UPDATE_COMMAND_RULES,

@@ -11,7 +11,8 @@
 // reference scores UI element coverage; our Keiko port scores atom-to-
 // candidate provenance coverage.
 
-import { compareStrings, QualityIntelligence } from "@oscharko-dev/keiko-contracts";
+import { compareStrings } from "@oscharko-dev/keiko-contracts/runtime/comparators";
+import * as QualityIntelligence from "@oscharko-dev/keiko-contracts/runtime/qualityIntelligence/index";
 import { sha256Hex } from "@oscharko-dev/keiko-security";
 
 // ─── Coverage classification ────────────────────────────────────────────────────

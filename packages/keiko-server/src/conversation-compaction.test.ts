@@ -8,15 +8,15 @@
 //  - determinism: same input -> same output (no clock / no random).
 
 import { describe, expect, it } from "vitest";
+import type { ContextProfile } from "@oscharko-dev/keiko-contracts";
 import {
   DEFAULT_CONTEXT_PROFILE,
   countContextTokens,
   countContextTokensForSegments,
   deriveContextProfile,
   estimateTokensForSegments,
-  type ContextProfile,
-  validateContextCompactionRecord,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/context-engineering";
+import { validateContextCompactionRecord } from "@oscharko-dev/keiko-contracts/runtime/context-engineering-compaction-validation";
 import { ContextOverflowError } from "@oscharko-dev/keiko-security/errors/gateway";
 import {
   conversationForGatewayWithCompaction,

@@ -5,12 +5,12 @@
 // and the derived `failureClass` getter, and asserts the contract vocabulary stays in lock-step.
 
 import { describe, expect, it } from "vitest";
+import type { WorkspaceFailureClass } from "@oscharko-dev/keiko-contracts";
 import {
   isWorkspaceFailureClass,
   WORKSPACE_FAILURE_CLASSES,
-  type WorkspaceFailureClass,
-} from "@oscharko-dev/keiko-contracts";
-import { CodedHttpError } from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/task-workspace";
+import { CodedHttpError } from "@oscharko-dev/keiko-contracts/runtime/http-error";
 import {
   classifyTaskWorkspaceError,
   TaskWorkspaceError,

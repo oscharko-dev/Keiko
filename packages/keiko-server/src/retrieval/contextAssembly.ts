@@ -2,16 +2,16 @@
 // redacted, byte-bounded candidates; this module owns deterministic provider order, auditable
 // omission handling, the total budget clamp, and final score/id packing through keiko-workspace.
 
-import {
-  RETRIEVAL_CONTEXT_SCHEMA_VERSION,
-  type RetrievalContextBudget,
-  type RetrievalContextExcerpt,
-  type RetrievalContextOmission,
-  type RetrievalContextPack,
-  type RetrievalContextSourceKind,
-  type RetrievalContextSourceTier,
-  type RetrievalPurpose,
+import type {
+  RetrievalContextBudget,
+  RetrievalContextExcerpt,
+  RetrievalContextOmission,
+  RetrievalContextPack,
+  RetrievalContextSourceKind,
+  RetrievalContextSourceTier,
+  RetrievalPurpose,
 } from "@oscharko-dev/keiko-contracts";
+import { RETRIEVAL_CONTEXT_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts/runtime/retrieval-context";
 import { selectScoredTextByByteBudget } from "@oscharko-dev/keiko-workspace";
 
 export interface RetrievalContextCandidate<

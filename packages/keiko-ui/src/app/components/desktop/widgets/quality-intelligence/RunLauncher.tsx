@@ -16,7 +16,7 @@ import {
   type WheelEvent,
   type ReactNode,
 } from "react";
-import { isQualityIntelligenceJudgeEligible } from "@oscharko-dev/keiko-contracts";
+import { isQualityIntelligenceJudgeEligible } from "@oscharko-dev/keiko-contracts/runtime/qualityIntelligence/bffWire";
 import type {
   QualityIntelligenceModelRouting,
   QualityIntelligenceFigmaSnapshotSource,

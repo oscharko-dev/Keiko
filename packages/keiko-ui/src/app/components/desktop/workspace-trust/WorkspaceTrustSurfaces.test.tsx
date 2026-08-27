@@ -2,10 +2,8 @@ import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { axe } from "jest-axe";
 import { describe, expect, it, vi } from "vitest";
-import {
-  WORKSPACE_TRUST_SCHEMA_VERSION,
-  type WorkspaceTrustStatus,
-} from "@oscharko-dev/keiko-contracts";
+import type { WorkspaceTrustStatus } from "@oscharko-dev/keiko-contracts";
+import { WORKSPACE_TRUST_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts/runtime/workspace-trust";
 import { I18nProvider } from "@/lib/i18n";
 import {
   WorkspaceTrustBadge,

@@ -1,13 +1,13 @@
 import { SDK_VERSION } from "@oscharko-dev/keiko-sdk";
-import {
-  UPDATE_PORTABLE_TARGET_ASSET_NAMES,
-  type ReleaseImpactCatalog,
-  type UpdateInstallMode,
-  type UpdatePreflightBlockerCode,
-  type UpdatePreflightPortableInstallability,
-  type UpdatePreflightReport,
-  type UpdatePortableTarget,
+import type {
+  ReleaseImpactCatalog,
+  UpdateInstallMode,
+  UpdatePreflightBlockerCode,
+  UpdatePreflightPortableInstallability,
+  UpdatePreflightReport,
+  UpdatePortableTarget,
 } from "@oscharko-dev/keiko-contracts";
+import { UPDATE_PORTABLE_TARGET_ASSET_NAMES } from "@oscharko-dev/keiko-contracts/runtime/update-session";
 import type { UiHandlerDeps } from "./deps.js";
 import type { RouteContext, RouteResult } from "./routes.js";
 import { detectUpdateInstallMode, productionUpdateFacts } from "./update-install-mode.js";

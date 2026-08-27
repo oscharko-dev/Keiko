@@ -9,14 +9,14 @@
 // diagnostic/failure message), NOT audit evidence — the ordinary no-secrets/no-cross-workspace rule
 // applies, not redaction-before-display (ADR-0126 consequence).
 
-import {
-  EDITOR_PROBLEM_MESSAGE_MAX_CHARS,
-  type EditorProblem,
-  type EditorProblemSeverity,
-  type VerificationKind,
-  type VerificationReport,
-  type VerificationResult,
+import type {
+  EditorProblem,
+  EditorProblemSeverity,
+  VerificationKind,
+  VerificationReport,
+  VerificationResult,
 } from "@oscharko-dev/keiko-contracts";
+import { EDITOR_PROBLEM_MESSAGE_MAX_CHARS } from "@oscharko-dev/keiko-contracts/runtime/editor-problems";
 import type { EditorDiagnostic } from "@oscharko-dev/keiko-editor";
 
 const FAILED_STATUSES: ReadonlySet<VerificationResult["status"]> = new Set([
@@ -290,4 +290,4 @@ export function resetEditorProblemsStoreForTests(): void {
 }
 
 // Re-exported for the panel + tests so the canonical bounded/sorted snapshot is built in one place.
-export { buildEditorProblemsSnapshot } from "@oscharko-dev/keiko-contracts";
+export { buildEditorProblemsSnapshot } from "@oscharko-dev/keiko-contracts/runtime/editor-problems";

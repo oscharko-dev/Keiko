@@ -15,12 +15,12 @@ import {
   isCommandAllowed,
   type SpawnFn,
 } from "@oscharko-dev/keiko-tools";
-import {
-  CONTAINER_TASK_RULES,
-  type ContainerCapabilityResponse,
-  type ContainerRunnerEvent,
-  type ContainerTask,
+import type {
+  ContainerCapabilityResponse,
+  ContainerRunnerEvent,
+  ContainerTask,
 } from "@oscharko-dev/keiko-contracts";
+import { CONTAINER_TASK_RULES } from "@oscharko-dev/keiko-contracts/runtime/container-runtime";
 import { createInMemoryEvidenceStore, type EvidenceStore } from "@oscharko-dev/keiko-evidence";
 import {
   buildContainerRunArgv,

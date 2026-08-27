@@ -7,25 +7,27 @@ import {
   type ConsolidationEmbedding,
   type ConsolidationResult,
 } from "@oscharko-dev/keiko-memory-consolidation";
+import type {
+  MemoryEdgeId,
+  MemoryId,
+  MemoryRecord,
+  MemoryScope,
+  MemoryScopeKind,
+  MemoryStatus,
+  MemoryType,
+  MemoryConsolidationJobEnvelopeWire,
+  MemoryConsolidationApplyPreconditionWire,
+  MemoryConsolidationApplicationWire,
+  MemoryConsolidationJobResponseWire,
+  MemoryConsolidationReviewItemWire,
+  MemoryConsolidationResultWire,
+} from "@oscharko-dev/keiko-contracts";
 import {
   MEMORY_SCOPE_KINDS,
-  MEMORY_CONSOLIDATION_EXCERPT_MAX_CHARS,
   MEMORY_STATUSES,
   MEMORY_TYPES,
-  type MemoryEdgeId,
-  type MemoryId,
-  type MemoryRecord,
-  type MemoryScope,
-  type MemoryScopeKind,
-  type MemoryStatus,
-  type MemoryType,
-  type MemoryConsolidationJobEnvelopeWire,
-  type MemoryConsolidationApplyPreconditionWire,
-  type MemoryConsolidationApplicationWire,
-  type MemoryConsolidationJobResponseWire,
-  type MemoryConsolidationReviewItemWire,
-  type MemoryConsolidationResultWire,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/memory";
+import { MEMORY_CONSOLIDATION_EXCERPT_MAX_CHARS } from "@oscharko-dev/keiko-contracts/runtime/memory-consolidation-wire";
 import type {
   ProjectId,
   UserId,

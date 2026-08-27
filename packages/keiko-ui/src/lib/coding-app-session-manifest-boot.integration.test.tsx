@@ -1,10 +1,8 @@
 import { render, waitFor } from "@testing-library/react";
 import { useEffect, type ReactNode } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import {
-  encodeCodingAppSessionPairingFragment,
-  type CodingAppSessionPairingAttestation,
-} from "@oscharko-dev/keiko-contracts";
+import type { CodingAppSessionPairingAttestation } from "@oscharko-dev/keiko-contracts";
+import { encodeCodingAppSessionPairingFragment } from "@oscharko-dev/keiko-contracts/runtime/coding-app-session";
 import { redeemCodingAppSessionPairingOnBoot } from "./coding-app-session-client";
 import { fetchWorkspaceManifests } from "./workspace-manifest-api";
 

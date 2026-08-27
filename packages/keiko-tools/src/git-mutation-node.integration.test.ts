@@ -14,7 +14,7 @@ import type {
   GitDeliveryRepoPolicyPack,
   GitDeliveryApprovalRequirement,
 } from "@oscharko-dev/keiko-contracts";
-import { GIT_DELIVERY_POLICY_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts";
+import { GIT_DELIVERY_POLICY_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts/runtime/git-delivery-policy";
 import type { WorkspaceInfo } from "@oscharko-dev/keiko-workspace";
 import { createNodeGitMutationAdapter } from "./git-mutation-node.js";
 import type { GitLocalMutationAdapter } from "./git-mutation-adapter.js";

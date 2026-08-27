@@ -1,11 +1,11 @@
 import { describe, expect, it } from "vitest";
-import {
-  UPDATE_SESSION_PHASES,
-  type UpdatePreflightReport,
-  type UpdateRemediationStatusReport,
-  type UpdateSession,
-  type UpdateSessionStatus,
+import type {
+  UpdatePreflightReport,
+  UpdateRemediationStatusReport,
+  UpdateSession,
+  UpdateSessionStatus,
 } from "@oscharko-dev/keiko-contracts";
+import { UPDATE_SESSION_PHASES } from "@oscharko-dev/keiko-contracts/runtime/update-session";
 import type {
   UpdateRemediationManager,
   UpdateSessionManager,

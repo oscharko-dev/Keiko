@@ -18,11 +18,11 @@
 // Credentials never appear here: the port materialises the Authorization header at execution
 // time (ADR-0128 D2), and these executors receive only the port and the validated base URL.
 
+import type { AtlassianConnectorWriteFailureReason } from "@oscharko-dev/keiko-contracts";
 import {
   isSafeAtlassianIdentifier,
   isSafeJiraProjectKey,
-  type AtlassianConnectorWriteFailureReason,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import type { AtlassianHttpBodyPort } from "./atlassian-http-port.js";
 import {
   asArray,

@@ -1,3 +1,12 @@
+import type {
+  CodingWorkbenchActionClass,
+  CodingWorkbenchApprovalRisk,
+  CodingWorkbenchConnectorScope,
+  CodingWorkbenchPermissionRequestKind,
+  CodingWorkbenchRuntimeHealth,
+  CodingWorkbenchSupervisedActionKind,
+  CodingWorkbenchSupervisedPolicyReason,
+} from "@oscharko-dev/keiko-contracts";
 import {
   CODING_WORKBENCH_ACTION_CLASSES,
   CODING_WORKBENCH_APPROVAL_RISKS,
@@ -6,14 +15,7 @@ import {
   CODING_WORKBENCH_RUNTIME_HEALTH_STATES,
   CODING_WORKBENCH_SUPERVISED_ACTION_KINDS,
   CODING_WORKBENCH_SUPERVISED_POLICY_REASONS,
-  type CodingWorkbenchActionClass,
-  type CodingWorkbenchApprovalRisk,
-  type CodingWorkbenchConnectorScope,
-  type CodingWorkbenchPermissionRequestKind,
-  type CodingWorkbenchRuntimeHealth,
-  type CodingWorkbenchSupervisedActionKind,
-  type CodingWorkbenchSupervisedPolicyReason,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/coding-workbench";
 import {
   parseSupervisedCodingApprovalClaim,
   type SupervisedCodingApprovalClaim,

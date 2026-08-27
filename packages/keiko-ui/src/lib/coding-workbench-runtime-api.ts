@@ -1,29 +1,31 @@
 "use client";
 
+import type {
+  CodingWorkbenchMode,
+  CodingWorkbenchRuntimeApprovalDecisionRequest,
+  CodingWorkbenchRuntimeApprovalReviewChannelPayload,
+  CodingWorkbenchRuntimeQuestionsChannelPayload,
+  CodingWorkbenchRuntimeReadiness,
+  CodingWorkbenchRuntimeRecoveryAcknowledgementRequest,
+  CodingWorkbenchRuntimeResearchChannelPayload,
+  CodingWorkbenchRuntimeResearchRevokeRequest,
+  CodingWorkbenchRuntimeResumeRequest,
+  CodingWorkbenchRuntimeRetryRequest,
+  CodingWorkbenchRuntimeSnapshot,
+  CodingWorkbenchRuntimeSseEvent,
+  CodingWorkbenchRuntimeStartRequest,
+  CodingWorkbenchRuntimeStopRequest,
+  CodingWorkbenchRuntimeTakeoverRequest,
+  CodingWorkbenchValidationResult,
+} from "@oscharko-dev/keiko-contracts";
+import { validateCodingWorkbenchRuntimeApprovalReviewChannelPayload } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime-approval-review";
+import { validateCodingWorkbenchRuntimeQuestionsChannelPayload } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime-questions";
 import {
-  validateCodingWorkbenchRuntimeApprovalReviewChannelPayload,
-  validateCodingWorkbenchRuntimeQuestionsChannelPayload,
   validateCodingWorkbenchRuntimeReadiness,
-  validateCodingWorkbenchRuntimeResearchChannelPayload,
   validateCodingWorkbenchRuntimeSnapshot,
   validateCodingWorkbenchRuntimeSseEvent,
-  type CodingWorkbenchMode,
-  type CodingWorkbenchRuntimeApprovalDecisionRequest,
-  type CodingWorkbenchRuntimeApprovalReviewChannelPayload,
-  type CodingWorkbenchRuntimeQuestionsChannelPayload,
-  type CodingWorkbenchRuntimeReadiness,
-  type CodingWorkbenchRuntimeRecoveryAcknowledgementRequest,
-  type CodingWorkbenchRuntimeResearchChannelPayload,
-  type CodingWorkbenchRuntimeResearchRevokeRequest,
-  type CodingWorkbenchRuntimeResumeRequest,
-  type CodingWorkbenchRuntimeRetryRequest,
-  type CodingWorkbenchRuntimeSnapshot,
-  type CodingWorkbenchRuntimeSseEvent,
-  type CodingWorkbenchRuntimeStartRequest,
-  type CodingWorkbenchRuntimeStopRequest,
-  type CodingWorkbenchRuntimeTakeoverRequest,
-  type CodingWorkbenchValidationResult,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime-api";
+import { validateCodingWorkbenchRuntimeResearchChannelPayload } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime-research";
 import { ApiError } from "./api";
 import { bffFetchJson } from "./http";
 import { createSameOriginApiEventSource } from "./safe-event-source";

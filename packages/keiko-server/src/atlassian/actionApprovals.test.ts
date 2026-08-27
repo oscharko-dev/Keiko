@@ -2,11 +2,11 @@
 // wall-clock races), TTL eviction, capacity, and single-use consumption.
 
 import { describe, expect, it } from "vitest";
+import type { AtlassianConnectorPendingApproval } from "@oscharko-dev/keiko-contracts";
 import {
   ATLASSIAN_APPROVAL_CONTENT_PREVIEW_MAX_CHARS,
   isSafeAtlassianContentPreview,
-  type AtlassianConnectorPendingApproval,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import {
   ATLASSIAN_ACTION_APPROVAL_MAX_PENDING,
   ATLASSIAN_ACTION_APPROVAL_TTL_MS,

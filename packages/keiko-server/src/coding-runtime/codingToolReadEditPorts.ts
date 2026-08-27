@@ -1,10 +1,10 @@
 import { createHash } from "node:crypto";
-import {
-  EDITOR_AGENT_SCHEMA_VERSION,
-  type EditorAgentAction,
-  type EditorAgentChangeset,
-  type EditorAgentGovernedAuthorityReference,
+import type {
+  EditorAgentAction,
+  EditorAgentChangeset,
+  EditorAgentGovernedAuthorityReference,
 } from "@oscharko-dev/keiko-contracts";
+import { EDITOR_AGENT_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts/runtime/editor-agent";
 import type { EditorAgentHttpClient } from "@oscharko-dev/keiko-tools";
 import { detectWorkspaceAt, discoverWithStats, isDenied } from "@oscharko-dev/keiko-workspace";
 

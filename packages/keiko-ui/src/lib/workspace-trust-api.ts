@@ -1,7 +1,8 @@
 // Co-located tests: `workspace-trust-api.test.ts` in this directory covers `fetchWorkspaceTrustStatus`,
 // `mutateWorkspaceTrust`, the `WORKSPACE_TRUST_CHANGED_EVENT` broadcast contract, and the event-shape
 // guard `workspaceTrustEventProjectId`.
-import { isWorkspaceTrustStatus, type WorkspaceTrustStatus } from "@oscharko-dev/keiko-contracts";
+import type { WorkspaceTrustStatus } from "@oscharko-dev/keiko-contracts";
+import { isWorkspaceTrustStatus } from "@oscharko-dev/keiko-contracts/runtime/workspace-trust";
 import { ApiError } from "./api";
 import { bffFetchJson } from "./http";
 

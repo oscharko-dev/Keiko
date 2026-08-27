@@ -18,7 +18,8 @@ import { createHash } from "node:crypto";
 import { closeSync, openSync, readFileSync, readSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
 import type { EvidenceManifest } from "@oscharko-dev/keiko-evidence";
-import { isStoreFingerprint, type StoreFingerprint } from "@oscharko-dev/keiko-contracts";
+import type { StoreFingerprint } from "@oscharko-dev/keiko-contracts";
+import { isStoreFingerprint } from "@oscharko-dev/keiko-contracts/runtime/store-fingerprint";
 import type { AuditResult } from "./audit.js";
 
 // The one byte that ends a log line in this format (server-log.ts's own file sink writes ASCII

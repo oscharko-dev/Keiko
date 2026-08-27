@@ -46,7 +46,7 @@ import {
   DEFAULT_LARGE_DOCUMENT_RESOURCE_POLICY,
   LARGE_DOCUMENT_DIAGNOSTIC_CODES,
   largeDocumentPolicyFingerprint,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/local-knowledge-large-document";
 import {
   assertCompatibleEmbeddingIdentity,
   verifyEmbeddingCapability,

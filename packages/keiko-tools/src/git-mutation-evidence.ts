@@ -37,11 +37,13 @@ import type {
 } from "@oscharko-dev/keiko-contracts";
 import {
   GIT_DELIVERY_EVIDENCE_SCHEMA_VERSION,
-  GIT_DELIVERY_RISK_CLASS_SEVERITY,
   gitDeliveryRecoveryDispositionForBlockReason,
   gitDeliveryRecoveryDispositionForExecutionError,
+} from "@oscharko-dev/keiko-contracts/runtime/git-delivery-evidence";
+import {
+  GIT_DELIVERY_RISK_CLASS_SEVERITY,
   gitDeliveryRiskClassForInputs,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/git-delivery";
 import { sha256Hex } from "@oscharko-dev/keiko-security";
 import { stripUnsafeFormatChars } from "@oscharko-dev/keiko-contracts/text-safety";
 import type {

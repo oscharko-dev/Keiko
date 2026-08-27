@@ -18,7 +18,10 @@
 // clock reads, no randomness — and the WorkspaceFs port is the only IO surface.
 
 import type { KnowledgeSourceScope } from "@oscharko-dev/keiko-contracts";
-import { isSafeScopePath, isSafeStorageReference } from "@oscharko-dev/keiko-contracts";
+import {
+  isSafeScopePath,
+  isSafeStorageReference,
+} from "@oscharko-dev/keiko-contracts/runtime/local-knowledge-paths";
 import type { IgnoreMatcher, WorkspaceFs, WorkspaceStat } from "@oscharko-dev/keiko-workspace";
 import { compileIgnore, isDenied, isIgnored } from "@oscharko-dev/keiko-workspace";
 

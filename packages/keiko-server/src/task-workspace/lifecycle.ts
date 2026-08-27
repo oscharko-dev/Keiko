@@ -18,14 +18,16 @@
 // service stays within the deliberately narrow #445 worktree adapter (no `git status` subcommand, no
 // adapter allowlist widening). Live re-verification of cleanliness is #447/#448's responsibility.
 
+import type {
+  TaskWorkspaceLifecycleState,
+  TaskWorkspaceTransitionContext,
+  WorkspaceEventType,
+  WorkspaceInstance,
+} from "@oscharko-dev/keiko-contracts";
 import {
   TASK_WORKSPACE_SCHEMA_VERSION,
   validateTaskWorkspaceTransition,
-  type TaskWorkspaceLifecycleState,
-  type TaskWorkspaceTransitionContext,
-  type WorkspaceEventType,
-  type WorkspaceInstance,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/task-workspace";
 import { buildBinding } from "./binding.js";
 import { assertSafeFieldValue } from "./field-safety.js";
 import { deriveManagedWorktreePath, deriveRepositoryId } from "./naming.js";

@@ -10,7 +10,7 @@
 // artifact is loadable. The serializers are deterministic and formula-injection safe.
 
 import type { IncomingMessage } from "node:http";
-import { sortedStrings } from "@oscharko-dev/keiko-contracts";
+import { sortedStrings } from "@oscharko-dev/keiko-contracts/runtime/stable-order";
 import { sha256Hex } from "@oscharko-dev/keiko-security";
 import {
   appendQualityIntelligenceExportRow,

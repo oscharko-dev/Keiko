@@ -1,10 +1,10 @@
 import { isAbsolute } from "node:path";
 
-import {
-  CODING_WORKBENCH_RUNTIME_CONTRACT_VERSION,
-  type CodingWorkbenchRuntimeEvent,
-  type CodingWorkbenchRuntimeIntent,
+import type {
+  CodingWorkbenchRuntimeEvent,
+  CodingWorkbenchRuntimeIntent,
 } from "@oscharko-dev/keiko-contracts";
+import { CODING_WORKBENCH_RUNTIME_CONTRACT_VERSION } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime";
 
 import {
   EditorAgentAuthorityRegistry,

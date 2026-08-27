@@ -1,5 +1,6 @@
 import { expect, test, type Locator, type Page } from "@playwright/test";
-import { validateWorkspaceManifest, type WorkspaceManifest } from "@oscharko-dev/keiko-contracts";
+import type { WorkspaceManifest } from "@oscharko-dev/keiko-contracts";
+import { validateWorkspaceManifest } from "@oscharko-dev/keiko-contracts/runtime/workspace-manifest";
 
 import {
   cleanupEditorWorkspaces,

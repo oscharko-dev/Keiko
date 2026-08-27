@@ -25,7 +25,7 @@ import type { ParsedUnit, ParserDiagnostic } from "@oscharko-dev/keiko-contracts
 import {
   LOCAL_KNOWLEDGE_CSV_FILE_EXTENSIONS,
   LOCAL_KNOWLEDGE_TSV_FILE_EXTENSIONS,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/local-knowledge-file-selection";
 import type {
   InternalParserResult,
   ParserAdapter,

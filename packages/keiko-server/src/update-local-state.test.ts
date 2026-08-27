@@ -16,7 +16,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
   UPDATE_HEALTH_LABELS,
   UPDATE_LOCAL_STATE_SCHEMA_VERSION,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/update-local-state";
 import {
   createUpdateLocalStateManager,
   type UpdateLocalStateManager,

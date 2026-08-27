@@ -31,7 +31,7 @@ export type TaskWorkspaceErrorCode =
   | "CLEANUP_NOT_ELIGIBLE"
   | "CLEANUP_FAILED";
 
-import { CodedHttpError, httpStatusFor } from "@oscharko-dev/keiko-contracts";
+import { CodedHttpError, httpStatusFor } from "@oscharko-dev/keiko-contracts/runtime/http-error";
 import type { WorkspaceFailureClass } from "@oscharko-dev/keiko-contracts";
 
 // The content-free outcome recorded in lifecycle evidence. `blocked` = a precondition/safety/conflict

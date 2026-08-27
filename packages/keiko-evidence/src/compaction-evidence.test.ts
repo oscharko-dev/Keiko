@@ -1,15 +1,19 @@
 import { createHash } from "node:crypto";
 import { describe, expect, it } from "vitest";
+import type {
+  ContextAssemblyDiagnostics,
+  ContextBudget,
+  ContextCompactionRecord,
+} from "@oscharko-dev/keiko-contracts";
 import {
   CONTEXT_COMPACTION_MODEL_SUMMARY_PROMPT_VERSION,
   CONTEXT_ENGINEERING_SCHEMA_VERSION,
   DEFAULT_CONTEXT_PROFILE,
+} from "@oscharko-dev/keiko-contracts/runtime/context-engineering";
+import {
   validateContextAssemblyDiagnostics,
   validateContextBudget,
-  type ContextAssemblyDiagnostics,
-  type ContextBudget,
-  type ContextCompactionRecord,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/context-engineering-validation";
 import {
   createInMemoryEvidenceStore,
   loadEvidence,

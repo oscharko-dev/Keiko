@@ -24,12 +24,12 @@ import {
   createInMemoryConfluenceFixture,
   createInMemoryJiraFixture,
 } from "@oscharko-dev/keiko-connectors";
-import {
-  ATLASSIAN_CONNECTOR_ACTION_TYPES,
-  type AtlassianConnectorActionType,
-  type CodingWorkbenchConnectorScope,
-  type CodingWorkbenchMode,
+import type {
+  AtlassianConnectorActionType,
+  CodingWorkbenchConnectorScope,
+  CodingWorkbenchMode,
 } from "@oscharko-dev/keiko-contracts";
+import { ATLASSIAN_CONNECTOR_ACTION_TYPES } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import type { RouteContext } from "../../packages/keiko-server/src/routes.js";
 import type { UiHandlerDeps } from "../../packages/keiko-server/src/deps.js";
 import type { AtlassianConnectorCredentialDeps } from "../../packages/keiko-server/src/atlassian/credentialRoutes.js";

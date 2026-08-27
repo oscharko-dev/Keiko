@@ -18,7 +18,7 @@
 // candidate/critic *dispatch* stage profiles (e.g. `pe:candidate`, `pe:critic`) and capability gating
 // are #1312's concern when productive model calls are added; they are intentionally not modelled here.
 
-import { PROMPT_ENHANCEMENT_PROFILE_IDS } from "@oscharko-dev/keiko-contracts";
+import { PROMPT_ENHANCEMENT_PROFILE_IDS } from "@oscharko-dev/keiko-contracts/runtime/prompt-enhancer";
 import type { PromptEnhancementProfileId } from "@oscharko-dev/keiko-contracts";
 
 // ─── Reasoning depth (ordered) ────────────────────────────────────────────────────

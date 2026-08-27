@@ -26,7 +26,7 @@
 import {
   EDITOR_LANGUAGE_MODE_BY_EXTENSION,
   EDITOR_LANGUAGE_MODE_IDS,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/editor-language-mode-map";
 
 /**
  * A Monaco built-in language id the Keiko Editor can render (monaco-editor 0.55.1).

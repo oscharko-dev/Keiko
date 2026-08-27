@@ -7,18 +7,18 @@
 
 import { randomUUID } from "node:crypto";
 
-import {
-  isKnowledgePodEvidenceSafeText,
-  isSafeScopePath,
-  standardPodModelUsePolicy,
-  type EmbeddingModelIdentity,
-  type KnowledgeCapsuleId,
-  type KnowledgePodModelUsePolicy,
-  type KnowledgePodSummary,
-  type KnowledgeSourceId,
-  type KnowledgeSourceScope,
-  type SharedPodRefreshTerminal,
+import type {
+  EmbeddingModelIdentity,
+  KnowledgeCapsuleId,
+  KnowledgePodModelUsePolicy,
+  KnowledgePodSummary,
+  KnowledgeSourceId,
+  KnowledgeSourceScope,
+  SharedPodRefreshTerminal,
 } from "@oscharko-dev/keiko-contracts";
+import { isKnowledgePodEvidenceSafeText } from "@oscharko-dev/keiko-contracts/runtime/local-knowledge-pods";
+import { isSafeScopePath } from "@oscharko-dev/keiko-contracts/runtime/local-knowledge-paths";
+import { standardPodModelUsePolicy } from "@oscharko-dev/keiko-contracts/runtime/local-knowledge-model-use-policy";
 import type { OpenAIEmbeddingAdapter } from "@oscharko-dev/keiko-model-gateway";
 import type { WorkspaceFs } from "@oscharko-dev/keiko-workspace";
 

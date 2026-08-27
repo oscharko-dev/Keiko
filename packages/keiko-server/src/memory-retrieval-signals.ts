@@ -19,14 +19,16 @@ import { createHash, randomUUID } from "node:crypto";
 import { isIP } from "node:net";
 
 import type { MemoryId, MemoryScope } from "@oscharko-dev/keiko-contracts/memory";
+import type {
+  EmbeddingModelIdentity,
+  VectorIndexDiagnostics,
+  VectorIndexPort,
+  VectorIndexResult,
+} from "@oscharko-dev/keiko-contracts";
 import {
   embeddingIdentityKey,
   isValidVectorIndexQuery,
-  type EmbeddingModelIdentity,
-  type VectorIndexDiagnostics,
-  type VectorIndexPort,
-  type VectorIndexResult,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/vector-index-port";
 import {
   searchUsearchAnnIndex,
   type UsearchVectorEntry,

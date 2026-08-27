@@ -14,7 +14,7 @@ import {
   RELEASE_IMPACT_PRIORITIES,
   RELEASE_IMPACT_PUBLISH_GATES,
   RELEASE_IMPACT_REMEDIATIONS,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/release-impact";
 import { isRecord, isStableVersionString } from "./update-preflight-registry.js";
 import {
   contentFreeErrorClass,

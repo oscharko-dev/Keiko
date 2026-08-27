@@ -6,7 +6,7 @@
 // prompt. NO IO, NO randomness — atom IDs are content-hash derived so the same blob yields the
 // same atoms.
 
-import { QualityIntelligence } from "@oscharko-dev/keiko-contracts";
+import * as QualityIntelligence from "@oscharko-dev/keiko-contracts/runtime/qualityIntelligence/index";
 import { sha256Hex } from "@oscharko-dev/keiko-security";
 
 import { normaliseText } from "../domain/assertions.js";

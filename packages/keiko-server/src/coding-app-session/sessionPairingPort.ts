@@ -21,7 +21,7 @@ export {
   CODING_APP_SESSION_PAIRING_CLAIM_MAX_CHARS as SESSION_PAIRING_CLAIM_MAX_CHARS,
   CODING_APP_SESSION_PAIRING_PRINCIPAL_LABEL_MAX_CHARS as SESSION_PAIRING_PRINCIPAL_LABEL_MAX_CHARS,
   isWellFormedCodingAppSessionPairingAttestation as isWellFormedSessionPairingAttestation,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/coding-app-session";
 
 /** A launcher-minted, single-use, process-bound pairing attestation presented at the pair endpoint. */
 export type SessionPairingAttestation = CodingAppSessionPairingAttestation;

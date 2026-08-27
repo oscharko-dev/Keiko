@@ -12,19 +12,21 @@
 // stored per-item `webui_path` joined onto the connector's validated https base URL — the same
 // role `resolveHtmlManualCitationTarget` plays for manual pods.
 
+import type {
+  AtlassianConnectorProvider,
+  AtlassianSyncBounds,
+  AtlassianSyncFailureReason,
+  AtlassianSyncTerminalStatus,
+  DocumentId,
+  JiraIssueCitationMetadata,
+  KnowledgeCapsuleId,
+  KnowledgeSourceId,
+} from "@oscharko-dev/keiko-contracts";
 import {
   isJiraIssueCitationMetadata,
   isSafeAtlassianConnectorBaseUrl,
-  validateAtlassianSyncBounds,
-  type AtlassianConnectorProvider,
-  type AtlassianSyncBounds,
-  type AtlassianSyncFailureReason,
-  type AtlassianSyncTerminalStatus,
-  type DocumentId,
-  type JiraIssueCitationMetadata,
-  type KnowledgeCapsuleId,
-  type KnowledgeSourceId,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
+import { validateAtlassianSyncBounds } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors-validation";
 
 import { KnowledgeStoreError } from "./errors.js";
 import type { KnowledgeStore } from "./store.js";

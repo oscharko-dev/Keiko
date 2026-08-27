@@ -1,4 +1,4 @@
-import { isRootRelativeFileIdentifier } from "@oscharko-dev/keiko-contracts";
+import { isRootRelativeFileIdentifier } from "@oscharko-dev/keiko-contracts/runtime/editor-workspace-path";
 import {
   EDITOR_AGENT_TARGET_PATH_MAX_BYTES,
   EDITOR_AGENT_WORKSPACE_ROOT_MAX_BYTES,

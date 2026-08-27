@@ -9,6 +9,20 @@
 // stripped of unsafe format characters before it can reach a model or the harness.
 
 import type { IncomingMessage, ServerResponse } from "node:http";
+import type {
+  CodingContextOmission,
+  CodingContextSourceKind,
+  EditorAgentDiagnostic,
+  EditorAgentSessionSnapshot,
+  GitEditorBlameResponse,
+  GitEditorDiffResponse,
+  GitRepositoryStatusResponse,
+  CodingWorkbenchConnectorScope,
+  CodingWorkbenchMode,
+  LanguageRange,
+  RetrievalQuery,
+  RetrievalReference,
+} from "@oscharko-dev/keiko-contracts";
 import {
   GIT_EDITOR_BLAME_MAX_LINES,
   GIT_AGENT_CONTEXT_MAX_BLAME_LINES,
@@ -16,21 +30,9 @@ import {
   GIT_AGENT_CONTEXT_MAX_HUNKS,
   parseGitEditorBlameResponse,
   parseGitEditorDiffResponse,
-  stripUnsafeFormatChars,
-  validateGitRepositoryStatusResponse,
-  type CodingContextOmission,
-  type CodingContextSourceKind,
-  type EditorAgentDiagnostic,
-  type EditorAgentSessionSnapshot,
-  type GitEditorBlameResponse,
-  type GitEditorDiffResponse,
-  type GitRepositoryStatusResponse,
-  type CodingWorkbenchConnectorScope,
-  type CodingWorkbenchMode,
-  type LanguageRange,
-  type RetrievalQuery,
-  type RetrievalReference,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/git-editor";
+import { stripUnsafeFormatChars } from "@oscharko-dev/keiko-contracts/runtime/text-safety";
+import { validateGitRepositoryStatusResponse } from "@oscharko-dev/keiko-contracts/runtime/git-repository";
 import type { MemoryScope, ProjectId } from "@oscharko-dev/keiko-contracts/memory";
 import {
   DEFAULT_SEARCH_LIMITS,

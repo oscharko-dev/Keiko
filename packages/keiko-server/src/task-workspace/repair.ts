@@ -16,6 +16,14 @@
 // mutation.
 
 import { detectWorkspaceAt } from "@oscharko-dev/keiko-workspace";
+import type {
+  TaskWorkspaceLifecycleState,
+  WorkspaceEventType,
+  WorkspaceInstance,
+  WorkspaceLock,
+  WorkspaceReconciliationOutcome,
+  WorkspaceRecoveryStrategy,
+} from "@oscharko-dev/keiko-contracts";
 import {
   TASK_WORKSPACE_SCHEMA_VERSION,
   isLegalTaskWorkspaceTransition,
@@ -24,13 +32,7 @@ import {
   reconciliationStatusFromInstance,
   validateTaskWorkspaceTransition,
   workspaceEntryOperatorActionRequired,
-  type TaskWorkspaceLifecycleState,
-  type WorkspaceEventType,
-  type WorkspaceInstance,
-  type WorkspaceLock,
-  type WorkspaceReconciliationOutcome,
-  type WorkspaceRecoveryStrategy,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/task-workspace";
 import { buildBinding } from "./binding.js";
 import { TaskWorkspaceError } from "./errors.js";
 import { assertSafeFieldValue } from "./field-safety.js";

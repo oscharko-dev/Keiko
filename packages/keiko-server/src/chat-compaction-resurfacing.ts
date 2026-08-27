@@ -1,13 +1,15 @@
+import type {
+  ContextCompactionRecord,
+  ContextProvenanceRef,
+  ContextRehydrationHandle,
+} from "@oscharko-dev/keiko-contracts";
 import {
   containsAbsolutePath,
-  partitionContextPreservedFacts,
   containsPseudoRoleMarker,
   stripUnsafeFormatChars,
-  validateContextCompactionRecord,
-  type ContextCompactionRecord,
-  type ContextProvenanceRef,
-  type ContextRehydrationHandle,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/text-safety";
+import { partitionContextPreservedFacts } from "@oscharko-dev/keiko-contracts/runtime/context-engineering";
+import { validateContextCompactionRecord } from "@oscharko-dev/keiko-contracts/runtime/context-engineering-compaction-validation";
 import {
   loadEvidence,
   type EvidenceManifest,

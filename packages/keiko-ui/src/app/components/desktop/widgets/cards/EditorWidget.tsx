@@ -15,23 +15,25 @@ import {
   type ReactNode,
 } from "react";
 import { createPortal } from "react-dom";
+import type {
+  EditorDirtyCloseIntent,
+  EditorLayoutNode,
+  EditorLayoutSplitNode,
+  EditorLayoutStateV2,
+  EditorPaneStateV2,
+  EditorSplitDirection,
+  EditorSplitDropZone,
+  WorkspaceTrustStatus,
+} from "@oscharko-dev/keiko-contracts";
 import {
   activeEditorPane,
-  createEditorDirtyCloseIntent,
   editorLayoutOpenFiles,
   editorLayoutPaneIds,
   editorLayoutReducer,
-  selectWorkspaceFileTarget,
   serializeEditorLayoutStateV2,
-  type EditorDirtyCloseIntent,
-  type EditorLayoutNode,
-  type EditorLayoutSplitNode,
-  type EditorLayoutStateV2,
-  type EditorPaneStateV2,
-  type EditorSplitDirection,
-  type EditorSplitDropZone,
-  type WorkspaceTrustStatus,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/editor-layout";
+import { createEditorDirtyCloseIntent } from "@oscharko-dev/keiko-contracts/runtime/editor-dirty-close";
+import { selectWorkspaceFileTarget } from "@oscharko-dev/keiko-contracts/runtime/editor-workspace-path";
 import type { EditorDocumentSymbol } from "@oscharko-dev/keiko-editor";
 
 import { Icons } from "../../Icons";

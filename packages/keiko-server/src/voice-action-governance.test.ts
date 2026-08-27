@@ -6,14 +6,14 @@ import { Readable } from "node:stream";
 import { EventEmitter } from "node:events";
 import { createHash } from "node:crypto";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import {
-  VOICE_TRANSCRIPT_SCHEMA_VERSION,
-  canonicalizeSpokenActionConfirmation,
-  type CommittedVoiceTranscriptProjection,
-  type SpokenActionConfirmationInput,
-  type VoiceProfile,
-  type VoiceTranscriptSource,
+import type {
+  CommittedVoiceTranscriptProjection,
+  SpokenActionConfirmationInput,
+  VoiceProfile,
+  VoiceTranscriptSource,
 } from "@oscharko-dev/keiko-contracts";
+import { VOICE_TRANSCRIPT_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts/runtime/voice-transcript";
+import { canonicalizeSpokenActionConfirmation } from "@oscharko-dev/keiko-contracts/runtime/voice-action-intent";
 import {
   DEFAULT_PATCH_SCOPE_LIMITS,
   WORKFLOW_HANDOFF_SCHEMA_VERSION,

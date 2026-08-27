@@ -12,15 +12,17 @@
 
 import { deepRedactStrings } from "@oscharko-dev/keiko-evidence";
 import type { EvidenceStore } from "@oscharko-dev/keiko-evidence";
+import type {
+  TaskWorkspaceDriftMarker,
+  TaskWorkspaceHealth,
+  TaskWorkspaceLifecycleState,
+  WorkspaceEvent,
+  WorkspaceEventType,
+} from "@oscharko-dev/keiko-contracts";
 import {
   TASK_WORKSPACE_SCHEMA_VERSION,
   validateWorkspaceEvent,
-  type TaskWorkspaceDriftMarker,
-  type TaskWorkspaceHealth,
-  type TaskWorkspaceLifecycleState,
-  type WorkspaceEvent,
-  type WorkspaceEventType,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/task-workspace";
 
 export const WORKSPACE_LIFECYCLE_EVIDENCE_KIND = "task-workspace-lifecycle" as const;
 

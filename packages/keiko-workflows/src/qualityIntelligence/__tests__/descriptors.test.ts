@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { QualityIntelligence } from "@oscharko-dev/keiko-contracts";
+import * as QualityIntelligence from "@oscharko-dev/keiko-contracts/runtime/qualityIntelligence/index";
 import {
   QI_ARTIFACT_REFINEMENT_WORKFLOW_DESCRIPTOR,
   QI_COVERAGE_REVIEW_WORKFLOW_DESCRIPTOR,

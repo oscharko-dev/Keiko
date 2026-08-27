@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 
-import { estimateTokensForSegments } from "@oscharko-dev/keiko-contracts";
+import { estimateTokensForSegments } from "@oscharko-dev/keiko-contracts/runtime/context-engineering";
 import {
   createSession,
   type EventSink,

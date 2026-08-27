@@ -1,18 +1,21 @@
 import { describe, expect, it } from "vitest";
+import type {
+  EnhancedPrompt,
+  PromptCandidateScorecard,
+  PromptCandidateSelection,
+  PromptSafetyAssessment,
+} from "./index.js";
+import { asEnhancedPromptId, PROMPT_ENHANCER_SCHEMA_VERSION } from "./prompt-enhancer.js";
 import {
-  asEnhancedPromptId,
   isPromptCandidateRejectionReason,
   isPromptCriticDimension,
   PROMPT_CANDIDATE_REJECTION_REASONS,
   PROMPT_CRITIC_DIMENSIONS,
-  PROMPT_ENHANCER_SCHEMA_VERSION,
+} from "./prompt-enhancer-critic.js";
+import {
   validatePromptCandidateScorecard,
   validatePromptCandidateSelection,
-  type EnhancedPrompt,
-  type PromptCandidateScorecard,
-  type PromptCandidateSelection,
-  type PromptSafetyAssessment,
-} from "./index.js";
+} from "./prompt-enhancer-validation.js";
 import {
   PROMPT_CANDIDATE_RANKING_EXPECTED_ORDER,
   PROMPT_CANDIDATE_RANKING_FIXTURE,

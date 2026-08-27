@@ -13,7 +13,7 @@ import {
   modelSupportsSpeechInput,
   modelSupportsSpeechOutput,
   VOICE_PERSONAS,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/gateway";
 import type {
   CompletionDegradeReason,
   CompletionModelSelection,
@@ -36,7 +36,7 @@ import type {
 export {
   isConversationEligibleModel,
   explainConversationIneligibility,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/gateway";
 export type { ConversationIneligibilityReason } from "@oscharko-dev/keiko-contracts";
 
 // Issue #1210 / ADR-0042 D5: infilling (FIM) capability helpers and the content-free
@@ -48,7 +48,7 @@ export {
   isAlignedInfillingModel,
   isAsYouTypeCompletionModel,
   INFILLING_ALIGNMENTS,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/gateway";
 export type {
   InfillingAlignment,
   CompletionInteractionMode,
@@ -74,7 +74,7 @@ export {
   listVoicePersonas,
   VOICE_PROVIDER_LOCALITIES,
   VOICE_PERSONAS,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/gateway";
 export type {
   VoiceProviderLocality,
   VoicePersona,
