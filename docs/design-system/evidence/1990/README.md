@@ -26,16 +26,21 @@ introduced for epic #1982.
 
 ## Verification Evidence
 
-Rerunnable browser harness:
+> **Historical / not reproducible by a lane.** The Coding Workbench @smoke live-runtime
+> spec `tests/e2e/coding-workbench-1990.spec.ts` was retained but its evidence-writing body was
+> removed in earlier housekeeping, so `KEIKO_WRITE_TRACKED_EVIDENCE=1 npm run
+> test:e2e:coding-workbench-1990` no longer regenerates the artifacts listed below. The tracked
+> captures record the verification as it stood when produced and are frozen at that state — the
+> committed `manifest.json` carries `status: "historical"` and `verified: false` to make this
+> explicit for a future shape audit. Live coverage for the Coding Workbench surface: the extended
+> e2e matrix suite `tests/e2e/coding-workbench-2253.spec.ts` and the @smoke live-runtime checks
+> retained in this same spec file (server-bound run + no-serious-axe-violations at narrow width),
+> which continue to gate the workbench directly without regenerating this evidence set.
+
+Historical (non-regenerating) invocation, kept for shape context only:
 
 ```bash
-npm run test:e2e:coding-workbench-1990
-```
-
-Tracked evidence regeneration:
-
-```bash
-KEIKO_WRITE_TRACKED_EVIDENCE=1 npm run test:e2e:coding-workbench-1990
+npm run test:e2e:coding-workbench-1990   # @smoke checks only; regenerates no evidence in this directory
 ```
 
 The Playwright harness writes these artifacts in this directory:
