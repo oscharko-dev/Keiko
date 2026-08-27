@@ -43,12 +43,14 @@ const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const BASELINE_PATH = join("docs", "qa", "unwired-e2e-suites.json");
 const E2E_SCRIPT_PREFIX = "test:e2e:";
 const RUNS_PER_PR = "runs-per-pr";
+const PULL_REQUEST_NONBLOCKING = "pull-request-nonblocking";
 const PUSH_NONBLOCKING = "push-nonblocking";
 const SCHEDULED_NONBLOCKING = "scheduled-nonblocking";
 const MANUAL_NONBLOCKING = "manual-nonblocking";
 const UNWIRED = "unwired";
 const PROTECTION_CLASSES = new Set([
   RUNS_PER_PR,
+  PULL_REQUEST_NONBLOCKING,
   PUSH_NONBLOCKING,
   SCHEDULED_NONBLOCKING,
   MANUAL_NONBLOCKING,
@@ -59,7 +61,10 @@ const PROTECTION_RANK = {
   [MANUAL_NONBLOCKING]: 1,
   [SCHEDULED_NONBLOCKING]: 2,
   [PUSH_NONBLOCKING]: 3,
-  [RUNS_PER_PR]: 4,
+  // A pull-request execution that may continue after a failure supplies signal, but cannot block
+  // delivery. Keep it below the blocking class while retaining that useful execution fact.
+  [PULL_REQUEST_NONBLOCKING]: 4,
+  [RUNS_PER_PR]: 5,
 };
 // Only two positions in a workflow can make a suite discoverable:
 //
@@ -470,6 +475,23 @@ function conditionsAtIndent(lines, start, end, indent) {
   return conditions;
 }
 
+function hasContinueOnErrorAtIndent(lines, start, end, indent) {
+  for (let index = start; index < end; index += 1) {
+    const raw = lines[index];
+    if (raw === undefined || lineIndent(raw) !== indent) continue;
+    const value = mappingValue(raw, "continue-on-error");
+    if (continuesOnError(value)) return true;
+  }
+  return false;
+}
+
+function continuesOnError(value) {
+  // The classification may call a lane blocking only when it can prove that a failing suite
+  // fails its step and job. An expression (or malformed value) is therefore non-blocking unless
+  // it is the literal false value GitHub Actions documents for this field.
+  return value !== undefined && value !== "false";
+}
+
 function jobStart(lines, step) {
   const first = lines[step];
   if (first === undefined) return undefined;
@@ -508,7 +530,7 @@ function jobEnd(lines, start) {
   return lines.length;
 }
 
-function directSuiteStepConditions(lines, runIndex) {
+function directSuiteStepExecution(lines, runIndex) {
   const start = stepStart(lines, runIndex);
   if (start === undefined) return undefined;
   const raw = lines[start];
@@ -528,10 +550,18 @@ function directSuiteStepConditions(lines, runIndex) {
     jobEnd(lines, job),
     lineIndent(lines[job]) + 2,
   );
-  return [...stepConditions, ...jobConditions];
+  const stepEndIndex = stepEnd(lines, start);
+  const jobEndIndex = jobEnd(lines, job);
+  return {
+    conditions: [...stepConditions, ...jobConditions],
+    continuesOnError:
+      continuesOnError(mappingValue(raw, "continue-on-error")) ||
+      hasContinueOnErrorAtIndent(lines, start + 1, stepEndIndex, stepIndent + 2) ||
+      hasContinueOnErrorAtIndent(lines, job, jobEndIndex, lineIndent(lines[job]) + 2),
+  };
 }
 
-function suiteStepConditions(script, workflowText) {
+function suiteStepExecutions(script, workflowText) {
   const lines = workflowText.split(/\r?\n/u);
   return lines.flatMap((_, index) => {
     const raw = lines[index];
@@ -541,19 +571,20 @@ function suiteStepConditions(script, workflowText) {
     ) {
       return [];
     }
-    const conditions = directSuiteStepConditions(lines, index);
-    return conditions === undefined ? [undefined] : [conditions];
+    const execution = directSuiteStepExecution(lines, index);
+    return execution === undefined ? [undefined] : [execution];
   });
 }
 
-function stepRunsOnEvent(conditions, event) {
+function stepRunsOnEvent(execution, event) {
   return (
-    conditions !== undefined &&
-    conditions.every((condition) => conditionAllowsEvent(condition, event))
+    execution !== undefined &&
+    execution.conditions.every((condition) => conditionAllowsEvent(condition, event))
   );
 }
 
-function protectionClassForEvent(event) {
+function protectionClassForEvent(event, continuesOnError) {
+  if (event === "pull_request" && continuesOnError) return PULL_REQUEST_NONBLOCKING;
   if (event === "pull_request") return RUNS_PER_PR;
   if (event === "push") return PUSH_NONBLOCKING;
   if (event === "schedule") return SCHEDULED_NONBLOCKING;
@@ -563,10 +594,10 @@ function protectionClassForEvent(event) {
 function workflowProtectionClass(script, workflowText) {
   const triggers = workflowTriggers(workflowText);
   let protection = UNWIRED;
-  for (const conditions of suiteStepConditions(script, workflowText)) {
+  for (const execution of suiteStepExecutions(script, workflowText)) {
     for (const event of triggers) {
-      if (!stepRunsOnEvent(conditions, event)) continue;
-      const eventProtection = protectionClassForEvent(event);
+      if (!stepRunsOnEvent(execution, event)) continue;
+      const eventProtection = protectionClassForEvent(event, execution.continuesOnError);
       if (PROTECTION_RANK[eventProtection] > PROTECTION_RANK[protection]) {
         protection = eventProtection;
       }

@@ -254,6 +254,48 @@ jobs:
     ]);
   });
 
+  it.each([
+    [
+      "step-level continue-on-error",
+      `
+on:
+  pull_request:
+jobs:
+  e2e:
+    steps:
+      - continue-on-error: true
+        run: npm run test:e2e:best-effort
+`,
+    ],
+    [
+      "job-level continue-on-error",
+      `
+on:
+  pull_request:
+jobs:
+  e2e:
+    continue-on-error: true
+    steps:
+      - run: npm run test:e2e:best-effort
+`,
+    ],
+  ])("classifies %s as a non-blocking pull-request execution", (_label, text) => {
+    const workflows = [{ name: "best-effort.yml", text }];
+    expect(suiteProtectionClass("test:e2e:best-effort", workflows)).toBe(
+      "pull-request-nonblocking",
+    );
+    expect(
+      checkE2eProtectionBaseline({
+        scripts: ["test:e2e:best-effort"],
+        workflows,
+        protectionBaseline: { "test:e2e:best-effort": "runs-per-pr" },
+      }).problems,
+    ).toEqual([
+      "test:e2e:best-effort protection changed from runs-per-pr to pull-request-nonblocking. " +
+        "Update its lane or the baseline through an explicit reviewed change.",
+    ]);
+  });
+
   // A workflow's PR trigger is insufficient on its own: the exact job and step that run the suite
   // must execute for a dev-targeted pull request. The parser intentionally models only this small,
   // auditable condition language and treats every other expression as non-blocking.

@@ -600,9 +600,11 @@ describe("logCompactionSummaryFailure", () => {
     // cached from this file's top-level imports; the cache must be cleared BEFORE re-importing,
     // or the fresh import below would resolve to the same already-loaded, unmocked module graph.
     vi.resetModules();
+    const enrichChatCompactionWithModelSummary = vi.fn((): Promise<void> =>
+      Promise.reject(new Error("scheduled enrichment blew up")),
+    );
     vi.doMock("./chat-compaction-model-summary.js", () => ({
-      enrichChatCompactionWithModelSummary: (): Promise<void> =>
-        Promise.reject(new Error("scheduled enrichment blew up")),
+      enrichChatCompactionWithModelSummary,
     }));
     const { recordChatCompaction } = await import("./chat-handlers.js");
     const events: ServerDiagnosticRecord[] = [];
@@ -656,6 +658,10 @@ describe("logCompactionSummaryFailure", () => {
     expect(event.correlationId).toBe("scheduling-failure-correlation-1");
     expect(event.source).toBe("chat.compaction.model-summary");
     expect(event.errorClass).toBe("Error");
+    expect(enrichChatCompactionWithModelSummary).toHaveBeenCalledWith(
+      deps,
+      expect.objectContaining({ correlationId: "scheduling-failure-correlation-1" }),
+    );
   });
 
   it("no longer logs a scheduled-enrichment failure through console.warn", () => {

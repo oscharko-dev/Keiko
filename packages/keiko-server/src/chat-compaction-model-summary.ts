@@ -28,7 +28,9 @@ import {
   persistChatCompactionEvidence,
   type ChatCompactionEvidenceInput,
 } from "./chat-compaction-evidence.js";
+import { UNKNOWN_CORRELATION_ID } from "./correlation.js";
 import { emitServerDiagnostic, serverDiagnosticFromError } from "./diagnostics-log.js";
+import { getServerLogger } from "./observability/index.js";
 
 const MODEL_SUMMARY_TIMEOUT_MS = 15_000;
 const MAX_SOURCE_TURNS = 16;
@@ -140,6 +142,9 @@ const MODEL_SUMMARY_RESPONSE_FORMAT: ResponseFormat = {
 
 export interface ChatCompactionModelSummaryInput extends ChatCompactionEvidenceInput {
   readonly historyPrefix: readonly ChatMessage[];
+  // The originating request correlation survives detached model-summary enrichment so its
+  // successful safety classification remains reconstructable in the activity log.
+  readonly correlationId?: string | undefined;
 }
 
 export async function enrichChatCompactionWithModelSummary(
@@ -151,10 +156,12 @@ export async function enrichChatCompactionWithModelSummary(
     return;
   }
   try {
-    const prompt = buildSummaryPrompt(record, input.historyPrefix, deps.redactor);
+    const facts = partitionContextPreservedFacts(record.preservedFacts);
+    const prompt = buildSummaryPrompt(record, input.historyPrefix, deps.redactor, facts);
     if (prompt === undefined) {
       return;
     }
+    logInferredFactClassification(input.correlationId, facts);
     const model = deps.modelPortFactory(input.modelId);
     const responseMode = modelSummaryResponseMode(deps, input.modelId);
     const modelSummary =
@@ -310,11 +317,12 @@ function buildSummaryPrompt(
   record: ContextCompactionRecord,
   historyPrefix: readonly ChatMessage[],
   redactor: Redactor,
+  facts: ReturnType<typeof partitionContextPreservedFacts>,
 ): string | undefined {
   const lines = [
     `Prompt version: ${CONTEXT_COMPACTION_MODEL_SUMMARY_PROMPT_VERSION}`,
     "Summarize the compacted conversation prefix for future turns.",
-    ...recordSignalLines(record),
+    ...recordSignalLines(record, facts),
     ...sourceTurnLines(record, historyPrefix),
   ];
   const redacted = redactedString(lines.join("\n"), redactor);
@@ -324,9 +332,11 @@ function buildSummaryPrompt(
   return clampText(redacted, MAX_MODEL_SOURCE_CHARS);
 }
 
-function recordSignalLines(record: ContextCompactionRecord): string[] {
+function recordSignalLines(
+  record: ContextCompactionRecord,
+  facts: ReturnType<typeof partitionContextPreservedFacts>,
+): string[] {
   const lines = ["Structured deterministic signals:"];
-  const facts = partitionContextPreservedFacts(record.preservedFacts);
   addList(
     lines,
     "Facts",
@@ -351,6 +361,27 @@ function recordSignalLines(record: ContextCompactionRecord): string[] {
   addList(lines, "Open questions", record.openQuestions);
   addList(lines, "Errors", record.failingTests);
   return lines;
+}
+
+// ADR-0173 D5 — the fact partition changes the model prompt and later resurfaced context. Record
+// that successful safety branch without preserving any fact body or chat identifier; an operator
+// can join it to the originating chat request and see why inferred entries were not treated as facts.
+function logInferredFactClassification(
+  correlationId: string | undefined,
+  facts: ReturnType<typeof partitionContextPreservedFacts>,
+): void {
+  if (facts.inferred.length === 0) {
+    return;
+  }
+  getServerLogger().info({
+    category: "gateway",
+    op: "chat.compaction.facts.classified",
+    correlationId: correlationId ?? UNKNOWN_CORRELATION_ID,
+    extra: {
+      inferredFactCount: facts.inferred.length,
+      verbatimFactCount: facts.verbatim.length,
+    },
+  });
 }
 
 function sourceTurnLines(

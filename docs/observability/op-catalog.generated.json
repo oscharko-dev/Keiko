@@ -747,6 +747,12 @@
       "package": "keiko-server"
     },
     {
+      "op": "chat.compaction.facts.classified",
+      "category": "gateway",
+      "site": "packages/keiko-server/src/chat-compaction-model-summary.ts:378",
+      "package": "keiko-server"
+    },
+    {
       "op": "chat.turn.started",
       "category": "gateway",
       "site": "packages/keiko-server/src/chat-handlers.ts:1690",

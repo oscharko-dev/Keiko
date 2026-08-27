@@ -93,6 +93,7 @@ describe("dev quality workflows", () => {
     expect(nightlyPerfEvidence).toContain("npm run --silent check:perf-evidence --");
     expect(nightlyPerfEvidence).not.toContain("check:perf-evidence:editor --");
     expect(nightlyPerfEvidence).toContain("performance-evidence-drift:");
+    expect(nightlyPerfEvidence).toContain("d12-drift:");
     expect(nightlyPerfEvidence).toContain("Performance evidence versus");
   });
 

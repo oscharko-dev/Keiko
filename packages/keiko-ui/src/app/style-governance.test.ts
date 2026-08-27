@@ -10,11 +10,10 @@ const styleExceptionsPath = resolve(repositoryRoot, "docs/design-system/styling-
 // must lower it in the same change, and any new exception needs an explicit governance decision.
 const EXPECTED_COMPATIBILITY_EXCEPTION_SOURCES = 38;
 
-type ExceptionKind = "global-selector-coupling" | "unprefixed-local-classes";
-
 interface StylingException {
   readonly source: string;
-  readonly kinds: readonly ExceptionKind[];
+  readonly globalSelectors: readonly string[];
+  readonly unprefixedLocalClasses: readonly string[];
 }
 
 interface StylingExceptionRegister {
@@ -64,45 +63,71 @@ function localClassNames(source: string): ReadonlySet<string> {
   );
 }
 
-function exceptionKinds(source: string, prefix: string): readonly ExceptionKind[] {
-  const kinds: ExceptionKind[] = [];
-  if (Array.from(localClassNames(source)).some((className) => !className.startsWith(prefix))) {
-    kinds.push("unprefixed-local-classes");
+function globalSelectors(source: string): readonly string[] {
+  const selectors: string[] = [];
+  let index = 0;
+  while (index < source.length) {
+    const globalStart = source.indexOf(":global(", index);
+    if (globalStart === -1) break;
+
+    index = globalStart + ":global(".length;
+    const selectorStart = index;
+    let depth = 1;
+    while (index < source.length && depth > 0) {
+      const character = source[index];
+      if (character === "(") depth += 1;
+      if (character === ")") depth -= 1;
+      index += 1;
+    }
+    selectors.push(source.slice(selectorStart, index - 1));
   }
-  if (source.includes(":global(")) kinds.push("global-selector-coupling");
-  return kinds;
+  return selectors.sort();
 }
 
 function exceptionRegister(): StylingExceptionRegister {
   return JSON.parse(readFileSync(styleExceptionsPath, "utf8")) as StylingExceptionRegister;
 }
 
-function registeredKinds(
+function exceptionDetails(source: string, prefix: string): Omit<StylingException, "source"> {
+  return {
+    globalSelectors: globalSelectors(source),
+    unprefixedLocalClasses: [...localClassNames(source)]
+      .filter((className) => !className.startsWith(prefix))
+      .sort(),
+  };
+}
+
+function registeredExceptions(
   register: StylingExceptionRegister,
-): ReadonlyMap<string, readonly ExceptionKind[]> {
-  return new Map(register.exceptions.map((entry) => [entry.source, entry.kinds]));
+): ReadonlyMap<string, Omit<StylingException, "source">> {
+  return new Map(register.exceptions.map(({ source, ...details }) => [source, details]));
 }
 
 describe("Design-system styling exception register", () => {
   it("is a shrink-only, exhaustive inventory of CSS Module compatibility exceptions", () => {
     const register = exceptionRegister();
-    const registered = registeredKinds(register);
-    const actual = new Map<string, readonly ExceptionKind[]>();
+    const registered = registeredExceptions(register);
+    const actual = new Map<string, Omit<StylingException, "source">>();
 
     for (const path of cssModulePaths(appDirectory)) {
-      const kinds = exceptionKinds(readFileSync(path, "utf8"), register.canonicalLocalClassPrefix);
-      if (kinds.length > 0) actual.set(relative(repositoryRoot, path), kinds);
+      const details = exceptionDetails(
+        readFileSync(path, "utf8"),
+        register.canonicalLocalClassPrefix,
+      );
+      if (details.globalSelectors.length > 0 || details.unprefixedLocalClasses.length > 0) {
+        actual.set(relative(repositoryRoot, path), details);
+      }
     }
 
-    expect(register.schemaVersion).toBe(1);
+    expect(register.schemaVersion).toBe(2);
     expect(register.canonicalLocalClassPrefix).toBe("cmp");
     expect(new Set(register.exceptions.map((entry) => entry.source)).size).toBe(
       register.exceptions.length,
     );
     expect(register.exceptions).toHaveLength(EXPECTED_COMPATIBILITY_EXCEPTION_SOURCES);
     expect([...registered.keys()].sort()).toStrictEqual([...actual.keys()].sort());
-    for (const [source, kinds] of actual) {
-      expect(registered.get(source)).toStrictEqual(kinds);
+    for (const [source, details] of actual) {
+      expect(registered.get(source)).toStrictEqual(details);
     }
   });
 
@@ -123,10 +148,7 @@ describe("Design-system styling exception register", () => {
       new Set(["marquee", "workspaceWindow", "selectionRing"]),
     );
     expect(workbench).toContain(":global(.window):has(.shell)");
-    expect(exceptionKinds(workbench, "cmp")).toStrictEqual([
-      "unprefixed-local-classes",
-      "global-selector-coupling",
-    ]);
+    expect(exceptionDetails(workbench, "cmp").globalSelectors).toContain(".window");
   });
 
   it("detects local classes in combinator positions without treating global selectors as local", () => {
@@ -136,6 +158,24 @@ describe("Design-system styling exception register", () => {
     expect(
       localClassNames(":global(.thirdParty .legacyIcon) .cmpCard { color: red; }"),
     ).toStrictEqual(new Set(["cmpCard"]));
+  });
+
+  it("detects added selectors in an already registered exception source", () => {
+    const baseline = exceptionDetails(".legacyCard :global(.vendor) { color: red; }", "cmp");
+    const expanded = exceptionDetails(
+      ".legacyCard .legacyBadge :global(.vendor .nested) { color: red; }",
+      "cmp",
+    );
+
+    expect(baseline).toStrictEqual({
+      globalSelectors: [".vendor"],
+      unprefixedLocalClasses: ["legacyCard"],
+    });
+    expect(expanded).toStrictEqual({
+      globalSelectors: [".vendor .nested"],
+      unprefixedLocalClasses: ["legacyBadge", "legacyCard"],
+    });
+    expect(expanded).not.toStrictEqual(baseline);
   });
 
   it("does not permit new bare native-control rules in the global stylesheet", () => {

@@ -1737,7 +1737,7 @@ function scheduleCompactionModelSummary(
   }
   pendingCompactionSummaries += 1;
   const handle = setImmediate(() => {
-    void enrichChatCompactionWithModelSummary(deps, { ...input, historyPrefix })
+    void enrichChatCompactionWithModelSummary(deps, { ...input, historyPrefix, correlationId })
       .catch((error: unknown) => {
         logCompactionSummaryFailure(deps, correlationId, error);
       })

@@ -1,7 +1,8 @@
 /* eslint-disable complexity, max-lines-per-function -- Polyglot regex indexing is intentionally consolidated here so resolver/scanner heuristics stay auditable in one place. */
 import { createHash } from "node:crypto";
+import { createRequire } from "node:module";
 import { dirname, normalize, posix } from "node:path";
-import ts from "typescript";
+import type * as ts from "typescript";
 import type {
   EvidenceAtom,
   EvidenceEdge,
@@ -19,6 +20,30 @@ import { buildAtom, gatherCandidates } from "./repoSearchScan.js";
 import { expandedQueryTerms } from "./repoSearchQueryTerms.js";
 import type { SearchLimits, SearchScope } from "./repoSearch.js";
 import { assertContainedRealPath } from "./realpath.js";
+
+const require = createRequire(import.meta.url);
+let cachedTypeScript: typeof ts | undefined;
+
+function isTypeScriptCompiler(value: unknown): value is typeof ts {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    "createSourceFile" in value &&
+    "ScriptKind" in value
+  );
+}
+
+function typeScriptCompiler(): typeof ts {
+  if (cachedTypeScript !== undefined) return cachedTypeScript;
+
+  const loaded: unknown = require("typescript");
+  if (!isTypeScriptCompiler(loaded)) {
+    throw new TypeError("The TypeScript compiler module has an invalid runtime shape");
+  }
+
+  cachedTypeScript = loaded;
+  return loaded;
+}
 
 export type CodeLanguage =
   | "typescript"
@@ -366,25 +391,25 @@ function parserKindForSource(scopePath: string, language: CodeLanguage): CodePar
 function scriptKindForPath(scopePath: string): ts.ScriptKind {
   switch (extension(scopePath)) {
     case "jsx":
-      return ts.ScriptKind.JSX;
+      return typeScriptCompiler().ScriptKind.JSX;
     case "js":
     case "mjs":
     case "cjs":
-      return ts.ScriptKind.JS;
+      return typeScriptCompiler().ScriptKind.JS;
     case "tsx":
-      return ts.ScriptKind.TSX;
+      return typeScriptCompiler().ScriptKind.TSX;
     case "json":
-      return ts.ScriptKind.JSON;
+      return typeScriptCompiler().ScriptKind.JSON;
     default:
-      return ts.ScriptKind.TS;
+      return typeScriptCompiler().ScriptKind.TS;
   }
 }
 
 function parseTypescriptSource(file: Omit<SourceFile, "parser" | "syntaxTree">): ts.SourceFile {
-  return ts.createSourceFile(
+  return typeScriptCompiler().createSourceFile(
     file.scopePath,
     file.text,
-    ts.ScriptTarget.Latest,
+    typeScriptCompiler().ScriptTarget.Latest,
     true,
     scriptKindForPath(file.scopePath),
   );
@@ -405,7 +430,10 @@ function stringLiteralText(node: ts.Node | undefined): string | undefined {
   if (node === undefined) {
     return undefined;
   }
-  if (ts.isStringLiteral(node) || ts.isNoSubstitutionTemplateLiteral(node)) {
+  if (
+    typeScriptCompiler().isStringLiteral(node) ||
+    typeScriptCompiler().isNoSubstitutionTemplateLiteral(node)
+  ) {
     return node.text;
   }
   return undefined;
@@ -418,10 +446,10 @@ function declarationNameText(
     return undefined;
   }
   if (
-    ts.isIdentifier(name) ||
-    ts.isStringLiteral(name) ||
-    ts.isNumericLiteral(name) ||
-    ts.isPrivateIdentifier(name)
+    typeScriptCompiler().isIdentifier(name) ||
+    typeScriptCompiler().isStringLiteral(name) ||
+    typeScriptCompiler().isNumericLiteral(name) ||
+    typeScriptCompiler().isPrivateIdentifier(name)
   ) {
     return name.text;
   }
@@ -657,7 +685,7 @@ function readTsCompilerOptions(
 ): Record<string, unknown> | undefined {
   try {
     const text = readWorkspaceFile(scope.workspace, relativePath, { maxBytes: 262_144 }, fs).text;
-    const result = ts.parseConfigFileTextToJson(relativePath, text);
+    const result = typeScriptCompiler().parseConfigFileTextToJson(relativePath, text);
     const parsed: unknown = result.error === undefined ? (result.config as unknown) : undefined;
     return isRecord(parsed) && isRecord(parsed.compilerOptions)
       ? parsed.compilerOptions
@@ -1152,36 +1180,37 @@ function collectTypescriptImportEdges(
     edges.push({ ...partial, ...resolveImportTarget(partial, pathSet, resolver) });
   };
   const visit = (node: ts.Node): void => {
-    if (ts.isImportDeclaration(node)) {
+    if (typeScriptCompiler().isImportDeclaration(node)) {
       const specifier = stringLiteralText(node.moduleSpecifier);
       if (specifier !== undefined) {
         emit("import", node, specifier);
       }
-    } else if (ts.isExportDeclaration(node)) {
+    } else if (typeScriptCompiler().isExportDeclaration(node)) {
       const specifier = stringLiteralText(node.moduleSpecifier);
       if (specifier !== undefined) {
         emit("export", node, specifier);
       }
     } else if (
-      ts.isImportEqualsDeclaration(node) &&
-      ts.isExternalModuleReference(node.moduleReference)
+      typeScriptCompiler().isImportEqualsDeclaration(node) &&
+      typeScriptCompiler().isExternalModuleReference(node.moduleReference)
     ) {
       const specifier = stringLiteralText(node.moduleReference.expression);
       if (specifier !== undefined) {
         emit("import", node, specifier);
       }
-    } else if (ts.isCallExpression(node)) {
+    } else if (typeScriptCompiler().isCallExpression(node)) {
       const [firstArg] = node.arguments;
       const specifier = stringLiteralText(firstArg);
       if (
         specifier !== undefined &&
-        (node.expression.kind === ts.SyntaxKind.ImportKeyword ||
-          (ts.isIdentifier(node.expression) && node.expression.text === "require"))
+        (node.expression.kind === typeScriptCompiler().SyntaxKind.ImportKeyword ||
+          (typeScriptCompiler().isIdentifier(node.expression) &&
+            node.expression.text === "require"))
       ) {
         emit("import", node, specifier);
       }
     }
-    ts.forEachChild(node, visit);
+    typeScriptCompiler().forEachChild(node, visit);
   };
   visit(sourceFile);
   return edges;
@@ -1242,7 +1271,11 @@ function appendTypescriptImportDeclarationBindings(
       "default",
     );
   }
-  if (clause.namedBindings === undefined || !ts.isNamedImports(clause.namedBindings)) return;
+  if (
+    clause.namedBindings === undefined ||
+    !typeScriptCompiler().isNamedImports(clause.namedBindings)
+  )
+    return;
   for (const element of clause.namedBindings.elements) {
     appendTypescriptImportBinding(
       bindings,
@@ -1268,7 +1301,7 @@ function collectTypescriptImportBindings(
   const targetBySpecifier = resolvedTargetsBySpecifier(file, imports);
   const bindings: CodeImportBinding[] = [];
   for (const statement of sourceFile.statements) {
-    if (!ts.isImportDeclaration(statement)) continue;
+    if (!typeScriptCompiler().isImportDeclaration(statement)) continue;
     appendTypescriptImportDeclarationBindings(
       bindings,
       file,
@@ -1406,7 +1439,7 @@ function appendTypescriptReExportBindings(
     bindings.push({ exporterPath, targetPath });
     return;
   }
-  if (!ts.isNamedExports(clause)) return;
+  if (!typeScriptCompiler().isNamedExports(clause)) return;
   for (const element of clause.elements) {
     bindings.push({
       exporterPath,
@@ -1428,7 +1461,7 @@ function collectTypescriptReExportBindings(
   const targetBySpecifier = resolvedTargetsBySpecifier(file, imports, "export");
   const bindings: TypescriptReExportBinding[] = [];
   for (const statement of sourceFile.statements) {
-    if (!ts.isExportDeclaration(statement)) continue;
+    if (!typeScriptCompiler().isExportDeclaration(statement)) continue;
     appendTypescriptReExportBindings(bindings, file.scopePath, targetBySpecifier, statement);
   }
   return bindings;
@@ -1436,27 +1469,34 @@ function collectTypescriptReExportBindings(
 
 function hasDefaultModifier(node: ts.Node): boolean {
   return (
-    ts.canHaveModifiers(node) &&
-    ts.getModifiers(node)?.some((modifier) => modifier.kind === ts.SyntaxKind.DefaultKeyword) ===
+    typeScriptCompiler().canHaveModifiers(node) &&
+    typeScriptCompiler()
+      .getModifiers(node)
+      ?.some((modifier) => modifier.kind === typeScriptCompiler().SyntaxKind.DefaultKeyword) ===
       true
   );
 }
 
 function defaultExportNames(statement: ts.Statement): readonly string[] {
   if (
-    (ts.isFunctionDeclaration(statement) || ts.isClassDeclaration(statement)) &&
+    (typeScriptCompiler().isFunctionDeclaration(statement) ||
+      typeScriptCompiler().isClassDeclaration(statement)) &&
     hasDefaultModifier(statement)
   ) {
     return [declarationNameText(statement.name) ?? "default"];
   }
-  if (ts.isExportAssignment(statement) && !statement.isExportEquals) {
-    return [ts.isIdentifier(statement.expression) ? statement.expression.text : "default"];
+  if (typeScriptCompiler().isExportAssignment(statement) && !statement.isExportEquals) {
+    return [
+      typeScriptCompiler().isIdentifier(statement.expression)
+        ? statement.expression.text
+        : "default",
+    ];
   }
   if (
-    !ts.isExportDeclaration(statement) ||
+    !typeScriptCompiler().isExportDeclaration(statement) ||
     statement.moduleSpecifier !== undefined ||
     statement.exportClause === undefined ||
-    !ts.isNamedExports(statement.exportClause)
+    !typeScriptCompiler().isNamedExports(statement.exportClause)
   ) {
     return [];
   }
@@ -2223,18 +2263,25 @@ function collectTypescriptFields(node: ts.Node): readonly string[] {
   const fields: string[] = [];
   const pushMemberName = (member: ts.ClassElement | ts.TypeElement): void => {
     const name =
-      ts.isPropertyDeclaration(member) || ts.isPropertySignature(member)
+      typeScriptCompiler().isPropertyDeclaration(member) ||
+      typeScriptCompiler().isPropertySignature(member)
         ? declarationNameText(member.name)
         : undefined;
     if (name !== undefined) {
       fields.push(name);
     }
   };
-  if (ts.isInterfaceDeclaration(node) || ts.isClassDeclaration(node)) {
+  if (
+    typeScriptCompiler().isInterfaceDeclaration(node) ||
+    typeScriptCompiler().isClassDeclaration(node)
+  ) {
     for (const member of node.members) {
       pushMemberName(member);
     }
-  } else if (ts.isTypeAliasDeclaration(node) && ts.isTypeLiteralNode(node.type)) {
+  } else if (
+    typeScriptCompiler().isTypeAliasDeclaration(node) &&
+    typeScriptCompiler().isTypeLiteralNode(node.type)
+  ) {
     for (const member of node.type.members) {
       pushMemberName(member);
     }
@@ -2268,39 +2315,39 @@ function collectTypescriptSymbols(file: SourceFile): readonly CodeSymbol[] {
     });
   };
   const visit = (node: ts.Node): void => {
-    if (ts.isFunctionDeclaration(node)) {
+    if (typeScriptCompiler().isFunctionDeclaration(node)) {
       emit(
         node,
         declarationNameText(node.name) ?? (hasDefaultModifier(node) ? "default" : undefined),
         "function",
       );
-    } else if (ts.isMethodDeclaration(node)) {
+    } else if (typeScriptCompiler().isMethodDeclaration(node)) {
       emit(node, declarationNameText(node.name), "method");
-    } else if (ts.isClassDeclaration(node)) {
+    } else if (typeScriptCompiler().isClassDeclaration(node)) {
       emit(
         node,
         declarationNameText(node.name) ?? (hasDefaultModifier(node) ? "default" : undefined),
         "class",
         collectTypescriptFields(node),
       );
-    } else if (ts.isInterfaceDeclaration(node)) {
+    } else if (typeScriptCompiler().isInterfaceDeclaration(node)) {
       emit(node, declarationNameText(node.name), "interface", collectTypescriptFields(node));
-    } else if (ts.isTypeAliasDeclaration(node)) {
+    } else if (typeScriptCompiler().isTypeAliasDeclaration(node)) {
       emit(node, declarationNameText(node.name), "type", collectTypescriptFields(node));
-    } else if (ts.isEnumDeclaration(node)) {
+    } else if (typeScriptCompiler().isEnumDeclaration(node)) {
       emit(node, declarationNameText(node.name), "enum");
-    } else if (ts.isModuleDeclaration(node)) {
+    } else if (typeScriptCompiler().isModuleDeclaration(node)) {
       emit(node, declarationNameText(node.name), "module");
-    } else if (ts.isVariableDeclaration(node) && node.initializer !== undefined) {
+    } else if (typeScriptCompiler().isVariableDeclaration(node) && node.initializer !== undefined) {
       emit(node, declarationNameText(node.name), "constant");
     } else if (
-      ts.isExportAssignment(node) &&
+      typeScriptCompiler().isExportAssignment(node) &&
       !node.isExportEquals &&
-      !ts.isIdentifier(node.expression)
+      !typeScriptCompiler().isIdentifier(node.expression)
     ) {
       emit(node, "default", "constant");
     }
-    ts.forEachChild(node, visit);
+    typeScriptCompiler().forEachChild(node, visit);
   };
   visit(sourceFile);
   return symbols;
@@ -2761,10 +2808,10 @@ function resolveCallTarget(
 }
 
 function calleeNameFromExpression(expression: ts.Expression): string | undefined {
-  if (ts.isIdentifier(expression)) {
+  if (typeScriptCompiler().isIdentifier(expression)) {
     return expression.text;
   }
-  if (ts.isPropertyAccessExpression(expression)) {
+  if (typeScriptCompiler().isPropertyAccessExpression(expression)) {
     return expression.name.text;
   }
   return undefined;
@@ -2782,7 +2829,7 @@ function collectTypescriptCalls(
   }
   const calls: CodeCallEdge[] = [];
   const visit = (node: ts.Node): void => {
-    if (ts.isCallExpression(node)) {
+    if (typeScriptCompiler().isCallExpression(node)) {
       const name = calleeNameFromExpression(node.expression);
       if (name !== undefined && !IGNORED_CALL_NAMES.has(name.toLowerCase())) {
         const resolved = resolveCallTarget(file.scopePath, name, byName, imports, importBindings);
@@ -2800,7 +2847,7 @@ function collectTypescriptCalls(
         }
       }
     }
-    ts.forEachChild(node, visit);
+    typeScriptCompiler().forEachChild(node, visit);
   };
   visit(sourceFile);
   return calls;
@@ -2809,17 +2856,17 @@ function collectTypescriptCalls(
 function isDeclarationNameIdentifier(node: ts.Identifier): boolean {
   const parent = node.parent;
   return (
-    (ts.isFunctionDeclaration(parent) && parent.name === node) ||
-    (ts.isClassDeclaration(parent) && parent.name === node) ||
-    (ts.isInterfaceDeclaration(parent) && parent.name === node) ||
-    (ts.isTypeAliasDeclaration(parent) && parent.name === node) ||
-    (ts.isEnumDeclaration(parent) && parent.name === node) ||
-    (ts.isModuleDeclaration(parent) && parent.name === node) ||
-    (ts.isMethodDeclaration(parent) && parent.name === node) ||
-    (ts.isVariableDeclaration(parent) && parent.name === node) ||
-    (ts.isParameter(parent) && parent.name === node) ||
-    (ts.isPropertyDeclaration(parent) && parent.name === node) ||
-    (ts.isPropertySignature(parent) && parent.name === node)
+    (typeScriptCompiler().isFunctionDeclaration(parent) && parent.name === node) ||
+    (typeScriptCompiler().isClassDeclaration(parent) && parent.name === node) ||
+    (typeScriptCompiler().isInterfaceDeclaration(parent) && parent.name === node) ||
+    (typeScriptCompiler().isTypeAliasDeclaration(parent) && parent.name === node) ||
+    (typeScriptCompiler().isEnumDeclaration(parent) && parent.name === node) ||
+    (typeScriptCompiler().isModuleDeclaration(parent) && parent.name === node) ||
+    (typeScriptCompiler().isMethodDeclaration(parent) && parent.name === node) ||
+    (typeScriptCompiler().isVariableDeclaration(parent) && parent.name === node) ||
+    (typeScriptCompiler().isParameter(parent) && parent.name === node) ||
+    (typeScriptCompiler().isPropertyDeclaration(parent) && parent.name === node) ||
+    (typeScriptCompiler().isPropertySignature(parent) && parent.name === node)
   );
 }
 
@@ -2828,23 +2875,27 @@ function isNonReferenceIdentifier(node: ts.Identifier): boolean {
   if (isDeclarationNameIdentifier(node)) {
     return true;
   }
-  if (ts.isImportSpecifier(parent) || ts.isImportClause(parent) || ts.isNamespaceImport(parent)) {
+  if (
+    typeScriptCompiler().isImportSpecifier(parent) ||
+    typeScriptCompiler().isImportClause(parent) ||
+    typeScriptCompiler().isNamespaceImport(parent)
+  ) {
     return true;
   }
-  if (ts.isExportSpecifier(parent)) {
+  if (typeScriptCompiler().isExportSpecifier(parent)) {
     return true;
   }
-  if (ts.isPropertyAccessExpression(parent) && parent.name === node) {
+  if (typeScriptCompiler().isPropertyAccessExpression(parent) && parent.name === node) {
     return true;
   }
-  if (ts.isQualifiedName(parent) && parent.right === node) {
+  if (typeScriptCompiler().isQualifiedName(parent) && parent.right === node) {
     return true;
   }
   if (
-    (ts.isPropertyAssignment(parent) ||
-      ts.isMethodDeclaration(parent) ||
-      ts.isPropertyDeclaration(parent) ||
-      ts.isPropertySignature(parent)) &&
+    (typeScriptCompiler().isPropertyAssignment(parent) ||
+      typeScriptCompiler().isMethodDeclaration(parent) ||
+      typeScriptCompiler().isPropertyDeclaration(parent) ||
+      typeScriptCompiler().isPropertySignature(parent)) &&
     parent.name === node
   ) {
     return true;
@@ -2963,7 +3014,7 @@ function collectTypescriptReferences(
   const references: CodeReferenceEdge[] = [];
   const seen = new Set<string>();
   const visit = (node: ts.Node): void => {
-    if (ts.isIdentifier(node) && !isNonReferenceIdentifier(node)) {
+    if (typeScriptCompiler().isIdentifier(node) && !isNonReferenceIdentifier(node)) {
       const resolved = resolveReferenceTarget(file, node.text, byName, importBindings);
       const range = nodeLineRange(sourceFile, node);
       if (
@@ -2996,7 +3047,7 @@ function collectTypescriptReferences(
         }
       }
     }
-    ts.forEachChild(node, visit);
+    typeScriptCompiler().forEachChild(node, visit);
   };
   visit(sourceFile);
   return references;

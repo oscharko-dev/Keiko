@@ -2,6 +2,7 @@ import { spawnSync } from "node:child_process";
 import { describe, expect, it } from "vitest";
 
 import * as codeIntelligence from "./codeIntelligenceSurface.js";
+import * as workspaceRoot from "./index.js";
 
 const TYPE_SCRIPT_BACKED_RUNTIME_EXPORTS = [
   "buildCodeIntelligenceIndex",
@@ -30,9 +31,17 @@ describe("code-intelligence public surface", () => {
     expect(`${result.stdout}\n${result.stderr}`).not.toContain("node_modules/typescript/");
   });
 
-  it("publishes all TypeScript-backed runtime values through the explicit subpath", () => {
+  it("keeps root compatibility aliases while publishing the focused subpath", () => {
     for (const exportName of TYPE_SCRIPT_BACKED_RUNTIME_EXPORTS) {
       expect(exportName in codeIntelligence).toBe(true);
+      expect(exportName in workspaceRoot).toBe(true);
     }
+
+    expect(workspaceRoot.buildCodeIntelligenceIndex).toBe(
+      codeIntelligence.buildCodeIntelligenceIndex,
+    );
+    expect(workspaceRoot.createEcosystemStructureAdapters).toBe(
+      codeIntelligence.createEcosystemStructureAdapters,
+    );
   });
 });

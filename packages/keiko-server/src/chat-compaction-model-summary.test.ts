@@ -22,6 +22,12 @@ import {
 import type { ModelPort } from "@oscharko-dev/keiko-harness";
 import type { UiHandlerDeps } from "./deps.js";
 import type { ServerDiagnosticRecord, ServerDiagnosticSink } from "./diagnostics-log.js";
+import {
+  createBufferedServerLogSink,
+  createServerLogger,
+  resetServerLogger,
+  setServerLogger,
+} from "./observability/index.js";
 import type { ChatMessage } from "./store/index.js";
 import { enrichChatCompactionWithModelSummary } from "./chat-compaction-model-summary.js";
 
@@ -31,6 +37,7 @@ const SECRET = "sk-summary-secret-1234567890abcdef";
 const ABS_PATH = "/Users/private/project/src/secret.ts";
 const SPACED_ABS_PATH = "/Users/Alice Smith/Secret Project/src/file.ts";
 const NOW = 1_700_000_000_000;
+const CORRELATION_ID = "summary-correlation-1";
 
 function response(
   content: string,
@@ -225,6 +232,7 @@ function defaultEnrichmentInput(
       message("user", `Remember the plan and ${SECRET} at ${ABS_PATH}`, 0),
       message("assistant", "Acknowledged.", 1),
     ],
+    correlationId: CORRELATION_ID,
   };
 }
 
@@ -253,12 +261,15 @@ function expectStructuredSummaryPersisted(summary: ContextCompactionModelSummary
 
 afterEach(() => {
   vi.useRealTimers();
+  resetServerLogger();
 });
 
 describe("enrichChatCompactionWithModelSummary", () => {
   it("labels inferred preserved facts instead of presenting them to the model as facts", async () => {
     const store = createInMemoryEvidenceStore();
     const calls: GatewayRequest[] = [];
+    const sink = createBufferedServerLogSink();
+    setServerLogger(createServerLogger({ sink, level: "info" }));
     const input = defaultEnrichmentInput();
     await enrichChatCompactionWithModelSummary(deps(store, structuredSummaryModel(calls)), {
       ...input,
@@ -281,6 +292,15 @@ describe("enrichChatCompactionWithModelSummary", () => {
       "Inferred statements (not facts):\n- the plan likely needs no further review",
     );
     expect(prompt).not.toContain("Facts:\n- the plan likely needs no further review");
+    expect(sink.events).toContainEqual(
+      expect.objectContaining({
+        category: "gateway",
+        op: "chat.compaction.facts.classified",
+        correlationId: CORRELATION_ID,
+        extra: { inferredFactCount: 1, verbatimFactCount: 1 },
+      }),
+    );
+    expect(sink.lines().join("\n")).not.toContain("the plan likely needs no further review");
   });
 
   it("persists a redacted bounded structured model-written summary for future resurfacing", async () => {
