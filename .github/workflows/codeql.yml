@@ -51,6 +51,10 @@ jobs:
   Analyze:
     name: Analyze (${{ matrix.language }})
     runs-on: ubuntu-latest
+    # ADR-0135 D4: a required workflow carries a repository-owned timeout appropriate to the
+    # pull-request feedback loop. A healthy CodeQL analysis of this codebase completes in single-digit
+    # minutes per language; 20 bounds a hung download or stalled query without truncating a healthy run.
+    timeout-minutes: 20
     permissions:
       actions: read
       contents: read
@@ -64,7 +68,7 @@ jobs:
         with:
           persist-credentials: false
       - name: Initialize CodeQL
-        uses: github/codeql-action/init@d1ba80a13dd99fba24a470575428917156a28b43 # v4.37.5
+        uses: github/codeql-action/init@ff2f1c621b7f889edc0d3c761ac2e6a3f8cdb0dd # v4.37.7
         with:
           languages: ${{ matrix.language }}
           build-mode: none

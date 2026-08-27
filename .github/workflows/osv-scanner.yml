@@ -23,6 +23,10 @@ jobs:
   scan:
     name: Scan dependency lockfiles
     runs-on: ubuntu-latest
+    # ADR-0135 D4: a required workflow carries a repository-owned timeout appropriate to the
+    # pull-request feedback loop. A healthy scan of this repository's lockfiles completes in under a
+    # minute; 10 bounds a hung download or a stalled scanner without truncating a healthy run.
+    timeout-minutes: 10
     permissions:
       contents: read
     steps:
