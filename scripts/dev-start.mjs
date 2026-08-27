@@ -1,7 +1,6 @@
 import { Buffer } from "node:buffer";
 import { spawn, spawnSync } from "node:child_process";
 import { randomBytes, randomUUID } from "node:crypto";
-import { createServer } from "node:net";
 import {
   closeSync,
   chmodSync,
@@ -20,6 +19,7 @@ import { setTimeout as sleep } from "node:timers/promises";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 import { hostDevLaneTarget, stageDevCodingRuntime } from "./stage-dev-coding-runtime.mjs";
+import { probePortFree } from "./lib/port-probe.mjs";
 
 const scriptPath = fileURLToPath(import.meta.url);
 const repoRoot = resolve(dirname(scriptPath), "..");
@@ -314,13 +314,7 @@ export function ensureDevGatewayConfig(seams = DEFAULT_ENSURE_DEV_GATEWAY_CONFIG
 }
 
 function checkPortAvailable(port) {
-  return new Promise((resolveAvailable) => {
-    const server = createServer();
-    server.once("error", () => resolveAvailable(false));
-    server.listen(port, host, () => {
-      server.close(() => resolveAvailable(true));
-    });
-  });
+  return probePortFree(port, host);
 }
 
 async function findAvailablePort(start) {
@@ -633,10 +627,10 @@ function stopSpawnedChild(child) {
 // message that names the first instance's stateDir. Two concurrent invocations otherwise both
 // run `npm run build` in the shared repo tree and race to bind the same ports; the loser
 // crashes with a stack that never mentions the collision.
-const DEV_START_LOCK_FILE = join(stateDir, "dev-start.lock");
-const DEV_START_LOCK_WAIT_MS = 60_000;
+export const DEV_START_LOCK_FILE = join(stateDir, "dev-start.lock");
+export const DEV_START_LOCK_WAIT_MS = 60_000;
 
-async function withDevStartLock(work) {
+export async function withDevStartLock(work) {
   mkdirSync(stateDir, { recursive: true });
   const started = Date.now();
   let fd;

@@ -14,7 +14,9 @@ import {
   explained,
   fileURLToPath,
   header,
+  installControlPipeErrorGuard,
   launchPacket as sharedLaunchPacket,
+  raiseControlPipeErrorIfIncomplete,
   readBytes,
   response,
   streamReader,
@@ -107,31 +109,6 @@ function boundedDiagnostic(label, buffer) {
 /* Windows children need SystemRoot for Win32/CRT plumbing; everything else stays withheld. */
 function hermeticWindowsEnv() {
   return { SystemRoot: process.env.SystemRoot ?? String.raw`C:\Windows` };
-}
-
-// KEIKO-0636: without this listener a supervisor that exits between spawn and our first
-// write() ends stdio[3] before we hand it a launchPacket, and the EPIPE/ERR_STREAM_DESTROYED
-// reaches the harness as an uncaught stream error instead of a stage-annotated failure. Return
-// a getter so the caller can surface the error after the try/finally block (throwing from a
-// finally would shadow any pending exception; `no-unsafe-finally` catches that).
-function installControlPipeErrorGuard(child) {
-  const state = { error: undefined };
-  child.stdio[3].on("error", (streamError) => {
-    state.error ??= streamError;
-  });
-  return state;
-}
-
-// KEIKO-0636: after the try/finally block, surface the pipe error attributed to the stage in
-// flight, but only if the try body did not complete. `completed` is set at the last line of
-// the try body so any early throw carries the original error, not this one.
-function raiseControlPipeErrorIfIncomplete(stage, controlPipeErrorState, completed) {
-  const streamError = controlPipeErrorState.error;
-  if (streamError && !completed) {
-    throw new Error(`${stage}: control pipe error before completion — ${streamError.message}`, {
-      cause: streamError,
-    });
-  }
 }
 
 async function qualifyWindows(helper, runtime, root) {

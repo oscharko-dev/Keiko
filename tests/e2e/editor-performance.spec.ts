@@ -1761,6 +1761,7 @@ async function collectEvidenceMeasurements(
 const B11_PEAK_GROWTH_BUDGET_BYTES = 128 * 1024 * 1024;
 const B11_RESIDUAL_GROWTH_BUDGET_BYTES = 16 * 1024 * 1024;
 
+// eslint-disable-next-line max-lines-per-function -- single release-evidence gate asserting every B4/B5/B6/B11 budget and worker-load guard together; splitting would scatter the coupled expectations.
 function assertEvidenceBudgets(
   evidence: {
     b4ColdStartMs: { budgetP50: number; budgetP95: number; p50: number; p95: number };

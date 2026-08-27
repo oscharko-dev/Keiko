@@ -1,9 +1,12 @@
 import { Buffer } from "node:buffer";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+import { existsSync } from "node:fs";
+
 import {
   codingRuntimeHealth,
   codingRuntimeRequired,
+  DEV_START_LOCK_FILE,
   ensureDevCodingRuntime,
   maybeOpenPairedBrowser,
   npmCommand,
@@ -14,6 +17,7 @@ import {
   resolveExternalOpener,
   run,
   shouldShellNpmCommand,
+  withDevStartLock,
 } from "../dev-start.mjs";
 
 // KEIKO-0286: a stale KEIKO_CONFIG_FILE inherited from a sourced operator .env used to suppress the
@@ -535,5 +539,45 @@ describe("dev-start gateway config credentials seed (KEIKO-0542)", () => {
     };
     ensureDevGatewayConfig(seams);
     expect(notices.join("\n")).toMatch(/no credentials\/ subdirectory next to/u);
+  });
+});
+
+// KEIKO-0719: `npm run dev:start` acquires a per-stateDir lockfile so two concurrent invocations
+// serialise instead of colliding in `npm run build` and racing for the same ports. The lock file
+// is an atomic O_EXCL|O_CREAT create at `$stateDir/dev-start.lock`. Regression: prove serialization
+// by holding the lock in one call while a second call queues behind it.
+describe("dev-start concurrency lock (KEIKO-0719)", () => {
+  it("serialises two concurrent withDevStartLock calls in FIFO order", async () => {
+    const order = [];
+    const first = withDevStartLock(async () => {
+      order.push("A-start");
+      await new Promise((resolveDelay) => globalThis.setTimeout(resolveDelay, 50));
+      order.push("A-end");
+    });
+    // Give A a tick to acquire the lock and start work.
+    await new Promise((resolveTick) => globalThis.setImmediate(resolveTick));
+    const second = withDevStartLock(async () => {
+      order.push("B-start");
+      order.push("B-end");
+    });
+    await Promise.all([first, second]);
+    expect(order).toEqual(["A-start", "A-end", "B-start", "B-end"]);
+    // Lock file removed after both settle.
+    expect(existsSync(DEV_START_LOCK_FILE)).toBe(false);
+  });
+
+  it("releases the lock even when the wrapped work throws", async () => {
+    await expect(
+      withDevStartLock(async () => {
+        throw new Error("boom");
+      }),
+    ).rejects.toThrow(/boom/);
+    expect(existsSync(DEV_START_LOCK_FILE)).toBe(false);
+    // A subsequent call must succeed (proves the lock file was released).
+    const marker = { ran: false };
+    await withDevStartLock(async () => {
+      marker.ran = true;
+    });
+    expect(marker.ran).toBe(true);
   });
 });

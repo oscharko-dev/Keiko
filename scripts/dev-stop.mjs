@@ -1,5 +1,6 @@
 import { readFileSync, rmSync } from "node:fs";
-import { createServer } from "node:net";
+
+import { probePortFree } from "./lib/port-probe.mjs";
 import { dirname, join, resolve } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
@@ -67,20 +68,13 @@ function removePidFile() {
 
 // KEIKO-0734: even after every tracked pid has exited, an orphaned `dev-bff.mjs` child (spawned
 // via `node --watch`) can keep the BFF port bound long enough for the next `npm run dev:start`
-// to collide. Report "stopped cleanly" only when the tracked ports are also released. Mirrors
-// scripts/dev-start.mjs's checkPortAvailable — a bind-and-close probe on the loopback host.
-const host = "127.0.0.1";
+// to collide. Report "stopped cleanly" only when the tracked ports are also released. Shared
+// probePortFree keeps this and dev-start.mjs's checkPortAvailable in lockstep.
 function checkPortReleased(port) {
   if (typeof port !== "number" || !Number.isInteger(port) || port <= 0 || port > 65_535) {
     return Promise.resolve(true);
   }
-  return new Promise((resolveAvailable) => {
-    const server = createServer();
-    server.once("error", () => resolveAvailable(false));
-    server.listen(port, host, () => {
-      server.close(() => resolveAvailable(true));
-    });
-  });
+  return probePortFree(port);
 }
 
 export function trackedListeningPorts(state) {
@@ -97,11 +91,10 @@ export function trackedListeningPorts(state) {
 }
 
 async function checkPortsReleased(ports) {
-  const remaining = [];
-  for (const port of ports) {
-    if (!(await checkPortReleased(port))) remaining.push(port);
-  }
-  return remaining;
+  // Probes are independent (separate ports, no shared state); parallelise so a fleet of tracked
+  // ports resolves in one round instead of one per port.
+  const released = await Promise.all(ports.map(checkPortReleased));
+  return ports.filter((_, index) => !released[index]);
 }
 
 const DEFAULT_STOP_SEAMS = {

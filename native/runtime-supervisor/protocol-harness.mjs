@@ -250,3 +250,30 @@ export async function explained(stage, promise, exited, stderr) {
   }
   return raced;
 }
+
+// KEIKO-0636 shared helpers: without this listener a supervisor that exits between spawn and the
+// harness's first write() ends stdio[3] before we hand it a launchPacket, and the EPIPE/
+// ERR_STREAM_DESTROYED reaches the harness as an uncaught stream error instead of a stage-
+// annotated failure. Extracted here so both Windows and macOS harnesses share the same
+// attribution logic (previously duplicated across three qualify functions).
+export function installControlPipeErrorGuard(child) {
+  const state = { error: undefined };
+  child.stdio[3].on("error", (streamError) => {
+    state.error ??= streamError;
+  });
+  return state;
+}
+
+// After the try/finally block, surface the pipe error attributed to the stage in flight, but
+// only if the try body did not complete. `completed` is set at the last line of the try body
+// so any early throw carries the original error, not this one. Kept OUT of the finally block:
+// `no-unsafe-finally` forbids throwing from finally because a pending exception from the try
+// body would be shadowed.
+export function raiseControlPipeErrorIfIncomplete(stage, controlPipeErrorState, completed) {
+  const streamError = controlPipeErrorState.error;
+  if (streamError && !completed) {
+    throw new Error(`${stage}: control pipe error before completion — ${streamError.message}`, {
+      cause: streamError,
+    });
+  }
+}

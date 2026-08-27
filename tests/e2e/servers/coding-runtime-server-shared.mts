@@ -236,7 +236,7 @@ function verificationRunner(fixtureLabel: string): Pick<VerificationRunnerManage
 // above the observed 1-2 skips a healthy script would produce, and fail with a message that
 // names the invariant.
 const SCRIPTED_QUESTION_SKIP_CEILING = 8;
-function nextScriptedTurn(
+export function nextScriptedTurn(
   script: ScriptState,
   includeQuestion: boolean,
   transcript: string,

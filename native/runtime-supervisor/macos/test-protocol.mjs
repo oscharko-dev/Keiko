@@ -10,7 +10,9 @@ import { fileURLToPath } from "node:url";
 // clang compile of the fixture and its two-mode qualification runner (KEIKO-0277).
 import {
   header,
+  installControlPipeErrorGuard,
   launchPacket,
+  raiseControlPipeErrorIfIncomplete,
   readBytes,
   response,
   streamReader,
@@ -70,13 +72,7 @@ async function qualify(helper, fixture, root) {
     child.once("error", reject);
     child.once("close", resolve);
   });
-  // KEIKO-0636 (mirrors qualifyWindows): without this listener a supervisor that exits between
-  // spawn and our first write() ends stdio[3] before we hand it a launchPacket, and the
-  // resulting EPIPE surfaces as an uncaught stream error instead of a stage-annotated failure.
-  let controlPipeError;
-  child.stdio[3].on("error", (streamError) => {
-    controlPipeError ??= streamError;
-  });
+  const controlPipeErrorState = installControlPipeErrorGuard(child);
   const deadline = setTimeout(() => child.kill(), DEADLINE_MS);
   let completed = false;
   try {
@@ -105,11 +101,7 @@ async function qualify(helper, fixture, root) {
     if (!completed) child.kill("SIGKILL");
     await exited.catch(() => undefined);
   }
-  if (controlPipeError && !completed) {
-    throw new Error(`qualify: control pipe error before completion — ${controlPipeError.message}`, {
-      cause: controlPipeError,
-    });
-  }
+  raiseControlPipeErrorIfIncomplete("qualify", controlPipeErrorState, completed);
 }
 
 /**
@@ -144,10 +136,7 @@ async function assertControlEofFailsClosed(helper, fixture, root) {
     child.once("error", reject);
     child.once("close", resolve);
   });
-  let controlPipeError;
-  child.stdio[3].on("error", (streamError) => {
-    controlPipeError ??= streamError;
-  });
+  const controlPipeErrorState = installControlPipeErrorGuard(child);
   const deadline = setTimeout(() => child.kill(), DEADLINE_MS);
   let completed = false;
   try {
@@ -168,12 +157,11 @@ async function assertControlEofFailsClosed(helper, fixture, root) {
     if (!completed) child.kill("SIGKILL");
     await exited.catch(() => undefined);
   }
-  if (controlPipeError && !completed) {
-    throw new Error(
-      `assertControlEofFailsClosed: control pipe error before completion — ${controlPipeError.message}`,
-      { cause: controlPipeError },
-    );
-  }
+  raiseControlPipeErrorIfIncomplete(
+    "assertControlEofFailsClosed",
+    controlPipeErrorState,
+    completed,
+  );
 }
 
 // KEIKO-0277 (review-follow-up): the assertions below used to run against the RAW source, so a

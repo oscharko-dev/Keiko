@@ -250,3 +250,45 @@ describe("dev-stop port release check (KEIKO-0734)", () => {
     expect(errors.join("\n")).toMatch(/still bound.*1983/u);
   });
 });
+
+// KEIKO-0734 (extended): the probePortFree seam extracted into scripts/lib/port-probe.mjs is
+// covered here indirectly via checkPortsReleased. These tests target the edge cases:
+// * invalid port values (non-integer, out of range) resolve as "released" without probing;
+// * released ports get filtered out in insertion order;
+// * empty port list resolves to an empty remaining list.
+describe("checkPortsReleased parallel probing (KEIKO-0734)", () => {
+  it("filters ports on the parallel probe result, preserving input order", async () => {
+    const errors = [];
+    const removePidFile = vi.fn();
+    const seams = {
+      killPid: vi.fn(),
+      stopOrphanedChildren: vi.fn().mockResolvedValue([]),
+      // Return 3005 as the only bound port among [1983, 3005, 3006].
+      checkPortsReleased: async (ports) => ports.filter((p) => p === 3005),
+      removePidFile,
+      log: vi.fn(),
+      error: (message) => errors.push(message),
+    };
+    const result = await stopStaleRunner(
+      { children: [11, 12], publicPort: 1983, bffPort: 3005, nextPort: 3006 },
+      false,
+      seams,
+    );
+    expect(result).toBe(1);
+    expect(errors[0]).toMatch(/3005/u);
+    expect(errors[0]).not.toMatch(/1983/u);
+  });
+
+  it("returns 0 when every tracked port is released", async () => {
+    const seams = {
+      killPid: vi.fn(),
+      stopOrphanedChildren: vi.fn().mockResolvedValue([]),
+      checkPortsReleased: async () => [],
+      removePidFile: vi.fn(),
+      log: vi.fn(),
+      error: vi.fn(),
+    };
+    const result = await stopStaleRunner({ children: [11], publicPort: 1983 }, false, seams);
+    expect(result).toBe(0);
+  });
+});

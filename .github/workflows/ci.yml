@@ -622,8 +622,8 @@ jobs:
           if-no-files-found: error
           retention-days: 1
 
-  # KEIKO-1021: the SonarCloud-scope `if:` condition is duplicated at ci.yml:767, 782, 794,
-  # and 808 (four coupled sites in this job). GitHub Actions has no `if:`-level variable
+  # KEIKO-1021: the SonarCloud-scope `if:` condition is duplicated at ci.yml:755, 770, 782,
+  # and 796 (four coupled sites in this job). GitHub Actions has no `if:`-level variable
   # interpolation, so the four expressions must be edited together. Any change to one — adding a
   # trigger, restricting a branch, or narrowing a base_ref — must be applied to all four to keep
   # the coverage-sonar scope coherent across the job's four gated steps.
