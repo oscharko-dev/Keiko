@@ -86,6 +86,7 @@ describe("freshness options", () => {
     const options = freshnessOptionsFor(false);
 
     expect(options.toolchainTouched).toBe(true);
+    expect(options.workspaceToolchainTouched).toBe(true);
     expect(options.enforceSourceFreshness).toBe(false);
     expect(options.dirtySubjectPaths).toEqual([]);
     expect(options.computeBaselineSourceTreeSha256()).toBe(D12_PINNED_BASELINE_SOURCE_TREE_SHA256);
@@ -96,7 +97,10 @@ describe("freshness options", () => {
     const previous = process.env.KEIKO_PERF_EVIDENCE_BASE_REF;
     process.env.KEIKO_PERF_EVIDENCE_BASE_REF = "HEAD";
 
-    expect(freshnessOptionsFor(true).toolchainTouched).toBe(true);
+    const options = freshnessOptionsFor(true);
+
+    expect(options.toolchainTouched).toBe(true);
+    expect(options.workspaceToolchainTouched).toBe(true);
 
     if (previous === undefined) delete process.env.KEIKO_PERF_EVIDENCE_BASE_REF;
     else process.env.KEIKO_PERF_EVIDENCE_BASE_REF = previous;
@@ -217,10 +221,14 @@ describe("command line dispatch", () => {
     expect(io.gate).not.toHaveBeenCalled();
   });
 
-  it("routes --target editor and the empty invocation to the right lane", () => {
+  it("routes named targets and the empty invocation to the right lane", () => {
     const editor = harness();
     executePerfEvidenceCli(["--target", "editor"], editor);
     expect(editor.gate).toHaveBeenCalledWith("editor", false, false);
+
+    const workspace = harness();
+    executePerfEvidenceCli(["--target", "workspace"], workspace);
+    expect(workspace.gate).toHaveBeenCalledWith("workspace", false, false);
 
     const all = harness();
     executePerfEvidenceCli([], all);
@@ -278,6 +286,21 @@ describe("gate target selection", () => {
 
     expect(code).toBe(0);
     expect(seen).toEqual(["editor"]);
+  });
+
+  it("resolves the real workspace target", () => {
+    const seen = [];
+    const code = runGate("workspace", false, false, {
+      evaluateTarget: (target) => {
+        seen.push(target.name);
+        return { failures: [], notes: [] };
+      },
+      log: vi.fn(),
+      fail: vi.fn(),
+    });
+
+    expect(code).toBe(0);
+    expect(seen).toEqual(["workspace"]);
   });
 
   it("resolves both real targets for the full run", () => {

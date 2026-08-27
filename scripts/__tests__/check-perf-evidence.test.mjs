@@ -23,6 +23,10 @@ import {
   toolchainTouchedAgainst,
 } from "../check-perf-evidence.mjs";
 import { readEvidence } from "../perf-evidence-gate.mjs";
+import {
+  evaluateWorkspaceEvidenceFreshness,
+  workspaceToolchainTouchedAgainst,
+} from "../workspace-performance-evidence-gate.mjs";
 
 const BASELINE_COMMIT = "18750d079e2a61c7d7044f3f6ec977a104b9884f";
 const CANDIDATE_COMMIT = "6c3d061e6c3d061e6c3d061e6c3d061e6c3d061e";
@@ -1975,6 +1979,24 @@ describe("evaluateFreshness — pull-request mode (source freshness owned by the
     expect(failures.join("\n")).toMatch(/stale D12 measurement toolchain evidence/u);
   });
 
+  it("rejects workspace evidence measured with a stale workspace toolchain", () => {
+    const currentDigest = "e".repeat(64);
+    const failures = evaluateWorkspaceEvidenceFreshness(
+      { ...workspaceEvidence(), measurementHarnessSha256: MEASUREMENT_HARNESS_SHA_256 },
+      {
+        computeMeasurementHarnessSha256: () => currentDigest,
+        computeSourceTreeSha256: computeMatchingSourceTreeSha256,
+        isAncestor,
+        toolchainTouched: true,
+      },
+    ).failures;
+
+    expect(failures).toContain(
+      `measurementHarnessSha256 ${MEASUREMENT_HARNESS_SHA_256} != current committed ${currentDigest} ` +
+        "(stale workspace measurement toolchain evidence)",
+    );
+  });
+
   // The other half of the same invariant: a diff that leaves the toolchain alone cannot be the
   // reason evidence was measured with a different ruler, and must not be failed for it. Without
   // this, one pull request editing a D12_MEASUREMENT_TOOLCHAIN_PATHS member turns the required
@@ -2122,6 +2144,21 @@ describe("toolchainTouchedAgainst", () => {
 
   it("resolves the real change set through git when no lister is injected", () => {
     expect(toolchainTouchedAgainst("HEAD")).toBe(false);
+  });
+});
+
+describe("workspaceToolchainTouchedAgainst", () => {
+  it("is true when the workspace measurement ruler changes", () => {
+    expect(
+      workspaceToolchainTouchedAgainst("base", ".", () => [
+        "README.md",
+        "tests/e2e/workspace-performance.spec.ts",
+      ]),
+    ).toBe(true);
+  });
+
+  it("is false for a change outside the workspace measurement ruler", () => {
+    expect(workspaceToolchainTouchedAgainst("base", ".", () => ["README.md"])).toBe(false);
   });
 });
 

@@ -3,6 +3,7 @@
   "commit": "cb608f90fdb42a7b6ba5e98ed3f1e962d5b56d65",
   "freshnessBinding": "source-tree-v1",
   "sourceTreeSha256": "3f2bd8a2e1012574d9744846566ddc667def990f1b19a495f6e6d1d45cdd2fb8",
+  "measurementHarnessSha256": "fd898b89b8f93ebdd51957eb07675e2484959b9cea4377c08dd068dc5996c7a8",
   "harness": "packaged CLI serving the production static UI via tests/e2e/config/playwright.workspace-performance.config.ts",
   "runs": {
     "chromium": {

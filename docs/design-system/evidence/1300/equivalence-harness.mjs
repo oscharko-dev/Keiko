@@ -1,8 +1,8 @@
 // Issue #1300 — consolidated Design System 0.4.0 reference-fidelity visual-regression suite.
 //
-// This is the epic #1290 CAPSTONE gate. Children #1296–#1299 each proved ONE ported component
-// layer resolves identically to its DS 0.4.0 reference. This harness re-proves the UNION of those
-// surfaces in a single re-runnable pass, so a future drift in ANY migrated layer fails one gate.
+// This is the epic #1290 historical CAPSTONE evidence script. Children #1296–#1299 each proved ONE ported component
+// layer resolved identically to its DS 0.4.0 reference. This harness reproduces the UNION of those
+// surfaces in one historical pass, so a manual re-run reports any divergence from that snapshot.
 //
 // It renders the same component markup with two CSS sources, in headless Chromium, across all 7
 // theme/contrast/motion modes via page.setContent (no file server — CodeQL-safe):

@@ -6,6 +6,14 @@ import { parse } from "yaml";
 const root = resolve(import.meta.dirname, "..", "..");
 const mutation = readFileSync(resolve(root, ".github/workflows/mutation-security.yml"), "utf8");
 const ci = readFileSync(resolve(root, ".github/workflows/ci.yml"), "utf8");
+const nightlyPerfEvidence = readFileSync(
+  resolve(root, ".github/workflows/nightly-perf-evidence.yml"),
+  "utf8",
+);
+const visualRegression = readFileSync(
+  resolve(root, "docs/design-system/visual-regression.md"),
+  "utf8",
+);
 const ciWorkflow = parse(ci, { maxAliasCount: 0 });
 const mutationScope = readFileSync(resolve(root, "scripts/check-mutation-scope.mjs"), "utf8");
 const localSonar = readFileSync(resolve(root, "docker/gates/run-sonar.sh"), "utf8");
@@ -50,6 +58,18 @@ describe("dev quality workflows", () => {
     expect(uiJob).toContain("npm run check:perf-evidence:editor");
   });
 
+  it("checks both committed performance documents nightly without running a hosted measurement", () => {
+    expect(nightlyPerfEvidence).toContain("npm run --silent check:perf-evidence --");
+    expect(nightlyPerfEvidence).not.toContain("check:perf-evidence:editor --");
+    expect(nightlyPerfEvidence).toContain("performance-evidence-drift:");
+    expect(nightlyPerfEvidence).toContain("Performance evidence versus");
+  });
+
+  it("does not represent migration-era design equivalence evidence as a standing gate", () => {
+    expect(visualRegression).toContain("All twelve browser equivalence harnesses");
+    expect(visualRegression).toContain("not standing CI or pull-request gates");
+  });
+
   it("keeps functional UI checks blocking and moves hosted performance to post-merge evidence", () => {
     const uiJob = ci.match(/ {2}ui:\n[\s\S]*$/u)?.[0];
     const performanceStep = uiJob?.match(
@@ -81,6 +101,8 @@ describe("dev quality workflows", () => {
       "if: ${{ github.event_name == 'pull_request' || github.event_name == 'merge_group' }}",
     );
     expect(performanceStep).toContain("npm run check:perf-evidence:editor");
+    expect(performanceStep).toContain("Validate workspace performance evidence freshness");
+    expect(performanceStep).toContain("npm run check:perf-evidence:workspace");
     expect(freshnessStep).toContain(
       "if: ${{ github.event_name == 'push' || github.event_name == 'workflow_dispatch' }}",
     );
