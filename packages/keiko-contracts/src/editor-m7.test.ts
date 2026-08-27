@@ -507,7 +507,7 @@ describe("M7 keybinding, snippet, and AI activation contracts", () => {
     ).toMatchObject({ ok: false, reasonCode: "KEYBINDING_COLLISION" });
   });
 
-  it("allows explicit context-disjoint reuse and normalizes persisted override records", () => {
+  it("rejects overlapping context reuse and normalizes persisted override records", () => {
     expect(
       validateEditorM7Keybinding({
         commandId: "view.splitRight",
@@ -521,7 +521,7 @@ describe("M7 keybinding, snippet, and AI activation contracts", () => {
         binding: "Shift+Alt+X",
         activeBindings: [{ commandId: "open-editor-settings", binding: "Shift+Alt+X" }],
       }),
-    ).toStrictEqual({ ok: true, value: "Alt+Shift+X" });
+    ).toMatchObject({ ok: false, reasonCode: "KEYBINDING_COLLISION" });
     const record = serializeEditorM7KeybindingOverride({
       schemaVersion: "1",
       commandId: "view.splitRight",

@@ -19,7 +19,11 @@ describe("code-intelligence public surface", () => {
     const result = spawnSync(
       process.execPath,
       ["--input-type=module", "--eval", 'await import("@oscharko-dev/keiko-workspace");'],
-      { encoding: "utf8", env: { ...process.env, NODE_DEBUG: "esm" } },
+      {
+        encoding: "utf8",
+        env: { ...process.env, NODE_DEBUG: "esm" },
+        maxBuffer: 64 * 1024 * 1024,
+      },
     );
 
     expect(result.status).toBe(0);
