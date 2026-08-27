@@ -1335,7 +1335,9 @@ describe("ConnectorGraph — DisconnectConfirmDialog focus management (test-plan
   it("moves focus into the dialog (first focusable) on open", async () => {
     await openDisconnectDialog();
     const dialog = screen.getByRole("dialog", { name: /disconnect Knowledge Pod/i });
-    expect(document.activeElement).toBe(within(dialog).getByRole("button", { name: /cancel/i }));
+    await waitFor(() => {
+      expect(document.activeElement).toBe(within(dialog).getByRole("button", { name: /cancel/i }));
+    });
   });
 
   it("traps Tab within the dialog, wrapping last -> first", async () => {
