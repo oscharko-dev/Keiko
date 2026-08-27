@@ -52,9 +52,11 @@ jobs:
     name: Analyze (${{ matrix.language }})
     runs-on: ubuntu-latest
     # ADR-0135 D4: a required workflow carries a repository-owned timeout appropriate to the
-    # pull-request feedback loop. A healthy CodeQL analysis of this codebase completes in single-digit
-    # minutes per language; 20 bounds a hung download or stalled query without truncating a healthy run.
-    timeout-minutes: 20
+    # pull-request feedback loop. The `actions` matrix arm completes in ~1 min; the
+    # `javascript-typescript` matrix arm reaches ~20 min on this monorepo when improved incremental
+    # analysis has to fall back to a full analysis (run #33043921592 truncated at 20m). 60 bounds a
+    # hung download or stalled query without truncating a healthy full JS/TS analysis.
+    timeout-minutes: 60
     permissions:
       actions: read
       contents: read
