@@ -44,17 +44,17 @@ interface ModeEvidence {
 interface EvidenceManifest {
   readonly issue: "#1296";
   readonly harness: "tests/e2e/config/playwright.issue-1296-editor-agent.config.ts";
-  readonly appPath: "packaged-cli-ui";
-  readonly route: "/";
+  readonly appPath: "static-evidence-fixture";
+  readonly route: null;
   readonly evidencePath: "docs/design-system/evidence/1296/editor";
   readonly generatedAt: string;
   readonly designReference: "design-system/editor-agent.html";
   readonly productCss: "packages/keiko-ui/src/app/globals.css";
   readonly assertions: {
-    readonly packagedUiLoaded: true;
-    readonly editorAgentGhostMatchesEditorGhost: true;
+    readonly fixtureUsesProductCssTokens: true;
+    readonly fixtureGhostTokenAliasesLegacyGhost: true;
     readonly screenshotsCaptured: number;
-    readonly authorityBearingFlowsPrimitiveOnly: true;
+    readonly fixtureAuthorityPrimitivesVisible: true;
   };
   readonly modes: readonly ModeEvidence[];
   readonly notes: readonly string[];
@@ -300,6 +300,11 @@ async function applyMode(page: Page, mode: ModeDefinition): Promise<void> {
     { dataTheme: mode.dataTheme, dataHc: mode.dataHc },
   );
   await expect(page.locator("[data-evidence-root]")).toBeVisible();
+  await expect(page.locator(".e1296-ghost")).toBeVisible();
+  await expect(page.locator(".e1296-legacy-ghost-probe")).toBeVisible();
+  await expect(page.locator(".ai-conf")).toBeVisible();
+  await expect(page.locator(".ai-permit")).toBeVisible();
+  await expect(page.locator(".ai-danger")).toBeVisible();
 }
 
 async function collectModeEvidence(
@@ -339,6 +344,7 @@ async function collectModeEvidence(
 }
 
 function expectModeEvidence(evidence: Pick<ModeEvidence, "tokenValues" | "resolved">): void {
+  expect(evidence.tokenValues["--ed-agent-ghost"]).not.toBe("");
   expect(evidence.tokenValues["--ed-agent-ghost"]).toBe(evidence.tokenValues["--ed-ghost"]);
   expect(evidence.resolved.agentGhostColor).toBe(evidence.resolved.legacyGhostColor);
   expect(evidence.resolved.agentLineBackground).not.toBe("");
@@ -376,23 +382,23 @@ test("Issue #1296 editor-agent context parity evidence", async ({ page }) => {
   const manifest: EvidenceManifest = {
     issue: "#1296",
     harness: "tests/e2e/config/playwright.issue-1296-editor-agent.config.ts",
-    appPath: "packaged-cli-ui",
-    route: "/",
+    appPath: "static-evidence-fixture",
+    route: null,
     evidencePath: "docs/design-system/evidence/1296/editor",
     generatedAt: new Date().toISOString(),
     designReference: "design-system/editor-agent.html",
     productCss: "packages/keiko-ui/src/app/globals.css",
     assertions: {
-      packagedUiLoaded: true,
-      editorAgentGhostMatchesEditorGhost: true,
+      fixtureUsesProductCssTokens: true,
+      fixtureGhostTokenAliasesLegacyGhost: true,
       screenshotsCaptured: modes.length,
-      authorityBearingFlowsPrimitiveOnly: true,
+      fixtureAuthorityPrimitivesVisible: true,
     },
     modes,
     notes: [
-      "Screenshots cover real editor-context agent primitives in Dark, Light, and High Contrast.",
-      "Monaco ghost text consumes --ed-agent-ghost, which aliases --ed-ghost without visual drift.",
-      "Permission and sensitive-action prompts are token-backed primitives only in #1296; live authority wiring remains deferred to #1405.",
+      "Screenshots cover a static editor-context fixture in Dark, Light, and High Contrast.",
+      "The fixture imports product CSS and verifies --ed-agent-ghost aliases --ed-ghost.",
+      "The fixture renders authority-related primitives but does not exercise live authority flows.",
     ],
     artifacts: ARTIFACT_NAMES,
   };

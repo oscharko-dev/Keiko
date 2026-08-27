@@ -1,17 +1,17 @@
 {
   "issue": "#1296",
   "harness": "tests/e2e/config/playwright.issue-1296-editor-agent.config.ts",
-  "appPath": "packaged-cli-ui",
-  "route": "/",
+  "appPath": "static-evidence-fixture",
+  "route": null,
   "evidencePath": "docs/design-system/evidence/1296/editor",
-  "generatedAt": "2026-06-26T01:11:05.362Z",
+  "generatedAt": "2026-08-27T08:49:18.262Z",
   "designReference": "design-system/editor-agent.html",
   "productCss": "packages/keiko-ui/src/app/globals.css",
   "assertions": {
-    "packagedUiLoaded": true,
-    "editorAgentGhostMatchesEditorGhost": true,
+    "fixtureUsesProductCssTokens": true,
+    "fixtureGhostTokenAliasesLegacyGhost": true,
     "screenshotsCaptured": 3,
-    "authorityBearingFlowsPrimitiveOnly": true
+    "fixtureAuthorityPrimitivesVisible": true
   },
   "modes": [
     {
@@ -97,9 +97,9 @@
     }
   ],
   "notes": [
-    "Screenshots cover real editor-context agent primitives in Dark, Light, and High Contrast.",
-    "Monaco ghost text consumes --ed-agent-ghost, which aliases --ed-ghost without visual drift.",
-    "Permission and sensitive-action prompts are token-backed primitives only in #1296; live authority wiring remains deferred to #1405."
+    "Screenshots cover a static editor-context fixture in Dark, Light, and High Contrast.",
+    "The fixture imports product CSS and verifies --ed-agent-ghost aliases --ed-ghost.",
+    "The fixture renders authority-related primitives but does not exercise live authority flows."
   ],
   "artifacts": [
     "dark-editor-agent.png",

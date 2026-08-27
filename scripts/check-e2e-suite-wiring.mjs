@@ -40,6 +40,22 @@ import { compareStrings } from "./lib/compare-strings.mjs";
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const BASELINE_PATH = join("docs", "qa", "unwired-e2e-suites.json");
 const E2E_SCRIPT_PREFIX = "test:e2e:";
+const REQUIRED_PER_PR = "required-per-pr";
+const SCHEDULED_NONBLOCKING = "scheduled-nonblocking";
+const EVENT_NONBLOCKING = "event-nonblocking";
+const UNWIRED = "unwired";
+const PROTECTION_CLASSES = new Set([
+  REQUIRED_PER_PR,
+  SCHEDULED_NONBLOCKING,
+  EVENT_NONBLOCKING,
+  UNWIRED,
+]);
+const PROTECTION_RANK = {
+  [UNWIRED]: 0,
+  [EVENT_NONBLOCKING]: 1,
+  [SCHEDULED_NONBLOCKING]: 2,
+  [REQUIRED_PER_PR]: 3,
+};
 // A script name continues through these characters, so a bare substring test would let
 // `test:e2e:foo` be "satisfied" by a lane that only runs `test:e2e:foo-extended`.
 const NAME_CHARACTER = /[A-Za-z0-9:_-]/u;
@@ -129,6 +145,146 @@ export function isWiredInWorkflows(script, workflowText) {
       from = at + script.length;
     }
   });
+}
+
+function workflowTriggers(workflowText) {
+  const triggers = new Set();
+  let inTriggerBlock = false;
+  for (const raw of workflowText.split(/\r?\n/u)) {
+    const body = raw.trimStart();
+    const indent = raw.length - body.length;
+    inTriggerBlock = collectWorkflowTriggers(triggers, body, indent, inTriggerBlock);
+  }
+  return triggers;
+}
+
+function collectWorkflowTriggers(triggers, body, indent, inTriggerBlock) {
+  if (indent === 0) return collectTopLevelWorkflowTriggers(triggers, body, inTriggerBlock);
+  return collectNestedWorkflowTrigger(triggers, body, inTriggerBlock);
+}
+
+function collectTopLevelWorkflowTriggers(triggers, body, inTriggerBlock) {
+  if (body.startsWith("#")) return inTriggerBlock;
+  if (body.startsWith("on:")) {
+    for (const trigger of body.slice("on:".length).match(/[A-Za-z_]+/gu) ?? []) {
+      triggers.add(trigger);
+    }
+    return true;
+  }
+  return body === "" ? inTriggerBlock : false;
+}
+
+function collectNestedWorkflowTrigger(triggers, body, inTriggerBlock) {
+  if (body.startsWith("#")) return inTriggerBlock;
+  if (!inTriggerBlock) return false;
+  const trigger = /^([A-Za-z_]+):/u.exec(body)?.[1];
+  if (trigger !== undefined) triggers.add(trigger);
+  return true;
+}
+
+function conditionAllowsPullRequest(condition) {
+  if (condition === undefined || !condition.includes("github.event_name")) return true;
+  if (condition.includes("github.event_name == 'pull_request'")) return true;
+  return condition.includes("github.event_name != 'pull_request'") && condition.includes("||");
+}
+
+function segmentRunsScript(segment, script) {
+  const at = segment.indexOf(script);
+  if (at === -1) return false;
+  const before = at === 0 ? "" : segment.charAt(at - 1);
+  const after = segment.charAt(at + script.length);
+  return (
+    (before === "" || !NAME_CHARACTER.test(before)) && (after === "" || !NAME_CHARACTER.test(after))
+  );
+}
+
+function blockRunHasSuite(lines, start, runIndent, script) {
+  for (const raw of lines.slice(start + 1)) {
+    const body = raw.trimStart();
+    const indent = raw.length - body.length;
+    if (body !== "" && indent <= runIndent) return false;
+    if (segmentRunsScript(stripInlineComment(raw), script)) return true;
+  }
+  return false;
+}
+
+function runStepHasSuite(lines, index, script) {
+  const raw = lines[index];
+  if (raw === undefined) return false;
+  const body = raw.trimStart();
+  const run = runValue(body);
+  if (run === undefined) return false;
+  if (!run.startsWith("|") && !run.startsWith(">")) return segmentRunsScript(run, script);
+  return blockRunHasSuite(lines, index, raw.length - body.length, script);
+}
+
+function conditionBeforeStep(lines, index) {
+  const previous = lines[index - 1];
+  if (previous === undefined) return undefined;
+  const body = previous.trimStart();
+  const condition = /^(?:-[ \t]+)?if:(.*)$/u.exec(body)?.[1];
+  return condition === undefined ? undefined : stripInlineComment(condition).trim();
+}
+
+function suiteStepConditions(script, workflowText) {
+  const lines = workflowText.split(/\r?\n/u);
+  return lines.flatMap((_, index) => {
+    return runStepHasSuite(lines, index, script) ? [conditionBeforeStep(lines, index)] : [];
+  });
+}
+
+function workflowRunsSuiteOnPullRequest(script, workflowText) {
+  if (!isWiredInWorkflows(script, workflowText)) return false;
+  return suiteStepConditions(script, workflowText).every(conditionAllowsPullRequest);
+}
+
+/**
+ * Classify the strongest workflow protection a suite actually has. A passing required-per-PR lane
+ * blocks a pull request; scheduled and other event/manual lanes detect regressions but do not.
+ */
+export function suiteProtectionClass(script, workflows) {
+  let scheduled = false;
+  let event = false;
+  for (const workflow of workflows) {
+    if (!isWiredInWorkflows(script, workflow.text)) continue;
+    const triggers = workflowTriggers(workflow.text);
+    if (triggers.has("pull_request") && workflowRunsSuiteOnPullRequest(script, workflow.text)) {
+      return REQUIRED_PER_PR;
+    }
+    if (triggers.has("schedule")) scheduled = true;
+    else event = true;
+  }
+  if (scheduled) return SCHEDULED_NONBLOCKING;
+  return event ? EVENT_NONBLOCKING : UNWIRED;
+}
+
+export function checkE2eProtectionBaseline({ scripts, workflows, protectionBaseline }) {
+  const suites = scripts.filter((name) => name.startsWith(E2E_SCRIPT_PREFIX)).sort(compareStrings);
+  const problems = [];
+  const protection = {};
+  for (const suite of suites) {
+    const actual = suiteProtectionClass(suite, workflows);
+    protection[suite] = actual;
+    const expected = protectionBaseline[suite];
+    if (expected === undefined) {
+      problems.push(
+        `${BASELINE_PATH} has no protection class for ${suite}. Record its current class (${actual}).`,
+      );
+    } else if (PROTECTION_RANK[actual] < PROTECTION_RANK[expected]) {
+      problems.push(
+        `${suite} protection downgraded from ${expected} to ${actual}. Update its lane or the ` +
+          "baseline through an explicit reviewed change.",
+      );
+    }
+  }
+  for (const suite of Object.keys(protectionBaseline).sort(compareStrings)) {
+    if (!protection[suite]) {
+      problems.push(
+        `${BASELINE_PATH} records protection for ${suite}, which no longer exists. Remove it.`,
+      );
+    }
+  }
+  return { problems, protection };
 }
 
 /**
@@ -306,12 +462,12 @@ function readE2eConfigs(repoRoot) {
   return readdirSync(join(repoRoot, CONFIG_DIR)).filter((name) => name.endsWith(CONFIG_SUFFIX));
 }
 
-function readWorkflowText(repoRoot) {
+function readWorkflows(repoRoot) {
   const dir = join(repoRoot, ".github", "workflows");
   return readdirSync(dir)
     .filter((name) => name.endsWith(".yml") || name.endsWith(".yaml"))
-    .map((name) => readFileSync(join(dir, name), "utf8"))
-    .join("\n");
+    .sort(compareStrings)
+    .map((name) => ({ name, text: readFileSync(join(dir, name), "utf8") }));
 }
 
 // The register is only trustworthy if it is well formed. A duplicate entry passes a naive read and
@@ -334,13 +490,32 @@ export function validateBaselineSuites(suites) {
   return suites;
 }
 
+function validateProtectionBaseline(protection) {
+  if (typeof protection !== "object" || protection === null || Array.isArray(protection)) {
+    throw new TypeError(`${BASELINE_PATH} must carry a "suiteProtection" object.`);
+  }
+  for (const [suite, protectionClass] of Object.entries(protection)) {
+    if (!suite.startsWith(E2E_SCRIPT_PREFIX)) {
+      throw new TypeError(`${BASELINE_PATH} suiteProtection keys must be E2E script names.`);
+    }
+    if (typeof protectionClass !== "string" || !PROTECTION_CLASSES.has(protectionClass)) {
+      throw new TypeError(`${BASELINE_PATH} records an invalid protection class for ${suite}.`);
+    }
+  }
+  return protection;
+}
+
 function readBaseline(repoRoot) {
   const parsed = JSON.parse(readFileSync(join(repoRoot, BASELINE_PATH), "utf8"));
   // Absent field ⇒ nothing recorded ⇒ every scriptless config fails. That is the fail-closed
   // direction, so a baseline predating this list degrades to "stricter", never to "silent".
   const configsWithoutScript = validateUnownedConfigs(parsed.configsWithoutScript ?? []);
   validateUnownedConfigReasons(configsWithoutScript, parsed.configsWithoutScriptReasons ?? {});
-  return { suites: validateBaselineSuites(parsed.suites), configsWithoutScript };
+  return {
+    suites: validateBaselineSuites(parsed.suites),
+    suiteProtection: validateProtectionBaseline(parsed.suiteProtection ?? {}),
+    configsWithoutScript,
+  };
 }
 
 /**
@@ -352,15 +527,22 @@ export function runE2eSuiteWiringGate(repoRoot = REPO_ROOT) {
   const pkg = JSON.parse(readFileSync(join(repoRoot, "package.json"), "utf8"));
   const allScripts = pkg.scripts ?? {};
   const scripts = Object.keys(allScripts);
-  const { suites: baseline, configsWithoutScript } = readBaseline(repoRoot);
+  const { suites: baseline, suiteProtection, configsWithoutScript } = readBaseline(repoRoot);
   const configs = readE2eConfigs(repoRoot);
+  const workflows = readWorkflows(repoRoot);
+  const protection = checkE2eProtectionBaseline({
+    scripts,
+    workflows,
+    protectionBaseline: suiteProtection,
+  });
   return {
     problems: [
       ...checkE2eSuiteWiring({
         scripts,
-        workflowText: readWorkflowText(repoRoot),
+        workflowText: workflows.map((workflow) => workflow.text).join("\n"),
         baseline,
       }),
+      ...protection.problems,
       ...checkE2eConfigOwnership({
         configs,
         scriptCommands: scripts
@@ -373,10 +555,18 @@ export function runE2eSuiteWiringGate(repoRoot = REPO_ROOT) {
     recorded: baseline.length,
     configs: configs.length,
     unownedConfigs: configsWithoutScript.length,
+    protection: protection.protection,
   };
 }
 
-export function formatGateReport({ problems, total, recorded, configs, unownedConfigs }) {
+export function formatGateReport({
+  problems,
+  total,
+  recorded,
+  configs,
+  unownedConfigs,
+  protection = {},
+}) {
   if (problems.length > 0) {
     return [
       `e2e-suite-wiring: FAIL — ${String(problems.length)} problem(s)`,
@@ -384,12 +574,21 @@ export function formatGateReport({ problems, total, recorded, configs, unownedCo
       "",
     ].join("\n");
   }
-  return (
+  const suiteLines = Object.entries(protection)
+    .sort(([left], [right]) => compareStrings(left, right))
+    .map(([suite, protectionClass]) => {
+      const blocksPullRequest =
+        protectionClass === REQUIRED_PER_PR ? "blocks PR" : "does not block PR";
+      return `  - ${suite}: ${protectionClass} (${blocksPullRequest})`;
+    });
+  return [
     `e2e-suite-wiring: PASS — ${String(total - recorded)} of ${String(total)} suite(s) run in a ` +
-    `workflow; ${String(recorded)} recorded as not yet wired. ` +
-    `${String(configs - unownedConfigs)} of ${String(configs)} config(s) have an owning script; ` +
-    `${String(unownedConfigs)} recorded as scriptless.\n`
-  );
+      `workflow; ${String(recorded)} recorded as not yet wired. ` +
+      `${String(configs - unownedConfigs)} of ${String(configs)} config(s) have an owning script; ` +
+      `${String(unownedConfigs)} recorded as scriptless.`,
+    ...suiteLines,
+    "",
+  ].join("\n");
 }
 
 export function main(write = (text) => process.stdout.write(text)) {

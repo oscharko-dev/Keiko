@@ -6,12 +6,14 @@ import { describe, expect, it } from "vitest";
 
 import {
   checkE2eConfigOwnership,
+  checkE2eProtectionBaseline,
   checkE2eSuiteWiring,
   executableWorkflowSegments,
   formatGateReport,
   isWiredInWorkflows,
   main,
   runE2eSuiteWiringGate,
+  suiteProtectionClass,
   playwrightConfigNames,
   validateBaselineSuites,
   validateUnownedConfigReasons,
@@ -48,6 +50,23 @@ jobs:
     steps:
       - run: npm run \${{ matrix.suite }}
 `;
+
+const REQUIRED_AND_SCHEDULED_LANE = {
+  name: "required-and-scheduled.yml",
+  text: `
+on:
+  pull_request:
+  schedule:
+    - cron: "0 6 * * *"
+jobs:
+  e2e:
+    steps:
+      - run: npm run test:e2e:required
+      - if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+        run: |
+          npm run test:e2e:nonblocking
+`,
+};
 
 function problemsFor(scripts, workflowText, baseline = []) {
   return checkE2eSuiteWiring({ scripts, workflowText, baseline });
@@ -157,6 +176,30 @@ describe("e2e suite wiring gate (#2629)", () => {
     });
     expect(report).toContain("e2e-suite-wiring: FAIL — 1 problem(s)");
     expect(report).toContain("  - test:e2e:orphan runs nowhere");
+  });
+
+  // KEIKO-0151: being mentioned by any workflow is not enough. This fixture models the exact
+  // regression: the same workflow has a PR trigger, but the step itself excludes pull requests.
+  it("records whether each suite actually blocks a pull request", () => {
+    expect(suiteProtectionClass("test:e2e:required", [REQUIRED_AND_SCHEDULED_LANE])).toBe(
+      "required-per-pr",
+    );
+    expect(suiteProtectionClass("test:e2e:nonblocking", [REQUIRED_AND_SCHEDULED_LANE])).toBe(
+      "scheduled-nonblocking",
+    );
+
+    const result = checkE2eProtectionBaseline({
+      scripts: ["test:e2e:required", "test:e2e:nonblocking"],
+      workflows: [REQUIRED_AND_SCHEDULED_LANE],
+      protectionBaseline: {
+        "test:e2e:required": "required-per-pr",
+        "test:e2e:nonblocking": "required-per-pr",
+      },
+    });
+    expect(result.problems).toEqual([
+      "test:e2e:nonblocking protection downgraded from required-per-pr to scheduled-nonblocking. " +
+        "Update its lane or the baseline through an explicit reviewed change.",
+    ]);
   });
 
   it("rejects a baseline document that is not a suites array", () => {
