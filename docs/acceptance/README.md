@@ -1,6 +1,6 @@
 # Code-task acceptance contributions
 
-Every Code-task child under an OpenCode Gen-3 epic (#2473) emits a
+Every Code-task child under Epic #2384 emits a
 `CodeTaskAcceptanceContributionV1` payload the epic-level aggregator will later fold into an
 epic-wide acceptance manifest. This directory checks in the **descriptor** each child needs and the
 generator that projects a descriptor plus a child's per-scenario receipts into the emitted
@@ -31,13 +31,13 @@ partial contribution.
 
 Fields:
 
-| Field              | Type                                      | Source of truth                      |
-| ------------------ | ----------------------------------------- | ------------------------------------ |
-| `epicIssue`        | `number`                                  | Parent epic (#2473 for Gen-3)        |
-| `childIssue`       | `number`                                  | The child issue being contributed    |
-| `scenarios[]`      | `{ scenarioId, evidenceClass, platform }` | Child's acceptance journey           |
-| `salvage[]`        | See `CodeTaskSalvageRowV1`                | The rebase-from-predecessor manifest |
-| `knownLimitations` | `readonly string[]`                       | Content-free notes surfaced upstream |
+| Field              | Type                                                                                                                                                                                               | Source of truth                      |
+| ------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------ |
+| `epicIssue`        | `number`                                                                                                                                                                                           | Parent epic (#2384)                  |
+| `childIssue`       | `number`                                                                                                                                                                                           | The child issue being contributed    |
+| `scenarios[]`      | `{ scenarioId, evidenceClass, platform }`                                                                                                                                                          | Child's acceptance journey           |
+| `salvage[]`        | `{sourceBranch, sourceSha, path, disposition, reshaping}` — a subset of `CodeTaskSalvageRowV1`; `verifiedAtSha` is added by the projection from the source commit sha, not part of the descriptor. | The rebase-from-predecessor manifest |
+| `knownLimitations` | `readonly string[]`                                                                                                                                                                                | Content-free notes surfaced upstream |
 
 The descriptor lives in this directory as `code-task-<child>.json`. For #2387 the file is
 `code-task-2387.json`.
@@ -64,6 +64,9 @@ alone would leave the projection uncovered.
 
 Receipts are an array of `{ scenarioId, outcome, recordedAt, digest }` records the child produces
 when its journey runs. The generator throws when a descriptor scenario has no matching receipt.
+The generator also throws on a duplicate receipt — two receipts sharing the same `scenarioId`. A
+later receipt would otherwise silently overwrite an earlier one, which could hide an earlier
+`failed` outcome behind a later `passed` one.
 
 The `--cleanup-root` argument is a sentinel: if the path exists after the child's run, the
 contribution records `cleanup: { state: "incomplete", residueCount: 1 }`; otherwise
@@ -73,7 +76,7 @@ contribution records `cleanup: { state: "incomplete", residueCount: 1 }`; otherw
 
 `CodeTaskAcceptanceContributionV1` is defined by
 [`packages/keiko-contracts/src/code-task-acceptance.ts`][contract] and re-exported from
-`@oscharko-dev/keiko-contracts`. The Gen-3 epic (#2473) aggregates these contributions into an
+`@oscharko-dev/keiko-contracts`. Epic #2384 aggregates these contributions into an
 epic-level acceptance manifest as part of the release-qualification wave; that consumer child is
 tracked under the epic and is not yet scheduled — the descriptor and generator ship ahead of it
 so the child's owner does not have to re-author the scaffolding.

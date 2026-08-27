@@ -63,7 +63,11 @@ evidence, and CI gates established by ADR-0049, ADR-0050, and the upstream archi
 
 4. **Accessibility is proven across every mode.** An axe-core run (`evidence/1300/a11y/axe-proof.mjs`) over the
    component union asserts **zero serious or critical WCAG 2.1 A/AA violations** in each of the seven
-   theme/contrast/motion modes, covering contrast, name/role/value, keyboard semantics, reduced-motion, and
+   theme/contrast/motion modes (see [docs/design-system/state-matrix.md](../design-system/state-matrix.md) for
+   the full seven-item list: `01-dark`, `02-light`, `03-dark-hc`, `04-light-hc`, `05-prefers-contrast`,
+   `06-forced-colors`, `07-reduced-motion` — gate 2 above names five of the seven, with `03-dark-hc` /
+   `04-light-hc` implied by the High Contrast × Dark/Light combinations), covering contrast, name/role/value,
+   keyboard semantics, reduced-motion, and
    forced-colors. Any serious/critical violation fails the run; any incomplete axe result also fails unless it
    has a checked-in owner/disposition.
 

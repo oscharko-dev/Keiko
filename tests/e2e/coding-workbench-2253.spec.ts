@@ -496,19 +496,24 @@ function a11yProof(captures: readonly CaptureRecord[], source: JsonObject): Json
 
 function manifest(captures: readonly CaptureRecord[]): JsonObject {
   return {
-    issue: "#2253",
+    issue: 2253,
     generatedAt: new Date().toISOString(),
     command: "KEIKO_WRITE_TRACKED_EVIDENCE=1 npm run test:e2e:coding-workbench-2253",
     playwrightCommand:
       "playwright test --config tests/e2e/config/playwright.issue-2253-coding-workbench.config.ts --project=chromium",
     artifacts: [...SCREENSHOT_ARTIFACTS, ...JSON_ARTIFACTS],
     captureCount: captures.length,
-    redaction: {
-      profileFixture:
-        "contains only deterministic status/capability metadata; no credentials, paths, endpoints, or runtime output",
-      screenshots:
-        "capture the current labelled Workbench with its server-confirmed Gateway context",
-      proofs: "contain assertions, accessibility counts, hashes, and visible product copy only",
+    // Seven-boolean redactionBoundary shape, matching the sibling 1990/2060 manifests (KEIKO-0959).
+    // Deterministic assertions, accessibility counts, hashes, and visible product copy only —
+    // never a customer repo file, secret, private path, raw diff, model prompt/output, or token.
+    redactionBoundary: {
+      customerRepositoryFilesIncluded: false,
+      secretsIncluded: false,
+      privatePathsIncluded: false,
+      rawDiffsIncluded: false,
+      rawModelPromptsIncluded: false,
+      rawModelOutputsIncluded: false,
+      tokensIncluded: false,
     },
   };
 }

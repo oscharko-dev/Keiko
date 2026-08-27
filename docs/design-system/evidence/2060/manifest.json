@@ -1,6 +1,6 @@
 {
-  "issue": "#2060",
-  "epic": "#2055",
+  "issue": 2060,
+  "epic": 2055,
   "generatedAt": "2026-07-09T12:54:50.559Z",
   "command": "KEIKO_WRITE_TRACKED_EVIDENCE=1 npm run test:e2e:workspace-selection-2060",
   "playwrightCommand": "npx playwright test --config tests/e2e/config/playwright.issue-2060-workspace-selection.config.ts --project=chromium",
@@ -21,5 +21,14 @@
     "Seeded windows are content-free Project, Plugins, and Automations windows.",
     "The behavior proof for Files-window marquee/group-drag/clipboard lives in workspace-multi-selection-2055.spec.ts."
   ],
-  "captureCount": 7
+  "captureCount": 7,
+  "redactionBoundary": {
+    "customerRepositoryFilesIncluded": false,
+    "secretsIncluded": false,
+    "privatePathsIncluded": false,
+    "rawDiffsIncluded": false,
+    "rawModelPromptsIncluded": false,
+    "rawModelOutputsIncluded": false,
+    "tokensIncluded": false
+  }
 }

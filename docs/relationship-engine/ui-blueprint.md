@@ -144,7 +144,7 @@ The active filter is announced via `aria-live="polite"` ("Showing 12 of 47 relat
 
 A focus mode supports the "what touches this object?" investigation. When the operator selects a workspace window, presses `F`, or follows the inspector's "Focus" affordance:
 
-- All relationships whose source or target is the focused endpoint render at full opacity (existing `.conn-path` styling at `globals.css:1677`).
+- All relationships whose source or target is the focused endpoint render at full opacity (existing `.conn-path` styling in `globals.css`).
 - Every other relationship's `.conn-path` drops to opacity 0.25 (a one-line addition to the existing `.conn-path` rule, gated by a parent `data-relationship-focus` attribute on `.workspace`). Other windows themselves are dimmed via the existing `data-conn="invalid"` rule (0.42 opacity) — **reusing existing CSS**, not adding a second dimming primitive.
 - The inspector pins to the focused endpoint until focus is released.
 
@@ -157,7 +157,7 @@ Focus mode honours the activity-state animated cap: even with all edges visible,
 Visual edge bundling collapses parallel and near-parallel edges that share an endpoint pair to a single visual edge with an aggregate count badge.
 
 - Two edges share endpoint cluster when their `(sourceId, targetId)` pair matches.
-- A bundle's aggregate count badge renders **only** when the bundle's edge count is strictly greater than **4**. At ≤ 4, edges render individually with vertical offset.
+- A bundle's aggregate count badge renders **only** when the bundle's edge count is strictly greater than **4** (Standard/Dense); Minimal mode uses a lower threshold — see [visual-density-rules.md §Edge bundling thresholds](visual-density-rules.md). At ≤ 4, edges render individually with vertical offset.
 - The aggregate badge carries the badge count (e.g., "7"); the underlying types are revealed by clicking the badge (which switches the inspector to a bundle-summary view).
 - The bundle never renders the relationship _ids_, only the count and the closed set of types in the bundle. This is the bounded-render contract from [activity-state.md §5.3](activity-state.md) applied to visual edges, not just badges.
 

@@ -1,6 +1,6 @@
 import { chromium } from "playwright";
 import { createHash } from "node:crypto";
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -12,8 +12,6 @@ const AXE_PATH = resolve(REPO, "node_modules/axe-core/axe.min.js");
 const cssText = readFileSync(resolve(REPO, CSS_PATH), "utf8");
 const cssSha256 = createHash("sha256").update(cssText).digest("hex");
 const axeSource = readFileSync(AXE_PATH, "utf8");
-
-mkdirSync(HERE, { recursive: true });
 
 const CAPTURES = [
   { file: "01-context-dark.png", theme: null, hc: null, forcedColors: "none", state: "context" },
@@ -83,6 +81,14 @@ function toolbar() {
   </div>`;
 }
 
+// Page label per marker when it is NOT the active one. Keyed by marker identity, never by array
+// index, so `contextPanel` stays correct for any value of `activeMarker` (see KEIKO-0854).
+const PAGE_LABEL_BY_MARKER = {
+  "[1]": "Page 3",
+  "[2]": "Page 7",
+  "[3]": "Page 11",
+};
+
 function contextPanel({ activeMarker = "[2]", disabledBack = false } = {}) {
   const disabledText = disabledBack
     ? `<span id="back-disabled-reason" class="pdfv-back-to-chat-hint">The originating answer is no longer available.</span>`
@@ -112,9 +118,13 @@ function contextPanel({ activeMarker = "[2]", disabledBack = false } = {}) {
       <span class="grounded-citations-label">Same answer citations</span>
       <ul class="grounded-citations pdfv-context-list" aria-label="Same answer citations">
         ${["[1]", "[2]", "[3]"]
-          .map((marker, index) => {
+          .map((marker) => {
             const active = marker === activeMarker;
-            const page = index === 0 ? "Page 3" : index === 1 ? "Active" : "Page 11";
+            // Mirror packages/keiko-ui/.../PdfCitationPreviewWindow.tsx (~1188-1192): the page label
+            // is derived from the marker's own identity when it is not active, and reads "Active"
+            // when it is — never from array index — so the label follows whichever marker
+            // `activeMarker` names for every value of `activeMarker`.
+            const page = active ? "Active" : PAGE_LABEL_BY_MARKER[marker];
             return `<li class="grounded-citations-item">
               <button type="button" class="grounded-citation grounded-citation-action pdfv-context-citation" aria-pressed="${String(active)}" data-active="${String(active)}">
                 <span class="grounded-citation-range">${escapeHtml(marker)} Product Manual / Policy wording.pdf</span>
@@ -263,11 +273,11 @@ try {
     await page.evaluate(
       ({ hc, theme }) => {
         const root = document.documentElement;
-        root.removeAttribute("data-theme");
-        root.removeAttribute("data-hc");
-        root.setAttribute("data-input-modality", "keyboard");
-        if (theme) root.setAttribute("data-theme", theme);
-        if (hc) root.setAttribute("data-hc", hc);
+        delete root.dataset.theme;
+        delete root.dataset.hc;
+        root.dataset.inputModality = "keyboard";
+        if (theme) root.dataset.theme = theme;
+        if (hc) root.dataset.hc = hc;
       },
       { hc: capture.hc, theme: capture.theme },
     );
@@ -318,15 +328,17 @@ try {
 const verdict = seriousViolations === 0 ? "PASS" : "FAIL";
 
 writeFileSync(
-  resolve(HERE, "citation-context-back-to-chat-fidelity-proof.json"),
+  resolve(HERE, "citation-context-back-to-chat-axe-gate-summary.json"),
   `${JSON.stringify(
     {
       issue: 1636,
       verdict,
+      verdictScope:
+        "axe accessibility gate only (serious/critical violations across the captured citation-context and Back to chat states); no computed-style fidelity comparison against the DS reference CSS is performed by this artifact.",
       cssSha256,
       captures: fidelityResults,
       summary:
-        "Browser-rendered visual evidence for answer-local PDF citation context, sibling citation navigation, Back to chat disabled state, transient chat highlight, responsive layout, and forced-colors coverage.",
+        "Browser-rendered visual evidence for answer-local PDF citation context, sibling citation navigation, Back to chat disabled state, transient chat highlight, responsive layout, and forced-colors coverage. Verdict reflects the axe accessibility gate only — this file does not carry a fidelity/equivalence comparison.",
     },
     null,
     2,

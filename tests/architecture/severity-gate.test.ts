@@ -61,6 +61,7 @@ const REQUIRED_TRUST_RULES = [
   "adr-0019-trust-6-evidence-allowed-callers",
   "adr-0019-trust-7-cli-server-no-port-bypass",
   "adr-0019-trust-8-no-do-not-follow-in-prod",
+  "adr-0165-editor-read-allowed-callers",
 ];
 
 // KEIKO-0289: the two lists above are ALLOW-lists — they can only assert what someone remembered

@@ -1,6 +1,6 @@
 {
-  "issue": "#1696",
-  "epic": "#1687",
+  "issue": 1696,
+  "epic": 1687,
   "generatedAt": "2026-06-30T17:11:30.507Z",
   "command": "npm run test:e2e:update-ui-1696",
   "artifacts": [

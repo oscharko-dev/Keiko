@@ -166,11 +166,12 @@ formattingEnabled   = formattingAvailable && !largeFileDegraded
 canFormat           = hasTarget && loadState.status === "ready" && formattingEnabled
 ```
 
-So `monaco-builtin` languages are available whenever Monaco has the worker (json/css/scss/less/html);
-`keiko-language-service` languages (ts/js) additionally require the server provider to be available
-(it always is, but the gate is honest); and `"none"` languages (yaml/markdown/python/…) are correctly
-**unavailable** — fixing AC5. The existing `providerOperationEnabled(...,"formatting")` no longer
-gates `monaco-builtin` languages, because the server is irrelevant to their browser formatter.
+So `monaco-builtin` languages (currently none in the shipped registry — see D1's Packaging update)
+are available whenever Monaco has the worker; `keiko-language-service` languages (ts/js) additionally
+require the server provider to be available (it always is, but the gate is honest); and `"none"`
+languages (yaml/markdown/python/…) are correctly **unavailable** — fixing AC5. The existing
+`providerOperationEnabled(...,"formatting")` no longer gates `monaco-builtin` languages, because the
+server is irrelevant to their browser formatter.
 
 ### D4 — A per-operation "formatting" status field, derived from the same registry
 
@@ -195,7 +196,10 @@ nothing.
 We will add the missing `basic-languages` tokenizer-contribution imports to
 `keiko-ui/.../editorMonacoRuntime.ts` so that **every** language the registry marks
 `syntaxHighlighting: true` actually registers its language id + Monarch grammar, and every
-`documentFormatting: "monaco-builtin"` language is registered so Monaco's worker formatter can attach.
+`documentFormatting: "monaco-builtin"` language (currently none in the shipped registry — see
+D1's Packaging update; the `monaco-builtin` bootstrap wiring below predates the Step-06 remediation
+that reclassified json/css/scss/less/html to `"none"`, but the wiring remains as reserved future
+capacity) is registered so Monaco's worker formatter can attach.
 Concretely, add the `basic-languages/{css,scss,less,html}` contributions (present in node_modules,
 currently unimported) alongside the existing `language/{css,html,json}/monaco.contribution.js`
 rich-worker imports. Without this, css/scss/less/html may not tokenize (AC1/AC2 fail) and their

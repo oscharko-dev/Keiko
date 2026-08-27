@@ -509,7 +509,7 @@ for (const mode of MODES) {
   dRaw.pre[mode.id] = await collectD(page, PRE, mode);
   dRaw.post[mode.id] = await collectD(page, POST, mode);
 
-  await applyMode(page, POST, mode);
+  // The DOM is already in POST state from the collectD(POST, mode) call above.
   byMode[mode.id].mediaProbe = await readMediaProbe(page);
   await page.screenshot({ path: resolve(HERE, `${mode.id}.png`), fullPage: true });
   console.log(

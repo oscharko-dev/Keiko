@@ -581,6 +581,13 @@ export const DEFAULT_VOICE_PROTOCOL_TIMEOUTS: VoiceProtocolTimeouts = {
 export type VoiceProtocolValidation =
   { readonly ok: true } | { readonly ok: false; readonly reasons: readonly string[] };
 
+// Note (ADR-0154 D2 attribution): the shared validator below allowlists and type-checks
+// `persona`, `transcriptionLanguage`, and `chatContext.{chatId, memory, grounding}` — it does
+// NOT reject their presence. Endpoint-specific rejection on the Twin endpoint (e.g. closing
+// with "not-allowed-for-profile" when persona or transcriptionLanguage is present) is the
+// Twin transport's job, performed by `resolveSessionChatContext` in
+// `packages/keiko-server/src/voice-realtime.ts`. A new consumer of this shared validator
+// alone does not inherit that rejection semantics for free.
 const VOICE_SESSION_CREATE_FIELDS: ReadonlySet<string> = new Set([
   "protocolVersion",
   "sessionId",

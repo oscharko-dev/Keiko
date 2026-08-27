@@ -301,7 +301,8 @@ for (const mode of MODES) {
     diffs: modeDiffs,
     mediaProbe: await readMediaProbe(page),
   };
-  await collect(page, POST, mode);
+  // The DOM is already in POST state from the collect(POST, mode) call above (line 280).
+  // Screenshot directly without re-collecting.
   await page.screenshot({ path: resolve(HERE, `${mode.id}.png`) });
   console.log(`${mode.id}: ${modeProbes} probes, ${modeDiffs} differing computed values`);
 }

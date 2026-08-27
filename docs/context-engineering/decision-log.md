@@ -147,6 +147,20 @@ conservative deterministic `estimateTokens` in keiko-contracts, used uniformly a
 
 ## Metrics
 
+**Mutation methodology.** Every "mutation-proven" / "mutation-probed" claim below is manual, targeted
+mutation coverage — not automated mutation testing (no Stryker, no PIT). The proof lives in the wave's
+own unit tests: for each named invariant the corresponding test file asserts that flipping the
+production behaviour (relocating a lane, promoting an injection item, dropping a required field) causes
+the gate to fail. General test locations per PR wave:
+`packages/keiko-workflows/src/context-budget/` (PR1 allocator + budget),
+`packages/keiko-contracts/src/context-compaction*.ts` and `packages/keiko-workspace/src/file-content-hash.ts`
+(PR2 compaction/rehydration schemas + bounded hashing),
+`packages/keiko-contracts/src/tool-observation.ts` and `packages/keiko-tools/src/exec.ts` (PR3 shaping),
+`packages/keiko-server/src/conversation-compaction.ts` and `packages/keiko-harness/` (PR4 orchestrator +
+harness wiring), `packages/keiko-evidence/src/context-*.ts` (PR5 evidence redaction/path-free), and
+`packages/keiko-contracts/src/grounded-answer-context.ts` + `packages/keiko-ui/src/app/components/` (PR6
+UI + grounded builder). See each wave's `*.test.ts` neighbours for the individual mutations.
+
 PR1 baseline (`npm run check:context-quality`, 2 long-session scenarios over the deterministic offline
 corpus; the gate enforces these as CI invariants going forward):
 
@@ -187,7 +201,10 @@ budget `$comment` and the harness header; out of scope until a richer test-resul
 ## Status
 
 **MILESTONE COMPLETE — all 6 PRs (PR1–PR6) implemented + verified** on `feat/context-engineering-foundation`
-(not yet committed; built up before commit/PR per user choice).
+(landed on `dev` via the Keiko 0.2.7 backport; this Status section is a historical snapshot written before
+the merging commit — see `git log -- docs/context-engineering/decision-log.md` for the shipping commits,
+`fb6e9439` "Harden context engineering foundation for 0.2.7" and `8cdf2d69` "Backport Keiko 0.2.7 release
+to dev").
 
 - **PR1** (Phases 1–2). Waves: contracts vocab + estimator + validators + `ContextPackDiagnostics.contextBudget?`
   (59 tests); lane allocator + `DEFAULT_CONTEXT_BUDGET` (18 tests, gates 3/4/5 mutation-proven); harness +

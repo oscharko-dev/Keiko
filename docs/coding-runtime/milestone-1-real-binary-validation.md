@@ -37,19 +37,25 @@ Every workflow run uploads the same schema as `code-task-real-binary-evidence` w
 
 ## Running the lane on demand
 
-GitHub resolves `workflow_dispatch` against the workflow file on the **default branch**, so while
-this lane lives only on a feature branch it cannot be dispatched by its own name — the API answers
-`404`. It is therefore also exposed as a reusable workflow (`workflow_call`) and invoked from the
-already-dispatchable `E2E Extended` workflow behind a boolean input:
+`code-task-real-binary.yml` now lives on the default branch (`dev`) and carries `schedule`,
+`workflow_dispatch`, and `workflow_call` triggers directly. Direct dispatch works:
+
+```bash
+gh workflow run code-task-real-binary.yml --ref <branch>
+```
+
+The nightly `schedule` (cron `30 5 * * *`, 05:30 UTC) is active — a scheduled workflow only fires
+from the default branch, which is where this lane now resides.
+
+The reusable-workflow (`workflow_call`) path remains available as an alternative for re-proving the
+lane against an exact SHA on a non-default branch (for example, a feature branch that has not yet
+merged) without paying for the full extended matrix:
 
 ```bash
 gh workflow run e2e-extended.yml --ref <branch> -f code_task_real_binary=true
 ```
 
-That input runs the real-binary job alone and skips the two Ubuntu suites, so the macOS lane can be
-re-proved on an exact SHA without paying for the full extended matrix. Once this lane is on the
-default branch, `gh workflow run code-task-real-binary.yml` also works and the nightly `schedule`
-becomes active — a scheduled workflow never fires from a non-default branch.
+That input runs the real-binary job alone and skips the two Ubuntu suites.
 
 Re-dispatch the lane whenever a change lands in the production composition the journey exercises
 (runtime resolver, tool facade and its governed ports, the OpenCode adapter/protocol, or the staged

@@ -108,9 +108,16 @@ The Realtime negotiation request may contain only the configured endpoint/authen
 Realtime and transcription deployment aliases, input transcription options, acoustic or semantic
 VAD tuning, a pseudonymous safety identifier, the opaque SDP offer, and bounded transport controls.
 The browser control-plane `session.create` contains only transport/profile identifiers plus
-`chatContext: {chatId}` for local authority binding. Its shared validator rejects legacy persona,
-memory, grounding, history, arbitrary fields, and any live-dictation-only language hint on the Twin
-endpoint before allocating a session.
+`chatContext: {chatId}` for local authority binding. The shared protocol validator in
+`packages/keiko-contracts/src/voice-protocol.ts` (`VOICE_SESSION_CREATE_FIELDS`,
+`VOICE_SESSION_CHAT_CONTEXT_FIELDS`, `isOptionalSessionChatContext`) allowlists and type-validates
+persona, `transcriptionLanguage`, and `chatContext.{chatId, memory, grounding}` — it does **not** by
+itself reject their presence. The Twin transport's `resolveSessionChatContext` in
+`packages/keiko-server/src/voice-realtime.ts` performs the endpoint-specific rejection: it closes the
+WebSocket with `not-allowed-for-profile` when `parsed.transcriptionLanguage` or `parsed.persona` is
+present on the Twin endpoint, or when `chatContext` fails `isVoiceSessionChatContext`. Any new consumer
+of the shared validator alone therefore does **not** inherit the Twin transport's rejection semantics —
+that enforcement is transport-specific by design.
 
 It contains no assistant instructions, tools, tool choice, memory block, grounding context, output
 voice, persona, or assistant response configuration. Both server negotiation and browser session

@@ -18,7 +18,9 @@ Keiko starts Java only after workspace activation, deployment policy, operator p
 configuration containment, executable containment, JDK validation, command policy, and private
 runtime-state creation all pass. It is disabled by default. The supported profile targets
 operator-provisioned Eclipse JDT LS `1.60.0`; the JDK that runs JDT LS must be version 21 or newer,
-even when the project source/target level is older.
+even when the project source/target level is older. The `1.60.0` value must match
+`SUPPORTED_JDT_LS_VERSION` in `packages/keiko-server/src/editor/lsp/providers/javaProvider.ts`,
+which is the source of truth the runtime enforces.
 
 Every process generation uses unique, private `-configuration` and `-data` directories. Keiko never
 reuses the operator home, the JDT LS distribution configuration, or another workspace's data.
