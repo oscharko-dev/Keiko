@@ -11,6 +11,7 @@ import {
   maybeOpenPairedBrowser,
   npmCommand,
   pairedDevBrowserUrl,
+  prepareRunnerCriticalSection,
   resolveDevPairingSecret,
   requiredRuntimeHealth,
   resolveDevGatewayConfigAction,
@@ -579,5 +580,33 @@ describe("dev-start concurrency lock (KEIKO-0719)", () => {
       marker.ran = true;
     });
     expect(marker.ran).toBe(true);
+  });
+});
+
+// KEIKO-0719 (extended): the two-step "stop any prior runner, then clear pidFile" sequence used
+// to live outside the dev-start lock; two concurrent `dev:start` invocations could both clear
+// the check and then race to overwrite pidFile. The extracted `prepareRunnerCriticalSection`
+// helper runs inside `withDevStartLock` so the sequence executes only once per acquirer.
+describe("prepareRunnerCriticalSection (KEIKO-0719 race close)", () => {
+  it("runs restartExistingRunnerIfNeeded before removing the pid file", async () => {
+    const order = [];
+    await prepareRunnerCriticalSection({
+      restartExistingRunnerIfNeeded: async () => order.push("restart"),
+      removePidFile: () => order.push("remove"),
+    });
+    expect(order).toEqual(["restart", "remove"]);
+  });
+
+  it("propagates a restart failure without removing the pid file", async () => {
+    const removePidFile = vi.fn();
+    await expect(
+      prepareRunnerCriticalSection({
+        restartExistingRunnerIfNeeded: async () => {
+          throw new Error("restart failed");
+        },
+        removePidFile,
+      }),
+    ).rejects.toThrow(/restart failed/);
+    expect(removePidFile).not.toHaveBeenCalled();
   });
 });

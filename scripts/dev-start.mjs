@@ -658,14 +658,21 @@ export async function withDevStartLock(work) {
   }
 }
 
+// KEIKO-0719 (extended): repeat the existing-runner check INSIDE the lock. Two concurrent
+// `npm run dev:start` invocations can both clear a pre-lock check; only the runner check under
+// the mutex prevents the second acquirer from starting a duplicate runner and clobbering
+// pidFile. Extracted as a seamed helper so the race-window semantics can be tested without
+// spawning a real Node runner.
+export async function prepareRunnerCriticalSection(seams = {}) {
+  const restart = seams.restartExistingRunnerIfNeeded ?? restartExistingRunnerIfNeeded;
+  const remove = seams.removePidFile ?? (() => rmSync(pidFile, { force: true }));
+  await restart();
+  remove();
+}
+
 async function launchDevelopmentRunner() {
   return withDevStartLock(async () => {
-    // KEIKO-0719 (extended): repeat the existing-runner check INSIDE the lock. Two concurrent
-    // `npm run dev:start` invocations can both clear the pre-lock check, then only one acquires
-    // the lock — the second would otherwise start a duplicate runner and overwrite `pidFile`,
-    // leaving the first unmanaged. Recheck under the mutex to close that race.
-    await restartExistingRunnerIfNeeded();
-    rmSync(pidFile, { force: true });
+    await prepareRunnerCriticalSection();
     ensureDependencies();
     ensureDevGatewayConfig();
     run(npmCommand(), ["run", "build"], repoRoot);
