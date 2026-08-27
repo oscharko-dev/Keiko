@@ -350,7 +350,10 @@ function validate479VerificationCommands(manifest, relPath) {
     // regexes as super-linear on adversarial input; the plain-string version below has neither
     // backtracking risk nor a change in behaviour for the concrete inputs this validator sees
     // (npm script names in manifest.verificationCommands).
-    const parts = entry.trim().split(" ").filter((part) => part.length > 0);
+    const parts = entry
+      .trim()
+      .split(" ")
+      .filter((part) => part.length > 0);
     if (parts.length === 0) return undefined;
     if (parts[0] !== "npm") return undefined;
     let index = parts[1] === "run" ? 2 : 1;

@@ -78,6 +78,11 @@ describe("Sonar analysis scope", () => {
     expect(isGeneratedOrBinaryPath("packages/ui/public/icon.png")).toBe(true);
     expect(isGeneratedOrBinaryPath("packages/ui/public/icon.svg")).toBe(true);
     expect(isGeneratedOrBinaryPath("scripts/native-quality/Keiko.NativeQuality.csproj")).toBe(true);
+    // KEIKO-2909 CI: TypeScript declaration files (.d.ts / .d.mts / .d.cts) are not
+    // executable sources — the LCOV mapping check must skip them.
+    expect(isGeneratedOrBinaryPath("scripts/lib/foo.d.mts")).toBe(true);
+    expect(isGeneratedOrBinaryPath("scripts/lib/foo.d.cts")).toBe(true);
+    expect(isGeneratedOrBinaryPath("packages/keiko-server/src/index.d.ts")).toBe(true);
     expect(isGeneratedOrBinaryPath(".keiko/dev/ui/task-workspaces/repo/ws/tsconfig.json")).toBe(
       true,
     );

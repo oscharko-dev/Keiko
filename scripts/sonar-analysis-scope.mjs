@@ -260,6 +260,8 @@ export function isGeneratedOrBinaryPath(input) {
     path.startsWith("docs/design-system/evidence/") ||
     binaryExtensions.has(fileExtension(path)) ||
     path.endsWith(".d.ts") ||
+    path.endsWith(".d.mts") ||
+    path.endsWith(".d.cts") ||
     /\.(?:generated|min)\.[^/]+$/u.test(path)
   );
 }

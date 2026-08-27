@@ -3,9 +3,6 @@ import { rmSync } from "node:fs";
 import { createServer } from "node:net";
 
 const delimiter = Buffer.from("\r\n\r\n", "ascii");
-// KEIKO-1017: hoist the Content-Length header regex once at module load, so the drain loop
-// does not evaluate the literal each iteration.
-const CONTENT_LENGTH_HEADER = /^Content-Length:\s*(\d+)\s*$/iu;
 const socketPath = socketArgument(process.argv.slice(2));
 const CAP_STACK_FRAME_COUNT = 128;
 const CAP_SCOPE_COUNT = 32;
@@ -39,26 +36,9 @@ const server = createServer((connection) => {
     pending = drain(connection, pending, (request) => dispatch(request, connection, state));
   });
   connection.on("close", () => clearInterval(state.outputTimer));
-  // KEIKO-0991: an I/O error on the debug socket (e.g. ECONNRESET when the editor closes
-  // unexpectedly) used to crash the fixture with an uncaught 'error' event. Log to stderr and
-  // let the 'close' handler tear down state as it normally would.
-  connection.on("error", (connectionError) => {
-    process.stderr.write(
-      `dap-socket-adapter: connection error: ${connectionError instanceof Error ? connectionError.message : String(connectionError)}\n`,
-    );
-  });
 });
 
 server.listen(socketPath);
-// KEIKO-0992: log a listen() failure to stderr and exit cleanly instead of crashing with an
-// uncaught exception. Common causes are a stale socket path (rmSync above already handles most
-// cases) or a permission denial on the parent directory.
-server.on("error", (listenError) => {
-  process.stderr.write(
-    `dap-socket-adapter: server error: ${listenError instanceof Error ? listenError.message : String(listenError)}\n`,
-  );
-  process.exit(1);
-});
 
 function socketArgument(args) {
   const index = args.indexOf("--server");
@@ -305,26 +285,15 @@ function drain(connection, pending, handle) {
     const headerEnd = rest.indexOf(delimiter);
     if (headerEnd < 0) return rest;
     const header = rest.subarray(0, headerEnd).toString("ascii");
-    const match = CONTENT_LENGTH_HEADER.exec(header);
-    if (match === null) {
-      // KEIKO-0990: name the malformed header before exiting so a fixture failure carries the
-      // shape of the input that killed it, not just an exit code.
-      process.stderr.write(
-        `dap-socket-adapter: malformed Content-Length header: ${JSON.stringify(header)}\n`,
-      );
-      process.exit(3);
-    }
+    const match = /^Content-Length:\s*(\d+)\s*$/iu.exec(header);
+    if (match === null) process.exit(3);
     const length = Number.parseInt(match[1] ?? "", 10);
     const bodyStart = headerEnd + delimiter.length;
     const bodyEnd = bodyStart + length;
     if (rest.length < bodyEnd) return rest;
     try {
       handle(JSON.parse(rest.subarray(bodyStart, bodyEnd).toString("utf8")));
-    } catch (parseError) {
-      // KEIKO-0990: name the JSON parse error before exiting.
-      process.stderr.write(
-        `dap-socket-adapter: JSON parse error: ${parseError instanceof Error ? parseError.message : String(parseError)}\n`,
-      );
+    } catch {
       process.exit(4);
     }
     rest = rest.subarray(bodyEnd);
