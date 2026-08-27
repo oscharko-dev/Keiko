@@ -41,7 +41,10 @@ answering.
 A **profile** controls how thorough and how lean the enhanced prompt is. The enhancer recommends a
 profile from the task analysis; you can request a different one as a hint, except that a high-stakes
 (critical) request is always escalated to the safety-critical profile and cannot be downgraded by a
-hint.
+hint. In practice a request is treated as **high-stakes (critical)** when it seeks consequential advice
+in a legal, medical, finance, or security domain, when it asks the enhancer for an agentic (tool-using
+or multi-step) plan, or when the analyzer trips any safety risk flag — the criticality signal is
+derived by the analyzer, not requested by the caller.
 
 | Profile           | Best for                                    | Style                                          |
 | ----------------- | ------------------------------------------- | ---------------------------------------------- |

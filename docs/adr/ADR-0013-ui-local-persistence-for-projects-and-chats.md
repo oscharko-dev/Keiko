@@ -4,7 +4,7 @@
 
 Accepted
 
-Superseded (in part) by ADR-0019 — module boundary and file paths (`src/ui/store/**`, `src/cli/ui.ts`, single-package layout) relocated to `packages/keiko-server/src/store/**` and `packages/keiko-cli/src/ui.ts` under the monorepo restructuring. The storage engine, DB path precedence, and `PRAGMA user_version` migration pattern (D1, D2, D4, D5, D9) remain the live, unmodified precedent, actively cited by ADR-0022, ADR-0035, ADR-0090, and ADR-0091.
+Superseded (in part) by ADR-0019 — module boundary and file paths (`src/ui/store/**`, `src/cli/ui.ts`, single-package layout) relocated to `packages/keiko-server/src/store/**` and `packages/keiko-cli/src/ui.ts` under the monorepo restructuring. The storage engine, DB path precedence, and `PRAGMA user_version` migration pattern (D1, D4, D5, D9) remain the live precedent, actively cited by ADR-0022, ADR-0035, ADR-0090, and ADR-0091. D2's Node 22.0–22.11 flag-enablement / re-exec branch is vestigial under the current `package.json` `engines.node` `>=24.18.0 <25` floor: Node 24 loads `node:sqlite` without the experimental flag, so the trigger condition no longer occurs on any supported Node line. The guard is retained in `packages/keiko-cli/src/ui.ts` as a harmless defensive fallback (its own comment already records why) and is not a live precedent.
 
 Decided before implementation begins (issue #62 requires the ADR before implementation).
 This ADR defines the storage engine, flag-enablement strategy, module boundary, schema,

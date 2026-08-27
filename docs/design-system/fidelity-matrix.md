@@ -8,9 +8,10 @@ and assigns an **owner child issue or a documented deferral** (acceptance criter
 the repository root.
 
 > **Snapshot note:** The counts below (16,191-line `globals.css`, 31 `WindowType`s, 32 `registerWindowRender`
-> call sites, 77 `.lk-*` rules) are as of the **2026-06-21 audit snapshot (release/0.2.0)**; current counts have
-> grown (e.g. `globals.css` is now ~22,658 lines and `registerWindowRender` call sites are 39). They are
-> retained as a point-in-time architecture baseline.
+> call sites, 77 `.lk-*` rules) are as of the **2026-06-21 audit snapshot (release/0.2.0)**; current counts
+> **as of 2026-08-27** have grown (e.g. `globals.css` is now ~22,658 lines and `registerWindowRender`
+> call sites are 39; re-verify with `wc -l packages/keiko-ui/src/app/globals.css`). They are retained as a
+> point-in-time architecture baseline.
 
 ## 0. Surface model (read this first)
 

@@ -49,6 +49,10 @@ Constraints carried over from the platform baseline:
   (`sealString`/`openString`/`sealBytes`/`openBytes`/`isSealed` from
   `@oscharko-dev/keiko-security`) and the env → OS-keychain → `0600`-keyfile resolution
   seam (`resolveLocalVaultKey`, ADR-0046) already exist and are audited. No new crypto.
+  Note: the shared `keiko-memory-v1` AAD constant name is a legacy artifact of its first
+  consumer (ADR-0035's memory vault); it is intentionally vault-agnostic and shared by
+  design across the memory, credential, and local-knowledge vaults. Cross-vault isolation
+  comes from per-vault key separation, not from the AAD string.
 - **Stay local-first.** No hosted vector database, hosted search, or cloud KMS.
 - **Preserve the data model.** No parallel capsule store; the on-disk schema and the
   public Local Knowledge APIs (indexing, retrieval, grounding, diagnostics, incremental

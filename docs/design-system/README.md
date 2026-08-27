@@ -150,10 +150,13 @@ The design-system tokens were **lifted 1:1 from the product `globals.css`** (the
 product → reference), and the editor tier was lifted back into the product. Consolidation must therefore
 **extend `globals.css` as the single token source** — layer the semantic/component aliases on top of the
 existing primitives — and must **not** introduce a second `:root` token block, a parallel theme engine, a
-CSS-Modules/Tailwind/styled-components layer, or a duplicate token namespace. The standalone
-`design-system/*.css` files stay the reference and visual-regression ground truth; they are not shipped as a
-second live stylesheet. Per-asset reuse decisions are in
-[token-component-reuse-map.md](token-component-reuse-map.md).
+CSS-Modules/Tailwind/styled-components layer, or a duplicate token namespace. This prohibition targets a
+second _token engine_ — it does not prohibit component-scoped `.module.css` files that consume only the
+existing `globals.css` semantic/component tokens; that pattern is separately sanctioned and used from #1696
+onward (see [`evidence/1696/`](evidence/1696/README.md), [`evidence/1990/`](evidence/1990/README.md),
+[`evidence/1991/`](evidence/1991/README.md)). The standalone `design-system/*.css` files stay the reference
+and visual-regression ground truth; they are not shipped as a second live stylesheet. Per-asset reuse
+decisions are in [token-component-reuse-map.md](token-component-reuse-map.md).
 
 ## Method and provenance
 

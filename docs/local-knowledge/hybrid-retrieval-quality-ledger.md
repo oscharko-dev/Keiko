@@ -1,6 +1,7 @@
 # Epic #1817 Hybrid Retrieval Quality Acceptance Ledger
 
-Status: live coordination ledger for Epic
+Status: post-merge evidence ledger (Epic #1817 and children #1837-#1842 closed `status: done`;
+see Post-merge audit note below) for Epic
 [#1817](https://github.com/oscharko-dev/Keiko/issues/1817) and child issues
 [#1837](https://github.com/oscharko-dev/Keiko/issues/1837),
 [#1838](https://github.com/oscharko-dev/Keiko/issues/1838),

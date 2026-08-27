@@ -19,7 +19,7 @@ surface onto the existing vocabulary, as D6 requires.
 ## Context
 
 MemoriaViva turn capture (`captureSalientFromTurn` in
-`packages/keiko-server/src/memory-salience.ts:304`) is live and default-on: every desktop and
+`packages/keiko-server/src/memory-salience.ts`) is live and default-on: every desktop and
 voice chat turn is scanned for salient candidates and, subject to a single boolean gate
 (`request.memory.enabled` and a provisioned vault), persisted through
 `persistSalienceActions` → `persistCandidate`. The persisted `status` a candidate receives today

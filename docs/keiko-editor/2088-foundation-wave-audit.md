@@ -115,8 +115,8 @@ spawns its first long-lived child process (M14/Jupyter has the same dependency).
 
 ## Verification policy
 
-The candidate is accepted only after the complete local-first `npm run agent:pre-pr` report is
-green, all touched-area gates are green, Linux-authoritative D12/bundle evidence is regenerated,
-the debug-launch mutation gate reports no surviving or uncovered mutants, and the exact pushed PR
-head passes every direct app-bound required check. No gate, coverage floor, evidence bound, policy,
-or branch protection setting may be weakened to obtain that result.
+The candidate is accepted only after AGENTS.md section 3's minimum-loop commands (scoped to the
+change), all touched-area gates, `npm run gates:sonar`, Linux-authoritative D12/bundle evidence
+(only if `D12_MEASUREMENT_TOOLCHAIN_PATHS` is touched, per ADR-0156 D2), the debug-launch mutation
+gate, and the exact pushed PR head's required checks are all green. No gate, coverage floor,
+evidence bound, policy, or branch protection setting may be weakened to obtain that result.

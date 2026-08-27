@@ -337,6 +337,29 @@ POST /api/task-workspaces/active { workspaceId: "ws-789" }
 - Fix the underlying issue (restore database, fix file permissions, free disk space).
 - Do not retry the request until the fault is resolved.
 
+**Evidence to collect before escalating:**
+
+- `auditCorrelationId` / `correlationId` for the failing request (returned by
+  `GET /api/task-workspaces/:id` and threaded through `provisioning.ts`, `repair.ts`, and
+  `cleanup.ts`).
+- The affected `workspaceId`.
+- The `error.code` (`PROVISIONING_FAILED`, `REPAIR_FAILED`, or `CLEANUP_FAILED`) and the
+  server-side `failureClass: "terminal"`.
+- The redacted server-log excerpt for the correlation id (body-free per the activity-log
+  contract — do not attach raw workspace paths or user content).
+- The wall-clock timestamp of the failing request.
+
+**Escalate to:** the workspace subsystem owner via the repository's standard support / ticket
+channel (do not name a specific team, on-call rotation, or SLO here — those live in the
+operator organization's own incident-response registry, not in this runbook). Include the
+evidence bundle above so the owner can reconstruct the operation from the activity log
+without needing access to the affected machine.
+
+**Do not** manually delete the worktree directory, hand-edit the SQLite store, or force a
+cleanup while a terminal fault is unresolved: any of these actions destroys the evidence the
+owner needs and can cross the SC1 / SC4 safety-gate lines that the terminal fault itself has
+not yet been proven to leave intact.
+
 ---
 
 ### Troubleshooting table

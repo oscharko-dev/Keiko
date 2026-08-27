@@ -31,7 +31,8 @@ a token, a screenshot, a matrix row, a register entry.
 3. **Anatomy** — _named parts on a labelled example._ Each structural part named once, against a
    labelled instance. Evidence: the part-to-class map and a screenshot or reference scene.
 4. **Variants & sizes** — _every supported shape._ Every variant and size that ships — no more, no
-   aspirational shapes. Evidence: the variant-to-modifier-class map.
+   aspirational shapes. If a common variant or size was deliberately excluded or deferred, name it
+   briefly so readers do not assume it will ship later. Evidence: the variant-to-modifier-class map.
 5. **States** — _from the eleven-state matrix ([state-matrix.md](state-matrix.md)), proven in 3
    modes._ The applicable (`✓`) states for this family from the matrix, each proven in **Dark**,
    **Light**, and **High Contrast**. Non-applicable (`·`) states are named explicitly as deliberate

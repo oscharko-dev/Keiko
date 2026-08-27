@@ -71,13 +71,8 @@ The first launch is a bootstrap launch. It validates the payload, copies Keiko i
 target-specific managed install root, creates native app registration, and records a content-free
 install attestation under the local Keiko state root.
 
-Default managed roots:
-
-| Platform target | Default managed root              | User-visible registration                     |
-| --------------- | --------------------------------- | --------------------------------------------- |
-| `windows-x64`   | `%LOCALAPPDATA%\\Programs\\Keiko` | Windows search and Start Menu entry for Keiko |
-| `macos-arm64`   | `/Applications/Keiko.app`         | Finder and Spotlight launch for the Keiko app |
-| `macos-x64`     | `/Applications/Keiko.app`         | Finder and Spotlight launch for the Keiko app |
+See [Managed Install Layout](portable-runtime-artifact-contract.md#managed-install-layout) in the
+Portable Runtime Artifact Contract for the canonical per-platform managed root table.
 
 The managed install root is separate from `.keiko` runtime state. Runtime state stores local app
 state, evidence, and content-free install/update registration; it does not store the portable

@@ -156,7 +156,6 @@ Contract tests prove the pure readiness/strategy/rejection derivations. keiko-to
 - ADR-0043: Enforced Execution Isolation (sandbox network policy; `gh api` uses `inherit` network, same as push/PR)
 - Issue #478: Merge governance, protected-branch enforcement, and guided recovery flows (this ADR)
 - Issue #470: Epic — governed end-to-end Git delivery
-- ADR-0066: (next on this feat branch)
 
 ## Date
 

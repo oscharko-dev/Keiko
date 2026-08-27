@@ -175,6 +175,14 @@ asymmetry by routing fetch/pull through the kernel.
 
 #### D4a — Two process environments: hardened for local reads, credential-capable for network sync
 
+> **Amended by [ADR-0115](ADR-0115-governed-git-core-package.md) (2026-07-07):**
+> `gitEnv` / `networkGitEnv` described below were subsequently relocated from `@oscharko-dev/keiko-server`
+> into the leaf package `@oscharko-dev/keiko-git`, which also fixed a locale-passthrough defect (the
+> network profile no longer inherits the host `LANG`/`LC_ALL` — `LC_ALL=C` is now pinned). See
+> `packages/keiko-git/src/env.ts` for the current implementation; `packages/keiko-server/src/gitRoutes.ts`
+> now only re-exports these symbols. The security posture below is unchanged; only the module location and
+> the locale-pinning behaviour were tightened.
+
 The reused runner is parameterized over its environment by a small factory,
 `createGitProcessRunner(buildEnv)`, which holds the unchanged spawn / byte-cap / timeout /
 spawn-error-to-127 machinery and takes the environment as its only seam. Two runners are built from

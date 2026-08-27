@@ -543,9 +543,10 @@ existing tests that do not supply it continue to compile.
 **ADR-0013 (UI-Local Persistence):** No schema changes. Executions are ephemeral (D9). `ProjectStore.getProject(projectId)`
 is read (not modified) to resolve the workspace root for D2 Tier 2.
 
-**ADR-0014 (Workspace Shell Architecture):** `TerminalWidget`'s mount point in
-`ui/app/components/desktop/widgets/index.tsx` is unchanged. Only the widget's internals are
-rewritten.
+**ADR-0014 (Workspace Shell Architecture) — not restored:** ADR-0014 was not restored (see
+`docs/adr/README.md`); the workspace shell is now governed by ADR-0026 through ADR-0030. The
+`TerminalWidget` mount point remains unchanged, but its authoritative reference is those
+superseding ADRs. Only the widget's internals are rewritten.
 
 ## Open Questions / Out of Scope
 
@@ -587,7 +588,9 @@ follow-up issue could introduce per-project `TerminalPolicyOverride` stored in t
   SSE pattern, DNS-rebinding defense.
 - ADR-0013: UI-Local SQLite Persistence — `ProjectStore.getProject` used for D2 Tier 2 project
   root resolution. No schema change.
-- ADR-0014: Keiko Workspace Shell Architecture — `TerminalWidget` mount point unchanged.
+- ADR-0014: not restored (see `docs/adr/README.md`); the workspace shell is now governed by
+  ADR-0026 through ADR-0030. The `TerminalWidget` mount point is unchanged; consult the
+  superseding ADRs for the current location.
 - ADR-0017: Browser Tool Boundary and BYO-Chrome Integration — sibling surface; D7 SSE event
   metadata-only pattern, D9 in-memory map lifecycle, D10 typed failure mode table all mirror
   this ADR's approach.

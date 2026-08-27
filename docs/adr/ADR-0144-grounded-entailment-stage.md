@@ -62,7 +62,10 @@ The stage is an **injected optional capability** (`createEntailmentStage`,
 `grounded-entailment-stage.ts`) constructed once per grounded ask and threaded into all three
 System-A topologies (folder via `OrchestratorDeps.entailmentStage`, multi-source and hybrid via a
 shared `appendGroundedAnswerEntailment` post-assembly merge). When it is absent the assembled pack is
-byte-identical to the pre-#2563 behavior.
+byte-identical to the pre-#2563 behavior. For hybrid, the `packs` argument to that merge is
+restricted to folder evidence (`folders.map((f) => f.pack)` at `grounded-qa-hybrid.ts`
+`applyHybridEntailment`); connector evidence is not currently included, so hybrid's NLI stage sees
+only the folder half of the answer's evidence.
 
 **System B is left on its existing token-overlap check for M1.** It already performs citation-support
 verification, so all four topologies verify support after this change (three via the new NLI stage,
@@ -130,7 +133,10 @@ unchanged at 1.0.
 
 - The three System-A grounded topologies gain semantic citation-support verification when a
   compatible judge model is configured and policy allows it; otherwise the path is byte-identical
-  (pinned by the existing grounded regression suites, which run with no judge configured).
+  (pinned by the existing grounded regression suites, which run with no judge configured). For the
+  hybrid topology specifically, NLI verification covers only `[path:line]`-cited folder evidence;
+  connector-`[n]`-marker-cited claims remain on the existing membership/reconciliation check (see
+  ADD-01/RAG-RETRIEVAL-ADD-01) pending a follow-up.
 - A richer `keiko-evidence` verdict-tally manifest (beyond the operator diagnostic and the persisted
   uncertainty markers) and the System-B NLI unification are explicit K M2 follow-ups.
 - New contract surface is limited to two additive `UncertaintyMarkerKind` values; no capsule-store
