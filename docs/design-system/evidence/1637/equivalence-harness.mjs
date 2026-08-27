@@ -1,6 +1,6 @@
 import { chromium } from "playwright";
 import { createHash } from "node:crypto";
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -68,8 +68,6 @@ const maxPdfPreviewRangeBytes = numericProductConstant(
 // Bind the emitted slowLoadStatusMs to the viewer's actual SLOW_LOAD_MS declaration so the
 // performanceEvidence figure is source-derived, not a hand-written duplicate.
 const slowLoadStatusMs = localNumericConstant(sourceText.viewer, "SLOW_LOAD_MS");
-
-mkdirSync(HERE, { recursive: true });
 
 const CAPTURES = [
   {

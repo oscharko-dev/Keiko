@@ -5,7 +5,7 @@
 // Dark, High Contrast, reduced-motion and forced-colors. The static export MUST be rebuilt from the
 // migrated globals.css before running this (npm run build --workspace @oscharko-dev/keiko-ui).
 //
-//   node .keiko/1295-browser-evidence.mjs            # writes PNGs into the OUT_DIR below
+//   node docs/design-system/evidence/1295/browser/capture.mjs   # writes PNGs into the OUT_DIR below
 //
 import { chromium } from "playwright";
 import { createServer } from "node:http";
@@ -140,23 +140,28 @@ for (const vp of VIEWPORTS) {
     });
     const page = await ctx.newPage();
     if (mode.media.contrast) await page.emulateMedia({ contrast: "more" });
+    // Register the pageerror listener and the localStorage init script ONCE per page. The mutable
+    // `errs` array is reset per route below so each iteration reports only its own errors, while
+    // the single listener keeps pushing into the same buffer — matching this file's per-(viewport,
+    // mode) page-reuse design.
+    const errs = [];
+    page.on("pageerror", (e) => errs.push(String(e)));
+    await page.addInitScript((t) => {
+      try {
+        localStorage.setItem("keiko.theme", t);
+      } catch {}
+    }, mode.theme);
     for (const route of ROUTES) {
       // mobile/tablet only need the primary surfaces to bound shot count
       if (vp.id !== "desktop" && route.id !== "home") continue;
-      const errs = [];
-      page.on("pageerror", (e) => errs.push(String(e)));
-      await page.addInitScript((t) => {
-        try {
-          localStorage.setItem("keiko.theme", t);
-        } catch {}
-      }, mode.theme);
+      errs.length = 0;
       await page.goto(BASE + route.path, { waitUntil: "networkidle", timeout: 30000 });
       await page.evaluate(
         ({ theme, hc }) => {
           const r = document.documentElement;
-          r.setAttribute("data-theme", theme);
-          r.removeAttribute("data-hc");
-          if (hc) r.setAttribute("data-hc", hc);
+          r.dataset.theme = theme;
+          delete r.dataset.hc;
+          if (hc) r.dataset.hc = hc;
         },
         { theme: mode.theme, hc: mode.hc },
       );

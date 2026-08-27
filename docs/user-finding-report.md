@@ -62,3 +62,24 @@ Do not include API keys, customer data, private screenshots, internal model endp
 ## Maintainer Handoff
 
 Maintainers should copy the completed report into the tracked [GitHub User-Finding issue form](https://github.com/oscharko-dev/Keiko/issues/new?template=user_finding.yml) and keep the public issue redacted.
+
+### User-impact option mapping
+
+The standalone template above accepts six user-impact values that predate the GitHub issue form; the
+GitHub form uses four normalized values. When transferring a standalone report, map the reporter's
+selection to the closest GitHub-form value using the table below:
+
+| Standalone report option         | GitHub issue-form value     |
+| -------------------------------- | --------------------------- |
+| Blocks installation or startup   | Degrades core workflow      |
+| Blocks model or credential setup | Degrades core workflow      |
+| Blocks core workflow             | Degrades core workflow      |
+| Degrades core workflow           | Degrades core workflow      |
+| Visual or usability issue        | Cosmetic or minor           |
+| Unknown                          | Degrades secondary workflow |
+
+`Data loss or security concern` is reserved for reports whose security relevance is what makes them
+severe (a leak, a bypass, corrupted or lost data) — not for a routine setup or startup outage. If a
+startup or setup failure exposes a secret or corrupts state, promote it to `Data loss or security
+concern`; otherwise it belongs in `Degrades core workflow`. If the mapping is uncertain, prefer the
+more severe GitHub-form value and note the reporter's original wording in the issue body.

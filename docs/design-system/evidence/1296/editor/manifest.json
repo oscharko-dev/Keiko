@@ -1,5 +1,5 @@
 {
-  "issue": "#1296",
+  "issue": 1296,
   "harness": "tests/e2e/config/playwright.issue-1296-editor-agent.config.ts",
   "appPath": "packaged-cli-ui",
   "route": "/",

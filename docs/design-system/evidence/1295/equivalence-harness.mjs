@@ -1021,7 +1021,7 @@ for (const mode of MODES) {
   catCRaw.post[mode.id] = await collectC(page, POST, mode);
 
   // ── Screenshot (POST) ───────────────────────────────────────────────────
-  await collect(page, POST, mode);
+  // The DOM is already in POST state from the collectC(POST, mode) call above.
   proof[mode.id].mediaProbe = await readMediaProbe(page);
   await page.screenshot({ path: resolve(HERE, `${mode.id}.png`), fullPage: true });
   console.log(`${mode.id}: ${modeProbes} probes, ${modeDiffs} differing computed values`);

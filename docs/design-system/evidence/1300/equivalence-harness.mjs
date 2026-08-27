@@ -496,8 +496,10 @@ const byMode = {};
 const accentRecord = {};
 
 for (const mode of MODES) {
-  const rPost = await collect(page, POST, mode, PROBES_R);
+  // Order matters: collect REFERENCE first, then POST, so the DOM ends in POST state and the
+  // screenshot below captures the product surface without a redundant applyMode(POST) call.
   const rRef = await collect(page, REFERENCE, mode, PROBES_R);
+  const rPost = await collect(page, POST, mode, PROBES_R);
   const sink = GATE_R_MODES.has(mode.id) ? rDiffsGated : rDiffsRecorded;
   const before = rCounters.diffs;
   diffSets(rRef, rPost, PROBES_R, mode.id, sink, rCounters, missing);
@@ -507,14 +509,15 @@ for (const mode of MODES) {
   };
 
   if (GATE_R_MODES.has(mode.id)) {
-    const addPost = await collect(page, POST, mode, PROBES_ACCENT);
+    // Same ordering: REFERENCE first, then POST last so the DOM stays in POST state.
     const addRef = await collect(page, REFERENCE, mode, PROBES_ACCENT);
+    const addPost = await collect(page, POST, mode, PROBES_ACCENT);
     accentRecord[mode.id] = Object.fromEntries(
       PROBES_ACCENT.map(([sel]) => [sel, { product: addPost[sel], reference: addRef[sel] }]),
     );
   }
 
-  await applyMode(page, POST, mode);
+  // The DOM is already in POST state from the collect(POST, mode, ...) call above.
   byMode[mode.id].mediaProbe = await readMediaProbe(page);
   await page.screenshot({ path: resolve(HERE, `${mode.id}.png`), fullPage: true });
   console.log(

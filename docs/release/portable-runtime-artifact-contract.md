@@ -145,9 +145,10 @@ windows-x64/
           NODE_RUNTIME_SOURCE.json
         sidecars/
           opencode-compatible/
-            opencode.cmd
-            LICENSE.txt
+            bin/
+              opencode.exe
             evidence/
+              LICENSE
               sbom.cdx.json
       support/
         keiko-support.cmd
@@ -199,9 +200,10 @@ macos-arm64/
                 NODE_RUNTIME_SOURCE.json
               sidecars/
                 opencode-compatible/
-                  bin/opencode
-                  LICENSE.txt
+                  bin/
+                    opencode
                   evidence/
+                    LICENSE
                     sbom.cdx.json
       support/
         keiko-support.sh
@@ -506,11 +508,11 @@ required contract vocabulary.
       "executableSha256": "64-hex-opencode-executable-digest",
       "platformTarget": "windows-x64",
       "payloadRootPath": "runtime/sidecars/opencode-compatible",
-      "executablePath": "runtime/sidecars/opencode-compatible/opencode.cmd",
+      "executablePath": "runtime/sidecars/opencode-compatible/bin/opencode.exe",
       "payloadSha256": "64-hex-opencode-compatible-payload-digest",
       "sizeBytes": 2345678,
       "licenseEvidence": {
-        "path": "runtime/sidecars/opencode-compatible/LICENSE.txt",
+        "path": "runtime/sidecars/opencode-compatible/evidence/LICENSE",
         "sha256": "625f0f619133f89bbbb2abe37369613dfa1885eba1e50d02170deb62bb42cb6b"
       },
       "sbomEvidence": {
@@ -734,11 +736,11 @@ required contract vocabulary.
           "executableSha256": "64-hex-opencode-executable-digest",
           "platformTarget": "windows-x64",
           "payloadRootPath": "runtime/sidecars/opencode-compatible",
-          "executablePath": "runtime/sidecars/opencode-compatible/opencode.cmd",
+          "executablePath": "runtime/sidecars/opencode-compatible/bin/opencode.exe",
           "payloadSha256": "64-hex-opencode-compatible-payload-digest",
           "sizeBytes": 2345678,
           "licenseEvidence": {
-            "path": "runtime/sidecars/opencode-compatible/LICENSE.txt",
+            "path": "runtime/sidecars/opencode-compatible/evidence/LICENSE",
             "sha256": "625f0f619133f89bbbb2abe37369613dfa1885eba1e50d02170deb62bb42cb6b"
           },
           "sbomEvidence": {

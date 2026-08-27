@@ -31,7 +31,7 @@ Use go only when all statements are true:
 
 - Installation and first-run setup work from the documented commands.
 - Chat works with at least one configured chat model.
-- The three model-backed workflows can use a configured chat model.
+- The three model-backed workflows (Generate Tests, Investigate Bug, Explain Plan) can use a configured chat model.
 - Non-chat models are not offered for chat or workflow execution.
 - Proposed changes remain reviewable and locally controlled.
 - Evidence is redacted and useful for review.

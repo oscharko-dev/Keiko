@@ -14,6 +14,13 @@ path-free.
 Amended by Issue #2774 (Epic #2285, 2026-07-27) to bound the private history index before parsing
 and repeat root identity validation immediately before history effects.
 
+Amended by [ADR-0155](ADR-0155-root-scoped-workspace-trust-binding.md) to narrow the trust validity
+comparison to root-describing dimensions and the workspace-authority `manifestRef` — a root moving
+to a different workspace is a different authority context and still invalidates. Only `manifestRevision`
+and `manifestDigest` are excluded from the equality check that governs re-authorization; they remain
+recorded as provenance but change on ordinary focus/reorder within the same workspace and were the
+false-positive drivers ADR-0155 removed.
+
 The independent architecture, security, and contract-test reviews required by Issue #2520 were
 completed before implementation. The maintainer clarified on
 [Issue #2520](https://github.com/oscharko-dev/Keiko/issues/2520#issuecomment-5012022731) that
@@ -174,13 +181,16 @@ tagged fact union `known | unknown | unavailable | absent`; no `undefined`, empt
 default, or inferred trust is valid. Unknown, unavailable, absent, malformed, corrupt, stale, or
 mismatched state resolves to restricted.
 
-A trust record is server-owned and binds all of:
+A trust record is server-owned. Under
+[ADR-0155](ADR-0155-root-scoped-workspace-trust-binding.md), its dimensions split into two roles:
 
-- manifest reference, revision, and digest;
-- root reference and current filesystem identity digest;
-- an explicit capability-specific trust-basis digest fact (the current package-script consumer uses
-  the exact raw-byte `package.json` digest);
-- trust revision, policy version, reason, and server ownership.
+- **Recorded provenance** (documented on the record, not compared): manifest reference, revision,
+  and digest.
+- **Validity comparison dimensions** (equality-checked to decide whether an existing grant still
+  authorizes the current request): root reference and current filesystem identity digest; an
+  explicit capability-specific trust-basis digest fact (the current package-script consumer uses
+  the exact raw-byte `package.json` digest); trust revision, policy version, reason, and server
+  ownership.
 
 The browser may later request grant or revocation for a bounded root reference with concurrency and
 idempotency data. It never supplies `trusted`, canonical paths, identity/manifest/source digests,

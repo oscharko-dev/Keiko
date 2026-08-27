@@ -743,7 +743,8 @@ Common failures and operational guidance for explicit refresh of an indexed HTML
 Knowledge Pod are documented separately. Refer to the
 [HTML Manual Knowledge Pod refresh runbook](./html-manual-pod-refresh.md) for scenarios
 including crawl limit exhaustion, embedding-model incompatibility, fail-closed refresh
-behaviour, and empty-crawl handling.
+behaviour, and empty-crawl handling. The runbook documents validated domain behaviour; the
+live, user-triggerable entry point is a tracked follow-up (see the runbook's own status note).
 
 ---
 

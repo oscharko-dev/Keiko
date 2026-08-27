@@ -309,3 +309,7 @@ can reference a stable baseline. Sequencing notes are in
   [ADR-0048](ADR-0048-evidence-artifact-confidentiality.md),
   [ADR-0052](ADR-0052-deterministic-context-engineering-layer.md).
 - [`docs/local-runtime-state-contract.md`](../local-runtime-state-contract.md).
+
+## Date
+
+2026-06-24

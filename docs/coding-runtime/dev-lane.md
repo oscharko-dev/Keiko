@@ -102,9 +102,11 @@ npm run dev:start
 - The readiness projection reports exactly the ceiling the mint clamp enforces (before #2475 it
   reported the separate autonomous-delivery ceiling, which could diverge from enforcement).
 - Mode-copy reconciliation (Epic #2473 gap-ledger row "Governed-assist copy-vs-enforcement"):
-  under ADR-0138's monotonic matrix, governed-assist gates workspace-contained reads behind
-  approval, while older product copy promised "reads and planning proceed". The enforcement is
-  authoritative. This lane makes `supervised-coding` honestly reachable through the explicit
+  ADR-0138 D3(4) confirms reads and planning are exempt from the approval matrix and remain
+  allowed under governed-assist — envelope-gated, budget-charged, sensitive-path-gated — which
+  matches the product copy in AGENTS.md and the distinct `workspace-read` effect class in
+  `packages/keiko-contracts/src/code-task-governance.ts`. No further reconciliation is required
+  on that point. This lane makes `supervised-coding` honestly reachable through the explicit
   ceiling above; W1.3 owns rendering the honest readiness states (including
   `runtimeUnavailableReason`) in the product UI.
 

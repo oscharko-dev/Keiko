@@ -157,8 +157,9 @@ The value is a strict JSON document with `schemaVersion: 1`, an `adapter` sectio
 (`executableName`, fixed `executableArgs`, `trustedRoots`, and an approved `PATH`), and a `launch`
 section naming the immutable Node, npm, shell, empty npm-config, sandbox-backend, and runtime-closure
 artifacts. Every host path must be absolute and live beneath its explicit operator-approved root;
-the two npm configuration artifacts must project exactly to
-`/opt/keiko-debug/npm-user-config` and `/opt/keiko-debug/npm-global-config`. The BFF derives the
+the two npm configuration artifacts must equal exactly
+`/opt/keiko-debug/npm-user-config` and `/opt/keiko-debug/npm-global-config` — any other path is
+rejected before the DAP service is composed. The BFF derives the
 preflight, launch-context, and target-revalidation ports from this declaration itself. Functions,
 unknown keys, protected environment variables, relative paths, duplicate values, and caller-supplied
 process arguments are rejected before the DAP service is composed.

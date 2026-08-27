@@ -25,16 +25,21 @@ Supervised Coding delivery approval flow.
 
 ## Verification Evidence
 
-Rerunnable browser harness:
+> **Historical / not reproducible by a lane.** The pending-approval bounded-facts @smoke spec
+> `tests/e2e/coding-workbench-1992.spec.ts` was retained but its evidence-writing body was
+> removed in earlier housekeeping, so `KEIKO_WRITE_TRACKED_EVIDENCE=1 npm run
+> test:e2e:coding-workbench-1992` no longer regenerates the artifacts below. The tracked captures
+> record the verification as it stood when produced and are frozen at that state — the committed
+> `manifest.json` carries `status: "historical"` and `verified: false` to make this explicit for a
+> future shape audit. Live coverage for the workbench-approval surface: the extended e2e matrix
+> suite `tests/e2e/coding-workbench-2253.spec.ts` and the pending-approval bounded-facts @smoke
+> check retained in this same spec file, which continues to gate that the workbench exposes only
+> the one-time decision controls in the awaiting-approval state.
+
+Historical (non-regenerating) invocation, kept for shape context only:
 
 ```bash
-npm run test:e2e:coding-workbench-1992
-```
-
-Tracked evidence regeneration:
-
-```bash
-KEIKO_WRITE_TRACKED_EVIDENCE=1 npm run test:e2e:coding-workbench-1992
+npm run test:e2e:coding-workbench-1992   # @smoke checks only; regenerates no evidence in this directory
 ```
 
 The Playwright harness writes these artifacts in this directory:
