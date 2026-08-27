@@ -169,7 +169,9 @@ function patternForRequest(
   request: WorkspaceSearchRequest | WorkspaceReplacePreviewRequest,
 ): string {
   const pattern = request.mode === "literal" ? escapeLiteralForRegex(request.query) : request.query;
-  return "wholeWord" in request && request.wholeWord === true ? `\\b(?:${pattern})\\b` : pattern;
+  return "wholeWord" in request && request.wholeWord === true
+    ? String.raw`\b(?:${pattern})\b`
+    : pattern;
 }
 
 function queryForRequest(

@@ -262,6 +262,25 @@ describe("restart supervision", () => {
     expect(start).not.toHaveBeenCalled();
     expect(waitForReadiness).not.toHaveBeenCalled();
   });
+
+  it("reports a readiness failure without leaving an unhandled restart promise", async () => {
+    const readinessFailure = new Error("readiness unavailable");
+    const reportError = vi.fn();
+    const result = await restartNextChildWithRetry({
+      currentPort: 3000,
+      lockPath: "/tmp/next-lock",
+      preflight: async () => ({ nextPort: 3000, reselected: false }),
+      isShuttingDown: () => false,
+      selectPort: vi.fn(),
+      start: vi.fn(),
+      waitForReadiness: async () => Promise.reject(readinessFailure),
+      retry: vi.fn(),
+      reportError,
+    });
+
+    expect(result).toEqual({ retried: false, started: true });
+    await vi.waitFor(() => expect(reportError).toHaveBeenCalledWith(readinessFailure));
+  });
 });
 
 // ---------------------------------------------------------------------------

@@ -14,6 +14,7 @@ import { createPortal } from "react-dom";
 import type { KnowledgeCapsuleId } from "@oscharko-dev/keiko-contracts";
 import { CAPSULE_SET_MAX_MEMBERS } from "@oscharko-dev/keiko-contracts/runtime/local-knowledge";
 import { useModalInteractionLock } from "@/app/components/desktop/hooks/useModalInteractionLock";
+import { NATIVE_DIALOG_STYLE } from "@/app/components/desktop/native-element-styles";
 import {
   useLocalKnowledgeTranslate as useTranslate,
   type I18nTranslate,
@@ -31,7 +32,7 @@ function focusablesIn(root: HTMLElement): readonly HTMLElement[] {
 }
 
 function useComposeFocusTrap(
-  dialogRef: React.RefObject<HTMLDivElement | null>,
+  dialogRef: React.RefObject<HTMLDialogElement | null>,
   busy: boolean,
   onCancel: () => void,
 ): void {
@@ -49,6 +50,7 @@ function useComposeFocusTrap(
   useEffect(() => {
     const dialog = dialogRef.current;
     if (dialog === null) return undefined;
+    const activeDialog: HTMLDialogElement = dialog;
     function handleKeyDown(event: KeyboardEvent): void {
       if (event.key === "Escape" && !busy) {
         event.preventDefault();
@@ -56,7 +58,7 @@ function useComposeFocusTrap(
         return;
       }
       if (event.key !== "Tab") return;
-      const focusables = focusablesIn(dialog as HTMLDivElement);
+      const focusables = focusablesIn(activeDialog);
       if (focusables.length === 0) {
         // All controls are disabled while busy — keep Tab from escaping
         // behind the backdrop (uiux-fix F033, C036).
@@ -64,7 +66,7 @@ function useComposeFocusTrap(
         return;
       }
       const first = focusables[0];
-      const last = focusables[focusables.length - 1];
+      const last = focusables.at(-1);
       if (event.shiftKey && document.activeElement === first) {
         event.preventDefault();
         last?.focus();
@@ -73,8 +75,8 @@ function useComposeFocusTrap(
         first?.focus();
       }
     }
-    dialog.addEventListener("keydown", handleKeyDown);
-    return () => dialog.removeEventListener("keydown", handleKeyDown);
+    activeDialog.addEventListener("keydown", handleKeyDown);
+    return () => activeDialog.removeEventListener("keydown", handleKeyDown);
   }, [dialogRef, busy, onCancel]);
 
   // While busy every control is disabled, which blurs the focused element to
@@ -168,7 +170,7 @@ export function CapsuleSetComposeDialog({
   const titleId = useId();
   const nameId = useId();
   const errorId = useId();
-  const dialogRef = useRef<HTMLDivElement>(null);
+  const dialogRef = useRef<HTMLDialogElement>(null);
   const [name, setName] = useState("");
   const [selected, setSelected] = useState<ReadonlySet<KnowledgeCapsuleId>>(new Set());
   const [busy, setBusy] = useState(false);
@@ -210,14 +212,15 @@ export function CapsuleSetComposeDialog({
   const selectionInvalid = error === t("localKnowledge.set.validation.selectionRequired");
 
   return createPortal(
-    <div className="mc-dialog-backdrop" role="presentation">
-      <div
+    <div className="mc-dialog-backdrop">
+      <dialog
         ref={dialogRef}
         className="mc-dialog"
-        role="dialog"
+        open
         aria-modal="true"
         aria-labelledby={titleId}
         tabIndex={-1}
+        style={NATIVE_DIALOG_STYLE}
       >
         <h2 id={titleId} className="mc-dialog-title">
           {t("localKnowledge.set.createTitle")}
@@ -294,7 +297,7 @@ export function CapsuleSetComposeDialog({
             </button>
           </div>
         </form>
-      </div>
+      </dialog>
     </div>,
     document.body,
   );

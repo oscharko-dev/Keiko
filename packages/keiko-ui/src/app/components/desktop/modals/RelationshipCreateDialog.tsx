@@ -34,6 +34,7 @@ import {
 import type { ApiRelationship } from "../../../relationships/api";
 import { Icons } from "../Icons";
 import KeikoSelect from "../KeikoSelect";
+import { NATIVE_DIALOG_STYLE } from "../native-element-styles";
 
 // PascalCase aliases so the JSX tag itself signals "component", not member access (S6770).
 const CloseIcon = Icons.close;
@@ -94,7 +95,7 @@ export function RelationshipCreateDialog({ onClose }: RelationshipCreateDialogPr
   const [submitting, setSubmitting] = useState(false);
   const [previewLoading, setPreviewLoading] = useState(false);
 
-  const dialogRef = useRef<HTMLDivElement | null>(null);
+  const dialogRef = useRef<HTMLDialogElement | null>(null);
   const titleId = "rel-create-dialog-title";
   const descId = "rel-create-dialog-desc";
 
@@ -304,7 +305,7 @@ export function RelationshipCreateDialog({ onClose }: RelationshipCreateDialogPr
   }, [canSubmit, form, onClose]);
 
   const onDialogKeyDown = useCallback(
-    (e: KeyboardEvent<HTMLDivElement>) => {
+    (e: KeyboardEvent<HTMLDialogElement>) => {
       if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) {
         void handleSubmit();
       }
@@ -336,15 +337,15 @@ export function RelationshipCreateDialog({ onClose }: RelationshipCreateDialogPr
       }}
       data-testid="rel-create-overlay"
     >
-      {/* eslint-disable-next-line jsx-a11y/no-noninteractive-element-interactions -- dialog needs keydown handling */}
-      <div
+      {/* eslint-disable-next-line jsx-a11y/no-noninteractive-element-interactions -- native dialog owns the modal semantics and receives the established focus trap. */}
+      <dialog
         ref={dialogRef}
-        role="dialog"
+        open
         aria-modal="true"
         aria-labelledby={titleId}
         aria-describedby={descId}
         className="cmdk"
-        style={{ maxWidth: 480, width: "100%" }}
+        style={{ ...NATIVE_DIALOG_STYLE, maxWidth: 480, width: "100%" }}
         onPointerDown={(e) => e.stopPropagation()}
         onKeyDown={onDialogKeyDown}
         data-testid="rel-create-dialog"
@@ -684,7 +685,7 @@ export function RelationshipCreateDialog({ onClose }: RelationshipCreateDialogPr
             </button>
           </div>
         </div>
-      </div>
+      </dialog>
     </div>
   );
 

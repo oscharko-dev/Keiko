@@ -334,7 +334,24 @@ function shellTokensRunScript(tokens, index, script) {
 }
 
 function isShellAssignment(token) {
-  return /^[A-Za-z_][A-Za-z0-9_]*=/u.test(token);
+  const assignment = token.indexOf("=");
+  if (assignment < 1 || !isShellNameStart(token.codePointAt(0))) return false;
+  for (let index = 1; index < assignment; index += 1) {
+    if (!isShellNameContinue(token.codePointAt(index))) return false;
+  }
+  return true;
+}
+
+function isShellNameStart(codePoint) {
+  return (
+    codePoint === 95 ||
+    (codePoint >= 65 && codePoint <= 90) ||
+    (codePoint >= 97 && codePoint <= 122)
+  );
+}
+
+function isShellNameContinue(codePoint) {
+  return isShellNameStart(codePoint) || (codePoint >= 48 && codePoint <= 57);
 }
 
 function blockRunHasSuite(lines, start, runIndent, script) {

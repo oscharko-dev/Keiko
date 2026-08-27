@@ -394,7 +394,7 @@ export async function restartNextChildWithRetry({
       selectPort(result.nextPort);
     }
     start();
-    void waitForReadiness();
+    waitForReadiness().catch(reportError);
     return { retried: false, started: true };
   } catch (error) {
     reportError(error);

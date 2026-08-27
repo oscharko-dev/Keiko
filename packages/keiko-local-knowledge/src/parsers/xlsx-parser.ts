@@ -534,7 +534,7 @@ function columnName(ref: string | undefined, fallbackIndex: number): string {
   let out = "";
   while (n > 0) {
     const rem = (n - 1) % 26;
-    out = String.fromCharCode(65 + rem) + out;
+    out = String.fromCodePoint(65 + rem) + out;
     n = Math.floor((n - 1) / 26);
   }
   return out;

@@ -42,7 +42,11 @@ import {
 } from "../../../../relationships/api";
 import type { ApiRelationship } from "../../../../relationships/api";
 import { RelationshipEdgeBadge, ACTIVITY_VISUALS } from "./RelationshipEdgeBadge";
-import { NATIVE_BLOCK_STYLE, NATIVE_LIST_STYLE } from "../../native-element-styles";
+import {
+  NATIVE_BLOCK_STYLE,
+  NATIVE_FIELDSET_RESET_STYLE,
+  NATIVE_LIST_STYLE,
+} from "../../native-element-styles";
 import { useTranslate } from "@/lib/i18n";
 
 // ─── Density mode helpers ──────────────────────────────────────────────────────
@@ -566,10 +570,15 @@ export function RelationshipListPanel({
     >
       {/* Density switcher — uiux-fix F018 C042: the four buttons need ~296px but the
           list column offers ~254px; wrapping keeps the labels inside their buttons. */}
-      <div
-        role="group"
+      <fieldset
         aria-label="Relationship density"
-        style={{ display: "flex", flexWrap: "wrap", gap: "var(--space-2)", marginBottom: 8 }}
+        style={{
+          ...NATIVE_FIELDSET_RESET_STYLE,
+          display: "flex",
+          flexWrap: "wrap",
+          gap: "var(--space-2)",
+          marginBottom: 8,
+        }}
       >
         {(["minimal", "standard", "dense"] as const).map((mode) => (
           <button
@@ -594,7 +603,7 @@ export function RelationshipListPanel({
         >
           Focus
         </button>
-      </div>
+      </fieldset>
 
       {/* Filter input */}
       <div style={{ marginBottom: 8 }}>

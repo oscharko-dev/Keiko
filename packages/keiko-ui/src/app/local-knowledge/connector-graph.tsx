@@ -36,6 +36,10 @@ import { Icons } from "@/app/components/desktop/Icons";
 import { isPrimaryActivationPointer } from "@/app/components/desktop/interactionGuards";
 import { useModalInteractionLock } from "@/app/components/desktop/hooks/useModalInteractionLock";
 import {
+  NATIVE_DIALOG_STYLE,
+  NATIVE_FIELDSET_RESET_STYLE,
+} from "@/app/components/desktop/native-element-styles";
+import {
   useLocalKnowledgeTranslate as useTranslate,
   type LocalKnowledgeMessageKey,
 } from "./local-knowledge-i18n";
@@ -115,6 +119,24 @@ function focusablesIn(root: HTMLElement): readonly HTMLElement[] {
       "button:not([disabled]),input:not([disabled]),textarea:not([disabled]),select:not([disabled]),[tabindex]:not([tabindex='-1'])",
     ),
   );
+}
+
+function retainDialogFocus(event: KeyboardEvent, dialog: HTMLElement): void {
+  if (event.key !== "Tab") return;
+  const focusables = focusablesIn(dialog);
+  if (focusables.length === 0) {
+    event.preventDefault();
+    return;
+  }
+  const first = focusables[0];
+  const last = focusables.at(-1);
+  if (event.shiftKey && document.activeElement === first) {
+    event.preventDefault();
+    last?.focus();
+  } else if (!event.shiftKey && document.activeElement === last) {
+    event.preventDefault();
+    first?.focus();
+  }
 }
 
 type CreateCapsuleAccessMode = "local" | "shareable";
@@ -435,7 +457,7 @@ function CreateCapsuleDialog({
   const descriptionId = useId();
   const inputId = useId();
   const errorId = useId();
-  const dialogRef = useRef<HTMLDivElement>(null);
+  const dialogRef = useRef<HTMLDialogElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const triggerRef = useRef<HTMLElement | null>(null);
   const [name, setName] = useState("");
@@ -461,23 +483,7 @@ function CreateCapsuleDialog({
         onCancel();
         return;
       }
-      if (event.key !== "Tab") return;
-      const focusables = focusablesIn(dialog);
-      if (focusables.length === 0) {
-        // All controls are disabled while busy — keep Tab from escaping
-        // behind the backdrop (uiux-fix F033, C036).
-        event.preventDefault();
-        return;
-      }
-      const first = focusables[0];
-      const last = focusables.at(-1);
-      if (event.shiftKey && document.activeElement === first) {
-        event.preventDefault();
-        last?.focus();
-      } else if (!event.shiftKey && document.activeElement === last) {
-        event.preventDefault();
-        first?.focus();
-      }
+      retainDialogFocus(event, dialog);
     };
     dialog.addEventListener("keydown", handleKeyDown);
     return () => dialog.removeEventListener("keydown", handleKeyDown);
@@ -513,15 +519,16 @@ function CreateCapsuleDialog({
 
   const dialogError = validationError ?? error;
   return createPortal(
-    <div className="mc-dialog-backdrop" role="presentation">
-      <div
+    <div className="mc-dialog-backdrop">
+      <dialog
         ref={dialogRef}
         className="mc-dialog"
-        role="dialog"
+        open
         aria-modal="true"
         aria-labelledby={titleId}
         aria-describedby={descriptionId}
         tabIndex={-1}
+        style={NATIVE_DIALOG_STYLE}
       >
         <h2 id={titleId} className="mc-dialog-title">
           {t("localKnowledge.create.title")}
@@ -575,7 +582,7 @@ function CreateCapsuleDialog({
             </button>
           </div>
         </form>
-      </div>
+      </dialog>
     </div>,
     document.body,
   );
@@ -599,7 +606,7 @@ function DisconnectConfirmDialog({
   const t = useTranslate();
   const titleId = useId();
   const descriptionId = useId();
-  const dialogRef = useRef<HTMLDivElement>(null);
+  const dialogRef = useRef<HTMLDialogElement>(null);
   useModalInteractionLock();
 
   // Focus the first control on open; restore the opener on close (WCAG 2.4.3).
@@ -619,36 +626,23 @@ function DisconnectConfirmDialog({
         onCancel();
         return;
       }
-      if (event.key !== "Tab") return;
-      const focusables = focusablesIn(dialog);
-      if (focusables.length === 0) {
-        event.preventDefault();
-        return;
-      }
-      const first = focusables[0];
-      const last = focusables.at(-1);
-      if (event.shiftKey && document.activeElement === first) {
-        event.preventDefault();
-        last?.focus();
-      } else if (!event.shiftKey && document.activeElement === last) {
-        event.preventDefault();
-        first?.focus();
-      }
+      retainDialogFocus(event, dialog);
     };
     dialog.addEventListener("keydown", handleKeyDown);
     return () => dialog.removeEventListener("keydown", handleKeyDown);
   }, [onCancel]);
 
   return createPortal(
-    <div className="mc-dialog-backdrop" role="presentation">
-      <div
+    <div className="mc-dialog-backdrop">
+      <dialog
         ref={dialogRef}
         className="mc-dialog"
-        role="dialog"
+        open
         aria-modal="true"
         aria-labelledby={titleId}
         aria-describedby={descriptionId}
         tabIndex={-1}
+        style={NATIVE_DIALOG_STYLE}
       >
         <h2 id={titleId} className="mc-dialog-title">
           {t("localKnowledge.disconnect.title")}
@@ -664,7 +658,7 @@ function DisconnectConfirmDialog({
             {t("localKnowledge.disconnect.confirm")}
           </button>
         </div>
-      </div>
+      </dialog>
     </div>,
     document.body,
   );
@@ -689,7 +683,7 @@ function DeleteCapsuleSetConfirmDialog({
   const t = useTranslate();
   const titleId = useId();
   const descriptionId = useId();
-  const dialogRef = useRef<HTMLDivElement>(null);
+  const dialogRef = useRef<HTMLDialogElement>(null);
   useModalInteractionLock();
 
   useEffect(() => {
@@ -708,36 +702,23 @@ function DeleteCapsuleSetConfirmDialog({
         onCancel();
         return;
       }
-      if (event.key !== "Tab") return;
-      const focusables = focusablesIn(dialog);
-      if (focusables.length === 0) {
-        event.preventDefault();
-        return;
-      }
-      const first = focusables[0];
-      const last = focusables[focusables.length - 1];
-      if (event.shiftKey && document.activeElement === first) {
-        event.preventDefault();
-        last?.focus();
-      } else if (!event.shiftKey && document.activeElement === last) {
-        event.preventDefault();
-        first?.focus();
-      }
+      retainDialogFocus(event, dialog);
     };
     dialog.addEventListener("keydown", handleKeyDown);
     return () => dialog.removeEventListener("keydown", handleKeyDown);
   }, [onCancel]);
 
   return createPortal(
-    <div className="mc-dialog-backdrop" role="presentation">
-      <div
+    <div className="mc-dialog-backdrop">
+      <dialog
         ref={dialogRef}
         className="mc-dialog"
-        role="dialog"
+        open
         aria-modal="true"
         aria-labelledby={titleId}
         aria-describedby={descriptionId}
         tabIndex={-1}
+        style={NATIVE_DIALOG_STYLE}
       >
         <h2 id={titleId} className="mc-dialog-title">
           {t("localKnowledge.set.deleteTitle")}
@@ -753,7 +734,7 @@ function DeleteCapsuleSetConfirmDialog({
             {t("localKnowledge.set.deleteConfirm")}
           </button>
         </div>
-      </div>
+      </dialog>
     </div>,
     document.body,
   );
@@ -1097,10 +1078,10 @@ function CapsuleRowActions({
   const t = useTranslate();
   const { id, displayName } = capsule;
   return (
-    <div
-      role="group"
+    <fieldset
       aria-label={`Actions for Knowledge Pod ${displayName}`}
       className="lk-capsule-actions"
+      style={NATIVE_FIELDSET_RESET_STYLE}
     >
       <IndexOrCancelBtn
         capsule={capsule}
@@ -1143,7 +1124,7 @@ function CapsuleRowActions({
       >
         {busyKind === "disconnect" ? "Disconnecting…" : t("localKnowledge.disconnect.confirm")}
       </button>
-    </div>
+    </fieldset>
   );
 }
 

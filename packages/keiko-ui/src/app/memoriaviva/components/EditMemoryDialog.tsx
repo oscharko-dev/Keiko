@@ -13,6 +13,7 @@ import type { MemoryId, MemoryRecord, MemorySensitivity } from "@oscharko-dev/ke
 import { MEMORY_SENSITIVITIES } from "@oscharko-dev/keiko-contracts/runtime/memory";
 import { correctMemory, editMemory } from "@/lib/memory-api";
 import { useTranslate } from "@/lib/i18n";
+import { NATIVE_DIALOG_STYLE } from "../../components/desktop/native-element-styles";
 import { formatError } from "./format-error";
 import { sensitivityLabel } from "./MemoryFilters";
 
@@ -49,7 +50,7 @@ export function EditMemoryDialog({
 
   const firstRef = useRef<HTMLTextAreaElement>(null);
   const backdropRef = useRef<HTMLDivElement>(null);
-  const dialogRef = useRef<HTMLDivElement>(null);
+  const dialogRef = useRef<HTMLDialogElement>(null);
   const restoreFocusRef = useRef<HTMLElement | null>(null);
   const titleId = useId();
   const errorId = useId();
@@ -65,7 +66,7 @@ export function EditMemoryDialog({
   }, []);
 
   const handleKeyDown = useCallback(
-    (e: KeyboardEvent<HTMLDivElement>): void => {
+    (e: KeyboardEvent<HTMLDialogElement>): void => {
       if (e.key === "Escape") {
         onClose();
         return;
@@ -162,116 +163,120 @@ export function EditMemoryDialog({
   }
 
   return (
-    <div
-      ref={backdropRef}
-      className="mc-dialog-backdrop"
-      role="presentation"
-      onClick={handleBackdropClick}
-    >
-      {/* eslint-disable-next-line jsx-a11y/no-noninteractive-element-interactions -- WAI-ARIA dialog pattern: role="dialog" is the canonical key-handler host; tabIndex={-1} makes it focusable for Escape capture */}
-      <div
-        ref={dialogRef}
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby={titleId}
-        tabIndex={-1}
-        className="mc-dialog"
-        onKeyDown={handleKeyDown}
-      >
-        <h2 id={titleId} className="mc-dialog-title">
-          {isCorrectMode ? t("memoria.dialog.correctTitle") : t("memoria.dialog.editTitle")}
-        </h2>
+    <>
+      {/* eslint-disable-next-line jsx-a11y/click-events-have-key-events, jsx-a11y/no-static-element-interactions -- pointer-only backdrop dismissal is additive; Escape and explicit Close provide keyboard dismissal. */}
+      <div ref={backdropRef} className="mc-dialog-backdrop" onClick={handleBackdropClick}>
+        {/* eslint-disable-next-line jsx-a11y/no-noninteractive-element-interactions -- native dialog owns the modal semantics and receives the established Escape handler. */}
+        <dialog
+          ref={dialogRef}
+          open
+          aria-modal="true"
+          aria-labelledby={titleId}
+          tabIndex={-1}
+          className="mc-dialog"
+          style={NATIVE_DIALOG_STYLE}
+          onKeyDown={handleKeyDown}
+        >
+          <h2 id={titleId} className="mc-dialog-title">
+            {isCorrectMode ? t("memoria.dialog.correctTitle") : t("memoria.dialog.editTitle")}
+          </h2>
 
-        <div className="mc-dialog-field">
-          <label htmlFor="edit-body" className="mc-dialog-label">
-            {isCorrectMode ? t("memoria.dialog.correctedBody") : t("memoria.dialog.body")}
-          </label>
-          <textarea
-            id="edit-body"
-            ref={firstRef}
-            className="mc-dialog-textarea"
-            value={body}
-            rows={5}
-            onChange={(e: ChangeEvent<HTMLTextAreaElement>) => {
-              setBody(e.target.value);
-              // Typing clears the field-level validation state.
-              if (bodyInvalid) {
-                setBodyInvalid(false);
-                setError(null);
-              }
-            }}
-            disabled={saving}
-            aria-required="true"
-            aria-invalid={bodyInvalid ? "true" : undefined}
-            aria-describedby={bodyInvalid ? errorId : undefined}
-          />
-        </div>
+          <div className="mc-dialog-field">
+            <label htmlFor="edit-body" className="mc-dialog-label">
+              {isCorrectMode ? t("memoria.dialog.correctedBody") : t("memoria.dialog.body")}
+            </label>
+            <textarea
+              id="edit-body"
+              ref={firstRef}
+              className="mc-dialog-textarea"
+              value={body}
+              rows={5}
+              onChange={(e: ChangeEvent<HTMLTextAreaElement>) => {
+                setBody(e.target.value);
+                // Typing clears the field-level validation state.
+                if (bodyInvalid) {
+                  setBodyInvalid(false);
+                  setError(null);
+                }
+              }}
+              disabled={saving}
+              aria-required="true"
+              aria-invalid={bodyInvalid ? "true" : undefined}
+              aria-describedby={bodyInvalid ? errorId : undefined}
+            />
+          </div>
 
-        {isCorrectMode ? null : (
-          <>
-            <div className="mc-dialog-field">
-              <label htmlFor="edit-tags" className="mc-dialog-label">
-                {t("memoria.dialog.tags")}{" "}
-                <span className="mc-dialog-hint">{t("memoria.dialog.commaSeparated")}</span>
-              </label>
-              <input
-                id="edit-tags"
-                type="text"
-                className="mc-dialog-input"
-                value={tagsRaw}
-                onChange={(e: ChangeEvent<HTMLInputElement>) => {
-                  setTagsRaw(e.target.value);
-                }}
-                disabled={saving}
-              />
-            </div>
+          {isCorrectMode ? null : (
+            <>
+              <div className="mc-dialog-field">
+                <label htmlFor="edit-tags" className="mc-dialog-label">
+                  {t("memoria.dialog.tags")}{" "}
+                  <span className="mc-dialog-hint">{t("memoria.dialog.commaSeparated")}</span>
+                </label>
+                <input
+                  id="edit-tags"
+                  type="text"
+                  className="mc-dialog-input"
+                  value={tagsRaw}
+                  onChange={(e: ChangeEvent<HTMLInputElement>) => {
+                    setTagsRaw(e.target.value);
+                  }}
+                  disabled={saving}
+                />
+              </div>
 
-            <div className="mc-dialog-field">
-              <label htmlFor="edit-sensitivity" className="mc-dialog-label">
-                {t("memoria.sensitivity")}
-              </label>
-              <select
-                id="edit-sensitivity"
-                className="mc-dialog-select"
-                value={sensitivity}
-                onChange={(e: ChangeEvent<HTMLSelectElement>) => {
-                  setSensitivity(e.target.value as MemorySensitivity);
-                }}
-                disabled={saving}
-              >
-                {MEMORY_SENSITIVITIES.map((s) => (
-                  <option key={s} value={s}>
-                    {sensitivityLabel(s, t)}
-                  </option>
-                ))}
-              </select>
-            </div>
-          </>
-        )}
+              <div className="mc-dialog-field">
+                <label htmlFor="edit-sensitivity" className="mc-dialog-label">
+                  {t("memoria.sensitivity")}
+                </label>
+                <select
+                  id="edit-sensitivity"
+                  className="mc-dialog-select"
+                  value={sensitivity}
+                  onChange={(e: ChangeEvent<HTMLSelectElement>) => {
+                    setSensitivity(e.target.value as MemorySensitivity);
+                  }}
+                  disabled={saving}
+                >
+                  {MEMORY_SENSITIVITIES.map((s) => (
+                    <option key={s} value={s}>
+                      {sensitivityLabel(s, t)}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            </>
+          )}
 
-        {error !== null ? (
-          <p id={errorId} role="alert" className="mc-dialog-error">
-            {error}
-          </p>
-        ) : null}
+          {error !== null ? (
+            <p id={errorId} role="alert" className="mc-dialog-error">
+              {error}
+            </p>
+          ) : null}
 
-        <div className="mc-dialog-actions">
-          <button type="button" className="lk-btn lk-btn-ghost" onClick={onClose} disabled={saving}>
-            {t("memoria.cancel")}
-          </button>
-          <button
-            type="button"
-            className="lk-btn lk-btn-primary"
-            onClick={() => {
-              void handleSave();
-            }}
-            disabled={saving}
-            aria-busy={saving}
-          >
-            {resolveSaveButtonLabel()}
-          </button>
-        </div>
+          <div className="mc-dialog-actions">
+            <button
+              type="button"
+              className="lk-btn lk-btn-ghost"
+              onClick={onClose}
+              disabled={saving}
+            >
+              {t("memoria.cancel")}
+            </button>
+            <button
+              type="button"
+              className="lk-btn lk-btn-primary"
+              onClick={() => {
+                void handleSave();
+              }}
+              disabled={saving}
+              aria-busy={saving}
+            >
+              {resolveSaveButtonLabel()}
+            </button>
+          </div>
+        </dialog>
       </div>
-    </div>
+    </>
   );
 }

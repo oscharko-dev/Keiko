@@ -99,7 +99,7 @@ describe("Design-system styling exception register", () => {
     expect(new Set(register.exceptions.map((entry) => entry.source)).size).toBe(
       register.exceptions.length,
     );
-    expect(register.exceptions.length).toBe(EXPECTED_COMPATIBILITY_EXCEPTION_SOURCES);
+    expect(register.exceptions).toHaveLength(EXPECTED_COMPATIBILITY_EXCEPTION_SOURCES);
     expect([...registered.keys()].sort()).toStrictEqual([...actual.keys()].sort());
     for (const [source, kinds] of actual) {
       expect(registered.get(source)).toStrictEqual(kinds);

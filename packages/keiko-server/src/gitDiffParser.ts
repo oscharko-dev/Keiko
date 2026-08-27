@@ -194,7 +194,7 @@ function diffLine(raw: string, oldLine: number, newLine: number): GitEditorDiffL
   if (raw.startsWith(" ")) return { kind: "ctx", oldLine, newLine, text };
   if (raw.startsWith("+")) return { kind: "add", oldLine: null, newLine, text };
   if (raw.startsWith("-")) return { kind: "del", oldLine, newLine: null, text };
-  if (raw === "\\ No newline at end of file") {
+  if (raw === String.raw`\ No newline at end of file`) {
     return { kind: "meta", oldLine: null, newLine: null, text: raw };
   }
   return undefined;

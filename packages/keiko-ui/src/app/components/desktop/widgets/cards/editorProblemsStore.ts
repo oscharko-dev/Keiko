@@ -183,7 +183,8 @@ function projectState(root: string): ProjectProblemsState {
 }
 
 function notify(entry: ProjectProblemsState): void {
-  for (const listener of [...entry.listeners]) listener();
+  const listeners = new Set(entry.listeners);
+  for (const listener of listeners) listener();
 }
 
 function pruneIfEmpty(root: string, entry: ProjectProblemsState): void {

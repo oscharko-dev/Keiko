@@ -3,8 +3,8 @@
 // Append-only writer for the `relationship_audit_entries` table (see audit-events.md §5.5).
 // Persistence-placement rule (audit-events.md §5.3): in this PR both run-scoped and
 // non-run-scoped mutations route to the sibling table. EvidenceManifest.relationships?
-// embedding is the responsibility of issue #544 (the `// TODO(#544)` comment in
-// `resolveAuditPlacement` is the single seam where future code branches).
+// embedding is deliberately not implemented until the evidence contract owns such a section;
+// `resolveAuditPlacement` is the single seam where that later contract can branch.
 //
 // Redaction-on-write: every payload string passes through `deepRedactStrings` with the
 // injected `redactString` BEFORE the SQL INSERT (audit-events.md §7). The forbidden-key
@@ -68,15 +68,14 @@ export interface RelationshipAuditEntryRow {
 }
 
 // Selects where the row lives. Audit-events.md §5.3: the source endpoint kind decides.
-// For now both branches return "sibling-table"; the workflow-run branch is reserved for
-// #544 wiring EvidenceManifest.relationships?.
+// Until the evidence contract owns relationship entries, every source kind persists to the
+// sibling table. The workflow-run value stays in the public union so the eventual additive
+// evidence contract has one owned selection seam rather than a parallel writer.
 export function resolveAuditPlacement(_input: {
   readonly kind: RelationshipAuditKind;
   readonly sourceKind?: string | undefined;
 }): RelationshipAuditPlacement {
-  // TODO(#544): wire EvidenceManifest.relationships? when sourceKind === "workflow-run"
-  // and the request handler holds an evidenceRunId. Until then every row lands in the
-  // sibling table — this is the documented Issue #539 placement.
+  // Every row lands in the sibling table — the documented current placement.
   return "sibling-table";
 }
 

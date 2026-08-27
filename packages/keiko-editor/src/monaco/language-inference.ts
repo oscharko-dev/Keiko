@@ -85,7 +85,7 @@ export const MONACO_LANGUAGE_BY_EXTENSION: Readonly<Record<string, MonacoLanguag
  */
 function basename(pathOrName: string): string {
   const segments = pathOrName.split(/[/\\]/);
-  return segments[segments.length - 1] ?? pathOrName;
+  return segments.at(-1) ?? pathOrName;
 }
 
 /**

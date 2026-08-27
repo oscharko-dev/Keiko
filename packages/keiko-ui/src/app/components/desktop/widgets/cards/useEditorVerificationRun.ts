@@ -210,7 +210,8 @@ function emit(root: string, entry: ProjectRunState, next: SharedRunState): void 
     if (entry.pendingState === null) return;
     entry.state = entry.pendingState;
     entry.pendingState = null;
-    for (const listener of [...entry.listeners]) listener();
+    const listeners = new Set(entry.listeners);
+    for (const listener of listeners) listener();
   });
 }
 

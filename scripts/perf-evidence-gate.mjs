@@ -44,25 +44,41 @@ const REQUIRED_WORKSPACE_EVIDENCE_RUNS = Object.freeze(["chromium", "chromium-mi
 export const D12_PINNED_BASELINE_SOURCE_TREE_SHA256 =
   "0dd8c879889c3449157e6527c651f30b6481422a0ade0bfed36e354ec5ba1664";
 
-export function evaluateWorkspaceEvidenceDocument(evidence) {
-  const evaluated = evaluateWorkspaceEvidence(evidence);
-  if (typeof evidence !== "object" || evidence === null) return evaluated;
+function compareRunNames(left, right) {
+  return left.localeCompare(right);
+}
+
+function workspaceRuns(evidence) {
+  if (typeof evidence !== "object" || evidence === null) return undefined;
   const runs = evidence.runs;
-  if (typeof runs !== "object" || runs === null || Array.isArray(runs)) return evaluated;
-  const actual = Object.keys(runs).sort();
-  const expected = [...REQUIRED_WORKSPACE_EVIDENCE_RUNS].sort();
-  const failures = [...evaluated.failures];
-  if (actual.join("\0") !== expected.join("\0")) {
-    failures.push(
-      `workspace evidence runs ${actual.join(", ") || "(none)"} != required ${expected.join(", ")}`,
-    );
-  }
+  if (typeof runs !== "object" || runs === null || Array.isArray(runs)) return undefined;
+  return runs;
+}
+
+function workspaceRunIdentityFailures(runs) {
+  const failures = [];
   for (const name of REQUIRED_WORKSPACE_EVIDENCE_RUNS) {
     const run = runs[name];
     if (typeof run !== "object" || run === null || run.project !== name) {
       failures.push(`workspace evidence run ${name} is missing its matching project identity`);
     }
   }
+  return failures;
+}
+
+export function evaluateWorkspaceEvidenceDocument(evidence) {
+  const evaluated = evaluateWorkspaceEvidence(evidence);
+  const runs = workspaceRuns(evidence);
+  if (runs === undefined) return evaluated;
+  const actual = Object.keys(runs).sort(compareRunNames);
+  const expected = [...REQUIRED_WORKSPACE_EVIDENCE_RUNS].sort(compareRunNames);
+  const failures = [...evaluated.failures];
+  if (actual.join("\0") !== expected.join("\0")) {
+    failures.push(
+      `workspace evidence runs ${actual.join(", ") || "(none)"} != required ${expected.join(", ")}`,
+    );
+  }
+  failures.push(...workspaceRunIdentityFailures(runs));
   return { passed: failures.length === 0, failures };
 }
 

@@ -557,7 +557,7 @@ function ancestorDirectoryPaths(scopePath: string): readonly string[] {
 }
 
 function parentDirectoryPath(scopePath: string): string {
-  const normalized = scopePath.split("\\").join("/");
+  const normalized = scopePath.replaceAll("\\", "/");
   const slash = normalized.lastIndexOf("/");
   return slash === -1 ? "" : normalized.slice(0, slash);
 }
