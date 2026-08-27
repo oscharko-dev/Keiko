@@ -53,8 +53,28 @@ const FORBIDDEN_IMPORT_PATTERNS = ["@oscharko-dev/test-intelligence", "@oscharko
 // realistic way to reach `test-intelligence`/`ti-*` without the contiguous literal. `[^`/]*` keeps
 // the match inside the package-name segment, so legitimate dynamic SUBPATHS of statically-named
 // packages (`import(`@oscharko-dev/keiko-foo/${sub}`)`) are NOT flagged.
+//
+// KEIKO-0900: this pattern detects ONLY the template-literal interpolation form of dynamic-scope
+// evasion. String concatenation (`import("@oscharko-dev/" + pkg)`) and array-join obfuscation
+// (`import(["@oscharko-dev", pkg].join("/"))`) are not matched by this literal. The
+// FORBIDDEN_NONLITERAL_IMPORT_PATTERN below fires when the same file contains any dynamic
+// import()/require() whose ARGUMENT is not a static string literal AND the file text also
+// contains a token that could resolve to a forbidden namespace. Together these cover the three
+// realistic obfuscation shapes without flagging every dynamic import in the tree.
 const FORBIDDEN_DYNAMIC_SCOPE_PATTERN =
   /\b(?:import|require)\s*\(\s*`[^`]*@oscharko-dev\/[^`/]*\$\{/u;
+
+// A dynamic import/require whose argument is NOT a plain string/template literal. Match:
+//   import(<non-literal>)          require(<non-literal>)
+// Excluded: a bare string literal `"…"` or `'…'` or a plain template ``…`` with no `${` inside.
+const FORBIDDEN_NONLITERAL_IMPORT_PATTERN =
+  /\b(?:import|require)\s*\(\s*(?!['"`][^'"`]*['"`]\s*\))/u;
+
+// KEIKO-0900: a file that carries a token capable of resolving to a forbidden namespace under
+// runtime concatenation. `test-intelligence` and `@oscharko-dev/ti-` are the two literal
+// fragments known to reach the forbidden set; any file that both contains one of those and
+// makes a non-literal import/require is a plausible evasion.
+const FORBIDDEN_NAMESPACE_TOKEN_FRAGMENTS = ["test-intelligence", "@oscharko-dev/ti-"];
 
 const TELEMETRY_SUBSTRINGS = [
   "@sentry/",
@@ -217,6 +237,19 @@ function findForbiddenImportHits(files) {
     }
     if (FORBIDDEN_DYNAMIC_SCOPE_PATTERN.test(content)) {
       hits.push({ file, pattern: "dynamic @oscharko-dev/ package-name import (template literal)" });
+    }
+    // KEIKO-0900: string-concatenation and array-join obfuscation cases — flagged only when the
+    // file also carries a token fragment capable of assembling to a forbidden namespace, so a
+    // routine dynamic import unrelated to test-intelligence is not condemned.
+    if (
+      FORBIDDEN_NONLITERAL_IMPORT_PATTERN.test(content) &&
+      FORBIDDEN_NAMESPACE_TOKEN_FRAGMENTS.some((fragment) => content.includes(fragment))
+    ) {
+      hits.push({
+        file,
+        pattern:
+          "dynamic import()/require() with non-literal argument alongside a forbidden-namespace token",
+      });
     }
   }
   return hits;

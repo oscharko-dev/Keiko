@@ -521,6 +521,10 @@ function writeEvidenceManifest(): void {
       kind: "local-bare-repository",
       worktree: "temporary-local-worktree",
       remote: "temporary-local-bare-remote",
+      // KEIKO-0995: name the browser-side project path this evidence run is scoped to, matching
+      // the field that git-changes-view-1575, git-pr-merge-1577, and git-client-closeout-1578
+      // all record in their fixture blocks.
+      browserProjectPath: EVIDENCE_PROJECT_PATH,
       branches: ["main", "feature/local"],
     },
     routesIntercepted: MANIFEST_ROUTES,

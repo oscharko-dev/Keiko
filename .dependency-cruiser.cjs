@@ -34,9 +34,7 @@
 function siblingPackageSourcePattern(packageNames) {
   const patterns = [];
   for (const packageName of packageNames) {
-    patterns.push(
-      `((\\.\\./)*packages/keiko-${packageName}/src/|packages/keiko-${packageName}/src/)`,
-    );
+    patterns.push(`(\\.\\./)*packages/keiko-${packageName}/src/`);
   }
   return patterns.join("|");
 }
@@ -331,7 +329,7 @@ module.exports = {
       severity: "error",
       from: {
         path: "^(packages/keiko-evaluations/src/|tests/architecture/fixtures/evaluations/)",
-        pathNot: "\\.test\\.ts$",
+        pathNot: PRODUCTION_SOURCE_PATH_NOT,
       },
       to: {
         path:
@@ -798,7 +796,7 @@ module.exports = {
       severity: "error",
       from: {
         path: "^(packages/keiko-ui/src/|tests/architecture/fixtures/ui-browser/)",
-        pathNot: "\\.test\\.ts$",
+        pathNot: PRODUCTION_SOURCE_PATH_NOT,
       },
       to: {
         path:
@@ -825,7 +823,7 @@ module.exports = {
       severity: "error",
       from: {
         path: "^(packages/keiko-editor/src/|tests/architecture/fixtures/editor-browser/)",
-        pathNot: "\\.test\\.ts$",
+        pathNot: PRODUCTION_SOURCE_PATH_NOT,
       },
       to: {
         path:
@@ -852,7 +850,7 @@ module.exports = {
         // surface and re-introduces domain coupling at the product layer. The pattern matches
         // any sibling whose directory begins with `keiko-` — naturally excluding the root
         // `packages/keiko/src/` itself (which has no trailing hyphen).
-        path: "^((\\.\\./)*packages/keiko-[^/]+/src/|packages/keiko-[^/]+/src/)",
+        path: "^(\\.\\./)*packages/keiko-[^/]+/src/",
       },
     },
 
@@ -930,7 +928,8 @@ module.exports = {
         path:
           "^(packages/keiko-(tools|harness|workflows)/src/|src/(tools|harness|workflows)/|" +
           "tests/architecture/fixtures/direct-fs-outside-workspace/)",
-        pathNot: "^(packages/keiko-tools/src/(_support|exec|writer)\\.ts$)|\\.test\\.ts$",
+        pathNot:
+          "^(packages/keiko-tools/src/(_support|exec|writer)\\.ts$)|" + PRODUCTION_SOURCE_PATH_NOT,
       },
       to: { path: "^node:fs$|^fs$" },
     },
@@ -947,7 +946,7 @@ module.exports = {
         path:
           "^(packages/keiko-(harness|workflows)/src/|src/(harness|workflows)/|" +
           "tests/architecture/fixtures/patch-routes-through-tools/)",
-        pathNot: "\\.test\\.ts$",
+        pathNot: PRODUCTION_SOURCE_PATH_NOT,
       },
       to: { path: "^(node:fs/promises|fs/promises)$" },
     },
@@ -1000,7 +999,7 @@ module.exports = {
       severity: "error",
       from: {
         path: "^(packages/keiko-[^/]+/src/|tests/architecture/fixtures/no-do-not-follow-in-prod/|src/)",
-        pathNot: "\\.test\\.ts$",
+        pathNot: PRODUCTION_SOURCE_PATH_NOT,
       },
       to: { path: "(^|/)(__tests__|__test-support__|test-support)(/|$)" },
     },

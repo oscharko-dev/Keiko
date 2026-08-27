@@ -42,7 +42,7 @@ Explain the product belief this epic validates and the trust or capability it sh
 
 Summarize expected release-impact metadata for the epic. Child issues and PRs own the final normalized fields.
 
-- Release-note categories expected: `critical-security | update-notes | state-or-compatibility-changes | new-additions | improvements | fixes | ui-polish | internal-only`.
+- Release-note categories expected: `critical-security | update-notes | state-or-compatibility-changes | new-additions | improvements | fixes | ui-polish | internal-only | not-release-impacting`.
 - User-visible change summary:
 - Release-note bullet:
 - State or compatibility areas expected:

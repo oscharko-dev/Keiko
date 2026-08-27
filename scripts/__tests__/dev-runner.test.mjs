@@ -501,4 +501,51 @@ describe("forwardedUpstreamHeaders", () => {
     expect(out.__proto__).toBeUndefined();
     expect(out.constructor).toBeUndefined();
   });
+
+  // KEIKO-0607: pre-fix, `npm run dev:start` served the entire app shell with zero CSP or
+  // security headers on Next.js-routed responses. Now every proxied response carries the same
+  // baseline the production BFF applies, with a documented narrow relaxation for the two CSP
+  // directives Next.js Fast Refresh/HMR requires. The pins below prove the invariant on the
+  // path that used to be bare (the /dashboard route routed to NEXT_PORT).
+  it("applies the dev security header baseline on every proxied response (KEIKO-0607)", () => {
+    const out = forwardedUpstreamHeaders(
+      { "content-type": "text/html", location: "/dashboard" },
+      NEXT_PORT,
+    );
+    expect(out["content-security-policy"]).toMatch(/default-src 'self'/);
+    expect(out["x-content-type-options"]).toBe("nosniff");
+    expect(out["x-frame-options"]).toBe("DENY");
+    expect(out["referrer-policy"]).toBe("no-referrer");
+    expect(out["cross-origin-opener-policy"]).toBe("same-origin");
+    expect(out["cross-origin-resource-policy"]).toBe("same-origin");
+    expect(out["permissions-policy"]).toMatch(/microphone=\(\)/);
+  });
+
+  it("keeps HMR-only CSP relaxations scoped to script-src/style-src/connect-src (KEIKO-0607)", () => {
+    const out = forwardedUpstreamHeaders({ "content-type": "text/html" }, NEXT_PORT);
+    const csp = out["content-security-policy"];
+    // The dev CSP allows unsafe-eval/unsafe-inline in script-src (Fast Refresh) and inline styles
+    // in style-src, plus ws:/wss: in connect-src for the HMR socket — nothing else is relaxed.
+    expect(csp).toMatch(/script-src [^;]*'unsafe-eval'/);
+    expect(csp).toMatch(/script-src [^;]*'unsafe-inline'/);
+    expect(csp).toMatch(/style-src [^;]*'unsafe-inline'/);
+    expect(csp).toMatch(/connect-src [^;]*ws:/);
+    expect(csp).toMatch(/connect-src [^;]*wss:/);
+    // Production directives that must NOT be relaxed:
+    expect(csp).toMatch(/object-src 'none'/);
+    expect(csp).toMatch(/frame-ancestors 'none'/);
+    expect(csp).toMatch(/base-uri 'self'/);
+    expect(csp).toMatch(/form-action 'self'/);
+  });
+
+  it("overrides an upstream-supplied CSP so the last edge to the browser owns the policy (KEIKO-0607)", () => {
+    const out = forwardedUpstreamHeaders(
+      { "content-security-policy": "default-src *; script-src *" },
+      NEXT_PORT,
+    );
+    expect(out["content-security-policy"]).toMatch(/default-src 'self'/);
+    // The dev baseline's script-src has 'unsafe-eval'; a permissive upstream `script-src *`
+    // must not survive.
+    expect(out["content-security-policy"]).not.toMatch(/script-src \*/);
+  });
 });

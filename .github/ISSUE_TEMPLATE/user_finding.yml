@@ -1,6 +1,6 @@
 name: User Finding
 description: Report a bug or defect found while using Keiko.
-labels: ["User Findings", "bug", "status: new"]
+labels: ["type: user-finding", "bug", "status: new"]
 body:
   - type: markdown
     attributes:
@@ -92,9 +92,6 @@ body:
     validations:
       required: true
 
-  # ── OPTION B: Maintainer release impact triage ──────────────────────────────
-  # Single textarea with `value:` → structure stays visible while typing.
-
   - type: textarea
     id: maintainer_triage
     attributes:
@@ -108,9 +105,7 @@ body:
         Supported-from versions: 
         Affected state stores: 
         User action required and remediation: 
-        Internal-only rationale: 
-
-  # ── end of triage section ────────────────────────────────────────────────────
+        Internal-only rationale:
 
   - type: checkboxes
     id: submission_safety

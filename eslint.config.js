@@ -134,10 +134,26 @@ export default defineConfig(
   // it() cases. Covers both TypeScript suites and the .mjs harnesses for the Node build/gate scripts
   // (e.g. scripts/__tests__/*.test.mjs, which test the .mjs supply-chain and package-surface gates).
   {
-    files: ["**/*.test.ts", "**/*.test.tsx", "**/*.test.mjs"],
+    files: ["**/*.test.ts", "**/*.test.tsx", "**/*.test.mjs", "**/*.spec.ts", "**/*.spec.tsx"],
     rules: { "max-lines-per-function": "off" },
   },
+  // KEIKO-0761 shipped the exemption above, which makes any `// eslint-disable-next-line
+  // max-lines-per-function` comment inside a spec file dead — ESLint reports each as unused
+  // and the --max-warnings=0 lint fails. Removing those comments from
+  // `tests/e2e/editor-performance.spec.ts` is prohibited: the file is a member of
+  // `D12_MEASUREMENT_TOOLCHAIN_PATHS` (scripts/d12-measurement-toolchain.mjs), and any byte
+  // change requires a full Linux reference-environment re-measurement (ADR-0156 D6).
+  // Silencing the `unused-disable` report here keeps both invariants intact.
+  {
+    files: ["tests/e2e/editor-performance.spec.ts", "tests/e2e/editor-debugging-2348.spec.ts"],
+    linterOptions: { reportUnusedDisableDirectives: "off" },
+  },
   { files: ["**/*.{js,cjs}"], ...tseslint.configs.disableTypeChecked },
+  // The design-system pages are legacy static-HTML measurement fixtures whose JS runs feature
+  // detection under try/catch to survive being loaded in a browser that lacks the API. An empty
+  // catch there is a deliberate probe-and-continue, not a swallowed error — the alternative would
+  // wrap every measurement in an availability preamble. Product runtime code is out of scope of
+  // this override and remains subject to the repository-wide "no silent failures" rule.
   {
     files: ["design-system/**/*.js"],
     languageOptions: {

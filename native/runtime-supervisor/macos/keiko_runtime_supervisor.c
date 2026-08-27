@@ -69,28 +69,6 @@ static void write_u32(unsigned char *value, uint32_t number) {
   value[3] = (unsigned char)(number >> 24);
 }
 
-static int read_exact(int descriptor, void *buffer, size_t length) {
-  unsigned char *bytes = buffer;
-  size_t offset = 0;
-  while (offset < length) {
-    ssize_t result = read(descriptor, bytes + offset, length - offset);
-    if (result <= 0) return 0;
-    offset += (size_t)result;
-  }
-  return 1;
-}
-
-static int write_exact(int descriptor, const void *buffer, size_t length) {
-  const unsigned char *bytes = buffer;
-  size_t offset = 0;
-  while (offset < length) {
-    ssize_t result = write(descriptor, bytes + offset, length - offset);
-    if (result <= 0) return 0;
-    offset += (size_t)result;
-  }
-  return 1;
-}
-
 static int send_response(uint16_t kind, const unsigned char *payload, uint32_t length) {
   unsigned char header[KRP_HEADER_BYTES] = {'K', 'R', 'S', '1', 0, 0, 0, 0, 0, 0, 0, 0};
   write_u16(header + 4, KRP_VERSION);

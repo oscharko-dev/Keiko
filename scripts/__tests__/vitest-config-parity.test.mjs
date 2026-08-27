@@ -165,3 +165,67 @@ describe("no vitest configuration reaches a coverage verdict (ADR-0157 D1, ADR-0
     });
   }
 });
+
+// KEIKO-0540: the eight package-coverage gate scripts sit in coverage.include of the packages run
+// AND in coverage.exclude of the scripts run — expressing one partition as two independently
+// edited literal arrays lets a new entry drift into just one and be silently measured by both
+// runs (or by neither). scripts/lib/package-coverage-gate-scripts.mjs is now the one edge; this
+// test enforces the three-way partition property so a bypass fails closed.
+describe("package coverage gate-script partition (KEIKO-0540)", () => {
+  it("no script appears in BOTH the packages-run include AND the scripts-run include", async () => {
+    const [pkg, scr] = await Promise.all([
+      loadConfig("vitest.coverage.packages.config.ts"),
+      loadConfig("vitest.coverage.scripts.config.ts"),
+    ]);
+    const pkgInclude = new Set(pkg.test.coverage.include);
+    const scrExclude = new Set(scr.test.coverage.exclude);
+    // Every script the packages run measures must be excluded from the scripts run's include —
+    // the scripts run's include is "scripts/**/*.{js,mjs}", so the check reduces to: every
+    // `scripts/*.mjs` in packages.include is either in scripts.exclude or is a NON_LCOV_SCRIPTS
+    // entry that is excluded from both runs by construction.
+    const { NON_LCOV_SCRIPTS } = await import(
+      resolve(repoRoot, "scripts/sonar-analysis-scope.mjs")
+    );
+    for (const entry of pkgInclude) {
+      if (!entry.endsWith(".mjs")) continue;
+      const partitioned = scrExclude.has(entry) || NON_LCOV_SCRIPTS.has(entry);
+      expect(
+        partitioned,
+        `${entry} must be partitioned (in scripts.exclude or NON_LCOV_SCRIPTS)`,
+      ).toBe(true);
+    }
+  });
+
+  it("both configs reference the shared PACKAGE_COVERAGE_GATE_SCRIPTS constant", () => {
+    const pkgSource = readFileSync(resolve(repoRoot, "vitest.coverage.packages.config.ts"), "utf8");
+    const scrSource = readFileSync(resolve(repoRoot, "vitest.coverage.scripts.config.ts"), "utf8");
+    expect(pkgSource).toMatch(/PACKAGE_COVERAGE_GATE_SCRIPTS/u);
+    expect(scrSource).toMatch(/PACKAGE_COVERAGE_GATE_SCRIPTS/u);
+    // The shared constant is the ONE edge; neither config may reintroduce its own literal array
+    // of the eight gate scripts alongside the import (would defeat the partition test above).
+    for (const source of [pkgSource, scrSource]) {
+      const literalCount = (source.match(/scripts\/check-sonar-main-quality-gate\.mjs/gu) ?? [])
+        .length;
+      expect(literalCount, "gate-script paths must only appear in the shared module").toBe(0);
+    }
+  });
+
+  it("every script excluded from the scripts run is either in the packages-run include or NON_LCOV_SCRIPTS", async () => {
+    const [pkg, scr] = await Promise.all([
+      loadConfig("vitest.coverage.packages.config.ts"),
+      loadConfig("vitest.coverage.scripts.config.ts"),
+    ]);
+    const pkgInclude = new Set(pkg.test.coverage.include);
+    const { NON_LCOV_SCRIPTS } = await import(
+      resolve(repoRoot, "scripts/sonar-analysis-scope.mjs")
+    );
+    for (const entry of scr.test.coverage.exclude) {
+      if (!entry.endsWith(".mjs")) continue;
+      const covered = pkgInclude.has(entry) || NON_LCOV_SCRIPTS.has(entry);
+      expect(
+        covered,
+        `${entry} excluded from scripts run must have an owner in packages.include or NON_LCOV_SCRIPTS`,
+      ).toBe(true);
+    }
+  });
+});

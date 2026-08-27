@@ -38,7 +38,6 @@ jobs:
         suite:
           - test:e2e:editor-baseline-1377
           - test:e2e:editor-layout-1375
-          - test:e2e:editor-run-verification-2215
           - test:e2e:editor-chat-2119
           # Restored #1395 invariant as a targeted pin against today's surface (ADR-0058,
           # ADR-0066): sensitive-path denial, the authority-missing fail-closed default, and the
@@ -86,18 +85,15 @@ jobs:
         run: node scripts/check-runtime-toolchain.mjs --exact
       - name: Install workspaces
         run: npm ci --ignore-scripts
-      - name: Install sandbox isolation backend (bubblewrap)
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y bubblewrap
-          # #2485: test:e2e:editor-run-verification-2215 executes verification commands through
-          # the real verification runner, which always enforces the mandatory network:none
-          # boundary (enforce-or-fail-closed) — without the isolation backend every verification
-          # fails closed on this runner and the suite can never pass. Ubuntu 24.04 restricts
-          # unprivileged user namespaces via AppArmor, so enable the proven Bubblewrap path
-          # exactly as the required ci job and the code-task lane below do; never weaken the
-          # verification runner to inherited networking for tests.
-          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
+      # KEIKO-0610 / #2485: suites executing verification commands go through the real
+      # verification runner, which always enforces the mandatory network:none boundary
+      # (enforce-or-fail-closed) — without the isolation backend every verification
+      # fails closed on this runner and the suite cannot pass. Ubuntu 24.04 restricts
+      # unprivileged user namespaces via AppArmor, so enable the proven Bubblewrap path
+      # exactly as the required ci job and the code-task lane below do; never weaken
+      # the verification runner to inherited networking for tests.
+      - name: Setup Linux sandbox isolation
+        uses: ./.github/actions/setup-sandbox-isolation
       - name: Build internal packages
         run: npm run build:packages
       - name: Install Playwright browser
@@ -146,16 +142,13 @@ jobs:
         run: node scripts/check-runtime-toolchain.mjs --exact
       - name: Install workspaces
         run: npm ci --ignore-scripts
-      - name: Install sandbox isolation backend (bubblewrap)
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y bubblewrap
-          # Both journeys execute the vetted verification step through the real verification
-          # runner, which always enforces the mandatory network:none boundary
-          # (enforce-or-fail-closed). Ubuntu 24.04 restricts unprivileged user namespaces via
-          # AppArmor, so enable the proven Bubblewrap path exactly as the required ci job does;
-          # never weaken the verification runner to inherited networking for tests.
-          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
+      # KEIKO-1020: both journeys execute the vetted verification step through the real
+      # verification runner, which always enforces the mandatory network:none boundary
+      # (enforce-or-fail-closed). Ubuntu 24.04 restricts unprivileged user namespaces via
+      # AppArmor, so enable the proven Bubblewrap path exactly as the required ci job does;
+      # never weaken the verification runner to inherited networking for tests.
+      - name: Setup Linux sandbox isolation
+        uses: ./.github/actions/setup-sandbox-isolation
       - name: Build internal packages
         run: npm run build:packages
       - name: Build UI static export

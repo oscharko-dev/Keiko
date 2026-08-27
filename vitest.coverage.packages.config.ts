@@ -1,6 +1,8 @@
 import { defineConfig } from "vitest/config";
 import react from "@vitejs/plugin-react";
 
+import { PACKAGE_COVERAGE_GATE_SCRIPTS } from "./scripts/lib/package-coverage-gate-scripts.mjs";
+
 export default defineConfig({
   plugins: [react()],
   test: {
@@ -36,14 +38,7 @@ export default defineConfig({
       include: [
         "packages/*/src/**/*.{ts,tsx}",
         "src/**/*.{ts,tsx}",
-        "scripts/check-lcov-source-mapping.mjs",
-        "scripts/check-mutation-quality.mjs",
-        "scripts/check-mutation-scope.mjs",
-        "scripts/check-sonar-analysis-log.mjs",
-        "scripts/check-sonar-main-quality-gate.mjs",
-        "scripts/check-sonar-pr-quality-gate.mjs",
-        "scripts/sonar-analysis-scope.mjs",
-        "scripts/sonar-quality-gate-contract.mjs",
+        ...PACKAGE_COVERAGE_GATE_SCRIPTS,
       ],
       exclude: [
         "packages/keiko-ui/**",

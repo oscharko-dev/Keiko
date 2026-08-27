@@ -1,4 +1,6 @@
 import { readFileSync, rmSync } from "node:fs";
+
+import { probePortFree } from "./lib/port-probe.mjs";
 import { dirname, join, resolve } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
@@ -64,9 +66,41 @@ function removePidFile() {
   rmSync(pidFile, { force: true });
 }
 
+// KEIKO-0734: even after every tracked pid has exited, an orphaned `dev-bff.mjs` child (spawned
+// via `node --watch`) can keep the BFF port bound long enough for the next `npm run dev:start`
+// to collide. Report "stopped cleanly" only when the tracked ports are also released. Shared
+// probePortFree keeps this and dev-start.mjs's checkPortAvailable in lockstep.
+export function checkPortReleased(port) {
+  if (typeof port !== "number" || !Number.isInteger(port) || port <= 0 || port > 65_535) {
+    return Promise.resolve(true);
+  }
+  return probePortFree(port);
+}
+
+export function trackedListeningPorts(state) {
+  const ports = new Set();
+  const collect = (value) => {
+    if (typeof value !== "number") return;
+    if (!Number.isInteger(value) || value <= 0 || value > 65_535) return;
+    ports.add(value);
+  };
+  collect(state?.publicPort);
+  collect(state?.bffPort);
+  collect(state?.nextPort);
+  return [...ports];
+}
+
+async function checkPortsReleased(ports) {
+  // Probes are independent (separate ports, no shared state); parallelise so a fleet of tracked
+  // ports resolves in one round instead of one per port.
+  const released = await Promise.all(ports.map(checkPortReleased));
+  return ports.filter((_, index) => !released[index]);
+}
+
 const DEFAULT_STOP_SEAMS = {
   killPid,
   waitForPidsToExit,
+  checkPortsReleased,
   removePidFile,
   log: console.log,
   error: console.error,
@@ -91,6 +125,13 @@ export async function stopStaleRunner(state, force, seams = {}) {
     );
     return 1;
   }
+  const boundPorts = await ops.checkPortsReleased(trackedListeningPorts(state));
+  if (boundPorts.length > 0) {
+    ops.error(
+      `Keiko dev UI tracked processes exited, but the following port(s) are still bound: ${boundPorts.join(", ")}. An orphaned watcher child likely survived; retry with \`npm run dev:stop -- --force\`.`,
+    );
+    return 1;
+  }
   ops.removePidFile();
   ops.log("Removed stale Keiko dev UI PID file after tracked processes stopped.");
   return 0;
@@ -110,6 +151,13 @@ export async function stopLiveRunner(state, force, seams = {}) {
     force ? FORCE_STOP_GRACE_MS : DEV_STOP_GRACE_MS,
   );
   if (remaining.length === 0) {
+    const boundPorts = await ops.checkPortsReleased(trackedListeningPorts(state));
+    if (boundPorts.length > 0) {
+      ops.error(
+        `Keiko dev UI processes exited, but the following port(s) are still bound: ${boundPorts.join(", ")}. An orphaned watcher child likely survived; retry with \`npm run dev:stop -- --force\`.`,
+      );
+      return 1;
+    }
     ops.removePidFile();
     ops.log(force ? "Keiko dev UI force-stopped." : "Keiko dev UI stopped cleanly.");
     return 0;

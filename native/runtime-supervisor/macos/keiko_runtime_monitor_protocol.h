@@ -2,6 +2,39 @@
 #define KEIKO_RUNTIME_MONITOR_PROTOCOL_H
 
 #include <stdint.h>
+#include <stddef.h>
+#include <unistd.h>
+
+// KEIKO-0967: read_exact and write_exact were duplicated verbatim across
+// keiko_runtime_monitor.m and keiko_system_extension_manager.m. Both files already include this
+// header; keeping one definition here removes the drift class. `static inline` is the standard
+// C shape for header-hosted helpers that must not create multiple external symbols.
+static inline int keiko_read_exact(int descriptor, void *buffer, size_t length) {
+  unsigned char *bytes = (unsigned char *)buffer;
+  size_t offset = 0;
+  while (offset < length) {
+    ssize_t result = read(descriptor, bytes + offset, length - offset);
+    if (result <= 0) return 0;
+    offset += (size_t)result;
+  }
+  return 1;
+}
+
+static inline int keiko_write_exact(int descriptor, const void *buffer, size_t length) {
+  const unsigned char *bytes = (const unsigned char *)buffer;
+  size_t offset = 0;
+  while (offset < length) {
+    ssize_t result = write(descriptor, bytes + offset, length - offset);
+    if (result <= 0) return 0;
+    offset += (size_t)result;
+  }
+  return 1;
+}
+
+// Legacy aliases: the two files historically named the helpers `read_exact` / `write_exact`.
+// Keep the names available so unrelated call sites do not have to move in the same change.
+#define read_exact keiko_read_exact
+#define write_exact keiko_write_exact
 
 #define KEIKO_MONITOR_SOCKET "/var/run/com.oscharko.keiko.runtime-monitor.sock"
 #define KEIKO_MONITOR_VERSION 1u

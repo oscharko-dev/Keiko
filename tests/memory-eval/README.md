@@ -6,7 +6,7 @@ Synthetic-fixture benchmark for the Governed Enterprise Memory Vault stack
 
 The harness composes the production memory packages (`keiko-memory-vault`,
 `keiko-memory-capture`, `keiko-memory-governance`, `keiko-memory-retrieval`)
-with deterministic clocks and counter-based IDs, then runs ten scenarios
+with deterministic clocks and counter-based IDs, then runs fourteen scenarios
 that each cover one acceptance criterion of the epic.
 
 ## How to run
@@ -86,17 +86,19 @@ kind requires its matching coordinate field (e.g. `userId` for `user`).
 
 ## What each fixture is for
 
-| File                         | Scenarios that consume it               |
-| ---------------------------- | --------------------------------------- |
-| `user-preferences.json`      | accurate-retrieval, no-memory-mode      |
-| `project-decisions.json`     | long-range-understanding                |
-| `workflow-lessons.json`      | test-time-learning                      |
-| `correction-pairs.json`      | correction-handling                     |
-| `stale-memories.json`        | suppressed-memory                       |
-| `forget-targets.json`        | selective-forgetting                    |
-| `cross-scope-collision.json` | cross-scope-isolation                   |
-| `workspace-scale.json`       | workspace-scale-boundary                |
-| `invalid-scope.json`         | `_support.test.ts` (fixture validation) |
+| File                         | Scenarios that consume it                      |
+| ---------------------------- | ---------------------------------------------- |
+| `user-preferences.json`      | accurate-retrieval, no-memory-mode, abstention |
+| `project-decisions.json`     | long-range-understanding                       |
+| `workflow-lessons.json`      | test-time-learning, reinforcement-ranking      |
+| `correction-pairs.json`      | correction-handling                            |
+| `stale-memories.json`        | suppressed-memory, forgetting-accuracy         |
+| `forget-targets.json`        | selective-forgetting                           |
+| `cross-scope-collision.json` | cross-scope-isolation                          |
+| `workspace-scale.json`       | workspace-scale-boundary                       |
+| `graded-relevance.json`      | graded-retrieval-quality                       |
+| `knowledge-update.json`      | forgetting-accuracy                            |
+| `invalid-scope.json`         | `_support.test.ts` (fixture validation)        |
 
 `error-propagation` does not load a fixture; it constructs a malformed record
 inline because the assertion is that the validator REJECTS it.
@@ -112,7 +114,7 @@ fixture rows.
 {
   "evalSchemaVersion": "1",
   "generatedAt": 1700000000000,
-  "totals": { "scenarios": 10, "passed": 10, "failed": 0 },
+  "totals": { "scenarios": 14, "passed": 14, "failed": 0 },
   "scenarios": [{ "name": "accurate-retrieval", "passed": true, "evidence": "..." }],
 }
 ```
