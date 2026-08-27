@@ -1847,7 +1847,7 @@
   },
   "src/app/local-knowledge/connector-graph.tsx": {
     "@typescript-eslint/explicit-function-return-type": {
-      "count": 5
+      "count": 3
     },
     "complexity": {
       "count": 2
@@ -1877,12 +1877,6 @@
     }
   },
   "src/app/memoriaviva/components/EditMemoryDialog.tsx": {
-    "@typescript-eslint/explicit-function-return-type": {
-      "count": 1
-    },
-    "complexity": {
-      "count": 1
-    },
     "max-lines-per-function": {
       "count": 1
     }

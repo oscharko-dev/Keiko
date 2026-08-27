@@ -17,10 +17,11 @@ All artifacts live under [`evidence/1300/`](evidence/1300/). All twelve browser 
 reproducible historical migration evidence, **not standing CI or pull-request gates**: they compare against
 immutable migration-era baselines, so later intentional design evolution can legitimately change their result.
 The CI-enforced vitest block pins the documented artifact shape and the current product contracts; it does not
-execute these browser harnesses. Current release protection is provided by the applicable UI and Playwright
-regression suites. In particular, `test:e2e:editor-fidelity-1296` starts the packaged CLI UI, opens a
-synthetic project in the live Monaco editor, and proves the governed inline-completion ghost-text path across
-its captured theme modes. Broader editor interaction coverage remains with the dedicated editor suites.
+execute these browser harnesses. `test:e2e:editor-fidelity-1296` is a reproducible, packaged-application
+evidence harness: it starts the packaged CLI UI, opens a synthetic project in the live Monaco editor, and
+proves the governed inline-completion ghost-text path across its captured theme modes. It is not a wired
+release-protection suite. Broader editor interaction release coverage remains with the dedicated wired editor
+suites.
 
 ---
 

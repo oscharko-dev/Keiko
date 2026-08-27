@@ -1271,7 +1271,9 @@ describe("ConnectorGraph — CreateCapsuleDialog focus management (test-plan #26
 
   it("moves focus into the dialog (the name input) on open", async () => {
     await openCreateDialog();
-    expect(document.activeElement).toBe(screen.getByLabelText(/pod display name/i));
+    await waitFor(() => {
+      expect(document.activeElement).toBe(screen.getByLabelText(/pod display name/i));
+    });
   });
 
   it("traps Tab within the dialog, wrapping last -> first", async () => {
@@ -1302,7 +1304,7 @@ describe("ConnectorGraph — CreateCapsuleDialog focus management (test-plan #26
     await waitFor(() => {
       expect(screen.queryByRole("dialog", { name: /create Knowledge Pod/i })).toBeNull();
     });
-    expect(document.activeElement).toBe(trigger);
+    await waitFor(() => expect(document.activeElement).toBe(trigger));
   });
 
   it("jest-axe: the create dialog has no violations", async () => {
@@ -1356,6 +1358,20 @@ describe("ConnectorGraph — DisconnectConfirmDialog focus management (test-plan
     );
   });
 
+  it("re-enters the dialog when focus drops to document.body", async () => {
+    await openDisconnectDialog();
+    const dialog = screen.getByRole("dialog", { name: /disconnect Knowledge Pod/i });
+    const cancel = within(dialog).getByRole("button", { name: /cancel/i });
+
+    (document.activeElement as HTMLElement).blur();
+    expect(document.activeElement).toBe(document.body);
+
+    const notCanceled = fireEvent.keyDown(document, { key: "Tab" });
+
+    expect(notCanceled).toBe(false);
+    expect(cancel).toHaveFocus();
+  });
+
   it("closes on Escape and restores focus to the trigger", async () => {
     const { trigger } = await openDisconnectDialog();
     const dialog = screen.getByRole("dialog", { name: /disconnect Knowledge Pod/i });
@@ -1363,7 +1379,7 @@ describe("ConnectorGraph — DisconnectConfirmDialog focus management (test-plan
     await waitFor(() => {
       expect(screen.queryByRole("dialog", { name: /disconnect Knowledge Pod/i })).toBeNull();
     });
-    expect(document.activeElement).toBe(trigger);
+    await waitFor(() => expect(document.activeElement).toBe(trigger));
   });
 
   it("jest-axe: the disconnect dialog has no violations", async () => {

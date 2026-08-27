@@ -220,9 +220,36 @@ describe("e2e suite wiring gate (#2629)", () => {
       },
     });
     expect(result.problems).toEqual([
-      "test:e2e:nonblocking protection downgraded from runs-per-pr to push-nonblocking. " +
+      "test:e2e:nonblocking protection changed from runs-per-pr to push-nonblocking. " +
         "Update its lane or the baseline through an explicit reviewed change.",
-      "test:e2e:scheduled protection downgraded from push-nonblocking to scheduled-nonblocking. " +
+      "test:e2e:scheduled protection changed from push-nonblocking to scheduled-nonblocking. " +
+        "Update its lane or the baseline through an explicit reviewed change.",
+    ]);
+  });
+
+  // KEIKO-0151: suiteProtection is an audited snapshot of the concrete execution surface, not a
+  // lower-bound. A stronger class changes CI cost and merge semantics, so it needs the same
+  // explicit, reviewed baseline update as a downgrade.
+  it("rejects a silent protection upgrade", () => {
+    const result = checkE2eProtectionBaseline({
+      scripts: ["test:e2e:baseline-ratchet"],
+      workflows: [
+        {
+          name: "push.yml",
+          text: `
+on:
+  push:
+jobs:
+  e2e:
+    steps:
+      - run: npm run test:e2e:baseline-ratchet
+`,
+        },
+      ],
+      protectionBaseline: { "test:e2e:baseline-ratchet": "manual-nonblocking" },
+    });
+    expect(result.problems).toEqual([
+      "test:e2e:baseline-ratchet protection changed from manual-nonblocking to push-nonblocking. " +
         "Update its lane or the baseline through an explicit reviewed change.",
     ]);
   });
@@ -410,7 +437,7 @@ jobs:
       protectionBaseline: { "test:e2e:unsafe": "runs-per-pr" },
     });
     expect(result.problems).toEqual([
-      "test:e2e:unsafe protection downgraded from runs-per-pr to unwired. " +
+      "test:e2e:unsafe protection changed from runs-per-pr to unwired. " +
         "Update its lane or the baseline through an explicit reviewed change.",
     ]);
   });

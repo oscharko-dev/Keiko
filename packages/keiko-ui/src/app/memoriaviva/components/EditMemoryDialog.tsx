@@ -7,18 +7,17 @@
 // focus-visible rings on all interactive elements. aria-modal on the dialog.
 // Sensitivity select uses <select> — native keyboard fully accessible.
 
-import { useCallback, useEffect, useId, useRef, useState } from "react";
+import { useCallback, useId, useRef, useState } from "react";
 import type { ChangeEvent, KeyboardEvent, ReactNode } from "react";
 import type { MemoryId, MemoryRecord, MemorySensitivity } from "@oscharko-dev/keiko-contracts";
 import { MEMORY_SENSITIVITIES } from "@oscharko-dev/keiko-contracts/runtime/memory";
 import { correctMemory, editMemory } from "@/lib/memory-api";
 import { useTranslate } from "@/lib/i18n";
+import { useDialogTabTrap } from "../../components/desktop/hooks/useDialogTabTrap";
+import { useModalInteractionLock } from "../../components/desktop/hooks/useModalInteractionLock";
 import { NATIVE_DIALOG_STYLE } from "../../components/desktop/native-element-styles";
 import { formatError } from "./format-error";
 import { sensitivityLabel } from "./MemoryFilters";
-
-const FOCUSABLE_SELECTOR =
-  'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"]):not([disabled])';
 
 interface EditMemoryDialogProps {
   readonly record: MemoryRecord;
@@ -51,49 +50,17 @@ export function EditMemoryDialog({
   const firstRef = useRef<HTMLTextAreaElement>(null);
   const backdropRef = useRef<HTMLDivElement>(null);
   const dialogRef = useRef<HTMLDialogElement>(null);
-  const restoreFocusRef = useRef<HTMLElement | null>(null);
   const titleId = useId();
   const errorId = useId();
   const isCorrectMode = mode === "correct";
 
-  useEffect(() => {
-    restoreFocusRef.current =
-      document.activeElement instanceof HTMLElement ? document.activeElement : null;
-    firstRef.current?.focus();
-    return () => {
-      restoreFocusRef.current?.focus();
-    };
-  }, []);
+  useDialogTabTrap(dialogRef);
+  useModalInteractionLock({ initialFocusRef: firstRef });
 
   const handleKeyDown = useCallback(
     (e: KeyboardEvent<HTMLDialogElement>): void => {
       if (e.key === "Escape") {
         onClose();
-        return;
-      }
-      if (e.key !== "Tab") return;
-
-      const focusable = dialogRef.current?.querySelectorAll<HTMLElement>(FOCUSABLE_SELECTOR);
-      if (focusable === undefined || focusable.length === 0) {
-        e.preventDefault();
-        dialogRef.current?.focus();
-        return;
-      }
-
-      const first = focusable[0];
-      const last = focusable[focusable.length - 1];
-      if (first === undefined || last === undefined) {
-        e.preventDefault();
-        dialogRef.current?.focus();
-        return;
-      }
-      const active = document.activeElement;
-      if (!e.shiftKey && active === last) {
-        e.preventDefault();
-        first.focus();
-      } else if (e.shiftKey && active === first) {
-        e.preventDefault();
-        last.focus();
       }
     },
     [onClose],

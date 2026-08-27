@@ -602,9 +602,9 @@ export function checkE2eProtectionBaseline({ scripts, workflows, protectionBasel
       problems.push(
         `${BASELINE_PATH} has no protection class for ${suite}. Record its current class (${actual}).`,
       );
-    } else if (PROTECTION_RANK[actual] < PROTECTION_RANK[expected]) {
+    } else if (actual !== expected) {
       problems.push(
-        `${suite} protection downgraded from ${expected} to ${actual}. Update its lane or the ` +
+        `${suite} protection changed from ${expected} to ${actual}. Update its lane or the ` +
           "baseline through an explicit reviewed change.",
       );
     }

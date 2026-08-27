@@ -221,6 +221,30 @@ describe("RelationshipCreateDialog", () => {
     expect(screen.getByRole("combobox", { name: /relationship type/i })).toHaveFocus();
   });
 
+  it("locks workspace shell interactions while the modal is mounted", () => {
+    const view = renderDialog();
+
+    expect(document.documentElement).toHaveAttribute("data-keiko-modal-open", "true");
+
+    view.unmount();
+    expect(document.documentElement).not.toHaveAttribute("data-keiko-modal-open");
+  });
+
+  it("re-enters the dialog when focus has dropped to document.body", () => {
+    renderDialog();
+    const dialog = screen.getByTestId("rel-create-dialog");
+    const firstControl = screen.getByRole("button", { name: "Close" });
+
+    (document.activeElement as HTMLElement).blur();
+    expect(document.activeElement).toBe(document.body);
+
+    const notCanceled = fireEvent.keyDown(document, { key: "Tab" });
+
+    expect(notCanceled).toBe(false);
+    expect(firstControl).toHaveFocus();
+    expect(dialog.contains(document.activeElement)).toBe(true);
+  });
+
   it("does not submit via Ctrl/Cmd+Enter while the form is incomplete", () => {
     renderDialog();
     fireEvent.keyDown(screen.getByTestId("rel-create-dialog"), { key: "Enter", ctrlKey: true });

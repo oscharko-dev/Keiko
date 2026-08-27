@@ -34,6 +34,8 @@ import {
 import type { ApiRelationship } from "../../../relationships/api";
 import { Icons } from "../Icons";
 import KeikoSelect from "../KeikoSelect";
+import { useDialogTabTrap } from "../hooks/useDialogTabTrap";
+import { useModalInteractionLock } from "../hooks/useModalInteractionLock";
 import { NATIVE_DIALOG_STYLE } from "../native-element-styles";
 
 // PascalCase aliases so the JSX tag itself signals "component", not member access (S6770).
@@ -99,29 +101,6 @@ export function RelationshipCreateDialog({ onClose }: RelationshipCreateDialogPr
   const titleId = "rel-create-dialog-title";
   const descId = "rel-create-dialog-desc";
 
-  // Focus trap: keep focus inside dialog
-  const trapFocus = useCallback((e: globalThis.KeyboardEvent) => {
-    const dialog = dialogRef.current;
-    if (dialog === null) return;
-    const focusable = Array.from(
-      dialog.querySelectorAll<HTMLElement>(
-        'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])',
-      ),
-    ).filter((el) => !el.hasAttribute("disabled"));
-    const first = focusable[0];
-    const last = focusable.at(-1);
-    if (e.key !== "Tab") return;
-    if (e.shiftKey) {
-      if (document.activeElement === first) {
-        e.preventDefault();
-        last?.focus();
-      }
-    } else if (document.activeElement === last) {
-      e.preventDefault();
-      first?.focus();
-    }
-  }, []);
-
   const handleEscape = useCallback(
     (e: globalThis.KeyboardEvent) => {
       if (e.key === "Escape") onClose(null);
@@ -129,19 +108,22 @@ export function RelationshipCreateDialog({ onClose }: RelationshipCreateDialogPr
     [onClose],
   );
 
-  // MD-01: bind Escape + focus-trap to the dialog element (not window) so a
-  // concurrent overlay's Escape does not double-fire this handler.
+  useDialogTabTrap(dialogRef);
+  useModalInteractionLock();
+
+  // MD-01: bind Escape to the dialog element (not window) so a concurrent
+  // overlay's Escape does not double-fire this handler. Tab containment is the
+  // shared useDialogTabTrap contract, including recovery after focus drops to
+  // document.body while a disabled form is submitting.
   // Pattern: GatewaySetupDialog lines 73-98.
   useEffect(() => {
     const dialog = dialogRef.current;
     if (dialog === null) return;
-    dialog.addEventListener("keydown", trapFocus);
     dialog.addEventListener("keydown", handleEscape);
     return () => {
-      dialog.removeEventListener("keydown", trapFocus);
       dialog.removeEventListener("keydown", handleEscape);
     };
-  }, [trapFocus, handleEscape]);
+  }, [handleEscape]);
 
   // ─── Client-side instant validation preview ───────────────────────────────
   // Uses pure validateRelationship from @oscharko-dev/keiko-contracts (Issue #538).
