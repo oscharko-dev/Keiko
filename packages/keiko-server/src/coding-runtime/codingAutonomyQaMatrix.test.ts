@@ -1,15 +1,17 @@
 import { existsSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
+import type {
+  CodingWorkbenchAuthorityEnvelope,
+  CodingWorkbenchConnectorScope,
+  GitRepositoryAgentOperationKind,
+  GitRepositoryAgentOperationRequest,
+} from "@oscharko-dev/keiko-contracts";
 import {
   CODING_WORKBENCH_ACTION_CLASSES,
   codingWorkbenchPolicyEffectFor,
   decideCodingWorkbenchActionForMode,
-  validateCodingWorkbenchEvidenceRecord,
-  type CodingWorkbenchAuthorityEnvelope,
-  type CodingWorkbenchConnectorScope,
-  type GitRepositoryAgentOperationKind,
-  type GitRepositoryAgentOperationRequest,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/coding-workbench";
+import { validateCodingWorkbenchEvidenceRecord } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-evidence";
 import { describe, expect, it } from "vitest";
 import {
   decideAutonomousDeliveryOperation,

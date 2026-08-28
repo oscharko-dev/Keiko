@@ -16,8 +16,8 @@ import type { ReactNode } from "react";
 import {
   EDITOR_VERIFICATION_KINDS,
   EDITOR_VERIFICATION_SCHEMA_VERSION,
-  WORKSPACE_TRUST_SCHEMA_VERSION,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/editor-verification";
+import { WORKSPACE_TRUST_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts/runtime/workspace-trust";
 import type { EditorRuntimeWidgetProps } from "./EditorRuntimeWidget";
 import type { FilesMutationEvent } from "./FilesWidget";
 import { EditorWidget } from "./EditorWidget";
@@ -2402,8 +2402,9 @@ describe("EditorWidget — Cmd/Ctrl+P quick access while editing (Epic #2090 reg
   it("opens the unified quick-access palette in file mode from the editor's capturing listener", () => {
     const openFiles = vi.fn();
     const openCommands = vi.fn();
+    const openEditorSettings = vi.fn();
     const { container } = render(
-      <EditorQuickAccessTriggerProvider value={{ openFiles, openCommands }}>
+      <EditorQuickAccessTriggerProvider value={{ openFiles, openCommands, openEditorSettings }}>
         <EditorWidget root="/repo" file="src/a.ts" />
       </EditorQuickAccessTriggerProvider>,
     );
@@ -2419,8 +2420,9 @@ describe("EditorWidget — Cmd/Ctrl+P quick access while editing (Epic #2090 reg
   it("opens the unified quick-access palette in command mode on Cmd/Ctrl+Shift+P", () => {
     const openFiles = vi.fn();
     const openCommands = vi.fn();
+    const openEditorSettings = vi.fn();
     const { container } = render(
-      <EditorQuickAccessTriggerProvider value={{ openFiles, openCommands }}>
+      <EditorQuickAccessTriggerProvider value={{ openFiles, openCommands, openEditorSettings }}>
         <EditorWidget root="/repo" file="src/a.ts" />
       </EditorQuickAccessTriggerProvider>,
     );
@@ -2430,6 +2432,27 @@ describe("EditorWidget — Cmd/Ctrl+P quick access while editing (Epic #2090 reg
 
     expect(openCommands).toHaveBeenCalledTimes(1);
     expect(openFiles).not.toHaveBeenCalled();
+  });
+
+  it("opens Editor settings from Monaco's editable target", () => {
+    const openFiles = vi.fn();
+    const openCommands = vi.fn();
+    const openEditorSettings = vi.fn();
+    const { container } = render(
+      <EditorQuickAccessTriggerProvider value={{ openFiles, openCommands, openEditorSettings }}>
+        <EditorWidget root="/repo" file="src/a.ts" />
+      </EditorQuickAccessTriggerProvider>,
+    );
+
+    const workspace = container.querySelector(".editor-workspace");
+    expect(workspace).not.toBeNull();
+    const monacoInput = document.createElement("textarea");
+    workspace?.append(monacoInput);
+
+    expect(fireEvent.keyDown(monacoInput, { key: ",", metaKey: true })).toBe(false);
+    expect(openEditorSettings).toHaveBeenCalledTimes(1);
+    expect(openFiles).not.toHaveBeenCalled();
+    expect(openCommands).not.toHaveBeenCalled();
   });
 
   it("does not throw when no quick-access trigger is registered (defensive no-op)", () => {

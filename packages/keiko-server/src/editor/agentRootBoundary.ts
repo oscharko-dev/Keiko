@@ -1,15 +1,15 @@
 import { realpathSync } from "node:fs";
 import { dirname, isAbsolute, resolve } from "node:path";
-import {
-  editorAgentRootBindingDenyReason,
-  isContainedAgentPath,
-  validateWorkspaceManifest,
-  type EditorAgentActionDenyReason,
-  type EditorAgentRootBinding,
-  type EditorAgentSessionSnapshot,
-  type WorkspaceManifest,
-  type WorkspaceRootDescriptor,
+import type {
+  EditorAgentActionDenyReason,
+  EditorAgentRootBinding,
+  EditorAgentSessionSnapshot,
+  WorkspaceManifest,
+  WorkspaceRootDescriptor,
 } from "@oscharko-dev/keiko-contracts";
+import { editorAgentRootBindingDenyReason } from "@oscharko-dev/keiko-contracts/runtime/editor-agent-governance";
+import { isContainedAgentPath } from "@oscharko-dev/keiko-contracts/runtime/editor-agent";
+import { validateWorkspaceManifest } from "@oscharko-dev/keiko-contracts/runtime/workspace-manifest";
 import { containedRealPathInfo, isWithinWorkspace } from "@oscharko-dev/keiko-workspace";
 import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
 import type { UiStore, WorkspaceManifestRecordRow } from "../store/index.js";

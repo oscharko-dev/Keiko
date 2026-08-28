@@ -1,17 +1,19 @@
 import { createHash } from "node:crypto";
+import type {
+  CodingWorkbenchApprovalRisk,
+  CodingWorkbenchAuthorityEnvelope,
+  CodingWorkbenchMode,
+  CodingWorkbenchPolicyEffect,
+  CodingWorkbenchRuntimeDelegationUsage,
+  EditorAgentGovernedAuthorityReference,
+} from "@oscharko-dev/keiko-contracts";
 import {
   CODING_WORKBENCH_SCHEMA_VERSION,
   codingWorkbenchPolicyEffectFor,
-  estimateTokensForSegments,
   resolveEffectiveCodingWorkbenchMode,
-  validateCodingWorkbenchAuthorityEnvelope,
-  type CodingWorkbenchApprovalRisk,
-  type CodingWorkbenchAuthorityEnvelope,
-  type CodingWorkbenchMode,
-  type CodingWorkbenchPolicyEffect,
-  type CodingWorkbenchRuntimeDelegationUsage,
-  type EditorAgentGovernedAuthorityReference,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/coding-workbench";
+import { estimateTokensForSegments } from "@oscharko-dev/keiko-contracts/runtime/context-engineering";
+import { validateCodingWorkbenchAuthorityEnvelope } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-validation";
 import type { ModelPort } from "@oscharko-dev/keiko-harness";
 import type { GatewayRequest, GatewayStreamChunk } from "@oscharko-dev/keiko-model-gateway";
 import type { SpawnFn } from "@oscharko-dev/keiko-tools";

@@ -1,11 +1,12 @@
-# Editor performance evidence — producer runbook (ADR-0139)
+# Performance evidence — producer runbook (ADR-0139)
 
-The two committed editor evidence documents live in `docs/release/`:
+The committed performance evidence documents live in `docs/release/`:
 
-| Document                    | Content                                                               | PR-time validation                      |
-| --------------------------- | --------------------------------------------------------------------- | --------------------------------------- |
-| `1209-perf-evidence.json`   | Immutable D12 baseline/candidate paired performance comparison        | `npm run check:perf-evidence:editor`    |
-| `1209-bundle-evidence.json` | Editor release bundle measurement (B1/B2/B3) of the production export | `npm run check:editor-release-evidence` |
+| Document                            | Content                                                               | PR-time validation                      |
+| ----------------------------------- | --------------------------------------------------------------------- | --------------------------------------- |
+| `1209-perf-evidence.json`           | Immutable D12 baseline/candidate paired performance comparison        | `npm run check:perf-evidence:editor`    |
+| `1209-bundle-evidence.json`         | Editor release bundle measurement (B1/B2/B3) of the production export | `npm run check:editor-release-evidence` |
+| `1580-workspace-perf-evidence.json` | Workspace browser-performance measurement                             | `npm run check:perf-evidence:workspace` |
 
 ## When evidence must be regenerated
 
@@ -40,6 +41,29 @@ what every merge into `packages/keiko-editor/`, `packages/keiko-ui/`, `packages/
 `packages/keiko-server/src/editor/`, `src/` or the root lockfile does, and the next such merge
 undoes any repair. That finding is reported in the run's job summary instead, where it says how far
 the committed numbers have travelled from the product without pretending anyone owes work for it.
+
+### Workspace browser-performance evidence
+
+The workspace measurement has its own toolchain digest, defined by
+`scripts/workspace-performance-measurement-toolchain.mjs`. A change to any listed member requires
+a fresh workspace measurement; a mismatched digest is always rejected so an evidence document cannot
+be re-stamped without running the producer. Run the measurement only on its declared reference
+environment, then replace the document through the producer rather than editing it:
+
+```bash
+rm -f docs/release/1580-workspace-perf-evidence.json
+npm run test:e2e:workspace-perf
+```
+
+The committed document has an exact, intentionally Chromium-only run set: `chromium` and
+`chromium-mixed-windows`. The first is the representative workspace journey and the second proves
+the heavy-widget fixture. `webkit` remains a local cross-browser functional aid, but is deliberately
+not committed as timing evidence: its headless renderer does not produce comparable frame-gap or
+write-coalescing measurements, and CI installs and runs Chromium only. The gate rejects both a
+missing required run and an additional stale project entry, so deleting the prior document before
+the Chromium producer cannot silently narrow the evidence contract.
+
+Commit the resulting document as the final change that moves the workspace measurement ruler.
 
 ## How to regenerate (one command)
 

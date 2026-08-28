@@ -2,11 +2,8 @@ import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { axe } from "jest-axe";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import {
-  WORKSPACE_TRUST_SCHEMA_VERSION,
-  type WorkspaceTrustReason,
-  type WorkspaceTrustStatus,
-} from "@oscharko-dev/keiko-contracts";
+import type { WorkspaceTrustReason, WorkspaceTrustStatus } from "@oscharko-dev/keiko-contracts";
+import { WORKSPACE_TRUST_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts/runtime/workspace-trust";
 import { I18nProvider } from "@/lib/i18n";
 import { WorkspaceTrustPanel } from "./WorkspaceTrustPanel";
 

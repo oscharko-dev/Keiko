@@ -3,7 +3,7 @@ import { listEvidence, loadEvidence } from "./index-api.js";
 import { createInMemoryEvidenceStore, type EvidenceStore } from "./store.js";
 import { EvidenceReadError, EvidenceSchemaError } from "./errors.js";
 import type { EvidenceManifest } from "./types.js";
-import { DEFAULT_TOKEN_ESTIMATOR_ID } from "@oscharko-dev/keiko-contracts";
+import { DEFAULT_TOKEN_ESTIMATOR_ID } from "@oscharko-dev/keiko-contracts/runtime/context-engineering";
 
 function manifestFixture(runId: string, startedAt: number): EvidenceManifest {
   return {

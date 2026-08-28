@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { compareStrings } from "./comparators.js";
-import { compareStrings as compareStringsFromEntrypoint } from "@oscharko-dev/keiko-contracts";
+import { compareStrings as compareStringsFromEntrypoint } from "@oscharko-dev/keiko-contracts/runtime/comparators";
 
 describe("compareStrings", () => {
   it("returns -1 when left sorts before right", () => {

@@ -13,12 +13,11 @@
 // thrown error and never a fabricated location. Parsing is line-based (each line bounded by the
 // output byte cap), so there is no ReDoS surface. Every result is clamped to the contract caps.
 
+import type { VerificationFailureLocation, VerificationKind } from "@oscharko-dev/keiko-contracts";
 import {
   VERIFICATION_FAILURE_MESSAGE_MAX_CHARS,
   VERIFICATION_MAX_FAILURE_LOCATIONS,
-  type VerificationFailureLocation,
-  type VerificationKind,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/verification";
 import type { CommandResult } from "@oscharko-dev/keiko-tools";
 import { posix as posixPath, win32 as win32Path } from "node:path";
 import { stripVTControlCharacters } from "node:util";

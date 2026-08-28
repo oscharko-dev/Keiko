@@ -13,9 +13,15 @@ export type {
   ModelCapability,
   ConversationIneligibilityReason,
   UsageMetadata,
-  WorkflowDescriptor,
-  WorkflowInputSpec,
-  GroundingLimits,
+  VoiceProfile,
+  VoiceProviderLocality,
+  VoiceUnavailableReason,
+  VoiceTransportPosture,
+  VoiceCapabilityResolution,
+} from "@oscharko-dev/keiko-contracts";
+export type { WorkflowDescriptor, WorkflowInputSpec } from "@oscharko-dev/keiko-contracts";
+export type { GroundingLimits } from "@oscharko-dev/keiko-contracts";
+export type {
   GitRepositoryState,
   GitUnavailableReason,
   GitStatusCode,
@@ -23,17 +29,21 @@ export type {
   GitRepositoryStatusResponse,
   GitDiffScope,
   GitRepositoryDiffResponse,
+} from "@oscharko-dev/keiko-contracts";
+export type {
   GitRepositorySummary,
   GitRepositorySummaryRemote,
   GitRemoteSummary,
   GitRemotesResponse,
-  GitHistoryEntry,
-  GitHistoryResponse,
+} from "@oscharko-dev/keiko-contracts";
+export type { GitHistoryEntry, GitHistoryResponse } from "@oscharko-dev/keiko-contracts";
+export type {
   GitSyncOperation,
   GitSyncOutcome,
   GitSyncPreview,
   GitSyncExecuteResponse,
-  // Issue #1387 — controlled test/build/run command executor wire types.
+} from "@oscharko-dev/keiko-contracts";
+export type {
   CommandTaskKind,
   CommandTaskSource,
   CommandTaskTrustState,
@@ -45,7 +55,8 @@ export type {
   CommandTaskRunResult,
   CommandRunnerEventKind,
   CommandRunnerEvent,
-  // Issue #1388 (ADR-0070) — container engine detection + governed execution wire types.
+} from "@oscharko-dev/keiko-contracts";
+export type {
   ContainerEngineId,
   ContainerEngineState,
   ContainerEngineUnavailableReason,
@@ -59,11 +70,8 @@ export type {
   ContainerRunResult,
   ContainerRunnerEventKind,
   ContainerRunnerEvent,
-  VoiceProfile,
-  VoiceProviderLocality,
-  VoiceUnavailableReason,
-  VoiceTransportPosture,
-  VoiceCapabilityResolution,
+} from "@oscharko-dev/keiko-contracts";
+export type {
   UpdatePreflightBlocker,
   UpdatePreflightBlockerCode,
   UpdatePreflightImpactEntry,
@@ -76,6 +84,8 @@ export type {
   UpdatePreflightReport,
   UpdatePreflightSeverity,
   UpdatePreflightStatus,
+} from "@oscharko-dev/keiko-contracts";
+export type {
   UpdateCommandPreview,
   UpdateInstallMode,
   UpdateInstallModeStatus,
@@ -91,10 +101,13 @@ export type {
   UpdateSessionStartRequest,
   UpdateSessionStatus,
   UpdateUnsupportedReason,
+} from "@oscharko-dev/keiko-contracts";
+export type {
   ReleaseImpactRemediation,
   ReleaseImpactStateImpact,
-  UpdateReleaseImpactInput,
-  UpdateStateStore,
+} from "@oscharko-dev/keiko-contracts";
+export type { UpdateReleaseImpactInput, UpdateStateStore } from "@oscharko-dev/keiko-contracts";
+export type {
   UpdateRemediationAction,
   UpdateRemediationActionKind,
   UpdateRemediationActionRequest,
@@ -106,22 +119,27 @@ export type {
   UpdateRemediationScopeCounts,
   UpdateRemediationStatusReport,
   UpdateRemediationStatusRequest,
+} from "@oscharko-dev/keiko-contracts";
+export type {
   KnowledgePodRetrievalActivity,
   KnowledgePodRetrievalActivityMode,
   KnowledgePodRetrievalActivityReasonCode,
   KnowledgePodRetrievalActivityState,
 } from "@oscharko-dev/keiko-contracts";
 
+export { DEFAULT_GROUNDING_LIMITS } from "@oscharko-dev/keiko-contracts/runtime/bff-wire";
 export {
-  DEFAULT_GROUNDING_LIMITS,
   UPDATE_PREFLIGHT_BLOCKER_CODES,
   UPDATE_PREFLIGHT_SCHEMA_VERSION,
   UPDATE_PREFLIGHT_SEVERITIES,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/update-preflight";
 
 // ─── Provider endpoint protocol (wire-value unions, #3037 follow-up) ─────────────────
 export type { ProviderEndpointStyle, RealtimeAuthMode } from "@oscharko-dev/keiko-contracts";
-export { PROVIDER_ENDPOINT_STYLES, REALTIME_AUTH_MODES } from "@oscharko-dev/keiko-contracts";
+export {
+  PROVIDER_ENDPOINT_STYLES,
+  REALTIME_AUTH_MODES,
+} from "@oscharko-dev/keiko-contracts/runtime/gateway";
 
 // ─── Editor completion gateway wire shapes (Issue #1199, contracts root barrel) ─────
 export type {
@@ -145,7 +163,7 @@ export type {
   NativeFileDialogCapability,
 } from "@oscharko-dev/keiko-contracts";
 
-export { EDITOR_COMPLETION_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts";
+export { EDITOR_COMPLETION_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts/runtime/editor-completion";
 
 // ─── Editor inline-completion (ghost text) wire shapes (Issue #1200, contracts root barrel) ─────
 export type {
@@ -159,7 +177,7 @@ export type {
 export {
   EDITOR_INLINE_COMPLETION_SCHEMA_VERSION,
   EDITOR_INLINE_COMPLETION_TELEMETRY_SCHEMA_VERSION,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/editor-inline-completion";
 
 // ─── Editor test-generation wire shapes (Issue #1202, contracts root barrel) ───────────────────
 export type {
@@ -173,7 +191,7 @@ export type {
   EditorTestGenerationWireFileChange,
   EditorTestGenerationWireProvenance,
 } from "@oscharko-dev/keiko-contracts";
-export { EDITOR_TEST_GENERATION_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts";
+export { EDITOR_TEST_GENERATION_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts/runtime/editor-test-generation";
 
 // ─── Editor patch-apply + post-apply verification wire shapes (Issue #1204, contracts root barrel) ──
 export type {
@@ -188,7 +206,7 @@ export type {
   EditorPatchVerificationSummary,
   EditorPatchRevertProposal,
 } from "@oscharko-dev/keiko-contracts";
-export { EDITOR_PATCH_APPLY_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts";
+export { EDITOR_PATCH_APPLY_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts/runtime/editor-patch-apply";
 
 // ─── Deterministic language-service wire shapes (Issue #1198/#1201, contracts root barrel) ─────
 // The `POST /api/editor/language` route serves diagnostics, hover, document symbols, and formatting
@@ -253,7 +271,7 @@ export type {
 // aggregate carried on a grounded answer's pack summary) comes from the bff-wire subpath. All
 // three are structurally path-free (string literal unions, numbers, booleans) by construction.
 export type { ContextLaneId, ContextBudgetPressure } from "@oscharko-dev/keiko-contracts";
-export { DEFAULT_TOKEN_ESTIMATOR_ID } from "@oscharko-dev/keiko-contracts";
+export { DEFAULT_TOKEN_ESTIMATOR_ID } from "@oscharko-dev/keiko-contracts/runtime/context-engineering";
 
 // Issue #144 / Epic #142: pure conversation-eligibility helpers re-exported
 // from keiko-contracts. UI cannot import from keiko-model-gateway (ADR-0019
@@ -264,7 +282,7 @@ export {
   explainConversationIneligibility,
   electConversationDefault,
   preferredConversationModelOrder,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/gateway";
 
 // Issue #1557 / Epic #1556 (ADR-0094 D3/D5): pure, content-free voice-provider availability helpers
 // re-exported from keiko-contracts so the model list can present a correctly configured voice
@@ -273,12 +291,12 @@ export {
 export {
   isConfiguredVoiceProvider,
   describeVoiceProviderAvailability,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/gateway";
 export type { VoiceProviderAvailability, VoicePersona } from "@oscharko-dev/keiko-contracts";
 
 // ─── Workspace summary + context pack ──────────────────────────────────────────────
+export type { SelectedScopeKind } from "@oscharko-dev/keiko-contracts";
 export type {
-  SelectedScopeKind,
   WorkspaceLanguage,
   TestFramework,
   DiscoveryStats,

@@ -18,7 +18,7 @@
 import { render, screen, fireEvent, waitFor, within } from "@testing-library/react";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { axe, toHaveNoViolations } from "jest-axe";
-import { RELATIONSHIP_QUERY_BOUNDS } from "@oscharko-dev/keiko-contracts";
+import { RELATIONSHIP_QUERY_BOUNDS } from "@oscharko-dev/keiko-contracts/runtime/relationships";
 import { RelationshipListPanel } from "./RelationshipListPanel";
 import type { RelationshipFilters } from "./RelationshipListPanel";
 

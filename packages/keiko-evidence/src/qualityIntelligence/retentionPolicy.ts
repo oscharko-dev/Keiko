@@ -6,7 +6,7 @@
 
 import type { QualityIntelligenceRetentionPolicyId } from "@oscharko-dev/keiko-contracts";
 
-export { QUALITY_INTELLIGENCE_DEFAULT_RETENTION_POLICY_ID as QUALITY_INTELLIGENCE_DEFAULT_RETENTION_PROFILE_ID } from "@oscharko-dev/keiko-contracts";
+export { QUALITY_INTELLIGENCE_DEFAULT_RETENTION_POLICY_ID as QUALITY_INTELLIGENCE_DEFAULT_RETENTION_PROFILE_ID } from "@oscharko-dev/keiko-contracts/runtime/qualityIntelligence/index";
 
 export interface QualityIntelligenceRetentionProfile {
   readonly id: QualityIntelligenceRetentionPolicyId;

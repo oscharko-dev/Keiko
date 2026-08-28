@@ -1,8 +1,8 @@
+import type { EditorHotExitSnapshotV1 } from "@oscharko-dev/keiko-contracts";
 import {
   EDITOR_HOT_EXIT_SCHEMA_VERSION,
   EDITOR_HOT_EXIT_TTL_MS,
-  type EditorHotExitSnapshotV1,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/editor-hot-exit";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   deleteEditorHotExitSnapshot,

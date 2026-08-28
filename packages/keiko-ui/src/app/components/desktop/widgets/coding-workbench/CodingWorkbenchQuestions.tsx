@@ -13,12 +13,12 @@ import {
   type RefObject,
   type SetStateAction,
 } from "react";
-import {
-  CODING_WORKBENCH_RUNTIME_QUESTION_TEXT_MAX_CHARS,
-  type CodingWorkbenchRuntimeQuestion,
-  type CodingWorkbenchRuntimeQuestionRequest,
-  type CodingWorkbenchRuntimeStateName,
+import type {
+  CodingWorkbenchRuntimeQuestion,
+  CodingWorkbenchRuntimeQuestionRequest,
+  CodingWorkbenchRuntimeStateName,
 } from "@oscharko-dev/keiko-contracts";
+import { CODING_WORKBENCH_RUNTIME_QUESTION_TEXT_MAX_CHARS } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime-questions";
 
 import {
   useCodingWorkbenchQuestions,

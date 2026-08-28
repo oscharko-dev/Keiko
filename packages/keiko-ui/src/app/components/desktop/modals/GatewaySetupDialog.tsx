@@ -16,7 +16,7 @@ import { createPortal } from "react-dom";
 import {
   selectRealtimeVoiceCapability,
   selectSpeechOutputCapability,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/gateway";
 import {
   ApiError,
   setupGateway,

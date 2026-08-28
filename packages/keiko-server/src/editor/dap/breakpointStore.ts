@@ -2,14 +2,16 @@ import { createHash, randomUUID } from "node:crypto";
 import { readFileSync, statSync } from "node:fs";
 import { isAbsolute, join } from "node:path";
 
+import type {
+  ExceptionBreakpointFilter,
+  InstrumentationSnapshot,
+  SourceBreakpoint,
+  WatchExpression,
+} from "@oscharko-dev/keiko-contracts";
 import {
   DAP_DEBUG_CONTRACT_SCHEMA_VERSION,
   DEFAULT_DEBUG_PAYLOAD_LIMITS,
-  type ExceptionBreakpointFilter,
-  type InstrumentationSnapshot,
-  type SourceBreakpoint,
-  type WatchExpression,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/dap-debug";
 import { containsPath } from "@oscharko-dev/keiko-git";
 
 import {

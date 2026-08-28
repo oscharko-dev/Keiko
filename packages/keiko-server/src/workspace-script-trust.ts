@@ -14,14 +14,13 @@
 import { createHash } from "node:crypto";
 import { realpathSync } from "node:fs";
 import { join } from "node:path";
+import { CodedHttpError, httpStatusFor } from "@oscharko-dev/keiko-contracts/runtime/http-error";
 import {
-  CodedHttpError,
-  httpStatusFor,
   projectCommandTaskTrustState,
-  validateWorkspaceManifest,
   validateWorkspaceTrustRecord,
   WORKSPACE_TRUST_SCHEMA_VERSION,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/workspace-trust";
+import { validateWorkspaceManifest } from "@oscharko-dev/keiko-contracts/runtime/workspace-manifest";
 import type {
   WorkspaceFact,
   WorkspaceManifest,

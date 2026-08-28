@@ -15,11 +15,11 @@
 // accepted result). Evidence is ids, counts, and bounded reason codes only.
 import {
   CODE_TASK_AUXILIARY_SCHEMA_VERSION,
-  CODING_WORKBENCH_RUNTIME_CONTRACT_VERSION,
   isCodeTaskChildRunId,
   validateAuxiliaryCapabilityOutcomeV1,
-  validateCodingWorkbenchRuntimeEvent,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/code-task-auxiliary";
+import { CODING_WORKBENCH_RUNTIME_CONTRACT_VERSION } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime";
+import { validateCodingWorkbenchRuntimeEvent } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-validation";
 import type {
   AuxiliaryCapabilityOutcomeV1,
   AuxiliaryCapabilityRequestV1,

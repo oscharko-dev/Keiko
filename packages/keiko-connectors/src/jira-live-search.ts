@@ -26,18 +26,20 @@
 // them. The result carries `source: "live"`, `queriedAt`, and `jqlDigest` (sha256 of the
 // executed JQL via keiko-security — the query text itself never leaves the request path).
 
+import type {
+  AtlassianLiveSearchTemplateId,
+  AtlassianSyncFailureReason,
+  JiraLiveIssue,
+  JiraLiveSearchRequest,
+  JiraLiveSearchResult,
+} from "@oscharko-dev/keiko-contracts";
 import {
   ATLASSIAN_CONNECTOR_SCHEMA_VERSION,
   ATLASSIAN_JQL_MAX_CHARS,
   ATLASSIAN_LIVE_ISSUE_SUMMARY_MAX_CHARS,
   ATLASSIAN_LIVE_SEARCH_MAX_RESULTS,
   isSafeAtlassianIdentifier,
-  type AtlassianLiveSearchTemplateId,
-  type AtlassianSyncFailureReason,
-  type JiraLiveIssue,
-  type JiraLiveSearchRequest,
-  type JiraLiveSearchResult,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import { sha256Hex } from "@oscharko-dev/keiko-security";
 import { AtlassianCredentialCustodyError } from "./atlassian-credential-custody.js";
 import type { AtlassianHttpBodyPort } from "./atlassian-http-port.js";

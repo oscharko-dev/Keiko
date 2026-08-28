@@ -1,4 +1,4 @@
-import { gatewayVerificationContradictsReadiness } from "@oscharko-dev/keiko-contracts";
+import { gatewayVerificationContradictsReadiness } from "@oscharko-dev/keiko-contracts/runtime/gateway-verification";
 import type {
   CodingWorkbenchMode,
   CodingWorkbenchModelSource,

@@ -3,7 +3,7 @@
 // and determinism. Hermetic and pure — no transport, no clock.
 
 import { describe, expect, it } from "vitest";
-import { isJiraIssueCitationMetadata } from "@oscharko-dev/keiko-contracts";
+import { isJiraIssueCitationMetadata } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import {
   boundedJiraIssueTitle,
   buildJiraIssueCitationMetadata,

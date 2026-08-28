@@ -1,8 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
-import {
-  encodeCodingAppSessionPairingFragment,
-  type CodingAppSessionPairingAttestation,
-} from "@oscharko-dev/keiko-contracts";
+import type { CodingAppSessionPairingAttestation } from "@oscharko-dev/keiko-contracts";
+import { encodeCodingAppSessionPairingFragment } from "@oscharko-dev/keiko-contracts/runtime/coding-app-session";
 
 import {
   codingAppSessionPairingSettled,

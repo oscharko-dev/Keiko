@@ -9,7 +9,7 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { join } from "node:path";
 import type { NativeFileDialogRequest } from "@oscharko-dev/keiko-contracts";
-import { NATIVE_FILE_DIALOG_MAX_SELECTIONS } from "@oscharko-dev/keiko-contracts";
+import { NATIVE_FILE_DIALOG_MAX_SELECTIONS } from "@oscharko-dev/keiko-contracts/runtime/native-file-dialog";
 import { buildSandboxEnv } from "@oscharko-dev/keiko-tools";
 import { MACOS_NATIVE_FILE_DIALOG_SCRIPT, WINDOWS_NATIVE_FILE_DIALOG_SCRIPT } from "./scripts.js";
 

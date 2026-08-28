@@ -2,10 +2,8 @@ import { PassThrough } from "node:stream";
 
 import { describe, expect, it, vi } from "vitest";
 
-import {
-  KEIKO_PRODUCT_VERSION,
-  type CodingWorkbenchCodexSubscriptionProfile,
-} from "@oscharko-dev/keiko-contracts";
+import type { CodingWorkbenchCodexSubscriptionProfile } from "@oscharko-dev/keiko-contracts";
+import { KEIKO_PRODUCT_VERSION } from "@oscharko-dev/keiko-contracts/runtime/version";
 
 import {
   createCodexAuthNavigationIntentCoordinator,

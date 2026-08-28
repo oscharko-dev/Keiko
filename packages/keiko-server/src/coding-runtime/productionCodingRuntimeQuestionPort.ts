@@ -1,7 +1,5 @@
-import {
-  validateCodingWorkbenchRuntimeQuestionsResponse,
-  type CodingWorkbenchRuntimeQuestionsResponse,
-} from "@oscharko-dev/keiko-contracts";
+import type { CodingWorkbenchRuntimeQuestionsResponse } from "@oscharko-dev/keiko-contracts";
+import { validateCodingWorkbenchRuntimeQuestionsResponse } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime-questions";
 
 import type {
   CodingRuntimeQuestionAnswerOperation,

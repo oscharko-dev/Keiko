@@ -1,10 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 
-import {
-  EDITOR_AGENT_SCHEMA_VERSION,
-  type EditorAgentAction,
-  type EditorAgentSessionSnapshot,
-} from "@oscharko-dev/keiko-contracts";
+import type { EditorAgentAction, EditorAgentSessionSnapshot } from "@oscharko-dev/keiko-contracts";
+import { EDITOR_AGENT_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts/runtime/editor-agent";
 
 import { createCodingToolInvocationRegistry } from "./codingToolInvocationRegistry.js";
 import {

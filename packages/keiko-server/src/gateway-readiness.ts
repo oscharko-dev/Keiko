@@ -17,11 +17,9 @@ import type {
   GatewayReadinessReport,
   GatewayReadinessRequest,
 } from "@oscharko-dev/keiko-contracts/bff-wire";
-import {
-  gatewayVerificationFromProbeOutcome,
-  maxUtf8BytesForTokenBudget,
-  preferredConversationModelOrder,
-} from "@oscharko-dev/keiko-contracts";
+import { gatewayVerificationFromProbeOutcome } from "@oscharko-dev/keiko-contracts/runtime/gateway-verification";
+import { maxUtf8BytesForTokenBudget } from "@oscharko-dev/keiko-contracts/runtime/context-engineering";
+import { preferredConversationModelOrder } from "@oscharko-dev/keiko-contracts/runtime/gateway";
 import type { UiHandlerDeps, VerifiedModelCapabilityFields } from "./deps.js";
 import { currentConversationReady, currentGatewayConfig } from "./deps.js";
 import { newCorrelationId } from "./correlation.js";

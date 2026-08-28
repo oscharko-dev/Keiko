@@ -3,10 +3,8 @@
 // project registry reference and make membership/ordering constraints transactional.
 
 import type { DatabaseSync } from "node:sqlite";
-import {
-  validateWorkspaceManifest,
-  workspaceTrustRootBindingsMatch,
-} from "@oscharko-dev/keiko-contracts";
+import { validateWorkspaceManifest } from "@oscharko-dev/keiko-contracts/runtime/workspace-manifest";
+import { workspaceTrustRootBindingsMatch } from "@oscharko-dev/keiko-contracts/runtime/workspace-trust";
 import type { WorkspaceManifest } from "@oscharko-dev/keiko-contracts";
 import {
   createSingleRootWorkspaceManifest,

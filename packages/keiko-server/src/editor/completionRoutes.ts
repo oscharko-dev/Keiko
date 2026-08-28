@@ -16,31 +16,35 @@
 // prompt hash, never the prompt, the buffer, or any retrieved excerpt. The browser never reaches the
 // Model Gateway, retrieval, or any provider directly (Acceptance Criterion 5).
 
+import type {
+  CodingContextPack,
+  CodingContextRequest,
+  CompletionDegradeReason,
+  CompletionInteractionMode,
+  CompletionModelSelection,
+  EditorCompletionItemOrigin,
+  EditorCompletionSource,
+  EditorCompletionWireItem,
+  EditorCompletionWireRequest,
+  EditorCompletionWireResponse,
+  LanguageCompletionItem,
+  LanguageCompletionResult,
+  LanguageServiceLimits,
+  LanguageServiceRequest,
+  UsageMetadata,
+} from "@oscharko-dev/keiko-contracts";
 import {
   CODING_CONTEXT_SCHEMA_VERSION,
   CODING_CONTEXT_BUDGETS,
-  DEFAULT_LANGUAGE_SERVICE_LIMITS,
-  EDITOR_COMPLETION_SCHEMA_VERSION,
-  isValidScopePath,
-  parseEditorCompletionRequest,
-  stripUnsafeFormatChars,
   toCodingContextWirePack,
-  type CodingContextPack,
-  type CodingContextRequest,
-  type CompletionDegradeReason,
-  type CompletionInteractionMode,
-  type CompletionModelSelection,
-  type EditorCompletionItemOrigin,
-  type EditorCompletionSource,
-  type EditorCompletionWireItem,
-  type EditorCompletionWireRequest,
-  type EditorCompletionWireResponse,
-  type LanguageCompletionItem,
-  type LanguageCompletionResult,
-  type LanguageServiceLimits,
-  type LanguageServiceRequest,
-  type UsageMetadata,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/coding-context";
+import { DEFAULT_LANGUAGE_SERVICE_LIMITS } from "@oscharko-dev/keiko-contracts/runtime/language-service";
+import {
+  EDITOR_COMPLETION_SCHEMA_VERSION,
+  parseEditorCompletionRequest,
+} from "@oscharko-dev/keiko-contracts/runtime/editor-completion";
+import { isValidScopePath } from "@oscharko-dev/keiko-contracts/runtime/connected-context";
+import { stripUnsafeFormatChars } from "@oscharko-dev/keiko-contracts/runtime/text-safety";
 import { selectCompletionModel } from "@oscharko-dev/keiko-model-gateway";
 import type { GatewayConfig } from "@oscharko-dev/keiko-model-gateway";
 import { errorBody, type RouteContext, type RouteResult } from "../routes.js";

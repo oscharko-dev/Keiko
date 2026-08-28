@@ -21,27 +21,31 @@
 // pacing is bounded server-side by a per-root rate limiter (cooldown + window cap) plus the per-call
 // cost ceiling and an as-you-type latency budget; output is bounded by a hard character cap.
 
+import type {
+  CodingContextPack,
+  CodingContextRequest,
+  CompletionDegradeReason,
+  CompletionInteractionMode,
+  CompletionModelSelection,
+  CostClass,
+  EditorCompletionSource,
+  EditorInlineCompletionWireItem,
+  EditorInlineCompletionWireRequest,
+  EditorInlineCompletionWireResponse,
+  UsageMetadata,
+} from "@oscharko-dev/keiko-contracts";
 import {
   CODING_CONTEXT_BUDGETS,
   CODING_CONTEXT_SCHEMA_VERSION,
+  toCodingContextWirePack,
+} from "@oscharko-dev/keiko-contracts/runtime/coding-context";
+import {
   EDITOR_INLINE_COMPLETION_SCHEMA_VERSION,
-  isValidScopePath,
   parseEditorInlineCompletionRequest,
   parseEditorInlineCompletionTelemetry,
-  stripUnsafeFormatChars,
-  toCodingContextWirePack,
-  type CodingContextPack,
-  type CodingContextRequest,
-  type CompletionDegradeReason,
-  type CompletionInteractionMode,
-  type CompletionModelSelection,
-  type CostClass,
-  type EditorCompletionSource,
-  type EditorInlineCompletionWireItem,
-  type EditorInlineCompletionWireRequest,
-  type EditorInlineCompletionWireResponse,
-  type UsageMetadata,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/editor-inline-completion";
+import { isValidScopePath } from "@oscharko-dev/keiko-contracts/runtime/connected-context";
+import { stripUnsafeFormatChars } from "@oscharko-dev/keiko-contracts/runtime/text-safety";
 import { selectCompletionModel } from "@oscharko-dev/keiko-model-gateway";
 import type { EnvSource, GatewayConfig } from "@oscharko-dev/keiko-model-gateway";
 import { errorBody, type RouteContext, type RouteResult } from "../routes.js";

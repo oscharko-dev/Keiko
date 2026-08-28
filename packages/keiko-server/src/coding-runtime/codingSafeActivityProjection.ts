@@ -1,3 +1,12 @@
+import type {
+  CodingSafeActivityFeed,
+  CodingSafeActivityMessageRole,
+  CodingSafeActivityPlanStepState,
+  CodingSafeActivityTextSegment,
+  CodingSafeActivityTool,
+  CodingSafeActivityToolState,
+  UnavailableCodingSafeActivityFeed,
+} from "@oscharko-dev/keiko-contracts";
 import {
   CODING_SAFE_ACTIVITY_MAX_DROPPED_EVENT_COUNT,
   CODING_SAFE_ACTIVITY_MAX_MESSAGE_UTF8_BYTES,
@@ -12,17 +21,10 @@ import {
   CODING_SAFE_ACTIVITY_MAX_TURN_UTF8_BYTES,
   CODING_SAFE_ACTIVITY_MAX_UTF8_BYTES,
   CODING_SAFE_ACTIVITY_PLAN_STEP_STATES,
-  stripUnsafeFormatChars,
   unavailableCodingSafeActivityFeed,
   validateCodingSafeActivityFeed,
-  type CodingSafeActivityFeed,
-  type CodingSafeActivityMessageRole,
-  type CodingSafeActivityPlanStepState,
-  type CodingSafeActivityTextSegment,
-  type CodingSafeActivityTool,
-  type CodingSafeActivityToolState,
-  type UnavailableCodingSafeActivityFeed,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/coding-safe-activity";
+import { stripUnsafeFormatChars } from "@oscharko-dev/keiko-contracts/runtime/text-safety";
 
 import {
   emitServerDiagnostic,

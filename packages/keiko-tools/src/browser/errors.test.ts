@@ -4,7 +4,7 @@
 // instanceof Error / CodedHttpError with the concrete subclass name.
 
 import { describe, expect, it } from "vitest";
-import { CodedHttpError } from "@oscharko-dev/keiko-contracts";
+import { CodedHttpError } from "@oscharko-dev/keiko-contracts/runtime/http-error";
 import { BROWSER_ERROR_CODES, BrowserToolError, type BrowserErrorCode } from "./errors.js";
 
 const EXPECTED_STATUS: Readonly<Record<BrowserErrorCode, number>> = {

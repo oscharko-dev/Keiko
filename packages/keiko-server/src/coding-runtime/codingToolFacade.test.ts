@@ -1,7 +1,7 @@
 import {
   EDITOR_AGENT_CONFLICT_CODES,
   EDITOR_AGENT_FAILURE_CODES,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/editor-agent";
 import { describe, expect, it, vi } from "vitest";
 
 import { createCodingToolFacade } from "./codingToolFacade.js";

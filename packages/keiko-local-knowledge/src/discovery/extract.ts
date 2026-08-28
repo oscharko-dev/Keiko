@@ -35,9 +35,9 @@ import type {
 import {
   DEFAULT_EXTRACTION_CAPABILITY_AVAILABILITY,
   DEFAULT_LARGE_DOCUMENT_RESOURCE_POLICY,
-  isSafeScopePath,
   largeDocumentPolicyFingerprint,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/local-knowledge-large-document";
+import { isSafeScopePath } from "@oscharko-dev/keiko-contracts/runtime/local-knowledge-paths";
 import type { WorkspaceFs, WorkspaceStat } from "@oscharko-dev/keiko-workspace";
 import { isDenied } from "@oscharko-dev/keiko-workspace";
 

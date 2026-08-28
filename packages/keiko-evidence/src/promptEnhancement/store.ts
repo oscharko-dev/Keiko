@@ -16,11 +16,8 @@
 import { randomUUID } from "node:crypto";
 import { lstatSync, readdirSync, readFileSync, rmSync } from "node:fs";
 import { join, resolve } from "node:path";
-import {
-  sortedStrings,
-  type GroundingDirective,
-  type PromptCandidateRejection,
-} from "@oscharko-dev/keiko-contracts";
+import type { GroundingDirective, PromptCandidateRejection } from "@oscharko-dev/keiko-contracts";
+import { sortedStrings } from "@oscharko-dev/keiko-contracts/runtime/stable-order";
 import { resolveWithinWorkspace, type WorkspaceFs } from "@oscharko-dev/keiko-workspace";
 import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
 import { assertValidRunId, sha256Hex } from "@oscharko-dev/keiko-security";

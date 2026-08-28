@@ -30,9 +30,11 @@ import type {
 import {
   evaluateGitDeliveryEffectivePolicy,
   evaluateGitPolicy,
+} from "@oscharko-dev/keiko-contracts/runtime/git-delivery-policy";
+import {
   GIT_DELIVERY_SCHEMA_VERSION,
   gitDeliveryRiskClassForInputs,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/git-delivery";
 import type { GitLocalMutationAdapter } from "./git-mutation-adapter.js";
 import type {
   GitPreflightFinding,

@@ -6,10 +6,12 @@ import { URL, fileURLToPath } from "node:url";
 
 import {
   RETRIEVAL_CONTEXT_BUDGETS,
-  isCodingContextPurpose,
   tierForRetrievalContextSource,
+} from "@oscharko-dev/keiko-contracts/runtime/retrieval-context";
+import {
+  isCodingContextPurpose,
   toCodingContextWirePack,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/coding-context";
 import {
   LocalKnowledgeEval,
   evaluateFloors,

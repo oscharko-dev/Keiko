@@ -3,7 +3,7 @@ import type {
   CodingWorkbenchAuthorityEnvelope,
   GitRepositoryAgentOperationRequest,
 } from "@oscharko-dev/keiko-contracts";
-import { validateCodingWorkbenchEvidenceRecord } from "@oscharko-dev/keiko-contracts";
+import { validateCodingWorkbenchEvidenceRecord } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-evidence";
 import {
   decideAutonomousDeliveryOperation,
   type AutonomousDeliveryPolicyRequest,

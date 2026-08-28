@@ -2,21 +2,21 @@
 // POST CSRF and JSON content-type enforcement is centralized in server.ts.
 
 import type { IncomingMessage, ServerResponse } from "node:http";
-import {
-  CODING_WORKBENCH_RUNTIME_CONTRACT_VERSION,
-  parseCodingWorkbenchRuntimeReadinessRequest,
-  resolveEffectiveCodingWorkbenchMode,
-  unpairedCodingWorkbenchRuntimeApprovalReviewChannelPayload,
-  unpairedCodingWorkbenchRuntimeQuestionsChannelPayload,
-  unpairedCodingWorkbenchRuntimeResearchChannelPayload,
-  type CodingWorkbenchMode,
-  type CodingWorkbenchRuntimeApprovalReviewChannelPayload,
-  type CodingWorkbenchRuntimeFailureCode,
-  type CodingWorkbenchRuntimeQuestionsChannelPayload,
-  type CodingWorkbenchRuntimeResearchChannelPayload,
-  type CodingWorkbenchRuntimeSseEvent,
-  type CodingWorkbenchRuntimeStateName,
+import type {
+  CodingWorkbenchMode,
+  CodingWorkbenchRuntimeApprovalReviewChannelPayload,
+  CodingWorkbenchRuntimeFailureCode,
+  CodingWorkbenchRuntimeQuestionsChannelPayload,
+  CodingWorkbenchRuntimeResearchChannelPayload,
+  CodingWorkbenchRuntimeSseEvent,
+  CodingWorkbenchRuntimeStateName,
 } from "@oscharko-dev/keiko-contracts";
+import { CODING_WORKBENCH_RUNTIME_CONTRACT_VERSION } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime";
+import { parseCodingWorkbenchRuntimeReadinessRequest } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime-api";
+import { resolveEffectiveCodingWorkbenchMode } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench";
+import { unpairedCodingWorkbenchRuntimeApprovalReviewChannelPayload } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime-approval-review";
+import { unpairedCodingWorkbenchRuntimeQuestionsChannelPayload } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime-questions";
+import { unpairedCodingWorkbenchRuntimeResearchChannelPayload } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime-research";
 import { resolveAppSessionReadAuthority } from "../coding-app-session/appSessionReadAuthority.js";
 import type { UiHandlerDeps } from "../deps.js";
 import {

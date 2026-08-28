@@ -35,28 +35,52 @@ import { readFileSync, readdirSync } from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
+import { parseDocument } from "yaml";
+
 import { compareStrings } from "./lib/compare-strings.mjs";
 
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const BASELINE_PATH = join("docs", "qa", "unwired-e2e-suites.json");
 const E2E_SCRIPT_PREFIX = "test:e2e:";
-// A script name continues through these characters, so a bare substring test would let
-// `test:e2e:foo` be "satisfied" by a lane that only runs `test:e2e:foo-extended`.
-const NAME_CHARACTER = /[A-Za-z0-9:_-]/u;
-
-// Only two positions in a workflow actually execute a suite, and the gate reads only those:
+const RUNS_PER_PR = "runs-per-pr";
+const PULL_REQUEST_NONBLOCKING = "pull-request-nonblocking";
+const PUSH_NONBLOCKING = "push-nonblocking";
+const SCHEDULED_NONBLOCKING = "scheduled-nonblocking";
+const MANUAL_NONBLOCKING = "manual-nonblocking";
+const UNWIRED = "unwired";
+const PROTECTION_CLASSES = new Set([
+  RUNS_PER_PR,
+  PULL_REQUEST_NONBLOCKING,
+  PUSH_NONBLOCKING,
+  SCHEDULED_NONBLOCKING,
+  MANUAL_NONBLOCKING,
+  UNWIRED,
+]);
+const PROTECTION_RANK = {
+  [UNWIRED]: 0,
+  [MANUAL_NONBLOCKING]: 1,
+  [SCHEDULED_NONBLOCKING]: 2,
+  [PUSH_NONBLOCKING]: 3,
+  // A pull-request execution that may continue after a failure supplies signal, but cannot block
+  // delivery. Keep it below the blocking class while retaining that useful execution fact.
+  [PULL_REQUEST_NONBLOCKING]: 4,
+  [RUNS_PER_PR]: 5,
+};
+// Only two positions in a workflow can make a suite discoverable:
 //
 //   1. a `run:` command — inline (`- run: npm run x`) or inside a `run: |` block scalar;
 //   2. a bare sequence item whose whole value is the script name, which is how
 //      `e2e-extended.yml` lists a group under `strategy.matrix.suite` and invokes it as
 //      `npm run ${{ matrix.suite }}`.
 //
-// Everything else is prose. A step called `name: test:e2e:orphan`, or a trailing comment on an
-// unrelated command, would otherwise mark a suite wired and silence the gate — the precise failure
-// this gate exists to prevent, arriving through the gate itself.
+// For the WIRED invariant, a bare matrix item is sufficient: the workflow's indirection can still
+// invoke that suite. Protection classification is stricter: it requires a concrete `npm run` step
+// whose shell command and event reachability the gate can prove. This deliberately leaves a matrix
+// item with no directly attributable execution step at `unwired`, rather than inventing protection.
 //
-// Line-oriented rather than YAML-parsed, matching the repository's other workflow gates
-// (check-zizmor-anchors, check-release-required-workflow-names) and adding no dependency.
+// Workflow commands are read line-oriented, matching the repository's other workflow gates. The
+// top-level `on` declaration is parsed as YAML because comments, quoted keys, flow collections and
+// nested event filters otherwise make a text scan ambiguous.
 function stripInlineComment(value) {
   const at = value.search(/\s#/u);
   return at === -1 ? value : value.slice(0, at);
@@ -113,22 +137,517 @@ export function executableWorkflowSegments(workflowText) {
 }
 
 export function isWiredInWorkflows(script, workflowText) {
-  return executableWorkflowSegments(workflowText).some((segment) => {
-    let from = 0;
-    for (;;) {
-      const at = segment.indexOf(script, from);
-      if (at === -1) return false;
-      const before = at === 0 ? "" : segment.charAt(at - 1);
-      const after = segment.charAt(at + script.length);
-      if (
-        (before === "" || !NAME_CHARACTER.test(before)) &&
-        (after === "" || !NAME_CHARACTER.test(after))
-      ) {
-        return true;
-      }
-      from = at + script.length;
+  return executableWorkflowSegments(workflowText).some(
+    (segment) => segment.trim() === script || shellCommandRunsScript(segment, script),
+  );
+}
+
+function workflowTriggers(workflowText) {
+  const document = parseDocument(workflowText);
+  if (document.errors.length > 0) return new Set();
+  const workflow = document.toJS();
+  if (typeof workflow !== "object" || workflow === null || Array.isArray(workflow))
+    return new Set();
+  return knownWorkflowTriggers(workflow.on);
+}
+
+const CLASSIFIED_TRIGGER_EVENTS = new Set([
+  "pull_request",
+  "push",
+  "schedule",
+  "workflow_dispatch",
+]);
+
+function knownWorkflowTriggers(value) {
+  if (typeof value === "string") return classifiedTriggerSet([value]);
+  if (Array.isArray(value)) return classifiedTriggerSet(value);
+  if (typeof value !== "object" || value === null) return new Set();
+  return classifiedTriggerSet(Object.keys(value));
+}
+
+function classifiedTriggerSet(values) {
+  return new Set(
+    values.filter((value) => typeof value === "string" && CLASSIFIED_TRIGGER_EVENTS.has(value)),
+  );
+}
+
+function conditionAllowsEvent(condition, event) {
+  if (condition === undefined) return true;
+  const expression = conditionExpression(condition, event);
+  if (expression === undefined) return false;
+  return evaluateBooleanExpression(expression);
+}
+
+function conditionExpression(condition, event) {
+  const trimmed = condition.trim();
+  const unwrapped =
+    trimmed.startsWith("${{") && trimmed.endsWith("}}") ? trimmed.slice(3, -2).trim() : condition;
+  const withEventValues = unwrapped
+    .replace(EVENT_COMPARISON, (_match, operator, _quote, value) => {
+      return String(compareKnownValue(event, operator, value));
+    })
+    .replace(BASE_REF_COMPARISON, (_match, operator, _quote, value) => {
+      return String(event === "pull_request" && compareKnownValue("dev", operator, value));
+    })
+    .replace(/\balways\(\)|\bsuccess\(\)|!cancelled\(\)/gu, "true")
+    .replace(UNKNOWN_REFERENCE, (value) => {
+      return value === "true" || value === "false" ? value : "unknown";
+    })
+    .trim();
+  return BOOLEAN_EXPRESSION.test(withEventValues) ? withEventValues : undefined;
+}
+
+const EVENT_COMPARISON = /github\.event_name\s*(==|!=)\s*(['"])([^'"]+)\2/gu;
+const BASE_REF_COMPARISON = /github\.base_ref\s*(==|!=)\s*(['"])([^'"]+)\2/gu;
+const UNKNOWN_REFERENCE = /\b[A-Za-z_][A-Za-z0-9_.]*\b/gu;
+const BOOLEAN_EXPRESSION = /^(?:\s|true|false|unknown|&&|\|\||!|\(|\))+$/u;
+
+function compareKnownValue(actual, operator, expected) {
+  return operator === "==" ? actual === expected : actual !== expected;
+}
+
+function evaluateBooleanExpression(expression) {
+  const tokens = expression.match(/true|false|unknown|&&|\|\||!|\(|\)/gu);
+  if (tokens === null) return false;
+  const state = { index: 0, tokens };
+  const value = parseBooleanOr(state);
+  return value === true && state.index === tokens.length;
+}
+
+function parseBooleanOr(state) {
+  let value = parseBooleanAnd(state);
+  while (value !== undefined && state.tokens[state.index] === "||") {
+    state.index += 1;
+    const right = parseBooleanAnd(state);
+    if (right === undefined) return undefined;
+    value = booleanOr(value, right);
+  }
+  return value;
+}
+
+function parseBooleanAnd(state) {
+  let value = parseBooleanPrimary(state);
+  while (value !== undefined && state.tokens[state.index] === "&&") {
+    state.index += 1;
+    const right = parseBooleanPrimary(state);
+    if (right === undefined) return undefined;
+    value = booleanAnd(value, right);
+  }
+  return value;
+}
+
+function parseBooleanPrimary(state) {
+  const token = state.tokens[state.index];
+  if (token === "!") {
+    state.index += 1;
+    const value = parseBooleanPrimary(state);
+    return value === undefined ? undefined : booleanNot(value);
+  }
+  if (token === "(") return parseParenthesizedBoolean(state);
+  if (token === "true" || token === "false") {
+    state.index += 1;
+    return token === "true";
+  }
+  if (token === "unknown") {
+    state.index += 1;
+    return null;
+  }
+  return undefined;
+}
+
+function booleanOr(left, right) {
+  if (left === true || right === true) return true;
+  if (left === false && right === false) return false;
+  return null;
+}
+
+function booleanAnd(left, right) {
+  if (left === false || right === false) return false;
+  if (left === true && right === true) return true;
+  return null;
+}
+
+function booleanNot(value) {
+  return value === null ? null : !value;
+}
+
+function parseParenthesizedBoolean(state) {
+  state.index += 1;
+  const value = parseBooleanOr(state);
+  if (value === undefined || state.tokens[state.index] !== ")") return undefined;
+  state.index += 1;
+  return value;
+}
+
+function shellTokens(command) {
+  const state = { tokens: [], token: "", quote: undefined };
+  for (const character of command) {
+    if (state.quote !== undefined) appendQuotedShellCharacter(state, character);
+    else appendUnquotedShellCharacter(state, character);
+  }
+  if (state.quote !== undefined) return [];
+  flushShellToken(state);
+  return state.tokens;
+}
+
+function appendQuotedShellCharacter(state, character) {
+  if (character === state.quote) state.quote = undefined;
+  else state.token += character;
+}
+
+function appendUnquotedShellCharacter(state, character) {
+  if (character === '"' || character === "'") {
+    state.quote = character;
+  } else if (/\s/u.test(character)) {
+    flushShellToken(state);
+  } else if (isShellSeparator(character)) {
+    flushShellToken(state);
+    state.tokens.push(character);
+  } else state.token += character;
+}
+
+function flushShellToken(state) {
+  if (state.token === "") return;
+  state.tokens.push(state.token);
+  state.token = "";
+}
+
+function isShellSeparator(token) {
+  return token === ";" || token === "|" || token === "&";
+}
+
+function shellCommandRunsScript(command, script) {
+  const tokens = shellTokens(command);
+  let commandStart = true;
+  for (let index = 0; index < tokens.length; index += 1) {
+    const token = tokens[index];
+    if (isShellSeparator(token)) {
+      commandStart = true;
+      continue;
     }
+    if (commandStart && shellTokensRunScript(tokens, index, script)) {
+      return true;
+    }
+    if (commandStart && isShellAssignment(token)) continue;
+    commandStart = false;
+  }
+  return false;
+}
+
+function shellTokensRunScript(tokens, index, script) {
+  return tokens[index] === "npm" && tokens[index + 1] === "run" && tokens[index + 2] === script;
+}
+
+function isShellAssignment(token) {
+  const assignment = token.indexOf("=");
+  if (assignment < 1 || !isShellNameStart(token.codePointAt(0))) return false;
+  for (let index = 1; index < assignment; index += 1) {
+    if (!isShellNameContinue(token.codePointAt(index))) return false;
+  }
+  return true;
+}
+
+function isShellNameStart(codePoint) {
+  return (
+    codePoint === 95 ||
+    (codePoint >= 65 && codePoint <= 90) ||
+    (codePoint >= 97 && codePoint <= 122)
+  );
+}
+
+function isShellNameContinue(codePoint) {
+  return isShellNameStart(codePoint) || (codePoint >= 48 && codePoint <= 57);
+}
+
+function blockRunHasSuite(lines, start, runIndent, script) {
+  for (const raw of lines.slice(start + 1)) {
+    const body = raw.trimStart();
+    const indent = raw.length - body.length;
+    if (body !== "" && indent <= runIndent) return false;
+    if (shellCommandRunsScript(stripInlineComment(raw), script)) return true;
+  }
+  return false;
+}
+
+function runStepHasSuite(lines, index, script) {
+  const raw = lines[index];
+  if (raw === undefined) return false;
+  const body = raw.trimStart();
+  const run = runValue(body);
+  if (run === undefined) return false;
+  if (!run.startsWith("|") && !run.startsWith(">")) return shellCommandRunsScript(run, script);
+  return blockRunHasSuite(lines, index, raw.length - body.length, script);
+}
+
+function matrixSuiteRun(run) {
+  return /^npm[ \t]+run[ \t]+\$\{\{[ \t]*matrix\.suite[ \t]*\}\}[ \t]*$/u.test(run);
+}
+
+function matrixRunStepHasSuite(lines, index, script) {
+  const raw = lines[index];
+  if (raw === undefined || !matrixSuiteRun(runValue(raw.trimStart()) ?? "")) return false;
+  const start = stepStart(lines, index);
+  if (start === undefined) return false;
+  const job = jobStart(lines, start);
+  return job !== undefined && jobMatrixSuiteContains(lines, job, jobEnd(lines, job), script);
+}
+
+function jobMatrixSuiteContains(lines, start, end, script) {
+  const jobIndent = lineIndent(lines[start] ?? "");
+  const strategyIndent = jobIndent + 2;
+  const matrixIndent = strategyIndent + 2;
+  const suiteIndent = matrixIndent + 2;
+  let state = { inStrategy: false, inMatrix: false, inSuite: false };
+  for (const raw of lines.slice(start + 1, end)) {
+    const indent = lineIndent(raw);
+    const body = raw.trim();
+    if (state.inSuite && indent > suiteIndent && sequenceItemValue(raw.trimStart()) === script) {
+      return true;
+    }
+    state = matrixStateForLine(state, indent, body, { strategyIndent, matrixIndent, suiteIndent });
+  }
+  return false;
+}
+
+function matrixStateForLine(state, indent, body, indents) {
+  if (indent === indents.strategyIndent) {
+    return { inStrategy: body === "strategy:", inMatrix: false, inSuite: false };
+  }
+  if (state.inStrategy && indent === indents.matrixIndent) {
+    return { ...state, inMatrix: body === "matrix:", inSuite: false };
+  }
+  if (state.inMatrix && indent === indents.suiteIndent) {
+    return { ...state, inSuite: body === "suite:" };
+  }
+  return state;
+}
+
+function lineIndent(raw) {
+  return raw.length - raw.trimStart().length;
+}
+
+function sequenceItemIndent(raw) {
+  return /^-[ \t]+/u.test(raw.trimStart()) ? lineIndent(raw) : undefined;
+}
+
+function mappingValue(raw, key) {
+  const body = raw.trimStart();
+  const keyExpression = new RegExp(String.raw`^(?:-[ \t]+)?${key}:(.*)$`, "u");
+  const value = keyExpression.exec(body)?.[1];
+  return value === undefined ? undefined : stripInlineComment(value).trim();
+}
+
+function stepStart(lines, runIndex) {
+  const run = lines[runIndex];
+  if (run === undefined) return undefined;
+  const runIndent = lineIndent(run);
+  if (sequenceItemIndent(run) !== undefined) return runIndex;
+  for (let index = runIndex - 1; index >= 0; index -= 1) {
+    const candidate = lines[index];
+    if (candidate === undefined) continue;
+    const indent = sequenceItemIndent(candidate);
+    if (indent !== undefined && indent < runIndent) return index;
+  }
+  return undefined;
+}
+
+function stepEnd(lines, start) {
+  const first = lines[start];
+  if (first === undefined) return start;
+  const indent = sequenceItemIndent(first);
+  if (indent === undefined) return start;
+  for (let index = start + 1; index < lines.length; index += 1) {
+    const candidate = lines[index];
+    if (candidate !== undefined && sequenceItemIndent(candidate) === indent) return index;
+  }
+  return lines.length;
+}
+
+function conditionsAtIndent(lines, start, end, indent) {
+  const conditions = [];
+  for (let index = start; index < end; index += 1) {
+    const raw = lines[index];
+    if (raw !== undefined && lineIndent(raw) === indent) {
+      const condition = mappingValue(raw, "if");
+      if (condition !== undefined) conditions.push(condition);
+    }
+  }
+  return conditions;
+}
+
+function hasContinueOnErrorAtIndent(lines, start, end, indent) {
+  for (let index = start; index < end; index += 1) {
+    const raw = lines[index];
+    if (raw === undefined || lineIndent(raw) !== indent) continue;
+    const value = mappingValue(raw, "continue-on-error");
+    if (continuesOnError(value)) return true;
+  }
+  return false;
+}
+
+function continuesOnError(value) {
+  // The classification may call a lane blocking only when it can prove that a failing suite
+  // fails its step and job. An expression (or malformed value) is therefore non-blocking unless
+  // it is the literal false value GitHub Actions documents for this field.
+  return value !== undefined && value !== "false";
+}
+
+function jobStart(lines, step) {
+  const first = lines[step];
+  if (first === undefined) return undefined;
+  const stepIndent = sequenceItemIndent(first);
+  if (stepIndent === undefined) return undefined;
+  const stepsIndent = stepIndent - 2;
+  for (let index = step - 1; index >= 0; index -= 1) {
+    const raw = lines[index];
+    if (raw === undefined) continue;
+    if (lineIndent(raw) === stepsIndent && raw.trim() === "steps:") {
+      return findJobStart(lines, index, stepsIndent - 2);
+    }
+  }
+  return undefined;
+}
+
+function findJobStart(lines, before, indent) {
+  for (let index = before - 1; index >= 0; index -= 1) {
+    const raw = lines[index];
+    if (raw === undefined || lineIndent(raw) !== indent) continue;
+    if (/^[A-Za-z][A-Za-z0-9_-]*:[ \t]*(?:#.*)?$/u.test(raw.trim())) return index;
+  }
+  return undefined;
+}
+
+function jobEnd(lines, start) {
+  const raw = lines[start];
+  if (raw === undefined) return start;
+  const indent = lineIndent(raw);
+  for (let index = start + 1; index < lines.length; index += 1) {
+    const candidate = lines[index];
+    if (candidate !== undefined && candidate.trim() !== "" && lineIndent(candidate) <= indent) {
+      return index;
+    }
+  }
+  return lines.length;
+}
+
+function directSuiteStepExecution(lines, runIndex) {
+  const start = stepStart(lines, runIndex);
+  if (start === undefined) return undefined;
+  const raw = lines[start];
+  if (raw === undefined) return undefined;
+  const stepIndent = sequenceItemIndent(raw);
+  if (stepIndent === undefined) return undefined;
+  const initialCondition = mappingValue(raw, "if");
+  const stepConditions = [
+    ...(initialCondition === undefined ? [] : [initialCondition]),
+    ...conditionsAtIndent(lines, start + 1, stepEnd(lines, start), stepIndent + 2),
+  ];
+  const job = jobStart(lines, start);
+  if (job === undefined) return undefined;
+  const jobConditions = conditionsAtIndent(
+    lines,
+    job,
+    jobEnd(lines, job),
+    lineIndent(lines[job]) + 2,
+  );
+  const stepEndIndex = stepEnd(lines, start);
+  const jobEndIndex = jobEnd(lines, job);
+  return {
+    conditions: [...stepConditions, ...jobConditions],
+    continuesOnError:
+      continuesOnError(mappingValue(raw, "continue-on-error")) ||
+      hasContinueOnErrorAtIndent(lines, start + 1, stepEndIndex, stepIndent + 2) ||
+      hasContinueOnErrorAtIndent(lines, job, jobEndIndex, lineIndent(lines[job]) + 2),
+  };
+}
+
+function suiteStepExecutions(script, workflowText) {
+  const lines = workflowText.split(/\r?\n/u);
+  return lines.flatMap((_, index) => {
+    const raw = lines[index];
+    if (
+      raw === undefined ||
+      (!runStepHasSuite(lines, index, script) && !matrixRunStepHasSuite(lines, index, script))
+    ) {
+      return [];
+    }
+    const execution = directSuiteStepExecution(lines, index);
+    return execution === undefined ? [undefined] : [execution];
   });
+}
+
+function stepRunsOnEvent(execution, event) {
+  return (
+    execution !== undefined &&
+    execution.conditions.every((condition) => conditionAllowsEvent(condition, event))
+  );
+}
+
+function protectionClassForEvent(event, continuesOnError) {
+  if (event === "pull_request" && continuesOnError) return PULL_REQUEST_NONBLOCKING;
+  if (event === "pull_request") return RUNS_PER_PR;
+  if (event === "push") return PUSH_NONBLOCKING;
+  if (event === "schedule") return SCHEDULED_NONBLOCKING;
+  return MANUAL_NONBLOCKING;
+}
+
+function workflowProtectionClass(script, workflowText) {
+  const triggers = workflowTriggers(workflowText);
+  let protection = UNWIRED;
+  for (const execution of suiteStepExecutions(script, workflowText)) {
+    for (const event of triggers) {
+      if (!stepRunsOnEvent(execution, event)) continue;
+      const eventProtection = protectionClassForEvent(event, execution.continuesOnError);
+      if (PROTECTION_RANK[eventProtection] > PROTECTION_RANK[protection]) {
+        protection = eventProtection;
+      }
+    }
+  }
+  return protection;
+}
+
+/**
+ * Classify the strongest event on which a concrete suite step actually executes. The class says
+ * where the suite runs, not whether a repository setting makes a resulting check merge-required.
+ */
+export function suiteProtectionClass(script, workflows) {
+  let protection = UNWIRED;
+  for (const workflow of workflows) {
+    const workflowProtection = workflowProtectionClass(script, workflow.text);
+    if (PROTECTION_RANK[workflowProtection] > PROTECTION_RANK[protection]) {
+      protection = workflowProtection;
+    }
+  }
+  return protection;
+}
+
+export function checkE2eProtectionBaseline({ scripts, workflows, protectionBaseline }) {
+  const suites = scripts.filter((name) => name.startsWith(E2E_SCRIPT_PREFIX)).sort(compareStrings);
+  const problems = [];
+  const protection = {};
+  for (const suite of suites) {
+    const actual = suiteProtectionClass(suite, workflows);
+    protection[suite] = actual;
+    const expected = protectionBaseline[suite];
+    if (expected === undefined) {
+      problems.push(
+        `${BASELINE_PATH} has no protection class for ${suite}. Record its current class (${actual}).`,
+      );
+    } else if (actual !== expected) {
+      problems.push(
+        `${suite} protection changed from ${expected} to ${actual}. Update its lane or the ` +
+          "baseline through an explicit reviewed change.",
+      );
+    }
+  }
+  for (const suite of Object.keys(protectionBaseline).sort(compareStrings)) {
+    if (!protection[suite]) {
+      problems.push(
+        `${BASELINE_PATH} records protection for ${suite}, which no longer exists. Remove it.`,
+      );
+    }
+  }
+  return { problems, protection };
 }
 
 /**
@@ -306,12 +825,12 @@ function readE2eConfigs(repoRoot) {
   return readdirSync(join(repoRoot, CONFIG_DIR)).filter((name) => name.endsWith(CONFIG_SUFFIX));
 }
 
-function readWorkflowText(repoRoot) {
+function readWorkflows(repoRoot) {
   const dir = join(repoRoot, ".github", "workflows");
   return readdirSync(dir)
     .filter((name) => name.endsWith(".yml") || name.endsWith(".yaml"))
-    .map((name) => readFileSync(join(dir, name), "utf8"))
-    .join("\n");
+    .sort(compareStrings)
+    .map((name) => ({ name, text: readFileSync(join(dir, name), "utf8") }));
 }
 
 // The register is only trustworthy if it is well formed. A duplicate entry passes a naive read and
@@ -334,13 +853,32 @@ export function validateBaselineSuites(suites) {
   return suites;
 }
 
+function validateProtectionBaseline(protection) {
+  if (typeof protection !== "object" || protection === null || Array.isArray(protection)) {
+    throw new TypeError(`${BASELINE_PATH} must carry a "suiteProtection" object.`);
+  }
+  for (const [suite, protectionClass] of Object.entries(protection)) {
+    if (!suite.startsWith(E2E_SCRIPT_PREFIX)) {
+      throw new TypeError(`${BASELINE_PATH} suiteProtection keys must be E2E script names.`);
+    }
+    if (typeof protectionClass !== "string" || !PROTECTION_CLASSES.has(protectionClass)) {
+      throw new TypeError(`${BASELINE_PATH} records an invalid protection class for ${suite}.`);
+    }
+  }
+  return protection;
+}
+
 function readBaseline(repoRoot) {
   const parsed = JSON.parse(readFileSync(join(repoRoot, BASELINE_PATH), "utf8"));
   // Absent field ⇒ nothing recorded ⇒ every scriptless config fails. That is the fail-closed
   // direction, so a baseline predating this list degrades to "stricter", never to "silent".
   const configsWithoutScript = validateUnownedConfigs(parsed.configsWithoutScript ?? []);
   validateUnownedConfigReasons(configsWithoutScript, parsed.configsWithoutScriptReasons ?? {});
-  return { suites: validateBaselineSuites(parsed.suites), configsWithoutScript };
+  return {
+    suites: validateBaselineSuites(parsed.suites),
+    suiteProtection: validateProtectionBaseline(parsed.suiteProtection ?? {}),
+    configsWithoutScript,
+  };
 }
 
 /**
@@ -352,15 +890,22 @@ export function runE2eSuiteWiringGate(repoRoot = REPO_ROOT) {
   const pkg = JSON.parse(readFileSync(join(repoRoot, "package.json"), "utf8"));
   const allScripts = pkg.scripts ?? {};
   const scripts = Object.keys(allScripts);
-  const { suites: baseline, configsWithoutScript } = readBaseline(repoRoot);
+  const { suites: baseline, suiteProtection, configsWithoutScript } = readBaseline(repoRoot);
   const configs = readE2eConfigs(repoRoot);
+  const workflows = readWorkflows(repoRoot);
+  const protection = checkE2eProtectionBaseline({
+    scripts,
+    workflows,
+    protectionBaseline: suiteProtection,
+  });
   return {
     problems: [
       ...checkE2eSuiteWiring({
         scripts,
-        workflowText: readWorkflowText(repoRoot),
+        workflowText: workflows.map((workflow) => workflow.text).join("\n"),
         baseline,
       }),
+      ...protection.problems,
       ...checkE2eConfigOwnership({
         configs,
         scriptCommands: scripts
@@ -373,10 +918,18 @@ export function runE2eSuiteWiringGate(repoRoot = REPO_ROOT) {
     recorded: baseline.length,
     configs: configs.length,
     unownedConfigs: configsWithoutScript.length,
+    protection: protection.protection,
   };
 }
 
-export function formatGateReport({ problems, total, recorded, configs, unownedConfigs }) {
+export function formatGateReport({
+  problems,
+  total,
+  recorded,
+  configs,
+  unownedConfigs,
+  protection = {},
+}) {
   if (problems.length > 0) {
     return [
       `e2e-suite-wiring: FAIL — ${String(problems.length)} problem(s)`,
@@ -384,12 +937,21 @@ export function formatGateReport({ problems, total, recorded, configs, unownedCo
       "",
     ].join("\n");
   }
-  return (
+  const suiteLines = Object.entries(protection)
+    .sort(([left], [right]) => compareStrings(left, right))
+    .map(([suite, protectionClass]) => {
+      const runsOnPullRequest =
+        protectionClass === RUNS_PER_PR ? "runs on PR" : "does not run on PR";
+      return `  - ${suite}: ${protectionClass} (${runsOnPullRequest})`;
+    });
+  return [
     `e2e-suite-wiring: PASS — ${String(total - recorded)} of ${String(total)} suite(s) run in a ` +
-    `workflow; ${String(recorded)} recorded as not yet wired. ` +
-    `${String(configs - unownedConfigs)} of ${String(configs)} config(s) have an owning script; ` +
-    `${String(unownedConfigs)} recorded as scriptless.\n`
-  );
+      `workflow; ${String(recorded)} recorded as not yet wired. ` +
+      `${String(configs - unownedConfigs)} of ${String(configs)} config(s) have an owning script; ` +
+      `${String(unownedConfigs)} recorded as scriptless.`,
+    ...suiteLines,
+    "",
+  ].join("\n");
 }
 
 export function main(write = (text) => process.stdout.write(text)) {

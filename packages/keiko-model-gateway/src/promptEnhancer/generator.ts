@@ -17,28 +17,30 @@
 // Determinism: pure. No IO, clock, or randomness. The caller supplies the `EnhancedPromptId` so id
 // construction stays deterministic. Output always satisfies `validateEnhancedPrompt` (#1309).
 
+import type {
+  CitationDiscipline,
+  ContradictionPolicy,
+  EnhancedPrompt,
+  EnhancedPromptId,
+  GroundingNeed,
+  GroundingPlan,
+  GroundingSourceKind,
+  GroundingSourcePolicy,
+  OutputSchemaDescriptor,
+  PromptClarification,
+  PromptDomain,
+  PromptEnhancementProfileId,
+  PromptRiskClass,
+  PromptTaskAnalysis,
+  PromptTaskClass,
+  RawPromptInput,
+} from "@oscharko-dev/keiko-contracts";
 import {
   PROMPT_ENHANCEMENT_PROFILES,
   normalizePromptDraft,
-  planGrounding,
-  validatePromptTaskAnalysis,
-  type CitationDiscipline,
-  type ContradictionPolicy,
-  type EnhancedPrompt,
-  type EnhancedPromptId,
-  type GroundingNeed,
-  type GroundingPlan,
-  type GroundingSourceKind,
-  type GroundingSourcePolicy,
-  type OutputSchemaDescriptor,
-  type PromptClarification,
-  type PromptDomain,
-  type PromptEnhancementProfileId,
-  type PromptRiskClass,
-  type PromptTaskAnalysis,
-  type PromptTaskClass,
-  type RawPromptInput,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/prompt-enhancer";
+import { planGrounding } from "@oscharko-dev/keiko-contracts/runtime/prompt-enhancer-grounding";
+import { validatePromptTaskAnalysis } from "@oscharko-dev/keiko-contracts/runtime/prompt-enhancer-validation";
 import { OUTPUT_CONTROLLABILITY_CRITERION } from "./critic.js";
 import type { PromptEnhancementPlan } from "./planner.js";
 import { getPromptEnhancerExecutionProfile } from "./profiles.js";

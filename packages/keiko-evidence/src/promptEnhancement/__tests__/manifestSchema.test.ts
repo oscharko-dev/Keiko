@@ -1,7 +1,7 @@
 // Tests for the Prompt Enhancement strict-schema gate (Issue #1313).
 
 import { describe, expect, it } from "vitest";
-import { PROMPT_ENHANCEMENT_MAX_CANDIDATE_COUNT } from "@oscharko-dev/keiko-contracts";
+import { PROMPT_ENHANCEMENT_MAX_CANDIDATE_COUNT } from "@oscharko-dev/keiko-contracts/runtime/prompt-enhancer-bff";
 import {
   PROMPT_ENHANCEMENT_EVIDENCE_SCHEMA_VERSION,
   validatePromptEnhancementEvidenceManifest,

@@ -8,7 +8,8 @@
 // §1 external-call rule: an effective-none cell egresses nowhere, any active capability egresses ONLY to
 // the configured model endpoint. Pure.
 
-import { VOICE_PROFILE_MEDIA_TRANSPORT, type VoiceProfile } from "@oscharko-dev/keiko-contracts";
+import type { VoiceProfile } from "@oscharko-dev/keiko-contracts";
+import { VOICE_PROFILE_MEDIA_TRANSPORT } from "@oscharko-dev/keiko-contracts/runtime/voice-protocol";
 import type { EgressDestinationClass, VoiceEnvironmentProfile } from "./types.js";
 
 // The four capability-axis profiles, declared locally because the contract exports no `VOICE_PROFILES`

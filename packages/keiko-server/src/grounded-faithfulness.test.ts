@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { CONNECTED_CONTEXT_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts";
+import { CONNECTED_CONTEXT_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts/runtime/connected-context";
 import type {
   ConnectedContextPack,
   ContextExcerpt,

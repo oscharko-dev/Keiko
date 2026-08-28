@@ -1,10 +1,10 @@
-import {
-  isCodingWorkbenchModeWidening,
-  type CodingWorkbenchMode,
-  type CodingWorkbenchRuntimeApprovalDecision,
-  type CodingWorkbenchRuntimeResearchGrant,
-  type CodingWorkbenchRuntimeSnapshot,
+import type {
+  CodingWorkbenchMode,
+  CodingWorkbenchRuntimeApprovalDecision,
+  CodingWorkbenchRuntimeResearchGrant,
+  CodingWorkbenchRuntimeSnapshot,
 } from "@oscharko-dev/keiko-contracts";
+import { isCodingWorkbenchModeWidening } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench";
 import {
   acknowledgeCodingWorkbenchRuntimeRecovery,
   codingWorkbenchRuntimeActionError,

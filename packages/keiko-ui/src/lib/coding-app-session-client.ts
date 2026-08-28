@@ -12,11 +12,11 @@
  * reports the honest paired/unpaired state through its channel payload instead.
  */
 
+import type { CodingAppSessionPairingAttestation } from "@oscharko-dev/keiko-contracts";
 import {
   CODING_APP_SESSION_PAIRING_FRAGMENT_PREFIX,
   decodeCodingAppSessionPairingFragment,
-  type CodingAppSessionPairingAttestation,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/coding-app-session";
 import { bffFetchJson } from "./http";
 
 const PAIR_PATH = "/api/coding-workbench/app-session/pair";

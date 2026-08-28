@@ -32,7 +32,7 @@
 // interface is still assignable to `ServerLogEvent`'s `op: string` / `extra?: Record<string,
 // unknown>`, so `processServerLogSink()` remains a valid `MemoryVaultLogSink` with no adapter.
 
-import { classifyErrorKind } from "@oscharko-dev/keiko-contracts";
+import { classifyErrorKind } from "@oscharko-dev/keiko-contracts/runtime/observability";
 
 export type MemoryVaultLogLevel = "debug" | "info" | "warn" | "error";
 

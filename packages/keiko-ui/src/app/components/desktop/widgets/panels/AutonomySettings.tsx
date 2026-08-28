@@ -1,11 +1,11 @@
 "use client";
 
 import { useId, type ReactNode } from "react";
+import type { CodingWorkbenchMode } from "@oscharko-dev/keiko-contracts";
 import {
   CODING_WORKBENCH_MODES,
   compareCodingWorkbenchModeAuthority,
-  type CodingWorkbenchMode,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/coding-workbench";
 import { useAutonomyModePolicy } from "../../hooks/useAutonomyModePolicy";
 import { useSettingsTranslate as useTranslate, type I18nTranslate } from "./settings-i18n";
 import styles from "./AutonomySettings.module.css";

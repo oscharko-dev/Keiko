@@ -14,7 +14,7 @@ import {
   isTaskWorkspaceLifecycleState,
   isWorkspaceCleanupMode,
   isWorkspaceRecoveryStrategy,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/task-workspace";
 import type {
   TaskWorkspaceLifecycleState,
   WorkspaceCleanupMode,

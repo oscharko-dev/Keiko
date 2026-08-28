@@ -2,15 +2,17 @@
 
 import { useMemo, useState, type ReactNode } from "react";
 
+import type {
+  EditorM11ProfileSummary,
+  EditorM11ProfilesSnapshot,
+  WorkspaceProfileRef,
+} from "@oscharko-dev/keiko-contracts";
+import { EDITOR_M11_DEFAULT_PROFILE_REF } from "@oscharko-dev/keiko-contracts/runtime/editor-m11-settings";
 import {
-  EDITOR_M11_DEFAULT_PROFILE_REF,
   WORKSPACE_PROFILE_DISPLAY_NAME_MAX_CHARS,
   isAssignableWorkspaceProfileDisplayName,
   isReservedWorkspaceProfileDisplayName,
-  type EditorM11ProfileSummary,
-  type EditorM11ProfilesSnapshot,
-  type WorkspaceProfileRef,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/workspace-profile";
 import type { EditorSettingsView } from "../cards/useEditorSettings";
 import { useSettingsTranslate as useTranslate, type I18nTranslate } from "./settings-i18n";
 import { EditorProfilePortability } from "./EditorProfilePortability";

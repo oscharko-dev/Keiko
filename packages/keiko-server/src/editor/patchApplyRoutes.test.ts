@@ -5,17 +5,19 @@ import { Readable } from "node:stream";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { createInMemoryEvidenceStore } from "@oscharko-dev/keiko-evidence";
+import type {
+  EditorM7SettingId,
+  EditorM7SettingValue,
+  EditorM7SettingsSnapshot,
+  EditorPatchApplyWireResponse,
+  EditorPatchVerificationSummary,
+  EvidenceStore,
+} from "@oscharko-dev/keiko-contracts";
 import {
   EDITOR_M7_SCHEMA_VERSION,
   EDITOR_M7_SETTING_REGISTRY,
   resolveEditorM7Settings,
-  type EditorM7SettingId,
-  type EditorM7SettingValue,
-  type EditorM7SettingsSnapshot,
-  type EditorPatchApplyWireResponse,
-  type EditorPatchVerificationSummary,
-  type EvidenceStore,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/editor-m7";
 import { buildRedactor, createInMemoryUiStore } from "../index.js";
 import type { RouteContext, UiHandlerDeps } from "../index.js";
 import type { UiStore } from "../store/index.js";

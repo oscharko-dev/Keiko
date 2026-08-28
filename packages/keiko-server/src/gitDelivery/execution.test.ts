@@ -10,12 +10,9 @@ import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { WorkspaceInfo } from "@oscharko-dev/keiko-workspace";
-import {
-  GIT_DELIVERY_POLICY_SCHEMA_VERSION,
-  GIT_DELIVERY_SCHEMA_VERSION,
-  type GitDeliveryRepoPolicyPack,
-  type WorkspaceInstance,
-} from "@oscharko-dev/keiko-contracts";
+import type { GitDeliveryRepoPolicyPack, WorkspaceInstance } from "@oscharko-dev/keiko-contracts";
+import { GIT_DELIVERY_POLICY_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts/runtime/git-delivery-policy";
+import { GIT_DELIVERY_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts/runtime/git-delivery";
 import type { GitMutationLifecycleResult } from "@oscharko-dev/keiko-tools";
 import { buildRedactor } from "../index.js";
 import type { EvidenceStore } from "@oscharko-dev/keiko-evidence";

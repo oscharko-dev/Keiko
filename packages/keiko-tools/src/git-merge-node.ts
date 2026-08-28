@@ -22,13 +22,13 @@
 // the Node execution effect; the pure port, builders, and rules it implements are on the barrel.
 
 import type { WorkspaceInfo } from "@oscharko-dev/keiko-workspace";
-import {
-  GIT_DELIVERY_SCHEMA_VERSION,
-  type GitDeliveryBranchProtection,
-  type GitDeliveryChecksState,
-  type GitDeliveryExecutionResult,
-  type GitDeliveryMergeStrategyHint,
+import type {
+  GitDeliveryBranchProtection,
+  GitDeliveryChecksState,
+  GitDeliveryExecutionResult,
+  GitDeliveryMergeStrategyHint,
 } from "@oscharko-dev/keiko-contracts";
+import { GIT_DELIVERY_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts/runtime/git-delivery";
 import {
   buildBranchProtectionArgv,
   buildCheckRunsArgv,

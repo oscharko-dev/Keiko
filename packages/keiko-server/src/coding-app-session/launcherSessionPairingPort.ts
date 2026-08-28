@@ -14,7 +14,7 @@ import { createHash, createHmac, timingSafeEqual } from "node:crypto";
 import {
   CODING_APP_SESSION_LAUNCHER_SECRET_ENV,
   CODING_APP_SESSION_LAUNCHER_SECRET_MIN_CHARS,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/coding-app-session";
 import type { EnvSource } from "@oscharko-dev/keiko-model-gateway";
 import {
   SESSION_PAIRING_DENIED,

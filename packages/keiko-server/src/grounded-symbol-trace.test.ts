@@ -1,10 +1,6 @@
 import { describe, expect, it } from "vitest";
-import {
-  CONNECTED_CONTEXT_SCHEMA_VERSION,
-  type EvidenceAtom,
-  type RetrievalQuery,
-  type SelectedScope,
-} from "@oscharko-dev/keiko-contracts";
+import type { EvidenceAtom, RetrievalQuery, SelectedScope } from "@oscharko-dev/keiko-contracts";
+import { CONNECTED_CONTEXT_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts/runtime/connected-context";
 import type {
   SearchScope,
   WorkspaceFs,

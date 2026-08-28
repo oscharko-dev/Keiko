@@ -2,18 +2,20 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync, realpathSync } from "nod
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type {
+  EditorAgentDiagnostic,
+  EditorAgentSessionSnapshot,
+  GitEditorDiffResponse,
+} from "@oscharko-dev/keiko-contracts";
+import { EDITOR_AGENT_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts/runtime/editor-agent";
 import {
-  EDITOR_AGENT_SCHEMA_VERSION,
   GIT_EDITOR_BLAME_MAX_BYTES,
   GIT_EDITOR_BLAME_MAX_LINES,
   GIT_EDITOR_DIFF_MAX_BYTES,
   GIT_EDITOR_DIFF_MAX_FILES,
   GIT_EDITOR_SCHEMA_VERSION,
-  GIT_REPOSITORY_SCHEMA_VERSION,
-  type EditorAgentDiagnostic,
-  type EditorAgentSessionSnapshot,
-  type GitEditorDiffResponse,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/git-editor";
+import { GIT_REPOSITORY_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts/runtime/git-repository";
 import { createMemoryVault, type MemoryVaultStore } from "@oscharko-dev/keiko-memory-vault";
 import type {
   MemoryId,

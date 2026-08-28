@@ -1,11 +1,13 @@
 import { Buffer } from "node:buffer";
 import type { EnvSource } from "@oscharko-dev/keiko-model-gateway";
+import type {
+  WorkspaceCleanupMode,
+  WorkspaceRecoveryStrategy,
+} from "@oscharko-dev/keiko-contracts";
 import {
   isWorkspaceCleanupMode,
   isWorkspaceRecoveryStrategy,
-  type WorkspaceCleanupMode,
-  type WorkspaceRecoveryStrategy,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/task-workspace";
 import { resolveLoopbackEndpoint, type LoopbackEndpointOptions } from "./loopback-endpoint.js";
 import type { CliIo } from "./runner.js";
 

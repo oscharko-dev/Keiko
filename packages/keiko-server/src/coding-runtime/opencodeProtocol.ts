@@ -3,7 +3,7 @@ import { createHash } from "node:crypto";
 import {
   CODING_WORKBENCH_APPROVAL_REVIEW_MAX_PATHS,
   CODING_WORKBENCH_APPROVAL_REVIEW_PATH_MAX_CHARS,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime-approval-review";
 
 import {
   parseCodingSidecarEventLine,

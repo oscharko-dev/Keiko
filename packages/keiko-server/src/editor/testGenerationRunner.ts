@@ -20,15 +20,15 @@ import {
   type UnitTestTarget,
 } from "@oscharko-dev/keiko-workflows";
 import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
-import {
-  notRunTestGenerationFunnel,
-  type CodingContextPack,
-  type EditorTestGenerationFunnel,
-  type EditorTestGenerationWirePatch,
-  type EditorTestGenerationWireProvenance,
-  type EditorTestGenerationWireRequest,
-  type EditorTestGenerationWireTarget,
+import type {
+  CodingContextPack,
+  EditorTestGenerationFunnel,
+  EditorTestGenerationWirePatch,
+  EditorTestGenerationWireProvenance,
+  EditorTestGenerationWireRequest,
+  EditorTestGenerationWireTarget,
 } from "@oscharko-dev/keiko-contracts";
+import { notRunTestGenerationFunnel } from "@oscharko-dev/keiko-contracts/runtime/editor-test-generation";
 import { currentGatewayConfig, type UiHandlerDeps } from "../deps.js";
 import { translateDiffToWirePatch, type OriginalContentReader } from "./testGenerationPatch.js";
 import type { AssuredVerificationKind } from "./assuredPreFilterRunner.js";

@@ -8,13 +8,13 @@
 
 import { ApiError } from "./api";
 import { bffFetchJson } from "./http";
-import {
-  isWorkspaceFailureClass,
-  type WorkspaceBinding,
-  type WorkspaceFailureClass,
-  type WorkspaceInstance,
-  type WorkspaceReconciliationReport,
+import type {
+  WorkspaceBinding,
+  WorkspaceFailureClass,
+  WorkspaceInstance,
+  WorkspaceReconciliationReport,
 } from "@oscharko-dev/keiko-contracts";
+import { isWorkspaceFailureClass } from "@oscharko-dev/keiko-contracts/runtime/task-workspace";
 
 // A task-workspace BFF error that also carries the caller-facing failure class (#449, ADR-0093 D3) when
 // the server surfaced one. Modelled as a TYPE on the existing `ApiError` (not a subclass) so this module

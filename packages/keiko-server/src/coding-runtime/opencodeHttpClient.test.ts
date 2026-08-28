@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { CODING_WORKBENCH_RUNTIME_QUESTIONS_MAX_UTF8_BYTES } from "@oscharko-dev/keiko-contracts";
+import { CODING_WORKBENCH_RUNTIME_QUESTIONS_MAX_UTF8_BYTES } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime-questions";
 import { createOpenCodeHttpClient, parseOpenCodeChildEndpoint } from "./opencodeHttpClient.js";
 
 interface OpenCodeEventClient {

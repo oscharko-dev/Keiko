@@ -7,12 +7,12 @@
 
 import { createHash, type Hash } from "node:crypto";
 
-import {
-  isSafeStorageReference,
-  type KnowledgeCapsuleId,
-  type KnowledgeSourceId,
-  type KnowledgeSourceScope,
+import type {
+  KnowledgeCapsuleId,
+  KnowledgeSourceId,
+  KnowledgeSourceScope,
 } from "@oscharko-dev/keiko-contracts";
+import { isSafeStorageReference } from "@oscharko-dev/keiko-contracts/runtime/local-knowledge-paths";
 import type { WorkspaceFs } from "@oscharko-dev/keiko-workspace";
 
 import { isContained, walkSource } from "../discovery/walk.js";

@@ -11,10 +11,8 @@
 
 import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from "react";
 import { reportClientDiagnostic } from "@/lib/client-diagnostics";
-import {
-  DEFAULT_VOICE_PROTOCOL_TIMEOUTS,
-  type VoiceSessionChatContext,
-} from "@oscharko-dev/keiko-contracts";
+import type { VoiceSessionChatContext } from "@oscharko-dev/keiko-contracts";
+import { DEFAULT_VOICE_PROTOCOL_TIMEOUTS } from "@oscharko-dev/keiko-contracts/runtime/voice-protocol";
 import {
   canonicalVoiceHasherIsReady,
   canonicalVoiceSha256Hex,

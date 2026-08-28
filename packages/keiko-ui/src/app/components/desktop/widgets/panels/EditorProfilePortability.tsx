@@ -2,13 +2,13 @@
 
 import { useState, type ChangeEvent, type ReactNode } from "react";
 
-import {
-  EDITOR_M7_SCHEMA_VERSION,
-  type EditorM11ProfileSummary,
-  type WorkspaceProfileExportResult,
-  type WorkspaceProfileImportPreview,
-  type WorkspaceProfileImportPreviewRow,
+import type {
+  EditorM11ProfileSummary,
+  WorkspaceProfileExportResult,
+  WorkspaceProfileImportPreview,
+  WorkspaceProfileImportPreviewRow,
 } from "@oscharko-dev/keiko-contracts";
+import { EDITOR_M7_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts/runtime/editor-m7";
 import {
   ApiError,
   applyEditorProfileImport,

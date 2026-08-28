@@ -26,16 +26,16 @@ import type {
   VoiceCapabilityResolution,
   VoicePersona,
 } from "./types.js";
-import {
-  UNVERIFIED_GATEWAY,
-  deriveContextProfileFromCapability,
-  isCodingWorkbenchModel,
-  type CodingWorkbenchModelSource,
-  type CodingWorkbenchSidecarGatewayProjection,
-  type CodingWorkbenchSidecarGatewayResult,
-  type CodingWorkbenchSidecarGatewayUnavailableReason,
-  type GatewayVerificationState,
+import type {
+  CodingWorkbenchModelSource,
+  CodingWorkbenchSidecarGatewayProjection,
+  CodingWorkbenchSidecarGatewayResult,
+  CodingWorkbenchSidecarGatewayUnavailableReason,
+  GatewayVerificationState,
 } from "@oscharko-dev/keiko-contracts";
+import { UNVERIFIED_GATEWAY } from "@oscharko-dev/keiko-contracts/runtime/gateway-verification";
+import { deriveContextProfileFromCapability } from "@oscharko-dev/keiko-contracts/runtime/context-engineering";
+import { isCodingWorkbenchModel } from "@oscharko-dev/keiko-contracts/runtime/gateway";
 const voiceCapabilityCache = new WeakMap<
   ConfiguredCapabilitySource,
   Map<string, VoiceCapabilityResolution>

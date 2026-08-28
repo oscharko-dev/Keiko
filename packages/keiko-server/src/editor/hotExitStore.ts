@@ -8,12 +8,12 @@ import {
 } from "@oscharko-dev/keiko-security/secret-vault";
 import { SecretboxError } from "@oscharko-dev/keiko-security/errors";
 import type { SecurityLogSink } from "@oscharko-dev/keiko-security";
-import {
-  EDITOR_HOT_EXIT_TTL_MS,
-  type EditorDocumentVersion,
-  type EditorHotExitSnapshotV1,
-  type EditorHotExitWriteStoredResponse,
+import type {
+  EditorDocumentVersion,
+  EditorHotExitSnapshotV1,
+  EditorHotExitWriteStoredResponse,
 } from "@oscharko-dev/keiko-contracts";
+import { EDITOR_HOT_EXIT_TTL_MS } from "@oscharko-dev/keiko-contracts/runtime/editor-hot-exit";
 import type { EnvSource } from "@oscharko-dev/keiko-model-gateway";
 
 const HOT_EXIT_SUBDIR = "editor-hot-exit";

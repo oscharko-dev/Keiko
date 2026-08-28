@@ -4,7 +4,7 @@
 // — only atoms belonging to stale candidates — and a fresh runId. Does NOT re-implement the
 // workflow; composes runQualityIntelligenceModelRoutedTestDesign unchanged.
 
-import { QualityIntelligence as QI } from "@oscharko-dev/keiko-contracts";
+import * as QI from "@oscharko-dev/keiko-contracts/runtime/qualityIntelligence/index";
 import type {
   QualityIntelligenceIngestedAtom,
   QualityIntelligenceModelRoutedTestDesignDeps,

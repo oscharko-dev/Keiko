@@ -22,7 +22,7 @@
 // opaque identifiers. Memory bodies, summaries, reviewer notes, and any other record content
 // never reach a field on this event.
 
-import { classifyErrorKind } from "@oscharko-dev/keiko-contracts";
+import { classifyErrorKind } from "@oscharko-dev/keiko-contracts/runtime/observability";
 
 export type ConsolidationLogLevel = "debug" | "info" | "warn" | "error";
 

@@ -27,7 +27,7 @@ import {
   type AtlassianHttpBodyPort,
   type AtlassianHttpPort,
 } from "@oscharko-dev/keiko-connectors";
-import { isAtlassianConnectorAuthRef } from "@oscharko-dev/keiko-contracts";
+import { isAtlassianConnectorAuthRef } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import { UNKNOWN_CORRELATION_ID } from "../correlation.js";
 import {
   contentFreeErrorClass,

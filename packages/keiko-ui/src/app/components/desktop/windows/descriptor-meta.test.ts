@@ -11,7 +11,7 @@
 //   - WIN_META keys are exactly the WindowsRegistry WIN_TYPES keys.
 
 import { describe, expect, it } from "vitest";
-import { validateWorkspaceDescriptorMeta } from "@oscharko-dev/keiko-contracts";
+import { validateWorkspaceDescriptorMeta } from "@oscharko-dev/keiko-contracts/runtime/workspace-descriptors";
 import { WIN_META, validateAllDescriptorMeta } from "./descriptor-meta";
 import { WIN_TYPES } from "./WindowsRegistry";
 

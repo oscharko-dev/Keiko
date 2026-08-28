@@ -8,13 +8,13 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import {
-  EDITOR_VERIFICATION_SCHEMA_VERSION,
-  WORKSPACE_TRUST_SCHEMA_VERSION,
-  type EditorVerificationCatalog,
-  type EditorVerificationEvent,
-  type EditorVerificationRun,
+import type {
+  EditorVerificationCatalog,
+  EditorVerificationEvent,
+  EditorVerificationRun,
 } from "@oscharko-dev/keiko-contracts";
+import { EDITOR_VERIFICATION_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts/runtime/editor-verification";
+import { WORKSPACE_TRUST_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts/runtime/workspace-trust";
 import type { RouteContext } from "../routes.js";
 import type { SseBackpressureSignal } from "../sse-write.js";
 import type { UiHandlerDeps } from "../deps.js";

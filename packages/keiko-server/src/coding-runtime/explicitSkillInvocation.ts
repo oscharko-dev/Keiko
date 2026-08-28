@@ -1,4 +1,5 @@
-import { isCodeTaskSkillId, type CodeTaskSkillId } from "@oscharko-dev/keiko-contracts";
+import type { CodeTaskSkillId } from "@oscharko-dev/keiko-contracts";
+import { isCodeTaskSkillId } from "@oscharko-dev/keiko-contracts/runtime/code-task-auxiliary";
 
 import type { SkillCatalog } from "./skillCatalog.js";
 

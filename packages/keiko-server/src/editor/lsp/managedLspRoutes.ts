@@ -1,13 +1,15 @@
+import type {
+  ManagedLspControlMutation,
+  ManagedLspControlResponse,
+  ManagedLspControlResult,
+  ManagedLspControlSnapshot,
+  ManagedLspProcessHealthSnapshot,
+} from "@oscharko-dev/keiko-contracts";
 import {
   parseManagedLspControlRequest,
   parseManagedLspRevisionEtag,
-  resolveManagedLspActivation,
-  type ManagedLspControlMutation,
-  type ManagedLspControlResponse,
-  type ManagedLspControlResult,
-  type ManagedLspControlSnapshot,
-  type ManagedLspProcessHealthSnapshot,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/managed-lsp-route";
+import { resolveManagedLspActivation } from "@oscharko-dev/keiko-contracts/runtime/managed-lsp-activation";
 
 import type { UiHandlerDeps } from "../../deps.js";
 import { readJsonObject, resolveRequestRoot, runFilesHandler } from "../../files.js";

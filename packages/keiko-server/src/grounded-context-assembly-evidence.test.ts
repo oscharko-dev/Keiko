@@ -11,13 +11,10 @@ import {
   persistConnectedContextEvidence,
   type ConnectedContextEvidenceInput,
 } from "@oscharko-dev/keiko-evidence";
-import {
-  CONNECTED_CONTEXT_SCHEMA_VERSION,
-  DEFAULT_CONTEXT_PROFILE,
-  validateContextAssemblyDiagnostics,
-  type ConnectedContextPack,
-  type ContextProfile,
-} from "@oscharko-dev/keiko-contracts";
+import type { ConnectedContextPack, ContextProfile } from "@oscharko-dev/keiko-contracts";
+import { CONNECTED_CONTEXT_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts/runtime/connected-context";
+import { DEFAULT_CONTEXT_PROFILE } from "@oscharko-dev/keiko-contracts/runtime/context-engineering";
+import { validateContextAssemblyDiagnostics } from "@oscharko-dev/keiko-contracts/runtime/context-engineering-validation";
 import { attachContextBudgetDiagnostics } from "./grounded-context-diagnostics.js";
 import { groundedContextAssemblyInput } from "./grounded-qa.js";
 import type { UiHandlerDeps } from "./deps.js";

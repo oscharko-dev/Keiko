@@ -66,7 +66,7 @@ export {
   describeVoiceProviderAvailability,
   listVoicePersonas,
   validateGatewaySamplingParameters,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/gateway";
 
 // ─── Provider configuration (credential-bearing — STAYS local) ────────────────
 

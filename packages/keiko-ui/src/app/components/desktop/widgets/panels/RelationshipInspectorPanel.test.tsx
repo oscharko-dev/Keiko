@@ -52,7 +52,7 @@ import {
   patchRelationship,
   RelationshipApiError,
 } from "../../../../relationships/api";
-import { RELATIONSHIP_QUERY_BOUNDS } from "@oscharko-dev/keiko-contracts";
+import { RELATIONSHIP_QUERY_BOUNDS } from "@oscharko-dev/keiko-contracts/runtime/relationships";
 
 const mockGetRelationship = vi.mocked(getRelationship);
 const mockGetExplain = vi.mocked(getExplain);

@@ -1,11 +1,8 @@
 import { act, renderHook, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import {
-  WORKSPACE_MANIFEST_SCHEMA_VERSION,
-  WORKSPACE_TRUST_SCHEMA_VERSION,
-  type WorkspaceManifest,
-  type WorkspaceTrustStatus,
-} from "@oscharko-dev/keiko-contracts";
+import type { WorkspaceManifest, WorkspaceTrustStatus } from "@oscharko-dev/keiko-contracts";
+import { WORKSPACE_MANIFEST_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts/runtime/workspace-manifest";
+import { WORKSPACE_TRUST_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts/runtime/workspace-trust";
 import { ApiError } from "@/lib/api";
 import { WORKSPACE_TRUST_CHANGED_EVENT } from "@/lib/workspace-trust-api";
 import { WORKSPACE_MANIFEST_CHANGED_EVENT } from "@/lib/workspace-manifest-api";

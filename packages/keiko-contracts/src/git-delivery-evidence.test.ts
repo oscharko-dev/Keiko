@@ -5,13 +5,16 @@
 // structural guards fail closed on malformed records (the on-read tamper gate).
 
 import { describe, expect, it } from "vitest";
+import type {
+  GitDeliveryEvidenceOutcomeClass,
+  GitDeliveryEvidenceRecord,
+  GitDeliveryRecoveryDisposition,
+} from "./index.js";
 import {
   GIT_DELIVERY_AUDIT_PACKET_KNOWN_LIMITATIONS,
-  GIT_DELIVERY_BLOCK_REASONS,
   GIT_DELIVERY_EVIDENCE_LIFECYCLE_PHASES,
   GIT_DELIVERY_EVIDENCE_OUTCOME_CLASSES,
   GIT_DELIVERY_EVIDENCE_SCHEMA_VERSION,
-  GIT_DELIVERY_EXECUTION_ERROR_CODES,
   GIT_DELIVERY_RECOVERY_DISPOSITIONS,
   buildGitDeliveryAuditPacket,
   gitDeliveryRecoveryDispositionForBlockReason,
@@ -21,10 +24,8 @@ import {
   isGitDeliveryEvidenceRecord,
   isGitDeliveryRecoveryDisposition,
   isGitDeliveryRecoveryMetadata,
-  type GitDeliveryEvidenceOutcomeClass,
-  type GitDeliveryEvidenceRecord,
-  type GitDeliveryRecoveryDisposition,
-} from "./index.js";
+} from "./git-delivery-evidence.js";
+import { GIT_DELIVERY_BLOCK_REASONS, GIT_DELIVERY_EXECUTION_ERROR_CODES } from "./git-delivery.js";
 
 function baseRecord(overrides: Partial<GitDeliveryEvidenceRecord> = {}): GitDeliveryEvidenceRecord {
   return {

@@ -60,7 +60,7 @@ import type {
 } from "@oscharko-dev/keiko-contracts";
 import type { ConversationId, ProjectId, WorkspaceId } from "@oscharko-dev/keiko-contracts/memory";
 import type { GroundedAnswer } from "@oscharko-dev/keiko-contracts/bff-wire";
-import { UNVERIFIED_GATEWAY } from "@oscharko-dev/keiko-contracts";
+import { UNVERIFIED_GATEWAY } from "@oscharko-dev/keiko-contracts/runtime/gateway-verification";
 
 const CHAT_MODEL = "example-chat-model";
 const ALTERNATE_CHAT_MODEL = "alternate-chat-model";

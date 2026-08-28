@@ -24,15 +24,17 @@ import {
   type AtlassianHttpPort,
   type AtlassianHttpResult,
 } from "@oscharko-dev/keiko-connectors";
+import type {
+  AtlassianConnectorProvider,
+  AtlassianSyncJobState,
+  CodingWorkbenchAuthorityEnvelope,
+  CodingWorkbenchConnectorScope,
+  CodingWorkbenchMode,
+} from "@oscharko-dev/keiko-contracts";
 import {
   CODING_WORKBENCH_ACTION_CLASSES,
   CODING_WORKBENCH_SCHEMA_VERSION,
-  type AtlassianConnectorProvider,
-  type AtlassianSyncJobState,
-  type CodingWorkbenchAuthorityEnvelope,
-  type CodingWorkbenchConnectorScope,
-  type CodingWorkbenchMode,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/coding-workbench";
 import type {
   GatewayConfig,
   OpenAIEmbeddingOutcome,

@@ -29,21 +29,21 @@
 
 import { randomUUID } from "node:crypto";
 
-import {
-  ATLASSIAN_CONNECTOR_SCHEMA_VERSION,
-  htmlManualReachableFilesScope,
-  isKnowledgePodEvidenceSafeText,
-  standardPodModelUsePolicy,
-  type AtlassianSyncChangeCounts,
-  type AtlassianSyncChangeSummary,
-  type AtlassianSyncFailureReason,
-  type AtlassianSyncTerminalStatus,
-  type EmbeddingModelIdentity,
-  type KnowledgeCapsuleId,
-  type KnowledgePodModelUsePolicy,
-  type KnowledgePodSummary,
-  type KnowledgeSourceId,
+import type {
+  AtlassianSyncChangeCounts,
+  AtlassianSyncChangeSummary,
+  AtlassianSyncFailureReason,
+  AtlassianSyncTerminalStatus,
+  EmbeddingModelIdentity,
+  KnowledgeCapsuleId,
+  KnowledgePodModelUsePolicy,
+  KnowledgePodSummary,
+  KnowledgeSourceId,
 } from "@oscharko-dev/keiko-contracts";
+import { ATLASSIAN_CONNECTOR_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
+import { htmlManualReachableFilesScope } from "@oscharko-dev/keiko-contracts/runtime/html-manual-source";
+import { isKnowledgePodEvidenceSafeText } from "@oscharko-dev/keiko-contracts/runtime/local-knowledge-pods";
+import { standardPodModelUsePolicy } from "@oscharko-dev/keiko-contracts/runtime/local-knowledge-model-use-policy";
 import type { OpenAIEmbeddingAdapter } from "@oscharko-dev/keiko-model-gateway";
 
 import { createCapsule, getCapsule, updateCapsuleState } from "./capsule-lifecycle.js";

@@ -29,7 +29,7 @@ import {
   type AtlassianHttpRequest,
   type AtlassianHttpResult,
 } from "@oscharko-dev/keiko-connectors";
-import { isSafeAtlassianConnectorBaseUrl } from "@oscharko-dev/keiko-contracts";
+import { isSafeAtlassianConnectorBaseUrl } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import {
   classifyOutboundHost,
   gatewayFetch,

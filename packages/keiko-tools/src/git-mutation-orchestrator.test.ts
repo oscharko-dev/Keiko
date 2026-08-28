@@ -1,14 +1,14 @@
 import { describe, expect, it } from "vitest";
-import {
-  GIT_DELIVERY_POLICY_SCHEMA_VERSION,
-  GIT_DELIVERY_SCHEMA_VERSION,
-  type GitDeliveryApprovalRequirement,
-  type GitDeliveryExecutionResult,
-  type GitDeliveryOrgPolicyPack,
-  type GitDeliveryRepoPolicyPack,
-  type GitDeliveryRuleDecision,
-  type GitDeliveryConstraint,
+import type {
+  GitDeliveryApprovalRequirement,
+  GitDeliveryExecutionResult,
+  GitDeliveryOrgPolicyPack,
+  GitDeliveryRepoPolicyPack,
+  GitDeliveryRuleDecision,
+  GitDeliveryConstraint,
 } from "@oscharko-dev/keiko-contracts";
+import { GIT_DELIVERY_POLICY_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts/runtime/git-delivery-policy";
+import { GIT_DELIVERY_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts/runtime/git-delivery";
 import type { GitLocalMutationAdapter } from "./git-mutation-adapter.js";
 import type { GitWorktreeSnapshot } from "./git-mutation-preflight.js";
 import {

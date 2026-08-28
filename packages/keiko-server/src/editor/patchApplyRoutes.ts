@@ -19,18 +19,20 @@
 
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
+import type {
+  EditorPatchApplyChangeCounts,
+  EditorPatchApplyEvidenceRefs,
+  EditorPatchApplyRejection,
+  EditorPatchApplyWireRequest,
+  EditorPatchApplyWireResponse,
+  EditorPatchRejectionReason,
+  EditorPatchRevertProposal,
+  EditorPatchVerificationSummary,
+} from "@oscharko-dev/keiko-contracts";
 import {
   EDITOR_PATCH_APPLY_SCHEMA_VERSION,
   parseEditorPatchApplyRequest,
-  type EditorPatchApplyChangeCounts,
-  type EditorPatchApplyEvidenceRefs,
-  type EditorPatchApplyRejection,
-  type EditorPatchApplyWireRequest,
-  type EditorPatchApplyWireResponse,
-  type EditorPatchRejectionReason,
-  type EditorPatchRevertProposal,
-  type EditorPatchVerificationSummary,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/editor-patch-apply";
 import {
   applyPatch,
   buildRestorePatch,

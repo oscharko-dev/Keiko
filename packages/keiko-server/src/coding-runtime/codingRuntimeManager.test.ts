@@ -15,7 +15,7 @@ import { PassThrough } from "node:stream";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ServerDiagnosticRecord } from "../diagnostics-log.js";
 
-import { validateCodingWorkbenchRuntimeEvent } from "@oscharko-dev/keiko-contracts";
+import { validateCodingWorkbenchRuntimeEvent } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-validation";
 import type {
   CodingWorkbenchActionClass,
   CodingWorkbenchConnectorScope,

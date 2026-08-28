@@ -3,10 +3,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
-import {
-  EDITOR_AGENT_TARGET_PATH_MAX_BYTES,
-  validateCodingWorkbenchEvidenceRecord,
-} from "@oscharko-dev/keiko-contracts";
+import { EDITOR_AGENT_TARGET_PATH_MAX_BYTES } from "@oscharko-dev/keiko-contracts/runtime/editor-agent";
+import { validateCodingWorkbenchEvidenceRecord } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-evidence";
 import { isDenied } from "@oscharko-dev/keiko-workspace";
 
 import {

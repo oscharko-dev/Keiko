@@ -7,18 +7,20 @@
 // indexing, checkpoint, and lifecycle a folder source already uses. No second store, no parallel
 // retrieval path. Byte retrieval is injected (`ManualCrawlFetcher`, ADR-0019 trust-9).
 
+import type {
+  EmbeddingModelIdentity,
+  HtmlManualSource,
+  KnowledgeCapsuleId,
+  KnowledgePodModelUsePolicy,
+  KnowledgePodSummary,
+  KnowledgeSourceId,
+} from "@oscharko-dev/keiko-contracts";
 import {
   htmlManualSourceFingerprintTag,
   htmlManualSourceKindTag,
   htmlManualReachableFilesScope,
-  standardPodModelUsePolicy,
-  type EmbeddingModelIdentity,
-  type HtmlManualSource,
-  type KnowledgeCapsuleId,
-  type KnowledgePodModelUsePolicy,
-  type KnowledgePodSummary,
-  type KnowledgeSourceId,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/html-manual-source";
+import { standardPodModelUsePolicy } from "@oscharko-dev/keiko-contracts/runtime/local-knowledge-model-use-policy";
 import type { OpenAIEmbeddingAdapter } from "@oscharko-dev/keiko-model-gateway";
 
 import { randomUUID } from "node:crypto";

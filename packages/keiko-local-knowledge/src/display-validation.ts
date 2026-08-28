@@ -7,7 +7,7 @@
 // — is the keiko-contracts canonical; these thin asserts add the non-empty-trimmed requirement for the
 // required variant and raise the domain `KnowledgeStoreError` with the exact prior messages, so every
 // write path enforces one identical rule.
-import { isSafeDisplaySummary } from "@oscharko-dev/keiko-contracts";
+import { isSafeDisplaySummary } from "@oscharko-dev/keiko-contracts/runtime/local-knowledge-validation";
 
 import { KnowledgeStoreError } from "./errors.js";
 

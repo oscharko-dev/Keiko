@@ -14,7 +14,7 @@ import { Readable } from "node:stream";
 import type { GatewayConfig } from "@oscharko-dev/keiko-model-gateway";
 import { createInMemoryEvidenceStore, type EvidenceStore } from "@oscharko-dev/keiko-evidence";
 import { createMemoryVault, type MemoryVaultStore } from "@oscharko-dev/keiko-memory-vault";
-import { VOICE_SESSION_RECAP_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts";
+import { VOICE_SESSION_RECAP_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts/runtime/voice-session-recap";
 import { createRunRegistry } from "./runs.js";
 import { buildRedactor, type UiHandlerDeps } from "./deps.js";
 import type { RouteContext } from "./routes.js";

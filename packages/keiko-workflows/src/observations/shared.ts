@@ -5,11 +5,8 @@
 // returns only {code, severity, matchCount}; we store an aggregate count and a boolean and NEVER
 // the matched text. No new package edge: contracts/security/workspace are already dependencies.
 
-import {
-  CONTEXT_ENGINEERING_SCHEMA_VERSION,
-  type ContextLaneId,
-  type ContextToolRehydrationHandle,
-} from "@oscharko-dev/keiko-contracts";
+import type { ContextLaneId, ContextToolRehydrationHandle } from "@oscharko-dev/keiko-contracts";
+import { CONTEXT_ENGINEERING_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts/runtime/context-engineering";
 import { hashExcerptContent } from "@oscharko-dev/keiko-workspace";
 import {
   detectPromptInjectionSignals,
@@ -96,4 +93,4 @@ export function buildToolRehydrationHandle(
   };
 }
 
-export { estimateTokens } from "@oscharko-dev/keiko-contracts";
+export { estimateTokens } from "@oscharko-dev/keiko-contracts/runtime/context-engineering";

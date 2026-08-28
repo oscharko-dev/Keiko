@@ -1,8 +1,6 @@
 import { describe, expect, it } from "vitest";
-import {
-  EDITOR_AGENT_SCHEMA_VERSION,
-  type EditorAgentSessionSnapshot,
-} from "@oscharko-dev/keiko-contracts";
+import type { EditorAgentSessionSnapshot } from "@oscharko-dev/keiko-contracts";
+import { EDITOR_AGENT_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts/runtime/editor-agent";
 import {
   EditorAgentHttpClient,
   EditorAgentToolHost,

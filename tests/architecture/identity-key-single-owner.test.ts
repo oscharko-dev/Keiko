@@ -14,7 +14,7 @@ import { fileURLToPath } from "node:url";
 
 import { describe, expect, it } from "vitest";
 
-import { embeddingIdentityKey } from "@oscharko-dev/keiko-contracts";
+import { embeddingIdentityKey } from "@oscharko-dev/keiko-contracts/runtime/vector-index-port";
 
 const REPO_ROOT = resolve(fileURLToPath(new URL("../..", import.meta.url)));
 const CANONICAL_SOURCE = "packages/keiko-contracts/src/vector-index-port.ts";

@@ -33,11 +33,8 @@ import {
 import type { ModelPort } from "@oscharko-dev/keiko-harness";
 import { CancelledError } from "@oscharko-dev/keiko-model-gateway";
 import type { NormalizedResponse } from "@oscharko-dev/keiko-model-gateway";
-import {
-  CONNECTED_CONTEXT_SCHEMA_VERSION,
-  type ConnectedContextPack,
-  type WorkspaceInstance,
-} from "@oscharko-dev/keiko-contracts";
+import type { ConnectedContextPack, WorkspaceInstance } from "@oscharko-dev/keiko-contracts";
+import { CONNECTED_CONTEXT_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts/runtime/connected-context";
 import {
   deriveManagedWorktreePath,
   deriveRepositoryId,

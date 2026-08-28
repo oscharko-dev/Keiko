@@ -11,7 +11,7 @@
 // test at tests/qa/secret-shape-detector-parity.test.ts is the mechanical guard against them
 // drifting apart silently.
 
-import { looksLikeSecretShape } from "@oscharko-dev/keiko-contracts";
+import { looksLikeSecretShape } from "@oscharko-dev/keiko-contracts/runtime/memory";
 
 const CREDENTIAL_ASSIGNMENT_MARKERS = [
   "api_key=",

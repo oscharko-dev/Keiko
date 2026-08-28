@@ -8,7 +8,7 @@ import type {
   RunResult,
   TaskInput,
 } from "@oscharko-dev/keiko-contracts";
-import { DEFAULT_LIMITS } from "@oscharko-dev/keiko-contracts";
+import { DEFAULT_LIMITS } from "@oscharko-dev/keiko-contracts/runtime/harness";
 import type { AuditSummary } from "@oscharko-dev/keiko-contracts";
 import type { VerificationAuditSummary } from "@oscharko-dev/keiko-contracts";
 

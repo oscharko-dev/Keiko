@@ -21,7 +21,7 @@ import {
   CODING_APP_SESSION_LAUNCHER_SECRET_ENV,
   CODING_APP_SESSION_LAUNCHER_SECRET_MIN_CHARS,
   decodeCodingAppSessionPairingFragment,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/coding-app-session";
 import { computeLauncherPairingClaim } from "@oscharko-dev/keiko-server";
 import { SDK_VERSION } from "@oscharko-dev/keiko-sdk";
 import { resolveExternalOpener, runLifecycleCli, safeKillProcess } from "./lifecycle.js";

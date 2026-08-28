@@ -6,7 +6,7 @@ import type {
   KnowledgeCapsuleId,
   KnowledgeSourceId,
 } from "@oscharko-dev/keiko-contracts";
-import { embeddingIdentityKey } from "@oscharko-dev/keiko-contracts";
+import { embeddingIdentityKey } from "@oscharko-dev/keiko-contracts/runtime/vector-index-port";
 
 import {
   readVectorIndexState,

@@ -22,10 +22,8 @@
 // carries the Node execution effect; the pure port, builders, and rules it implements are on the barrel.
 
 import type { WorkspaceInfo } from "@oscharko-dev/keiko-workspace";
-import {
-  GIT_DELIVERY_SCHEMA_VERSION,
-  type GitDeliveryExecutionResult,
-} from "@oscharko-dev/keiko-contracts";
+import type { GitDeliveryExecutionResult } from "@oscharko-dev/keiko-contracts";
+import { GIT_DELIVERY_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts/runtime/git-delivery";
 import {
   buildPrConvertDraftGraphqlArgv,
   buildPrCreateArgv,

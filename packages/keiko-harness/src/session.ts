@@ -2,7 +2,7 @@
 // asynchronously, and exposes the run id, config fingerprint, a result Promise, and a
 // cancel() that aborts the single per-run AbortController (ADR-0004 D4, D9).
 
-import { HARNESS_VERSION } from "@oscharko-dev/keiko-contracts";
+import { HARNESS_VERSION } from "@oscharko-dev/keiko-contracts/runtime/harness";
 import type { Clock } from "@oscharko-dev/keiko-model-gateway";
 import { systemClock } from "@oscharko-dev/keiko-model-gateway/internal/resilience";
 import { newCounters, type RunContext } from "./context.js";

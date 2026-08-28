@@ -12,14 +12,14 @@ import { DatabaseSync } from "node:sqlite";
 import { createNodeGitWorktreeAdapter } from "@oscharko-dev/keiko-tools/internal/git-mutation";
 import type { GitWorktreeAdapter } from "@oscharko-dev/keiko-tools/internal/git-mutation";
 import type { EvidenceStore } from "@oscharko-dev/keiko-evidence";
-import {
-  validateWorkspaceHealthReport,
-  type TaskWorkspaceLifecycleState,
-  type WorkspaceHealthEntry,
-  type WorkspaceHealthReport,
-  type WorkspaceInfo,
-  type WorkspaceInstance,
+import type {
+  TaskWorkspaceLifecycleState,
+  WorkspaceHealthEntry,
+  WorkspaceHealthReport,
+  WorkspaceInfo,
+  WorkspaceInstance,
 } from "@oscharko-dev/keiko-contracts";
+import { validateWorkspaceHealthReport } from "@oscharko-dev/keiko-contracts/runtime/task-workspace";
 import { runMigrations } from "../store/schema.js";
 import { buildWorkspaceInstanceStoreOverDatabase, type WorkspaceInstanceStore } from "./store.js";
 import {

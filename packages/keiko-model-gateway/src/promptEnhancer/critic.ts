@@ -13,18 +13,18 @@
 //
 // Determinism: pure. No IO, clock, or randomness. Identical inputs always yield an identical scorecard.
 
-import {
-  clampUnit,
-  estimateTokens,
-  PROMPT_CRITIC_DIMENSIONS,
-  PROMPT_ENHANCER_SCHEMA_VERSION,
-  type EnhancedPrompt,
-  type PromptCandidateScorecard,
-  type PromptCriticDimension,
-  type PromptCriticDimensionScore,
-  type PromptEnhancementProfileId,
-  type PromptTaskAnalysis,
+import type {
+  EnhancedPrompt,
+  PromptCandidateScorecard,
+  PromptCriticDimension,
+  PromptCriticDimensionScore,
+  PromptEnhancementProfileId,
+  PromptTaskAnalysis,
 } from "@oscharko-dev/keiko-contracts";
+import { clampUnit } from "@oscharko-dev/keiko-contracts/runtime/numeric";
+import { estimateTokens } from "@oscharko-dev/keiko-contracts/runtime/context-engineering";
+import { PROMPT_CRITIC_DIMENSIONS } from "@oscharko-dev/keiko-contracts/runtime/prompt-enhancer-critic";
+import { PROMPT_ENHANCER_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts/runtime/prompt-enhancer";
 import type { PromptEnhancementPlan } from "./planner.js";
 import { renderEnhancedPromptText } from "./rendering.js";
 

@@ -4682,11 +4682,11 @@ describe("Issue #1299 — component state matrix", () => {
 
 // ─── Issue #1300 — consolidated visual-regression + designer-acceptance gate ─────
 //
-// Epic #1290 closure capstone. The browser harnesses under docs/design-system/evidence/1300 are the
-// live re-runnable proofs; this block is the CI-enforced contract that pins their committed verdicts,
-// the variance register, and the migrated-surface inventory against the product globals.css so the
-// epic acceptance evidence cannot silently drift. A single revert (a dropped surface, a flipped
-// verdict, a deleted variance disposition, a missing child-evidence link) re-fails a named assertion.
+// Epic #1290 closure capstone. The browser harnesses under docs/design-system/evidence/1300 are historical,
+// re-runnable proofs; this block validates their committed metadata, variance register, and migrated-surface
+// inventory against the product globals.css. It intentionally does not replace a standing browser
+// visual-regression gate. A dropped surface, flipped committed verdict, deleted variance disposition, or
+// missing child-evidence link re-fails a named assertion.
 
 interface Issue1300ConsolidatedProof {
   readonly verdict: string;

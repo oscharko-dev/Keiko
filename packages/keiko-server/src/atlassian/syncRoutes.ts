@@ -35,6 +35,12 @@
 
 import { randomUUID } from "node:crypto";
 import type { IncomingMessage } from "node:http";
+import type {
+  AtlassianConnectorActionType,
+  AtlassianConnectorActivityReasonCode,
+  AtlassianConnectorProvider,
+  KnowledgeCapsuleId,
+} from "@oscharko-dev/keiko-contracts";
 import {
   ATLASSIAN_JQL_MAX_CHARS,
   ATLASSIAN_SYNC_SCOPE_MAX_KEYS,
@@ -44,11 +50,7 @@ import {
   isSafeAtlassianIdentifier,
   isSafeConfluenceSpaceKey,
   isSafeJiraProjectKey,
-  type AtlassianConnectorActionType,
-  type AtlassianConnectorActivityReasonCode,
-  type AtlassianConnectorProvider,
-  type KnowledgeCapsuleId,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import type { AtlassianCredentialMetadata } from "@oscharko-dev/keiko-connectors";
 import { errorBody, type RouteContext, type RouteResult } from "../routes.js";
 import type { UiHandlerDeps } from "../deps.js";

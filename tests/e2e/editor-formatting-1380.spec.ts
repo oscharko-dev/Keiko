@@ -1,9 +1,7 @@
 import { expect, test, type Page } from "@playwright/test";
-import {
-  editorBuiltinDocumentFormatting,
-  inferEditorLanguageModeId,
-  type EditorBuiltinFormattingSource,
-} from "@oscharko-dev/keiko-contracts";
+import type { EditorBuiltinFormattingSource } from "@oscharko-dev/keiko-contracts";
+import { editorBuiltinDocumentFormatting } from "@oscharko-dev/keiko-contracts/runtime/editor-builtin-capabilities";
+import { inferEditorLanguageModeId } from "@oscharko-dev/keiko-contracts/runtime/editor-language-mode-map";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";

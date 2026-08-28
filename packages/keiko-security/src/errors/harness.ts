@@ -2,11 +2,8 @@
 // stable `code` discriminant; callers switch on `code`, never parse `message`.
 // Messages are redacted at construction so they are always safe to log.
 
-import {
-  HARNESS_CODES,
-  type HarnessCode,
-  type HarnessFailure,
-} from "@oscharko-dev/keiko-contracts";
+import type { HarnessCode, HarnessFailure } from "@oscharko-dev/keiko-contracts";
+import { HARNESS_CODES } from "@oscharko-dev/keiko-contracts/runtime/harness";
 import { RedactingError } from "./base.js";
 
 export { HARNESS_CODES };

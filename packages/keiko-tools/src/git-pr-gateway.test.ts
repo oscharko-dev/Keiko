@@ -3,13 +3,13 @@
 // gates with a fake adapter — no `gh` subprocess, no network.
 
 import { describe, expect, it, vi } from "vitest";
-import {
-  GIT_DELIVERY_POLICY_SCHEMA_VERSION,
-  type GitDeliveryApprovalRequirement,
-  type GitDeliveryOrgPolicyPack,
-  type GitDeliveryPolicyDecision,
-  type GitDeliveryRepoPolicyPack,
+import type {
+  GitDeliveryApprovalRequirement,
+  GitDeliveryOrgPolicyPack,
+  GitDeliveryPolicyDecision,
+  GitDeliveryRepoPolicyPack,
 } from "@oscharko-dev/keiko-contracts";
+import { GIT_DELIVERY_POLICY_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts/runtime/git-delivery-policy";
 import type { GitWorktreeSnapshot } from "./git-mutation-preflight.js";
 import {
   buildPrConvertDraftGraphqlArgv,

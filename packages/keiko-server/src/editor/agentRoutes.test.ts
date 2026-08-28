@@ -17,10 +17,23 @@ import { EventEmitter } from "node:events";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { buildRedactor, createInMemoryUiStore } from "../index.js";
+import type {
+  CodingWorkbenchAuthorityEnvelope,
+  CodingWorkbenchMode,
+  EditorAgentAction,
+  EditorAgentGovernedAuthorityReference,
+  EditorAgentActionResult,
+  EditorAgentActionStatus,
+  EditorAgentEvent,
+  EditorAgentSessionSnapshot,
+} from "@oscharko-dev/keiko-contracts";
 import {
   CODING_WORKBENCH_ACTION_CLASSES,
   CODING_WORKBENCH_SCHEMA_VERSION,
-  DEFAULT_LANGUAGE_SERVICE_LIMITS,
+  resolveEffectiveCodingWorkbenchMode,
+} from "@oscharko-dev/keiko-contracts/runtime/coding-workbench";
+import { DEFAULT_LANGUAGE_SERVICE_LIMITS } from "@oscharko-dev/keiko-contracts/runtime/language-service";
+import {
   EDITOR_AGENT_DIAGNOSTIC_MESSAGE_MAX_CHARS,
   EDITOR_AGENT_DIAGNOSTICS_MAX_ITEMS,
   EDITOR_AGENT_BRIDGE_DECISION_CAPABILITY_ENCODED_CHARS,
@@ -28,16 +41,7 @@ import {
   isEditorAgentAction,
   parseEditorAgentQueryGitData,
   isEditorAgentSessionSnapshot,
-  resolveEffectiveCodingWorkbenchMode,
-  type CodingWorkbenchAuthorityEnvelope,
-  type CodingWorkbenchMode,
-  type EditorAgentAction,
-  type EditorAgentGovernedAuthorityReference,
-  type EditorAgentActionResult,
-  type EditorAgentActionStatus,
-  type EditorAgentEvent,
-  type EditorAgentSessionSnapshot,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/editor-agent";
 import {
   PatchApplyError,
   PatchValidationError,

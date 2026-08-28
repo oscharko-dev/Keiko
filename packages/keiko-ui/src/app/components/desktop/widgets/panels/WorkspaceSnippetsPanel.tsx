@@ -2,14 +2,16 @@
 
 import { useMemo, useState, type ReactNode } from "react";
 
+import type {
+  EditorM7ParseResult,
+  EditorM7ReasonCode,
+  EditorM7WorkspaceSnippet,
+  EditorM7WorkspaceSnippetInput,
+} from "@oscharko-dev/keiko-contracts";
 import {
   compileEditorM7SnippetBody,
   EDITOR_M7_SNIPPET_BODY_MAX_UTF8_BYTES,
-  type EditorM7ParseResult,
-  type EditorM7ReasonCode,
-  type EditorM7WorkspaceSnippet,
-  type EditorM7WorkspaceSnippetInput,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/editor-snippets";
 import { useWorkspaceSnippets } from "../cards/useWorkspaceSnippets";
 import { useSettingsTranslate as useTranslate, type I18nTranslate } from "./settings-i18n";
 

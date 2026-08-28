@@ -13,10 +13,8 @@
 // Determinism: pure. Rationales are harness-authored and content-free (structural counts, closed-
 // vocabulary labels, numeric scores) — they never echo the untrusted draft (ADR-0044 §5).
 
-import {
-  BASELINE_LEAST_PRIVILEGE,
-  type PromptCriticDimension,
-} from "@oscharko-dev/keiko-contracts";
+import type { PromptCriticDimension } from "@oscharko-dev/keiko-contracts";
+import { BASELINE_LEAST_PRIVILEGE } from "@oscharko-dev/keiko-contracts/runtime/prompt-enhancer-safety";
 import { PromptEnhancer } from "@oscharko-dev/keiko-model-gateway";
 import {
   PROMPT_QUALITY_DIMENSIONS,

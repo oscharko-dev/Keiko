@@ -34,11 +34,11 @@ import {
   type CaptureContext,
   type CaptureOutcome,
 } from "@oscharko-dev/keiko-memory-capture";
-import {
-  MEMORY_TYPES,
-  type CodingWorkbenchMode,
-  type ConversationMemoryCaptureOutcomeWire,
+import type {
+  CodingWorkbenchMode,
+  ConversationMemoryCaptureOutcomeWire,
 } from "@oscharko-dev/keiko-contracts";
+import { MEMORY_TYPES } from "@oscharko-dev/keiko-contracts/runtime/memory";
 import type {
   MemoryAuditEvent,
   MemoryId,

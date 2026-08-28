@@ -6,7 +6,7 @@ import {
   validateWorkspaceManifest,
   validateWorkspaceRootDispatch,
   WORKSPACE_MANIFEST_MAX_ROOTS,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/workspace-manifest";
 import type {
   WorkspaceBindingV2,
   WorkspaceManifest,

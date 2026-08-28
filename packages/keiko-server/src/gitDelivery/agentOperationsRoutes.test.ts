@@ -10,10 +10,8 @@ import type {
   GitRepositoryAgentOperationRequest,
   GitRepositoryAgentOperationResponse,
 } from "@oscharko-dev/keiko-contracts";
-import {
-  CODING_WORKBENCH_MODES,
-  gitRepositoryAgentMinimumMode,
-} from "@oscharko-dev/keiko-contracts";
+import { CODING_WORKBENCH_MODES } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench";
+import { gitRepositoryAgentMinimumMode } from "@oscharko-dev/keiko-contracts/runtime/git-repository-agent";
 import { buildRedactor, createRunRegistry, type UiHandlerDeps } from "../index.js";
 import type { GitProcessRunner } from "../gitRoutes.js";
 import { matchRoute, type RouteContext } from "../routes.js";

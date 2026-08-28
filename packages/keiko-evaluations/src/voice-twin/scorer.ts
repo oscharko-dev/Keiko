@@ -8,11 +8,8 @@
 // egress through, or breaking a metric flips the corresponding dimension to FAIL. Rationales are
 // harness-authored and content-free (counts, closed-vocabulary labels, numbers).
 
-import {
-  VOICE_CONTROL_TRANSPORTS,
-  type VoiceControlMessageKind,
-  type VoiceMediaTransport,
-} from "@oscharko-dev/keiko-contracts";
+import type { VoiceControlMessageKind, VoiceMediaTransport } from "@oscharko-dev/keiko-contracts";
+import { VOICE_CONTROL_TRANSPORTS } from "@oscharko-dev/keiko-contracts/runtime/voice-protocol";
 import { VOICE_TWIN_REPLAY_CAPACITY } from "./metrics.js";
 import {
   VOICE_TWIN_DIMENSIONS,

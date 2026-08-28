@@ -11,15 +11,16 @@ import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import type { IncomingMessage } from "node:http";
 
+import type { KnowledgeCapsuleId, KnowledgePodModelUsePolicy } from "@oscharko-dev/keiko-contracts";
 import {
   deriveContextProfileFromCapability,
-  KNOWLEDGE_POD_MODEL_USE_POLICY_SCHEMA_VERSION,
   maxUtf8BytesForTokenBudget,
+} from "@oscharko-dev/keiko-contracts/runtime/context-engineering";
+import {
+  KNOWLEDGE_POD_MODEL_USE_POLICY_SCHEMA_VERSION,
   standardPodModelUsePolicy,
-  UNVERIFIED_GATEWAY,
-  type KnowledgeCapsuleId,
-  type KnowledgePodModelUsePolicy,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/local-knowledge-model-use-policy";
+import { UNVERIFIED_GATEWAY } from "@oscharko-dev/keiko-contracts/runtime/gateway-verification";
 import {
   CONNECTED_CONTEXT_SCHEMA_VERSION,
   type ConnectedContextPack,

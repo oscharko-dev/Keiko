@@ -2,23 +2,27 @@ import { createHash } from "node:crypto";
 import { existsSync, realpathSync } from "node:fs";
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 
+import type {
+  CodingWorkbenchActionClass,
+  CodingWorkbenchConnectorScope,
+  CodingWorkbenchEvidenceKind,
+  CodingWorkbenchEvidenceRecord,
+  CodingWorkbenchModelSource,
+  CodingWorkbenchMode,
+  CodingWorkbenchPermissionRequest,
+  CodingWorkbenchRuntimeSource,
+  CodingWorkbenchSupervisedActionKind,
+  CodingWorkbenchSupervisedPolicyReason,
+} from "@oscharko-dev/keiko-contracts";
 import {
   CODING_WORKBENCH_SCHEMA_VERSION,
+  permissionKindForSupervisedCodingAction,
+} from "@oscharko-dev/keiko-contracts/runtime/coding-workbench";
+import {
   EDITOR_AGENT_TARGET_PATH_MAX_BYTES,
   isContainedAgentPath,
-  permissionKindForSupervisedCodingAction,
-  validateCodingWorkbenchEvidenceRecord,
-  type CodingWorkbenchActionClass,
-  type CodingWorkbenchConnectorScope,
-  type CodingWorkbenchEvidenceKind,
-  type CodingWorkbenchEvidenceRecord,
-  type CodingWorkbenchModelSource,
-  type CodingWorkbenchMode,
-  type CodingWorkbenchPermissionRequest,
-  type CodingWorkbenchRuntimeSource,
-  type CodingWorkbenchSupervisedActionKind,
-  type CodingWorkbenchSupervisedPolicyReason,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/editor-agent";
+import { validateCodingWorkbenchEvidenceRecord } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-evidence";
 import { containedRealPathInfo, PathEscapeError } from "@oscharko-dev/keiko-workspace";
 import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
 

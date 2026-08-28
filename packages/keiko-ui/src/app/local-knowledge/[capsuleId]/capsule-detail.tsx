@@ -20,11 +20,9 @@ import type {
   IndexingJobStatus,
   CapsuleContextualRetrievalSettings,
 } from "@oscharko-dev/keiko-contracts";
-import {
-  INDEXING_EMBEDDING_STOPPED_ERROR_CODES,
-  isTerminalExtractionPhase,
-  parseHtmlManualSourceTagMetadata,
-} from "@oscharko-dev/keiko-contracts";
+import { INDEXING_EMBEDDING_STOPPED_ERROR_CODES } from "@oscharko-dev/keiko-contracts/runtime/local-knowledge-records";
+import { isTerminalExtractionPhase } from "@oscharko-dev/keiko-contracts/runtime/local-knowledge-large-document";
+import { parseHtmlManualSourceTagMetadata } from "@oscharko-dev/keiko-contracts/runtime/html-manual-source";
 import type {
   CapsuleDetail as CapsuleDetailData,
   CapsuleActionResponse,

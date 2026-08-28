@@ -14,10 +14,8 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
-import {
-  isStoreFingerprint,
-  type StoredPdfCitationPreviewCitation,
-} from "@oscharko-dev/keiko-contracts";
+import type { StoredPdfCitationPreviewCitation } from "@oscharko-dev/keiko-contracts";
+import { isStoreFingerprint } from "@oscharko-dev/keiko-contracts/runtime/store-fingerprint";
 import { MAX_DESKTOP_CHAT_CLIENT_TURN_ID_CHARS } from "@oscharko-dev/keiko-contracts/bff-wire";
 import {
   buildUiStoreOverDatabase,

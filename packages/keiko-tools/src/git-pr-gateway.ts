@@ -39,12 +39,14 @@ import type {
 } from "@oscharko-dev/keiko-contracts";
 import {
   evaluateGitPolicy,
-  GIT_DELIVERY_SCHEMA_VERSION,
   gitDeliveryConstraintBlockReason,
-  gitDeliveryDefaultRiskClass,
   gitDeliveryPolicyTargetBranchName,
-  gitPrRejectionToDisposition,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/git-delivery-policy";
+import {
+  GIT_DELIVERY_SCHEMA_VERSION,
+  gitDeliveryDefaultRiskClass,
+} from "@oscharko-dev/keiko-contracts/runtime/git-delivery";
+import { gitPrRejectionToDisposition } from "@oscharko-dev/keiko-contracts/runtime/git-pull-request";
 import type { GitWorktreeSnapshot } from "./git-mutation-preflight.js";
 import { evaluateGitPreflight } from "./git-mutation-preflight.js";
 import type {
@@ -740,4 +742,4 @@ export async function runGitPullRequest(
 
 // Re-export the contract bridges so the server/UI consume the error-code mapping from this gateway,
 // keeping the publish/PR gateway surfaces symmetric.
-export { gitPrRejectionToErrorCode } from "@oscharko-dev/keiko-contracts";
+export { gitPrRejectionToErrorCode } from "@oscharko-dev/keiko-contracts/runtime/git-pull-request";

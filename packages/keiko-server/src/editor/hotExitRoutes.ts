@@ -10,10 +10,8 @@ import {
 } from "../files.js";
 import { DENIED_MESSAGE, pathIsDenied } from "../files-deny.js";
 import type { EditorHotExitStore, EditorHotExitStoredSnapshot } from "./hotExitStore.js";
-import {
-  isEditorHotExitSnapshotV1,
-  type EditorHotExitSnapshotV1,
-} from "@oscharko-dev/keiko-contracts";
+import type { EditorHotExitSnapshotV1 } from "@oscharko-dev/keiko-contracts";
+import { isEditorHotExitSnapshotV1 } from "@oscharko-dev/keiko-contracts/runtime/editor-hot-exit";
 import { containsRedactableSecret } from "@oscharko-dev/keiko-security";
 
 const MAX_HOT_EXIT_BODY_BYTES = 8 * 1024 * 1024 + 32 * 1024;

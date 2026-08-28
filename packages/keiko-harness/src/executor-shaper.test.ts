@@ -8,10 +8,8 @@
 //   - noPortUnchanged: with no port (every existing caller), messages are identical to today.
 
 import { describe, expect, it } from "vitest";
-import {
-  CONTEXT_ENGINEERING_SCHEMA_VERSION,
-  validateContextToolObservation,
-} from "@oscharko-dev/keiko-contracts";
+import { CONTEXT_ENGINEERING_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts/runtime/context-engineering";
+import { validateContextToolObservation } from "@oscharko-dev/keiko-contracts/runtime/context-observations-validation";
 import type {
   ContextToolObservation,
   ToolShapingDegradedReason,

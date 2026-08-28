@@ -22,10 +22,8 @@ import {
   loadEvidence,
   type EvidenceStore,
 } from "@oscharko-dev/keiko-evidence";
-import {
-  DEFAULT_CONTEXT_PROFILE,
-  validateContextCompactionRecord,
-} from "@oscharko-dev/keiko-contracts";
+import { DEFAULT_CONTEXT_PROFILE } from "@oscharko-dev/keiko-contracts/runtime/context-engineering";
+import { validateContextCompactionRecord } from "@oscharko-dev/keiko-contracts/runtime/context-engineering-compaction-validation";
 import { sha256Hex } from "@oscharko-dev/keiko-security";
 import { handleSendDesktopChat } from "./chat-handlers.js";
 import { handleSendDesktopChatStream } from "./chat-stream-handlers.js";

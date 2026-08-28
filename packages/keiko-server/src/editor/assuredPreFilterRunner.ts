@@ -23,14 +23,14 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, dirname, join, relative, resolve, sep } from "node:path";
-import {
-  DEFAULT_SANDBOX_POLICY,
-  isValidScopePath,
-  type CommandRule,
-  type EditorTestGenerationWirePatch,
-  type EditorTestGenerationWireRequest,
-  type EditorTestGenerationWireTarget,
+import type {
+  CommandRule,
+  EditorTestGenerationWirePatch,
+  EditorTestGenerationWireRequest,
+  EditorTestGenerationWireTarget,
 } from "@oscharko-dev/keiko-contracts";
+import { DEFAULT_SANDBOX_POLICY } from "@oscharko-dev/keiko-contracts/runtime/tools";
+import { isValidScopePath } from "@oscharko-dev/keiko-contracts/runtime/connected-context";
 import { runCommand } from "@oscharko-dev/keiko-tools";
 import { nodeSpawnFn } from "@oscharko-dev/keiko-tools/internal/exec";
 import {

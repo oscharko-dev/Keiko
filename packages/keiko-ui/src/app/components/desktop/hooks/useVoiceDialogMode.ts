@@ -19,7 +19,8 @@ import {
   useState,
   useSyncExternalStore,
 } from "react";
-import { VOICE_PERSONAS, type VoicePersona } from "@oscharko-dev/keiko-contracts";
+import type { VoicePersona } from "@oscharko-dev/keiko-contracts";
+import { VOICE_PERSONAS } from "@oscharko-dev/keiko-contracts/runtime/gateway";
 import type { VoiceCapabilityResolution } from "@/lib/types";
 import { realtimeVoiceTransportSupported } from "./voice-rtc-transport";
 import { voiceDialogueModeForResolution } from "./voice-dialogue-session";

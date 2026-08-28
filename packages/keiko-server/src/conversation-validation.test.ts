@@ -4,7 +4,8 @@
 // byte counts back into a response the browser will render.
 
 import { describe, expect, it } from "vitest";
-import { MAX_ATTACHMENT_MIME_BYTES, type ModelCapability } from "@oscharko-dev/keiko-contracts";
+import type { ModelCapability } from "@oscharko-dev/keiko-contracts";
+import { MAX_ATTACHMENT_MIME_BYTES } from "@oscharko-dev/keiko-contracts/runtime/bff-wire";
 import {
   MAX_AGGREGATE_DOCUMENT_BYTES,
   validateConversationPayload,

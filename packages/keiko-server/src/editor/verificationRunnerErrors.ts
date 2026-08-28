@@ -7,7 +7,7 @@
 // 4xx/5xx envelope). Actual RUN outcomes stream over SSE as content-free lifecycle events; the
 // terminal event carries the redacted VerificationReport.
 
-import { CodedHttpError, httpStatusFor } from "@oscharko-dev/keiko-contracts";
+import { CodedHttpError, httpStatusFor } from "@oscharko-dev/keiko-contracts/runtime/http-error";
 
 export const VERIFICATION_RUNNER_ERROR_CODES = {
   PROJECT_NOT_FOUND: "PROJECT_NOT_FOUND",

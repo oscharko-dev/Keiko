@@ -1,12 +1,12 @@
 import { Readable } from "node:stream";
 import type { IncomingMessage } from "node:http";
 import { URL } from "node:url";
-import {
-  CODING_WORKBENCH_SCHEMA_VERSION,
-  type CodingWorkbenchAuthorityEnvelope,
-  type CodingWorkbenchConnectorScope,
-  type CodingWorkbenchMode,
+import type {
+  CodingWorkbenchAuthorityEnvelope,
+  CodingWorkbenchConnectorScope,
+  CodingWorkbenchMode,
 } from "@oscharko-dev/keiko-contracts";
+import { CODING_WORKBENCH_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { composeCodingContextConnectors, handleCodingContextPack } from "./codingContextRoutes.js";

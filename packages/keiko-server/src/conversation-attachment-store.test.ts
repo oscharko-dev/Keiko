@@ -3,7 +3,7 @@ import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { MAX_ATTACHMENT_MIME_BYTES } from "@oscharko-dev/keiko-contracts";
+import { MAX_ATTACHMENT_MIME_BYTES } from "@oscharko-dev/keiko-contracts/runtime/bff-wire";
 import type { LocalSecretVault } from "@oscharko-dev/keiko-security/secret-vault";
 import type { SecurityLogEvent, SecurityLogSink } from "@oscharko-dev/keiko-security";
 import {

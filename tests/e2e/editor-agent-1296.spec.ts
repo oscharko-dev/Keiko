@@ -1,17 +1,34 @@
-import { expect, test, type Page } from "@playwright/test";
-import { existsSync, lstatSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { dirname, isAbsolute, relative, resolve } from "node:path";
+import { expect, test, type Locator, type Page } from "@playwright/test";
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
-const REPO = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
-const GLOBALS_CSS = resolve(REPO, "packages", "keiko-ui", "src", "app", "globals.css");
-const EVIDENCE_DIR = resolve(REPO, "docs", "design-system", "evidence", "1296", "editor");
-
+const EVIDENCE_DIR = resolve(
+  dirname(fileURLToPath(import.meta.url)),
+  "..",
+  "..",
+  "docs",
+  "design-system",
+  "evidence",
+  "1296",
+  "editor",
+);
 const ARTIFACT_NAMES = [
   "dark-editor-agent.png",
   "light-editor-agent.png",
   "high-contrast-editor-agent.png",
   "manifest.json",
+] as const;
+const TOKEN_NAMES = [
+  "--ed-agent-line",
+  "--ed-agent-gutter",
+  "--ed-agent-ghost",
+  "--ed-agent-accept",
+  "--ed-agent-reject",
+  "--ed-agent-chip-bg",
+  "--ed-agent-chip-line",
+  "--ed-ghost",
 ] as const;
 
 type ArtifactName = (typeof ARTIFACT_NAMES)[number];
@@ -20,25 +37,15 @@ type EditorAgentMode = "dark" | "light" | "high-contrast";
 interface ModeDefinition {
   readonly mode: EditorAgentMode;
   readonly artifact: ArtifactName;
-  readonly dataTheme: string | null;
-  readonly dataHc: string | null;
   readonly colorScheme: "dark" | "light";
+  readonly contrast: "more" | "no-preference";
 }
 
 interface ModeEvidence {
   readonly mode: EditorAgentMode;
   readonly artifact: ArtifactName;
-  readonly dataTheme: string | null;
-  readonly dataHc: string | null;
   readonly tokenValues: Record<string, string>;
-  readonly resolved: {
-    readonly agentGhostColor: string;
-    readonly legacyGhostColor: string;
-    readonly agentLineBackground: string;
-    readonly agentGutterColor: string;
-    readonly chipBackground: string;
-    readonly chipBorderColor: string;
-  };
+  readonly monaco: Record<string, string>;
 }
 
 interface EvidenceManifest {
@@ -46,15 +53,17 @@ interface EvidenceManifest {
   readonly harness: "tests/e2e/config/playwright.issue-1296-editor-agent.config.ts";
   readonly appPath: "packaged-cli-ui";
   readonly route: "/";
+  readonly workspace: "synthetic-temp-project";
   readonly evidencePath: "docs/design-system/evidence/1296/editor";
   readonly generatedAt: string;
   readonly designReference: "design-system/editor-agent.html";
   readonly productCss: "packages/keiko-ui/src/app/globals.css";
   readonly assertions: {
-    readonly packagedUiLoaded: true;
-    readonly editorAgentGhostMatchesEditorGhost: true;
+    readonly packagedAppBooted: true;
+    readonly liveMonacoVisible: true;
+    readonly liveInlineGhostVisible: true;
+    readonly inlineCompletionRequests: number;
     readonly screenshotsCaptured: number;
-    readonly authorityBearingFlowsPrimitiveOnly: true;
   };
   readonly modes: readonly ModeEvidence[];
   readonly notes: readonly string[];
@@ -65,39 +74,24 @@ const MODES: readonly ModeDefinition[] = [
   {
     mode: "dark",
     artifact: "dark-editor-agent.png",
-    dataTheme: null,
-    dataHc: null,
     colorScheme: "dark",
+    contrast: "no-preference",
   },
   {
     mode: "light",
     artifact: "light-editor-agent.png",
-    dataTheme: "light",
-    dataHc: null,
     colorScheme: "light",
+    contrast: "no-preference",
   },
   {
     mode: "high-contrast",
     artifact: "high-contrast-editor-agent.png",
-    dataTheme: null,
-    dataHc: "more",
     colorScheme: "dark",
+    contrast: "more",
   },
 ];
 
-const TOKEN_NAMES = [
-  "--ed-agent-line",
-  "--ed-agent-gutter",
-  "--ed-agent-ghost",
-  "--ed-agent-accept",
-  "--ed-agent-reject",
-  "--ed-agent-chip-bg",
-  "--ed-agent-chip-line",
-  "--ed-ghost",
-  "--ai-permission-surface",
-  "--ai-permission-border",
-  "--feedback-danger",
-] as const;
+const tempProjects: string[] = [];
 
 function ensureEvidenceDir(): void {
   mkdirSync(EVIDENCE_DIR, { recursive: true });
@@ -108,9 +102,8 @@ function ensureEvidenceDir(): void {
 }
 
 function artifactPath(name: ArtifactName): string {
-  if (!ARTIFACT_NAMES.includes(name)) {
+  if (!ARTIFACT_NAMES.includes(name))
     throw new Error("Unexpected Issue #1296 editor evidence artifact");
-  }
   const resolved = resolve(EVIDENCE_DIR, name);
   const rel = relative(EVIDENCE_DIR, resolved);
   if (rel.startsWith("..") || isAbsolute(rel)) {
@@ -122,279 +115,192 @@ function artifactPath(name: ArtifactName): string {
   return resolved;
 }
 
-function sceneHtml(): string {
-  const globals = readFileSync(GLOBALS_CSS, "utf8");
-  return `<!doctype html>
-<html>
-  <head>
-    <meta charset="utf-8" />
-    <style>
-      ${globals}
-      body {
-        margin: 0;
-        min-height: 100vh;
-        background: var(--background-primary);
-        color: var(--text-primary);
-        font-family: var(--font-ui), system-ui, sans-serif;
-      }
-      .e1296-stage {
-        box-sizing: border-box;
-        width: 960px;
-        padding: 24px;
-      }
-      .e1296-frame {
-        display: grid;
-        grid-template-columns: 1fr 310px;
-        gap: 16px;
-        background: var(--surface-primary);
-        border: 1px solid var(--border-default);
-        box-shadow: var(--shadow-card);
-        padding: 14px;
-      }
-      .e1296-editor {
-        overflow: hidden;
-        background: var(--ed-bg);
-        color: var(--ed-fg);
-        border: 1px solid var(--border-subtle);
-        font-family: var(--font-mono), ui-monospace, monospace;
-        font-size: 13px;
-        line-height: 1.6;
-      }
-      .e1296-titlebar {
-        display: flex;
-        justify-content: space-between;
-        gap: 12px;
-        padding: 8px 12px;
-        background: var(--ed-tab-active-bg);
-        color: var(--ed-tab-active-fg);
-        border-bottom: 1px solid var(--border-subtle);
-        font-size: 11px;
-      }
-      .e1296-code {
-        display: grid;
-        grid-template-columns: 44px 1fr;
-      }
-      .e1296-gutter {
-        background: var(--ed-bg-gutter);
-        color: var(--ed-agent-gutter);
-        text-align: right;
-        padding: 12px 9px 12px 0;
-        border-right: 1px solid var(--border-subtle);
-      }
-      .e1296-lines {
-        padding: 12px 0;
-      }
-      .e1296-line {
-        padding: 0 12px;
-        white-space: pre;
-      }
-      .e1296-agent-line {
-        background: var(--ed-agent-line);
-        border-left: 3px solid var(--ed-agent-gutter);
-        padding-left: 9px;
-      }
-      .e1296-kw { color: var(--ed-syn-keyword); }
-      .e1296-fn { color: var(--ed-syn-function); }
-      .e1296-str { color: var(--ed-syn-string); }
-      .e1296-ghost { color: var(--ed-agent-ghost); }
-      .e1296-legacy-ghost-probe { color: var(--ed-ghost); }
-      .e1296-chip {
-        display: inline-flex;
-        align-items: center;
-        gap: 6px;
-        margin-top: 10px;
-        padding: 5px 8px;
-        border: 1px solid var(--ed-agent-chip-line);
-        background: var(--ed-agent-chip-bg);
-        color: var(--text-primary);
-        font: 600 11px var(--font-ui), system-ui, sans-serif;
-      }
-      .e1296-chip::before {
-        content: "";
-        width: 7px;
-        height: 7px;
-        border-radius: 999px;
-        background: var(--ed-agent-accept);
-      }
-      .e1296-side {
-        display: flex;
-        flex-direction: column;
-        gap: 12px;
-      }
-      .e1296-side .ai-permit,
-      .e1296-side .ai-danger {
-        margin: 0;
-      }
-      .e1296-side .ai-conf {
-        align-self: flex-start;
-      }
-    </style>
-  </head>
-  <body>
-    <main class="e1296-stage" data-evidence-root>
-      <section class="e1296-frame" aria-label="Editor agent evidence">
-        <article class="e1296-editor" aria-label="Keiko editor agent context">
-          <div class="e1296-titlebar">
-            <span>src/AgentPlan.ts</span>
-            <span>agent context</span>
-          </div>
-          <div class="e1296-code">
-            <div class="e1296-gutter" aria-hidden="true">41<br />42<br />43<br />44<br />45<br />46</div>
-            <div class="e1296-lines">
-              <div class="e1296-line"><span class="e1296-kw">export</span> <span class="e1296-kw">async function</span> <span class="e1296-fn">shipAudit</span>() {</div>
-              <div class="e1296-line">  <span class="e1296-kw">const</span> plan = <span class="e1296-str">"issue-1296"</span>;</div>
-              <div class="e1296-line e1296-agent-line">  <span class="e1296-ghost">await agent.verifyEditorContext(plan);</span></div>
-              <div class="e1296-line">  <span class="e1296-kw">return</span> plan;</div>
-              <div class="e1296-line">}</div>
-              <span class="e1296-legacy-ghost-probe" aria-hidden="true">legacy ghost probe</span>
-              <div class="e1296-chip">AI edit suggestion ready for review</div>
-            </div>
-          </div>
-        </article>
-        <aside class="e1296-side" aria-label="Editor agent primitives">
-          <div class="ai-conf" data-level="medium">
-            <span class="track" aria-hidden="true"><i></i><i></i><i></i></span>
-            <span class="lbl">Medium</span>
-          </div>
-          <div class="ai-permit">
-            <div class="ai-permit-h">
-              <span class="ic" aria-hidden="true">lock</span>
-              <div>
-                <div class="tt">Allow editor context access?</div>
-                <div class="ts">Primitive only in #1296; live authority flow remains #1405.</div>
-              </div>
-            </div>
-            <div class="ai-permit-scope">
-              <div class="row"><span class="gr">yes</span> Current file and diagnostics</div>
-              <div class="row">no Repository write access</div>
-            </div>
-            <div class="ai-permit-act"><button class="ai-stop" type="button">Review</button></div>
-          </div>
-          <div class="ai-danger">
-            <div class="ai-danger-h">
-              <span class="ic" aria-hidden="true">!</span>
-              <div class="tt">Sensitive editor action</div>
-            </div>
-            <p>Primitive only. Executing permissioned edits is deferred to #1405.</p>
-            <div class="ai-danger-act"><button class="ai-stop" type="button">Cancel</button></div>
-          </div>
-        </aside>
-      </section>
-    </main>
-  </body>
-</html>`;
-}
-
-async function applyMode(page: Page, mode: ModeDefinition): Promise<void> {
-  await page.emulateMedia({ colorScheme: mode.colorScheme });
-  await page.setContent(sceneHtml(), { waitUntil: "load" });
-  await page.evaluate(
-    ({ dataTheme, dataHc }) => {
-      const root = document.documentElement;
-      root.removeAttribute("data-theme");
-      root.removeAttribute("data-hc");
-      if (dataTheme !== null) root.setAttribute("data-theme", dataTheme);
-      if (dataHc !== null) root.setAttribute("data-hc", dataHc);
-    },
-    { dataTheme: mode.dataTheme, dataHc: mode.dataHc },
+function createProjectFixture(): string {
+  const root = mkdtempSync(join(tmpdir(), "keiko-1296-editor-"));
+  tempProjects.push(root);
+  mkdirSync(join(root, "src"), { recursive: true });
+  writeFileSync(
+    join(root, "src", "AgentPlan.ts"),
+    [
+      "export async function shipAudit(): Promise<string> {",
+      '  const plan = "issue-1296";',
+      "  await agent.verifyEditorContext(plan);",
+      "  return plan;",
+      "}",
+      "",
+    ].join("\n"),
+    "utf8",
   );
-  await expect(page.locator("[data-evidence-root]")).toBeVisible();
+  return root;
 }
 
-async function collectModeEvidence(
-  page: Page,
-): Promise<Pick<ModeEvidence, "tokenValues" | "resolved">> {
-  return page.evaluate((tokenNames) => {
-    const rootStyles = getComputedStyle(document.documentElement);
-    const tokenValues = Object.fromEntries(
-      tokenNames.map((token) => [token, rootStyles.getPropertyValue(token).trim()]),
-    );
-    const ghost = document.querySelector(".e1296-ghost");
-    const legacyGhost = document.querySelector(".e1296-legacy-ghost-probe");
-    const agentLine = document.querySelector(".e1296-agent-line");
-    const gutter = document.querySelector(".e1296-gutter");
-    const chip = document.querySelector(".e1296-chip");
-    if (
-      ghost === null ||
-      legacyGhost === null ||
-      agentLine === null ||
-      gutter === null ||
-      chip === null
-    ) {
-      throw new Error("Issue #1296 editor-agent evidence DOM did not render expected probes");
-    }
-    return {
-      tokenValues,
-      resolved: {
-        agentGhostColor: getComputedStyle(ghost).color,
-        legacyGhostColor: getComputedStyle(legacyGhost).color,
-        agentLineBackground: getComputedStyle(agentLine).backgroundColor,
-        agentGutterColor: getComputedStyle(gutter).color,
-        chipBackground: getComputedStyle(chip).backgroundColor,
-        chipBorderColor: getComputedStyle(chip).borderTopColor,
-      },
-    };
-  }, TOKEN_NAMES);
-}
-
-function expectModeEvidence(evidence: Pick<ModeEvidence, "tokenValues" | "resolved">): void {
-  expect(evidence.tokenValues["--ed-agent-ghost"]).toBe(evidence.tokenValues["--ed-ghost"]);
-  expect(evidence.resolved.agentGhostColor).toBe(evidence.resolved.legacyGhostColor);
-  expect(evidence.resolved.agentLineBackground).not.toBe("");
-  expect(evidence.resolved.agentGutterColor).not.toBe("");
-  expect(evidence.resolved.chipBorderColor).not.toBe("");
-}
-
-async function renderMode(page: Page, mode: ModeDefinition): Promise<ModeEvidence> {
-  await applyMode(page, mode);
-  const evidence = await collectModeEvidence(page);
-  expectModeEvidence(evidence);
-  await page.locator("[data-evidence-root]").screenshot({
-    path: artifactPath(mode.artifact),
-  });
-  return {
-    mode: mode.mode,
-    artifact: mode.artifact,
-    dataTheme: mode.dataTheme,
-    dataHc: mode.dataHc,
-    tokenValues: evidence.tokenValues,
-    resolved: evidence.resolved,
-  };
-}
-
-test("Issue #1296 editor-agent context parity evidence", async ({ page }) => {
-  ensureEvidenceDir();
+async function seedLiveEditor(page: Page, root: string, mode: ModeDefinition): Promise<void> {
+  await page.emulateMedia({ colorScheme: mode.colorScheme, contrast: mode.contrast });
+  await page.addInitScript(
+    ({ projectRoot, theme }) => {
+      window.localStorage.setItem("keiko.theme", theme);
+      window.localStorage.setItem("keiko.view", JSON.stringify({ zoom: 1, x: 0, y: 0 }));
+      window.localStorage.setItem(
+        "keiko.workspace.v4",
+        JSON.stringify([
+          {
+            id: `issue-1296-editor-${theme}`,
+            type: "editor",
+            x: 32,
+            y: 32,
+            w: 920,
+            h: 620,
+            z: 10,
+            cfg: { root: projectRoot, file: "src/AgentPlan.ts", openFiles: ["src/AgentPlan.ts"] },
+            max: false,
+          },
+        ]),
+      );
+      window.localStorage.removeItem("keiko.conns.v1");
+    },
+    { projectRoot: root, theme: mode.colorScheme },
+  );
   await page.goto("/");
-  await expect(page.locator("body")).toBeVisible();
+}
 
-  const modes: ModeEvidence[] = [];
-  for (const mode of MODES) {
-    modes.push(await renderMode(page, mode));
+async function installInlineCompletionRoute(page: Page): Promise<() => number> {
+  let requestCount = 0;
+  await page.route("**/api/editor/inline-completion", async (route) => {
+    requestCount += 1;
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        schemaVersion: "1",
+        items: [{ insertText: "urn 42;" }],
+        provenance: {
+          sources: ["model-assisted"],
+          modelMode: "as-you-type",
+          modelId: "issue-1296-editor-agent",
+          latencyClass: "fast",
+          gatewayPolicyVersion: "editor-inline-completion/1",
+          promptHash: "b".repeat(64),
+        },
+      }),
+    });
+  });
+  await page.route("**/api/editor/inline-completion/telemetry", async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({ ok: true }),
+    });
+  });
+  return () => requestCount;
+}
+
+async function openLiveEditor(page: Page): Promise<Locator> {
+  const editorWindow = page
+    .locator(".window[data-window-id]")
+    .filter({ has: page.locator(".editor-workspace") })
+    .first();
+  await expect(editorWindow).toBeVisible();
+  await expect(editorWindow.locator(".monaco-editor").first()).toBeVisible();
+  await expect(editorWindow.getByTestId("editor-status-bar")).toBeVisible();
+  await expect(
+    editorWindow.locator(".view-line").filter({ hasText: "shipAudit" }).first(),
+  ).toBeVisible();
+  return editorWindow;
+}
+
+async function triggerLiveInlineGhost(page: Page, editorWindow: Locator): Promise<void> {
+  const editor = editorWindow.locator(".monaco-editor").first();
+  await editor.click();
+  const modifier = process.platform === "darwin" ? "Meta" : "Control";
+  await page.keyboard.press(`${modifier}+KeyA`);
+  await page.keyboard.insertText("export function answer() {\n  ret");
+  await expect(page.getByRole("alert").filter({ hasText: "urn 42;" }).first()).toBeVisible();
+}
+
+async function collectLiveEvidence(
+  page: Page,
+  editorWindow: Locator,
+): Promise<{
+  readonly tokenValues: Record<string, string>;
+  readonly monaco: Record<string, string>;
+}> {
+  const tokenValues = await page.evaluate(
+    (names) => {
+      const style = getComputedStyle(document.documentElement);
+      return Object.fromEntries(names.map((name) => [name, style.getPropertyValue(name).trim()]));
+    },
+    [...TOKEN_NAMES],
+  );
+  const monaco = await editorWindow
+    .locator(".monaco-editor")
+    .first()
+    .evaluate((element) => {
+      const editor = element as HTMLElement;
+      const line = editor.querySelector(".view-line");
+      const gutter = editor.querySelector(".margin");
+      return {
+        backgroundColor: getComputedStyle(editor).backgroundColor,
+        lineColor:
+          line instanceof HTMLElement ? getComputedStyle(line).color : "missing-line-color",
+        gutterBackground:
+          gutter instanceof HTMLElement
+            ? getComputedStyle(gutter).backgroundColor
+            : "missing-gutter-background",
+      };
+    });
+  for (const [name, value] of Object.entries({ ...tokenValues, ...monaco })) {
+    expect(value, `${name} should resolve on the live packaged editor`).not.toMatch(/^missing|^$/u);
   }
+  expect(tokenValues["--ed-agent-ghost"]).toBe(tokenValues["--ed-ghost"]);
+  return { tokenValues, monaco };
+}
+
+async function captureMode(page: Page, root: string, mode: ModeDefinition): Promise<ModeEvidence> {
+  await seedLiveEditor(page, root, mode);
+  const editorWindow = await openLiveEditor(page);
+  await triggerLiveInlineGhost(page, editorWindow);
+  const evidence = await collectLiveEvidence(page, editorWindow);
+  await editorWindow.screenshot({ path: artifactPath(mode.artifact) });
+  return { mode: mode.mode, artifact: mode.artifact, ...evidence };
+}
+
+test.afterAll(() => {
+  for (const project of tempProjects) rmSync(project, { recursive: true, force: true });
+});
+
+test("Issue #1296 records packaged editor-agent evidence", async ({ page }) => {
+  test.setTimeout(300_000);
+  ensureEvidenceDir();
+  const inlineCompletionRequests = await installInlineCompletionRoute(page);
+  const root = createProjectFixture();
+  const modes: ModeEvidence[] = [];
+  for (const mode of MODES) modes.push(await captureMode(page, root, mode));
+  expect(inlineCompletionRequests()).toBeGreaterThan(0);
 
   const manifest: EvidenceManifest = {
     issue: 1296,
     harness: "tests/e2e/config/playwright.issue-1296-editor-agent.config.ts",
     appPath: "packaged-cli-ui",
     route: "/",
+    workspace: "synthetic-temp-project",
     evidencePath: "docs/design-system/evidence/1296/editor",
     generatedAt: new Date().toISOString(),
     designReference: "design-system/editor-agent.html",
     productCss: "packages/keiko-ui/src/app/globals.css",
     assertions: {
-      packagedUiLoaded: true,
-      editorAgentGhostMatchesEditorGhost: true,
+      packagedAppBooted: true,
+      liveMonacoVisible: true,
+      liveInlineGhostVisible: true,
+      inlineCompletionRequests: inlineCompletionRequests(),
       screenshotsCaptured: modes.length,
-      authorityBearingFlowsPrimitiveOnly: true,
     },
     modes,
     notes: [
-      "Screenshots cover real editor-context agent primitives in Dark, Light, and High Contrast.",
-      "Monaco ghost text consumes --ed-agent-ghost, which aliases --ed-ghost without visual drift.",
-      "Permission and sensitive-action prompts are token-backed primitives only in #1296; live authority wiring remains deferred to #1405.",
+      "Screenshots capture the packaged CLI UI's running Monaco editor in Dark, Light, and High Contrast.",
+      "The proof drives the live inline-completion route and verifies its editor ghost-text alert.",
+      "Permissioned agent mutation flows remain separately governed by #1405.",
     ],
     artifacts: ARTIFACT_NAMES,
   };
-
   writeFileSync(artifactPath("manifest.json"), `${JSON.stringify(manifest, null, 2)}\n`, "utf8");
 });

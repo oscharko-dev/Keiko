@@ -5,10 +5,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Readable } from "node:stream";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import {
-  EDITOR_HOT_EXIT_SCHEMA_VERSION,
-  type EditorHotExitSnapshotV1,
-} from "@oscharko-dev/keiko-contracts";
+import type { EditorHotExitSnapshotV1 } from "@oscharko-dev/keiko-contracts";
+import { EDITOR_HOT_EXIT_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts/runtime/editor-hot-exit";
 import {
   buildRedactor,
   createInMemoryUiStore,

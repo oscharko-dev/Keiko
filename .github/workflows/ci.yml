@@ -1091,6 +1091,7 @@ jobs:
 
   ui:
     name: ui
+    timeout-minutes: 45
     runs-on: ubuntu-latest
     permissions:
       attestations: write
@@ -1178,6 +1179,14 @@ jobs:
           # digest unconditionally, and reintroduce exactly the cross-PR blocking this removes.
           KEIKO_PERF_EVIDENCE_BASE_REF: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha }}
         run: npm run check:perf-evidence:editor
+      # The post-push workspace browser run above remains the runtime-regression detector. This
+      # deterministic check is intentionally narrower: it validates the committed document's
+      # provenance and makes a workspace measurement-ruler change carry its own re-measurement.
+      - name: Validate workspace performance evidence freshness
+        if: ${{ github.event_name == 'pull_request' || github.event_name == 'merge_group' }}
+        env:
+          KEIKO_PERF_EVIDENCE_BASE_REF: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha }}
+        run: npm run check:perf-evidence:workspace
       - name: Performance evidence freshness + budget gate
         if: ${{ github.event_name == 'push' || github.event_name == 'workflow_dispatch' }}
         run: npm run check:perf-evidence

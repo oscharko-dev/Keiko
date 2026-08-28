@@ -5,7 +5,7 @@
 // status is persisted in the manifest's coverageMatrix field.
 
 import { describe, expect, it } from "vitest";
-import { QualityIntelligence } from "@oscharko-dev/keiko-contracts";
+import * as QualityIntelligence from "@oscharko-dev/keiko-contracts/runtime/qualityIntelligence/index";
 import { DETERMINISTIC_BASELINE_PROVENANCE_TAG } from "@oscharko-dev/keiko-quality-intelligence";
 import {
   createInMemoryQualityIntelligenceLocalStore,

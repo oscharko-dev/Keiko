@@ -3,11 +3,11 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { createLocalSecretVault } from "@oscharko-dev/keiko-security/secret-vault";
+import type { EditorHotExitSnapshotV1 } from "@oscharko-dev/keiko-contracts";
 import {
   EDITOR_HOT_EXIT_SCHEMA_VERSION,
   EDITOR_HOT_EXIT_TTL_MS,
-  type EditorHotExitSnapshotV1,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/editor-hot-exit";
 import { createEditorHotExitStore } from "./hotExitStore.js";
 
 const REAL_TMPDIR = realpathSync(tmpdir());

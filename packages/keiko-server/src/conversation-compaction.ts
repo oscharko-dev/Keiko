@@ -16,16 +16,19 @@
 // model-written enrichment is handled by chat-compaction-model-summary.ts and resurfaced on later
 // turns through chat-compaction-resurfacing.ts.
 
+import type {
+  ContextCompactionRecord,
+  ContextProfile,
+  ContextTokenAccounting,
+} from "@oscharko-dev/keiko-contracts";
 import {
   CONTEXT_ENGINEERING_SCHEMA_VERSION,
   DEFAULT_CONTEXT_PROFILE,
   countContextTokens,
   countContextTokensForSegments,
-  validateContextCompactionRecord,
-  type ContextCompactionRecord,
-  type ContextProfile,
-  type ContextTokenAccounting,
-} from "@oscharko-dev/keiko-contracts";
+  partitionContextPreservedFacts,
+} from "@oscharko-dev/keiko-contracts/runtime/context-engineering";
+import { validateContextCompactionRecord } from "@oscharko-dev/keiko-contracts/runtime/context-engineering-compaction-validation";
 import { ContextOverflowError } from "@oscharko-dev/keiko-security/errors/gateway";
 import {
   buildStructuredCompactionDigest,
@@ -180,7 +183,7 @@ function selectCompaction(
 function buildTokenPrefix(prepared: readonly DroppedTurn[]): number[] {
   const tokenPrefix: number[] = [0];
   for (const turn of prepared) {
-    const previousTotal = tokenPrefix[tokenPrefix.length - 1] ?? 0;
+    const previousTotal = tokenPrefix.at(-1) ?? 0;
     tokenPrefix.push(previousTotal + turn.contentTokens);
   }
   return tokenPrefix;
@@ -197,8 +200,7 @@ function selectCompactionCandidate(
 ): CompactionSelection | undefined {
   const retained = prepared.slice(dropCount);
   const retainedContents = retained.map((turn) => turn.content);
-  const retainedContentTokens =
-    (tokenPrefix[tokenPrefix.length - 1] ?? 0) - (tokenPrefix[dropCount] ?? 0);
+  const retainedContentTokens = (tokenPrefix.at(-1) ?? 0) - (tokenPrefix[dropCount] ?? 0);
   const systemTokens =
     systemContent === undefined ? 0 : countContextTokens(systemContent, tokenAccounting);
   if (systemTokens + retainedContentTokens > effectiveInputBudget) {
@@ -294,7 +296,7 @@ function buildSummaryContent(
   return content === undefined ? undefined : { content, digest };
 }
 
-function renderStructuredSummaryLines(
+export function renderStructuredSummaryLines(
   droppedCount: number,
   digest: CompactionDigest,
 ): readonly string[] {
@@ -302,10 +304,16 @@ function renderStructuredSummaryLines(
     SUMMARY_HEADER,
     `Dropped ${String(droppedCount)} earlier turn(s); structured continuity fields are recorded in the compaction record.`,
   ];
+  const facts = partitionContextPreservedFacts(digest.preservedFacts);
   addSection(
     lines,
     "Pinned facts",
-    digest.preservedFacts?.map((fact) => fact.statement),
+    facts.verbatim.map((fact) => fact.statement),
+  );
+  addSection(
+    lines,
+    "Inferred statements (not facts)",
+    facts.inferred.map((fact) => fact.statement),
   );
   addSection(
     lines,
@@ -334,13 +342,18 @@ function renderStructuredSummaryLines(
 }
 
 function addSection(lines: string[], title: string, values: readonly string[] | undefined): void {
-  if (values === undefined || values.length === 0) {
+  const singleLineValues = values?.filter(isSafeListItem) ?? [];
+  if (singleLineValues.length === 0) {
     return;
   }
   lines.push(`${title}:`);
-  for (const value of values) {
+  for (const value of singleLineValues) {
     lines.push(`- ${value}`);
   }
+}
+
+function isSafeListItem(value: string): boolean {
+  return !/[\r\n]/u.test(value);
 }
 
 function fitSummaryLines(

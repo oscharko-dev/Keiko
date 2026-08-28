@@ -35,11 +35,11 @@
 // page script, so there is no id to recover at that call site, ever — not a gap, a hard platform
 // limit.
 
-import {
-  CLIENT_DIAGNOSTIC_MESSAGE_MAX_LENGTH,
-  type ClientDiagnosticIngestRequest,
-  type ClientDiagnosticReadyState,
+import type {
+  ClientDiagnosticIngestRequest,
+  ClientDiagnosticReadyState,
 } from "@oscharko-dev/keiko-contracts";
+import { CLIENT_DIAGNOSTIC_MESSAGE_MAX_LENGTH } from "@oscharko-dev/keiko-contracts/runtime/diagnostics";
 import { type ClientDiagnosticMeta, setClientDiagnosticWriter } from "./client-diagnostics";
 import { bffFetchJson } from "./http";
 

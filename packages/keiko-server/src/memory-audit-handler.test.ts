@@ -9,7 +9,7 @@ import {
   createAuditRedactor,
   type EvidenceStore,
 } from "@oscharko-dev/keiko-evidence";
-import { MEMORY_AUDIT_EVENT_SUMMARY_MAX_CHARS } from "@oscharko-dev/keiko-contracts";
+import { MEMORY_AUDIT_EVENT_SUMMARY_MAX_CHARS } from "@oscharko-dev/keiko-contracts/runtime/memory";
 import type {
   MemoryAuditEvent,
   MemoryId,

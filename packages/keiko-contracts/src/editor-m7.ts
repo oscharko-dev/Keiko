@@ -1023,6 +1023,9 @@ export function planEditorM7ModelEviction(args: {
 }
 
 export type EditorM7CommandScope = "global" | "editor" | "explorer" | "git" | "settings";
+// Contexts identify the runtime listener that receives a Keiko-owned keybinding. AppShell dispatches
+// both "global" and "settings" contexts, while EditorWidget owns the capturing "editor" context.
+// A command must not be advertised in a context until that listener exists.
 export type EditorM7CommandContext = "global" | "editor" | "monaco" | "settings" | "explorer";
 export type EditorM7CommandDispatchOwner = "keiko" | "monaco";
 
@@ -1094,7 +1097,7 @@ export const EDITOR_M7_COMMAND_REGISTRY: readonly EditorM7CommandDefinition[] = 
     "open-editor-settings",
     "command.openEditorSettings",
     "settings",
-    ["settings"],
+    ["settings", "editor"],
     ["CtrlOrMeta+,"],
     true,
   ),
@@ -1232,8 +1235,11 @@ const MAX_KEYBINDING_OVERRIDE_BYTES = 192;
 const KEYBINDING_OVERRIDE_SEPARATOR = "|";
 type EditorM7KeybindingModifier = (typeof MODIFIERS)[number];
 
-function commandFor(id: string): EditorM7CommandDefinition | undefined {
-  return EDITOR_M7_COMMAND_REGISTRY.find((entry) => entry.id === id);
+function commandFor(
+  id: string,
+  registry: readonly EditorM7CommandDefinition[] = EDITOR_M7_COMMAND_REGISTRY,
+): EditorM7CommandDefinition | undefined {
+  return registry.find((entry) => entry.id === id);
 }
 
 function canonicalBinding(binding: string): string | undefined {
@@ -1385,13 +1391,18 @@ function canonicalPersistableBinding(commandId: string, binding: string): string
   return utf8ByteLength(serialized) > MAX_KEYBINDING_OVERRIDE_BYTES ? undefined : canonical;
 }
 
-export function validateEditorM7Keybinding(args: {
+export interface EditorM7KeybindingValidationArgs {
   readonly commandId: string;
   readonly binding: string;
   readonly activeBindings: Readonly<Record<string, string>> | readonly EditorM7ActiveKeybinding[];
-}): EditorM7ParseResult<string> {
+}
+
+function validateEditorM7KeybindingAgainstRegistry(
+  args: EditorM7KeybindingValidationArgs,
+  registry: readonly EditorM7CommandDefinition[],
+): EditorM7ParseResult<string> {
   try {
-    const command = commandFor(args.commandId);
+    const command = commandFor(args.commandId, registry);
     if (command === undefined) return { ok: false, reasonCode: "UNKNOWN_COMMAND" };
     if (utf8ByteLength(args.binding) > MAX_KEYBINDING_OVERRIDE_BYTES) {
       return { ok: false, reasonCode: "INVALID_INPUT" };
@@ -1408,13 +1419,29 @@ export function validateEditorM7Keybinding(args: {
     const active = Array.isArray(args.activeBindings)
       ? (args.activeBindings as readonly EditorM7ActiveKeybinding[])
       : activeKeybindingsFromRecord(args.activeBindings as Readonly<Record<string, string>>);
-    const collision = active.find((entry) => collidesWithCommand(command, canonical, entry));
+    const collision = active.find((entry) =>
+      collidesWithCommand(command, canonical, entry, registry),
+    );
     return collision === undefined
       ? { ok: true, value: canonical }
       : { ok: false, reasonCode: "KEYBINDING_COLLISION" };
   } catch {
     return { ok: false, reasonCode: "INVALID_INPUT" };
   }
+}
+
+export function validateEditorM7Keybinding(
+  args: EditorM7KeybindingValidationArgs,
+): EditorM7ParseResult<string> {
+  return validateEditorM7KeybindingAgainstRegistry(args, EDITOR_M7_COMMAND_REGISTRY);
+}
+
+/** Test-only seam: pins the validator's context-disjoint reuse semantics without inventing UI commands. */
+export function __validateEditorM7KeybindingForTests(
+  args: EditorM7KeybindingValidationArgs,
+  registry: readonly EditorM7CommandDefinition[],
+): EditorM7ParseResult<string> {
+  return validateEditorM7KeybindingAgainstRegistry(args, registry);
 }
 
 // Collision is decided on the PHYSICAL chord, never on the canonical binding string: dispatch
@@ -1425,11 +1452,12 @@ function collidesWithCommand(
   command: EditorM7CommandDefinition,
   binding: string,
   active: EditorM7ActiveKeybinding,
+  registry: readonly EditorM7CommandDefinition[],
 ): boolean {
   const activeBinding = canonicalBinding(active.binding);
   if (active.commandId === command.id || activeBinding === undefined) return false;
   if (physicalChordKey(activeBinding) !== physicalChordKey(binding)) return false;
-  const other = commandFor(active.commandId);
+  const other = commandFor(active.commandId, registry);
   return other !== undefined && commandContextsOverlap(command, other);
 }
 

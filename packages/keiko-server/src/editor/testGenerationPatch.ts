@@ -14,7 +14,7 @@ import type {
   PatchChangeKind,
   PatchFileChange,
 } from "@oscharko-dev/keiko-contracts";
-import { isValidScopePath } from "@oscharko-dev/keiko-contracts";
+import { isValidScopePath } from "@oscharko-dev/keiko-contracts/runtime/connected-context";
 
 /** Resolves the current workspace content of a file, or undefined when it does not exist / is unreadable. */
 export type OriginalContentReader = (relativePath: string) => string | undefined;

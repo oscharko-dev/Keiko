@@ -10,7 +10,7 @@ import type {
   UpdateRuntimeEventType,
   UpdateRuntimeWarningCode,
 } from "@oscharko-dev/keiko-contracts";
-import { UPDATE_REMEDIATION_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts";
+import { UPDATE_REMEDIATION_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts/runtime/update-remediation";
 import type { LocalKnowledgeRemediationPort } from "./local-knowledge-remediation.js";
 import {
   FEATURE_LABELS,

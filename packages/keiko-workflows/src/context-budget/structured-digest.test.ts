@@ -1,9 +1,7 @@
 import { describe, expect, it } from "vitest";
 
-import {
-  validateContextCompactionRecord,
-  type ContextCompactionRecord,
-} from "@oscharko-dev/keiko-contracts";
+import type { ContextCompactionRecord } from "@oscharko-dev/keiko-contracts";
+import { validateContextCompactionRecord } from "@oscharko-dev/keiko-contracts/runtime/context-engineering-compaction-validation";
 
 import {
   buildStructuredCompactionDigest,

@@ -23,17 +23,19 @@ import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import type {
+  CodingWorkbenchAuthorityEnvelope,
+  EditorAgentGovernedAuthorityReference,
+  EditorAgentSessionSnapshot,
+  VerificationReport,
+} from "@oscharko-dev/keiko-contracts";
 import {
   CODING_WORKBENCH_ACTION_CLASSES,
   CODING_WORKBENCH_SCHEMA_VERSION,
-  DEFAULT_LANGUAGE_SERVICE_LIMITS,
-  EDITOR_AGENT_SCHEMA_VERSION,
   resolveEffectiveCodingWorkbenchMode,
-  type CodingWorkbenchAuthorityEnvelope,
-  type EditorAgentGovernedAuthorityReference,
-  type EditorAgentSessionSnapshot,
-  type VerificationReport,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/coding-workbench";
+import { DEFAULT_LANGUAGE_SERVICE_LIMITS } from "@oscharko-dev/keiko-contracts/runtime/language-service";
+import { EDITOR_AGENT_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts/runtime/editor-agent";
 import type { ModelPort } from "@oscharko-dev/keiko-harness";
 import type { NormalizedResponse } from "@oscharko-dev/keiko-model-gateway";
 import {

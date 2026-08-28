@@ -14,19 +14,21 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 
+import type {
+  CodingWorkbenchAuthorityEnvelope,
+  EditorAgentGovernedAuthorityReference,
+  EditorAgentNavigateSymbolOperation,
+  EditorAgentSessionSnapshot,
+  ToolCallResult,
+} from "@oscharko-dev/keiko-contracts";
 import {
   CODING_WORKBENCH_ACTION_CLASSES,
   CODING_WORKBENCH_SCHEMA_VERSION,
-  DEFAULT_LANGUAGE_SERVICE_LIMITS,
-  DEFAULT_LSP_PROCESS_CONFIG,
-  EDITOR_AGENT_SCHEMA_VERSION,
   resolveEffectiveCodingWorkbenchMode,
-  type CodingWorkbenchAuthorityEnvelope,
-  type EditorAgentGovernedAuthorityReference,
-  type EditorAgentNavigateSymbolOperation,
-  type EditorAgentSessionSnapshot,
-  type ToolCallResult,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/coding-workbench";
+import { DEFAULT_LANGUAGE_SERVICE_LIMITS } from "@oscharko-dev/keiko-contracts/runtime/language-service";
+import { DEFAULT_LSP_PROCESS_CONFIG } from "@oscharko-dev/keiko-contracts/runtime/lsp-process";
+import { EDITOR_AGENT_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts/runtime/editor-agent";
 import {
   createFetchEditorAgentHttpTransport,
   EditorAgentHttpClient,

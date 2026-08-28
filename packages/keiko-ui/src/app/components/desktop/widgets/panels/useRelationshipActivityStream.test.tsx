@@ -20,7 +20,7 @@ import type { ReactNode } from "react";
 import { useRelationshipActivityStream, N_VISIBLE } from "./useRelationshipActivityStream";
 import { RelationshipEdgeBadge, ACTIVITY_VISUALS } from "./RelationshipEdgeBadge";
 import type { RelationshipActivityState } from "@oscharko-dev/keiko-contracts";
-import { RELATIONSHIP_ACTIVITY_STATES } from "@oscharko-dev/keiko-contracts";
+import { RELATIONSHIP_ACTIVITY_STATES } from "@oscharko-dev/keiko-contracts/runtime/relationships";
 import {
   resetClientDiagnosticWriter,
   setClientDiagnosticWriter,

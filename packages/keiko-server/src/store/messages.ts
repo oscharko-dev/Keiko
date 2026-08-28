@@ -6,7 +6,7 @@
 
 import type { DatabaseSync } from "node:sqlite";
 import { randomUUID } from "node:crypto";
-import { validateKnowledgePodRetrievalActivity } from "@oscharko-dev/keiko-contracts";
+import { validateKnowledgePodRetrievalActivity } from "@oscharko-dev/keiko-contracts/runtime/local-knowledge-retrieval-activity";
 import { contentFreeErrorClass, emitServerDiagnostic } from "../diagnostics-log.js";
 import type {
   ChatAssistantResponseVersion,

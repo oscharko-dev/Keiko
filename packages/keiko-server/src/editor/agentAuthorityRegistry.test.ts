@@ -1,10 +1,12 @@
 import { describe, expect, it } from "vitest";
+import type {
+  CodingWorkbenchAuthorityEnvelope,
+  EditorAgentAction,
+} from "@oscharko-dev/keiko-contracts";
 import {
   CODING_WORKBENCH_ACTION_CLASSES,
   CODING_WORKBENCH_SCHEMA_VERSION,
-  type CodingWorkbenchAuthorityEnvelope,
-  type EditorAgentAction,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/coding-workbench";
 import {
   EDITOR_AGENT_AUTHORITY_MAX_RECORDS,
   EditorAgentAuthorityRegistry,

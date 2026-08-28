@@ -19,15 +19,15 @@
 // and only over the authenticated app-session channel (ADR-0141), because the operator cannot give
 // meaningful consent to a destination they were never shown. The unauthenticated status/SSE
 // surfaces stay content-free: they never carry the host, the URL, the path, or the query.
-import {
-  CODING_WORKBENCH_RUNTIME_CONTRACT_VERSION,
-  isCodeTaskPublicDomain,
-  validateCodingWorkbenchRuntimeEvent,
-  validateGovernedActionV1,
-  type AuxiliaryResearchScopeV1,
-  type CodingWorkbenchRuntimeEvent,
-  type GovernedActionV1,
+import type {
+  AuxiliaryResearchScopeV1,
+  CodingWorkbenchRuntimeEvent,
+  GovernedActionV1,
 } from "@oscharko-dev/keiko-contracts";
+import { CODING_WORKBENCH_RUNTIME_CONTRACT_VERSION } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime";
+import { isCodeTaskPublicDomain } from "@oscharko-dev/keiko-contracts/runtime/code-task-auxiliary";
+import { validateCodingWorkbenchRuntimeEvent } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-validation";
+import { validateGovernedActionV1 } from "@oscharko-dev/keiko-contracts/runtime/code-task-governance";
 
 import { researchRequestLineDigest, researchRequestLineText } from "./researchEgressPort.js";
 import { normalizeResearchHost, type ResearchGrantRegistry } from "./researchGrantRegistry.js";

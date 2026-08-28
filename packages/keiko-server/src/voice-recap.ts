@@ -32,17 +32,19 @@ import {
   resolveVoiceCapability,
   type VoiceCapabilityResolution,
 } from "@oscharko-dev/keiko-model-gateway";
+import type {
+  MemoryAuditEvent,
+  MemoryId,
+  MemoryProposalId,
+  MemoryScope,
+  VoiceProfile,
+  VoiceSessionRecapAuditRecord,
+} from "@oscharko-dev/keiko-contracts";
 import {
   VOICE_SESSION_RECAP_SCHEMA_VERSION,
   validateVoiceSessionRecapAuditRecord,
   voiceRecapAllowed,
-  type MemoryAuditEvent,
-  type MemoryId,
-  type MemoryProposalId,
-  type MemoryScope,
-  type VoiceProfile,
-  type VoiceSessionRecapAuditRecord,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/voice-session-recap";
 import {
   extractCandidatesFromUserText,
   type CaptureContext,

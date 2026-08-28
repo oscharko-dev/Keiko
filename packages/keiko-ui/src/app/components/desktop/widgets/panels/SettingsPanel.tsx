@@ -3,13 +3,13 @@
 import dynamic from "next/dynamic";
 import { useCallback, useEffect, useEffectEvent, useMemo, useRef, useState } from "react";
 import type { CSSProperties, ReactNode } from "react";
+import type { GatewayVerificationState } from "@oscharko-dev/keiko-contracts";
 import {
   gatewayVerificationContradictsReadiness,
   gatewayVerificationFromProbeOutcome,
   UNVERIFIED_GATEWAY,
-  VOICE_PERSONAS,
-  type GatewayVerificationState,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/gateway-verification";
+import { VOICE_PERSONAS } from "@oscharko-dev/keiko-contracts/runtime/gateway";
 import {
   applyGatewayVerifiedCapabilities,
   fetchConfig,

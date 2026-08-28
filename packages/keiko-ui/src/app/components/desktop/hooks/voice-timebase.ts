@@ -14,17 +14,19 @@
 // are content-free no-ops (AC5).
 
 import type { VoiceProfile, VoiceCapabilityResolution } from "@/lib/types";
+import type {
+  VoiceControlMessage,
+  VoiceControlMessageKind,
+  VoiceRedactionClass,
+  VoiceMediaTrackState,
+  VoicePlaybackState,
+} from "@oscharko-dev/keiko-contracts";
 import {
-  type VoiceControlMessage,
-  type VoiceControlMessageKind,
-  type VoiceRedactionClass,
-  type VoiceMediaTrackState,
-  type VoicePlaybackState,
   VOICE_REPLAY_CAPACITY,
   voiceMessageAllowedForProfile,
   isVoiceReplayEligible,
   voiceControlMessageRedactionClass,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/voice-protocol";
 
 // ─── Clock seam (D2) ───────────────────────────────────────────────────────────
 // Monotonic milliseconds. Production uses `performance.now()`; tests inject a scripted, deterministic

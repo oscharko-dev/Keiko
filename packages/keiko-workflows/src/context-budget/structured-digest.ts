@@ -1,10 +1,10 @@
-import {
-  stripUnsafeFormatChars,
-  type ContextAssumption,
-  type ContextPreservedFact,
-  type ContextProvenanceRef,
-  type ContextUserConstraint,
+import type {
+  ContextAssumption,
+  ContextPreservedFact,
+  ContextProvenanceRef,
+  ContextUserConstraint,
 } from "@oscharko-dev/keiko-contracts";
+import { stripUnsafeFormatChars } from "@oscharko-dev/keiko-contracts/runtime/text-safety";
 import { redact } from "@oscharko-dev/keiko-security";
 
 import type { CompactionDigest } from "./compaction-helpers.js";

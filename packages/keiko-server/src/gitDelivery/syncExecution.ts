@@ -15,14 +15,14 @@
 // Pure parsing lives in gitPorcelainStatus.ts; this module owns only the bounded process effect and
 // the deterministic outcome classifier. Both are seam-injectable for tests.
 
-import {
-  GIT_SYNC_SCHEMA_VERSION,
-  type GitSyncBlockReason,
-  type GitSyncOperation,
-  type GitSyncOutcome,
-  type GitSyncPreview,
-  type GitUpstreamSummary,
+import type {
+  GitSyncBlockReason,
+  GitSyncOperation,
+  GitSyncOutcome,
+  GitSyncPreview,
+  GitUpstreamSummary,
 } from "@oscharko-dev/keiko-contracts";
+import { GIT_SYNC_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts/runtime/git-sync";
 import {
   classifyGitRemoteFailure,
   GIT_BASE_ARGS,

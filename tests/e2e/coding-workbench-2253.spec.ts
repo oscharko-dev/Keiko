@@ -1,5 +1,5 @@
 import { expect, test, type Locator, type Page } from "@playwright/test";
-import { validateCodingWorkbenchCodexSubscriptionProfile } from "@oscharko-dev/keiko-contracts";
+import { validateCodingWorkbenchCodexSubscriptionProfile } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-codex-auth";
 import { createHash } from "node:crypto";
 import { lstatSync, mkdirSync, readFileSync, writeFileSync, type Stats } from "node:fs";
 import { dirname, relative, resolve } from "node:path";

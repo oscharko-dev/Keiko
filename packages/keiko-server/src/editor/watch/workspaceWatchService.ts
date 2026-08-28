@@ -3,15 +3,15 @@ import { readdir, realpath, stat, lstat } from "node:fs/promises";
 import { createHash } from "node:crypto";
 import { isAbsolute, join, posix as pathPosix, relative, resolve } from "node:path";
 
-import {
-  EDITOR_M7_SCHEMA_VERSION,
-  type EditorM7WatchDegradedReason,
-  type EditorM7WatchEntryKind,
-  type EditorM7WatchEvent,
-  type EditorM7WatchEventKind,
-  type EditorM7WatchHealth,
-  type EditorM7WatchSnapshot,
+import type {
+  EditorM7WatchDegradedReason,
+  EditorM7WatchEntryKind,
+  EditorM7WatchEvent,
+  EditorM7WatchEventKind,
+  EditorM7WatchHealth,
+  EditorM7WatchSnapshot,
 } from "@oscharko-dev/keiko-contracts";
+import { EDITOR_M7_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts/runtime/editor-m7";
 import { containsPath } from "@oscharko-dev/keiko-git";
 
 import { pathIsDenied } from "../../files-deny.js";

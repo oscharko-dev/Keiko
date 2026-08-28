@@ -3,10 +3,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
-import {
-  EDITOR_M7_SNIPPET_COLLECTION_VERSION,
-  type EditorM7WorkspaceSnippetInput,
-} from "@oscharko-dev/keiko-contracts";
+import type { EditorM7WorkspaceSnippetInput } from "@oscharko-dev/keiko-contracts";
+import { EDITOR_M7_SNIPPET_COLLECTION_VERSION } from "@oscharko-dev/keiko-contracts/runtime/editor-snippets";
 
 import { savePrivateJson } from "../../private-json.js";
 import { createWorkspaceMutexRegistry } from "../../task-workspace/mutex.js";

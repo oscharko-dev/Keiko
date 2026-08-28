@@ -52,25 +52,19 @@ import {
   DEFAULT_SEARCH_LIMITS,
   FileTooLargeError,
   RepoSearchUnsupportedFileError,
-  createEcosystemStructureAdapters,
   detectWorkspaceAt,
   endpointContractAdapter,
   findFiles,
   gitHistoryAdapter,
-  importGraphAdapter,
   isCanonicalMetadataFile,
   isEcosystemSourceFile,
   isDenied,
   readExcerpt,
   resolveWithinWorkspace,
-  runStructuralAdapters,
   searchText,
   symbolGraphAdapter,
   type SearchScope,
   type SemanticSearchProvider,
-  type StructuralAdapterRegistry,
-  type StructuralCoverageDiagnostics,
-  testSourcePairingAdapter,
   type WorkspaceDirEntry,
   type WorkspaceFs,
   type WorkspaceIndex,
@@ -78,6 +72,14 @@ import {
   containedRealPathInfo,
   evidenceAtomStableId,
 } from "@oscharko-dev/keiko-workspace";
+import {
+  createEcosystemStructureAdapters,
+  importGraphAdapter,
+  runStructuralAdapters,
+  type StructuralAdapterRegistry,
+  type StructuralCoverageDiagnostics,
+  testSourcePairingAdapter,
+} from "@oscharko-dev/keiko-workspace/code-intelligence";
 import { CancelledError } from "@oscharko-dev/keiko-model-gateway";
 import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
 import {

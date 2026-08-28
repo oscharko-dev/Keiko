@@ -19,11 +19,11 @@ import type { RouteContext, RouteResult, HandlerOutcome } from "./routes.js";
 import { errorBody, STREAMING } from "./routes.js";
 import type { UiHandlerDeps } from "./deps.js";
 import { currentRedactionSecrets } from "./deps.js";
-import {
-  VOICE_TRANSCRIPT_SCHEMA_VERSION,
-  type CommittedVoiceTranscriptProjection,
-  type VoiceProfile,
+import type {
+  CommittedVoiceTranscriptProjection,
+  VoiceProfile,
 } from "@oscharko-dev/keiko-contracts";
+import { VOICE_TRANSCRIPT_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts/runtime/voice-transcript";
 import type { ModelPort } from "@oscharko-dev/keiko-harness";
 import { createNodeToolResultArtifactStore } from "@oscharko-dev/keiko-evidence";
 import { validateWorkflowHandoffRequest } from "@oscharko-dev/keiko-contracts/workflow-handoff";

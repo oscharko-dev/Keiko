@@ -1,10 +1,12 @@
 import { describe, expect, it } from "vitest";
+import type {
+  CreateEditorLayoutStateV2Input,
+  EditorLayoutStateV2,
+} from "@oscharko-dev/keiko-contracts";
 import {
   createEditorLayoutStateV2,
   editorLayoutReducer,
-  type CreateEditorLayoutStateV2Input,
-  type EditorLayoutStateV2,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/editor-layout";
 
 import {
   dirtyFilesUnderPath,

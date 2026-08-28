@@ -57,4 +57,4 @@ export {
   isTerminalHarnessState,
   DEFAULT_LIMITS,
   HARNESS_CODES,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/harness";

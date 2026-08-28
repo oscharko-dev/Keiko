@@ -11,10 +11,12 @@ import {
   createEditorLayoutStateV2,
   editorLayoutOpenFiles,
   editorLayoutReducer,
+  serializeEditorLayoutStateV2,
+} from "@oscharko-dev/keiko-contracts/runtime/editor-layout";
+import {
   isRootRelativeFileIdentifier,
   resolveWorkspaceFileIdentifier,
-  serializeEditorLayoutStateV2,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/editor-workspace-path";
 import type {
   ChatBindingTarget,
   ChatUnbindTarget,

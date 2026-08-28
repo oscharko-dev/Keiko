@@ -98,6 +98,634 @@
     "./release-impact": {
       "types": "./dist/release-impact.d.ts",
       "import": "./dist/release-impact.js"
+    },
+    "./runtime/atlassian-connectors": {
+      "types": "./dist/atlassian-connectors.d.ts",
+      "import": "./dist/atlassian-connectors.js"
+    },
+    "./runtime/atlassian-connectors-validation": {
+      "types": "./dist/atlassian-connectors-validation.d.ts",
+      "import": "./dist/atlassian-connectors-validation.js"
+    },
+    "./runtime/bff-wire": {
+      "types": "./dist/bff-wire.d.ts",
+      "import": "./dist/bff-wire.js"
+    },
+    "./runtime/bug-investigation-events": {
+      "types": "./dist/bug-investigation-events.d.ts",
+      "import": "./dist/bug-investigation-events.js"
+    },
+    "./runtime/code-task-acceptance": {
+      "types": "./dist/code-task-acceptance.d.ts",
+      "import": "./dist/code-task-acceptance.js"
+    },
+    "./runtime/code-task-auxiliary": {
+      "types": "./dist/code-task-auxiliary.d.ts",
+      "import": "./dist/code-task-auxiliary.js"
+    },
+    "./runtime/code-task-governance": {
+      "types": "./dist/code-task-governance.d.ts",
+      "import": "./dist/code-task-governance.js"
+    },
+    "./runtime/code-task-run-control": {
+      "types": "./dist/code-task-run-control.d.ts",
+      "import": "./dist/code-task-run-control.js"
+    },
+    "./runtime/coding-app-session": {
+      "types": "./dist/coding-app-session.d.ts",
+      "import": "./dist/coding-app-session.js"
+    },
+    "./runtime/coding-context": {
+      "types": "./dist/coding-context.d.ts",
+      "import": "./dist/coding-context.js"
+    },
+    "./runtime/coding-safe-activity": {
+      "types": "./dist/coding-safe-activity.d.ts",
+      "import": "./dist/coding-safe-activity.js"
+    },
+    "./runtime/coding-workbench": {
+      "types": "./dist/coding-workbench.d.ts",
+      "import": "./dist/coding-workbench.js"
+    },
+    "./runtime/coding-workbench-codex-auth": {
+      "types": "./dist/coding-workbench-codex-auth.d.ts",
+      "import": "./dist/coding-workbench-codex-auth.js"
+    },
+    "./runtime/coding-workbench-evidence": {
+      "types": "./dist/coding-workbench-evidence.d.ts",
+      "import": "./dist/coding-workbench-evidence.js"
+    },
+    "./runtime/coding-workbench-runtime": {
+      "types": "./dist/coding-workbench-runtime.d.ts",
+      "import": "./dist/coding-workbench-runtime.js"
+    },
+    "./runtime/coding-workbench-runtime-api": {
+      "types": "./dist/coding-workbench-runtime-api.d.ts",
+      "import": "./dist/coding-workbench-runtime-api.js"
+    },
+    "./runtime/coding-workbench-runtime-approval-review": {
+      "types": "./dist/coding-workbench-runtime-approval-review.d.ts",
+      "import": "./dist/coding-workbench-runtime-approval-review.js"
+    },
+    "./runtime/coding-workbench-runtime-questions": {
+      "types": "./dist/coding-workbench-runtime-questions.d.ts",
+      "import": "./dist/coding-workbench-runtime-questions.js"
+    },
+    "./runtime/coding-workbench-runtime-research": {
+      "types": "./dist/coding-workbench-runtime-research.d.ts",
+      "import": "./dist/coding-workbench-runtime-research.js"
+    },
+    "./runtime/coding-workbench-validation": {
+      "types": "./dist/coding-workbench-validation.d.ts",
+      "import": "./dist/coding-workbench-validation.js"
+    },
+    "./runtime/command-runner": {
+      "types": "./dist/command-runner.d.ts",
+      "import": "./dist/command-runner.js"
+    },
+    "./runtime/comparators": {
+      "types": "./dist/comparators.d.ts",
+      "import": "./dist/comparators.js"
+    },
+    "./runtime/connected-context": {
+      "types": "./dist/connected-context.d.ts",
+      "import": "./dist/connected-context.js"
+    },
+    "./runtime/container-runtime": {
+      "types": "./dist/container-runtime.d.ts",
+      "import": "./dist/container-runtime.js"
+    },
+    "./runtime/context-engineering": {
+      "types": "./dist/context-engineering.d.ts",
+      "import": "./dist/context-engineering.js"
+    },
+    "./runtime/context-engineering-compaction-validation": {
+      "types": "./dist/context-engineering-compaction-validation.d.ts",
+      "import": "./dist/context-engineering-compaction-validation.js"
+    },
+    "./runtime/context-engineering-validation": {
+      "types": "./dist/context-engineering-validation.d.ts",
+      "import": "./dist/context-engineering-validation.js"
+    },
+    "./runtime/context-observations": {
+      "types": "./dist/context-observations.d.ts",
+      "import": "./dist/context-observations.js"
+    },
+    "./runtime/context-observations-validation": {
+      "types": "./dist/context-observations-validation.d.ts",
+      "import": "./dist/context-observations-validation.js"
+    },
+    "./runtime/dap-debug": {
+      "types": "./dist/dap-debug.d.ts",
+      "import": "./dist/dap-debug.js"
+    },
+    "./runtime/debug-activation": {
+      "types": "./dist/debug-activation.d.ts",
+      "import": "./dist/debug-activation.js"
+    },
+    "./runtime/debug/debug-lifecycle": {
+      "types": "./dist/debug/debug-lifecycle.d.ts",
+      "import": "./dist/debug/debug-lifecycle.js"
+    },
+    "./runtime/diagnostics": {
+      "types": "./dist/diagnostics.d.ts",
+      "import": "./dist/diagnostics.js"
+    },
+    "./runtime/discussion-intelligence": {
+      "types": "./dist/discussion-intelligence.d.ts",
+      "import": "./dist/discussion-intelligence.js"
+    },
+    "./runtime/documentation-browser": {
+      "types": "./dist/documentation-browser.d.ts",
+      "import": "./dist/documentation-browser.js"
+    },
+    "./runtime/documentation-manual-proposal": {
+      "types": "./dist/documentation-manual-proposal.d.ts",
+      "import": "./dist/documentation-manual-proposal.js"
+    },
+    "./runtime/editor-agent": {
+      "types": "./dist/editor-agent.d.ts",
+      "import": "./dist/editor-agent.js"
+    },
+    "./runtime/editor-agent-governance": {
+      "types": "./dist/editor-agent-governance.d.ts",
+      "import": "./dist/editor-agent-governance.js"
+    },
+    "./runtime/editor-agent-verification": {
+      "types": "./dist/editor-agent-verification.d.ts",
+      "import": "./dist/editor-agent-verification.js"
+    },
+    "./runtime/editor-builtin-capabilities": {
+      "types": "./dist/editor-builtin-capabilities.d.ts",
+      "import": "./dist/editor-builtin-capabilities.js"
+    },
+    "./runtime/editor-completion": {
+      "types": "./dist/editor-completion.d.ts",
+      "import": "./dist/editor-completion.js"
+    },
+    "./runtime/editor-dirty-close": {
+      "types": "./dist/editor-dirty-close.d.ts",
+      "import": "./dist/editor-dirty-close.js"
+    },
+    "./runtime/editor-hot-exit": {
+      "types": "./dist/editor-hot-exit.d.ts",
+      "import": "./dist/editor-hot-exit.js"
+    },
+    "./runtime/editor-inline-completion": {
+      "types": "./dist/editor-inline-completion.d.ts",
+      "import": "./dist/editor-inline-completion.js"
+    },
+    "./runtime/editor-language-mode-map": {
+      "types": "./dist/editor-language-mode-map.d.ts",
+      "import": "./dist/editor-language-mode-map.js"
+    },
+    "./runtime/editor-layout": {
+      "types": "./dist/editor-layout.d.ts",
+      "import": "./dist/editor-layout.js"
+    },
+    "./runtime/editor-local-history": {
+      "types": "./dist/editor-local-history.d.ts",
+      "import": "./dist/editor-local-history.js"
+    },
+    "./runtime/editor-m11-settings": {
+      "types": "./dist/editor-m11-settings.d.ts",
+      "import": "./dist/editor-m11-settings.js"
+    },
+    "./runtime/editor-m7": {
+      "types": "./dist/editor-m7.d.ts",
+      "import": "./dist/editor-m7.js"
+    },
+    "./runtime/editor-patch-apply": {
+      "types": "./dist/editor-patch-apply.d.ts",
+      "import": "./dist/editor-patch-apply.js"
+    },
+    "./runtime/editor-problems": {
+      "types": "./dist/editor-problems.d.ts",
+      "import": "./dist/editor-problems.js"
+    },
+    "./runtime/editor-session": {
+      "types": "./dist/editor-session.d.ts",
+      "import": "./dist/editor-session.js"
+    },
+    "./runtime/editor-snippets": {
+      "types": "./dist/editor-snippets.d.ts",
+      "import": "./dist/editor-snippets.js"
+    },
+    "./runtime/editor-test-generation": {
+      "types": "./dist/editor-test-generation.d.ts",
+      "import": "./dist/editor-test-generation.js"
+    },
+    "./runtime/editor-verification": {
+      "types": "./dist/editor-verification.d.ts",
+      "import": "./dist/editor-verification.js"
+    },
+    "./runtime/editor-workspace-path": {
+      "types": "./dist/editor-workspace-path.d.ts",
+      "import": "./dist/editor-workspace-path.js"
+    },
+    "./runtime/eval-metrics": {
+      "types": "./dist/eval-metrics.d.ts",
+      "import": "./dist/eval-metrics.js"
+    },
+    "./runtime/evaluation-gates": {
+      "types": "./dist/evaluation-gates.d.ts",
+      "import": "./dist/evaluation-gates.js"
+    },
+    "./runtime/evaluations": {
+      "types": "./dist/evaluations.d.ts",
+      "import": "./dist/evaluations.js"
+    },
+    "./runtime/evidence": {
+      "types": "./dist/evidence.d.ts",
+      "import": "./dist/evidence.js"
+    },
+    "./runtime/figma-codegen": {
+      "types": "./dist/figma-codegen.d.ts",
+      "import": "./dist/figma-codegen.js"
+    },
+    "./runtime/gateway": {
+      "types": "./dist/gateway.d.ts",
+      "import": "./dist/gateway.js"
+    },
+    "./runtime/gateway-setup-audit": {
+      "types": "./dist/gateway-setup-audit.d.ts",
+      "import": "./dist/gateway-setup-audit.js"
+    },
+    "./runtime/gateway-verification": {
+      "types": "./dist/gateway-verification.d.ts",
+      "import": "./dist/gateway-verification.js"
+    },
+    "./runtime/git-commit-intent": {
+      "types": "./dist/git-commit-intent.d.ts",
+      "import": "./dist/git-commit-intent.js"
+    },
+    "./runtime/git-commit-policy": {
+      "types": "./dist/git-commit-policy.d.ts",
+      "import": "./dist/git-commit-policy.js"
+    },
+    "./runtime/git-delivery": {
+      "types": "./dist/git-delivery.d.ts",
+      "import": "./dist/git-delivery.js"
+    },
+    "./runtime/git-delivery-action-sheet": {
+      "types": "./dist/git-delivery-action-sheet.d.ts",
+      "import": "./dist/git-delivery-action-sheet.js"
+    },
+    "./runtime/git-delivery-evidence": {
+      "types": "./dist/git-delivery-evidence.d.ts",
+      "import": "./dist/git-delivery-evidence.js"
+    },
+    "./runtime/git-delivery-policy": {
+      "types": "./dist/git-delivery-policy.d.ts",
+      "import": "./dist/git-delivery-policy.js"
+    },
+    "./runtime/git-delivery-provider": {
+      "types": "./dist/git-delivery-provider.d.ts",
+      "import": "./dist/git-delivery-provider.js"
+    },
+    "./runtime/git-editor": {
+      "types": "./dist/git-editor.d.ts",
+      "import": "./dist/git-editor.js"
+    },
+    "./runtime/git-history": {
+      "types": "./dist/git-history.d.ts",
+      "import": "./dist/git-history.js"
+    },
+    "./runtime/git-merge": {
+      "types": "./dist/git-merge.d.ts",
+      "import": "./dist/git-merge.js"
+    },
+    "./runtime/git-pull-request": {
+      "types": "./dist/git-pull-request.d.ts",
+      "import": "./dist/git-pull-request.js"
+    },
+    "./runtime/git-repository": {
+      "types": "./dist/git-repository.d.ts",
+      "import": "./dist/git-repository.js"
+    },
+    "./runtime/git-repository-agent": {
+      "types": "./dist/git-repository-agent.d.ts",
+      "import": "./dist/git-repository-agent.js"
+    },
+    "./runtime/git-repository-summary": {
+      "types": "./dist/git-repository-summary.d.ts",
+      "import": "./dist/git-repository-summary.js"
+    },
+    "./runtime/git-sync": {
+      "types": "./dist/git-sync.d.ts",
+      "import": "./dist/git-sync.js"
+    },
+    "./runtime/harness": {
+      "types": "./dist/harness.d.ts",
+      "import": "./dist/harness.js"
+    },
+    "./runtime/html-manual-job": {
+      "types": "./dist/html-manual-job.d.ts",
+      "import": "./dist/html-manual-job.js"
+    },
+    "./runtime/html-manual-refresh": {
+      "types": "./dist/html-manual-refresh.d.ts",
+      "import": "./dist/html-manual-refresh.js"
+    },
+    "./runtime/html-manual-source": {
+      "types": "./dist/html-manual-source.d.ts",
+      "import": "./dist/html-manual-source.js"
+    },
+    "./runtime/http-error": {
+      "types": "./dist/http-error.d.ts",
+      "import": "./dist/http-error.js"
+    },
+    "./runtime/language-service": {
+      "types": "./dist/language-service.d.ts",
+      "import": "./dist/language-service.js"
+    },
+    "./runtime/local-knowledge": {
+      "types": "./dist/local-knowledge.d.ts",
+      "import": "./dist/local-knowledge.js"
+    },
+    "./runtime/local-knowledge-embedding-profiles": {
+      "types": "./dist/local-knowledge-embedding-profiles.d.ts",
+      "import": "./dist/local-knowledge-embedding-profiles.js"
+    },
+    "./runtime/local-knowledge-file-selection": {
+      "types": "./dist/local-knowledge-file-selection.d.ts",
+      "import": "./dist/local-knowledge-file-selection.js"
+    },
+    "./runtime/local-knowledge-large-document": {
+      "types": "./dist/local-knowledge-large-document.d.ts",
+      "import": "./dist/local-knowledge-large-document.js"
+    },
+    "./runtime/local-knowledge-large-document-validation": {
+      "types": "./dist/local-knowledge-large-document-validation.d.ts",
+      "import": "./dist/local-knowledge-large-document-validation.js"
+    },
+    "./runtime/local-knowledge-model-use-policy": {
+      "types": "./dist/local-knowledge-model-use-policy.d.ts",
+      "import": "./dist/local-knowledge-model-use-policy.js"
+    },
+    "./runtime/local-knowledge-paths": {
+      "types": "./dist/local-knowledge-paths.d.ts",
+      "import": "./dist/local-knowledge-paths.js"
+    },
+    "./runtime/local-knowledge-pods": {
+      "types": "./dist/local-knowledge-pods.d.ts",
+      "import": "./dist/local-knowledge-pods.js"
+    },
+    "./runtime/local-knowledge-preview": {
+      "types": "./dist/local-knowledge-preview.d.ts",
+      "import": "./dist/local-knowledge-preview.js"
+    },
+    "./runtime/local-knowledge-records": {
+      "types": "./dist/local-knowledge-records.d.ts",
+      "import": "./dist/local-knowledge-records.js"
+    },
+    "./runtime/local-knowledge-retrieval-activity": {
+      "types": "./dist/local-knowledge-retrieval-activity.d.ts",
+      "import": "./dist/local-knowledge-retrieval-activity.js"
+    },
+    "./runtime/local-knowledge-schema": {
+      "types": "./dist/local-knowledge-schema.d.ts",
+      "import": "./dist/local-knowledge-schema.js"
+    },
+    "./runtime/local-knowledge-schema-validation": {
+      "types": "./dist/local-knowledge-schema-validation.d.ts",
+      "import": "./dist/local-knowledge-schema-validation.js"
+    },
+    "./runtime/local-knowledge-validation": {
+      "types": "./dist/local-knowledge-validation.d.ts",
+      "import": "./dist/local-knowledge-validation.js"
+    },
+    "./runtime/lsp-process": {
+      "types": "./dist/lsp-process.d.ts",
+      "import": "./dist/lsp-process.js"
+    },
+    "./runtime/managed-lsp-activation": {
+      "types": "./dist/managed-lsp-activation.d.ts",
+      "import": "./dist/managed-lsp-activation.js"
+    },
+    "./runtime/managed-lsp-capabilities": {
+      "types": "./dist/managed-lsp-capabilities.d.ts",
+      "import": "./dist/managed-lsp-capabilities.js"
+    },
+    "./runtime/managed-lsp-evidence": {
+      "types": "./dist/managed-lsp-evidence.d.ts",
+      "import": "./dist/managed-lsp-evidence.js"
+    },
+    "./runtime/managed-lsp-route": {
+      "types": "./dist/managed-lsp-route.d.ts",
+      "import": "./dist/managed-lsp-route.js"
+    },
+    "./runtime/managed-lsp-runtime": {
+      "types": "./dist/managed-lsp-runtime.d.ts",
+      "import": "./dist/managed-lsp-runtime.js"
+    },
+    "./runtime/memory": {
+      "types": "./dist/memory.d.ts",
+      "import": "./dist/memory.js"
+    },
+    "./runtime/memory-consolidation-wire": {
+      "types": "./dist/memory-consolidation-wire.d.ts",
+      "import": "./dist/memory-consolidation-wire.js"
+    },
+    "./runtime/memory-health-scan-wire": {
+      "types": "./dist/memory-health-scan-wire.d.ts",
+      "import": "./dist/memory-health-scan-wire.js"
+    },
+    "./runtime/memory-workflow-port": {
+      "types": "./dist/memory-workflow-port.d.ts",
+      "import": "./dist/memory-workflow-port.js"
+    },
+    "./runtime/native-file-dialog": {
+      "types": "./dist/native-file-dialog.d.ts",
+      "import": "./dist/native-file-dialog.js"
+    },
+    "./runtime/numeric": {
+      "types": "./dist/numeric.d.ts",
+      "import": "./dist/numeric.js"
+    },
+    "./runtime/observability": {
+      "types": "./dist/observability.d.ts",
+      "import": "./dist/observability.js"
+    },
+    "./runtime/prompt-enhancer": {
+      "types": "./dist/prompt-enhancer.d.ts",
+      "import": "./dist/prompt-enhancer.js"
+    },
+    "./runtime/prompt-enhancer-analyzer": {
+      "types": "./dist/prompt-enhancer-analyzer.d.ts",
+      "import": "./dist/prompt-enhancer-analyzer.js"
+    },
+    "./runtime/prompt-enhancer-bff": {
+      "types": "./dist/prompt-enhancer-bff.d.ts",
+      "import": "./dist/prompt-enhancer-bff.js"
+    },
+    "./runtime/prompt-enhancer-critic": {
+      "types": "./dist/prompt-enhancer-critic.d.ts",
+      "import": "./dist/prompt-enhancer-critic.js"
+    },
+    "./runtime/prompt-enhancer-grounding": {
+      "types": "./dist/prompt-enhancer-grounding.d.ts",
+      "import": "./dist/prompt-enhancer-grounding.js"
+    },
+    "./runtime/prompt-enhancer-ranking-fixture": {
+      "types": "./dist/prompt-enhancer-ranking-fixture.d.ts",
+      "import": "./dist/prompt-enhancer-ranking-fixture.js"
+    },
+    "./runtime/prompt-enhancer-safety": {
+      "types": "./dist/prompt-enhancer-safety.d.ts",
+      "import": "./dist/prompt-enhancer-safety.js"
+    },
+    "./runtime/prompt-enhancer-validation": {
+      "types": "./dist/prompt-enhancer-validation.d.ts",
+      "import": "./dist/prompt-enhancer-validation.js"
+    },
+    "./runtime/qualityIntelligence/bffWire": {
+      "types": "./dist/qualityIntelligence/bffWire.d.ts",
+      "import": "./dist/qualityIntelligence/bffWire.js"
+    },
+    "./runtime/qualityIntelligence/editableRevision": {
+      "types": "./dist/qualityIntelligence/editableRevision.d.ts",
+      "import": "./dist/qualityIntelligence/editableRevision.js"
+    },
+    "./runtime/qualityIntelligence/index": {
+      "types": "./dist/qualityIntelligence/index.d.ts",
+      "import": "./dist/qualityIntelligence/index.js"
+    },
+    "./runtime/relationships": {
+      "types": "./dist/relationships.d.ts",
+      "import": "./dist/relationships.js"
+    },
+    "./runtime/relationships-validation": {
+      "types": "./dist/relationships-validation.d.ts",
+      "import": "./dist/relationships-validation.js"
+    },
+    "./runtime/release-impact": {
+      "types": "./dist/release-impact.d.ts",
+      "import": "./dist/release-impact.js"
+    },
+    "./runtime/retrieval-context": {
+      "types": "./dist/retrieval-context.d.ts",
+      "import": "./dist/retrieval-context.js"
+    },
+    "./runtime/runtime-capabilities": {
+      "types": "./dist/runtime-capabilities.d.ts",
+      "import": "./dist/runtime-capabilities.js"
+    },
+    "./runtime/stable-order": {
+      "types": "./dist/stable-order.d.ts",
+      "import": "./dist/stable-order.js"
+    },
+    "./runtime/store-fingerprint": {
+      "types": "./dist/store-fingerprint.d.ts",
+      "import": "./dist/store-fingerprint.js"
+    },
+    "./runtime/task-workspace": {
+      "types": "./dist/task-workspace.d.ts",
+      "import": "./dist/task-workspace.js"
+    },
+    "./runtime/text-safety": {
+      "types": "./dist/text-safety.d.ts",
+      "import": "./dist/text-safety.js"
+    },
+    "./runtime/tools": {
+      "types": "./dist/tools.d.ts",
+      "import": "./dist/tools.js"
+    },
+    "./runtime/unit-test-events": {
+      "types": "./dist/unit-test-events.d.ts",
+      "import": "./dist/unit-test-events.js"
+    },
+    "./runtime/update-local-state": {
+      "types": "./dist/update-local-state.d.ts",
+      "import": "./dist/update-local-state.js"
+    },
+    "./runtime/update-preflight": {
+      "types": "./dist/update-preflight.d.ts",
+      "import": "./dist/update-preflight.js"
+    },
+    "./runtime/update-remediation": {
+      "types": "./dist/update-remediation.d.ts",
+      "import": "./dist/update-remediation.js"
+    },
+    "./runtime/update-session": {
+      "types": "./dist/update-session.d.ts",
+      "import": "./dist/update-session.js"
+    },
+    "./runtime/vector-index-port": {
+      "types": "./dist/vector-index-port.d.ts",
+      "import": "./dist/vector-index-port.js"
+    },
+    "./runtime/verification": {
+      "types": "./dist/verification.d.ts",
+      "import": "./dist/verification.js"
+    },
+    "./runtime/verification-summary": {
+      "types": "./dist/verification-summary.d.ts",
+      "import": "./dist/verification-summary.js"
+    },
+    "./runtime/version": {
+      "types": "./dist/version.d.ts",
+      "import": "./dist/version.js"
+    },
+    "./runtime/voice-action-intent": {
+      "types": "./dist/voice-action-intent.d.ts",
+      "import": "./dist/voice-action-intent.js"
+    },
+    "./runtime/voice-playback": {
+      "types": "./dist/voice-playback.d.ts",
+      "import": "./dist/voice-playback.js"
+    },
+    "./runtime/voice-protocol": {
+      "types": "./dist/voice-protocol.d.ts",
+      "import": "./dist/voice-protocol.js"
+    },
+    "./runtime/voice-session-recap": {
+      "types": "./dist/voice-session-recap.d.ts",
+      "import": "./dist/voice-session-recap.js"
+    },
+    "./runtime/voice-transcript": {
+      "types": "./dist/voice-transcript.d.ts",
+      "import": "./dist/voice-transcript.js"
+    },
+    "./runtime/workflow-descriptor": {
+      "types": "./dist/workflow-descriptor.d.ts",
+      "import": "./dist/workflow-descriptor.js"
+    },
+    "./runtime/workflow-handoff": {
+      "types": "./dist/workflow-handoff.d.ts",
+      "import": "./dist/workflow-handoff.js"
+    },
+    "./runtime/workspace": {
+      "types": "./dist/workspace.d.ts",
+      "import": "./dist/workspace.js"
+    },
+    "./runtime/workspace-contract-primitives": {
+      "types": "./dist/workspace-contract-primitives.d.ts",
+      "import": "./dist/workspace-contract-primitives.js"
+    },
+    "./runtime/workspace-descriptors": {
+      "types": "./dist/workspace-descriptors.d.ts",
+      "import": "./dist/workspace-descriptors.js"
+    },
+    "./runtime/workspace-manifest": {
+      "types": "./dist/workspace-manifest.d.ts",
+      "import": "./dist/workspace-manifest.js"
+    },
+    "./runtime/workspace-profile": {
+      "types": "./dist/workspace-profile.d.ts",
+      "import": "./dist/workspace-profile.js"
+    },
+    "./runtime/workspace-search": {
+      "types": "./dist/workspace-search.d.ts",
+      "import": "./dist/workspace-search.js"
+    },
+    "./runtime/workspace-trust": {
+      "types": "./dist/workspace-trust.d.ts",
+      "import": "./dist/workspace-trust.js"
+    },
+    "./runtime/workspace-ui": {
+      "types": "./dist/workspace-ui.d.ts",
+      "import": "./dist/workspace-ui.js"
     }
   },
   "scripts": {

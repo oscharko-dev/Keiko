@@ -10,11 +10,9 @@ import {
 } from "node:fs";
 import { join, relative, resolve, sep } from "node:path";
 
-import {
-  CODING_SAFE_ACTIVITY_MAX_TEXT_SEGMENT_CHARS,
-  EDITOR_AGENT_SCHEMA_VERSION,
-  type WorkspaceInfo,
-} from "@oscharko-dev/keiko-contracts";
+import type { WorkspaceInfo } from "@oscharko-dev/keiko-contracts";
+import { CODING_SAFE_ACTIVITY_MAX_TEXT_SEGMENT_CHARS } from "@oscharko-dev/keiko-contracts/runtime/coding-safe-activity";
+import { EDITOR_AGENT_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts/runtime/editor-agent";
 import type {
   GatewayConfig,
   GatewayRequest,

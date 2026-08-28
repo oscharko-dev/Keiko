@@ -9,15 +9,17 @@
 // The active root is the managed worktree path: every bound surface (editor/runtime/git-delivery/
 // terminal/files/...) operates on the task's isolated worktree, never the bare repository root.
 
+import type {
+  WorkspaceBinding,
+  WorkspaceBindingV2,
+  WorkspaceInstance,
+  WorkspaceManifest,
+} from "@oscharko-dev/keiko-contracts";
 import {
   TASK_WORKSPACE_SCHEMA_VERSION,
   TASK_WORKSPACE_SURFACES,
   WORKSPACE_BINDING_V2_SCHEMA_VERSION,
-  type WorkspaceBinding,
-  type WorkspaceBindingV2,
-  type WorkspaceInstance,
-  type WorkspaceManifest,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/task-workspace";
 
 export function buildBinding(instance: WorkspaceInstance): WorkspaceBinding;
 export function buildBinding(manifest: WorkspaceManifest, taskId: string): WorkspaceBindingV2;

@@ -19,7 +19,7 @@ import {
   REALTIME_AUTH_MODES,
   isVoiceCapability,
   modelSupportsSpeechOutput,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/gateway";
 import { outboundTargetBlockedReason } from "./egress-policy.js";
 import { projectSafeCapabilities, type SafeModelCapability } from "./model-selection.js";
 import type {

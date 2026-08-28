@@ -30,7 +30,7 @@ afterEach(() => {
 async function loadPinnedEnv(platform: NodeJS.Platform): Promise<Readonly<Record<string, string>>> {
   vi.resetModules();
   setPlatform(platform);
-  const contracts = await import("@oscharko-dev/keiko-contracts");
+  const contracts = await import("@oscharko-dev/keiko-contracts/runtime/tools");
   return contracts.GOVERNED_GIT_REMOTE_PINNED_ENV;
 }
 

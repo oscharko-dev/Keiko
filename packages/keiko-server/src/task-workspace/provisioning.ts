@@ -20,15 +20,17 @@ import { join } from "node:path";
 import { detectWorkspaceAt } from "@oscharko-dev/keiko-workspace";
 import { isSafeGitRefName } from "@oscharko-dev/keiko-tools/internal/git-mutation";
 import type { GitWorktreeAdapter } from "@oscharko-dev/keiko-tools/internal/git-mutation";
+import type {
+  TaskWorkspaceLifecycleState,
+  WorkspaceEventType,
+  WorkspaceInfo,
+  WorkspaceInstance,
+  WorkspaceLock,
+} from "@oscharko-dev/keiko-contracts";
 import {
   TASK_WORKSPACE_SCHEMA_VERSION,
   validateTaskWorkspaceTransition,
-  type TaskWorkspaceLifecycleState,
-  type WorkspaceEventType,
-  type WorkspaceInfo,
-  type WorkspaceInstance,
-  type WorkspaceLock,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/task-workspace";
 import { buildBinding } from "./binding.js";
 import { assertSafeFieldValue, containsUnsafeFieldChars } from "./field-safety.js";
 import { lockIsLive, makeWorkspaceLock, resolveLockTtl } from "./locks.js";

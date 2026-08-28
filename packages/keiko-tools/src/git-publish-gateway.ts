@@ -35,10 +35,12 @@ import type {
 import {
   evaluateGitDeliveryEffectivePolicy,
   evaluateGitPolicy,
-  GIT_DELIVERY_SCHEMA_VERSION,
   gitDeliveryPolicyTargetBranchName,
+} from "@oscharko-dev/keiko-contracts/runtime/git-delivery-policy";
+import {
+  GIT_DELIVERY_SCHEMA_VERSION,
   gitDeliveryRiskClassForInputs,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/git-delivery";
 import { classifyGitRemoteFailure } from "@oscharko-dev/keiko-git";
 import type { GitWorktreeSnapshot } from "./git-mutation-preflight.js";
 import { evaluateGitPreflight } from "./git-mutation-preflight.js";

@@ -7,11 +7,11 @@
 // of the bounded, content-free templates the contract defines, so the block can never leak user
 // or assistant text, credentials, or provider URLs.
 
+import type { DiscussionMode } from "@oscharko-dev/keiko-contracts";
 import {
   DISCUSSION_DIRECTIVE_TEMPLATES,
   DISCUSSION_MODE_PLANS,
-  type DiscussionMode,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/discussion-intelligence";
 
 // Fixed label that opens the directive block. Exported so the prompt composer and the test suite
 // can assert the block boundary directly (mirrors the CONVERSATION_*_BLOCK_HEADER constants).

@@ -6,7 +6,7 @@
 // is injected as an abstract `generate` port so this module stays free of provider SDKs and the
 // server tier owns the gateway wiring (ADR-0023 D5/D6).
 
-import { QualityIntelligence as QI } from "@oscharko-dev/keiko-contracts";
+import * as QI from "@oscharko-dev/keiko-contracts/runtime/qualityIntelligence/index";
 import {
   buildAtomCoverageStatuses,
   buildCoverageMap,

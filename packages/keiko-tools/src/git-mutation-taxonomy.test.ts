@@ -1,10 +1,12 @@
 import { describe, expect, it } from "vitest";
+import type {
+  GitDeliveryExecutionErrorCode,
+  GitDeliveryExecutionResult,
+} from "@oscharko-dev/keiko-contracts";
 import {
   GIT_DELIVERY_EXECUTION_ERROR_CODES,
   GIT_DELIVERY_SCHEMA_VERSION,
-  type GitDeliveryExecutionErrorCode,
-  type GitDeliveryExecutionResult,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/git-delivery";
 import {
   GIT_MUTATION_FAILURE_CATEGORIES,
   GIT_MUTATION_LIFECYCLE_PHASES,

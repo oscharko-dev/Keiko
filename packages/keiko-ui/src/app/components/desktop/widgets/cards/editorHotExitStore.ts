@@ -1,11 +1,13 @@
+import type {
+  EditorHotExitIndexRecordV2,
+  EditorHotExitSnapshotV1,
+} from "@oscharko-dev/keiko-contracts";
 import {
   EDITOR_HOT_EXIT_INDEX_SCHEMA_VERSION,
   EDITOR_HOT_EXIT_SCHEMA_VERSION,
   EDITOR_HOT_EXIT_TTL_MS,
   isEditorHotExitIndexRecordV2,
-  type EditorHotExitIndexRecordV2,
-  type EditorHotExitSnapshotV1,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/editor-hot-exit";
 import {
   deleteEditorHotExitContent,
   readEditorHotExitContent,

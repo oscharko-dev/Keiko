@@ -6,12 +6,12 @@
 // `keiko-memory-*` package and `keiko-model-gateway` at once (ADR-0120 D2), so this call cannot
 // live inside the consolidation engine or the governance package.
 
+import type { ResponseFormat } from "@oscharko-dev/keiko-contracts";
 import {
   containsPseudoRoleMarker,
   redactAbsolutePaths,
   stripUnsafeFormatChars,
-  type ResponseFormat,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/text-safety";
 import type { MemoryId, MemoryRecord } from "@oscharko-dev/keiko-contracts/memory";
 import {
   memoryTextEgressRejectionReason,

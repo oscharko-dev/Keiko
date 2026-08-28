@@ -14,10 +14,8 @@
 // Determinism: pure. Rationales are harness-authored and content-free (counts, closed-vocabulary
 // labels, numbers) — they never echo committed text or any raw transcript content.
 
-import {
-  spokenActionRequiresConfirmation,
-  type SpokenActionAuditRecord,
-} from "@oscharko-dev/keiko-contracts";
+import type { SpokenActionAuditRecord } from "@oscharko-dev/keiko-contracts";
+import { spokenActionRequiresConfirmation } from "@oscharko-dev/keiko-contracts/runtime/voice-action-intent";
 import {
   VOICE_ACTION_DIMENSIONS,
   type VoiceActionDimension,

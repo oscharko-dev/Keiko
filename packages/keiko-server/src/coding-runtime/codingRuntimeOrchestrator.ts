@@ -1,7 +1,21 @@
 /** Server-owned, single-slot lifecycle coordinator for the Coding Workbench (issue #2256). */
 import { createHash, randomUUID } from "node:crypto";
+import type {
+  CodingWorkbenchMode,
+  CodingWorkbenchRuntimeApprovalDecisionRequest,
+  CodingWorkbenchRuntimeEvent,
+  CodingWorkbenchRuntimePendingApprovalReview,
+  CodingWorkbenchRuntimePendingPermission,
+  CodingWorkbenchRuntimeFailureCode,
+  CodingWorkbenchRuntimePendingResearch,
+  CodingWorkbenchRuntimeResearchGrant,
+  CodingWorkbenchRuntimeResult,
+  CodingWorkbenchRuntimeStartRequest,
+  CodingWorkbenchRuntimeSnapshot as PublicSnapshot,
+  CodingWorkbenchRuntimeStateName,
+} from "@oscharko-dev/keiko-contracts";
+import { isLegalCodingWorkbenchRuntimeTransition } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime";
 import {
-  isLegalCodingWorkbenchRuntimeTransition,
   parseCodingWorkbenchRuntimeRecoveryAcknowledgementRequest,
   parseCodingWorkbenchRuntimeResumeRequest,
   parseCodingWorkbenchRuntimeApprovalDecisionRequest,
@@ -9,19 +23,7 @@ import {
   parseCodingWorkbenchRuntimeStartRequest,
   parseCodingWorkbenchRuntimeStopRequest,
   parseCodingWorkbenchRuntimeTakeoverRequest,
-  type CodingWorkbenchMode,
-  type CodingWorkbenchRuntimeApprovalDecisionRequest,
-  type CodingWorkbenchRuntimeEvent,
-  type CodingWorkbenchRuntimePendingApprovalReview,
-  type CodingWorkbenchRuntimePendingPermission,
-  type CodingWorkbenchRuntimeFailureCode,
-  type CodingWorkbenchRuntimePendingResearch,
-  type CodingWorkbenchRuntimeResearchGrant,
-  type CodingWorkbenchRuntimeResult,
-  type CodingWorkbenchRuntimeStartRequest,
-  type CodingWorkbenchRuntimeSnapshot as PublicSnapshot,
-  type CodingWorkbenchRuntimeStateName,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime-api";
 import type {
   CodingRuntimeApprovalIssueResult,
   CodingRuntimeFailureCode,

@@ -193,11 +193,12 @@ export interface ContextProvenanceRef {
   readonly notPersistedReason?: string | undefined;
 }
 
-// ─── Preserved fact (durable, authoritative) ──────────────────────────────── [PR2, additive]
+// ─── Preserved fact (durable, verbatim or explicitly inferred) ─────────────── [PR2, additive]
 // Structurally DISTINCT from ContextAssumption — no shared base type. A ContextPreservedFact
 // carries statement + (sourceRef and/or inferred) + optional corroborating; it has NO rationale
-// and NO confidence, so a ContextAssumption is not assignable here and vice versa. This is the
-// load-bearing anti-poisoning rule: structural separation, NOT a flag on a common type.
+// and NO confidence, so a ContextAssumption is not assignable here and vice versa. The inferred
+// marker is provenance, not an assumption: consumers MUST partition it before a fact-labeled
+// projection so an inferred entry cannot be presented as a verbatim pinned fact.
 // REFINEMENT 1 over ADR-0053 D1: sourceRef is OPTIONAL but the validator REQUIRES sourceRef OR
 // inferred===true — an unsourced, non-inferred "fact" is rejected. Every factual claim points to
 // a source OR is explicitly marked an inference. ADR-0053 D1 note updated to match.
@@ -215,6 +216,28 @@ export interface ContextPreservedFact {
   // zero-runtime — valid facts simply never set these. This is the compile-time anti-poisoning gate.
   readonly rationale?: never;
   readonly confidence?: never;
+}
+
+// The shared owner for every fact-labeled compaction projection. The partition is deliberately
+// immutable and does not reinterpret a false or absent marker: only inferred===true is inferred.
+export interface ContextPreservedFactPartition {
+  readonly verbatim: readonly ContextPreservedFact[];
+  readonly inferred: readonly ContextPreservedFact[];
+}
+
+export function partitionContextPreservedFacts(
+  facts: readonly ContextPreservedFact[] | undefined,
+): ContextPreservedFactPartition {
+  const verbatim: ContextPreservedFact[] = [];
+  const inferred: ContextPreservedFact[] = [];
+  for (const fact of facts ?? []) {
+    if (fact.inferred === true) {
+      inferred.push(fact);
+    } else {
+      verbatim.push(fact);
+    }
+  }
+  return { verbatim, inferred };
 }
 
 // ─── Assumption (uncertain, model-derived) ────────────────────────────────── [PR2, additive]

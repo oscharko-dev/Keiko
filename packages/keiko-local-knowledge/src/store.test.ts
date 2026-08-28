@@ -18,7 +18,7 @@ import {
   KNOWLEDGE_CAPSULE_MIGRATIONS,
   KNOWLEDGE_CAPSULE_TABLES,
   LOCAL_KNOWLEDGE_DB_SCHEMA_VERSION,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/local-knowledge-schema";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { KnowledgeStoreError } from "./errors.js";

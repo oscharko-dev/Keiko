@@ -13,19 +13,21 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Readable } from "node:stream";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import type {
+  CodingWorkbenchAuthorityEnvelope,
+  EditorAgentAction,
+  EditorAgentRootBinding,
+  EditorAgentSessionSnapshot,
+  WorkspaceManifest,
+  WorkspaceRootDispatch,
+} from "@oscharko-dev/keiko-contracts";
 import {
   CODING_WORKBENCH_ACTION_CLASSES,
   CODING_WORKBENCH_SCHEMA_VERSION,
-  EDITOR_AGENT_SCHEMA_VERSION,
   resolveEffectiveCodingWorkbenchMode,
-  validateCodingWorkbenchAuthorityEnvelope,
-  type CodingWorkbenchAuthorityEnvelope,
-  type EditorAgentAction,
-  type EditorAgentRootBinding,
-  type EditorAgentSessionSnapshot,
-  type WorkspaceManifest,
-  type WorkspaceRootDispatch,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/coding-workbench";
+import { EDITOR_AGENT_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts/runtime/editor-agent";
+import { validateCodingWorkbenchAuthorityEnvelope } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-validation";
 import type { RouteContext } from "../routes.js";
 import type { UiHandlerDeps } from "../deps.js";
 import { createInMemoryUiStore, type UiStore } from "../store/index.js";

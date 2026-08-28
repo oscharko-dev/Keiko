@@ -19,14 +19,16 @@ import {
   type RealtimeNegotiationRequest,
   type VoiceCapabilityResolution,
 } from "@oscharko-dev/keiko-model-gateway";
+import type {
+  VoiceControlMessage,
+  VoiceProtocolErrorCode,
+  VoiceSessionCreateMessage,
+} from "@oscharko-dev/keiko-contracts";
 import {
   VOICE_PROFILE_NEGOTIATION_MODE,
   VOICE_PROTOCOL_VERSION,
   validateVoiceControlMessage,
-  type VoiceControlMessage,
-  type VoiceProtocolErrorCode,
-  type VoiceSessionCreateMessage,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/voice-protocol";
 import { isAllowedHost } from "./host-check.js";
 import { resolveCorrelationId } from "./correlation.js";
 import { currentGatewayConfig, currentGatewayEgressConfig, type UiHandlerDeps } from "./deps.js";

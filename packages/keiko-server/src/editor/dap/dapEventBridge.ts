@@ -1,8 +1,8 @@
+import type { DebugEvent } from "@oscharko-dev/keiko-contracts";
 import {
   DAP_DEBUG_CONTRACT_SCHEMA_VERSION,
   DEFAULT_DEBUG_PAYLOAD_LIMITS,
-  type DebugEvent,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/dap-debug";
 
 const DEBUG_EVENT_REPLAY_ENTRY_CAP = 2_000;
 export const DEBUG_EVENT_REPLAY_BYTE_CAP = 512 * 1_024;

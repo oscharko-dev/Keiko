@@ -27,7 +27,7 @@ import { runRepairCli } from "@oscharko-dev/keiko-cli";
 import {
   isAtlassianConnectorProvider,
   isSafeAtlassianDisplayName,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import { sealString } from "@oscharko-dev/keiko-security";
 
 import {

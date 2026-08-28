@@ -5,12 +5,12 @@
 
 import { describe, expect, it } from "vitest";
 
-import {
-  CONTEXT_ENGINEERING_SCHEMA_VERSION,
-  type ContextProvenanceRef,
-  type ContextRehydrationHandle,
-  type ContextToolRehydrationHandle,
+import type {
+  ContextProvenanceRef,
+  ContextRehydrationHandle,
+  ContextToolRehydrationHandle,
 } from "@oscharko-dev/keiko-contracts";
+import { CONTEXT_ENGINEERING_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts/runtime/context-engineering";
 import {
   hashExcerptContent,
   type SearchScope,

@@ -31,19 +31,21 @@
 // proofs untouched, the same runtime-mechanics posture as #498 / #499 / #500 / #502.
 
 import type { VoiceProfile } from "@/lib/types";
+import type {
+  SpokenActionEffectClass,
+  SpokenActionProposal,
+  SpokenActionState,
+  VoiceTranscriptSegment,
+  VoiceTranscriptSource,
+} from "@oscharko-dev/keiko-contracts";
 import {
-  type SpokenActionEffectClass,
-  type SpokenActionProposal,
-  type SpokenActionState,
-  type VoiceTranscriptSegment,
-  type VoiceTranscriptSource,
   canTransitionSpokenAction,
   canonicalizeSpokenActionConfirmation,
   isTerminalSpokenActionState,
   normalizeSpokenActionProposal,
-  selectCommittedVoiceTranscript,
   voiceCanProposeAction,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/voice-action-intent";
+import { selectCommittedVoiceTranscript } from "@oscharko-dev/keiko-contracts/runtime/voice-transcript";
 import type { VoiceTurnSnapshot } from "./voice-turn-manager";
 
 // ─── Content-free observer (mirrors the #499 / #500 / #502 observers) ─────────────

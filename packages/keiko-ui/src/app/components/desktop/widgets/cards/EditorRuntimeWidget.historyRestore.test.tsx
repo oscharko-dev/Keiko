@@ -14,13 +14,20 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import type { ReactElement } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type {
+  EditorM11SettingsSnapshot,
+  EditorLocalHistoryEntry,
+} from "@oscharko-dev/keiko-contracts";
 import {
   EDITOR_LOCAL_HISTORY_ENCRYPTION,
   EDITOR_LOCAL_HISTORY_SCHEMA_VERSION,
+} from "@oscharko-dev/keiko-contracts/runtime/editor-local-history";
+import {
   EDITOR_M7_SCHEMA_VERSION,
   EDITOR_M7_SETTING_REGISTRY,
-  resolveEditorM11Settings,
-  type EditorM11SettingsSnapshot,
+} from "@oscharko-dev/keiko-contracts/runtime/editor-m7";
+import { resolveEditorM11Settings } from "@oscharko-dev/keiko-contracts/runtime/editor-m11-settings";
+import {
   isWorkspaceContentDigest,
   isWorkspaceHistoryEntryRef,
   isWorkspaceIsoInstant,
@@ -28,8 +35,7 @@ import {
   isWorkspaceRootIdentityDigest,
   isWorkspaceRootRef,
   isWorkspaceVaultEntryRef,
-  type EditorLocalHistoryEntry,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/workspace-contract-primitives";
 import type { FilesContentResponse, LanguageServiceCapabilities } from "../../../../../lib/types";
 import {
   ApiError,

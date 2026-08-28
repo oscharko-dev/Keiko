@@ -1,18 +1,20 @@
 import { describe, expect, it } from "vitest";
+import type {
+  ClarificationOrAssumption,
+  GroundingNeedKind,
+  PromptEnhancementProfileId,
+  PromptTaskClass,
+  RawPromptInput,
+} from "@oscharko-dev/keiko-contracts";
+import { analyzePrompt } from "@oscharko-dev/keiko-contracts/runtime/prompt-enhancer-analyzer";
 import {
-  analyzePrompt,
   asPromptEnhancementRequestId,
   GROUNDING_NEED_KINDS,
   PROMPT_ENHANCEMENT_PROFILE_IDS,
   PROMPT_ENHANCER_SCHEMA_VERSION,
   PROMPT_TASK_CLASSES,
-  validateEnhancedPrompt,
-  type ClarificationOrAssumption,
-  type GroundingNeedKind,
-  type PromptEnhancementProfileId,
-  type PromptTaskClass,
-  type RawPromptInput,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/prompt-enhancer";
+import { validateEnhancedPrompt } from "@oscharko-dev/keiko-contracts/runtime/prompt-enhancer-validation";
 import { planPromptEnhancement } from "../planner.js";
 import { GENERATED_INPUT_MAX_CHARS, generateEnhancedPrompt } from "../generator.js";
 import { makeAnalysis, testPromptId } from "./_support.js";

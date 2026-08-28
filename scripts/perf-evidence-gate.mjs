@@ -30,12 +30,57 @@ import {
   toolchainTouchedAgainst,
 } from "./check-perf-evidence.mjs";
 import { isMainModule } from "./lib/is-main-module.mjs";
+import { computeWorkspacePerformanceMeasurementToolchainDigest } from "./workspace-performance-measurement-toolchain.mjs";
+import { evaluateWorkspaceEvidenceFreshness } from "./workspace-performance-evidence-gate.mjs";
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const WORKSPACE_EVIDENCE = join(repoRoot, "docs", "release", "1580-workspace-perf-evidence.json");
 const EDITOR_EVIDENCE = join(repoRoot, "docs", "release", "1209-perf-evidence.json");
+// The CI producer intentionally selects Chromium, which emits the representative workspace run
+// and the mixed-heavy-window run. WebKit is a local functional aid, not comparable timing evidence
+// on the headless CI renderer. The judge owns this document-shape policy, rather than the
+// measurement helper, so changing it cannot invalidate measured timings.
+const REQUIRED_WORKSPACE_EVIDENCE_RUNS = Object.freeze(["chromium", "chromium-mixed-windows"]);
 export const D12_PINNED_BASELINE_SOURCE_TREE_SHA256 =
   "0dd8c879889c3449157e6527c651f30b6481422a0ade0bfed36e354ec5ba1664";
+
+function compareRunNames(left, right) {
+  return left.localeCompare(right);
+}
+
+function workspaceRuns(evidence) {
+  if (typeof evidence !== "object" || evidence === null) return undefined;
+  const runs = evidence.runs;
+  if (typeof runs !== "object" || runs === null || Array.isArray(runs)) return undefined;
+  return runs;
+}
+
+function workspaceRunIdentityFailures(runs) {
+  const failures = [];
+  for (const name of REQUIRED_WORKSPACE_EVIDENCE_RUNS) {
+    const run = runs[name];
+    if (typeof run !== "object" || run === null || run.project !== name) {
+      failures.push(`workspace evidence run ${name} is missing its matching project identity`);
+    }
+  }
+  return failures;
+}
+
+export function evaluateWorkspaceEvidenceDocument(evidence) {
+  const evaluated = evaluateWorkspaceEvidence(evidence);
+  const runs = workspaceRuns(evidence);
+  if (runs === undefined) return evaluated;
+  const actual = Object.keys(runs).sort(compareRunNames);
+  const expected = [...REQUIRED_WORKSPACE_EVIDENCE_RUNS].sort(compareRunNames);
+  const failures = [...evaluated.failures];
+  if (actual.join("\0") !== expected.join("\0")) {
+    failures.push(
+      `workspace evidence runs ${actual.join(", ") || "(none)"} != required ${expected.join(", ")}`,
+    );
+  }
+  failures.push(...workspaceRunIdentityFailures(runs));
+  return { passed: failures.length === 0, failures };
+}
 
 export function readEvidence(path) {
   if (!existsSync(path)) return { error: `missing evidence file: ${path}` };
@@ -56,12 +101,27 @@ export function readEvidence(path) {
 
 function selectGateTargets(targetName) {
   const allTargets = [
-    { name: "workspace", path: WORKSPACE_EVIDENCE, evaluate: evaluateWorkspaceEvidence },
+    {
+      name: "workspace",
+      path: WORKSPACE_EVIDENCE,
+      evaluate: evaluateWorkspaceEvidenceDocument,
+      evaluateFreshness: evaluateWorkspaceEvidenceFreshness,
+      freshnessOptions: (options) => ({
+        ...options,
+        computeMeasurementHarnessSha256: defaultComputeWorkspaceMeasurementHarnessSha256,
+      }),
+    },
     { name: "editor", path: EDITOR_EVIDENCE, evaluate: evaluateEditorEvidence },
   ];
   return targetName === "all"
     ? allTargets
     : allTargets.filter((target) => target.name === targetName);
+}
+
+function defaultComputeWorkspaceMeasurementHarnessSha256() {
+  return computeWorkspacePerformanceMeasurementToolchainDigest((path) =>
+    readFileSync(join(repoRoot, path)),
+  );
 }
 
 const SUBJECT_DRIFT_NOTE =
@@ -109,8 +169,9 @@ export function evaluateGateTarget(
   const failures = target
     .evaluate(evidence)
     .failures.map((failure) => `${target.name} budget: ${failure}`);
+  const options = target.freshnessOptions?.(freshnessOptions) ?? freshnessOptions;
   const freshness = partitionFreshnessFindings(
-    evaluateFreshness(evidence, freshnessOptions).failures,
+    (target.evaluateFreshness ?? evaluateFreshness)(evidence, options).failures,
     reportSubjectDrift,
   );
   failures.push(...freshness.failures.map((failure) => `${target.name} freshness: ${failure}`));
@@ -178,7 +239,7 @@ export function runGate(
 }
 
 const USAGE =
-  "usage: perf-evidence-gate.mjs [--print-source-tree-sha256 | --target editor] " +
+  "usage: perf-evidence-gate.mjs [--print-source-tree-sha256 | --target editor|workspace] " +
   "[--enforce-source-freshness [--report-subject-drift]]";
 
 const CLI_FLAGS = new Set(["--enforce-source-freshness", "--report-subject-drift"]);
@@ -208,9 +269,9 @@ export function parseCliArgs(cliArgs) {
 
 function selectedTarget(positional) {
   if (positional.length === 0) return "all";
-  const isEditor =
-    positional.length === 2 && positional[0] === "--target" && positional[1] === "editor";
-  return isEditor ? "editor" : undefined;
+  if (positional.length !== 2 || positional[0] !== "--target") return undefined;
+  const target = positional[1];
+  return target === "editor" || target === "workspace" ? target : undefined;
 }
 
 export function executePerfEvidenceCli(cliArgs = process.argv.slice(2), io = {}) {

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { MODEL_REASONING_EFFORTS } from "@oscharko-dev/keiko-contracts";
+import { MODEL_REASONING_EFFORTS } from "@oscharko-dev/keiko-contracts/runtime/gateway";
 import {
   createInMemoryRuntimeCapabilityStore,
   type RuntimeCapabilityBinding,

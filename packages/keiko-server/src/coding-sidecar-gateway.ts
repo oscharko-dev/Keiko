@@ -10,16 +10,18 @@ import {
   type NormalizedResponse,
   type ToolDefinition,
 } from "@oscharko-dev/keiko-model-gateway";
+import type {
+  CodingWorkbenchModelSource,
+  CodingWorkbenchSidecarGatewayRunMetadata,
+  CodingWorkbenchSidecarGatewayResult,
+  CodingWorkbenchSidecarGatewayUnavailableReason,
+  ModelReasoningEffort,
+} from "@oscharko-dev/keiko-contracts";
+import { estimateTokensForSegments } from "@oscharko-dev/keiko-contracts/runtime/context-engineering";
 import {
-  estimateTokensForSegments,
   MODEL_REASONING_EFFORTS,
   validateGatewaySamplingParameters,
-  type CodingWorkbenchModelSource,
-  type CodingWorkbenchSidecarGatewayRunMetadata,
-  type CodingWorkbenchSidecarGatewayResult,
-  type CodingWorkbenchSidecarGatewayUnavailableReason,
-  type ModelReasoningEffort,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/gateway";
 import {
   currentGateway,
   currentGatewayConfig,

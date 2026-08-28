@@ -15,7 +15,7 @@ import type {
   QualityIntelligenceUiRetentionNotice,
   QualityIntelligenceUiRunSummary,
 } from "@oscharko-dev/keiko-contracts";
-import { isQualityIntelligenceRetentionPolicyId } from "@oscharko-dev/keiko-contracts";
+import { isQualityIntelligenceRetentionPolicyId } from "@oscharko-dev/keiko-contracts/runtime/qualityIntelligence/index";
 import { useQiTranslate as useTranslate, type I18nTranslate } from "./qi-i18n";
 import { deleteQiRun, fetchQiRuns } from "@/lib/quality-intelligence-api";
 import { RunLauncher } from "./RunLauncher";

@@ -2,11 +2,9 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 
 import { expect, test, type APIRequestContext, type Locator, type Page } from "@playwright/test";
-import {
-  encodeCodingAppSessionPairingFragment,
-  validateWorkspaceManifest,
-  type WorkspaceManifest,
-} from "@oscharko-dev/keiko-contracts";
+import type { WorkspaceManifest } from "@oscharko-dev/keiko-contracts";
+import { encodeCodingAppSessionPairingFragment } from "@oscharko-dev/keiko-contracts/runtime/coding-app-session";
+import { validateWorkspaceManifest } from "@oscharko-dev/keiko-contracts/runtime/workspace-manifest";
 import { mintLauncherPairingAttestation } from "@oscharko-dev/keiko-server";
 
 import { formatViolations, runAxe, seriousOrCritical } from "./support/axe.js";

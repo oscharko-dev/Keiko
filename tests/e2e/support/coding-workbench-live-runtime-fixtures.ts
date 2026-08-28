@@ -1,19 +1,23 @@
 import { expect, type Route } from "@playwright/test";
+import type {
+  CodingWorkbenchCodexAuthMethod,
+  CodingWorkbenchCodexAuthSetupPlan,
+  CodingWorkbenchCodexSubscriptionProfile,
+  CodingWorkbenchRuntimeSnapshot,
+  CodingWorkbenchRuntimeSseEvent,
+  CodingWorkbenchRuntimeStateName,
+  CodingWorkbenchSidecarGatewayResult,
+  WorkspaceBinding,
+  WorkspaceInstance,
+} from "@oscharko-dev/keiko-contracts";
 import {
   validateCodingWorkbenchCodexAuthSetupPlan,
   validateCodingWorkbenchCodexSubscriptionProfile,
+} from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-codex-auth";
+import {
   validateCodingWorkbenchRuntimeSnapshot,
   validateCodingWorkbenchRuntimeSseEvent,
-  type CodingWorkbenchCodexAuthMethod,
-  type CodingWorkbenchCodexAuthSetupPlan,
-  type CodingWorkbenchCodexSubscriptionProfile,
-  type CodingWorkbenchRuntimeSnapshot,
-  type CodingWorkbenchRuntimeSseEvent,
-  type CodingWorkbenchRuntimeStateName,
-  type CodingWorkbenchSidecarGatewayResult,
-  type WorkspaceBinding,
-  type WorkspaceInstance,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime-api";
 import type { LiveRuntimeFixtureOptions } from "./coding-workbench-live-runtime.js";
 
 export type FixtureAuthStatus = Extract<

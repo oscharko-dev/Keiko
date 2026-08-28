@@ -19,18 +19,20 @@
 
 import { randomUUID } from "node:crypto";
 
+import type {
+  CapsuleSet,
+  CapsuleSetId,
+  KnowledgeCapsule,
+  KnowledgeCapsuleId,
+  KnowledgeSource,
+  KnowledgeSourceId,
+  KnowledgeSourceScopeKind,
+} from "@oscharko-dev/keiko-contracts";
 import {
   compareEmbeddingProfiles,
   embeddingProfileFromModelIdentity,
-  validateKnowledgeSourceScope,
-  type CapsuleSet,
-  type CapsuleSetId,
-  type KnowledgeCapsule,
-  type KnowledgeCapsuleId,
-  type KnowledgeSource,
-  type KnowledgeSourceId,
-  type KnowledgeSourceScopeKind,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/local-knowledge-embedding-profiles";
+import { validateKnowledgeSourceScope } from "@oscharko-dev/keiko-contracts/runtime/local-knowledge-validation";
 
 import { getCapsule } from "./capsule-lifecycle.js";
 import { assertSafeDisplayField, assertSafeOptionalDisplayField } from "./display-validation.js";

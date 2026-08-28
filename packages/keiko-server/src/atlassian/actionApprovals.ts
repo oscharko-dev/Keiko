@@ -16,14 +16,16 @@
 // both axes: a hard cap on simultaneously-pending entries and the TTL after which an unresolved
 // entry is dropped.
 
+import type {
+  AtlassianConnectorPendingApproval,
+  JiraLiveSearchRequest,
+  KnowledgeCapsuleId,
+} from "@oscharko-dev/keiko-contracts";
 import {
   ATLASSIAN_APPROVAL_CONTENT_PREVIEW_MAX_CHARS,
   isAtlassianContentPreviewUnpresentable,
-  stripUnsafeFormatChars,
-  type AtlassianConnectorPendingApproval,
-  type JiraLiveSearchRequest,
-  type KnowledgeCapsuleId,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
+import { stripUnsafeFormatChars } from "@oscharko-dev/keiko-contracts/runtime/text-safety";
 import type { UiHandlerDeps } from "../deps.js";
 import type { AtlassianActionAuthorityContext } from "./actionPolicy.js";
 

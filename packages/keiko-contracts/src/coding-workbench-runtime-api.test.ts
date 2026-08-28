@@ -17,7 +17,7 @@ import {
   validateCodingWorkbenchRuntimeReadiness,
   validateCodingWorkbenchRuntimeSseEvent,
   validateCodingWorkbenchRuntimeStatus,
-} from "./index.js";
+} from "./coding-workbench-runtime-api.js";
 
 const AT = "2026-07-13T12:00:00.000Z";
 

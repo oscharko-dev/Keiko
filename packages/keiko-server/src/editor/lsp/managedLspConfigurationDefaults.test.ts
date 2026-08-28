@@ -1,9 +1,7 @@
 import { describe, expect, it } from "vitest";
 
-import {
-  MANAGED_LSP_LANGUAGES,
-  parseManagedLspRuntimeConfiguration,
-} from "@oscharko-dev/keiko-contracts";
+import { MANAGED_LSP_LANGUAGES } from "@oscharko-dev/keiko-contracts/runtime/managed-lsp-activation";
+import { parseManagedLspRuntimeConfiguration } from "@oscharko-dev/keiko-contracts/runtime/managed-lsp-runtime";
 
 import { managedLspConfigurationDefaults } from "./managedLspConfigurationDefaults.js";
 

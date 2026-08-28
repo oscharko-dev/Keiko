@@ -16,13 +16,10 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { WorkspaceFs, WorkspaceStat } from "@oscharko-dev/keiko-workspace";
-import {
-  ATLASSIAN_CONNECTOR_SCHEMA_VERSION,
-  DEFAULT_CONTEXT_PROFILE,
-  standardPodModelUsePolicy,
-  type KnowledgeCapsuleId,
-  type KnowledgeSourceId,
-} from "@oscharko-dev/keiko-contracts";
+import type { KnowledgeCapsuleId, KnowledgeSourceId } from "@oscharko-dev/keiko-contracts";
+import { ATLASSIAN_CONNECTOR_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
+import { DEFAULT_CONTEXT_PROFILE } from "@oscharko-dev/keiko-contracts/runtime/context-engineering";
+import { standardPodModelUsePolicy } from "@oscharko-dev/keiko-contracts/runtime/local-knowledge-model-use-policy";
 import { resolveAtlassianActionApprovalRegistry } from "./atlassian/actionApprovals.js";
 import { resolveAtlassianSyncJobRegistry } from "./atlassian/syncService.js";
 import {
@@ -58,11 +55,11 @@ import {
   type ServerDiagnosticSink,
 } from "./diagnostics-log.js";
 import type { WorkspaceReconciliationService } from "./task-workspace/types.js";
-import {
-  TASK_WORKSPACE_SCHEMA_VERSION,
-  type WorkspaceInstance,
-  type WorkspaceReconciliationReport,
+import type {
+  WorkspaceInstance,
+  WorkspaceReconciliationReport,
 } from "@oscharko-dev/keiko-contracts";
+import { TASK_WORKSPACE_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts/runtime/task-workspace";
 import { parseGatewayConfig } from "@oscharko-dev/keiko-model-gateway";
 import { createInMemoryUiStore, type UiStore } from "./store/index.js";
 import { DatabaseSync } from "node:sqlite";

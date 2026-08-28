@@ -5,7 +5,8 @@ import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { IncomingMessage } from "node:http";
 import { createDefaultChatCapability, type GatewayConfig } from "@oscharko-dev/keiko-model-gateway";
-import { maxUtf8BytesForTokenBudget, UNVERIFIED_GATEWAY } from "@oscharko-dev/keiko-contracts";
+import { maxUtf8BytesForTokenBudget } from "@oscharko-dev/keiko-contracts/runtime/context-engineering";
+import { UNVERIFIED_GATEWAY } from "@oscharko-dev/keiko-contracts/runtime/gateway-verification";
 import { buildRedactor, createRunRegistry, type UiHandlerDeps } from "./index.js";
 import { createInMemoryUiStore } from "./store/index.js";
 import {

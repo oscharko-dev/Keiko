@@ -8,7 +8,7 @@ import {
   activeEditorPane,
   createEditorLayoutStateV2,
   serializeEditorLayoutStateV2,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/editor-layout";
 import {
   MAX_SCOPES,
   appendConnectorScope,

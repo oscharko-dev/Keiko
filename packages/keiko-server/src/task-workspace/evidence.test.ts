@@ -3,7 +3,7 @@
 // and an evidence-store failure is swallowed (best-effort).
 
 import { describe, expect, it } from "vitest";
-import { validateWorkspaceEvent } from "@oscharko-dev/keiko-contracts";
+import { validateWorkspaceEvent } from "@oscharko-dev/keiko-contracts/runtime/task-workspace";
 import type { EvidenceStore } from "@oscharko-dev/keiko-evidence";
 import {
   appendWorkspaceLifecycleEvidence,

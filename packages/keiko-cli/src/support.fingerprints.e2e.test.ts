@@ -24,12 +24,12 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import {
-  isStoreFingerprint,
-  type EmbeddingModelIdentity,
-  type KnowledgeCapsuleId,
-  type StoreFingerprint,
+import type {
+  EmbeddingModelIdentity,
+  KnowledgeCapsuleId,
+  StoreFingerprint,
 } from "@oscharko-dev/keiko-contracts";
+import { isStoreFingerprint } from "@oscharko-dev/keiko-contracts/runtime/store-fingerprint";
 import type { MemoryId, UserId } from "@oscharko-dev/keiko-contracts/memory";
 import { createMemoryVault, MEMORY_DB_FILENAME } from "@oscharko-dev/keiko-memory-vault";
 import {

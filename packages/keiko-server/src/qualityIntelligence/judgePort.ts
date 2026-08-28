@@ -31,7 +31,7 @@ import type {
 import {
   TEST_QUALITY_JUDGE_RESPONSE_SCHEMA,
   TEST_QUALITY_RUBRIC_DIMENSIONS,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/qualityIntelligence/index";
 import type { UiHandlerDeps } from "../deps.js";
 import { currentGatewayConfig } from "../deps.js";
 

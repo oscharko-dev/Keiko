@@ -1,10 +1,10 @@
 import { describe, expect, it } from "vitest";
+import { analyzePrompt } from "@oscharko-dev/keiko-contracts/runtime/prompt-enhancer-analyzer";
 import {
-  analyzePrompt,
   asEnhancedPromptId,
   asPromptEnhancementRequestId,
   PROMPT_ENHANCER_SCHEMA_VERSION,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/prompt-enhancer";
 import type {
   PromptEnhancementProfileId,
   PromptEnhancementRequest,

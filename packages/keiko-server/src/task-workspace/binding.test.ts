@@ -5,7 +5,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
   TASK_WORKSPACE_SCHEMA_VERSION,
   validateWorkspaceBinding,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/task-workspace";
 import type { WorkspaceInstance } from "@oscharko-dev/keiko-contracts";
 import { createSingleRootWorkspaceManifest } from "../workspace-manifest-identity.js";
 import { buildBinding } from "./binding.js";

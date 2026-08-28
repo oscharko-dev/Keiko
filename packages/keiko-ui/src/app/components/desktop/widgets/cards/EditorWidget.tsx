@@ -15,23 +15,25 @@ import {
   type ReactNode,
 } from "react";
 import { createPortal } from "react-dom";
+import type {
+  EditorDirtyCloseIntent,
+  EditorLayoutNode,
+  EditorLayoutSplitNode,
+  EditorLayoutStateV2,
+  EditorPaneStateV2,
+  EditorSplitDirection,
+  EditorSplitDropZone,
+  WorkspaceTrustStatus,
+} from "@oscharko-dev/keiko-contracts";
 import {
   activeEditorPane,
-  createEditorDirtyCloseIntent,
   editorLayoutOpenFiles,
   editorLayoutPaneIds,
   editorLayoutReducer,
-  selectWorkspaceFileTarget,
   serializeEditorLayoutStateV2,
-  type EditorDirtyCloseIntent,
-  type EditorLayoutNode,
-  type EditorLayoutSplitNode,
-  type EditorLayoutStateV2,
-  type EditorPaneStateV2,
-  type EditorSplitDirection,
-  type EditorSplitDropZone,
-  type WorkspaceTrustStatus,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/editor-layout";
+import { createEditorDirtyCloseIntent } from "@oscharko-dev/keiko-contracts/runtime/editor-dirty-close";
+import { selectWorkspaceFileTarget } from "@oscharko-dev/keiko-contracts/runtime/editor-workspace-path";
 import type { EditorDocumentSymbol } from "@oscharko-dev/keiko-editor";
 
 import { Icons } from "../../Icons";
@@ -252,6 +254,7 @@ function dispatchEditorShortcut(
 ): boolean {
   if (commandId === "quick-access.files") return dispatchQuickAccess(trigger, "files");
   if (commandId === "quick-access.commands") return dispatchQuickAccess(trigger, "commands");
+  if (commandId === "open-editor-settings") return dispatchOpenEditorSettings(trigger);
   if (commandId === "view.splitRight") host.splitActive("row");
   else if (commandId === "view.splitDown") host.splitActive("column");
   else if (commandId === "view.closeSplit") host.closeActiveSplit();
@@ -261,6 +264,12 @@ function dispatchEditorShortcut(
   else if (commandId === "tab.reopenClosed") host.reopenClosed();
   else if (commandId === "files.saveAll") host.saveAll();
   else return false;
+  return true;
+}
+
+function dispatchOpenEditorSettings(trigger: EditorQuickAccessTrigger | null): boolean {
+  if (trigger === null) return false;
+  trigger.openEditorSettings();
   return true;
 }
 

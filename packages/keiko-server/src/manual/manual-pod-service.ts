@@ -10,20 +10,20 @@
 // remediation — never a raw URL, page path, or page body.
 
 import { randomUUID } from "node:crypto";
-import {
-  DEFAULT_DOCUMENTATION_MANUAL_SCOPE_LIMITS,
-  validateHtmlManualSource,
-  type HtmlManualPodCreateRequest,
-  type HtmlManualPodJob,
-  type HtmlManualPodJobOperation,
-  type HtmlManualPodJobState,
-  type HtmlManualPodRefreshRequest,
-  type HtmlManualSource,
-  type ManualRefreshOutcome,
-  type KnowledgeCapsule,
-  type KnowledgeCapsuleId,
-  type KnowledgeSourceId,
+import type {
+  HtmlManualPodCreateRequest,
+  HtmlManualPodJob,
+  HtmlManualPodJobOperation,
+  HtmlManualPodJobState,
+  HtmlManualPodRefreshRequest,
+  HtmlManualSource,
+  ManualRefreshOutcome,
+  KnowledgeCapsule,
+  KnowledgeCapsuleId,
+  KnowledgeSourceId,
 } from "@oscharko-dev/keiko-contracts";
+import { DEFAULT_DOCUMENTATION_MANUAL_SCOPE_LIMITS } from "@oscharko-dev/keiko-contracts/runtime/documentation-manual-proposal";
+import { validateHtmlManualSource } from "@oscharko-dev/keiko-contracts/runtime/html-manual-source";
 import {
   createDefaultParserRegistry,
   createHtmlManualPod,

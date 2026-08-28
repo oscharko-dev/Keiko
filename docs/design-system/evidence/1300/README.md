@@ -1,10 +1,15 @@
-# Evidence — Issue #1300 (Design System 0.4.0 visual-regression + acceptance capstone)
+# Historical evidence — Issue #1300 (Design System 0.4.0 visual-regression + acceptance capstone)
 
-Consolidated, re-runnable proof that the migrated 0.4.0 surfaces (children #1292–#1299) resolve to the
+Consolidated, re-runnable historical proof that the migrated 0.4.0 surfaces (children #1292–#1299) resolved to the
 governed reference, render across the full theme/contrast/motion/viewport matrix, pass accessibility, and have
 been visually accepted. The narrative, surface matrix, tolerance, retention, designer-acceptance notes and the
 final variance register are in [`../../visual-regression.md`](../../visual-regression.md); the governance gates
 are in [ADR-0051](../../../adr/ADR-0051-design-system-visual-regression-and-acceptance-gate.md).
+
+The commands below are historical evidence tools, not standing CI or pull-request gates. They retain their
+non-zero assertions for forensic reproduction, but later intentional changes to the product or reference can
+make an old migration comparison fail. Current release protection is provided by the applicable UI and
+Playwright regression suites.
 
 ## How to reproduce
 

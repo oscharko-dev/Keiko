@@ -7,11 +7,11 @@
 
 import type { EnvSource, GatewayConfig } from "@oscharko-dev/keiko-model-gateway";
 import type { ModelPort } from "@oscharko-dev/keiko-harness";
-import {
-  validatePromptEnhancementWireRequest,
-  type PromptEnhancementWireRequest,
-  type PromptEnhancementWireResponse,
+import type {
+  PromptEnhancementWireRequest,
+  PromptEnhancementWireResponse,
 } from "@oscharko-dev/keiko-contracts";
+import { validatePromptEnhancementWireRequest } from "@oscharko-dev/keiko-contracts/runtime/prompt-enhancer-bff";
 import { keikoApiKeySecretValues } from "@oscharko-dev/keiko-security";
 // GEN-PERF-CLI-001 — gateway/harness/workflows/evidence load at dispatch; the
 // contracts + security leaves above are cheap and stay static.

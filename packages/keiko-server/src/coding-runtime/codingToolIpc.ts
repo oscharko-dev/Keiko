@@ -1,11 +1,11 @@
 import { isUtf8 } from "node:buffer";
 
-import {
-  isCodeTaskSkillId,
-  isEditorAgentChangeset,
-  type AuxiliaryCapabilityOutcomeV1,
-  type EditorAgentChangeset,
+import type {
+  AuxiliaryCapabilityOutcomeV1,
+  EditorAgentChangeset,
 } from "@oscharko-dev/keiko-contracts";
+import { isCodeTaskSkillId } from "@oscharko-dev/keiko-contracts/runtime/code-task-auxiliary";
+import { isEditorAgentChangeset } from "@oscharko-dev/keiko-contracts/runtime/editor-agent";
 import { isDenied } from "@oscharko-dev/keiko-workspace";
 
 export const CODING_TOOL_MAX_BODY_BYTES = 262_144;

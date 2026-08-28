@@ -1,4 +1,4 @@
-import { encodeCodingAppSessionPairingFragment } from "@oscharko-dev/keiko-contracts";
+import { encodeCodingAppSessionPairingFragment } from "@oscharko-dev/keiko-contracts/runtime/coding-app-session";
 import { mintLauncherPairingAttestation } from "@oscharko-dev/keiko-server";
 
 import { FILE_HISTORY_APP_SESSION_LAUNCHER_SECRET } from "./file-history-2531.js";

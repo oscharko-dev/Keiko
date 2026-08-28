@@ -2,7 +2,7 @@
 // mutation carries a closed WorkspaceRootDispatch; no active/focused-root fallback exists.
 
 import type { IncomingMessage } from "node:http";
-import { workspaceManifestAccessResponse } from "@oscharko-dev/keiko-contracts";
+import { workspaceManifestAccessResponse } from "@oscharko-dev/keiko-contracts/runtime/workspace-manifest";
 import type { UiHandlerDeps } from "./deps.js";
 import {
   DEFAULT_SERVER_DIAGNOSTIC_SUMMARY,

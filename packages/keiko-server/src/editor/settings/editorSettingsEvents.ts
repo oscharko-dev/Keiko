@@ -1,12 +1,12 @@
 import type { ServerResponse } from "node:http";
 
-import {
-  EDITOR_M7_SCHEMA_VERSION,
-  type EditorM7SettingId,
-  type EditorM11SettingScope,
-  type EditorM11SettingsEvent,
-  type EditorM11SettingsSnapshot,
+import type {
+  EditorM7SettingId,
+  EditorM11SettingScope,
+  EditorM11SettingsEvent,
+  EditorM11SettingsSnapshot,
 } from "@oscharko-dev/keiko-contracts";
+import { EDITOR_M7_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts/runtime/editor-m7";
 
 import { writeOrDestroy } from "../../sse-write.js";
 import { editorSettingsWorkspaceFingerprint } from "./editorSettingsStore.js";

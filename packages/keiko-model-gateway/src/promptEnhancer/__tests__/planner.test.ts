@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { PROMPT_ENHANCEMENT_PROFILES } from "@oscharko-dev/keiko-contracts";
+import { PROMPT_ENHANCEMENT_PROFILES } from "@oscharko-dev/keiko-contracts/runtime/prompt-enhancer";
 import { getPromptEnhancerExecutionProfile } from "../profiles.js";
 import { planPromptEnhancement } from "../planner.js";
 import { makeAnalysis } from "./_support.js";

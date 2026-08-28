@@ -2,13 +2,13 @@ import { existsSync, lstatSync, readFileSync, realpathSync } from "node:fs";
 import { dirname, join, resolve, win32 } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { CommandRule } from "@oscharko-dev/keiko-tools";
-import {
-  UPDATE_SESSION_SCHEMA_VERSION,
-  type UpdateCommandPreview,
-  type UpdateInstallMode,
-  type UpdateInstallPackageManager,
-  type UpdateMutationPolicy,
+import type {
+  UpdateCommandPreview,
+  UpdateInstallMode,
+  UpdateInstallPackageManager,
+  UpdateMutationPolicy,
 } from "@oscharko-dev/keiko-contracts";
+import { UPDATE_SESSION_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts/runtime/update-session";
 import {
   detectPortableUpdateInstallMode,
   portableStateDirFromEnv,

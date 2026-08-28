@@ -13,7 +13,8 @@ import type {
   QualityIntelligenceExportBundle,
   QualityIntelligenceTestCaseCandidate,
 } from "@oscharko-dev/keiko-contracts";
-import { assertExportBundleInvariant, compareStrings } from "@oscharko-dev/keiko-contracts";
+import { assertExportBundleInvariant } from "@oscharko-dev/keiko-contracts/runtime/qualityIntelligence/index";
+import { compareStrings } from "@oscharko-dev/keiko-contracts/runtime/comparators";
 import { encodeSpreadsheetSafeRow } from "./spreadsheetSafeCsv.js";
 
 export const QTEST_CSV_HEADERS: readonly string[] = Object.freeze([

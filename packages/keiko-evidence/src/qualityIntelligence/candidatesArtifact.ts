@@ -6,7 +6,7 @@
 // that echoed a secret-shaped source string cannot reach disk, preview, or export unredacted
 // (Issue #284). Stored as plain rows (branded IDs collapse to strings on the wire).
 
-import { QualityIntelligence } from "@oscharko-dev/keiko-contracts";
+import * as QualityIntelligence from "@oscharko-dev/keiko-contracts/runtime/qualityIntelligence/index";
 import { canonicalise, sha256Hex } from "@oscharko-dev/keiko-security";
 import {
   createNodeContainedJsonArtifactStore,

@@ -2,17 +2,17 @@ import { describe, expect, it } from "vitest";
 import {
   PROMPT_CANDIDATE_RANKING_EXPECTED_ORDER,
   PROMPT_CANDIDATE_RANKING_FIXTURE,
+} from "@oscharko-dev/keiko-contracts/runtime/prompt-enhancer-ranking-fixture";
+import type {
+  PromptCandidateScorecard,
+  PromptCriticDimension,
+  PromptEnhancementProfileId,
+  PromptOptimizationBounds,
+  RawPromptInput,
 } from "@oscharko-dev/keiko-contracts";
-import {
-  PROMPT_CRITIC_DIMENSIONS,
-  PROMPT_ENHANCER_SCHEMA_VERSION,
-  validatePromptCandidateSelection,
-  type PromptCandidateScorecard,
-  type PromptCriticDimension,
-  type PromptEnhancementProfileId,
-  type PromptOptimizationBounds,
-  type RawPromptInput,
-} from "@oscharko-dev/keiko-contracts";
+import { PROMPT_CRITIC_DIMENSIONS } from "@oscharko-dev/keiko-contracts/runtime/prompt-enhancer-critic";
+import { PROMPT_ENHANCER_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts/runtime/prompt-enhancer";
+import { validatePromptCandidateSelection } from "@oscharko-dev/keiko-contracts/runtime/prompt-enhancer-validation";
 import {
   DEFAULT_CANDIDATE_COUNT,
   DEFAULT_MAX_ITERATIONS,

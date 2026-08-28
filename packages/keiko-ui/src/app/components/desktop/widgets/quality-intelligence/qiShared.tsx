@@ -10,7 +10,7 @@ import type {
   TestQualityRubricDimension,
   QualityIntelligenceUiWeakTestFlag,
 } from "@oscharko-dev/keiko-contracts";
-import { QUALITY_INTELLIGENCE_RUN_STATUSES } from "@oscharko-dev/keiko-contracts";
+import { QUALITY_INTELLIGENCE_RUN_STATUSES } from "@oscharko-dev/keiko-contracts/runtime/qualityIntelligence/index";
 import { ApiError } from "@/lib/api";
 import { translateQi, useQiTranslate as useTranslate, type I18nTranslate } from "./qi-i18n";
 

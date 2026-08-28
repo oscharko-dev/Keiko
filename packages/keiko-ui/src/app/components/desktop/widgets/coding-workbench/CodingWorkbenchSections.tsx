@@ -6,7 +6,7 @@ import type {
   ModelCapability,
   ModelReasoningEffort,
 } from "@oscharko-dev/keiko-contracts";
-import { isCodingWorkbenchMode } from "@oscharko-dev/keiko-contracts";
+import { isCodingWorkbenchMode } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench";
 import {
   useCodingWorkbenchTranslate,
   type CodingWorkbenchTranslate,

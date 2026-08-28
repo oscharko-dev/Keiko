@@ -9,7 +9,10 @@ import {
   type Dispatch,
   type SetStateAction,
 } from "react";
-import { classifyAttachmentMime, MAX_ATTACHMENT_BYTES } from "@oscharko-dev/keiko-contracts";
+import {
+  classifyAttachmentMime,
+  MAX_ATTACHMENT_BYTES,
+} from "@oscharko-dev/keiko-contracts/runtime/bff-wire";
 import { useTranslate } from "@/lib/i18n";
 import { ATTACHMENT_CLEANUP_DEFERRED_ERROR } from "@/lib/chat-session-error";
 import type { ConversationAttachmentDescriptorWire, MemoryId } from "@oscharko-dev/keiko-contracts";

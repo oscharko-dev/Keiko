@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
-import { compareStrings, QualityIntelligence } from "@oscharko-dev/keiko-contracts";
+import { compareStrings } from "@oscharko-dev/keiko-contracts/runtime/comparators";
+import * as QualityIntelligence from "@oscharko-dev/keiko-contracts/runtime/qualityIntelligence/index";
 
 import {
   computeCandidateEquivalenceSignature,

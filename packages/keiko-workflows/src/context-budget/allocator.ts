@@ -3,21 +3,23 @@
 // no randomness, no network. countContextTokens from keiko-contracts is the SINGLE token currency
 // (ADR-0052 gate 3) — no other ratio appears in this module.
 
+import type {
+  ContextAssemblyDiagnostics,
+  ContextBudget,
+  ContextBudgetPressure,
+  ContextEvictionPolicy,
+  ContextLaneBudget,
+  ContextLaneDiagnostics,
+  ContextLaneId,
+  ContextProfile,
+  ContextTokenAccounting,
+} from "@oscharko-dev/keiko-contracts";
 import {
   CONTEXT_ENGINEERING_SCHEMA_VERSION,
   CONTEXT_LANE_IDS,
   countContextTokens,
   resolveContextTokenAccounting,
-  type ContextAssemblyDiagnostics,
-  type ContextBudget,
-  type ContextBudgetPressure,
-  type ContextEvictionPolicy,
-  type ContextLaneBudget,
-  type ContextLaneDiagnostics,
-  type ContextLaneId,
-  type ContextProfile,
-  type ContextTokenAccounting,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/context-engineering";
 
 export interface ContextLaneItemInput {
   readonly id: string;
