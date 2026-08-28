@@ -96,6 +96,13 @@ function renderComposerWithOverrides(overrides: Partial<ComposerProps>): Compose
 describe("Coding Workbench composer", () => {
   afterEach(() => cleanup());
 
+  it("uses the dedicated governed-coding glyph for the run-authority mode label (#2694)", () => {
+    renderComposer("idle", composerActions());
+    const authority = screen.getByRole("combobox", { name: "Run authority" });
+    expect(authority.querySelector('path[d*="M16.4 6.5"]')).toBeInTheDocument();
+    expect(authority.querySelector('path[d*="M13.5 5.5"]')).not.toBeInTheDocument();
+  });
+
   it("opens Git from the active repository and branch controls", async () => {
     const user = userEvent.setup();
     const onOpenGit = vi.fn();

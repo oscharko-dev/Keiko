@@ -475,7 +475,7 @@ const PARTIAL: Readonly<Record<WindowType, PartialDef>> = {
   },
   coding: {
     titleKey: "window.type.coding.title",
-    icon: "code",
+    icon: "codingWorkbench",
     accent: true,
     descKey: "window.type.coding.desc",
     w: 860,

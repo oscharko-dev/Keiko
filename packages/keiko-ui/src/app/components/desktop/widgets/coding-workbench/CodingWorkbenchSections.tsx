@@ -34,7 +34,7 @@ import { requestGatewayModelCatalogRefresh } from "../shared/gatewaySetupBus";
 import styles from "./CodingWorkbenchWindow.module.css";
 
 // PascalCase aliases so the JSX tag itself signals "component", not member access (S6770).
-const CodeIcon = Icons.code;
+const CodingWorkbenchIcon = Icons.codingWorkbench;
 const MinimizeIcon = Icons.minimize;
 const FwdIcon = Icons.fwd;
 const ArrowUpIcon = Icons.arrowUp;
@@ -405,7 +405,7 @@ function AuthorityControl({ input, t }: ControlProps): ReactNode {
         menuMinWidth={260}
         disabled={input.configurationLocked}
         mono
-        leadingVisual={<CodeIcon size={14} />}
+        leadingVisual={<CodingWorkbenchIcon size={14} />}
         sections={[{ options: autonomyOptions(t) }]}
         onValueChange={(value): void => {
           if (isCodingWorkbenchMode(value)) input.onRequestedModeChange(value);

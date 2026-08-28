@@ -1503,6 +1503,8 @@ describe("workspace widget renderer registry", () => {
 
   it("renders the Coding Workbench singleton through the workspace registry", async () => {
     const ctx = makeCtx();
+    expect(WIN_TYPES.coding.icon).toBe("codingWorkbench");
+    expect(WIN_TYPES.terminal.icon).toBe("terminal");
     render(<>{WIN_TYPES.coding.render({}, ctx)}</>);
 
     expect(await screen.findByTestId("coding-workbench-window")).toHaveTextContent(

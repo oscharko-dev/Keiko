@@ -317,6 +317,15 @@ export const Icons = {
       <path d="M13.5 5.5 L10.5 18.5" />
     </Ico>
   ),
+  /* Lift: governed coding — terminal frame with one seam, prompt, and Keiko spark. */
+  codingWorkbench: (p: IcoProps): ReactNode => (
+    <Ico {...p}>
+      <path d="M13.70 5.00 H17.50 A2.5 2.5 0 0 1 20.00 7.50 V16.50 A2.5 2.5 0 0 1 17.50 19.00 H6.50 A2.5 2.5 0 0 1 4.00 16.50 V7.50 A2.5 2.5 0 0 1 6.50 5.00 H10.30" />
+      <path d="M8 9.6 L11 12.6 L8 15.6" />
+      <path d="M12.8 15.6 H16.4" />
+      <path d="M16.4 6.5 L17 8 L18.5 8.6 L17 9.2 L16.4 10.7 L15.8 9.2 L14.3 8.6 L15.8 8 Z" />
+    </Ico>
+  ),
   /* Lift: regenerate — two seam'd arcs with arrowheads (refresh, with the lift gap). */
   regenerate: (p: IcoProps): ReactNode => (
     <Ico {...p}>
