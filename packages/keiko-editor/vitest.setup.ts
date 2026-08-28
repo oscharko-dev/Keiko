@@ -44,6 +44,21 @@ if (typeof matchMediaWindow.matchMedia !== "function") {
   matchMediaWindow.matchMedia = fakeMatchMedia;
 }
 
+// A fillStyle value jsdom's facade recognizes and stores. Mirrors the Canvas 2D fillStyle-assignment
+// spec closely enough for tests: hex, rgb()/rgba(), oklch(), and lab() are accepted; anything else
+// (e.g. an unresolved `var(--token)` literal, or plain gibberish) is silently rejected, per spec,
+// leaving the previously stored value in place — this is what lets theme-resolver.ts's two-sentinel
+// guard (KEIKO-0528, KEIKO-0581) detect a rejected assignment from any jsdom-backed test, not only
+// theme-resolver.test.ts's own hand-rolled mock.
+function isRecognizedFillStyle(value: string): boolean {
+  return (
+    value.startsWith("#") ||
+    value.startsWith("rgb") ||
+    value.startsWith("oklch") ||
+    value.startsWith("lab")
+  );
+}
+
 // jsdom deliberately omits canvas rendering. Monaco-adjacent React tests only need a harmless
 // 2D-context facade so they exercise editor behavior without noisy environment warnings.
 Object.defineProperty(HTMLCanvasElement.prototype, "getContext", {
@@ -52,8 +67,17 @@ Object.defineProperty(HTMLCanvasElement.prototype, "getContext", {
     if (contextId !== "2d") {
       return null;
     }
+    let fillStyleValue = "#000000";
     return {
       canvas: this,
+      get fillStyle(): string {
+        return fillStyleValue;
+      },
+      set fillStyle(value: string) {
+        if (isRecognizedFillStyle(value)) {
+          fillStyleValue = value;
+        }
+      },
       clearRect: noop,
       fillRect: noop,
       getImageData: () => ({ data: new Uint8ClampedArray(0) }),
