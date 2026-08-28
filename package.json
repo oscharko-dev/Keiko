@@ -67,6 +67,7 @@
     "build:d12-bundle-input": "node scripts/build-d12-bundle-input.mjs",
     "run:d12-perf-comparison": "node scripts/run-d12-perf-comparison.mjs",
     "perf:evidence:regen": "node scripts/regenerate-d12-evidence.mjs",
+    "perf:evidence:regen:workspace": "node scripts/regenerate-d12-evidence.mjs --workspace",
     "perf:evidence:regen:container": "node scripts/regenerate-d12-evidence.mjs --container",
     "test:e2e:workspace-search-2090": "playwright test --config tests/e2e/config/playwright.issue-2090-workspace-search.config.ts --project=chromium",
     "test:e2e:editor-fidelity-1295": "playwright test --config tests/e2e/config/playwright.issue-1295-editor-fidelity.config.ts --project=chromium",
@@ -135,6 +136,7 @@
     "check:error-observability": "node scripts/check-error-observability.mjs",
     "check:dependency-currency": "node scripts/check-dependency-currency.mjs",
     "check:dependency-hygiene": "node scripts/check-dependency-hygiene.mjs",
+    "check:eslint-lane": "npm ls eslint",
     "check:knip": "node scripts/check-knip.mjs",
     "check:external-quality-config": "node scripts/check-external-quality-config.mjs",
     "check:review-bot-suppression": "node scripts/check-review-bot-suppression.mjs",
@@ -230,8 +232,15 @@
     "qs": "6.15.3",
     "vite": "8.1.4",
     "lightningcss": "1.32.0",
+    "eslint-plugin-import@2.32.0": {
+      "eslint": "^10.0.0"
+    },
     "eslint-plugin-jsx-a11y": {
-      "axe-core": "4.12.1"
+      "axe-core": "4.12.1",
+      "eslint": "^10.0.0"
+    },
+    "eslint-plugin-react@7.37.5": {
+      "eslint": "^10.0.0"
     },
     "@napi-rs/canvas": "1.0.8"
   },
@@ -239,7 +248,7 @@
     "@babel/core": "^8.0.1",
     "@babel/parser": "^8.0.1",
     "@babel/preset-env": "^8.0.2",
-    "@eslint/js": "^9.39.5",
+    "@eslint/js": "^10.0.1",
     "@oscharko-dev/keiko-editor": "0.3.17",
     "@playwright/test": "^1.61.1",
     "@stryker-mutator/core": "10.0.0",

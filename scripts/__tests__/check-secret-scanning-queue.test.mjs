@@ -70,9 +70,12 @@ describe("check-secret-scanning-queue pagination", () => {
 
   it("reads the real closeout document through the default seams", () => {
     // Proves the committed path constant still resolves: a renamed document would otherwise only
-    // surface in the scheduled lane, long after the rename.
-    const documented = parseDocumentedAlerts(defaultSeams().readDocument());
-    expect(documented.size).toBeGreaterThan(0);
+    // surface in the scheduled lane, long after the rename. It asserts the document's SHAPE, not a
+    // disposition count — the count tracks the live alert queue, and a clean queue is zero. Binding
+    // a test to that would make an empty queue, the desired state, look like a broken seam.
+    const document = defaultSeams().readDocument();
+    expect(document).toContain("### Dispositions");
+    expect(() => parseDocumentedAlerts(document)).not.toThrow();
   });
 });
 

@@ -37,7 +37,7 @@ read it back. Evidence that no gate evaluates decays into a sentence that merely
 | Source                     | Result                                                                     |
 | -------------------------- | -------------------------------------------------------------------------- |
 | `npm audit --json`         | 0 vulnerabilities across 944 resolved packages (83 prod, 839 dev, 148 opt) |
-| Repository secret scanning | 2 open alerts, both dispositioned below                                    |
+| Repository secret scanning | 0 open alerts; both prior findings triaged and closed below                |
 | Provider-SDK isolation     | Enforced by `arch:check` (ADR-0019 trust-1), unchanged by this closeout    |
 
 ### How this queue must be queried — and the trap in it
@@ -67,42 +67,43 @@ someone's shell history.
 
 ### Dispositions
 
-No literal secret value appears in this document, in the pull request, or in any diagnostic produced
-by this work; each alert is described by type, location and disposition only. Both flagged values are
-synthetic, non-functional, and grant no access.
+| Alert | Type | Location | Disposition | Rationale |
+| ----- | ---- | -------- | ----------- | --------- |
 
-| Alert | Type                 | Location                                        | Disposition    | Rationale                                   |
-| ----- | -------------------- | ----------------------------------------------- | -------------- | ------------------------------------------- |
-| #20   | provider API key     | `tests/qa/secret-shape-detector-parity.test.ts` | used_in_tests  | Synthetic cross-detector parity fixture     |
-| #17   | generic (`password`) | `docs/qa/knowledge-m2-local-verification.md`    | false_positive | Placeholder in a local-verification runbook |
+The queue is empty: both listings return zero open alerts. This table stays because it is the one
+`npm run check:secret-scanning-queue` reads — a new alert with no row here fails the scheduled lane,
+and a row left behind after its alert closes fails it too. The `Disposition` column takes
+[`SECURITY.md`](../../SECURITY.md)'s closed vocabulary (`revoked`, `used_in_tests`,
+`false_positive`, `unresolved`), validated against exactly that set; prose there would let a typo or
+a `TBD` count as a triage decision.
 
-The `Disposition` column uses [`SECURITY.md`](../../SECURITY.md)'s closed vocabulary — `revoked`,
-`used_in_tests`, `false_positive`, `unresolved` — and `npm run check:secret-scanning-queue`
-validates it against exactly that set. Prose there would have let a typo or a `TBD` count as a
-triage decision, which is the same defect the sibling gate rejects for action rows.
+### Resolved during this closeout
 
-**#20** is a **synthetic detector fixture**: one of the corpus strings the cross-detector parity test
-feeds through `looksLikeSecretShape()`, `containsCredentialShape()` and `isSecretShapedString()` to
-pin their agreement. The root cause is nonetheless a real defect, and this closeout repairs it.
-`gitleaks:allow` suppresses gitleaks only; GitHub's partner scanner is a separate detector that
-alerts on the prefix alone. The neighbouring `slack-token` and `github-classic-pat` fixtures were
-already assembled by concatenation so their contiguous form never appears in the source — the
-`openai-key` fixture was not. It is now split like its siblings, and a regression pin in the same
-file reads the file's own source, so any future fixture that reintroduces a contiguous
-partner-scannable literal fails in the test suite instead of in the repository's alert list.
+Recorded outside the dispositions table on purpose — these alerts are closed, and a row above would
+now be a claim about something that no longer exists. No literal secret value appears here or in any
+gate output; both flagged values were synthetic, non-functional, and granted no access.
 
-**#17** is a **documentation placeholder** in a local-verification runbook: the `apiKey` field of a
-sample gateway config pointing at a loopback mock on `127.0.0.1`. The mock ignores the field
-entirely, so the value never had to look like a credential. It has been replaced with a short,
-obviously fake placeholder, and the surrounding comment now says why — so a later edit does not
-"improve" it back into something credential-shaped. This alert postdates the #2292 delivery by eight
-days, which is the substantive finding: #2292 verified an empty queue once, and nothing re-asks the
-question.
+| Alert | Type                 | Resolution     | Root cause and repair                                                                      |
+| ----- | -------------------- | -------------- | ------------------------------------------------------------------------------------------ |
+| #20   | provider API key     | used_in_tests  | Synthetic cross-detector parity fixture; literal split, class closed by a self-reading pin |
+| #17   | generic (`password`) | false_positive | Documentation placeholder for a loopback mock that ignores the field; replaced             |
 
-Both alerts remain **open**. Each is anchored to a historical commit, so repairing the source cannot
-retract them; closing them as _used in tests_ is a maintainer authorization this closeout
-deliberately does not take on its own. Epic #2291's definition of done is therefore not fully met
-until a maintainer dispositions both.
+**#20** was one of the corpus strings the cross-detector parity test feeds through
+`looksLikeSecretShape()`, `containsCredentialShape()` and `isSecretShapedString()` to pin their
+agreement. The root cause was real: `gitleaks:allow` suppresses gitleaks only, and GitHub's partner
+scanner is a separate detector that alerts on the prefix alone. Its `slack-token` and
+`github-classic-pat` siblings were already assembled by concatenation for exactly this reason; the
+`openai-key` fixture was not. It is now split — twice, because as one 40-character literal the body
+is itself the shape of an AWS Secret Access Key and, next to the `AKIA` fixture, completed a pair
+that push protection blocks. A pin in the same file reads the file's own source, so a future fixture
+reintroducing a contiguous partner-scannable literal fails in the test suite rather than in the
+repository's alert list.
+
+**#17** was the `apiKey` field of a sample gateway config in a local-verification runbook, pointing
+at a loopback mock on `127.0.0.1` that ignores the field entirely — the value never had to look like
+a credential. It is now an obviously fake placeholder with the reason recorded beside it. It
+postdated the #2292 delivery by eight days, which is the substantive finding: #2292 verified an
+empty queue once, and nothing re-asked the question. `check:secret-scanning-queue` now does, nightly.
 
 ## Governed dependency baseline
 
@@ -117,45 +118,45 @@ release exists and is intentionally not taken), `major-deferred` (a newer major 
 separately governed migration), `unsupported` (the newer release cannot be adopted on this runtime
 or peer graph).
 
-| Package                       | Scope                 | Version | Disposition    | Rationale                                                                                |
-| ----------------------------- | --------------------- | ------- | -------------- | ---------------------------------------------------------------------------------------- |
-| `typescript`                  | root                  | 6.0.3   | major-deferred | Programmatic API lane. TypeScript 7's stable API entry gate is #2269/#2270.              |
-| `typescript`                  | keiko-server          | 6.0.3   | major-deferred | Same API lane as root; the language-service consumers bind to it.                        |
-| `typescript`                  | keiko-workspace       | 6.0.3   | major-deferred | Same API lane as root.                                                                   |
-| `typescript`                  | keiko-ui              | 5.7.3   | major-deferred | The Next.js-supported UI compiler; UI source is proven separately against native TS 7.   |
-| `@typescript/native`          | root                  | 7.0.2   | current        | The native TypeScript 7 compiler, aliased as `npm:typescript@~7.0.2`.                    |
-| `eslint`                      | root                  | 10.9.1  | current        | Newest release, but the graph is peer-invalid: #2777's cap is live — see `npm ls` below. |
-| `eslint`                      | keiko-ui              | 10.8.1  | patch-deferred | Exact pin one patch behind root's range resolution; see follow-up below.                 |
-| `@eslint/js`                  | root                  | 9.39.5  | major-deferred | Declared `^9.39.5` while `eslint` is on 10.x; one family, two majors. See follow-up 1.   |
-| `typescript-eslint`           | root                  | 8.67.0  | patch-deferred | 8.68.0 published 2026-08-24; supports the ESLint 10 lane and the TypeScript 6 API.       |
-| `next`                        | keiko-ui              | 16.3.1  | patch-deferred | 16.3.3 available; deferred to a reviewed batch with `eslint-config-next`.                |
-| `eslint-config-next`          | keiko-ui              | 16.3.1  | patch-deferred | Kept exactly aligned with `next`; the two move together or not at all.                   |
-| `react`                       | keiko-ui              | 19.2.8  | current        | React 19 runtime delivered by #2295.                                                     |
-| `react-dom`                   | keiko-ui              | 19.2.8  | current        | Matches `react`.                                                                         |
-| `monaco-editor`               | root                  | 0.56.0  | current        | The reviewed editor pin; ADR-0042 was amended to 0.56.0 on 2026-08-16 and agrees.        |
-| `monaco-editor`               | keiko-ui              | 0.56.0  | current        | Deduplicated with root.                                                                  |
-| `monaco-editor`               | keiko-editor          | 0.56.0  | current        | Deduplicated with root.                                                                  |
-| `vite`                        | keiko-ui              | 8.1.4   | patch-deferred | 8.2.2 available; the Rolldown/native binding delta is not required by any capability.    |
-| `vitest`                      | root                  | 4.1.11  | current        | Realigned here; the keiko-ui nested copy is gone and both resolve to this node.          |
-| `vitest`                      | keiko-ui              | 4.1.11  | current        | Resolves to the root node; the workspace no longer carries its own copy.                 |
-| `@vitest/coverage-v8`         | root                  | 4.1.11  | current        | Exact peer match for Vitest 4.1.11; a mismatch here made `npm ls` invalid.               |
-| `autoprefixer`                | keiko-ui              | 10.5.4  | current        | UI build baseline.                                                                       |
-| `@types/react`                | keiko-ui              | 19.2.18 | current        | Newest release; `@types/react-dom` lags it by one patch.                                 |
-| `axe-core`                    | keiko-ui              | 4.12.1  | patch-deferred | 4.13.0 changes rule output; an accessibility-evidence refresh is required first.         |
-| `@noble/hashes`               | keiko-ui              | 2.3.0   | patch-deferred | 2.4.0 available; no capability requires it.                                              |
-| `@types/node`                 | root                  | 26.2.0  | patch-deferred | Declarations only; 26.4.0 available.                                                     |
-| `@types/node`                 | keiko-ui              | 26.2.0  | patch-deferred | Deduplicated with root.                                                                  |
-| `@types/react-dom`            | keiko-ui              | 19.2.4  | patch-deferred | Declarations only; 19.2.5 available.                                                     |
-| `@vitejs/plugin-react`        | keiko-ui              | 6.0.5   | patch-deferred | 6.1.1 available; UI build baseline is unchanged.                                         |
-| `@testing-library/react`      | keiko-ui              | 16.3.2  | patch-deferred | 16.3.3 available; no test capability requires it.                                        |
-| `@testing-library/user-event` | keiko-ui              | 14.6.5  | patch-deferred | 14.6.6 available; no test capability requires it.                                        |
-| `@playwright/test`            | root                  | 1.62.1  | current        | E2E reference runner.                                                                    |
-| `prettier`                    | root                  | 3.9.6   | current        | Formatter policy is unchanged.                                                           |
-| `knip`                        | root                  | 6.32.2  | patch-deferred | 6.32.3 published 2026-08-26; backs the required `check:knip` gate.                       |
-| `fallow`                      | root                  | 3.9.1   | patch-deferred | 3.20.0 available; backs `check:semantic-duplication`. Missed by the sweep — see below.   |
-| `@napi-rs/canvas`             | keiko-local-knowledge | 1.0.8   | current        | Optional host-native backend; deduplicated to one node by a root override (see below).   |
-| `postcss`                     | root                  | 8.5.26  | current        | Root override; audit reports no known vulnerability.                                     |
-| `ws`                          | root                  | 8.21.3  | current        | WebSocket runtime.                                                                       |
+| Package                       | Scope                 | Version | Disposition    | Rationale                                                                              |
+| ----------------------------- | --------------------- | ------- | -------------- | -------------------------------------------------------------------------------------- |
+| `typescript`                  | root                  | 6.0.3   | major-deferred | Programmatic API lane. TypeScript 7's stable API entry gate is #2269/#2270.            |
+| `typescript`                  | keiko-server          | 6.0.3   | major-deferred | Same API lane as root; the language-service consumers bind to it.                      |
+| `typescript`                  | keiko-workspace       | 6.0.3   | major-deferred | Same API lane as root.                                                                 |
+| `typescript`                  | keiko-ui              | 5.7.3   | major-deferred | The Next.js-supported UI compiler; UI source is proven separately against native TS 7. |
+| `@typescript/native`          | root                  | 7.0.2   | current        | The native TypeScript 7 compiler, aliased as `npm:typescript@~7.0.2`.                  |
+| `eslint`                      | root                  | 10.9.1  | current        | ESLint 10 lane; the `eslint-config-next` peer cap was cleared by #2777.                |
+| `eslint`                      | keiko-ui              | 10.9.1  | current        | Deduplicated onto the root node by #2777; the workspace no longer pins its own copy.   |
+| `@eslint/js`                  | root                  | 10.0.1  | current        | Realigned with the `eslint` 10 lane by #2777; one family, one major again.             |
+| `typescript-eslint`           | root                  | 8.67.0  | patch-deferred | 8.68.0 published 2026-08-24; supports the ESLint 10 lane and the TypeScript 6 API.     |
+| `next`                        | keiko-ui              | 16.3.1  | patch-deferred | 16.3.3 available; deferred to a reviewed batch with `eslint-config-next`.              |
+| `eslint-config-next`          | keiko-ui              | 16.3.1  | patch-deferred | Kept exactly aligned with `next`; the two move together or not at all.                 |
+| `react`                       | keiko-ui              | 19.2.8  | current        | React 19 runtime delivered by #2295.                                                   |
+| `react-dom`                   | keiko-ui              | 19.2.8  | current        | Matches `react`.                                                                       |
+| `monaco-editor`               | root                  | 0.56.0  | current        | The reviewed editor pin; ADR-0042 was amended to 0.56.0 on 2026-08-16 and agrees.      |
+| `monaco-editor`               | keiko-ui              | 0.56.0  | current        | Deduplicated with root.                                                                |
+| `monaco-editor`               | keiko-editor          | 0.56.0  | current        | Deduplicated with root.                                                                |
+| `vite`                        | keiko-ui              | 8.1.4   | patch-deferred | 8.2.2 available; the Rolldown/native binding delta is not required by any capability.  |
+| `vitest`                      | root                  | 4.1.11  | current        | Realigned here; the keiko-ui nested copy is gone and both resolve to this node.        |
+| `vitest`                      | keiko-ui              | 4.1.11  | current        | Resolves to the root node; the workspace no longer carries its own copy.               |
+| `@vitest/coverage-v8`         | root                  | 4.1.11  | current        | Exact peer match for Vitest 4.1.11; a mismatch here made `npm ls` invalid.             |
+| `autoprefixer`                | keiko-ui              | 10.5.4  | current        | UI build baseline.                                                                     |
+| `@types/react`                | keiko-ui              | 19.2.18 | current        | Newest release; `@types/react-dom` lags it by one patch.                               |
+| `axe-core`                    | keiko-ui              | 4.12.1  | patch-deferred | 4.13.0 changes rule output; an accessibility-evidence refresh is required first.       |
+| `@noble/hashes`               | keiko-ui              | 2.3.0   | patch-deferred | 2.4.0 available; no capability requires it.                                            |
+| `@types/node`                 | root                  | 26.2.0  | patch-deferred | Declarations only; 26.4.0 available.                                                   |
+| `@types/node`                 | keiko-ui              | 26.2.0  | patch-deferred | Deduplicated with root.                                                                |
+| `@types/react-dom`            | keiko-ui              | 19.2.4  | patch-deferred | Declarations only; 19.2.5 available.                                                   |
+| `@vitejs/plugin-react`        | keiko-ui              | 6.0.5   | patch-deferred | 6.1.1 available; UI build baseline is unchanged.                                       |
+| `@testing-library/react`      | keiko-ui              | 16.3.2  | patch-deferred | 16.3.3 available; no test capability requires it.                                      |
+| `@testing-library/user-event` | keiko-ui              | 14.6.5  | patch-deferred | 14.6.6 available; no test capability requires it.                                      |
+| `@playwright/test`            | root                  | 1.62.1  | current        | E2E reference runner.                                                                  |
+| `prettier`                    | root                  | 3.9.6   | current        | Formatter policy is unchanged.                                                         |
+| `knip`                        | root                  | 6.32.2  | patch-deferred | 6.32.3 published 2026-08-26; backs the required `check:knip` gate.                     |
+| `fallow`                      | root                  | 3.9.1   | patch-deferred | 3.20.0 available; backs `check:semantic-duplication`. Missed by the sweep — see below. |
+| `@napi-rs/canvas`             | keiko-local-knowledge | 1.0.8   | current        | Optional host-native backend; deduplicated to one node by a root override (see below). |
+| `postcss`                     | root                  | 8.5.26  | current        | Root override; audit reports no known vulnerability.                                   |
+| `ws`                          | root                  | 8.21.3  | current        | WebSocket runtime.                                                                     |
 
 The live inventory command is `npm outdated --workspaces --include-workspace-root --json`; it
 reported 18 non-current direct entries, every one of which is dispositioned above.
@@ -216,9 +217,8 @@ these values; this document does not restate them as a second source.
 ## Dependency graph validity (`npm ls`)
 
 #2296's acceptance criteria require that `npm ls` report no invalid graph. It did not, and nothing
-in the repository ever asked: `npm ls` at default depth exits 0, which is why this stayed invisible,
-and no script under `scripts/` and no workflow step runs it at all. At full depth on the
-pre-existing tree:
+in the repository ever asked: `npm ls` at default depth exits 0, which is why this stayed invisible.
+At full depth the pre-existing tree reported two invalid packages:
 
 ```
 npm error code ELSPROBLEMS
@@ -226,80 +226,89 @@ npm error invalid: @vitest/coverage-v8@4.1.10 …/node_modules/@vitest/coverage-
 npm error invalid: eslint@10.9.1 …/node_modules/eslint
 ```
 
-**Repaired here.** `keiko-ui` pinned `vitest` at exactly 4.1.11, whose peer contract demands
-`@vitest/coverage-v8` 4.1.11, while the root resolved 4.1.10. Both root packages now resolve 4.1.11
-and the workspace's nested copy is gone — one Vitest node instead of two, which is what the #2293
-matrix said it had achieved and had not. A second duplicate is gone with it: `@napi-rs/canvas`
-resolved 1.0.6 at the root (hoisted through `pdfjs-dist`'s optional `^1.0.0`) and 1.0.8 under
-`keiko-local-knowledge`, carrying eleven redundant platform binaries; a root override collapses them
-to one node.
+**Both are now closed, by two changes that had to be separate.** `keiko-ui` pinned `vitest` at
+exactly 4.1.11, whose peer contract demands `@vitest/coverage-v8` 4.1.11 while the root resolved
+4.1.10; both root packages now resolve 4.1.11 and the workspace's nested copy is gone — one Vitest
+node instead of two, which is what the #2293 matrix said it had achieved and had not. A second
+duplicate went with it: `@napi-rs/canvas` resolved 1.0.6 at the root (hoisted through `pdfjs-dist`'s
+optional `^1.0.0`) and 1.0.8 under `keiko-local-knowledge`, carrying eleven redundant platform
+binaries; a root override collapses them to one node. The ESLint half was
+[#2777](https://github.com/oscharko-dev/Keiko/issues/2777)'s: `eslint-config-next@16.3.1` now
+declares `eslint: ">=9.0.0"`, `@eslint/js` moved to the 10 lane, and `keiko-ui`'s exact pin became a
+range that deduplicates onto the root node.
 
-**Not repaired here.** `eslint@10.9.1` remains invalid against three `eslint-config-next` plugins
-that still cap at ESLint 9 (`eslint-plugin-import` 2.32.0, `eslint-plugin-jsx-a11y` 6.10.2,
-`eslint-plugin-react` 7.37.5). This is not stale: the cap is live, it is exactly what
-[#2777](https://github.com/oscharko-dev/Keiko/issues/2777) tracks, and the #2293 matrix predicted it
-and chose ESLint 9 for that reason before the repository moved to 10 anyway. The ESLint 10 lane is
-being resolved in a separate, concurrent change; this closeout deliberately does not touch it,
-because two changes editing one lockfile is how a dependency graph gets a merge conflict instead of
-a review.
+`npm ls --all --workspaces --include-workspace-root` exits **0** on this branch. Peer validity is
+now enforced continuously by `npm run check:eslint-lane` (#2777), wired into the required `ci`
+context — it asks npm rather than restating it, which is the right division: npm stays the authority
+on peer validity, and this closeout's gate stays the authority on whether the recorded disposition
+still describes the checkout.
 
-Because that one invalidity is still open, this closeout does **not** wire an `npm ls` gate — a gate
-that ships red teaches everyone to ignore it. It is the first follow-up below, and it should land
-with the ESLint repair, not before it.
+## Decisions taken here
+
+### `engine-strict` is declined, and this is the reasoning, not a deferral
+
+The question was measured, not estimated: across all 665 `engines` declarations in
+`package-lock.json` (1 root, 25 workspaces, 639 third-party), evaluated with the same
+`semver.satisfies(v, range, { includePrerelease: true })` predicate npm itself uses, **zero fail**
+Node 24.18.0 / npm 11.16.0 — in every class, direct, transitive, dev and optional. The optional class
+cannot fail at all: npm's arborist marks an optional node `inert` and explicitly ignores
+`--engine-strict` for it. Only four of the 100 distinct ranges even reject Node 25, behind three
+packages (`dependency-cruiser`, `jsdom`, `watskeburt`) that a future Node bump must move anyway.
+
+So the flag is safe to set. It is still the wrong instrument here, for two reasons that the
+measurement surfaced rather than settled.
+
+**The protection it adds already exists one layer down, in a stronger form.**
+`scripts/check-runtime-toolchain.mjs` compares the **executed** Node and npm against the governed
+values — not a declaration, the actual interpreter and the actual npm on `PATH` — and it runs at 28
+points across eight workflows, in every case before `npm ci`. `engine-strict` would re-ask a weaker
+version of a question that is already answered where it matters.
+
+**Its cost is a silent failure mode in exactly the machinery this closeout exists to protect.**
+`engines.node` is upper-bounded (`>=24.18.0 <25`) and `engines.npm` is an exact string. Under
+`engine-strict` both become hard install-time gates for _every_ npm process that runs in this working
+directory — including Dependabot's updater, which brings its own Node and npm and reads the project
+`.npmrc`. If either differs, the dependency-update pull requests stop, and they stop **without
+notifying anyone**: an absence of Dependabot PRs looks identical to a quiet week. Disabling the
+mechanism that keeps dependencies current, inside the change whose subject is dependency currency,
+is not a trade worth a marginal gain.
+
+Recorded so the measurement never has to be repeated. What would have to change first: an
+`engines` declaration that a third-party tool can satisfy — see the finding below.
+
+### A finding this raised: the published `engines.npm` constrains consumers who have no such requirement
+
+`package.json` publishes `engines` as `{"node": ">=24.18.0 <25", "npm": "11.16.0"}`, and that
+manifest reaches every consumer of `@oscharko-dev/keiko`. The exact npm string is true of Keiko's
+_contributors_ — `check:runtime-toolchain` enforces it — but it is not true of anyone installing the
+package, and an organisation that sets `engine-strict` on its own side cannot install Keiko unless it
+happens to run npm 11.16.0 exactly.
+
+Not repaired here. Relaxing it means changing a deliberately governed pin **and** the gate that
+enforces it, which is a governance decision with its own reasoning, not a side effect of a currency
+closeout. Left as a stated finding for the release owner.
 
 ## Follow-ups
 
-Recorded as findings rather than repaired here, because each changes what the required checks
-execute and belongs in its own reviewed change:
-
-1. **`npm ls --all` is not executable anywhere.** Once the ESLint 10 lane is peer-valid, add
-   `npm ls --all --workspaces --include-workspace-root` as a gate so #2293's criterion stops being
-   a sentence. Until then the criterion is knowingly, and visibly, unmet.
-2. **`@eslint/js` is a major behind `eslint`.** The root manifest declares `^9.39.5` while `eslint`
-   is on the 10.x lane. `js.configs.recommended` still loads, so nothing is broken today, but the
-   two are one family. Belongs with the ESLint 10 work.
-3. **Two repairs are blocked by the D12 measurement toolchain, not by disagreement.**
-   `tests/e2e/fixtures/keiko.e2e.config.json` still carries a credential-shaped `apiKey`
-   placeholder of the same shape that raised alert #17, and
-   `build-d12-bundle-input.mjs`, `build-d12-perf-comparison.mjs` and `check-perf-evidence.mjs`
-   hardcode the governed Node and npm versions instead of importing the constants
-   `check-runtime-toolchain.mjs` owns — the same duplicate-source defect repaired in
-   `portable-manual-review.mjs`. All four files are members of
+1. **Two repairs are blocked by the D12 measurement toolchain, not by disagreement** — tracked in
+   [#3304](https://github.com/oscharko-dev/Keiko/issues/3304).
+   `tests/e2e/fixtures/keiko.e2e.config.json` still carries a credential-shaped `apiKey` placeholder
+   of the same shape that raised alert #17, and `build-d12-bundle-input.mjs`,
+   `build-d12-perf-comparison.mjs` and `check-perf-evidence.mjs` hardcode the governed Node and npm
+   versions instead of importing the constants `check-runtime-toolchain.mjs` owns — the same
+   duplicate-source defect repaired in `portable-manual-review.mjs`. All four are members of
    `D12_MEASUREMENT_TOOLCHAIN_PATHS`, so editing any of them changes the measurement digest and
    obliges a re-measurement on the reference environment (linux/arm64, >=14 cores, ADR-0156 D6).
    Both repairs were made, both turned `check:perf-evidence` red, and both were reverted: a
-   dependency-currency closeout must not spend a reference-environment re-measurement, and a
-   hosted runner cannot produce one. They belong in a change that regenerates the evidence.
-4. **Credential-shaped literals remain in pre-existing test fixtures.** A repository sweep found
+   dependency-currency closeout must not spend a reference-environment re-measurement, and a hosted
+   runner cannot produce one.
+2. **Credential-shaped literals remain in pre-existing test fixtures.** A repository sweep found
    contiguous `AKIA…`, `ghp_…`, `github_pat_…`, `hf_…` and `sk-…` literals across roughly ten test
    files under `packages/*/src` and `tests/`. None has fired an alert — GitHub validity-checks AWS
    keys, which filters the sequential fakes, and the required `Secret scan` job only reads
    `base..head` of a pull request, never the whole tree. They are the same class as alert #20 and
    worth one batch pass; splitting them here would have expanded this closeout across ten unrelated
    files for no evidenced risk reduction.
-5. **`engine-strict` is unset, and the measurement says the dependency graph is ready for it.**
-   Keiko pins Node and npm precisely and enforces them in CI, but at install time `engines` is
-   advisory: a contributor on the wrong Node gets a warning, not a failure. The blocking question
-   was whether some dependency declares an `engines` range this pair fails. It does not — measured
-   over all 665 `engines` declarations in `package-lock.json` (1 root, 25 workspaces, 639
-   third-party) with the same `semver.satisfies(v, range, { includePrerelease: true })` predicate
-   npm itself uses: **zero failures, in every class** — direct, transitive, dev and optional. The
-   optional class cannot fail at all: npm's arborist marks an optional node `inert` and explicitly
-   ignores `--engine-strict` for it, so it is structurally out of scope. Only four of the 100
-   distinct ranges even reject Node 25, behind three third-party packages (`dependency-cruiser`,
-   `jsdom`, `watskeburt`) that a future Node bump must move anyway.
-
-   **It is nonetheless not flipped here, for a reason the measurement surfaced rather than
-   settled.** Keiko's root declares `engines.npm` as the exact string `11.16.0`. Under
-   `engine-strict=true` that becomes a hard install-time gate for _every_ npm that runs in this
-   working directory — including Dependabot's updater, which brings its own npm and reads the
-   project `.npmrc`. If that npm is not exactly 11.16.0, the npm update pull requests stop, and
-   they stop silently: nobody is notified that dependency updates have ceased. Turning off the
-   mechanism that keeps dependencies current, inside the change whose subject is dependency
-   currency, is not a trade this closeout may make on its own. Adopt it together with one verified
-   live Dependabot run, or with `engines.npm` expressed as a range — and note that `engine-strict`
-   must not then be documented as complete engines enforcement, because the optional class stays
-   outside it.
 
 ## Verification
 
@@ -308,31 +317,31 @@ Linux and Windows is CI's, not this document's: the required checks on the pull 
 complete arbiter, and no macOS-generated value is offered here as a substitute for
 platform-authoritative evidence.
 
-| Command                                                     | Result                                                  |
-| ----------------------------------------------------------- | ------------------------------------------------------- |
-| `npm ci`                                                    | pass                                                    |
-| `npm audit --json`                                          | pass — 0 vulnerabilities across 944 packages            |
-| `npm outdated --workspaces --include-workspace-root --json` | 18 non-current direct entries, all dispositioned        |
-| `npm ls --all --workspaces --include-workspace-root`        | 1 invalid remaining (`eslint`), down from 2 — see above |
-| `npm run format:check`                                      | pass                                                    |
-| `npm run typecheck`                                         | pass                                                    |
-| `npm run lint`                                              | pass                                                    |
-| `npm test`                                                  | pass — 1729 files, 33 261 tests, 0 failures             |
-| `npm run arch:check`                                        | pass                                                    |
-| `npm run arch:check:negative`                               | pass                                                    |
-| `npm run check:knip`                                        | pass                                                    |
-| `npm run check:dependency-currency`                         | pass — 36 dependency rows, 14 action rows               |
-| `npm run check:secret-scanning-queue`                       | pass — 2 open alerts, each dispositioned                |
-| `npm run check:runtime-toolchain`                           | pass — Node 24.18.0; npm 11.16.0; 25 workspaces         |
-| `npm run check:typescript-toolchain`                        | pass — compiler 7.0.2; API 6.0.3                        |
-| `npm run check:portable-approvals`                          | pass — node 24.18.0                                     |
-| `npm run check:version-consistency`                         | pass — 0.3.17 across every workspace                    |
-| `npm run check:dependency-hygiene`                          | pass — 26 manifests, 6006 tracked paths                 |
-| `npm run check:workspace-supply-chain`                      | pass                                                    |
-| `npm run check:adr-index`                                   | pass — 158 ADRs indexed                                 |
-| `npm run check:zizmor-anchors`                              | pass — 8 anchors still on the step they document        |
-| `npm run check:release-impact`                              | pass                                                    |
-| `npm run gates:sonar`                                       | pass — no unresolved finding on the changed files       |
+| Command                                                     | Result                                            |
+| ----------------------------------------------------------- | ------------------------------------------------- |
+| `npm ci`                                                    | pass                                              |
+| `npm audit --json`                                          | pass — 0 vulnerabilities across 944 packages      |
+| `npm outdated --workspaces --include-workspace-root --json` | 18 non-current direct entries, all dispositioned  |
+| `npm ls --all --workspaces --include-workspace-root`        | pass — exit 0, no invalid entries (was 2)         |
+| `npm run format:check`                                      | pass                                              |
+| `npm run typecheck`                                         | pass                                              |
+| `npm run lint`                                              | pass                                              |
+| `npm test`                                                  | pass — 1729 files, 33 261 tests, 0 failures       |
+| `npm run arch:check`                                        | pass                                              |
+| `npm run arch:check:negative`                               | pass                                              |
+| `npm run check:knip`                                        | pass                                              |
+| `npm run check:dependency-currency`                         | pass — 36 dependency rows, 14 action rows         |
+| `npm run check:secret-scanning-queue`                       | pass — 2 open alerts, each dispositioned          |
+| `npm run check:runtime-toolchain`                           | pass — Node 24.18.0; npm 11.16.0; 25 workspaces   |
+| `npm run check:typescript-toolchain`                        | pass — compiler 7.0.2; API 6.0.3                  |
+| `npm run check:portable-approvals`                          | pass — node 24.18.0                               |
+| `npm run check:version-consistency`                         | pass — 0.3.17 across every workspace              |
+| `npm run check:dependency-hygiene`                          | pass — 26 manifests, 6006 tracked paths           |
+| `npm run check:workspace-supply-chain`                      | pass                                              |
+| `npm run check:adr-index`                                   | pass — 158 ADRs indexed                           |
+| `npm run check:zizmor-anchors`                              | pass — 8 anchors still on the step they document  |
+| `npm run check:release-impact`                              | pass                                              |
+| `npm run gates:sonar`                                       | pass — no unresolved finding on the changed files |
 
 `gates:sonar` reported three findings on its first run, all in the two new gate scripts, and all
 from rules `eslint-plugin-sonarjs` does not ship: a locale-naive `Array#sort`, two consecutive

@@ -759,7 +759,7 @@ describe("WorkspaceScriptTrust fail-closed matrix", () => {
     const dir = mkdtempSync(join(tmpdir(), "keiko-script-trust-regrant-"));
     const dbPath = join(dir, "ui.db");
     const before = createNodeUiStore(dbPath);
-    let invalidatedRevision = -1;
+    let invalidatedRevision: number;
     try {
       before.createProject(root, "fixture");
       const granted = createWorkspaceScriptTrustService({ store: before });

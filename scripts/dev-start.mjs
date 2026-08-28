@@ -646,6 +646,7 @@ export async function withDevStartLock(work) {
         throw new Error(
           `[dev:start] another dev-start is holding ${DEV_START_LOCK_FILE} — either wait for it ` +
             "or `npm run dev:stop` first (use a distinct KEIKO_STATE_DIR to run in parallel)",
+          { cause: openError },
         );
       }
       await sleep(200);

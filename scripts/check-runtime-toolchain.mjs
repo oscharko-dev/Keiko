@@ -10,7 +10,10 @@ const EXPECTED_NODE_ENGINE = ">=24.18.0 <25";
 // its setup-node pins against THIS constant, so a fixture cannot restate the version and go on
 // passing while the governed baseline moves and the workflows stay behind.
 export const EXPECTED_NODE_BASELINE = "24.18.0";
-const EXPECTED_NPM_ENGINE = "11.16.0";
+// Exported for the same reason as the Node baseline: three perf-evidence scripts hard-compared
+// this value and would have started rejecting valid runs on the next npm bump, with nothing to
+// point the person doing the bump at them (#3304).
+export const EXPECTED_NPM_ENGINE = "11.16.0";
 // Exported: release.yml pins its publish npm to this exact governed version, and the lockstep
 // test compares the workflow line against THIS constant — the 0.3.1 CI publish died on a drifted
 // hand-maintained pin (11.18.0) that the tag then froze forever.

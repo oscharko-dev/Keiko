@@ -245,9 +245,28 @@ describe("dispatch collaborators", () => {
     expect(typeof deps.setExitCode).toBe("function");
   });
 
+  it("routes --workspace to the workspace producer, not the editor one", () => {
+    // The two documents have different toolchain digests and different producers; sending the
+    // workspace flag to the editor lane would measure the wrong thing for 35 minutes and copy back
+    // a document that does not answer the question that was asked.
+    const calls = [];
+    executeRegenerationCli(["node", "regen", "--workspace"], {
+      workspaceContainer: () => {
+        calls.push("workspace");
+        return { ok: true };
+      },
+      container: () => {
+        calls.push("editor");
+        return { ok: true };
+      },
+    });
+    expect(calls).toEqual(["workspace"]);
+  });
+
   it("lets every collaborator be replaced", () => {
     const overrides = {
       container: () => "c",
+      workspaceContainer: () => "w",
       regenerate: () => "r",
       error: () => "e",
       setExitCode: () => "x",

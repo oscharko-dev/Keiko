@@ -29,6 +29,7 @@ import {
 import { compareStrings } from "./lib/compare-strings.mjs";
 import { resolveHostExecutable } from "./lib/host-executable.mjs";
 import { listChangedGitPaths } from "./lib/git-changed-paths.mjs";
+import { EXPECTED_NODE_BASELINE, EXPECTED_NPM_ENGINE } from "./check-runtime-toolchain.mjs";
 
 const repoRoot = resolve(import.meta.dirname, "..");
 
@@ -793,10 +794,10 @@ function evaluateD12Toolchain(provenance, label) {
     "zlibVersion",
   ];
   if (provenance.platform !== "linux") failures.push(`${label}: platform must be linux`);
-  if (provenance.nodeVersion !== "24.18.0") {
+  if (provenance.nodeVersion !== EXPECTED_NODE_BASELINE) {
     failures.push(`${label}: Node.js version must be 24.18.0`);
   }
-  if (provenance.npmVersion !== "11.16.0") {
+  if (provenance.npmVersion !== EXPECTED_NPM_ENGINE) {
     failures.push(`${label}: npm version must be 11.16.0`);
   }
   for (const field of requiredStrings) {
@@ -2398,10 +2399,10 @@ function evaluateD12BundleRuntime(value, label) {
         "(the declared D12 reference environment; see docs/qa/perf-evidence.md)",
     );
   }
-  if (runtime.nodeVersion !== "24.18.0") {
+  if (runtime.nodeVersion !== EXPECTED_NODE_BASELINE) {
     failures.push(`${label} runtime Node.js version must be 24.18.0`);
   }
-  if (runtime.npmVersion !== "11.16.0") {
+  if (runtime.npmVersion !== EXPECTED_NPM_ENGINE) {
     failures.push(`${label} runtime npm version must be 11.16.0`);
   }
   for (const field of ["architecture", "osRelease", "zlibVersion"]) {

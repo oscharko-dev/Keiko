@@ -39,6 +39,27 @@ export const CONTAINER_SCRIPT = [
   "node scripts/regenerate-d12-evidence.mjs",
 ].join("\n");
 
+// The workspace browser-performance document has its own toolchain digest
+// (scripts/workspace-performance-measurement-toolchain.mjs) and, until now, no one-command
+// producer — only two lines of prose. That ambiguity is the defect: a pull request that moved the
+// workspace ruler had to invent its own invocation, and an invented one measures something nobody
+// can compare. Its reference environment is Linux, evidenced by ci.yml, which refreshes this
+// document on every push to `dev` and only validates freshness on a pull request. The Playwright
+// config builds the product itself, so the container needs dependencies and Chromium and nothing
+// else.
+export const WORKSPACE_EVIDENCE_FILES = ["docs/release/1580-workspace-perf-evidence.json"];
+
+export const WORKSPACE_CONTAINER_SCRIPT = [
+  "set -e",
+  'git config --global --add safe.directory "*"',
+  "npm ci",
+  `npx --yes --ignore-scripts ${PLAYWRIGHT_PIN} install --with-deps chromium`,
+  // Deleting first is part of the contract: the gate rejects a stale extra project entry, so a
+  // re-measurement must not be able to silently narrow the committed run set.
+  `rm -f ${WORKSPACE_EVIDENCE_FILES[0]}`,
+  "npm run test:e2e:workspace-perf",
+].join("\n");
+
 export const CONTAINER_REMEDIATION = [
   `The D12 editor evidence is Linux-authoritative. Run it in the pinned ${CONTAINER_IMAGE}`,
   "container with one command:",
@@ -206,7 +227,7 @@ export function regenerateEvidence(overrides = {}) {
 // were prose in CONTAINER_REMEDIATION and had to be retyped every time — provision a self-contained
 // clone, run the pinned container against it, copy both documents back — and it works from a
 // worktree, where `$PWD/.git` is a file the container cannot resolve.
-export function buildContainerArgs(clone) {
+export function buildContainerArgs(clone, script = CONTAINER_SCRIPT) {
   return [
     "run",
     "--rm",
@@ -230,8 +251,23 @@ export function buildContainerArgs(clone) {
     CONTAINER_IMAGE,
     "bash",
     "-c",
-    CONTAINER_SCRIPT,
+    script,
   ];
+}
+
+export function regenerateWorkspaceInContainer(overrides = {}) {
+  const deps = resolveDependencies(overrides);
+  const clone = join(deps.makeWorkdir(), "repo.noindex");
+  deps.log(`Provisioning a self-contained clone at ${clone}.`);
+  deps.run("git", ["clone", "--no-local", "--quiet", repoRoot, clone]);
+  deps.run("git", ["remote", "set-url", "origin", deps.originUrl()], { cwd: clone });
+  deps.log(`Measuring the workspace document in ${CONTAINER_IMAGE}. Give it the machine.`);
+  deps.run("docker", buildContainerArgs(clone, WORKSPACE_CONTAINER_SCRIPT));
+  for (const file of WORKSPACE_EVIDENCE_FILES) {
+    deps.copyFile(join(clone, file), join(repoRoot, file));
+  }
+  deps.log(`Refreshed ${WORKSPACE_EVIDENCE_FILES.join(" and ")} — review and commit it.`);
+  return { ok: true, clone };
 }
 
 export function regenerateInContainer(overrides = {}) {
@@ -271,6 +307,7 @@ export function regenerateInContainer(overrides = {}) {
 export function resolveCliIo(io = {}) {
   return {
     container: io.container ?? regenerateInContainer,
+    workspaceContainer: io.workspaceContainer ?? regenerateWorkspaceInContainer,
     regenerate: io.regenerate ?? regenerateEvidence,
     error: io.error ?? ((message) => process.stderr.write(`${message}\n`)),
     setExitCode: io.setExitCode ?? ((value) => (process.exitCode = value)),
@@ -281,6 +318,7 @@ export function resolveCliIo(io = {}) {
 // the half that decides which lane runs and what the exit code is.
 export function executeRegenerationCli(argv = process.argv, io = {}) {
   const deps = resolveCliIo(io);
+  if (argv.includes("--workspace")) return deps.workspaceContainer();
   if (argv.includes("--container")) return deps.container();
   const result = deps.regenerate();
   if (!result.ok) {
