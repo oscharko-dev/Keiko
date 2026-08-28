@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   actionFailures,
+  malformedActionRows,
   collectWorkflowPins,
   dependencyFailures,
   evaluate,
@@ -28,12 +29,26 @@ const DOCUMENT = `# closeout
 `;
 
 const LOCK = {
+  "packages/keiko-ui": {
+    dependencies: { typescript: "6.0.3" },
+    devDependencies: { vitest: "4.1.11" },
+  },
   "node_modules/typescript": { version: "6.0.3" },
   "node_modules/vitest": { version: "4.1.10" },
   "packages/keiko-ui/node_modules/vitest": { version: "4.1.11" },
 };
 
-const workflow = (name, ...lines) => ({ name, text: lines.join("\n") });
+// Fixtures are real workflow documents now that the gate parses YAML rather than scanning lines:
+// a fixture that fed the parser something it could never see in `.github/workflows` would stop
+// exercising the code under test.
+const workflow = (name, ...stepLines) => ({
+  name,
+  text: ["jobs:", "  a:", "    steps:", ...stepLines.map((line) => `      ${line.trim()}`)].join(
+    "\n",
+  ),
+});
+
+const rawWorkflow = (name, text) => ({ name, text });
 
 describe("check-dependency-currency parsing", () => {
   it("reads governed dependency rows and ignores headers, separators and prose rows", () => {
@@ -51,10 +66,19 @@ describe("check-dependency-currency parsing", () => {
     expect(names).not.toContain("actions/checkout");
   });
 
-  it("reads action rows by their commit-SHA column", () => {
+  it("reads action rows by their commit-SHA column, disposition included", () => {
     expect(parseActionRows(DOCUMENT)).toEqual([
-      { action: "actions/checkout", version: "v7.0.0", sha: SHA_A },
+      { action: "actions/checkout", version: "v7.0.0", sha: SHA_A, disposition: "current" },
     ]);
+  });
+
+  it("rejects an action row whose reviewed disposition was deleted or mistyped", () => {
+    // The decision record is the artifact being enforced, not just the pin. Accepting a row on its
+    // SHA alone let the disposition be replaced with prose while the gate stayed green.
+    const typo = DOCUMENT.replace(`${SHA_A} | current |`, `${SHA_A} | currrent |`);
+    expect(parseActionRows(typo)).toEqual([]);
+    expect(malformedActionRows(typo)).toEqual(["actions/checkout"]);
+    expect(malformedActionRows(DOCUMENT)).toEqual([]);
   });
 });
 
@@ -66,6 +90,17 @@ describe("check-dependency-currency dependency resolution", () => {
 
   it("falls back to the root copy when the workspace does not override the dependency", () => {
     expect(resolveInstalledVersion(LOCK, "typescript", "keiko-ui")).toBe("6.0.3");
+  });
+
+  it("refuses the hoisted copy for a workspace that no longer declares the dependency", () => {
+    // Otherwise a row outlives its own subject: drop the dependency from this workspace while
+    // another keeps the same hoisted version, and the stale disposition passes forever.
+    const dropped = { ...LOCK, "packages/keiko-ui": { dependencies: {}, devDependencies: {} } };
+    expect(resolveInstalledVersion(dropped, "typescript", "keiko-ui")).toBeUndefined();
+  });
+
+  it("refuses a scope that is not a workspace at all, so a typo fails closed", () => {
+    expect(resolveInstalledVersion(LOCK, "typescript", "keiko-uii")).toBeUndefined();
   });
 
   it("passes when every documented version matches the resolved graph", () => {
@@ -151,6 +186,25 @@ describe("check-dependency-currency action pins", () => {
     const failures = actionFailures(documented, pins);
     expect(failures).toHaveLength(1);
     expect(failures[0]).toContain("workflows pin v7.0.1@");
+  });
+
+  it("ignores a pinned reference that is not an executed step", () => {
+    // Raw-text scanning counted a pin inside a comment or a run script. A documented row could then
+    // stay green on an action no workflow executes — the completeness check inverted.
+    const pins = collectWorkflowPins([
+      rawWorkflow(
+        "ci.yml",
+        [
+          "jobs:",
+          "  a:",
+          "    steps:",
+          `      # historical: uses: some/action@${SHA_B} # v1.0.0`,
+          "      - run: |",
+          `          echo "uses: other/action@${SHA_B} # v2.0.0"`,
+        ].join("\n"),
+      ),
+    ]);
+    expect(pins.size).toBe(0);
   });
 
   it("ignores a local composite action, which has no ref to pin", () => {

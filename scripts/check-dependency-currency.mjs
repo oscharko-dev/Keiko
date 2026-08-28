@@ -31,6 +31,7 @@
 // bodies or credentials.
 
 import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
+import { parse } from "yaml";
 import { dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { readJsonFile } from "./lib/json.mjs";
@@ -48,7 +49,16 @@ const WORKFLOW_DIRS = [join(".github", "workflows"), join(".github", "actions")]
 const DISPOSITIONS = new Set(["current", "patch-deferred", "major-deferred", "unsupported"]);
 
 const SHA_PATTERN = /^[0-9a-f]{40}$/u;
-const USES_PIN = /uses:\s*([A-Za-z0-9._-]+\/[A-Za-z0-9._/-]+)@([0-9a-f]{40})\s*#\s*(\S+)/u;
+// Applied to a parsed step's `uses` VALUE, never to a raw file line: a pinned reference inside a
+// YAML comment or a `run:` heredoc is not a step this repository executes, and counting one would
+// let the completeness check pass on an action no workflow actually uses.
+const USES_REFERENCE = /^([A-Za-z0-9._-]+\/[A-Za-z0-9._/-]+)@([0-9a-f]{40})$/u;
+const DEPENDENCY_SECTIONS = [
+  "dependencies",
+  "devDependencies",
+  "optionalDependencies",
+  "peerDependencies",
+];
 
 function tableCells(line) {
   const trimmed = line.trim();
@@ -86,27 +96,64 @@ export function parseDependencyRows(markdown) {
   return rows;
 }
 
+// The full row schema is required, disposition included. Accepting a row on its SHA alone would
+// let the reviewed decision be deleted, mistyped, or replaced with prose while the gate stayed
+// green — the decision record is the artifact being enforced, not just the pin.
 export function parseActionRows(markdown) {
   const rows = [];
   for (const line of markdown.split(/\r?\n/)) {
     const cells = tableCells(line);
-    if (cells === null || cells.length < 3) continue;
+    if (cells === null || cells.length < 4) continue;
     const sha = unquote(cells[2]);
     if (!SHA_PATTERN.test(sha)) continue;
-    rows.push({ action: unquote(cells[0]), version: unquote(cells[1]), sha });
+    if (!DISPOSITIONS.has(cells[3])) continue;
+    rows.push({
+      action: unquote(cells[0]),
+      version: unquote(cells[1]),
+      sha,
+      disposition: cells[3],
+    });
   }
   return rows;
+}
+
+// A SHA-shaped row whose disposition is missing or invalid is a corrupted decision record, not an
+// absent one, so it must fail loudly rather than silently drop out of enforcement.
+export function malformedActionRows(markdown) {
+  const malformed = [];
+  for (const line of markdown.split(/\r?\n/)) {
+    const cells = tableCells(line);
+    if (cells === null || cells.length < 3) continue;
+    if (!SHA_PATTERN.test(unquote(cells[2]))) continue;
+    if (cells.length >= 4 && DISPOSITIONS.has(cells[3])) continue;
+    malformed.push(unquote(cells[0]));
+  }
+  return malformed;
+}
+
+function workspaceDeclares(workspace, name) {
+  return DEPENDENCY_SECTIONS.some((section) => {
+    const declared = workspace[section];
+    return typeof declared === "object" && declared !== null && name in declared;
+  });
 }
 
 // A workspace may override a dependency locally; npm then places it under the workspace's own
 // node_modules and the hoisted root copy is a different resolution. Checking the root copy for a
 // workspace-scoped row would compare the wrong node, so the local path wins when it exists.
+//
+// The hoisted fallback is only valid while that workspace still DECLARES the dependency. Without
+// that condition a row outlives its own subject: drop `monaco-editor` from keiko-ui while another
+// workspace keeps the same hoisted version and the stale keiko-ui disposition passes forever, and
+// a misspelled scope never fails at all. Both now resolve to undefined and fail closed.
 export function resolveInstalledVersion(lockPackages, name, scope) {
-  if (scope !== "root") {
-    const local = lockPackages[`packages/${scope}/node_modules/${name}`];
-    if (local?.version !== undefined) return local.version;
-  }
-  return lockPackages[`node_modules/${name}`]?.version;
+  const hoisted = lockPackages[`node_modules/${name}`]?.version;
+  if (scope === "root") return hoisted;
+  const workspace = lockPackages[`packages/${scope}`];
+  if (workspace === undefined) return undefined;
+  const local = lockPackages[`packages/${scope}/node_modules/${name}`];
+  if (local?.version !== undefined) return local.version;
+  return workspaceDeclares(workspace, name) ? hoisted : undefined;
 }
 
 export function dependencyFailures(rows, lockPackages) {
@@ -131,17 +178,36 @@ function actionRepository(reference) {
   return `${owner}/${name}`;
 }
 
+// A workflow's steps live under `jobs.<id>.steps`; a composite action's under `runs.steps`.
+function documentSteps(document) {
+  const steps = [];
+  for (const job of Object.values(document?.jobs ?? {})) {
+    if (Array.isArray(job?.steps)) steps.push(...job.steps);
+  }
+  if (Array.isArray(document?.runs?.steps)) steps.push(...document.runs.steps);
+  return steps;
+}
+
+// The version comment is not part of the parsed `uses` value, so it is recovered from the line that
+// declares this exact reference. A pin without one yields an empty comment, which then fails the
+// comparison against the documented row — the intended fail-closed outcome.
+function versionCommentFor(text, reference) {
+  const escaped = reference.replace(/[.*+?^${}()|[\]\\]/gu, String.raw`\$&`);
+  return new RegExp(String.raw`${escaped}\s*#\s*(\S+)`, "u").exec(text)?.[1] ?? "";
+}
+
 // Collects one entry per action REPOSITORY, keeping every distinct (sha, comment) pair seen for it.
 export function collectWorkflowPins(files) {
   const pins = new Map();
   for (const { name, text } of files) {
-    for (const line of text.split(/\r?\n/)) {
-      const match = USES_PIN.exec(line);
+    for (const step of documentSteps(parse(text))) {
+      if (typeof step?.uses !== "string") continue;
+      const reference = step.uses.trim();
+      const match = USES_REFERENCE.exec(reference);
       if (match === null) continue;
-      const [, reference, sha, version] = match;
-      const repository = actionRepository(reference);
+      const repository = actionRepository(match[1]);
       const seen = pins.get(repository) ?? new Map();
-      const key = `${sha} ${version}`;
+      const key = `${match[2]} ${versionCommentFor(text, reference)}`;
       seen.set(key, [...(seen.get(key) ?? []), name]);
       pins.set(repository, seen);
     }
@@ -223,6 +289,9 @@ export function evaluate(seams) {
   }
   if (actionRows.length === 0) {
     failures.push("closeout document declares no GitHub Action rows");
+  }
+  for (const action of malformedActionRows(markdown)) {
+    failures.push(`${action}: action row has no valid disposition`);
   }
   failures.push(
     ...dependencyFailures(dependencyRows, seams.readLock()),

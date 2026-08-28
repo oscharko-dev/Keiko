@@ -45,23 +45,31 @@ export function alertQueries(repository) {
   return [base, `${base}&secret_type=password`];
 }
 
+// Exported so the pagination flags are assertable: they are the difference between reading the
+// whole queue and reading its first hundred entries, and nothing else in the run would reveal the
+// truncation.
+export function ghArguments(query) {
+  return ["api", "--paginate", "--slurp", "-H", `X-GitHub-Api-Version: ${API_VERSION}`, query];
+}
+
+// `--paginate --slurp` returns every page as one outer array of pages. Without it, `per_page=100`
+// silently truncates: an untriaged alert on page two would be indistinguishable from no alert at
+// all, and this gate would report a clean queue precisely when it is least true.
 function runGh(query) {
   const result = spawnSync(
     // Resolved through the repository's hardened resolver rather than a bare PATH lookup: a
     // writable directory earlier in PATH must not be able to substitute the binary that reads
     // this repository's security findings.
     resolveHostExecutable("gh"),
-    ["api", "-H", `X-GitHub-Api-Version: ${API_VERSION}`, query],
-    {
-      encoding: "utf8",
-      timeout: GH_TIMEOUT_MS,
-      maxBuffer: 8 * 1024 * 1024,
-    },
+    ghArguments(query),
+    { encoding: "utf8", timeout: GH_TIMEOUT_MS, maxBuffer: 32 * 1024 * 1024 },
   );
   if (result.status !== 0) {
     throw new Error(`GitHub API request failed (exit ${String(result.status)})`);
   }
-  return JSON.parse(result.stdout);
+  const pages = JSON.parse(result.stdout);
+  if (!Array.isArray(pages)) throw new TypeError("paginated alert response is not an array");
+  return pages.flat();
 }
 
 // Merged by alert number: the two listings overlap by design, and an alert must be counted once.
@@ -75,15 +83,49 @@ export function mergeAlerts(responses) {
   return [...byNumber.values()].sort((left, right) => left.number - right.number);
 }
 
-// Disposition rows in the closeout document start with an alert reference cell (`#17`).
+function tableCells(line) {
+  const trimmed = line.trim();
+  if (!trimmed.startsWith("|")) return null;
+  return trimmed
+    .split("|")
+    .slice(1, -1)
+    .map((cell) => cell.trim());
+}
+
+const SEPARATOR_ROW = /^\|[\s:|-]*$/u;
+const ALERT_REFERENCE = /^#(\d+)$/u;
+
+function tableRowKind(trimmed, cells) {
+  if (SEPARATOR_ROW.test(trimmed)) return "separator";
+  return cells[0] === "Alert" && cells.length >= 4 ? "header" : "row";
+}
+
+function dispositionedAlertNumber(cells) {
+  if (cells.length < 4) return undefined;
+  const match = ALERT_REFERENCE.exec(cells[0] ?? "");
+  if (match === null) return undefined;
+  // An empty disposition cell is a row someone started and did not finish; it is not a decision.
+  return (cells[3] ?? "").length > 0 ? Number(match[1]) : undefined;
+}
+
+// Bound to the dispositions table specifically, entered only through its `Alert` header and left at
+// the first non-table line. This document is expected to grow: any later table listing issue or
+// follow-up numbers would otherwise be read as security dispositions, and a newly opened alert that
+// happened to share a number with a follow-up would count as reviewed by nobody.
 export function parseDocumentedAlerts(markdown) {
   const documented = new Set();
+  let inDispositions = false;
   for (const line of markdown.split(/\r?\n/)) {
-    const trimmed = line.trim();
-    if (!trimmed.startsWith("|")) continue;
-    const first = trimmed.split("|")[1]?.trim() ?? "";
-    const match = /^#(\d+)$/u.exec(first);
-    if (match !== null) documented.add(Number(match[1]));
+    const cells = tableCells(line);
+    if (cells === null) {
+      inDispositions = false;
+      continue;
+    }
+    const kind = tableRowKind(line.trim(), cells);
+    if (kind === "header") inDispositions = true;
+    if (kind !== "row" || !inDispositions) continue;
+    const number = dispositionedAlertNumber(cells);
+    if (number !== undefined) documented.add(number);
   }
   return documented;
 }

@@ -55,17 +55,19 @@ function stepGroups(document, label) {
   return groups;
 }
 
+// Every occurrence is kept, not just the first. Collapsing to one index per kind is what let a
+// second `setup-node` added AFTER the gate satisfy an assertion about "every" setup.
 function classify(steps) {
   const setupNode = [];
-  let gate = -1;
-  let install = -1;
+  const gates = [];
+  const installs = [];
   steps.forEach((step, index) => {
     if (typeof step?.uses === "string" && step.uses.includes(SETUP_NODE)) setupNode.push(index);
     if (typeof step?.run !== "string") return;
-    if (gate < 0 && step.run.includes(GATE_SCRIPT)) gate = index;
-    if (install < 0 && /\bnpm ci\b/u.test(step.run)) install = index;
+    if (step.run.includes(GATE_SCRIPT)) gates.push(index);
+    if (/\bnpm ci\b/u.test(step.run)) installs.push(index);
   });
-  return { setupNode, gate, install };
+  return { setupNode, gates, installs };
 }
 
 function allGroups() {
@@ -99,16 +101,24 @@ describe("workflow Node toolchain parity", () => {
   });
 
   it("verifies the governed toolchain after every Node setup and before npm ci", () => {
+    // Asserted per setup step, independently. A job that sets up Node twice must verify the
+    // toolchain after each one: the second setup selects a different runtime, and a gate that ran
+    // before it proves nothing about what the following `npm ci` actually installs with.
     for (const group of withSetupNode) {
-      const { setupNode, gate, install } = classify(group.steps);
-      expect(gate, `${group.label} sets up Node but never runs ${GATE_SCRIPT}`).toBeGreaterThan(-1);
-      expect(gate, `${group.label} runs ${GATE_SCRIPT} before Node is set up`).toBeGreaterThan(
-        Math.min(...setupNode),
-      );
-      if (install > -1) {
-        expect(gate, `${group.label} runs npm ci before verifying the toolchain`).toBeLessThan(
-          install,
-        );
+      const { setupNode, gates, installs } = classify(group.steps);
+      for (const setup of setupNode) {
+        const gate = gates.find((index) => index > setup);
+        expect(
+          gate,
+          `${group.label}: the setup-node at step ${String(setup)} is never followed by ${GATE_SCRIPT}`,
+        ).toBeDefined();
+        const install = installs.find((index) => index > setup);
+        if (install !== undefined) {
+          expect(
+            gate,
+            `${group.label}: npm ci at step ${String(install)} runs before the toolchain is verified`,
+          ).toBeLessThan(install);
+        }
       }
     }
   });

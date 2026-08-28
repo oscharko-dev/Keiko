@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   alertQueries,
+  ghArguments,
   evaluate,
   main,
   mergeAlerts,
@@ -42,6 +43,16 @@ describe("check-secret-scanning-queue queries", () => {
   });
 });
 
+describe("check-secret-scanning-queue pagination", () => {
+  it("requests every page, because per_page=100 alone truncates the queue silently", () => {
+    // A hundred-and-first open alert would be indistinguishable from no alert at all, and this
+    // gate would report a clean queue exactly when it is least true.
+    const args = ghArguments("repos/o/r/secret-scanning/alerts?state=open");
+    expect(args).toContain("--paginate");
+    expect(args).toContain("--slurp");
+  });
+});
+
 describe("check-secret-scanning-queue parsing", () => {
   it("merges the two overlapping listings, counting each alert once", () => {
     expect(
@@ -57,6 +68,24 @@ describe("check-secret-scanning-queue parsing", () => {
 
   it("reads alert rows and ignores tables that are not dispositions", () => {
     expect([...parseDocumentedAlerts(DOCUMENT)].sort((a, b) => a - b)).toEqual([17, 20]);
+  });
+
+  it("ignores an alert-shaped number in a table that is not the dispositions table", () => {
+    // This document is expected to grow. A later follow-up table listing issue numbers must never
+    // be read as a security disposition: a newly opened alert sharing a number with a follow-up
+    // would otherwise count as reviewed by nobody.
+    const withFollowUps = `${DOCUMENT}
+
+| Ref | Owner | Status | Note |
+| --- | ----- | ------ | ---- |
+| #31 | infra | open   | unrelated follow-up |
+`;
+    expect([...parseDocumentedAlerts(withFollowUps)].sort((a, b) => a - b)).toEqual([17, 20]);
+  });
+
+  it("ignores a disposition row whose disposition cell is empty", () => {
+    const emptied = DOCUMENT.replace("False positive — doc placeholder", "");
+    expect([...parseDocumentedAlerts(emptied)]).toEqual([20]);
   });
 });
 
