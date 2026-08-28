@@ -57,9 +57,21 @@ This script uses a disposable repository containing no secrets or private data.
 Run:
 
 ```bash
-npm run test:e2e:editor-agent-docking-2122
+npm run test:e2e:editor-chat-2119
 ```
 
-The suite covers selection-grounded Ask/response, Chat Apply Reject/Accept/Save, reviewed and direct
-multi-file transactions, split-pane bridge supersession and model reconciliation, filesystem state,
-presence, and content-free audit evidence against the real BFF.
+```bash
+npm run test:e2e:editor-agent-pins
+```
+
+Together these cover selection-grounded Ask/response, Chat Apply Reject/Accept/Save, the
+sensitive-path denial and authority-missing fail-closed default, split-pane session supersession and
+model reconciliation, filesystem state, presence, and content-free audit evidence against the real
+BFF.
+
+The former `test:e2e:editor-agent-docking-2122` suite is retired (#2955). Its reviewed and direct
+multi-file transaction journeys registered a browser-supplied Authority Envelope through
+`POST /api/editor/agent/authority` and `/api/coding-workbench/autonomous-delivery/confirm`, which
+#2256 deliberately unmounted — `packages/keiko-server/src/routes.test.ts` pins that they stay
+unmounted, so those journeys asserted a capability the product no longer offers. Server-derived
+authority now travels with the bridge lease, which is what the two suites above exercise.

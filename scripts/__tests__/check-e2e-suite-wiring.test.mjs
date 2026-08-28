@@ -5,28 +5,41 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
 import {
+  apiPathReferences,
+  blankComments,
   checkE2eConfigOwnership,
   checkE2eProtectionBaseline,
+  checkE2eRouteResolution,
+  checkE2eSpecReachability,
   checkE2eSuiteWiring,
+  declaredSpecTags,
   executableWorkflowSegments,
   formatGateReport,
   isWiredInWorkflows,
   main,
+  mountedRoutePatterns,
+  parseConfigSelection,
+  reachableSpecs,
+  routeResolves,
   runE2eSuiteWiringGate,
   suiteProtectionClass,
   playwrightConfigNames,
   validateBaselineSuites,
+  validateExternalApiPathReasons,
+  validateExternalApiPaths,
+  validateUnreachableSpecReasons,
+  validateUnreachableSpecs,
   validateUnownedConfigReasons,
   validateUnownedConfigs,
 } from "../check-e2e-suite-wiring.mjs";
 
 // Each caller owns its directory for the length of one test, so nothing is shared and no ordering
 // between tests can matter.
-function withFixtureRoot(build, assert) {
+async function withFixtureRoot(build, assert) {
   const root = mkdtempSync(join(tmpdir(), "keiko-e2e-wiring-"));
   try {
     build(root);
-    assert(root);
+    await assert(root);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -168,8 +181,8 @@ describe("e2e suite wiring gate (#2629)", () => {
   // Live wiring, through the gate's own readers rather than a re-implementation of them. This is
   // what turns the register into a ratchet on the actual repository instead of only on fixtures,
   // and it is the only thing that proves the gate can load its real inputs at all.
-  it("holds over the real package.json, workflows, and baseline", () => {
-    const result = runE2eSuiteWiringGate();
+  it("holds over the real package.json, workflows, and baseline", async () => {
+    const result = await runE2eSuiteWiringGate();
     expect(result.problems).toEqual([]);
     expect(result.total).toBeGreaterThan(result.recorded);
     expect(formatGateReport(result)).toContain("e2e-suite-wiring: PASS");
@@ -484,10 +497,10 @@ jobs:
     ]);
   });
 
-  it("rejects a baseline document that is not a suites array", () => {
+  it("rejects a baseline document that is not a suites array", async () => {
     // Fail loudly on a malformed register rather than treating it as "nothing recorded", which
     // would silently re-admit every suite it was holding.
-    withFixtureRoot(
+    await withFixtureRoot(
       (root) => {
         mkdirSync(join(root, "docs", "qa"), { recursive: true });
         writeFileSync(join(root, "package.json"), JSON.stringify({ scripts: {} }), "utf8");
@@ -497,8 +510,10 @@ jobs:
           "utf8",
         );
       },
-      (root) => {
-        expect(() => runE2eSuiteWiringGate(root)).toThrow(/must carry a "suites" array/u);
+      async (root) => {
+        // The gate is async since #2955 (it imports the built server route table), so a malformed
+        // register surfaces as a rejection rather than a synchronous throw. Same invariant.
+        await expect(runE2eSuiteWiringGate(root)).rejects.toThrow(/must carry a "suites" array/u);
       },
     );
   });
@@ -516,9 +531,9 @@ jobs:
     ]);
   });
 
-  it("runs end to end and reports success without writing to the real stdout", () => {
+  it("runs end to end and reports success without writing to the real stdout", async () => {
     const written = [];
-    expect(main((text) => written.push(text))).toBe(0);
+    expect(await main((text) => written.push(text))).toBe(0);
     expect(written.join("")).toContain("e2e-suite-wiring: PASS");
   });
 });
@@ -682,7 +697,254 @@ describe("config ownership (KEIKO-0077)", () => {
 
   // The real repository must satisfy the invariant, not only the fixtures: a gate whose only
   // coverage is synthetic never proves it can read its own inputs.
-  it("holds over the real repository", () => {
-    expect(runE2eSuiteWiringGate().problems).toEqual([]);
+  it("holds over the real repository", async () => {
+    expect((await runE2eSuiteWiringGate()).problems).toEqual([]);
+  });
+});
+
+// Audits KEIKO-0078 / KEIKO-0080 (#2955). Invariants 1-3 all start from an artifact that already
+// declares itself runnable. A spec file declares nothing, so nothing enumerated tests/e2e — the
+// dimension in which eleven specs were reachable from no script at all.
+describe("spec reachability (KEIKO-0078 / KEIKO-0080)", () => {
+  const CONFIGURED = "configured.spec.ts";
+  const TAGGED = "tagged.spec.ts";
+  const NAMED = "named.spec.ts";
+  const ORPHAN = "orphan.spec.ts";
+  const SPECS = [CONFIGURED, TAGGED, NAMED, ORPHAN];
+
+  // The shared config's catch-all glob, and one config that names a spec literally.
+  const SELECTIONS = new Map([
+    [
+      "playwright.config.ts",
+      parseConfigSelection('testMatch: "**/*.spec.ts",\ntestIgnore: "code-task-*.spec.ts",'),
+    ],
+    ["playwright.configured.config.ts", parseConfigSelection(`testMatch: ["${CONFIGURED}"],`)],
+  ]);
+  const SPEC_TAGS = new Map([
+    [CONFIGURED, new Set()],
+    [TAGGED, new Set(["@smoke"])],
+    [NAMED, new Set()],
+    [ORPHAN, new Set()],
+  ]);
+  const SCRIPTS = [
+    {
+      name: "test:e2e:configured",
+      command: "playwright test --config tests/e2e/config/playwright.configured.config.ts",
+    },
+    {
+      name: "test:e2e:smoke",
+      command: "playwright test --config tests/e2e/config/playwright.config.ts --grep @smoke",
+    },
+    {
+      name: "test:e2e:named",
+      command: `playwright test tests/e2e/${NAMED} --config tests/e2e/config/playwright.config.ts`,
+    },
+  ];
+
+  function reachability(recordedSpecs = []) {
+    return checkE2eSpecReachability({
+      specs: SPECS,
+      scripts: SCRIPTS,
+      selections: SELECTIONS,
+      specTags: SPEC_TAGS,
+      recordedSpecs,
+    });
+  }
+
+  it("reaches a spec through a config's literal testMatch, a grep tag, and a named path", () => {
+    const reached = reachableSpecs({
+      specs: SPECS,
+      scripts: SCRIPTS,
+      selections: SELECTIONS,
+      specTags: SPEC_TAGS,
+    });
+    expect(reached.get(CONFIGURED)).toBe("test:e2e:configured");
+    expect(reached.get(TAGGED)).toBe("test:e2e:smoke");
+    expect(reached.get(NAMED)).toBe("test:e2e:named");
+    expect(reached.has(ORPHAN)).toBe(false);
+  });
+
+  it("reports a spec no script can reach", () => {
+    const { problems } = reachability();
+    expect(problems).toHaveLength(1);
+    expect(problems[0]).toContain(ORPHAN);
+    expect(problems[0]).toContain("reachable from no test:e2e:* script");
+  });
+
+  // The whole point of literal-only config matching. The shared config's "**/*.spec.ts" collects
+  // every spec in the tree while its only script greps @smoke; honouring the glob would report the
+  // orphan as covered by a lane that never runs it.
+  it("does not let a catch-all config glob stand in for a lane", () => {
+    const untagged = reachableSpecs({
+      specs: [ORPHAN],
+      scripts: [SCRIPTS[1]],
+      selections: SELECTIONS,
+      specTags: new Map([[ORPHAN, new Set()]]),
+    });
+    expect(untagged.has(ORPHAN)).toBe(false);
+  });
+
+  it("honours testIgnore, so an excluded spec is not reached by the tag lane", () => {
+    const ignored = "code-task-thing.spec.ts";
+    const reached = reachableSpecs({
+      specs: [ignored],
+      scripts: [SCRIPTS[1]],
+      selections: SELECTIONS,
+      specTags: new Map([[ignored, new Set(["@smoke"])]]),
+    });
+    expect(reached.has(ignored)).toBe(false);
+  });
+
+  it("passes when the spec is recorded in the register instead", () => {
+    expect(reachability([ORPHAN]).problems).toEqual([]);
+  });
+
+  // The ratchet: a register that only shrinks is a debt list; one that can hold stale entries is a
+  // permanent exemption.
+  it("reports a recorded spec that is now reachable, or has been deleted", () => {
+    expect(reachability([CONFIGURED]).problems.join("\n")).toContain(
+      "test:e2e:configured now runs it",
+    );
+    expect(reachability([ORPHAN, "gone.spec.ts"]).problems.join("\n")).toContain(
+      "gone.spec.ts, which no longer exists",
+    );
+  });
+
+  it("reads testMatch as a string, an array, or a single-file regular expression", () => {
+    expect(parseConfigSelection('testMatch: "one.spec.ts",').literals).toEqual(["one.spec.ts"]);
+    expect(parseConfigSelection('testMatch: ["a.spec.ts", "b.spec.ts"],').literals).toEqual([
+      "a.spec.ts",
+      "b.spec.ts",
+    ]);
+    expect(parseConfigSelection("testMatch: /local\\.spec\\.ts/u,").literals).toEqual([
+      "local.spec.ts",
+    ]);
+    expect(parseConfigSelection("timeout: 1,").collectsByGlob).toBe(true);
+  });
+
+  it("reads a tag from a spec's code but not from its comments", () => {
+    expect(declaredSpecTags('test("runs @smoke", () => {});')).toContain("@smoke");
+    expect(declaredSpecTags("// @smoke is not wired yet\nconst x = 1;")).not.toContain("@smoke");
+  });
+
+  it("requires a non-empty reason for every recorded spec and rejects stale reasons", () => {
+    expect(() => validateUnreachableSpecReasons([ORPHAN], {})).toThrow(/no reason/u);
+    expect(() => validateUnreachableSpecReasons([], { [ORPHAN]: "why" })).toThrow(/stale reason/u);
+    expect(validateUnreachableSpecReasons([ORPHAN], { [ORPHAN]: "why" })).toEqual({
+      [ORPHAN]: "why",
+    });
+  });
+
+  it("rejects duplicate and non-spec register entries", () => {
+    expect(() => validateUnreachableSpecs([ORPHAN, ORPHAN])).toThrow(/more than once/u);
+    expect(() => validateUnreachableSpecs(["playwright.x.config.ts"])).toThrow(/file names/u);
+    expect(() => validateUnreachableSpecs(undefined)).toThrow(/specsWithoutLane/u);
+  });
+});
+
+// Audit KEIKO-0094 (#2955). A wired suite calling a route the server does not mount reads as a
+// passing journey right up to the moment it runs — which is how editor-agent-docking-2122 kept
+// POSTing two routes #2256 deliberately unmounted, in a lane nobody watched.
+describe("route resolution (KEIKO-0094)", () => {
+  const PATTERNS = [
+    "/api/editor/agent/sessions",
+    "/api/editor/agent/audit",
+    "/api/git/status",
+    "/api/runs/:runId/cancel",
+    "/api/prompt-enhancement/evidence/:runId",
+  ];
+  const source = (body) => [{ name: "one.spec.ts", source: body }];
+
+  function problemsFor(body, externalPaths = []) {
+    return checkE2eRouteResolution({
+      specSources: source(body),
+      patterns: PATTERNS,
+      externalPaths,
+    });
+  }
+
+  it("reports a path no mounted route serves", () => {
+    const problems = problemsFor('await request.post("/api/editor/agent/authority", {});');
+    expect(problems).toHaveLength(1);
+    expect(problems[0]).toContain("/api/editor/agent/authority");
+    expect(problems[0]).toContain("no mounted server route serves");
+  });
+
+  it("resolves an exact path and a :param segment", () => {
+    expect(problemsFor('request.get("/api/editor/agent/sessions")')).toEqual([]);
+    expect(problemsFor('request.post("/api/runs/run-7/cancel")')).toEqual([]);
+  });
+
+  it("does not let a shorter or longer path match a mounted pattern", () => {
+    expect(problemsFor('request.get("/api/runs/run-7")')).toHaveLength(1);
+    expect(problemsFor('request.get("/api/git/status/extra")')).toHaveLength(1);
+  });
+
+  // Interception globs and interpolated template literals name a FAMILY of paths, not one route.
+  it("resolves a wildcard route glob and an interpolated path by prefix", () => {
+    expect(problemsFor('page.route("**/api/git/status**", handler)')).toEqual([]);
+    expect(problemsFor("request.get(`/api/runs/${id}/cancel`)")).toEqual([]);
+    expect(problemsFor('expect(url).toContain("/api/prompt-enhancement/evidence/")')).toEqual([]);
+  });
+
+  it("ignores a path that appears only in a comment", () => {
+    expect(problemsFor("// calls /api/editor/agent/authority one day\nconst x = 1;")).toEqual([]);
+  });
+
+  it("passes an allowlisted path and reports one no spec names any more", () => {
+    const body = 'if (!String(url).includes("/api/voice/control")) return;';
+    expect(problemsFor(body, ["/api/voice/control"])).toEqual([]);
+    const stale = problemsFor("const x = 1;", ["/api/voice/control"]);
+    expect(stale).toHaveLength(1);
+    expect(stale[0]).toContain("no spec names it any more");
+  });
+
+  it("requires a non-empty reason for every allowlisted path and rejects stale reasons", () => {
+    expect(() => validateExternalApiPathReasons(["/api/x"], {})).toThrow(/no reason/u);
+    expect(() => validateExternalApiPathReasons([], { "/api/x": "why" })).toThrow(/stale reason/u);
+    expect(() => validateExternalApiPaths(["not-a-path"])).toThrow(/paths/u);
+    expect(() => validateExternalApiPaths(["/api/x", "/api/x"])).toThrow(/more than once/u);
+  });
+
+  it("matches a path by segment arity, and a prefix by containment", () => {
+    expect(routeResolves({ path: "/api/git/status", prefix: false }, PATTERNS)).toBe(true);
+    expect(routeResolves({ path: "/api/git", prefix: false }, PATTERNS)).toBe(false);
+    expect(routeResolves({ path: "/api/git", prefix: true }, PATTERNS)).toBe(true);
+    expect(routeResolves({ path: "/api/gitx", prefix: true }, PATTERNS)).toBe(false);
+  });
+
+  // Blanking, not deleting: a `//` inside a string is not a comment, and losing the rest of that
+  // line would silently drop any call after it — the fail-OPEN direction this gate cannot afford.
+  it("blanks comments while leaving string literals byte-identical", () => {
+    expect(blankComments('const a = "http://127.0.0.1/api/git/status";')).toContain(
+      "http://127.0.0.1/api/git/status",
+    );
+    expect(blankComments("/* /api/gone */ const a = 1;")).not.toContain("/api/gone");
+    expect(blankComments("const a = 1; // /api/gone\nconst b = 2;")).not.toContain("/api/gone");
+    expect(blankComments("/* x */ const a = 1;")).toContain("const a = 1;");
+  });
+
+  it("extracts one reference per path and prefers the exact form over a prefix", () => {
+    const refs = apiPathReferences(
+      'page.route("**/api/git/status**"); request.get("/api/git/status")',
+    );
+    expect(refs).toEqual([{ path: "/api/git/status", prefix: false }]);
+    expect(apiPathReferences('const base = "/api/";')).toEqual([]);
+  });
+
+  // Fail closed on unreadable input: an unloadable route table means the mounted set is UNKNOWN, and
+  // a gate that quietly skipped the invariant there would remove itself exactly when it is needed.
+  it("reports an unreadable route table instead of skipping the invariant", async () => {
+    await expect(mountedRoutePatterns(join(tmpdir(), "keiko-no-such-checkout"))).rejects.toThrow(
+      /could not be loaded/u,
+    );
+  });
+
+  it("reads the real mounted table from the built server package", async () => {
+    const patterns = await mountedRoutePatterns(join(import.meta.dirname, "..", ".."));
+    expect(patterns).toContain("/api/editor/agent/sessions");
+    // #2256 unmounted the browser-owned authority routes on purpose; routes.test.ts pins that they
+    // stay unmounted. If this ever resolves, the register entry — not the gate — is what moved.
+    expect(patterns).not.toContain("/api/editor/agent/authority");
   });
 });

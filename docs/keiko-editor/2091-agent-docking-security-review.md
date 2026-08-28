@@ -91,7 +91,7 @@ No unresolved high or critical finding remains after these fixes.
 | Authority and capability         | missing/wrong/replayed bridge capability; expired changeset authority; delayed stream close; unknown-field smuggling               | `agentRoutes.test.ts`: bridge lease/supersession, changeset expiry, and canonical-wire tests    |
 | Atomicity                        | browser rejection; stale member; writer failure on a later member; replay; forged result                                           | `agentRoutes.test.ts`: apply-none, rollback, idempotency, and forged-result tests               |
 | Authority budgets                | cumulative tool calls and UTF-8 patch bytes; elapsed runtime; text-edit bytes; identical re-registration                           | `agentAuthorityRegistry.test.ts` and `agentRoutes.test.ts` Authority Envelope budget tests      |
-| Cross-pane reconciliation        | active-pane switching; stale retained snapshots; clean peer model; dirty/delete rechecks; bounded queue                            | route, queue, runtime, and `editor-agent-docking-2122` split-pane tests                         |
+| Cross-pane reconciliation        | active-pane switching; stale retained snapshots; clean peer model; dirty/delete rechecks; bounded queue                            | route, queue, runtime, and the `editor-agent-pins` split-pane session pin (#2955)               |
 | Diagnostics/context              | item/message caps, ingest rejection, truncation, unsafe-format stripping, redaction                                                | `editor-agent.test.ts`, `agentRoutes.test.ts`, and `codingContextProviders.test.ts`             |
 
 The credential-path case intentionally uses a well-known credential store (`.aws/credentials`). A

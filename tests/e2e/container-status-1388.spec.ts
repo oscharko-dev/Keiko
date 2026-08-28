@@ -8,14 +8,19 @@ import { expect, test, type Page } from "@playwright/test";
 
 const TAG = "@container-status-1388";
 
-async function seedContainerWindow(page: Page): Promise<void> {
+// The Containers window declares `persistence: "transient"`, so seeding it into
+// `keiko.workspace.v4` restores nothing: `sanitizeWindow` drops a transient record by design and
+// the window silently never appears. Seed the Runtime hub — which IS persisted — and open
+// Containers the way a human does, through its "Containers" action. That is also the only entry
+// point the product offers: `containerStatus` is in neither TYPE_ORDER nor the quick-access lists.
+async function seedRuntimeHubWindow(page: Page): Promise<void> {
   await page.addInitScript(() => {
     window.localStorage.setItem(
       "keiko.workspace.v4",
       JSON.stringify([
         {
-          id: "issue-1388-containers",
-          type: "containerStatus",
+          id: "issue-1388-runtime",
+          type: "runtime",
           x: 64,
           y: 56,
           w: 620,
@@ -40,6 +45,14 @@ async function seedContainerWindow(page: Page): Promise<void> {
     );
     window.localStorage.removeItem("keiko.conns.v1");
   });
+}
+
+async function openContainersFromRuntimeHub(page: Page): Promise<void> {
+  // Exact: the Runtime hub's own audit-metadata region is also named "Runtime …", so a prefix
+  // match resolves to two elements and fails Playwright's strict mode.
+  const runtimeWindow = page.getByRole("region", { name: "Runtime", exact: true });
+  await expect(runtimeWindow).toBeVisible();
+  await runtimeWindow.getByRole("button", { name: "Containers", exact: true }).click();
 }
 
 // The CI host has no container engine: the capability route reports both engines unavailable.
@@ -88,10 +101,11 @@ async function routeUnavailableContainerBff(page: Page): Promise<void> {
 }
 
 test(`Container surface degrades gracefully with no engine ${TAG}`, async ({ page }) => {
-  await seedContainerWindow(page);
+  await seedRuntimeHubWindow(page);
   await routeUnavailableContainerBff(page);
 
   await page.goto("/");
+  await openContainersFromRuntimeHub(page);
 
   const containerWindow = page.getByRole("region", { name: /^Containers/u });
   await expect(containerWindow).toBeVisible();

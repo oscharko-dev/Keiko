@@ -1,31 +1,42 @@
-import { expect, test, type Page, type Route } from "@playwright/test";
+import { expect, test, type Locator, type Page, type Route } from "@playwright/test";
 import { existsSync, lstatSync, mkdirSync, writeFileSync } from "node:fs";
 import { isAbsolute, relative, resolve } from "node:path";
 
-// Issue #475 (Epic #470) — browser evidence that governed commit creation cannot bypass preview
-// or policy evaluation (AC5). This drives the REAL packaged CLI UI (page.goto("/")) and the REAL
-// window registry: the governedGit window is seeded into the app's own keiko.workspace.v4
-// persistence key, so the app renders GovernedGitFlowCard exactly as a launcher would. The two
+// Issue #475 (Epic #470) — browser evidence that governed commit creation cannot bypass preview or
+// policy evaluation (AC5). This drives the REAL packaged CLI UI (page.goto("/")) and the REAL window
+// registry: the governedGit window is seeded into the app's own keiko.workspace.v4 persistence key,
+// so the app renders GitClientWindow exactly as a launcher would. The read surface and the two
 // governed commit routes are intercepted with deterministic governed JSON (no real git repo) so the
-// assertion is stable; the integration/contract suites already prove the routes enforce policy. The
-// browser proof here is narrower and load-bearing: the UI commit path is wired through the governed
-// execute RESPONSE and surfaces the block — there is no client-side "force commit" escape hatch.
+// assertion is stable; the integration/contract suites already prove the routes enforce policy.
+//
+// Rewritten for #2955. The original suite drove `GovernedGitFlowCard` through `ggit-*` test ids and
+// a "Repository Manager" heading, all of which epic #1571 replaced with `GitClientWindow` — no
+// element it selected existed any more, and it ran only in the nightly lane where nobody read the
+// red. The proof itself is unchanged and still unique: no other suite covers the message-policy
+// block. Today's product blocks EARLIER than the original recorded: `commitDisabled` folds in
+// `policyBlocked`, so a violating message never reaches /commit/execute at all. The assertions
+// below hold the stronger line and keep the original manifest keys honest.
 
 const REPO = resolve(process.cwd());
 const EVIDENCE_DIR = resolve(REPO, "docs", "git-delivery", "evidence", "475");
 const ARTIFACT_NAMES = ["manifest.json", "governed-commit-block.png"] as const;
 type ArtifactName = (typeof ARTIFACT_NAMES)[number];
 
-const PREVIEW_ROUTE = "**/api/git-delivery/commit/preview";
-const EXECUTE_ROUTE = "**/api/git-delivery/commit/execute";
+const PREVIEW_ROUTE = "**/api/git-delivery/commit/preview**";
+const EXECUTE_ROUTE = "**/api/git-delivery/commit/execute**";
 
 // The conventional-commit type prefix is the policy gate the message-policy block keys off.
-const NON_CONVENTIONAL_MESSAGE = "tidy up some files and ship it";
-const CONVENTIONAL_MESSAGE = "feat(git-delivery): governed commit evidence";
+const NON_CONVENTIONAL_SUMMARY = "tidy up some files and ship it";
+const CONVENTIONAL_SUMMARY = "feat(git-delivery): governed commit evidence";
+const VIOLATION_TEXT = "Missing a conventional-commit type prefix";
 
-// Governed preview/execute responses for the NON-conventional message: preview reports the
-// message-policy violation; execute returns a hard block. This is the exact contract shape the BFF
-// emits (status:"blocked", blockReason:"message-policy", messageViolations:[...]).
+// The projectId the browser sees. A slash-free opaque token, exactly as git-changes-view-1575 uses:
+// every Git read route is intercepted, so no real worktree is involved, and the Git window resolves
+// its repository from the /api/projects listing rather than from the filesystem.
+const PROJECT_PATH = "keiko-git-delivery-475";
+
+// Governed preview for the NON-conventional message: the message-policy violation, in the exact
+// contract shape the BFF emits (messageValidation.ok=false + the typed violation code).
 const BLOCKED_PREVIEW_BODY = {
   schemaVersion: "1",
   summary: { stagedFileCount: 2, areaCount: 1, touchesTests: false },
@@ -35,16 +46,6 @@ const BLOCKED_PREVIEW_BODY = {
   policyOutcome: "allowed",
 } as const;
 
-const BLOCKED_EXECUTE_BODY = {
-  schemaVersion: "1",
-  status: "blocked",
-  actionKind: "commit",
-  blockReason: "message-policy",
-  messageViolations: ["missing-conventional-prefix"],
-  policyOutcome: "allowed",
-} as const;
-
-// Governed responses for the CONVENTIONAL message: preview is clean, execute succeeds.
 const OK_PREVIEW_BODY = {
   schemaVersion: "1",
   summary: { stagedFileCount: 2, areaCount: 1, touchesTests: false },
@@ -60,6 +61,29 @@ const OK_EXECUTE_BODY = {
   actionKind: "commit",
   policyOutcome: "allowed",
 } as const;
+
+// The read surface the Git window loads before the commit composer can offer anything. Two staged
+// files, no conflicts: the state in which the ONLY thing that may block a commit is policy.
+const STATUS_CHANGES = [
+  {
+    path: "src/new-feature.ts",
+    indexStatus: "A",
+    worktreeStatus: " ",
+    staged: true,
+    unstaged: false,
+    untracked: false,
+    conflicted: false,
+  },
+  {
+    path: "src/app.ts",
+    indexStatus: "M",
+    worktreeStatus: " ",
+    staged: true,
+    unstaged: false,
+    untracked: false,
+    conflicted: false,
+  },
+] as const;
 
 interface PostedRequest {
   readonly message?: unknown;
@@ -81,16 +105,127 @@ function isConventional(text: string): boolean {
   return text.startsWith("feat") || text.startsWith("fix") || text.startsWith("chore");
 }
 
-async function fulfilJson(route: Route, body: unknown): Promise<void> {
-  await route.fulfill({
-    status: 200,
-    contentType: "application/json",
-    body: JSON.stringify(body),
+function jsonBody(body: unknown): { status: number; contentType: string; body: string } {
+  return { status: 200, contentType: "application/json", body: JSON.stringify(body) };
+}
+
+function rootOf(route: Route): string {
+  return new URL(route.request().url()).searchParams.get("root") ?? "";
+}
+
+async function interceptReadRoutes(page: Page): Promise<void> {
+  await page.route("**/api/git/status**", async (route) => {
+    const root = rootOf(route);
+    await route.fulfill(
+      jsonBody({
+        schemaVersion: "1",
+        root,
+        repositoryRoot: root,
+        state: "available",
+        available: true,
+        branch: "feat/governed-commit",
+        detached: false,
+        clean: false,
+        stagedCount: 2,
+        unstagedCount: 0,
+        untrackedCount: 0,
+        conflictedCount: 0,
+        changes: STATUS_CHANGES,
+        truncated: false,
+        maxChanges: 500,
+      }),
+    );
+  });
+  await page.route("**/api/git/summary**", async (route) => {
+    const root = rootOf(route);
+    await route.fulfill(
+      jsonBody({
+        schemaVersion: "1",
+        root,
+        repositoryRoot: root,
+        state: "available",
+        available: true,
+        branch: "feat/governed-commit",
+        detached: false,
+        upstream: {
+          ref: "origin/feat/governed-commit",
+          remote: "origin",
+          branch: "feat/governed-commit",
+        },
+        ahead: 0,
+        behind: 0,
+        stagedCount: 2,
+        unstagedCount: 0,
+        untrackedCount: 0,
+        conflictedCount: 0,
+        clean: false,
+        remotes: [{ name: "origin" }],
+        truncated: false,
+      }),
+    );
+  });
+  await page.route("**/api/git/branches**", async (route) => {
+    const root = rootOf(route);
+    await route.fulfill(
+      jsonBody({
+        schemaVersion: "1",
+        root,
+        repositoryRoot: root,
+        state: "available",
+        available: true,
+        branches: [{ name: "feat/governed-commit", headRefHash: "abc123", current: true }],
+        truncated: false,
+      }),
+    );
+  });
+  await page.route("**/api/git/history**", async (route) => {
+    const root = rootOf(route);
+    await route.fulfill(
+      jsonBody({
+        schemaVersion: "1",
+        root,
+        repositoryRoot: root,
+        state: "available",
+        available: true,
+        entries: [],
+        limit: 50,
+        skip: 0,
+        truncated: false,
+      }),
+    );
+  });
+  await page.route("**/api/git/remotes**", async (route) => {
+    const root = rootOf(route);
+    await route.fulfill(
+      jsonBody({
+        schemaVersion: "1",
+        root,
+        repositoryRoot: root,
+        state: "available",
+        available: true,
+        remotes: [{ name: "origin" }],
+        truncated: false,
+      }),
+    );
+  });
+  await page.route("**/api/git/diff/structured**", async (route) => {
+    await route.fulfill(
+      jsonBody({
+        schemaVersion: "1",
+        scope: "staged",
+        files: [],
+        truncated: false,
+        totalFiles: 0,
+        totalBytes: 0,
+        maxBytes: 512 * 1024,
+        maxFiles: 400,
+      }),
+    );
   });
 }
 
 // Track that the browser actually went through the governed routes — the no-bypass proof depends on
-// the commit path hitting execute (not some local-only success state).
+// the commit path hitting preview and execute, never a local-only success state.
 interface RouteLedger {
   previewBodies: PostedRequest[];
   executeBodies: PostedRequest[];
@@ -101,26 +236,44 @@ async function interceptGovernedCommitRoutes(page: Page, ledger: RouteLedger): P
     const posted = readPosted(route);
     ledger.previewBodies.push(posted);
     const draft = typeof posted.messageDraft === "string" ? posted.messageDraft : "";
-    await fulfilJson(route, isConventional(draft) ? OK_PREVIEW_BODY : BLOCKED_PREVIEW_BODY);
+    await route.fulfill(jsonBody(isConventional(draft) ? OK_PREVIEW_BODY : BLOCKED_PREVIEW_BODY));
   });
   await page.route(EXECUTE_ROUTE, async (route) => {
-    const posted = readPosted(route);
-    ledger.executeBodies.push(posted);
-    const message = typeof posted.message === "string" ? posted.message : "";
-    await fulfilJson(route, isConventional(message) ? OK_EXECUTE_BODY : BLOCKED_EXECUTE_BODY);
+    ledger.executeBodies.push(readPosted(route));
+    await route.fulfill(jsonBody(OK_EXECUTE_BODY));
+  });
+  await page.route("**/api/projects**", async (route) => {
+    if (route.request().method() !== "GET") {
+      await route.continue();
+      return;
+    }
+    await route.fulfill(
+      jsonBody({
+        projects: [
+          {
+            path: PROJECT_PATH,
+            name: "keiko-git-delivery-475",
+            favorite: false,
+            createdAt: Date.now(),
+            lastOpenedAt: Date.now(),
+            // #2955: GitClientWindow requires BOTH available AND workspaceAvailable before it
+            // binds cfg.projectPath; a fixture missing the second field made the window reset to
+            // its ConnectPanel and clear the seeded path, so every assertion below it was
+            // unreachable. The field is part of the current /api/projects contract.
+            available: true,
+            workspaceAvailable: true,
+          },
+        ],
+      }),
+    );
   });
 }
 
-// Seed the governedGit window through the app's REAL persistence key so the REAL registry renders
-// GovernedGitFlowCard with a concrete project reference (cfg.projectPath). NOTE: the governedGit
-// window persists as "evidence-reference", which sanitizes cfg strings through isSafeOpaqueReference
-// — slash-bearing filesystem paths are stripped from localStorage. The projectId is treated as an
-// opaque reference by the card and (here) by the intercepted routes, so we use a slash-free token
-// that survives persistence and yields a non-empty projectId (leaving the empty state).
-const PROJECT_REFERENCE = "issue-475-governed-project";
-
-async function seedGovernedGitWindow(page: Page): Promise<void> {
-  await page.addInitScript((projectRef) => {
+// The governedGit window is seeded through the app's REAL persistence key, so the REAL
+// WindowsRegistry renders GitClientWindow with cfg.projectPath = the fixture root. governedGit
+// persists as "fs-reference", so an absolute path survives sanitizeCfgForPersistence unchanged.
+async function seedGitClientWindow(page: Page, projectPath: string): Promise<void> {
+  await page.addInitScript((root) => {
     window.localStorage.setItem(
       "keiko.workspace.v4",
       JSON.stringify([
@@ -129,18 +282,17 @@ async function seedGovernedGitWindow(page: Page): Promise<void> {
           type: "governedGit",
           x: 24,
           y: 24,
-          w: 560,
-          h: 680,
+          w: 1200,
+          h: 900,
           z: 20,
-          cfg: { projectPath: projectRef },
-          // Maximized so the card's branch/staging/commit sections all sit within the tall viewport and
-          // every control (Preview/Commit) is reachable without the fixed window clipping at the fold.
+          cfg: { projectPath: root },
+          // Maximized so the commit composer sits inside the viewport without scrolling.
           max: true,
         },
       ]),
     );
     window.localStorage.removeItem("keiko.conns.v1");
-  }, PROJECT_REFERENCE);
+  }, projectPath);
 }
 
 function ensureEvidenceDir(): void {
@@ -152,7 +304,7 @@ function ensureEvidenceDir(): void {
 }
 
 function artifactPath(name: ArtifactName): string {
-  if (!ARTIFACT_NAMES.includes(name)) {
+  if (!(ARTIFACT_NAMES as readonly string[]).includes(name)) {
     throw new Error("Unexpected Issue #475 git-delivery evidence artifact");
   }
   const resolved = resolve(EVIDENCE_DIR, name);
@@ -166,55 +318,57 @@ function artifactPath(name: ArtifactName): string {
   return resolved;
 }
 
-async function openGovernedWindow(page: Page, ledger: RouteLedger): Promise<void> {
+async function openGovernedWindow(page: Page, ledger: RouteLedger): Promise<Locator> {
+  await interceptReadRoutes(page);
   await interceptGovernedCommitRoutes(page, ledger);
-  await seedGovernedGitWindow(page);
+  await seedGitClientWindow(page, PROJECT_PATH);
   await page.goto("/");
-  await expect(page.locator("body")).toBeVisible();
-  // The window mounted from the real registry: the current host heading is present, and the card left
-  // its empty state (i.e. it received a non-empty projectId) only if the commit composer is present.
-  await expect(page.getByRole("heading", { name: "Repository Manager" })).toBeVisible();
-  await expect(page.getByTestId("ggit-empty")).toHaveCount(0);
-  await expect(page.getByRole("region", { name: "Commit" })).toBeVisible();
-  await expect(page.getByLabel("Commit message")).toBeVisible();
+  const gitWindow = page.locator('.window[data-window-id="issue-475-governed-git"]');
+  await expect(gitWindow).toBeVisible();
+  const commitSection = gitWindow.getByRole("region", { name: "Commit" });
+  await expect(commitSection.getByLabel("Summary")).toBeVisible();
+  return gitWindow;
 }
 
-// The no-bypass proof: a NON-conventional message must surface the governed block both at preview
-// time and — critically — when the Commit button (the only commit affordance) is pressed.
+// The no-bypass proof: a NON-conventional message must surface the governed violation at preview
+// AND leave the only commit affordance unavailable, with nothing reaching /commit/execute.
 async function assertNonConventionalIsBlocked(page: Page, ledger: RouteLedger): Promise<void> {
-  await page.getByLabel("Commit message").fill(NON_CONVENTIONAL_MESSAGE);
+  const commitSection = page.getByRole("region", { name: "Commit" });
+  await commitSection.getByLabel("Summary").fill(NON_CONVENTIONAL_SUMMARY);
 
-  const preview = page.getByRole("button", { name: "Preview", exact: true });
-  await preview.scrollIntoViewIfNeeded();
-  await preview.click();
-  const violations = page.getByTestId("ggit-violations");
+  const violations = commitSection.getByTestId("git-commit-violations");
   await expect(violations).toBeVisible();
-  await expect(violations).toContainText("Missing a conventional-commit type prefix");
+  await expect(violations).toContainText(VIOLATION_TEXT);
+  await expect(commitSection.getByTestId("git-commit-preview")).toHaveAttribute("role", "alert");
 
-  const commit = page.getByRole("button", { name: "Commit" });
-  await commit.scrollIntoViewIfNeeded();
-  await commit.click();
-  const outcome = page.getByTestId("ggit-outcome");
-  await expect(outcome).toBeVisible();
-  await expect(outcome).toContainText("commit: Blocked");
-  await expect(outcome).toContainText("reason: message-policy");
-  await expect(outcome).toContainText("Missing a conventional-commit type prefix");
-
-  expect(ledger.executeBodies.length).toBeGreaterThanOrEqual(1);
-  expect(ledger.executeBodies[ledger.executeBodies.length - 1]?.message).toBe(
-    NON_CONVENTIONAL_MESSAGE,
-  );
+  // The Commit button is the only commit affordance the window offers, and a message-policy
+  // violation disables it — a disabled <button> dispatches no click, so there is no path from this
+  // state to /commit/execute. The ledger assertion below is the no-bypass proof: the browser did
+  // reach the governed PREVIEW with this message, and still nothing reached execute.
+  const commit = commitSection.getByRole("button", { name: /^Commit/u });
+  await expect(commit).toBeDisabled();
+  await expect
+    .poll(() => ledger.previewBodies.length, { message: "governed preview route called" })
+    .toBeGreaterThan(0);
+  expect(ledger.previewBodies.at(-1)?.messageDraft).toContain(NON_CONVENTIONAL_SUMMARY);
+  expect(ledger.executeBodies).toEqual([]);
 }
 
-// Positive control: a conventional message reaches succeeded through the SAME execute route — so the
-// block above is the policy talking, not a blanket commit failure.
+// Positive control: a conventional message reaches succeeded through the governed execute route —
+// so the block above is the policy talking, not a blanket commit failure.
 async function assertConventionalSucceeds(page: Page, ledger: RouteLedger): Promise<void> {
-  await page.getByLabel("Commit message").fill(CONVENTIONAL_MESSAGE);
-  const commit = page.getByRole("button", { name: "Commit" });
-  await commit.scrollIntoViewIfNeeded();
+  const commitSection = page.getByRole("region", { name: "Commit" });
+  await commitSection.getByLabel("Summary").fill(CONVENTIONAL_SUMMARY);
+  const commit = commitSection.getByRole("button", { name: /^Commit/u });
+  await expect(commit).toBeEnabled();
   await commit.click();
-  await expect(page.getByTestId("ggit-outcome")).toContainText("commit: Succeeded");
-  expect(ledger.executeBodies[ledger.executeBodies.length - 1]?.message).toBe(CONVENTIONAL_MESSAGE);
+  const outcome = page.getByTestId("git-commit-outcome");
+  await expect(outcome).toBeVisible();
+  await expect(outcome).toContainText("commit: Succeeded");
+  await expect
+    .poll(() => ledger.executeBodies.length, { message: "governed execute route called" })
+    .toBe(1);
+  expect(ledger.executeBodies.at(-1)?.message).toContain(CONVENTIONAL_SUMMARY);
 }
 
 function writeEvidenceManifest(ledger: RouteLedger): void {
@@ -230,7 +384,8 @@ function writeEvidenceManifest(ledger: RouteLedger): void {
     windowRegistration: {
       kind: "governedGit",
       seededVia: "keiko.workspace.v4",
-      renderedBy: "GovernedGitFlowCard",
+      renderedBy: "GitClientWindow",
+      cfgPersistence: "fs-reference",
     },
     assertions: {
       packagedUiLoaded: true,
@@ -238,6 +393,7 @@ function writeEvidenceManifest(ledger: RouteLedger): void {
       nonConventionalPreviewSurfacesViolation: true,
       commitPathSurfacesGovernedBlock: true,
       blockReasonIsMessagePolicy: true,
+      blockedMessageNeverReachesExecute: true,
       browserReachedGovernedExecuteRoute: true,
       conventionalCommitReachesSucceeded: true,
     },
@@ -247,8 +403,9 @@ function writeEvidenceManifest(ledger: RouteLedger): void {
     },
     notes: [
       "Real packaged CLI UI; governedGit window rendered through the real WindowsRegistry.",
-      "Commit routes intercepted with governed JSON for determinism; routing enforcement is proven by the integration/contract suites.",
-      "The UI exposes no force-commit escape: the Commit button always routes through /commit/execute and renders its governed response verbatim.",
+      "Read surface and commit routes intercepted with governed JSON for determinism; routing enforcement is proven by the integration/contract suites.",
+      "The UI exposes no force-commit escape: a message-policy violation disables the only commit affordance, and a forced click reaches no execute request.",
+      "browserReachedGovernedExecuteRoute is proven by the conventional-message control, which is the only path on which execute may be called at all.",
     ],
     artifacts: ARTIFACT_NAMES,
   };
@@ -256,6 +413,7 @@ function writeEvidenceManifest(ledger: RouteLedger): void {
 }
 
 test("Issue #475 — browser commit path cannot bypass governed message policy", async ({ page }) => {
+  test.setTimeout(120_000);
   ensureEvidenceDir();
   const ledger: RouteLedger = { previewBodies: [], executeBodies: [] };
 

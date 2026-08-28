@@ -941,7 +941,11 @@ async function runRegressionPass(
   await stubNativeFileDialog(page, join(CORPUS_DATA_ROOT, "small-files"));
   await resetWorkspaceState(page);
   await openLocalKnowledge(page);
-  await expect(page.locator(".lk-pipeline")).toHaveCount(0);
+  // #2955: this was `expect(page.locator(".lk-pipeline")).toHaveCount(0)` — a class that exists
+  // nowhere in the product, so the assertion passed over any state whatsoever. The intent was "a
+  // reset pass starts from a clean overview"; the positive form of that is the overview's own empty
+  // state, which renders only when the capsule list is genuinely empty and the load has settled.
+  await expect(page.getByTestId("empty-state")).toBeVisible();
   await expect(page.getByRole("button", { name: "Create Knowledge Pod Set" })).toBeDisabled();
 
   const uiCapsule = `E2E Pass ${passLabel} UI`;

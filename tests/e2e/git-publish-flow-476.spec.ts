@@ -1,31 +1,42 @@
-import { expect, test, type Page, type Route } from "@playwright/test";
+import { expect, test, type Locator, type Page, type Route } from "@playwright/test";
 import { existsSync, lstatSync, mkdirSync, writeFileSync } from "node:fs";
 import { isAbsolute, relative, resolve } from "node:path";
 
-// Issue #476 (Epic #470) — browser evidence that governed remote publish cannot bypass policy (AC1/AC2).
-// Drives the REAL packaged CLI UI (page.goto("/")) and the REAL window registry: the governedGit window
-// is seeded into the app's own keiko.workspace.v4 persistence key, so the app renders GovernedGitFlowCard
-// (incl. the #476 Publish section) exactly as a launcher would. The two governed push routes are
-// intercepted with deterministic governed JSON (no real remote) so the assertion is stable; the
-// integration/contract/route suites already prove the routes enforce policy. The browser proof here is
-// narrower and load-bearing: the UI publish path is wired through the governed execute RESPONSE and
-// surfaces a protected-target BLOCK — there is no client-side "force publish" escape hatch.
+// Issue #476 (Epic #470) — browser evidence that governed remote publish cannot bypass policy
+// (AC1/AC2). Drives the REAL packaged CLI UI (page.goto("/")) and the REAL window registry: the
+// governedGit window is seeded into the app's own keiko.workspace.v4 persistence key, so the app
+// renders GitClientWindow exactly as a launcher would. The read surface and the two governed push
+// routes are intercepted with deterministic governed JSON (no real remote) so the assertion is
+// stable; the integration/contract/route suites already prove the routes enforce policy.
+//
+// Rewritten for #2955. The original suite drove `GovernedGitFlowCard`'s Publish section through
+// `ggit-*` test ids and free-text "Source branch"/"Remote branch" fields, none of which survived
+// epic #1571's GitClientWindow. Today the push target is DERIVED from repository state rather than
+// typed, so the protected and safe cases are two repository summaries rather than two field values —
+// and the product blocks EARLIER than the original recorded: a non-allowed push preview short-
+// circuits before /push/execute is called at all. The assertions below hold that stronger line.
 
 const REPO = resolve(process.cwd());
 const EVIDENCE_DIR = resolve(REPO, "docs", "git-delivery", "evidence", "476");
 const ARTIFACT_NAMES = ["manifest.json", "governed-publish-block.png"] as const;
 type ArtifactName = (typeof ARTIFACT_NAMES)[number];
 
-const PREVIEW_ROUTE = "**/api/git-delivery/push/preview";
-const EXECUTE_ROUTE = "**/api/git-delivery/push/execute";
+const PREVIEW_ROUTE = "**/api/git-delivery/push/preview**";
+const EXECUTE_ROUTE = "**/api/git-delivery/push/execute**";
+const WINDOW_ID = "issue-476-governed-git";
 
-// A protected/shared remote target the default publish pack blocks; a user-namespace target it permits.
-const PROTECTED_TARGET = "dev";
-const SAFE_TARGET = "feat/x";
+// A protected/shared branch the default publish pack blocks; a user-namespace branch it permits.
+const PROTECTED_BRANCH = "dev";
+const SAFE_BRANCH = "feat/x";
 
 function isSafeTarget(target: string): boolean {
   return target.startsWith("feat/") || target.startsWith("fix/") || target.startsWith("chore/");
 }
+
+// The projectId the browser sees. A slash-free opaque token, exactly as git-changes-view-1575 uses:
+// every Git read route is intercepted, so no real worktree is involved, and the Git window resolves
+// its repository from the /api/projects listing rather than from the filesystem.
+const PROJECT_PATH = "keiko-git-publish-476";
 
 function previewBody(remoteBranchName: string): unknown {
   const safe = isSafeTarget(remoteBranchName);
@@ -33,7 +44,7 @@ function previewBody(remoteBranchName: string): unknown {
     schemaVersion: "1",
     remoteAlias: "origin",
     remoteBranchName,
-    sourceBranchName: "feat/x",
+    sourceBranchName: remoteBranchName,
     riskClass: "publish",
     wouldCreateRemoteBranch: false,
     wouldTriggerChecks: true,
@@ -42,24 +53,6 @@ function previewBody(remoteBranchName: string): unknown {
     preflightAdvisoryCodes: [],
     policyOutcome: safe ? "allowed" : "blocked",
     ...(safe ? {} : { policyBlockReason: "policy-pack-blocked" }),
-  };
-}
-
-function executeBody(remoteBranchName: string): unknown {
-  if (isSafeTarget(remoteBranchName)) {
-    return {
-      schemaVersion: "1",
-      status: "succeeded",
-      actionKind: "push",
-      policyOutcome: "allowed",
-    };
-  }
-  return {
-    schemaVersion: "1",
-    status: "blocked",
-    actionKind: "push",
-    blockReason: "policy-pack-blocked",
-    policyOutcome: "blocked",
   };
 }
 
@@ -79,10 +72,115 @@ function readPosted(route: Route): PostedRequest {
   }
 }
 
-async function fulfilJson(route: Route, body: unknown): Promise<void> {
-  await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(body) });
+function jsonBody(body: unknown): { status: number; contentType: string; body: string } {
+  return { status: 200, contentType: "application/json", body: JSON.stringify(body) };
 }
 
+function rootOf(route: Route): string {
+  return new URL(route.request().url()).searchParams.get("root") ?? "";
+}
+
+// The branch the intercepted read surface reports. Mutable so the same page can be reloaded onto the
+// safe-namespace control without a second fixture: the push target is derived from this state.
+const branchState = { current: PROTECTED_BRANCH };
+
+async function interceptReadRoutes(page: Page): Promise<void> {
+  await page.route("**/api/git/status**", async (route) => {
+    const root = rootOf(route);
+    await route.fulfill(
+      jsonBody({
+        schemaVersion: "1",
+        root,
+        repositoryRoot: root,
+        state: "available",
+        available: true,
+        branch: branchState.current,
+        detached: false,
+        clean: true,
+        stagedCount: 0,
+        unstagedCount: 0,
+        untrackedCount: 0,
+        conflictedCount: 0,
+        changes: [],
+        truncated: false,
+        maxChanges: 500,
+      }),
+    );
+  });
+  await page.route("**/api/git/summary**", async (route) => {
+    const root = rootOf(route);
+    const branch = branchState.current;
+    await route.fulfill(
+      jsonBody({
+        schemaVersion: "1",
+        root,
+        repositoryRoot: root,
+        state: "available",
+        available: true,
+        branch,
+        detached: false,
+        upstream: { ref: `origin/${branch}`, remote: "origin", branch },
+        // Ahead of upstream: the derived sync action is Push, which is the publish path under test.
+        ahead: 1,
+        behind: 0,
+        stagedCount: 0,
+        unstagedCount: 0,
+        untrackedCount: 0,
+        conflictedCount: 0,
+        clean: true,
+        remotes: [{ name: "origin" }],
+        truncated: false,
+      }),
+    );
+  });
+  await page.route("**/api/git/branches**", async (route) => {
+    const root = rootOf(route);
+    await route.fulfill(
+      jsonBody({
+        schemaVersion: "1",
+        root,
+        repositoryRoot: root,
+        state: "available",
+        available: true,
+        branches: [{ name: branchState.current, headRefHash: "abc123", current: true }],
+        truncated: false,
+      }),
+    );
+  });
+  await page.route("**/api/git/history**", async (route) => {
+    const root = rootOf(route);
+    await route.fulfill(
+      jsonBody({
+        schemaVersion: "1",
+        root,
+        repositoryRoot: root,
+        state: "available",
+        available: true,
+        entries: [],
+        limit: 50,
+        skip: 0,
+        truncated: false,
+      }),
+    );
+  });
+  await page.route("**/api/git/remotes**", async (route) => {
+    const root = rootOf(route);
+    await route.fulfill(
+      jsonBody({
+        schemaVersion: "1",
+        root,
+        repositoryRoot: root,
+        state: "available",
+        available: true,
+        remotes: [{ name: "origin" }],
+        truncated: false,
+      }),
+    );
+  });
+}
+
+// Track that the browser actually went through the governed routes — the no-bypass proof depends on
+// the publish path hitting preview, and on execute being reachable ONLY when policy allows.
 interface RouteLedger {
   previewBodies: PostedRequest[];
   executeBodies: PostedRequest[];
@@ -93,42 +191,70 @@ async function interceptGovernedPushRoutes(page: Page, ledger: RouteLedger): Pro
     const posted = readPosted(route);
     ledger.previewBodies.push(posted);
     const target = typeof posted.remoteBranchName === "string" ? posted.remoteBranchName : "";
-    await fulfilJson(route, previewBody(target));
+    await route.fulfill(jsonBody(previewBody(target)));
   });
   await page.route(EXECUTE_ROUTE, async (route) => {
-    const posted = readPosted(route);
-    ledger.executeBodies.push(posted);
-    const target = typeof posted.remoteBranchName === "string" ? posted.remoteBranchName : "";
-    await fulfilJson(route, executeBody(target));
+    ledger.executeBodies.push(readPosted(route));
+    await route.fulfill(
+      jsonBody({
+        schemaVersion: "1",
+        status: "succeeded",
+        actionKind: "push",
+        policyOutcome: "allowed",
+      }),
+    );
+  });
+  await page.route("**/api/projects**", async (route) => {
+    if (route.request().method() !== "GET") {
+      await route.continue();
+      return;
+    }
+    await route.fulfill(
+      jsonBody({
+        projects: [
+          {
+            path: PROJECT_PATH,
+            name: "keiko-git-publish-476",
+            favorite: false,
+            createdAt: Date.now(),
+            lastOpenedAt: Date.now(),
+            // #2955: GitClientWindow requires BOTH available AND workspaceAvailable before it
+            // binds cfg.projectPath; a fixture missing the second field made the window reset to
+            // its ConnectPanel and clear the seeded path, so every assertion below it was
+            // unreachable. The field is part of the current /api/projects contract.
+            available: true,
+            workspaceAvailable: true,
+          },
+        ],
+      }),
+    );
   });
 }
 
-// Seed the governedGit window through the app's REAL persistence key so the REAL registry renders
-// GovernedGitFlowCard with a concrete project reference. The projectId is an opaque, slash-free token
-// that survives the evidence-reference sanitisation and yields a non-empty projectId (leaving the empty
-// state). Mirrors the #475 evidence harness.
-const PROJECT_REFERENCE = "issue-476-governed-project";
-
-async function seedGovernedGitWindow(page: Page): Promise<void> {
-  await page.addInitScript((projectRef) => {
-    window.localStorage.setItem(
-      "keiko.workspace.v4",
-      JSON.stringify([
-        {
-          id: "issue-476-governed-git",
-          type: "governedGit",
-          x: 24,
-          y: 24,
-          w: 560,
-          h: 760,
-          z: 20,
-          cfg: { projectPath: projectRef },
-          max: true,
-        },
-      ]),
-    );
-    window.localStorage.removeItem("keiko.conns.v1");
-  }, PROJECT_REFERENCE);
+// governedGit persists as "fs-reference", so an absolute path survives sanitizeCfgForPersistence.
+async function seedGitClientWindow(page: Page, projectPath: string): Promise<void> {
+  await page.addInitScript(
+    ({ root, windowId }) => {
+      window.localStorage.setItem(
+        "keiko.workspace.v4",
+        JSON.stringify([
+          {
+            id: windowId,
+            type: "governedGit",
+            x: 24,
+            y: 24,
+            w: 1200,
+            h: 900,
+            z: 20,
+            cfg: { projectPath: root },
+            max: true,
+          },
+        ]),
+      );
+      window.localStorage.removeItem("keiko.conns.v1");
+    },
+    { root: projectPath, windowId: WINDOW_ID },
+  );
 }
 
 function ensureEvidenceDir(): void {
@@ -140,7 +266,7 @@ function ensureEvidenceDir(): void {
 }
 
 function artifactPath(name: ArtifactName): string {
-  if (!ARTIFACT_NAMES.includes(name)) {
+  if (!(ARTIFACT_NAMES as readonly string[]).includes(name)) {
     throw new Error("Unexpected Issue #476 git-publish evidence artifact");
   }
   const resolved = resolve(EVIDENCE_DIR, name);
@@ -154,57 +280,50 @@ function artifactPath(name: ArtifactName): string {
   return resolved;
 }
 
-async function openGovernedWindow(page: Page, ledger: RouteLedger): Promise<void> {
+async function openGovernedWindow(page: Page, ledger: RouteLedger): Promise<Locator> {
+  await interceptReadRoutes(page);
   await interceptGovernedPushRoutes(page, ledger);
-  await seedGovernedGitWindow(page);
+  await seedGitClientWindow(page, PROJECT_PATH);
   await page.goto("/");
-  await expect(page.locator("body")).toBeVisible();
-  await expect(page.getByRole("heading", { name: "Repository Manager" })).toBeVisible();
-  await expect(page.getByTestId("ggit-empty")).toHaveCount(0);
-  await expect(page.getByRole("region", { name: "Publish" })).toBeVisible();
+  const gitWindow = page.locator(`.window[data-window-id="${WINDOW_ID}"]`);
+  await expect(gitWindow).toBeVisible();
+  return gitWindow;
 }
 
-async function fillPublishTarget(page: Page, remoteBranch: string): Promise<void> {
-  await page.getByLabel("Source branch").fill("feat/x");
-  await page.getByLabel("Remote branch").fill(remoteBranch);
-}
-
-// The no-bypass proof: pushing to a protected/shared target must surface the governed block both at
-// preview time and — critically — when the Push button (the only publish affordance) is pressed.
-async function assertProtectedTargetIsBlocked(page: Page, ledger: RouteLedger): Promise<void> {
-  await fillPublishTarget(page, PROTECTED_TARGET);
-
-  const preview = page.getByRole("button", { name: "Preview push" });
-  await preview.scrollIntoViewIfNeeded();
-  await preview.click();
-  const pushPreview = page.getByTestId("ggit-push-policy");
-  await expect(pushPreview).toBeVisible();
-  await expect(pushPreview).toContainText("Policy: blocked");
-  await expect(pushPreview).toContainText("policy-pack-blocked");
-
-  const push = page.getByRole("button", { name: "Push", exact: true });
-  await push.scrollIntoViewIfNeeded();
+async function runPush(gitWindow: Locator): Promise<void> {
+  const push = gitWindow.getByRole("button", { name: "Run sync: Push" });
+  await expect(push).toBeEnabled();
   await push.click();
-  const outcome = page.getByTestId("ggit-outcome");
-  await expect(outcome).toBeVisible();
-  await expect(outcome).toContainText("push: Blocked");
-  await expect(outcome).toContainText("reason: policy-pack-blocked");
-
-  expect(ledger.executeBodies.length).toBeGreaterThanOrEqual(1);
-  expect(ledger.executeBodies[ledger.executeBodies.length - 1]?.remoteBranchName).toBe(
-    PROTECTED_TARGET,
-  );
 }
 
-// Positive control: a user-namespace target reaches succeeded through the SAME execute route — so the
-// block above is policy talking, not a blanket publish failure.
+// The no-bypass proof: pushing to a protected/shared target must surface the governed block, and the
+// browser must never reach /push/execute for it.
+async function assertProtectedTargetIsBlocked(
+  gitWindow: Locator,
+  ledger: RouteLedger,
+): Promise<void> {
+  await runPush(gitWindow);
+  await expect
+    .poll(() => ledger.previewBodies.length, { message: "governed push preview called" })
+    .toBeGreaterThan(0);
+  expect(ledger.previewBodies.at(-1)?.remoteBranchName).toBe(PROTECTED_BRANCH);
+  await expect(gitWindow.getByText("Blocked: policy-pack-blocked")).toBeVisible();
+  expect(ledger.executeBodies).toEqual([]);
+}
+
+// Positive control: a user-namespace target reaches succeeded through the governed execute route —
+// so the block above is policy talking, not a blanket publish failure.
 async function assertSafeTargetSucceeds(page: Page, ledger: RouteLedger): Promise<void> {
-  await fillPublishTarget(page, SAFE_TARGET);
-  const push = page.getByRole("button", { name: "Push", exact: true });
-  await push.scrollIntoViewIfNeeded();
-  await push.click();
-  await expect(page.getByTestId("ggit-outcome")).toContainText("push: Succeeded");
-  expect(ledger.executeBodies[ledger.executeBodies.length - 1]?.remoteBranchName).toBe(SAFE_TARGET);
+  branchState.current = SAFE_BRANCH;
+  await page.reload();
+  const gitWindow = page.locator(`.window[data-window-id="${WINDOW_ID}"]`);
+  await expect(gitWindow).toBeVisible();
+  await runPush(gitWindow);
+  await expect(gitWindow.getByText("Push: succeeded")).toBeVisible();
+  await expect
+    .poll(() => ledger.executeBodies.length, { message: "governed push execute called" })
+    .toBe(1);
+  expect(ledger.executeBodies.at(-1)?.remoteBranchName).toBe(SAFE_BRANCH);
 }
 
 function writeEvidenceManifest(ledger: RouteLedger): void {
@@ -220,7 +339,8 @@ function writeEvidenceManifest(ledger: RouteLedger): void {
     windowRegistration: {
       kind: "governedGit",
       seededVia: "keiko.workspace.v4",
-      renderedBy: "GovernedGitFlowCard (Publish section)",
+      renderedBy: "GitClientWindow (sync control)",
+      cfgPersistence: "fs-reference",
     },
     assertions: {
       packagedUiLoaded: true,
@@ -228,6 +348,7 @@ function writeEvidenceManifest(ledger: RouteLedger): void {
       protectedTargetPreviewSurfacesPolicyBlock: true,
       publishPathSurfacesGovernedBlock: true,
       blockReasonIsPolicyPackBlocked: true,
+      blockedTargetNeverReachesExecute: true,
       browserReachedGovernedPushExecuteRoute: true,
       safeNamespaceTargetReachesSucceeded: true,
     },
@@ -237,8 +358,10 @@ function writeEvidenceManifest(ledger: RouteLedger): void {
     },
     notes: [
       "Real packaged CLI UI; governedGit window rendered through the real WindowsRegistry.",
-      "Push routes intercepted with governed JSON for determinism; routing enforcement is proven by the integration/route/contract suites.",
-      "The UI exposes no force-publish escape: the Push button always routes through /push/execute and renders its governed response verbatim.",
+      "Read surface and push routes intercepted with governed JSON for determinism; routing enforcement is proven by the integration/route/contract suites.",
+      "The push target is derived from repository state, so the protected and safe cases are two intercepted summaries rather than two typed field values.",
+      "The UI exposes no force-publish escape: a blocked push preview short-circuits before /push/execute, and the sync control offers no other publish affordance.",
+      "browserReachedGovernedPushExecuteRoute is proven by the safe-namespace control, which is the only path on which execute may be called at all.",
     ],
     artifacts: ARTIFACT_NAMES,
   };
@@ -246,11 +369,13 @@ function writeEvidenceManifest(ledger: RouteLedger): void {
 }
 
 test("Issue #476 — browser publish path cannot bypass governed target policy", async ({ page }) => {
+  test.setTimeout(120_000);
   ensureEvidenceDir();
+  branchState.current = PROTECTED_BRANCH;
   const ledger: RouteLedger = { previewBodies: [], executeBodies: [] };
 
-  await openGovernedWindow(page, ledger);
-  await assertProtectedTargetIsBlocked(page, ledger);
+  const gitWindow = await openGovernedWindow(page, ledger);
+  await assertProtectedTargetIsBlocked(gitWindow, ledger);
   await page.locator("body").screenshot({ path: artifactPath("governed-publish-block.png") });
   await assertSafeTargetSucceeds(page, ledger);
 

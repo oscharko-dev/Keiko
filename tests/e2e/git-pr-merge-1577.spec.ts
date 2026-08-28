@@ -229,7 +229,12 @@ async function interceptProjectRoutes(page: Page, fixtureRoot: string): Promise<
           favorite: false,
           createdAt: Date.now(),
           lastOpenedAt: Date.now(),
+          // #2955: GitClientWindow requires BOTH available AND workspaceAvailable before it
+          // binds cfg.projectPath; a fixture missing the second field made the window reset to
+          // its ConnectPanel and clear the seeded path, so every assertion below it was
+          // unreachable. The field is part of the current /api/projects contract.
           available: true,
+          workspaceAvailable: true,
         },
       ],
     }),
@@ -385,8 +390,14 @@ test("Git window embeds Pull Request and Merge repository operations", async ({ 
   await expect(prPanel.locator('[data-field="policy"]')).toContainText("policy-pack-blocked");
   expect(ledger.prPreviews).toHaveLength(1);
 
-  await page.getByRole("button", { name: "Back to diff" }).click();
-  await expect(page.getByRole("region", { name: "Diff" })).toBeVisible();
+  // #2955: the control is labelled "Back to changes" (gitClientWindow.action.backToDiff); the old
+  // "Back to diff" text stopped existing and this suite has been timing out on it in the nightly
+  // lane ever since.
+  await page.getByRole("button", { name: "Back to changes" }).click();
+  // …which returns to the Changes view, not to a Diff region: the Diff pane only exists while a
+  // changed file is selected, and this fixture has none. The tabpanel is the surface the control
+  // actually returns to.
+  await expect(page.getByRole("tabpanel", { name: "Changes" })).toBeVisible();
   await page.getByRole("button", { name: /Merge/u }).click();
   const mergePanel = page.getByRole("region", { name: "Merge", exact: true });
   await expect(mergePanel).toBeVisible();
