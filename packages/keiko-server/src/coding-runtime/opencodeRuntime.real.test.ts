@@ -20,11 +20,12 @@ import type { Readable } from "node:stream";
 import { describe, expect, it, vi } from "vitest";
 
 import type { UpdatePortableTarget } from "@oscharko-dev/keiko-contracts";
-import type {
-  GatewayConfig,
-  GatewayRequest,
-  GatewayStreamChunk,
-  NormalizedResponse,
+import {
+  toolCallingConfigurationFingerprint,
+  type GatewayConfig,
+  type GatewayRequest,
+  type GatewayStreamChunk,
+  type NormalizedResponse,
 } from "@oscharko-dev/keiko-model-gateway";
 
 import type { PortableSidecarRuntimeVerification } from "../update-portable-sidecar-verification.js";
@@ -370,20 +371,19 @@ function realPortableRuntime(testRoot: string): {
 }
 
 function gatewayConfig(): GatewayConfig {
+  const provider = {
+    modelId: "functional-coding-model",
+    baseUrl: "https://provider.invalid/v1",
+    apiKey: "functional-provider-secret",
+    apiKeyHeaderName: "api-key",
+    endpointStyle: "azure-openai-deployment" as const,
+    apiVersion: "2024-06-01",
+    timeoutMs: 30_000,
+    maxRetries: 0,
+    retryBaseDelayMs: 1,
+  };
   return {
-    providers: [
-      {
-        modelId: "functional-coding-model",
-        baseUrl: "https://provider.invalid/v1",
-        apiKey: "functional-provider-secret",
-        apiKeyHeaderName: "api-key",
-        endpointStyle: "azure-openai-deployment",
-        apiVersion: "2024-06-01",
-        timeoutMs: 30_000,
-        maxRetries: 0,
-        retryBaseDelayMs: 1,
-      },
-    ],
+    providers: [provider],
     circuitBreaker: { failureThreshold: 5, cooldownMs: 30_000, halfOpenProbes: 2 },
     capabilities: [
       {
@@ -396,7 +396,7 @@ function gatewayConfig(): GatewayConfig {
           status: "verified",
           checkedAt: new Date().toISOString(),
           probe: "gateway-tool-calling-v1",
-          configurationFingerprint: "functional-fixture",
+          configurationFingerprint: toolCallingConfigurationFingerprint(provider),
         },
         structuredOutput: true,
         streaming: true,

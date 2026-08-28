@@ -1,5 +1,6 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { ConfigInvalidError } from "@oscharko-dev/keiko-security/errors/gateway";
+import { TOOL_CALLING_VERIFICATION_MAX_AGE_MS } from "./config.js";
 import { COST_RANK, isConversationEligibleModel } from "./capabilities.js";
 import {
   assertConfiguredModel,
@@ -17,6 +18,10 @@ function verifiedToolCallingProof(): NonNullable<ModelCapability["toolCallingVer
     configurationFingerprint: "0".repeat(64),
   };
 }
+
+afterEach(() => {
+  vi.useRealTimers();
+});
 
 function provider(modelId: string): ModelProviderConfig {
   return {
@@ -195,6 +200,8 @@ describe("selectConfiguredModel", () => {
   });
 
   it("fails closed when a tool-calling proof expires while the process is running", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-08-28T12:00:00.000Z"));
     const selected = selectConfiguredModel(
       config(
         ["expired-proof"],
@@ -207,7 +214,9 @@ describe("selectConfiguredModel", () => {
             toolCalling: true,
             toolCallingVerification: {
               ...verifiedToolCallingProof(),
-              checkedAt: new Date(Date.now() - 24 * 60 * 60 * 1_000 - 1).toISOString(),
+              checkedAt: new Date(
+                Date.parse("2026-08-28T12:00:00.000Z") - TOOL_CALLING_VERIFICATION_MAX_AGE_MS - 1,
+              ).toISOString(),
             },
             structuredOutput: true,
             streaming: true,

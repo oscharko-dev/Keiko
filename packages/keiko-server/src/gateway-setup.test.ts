@@ -31,6 +31,7 @@ import {
   parseGatewayConfig,
   resolveCodingSafeSidecarGatewayProfile,
   resolveVoiceCapability,
+  toolCallingConfigurationFingerprint,
 } from "@oscharko-dev/keiko-model-gateway";
 import type {
   GatewayConfig,
@@ -560,6 +561,88 @@ describe("handleGatewaySetup", () => {
     }
   });
 
+  it("preserves a verified tool proof when an unrelated readiness chat probe fails", async () => {
+    const uiDir = await tempDir("keiko-gw-readiness-failure-proof-ui-");
+    const provider: ModelProviderConfig = {
+      modelId: "verified-before-chat-failure",
+      baseUrl: "https://gateway.example.com/v1",
+      apiKey: "test-token",
+      timeoutMs: 30_000,
+      maxRetries: 0,
+      retryBaseDelayMs: 1,
+    };
+    const proof = {
+      status: "verified" as const,
+      checkedAt: "2026-08-28T10:00:00.000Z",
+      probe: "gateway-tool-calling-v1" as const,
+      configurationFingerprint: toolCallingConfigurationFingerprint(provider),
+    };
+    const readinessFetch: typeof fetch = (): Promise<Response> =>
+      Promise.resolve(
+        new Response(JSON.stringify({ choices: [] }), {
+          headers: { "content-type": "application/json" },
+        }),
+      );
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir: await tempDir("keiko-gw-readiness-failure-proof-ev-"),
+      env: { ...VAULT_ENV },
+      uiDbPath: join(uiDir, "keiko-ui.db"),
+    });
+    const gatewayConfig = deps.gatewayConfig;
+    if (gatewayConfig === undefined) throw new Error("expected runtime gateway config");
+    gatewayConfig.set(
+      parseGatewayConfig({
+        providers: [provider],
+        capabilities: [
+          {
+            id: provider.modelId,
+            kind: "chat",
+            contextWindow: 32_000,
+            maxOutputTokens: 4_096,
+            toolCalling: true,
+            toolCallingVerification: proof,
+            structuredOutput: true,
+            streaming: true,
+            supportsImageInput: false,
+            supportsDocumentInput: false,
+            workflowEligible: true,
+            costClass: "medium",
+            latencyClass: "standard",
+            throughputHint: "test",
+            preferredUseCases: [],
+            knownLimitations: [],
+          },
+        ],
+      }),
+      true,
+    );
+    gatewayConfig.recordVerifiedCapability(
+      provider.modelId,
+      { toolCalling: true },
+      proof.checkedAt,
+      gatewayConfig.generation(),
+    );
+
+    const report = await runGatewayReadiness(
+      { modelId: provider.modelId, options: { probes: ["chat", "tool_calling"] } },
+      { ...deps, gatewayReadinessFetch: readinessFetch },
+      "corr-preserve-tool-proof",
+    );
+
+    expect("status" in report).toBe(false);
+    expect(
+      requiredCapability(requiredGatewayConfig(deps), provider.modelId).toolCallingVerification,
+    ).toEqual(proof);
+    expect(gatewayConfig.verifiedCapability(provider.modelId)).toEqual({
+      modelId: provider.modelId,
+      generation: gatewayConfig.generation(),
+      checkedAt: proof.checkedAt,
+      fields: { toolCalling: true },
+    });
+    deps.store.close();
+  });
+
   it("keeps a temporarily unreachable chat deployment configured but tool-unverified", async () => {
     const uiDir = await tempDir("keiko-gw-transient-setup-ui-");
     const deps = buildUiHandlerDeps({
@@ -587,6 +670,34 @@ describe("handleGatewaySetup", () => {
       toolCalling: false,
       toolCallingVerification: { status: "unverified", probe: "gateway-tool-calling-v1" },
     });
+    deps.store.close();
+  });
+
+  it("rejects DNS setup failures without persisting an unverified chat deployment", async () => {
+    const uiDir = await tempDir("keiko-gw-dns-setup-ui-");
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir: await tempDir("keiko-gw-dns-setup-ev-"),
+      env: { ...VAULT_ENV },
+      uiDbPath: join(uiDir, "keiko-ui.db"),
+      gatewayEmbeddingProbe: PASSTHROUGH_EMBEDDING_PROBE,
+      gatewaySetupTester: () =>
+        Promise.reject(
+          Object.assign(new Error("provider hostname not found"), { code: "ENOTFOUND" }),
+        ),
+    });
+
+    const result = await handleGatewaySetup(
+      ctx({
+        baseUrl: "https://gateway.example.com/v1",
+        apiKey: "test-token",
+        deploymentNames: ["unresolvable-deployment"],
+      }),
+      deps,
+    );
+
+    expect(result.status).toBe(502);
+    expect(currentGatewayConfig(deps)).toBeUndefined();
     deps.store.close();
   });
 
@@ -4988,6 +5099,68 @@ describe("handleGatewaySetup", () => {
     );
     expect(again.status).toBe(200);
     expect(noteCount()).toBe(1);
+    deps.store.close();
+  });
+
+  it("removes the Mistral limitation note only after a verified tool-calling observation", async () => {
+    const note =
+      "Tool calling is disabled by default for Mistral deployments until endpoint readiness verifies it";
+    const uiDir = await tempDir("keiko-gw-ui-mistral-verified-note-");
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir: await tempDir("keiko-gw-ev-mistral-verified-note-"),
+      env: { ...VAULT_ENV },
+      uiDbPath: join(uiDir, "keiko-ui.db"),
+    });
+    const gatewayConfig = deps.gatewayConfig;
+    if (gatewayConfig === undefined) throw new Error("expected gateway config store");
+    gatewayConfig.set(
+      parseGatewayConfig({
+        providers: [
+          {
+            modelId: "Mistral-Large-3",
+            baseUrl: "https://llm.example.com/v1",
+            apiKey: "chat-token",
+          },
+        ],
+        capabilities: [
+          {
+            id: "Mistral-Large-3",
+            kind: "chat",
+            contextWindow: 128_000,
+            maxOutputTokens: 8_192,
+            toolCalling: false,
+            structuredOutput: false,
+            streaming: true,
+            supportsImageInput: false,
+            supportsDocumentInput: false,
+            workflowEligible: false,
+            costClass: "medium",
+            latencyClass: "standard",
+            throughputHint: "test chat deployment",
+            preferredUseCases: ["Chat"],
+            knownLimitations: [note],
+          },
+        ],
+      }),
+      true,
+    );
+    gatewayConfig.recordVerifiedCapability(
+      "Mistral-Large-3",
+      { toolCalling: true },
+      "2026-08-28T12:00:00.000Z",
+      gatewayConfig.generation(),
+    );
+
+    const result = await handleApplyGatewayVerifiedCapabilities(
+      { ...ctx({ fields: { toolCalling: true } }), params: { modelId: "Mistral-Large-3" } },
+      deps,
+    );
+
+    expect(result.status).toBe(200);
+    expect(
+      requiredCapability(requiredGatewayConfig(deps), "Mistral-Large-3").knownLimitations,
+    ).not.toContain(note);
     deps.store.close();
   });
 

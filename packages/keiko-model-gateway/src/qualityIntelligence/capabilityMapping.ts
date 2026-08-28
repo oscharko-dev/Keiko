@@ -8,20 +8,9 @@
 // buildSelectionQueryForCapabilities (capabilityGate.ts), kept consistent with this READ side by the
 // capabilityGate tests.
 
-import type { ModelCapability, ToolCallingVerification } from "@oscharko-dev/keiko-contracts";
+import type { ModelCapability } from "@oscharko-dev/keiko-contracts";
+import { isToolCallingVerificationFresh } from "../config.js";
 import type { QualityIntelligenceCapability } from "./taskProfiles.js";
-
-const TOOL_CALLING_VERIFICATION_MAX_AGE_MS = 24 * 60 * 60 * 1000;
-
-function isFreshToolCallingVerification(
-  verification: ToolCallingVerification | undefined,
-  now = Date.now(),
-): boolean {
-  if (verification?.status !== "verified") return false;
-  const checkedAt = Date.parse(verification.checkedAt);
-  const ageMs = now - checkedAt;
-  return Number.isFinite(checkedAt) && ageMs >= 0 && ageMs <= TOOL_CALLING_VERIFICATION_MAX_AGE_MS;
-}
 
 export function modelSupportsCapability(
   capability: QualityIntelligenceCapability,
@@ -35,6 +24,6 @@ export function modelSupportsCapability(
     case "structured-output":
       return model.structuredOutput;
     case "function-calling":
-      return model.toolCalling && isFreshToolCallingVerification(model.toolCallingVerification);
+      return model.toolCalling && isToolCallingVerificationFresh(model.toolCallingVerification);
   }
 }

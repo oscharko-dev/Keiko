@@ -1147,7 +1147,7 @@ function recordReadinessObservation(
     observedGeneration,
   );
   if (report.overallStatus === "failed") {
-    deps.gatewayConfig?.clearVerifiedCapability(report.modelId, observedGeneration);
+    recordFailedReadinessObservation(deps, report.modelId, observedGeneration);
     return;
   }
   const observation = verifiedCapabilityObservation(report.probes);
@@ -1168,6 +1168,40 @@ function recordReadinessObservation(
     report.checkedAt,
     observedGeneration,
   );
+}
+
+function recordFailedReadinessObservation(
+  deps: UiHandlerDeps,
+  modelId: string,
+  observedGeneration: number | undefined,
+): void {
+  if (preserveVerifiedToolCallingObservation(deps, modelId, observedGeneration)) return;
+  deps.gatewayConfig?.clearVerifiedCapability(modelId, observedGeneration);
+}
+
+function preserveVerifiedToolCallingObservation(
+  deps: UiHandlerDeps,
+  modelId: string,
+  observedGeneration: number | undefined,
+): boolean {
+  const previous = deps.gatewayConfig?.verifiedCapability(modelId);
+  if (
+    previous === undefined ||
+    previous.generation !== observedGeneration ||
+    previous.fields.toolCalling !== true
+  ) {
+    return false;
+  }
+  // A failed chat request proves that the deployment is not currently ready, but it says nothing
+  // about a previous, configuration-bound tool-call proof. Preserve only that exact observation
+  // with its original timestamp so an unrelated outage cannot erase uncontradicted evidence.
+  deps.gatewayConfig?.recordVerifiedCapability(
+    modelId,
+    { toolCalling: true },
+    previous.checkedAt,
+    observedGeneration,
+  );
+  return true;
 }
 
 function reconcileToolCallingReadiness(
