@@ -207,6 +207,10 @@ const RepositoryFolderSwitcher = dynamic(
   () => import("./RepositoryFolderSwitcher").then((mod) => mod.RepositoryFolderSwitcher),
   { ssr: false, loading: () => null },
 );
+const TaskWorkspaceManager = dynamic(
+  () => import("./TaskWorkspaceManager").then((mod) => mod.TaskWorkspaceManager),
+  { ssr: false, loading: () => null },
+);
 
 const UnifiedQuickAccessPalette = dynamic(
   () => import("./modals/UnifiedQuickAccessPalette").then((mod) => mod.UnifiedQuickAccessPalette),
@@ -1359,10 +1363,18 @@ function AppShellInner(): ReactNode {
   );
   const wsContextValue: WsContextValue = useMemo(() => ({ active, winCount }), [active, winCount]);
   // GEN-PERF-RENDER-002 — Header is memoized, but passing a freshly-constructed
-  // <RepositoryFolderSwitcher/> element inline defeated that memo (new element identity every
-  // AppShell render). Memoizing the element keeps Header's props referentially stable so it only
-  // re-renders on real input changes.
-  const contextControl = useMemo(() => <RepositoryFolderSwitcher />, []);
+  // Building the context controls inline defeated Header's memoization (new element identities on
+  // every AppShell render). The controls intentionally remain separate: the repository picker owns
+  // base-folder selection, while TaskWorkspaceManager owns the server-backed lifecycle inventory.
+  const contextControl = useMemo(
+    () => (
+      <>
+        <RepositoryFolderSwitcher />
+        <TaskWorkspaceManager />
+      </>
+    ),
+    [],
+  );
 
   const openPalette = useCallback((): void => setPalOpen(true), []);
   const closePalette = useCallback((): void => setPalOpen(false), []);

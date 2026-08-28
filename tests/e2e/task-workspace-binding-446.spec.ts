@@ -20,7 +20,9 @@ interface Inst {
   readonly managedWorktreePath: string;
 }
 
-function instance(i: Inst): Record<string, unknown> {
+type LifecycleState = "active" | "paused" | "handoff-ready";
+
+function instance(i: Inst, lifecycleState: LifecycleState): Record<string, unknown> {
   return {
     schemaVersion: "1",
     workspaceId: i.workspaceId,
@@ -31,7 +33,7 @@ function instance(i: Inst): Record<string, unknown> {
     taskBranch: `keiko/task/${i.taskId}`,
     managedWorktreePath: i.managedWorktreePath,
     gitdirIdentity: "gitdir-hash",
-    lifecycleState: "active",
+    lifecycleState,
     health: "healthy",
     lock: null,
     createdAt: "2026-06-26T00:00:00.000Z",
@@ -63,9 +65,9 @@ function binding(i: Inst): Record<string, unknown> {
   };
 }
 
-function view(i: Inst): Record<string, unknown> {
+function view(i: Inst, lifecycleState: LifecycleState): Record<string, unknown> {
   return {
-    instance: instance(i),
+    instance: instance(i, lifecycleState),
     binding: binding(i),
     pointer: {
       workspaceId: i.workspaceId,
@@ -88,8 +90,25 @@ async function fulfilJson(route: Route, body: unknown): Promise<void> {
 }
 
 interface BindingServer {
-  activeId: string;
+  activeId: string | null;
+  readonly lifecycleById: Record<string, LifecycleState>;
   readonly filesRoots: string[];
+}
+
+function workspaceFor(workspaceId: string): Inst {
+  return workspaceId === ALPHA.workspaceId ? ALPHA : BETA;
+}
+
+function lifecycleFor(state: BindingServer, workspaceId: string): LifecycleState {
+  const lifecycle = state.lifecycleById[workspaceId];
+  if (lifecycle === undefined) throw new Error("Task workspace lifecycle state missing");
+  return lifecycle;
+}
+
+function activeView(state: BindingServer): Record<string, unknown> | null {
+  if (state.activeId === null) return null;
+  const workspace = workspaceFor(state.activeId);
+  return view(workspace, lifecycleFor(state, workspace.workspaceId));
 }
 
 // Wire the deterministic task-workspace + files surface. `state.activeId` flips on a switch POST so a
@@ -114,21 +133,90 @@ async function installRoutes(page: Page, state: BindingServer): Promise<void> {
   await page.route("**/api/task-workspaces/active", async (route) => {
     if (route.request().method() === "GET") {
       await fulfilJson(route, {
-        active: view(state.activeId === ALPHA.workspaceId ? ALPHA : BETA),
+        active: activeView(state),
       });
       return;
     }
     // POST switch — flip the active pointer to the requested workspace, return its binding.
     const raw = route.request().postData();
     const body = raw === null ? {} : (JSON.parse(raw) as { workspaceId?: string });
-    if (body.workspaceId === BETA.workspaceId) state.activeId = BETA.workspaceId;
-    else if (body.workspaceId === ALPHA.workspaceId) state.activeId = ALPHA.workspaceId;
-    const current = state.activeId === ALPHA.workspaceId ? ALPHA : BETA;
-    await fulfilJson(route, { instance: instance(current), binding: binding(current) });
+    if (body.workspaceId !== ALPHA.workspaceId && body.workspaceId !== BETA.workspaceId) {
+      throw new Error("Unexpected task workspace id");
+    }
+    state.activeId = body.workspaceId;
+    state.lifecycleById[body.workspaceId] = "active";
+    const current = workspaceFor(body.workspaceId);
+    await fulfilJson(route, { instance: instance(current, "active"), binding: binding(current) });
+  });
+
+  await page.route("**/api/task-workspaces/*/pause", async (route) => {
+    const workspaceId = route.request().url().split("/").at(-2);
+    if (workspaceId !== ALPHA.workspaceId && workspaceId !== BETA.workspaceId) {
+      throw new Error("Unexpected pause workspace id");
+    }
+    state.lifecycleById[workspaceId] = "paused";
+    state.activeId = null;
+    await fulfilJson(route, {
+      instance: instance(workspaceFor(workspaceId), "paused"),
+      binding: null,
+    });
+  });
+
+  await page.route("**/api/task-workspaces/*/resume", async (route) => {
+    const workspaceId = route.request().url().split("/").at(-2);
+    if (workspaceId !== ALPHA.workspaceId && workspaceId !== BETA.workspaceId) {
+      throw new Error("Unexpected resume workspace id");
+    }
+    state.lifecycleById[workspaceId] = "active";
+    state.activeId = workspaceId;
+    const workspace = workspaceFor(workspaceId);
+    await fulfilJson(route, {
+      instance: instance(workspace, "active"),
+      binding: binding(workspace),
+    });
+  });
+
+  await page.route("**/api/task-workspaces/*/handoff", async (route) => {
+    const workspaceId = route.request().url().split("/").at(-2);
+    if (workspaceId !== ALPHA.workspaceId && workspaceId !== BETA.workspaceId) {
+      throw new Error("Unexpected handoff workspace id");
+    }
+    state.lifecycleById[workspaceId] = "handoff-ready";
+    const workspace = workspaceFor(workspaceId);
+    await fulfilJson(route, {
+      instance: instance(workspace, "handoff-ready"),
+      binding: binding(workspace),
+    });
   });
 
   await page.route("**/api/task-workspaces?*", async (route) => {
-    await fulfilJson(route, { instances: [instance(ALPHA), instance(BETA)] });
+    await fulfilJson(route, {
+      instances: [
+        instance(ALPHA, lifecycleFor(state, ALPHA.workspaceId)),
+        instance(BETA, lifecycleFor(state, BETA.workspaceId)),
+      ],
+    });
+  });
+
+  // Restore-time binding verification is part of the real client path. The lifecycle routes stay
+  // intercepted, but the verification response remains a healthy, body-free server truth so the
+  // test proves the mounted production surface rather than bypassing its admission sequence.
+  await page.route("**/api/task-workspaces/reconciliation", async (route) => {
+    await fulfilJson(route, {
+      report: {
+        entries: [
+          { workspaceId: ALPHA.workspaceId, status: "healthy" },
+          { workspaceId: BETA.workspaceId, status: "healthy" },
+        ],
+      },
+    });
+  });
+
+  // The managed Files surface separately asks whether launcher-paired path-read authority is
+  // available. This route supplies that bounded session verdict; it does not manufacture another
+  // lifecycle source and keeps the binding assertion below on the real Files implementation.
+  await page.route("**/api/workspaces", async (route) => {
+    await fulfilJson(route, { session: "paired", manifests: [] });
   });
 
   // Record the root every Files-surface request carries, and answer with an empty-but-valid listing.
@@ -170,10 +258,14 @@ async function seedFilesWindow(page: Page): Promise<void> {
   });
 }
 
-test("active task-workspace binding targets and re-targets the Files surface in the real app", async ({
+test("active task-workspace binding targets, re-targets, and manages lifecycle in the real app", async ({
   page,
 }) => {
-  const state: BindingServer = { activeId: ALPHA.workspaceId, filesRoots: [] };
+  const state: BindingServer = {
+    activeId: ALPHA.workspaceId,
+    lifecycleById: { [ALPHA.workspaceId]: "active", [BETA.workspaceId]: "paused" },
+    filesRoots: [],
+  };
   await installRoutes(page, state);
   await seedFilesWindow(page);
   await page.goto("/");
@@ -187,14 +279,32 @@ test("active task-workspace binding targets and re-targets the Files surface in 
   // surface must not remain there).
   await expect.poll(() => state.filesRoots.at(-1)).toBe(ALPHA_ROOT);
 
-  // Open the switcher and switch to the second workspace.
+  // #2946: the management surface exposes the legal action set from server lifecycle truth.
   await page.getByRole("button", { name: /alpha-446/u }).click();
   const list = page.getByRole("list", { name: /task workspaces/iu });
   await expect(list).toBeVisible();
-  await list.getByRole("button", { name: "Switch" }).first().click();
+  const alphaItem = list.getByRole("listitem").filter({ hasText: "alpha-446" });
+  const betaItem = list.getByRole("listitem").filter({ hasText: "beta-446" });
+  await alphaItem.getByRole("button", { name: "Prepare handoff" }).click();
+  await expect(alphaItem).toContainText("handoff-ready");
+  await betaItem.getByRole("button", { name: "Switch" }).click();
 
   // AC2 / SC3 — after the atomic switch, the switcher shows the new task and the Files surface
   // re-issued its request against the NEW active root, leaving no surface on the previous workspace.
   await expect(page.getByRole("button", { name: /beta-446/u })).toBeVisible();
   await expect.poll(() => state.filesRoots.at(-1)).toBe(BETA_ROOT);
+
+  // Pause clears the active pointer, then Resume rebinds it from the refreshed server inventory.
+  await page
+    .getByRole("listitem")
+    .filter({ hasText: "beta-446" })
+    .getByRole("button", { name: "Pause" })
+    .click();
+  await expect(page.getByRole("button", { name: /no active workspace/u })).toBeVisible();
+  await page
+    .getByRole("listitem")
+    .filter({ hasText: "beta-446" })
+    .getByRole("button", { name: "Resume" })
+    .click();
+  await expect(page.getByRole("button", { name: /beta-446/u })).toBeVisible();
 });

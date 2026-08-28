@@ -245,11 +245,33 @@ export class CodingRuntimeAuthorityService {
     if (capabilities === undefined) {
       return { ok: false, reason: "authority-resolution-failed" };
     }
+    return this.activateMintedRuntime({
+      runId,
+      envelope,
+      authorityRef: registered.authorityRef,
+      capabilities,
+      context,
+      nowIso,
+    });
+  }
+
+  private activateMintedRuntime(input: {
+    readonly runId: string;
+    readonly envelope: CodingWorkbenchRuntimeAuthorityEnvelope;
+    readonly authorityRef: CodingRuntimeAuthorityRef;
+    readonly capabilities: {
+      readonly modelGatewayCapability: string;
+      readonly toolFacadeCapability: string;
+    };
+    readonly context: CodingRuntimeTrustedContext;
+    readonly nowIso: string;
+  }): CodingRuntimeMintResult {
+    const { runId, envelope, authorityRef, capabilities, context, nowIso } = input;
     const treeBindingId = randomBytes(32).toString("hex");
-    this.activeAuthorityRef = registered.authorityRef;
+    this.activeAuthorityRef = authorityRef;
     this.activeGitDeliveryAuthority = {
       runId,
-      envelopeDigest: registered.authorityRef.envelopeDigest,
+      envelopeDigest: authorityRef.envelopeDigest,
       projectId: context.projectId,
       workspaceRoot: context.workspaceRoot,
       branch: context.branch,
@@ -260,7 +282,7 @@ export class CodingRuntimeAuthorityService {
     this.runtimeState = stateForMint(this.runtimeState, envelope, nowIso);
     return {
       ok: true,
-      authorityRef: registered.authorityRef,
+      authorityRef,
       modelGatewayCapability: capabilities.modelGatewayCapability,
       toolFacadeCapability: capabilities.toolFacadeCapability,
       effectiveMode: envelope.authority.effectiveMode,

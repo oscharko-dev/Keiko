@@ -17,8 +17,6 @@ import type {
 } from "@oscharko-dev/keiko-contracts";
 import {
   GIT_REPOSITORY_AGENT_SCHEMA_VERSION,
-  gitRepositoryAgentMinimumMode,
-  gitRepositoryAgentOperationAdmitted,
   parseGitRepositoryAgentOperationRequest,
 } from "@oscharko-dev/keiko-contracts/runtime/git-repository-agent";
 import { resolveEffectiveCodingWorkbenchMode } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench";
@@ -451,33 +449,6 @@ export function gitAgentEffectiveMode(
 ): CodingWorkbenchMode {
   const ceiling = deps.codingRuntimeDeploymentCeiling ?? "governed-assist";
   return resolveEffectiveCodingWorkbenchMode(ceiling, ceiling);
-}
-
-// The authority gate for the agent repository facade. It runs BEFORE the idempotency reservation and
-// before any delegation, so a denied operation neither mutates the repository nor occupies a replay
-// slot. A denial is content-free: the operation, the effective mode, and either the mode that would
-// have admitted it or (KEIKO-0227: repository-delivery operations — fetch/pull/push/pull-request/
-// merge — are approval-required at every mode, per coding-workbench.ts's shared
-// CODING_WORKBENCH_MODE_POLICIES, ADR-0087) a statement that no mode alone suffices — never a path,
-// a branch name, or any part of the payload.
-function autonomyDenial(
-  request: GitRepositoryAgentOperationRequest,
-  effectiveMode: CodingWorkbenchMode,
-): RouteResult | undefined {
-  if (gitRepositoryAgentOperationAdmitted(request.operation, request.mode, effectiveMode)) {
-    return undefined;
-  }
-  const required = gitRepositoryAgentMinimumMode(request.operation);
-  const requirement =
-    required === undefined ? "a separate approval, regardless of mode" : `${required} or higher`;
-  return {
-    status: deniedStatus("autonomy-mode-denied"),
-    body: denied(
-      request,
-      "autonomy-mode-denied",
-      `The autonomy mode in effect (${effectiveMode}) does not admit an agent-initiated ${request.operation} execute; ${requirement} is required.`,
-    ),
-  };
 }
 
 async function parseAgentRequest(req: IncomingMessage): Promise<

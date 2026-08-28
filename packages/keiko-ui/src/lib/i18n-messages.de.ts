@@ -1400,8 +1400,10 @@ export const DE_MESSAGES = {
   "taskWorkspace.panel.aria": "Task-Workspace-Kontext",
   "taskWorkspace.noWorkspaceBound": "Kein Workspace gebunden",
   "taskWorkspace.action.pause": "Pausieren",
+  "taskWorkspace.action.resume": "Fortsetzen",
   "taskWorkspace.action.prepareHandoff": "Handoff vorbereiten",
   "taskWorkspace.action.clearActive": "Aktiven Workspace lösen",
+  "taskWorkspace.action.refresh": "Aktualisieren",
   "taskWorkspace.action.active": "Aktiv",
   "taskWorkspace.action.switch": "Wechseln",
   "taskWorkspace.empty.title": "Kein aktiver Task Workspace",
@@ -1411,6 +1413,17 @@ export const DE_MESSAGES = {
     "Wechsle zu einem vorhandenen Workspace oder erstelle einen für dieses Repository.",
   "taskWorkspace.available": "Verfügbare Workspaces",
   "taskWorkspace.loading": "Workspaces werden geladen…",
+  "taskWorkspace.status.updating": "Task Workspace wird aktualisiert…",
+  "taskWorkspace.status.reconciled": "Task Workspaces aktualisiert.",
+  "taskWorkspace.reason.busy": "Eine andere Workspace-Aktion wird gerade ausgeführt.",
+  "taskWorkspace.reason.switchUnavailable":
+    "Es kann nur zu aktiven, pausierten oder handoff-bereiten Workspaces gewechselt werden.",
+  "taskWorkspace.reason.pauseUnavailable": "Nur ein aktiver Workspace kann pausiert werden.",
+  "taskWorkspace.reason.resumeUnavailable": "Nur ein pausierter Workspace kann fortgesetzt werden.",
+  "taskWorkspace.reason.handoffUnavailable":
+    "Nur aktive oder pausierte Workspaces können für einen Handoff vorbereitet werden.",
+  "taskWorkspace.reason.handoffDirty":
+    "Committe oder stashe ungesicherte Änderungen, bevor du einen Handoff vorbereitest.",
   "taskWorkspace.noneManaged": "Noch keine verwalteten Task Workspaces vorhanden.",
   "taskWorkspace.list": "Task Workspaces",
   "taskWorkspace.create.title": "Workspace erstellen",

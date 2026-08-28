@@ -1368,8 +1368,10 @@ export const EN_MESSAGES = {
   "taskWorkspace.panel.aria": "Task workspace context",
   "taskWorkspace.noWorkspaceBound": "No workspace bound",
   "taskWorkspace.action.pause": "Pause",
+  "taskWorkspace.action.resume": "Resume",
   "taskWorkspace.action.prepareHandoff": "Prepare handoff",
   "taskWorkspace.action.clearActive": "Clear active",
+  "taskWorkspace.action.refresh": "Refresh",
   "taskWorkspace.action.active": "Active",
   "taskWorkspace.action.switch": "Switch",
   "taskWorkspace.empty.title": "No active task workspace",
@@ -1378,6 +1380,17 @@ export const EN_MESSAGES = {
     "Switch to an existing workspace or create one for this repository.",
   "taskWorkspace.available": "Available workspaces",
   "taskWorkspace.loading": "Loading workspaces…",
+  "taskWorkspace.status.updating": "Updating task workspace…",
+  "taskWorkspace.status.reconciled": "Task workspaces refreshed.",
+  "taskWorkspace.reason.busy": "Another workspace action is in progress.",
+  "taskWorkspace.reason.switchUnavailable":
+    "Only active, paused, or handoff-ready workspaces can be switched to.",
+  "taskWorkspace.reason.pauseUnavailable": "Only an active workspace can be paused.",
+  "taskWorkspace.reason.resumeUnavailable": "Only a paused workspace can be resumed.",
+  "taskWorkspace.reason.handoffUnavailable":
+    "Only active or paused workspaces can prepare a handoff.",
+  "taskWorkspace.reason.handoffDirty":
+    "Commit or stash uncommitted changes before preparing a handoff.",
   "taskWorkspace.noneManaged": "No managed task workspaces yet.",
   "taskWorkspace.list": "Task workspaces",
   "taskWorkspace.create.title": "Create workspace",
