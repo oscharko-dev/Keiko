@@ -41,6 +41,8 @@ export interface GitDeliveryAuthorityRequest {
   readonly operation: GitRepositoryAgentOperationKind;
   readonly headBranchName?: string | undefined;
   readonly baseBranchName?: string | undefined;
+  // A push's remote ref is the remote counterpart of the head, never the repository base.
+  readonly remoteBranchName?: string | undefined;
 }
 
 export type GitDeliveryAuthorityDecision =
@@ -67,8 +69,10 @@ function withinBranchEnvelope(
 ): boolean {
   const head = request.headBranchName;
   const base = request.baseBranchName;
+  const remote = request.remoteBranchName;
   if (head !== undefined && head !== active.branch.headRef) return false;
   if (base !== undefined && base !== active.branch.baseRef) return false;
+  if (remote !== undefined && remote !== active.branch.headRef) return false;
   return branchAllowed(active.branch.headRef, active.branch.allowedPrefixes);
 }
 

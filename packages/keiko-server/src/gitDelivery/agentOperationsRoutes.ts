@@ -30,7 +30,7 @@ import { createGitDeliveryPrRouteGroup } from "./prRoutes.js";
 import { createGitDeliveryPushRouteGroup } from "./pushRoutes.js";
 import { createGitDeliverySyncRouteGroup } from "./syncRoutes.js";
 import { resolveProjectWorkspace } from "./execution.js";
-import { gitDeliveryAuthorityDenial } from "./requestPreparation.js";
+import { gitDeliveryAuthorityDenial, logGitDeliveryAuthorityDenial } from "./requestPreparation.js";
 import {
   hasOnlyAllowedKeys,
   isPlainObject,
@@ -548,6 +548,7 @@ export async function handleGitAgentOperation(
   if (parsed.request.mode === "execute") {
     const workspace = resolveProjectWorkspace(deps, parsed.request.projectId);
     if (workspace === undefined) {
+      logGitDeliveryAuthorityDenial(ctx, parsed.request.operation, "workspace-unresolvable");
       return {
         status: 403,
         body: denied(

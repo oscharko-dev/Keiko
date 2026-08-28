@@ -56,7 +56,7 @@ import {
   scanUnsafeFormatChars,
 } from "./requestGuards.js";
 import {
-  gitDeliveryAuthorityDenial,
+  gitDeliveryAuthorityGate,
   prepareGitDeliveryRequest,
   type GitDeliveryRequestErrors,
 } from "./requestPreparation.js";
@@ -236,10 +236,22 @@ export const createHandleMergeApprove = (
     // body — the binding-hash consume() already enforces then matches by construction.
     const prepared = await prepareGitDeliveryRequest(ctx, deps, MERGE_REQUEST_ERRORS, validate);
     if (!prepared.ok) return prepared.result;
+    const { workspace } = prepared;
     const { projectId, command } = prepared.value;
+    const authority = gitDeliveryAuthorityGate(ctx, deps, projectId, workspace, "merge", {
+      headBranchName: command.headBranchName,
+      baseBranchName: command.baseBranchName,
+    });
+    if (!authority.allowed) return authority.result;
     const store = seams.approvalStore ?? DEFAULT_GIT_DELIVERY_APPROVAL_STORE;
     const issued = store.issue({
-      binding: { projectId, operation: "merge", command },
+      binding: {
+        projectId,
+        operation: "merge",
+        command,
+        runId: authority.runId,
+        envelopeDigest: authority.envelopeDigest,
+      },
       approvedByUserId: GIT_DELIVERY_LOCAL_OPERATOR_ID,
       nowMs: (seams.now ?? Date.now)(),
     });
@@ -263,20 +275,36 @@ export const createHandleMergeExecute = (
     if (!prepared.ok) return prepared.result;
     const { workspace } = prepared;
     const { projectId, command, approval } = prepared.value;
-    const authorityDenial = gitDeliveryAuthorityDenial(ctx, deps, projectId, workspace, "merge", {
+    const authority = gitDeliveryAuthorityGate(ctx, deps, projectId, workspace, "merge", {
       headBranchName: command.headBranchName,
       baseBranchName: command.baseBranchName,
     });
-    if (authorityDenial !== undefined) return authorityDenial;
+    if (!authority.allowed) return authority.result;
     const verifiedApproval = resolveGitDeliveryApprovalRequirement(approval, {
       store: seams.approvalStore,
-      binding: { projectId, operation: "merge", command },
+      binding: {
+        projectId,
+        operation: "merge",
+        command,
+        runId: authority.runId,
+        envelopeDigest: authority.envelopeDigest,
+      },
       nowMs: (seams.now ?? Date.now)(),
     });
     if (verifiedApproval === undefined) return errResult(400, "GIT_DELIVERY_MERGE_BAD_REQUEST");
+    const beforeRemoteDispatch = (): boolean => {
+      const latest = gitDeliveryAuthorityGate(ctx, deps, projectId, workspace, "merge", {
+        headBranchName: command.headBranchName,
+        baseBranchName: command.baseBranchName,
+      });
+      return latest.allowed && (seams.beforeRemoteDispatch?.() ?? true);
+    };
     let result;
     try {
-      result = await executeGovernedMerge(command, verifiedApproval, workspace, deps, seams);
+      result = await executeGovernedMerge(command, verifiedApproval, workspace, deps, {
+        ...seams,
+        beforeRemoteDispatch,
+      });
     } catch {
       // Only the read-only snapshot step can throw (not a git repository); the gateway never throws.
       return errResult(409, "GIT_DELIVERY_MERGE_WORKTREE_UNAVAILABLE");

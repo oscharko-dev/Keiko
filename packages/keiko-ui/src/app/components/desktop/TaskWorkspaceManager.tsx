@@ -230,6 +230,48 @@ function WorkspaceInventory(props: {
   );
 }
 
+function WorkspacePanelHeader(props: {
+  readonly api: ActiveWorkspaceApi;
+  readonly headingRef: RefObject<HTMLHeadingElement | null>;
+  readonly refresh: () => void;
+  readonly t: I18nTranslate;
+}): ReactNode {
+  return (
+    <div className={styles["cmp-ph"]}>
+      <h2 ref={props.headingRef} tabIndex={-1}>
+        {props.t("taskWorkspace.title")}
+      </h2>
+      <button
+        type="button"
+        className={styles["cmp-rf"]}
+        aria-disabled={props.api.loading || props.api.switching}
+        onClick={props.refresh}
+      >
+        {props.t("taskWorkspace.action.refresh")}
+      </button>
+    </div>
+  );
+}
+
+function ClearActiveButton(props: {
+  readonly api: ActiveWorkspaceApi;
+  readonly t: I18nTranslate;
+}): ReactNode {
+  const unavailable = props.api.activeInstance === null || props.api.switching;
+  return (
+    <button
+      type="button"
+      className={styles["cmp-clear"]}
+      aria-disabled={unavailable}
+      onClick={() => {
+        if (!unavailable) void props.api.clearActive();
+      }}
+    >
+      {props.t("taskWorkspace.action.clearActive")}
+    </button>
+  );
+}
+
 function WorkspacePanel(props: {
   readonly api: ActiveWorkspaceApi;
   readonly panelId: string;
@@ -254,37 +296,14 @@ function WorkspacePanel(props: {
       aria-modal="false"
       aria-label={props.t("taskWorkspace.panel.aria")}
     >
-      <div className={styles["cmp-ph"]}>
-        <h2 ref={headingRef} tabIndex={-1}>
-          {props.t("taskWorkspace.title")}
-        </h2>
-        <button
-          type="button"
-          className={styles["cmp-rf"]}
-          aria-disabled={props.api.loading || props.api.switching}
-          onClick={refresh}
-        >
-          {props.t("taskWorkspace.action.refresh")}
-        </button>
-      </div>
+      <WorkspacePanelHeader api={props.api} headingRef={headingRef} refresh={refresh} t={props.t} />
       {props.api.error === null ? null : (
         <p role="alert" className={styles["cmp-e"]}>
           {props.api.error}
         </p>
       )}
       <WorkspaceInventory api={props.api} t={props.t} />
-      <button
-        type="button"
-        className={styles["cmp-clear"]}
-        aria-disabled={props.api.activeInstance === null || props.api.switching}
-        onClick={() => {
-          if (props.api.activeInstance !== null && !props.api.switching) {
-            void props.api.clearActive();
-          }
-        }}
-      >
-        {props.t("taskWorkspace.action.clearActive")}
-      </button>
+      <ClearActiveButton api={props.api} t={props.t} />
     </dialog>
   );
 }

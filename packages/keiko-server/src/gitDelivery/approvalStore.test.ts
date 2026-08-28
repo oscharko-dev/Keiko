@@ -11,6 +11,8 @@ const NOW = 1_700_000_000_000;
 const BINDING: GitDeliveryApprovalBinding = {
   projectId: "/workspace/repo",
   operation: "merge",
+  runId: "run-a",
+  envelopeDigest: "a".repeat(64),
   command: {
     kind: "merge",
     ownerAndRepo: "oscharko-dev/Keiko",
@@ -81,6 +83,26 @@ describe("git delivery approval store", () => {
             deleteBranchAfterMerge: false,
           },
         },
+        nowMs: NOW + 1,
+      }),
+    ).toBeUndefined();
+  });
+
+  it("rejects a claim replayed under a different runtime Authority Envelope", () => {
+    const store = createInMemoryGitDeliveryApprovalStore();
+    const issued = store.issue({
+      binding: BINDING,
+      approvedByUserId: "u-1",
+      nowMs: NOW,
+      ttlMs: 60_000,
+    });
+    const parsed = parseGitDeliveryApprovalRequest(issued.approval);
+    if (parsed?.kind !== "claim") throw new Error("expected claim");
+
+    expect(
+      resolveGitDeliveryApprovalRequirement(parsed, {
+        store,
+        binding: { ...BINDING, runId: "run-b", envelopeDigest: "b".repeat(64) },
         nowMs: NOW + 1,
       }),
     ).toBeUndefined();

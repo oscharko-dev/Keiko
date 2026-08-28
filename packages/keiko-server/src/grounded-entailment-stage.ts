@@ -211,11 +211,9 @@ async function evaluateHybridEntailment(
   packs: readonly ConnectedContextPack[],
   selectedEvidence: readonly NumericEntailmentEvidence[],
   nowMs: number,
-  judge: EntailmentJudge,
-  options: EntailmentOptions,
-  observability: CorrelatedEntailmentObservability,
-  signal: AbortSignal | undefined,
+  runtime: EntailmentEvaluationRuntime,
 ): Promise<readonly UncertaintyMarker[]> {
+  const { judge, options, observability, signal } = runtime;
   try {
     const budget = createEntailmentExecutionBudget(options, signal);
     const membership = reconcileInlineCitations(answerText, buildPackCitationIndex(packs));
@@ -277,25 +275,29 @@ export function createEntailmentStage(
   // to pair with it (the folder orchestrator never sees an answer id), which silently disabled the
   // operator diagnostic this stage promises. Mint one per stage — the stage's lifetime is exactly
   // one grounded ask — matching the workspace-index provider's convention for the same situation.
-  const correlated: CorrelatedEntailmentObservability = {
-    ...observability,
-    correlationId: observability.correlationId ?? randomUUID(),
-  };
+  const correlated = correlatedEntailmentObservability(observability);
   const judge = createGatewayEntailmentJudge(deps, modelId, correlated.correlationId);
   if (judge === undefined) {
     // KEIKO-0359: report WHY the stage is inert. Going inert used to be completely silent, so a
     // model whose capability metadata Gateway Setup never enriched looked identical to a model
     // that genuinely cannot do structured output — and the stage stayed off indefinitely with
     // nothing an operator could act on. Body-free: the reason code only, no capability payload.
-    const reason = entailmentJudgeUnavailableReason(deps, modelId);
-    if (reason !== undefined) {
-      recordDiagnostic(correlated, Date.now(), "EntailmentStageInert", reason);
-    }
+    reportUnavailableEntailmentJudge(deps, modelId, correlated);
     return undefined;
   }
   // The request signal is baked in here (the stage's lifetime is the grounded ask's): a client
   // cancellation stops the remaining sequential judge calls early, and the per-answer wall-clock
   // budget in reconcileClaimEntailment bounds the worst case even when the request never cancels.
+  return configuredEntailmentStage(judge, options, correlated, signal);
+}
+
+function configuredEntailmentStage(
+  judge: EntailmentJudge,
+  options: EntailmentOptions,
+  correlated: CorrelatedEntailmentObservability,
+  signal: AbortSignal | undefined,
+): EntailmentStage {
+  const runtime = { judge, options, observability: correlated, signal };
   return {
     evaluate: (
       answerText: string,
@@ -318,15 +320,33 @@ export function createEntailmentStage(
         signal,
       ),
     evaluateHybrid: (answerText, packs, selectedEvidence, nowMs) =>
-      evaluateHybridEntailment(
-        answerText,
-        packs,
-        selectedEvidence,
-        nowMs,
-        judge,
-        options,
-        correlated,
-        signal,
-      ),
+      evaluateHybridEntailment(answerText, packs, selectedEvidence, nowMs, runtime),
   };
+}
+
+interface EntailmentEvaluationRuntime {
+  readonly judge: EntailmentJudge;
+  readonly options: EntailmentOptions;
+  readonly observability: CorrelatedEntailmentObservability;
+  readonly signal: AbortSignal | undefined;
+}
+
+function correlatedEntailmentObservability(
+  observability: EntailmentStageObservability,
+): CorrelatedEntailmentObservability {
+  return {
+    ...observability,
+    correlationId: observability.correlationId ?? randomUUID(),
+  };
+}
+
+function reportUnavailableEntailmentJudge(
+  deps: UiHandlerDeps,
+  modelId: string,
+  observability: CorrelatedEntailmentObservability,
+): void {
+  const reason = entailmentJudgeUnavailableReason(deps, modelId);
+  if (reason !== undefined) {
+    recordDiagnostic(observability, Date.now(), "EntailmentStageInert", reason);
+  }
 }

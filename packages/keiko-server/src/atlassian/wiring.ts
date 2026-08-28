@@ -79,20 +79,22 @@ export function buildAtlassianConnectorCredentialDeps(
   });
   return {
     custody,
-    httpPortFactory: (metadata) =>
+    httpPortFactory: (metadata, correlationId) =>
       createGatewayAtlassianHttpPort({
         baseUrl: metadata.baseUrl,
         authRef: metadata.authRef,
         credentials: executionResolver,
         egress: options.egress,
+        correlationId,
         ...(options.fetchImpl === undefined ? {} : { fetchImpl: options.fetchImpl }),
       }),
-    httpBodyPortFactory: (metadata) =>
+    httpBodyPortFactory: (metadata, correlationId) =>
       createGatewayAtlassianHttpBodyPort({
         baseUrl: metadata.baseUrl,
         authRef: metadata.authRef,
         credentials: executionResolver,
         egress: options.egress,
+        correlationId,
         ...(options.fetchImpl === undefined ? {} : { fetchImpl: options.fetchImpl }),
       }),
     ...(options.activityLog === undefined ? {} : { activityLog: options.activityLog }),

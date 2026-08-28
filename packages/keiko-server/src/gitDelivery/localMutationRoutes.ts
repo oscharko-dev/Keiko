@@ -27,7 +27,10 @@ import {
   resolveProjectWorkspace,
   type GitDeliveryExecutionSeams,
 } from "./execution.js";
-import { gitDeliveryAuthorityDenial } from "./requestPreparation.js";
+import {
+  gitDeliveryAuthorityDenial,
+  type GitDeliveryAuthorityTarget,
+} from "./requestPreparation.js";
 import {
   hasOnlyAllowedKeys,
   isContainedPathspec,
@@ -93,6 +96,16 @@ function localDeliveryOperationFor(
   if (command.kind === "branch-switch") return "branch-switch";
   if (command.kind === "stage") return "stage";
   return command.kind === "unstage" ? "unstage" : undefined;
+}
+
+function localMutationAuthorityTarget(command: GitMutationCommand): GitDeliveryAuthorityTarget {
+  if (command.kind === "branch-create") {
+    return {
+      headBranchName: command.branchName,
+      baseBranchName: command.baseBranchName,
+    };
+  }
+  return command.kind === "branch-switch" ? { headBranchName: command.branchName } : {};
 }
 
 const BRANCH_CREATE_SPEC: LocalMutationSpec = {
@@ -220,7 +233,14 @@ export const createHandleLocalMutation = (
     if (workspace === undefined) return errResult(404, "GIT_DELIVERY_LOCAL_UNKNOWN_PROJECT");
     const operation = spec.operation ?? localDeliveryOperationFor(command);
     if (operation === undefined) return errResult(400, "GIT_DELIVERY_LOCAL_BAD_REQUEST");
-    const authorityDenial = gitDeliveryAuthorityDenial(ctx, deps, projectId, workspace, operation);
+    const authorityDenial = gitDeliveryAuthorityDenial(
+      ctx,
+      deps,
+      projectId,
+      workspace,
+      operation,
+      localMutationAuthorityTarget(command),
+    );
     if (authorityDenial !== undefined) return authorityDenial;
     const verifiedApproval = resolveGitDeliveryApprovalRequirement(approval, {
       store: seams.approvalStore,

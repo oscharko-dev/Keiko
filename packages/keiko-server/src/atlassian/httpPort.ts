@@ -35,6 +35,8 @@ import {
   gatewayFetch,
   type OutboundHttpEgressConfig,
 } from "@oscharko-dev/keiko-model-gateway/internal/http";
+import { UNKNOWN_CORRELATION_ID } from "../correlation.js";
+import { processServerLogSink } from "../process-log-sink.js";
 
 // Hard per-request ceiling: the largest ADR-0128 D3 budget (bulk sync pagination). Requests ask
 // for less (the verify probe asks for 30 000 ms); a hostile or buggy caller can never widen it.
@@ -74,6 +76,7 @@ export interface CreateAtlassianHttpPortOptions {
   // Resolved fresh per request so runtime gateway-config updates are honored immediately.
   readonly egress?: (() => OutboundHttpEgressConfig | undefined) | undefined;
   readonly fetchImpl?: typeof fetch | undefined;
+  readonly correlationId?: string | undefined;
 }
 
 function boundedTimeoutMs(requested: number): number {
@@ -250,6 +253,8 @@ export function createGatewayAtlassianHttpPort(
         },
         signal: AbortSignal.timeout(boundedTimeoutMs(request.timeoutMs)),
         egress,
+        log: processServerLogSink(),
+        logContext: { correlationId: options.correlationId ?? UNKNOWN_CORRELATION_ID },
         ...(options.fetchImpl === undefined ? {} : { fetchImpl: options.fetchImpl }),
       });
       await discardBody(response);
@@ -363,6 +368,8 @@ export function createGatewayAtlassianHttpBodyPort(
         ...(request.bodyJson === undefined ? {} : { body: request.bodyJson }),
         signal: composeBodyRequestSignal(request),
         egress,
+        log: processServerLogSink(),
+        logContext: { correlationId: options.correlationId ?? UNKNOWN_CORRELATION_ID },
         ...(options.fetchImpl === undefined ? {} : { fetchImpl: options.fetchImpl }),
       });
       const retryAfterMs = parseRetryAfterMs(response.headers.get("retry-after"), Date.now());

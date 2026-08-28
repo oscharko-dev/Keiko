@@ -220,7 +220,13 @@ function issueMergeApproval(
   overrides: Record<string, unknown> = {},
 ): GitDeliveryApprovalClaim {
   return approvalStore.issue({
-    binding: { projectId, operation: "merge", command: mergeCommand(overrides) },
+    binding: {
+      projectId,
+      operation: "merge",
+      command: mergeCommand(overrides),
+      runId: "test-run",
+      envelopeDigest: "c".repeat(64),
+    },
     approvedByUserId: "u-1",
     nowMs: 1_700_000_000_000,
     ttlMs: 60_000,
@@ -448,6 +454,37 @@ describe("merge execute (governed)", () => {
     expect(adapter.merges()).toBe(1);
   });
 
+  it("rechecks runtime authority immediately before merge dispatch", async () => {
+    const adapter = recordingMergeAdapter(READY_PROVIDER);
+    const approvalStore = createInMemoryGitDeliveryApprovalStore();
+    const approval = issueMergeApproval(approvalStore);
+    const baseAuthority = permittedGitDeliveryAuthority(
+      () => projectId,
+      () => projectId,
+      "autonomous-delivery",
+      { headRef: "feat/x", baseRef: "main", allowDetachedHead: false, allowedPrefixes: ["feat/"] },
+    );
+    let reads = 0;
+    const authority = {
+      current: (nowIso: string): ReturnType<typeof baseAuthority.current> => {
+        reads += 1;
+        return reads === 1 ? baseAuthority.current(nowIso) : undefined;
+      },
+    };
+    const handler = createHandleMergeExecute({
+      execution: seams({ mergeAdapterFactory: () => adapter.adapter, approvalStore }),
+    });
+
+    const res = await handler(
+      ctxFor(EXECUTE, mergeBody({ approval })),
+      deps({ gitDeliveryAuthority: authority }),
+    );
+
+    expect((res.body as GitDeliveryMergeExecuteResponseBody).status).toBe("failed");
+    expect(reads).toBe(2);
+    expect(adapter.merges()).toBe(0);
+  });
+
   it("normalizes a provider rejection into a typed reason + recovery disposition (AC3/AC4)", async () => {
     const adapter = recordingMergeAdapter(READY_PROVIDER, {
       schemaVersion: "1",
@@ -518,6 +555,44 @@ describe("merge approve (mints the approval execute consumes)", () => {
       ctxFor(EXECUTE, mergeBody({ prExternalId: "99", approval: approveBody.approval })),
       deps(),
     );
+    expect(executeRes.status).toBe(400);
+    expect(adapter.merges()).toBe(0);
+  });
+
+  it("rejects a claim when a different runtime Authority Envelope is active at execute", async () => {
+    const adapter = recordingMergeAdapter(READY_PROVIDER);
+    const approvalStore = createInMemoryGitDeliveryApprovalStore();
+    const baseAuthority = permittedGitDeliveryAuthority(
+      () => projectId,
+      () => projectId,
+      "autonomous-delivery",
+      { headRef: "feat/x", baseRef: "main", allowDetachedHead: false, allowedPrefixes: ["feat/"] },
+    );
+    let runId = "run-a";
+    let envelopeDigest = "a".repeat(64);
+    const authority = {
+      current: (nowIso: string): ReturnType<typeof baseAuthority.current> => {
+        const active = baseAuthority.current(nowIso);
+        return active === undefined ? undefined : { ...active, runId, envelopeDigest };
+      },
+    };
+    const approveHandler = createHandleMergeApprove({ execution: seams({ approvalStore }) });
+    const approveRes = await approveHandler(
+      ctxFor(APPROVE, mergeBody()),
+      deps({ gitDeliveryAuthority: authority }),
+    );
+    const approveBody = approveRes.body as { approval: GitDeliveryApprovalClaim };
+
+    runId = "run-b";
+    envelopeDigest = "b".repeat(64);
+    const executeHandler = createHandleMergeExecute({
+      execution: seams({ approvalStore, mergeAdapterFactory: () => adapter.adapter }),
+    });
+    const executeRes = await executeHandler(
+      ctxFor(EXECUTE, mergeBody({ approval: approveBody.approval })),
+      deps({ gitDeliveryAuthority: authority }),
+    );
+
     expect(executeRes.status).toBe(400);
     expect(adapter.merges()).toBe(0);
   });

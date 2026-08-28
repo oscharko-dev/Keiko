@@ -527,6 +527,15 @@ function isSentenceBoundary(text: string, offset: number): boolean {
   return next.length === 0 || /\s/u.test(next);
 }
 
+const OPEN_CITATION_BRACKETS: ReadonlySet<string> = new Set(["[", "［", "【"]);
+const CLOSE_CITATION_BRACKETS: ReadonlySet<string> = new Set(["]", "］", "】"]);
+
+function citationBracketDepth(depth: number, character: string): number {
+  if (OPEN_CITATION_BRACKETS.has(character)) return depth + 1;
+  if (CLOSE_CITATION_BRACKETS.has(character)) return Math.max(0, depth - 1);
+  return depth;
+}
+
 /**
  * Split answer text into sentence-level spans, bracket-aware so a `.` inside a `[routes.ts:5]`
  * citation never splits mid-citation. A span ends at `.`/`!`/`?`/newline only at bracket depth 0.
@@ -537,16 +546,15 @@ export function splitClaimSpans(text: string): readonly string[] {
   let start = 0;
   for (let i = 0; i < text.length; i += 1) {
     const ch = text.charAt(i);
-    if (ch === "[" || ch === "［" || ch === "【") {
-      depth += 1;
-    } else if ((ch === "]" || ch === "］" || ch === "】") && depth > 0) {
-      depth -= 1;
-    } else if (depth === 0 && isSentenceBoundary(text, i)) {
-      if (text.slice(start, i + 1).trim().length > 0) {
-        spans.push(text.slice(start, i + 1));
-      }
-      start = i + 1;
+    const nextDepth = citationBracketDepth(depth, ch);
+    if (nextDepth !== depth) {
+      depth = nextDepth;
+      continue;
     }
+    if (depth !== 0 || !isSentenceBoundary(text, i)) continue;
+    const span = text.slice(start, i + 1);
+    if (span.trim().length > 0) spans.push(span);
+    start = i + 1;
   }
   if (text.slice(start).trim().length > 0) {
     spans.push(text.slice(start));
@@ -557,7 +565,7 @@ export function splitClaimSpans(text: string): readonly string[] {
 /** Remove inline `[...]` citation brackets from a claim span so the judge sees the prose claim. */
 export function stripInlineCitations(text: string): string {
   return text
-    .replace(/[\[［【][^\]］】\n]{1,200}[\]］】]/g, " ")
+    .replace(/[[［【][^\]］】\n]{1,200}[\]］】]/g, " ")
     .replace(/\s{2,}/g, " ")
     .trim();
 }
@@ -579,15 +587,36 @@ export interface NumericCitedClaim {
   readonly markers: readonly number[];
 }
 
+function appendNumericCitedClaim(
+  claims: NumericCitedClaim[],
+  claimText: string,
+  markers: readonly number[],
+): void {
+  const previous = claims.at(-1);
+  if (previous?.claimText === claimText) {
+    claims[claims.length - 1] = {
+      claimText,
+      markers: [...new Set([...previous.markers, ...markers])],
+    };
+    return;
+  }
+  claims.push({ claimText, markers });
+}
+
 /** Segment user-visible `[n]` citations against the sentence each marker actually supports. */
 export function segmentNumericCitedClaims(answerText: string): readonly NumericCitedClaim[] {
   const claims: NumericCitedClaim[] = [];
+  let precedingClaimText: string | undefined;
   for (const span of splitClaimSpans(answerText)) {
     const markers = [...new Set(parseNumericCitations(span).map((citation) => citation.marker))];
-    if (markers.length === 0) continue;
     const claimText = stripInlineCitations(span);
-    if (claimText.length === 0) continue;
-    claims.push({ claimText, markers });
+    if (markers.length > 0) {
+      const supportedClaimText = claimText.length > 0 ? claimText : precedingClaimText;
+      if (supportedClaimText !== undefined) {
+        appendNumericCitedClaim(claims, supportedClaimText, markers);
+      }
+    }
+    if (claimText.length > 0) precedingClaimText = claimText;
   }
   return claims;
 }

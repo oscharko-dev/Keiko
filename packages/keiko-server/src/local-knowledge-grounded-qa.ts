@@ -2230,7 +2230,7 @@ async function appendLocalKnowledgeNumericEntailment(
   );
   if (stage === undefined) return answer;
   const markers = await stage.evaluateNumeric(result.answer, numericEvidence, Date.now());
-  if (context.signal?.aborted === true) {
+  if (context.signal.aborted) {
     throw new CancelledError("grounded request cancelled");
   }
   if (markers.length === 0) return answer;

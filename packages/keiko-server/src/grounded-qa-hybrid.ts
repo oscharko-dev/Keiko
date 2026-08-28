@@ -24,6 +24,7 @@ import type {
   KnowledgeCapsuleId,
   KnowledgeSourceId,
   RetrievalReference,
+  UncertaintyMarker,
 } from "@oscharko-dev/keiko-contracts";
 import {
   rerankAndSelect,
@@ -1177,6 +1178,39 @@ function hybridReconciliationUncertainty(
 // Knowledge M1.2 (#2563) / #2947: judge the hybrid answer's `[path:line]` and connector `[n]`
 // citations against their selected evidence. Capsule policy applies here — a connector capsule that
 // denies `answerSynthesis` keeps the stage inert.
+function hybridEntailmentStage(
+  ctx: HybridGroundedAskCtx,
+  capsules: readonly KnowledgeCapsule[],
+): EntailmentStage | undefined {
+  return ctx.entailmentStageFactory !== undefined
+    ? ctx.entailmentStageFactory({ capsules, modelId: ctx.modelId, signal: ctx.signal })
+    : createEntailmentStage(
+        ctx.deps,
+        capsules,
+        ctx.modelId,
+        { diagnostics: ctx.deps.diagnostics },
+        ctx.signal,
+      );
+}
+
+function answerWithHybridMarkers(
+  ctx: HybridGroundedAskCtx,
+  answer: HybridGroundedAnswer,
+  markers: readonly UncertaintyMarker[],
+): HybridGroundedAnswer {
+  if (markers.length === 0) return answer;
+  return {
+    ...answer,
+    uncertainty: [
+      ...answer.uncertainty,
+      ...markers.map((marker) => ({
+        kind: marker.kind,
+        claim: redactString(ctx.deps.redactor, marker.claim),
+      })),
+    ],
+  };
+}
+
 async function applyHybridEntailment(
   ctx: HybridGroundedAskCtx,
   answer: HybridGroundedAnswer,
@@ -1186,16 +1220,7 @@ async function applyHybridEntailment(
   selected: readonly SelectedCandidate<HybridPayload>[],
 ): Promise<HybridGroundedAnswer> {
   const capsules = connectors.flatMap((src) => src.selected.capsules);
-  const stage =
-    ctx.entailmentStageFactory !== undefined
-      ? ctx.entailmentStageFactory({ capsules, modelId: ctx.modelId, signal: ctx.signal })
-      : createEntailmentStage(
-          ctx.deps,
-          capsules,
-          ctx.modelId,
-          { diagnostics: ctx.deps.diagnostics },
-          ctx.signal,
-        );
+  const stage = hybridEntailmentStage(ctx, capsules);
   if (stage === undefined) {
     return answer;
   }
@@ -1206,17 +1231,7 @@ async function applyHybridEntailment(
       numericEntailmentEvidence(selected),
       Date.now(),
     );
-    if (markers.length === 0) return answer;
-    return {
-      ...answer,
-      uncertainty: [
-        ...answer.uncertainty,
-        ...markers.map((marker) => ({
-          kind: marker.kind,
-          claim: redactString(ctx.deps.redactor, marker.claim),
-        })),
-      ],
-    };
+    return answerWithHybridMarkers(ctx, answer, markers);
   }
   const folderEntailment = await appendGroundedAnswerEntailment(
     answer,

@@ -5,6 +5,7 @@ import type {
 import type { WorkspaceInfo } from "@oscharko-dev/keiko-workspace";
 import type { ServerLogEvent } from "../observability/index.js";
 import { describe, expect, it } from "vitest";
+import { UNKNOWN_CORRELATION_ID } from "../correlation.js";
 import { gitDeliveryAuthorityDenial } from "./requestPreparation.js";
 import { authorizeGitDelivery } from "./runBoundAuthority.js";
 import { permittedGitDeliveryAuthority } from "./runBoundAuthority.test-support.js";
@@ -19,6 +20,7 @@ const REQUEST = {
   operation: "push",
   headBranchName: "feature/test",
   baseBranchName: "dev",
+  remoteBranchName: "feature/test",
 } as const;
 
 function authorityPort(
@@ -88,6 +90,14 @@ describe("authorizeGitDelivery", () => {
       { ...REQUEST, headBranchName: "other/branch" },
       "branch-out-of-envelope",
     ],
+    [
+      permittedGitDeliveryAuthority(
+        () => PROJECT_ID,
+        () => WORKSPACE_ROOT,
+      ),
+      { ...REQUEST, remoteBranchName: "dev" },
+      "branch-out-of-envelope",
+    ],
   ] as const)("denies %s with %s", (port, request, reason) => {
     expect(authorizeGitDelivery(port, request, NOW)).toEqual({ allowed: false, reason });
   });
@@ -124,5 +134,30 @@ describe("authorizeGitDelivery", () => {
       }),
     ]);
     expect(JSON.stringify(events)).not.toContain(WORKSPACE_ROOT);
+  });
+
+  it("writes the denial reason and falls back to the unknown correlation id", () => {
+    const events: ServerLogEvent[] = [];
+    const workspace = { root: WORKSPACE_ROOT } as WorkspaceInfo;
+    const result = gitDeliveryAuthorityDenial(
+      {} as never,
+      { gitDeliveryAuthority: undefined },
+      PROJECT_ID,
+      workspace,
+      "push",
+      { headBranchName: "feature/test", remoteBranchName: "feature/test" },
+      { nowIso: NOW, logSink: { write: (event) => events.push(event) } },
+    );
+
+    expect(result?.status).toBe(403);
+    expect(events).toEqual([
+      expect.objectContaining({
+        category: "security",
+        op: "git.delivery.authority.denied",
+        correlationId: UNKNOWN_CORRELATION_ID,
+        status: 403,
+        extra: { operation: "push", reason: "accepted-run-unavailable" },
+      }),
+    ]);
   });
 });

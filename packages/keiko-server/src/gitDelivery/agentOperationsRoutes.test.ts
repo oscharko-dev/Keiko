@@ -4,6 +4,12 @@ import { join } from "node:path";
 import { Readable } from "node:stream";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  createBufferedServerLogSink,
+  createServerLogger,
+  resetServerLogger,
+  setServerLogger,
+} from "../observability/index.js";
 import type {
   CodingWorkbenchAuthorityEnvelope,
   CodingWorkbenchMode,
@@ -115,6 +121,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  resetServerLogger();
   store.close();
   rmSync(root, { recursive: true, force: true });
 });
@@ -454,12 +461,16 @@ describe("agent facade — autonomy admission (fail-closed)", () => {
   it("routes an accepted autonomous push to its downstream policy and approval gate", async () => {
     const runner = vi.fn<GitProcessRunner>(() => Promise.resolve(ok("")));
     const body = executeRequest("push", "push-autonomous");
-    body.payload = { remoteAlias: "origin", sourceBranchName: "feat/x", remoteBranchName: "main" };
+    body.payload = {
+      remoteAlias: "origin",
+      sourceBranchName: "feat/x",
+      remoteBranchName: "feat/x",
+    };
     const result = await handleGitAgentOperation(
       ctx(body),
       deps(runner, "autonomous-delivery", {
         headRef: "feat/x",
-        baseRef: "main",
+        baseRef: "dev",
         allowDetachedHead: false,
         allowedPrefixes: ["feat/"],
       }),
@@ -519,14 +530,28 @@ describe("agent facade — autonomy admission (fail-closed)", () => {
   });
 
   it("denies an execute request for an unresolved workspace before idempotency or delegation", async () => {
+    const sink = createBufferedServerLogSink();
+    setServerLogger(createServerLogger({ sink, level: "info" }));
     const runner = vi.fn<GitProcessRunner>(() => Promise.resolve(ok("")));
     const body = executeRequest("branch-switch", "unknown-workspace-idempotency");
     body.projectId = "/not-a-registered-workspace";
-    const result = await handleGitAgentOperation(ctx(body), deps(runner, "autonomous-delivery"));
+    const result = await handleGitAgentOperation(
+      { ...ctx(body), correlationId: "717cfe41-510a-4f53-aa43-a48c6829452d" },
+      deps(runner, "autonomous-delivery"),
+    );
 
     expect(result.status).toBe(403);
     expect(result.body).toMatchObject({ status: "denied", denialReason: "autonomy-mode-denied" });
     expect(runner).not.toHaveBeenCalled();
+    expect(sink.events).toContainEqual(
+      expect.objectContaining({
+        category: "security",
+        op: "git.delivery.authority.denied",
+        correlationId: "717cfe41-510a-4f53-aa43-a48c6829452d",
+        status: 403,
+        extra: { operation: "branch-switch", reason: "workspace-unresolvable" },
+      }),
+    );
   });
 
   it("keeps the denial content-free", async () => {

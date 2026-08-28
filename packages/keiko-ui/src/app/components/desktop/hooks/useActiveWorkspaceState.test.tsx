@@ -103,32 +103,54 @@ function reconciliationCount(fetchMock: ReturnType<typeof vi.fn>): number {
   }).length;
 }
 
+function requestMethod(init: RequestInit | undefined): string {
+  return (init?.method ?? "GET").toUpperCase();
+}
+
+function workspaceReadResponse(
+  state: RouterState,
+  url: string,
+  method: string,
+  reconcileStatus: (workspaceId: string) => string = () => "healthy",
+): Promise<Response> | undefined {
+  if (url.startsWith("/api/task-workspaces/active") && method === "GET") {
+    return Promise.resolve(json({ active: state.active }));
+  }
+  if (url === "/api/task-workspaces/reconciliation" && method === "POST") {
+    return Promise.resolve(json(reconciliationReport(state, reconcileStatus)));
+  }
+  if (url.startsWith("/api/task-workspaces?") && method === "GET") {
+    return Promise.resolve(json({ instances: state.instances }));
+  }
+  return undefined;
+}
+
+function requestedWorkspaceId(init: RequestInit | undefined): string {
+  return (JSON.parse(init?.body as string) as { workspaceId: string }).workspaceId;
+}
+
+function activateWorkspace(state: RouterState, workspaceId: string): WorkspaceInstance | undefined {
+  const target = state.instances.find((item) => item.workspaceId === workspaceId);
+  if (target === undefined) return undefined;
+  state.active = {
+    instance: target,
+    binding: binding(workspaceId, target.managedWorktreePath),
+    pointer: {},
+  };
+  return target;
+}
+
 // A stateful fetch router so a switch is observable through a subsequent getActive reload.
 function installRouter(
   state: RouterState,
   reconcileStatus: (workspaceId: string) => string = () => "healthy",
 ): ReturnType<typeof vi.fn> {
   const fetchMock = vi.fn((url: string, init?: RequestInit) => {
-    const method = (init?.method ?? "GET").toUpperCase();
-    if (url.startsWith("/api/task-workspaces/active") && method === "GET") {
-      return Promise.resolve(json({ active: state.active }));
-    }
-    if (url === "/api/task-workspaces/reconciliation" && method === "POST") {
-      return Promise.resolve(json(reconciliationReport(state, reconcileStatus)));
-    }
-    if (url.startsWith("/api/task-workspaces?") && method === "GET") {
-      return Promise.resolve(json({ instances: state.instances }));
-    }
+    const method = requestMethod(init);
+    const read = workspaceReadResponse(state, url, method, reconcileStatus);
+    if (read !== undefined) return read;
     if (url === "/api/task-workspaces/active" && method === "POST") {
-      const { workspaceId } = JSON.parse(init?.body as string) as { workspaceId: string };
-      const target = state.instances.find((i) => i.workspaceId === workspaceId);
-      if (target !== undefined) {
-        state.active = {
-          instance: target,
-          binding: binding(workspaceId, target.managedWorktreePath),
-          pointer: {},
-        };
-      }
+      const target = activateWorkspace(state, requestedWorkspaceId(init));
       return Promise.resolve(json({ instance: target, binding: state.active?.binding }));
     }
     if (url === "/api/task-workspaces/active" && method === "DELETE") {
@@ -222,28 +244,15 @@ describe("useActiveWorkspaceState", () => {
       instances: [instance("ws-1", "/wt/1"), instance("ws-2", "/wt/2")],
     };
     const fetchMock = vi.fn((url: string, init?: RequestInit) => {
-      const method = (init?.method ?? "GET").toUpperCase();
-      if (url.startsWith("/api/task-workspaces/active") && method === "GET") {
-        return Promise.resolve(json({ active: state.active }));
-      }
-      if (url === "/api/task-workspaces/reconciliation" && method === "POST") {
-        return Promise.resolve(json(healthyReport(state)));
-      }
-      if (url.startsWith("/api/task-workspaces?") && method === "GET") {
-        return Promise.resolve(json({ instances: state.instances }));
-      }
+      const method = requestMethod(init);
+      const read = workspaceReadResponse(state, url, method);
+      if (read !== undefined) return read;
       if (url === "/api/task-workspaces/active" && method === "POST") {
-        const { workspaceId } = JSON.parse(init?.body as string) as { workspaceId: string };
+        const workspaceId = requestedWorkspaceId(init);
         const target = state.instances.find((item) => item.workspaceId === workspaceId);
         const response = workspaceId === "ws-1" ? postWs1 : postWs2;
         return response.promise.then(() => {
-          if (target !== undefined) {
-            state.active = {
-              instance: target,
-              binding: binding(workspaceId, target.managedWorktreePath),
-              pointer: {},
-            };
-          }
+          activateWorkspace(state, workspaceId);
           return json({ instance: target, binding: state.active?.binding });
         });
       }
@@ -282,24 +291,16 @@ describe("useActiveWorkspaceState", () => {
     const target = instance("ws-1", "/wt/1");
     const state: RouterState = { active: null, instances: [target] };
     const fetchMock = vi.fn((url: string, init?: RequestInit) => {
-      const method = (init?.method ?? "GET").toUpperCase();
-      if (url.startsWith("/api/task-workspaces/active") && method === "GET") {
-        return Promise.resolve(json({ active: state.active }));
-      }
-      if (url === "/api/task-workspaces/reconciliation" && method === "POST") {
-        return Promise.resolve(json(healthyReport(state)));
-      }
-      if (url.startsWith("/api/task-workspaces?") && method === "GET") {
-        return Promise.resolve(json({ instances: state.instances }));
-      }
+      const method = requestMethod(init);
+      const read = workspaceReadResponse(state, url, method);
+      if (read !== undefined) return read;
       if (url === "/api/task-workspaces/active" && method === "POST") {
         return post.promise.then(() => {
-          state.active = {
+          activateWorkspace(state, target.workspaceId);
+          return json({
             instance: target,
             binding: binding(target.workspaceId, target.managedWorktreePath),
-            pointer: {},
-          };
-          return json({ instance: target, binding: state.active.binding });
+          });
         });
       }
       return Promise.resolve(json({}, 404));

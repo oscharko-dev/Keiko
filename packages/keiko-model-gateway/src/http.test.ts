@@ -799,6 +799,29 @@ describe("gatewayFetch DNS-rebinding pinning (AUDIT-SEC-001)", () => {
     }
   });
 
+  it("recomputes no-proxy routing for a redirect before applying hostname delegation policy", async () => {
+    let proxyRequests = 0;
+    const proxy = createHttpServer((_req, res) => {
+      proxyRequests += 1;
+      res.writeHead(302, { location: "http://bypass.invalid/next" });
+      res.end();
+    });
+    const proxyPort = await listen(proxy);
+    try {
+      const response = await gatewayFetch("http://203.0.113.10/start", {
+        egress: {
+          httpProxy: `http://127.0.0.1:${String(proxyPort)}`,
+          noProxy: ["bypass.invalid"],
+        },
+      });
+
+      expect(response.status).toBe(302);
+      expect(proxyRequests).toBe(1);
+    } finally {
+      await close(proxy);
+    }
+  });
+
   it("keeps literal private redirect targets blocked after proxied hostname delegation", async () => {
     const proxy = createHttpServer((_req, res) => {
       res.writeHead(302, { location: "http://10.0.0.1/private" });

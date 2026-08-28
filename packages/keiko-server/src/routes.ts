@@ -144,7 +144,6 @@ import {
 } from "./editor/verificationRoutes.js";
 import { handleEditorAgentVerificationRun } from "./editor/agentVerificationRoute.js";
 import {
-  handleActivateTaskWorkspace,
   handleCleanupOrphanTaskWorkspaces,
   handleCleanupTaskWorkspace,
   handleClearActiveTaskWorkspace,
@@ -688,11 +687,6 @@ export const API_ROUTES: readonly RouteDefinition[] = [
     method: "POST",
     pattern: "/api/task-workspaces/:workspaceId/handoff",
     handler: handleHandoffTaskWorkspace,
-  },
-  {
-    method: "POST",
-    pattern: "/api/task-workspaces/:workspaceId/activate",
-    handler: handleActivateTaskWorkspace,
   },
   // Issue #447 (Epic #443, ADR-0091) — startup reconciliation report (read-only, derived from the
   // persisted content-free fields), an explicit live reconcile pass (CSRF-gated POST), and the

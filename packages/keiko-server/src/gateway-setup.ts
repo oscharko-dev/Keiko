@@ -5212,6 +5212,7 @@ function finalizeVerifiedCandidate(
       gatewayConfig.storagePath,
       deps,
       current === undefined,
+      request.correlationId,
     ),
     gatewayConfig.storagePath,
     deps,
@@ -5295,14 +5296,30 @@ function withDiskGatewayEgress(
   raw: Record<string, unknown>,
   storagePath: string,
   deps: UiHandlerDeps,
-  ignoreInvalidStoredConfig: boolean = false,
+  ignoreInvalidStoredConfig = false,
+  correlationId?: string,
 ): Record<string, unknown> {
   const withoutEgress = { ...raw };
   delete withoutEgress.egress;
   try {
     return withPersistedGatewayEgress(withoutEgress, storagePath, deps);
   } catch (error) {
-    if (ignoreInvalidStoredConfig && error instanceof ConfigInvalidError) return withoutEgress;
+    if (ignoreInvalidStoredConfig && error instanceof ConfigInvalidError) {
+      emitServerDiagnostic(
+        deps.diagnostics,
+        serverDiagnosticFromError({
+          correlationId: correlationId ?? UNKNOWN_CORRELATION_ID,
+          operation: "POST /api/gateway/setup",
+          source: "gateway-setup.egress",
+          error,
+          summary:
+            "Stored gateway egress configuration was invalid; setup omitted it from the rewritten file.",
+          redact: () =>
+            "Stored gateway egress configuration was invalid; setup omitted it from the rewritten file.",
+        }),
+      );
+      return withoutEgress;
+    }
     throw error;
   }
 }

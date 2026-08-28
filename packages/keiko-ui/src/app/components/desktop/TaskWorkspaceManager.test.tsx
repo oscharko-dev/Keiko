@@ -87,6 +87,7 @@ describe("TaskWorkspaceManager", () => {
     if (activeItem === null || pausedItem === null) throw new Error("Workspace list item missing");
 
     fireEvent.click(within(activeItem).getByRole("button", { name: "Pause" }));
+    expect(within(pausedItem).queryByRole("button", { name: "Switch" })).not.toBeInTheDocument();
     fireEvent.click(within(pausedItem).getByRole("button", { name: "Resume" }));
     fireEvent.click(within(activeItem).getByRole("button", { name: "Prepare handoff" }));
 

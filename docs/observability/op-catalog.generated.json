@@ -647,43 +647,43 @@
     {
       "op": "http.gateway.egress.planned",
       "category": "http",
-      "site": "packages/keiko-model-gateway/src/http.ts:1378",
+      "site": "packages/keiko-model-gateway/src/http.ts:1382",
       "package": "keiko-model-gateway"
     },
     {
       "op": "http.gateway.fetch.completed",
       "category": "http",
-      "site": "packages/keiko-model-gateway/src/http.ts:1520",
+      "site": "packages/keiko-model-gateway/src/http.ts:1522",
       "package": "keiko-model-gateway"
     },
     {
       "op": "http.gateway.fetch.failed",
       "category": "http",
-      "site": "packages/keiko-model-gateway/src/http.ts:1553",
+      "site": "packages/keiko-model-gateway/src/http.ts:1555",
       "package": "keiko-model-gateway"
     },
     {
       "op": "http.gateway.fetch.started",
       "category": "http",
-      "site": "packages/keiko-model-gateway/src/http.ts:1484",
+      "site": "packages/keiko-model-gateway/src/http.ts:1486",
       "package": "keiko-model-gateway"
     },
     {
       "op": "http.gateway.tls.ca-bundle-fallback",
       "category": "http",
-      "site": "packages/keiko-model-gateway/src/http.ts:1238",
+      "site": "packages/keiko-model-gateway/src/http.ts:1242",
       "package": "keiko-model-gateway"
     },
     {
       "op": "http.gateway.tls.trust-failed",
       "category": "http",
-      "site": "packages/keiko-model-gateway/src/http.ts:1206",
+      "site": "packages/keiko-model-gateway/src/http.ts:1210",
       "package": "keiko-model-gateway"
     },
     {
       "op": "http.gateway.tls.trust-failed",
       "category": "http",
-      "site": "packages/keiko-model-gateway/src/http.ts:1248",
+      "site": "packages/keiko-model-gateway/src/http.ts:1252",
       "package": "keiko-model-gateway"
     },
     {
@@ -743,7 +743,7 @@
     {
       "op": "atlassian.credential.rejected",
       "category": "security",
-      "site": "packages/keiko-server/src/atlassian/credentialRoutes.ts:188",
+      "site": "packages/keiko-server/src/atlassian/credentialRoutes.ts:194",
       "package": "keiko-server"
     },
     {
@@ -851,13 +851,13 @@
     {
       "op": "git.delivery.authority.admitted",
       "category": "security",
-      "site": "packages/keiko-server/src/gitDelivery/requestPreparation.ts:65",
+      "site": "packages/keiko-server/src/gitDelivery/requestPreparation.ts:94",
       "package": "keiko-server"
     },
     {
       "op": "git.delivery.authority.denied",
       "category": "security",
-      "site": "packages/keiko-server/src/gitDelivery/requestPreparation.ts:65",
+      "site": "packages/keiko-server/src/gitDelivery/requestPreparation.ts:64",
       "package": "keiko-server"
     },
     {

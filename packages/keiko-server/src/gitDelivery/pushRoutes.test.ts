@@ -116,7 +116,7 @@ function deps(overrides: Partial<UiHandlerDeps> = {}): UiHandlerDeps {
       "autonomous-delivery",
       {
         headRef: "feat/x",
-        baseRef: "feat/x",
+        baseRef: "dev",
         allowDetachedHead: false,
         allowedPrefixes: ["feat/"],
       },
@@ -335,6 +335,40 @@ describe("push execute — governed publish + no-bypass (AC2/AC3/AC4/AC5)", () =
     expect((res.body as GitDeliveryPushExecuteResponseBody).status).toBe("succeeded");
     expect(adapter.calls()).toBe(1);
     expect(cap.count()).toBe(1);
+  });
+
+  it("rechecks runtime authority immediately before remote dispatch", async () => {
+    const adapter = recordingPublishAdapter();
+    const baseAuthority = permittedGitDeliveryAuthority(
+      () => projectId,
+      () => projectId,
+      "autonomous-delivery",
+      {
+        headRef: "feat/x",
+        baseRef: "dev",
+        allowDetachedHead: false,
+        allowedPrefixes: ["feat/"],
+      },
+    );
+    let reads = 0;
+    const authority = {
+      current: (nowIso: string): ReturnType<typeof baseAuthority.current> => {
+        reads += 1;
+        return reads === 1 ? baseAuthority.current(nowIso) : undefined;
+      },
+    };
+    const handler = createHandlePushExecute({
+      execution: seams({ publishAdapterFactory: () => adapter.adapter }),
+    });
+
+    const res = await handler(
+      ctxFor(EXECUTE, pushBody()),
+      deps({ gitDeliveryAuthority: authority }),
+    );
+
+    expect((res.body as GitDeliveryPushExecuteResponseBody).status).toBe("failed");
+    expect(reads).toBe(2);
+    expect(adapter.calls()).toBe(0);
   });
 
   it("denies a protected target outside the active authority envelope", async () => {

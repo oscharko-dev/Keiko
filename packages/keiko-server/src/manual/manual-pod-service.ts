@@ -311,8 +311,14 @@ export function currentManualPodEgressConfig(
 // route-level authorization equivalent to resolveRegisteredOrManagedWorkspaceRoot and the
 // route-level TOCTOU/symlink-escape negative test that the local fetcher's own comments
 // require (#2906 KEIKO-0554). See html-manual-source.ts for the matching contract note.
-function fetcherFor(deps: UiHandlerDeps): ReturnType<typeof createGatewayManualFetcher> {
-  return createGatewayManualFetcher({ egress: () => currentManualPodEgressConfig(deps) });
+function fetcherFor(
+  deps: UiHandlerDeps,
+  correlationId?: string,
+): ReturnType<typeof createGatewayManualFetcher> {
+  return createGatewayManualFetcher({
+    egress: () => currentManualPodEgressConfig(deps),
+    ...(correlationId === undefined ? {} : { correlationId }),
+  });
 }
 
 export type StartManualPodJobResult =
@@ -344,6 +350,14 @@ export interface StartManualPodOverrides {
 function resolveManualPodContext(deps: UiHandlerDeps): ManualPodJobContext | undefined {
   const env = openManualEnv(deps);
   return env === undefined ? undefined : { env, fetcher: fetcherFor(deps) };
+}
+
+function productionManualPodJobContext(
+  deps: UiHandlerDeps,
+  context: ManualPodJobContext,
+  jobId: string,
+): ManualPodJobContext {
+  return { env: context.env, fetcher: fetcherFor(deps, jobId) };
 }
 
 function refreshRun(
@@ -438,7 +452,15 @@ export async function startManualPodCreate(
   const job = startJob(
     "create",
     ids,
-    (_base, controller) => run ?? createRun(ctx, built.source, identity, ids, controller),
+    (base, controller) =>
+      run ??
+      createRun(
+        overrides.context ?? productionManualPodJobContext(deps, ctx, base.jobId),
+        built.source,
+        identity,
+        ids,
+        controller,
+      ),
     deps.diagnostics,
   );
   return { ok: true, job };
@@ -481,7 +503,13 @@ export function startManualPodRefresh(
   const job = startJob(
     "refresh",
     { capsuleId: request.capsuleId, sourceId: request.sourceId },
-    (_base, controller) => run ?? refreshRun(ctx, request, controller),
+    (base, controller) =>
+      run ??
+      refreshRun(
+        overrides.context ?? productionManualPodJobContext(deps, ctx, base.jobId),
+        request,
+        controller,
+      ),
     deps.diagnostics,
   );
   return { ok: true, job };

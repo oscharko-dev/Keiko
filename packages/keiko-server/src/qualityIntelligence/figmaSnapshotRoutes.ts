@@ -50,6 +50,7 @@ import type { IncomingMessage } from "node:http";
 import { join } from "node:path";
 import { STREAMING, type HandlerOutcome, type RouteContext, type RouteResult } from "../routes.js";
 import { currentGatewayConfig, currentGatewayEgressConfig, type UiHandlerDeps } from "../deps.js";
+import { UNKNOWN_CORRELATION_ID } from "../correlation.js";
 import type { EnvSource } from "@oscharko-dev/keiko-security";
 import { emitServerDiagnostic } from "../diagnostics-log.js";
 import {
@@ -912,6 +913,7 @@ function startCoalescedBuild(
   body: ParsedTriggerBody,
   evidenceDir: string,
   deps: UiHandlerDeps,
+  correlationId: string,
 ): Promise<RouteResult> {
   const buildAndPersist = async (): Promise<RouteResult> => {
     let result: GovernedSnapshotResult;
@@ -925,6 +927,7 @@ function startCoalescedBuild(
           evidenceDir,
           env: deps.env,
           now: new Date().toISOString(),
+          correlationId,
           acknowledgeReadOnly: body.acknowledgeReadOnly,
           version: body.version,
           pagination: figmaPaginationFromEnv(deps.env),
@@ -979,6 +982,20 @@ function makeDeadline(ms: number): Deadline {
   };
 }
 
+function triggerBuildPromise(
+  scopeKey: string,
+  inFlight: Map<string, CoalescedBuildEntry>,
+  body: ParsedTriggerBody,
+  evidenceDir: string,
+  deps: UiHandlerDeps,
+  correlationId: string,
+): Promise<RouteResult> {
+  return (
+    inFlight.get(scopeKey)?.promise ??
+    startCoalescedBuild(scopeKey, inFlight, body.boardLink, body, evidenceDir, deps, correlationId)
+  );
+}
+
 // ─── POST /api/figma/snapshots ─────────────────────────────────────────────────
 
 export async function handleFigmaTriggerSnapshot(
@@ -1006,11 +1023,14 @@ export async function handleFigmaTriggerSnapshot(
   }
 
   // Coalesce: join an existing build for this scope, or start a new one.
-  const existing = inFlight.get(scopeKey);
-  const buildPromise =
-    existing !== undefined
-      ? existing.promise
-      : startCoalescedBuild(scopeKey, inFlight, body.boardLink, body, evidenceDir, deps);
+  const buildPromise = triggerBuildPromise(
+    scopeKey,
+    inFlight,
+    body,
+    evidenceDir,
+    deps,
+    ctx.correlationId ?? UNKNOWN_CORRELATION_ID,
+  );
 
   const deadlineMs = figmaBuildDeadlineMsFromEnv(deps.env);
   const deadline = makeDeadline(deadlineMs);

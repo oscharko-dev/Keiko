@@ -215,7 +215,7 @@ export const createHandlePushExecute = (
     const { projectId, command, approval } = prepared.value;
     const authorityDenial = gitDeliveryAuthorityDenial(ctx, deps, projectId, workspace, "push", {
       headBranchName: command.sourceBranchName,
-      baseBranchName: command.remoteBranchName,
+      remoteBranchName: command.remoteBranchName,
     });
     if (authorityDenial !== undefined) return authorityDenial;
     const verifiedApproval = resolveGitDeliveryApprovalRequirement(approval, {
@@ -224,9 +224,19 @@ export const createHandlePushExecute = (
       nowMs: (seams.now ?? Date.now)(),
     });
     if (verifiedApproval === undefined) return errResult(400, "GIT_DELIVERY_PUSH_BAD_REQUEST");
+    const beforeRemoteDispatch = (): boolean => {
+      const denial = gitDeliveryAuthorityDenial(ctx, deps, projectId, workspace, "push", {
+        headBranchName: command.sourceBranchName,
+        remoteBranchName: command.remoteBranchName,
+      });
+      return denial === undefined && (seams.beforeRemoteDispatch?.() ?? true);
+    };
     let result;
     try {
-      result = await executeGovernedPublish(command, verifiedApproval, workspace, deps, seams);
+      result = await executeGovernedPublish(command, verifiedApproval, workspace, deps, {
+        ...seams,
+        beforeRemoteDispatch,
+      });
     } catch {
       // Only the read-only snapshot step can throw (not a git repository); the gateway never throws.
       return errResult(409, "GIT_DELIVERY_PUSH_WORKTREE_UNAVAILABLE");

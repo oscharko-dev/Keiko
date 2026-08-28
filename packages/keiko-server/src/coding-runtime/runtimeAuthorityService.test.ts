@@ -418,9 +418,9 @@ describe("CodingRuntimeAuthorityService", () => {
       effectiveMode: "governed-assist",
     });
 
-    expect(authority.gitDeliveryAuthorityPort().current(NOW)?.authority.effectiveMode).toBe(
-      "governed-assist",
-    );
+    expect(authority.gitDeliveryAuthorityPort().current(NOW)).toMatchObject({
+      authority: { effectiveMode: "governed-assist" },
+    });
   });
 
   it("fails pause closed when retained authority is expired or revoked", () => {

@@ -5704,6 +5704,50 @@ describe("handleGatewaySetup", () => {
         caBundlePath: "/etc/keiko/config-ca.pem",
       },
     });
+    expect((JSON.parse(saved) as { readonly egress: unknown }).egress).toEqual({
+      httpsProxy: "http://proxy.config.internal.example:8443",
+      noProxy: "localhost,.corp.example",
+      caBundlePath: "/etc/keiko/config-ca.pem",
+    });
+    deps.store.close();
+  });
+
+  it("reports invalid stored egress before a fresh setup omits it", async () => {
+    const uiDir = await tempDir("keiko-gw-ui-invalid-egress-");
+    const evidenceDir = await tempDir("keiko-gw-ev-invalid-egress-");
+    const configPath = join(evidenceDir, "keiko.config.json");
+    writeFileSync(configPath, JSON.stringify({ egress: { httpsProxy: "not-a-url" } }), "utf8");
+    const diagnostics: ServerDiagnosticRecord[] = [];
+    const deps = buildUiHandlerDeps({
+      configPath,
+      evidenceDir,
+      env: { ...VAULT_ENV },
+      uiDbPath: join(uiDir, "keiko-ui.db"),
+      diagnostics: { record: (record): void => void diagnostics.push(record) },
+      gatewayModelDiscovery: () => Promise.resolve(["example-chat-model"]),
+      gatewayEmbeddingProbe: PASSTHROUGH_EMBEDDING_PROBE,
+      gatewaySetupTester: (_config, modelIds) => Promise.resolve(modelIds),
+    });
+
+    const result = await handleGatewaySetup(
+      ctx(
+        { baseUrl: "https://llm-gateway.example.com", apiKey: "example-secret-token" },
+        "a9e15a53-54a0-43f4-a021-b7f596e4eedc",
+      ),
+      deps,
+    );
+
+    expect(result.status).toBe(200);
+    expect(readFileSync(deps.gatewayConfig?.storagePath ?? "", "utf8")).not.toContain("egress");
+    expect(diagnostics).toContainEqual(
+      expect.objectContaining({
+        correlationId: "a9e15a53-54a0-43f4-a021-b7f596e4eedc",
+        source: "gateway-setup.egress",
+        errorClass: "ConfigInvalidError",
+        message:
+          "Stored gateway egress configuration was invalid; setup omitted it from the rewritten file.",
+      }),
+    );
     deps.store.close();
   });
 
