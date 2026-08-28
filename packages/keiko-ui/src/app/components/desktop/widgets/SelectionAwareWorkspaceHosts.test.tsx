@@ -1,4 +1,4 @@
-import { act, render, screen, waitFor } from "@testing-library/react";
+import { act, render, renderHook, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi, type Mock } from "vitest";
 import type { ReactNode } from "react";
@@ -15,9 +15,11 @@ import type { WindowRenderContext } from "../windows/WindowsRegistry";
 import type { EditorWidgetProps } from "./cards/EditorWidget";
 import {
   ChatWindowSessionHost,
+  executeChatCreationRequest,
   EditorWindowSessionHost,
   FilesWindowSessionHost,
   normalizedChatTitle,
+  useChatCreationCoordinator,
 } from "./SelectionAwareWorkspaceHosts";
 import { subText } from "../windows/connectionUtils";
 import { chatWindowRuntimeTarget } from "../windows/chatWindowActivity";
@@ -875,6 +877,48 @@ describe("ChatWindowSessionHost target missing", () => {
   it("rejects empty and whitespace-only titles at the owning normalization boundary", (): void => {
     expect(normalizedChatTitle("")).toBeUndefined();
     expect(normalizedChatTitle(" \t\n ")).toBeUndefined();
+  });
+
+  it("keeps a replacement creation after a detached same-key request settles (#3210)", async (): Promise<void> => {
+    const original = deferred<Chat | undefined>();
+    const replacement = deferred<Chat | undefined>();
+    const originalChat = chatFixture("chat-original", "Original", 1);
+    const replacementChat = chatFixture("chat-replacement", "Replacement", 2);
+    const openNewChat = vi
+      .fn()
+      .mockReturnValueOnce(original.promise)
+      .mockReturnValueOnce(replacement.promise);
+    const replaceChat = vi.fn((_chat: Chat): void => undefined);
+    const { result } = renderHook(() => useChatCreationCoordinator(openNewChat, replaceChat));
+    const owner = { kind: "window", id: "initial-unbound-chat-0\u0000" } as const;
+
+    const originalResult = executeChatCreationRequest({
+      activeProject: undefined,
+      coordinator: result.current,
+      isCurrent: (): boolean => false,
+      owner,
+      requestKey: owner.id,
+      setError: vi.fn(),
+      title: undefined,
+      updateCfg: vi.fn(),
+    });
+    result.current.release(owner);
+    const replacementResult = result.current.request(owner);
+    expect(openNewChat).toHaveBeenCalledTimes(2);
+
+    await act(async (): Promise<void> => {
+      original.resolve(originalChat);
+      await originalResult;
+    });
+
+    const coalescedReplacement = result.current.request(owner);
+    expect(openNewChat).toHaveBeenCalledTimes(2);
+    expect(coalescedReplacement).toBe(replacementResult);
+
+    await act(async (): Promise<void> => {
+      replacement.resolve(replacementChat);
+      await replacementResult;
+    });
   });
 
   it("reports a content-free diagnostic when chat creation rejects", async (): Promise<void> => {
