@@ -130,7 +130,7 @@ window described above (repository and filename registered without the environme
 
 **Secret retirement: done (2026-08-28).** The `NPM_TOKEN` GitHub Actions secret was deleted on the
 release owner's decision once the verified trusted publish above made it redundant; no workflow read
-it, and D5 pins that none starts to. No publish path lost anything: the governed local publish reads
+it, and D5 pins that no workflow starts reading it. No publish path lost anything: the governed local publish reads
 its token from the operator's own environment, never from Actions, and the D3 dist-tag repair is a
 manual run that exports one for itself. Optionally disallowing classic tokens on the package
 entirely remains available to the release owner on npmjs.com.

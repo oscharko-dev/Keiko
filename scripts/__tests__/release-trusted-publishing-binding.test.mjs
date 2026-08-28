@@ -4,10 +4,14 @@
  * npmjs.com stores the publisher entry as `repository + workflow BASENAME + environment` and never
  * re-validates it: renaming `release.yml`, renaming the `npm-publish` environment, dropping
  * `id-token: write`, moving the job to a self-hosted runner, wrapping it behind `workflow_call`, or
- * reintroducing a registry token into the publish step all leave CI green and break authentication
- * only at the registry, mid-release. The npm-side entry cannot be read from here, so this pins
- * every identifier the entry names on the side that IS readable — the ADR previously stated this
+ * letting a registry token reach the publish step from any env scope all leave CI green and break
+ * authentication only at the registry, mid-release. The npm-side entry cannot be read from here, so
+ * this pins every condition the entry depends on that IS readable — the ADR previously stated the
  * obligation in prose with no gate behind it.
+ *
+ * The conditions are evaluated by `bindingFailures()` over a parsed workflow document, so the live
+ * file proves acceptance and weakened copies of it prove rejection. A suite that only asserted the
+ * current file would pass just as happily over assertions that can no longer fail.
  */
 
 import { readFileSync, readdirSync } from "node:fs";
@@ -19,66 +23,130 @@ import { parse } from "yaml";
 const TRUSTED_PUBLISHER_WORKFLOW = "release.yml";
 /** The exact GitHub Actions environment the publisher entry is bound to. */
 const TRUSTED_PUBLISHER_ENVIRONMENT = "npm-publish";
-/** The job that runs `npm publish`; its name is local, its bindings are not. */
+/** Trusted publishing needs a GitHub-hosted runner: self-hosted mints no identity npm accepts. */
+const HOSTED_RUNNER = "ubuntu-latest";
+/** The job that runs `npm publish`; its name is local, the conditions on it are not. */
 const PUBLISH_JOB = "publish";
 const PUBLISH_STEP = "Publish package";
+/** A token under either name, from any scope, returns the pipeline to classic-token publishing. */
+const REGISTRY_TOKEN_ENV = ["NODE_AUTH_TOKEN", "NPM_TOKEN"];
 
 const workflowsDir = resolve(import.meta.dirname, "..", "..", ".github", "workflows");
 const workflowPath = join(workflowsDir, TRUSTED_PUBLISHER_WORKFLOW);
-const workflowSource = readFileSync(workflowPath, "utf8");
-const workflow = parse(workflowSource);
-const publishJob = workflow.jobs[PUBLISH_JOB];
-const publishStep = publishJob.steps.find((step) => step.name === PUBLISH_STEP);
+const workflow = parse(readFileSync(workflowPath, "utf8"));
+
+/** @returns the env variable names declared at workflow, job, and step scope — all inherited. */
+function declaredEnvNames(document, job) {
+  const scopes = [document.env, job.env, ...(job.steps ?? []).map((step) => step.env)];
+  return scopes.flatMap((scope) => Object.keys(scope ?? {}));
+}
+
+function jobShapeFailures(document, job) {
+  const failures = [];
+  if (job.environment !== TRUSTED_PUBLISHER_ENVIRONMENT) failures.push("environment is not bound");
+  if (job.permissions?.["id-token"] !== "write") failures.push("id-token write is missing");
+  if (job["runs-on"] !== HOSTED_RUNNER) failures.push("runner is not GitHub-hosted");
+  if (job.uses !== undefined || !Array.isArray(job.steps)) failures.push("job is a reusable call");
+  if (Object.keys(document.on ?? {}).includes("workflow_call")) failures.push("workflow_call");
+  return failures;
+}
+
+/**
+ * @returns one message per condition the publisher entry depends on that this document breaks;
+ *   empty means the OIDC exchange can happen and npm's stored entry still matches.
+ */
+function bindingFailures(document) {
+  const job = document.jobs?.[PUBLISH_JOB];
+  if (job === undefined) return ["publish job is missing"];
+
+  const failures = jobShapeFailures(document, job);
+  const declared = declaredEnvNames(document, job);
+  for (const name of REGISTRY_TOKEN_ENV) {
+    if (declared.includes(name)) failures.push(`${name} reaches the publish step`);
+  }
+  return failures;
+}
+
+/** @returns a deep copy of the live workflow with `mutate` applied — never the shared document. */
+function weakened(mutate) {
+  const document = structuredClone(workflow);
+  mutate(document, document.jobs[PUBLISH_JOB]);
+  return document;
+}
+
+const TOKEN_EXPRESSION = "${{ secrets.KEIKO_REGISTRY }}";
+
+// Each token scope is fed by a DIFFERENTLY NAMED secret on purpose: the `secrets.NPM_TOKEN` scan
+// in the last case never sees these, so only the env-name check rejects them (Codex on #3299).
+const WEAKENED_VARIANTS = [
+  [
+    "a renamed environment",
+    (_doc, job) => (job.environment = "npm-release"),
+    "environment is not bound",
+  ],
+  ["a dropped environment", (_doc, job) => delete job.environment, "environment is not bound"],
+  [
+    "id-token downgraded to read",
+    (_doc, job) => (job.permissions["id-token"] = "read"),
+    "id-token write is missing",
+  ],
+  ["dropped job permissions", (_doc, job) => delete job.permissions, "id-token write is missing"],
+  [
+    "a self-hosted runner",
+    (_doc, job) => (job["runs-on"] = "self-hosted"),
+    "runner is not GitHub-hosted",
+  ],
+  [
+    "a reusable-workflow job",
+    (_doc, job) => (job.uses = "./.github/workflows/publish.yml"),
+    "job is a reusable call",
+  ],
+  ["a stepless job", (_doc, job) => delete job.steps, "job is a reusable call"],
+  ["a workflow_call trigger", (doc) => (doc.on.workflow_call = null), "workflow_call"],
+  [
+    "a workflow-scope token",
+    (doc) => (doc.env.NPM_TOKEN = TOKEN_EXPRESSION),
+    "NPM_TOKEN reaches the publish step",
+  ],
+  [
+    "a job-scope token",
+    (_doc, job) => (job.env = { NODE_AUTH_TOKEN: TOKEN_EXPRESSION }),
+    "NODE_AUTH_TOKEN reaches the publish step",
+  ],
+  [
+    "a step-scope token",
+    (_doc, job) => (job.steps.at(-1).env.NODE_AUTH_TOKEN = TOKEN_EXPRESSION),
+    "NODE_AUTH_TOKEN reaches the publish step",
+  ],
+  [
+    "a removed publish job",
+    (doc) => {
+      doc.jobs = Object.fromEntries(
+        Object.entries(doc.jobs).filter(([name]) => name !== PUBLISH_JOB),
+      );
+    },
+    "publish job is missing",
+  ],
+];
 
 describe("npm trusted publishing binding", () => {
-  it("keeps the publish job on the exact environment the npm publisher entry names", () => {
-    // The environment binding is also the human-approval boundary (ADR-0170 D3): npm rejects the
-    // OIDC token of any run that did not pass through `npm-publish`, so a dispatched workflow
-    // variant that drops the environment cannot publish either.
-    expect(publishJob.environment).toBe(TRUSTED_PUBLISHER_ENVIRONMENT);
+  it("accepts the live release workflow", () => {
+    // ADR-0130 D1/D4: the tokenless job configuration is what evidences the OIDC auth path — the
+    // publish attestation does not, since `--provenance` is added wherever the OIDC variables exist.
+    expect(bindingFailures(workflow)).toEqual([]);
+
+    const publishStep = workflow.jobs[PUBLISH_JOB].steps.find((step) => step.name === PUBLISH_STEP);
+    expect(publishStep?.run).toContain("npm run release:publish");
   });
 
-  it("keeps the OIDC exchange available to the publish job", () => {
-    // Without `id-token: write` the npm CLI has no identity to exchange and falls straight back to
-    // token auth — the ENEEDAUTH shape the 0.3.6 dispatch publish failed with.
-    expect(publishJob.permissions["id-token"]).toBe("write");
-  });
-
-  it("publishes from a GitHub-hosted runner", () => {
-    // Trusted publishing is unavailable on self-hosted runners; GitHub issues no OIDC identity
-    // npm accepts there.
-    expect(publishJob["runs-on"]).toBe("ubuntu-latest");
-  });
-
-  it("never wraps the publish job behind a reusable workflow", () => {
-    // npm matches the OIDC claim against the registered basename. A `workflow_call` indirection
-    // publishes under the caller's identity and stops matching the stored entry.
-    expect(Object.keys(workflow.on)).not.toContain("workflow_call");
-    expect(publishJob.uses).toBeUndefined();
-    expect(Array.isArray(publishJob.steps)).toBe(true);
-  });
-
-  it("lets no registry token reach the publish step from any env scope", () => {
-    // ADR-0130 D1: an unset NODE_AUTH_TOKEN/NPM_TOKEN is precisely what makes the npm CLI attempt
-    // the OIDC exchange instead of writing an `_authToken` line, so a reintroduced token env var
-    // silently returns the pipeline to classic-token publishing. A workflow-level or job-level
-    // entry is inherited by the step exactly like a step-level one — and it can be fed by a secret
-    // of any name, which the `secrets.NPM_TOKEN` scan below would never see (Codex finding on
-    // #3299) — so all three scopes are checked, not just the step's own block.
-    expect(publishStep).toBeDefined();
-    expect(publishStep.run).toContain("npm run release:publish");
-
-    const envScopes = [workflow.env, publishJob.env, ...publishJob.steps.map((step) => step.env)];
-    const declared = envScopes.flatMap((scope) => Object.keys(scope ?? {}));
-
-    expect(declared).not.toContain("NODE_AUTH_TOKEN");
-    expect(declared).not.toContain("NPM_TOKEN");
+  it.each(WEAKENED_VARIANTS)("rejects %s", (_label, mutate, expected) => {
+    expect(bindingFailures(weakened(mutate))).toContain(expected);
   });
 
   it("leaves the classic registry secret unconsumed by every workflow", () => {
-    // ADR-0130 D4's retirement follow-up: the standing `NPM_TOKEN` Actions secret has no consumer
-    // once trusted publishing works. A workflow that starts reading it again reintroduces exactly
-    // the long-lived-credential exposure this decision removed.
+    // ADR-0130 D4's retirement follow-up: the `NPM_TOKEN` Actions secret was deleted once trusted
+    // publishing worked. A workflow that starts reading it again reintroduces exactly the
+    // long-lived-credential exposure this decision removed.
     const consumers = readdirSync(workflowsDir)
       .filter((entry) => entry.endsWith(".yml") || entry.endsWith(".yaml"))
       .filter((entry) =>

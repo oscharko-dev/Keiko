@@ -354,12 +354,18 @@ The `publish` job authenticates to the npm registry with [npm Trusted Publishing
   job ran with no registry token and npm holds a Sigstore publish attestation for
   `@oscharko-dev/keiko@0.3.8`. Before that, the 0.3.6 dispatch failed with `ENEEDAUTH` because no
   publisher entry existed yet.
-- **The three identifiers are load-bearing and case-sensitive** (basename only, extension included,
-  no `workflow_call` indirection). npm never re-validates a saved entry, so renaming the workflow
-  file or the environment breaks authentication only at the next publish. The repository side of
-  that binding is pinned by `scripts/__tests__/release-trusted-publishing-binding.test.mjs`
-  (ADR-0130 D5), which also fails if the publish step regains a registry token env var or the job
-  loses `id-token: write`; the npmjs.com side still has to be edited by hand in the same change.
+- **Three values identify the publisher entry** and are case-sensitive: the repository, the
+  workflow basename `release.yml` (basename only, extension included — never the
+  `.github/workflows/` path), and the environment `npm-publish`. npm never re-validates a saved
+  entry, so renaming the workflow file or the environment breaks authentication only at the next
+  publish.
+- **Four further conditions must hold in the workflow itself** for the OIDC exchange to happen and
+  match that entry: no `workflow_call` indirection (the claim would carry the caller's identity), a
+  GitHub-hosted runner, `id-token: write` on the publish job, and no `NODE_AUTH_TOKEN`/`NPM_TOKEN`
+  reaching the publish step from any env scope. All three values and all four conditions are pinned
+  by `scripts/__tests__/release-trusted-publishing-binding.test.mjs` (ADR-0130 D5), which proves
+  rejection against weakened copies of the live workflow rather than only asserting the current
+  file; the npmjs.com side still has to be edited by hand in the same change.
 - **No `NPM_TOKEN` Actions secret exists any more** (retired 2026-08-28, ADR-0130 D4): nothing in CI
   can publish with a classic token. The governed local publish reads its token from the operator's
   own environment or a local `.env`, and the dist-tag repair below exports one for that single run.
