@@ -5,9 +5,9 @@
 // traversal, delegating byte retrieval to an injected `ManualCrawlFetcher`. This is the production
 // HTTP implementation, and it lives HERE in keiko-server (the sole egress composition root), built
 // on the shared proxy/CA-aware `gatewayFetch` transport (ADR-0038). `gatewayFetch` owns the network
-// trust boundary: it always issues `redirect: "manual"` (a 3xx is surfaced, never followed) and
-// re-validates redirect targets, blocks literal/loopback/link-local/blocked targets, and — on the
-// direct path — pins the outbound connect to the DNS-validated address set, closing the
+// trust boundary: it always issues `redirect: "manual"` (a 3xx is surfaced, never followed),
+// blocks literal/loopback/link-local/blocked targets, and — on the direct path — pins the
+// outbound connect to the DNS-validated address set, closing the
 // resolve-then-connect DNS-rebinding gap (AUDIT-SEC-001). The crawl scope guard (in the runner)
 // remains the authority on WHICH origin/path may be fetched; this fetcher adds a cheap defense-in-
 // depth re-check (scheme + no embedded credentials) and never lets a raw upstream error, header, or

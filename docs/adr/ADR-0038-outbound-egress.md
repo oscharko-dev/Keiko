@@ -59,9 +59,19 @@ single-credential posture: the proxy layer may not introduce additional secrets.
    environment-mapped, and is logged only as the content-free policy reason
    `undelegated-proxied-hostname` when absent. It applies in the shared gateway layer to provider,
    connector, and Manual Knowledge Pod traffic; it does not apply when `NO_PROXY` selects the
-   direct path. Literal-IP, loopback, private/metadata, and redirect-hop checks remain local and
-   fail closed. Research egress never inherits this acknowledgement, so acknowledgement alone
-   cannot relax its stricter proxied posture.
+   direct path. Literal-IP, loopback, and private/metadata checks remain local and fail closed.
+   Research egress never inherits this acknowledgement, so acknowledgement alone cannot relax its
+   stricter proxied posture.
+   **Correction (#3327, 2026-08-29).** This decision previously also listed "redirect-hop checks"
+   among the guarantees that remain local and fail closed. `gatewayFetch` never validates a 3xx
+   `Location` header, because it never follows one: `redirect: "manual"` is forced non-overridably
+   and the raw 3xx response is returned to the caller unchanged, so a `Location` target — blocked
+   or not — is inert. A validate-then-discard check (`enforceRedirectTargetPolicy`) existed here
+   until KEIKO-0791 (#3327) removed it as dead code producing false confidence. Per-hop
+   re-validation for the one caller that does follow redirects is owned entirely by
+   `researchEgressPort.ts`'s `followResearch`, which re-validates the target and re-pins DNS via a
+   fresh `gatewayFetch` call on every hop; it does not rely on anything inside `gatewayFetch`
+   itself to police a redirect target.
 
    `egress.pinProxiedConnectTarget` (off by default, never config-file/env-mapped — a caller must
    construct it explicitly, exactly like `denyLoopback`) makes `gatewayFetch` resolve and vet the

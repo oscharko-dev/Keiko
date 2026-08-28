@@ -549,36 +549,6 @@ function refuseUndelegatedProxiedHostnameEgress(
   }
 }
 
-function redirectTarget(original: URL, response: Response): URL | undefined {
-  if (response.status < 300 || response.status >= 400) return undefined;
-  const location = response.headers.get("location");
-  if (location === null || location.trim().length === 0) return undefined;
-  try {
-    return new URL(location, original);
-  } catch {
-    throw new OutboundHttpEgressError(
-      "PROXY_BLOCKED_BY_POLICY",
-      "Outbound redirect target is invalid.",
-    );
-  }
-}
-
-async function enforceRedirectTargetPolicy(
-  original: URL,
-  response: Response,
-  egress: OutboundHttpEgressConfig | undefined,
-  options: { readonly resolveDns: boolean },
-): Promise<URL | undefined> {
-  const redirected = redirectTarget(original, response);
-  if (redirected === undefined) return undefined;
-  const redirectedProxyRaw = proxyForTarget(redirected, egress);
-  const redirectedProxy =
-    redirectedProxyRaw === undefined ? undefined : parseProxyUrl(redirectedProxyRaw);
-  refuseUndelegatedProxiedHostnameEgress(redirected, redirectedProxy, egress);
-  await enforceOutboundTargetPolicy(redirected, egress, options);
-  return redirected;
-}
-
 // Resolves and validates the target's DNS records, returning the vetted address set so the
 // caller can pin the actual connect to it (AUDIT-SEC-001). Returns undefined when DNS
 // resolution was skipped (no resolution needed/allowed) -- callers must not pin a connect in
@@ -1324,14 +1294,13 @@ function requirePinnedAddress(addresses: readonly LookupAddress[] | undefined): 
 interface GatewayDnsResolution {
   readonly pinnedAddresses: readonly LookupAddress[] | undefined;
   readonly proxyPinnedAddress: LookupAddress | undefined;
-  readonly redirectPolicy: { readonly resolveDns: boolean };
 }
 
 // Extracted from gatewayFetch to keep its line count and cyclomatic complexity within budget.
 // Resolves and vets the target's DNS exactly once per call, per whichever plan planGatewayDns
 // picked, and derives every address binding a caller of gatewayFetch needs from that single
-// lookup: the direct-path pinned set (AUDIT-SEC-001), the proxy-path pinned address (ADR-0038 D6),
-// and the resolveDns flag the redirect re-check must reuse.
+// lookup: the direct-path pinned set (AUDIT-SEC-001) and the proxy-path pinned address
+// (ADR-0038 D6).
 async function resolveGatewayDns(
   plan: GatewayProxyPlan,
   egress: OutboundHttpEgressConfig | undefined,
@@ -1342,7 +1311,6 @@ async function resolveGatewayDns(
   return {
     pinnedAddresses: dns.pinForConnect ? vettedAddresses : undefined,
     proxyPinnedAddress: dns.pinForProxyConnect ? requirePinnedAddress(vettedAddresses) : undefined,
-    redirectPolicy: { resolveDns },
   };
 }
 
@@ -1426,9 +1394,6 @@ async function performGatewayFetch(url: string, options: GatewayFetchOptions): P
       maxResponseBytes,
       dns.proxyPinnedAddress,
     );
-    await enforceRedirectTargetPolicy(plan.target, response, egress, {
-      ...dns.redirectPolicy,
-    });
     return response;
   }
   const response = await fetchDirectWithCaFallback(url, init, {
@@ -1438,9 +1403,6 @@ async function performGatewayFetch(url: string, options: GatewayFetchOptions): P
     maxResponseBytes,
     pinnedAddresses: dns.pinnedAddresses,
     log,
-  });
-  await enforceRedirectTargetPolicy(plan.target, response, egress, {
-    ...dns.redirectPolicy,
   });
   return response;
 }
@@ -1529,9 +1491,8 @@ function logFetchCompleted(
 // Outcome line for one outbound gateway call, paired with the attempt line above. `errorKind`
 // carries the egress taxonomy code verbatim (`PROXY_BLOCKED_BY_POLICY`, `PROXY_UNREACHABLE`,
 // `TLS_CA_FAILURE`, …), which is how every fail-closed rejection in this module — literal-address
-// policy, DNS-resolved-to-blocked, redirect target, unpinnable research egress, missing pinned
-// address, oversized CONNECT header — becomes visible without threading a sink through each
-// individual guard.
+// policy, DNS-resolved-to-blocked, unpinnable research egress, missing pinned address, oversized
+// CONNECT header — becomes visible without threading a sink through each individual guard.
 export async function gatewayFetch(
   url: string,
   options: GatewayFetchOptions = {},

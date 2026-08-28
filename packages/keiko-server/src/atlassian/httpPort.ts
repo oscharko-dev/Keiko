@@ -14,8 +14,8 @@
 //
 // Egress posture (ADR-0128 D3): the connector's base-URL host is the sole allowlisted target,
 // re-checked here at request-construction time (defense in depth on top of creation-time
-// validation); `gatewayFetch` itself always issues `redirect: "manual"` and re-checks redirect
-// targets, so a 3xx is surfaced, never followed.
+// validation); `gatewayFetch` itself always issues `redirect: "manual"`, so a 3xx is surfaced,
+// never followed.
 
 import {
   ATLASSIAN_HTTP_REQUEST_BODY_MAX_BYTES,
@@ -208,10 +208,10 @@ function assertAllowlistedTarget(base: URL, requestUrl: string): URL {
 }
 
 // AbortSignal.timeout aborts with a DOMException named TimeoutError. Everything else is a
-// network-class failure (DNS, refused connection, TLS, proxy, or a blocked redirect target) and
-// fails closed as such — the error text is deliberately dropped so no upstream detail can ride
-// into diagnostics or wire responses. The narrow return union is assignable to both port result
-// unions (body-less and bounded-body).
+// network-class failure (DNS, refused connection, TLS, or proxy) and fails closed as such — the
+// error text is deliberately dropped so no upstream detail can ride into diagnostics or wire
+// responses. The narrow return union is assignable to both port result unions (body-less and
+// bounded-body).
 function classifyTransportError(error: unknown): { kind: "timeout" } | { kind: "network-error" } {
   if (error instanceof Error && (error.name === "TimeoutError" || error.name === "AbortError")) {
     return { kind: "timeout" };
