@@ -6,6 +6,7 @@ import { HARNESS_VERSION } from "@oscharko-dev/keiko-contracts/runtime/harness";
 import type { Clock } from "@oscharko-dev/keiko-model-gateway";
 import { systemClock } from "@oscharko-dev/keiko-model-gateway/internal/resilience";
 import { newCounters, type RunContext } from "./context.js";
+import type { HarnessCompactionPort } from "./context-compaction-port.js";
 import { Emitter } from "./emitter.js";
 import { HARNESS_CODES, toFailure } from "./errors.js";
 import { defaultFingerprinter, defaultIdSource } from "./fingerprint.js";
@@ -46,6 +47,11 @@ export interface HarnessDeps {
   // shaping and the run is byte-identical to today. The production wiring tier (which already
   // depends on keiko-workflows) injects an implementation backed by the workflow shapers.
   readonly shaperPort?: HarnessShaperPort | undefined;
+  // Optional injected message-history compaction port (KEIKO-0726, #3323). When omitted, the
+  // harness performs no compaction and checkModelCallLimits keeps its original byte-only
+  // hard-fail. The production wiring tier (which already depends on keiko-workflows) injects an
+  // implementation backed by the context-budget allocator.
+  readonly compactionPort?: HarnessCompactionPort | undefined;
 }
 
 export interface AgentSession {
@@ -117,6 +123,7 @@ function buildContext(
     startedAt: clock.now(),
     counters: newCounters(),
     ...(deps.shaperPort === undefined ? {} : { shaperPort: deps.shaperPort }),
+    ...(deps.compactionPort === undefined ? {} : { compactionPort: deps.compactionPort }),
     shapedObservations: [],
     compactedToolMessages: new Map(),
     messages: [...plan.messages],

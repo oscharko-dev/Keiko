@@ -94,6 +94,7 @@ export type {
   ToolShapingDegradedEvent,
   SinkDegradedReason,
   SinkDegradedEvent,
+  ContextCompactedEvent,
   HarnessEvent,
 } from "./harness.js";
 export type {

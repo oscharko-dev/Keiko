@@ -15,6 +15,10 @@ import type {
   ToolDefinition,
 } from "@oscharko-dev/keiko-model-gateway";
 
+import {
+  logHarnessContextCompactionEvents,
+  serverHarnessContextCompactor,
+} from "../harness-context-compactor.js";
 import type { ReadOnlyChildRunner, ReadOnlyChildRunnerInput } from "./readOnlyChildOrchestrator.js";
 import type { SecureWorkspaceTextReadPort } from "./secureWorkspaceTextRead.js";
 
@@ -132,6 +136,10 @@ async function runChildSession(
       model: budgetedChildModel(model, deps.reservePromptTokens),
       tools: readOnlyTools(deps, input, state),
       sink: TRANSIENT_SINK,
+      // KEIKO-0726 (#3323): a real, tool-using production call site — a read-only child can loop
+      // through many read_file rounds against a 128KB budget and genuinely grow past it, so this
+      // is where the gap this issue closes actually gets exercised.
+      compactionPort: serverHarnessContextCompactor,
     },
   );
   bindSessionCancellation(state, session);
@@ -142,6 +150,7 @@ async function runChildSession(
   if (input.signal.aborted) abort();
   try {
     const result = await session.result;
+    logHarnessContextCompactionEvents(result.events);
     if (result.outcome === "failed") throw new Error("child-session-failed");
     const summary = result.report ?? result.outcome;
     return {

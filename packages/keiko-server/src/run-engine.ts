@@ -65,6 +65,7 @@ import {
 import { contentFreeErrorClass, emitServerDiagnostic } from "./diagnostics-log.js";
 import { createWorkflowMemoryPort } from "./memory-workflow-port.js";
 import { buildGovernedHandoffEvidence } from "./governed-workflow.js";
+import { serverHarnessContextCompactor } from "./harness-context-compactor.js";
 import { createServerHarnessToolShaper } from "./harness-tool-shaper.js";
 
 export interface StartRunResult {
@@ -363,6 +364,10 @@ function dispatchExplain(
     shaperPort: createServerHarnessToolShaper({
       ...(ctx.toolArtifacts === undefined ? {} : { artifactWriter: ctx.toolArtifacts }),
     }),
+    // KEIKO-0726 (#3323): give checkModelCallLimits a compaction attempt before it hard-fails on
+    // context-size alone (loop.ts). See harness-context-compactor.ts for the allocator-backed
+    // implementation and its reconciliation with shaperPort above.
+    compactionPort: serverHarnessContextCompactor,
     ...(reservedRunId === undefined ? {} : { idSource: { newRunId: (): string => reservedRunId } }),
   });
   const result = session.result.then((runResult): DispatchOutcome => ({

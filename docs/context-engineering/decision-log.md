@@ -255,3 +255,31 @@ to dev").
 - `rehydrationReadiness` is vacuous in PR1 (gated at 0); PR2 must add meta-backed evicting repo-evidence
   items + full `readExcerpt` round-trip and tighten the threshold, or the deferred metric never bites.
 - Path-free regex in the harness is corpus-specific; new fixture path prefixes must extend it.
+
+## Post-milestone follow-ups
+
+- **KEIKO-0726 (#3323), closed for the reachable production call sites; one CLI call site tracked as a
+  follow-up.** PR4's harness wiring (ADR-0055 D4) was narrower than this milestone's original scope for the
+  agentic harness path: `HarnessShaperPort` recompacts individual `role:tool` messages reactively, but
+  `keiko-harness/loop.ts`'s `checkModelCallLimits` still hard-failed on `maxContextBytes` alone, with zero
+  compaction wired into the gate itself, for growth from assistant/user/system turns, working-memory,
+  history-summary, or verification-evidence — an asymmetry this log did not previously disclose.
+  `checkModelCallLimits` now gives an optional, injected `HarnessCompactionPort` one attempt to evict/compact
+  history before hard-failing, with a production implementation
+  (`packages/keiko-server/src/harness-context-compactor.ts`) backed by the `keiko-workflows` context-budget
+  allocator and guarded by the same profile-present precondition PR4 used for the chat path.
+  Segmentation had to be on assistant-message boundaries, not user-message boundaries: the harness never
+  produces more than one `role:"user"` message per run, so the first landing of this compactor (segmenting on
+  `role:"user"`) was a structural no-op against every real run — caught in post-merge review and fixed before
+  landing. The port is injected at `agentProducerRoute.ts` (editor producer route) and
+  `productionReadOnlyChildRunner.ts` (read-only child runner), both real `editor-agent-turn` call sites that
+  loop through multiple model/tool rounds and can genuinely exceed `maxContextBytes` — these are what actually
+  close the gap for a real run. It is also injected at `run-engine.ts`'s `dispatchExplain`, but `explain-plan`
+  is read-only and single-model-call by construction, so `checkModelCallLimits` never sees a prior assistant
+  turn there and the port cannot fire on that path; it stays wired as a harmless no-op.
+  `packages/keiko-cli/src/run.ts`'s tool-using CLI dispatch (`generate-unit-tests` / `investigate-bug`) is a
+  real reachable call site that does not yet inject the port — tracked as a follow-up. A compaction success
+  now emits a body-free `context:compacted` `HarnessEvent` (counts and byte totals only), bridged into the
+  server activity log as `op: "harness.context.compacted"` so a compacted run is reconstructable from
+  `server.log` alone. See ADR-0052 D9 for the full decision, its wiring-status breakdown, and its
+  reconciliation with `HarnessShaperPort`.

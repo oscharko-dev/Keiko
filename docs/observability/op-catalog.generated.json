@@ -879,6 +879,12 @@
       "package": "keiko-server"
     },
     {
+      "op": "harness.context.compacted",
+      "category": "process",
+      "site": "packages/keiko-server/src/harness-context-compactor.ts:275",
+      "package": "keiko-server"
+    },
+    {
       "op": "http.request.body.cancelled",
       "category": "http",
       "site": "packages/keiko-server/src/bounded-request-body.ts:92",

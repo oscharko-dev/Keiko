@@ -31,6 +31,10 @@ import {
 } from "@oscharko-dev/keiko-contracts/runtime/editor-agent";
 import type { UiHandlerDeps } from "../deps.js";
 import { readJsonObject } from "../files.js";
+import {
+  logHarnessContextCompactionEvents,
+  serverHarnessContextCompactor,
+} from "../harness-context-compactor.js";
 import { errorBody, type RouteContext, type RouteResult } from "../routes.js";
 import { editorAgentRegistry } from "./agentSessionRegistry.js";
 import { editorAgentAuthorityRegistry } from "./agentAuthorityRegistry.js";
@@ -282,9 +286,19 @@ async function runProducerTurn(
   const session = createSession(
     { taskType: "editor-agent-turn", input: { goal: request.goal, sessionId: request.sessionId } },
     { model: request.modelId, workingDirectory: workspaceRoot },
-    { model, tools: scopedProducerToolPort(host, outcomes), sink: new MemoryEventSink() },
+    {
+      model,
+      tools: scopedProducerToolPort(host, outcomes),
+      sink: new MemoryEventSink(),
+      // KEIKO-0726 (#3323): a real, tool-using production call site — unlike explain-plan's
+      // single-shot read-only path, an editor-agent-turn producer run can loop through several
+      // model/tool rounds and genuinely grow past maxContextBytes, so this is where the gap this
+      // issue closes actually gets exercised.
+      compactionPort: serverHarnessContextCompactor,
+    },
   );
   const result = await session.result;
+  logHarnessContextCompactionEvents(result.events);
   const toolCompletions = result.events.filter(isToolCallCompleted);
   return {
     schemaVersion: EDITOR_AGENT_SCHEMA_VERSION,

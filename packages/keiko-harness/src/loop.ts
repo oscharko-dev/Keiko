@@ -69,6 +69,54 @@ function checkLoopLimits(ctx: RunContext): StateStep | null {
   return null;
 }
 
+// KEIKO-0726 (#3323): before checkModelCallLimits hard-fails on context-size alone, give an
+// injected HarnessCompactionPort one attempt to evict/compact history and bring the run back
+// under budget. No port injected (every caller predating KEIKO-0726) => returns false and the
+// hard-fail below is byte-identical to before. The port's own contract requires it to be total,
+// but production wiring may still throw in violation of that contract or hand back a result that
+// does not actually fit — both are treated as "could not compact" rather than trusted blindly, so
+// this can never be MORE permissive than doing nothing: a broken or over-optimistic port degrades
+// to the unchanged hard-fail, it never lets an over-budget run through.
+//
+// Reconciliation with HarnessShaperPort (executor.ts, ADR-0055 D4): that port narrowly recompacts
+// individual tool-role messages, reactively, at tool-result insertion time, which is disjoint from
+// this port's scope (the whole accumulating history at model-call re-entry) — the two are invoked
+// at different points in the loop on different message sets and never compete over the same edit.
+function tryCompact(ctx: RunContext): boolean {
+  if (ctx.compactionPort === undefined) {
+    return false;
+  }
+  const bytesBefore = contextBytes(ctx.messages);
+  const messagesBefore = ctx.messages.length;
+  let result: ReturnType<NonNullable<RunContext["compactionPort"]>>;
+  try {
+    result = ctx.compactionPort({
+      messages: ctx.messages,
+      maxContextBytes: ctx.limits.maxContextBytes,
+    });
+  } catch {
+    return false;
+  }
+  if (result === undefined) {
+    return false;
+  }
+  const bytesAfter = contextBytes(result.messages);
+  if (bytesAfter > ctx.limits.maxContextBytes) {
+    return false;
+  }
+  ctx.messages = [...result.messages];
+  // KEIKO-0726 (#3323): body-free observability signal (AGENTS.md §8 Rule 1) — counts and byte
+  // totals only, never message content. Emitted through the harness's existing instrumentation
+  // port (ctx.emitter), exactly like every other structured audit event this loop already emits.
+  ctx.emitter.emit({
+    type: "context:compacted",
+    messagesDropped: Math.max(0, messagesBefore - ctx.messages.length),
+    bytesBefore,
+    bytesAfter,
+  });
+  return true;
+}
+
 // Context-size and model-call-count checks, evaluated at every model-call entry so the
 // limit bounds calls that follow tool-call (not only the initial context-selection path).
 function checkModelCallLimits(ctx: RunContext): StateStep | null {
@@ -77,14 +125,17 @@ function checkModelCallLimits(ctx: RunContext): StateStep | null {
     return { to: "limit-exceeded", reason: "maxModelCalls exceeded" };
   }
   const bytes = contextBytes(ctx.messages);
-  if (bytes > ctx.limits.maxContextBytes) {
-    ctx.failure = toFailure(
-      HARNESS_CODES.LIMIT_CONTEXT_SIZE,
-      `context ${String(bytes)} bytes exceeds limit ${String(ctx.limits.maxContextBytes)}`,
-    );
-    return { to: "limit-exceeded", reason: "maxContextBytes exceeded" };
+  if (bytes <= ctx.limits.maxContextBytes) {
+    return null;
   }
-  return null;
+  if (tryCompact(ctx)) {
+    return null;
+  }
+  ctx.failure = toFailure(
+    HARNESS_CODES.LIMIT_CONTEXT_SIZE,
+    `context ${String(bytes)} bytes exceeds limit ${String(ctx.limits.maxContextBytes)}`,
+  );
+  return { to: "limit-exceeded", reason: "maxContextBytes exceeded" };
 }
 
 // Per-state-entry guards: abort is honoured before any state; call-count limits are

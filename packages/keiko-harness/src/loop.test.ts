@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import type { NormalizedResponse, ToolDefinition } from "@oscharko-dev/keiko-model-gateway";
+import type {
+  ChatMessage,
+  NormalizedResponse,
+  ToolDefinition,
+} from "@oscharko-dev/keiko-model-gateway";
+import type { HarnessCompactionPort } from "./context-compaction-port.js";
 import { runLoop } from "./loop.js";
 import type { ModelPort, ToolCallResult, ToolPort } from "./ports.js";
 import type { HarnessEvent, TaskInput } from "./types.js";
@@ -684,5 +689,139 @@ describe("runLoop — limit breaches each map to their category", () => {
     // reaches the model only inside dispatch(), after that guard, so a non-zero model call count
     // is what makes this pin non-vacuous.
     expect(modelCalls()).toBe(1);
+  });
+});
+
+// KEIKO-0726 (#3323): checkModelCallLimits' hard-fail gate must give an injected
+// HarnessCompactionPort one chance to evict/compact history before failing on context-size
+// alone. This is the growth the tool-observation shaper (executor.ts) never covered: the model's
+// OWN assistant-turn content, appended unchecked in handleModelCall, only becomes visible again at
+// the next model-call entry guard (loop.ts's checkModelCallLimits) — reached directly, without an
+// intervening handleContextSelection or tool-result byte check, when a tool-call round trip
+// resolves with zero tool calls (finishReason "tool_calls" + an empty toolCalls array). That is
+// therefore the only way to exercise checkModelCallLimits' own byte check with fresh, uncompacted
+// growth rather than a check some earlier call site already performed on the same bytes.
+describe("runLoop — checkModelCallLimits compaction (KEIKO-0726)", () => {
+  // A large assistant turn appended with no tool calls to execute: handleModelCall appends it
+  // unchecked, routeAfterModel sends the run to tool-call (editor-agent-turn allows tools), and
+  // handleToolCall's empty-calls loop feeds straight back to model-call without ever computing
+  // context bytes itself — so checkModelCallLimits is the FIRST and only guard that sees the
+  // overflow.
+  function overflowingFirstResponse(): NormalizedResponse {
+    return response({
+      finishReason: "tool_calls",
+      toolCalls: [],
+      content: "x".repeat(2000),
+    });
+  }
+
+  const TASK = {
+    taskType: "editor-agent-turn" as const,
+    input: { goal: "investigate", sessionId: "session-1" },
+  };
+
+  it("still hard-fails with no compactionPort injected (unchanged behavior)", async () => {
+    const { port } = scriptedModel([overflowingFirstResponse(), response({ content: "final" })]);
+    const { ctx, sink } = buildContext({
+      task: TASK,
+      model: port,
+      limits: { maxContextBytes: 1000 },
+    });
+    const outcome = await runLoop(ctx);
+    expect(outcome).toBe("limit-exceeded");
+    expect(failureCategory(sink.events())).toBe("HARNESS_LIMIT_CONTEXT_SIZE");
+  });
+
+  it("compacts and completes when the injected compactionPort frees enough room", async () => {
+    const { port, calls } = scriptedModel([
+      overflowingFirstResponse(),
+      response({ content: "final" }),
+    ]);
+    const compactionPort: HarnessCompactionPort = (input) => ({
+      // Drops everything but the leading system seed — a deliberately blunt stand-in for the
+      // real allocator-backed compactor; checkModelCallLimits re-validates the byte result
+      // itself, so this test only needs "small enough to fit", not a faithful algorithm.
+      messages: input.messages.filter((m) => m.role === "system"),
+    });
+    const { ctx, sink } = buildContext({
+      task: TASK,
+      model: port,
+      limits: { maxContextBytes: 1000 },
+      compactionPort,
+    });
+    const outcome = await runLoop(ctx);
+    expect(outcome).toBe("completed");
+    expect(calls()).toBe(2);
+    expect(failureCategory(sink.events())).toBeUndefined();
+    // AGENTS.md §8 Rule 1: a run whose history was evicted must be reconstructable from the
+    // emitted event stream alone — assert the body-free compaction signal, not just the outcome.
+    const compacted = sink.events().find((e) => e.type === "context:compacted");
+    expect(compacted).toBeDefined();
+    if (compacted?.type === "context:compacted") {
+      expect(compacted.messagesDropped).toBeGreaterThan(0);
+      expect(compacted.bytesAfter).toBeLessThanOrEqual(compacted.bytesBefore);
+      expect(compacted.bytesAfter).toBeLessThanOrEqual(1000);
+    }
+  });
+
+  it("still hard-fails when the compactionPort cannot free enough room", async () => {
+    const { port } = scriptedModel([overflowingFirstResponse(), response({ content: "final" })]);
+    const compactionPort: HarnessCompactionPort = () => ({
+      // Returns something smaller but still over the 1000-byte ceiling — checkModelCallLimits
+      // must re-check the result, not trust the port blindly.
+      messages: [{ role: "assistant", content: "y".repeat(1500) } satisfies ChatMessage],
+    });
+    const { ctx, sink } = buildContext({
+      task: TASK,
+      model: port,
+      limits: { maxContextBytes: 1000 },
+      compactionPort,
+    });
+    const outcome = await runLoop(ctx);
+    expect(outcome).toBe("limit-exceeded");
+    expect(failureCategory(sink.events())).toBe("HARNESS_LIMIT_CONTEXT_SIZE");
+  });
+
+  it("still hard-fails when the compactionPort declines (returns undefined)", async () => {
+    const { port } = scriptedModel([overflowingFirstResponse(), response({ content: "final" })]);
+    const compactionPort: HarnessCompactionPort = () => undefined;
+    const { ctx, sink } = buildContext({
+      task: TASK,
+      model: port,
+      limits: { maxContextBytes: 1000 },
+      compactionPort,
+    });
+    const outcome = await runLoop(ctx);
+    expect(outcome).toBe("limit-exceeded");
+    expect(failureCategory(sink.events())).toBe("HARNESS_LIMIT_CONTEXT_SIZE");
+  });
+
+  it("fails closed (unchanged hard-fail) when the compactionPort throws", async () => {
+    const { port } = scriptedModel([overflowingFirstResponse(), response({ content: "final" })]);
+    const compactionPort: HarnessCompactionPort = () => {
+      throw new Error("boom");
+    };
+    const { ctx, sink } = buildContext({
+      task: TASK,
+      model: port,
+      limits: { maxContextBytes: 1000 },
+      compactionPort,
+    });
+    const outcome = await runLoop(ctx);
+    expect(outcome).toBe("limit-exceeded");
+    expect(failureCategory(sink.events())).toBe("HARNESS_LIMIT_CONTEXT_SIZE");
+  });
+
+  it("never invokes the compactionPort when already within budget", async () => {
+    let invoked = 0;
+    const compactionPort: HarnessCompactionPort = () => {
+      invoked += 1;
+      return undefined;
+    };
+    const { port } = scriptedModel([response({ content: "final" })]);
+    const { ctx } = buildContext({ task: EXPLAIN, model: port, compactionPort });
+    const outcome = await runLoop(ctx);
+    expect(outcome).toBe("completed");
+    expect(invoked).toBe(0);
   });
 });

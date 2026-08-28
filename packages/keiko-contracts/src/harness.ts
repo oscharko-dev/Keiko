@@ -468,6 +468,19 @@ export interface SinkDegradedEvent extends BaseEvent {
   readonly reason: SinkDegradedReason;
 }
 
+// KEIKO-0726 (#3323): observability signal for `loop.ts`'s `tryCompact` succeeding — an injected
+// `HarnessCompactionPort` evicted whole history turns to bring a run back under
+// `maxContextBytes` before `checkModelCallLimits` would otherwise have hard-failed it. Body-free
+// by construction (ADR-0173 D4): counts and byte totals only, never message content. Without this
+// event a run whose history was silently evicted is indistinguishable in the emitted stream from
+// one that was not (the machine-reconstruction contract's exact failure mode).
+export interface ContextCompactedEvent extends BaseEvent {
+  readonly type: "context:compacted";
+  readonly messagesDropped: number;
+  readonly bytesBefore: number;
+  readonly bytesAfter: number;
+}
+
 export type HarnessEvent =
   | RunStartedEvent
   | StateTransitionEvent
@@ -488,4 +501,5 @@ export type HarnessEvent =
   | RunFailedEvent
   | BrowserEvent
   | ToolShapingDegradedEvent
-  | SinkDegradedEvent;
+  | SinkDegradedEvent
+  | ContextCompactedEvent;
