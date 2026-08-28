@@ -117,6 +117,54 @@ export function isTextEntryTarget(target: EventTarget | null): boolean {
   );
 }
 
+// Issue #2710 — a control that CONSUMES typed input (and where Escape has its
+// own local meaning: dismiss, revert, blur). Deliberately narrower than
+// isTextEntryTarget, which also treats a read-only `data-text-selectable`
+// surface as text entry: a file preview or diff pane accepts no keystrokes, so
+// Escape there must still reach the workspace and clear the window selection
+// (ADR-0123 D6 requires selection commands to be keyboard reachable).
+export function isTextInputTarget(target: EventTarget | null): boolean {
+  if (!(target instanceof Element)) return false;
+  return (
+    target.closest("input, textarea, select, [contenteditable='true'], [contenteditable='']") !==
+    null
+  );
+}
+
+// ADR-0123 D6 / issue #2710 — surfaces whose clipboard behavior the workspace
+// window copy/cut/paste commands must never intercept. D6 names editors,
+// terminals, text inputs, file trees, diff viewers, and embedded widgets:
+// editors/terminals focus their own textarea/contenteditable and diff viewers
+// carry data-text-selectable (both covered by the text-entry selector), so the
+// tree roles are the one class the narrower isTextEntryTarget guard missed.
+export function isEmbeddedClipboardSurfaceTarget(target: EventTarget | null): boolean {
+  if (!(target instanceof Element)) return false;
+  return (
+    target.closest(
+      [
+        "input",
+        "textarea",
+        "select",
+        "[contenteditable='true']",
+        "[contenteditable='']",
+        "[data-text-selectable='true']",
+        "[role='tree']",
+        "[role='treeitem']",
+      ].join(","),
+    ) !== null
+  );
+}
+
+// Issue #2710 — a live, non-collapsed DOM text selection means the user is
+// copying text they selected (chat bubbles, markdown, file preview, diff
+// lines); the workspace window-clipboard must yield so the native copy/cut
+// reaches the OS clipboard.
+export function hasActiveTextSelection(): boolean {
+  if (typeof window === "undefined") return false;
+  const selection = window.getSelection();
+  return selection !== null && !selection.isCollapsed && selection.toString().length > 0;
+}
+
 export function isHandToolKeyIgnoredTarget(target: EventTarget | null): boolean {
   if (!(target instanceof Element)) return false;
   return (

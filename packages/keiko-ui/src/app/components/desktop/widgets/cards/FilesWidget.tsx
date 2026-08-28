@@ -48,6 +48,7 @@ import {
 } from "./files-widget-i18n";
 import { useWorkspaceWatch } from "./useWorkspaceWatch";
 import { WORKSPACE_FILE_MUTATED_EVENT, workspaceFileMutationDetail } from "./workspace-file-events";
+import selectableTextStyles from "./shared/selectableText.module.css";
 
 // PascalCase aliases so the JSX tag itself signals "component", not member access (S6770).
 const FolderIcon = Icons.folder;
@@ -1888,7 +1889,9 @@ export function FilesWidget({
         ) : null}
         {state.response !== null ? (
           <section
-            className="fpv-code mono"
+            className={`fpv-code mono ${selectableTextStyles["cmp-selectable-text"]}`}
+            // Issue #2710 — diff text must be selectable and its copy native.
+            data-text-selectable="true"
             // Scrollable diff pane: tabIndex makes the overflow region keyboard-scrollable.
             // eslint-disable-next-line jsx-a11y/no-noninteractive-tabindex
             tabIndex={0}

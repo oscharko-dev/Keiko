@@ -27,6 +27,15 @@ function Harness({ cameraSmoothness = 0 }: { readonly cameraSmoothness?: number 
   const wsRef = useRef<HTMLDivElement>(null);
   const ws = useWorkspace(wsRef, { cameraSmoothness });
   const files = ws.wins?.find((win) => win.id === "files-1");
+  // Issue #2402 — observable `wins` identity: a snapped no-op content-zoom step
+  // must not flip the array identity (that identity drives persistence scheduling,
+  // connection pruning, and selection normalization downstream).
+  const lastWinsRef = useRef<readonly AppWindow[] | null>(null);
+  const winsIdentityChangesRef = useRef(0);
+  if (ws.wins !== lastWinsRef.current) {
+    lastWinsRef.current = ws.wins;
+    winsIdentityChangesRef.current += 1;
+  }
 
   return (
     <main ref={wsRef} data-testid="workspace" className="workspace">
@@ -37,6 +46,7 @@ function Harness({ cameraSmoothness = 0 }: { readonly cameraSmoothness?: number 
       <output data-testid="view-zoom">{ws.view.zoom}</output>
       <output data-testid="view-x">{ws.view.x}</output>
       <output data-testid="view-y">{ws.view.y}</output>
+      <output data-testid="wins-identity-changes">{winsIdentityChangesRef.current}</output>
       <button type="button" onClick={ws.api.fitView}>
         Fit
       </button>
@@ -298,6 +308,8 @@ describe("useWorkspace wheel zoom routing", () => {
     });
 
     expect(cancelAnimationFrameSpy).not.toHaveBeenCalled();
+    // Issue #2402 — content zoom now commits once per animation frame.
+    callbacks.at(-1)?.(0);
     await waitFor(() => {
       expect(screen.getByTestId("files-zoom")).toHaveTextContent("1.2");
       expect(screen.getByTestId("view-x")).toHaveTextContent("-20");
@@ -388,5 +400,121 @@ describe("useWorkspace wheel zoom layout-read coalescing (GEN-PERF-WORKSPACE-005
       expect(Number(screen.getByTestId("view-zoom").textContent)).toBeGreaterThan(1),
     );
     expect(rectSpy).toHaveBeenCalledTimes(1);
+  });
+});
+
+// Issue #2402 — the ctrl/cmd-wheel CONTENT-zoom branch (pointer over a window)
+// had none of the camera path's protections: one uncapped setWins commit per
+// wheel event, a fresh wins array even for snapped no-op steps, and no
+// data-view-active suppression for the wallpaper shader. A trackpad pinch
+// synthesizes ctrl-wheel at 60-120+Hz, so each gap was a per-event cost.
+describe("useWorkspace content-zoom wheel coalescing (issue #2402)", () => {
+  afterEach(() => {
+    cleanup();
+    window.localStorage.clear();
+    vi.restoreAllMocks();
+  });
+
+  function mockAnimationFrames(): FrameRequestCallback[] {
+    const callbacks: FrameRequestCallback[] = [];
+    vi.spyOn(window, "requestAnimationFrame").mockImplementation(
+      (callback: FrameRequestCallback): number => {
+        callbacks.push(callback);
+        return callbacks.length;
+      },
+    );
+    vi.spyOn(window, "cancelAnimationFrame").mockImplementation(() => undefined);
+    return callbacks;
+  }
+
+  function fireContentZoomWheel(deltaY: number): void {
+    fireEvent.wheel(screen.getByTestId("window-target"), {
+      bubbles: true,
+      cancelable: true,
+      clientX: 200,
+      clientY: 200,
+      ctrlKey: true,
+      deltaY,
+    });
+  }
+
+  it("coalesces a same-frame ctrl-wheel burst over a window into one commit", async () => {
+    const callbacks = mockAnimationFrames();
+    window.localStorage.setItem(WORKSPACE_STORAGE_KEY, JSON.stringify([appWindow()]));
+    render(<Harness />);
+    mockWorkspaceRect();
+
+    await waitFor(() => expect(screen.getByTestId("files-zoom")).toHaveTextContent("1"));
+    const scheduledBefore = callbacks.length;
+
+    fireContentZoomWheel(-100);
+    fireContentZoomWheel(-100);
+
+    // No synchronous per-event commit, and the whole burst holds ONE frame.
+    expect(screen.getByTestId("files-zoom")).toHaveTextContent("1");
+    expect(callbacks.length - scheduledBefore).toBe(1);
+
+    callbacks[scheduledBefore]?.(0);
+
+    // The coalesced commit replays each queued delta in order against the previous
+    // step's SNAPPED zoom, exactly like two separate per-event commits would:
+    // 1 -[deltaY -100]-> 1.2 -[deltaY -100]-> 1.4. (Summing the raw deltas first —
+    // exp(0.0015 * 200) ≈ 1.35 → snapped 1.3 — would silently diverge from that.)
+    await waitFor(() => expect(screen.getByTestId("files-zoom")).toHaveTextContent("1.4"));
+  });
+
+  it("replays a same-frame burst that crosses the max content-zoom bound like separate commits", async () => {
+    // Regression for the clamp-boundary divergence: summing deltaY before clamping loses
+    // the fact that the first step already saturated CONTENT_MAX_ZOOM (2.0), so a second,
+    // smaller step in the same frame must ease back down FROM the clamped value (1.9), not
+    // from a hypothetical higher unclamped total. Sequentially: 1.9 -[-300]-> 2.0 -[+40]->
+    // 1.9. Summing first (-260 in one exp() call) never reaches the cap and lands on 2.0.
+    const callbacks = mockAnimationFrames();
+    window.localStorage.setItem(WORKSPACE_STORAGE_KEY, JSON.stringify([appWindow({ zoom: 1.9 })]));
+    render(<Harness />);
+    mockWorkspaceRect();
+
+    await waitFor(() => expect(screen.getByTestId("files-zoom")).toHaveTextContent("1.9"));
+    const scheduledBefore = callbacks.length;
+
+    fireContentZoomWheel(-300);
+    fireContentZoomWheel(40);
+
+    expect(callbacks.length - scheduledBefore).toBe(1);
+    callbacks[scheduledBefore]?.(0);
+
+    await waitFor(() => expect(screen.getByTestId("files-zoom")).toHaveTextContent("1.9"));
+  });
+
+  it("preserves the wins identity when a content-zoom step does not change the snapped zoom", async () => {
+    const callbacks = mockAnimationFrames();
+    window.localStorage.setItem(WORKSPACE_STORAGE_KEY, JSON.stringify([appWindow()]));
+    render(<Harness />);
+    mockWorkspaceRect();
+
+    await waitFor(() => expect(screen.getByTestId("files-zoom")).toHaveTextContent("1"));
+    const identityBefore = screen.getByTestId("wins-identity-changes").textContent;
+    const scheduledBefore = callbacks.length;
+
+    // Zero delta: exp(0) = 1, the snapped zoom cannot change.
+    fireContentZoomWheel(0);
+    callbacks[scheduledBefore]?.(0);
+
+    expect(screen.getByTestId("files-zoom")).toHaveTextContent("1");
+    expect(screen.getByTestId("wins-identity-changes")).toHaveTextContent(identityBefore ?? "");
+  });
+
+  it("marks the workspace view-active so the wallpaper shader pauses during content zoom", async () => {
+    mockAnimationFrames();
+    window.localStorage.setItem(WORKSPACE_STORAGE_KEY, JSON.stringify([appWindow()]));
+    render(<Harness />);
+    mockWorkspaceRect();
+
+    await waitFor(() => expect(screen.getByTestId("files-zoom")).toHaveTextContent("1"));
+    expect(screen.getByTestId("workspace").dataset["viewActive"]).toBeUndefined();
+
+    fireContentZoomWheel(-100);
+
+    expect(screen.getByTestId("workspace").dataset["viewActive"]).toBe("true");
   });
 });

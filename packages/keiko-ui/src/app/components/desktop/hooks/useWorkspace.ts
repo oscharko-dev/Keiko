@@ -283,14 +283,86 @@ export function applyContentWheelZoom(win: AppWindow, deltaY: number): AppWindow
 // GEN-UI-WORKSPACE-S2004 — extracted so the ctrl/cmd-wheel content-zoom updater
 // passed to setWins does not nest a `.map()` closure inside the wheel handler
 // inside the effect callback (SonarCloud S2004: nesting > 4 levels).
-function applyWheelZoomToWindows(
+// Issue #2402 — identity-preserving: content zoom snaps to 0.1 steps, so most
+// wheel events are no-ops; returning the SAME array for those keeps the wins
+// identity stable and skips the whole downstream chain (persistence schedule,
+// connection prune, selection normalization, scene re-render). `deltas` replays
+// every queued wheel event IN ORDER through applyContentWheelZoom — see
+// createWheelContentZoomQueue for why a raw deltaY SUM cannot be substituted here.
+export function applyWheelZoomToWindows(
   ws: AppWindow[] | null,
   windowId: string,
-  deltaY: number,
+  deltas: readonly number[],
 ): AppWindow[] | null {
-  return ws === null
-    ? ws
-    : ws.map((w) => (w.id === windowId ? applyContentWheelZoom(w, deltaY) : w));
+  if (ws === null) return ws;
+  const index = ws.findIndex((w) => w.id === windowId);
+  const current = index === -1 ? undefined : ws[index];
+  if (current === undefined) return ws;
+  let updated = current;
+  for (const deltaY of deltas) updated = applyContentWheelZoom(updated, deltaY);
+  if (updated === current) return ws;
+  const next = ws.slice();
+  next[index] = updated;
+  return next;
+}
+
+// Issue #2402 — the ctrl/cmd-wheel content-zoom branch committed one setWins per
+// wheel event, uncapped by frame rate (a trackpad pinch synthesizes ctrl-wheel at
+// 60-120+Hz). Mirror queueView's rAF coalescing: wheel deltas for one window
+// accumulate per animation frame and flush as ONE commit.
+//
+// The commit replays the queued deltas IN ORDER instead of summing them first.
+// exp() is multiplicative in the continuous math, but nextContentZoomFromWheel
+// also snaps to a 0.1 grid and clamps to [CONTENT_MIN_ZOOM, CONTENT_MAX_ZOOM] on
+// EVERY step, and both are nonlinear: summing raw deltaY before that per-step
+// snap/clamp does not reproduce what N separate per-event commits would have
+// produced. Two concrete examples (verified): from zoom=1, deltaY -100 twice
+// sequentially reaches 1.2 then 1.4; summing first (-200 in one exp() call)
+// reaches only 1.3. From zoom=1.9, deltaY -300 then +40 sequentially hits the
+// 2.0 cap and settles back to 1.9; summing first (-260) never crosses the cap
+// and lands on 2.0. Replaying the ordered deltas against each step's SNAPPED
+// result — exactly like N separate commits would — keeps the coalesced commit
+// bit-for-bit identical to the pre-coalescing per-event behaviour.
+interface WheelContentZoomQueue {
+  readonly queue: (windowId: string, deltaY: number) => void;
+  readonly cancel: () => void;
+}
+
+function createWheelContentZoomQueue(
+  apply: (windowId: string, deltas: readonly number[]) => void,
+): WheelContentZoomQueue {
+  let frame: number | null = null;
+  let pendingWindowId: string | null = null;
+  let pendingDeltas: number[] = [];
+  const flush = (): void => {
+    frame = null;
+    const windowId = pendingWindowId;
+    const deltas = pendingDeltas;
+    pendingWindowId = null;
+    pendingDeltas = [];
+    if (windowId !== null) apply(windowId, deltas);
+  };
+  const queue = (windowId: string, deltaY: number): void => {
+    // A mid-frame target switch flushes the previous window's pending deltas so
+    // deltas never leak across windows; the already-scheduled frame then no-ops.
+    if (pendingWindowId !== null && pendingWindowId !== windowId) flush();
+    pendingWindowId = windowId;
+    pendingDeltas.push(deltaY);
+    if (typeof window.requestAnimationFrame !== "function") {
+      flush();
+      return;
+    }
+    frame ??= window.requestAnimationFrame(flush);
+  };
+  const cancel = (): void => {
+    if (frame !== null && typeof window.cancelAnimationFrame === "function") {
+      window.cancelAnimationFrame(frame);
+    }
+    frame = null;
+    pendingWindowId = null;
+    pendingDeltas = [];
+  };
+  return { queue, cancel };
 }
 
 function windowIdFromWheelTarget(target: EventTarget | null): string | null {
@@ -605,13 +677,22 @@ function usePanZoom({
       }
       return zoomRect;
     };
+    // Issue #2402 — per-frame coalescer for the content-zoom branch below; the
+    // camera branch already coalesces through queueView.
+    const contentZoom = createWheelContentZoomQueue((windowId, deltas) => {
+      setWins((ws) => applyWheelZoomToWindows(ws, windowId, deltas));
+    });
     const onWheel = (e: WheelEvent): void => {
       if (e.metaKey || e.ctrlKey) {
         e.preventDefault();
         const windowId = windowIdFromWheelTarget(e.target);
         if (windowId !== null) {
           settleCameraAnimation();
-          setWins((ws) => applyWheelZoomToWindows(ws, windowId, e.deltaY));
+          // Issue #2402 — the wallpaper shader's gesture suppression
+          // (data-view-active, GEN-PERF-WORKSPACE-004) must engage for content
+          // zoom exactly as it does for camera zoom.
+          markViewActive();
+          contentZoom.queue(windowId, e.deltaY);
           return;
         }
         const r = gestureRect();
@@ -641,8 +722,9 @@ function usePanZoom({
     el.addEventListener("wheel", onWheel, { passive: false });
     return () => {
       el.removeEventListener("wheel", onWheel);
+      contentZoom.cancel();
     };
-  }, [wsRef, setWins, queueView, settleCameraAnimation]);
+  }, [wsRef, setWins, queueView, settleCameraAnimation, markViewActive]);
 
   const rect = useCallback(
     (): DOMRect | null => (wsRef.current === null ? null : wsRef.current.getBoundingClientRect()),
@@ -2183,20 +2265,56 @@ export function useWorkspace(
     [selectionRef, setWins, winsRef, worldVP],
   );
   const copySelectedWindows = useCallback<WorkspaceApi["copySelectedWindows"]>(() => {
-    if (!winsReadyRef.current) return false;
-    const payload = buildWorkspaceClipboardPayload(
+    if (!winsReadyRef.current) return { captured: 0, skipped: 0, overflow: 0 };
+    const built = buildWorkspaceClipboardPayload(
       winsRef.current,
       selectionRef.current.selectedWindowIds,
     );
-    if (payload === null) return false;
-    workspaceClipboardRef.current = payload;
+    if (built.payload === null) {
+      return { captured: 0, skipped: built.skippedCount, overflow: built.overflowCount };
+    }
+    workspaceClipboardRef.current = built.payload;
     workspaceClipboardPasteCountRef.current = 1;
-    return true;
+    return {
+      captured: built.capturedWindowIds.length,
+      skipped: built.skippedCount,
+      overflow: built.overflowCount,
+    };
   }, [selectionRef, winsReadyRef, winsRef]);
+  // Issue #2150 follow-up — cut captures the same content-free descriptors copy
+  // does, then closes exactly the captured windows. Only duplicable windows are
+  // ever closed, so the first paste can always restore what a cut removed.
+  // Removal goes through closeWithTeardown, not a raw setWins filter: a cut
+  // window can be a connected chat/files/connector endpoint, and only
+  // closeWithTeardown fires the scope/connector unbind callbacks that keep the
+  // chat's server-side grounding in sync with the visible connection (see the
+  // uiux-fix F008 C120 comment on closeWithTeardown below) — a bare filter would
+  // silently orphan that server-side binding while the edge and window vanish.
+  const cutSelectedWindows = useCallback<WorkspaceApi["cutSelectedWindows"]>(() => {
+    if (!winsReadyRef.current) return { captured: 0, skipped: 0, overflow: 0 };
+    const built = buildWorkspaceClipboardPayload(
+      winsRef.current,
+      selectionRef.current.selectedWindowIds,
+    );
+    if (built.payload === null) {
+      return { captured: 0, skipped: built.skippedCount, overflow: built.overflowCount };
+    }
+    workspaceClipboardRef.current = built.payload;
+    // Cut/paste is a move: the FIRST paste restores the cut windows at their
+    // original geometry (offset 0); subsequent pastes offset like copy does.
+    workspaceClipboardPasteCountRef.current = 0;
+    for (const id of built.capturedWindowIds) closeWithTeardown(id);
+    return {
+      captured: built.capturedWindowIds.length,
+      skipped: built.skippedCount,
+      overflow: built.overflowCount,
+    };
+  }, [closeWithTeardown, selectionRef, winsReadyRef, winsRef]);
   const pasteCopiedWindows = useCallback<WorkspaceApi["pasteCopiedWindows"]>(() => {
-    if (!winsReadyRef.current || workspaceClipboardRef.current === null) return false;
+    const none = { pasted: 0, limitReached: false } as const;
+    if (!winsReadyRef.current || workspaceClipboardRef.current === null) return none;
     const vp = worldVP();
-    if (vp === null) return false;
+    if (vp === null) return none;
     const result = duplicateWorkspaceClipboardWindows({
       wins: winsRef.current,
       payload: workspaceClipboardRef.current,
@@ -2205,14 +2323,15 @@ export function useWorkspace(
       nowMs: Date.now(),
       pasteOffsetPx: WORKSPACE_CLIPBOARD_PASTE_OFFSET_PX * workspaceClipboardPasteCountRef.current,
     });
-    if (result === null) return false;
+    if (result === null) return none;
     if (result.limitReached) stableWindowLimitReached(MAX_WORKSPACE_WINDOWS);
-    if (result.pastedWindowIds.length === 0) return false;
+    if (result.pastedWindowIds.length === 0)
+      return { pasted: 0, limitReached: result.limitReached };
     zc.current = result.nextZ;
     workspaceClipboardPasteCountRef.current += 1;
     setWins(result.wins as AppWindow[]);
     setSelection(replaceWorkspaceSelection(result.wins, result.pastedWindowIds));
-    return true;
+    return { pasted: result.pastedWindowIds.length, limitReached: result.limitReached };
   }, [setWins, stableWindowLimitReached, winsReadyRef, winsRef, worldVP, zc]);
 
   // Component unmount must also drop the global listener.
@@ -2244,6 +2363,7 @@ export function useWorkspace(
       clearSelection,
       moveSelectedWindowsBy,
       copySelectedWindows,
+      cutSelectedWindows,
       pasteCopiedWindows,
       close: closeWithTeardown,
       minimize: mutations.minimize,
@@ -2291,6 +2411,7 @@ export function useWorkspace(
       clearSelection,
       moveSelectedWindowsBy,
       copySelectedWindows,
+      cutSelectedWindows,
       pasteCopiedWindows,
       updateConnBoundScope,
       currentView,

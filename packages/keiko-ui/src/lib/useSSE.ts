@@ -28,6 +28,22 @@ interface RunEventSubscriber {
 }
 
 const subscribersByRunId = new Map<string, Set<RunEventSubscriber>>();
+// User finding #2456 — the wake-up replay burst. The highest seq observed per subscribed run,
+// independent of any hook's own lastSeqRef, so a reopened shared stream (visibility hidden →
+// visible, or reconnect) can tell the server what it already has instead of re-downloading every
+// run's entire ring buffer just to discard it. Entries live exactly as long as the run has a
+// subscriber (deleted with the last unsubscribe in subscribeRunEvents' cleanup).
+const lastSeqByRunId = new Map<string, number>();
+// Sticky for the lifetime of one tracked session (cleared only when subscriberCount() returns to
+// zero, alongside sharedEventSource/lastSeqByRunId, in subscribeRunEvents' cleanup): once ANY
+// event has been delivered to a subscriber THIS session, every later (re)connect should name
+// every currently-subscribed run in `resume` — even one with no cursor of its own right now (e.g.
+// its last subscriber just unsubscribed and a fresh one re-subscribed before the next reconnect).
+// Gating on "at least one CURRENTLY-known cursor" instead would fall back to the plain,
+// no-`resume` URL in that gap, which is safe but reintroduces the exact
+// full-replay-of-every-run-on-the-server burst #2456 exists to remove for every OTHER run the
+// client no longer names.
+let everObservedEvent = false;
 let sharedEventSource: EventSource | null = null;
 let sharedEventSourceLive = false;
 let reconnectTimer: number | undefined;
@@ -57,6 +73,11 @@ function notifyAll(status: SseStatus, error: string | null): void {
 function notifyRun(event: HarnessEvent): void {
   const subscribers = subscribersByRunId.get(event.runId);
   if (subscribers === undefined) return;
+  everObservedEvent = true;
+  const known = lastSeqByRunId.get(event.runId);
+  if (known === undefined || event.seq > known) {
+    lastSeqByRunId.set(event.runId, event.seq);
+  }
   for (const subscriber of subscribers) {
     subscriber.onEvent(event);
   }
@@ -121,10 +142,34 @@ function removeVisibilityListenerIfIdle(): void {
   visibilityListenerInstalled = false;
 }
 
+// Marker for a subscribed run with no observed event yet. The server treats an unnamed run as
+// live-only, so a subscribed-but-uncursored run MUST still be named — otherwise its buffered
+// history is dropped instead of replayed (subscribing while hidden or inside a reconnect gap
+// reaches exactly that state). The marker asks for the full replay such a run needs.
+const RESUME_FULL_REPLAY = "*";
+
+// The stream URL for (re)connecting: once any event has ever been observed (`everObservedEvent`),
+// name EVERY currently-subscribed run in a `resume` parameter — `runId:seq` for a known cursor,
+// `runId:*` for a run not yet seen — so the server replays only unseen events without ever
+// withholding a subscribed run's history, AND treats every OTHER run it knows about as live-only
+// instead of replaying it needlessly. RunId encoding keeps a reserved ":" or "," inside a runId
+// from corrupting the pair framing. Before anything has ever been observed (true first load), the
+// plain URL keeps today's full-replay behavior — there is no cursor state worth naming yet.
+function runEventsUrl(): string {
+  if (!everObservedEvent) return RUN_EVENTS_URL;
+  const runIds = [...subscribersByRunId.keys()];
+  const cursors = runIds.map((runId) => {
+    const seq = lastSeqByRunId.get(runId);
+    const cursor = seq === undefined ? RESUME_FULL_REPLAY : String(seq);
+    return `${encodeURIComponent(runId)}:${cursor}`;
+  });
+  return `${RUN_EVENTS_URL}?resume=${cursors.join(",")}`;
+}
+
 function openSharedEventSource(): void {
   if (subscriberCount() === 0 || documentHidden() || sharedEventSource !== null) return;
   closeSharedEventSource();
-  sharedEventSource = createSameOriginApiEventSource(RUN_EVENTS_URL);
+  sharedEventSource = createSameOriginApiEventSource(runEventsUrl());
   if (sharedEventSource === null) return;
 
   sharedEventSource.onopen = () => {
@@ -175,10 +220,16 @@ function subscribeRunEvents(runId: string, subscriber: RunEventSubscriber): () =
     current?.delete(subscriber);
     if (current?.size === 0) {
       subscribersByRunId.delete(runId);
+      lastSeqByRunId.delete(runId);
     }
     if (subscriberCount() === 0) {
       clearReconnectTimer();
       closeSharedEventSource();
+      // The tracked session is over: nobody is subscribed to anything. The NEXT subscriber
+      // starts a genuinely fresh session, so `everObservedEvent` must not carry a stale "we've
+      // seen traffic before" signal into it (see its declaration for why sticky-within-a-session
+      // is otherwise the correct behaviour).
+      everObservedEvent = false;
     }
     removeVisibilityListenerIfIdle();
   };

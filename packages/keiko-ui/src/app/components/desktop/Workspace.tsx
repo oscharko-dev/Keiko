@@ -14,11 +14,14 @@ import { useTranslate, type I18nTranslate } from "@/lib/i18n";
 import { Icons } from "./Icons";
 import {
   acquireGrabbingBodyStyle,
+  hasActiveTextSelection,
   isCanvasPanPointer,
+  isEmbeddedClipboardSurfaceTarget,
   isHandToolKeyIgnoredTarget,
   isInteractiveSurfaceTarget,
   isPrimaryActivationPointer,
   isTextEntryTarget,
+  isTextInputTarget,
   workspaceInteractionLocked,
 } from "./interactionGuards";
 import { ConnectionsLayer } from "./windows/ConnectionsLayer";
@@ -28,7 +31,10 @@ import { canConnect, relLabel } from "./windows/connectionUtils";
 import type { AppWindow, ConnState, ConnectingState, Connection, SnapPrev } from "./windows/types";
 import { MAX_ZOOM, MIN_ZOOM } from "./hooks/useWorkspace";
 import { useLinkRevision } from "./hooks/useLinkRevision";
-import type { UseWorkspaceResult } from "./hooks/useWorkspace.types";
+import type {
+  UseWorkspaceResult,
+  WorkspaceClipboardCaptureResult,
+} from "./hooks/useWorkspace.types";
 import {
   LOCAL_KNOWLEDGE_CONNECTOR_DROP_EVENT,
   parseLocalKnowledgeConnectorDrag,
@@ -56,6 +62,7 @@ import {
 import { isWorkspaceWindowSelectable } from "./hooks/workspaceActions";
 import { syncPdfCitationPreviewWindowRegistry } from "./widgets/cards/pdf-citation-preview-session";
 import selectionStyles from "./WorkspaceSelection.module.css";
+import clipboardStatusStyles from "./WorkspaceClipboardStatus.module.css";
 
 // PascalCase aliases so the JSX tag itself signals "component", not member access (S6770).
 const ZoomOutIcon = Icons.zoomOut;
@@ -460,40 +467,180 @@ function tryHandleWorkspaceEscapeShortcut(
   return false;
 }
 
+function describeClipboardCaptureBase(
+  t: I18nTranslate,
+  action: "copy" | "cut",
+  captured: number,
+): string {
+  if (action === "copy") {
+    return captured === 1
+      ? t("workspace.clipboard.copied.one")
+      : t("workspace.clipboard.copied.many", { count: captured });
+  }
+  return captured === 1
+    ? t("workspace.clipboard.cut.one")
+    : t("workspace.clipboard.cut.many", { count: captured });
+}
+
+// Issue #2150 follow-up — every copy/cut outcome gets a user-visible reason.
+// ADR-0123 D5 skips windows that cannot be duplicated (singleton, keyed, and
+// minimized/maximized descriptors); before this, that skip was a silent no-op
+// indistinguishable from a broken feature.
+// The reason clause for the windows a capture did not take. `skipped` and
+// `overflow` are separate counts on purpose: a window that CANNOT be duplicated
+// and one that merely exceeded the per-copy cap need different wording, because
+// calling an over-cap window "not duplicable" states something untrue.
+function describeClipboardRemainder(
+  t: I18nTranslate,
+  result: WorkspaceClipboardCaptureResult,
+): string | null {
+  if (result.overflow > 0) {
+    return result.overflow === 1
+      ? t("workspace.clipboard.overflow.one")
+      : t("workspace.clipboard.overflow.many", { count: result.overflow });
+  }
+  if (result.skipped === 0) return null;
+  return result.skipped === 1
+    ? t("workspace.clipboard.skipped.one")
+    : t("workspace.clipboard.skipped.many", { count: result.skipped });
+}
+
+function describeClipboardCapture(
+  t: I18nTranslate,
+  action: "copy" | "cut",
+  result: WorkspaceClipboardCaptureResult,
+): string | null {
+  if (result.captured === 0) {
+    return result.skipped > 0 ? t("workspace.clipboard.noneEligible") : null;
+  }
+  const base = describeClipboardCaptureBase(t, action, result.captured);
+  const remainder = describeClipboardRemainder(t, result);
+  return remainder === null ? base : `${base} · ${remainder}`;
+}
+
+interface WorkspaceClipboardDispatch {
+  readonly acted: boolean;
+  readonly announcement: string | null;
+}
+
+function dispatchWorkspaceClipboardCommand(
+  key: "c" | "v" | "x",
+  api: UseWorkspaceResult["api"],
+  t: I18nTranslate,
+): WorkspaceClipboardDispatch {
+  if (key === "v") {
+    const result = api.pasteCopiedWindows();
+    if (result.pasted === 0) return { acted: false, announcement: null };
+    const announcement =
+      result.pasted === 1
+        ? t("workspace.clipboard.pasted.one")
+        : t("workspace.clipboard.pasted.many", { count: result.pasted });
+    return { acted: true, announcement };
+  }
+  const result = key === "c" ? api.copySelectedWindows() : api.cutSelectedWindows();
+  return {
+    acted: result.captured > 0,
+    announcement: describeClipboardCapture(t, key === "c" ? "copy" : "cut", result),
+  };
+}
+
+// The workspace clipboard command this event asks for, or null when the event
+// is not one (wrong modifiers, another key, or a key whose native clipboard
+// behavior must win).
+function workspaceClipboardCommandKey(
+  event: ReactKeyboardEvent<HTMLElement>,
+): "c" | "v" | "x" | null {
+  if (!(event.metaKey || event.ctrlKey) || event.altKey || event.shiftKey) return null;
+  const key = event.key.toLowerCase();
+  if (key !== "c" && key !== "v" && key !== "x") return null;
+  // Issue #2710 — an active text selection always wins: the user is copying
+  // text they selected, so the native copy/cut must reach the OS clipboard.
+  if (key !== "v" && hasActiveTextSelection()) return null;
+  return key;
+}
+
 function tryHandleWorkspaceClipboardShortcut(
   event: ReactKeyboardEvent<HTMLElement>,
   api: UseWorkspaceResult["api"],
+  t: I18nTranslate,
+  announce: (message: string) => void,
 ): boolean {
-  if (!(event.metaKey || event.ctrlKey) || event.altKey || event.shiftKey) return false;
-  const key = event.key.toLowerCase();
-  if (key !== "c" && key !== "v") return false;
-  const handled = key === "c" ? api.copySelectedWindows() : api.pasteCopiedWindows();
-  if (handled) {
+  const key = workspaceClipboardCommandKey(event);
+  if (key === null) return false;
+  const { acted, announcement } = dispatchWorkspaceClipboardCommand(key, api, t);
+  if (announcement !== null) announce(announcement);
+  if (acted) {
     event.preventDefault();
     event.stopPropagation();
   }
   return true;
 }
 
-// Issue #2150 — selection commands (Escape/Ctrl+C/Ctrl+V) must fire from
+// Issue #2150 — selection commands (Escape/Ctrl+C/Ctrl+X/Ctrl+V) must fire from
 // anywhere in the workspace subtree, not only when the bare <main> surface
 // itself is focused: completing a marquee-select calls preventDefault() on
 // pointerdown (Workspace.tsx startMarqueeSelection), which suppresses the
 // browser's default focus-on-mousedown onto <main>, and clicking a window
 // focuses that window's own section instead. Requiring literal
 // target === currentTarget therefore made Ctrl+C/Ctrl+V no-op after the
-// exact gestures users perform to build a selection. Per ADR-0123 D6, the
-// only thing these commands must not steal is an embedded editor/terminal/
-// text-input's own clipboard behavior — isTextEntryTarget is the existing
-// guard for that, so it (not exact-target) is the right gate here.
+// exact gestures users perform to build a selection.
+// Issue #2710 — the two commands need different gates, because ADR-0123 D6 asks
+// two different things of them. Clipboard commands must not steal an embedded
+// surface's own copy/cut/paste, which D6 defines to include file trees and diff
+// viewers, so they use the broad isEmbeddedClipboardSurfaceTarget guard. Escape
+// only has to yield where the key itself already means something locally — a
+// control that consumes typed input — so it uses the narrow isTextInputTarget:
+// a read-only preview/diff pane is `data-text-selectable`, and gating Escape on
+// that would silently make clearing the selection unreachable there, which D6
+// forbids.
 function handleWorkspaceSelectionShortcut(
   event: ReactKeyboardEvent<HTMLElement>,
   selection: UseWorkspaceResult["selection"],
   api: UseWorkspaceResult["api"],
+  t: I18nTranslate,
+  announce: (message: string) => void,
 ): boolean {
-  if (workspaceInteractionLocked() || isTextEntryTarget(event.target)) return false;
+  if (workspaceInteractionLocked() || isTextInputTarget(event.target)) return false;
   if (tryHandleWorkspaceEscapeShortcut(event, selection, api)) return true;
-  return tryHandleWorkspaceClipboardShortcut(event, api);
+  if (isEmbeddedClipboardSurfaceTarget(event.target)) return false;
+  return tryHandleWorkspaceClipboardShortcut(event, api, t, announce);
+}
+
+const CLIPBOARD_STATUS_VISIBLE_MS = 6000;
+
+interface WorkspaceClipboardStatusState {
+  readonly message: string;
+  readonly nonce: number;
+}
+
+// Issue #2150 follow-up — visible, assistive-technology-announced outcome for
+// the selection clipboard commands. role="status" carries the aria-live
+// announcement; the visible pill answers the reported "pressed Ctrl+C and
+// nothing happened" experience.
+function WorkspaceClipboardStatusView({
+  status,
+}: {
+  readonly status: WorkspaceClipboardStatusState | null;
+}): ReactNode {
+  return (
+    <p
+      // The nonce is keyed here, not just carried in state: two consecutive
+      // identical announcements (e.g. "1 window copied" twice in a row) would
+      // otherwise leave the live region's text content unchanged, and a
+      // screen reader only re-announces on an actual DOM mutation — an
+      // unread `nonce` field does nothing on its own. Keying on it forces a
+      // fresh node every time, so the announcement always fires.
+      key={status?.nonce ?? 0}
+      className={clipboardStatusStyles["cmp-clipboard-status"]}
+      role="status"
+      aria-live="polite"
+      aria-atomic="true"
+      data-testid="workspace-clipboard-status"
+      data-visible={status === null ? "false" : "true"}
+    >
+      {status?.message ?? ""}
+    </p>
+  );
 }
 
 function describeSelectionStatus(t: I18nTranslate, selectedWindowCount: number): string {
@@ -695,6 +842,22 @@ export function Workspace({
   const [panning, setPanning] = useState(false);
   const [handTool, setHandTool] = useState(false);
   const [marquee, setMarquee] = useState<MarqueeSession | null>(null);
+  const [clipboardStatus, setClipboardStatus] = useState<WorkspaceClipboardStatusState | null>(
+    null,
+  );
+  const announceClipboardStatus = useCallback((message: string): void => {
+    // The nonce keeps aria-atomic re-announcing a repeated identical outcome.
+    setClipboardStatus((current) => ({ message, nonce: (current?.nonce ?? 0) + 1 }));
+  }, []);
+  useEffect(() => {
+    if (clipboardStatus === null) return undefined;
+    const timer = window.setTimeout(() => {
+      setClipboardStatus(null);
+    }, CLIPBOARD_STATUS_VISIBLE_MS);
+    return (): void => {
+      window.clearTimeout(timer);
+    };
+  }, [clipboardStatus]);
   const handToolRef = useRef(false);
   const settledZoom = useSettledZoom(view.zoom);
   const visibleWins = useMemo(
@@ -723,6 +886,16 @@ export function Workspace({
   ): void => {
     event.preventDefault();
     event.stopPropagation();
+    // Issue #2710 — preventDefault() above suppresses the browser's own
+    // collapse-selection-on-click default action, so a text selection left
+    // over from an earlier interaction (a file preview, a diff view, a chat
+    // bubble) would otherwise survive this gesture untouched. Starting a
+    // marquee is unambiguously a canvas action — onBgPointerDown only reaches
+    // here when the pointer is NOT over an interactive/text surface — so any
+    // lingering selection is stale. Left alone, hasActiveTextSelection()
+    // would then misread it as "the user is copying selected text" and
+    // silently decline the very Ctrl+C the marquee was just built for.
+    window.getSelection()?.removeAllRanges();
     const target = event.currentTarget;
     target.setPointerCapture?.(event.pointerId);
     const startX = event.clientX - surfaceRect.left;
@@ -811,7 +984,7 @@ export function Workspace({
   }, []);
 
   const onSurfaceKeyDown = (event: ReactKeyboardEvent<HTMLElement>): void => {
-    if (handleWorkspaceSelectionShortcut(event, selection, api)) return;
+    if (handleWorkspaceSelectionShortcut(event, selection, api, t, announceClipboardStatus)) return;
     // WCAG 2.1.1 (WC-01): keyboard pan when the workspace surface itself is
     // focused. Guard event.target === event.currentTarget so arrow keys inside a
     // focused window child are not captured here (those are handled by WindowFrame).
@@ -1234,6 +1407,7 @@ export function Workspace({
       >
         {selectionStatusText}
       </p>
+      <WorkspaceClipboardStatusView status={clipboardStatus} />
       <WorkspaceConnectHint connecting={connecting} t={t} />
       <WorkspaceEmptyState empty={empty} onNewWindow={openPalette} />
 

@@ -231,6 +231,197 @@ describe("useSSE", () => {
     expect(view.result.current.events[499]?.seq).toBe(519);
   });
 
+  // User finding #2456 — the wake-up replay burst. Reopening the shared stream after a
+  // hidden→visible cycle names the runs still subscribed (with the last seq observed for each) in
+  // a `resume` query parameter, so the server replays only what the client has not seen instead of
+  // every run's entire ring buffer. RunIds are percent-encoded ("run 1" → "run%201") so a reserved
+  // character can never corrupt the comma/colon pair framing.
+  describe("resume cursors (user finding #2456)", () => {
+    function eventFor(runId: string, seq: number): string {
+      return JSON.stringify({
+        schemaVersion: "1",
+        runId,
+        fingerprint: `fp-${runId}`,
+        seq,
+        ts: seq,
+        type: "run:started",
+      });
+    }
+
+    function setVisibility(state: DocumentVisibilityState): void {
+      Object.defineProperty(document, "visibilityState", {
+        configurable: true,
+        get: (): DocumentVisibilityState => state,
+      });
+      document.dispatchEvent(new Event("visibilitychange"));
+    }
+
+    afterEach(() => {
+      Reflect.deleteProperty(document, "visibilityState");
+    });
+
+    it("opens the first connection with no resume parameter", () => {
+      vi.stubGlobal("EventSource", FakeEventSource);
+
+      const view = renderHook(() => useSSE("run 1"));
+
+      expect(FakeEventSource.instances[0]?.url).toBe("/api/runs/events");
+      view.unmount();
+    });
+
+    it("reopens after a hidden→visible cycle with cursors for the subscribed runs", () => {
+      vi.stubGlobal("EventSource", FakeEventSource);
+      const first = renderHook(() => useSSE("run 1"));
+      const second = renderHook(() => useSSE("run 2"));
+      const source = FakeEventSource.instances[0];
+      act(() => {
+        source?.emit(eventFor("run 1", 4));
+        source?.emit(eventFor("run 2", 7));
+      });
+
+      act(() => {
+        setVisibility("hidden");
+      });
+      expect(source?.close).toHaveBeenCalled();
+      act(() => {
+        setVisibility("visible");
+      });
+
+      expect(FakeEventSource.instances[1]?.url).toBe("/api/runs/events?resume=run%201:4,run%202:7");
+      first.unmount();
+      second.unmount();
+    });
+
+    it("names a subscribed run with no observed event for full replay, never live-only", () => {
+      // Under-delivery guard: a run subscribed but not yet seen (subscribed while hidden, or
+      // during a reconnect gap) has no cursor. Leaving it OUT of the parameter would make the
+      // server attach it live-only and its buffered history would be lost for good — the exact
+      // opposite of the burst this fix removes. It must be named with the full-replay marker.
+      vi.stubGlobal("EventSource", FakeEventSource);
+      const first = renderHook(() => useSSE("run 1"));
+      const source = FakeEventSource.instances[0];
+      act(() => {
+        source?.emit(eventFor("run 1", 4));
+      });
+      const second = renderHook(() => useSSE("run 2"));
+
+      act(() => {
+        setVisibility("hidden");
+      });
+      act(() => {
+        setVisibility("visible");
+      });
+
+      expect(FakeEventSource.instances[1]?.url).toBe("/api/runs/events?resume=run%201:4,run%202:*");
+      first.unmount();
+      second.unmount();
+    });
+
+    it("drops a run's cursor from the reopen URL once its last subscriber unsubscribed", () => {
+      vi.stubGlobal("EventSource", FakeEventSource);
+      const first = renderHook(() => useSSE("run 1"));
+      const second = renderHook(() => useSSE("run 2"));
+      const source = FakeEventSource.instances[0];
+      act(() => {
+        source?.emit(eventFor("run 1", 4));
+        source?.emit(eventFor("run 2", 7));
+      });
+      second.unmount();
+
+      act(() => {
+        setVisibility("hidden");
+      });
+      act(() => {
+        setVisibility("visible");
+      });
+
+      expect(FakeEventSource.instances[1]?.url).toBe("/api/runs/events?resume=run%201:4");
+      first.unmount();
+    });
+
+    it("never regresses the resume cursor when a later event arrives with a lower seq", () => {
+      // The buffered ring can replay/interleave during a reconnect, so notifyRun tracks the
+      // MAX seq observed, not simply the last one delivered. A naive "always overwrite" would
+      // shrink the cursor back down and cause the next reopen to re-replay events the client
+      // already rendered — the exact burst #2456 exists to remove, just re-introduced on the
+      // next reconnect instead of the first.
+      vi.stubGlobal("EventSource", FakeEventSource);
+      const first = renderHook(() => useSSE("run 1"));
+      const source = FakeEventSource.instances[0];
+      act(() => {
+        source?.emit(eventFor("run 1", 9));
+        source?.emit(eventFor("run 1", 3));
+      });
+
+      act(() => {
+        setVisibility("hidden");
+      });
+      act(() => {
+        setVisibility("visible");
+      });
+
+      expect(FakeEventSource.instances[1]?.url).toBe("/api/runs/events?resume=run%201:9");
+      first.unmount();
+    });
+
+    it("does not resurrect a stale cursor for a run re-subscribed after its last unsubscribe", () => {
+      // "drops a run's cursor from the reopen URL" above only shows the unsubscribed run
+      // disappearing from the resume parameter, which the runIds-from-subscribersByRunId
+      // computation would do even without lastSeqByRunId.delete(runId) in the unsubscribe
+      // cleanup — that line is otherwise untested. This proves it's load-bearing: without it,
+      // re-subscribing to the SAME runId while the shared connection stays open (a second run
+      // keeps the subscriber count above zero) would resume from the seq the FIRST subscription
+      // observed, silently skipping whatever the server buffered in between.
+      vi.stubGlobal("EventSource", FakeEventSource);
+      const keepAlive = renderHook(() => useSSE("run 2"));
+      const firstSubscription = renderHook(() => useSSE("run 1"));
+      const source = FakeEventSource.instances[0];
+      act(() => {
+        // "run 2" gets a real cursor too, so the reopen still takes the resume path
+        // (runEventsUrl falls back to the plain, cursor-free URL only when NO
+        // subscribed run has any known cursor at all).
+        source?.emit(eventFor("run 2", 11));
+        source?.emit(eventFor("run 1", 4));
+      });
+      firstSubscription.unmount();
+
+      const secondSubscription = renderHook(() => useSSE("run 1"));
+      // No new "run 1" event observed by this fresh subscription.
+
+      act(() => {
+        setVisibility("hidden");
+      });
+      act(() => {
+        setVisibility("visible");
+      });
+
+      expect(FakeEventSource.instances[1]?.url).toBe(
+        "/api/runs/events?resume=run%202:11,run%201:*",
+      );
+      keepAlive.unmount();
+      secondSubscription.unmount();
+    });
+
+    it("starts a fresh, resume-free session once every subscriber has gone and a new one arrives", () => {
+      // The "everObservedEvent" gate is deliberately sticky WITHIN a session so a run losing and
+      // regaining its subscriber doesn't fall back to the plain (safe but noisier) URL — but once
+      // the LAST subscriber anywhere unmounts, nobody is tracking anything, and that stickiness
+      // must not leak into an unrelated later session that has never seen an event of its own.
+      vi.stubGlobal("EventSource", FakeEventSource);
+      const first = renderHook(() => useSSE("run 1"));
+      const source = FakeEventSource.instances[0];
+      act(() => {
+        source?.emit(eventFor("run 1", 4));
+      });
+      first.unmount();
+
+      const second = renderHook(() => useSSE("run 1"));
+
+      expect(FakeEventSource.instances[1]?.url).toBe("/api/runs/events");
+      second.unmount();
+    });
+  });
+
   // Wave 5 of epic #3233 (g6): every EventSource.onerror handler reports a client diagnostic
   // carrying the observed readyState and a closed reason label.
   it("reports a client diagnostic with readyState and a reason label on stream error", () => {

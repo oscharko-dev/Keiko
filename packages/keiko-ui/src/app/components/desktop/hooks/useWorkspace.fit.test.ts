@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   applyContentWheelZoom,
+  applyWheelZoomToWindows,
   fitWorkspaceViewToWindows,
   fitWindowToViewport,
   fitWindowsToViewport,
@@ -142,6 +143,51 @@ describe("content wheel zoom", () => {
       max: win.max,
       zoom: 1.2,
     });
+  });
+
+  // Issue #2402 — applyWheelZoomToWindows replaces the targeted window's slot
+  // with a new object, but every other window in the array must stay the SAME
+  // object it already was. WindowFrame is memoized per window; a sibling that
+  // gets a fresh object identity on every wheel tick of a NEIGHBORING window's
+  // content zoom would re-render for no reason, exactly the per-event cost
+  // #2402 exists to remove.
+  it("replaces only the targeted window's object and preserves every sibling's identity", () => {
+    const target = appWindow({ id: "target", zoom: 1 });
+    const siblingA = appWindow({ id: "sibling-a", zoom: 1 });
+    const siblingB = appWindow({ id: "sibling-b", zoom: 1 });
+    const wins = [siblingA, target, siblingB];
+
+    const next = applyWheelZoomToWindows(wins, "target", [-100]);
+
+    expect(next).not.toBe(wins);
+    expect(next?.find((w) => w.id === "sibling-a")).toBe(siblingA);
+    expect(next?.find((w) => w.id === "sibling-b")).toBe(siblingB);
+    const nextTarget = next?.find((w) => w.id === "target");
+    expect(nextTarget).not.toBe(target);
+    expect(nextTarget?.zoom).toBe(1.2);
+  });
+
+  it("returns the SAME array when the replayed deltas snap back to the same zoom", () => {
+    const target = appWindow({ id: "target", zoom: 1 });
+    const sibling = appWindow({ id: "sibling", zoom: 1 });
+    const wins = [target, sibling];
+
+    // deltaY 0 -> exp(0) = 1: the snapped zoom cannot move.
+    const next = applyWheelZoomToWindows(wins, "target", [0]);
+
+    expect(next).toBe(wins);
+  });
+
+  it("returns the SAME array unchanged when the targeted window id is not present", () => {
+    const wins = [appWindow({ id: "only" })];
+
+    const next = applyWheelZoomToWindows(wins, "missing", [-100]);
+
+    expect(next).toBe(wins);
+  });
+
+  it("returns null unchanged when there is no windows array yet", () => {
+    expect(applyWheelZoomToWindows(null, "any", [-100])).toBeNull();
   });
 });
 

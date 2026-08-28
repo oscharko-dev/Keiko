@@ -1,7 +1,9 @@
 import { afterEach, describe, expect, it } from "vitest";
 import {
   acquireGrabbingBodyStyle,
+  hasActiveTextSelection,
   isCanvasPanPointer,
+  isEmbeddedClipboardSurfaceTarget,
   isInteractiveControlTarget,
   isInteractiveSurfaceTarget,
   isTextEntryTarget,
@@ -66,6 +68,52 @@ describe("pointer guards", () => {
     expect(isInteractiveSurfaceTarget(target)).toBe(true);
     expect(isInteractiveControlTarget(target)).toBe(true);
     expect(isTextEntryTarget(target)).toBe(true);
+  });
+});
+
+describe("embedded clipboard surface guard (issue #2710 / ADR-0123 D6)", () => {
+  it("covers text-entry controls, selectable text surfaces, and file trees", () => {
+    const host = document.createElement("div");
+    host.innerHTML = [
+      "<input />",
+      '<pre data-text-selectable="true">diff text</pre>',
+      '<ul role="tree"><li role="treeitem"><span class="label">src</span></li></ul>',
+      "<p>plain window text</p>",
+    ].join("");
+
+    expect(isEmbeddedClipboardSurfaceTarget(host.querySelector("input"))).toBe(true);
+    expect(isEmbeddedClipboardSurfaceTarget(host.querySelector("pre"))).toBe(true);
+    // A descendant of a tree item (the click/focus target in the Files tree).
+    expect(isEmbeddedClipboardSurfaceTarget(host.querySelector(".label"))).toBe(true);
+    expect(isEmbeddedClipboardSurfaceTarget(host.querySelector("p"))).toBe(false);
+    expect(isEmbeddedClipboardSurfaceTarget(null)).toBe(false);
+  });
+});
+
+describe("hasActiveTextSelection (issue #2710)", () => {
+  afterEach(() => {
+    window.getSelection()?.removeAllRanges();
+  });
+
+  it("reports a live, non-collapsed selection and ignores a collapsed caret", () => {
+    const host = document.createElement("p");
+    host.textContent = "selectable message text";
+    document.body.appendChild(host);
+    try {
+      expect(hasActiveTextSelection()).toBe(false);
+
+      const range = document.createRange();
+      range.selectNodeContents(host);
+      const selection = window.getSelection();
+      selection?.removeAllRanges();
+      selection?.addRange(range);
+      expect(hasActiveTextSelection()).toBe(true);
+
+      selection?.collapseToStart();
+      expect(hasActiveTextSelection()).toBe(false);
+    } finally {
+      host.remove();
+    }
   });
 });
 

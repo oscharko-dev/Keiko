@@ -154,9 +154,15 @@ Pointer marquee is not the only selection path. Implementation issues must provi
 assistive-technology coverage where a reasonable workspace equivalent exists:
 
 - selected windows expose selected state through ARIA/data attributes that tests can assert,
-- clearing selection is keyboard reachable,
-- copy/paste commands do not intercept focused editor, terminal, text input, file tree, diff viewer,
-  or embedded widget clipboard behavior,
+- clearing selection is keyboard reachable — including from a read-only text surface such as a file
+  preview or diff pane, which accepts no keystrokes and therefore has no competing meaning for
+  Escape (issue #2710),
+- copy/cut/paste commands do not intercept focused editor, terminal, text input, file tree, diff
+  viewer, or embedded widget clipboard behavior, and they yield to an active native text selection
+  so the browser's own copy/cut reaches the OS clipboard (issue #2710),
+- every copy/cut/paste command reports its outcome through a polite live region, including the
+  reason a command captured nothing — a silent no-op is indistinguishable from a broken feature and
+  is not an acceptable outcome (issue #2150 follow-up),
 - focus remains visible and deterministic after selection, group drag, paste, close, minimize, and
   restore operations,
 - selected state is not conveyed by color alone.
@@ -184,6 +190,26 @@ Contract/package-surface changes additionally require
 `npm run check:package-surface:assembled`. The aggregate performs the complete artifact assembly
 and pruning sequence before the fail-closed surface check.
 Architecture-sensitive changes require `npm run arch:check` and `npm run arch:check:negative`.
+
+### D8 - Cut is copy's descriptor and eligibility, plus a move (Issue #2150 follow-up)
+
+`Ctrl+X` reuses D5's content-free descriptor builder and D2's eligibility rules verbatim; it is not
+a second capture mechanism. The windows it closes are exactly the windows it captured — an
+ineligible selected window is neither captured nor closed, so cut can never remove a window that
+paste could not bring back, and its skip reason is announced per D6. Closing a captured window goes
+through the same connection-teardown path ordinary `close` uses, so a cut window's chat/connector
+scope binding is released exactly as it would be on close; removing the window without that
+teardown would orphan a server-side grounding behind a vanished edge.
+
+Cut/paste is a move, not a duplication: the first paste after a cut restores the cut windows at
+their original geometry (zero offset). A second paste of the same clipboard duplicates with the
+ordinary offset, because the move has completed and any further paste is an explicit duplication
+request. Cut introduces no new authority, descriptor shape, or persistence.
+
+The capture outcome distinguishes two reasons a selected window did not make it into the clipboard:
+a window that cannot be duplicated at all (singleton, keyed, minimized, maximized) and one that
+merely exceeded the per-copy descriptor cap. They are counted and announced separately — reporting
+an over-cap window as "not duplicable" would state something untrue about the workspace.
 
 ## Consequences
 
