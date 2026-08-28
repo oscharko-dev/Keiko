@@ -13,8 +13,10 @@ import type { MemoryId, MemoryRecord } from "@oscharko-dev/keiko-contracts";
 import {
   acceptMemoryProposal,
   archiveMemory,
+  fetchCorrectionPredecessors,
   fetchMemoryReviewQueue,
   rejectMemoryProposal,
+  type AcceptMemoryProposalOptions,
   type MemoryReviewQueueResponse,
 } from "@/lib/memory-api";
 import { useTranslate, type I18nTranslate } from "@/lib/i18n";
@@ -115,13 +117,35 @@ function actionStatusMessage(action: ReviewAction, t: I18nTranslate): string {
 
 interface ReviewRowProps {
   readonly record: MemoryRecord;
+  readonly predecessors: readonly MemoryRecord[] | undefined;
   readonly busyAction: ReviewAction | null;
   readonly rowError: string | null;
-  readonly onAccept: (record: MemoryRecord, bodyOverride?: string) => void;
+  readonly onAccept: (record: MemoryRecord, options: AcceptMemoryProposalOptions) => void;
   readonly onReject: (record: MemoryRecord) => void;
   readonly onArchive: (record: MemoryRecord) => void;
   readonly onOpenDetail?: ((id: string) => void) | undefined;
   readonly t: I18nTranslate;
+}
+
+type CorrectionPredecessorsById = ReadonlyMap<string, readonly MemoryRecord[]>;
+
+async function loadCorrectionPredecessors(
+  records: readonly MemoryRecord[],
+  fetchImpl: typeof fetchCorrectionPredecessors,
+): Promise<CorrectionPredecessorsById> {
+  const corrections = records.filter(
+    (record) => record.status === "proposed" && record.type === "correction",
+  );
+  const entries = await Promise.all(
+    corrections.map(
+      async (record) => [record.id, (await fetchImpl(record.id)).candidates] as const,
+    ),
+  );
+  return new Map(entries);
+}
+
+function acceptsOptions(options: AcceptMemoryProposalOptions): boolean {
+  return options.bodyOverride !== undefined || options.predecessorId !== undefined;
 }
 
 // ---------------------------------------------------------------------------
@@ -209,6 +233,42 @@ function RowError({ rowError }: { readonly rowError: string | null }): ReactNode
   );
 }
 
+function CorrectionPredecessorSelector({
+  candidates,
+  selectedId,
+  onSelect,
+  t,
+}: {
+  readonly candidates: readonly MemoryRecord[] | undefined;
+  readonly selectedId: MemoryId | undefined;
+  readonly onSelect: (id: MemoryId | undefined) => void;
+  readonly t: I18nTranslate;
+}): ReactNode {
+  if (candidates === undefined || candidates.length < 2) return null;
+  return (
+    <label style={{ display: "grid", gap: "var(--space-1)" }}>
+      {t("memoria.correctionPredecessor")}
+      <select
+        className="lk-input"
+        value={selectedId ?? ""}
+        onChange={(event) => {
+          const selected = candidates.find(
+            (candidate) => candidate.id === event.currentTarget.value,
+          );
+          onSelect(selected?.id);
+        }}
+      >
+        <option value="">{t("memoria.selectCorrectionPredecessor")}</option>
+        {candidates.map((candidate) => (
+          <option key={candidate.id} value={candidate.id}>
+            {candidate.body.slice(0, 80)} ({candidate.id})
+          </option>
+        ))}
+      </select>
+    </label>
+  );
+}
+
 // ---------------------------------------------------------------------------
 // ReviewRowActions
 // ---------------------------------------------------------------------------
@@ -264,7 +324,7 @@ function ReviewRowActions({
   readonly record: MemoryRecord;
   readonly busyAction: ReviewAction | null;
   readonly labelId: string;
-  readonly onAccept: (record: MemoryRecord) => void;
+  readonly onAccept: () => void;
   readonly onReject: (record: MemoryRecord) => void;
   readonly onArchive: (record: MemoryRecord) => void;
   readonly editing: boolean;
@@ -285,7 +345,7 @@ function ReviewRowActions({
           isBusy={busyAction === "accept"}
           busyLabel={t("memoria.approving")}
           idleLabel={editing ? t("memoria.approveEditedProposal") : t("memoria.approve")}
-          onClick={() => onAccept(record)}
+          onClick={onAccept}
         />
         <RowActionButton
           variant="ghost"
@@ -354,6 +414,7 @@ function ReviewRowActions({
 
 function ReviewRow({
   record,
+  predecessors,
   busyAction,
   rowError,
   onAccept,
@@ -364,6 +425,7 @@ function ReviewRow({
 }: ReviewRowProps): ReactNode {
   const [editing, setEditing] = useState(false);
   const [draftBody, setDraftBody] = useState(record.body);
+  const [predecessorId, setPredecessorId] = useState<MemoryId | undefined>();
   const labelId = `memory-review-body-${record.id}`;
   const editorId = `memory-review-editor-${record.id}`;
   const detailLinkLabel = t("memoria.viewDetailsFor", {
@@ -394,6 +456,12 @@ function ReviewRow({
               {record.body}
             </p>
           )}
+          <CorrectionPredecessorSelector
+            candidates={record.type === "correction" ? predecessors : undefined}
+            selectedId={predecessorId}
+            onSelect={setPredecessorId}
+            t={t}
+          />
           <div className="mc-row-meta">
             <span className="mc-row-type">{typeLabel(record.type, t)}</span>
             <span className="mc-row-scope">{scopeLabel(record.scope.kind, t)}</span>
@@ -426,7 +494,12 @@ function ReviewRow({
           record={record}
           busyAction={busyAction}
           labelId={labelId}
-          onAccept={(row) => onAccept(row, editing ? draftBody : undefined)}
+          onAccept={() =>
+            onAccept(record, {
+              ...(editing ? { bodyOverride: draftBody } : {}),
+              ...(predecessorId === undefined ? {} : { predecessorId }),
+            })
+          }
           onReject={onReject}
           onArchive={onArchive}
           editing={editing}
@@ -444,6 +517,7 @@ function ReviewRow({
 
 interface ReviewQueueProps {
   readonly fetchQueueImpl?: typeof fetchMemoryReviewQueue;
+  readonly fetchCorrectionPredecessorsImpl?: typeof fetchCorrectionPredecessors;
   readonly acceptImpl?: typeof acceptMemoryProposal;
   readonly rejectImpl?: typeof rejectMemoryProposal;
   readonly archiveImpl?: typeof archiveMemory;
@@ -453,6 +527,7 @@ interface ReviewQueueProps {
 
 export function ReviewQueue({
   fetchQueueImpl = fetchMemoryReviewQueue,
+  fetchCorrectionPredecessorsImpl = fetchCorrectionPredecessors,
   acceptImpl = acceptMemoryProposal,
   rejectImpl = rejectMemoryProposal,
   archiveImpl = archiveMemory,
@@ -461,6 +536,9 @@ export function ReviewQueue({
 }: ReviewQueueProps): ReactNode {
   const t = useTranslate();
   const [records, setRecords] = useState<readonly MemoryRecord[]>([]);
+  const [predecessorsById, setPredecessorsById] = useState<CorrectionPredecessorsById>(
+    () => new Map(),
+  );
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [busyById, setBusyById] = useState<Partial<Record<string, ReviewAction>>>({});
@@ -479,7 +557,12 @@ export function ReviewQueue({
     setError(null);
     try {
       const res: MemoryReviewQueueResponse = await fetchQueueImpl();
+      const predecessors = await loadCorrectionPredecessors(
+        res.memories,
+        fetchCorrectionPredecessorsImpl,
+      );
       setRecords(res.memories);
+      setPredecessorsById(predecessors);
       setBusyById({});
       setRowErrorsById({});
     } catch (err) {
@@ -487,7 +570,7 @@ export function ReviewQueue({
     } finally {
       setLoading(false);
     }
-  }, [fetchQueueImpl]);
+  }, [fetchCorrectionPredecessorsImpl, fetchQueueImpl]);
 
   useEffect(() => {
     void load();
@@ -515,6 +598,11 @@ export function ReviewQueue({
       const neighbor = records[idx + 1] ?? records[idx - 1];
       pendingFocusRef.current = neighbor !== undefined ? neighbor.id : "";
       setRecords((prev) => prev.filter((r) => r.id !== id));
+      setPredecessorsById((prev) => {
+        const next = new Map(prev);
+        next.delete(id);
+        return next;
+      });
       clearRowState(id);
     },
     [records, clearRowState],
@@ -540,7 +628,7 @@ export function ReviewQueue({
     async (
       record: MemoryRecord,
       action: "accept" | "reject" | "archive",
-      bodyOverride?: string,
+      acceptOptions: AcceptMemoryProposalOptions = {},
     ): Promise<void> => {
       const id = record.id as MemoryId;
       setBusyById((prev) => ({ ...prev, [id]: action }));
@@ -552,10 +640,10 @@ export function ReviewQueue({
 
       try {
         if (action === "accept") {
-          if (bodyOverride === undefined) {
+          if (!acceptsOptions(acceptOptions)) {
             await acceptImpl(id);
           } else {
-            await acceptImpl(id, { bodyOverride });
+            await acceptImpl(id, acceptOptions);
           }
         } else if (action === "archive") {
           await archiveImpl(
@@ -643,10 +731,11 @@ export function ReviewQueue({
           <ReviewRow
             key={record.id}
             record={record}
+            predecessors={predecessorsById.get(record.id)}
             busyAction={busyById[record.id] ?? null}
             rowError={rowErrorsById[record.id] ?? null}
-            onAccept={(row, bodyOverride) => {
-              void runRowAction(row, "accept", bodyOverride);
+            onAccept={(row, options) => {
+              void runRowAction(row, "accept", options);
             }}
             onReject={(row) => {
               void runRowAction(row, "reject");

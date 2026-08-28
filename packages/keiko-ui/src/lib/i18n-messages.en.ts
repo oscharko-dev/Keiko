@@ -748,6 +748,8 @@ export const EN_MESSAGES = {
   "memoria.cancelEdit": "Cancel edit",
   "memoria.proposalText": "Proposal text",
   "memoria.approveEditedProposal": "Approve edited proposal",
+  "memoria.correctionPredecessor": "Memory being corrected",
+  "memoria.selectCorrectionPredecessor": "Select the memory to supersede",
   "memoria.reject": "Reject",
   "memoria.rejecting": "Rejecting...",
   "memoria.archiveConflict": "Archive conflict",

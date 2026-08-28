@@ -72,6 +72,7 @@ import {
   handleCorrectMemory,
   handleResolveMemoryConflict,
   handleAcceptMemoryProposal,
+  handleGetCorrectionPredecessors,
   handleRejectMemoryProposal,
 } from "./memory-handlers.js";
 import {
@@ -1198,6 +1199,11 @@ export const API_ROUTES: readonly RouteDefinition[] = [
   { method: "POST", pattern: "/api/memory/:id/forget", handler: handleForgetMemory },
   { method: "DELETE", pattern: "/api/memory/:id", handler: handleDeleteMemory },
   { method: "POST", pattern: "/api/memory/:id/correct", handler: handleCorrectMemory },
+  {
+    method: "GET",
+    pattern: "/api/memory/proposals/:id/correction-predecessors",
+    handler: handleGetCorrectionPredecessors,
+  },
   {
     method: "POST",
     pattern: "/api/memory/proposals/:id/accept",

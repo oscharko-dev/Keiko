@@ -168,6 +168,45 @@ describe("MemoriaViva browser-tier flows", () => {
     });
   });
 
+  it("requires the reviewer to select an ambiguous correction predecessor", async () => {
+    const user = userEvent.setup();
+    const correction = makeMemory({
+      id: "mem-browser-correction" as MemoryId,
+      type: "correction",
+      body: "Release hardening uses vitest.",
+      status: "proposed",
+    });
+    const first = makeMemory({
+      id: "mem-browser-predecessor-1" as MemoryId,
+      body: "Release hardening uses jest.",
+    });
+    const second = makeMemory({
+      id: "mem-browser-predecessor-2" as MemoryId,
+      body: "Release hardening uses tap.",
+    });
+    const acceptImpl = vi.fn().mockResolvedValue({ memory: { ...correction, status: "accepted" } });
+
+    render(
+      <ReviewQueue
+        fetchQueueImpl={vi.fn().mockResolvedValue(queueResponse([correction]))}
+        fetchCorrectionPredecessorsImpl={vi.fn().mockResolvedValue({ candidates: [first, second] })}
+        acceptImpl={acceptImpl}
+      />,
+    );
+
+    await user.selectOptions(
+      await screen.findByLabelText("Memory being corrected"),
+      "mem-browser-predecessor-1",
+    );
+    await user.click(screen.getByRole("button", { name: "Approve" }));
+
+    await waitFor(() => {
+      expect(acceptImpl).toHaveBeenCalledWith("mem-browser-correction", {
+        predecessorId: "mem-browser-predecessor-1",
+      });
+    });
+  });
+
   it("covers edit, correction, and deletion controls without local file edits", async () => {
     const user = userEvent.setup();
     const record = makeMemory();

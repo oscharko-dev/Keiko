@@ -41,6 +41,7 @@ import {
   handleEditMemory,
   handleForgetMemories,
   handleForgetMemory,
+  handleGetCorrectionPredecessors,
   handleGetMemory,
   handleListMemories,
   handleListMemoryTombstones,
@@ -922,7 +923,7 @@ describe("memory handlers", () => {
     });
   });
 
-  it("creates a correction proposal with a provenance-preserving supersession edge", async () => {
+  it("creates a correction proposal with a provenance-preserving predecessor binding", async () => {
     const vault = makeVault();
     const evidenceStore = createInMemoryEvidenceStore();
     vault.insertMemory(makeMemory("memory-correct-1", "Prefer yarn for package installs."));
@@ -946,7 +947,7 @@ describe("memory handlers", () => {
 
     const edges = vault.listOutgoingEdges(memoryId("memory-correct-1"));
     expect(edges).toHaveLength(1);
-    expect(edges[0]?.kind).toBe("supersedes");
+    expect(edges[0]?.kind).toBe("corrects");
     expect(edges[0]?.fromMemoryId).toBe(memoryId("memory-correct-1"));
     expect(edges[0]?.toMemoryId).toBe(correction.id);
     expect(edges[0]?.provenanceSummary).toBe("user-issued correction");
@@ -986,6 +987,11 @@ describe("memory handlers", () => {
     // "what did we believe as of T" is answerable and it drops out of default retrieval.
     expect(superseded?.validity.validUntil).toBeGreaterThan(superseded?.validity.validFrom ?? 0);
     expect(vault.getMemory(correction.id)?.status).toBe("accepted");
+    expect(
+      vault
+        .listOutgoingEdges(memoryId("memory-correct-accept"))
+        .some((edge) => edge.kind === "supersedes" && edge.toMemoryId === correction.id),
+    ).toBe(true);
     // The replacement's window stays OPEN (the current belief).
     expect(vault.getMemory(correction.id)?.validity.validUntil).toBeUndefined();
     expect(vault.getMemory(correction.id)?.type).toBe("preference");
@@ -1004,6 +1010,41 @@ describe("memory handlers", () => {
     const persistedAudit = JSON.stringify(events);
     expect(persistedAudit).not.toContain("Prefer yarn");
     expect(persistedAudit).not.toContain("Prefer npm ci");
+  });
+
+  it("returns the bound predecessor to the authorized review surface", () => {
+    const vault = makeVault();
+    vault.insertMemory(makeMemory("memory-correction-candidate", "Prefer yarn."));
+    const correction = vault.insertMemory(
+      makeMemory("memory-correction-proposal", "Prefer npm ci.", {
+        type: "correction",
+        status: "proposed",
+      }),
+    );
+    vault.insertEdge({
+      id: "memory-correction-binding" as MemoryEdgeId,
+      schemaVersion: "1",
+      fromMemoryId: memoryId("memory-correction-candidate"),
+      toMemoryId: correction.id,
+      kind: "corrects",
+      createdAt: correction.createdAt,
+    });
+
+    const result = handleGetCorrectionPredecessors(
+      makeCtx(
+        `/api/memory/proposals/${correction.id}/correction-predecessors`,
+        {},
+        {
+          id: correction.id,
+        },
+      ),
+      makeDeps({ memoryVault: vault }),
+    );
+
+    expect(result.status).toBe(200);
+    expect(asJson(result)).toMatchObject({
+      candidates: [{ id: "memory-correction-candidate", body: "Prefer yarn." }],
+    });
   });
 
   it("does not accept a correction when the original can no longer be superseded", async () => {
@@ -1026,9 +1067,103 @@ describe("memory handlers", () => {
       makeDeps({ memoryVault: vault }),
     );
 
-    expect(acceptResult.status).toBe(400);
+    expect(acceptResult.status).toBe(409);
     expect(vault.getMemory(correction.id)?.status).toBe("proposed");
     expect(vault.getMemory(memoryId("memory-correct-archived"))?.status).toBe("archived");
+  });
+
+  it("fails closed when a bound predecessor has already been superseded", async () => {
+    const vault = makeVault();
+    vault.insertMemory(
+      makeMemory("memory-correct-superseded", "Prefer yarn.", { status: "superseded" }),
+    );
+    const correction = vault.insertMemory(
+      makeMemory("memory-correct-superseded-proposal", "Prefer npm ci.", {
+        type: "correction",
+        status: "proposed",
+      }),
+    );
+    vault.insertEdge({
+      id: "memory-correct-superseded-binding" as MemoryEdgeId,
+      schemaVersion: "1",
+      fromMemoryId: memoryId("memory-correct-superseded"),
+      toMemoryId: correction.id,
+      kind: "corrects",
+      createdAt: correction.createdAt,
+    });
+
+    const result = await handleAcceptMemoryProposal(
+      makeCtx(`/api/memory/proposals/${correction.id}/accept`, {}, { id: correction.id }),
+      makeDeps({ memoryVault: vault }),
+    );
+
+    expect(result.status).toBe(409);
+    expect((asJson(result).error as { code: string }).code).toBe(
+      "CORRECTION_PREDECESSOR_ALREADY_SUPERSEDED",
+    );
+    expect(vault.getMemory(correction.id)?.status).toBe("proposed");
+  });
+
+  it("fails closed when the caller loses authorization for a bound predecessor", async () => {
+    const vault = makeVault();
+    vault.insertMemory(makeMemory("memory-correct-forbidden", "Prefer yarn."));
+    const proposalResult = await handleCorrectMemory(
+      makeCtx(
+        "/api/memory/memory-correct-forbidden/correct",
+        { body: "Prefer npm ci." },
+        { id: "memory-correct-forbidden" },
+      ),
+      makeDeps({ memoryVault: vault }),
+    );
+    const correction = asJson(proposalResult).correction as MemoryRecord;
+
+    const result = await handleAcceptMemoryProposal(
+      makeCtx(`/api/memory/proposals/${correction.id}/accept`, {}, { id: correction.id }),
+      makeDeps({
+        memoryVault: vault,
+        memoryAuthorization: {
+          reviewerId: reviewerId("scope-limited-reviewer"),
+          authorizedScopes: () => [{ kind: "workspace", workspaceId: workspaceId("allowed") }],
+        },
+      }),
+    );
+
+    expect(result.status).toBe(403);
+    expect((asJson(result).error as { code: string }).code).toBe(
+      "CORRECTION_PREDECESSOR_FORBIDDEN",
+    );
+    expect(vault.getMemory(correction.id)?.status).toBe("proposed");
+  });
+
+  it("fails closed when acceptance loses its predecessor version race", async () => {
+    const vault = makeVault();
+    const original = vault.insertMemory(makeMemory("memory-correct-race", "Prefer yarn."));
+    const proposalResult = await handleCorrectMemory(
+      makeCtx(
+        "/api/memory/memory-correct-race/correct",
+        { body: "Prefer npm ci." },
+        { id: "memory-correct-race" },
+      ),
+      makeDeps({ memoryVault: vault }),
+    );
+    const correction = asJson(proposalResult).correction as MemoryRecord;
+    const applyGraphMutation = vault.applyGraphMutation.bind(vault);
+    vi.spyOn(vault, "applyGraphMutation").mockImplementationOnce((mutation) => {
+      vault.updateMemory(original.id, { status: "archived" }, original.updatedAt + 1);
+      return applyGraphMutation(mutation);
+    });
+
+    const result = await handleAcceptMemoryProposal(
+      makeCtx(`/api/memory/proposals/${correction.id}/accept`, {}, { id: correction.id }),
+      makeDeps({ memoryVault: vault }),
+    );
+
+    expect(result.status).toBe(409);
+    expect((asJson(result).error as { code: string }).code).toBe("CORRECTION_PREDECESSOR_STALE");
+    expect(vault.getMemory(correction.id)?.status).toBe("proposed");
+    expect(vault.listOutgoingEdges(original.id).some((edge) => edge.kind === "supersedes")).toBe(
+      false,
+    );
   });
 
   it("forgets a memory only after acknowledgement and persists a body-free tombstone", async () => {
@@ -1965,7 +2100,7 @@ describe("emitServerDiagnostic on memory-handler storage failures (w4b)", () => 
     const { records, diagnostics } = recordingSink();
     const broken: MemoryVaultStore = {
       ...vault,
-      updateMemories: () => {
+      applyGraphMutation: () => {
         throw new MemoryStorageError("internal", "simulated accept failure");
       },
     };

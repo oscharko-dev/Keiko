@@ -59,6 +59,10 @@ export interface MemoryActionResponse {
   readonly memory: MemoryRecord;
 }
 
+export interface MemoryCorrectionPredecessorsResponse {
+  readonly candidates: readonly MemoryRecord[];
+}
+
 export type MemoryConsolidationJobState = MemoryConsolidationJobStateWire;
 export type MemoryConsolidationStaleReason = MemoryConsolidationStaleReasonWire;
 export type MemoryConsolidationStaleFlag = MemoryConsolidationStaleFlagWire;
@@ -466,6 +470,7 @@ export async function resolveMemoryConflict(
 // queue: MemoryId) and this HTTP boundary only needs the URL path segment, not the brand.
 export interface AcceptMemoryProposalOptions {
   readonly bodyOverride?: string;
+  readonly predecessorId?: MemoryId;
 }
 
 type MemoryActionFetch = (path: string, init?: RequestInit) => Promise<MemoryActionResponse>;
@@ -481,6 +486,13 @@ export async function acceptMemoryProposal(
     method: "POST",
     body: JSON.stringify(options),
   });
+}
+
+export async function fetchCorrectionPredecessors(
+  id: string,
+  fetchImpl = fetchJson<MemoryCorrectionPredecessorsResponse>,
+): Promise<MemoryCorrectionPredecessorsResponse> {
+  return fetchImpl(`/api/memory/proposals/${encodeURIComponent(id)}/correction-predecessors`);
 }
 
 export async function rejectMemoryProposal(

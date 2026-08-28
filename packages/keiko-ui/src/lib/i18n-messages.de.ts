@@ -766,6 +766,8 @@ export const DE_MESSAGES = {
   "memoria.cancelEdit": "Bearbeitung abbrechen",
   "memoria.proposalText": "Vorschlagstext",
   "memoria.approveEditedProposal": "Bearbeiteten Vorschlag akzeptieren",
+  "memoria.correctionPredecessor": "Zu korrigierende Erinnerung",
+  "memoria.selectCorrectionPredecessor": "Zu ersetzende Erinnerung auswählen",
   "memoria.reject": "Ablehnen",
   "memoria.rejecting": "Lehne ab…",
   "memoria.archiveConflict": "Konflikt archivieren",

@@ -915,10 +915,10 @@ describe("handleMemoryCaptureFromConversation", () => {
   // Issue #642 — candidate outcomes must be persisted as `proposed` memory records so the
   // shared /api/memory/proposals/:id/accept route can transition them to accepted.
   describe("issue #642 — candidate persistence enables proposal accept", () => {
-    function acceptCtx(id: string): RouteContext {
+    function acceptCtx(id: string, payload: unknown = {}): RouteContext {
       const socket = new Socket();
       return {
-        req: makeReq({}),
+        req: makeReq(payload),
         res: { socket } as unknown as RouteContext["res"],
         params: { id },
         url: new URL(`http://127.0.0.1/api/memory/proposals/${id}/accept`),
@@ -971,6 +971,108 @@ describe("handleMemoryCaptureFromConversation", () => {
       expect(accepted.status).toBe(200);
       const reloaded = vault.getMemory(proposalId as unknown as MemoryId);
       expect(reloaded?.status).toBe("accepted");
+    });
+
+    it("accepts a captured correction with its uniquely resolved predecessor atomically", async () => {
+      const vault = makeVault();
+      const deps = makeDeps({ memoryVault: vault });
+      const chat = registerChat(deps, "capture-correction-then-accept");
+      const original = insertAcceptedMemory(vault, {
+        body: "release hardening uses vitest",
+        scope: projectScope(chat.projectPath),
+      });
+      const captureResult = await handleMemoryCaptureFromConversation(
+        makeCtx({
+          text: "actually, release hardening uses vitest",
+          context: { projectPath: chat.projectPath, chatId: chat.chatId },
+        }),
+        deps,
+      );
+      const outcomes = asJson(captureResult).outcomes as readonly {
+        proposal?: { proposalId: string };
+      }[];
+      const proposalId = outcomes[0]?.proposal?.proposalId;
+      if (proposalId === undefined) {
+        throw new Error("expected correction capture to emit a candidate proposalId");
+      }
+
+      const accepted = await handleAcceptMemoryProposal(acceptCtx(proposalId), deps);
+
+      expect(accepted.status).toBe(200);
+      expect(vault.getMemory(original.id)?.status).toBe("superseded");
+      expect(vault.getMemory(proposalId as unknown as MemoryId)?.status).toBe("accepted");
+      expect(
+        vault
+          .listOutgoingEdges(original.id)
+          .some((edge) => edge.kind === "supersedes" && edge.toMemoryId === proposalId),
+      ).toBe(true);
+    });
+
+    it("keeps a captured correction reviewable until the reviewer selects an ambiguous predecessor", async () => {
+      const vault = makeVault();
+      const deps = makeDeps({ memoryVault: vault });
+      const chat = registerChat(deps, "capture-ambiguous-correction");
+      const scope = projectScope(chat.projectPath);
+      const first = insertAcceptedMemory(vault, { body: "release hardening uses vitest", scope });
+      insertAcceptedMemory(vault, { body: "release hardening uses vitest", scope });
+      const captureResult = await handleMemoryCaptureFromConversation(
+        makeCtx({
+          text: "correction: release hardening uses vitest",
+          context: { projectPath: chat.projectPath, chatId: chat.chatId },
+        }),
+        deps,
+      );
+      const outcomes = asJson(captureResult).outcomes as readonly {
+        proposal?: { proposalId: string };
+      }[];
+      const proposalId = outcomes[0]?.proposal?.proposalId;
+      if (proposalId === undefined) {
+        throw new Error("expected correction capture to emit a candidate proposalId");
+      }
+
+      const ambiguous = await handleAcceptMemoryProposal(acceptCtx(proposalId), deps);
+
+      expect(ambiguous.status).toBe(409);
+      expect((asJson(ambiguous).error as { code: string }).code).toBe(
+        "CORRECTION_PREDECESSOR_AMBIGUOUS",
+      );
+      expect(vault.getMemory(proposalId as unknown as MemoryId)?.status).toBe("proposed");
+
+      const accepted = await handleAcceptMemoryProposal(
+        acceptCtx(proposalId, { predecessorId: first.id }),
+        deps,
+      );
+
+      expect(accepted.status).toBe(200);
+      expect(vault.getMemory(first.id)?.status).toBe("superseded");
+    });
+
+    it("keeps a captured correction proposed when no eligible predecessor exists", async () => {
+      const vault = makeVault();
+      const deps = makeDeps({ memoryVault: vault });
+      const chat = registerChat(deps, "capture-unmatched-correction");
+      const captureResult = await handleMemoryCaptureFromConversation(
+        makeCtx({
+          text: "correction: release hardening uses vitest",
+          context: { projectPath: chat.projectPath, chatId: chat.chatId },
+        }),
+        deps,
+      );
+      const outcomes = asJson(captureResult).outcomes as readonly {
+        proposal?: { proposalId: string };
+      }[];
+      const proposalId = outcomes[0]?.proposal?.proposalId;
+      if (proposalId === undefined) {
+        throw new Error("expected correction capture to emit a candidate proposalId");
+      }
+
+      const result = await handleAcceptMemoryProposal(acceptCtx(proposalId), deps);
+
+      expect(result.status).toBe(409);
+      expect((asJson(result).error as { code: string }).code).toBe(
+        "CORRECTION_PREDECESSOR_MISSING",
+      );
+      expect(vault.getMemory(proposalId as unknown as MemoryId)?.status).toBe("proposed");
     });
 
     it("returns the persisted proposal id when an identical candidate is reused", async () => {
