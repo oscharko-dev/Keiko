@@ -790,13 +790,21 @@ export class CodingRuntimeOrchestrator {
 
   /**
    * The runtime process is gone. `cancelled` is legal only from the states an operator-initiated
-   * stop passes through (`starting`, `stopping`); from every live state the machine rejects it, so
-   * this ingest used to fail closed SILENTLY — no transition, no evidence record, no SSE frame —
-   * and a dead runtime kept presenting as `running` until the separate task-settlement wait gave
-   * up (OPEN_CODE_MAX_TURN_WAIT_MS, 30 minutes). A runtime that exits under a live run terminates
-   * that run, the same terminal projection a non-zero exit already produces through
-   * `failure-redacted`; the exit code itself reaches the operator diagnostic sink, not this
-   * content-free lifecycle projection.
+   * stop passes through — `stopping` here; from every other live state this ingest rejects it, so
+   * it used to fail closed SILENTLY — no transition, no evidence record, no SSE frame — and a dead
+   * runtime kept presenting as `running` until the separate task-settlement wait gave up
+   * (OPEN_CODE_MAX_TURN_WAIT_MS, 30 minutes). A runtime that exits under a live run terminates that
+   * run, the same terminal projection a non-zero exit already produces through `failure-redacted`;
+   * the exit code itself reaches the operator diagnostic sink, not this content-free lifecycle
+   * projection.
+   *
+   * The shared LEGAL_TRANSITIONS contract also legalizes `starting` -> `cancelled` (KEIKO-0618),
+   * but that edge is not reachable through this ingest path: `serial()`/`startFresh()` serialize
+   * every operation on `this.tail`, so `start()` has already advanced `current.state` past
+   * `starting` before any externally-ingested event can reach `ingestRuntimeStopped`. That edge is
+   * genuinely used elsewhere — runtimeAuthorityService.ts's `REAP_SETTLEMENT_TRANSITIONS["starting"]`,
+   * reached via `confirmReaped` when a Codex/OpenCode sidecar fails its startup handshake — so do
+   * not remove it from the shared contract on the strength of this call site alone.
    */
   private ingestRuntimeStopped(current: CodingRuntimeSnapshot): CodingRuntimeOrchestratorResult {
     if (isLegalCodingWorkbenchRuntimeTransition(current.state, "cancelled")) {

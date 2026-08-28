@@ -146,8 +146,7 @@ export interface CodingWorkbenchRuntimeAdapterPort {
 const LEGAL_TRANSITIONS: Readonly<
   Record<CodingWorkbenchRuntimeStateName, readonly CodingWorkbenchRuntimeStateName[]>
 > = deepFreeze({
-  unavailable: ["idle", "recovery-required"],
-  idle: ["starting", "unavailable", "recovery-required"],
+  idle: ["starting", "recovery-required"],
   starting: ["ready", "failed", "cancelled", "taken-over", "recovery-required"],
   ready: ["running", "stopping", "failed", "taken-over", "recovery-required"],
   running: [
@@ -166,7 +165,7 @@ const LEGAL_TRANSITIONS: Readonly<
   failed: ["idle", "recovery-required"],
   cancelled: ["idle", "recovery-required"],
   "taken-over": ["idle", "recovery-required"],
-  "recovery-required": ["idle", "unavailable"],
+  "recovery-required": ["idle"],
 } as const);
 
 function isNonEmpty(value: unknown): value is string {
@@ -432,7 +431,7 @@ function validateOptionalStateFields(value: Record<string, unknown>, errors: str
 
 function validateStateShape(value: Record<string, unknown>, errors: string[]): void {
   if (!isOneOf(value.state, CODING_WORKBENCH_RUNTIME_STATE_NAMES)) return;
-  const unbound = value.state === "idle" || value.state === "unavailable";
+  const unbound = value.state === "idle";
   const bindings = [
     value.runId,
     value.taskId,
@@ -454,13 +453,9 @@ function validateStateFailureShape(value: Record<string, unknown>, errors: strin
   const requiresFailure = value.state === "failed" || value.state === "recovery-required";
   if (requiresFailure && value.failureCode === undefined)
     errors.push("failure state requires failureCode");
-  const permitsFailure = [
-    "unavailable",
-    "failed",
-    "cancelled",
-    "taken-over",
-    "recovery-required",
-  ].includes(String(value.state));
+  const permitsFailure = ["failed", "cancelled", "taken-over", "recovery-required"].includes(
+    String(value.state),
+  );
   if (!permitsFailure && value.failureCode !== undefined)
     errors.push("state must not carry failureCode");
 }

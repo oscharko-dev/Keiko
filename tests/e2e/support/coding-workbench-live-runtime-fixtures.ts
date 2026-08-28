@@ -191,9 +191,7 @@ export function snapshot(fixture: RuntimeFixtureState): CodingWorkbenchRuntimeSn
     state,
     revision,
     updatedAt: AT,
-    ...(state === "idle" || state === "unavailable"
-      ? {}
-      : { runId: FIXTURE_RUN_ID, requestedMode: "governed-assist" }),
+    ...(state === "idle" ? {} : { runId: FIXTURE_RUN_ID, requestedMode: "governed-assist" }),
     ...(state === "awaiting-approval"
       ? {
           pendingPermission: {
@@ -223,8 +221,12 @@ export function activeWorkspace(): ActiveWorkspaceFixture {
 }
 
 export function createRuntimeFixture(options: LiveRuntimeFixtureOptions): RuntimeFixtureState {
+  // KEIKO-0539: the FSM state must never encode host qualification — no orchestrator code path
+  // can produce an "unavailable" state. Unavailability is modelled where the product actually
+  // reports it: through readiness (`runtimeAvailable` / `runtimeUnavailableReason`), wired at
+  // coding-workbench-live-runtime-routes.ts:221-226.
   return {
-    state: options.runtimeAvailable === false ? "unavailable" : (options.initialState ?? "idle"),
+    state: options.initialState ?? "idle",
     revision: 1,
     recoveryAcknowledged: false,
     streamConnections: 0,
