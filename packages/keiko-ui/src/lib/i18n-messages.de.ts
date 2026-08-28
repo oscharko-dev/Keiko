@@ -254,6 +254,23 @@ export const DE_MESSAGES = {
     "Der aktive Task-Workspace hat die erneute Verifizierung nicht bestanden. Binden Sie ihn neu, bevor Sie einen Coding-Lauf starten.",
   "workspace.selection.one": "1 Arbeitsbereichsfenster ausgewählt",
   "workspace.selection.many": "{count} Arbeitsbereichsfenster ausgewählt",
+  "workspace.clipboard.copied.one": "1 Fenster kopiert",
+  "workspace.clipboard.copied.many": "{count} Fenster kopiert",
+  "workspace.clipboard.cut.one": "1 Fenster ausgeschnitten",
+  "workspace.clipboard.cut.many": "{count} Fenster ausgeschnitten",
+  "workspace.clipboard.pasted.one": "1 Fenster eingefügt",
+  "workspace.clipboard.pasted.many": "{count} Fenster eingefügt",
+  "workspace.clipboard.skipped.one": "1 ausgewähltes Fenster übersprungen (nicht duplizierbar)",
+  "workspace.clipboard.skipped.many":
+    "{count} ausgewählte Fenster übersprungen (nicht duplizierbar)",
+  "workspace.clipboard.overflow.one": "1 weiteres Fenster passte nicht in diese Kopie",
+  "workspace.clipboard.overflow.many": "{count} weitere Fenster passten nicht in diese Kopie",
+  "workspace.clipboard.noSelection": "Wählen Sie zuerst ein oder mehrere Fenster aus",
+  "workspace.clipboard.nothingToPaste":
+    "Nichts zum Einfügen — kopieren oder schneiden Sie zuerst Fenster aus",
+  "workspace.clipboard.workspaceFull": "Der Arbeitsbereich hat keinen Platz für weitere Fenster",
+  "workspace.clipboard.noneEligible":
+    "Die ausgewählten Fenster können nicht dupliziert werden — Chat- und Einzelinstanz-Fenster sind ausgenommen",
   "workspace.window.selectedLabel": "{label} — ausgewählt",
   "workspace.surface": "Arbeitsbereich",
   "workspace.connectHint": "Klicke ein hervorgehobenes Fenster an - Esc bricht ab",

@@ -571,8 +571,10 @@ function useRegisterPdfCitationPreviewTarget(
   ]);
 }
 
-// Extracted from ChatBubbleImpl (SonarCloud S3776) — the message body: plain text while
-// streaming/for the user, otherwise safe markdown, plus the streaming caret.
+// Extracted from ChatBubbleImpl (SonarCloud S3776) — the message body: plain text
+// for the user, otherwise safe markdown, plus the streaming caret. A streaming
+// assistant turn takes the SAME safe-markdown path as a settled one (#2404,
+// #2783); only code-fence highlighting is deferred while tokens arrive.
 function ChatBubbleContentArea({
   message,
   isUser,

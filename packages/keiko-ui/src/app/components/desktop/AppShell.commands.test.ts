@@ -24,6 +24,7 @@ import {
 import type { AppWindow, Connection } from "./windows/types";
 import type { WorkspaceApi } from "./hooks/useWorkspace.types";
 import { DEFAULT_LOCALE, translate, type I18nTranslate } from "@/lib/i18n";
+import { cutResult } from "../../../test-utils/workspace-api-fixture";
 
 // The command labels are English here because "en" is the locale under test, not because the builder
 // hardcodes English: `buildAppShellCommands` REQUIRES a translate function, so a caller that
@@ -41,8 +42,9 @@ function fakeApi(): WorkspaceApi {
     toggleWindowSelection: vi.fn(),
     clearSelection: vi.fn(),
     moveSelectedWindowsBy: vi.fn(() => ({ dx: 0, dy: 0 })),
-    copySelectedWindows: vi.fn(() => false),
-    pasteCopiedWindows: vi.fn(() => false),
+    copySelectedWindows: vi.fn(() => ({ captured: 0, skipped: 0, overflow: 0 })),
+    cutSelectedWindows: vi.fn(() => cutResult({ captured: 0, skipped: 0, overflow: 0 })),
+    pasteCopiedWindows: vi.fn(() => ({ pasted: 0, limitReached: false })),
     close: vi.fn(),
     minimize: vi.fn(),
     restore: vi.fn(),

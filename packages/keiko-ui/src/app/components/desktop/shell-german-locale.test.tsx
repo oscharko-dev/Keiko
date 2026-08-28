@@ -7,7 +7,8 @@
 // literals in the command builder, and inline JSX text — none of which any locale switch could move.
 //
 // Each test asserts the GERMAN rendering, so it fails the moment a surface falls back to English.
-import { render, screen, waitFor } from "@testing-library/react";
+import { createRef } from "react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
@@ -25,8 +26,15 @@ import { buildUnifiedQuickAccessCommands } from "./quickAccessRegistry";
 import { Palette } from "./modals/Palette";
 import { NewWindowDialog } from "./modals/NewWindowDialog";
 import { UnifiedQuickAccessPalette } from "./modals/UnifiedQuickAccessPalette";
+import { Workspace } from "./Workspace";
 import { WIN_TYPES } from "./windows/WindowsRegistry";
 import type { WorkspaceApi } from "./hooks/useWorkspace.types";
+import type { UseWorkspaceResult } from "./hooks/useWorkspace.types";
+import { cutResult } from "../../../test-utils/workspace-api-fixture";
+
+vi.mock("./WorkspaceShader", () => ({
+  WorkspaceShader: (): null => null,
+}));
 
 vi.mock("@/lib/api", async () => {
   const actual = await vi.importActual<typeof import("@/lib/api")>("@/lib/api");
@@ -216,5 +224,134 @@ describe("Quick Access command palette under the German locale", () => {
       );
     });
     expect(screen.queryByText(/^Search unavailable for/)).not.toBeInTheDocument();
+  });
+});
+
+// Issue #2150 follow-up / #2710 — the copy/cut/paste outcome pill (Workspace.tsx
+// WorkspaceClipboardStatusView) reads its text through t(), same as every other
+// surface above; this pins it against the same silent-English-fallback failure
+// mode the rest of this suite guards.
+describe("Workspace clipboard status pill under the German locale", () => {
+  function clipboardApi(patch: Partial<WorkspaceApi> = {}): WorkspaceApi {
+    return {
+      add: vi.fn(() => null),
+      openEditorFile: vi.fn(() => ({ ok: false as const, message: "Unable to open editor." })),
+      toggleTool: vi.fn(),
+      focus: vi.fn(),
+      currentSelection: vi.fn(() => ({ focusedWindowId: null, selectedWindowIds: [] })),
+      replaceSelection: vi.fn(),
+      toggleWindowSelection: vi.fn(),
+      clearSelection: vi.fn(),
+      moveSelectedWindowsBy: vi.fn(() => ({ dx: 0, dy: 0 })),
+      copySelectedWindows: vi.fn(() => ({ captured: 0, skipped: 0, overflow: 0 })),
+      cutSelectedWindows: vi.fn(() => cutResult({ captured: 0, skipped: 0, overflow: 0 })),
+      pasteCopiedWindows: vi.fn(() => ({ pasted: 0, limitReached: false })),
+      close: vi.fn(),
+      minimize: vi.fn(),
+      restore: vi.fn(),
+      maximize: vi.fn(),
+      update: vi.fn(),
+      setSnap: vi.fn(),
+      commitSnap: vi.fn(),
+      tileAll: vi.fn(),
+      splitFront: vi.fn(),
+      cascade: vi.fn(),
+      startConnect: vi.fn(),
+      confirmConnect: vi.fn(),
+      cancelConnect: vi.fn(),
+      removeConn: vi.fn(),
+      updateConnBoundScope: vi.fn(),
+      connect: vi.fn(),
+      linkedFilesRoot: vi.fn(() => null),
+      linkedAllFilesRoots: vi.fn(() => []),
+      linkedConnectorCapsuleIds: vi.fn(() => []),
+      linkedConnectorCapsuleSetIds: vi.fn(() => []),
+      linkedFigmaSnapshotRunIds: vi.fn(() => []),
+      linkedFilesContext: vi.fn(() => null),
+      currentFilesContext: vi.fn(() => null),
+      zoomTo: vi.fn(),
+      fitView: vi.fn(),
+      resetView: vi.fn(),
+      panBy: vi.fn(),
+      rect: vi.fn(() => null),
+      currentView: vi.fn(() => ({ x: 0, y: 0, zoom: 1 })),
+      ...patch,
+    };
+  }
+
+  function clipboardWorkspace(api: WorkspaceApi): UseWorkspaceResult {
+    return {
+      wins: [],
+      winsById: new Map(),
+      snapPrev: null,
+      palOpen: false,
+      setPalOpen: vi.fn(),
+      conns: [],
+      connecting: null,
+      selection: { focusedWindowId: null, selectedWindowIds: [] },
+      view: { x: 0, y: 0, zoom: 1 },
+      api,
+    };
+  }
+
+  it("announces a partial copy, a cut, and a paste in German — never the English fallback", async () => {
+    await loadLocaleMessages("de");
+    const copySelectedWindows = vi.fn(() => ({ captured: 2, skipped: 1, overflow: 0 }));
+    const cutSelectedWindows = vi.fn(() => cutResult({ captured: 1, skipped: 0, overflow: 0 }));
+    const pasteCopiedWindows = vi.fn(() => ({ pasted: 1, limitReached: false }));
+    germanShell(
+      <Workspace
+        ws={clipboardWorkspace(
+          clipboardApi({ copySelectedWindows, cutSelectedWindows, pasteCopiedWindows }),
+        )}
+        wsRef={createRef<HTMLDivElement>()}
+        openPalette={() => undefined}
+      />,
+    );
+    const surface = await screen.findByRole("main", { name: deTranslate("workspace.surface") });
+    const status = (): HTMLElement => screen.getByTestId("workspace-clipboard-status");
+
+    fireEvent.keyDown(surface, { key: "c", ctrlKey: true });
+    // Reviewer finding on PR #3305 — asserted as two independent fragments rather than one
+    // `${base} · ${remainder}` literal: that join belongs to describeClipboardCapture in
+    // Workspace.tsx (the " · " separator), and restating it here would let the test keep passing
+    // even if the separator changed, since both sides would be reproducing the same (now-wrong)
+    // formula instead of checking the actual rendered output.
+    expect(status()).toHaveTextContent(
+      deTranslate("workspace.clipboard.copied.many", { count: 2 }),
+    );
+    expect(status()).toHaveTextContent(deTranslate("workspace.clipboard.skipped.one"));
+    expect(status()).not.toHaveTextContent("2 windows copied");
+
+    // Cut announces from its settled teardown outcome, so this one is awaited.
+    fireEvent.keyDown(surface, { key: "x", ctrlKey: true });
+    await waitFor(() =>
+      expect(status()).toHaveTextContent(deTranslate("workspace.clipboard.cut.one")),
+    );
+    expect(status()).not.toHaveTextContent("1 window cut");
+
+    fireEvent.keyDown(surface, { key: "v", ctrlKey: true });
+    expect(status()).toHaveTextContent(deTranslate("workspace.clipboard.pasted.one"));
+    expect(status()).not.toHaveTextContent("1 window pasted");
+  });
+
+  it("announces the noneEligible reason in German when nothing could be copied", async () => {
+    await loadLocaleMessages("de");
+    const copySelectedWindows = vi.fn(() => ({ captured: 0, skipped: 3, overflow: 0 }));
+    germanShell(
+      <Workspace
+        ws={clipboardWorkspace(clipboardApi({ copySelectedWindows }))}
+        wsRef={createRef<HTMLDivElement>()}
+        openPalette={() => undefined}
+      />,
+    );
+    const surface = await screen.findByRole("main", { name: deTranslate("workspace.surface") });
+
+    fireEvent.keyDown(surface, { key: "c", ctrlKey: true });
+
+    expect(screen.getByTestId("workspace-clipboard-status")).toHaveTextContent(
+      deTranslate("workspace.clipboard.noneEligible"),
+    );
+    expect(screen.queryByText(/can't be duplicated/)).not.toBeInTheDocument();
   });
 });

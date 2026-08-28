@@ -782,5 +782,6 @@ well as setting `KEIKO_QUALITY_ENABLED`. The cost arithmetic itself is in
 - [Atlassian connector troubleshooting runbook](./atlassian-connector.md) — verify statuses, sync and write degradation reasons, and enterprise proxy/CA failures for the Atlassian connector.
 - [Native OS file/folder dialog runbook](./native-file-dialog.md) — unsupported platforms, macOS privacy (TCC) read limits, and Windows interactive-session requirements for Browse.
 - [macOS portable first-launch runbook](./macos-portable-first-launch.md) — the "damaged" Gatekeeper verdict, silent double-click exits, and same-path adoption for hand-moved bundles.
+- [Windows portable first-launch runbook](./windows-portable-first-launch.md) — the console flash-and-exit, the three native bootstrap dialogs, and the detached UI server that outlives the setup companion.
 
 For new entries, follow the [troubleshooting entry template](./_template.md).

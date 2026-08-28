@@ -22,6 +22,9 @@ import type {
   UseWorkspaceResult,
   ViewportWorld,
   WorkspaceApi,
+  WorkspaceClipboardCaptureResult,
+  WorkspaceClipboardCutResult,
+  WorkspaceClipboardPasteResult,
 } from "./useWorkspace.types";
 import {
   MAX_WORKSPACE_WINDOWS,
@@ -115,7 +118,15 @@ function clampViewZoom(z: number): number {
   return Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, z));
 }
 
+// Review finding on #3305 — NaN must not escape as a zoom. Both Math.min and
+// Math.max propagate it, so `Math.max(min, Math.min(max, NaN))` is NaN, and a
+// hostile or malformed wheel delta (deltaY: NaN, or a NaN zoom already in
+// persisted state) would be written straight into the window and render it at
+// an invalid scale. NaN carries no direction to saturate toward, so it falls
+// back to the neutral zoom; ±Infinity does carry one and still clamps to the
+// bounds below.
 function clampContentZoom(z: number): number {
+  if (Number.isNaN(z)) return 1;
   return Math.max(CONTENT_MIN_ZOOM, Math.min(CONTENT_MAX_ZOOM, Math.round(z * 10) / 10));
 }
 
@@ -283,14 +294,109 @@ export function applyContentWheelZoom(win: AppWindow, deltaY: number): AppWindow
 // GEN-UI-WORKSPACE-S2004 — extracted so the ctrl/cmd-wheel content-zoom updater
 // passed to setWins does not nest a `.map()` closure inside the wheel handler
 // inside the effect callback (SonarCloud S2004: nesting > 4 levels).
-function applyWheelZoomToWindows(
+// Issue #2402 — identity-preserving: content zoom snaps to 0.1 steps, so most
+// wheel events are no-ops; returning the SAME array for those keeps the wins
+// identity stable and skips the whole downstream chain (persistence schedule,
+// connection prune, selection normalization, scene re-render). `deltas` replays
+// every queued wheel event IN ORDER through applyContentWheelZoom — see
+// createWheelContentZoomQueue for why a raw deltaY SUM cannot be substituted here.
+export function applyWheelZoomToWindows(
   ws: AppWindow[] | null,
   windowId: string,
-  deltaY: number,
+  deltas: readonly number[],
 ): AppWindow[] | null {
-  return ws === null
-    ? ws
-    : ws.map((w) => (w.id === windowId ? applyContentWheelZoom(w, deltaY) : w));
+  if (ws === null) return ws;
+  const index = ws.findIndex((w) => w.id === windowId);
+  const current = index === -1 ? undefined : ws[index];
+  if (current === undefined) return ws;
+  let updated = current;
+  for (const deltaY of deltas) updated = applyContentWheelZoom(updated, deltaY);
+  // Compare the resulting zoom, not the object: a batch that moves the zoom and
+  // returns to where it started (e.g. a delta that pins at the clamp and one
+  // that eases straight back) allocates a new object with the ORIGINAL value.
+  // Only the final value decides whether anything changed.
+  if (updated.zoom === current.zoom) return ws;
+  const next = ws.slice();
+  next[index] = updated;
+  return next;
+}
+
+// Issue #2402 — the ctrl/cmd-wheel content-zoom branch committed one setWins per
+// wheel event, uncapped by frame rate (a trackpad pinch synthesizes ctrl-wheel at
+// 60-120+Hz). Mirror queueView's rAF coalescing: wheel deltas for one window
+// accumulate per animation frame and flush as ONE commit.
+//
+// The commit replays the queued deltas IN ORDER instead of summing them first.
+// exp() is multiplicative in the continuous math, but nextContentZoomFromWheel
+// also snaps to a 0.1 grid and clamps to [CONTENT_MIN_ZOOM, CONTENT_MAX_ZOOM] on
+// EVERY step, and both are nonlinear: summing raw deltaY before that per-step
+// snap/clamp does not reproduce what N separate per-event commits would have
+// produced. Two concrete examples (verified): from zoom=1, deltaY -100 twice
+// sequentially reaches 1.2 then 1.4; summing first (-200 in one exp() call)
+// reaches only 1.3. From zoom=1.9, deltaY -300 then +40 sequentially hits the
+// 2.0 cap and settles back to 1.9; summing first (-260) never crosses the cap
+// and lands on 2.0. Replaying the ordered deltas against each step's SNAPPED
+// result — exactly like N separate commits would — keeps the coalesced commit
+// bit-for-bit identical to the pre-coalescing per-event behaviour.
+export interface WheelContentZoomQueue {
+  readonly queue: (windowId: string, deltaY: number) => void;
+  readonly cancel: () => void;
+}
+
+// Exported so a direct unit test can pin the frame-cancellation bookkeeping without
+// wiring two window targets through the full wheel-event/DOM harness — the same
+// reason utf8ByteLength/keepaliveBodyFitsBudget below are exported for tests.
+export function createWheelContentZoomQueue(
+  apply: (windowId: string, deltas: readonly number[]) => void,
+): WheelContentZoomQueue {
+  let frame: number | null = null;
+  let pendingWindowId: string | null = null;
+  let pendingDeltas: number[] = [];
+  // Cancels whatever frame is currently tracked, if any. Shared by flush() (so a
+  // mid-frame target switch cancels the frame it is superseding instead of merely
+  // forgetting its id) and cancel() (so unmount never leaves a dangling browser-level
+  // registration behind).
+  const cancelScheduledFrame = (): void => {
+    if (frame !== null && typeof window.cancelAnimationFrame === "function") {
+      window.cancelAnimationFrame(frame);
+    }
+    frame = null;
+  };
+  const flush = (): void => {
+    // Review finding on #3305 — this used to only null out the local `frame`
+    // variable, never telling the browser to cancel it. queue() below calls flush()
+    // on a mid-frame target switch and then schedules a NEW frame, so the id just
+    // forgotten here was still live with the browser: two frames ended up
+    // outstanding while `frame` could only ever track the newest one, so cancel()
+    // (called by the wheel effect's unmount cleanup) could only cancel that one and
+    // the other stayed dangling. Cancelling here first guarantees at most one frame
+    // is ever outstanding, so cancel() is always complete.
+    cancelScheduledFrame();
+    const windowId = pendingWindowId;
+    const deltas = pendingDeltas;
+    pendingWindowId = null;
+    pendingDeltas = [];
+    if (windowId !== null) apply(windowId, deltas);
+  };
+  const queue = (windowId: string, deltaY: number): void => {
+    // A mid-frame target switch flushes the previous window's pending deltas so
+    // deltas never leak across windows; flush() above now also cancels the frame it
+    // is superseding, so the already-scheduled frame can never fire twice.
+    if (pendingWindowId !== null && pendingWindowId !== windowId) flush();
+    pendingWindowId = windowId;
+    pendingDeltas.push(deltaY);
+    if (typeof window.requestAnimationFrame !== "function") {
+      flush();
+      return;
+    }
+    frame ??= window.requestAnimationFrame(flush);
+  };
+  const cancel = (): void => {
+    cancelScheduledFrame();
+    pendingWindowId = null;
+    pendingDeltas = [];
+  };
+  return { queue, cancel };
 }
 
 function windowIdFromWheelTarget(target: EventTarget | null): string | null {
@@ -605,13 +711,22 @@ function usePanZoom({
       }
       return zoomRect;
     };
+    // Issue #2402 — per-frame coalescer for the content-zoom branch below; the
+    // camera branch already coalesces through queueView.
+    const contentZoom = createWheelContentZoomQueue((windowId, deltas) => {
+      setWins((ws) => applyWheelZoomToWindows(ws, windowId, deltas));
+    });
     const onWheel = (e: WheelEvent): void => {
       if (e.metaKey || e.ctrlKey) {
         e.preventDefault();
         const windowId = windowIdFromWheelTarget(e.target);
         if (windowId !== null) {
           settleCameraAnimation();
-          setWins((ws) => applyWheelZoomToWindows(ws, windowId, e.deltaY));
+          // Issue #2402 — the wallpaper shader's gesture suppression
+          // (data-view-active, GEN-PERF-WORKSPACE-004) must engage for content
+          // zoom exactly as it does for camera zoom.
+          markViewActive();
+          contentZoom.queue(windowId, e.deltaY);
           return;
         }
         const r = gestureRect();
@@ -641,8 +756,9 @@ function usePanZoom({
     el.addEventListener("wheel", onWheel, { passive: false });
     return () => {
       el.removeEventListener("wheel", onWheel);
+      contentZoom.cancel();
     };
-  }, [wsRef, setWins, queueView, settleCameraAnimation]);
+  }, [wsRef, setWins, queueView, settleCameraAnimation, markViewActive]);
 
   const rect = useCallback(
     (): DOMRect | null => (wsRef.current === null ? null : wsRef.current.getBoundingClientRect()),
@@ -1713,6 +1829,55 @@ function connectionUnbindScope(
   return filesChatBindScope(win, other, Date.now());
 }
 
+// Runs a connection's teardown at most once across OVERLAPPING close operations:
+// a second caller reaching the same edge while the first is still in flight
+// awaits that result instead of issuing a duplicate server-side unbind. The
+// entry is dropped once it settles, so a later, genuinely new close still runs.
+function teardownConnectionOnce(
+  inFlight: Map<string, Promise<boolean>>,
+  conn: Connection,
+  run: () => Promise<boolean>,
+): Promise<boolean> {
+  const existing = inFlight.get(conn.id);
+  if (existing !== undefined) return existing;
+  const started = run().finally(() => {
+    inFlight.delete(conn.id);
+  });
+  inFlight.set(conn.id, started);
+  return started;
+}
+
+// One teardown per connection for a batch close: both endpoints of the same
+// edge can be in the batch, and every one of them reads the same pre-close
+// snapshot, so without this the edge's server-side unbind would run twice.
+function batchConnectionTeardowns(
+  targets: readonly string[],
+  connsByEndpoint: ReadonlyMap<string, readonly Connection[]>,
+): readonly { readonly conn: Connection; readonly ownerId: string }[] {
+  const byConnection = new Map<string, { conn: Connection; ownerId: string }>();
+  for (const id of targets) {
+    for (const conn of connsByEndpoint.get(id) ?? []) {
+      if (!byConnection.has(conn.id)) byConnection.set(conn.id, { conn, ownerId: id });
+    }
+  }
+  return [...byConnection.values()];
+}
+
+// A refused edge blocks only the batch endpoints that belong to it; the rest of
+// the batch still closes.
+function refusedTeardownEndpoints(
+  outcomes: readonly { readonly conn: Connection; readonly accepted: boolean }[],
+  targets: ReadonlySet<string>,
+): ReadonlySet<string> {
+  const refused = new Set<string>();
+  for (const { conn, accepted } of outcomes) {
+    if (accepted) continue;
+    if (targets.has(conn.a)) refused.add(conn.a);
+    if (targets.has(conn.b)) refused.add(conn.b);
+  }
+  return refused;
+}
+
 async function unbindClosedWindowConnection(
   closedWindowId: string,
   closedWin: AppWindow,
@@ -1871,6 +2036,21 @@ export function useWorkspace(
   selectionRef.current = selection;
   const workspaceClipboardRef = useRef<string | null>(null);
   const workspaceClipboardPasteCountRef = useRef(1);
+  // Cut is a MOVE, and the clipboard descriptor is content-free by ADR-0123 D5 —
+  // right for a duplicate, but restoring only geometry would silently destroy a
+  // cut window's state (a Files root and active path, an Editor's file, a
+  // Terminal's cwd, a Browser's URL). The windows this session just removed are
+  // therefore held verbatim here until the next paste puts them back. This
+  // buffer stays in memory for this workspace only: it is never serialized into
+  // the clipboard payload, never written to localStorage, and never reaches the
+  // OS clipboard, so D5's "no content leaves the workspace" property is intact.
+  const workspaceCutBufferRef = useRef<readonly AppWindow[] | null>(null);
+  // A cut settles asynchronously, so the user can copy (or cut again) before it
+  // finishes. Each cut takes a generation; copy bumps it. Only the completion
+  // whose generation is still current may write the move buffer or the paste
+  // offset — otherwise a stale cut would resurrect its windows on the next
+  // paste instead of duplicating what was copied last.
+  const workspaceClipboardGenerationRef = useRef(0);
   const connsRef = useRef<Connection[]>([]);
   connsRef.current = conns;
   const winsById = useMemo<ReadonlyMap<string, AppWindow>>(
@@ -1900,6 +2080,13 @@ export function useWorkspace(
   const connsByEndpointRef = useRef<ReadonlyMap<string, readonly Connection[]>>(connsByEndpoint);
   connsByEndpointRef.current = connsByEndpoint;
   const pendingWindowClosesRef = useRef(new Set<string>());
+  // In-flight connection teardowns, keyed by connection id. Batch dedupe only
+  // covers one operation: while a cut waits for its unbinds, a close (or a
+  // second cut) of the OTHER endpoint reads the same pre-close connection
+  // snapshot and would start that edge's server-side unbind again. Overlapping
+  // operations share this promise instead, so each connection is torn down
+  // exactly once no matter how many closes reach it.
+  const pendingConnectionTeardownsRef = useRef(new Map<string, Promise<boolean>>());
   // Refs for the click-to-connect flow. connectingRef is a synchronous view of
   // the `connecting` state for handlers fired from child components (confirm).
   // connectCleanupRef stores the global pointermove listener disposer so we
@@ -2078,37 +2265,65 @@ export function useWorkspace(
   // do this: by the time it runs, the closed window is gone from winsRef and the bind roots can
   // no longer be derived — so the teardown runs here, BEFORE the window list shrinks. The prune
   // effect afterwards only sweeps the now-orphaned edge objects.
-  const closeWithTeardown = useCallback<WorkspaceApi["close"]>(
-    (id) => {
-      if (pendingWindowClosesRef.current.has(id)) return;
-      const win = winsByIdRef.current.get(id);
-      const connections = connsByEndpointRef.current.get(id) ?? [];
-      if (win === undefined || connections.length === 0) {
-        mutations.close(id);
-        return;
-      }
-      pendingWindowClosesRef.current.add(id);
-      const teardown = Promise.all(
-        connections.map((connection) =>
-          unbindClosedWindowConnection(
-            id,
-            win,
-            connection,
-            winsByIdRef.current,
-            stableScopeUnbind,
-            stableConnectorUnbind,
-          ),
-        ),
+  // Resolves to the ids that actually left the workspace. Batch-aware on
+  // purpose: when BOTH endpoints of one connection are closed together (a cut
+  // whose selection contains both), every caller works from the same pre-close
+  // connection snapshot, so a per-window loop would issue that edge's
+  // server-side unbind TWICE. A non-idempotent second unbind can fail and leave
+  // the batch half-applied, so each connection is torn down exactly once here,
+  // keyed by connection id, and a refused edge blocks only the endpoints that
+  // belong to it.
+  const closeWindowsWithTeardown = useCallback(
+    async (ids: readonly string[]): Promise<readonly string[]> => {
+      const targets = ids.filter(
+        (id) => !pendingWindowClosesRef.current.has(id) && winsByIdRef.current.has(id),
       );
-      void teardown
-        .then((accepted): void => {
-          if (accepted.every(Boolean)) mutations.close(id);
-        })
-        .finally((): void => {
-          pendingWindowClosesRef.current.delete(id);
-        });
+      if (targets.length === 0) return [];
+      const byConnection = batchConnectionTeardowns(targets, connsByEndpointRef.current);
+      // Unconnected windows keep the synchronous close they have always had.
+      if (byConnection.length === 0) {
+        for (const id of targets) mutations.close(id);
+        return targets;
+      }
+      for (const id of targets) pendingWindowClosesRef.current.add(id);
+      try {
+        const outcomes = await Promise.all(
+          byConnection.map(async ({ conn, ownerId }) => {
+            const accepted = await teardownConnectionOnce(
+              pendingConnectionTeardownsRef.current,
+              conn,
+              () => {
+                const owner = winsByIdRef.current.get(ownerId);
+                if (owner === undefined) return Promise.resolve(true);
+                return unbindClosedWindowConnection(
+                  ownerId,
+                  owner,
+                  conn,
+                  winsByIdRef.current,
+                  stableScopeUnbind,
+                  stableConnectorUnbind,
+                );
+              },
+            );
+            return { conn, accepted };
+          }),
+        );
+        const refused = refusedTeardownEndpoints(outcomes, new Set(targets));
+        const closed = targets.filter((id) => !refused.has(id));
+        for (const id of closed) mutations.close(id);
+        return closed;
+      } finally {
+        for (const id of targets) pendingWindowClosesRef.current.delete(id);
+      }
     },
     [winsByIdRef, connsByEndpointRef, mutations, stableScopeUnbind, stableConnectorUnbind],
+  );
+
+  const closeWithTeardown = useCallback<WorkspaceApi["close"]>(
+    (id) => {
+      void closeWindowsWithTeardown([id]);
+    },
+    [closeWindowsWithTeardown],
   );
 
   const updateConnBoundScope = useCallback<WorkspaceApi["updateConnBoundScope"]>(
@@ -2183,20 +2398,129 @@ export function useWorkspace(
     [selectionRef, setWins, winsRef, worldVP],
   );
   const copySelectedWindows = useCallback<WorkspaceApi["copySelectedWindows"]>(() => {
-    if (!winsReadyRef.current) return false;
-    const payload = buildWorkspaceClipboardPayload(
+    if (!winsReadyRef.current) return { captured: 0, skipped: 0, overflow: 0 };
+    const built = buildWorkspaceClipboardPayload(
       winsRef.current,
       selectionRef.current.selectedWindowIds,
     );
-    if (payload === null) return false;
-    workspaceClipboardRef.current = payload;
+    if (built.payload === null) {
+      return { captured: 0, skipped: built.skippedCount, overflow: built.overflowCount };
+    }
+    workspaceClipboardRef.current = built.payload;
     workspaceClipboardPasteCountRef.current = 1;
-    return true;
+    // A copy supersedes a pending move: the next paste must duplicate what was
+    // just copied, not restore windows an earlier cut removed. Bumping the
+    // generation also disarms a cut that has not settled yet.
+    workspaceCutBufferRef.current = null;
+    workspaceClipboardGenerationRef.current += 1;
+    return {
+      captured: built.capturedWindowIds.length,
+      skipped: built.skippedCount,
+      overflow: built.overflowCount,
+    };
   }, [selectionRef, winsReadyRef, winsRef]);
+  // Issue #2150 follow-up — cut captures the same content-free descriptors copy
+  // does, then closes exactly the captured windows. Only duplicable windows are
+  // ever closed, so the first paste can always restore what a cut removed.
+  // Removal goes through closeWithTeardown, not a raw setWins filter: a cut
+  // window can be a connected chat/files/connector endpoint, and only
+  // closeWithTeardown fires the scope/connector unbind callbacks that keep the
+  // chat's server-side grounding in sync with the visible connection (see the
+  // uiux-fix F008 C120 comment on closeWithTeardown below) — a bare filter would
+  // silently orphan that server-side binding while the edge and window vanish.
+  const cutSelectedWindows = useCallback<WorkspaceApi["cutSelectedWindows"]>(() => {
+    const empty = (capture: WorkspaceClipboardCaptureResult): WorkspaceClipboardCutResult => ({
+      ...capture,
+      settled: Promise.resolve(capture),
+    });
+    if (!winsReadyRef.current) return empty({ captured: 0, skipped: 0, overflow: 0 });
+    const built = buildWorkspaceClipboardPayload(
+      winsRef.current,
+      selectionRef.current.selectedWindowIds,
+    );
+    if (built.payload === null) {
+      return empty({ captured: 0, skipped: built.skippedCount, overflow: built.overflowCount });
+    }
+    workspaceClipboardRef.current = built.payload;
+    // Cut/paste is a move, so the FIRST paste restores at the original geometry
+    // (offset 0) from the buffer below. Anything the teardown refuses stays
+    // open, so it is neither buffered nor reported, and the offset falls back to
+    // the ordinary duplicate spacing.
+    workspaceClipboardPasteCountRef.current = 0;
+    workspaceCutBufferRef.current = null;
+    workspaceClipboardGenerationRef.current += 1;
+    const generation = workspaceClipboardGenerationRef.current;
+    const snapshot = new Map(winsRef.current.map((win) => [win.id, win]));
+    const settled = closeWindowsWithTeardown(built.capturedWindowIds).then(
+      (closed): WorkspaceClipboardCaptureResult => {
+        const moved = closed
+          .map((id) => snapshot.get(id))
+          .filter((win): win is AppWindow => win !== undefined);
+        // A copy or a newer cut that landed while this teardown was in flight
+        // owns the clipboard now; this completion only reports what it closed.
+        if (workspaceClipboardGenerationRef.current === generation) {
+          workspaceCutBufferRef.current = moved.length > 0 ? moved : null;
+          if (closed.length !== built.capturedWindowIds.length) {
+            workspaceClipboardPasteCountRef.current = 1;
+          }
+        }
+        return {
+          captured: closed.length,
+          skipped: built.skippedCount,
+          overflow: built.overflowCount,
+        };
+      },
+    );
+    return {
+      captured: built.capturedWindowIds.length,
+      skipped: built.skippedCount,
+      overflow: built.overflowCount,
+      settled,
+    };
+  }, [closeWindowsWithTeardown, selectionRef, winsReadyRef, winsRef]);
+  // Completes a pending move: puts the windows a cut removed back exactly as
+  // they were — same ids where still free, same cfg, same geometry — instead of
+  // pasting the content-free duplicate descriptor. Returns null when no move is
+  // pending, so paste falls through to the ordinary duplicate path.
+  const restoreCutWindows = useCallback((): WorkspaceClipboardPasteResult | null => {
+    const buffered = workspaceCutBufferRef.current;
+    if (buffered === null) return null;
+    const taken = new Set(winsRef.current.map((win) => win.id));
+    const pending = buffered.filter((win) => !taken.has(win.id));
+    const capacity = Math.max(0, MAX_WORKSPACE_WINDOWS - winsRef.current.length);
+    const restorable = pending.slice(0, capacity);
+    const limitReached = restorable.length < pending.length;
+    if (limitReached) stableWindowLimitReached(MAX_WORKSPACE_WINDOWS);
+    // The buffer is the ONLY copy of each cut window's state, so what capacity
+    // could not take stays buffered for a later paste rather than being dropped.
+    const remaining = pending.slice(restorable.length);
+    workspaceCutBufferRef.current = remaining.length > 0 ? remaining : null;
+    if (restorable.length === 0) return { pasted: 0, limitReached };
+    let z = zc.current;
+    const restored = restorable.map((win) => ({ ...win, z: ++z }));
+    zc.current = z;
+    const next = [...winsRef.current, ...restored];
+    // Once the whole move has landed, the next paste of the same clipboard is a
+    // duplicate again, so it offsets.
+    if (remaining.length === 0) workspaceClipboardPasteCountRef.current = 1;
+    setWins(next);
+    setSelection(
+      replaceWorkspaceSelection(
+        next,
+        restored.map((win) => win.id),
+      ),
+    );
+    return { pasted: restored.length, limitReached };
+  }, [setWins, stableWindowLimitReached, winsRef, zc]);
+
   const pasteCopiedWindows = useCallback<WorkspaceApi["pasteCopiedWindows"]>(() => {
-    if (!winsReadyRef.current || workspaceClipboardRef.current === null) return false;
+    const none = { pasted: 0, limitReached: false } as const;
+    if (!winsReadyRef.current) return none;
+    const restored = restoreCutWindows();
+    if (restored !== null) return restored;
+    if (workspaceClipboardRef.current === null) return none;
     const vp = worldVP();
-    if (vp === null) return false;
+    if (vp === null) return none;
     const result = duplicateWorkspaceClipboardWindows({
       wins: winsRef.current,
       payload: workspaceClipboardRef.current,
@@ -2205,15 +2529,16 @@ export function useWorkspace(
       nowMs: Date.now(),
       pasteOffsetPx: WORKSPACE_CLIPBOARD_PASTE_OFFSET_PX * workspaceClipboardPasteCountRef.current,
     });
-    if (result === null) return false;
+    if (result === null) return none;
     if (result.limitReached) stableWindowLimitReached(MAX_WORKSPACE_WINDOWS);
-    if (result.pastedWindowIds.length === 0) return false;
+    if (result.pastedWindowIds.length === 0)
+      return { pasted: 0, limitReached: result.limitReached };
     zc.current = result.nextZ;
     workspaceClipboardPasteCountRef.current += 1;
     setWins(result.wins as AppWindow[]);
     setSelection(replaceWorkspaceSelection(result.wins, result.pastedWindowIds));
-    return true;
-  }, [setWins, stableWindowLimitReached, winsReadyRef, winsRef, worldVP, zc]);
+    return { pasted: result.pastedWindowIds.length, limitReached: result.limitReached };
+  }, [restoreCutWindows, setWins, stableWindowLimitReached, winsReadyRef, winsRef, worldVP, zc]);
 
   // Component unmount must also drop the global listener.
   useEffect(
@@ -2244,6 +2569,7 @@ export function useWorkspace(
       clearSelection,
       moveSelectedWindowsBy,
       copySelectedWindows,
+      cutSelectedWindows,
       pasteCopiedWindows,
       close: closeWithTeardown,
       minimize: mutations.minimize,
@@ -2291,6 +2617,7 @@ export function useWorkspace(
       clearSelection,
       moveSelectedWindowsBy,
       copySelectedWindows,
+      cutSelectedWindows,
       pasteCopiedWindows,
       updateConnBoundScope,
       currentView,

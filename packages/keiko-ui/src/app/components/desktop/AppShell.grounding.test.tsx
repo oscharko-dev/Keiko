@@ -15,6 +15,7 @@ import { MAX_WORKSPACE_WINDOWS } from "./hooks/workspace-persistence";
 import type { AppWindow, Connection } from "./windows/types";
 import appShellStyles from "./AppShell.module.css";
 import { registerChatWindowRuntime } from "./windows/chatWindowActivity";
+import { cutResult } from "../../../test-utils/workspace-api-fixture";
 
 interface WorkspaceHookOptions {
   readonly onWindowLimitReached?: (limit: number) => void;
@@ -330,8 +331,9 @@ function workspaceApi(patch: Partial<WorkspaceApi> = {}): WorkspaceApi {
     toggleWindowSelection: vi.fn(),
     clearSelection: vi.fn(),
     moveSelectedWindowsBy: vi.fn(() => ({ dx: 0, dy: 0 })),
-    copySelectedWindows: vi.fn(() => false),
-    pasteCopiedWindows: vi.fn(() => false),
+    copySelectedWindows: vi.fn(() => ({ captured: 0, skipped: 0, overflow: 0 })),
+    cutSelectedWindows: vi.fn(() => cutResult({ captured: 0, skipped: 0, overflow: 0 })),
+    pasteCopiedWindows: vi.fn(() => ({ pasted: 0, limitReached: false })),
     close: vi.fn(),
     minimize: vi.fn(),
     restore: vi.fn(),

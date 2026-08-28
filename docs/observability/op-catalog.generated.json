@@ -1023,6 +1023,12 @@
       "package": "keiko-server"
     },
     {
+      "op": "sse.run-events.resume",
+      "category": "http",
+      "site": "packages/keiko-server/src/run-handlers.ts:575",
+      "package": "keiko-server"
+    },
+    {
       "op": "sse.stream.closed",
       "category": "http",
       "site": "packages/keiko-server/src/sse-write.ts:69",

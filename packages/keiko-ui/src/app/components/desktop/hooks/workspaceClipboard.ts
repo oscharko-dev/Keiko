@@ -146,27 +146,50 @@ function descriptorFromWindow(win: AppWindow): WorkspaceClipboardWindowDescripto
   };
 }
 
+// Issue #2150 follow-up — the payload builder reports WHAT it captured and WHY
+// the rest fell away, so the caller can announce the outcome instead of
+// silently no-oping, and cut can close exactly the windows the clipboard
+// captured. The two reasons are counted separately on purpose: a window the
+// clipboard CANNOT duplicate (singleton/keyed/minimized/maximized) and one that
+// merely did not fit the MAX_CLIPBOARD_WINDOWS cap need different wording —
+// reporting an over-cap window as "not duplicable" states something false.
+export interface WorkspaceClipboardBuildResult {
+  readonly payload: string | null;
+  readonly capturedWindowIds: readonly string[];
+  readonly skippedCount: number;
+  readonly overflowCount: number;
+}
+
 export function buildWorkspaceClipboardPayload(
   wins: readonly AppWindow[],
   selectedWindowIds: readonly string[],
-): string | null {
+): WorkspaceClipboardBuildResult {
+  const selectedSet = new Set(selectedWindowIds);
+  const selectedCount = wins.filter((win) => selectedSet.has(win.id)).length;
   const selected = selectableClipboardWindows(wins, selectedWindowIds);
-  if (selected.length === 0) return null;
-  const sanitized = sanitizePersistedWindows(selected)
+  const eligible = sanitizePersistedWindows(selected)
     .filter(isWorkspaceClipboardWindowEligible)
-    .sort((a, b) => a.z - b.z)
-    .slice(0, MAX_CLIPBOARD_WINDOWS);
+    .sort((a, b) => a.z - b.z);
   const descriptors: WorkspaceClipboardWindowDescriptor[] = [];
-  for (const win of sanitized) {
+  const capturedWindowIds: string[] = [];
+  for (const win of eligible.slice(0, MAX_CLIPBOARD_WINDOWS)) {
     const descriptor = descriptorFromWindow(win);
-    if (descriptor !== null) descriptors.push(descriptor);
+    if (descriptor !== null) {
+      descriptors.push(descriptor);
+      capturedWindowIds.push(win.id);
+    }
   }
-  if (descriptors.length === 0) return null;
-  return JSON.stringify({
+  const overflowCount = Math.max(0, eligible.length - MAX_CLIPBOARD_WINDOWS);
+  const skippedCount = Math.max(0, selectedCount - eligible.length);
+  if (descriptors.length === 0) {
+    return { payload: null, capturedWindowIds: [], skippedCount, overflowCount };
+  }
+  const payload = JSON.stringify({
     kind: WORKSPACE_CLIPBOARD_KIND,
     version: WORKSPACE_CLIPBOARD_VERSION,
     windows: descriptors,
   } satisfies WorkspaceClipboardPayload);
+  return { payload, capturedWindowIds, skippedCount, overflowCount };
 }
 
 function nextDuplicateId(
