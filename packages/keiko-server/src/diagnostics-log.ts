@@ -430,6 +430,10 @@ const SERVER_DIAGNOSTIC_SUMMARIES = [
   "A verification event subscriber failed.",
   "Gateway tool-calling verification could not be persisted.",
   "Model discovery exceeded the discovery cap; setup continued with the retained models.",
+  // KEIKO-0884 (#3333): loopback was the only egress class Gateway Setup accepted with no
+  // configuration signal, no log line, and no opt-in trail. Not a failure — a deliberate, silent
+  // acceptance made operator-visible.
+  "Gateway Setup accepted a loopback candidate target.",
   "Stored gateway egress configuration was invalid; setup omitted it from the rewritten file.",
   "Setup skipped models the gateway declared as unsupported modes or that failed the embedding probe.",
   "gateway-setup-audit-validation-failed",

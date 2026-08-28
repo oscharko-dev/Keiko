@@ -1176,6 +1176,51 @@ describe("handleGatewaySetup", () => {
     deps.store.close();
   });
 
+  it("emits a body-free operator diagnostic when a loopback candidate is accepted (KEIKO-0884, #3333)", async () => {
+    // Loopback is the only egress class Gateway Setup accepts with no configuration signal, no log
+    // line, and no opt-in trail (a deliberate product choice, not a defect). The gap is purely
+    // observability: an operator investigating an unexpected acceptance has no record that a
+    // loopback target was the one silently let through.
+    const uiDir = await tempDir("keiko-gw-loopback-diag-ui-");
+    const evidenceDir = await tempDir("keiko-gw-loopback-diag-ev-");
+    const diagnostics: ServerDiagnosticRecord[] = [];
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir,
+      env: { ...VAULT_ENV, KEIKO_ALLOW_PRIVATE_EGRESS: "true" },
+      uiDbPath: join(uiDir, "keiko-ui.db"),
+      gatewayModelDiscovery: () => Promise.resolve(["local-model"]),
+      gatewayEmbeddingProbe: PASSTHROUGH_EMBEDDING_PROBE,
+      gatewaySetupTester: (_config, modelIds) => Promise.resolve([modelIds[0] ?? "local-model"]),
+      diagnostics: { record: (record): void => void diagnostics.push(record) },
+    });
+
+    const result = await handleGatewaySetup(
+      ctx(
+        { baseUrl: "http://127.0.0.1:11434/v1", apiKey: "local-token" },
+        "corr-gw-loopback-diagnostic",
+      ),
+      deps,
+    );
+    expect(result.status, JSON.stringify(result.body)).toBe(200);
+
+    expect(diagnostics).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          correlationId: "corr-gw-loopback-diagnostic",
+          operation: "POST /api/gateway/setup",
+          code: "GATEWAY_SETUP_LOOPBACK_TARGET_ACCEPTED",
+        }),
+      ]),
+    );
+    // Body-free by construction: a count/code only, never the raw baseUrl/host/port.
+    const serialized = JSON.stringify(diagnostics);
+    expect(serialized).not.toContain("127.0.0.1");
+    expect(serialized).not.toContain("11434");
+    expect(serialized).not.toContain("local-token");
+    deps.store.close();
+  });
+
   it("records the link-local/metadata override, not only the private-network one (Codex, #3201)", async () => {
     const uiDir = await tempDir("keiko-gw-audit-linklocal-ui-");
     const evidenceDir = await tempDir("keiko-gw-audit-linklocal-ev-");

@@ -4914,10 +4914,35 @@ function reportUnusableDiscoveredModels(
   });
 }
 
+// KEIKO-0884 (#3333): every non-public egress target class (private, link-local, metadata)
+// requires an explicit env opt-in to be accepted by Gateway Setup; loopback is the only class
+// silently accepted with no configuration signal, no log line, and no opt-in trail — a deliberate
+// product choice (local sidecar providers, Ollama-style, #2387 research egress), not a defect. The
+// gap is purely observability: an operator investigating an unexpected Gateway Setup acceptance had
+// no record that a loopback target was the one silently let through. Body-free by construction, the
+// same pattern as `reportDiscoveryTruncation` above — a fixed code, never the raw baseUrl/host/port.
+function reportLoopbackTargetAccepted(
+  diagnostics: ServerDiagnosticSink | undefined,
+  correlationId: string | undefined,
+  baseUrl: string,
+): void {
+  if (classifyOutboundHost(new URL(baseUrl).hostname) !== "loopback") return;
+  emitServerDiagnostic(diagnostics, {
+    correlationId: correlationId ?? randomUUID(),
+    timestamp: new Date().toISOString(),
+    operation: "POST /api/gateway/setup",
+    source: "gateway-setup.candidate",
+    errorClass: "GatewaySetupLoopbackTargetAccepted",
+    message: "Gateway Setup accepted a loopback candidate target.",
+    code: "GATEWAY_SETUP_LOOPBACK_TARGET_ACCEPTED",
+  });
+}
+
 async function verifySetupCandidate(input: SetupVerificationInput): Promise<VerifiedSetup> {
   // Defence-in-depth: never send the credential to a candidate URL that has not passed the same
   // scheme/credential/loopback validation as the originally submitted base URL.
   validateBaseUrl(input.baseUrl, "candidate", input.egress);
+  reportLoopbackTargetAccepted(input.diagnostics, input.correlationId, input.baseUrl);
   const validationConfig = validationConfigForSetup(input);
   const candidateModels = await candidateModelIdsForSetup(input, validationConfig);
   reportDiscoveryTruncation(input.diagnostics, input.correlationId, candidateModels);
