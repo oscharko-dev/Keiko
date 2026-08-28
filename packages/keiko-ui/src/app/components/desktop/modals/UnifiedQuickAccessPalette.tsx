@@ -7,7 +7,6 @@
 import {
   useCallback,
   useEffect,
-  useId,
   useMemo,
   useRef,
   useState,
@@ -64,6 +63,7 @@ interface UnifiedQuickAccessPaletteProps {
   readonly roots?: readonly WorkspaceRootTarget[] | undefined;
   readonly commands: readonly QuickAccessCommand[];
   readonly openEditorFile: (request: OpenEditorFileRequest) => OpenEditorFileResult;
+  readonly opener?: HTMLElement | null;
   readonly onClose: () => void;
 }
 
@@ -274,10 +274,11 @@ function quickAccessResultsStatus(
 }
 
 // Restores focus to whatever had it before the palette opened, once the palette closes.
-function useQuickAccessFocusRestore(inputRef: RefObject<HTMLInputElement | null>): void {
-  const openerRef = useRef<HTMLElement | null>(
-    typeof document === "undefined" ? null : (document.activeElement as HTMLElement | null),
-  );
+function useQuickAccessFocusRestore(
+  inputRef: RefObject<HTMLInputElement | null>,
+  opener: HTMLElement | null,
+): void {
+  const openerRef = useRef(opener);
   useEffect(() => {
     const opener = openerRef.current;
     inputRef.current?.focus();
@@ -377,20 +378,20 @@ export function UnifiedQuickAccessPalette({
   roots,
   commands,
   openEditorFile,
+  opener = null,
   onClose,
 }: UnifiedQuickAccessPaletteProps): ReactNode {
   const t = useOptionalWidgetTranslate();
   const [query, setQuery] = useState(initialMode === "commands" ? ">" : "");
   const [selected, setSelected] = useState(0);
   const inputRef = useRef<HTMLInputElement>(null);
-  const dialogRef = useRef<HTMLDivElement>(null);
-  const listId = useId();
+  const dialogRef = useRef<HTMLDialogElement>(null);
   const mode: QuickAccessMode = query.startsWith(">") ? "commands" : "files";
   const commandQuery = query.startsWith(">") ? query.slice(1).trim() : "";
   const targets = useMemo(() => quickAccessTargets(root, roots), [root, roots]);
   const multiRoot = targets.length > 1;
 
-  useQuickAccessFocusRestore(inputRef);
+  useQuickAccessFocusRestore(inputRef, opener);
   const { searchResults, truncated, failedRoots } = useQuickAccessFileSearch(mode, query, targets);
 
   const commandResults = useMemo(
@@ -437,7 +438,6 @@ export function UnifiedQuickAccessPalette({
     inputRef,
   );
 
-  const optionId = (index: number): string => `${listId}-option-${String(index)}`;
   const emptyText = quickAccessEmptyText(t, mode, root, query);
   const resultsStatus = quickAccessResultsStatus(
     t,
@@ -448,14 +448,15 @@ export function UnifiedQuickAccessPalette({
 
   return (
     <div className="cmdk-overlay" onPointerDown={onClose}>
-      <div
+      <dialog
         ref={dialogRef}
+        open
         className="cmdk"
-        role="dialog"
         aria-modal="true"
         aria-labelledby="quick-access-title"
         aria-describedby="quick-access-desc"
         tabIndex={-1}
+        style={{ margin: 0, padding: 0 }}
         onPointerDown={(event) => event.stopPropagation()}
       >
         <h2 id="quick-access-title" className="sr-only">
@@ -467,10 +468,7 @@ export function UnifiedQuickAccessPalette({
         <div className="cmdk-input">
           <input
             ref={inputRef}
-            role="combobox"
-            aria-expanded="true"
-            aria-controls={listId}
-            aria-activedescendant={itemCount > 0 ? optionId(selected) : undefined}
+            type="search"
             aria-label={
               mode === "commands" ? t("quickAccess.query.commands") : t("quickAccess.query.files")
             }
@@ -495,7 +493,7 @@ export function UnifiedQuickAccessPalette({
             {t("quickAccess.searchUnavailable", { roots: failedRoots.join(", ") })}
           </div>
         ) : null}
-        <div id={listId} role="listbox" className="cmdk-list">
+        <div className="cmdk-list">
           {itemCount === 0 && <div className="cmdk-empty">{emptyText}</div>}
           {itemCount > 0 &&
             mode === "commands" &&
@@ -503,9 +501,6 @@ export function UnifiedQuickAccessPalette({
               <button
                 key={command.id}
                 type="button"
-                id={optionId(index)}
-                role="option"
-                aria-selected={index === selected}
                 className="cmdk-row"
                 data-sel={index === selected}
                 tabIndex={-1}
@@ -526,9 +521,6 @@ export function UnifiedQuickAccessPalette({
               <button
                 key={`${result.root}:${result.kind}:${result.path}:${String(result.line)}:${index.toString()}`}
                 type="button"
-                id={optionId(index)}
-                role="option"
-                aria-selected={index === selected}
                 className="cmdk-row"
                 data-sel={index === selected}
                 tabIndex={-1}
@@ -549,7 +541,7 @@ export function UnifiedQuickAccessPalette({
               </button>
             ))}
         </div>
-      </div>
+      </dialog>
     </div>
   );
 }

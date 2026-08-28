@@ -216,7 +216,7 @@ describe("Quick Access command palette under the German locale", () => {
       />,
     );
 
-    await userEvent.type(screen.getByRole("combobox"), "abc");
+    await userEvent.type(screen.getByRole("searchbox"), "abc");
 
     await waitFor(() => {
       expect(screen.getByRole("alert")).toHaveTextContent(

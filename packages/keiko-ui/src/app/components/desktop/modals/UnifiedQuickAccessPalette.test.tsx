@@ -55,6 +55,29 @@ afterEach(() => {
 });
 
 describe("UnifiedQuickAccessPalette", () => {
+  it("restores the opener captured before the lazy palette mounts", () => {
+    const opener = document.createElement("button");
+    document.body.appendChild(opener);
+    opener.focus();
+    const capturedOpener = document.activeElement as HTMLElement;
+    capturedOpener.blur();
+
+    const { unmount } = render(
+      <UnifiedQuickAccessPalette
+        initialMode="files"
+        root="/repo"
+        commands={[]}
+        openEditorFile={vi.fn()}
+        opener={capturedOpener}
+        onClose={vi.fn()}
+      />,
+    );
+    unmount();
+
+    expect(document.activeElement).toBe(opener);
+    opener.remove();
+  });
+
   it("switches to command mode with a leading greater-than and runs the selected command", async () => {
     const run = vi.fn();
     render(
@@ -67,9 +90,9 @@ describe("UnifiedQuickAccessPalette", () => {
       />,
     );
 
-    await userEvent.type(screen.getByRole("combobox"), ">theme");
+    await userEvent.type(screen.getByRole("searchbox"), ">theme");
     await userEvent.click(
-      await screen.findByRole("option", { name: /Toggle light \/ dark theme/ }),
+      await screen.findByRole("button", { name: /Toggle light \/ dark theme/ }),
     );
 
     expect(run).toHaveBeenCalledTimes(1);
@@ -107,8 +130,8 @@ describe("UnifiedQuickAccessPalette", () => {
       />,
     );
 
-    await userEvent.type(screen.getByRole("combobox"), "quick.ts");
-    await userEvent.click(await screen.findByRole("option", { name: /src\/quick\.ts/ }));
+    await userEvent.type(screen.getByRole("searchbox"), "quick.ts");
+    await userEvent.click(await screen.findByRole("button", { name: /src\/quick\.ts/ }));
 
     expect(fetchFilesSearchMock).toHaveBeenCalledWith(
       "/repo",
@@ -163,8 +186,8 @@ describe("UnifiedQuickAccessPalette", () => {
       />,
     );
 
-    await userEvent.type(screen.getByRole("combobox"), "render");
-    await userEvent.click(await screen.findByRole("option", { name: /renderApp/ }));
+    await userEvent.type(screen.getByRole("searchbox"), "render");
+    await userEvent.click(await screen.findByRole("button", { name: /renderApp/ }));
 
     await waitFor(() =>
       expect(openEditorFile).toHaveBeenCalledWith({
@@ -217,10 +240,10 @@ describe("UnifiedQuickAccessPalette", () => {
       />,
     );
 
-    await userEvent.type(screen.getByRole("combobox"), "quick");
-    await screen.findByRole("option", { name: /src\/quick\.ts/ });
+    await userEvent.type(screen.getByRole("searchbox"), "quick");
+    await screen.findByRole("button", { name: /src\/quick\.ts/ });
 
-    expect(screen.getAllByRole("option", { name: /src\/quick\.ts/ })).toHaveLength(1);
+    expect(screen.getAllByRole("button", { name: /src\/quick\.ts/ })).toHaveLength(1);
   });
 
   it("disambiguates same-path results across roots and opens the selected root", async () => {
@@ -258,9 +281,9 @@ describe("UnifiedQuickAccessPalette", () => {
       />,
     );
 
-    await userEvent.type(screen.getByRole("combobox"), "shared");
-    const rootB = await screen.findByRole("option", { name: /Root B · src\/shared\.ts:1/ });
-    expect(screen.getByRole("option", { name: /Root A · src\/shared\.ts:1/ })).toBeInTheDocument();
+    await userEvent.type(screen.getByRole("searchbox"), "shared");
+    const rootB = await screen.findByRole("button", { name: /Root B · src\/shared\.ts:1/ });
+    expect(screen.getByRole("button", { name: /Root A · src\/shared\.ts:1/ })).toBeInTheDocument();
     await userEvent.click(rootB);
 
     expect(openEditorFile).toHaveBeenCalledWith({
@@ -327,11 +350,11 @@ describe("UnifiedQuickAccessPalette", () => {
       />,
     );
 
-    await userEvent.type(screen.getByRole("combobox"), "match");
-    await screen.findAllByRole("option", { name: /Root B/ });
+    await userEvent.type(screen.getByRole("searchbox"), "match");
+    await screen.findAllByRole("button", { name: /Root B/ });
 
-    expect(screen.getAllByRole("option", { name: /Root A/ })).not.toHaveLength(0);
-    expect(screen.getAllByRole("option", { name: /Root B/ })).toHaveLength(3);
+    expect(screen.getAllByRole("button", { name: /Root A/ })).not.toHaveLength(0);
+    expect(screen.getAllByRole("button", { name: /Root B/ })).toHaveLength(3);
     expect(screen.getByRole("status")).toHaveTextContent(/capped/i);
   });
 
@@ -363,8 +386,8 @@ describe("UnifiedQuickAccessPalette", () => {
       />,
     );
 
-    await userEvent.type(screen.getByRole("combobox"), "app");
-    await screen.findByRole("option", { name: /src\/app\.ts/ });
+    await userEvent.type(screen.getByRole("searchbox"), "app");
+    await screen.findByRole("button", { name: /src\/app\.ts/ });
     expect(await axe(fileMode.container)).toHaveNoViolations();
     fileMode.unmount();
 
@@ -378,7 +401,7 @@ describe("UnifiedQuickAccessPalette", () => {
       />,
     );
 
-    await screen.findByRole("option", { name: /Toggle light \/ dark theme/ });
+    await screen.findByRole("button", { name: /Toggle light \/ dark theme/ });
     expect(await axe(commandMode.container)).toHaveNoViolations();
   });
 
@@ -393,7 +416,7 @@ describe("UnifiedQuickAccessPalette", () => {
       />,
     );
 
-    const option = await screen.findByRole("option", { name: /Toggle light \/ dark theme/ });
+    const option = await screen.findByRole("button", { name: /Toggle light \/ dark theme/ });
     expect(within(option).getByText("⌘K")).toBeInTheDocument();
   });
 });

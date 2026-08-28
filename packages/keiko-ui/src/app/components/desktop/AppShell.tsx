@@ -842,6 +842,11 @@ export function deepLinkToolFor(path: string): "relationships" | "localKnowledge
   return null;
 }
 
+function focusedModalOpener(): HTMLElement | null {
+  const activeElement = document.activeElement;
+  return activeElement instanceof HTMLElement ? activeElement : null;
+}
+
 function AppShellInner(): ReactNode {
   const t = useTranslate();
   const { theme, toggle: toggleTheme } = useTheme();
@@ -1338,7 +1343,9 @@ function AppShellInner(): ReactNode {
 
   const [palOpen, setPalOpen] = useState(false);
   const [pending, setPending] = useState<WindowType | null>(null);
+  const [newWindowOpener, setNewWindowOpener] = useState<HTMLElement | null>(null);
   const [quickAccessMode, setQuickAccessMode] = useState<"files" | "commands" | null>(null);
+  const [quickAccessOpener, setQuickAccessOpener] = useState<HTMLElement | null>(null);
   const [windowPaletteOpen, setWindowPaletteOpen] = useState(false);
   const [editorHosts, setEditorHosts] = useState<ReadonlyMap<string, EditorPaletteHost>>(
     () => new Map(),
@@ -1378,9 +1385,18 @@ function AppShellInner(): ReactNode {
 
   const openPalette = useCallback((): void => setPalOpen(true), []);
   const closePalette = useCallback((): void => setPalOpen(false), []);
-  const openQuickAccessFiles = useCallback((): void => setQuickAccessMode("files"), []);
-  const openQuickAccessCommands = useCallback((): void => setQuickAccessMode("commands"), []);
-  const closeQuickAccess = useCallback((): void => setQuickAccessMode(null), []);
+  const openQuickAccessFiles = useCallback((): void => {
+    setQuickAccessOpener(focusedModalOpener());
+    setQuickAccessMode("files");
+  }, []);
+  const openQuickAccessCommands = useCallback((): void => {
+    setQuickAccessOpener(focusedModalOpener());
+    setQuickAccessMode("commands");
+  }, []);
+  const closeQuickAccess = useCallback((): void => {
+    setQuickAccessMode(null);
+    setQuickAccessOpener(null);
+  }, []);
   const registerEditorHost = useCallback(
     (windowId: string, host: EditorPaletteHost): (() => void) => {
       setEditorHosts((current) => {
@@ -1415,6 +1431,7 @@ function AppShellInner(): ReactNode {
         if (createdId !== null) focusCreatedWindow(createdId);
         return;
       }
+      setNewWindowOpener(focusedModalOpener());
       setPending(type);
     },
     [ws.api],
@@ -1426,6 +1443,7 @@ function AppShellInner(): ReactNode {
       // dialog only renders while `pending` is non-null, so reading it from the closure is safe.
       const current = pending;
       setPending(null);
+      setNewWindowOpener(null);
       if (current === null) return;
       const normalizedCfg = current === "editor" ? normalizeEditorWindowCfg(cfg) : cfg;
       const { __connectFilesId, ...windowCfg } = normalizedCfg;
@@ -1456,7 +1474,10 @@ function AppShellInner(): ReactNode {
     },
     [pending, session.activeProject?.path, ws.api],
   );
-  const closeDialog = useCallback((): void => setPending(null), []);
+  const closeDialog = useCallback((): void => {
+    setPending(null);
+    setNewWindowOpener(null);
+  }, []);
   const statusRef = useRef<HTMLElement | null>(null);
   const setStatusRef = useCallback((node: HTMLElement | null): void => {
     statusRef.current = node;
@@ -1722,6 +1743,7 @@ function AppShellInner(): ReactNode {
                       type={pending}
                       types={WIN_TYPES}
                       filesContext={ws.api.currentFilesContext()}
+                      opener={newWindowOpener}
                       onConfirm={confirmNew}
                       onClose={closeDialog}
                     />
@@ -1733,6 +1755,7 @@ function AppShellInner(): ReactNode {
                       roots={quickAccessRoots}
                       commands={quickAccessCommands}
                       openEditorFile={ws.api.openEditorFile}
+                      opener={quickAccessOpener}
                       onClose={closeQuickAccess}
                     />
                   ) : null}

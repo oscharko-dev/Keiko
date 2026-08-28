@@ -201,6 +201,28 @@ describe("NewWindowDialog: no Keiko-Mode coming-soon toggle (#146 GAP-C3)", () =
 // target — document.body is the guaranteed last resort when neither the top
 // window nor the FAB is present in the DOM.
 describe("NewWindowDialog: focus-restoration guaranteed fallback (MD-05)", () => {
+  it("restores the opener captured before the lazy dialog mounts", () => {
+    const opener = document.createElement("button");
+    document.body.appendChild(opener);
+    opener.focus();
+    const capturedOpener = document.activeElement as HTMLElement;
+    capturedOpener.blur();
+
+    const { unmount } = render(
+      <NewWindowDialog
+        type="chat"
+        types={WIN_TYPES}
+        opener={capturedOpener}
+        onConfirm={vi.fn()}
+        onClose={vi.fn()}
+      />,
+    );
+    unmount();
+
+    expect(document.activeElement).toBe(opener);
+    opener.remove();
+  });
+
   it("focuses document.body when no top-window or FAB is available on close", () => {
     // Ensure no stray .window[data-top=true] or .ws-fab elements exist.
     expect(document.querySelector('.window[data-top="true"]')).toBeNull();

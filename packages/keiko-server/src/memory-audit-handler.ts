@@ -64,6 +64,8 @@ import { sanitizeAuditEvent } from "./memory-scope-sanitizer.js";
 
 // ─── Public types ─────────────────────────────────────────────────────────────
 
+type MemoryAuditSeedRecord = Pick<MemoryRecord, "id" | "status" | "pinned">;
+
 export interface MemoryAuditHandlerOptions {
   readonly evidenceStore: EvidenceStore;
   readonly redactString: (input: string) => string;
@@ -122,7 +124,7 @@ function reportAuditPersistFailure(
 }
 
 export type MemoryAuditHandler = ((event: MemoryEvent) => void) & {
-  readonly seed: (records: readonly Pick<MemoryRecord, "id" | "status" | "pinned">[]) => void;
+  readonly seed: (records: readonly MemoryAuditSeedRecord[]) => void;
 };
 
 // ─── Constants ────────────────────────────────────────────────────────────────
@@ -373,14 +375,14 @@ export function createMemoryAuditHandler(options: MemoryAuditHandlerOptions): Me
     }
   };
   return Object.assign(handler, {
-    seed: (records: readonly Pick<MemoryRecord, "id" | "status" | "pinned">[]): void => {
+    seed: (records: readonly MemoryAuditSeedRecord[]): void => {
       seedStateCache(records, previousStatus, previousPinned);
     },
   });
 }
 
 function seedStateCache(
-  records: readonly Pick<MemoryRecord, "id" | "status" | "pinned">[],
+  records: readonly MemoryAuditSeedRecord[],
   previousStatus: Map<MemoryId, MemoryStatus>,
   previousPinned: Map<MemoryId, boolean>,
 ): void {
@@ -573,6 +575,6 @@ export function createMemoryAuditDeleteCommitHandler(
 
 export function createNoopMemoryAuditHandler(): MemoryAuditHandler {
   return Object.assign((_: MemoryEvent): void => undefined, {
-    seed: (_records: readonly Pick<MemoryRecord, "id" | "status" | "pinned">[]): void => undefined,
+    seed: (_records: readonly MemoryAuditSeedRecord[]): void => undefined,
   });
 }
