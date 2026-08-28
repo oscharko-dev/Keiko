@@ -1,6 +1,11 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
+  planEditorM7ModelEviction,
+  type EditorM7ModelEntry,
+} from "@oscharko-dev/keiko-contracts/runtime/editor-m7";
+
+import {
   EditorModelRegistry,
   UNPROTECTED_EDITOR_MODEL,
   attachRetainedEditorModel,
@@ -11,6 +16,7 @@ import {
   getEditorModelRegistryDiagnostics,
   resetEditorModelRegistryForTests,
   updateRetainedEditorModelProtection,
+  type EditorModelProtection,
   type RetainedEditorModel,
   type RetainedEditorModelEditor,
   type RetainedEditorModelNamespace,
@@ -863,5 +869,188 @@ describe("shared editor model registry singleton", () => {
 
     disposeAllUnattachedEditorModels();
     expect(namespace.created[1]?.dispose).toHaveBeenCalledOnce();
+  });
+});
+
+interface D4ConformanceScenario {
+  readonly name: string;
+  readonly protection: EditorModelProtection;
+  readonly stayAttached: boolean;
+  // When true, after the initial attach/detach the scenario re-applies `active: true` via
+  // `updateProtection()` on an already-detached (attachmentCount === 0) entry. This is the only
+  // way to exercise the registry's `entry.protection.active` clause in `protectedEntry()` in
+  // isolation from its `entry.attachmentCount > 0` clause: `attach()` always forces
+  // `active: true` on its own, and `detach()` always resets `active` back to
+  // `entry.attachmentCount > 0`, so a *detached* entry that is still protected only because
+  // `entry.protection.active` is true can only be produced by a follow-up `updateProtection()`
+  // call (KEIKO-0751 review finding: the "active" scenario below stays attached, so it never
+  // actually reaches that clause).
+  readonly markActiveAfterDetach?: boolean;
+  // The D4 baseline's four-field protection surface: its single `pendingOperation` flag is the
+  // generalization the registry later split into four independent, richer reasons
+  // (pendingSave/pendingConflict/hotExitRecovery/agentReview), so every registry-only reason maps
+  // onto it here.
+  readonly d4: Pick<EditorM7ModelEntry, "dirty" | "pinned" | "active" | "pendingOperation">;
+}
+
+const D4_CONFORMANCE_SCENARIOS: readonly D4ConformanceScenario[] = [
+  {
+    name: "clean-1",
+    protection: UNPROTECTED_EDITOR_MODEL,
+    stayAttached: false,
+    d4: { dirty: false, pinned: false, active: false, pendingOperation: false },
+  },
+  {
+    name: "clean-2",
+    protection: UNPROTECTED_EDITOR_MODEL,
+    stayAttached: false,
+    d4: { dirty: false, pinned: false, active: false, pendingOperation: false },
+  },
+  {
+    name: "dirty",
+    protection: { ...UNPROTECTED_EDITOR_MODEL, dirty: true },
+    stayAttached: false,
+    d4: { dirty: true, pinned: false, active: false, pendingOperation: false },
+  },
+  {
+    name: "pinned",
+    protection: { ...UNPROTECTED_EDITOR_MODEL, pinned: true },
+    stayAttached: false,
+    d4: { dirty: false, pinned: true, active: false, pendingOperation: false },
+  },
+  {
+    name: "active",
+    protection: UNPROTECTED_EDITOR_MODEL,
+    stayAttached: true,
+    d4: { dirty: false, pinned: false, active: true, pendingOperation: false },
+  },
+  {
+    // Distinct from "active" above: this entry is fully detached (attachmentCount === 0) and is
+    // protected *only* by `entry.protection.active`, not by `entry.attachmentCount > 0`. A host
+    // reaches this state via `EditorModelRegistry.updateProtection()`, whose
+    // `active: entry.attachmentCount > 0 || protection.active` keeps `active` true for a detached
+    // entry the host still marks active.
+    name: "active-detached",
+    protection: UNPROTECTED_EDITOR_MODEL,
+    stayAttached: false,
+    markActiveAfterDetach: true,
+    d4: { dirty: false, pinned: false, active: true, pendingOperation: false },
+  },
+  {
+    name: "pending-save",
+    protection: { ...UNPROTECTED_EDITOR_MODEL, pendingSave: true },
+    stayAttached: false,
+    d4: { dirty: false, pinned: false, active: false, pendingOperation: true },
+  },
+  {
+    name: "pending-conflict",
+    protection: { ...UNPROTECTED_EDITOR_MODEL, pendingConflict: true },
+    stayAttached: false,
+    d4: { dirty: false, pinned: false, active: false, pendingOperation: true },
+  },
+  {
+    name: "hot-exit-recovery",
+    protection: { ...UNPROTECTED_EDITOR_MODEL, hotExitRecovery: true },
+    stayAttached: false,
+    d4: { dirty: false, pinned: false, active: false, pendingOperation: true },
+  },
+  {
+    name: "agent-review",
+    protection: { ...UNPROTECTED_EDITOR_MODEL, agentReview: true },
+    stayAttached: false,
+    d4: { dirty: false, pinned: false, active: false, pendingOperation: true },
+  },
+];
+
+function attachD4ConformanceScenarios(
+  registry: EditorModelRegistry,
+  namespace: FakeNamespace,
+): ReadonlyMap<string, FakeModel> {
+  const models = new Map<string, FakeModel>();
+  D4_CONFORMANCE_SCENARIOS.forEach((scenario, index) => {
+    const rootKey = "scope:/repo";
+    const key = `${rootKey}:${scenario.name}.ts`;
+    const attachment = registry.attach({
+      key,
+      rootKey,
+      uri: uri(`${scenario.name}.ts`),
+      language: "typescript",
+      text: `// ${scenario.name}\n`,
+      sizeBytes: 8,
+      degraded: false,
+      viewStateKey: `pane:${scenario.name}`,
+      namespace,
+      editor: new FakeEditor(),
+      protection: scenario.protection,
+    });
+    const created = namespace.created[index];
+    if (created !== undefined) models.set(scenario.name, created);
+    if (!scenario.stayAttached) attachment.detach();
+    if (scenario.markActiveAfterDetach) {
+      // `detach()` above already reset `active` to false (attachmentCount === 0); re-apply
+      // `active: true` through the real host-facing entry point so the entry is protected only
+      // by `entry.protection.active`, never by `entry.attachmentCount > 0`.
+      registry.updateProtection(key, { ...scenario.protection, active: true }, rootKey);
+    }
+  });
+  return models;
+}
+
+describe("D4 baseline conformance (KEIKO-0751, #3325)", () => {
+  // ADR-0133 documents `planEditorM7ModelEviction`/`evictionEligible`
+  // (packages/keiko-contracts/src/editor-m7.ts) as a dead D4 baseline reference algorithm: the
+  // production runtime never calls it, and `EditorModelRegistry`'s own `protectedEntry()`
+  // implements a strictly richer, independently-evolved protection set. This is a conformance
+  // check on that claim, not a fixture that recomputes one side from the other (AGENTS.md §7): both
+  // sides run their own real production entry point — `planEditorM7ModelEviction` and the
+  // registry's real budget-driven eviction path — over the same scenario set, and the assertion is
+  // the subset/refinement property itself: whatever the D4 baseline would protect must never be
+  // evicted by the registry.
+  it("never evicts an entry the D4 baseline's evictionEligible would protect", () => {
+    // Deliberately loose on construction: `attach()`/`detach()`/`updateProtection()` each call
+    // `enforceBudgets()` internally, and a scenario that goes through detach() (dropping
+    // `attachmentCount` to 0, which momentarily makes the entry unprotected) before re-applying
+    // `protection.active` via `updateProtection()` (see "active-detached" above) must not be
+    // evicted by that momentary gap. A budget that comfortably covers every scenario lets the
+    // whole attach/detach/re-protect sequence run without incidental eviction, so the only real
+    // eviction pressure comes from the deliberate `registry.configure()` tightening below.
+    const registry = new EditorModelRegistry({
+      countBudget: D4_CONFORMANCE_SCENARIOS.length + 5,
+      byteBudget: 1_000_000,
+    });
+    const namespace = new FakeNamespace();
+    const models = attachD4ConformanceScenarios(registry, namespace);
+
+    // Force real eviction pressure: tightening the count budget makes `enforceBudgets()` evict
+    // every entry its own `protectedEntry()` does not protect, down to the budget or until only
+    // protected entries remain (whichever comes first). This is the load-bearing eviction pass —
+    // nothing above triggered eviction against the loose construction-time budget.
+    registry.configure({ countBudget: 1, byteBudget: 1_000_000 });
+
+    const entries: readonly EditorM7ModelEntry[] = D4_CONFORMANCE_SCENARIOS.map(
+      (scenario, index) => ({
+        identity: scenario.name,
+        byteSize: 8,
+        lastAccessSequence: index + 1,
+        ...scenario.d4,
+      }),
+    );
+    // Force the D4 baseline under the same tight budget so it also evicts everything its own
+    // `evictionEligible` allows.
+    const plan = planEditorM7ModelEviction({ entries, maximumCount: 1, maximumBytes: 1_000_000 });
+
+    // Sanity: the scenario set actually produced real eviction pressure on both sides, so the
+    // subset assertion below is not vacuously true.
+    expect(plan.evicted.length).toBeGreaterThan(0);
+    expect(
+      D4_CONFORMANCE_SCENARIOS.some(
+        (scenario) => models.get(scenario.name)?.dispose.mock.calls.length === 1,
+      ),
+    ).toBe(true);
+
+    const disposedProtectedIdentities = plan.protected.filter(
+      (identity) => models.get(identity)?.dispose.mock.calls.length === 1,
+    );
+    expect(disposedProtectedIdentities).toEqual([]);
   });
 });
