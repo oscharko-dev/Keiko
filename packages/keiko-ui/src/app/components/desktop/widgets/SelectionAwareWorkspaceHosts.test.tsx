@@ -229,16 +229,22 @@ function context(overrides: Partial<WindowRenderContext> = {}): WindowRenderCont
 
 interface Deferred<T> {
   readonly promise: Promise<T>;
+  readonly reject: (reason?: unknown) => void;
   readonly resolve: (value: T) => void;
 }
 
 function deferred<T>(): Deferred<T> {
+  let rejectPromise: ((reason?: unknown) => void) | undefined;
   let resolvePromise: ((value: T) => void) | undefined;
-  const promise = new Promise<T>((resolve): void => {
+  const promise = new Promise<T>((resolve, reject): void => {
     resolvePromise = resolve;
+    rejectPromise = reject;
   });
   return {
     promise,
+    reject: (reason?: unknown): void => {
+      rejectPromise?.(reason);
+    },
     resolve: (value: T): void => {
       resolvePromise?.(value);
     },
@@ -918,6 +924,56 @@ describe("ChatWindowSessionHost target missing", () => {
     await act(async (): Promise<void> => {
       replacement.resolve(replacementChat);
       await replacementResult;
+    });
+  });
+
+  it("releases a detached host request before re-requesting after its rejection (#3210)", async (): Promise<void> => {
+    vi.stubGlobal("reportError", vi.fn());
+    const rejected = deferred<Chat | undefined>();
+    const replacement = deferred<Chat | undefined>();
+    const replacementChat = chatFixture("chat-replacement", "Replacement", 2);
+    chatSessionState.openNewChat = vi
+      .fn()
+      .mockReturnValueOnce(rejected.promise)
+      .mockReturnValueOnce(replacement.promise);
+    const ctx = context();
+    const view = render(
+      <I18nProvider>
+        <ChatWindowSessionHost cfg={{ newChatRequestId: "request-a" }} ctx={ctx} />
+      </I18nProvider>,
+    );
+    await waitFor((): void => {
+      expect(chatSessionState.openNewChat).toHaveBeenCalledTimes(1);
+    });
+
+    view.rerender(
+      <I18nProvider>
+        <ChatWindowSessionHost cfg={{ chatId: "already-open" }} ctx={ctx} />
+      </I18nProvider>,
+    );
+    view.rerender(
+      <I18nProvider>
+        <ChatWindowSessionHost cfg={{ newChatRequestId: "request-a" }} ctx={ctx} />
+      </I18nProvider>,
+    );
+    await waitFor((): void => {
+      expect(chatSessionState.openNewChat).toHaveBeenCalledTimes(2);
+    });
+
+    await act(async (): Promise<void> => {
+      rejected.reject(new Error("transport rejected the detached request"));
+      await Promise.resolve();
+    });
+    expect(ctx.updateCfg).not.toHaveBeenCalled();
+
+    await act(async (): Promise<void> => {
+      replacement.resolve(replacementChat);
+      await Promise.resolve();
+    });
+    await waitFor((): void => {
+      expect(ctx.updateCfg).toHaveBeenCalledWith(
+        expect.objectContaining({ chatId: replacementChat.id, newChatRequestId: undefined }),
+      );
     });
   });
 

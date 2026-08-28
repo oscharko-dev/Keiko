@@ -68,7 +68,7 @@ function initialCfg(fields: readonly LocalizedConfigField[]): Cfg {
 
 function useNewWindowFocusRestore(opener: HTMLElement | null | undefined): void {
   const triggerRef = useRef(opener ?? null);
-  useEffect(() => {
+  useEffect((): (() => void) => {
     const trigger = triggerRef.current;
     return () => {
       // Audit C148 — confirming from the Empty State unmounts the trigger button
@@ -77,7 +77,7 @@ function useNewWindowFocusRestore(opener: HTMLElement | null | undefined): void 
       // window (focusable via tabIndex={-1}) or the New-window FAB — the same
       // deterministic targets as WindowFrame's close-with-focus-restore. The rAF
       // waits for React to commit the new window before querying it.
-      if (trigger?.isConnected === true) {
+      if (trigger?.isConnected === true && trigger !== document.body) {
         trigger.focus();
         return;
       }

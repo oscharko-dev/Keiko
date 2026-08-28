@@ -84,11 +84,22 @@ export interface MemoryMetadata {
   readonly updatedAt: number;
 }
 
+// Body-free pre-image captured inside the same SQLite write transaction as an update. Consumers
+// must never infer this state from a process-local cache: another process can mutate the vault
+// between two BFF requests.
+export type MemoryUpdatePreImage = Pick<MemoryRecord, "id" | "status" | "pinned">;
+
 // Mutating-call event union for the optional onMemoryEvent callback. #214 wires the audit ledger
 // here later; #206 only forwards the event after a successful commit.
 export type MemoryEvent =
   | { readonly kind: "memory:inserted"; readonly record: MemoryRecord }
-  | { readonly kind: "memory:updated"; readonly record: MemoryRecord }
+  | {
+      readonly kind: "memory:updated";
+      readonly record: MemoryRecord;
+      // Optional only for compatibility with pre-image-free external adapters. The vault itself
+      // always emits it, and the audit bridge degrades conservatively when it is absent.
+      readonly previous?: MemoryUpdatePreImage;
+    }
   | {
       readonly kind: "memory:deleted";
       readonly memoryId: MemoryId;

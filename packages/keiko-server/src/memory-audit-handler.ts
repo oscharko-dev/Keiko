@@ -353,6 +353,7 @@ export function createMemoryAuditHandler(options: MemoryAuditHandlerOptions): Me
   const newEventId = options.newEventId ?? ((): string => randomUUID());
   const previousStatus = new Map<MemoryId, MemoryStatus>();
   const previousPinned = new Map<MemoryId, boolean>();
+  let seeded = false;
 
   const handler = (event: MemoryEvent): void => {
     const ctx: BuildContext = {
@@ -376,6 +377,10 @@ export function createMemoryAuditHandler(options: MemoryAuditHandlerOptions): Me
   };
   return Object.assign(handler, {
     seed: (records: readonly MemoryAuditSeedRecord[]): void => {
+      if (seeded) {
+        throw new Error("MemoryAuditHandler.seed() may only be called once before mutations.");
+      }
+      seeded = true;
       seedStateCache(records, previousStatus, previousPinned);
     },
   });
@@ -404,19 +409,11 @@ function mapVaultEvent(
     case "memory:inserted":
       return buildInsertedEvent(event.record, ctx);
     case "memory:updated":
-      return buildUpdatedEvent(
-        event.record,
-        previousStatus.get(event.record.id),
-        previousPinned.get(event.record.id),
-        ctx,
-      );
+      return mapUpdatedVaultEvent(event, previousStatus, previousPinned, ctx);
     case "memory:tombstoned":
       return buildTombstonedEvent(event.tombstone, ctx);
     case "memory:deleted":
-      if (event.tombstoned) {
-        return undefined;
-      }
-      return buildDeletedEvent(event.memoryId, event.scope, ctx);
+      return mapDeletedVaultEvent(event, ctx);
     case "edge:inserted":
     case "edge:deleted":
     case "embedding:upserted":
@@ -425,6 +422,27 @@ function mapVaultEvent(
     default:
       return undefined;
   }
+}
+
+function mapUpdatedVaultEvent(
+  event: Extract<MemoryEvent, { readonly kind: "memory:updated" }>,
+  previousStatus: ReadonlyMap<MemoryId, MemoryStatus>,
+  previousPinned: ReadonlyMap<MemoryId, boolean>,
+  ctx: BuildContext,
+): MemoryAuditEvent | undefined {
+  return buildUpdatedEvent(
+    event.record,
+    event.previous?.status ?? previousStatus.get(event.record.id),
+    event.previous?.pinned ?? previousPinned.get(event.record.id),
+    ctx,
+  );
+}
+
+function mapDeletedVaultEvent(
+  event: Extract<MemoryEvent, { readonly kind: "memory:deleted" }>,
+  ctx: BuildContext,
+): MemoryAuditEvent | undefined {
+  return event.tombstoned ? undefined : buildDeletedEvent(event.memoryId, event.scope, ctx);
 }
 
 function updateStateCache(

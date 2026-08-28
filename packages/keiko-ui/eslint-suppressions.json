@@ -579,7 +579,7 @@
   },
   "src/app/components/desktop/modals/NewWindowDialog.tsx": {
     "@typescript-eslint/explicit-function-return-type": {
-      "count": 6
+      "count": 5
     },
     "complexity": {
       "count": 3

@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   applyBackgroundModalLock,
+  focusedModalOpener,
   persistedChatProjectPath,
   prepareNewWindowCfg,
 } from "./AppShell";
@@ -70,6 +71,14 @@ describe("applyBackgroundModalLock", (): void => {
     expect(document.activeElement).toBe(outside);
     background.remove();
     outside.remove();
+  });
+});
+
+describe("focusedModalOpener", (): void => {
+  it("rejects document.body so modal cleanup reaches its deterministic fallback", (): void => {
+    document.body.focus();
+
+    expect(focusedModalOpener()).toBeNull();
   });
 });
 

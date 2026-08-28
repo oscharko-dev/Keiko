@@ -148,3 +148,8 @@ checks-green-to-merged gap is **1.6 minutes**, well inside the 30-minute target,
 and reaction time remain the operative cost. No review conversation was bulk-resolved, timer-resolved,
 or otherwise automated to create this report; the observation does not change ADR-0135 settlement
 semantics.
+
+The regression is tracked in [#3342](https://github.com/oscharko-dev/Keiko/issues/3342). After the
+next 10 finding-bearing pull requests merge to `dev`, rerun the same body-free report and compare
+the 10-minute-SLO share and median reaction against both cohorts above. The investigation must not
+weaken review, conversation-resolution, required-check, or merge controls.

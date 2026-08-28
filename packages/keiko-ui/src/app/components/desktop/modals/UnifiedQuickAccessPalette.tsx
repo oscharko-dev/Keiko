@@ -30,6 +30,10 @@ import { NATIVE_BLOCK_STYLE } from "../native-element-styles";
 
 const SEARCH_DEBOUNCE_MS = 120;
 const SEARCH_LIMIT = 30;
+// MD-05: the input owns the active option; do not replace this with a native select because each
+// result is an interactive command that opens a file or executes a palette action.
+const ACTIVE_DESCENDANT_RESULTS_ROLE = "listbox";
+const ACTIVE_DESCENDANT_OPTION_ROLE = "option";
 
 type QuickAccessMode = "files" | "commands";
 
@@ -283,7 +287,7 @@ function useQuickAccessFocusRestore(
     const opener = openerRef.current;
     inputRef.current?.focus();
     return (): void => {
-      if (opener?.isConnected === true) opener.focus();
+      if (opener?.isConnected === true && opener !== document.body) opener.focus();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -439,6 +443,7 @@ export function UnifiedQuickAccessPalette({
   );
 
   const emptyText = quickAccessEmptyText(t, mode, root, query);
+  const activeOptionId = itemCount > 0 ? `quick-access-option-${String(selected)}` : undefined;
   const resultsStatus = quickAccessResultsStatus(
     t,
     itemCount,
@@ -469,6 +474,11 @@ export function UnifiedQuickAccessPalette({
           <input
             ref={inputRef}
             type="search"
+            role="combobox"
+            aria-autocomplete="list"
+            aria-controls="quick-access-results"
+            aria-expanded="true"
+            aria-activedescendant={activeOptionId}
             aria-label={
               mode === "commands" ? t("quickAccess.query.commands") : t("quickAccess.query.files")
             }
@@ -493,14 +503,17 @@ export function UnifiedQuickAccessPalette({
             {t("quickAccess.searchUnavailable", { roots: failedRoots.join(", ") })}
           </div>
         ) : null}
-        <div className="cmdk-list">
+        <div id="quick-access-results" className="cmdk-list" role={ACTIVE_DESCENDANT_RESULTS_ROLE}>
           {itemCount === 0 && <div className="cmdk-empty">{emptyText}</div>}
           {itemCount > 0 &&
             mode === "commands" &&
             commandResults.map((command, index) => (
               <button
                 key={command.id}
+                id={`quick-access-option-${String(index)}`}
                 type="button"
+                role={ACTIVE_DESCENDANT_OPTION_ROLE}
+                aria-selected={index === selected}
                 className="cmdk-row"
                 data-sel={index === selected}
                 tabIndex={-1}
@@ -520,7 +533,10 @@ export function UnifiedQuickAccessPalette({
             searchResults.map((result, index) => (
               <button
                 key={`${result.root}:${result.kind}:${result.path}:${String(result.line)}:${index.toString()}`}
+                id={`quick-access-option-${String(index)}`}
                 type="button"
+                role={ACTIVE_DESCENDANT_OPTION_ROLE}
+                aria-selected={index === selected}
                 className="cmdk-row"
                 data-sel={index === selected}
                 tabIndex={-1}

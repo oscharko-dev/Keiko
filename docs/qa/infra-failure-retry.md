@@ -101,29 +101,26 @@ only with evidence, and record the widening here.
 
 ## Post-activation observation, 2026-07-25 → 2026-08-25 (#2750)
 
-The scheduled 30-day observation closed with fewer than the five target occurrences. The observer
-received 4,965 workflow-run events in this period; 4,354 were skipped because their source run was
-not a failure. The remaining 611 completed classifications were read from their body-free decision
-lines:
+The original aggregate was withdrawn: a single GitHub workflow-runs listing is capped at 1,000
+records, so the stated classification breakdown could not establish that it covered the full
+window. The corrected, reproducible source envelope is generated per UTC day, which prevents that
+cap from silently truncating a high-volume day:
 
-| Classification      | Runs | Action    |
-| ------------------- | ---: | --------- |
-| `genuine`           |  562 | no action |
-| `excluded-lane`     |   30 | no action |
-| `already-attempted` |   19 | no action |
-| `infra`             |    0 | re-run    |
+```bash
+GH_TOKEN=... npm run report:infra-failure-observation -- --from 2026-07-25 --to 2026-08-25
+```
 
-There were no eligible infrastructure-signature occurrences and therefore no automatic re-run
-request or manual re-run required for such an occurrence. The observation demonstrates the
-fail-closed default at production volume: every classified run stayed on the existing manual path
-unless the exact pinned signature and structural preconditions would have admitted it. The
-allowlist remains unchanged; in particular, this window does not authorize widening it to an
-external aggregate.
+The 2026-08-28 rerun returns **4,963** `workflow_run`-triggered observer records: **4,273** skipped
+because the source run was not a failure, and **690** where the observer job completed. Two manual
+`workflow_dispatch` executions are deliberately excluded: they are not production observations.
+The reporter outputs only dates and outcome counts; it does not read job logs or expose their
+contents.
 
-The aggregate is reproducible from the `Infrastructure failure re-run` workflow history for the
-date range, counting only the observer runs whose `Classify infrastructure-signature failure` job
-actually executed. Its summaries contain only the run id, workflow path, counts, signature id, and
-the closed classification/action vocabulary.
+The Actions REST API does not surface a job summary's classifier verdict as structured data. This
+report therefore does **not** infer a `genuine`/`excluded-lane`/`already-attempted`/`infra`
+breakdown from observer completion counts. A future claim about those verdicts must commit a
+body-free, per-run decision export produced by the workflow itself. Until then, this window records
+the complete observer envelope only and does not authorize widening the eligible allowlist.
 
 ## When the signature drifts
 

@@ -238,6 +238,28 @@ describe("NewWindowDialog: focus-restoration guaranteed fallback (MD-05)", () =>
     // on some browsers); with it, document.body is always the fallback.
     expect(document.activeElement).toBe(document.body);
   });
+
+  it("does not treat document.body as a valid opener and uses the deterministic FAB fallback", async () => {
+    const fab = document.createElement("button");
+    fab.className = "ws-fab";
+    document.body.appendChild(fab);
+
+    const { unmount } = render(
+      <NewWindowDialog
+        type="chat"
+        types={WIN_TYPES}
+        opener={document.body}
+        onConfirm={vi.fn()}
+        onClose={vi.fn()}
+      />,
+    );
+    unmount();
+
+    await waitFor(() => {
+      expect(document.activeElement).toBe(fab);
+    });
+    fab.remove();
+  });
 });
 
 // FE-05 (WCAG 4.1.2) + FE-03 (WCAG 3.3.4): Start agent button in the agents

@@ -155,10 +155,21 @@ afterEach(async () => {
   }
 });
 
-async function boot(handlerDeps: UiHandlerDeps): Promise<number> {
+async function boot(
+  handlerDeps: UiHandlerDeps,
+  liveDictationInitialFrameTimeoutMs?: number,
+): Promise<number> {
   const staticRoot = tmpdir();
   const csp = "default-src 'none'";
-  const probe = createUiServer({ staticRoot, csp, port: 0, handlerDeps });
+  const probe = createUiServer({
+    staticRoot,
+    csp,
+    port: 0,
+    handlerDeps,
+    ...(liveDictationInitialFrameTimeoutMs === undefined
+      ? {}
+      : { liveDictationInitialFrameTimeoutMs }),
+  });
   const port = await new Promise<number>((res) =>
     probe.listen(0, UI_HOST, () => {
       res((probe.address() as AddressInfo).port);
@@ -169,7 +180,15 @@ async function boot(handlerDeps: UiHandlerDeps): Promise<number> {
       res();
     }),
   );
-  const listening = createUiServer({ staticRoot, csp, port, handlerDeps });
+  const listening = createUiServer({
+    staticRoot,
+    csp,
+    port,
+    handlerDeps,
+    ...(liveDictationInitialFrameTimeoutMs === undefined
+      ? {}
+      : { liveDictationInitialFrameTimeoutMs }),
+  });
   server = listening;
   await new Promise<void>((res) => {
     listening.listen(port, UI_HOST, res);
@@ -337,13 +356,13 @@ describe("WebSocket voice control upgrade — capability gate (AC1/AC3)", () => 
   });
 
   it("rejects an upgrade on any other path", async () => {
-    const port = await boot(depsWith({ config: voiceConfig(true), configPresent: true }));
+    const port = await boot(depsWith({ config: voiceConfig(true), configPresent: true }), 20);
     const result = await connect(port, { path: "/api/voice/other" });
     expect(result.opened).toBe(false);
   });
 
   it("rejects an upgrade carrying a non-loopback Origin (cross-origin defense)", async () => {
-    const port = await boot(depsWith({ config: voiceConfig(true), configPresent: true }));
+    const port = await boot(depsWith({ config: voiceConfig(true), configPresent: true }), 20_000);
     const result = await connect(port, { headers: { Origin: "http://evil.example.com" } });
     expect(result.opened).toBe(false);
   });
@@ -397,7 +416,7 @@ describe("WebSocket live dictation upgrade — transcription-only control plane"
   });
 
   it("does not let 64 idle sockets consume negotiated-session capacity (#3190)", async () => {
-    const port = await boot(depsWith({ config: voiceConfig(true), configPresent: true }));
+    const port = await boot(depsWith({ config: voiceConfig(true), configPresent: true }), 20_000);
     const idle = await Promise.all(
       Array.from({ length: 64 }, () => connect(port, { path: VOICE_LIVE_TRANSCRIBE_PATH })),
     );
@@ -417,7 +436,7 @@ describe("WebSocket live dictation upgrade — transcription-only control plane"
   it("closes an unnegotiated socket on the initial-frame deadline with correlated evidence", async () => {
     const sink = createBufferedServerLogSink();
     setServerLogger(createServerLogger({ sink, level: "info" }));
-    const port = await boot(depsWith({ config: voiceConfig(true), configPresent: true }));
+    const port = await boot(depsWith({ config: voiceConfig(true), configPresent: true }), 20);
     const { ws: socket } = expectOpen(
       await connect(port, {
         path: VOICE_LIVE_TRANSCRIBE_PATH,
@@ -434,7 +453,17 @@ describe("WebSocket live dictation upgrade — transcription-only control plane"
         correlationId: "live-dictation-initial-frame-timeout",
       }),
     );
-  }, 10_000);
+  });
+
+  it("does not admit junk opening frames before the initial-frame deadline", async () => {
+    const port = await boot(depsWith({ config: voiceConfig(true), configPresent: true }), 1_000);
+    const { ws: socket } = expectOpen(await connect(port, { path: VOICE_LIVE_TRANSCRIBE_PATH }));
+    const closed = nextCloseDetails(socket);
+
+    socket.send(JSON.stringify({ kind: "not-a-session-create" }));
+
+    await expect(closed).resolves.toEqual({ code: 1008, reason: "expected session.create" });
+  });
 
   it("keeps genuine negotiated-session capacity pressure on close(1013)", async () => {
     const sink = createBufferedServerLogSink();

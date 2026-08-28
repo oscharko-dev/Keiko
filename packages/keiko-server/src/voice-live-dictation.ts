@@ -128,6 +128,8 @@ type HostMessagePayload = DistributiveOmit<
 export interface VoiceLiveDictationPlaneDeps {
   readonly port: number;
   readonly handlerDeps: () => UiHandlerDeps;
+  // Test seam only; production keeps the bounded five-second admission deadline.
+  readonly initialFrameTimeoutMs?: number | undefined;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -303,7 +305,7 @@ function readSessionCreateFrame(
   try {
     parsed = JSON.parse(raw);
   } catch {
-    ws.close(1008, "invalid opening frame");
+    closeRejectedSocket(ws, 1008, "invalid opening frame");
     return undefined;
   }
   if (
@@ -311,13 +313,13 @@ function readSessionCreateFrame(
     !isRecord(parsed) ||
     parsed.kind !== "session.create"
   ) {
-    ws.close(1008, "expected session.create");
+    closeRejectedSocket(ws, 1008, "expected session.create");
     return undefined;
   }
   const sessionId = typeof parsed.sessionId === "string" ? parsed.sessionId : "unknown";
   if (parsed.chatContext !== undefined || parsed.persona !== undefined) {
     emitStandaloneError(ws, sessionId, "not-allowed-for-profile", redact);
-    ws.close(1008, "dialogue fields are not accepted");
+    closeRejectedSocket(ws, 1008, "dialogue fields are not accepted");
     return undefined;
   }
   return parsed as unknown as LiveSessionCreateMessage;
@@ -609,7 +611,7 @@ class VoiceLiveDictationPlaneImpl implements VoiceControlPlane {
     if (parsed === undefined) return undefined;
     const sessionId = parsed.sessionId;
     if (!isSafeIdentifier(sessionId) || !isSafeIdentifier(parsed.idempotencyKey)) {
-      ws.close(1008, "invalid session identifiers");
+      closeRejectedSocket(ws, 1008, "invalid session identifiers");
       return undefined;
     }
     if (
@@ -618,13 +620,13 @@ class VoiceLiveDictationPlaneImpl implements VoiceControlPlane {
       parsed.negotiationMode !== VOICE_PROFILE_NEGOTIATION_MODE["full-realtime"]
     ) {
       emitStandaloneError(ws, sessionId, "not-allowed-for-profile", deps.redactor);
-      ws.close(1008, "profile/negotiation mismatch");
+      closeRejectedSocket(ws, 1008, "profile/negotiation mismatch");
       return undefined;
     }
     const language = resolveRequestedTranscriptionLanguage(parsed.transcriptionLanguage);
     if (language === null) {
       emitStandaloneError(ws, sessionId, "invalid-message", deps.redactor);
-      ws.close(1008, "invalid transcription language");
+      closeRejectedSocket(ws, 1008, "invalid transcription language");
       return undefined;
     }
     return {
@@ -662,7 +664,7 @@ class VoiceLiveDictationPlaneImpl implements VoiceControlPlane {
         correlationId,
       });
       closeRejectedSocket(ws, 1008, "initial session frame deadline exceeded");
-    }, LIVE_DICTATION_INITIAL_FRAME_TIMEOUT_MS);
+    }, this.planeDeps.initialFrameTimeoutMs ?? LIVE_DICTATION_INITIAL_FRAME_TIMEOUT_MS);
     timer.unref();
     return timer;
   }
@@ -676,14 +678,13 @@ class VoiceLiveDictationPlaneImpl implements VoiceControlPlane {
     state: LiveDictationConnectionState,
   ): void {
     ws.on("message", (data: RawData, isBinary: boolean) => {
-      clearTimeout(initialFrameDeadline);
       if (rawDataByteLength(data) > MAX_VOICE_CONTROL_FRAME_BYTES) {
-        ws.close(1009, "control frame too large");
+        closeRejectedSocket(ws, 1009, "control frame too large");
         return;
       }
       const raw = rawDataToString(data, isBinary);
       if (raw === undefined) {
-        ws.close(1003, "binary frames are not permitted on the control plane");
+        closeRejectedSocket(ws, 1003, "binary frames are not permitted on the control plane");
         return;
       }
       if (state.connection !== undefined) {
@@ -704,6 +705,7 @@ class VoiceLiveDictationPlaneImpl implements VoiceControlPlane {
         return;
       }
       this.activeSessionSockets.add(ws);
+      clearTimeout(initialFrameDeadline);
       state.activeSession = true;
       state.connection = new VoiceLiveDictationConnection(
         ws,
@@ -743,7 +745,7 @@ class VoiceLiveDictationPlaneImpl implements VoiceControlPlane {
     this.attachMessageHandler(ws, deps, correlationId, voice, initialFrameDeadline, state);
     this.attachCloseHandler(ws, initialFrameDeadline, state);
     ws.on("error", () => {
-      ws.close(1011, "live dictation control plane error");
+      closeRejectedSocket(ws, 1011, "live dictation control plane error");
     });
   }
 }

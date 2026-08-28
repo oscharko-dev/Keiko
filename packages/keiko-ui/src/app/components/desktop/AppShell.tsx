@@ -842,9 +842,13 @@ export function deepLinkToolFor(path: string): "relationships" | "localKnowledge
   return null;
 }
 
-function focusedModalOpener(): HTMLElement | null {
+export function focusedModalOpener(): HTMLElement | null {
   const activeElement = document.activeElement;
-  return activeElement instanceof HTMLElement ? activeElement : null;
+  // `document.body` is the browser's no-focus sentinel, not a restore target. Capturing it would
+  // make the modal cleanup skip its deterministic window/FAB fallback.
+  return activeElement instanceof HTMLElement && activeElement !== document.body
+    ? activeElement
+    : null;
 }
 
 function AppShellInner(): ReactNode {

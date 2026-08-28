@@ -201,6 +201,61 @@ describe("createMemoryAuditHandler", () => {
     expect(readEvents(store, FIXED_NOW).map((event) => event.kind)).toEqual(["memory:updated"]);
   });
 
+  it("classifies an unpin from a seeded body-free pre-image", () => {
+    const store = createInMemoryEvidenceStore();
+    const handler = createMemoryAuditHandler({
+      evidenceStore: store,
+      redactString: identityRedact,
+      now: () => FIXED_NOW,
+      newEventId: makeIdFactory(),
+    });
+    const pinned = makeRecord({ pinned: true });
+
+    handler.seed([pinned]);
+    handler({ kind: "memory:updated", record: { ...pinned, pinned: false } });
+
+    expect(readEvents(store, FIXED_NOW).map((event) => event.kind)).toEqual(["memory:unpinned"]);
+  });
+
+  it("rejects a second empty seed instead of discarding live transition state", () => {
+    const store = createInMemoryEvidenceStore();
+    const handler = createMemoryAuditHandler({
+      evidenceStore: store,
+      redactString: identityRedact,
+      now: () => FIXED_NOW,
+      newEventId: makeIdFactory(),
+    });
+    const proposed = makeRecord({ status: "proposed" });
+
+    handler.seed([proposed]);
+    expect((): void => {
+      handler.seed([]);
+    }).toThrow("may only be called once");
+    handler({ kind: "memory:updated", record: { ...proposed, status: "accepted" } });
+
+    expect(readEvents(store, FIXED_NOW).map((event) => event.kind)).toEqual(["memory:accepted"]);
+  });
+
+  it("prefers the vault's transactional pre-image over a stale seeded cache", () => {
+    const store = createInMemoryEvidenceStore();
+    const handler = createMemoryAuditHandler({
+      evidenceStore: store,
+      redactString: identityRedact,
+      now: () => FIXED_NOW,
+      newEventId: makeIdFactory(),
+    });
+    const accepted = makeRecord({ status: "accepted" });
+
+    handler.seed([accepted]);
+    handler({
+      kind: "memory:updated",
+      record: { ...accepted, status: "archived" },
+      previous: { id: accepted.id, status: "proposed", pinned: false },
+    });
+
+    expect(readEvents(store, FIXED_NOW).map((event) => event.kind)).toEqual(["memory:archived"]);
+  });
+
   it("keeps audit hashes independent of runtime locale collation", () => {
     const localeCompare = vi.spyOn(String.prototype, "localeCompare").mockImplementation(() => {
       throw new Error("locale collation must not participate in canonical hashes");
