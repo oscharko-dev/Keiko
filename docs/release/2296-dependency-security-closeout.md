@@ -352,7 +352,7 @@ platform-authoritative evidence.
 | `npm run format:check`                                      | pass                                                     |
 | `npm run typecheck`                                         | pass                                                     |
 | `npm run lint`                                              | pass                                                     |
-| `npm test`                                                  | pending — re-run as the final verification               |
+| `npm test`                                                  | pass — 1729 files, 33 276 tests, 0 failures              |
 | `npm run arch:check`                                        | pass                                                     |
 | `npm run arch:check:negative`                               | pass                                                     |
 | `npm run check:knip`                                        | pass                                                     |
