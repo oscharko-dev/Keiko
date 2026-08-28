@@ -1148,6 +1148,7 @@ function reconcileToolCallingReadiness(
   observedGeneration: number | undefined,
   correlationId: string,
 ): void {
+  if (!report.probes.some((probe) => probe.name === "tool_calling")) return;
   try {
     reconcileGatewayToolCallingReadiness(deps, report, observedGeneration);
   } catch (error) {

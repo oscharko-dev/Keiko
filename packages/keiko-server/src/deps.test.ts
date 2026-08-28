@@ -34,6 +34,7 @@ import {
 import type {
   GatewayConfig,
   ModelCapability,
+  ModelProviderConfig,
   OpenAIEmbeddingAdapter,
   OpenAIEmbeddingOutcome,
   OpenAIEmbeddingRequest,
@@ -60,7 +61,10 @@ import type {
   WorkspaceReconciliationReport,
 } from "@oscharko-dev/keiko-contracts";
 import { TASK_WORKSPACE_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts/runtime/task-workspace";
-import { parseGatewayConfig } from "@oscharko-dev/keiko-model-gateway";
+import {
+  parseGatewayConfig,
+  toolCallingConfigurationFingerprint,
+} from "@oscharko-dev/keiko-model-gateway";
 import { createInMemoryUiStore, type UiStore } from "./store/index.js";
 import { DatabaseSync } from "node:sqlite";
 import { buildCspHeader } from "./csp.js";
@@ -323,6 +327,18 @@ function codingCapability(modelId: string): ModelCapability {
   return {
     ...chatCapability(modelId, 128_000, 4_096),
     preferredUseCases: ["Coding"],
+  };
+}
+
+function verifiedCodingCapability(provider: ModelProviderConfig): ModelCapability {
+  return {
+    ...codingCapability(provider.modelId),
+    toolCallingVerification: {
+      status: "verified",
+      checkedAt: new Date().toISOString(),
+      probe: "gateway-tool-calling-v1",
+      configurationFingerprint: toolCallingConfigurationFingerprint(provider),
+    },
   };
 }
 
@@ -1205,21 +1221,20 @@ describe("buildUiHandlerDeps — coding-sidecar model-source wiring", () => {
 
   it("derives the OpenAI API-key-through-gateway model source from the selected coding-safe provider", () => {
     const configPath = join(tmp("ev-sidecar-openai-"), "keiko.config.json");
+    const provider: ModelProviderConfig = {
+      modelId: "gpt-4.1-mini",
+      baseUrl: "https://api.openai.com/v1",
+      apiKey: "fake-test-key",
+      timeoutMs: 30000,
+      maxRetries: 2,
+      retryBaseDelayMs: 500,
+    };
     writeFileSync(
       configPath,
       JSON.stringify({
-        providers: [
-          {
-            modelId: "gpt-4.1-mini",
-            baseUrl: "https://api.openai.com/v1",
-            apiKey: "fake-test-key",
-            timeoutMs: 30000,
-            maxRetries: 2,
-            retryBaseDelayMs: 500,
-          },
-        ],
+        providers: [provider],
         circuitBreaker: { failureThreshold: 5, cooldownMs: 30000, halfOpenProbes: 2 },
-        capabilities: [codingCapability("gpt-4.1-mini")],
+        capabilities: [verifiedCodingCapability(provider)],
       }),
       "utf8",
     );
@@ -1243,20 +1258,19 @@ describe("buildUiHandlerDeps — coding-sidecar model-source wiring", () => {
 
     expect(deps.codingSidecarGatewayModelSourceResolver?.()).toBe("keiko-model-gateway");
 
+    const provider: ModelProviderConfig = {
+      modelId: "gpt-4.1-mini",
+      baseUrl: "https://api.openai.com/v1",
+      apiKey: "fake-test-key",
+      timeoutMs: 30000,
+      maxRetries: 2,
+      retryBaseDelayMs: 500,
+    };
     deps.gatewayConfig?.set(
       parseGatewayConfig({
-        providers: [
-          {
-            modelId: "gpt-4.1-mini",
-            baseUrl: "https://api.openai.com/v1",
-            apiKey: "fake-test-key",
-            timeoutMs: 30000,
-            maxRetries: 2,
-            retryBaseDelayMs: 500,
-          },
-        ],
+        providers: [provider],
         circuitBreaker: { failureThreshold: 5, cooldownMs: 30000, halfOpenProbes: 2 },
-        capabilities: [codingCapability("gpt-4.1-mini")],
+        capabilities: [verifiedCodingCapability(provider)],
       }),
       true,
     );
