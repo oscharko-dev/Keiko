@@ -501,9 +501,14 @@ describe("desktop files browser", () => {
     // enforces at the type level. `readable` stays the security invariant this test pins; there is
     // no separate `symlink` field to assert on since PR #3289 review (comment 3865167775) removed
     // it from the wire type -- `kind` alone is the discriminant.
+    // KEIKO-0873 (#3331): an out-of-root symlink target must NOT disclose whether the escaped path
+    // is a file or a directory -- `symlinkTargetKind` collapses to "unknown" whenever `contained`
+    // is false, mirroring how `readable` already collapses to `false` for the same case. Reporting
+    // the real kind here was a one-bit filesystem-enumeration oracle for paths the workspace
+    // boundary is otherwise supposed to hide entirely.
     expect(listing.entries.find((entry) => entry.name === "escape")).toMatchObject({
       kind: "symlink",
-      symlinkTargetKind: "directory",
+      symlinkTargetKind: "unknown",
       readable: false,
     });
     await expect(readFilesTree(store, root, "escape")).rejects.toMatchObject({
