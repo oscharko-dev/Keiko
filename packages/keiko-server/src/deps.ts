@@ -100,6 +100,7 @@ import {
   type ServerDiagnosticSink,
   type ServerDiagnosticSummary,
 } from "./diagnostics-log.js";
+import { UNKNOWN_CORRELATION_ID } from "./correlation.js";
 import { processServerLogSink } from "./process-log-sink.js";
 import type { CodexSubscriptionProfileCoordinator } from "./coding-codex-subscription.js";
 import {
@@ -1775,11 +1776,16 @@ function buildMemoryVault(
   // vault exists and before this composition returns it to mutation routes. This keeps the first
   // post-restart archive/accept/reject/pin mutation semantically classified without retaining
   // memory bodies in the audit bridge.
-  postCommitAudit.seed(
-    vault
-      .listMemoryScopes()
-      .flatMap((scope) => vault.listMemoryMetadataByScope(scope, { includeExpired: true })),
-  );
+  const records = vault
+    .listMemoryScopes()
+    .flatMap((scope) => vault.listMemoryMetadataByScope(scope, { includeExpired: true }));
+  postCommitAudit.seed(records);
+  processServerLogSink().write({
+    category: "memory",
+    op: "memory.audit.state-cache.seeded",
+    correlationId: UNKNOWN_CORRELATION_ID,
+    extra: { recordCount: records.length },
+  });
   return vault;
 }
 

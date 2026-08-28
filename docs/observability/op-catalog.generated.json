@@ -945,6 +945,12 @@
       "package": "keiko-server"
     },
     {
+      "op": "memory.audit.state-cache.seeded",
+      "category": "memory",
+      "site": "packages/keiko-server/src/deps.ts:1785",
+      "package": "keiko-server"
+    },
+    {
       "op": "memory.capture.novelty-gate",
       "category": "memory",
       "site": "packages/keiko-server/src/memory-embedding.ts:686",

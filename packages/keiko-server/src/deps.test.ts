@@ -78,6 +78,13 @@ import type { ManagedLspControlService } from "./editor/lsp/managedLspControl.js
 import { createWorkspaceScriptTrustService } from "./workspace-script-trust.js";
 import { buildBinding } from "./task-workspace/binding.js";
 import type { WorkspaceProvisioningService } from "./task-workspace/types.js";
+import {
+  createBufferedServerLogSink,
+  createServerLogger,
+  resetServerLogger,
+  setServerLogger,
+} from "./observability/index.js";
+import { UNKNOWN_CORRELATION_ID } from "./correlation.js";
 
 const tmpDirs: string[] = [];
 
@@ -1192,6 +1199,8 @@ describe("buildUiHandlerDeps — UiStore wiring (ADR-0013)", () => {
     const memoryDir = tmp("memory-audit-restart-");
     const evidenceDir = tmp("memory-audit-restart-evidence-");
     const fixture = memoryAuditFixture();
+    const activityLog = createBufferedServerLogSink();
+    setServerLogger(createServerLogger({ sink: activityLog, level: "info" }));
     const first = buildUiHandlerDeps({
       configPath: undefined,
       evidenceDir,
@@ -1225,7 +1234,17 @@ describe("buildUiHandlerDeps — UiStore wiring (ADR-0013)", () => {
     } finally {
       restarted.store.close();
       restarted.memoryVault?.close();
+      resetServerLogger();
     }
+
+    expect(activityLog.events).toContainEqual(
+      expect.objectContaining({
+        category: "memory",
+        op: "memory.audit.state-cache.seeded",
+        correlationId: UNKNOWN_CORRELATION_ID,
+        extra: { recordCount: 1 },
+      }),
+    );
   });
 
   // Wave 4a (epic #3233 §8): a UiStoreSchemaVersionError previously crashed startup as a bare,
