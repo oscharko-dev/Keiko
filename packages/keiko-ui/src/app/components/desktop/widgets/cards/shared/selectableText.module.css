@@ -1,0 +1,23 @@
+/* Issue #2710 — read-only text surfaces (file preview, file diff, review diff)
+   opt back in to text selection under the workspace canvas rule that sets
+   user-select: none in the global stylesheet and inherits into every window
+   body. Without this the text cannot be selected with the mouse at all, so
+   Ctrl+C has nothing to copy. Component-scoped per ADR-0123 D4 — the global
+   stylesheet's visual-proof gate stays untouched — and canonically cmp-prefixed
+   with locally scoped selectors only, so it adds no styling-exception entry.
+   The elements also carry data-text-selectable="true", which the interaction
+   guards already treat as an embedded text surface (no marquee start, no
+   workspace clipboard interception). */
+.cmp-selectable-text {
+  user-select: text;
+  -webkit-user-select: text;
+}
+
+/* Chrome that must never land in a copied range: line-number gutters, diff sign
+   gutters, and screen-reader-only labels. Applied to those elements directly
+   rather than through a globally scoped descendant selector, so a copied diff
+   carries the source text without line numbers or visually hidden labels. */
+.cmp-selectable-text-chrome {
+  user-select: none;
+  -webkit-user-select: none;
+}

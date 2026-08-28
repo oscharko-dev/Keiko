@@ -19,6 +19,7 @@ import { useWorkspace } from "./hooks/useWorkspace";
 import { registerWindowRender } from "./windows/WindowsRegistry";
 import type { UseWorkspaceResult, WorkspaceApi } from "./hooks/useWorkspace.types";
 import type { AppWindow, Connection, View } from "./windows/types";
+import { cutResult } from "../../../test-utils/workspace-api-fixture";
 
 vi.mock("./WorkspaceShader", () => ({ WorkspaceShader: () => null }));
 
@@ -33,8 +34,9 @@ function makeApi(view: View): WorkspaceApi {
     toggleWindowSelection: vi.fn(),
     clearSelection: vi.fn(),
     moveSelectedWindowsBy: vi.fn(() => ({ dx: 0, dy: 0 })),
-    copySelectedWindows: vi.fn(() => false),
-    pasteCopiedWindows: vi.fn(() => false),
+    copySelectedWindows: vi.fn(() => ({ captured: 0, skipped: 0, overflow: 0 })),
+    cutSelectedWindows: vi.fn(() => cutResult({ captured: 0, skipped: 0, overflow: 0 })),
+    pasteCopiedWindows: vi.fn(() => ({ pasted: 0, limitReached: false })),
     close: vi.fn(),
     minimize: vi.fn(),
     restore: vi.fn(),

@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { axe } from "jest-axe";
 import { describe, expect, it, vi } from "vitest";
@@ -11,6 +11,15 @@ import { WsContext, type WsContextValue } from "./context/WsContext";
 import type { UseWorkspaceResult, WorkspaceApi } from "./hooks/useWorkspace.types";
 import { InspectorPanel } from "./widgets/panels/InspectorPanel";
 import type { AppWindow } from "./windows/types";
+import { workspaceApiFixture } from "../../../test-utils/workspace-api-fixture";
+
+// Matches Workspace.test.tsx's own convention: the shader is a next/dynamic,
+// SSR-disabled import, so leaving it unmocked resolves outside of React's act()
+// tracking and produces "not wrapped in act(...)" noise the moment a test
+// triggers any state update (e.g. the clipboard-status keydown test below).
+vi.mock("./WorkspaceShader", () => ({
+  WorkspaceShader: (): null => null,
+}));
 
 function appWindow(patch: Partial<AppWindow> & Pick<AppWindow, "id" | "type">): AppWindow {
   return {
@@ -26,51 +35,7 @@ function appWindow(patch: Partial<AppWindow> & Pick<AppWindow, "id" | "type">): 
   };
 }
 
-function api(patch: Partial<WorkspaceApi> = {}): WorkspaceApi {
-  return {
-    add: vi.fn(() => null),
-    openEditorFile: vi.fn(() => ({ ok: false as const, message: "Unable to open editor." })),
-    toggleTool: vi.fn(),
-    focus: vi.fn(),
-    currentSelection: vi.fn(() => ({ focusedWindowId: null, selectedWindowIds: [] })),
-    replaceSelection: vi.fn(),
-    toggleWindowSelection: vi.fn(),
-    clearSelection: vi.fn(),
-    moveSelectedWindowsBy: vi.fn(() => ({ dx: 0, dy: 0 })),
-    copySelectedWindows: vi.fn(() => false),
-    pasteCopiedWindows: vi.fn(() => false),
-    close: vi.fn(),
-    minimize: vi.fn(),
-    restore: vi.fn(),
-    maximize: vi.fn(),
-    update: vi.fn(),
-    setSnap: vi.fn(),
-    commitSnap: vi.fn(),
-    tileAll: vi.fn(),
-    splitFront: vi.fn(),
-    cascade: vi.fn(),
-    startConnect: vi.fn(),
-    confirmConnect: vi.fn(),
-    cancelConnect: vi.fn(),
-    removeConn: vi.fn(),
-    updateConnBoundScope: vi.fn(),
-    connect: vi.fn(),
-    linkedFilesRoot: vi.fn(() => null),
-    linkedAllFilesRoots: vi.fn(() => []),
-    linkedConnectorCapsuleIds: vi.fn(() => []),
-    linkedConnectorCapsuleSetIds: vi.fn(() => []),
-    linkedFigmaSnapshotRunIds: vi.fn(() => []),
-    linkedFilesContext: vi.fn(() => null),
-    currentFilesContext: vi.fn(() => null),
-    zoomTo: vi.fn(),
-    fitView: vi.fn(),
-    resetView: vi.fn(),
-    panBy: vi.fn(),
-    rect: vi.fn(() => null),
-    currentView: vi.fn(() => ({ x: 0, y: 0, zoom: 1 })),
-    ...patch,
-  };
-}
+const api = workspaceApiFixture;
 
 function workspace(partial: Partial<UseWorkspaceResult>): UseWorkspaceResult {
   const wins = partial.wins ?? [];
@@ -209,6 +174,37 @@ describe("Workspace shell accessibility", () => {
         onCloseWindowPalette={vi.fn()}
       />,
     );
+
+    const results = await axe(container);
+    expect(results).toHaveNoViolations();
+  });
+
+  // Issue #2150 follow-up — the copy/cut/paste outcome pill (Workspace.tsx
+  // WorkspaceClipboardStatusView) is a role="status" aria-live region that only
+  // carries text once a clipboard command runs; the whole-shell axe pass above
+  // only ever exercises its empty, data-visible="false" resting state. Trigger
+  // the announcement so axe evaluates the region in the state assistive tech
+  // actually reads it in.
+  it("passes jest-axe while the clipboard status pill is announcing an outcome", async () => {
+    // A non-empty `wins` keeps the workspace out of its empty-state layout,
+    // which lazily loads EmptyWorkspaceBlob (a next/dynamic component, same
+    // family as the mocked WorkspaceShader) — irrelevant to this assertion.
+    const reviewWindow = appWindow({ id: "review-1", type: "review", cfg: { runId: "run-123" } });
+    const copySelectedWindows = vi.fn(() => ({ captured: 1, skipped: 0, overflow: 0 }));
+    const { container } = render(
+      <Workspace
+        ws={workspace({ wins: [reviewWindow], api: api({ copySelectedWindows }) })}
+        wsRef={{ current: null }}
+        openPalette={vi.fn()}
+      />,
+    );
+    const surface = screen.getByRole("main", { name: "Workspace surface" });
+
+    fireEvent.keyDown(surface, { key: "c", ctrlKey: true });
+
+    const status = screen.getByTestId("workspace-clipboard-status");
+    expect(status).toHaveAttribute("data-visible", "true");
+    expect(status).toHaveTextContent("1 window copied");
 
     const results = await axe(container);
     expect(results).toHaveNoViolations();

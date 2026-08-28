@@ -1,6 +1,8 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   applyContentWheelZoom,
+  applyWheelZoomToWindows,
+  createWheelContentZoomQueue,
   fitWorkspaceViewToWindows,
   fitWindowToViewport,
   fitWindowsToViewport,
@@ -142,6 +144,162 @@ describe("content wheel zoom", () => {
       max: win.max,
       zoom: 1.2,
     });
+  });
+
+  // Issue #2402 — applyWheelZoomToWindows replaces the targeted window's slot
+  // with a new object, but every other window in the array must stay the SAME
+  // object it already was. WindowFrame is memoized per window; a sibling that
+  // gets a fresh object identity on every wheel tick of a NEIGHBORING window's
+  // content zoom would re-render for no reason, exactly the per-event cost
+  // #2402 exists to remove.
+  it("replaces only the targeted window's object and preserves every sibling's identity", () => {
+    const target = appWindow({ id: "target", zoom: 1 });
+    const siblingA = appWindow({ id: "sibling-a", zoom: 1 });
+    const siblingB = appWindow({ id: "sibling-b", zoom: 1 });
+    const wins = [siblingA, target, siblingB];
+
+    const next = applyWheelZoomToWindows(wins, "target", [-100]);
+
+    expect(next).not.toBe(wins);
+    expect(next?.find((w) => w.id === "sibling-a")).toBe(siblingA);
+    expect(next?.find((w) => w.id === "sibling-b")).toBe(siblingB);
+    const nextTarget = next?.find((w) => w.id === "target");
+    expect(nextTarget).not.toBe(target);
+    expect(nextTarget?.zoom).toBe(1.2);
+  });
+
+  it("returns the SAME array when the replayed deltas snap back to the same zoom", () => {
+    const target = appWindow({ id: "target", zoom: 1 });
+    const sibling = appWindow({ id: "sibling", zoom: 1 });
+    const wins = [target, sibling];
+
+    // deltaY 0 -> exp(0) = 1: the snapped zoom cannot move.
+    const next = applyWheelZoomToWindows(wins, "target", [0]);
+
+    expect(next).toBe(wins);
+  });
+
+  it("returns the SAME array when a multi-delta batch ends back at its starting zoom", () => {
+    // A batch that moves the zoom and returns to where it started has no net
+    // effect, so it must not flip the array identity either — that identity is
+    // what drives the downstream render, persistence, connection-prune and
+    // selection-normalization work #2402 exists to avoid. The clamp-boundary
+    // case has exactly this shape: from 1.9, exp(0.45) overshoots the 2.0 cap
+    // and pins there, then exp(-0.06) eases to ~1.8835, which the 0.1 snap
+    // rounds back to 1.9 — the same value the batch started from. The expected
+    // value is stated here rather than recomputed with the production helper,
+    // which would make the assertion its own oracle.
+    const target = appWindow({ id: "target", zoom: 1.9 });
+    const wins = [target, appWindow({ id: "sibling", zoom: 1 })];
+
+    const next = applyWheelZoomToWindows(wins, "target", [-300, 40]);
+
+    expect(next).toBe(wins);
+    expect(next?.find((win) => win.id === "target")?.zoom).toBe(1.9);
+  });
+
+  it("returns the SAME array unchanged when the targeted window id is not present", () => {
+    const wins = [appWindow({ id: "only" })];
+
+    const next = applyWheelZoomToWindows(wins, "missing", [-100]);
+
+    expect(next).toBe(wins);
+  });
+
+  it("returns null unchanged when there is no windows array yet", () => {
+    expect(applyWheelZoomToWindows(null, "any", [-100])).toBeNull();
+  });
+
+  // Reviewer finding on PR #3305 — the array-boundary case, direct: `ws.findIndex` on an empty
+  // array is always -1, so `current` is `undefined` and the existing
+  // `if (current === undefined) return ws;` guard already returns the SAME (empty) reference
+  // untouched — the same guard the "id not present" case above exercises, just at length 0.
+  it("returns the SAME array unchanged when the windows array is empty", () => {
+    const wins: AppWindow[] = [];
+
+    const next = applyWheelZoomToWindows(wins, "any", [-100]);
+
+    expect(next).toBe(wins);
+  });
+
+  // Reviewer finding on PR #3305 — a hostile/malformed wheel delta must never let a window's zoom
+  // become a non-finite number. nextContentZoomFromWheel's clampContentZoom resolves a
+  // non-finite-but-not-NaN operand (±Infinity) to the nearer bound, because Math.exp saturates to
+  // 0 or +Infinity first and Math.max/Math.min then clamp that finite-vs-infinite comparison
+  // normally.
+  it("clamps an Infinity or -Infinity content-zoom delta to a finite, in-range zoom", () => {
+    const wins = [appWindow({ id: "target", zoom: 1 })];
+
+    const fromPlusInfinity = applyWheelZoomToWindows(wins, "target", [Infinity]);
+    const fromMinusInfinity = applyWheelZoomToWindows(wins, "target", [-Infinity]);
+    const plusZoom = fromPlusInfinity?.find((w) => w.id === "target")?.zoom ?? Number.NaN;
+    const minusZoom = fromMinusInfinity?.find((w) => w.id === "target")?.zoom ?? Number.NaN;
+
+    expect(Number.isFinite(plusZoom)).toBe(true);
+    expect(Number.isFinite(minusZoom)).toBe(true);
+    // exp(-Infinity * 0.0015) underflows to 0, snapping to the CONTENT_MIN_ZOOM floor.
+    expect(plusZoom).toBe(0.5);
+    // exp(Infinity * 0.0015) overflows to Infinity, snapping to the CONTENT_MAX_ZOOM ceiling.
+    expect(minusZoom).toBe(2);
+  });
+
+  // Unlike ±Infinity above, Math.max/Math.min propagate NaN instead of clamping it — a NaN
+  // operand makes both return NaN (`Math.min(2, NaN) === NaN`), so without a dedicated guard
+  // clampContentZoom's `Math.max(CONTENT_MIN_ZOOM, Math.min(CONTENT_MAX_ZOOM, ...))` would come
+  // out the other end still NaN instead of landing on either bound. clampContentZoom's
+  // `if (Number.isNaN(z)) return 1;` short-circuits before that chain for exactly this reason.
+  it("never lets a NaN content-zoom delta produce a non-finite window zoom", () => {
+    const wins = [appWindow({ id: "target", zoom: 1 })];
+
+    const next = applyWheelZoomToWindows(wins, "target", [NaN]);
+    const zoom = next?.find((w) => w.id === "target")?.zoom ?? Number.NaN;
+
+    expect(Number.isFinite(zoom)).toBe(true);
+  });
+});
+
+// Reviewer finding on PR #3305 — an unmount mid-gesture must not let a QUEUED (not yet flushed)
+// content-zoom frame commit later. createWheelContentZoomQueue is exported specifically so this
+// can pin the frame-cancellation bookkeeping directly, without wiring a DOM/wheel-event harness
+// (useWorkspace.wheel.test.tsx pins the same guarantee end-to-end through the real onWheel
+// listener).
+describe("createWheelContentZoomQueue frame cancellation", () => {
+  function mockAnimationFrames(): {
+    readonly callbacks: FrameRequestCallback[];
+    readonly cancelSpy: ReturnType<typeof vi.spyOn>;
+  } {
+    const callbacks: FrameRequestCallback[] = [];
+    vi.spyOn(window, "requestAnimationFrame").mockImplementation(
+      (callback: FrameRequestCallback): number => {
+        callbacks.push(callback);
+        return callbacks.length;
+      },
+    );
+    const cancelSpy = vi.spyOn(window, "cancelAnimationFrame").mockImplementation(() => undefined);
+    return { callbacks, cancelSpy };
+  }
+
+  it("cancels its scheduled frame on cancel() so a stale callback can no longer commit", () => {
+    const { callbacks, cancelSpy } = mockAnimationFrames();
+    const applied: Array<{ windowId: string; deltas: readonly number[] }> = [];
+    const queue = createWheelContentZoomQueue((windowId, deltas) => {
+      applied.push({ windowId, deltas });
+    });
+
+    queue.queue("target", -100);
+    expect(callbacks).toHaveLength(1);
+
+    queue.cancel();
+
+    expect(cancelSpy).toHaveBeenCalledWith(1);
+    // This mock's cancelAnimationFrame is a no-op (unlike a real browser's), so invoking the
+    // captured callback simulates a frame that fired despite the cancel request. cancel() already
+    // cleared pendingWindowId/pendingDeltas, so flush() must see nothing pending and never call
+    // `apply` — the queue is inert, not merely "asked the browser nicely".
+    callbacks[0]?.(0);
+    expect(applied).toEqual([]);
+
+    vi.restoreAllMocks();
   });
 });
 

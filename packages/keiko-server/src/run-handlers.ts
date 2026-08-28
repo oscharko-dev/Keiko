@@ -14,6 +14,8 @@ import { startRun, applyRun, type EngineContext } from "./run-engine.js";
 import { ActiveRunLimitError, type AppliableSnapshot, type RunRecord } from "./runs.js";
 import { SSE_HEADERS, writeMessageEvent, readyMessage, startSseHeartbeat } from "./sse.js";
 import { markSseStreamBackpressureKilled } from "./sse-write.js";
+import { getServerLogger } from "./observability/index.js";
+import { UNKNOWN_CORRELATION_ID } from "./correlation.js";
 import type { SseWriter, StreamEvent } from "./sink.js";
 import type { RouteContext, RouteResult, HandlerOutcome } from "./routes.js";
 import { errorBody, STREAMING } from "./routes.js";
@@ -430,8 +432,183 @@ export function handleRunEvents(ctx: RouteContext, deps: UiHandlerDeps): Handler
   return STREAMING;
 }
 
+// User finding #2456 — the wake-up replay burst. A reconnecting desktop (e.g. after tab
+// visibility-hidden) names the runs it still follows as comma-separated `runId:seq` pairs in an
+// optional `resume` query parameter. Parsed from the RAW query string, never `searchParams`:
+// URLSearchParams percent-decodes the value BEFORE we could split it, so a runId containing an
+// encoded ":" or "," would corrupt the pair framing. Each runId is percent-encoded by the client;
+// it is decoded here after framing. A malformed cursor maps to -1 (full replay) — over-delivery is
+// safe (the client dedupes by seq), under-delivery would lose events. Never throws.
+//
+// A present-but-empty (or all-empty-entries) `resume=` value parses to NO usable pairs. Treating
+// that as an empty (defined) Map would make `resumeAfterSeq` fall through to its "unnamed run"
+// branch — live-only — for EVERY run, which is under-delivery, not the safe over-delivery this
+// function promises. Falling back to `undefined` here keeps that shape byte-identical to "no
+// `resume` parameter at all": full replay for every run.
+//
+// This function has no view of the snapshot, so it cannot itself detect the case where every
+// parsed entry is well-formed AS A PAIR but names no run that actually exists (`resume=garbage`
+// with no `:` delimiter, or `resume=%` with invalid percent-encoding, both parse to one entry keyed
+// by nonsense text). That check — a cursor set is usable only once it matches at least one
+// snapshotted run — lives one layer up, in `usableResumeCursors` (PR #3305 review finding 1).
+function parseResumeCursors(url: URL): ReadonlyMap<string, number> | undefined {
+  const raw = rawQueryParameter(url, "resume");
+  if (raw === undefined) return undefined;
+  const cursors = new Map<string, number>();
+  for (const entry of raw.split(",")) {
+    if (entry === "") continue;
+    const colon = entry.lastIndexOf(":");
+    const runId = decodeResumeRunId(colon === -1 ? entry : entry.slice(0, colon));
+    if (runId === "") continue;
+    cursors.set(runId, parseResumeSeq(colon === -1 ? "" : entry.slice(colon + 1)));
+  }
+  return cursors.size === 0 ? undefined : cursors;
+}
+
+// The still-percent-encoded value of `name` in `url`'s query, or undefined when absent.
+function rawQueryParameter(url: URL, name: string): string | undefined {
+  const query = url.search.startsWith("?") ? url.search.slice(1) : url.search;
+  for (const pair of query.split("&")) {
+    if (pair === "") continue;
+    const eq = pair.indexOf("=");
+    if ((eq === -1 ? pair : pair.slice(0, eq)) !== name) continue;
+    return eq === -1 ? "" : pair.slice(eq + 1);
+  }
+  return undefined;
+}
+
+// Invalid percent-encoding falls back to the raw text: the entry still names SOME identifier, and
+// matching it best-effort fails toward over-delivery rather than throwing or dropping the entry.
+function decodeResumeRunId(raw: string): string {
+  try {
+    return decodeURIComponent(raw);
+  } catch {
+    return raw;
+  }
+}
+
+// The client's explicit "subscribed, but nothing observed yet — send everything" marker. It is a
+// named request for full replay, NOT a malformed cursor: a run the client still follows must never
+// be treated like an unnamed (live-only) one, or its buffered history is lost. Pinned by
+// run-handlers-sse-resume.test.ts; keep it accepted even if the malformed fallback is ever
+// tightened.
+const RESUME_FULL_REPLAY_MARKER = "*";
+const RESUME_FULL_REPLAY = -1;
+
+// A cursor is the full-replay marker, or a base-10 non-negative safe integer; anything else is
+// malformed and also means full replay (over-delivery is safe, under-delivery would lose events).
+function parseResumeSeq(raw: string): number {
+  if (raw === RESUME_FULL_REPLAY_MARKER) return RESUME_FULL_REPLAY;
+  if (!/^\d+$/u.test(raw)) return RESUME_FULL_REPLAY;
+  const parsed = Number.parseInt(raw, 10);
+  return Number.isSafeInteger(parsed) ? parsed : RESUME_FULL_REPLAY;
+}
+
+// The replay boundary for one snapshot run under the parsed cursors: no `resume` parameter means
+// full replay for every run (exactly the pre-#2456 behaviour); a named run resumes after its
+// cursor (or fully, when the cursor was malformed); an unnamed run attaches live-only — at reopen
+// time the client keeps no subscriber for it, so its replay would be parsed and discarded anyway.
+function resumeAfterSeq(cursors: ReadonlyMap<string, number> | undefined, runId: string): number {
+  if (cursors === undefined) return -1;
+  return cursors.get(runId) ?? Number.MAX_SAFE_INTEGER;
+}
+
+// Repository-owner review finding on PR #3305 (P1): a parsed cursor map is trusted only once it
+// actually authorizes at least one run present in THIS snapshot — i.e. at least one cursor key
+// equals a snapshotted run's id. `parseResumeCursors` cannot see the snapshot, so a malformed
+// `resume` value with no `:` delimiter (`resume=garbage`) or invalid percent-encoding
+// (`resume=%`) still parses into a non-empty, single-entry map keyed by nonsense text. Passed
+// straight to `resumeAfterSeq`, that map is non-`undefined` for every real run, so each one falls
+// through to the "unnamed run" branch (live-only) — malformed client input would silently suppress
+// ALL buffered history, the exact under-delivery `parseResumeCursors`'s own contract forbids.
+// A well-formed request that names at least one real run is unaffected: it still marks any other,
+// truly unnamed run live-only (the deliberate #2456 optimization) because the match check below
+// passes and the parsed map is returned unchanged.
+function usableResumeCursors(
+  cursors: ReadonlyMap<string, number> | undefined,
+  records: readonly RunRecord[],
+  attachable: (record: RunRecord) => boolean,
+): ReadonlyMap<string, number> | undefined {
+  if (cursors === undefined) return undefined;
+  for (const record of records) {
+    // The match must be a run this connection can actually attach to. An
+    // id-only check would let a cursor naming ANOTHER session's run mark the
+    // whole set usable, after which every accessible run the client did not
+    // name attaches live-only and loses its buffered history — under-delivery
+    // driven by a run the caller cannot even see.
+    if (cursors.has(record.runId) && attachable(record)) return cursors;
+  }
+  return undefined;
+}
+
+interface ResumeAttachStats {
+  resumedRuns: number;
+  liveOnlyRuns: number;
+  fullReplayRuns: number;
+}
+
+function recordResumeDecision(stats: ResumeAttachStats, afterSeq: number): void {
+  if (afterSeq === Number.MAX_SAFE_INTEGER) {
+    stats.liveOnlyRuns += 1;
+  } else if (afterSeq >= 0) {
+    stats.resumedRuns += 1;
+  } else {
+    stats.fullReplayRuns += 1;
+  }
+}
+
+// Body-free evidence for the resume decision (ADR-0173): counts per attach class, never runIds.
+// `cursorsUnusable` is only added (as `true`) when the request carried a `resume` parameter that
+// yielded no usable pair, so a malformed-but-present request is distinguishable in the log from
+// an ordinary, fully-honoured resume request — without changing the shape of the ordinary line.
+// Repository-owner review finding on PR #3305 (P2): `RouteContext.correlationId` is optional, so a
+// direct/internal handler composition can reach this line with none in scope. ADR-0173 requires
+// every line of one logical operation to carry a correlation id, and names `UNKNOWN_CORRELATION_ID`
+// (correlation.ts) as the only sanctioned fallback — resolve it here rather than omitting the field.
+function logResumeDecision(
+  correlationId: string | undefined,
+  stats: ResumeAttachStats,
+  cursorsUnusable: boolean,
+): void {
+  getServerLogger().info({
+    category: "http",
+    op: "sse.run-events.resume",
+    correlationId: correlationId ?? UNKNOWN_CORRELATION_ID,
+    extra: { ...stats, ...(cursorsUnusable ? { cursorsUnusable: true } : {}) },
+  });
+}
+
+// Attaches every snapshot run at its resume boundary, then logs the per-class attach counts once
+// when (and only when) the connection actually carried a `resume` parameter — including when that
+// parameter was present but unusable (`resume=`, `resume=,,`, or a parsed cursor set that names
+// nothing in this snapshot — see `usableResumeCursors`), which still causes a full-replay burst and
+// must not be indistinguishable in the log from a connection that never asked to resume.
+function attachSnapshotRuns(
+  ctx: RouteContext,
+  deps: UiHandlerDeps,
+  attachRun: (record: RunRecord, afterSeq: number) => boolean,
+): void {
+  const resumeRequested = rawQueryParameter(ctx.url, "resume") !== undefined;
+  const records = deps.registry.snapshot?.(AGGREGATE_RUN_EVENTS_SNAPSHOT_LIMIT) ?? [];
+  const resumeCursors = usableResumeCursors(parseResumeCursors(ctx.url), records, (record) =>
+    agentRecordSessionMatches(record, ctx, deps),
+  );
+  const stats: ResumeAttachStats = { resumedRuns: 0, liveOnlyRuns: 0, fullReplayRuns: 0 };
+  for (const record of records) {
+    const afterSeq = resumeAfterSeq(resumeCursors, record.runId);
+    if (attachRun(record, afterSeq)) {
+      recordResumeDecision(stats, afterSeq);
+    }
+  }
+  if (resumeRequested) {
+    logResumeDecision(ctx.correlationId, stats, resumeCursors === undefined);
+  }
+}
+
 // Shared run-event stream for the desktop. It replays bounded buffers for recent records, then
 // attaches to newly registered runs so multiple AgentRun windows do not consume one SSE slot each.
+// Snapshot runs honour the optional `resume` cursors (#2456); runs registered AFTER connect keep
+// full replay unconditionally — a new run's buffer is small and the client has no cursor for it.
 export function handleAllRunEvents(ctx: RouteContext, deps: UiHandlerDeps): HandlerOutcome {
   const detachByRunId = new Map<string, () => void>();
   let closed = false;
@@ -446,21 +623,23 @@ export function handleAllRunEvents(ctx: RouteContext, deps: UiHandlerDeps): Hand
     detach();
   };
 
-  const attachRun = (record: RunRecord): void => {
-    if (closed || detachByRunId.has(record.runId)) return;
-    if (!agentRecordSessionMatches(record, ctx, deps)) return;
+  const attachRun = (record: RunRecord, afterSeq: number): boolean => {
+    if (closed || detachByRunId.has(record.runId)) return false;
+    if (!agentRecordSessionMatches(record, ctx, deps)) return false;
     const writer = aggregateRunWriter(record, ctx, deps, detachRun);
-    const detach = record.sink.attach(writer, -1);
+    const detach = record.sink.attach(writer, afterSeq);
     detachByRunId.set(record.runId, detach);
     if (record.sink.isTerminated()) {
       detachRun(record.runId);
     }
+    return true;
   };
 
-  for (const record of deps.registry.snapshot?.(AGGREGATE_RUN_EVENTS_SNAPSHOT_LIMIT) ?? []) {
-    attachRun(record);
-  }
-  const unsubscribeRegistry = deps.registry.subscribe?.(attachRun) ?? ((): void => undefined);
+  attachSnapshotRuns(ctx, deps, attachRun);
+  const unsubscribeRegistry =
+    deps.registry.subscribe?.((record: RunRecord): void => {
+      attachRun(record, -1);
+    }) ?? ((): void => undefined);
   ctx.res.write(readyMessage());
 
   const close = (): void => {

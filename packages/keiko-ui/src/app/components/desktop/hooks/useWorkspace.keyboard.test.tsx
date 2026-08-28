@@ -65,6 +65,7 @@ function Harness(options: UseWorkspaceOptions = {}): ReactElement {
   const wsRef = useRef<HTMLDivElement>(null);
   const workspace = useWorkspace(wsRef, options);
   const [editorResults, setEditorResults] = useState<readonly boolean[]>([]);
+  const [cutResult, setCutResult] = useState<unknown>(null);
 
   return (
     <main ref={wsRef} data-testid="workspace" className="workspace">
@@ -110,11 +111,50 @@ function Harness(options: UseWorkspaceOptions = {}): ReactElement {
       <button type="button" onClick={() => workspace.api.replaceSelection(["files-1"])}>
         select files
       </button>
+      <button
+        type="button"
+        onClick={() => {
+          for (
+            let index = workspace.wins?.length ?? 0;
+            index < MAX_WORKSPACE_WINDOWS - 1;
+            index++
+          ) {
+            workspace.api.add("files");
+          }
+        }}
+      >
+        fill to one below the limit
+      </button>
+      <button
+        type="button"
+        onClick={() => {
+          const filler = (workspace.wins ?? []).find(
+            (win) => win.id !== "files-1" && win.id !== "chat-1",
+          );
+          if (filler !== undefined) workspace.api.close(filler.id);
+        }}
+      >
+        close one filler window
+      </button>
+      <button type="button" onClick={() => workspace.api.replaceSelection(["files-1", "chat-1"])}>
+        select files and chat
+      </button>
       <button type="button" onClick={() => workspace.api.copySelectedWindows()}>
         copy selected windows
       </button>
       <button type="button" onClick={() => workspace.api.pasteCopiedWindows()}>
         paste copied windows
+      </button>
+      <button
+        type="button"
+        onClick={() => {
+          const result = workspace.api.cutSelectedWindows();
+          void result.settled.then((settled) => {
+            setCutResult(settled);
+          });
+        }}
+      >
+        cut selected windows
       </button>
       <button
         type="button"
@@ -134,6 +174,7 @@ function Harness(options: UseWorkspaceOptions = {}): ReactElement {
         {JSON.stringify(workspace.api.linkedImageSources?.("quality") ?? null)}
       </output>
       <output data-testid="editor-results">{JSON.stringify(editorResults)}</output>
+      <output data-testid="cut-result">{JSON.stringify(cutResult)}</output>
     </main>
   );
 }
@@ -344,6 +385,318 @@ describe("useWorkspace keyboard and connection workflow hardening", () => {
     });
     expect(pasted?.id).not.toBe("files-1");
     expect(readSelection().selectedWindowIds).toEqual([pasted?.id]);
+  });
+
+  it("issue #2150 — cuts selected windows and restores them at their original spot on first paste", async () => {
+    persistWorkspace([
+      filesWindow({ z: 1, x: 40, y: 40, cfg: { resolvedRoot: "/repo" } }),
+      appWindow({ id: "chat-1", type: "chat", z: 10, x: 100, y: 120 }),
+    ]);
+    render(<Harness />);
+    mockWorkspaceRect();
+    await waitFor(() => expect(readWins()).toHaveLength(2));
+
+    fireEvent.click(screen.getByRole("button", { name: "select files" }));
+    await waitFor(() => expect(readSelection().selectedWindowIds).toEqual(["files-1"]));
+
+    // Cut captures the content-free descriptor and closes the window.
+    fireEvent.click(screen.getByRole("button", { name: "cut selected windows" }));
+    await waitFor(() => expect(readWins()).toHaveLength(1));
+    expect(readWins().find((w) => w.id === "files-1")).toBeUndefined();
+
+    // Cut/paste is a MOVE: the first paste restores the cut window at its
+    // original geometry AND with the state it had. Restoring only the layout
+    // would silently destroy the window's root, open file, URL or cwd — the
+    // content-free descriptor is the right payload for a duplicate, not for a
+    // move of a window this same session just removed.
+    fireEvent.click(screen.getByRole("button", { name: "paste copied windows" }));
+    await waitFor(() => expect(readWins()).toHaveLength(2));
+    const restored = readWins().find((w) => w.type === "files");
+    expect(restored).toMatchObject({ x: 40, y: 40, cfg: { resolvedRoot: "/repo" } });
+
+    // A second paste is a duplicate again and offsets.
+    fireEvent.click(screen.getByRole("button", { name: "paste copied windows" }));
+    await waitFor(() => expect(readWins()).toHaveLength(3));
+    const duplicated = readWins().at(-1);
+    expect(duplicated).toMatchObject({ x: 72, y: 72 });
+  });
+
+  it("issue #2150 — cut never closes a keyed (non-duplicable) window even when it is selected", async () => {
+    // A chat window bound to a real conversation (chatId set) cannot be
+    // recreated by paste — buildWorkspaceClipboardPayload treats it as keyed
+    // and skips it. Cut must therefore leave it open: closing a window that
+    // paste can never restore is data loss, not a cut.
+    persistWorkspace([
+      filesWindow({ z: 1, x: 40, y: 40, cfg: { resolvedRoot: "/repo" } }),
+      appWindow({
+        id: "chat-1",
+        type: "chat",
+        z: 10,
+        x: 100,
+        y: 120,
+        cfg: { chatId: "conversation-1" },
+      }),
+    ]);
+    render(<Harness />);
+    mockWorkspaceRect();
+    await waitFor(() => expect(readWins()).toHaveLength(2));
+
+    fireEvent.click(screen.getByRole("button", { name: "select files and chat" }));
+    await waitFor(() => expect(readSelection().selectedWindowIds).toEqual(["files-1", "chat-1"]));
+
+    fireEvent.click(screen.getByRole("button", { name: "cut selected windows" }));
+
+    // Only the duplicable files window is removed; the keyed chat window survives.
+    await waitFor(() => expect(readWins()).toHaveLength(1));
+    expect(readWins().find((w) => w.id === "files-1")).toBeUndefined();
+    expect(readWins().find((w) => w.id === "chat-1")).toBeDefined();
+
+    // Selection state stays consistent: the removed window drops out, the
+    // surviving one that was already selected stays selected.
+    await waitFor(() => expect(readSelection().selectedWindowIds).toEqual(["chat-1"]));
+
+    // The clipboard only ever captured the duplicable window, so paste
+    // restores exactly the files window and never resurrects the chat window
+    // as a second copy.
+    fireEvent.click(screen.getByRole("button", { name: "paste copied windows" }));
+    await waitFor(() => expect(readWins()).toHaveLength(2));
+    expect(readWins().filter((w) => w.type === "chat")).toHaveLength(1);
+    const restoredFiles = readWins().find((w) => w.type === "files");
+    expect(restoredFiles).toMatchObject({ x: 40, y: 40 });
+  });
+
+  it("tears a connection down once when a batch cut takes BOTH of its endpoints", async () => {
+    // Every window in the batch reads the same pre-cut connection snapshot, so a
+    // per-window loop would issue this edge's server-side unbind twice. A
+    // non-idempotent second unbind can fail and leave the cut half-applied.
+    const onScopeUnbind = vi.fn(() => true);
+    persistWorkspace([filesWindow(), appWindow()]);
+    render(<Harness onScopeUnbind={onScopeUnbind} />);
+    await waitFor(() => expect(readWins()).toHaveLength(2));
+
+    fireEvent.click(screen.getByRole("button", { name: "connect" }));
+    await waitFor(() => expect(readConns()).toHaveLength(1));
+
+    fireEvent.click(screen.getByRole("button", { name: "select files and chat" }));
+    await waitFor(() => expect(readSelection().selectedWindowIds).toEqual(["files-1", "chat-1"]));
+
+    fireEvent.click(screen.getByRole("button", { name: "cut selected windows" }));
+
+    await waitFor(() => expect(readWins()).toHaveLength(0));
+    expect(onScopeUnbind).toHaveBeenCalledTimes(1);
+  });
+
+  it("tears a connection down once when a close overlaps an in-flight cut of its other endpoint", async () => {
+    // Batch dedupe only covers ONE operation. While a cut waits for teardown,
+    // only its own window id is marked pending, so closing the other endpoint
+    // starts the same connection's unbind a second time. A non-idempotent
+    // second unbind can reject and strand the first cut half-applied.
+    let releaseUnbind: (() => void) | undefined;
+    const gate = new Promise<void>((resolve) => {
+      releaseUnbind = resolve;
+    });
+    const onScopeUnbind = vi.fn(() => gate.then(() => true));
+    persistWorkspace([filesWindow(), appWindow()]);
+    render(<Harness onScopeUnbind={onScopeUnbind} />);
+    await waitFor(() => expect(readWins()).toHaveLength(2));
+
+    fireEvent.click(screen.getByRole("button", { name: "connect" }));
+    await waitFor(() => expect(readConns()).toHaveLength(1));
+
+    fireEvent.click(screen.getByRole("button", { name: "select files" }));
+    fireEvent.click(screen.getByRole("button", { name: "cut selected windows" }));
+    await waitFor(() => expect(onScopeUnbind).toHaveBeenCalledTimes(1));
+
+    // The cut's teardown is still in flight; close the OTHER endpoint.
+    fireEvent.click(screen.getByRole("button", { name: "close chat" }));
+    releaseUnbind?.();
+
+    await waitFor(() => expect(readWins()).toHaveLength(0));
+    expect(onScopeUnbind).toHaveBeenCalledTimes(1);
+  });
+
+  it("restores a cut window's own state, not just its geometry", async () => {
+    // The clipboard descriptor is content-free by design (ADR-0123 D5) — correct
+    // for a duplicate, destructive for a move. A cut Files window must come back
+    // with its root, otherwise cut silently discards what the user was working on.
+    persistWorkspace([filesWindow({ cfg: { resolvedRoot: "/repo", activeFilePath: "src/a.ts" } })]);
+    render(<Harness />);
+    mockWorkspaceRect();
+    await waitFor(() => expect(readWins()).toHaveLength(1));
+
+    fireEvent.click(screen.getByRole("button", { name: "select files" }));
+    fireEvent.click(screen.getByRole("button", { name: "cut selected windows" }));
+    await waitFor(() => expect(readWins()).toHaveLength(0));
+
+    fireEvent.click(screen.getByRole("button", { name: "paste copied windows" }));
+
+    await waitFor(() => expect(readWins()).toHaveLength(1));
+    expect(readWins()[0]).toMatchObject({
+      id: "files-1",
+      cfg: { resolvedRoot: "/repo", activeFilePath: "src/a.ts" },
+    });
+  });
+
+  it("lets a copy after a cut supersede the pending move", async () => {
+    persistWorkspace([
+      filesWindow({ cfg: { resolvedRoot: "/repo" } }),
+      appWindow({ id: "chat-1", type: "chat", x: 300 }),
+    ]);
+    render(<Harness />);
+    mockWorkspaceRect();
+    await waitFor(() => expect(readWins()).toHaveLength(2));
+
+    fireEvent.click(screen.getByRole("button", { name: "select files" }));
+    fireEvent.click(screen.getByRole("button", { name: "cut selected windows" }));
+    await waitFor(() => expect(readWins()).toHaveLength(1));
+
+    // Copying the surviving window replaces the pending move.
+    fireEvent.click(screen.getByRole("button", { name: "select files and chat" }));
+    fireEvent.click(screen.getByRole("button", { name: "copy selected windows" }));
+    fireEvent.click(screen.getByRole("button", { name: "paste copied windows" }));
+
+    await waitFor(() => expect(readWins()).toHaveLength(2));
+    // The cut Files window is NOT resurrected; the paste duplicated the chat.
+    expect(readWins().some((w) => w.id === "files-1")).toBe(false);
+    expect(readWins().filter((w) => w.type === "chat")).toHaveLength(2);
+  });
+
+  it("keeps un-restored cut windows buffered when the workspace is full", async () => {
+    // The move buffer is the ONLY copy of a cut window's state. Dropping what
+    // capacity could not take would destroy it permanently, and the paste must
+    // report the real capacity outcome rather than a silent partial success.
+    const onWindowLimitReached = vi.fn();
+    persistWorkspace([
+      filesWindow({ cfg: { resolvedRoot: "/repo" } }),
+      appWindow({ id: "chat-1", type: "chat", x: 300 }),
+    ]);
+    render(<Harness onWindowLimitReached={onWindowLimitReached} />);
+    mockWorkspaceRect();
+    await waitFor(() => expect(readWins()).toHaveLength(2));
+
+    fireEvent.click(screen.getByRole("button", { name: "select files and chat" }));
+    fireEvent.click(screen.getByRole("button", { name: "cut selected windows" }));
+    await waitFor(() => expect(readWins()).toHaveLength(0));
+
+    // Fill the workspace so only one of the two cut windows can come back.
+    fireEvent.click(screen.getByRole("button", { name: "fill to one below the limit" }));
+    await waitFor(() => expect(readWins()).toHaveLength(MAX_WORKSPACE_WINDOWS - 1));
+
+    fireEvent.click(screen.getByRole("button", { name: "paste copied windows" }));
+    await waitFor(() => expect(readWins()).toHaveLength(MAX_WORKSPACE_WINDOWS));
+    expect(onWindowLimitReached).toHaveBeenCalled();
+
+    // The window capacity refused is still buffered: closing one frees a slot
+    // and the next paste brings it back with its state intact.
+    fireEvent.click(screen.getByRole("button", { name: "close one filler window" }));
+    await waitFor(() => expect(readWins()).toHaveLength(MAX_WORKSPACE_WINDOWS - 1));
+    fireEvent.click(screen.getByRole("button", { name: "paste copied windows" }));
+
+    await waitFor(() => expect(readWins()).toHaveLength(MAX_WORKSPACE_WINDOWS));
+    // BOTH originals are back under their own ids with their own state. Had the
+    // remainder been dropped, this second paste would have fallen through to the
+    // content-free duplicate path and produced a fresh `*-copy-*` id instead.
+    const restoredFiles = readWins().find((w) => w.id === "files-1");
+    const restoredChat = readWins().find((w) => w.id === "chat-1");
+    expect(restoredFiles).toBeDefined();
+    expect(restoredChat).toBeDefined();
+    expect(restoredFiles?.cfg).toMatchObject({ resolvedRoot: "/repo" });
+  });
+
+  it("does not let a copy that lands mid-cut be overwritten by the settling cut", async () => {
+    // Teardown is asynchronous, so a user can cut, copy something else, and
+    // paste before the cut settles. The stale cut completion must not write its
+    // windows back into the move buffer and hijack that paste.
+    const onScopeUnbind = vi.fn(
+      () => new Promise<boolean>((resolve) => setTimeout(() => resolve(true), 0)),
+    );
+    persistWorkspace([filesWindow({ cfg: { resolvedRoot: "/repo" } }), appWindow()]);
+    render(<Harness onScopeUnbind={onScopeUnbind} />);
+    mockWorkspaceRect();
+    await waitFor(() => expect(readWins()).toHaveLength(2));
+
+    fireEvent.click(screen.getByRole("button", { name: "connect" }));
+    await waitFor(() => expect(readConns()).toHaveLength(1));
+
+    fireEvent.click(screen.getByRole("button", { name: "select files" }));
+    fireEvent.click(screen.getByRole("button", { name: "cut selected windows" }));
+
+    // Copy the chat BEFORE the cut's teardown resolves.
+    fireEvent.click(screen.getByRole("button", { name: "select files and chat" }));
+    fireEvent.click(screen.getByRole("button", { name: "copy selected windows" }));
+
+    await waitFor(() => expect(readWins().some((w) => w.id === "files-1")).toBe(false));
+
+    fireEvent.click(screen.getByRole("button", { name: "paste copied windows" }));
+
+    // The paste duplicated the copy; it did not resurrect the cut Files window.
+    await waitFor(() => expect(readWins().length).toBeGreaterThan(1));
+    expect(readWins().some((w) => w.id === "files-1")).toBe(false);
+  });
+
+  it("does not report a cut for a window whose teardown refused to close it", async () => {
+    // closeWithTeardown only removes a connected window once every unbind is
+    // accepted; a refused unbind deliberately leaves the window open so the
+    // grounding stays consistent. Cut must not announce that window as cut, and
+    // must not arm the zero-offset restore — the next paste would then land a
+    // duplicate exactly on a window that never left.
+    const onScopeUnbind = vi.fn(() => false);
+    persistWorkspace([filesWindow(), appWindow()]);
+    render(<Harness onScopeUnbind={onScopeUnbind} />);
+    await waitFor(() => expect(readWins()).toHaveLength(2));
+
+    fireEvent.click(screen.getByRole("button", { name: "connect" }));
+    await waitFor(() => expect(readConns()).toHaveLength(1));
+
+    fireEvent.click(screen.getByRole("button", { name: "select files" }));
+    await waitFor(() => expect(readSelection().selectedWindowIds).toEqual(["files-1"]));
+
+    fireEvent.click(screen.getByRole("button", { name: "cut selected windows" }));
+
+    await waitFor(() => expect(onScopeUnbind).toHaveBeenCalled());
+    await waitFor(() =>
+      expect(JSON.parse(screen.getByTestId("cut-result").textContent ?? "null")).toMatchObject({
+        captured: 0,
+      }),
+    );
+    // The refused window is still there.
+    expect(readWins().some((w) => w.id === "files-1")).toBe(true);
+
+    // Paste must offset like a duplicate rather than restore onto the open window.
+    fireEvent.click(screen.getByRole("button", { name: "paste copied windows" }));
+    await waitFor(() => expect(readWins()).toHaveLength(3));
+    const pasted = readWins().find((w) => w.type === "files" && w.id !== "files-1");
+    expect(pasted?.x).not.toBe(readWins().find((w) => w.id === "files-1")?.x);
+  });
+
+  it("issue #2710 audit — cutting a connected window unbinds its scope like close does", async () => {
+    // Cut used to remove windows through a raw setWins filter instead of
+    // closeWithTeardown, so a cut Files window never fired onScopeUnbind: the
+    // visible edge disappeared (useConnectionPrune sweeps the orphaned conn
+    // object) but the chat's server-side grounding against the folder was
+    // never told to let go — the exact bug closeWithTeardown's "uiux-fix F008
+    // C120" comment exists to prevent for ordinary close.
+    const onScopeUnbind = vi.fn();
+    persistWorkspace([filesWindow(), appWindow()]);
+    render(<Harness onScopeUnbind={onScopeUnbind} />);
+    await waitFor(() => expect(readWins()).toHaveLength(2));
+
+    fireEvent.click(screen.getByRole("button", { name: "connect" }));
+    await waitFor(() => expect(readConns()).toHaveLength(1));
+
+    fireEvent.click(screen.getByRole("button", { name: "select files" }));
+    await waitFor(() => expect(readSelection().selectedWindowIds).toEqual(["files-1"]));
+
+    fireEvent.click(screen.getByRole("button", { name: "cut selected windows" }));
+
+    await waitFor(() => expect(readWins().some((w) => w.id === "files-1")).toBe(false));
+    expect(onScopeUnbind).toHaveBeenCalledWith(
+      "chat-1",
+      expect.objectContaining({ root: "/repo" }),
+      undefined,
+    );
+    // The edge itself is swept by useConnectionPrune once the window is gone.
+    await waitFor(() => expect(readConns()).toHaveLength(0));
   });
 
   it("snaps the focused window left/right/maximize with Cmd+Alt+Arrow (GEN-UI-KEYBOARD-009)", async () => {

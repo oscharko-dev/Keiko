@@ -13,6 +13,7 @@ import type { ChangedFile } from "../../../../../../lib/types";
 import { NATIVE_BLOCK_STYLE } from "../../../native-element-styles";
 import { langOf, highlightLines } from "./syntaxHighlight";
 import type { Token } from "./syntaxHighlight";
+import selectableTextStyles from "./selectableText.module.css";
 import type {
   GitEditorDiffFile as DiffFile,
   GitEditorDiffHunk as DiffHunk,
@@ -31,6 +32,11 @@ export interface DiffViewLabels {
   readonly previousPath: (path: string) => string;
   readonly elevatedReview: string;
 }
+
+// Issue #2710 — line-number gutters, the sign gutter, and screen-reader-only
+// labels stay unselectable inside the now-selectable diff body, so a copied
+// range carries the source text alone.
+const CHROME_CLASS = selectableTextStyles["cmp-selectable-text-chrome"] ?? "";
 
 function lineKindLabel(kind: DiffLine["kind"], labels?: DiffViewLabels): string {
   if (kind === "add") return labels?.addedLine ?? "Added line";
@@ -86,10 +92,12 @@ function DiffLineView({ line, lang, kindLabel, labels }: DiffLineViewProps): Rea
 
   return (
     <div className={`rv-line${cls}`}>
-      <span className="rv-sr-only">{kindLabel ?? lineKindLabel(line.kind, labels)}</span>
-      <span className="rv-num-old rv-num">{line.oldLine ?? ""}</span>
-      <span className="rv-num-new rv-num">{line.newLine ?? ""}</span>
-      <span className="rv-gutter" aria-hidden="true">
+      <span className={`rv-sr-only ${CHROME_CLASS}`}>
+        {kindLabel ?? lineKindLabel(line.kind, labels)}
+      </span>
+      <span className={`rv-num-old rv-num ${CHROME_CLASS}`}>{line.oldLine ?? ""}</span>
+      <span className={`rv-num-new rv-num ${CHROME_CLASS}`}>{line.newLine ?? ""}</span>
+      <span className={`rv-gutter ${CHROME_CLASS}`} aria-hidden="true">
         {sign}
       </span>
       <code className="rv-src">{content}</code>
@@ -119,7 +127,10 @@ export function DiffHunkView({ hunk, lang, labels, viewLabels }: DiffHunkViewPro
         className="rv-hunk mono"
         aria-label={`${viewLabels?.hunkHeader ?? "Hunk header"} ${hunk.header}`}
       >
-        <span className="rv-sr-only">
+        {/* Review finding on #3305 — this label sits inside the selectable .rv-code
+            body (data-text-selectable) just like DiffLineView's per-line rv-sr-only
+            span, so it needs the same CHROME_CLASS to stay out of a copied range. */}
+        <span className={`rv-sr-only ${CHROME_CLASS}`}>
           {labels?.header ?? viewLabels?.hunkHeader ?? "Hunk header"}
         </span>
         {hunk.header}
@@ -195,7 +206,12 @@ export function DiffFileSection({
           </span>
         )}
       </h3>
-      <div className="rv-code mono">
+      {/* Issue #2710 — diff text must be selectable and its copy native;
+          data-text-selectable is the interaction-guard contract for both. */}
+      <div
+        className={`rv-code mono ${selectableTextStyles["cmp-selectable-text"]}`}
+        data-text-selectable="true"
+      >
         {file.binary ? (
           <p className="rv-empty-p">
             {labels?.binaryFile ?? "Binary file — no text diff to display."}

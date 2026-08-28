@@ -22,7 +22,7 @@ function workspacePayload(windows: readonly Record<string, unknown>[]): string {
 
 describe("workspace clipboard duplication (Issue #2059)", () => {
   it("copies eligible layout descriptors without serializing config paths or secrets", () => {
-    const payload = buildWorkspaceClipboardPayload(
+    const built = buildWorkspaceClipboardPayload(
       [
         win("files", {
           resolvedRoot: "/repo",
@@ -33,12 +33,16 @@ describe("workspace clipboard duplication (Issue #2059)", () => {
       ["files-1", "chat-1"],
     );
 
-    expect(payload).not.toBeNull();
-    expect(payload).not.toContain("/repo");
-    expect(payload).not.toContain("ghp_");
+    expect(built.payload).not.toBeNull();
+    expect(built.payload).not.toContain("/repo");
+    expect(built.payload).not.toContain("ghp_");
+    // Issue #2150 follow-up — the builder reports what it captured and skipped
+    // so the caller can announce the outcome instead of silently no-oping.
+    expect(built.capturedWindowIds).toEqual(["files-1"]);
+    expect(built.skippedCount).toBe(1);
     const duplicated = duplicateWorkspaceClipboardWindows({
       wins: [],
-      payload: payload ?? "",
+      payload: built.payload ?? "",
       viewport,
       zStart: 10,
       nowMs: 1_000,
@@ -61,10 +65,10 @@ describe("workspace clipboard duplication (Issue #2059)", () => {
       { ...win("editor", { root: "/repo", file: "README.md" }, "editor-1"), x: 280, y: 90, z: 3 },
       { ...win("files", { resolvedRoot: "/repo" }, "files-1"), x: 40, y: 50, z: 9 },
     ];
-    const payload = buildWorkspaceClipboardPayload(source, ["editor-1", "files-1"]);
+    const built = buildWorkspaceClipboardPayload(source, ["editor-1", "files-1"]);
     const duplicated = duplicateWorkspaceClipboardWindows({
       wins: source,
-      payload: payload ?? "",
+      payload: built.payload ?? "",
       viewport,
       zStart: 20,
       nowMs: 2_000,
@@ -84,13 +88,13 @@ describe("workspace clipboard duplication (Issue #2059)", () => {
     const existing = Array.from({ length: MAX_WORKSPACE_WINDOWS - 1 }, (_, index) =>
       win("files", {}, `files-${String(index)}`),
     );
-    const payload = buildWorkspaceClipboardPayload(
+    const built = buildWorkspaceClipboardPayload(
       [win("files", {}, "copy-a"), win("editor", {}, "copy-b")],
       ["copy-a", "copy-b"],
     );
     const duplicated = duplicateWorkspaceClipboardWindows({
       wins: existing,
-      payload: payload ?? "",
+      payload: built.payload ?? "",
       viewport,
       zStart: MAX_WORKSPACE_WINDOWS,
       nowMs: 2_500,
@@ -103,7 +107,7 @@ describe("workspace clipboard duplication (Issue #2059)", () => {
   });
 
   it("skips singleton and keyed windows that the workspace normally dedupes", () => {
-    const payload = buildWorkspaceClipboardPayload(
+    const built = buildWorkspaceClipboardPayload(
       [
         win("chat", { chatId: "chat-1", title: "Hidden" }, "chat-1"),
         win("qiRun", { runId: "run-1" }, "run-1"),
@@ -112,9 +116,11 @@ describe("workspace clipboard duplication (Issue #2059)", () => {
       ["chat-1", "run-1", "files-1"],
     );
 
+    expect(built.capturedWindowIds).toEqual(["files-1"]);
+    expect(built.skippedCount).toBe(2);
     const duplicated = duplicateWorkspaceClipboardWindows({
       wins: [],
-      payload: payload ?? "",
+      payload: built.payload ?? "",
       viewport,
       zStart: 10,
       nowMs: 4_000,
@@ -131,9 +137,26 @@ describe("workspace clipboard duplication (Issue #2059)", () => {
       { ...win("editor", {}, "editor-1"), max: true },
     ];
 
-    expect(buildWorkspaceClipboardPayload(wins, [])).toBeNull();
-    expect(buildWorkspaceClipboardPayload(wins, ["missing"])).toBeNull();
-    expect(buildWorkspaceClipboardPayload(wins, ["files-1", "editor-1"])).toBeNull();
+    expect(buildWorkspaceClipboardPayload(wins, [])).toEqual({
+      payload: null,
+      capturedWindowIds: [],
+      skippedCount: 0,
+      overflowCount: 0,
+    });
+    expect(buildWorkspaceClipboardPayload(wins, ["missing"])).toEqual({
+      payload: null,
+      capturedWindowIds: [],
+      skippedCount: 0,
+      overflowCount: 0,
+    });
+    // Both selected windows exist but are minimized/maximized: the skip count
+    // carries the reason the clipboard stayed empty.
+    expect(buildWorkspaceClipboardPayload(wins, ["files-1", "editor-1"])).toEqual({
+      payload: null,
+      capturedWindowIds: [],
+      skippedCount: 2,
+      overflowCount: 0,
+    });
   });
 
   it("fails closed for malformed, foreign, or secret-bearing payloads", () => {
@@ -202,12 +225,29 @@ describe("workspace clipboard duplication (Issue #2059)", () => {
     }
   });
 
+  it("reports windows dropped by the clipboard cap as overflow, not as ineligible", () => {
+    // The 32-window clipboard cap and genuine ineligibility are different
+    // reasons and must not share a counter: every one of these windows IS
+    // duplicable, so announcing them as "not duplicable" would be false.
+    const wins = Array.from({ length: 40 }, (_unused, index) =>
+      win("files", { resolvedRoot: "/repo" }, `files-${String(index)}`),
+    );
+    const built = buildWorkspaceClipboardPayload(
+      wins,
+      wins.map((w) => w.id),
+    );
+
+    expect(built.capturedWindowIds).toHaveLength(32);
+    expect(built.skippedCount).toBe(0);
+    expect(built.overflowCount).toBe(8);
+  });
+
   it("allocates a suffix when a regenerated duplicate id collides", () => {
     const source = [win("files", {}, "files-1")];
-    const payload = buildWorkspaceClipboardPayload(source, ["files-1"]);
+    const built = buildWorkspaceClipboardPayload(source, ["files-1"]);
     const duplicated = duplicateWorkspaceClipboardWindows({
       wins: [win("files", {}, "files-copy-rs-0"), win("files", {}, "files-copy-rs-0-1")],
-      payload: payload ?? "",
+      payload: built.payload ?? "",
       viewport,
       zStart: 2,
       nowMs: 1_000,
@@ -225,10 +265,10 @@ describe("workspace clipboard duplication (Issue #2059)", () => {
 
   it("keeps pasted window title bars inside the workspace recovery bounds", () => {
     const source = [{ ...win("files", {}, "files-1"), x: 760, y: 580, w: 200, h: 140 }];
-    const payload = buildWorkspaceClipboardPayload(source, ["files-1"]);
+    const built = buildWorkspaceClipboardPayload(source, ["files-1"]);
     const duplicated = duplicateWorkspaceClipboardWindows({
       wins: source,
-      payload: payload ?? "",
+      payload: built.payload ?? "",
       viewport,
       zStart: 5,
       nowMs: 3_000,

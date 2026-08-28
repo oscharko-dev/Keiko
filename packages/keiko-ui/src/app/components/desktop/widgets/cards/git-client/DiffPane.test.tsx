@@ -9,6 +9,13 @@ import type { GitEditorDiffFile, GitEditorDiffResponse } from "@oscharko-dev/kei
 import type { GitDiffScope } from "@/lib/types";
 import type { GitClientSeam } from "./git-client-seam";
 import { DiffPane } from "./DiffPane";
+import selectableTextStyles from "../shared/selectableText.module.css";
+
+function selectableTextClass(name: keyof typeof selectableTextStyles): string {
+  const value = selectableTextStyles[name];
+  if (value === undefined) throw new Error(`missing selectableText CSS module class ${name}`);
+  return value;
+}
 
 function makeDiffFile(overrides: Partial<GitEditorDiffFile> = {}): GitEditorDiffFile {
   return {
@@ -189,6 +196,45 @@ describe("DiffPane — states", () => {
     const metaText = await screen.findByText("\\ No newline at end of file");
     expect(screen.getByText("Diff metadata")).toBeInTheDocument();
     expect(metaText.closest(".rv-line")?.querySelector(".rv-gutter")).toHaveTextContent("");
+  });
+
+  it("issue #2710 — makes the diff body selectable while gutters and sr-only labels opt back out", async () => {
+    renderPane({
+      client: makeSeam({
+        getStructuredDiff: vi.fn(async () => makeDiffResponse([makeDiffFile()])),
+      }),
+    });
+
+    const hunkHeader = await screen.findByLabelText("Hunk header @@ -7,1 +7,1 @@");
+    const diffBody = hunkHeader.closest(".rv-code");
+    expect(diffBody).not.toBeNull();
+    // The interaction guards' embedded-text-surface contract, same as the file
+    // preview and diff-view panes elsewhere (issue #2710).
+    expect(diffBody).toHaveAttribute("data-text-selectable", "true");
+    expect(diffBody).toHaveClass(selectableTextClass("cmp-selectable-text"));
+
+    // Review finding on #3305 — the hunk-header sr-only label sits directly in the
+    // selectable .rv-code body (same as the per-line sr-only label below), so a
+    // copied range must not be able to pull in its visually hidden "Hunk header"
+    // text either.
+    expect(hunkHeader.querySelector(".rv-sr-only")).toHaveClass(
+      selectableTextClass("cmp-selectable-text-chrome"),
+    );
+
+    // A copied range must carry only the source text: line-number gutters, the
+    // +/- sign gutter, and the visually hidden per-line kind label all opt back
+    // out of selection so they cannot land inside a pasted diff line.
+    const line = (diffBody as HTMLElement).querySelector(".rv-add");
+    expect(line).not.toBeNull();
+    expect(line?.querySelector(".rv-num-new")).toHaveClass(
+      selectableTextClass("cmp-selectable-text-chrome"),
+    );
+    expect(line?.querySelector(".rv-gutter")).toHaveClass(
+      selectableTextClass("cmp-selectable-text-chrome"),
+    );
+    expect(line?.querySelector(".rv-sr-only")).toHaveClass(
+      selectableTextClass("cmp-selectable-text-chrome"),
+    );
   });
 
   it("surfaces a truncated diff with a clear notice", async () => {
