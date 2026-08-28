@@ -22,7 +22,7 @@
 // bodies, API keys, or headers — counts, sizes, statuses, durations, and closed-union decision
 // labels only.
 
-import { classifyErrorKind } from "@oscharko-dev/keiko-contracts";
+import { classifyErrorKind } from "@oscharko-dev/keiko-contracts/runtime/observability";
 
 export type ModelGatewayLogLevel = "debug" | "info" | "warn" | "error";
 

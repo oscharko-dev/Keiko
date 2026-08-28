@@ -21,7 +21,7 @@
 // text, document text, extracted content, prompts, embeddings, api keys, endpoints, and
 // absolute filesystem paths never reach a field on this event.
 
-import { classifyErrorKind } from "@oscharko-dev/keiko-contracts";
+import { classifyErrorKind } from "@oscharko-dev/keiko-contracts/runtime/observability";
 
 export type KnowledgeLogLevel = "debug" | "info" | "warn" | "error";
 

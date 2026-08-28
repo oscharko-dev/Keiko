@@ -8,12 +8,11 @@
 //
 // This file lives under `__tests__/` so it is excluded from coverage instrumentation; it is test data.
 
+import type { GroundingStrategy, PromptEnhancementRequest } from "@oscharko-dev/keiko-contracts";
 import {
   asPromptEnhancementRequestId,
   PROMPT_ENHANCER_SCHEMA_VERSION,
-  type GroundingStrategy,
-  type PromptEnhancementRequest,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/prompt-enhancer";
 
 export interface GroundingFixture {
   readonly name: string;

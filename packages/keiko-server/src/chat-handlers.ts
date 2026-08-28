@@ -15,17 +15,19 @@ import {
   type ModelCapability,
   type NormalizedResponse,
 } from "@oscharko-dev/keiko-model-gateway";
+import type {
+  ConversationDocumentContextWire,
+  CodingWorkbenchMode,
+  DiscussionMode,
+  ChatMessageContentPart,
+} from "@oscharko-dev/keiko-contracts";
+import { isDiscussionMode } from "@oscharko-dev/keiko-contracts/runtime/discussion-intelligence";
+import { isCodingWorkbenchMode } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench";
 import {
-  isDiscussionMode,
-  isCodingWorkbenchMode,
   electConversationDefault,
   preferredConversationModelOrder,
-  DEFAULT_CONTEXT_PROFILE,
-  type ConversationDocumentContextWire,
-  type CodingWorkbenchMode,
-  type DiscussionMode,
-  type ChatMessageContentPart,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/gateway";
+import { DEFAULT_CONTEXT_PROFILE } from "@oscharko-dev/keiko-contracts/runtime/context-engineering";
 import {
   MAX_DESKTOP_CHAT_CLIENT_TURN_ID_CHARS,
   MAX_DESKTOP_CHAT_INPUT_BYTES,
@@ -1735,7 +1737,7 @@ function scheduleCompactionModelSummary(
   }
   pendingCompactionSummaries += 1;
   const handle = setImmediate(() => {
-    void enrichChatCompactionWithModelSummary(deps, { ...input, historyPrefix })
+    void enrichChatCompactionWithModelSummary(deps, { ...input, historyPrefix, correlationId })
       .catch((error: unknown) => {
         logCompactionSummaryFailure(deps, correlationId, error);
       })

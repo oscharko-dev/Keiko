@@ -5,7 +5,8 @@
 // Skill metadata is an authority-smuggling channel, so every candidate entry is canonicalized and
 // closed on registration — invalid or free-form input fails closed (the skill is simply not
 // admitted) and the produced entry carries only the bounded canonical fields, nothing else.
-import { isCodeTaskSkillId, type CodeTaskSkillId } from "@oscharko-dev/keiko-contracts";
+import type { CodeTaskSkillId } from "@oscharko-dev/keiko-contracts";
+import { isCodeTaskSkillId } from "@oscharko-dev/keiko-contracts/runtime/code-task-auxiliary";
 
 // The closed, canonical purpose vocabulary for an approved skill. Every approved skill is read-only;
 // the category names *which* read-only surface it draws on. There is deliberately no free-form

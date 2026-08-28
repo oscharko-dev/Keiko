@@ -1,8 +1,5 @@
-import {
-  UPDATE_PORTABLE_TARGET_ASSET_NAMES,
-  type UpdatePreflightBlocker,
-  type UpdatePortableTarget,
-} from "@oscharko-dev/keiko-contracts";
+import type { UpdatePreflightBlocker, UpdatePortableTarget } from "@oscharko-dev/keiko-contracts";
+import { UPDATE_PORTABLE_TARGET_ASSET_NAMES } from "@oscharko-dev/keiko-contracts/runtime/update-session";
 import { blocker } from "./update-preflight-impact.js";
 
 export interface GitHubAsset {

@@ -61,6 +61,39 @@ component shown Ready here must not sit in a board state that contradicts shippe
 This is a Stop Condition — status labels must not conflict with delivery-board states. When the two disagree,
 reconcile before treating either as authoritative (the data-viz reconciliation above is the worked example).
 
+## Component styling register
+
+The product has a global token source and several component-scoped styling conventions. This
+register records the shipped conventions and their migration status; it is separate from the
+component maturity register above.
+
+For new components, the canonical convention is a CSS Module with local class names prefixed with
+`cmp` (for example, `.cmpPanel` or `.cmpAction`). New component styles must consume the existing
+design tokens and must not add rules to `globals.css`, which remains protected by the #1300 visual
+proof gate.
+
+The remaining entries are documented compatibility exceptions, not alternative defaults for new
+components. Their number is shrink-only: do not add a new surface using an exception, and migrate
+an existing surface opportunistically when a feature change already makes the work local and safe.
+The complete, machine-readable **CSS Module** exception inventory lives in
+[`styling-exceptions.json`](styling-exceptions.json). Its UI test fails for an unregistered
+exception, a stale entry, or an increase above the committed inventory size; the same test pins
+the separately documented native-control baseline. This makes the exception budget a ratchet
+rather than a review convention.
+
+| Surface / source                      | Convention                                                                                                  | Status                                           | Evidence                                                      | Migration expectation                                                                                                                                                                                   |
+| ------------------------------------- | ----------------------------------------------------------------------------------------------------------- | ------------------------------------------------ | ------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `WorkspaceTrust.module.css`           | CSS Module with `cmp`-prefixed local classes                                                                | Canonical                                        | Existing shipped surface; retrospectively registered in #3124 | Use as the pattern for new component styles.                                                                                                                                                            |
+| `WorkspaceSelection.module.css`       | CSS Module with unprefixed local classes                                                                    | Legacy exception (shrink-only)                   | Workspace-selection overlay, #2150                            | Keep the overlap-safe overlay isolated; rename its local classes to `cmp*` when that surface is next changed.                                                                                           |
+| `CodingWorkbenchWindow.module.css`    | CSS Module with unprefixed local classes and a narrowly scoped `:global(.window):has(.shell)` host selector | Legacy exception (shrink-only)                   | Coding Workbench, #1990-#1994                                 | The host selector is coupled to the desktop window contract; do not extend it or introduce a new global host coupling. Rename local classes to `cmp*` when the workbench is next substantially changed. |
+| `connectors.module.css`               | Scoped selector using `.scope` with `:global()`                                                             | Legacy exception (shrink-only)                   | Connector styling boundary, #2245                             | Use only to bridge an existing external or global class contract; new component rules stay local to a `cmp`-prefixed module.                                                                            |
+| `git-client-styles.ts`                | Inline `CSSProperties` objects                                                                              | Legacy exception (shrink-only)                   | Git client shell, #1574 and #1575                             | Keep inline styles only for values that are genuinely runtime-dynamic; move static presentation to a `cmp`-prefixed CSS Module when modifying the surface.                                              |
+| `globals.css` native-control baseline | Global `button` reset and pointer-modality focus suppression                                                | Foundation compatibility exception (shrink-only) | WCAG focus-modality contract, #627                            | Do not add bare native-element styling; component styles stay scoped and use `cmp*` classes. The existing baseline may only be narrowed after all consumers are migrated.                               |
+
+The register does not authorize a second token system, a parallel theme engine, or product-specific
+global selectors. If a proposed component cannot follow the canonical convention, document the
+constraint in the relevant component record before adding a new exception.
+
 ## Per-component documentation template
 
 The canonical ten-section template — Overview, When (not) to use, Anatomy, Variants & sizes, States,

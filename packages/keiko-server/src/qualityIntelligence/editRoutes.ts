@@ -15,10 +15,8 @@ import {
   recordQualityIntelligenceCandidates,
   type QualityIntelligenceCandidateRow,
 } from "@oscharko-dev/keiko-evidence";
-import {
-  QualityIntelligence,
-  type QualityIntelligenceUiCandidate,
-} from "@oscharko-dev/keiko-contracts";
+import type { QualityIntelligenceUiCandidate } from "@oscharko-dev/keiko-contracts";
+import * as QualityIntelligence from "@oscharko-dev/keiko-contracts/runtime/qualityIntelligence/index";
 import { normaliseCandidateText } from "@oscharko-dev/keiko-quality-intelligence";
 import type { RouteContext, RouteResult, RouteDefinition } from "../routes.js";
 import type { UiHandlerDeps } from "../deps.js";

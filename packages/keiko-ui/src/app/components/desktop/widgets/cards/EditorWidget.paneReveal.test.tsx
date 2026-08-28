@@ -14,7 +14,7 @@ import {
   createEditorLayoutStateV2,
   editorLayoutReducer,
   serializeEditorLayoutStateV2,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/editor-layout";
 import { paneLineRevealProps } from "./EditorWidget";
 import type { EditorRuntimeWidgetProps } from "./EditorRuntimeWidget";
 import { EditorWidget } from "./EditorWidget";

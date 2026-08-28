@@ -3,7 +3,8 @@ import { existsSync, readFileSync, statSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { Worker } from "node:worker_threads";
 
-import { embeddingIdentityKey, type EmbeddingModelIdentity } from "@oscharko-dev/keiko-contracts";
+import type { EmbeddingModelIdentity } from "@oscharko-dev/keiko-contracts";
+import { embeddingIdentityKey } from "@oscharko-dev/keiko-contracts/runtime/vector-index-port";
 
 import { emitKnowledgeLogEvent, type KnowledgeLogSink } from "../knowledge-log.js";
 

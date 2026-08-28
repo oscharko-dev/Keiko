@@ -41,7 +41,7 @@ import {
 } from "node:fs";
 import { join, resolve as resolvePath } from "node:path";
 
-import { classifyErrorKind } from "@oscharko-dev/keiko-contracts";
+import { classifyErrorKind } from "@oscharko-dev/keiko-contracts/runtime/observability";
 
 import { isValidCorrelationId } from "../correlation.js";
 import { contentFreeErrorClass, machineToken, safeProperty } from "./error-classification.js";

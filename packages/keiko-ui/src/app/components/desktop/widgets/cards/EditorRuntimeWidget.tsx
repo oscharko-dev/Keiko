@@ -131,22 +131,24 @@ import {
   type TestGenerationFlowState,
   type TestGenerationPreview,
 } from "@oscharko-dev/keiko-editor";
+import type {
+  GitEditorDiffResponse,
+  GitEditorDiffHunk,
+  GitEditorBlameLine,
+  EditorM7WatchEvent,
+  EditorCompletionSource,
+  ManagedLspSemanticTokenLegend,
+  EditorM7WorkspaceSnippetSnapshot,
+  WorkspaceReplaceApplyFile,
+  WorkspaceReplacePreviewTextRange,
+} from "@oscharko-dev/keiko-contracts";
+import { editorBuiltinDocumentFormatting } from "@oscharko-dev/keiko-contracts/runtime/editor-builtin-capabilities";
+import { GIT_EDITOR_BLAME_MAX_LINES } from "@oscharko-dev/keiko-contracts/runtime/git-editor";
 import {
-  editorBuiltinDocumentFormatting,
-  type GitEditorDiffResponse,
-  type GitEditorDiffHunk,
-  type GitEditorBlameLine,
-  GIT_EDITOR_BLAME_MAX_LINES,
-  type EditorM7WatchEvent,
   MANAGED_LSP_SEMANTIC_TOKEN_MODIFIERS,
   MANAGED_LSP_SEMANTIC_TOKEN_TYPES,
-  matchingEditorM7Snippets,
-  type EditorCompletionSource,
-  type ManagedLspSemanticTokenLegend,
-  type EditorM7WorkspaceSnippetSnapshot,
-  type WorkspaceReplaceApplyFile,
-  type WorkspaceReplacePreviewTextRange,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/managed-lsp-capabilities";
+import { matchingEditorM7Snippets } from "@oscharko-dev/keiko-contracts/runtime/editor-snippets";
 import {
   EDITOR_AGENT_DIAGNOSTIC_MESSAGE_MAX_CHARS,
   EDITOR_AGENT_DIAGNOSTICS_MAX_ITEMS,

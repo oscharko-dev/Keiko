@@ -20,7 +20,8 @@ import {
   writeSync,
 } from "node:fs";
 import { join } from "node:path";
-import { QualityIntelligence, type QualityIntelligence as QI } from "@oscharko-dev/keiko-contracts";
+import type { QualityIntelligence as QI } from "@oscharko-dev/keiko-contracts";
+import * as QualityIntelligence from "@oscharko-dev/keiko-contracts/runtime/qualityIntelligence/index";
 import { QualityIntelligenceReview } from "@oscharko-dev/keiko-quality-intelligence";
 import { sha256Hex } from "@oscharko-dev/keiko-security";
 

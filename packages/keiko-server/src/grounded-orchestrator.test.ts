@@ -27,17 +27,20 @@ import {
 } from "@oscharko-dev/keiko-contracts/connected-context";
 import {
   gitHistoryAdapter,
-  importGraphAdapter,
   symbolGraphAdapter,
-  testSourcePairingAdapter,
   type SemanticSearchProvider,
   type WorkspaceFs,
   type WorkspaceDirEntry,
   type WorkspaceInfo,
   type WorkspaceStat,
 } from "@oscharko-dev/keiko-workspace";
+import {
+  importGraphAdapter,
+  testSourcePairingAdapter,
+} from "@oscharko-dev/keiko-workspace/code-intelligence";
 import type { MicroIndex, RerankerSeam } from "@oscharko-dev/keiko-workflows";
-import { DEFAULT_CONTEXT_PROFILE, validateContextBudget } from "@oscharko-dev/keiko-contracts";
+import { DEFAULT_CONTEXT_PROFILE } from "@oscharko-dev/keiko-contracts/runtime/context-engineering";
+import { validateContextBudget } from "@oscharko-dev/keiko-contracts/runtime/context-engineering-validation";
 
 import { CancelledError } from "@oscharko-dev/keiko-model-gateway";
 

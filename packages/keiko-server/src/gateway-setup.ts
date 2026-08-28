@@ -42,11 +42,13 @@ import {
 } from "@oscharko-dev/keiko-model-gateway";
 import {
   boundedUnsupportedReason,
-  GATEWAY_SETUP_AUDIT_SCHEMA_VERSION,
   isChatCompatibleDeclaredMode,
   modelKindForDeclaredMode,
+} from "@oscharko-dev/keiko-contracts/runtime/gateway";
+import {
+  GATEWAY_SETUP_AUDIT_SCHEMA_VERSION,
   validateGatewaySetupAuditRecord,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/gateway-setup-audit";
 import type {
   GatewayModelUnsupportedReason,
   GatewaySetupAuditRecord,

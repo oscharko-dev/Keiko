@@ -5,12 +5,12 @@ import { join } from "node:path";
 
 import { describe, expect, it, vi } from "vitest";
 
-import {
-  EDITOR_AGENT_SCHEMA_VERSION,
-  type EditorAgentAction,
-  type EditorAgentChangeset,
-  type EditorAgentSessionSnapshot,
+import type {
+  EditorAgentAction,
+  EditorAgentChangeset,
+  EditorAgentSessionSnapshot,
 } from "@oscharko-dev/keiko-contracts";
+import { EDITOR_AGENT_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts/runtime/editor-agent";
 import { EditorAgentHttpClient } from "@oscharko-dev/keiko-tools";
 
 import type { ServerDiagnosticRecord } from "../diagnostics-log.js";

@@ -1,9 +1,7 @@
 import { describe, expect, it } from "vitest";
 
-import {
-  LANGUAGE_SERVICE_OPERATIONS,
-  type LanguageServiceOperation,
-} from "@oscharko-dev/keiko-contracts";
+import type { LanguageServiceOperation } from "@oscharko-dev/keiko-contracts";
+import { LANGUAGE_SERVICE_OPERATIONS } from "@oscharko-dev/keiko-contracts/runtime/language-service";
 
 import { LspServerRequestError } from "./lspJsonRpcClient.js";
 import { createLspProtocolSession, type LspProtocolSession } from "./lspProtocolSession.js";

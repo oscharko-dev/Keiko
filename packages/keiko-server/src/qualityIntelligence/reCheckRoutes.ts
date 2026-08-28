@@ -18,7 +18,8 @@
 import { randomUUID } from "node:crypto";
 import type { IncomingMessage } from "node:http";
 import { isAbsolute } from "node:path";
-import { QualityIntelligence, type QualityIntelligence as QI } from "@oscharko-dev/keiko-contracts";
+import type { QualityIntelligence as QI } from "@oscharko-dev/keiko-contracts";
+import * as QualityIntelligence from "@oscharko-dev/keiko-contracts/runtime/qualityIntelligence/index";
 import {
   ALL_POLICY_PROFILES,
   buildAtomCoverageStatuses,

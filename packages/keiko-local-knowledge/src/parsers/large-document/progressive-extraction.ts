@@ -22,7 +22,7 @@ import type {
   ParserDependencyVersion,
   ParserDiagnostic,
 } from "@oscharko-dev/keiko-contracts";
-import { LARGE_DOCUMENT_DIAGNOSTIC_CODES } from "@oscharko-dev/keiko-contracts";
+import { LARGE_DOCUMENT_DIAGNOSTIC_CODES } from "@oscharko-dev/keiko-contracts/runtime/local-knowledge-large-document";
 
 import { largeDocumentDiagnostic } from "./diagnostics.js";
 

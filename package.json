@@ -123,6 +123,7 @@
     "check:editor-release-evidence": "node scripts/editor-release-evidence.mjs",
     "check:perf-evidence": "node scripts/perf-evidence-gate.mjs",
     "check:perf-evidence:editor": "node scripts/perf-evidence-gate.mjs --target editor",
+    "check:perf-evidence:workspace": "node scripts/perf-evidence-gate.mjs --target workspace",
     "check:retrieval-latency": "node scripts/check-retrieval-latency.mjs",
     "check:retrieval-quality": "node --disable-warning=ExperimentalWarning scripts/check-retrieval-quality.mjs",
     "check:grounded-retrieval-quality": "node scripts/check-grounded-retrieval-quality.mjs",

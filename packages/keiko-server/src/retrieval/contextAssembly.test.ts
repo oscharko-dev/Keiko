@@ -1,14 +1,16 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { Readable } from "node:stream";
 import { describe, expect, it, vi } from "vitest";
+import type {
+  CodingContextPack,
+  RetrievalContextPack,
+  RetrievalContextSourceKind,
+} from "@oscharko-dev/keiko-contracts";
 import {
   RETRIEVAL_CONTEXT_BUDGETS,
   tierForRetrievalContextSource,
-  toCodingContextWirePack,
-  type CodingContextPack,
-  type RetrievalContextPack,
-  type RetrievalContextSourceKind,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/retrieval-context";
+import { toCodingContextWirePack } from "@oscharko-dev/keiko-contracts/runtime/coding-context";
 import { codingContextEvidenceRunId } from "../editor/codingContextEvidence.js";
 import { handleEditorContext } from "../editor/contextRoutes.js";
 import { generateModelCompletions } from "../editor/editorCompletionModel.js";

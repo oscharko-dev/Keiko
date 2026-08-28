@@ -23,17 +23,16 @@
 // An UNBOUND command, and a BOUND command nothing dispatches, both contribute no entry at all.
 // `shortcutLabel(null, …)` renders the "Unbound" wording the settings table wants, which is not a
 // chord hint — leaving the entry out lets the palette row fall through to no chip instead of
-// advertising a word as a keystroke. Keiko listens in the "global" context (AppShell →
-// useKeyboardShortcuts) and the "editor" context (EditorWidget's capturing listener); no listener
-// claims the "settings" context, so `open-editor-settings` (`CtrlOrMeta+,`) stays out until one
-// exists. Advertising a chord nobody dispatches is the same defect one command later.
+// advertising a word as a keystroke. Keiko listens in the "global" and "settings" contexts through
+// AppShell → useKeyboardShortcuts, and in the "editor" context through EditorWidget's capturing
+// listener. Every labelled binding therefore has a runtime dispatcher.
 
-import {
-  EDITOR_M7_COMMAND_REGISTRY,
-  type EditorM7CommandContext,
-  type EditorM7ReasonCode,
-  type WorkspaceKeyboardShortcutBinding,
+import type {
+  EditorM7CommandContext,
+  EditorM7ReasonCode,
+  WorkspaceKeyboardShortcutBinding,
 } from "@oscharko-dev/keiko-contracts";
+import { EDITOR_M7_COMMAND_REGISTRY } from "@oscharko-dev/keiko-contracts/runtime/editor-m7";
 import {
   detectKeyboardShortcutPlatform,
   dispatchableWorkspaceShortcutsForContext,
@@ -51,7 +50,12 @@ export type ShellShortcutState = {
   readonly bindings: ReadonlyArray<WorkspaceKeyboardShortcutBinding>;
 };
 
-const KEIKO_DISPATCHED_CONTEXTS: readonly EditorM7CommandContext[] = ["global", "editor"];
+const KEIKO_DISPATCHED_CONTEXTS: readonly EditorM7CommandContext[] = [
+  "global",
+  "editor",
+  "settings",
+];
+const SHELL_SHORTCUT_CONTEXTS: readonly EditorM7CommandContext[] = ["global", "settings"];
 
 export function projectShellShortcutRefusals(
   registry: EffectiveKeyboardShortcutRegistry,
@@ -89,7 +93,6 @@ function labelledBindings(
 export function resolveShellShortcutState(overrides: readonly string[]): ShellShortcutState {
   const registry = resolveEffectiveKeyboardShortcuts(overrides);
   const platform = detectKeyboardShortcutPlatform();
-  const projection = projectDispatchableWorkspaceShortcuts(registry, "global");
   const refusals = projectShellShortcutRefusals(registry);
   const settingRefusalReasonCode =
     registry.status.kind === "fallback" ? (registry.status.reasonCode ?? "INVALID_INPUT") : null;
@@ -101,10 +104,12 @@ export function resolveShellShortcutState(overrides: readonly string[]): ShellSh
         shortcutLabel(binding, platform),
       ]),
     ),
-    bindings: projection.shortcuts.map((entry) => ({
-      commandId: entry.commandId,
-      chord: entry.chord,
-    })),
+    bindings: SHELL_SHORTCUT_CONTEXTS.flatMap((context) =>
+      projectDispatchableWorkspaceShortcuts(registry, context).shortcuts.map((entry) => ({
+        commandId: entry.commandId,
+        chord: entry.chord,
+      })),
+    ),
   };
 }
 

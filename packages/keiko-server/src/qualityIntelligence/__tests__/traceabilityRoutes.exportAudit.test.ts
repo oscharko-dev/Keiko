@@ -16,7 +16,7 @@ import {
   recordQualityIntelligenceCandidates,
   recordQualityIntelligenceRun,
 } from "@oscharko-dev/keiko-evidence";
-import { QualityIntelligence } from "@oscharko-dev/keiko-contracts";
+import * as QualityIntelligence from "@oscharko-dev/keiko-contracts/runtime/qualityIntelligence/index";
 import type { QualityIntelligence as QI } from "@oscharko-dev/keiko-contracts";
 import type { RouteContext } from "../../routes.js";
 import type { UiHandlerDeps } from "../../deps.js";

@@ -2,12 +2,14 @@ import { fireEvent, render, screen, waitFor, within } from "@testing-library/rea
 import { axe } from "jest-axe";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import type {
+  EditorM7WorkspaceSnippet,
+  EditorM7WorkspaceSnippetSnapshot,
+} from "@oscharko-dev/keiko-contracts";
 import {
   EDITOR_M7_SNIPPET_BODY_MAX_UTF8_BYTES,
   EDITOR_M7_SNIPPET_COLLECTION_VERSION,
-  type EditorM7WorkspaceSnippet,
-  type EditorM7WorkspaceSnippetSnapshot,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/editor-snippets";
 import { I18nProvider } from "@/lib/i18n";
 import { WorkspaceSnippetsPanel } from "./WorkspaceSnippetsPanel";
 import type { WorkspaceSnippetsView } from "../cards/useWorkspaceSnippets";
@@ -27,8 +29,9 @@ const contractsSpies = vi.hoisted(() => ({
   compileEditorM7SnippetBody: vi.fn(),
 }));
 
-vi.mock("@oscharko-dev/keiko-contracts", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("@oscharko-dev/keiko-contracts")>();
+vi.mock("@oscharko-dev/keiko-contracts/runtime/editor-snippets", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("@oscharko-dev/keiko-contracts/runtime/editor-snippets")>();
   contractsSpies.compileEditorM7SnippetBody.mockImplementation(actual.compileEditorM7SnippetBody);
   return { ...actual, compileEditorM7SnippetBody: contractsSpies.compileEditorM7SnippetBody };
 });

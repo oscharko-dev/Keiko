@@ -23,7 +23,7 @@
 //   cross-field-invariant-engine.ts and acceptance-criteria.ts — but with
 // the model-judge tier excluded and a Keiko-shaped finding output.
 
-import { QualityIntelligence } from "@oscharko-dev/keiko-contracts";
+import * as QualityIntelligence from "@oscharko-dev/keiko-contracts/runtime/qualityIntelligence/index";
 import { sha256Hex } from "@oscharko-dev/keiko-security";
 
 import {

@@ -7,11 +7,11 @@ import { Readable } from "node:stream";
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import {
-  EDITOR_M7_SNIPPET_COLLECTION_VERSION,
-  type EditorM7WorkspaceSnippetInput,
-  type EditorM7WorkspaceSnippetSnapshot,
+import type {
+  EditorM7WorkspaceSnippetInput,
+  EditorM7WorkspaceSnippetSnapshot,
 } from "@oscharko-dev/keiko-contracts";
+import { EDITOR_M7_SNIPPET_COLLECTION_VERSION } from "@oscharko-dev/keiko-contracts/runtime/editor-snippets";
 
 import type { UiHandlerDeps } from "../../deps.js";
 import { createRunRegistry } from "../../runs.js";

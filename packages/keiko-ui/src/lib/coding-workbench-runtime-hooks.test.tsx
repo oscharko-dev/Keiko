@@ -1,12 +1,12 @@
 import { act, renderHook } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  CODING_WORKBENCH_SCHEMA_VERSION,
-  type CodingWorkbenchCodexAuthSetupPlan,
-  type CodingWorkbenchCodexSubscriptionProfile,
-  type CodingWorkbenchRuntimeSnapshot,
-  type CodingWorkbenchSidecarGatewayResult,
+import type {
+  CodingWorkbenchCodexAuthSetupPlan,
+  CodingWorkbenchCodexSubscriptionProfile,
+  CodingWorkbenchRuntimeSnapshot,
+  CodingWorkbenchSidecarGatewayResult,
 } from "@oscharko-dev/keiko-contracts";
+import { CODING_WORKBENCH_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench";
 import {
   fetchCodingWorkbenchCodexSubscriptionProfile,
   fetchCodingWorkbenchSidecarGatewayProfile,

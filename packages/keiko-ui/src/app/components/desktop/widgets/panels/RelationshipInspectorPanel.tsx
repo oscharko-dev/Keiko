@@ -35,7 +35,7 @@ import type {
 import {
   RELATIONSHIP_QUERY_BOUNDS,
   RELATIONSHIP_TYPE_DEFINITIONS,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/relationships";
 import {
   getRelationship,
   getExplain,

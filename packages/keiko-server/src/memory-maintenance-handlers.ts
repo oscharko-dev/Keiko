@@ -25,7 +25,7 @@ import {
   type MemoryMaintenancePlan,
   type MemoryMaintenancePolicy,
 } from "@oscharko-dev/keiko-memory-governance";
-import { MEMORY_TYPE_DECAY_HALF_LIFE_MULTIPLIERS } from "@oscharko-dev/keiko-contracts";
+import { MEMORY_TYPE_DECAY_HALF_LIFE_MULTIPLIERS } from "@oscharko-dev/keiko-contracts/runtime/memory";
 import type {
   CodingWorkbenchMode,
   MemoryAuditEvent,

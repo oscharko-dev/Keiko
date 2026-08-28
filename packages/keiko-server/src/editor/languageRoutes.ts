@@ -7,21 +7,23 @@
 // already length-capped and control-character-stripped by the orchestrator.
 
 import { isAbsolute, resolve } from "node:path";
+import type {
+  LanguageProviderDescriptor,
+  LanguageServiceErrorCode,
+  LanguageServiceLimits,
+  LanguageServiceRequest,
+  ManagedLspEffectiveState,
+  ManagedLspLanguage,
+  ManagedLspProcessHealthSnapshot,
+  ManagedLspRuntimeConfiguration,
+  ManagedLspSemanticTokenResponse,
+} from "@oscharko-dev/keiko-contracts";
 import {
   DEFAULT_LANGUAGE_SERVICE_LIMITS,
-  MANAGED_LSP_LANGUAGES,
   parseLanguageServiceRequest,
-  parseManagedLspSemanticTokenRequest,
-  type LanguageProviderDescriptor,
-  type LanguageServiceErrorCode,
-  type LanguageServiceLimits,
-  type LanguageServiceRequest,
-  type ManagedLspEffectiveState,
-  type ManagedLspLanguage,
-  type ManagedLspProcessHealthSnapshot,
-  type ManagedLspRuntimeConfiguration,
-  type ManagedLspSemanticTokenResponse,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/language-service";
+import { MANAGED_LSP_LANGUAGES } from "@oscharko-dev/keiko-contracts/runtime/managed-lsp-activation";
+import { parseManagedLspSemanticTokenRequest } from "@oscharko-dev/keiko-contracts/runtime/managed-lsp-capabilities";
 import type { CommandRule } from "@oscharko-dev/keiko-tools";
 import { containedRealPathInfo } from "@oscharko-dev/keiko-workspace";
 import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";

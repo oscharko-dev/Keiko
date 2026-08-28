@@ -25,14 +25,13 @@ import {
   type OpenAIEmbeddingRequest,
   type RerankOutcome,
 } from "@oscharko-dev/keiko-model-gateway";
-import {
-  binaryNdcgAtK,
-  mean,
-  type EvalBudget,
-  type EvalFloorResult,
-  type KnowledgeCapsuleId,
-  type KnowledgeSourceId,
+import type {
+  EvalBudget,
+  EvalFloorResult,
+  KnowledgeCapsuleId,
+  KnowledgeSourceId,
 } from "@oscharko-dev/keiko-contracts";
+import { binaryNdcgAtK, mean } from "@oscharko-dev/keiko-contracts/runtime/eval-metrics";
 import {
   createDefaultParserRegistry,
   createRepositoryPodShell,

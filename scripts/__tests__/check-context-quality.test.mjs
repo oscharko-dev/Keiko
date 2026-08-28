@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { allocateContext, DEFAULT_CONTEXT_BUDGET } from "@oscharko-dev/keiko-workflows";
-import { DEFAULT_CONTEXT_PROFILE } from "@oscharko-dev/keiko-contracts";
+import { DEFAULT_CONTEXT_PROFILE } from "@oscharko-dev/keiko-contracts/runtime/context-engineering";
 
 import {
   conversationForGateway,

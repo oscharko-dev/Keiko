@@ -1,11 +1,13 @@
 "use client";
 
+import type {
+  CodingAppSessionChannelSnapshot,
+  CodingWorkbenchValidationResult,
+} from "@oscharko-dev/keiko-contracts";
 import {
   CODING_APP_SESSION_CHANNEL_MAX_UTF8_BYTES,
   validateCodingAppSessionChannelSnapshot,
-  type CodingAppSessionChannelSnapshot,
-  type CodingWorkbenchValidationResult,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/coding-app-session";
 
 import { ApiError } from "./api";
 import { clientErrorSummary } from "./client-error-summary";

@@ -32,7 +32,7 @@ import type {
 import {
   KNOWLEDGE_POD_MODEL_USE_OPERATIONS,
   resolveKnowledgePodModelUsePolicy,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/local-knowledge-model-use-policy";
 
 // ---------------------------------------------------------------------------
 // Wire shapes

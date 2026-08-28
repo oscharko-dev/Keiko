@@ -24,19 +24,21 @@ import {
 import { nodeSpawnFn } from "@oscharko-dev/keiko-tools/internal/exec";
 import type { WorkspaceInfo } from "@oscharko-dev/keiko-workspace";
 import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
+import type {
+  ContainerCapabilityResponse,
+  ContainerExecutionPolicy,
+  ContainerFailureReason,
+  ContainerResourceLimits,
+  ContainerRunResult,
+  ContainerRunnerEvent,
+  ContainerRunnerEventKind,
+  ContainerTask,
+  ContainerTaskCatalog,
+} from "@oscharko-dev/keiko-contracts";
 import {
   CONTAINER_RUNTIME_SCHEMA_VERSION,
   CONTAINER_TASK_RULES,
-  type ContainerCapabilityResponse,
-  type ContainerExecutionPolicy,
-  type ContainerFailureReason,
-  type ContainerResourceLimits,
-  type ContainerRunResult,
-  type ContainerRunnerEvent,
-  type ContainerRunnerEventKind,
-  type ContainerTask,
-  type ContainerTaskCatalog,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/container-runtime";
 import { DEFAULT_RETENTION, type EvidenceStore } from "@oscharko-dev/keiko-evidence";
 import { ContainerRunnerError } from "./containerRunner-errors.js";
 import {

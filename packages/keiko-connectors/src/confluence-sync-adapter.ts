@@ -27,11 +27,11 @@
 // supplementary enrichment: a failed or oversized comments read never fails its page (the page
 // body remains the citable artifact) — except a 401, which is always run-fatal.
 
+import type { AtlassianSyncFailureReason } from "@oscharko-dev/keiko-contracts";
 import {
   isSafeAtlassianIdentifier,
   isSafeConfluenceSpaceKey,
-  type AtlassianSyncFailureReason,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import { AtlassianCredentialCustodyError } from "./atlassian-credential-custody.js";
 import {
   asArray,

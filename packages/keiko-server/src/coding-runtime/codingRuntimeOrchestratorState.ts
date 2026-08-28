@@ -1,11 +1,11 @@
-import {
-  CODING_WORKBENCH_RUNTIME_CONTRACT_VERSION,
-  validateCodingWorkbenchRuntimeSnapshot,
-  type CodingWorkbenchRuntimeEvent,
-  type CodingWorkbenchMode,
-  type CodingWorkbenchRuntimePendingPermission,
-  type CodingWorkbenchRuntimeSnapshot as PublicSnapshot,
+import type {
+  CodingWorkbenchRuntimeEvent,
+  CodingWorkbenchMode,
+  CodingWorkbenchRuntimePendingPermission,
+  CodingWorkbenchRuntimeSnapshot as PublicSnapshot,
 } from "@oscharko-dev/keiko-contracts";
+import { CODING_WORKBENCH_RUNTIME_CONTRACT_VERSION } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime";
+import { validateCodingWorkbenchRuntimeSnapshot } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime-api";
 
 import type { CodingRuntimeEventHub } from "./codingRuntimeEventHub.js";
 import type { CodingRuntimeSnapshot } from "./codingRuntimeSnapshotStore.js";

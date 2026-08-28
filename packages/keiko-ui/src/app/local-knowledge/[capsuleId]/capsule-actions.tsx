@@ -21,7 +21,7 @@ import {
   type SetStateAction,
 } from "react";
 import { createPortal } from "react-dom";
-import { LOCAL_KNOWLEDGE_FILE_FILTERS } from "@oscharko-dev/keiko-contracts";
+import { LOCAL_KNOWLEDGE_FILE_FILTERS } from "@oscharko-dev/keiko-contracts/runtime/local-knowledge-file-selection";
 import type {
   KnowledgeCapsuleId,
   CapsuleLifecycleState,
@@ -52,6 +52,10 @@ import {
 } from "@/lib/local-knowledge-limits";
 import { useModalInteractionLock } from "@/app/components/desktop/hooks/useModalInteractionLock";
 import { useNativeFileDialogCapability } from "@/app/components/desktop/hooks/useNativeFileDialogCapability";
+import {
+  NATIVE_DIALOG_STYLE,
+  NATIVE_FIELDSET_RESET_STYLE,
+} from "@/app/components/desktop/native-element-styles";
 import { nativePathsToRootAndFiles, pickWithNativeDialog } from "@/lib/native-file-dialog";
 import { useLocale } from "@/lib/i18n";
 import {
@@ -889,7 +893,7 @@ function ConnectSourceForm({
 // ---------------------------------------------------------------------------
 
 function useFocusTrap(
-  dialogRef: React.RefObject<HTMLDivElement | null>,
+  dialogRef: React.RefObject<HTMLElement | null>,
   active: boolean,
   onEscape: () => void,
 ): void {
@@ -917,9 +921,9 @@ function useFocusTrap(
 
     // Capture the narrowed non-null reference so the inner handler can use it
     // without TypeScript losing the narrowing across the closure boundary.
-    const narrowedDialog: HTMLDivElement = dialog;
+    const narrowedDialog: HTMLElement = dialog;
 
-    function focusablesIn(root: HTMLDivElement): readonly HTMLElement[] {
+    function focusablesIn(root: HTMLElement): readonly HTMLElement[] {
       return Array.from(
         root.querySelectorAll<HTMLElement>(
           "button:not([disabled]),input:not([disabled]),[tabindex]:not([tabindex='-1'])",
@@ -1149,10 +1153,10 @@ function MaintenanceActionsGroup({
   t,
 }: MaintenanceActionsGroupProps): ReactNode {
   return (
-    <div
-      role="group"
+    <fieldset
       aria-label={t("localKnowledge.detail.actions.group", { name: capsuleDisplayName })}
       className="lkd-actions-group"
+      style={NATIVE_FIELDSET_RESET_STYLE}
     >
       {showReembedButton ? (
         <button
@@ -1219,7 +1223,7 @@ function MaintenanceActionsGroup({
       >
         {t("common.delete")}
       </button>
-    </div>
+    </fieldset>
   );
 }
 
@@ -1235,7 +1239,7 @@ function ConfirmModal({
   onCancel,
 }: ConfirmModalProps): ReactNode {
   const t = useTranslate();
-  const dialogRef = useRef<HTMLDivElement>(null);
+  const dialogRef = useRef<HTMLDialogElement>(null);
   const confirmInputRef = useRef<HTMLInputElement>(null);
   useModalInteractionLock();
   useFocusTrap(dialogRef, true, onCancel);
@@ -1273,86 +1277,90 @@ function ConfirmModal({
   const descId = "lkd-confirm-desc";
 
   return createPortal(
-    <div
-      className="dlg-overlay in"
-      role="presentation"
-      onClick={(e) => {
-        if (e.target === e.currentTarget) onCancel();
-      }}
-    >
+    <>
+      {/* eslint-disable-next-line jsx-a11y/click-events-have-key-events, jsx-a11y/no-static-element-interactions -- pointer-only backdrop dismissal is additive; Escape and explicit Cancel provide keyboard dismissal. */}
       <div
-        ref={dialogRef}
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby={titleId}
-        aria-describedby={descId}
-        className="dlg"
-        tabIndex={-1}
+        className="dlg-overlay in"
+        onClick={(e) => {
+          if (e.target === e.currentTarget) onCancel();
+        }}
       >
-        <div className="dlg-head">
-          <div className="dlg-htext">
-            <div id={titleId} className="dlg-title">
-              {actionTitle(kind, t)}
-            </div>
-            <div id={descId} className="dlg-sub">
-              {actionDescription(kind, capsuleDisplayName, t)}
-            </div>
-          </div>
-        </div>
-
-        {requiresTypedName ? (
-          <div className="dlg-body">
-            <div className="dlg-field">
-              <label htmlFor="lkd-confirm-name-input" className="dlg-label">
-                {t("localKnowledge.detail.actions.delete.confirmName")}
-              </label>
-              <input
-                id="lkd-confirm-name-input"
-                type="text"
-                className="dlg-input"
-                value={nameInput}
-                autoComplete="off"
-                ref={confirmInputRef}
-                disabled={busy}
-                placeholder={capsuleDisplayName}
-                onChange={(e: ChangeEvent<HTMLInputElement>) => onNameChange(e.target.value)}
-              />
-            </div>
-            {error !== null ? (
-              <div role="alert" className="lk-alert" style={{ marginTop: 4 }}>
-                {error}
+        {/* eslint-disable-next-line jsx-a11y/no-noninteractive-element-interactions -- native dialog owns the modal semantics and receives the established focus trap. */}
+        <dialog
+          ref={dialogRef}
+          open
+          aria-modal="true"
+          aria-labelledby={titleId}
+          aria-describedby={descId}
+          className="dlg"
+          tabIndex={-1}
+          style={NATIVE_DIALOG_STYLE}
+        >
+          <div className="dlg-head">
+            <div className="dlg-htext">
+              <div id={titleId} className="dlg-title">
+                {actionTitle(kind, t)}
               </div>
-            ) : null}
-          </div>
-        ) : (
-          <div className="dlg-body">
-            {busy && progress !== null ? (
-              <ActionProgress kind={kind} progress={progress} t={t} />
-            ) : null}
-            {error !== null ? (
-              <div role="alert" className="lk-alert">
-                {error}
+              <div id={descId} className="dlg-sub">
+                {actionDescription(kind, capsuleDisplayName, t)}
               </div>
-            ) : null}
+            </div>
           </div>
-        )}
 
-        <div className="dlg-foot">
-          <button type="button" className="dlg-btn" disabled={busy} onClick={onCancel}>
-            {t("common.cancel")}
-          </button>
-          <button
-            type="button"
-            className="dlg-btn lkd-btn-destructive"
-            disabled={!confirmEnabled}
-            aria-disabled={!confirmEnabled}
-            onClick={onConfirm}
-          >
-            {confirmButtonLabel(kind, busy, t)}
-          </button>
-        </div>
+          {requiresTypedName ? (
+            <div className="dlg-body">
+              <div className="dlg-field">
+                <label htmlFor="lkd-confirm-name-input" className="dlg-label">
+                  {t("localKnowledge.detail.actions.delete.confirmName")}
+                </label>
+                <input
+                  id="lkd-confirm-name-input"
+                  type="text"
+                  className="dlg-input"
+                  value={nameInput}
+                  autoComplete="off"
+                  ref={confirmInputRef}
+                  disabled={busy}
+                  placeholder={capsuleDisplayName}
+                  onChange={(e: ChangeEvent<HTMLInputElement>) => onNameChange(e.target.value)}
+                />
+              </div>
+              {error !== null ? (
+                <div role="alert" className="lk-alert" style={{ marginTop: 4 }}>
+                  {error}
+                </div>
+              ) : null}
+            </div>
+          ) : (
+            <div className="dlg-body">
+              {busy && progress !== null ? (
+                <ActionProgress kind={kind} progress={progress} t={t} />
+              ) : null}
+              {error !== null ? (
+                <div role="alert" className="lk-alert">
+                  {error}
+                </div>
+              ) : null}
+            </div>
+          )}
+
+          <div className="dlg-foot">
+            <button type="button" className="dlg-btn" disabled={busy} onClick={onCancel}>
+              {t("common.cancel")}
+            </button>
+            <button
+              type="button"
+              className="dlg-btn lkd-btn-destructive"
+              disabled={!confirmEnabled}
+              aria-disabled={!confirmEnabled}
+              onClick={onConfirm}
+            >
+              {confirmButtonLabel(kind, busy, t)}
+            </button>
+          </div>
+        </dialog>
       </div>
-    </div>,
+    </>,
     document.body,
   );
 }
@@ -1380,9 +1388,7 @@ function AffectedSetsNotice({
   const descId = "lkd-affected-sets-desc";
 
   return createPortal(
-    // No role="presentation" here, unlike the confirm dialog's overlay above: this scrim
-    // carries no interaction, and a <div> has no implicit role for the attribute to suppress
-    // (#2721). The sibling keeps it because its outside-click handler needs it.
+    // This scrim carries no interaction, so the ordinary non-semantic <div> is sufficient.
     <div className="dlg-overlay in">
       <div
         ref={dialogRef}

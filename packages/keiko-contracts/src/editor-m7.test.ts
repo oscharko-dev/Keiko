@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  __validateEditorM7KeybindingForTests,
   EDITOR_M7_COMMAND_REGISTRY,
   EDITOR_M7_SCHEMA_VERSION,
   EDITOR_M7_SETTING_REGISTRY,
@@ -18,6 +19,7 @@ import {
   serializeEditorM7KeybindingOverride,
   validateEditorM7Keybinding,
   type EditorM7AiActivationInput,
+  type EditorM7CommandDefinition,
   type EditorM7ModelEntry,
   type EditorM7SettingId,
   type EditorM7SettingsSnapshot,
@@ -275,6 +277,11 @@ describe("M7 keybinding, snippet, and AI activation contracts", () => {
   it("keeps a closed command registry and rejects reserved, malformed, unknown, and colliding bindings", () => {
     expect(EDITOR_M7_COMMAND_REGISTRY.map((entry) => entry.id)).toContain("editor.save");
     expect(
+      EDITOR_M7_COMMAND_REGISTRY.find((entry) => entry.id === "open-editor-settings"),
+    ).toMatchObject({
+      contexts: ["settings", "editor"],
+    });
+    expect(
       validateEditorM7Keybinding({
         commandId: "quick-access.files",
         binding: "CtrlOrMeta+Shift+O",
@@ -502,7 +509,39 @@ describe("M7 keybinding, snippet, and AI activation contracts", () => {
     ).toMatchObject({ ok: false, reasonCode: "KEYBINDING_COLLISION" });
   });
 
-  it("allows explicit context-disjoint reuse and normalizes persisted override records", () => {
+  it("rejects overlapping context reuse and normalizes persisted override records", () => {
+    const disjointCommands = [
+      {
+        id: "settings-only",
+        labelKey: "command.settingsOnly",
+        descriptionKey: "command.settingsOnly.description",
+        scope: "settings",
+        contexts: ["settings"],
+        defaultBindings: [],
+        rebindable: true,
+        dispatchOwner: "keiko",
+      },
+      {
+        id: "explorer-only",
+        labelKey: "command.explorerOnly",
+        descriptionKey: "command.explorerOnly.description",
+        scope: "explorer",
+        contexts: ["explorer"],
+        defaultBindings: [],
+        rebindable: true,
+        dispatchOwner: "keiko",
+      },
+    ] as const satisfies readonly EditorM7CommandDefinition[];
+    expect(
+      __validateEditorM7KeybindingForTests(
+        {
+          commandId: "settings-only",
+          binding: "Alt+S",
+          activeBindings: [{ commandId: "explorer-only", binding: "Alt+S" }],
+        },
+        disjointCommands,
+      ),
+    ).toStrictEqual({ ok: true, value: "Alt+S" });
     expect(
       validateEditorM7Keybinding({
         commandId: "view.splitRight",
@@ -516,7 +555,7 @@ describe("M7 keybinding, snippet, and AI activation contracts", () => {
         binding: "Shift+Alt+X",
         activeBindings: [{ commandId: "open-editor-settings", binding: "Shift+Alt+X" }],
       }),
-    ).toStrictEqual({ ok: true, value: "Alt+Shift+X" });
+    ).toMatchObject({ ok: false, reasonCode: "KEYBINDING_COLLISION" });
     const record = serializeEditorM7KeybindingOverride({
       schemaVersion: "1",
       commandId: "view.splitRight",

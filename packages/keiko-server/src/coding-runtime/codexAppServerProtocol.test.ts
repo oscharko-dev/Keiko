@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { KEIKO_PRODUCT_VERSION } from "@oscharko-dev/keiko-contracts";
+import { KEIKO_PRODUCT_VERSION } from "@oscharko-dev/keiko-contracts/runtime/version";
 
 import {
   CODEX_APP_SERVER_CLIENT_METHODS,

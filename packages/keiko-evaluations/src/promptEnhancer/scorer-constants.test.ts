@@ -9,11 +9,11 @@
 // and the scorer's threshold moves in lockstep, or the test fails.
 
 import { describe, expect, it } from "vitest";
-import {
-  BASELINE_LEAST_PRIVILEGE,
-  type LeastPrivilegeConstraint,
-  type PromptSafetyAssessment,
+import type {
+  LeastPrivilegeConstraint,
+  PromptSafetyAssessment,
 } from "@oscharko-dev/keiko-contracts";
+import { BASELINE_LEAST_PRIVILEGE } from "@oscharko-dev/keiko-contracts/runtime/prompt-enhancer-safety";
 import { PromptEnhancer } from "@oscharko-dev/keiko-model-gateway";
 import {
   promptEnhancerFixtureByName,

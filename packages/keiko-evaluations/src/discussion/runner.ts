@@ -4,6 +4,7 @@
 // pure recovery helpers, scores the seven discussion-quality dimensions, aggregates a scorecard, and
 // derives the offline Go/No-Go verdict. Pure: no IO, clock, randomness, or model dispatch.
 
+import type { DiscussionMode } from "@oscharko-dev/keiko-contracts";
 import {
   DISCUSSION_DIRECTIVE_TEMPLATES,
   applyDiscussionInterruption,
@@ -11,8 +12,7 @@ import {
   beginDiscussionTurn,
   discussionModePlan,
   voiceCanDriveDiscussion,
-  type DiscussionMode,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/discussion-intelligence";
 import { ALL_DISCUSSION_FIXTURES } from "./fixtures/index.js";
 import { aggregateDiscussionQuality, scoreDiscussionQuality } from "./scorer.js";
 import {

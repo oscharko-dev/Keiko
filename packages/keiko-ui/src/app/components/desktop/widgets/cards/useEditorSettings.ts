@@ -2,25 +2,29 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState, type RefObject } from "react";
 
+import type {
+  EditorM7ExternalReloadPolicy,
+  EditorM7LargeFileMode,
+  EditorM7SettingId,
+  EditorM7SettingValue,
+  EditorM7SettingsMutationAction,
+  EditorM7WhitespaceRendering,
+  EditorM7WordWrap,
+  EditorM11ResolvedSetting,
+  EditorM11ProfileMutationAction,
+  EditorM11SettingScope,
+  EditorM11SettingsSnapshot,
+  WorkspaceProfileRef,
+} from "@oscharko-dev/keiko-contracts";
 import {
   EDITOR_M7_SCHEMA_VERSION,
   EDITOR_M7_SETTING_REGISTRY,
-  EDITOR_M11_DEFAULT_PROFILE_REF,
   defaultEditorM7Settings,
+} from "@oscharko-dev/keiko-contracts/runtime/editor-m7";
+import {
+  EDITOR_M11_DEFAULT_PROFILE_REF,
   parseEditorM11SettingsEvent,
-  type EditorM7ExternalReloadPolicy,
-  type EditorM7LargeFileMode,
-  type EditorM7SettingId,
-  type EditorM7SettingValue,
-  type EditorM7SettingsMutationAction,
-  type EditorM7WhitespaceRendering,
-  type EditorM7WordWrap,
-  type EditorM11ResolvedSetting,
-  type EditorM11ProfileMutationAction,
-  type EditorM11SettingScope,
-  type EditorM11SettingsSnapshot,
-  type WorkspaceProfileRef,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/editor-m11-settings";
 import {
   ApiError,
   fetchEditorSettings,

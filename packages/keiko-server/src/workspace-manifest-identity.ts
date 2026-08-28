@@ -7,7 +7,7 @@ import { basename } from "node:path";
 import {
   WORKSPACE_MANIFEST_SCHEMA_VERSION,
   validateWorkspaceManifest,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/workspace-manifest";
 import type {
   WorkspaceManifest,
   WorkspaceManifestDigest,

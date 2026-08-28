@@ -1,18 +1,20 @@
+import type {
+  CodingWorkbenchCodexAuthMethod,
+  CodingWorkbenchCodexAuthSetupPlan,
+  CodingWorkbenchCodexAuthStateRoot,
+  CodingWorkbenchCodexAuthStatus,
+  CodingWorkbenchCodexCredentialStore,
+  CodingWorkbenchCodexSubscriptionProfile,
+} from "@oscharko-dev/keiko-contracts";
 import {
   CODING_WORKBENCH_CODEX_AUTH_STATUSES,
   CODING_WORKBENCH_CODEX_CREDENTIAL_STORES,
-  CODING_WORKBENCH_SCHEMA_VERSION,
   codingWorkbenchCodexAuthMethodRowFor,
   validateCodingWorkbenchCodexAuthSetupPlan,
   validateCodingWorkbenchCodexAuthSetupRequest,
   validateCodingWorkbenchCodexSubscriptionProfile,
-  type CodingWorkbenchCodexAuthMethod,
-  type CodingWorkbenchCodexAuthSetupPlan,
-  type CodingWorkbenchCodexAuthStateRoot,
-  type CodingWorkbenchCodexAuthStatus,
-  type CodingWorkbenchCodexCredentialStore,
-  type CodingWorkbenchCodexSubscriptionProfile,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-codex-auth";
+import { CODING_WORKBENCH_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench";
 import { createHash, randomUUID } from "node:crypto";
 import type { EnvSource } from "@oscharko-dev/keiko-model-gateway";
 import type { RouteContext, RouteResult } from "./routes.js";

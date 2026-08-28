@@ -16,14 +16,13 @@ import { existsSync, renameSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 
+import type { KnowledgeCapsuleMigration, StoreFingerprint } from "@oscharko-dev/keiko-contracts";
 import {
   KNOWLEDGE_CAPSULE_MIGRATIONS,
   KNOWLEDGE_CAPSULE_TABLES,
   KNOWLEDGE_CAPSULE_V1_TABLES,
   LOCAL_KNOWLEDGE_DB_SCHEMA_VERSION,
-  type KnowledgeCapsuleMigration,
-  type StoreFingerprint,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/local-knowledge-schema";
 // Shared fs-hardening owner [GEN-MAINT-COUPLING-005]: the single 0o700/0o600 hardening pair.
 import {
   chmodIfPresent,

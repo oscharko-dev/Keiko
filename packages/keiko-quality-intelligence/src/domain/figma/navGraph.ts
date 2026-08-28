@@ -21,7 +21,7 @@
 // cycle or self-loop never produces an unbounded path set. Total flow count is also bounded by
 // MAX_NAV_FLOWS so a dense fully-connected graph cannot exhaust memory during QI ingestion.
 
-import { compareStrings } from "@oscharko-dev/keiko-contracts";
+import { compareStrings } from "@oscharko-dev/keiko-contracts/runtime/comparators";
 import { fnv1aHex } from "./idHash.js";
 import type { InterScreenLink, IrNode, ScreenIr, ScreenIrResult } from "./irTypes.js";
 import type { StructuralTestItem } from "./screenIrTestBaseline.js";

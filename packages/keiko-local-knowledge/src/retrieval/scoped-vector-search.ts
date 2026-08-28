@@ -25,7 +25,7 @@ import type {
 // One canonical identity key, owned by contracts (ADR-0152 D1). This module used to carry its own
 // byte-equivalent copy; a third copy is forbidden, because a drifting key silently compares vectors
 // from incompatible embedding spaces as if they were comparable.
-import { embeddingIdentityKey as identityKey } from "@oscharko-dev/keiko-contracts";
+import { embeddingIdentityKey as identityKey } from "@oscharko-dev/keiko-contracts/runtime/vector-index-port";
 import {
   assertCompatibleEmbeddingIdentity,
   l2NormalizeVector,

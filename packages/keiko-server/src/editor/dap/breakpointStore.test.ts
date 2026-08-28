@@ -14,10 +14,8 @@ import { basename, join } from "node:path";
 
 import { afterEach, describe, expect, it } from "vitest";
 
-import {
-  DAP_DEBUG_CONTRACT_SCHEMA_VERSION,
-  type InstrumentationSnapshot,
-} from "@oscharko-dev/keiko-contracts";
+import type { InstrumentationSnapshot } from "@oscharko-dev/keiko-contracts";
+import { DAP_DEBUG_CONTRACT_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts/runtime/dap-debug";
 
 import type { ServerDiagnosticRecord } from "../../diagnostics-log.js";
 import { savePrivateJson } from "../../private-json.js";

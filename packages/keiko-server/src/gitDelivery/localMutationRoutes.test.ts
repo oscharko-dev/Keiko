@@ -14,13 +14,13 @@ import { join } from "node:path";
 import { Readable } from "node:stream";
 import type { Server, IncomingMessage, ServerResponse } from "node:http";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import {
-  GIT_DELIVERY_POLICY_SCHEMA_VERSION,
-  GIT_DELIVERY_SCHEMA_VERSION,
-  type GitDeliveryExecutionResult,
-  type GitDeliveryRepoPolicyPack,
-  type WorkspaceInstance,
+import type {
+  GitDeliveryExecutionResult,
+  GitDeliveryRepoPolicyPack,
+  WorkspaceInstance,
 } from "@oscharko-dev/keiko-contracts";
+import { GIT_DELIVERY_POLICY_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts/runtime/git-delivery-policy";
+import { GIT_DELIVERY_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts/runtime/git-delivery";
 import type { GitLocalMutationAdapter, GitWorktreeSnapshot } from "@oscharko-dev/keiko-tools";
 import { UI_HOST } from "../server.js";
 import { buildCspHeader } from "../csp.js";

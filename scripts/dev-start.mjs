@@ -83,7 +83,8 @@ export async function pairedDevBrowserUrl(pairingSecret, baseUrl = publicBrowser
     pathToFileURL(join(repoRoot, "packages", "keiko-server", "dist", "index.js")).href
   );
   const contractsModule = await import(
-    pathToFileURL(join(repoRoot, "packages", "keiko-contracts", "dist", "index.js")).href
+    pathToFileURL(join(repoRoot, "packages", "keiko-contracts", "dist", "coding-app-session.js"))
+      .href
   );
   const attestation = serverModule.mintLauncherPairingAttestation({
     secret: pairingSecret,

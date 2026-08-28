@@ -22,16 +22,20 @@ import type {
 } from "@oscharko-dev/keiko-contracts";
 import {
   GROUNDING_DIRECTIVES,
-  LEAST_PRIVILEGE_CONSTRAINTS,
-  PROMPT_CANDIDATE_REJECTION_REASONS,
-  PROMPT_ENHANCEMENT_MAX_CANDIDATE_COUNT,
   PROMPT_ENHANCEMENT_PROFILE_IDS,
+  validatePromptEnhancerIdString,
+} from "@oscharko-dev/keiko-contracts/runtime/prompt-enhancer";
+import {
+  LEAST_PRIVILEGE_CONSTRAINTS,
   PROMPT_SAFETY_DECISIONS,
   PROMPT_SAFETY_VERIFICATION_STATUSES,
-  isPromptCandidateRejectionReason,
   isPromptSafetyViolationCode,
-  validatePromptEnhancerIdString,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/prompt-enhancer-safety";
+import {
+  PROMPT_CANDIDATE_REJECTION_REASONS,
+  isPromptCandidateRejectionReason,
+} from "@oscharko-dev/keiko-contracts/runtime/prompt-enhancer-critic";
+import { PROMPT_ENHANCEMENT_MAX_CANDIDATE_COUNT } from "@oscharko-dev/keiko-contracts/runtime/prompt-enhancer-bff";
 
 export const PROMPT_ENHANCEMENT_EVIDENCE_SCHEMA_VERSION = 3 as const;
 

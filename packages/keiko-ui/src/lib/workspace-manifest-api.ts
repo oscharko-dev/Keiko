@@ -1,13 +1,15 @@
+import type {
+  WorkspaceManifest,
+  WorkspaceManifestAccess,
+  WorkspaceRootDescriptor,
+  WorkspaceRootDispatch,
+  WorkspaceRootDispatchOperationClass,
+  WorkspaceRootRef,
+} from "@oscharko-dev/keiko-contracts";
 import {
   parseWorkspaceManifestAccess,
   validateWorkspaceManifest,
-  type WorkspaceManifest,
-  type WorkspaceManifestAccess,
-  type WorkspaceRootDescriptor,
-  type WorkspaceRootDispatch,
-  type WorkspaceRootDispatchOperationClass,
-  type WorkspaceRootRef,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/workspace-manifest";
 import { bffFetchJson } from "./http";
 import { codingAppSessionPairingSettled } from "./coding-app-session-client";
 

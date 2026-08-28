@@ -17,7 +17,7 @@
 // persisted advisory lock + visible lifecycle state (#447 reconciliation/repair resolve any stale lock).
 
 import { comparablePath } from "@oscharko-dev/keiko-git";
-import { compareStrings } from "@oscharko-dev/keiko-contracts";
+import { compareStrings } from "@oscharko-dev/keiko-contracts/runtime/comparators";
 
 export interface WorkspaceMutexRegistry {
   // Runs `fn()` with exclusive access to every key in `keys`, queuing behind any in-flight holder of an

@@ -19,7 +19,7 @@ import {
   type UiCliArgs,
   type UiCliDeps,
 } from "./ui.js";
-import { DEFAULT_UI_PORT, UI_HOST } from "@oscharko-dev/keiko-contracts";
+import { DEFAULT_UI_PORT, UI_HOST } from "@oscharko-dev/keiko-contracts/runtime/bff-wire";
 import { extractInlineScriptHashes } from "@oscharko-dev/keiko-server";
 import type { ServerLogEvent, ServerLogSink, UiHandlerDeps } from "@oscharko-dev/keiko-server";
 import type { CliIo } from "./runner.js";

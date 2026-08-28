@@ -2,7 +2,7 @@ import { mkdirSync, mkdtempSync, rmSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { workspaceTrustRootBindingsMatch } from "@oscharko-dev/keiko-contracts";
+import { workspaceTrustRootBindingsMatch } from "@oscharko-dev/keiko-contracts/runtime/workspace-trust";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   createNodeUiStore,

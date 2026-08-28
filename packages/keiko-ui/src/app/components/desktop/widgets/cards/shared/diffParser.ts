@@ -7,12 +7,11 @@
 //   list and set `truncated: true`. Prevents the Review widget from doing unbounded work on the
 //   `files` array for large repository / generated patches.
 
+import type { GitEditorDiffFile, GitEditorDiffLine } from "@oscharko-dev/keiko-contracts";
 import {
   GIT_EDITOR_DIFF_MAX_BYTES,
   GIT_EDITOR_DIFF_MAX_FILES,
-  type GitEditorDiffFile,
-  type GitEditorDiffLine,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/git-editor";
 
 type DiffLine = GitEditorDiffLine;
 type DiffFile = GitEditorDiffFile;

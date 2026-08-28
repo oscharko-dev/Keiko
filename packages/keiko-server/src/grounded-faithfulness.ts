@@ -19,12 +19,12 @@
 // The module deliberately depends only on contract types so it stays a leaf (no import cycle with
 // the grounded-qa ⇄ grounded-qa-hybrid pair).
 
-import {
-  isValidScopePath,
-  type ConnectedContextPack,
-  type LineRange,
-  type UncertaintyMarker,
+import type {
+  ConnectedContextPack,
+  LineRange,
+  UncertaintyMarker,
 } from "@oscharko-dev/keiko-contracts";
+import { isValidScopePath } from "@oscharko-dev/keiko-contracts/runtime/connected-context";
 
 // Deterministic no-evidence answer used when the folder/multi-source path abstains BEFORE the
 // model call. Kept generic (no scope path) so it is safe to display and speak verbatim.

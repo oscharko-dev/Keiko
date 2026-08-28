@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { UNVERIFIED_GATEWAY } from "@oscharko-dev/keiko-contracts";
+import { UNVERIFIED_GATEWAY } from "@oscharko-dev/keiko-contracts/runtime/gateway-verification";
 import type {
   GatewayConfig,
   LiteLLMRerankRequest,

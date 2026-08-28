@@ -29,8 +29,8 @@ import type {
 import {
   deriveQualityIntelligenceTerminalDegradation,
   isQualityIntelligenceSeed,
-  resolveQualityIntelligenceRetentionPolicyId,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/qualityIntelligence/bffWire";
+import { resolveQualityIntelligenceRetentionPolicyId } from "@oscharko-dev/keiko-contracts/runtime/qualityIntelligence/index";
 import { QualityIntelligenceHardening } from "@oscharko-dev/keiko-quality-intelligence";
 import { SSE_HEADERS } from "../sse.js";
 import { writeOrDestroy } from "../sse-write.js";

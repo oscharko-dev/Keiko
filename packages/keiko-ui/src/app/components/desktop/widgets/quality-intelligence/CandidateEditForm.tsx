@@ -7,13 +7,13 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { ReactNode } from "react";
-import {
-  QualityIntelligence,
-  type QualityIntelligenceUiCandidate,
-  type QualityIntelligenceCandidateEditableFields,
-  type QualityIntelligencePriority,
-  type QualityIntelligenceRiskClass,
+import type {
+  QualityIntelligenceUiCandidate,
+  QualityIntelligenceCandidateEditableFields,
+  QualityIntelligencePriority,
+  QualityIntelligenceRiskClass,
 } from "@oscharko-dev/keiko-contracts";
+import * as QualityIntelligence from "@oscharko-dev/keiko-contracts/runtime/qualityIntelligence/index";
 import { formatError } from "./qiShared";
 import { useQiTranslate } from "./qi-i18n";
 

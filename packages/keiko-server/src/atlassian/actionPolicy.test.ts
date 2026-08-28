@@ -1,12 +1,14 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import type {
+  CodingWorkbenchAuthorityEnvelope,
+  CodingWorkbenchConnectorScope,
+  CodingWorkbenchMode,
+} from "@oscharko-dev/keiko-contracts";
 import {
   CODING_WORKBENCH_ACTION_CLASSES,
   CODING_WORKBENCH_SCHEMA_VERSION,
   resolveEffectiveCodingWorkbenchMode,
-  type CodingWorkbenchAuthorityEnvelope,
-  type CodingWorkbenchConnectorScope,
-  type CodingWorkbenchMode,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/coding-workbench";
 import type { UiHandlerDeps } from "../deps.js";
 import {
   editorAgentAuthorityRegistry,

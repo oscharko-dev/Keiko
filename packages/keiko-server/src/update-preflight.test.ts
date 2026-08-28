@@ -1,12 +1,12 @@
 import { describe, expect, it, vi } from "vitest";
 import type { IncomingMessage } from "node:http";
-import {
-  UPDATE_PORTABLE_TARGET_ASSET_NAMES,
-  type ReleaseImpactCatalog,
-  type ReleaseImpactEntry,
-  type UpdateInstallMode,
-  type UpdatePortableTarget,
+import type {
+  ReleaseImpactCatalog,
+  ReleaseImpactEntry,
+  UpdateInstallMode,
+  UpdatePortableTarget,
 } from "@oscharko-dev/keiko-contracts";
+import { UPDATE_PORTABLE_TARGET_ASSET_NAMES } from "@oscharko-dev/keiko-contracts/runtime/update-session";
 import { buildRedactor, createRunRegistry, type UiHandlerDeps } from "./index.js";
 import { createInMemoryUiStore } from "./store/index.js";
 import {

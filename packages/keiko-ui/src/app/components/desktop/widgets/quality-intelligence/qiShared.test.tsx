@@ -6,7 +6,7 @@
 
 import { render, screen } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
-import { QUALITY_INTELLIGENCE_RUN_STATUSES } from "@oscharko-dev/keiko-contracts";
+import { QUALITY_INTELLIGENCE_RUN_STATUSES } from "@oscharko-dev/keiko-contracts/runtime/qualityIntelligence/index";
 import { StatusBadge, runStatusLabel } from "./qiShared";
 
 const KNOWN: ReadonlyArray<readonly [string, string, string]> = [

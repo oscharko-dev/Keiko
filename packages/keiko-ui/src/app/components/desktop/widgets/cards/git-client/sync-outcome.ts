@@ -17,7 +17,7 @@ import type { I18nTranslate } from "@/lib/i18n";
 import type { MessageKey } from "@/lib/i18n-messages.en";
 import type { GitSyncOutcome } from "@/lib/types";
 import type { GitDeliveryMutationStatus } from "@/lib/api";
-import { isGitDeliveryRecoveryActionHint } from "@oscharko-dev/keiko-contracts";
+import { isGitDeliveryRecoveryActionHint } from "@oscharko-dev/keiko-contracts/runtime/git-delivery-action-sheet";
 import type { GitMutationOutcome } from "./git-client-seam";
 
 export interface SyncOutcomeView {

@@ -1,15 +1,15 @@
-import {
-  CODING_WORKBENCH_RUNTIME_CONTRACT_VERSION,
-  codingWorkbenchPolicyEffectFor,
-  validateCodingWorkbenchRuntimeEvent,
-  type CodingWorkbenchMode,
-  type CodingWorkbenchRuntimeAdapterKind,
-  type CodingWorkbenchRuntimeAuthorityFacts,
-  type CodingWorkbenchRuntimeEvent,
-  type EditorAgentGovernedAuthorityReference,
-  type VerificationKind,
-  type VerificationReport,
+import type {
+  CodingWorkbenchMode,
+  CodingWorkbenchRuntimeAdapterKind,
+  CodingWorkbenchRuntimeAuthorityFacts,
+  CodingWorkbenchRuntimeEvent,
+  EditorAgentGovernedAuthorityReference,
+  VerificationKind,
+  VerificationReport,
 } from "@oscharko-dev/keiko-contracts";
+import { CODING_WORKBENCH_RUNTIME_CONTRACT_VERSION } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime";
+import { codingWorkbenchPolicyEffectFor } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench";
+import { validateCodingWorkbenchRuntimeEvent } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-validation";
 
 import type { OutboundHttpEgressConfig } from "@oscharko-dev/keiko-model-gateway/internal/http";
 import type { ModelPort } from "@oscharko-dev/keiko-harness";

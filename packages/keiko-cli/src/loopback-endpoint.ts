@@ -1,5 +1,5 @@
 import type { EnvSource } from "@oscharko-dev/keiko-model-gateway";
-import { DEFAULT_UI_PORT, UI_HOST } from "@oscharko-dev/keiko-contracts";
+import { DEFAULT_UI_PORT, UI_HOST } from "@oscharko-dev/keiko-contracts/runtime/bff-wire";
 
 const ALLOWED_HOSTS: ReadonlySet<string> = new Set(["127.0.0.1", "localhost"]);
 

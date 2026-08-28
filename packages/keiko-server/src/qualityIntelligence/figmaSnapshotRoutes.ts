@@ -77,7 +77,7 @@ import {
   type FigmaSnapshotRecord,
   type FigmaSnapshotUserMetadata,
 } from "@oscharko-dev/keiko-evidence";
-import { compareStrings } from "@oscharko-dev/keiko-contracts";
+import { compareStrings } from "@oscharko-dev/keiko-contracts/runtime/comparators";
 
 // ─── Error helpers ─────────────────────────────────────────────────────────────
 

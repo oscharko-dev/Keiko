@@ -7,16 +7,18 @@
 
 import { describe, expect, it } from "vitest";
 import { sha256Hex } from "@oscharko-dev/keiko-security";
+import type {
+  GitDeliveryActionEnvelope,
+  GitDeliveryExecutionResult,
+  GitDeliveryOrgPolicyPack,
+  GitDeliveryPolicyDecision,
+  GitDeliveryRepoPolicyPack,
+  GitDeliveryResolvedInputs,
+} from "@oscharko-dev/keiko-contracts";
 import {
   GIT_DELIVERY_POLICY_SCHEMA_VERSION,
   evaluateGitPolicy,
-  type GitDeliveryActionEnvelope,
-  type GitDeliveryExecutionResult,
-  type GitDeliveryOrgPolicyPack,
-  type GitDeliveryPolicyDecision,
-  type GitDeliveryRepoPolicyPack,
-  type GitDeliveryResolvedInputs,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/git-delivery-policy";
 import { buildGitDeliveryEvidenceRecord } from "./git-mutation-evidence.js";
 import type {
   GitDeliveryEvidenceBuildInput,

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { VERIFICATION_MAX_FAILURE_LOCATIONS } from "@oscharko-dev/keiko-contracts";
+import { VERIFICATION_MAX_FAILURE_LOCATIONS } from "@oscharko-dev/keiko-contracts/runtime/verification";
 import type { CommandResult } from "@oscharko-dev/keiko-tools";
 import { extractFailureLocations } from "./failure-location.js";
 

@@ -38,6 +38,24 @@ import {
   supersededValidity,
   type ForgetSelector,
 } from "@oscharko-dev/keiko-memory-governance";
+import type {
+  MemoryConversationId,
+  MemoryAuditEvent,
+  MemoryEdge,
+  MemoryEdgeId,
+  MemoryForgetReason,
+  MemoryId,
+  MemoryProposal,
+  MemoryProposalId,
+  MemoryRecord,
+  MemoryReviewerId,
+  MemoryScope,
+  MemoryScopeKind,
+  MemorySensitivity,
+  MemoryStatus,
+  MemoryType,
+  MemorySupersession,
+} from "@oscharko-dev/keiko-contracts";
 import {
   checkStatusTransition,
   MEMORY_FORGET_REASON_USER_REQUEST,
@@ -47,23 +65,7 @@ import {
   MEMORY_SENSITIVITIES,
   validateMemoryScope,
   validateMemoryAcceptance,
-  type MemoryConversationId,
-  type MemoryAuditEvent,
-  type MemoryEdge,
-  type MemoryEdgeId,
-  type MemoryForgetReason,
-  type MemoryId,
-  type MemoryProposal,
-  type MemoryProposalId,
-  type MemoryRecord,
-  type MemoryReviewerId,
-  type MemoryScope,
-  type MemoryScopeKind,
-  type MemorySensitivity,
-  type MemoryStatus,
-  type MemoryType,
-  type MemorySupersession,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/memory";
 import type { UiHandlerDeps } from "./deps.js";
 import type { ApiError, RouteContext, RouteResult } from "./routes.js";
 import { errorBody } from "./routes.js";

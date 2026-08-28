@@ -4,11 +4,11 @@
 // cannot pass silently. Pure inputs; no model, clock, or randomness.
 
 import { describe, expect, it } from "vitest";
+import type { DiscussionModePlan } from "@oscharko-dev/keiko-contracts";
 import {
   beginDiscussionTurn,
   discussionModePlan,
-  type DiscussionModePlan,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/discussion-intelligence";
 import { aggregateDiscussionQuality, scoreDiscussionQuality } from "./scorer.js";
 import type {
   DiscussionEvalFixture,

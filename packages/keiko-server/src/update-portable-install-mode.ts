@@ -1,12 +1,12 @@
 import { dirname, join, resolve, win32 } from "node:path";
-import {
-  UPDATE_SESSION_SCHEMA_VERSION,
-  type UpdateInstallMode,
-  type UpdateInstallModeKind,
-  type UpdatePortableInstallSummary,
-  type UpdatePortableManagedRootKind,
-  type UpdatePortableTarget,
+import type {
+  UpdateInstallMode,
+  UpdateInstallModeKind,
+  UpdatePortableInstallSummary,
+  UpdatePortableManagedRootKind,
+  UpdatePortableTarget,
 } from "@oscharko-dev/keiko-contracts";
+import { UPDATE_SESSION_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts/runtime/update-session";
 
 export type PortableManagementMode = "user-local" | "organization-managed" | "machine-managed";
 

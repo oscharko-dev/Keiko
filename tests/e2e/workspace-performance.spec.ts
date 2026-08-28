@@ -24,6 +24,19 @@ function resolveSourceTreeSha256(): string {
   return digest;
 }
 
+function resolveMeasurementHarnessSha256(): string {
+  const digest = execFileSync(
+    process.execPath,
+    [
+      join(REPO_ROOT, "scripts", "workspace-performance-evidence-gate.mjs"),
+      "--print-measurement-harness-sha256",
+    ],
+    { cwd: REPO_ROOT, encoding: "utf8" },
+  ).trim();
+  if (!SHA_256.test(digest)) throw new Error("workspace measurement toolchain digest is invalid");
+  return digest;
+}
+
 // Stamp the commit the evidence was measured at so the freshness gate
 // (scripts/perf-evidence-gate.mjs, GEN-PERF-BENCHMARK-001) can prove the committed evidence
 // belongs to this history. CI provides GITHUB_SHA; locally we fall back to `git rev-parse HEAD`.
@@ -435,6 +448,7 @@ function writeMergedEvidence(projectEvidence: ProjectEvidence): Record<string, u
     commit: resolveCommit(),
     freshnessBinding: "source-tree-v1",
     sourceTreeSha256: resolveSourceTreeSha256(),
+    measurementHarnessSha256: resolveMeasurementHarnessSha256(),
     harness:
       "packaged CLI serving the production static UI via tests/e2e/config/playwright.workspace-performance.config.ts",
     runs: {

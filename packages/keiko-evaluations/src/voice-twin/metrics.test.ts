@@ -10,10 +10,8 @@
 //   - deriveProviderFailureRecoveryMetric structural properties
 // Each assertion is mutation-robust.
 
-import {
-  VOICE_REPLAY_CAPACITY,
-  VOICE_TRANSCRIPT_CONSUMABLE_STATES,
-} from "@oscharko-dev/keiko-contracts";
+import { VOICE_REPLAY_CAPACITY } from "@oscharko-dev/keiko-contracts/runtime/voice-protocol";
+import { VOICE_TRANSCRIPT_CONSUMABLE_STATES } from "@oscharko-dev/keiko-contracts/runtime/voice-transcript";
 import { describe, expect, it } from "vitest";
 import {
   VOICE_TWIN_REPLAY_CAPACITY,

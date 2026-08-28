@@ -16,14 +16,14 @@ import {
   QualityIntelligenceSafeErrorException,
   type ModelSelectionQuery,
 } from "@oscharko-dev/keiko-model-gateway";
-import {
-  isQualityIntelligenceJudgeEligible,
-  type ModelCapability,
-  type QualityIntelligenceModelPolicy,
-  type QualityIntelligenceModelPolicyValidation,
-  type QualityIntelligenceResolvedModelPolicy,
-  type QualityIntelligenceStartRunRequest,
+import type {
+  ModelCapability,
+  QualityIntelligenceModelPolicy,
+  QualityIntelligenceModelPolicyValidation,
+  QualityIntelligenceResolvedModelPolicy,
+  QualityIntelligenceStartRunRequest,
 } from "@oscharko-dev/keiko-contracts";
+import { isQualityIntelligenceJudgeEligible } from "@oscharko-dev/keiko-contracts/runtime/qualityIntelligence/bffWire";
 import type { UiHandlerDeps } from "../deps.js";
 import { currentGatewayConfig } from "../deps.js";
 import { QiGenerationError } from "./generationPort.js";

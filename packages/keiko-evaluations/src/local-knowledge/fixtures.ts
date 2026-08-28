@@ -17,7 +17,7 @@ import type {
   KnowledgeCapsuleId,
   KnowledgeSourceId,
 } from "@oscharko-dev/keiko-contracts";
-import { sealedLocalPodModelUsePolicy } from "@oscharko-dev/keiko-contracts";
+import { sealedLocalPodModelUsePolicy } from "@oscharko-dev/keiko-contracts/runtime/local-knowledge-model-use-policy";
 
 import type { RetrievalEvalFixture } from "./types.js";
 

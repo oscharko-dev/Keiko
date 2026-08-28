@@ -9,11 +9,8 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import {
-  DEFAULT_VERIFICATION_LIMITS,
-  type VerificationReport,
-  type VerificationStep,
-} from "@oscharko-dev/keiko-contracts";
+import type { VerificationReport, VerificationStep } from "@oscharko-dev/keiko-contracts";
+import { DEFAULT_VERIFICATION_LIMITS } from "@oscharko-dev/keiko-contracts/runtime/verification";
 import { createInMemoryEvidenceStore } from "@oscharko-dev/keiko-evidence";
 import type { SpawnFn } from "@oscharko-dev/keiko-tools";
 import { runVerification } from "@oscharko-dev/keiko-verification";

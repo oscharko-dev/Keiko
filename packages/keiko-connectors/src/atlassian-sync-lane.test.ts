@@ -2,10 +2,8 @@
 // and sleep, virtual clock, no network, no timers.
 
 import { describe, expect, it } from "vitest";
-import {
-  DEFAULT_ATLASSIAN_SYNC_BOUNDS,
-  type AtlassianSyncBounds,
-} from "@oscharko-dev/keiko-contracts";
+import type { AtlassianSyncBounds } from "@oscharko-dev/keiko-contracts";
+import { DEFAULT_ATLASSIAN_SYNC_BOUNDS } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import type {
   AtlassianHttpBodyPort,
   AtlassianHttpBodyRequest,

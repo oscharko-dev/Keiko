@@ -12,11 +12,11 @@ import { randomUUID } from "node:crypto";
 import type { IncomingMessage } from "node:http";
 import { isAbsolute } from "node:path";
 
-import {
-  resolveEffectiveCodingWorkbenchMode,
-  type CodingWorkbenchMode,
-  type EditorAgentGovernedAuthorityReference,
+import type {
+  CodingWorkbenchMode,
+  EditorAgentGovernedAuthorityReference,
 } from "@oscharko-dev/keiko-contracts";
+import { resolveEffectiveCodingWorkbenchMode } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench";
 
 import type { UiHandlerDeps } from "../deps.js";
 import { emitServerDiagnostic, serverDiagnosticFromError } from "../diagnostics-log.js";

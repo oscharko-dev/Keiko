@@ -33,11 +33,11 @@ beforeEach(() => {
   vi.mocked(pickWithNativeDialog).mockReset();
   vi.mocked(pickWithNativeDialog).mockResolvedValue({ kind: "cancelled" });
 });
+import { LOCAL_KNOWLEDGE_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts/runtime/local-knowledge";
 import {
-  LOCAL_KNOWLEDGE_SCHEMA_VERSION,
   resolveKnowledgePodModelUsePolicy,
   standardPodModelUsePolicy,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/local-knowledge-model-use-policy";
 import type {
   CapsuleSetId,
   KnowledgePodSummary,

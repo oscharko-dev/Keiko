@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { readFile } from "node:fs/promises";
+import { access, readFile, rm } from "node:fs/promises";
 import { createServer, request } from "node:http";
 import { connect } from "node:net";
 import { createRequire } from "node:module";
@@ -18,14 +18,16 @@ const host = "127.0.0.1";
 const publicBrowserHost = "localhost";
 const publicPort = Number(process.env.KEIKO_DEV_UI_PORT ?? process.env.KEIKO_UI_PORT ?? "1983");
 const bffPort = Number(process.env.KEIKO_DEV_BFF_PORT ?? "1984");
-const nextPort = Number(process.env.KEIKO_DEV_NEXT_PORT ?? "3000");
+let nextPort = Number(process.env.KEIKO_DEV_NEXT_PORT ?? "3000");
 const stateDir = resolve(process.env.KEIKO_STATE_DIR ?? join(repoRoot, ".keiko", "dev"));
 const pidFile = resolve(process.env.KEIKO_DEV_PID_FILE ?? join(stateDir, "dev-ui.pid.json"));
 const bffScript = join(repoRoot, "scripts", "dev-bff.mjs");
 const nextBin = requireFromUi.resolve("next/dist/bin/next");
+const nextLockPath = join(uiDir, ".next", "lock");
 const children = new Map();
-const restartCounts = new Map();
 const maxRestarts = Number(process.env.KEIKO_DEV_MAX_RESTARTS ?? "3");
+const restartDelayMs = Number(process.env.KEIKO_DEV_RESTART_DELAY_MS ?? "500");
+const restartStabilityMs = Number(process.env.KEIKO_DEV_RESTART_STABILITY_MS ?? "300000");
 const nextBundlerPreference = process.env.KEIKO_DEV_NEXT_BUNDLER ?? "auto";
 const skipPackageWatchForTest =
   process.env.NODE_ENV === "test" && process.env.KEIKO_DEV_TEST_SKIP_PACKAGE_WATCH === "1";
@@ -133,6 +135,56 @@ if (!Number.isInteger(maxRestarts) || maxRestarts < 0) {
   process.exit(2);
 }
 
+if (!Number.isSafeInteger(restartDelayMs) || restartDelayMs < 0 || restartDelayMs > 60_000) {
+  console.error(
+    `Invalid KEIKO_DEV_RESTART_DELAY_MS: ${String(process.env.KEIKO_DEV_RESTART_DELAY_MS)}`,
+  );
+  process.exit(2);
+}
+
+if (
+  !Number.isSafeInteger(restartStabilityMs) ||
+  restartStabilityMs < 1_000 ||
+  restartStabilityMs > 3_600_000
+) {
+  console.error(
+    `Invalid KEIKO_DEV_RESTART_STABILITY_MS: ${String(process.env.KEIKO_DEV_RESTART_STABILITY_MS)}`,
+  );
+  process.exit(2);
+}
+
+export function createRestartBudget(maximumRestarts, stabilityMs, schedule = setTimeout) {
+  const counts = new Map();
+  const stabilityTimers = new Map();
+
+  const cancelStabilityTimer = (label) => {
+    const timer = stabilityTimers.get(label);
+    if (timer !== undefined) clearTimeout(timer);
+    stabilityTimers.delete(label);
+  };
+
+  return {
+    recordExit(label) {
+      cancelStabilityTimer(label);
+      const count = (counts.get(label) ?? 0) + 1;
+      counts.set(label, count);
+      return { count, allowed: count <= maximumRestarts };
+    },
+    recordStableRestart(label) {
+      if (!counts.has(label)) return;
+      cancelStabilityTimer(label);
+      const timer = schedule(() => {
+        counts.delete(label);
+        stabilityTimers.delete(label);
+      }, stabilityMs);
+      timer.unref?.();
+      stabilityTimers.set(label, timer);
+    },
+  };
+}
+
+const restartBudget = createRestartBudget(maxRestarts, restartStabilityMs);
+
 /**
  * Checks whether the given TCP port is free by attempting a connection.
  * Resolves to `true` when the port is free, `false` when something is already listening.
@@ -170,8 +222,8 @@ export async function readNextLockInfo(lockPath) {
     if (
       parsed !== null &&
       typeof parsed === "object" &&
-      typeof parsed["pid"] === "number" &&
-      typeof parsed["port"] === "number"
+      isValidProcessId(parsed["pid"]) &&
+      isValidTcpPort(parsed["port"])
     ) {
       return /** @type {{ pid: number; port: number; appUrl: string }} */ (parsed);
     }
@@ -179,6 +231,92 @@ export async function readNextLockInfo(lockPath) {
   } catch {
     return undefined;
   }
+}
+
+async function pathExists(path) {
+  try {
+    await access(path);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function isValidProcessId(pid) {
+  return Number.isSafeInteger(pid) && pid > 0;
+}
+
+function isValidTcpPort(port) {
+  return Number.isSafeInteger(port) && port >= 1 && port <= 65_535;
+}
+
+function processIsAlive(pid) {
+  if (!isValidProcessId(pid)) return false;
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+export async function findAvailableNextPort(startPort, checkPortFree = checkNextPortFree) {
+  if (!isValidTcpPort(startPort)) {
+    throw new TypeError(`Invalid Next.js port: ${String(startPort)}`);
+  }
+  const finalPort = Math.min(65_535, startPort + 99);
+  for (let port = startPort; port <= finalPort; port += 1) {
+    if (await checkPortFree(host, port)) return port;
+  }
+  throw new Error(`No free Next.js port found at or above ${String(startPort)}`);
+}
+
+function resolveNextRespawnIo(overrides = {}) {
+  return {
+    checkPortFree: overrides.checkPortFree ?? checkNextPortFree,
+    lockExists: overrides.lockExists ?? pathExists,
+    processIsAlive: overrides.processIsAlive ?? processIsAlive,
+    readLock: overrides.readLock ?? readNextLockInfo,
+    removeLock: overrides.removeLock ?? ((path) => rm(path, { force: true })),
+  };
+}
+
+function isSameLockOwner(left, right) {
+  return left?.pid === right?.pid && left?.port === right?.port;
+}
+
+async function releaseStaleNextLock(lockPath, lockInfo, currentPort, io) {
+  if (lockInfo === undefined) {
+    throw new Error("Next.js lock ownership could not be validated");
+  }
+  if (io.processIsAlive(lockInfo.pid) && lockInfo.port !== currentPort) {
+    return;
+  }
+  if (io.processIsAlive(lockInfo.pid)) {
+    throw new Error(`Next.js lock is held by live process ${String(lockInfo.pid)}`);
+  }
+  const currentLockInfo = await io.readLock(lockPath);
+  if (!isSameLockOwner(lockInfo, currentLockInfo)) {
+    throw new Error("Next.js lock changed before stale-lock removal");
+  }
+  await io.removeLock(lockPath);
+}
+
+export async function preflightNextRespawn(currentPort, lockPath, overrides = {}) {
+  if (!isValidTcpPort(currentPort)) {
+    throw new TypeError(`Invalid Next.js port: ${String(currentPort)}`);
+  }
+  const io = resolveNextRespawnIo(overrides);
+  const [portFree, lockPresent, lockInfo] = await Promise.all([
+    io.checkPortFree(host, currentPort),
+    io.lockExists(lockPath),
+    io.readLock(lockPath),
+  ]);
+  if (lockPresent) await releaseStaleNextLock(lockPath, lockInfo, currentPort, io);
+  const selectedPort = portFree
+    ? currentPort
+    : await findAvailableNextPort(currentPort + 1, io.checkPortFree);
+  return { nextPort: selectedPort, reselected: selectedPort !== currentPort };
 }
 
 function writeState(extra = {}) {
@@ -208,24 +346,79 @@ function writeState(extra = {}) {
 }
 
 function restartChild(label) {
-  const count = (restartCounts.get(label) ?? 0) + 1;
-  restartCounts.set(label, count);
-  if (count > maxRestarts) {
-    console.error(`[dev] ${label} exceeded restart limit (${String(maxRestarts)}).`);
+  const { allowed, count } = restartBudget.recordExit(label);
+  if (!allowed) {
+    console.error(
+      `[dev] ${label} exceeded restart limit (${String(maxRestarts)}) within the ` +
+        `${String(restartStabilityMs)}ms stability window.`,
+    );
     shutdown(1);
     return;
   }
-  const delayMs = Math.min(5_000, 500 * count);
+  const delayMs = Math.min(60_000, restartDelayMs * count);
   console.error(
-    `[dev] restarting ${label} in ${String(delayMs)}ms (${String(count)}/${String(maxRestarts)}) ...`,
+    `[dev] restarting ${label} in ${String(delayMs)}ms ` +
+      `(${String(count)}/${String(maxRestarts)} before stability reset) ...`,
   );
   setTimeout(() => {
-    if (shuttingDown) return;
-    if (label === "bff") startBff();
-    else if (label === "packages") startPackageBuildWatch();
-    else startNext();
-    void waitForPublicReadiness();
+    restartChildAfterDelay(label);
   }, delayMs).unref();
+}
+
+function restartChildAfterDelay(label) {
+  if (shuttingDown) return;
+  if (label === "bff") startBff();
+  else if (label === "packages") startPackageBuildWatch();
+  else {
+    void restartNextChild();
+    return;
+  }
+  void waitForPublicReadiness();
+}
+
+export async function restartNextChildWithRetry({
+  currentPort,
+  lockPath,
+  preflight = preflightNextRespawn,
+  isShuttingDown,
+  selectPort,
+  start,
+  waitForReadiness,
+  retry,
+  reportError,
+}) {
+  try {
+    const result = await preflight(currentPort, lockPath);
+    if (isShuttingDown()) return { retried: false, started: false };
+    if (result.reselected) {
+      selectPort(result.nextPort);
+    }
+    start();
+    waitForReadiness().catch(reportError);
+    return { retried: false, started: true };
+  } catch (error) {
+    reportError(error);
+    retry();
+    return { retried: true, started: false };
+  }
+}
+
+async function restartNextChild() {
+  await restartNextChildWithRetry({
+    currentPort: nextPort,
+    lockPath: nextLockPath,
+    isShuttingDown: () => shuttingDown,
+    selectPort: (selectedPort) => {
+      nextPort = selectedPort;
+      console.error(`[dev] Next.js port was busy; respawning on ${String(nextPort)}.`);
+    },
+    start: startNext,
+    waitForReadiness: waitForPublicReadiness,
+    retry: () => restartChild("next"),
+    reportError: (error) => {
+      console.error(`[dev] Next.js respawn preflight failed: ${String(error)}`);
+    },
+  });
 }
 
 function spawnChild(label, command, args, options) {
@@ -238,6 +431,7 @@ function spawnChild(label, command, args, options) {
     },
   });
   children.set(label, child);
+  restartBudget.recordStableRestart(label);
   writeState();
   child.on("exit", (code, signal) => {
     if (children.get(label) !== child) return;
@@ -248,7 +442,6 @@ function spawnChild(label, command, args, options) {
     console.error(`[dev] ${label} exited unexpectedly.`);
     if (label === "next" && nextBundler === "turbopack" && nextBundlerPreference === "auto") {
       nextBundler = "webpack";
-      restartCounts.set(label, 0);
       console.error("[dev] Turbopack dev server exited; falling back to webpack dev server.");
     }
     restartChild(label);
@@ -629,7 +822,6 @@ const invokedDirectly = process.argv[1] && resolve(process.argv[1]).endsWith("de
 
 if (invokedDirectly) {
   // PREFLIGHT: fail fast if next dev is already running on the configured port.
-  const nextLockPath = join(uiDir, ".next", "lock");
   const [portFree, publicPortFree, lockInfo] = await Promise.all([
     checkNextPortFree(host, nextPort),
     // The public port had NO bind-time check: dev-start's probe runs before the

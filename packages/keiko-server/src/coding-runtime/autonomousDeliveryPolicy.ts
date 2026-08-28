@@ -1,16 +1,16 @@
 import { createHash } from "node:crypto";
-import {
-  CODING_WORKBENCH_SCHEMA_VERSION,
-  validateCodingWorkbenchAuthorityEnvelope,
-  validateCodingWorkbenchEvidenceRecord,
-  type CodingWorkbenchActionClass,
-  type CodingWorkbenchAuthorityEnvelope,
-  type CodingWorkbenchConnectorScope,
-  type CodingWorkbenchEvidenceRecord,
-  type CommandTaskRunRequest,
-  type GitRepositoryAgentOperationKind,
-  type GitRepositoryAgentOperationRequest,
+import type {
+  CodingWorkbenchActionClass,
+  CodingWorkbenchAuthorityEnvelope,
+  CodingWorkbenchConnectorScope,
+  CodingWorkbenchEvidenceRecord,
+  CommandTaskRunRequest,
+  GitRepositoryAgentOperationKind,
+  GitRepositoryAgentOperationRequest,
 } from "@oscharko-dev/keiko-contracts";
+import { CODING_WORKBENCH_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench";
+import { validateCodingWorkbenchAuthorityEnvelope } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-validation";
+import { validateCodingWorkbenchEvidenceRecord } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-evidence";
 
 export type AutonomousDeliveryDenialReason =
   | "authority-envelope-invalid"

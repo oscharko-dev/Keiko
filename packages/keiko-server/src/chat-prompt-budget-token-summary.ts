@@ -1,11 +1,13 @@
+import type {
+  ContextProfile,
+  ContextTokenAccounting,
+  ConversationDocumentContextWire,
+  DiscussionMode,
+} from "@oscharko-dev/keiko-contracts";
 import {
   countContextTokens,
   countContextTokensForSegments,
-  type ContextProfile,
-  type ContextTokenAccounting,
-  type ConversationDocumentContextWire,
-  type DiscussionMode,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/context-engineering";
 import type { ConversationMemoryContextEntryWire } from "@oscharko-dev/keiko-contracts/bff-wire";
 import {
   CONVERSATION_CONTEXT_BLOCK_HEADER,

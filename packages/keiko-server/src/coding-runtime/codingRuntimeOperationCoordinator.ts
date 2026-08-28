@@ -1,9 +1,9 @@
-import {
-  CODING_WORKBENCH_TASK_INTENT_MAX_CHARS,
-  parseCodingWorkbenchRuntimeQuestionAnswerRequest,
-  type CodingWorkbenchRuntimeEvent,
-  type CodingWorkbenchRuntimeQuestionsResponse,
+import type {
+  CodingWorkbenchRuntimeEvent,
+  CodingWorkbenchRuntimeQuestionsResponse,
 } from "@oscharko-dev/keiko-contracts";
+import { CODING_WORKBENCH_TASK_INTENT_MAX_CHARS } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime";
+import { parseCodingWorkbenchRuntimeQuestionAnswerRequest } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime-questions";
 
 import type { CodingRuntimeQuestionPort } from "./codingRuntimeQuestionPort.js";
 import type { CodingRuntimeManager } from "./codingRuntimeManager.js";

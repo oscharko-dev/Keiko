@@ -17,7 +17,7 @@ import type { Readable, Writable } from "node:stream";
 
 import { describe, expect, it } from "vitest";
 
-import { KEIKO_PRODUCT_VERSION } from "@oscharko-dev/keiko-contracts";
+import { KEIKO_PRODUCT_VERSION } from "@oscharko-dev/keiko-contracts/runtime/version";
 
 import { CodexAppServerClient, type CodexAppServerTransport } from "./codexAppServerClient.js";
 import { CODEX_APP_SERVER_SCHEMA } from "./codexAppServerProtocol.js";

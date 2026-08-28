@@ -1,8 +1,8 @@
+import type { GitCommitMessagePolicy } from "@oscharko-dev/keiko-contracts";
 import {
   gitCommitMessagePolicyForMode,
   resolveGitCommitMessagePolicyMode,
-  type GitCommitMessagePolicy,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/git-commit-policy";
 
 import type { UiHandlerDeps } from "../deps.js";
 

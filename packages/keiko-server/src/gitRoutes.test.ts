@@ -10,7 +10,7 @@ import {
   GIT_EDITOR_DIFF_MAX_FILES,
   parseGitEditorBlameResponse,
   parseGitEditorDiffResponse,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/git-editor";
 import { defaultGitProcessRunner } from "@oscharko-dev/keiko-git";
 import {
   buildRedactor,

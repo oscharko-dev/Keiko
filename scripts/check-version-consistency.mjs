@@ -3,7 +3,7 @@
 // Asserts:
 //   1. Every workspace package (packages/*/package.json) reports the same version as the
 //      root package.json's "version" field (the 0.2.0 baseline finalised in #427).
-//   2. The KEIKO_PRODUCT_VERSION constant in @oscharko-dev/keiko-contracts/src/index.ts
+//   2. The KEIKO_PRODUCT_VERSION constant in @oscharko-dev/keiko-contracts/src/version.ts
 //      matches that same root version.
 //   3. Every exported KEIKO_*_VERSION package/product constant under packages/*/src matches that
 //      package's package.json version. Schema/event versions use non-KEIKO names and stay separate.
@@ -135,13 +135,13 @@ for (const name of readdirSync(packagesDir)) {
   }
 }
 
-const contractsIndex = readFileSync(
-  join(repoRoot, "packages", "keiko-contracts", "src", "index.ts"),
+const contractsVersion = readFileSync(
+  join(repoRoot, "packages", "keiko-contracts", "src", "version.ts"),
   "utf8",
 );
-const constMatch = /KEIKO_PRODUCT_VERSION\s*=\s*"([^"]+)"\s+as\s+const/.exec(contractsIndex);
+const constMatch = /KEIKO_PRODUCT_VERSION\s*=\s*"([^"]+)"\s+as\s+const/.exec(contractsVersion);
 if (constMatch === null) {
-  fail("keiko-contracts: KEIKO_PRODUCT_VERSION constant not found in src/index.ts");
+  fail("keiko-contracts: KEIKO_PRODUCT_VERSION constant not found in src/version.ts");
 } else if (constMatch[1] !== expected) {
   fail(`keiko-contracts KEIKO_PRODUCT_VERSION ${constMatch[1]} does not match root ${expected}`);
 }
@@ -177,13 +177,13 @@ for (const [relativePath, approvedHash] of APPROVED_ROOT_SRC_SHA256) {
 const sdkIndexPath = join(repoRoot, "packages", "keiko-sdk", "src", "index.ts");
 const sdkIndex = readFileSync(sdkIndexPath, "utf8");
 if (
-  !/^import\s+\{\s*KEIKO_PRODUCT_VERSION\s*\}\s+from\s+"@oscharko-dev\/keiko-contracts";$/m.test(
+  !/^import\s+\{\s*KEIKO_PRODUCT_VERSION\s*\}\s+from\s+"@oscharko-dev\/keiko-contracts\/runtime\/version";$/m.test(
     sdkIndex,
   )
 ) {
   fail(
     "packages/keiko-sdk/src/index.ts: missing KEIKO_PRODUCT_VERSION import from " +
-      "@oscharko-dev/keiko-contracts.",
+      "@oscharko-dev/keiko-contracts/runtime/version.",
   );
 }
 if (

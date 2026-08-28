@@ -14,24 +14,30 @@
 // and must not, import those private functions or modify agentRoutes.ts. The combined disposition can
 // only be as-or-more restrictive than either governance layer alone (the #2121 stricter-of-two rule).
 
+import type {
+  CodingWorkbenchMode,
+  EditorAgentAction,
+  EditorAgentActionDenyReason,
+  EditorAgentActionPolicyDecision,
+  EditorAgentActionStatus,
+  EditorAgentSessionSnapshot,
+  EditorAgentVerificationRunRequest,
+  WorkspaceTrustLevel,
+} from "@oscharko-dev/keiko-contracts";
 import {
   EDITOR_AGENT_ACTION_APPROVAL_RISK,
-  EDITOR_AGENT_SCHEMA_VERSION,
   EDITOR_AGENT_WORKBENCH_ACTION_CLASS,
   classifyEditorAgentAction,
   composeEditorAgentActionPolicyDecision,
+} from "@oscharko-dev/keiko-contracts/runtime/editor-agent-governance";
+import {
+  EDITOR_AGENT_SCHEMA_VERSION,
   isContainedAgentPath,
+} from "@oscharko-dev/keiko-contracts/runtime/editor-agent";
+import {
   parseEditorAgentVerificationRunRequest,
   toRedactedVerificationReport,
-  type CodingWorkbenchMode,
-  type EditorAgentAction,
-  type EditorAgentActionDenyReason,
-  type EditorAgentActionPolicyDecision,
-  type EditorAgentActionStatus,
-  type EditorAgentSessionSnapshot,
-  type EditorAgentVerificationRunRequest,
-  type WorkspaceTrustLevel,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/editor-agent-verification";
 import { isDenied } from "@oscharko-dev/keiko-workspace";
 import {
   editorAgentAuditRootAttribution,

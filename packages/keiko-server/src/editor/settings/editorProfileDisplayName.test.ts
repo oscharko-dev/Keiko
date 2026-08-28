@@ -9,16 +9,15 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
+import type { WorkspaceProfileManifest, WorkspaceProfileRef } from "@oscharko-dev/keiko-contracts";
+import { EDITOR_M11_SETTINGS_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts/runtime/editor-m11-settings";
 import {
-  EDITOR_M11_SETTINGS_SCHEMA_VERSION,
   WORKSPACE_PROFILE_SCHEMA_VERSION,
   isAssignableWorkspaceProfileDisplayName,
   isReservedWorkspaceProfileDisplayName,
-  isWorkspaceProfileRef,
   workspaceProfileDisplayNameKey,
-  type WorkspaceProfileManifest,
-  type WorkspaceProfileRef,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/workspace-profile";
+import { isWorkspaceProfileRef } from "@oscharko-dev/keiko-contracts/runtime/workspace-contract-primitives";
 import { createWorkspaceMutexRegistry } from "../../task-workspace/mutex.js";
 import {
   createEditorSettingsControlService,

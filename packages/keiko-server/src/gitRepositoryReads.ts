@@ -17,10 +17,8 @@ import type {
   GitRepositoryStatusResponse,
   GitUnavailableReason,
 } from "@oscharko-dev/keiko-contracts";
-import {
-  GIT_HISTORY_SCHEMA_VERSION,
-  GIT_REPOSITORY_SUMMARY_SCHEMA_VERSION,
-} from "@oscharko-dev/keiko-contracts";
+import { GIT_HISTORY_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts/runtime/git-history";
+import { GIT_REPOSITORY_SUMMARY_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts/runtime/git-repository-summary";
 import {
   classifyFailure,
   optionsWithDefaults,

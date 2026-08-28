@@ -6,7 +6,7 @@
 // entry in `modelRoutedTestDesign.ts`). NO new scheduler, NO event bus: this composes the existing
 // Harness world and emits the versioned QI run-event envelope from `@oscharko-dev/keiko-contracts`.
 
-import { QualityIntelligence as QI } from "@oscharko-dev/keiko-contracts";
+import * as QI from "@oscharko-dev/keiko-contracts/runtime/qualityIntelligence/index";
 import {
   recordQualityIntelligenceRun,
   type QualityIntelligenceCoverageMatrixRow,

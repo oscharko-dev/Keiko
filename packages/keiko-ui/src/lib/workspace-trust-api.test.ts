@@ -1,8 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import {
-  WORKSPACE_TRUST_SCHEMA_VERSION,
-  type WorkspaceTrustStatus,
-} from "@oscharko-dev/keiko-contracts";
+import type { WorkspaceTrustStatus } from "@oscharko-dev/keiko-contracts";
+import { WORKSPACE_TRUST_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts/runtime/workspace-trust";
 import { ApiError } from "./api";
 import {
   fetchWorkspaceTrustStatus,

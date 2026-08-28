@@ -4,11 +4,11 @@ import { join } from "node:path";
 import { Readable } from "node:stream";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  DEFAULT_LANGUAGE_SERVICE_LIMITS,
-  type ManagedLspProcessHealthSnapshot,
-  type ManagedLspShellConfiguration,
+import type {
+  ManagedLspProcessHealthSnapshot,
+  ManagedLspShellConfiguration,
 } from "@oscharko-dev/keiko-contracts";
+import { DEFAULT_LANGUAGE_SERVICE_LIMITS } from "@oscharko-dev/keiko-contracts/runtime/language-service";
 import { createWorkspaceMutexRegistry } from "../task-workspace/mutex.js";
 import { buildRedactor, createInMemoryUiStore } from "../index.js";
 import type { RouteContext, UiHandlerDeps } from "../index.js";

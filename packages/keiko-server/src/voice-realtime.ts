@@ -32,6 +32,14 @@ import {
   type RealtimeNegotiationRequest,
   type VoiceCapabilityResolution,
 } from "@oscharko-dev/keiko-model-gateway";
+import type {
+  VoiceControlMessage,
+  VoiceProfile,
+  VoiceProtocolErrorCode,
+  VoiceProviderLocality,
+  VoiceSessionChatContext,
+  VoiceSessionCreateMessage,
+} from "@oscharko-dev/keiko-contracts";
 import {
   DEFAULT_VOICE_PROTOCOL_TIMEOUTS,
   isVoiceReplayEligible,
@@ -41,13 +49,7 @@ import {
   VOICE_PROTOCOL_VERSION,
   VOICE_REPLAY_CAPACITY,
   voiceMessageAllowedForProfile,
-  type VoiceControlMessage,
-  type VoiceProfile,
-  type VoiceProtocolErrorCode,
-  type VoiceProviderLocality,
-  type VoiceSessionChatContext,
-  type VoiceSessionCreateMessage,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/voice-protocol";
 import { isAllowedHost } from "./host-check.js";
 import { resolveCorrelationId } from "./correlation.js";
 import { currentGatewayConfig, currentGatewayEgressConfig, type UiHandlerDeps } from "./deps.js";

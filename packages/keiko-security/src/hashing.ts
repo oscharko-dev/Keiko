@@ -9,7 +9,7 @@
 
 import { createHash } from "node:crypto";
 
-import { compareStrings } from "@oscharko-dev/keiko-contracts";
+import { compareStrings } from "@oscharko-dev/keiko-contracts/runtime/comparators";
 
 // Canonical JSON: object keys sorted recursively, array order preserved, undefined values omitted
 // (matching JSON.stringify semantics). Two structurally equal inputs serialise to byte-identical

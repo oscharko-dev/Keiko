@@ -3,10 +3,8 @@ import {
   readBytesCapped,
   readJsonCapped,
 } from "@oscharko-dev/keiko-model-gateway/internal/http";
-import {
-  UPDATE_PORTABLE_TARGET_ASSET_NAMES,
-  type UpdatePortableTarget,
-} from "@oscharko-dev/keiko-contracts";
+import type { UpdatePortableTarget } from "@oscharko-dev/keiko-contracts";
+import { UPDATE_PORTABLE_TARGET_ASSET_NAMES } from "@oscharko-dev/keiko-contracts/runtime/update-session";
 import { firstClassArchiveSetComplete } from "./update-preflight-portable-shared.js";
 import {
   type PortableSidecarRuntimeVerification,

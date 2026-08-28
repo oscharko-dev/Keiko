@@ -22,7 +22,7 @@ import type { GitDeliveryEvidenceRecord } from "@oscharko-dev/keiko-contracts";
 import {
   GIT_DELIVERY_EVIDENCE_SCHEMA_VERSION,
   isGitDeliveryEvidenceRecord,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/git-delivery-evidence";
 import { deepRedactStrings } from "@oscharko-dev/keiko-evidence";
 import type { EvidenceStore } from "@oscharko-dev/keiko-evidence";
 import { randomUUID } from "node:crypto";

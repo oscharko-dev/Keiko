@@ -1,11 +1,11 @@
 import { describe, expect, it } from "vitest";
-import {
-  MEMORY_AUDIT_EVENT_SUMMARY_MAX_CHARS,
-  type MemoryId,
-  type MemoryRecord,
-  type MemoryScope,
-  type MemoryUserId,
+import type {
+  MemoryId,
+  MemoryRecord,
+  MemoryScope,
+  MemoryUserId,
 } from "@oscharko-dev/keiko-contracts";
+import { MEMORY_AUDIT_EVENT_SUMMARY_MAX_CHARS } from "@oscharko-dev/keiko-contracts/runtime/memory";
 import {
   buildInsertedEvent,
   buildUpdatedEvent,

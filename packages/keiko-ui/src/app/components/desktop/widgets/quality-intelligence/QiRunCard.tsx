@@ -11,7 +11,7 @@ import type {
   QualityIntelligenceUiRunDetail,
   QualityIntelligenceCandidateEditableFields,
 } from "@oscharko-dev/keiko-contracts";
-import { reviewActionResultState } from "@oscharko-dev/keiko-contracts";
+import { reviewActionResultState } from "@oscharko-dev/keiko-contracts/runtime/qualityIntelligence/index";
 import { useQiTranslate as useTranslate, type I18nTranslate } from "./qi-i18n";
 import { editQiCandidate, fetchQiRunDetail, reviewQiRun } from "@/lib/quality-intelligence-api";
 import { CandidatesPane, type QiPendingReview, type QiReviewAction } from "./CandidatesPane";

@@ -3,23 +3,23 @@
 // downstream packages can rely on the wire-shape guarantees without re-validating.
 
 import { describe, it, expect } from "vitest";
+import type { EnhancedPrompt, GroundingPlan, PromptEnhancementRequest } from "./index.js";
+import { analyzePrompt } from "./prompt-enhancer-analyzer.js";
 import {
-  analyzePrompt,
   asEnhancedPromptId,
   asPromptEnhancementRequestId,
-  planGrounding,
+  validatePromptEnhancerIdString,
+  PROMPT_ENHANCER_SCHEMA_VERSION,
+  RAG_EVALUATION_DIMENSIONS,
+} from "./prompt-enhancer.js";
+import { planGrounding } from "./prompt-enhancer-grounding.js";
+import {
   validateGroundingPlan,
   validateEnhancedPrompt,
   validatePromptEnhancementRequest,
-  validatePromptEnhancerIdString,
   validatePromptTaskAnalysis,
-  PROMPT_ENHANCER_SCHEMA_VERSION,
   PROMPT_REQUEST_TEXT_MAX_CHARS,
-  RAG_EVALUATION_DIMENSIONS,
-  type EnhancedPrompt,
-  type GroundingPlan,
-  type PromptEnhancementRequest,
-} from "./index.js";
+} from "./prompt-enhancer-validation.js";
 // Imported from the producing module, not re-exported through index.js: these tables are internal
 // to the prompt-enhancer pair and adding them to the package's public surface would be a surface
 // change this fix does not need.

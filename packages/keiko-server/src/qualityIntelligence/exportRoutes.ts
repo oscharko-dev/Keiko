@@ -11,12 +11,10 @@
 // contract invariant holds. Path-/formula-safety lives in the pure adapters.
 
 import type { IncomingMessage } from "node:http";
-import {
-  compareStrings,
-  QualityIntelligence,
-  sortedStrings,
-  type QualityIntelligence as QI,
-} from "@oscharko-dev/keiko-contracts";
+import type { QualityIntelligence as QI } from "@oscharko-dev/keiko-contracts";
+import { compareStrings } from "@oscharko-dev/keiko-contracts/runtime/comparators";
+import * as QualityIntelligence from "@oscharko-dev/keiko-contracts/runtime/qualityIntelligence/index";
+import { sortedStrings } from "@oscharko-dev/keiko-contracts/runtime/stable-order";
 import { canonicalise, sha256Hex } from "@oscharko-dev/keiko-security";
 import { QualityIntelligenceExport } from "@oscharko-dev/keiko-quality-intelligence";
 import {

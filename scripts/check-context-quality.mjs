@@ -52,11 +52,13 @@ import {
   countContextTokens,
   DEFAULT_CONTEXT_PROFILE,
   deriveContextProfile,
+} from "@oscharko-dev/keiko-contracts/runtime/context-engineering";
+import {
   MAX_OBSERVATION_EXCERPT_BYTES,
   MAX_TOP_RANGES,
-  validateContextCompactionRecord,
-  validateContextToolObservation,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/context-observations";
+import { validateContextCompactionRecord } from "@oscharko-dev/keiko-contracts/runtime/context-engineering-compaction-validation";
+import { validateContextToolObservation } from "@oscharko-dev/keiko-contracts/runtime/context-observations-validation";
 
 import {
   buildScenarioCorpus,

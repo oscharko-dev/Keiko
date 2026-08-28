@@ -8,7 +8,7 @@
 //   5. Adversarial inputs
 
 import { describe, expect, it } from "vitest";
-import { QualityIntelligence } from "@oscharko-dev/keiko-contracts";
+import * as QualityIntelligence from "@oscharko-dev/keiko-contracts/runtime/qualityIntelligence/index";
 import { bankingDefault, regressionDefault } from "../../domain/policyProfile.js";
 import {
   GENERATED_CANDIDATE_EXPECTED_RESULT_MAX_ITEMS,

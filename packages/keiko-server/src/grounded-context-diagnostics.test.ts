@@ -7,15 +7,16 @@
 //  - additive isolation: files / budget / usage are reference-identical after the observer.
 
 import { describe, expect, it } from "vitest";
+import type { ConnectedContextPack, ContextPackDiagnostics } from "@oscharko-dev/keiko-contracts";
+import { CONNECTED_CONTEXT_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts/runtime/connected-context";
 import {
-  CONNECTED_CONTEXT_SCHEMA_VERSION,
   CONTEXT_ENGINEERING_SCHEMA_VERSION,
   DEFAULT_CONTEXT_PROFILE,
+} from "@oscharko-dev/keiko-contracts/runtime/context-engineering";
+import {
   validateContextAssemblyDiagnostics,
   validateContextBudget,
-  type ConnectedContextPack,
-  type ContextPackDiagnostics,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/context-engineering-validation";
 import {
   attachContextBudgetDiagnostics,
   deriveGroundedContextAssembly,

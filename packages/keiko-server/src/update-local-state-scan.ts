@@ -1,7 +1,7 @@
 import { lstatSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import type { UpdateCompatibilityScan, UpdateStateStore } from "@oscharko-dev/keiko-contracts";
-import { UPDATE_STATE_STORES } from "@oscharko-dev/keiko-contracts";
+import { UPDATE_STATE_STORES } from "@oscharko-dev/keiko-contracts/runtime/update-local-state";
 
 export type ArtifactCategory =
   | "lifecycle"

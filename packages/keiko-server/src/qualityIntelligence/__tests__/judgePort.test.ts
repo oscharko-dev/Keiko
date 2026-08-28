@@ -9,7 +9,7 @@ import type {
   ModelCapability,
   NormalizedResponse,
 } from "@oscharko-dev/keiko-model-gateway";
-import { TEST_QUALITY_JUDGE_RESPONSE_SCHEMA } from "@oscharko-dev/keiko-contracts";
+import { TEST_QUALITY_JUDGE_RESPONSE_SCHEMA } from "@oscharko-dev/keiko-contracts/runtime/qualityIntelligence/index";
 import { parseGatewayConfig } from "@oscharko-dev/keiko-model-gateway";
 import type { ModelPort } from "@oscharko-dev/keiko-harness";
 import type { UiHandlerDeps } from "../../deps.js";

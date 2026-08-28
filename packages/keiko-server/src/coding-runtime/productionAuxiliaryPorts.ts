@@ -1,20 +1,20 @@
 import { createHash } from "node:crypto";
 
-import {
-  CODE_TASK_AUXILIARY_SCHEMA_VERSION,
-  type AuxiliaryCapabilityOutcomeV1,
-  type AuxiliaryCapabilityRequestV1,
-  type AuxiliaryCapabilityTarget,
-  type AuxiliaryResearchScopeV1,
-  type CodeTaskChildRunId,
-  type CodeTaskGrantId,
-  type CodeTaskIdempotencyKey,
-  type CodeTaskRunId,
-  type CodeTaskSha256Digest,
-  type CodeTaskTaskId,
-  type CodeTaskWorkspaceId,
-  type CodingWorkbenchRuntimeEvent,
+import type {
+  AuxiliaryCapabilityOutcomeV1,
+  AuxiliaryCapabilityRequestV1,
+  AuxiliaryCapabilityTarget,
+  AuxiliaryResearchScopeV1,
+  CodeTaskChildRunId,
+  CodeTaskGrantId,
+  CodeTaskIdempotencyKey,
+  CodeTaskRunId,
+  CodeTaskSha256Digest,
+  CodeTaskTaskId,
+  CodeTaskWorkspaceId,
+  CodingWorkbenchRuntimeEvent,
 } from "@oscharko-dev/keiko-contracts";
+import { CODE_TASK_AUXILIARY_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts/runtime/code-task-auxiliary";
 import type { ModelPort } from "@oscharko-dev/keiko-harness";
 
 import type { CodingToolMutationGuard } from "./codingToolFacadePorts.js";

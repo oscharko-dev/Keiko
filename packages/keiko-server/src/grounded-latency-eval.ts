@@ -18,11 +18,8 @@
 // latency instead of catching regressions. `DEFAULT_ENTAILMENT_OPTIONS.maxTotalMs` (20s) is a
 // per-request safety ceiling, not a performance target, and is deliberately not the budget.
 
-import {
-  CONNECTED_CONTEXT_SCHEMA_VERSION,
-  type ConnectedContextPack,
-  type ContextExcerpt,
-} from "@oscharko-dev/keiko-contracts";
+import type { ConnectedContextPack, ContextExcerpt } from "@oscharko-dev/keiko-contracts";
+import { CONNECTED_CONTEXT_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts/runtime/connected-context";
 
 import {
   DEFAULT_ENTAILMENT_OPTIONS,

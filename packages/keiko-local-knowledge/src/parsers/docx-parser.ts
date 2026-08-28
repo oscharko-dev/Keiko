@@ -6,7 +6,7 @@ import type {
   ParserResult,
   SectionRecord,
 } from "@oscharko-dev/keiko-contracts";
-import { LOCAL_KNOWLEDGE_DOCX_FILE_EXTENSIONS } from "@oscharko-dev/keiko-contracts";
+import { LOCAL_KNOWLEDGE_DOCX_FILE_EXTENSIONS } from "@oscharko-dev/keiko-contracts/runtime/local-knowledge-file-selection";
 import yauzl from "yauzl";
 
 import {

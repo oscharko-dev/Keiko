@@ -23,9 +23,9 @@ import type { EnvSource } from "@oscharko-dev/keiko-model-gateway";
 import {
   CODING_APP_SESSION_LAUNCHER_SECRET_ENV,
   CODING_APP_SESSION_LAUNCHER_SECRET_MIN_CHARS,
-  KEIKO_PRODUCT_VERSION as SDK_VERSION,
   encodeCodingAppSessionPairingFragment,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/coding-app-session";
+import { KEIKO_PRODUCT_VERSION as SDK_VERSION } from "@oscharko-dev/keiko-contracts/runtime/version";
 import { absoluteExistingPath, resolvePreferredInstallLayout } from "./install-layout.js";
 import { LauncherError } from "./launcher-platforms.js";
 import { resolveLoopbackEndpoint } from "./loopback-endpoint.js";

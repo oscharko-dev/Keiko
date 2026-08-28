@@ -6,18 +6,18 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { SDK_VERSION } from "@oscharko-dev/keiko-sdk";
 import type { CommandResult } from "@oscharko-dev/keiko-tools";
-import {
-  UPDATE_PREFLIGHT_SCHEMA_VERSION,
-  UPDATE_SESSION_SCHEMA_VERSION,
-  type ReleaseImpactCatalog,
-  type UpdateInstallMode,
-  type UpdatePortableActivationSummary,
-  type UpdatePortableStagingSummary,
-  type UpdateRemediationStatusReport,
-  type UpdatePreflightReport,
-  type UpdateSession,
-  type UpdateSessionStatus,
+import type {
+  ReleaseImpactCatalog,
+  UpdateInstallMode,
+  UpdatePortableActivationSummary,
+  UpdatePortableStagingSummary,
+  UpdateRemediationStatusReport,
+  UpdatePreflightReport,
+  UpdateSession,
+  UpdateSessionStatus,
 } from "@oscharko-dev/keiko-contracts";
+import { UPDATE_PREFLIGHT_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts/runtime/update-preflight";
+import { UPDATE_SESSION_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts/runtime/update-session";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { buildCspHeader } from "./csp.js";
 import { buildUiHandlerDeps } from "./deps.js";

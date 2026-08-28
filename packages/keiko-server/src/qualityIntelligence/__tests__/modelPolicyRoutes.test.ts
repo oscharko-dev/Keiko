@@ -4,7 +4,7 @@ import { dirname, join } from "node:path";
 import { Readable } from "node:stream";
 import type { IncomingMessage } from "node:http";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { UNVERIFIED_GATEWAY } from "@oscharko-dev/keiko-contracts";
+import { UNVERIFIED_GATEWAY } from "@oscharko-dev/keiko-contracts/runtime/gateway-verification";
 import { parseGatewayConfig, type ModelCapability } from "@oscharko-dev/keiko-model-gateway";
 import type { EvidenceStore } from "@oscharko-dev/keiko-evidence";
 import type { RuntimeGatewayConfig, UiHandlerDeps } from "../../deps.js";

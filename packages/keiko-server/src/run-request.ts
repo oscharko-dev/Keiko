@@ -7,13 +7,13 @@
 // are enforced by the workflow/harness entry points the engine calls; the BFF never reimplements
 // them.
 
-import {
-  isCodingWorkbenchMode,
-  type CodingWorkbenchMode,
-  type SpokenActionAuditRecord,
-  type VoiceProfile,
-  type VoiceTranscriptSource,
+import type {
+  CodingWorkbenchMode,
+  SpokenActionAuditRecord,
+  VoiceProfile,
+  VoiceTranscriptSource,
 } from "@oscharko-dev/keiko-contracts";
+import { isCodingWorkbenchMode } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench";
 import type { WorkflowHandoffRequest } from "@oscharko-dev/keiko-contracts/workflow-handoff";
 
 export type RunKind = "unit-tests" | "bug-investigation" | "explain-plan" | "verify";

@@ -2,7 +2,7 @@ import type { IncomingMessage } from "node:http";
 import {
   parseUpdateRestartVerificationRequest,
   parseUpdateSessionStartRequest,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/update-session";
 import type { UiHandlerDeps } from "./deps.js";
 import { errorBody, type RouteContext, type RouteResult } from "./routes.js";
 import { UpdateSessionError, type UpdateSessionManager } from "./update-session.js";

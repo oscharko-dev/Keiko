@@ -2,7 +2,7 @@
 // @oscharko-dev/keiko-contracts (leaf package); SDK_VERSION is the SDK-facing alias kept
 // for backward compatibility. Bump KEIKO_PRODUCT_VERSION in lockstep with the root
 // package.json "version" field as part of every release.
-import { KEIKO_PRODUCT_VERSION } from "@oscharko-dev/keiko-contracts";
+import { KEIKO_PRODUCT_VERSION } from "@oscharko-dev/keiko-contracts/runtime/version";
 export const SDK_VERSION: string = KEIKO_PRODUCT_VERSION;
 
 // The typed agent surface. AgentConfig, the session factory, the run result, and the

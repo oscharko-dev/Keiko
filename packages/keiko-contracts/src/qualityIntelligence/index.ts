@@ -1,8 +1,7 @@
 // Public barrel for the Quality Intelligence contract surface (Epic #270, Issue #277).
 //
 // Pure leaf module. Re-exports every type, constant, and validator from this directory
-// for consumption via `@oscharko-dev/keiko-contracts` (which re-exports this barrel
-// under the `QualityIntelligence` namespace).
+// for runtime consumption through `@oscharko-dev/keiko-contracts/runtime/qualityIntelligence/index`.
 
 export const QUALITY_INTELLIGENCE_SCHEMA_VERSION = "1" as const;
 

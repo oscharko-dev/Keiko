@@ -9,16 +9,18 @@
 // effect is injected via seams so route tests run deterministically against a fake remote.
 
 import type { WorkspaceInfo } from "@oscharko-dev/keiko-workspace";
+import type {
+  GitDeliveryApprovalRequirement,
+  GitDeliveryProtectedBranchConstraint,
+  GitDeliveryPushInputs,
+  GitDeliveryRepoPolicyPack,
+  GitDeliveryRiskClass,
+} from "@oscharko-dev/keiko-contracts";
 import {
   GIT_DELIVERY_POLICY_SCHEMA_VERSION,
   evaluateGitPolicy,
-  gitDeliveryRiskClassForInputs,
-  type GitDeliveryApprovalRequirement,
-  type GitDeliveryProtectedBranchConstraint,
-  type GitDeliveryPushInputs,
-  type GitDeliveryRepoPolicyPack,
-  type GitDeliveryRiskClass,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/git-delivery-policy";
+import { gitDeliveryRiskClassForInputs } from "@oscharko-dev/keiko-contracts/runtime/git-delivery";
 import {
   evaluateGitPreflight,
   evaluateGitPublishEffectivePolicy,

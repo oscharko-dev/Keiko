@@ -2,10 +2,8 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { axe } from "jest-axe";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import {
-  DEBUG_ACTIVATION_EFFECTIVE_STATES,
-  type DebugActivationSummary,
-} from "@oscharko-dev/keiko-contracts";
+import type { DebugActivationSummary } from "@oscharko-dev/keiko-contracts";
+import { DEBUG_ACTIVATION_EFFECTIVE_STATES } from "@oscharko-dev/keiko-contracts/runtime/debug-activation";
 import { I18nProvider } from "@/lib/i18n";
 import type { DebuggingSettingsView } from "./useDebuggingSettings";
 import { DebuggingSettings } from "./DebuggingSettings";

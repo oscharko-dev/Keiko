@@ -77,21 +77,27 @@ import { emitServerDiagnostic, serverDiagnosticFromError } from "./diagnostics-l
 import { newCorrelationId } from "./correlation.js";
 import { errorKindOf, getServerLogger, type ServerLogger } from "./observability/index.js";
 import { processServerLogSink } from "./process-log-sink.js";
+import { CAPSULE_SET_MAX_MEMBERS } from "@oscharko-dev/keiko-contracts/runtime/local-knowledge";
 import {
-  CAPSULE_SET_MAX_MEMBERS,
   electConversationDefault,
-  DEFAULT_LARGE_DOCUMENT_RESOURCE_POLICY,
-  isKnowledgePodEvidenceSafeText,
   MODEL_COST_RANK,
-  isSafeQualityWarning,
+} from "@oscharko-dev/keiko-contracts/runtime/gateway";
+import { DEFAULT_LARGE_DOCUMENT_RESOURCE_POLICY } from "@oscharko-dev/keiko-contracts/runtime/local-knowledge-large-document";
+import {
+  isKnowledgePodEvidenceSafeText,
+  validateKnowledgePodSummary,
+} from "@oscharko-dev/keiko-contracts/runtime/local-knowledge-pods";
+import { isSafeQualityWarning } from "@oscharko-dev/keiko-contracts/runtime/local-knowledge-large-document-validation";
+import {
   standardPodModelUsePolicy,
-  stripUnsafeFormatChars,
+  validateKnowledgePodModelUsePolicy,
+} from "@oscharko-dev/keiko-contracts/runtime/local-knowledge-model-use-policy";
+import { stripUnsafeFormatChars } from "@oscharko-dev/keiko-contracts/runtime/text-safety";
+import {
   validateCapsuleContextualRetrievalSettings,
   validateCapsuleReindexRequest,
-  validateKnowledgePodModelUsePolicy,
-  validateKnowledgePodSummary,
   validateKnowledgeSourceScope,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/local-knowledge-validation";
 import {
   currentConversationReadinessObservation,
   currentGateway,

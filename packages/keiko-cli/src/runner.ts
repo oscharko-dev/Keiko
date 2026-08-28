@@ -26,7 +26,7 @@ import type { EnvSource } from "@oscharko-dev/keiko-model-gateway";
 // evaluations, so importing SDK_VERSION from it loaded the entire product graph
 // on every `keiko` invocation — the single largest slice of the measured ~410ms
 // startup tax (GEN-PERF-CLI-001). SDK_VERSION is defined as exactly this alias.
-import { KEIKO_PRODUCT_VERSION as SDK_VERSION } from "@oscharko-dev/keiko-contracts";
+import { KEIKO_PRODUCT_VERSION as SDK_VERSION } from "@oscharko-dev/keiko-contracts/runtime/version";
 
 // Pure CLI core: returns an exit code and writes through the injected IO so it is
 // testable without touching process.* (the thin process shim lives in index.ts).

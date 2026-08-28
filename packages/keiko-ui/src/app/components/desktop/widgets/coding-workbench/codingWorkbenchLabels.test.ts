@@ -1,13 +1,15 @@
 import { describe, expect, it } from "vitest";
+import type {
+  CodingWorkbenchCodexSubscriptionProfile,
+  CodingWorkbenchRuntimeResearchGrant,
+  CodingWorkbenchRuntimeSnapshot,
+  CodingWorkbenchRuntimeSseEvent,
+} from "@oscharko-dev/keiko-contracts";
 import {
   CODING_WORKBENCH_RUNTIME_STATE_NAMES,
-  CODING_WORKBENCH_SCHEMA_VERSION,
   isLegalCodingWorkbenchRuntimeTransition,
-  type CodingWorkbenchCodexSubscriptionProfile,
-  type CodingWorkbenchRuntimeResearchGrant,
-  type CodingWorkbenchRuntimeSnapshot,
-  type CodingWorkbenchRuntimeSseEvent,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime";
+import { CODING_WORKBENCH_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench";
 import {
   createInitialCodingWorkbenchRuntimeState,
   type CodingWorkbenchResourceState,

@@ -9,14 +9,14 @@
 "use client";
 
 import { useId, useState, type ReactNode } from "react";
+import type { AtlassianConnectorProvider } from "@oscharko-dev/keiko-contracts";
 import {
   ATLASSIAN_JQL_MAX_CHARS,
   ATLASSIAN_SYNC_SCOPE_MAX_KEYS,
   DEFAULT_ATLASSIAN_SYNC_BOUNDS,
   isSafeConfluenceSpaceKey,
   isSafeJiraProjectKey,
-  type AtlassianConnectorProvider,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import { useTranslate } from "@/lib/i18n";
 import type { MessageKey } from "@/lib/i18n-messages.en";
 

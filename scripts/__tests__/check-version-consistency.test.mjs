@@ -69,7 +69,8 @@ function writeCleanRoot(root, { version = VERSION } = {}) {
   });
 
   // 4) keiko-contracts: manifest + KEIKO_PRODUCT_VERSION + a second KEIKO_*_VERSION constant,
-  //    all agreeing with the root version.
+  //    all agreeing with the root version. Runtime constants deliberately live outside the
+  //    type-only root barrel.
   writeJson(root, "packages/keiko-contracts/package.json", {
     name: "@oscharko-dev/keiko-contracts",
     version,
@@ -77,7 +78,7 @@ function writeCleanRoot(root, { version = VERSION } = {}) {
   });
   writeFile(
     root,
-    "packages/keiko-contracts/src/index.ts",
+    "packages/keiko-contracts/src/version.ts",
     [
       `export const KEIKO_CONTRACTS_VERSION = "${version}" as const;`,
       `export const KEIKO_PRODUCT_VERSION = "${version}" as const;`,
@@ -107,7 +108,7 @@ function writeCleanRoot(root, { version = VERSION } = {}) {
     root,
     "packages/keiko-sdk/src/index.ts",
     [
-      'import { KEIKO_PRODUCT_VERSION } from "@oscharko-dev/keiko-contracts";',
+      'import { KEIKO_PRODUCT_VERSION } from "@oscharko-dev/keiko-contracts/runtime/version";',
       "export const SDK_VERSION: string = KEIKO_PRODUCT_VERSION;",
       "",
     ].join("\n"),
@@ -198,7 +199,7 @@ describe("check-version-consistency gate", () => {
     });
     writeFile(
       root,
-      "packages/keiko-contracts/src/index.ts",
+      "packages/keiko-contracts/src/version.ts",
       [
         'export const KEIKO_CONTRACTS_VERSION = "0.2.99" as const;',
         'export const KEIKO_PRODUCT_VERSION = "0.2.99" as const;',

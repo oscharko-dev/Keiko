@@ -2,7 +2,7 @@
 // message — messages are static strings that never leak filesystem paths or raw Chrome diagnostics
 // to the UI.
 
-import { CodedHttpError, httpStatusFor } from "@oscharko-dev/keiko-contracts";
+import { CodedHttpError, httpStatusFor } from "@oscharko-dev/keiko-contracts/runtime/http-error";
 
 export const BROWSER_ERROR_CODES = {
   CHROME_UNREACHABLE: "CHROME_UNREACHABLE",

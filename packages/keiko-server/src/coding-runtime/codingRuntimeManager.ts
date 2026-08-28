@@ -6,13 +6,17 @@ import { Readable } from "node:stream";
 
 import {
   CODING_WORKBENCH_APPROVAL_REVIEW_MAX_PATHS,
+  validateCodingWorkbenchRuntimeApprovalReviewChannelPayload,
+} from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime-approval-review";
+import {
   CODING_WORKBENCH_SCHEMA_VERSION,
   decideCodingWorkbenchActionForMode,
   isCodingWorkbenchModeWidening,
+} from "@oscharko-dev/keiko-contracts/runtime/coding-workbench";
+import {
   validateCodingWorkbenchPermissionRequest,
-  validateCodingWorkbenchRuntimeApprovalReviewChannelPayload,
   validateCodingWorkbenchRuntimeEvent,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-validation";
 import type {
   CodingWorkbenchActionClass,
   CodingWorkbenchConnectorScope,

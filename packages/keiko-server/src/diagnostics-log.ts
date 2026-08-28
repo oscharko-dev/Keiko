@@ -1,4 +1,4 @@
-import { DECLARED_MODEL_MODES } from "@oscharko-dev/keiko-contracts";
+import { DECLARED_MODEL_MODES } from "@oscharko-dev/keiko-contracts/runtime/gateway";
 import { providerErrorDetail } from "@oscharko-dev/keiko-model-gateway";
 
 import { isValidCorrelationId } from "./correlation.js";

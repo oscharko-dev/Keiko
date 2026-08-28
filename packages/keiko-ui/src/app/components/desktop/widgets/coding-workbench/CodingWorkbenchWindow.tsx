@@ -1,18 +1,20 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from "react";
+import type {
+  CodingWorkbenchMode,
+  CodingWorkbenchRuntimeApprovalDecision,
+  CodingWorkbenchRuntimePendingPermission,
+  CodingWorkbenchRuntimeSseEvent,
+  CodingWorkbenchRuntimeStateName,
+  ModelCapability,
+} from "@oscharko-dev/keiko-contracts";
 import {
   CODING_WORKBENCH_MODES,
   isCodingWorkbenchMode,
   isCodingWorkbenchModeWidening,
-  isCodingWorkbenchModel,
-  type CodingWorkbenchMode,
-  type CodingWorkbenchRuntimeApprovalDecision,
-  type CodingWorkbenchRuntimePendingPermission,
-  type CodingWorkbenchRuntimeSseEvent,
-  type CodingWorkbenchRuntimeStateName,
-  type ModelCapability,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/coding-workbench";
+import { isCodingWorkbenchModel } from "@oscharko-dev/keiko-contracts/runtime/gateway";
 import { useTranslate } from "@/lib/i18n";
 import {
   useCodingWorkbenchTranslate,

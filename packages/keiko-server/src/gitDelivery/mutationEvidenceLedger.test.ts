@@ -7,10 +7,8 @@ import { describe, expect, it, vi } from "vitest";
 import { redact } from "@oscharko-dev/keiko-security";
 import { createInMemoryEvidenceStore } from "@oscharko-dev/keiko-evidence";
 import type { EvidenceStore } from "@oscharko-dev/keiko-evidence";
-import {
-  GIT_DELIVERY_EVIDENCE_SCHEMA_VERSION,
-  type GitDeliveryEvidenceRecord,
-} from "@oscharko-dev/keiko-contracts";
+import type { GitDeliveryEvidenceRecord } from "@oscharko-dev/keiko-contracts";
+import { GIT_DELIVERY_EVIDENCE_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts/runtime/git-delivery-evidence";
 import {
   gitDeliveryEvidenceRunIdFor,
   recordGitDeliveryMutationEvidence,

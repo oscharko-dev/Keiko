@@ -8,12 +8,12 @@
 // via seams so route tests run deterministically against a fake repository.
 
 import type { WorkspaceInfo } from "@oscharko-dev/keiko-workspace";
-import {
-  GIT_DELIVERY_POLICY_SCHEMA_VERSION,
-  type GitDeliveryActionKind,
-  type GitDeliveryApprovalRequirement,
-  type GitDeliveryRepoPolicyPack,
+import type {
+  GitDeliveryActionKind,
+  GitDeliveryApprovalRequirement,
+  GitDeliveryRepoPolicyPack,
 } from "@oscharko-dev/keiko-contracts";
+import { GIT_DELIVERY_POLICY_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts/runtime/git-delivery-policy";
 import { sha256Hex } from "@oscharko-dev/keiko-security";
 import {
   buildGitDeliveryEvidenceRecord,

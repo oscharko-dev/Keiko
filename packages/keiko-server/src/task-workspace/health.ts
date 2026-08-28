@@ -23,16 +23,18 @@ import type {
   GitWorktreeAdapter,
   WorktreeListEntry,
 } from "@oscharko-dev/keiko-tools/internal/git-mutation";
+import type {
+  WorkspaceHealthEntry,
+  WorkspaceHealthReport,
+  WorkspaceInstance,
+} from "@oscharko-dev/keiko-contracts";
 import {
   TASK_WORKSPACE_SCHEMA_VERSION,
   classifyWorkspaceHealth,
   deriveOrphanWorktreeHealthEntry,
   deriveWorkspaceHealthEntry,
   evaluateWorkspaceCleanupSafety,
-  type WorkspaceHealthEntry,
-  type WorkspaceHealthReport,
-  type WorkspaceInstance,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/task-workspace";
 import { deriveRepositoryId } from "./naming.js";
 import { isManagedRootOwned, isManagedTargetContained } from "./managed-root.js";
 import { gatherInstanceReconciliationFacts } from "./reconciliation.js";

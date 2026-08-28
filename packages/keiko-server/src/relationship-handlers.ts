@@ -51,8 +51,8 @@ import {
   RELATIONSHIP_OBJECT_KINDS,
   RELATIONSHIP_SCHEMA_VERSION,
   RELATIONSHIP_TYPES,
-  validateRelationship,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/relationships";
+import { validateRelationship } from "@oscharko-dev/keiko-contracts/runtime/relationships-validation";
 import type { RouteContext, RouteResult } from "./routes.js";
 import { errorBody, STREAMING } from "./routes.js";
 import type { UiHandlerDeps, Redactor } from "./deps.js";

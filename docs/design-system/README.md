@@ -51,8 +51,9 @@ token layer, and a core component set that has not yet grown to cover the full p
 
 The product UI (`packages/keiko-ui`) is a **single-route governed desktop**: one real interactive route (`/`)
 renders `KeikoDesktop → AppShell`, and the apparent "pages" are 31 tool-window types rendered on the
-`Workspace` canvas. The entire visual language lives in **one 16,191-line `globals.css`** with global class
-names — there is no CSS-Modules, Tailwind, styled-components, or Storybook layer. See
+`Workspace` canvas. Most of its visual language historically lived in one 16,191-line `globals.css` with
+global class names; shipped component-scoped CSS Modules and token-backed inline `CSSProperties` objects now
+coexist with that legacy layer. There is no Tailwind, styled-components, or Storybook layer. See
 [fidelity-matrix.md](fidelity-matrix.md) for the full surface inventory.
 
 > **Snapshot note:** The figures in this document (16,191-line `globals.css`, 31 tool-window types, 32
@@ -150,13 +151,14 @@ The design-system tokens were **lifted 1:1 from the product `globals.css`** (the
 product → reference), and the editor tier was lifted back into the product. Consolidation must therefore
 **extend `globals.css` as the single token source** — layer the semantic/component aliases on top of the
 existing primitives — and must **not** introduce a second `:root` token block, a parallel theme engine, a
-CSS-Modules/Tailwind/styled-components layer, or a duplicate token namespace. This prohibition targets a
-second _token engine_ — it does not prohibit component-scoped `.module.css` files that consume only the
-existing `globals.css` semantic/component tokens; that pattern is separately sanctioned and used from #1696
-onward (see [`evidence/1696/`](evidence/1696/README.md), [`evidence/1990/`](evidence/1990/README.md),
-[`evidence/1991/`](evidence/1991/README.md)). The standalone `design-system/*.css` files stay the reference
-and visual-regression ground truth; they are not shipped as a second live stylesheet. Per-asset reuse
-decisions are in [token-component-reuse-map.md](token-component-reuse-map.md).
+Tailwind, styled-components, or a duplicate token namespace. This prohibition targets a second _token
+engine_ — it does not prohibit component-scoped `.module.css` files that consume only the existing
+`globals.css` semantic/component tokens. Existing CSS Modules are the component-scoped consumption layer and
+follow the conventions in [`governance.md`](governance.md#component-styling-register); that pattern is
+separately sanctioned and used from #1696 onward (see [`evidence/1696/`](evidence/1696/README.md),
+[`evidence/1990/`](evidence/1990/README.md), [`evidence/1991/`](evidence/1991/README.md)). The standalone
+`design-system/*.css` files stay the reference and visual-regression ground truth; they are not shipped as a
+second live stylesheet. Per-asset reuse decisions are in [token-component-reuse-map.md](token-component-reuse-map.md).
 
 ## Method and provenance
 

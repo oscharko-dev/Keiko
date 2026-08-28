@@ -8,7 +8,7 @@
     "@oscharko-dev/keiko-sandbox",
     "ws"
   ],
-  "ignoreBinaries": ["pwsh", "mkfifo", "ldd", "sqlite3"],
+  "ignoreBinaries": ["pwsh", "mkfifo", "ldd", "sqlite3", "pgrep"],
   "workspaces": {
     ".": {
       "playwright": false,

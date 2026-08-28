@@ -13,7 +13,7 @@ import type {
   KnowledgeCapsuleId,
   LargeDocumentJobProgress,
 } from "@oscharko-dev/keiko-contracts";
-import { checkpointCompatibility } from "@oscharko-dev/keiko-contracts";
+import { checkpointCompatibility } from "@oscharko-dev/keiko-contracts/runtime/local-knowledge-large-document";
 
 import { listExtractionCheckpoints, selectExtractionCheckpoint } from "./checkpoint-persist.js";
 import type { KnowledgeStore } from "../store.js";

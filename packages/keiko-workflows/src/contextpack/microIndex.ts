@@ -6,7 +6,7 @@
 
 import { createHash } from "node:crypto";
 
-import { compareStrings } from "@oscharko-dev/keiko-contracts";
+import { compareStrings } from "@oscharko-dev/keiko-contracts/runtime/comparators";
 import type { ConnectedContextPack } from "@oscharko-dev/keiko-contracts/connected-context";
 
 // ─── Public types ─────────────────────────────────────────────────────────────

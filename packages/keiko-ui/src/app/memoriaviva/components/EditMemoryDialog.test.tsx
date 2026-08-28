@@ -63,6 +63,22 @@ describe("EditMemoryDialog — rendering", () => {
 });
 
 describe("EditMemoryDialog — interaction", () => {
+  it("locks workspace shell interactions while the modal is mounted", () => {
+    const view = render(
+      <EditMemoryDialog
+        record={makeRecord()}
+        onSave={vi.fn()}
+        onClose={vi.fn()}
+        editMemoryImpl={vi.fn()}
+      />,
+    );
+
+    expect(document.documentElement).toHaveAttribute("data-keiko-modal-open", "true");
+
+    view.unmount();
+    expect(document.documentElement).not.toHaveAttribute("data-keiko-modal-open");
+  });
+
   it("calls onClose when Cancel is clicked", async () => {
     const onClose = vi.fn();
     const user = userEvent.setup();
@@ -89,6 +105,7 @@ describe("EditMemoryDialog — interaction", () => {
         editMemoryImpl={vi.fn()}
       />,
     );
+    await waitFor(() => expect(screen.getByLabelText(/body/i)).toHaveFocus());
     await user.keyboard("{Escape}");
     expect(onClose).toHaveBeenCalledOnce();
   });

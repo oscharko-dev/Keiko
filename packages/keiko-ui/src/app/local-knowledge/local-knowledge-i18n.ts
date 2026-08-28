@@ -1,7 +1,7 @@
 "use client";
 
 import { useMemo } from "react";
-import { UNSUPPORTED_DOCUMENT_GUIDANCE_CODES } from "@oscharko-dev/keiko-contracts";
+import { UNSUPPORTED_DOCUMENT_GUIDANCE_CODES } from "@oscharko-dev/keiko-contracts/runtime/local-knowledge-records";
 import type { UnsupportedDocumentGuidanceCode } from "@oscharko-dev/keiko-contracts";
 import { useLocale, type Locale, type MessageValues } from "@/lib/i18n";
 

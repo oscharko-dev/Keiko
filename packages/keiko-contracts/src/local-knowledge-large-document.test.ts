@@ -22,9 +22,11 @@ import {
   checkpointCompatibility,
   isTerminalExtractionPhase,
   largeDocumentPolicyFingerprint,
+} from "./local-knowledge-large-document.js";
+import {
   validateExtractionCheckpointRecord,
   validateLargeDocumentResourcePolicy,
-} from "./index.js";
+} from "./local-knowledge-large-document-validation.js";
 
 const IDENTITY: EmbeddingModelIdentity = {
   provider: "keiko",

@@ -26,17 +26,19 @@ import { nodeSpawnFn } from "@oscharko-dev/keiko-tools/internal/exec";
 import { readWorkspaceFile } from "@oscharko-dev/keiko-workspace";
 import type { WorkspaceFs, WorkspaceInfo } from "@oscharko-dev/keiko-workspace";
 import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
+import type {
+  CommandFailureReason,
+  CommandRunnerEvent,
+  CommandRunnerEventKind,
+  CommandTask,
+  CommandTaskCatalog,
+  CommandTaskKind,
+  CommandTaskRunResult,
+} from "@oscharko-dev/keiko-contracts";
 import {
   COMMAND_RUNNER_SCHEMA_VERSION,
   COMMAND_TASK_RULES,
-  type CommandFailureReason,
-  type CommandRunnerEvent,
-  type CommandRunnerEventKind,
-  type CommandTask,
-  type CommandTaskCatalog,
-  type CommandTaskKind,
-  type CommandTaskRunResult,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/command-runner";
 import { DEFAULT_RETENTION, type EvidenceStore } from "@oscharko-dev/keiko-evidence";
 import { CommandRunnerError } from "./command-runner-errors.js";
 import {

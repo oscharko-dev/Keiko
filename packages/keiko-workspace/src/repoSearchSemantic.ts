@@ -1,4 +1,4 @@
-import { clampUnit } from "@oscharko-dev/keiko-contracts";
+import { clampUnit } from "@oscharko-dev/keiko-contracts/runtime/numeric";
 import type {
   CandidateSignal,
   RetrievalQuery,

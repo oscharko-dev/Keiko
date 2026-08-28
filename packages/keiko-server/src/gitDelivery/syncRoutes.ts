@@ -20,7 +20,7 @@ import type {
   GitSyncOperation,
   GitSyncPreview,
 } from "@oscharko-dev/keiko-contracts";
-import { GIT_SYNC_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts";
+import { GIT_SYNC_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts/runtime/git-sync";
 import type { RouteContext, RouteDefinition, RouteResult } from "../routes.js";
 import type { UiHandlerDeps } from "../deps.js";
 import {

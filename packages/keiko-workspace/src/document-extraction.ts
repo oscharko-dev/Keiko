@@ -25,7 +25,7 @@
 import { Buffer } from "node:buffer";
 import { basename, extname } from "node:path";
 import { randomUUID } from "node:crypto";
-import { stripUnsafeFormatChars } from "@oscharko-dev/keiko-contracts";
+import { stripUnsafeFormatChars } from "@oscharko-dev/keiko-contracts/runtime/text-safety";
 import { redact } from "@oscharko-dev/keiko-security";
 import { DEFAULT_BINARY_PROBE, looksBinary } from "./binaryDetect.js";
 import { PathEscapeError, PathDeniedError } from "./errors.js";

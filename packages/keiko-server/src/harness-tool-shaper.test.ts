@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { validateContextToolObservation } from "@oscharko-dev/keiko-contracts";
+import { validateContextToolObservation } from "@oscharko-dev/keiko-contracts/runtime/context-observations-validation";
 import type { HarnessShaperInput, ToolCallResult } from "@oscharko-dev/keiko-harness";
 import { createServerHarnessToolShaper, serverHarnessToolShaper } from "./harness-tool-shaper.js";
 

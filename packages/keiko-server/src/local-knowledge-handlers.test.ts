@@ -25,12 +25,12 @@ import type {
   KnowledgeCapsuleId,
   KnowledgeSourceId,
 } from "@oscharko-dev/keiko-contracts";
+import { DEFAULT_LARGE_DOCUMENT_RESOURCE_POLICY } from "@oscharko-dev/keiko-contracts/runtime/local-knowledge-large-document";
+import { UNSUPPORTED_DOCUMENT_GUIDANCE_CODES } from "@oscharko-dev/keiko-contracts/runtime/local-knowledge-records";
 import {
-  DEFAULT_LARGE_DOCUMENT_RESOURCE_POLICY,
-  UNSUPPORTED_DOCUMENT_GUIDANCE_CODES,
   sealedLocalPodModelUsePolicy,
   standardPodModelUsePolicy,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/local-knowledge-model-use-policy";
 import type {
   GatewayConfig,
   GatewayRequest,

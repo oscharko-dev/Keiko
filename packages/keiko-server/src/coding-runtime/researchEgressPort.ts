@@ -29,12 +29,12 @@
 // the page, the URL, the path, or the query).
 import { createHash, timingSafeEqual } from "node:crypto";
 
-import {
-  CODING_WORKBENCH_RUNTIME_CONTRACT_VERSION,
-  validateCodingWorkbenchRuntimeEvent,
-  type CodingWorkbenchAuxiliaryStatus,
-  type CodingWorkbenchRuntimeEvent,
+import type {
+  CodingWorkbenchAuxiliaryStatus,
+  CodingWorkbenchRuntimeEvent,
 } from "@oscharko-dev/keiko-contracts";
+import { CODING_WORKBENCH_RUNTIME_CONTRACT_VERSION } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime";
+import { validateCodingWorkbenchRuntimeEvent } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-validation";
 import {
   MAX_RESPONSE_BYTES,
   gatewayFetch,

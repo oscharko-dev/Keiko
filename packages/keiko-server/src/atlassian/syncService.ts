@@ -35,23 +35,25 @@ import {
   type JiraIncrementalSyncOptions,
   type JiraSyncEnumerationSnapshot,
 } from "@oscharko-dev/keiko-connectors";
+import type {
+  AtlassianConnectorActionDisposition,
+  AtlassianConnectorActivityOutcome,
+  AtlassianConnectorActivityReasonCode,
+  AtlassianConnectorActivityRecord,
+  AtlassianConnectorProvider,
+  AtlassianSyncChangeSummary,
+  AtlassianSyncFailureReason,
+  AtlassianSyncJobState,
+  AtlassianSyncProgressCounts,
+  KnowledgeCapsuleId,
+  KnowledgeSourceId,
+} from "@oscharko-dev/keiko-contracts";
 import {
   ATLASSIAN_CONNECTOR_AUTH_REF_PREFIX,
   ATLASSIAN_CONNECTOR_HUMAN_INITIATION_REASON,
   ATLASSIAN_CONNECTOR_SCHEMA_VERSION,
   DEFAULT_ATLASSIAN_SYNC_BOUNDS,
-  type AtlassianConnectorActionDisposition,
-  type AtlassianConnectorActivityOutcome,
-  type AtlassianConnectorActivityReasonCode,
-  type AtlassianConnectorActivityRecord,
-  type AtlassianConnectorProvider,
-  type AtlassianSyncChangeSummary,
-  type AtlassianSyncFailureReason,
-  type AtlassianSyncJobState,
-  type AtlassianSyncProgressCounts,
-  type KnowledgeCapsuleId,
-  type KnowledgeSourceId,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import {
   applyConnectorSyncRun,
   createConnectorPodShell,

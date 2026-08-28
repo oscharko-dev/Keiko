@@ -12,7 +12,8 @@ import {
   setActiveTaskWorkspace,
   type ActiveWorkspaceView,
 } from "./task-workspace-api";
-import { isWorkspaceFailureClass, type WorkspaceFailureClass } from "@oscharko-dev/keiko-contracts";
+import type { WorkspaceFailureClass } from "@oscharko-dev/keiko-contracts";
+import { isWorkspaceFailureClass } from "@oscharko-dev/keiko-contracts/runtime/task-workspace";
 import { clientErrorSummary, correlationIdOf } from "./client-error-summary";
 import { reportClientDiagnostic } from "./client-diagnostics";
 

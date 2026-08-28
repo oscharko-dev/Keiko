@@ -5,40 +5,44 @@
 // behavior; it reuses the existing capsule/source/set lifecycle APIs and returns body-free,
 // path-free summaries for UI and evidence-facing surfaces.
 
+import type {
+  EmbeddingProfileCompatibilityDecision,
+  EmbeddingProfileCompatibilityStatus,
+  EmbeddingProfileIdentity,
+  CapsuleLifecycleState,
+  CapsuleSet,
+  KnowledgeCapsule,
+  KnowledgeCapsuleId,
+  KnowledgePodCounts,
+  KnowledgePodModelUsePolicySummary,
+  KnowledgePodReadiness,
+  KnowledgePodRetrievalCapabilities,
+  KnowledgePodSetReadinessReasonCode,
+  KnowledgePodSetReadinessSummary,
+  KnowledgePodSourceKind,
+  KnowledgePodSummary,
+  KnowledgePodSummaryKind,
+  KnowledgeSource,
+  AtlassianConnectorPodSource,
+  AtlassianSyncFailureReason,
+  ManualRefreshChangeSummary,
+} from "@oscharko-dev/keiko-contracts";
+import { LOCAL_KNOWLEDGE_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts/runtime/local-knowledge";
 import {
-  LOCAL_KNOWLEDGE_SCHEMA_VERSION,
   KNOWLEDGE_POD_SUMMARY_SCHEMA_VERSION,
+  isKnowledgePodEvidenceSafeText,
+  validateKnowledgePodSummary,
+} from "@oscharko-dev/keiko-contracts/runtime/local-knowledge-pods";
+import {
   compareEmbeddingProfiles,
   embeddingProfileFromModelIdentity,
   embeddingProfileKey,
-  type EmbeddingProfileCompatibilityDecision,
-  type EmbeddingProfileCompatibilityStatus,
-  type EmbeddingProfileIdentity,
-  type CapsuleLifecycleState,
-  type CapsuleSet,
-  type KnowledgeCapsule,
-  type KnowledgeCapsuleId,
-  type KnowledgePodCounts,
-  type KnowledgePodModelUsePolicySummary,
-  type KnowledgePodReadiness,
-  type KnowledgePodRetrievalCapabilities,
-  type KnowledgePodSetReadinessReasonCode,
-  type KnowledgePodSetReadinessSummary,
-  type KnowledgePodSourceKind,
-  type KnowledgePodSummary,
-  type KnowledgePodSummaryKind,
-  type KnowledgeSource,
-  isKnowledgePodEvidenceSafeText,
-  isSafeAtlassianIdentifier,
-  parseHtmlManualSourceTagMetadata,
-  resolveKnowledgePodModelUsePolicy,
-  validateAtlassianSyncChangeSummary,
-  validateKnowledgePodSummary,
-  validateManualRefreshChangeSummary,
-  type AtlassianConnectorPodSource,
-  type AtlassianSyncFailureReason,
-  type ManualRefreshChangeSummary,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/local-knowledge-embedding-profiles";
+import { isSafeAtlassianIdentifier } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
+import { parseHtmlManualSourceTagMetadata } from "@oscharko-dev/keiko-contracts/runtime/html-manual-source";
+import { resolveKnowledgePodModelUsePolicy } from "@oscharko-dev/keiko-contracts/runtime/local-knowledge-model-use-policy";
+import { validateAtlassianSyncChangeSummary } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors-validation";
+import { validateManualRefreshChangeSummary } from "@oscharko-dev/keiko-contracts/runtime/html-manual-refresh";
 
 import { getCapsule, listCapsules } from "./capsule-lifecycle.js";
 import { listCapsuleSets } from "./capsule-set-lifecycle.js";

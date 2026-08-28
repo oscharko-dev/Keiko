@@ -22,7 +22,7 @@ import {
   nativeFileDialogExpectedKind,
   nativeFileDialogSelectionBounds,
   validateNativeFileDialogRequest,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/native-file-dialog";
 import type { UiHandlerDeps } from "../deps.js";
 import { UNKNOWN_CORRELATION_ID } from "../correlation.js";
 import { emitServerDiagnostic, serverDiagnosticFromError } from "../diagnostics-log.js";

@@ -6,7 +6,7 @@
 
 import { createHash } from "node:crypto";
 
-import { compareStrings } from "@oscharko-dev/keiko-contracts";
+import { compareStrings } from "@oscharko-dev/keiko-contracts/runtime/comparators";
 import {
   CONNECTED_CONTEXT_SCHEMA_VERSION,
   type CandidateFile,

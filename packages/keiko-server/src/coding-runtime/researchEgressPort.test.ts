@@ -1,10 +1,10 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import {
-  validateCodingWorkbenchRuntimeEvent,
-  type AuxiliaryResearchScopeV1,
-  type CodingWorkbenchRuntimeEvent,
+import type {
+  AuxiliaryResearchScopeV1,
+  CodingWorkbenchRuntimeEvent,
 } from "@oscharko-dev/keiko-contracts";
+import { validateCodingWorkbenchRuntimeEvent } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-validation";
 import type {
   GatewayFetchOptions,
   OutboundHttpEgressConfig,

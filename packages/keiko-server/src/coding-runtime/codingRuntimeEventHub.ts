@@ -1,7 +1,5 @@
-import {
-  CODING_WORKBENCH_RUNTIME_CONTRACT_VERSION,
-  validateCodingWorkbenchRuntimeSseEvent,
-} from "@oscharko-dev/keiko-contracts";
+import { CODING_WORKBENCH_RUNTIME_CONTRACT_VERSION } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime";
+import { validateCodingWorkbenchRuntimeSseEvent } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime-api";
 import type {
   CodingWorkbenchRuntimeFailureCode,
   CodingWorkbenchRuntimeSseEvent,

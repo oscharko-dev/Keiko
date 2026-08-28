@@ -12,12 +12,12 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { IncomingMessage } from "node:http";
 
+import type { ContextLaneId } from "@oscharko-dev/keiko-contracts";
 import {
   CONTEXT_LANE_IDS,
   DEFAULT_CONTEXT_PROFILE,
   maxUtf8BytesForTokenBudget,
-  type ContextLaneId,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/context-engineering";
 import {
   CONNECTED_CONTEXT_SCHEMA_VERSION,
   DEFAULT_EXPLORATION_BUDGET,

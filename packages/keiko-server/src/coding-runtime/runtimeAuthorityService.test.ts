@@ -9,7 +9,7 @@ import type {
 import {
   validateCodingWorkbenchRuntimeAuthorityFacts,
   validateCodingWorkbenchRuntimeState,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime";
 import { EditorAgentAuthorityRegistry } from "../editor/agentAuthorityRegistry.js";
 import {
   createInMemoryRuntimeCapabilityStore,

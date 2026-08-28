@@ -4,7 +4,7 @@
 // empty-step zero-row edge case, deterministic ordering.
 
 import { describe, expect, it } from "vitest";
-import { QualityIntelligence } from "@oscharko-dev/keiko-contracts";
+import * as QualityIntelligence from "@oscharko-dev/keiko-contracts/runtime/qualityIntelligence/index";
 import type {
   QualityIntelligenceExportBundle,
   QualityIntelligenceTestCaseCandidate,

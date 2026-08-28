@@ -8,6 +8,7 @@
 // from issue #65). focus-visible ring. min 24×24 target per WCAG 2.5.8.
 
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
+import { NATIVE_FIELDSET_RESET_STYLE } from "../../components/desktop/native-element-styles";
 import type {
   MemoryScopeKind,
   MemorySensitivity,
@@ -19,7 +20,7 @@ import {
   MEMORY_TYPES,
   MEMORY_STATUSES,
   MEMORY_SENSITIVITIES,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/memory";
 import { useTranslate, type I18nTranslate } from "@/lib/i18n";
 
 export interface MemoryFilterState {
@@ -146,7 +147,7 @@ function ChipGroup<T extends string>({
   readonly onToggle: (item: T) => void;
 }): ReactNode {
   return (
-    <div className="mc-filter-row" role="group" aria-label={ariaLabel}>
+    <fieldset className="mc-filter-row" aria-label={ariaLabel} style={NATIVE_FIELDSET_RESET_STYLE}>
       <span className="mc-filter-label">{label}</span>
       <div className="mc-filter-chips">
         {items.map((item) => {
@@ -167,7 +168,7 @@ function ChipGroup<T extends string>({
           );
         })}
       </div>
-    </div>
+    </fieldset>
   );
 }
 

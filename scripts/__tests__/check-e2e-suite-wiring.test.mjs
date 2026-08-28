@@ -6,12 +6,14 @@ import { describe, expect, it } from "vitest";
 
 import {
   checkE2eConfigOwnership,
+  checkE2eProtectionBaseline,
   checkE2eSuiteWiring,
   executableWorkflowSegments,
   formatGateReport,
   isWiredInWorkflows,
   main,
   runE2eSuiteWiringGate,
+  suiteProtectionClass,
   playwrightConfigNames,
   validateBaselineSuites,
   validateUnownedConfigReasons,
@@ -48,6 +50,42 @@ jobs:
     steps:
       - run: npm run \${{ matrix.suite }}
 `;
+
+const REQUIRED_AND_SCHEDULED_LANE = {
+  name: "required-and-scheduled.yml",
+  text: `
+on:
+  pull_request:
+  push:
+  schedule:
+    - cron: "0 6 * * *"
+  workflow_dispatch:
+jobs:
+  e2e:
+    steps:
+      - run: npm run test:e2e:required
+      - if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+        run: |
+          npm run test:e2e:nonblocking
+      - if: github.event_name == 'schedule'
+        run: npm run test:e2e:scheduled
+`,
+};
+
+const REQUIRED_PULL_REQUEST_LANE = {
+  name: "required-pull-request.yml",
+  text: `
+on:
+  pull_request:
+jobs:
+  e2e:
+    if: \${{ github.event_name == 'pull_request' && github.base_ref == 'dev' }}
+    steps:
+      - if: \${{ github.event_name == 'pull_request' }}
+        name: Run the required suite
+        run: npm run test:e2e:required
+`,
+};
 
 function problemsFor(scripts, workflowText, baseline = []) {
   return checkE2eSuiteWiring({ scripts, workflowText, baseline });
@@ -157,6 +195,293 @@ describe("e2e suite wiring gate (#2629)", () => {
     });
     expect(report).toContain("e2e-suite-wiring: FAIL — 1 problem(s)");
     expect(report).toContain("  - test:e2e:orphan runs nowhere");
+  });
+
+  // KEIKO-0151: a workflow's trigger is insufficient. Every class is attributed to the concrete
+  // step that runs the suite, rather than to an unrelated sibling in the same workflow file.
+  it("records the strongest event on which each suite step actually runs", () => {
+    expect(suiteProtectionClass("test:e2e:required", [REQUIRED_AND_SCHEDULED_LANE])).toBe(
+      "runs-per-pr",
+    );
+    expect(suiteProtectionClass("test:e2e:nonblocking", [REQUIRED_AND_SCHEDULED_LANE])).toBe(
+      "push-nonblocking",
+    );
+    expect(suiteProtectionClass("test:e2e:scheduled", [REQUIRED_AND_SCHEDULED_LANE])).toBe(
+      "scheduled-nonblocking",
+    );
+
+    const result = checkE2eProtectionBaseline({
+      scripts: ["test:e2e:required", "test:e2e:nonblocking", "test:e2e:scheduled"],
+      workflows: [REQUIRED_AND_SCHEDULED_LANE],
+      protectionBaseline: {
+        "test:e2e:required": "runs-per-pr",
+        "test:e2e:nonblocking": "runs-per-pr",
+        "test:e2e:scheduled": "push-nonblocking",
+      },
+    });
+    expect(result.problems).toEqual([
+      "test:e2e:nonblocking protection changed from runs-per-pr to push-nonblocking. " +
+        "Update its lane or the baseline through an explicit reviewed change.",
+      "test:e2e:scheduled protection changed from push-nonblocking to scheduled-nonblocking. " +
+        "Update its lane or the baseline through an explicit reviewed change.",
+    ]);
+  });
+
+  // KEIKO-0151: suiteProtection is an audited snapshot of the concrete execution surface, not a
+  // lower-bound. A stronger class changes CI cost and merge semantics, so it needs the same
+  // explicit, reviewed baseline update as a downgrade.
+  it("rejects a silent protection upgrade", () => {
+    const result = checkE2eProtectionBaseline({
+      scripts: ["test:e2e:baseline-ratchet"],
+      workflows: [
+        {
+          name: "push.yml",
+          text: `
+on:
+  push:
+jobs:
+  e2e:
+    steps:
+      - run: npm run test:e2e:baseline-ratchet
+`,
+        },
+      ],
+      protectionBaseline: { "test:e2e:baseline-ratchet": "manual-nonblocking" },
+    });
+    expect(result.problems).toEqual([
+      "test:e2e:baseline-ratchet protection changed from manual-nonblocking to push-nonblocking. " +
+        "Update its lane or the baseline through an explicit reviewed change.",
+    ]);
+  });
+
+  it.each([
+    [
+      "step-level continue-on-error",
+      `
+on:
+  pull_request:
+jobs:
+  e2e:
+    steps:
+      - continue-on-error: true
+        run: npm run test:e2e:best-effort
+`,
+    ],
+    [
+      "job-level continue-on-error",
+      `
+on:
+  pull_request:
+jobs:
+  e2e:
+    continue-on-error: true
+    steps:
+      - run: npm run test:e2e:best-effort
+`,
+    ],
+  ])("classifies %s as a non-blocking pull-request execution", (_label, text) => {
+    const workflows = [{ name: "best-effort.yml", text }];
+    expect(suiteProtectionClass("test:e2e:best-effort", workflows)).toBe(
+      "pull-request-nonblocking",
+    );
+    expect(
+      checkE2eProtectionBaseline({
+        scripts: ["test:e2e:best-effort"],
+        workflows,
+        protectionBaseline: { "test:e2e:best-effort": "runs-per-pr" },
+      }).problems,
+    ).toEqual([
+      "test:e2e:best-effort protection changed from runs-per-pr to pull-request-nonblocking. " +
+        "Update its lane or the baseline through an explicit reviewed change.",
+    ]);
+  });
+
+  // A workflow's PR trigger is insufficient on its own: the exact job and step that run the suite
+  // must execute for a dev-targeted pull request. The parser intentionally models only this small,
+  // auditable condition language and treats every other expression as non-blocking.
+  it("recognizes a direct suite run guarded for the required pull-request context", () => {
+    expect(suiteProtectionClass("test:e2e:required", [REQUIRED_PULL_REQUEST_LANE])).toBe(
+      "runs-per-pr",
+    );
+  });
+
+  it.each([
+    [
+      "a condition separated from run by a comment",
+      `
+on:
+  pull_request:
+jobs:
+  e2e:
+    steps:
+      - if: github.event_name == 'push'
+        # This comment must not hide the step condition from the classifier.
+        run: npm run test:e2e:unsafe
+`,
+    ],
+    [
+      "a condition before the step name",
+      `
+on:
+  pull_request:
+jobs:
+  e2e:
+    steps:
+      - if: github.event_name == 'push'
+        name: Run conditionally
+        run: npm run test:e2e:unsafe
+`,
+    ],
+    [
+      "a job-level condition",
+      `
+on:
+  pull_request:
+jobs:
+  e2e:
+    if: github.event_name == 'push'
+    steps:
+      - run: npm run test:e2e:unsafe
+`,
+    ],
+    [
+      "a false pull-request/base-ref OR condition",
+      `
+on:
+  pull_request:
+jobs:
+  e2e:
+    steps:
+      - if: \${{ github.event_name != 'pull_request' || github.base_ref != 'dev' }}
+        run: npm run test:e2e:unsafe
+`,
+    ],
+    [
+      "an expression the classifier cannot prove",
+      `
+on:
+  pull_request:
+jobs:
+  e2e:
+    steps:
+      - if: inputs.run_e2e
+        run: npm run test:e2e:unsafe
+`,
+    ],
+  ])("does not classify %s as required per PR", (_label, text) => {
+    expect(suiteProtectionClass("test:e2e:unsafe", [{ name: "unsafe.yml", text }])).toBe("unwired");
+  });
+
+  it("attributes a matrix suite to the concrete matrix execution step", () => {
+    const matrixOnPullRequest = {
+      name: "matrix-on-pr.yml",
+      text: `
+on:
+  pull_request:
+jobs:
+  e2e:
+    strategy:
+      matrix:
+        suite:
+          - test:e2e:matrix-only
+    steps:
+      - run: npm run \${{ matrix.suite }}
+`,
+    };
+    expect(suiteProtectionClass("test:e2e:matrix-only", [matrixOnPullRequest])).toBe("runs-per-pr");
+    expect(isWiredInWorkflows("test:e2e:matrix-only", matrixOnPullRequest.text)).toBe(true);
+  });
+
+  it("leaves an untraceable matrix reference unattributed", () => {
+    const untraceableMatrix = {
+      name: "untraceable-matrix.yml",
+      text: `
+on:
+  schedule:
+    - cron: "0 6 * * *"
+jobs:
+  e2e:
+    strategy:
+      matrix:
+        suite:
+          - test:e2e:matrix-only
+    steps:
+      - run: npm run \${{ matrix.another_value }}
+`,
+    };
+
+    expect(suiteProtectionClass("test:e2e:matrix-only", [untraceableMatrix])).toBe("unwired");
+  });
+
+  it("does not turn an inline comment on the trigger declaration into a PR trigger", () => {
+    const dispatchOnly = {
+      name: "dispatch-only.yml",
+      text: `
+on: # pull_request disabled
+  workflow_dispatch:
+jobs:
+  e2e:
+    steps:
+      - run: npm run test:e2e:demo-suite
+`,
+    };
+
+    expect(suiteProtectionClass("test:e2e:demo-suite", [dispatchOnly])).toBe("manual-nonblocking");
+  });
+
+  it("reads quoted trigger keys but never promotes nested filters into triggers", () => {
+    const quotedTrigger = {
+      name: "quoted-trigger.yml",
+      text: `
+"on":
+  push:
+    branches: [dev]
+  workflow_dispatch:
+jobs:
+  e2e:
+    steps:
+      - if: github.event_name == 'push'
+        run: npm run test:e2e:quoted-trigger
+`,
+    };
+
+    expect(suiteProtectionClass("test:e2e:quoted-trigger", [quotedTrigger])).toBe(
+      "push-nonblocking",
+    );
+  });
+
+  it("does not classify suite names embedded in a shell string as executable", () => {
+    const nightly = readFileSync(".github/workflows/nightly-perf-evidence.yml", "utf8");
+    expect(isWiredInWorkflows("test:e2e:workspace-perf", nightly)).toBe(false);
+    expect(
+      suiteProtectionClass("test:e2e:workspace-perf", [{ name: "nightly.yml", text: nightly }]),
+    ).toBe("unwired");
+  });
+
+  it("ratchets a formerly required suite down when its direct PR execution is no longer provable", () => {
+    const result = checkE2eProtectionBaseline({
+      scripts: ["test:e2e:unsafe"],
+      workflows: [
+        {
+          name: "unsafe.yml",
+          text: `
+on:
+  pull_request:
+jobs:
+  e2e:
+    steps:
+      - if: github.event_name == 'push'
+        name: Run conditionally
+        run: npm run test:e2e:unsafe
+`,
+        },
+      ],
+      protectionBaseline: { "test:e2e:unsafe": "runs-per-pr" },
+    });
+    expect(result.problems).toEqual([
+      "test:e2e:unsafe protection changed from runs-per-pr to unwired. " +
+        "Update its lane or the baseline through an explicit reviewed change.",
+    ]);
   });
 
   it("rejects a baseline document that is not a suites array", () => {

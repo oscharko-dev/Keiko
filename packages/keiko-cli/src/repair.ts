@@ -36,7 +36,7 @@ import {
   isAtlassianConnectorProvider,
   isSafeAtlassianConnectorBaseUrl,
   isSafeAtlassianDisplayName,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import type { EnvSource } from "@oscharko-dev/keiko-model-gateway";
 import type { CliIo } from "./runner.js";
 import { collectDoctorReport } from "./doctor.js";

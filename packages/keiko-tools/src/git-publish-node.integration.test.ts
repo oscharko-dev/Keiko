@@ -24,10 +24,8 @@ import {
   type GitPublishLifecycleResult,
   type GitPushCommand,
 } from "./git-publish-gateway.js";
-import {
-  GIT_DELIVERY_POLICY_SCHEMA_VERSION,
-  type GitDeliveryRepoPolicyPack,
-} from "@oscharko-dev/keiko-contracts";
+import type { GitDeliveryRepoPolicyPack } from "@oscharko-dev/keiko-contracts";
+import { GIT_DELIVERY_POLICY_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts/runtime/git-delivery-policy";
 import type { WorkspaceInfo } from "@oscharko-dev/keiko-workspace";
 
 let remote: string;

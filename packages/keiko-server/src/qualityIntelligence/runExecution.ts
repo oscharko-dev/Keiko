@@ -7,12 +7,12 @@
 // artifact). Route-agnostic: the caller supplies an event callback (wired to SSE) and an
 // AbortSignal (wired to the run registry for cancellation).
 
-import {
-  QualityIntelligence,
-  type QualityIntelligence as QI,
-  type QualityIntelligenceStartRunRequest,
-  type QualityIntelligenceModelRouting,
+import type {
+  QualityIntelligence as QI,
+  QualityIntelligenceStartRunRequest,
+  QualityIntelligenceModelRouting,
 } from "@oscharko-dev/keiko-contracts";
+import * as QualityIntelligence from "@oscharko-dev/keiko-contracts/runtime/qualityIntelligence/index";
 import {
   ALL_POLICY_PROFILES,
   regressionDefault,

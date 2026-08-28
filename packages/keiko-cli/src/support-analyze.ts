@@ -37,7 +37,8 @@
 // can be exercised on an in-memory string.
 
 import { createHash } from "node:crypto";
-import { isStoreFingerprint, type StoreFingerprint } from "@oscharko-dev/keiko-contracts";
+import type { StoreFingerprint } from "@oscharko-dev/keiko-contracts";
+import { isStoreFingerprint } from "@oscharko-dev/keiko-contracts/runtime/store-fingerprint";
 
 const KNOWN_ENVELOPE_KEYS: ReadonlySet<string> = new Set([
   "ts",

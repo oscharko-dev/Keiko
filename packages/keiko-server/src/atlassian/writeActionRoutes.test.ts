@@ -11,18 +11,22 @@ import { EventEmitter } from "node:events";
 import type { IncomingMessage } from "node:http";
 import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import type {
+  AtlassianConnectorActivityRecord,
+  AtlassianConnectorPendingApproval,
+  CodingWorkbenchAuthorityEnvelope,
+  CodingWorkbenchConnectorScope,
+  CodingWorkbenchMode,
+} from "@oscharko-dev/keiko-contracts";
+import { ATLASSIAN_APPROVAL_CONTENT_PREVIEW_MAX_CHARS } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import {
-  ATLASSIAN_APPROVAL_CONTENT_PREVIEW_MAX_CHARS,
   CODING_WORKBENCH_ACTION_CLASSES,
   CODING_WORKBENCH_SCHEMA_VERSION,
+} from "@oscharko-dev/keiko-contracts/runtime/coding-workbench";
+import {
   validateAtlassianConnectorActivityRecord,
   validateAtlassianConnectorPendingApproval,
-  type AtlassianConnectorActivityRecord,
-  type AtlassianConnectorPendingApproval,
-  type CodingWorkbenchAuthorityEnvelope,
-  type CodingWorkbenchConnectorScope,
-  type CodingWorkbenchMode,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors-validation";
 import type {
   AtlassianCredentialCustody,
   AtlassianCredentialMetadata,

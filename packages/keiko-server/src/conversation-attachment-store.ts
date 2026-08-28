@@ -4,7 +4,7 @@ import {
   classifyAttachmentMime,
   MAX_ATTACHMENT_BYTES,
   normalizeAttachmentMime,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/bff-wire";
 import {
   createShardedLocalSecretVault,
   resolveLocalVaultKey,

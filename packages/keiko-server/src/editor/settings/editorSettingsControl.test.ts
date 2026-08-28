@@ -3,14 +3,14 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
-import {
-  EDITOR_M11_DEFAULT_PROFILE_REF,
-  isWorkspaceProfileRef,
-  resolveEditorM7Settings,
-  type EditorM7SettingId,
-  type EditorM11ResolvedSetting,
-  type WorkspaceProfileRef,
+import type {
+  EditorM7SettingId,
+  EditorM11ResolvedSetting,
+  WorkspaceProfileRef,
 } from "@oscharko-dev/keiko-contracts";
+import { EDITOR_M11_DEFAULT_PROFILE_REF } from "@oscharko-dev/keiko-contracts/runtime/editor-m11-settings";
+import { isWorkspaceProfileRef } from "@oscharko-dev/keiko-contracts/runtime/workspace-contract-primitives";
+import { resolveEditorM7Settings } from "@oscharko-dev/keiko-contracts/runtime/editor-m7";
 import { createWorkspaceMutexRegistry } from "../../task-workspace/mutex.js";
 import type { WorkspaceMutexRegistry } from "../../task-workspace/mutex.js";
 import type {

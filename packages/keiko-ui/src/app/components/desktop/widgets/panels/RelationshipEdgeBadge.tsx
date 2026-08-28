@@ -21,12 +21,12 @@
 "use client";
 
 import { useEffect, useState, type CSSProperties, type ReactNode } from "react";
-import {
-  RELATIONSHIP_TYPE_DEFINITIONS,
-  type RelationshipActivityState,
-  type RelationshipLifecycleState,
-  type RelationshipType,
+import type {
+  RelationshipActivityState,
+  RelationshipLifecycleState,
+  RelationshipType,
 } from "@oscharko-dev/keiko-contracts";
+import { RELATIONSHIP_TYPE_DEFINITIONS } from "@oscharko-dev/keiko-contracts/runtime/relationships";
 
 // ─── Activity state visual binding (activity-visualization.md §"Per-state visual treatment") ─
 

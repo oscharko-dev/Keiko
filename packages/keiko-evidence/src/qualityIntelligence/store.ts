@@ -25,7 +25,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import { readdirSync, readFileSync, lstatSync, rmSync } from "node:fs";
 import { join, resolve } from "node:path";
-import { sortedStrings } from "@oscharko-dev/keiko-contracts";
+import { sortedStrings } from "@oscharko-dev/keiko-contracts/runtime/stable-order";
 import { resolveWithinWorkspace, type WorkspaceFs } from "@oscharko-dev/keiko-workspace";
 import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
 import { assertValidRunId } from "@oscharko-dev/keiko-security";

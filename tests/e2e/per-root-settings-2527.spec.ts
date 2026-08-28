@@ -1,5 +1,6 @@
 import { expect, test, type APIRequestContext, type Page } from "@playwright/test";
-import { validateWorkspaceManifest, type WorkspaceManifest } from "@oscharko-dev/keiko-contracts";
+import type { WorkspaceManifest } from "@oscharko-dev/keiko-contracts";
+import { validateWorkspaceManifest } from "@oscharko-dev/keiko-contracts/runtime/workspace-manifest";
 
 import { cleanupEditorWorkspaces, createEditorWorkspace } from "./support/editorWorkspace.js";
 import { editorM11PairingFragment } from "./support/editor-m11-app-session.js";

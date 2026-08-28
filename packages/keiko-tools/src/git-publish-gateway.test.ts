@@ -4,12 +4,12 @@
 // policy/protected-target, approval, execution + rejection surfacing).
 
 import { describe, expect, it, vi } from "vitest";
-import {
-  GIT_DELIVERY_POLICY_SCHEMA_VERSION,
-  type GitDeliveryApprovalRequirement,
-  type GitDeliveryOrgPolicyPack,
-  type GitDeliveryRepoPolicyPack,
+import type {
+  GitDeliveryApprovalRequirement,
+  GitDeliveryOrgPolicyPack,
+  GitDeliveryRepoPolicyPack,
 } from "@oscharko-dev/keiko-contracts";
+import { GIT_DELIVERY_POLICY_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts/runtime/git-delivery-policy";
 import type { GitWorktreeSnapshot } from "./git-mutation-preflight.js";
 import {
   buildPushArgv,

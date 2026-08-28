@@ -12,21 +12,23 @@
 // `SpokenActionAuditRecord` carrying enums / counts / a digest only — never raw transcript text or audio.
 
 import { createHash } from "node:crypto";
+import type {
+  CommittedVoiceTranscriptProjection,
+  SpokenActionAuditRecord,
+  SpokenActionConfirmationInput,
+  SpokenActionEffectClass,
+  SpokenActionOutcome,
+  SpokenActionProposal,
+  SpokenActionState,
+  VoiceProfile,
+  VoiceTranscriptSource,
+} from "@oscharko-dev/keiko-contracts";
 import {
   buildSpokenActionAuditRecord,
   canonicalizeSpokenActionConfirmation,
   normalizeSpokenActionProposal,
   voiceCanProposeAction,
-  type CommittedVoiceTranscriptProjection,
-  type SpokenActionAuditRecord,
-  type SpokenActionConfirmationInput,
-  type SpokenActionEffectClass,
-  type SpokenActionOutcome,
-  type SpokenActionProposal,
-  type SpokenActionState,
-  type VoiceProfile,
-  type VoiceTranscriptSource,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/voice-action-intent";
 import {
   type WorkflowHandoffRequest,
   validateWorkflowHandoffRequest,

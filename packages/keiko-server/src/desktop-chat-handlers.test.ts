@@ -25,7 +25,10 @@ import type {
   MemoryScope,
   MemoryUserId,
 } from "@oscharko-dev/keiko-contracts";
-import { DEFAULT_CONTEXT_PROFILE, deriveContextProfile } from "@oscharko-dev/keiko-contracts";
+import {
+  DEFAULT_CONTEXT_PROFILE,
+  deriveContextProfile,
+} from "@oscharko-dev/keiko-contracts/runtime/context-engineering";
 import {
   MAX_DESKTOP_CHAT_INPUT_BYTES,
   type ChatMessage,

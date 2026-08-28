@@ -8,18 +8,20 @@
 import { createHash } from "node:crypto";
 import type { IncomingMessage } from "node:http";
 import { Readable } from "node:stream";
+import type {
+  CodingWorkbenchMode,
+  GitRepositoryAgentDenialReason,
+  GitRepositoryAgentOperationKind,
+  GitRepositoryAgentOperationRequest,
+  GitRepositoryAgentOperationResponse,
+} from "@oscharko-dev/keiko-contracts";
 import {
   GIT_REPOSITORY_AGENT_SCHEMA_VERSION,
   gitRepositoryAgentMinimumMode,
   gitRepositoryAgentOperationAdmitted,
   parseGitRepositoryAgentOperationRequest,
-  resolveEffectiveCodingWorkbenchMode,
-  type CodingWorkbenchMode,
-  type GitRepositoryAgentDenialReason,
-  type GitRepositoryAgentOperationKind,
-  type GitRepositoryAgentOperationRequest,
-  type GitRepositoryAgentOperationResponse,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/git-repository-agent";
+import { resolveEffectiveCodingWorkbenchMode } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench";
 import { STREAMING, type RouteContext, type RouteDefinition, type RouteResult } from "../routes.js";
 import { handleGitBranches, handleGitDiff, handleGitStatus } from "../gitRoutes.js";
 import type { UiHandlerDeps } from "../deps.js";

@@ -18,12 +18,8 @@ import {
   type RetentionPolicy,
 } from "./types.js";
 import type { EvidenceStore } from "./store.js";
-import {
-  HARNESS_VERSION,
-  type AuditSummary,
-  type CostClass,
-  type TaskType,
-} from "@oscharko-dev/keiko-contracts";
+import type { AuditSummary, CostClass, TaskType } from "@oscharko-dev/keiko-contracts";
+import { HARNESS_VERSION } from "@oscharko-dev/keiko-contracts/runtime/harness";
 import type { EnvSource } from "@oscharko-dev/keiko-security";
 
 // The two workflow families the evidence path serves. Distinct from the UI RunKind (which also

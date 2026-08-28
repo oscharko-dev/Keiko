@@ -8,13 +8,13 @@
 
 import { realpathSync } from "node:fs";
 import { dirname, isAbsolute, relative, resolve } from "node:path";
-import {
-  compareStrings,
-  QualityIntelligence,
-  type QualityIntelligence as QI,
-  type QualityIntelligenceInlineSource,
-  type QualityIntelligenceStartRunRequest,
+import type {
+  QualityIntelligence as QI,
+  QualityIntelligenceInlineSource,
+  QualityIntelligenceStartRunRequest,
 } from "@oscharko-dev/keiko-contracts";
+import { compareStrings } from "@oscharko-dev/keiko-contracts/runtime/comparators";
+import * as QualityIntelligence from "@oscharko-dev/keiko-contracts/runtime/qualityIntelligence/index";
 import { redact, sha256Hex } from "@oscharko-dev/keiko-security";
 import {
   QualityIntelligenceGeneration,
@@ -279,7 +279,7 @@ const sanitiseLabel = (label: string): string => {
   // display label never leaks the filesystem layout (the basename is the useful display token).
   if (/^(?:\/|[A-Za-z]:[\\/]|\\\\)/u.test(cleaned)) {
     const segments = cleaned.split(/[\\/]/u).filter((s) => s.length > 0);
-    cleaned = (segments[segments.length - 1] ?? "").trim();
+    cleaned = (segments.at(-1) ?? "").trim();
   }
   const safe = cleaned.length === 0 ? "Untitled source" : cleaned;
   return safe.length > MAX_LABEL_CHARS ? `${safe.slice(0, MAX_LABEL_CHARS - 1)}…` : safe;

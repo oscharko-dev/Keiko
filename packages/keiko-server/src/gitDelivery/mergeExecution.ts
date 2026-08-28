@@ -10,22 +10,26 @@
 // deterministically against a fake.
 
 import type { WorkspaceInfo } from "@oscharko-dev/keiko-workspace";
+import type {
+  GitDeliveryApprovalRequirement,
+  GitDeliveryMergeStrategyHint,
+  GitDeliveryRepoPolicyPack,
+  GitDeliveryRiskClass,
+  GitMergeReadinessBlocker,
+  GitMergeReadinessSummary,
+  GitMergeStrategyPolicy,
+} from "@oscharko-dev/keiko-contracts";
 import {
   deriveEligibleMergeStrategies,
-  evaluateGitPolicy,
-  GIT_DELIVERY_POLICY_SCHEMA_VERSION,
-  GIT_DELIVERY_RISK_CLASS_SEVERITY,
   gitMergeBlockerActionHintFor,
   gitMergeReadinessFor,
   gitMergeRecommendationFor,
-  type GitDeliveryApprovalRequirement,
-  type GitDeliveryMergeStrategyHint,
-  type GitDeliveryRepoPolicyPack,
-  type GitDeliveryRiskClass,
-  type GitMergeReadinessBlocker,
-  type GitMergeReadinessSummary,
-  type GitMergeStrategyPolicy,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/git-merge";
+import {
+  evaluateGitPolicy,
+  GIT_DELIVERY_POLICY_SCHEMA_VERSION,
+} from "@oscharko-dev/keiko-contracts/runtime/git-delivery-policy";
+import { GIT_DELIVERY_RISK_CLASS_SEVERITY } from "@oscharko-dev/keiko-contracts/runtime/git-delivery";
 import {
   evaluateGitMergeEffectivePolicy,
   runGitMerge,

@@ -12,14 +12,14 @@ import { join } from "node:path";
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+import type { DebugActivationInput } from "@oscharko-dev/keiko-contracts";
+import { DEBUG_ACTIVATION_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts/runtime/debug-activation";
 import {
-  DEBUG_ACTIVATION_SCHEMA_VERSION,
   DEFAULT_DEBUG_PAYLOAD_LIMITS,
   buildDebugVariableTree,
   buildStackPage,
   parseDebugSessionStartRequest,
-  type DebugActivationInput,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/dap-debug";
 
 import { buildRedactor, createInMemoryUiStore, type UiHandlerDeps } from "../../index.js";
 import { createRunRegistry } from "../../runs.js";

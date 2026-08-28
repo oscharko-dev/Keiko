@@ -1,13 +1,15 @@
+import type {
+  EditorM7SettingId,
+  EditorM7SettingValue,
+  EditorM7SettingsMutationAction,
+  EditorM11SettingScope,
+  EditorM11SettingsMutationResult,
+} from "@oscharko-dev/keiko-contracts";
 import {
   EDITOR_M7_SETTING_REGISTRY,
   EDITOR_M7_SCHEMA_VERSION,
   parseEditorM7SettingPatch,
-  type EditorM7SettingId,
-  type EditorM7SettingValue,
-  type EditorM7SettingsMutationAction,
-  type EditorM11SettingScope,
-  type EditorM11SettingsMutationResult,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/editor-m7";
 
 import type { UiHandlerDeps } from "../../deps.js";
 import { readJsonObject, resolveRequestRoot, runFilesHandler } from "../../files.js";

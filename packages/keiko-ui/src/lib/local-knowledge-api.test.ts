@@ -1,10 +1,10 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { LOCAL_KNOWLEDGE_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts/runtime/local-knowledge";
 import {
-  LOCAL_KNOWLEDGE_SCHEMA_VERSION,
   resolveKnowledgePodModelUsePolicy,
   sealedLocalPodModelUsePolicy,
   standardPodModelUsePolicy,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/local-knowledge-model-use-policy";
 import type {
   CapsuleSetId,
   KnowledgeCapsuleId,

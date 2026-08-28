@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { UNVERIFIED_GATEWAY } from "@oscharko-dev/keiko-contracts";
+import { UNVERIFIED_GATEWAY } from "@oscharko-dev/keiko-contracts/runtime/gateway-verification";
 import {
   CONNECTED_CONTEXT_SCHEMA_VERSION,
   type CandidateFile,

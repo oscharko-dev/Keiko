@@ -4,17 +4,19 @@
 
 import { describe, expect, it } from "vitest";
 
+import type {
+  ContextBudget,
+  ContextEvictionPolicy,
+  ContextLaneId,
+  ContextProfile,
+} from "@oscharko-dev/keiko-contracts";
 import {
   CONTEXT_LANE_IDS,
   DEFAULT_CONTEXT_PROFILE,
   countContextTokens,
   deriveContextProfile,
   estimateTokens,
-  type ContextBudget,
-  type ContextEvictionPolicy,
-  type ContextLaneId,
-  type ContextProfile,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/context-engineering";
 
 import {
   allocateContext,

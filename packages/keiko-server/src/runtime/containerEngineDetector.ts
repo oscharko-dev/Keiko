@@ -21,16 +21,18 @@ import {
 } from "@oscharko-dev/keiko-tools";
 import { nodeSpawnFn } from "@oscharko-dev/keiko-tools/internal/exec";
 import type { WorkspaceInfo } from "@oscharko-dev/keiko-workspace";
+import type {
+  ContainerCapabilityResponse,
+  ContainerEngineId,
+  ContainerEngineState,
+  ContainerEngineStatus,
+  ContainerEngineUnavailableReason,
+} from "@oscharko-dev/keiko-contracts";
 import {
   CONTAINER_ENGINE_IDS,
   CONTAINER_RUNTIME_SCHEMA_VERSION,
   CONTAINER_TASK_RULES,
-  type ContainerCapabilityResponse,
-  type ContainerEngineId,
-  type ContainerEngineState,
-  type ContainerEngineStatus,
-  type ContainerEngineUnavailableReason,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/container-runtime";
 
 export const DEFAULT_CONTAINER_PROBE_DEADLINE_MS = 4_000 as const; // generous: real daemon round-trip
 export const SUPPORTED_DOCKER_MAJOR = 20 as const; // engine-version floor; below → "unsupported"

@@ -12,7 +12,7 @@ import type {
   EvidenceAtom,
   RetrievalQuery,
 } from "@oscharko-dev/keiko-contracts/connected-context";
-import { compareStrings } from "@oscharko-dev/keiko-contracts";
+import { compareStrings } from "@oscharko-dev/keiko-contracts/runtime/comparators";
 import { createHash } from "node:crypto";
 import {
   isValidScopePath,
@@ -557,7 +557,7 @@ function ancestorDirectoryPaths(scopePath: string): readonly string[] {
 }
 
 function parentDirectoryPath(scopePath: string): string {
-  const normalized = scopePath.split("\\").join("/");
+  const normalized = scopePath.replaceAll("\\", "/");
   const slash = normalized.lastIndexOf("/");
   return slash === -1 ? "" : normalized.slice(0, slash);
 }

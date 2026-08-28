@@ -16,7 +16,7 @@ import { join } from "node:path";
 import { Readable } from "node:stream";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { EDITOR_SESSION_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts";
+import { EDITOR_SESSION_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts/runtime/editor-session";
 import type { LocalSecretVault } from "@oscharko-dev/keiko-security/secret-vault";
 
 // KEIKO-0192 regression: create/rename/delete must forward workspace/didChangeWatchedFiles to

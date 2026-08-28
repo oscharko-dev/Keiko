@@ -17,17 +17,19 @@
 import { existsSync, readdirSync, realpathSync, rmSync } from "node:fs";
 import { join, relative } from "node:path";
 import { detectWorkspaceAt } from "@oscharko-dev/keiko-workspace";
+import type {
+  TaskWorkspaceLifecycleState,
+  WorkspaceCleanupRefusalReason,
+  WorkspaceEventType,
+  WorkspaceInstance,
+  WorkspaceLock,
+} from "@oscharko-dev/keiko-contracts";
 import {
   TASK_WORKSPACE_SCHEMA_VERSION,
   evaluateWorkspaceCleanupSafety,
   isCleanupEligibleLifecycleState,
   validateTaskWorkspaceTransition,
-  type TaskWorkspaceLifecycleState,
-  type WorkspaceCleanupRefusalReason,
-  type WorkspaceEventType,
-  type WorkspaceInstance,
-  type WorkspaceLock,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/task-workspace";
 import { deriveRepositoryId } from "./naming.js";
 import {
   assertManagedTargetContained,

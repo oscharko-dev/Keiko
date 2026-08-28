@@ -42,7 +42,7 @@
 //     which already gates archive/forget. So a faded memory still archives/forgets, but its
 //     provenance stays intact and every run is idempotent.
 
-import { clampUnit } from "@oscharko-dev/keiko-contracts";
+import { clampUnit } from "@oscharko-dev/keiko-contracts/runtime/numeric";
 import {
   decayHalfLifeMultiplierForType,
   MEMORY_FORGET_REASON_ARCHIVED_RETENTION,

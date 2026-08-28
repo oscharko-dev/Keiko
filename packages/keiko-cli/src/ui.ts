@@ -20,12 +20,9 @@ import { fileURLToPath } from "node:url";
 import { createRequire } from "node:module";
 import { spawn, type SpawnOptions, type ChildProcess } from "node:child_process";
 import { monitorEventLoopDelay } from "node:perf_hooks";
-import {
-  DEFAULT_UI_PORT,
-  KEIKO_PRODUCT_VERSION,
-  UI_HOST,
-  type UpdateInstallModeKind,
-} from "@oscharko-dev/keiko-contracts";
+import type { UpdateInstallModeKind } from "@oscharko-dev/keiko-contracts";
+import { DEFAULT_UI_PORT, UI_HOST } from "@oscharko-dev/keiko-contracts/runtime/bff-wire";
+import { KEIKO_PRODUCT_VERSION } from "@oscharko-dev/keiko-contracts/runtime/version";
 import type { ServerLogSink, UiHandlerDeps } from "@oscharko-dev/keiko-server";
 import type { EnvSource } from "@oscharko-dev/keiko-model-gateway";
 import { resolvePreferredInstallLayout } from "./install-layout.js";

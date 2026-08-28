@@ -6,12 +6,12 @@ import type {
   UpdateRecoverySnapshotEntry,
   UpdateStoreHealth,
 } from "@oscharko-dev/keiko-contracts";
+import { RELEASE_IMPACT_REMEDIATIONS } from "@oscharko-dev/keiko-contracts/runtime/release-impact";
 import {
-  RELEASE_IMPACT_REMEDIATIONS,
   UPDATE_HEALTH_LABELS,
   UPDATE_LOCAL_STATE_SCHEMA_VERSION,
   UPDATE_STATE_STORES,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/update-local-state";
 import { UPDATE_DIR, type StateScan } from "./update-local-state-scan.js";
 
 const SNAPSHOT_DIR = "snapshots";

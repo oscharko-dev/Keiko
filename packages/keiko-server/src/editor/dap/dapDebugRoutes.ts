@@ -1,5 +1,22 @@
 import { randomBytes } from "node:crypto";
 
+import type {
+  DebugEvent,
+  DebugParseResult,
+  DebugSession,
+  DebugSessionStatus,
+  DebugActivationSummary,
+  DebugVariableInput,
+  EvaluateWatchRequest,
+  ExceptionBreakpointFilter,
+  InstrumentationSnapshot,
+  SetVariableRequest,
+  ScopesRequest,
+  SourceBreakpoint,
+  StackTraceRequest,
+  VariablesRequest,
+  WatchExpression,
+} from "@oscharko-dev/keiko-contracts";
 import {
   DAP_DEBUG_CONTRACT_SCHEMA_VERSION,
   DEFAULT_DEBUG_PAYLOAD_LIMITS,
@@ -18,22 +35,7 @@ import {
   parseSetWatchesRequest,
   parseStackTraceRequest,
   parseVariablesRequest,
-  type DebugEvent,
-  type DebugParseResult,
-  type DebugSession,
-  type DebugSessionStatus,
-  type DebugActivationSummary,
-  type DebugVariableInput,
-  type EvaluateWatchRequest,
-  type ExceptionBreakpointFilter,
-  type InstrumentationSnapshot,
-  type SetVariableRequest,
-  type ScopesRequest,
-  type SourceBreakpoint,
-  type StackTraceRequest,
-  type VariablesRequest,
-  type WatchExpression,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/dap-debug";
 
 import type { UiHandlerDeps } from "../../deps.js";
 import {

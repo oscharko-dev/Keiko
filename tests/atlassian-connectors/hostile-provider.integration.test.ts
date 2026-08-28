@@ -25,7 +25,7 @@ import {
   type AtlassianHttpBodyResult,
   type AtlassianSyncFetchOutcome,
 } from "@oscharko-dev/keiko-connectors";
-import { DEFAULT_ATLASSIAN_SYNC_BOUNDS } from "@oscharko-dev/keiko-contracts";
+import { DEFAULT_ATLASSIAN_SYNC_BOUNDS } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import { startAtlassianSyncJob } from "../../packages/keiko-server/src/atlassian/syncService.js";
 import {
   CONNECTOR_BASE_URL,

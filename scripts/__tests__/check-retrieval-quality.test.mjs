@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { binaryNdcgAtK } from "@oscharko-dev/keiko-contracts";
+import { binaryNdcgAtK } from "@oscharko-dev/keiko-contracts/runtime/eval-metrics";
 import {
   evaluateQualityBudget,
   recallAtK,

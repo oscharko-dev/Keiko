@@ -29,7 +29,7 @@
 // exactly which detector(s) it is missing from.
 
 import { describe, expect, it } from "vitest";
-import { looksLikeSecretShape } from "@oscharko-dev/keiko-contracts";
+import { looksLikeSecretShape } from "@oscharko-dev/keiko-contracts/runtime/memory";
 import { containsCredentialShape, redact } from "@oscharko-dev/keiko-security";
 // Import from the leaf module (not workspace-persistence.ts) so this root-suite test does not
 // pull the desktop hook's WIN_TYPES/WIN_META imports into the root's stricter tsconfig.

@@ -12,15 +12,15 @@
 // the idempotency invariant at the DB layer (AC3).
 
 import type { DatabaseSync } from "node:sqlite";
-import {
-  validateWorkspaceInstance,
-  type TaskWorkspaceDriftMarker,
-  type TaskWorkspaceHealth,
-  type TaskWorkspaceLifecycleState,
-  type WorkspaceInstance,
-  type WorkspaceLock,
-  type WorkspaceRecoveryHint,
+import type {
+  TaskWorkspaceDriftMarker,
+  TaskWorkspaceHealth,
+  TaskWorkspaceLifecycleState,
+  WorkspaceInstance,
+  WorkspaceLock,
+  WorkspaceRecoveryHint,
 } from "@oscharko-dev/keiko-contracts";
+import { validateWorkspaceInstance } from "@oscharko-dev/keiko-contracts/runtime/task-workspace";
 
 export interface WorkspaceInstanceStore {
   readonly getById: (workspaceId: string) => WorkspaceInstance | undefined;

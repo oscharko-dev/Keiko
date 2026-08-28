@@ -34,7 +34,7 @@ import type {
   QualityIntelligenceUiDriftMetadata,
   TestQualityRubricDimension,
 } from "@oscharko-dev/keiko-contracts";
-import { deriveQualityIntelligenceTerminalDegradation } from "@oscharko-dev/keiko-contracts";
+import { deriveQualityIntelligenceTerminalDegradation } from "@oscharko-dev/keiko-contracts/runtime/qualityIntelligence/bffWire";
 import type { RouteContext, RouteResult } from "../routes.js";
 import type { UiHandlerDeps } from "../deps.js";
 import { loadRunReviewState, candidateReviewStateOf, runReviewStateOf } from "./reviewStore.js";

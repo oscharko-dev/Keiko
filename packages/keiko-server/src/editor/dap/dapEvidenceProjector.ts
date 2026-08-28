@@ -1,8 +1,5 @@
-import {
-  isDebugLifecycleEvent,
-  type DebugLifecycleEvent,
-  type EvidenceStore,
-} from "@oscharko-dev/keiko-contracts";
+import type { DebugLifecycleEvent, EvidenceStore } from "@oscharko-dev/keiko-contracts";
+import { isDebugLifecycleEvent } from "@oscharko-dev/keiko-contracts/runtime/debug/debug-lifecycle";
 import type { DebugLiveEvidenceProjection } from "./dapLifecycleLedger.js";
 
 export interface DapEvidenceProjector {

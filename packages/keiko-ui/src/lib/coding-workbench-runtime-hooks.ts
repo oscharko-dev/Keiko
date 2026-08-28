@@ -1,5 +1,5 @@
 import { useCallback, useRef, type Dispatch, type RefObject } from "react";
-import { UNVERIFIED_GATEWAY } from "@oscharko-dev/keiko-contracts";
+import { UNVERIFIED_GATEWAY } from "@oscharko-dev/keiko-contracts/runtime/gateway-verification";
 import type {
   CodingWorkbenchCodexAuthMethod,
   CodingWorkbenchMode,

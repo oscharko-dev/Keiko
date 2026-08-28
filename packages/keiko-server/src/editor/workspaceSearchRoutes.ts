@@ -1,23 +1,26 @@
+import type {
+  RetrievalQuery,
+  WorkspaceReplaceApplyConflict,
+  WorkspaceReplaceApplyFile,
+  WorkspaceReplaceApplyRequest,
+  WorkspaceReplaceApplyResponse,
+  WorkspaceReplacePreviewEdit,
+  WorkspaceReplacePreviewFileEdit,
+  WorkspaceReplacePreviewRequest,
+  WorkspaceReplacePreviewResponse,
+  WorkspaceSearchRequest,
+  WorkspaceSearchResponse,
+  WorkspaceSymbolSearchRequest,
+  WorkspaceSymbolSearchResponse,
+  WorkspaceSymbolSearchResult,
+} from "@oscharko-dev/keiko-contracts";
 import {
+  compileSafeWorkspaceSearchRegex,
   validateWorkspaceReplaceApplyRequest,
   validateWorkspaceReplacePreviewRequest,
   validateWorkspaceSearchRequest,
   validateWorkspaceSymbolSearchRequest,
-  type RetrievalQuery,
-  type WorkspaceReplaceApplyConflict,
-  type WorkspaceReplaceApplyFile,
-  type WorkspaceReplaceApplyRequest,
-  type WorkspaceReplaceApplyResponse,
-  type WorkspaceReplacePreviewEdit,
-  type WorkspaceReplacePreviewFileEdit,
-  type WorkspaceReplacePreviewRequest,
-  type WorkspaceReplacePreviewResponse,
-  type WorkspaceSearchRequest,
-  type WorkspaceSearchResponse,
-  type WorkspaceSymbolSearchRequest,
-  type WorkspaceSymbolSearchResponse,
-  type WorkspaceSymbolSearchResult,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/workspace-search";
 import {
   DEFAULT_SEARCH_LIMITS,
   FileTooLargeError,
@@ -167,7 +170,9 @@ function patternForRequest(
   request: WorkspaceSearchRequest | WorkspaceReplacePreviewRequest,
 ): string {
   const pattern = request.mode === "literal" ? escapeLiteralForRegex(request.query) : request.query;
-  return "wholeWord" in request && request.wholeWord === true ? `\\b(?:${pattern})\\b` : pattern;
+  return "wholeWord" in request && request.wholeWord === true
+    ? String.raw`\b(?:${pattern})\b`
+    : pattern;
 }
 
 function queryForRequest(
@@ -212,13 +217,8 @@ function searchRouteErrorResult(error: unknown): RouteResult | undefined {
   return undefined;
 }
 
-// Flags must match `regexSafetyIssue`'s validity check (`new RegExp(source)`, no flags) and
-// `buildRegexMatcher`'s actual matching flags (`repoSearchMatchers.ts`: "g" / "gi") exactly. A
-// stricter flag set here (e.g. "u") can make `new RegExp` throw on a pattern the shared validator
-// already approved as safe (for example an unescaped "{" that is valid Annex-B syntax without "u"
-// but a SyntaxError under it), crashing this route instead of previewing or cleanly rejecting.
 function buildMatchRegex(request: WorkspaceSearchRequest | WorkspaceReplacePreviewRequest): RegExp {
-  return new RegExp(patternForRequest(request), request.caseSensitive ? "g" : "gi");
+  return compileSafeWorkspaceSearchRegex(patternForRequest(request), request.caseSensitive);
 }
 
 async function snippetForMatch(

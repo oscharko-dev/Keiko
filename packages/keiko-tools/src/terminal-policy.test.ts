@@ -5,7 +5,7 @@
 // least one assertion in this file.
 
 import { describe, expect, it } from "vitest";
-import { GIT_DELIVERY_ACTION_KINDS } from "@oscharko-dev/keiko-contracts";
+import { GIT_DELIVERY_ACTION_KINDS } from "@oscharko-dev/keiko-contracts/runtime/git-delivery";
 import { TERMINAL_COMMAND_RULES, isTerminalCommandAllowed } from "./terminal-policy.js";
 
 describe("TERMINAL_COMMAND_RULES", () => {

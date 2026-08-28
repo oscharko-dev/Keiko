@@ -4,11 +4,8 @@ import type {
   LocalKnowledgeGroundedAnswerContextSummary,
   LocalKnowledgeIndexLifecycleSummary,
 } from "@oscharko-dev/keiko-contracts/bff-wire";
-import {
-  isKnowledgePodRetrievalActivitySafeText,
-  type KnowledgeCapsule,
-  type KnowledgeCapsuleId,
-} from "@oscharko-dev/keiko-contracts";
+import type { KnowledgeCapsule, KnowledgeCapsuleId } from "@oscharko-dev/keiko-contracts";
+import { isKnowledgePodRetrievalActivitySafeText } from "@oscharko-dev/keiko-contracts/runtime/local-knowledge-retrieval-activity";
 import { getCapsule, type KnowledgeStore } from "@oscharko-dev/keiko-local-knowledge";
 
 function safeLifecycleCapsuleId(capsuleId: KnowledgeCapsuleId): KnowledgeCapsuleId {

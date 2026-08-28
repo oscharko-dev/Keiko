@@ -4,19 +4,23 @@ import { fireEvent, render, screen, waitFor, within } from "@testing-library/rea
 import { axe } from "jest-axe";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import type {
+  EditorM11ProfileSettingsLayer,
+  EditorM11SettingsSnapshot,
+  EditorM7ReasonCode,
+  EditorM7SettingId,
+  EditorM7SettingValue,
+  WorkspaceProfileRef,
+} from "@oscharko-dev/keiko-contracts";
 import {
   EDITOR_M7_SCHEMA_VERSION,
   EDITOR_M7_SETTING_REGISTRY,
+} from "@oscharko-dev/keiko-contracts/runtime/editor-m7";
+import {
   EDITOR_M11_SETTINGS_SCHEMA_VERSION,
-  isWorkspaceProfileRef,
   resolveEditorM11Settings,
-  type EditorM11ProfileSettingsLayer,
-  type EditorM11SettingsSnapshot,
-  type EditorM7ReasonCode,
-  type EditorM7SettingId,
-  type EditorM7SettingValue,
-  type WorkspaceProfileRef,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/editor-m11-settings";
+import { isWorkspaceProfileRef } from "@oscharko-dev/keiko-contracts/runtime/workspace-contract-primitives";
 import { I18nProvider } from "@/lib/i18n";
 import type { EditorSettingsEditScope, EditorSettingsView } from "../cards/useEditorSettings";
 

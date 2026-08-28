@@ -52,24 +52,26 @@ import {
   type EvidenceStore,
 } from "@oscharko-dev/keiko-evidence";
 import { keikoApiKeySecretValues, redact } from "@oscharko-dev/keiko-security";
+import type {
+  CodingWorkbenchMode,
+  CodingWorkbenchModelSource,
+  CodingWorkbenchRuntimeEvidenceClass,
+  CodingWorkbenchRuntimeUnavailableReason,
+  DebugDeploymentPolicy,
+  DebugProductSupport,
+  DebugProvisioning,
+  ContextProfile,
+  GatewayUnsupportedDiscoveredModel,
+  GatewayVerificationState,
+  UpdatePreflightReport,
+  WorkspaceInstance,
+} from "@oscharko-dev/keiko-contracts";
 import {
   DEFAULT_CONTEXT_PROFILE,
-  isCodingWorkbenchMode,
-  UNVERIFIED_GATEWAY,
-  type CodingWorkbenchMode,
-  type CodingWorkbenchModelSource,
-  type CodingWorkbenchRuntimeEvidenceClass,
-  type CodingWorkbenchRuntimeUnavailableReason,
-  type DebugDeploymentPolicy,
-  type DebugProductSupport,
-  type DebugProvisioning,
   deriveContextProfileFromCapability,
-  type ContextProfile,
-  type GatewayUnsupportedDiscoveredModel,
-  type GatewayVerificationState,
-  type UpdatePreflightReport,
-  type WorkspaceInstance,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/context-engineering";
+import { isCodingWorkbenchMode } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench";
+import { UNVERIFIED_GATEWAY } from "@oscharko-dev/keiko-contracts/runtime/gateway-verification";
 import type { IncomingMessage } from "node:http";
 import type { DatabaseSync } from "node:sqlite";
 import { detectWorkspaceAt, isWithinWorkspace } from "@oscharko-dev/keiko-workspace";

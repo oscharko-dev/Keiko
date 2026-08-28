@@ -4,15 +4,15 @@ import { join } from "node:path";
 import type { AddressInfo } from "node:net";
 import type { Server } from "node:http";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import {
-  UPDATE_SESSION_SCHEMA_VERSION,
-  type UpdateRemediationActionRequest,
-  type UpdateRemediationStatusReport,
-  type UpdateInstallMode,
-  type UpdateSession,
-  type UpdateSessionStartRequest,
-  type UpdateSessionStatus,
+import type {
+  UpdateRemediationActionRequest,
+  UpdateRemediationStatusReport,
+  UpdateInstallMode,
+  UpdateSession,
+  UpdateSessionStartRequest,
+  UpdateSessionStatus,
 } from "@oscharko-dev/keiko-contracts";
+import { UPDATE_SESSION_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts/runtime/update-session";
 import { buildCspHeader } from "./csp.js";
 import { buildRedactor, createInMemoryUiStore, type UiHandlerDeps } from "./index.js";
 import { createRunRegistry } from "./runs.js";

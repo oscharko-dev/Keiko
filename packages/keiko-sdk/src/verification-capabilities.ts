@@ -1,4 +1,5 @@
-import { SANDBOX_BACKENDS, type SandboxBackend } from "@oscharko-dev/keiko-contracts";
+import type { SandboxBackend } from "@oscharko-dev/keiko-contracts";
+import { SANDBOX_BACKENDS } from "@oscharko-dev/keiko-contracts/runtime/tools";
 import {
   DEFAULT_VERIFICATION_LIMITS,
   nodeResourceMonitor,

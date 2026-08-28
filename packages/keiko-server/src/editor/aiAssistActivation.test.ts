@@ -1,14 +1,14 @@
 import { describe, expect, it } from "vitest";
 
-import {
-  resolveEditorM11Settings,
-  type EditorM7AiActivationStatus,
-  type EditorM7AiActivationSummary,
-  type EditorM7AiFeature,
-  type EditorM7SettingId,
-  type EditorM7SettingValue,
-  type EditorM11ResolvedSetting,
+import type {
+  EditorM7AiActivationStatus,
+  EditorM7AiActivationSummary,
+  EditorM7AiFeature,
+  EditorM7SettingId,
+  EditorM7SettingValue,
+  EditorM11ResolvedSetting,
 } from "@oscharko-dev/keiko-contracts";
+import { resolveEditorM11Settings } from "@oscharko-dev/keiko-contracts/runtime/editor-m11-settings";
 
 import {
   editorAiLegacyFlag,
