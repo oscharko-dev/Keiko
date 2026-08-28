@@ -389,11 +389,27 @@ click, and in what the published version carries afterwards:
 | Governed local publish — `npm run release:publish -- --tag latest`                                       | `NODE_AUTH_TOKEN`/`NPM_TOKEN` from the operator's own environment or local `.env` | none beyond starting the run                                                    | no                     | written by the script itself since 0.3.17 (issue #3252) |
 
 Prefer the Actions dispatch whenever the release owner is available to approve: it publishes with no
-standing credential and leaves a registry-verifiable attestation. The governed local publish exists
-for releases that must complete without an approval click; run it in the pinned Linux gates
-container (`docker/gates/docker-compose.yml`), because the editor bundle evidence the publish gates
-re-check is Linux-anchored and fails on macOS for platform reasons alone. When a version ships that
+standing credential and leaves a Sigstore publish attestation on the registry. The governed local
+publish exists for releases that must complete without an approval click. When a version ships that
 way, record that it carries no publish attestation — of the 0.3.x line only 0.3.8 does.
+
+The local publish must run on **Linux**: the publish gates re-check editor bundle evidence whose
+gzip sizes are Linux-anchored, and a macOS run fails it for platform reasons alone. Any Linux host
+with Node, `gh`, and the credentials below works directly. The `gates` container
+(`docker/gates/docker-compose.yml`) is the closest ready-made Linux userland, but it is a gate
+image, not a release image, so a publish from it needs three things added in the same
+`docker compose run` invocation:
+
+- **`gh`**, which the publisher shells out to for the owner allowlist, the GitHub Release, the
+  deployment record, and the alignment check. The image does not ship it and Debian does not package
+  it, so install a pinned `gh` release binary into a writable path (`$HOME/bin` — the container runs
+  as non-root and `/usr/local/bin` is read-only).
+- **Credentials and the allowlist, forwarded explicitly**: the Compose service declares none, so
+  pass `-e GH_TOKEN -e NPM_TOKEN -e KEIKO_RELEASE_OWNER_GITHUB_LOGINS` from the operator's shell.
+- **A container-local clone of the tag**, not the bind-mounted checkout: `git clone --depth 1
+--branch v<version>` into a path under `/tmp`, then `npm ci` and `npm run provision:usearch`
+  there. A checkout mounted from a git worktree carries a `.git` _file_ pointing at a main
+  repository that is not mounted, and every git-reading gate fails on it.
 
 The approval requirement on the `npm-publish` environment is a deliberate control (ADR-0170 D3):
 `actions: write` anywhere in this repository is otherwise enough to dispatch a production publish.

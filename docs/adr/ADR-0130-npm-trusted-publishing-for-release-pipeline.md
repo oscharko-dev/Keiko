@@ -114,11 +114,19 @@ that secret.
 **Provisioning status: configured and verified (2026-08-16).** The Trusted Publisher entry exists on
 npmjs.com for `@oscharko-dev/keiko` naming this repository, the basename `release.yml`, and the
 `npm-publish` environment. The v0.3.8 publish ran as a `workflow_dispatch` on tag `v0.3.8` with the
-`Publish to npm` job green and no registry token in the job, and npm holds a Sigstore publish
-attestation for `@oscharko-dev/keiko@0.3.8` — the only artifact that evidences the OIDC exchange
-from outside the run, and what closes the `ENEEDAUTH` failure of the 0.3.6 dispatch (issue #3088).
-That run passed through the environment, so the incomplete-provisioning fail-open window described
-above (repository and filename registered without the environment) is closed too.
+`Publish to npm` job green.
+
+What evidences the registry-auth path is that run's configuration, not an artifact: the workflow
+supplies no `NODE_AUTH_TOKEN`/`NPM_TOKEN` at workflow, job, or step scope (D5 pins all three), so
+OIDC was the only credential the npm CLI could present — and the publish succeeded where the 0.3.6
+dispatch had failed with `ENEEDAUTH` (issue #3088). The Sigstore publish attestation npm holds for
+`@oscharko-dev/keiko@0.3.8` is **not** that proof and must not be cited as it: `--provenance` is
+added whenever GitHub's OIDC variables are present (`provenancePublishArgs()` in
+`scripts/lib/npm-publish-preflight.mjs`), independent of how the CLI authenticated, so a
+token-authenticated Actions publish would carry the same attestation. It evidences workflow
+provenance — which repository, workflow, and run produced the tarball — and nothing about the
+credential. The run did pass through the environment, so the incomplete-provisioning fail-open
+window described above (repository and filename registered without the environment) is closed too.
 
 **Secret retirement: done (2026-08-28).** The `NPM_TOKEN` GitHub Actions secret was deleted on the
 release owner's decision once the verified trusted publish above made it redundant; no workflow read
@@ -131,10 +139,12 @@ entirely remains available to the release owner on npmjs.com.
 
 The publisher entry names three identifiers this repository owns — the workflow basename
 `release.yml`, the `npm-publish` environment, and a GitHub-hosted runner carrying `id-token: write`
-— plus one negative condition: the publish step must supply no registry token, because an unset
-`NODE_AUTH_TOKEN`/`NPM_TOKEN` is exactly what makes the npm CLI attempt the OIDC exchange (D1). npm
-never re-validates a saved entry, so each of those drifts silently: CI stays green, and
-authentication breaks only at the registry, in the middle of a release.
+— plus one negative condition: no registry token may reach the publish step, because an unset
+`NODE_AUTH_TOKEN`/`NPM_TOKEN` is exactly what makes the npm CLI attempt the OIDC exchange (D1). The
+negative condition spans three scopes, not one: a workflow-level or job-level `env` entry is
+inherited by the step just as surely as a step-level one, from a secret of any name. npm never
+re-validates a saved entry, so each of these drifts silently: CI stays green, and authentication
+breaks only at the registry, in the middle of a release.
 
 `scripts/__tests__/release-trusted-publishing-binding.test.mjs` pins all four, plus the two
 structural changes that would break the OIDC claim without touching any of them — a `workflow_call`

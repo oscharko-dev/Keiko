@@ -58,14 +58,21 @@ describe("npm trusted publishing binding", () => {
     expect(Array.isArray(publishJob.steps)).toBe(true);
   });
 
-  it("supplies no registry token to the publish step", () => {
+  it("lets no registry token reach the publish step from any env scope", () => {
     // ADR-0130 D1: an unset NODE_AUTH_TOKEN/NPM_TOKEN is precisely what makes the npm CLI attempt
     // the OIDC exchange instead of writing an `_authToken` line, so a reintroduced token env var
-    // silently returns the pipeline to classic-token publishing.
+    // silently returns the pipeline to classic-token publishing. A workflow-level or job-level
+    // entry is inherited by the step exactly like a step-level one — and it can be fed by a secret
+    // of any name, which the `secrets.NPM_TOKEN` scan below would never see (Codex finding on
+    // #3299) — so all three scopes are checked, not just the step's own block.
     expect(publishStep).toBeDefined();
     expect(publishStep.run).toContain("npm run release:publish");
-    expect(Object.keys(publishStep.env)).not.toContain("NODE_AUTH_TOKEN");
-    expect(Object.keys(publishStep.env)).not.toContain("NPM_TOKEN");
+
+    const envScopes = [workflow.env, publishJob.env, ...publishJob.steps.map((step) => step.env)];
+    const declared = envScopes.flatMap((scope) => Object.keys(scope ?? {}));
+
+    expect(declared).not.toContain("NODE_AUTH_TOKEN");
+    expect(declared).not.toContain("NPM_TOKEN");
   });
 
   it("leaves the classic registry secret unconsumed by every workflow", () => {
