@@ -337,21 +337,46 @@ describe("tracked Next.js output hygiene", () => {
   // Fail closed on a range the gate cannot read. `npm ls` cannot see this pair's mismatch at all,
   // so skipping an unparseable range would silently remove the only guard it has — which is how a
   // dot-less "^9" against an "^10.8.1" engine reproduced defect 1 with the gate reporting PASS.
-  it.each(["^9", "~9", "9", "*", "latest", ">=9 <10.0.0"])(
-    "rejects a rule-set range the gate cannot compare (%s)",
-    (followerRange) => {
+  // Both halves of the guard are falsified: a range with no dot at all, a range whose digits are
+  // followed by something else before the dot, and the same on the engine side — a mutation that
+  // dropped either undefined-check would otherwise survive.
+  it.each([
+    ["^10.8.1", "^9"],
+    ["^10.8.1", ">=9 <10.0.0"],
+    ["^10", "^10.0.1"],
+  ])(
+    "rejects a lint pair the gate cannot compare (eslint %s, @eslint/js %s)",
+    (engine, ruleSet) => {
       const root = makeRepository();
       writeJson(resolve(root, "package.json"), {
         engines: { node: ">=22" },
-        devDependencies: { eslint: "^10.8.1", "@eslint/js": followerRange },
+        devDependencies: { eslint: engine, "@eslint/js": ruleSet },
       });
       trackAll(root);
 
       expect(checkDependencyHygiene(root).problems).toEqual([
-        `<root>: cannot compare majors for "eslint": "^10.8.1" and "@eslint/js": "${followerRange}" — this pair must stay on one major, so declare both as plain ranges (for example "^10.8.1") that the gate can read.`,
+        `<root>: cannot compare majors for "eslint": "${engine}" and "@eslint/js": "${ruleSet}" — this pair must stay on one major, so declare both as plain ranges (for example "^10.8.1") that the gate can read.`,
       ]);
     },
   );
+
+  // A second collector, and the one whose untrusted value is a version range rather than a
+  // directory name: the sanitisation has to hold on every diagnostic, not just the one it was
+  // first written for.
+  it("strips control characters from a reported rule-set range", () => {
+    const root = makeRepository();
+    writeJson(resolve(root, "package.json"), {
+      engines: { node: ">=22" },
+      devDependencies: { eslint: "^10.8.1", "@eslint/js": "^9.39.5\u001b[31m\u0007" },
+    });
+    trackAll(root);
+
+    const { problems } = checkDependencyHygiene(root);
+
+    expect(problems).toHaveLength(1);
+    expect(/[^\P{Cc}\r\n\t]/u.test(problems[0] ?? "")).toBe(false);
+    expect(problems[0]).toContain("is on major 9 while");
+  });
 
   it("accepts a rule-set package on the engine's major, and stays quiet when either is absent", () => {
     const paired = makeRepository();

@@ -9,7 +9,7 @@ single source of truth for which ESLint major this repository runs and why.
 - `packages/keiko-ui` uses the reviewed `next` and `eslint-config-next` baseline, held exactly aligned with each other (`16.2.12` when #862 was verified; `16.3.1` since PR #3290). The consolidated dependency review verified the aligned refresh with the UI lint, test, build, and Chromium smoke gates.
 - Issue #2293 deliberately retained React `18.3.1`; the subsequent, independently verified React 19
   migration is recorded in [React 19 UI and editor migration](react19-ui-editor-migration.md).
-- The root package and UI workspace run ESLint 10 on one installed binary. The ESLint 9 lane held here until 2026-08-27 and the earlier rejections of ESLint 10.7.0 and 10.8.0 (recorded in [the #2293 decision matrix](release/2293-dependency-update-decision-matrix.md)) were superseded by the evidence under [ESLint 10 adoption](#eslint-10-adoption-issue-2777-2026-08-28).
+- The root package and UI workspace run ESLint 10 on one installed binary. The ESLint 9 lane held here until 2026-08-27; the 10.7.0 rejection recorded in [the #2293 decision matrix](release/2293-dependency-update-decision-matrix.md), and the 10.8.0 rejection this document itself carried before this revision, were both superseded by the evidence under [ESLint 10 adoption](#eslint-10-adoption-issue-2777-2026-08-28).
 - The lint entry point is now `eslint . --max-warnings=0`; `next lint` is no longer used.
 - `packages/keiko-ui/.eslintrc.json` was replaced by `packages/keiko-ui/eslint.config.mjs`, based on the ESLint-10-compatible subset of `eslint-config-next/core-web-vitals` plus the strict flat `jsx-a11y` rules.
 - `eslint-config-next` still bundles React, import, and JSX-a11y plugins whose published peer ranges do not name ESLint 10 (unchanged in `16.3.1`); its parser layer, `typescript-eslint`, does accept ESLint 10 (`^8.57.0 || ^9.0.0 || ^10.0.0`) and is not part of the constraint. The UI config reuses Next's own `@next/next`, React Hooks, TypeScript, and JSX-a11y plugin objects, but filters out the React/import rule layer and avoids Next's Babel parser shim.
@@ -74,10 +74,12 @@ Both halves of that were measured rather than assumed, and they surface at diffe
 
 - On an already-installed tree, editing the range to one the installed ESLint does not satisfy
   moves `npm ls eslint` to exit `1` — `check:eslint-lane` goes red.
-- On a fresh install it never gets that far. npm refuses outright:
-  `npm error peer overridden eslint@"^9.0.0" (was "^3 || … || ^9.7") from eslint-plugin-react`,
-  and `npm install` / `npm ci` exit non-zero. Notably npm does **not** quietly nest a second ESLint
-  to satisfy the override, so this cannot reopen the duplicate-install defect.
+- On a fresh install it never gets that far: npm refuses outright with `ERESOLVE`, naming the
+  overridden peer, the override's range, and the plugin it came from, and `npm install` / `npm ci`
+  exit non-zero. (Measured in a throwaway fixture whose override pinned a range the installed
+  ESLint did not satisfy — the quoted range there is the fixture's, not this repository's
+  `^10.0.0`.) Notably npm does **not** quietly nest a second ESLint to satisfy the override, so
+  this cannot reopen the duplicate-install defect.
 
 So an ESLint 11 bump cannot inherit this acceptance by default: it fails at dependency resolution,
 naming the override and the plugin that need re-reviewing.
@@ -113,12 +115,11 @@ That acceptance is bounded rather than open-ended:
 "@eslint/js": "^9"}` — defect 1 exactly — passed it. An unreadable range is therefore itself the
   finding.
 
-  The installed-duplicate check is not redundant with the manifest one either, and it is not
-  something `npm ls` could do. `npm ls` raises a problem only for a missing, invalid, or extraneous
-  edge (npm's `lib/commands/ls.js`, `getProblems`); a nested copy that satisfies its own declared
-  range is a valid node, so `npm ls eslint` prints both copies and exits `0`. Reproduced against the
-  exact PR #3290 tree: `npm ls eslint` → `0`, `check:dependency-hygiene` → `1`. The `npm ls eslint`
-  exit `1` seen on `dev` came entirely from the peer-invalid plugin edges, never from the duplicate.
+  The installed-duplicate check is not redundant with the manifest one, and `npm ls` cannot stand
+  in for it: a nested copy that satisfies its own workspace's range is a valid node, so
+  `npm ls eslint` prints both and exits `0`. Reproduced against the exact PR #3290 tree —
+  `npm ls eslint` → `0`, `check:dependency-hygiene` → `1`. The mechanism is documented once, beside
+  the code it constrains, in `collectDuplicateInstallProblems`.
 
 When `eslint-plugin-react`, `eslint-plugin-jsx-a11y`, or `eslint-plugin-import` publishes an
 ESLint 10 peer range, delete the matching override; `check:eslint-lane` stays green either way, so

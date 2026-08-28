@@ -4,9 +4,10 @@
 // This deterministic, offline gate fails closed on dependency placement, missing workspace engine
 // floors, a workspace lint toolchain that has drifted off the root's single lane, undeclared script
 // imports, and tracked generated Next.js output. It reports metadata only: package names, policy
-// descriptions, counts, and control-character-safe values — never file bodies. Every dynamic
-// value reaching a diagnostic goes through safeDiagnostic, because workspace directory names and
-// version ranges are file-supplied and would otherwise carry control sequences into CI output.
+// descriptions, counts, and control-character-safe values — never file bodies. File-supplied
+// values (workspace directory names, version ranges, script and tracked file names) reach a
+// diagnostic only through safeDiagnostic or JSON.stringify, both of which render control sequences
+// inert: unescaped, one could repaint or hide the CI output around the finding.
 
 import { spawnSync } from "node:child_process";
 import { existsSync, readdirSync, readFileSync, realpathSync } from "node:fs";
@@ -33,7 +34,7 @@ const BARE_PACKAGE = /^(@[a-z0-9][\w.-]*\/)?[a-z0-9][\w.-]*(\/[\w.-]+)*$/i;
 // copy that satisfies its own workspace's declared range is a valid node, so `npm ls eslint` prints
 // both and exits 0. check:eslint-lane therefore answers peer-edge validity and nothing else — the
 // duplicate is only ever caught here.
-const SINGLE_LANE_PACKAGES = ["eslint"];
+const SHARED_LINT_ENGINE = "eslint";
 // Issue #2777, the third defect PR #3290 left behind and the one that actually silenced rules: it
 // moved `eslint` to a new major and left `@eslint/js` a major behind, so the ESLint 10 engine ran
 // ESLint 9's `recommended` set and three newly-default rules never fired. Nothing caught it and
@@ -42,7 +43,7 @@ const SINGLE_LANE_PACKAGES = ["eslint"];
 // `@eslint/js` ships the rule set `eslint` runs; their majors move together, or the gate fails —
 // including when a range is written in a form the gate cannot compare, since staying quiet there
 // would remove the only guard this pair has.
-const MAJOR_LOCKED_PAIRS = [["eslint", "@eslint/js"]];
+const LINT_RULE_SET = "@eslint/js";
 const DECIMAL_DIGITS = new Set("0123456789");
 const GOVERNED_GIT_EXECUTABLE_PATHS = [
   "/usr/bin/git",
@@ -108,18 +109,16 @@ function declaredRange(pkg, dependency) {
 
 function collectSingleLaneProblems(manifests, rootPackage) {
   const problems = [];
-  for (const dependency of SINGLE_LANE_PACKAGES) {
-    const rootRange = declaredRange(rootPackage, dependency);
-    for (const { label, pkg } of manifests) {
-      if (label === "<root>") continue;
-      const range = declaredRange(pkg, dependency);
-      if (range === undefined || range === rootRange) continue;
-      problems.push(
-        rootRange === undefined
-          ? `${safeDiagnostic(label)}: declares "${safeDiagnostic(dependency)}": "${safeDiagnostic(range)}" while the root declares none — the workspace executes the root's installed ${safeDiagnostic(dependency)}, so declare it at the root instead.`
-          : `${safeDiagnostic(label)}: declares "${safeDiagnostic(dependency)}": "${safeDiagnostic(range)}" but the root declares "${safeDiagnostic(rootRange)}" — the workspace executes the root's installed ${safeDiagnostic(dependency)}, so a diverging range installs a second copy that never runs.`,
-      );
-    }
+  const rootRange = declaredRange(rootPackage, SHARED_LINT_ENGINE);
+  for (const { label, pkg } of manifests) {
+    if (label === "<root>") continue;
+    const range = declaredRange(pkg, SHARED_LINT_ENGINE);
+    if (range === undefined || range === rootRange) continue;
+    problems.push(
+      rootRange === undefined
+        ? `${safeDiagnostic(label)}: declares "${SHARED_LINT_ENGINE}": "${safeDiagnostic(range)}" while the root declares none — the workspace executes the root's installed ${SHARED_LINT_ENGINE}, so declare it at the root instead.`
+        : `${safeDiagnostic(label)}: declares "${SHARED_LINT_ENGINE}": "${safeDiagnostic(range)}" but the root declares "${safeDiagnostic(rootRange)}" — the workspace executes the root's installed ${SHARED_LINT_ENGINE}, so a diverging range installs a second copy that never runs.`,
+    );
   }
   return problems;
 }
@@ -138,42 +137,36 @@ function declaredMajor(range) {
 }
 
 function collectMajorLockProblems(rootPackage) {
-  const problems = [];
-  for (const [anchor, follower] of MAJOR_LOCKED_PAIRS) {
-    const anchorRange = declaredRange(rootPackage, anchor);
-    const followerRange = declaredRange(rootPackage, follower);
-    if (anchorRange === undefined || followerRange === undefined) continue;
-    const anchorMajor = declaredMajor(anchorRange);
-    const followerMajor = declaredMajor(followerRange);
-    if (anchorMajor === undefined || followerMajor === undefined) {
-      // Fail closed. Skipping an unreadable range would disable the only guard this pair has —
-      // `npm ls` cannot see the mismatch at all — so a range the gate cannot compare is itself the
-      // finding, not a reason to stay quiet.
-      problems.push(
-        `<root>: cannot compare majors for "${safeDiagnostic(anchor)}": "${safeDiagnostic(anchorRange)}" and "${safeDiagnostic(follower)}": "${safeDiagnostic(followerRange)}" — this pair must stay on one major, so declare both as plain ranges (for example "^10.8.1") that the gate can read.`,
-      );
-      continue;
-    }
-    if (anchorMajor === followerMajor) continue;
-    problems.push(
-      `<root>: "${safeDiagnostic(follower)}": "${safeDiagnostic(followerRange)}" is on major ${followerMajor} while "${safeDiagnostic(anchor)}": "${safeDiagnostic(anchorRange)}" is on major ${anchorMajor} — ${safeDiagnostic(follower)} ships the rule set ${safeDiagnostic(anchor)} runs, so a major apart silently changes which rules are enabled.`,
-    );
+  const engineRange = declaredRange(rootPackage, SHARED_LINT_ENGINE);
+  const ruleSetRange = declaredRange(rootPackage, LINT_RULE_SET);
+  if (engineRange === undefined || ruleSetRange === undefined) return [];
+  const engineMajor = declaredMajor(engineRange);
+  const ruleSetMajor = declaredMajor(ruleSetRange);
+  if (engineMajor === undefined || ruleSetMajor === undefined) {
+    // Fail closed. Skipping an unreadable range would disable the only guard this pair has —
+    // `npm ls` cannot see the mismatch at all — so a range the gate cannot compare is itself the
+    // finding, not a reason to stay quiet.
+    return [
+      `<root>: cannot compare majors for "${SHARED_LINT_ENGINE}": "${safeDiagnostic(engineRange)}" and "${LINT_RULE_SET}": "${safeDiagnostic(ruleSetRange)}" — this pair must stay on one major, so declare both as plain ranges (for example "^10.8.1") that the gate can read.`,
+    ];
   }
-  return problems;
+  if (engineMajor === ruleSetMajor) return [];
+  return [
+    `<root>: "${LINT_RULE_SET}": "${safeDiagnostic(ruleSetRange)}" is on major ${ruleSetMajor} while "${SHARED_LINT_ENGINE}": "${safeDiagnostic(engineRange)}" is on major ${engineMajor} — ${LINT_RULE_SET} ships the rule set ${SHARED_LINT_ENGINE} runs, so a major apart silently changes which rules are enabled.`,
+  ];
 }
 
 function collectDuplicateInstallProblems(repoRoot, manifests) {
+  // No root copy means nothing is installed yet; the manifest rule above still applies.
+  if (!existsSync(join(repoRoot, "node_modules", SHARED_LINT_ENGINE))) return [];
   const problems = [];
-  for (const dependency of SINGLE_LANE_PACKAGES) {
-    // No root copy means nothing is installed yet; the manifest rule above still applies.
-    if (!existsSync(join(repoRoot, "node_modules", dependency))) continue;
-    for (const { label } of manifests) {
-      if (label === "<root>") continue;
-      if (!existsSync(join(repoRoot, "packages", label, "node_modules", dependency))) continue;
-      problems.push(
-        `${safeDiagnostic(label)}: a second "${safeDiagnostic(dependency)}" is installed at packages/${safeDiagnostic(label)}/node_modules/${safeDiagnostic(dependency)} — the workspace executes the root's copy, so this one never runs and the two can drift apart.`,
-      );
-    }
+  for (const { label } of manifests) {
+    if (label === "<root>") continue;
+    if (!existsSync(join(repoRoot, "packages", label, "node_modules", SHARED_LINT_ENGINE)))
+      continue;
+    problems.push(
+      `${safeDiagnostic(label)}: a second "${SHARED_LINT_ENGINE}" is installed at packages/${safeDiagnostic(label)}/node_modules/${SHARED_LINT_ENGINE} — the workspace executes the root's copy, so this one never runs and the two can drift apart.`,
+    );
   }
   return problems;
 }
