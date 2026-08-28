@@ -768,6 +768,10 @@ export const DE_MESSAGES = {
   "memoria.approveEditedProposal": "Bearbeiteten Vorschlag akzeptieren",
   "memoria.correctionPredecessor": "Zu korrigierende Erinnerung",
   "memoria.selectCorrectionPredecessor": "Zu ersetzende Erinnerung auswählen",
+  "memoria.correctionPredecessorMissing":
+    "Es gibt keine geeignete Vorgänger-Erinnerung mehr. Lehne diesen Vorschlag ab und reiche ihn als eigenständige Erinnerung neu ein oder stelle vor der Annahme eine akzeptierte Erinnerung wieder her.",
+  "memoria.correctionPredecessorInvalid":
+    "Die Vorgänger der Korrektur konnten nicht verifiziert werden. Versuche es vor der Annahme erneut.",
   "memoria.reject": "Ablehnen",
   "memoria.rejecting": "Lehne ab…",
   "memoria.archiveConflict": "Konflikt archivieren",

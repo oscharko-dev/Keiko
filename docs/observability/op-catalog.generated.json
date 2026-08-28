@@ -851,13 +851,13 @@
     {
       "op": "git.delivery.authority.admitted",
       "category": "security",
-      "site": "packages/keiko-server/src/gitDelivery/requestPreparation.ts:94",
+      "site": "packages/keiko-server/src/gitDelivery/requestPreparation.ts:140",
       "package": "keiko-server"
     },
     {
       "op": "git.delivery.authority.denied",
       "category": "security",
-      "site": "packages/keiko-server/src/gitDelivery/requestPreparation.ts:64",
+      "site": "packages/keiko-server/src/gitDelivery/requestPreparation.ts:106",
       "package": "keiko-server"
     },
     {

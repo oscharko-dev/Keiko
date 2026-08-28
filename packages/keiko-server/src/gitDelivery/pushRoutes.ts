@@ -40,7 +40,8 @@ import {
   scanUnsafeFormatChars,
 } from "./requestGuards.js";
 import {
-  gitDeliveryAuthorityDenial,
+  gitDeliveryAuthorityContinuityGuard,
+  gitDeliveryAuthorityGate,
   prepareGitDeliveryRequest,
   type GitDeliveryRequestErrors,
 } from "./requestPreparation.js";
@@ -213,24 +214,34 @@ export const createHandlePushExecute = (
     if (!prepared.ok) return prepared.result;
     const { workspace } = prepared;
     const { projectId, command, approval } = prepared.value;
-    const authorityDenial = gitDeliveryAuthorityDenial(ctx, deps, projectId, workspace, "push", {
+    const target = {
       headBranchName: command.sourceBranchName,
       remoteBranchName: command.remoteBranchName,
-    });
-    if (authorityDenial !== undefined) return authorityDenial;
+    };
+    const authority = gitDeliveryAuthorityGate(ctx, deps, projectId, workspace, "push", target);
+    if (!authority.allowed) return authority.result;
     const verifiedApproval = resolveGitDeliveryApprovalRequirement(approval, {
       store: seams.approvalStore,
-      binding: { projectId, operation: "push", command },
+      binding: {
+        projectId,
+        operation: "push",
+        command,
+        runId: authority.runId,
+        envelopeDigest: authority.envelopeDigest,
+      },
       nowMs: (seams.now ?? Date.now)(),
     });
     if (verifiedApproval === undefined) return errResult(400, "GIT_DELIVERY_PUSH_BAD_REQUEST");
-    const beforeRemoteDispatch = (): boolean => {
-      const denial = gitDeliveryAuthorityDenial(ctx, deps, projectId, workspace, "push", {
-        headBranchName: command.sourceBranchName,
-        remoteBranchName: command.remoteBranchName,
-      });
-      return denial === undefined && (seams.beforeRemoteDispatch?.() ?? true);
-    };
+    const beforeRemoteDispatch = gitDeliveryAuthorityContinuityGuard({
+      ctx,
+      deps,
+      projectId,
+      workspace,
+      operation: "push",
+      target,
+      admitted: authority,
+      next: seams.beforeRemoteDispatch,
+    });
     let result;
     try {
       result = await executeGovernedPublish(command, verifiedApproval, workspace, deps, {

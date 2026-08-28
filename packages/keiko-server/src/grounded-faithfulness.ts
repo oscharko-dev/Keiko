@@ -591,9 +591,10 @@ function appendNumericCitedClaim(
   claims: NumericCitedClaim[],
   claimText: string,
   markers: readonly number[],
+  mergeWithPrevious: boolean,
 ): void {
   const previous = claims.at(-1);
-  if (previous?.claimText === claimText) {
+  if (mergeWithPrevious && previous?.claimText === claimText) {
     claims[claims.length - 1] = {
       claimText,
       markers: [...new Set([...previous.markers, ...markers])],
@@ -613,7 +614,7 @@ export function segmentNumericCitedClaims(answerText: string): readonly NumericC
     if (markers.length > 0) {
       const supportedClaimText = claimText.length > 0 ? claimText : precedingClaimText;
       if (supportedClaimText !== undefined) {
-        appendNumericCitedClaim(claims, supportedClaimText, markers);
+        appendNumericCitedClaim(claims, supportedClaimText, markers, claimText.length === 0);
       }
     }
     if (claimText.length > 0) precedingClaimText = claimText;

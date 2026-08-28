@@ -352,6 +352,42 @@ describe("pr execute — governed create + no-bypass (AC1/AC4/AC5)", () => {
     expect(cap.raw()).not.toContain("Implements the #477");
   });
 
+  it("aborts PR dispatch when another allowed authority replaces the admitted run", async () => {
+    const adapter = recordingPrAdapter();
+    const baseAuthority = permittedGitDeliveryAuthority(
+      () => projectId,
+      () => projectId,
+      "autonomous-delivery",
+      {
+        headRef: "claude/issue-477-github-pr-command-center",
+        baseRef: "dev",
+        allowDetachedHead: false,
+        allowedPrefixes: ["claude/"],
+      },
+    );
+    let reads = 0;
+    const authority = {
+      current: (nowIso: string): ReturnType<typeof baseAuthority.current> => {
+        reads += 1;
+        const active = baseAuthority.current(nowIso);
+        if (active === undefined || reads === 1) return active;
+        return { ...active, runId: "replacement-run", envelopeDigest: "d".repeat(64) };
+      },
+    };
+    const handler = createHandlePrExecute({
+      execution: seams({ prAdapterFactory: () => adapter.adapter }),
+    });
+
+    const res = await handler(
+      ctxFor(EXECUTE, createBody()),
+      deps({ gitDeliveryAuthority: authority }),
+    );
+
+    expect((res.body as GitDeliveryPrExecuteResponseBody).status).toBe("failed");
+    expect(reads).toBe(2);
+    expect(adapter.creates()).toBe(0);
+  });
+
   it("denies a base outside the active authority envelope before execution", async () => {
     const adapter = recordingPrAdapter();
     const cap = capturingEvidenceStore();

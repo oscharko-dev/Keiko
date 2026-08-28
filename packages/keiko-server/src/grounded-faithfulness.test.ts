@@ -502,6 +502,30 @@ describe("numeric citation entailment", () => {
     expect(calls).toBe(1);
   });
 
+  it("judges repeated sentence text with different markers as separate claims", async () => {
+    const judged: EntailmentJudgeInput[] = [];
+    const result = await reconcileNumericClaimEntailment(
+      "Retention is 30 days [1]. Retention is 30 days [2].",
+      [
+        { marker: 1, excerptText: "Retention is ten years. [[CONTRADICTS]]" },
+        { marker: 2, excerptText: "Retention is 30 days." },
+      ],
+      {
+        judge: (input): Promise<EntailmentVerdict> => {
+          judged.push(input);
+          return scriptedJudge().judge(input);
+        },
+      },
+    );
+
+    expect(judged).toHaveLength(2);
+    expect(judged.map((input) => input.excerptText)).toEqual([
+      "Retention is ten years. [[CONTRADICTS]]",
+      "Retention is 30 days.",
+    ]);
+    expect(result).toMatchObject({ judgedClaims: 2, unentailed: [{ citedPaths: ["[1]"] }] });
+  });
+
   it("keeps a numeric citation with mixed path citations in one judgeable claim", () => {
     expect(
       segmentNumericCitedClaims(

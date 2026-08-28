@@ -750,6 +750,10 @@ export const EN_MESSAGES = {
   "memoria.approveEditedProposal": "Approve edited proposal",
   "memoria.correctionPredecessor": "Memory being corrected",
   "memoria.selectCorrectionPredecessor": "Select the memory to supersede",
+  "memoria.correctionPredecessorMissing":
+    "No eligible predecessor remains. Reject and resubmit this as a standalone memory, or restore an accepted memory before approving.",
+  "memoria.correctionPredecessorInvalid":
+    "Correction predecessors could not be verified. Retry before approving.",
   "memoria.reject": "Reject",
   "memoria.rejecting": "Rejecting...",
   "memoria.archiveConflict": "Archive conflict",

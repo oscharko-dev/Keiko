@@ -44,6 +44,7 @@ export interface GitDeliverySyncSeams {
   readonly now?: (() => number) | undefined;
   readonly maxBytes?: number | undefined;
   readonly timeoutMs?: number | undefined;
+  readonly beforeRemoteDispatch?: (() => boolean) | undefined;
 }
 
 interface NormalizedSyncSeams {
@@ -306,6 +307,17 @@ function blockedResultFor(preview: GitSyncPreview): SyncExecuteResult {
   };
 }
 
+function authorityStoppedResultFor(preview: GitSyncPreview): SyncExecuteResult {
+  return {
+    outcome: "git-error",
+    branch: preview.branch,
+    upstream: preview.upstream,
+    ahead: preview.ahead,
+    behind: preview.behind,
+    truncated: false,
+  };
+}
+
 // Re-reads branch/upstream/ahead/behind after a settled op so the response reflects the post-sync
 // position. Best-effort: any failure tolerates and omits the counts.
 async function readPostState(
@@ -348,6 +360,7 @@ export async function runSyncExecute(
   const normalized = normalizeSeams(seams);
   const preview = preflight ?? (await buildSyncPreview(operation, repoRoot, remote, seams));
   if (!preview.executable) return blockedResultFor(preview);
+  if (!(seams.beforeRemoteDispatch?.() ?? true)) return authorityStoppedResultFor(preview);
   // ONLY the network fetch/pull uses the credential-capable runner; the post-state re-read below
   // stays on the hardened local read runner.
   const result = await runNetworkGit(repoRoot, normalized, syncArgs(operation, remote));

@@ -17,6 +17,7 @@ import {
   bindVerifiedTaskWorkspace,
   type VerifiedTaskWorkspaceBindFailure,
 } from "@/lib/verified-task-workspace-binding";
+import { reportClientDiagnostic } from "@/lib/client-diagnostics";
 import {
   useCodingWorkbenchTranslate,
   type CodingWorkbenchTranslate,
@@ -48,7 +49,7 @@ export interface CodingWorkbenchSetupProps {
   readonly selectedRoot?: string | undefined;
   // ActiveWorkspaceApi.refresh from the shared context — re-reads the active binding after the
   // workbench-initiated bind so every bound surface flips to the new workspace atomically.
-  readonly refreshWorkspace: (root: string) => Promise<void>;
+  readonly refreshWorkspace: (root: string) => Promise<boolean>;
   // The honest pre-activation posture. "unavailable" only once readiness has RESOLVED as
   // unavailable, "evaluation" once it has resolved as available over an unverified evaluation
   // runtime, "verified" otherwise — a still-pending readiness check stays "verified" so neither
@@ -98,7 +99,7 @@ function setupErrorReason(failure: VerifiedTaskWorkspaceBindFailure): SetupError
 async function executeBind(input: {
   readonly root: string;
   readonly baseBranch: string;
-  readonly refreshWorkspace: (root: string) => Promise<void>;
+  readonly refreshWorkspace: (root: string) => Promise<boolean>;
   readonly onPhase: (phase: SetupPhase) => void;
 }): Promise<BindOutcome> {
   const result = await bindVerifiedTaskWorkspace({
@@ -110,8 +111,9 @@ async function executeBind(input: {
   });
   if (!result.ok) return setupErrorReason(result);
   try {
-    await input.refreshWorkspace(input.root);
-    return "ok";
+    if (await input.refreshWorkspace(input.root)) return "ok";
+    reportClientDiagnostic("[keiko] coding workbench workspace refresh did not settle");
+    return "bind";
   } catch {
     return "bind";
   }
@@ -121,7 +123,7 @@ function createBindSubmitHandler(params: {
   readonly repositoryPath: string;
   readonly targetBranch: string;
   readonly submitDisabled: boolean;
-  readonly refreshWorkspace: (root: string) => Promise<void>;
+  readonly refreshWorkspace: (root: string) => Promise<boolean>;
   readonly setStatus: (status: SetupStatus) => void;
 }): (event: { preventDefault: () => void }) => void {
   return (event) => {

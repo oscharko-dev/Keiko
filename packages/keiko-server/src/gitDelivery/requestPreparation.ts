@@ -47,16 +47,58 @@ export interface GitDeliveryAuthorityTarget {
 export interface GitDeliveryAuthorityAuditSeams {
   readonly nowIso?: string | undefined;
   readonly logSink?: ServerLogSink | undefined;
+  readonly expectedAuthority?: GitDeliveryAuthorityIdentity | undefined;
+}
+
+export interface GitDeliveryAuthorityIdentity {
+  readonly runId: string;
+  readonly envelopeDigest: string;
 }
 
 export type GitDeliveryAuthorityGate =
-  | { readonly allowed: true; readonly runId: string; readonly envelopeDigest: string }
+  | ({ readonly allowed: true } & GitDeliveryAuthorityIdentity)
   | { readonly allowed: false; readonly result: RouteResult };
+
+interface GitDeliveryAuthorityContinuityInput {
+  readonly ctx: RouteContext;
+  readonly deps: Pick<UiHandlerDeps, "gitDeliveryAuthority">;
+  readonly projectId: string;
+  readonly workspace: WorkspaceInfo;
+  readonly operation: GitRepositoryAgentOperationKind;
+  readonly target?: GitDeliveryAuthorityTarget | undefined;
+  readonly admitted: GitDeliveryAuthorityIdentity;
+  readonly next?: (() => boolean) | undefined;
+}
+
+function deniedAuthorityGate(): GitDeliveryAuthorityGate {
+  return {
+    allowed: false,
+    result: {
+      status: 403,
+      body: {
+        error: {
+          code: "GIT_DELIVERY_AUTHORITY_DENIED",
+          message: "The accepted runtime authority does not admit this Git delivery operation.",
+        },
+      },
+    },
+  };
+}
+
+function authorityIdentityChanged(
+  decision: GitDeliveryAuthorityIdentity,
+  expected: GitDeliveryAuthorityIdentity | undefined,
+): boolean {
+  return (
+    expected !== undefined &&
+    (decision.runId !== expected.runId || decision.envelopeDigest !== expected.envelopeDigest)
+  );
+}
 
 export function logGitDeliveryAuthorityDenial(
   ctx: RouteContext,
   operation: GitRepositoryAgentOperationKind,
-  reason: GitDeliveryAuthorityDenial | "workspace-unresolvable",
+  reason: GitDeliveryAuthorityDenial | "authority-changed" | "workspace-unresolvable",
   logSink: ServerLogSink = processServerLogSink(),
 ): void {
   logSink.write({
@@ -88,6 +130,10 @@ export function gitDeliveryAuthorityGate(
     audit.nowIso ?? new Date().toISOString(),
   );
   const logSink = audit.logSink ?? processServerLogSink();
+  if (decision.allowed && authorityIdentityChanged(decision, audit.expectedAuthority)) {
+    logGitDeliveryAuthorityDenial(ctx, operation, "authority-changed", logSink);
+    return deniedAuthorityGate();
+  }
   if (decision.allowed) {
     logSink.write({
       category: "security",
@@ -99,17 +145,23 @@ export function gitDeliveryAuthorityGate(
     return decision;
   }
   logGitDeliveryAuthorityDenial(ctx, operation, decision.reason, logSink);
-  return {
-    allowed: false,
-    result: {
-      status: 403,
-      body: {
-        error: {
-          code: "GIT_DELIVERY_AUTHORITY_DENIED",
-          message: "The accepted runtime authority does not admit this Git delivery operation.",
-        },
-      },
-    },
+  return deniedAuthorityGate();
+}
+
+export function gitDeliveryAuthorityContinuityGuard(
+  input: GitDeliveryAuthorityContinuityInput,
+): () => boolean {
+  return (): boolean => {
+    const latest = gitDeliveryAuthorityGate(
+      input.ctx,
+      input.deps,
+      input.projectId,
+      input.workspace,
+      input.operation,
+      input.target,
+      { expectedAuthority: input.admitted },
+    );
+    return latest.allowed && (input.next?.() ?? true);
   };
 }
 

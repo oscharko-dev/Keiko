@@ -454,7 +454,7 @@ describe("merge execute (governed)", () => {
     expect(adapter.merges()).toBe(1);
   });
 
-  it("rechecks runtime authority immediately before merge dispatch", async () => {
+  it("aborts merge when another allowed authority replaces the approval-bound run", async () => {
     const adapter = recordingMergeAdapter(READY_PROVIDER);
     const approvalStore = createInMemoryGitDeliveryApprovalStore();
     const approval = issueMergeApproval(approvalStore);
@@ -468,7 +468,9 @@ describe("merge execute (governed)", () => {
     const authority = {
       current: (nowIso: string): ReturnType<typeof baseAuthority.current> => {
         reads += 1;
-        return reads === 1 ? baseAuthority.current(nowIso) : undefined;
+        const active = baseAuthority.current(nowIso);
+        if (active === undefined || reads === 1) return active;
+        return { ...active, runId: "replacement-run", envelopeDigest: "d".repeat(64) };
       },
     };
     const handler = createHandleMergeExecute({

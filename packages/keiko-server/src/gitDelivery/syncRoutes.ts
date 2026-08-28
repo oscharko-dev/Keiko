@@ -32,7 +32,8 @@ import {
   scanUnsafeFormatChars,
 } from "./requestGuards.js";
 import {
-  gitDeliveryAuthorityDenial,
+  gitDeliveryAuthorityContinuityGuard,
+  gitDeliveryAuthorityGate,
   prepareGitDeliveryRequest,
   type GitDeliveryRequestErrors,
 } from "./requestPreparation.js";
@@ -189,50 +190,86 @@ function evidenceRecord(
   };
 }
 
+function persistSyncResult(
+  deps: UiHandlerDeps,
+  operation: GitSyncOperation,
+  remote: string | undefined,
+  workspaceRoot: string,
+  before: GitSyncPreview,
+  result: SyncExecuteResult,
+  recordedAtMs: number,
+): void {
+  const record = evidenceRecord(
+    operation,
+    remote,
+    gitSyncRepoIdHash(workspaceRoot),
+    before,
+    result,
+    recordedAtMs,
+  );
+  recordGitSyncEvidence(
+    {
+      evidenceStore: deps.evidenceStore,
+      redactString: redactStringFor(deps),
+      ...(deps.diagnostics === undefined ? {} : { diagnostics: deps.diagnostics }),
+    },
+    record,
+  );
+}
+
+async function handleSyncExecute(
+  ctx: RouteContext,
+  deps: UiHandlerDeps,
+  operation: GitSyncOperation,
+  seams: GitDeliverySyncSeams,
+): Promise<RouteResult> {
+  const prepared = await prepareGitDeliveryRequest(ctx, deps, SYNC_REQUEST_ERRORS, validate);
+  if (!prepared.ok) return prepared.result;
+  const { workspace } = prepared;
+  const { projectId, remote } = prepared.value;
+  const authority = gitDeliveryAuthorityGate(ctx, deps, projectId, workspace, operation);
+  if (!authority.allowed) return authority.result;
+  let before: GitSyncPreview;
+  try {
+    before = await buildSyncPreview(operation, workspace.root, remote, seams);
+  } catch {
+    return errResult(409, "GIT_DELIVERY_SYNC_WORKTREE_UNAVAILABLE");
+  }
+  const beforeRemoteDispatch = gitDeliveryAuthorityContinuityGuard({
+    ctx,
+    deps,
+    projectId,
+    workspace,
+    operation,
+    target: before.branch === undefined ? {} : { headBranchName: before.branch },
+    admitted: authority,
+    next: seams.beforeRemoteDispatch,
+  });
+  const result = await runSyncExecute(
+    operation,
+    workspace.root,
+    remote,
+    { ...seams, beforeRemoteDispatch },
+    before,
+  );
+  persistSyncResult(
+    deps,
+    operation,
+    remote,
+    workspace.root,
+    before,
+    result,
+    (seams.now ?? Date.now)(),
+  );
+  return { status: 200, body: deps.redactor(executeResponse(operation, remote, result)) };
+}
+
 export const createHandleSyncExecute = (
   operation: GitSyncOperation,
   options: GitDeliverySyncRouteOptions = {},
 ): ((ctx: RouteContext, deps: UiHandlerDeps) => Promise<RouteResult>) => {
   const seams = options.execution ?? {};
-  const now = (): number => (seams.now ?? Date.now)();
-  return async (ctx, deps): Promise<RouteResult> => {
-    const prepared = await prepareGitDeliveryRequest(ctx, deps, SYNC_REQUEST_ERRORS, validate);
-    if (!prepared.ok) return prepared.result;
-    const { workspace } = prepared;
-    const authorityDenial = gitDeliveryAuthorityDenial(
-      ctx,
-      deps,
-      prepared.value.projectId,
-      workspace,
-      operation,
-    );
-    if (authorityDenial !== undefined) return authorityDenial;
-    const { remote } = prepared.value;
-    let before: GitSyncPreview;
-    try {
-      before = await buildSyncPreview(operation, workspace.root, remote, seams);
-    } catch {
-      return errResult(409, "GIT_DELIVERY_SYNC_WORKTREE_UNAVAILABLE");
-    }
-    const result = await runSyncExecute(operation, workspace.root, remote, seams, before);
-    const record = evidenceRecord(
-      operation,
-      remote,
-      gitSyncRepoIdHash(workspace.root),
-      before,
-      result,
-      now(),
-    );
-    recordGitSyncEvidence(
-      {
-        evidenceStore: deps.evidenceStore,
-        redactString: redactStringFor(deps),
-        ...(deps.diagnostics === undefined ? {} : { diagnostics: deps.diagnostics }),
-      },
-      record,
-    );
-    return { status: 200, body: deps.redactor(executeResponse(operation, remote, result)) };
-  };
+  return (ctx, deps) => handleSyncExecute(ctx, deps, operation, seams);
 };
 
 // ─── Route group ───────────────────────────────────────────────────────────────────────────────

@@ -8,7 +8,7 @@ import type { WorkspaceInfo } from "@oscharko-dev/keiko-workspace";
 import type { ServerLogEvent } from "../observability/index.js";
 import { describe, expect, it } from "vitest";
 import { UNKNOWN_CORRELATION_ID } from "../correlation.js";
-import { gitDeliveryAuthorityDenial } from "./requestPreparation.js";
+import { gitDeliveryAuthorityDenial, gitDeliveryAuthorityGate } from "./requestPreparation.js";
 import { authorizeGitDelivery } from "./runBoundAuthority.js";
 import { permittedGitDeliveryAuthority } from "./runBoundAuthority.test-support.js";
 
@@ -167,6 +167,39 @@ describe("authorizeGitDelivery", () => {
         correlationId: UNKNOWN_CORRELATION_ID,
         status: 403,
         extra: { operation: "push", reason: "accepted-run-unavailable" },
+      }),
+    ]);
+  });
+
+  it("denies and logs when a different allowed authority replaces the admitted run", () => {
+    const events: ServerLogEvent[] = [];
+    const workspace = { root: WORKSPACE_ROOT } as WorkspaceInfo;
+    const result = gitDeliveryAuthorityGate(
+      { correlationId: "correlation-2" } as never,
+      {
+        gitDeliveryAuthority: permittedGitDeliveryAuthority(
+          () => PROJECT_ID,
+          () => WORKSPACE_ROOT,
+        ),
+      },
+      PROJECT_ID,
+      workspace,
+      "push",
+      { headBranchName: "feature/test", remoteBranchName: "feature/test" },
+      {
+        nowIso: NOW,
+        expectedAuthority: { runId: "previous-run", envelopeDigest: "d".repeat(64) },
+        logSink: { write: (event) => events.push(event) },
+      },
+    );
+
+    expect(result.allowed).toBe(false);
+    expect(events).toEqual([
+      expect.objectContaining({
+        op: "git.delivery.authority.denied",
+        correlationId: "correlation-2",
+        status: 403,
+        extra: { operation: "push", reason: "authority-changed" },
       }),
     ]);
   });

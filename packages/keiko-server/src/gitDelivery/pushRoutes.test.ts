@@ -337,7 +337,7 @@ describe("push execute — governed publish + no-bypass (AC2/AC3/AC4/AC5)", () =
     expect(cap.count()).toBe(1);
   });
 
-  it("rechecks runtime authority immediately before remote dispatch", async () => {
+  it("aborts dispatch when another allowed runtime authority replaces the admitted run", async () => {
     const adapter = recordingPublishAdapter();
     const baseAuthority = permittedGitDeliveryAuthority(
       () => projectId,
@@ -354,7 +354,9 @@ describe("push execute — governed publish + no-bypass (AC2/AC3/AC4/AC5)", () =
     const authority = {
       current: (nowIso: string): ReturnType<typeof baseAuthority.current> => {
         reads += 1;
-        return reads === 1 ? baseAuthority.current(nowIso) : undefined;
+        const active = baseAuthority.current(nowIso);
+        if (active === undefined || reads === 1) return active;
+        return { ...active, runId: "replacement-run", envelopeDigest: "d".repeat(64) };
       },
     };
     const handler = createHandlePushExecute({

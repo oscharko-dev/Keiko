@@ -19,6 +19,7 @@ import type { UiHandlerDeps } from "../deps.js";
 import {
   parseGitDeliveryApprovalRequest,
   resolveGitDeliveryApprovalRequirement,
+  type GitDeliveryApprovalBinding,
   type ParsedGitDeliveryApprovalRequest,
 } from "./approvalStore.js";
 import { readWorktreeSnapshotFor } from "./execution.js";
@@ -39,8 +40,10 @@ import {
   scanUnsafeFormatChars,
 } from "./requestGuards.js";
 import {
-  gitDeliveryAuthorityDenial,
+  gitDeliveryAuthorityContinuityGuard,
+  gitDeliveryAuthorityGate,
   prepareGitDeliveryRequest,
+  type GitDeliveryAuthorityIdentity,
   type GitDeliveryRequestErrors,
 } from "./requestPreparation.js";
 
@@ -256,39 +259,78 @@ export const createHandlePrPreview = (
 
 // ─── Execute handler (governed) ───────────────────────────────────────────────────────────────
 
+function prAuthorityTarget(command: GitPullRequestCommand): {
+  readonly headBranchName: string;
+  readonly baseBranchName: string;
+} {
+  return { headBranchName: command.headBranchName, baseBranchName: command.baseBranchName };
+}
+
+function prApprovalBinding(
+  projectId: string,
+  command: GitPullRequestCommand,
+  authority: GitDeliveryAuthorityIdentity,
+): GitDeliveryApprovalBinding {
+  return {
+    projectId,
+    operation: "pr",
+    command,
+    runId: authority.runId,
+    envelopeDigest: authority.envelopeDigest,
+  };
+}
+
+async function handlePrExecute(
+  ctx: RouteContext,
+  deps: UiHandlerDeps,
+  seams: GitDeliveryPullRequestSeams,
+): Promise<RouteResult> {
+  const prepared = await prepareGitDeliveryRequest(ctx, deps, PR_REQUEST_ERRORS, validate);
+  if (!prepared.ok) return prepared.result;
+  const { workspace } = prepared;
+  const { projectId, command, approval } = prepared.value;
+  const target = prAuthorityTarget(command);
+  const authority = gitDeliveryAuthorityGate(
+    ctx,
+    deps,
+    projectId,
+    workspace,
+    "pull-request",
+    target,
+  );
+  if (!authority.allowed) return authority.result;
+  const verifiedApproval = resolveGitDeliveryApprovalRequirement(approval, {
+    store: seams.approvalStore,
+    binding: prApprovalBinding(projectId, command, authority),
+    nowMs: (seams.now ?? Date.now)(),
+  });
+  if (verifiedApproval === undefined) return errResult(400, "GIT_DELIVERY_PR_BAD_REQUEST");
+  const beforeRemoteDispatch = gitDeliveryAuthorityContinuityGuard({
+    ctx,
+    deps,
+    projectId,
+    workspace,
+    operation: "pull-request",
+    target,
+    admitted: authority,
+    next: seams.beforeRemoteDispatch,
+  });
+  try {
+    const result = await executeGovernedPullRequest(command, verifiedApproval, workspace, deps, {
+      ...seams,
+      beforeRemoteDispatch,
+    });
+    return { status: 200, body: deps.redactor(gitDeliveryPrExecuteResponse(result)) };
+  } catch {
+    return errResult(409, "GIT_DELIVERY_PR_WORKTREE_UNAVAILABLE");
+  }
+}
+
 export const createHandlePrExecute = (
   options: GitDeliveryPrRouteOptions = {},
 ): ((ctx: RouteContext, deps: UiHandlerDeps) => Promise<RouteResult>) => {
   const seams = options.execution ?? {};
-  return async (ctx, deps): Promise<RouteResult> => {
-    const prepared = await prepareGitDeliveryRequest(ctx, deps, PR_REQUEST_ERRORS, validate);
-    if (!prepared.ok) return prepared.result;
-    const { workspace } = prepared;
-    const { projectId, command, approval } = prepared.value;
-    const authorityDenial = gitDeliveryAuthorityDenial(
-      ctx,
-      deps,
-      projectId,
-      workspace,
-      "pull-request",
-      { headBranchName: command.headBranchName, baseBranchName: command.baseBranchName },
-    );
-    if (authorityDenial !== undefined) return authorityDenial;
-    const verifiedApproval = resolveGitDeliveryApprovalRequirement(approval, {
-      store: seams.approvalStore,
-      binding: { projectId, operation: "pr", command },
-      nowMs: (seams.now ?? Date.now)(),
-    });
-    if (verifiedApproval === undefined) return errResult(400, "GIT_DELIVERY_PR_BAD_REQUEST");
-    let result;
-    try {
-      result = await executeGovernedPullRequest(command, verifiedApproval, workspace, deps, seams);
-    } catch {
-      // Only the read-only snapshot step can throw (not a git repository); the gateway never throws.
-      return errResult(409, "GIT_DELIVERY_PR_WORKTREE_UNAVAILABLE");
-    }
-    return { status: 200, body: deps.redactor(gitDeliveryPrExecuteResponse(result)) };
-  };
+  return (ctx, deps) => handlePrExecute(ctx, deps, seams);
 };
 
 // ─── Route group ───────────────────────────────────────────────────────────────────────────────

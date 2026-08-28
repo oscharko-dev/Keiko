@@ -461,9 +461,7 @@ function WorkbenchColumns({
       <div className={styles.emptySession}>
         <CodingWorkbenchSetup
           selectedRoot={selectedRoot}
-          refreshWorkspace={async (root): Promise<void> => {
-            await activeWorkspace.refresh(root);
-          }}
+          refreshWorkspace={(root) => activeWorkspace.refresh(root)}
           runtimePosture={runtimePosture}
         />
       </div>

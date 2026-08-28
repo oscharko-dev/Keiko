@@ -14,6 +14,7 @@ import type {
   MemoryId,
   MemoryRecord,
 } from "@oscharko-dev/keiko-contracts";
+import { isMemoryRecord } from "@oscharko-dev/keiko-contracts/runtime/memory";
 import {
   acceptMemoryProposal,
   archiveMemory,
@@ -23,6 +24,7 @@ import {
   type MemoryReviewQueueResponse,
 } from "@/lib/memory-api";
 import { useTranslate, type I18nTranslate } from "@/lib/i18n";
+import { reportClientDiagnostic } from "@/lib/client-diagnostics";
 import { formatError } from "./format-error";
 
 type ReviewAction = "accept" | "reject" | "archive";
@@ -136,6 +138,82 @@ type CorrectionPredecessorsById = ReadonlyMap<string, readonly MemoryRecord[]>;
 
 function acceptsOptions(options: AcceptMemoryProposalOptions): boolean {
   return options.bodyOverride !== undefined || options.predecessorId !== undefined;
+}
+
+function verifiedCorrectionPredecessors(response: unknown): readonly MemoryRecord[] | undefined {
+  if (typeof response !== "object" || response === null || Array.isArray(response))
+    return undefined;
+  const candidates = (response as { readonly candidates?: unknown }).candidates;
+  if (!Array.isArray(candidates) || !candidates.every(isMemoryRecord)) return undefined;
+  return candidates;
+}
+
+interface CorrectionPredecessorDecision {
+  readonly acceptDisabled: boolean;
+  readonly effectiveId: MemoryId | undefined;
+  readonly loadRequired: boolean;
+  readonly selectorCandidates: readonly MemoryRecord[] | undefined;
+}
+
+function correctionPredecessorDecision(
+  record: MemoryRecord,
+  candidates: readonly MemoryRecord[] | undefined,
+  selectedId: MemoryId | undefined,
+  loading: boolean,
+): CorrectionPredecessorDecision {
+  const none = { effectiveId: undefined, selectorCandidates: undefined } as const;
+  if (record.type !== "correction") {
+    return { ...none, acceptDisabled: loading, loadRequired: false };
+  }
+  if (candidates === undefined) {
+    return { ...none, acceptDisabled: loading, loadRequired: true };
+  }
+  if (candidates.length === 0) {
+    return { ...none, acceptDisabled: true, loadRequired: false };
+  }
+  if (candidates.length === 1) {
+    return {
+      ...none,
+      acceptDisabled: loading,
+      effectiveId: candidates[0]?.id,
+      loadRequired: false,
+    };
+  }
+  return {
+    acceptDisabled: loading || selectedId === undefined,
+    effectiveId: selectedId,
+    loadRequired: false,
+    selectorCandidates: candidates,
+  };
+}
+
+function reviewAcceptOptions(
+  editing: boolean,
+  draftBody: string,
+  predecessorId: MemoryId | undefined,
+): AcceptMemoryProposalOptions {
+  return {
+    ...(editing ? { bodyOverride: draftBody } : {}),
+    ...(predecessorId === undefined ? {} : { predecessorId }),
+  };
+}
+
+function acceptOrLoadPredecessors(input: {
+  readonly decision: CorrectionPredecessorDecision;
+  readonly draftBody: string;
+  readonly editing: boolean;
+  readonly onAccept: ReviewRowProps["onAccept"];
+  readonly onRequestPredecessors: ReviewRowProps["onRequestPredecessors"];
+  readonly record: MemoryRecord;
+}): void {
+  if (input.decision.loadRequired) {
+    input.onRequestPredecessors(input.record);
+    return;
+  }
+  input.onAccept(
+    input.record,
+    reviewAcceptOptions(input.editing, input.draftBody, input.decision.effectiveId),
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -423,8 +501,12 @@ function ReviewRow({
   const [editing, setEditing] = useState(false);
   const [draftBody, setDraftBody] = useState(record.body);
   const [predecessorId, setPredecessorId] = useState<MemoryId | undefined>();
-  const requiresPredecessorSelection =
-    record.type === "correction" && (predecessors?.length ?? 0) > 1 && predecessorId === undefined;
+  const predecessorDecision = correctionPredecessorDecision(
+    record,
+    predecessors,
+    predecessorId,
+    predecessorsLoading,
+  );
   const labelId = `memory-review-body-${record.id}`;
   const editorId = `memory-review-editor-${record.id}`;
   const detailLinkLabel = t("memoria.viewDetailsFor", {
@@ -456,7 +538,7 @@ function ReviewRow({
             </p>
           )}
           <CorrectionPredecessorSelector
-            candidates={record.type === "correction" ? predecessors : undefined}
+            candidates={predecessorDecision.selectorCandidates}
             selectedId={predecessorId}
             onSelect={setPredecessorId}
             t={t}
@@ -494,18 +576,18 @@ function ReviewRow({
           busyAction={busyAction}
           labelId={labelId}
           onAccept={() => {
-            if (record.type === "correction" && predecessors === undefined) {
-              onRequestPredecessors(record);
-              return;
-            }
-            onAccept(record, {
-              ...(editing ? { bodyOverride: draftBody } : {}),
-              ...(predecessorId === undefined ? {} : { predecessorId }),
+            acceptOrLoadPredecessors({
+              decision: predecessorDecision,
+              draftBody,
+              editing,
+              onAccept,
+              onRequestPredecessors,
+              record,
             });
           }}
           onReject={onReject}
           onArchive={onArchive}
-          acceptDisabled={predecessorsLoading || requiresPredecessorSelection}
+          acceptDisabled={predecessorDecision.acceptDisabled}
           editing={editing}
           onEdit={() => setEditing(true)}
           onCancelEdit={() => {
@@ -589,7 +671,28 @@ export function ReviewQueue({
       setPredecessorsLoadingById((prev) => ({ ...prev, [record.id]: true }));
       try {
         const response = await fetchCorrectionPredecessorsImpl(record.id);
-        setPredecessorsById((prev) => new Map(prev).set(record.id, response.candidates));
+        const candidates = verifiedCorrectionPredecessors(response);
+        if (candidates === undefined) {
+          reportClientDiagnostic(
+            "[keiko] memory correction predecessor response rejected (kind=invalid-response)",
+          );
+          predecessorRequestsRef.current.delete(record.id);
+          setRowErrorsById((prev) => ({
+            ...prev,
+            [record.id]: t("memoria.correctionPredecessorInvalid"),
+          }));
+          return;
+        }
+        setPredecessorsById((prev) => new Map(prev).set(record.id, candidates));
+        setRowErrorsById((prev) => {
+          const next = { ...prev };
+          if (candidates.length === 0) {
+            next[record.id] = t("memoria.correctionPredecessorMissing");
+          } else {
+            delete next[record.id];
+          }
+          return next;
+        });
       } catch (err) {
         predecessorRequestsRef.current.delete(record.id);
         setRowErrorsById((prev) => ({ ...prev, [record.id]: formatError(err) }));
@@ -597,7 +700,7 @@ export function ReviewQueue({
         setPredecessorsLoadingById((prev) => ({ ...prev, [record.id]: false }));
       }
     },
-    [fetchCorrectionPredecessorsImpl],
+    [fetchCorrectionPredecessorsImpl, t],
   );
 
   const clearRowState = useCallback((id: MemoryId): void => {

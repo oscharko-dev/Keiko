@@ -6,7 +6,7 @@
 
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ReactNode } from "react";
 import type { MemoryId, MemoryRecord } from "@oscharko-dev/keiko-contracts";
 import { MemoryListContent } from "./components/MemoryList";
@@ -15,6 +15,7 @@ import { ReviewQueue } from "./components/ReviewQueue";
 import { EditMemoryDialog } from "./components/EditMemoryDialog";
 import { MemoryActions } from "./components/MemoryActions";
 import type { MemoryListResponse, MemoryReviewQueueResponse } from "@/lib/memory-api";
+import { resetClientDiagnosticWriter, setClientDiagnosticWriter } from "@/lib/client-diagnostics";
 
 // KEIKO-0650: the earlier MemoryList URL-state-sync wrapper (router.push on filter change) was
 // removed as dead code once every production caller moved to MemoryListContent with explicit
@@ -77,6 +78,10 @@ function queueResponse(records: readonly MemoryRecord[]): MemoryReviewQueueRespo
 }
 
 describe("MemoriaViva browser-tier flows", () => {
+  afterEach(() => {
+    resetClientDiagnosticWriter();
+  });
+
   it("covers filtering and empty-state behavior on the MemoriaViva route", async () => {
     const user = userEvent.setup();
     const fetchMemoriesImpl = vi.fn().mockResolvedValue(listResponse([]));
@@ -178,7 +183,7 @@ describe("MemoriaViva browser-tier flows", () => {
     });
     const first = makeMemory({
       id: "mem-browser-predecessor-1" as MemoryId,
-      body: "Release hardening uses jest.",
+      body: "<img src=x onerror=alert(1)> Release hardening uses jest.",
     });
     const second = makeMemory({
       id: "mem-browser-predecessor-2" as MemoryId,
@@ -187,7 +192,7 @@ describe("MemoriaViva browser-tier flows", () => {
     const acceptImpl = vi.fn().mockResolvedValue({ memory: { ...correction, status: "accepted" } });
 
     const fetchPredecessors = vi.fn().mockResolvedValue({ candidates: [first, second] });
-    render(
+    const { container } = render(
       <ReviewQueue
         fetchQueueImpl={vi.fn().mockResolvedValue(queueResponse([correction]))}
         fetchCorrectionPredecessorsImpl={fetchPredecessors}
@@ -199,10 +204,10 @@ describe("MemoriaViva browser-tier flows", () => {
     expect(fetchPredecessors).not.toHaveBeenCalled();
     await user.click(approve);
     expect(acceptImpl).not.toHaveBeenCalled();
-    await user.selectOptions(
-      await screen.findByLabelText("Memory being corrected"),
-      "mem-browser-predecessor-1",
-    );
+    const selector = await screen.findByLabelText("Memory being corrected");
+    expect(selector).toHaveTextContent("<img src=x onerror=alert(1)>");
+    expect(container.querySelector("img")).toBeNull();
+    await user.selectOptions(selector, "mem-browser-predecessor-1");
     await user.click(approve);
 
     await waitFor(() => {
@@ -210,6 +215,97 @@ describe("MemoriaViva browser-tier flows", () => {
         predecessorId: "mem-browser-predecessor-1",
       });
     });
+  });
+
+  it("binds a unique correction predecessor before acceptance", async () => {
+    const user = userEvent.setup();
+    const correction = makeMemory({
+      id: "mem-browser-unique-correction" as MemoryId,
+      type: "correction",
+      status: "proposed",
+    });
+    const predecessor = makeMemory({ id: "mem-browser-unique-predecessor" as MemoryId });
+    const acceptImpl = vi.fn().mockResolvedValue({ memory: { ...correction, status: "accepted" } });
+    render(
+      <ReviewQueue
+        fetchQueueImpl={vi.fn().mockResolvedValue(queueResponse([correction]))}
+        fetchCorrectionPredecessorsImpl={vi.fn().mockResolvedValue({ candidates: [predecessor] })}
+        acceptImpl={acceptImpl}
+      />,
+    );
+
+    await user.click(await screen.findByRole("button", { name: "Approve" }));
+    expect(acceptImpl).not.toHaveBeenCalled();
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: "Approve" })).toHaveAttribute(
+        "aria-disabled",
+        "false",
+      );
+    });
+    await user.click(screen.getByRole("button", { name: "Approve" }));
+
+    await waitFor(() => {
+      expect(acceptImpl).toHaveBeenCalledWith("mem-browser-unique-correction", {
+        predecessorId: "mem-browser-unique-predecessor",
+      });
+    });
+  });
+
+  it("keeps a correction blocked when no eligible predecessor exists", async () => {
+    const user = userEvent.setup();
+    const correction = makeMemory({
+      id: "mem-browser-missing-predecessor" as MemoryId,
+      type: "correction",
+      status: "proposed",
+    });
+    const acceptImpl = vi.fn();
+    render(
+      <ReviewQueue
+        fetchQueueImpl={vi.fn().mockResolvedValue(queueResponse([correction]))}
+        fetchCorrectionPredecessorsImpl={vi.fn().mockResolvedValue({ candidates: [] })}
+        acceptImpl={acceptImpl}
+      />,
+    );
+
+    const approve = await screen.findByRole("button", { name: "Approve" });
+    await user.click(approve);
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("No eligible predecessor remains.");
+    expect(approve).toHaveAttribute("aria-disabled", "true");
+    await user.click(approve);
+    expect(acceptImpl).not.toHaveBeenCalled();
+  });
+
+  it("rejects malformed correction predecessor data without replacing the review row", async () => {
+    const user = userEvent.setup();
+    const diagnostics: string[] = [];
+    setClientDiagnosticWriter((message) => diagnostics.push(message));
+    const correction = makeMemory({
+      id: "mem-browser-malformed-predecessor" as MemoryId,
+      type: "correction",
+      status: "proposed",
+    });
+    const acceptImpl = vi.fn();
+    render(
+      <ReviewQueue
+        fetchQueueImpl={vi.fn().mockResolvedValue(queueResponse([correction]))}
+        fetchCorrectionPredecessorsImpl={vi.fn().mockResolvedValue({
+          candidates: [{ id: "malformed", body: 42 }],
+        } as never)}
+        acceptImpl={acceptImpl}
+      />,
+    );
+
+    await user.click(await screen.findByRole("button", { name: "Approve" }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "Correction predecessors could not be verified.",
+    );
+    expect(screen.getByText(correction.body)).toBeInTheDocument();
+    expect(acceptImpl).not.toHaveBeenCalled();
+    expect(diagnostics).toContain(
+      "[keiko] memory correction predecessor response rejected (kind=invalid-response)",
+    );
   });
 
   it("covers edit, correction, and deletion controls without local file edits", async () => {
