@@ -19,6 +19,10 @@ import type { WorkflowHandoffRequest } from "@oscharko-dev/keiko-contracts/workf
 export type RunKind = "unit-tests" | "bug-investigation" | "explain-plan" | "verify";
 
 export interface RunVoiceOrigin {
+  // Wire-shape discipline only: accepted and shape-validated so the payload round-trips cleanly,
+  // but NEVER consulted for the governance/trust decision. `applyVoiceGovernance` (run-handlers.ts)
+  // sources the profile it actually governs against exclusively from
+  // `serverTrustedVoiceProfile(deps)` — a client-claimed capability is never trusted (KEIKO-0685).
   readonly profile: VoiceProfile;
   readonly turnIndex: number;
   readonly source: VoiceTranscriptSource;
@@ -126,6 +130,9 @@ function parseConfirmationDigest(value: unknown): string | undefined | RunReques
 }
 
 function parseVoiceOriginFields(value: Record<string, unknown>): RunVoiceOrigin | RunRequestError {
+  // Shape validation only — rejects a malformed/unknown profile string so the parsed value type-checks
+  // as `VoiceProfile`. This is NOT a security decision: the parsed value is never used to authorize
+  // anything (see the `RunVoiceOrigin.profile` comment above and KEIKO-0685).
   if (!isVoiceProfile(value.profile)) {
     return badRequest("voiceOrigin.profile is invalid.");
   }
