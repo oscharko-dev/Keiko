@@ -363,7 +363,6 @@ interface ProviderRawOptions {
   readonly apiVersion?: string | undefined;
   readonly imageInputModelIds?: readonly string[] | undefined;
   readonly responseFormatModelIds?: readonly string[] | undefined;
-  readonly toolCallingObservations?: readonly GatewaySetupToolCallingObservation[] | undefined;
   readonly embeddingModelIds?: readonly string[] | undefined;
   readonly modelMetadata?: Readonly<Record<string, GatewayDiscoveredModelMetadata>> | undefined;
   readonly current?: GatewayConfig | undefined;

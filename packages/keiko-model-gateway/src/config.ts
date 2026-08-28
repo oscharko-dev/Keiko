@@ -1888,7 +1888,8 @@ function verifiedToolCallingCapability(
   capability: ModelCapability,
   provider: ModelProviderConfig | undefined,
 ): ModelCapability {
-  if (capability.kind !== "chat" || provider === undefined) return capability;
+  if (capability.kind !== "chat") return capability;
+  if (provider === undefined) return { ...capability, toolCalling: false };
   return hasCurrentToolCallingVerification(
     capability.toolCallingVerification,
     provider,

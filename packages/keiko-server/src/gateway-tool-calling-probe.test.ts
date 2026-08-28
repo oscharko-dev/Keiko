@@ -84,9 +84,46 @@ describe("probeGatewayToolCalling", () => {
           ],
         }),
       );
+    const emptyArguments: typeof fetch = () =>
+      Promise.resolve(
+        jsonResponse({
+          choices: [
+            {
+              message: {
+                tool_calls: [{ function: { name: "report_readiness", arguments: "{}" } }],
+              },
+            },
+          ],
+        }),
+      );
+    const extraArgument: typeof fetch = () =>
+      Promise.resolve(
+        jsonResponse({
+          choices: [
+            {
+              message: {
+                tool_calls: [
+                  {
+                    function: {
+                      name: "report_readiness",
+                      arguments: '{"status":"ok","extra":"value"}',
+                    },
+                  },
+                ],
+              },
+            },
+          ],
+        }),
+      );
 
     await expect(probeGatewayToolCalling(CONFIG, PROVIDER, malformed)).resolves.toBe("unsupported");
     await expect(probeGatewayToolCalling(CONFIG, PROVIDER, unexpected)).resolves.toBe(
+      "unsupported",
+    );
+    await expect(probeGatewayToolCalling(CONFIG, PROVIDER, emptyArguments)).resolves.toBe(
+      "unsupported",
+    );
+    await expect(probeGatewayToolCalling(CONFIG, PROVIDER, extraArgument)).resolves.toBe(
       "unsupported",
     );
   });
