@@ -42,7 +42,6 @@ import {
   handleDeleteChat,
   handleListMessages,
   handleCreateMessage,
-  handleCreateRunSummaryPair,
   handleUpdateMessage,
 } from "./store-handlers.js";
 import { WORKSPACE_MANIFEST_ROUTE_GROUP } from "./workspace-manifest-routes.js";
@@ -539,12 +538,6 @@ export const API_ROUTES: readonly RouteDefinition[] = [
   { method: "DELETE", pattern: "/api/chats", handler: handleDeleteChat },
   { method: "GET", pattern: "/api/chats/messages", handler: handleListMessages },
   { method: "POST", pattern: "/api/chats/messages", handler: handleCreateMessage },
-  // Issue #66 — atomic composer write: exactly one user message plus one run-summary system message.
-  {
-    method: "POST",
-    pattern: "/api/chats/messages/run-summary-pair",
-    handler: handleCreateRunSummaryPair,
-  },
   // Issue #66 — PATCH a run-summary message (status/shortResult/taskType).
   { method: "PATCH", pattern: "/api/chats/messages", handler: handleUpdateMessage },
   // Issue #185 — grounded repository-aware Q&A. Composes #179-#183 behind the chat-scope binding.

@@ -1001,7 +1001,7 @@
     {
       "op": "project.workspace.reconnect",
       "category": "setup",
-      "site": "packages/keiko-server/src/store-handlers.ts:485",
+      "site": "packages/keiko-server/src/store-handlers.ts:476",
       "package": "keiko-server"
     },
     {

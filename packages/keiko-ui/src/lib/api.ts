@@ -1151,34 +1151,6 @@ export async function createChatMessage(input: CreateMessageInput): Promise<Mess
   return fetchJson("/api/chats/messages", { method: "POST", body: JSON.stringify(input) });
 }
 
-export interface CreateRunSummaryPairInput {
-  chatId: string;
-  projectPath: string;
-  user: {
-    content: string;
-    timestamp: number;
-  };
-  summary: {
-    content: string;
-    timestamp: number;
-    runId: string;
-    workflowId?: string;
-    workflowStatus: WorkflowStatus;
-    shortResult?: string;
-    /** Issue #66 — labels harness task runs (verify, explain-plan). */
-    taskType?: string;
-  };
-}
-
-export async function createRunSummaryPair(
-  input: CreateRunSummaryPairInput,
-): Promise<MessagesResponse> {
-  return fetchJson("/api/chats/messages/run-summary-pair", {
-    method: "POST",
-    body: JSON.stringify(input),
-  });
-}
-
 // Issue #66 — PATCH the run-summary message in place and keep the selected project's
 // normalized path on the request so the BFF can enforce chat ownership before patching.
 export async function patchChatMessage(

@@ -486,19 +486,22 @@ describe("API route contract", () => {
     });
   });
 
-  it("includes the run-summary message routes (#66)", () => {
+  it("includes the run-summary message patch route (#66)", () => {
     const patchRoute = API_ROUTES.find(
       (r) => r.method === "PATCH" && r.pattern === "/api/chats/messages",
     );
-    const pairRoute = API_ROUTES.find(
-      (r) => r.method === "POST" && r.pattern === "/api/chats/messages/run-summary-pair",
-    );
     expect(patchRoute).toBeDefined();
-    expect(pairRoute).toBeDefined();
   });
 
   it("does not expose the retired composer chat-run route", () => {
     const route = API_ROUTES.find((r) => r.method === "POST" && r.pattern === "/api/chats/runs");
+    expect(route).toBeUndefined();
+  });
+
+  it("does not expose the retired run-summary-pair route (KEIKO-0566, #3314)", () => {
+    const route = API_ROUTES.find(
+      (r) => r.method === "POST" && r.pattern === "/api/chats/messages/run-summary-pair",
+    );
     expect(route).toBeUndefined();
   });
 
