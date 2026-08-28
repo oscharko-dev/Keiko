@@ -1,7 +1,6 @@
 import { defineConfig, devices } from "@playwright/test";
-import { realpathSync } from "node:fs";
-import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { e2eStateDir } from "../support/e2e-state-dir.js";
 
 const root = process.cwd();
 const publicPort = Number(process.env.KEIKO_E2E_UI_PORT ?? "32183");
@@ -12,8 +11,7 @@ const modelPort = Number(process.env.KEIKO_E2E_MODEL_PORT ?? "32186");
 const modelMockScript = join(root, "tests", "e2e", "support", "model-mock-server.mjs");
 const modelBaseUrl = `http://127.0.0.1:${String(modelPort)}/v1`;
 const stateId = process.env.GITHUB_RUN_ID ?? String(process.pid);
-const stateDir =
-  process.env.KEIKO_E2E_STATE_DIR ?? join(realpathSync(tmpdir()), "keiko-e2e", stateId);
+const stateDir = e2eStateDir(stateId);
 const fixtureConfigPath = join(root, "tests", "e2e", "fixtures", "keiko.e2e.config.json");
 const runtimeConfigPath = join(stateDir, "keiko.e2e.config.json");
 // GEN-TEST-RELEASE-GATE-002: copy the fixture config but repoint every provider baseUrl at the

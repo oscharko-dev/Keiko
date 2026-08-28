@@ -6,10 +6,7 @@
   "route": "/",
   "evidencePath": "docs/git-delivery/evidence/475",
   "generatedAt": "2026-08-28T20:06:10.075Z",
-  "governedRoutes": [
-    "/api/git-delivery/commit/preview",
-    "/api/git-delivery/commit/execute"
-  ],
+  "governedRoutes": ["/api/git-delivery/commit/preview", "/api/git-delivery/commit/execute"],
   "windowRegistration": {
     "kind": "governedGit",
     "seededVia": "keiko.workspace.v4",
@@ -36,8 +33,5 @@
     "The UI exposes no force-commit escape: a message-policy violation disables the only commit affordance, and a forced click reaches no execute request.",
     "browserReachedGovernedExecuteRoute is proven by the conventional-message control, which is the only path on which execute may be called at all."
   ],
-  "artifacts": [
-    "manifest.json",
-    "governed-commit-block.png"
-  ]
+  "artifacts": ["manifest.json", "governed-commit-block.png"]
 }

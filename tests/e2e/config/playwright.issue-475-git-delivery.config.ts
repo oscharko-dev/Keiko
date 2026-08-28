@@ -1,7 +1,6 @@
 import { defineConfig, devices } from "@playwright/test";
-import { realpathSync } from "node:fs";
-import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { e2eStateDir } from "../support/e2e-state-dir.js";
 
 // Issue #475 (Epic #470) — browser evidence that governed commit creation cannot bypass preview
 // or policy evaluation. Mirrors tests/e2e/config/playwright.issue-1296-editor-agent.config.ts: build the packaged
@@ -13,11 +12,7 @@ import { join } from "node:path";
 const root = process.cwd();
 const publicPort = Number(process.env.KEIKO_E2E_UI_PORT ?? "32198");
 const stateId = process.env.GITHUB_RUN_ID ?? `issue-475-git-delivery-${String(process.pid)}`;
-// realpath: macOS resolves os.tmpdir() through a symlink (/var -> /private/var) and the UI
-// store refuses a database path inside a symlinked directory, so the raw value cannot boot
-// the server locally. Resolving it is a no-op on the Linux runners.
-const stateDir =
-  process.env.KEIKO_E2E_STATE_DIR ?? join(realpathSync(tmpdir()), "keiko-e2e", stateId);
+const stateDir = e2eStateDir(stateId);
 const fixtureConfigPath = join(root, "tests", "e2e", "fixtures", "keiko.e2e.config.json");
 const runtimeConfigPath = join(stateDir, "keiko.e2e.config.json");
 const prepareRuntimeConfig = [
