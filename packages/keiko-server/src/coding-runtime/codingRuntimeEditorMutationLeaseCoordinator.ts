@@ -250,7 +250,7 @@ function claimRecord(
 ): boolean {
   const record = findRecord(records, request, disposed);
   if (record === undefined || record.claimed) return false;
-  let allowed = false;
+  let allowed: boolean;
   try {
     allowed = record.mutationGuard();
   } catch {

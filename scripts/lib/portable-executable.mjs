@@ -6,7 +6,7 @@ const PE_SIGNATURE = Buffer.from([0x50, 0x45, 0x00, 0x00]);
 
 export function isPortableExecutableFile(path) {
   let descriptor;
-  let valid = false;
+  let valid;
   try {
     const size = statSync(path).size;
     descriptor = openSync(path, "r");

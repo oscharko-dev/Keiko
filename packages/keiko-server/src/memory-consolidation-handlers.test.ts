@@ -459,8 +459,8 @@ describe("memory consolidation job handlers", () => {
     await new Promise<void>((resolve) => server.listen(0, UI_HOST, resolve));
     const port = (server.address() as AddressInfo).port;
     serverDeps.port = port;
-    let responseText = "";
-    let responseStatus = 0;
+    let responseText: string;
+    let responseStatus: number;
     try {
       const response = await fetch(
         `http://${UI_HOST}:${String(port)}/api/memory/consolidation/jobs/${jobId}/review-items/${item.id}/apply`,
