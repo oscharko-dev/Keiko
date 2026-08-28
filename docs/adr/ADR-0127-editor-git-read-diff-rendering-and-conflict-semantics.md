@@ -97,9 +97,15 @@ input. Paths reject absolute, backslash-shaped, empty-segment, dot-segment, trav
 and over-cap values. Issue #2228 parses unified diff server-side at the existing Git route boundary,
 after `keiko-git` membership and containment checks and before returning this contract. Blame needs
 no subcommand allowlist widening. Issue #2228 nevertheless hardens every local read against
-execution-capable repository configuration: fixed Git arguments override `core.fsmonitor=false`,
-diff keeps `--no-ext-diff --no-textconv`, and blame uses `--no-textconv`. The existing
-forbidden-option family remains in force, and `LC_ALL=C` stabilizes machine parsing.
+execution-capable repository configuration: fixed Git arguments override `core.fsmonitor=false` and
+`core.editor=true`; the single spawn boundary injects `--no-ext-diff --no-textconv` right after any
+diff-family subcommand (`diff`, `diff-files`, `diff-index`, `diff-tree`) regardless of what the
+caller passed, so a future call site can never silently reopen the repository-local
+`diff.external`/textconv gap (a blanket `-c diff.external=` override was tried and rejected: git
+treats an explicit empty value as "the external diff command is the empty string" and fails the
+whole invocation rather than falling back to the internal differ — KEIKO-0652, #3318); blame keeps
+`--no-textconv` at the call site. The existing forbidden-option family remains in force, and
+`LC_ALL=C` stabilizes machine parsing.
 
 ### D2 - Two rendering engines behind one contract and visual language
 

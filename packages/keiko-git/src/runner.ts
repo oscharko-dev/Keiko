@@ -20,8 +20,20 @@ export const GIT_BASE_ARGS: readonly string[] = ["--no-pager", "--no-optional-lo
 
 // Repository-local configuration is intentionally still visible for ordinary repository data,
 // but executable read helpers must never run. This fixed override is injected by the local runner
-// before every caller-supplied argument, so no route can accidentally omit it.
-const LOCAL_READ_CONFIG_ARGS: readonly string[] = ["-c", "core.fsmonitor=false"];
+// before every caller-supplied argument, so no route can accidentally omit it. `diff.external` is
+// deliberately NOT here as a blanket `-c diff.external=`: git treats an explicit empty override as
+// "the external diff command is the empty string" and fails the whole invocation at exec time
+// (exit 128) instead of falling back to the internal differ, which would turn every `git diff` on
+// this runner into a hard failure. That helper is neutralized per diff-family subcommand instead —
+// see `withDiffFamilyNeutralized` below. `core.editor=true` has no reachable local-read path (no
+// subcommand this runner uses launches an editor) but costs nothing and closes the config value
+// for good if one is ever added.
+const LOCAL_READ_CONFIG_ARGS: readonly string[] = [
+  "-c",
+  "core.fsmonitor=false",
+  "-c",
+  "core.editor=true",
+];
 const NETWORK_CONFIG_ARGS: readonly string[] = [
   "-c",
   "core.fsmonitor=false",
@@ -59,6 +71,55 @@ const FORBIDDEN_GIT_OPTION = /^--(?:upload-pack|receive-pack|exec)(?:=|$)/u;
 
 function forbiddenGitOption(args: readonly string[]): string | undefined {
   return args.find((arg) => FORBIDDEN_GIT_OPTION.test(arg));
+}
+
+// Diff-family subcommands whose default behaviour can shell out to a repository-local
+// `diff.external` helper, or run a repository-local `textconv` filter, unless the invocation
+// carries `--no-ext-diff --no-textconv`. Injected right after the subcommand token at the single
+// spawn boundary so no caller can silently reopen the gap by omitting the flags — mirroring how
+// NETWORK_CONFIG_ARGS neutralizes remote-facing repository config regardless of the call site.
+const DIFF_FAMILY_SUBCOMMANDS: ReadonlySet<string> = new Set([
+  "diff",
+  "diff-files",
+  "diff-index",
+  "diff-tree",
+]);
+const DIFF_NO_EXTERNAL_ARGS: readonly string[] = ["--no-ext-diff", "--no-textconv"];
+
+// Global flags this codebase's callers pass before the subcommand: GIT_BASE_ARGS'
+// `--no-pager`/`--no-optional-locks` take no value, `-C <path>` takes one. Extend this set before
+// any caller adds another pre-subcommand flag, or subcommand detection below stops one token early
+// and the diff-family injection silently becomes a no-op for that call shape.
+const PRE_SUBCOMMAND_FLAG_NO_VALUE: ReadonlySet<string> = new Set([
+  "--no-pager",
+  "--no-optional-locks",
+]);
+
+function findSubcommandIndex(args: readonly string[]): number | undefined {
+  let index = 0;
+  while (index < args.length) {
+    const arg = args[index];
+    if (arg === "-C") {
+      index += 2;
+      continue;
+    }
+    if (arg !== undefined && PRE_SUBCOMMAND_FLAG_NO_VALUE.has(arg)) {
+      index += 1;
+      continue;
+    }
+    return arg !== undefined && !arg.startsWith("-") ? index : undefined;
+  }
+  return undefined;
+}
+
+function withDiffFamilyNeutralized(args: readonly string[]): readonly string[] {
+  const index = findSubcommandIndex(args);
+  const subcommand = index === undefined ? undefined : args[index];
+  if (index === undefined || subcommand === undefined || !DIFF_FAMILY_SUBCOMMANDS.has(subcommand)) {
+    return args;
+  }
+  if (DIFF_NO_EXTERNAL_ARGS.every((flag) => args.includes(flag))) return args;
+  return [...args.slice(0, index + 1), ...DIFF_NO_EXTERNAL_ARGS, ...args.slice(index + 1)];
 }
 
 interface OutputAccumulator {
@@ -235,7 +296,7 @@ function createGitProcessRunnerWithFixedArgs(
         resolveResult({ ...base, truncated: false, timedOut: false, aborted: false });
         return;
       }
-      const child = spawn(resolution.path, [...fixedArgs, ...args], {
+      const child = spawn(resolution.path, [...fixedArgs, ...withDiffFamilyNeutralized(args)], {
         cwd: options.cwd,
         env,
         shell: false,

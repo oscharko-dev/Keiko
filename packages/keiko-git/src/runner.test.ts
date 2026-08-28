@@ -258,6 +258,52 @@ describe("createGitProcessRunner", () => {
     },
   );
 
+  it.skipIf(process.platform === "win32")(
+    "neutralizes a repository-local diff.external for local reads",
+    async () => {
+      const marker = join(root, "diff-external-executed.marker");
+      const hook = join(root, "hostile-diff-external.sh");
+      writeFileSync(hook, `#!/bin/sh\ntouch '${marker}'\n`);
+      execFileSync("chmod", ["+x", hook]);
+      execFileSync("git", ["config", "diff.external", hook], { cwd: root });
+
+      const tracked = join(root, "tracked.txt");
+      writeFileSync(tracked, "original\n");
+      execFileSync("git", ["add", "tracked.txt"], { cwd: root });
+      writeFileSync(tracked, "changed\n");
+
+      const result = await defaultGitProcessRunner([...GIT_BASE_ARGS, "-C", root, "diff"], {
+        cwd: root,
+        maxBytes: 4096,
+        timeoutMs: 10_000,
+      });
+
+      // The repository-local hostile external-diff helper must never run, AND the read must still
+      // succeed with a correct internal-differ patch. Order matters: this must be red because the
+      // hostile script ran, never because the read itself failed (a blanket `-c diff.external=`
+      // override would fail the whole invocation at exec time, which is not neutralization — see
+      // the comment on LOCAL_READ_CONFIG_ARGS in runner.ts).
+      expect(existsSync(marker)).toBe(false);
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toMatch(/^diff --git /u);
+    },
+  );
+
+  it.each([
+    ["core.fsmonitor", "hostile", "false"],
+    ["core.editor", "hostile-editor", "true"],
+  ] as const)("overrides repository-local read setting %s", async (key, configured, expected) => {
+    execFileSync("git", ["config", key, configured], { cwd: root });
+
+    const result = await defaultGitProcessRunner(
+      [...GIT_BASE_ARGS, "-C", root, "config", "--get", key],
+      { cwd: root, maxBytes: 1_024, timeoutMs: 5_000 },
+    );
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout.trim()).toBe(expected);
+  });
+
   it.each([
     ["core.fsmonitor", "hostile", "false"],
     ["core.hooksPath", "hostile", process.platform === "win32" ? "NUL" : "/dev/null"],
