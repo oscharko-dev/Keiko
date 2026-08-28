@@ -158,7 +158,6 @@ interface RegistryEntry {
   degraded: boolean;
   protection: EditorModelProtection;
   disposed: boolean;
-  disposalReason: EditorModelDisposalReason | null;
 }
 
 const DEFAULT_COUNT_BUDGET = 16;
@@ -386,7 +385,6 @@ export class EditorModelRegistry {
       degraded: input.degraded,
       protection: input.protection,
       disposed: false,
-      disposalReason: null,
     };
   }
 
@@ -496,10 +494,9 @@ export class EditorModelRegistry {
     }
   }
 
-  private disposeEntry(entry: RegistryEntry, reason: EditorModelDisposalReason): void {
+  private disposeEntry(entry: RegistryEntry, _reason: EditorModelDisposalReason): void {
     if (entry.disposed) return;
     entry.disposed = true;
-    entry.disposalReason = reason;
     this.entries.delete(entry.identity);
     if (!modelDisposed(entry.model)) entry.model.dispose();
   }

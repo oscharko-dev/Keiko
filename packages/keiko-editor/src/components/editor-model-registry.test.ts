@@ -1,3 +1,7 @@
+import { readFileSync } from "node:fs";
+import { dirname, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
+
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
@@ -22,6 +26,15 @@ import {
   type RetainedEditorModelNamespace,
   type RetainedEditorUri,
 } from "./editor-model-registry.js";
+
+const here = dirname(fileURLToPath(import.meta.url));
+
+describe("RegistryEntry source (KEIKO-0929)", () => {
+  it("never re-introduces the dead disposalReason field (write-only: zero reads, unread even by diagnostics())", () => {
+    const source = readFileSync(resolve(here, "editor-model-registry.ts"), "utf8");
+    expect(source).not.toContain("disposalReason");
+  });
+});
 
 class FakeUri implements RetainedEditorUri {
   constructor(private readonly value: string) {}
