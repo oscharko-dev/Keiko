@@ -243,6 +243,8 @@ export const DE_MESSAGES = {
     " Embedding-Prüfung fehlgeschlagen, nicht gespeichert: {models}.",
   "gatewaySetup.unusable.unverified":
     " Übernommen, aber als Embedding-Modell nicht verifiziert: {models}.",
+  "gatewaySetup.unusable.unverifiedChat":
+    " Übernommen, aber als Chat-Modell nicht verifiziert: {models}.",
   // Der Undo-Stapel der Shell zeichnet ausschließlich Panel-Umschaltungen auf — kein Verschieben,
   // Skalieren, Maximieren oder Schließen von Fenstern erreicht ihn.
   "shell.command.undo.target": "Rückgängig: {target}",

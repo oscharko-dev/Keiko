@@ -569,9 +569,7 @@ describe("handleGatewaySetup", () => {
       uiDbPath: join(uiDir, "keiko-ui.db"),
       gatewayEmbeddingProbe: PASSTHROUGH_EMBEDDING_PROBE,
       gatewaySetupTester: () =>
-        Promise.reject(
-          Object.assign(new Error("provider unavailable"), { code: ERROR_CODES.TRANSPORT }),
-        ),
+        Promise.reject(Object.assign(new Error("provider unavailable"), { code: "ETIMEDOUT" })),
     });
 
     const result = await handleGatewaySetup(

@@ -644,16 +644,27 @@ async function probeToolCalling(
       "OpenAI-compatible tool call returned the expected function name.",
     );
   }
-  return toolCallingResult(status === "unsupported" ? "unsupported" : "failed", start);
+  return toolCallingResult(status === "unsupported" ? "unsupported" : "failed", start, provider);
 }
 
-function toolCallingResult(status: ProbeStatus, start: number): GatewayReadinessProbeResult {
+function toolCallingResult(
+  status: ProbeStatus,
+  start: number,
+  provider: ModelProviderConfig,
+): GatewayReadinessProbeResult {
   return rejectedCapabilityResult(
     "tool_calling",
     status,
     start,
     "Tool calling was not accepted by the endpoint.",
+    qwenToolCallingWarning(provider),
   );
+}
+
+function qwenToolCallingWarning(provider: ModelProviderConfig): string | undefined {
+  return provider.modelId.toLowerCase().includes("qwen3-coder")
+    ? "For Qwen3-Coder on vLLM, ask the provider to enable auto tool choice and the qwen3_coder tool parser."
+    : undefined;
 }
 
 async function probeJsonSchema(

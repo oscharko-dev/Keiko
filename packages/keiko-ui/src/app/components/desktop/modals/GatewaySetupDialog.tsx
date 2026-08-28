@@ -152,7 +152,7 @@ function unusableModelSummary(t: GatewaySetupTranslate, result: GatewaySetupResp
   }
   const unverifiedChat = result.unverifiedChatModelIds ?? [];
   if (unverifiedChat.length > 0) {
-    parts.push(t("gatewaySetup.unusable.unverified", { models: unverifiedChat.join(", ") }));
+    parts.push(t("gatewaySetup.unusable.unverifiedChat", { models: unverifiedChat.join(", ") }));
   }
   return parts.join("");
 }

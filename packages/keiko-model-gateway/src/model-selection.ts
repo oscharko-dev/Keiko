@@ -35,12 +35,14 @@ import type {
 } from "@oscharko-dev/keiko-contracts";
 import { UNVERIFIED_GATEWAY } from "@oscharko-dev/keiko-contracts/runtime/gateway-verification";
 import { deriveContextProfileFromCapability } from "@oscharko-dev/keiko-contracts/runtime/context-engineering";
-import { isCodingWorkbenchModel } from "@oscharko-dev/keiko-contracts/runtime/gateway";
+import {
+  isCodingWorkbenchModel,
+  isToolCallingVerificationFresh,
+} from "@oscharko-dev/keiko-contracts/runtime/gateway";
 const voiceCapabilityCache = new WeakMap<
   ConfiguredCapabilitySource,
   Map<string, VoiceCapabilityResolution>
 >();
-const TOOL_CALLING_VERIFICATION_MAX_AGE_MS = 24 * 60 * 60 * 1_000;
 
 export interface ModelSelectionQuery {
   readonly kind: ModelKind;
@@ -97,13 +99,10 @@ function matches(capability: ModelCapability, query: ModelSelectionQuery): boole
   return true;
 }
 
-function hasCurrentToolCallingVerification(capability: ModelCapability): boolean {
-  if (!capability.toolCalling || capability.toolCallingVerification?.status !== "verified") {
-    return false;
-  }
-  const checkedAt = Date.parse(capability.toolCallingVerification.checkedAt);
-  const ageMs = Date.now() - checkedAt;
-  return Number.isFinite(checkedAt) && ageMs >= 0 && ageMs <= TOOL_CALLING_VERIFICATION_MAX_AGE_MS;
+export function hasCurrentToolCallingVerification(capability: ModelCapability): boolean {
+  return (
+    capability.toolCalling && isToolCallingVerificationFresh(capability.toolCallingVerification)
+  );
 }
 
 export function assertConfiguredModel(config: ConfiguredCapabilitySource, modelId: string): void {

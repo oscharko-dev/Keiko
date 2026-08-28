@@ -3,9 +3,9 @@
 // API keys are sourced only from environment or the config file, never CLI flags,
 // and are excluded from every serialisation path.
 
-import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { isIP } from "node:net";
+import { canonicalise, sha256Hex } from "@oscharko-dev/keiko-security";
 import { ConfigInvalidError } from "@oscharko-dev/keiko-security/errors/gateway";
 import {
   DEFAULT_GROUNDING_LIMITS,
@@ -18,8 +18,10 @@ import {
   MODEL_REASONING_EFFORTS,
   PROVIDER_ENDPOINT_STYLES,
   REALTIME_AUTH_MODES,
+  isToolCallingVerificationFresh,
   isVoiceCapability,
   modelSupportsSpeechOutput,
+  TOOL_CALLING_VERIFICATION_MAX_AGE_MS,
 } from "@oscharko-dev/keiko-contracts/runtime/gateway";
 import { outboundTargetBlockedReason } from "./egress-policy.js";
 import { projectSafeCapabilities, type SafeModelCapability } from "./model-selection.js";
@@ -56,7 +58,7 @@ export function toolCallingConfigurationFingerprint(provider: ModelProviderConfi
     provider.endpointStyle ?? "openai-compatible",
     provider.apiVersion ?? "",
   ];
-  return createHash("sha256").update(JSON.stringify(binding)).digest("hex");
+  return sha256Hex(canonicalise(binding));
 }
 
 const DEFAULT_TIMEOUT_MS = 30_000;
@@ -77,7 +79,7 @@ export const DEFAULT_CIRCUIT_BREAKER_CONFIG = {
   halfOpenProbes: DEFAULT_HALF_OPEN_PROBES,
 } as const;
 export const DEFAULT_API_KEY_HEADER_NAME = "authorization";
-export const TOOL_CALLING_VERIFICATION_MAX_AGE_MS = 24 * 60 * 60 * 1_000;
+export { TOOL_CALLING_VERIFICATION_MAX_AGE_MS };
 const MAX_API_KEY_HEADER_NAME_LENGTH = 64;
 const API_KEY_HEADER_NAME_RE = /^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$/u;
 export const SUPPORTED_API_KEY_HEADER_NAMES = [
@@ -1879,12 +1881,7 @@ function hasCurrentToolCallingVerification(
   ) {
     return false;
   }
-  const checkedAt = Date.parse(verification.checkedAt);
-  return (
-    Number.isFinite(checkedAt) &&
-    checkedAt <= now &&
-    now - checkedAt <= TOOL_CALLING_VERIFICATION_MAX_AGE_MS
-  );
+  return isToolCallingVerificationFresh(verification, now);
 }
 
 function verifiedToolCallingCapability(

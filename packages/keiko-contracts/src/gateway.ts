@@ -55,6 +55,23 @@ export interface ToolCallingVerification {
   readonly configurationFingerprint: string;
 }
 
+/** A forced tool-call proof expires unless the deployment is probed again. */
+export const TOOL_CALLING_VERIFICATION_MAX_AGE_MS = 24 * 60 * 60 * 1_000;
+
+/**
+ * Returns whether the proof itself is current. Callers that know the provider must additionally
+ * compare its configuration fingerprint before relying on the capability.
+ */
+export function isToolCallingVerificationFresh(
+  verification: ToolCallingVerification | undefined,
+  now = Date.now(),
+): boolean {
+  if (verification?.status !== "verified") return false;
+  const checkedAt = Date.parse(verification.checkedAt);
+  const ageMs = now - checkedAt;
+  return Number.isFinite(checkedAt) && ageMs >= 0 && ageMs <= TOOL_CALLING_VERIFICATION_MAX_AGE_MS;
+}
+
 export type ModelTokenAccountingSource = "calibrated";
 
 export interface ModelTokenAccounting {
@@ -273,6 +290,7 @@ export function isCodingWorkbenchModel(capability: ModelCapability): boolean {
   return (
     capability.kind === "chat" &&
     capability.toolCalling &&
+    isToolCallingVerificationFresh(capability.toolCallingVerification) &&
     capability.workflowEligible &&
     capability.preferredUseCases.some((value) =>
       CODING_WORKBENCH_USE_CASES.has(normalizedCodingUseCase(value)),
