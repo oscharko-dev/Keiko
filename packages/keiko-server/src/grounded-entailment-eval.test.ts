@@ -16,16 +16,12 @@ describe("runGroundedEntailmentEval", () => {
     expect(scorecard.failures).toEqual([]);
   });
 
-  it("KEIKO-0659: exercises the three added branch scenarios (multi-citation, over-max excerpt, budget)", async () => {
-    // These three fixtures are the ones added to close the missing-coverage finding; the outer
-    // gate already asserts 1.0 across variants, but this test locks in the specific fixture
-    // count so a future refactor cannot silently drop one and still show a green scorecard.
+  it("keeps both path and numeric citation branch fixtures in the deterministic gate", async () => {
+    // The outer gate already asserts 1.0 across variants; the exact count prevents a future
+    // refactor from silently dropping numeric membership, duplicate, malformed, or judge cases.
     const scorecard = await runGroundedEntailmentEval();
-    // 6 pre-existing + 3 new (multi-citation-mixed, excerpt-over-max, budget-exhaustion) = 9.
-    expect(scorecard.fixtures).toBe(9);
-    // With the three additions the unsupported-claim variant grows from 3 to 4, and the
-    // unavailable variant from 1 to 3, so the detection/degradation floors are still 1.0
-    // (proving every added branch resolves to its expected verdict).
+    // 9 existing path fixtures + 6 numeric connector fixtures = 15.
+    expect(scorecard.fixtures).toBe(15);
     expect(scorecard.unsupportedClaimDetectionRate).toBe(1);
     expect(scorecard.degradationCorrectnessRate).toBe(1);
     expect(scorecard.failures).toEqual([]);

@@ -29,9 +29,11 @@ import {
   buildPackExcerptTextResolver,
   entailmentUnavailableMarker,
   reconcileClaimEntailment,
+  reconcileNumericClaimEntailment,
   reconcileInlineCitations,
   unsupportedClaimMarker,
   type EntailmentJudge,
+  type NumericEntailmentEvidence,
   type EntailmentOptions,
   type EntailmentReconciliation,
 } from "./grounded-faithfulness.js";
@@ -52,6 +54,13 @@ export interface EntailmentStage {
   readonly evaluate: (
     answerText: string,
     packs: readonly ConnectedContextPack[],
+    nowMs: number,
+  ) => Promise<readonly UncertaintyMarker[]>;
+  // Numeric connector citations use the same judge, budget, warning vocabulary, and diagnostics
+  // as path-and-line citations. Evidence is supplied only from the prompt-selected rendering.
+  readonly evaluateNumeric: (
+    answerText: string,
+    selectedEvidence: readonly NumericEntailmentEvidence[],
     nowMs: number,
   ) => Promise<readonly UncertaintyMarker[]>;
 }
@@ -159,6 +168,35 @@ async function evaluateEntailment(
   }
 }
 
+async function evaluateNumericEntailment(
+  answerText: string,
+  selectedEvidence: readonly NumericEntailmentEvidence[],
+  nowMs: number,
+  judge: EntailmentJudge,
+  options: EntailmentOptions,
+  observability: CorrelatedEntailmentObservability,
+  signal: AbortSignal | undefined,
+): Promise<readonly UncertaintyMarker[]> {
+  try {
+    const result = await reconcileNumericClaimEntailment(
+      answerText,
+      selectedEvidence,
+      judge,
+      options,
+      signal,
+    );
+    return markersFor(result, nowMs, observability);
+  } catch (error) {
+    recordDiagnostic(
+      observability,
+      nowMs,
+      contentFreeErrorClass(error),
+      "entailment stage failed; degraded to WARN",
+    );
+    return [entailmentUnavailableMarker(nowMs)];
+  }
+}
+
 /**
  * Build the entailment stage for a grounded ask, or `undefined` when it must stay inert (no judge
  * model configured, or a capsule policy denies answer synthesis). `modelId` is the model that
@@ -206,5 +244,19 @@ export function createEntailmentStage(
       nowMs: number,
     ): Promise<readonly UncertaintyMarker[]> =>
       evaluateEntailment(answerText, packs, nowMs, judge, options, correlated, signal),
+    evaluateNumeric: (
+      answerText: string,
+      selectedEvidence: readonly NumericEntailmentEvidence[],
+      nowMs: number,
+    ): Promise<readonly UncertaintyMarker[]> =>
+      evaluateNumericEntailment(
+        answerText,
+        selectedEvidence,
+        nowMs,
+        judge,
+        options,
+        correlated,
+        signal,
+      ),
   };
 }

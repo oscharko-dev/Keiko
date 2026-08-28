@@ -89,7 +89,9 @@ import {
   missingCitationMarker,
   reconcileNumericCitations,
   unsupportedNumericCitationMarker,
+  type NumericEntailmentEvidence,
 } from "./grounded-faithfulness.js";
+import { createEntailmentStage } from "./grounded-entailment-stage.js";
 import { persistGroundedExchange } from "./grounded-message-persistence.js";
 import {
   assertConversationReadinessAdmission,
@@ -587,28 +589,37 @@ function buildReferenceLines(
 ): readonly string[] {
   const lines: string[] = [];
   const references = input.references.slice(0, limits.maxPromptReferences);
-  // GRD-001: strip Trojan-source / invisible format chars before redaction so reordered or
-  // hidden instructions in indexed document text never reach the model or the rendered wire.
-  const safeRedact = (value: string): string => redactExcerpt(stripUnsafeFormatChars(value));
   for (let i = 0; i < references.length; i += 1) {
     const reference = references[i];
     if (reference === undefined) continue;
-    const label = renderCitationLabel(reference.citation, safeRedact);
-    // Redact secret-shaped strings out of document excerpts before they reach the model,
-    // matching the hybrid grounded-ask path (grounded-qa-hybrid.ts). Without this the
-    // single-connector path would forward raw document content (e.g. an embedded API key)
-    // verbatim to the configured gateway.
-    const excerpt = safeRedact(
-      readCitationExcerpt(store, reference.capsuleId, reference.citation, limits.maxExcerptChars),
-    );
-    lines.push(`[${String(i + 1)}] ${label}`);
-    if (excerpt.length > 0) {
-      lines.push("```text", excerpt, "```");
-    } else {
-      lines.push("(No excerpt text available for this citation.)");
-    }
+    const rendered = renderConnectorEvidence(reference, store, redactExcerpt, limits);
+    lines.push(`[${String(i + 1)}] ${rendered.label}`, "```text", rendered.excerpt, "```");
   }
   return lines;
+}
+
+interface RenderedConnectorEvidence {
+  readonly label: string;
+  readonly excerpt: string;
+}
+
+function renderConnectorEvidence(
+  reference: RetrievalReference,
+  store: KnowledgeStore,
+  redactExcerpt: (value: string) => string,
+  limits: ReturnType<typeof currentGroundingLimits>,
+): RenderedConnectorEvidence {
+  // GRD-001: strip Trojan-source / invisible format chars before redaction so reordered or
+  // hidden instructions in indexed document text never reach the model or the rendered wire.
+  const safeRedact = (value: string): string => redactExcerpt(stripUnsafeFormatChars(value));
+  const label = renderCitationLabel(reference.citation, safeRedact);
+  const excerpt = safeRedact(
+    readCitationExcerpt(store, reference.capsuleId, reference.citation, limits.maxExcerptChars),
+  );
+  return {
+    label,
+    excerpt: excerpt.length > 0 ? excerpt : "(No excerpt text available for this citation.)",
+  };
 }
 
 function localKnowledgePromptSummary(input: AnswerGeneratorInput): string {
@@ -2171,15 +2182,110 @@ function persistRedactedGroundedExchange(
   );
 }
 
-function persistScopedGroundedAnswer(
-  chat: Chat,
-  input: AskInput,
-  deps: UiHandlerDeps,
-  env: { readonly store: KnowledgeStore },
-  selected: SelectedLocalKnowledgeScope,
+function numericEntailmentEvidence(
   result: ScopedGroundedResult,
-  startedAt: number,
-): GroundedAnswer {
+  store: KnowledgeStore,
+  deps: UiHandlerDeps,
+  limits: ReturnType<typeof currentGroundingLimits>,
+): readonly NumericEntailmentEvidence[] {
+  return result.references.slice(0, limits.maxPromptReferences).map((reference, index) => {
+    const rendered = renderConnectorEvidence(
+      reference,
+      store,
+      (value) => redactText(deps, value),
+      limits,
+    );
+    const marker = index + 1;
+    return {
+      marker,
+      excerptText: `[${String(marker)}] ${rendered.label}\n\`\`\`text\n${rendered.excerpt}\n\`\`\``,
+    };
+  });
+}
+
+async function appendLocalKnowledgeNumericEntailment(
+  answer: GroundedAnswer,
+  result: ScopedGroundedResult,
+  selected: SelectedLocalKnowledgeScope,
+  context: ScopedGroundedAnswerContext & { readonly modelId: string },
+  env: { readonly store: KnowledgeStore },
+  deps: UiHandlerDeps,
+  limits: ReturnType<typeof currentGroundingLimits>,
+): Promise<GroundedAnswer> {
+  if (
+    result.noEvidence ||
+    result.answerOnlyContextUsed === true ||
+    result.references.length === 0
+  ) {
+    return answer;
+  }
+  const stage = createEntailmentStage(
+    deps,
+    selected.capsules,
+    context.modelId,
+    {
+      diagnostics: deps.diagnostics,
+      ...(context.correlationId === undefined ? {} : { correlationId: context.correlationId }),
+    },
+    context.signal,
+  );
+  if (stage === undefined) return answer;
+  const markers = await stage.evaluateNumeric(
+    result.answer,
+    numericEntailmentEvidence(result, env.store, deps, limits),
+    Date.now(),
+  );
+  if (markers.length === 0) return answer;
+  return {
+    ...answer,
+    uncertainty: [
+      ...answer.uncertainty,
+      ...markers.map((marker) => ({ kind: marker.kind, claim: redactText(deps, marker.claim) })),
+    ],
+  };
+}
+
+function buildPersistedScopedAnswer(input: {
+  readonly chat: Chat;
+  readonly store: KnowledgeStore;
+  readonly selected: SelectedLocalKnowledgeScope;
+  readonly persisted: readonly [ChatMessage, ChatMessage];
+  readonly result: ScopedGroundedResult;
+  readonly elapsedMs: number;
+  readonly limits: ReturnType<typeof currentGroundingLimits>;
+  readonly sourceLookup: LocalKnowledgeCitationSourceLookup;
+  readonly deps: UiHandlerDeps;
+}): GroundedAnswer {
+  return buildLocalKnowledgeAnswer({
+    chat: input.chat,
+    store: input.store,
+    selected: input.selected,
+    persisted: input.persisted,
+    result: input.result,
+    elapsedMs: input.elapsedMs,
+    assistantContent: input.persisted[1].content,
+    limits: input.limits,
+    sourceLookup: input.sourceLookup,
+    redactLabel: (value: string): string => redactText(input.deps, value),
+    diagnostics: input.deps.diagnostics,
+  });
+}
+
+interface PersistScopedGroundedAnswerInput {
+  readonly chat: Chat;
+  readonly input: AskInput;
+  readonly deps: UiHandlerDeps;
+  readonly env: { readonly store: KnowledgeStore };
+  readonly selected: SelectedLocalKnowledgeScope;
+  readonly result: ScopedGroundedResult;
+  readonly startedAt: number;
+  readonly context: ScopedGroundedAnswerContext & { readonly modelId: string };
+}
+
+async function persistScopedGroundedAnswer(
+  persistedInput: PersistScopedGroundedAnswerInput,
+): Promise<GroundedAnswer> {
+  const { chat, input, deps, env, selected, result, startedAt, context } = persistedInput;
   const elapsedMs = Date.now() - startedAt;
   const auditSink = createSqliteAuditSink(env.store);
   const occurredAt = Date.now();
@@ -2190,28 +2296,35 @@ function persistScopedGroundedAnswer(
   const persisted = persistRedactedGroundedExchange(deps, chat, input, assistantContent);
   const sourceLookup = buildSelectedScopeSourceLookup(env.store, selected);
   const limits = currentGroundingLimits(deps);
-  const answer = buildLocalKnowledgeAnswer({
+  const answer = buildPersistedScopedAnswer({
     chat,
     store: env.store,
     selected,
     persisted,
     result,
     elapsedMs,
-    assistantContent: persisted[1].content,
     limits,
     sourceLookup,
-    redactLabel: (value: string): string => redactText(deps, value),
-    diagnostics: deps.diagnostics,
-  }) satisfies GroundedAnswer;
+    deps,
+  });
+  const finalAnswer = await appendLocalKnowledgeNumericEntailment(
+    answer,
+    result,
+    selected,
+    context,
+    env,
+    deps,
+    limits,
+  );
   attachGroundedAnswerWithPreviewCitations(
     deps,
     env,
     persisted[1].id,
-    answer,
+    finalAnswer,
     result,
     sourceLookup,
   );
-  return answer;
+  return finalAnswer;
 }
 
 function createScopedAnswerGenerator(
@@ -2245,6 +2358,24 @@ interface ScopedGroundedAnswerContext {
   readonly correlationId: string | undefined;
 }
 
+function scopedCitationFaithfulness(
+  store: KnowledgeStore,
+  limits: ReturnType<typeof currentGroundingLimits>,
+): { readonly excerptForReference: (reference: RetrievalReference) => string } {
+  return {
+    // The faithfulness basis is the label plus the excerpt shown to the model. The label carries a
+    // repository path while the excerpt is raw source, so judging the excerpt alone drops faithful
+    // citations such as "implemented in code-parser.ts".
+    excerptForReference: (reference): string =>
+      `${renderCitationLabel(reference.citation)}\n${readCitationExcerpt(
+        store,
+        reference.capsuleId,
+        reference.citation,
+        limits.maxExcerptChars,
+      )}`,
+  };
+}
+
 async function runScopedGroundedAnswer(
   chat: Chat,
   input: AskInput,
@@ -2272,22 +2403,7 @@ async function runScopedGroundedAnswer(
       },
       answerGenerator: generator,
       referenceReranker: referenceRerankerForScope(deps, env.store, selected, limits),
-      citationFaithfulness: {
-        // The faithfulness basis must be everything the model was SHOWN for that reference, which
-        // is the rendered label followed by the excerpt (see renderCitations: `[n] label` then the
-        // fenced excerpt). Judging against the excerpt alone rejects citations that are perfectly
-        // faithful to the label — and for a repository pod that is the normal case, because the
-        // label carries the file path while the excerpt is raw source. An answer saying "implemented
-        // in code-parser.ts" then shares no tokens with the code body and its citation is silently
-        // dropped, leaving a bare [n] marker in the prose with nothing behind it.
-        excerptForReference: (reference): string =>
-          `${renderCitationLabel(reference.citation)}\n${readCitationExcerpt(
-            env.store,
-            reference.capsuleId,
-            reference.citation,
-            limits.maxExcerptChars,
-          )}`,
-      },
+      citationFaithfulness: scopedCitationFaithfulness(env.store, limits),
       signal,
     },
     localKnowledgeQuery(chat, input, deps),
@@ -2295,7 +2411,16 @@ async function runScopedGroundedAnswer(
   if (signal.aborted) {
     throw new CancelledError("grounded request cancelled");
   }
-  return persistScopedGroundedAnswer(chat, input, deps, env, selected, result, startedAt);
+  return await persistScopedGroundedAnswer({
+    chat,
+    input,
+    deps,
+    env,
+    selected,
+    result,
+    startedAt,
+    context: { ...context, modelId },
+  });
 }
 
 function stateFailureRoute(

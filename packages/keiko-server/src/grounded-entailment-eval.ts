@@ -20,7 +20,9 @@ import {
   buildPackExcerptTextResolver,
   reconcileClaimEntailment,
   reconcileInlineCitations,
+  reconcileNumericClaimEntailment,
   type EntailmentJudge,
+  type NumericEntailmentEvidence,
   type EntailmentOptions,
   type EntailmentReconciliation,
   type EntailmentVerdict,
@@ -52,6 +54,9 @@ interface EntailmentFixture {
   // the maxClaims / maxTotalMs exhaustion branch in reconcileClaimEntailment without changing
   // the default budget every other fixture uses. Undefined means "use DEFAULT_ENTAILMENT_OPTIONS".
   readonly options?: EntailmentOptions | undefined;
+  // Numeric connector evidence is already the exact, prompt-rendered `[n]` candidate text. When
+  // present, the score exercises numeric membership + segmentation + the SAME entailment engine.
+  readonly numericEvidence?: readonly NumericEntailmentEvidence[] | undefined;
 }
 
 // Distractor-dense shared evidence: every fixture cites into a pack that also holds unrelated,
@@ -185,6 +190,48 @@ const FIXTURES: readonly EntailmentFixture[] = [
     },
     options: { ...DEFAULT_ENTAILMENT_OPTIONS, maxClaims: 1 },
   },
+  {
+    name: "supported-numeric-connector",
+    variant: "supported",
+    answerText: "Audit logs are retained for 30 days.[1]",
+    excerpts: {},
+    numericEvidence: [{ marker: 1, excerptText: SUPPORTING }],
+  },
+  {
+    name: "unsupported-numeric-connector",
+    variant: "unsupported-claim",
+    answerText: "Audit logs are retained for ten years [1].",
+    excerpts: {},
+    numericEvidence: [{ marker: 1, excerptText: CONTRADICTING }],
+  },
+  {
+    name: "unavailable-numeric-connector",
+    variant: "unavailable",
+    answerText: "Audit logs are retained for 30 days 【1】.",
+    excerpts: {},
+    numericEvidence: [{ marker: 1, excerptText: UNJUDGEABLE }],
+  },
+  {
+    name: "numeric-missing-marker-is-not-semantic-evidence",
+    variant: "supported",
+    answerText: "Audit logs are retained for 30 days [9].",
+    excerpts: {},
+    numericEvidence: [{ marker: 1, excerptText: CONTRADICTING }],
+  },
+  {
+    name: "numeric-duplicate-marker-is-one-claim",
+    variant: "supported",
+    answerText: "Audit logs are retained for 30 days [1][1].",
+    excerpts: {},
+    numericEvidence: [{ marker: 1, excerptText: SUPPORTING }],
+  },
+  {
+    name: "numeric-malformed-marker-is-not-semantic-evidence",
+    variant: "supported",
+    answerText: "Audit logs are retained for 30 days [not-a-marker] and [0].",
+    excerpts: {},
+    numericEvidence: [{ marker: 1, excerptText: CONTRADICTING }],
+  },
 ];
 
 function verdictFromToken(excerptText: string): EntailmentVerdict {
@@ -218,6 +265,14 @@ async function evaluateFixture(
   fixture: EntailmentFixture,
   judge: EntailmentJudge,
 ): Promise<EntailmentReconciliation> {
+  if (fixture.numericEvidence !== undefined) {
+    return reconcileNumericClaimEntailment(
+      fixture.answerText,
+      fixture.numericEvidence,
+      judge,
+      fixture.options ?? DEFAULT_ENTAILMENT_OPTIONS,
+    );
+  }
   const packs = [packFor(fixture)];
   const membership = reconcileInlineCitations(fixture.answerText, buildPackCitationIndex(packs));
   const resolveExcerptText = buildPackExcerptTextResolver(packs);

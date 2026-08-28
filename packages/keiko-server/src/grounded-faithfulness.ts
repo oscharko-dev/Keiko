@@ -196,6 +196,20 @@ export interface NumericCitationReconciliation {
   readonly unsupportedMarkers: readonly number[];
 }
 
+interface ParsedNumericCitation {
+  readonly marker: number;
+  readonly offset: number;
+}
+
+function parseNumericCitations(answerText: string): readonly ParsedNumericCitation[] {
+  const citations: ParsedNumericCitation[] = [];
+  for (const match of answerText.matchAll(NUMERIC_CITATION_RE)) {
+    const marker = Number.parseInt(match[1] ?? "", 10);
+    if (Number.isSafeInteger(marker) && marker > 0) citations.push({ marker, offset: match.index });
+  }
+  return citations;
+}
+
 /** Reconcile hybrid `[n]` markers against the exact selected evidence marker set. */
 export function reconcileNumericCitations(
   answerText: string,
@@ -204,11 +218,7 @@ export function reconcileNumericCitations(
   const citedMarkers = new Set<number>();
   const unsupportedMarkers: number[] = [];
   const seenUnsupported = new Set<number>();
-  for (const match of answerText.matchAll(NUMERIC_CITATION_RE)) {
-    const rawMarker = match[1];
-    if (rawMarker === undefined) continue;
-    const marker = Number.parseInt(rawMarker, 10);
-    if (!Number.isSafeInteger(marker) || marker < 1) continue;
+  for (const { marker } of parseNumericCitations(answerText)) {
     if (supportedMarkers.has(marker)) {
       citedMarkers.add(marker);
     } else if (!seenUnsupported.has(marker)) {
@@ -555,6 +565,68 @@ export function segmentCitedClaims(answerText: string): readonly CitedClaim[] {
   return claims;
 }
 
+export interface NumericCitedClaim {
+  readonly claimText: string;
+  readonly markers: readonly number[];
+}
+
+function isNumericClaimBoundary(text: string, offset: number): boolean {
+  const character = text.charAt(offset);
+  if (character === "!" || character === "?" || character === "\n") return true;
+  if (character !== ".") return false;
+  const next = text.charAt(offset + 1);
+  return next.length === 0 || /\s/u.test(next);
+}
+
+function numericSentenceBounds(
+  text: string,
+  offset: number,
+): { readonly start: number; readonly end: number } {
+  let start = offset;
+  while (start > 0 && !isNumericClaimBoundary(text, start - 1)) start -= 1;
+  let end = offset;
+  while (end < text.length && !isNumericClaimBoundary(text, end)) end += 1;
+  return { start, end };
+}
+
+function precedingNumericSentenceBounds(
+  text: string,
+  start: number,
+  fallbackEnd: number,
+): { readonly start: number; readonly end: number } {
+  let previousEnd = start;
+  while (previousEnd > 0 && isNumericClaimBoundary(text, previousEnd - 1)) previousEnd -= 1;
+  if (previousEnd === 0) return { start, end: fallbackEnd };
+  let previousStart = previousEnd - 1;
+  while (previousStart > 0 && !isNumericClaimBoundary(text, previousStart - 1)) previousStart -= 1;
+  return { start: previousStart, end: previousEnd };
+}
+
+function numericCitationClaimBounds(
+  text: string,
+  offset: number,
+): { readonly start: number; readonly end: number } {
+  const own = numericSentenceBounds(text, offset);
+  return stripInlineCitations(text.slice(own.start, own.end)).length > 0
+    ? own
+    : precedingNumericSentenceBounds(text, own.start, own.end);
+}
+
+/** Segment user-visible `[n]` citations against the sentence each marker actually supports. */
+export function segmentNumericCitedClaims(answerText: string): readonly NumericCitedClaim[] {
+  const claims = new Map<string, { claimText: string; markers: number[] }>();
+  for (const citation of parseNumericCitations(answerText)) {
+    const bounds = numericCitationClaimBounds(answerText, citation.offset);
+    const claimText = stripInlineCitations(answerText.slice(bounds.start, bounds.end));
+    if (claimText.length === 0) continue;
+    const key = `${String(bounds.start)}:${String(bounds.end)}`;
+    const claim = claims.get(key) ?? { claimText, markers: [] };
+    if (!claim.markers.includes(citation.marker)) claim.markers.push(citation.marker);
+    claims.set(key, claim);
+  }
+  return [...claims.values()];
+}
+
 /** A claim whose cited excerpt(s) did NOT support it (verdict `unsupported`). */
 export interface UnentailedClaim {
   readonly citedPaths: readonly string[];
@@ -572,6 +644,22 @@ export interface EntailmentReconciliation {
 /** Resolve the bounded excerpt text for a membership-valid citation, or `undefined` if none. */
 export type ExcerptTextResolver = (citation: ParsedInlineCitation) => string | undefined;
 
+/** Evidence selected and rendered for one numeric `[n]` connector citation. */
+export interface NumericEntailmentEvidence {
+  readonly marker: number;
+  readonly excerptText: string;
+}
+
+interface EntailmentClaimEvidence {
+  readonly citedPath: string;
+  readonly excerptText: string | undefined;
+}
+
+interface EntailmentClaim {
+  readonly claimText: string;
+  readonly evidence: readonly EntailmentClaimEvidence[];
+}
+
 interface CollectedExcerptText {
   readonly text: string;
   // True when the joined excerpt text exceeded `maxExcerptChars` and was cut down for the judge —
@@ -581,14 +669,13 @@ interface CollectedExcerptText {
 }
 
 function collectExcerptText(
-  citations: readonly ParsedInlineCitation[],
-  resolveExcerptText: ExcerptTextResolver,
+  evidence: readonly EntailmentClaimEvidence[],
   maxExcerptChars: number,
 ): CollectedExcerptText {
   const seen = new Set<string>();
   const parts: string[] = [];
-  for (const citation of citations) {
-    const text = resolveExcerptText(citation)?.trim();
+  for (const item of evidence) {
+    const text = item.excerptText?.trim();
     if (text === undefined || text.length === 0 || seen.has(text)) {
       continue;
     }
@@ -610,16 +697,10 @@ interface JudgeableClaim {
 }
 
 function judgeableClaimFor(
-  claim: CitedClaim,
-  validCitations: readonly ParsedInlineCitation[],
-  resolveExcerptText: ExcerptTextResolver,
+  claim: EntailmentClaim,
   maxExcerptChars: number,
 ): JudgeableClaim | undefined {
-  const { text: excerptText, truncated } = collectExcerptText(
-    validCitations,
-    resolveExcerptText,
-    maxExcerptChars,
-  );
+  const { text: excerptText, truncated } = collectExcerptText(claim.evidence, maxExcerptChars);
   if (excerptText.length === 0 || claim.claimText.length === 0) {
     // No usable excerpt/claim text to judge against — undecidable, never assumed supported.
     return undefined;
@@ -633,7 +714,7 @@ function judgeableClaimFor(
   return {
     claimText: claim.claimText,
     excerptText,
-    citedPaths: [...new Set(validCitations.map((citation) => citation.scopePath))],
+    citedPaths: [...new Set(claim.evidence.map((item) => item.citedPath))],
   };
 }
 
@@ -670,24 +751,19 @@ interface ScheduledClaim {
 }
 
 function scheduleClaimJudges(
-  answerText: string,
-  membership: CitationReconciliation,
-  resolveExcerptText: ExcerptTextResolver,
+  claims: readonly EntailmentClaim[],
   judge: EntailmentJudge,
   options: EntailmentOptions,
   budget: AbortSignal | undefined,
 ): { readonly scheduled: readonly ScheduledClaim[]; readonly unavailableClaims: number } {
-  const membershipFailed = new Set(membership.unsupported.map(citationDedupKey));
   let unavailableClaims = 0;
   const scheduled: ScheduledClaim[] = [];
-  for (const claim of segmentCitedClaims(answerText)) {
-    const valid = claim.citations.filter((c) => !membershipFailed.has(citationDedupKey(c)));
-    if (valid.length === 0) continue;
+  for (const claim of claims) {
     if (scheduled.length >= options.maxClaims || budget?.aborted === true) {
       unavailableClaims += 1;
       continue;
     }
-    const judgeable = judgeableClaimFor(claim, valid, resolveExcerptText, options.maxExcerptChars);
+    const judgeable = judgeableClaimFor(claim, options.maxExcerptChars);
     if (judgeable === undefined) {
       unavailableClaims += 1;
       continue;
@@ -700,24 +776,15 @@ function scheduleClaimJudges(
   return { scheduled, unavailableClaims };
 }
 
-export async function reconcileClaimEntailment(
-  answerText: string,
-  membership: CitationReconciliation,
-  resolveExcerptText: ExcerptTextResolver,
+async function reconcileEntailmentClaims(
+  claims: readonly EntailmentClaim[],
   judge: EntailmentJudge,
-  options: EntailmentOptions = DEFAULT_ENTAILMENT_OPTIONS,
-  signal?: AbortSignal,
+  options: EntailmentOptions,
+  signal: AbortSignal | undefined,
 ): Promise<EntailmentReconciliation> {
   const budget = entailmentBudgetSignal(options.maxTotalMs, signal);
   const unentailed: UnentailedClaim[] = [];
-  const scheduledClaims = scheduleClaimJudges(
-    answerText,
-    membership,
-    resolveExcerptText,
-    judge,
-    options,
-    budget,
-  );
+  const scheduledClaims = scheduleClaimJudges(claims, judge, options, budget);
   let unavailableClaims = scheduledClaims.unavailableClaims;
   const { scheduled } = scheduledClaims;
   const outcomes = await Promise.all(scheduled.map(({ verdict }) => verdict));
@@ -731,6 +798,71 @@ export async function reconcileClaimEntailment(
     }
   }
   return { unentailed, judgedClaims: scheduled.length, unavailableClaims };
+}
+
+function inlineEntailmentClaims(
+  answerText: string,
+  membership: CitationReconciliation,
+  resolveExcerptText: ExcerptTextResolver,
+): readonly EntailmentClaim[] {
+  const membershipFailed = new Set(membership.unsupported.map(citationDedupKey));
+  return segmentCitedClaims(answerText).flatMap((claim): readonly EntailmentClaim[] => {
+    const evidence = claim.citations
+      .filter((citation) => !membershipFailed.has(citationDedupKey(citation)))
+      .map((citation) => ({
+        citedPath: citation.scopePath,
+        excerptText: resolveExcerptText(citation),
+      }));
+    return evidence.length === 0 ? [] : [{ claimText: claim.claimText, evidence }];
+  });
+}
+
+export async function reconcileClaimEntailment(
+  answerText: string,
+  membership: CitationReconciliation,
+  resolveExcerptText: ExcerptTextResolver,
+  judge: EntailmentJudge,
+  options: EntailmentOptions = DEFAULT_ENTAILMENT_OPTIONS,
+  signal?: AbortSignal,
+): Promise<EntailmentReconciliation> {
+  return reconcileEntailmentClaims(
+    inlineEntailmentClaims(answerText, membership, resolveExcerptText),
+    judge,
+    options,
+    signal,
+  );
+}
+
+/**
+ * Judge numeric connector citations against the exact selected evidence that rendered their `[n]`
+ * markers. Unknown, malformed, and non-positive markers remain membership failures and are never
+ * promoted into semantic evidence.
+ */
+export async function reconcileNumericClaimEntailment(
+  answerText: string,
+  selectedEvidence: readonly NumericEntailmentEvidence[],
+  judge: EntailmentJudge,
+  options: EntailmentOptions = DEFAULT_ENTAILMENT_OPTIONS,
+  signal?: AbortSignal,
+): Promise<EntailmentReconciliation> {
+  const evidenceByMarker = new Map<number, NumericEntailmentEvidence>();
+  for (const evidence of selectedEvidence) {
+    if (Number.isSafeInteger(evidence.marker) && evidence.marker > 0) {
+      evidenceByMarker.set(evidence.marker, evidence);
+    }
+  }
+  const claims = segmentNumericCitedClaims(answerText).flatMap(
+    (claim): readonly EntailmentClaim[] => {
+      const evidence = claim.markers.flatMap((marker): readonly EntailmentClaimEvidence[] => {
+        const selected = evidenceByMarker.get(marker);
+        return selected === undefined
+          ? []
+          : [{ citedPath: `[${String(selected.marker)}]`, excerptText: selected.excerptText }];
+      });
+      return evidence.length === 0 ? [] : [{ claimText: claim.claimText, evidence }];
+    },
+  );
+  return reconcileEntailmentClaims(claims, judge, options, signal);
 }
 
 /**

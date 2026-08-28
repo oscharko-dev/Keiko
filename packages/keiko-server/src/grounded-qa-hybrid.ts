@@ -107,6 +107,7 @@ import {
   reconcileNumericCitations,
   unsupportedCitationMarker,
   unsupportedNumericCitationMarker,
+  type NumericEntailmentEvidence,
 } from "./grounded-faithfulness.js";
 import { assertUsableAssistantContent } from "./assistant-response.js";
 import { rerankSelection } from "./grounded-rerank-facade.js";
@@ -114,6 +115,7 @@ import { buildLocalKnowledgeIndexLifecycle } from "./local-knowledge-index-lifec
 import { createEntailmentStage, type EntailmentStage } from "./grounded-entailment-stage.js";
 import {
   appendGroundedAnswerEntailment,
+  appendGroundedAnswerNumericEntailment,
   buildQuery,
   buildSelectedScopeFrom,
   clarificationRequest,
@@ -810,6 +812,23 @@ function buildRerankedHybridUserMessage(
   return lines.join("\n");
 }
 
+function numericConnectorEntailmentEvidence(
+  selected: readonly SelectedCandidate<HybridPayload>[],
+): readonly NumericEntailmentEvidence[] {
+  return selected.filter(isConnectorCandidate).map((candidate) => ({
+    marker: candidate.marker,
+    // Match the prompt's selected, redacted rendering. This never re-searches or reads a broader
+    // corpus, so `[n]` support is judged only against evidence the answer model actually saw.
+    excerptText:
+      `[${String(candidate.marker)}] ### Connector source: ${candidate.sourceLabel}\n` +
+      "```text\n" +
+      (candidate.redactedText.length > 0
+        ? promptSafeExcerptText(candidate.redactedText)
+        : "(No excerpt text available.)") +
+      "\n```",
+  }));
+}
+
 export function createHybridAnswerer(
   model: ModelPort,
   modelId: string,
@@ -1158,15 +1177,16 @@ function hybridReconciliationUncertainty(
   return markers.map((m) => ({ kind: m.kind, claim: redactString(redactor, m.claim) }));
 }
 
-// Knowledge M1.2 (#2563): judge whether the hybrid answer's `[path:line]` citations are SUPPORTED by
-// their folder-evidence excerpts (the same folder packs membership reconciliation checks). Capsule
-// policy applies here — a connector capsule that denies `answerSynthesis` keeps the stage inert.
+// Knowledge M1.2 (#2563) / #2947: judge the hybrid answer's `[path:line]` and connector `[n]`
+// citations against their selected evidence. Capsule policy applies here — a connector capsule that
+// denies `answerSynthesis` keeps the stage inert.
 async function applyHybridEntailment(
   ctx: HybridGroundedAskCtx,
   answer: HybridGroundedAnswer,
   answerContent: string,
   folders: readonly RetrievedFolder[],
   connectors: readonly RetrievedConnector[],
+  selected: readonly SelectedCandidate<HybridPayload>[],
 ): Promise<HybridGroundedAnswer> {
   const capsules = connectors.flatMap((src) => src.selected.capsules);
   const stage =
@@ -1182,11 +1202,18 @@ async function applyHybridEntailment(
   if (stage === undefined) {
     return answer;
   }
-  return appendGroundedAnswerEntailment(
+  const folderEntailment = await appendGroundedAnswerEntailment(
     answer,
     stage,
     answerContent,
     folders.map((folder) => folder.pack),
+    ctx.deps.redactor,
+  );
+  return appendGroundedAnswerNumericEntailment(
+    folderEntailment,
+    stage,
+    answerContent,
+    numericConnectorEntailmentEvidence(selected),
     ctx.deps.redactor,
   );
 }
@@ -1738,6 +1765,7 @@ async function assembleHybridNoEvidenceRoute(
           assistant.content,
           meta.folderResult.retrieved,
           meta.connectorResult.retrieved,
+          selected,
         )
       : answer;
   ensureNotCancelled(ctx.signal);
@@ -2037,8 +2065,8 @@ interface HybridFinalizeInput {
   readonly ids: { readonly userMessageId: string; readonly assistantMessageId: string };
 }
 
-// Assemble the hybrid answer, run the entailment stage over its folder evidence (#2563), and attach
-// it. Extracted from answerAndAssemble to keep both functions under the LOC bound.
+// Assemble the hybrid answer, judge its selected folder and connector evidence (#2563, #2947), and
+// attach the result. Extracted from answerAndAssemble to keep both functions under the LOC bound.
 async function finalizeHybridAnswer(
   ctx: HybridGroundedAskCtx,
   store: KnowledgeStore,
@@ -2070,6 +2098,7 @@ async function finalizeHybridAnswer(
     assistant.content,
     folders,
     meta.connectorResult.retrieved,
+    selected,
   );
   ensureNotCancelled(ctx.signal);
   const previewCitations = selectedConnectorPreviewCitations(store, selected, ctx.deps.redactor);

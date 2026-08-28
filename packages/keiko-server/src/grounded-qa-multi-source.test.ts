@@ -1627,6 +1627,7 @@ describe("multi-source entailment forwards the retrieved packs (KEIKO-0237)", ()
               observedPacks.push(packs);
               return Promise.resolve([]);
             },
+            evaluateNumeric: (): Promise<readonly never[]> => Promise.resolve([]),
           };
         },
       },

@@ -28,15 +28,16 @@ are commit-independent because every gate is deterministic).
 
 | Metric                                            | Value  | Floor    |
 | ------------------------------------------------- | ------ | -------- |
-| fixtures                                          | 6      | —        |
+| fixtures                                          | 15     | —        |
 | unsupported-claim detection rate                  | 100.0% | 100.0%   |
 | claim precision (no false positives)              | 100.0% | 100.0%   |
 | degradation correctness (unavailable ⇒ WARN)      | 100.0% | 100.0%   |
 | non-tautology proven (pass-through checker fails) | yes    | required |
 
-The gate scores the real claim-segmentation / entailment-reconciliation / marker logic over a
-deterministic scripted judge (the same `EntailmentJudge` port the gateway judge implements). The
-non-tautology proof is intrinsic: a pass-through judge must fail to detect the unsupported fixtures.
+The gate scores the real path-and-line and numeric-marker claim-segmentation / entailment-
+reconciliation / marker logic over a deterministic scripted judge (the same `EntailmentJudge` port
+the gateway judge implements). The non-tautology proof is intrinsic: a pass-through judge must fail
+to detect the unsupported fixtures.
 
 ### `check:grounded-faithfulness` — membership moat (unchanged floors)
 

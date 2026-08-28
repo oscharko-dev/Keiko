@@ -24,8 +24,10 @@ import {
   parseInlineCitations,
   reconcileClaimEntailment,
   reconcileInlineCitations,
+  reconcileNumericClaimEntailment,
   reconcileNumericCitations,
   segmentCitedClaims,
+  segmentNumericCitedClaims,
   splitClaimSpans,
   stripInlineCitations,
   unsupportedCitationMarker,
@@ -433,6 +435,48 @@ function scriptedJudge(): EntailmentJudge {
     },
   };
 }
+
+describe("numeric citation entailment", () => {
+  it("judges a trailing numeric marker against its exact selected excerpt", async () => {
+    const result = await reconcileNumericClaimEntailment(
+      "Retention is ten years.[1]",
+      [{ marker: 1, excerptText: "Retention is 30 days. [[CONTRADICTS]]" }],
+      scriptedJudge(),
+    );
+    expect(result.unentailed).toEqual([{ citedPaths: ["[1]"] }]);
+  });
+
+  it("keeps duplicate markers on one claim to one judge call", async () => {
+    let calls = 0;
+    const result = await reconcileNumericClaimEntailment(
+      "Retention is 30 days [1][1].",
+      [{ marker: 1, excerptText: "Retention is 30 days." }],
+      { judge: (): Promise<EntailmentVerdict> => ((calls += 1), Promise.resolve("supported")) },
+    );
+    expect(result.judgedClaims).toBe(1);
+    expect(calls).toBe(1);
+  });
+
+  it("keeps missing and malformed markers out of semantic evidence", async () => {
+    const claims = segmentNumericCitedClaims("Missing [9], malformed [x], and zero [0].");
+    expect(claims).toEqual([{ claimText: "Missing , malformed , and zero", markers: [9] }]);
+    const result = await reconcileNumericClaimEntailment(
+      "Missing [9], malformed [x], and zero [0].",
+      [{ marker: 1, excerptText: "unused" }],
+      scriptedJudge(),
+    );
+    expect(result).toEqual({ unentailed: [], judgedClaims: 0, unavailableClaims: 0 });
+  });
+
+  it("degrades to unavailable when the numeric citation judge cannot decide", async () => {
+    const result = await reconcileNumericClaimEntailment(
+      "Retention is 30 days 【1】.",
+      [{ marker: 1, excerptText: "[[UNAVAIL]]" }],
+      scriptedJudge(),
+    );
+    expect(result).toEqual({ unentailed: [], judgedClaims: 1, unavailableClaims: 1 });
+  });
+});
 
 describe("splitClaimSpans", () => {
   it("splits on sentence boundaries but never inside a [citation]", () => {
