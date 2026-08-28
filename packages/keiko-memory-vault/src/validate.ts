@@ -10,7 +10,7 @@ import {
 import type { MemoryEdge, MemoryRecord, MemoryScope } from "@oscharko-dev/keiko-contracts/memory";
 import { MemoryStorageValidationError, type MemoryStorageValidationFailure } from "./errors.js";
 import { ALLOWED_EMBEDDING_METRICS, MAX_EMBEDDING_DIMENSIONS } from "./embeddings.js";
-import type { DeleteMemoryOptions, MemoryEmbeddingInput } from "./types.js";
+import type { DeleteMemoryOptions, ListMemoriesOptions, MemoryEmbeddingInput } from "./types.js";
 
 function toFailures(errors: readonly string[]): readonly MemoryStorageValidationFailure[] {
   return errors.map((message) => ({ path: [], message }));
@@ -64,6 +64,20 @@ export function gateEmbeddingInput(input: MemoryEmbeddingInput): MemoryEmbedding
     throw new MemoryStorageValidationError("Invalid embedding input.", toFailures(errors));
   }
   return input;
+}
+
+// KEIKO-0792 (#3328): `offset` is only meaningful relative to a `limit`-bounded page. Silently
+// discarding it (the prior behaviour of buildListSql/appendPagingParams) let a caller believe it
+// was paging past the first `offset` rows while actually receiving the full unpaged result.
+// Reject the combination up front so a future CLI flag or SDK consumer fails loudly instead of
+// silently getting unpaginated data back.
+export function gateListOptions(options: ListMemoriesOptions): ListMemoriesOptions {
+  if (options.offset !== undefined && options.limit === undefined) {
+    throw new MemoryStorageValidationError("Invalid list options.", [
+      { path: ["offset"], message: "offset requires limit to also be set" },
+    ]);
+  }
+  return options;
 }
 
 export function gateDeleteOptions(options: DeleteMemoryOptions): DeleteMemoryOptions {
