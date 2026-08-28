@@ -100,14 +100,30 @@ describe("findForbiddenPaths — build metadata and compiled tests", () => {
       "node_modules/@oscharko-dev/keiko-server/dist/gitRepositoryRoutes.test.js",
       "node_modules/@oscharko-dev/keiko-server/dist/gitRepositoryRoutes.test.d.ts",
     ]);
-    expect(hits.filter((h) => h.label === "compiled test or spec artifact")).toHaveLength(2);
+    expect(hits.filter((h) => h.label === "compiled test, spec, or bench artifact")).toHaveLength(
+      2,
+    );
+  });
+
+  // KEIKO-1028 (#3340 review follow-up): a compiled `.bench.js` module imports `vitest`, a
+  // devDependency the published tarball never carries — the same publish hazard as a compiled
+  // `.test.js`/`.spec.js`. Regression pin for the gap the review found: `findForbiddenPaths`
+  // returned `[]` for a compiled bench artifact before this rule covered `.bench.`.
+  it("flags compiled bench files", () => {
+    const hits = findForbiddenPaths([
+      "node_modules/@oscharko-dev/keiko-contracts/dist/prompt-enhancer-analyzer.bench.js",
+      "node_modules/@oscharko-dev/keiko-contracts/dist/prompt-enhancer-analyzer.bench.d.ts",
+    ]);
+    expect(hits.filter((h) => h.label === "compiled test, spec, or bench artifact")).toHaveLength(
+      2,
+    );
   });
 
   it("flags nested __tests__ artifacts", () => {
     const hits = findForbiddenPaths([
       "node_modules/@oscharko-dev/keiko-evidence/dist/qualityIntelligence/__tests__/retention.js",
     ]);
-    expect(hits.some((h) => h.label === "compiled test or spec artifact")).toBe(true);
+    expect(hits.some((h) => h.label === "compiled test, spec, or bench artifact")).toBe(true);
   });
 
   it("does not flag production files whose basename contains the word test", () => {

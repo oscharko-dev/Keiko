@@ -109,13 +109,12 @@ const nativeSonarExclusions = Object.freeze([
 const approvedScopeValueDigests = new Map([
   ["sonar.sources", "cdb4ee2aea69cc6a83331bbe96dc2caa9a299d21329efb0336fc02a82e1839a8"],
   ["sonar.tests", "cdb4ee2aea69cc6a83331bbe96dc2caa9a299d21329efb0336fc02a82e1839a8"],
-  // Digest re-pinned after appending shared test-infrastructure modules under `native/`
-  // (protocol-harness.mjs + c-source-scanner.mjs) to both the exclusions and the test
-  // inclusions. Both are imported ONLY by the three test-protocol.mjs files that already sit
-  // in those lists, so they carry the same Sonar disposition. Re-computed the SHA-256 of the
-  // raw value after `=` via `createHash("sha256").update(value).digest("hex")`.
-  ["sonar.exclusions", "7ec1d1787799c77e199ee4561aba1a1d6ce204e42009d76515b653f1ae033348"],
-  ["sonar.test.inclusions", "fc189ed7f62a535e41c6175c2893fe3bd3d690ce4bd85c65683db13cb8c2ec58"],
+  // Digest re-pinned after adding the `**/*.bench.*` classifier pattern to both the exclusions
+  // and the test inclusions (KEIKO-1028, #3340 review follow-up): `vitest bench` files carry the
+  // same Sonar disposition as `.test.`/`.spec.` — asserts nothing, never packaged. Re-computed
+  // the SHA-256 of the raw value after `=` via `createHash("sha256").update(value).digest("hex")`.
+  ["sonar.exclusions", "dc113fa197390651bc9f0377b9a1395d19c5cadb60a9754b92c3f93e3c19b135"],
+  ["sonar.test.inclusions", "8db9d0077b198b3b047e46ea3c5151f1b30aef42dabc06be1e589c8c475e1704"],
   ["sonar.test.exclusions", "5a01270e497c669e4f0abd5cef680f9eb0139bb8b82da51719b443b076fcd638"],
   [
     "sonar.typescript.tsconfigPaths",
@@ -136,6 +135,10 @@ const testScopeRules = Object.freeze([
   ["**/testing/**", (path) => path.startsWith("testing/") || path.includes("/testing/")],
   ["**/*.test.*", (path) => /\.test\.[^/]+$/u.test(path)],
   ["**/*.spec.*", (path) => /\.spec\.[^/]+$/u.test(path)],
+  // KEIKO-1028 (#3340 review follow-up): `vitest bench` files assert nothing and are never a
+  // packaged surface — same disposition as `.test.`/`.spec.`, so they belong in the same
+  // classifier rather than a one-off exception for the first bench file added.
+  ["**/*.bench.*", (path) => /\.bench\.[^/]+$/u.test(path)],
   ["**/_support.*", (path) => /(?:^|\/)_support\.[^/]+$/u.test(path)],
   ["**/test-support.*", (path) => /(?:^|\/)test-support\.[^/]+$/u.test(path)],
   // KEIKO-0130: shared per-package test-fixture modules live under `src/test-support/`, never
