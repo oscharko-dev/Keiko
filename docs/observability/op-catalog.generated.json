@@ -843,6 +843,12 @@
       "package": "keiko-server"
     },
     {
+      "op": "gateway.tool-calling.verification",
+      "category": "gateway",
+      "site": "packages/keiko-server/src/gateway-setup.ts:6293",
+      "package": "keiko-server"
+    },
+    {
       "op": "git.commit.preview.completed",
       "category": "diagnostic",
       "site": "packages/keiko-server/src/gitDelivery/commitRoutes.ts:425",

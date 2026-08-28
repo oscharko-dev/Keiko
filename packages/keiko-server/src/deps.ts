@@ -429,6 +429,14 @@ export interface GatewayDiscoveredModelMetadata {
 export interface GatewaySetupTestResult {
   readonly testedModelIds: readonly string[];
   readonly responseFormatModelIds: readonly string[];
+  /** One body-free live-tool-call observation per successfully chat-probed deployment. */
+  readonly toolCallingObservations?: readonly GatewaySetupToolCallingObservation[] | undefined;
+}
+
+export interface GatewaySetupToolCallingObservation {
+  readonly modelId: string;
+  readonly status: "verified" | "unsupported" | "unverified";
+  readonly checkedAt: string;
 }
 
 export type GatewayModelDiscoveryOutput = readonly string[] | GatewayDiscoveredModels;

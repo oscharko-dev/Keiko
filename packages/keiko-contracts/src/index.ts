@@ -1789,6 +1789,7 @@ export type {
   LatencyClass,
   ModelTokenAccountingSource,
   ModelTokenAccounting,
+  ToolCallingVerification,
   ModelReasoningEffort,
   InfillingAlignment,
   ModelCapability,

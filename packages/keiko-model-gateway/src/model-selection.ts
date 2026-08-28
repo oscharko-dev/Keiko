@@ -35,7 +35,10 @@ import type {
 } from "@oscharko-dev/keiko-contracts";
 import { UNVERIFIED_GATEWAY } from "@oscharko-dev/keiko-contracts/runtime/gateway-verification";
 import { deriveContextProfileFromCapability } from "@oscharko-dev/keiko-contracts/runtime/context-engineering";
-import { isCodingWorkbenchModel } from "@oscharko-dev/keiko-contracts/runtime/gateway";
+import {
+  isCodingWorkbenchModel,
+  isToolCallingVerificationFresh,
+} from "@oscharko-dev/keiko-contracts/runtime/gateway";
 const voiceCapabilityCache = new WeakMap<
   ConfiguredCapabilitySource,
   Map<string, VoiceCapabilityResolution>
@@ -81,7 +84,7 @@ function matches(capability: ModelCapability, query: ModelSelectionQuery): boole
   if (capability.kind !== query.kind) {
     return false;
   }
-  if (query.toolCalling === true && !capability.toolCalling) {
+  if (query.toolCalling === true && !hasCurrentToolCallingVerification(capability)) {
     return false;
   }
   if (query.structuredOutput === true && !capability.structuredOutput) {
@@ -94,6 +97,12 @@ function matches(capability: ModelCapability, query: ModelSelectionQuery): boole
     return false;
   }
   return true;
+}
+
+export function hasCurrentToolCallingVerification(capability: ModelCapability): boolean {
+  return (
+    capability.toolCalling && isToolCallingVerificationFresh(capability.toolCallingVerification)
+  );
 }
 
 export function assertConfiguredModel(config: ConfiguredCapabilitySource, modelId: string): void {
