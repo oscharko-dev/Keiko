@@ -19,6 +19,10 @@ export interface GitDeliveryApprovalBinding {
   readonly projectId: string;
   readonly operation: GitDeliveryApprovalOperation;
   readonly command: unknown;
+  // Present for approval-gated delivery operations. The server-owned active-run identity joins the
+  // durable human proof to the exact Authority Envelope that admitted both mint and redemption.
+  readonly runId?: string | undefined;
+  readonly envelopeDigest?: string | undefined;
 }
 
 export interface GitDeliveryApprovalIssueInput {

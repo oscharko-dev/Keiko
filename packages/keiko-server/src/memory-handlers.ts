@@ -19,6 +19,7 @@ import { createHash, randomUUID } from "node:crypto";
 import {
   createMemoryVault,
   MemoryStorageError,
+  MemoryStoragePreconditionError,
   MemoryStorageValidationError,
   type MemoryBatchUpdate,
   type MemoryTombstone,
@@ -39,7 +40,9 @@ import {
   type ForgetSelector,
 } from "@oscharko-dev/keiko-memory-governance";
 import type {
+  AcceptMemoryProposalOptions,
   MemoryConversationId,
+  MemoryCorrectionPredecessorsResponse,
   MemoryAuditEvent,
   MemoryEdge,
   MemoryEdgeId,
@@ -63,6 +66,7 @@ import {
   MEMORY_STATUSES,
   MEMORY_TYPES,
   MEMORY_SENSITIVITIES,
+  isMemoryRecord,
   validateMemoryScope,
   validateMemoryAcceptance,
 } from "@oscharko-dev/keiko-contracts/runtime/memory";
@@ -84,6 +88,7 @@ import { refreshMemoryEmbeddingAfterBodyEdit } from "./memory-embedding.js";
 import { readJsonRequestBody } from "./bounded-request-body.js";
 import { processServerLogSink } from "./process-log-sink.js";
 import { emitServerDiagnostic, serverDiagnosticFromError } from "./diagnostics-log.js";
+import { resolveMemoryTargetRecords } from "./memory-target-resolver.js";
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -321,8 +326,12 @@ function resolveVault(deps: UiHandlerDeps): MemoryVaultStore | RouteResult {
 
 // ─── Redaction helper ──────────────────────────────────────────────────────────
 
-function redactMemory(deps: UiHandlerDeps, record: MemoryRecord): unknown {
-  return deps.redactor(record);
+function redactMemory(deps: UiHandlerDeps, record: MemoryRecord): MemoryRecord {
+  const redacted = deps.redactor(record);
+  if (!isMemoryRecord(redacted)) {
+    throw new TypeError("Memory redaction produced an invalid record shape.");
+  }
+  return redacted;
 }
 
 function redactMemories(deps: UiHandlerDeps, records: readonly MemoryRecord[]): unknown {
@@ -1892,7 +1901,10 @@ function executeCorrectMemory(
   const auditCountBeforeInsert = auditEventCountForDay(deps, nowMs);
   const inserted = vault.insertMemory(buildCorrectionRecord(proposal, correctionId, nowMs));
   recordCorrectionProposalAuditIfNeeded(deps, inserted, nowMs, auditCountBeforeInsert);
-  vault.insertEdge(buildEdgeFromSupersession(supersession));
+  // Bind the reviewer-selected predecessor while the correction is proposed, but do not claim a
+  // supersession before acceptance. The actual `supersedes` edge is committed atomically with the
+  // proposal/origin transition in acceptMemoryProposal.
+  vault.insertEdge({ ...buildEdgeFromSupersession(supersession), kind: "corrects" });
   return {
     status: 201,
     body: { correction: redactMemory(deps, inserted), originalMemoryId: id },
@@ -1954,30 +1966,24 @@ function assertSupersedable(memory: MemoryRecord): void {
 }
 
 interface CorrectionSupersessionOrigin {
-  readonly edge: MemoryEdge;
   readonly original: MemoryRecord;
+  readonly binding?: MemoryEdge;
 }
 
-function loadCorrectionSupersessionOrigins(
+function loadBoundCorrectionOrigins(
   vault: MemoryVaultStore,
   proposal: MemoryRecord,
 ): readonly CorrectionSupersessionOrigin[] {
   if (proposal.type !== "correction") return [];
-  const incomingSupersessions = vault
+  const bindings = vault
     .listIncomingEdges(proposal.id)
-    .filter((edge) => edge.kind === "supersedes");
-  if (incomingSupersessions.length === 0) {
-    throw new GovernanceError(
-      "invalid-resolution",
-      "correction proposal requires a supersession origin",
-    );
-  }
-  return incomingSupersessions.map((edge) => {
-    const original = vault.getMemory(edge.fromMemoryId);
+    .filter((edge) => edge.kind === "corrects" || edge.kind === "supersedes");
+  return bindings.map((binding) => {
+    const original = vault.getMemory(binding.fromMemoryId);
     if (original === undefined) {
       throw new GovernanceError("invalid-resolution", "correction origin memory is missing");
     }
-    return { edge, original };
+    return { original, binding };
   });
 }
 
@@ -1999,6 +2005,105 @@ function acceptedCorrectionType(
   return first;
 }
 
+type CorrectionPredecessorFailureCode =
+  | "CORRECTION_PREDECESSOR_ALREADY_SUPERSEDED"
+  | "CORRECTION_PREDECESSOR_AMBIGUOUS"
+  | "CORRECTION_PREDECESSOR_FORBIDDEN"
+  | "CORRECTION_PREDECESSOR_MISSING"
+  | "CORRECTION_PREDECESSOR_STALE"
+  | "CORRECTION_PREDECESSOR_SELECTION_INVALID";
+
+function correctionPredecessorFailure(code: CorrectionPredecessorFailureCode): RouteResult {
+  const messages: Readonly<Record<CorrectionPredecessorFailureCode, string>> = {
+    CORRECTION_PREDECESSOR_ALREADY_SUPERSEDED:
+      "The selected predecessor has already been superseded. Reload and review the correction.",
+    CORRECTION_PREDECESSOR_AMBIGUOUS:
+      "Multiple predecessor memories match this correction. Select one predecessor before accepting.",
+    CORRECTION_PREDECESSOR_FORBIDDEN:
+      "The correction predecessor is outside the caller's authorized memory scope.",
+    CORRECTION_PREDECESSOR_MISSING:
+      "No eligible predecessor memory matches this correction. Reclassify or revise the proposal.",
+    CORRECTION_PREDECESSOR_STALE:
+      "The correction predecessor is no longer eligible. Reload and review the proposal.",
+    CORRECTION_PREDECESSOR_SELECTION_INVALID:
+      "The selected predecessor is not an eligible match for this correction.",
+  };
+  return {
+    status: code === "CORRECTION_PREDECESSOR_FORBIDDEN" ? 403 : 409,
+    body: errorBody(code, messages[code]),
+  };
+}
+
+function proposalStaleFailure(): RouteResult {
+  return {
+    status: 409,
+    body: errorBody(
+      "PROPOSAL_STALE",
+      "The proposal changed before it could be accepted. Reload it.",
+    ),
+  };
+}
+
+function correctionOriginFailure(origin: MemoryRecord): RouteResult | null {
+  if (origin.status === "superseded") {
+    return correctionPredecessorFailure("CORRECTION_PREDECESSOR_ALREADY_SUPERSEDED");
+  }
+  if (origin.status !== "accepted") {
+    return correctionPredecessorFailure("CORRECTION_PREDECESSOR_STALE");
+  }
+  return null;
+}
+
+function uniqueCorrectionOrigin(
+  matches: readonly MemoryRecord[],
+  selectedPredecessorId: MemoryId | undefined,
+): CorrectionSupersessionOrigin | RouteResult {
+  if (selectedPredecessorId !== undefined) {
+    const selected = matches.find((candidate) => candidate.id === selectedPredecessorId);
+    if (selected === undefined) {
+      return correctionPredecessorFailure("CORRECTION_PREDECESSOR_SELECTION_INVALID");
+    }
+    const failure = correctionOriginFailure(selected);
+    return failure ?? { original: selected };
+  }
+  const eligible = matches.filter((candidate) => candidate.status === "accepted");
+  const soleEligible = eligible[0];
+  if (eligible.length === 1 && soleEligible !== undefined) return { original: soleEligible };
+  if (eligible.length > 1) {
+    return correctionPredecessorFailure("CORRECTION_PREDECESSOR_AMBIGUOUS");
+  }
+  const superseded = matches.find((candidate) => candidate.status === "superseded");
+  return superseded === undefined
+    ? correctionPredecessorFailure("CORRECTION_PREDECESSOR_MISSING")
+    : correctionPredecessorFailure("CORRECTION_PREDECESSOR_ALREADY_SUPERSEDED");
+}
+
+function resolveCorrectionOrigins(
+  vault: MemoryVaultStore,
+  proposal: MemoryRecord,
+  selectedPredecessorId: MemoryId | undefined,
+): readonly CorrectionSupersessionOrigin[] | RouteResult {
+  if (proposal.type !== "correction") return [];
+  const bound = loadBoundCorrectionOrigins(vault, proposal);
+  if (bound.length > 1) {
+    return correctionPredecessorFailure("CORRECTION_PREDECESSOR_AMBIGUOUS");
+  }
+  if (bound.length === 1) {
+    const origin = bound[0];
+    if (origin === undefined) return correctionPredecessorFailure("CORRECTION_PREDECESSOR_MISSING");
+    if (selectedPredecessorId !== undefined && selectedPredecessorId !== origin.original.id) {
+      return correctionPredecessorFailure("CORRECTION_PREDECESSOR_SELECTION_INVALID");
+    }
+    const failure = correctionOriginFailure(origin.original);
+    return failure ?? [origin];
+  }
+  const resolved = uniqueCorrectionOrigin(
+    resolveMemoryTargetRecords(vault, proposal.body, proposal.scope),
+    selectedPredecessorId,
+  );
+  return isRouteResult(resolved) ? resolved : [resolved];
+}
+
 function buildAcceptProposalPatch(
   origins: readonly CorrectionSupersessionOrigin[],
   bodyOverride?: string,
@@ -2016,14 +2121,20 @@ function buildAcceptProposalPatch(
 }
 
 function buildCorrectionAcceptanceUpdates(
-  proposalId: MemoryId,
+  proposal: MemoryRecord,
   acceptPatch: MemoryBatchUpdate["patch"],
   origins: readonly CorrectionSupersessionOrigin[],
   nowMs: number,
 ): readonly MemoryBatchUpdate[] {
   return [
-    { id: proposalId, patch: acceptPatch, nowMs },
-    ...origins.map(({ edge, original }) => {
+    {
+      id: proposal.id,
+      patch: acceptPatch,
+      nowMs,
+      expectedStatus: proposal.status,
+      expectedUpdatedAt: proposal.updatedAt,
+    },
+    ...origins.map(({ binding, original }) => {
       // Bi-temporal-lite (#204, C1): close the superseded fact's belief window at acceptance time so
       // it drops out of default retrieval and "as of date T" stays answerable. Additive — only when
       // it forms a valid, non-extending interval.
@@ -2032,13 +2143,36 @@ function buildCorrectionAcceptanceUpdates(
         id: original.id,
         patch: {
           status: "superseded" as const,
-          staleReason: edge.provenanceSummary ?? "accepted correction",
+          staleReason: binding?.provenanceSummary ?? "accepted correction",
           ...(validity !== null ? { validity } : {}),
         },
         nowMs,
+        expectedStatus: original.status,
+        expectedUpdatedAt: original.updatedAt,
       };
     }),
   ];
+}
+
+function correctionAcceptanceEdges(
+  proposal: MemoryRecord,
+  origins: readonly CorrectionSupersessionOrigin[],
+  nowMs: number,
+): readonly MemoryEdge[] {
+  return origins.flatMap(({ binding, original }) => {
+    if (binding?.kind === "supersedes") return [];
+    return [
+      {
+        id: randomUUID() as MemoryEdgeId,
+        schemaVersion: "1",
+        fromMemoryId: original.id,
+        toMemoryId: proposal.id,
+        kind: "supersedes" as const,
+        createdAt: nowMs,
+        provenanceSummary: binding?.provenanceSummary ?? "accepted correction",
+      },
+    ];
+  });
 }
 
 function recordCorrectionSupersessionAudits(
@@ -2071,35 +2205,96 @@ function ensureProposedMemory(existing: MemoryRecord | undefined): MemoryRecord 
   return existing;
 }
 
+interface CommittedCorrectionAcceptance {
+  readonly updated: MemoryRecord;
+  readonly nowMs: number;
+}
+
+function commitCorrectionAcceptance(
+  vault: MemoryVaultStore,
+  proposal: MemoryRecord,
+  origins: readonly CorrectionSupersessionOrigin[],
+  bodyOverride: string | undefined,
+): CommittedCorrectionAcceptance | RouteResult {
+  const nowMs = Date.now();
+  const acceptPatch = buildAcceptProposalPatch(origins, bodyOverride);
+  const updates = buildCorrectionAcceptanceUpdates(proposal, acceptPatch, origins, nowMs);
+  try {
+    const mutation = vault.applyGraphMutation({
+      preconditions: [
+        {
+          id: proposal.id,
+          expectedStatus: proposal.status,
+          expectedUpdatedAt: proposal.updatedAt,
+        },
+        ...origins.map((origin) => ({
+          id: origin.original.id,
+          expectedStatus: origin.original.status,
+          expectedUpdatedAt: origin.original.updatedAt,
+        })),
+      ],
+      updates,
+      edges: correctionAcceptanceEdges(proposal, origins, nowMs),
+    });
+    const updated = mutation.memories[0];
+    if (updated === undefined) {
+      throw new GovernanceError("invalid-resolution", "acceptance update produced no records");
+    }
+    return { updated, nowMs };
+  } catch (error) {
+    if (error instanceof MemoryStoragePreconditionError) {
+      if (error.memoryId === proposal.id) return proposalStaleFailure();
+      return correctionPredecessorFailure("CORRECTION_PREDECESSOR_STALE");
+    }
+    throw error;
+  }
+}
+
 function acceptMemoryProposal(
   vault: MemoryVaultStore,
   deps: UiHandlerDeps,
   id: MemoryId,
-  bodyOverride?: string,
+  input: AcceptMemoryProposalOptions,
 ): RouteResult {
   const existing = ensureProposedMemory(vault.getMemory(id));
   if (isRouteResult(existing)) return existing;
-  const nowMs = Date.now();
-  const origins = loadCorrectionSupersessionOrigins(vault, existing);
-  const acceptPatch = buildAcceptProposalPatch(origins, bodyOverride);
-  const updates = buildCorrectionAcceptanceUpdates(id, acceptPatch, origins, nowMs);
-  const [updated] = vault.updateMemories(updates);
-  if (updated === undefined) {
-    throw new GovernanceError("invalid-resolution", "acceptance update produced no records");
+  const authorizedScopes = authorizedMemoryScopes(deps, vault);
+  if (!scopeAuthorized(existing.scope, authorizedScopes)) return forbiddenMemoryScopeResult();
+  const origins = resolveCorrectionOrigins(vault, existing, input.predecessorId);
+  if (isRouteResult(origins)) return origins;
+  if (origins.some((origin) => !scopeAuthorized(origin.original.scope, authorizedScopes))) {
+    return correctionPredecessorFailure("CORRECTION_PREDECESSOR_FORBIDDEN");
   }
+  const committed = commitCorrectionAcceptance(vault, existing, origins, input.bodyOverride);
+  if (isRouteResult(committed)) return committed;
   // Outcome-driven forgetting (#204, O-V1): acceptance is a positive retention outcome for the
   // proposal; any origin it supersedes proved wrong (utility 0). Both feed the maintenance utility
   // factor so the kept memory resists disuse decay and the corrected-away origin fades sooner.
-  vault.recordOutcome([id], 1, nowMs);
+  vault.recordOutcome([id], 1, committed.nowMs);
   const supersededOriginIds = origins.map((origin) => origin.original.id);
   if (supersededOriginIds.length > 0) {
-    vault.recordOutcome(supersededOriginIds, 0, nowMs);
+    vault.recordOutcome(supersededOriginIds, 0, committed.nowMs);
   }
-  recordCorrectionSupersessionAudits(deps, updated, origins, nowMs);
-  return { status: 200, body: { memory: redactMemory(deps, updated) } };
+  recordCorrectionSupersessionAudits(deps, committed.updated, origins, committed.nowMs);
+  return { status: 200, body: { memory: redactMemory(deps, committed.updated) } };
 }
 
 function parseAcceptBody(
+  raw: Record<string, unknown>,
+  id: MemoryId,
+  deps: UiHandlerDeps,
+): AcceptMemoryProposalOptions | RouteResult {
+  const bodyOverride = parseAcceptBodyOverride(raw, id, deps);
+  if (isRouteResult(bodyOverride)) return bodyOverride;
+  const predecessorId = parseCorrectionPredecessorId(raw.predecessorId);
+  if (isRouteResult(predecessorId)) return predecessorId;
+  return {
+    ...(bodyOverride === undefined ? {} : { bodyOverride }),
+    ...(predecessorId === undefined ? {} : { predecessorId }),
+  };
+}
+
+function parseAcceptBodyOverride(
   raw: Record<string, unknown>,
   id: MemoryId,
   deps: UiHandlerDeps,
@@ -2121,6 +2316,17 @@ function parseAcceptBody(
       };
 }
 
+function parseCorrectionPredecessorId(raw: unknown): MemoryId | RouteResult | undefined {
+  if (raw === undefined) return undefined;
+  if (typeof raw !== "string" || !/^[A-Za-z0-9][A-Za-z0-9_.:-]{0,199}$/u.test(raw)) {
+    return {
+      status: 400,
+      body: errorBody("BAD_REQUEST", "predecessorId must be a bounded safe memory id."),
+    };
+  }
+  return raw as MemoryId;
+}
+
 export async function handleAcceptMemoryProposal(
   ctx: RouteContext,
   deps: UiHandlerDeps,
@@ -2134,11 +2340,11 @@ export async function handleAcceptMemoryProposal(
   }
   const body = await readJsonBody(ctx.req, ctx.correlationId);
   if (isRouteResult(body)) return body;
-  const bodyOverride = parseAcceptBody(body, id as MemoryId, deps);
-  if (isRouteResult(bodyOverride)) return bodyOverride;
+  const input = parseAcceptBody(body, id as MemoryId, deps);
+  if (isRouteResult(input)) return input;
 
   try {
-    return acceptMemoryProposal(vault, deps, id as MemoryId, bodyOverride);
+    return acceptMemoryProposal(vault, deps, id as MemoryId, input);
   } catch (err) {
     return memoryMutationErrorBody(
       deps,
@@ -2148,6 +2354,49 @@ export async function handleAcceptMemoryProposal(
       "Failed to accept proposal.",
     );
   }
+}
+
+// ─── Handler: GET /api/memory/proposals/:id/correction-predecessors ──────────
+
+// A correction's predecessor remains local review evidence until acceptance. This endpoint lets
+// the review surface show every eligible candidate without leaking records from another scope.
+export function handleGetCorrectionPredecessors(
+  ctx: RouteContext,
+  deps: UiHandlerDeps,
+): RouteResult {
+  const vault = resolveVault(deps);
+  if (isRouteResult(vault)) return vault;
+  const { id } = ctx.params;
+  if (id === undefined || id.length === 0) {
+    return { status: 400, body: errorBody("BAD_REQUEST", "Memory id is required.") };
+  }
+  const proposal = ensureProposedMemory(vault.getMemory(id as MemoryId));
+  if (isRouteResult(proposal)) return proposal;
+  if (proposal.type !== "correction") {
+    return {
+      status: 400,
+      body: errorBody("BAD_REQUEST", "Memory proposal is not a correction."),
+    };
+  }
+  const authorizedScopes = authorizedMemoryScopes(deps, vault);
+  if (!scopeAuthorized(proposal.scope, authorizedScopes)) return forbiddenMemoryScopeResult();
+  const bound = loadBoundCorrectionOrigins(vault, proposal);
+  const candidates =
+    bound.length > 0
+      ? bound.map((origin) => origin.original)
+      : resolveMemoryTargetRecords(vault, proposal.body, proposal.scope);
+  if (candidates.some((candidate) => !scopeAuthorized(candidate.scope, authorizedScopes))) {
+    return forbiddenMemoryScopeResult();
+  }
+  const response: MemoryCorrectionPredecessorsResponse = {
+    candidates: candidates
+      .filter((candidate) => candidate.status === "accepted")
+      .map((candidate) => redactMemory(deps, candidate)),
+  };
+  return {
+    status: 200,
+    body: response,
+  };
 }
 
 // ─── Handler: POST /api/memory/proposals/:id/reject ───────────────────────────

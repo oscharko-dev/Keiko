@@ -10,6 +10,7 @@ import {
   editMemory,
   fetchMemories,
   fetchMemory,
+  fetchCorrectionPredecessors,
   fetchMemoryConsolidationJob,
   fetchMemoryReviewQueue,
   fetchRecentCaptures,
@@ -83,7 +84,10 @@ describe("memory consolidation API helpers", () => {
     await applyMemoryConsolidationReviewItem("job 1", "item/2", [
       { memoryId: "mem-1" as MemoryId, expectedUpdatedAt: 42 },
     ]);
-    await acceptMemoryProposal("proposal 1", { bodyOverride: "Reviewed body" });
+    await acceptMemoryProposal("proposal 1", {
+      bodyOverride: "Reviewed body",
+      predecessorId: "predecessor-1" as MemoryId,
+    });
 
     expect(fetchMock).toHaveBeenCalledWith(
       "/api/memory/consolidation/jobs/job%201/review-items/item%2F2/apply",
@@ -98,7 +102,10 @@ describe("memory consolidation API helpers", () => {
       "/api/memory/proposals/proposal%201/accept",
       expect.objectContaining({
         method: "POST",
-        body: JSON.stringify({ bodyOverride: "Reviewed body" }),
+        body: JSON.stringify({
+          bodyOverride: "Reviewed body",
+          predecessorId: "predecessor-1",
+        }),
       }),
     );
   });
@@ -283,6 +290,7 @@ describe("memory BFF boundary helpers", () => {
     });
     await fetchRecentCaptures({ since: 123, scope: ["project", "workspace"], limit: 10 });
     await fetchMemoryReviewQueue();
+    await fetchCorrectionPredecessors("proposal 1");
     await fetchMemory("mem 1" as MemoryId);
     await editMemory("mem 1" as MemoryId, {
       body: "corrected preference",
@@ -307,6 +315,10 @@ describe("memory BFF boundary helpers", () => {
     );
     expect(fetchMock).toHaveBeenCalledWith(
       "/api/memory/review-queue",
+      expect.objectContaining({ headers: expect.objectContaining({ Accept: "application/json" }) }),
+    );
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/memory/proposals/proposal%201/correction-predecessors",
       expect.objectContaining({ headers: expect.objectContaining({ Accept: "application/json" }) }),
     );
     expect(fetchMock).toHaveBeenCalledWith(

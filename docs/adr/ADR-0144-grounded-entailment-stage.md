@@ -67,11 +67,15 @@ restricted to folder evidence (`folders.map((f) => f.pack)` at `grounded-qa-hybr
 `applyHybridEntailment`); connector evidence is not currently included, so hybrid's NLI stage sees
 only the folder half of the answer's evidence.
 
-**System B is left on its existing token-overlap check for M1.** It already performs citation-support
-verification, so all four topologies verify support after this change (three via the new NLI stage,
-one via the pre-existing lexical check). Unifying System B onto the shared NLI judge is deferred to
-K M2 (#2556) substrate unification, matching that milestone's "one reranker facade / one eval
-harness" scope — it is not smuggled into M1.
+**System B and hybrid connector markers use the same NLI judge.** Numeric `[n]` markers are segmented
+with the same shared claim/citation contract and resolved only against the exact selected, redacted
+candidate rendering that reached the answer model. The single-connector path contributes its
+prompt-capped `[n] label + excerpt` rendering; the hybrid path contributes only its post-rerank,
+prompt-selected connector candidates. Neither path performs a second search, consults a broader
+corpus, or promotes a malformed, missing, or unselected marker into semantic evidence. The former
+token-overlap check remains a conservative citation-attachment filter, not the semantic success
+criterion. The shared NLI stage supplies the existing bounded, unavailable-to-WARN behavior and
+body-free diagnostics for System B and hybrid connector citations as well as path-and-line citations.
 
 ### D2 — The production judge is a Model-Gateway NLI pass over the same configured model
 
@@ -131,16 +135,13 @@ unchanged at 1.0.
 
 ## Consequences
 
-- The three System-A grounded topologies gain semantic citation-support verification when a
-  compatible judge model is configured and policy allows it; otherwise the path is byte-identical
-  (pinned by the existing grounded regression suites, which run with no judge configured). For the
-  hybrid topology specifically, NLI verification covers only `[path:line]`-cited folder evidence;
-  connector-`[n]`-marker-cited claims stay on the existing `citationPassesFaithfulness` token-overlap
-  citation-support check (see D1 above and ADD-01/RAG-RETRIEVAL-ADD-01) pending a follow-up. The
-  reconciliation check is a separate downstream stage that reads the same verdict — it is not
-  itself the verification layer.
+- Every user-facing grounded topology gains semantic citation-support verification when a compatible
+  judge model is configured and policy allows it; otherwise the path is byte-identical (pinned by
+  the existing grounded regression suites, which run with no judge configured). Hybrid verification
+  covers both `[path:line]` folder evidence and `[n]` connector evidence; the reconciliation check
+  is a separate downstream membership stage and is not itself the verification layer.
 - A richer `keiko-evidence` verdict-tally manifest (beyond the operator diagnostic and the persisted
-  uncertainty markers) and the System-B NLI unification are explicit K M2 follow-ups.
+  uncertainty markers) remains an explicit K M2 follow-up.
 - New contract surface is limited to two additive `UncertaintyMarkerKind` values; no capsule-store
   schema, embedding identity, RRF fusion (ADR-0036), or connector change.
 

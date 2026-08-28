@@ -639,10 +639,10 @@ function updateMemoryInPlace(
 ): MemoryRecord {
   const existing = existingMemoryOrThrow(db, update.id, opts.cipher);
   if (update.expectedStatus !== undefined && existing.status !== update.expectedStatus) {
-    throw new MemoryStoragePreconditionError("status");
+    throw new MemoryStoragePreconditionError("status", update.id);
   }
   if (update.expectedUpdatedAt !== undefined && existing.updatedAt !== update.expectedUpdatedAt) {
-    throw new MemoryStoragePreconditionError("updatedAt");
+    throw new MemoryStoragePreconditionError("updatedAt", update.id);
   }
   const merged = mergePatch(existing, update.patch, update.nowMs);
   const ready = preparedForWrite(merged, opts);
@@ -683,10 +683,10 @@ function assertGraphPrecondition(
 ): void {
   const existing = existingMemoryOrThrow(db, precondition.id, cipher);
   if (existing.status !== precondition.expectedStatus) {
-    throw new MemoryStoragePreconditionError("status");
+    throw new MemoryStoragePreconditionError("status", precondition.id);
   }
   if (existing.updatedAt !== precondition.expectedUpdatedAt) {
-    throw new MemoryStoragePreconditionError("updatedAt");
+    throw new MemoryStoragePreconditionError("updatedAt", precondition.id);
   }
 }
 

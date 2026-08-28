@@ -153,6 +153,12 @@ export interface OutboundHttpEgressConfig {
   // common corporate-proxy pattern) would see an IP-literal target instead and could reject it —
   // an operator must confirm their proxy tolerates that before opting in.
   readonly pinProxiedConnectTarget?: boolean | undefined;
+  // Explicit deployment acknowledgement for ordinary proxied HOSTNAME egress. Keiko cannot
+  // validate a proxy's independently-resolved address at connect time, so this delegates the
+  // blocked-address policy to that proxy; it is not proof that the proxy enforces it. This
+  // config-file-only acknowledgement never relaxes research, literal-address, redirect, or
+  // private/metadata address-class denials.
+  readonly acknowledgeProxiedHostnamePolicy?: boolean | undefined;
 }
 
 export interface CircuitBreakerConfig {

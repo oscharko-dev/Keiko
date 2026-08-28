@@ -119,6 +119,7 @@ export const API_ROUTE_LITERAL_SEGMENTS: ReadonlySet<string> = new Set([
   "control",
   "copy",
   "correct",
+  "correction-predecessors",
   "create",
   "credentials",
   "deactivate",

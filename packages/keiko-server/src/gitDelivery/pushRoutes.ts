@@ -39,7 +39,12 @@ import {
   scanForbiddenStrings,
   scanUnsafeFormatChars,
 } from "./requestGuards.js";
-import { prepareGitDeliveryRequest, type GitDeliveryRequestErrors } from "./requestPreparation.js";
+import {
+  gitDeliveryAuthorityContinuityGuard,
+  gitDeliveryAuthorityGate,
+  prepareGitDeliveryRequest,
+  type GitDeliveryRequestErrors,
+} from "./requestPreparation.js";
 import {
   readTrustedGitDeliveryBranchProtection,
   signatureRequirementOf,
@@ -209,15 +214,40 @@ export const createHandlePushExecute = (
     if (!prepared.ok) return prepared.result;
     const { workspace } = prepared;
     const { projectId, command, approval } = prepared.value;
+    const target = {
+      headBranchName: command.sourceBranchName,
+      remoteBranchName: command.remoteBranchName,
+    };
+    const authority = gitDeliveryAuthorityGate(ctx, deps, projectId, workspace, "push", target);
+    if (!authority.allowed) return authority.result;
     const verifiedApproval = resolveGitDeliveryApprovalRequirement(approval, {
       store: seams.approvalStore,
-      binding: { projectId, operation: "push", command },
+      binding: {
+        projectId,
+        operation: "push",
+        command,
+        runId: authority.runId,
+        envelopeDigest: authority.envelopeDigest,
+      },
       nowMs: (seams.now ?? Date.now)(),
     });
     if (verifiedApproval === undefined) return errResult(400, "GIT_DELIVERY_PUSH_BAD_REQUEST");
+    const beforeRemoteDispatch = gitDeliveryAuthorityContinuityGuard({
+      ctx,
+      deps,
+      projectId,
+      workspace,
+      operation: "push",
+      target,
+      admitted: authority,
+      next: seams.beforeRemoteDispatch,
+    });
     let result;
     try {
-      result = await executeGovernedPublish(command, verifiedApproval, workspace, deps, seams);
+      result = await executeGovernedPublish(command, verifiedApproval, workspace, deps, {
+        ...seams,
+        beforeRemoteDispatch,
+      });
     } catch {
       // Only the read-only snapshot step can throw (not a git repository); the gateway never throws.
       return errResult(409, "GIT_DELIVERY_PUSH_WORKTREE_UNAVAILABLE");

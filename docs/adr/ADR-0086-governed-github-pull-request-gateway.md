@@ -69,7 +69,7 @@ The local kernel (`runGitMutation`), the local adapter, and the publish gateway 
 - Secret-redacts subprocess stdout/stderr before any classification or logging, exactly as the publish node adapter does. Raw API responses never leave the executor.
 - Classifies a non-OK HTTP status or non-zero exit via `classifyGitPullRequestRejection`, which matches error tokens in the redacted output and maps them to a typed `GitPullRequestRejectionReason`.
 
-`gh` is treated as an authenticated system binary. The team's deployment must ensure `gh` is authenticated before `KEIKO_GIT_DELIVERY_ENABLED` is set. Keiko does not perform auth setup and has no auth-token lifecycle.
+`gh` is treated as an authenticated system binary. Keiko does not perform auth setup and has no auth-token lifecycle; write admission remains bound to the active server-owned runtime Authority Envelope.
 
 ### D3 — Content-free guarantee preserved; metadata synthesis produces a deterministic, user-editable draft from structured facts
 
@@ -106,7 +106,7 @@ This split keeps readiness derivation testable without a running server and avoi
 
 Raw subprocess output never crosses the executor boundary. Only the typed reason, the contract error code, and the recovery hint are returned from the adapter.
 
-### D6 — Default PR policy pack (server): pr-create and pr-update constrained by base-branch namespace and capability; capability-gated behind KEIKO_GIT_DELIVERY_ENABLED
+### D6 — Default PR policy pack (server): pr-create and pr-update constrained by base-branch namespace and active Authority Envelope
 
 `KEIKO_DEFAULT_PR_POLICY_PACK` (server, alongside `KEIKO_DEFAULT_PUBLISH_POLICY_PACK` and `KEIKO_DEFAULT_LOCAL_GIT_POLICY_PACK`) authorises `pr-create` and `pr-update` as `constrained` by two constraints:
 
@@ -115,7 +115,7 @@ Raw subprocess output never crosses the executor boundary. Only the typed reason
 
 The policy evaluator (`evaluateGitPolicy`) selects a rule by `actionKind`, then the PR gateway resolves a `constrained` decision's branch-pattern against the base target. Per-target approval escalation (requiring a human approval token before opening a PR to a specific protected base) is therefore expressed by a deployment-supplied override pack with an `approval-gated` rule, not by the default pack: `runGitPullRequest` fully supports the `approval-gated` → `approval-required` path (a unit test injects such a pack and asserts the adapter is never called without a valid token). Keeping the default pack `constrained` rather than `approval-gated` reflects that the governed gate for *merging* (where approvals belong) is the #478 slice; opening or updating a PR to a known integration base is itself the reviewable artifact.
 
-The default pack is fail-closed: all action kinds not explicitly covered by a rule fall through to the `defaultRule: { decision: "blocked" }`. Governed PR delivery is only ever evaluated when `KEIKO_GIT_DELIVERY_ENABLED` is set to a truthy value in the server environment (reusing the existing `isGitDeliveryTrusted` capability gate from capability.ts); the default is false.
+The default pack is fail-closed: all action kinds not explicitly covered by a rule fall through to the `defaultRule: { decision: "blocked" }`. Governed PR delivery additionally requires a current server-owned runtime Authority Envelope; no environment switch grants delivery authority.
 
 Force-push for a PR update (e.g. force-updating the head branch after a rebase) is out of scope for this slice. The PR gateway has no force operand; any head-branch force push must use the ADR-0085 publish gateway with a future explicit policy path.
 
@@ -133,7 +133,7 @@ The `GovernedPullRequestCard` is launched from the "PR" action button in the Pub
 
 `globals.css` is **not modified** (ADR-0051 gate). All card styling uses inline styles via existing CSS custom properties (`var(--space-4)`, `var(--fg-muted)`, `var(--text-body-sm)`, etc.), mirroring the pattern established in `GovernedGitFlowCard.tsx`.
 
-### D8 — AC5 test strategy: fake-adapter integration tests gate CI; Playwright e2e covers the read-only preview path and disabled/blocked states
+### D8 — AC5 test strategy: fake-adapter integration tests gate CI; Playwright e2e covers the read-only preview and blocked states
 
 **Server integration tests** (`packages/keiko-server/src/gitDelivery/prRoutes.test.ts`) inject a deterministic fake `GitPullRequestAdapter` seam (no `gh` subprocess, no network). They assert:
 - Policy-awareness: a PR whose base is outside the allowed-namespace constraint is blocked with `policy-pack-blocked` before the adapter is called.
@@ -143,7 +143,7 @@ The `GovernedPullRequestCard` is launched from the "PR" action button in the Pub
 
 These tests run in the `ci` job (the required gating check) and require no live GitHub credentials.
 
-**Playwright e2e** (non-gating, coordinator evidence, `tests/e2e/config/playwright.issue-477-pr-command-center.config.ts`, `test:e2e:pr-command-center-477`): drives the real packaged app to assert the read-only preview path (policy outcome display, readiness blockers, metadata-draft editor render), the disabled state when `KEIKO_GIT_DELIVERY_ENABLED` is unset (404 response causes the card to render a "not enabled" notice), and the blocked state when the base branch is outside the policy namespace. No live `gh api` calls are made in CI; the e2e suite exercises only the preview path and the blocked/disabled UI states.
+**Playwright e2e** (non-gating, coordinator evidence, `tests/e2e/config/playwright.issue-477-pr-command-center.config.ts`, `test:e2e:pr-command-center-477`): drives the real packaged app to assert the read-only preview path (policy outcome display, readiness blockers, metadata-draft editor render) and the blocked state when the base branch is outside the policy namespace. No live `gh api` calls are made in CI.
 
 ## Consequences
 
@@ -197,7 +197,7 @@ These tests run in the `ci` job (the required gating check) and require no live 
 
 - ADR-0080: Governed Git delivery contracts (PR input shapes, execution error codes, recovery vocabulary reused unchanged; provider-neutral PR state interfaces reused)
 - ADR-0081: Governed Git mutation execution kernel (preflight pr-create/pr-update → `preflightNoLocalPrecondition` unchanged; lifecycle result shape reused)
-- ADR-0082: Governed Git approval and preview surface (read-only BFF preview pattern; `isGitDeliveryTrusted` gate reused; action-sheet recovery vocabulary reused)
+- ADR-0082: Governed Git approval and preview surface (read-only BFF preview pattern; action-sheet recovery vocabulary reused)
 - ADR-0083: Governed Git mutation evidence ledger (`recordGitDeliveryMutationEvidence` / `buildGitDeliveryEvidenceRecord` pr-create/pr-update projection reused)
 - ADR-0084: Governed local Git flows (GovernedGitFlowCard extended with "PR" launch button in Publish section)
 - ADR-0085: Governed remote publish gateway (parallel gateway pattern mirrored; publish gateway unchanged)

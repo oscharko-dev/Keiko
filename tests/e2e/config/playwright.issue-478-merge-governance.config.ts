@@ -5,7 +5,7 @@ import { join } from "node:path";
 // Issue #478 (Epic #470) — browser evidence that the governed merge surface reaches the governed BFF
 // merge path and cannot bypass the readiness/policy gates. Mirrors
 // tests/e2e/config/playwright.issue-477-pr-command-center.config.ts: build the packaged CLI, boot the real UI server, run
-// a single deterministic chromium worker. The webServer env flag KEIKO_GIT_DELIVERY_ENABLED=true makes
+// a single deterministic chromium worker. The governed Git-delivery routes are available in the
 // the governed /api/git-delivery/merge/* routes live in the running app (the spec intercepts the merge
 // routes for determinism, but the gate proves the surface reaches the governed BFF merge path rather than
 // a no-op stub). Non-gating: ci.yml does not reference this config; it is coordinator evidence.
@@ -60,7 +60,6 @@ export default defineConfig({
     env: {
       KEIKO_STATE_DIR: stateDir,
       KEIKO_UI_DATA_DIR: join(stateDir, "ui"),
-      KEIKO_GIT_DELIVERY_ENABLED: "true",
     },
   },
 });

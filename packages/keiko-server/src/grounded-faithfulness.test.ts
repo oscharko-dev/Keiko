@@ -24,8 +24,10 @@ import {
   parseInlineCitations,
   reconcileClaimEntailment,
   reconcileInlineCitations,
+  reconcileNumericClaimEntailment,
   reconcileNumericCitations,
   segmentCitedClaims,
+  segmentNumericCitedClaims,
   splitClaimSpans,
   stripInlineCitations,
   unsupportedCitationMarker,
@@ -434,6 +436,130 @@ function scriptedJudge(): EntailmentJudge {
   };
 }
 
+describe("numeric citation entailment", () => {
+  it("judges a trailing numeric marker against its exact selected excerpt", async () => {
+    const result = await reconcileNumericClaimEntailment(
+      "Retention is ten years.[1]",
+      [{ marker: 1, excerptText: "Retention is 30 days. [[CONTRADICTS]]" }],
+      scriptedJudge(),
+    );
+    expect(result.unentailed).toEqual([{ citedPaths: ["[1]"] }]);
+  });
+
+  it("attributes a citation-only trailing marker span to the preceding sentence", async () => {
+    const judged: EntailmentJudgeInput[] = [];
+    const judge: EntailmentJudge = {
+      judge: (input): Promise<EntailmentVerdict> => {
+        judged.push(input);
+        return Promise.resolve("unsupported");
+      },
+    };
+
+    const result = await reconcileNumericClaimEntailment(
+      "Retention is 30 days. [1]",
+      [{ marker: 1, excerptText: "Retention is ten years." }],
+      judge,
+    );
+
+    expect(judged).toEqual([
+      { claimText: "Retention is 30 days.", excerptText: "Retention is ten years." },
+    ]);
+    expect(result).toMatchObject({ judgedClaims: 1, unentailed: [{ citedPaths: ["[1]"] }] });
+  });
+
+  it.each([
+    ["Retention is 30 days. 【1】", ["[1]"]],
+    ["Retention is 30 days. [1] [2]", ["[1]", "[2]"]],
+  ] as const)("judges every citation-only trailing marker in %s", async (answer, citedPaths) => {
+    const judged: EntailmentJudgeInput[] = [];
+    const result = await reconcileNumericClaimEntailment(
+      answer,
+      [
+        { marker: 1, excerptText: "Retention is ten years." },
+        { marker: 2, excerptText: "Retention is five years." },
+      ],
+      {
+        judge: (input): Promise<EntailmentVerdict> => {
+          judged.push(input);
+          return Promise.resolve("unsupported");
+        },
+      },
+    );
+
+    expect(judged).toHaveLength(1);
+    expect(judged[0]?.claimText).toBe("Retention is 30 days.");
+    expect(result).toMatchObject({ judgedClaims: 1, unentailed: [{ citedPaths }] });
+  });
+
+  it("keeps duplicate markers on one claim to one judge call", async () => {
+    let calls = 0;
+    const result = await reconcileNumericClaimEntailment(
+      "Retention is 30 days [1][1].",
+      [{ marker: 1, excerptText: "Retention is 30 days." }],
+      { judge: (): Promise<EntailmentVerdict> => ((calls += 1), Promise.resolve("supported")) },
+    );
+    expect(result.judgedClaims).toBe(1);
+    expect(calls).toBe(1);
+  });
+
+  it("judges repeated sentence text with different markers as separate claims", async () => {
+    const judged: EntailmentJudgeInput[] = [];
+    const result = await reconcileNumericClaimEntailment(
+      "Retention is 30 days [1]. Retention is 30 days [2].",
+      [
+        { marker: 1, excerptText: "Retention is ten years. [[CONTRADICTS]]" },
+        { marker: 2, excerptText: "Retention is 30 days." },
+      ],
+      {
+        judge: (input): Promise<EntailmentVerdict> => {
+          judged.push(input);
+          return scriptedJudge().judge(input);
+        },
+      },
+    );
+
+    expect(judged).toHaveLength(2);
+    expect(judged.map((input) => input.excerptText)).toEqual([
+      "Retention is ten years. [[CONTRADICTS]]",
+      "Retention is 30 days.",
+    ]);
+    expect(result).toMatchObject({ judgedClaims: 2, unentailed: [{ citedPaths: ["[1]"] }] });
+  });
+
+  it("keeps a numeric citation with mixed path citations in one judgeable claim", () => {
+    expect(
+      segmentNumericCitedClaims(
+        "Retention is 30 days [docs/policy.md:12] and audits are quarterly [1].",
+      ),
+    ).toEqual([
+      {
+        claimText: "Retention is 30 days and audits are quarterly .",
+        markers: [1],
+      },
+    ]);
+  });
+
+  it("keeps missing and malformed markers out of semantic evidence", async () => {
+    const claims = segmentNumericCitedClaims("Missing [9], malformed [x], and zero [0].");
+    expect(claims).toEqual([{ claimText: "Missing , malformed , and zero .", markers: [9] }]);
+    const result = await reconcileNumericClaimEntailment(
+      "Missing [9], malformed [x], and zero [0].",
+      [{ marker: 1, excerptText: "unused" }],
+      scriptedJudge(),
+    );
+    expect(result).toEqual({ unentailed: [], judgedClaims: 0, unavailableClaims: 0 });
+  });
+
+  it("degrades to unavailable when the numeric citation judge cannot decide", async () => {
+    const result = await reconcileNumericClaimEntailment(
+      "Retention is 30 days 【1】.",
+      [{ marker: 1, excerptText: "[[UNAVAIL]]" }],
+      scriptedJudge(),
+    );
+    expect(result).toEqual({ unentailed: [], judgedClaims: 1, unavailableClaims: 1 });
+  });
+});
+
 describe("splitClaimSpans", () => {
   it("splits on sentence boundaries but never inside a [citation]", () => {
     const spans = splitClaimSpans(
@@ -449,6 +575,11 @@ describe("splitClaimSpans", () => {
     expect(spans).toHaveLength(1);
   });
 
+  it("keeps dotted content inside full-width citation brackets in one span", () => {
+    const spans = splitClaimSpans("See ［src/config/env.ts:3］ for details.");
+    expect(spans).toHaveLength(1);
+  });
+
   it("splits on newlines for bulleted answers", () => {
     const spans = splitClaimSpans("- first [a/b.ts:1]\n- second [c/d.ts:2]");
     expect(spans).toHaveLength(2);
@@ -459,6 +590,12 @@ describe("stripInlineCitations", () => {
   it("removes citation brackets and collapses whitespace", () => {
     expect(stripInlineCitations("Login validates in [src/auth/login.ts:10-20] the session.")).toBe(
       "Login validates in the session.",
+    );
+  });
+
+  it("removes full-width numeric citation brackets before judging", () => {
+    expect(stripInlineCitations("The retention is 30 days ［1］.")).toBe(
+      "The retention is 30 days .",
     );
   });
 });

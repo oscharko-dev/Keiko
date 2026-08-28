@@ -90,6 +90,21 @@ export interface GitDeliveryPullRequestSeams {
   readonly approvalStore?: GitDeliveryApprovalStore | undefined;
   readonly now?: (() => number) | undefined;
   readonly newActionId?: (() => string) | undefined;
+  readonly beforeRemoteDispatch?: (() => boolean) | undefined;
+}
+
+function authorityGuardedPrAdapter(
+  adapter: GitPullRequestAdapter,
+  beforeRemoteDispatch: (() => boolean) | undefined,
+): GitPullRequestAdapter {
+  if (beforeRemoteDispatch === undefined) return adapter;
+  const aborted = { schemaVersion: "1", outcome: "aborted", durationMs: 0 } as const;
+  return {
+    createPullRequest: (request) =>
+      beforeRemoteDispatch() ? adapter.createPullRequest(request) : Promise.resolve(aborted),
+    updatePullRequest: (request) =>
+      beforeRemoteDispatch() ? adapter.updatePullRequest(request) : Promise.resolve(aborted),
+  };
 }
 
 function prAdapterFor(
@@ -115,7 +130,10 @@ export async function executeGovernedPullRequest(
 ): Promise<GitPullRequestLifecycleResult> {
   const now = seams.now ?? Date.now;
   const snapshot = await readWorktreeSnapshotFor(workspace, seams, now);
-  const adapter = prAdapterFor(workspace, seams, now);
+  const adapter = authorityGuardedPrAdapter(
+    prAdapterFor(workspace, seams, now),
+    seams.beforeRemoteDispatch,
+  );
   const packs = seams.policyPacks ?? defaultMintableRepoPack(KEIKO_DEFAULT_PR_POLICY_PACK);
   const newActionId =
     seams.newActionId ?? ((): string => defaultGitDeliveryActionId(command, now()));

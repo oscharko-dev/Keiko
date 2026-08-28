@@ -660,7 +660,10 @@ describe("Atlassian connector egress posture — proxied DNS-rebinding refusal (
         baseUrl: "https://mycompany.atlassian.example",
         authRef: AUTH_REF,
         credentials: resolver(),
-        egress: () => ({ httpsProxy: `http://127.0.0.1:${String(proxyPort)}` }),
+        egress: () => ({
+          httpsProxy: `http://127.0.0.1:${String(proxyPort)}`,
+          acknowledgeProxiedHostnamePolicy: true,
+        }),
       })({
         method: "GET",
         url: "https://mycompany.atlassian.example/rest/api/3/myself",
@@ -708,7 +711,10 @@ describe("Atlassian connector egress posture — proxied DNS-rebinding refusal (
         baseUrl: "https://mycompany.atlassian.example",
         authRef: AUTH_REF,
         credentials: resolver(),
-        egress: () => ({ httpsProxy: `http://127.0.0.1:${String(proxyPort)}` }),
+        egress: () => ({
+          httpsProxy: `http://127.0.0.1:${String(proxyPort)}`,
+          acknowledgeProxiedHostnamePolicy: true,
+        }),
       })({
         method: "GET",
         url: "https://mycompany.atlassian.example/rest/api/3/myself",

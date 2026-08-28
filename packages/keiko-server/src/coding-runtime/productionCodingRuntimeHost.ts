@@ -69,6 +69,7 @@ export function createProductionCodingRuntimeHost(
     ...(runtime.runtimeCapabilityAuthenticator
       ? { runtimeCapabilityAuthenticator: runtime.runtimeCapabilityAuthenticator }
       : {}),
+    ...(runtime.gitDeliveryAuthority ? { gitDeliveryAuthority: runtime.gitDeliveryAuthority } : {}),
     ...(runtime.openCodeGatewayReadinessRegistry
       ? { openCodeGatewayReadinessRegistry: runtime.openCodeGatewayReadinessRegistry }
       : {}),

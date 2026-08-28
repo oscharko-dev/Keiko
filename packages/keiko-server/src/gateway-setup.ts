@@ -5207,9 +5207,13 @@ function finalizeVerifiedCandidate(
   request: SetupRequest,
 ): RouteResult {
   persistGatewayConfig(
-    current === undefined
-      ? verified.rawConfig
-      : withDiskGatewayEgress(verified.rawConfig, gatewayConfig.storagePath, deps),
+    withDiskGatewayEgress(
+      verified.rawConfig,
+      gatewayConfig.storagePath,
+      deps,
+      current === undefined,
+      request.correlationId,
+    ),
     gatewayConfig.storagePath,
     deps,
   );
@@ -5283,19 +5287,41 @@ async function trySetupCandidate(
 // bundle, private-network opt-in). On a preserve-mode rebuild only what the stored file itself
 // declares may reach disk — persisting the aggregate would keep an env opt-in active from disk
 // after the environment is cleared (review finding on #3037; the settings-only path draws the
-// same distinction through withPersistedGatewayEgress). A FRESH setup skips this entirely: its
-// raw config carries no current-egress copy, and the storage path may still be the operator's
-// bootstrap config file whose config-file-only egress must not be re-persisted by the UI. The
-// runtime config handed to gatewayConfig.set keeps the full aggregate either way — behavior in
-// the running process is unchanged.
+// same distinction through withPersistedGatewayEgress). The same rule applies on a FRESH setup:
+// its storage path may be the operator's bootstrap config file, so its file-declared egress must
+// survive the first verified save while environment-derived egress remains transient. The runtime
+// config handed to gatewayConfig.set keeps the full aggregate either way — behavior in the running
+// process is unchanged.
 function withDiskGatewayEgress(
   raw: Record<string, unknown>,
   storagePath: string,
   deps: UiHandlerDeps,
+  ignoreInvalidStoredConfig = false,
+  correlationId?: string,
 ): Record<string, unknown> {
   const withoutEgress = { ...raw };
   delete withoutEgress.egress;
-  return withPersistedGatewayEgress(withoutEgress, storagePath, deps);
+  try {
+    return withPersistedGatewayEgress(withoutEgress, storagePath, deps);
+  } catch (error) {
+    if (ignoreInvalidStoredConfig && error instanceof ConfigInvalidError) {
+      emitServerDiagnostic(
+        deps.diagnostics,
+        serverDiagnosticFromError({
+          correlationId: correlationId ?? UNKNOWN_CORRELATION_ID,
+          operation: "POST /api/gateway/setup",
+          source: "gateway-setup.egress",
+          error,
+          summary:
+            "Stored gateway egress configuration was invalid; setup omitted it from the rewritten file.",
+          redact: () =>
+            "Stored gateway egress configuration was invalid; setup omitted it from the rewritten file.",
+        }),
+      );
+      return withoutEgress;
+    }
+    throw error;
+  }
 }
 
 // Per-model CONNECTION-IDENTITY overrides (base URL, api key, credential header) are the

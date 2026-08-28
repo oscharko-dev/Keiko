@@ -429,6 +429,7 @@ const SERVER_DIAGNOSTIC_SUMMARIES = [
   "Verification execution failed unexpectedly.",
   "A verification event subscriber failed.",
   "Model discovery exceeded the discovery cap; setup continued with the retained models.",
+  "Stored gateway egress configuration was invalid; setup omitted it from the rewritten file.",
   "Setup skipped models the gateway declared as unsupported modes or that failed the embedding probe.",
   "gateway-setup-audit-validation-failed",
   "entailment-claim-judging-incomplete",

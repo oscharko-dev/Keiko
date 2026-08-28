@@ -9,6 +9,7 @@ import { connect as netConnect, isIP } from "node:net";
 import type { LookupFunction, Socket } from "node:net";
 import * as tls from "node:tls";
 import {
+  classifyOutboundHost,
   normalizeHost,
   outboundAddressBlockedReason,
   outboundTargetBlockedReason,
@@ -70,13 +71,21 @@ export type OutboundHttpEgressErrorCode =
   | "PROXY_BLOCKED_BY_POLICY"
   | "TLS_CA_FAILURE";
 
+type OutboundHttpEgressPolicyReason = "undelegated-proxied-hostname";
+
 export class OutboundHttpEgressError extends Error {
   readonly code: OutboundHttpEgressErrorCode;
+  readonly policyReason?: OutboundHttpEgressPolicyReason | undefined;
 
-  constructor(code: OutboundHttpEgressErrorCode, message: string) {
+  constructor(
+    code: OutboundHttpEgressErrorCode,
+    message: string,
+    policyReason?: OutboundHttpEgressPolicyReason,
+  ) {
     super(message);
     this.name = "OutboundHttpEgressError";
     this.code = code;
+    this.policyReason = policyReason;
   }
 }
 
@@ -511,11 +520,33 @@ function proxyForTarget(
   return undefined;
 }
 
-function blockedTargetError(reason: string): OutboundHttpEgressError {
+function blockedTargetError(
+  reason: string,
+  policyReason?: OutboundHttpEgressPolicyReason,
+): OutboundHttpEgressError {
   return new OutboundHttpEgressError(
     "PROXY_BLOCKED_BY_POLICY",
     `Outbound target is blocked by gateway egress policy (${reason}).`,
+    policyReason,
   );
+}
+
+function refuseUndelegatedProxiedHostnameEgress(
+  target: URL,
+  proxy: URL | undefined,
+  egress: OutboundHttpEgressConfig | undefined,
+): void {
+  if (
+    proxy !== undefined &&
+    classifyOutboundHost(target.hostname) === undefined &&
+    egress?.pinProxiedConnectTarget !== true &&
+    egress?.acknowledgeProxiedHostnamePolicy !== true
+  ) {
+    throw blockedTargetError(
+      "proxied hostname policy delegation is not acknowledged",
+      "undelegated-proxied-hostname",
+    );
+  }
 }
 
 function redirectTarget(original: URL, response: Response): URL | undefined {
@@ -540,6 +571,10 @@ async function enforceRedirectTargetPolicy(
 ): Promise<URL | undefined> {
   const redirected = redirectTarget(original, response);
   if (redirected === undefined) return undefined;
+  const redirectedProxyRaw = proxyForTarget(redirected, egress);
+  const redirectedProxy =
+    redirectedProxyRaw === undefined ? undefined : parseProxyUrl(redirectedProxyRaw);
+  refuseUndelegatedProxiedHostnameEgress(redirected, redirectedProxy, egress);
   await enforceOutboundTargetPolicy(redirected, egress, options);
   return redirected;
 }
@@ -1379,6 +1414,7 @@ async function performGatewayFetch(url: string, options: GatewayFetchOptions): P
   const log = resolveLogSink(logOption);
   const init = gatewayRequestInit(rest, timeoutMs);
   const plan = planGatewayProxy(url, fetchImpl, egress, log);
+  refuseUndelegatedProxiedHostnameEgress(plan.target, plan.proxy, egress);
   refuseUnpinnableResearchEgress(plan.proxy, egress);
   const dns = await resolveGatewayDns(plan, egress);
   if (plan.proxy !== undefined) {
@@ -1390,7 +1426,9 @@ async function performGatewayFetch(url: string, options: GatewayFetchOptions): P
       maxResponseBytes,
       dns.proxyPinnedAddress,
     );
-    await enforceRedirectTargetPolicy(plan.target, response, egress, dns.redirectPolicy);
+    await enforceRedirectTargetPolicy(plan.target, response, egress, {
+      ...dns.redirectPolicy,
+    });
     return response;
   }
   const response = await fetchDirectWithCaFallback(url, init, {
@@ -1401,7 +1439,9 @@ async function performGatewayFetch(url: string, options: GatewayFetchOptions): P
     pinnedAddresses: dns.pinnedAddresses,
     log,
   });
-  await enforceRedirectTargetPolicy(plan.target, response, egress, dns.redirectPolicy);
+  await enforceRedirectTargetPolicy(plan.target, response, egress, {
+    ...dns.redirectPolicy,
+  });
   return response;
 }
 
@@ -1515,7 +1555,12 @@ export async function gatewayFetch(
       op: "http.gateway.fetch.failed",
       durationMs: elapsed(),
       errorKind: logErrorKind(error),
-      extra: { endpoint: logEndpointHost(url) },
+      extra: {
+        endpoint: logEndpointHost(url),
+        ...(error instanceof OutboundHttpEgressError && error.policyReason !== undefined
+          ? { policyReason: error.policyReason }
+          : {}),
+      },
     });
     throw error;
   }

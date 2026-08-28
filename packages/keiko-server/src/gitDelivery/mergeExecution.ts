@@ -74,6 +74,21 @@ export interface GitDeliveryMergeSeams {
   readonly strategyPolicy?: GitMergeStrategyPolicy | undefined;
   readonly now?: (() => number) | undefined;
   readonly newActionId?: (() => string) | undefined;
+  readonly beforeRemoteDispatch?: (() => boolean) | undefined;
+}
+
+function authorityGuardedMergeAdapter(
+  adapter: GitMergeAdapter,
+  beforeRemoteDispatch: (() => boolean) | undefined,
+): GitMergeAdapter {
+  if (beforeRemoteDispatch === undefined) return adapter;
+  return {
+    readMergeReadiness: (request) => adapter.readMergeReadiness(request),
+    mergePullRequest: (request) =>
+      beforeRemoteDispatch()
+        ? adapter.mergePullRequest(request)
+        : Promise.resolve({ schemaVersion: "1", outcome: "aborted", durationMs: 0 }),
+  };
 }
 
 function mergeAdapterFor(
@@ -120,7 +135,10 @@ export async function executeGovernedMerge(
 ): Promise<GitMergeLifecycleResult> {
   const now = seams.now ?? Date.now;
   const snapshot = await readWorktreeSnapshotFor(workspace, seams, now);
-  const adapter = mergeAdapterFor(workspace, seams, now);
+  const adapter = authorityGuardedMergeAdapter(
+    mergeAdapterFor(workspace, seams, now),
+    seams.beforeRemoteDispatch,
+  );
   const packs = seams.policyPacks ?? defaultMintableRepoPack(KEIKO_DEFAULT_MERGE_POLICY_PACK);
   const newActionId =
     seams.newActionId ?? ((): string => defaultGitDeliveryActionId(command, now()));

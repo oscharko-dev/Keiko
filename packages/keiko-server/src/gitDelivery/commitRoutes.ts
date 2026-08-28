@@ -50,6 +50,7 @@ import type { RouteContext, RouteDefinition, RouteResult } from "../routes.js";
 import type { UiHandlerDeps } from "../deps.js";
 import type { ServerLogSink } from "../observability/server-log.js";
 import { processServerLogSink } from "../process-log-sink.js";
+import { gitDeliveryAuthorityDenial } from "./requestPreparation.js";
 import {
   parseGitDeliveryApprovalRequest,
   resolveGitDeliveryApprovalRequirement,
@@ -753,6 +754,14 @@ export const createHandleCommitExecute = (
     const prepared = await prepareCommitExecution(ctx, deps, options.messagePolicy);
     if (!prepared.ok) return prepared.result;
     const { request: req, workspace, policy } = prepared.value;
+    const authorityDenial = gitDeliveryAuthorityDenial(
+      ctx,
+      deps,
+      req.projectId,
+      workspace,
+      "commit",
+    );
+    if (authorityDenial !== undefined) return authorityDenial;
 
     const messageBlock = messagePolicyBlockResult(req.message, policy, deps);
     if (messageBlock !== undefined) return messageBlock;

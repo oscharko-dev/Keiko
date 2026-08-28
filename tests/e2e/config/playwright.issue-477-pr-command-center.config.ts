@@ -5,7 +5,7 @@ import { join } from "node:path";
 // Issue #477 (Epic #470) — browser evidence that the governed GitHub pull request command center
 // reaches the governed BFF PR path and cannot bypass policy. Mirrors
 // tests/e2e/config/playwright.issue-476-git-publish.config.ts: build the packaged CLI, boot the real UI server, run a
-// single deterministic chromium worker. The webServer env flag KEIKO_GIT_DELIVERY_ENABLED=true makes the
+// single deterministic chromium worker. The governed Git-delivery routes are available in the
 // governed /api/git-delivery/pr/* routes live in the running app (the spec intercepts the PR routes for
 // determinism, but the gate proves the surface reaches the governed BFF PR path rather than a no-op
 // stub). Non-gating: ci.yml does not reference this config; it is coordinator evidence.
@@ -60,7 +60,6 @@ export default defineConfig({
     env: {
       KEIKO_STATE_DIR: stateDir,
       KEIKO_UI_DATA_DIR: join(stateDir, "ui"),
-      KEIKO_GIT_DELIVERY_ENABLED: "true",
     },
   },
 });

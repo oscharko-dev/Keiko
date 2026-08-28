@@ -57,6 +57,7 @@ export interface GovernedSnapshotDeps {
   readonly env: EnvSource;
   /** Wall-clock for consent + audit timestamps; injected so tests stay deterministic. */
   readonly now: string;
+  readonly correlationId?: string;
   /** When true, record the read-only-scope acknowledgement before the fetch (operator consent). */
   readonly acknowledgeReadOnly?: boolean;
   /**
@@ -192,10 +193,14 @@ interface SnapshotPorts {
 }
 
 function snapshotPorts(deps: GovernedSnapshotDeps): SnapshotPorts {
+  const portOptions = {
+    ...deps.portOptions,
+    ...(deps.correlationId === undefined ? {} : { correlationId: deps.correlationId }),
+  };
   return {
-    httpPort: deps.httpPort ?? createDefaultFigmaHttpPort(deps.egress, undefined, deps.portOptions),
+    httpPort: deps.httpPort ?? createDefaultFigmaHttpPort(deps.egress, undefined, portOptions),
     renderPort:
-      deps.renderPort ?? createDefaultFigmaRenderPort(deps.egress, undefined, deps.portOptions),
+      deps.renderPort ?? createDefaultFigmaRenderPort(deps.egress, undefined, portOptions),
   };
 }
 

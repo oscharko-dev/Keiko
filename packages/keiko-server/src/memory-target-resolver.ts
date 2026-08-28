@@ -79,13 +79,23 @@ function matchesTarget(target: string, record: MemoryRecord): boolean {
   return tokensMatch(tokenize(target), tokenize(haystack));
 }
 
+// The resolver deliberately exposes records as well as ids. Update/forget extraction needs only
+// ids, while correction review must revalidate each candidate's current status and revision before
+// it can bind a supersession. Keeping one matcher prevents the two governed paths from drifting.
+export function resolveMemoryTargetRecords(
+  vault: MemoryVaultStore,
+  target: string,
+  scope: Parameters<CaptureMemoryResolver>[1],
+): readonly MemoryRecord[] {
+  return vault
+    .listMemoriesByScope(scope, {
+      status: TARGETABLE_STATUSES,
+      includeExpired: true,
+    })
+    .filter((record) => matchesTarget(target, record));
+}
+
 export function createMemoryTargetResolver(vault: MemoryVaultStore): CaptureMemoryResolver {
   return (target, scope) =>
-    vault
-      .listMemoriesByScope(scope, {
-        status: TARGETABLE_STATUSES,
-        includeExpired: true,
-      })
-      .filter((record) => matchesTarget(target, record))
-      .map((record) => record.id);
+    resolveMemoryTargetRecords(vault, target, scope).map((record) => record.id);
 }

@@ -5,6 +5,7 @@
 
 import { bffFetchJson } from "./http";
 import type {
+  AcceptMemoryProposalOptions,
   CodingWorkbenchMode,
   MemoryId,
   MemoryRecord,
@@ -33,6 +34,12 @@ import type {
   MemoryConsolidationApplyResponseWire,
   MemoryHealthScanResultWire,
   MemoryAutonomyPolicyWire,
+  MemoryCorrectionPredecessorsResponse,
+} from "@oscharko-dev/keiko-contracts";
+
+export type {
+  AcceptMemoryProposalOptions,
+  MemoryCorrectionPredecessorsResponse,
 } from "@oscharko-dev/keiko-contracts";
 
 // ---------------------------------------------------------------------------
@@ -464,10 +471,6 @@ export async function resolveMemoryConflict(
 // `id` is the proposal/record identifier the route encodes into the path. It is typed as a
 // plain string because both call sites supply a branded id (chat: MemoryProposalId, review
 // queue: MemoryId) and this HTTP boundary only needs the URL path segment, not the brand.
-export interface AcceptMemoryProposalOptions {
-  readonly bodyOverride?: string;
-}
-
 type MemoryActionFetch = (path: string, init?: RequestInit) => Promise<MemoryActionResponse>;
 
 export async function acceptMemoryProposal(
@@ -481,6 +484,13 @@ export async function acceptMemoryProposal(
     method: "POST",
     body: JSON.stringify(options),
   });
+}
+
+export async function fetchCorrectionPredecessors(
+  id: string,
+  fetchImpl = fetchJson<MemoryCorrectionPredecessorsResponse>,
+): Promise<MemoryCorrectionPredecessorsResponse> {
+  return fetchImpl(`/api/memory/proposals/${encodeURIComponent(id)}/correction-predecessors`);
 }
 
 export async function rejectMemoryProposal(

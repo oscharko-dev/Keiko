@@ -4,7 +4,14 @@ import { join } from "node:path";
 import { Readable } from "node:stream";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  createBufferedServerLogSink,
+  createServerLogger,
+  resetServerLogger,
+  setServerLogger,
+} from "../observability/index.js";
 import type {
+  CodingWorkbenchAuthorityEnvelope,
   CodingWorkbenchMode,
   GitRepositoryAgentOperationKind,
   GitRepositoryAgentOperationRequest,
@@ -21,6 +28,7 @@ import {
   handleGitAgentOperationWithDelegate,
   IdempotencyCache,
 } from "./agentOperationsRoutes.js";
+import { permittedGitDeliveryAuthority } from "./runBoundAuthority.test-support.js";
 
 let store: UiStore;
 let root: string;
@@ -41,6 +49,7 @@ const NO_CEILING = "unconfigured" as const;
 function deps(
   runner: GitProcessRunner = vi.fn(() => Promise.resolve(ok(""))),
   ceiling: CodingWorkbenchMode | typeof NO_CEILING = "autonomous-delivery",
+  branch?: CodingWorkbenchAuthorityEnvelope["branch"],
 ): UiHandlerDeps {
   return {
     config: undefined,
@@ -53,6 +62,16 @@ function deps(
     store,
     gitRouteOptions: { runner, maxDiffBytes: 64, maxStatusBytes: 4096, maxChanges: 10 },
     ...(ceiling === NO_CEILING ? {} : { codingRuntimeDeploymentCeiling: ceiling }),
+    ...(ceiling === NO_CEILING
+      ? {}
+      : {
+          gitDeliveryAuthority: permittedGitDeliveryAuthority(
+            () => root,
+            () => root,
+            ceiling,
+            branch,
+          ),
+        }),
   };
 }
 
@@ -102,6 +121,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  resetServerLogger();
   store.close();
   rmSync(root, { recursive: true, force: true });
 });
@@ -163,7 +183,7 @@ describe("POST /api/git/agent/operations", () => {
     });
   });
 
-  it("passes through unknown project results from delegated routes", async () => {
+  it("denies an execute request for an unknown project before delegation", async () => {
     const result = await handleGitAgentOperation(
       ctx(
         request({
@@ -177,11 +197,11 @@ describe("POST /api/git/agent/operations", () => {
       deps(),
     );
 
-    expect(result.status).toBe(404);
+    expect(result.status).toBe(403);
     expect(result.body).toMatchObject({
-      status: "delegated",
+      status: "denied",
       operation: "branch-switch",
-      routeStatus: 404,
+      denialReason: "autonomy-mode-denied",
     });
   });
 
@@ -438,60 +458,48 @@ describe("agent facade — autonomy admission (fail-closed)", () => {
     }
   });
 
-  // KEIKO-0227: converged the facade's admission onto coding-workbench.ts's shared
-  // CODING_WORKBENCH_MODE_POLICIES (ADR-0138 D2), which declares "delivery" approval-required at
-  // every risk tier in every mode. This facade has no approval channel of its own, so a delivery
-  // execute is now denied at the gate rather than delegated — it previously reached "delegated"
-  // here with no approval channel at all once the ceiling hit autonomous-delivery, a materially
-  // more permissive, independently-maintained contract for the same operation than the shared
-  // table already enforced (ADR-0087 D6: merge is an explicit, approval-gated action; ADR-0129 D4).
-  it("keeps a delivery execute approval-required even at the autonomous-delivery ceiling (ADR-0087)", async () => {
+  it("routes an accepted autonomous push to its downstream policy and approval gate", async () => {
     const runner = vi.fn<GitProcessRunner>(() => Promise.resolve(ok("")));
+    const body = executeRequest("push", "push-autonomous");
+    body.payload = {
+      remoteAlias: "origin",
+      sourceBranchName: "feat/x",
+      remoteBranchName: "feat/x",
+    };
     const result = await handleGitAgentOperation(
-      ctx(executeRequest("push", "push-autonomous")),
-      deps(runner, "autonomous-delivery"),
+      ctx(body),
+      deps(runner, "autonomous-delivery", {
+        headRef: "feat/x",
+        baseRef: "dev",
+        allowDetachedHead: false,
+        allowedPrefixes: ["feat/"],
+      }),
     );
 
-    expect(result.status).toBe(403);
+    expect(result.status).toBe(409);
     expect(result.body).toMatchObject({
-      status: "denied",
-      denialReason: "autonomy-mode-denied",
+      status: "delegated",
       operation: "push",
     });
-    expect(runner).not.toHaveBeenCalled();
   });
 
-  // KEIKO-0322, STRENGTHENED by KEIKO-0227. ORIGINAL finding: the facade's autonomy admission
-  // (repository-delivery ≥ autonomous-delivery, no approval channel) and the merge route's own
-  // approval gate (KEIKO_DEFAULT_MERGE_POLICY_PACK ⇒ approval-required with no token) composed
-  // safely only BY COINCIDENCE of two separate, independently-maintained design decisions: the
-  // facade ADMITTED a merge at autonomous-delivery and relied entirely on the downstream route to
-  // still refuse it. The pin existed so a future edit to either side in isolation could not
-  // silently reopen the autonomous-merge path ADR-0087 forbids.
-  //
-  // KEIKO-0227 removed the coincidence this pin worried about: the facade's admission now derives
-  // from the SAME shared CODING_WORKBENCH_MODE_POLICIES table (ADR-0138 D2) the merge route's
-  // approval posture answers to, so "delivery" reads approval-required here too, at every mode —
-  // the facade denies a merge outright, before ever reaching the merge route. The invariant this
-  // pin protects — a merge never completes autonomously without approval — is unchanged and now
-  // enforced at an earlier, single-sourced layer instead of relying on two independent gates
-  // agreeing by chance. Updated to assert the new, earlier denial rather than the old
-  // delegate-then-approval-required round trip, which is no longer reachable.
-  it("never admits a merge execute through the facade, at any ceiling — approval is required separately (ADR-0087)", async () => {
+  it("routes an accepted autonomous merge to its downstream approval gate", async () => {
     const runner = vi.fn<GitProcessRunner>(() => Promise.resolve(ok("")));
     const result = await handleGitAgentOperation(
       ctx(executeRequest("merge", "merge-facade-approval-required")),
-      deps(runner, "autonomous-delivery"),
+      deps(runner, "autonomous-delivery", {
+        headRef: "feat/x",
+        baseRef: "main",
+        allowDetachedHead: false,
+        allowedPrefixes: ["feat/"],
+      }),
     );
 
-    expect(result.status).toBe(403);
+    expect(result.status).toBe(409);
     expect(result.body).toMatchObject({
-      status: "denied",
-      denialReason: "autonomy-mode-denied",
+      status: "delegated",
       operation: "merge",
     });
-    // The merge route (and its own approval gate) is never reached from the facade at this ceiling.
-    expect(runner).not.toHaveBeenCalled();
   });
 
   it.each(["read", "preview"] as const)(
@@ -519,6 +527,31 @@ describe("agent facade — autonomy admission (fail-closed)", () => {
     expect(blocked.body).toMatchObject({ status: "denied", denialReason: "autonomy-mode-denied" });
     expect(admitted.body).toMatchObject({ status: "delegated" });
     expect(admitted.body).not.toMatchObject({ replay: true });
+  });
+
+  it("denies an execute request for an unresolved workspace before idempotency or delegation", async () => {
+    const sink = createBufferedServerLogSink();
+    setServerLogger(createServerLogger({ sink, level: "info" }));
+    const runner = vi.fn<GitProcessRunner>(() => Promise.resolve(ok("")));
+    const body = executeRequest("branch-switch", "unknown-workspace-idempotency");
+    body.projectId = "/not-a-registered-workspace";
+    const result = await handleGitAgentOperation(
+      { ...ctx(body), correlationId: "717cfe41-510a-4f53-aa43-a48c6829452d" },
+      deps(runner, "autonomous-delivery"),
+    );
+
+    expect(result.status).toBe(403);
+    expect(result.body).toMatchObject({ status: "denied", denialReason: "autonomy-mode-denied" });
+    expect(runner).not.toHaveBeenCalled();
+    expect(sink.events).toContainEqual(
+      expect.objectContaining({
+        category: "security",
+        op: "git.delivery.authority.denied",
+        correlationId: "717cfe41-510a-4f53-aa43-a48c6829452d",
+        status: 403,
+        extra: { operation: "branch-switch", reason: "workspace-unresolvable" },
+      }),
+    );
   });
 
   it("keeps the denial content-free", async () => {

@@ -3143,6 +3143,79 @@ async function askFailClosedChat(
   return result.body as LocalKnowledgeAnswer;
 }
 
+async function askWithNumericEntailmentJudge(
+  chat: FailClosedChat,
+  assistantAnswer: string,
+): Promise<{
+  readonly answer: LocalKnowledgeAnswer;
+  readonly judgeCalls: number;
+  readonly judgeRequest: string;
+}> {
+  const embeddingModelId = "text-embedding-3-small";
+  const adapter = scriptedAdapter();
+  let judgeCalls = 0;
+  let judgeRequest = "";
+  let excerptRedactions = 0;
+  const model: ModelPort = {
+    call: (request) => {
+      const isEntailment = request.responseFormat !== undefined;
+      if (isEntailment) {
+        judgeCalls += 1;
+        judgeRequest = JSON.stringify(request.messages);
+      }
+      return Promise.resolve({
+        modelId: "chat-model",
+        content: isEntailment ? '{"verdict":"unsupported"}' : assistantAnswer,
+        finishReason: "stop" as const,
+        toolCalls: [],
+        structuredOutput: null,
+        usage: {
+          requestId: isEntailment ? "numeric-entailment" : "numeric-answer",
+          promptTokens: 5,
+          completionTokens: 12,
+          latencyMs: 1,
+          costClass: "medium" as const,
+        },
+      });
+    },
+  };
+  const deps: UiHandlerDeps = {
+    config: {
+      providers: [testProvider("chat-model"), testProvider(embeddingModelId)],
+      circuitBreaker: { failureThreshold: 5, cooldownMs: 30_000, halfOpenProbes: 2 },
+      capabilities: [
+        { ...chatCapability("chat-model"), supportsResponseFormat: true },
+        embeddingCapability(embeddingModelId),
+      ],
+    },
+    configPresent: true,
+    evidenceStore: { put: () => "", list: () => [], get: () => undefined, delete: () => undefined },
+    env: {},
+    redactor: (value: unknown): unknown => {
+      if (typeof value !== "string" || !value.includes("alpha beta grounded evidence")) {
+        return value;
+      }
+      excerptRedactions += 1;
+      return excerptRedactions === 1
+        ? value.replace("alpha beta grounded evidence", "prompt-time grounded evidence")
+        : value.replace("alpha beta grounded evidence", "later store rendering");
+    },
+    registry: createRunRegistry(),
+    modelPortFactory: () => model,
+    store: rescueStore,
+    uiDbPath: join(rescueTmp, "keiko-ui.db"),
+    localKnowledgeEmbeddingRequest: adapter.request,
+  };
+  const result = await handleLocalKnowledgeGroundedAsk(
+    chat,
+    { chatId: chat.id, content: "alpha beta", modelId: "chat-model" },
+    deps,
+    new AbortController().signal,
+  );
+  expect(result.status, JSON.stringify(result.body)).toBe(200);
+  return { answer: result.body as LocalKnowledgeAnswer, judgeCalls, judgeRequest };
+}
+
 describe("local-knowledge uncited-answer fail-closed (AC6, #2670)", () => {
   it("marks a substantive markerless answer over retrieved references as unsupported-citation", async () => {
     const chat = await seedFailClosedChat("markerless");
@@ -3209,6 +3282,21 @@ describe("local-knowledge uncited-answer fail-closed (AC6, #2670)", () => {
 
     expect(answer.citations.map((citation) => citation.marker)).toEqual(["[1]"]);
     expect(answer.uncertainty).toEqual([]);
+  });
+
+  it("routes a supported numeric marker through the shared entailment judge", async () => {
+    const chat = await seedFailClosedChat("numeric-entailment");
+    const { answer, judgeCalls, judgeRequest } = await askWithNumericEntailmentJudge(
+      chat,
+      "Alpha beta grounded evidence is retained for ten years [1].",
+    );
+
+    expect(answer.citations.map((citation) => citation.marker)).toEqual(["[1]"]);
+    expect(judgeCalls).toBe(1);
+    expect(judgeRequest).toContain("prompt-time grounded evidence");
+    expect(judgeRequest).not.toContain("later store rendering");
+    const unsupported = answer.uncertainty.find((marker) => marker.kind === "unsupported-claim");
+    expect(unsupported?.claim).toContain("[1]");
   });
 
   it("does not double-mark the no-evidence path with a citation marker", async () => {

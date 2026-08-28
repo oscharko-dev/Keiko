@@ -262,6 +262,7 @@ import {
   createProductionCodingRuntimeHost,
   type ProductionCodingRuntimeResolver,
 } from "./coding-runtime/productionCodingRuntimeHost.js";
+import type { GitDeliveryRunAuthorityPort } from "./gitDelivery/runBoundAuthority.js";
 import {
   createProductionCodingRuntimeResolver,
   type ProductionCodingRuntimeResolverInput,
@@ -477,6 +478,8 @@ export interface UiHandlerDeps {
           ((capability: string, promptTokens: number) => unknown) | undefined;
       }
     | undefined;
+  /** Current server-owned delivery authority; absent means Git delivery executes fail closed. */
+  readonly gitDeliveryAuthority?: GitDeliveryRunAuthorityPort | undefined;
   readonly openCodeGatewayReadinessRegistry?:
     | {
         readonly claim: (runId: string) => boolean;
@@ -3922,6 +3925,7 @@ interface CodingRuntimeControlPlaneDeps {
   codingRuntimeEvidenceClass?: UiHandlerDeps["codingRuntimeEvidenceClass"];
   codingSidecarGatewayCancellationRegistry?: UiHandlerDeps["codingSidecarGatewayCancellationRegistry"];
   runtimeCapabilityAuthenticator?: UiHandlerDeps["runtimeCapabilityAuthenticator"];
+  gitDeliveryAuthority?: UiHandlerDeps["gitDeliveryAuthority"];
   openCodeGatewayReadinessRegistry?: UiHandlerDeps["openCodeGatewayReadinessRegistry"];
 }
 
@@ -3948,6 +3952,9 @@ function buildCodingRuntimeControlPlaneDeps(
       : {}),
     ...(controlPlane.runtimeCapabilityAuthenticator !== undefined
       ? { runtimeCapabilityAuthenticator: controlPlane.runtimeCapabilityAuthenticator }
+      : {}),
+    ...(controlPlane.gitDeliveryAuthority !== undefined
+      ? { gitDeliveryAuthority: controlPlane.gitDeliveryAuthority }
       : {}),
     ...(controlPlane.openCodeGatewayReadinessRegistry !== undefined
       ? {

@@ -274,11 +274,6 @@
       "count": 1
     }
   },
-  "src/app/components/desktop/hooks/useActiveWorkspaceState.test.tsx": {
-    "complexity": {
-      "count": 2
-    }
-  },
   "src/app/components/desktop/hooks/useActiveWorkspaceState.ts": {
     "max-lines-per-function": {
       "count": 1

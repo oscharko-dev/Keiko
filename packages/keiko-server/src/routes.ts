@@ -72,6 +72,7 @@ import {
   handleCorrectMemory,
   handleResolveMemoryConflict,
   handleAcceptMemoryProposal,
+  handleGetCorrectionPredecessors,
   handleRejectMemoryProposal,
 } from "./memory-handlers.js";
 import {
@@ -143,7 +144,6 @@ import {
 } from "./editor/verificationRoutes.js";
 import { handleEditorAgentVerificationRun } from "./editor/agentVerificationRoute.js";
 import {
-  handleActivateTaskWorkspace,
   handleCleanupOrphanTaskWorkspaces,
   handleCleanupTaskWorkspace,
   handleClearActiveTaskWorkspace,
@@ -688,11 +688,6 @@ export const API_ROUTES: readonly RouteDefinition[] = [
     pattern: "/api/task-workspaces/:workspaceId/handoff",
     handler: handleHandoffTaskWorkspace,
   },
-  {
-    method: "POST",
-    pattern: "/api/task-workspaces/:workspaceId/activate",
-    handler: handleActivateTaskWorkspace,
-  },
   // Issue #447 (Epic #443, ADR-0091) — startup reconciliation report (read-only, derived from the
   // persisted content-free fields), an explicit live reconcile pass (CSRF-gated POST), and the
   // controlled, operator-approval-gated repair. The literal `reconciliation` path wins over the
@@ -1198,6 +1193,11 @@ export const API_ROUTES: readonly RouteDefinition[] = [
   { method: "POST", pattern: "/api/memory/:id/forget", handler: handleForgetMemory },
   { method: "DELETE", pattern: "/api/memory/:id", handler: handleDeleteMemory },
   { method: "POST", pattern: "/api/memory/:id/correct", handler: handleCorrectMemory },
+  {
+    method: "GET",
+    pattern: "/api/memory/proposals/:id/correction-predecessors",
+    handler: handleGetCorrectionPredecessors,
+  },
   {
     method: "POST",
     pattern: "/api/memory/proposals/:id/accept",

@@ -7,7 +7,7 @@ import { join } from "node:path";
 // controls and header counters, opens a diff with scope controls, and surfaces the commit composer.
 // Mirrors playwright.issue-475-git-delivery.config.ts: build the packaged CLI, boot the real UI
 // server, run a single deterministic chromium worker. The webServer env flag
-// KEIKO_GIT_DELIVERY_ENABLED=true makes the governed /api/git-delivery/staging/* routes live so the
+// The governed /api/git-delivery/staging/* routes are live so the
 // spec can also verify staging-mutation intercept for determinism on the mutation assertions.
 // The read surface (/api/git/status + /api/git/diff) is intercepted with a deterministic fixture
 // carrying all six change states, so the assertion is stable across environments and CI machines
@@ -65,7 +65,6 @@ export default defineConfig({
       KEIKO_UI_DATA_DIR: join(stateDir, "ui"),
       KEIKO_MEMORY_DIR: join(stateDir, "memory"),
       KEIKO_CONFIG_FILE: runtimeConfigPath,
-      KEIKO_GIT_DELIVERY_ENABLED: "true",
     },
   },
 });

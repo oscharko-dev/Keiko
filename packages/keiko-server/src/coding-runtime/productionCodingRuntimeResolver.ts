@@ -243,6 +243,7 @@ function composeRuntime(
       reservePromptTokens: (capability, promptTokens) =>
         authority.reservePromptTokens(capability, promptTokens),
     },
+    gitDeliveryAuthority: authority.gitDeliveryAuthorityPort(),
     ...(input.backend.safeActivityProjection
       ? { safeActivityProjection: input.backend.safeActivityProjection }
       : {}),

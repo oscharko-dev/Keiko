@@ -28,6 +28,7 @@ import {
   streamingResponseFromNode,
 } from "./http.js";
 import { requestOpenAIEmbedding } from "./openai-embedding-adapter.js";
+import type { ModelGatewayLogEvent } from "./observability.js";
 
 const TEST_TLS_KEY = `-----BEGIN PRIVATE KEY-----
 MIIEvAIBADANBgkqhkiG9w0BAQEFAASCBKYwggSiAgEAAoIBAQDAT3UYX+IFphaO
@@ -740,6 +741,7 @@ describe("gatewayFetch DNS-rebinding pinning (AUDIT-SEC-001)", () => {
           egress: {
             denyLoopback: true,
             httpsProxy: "http://127.0.0.1:65535",
+            acknowledgeProxiedHostnamePolicy: true,
           },
         }),
       ).rejects.toMatchObject({ code: "PROXY_BLOCKED_BY_POLICY" });
@@ -762,6 +764,117 @@ describe("gatewayFetch DNS-rebinding pinning (AUDIT-SEC-001)", () => {
     });
 
     expect(response.status).toBe(200);
+  });
+
+  it("requires delegated-policy acknowledgement before sending a hostname through a proxy", async () => {
+    let proxiedRequests = 0;
+    const logEvents: ModelGatewayLogEvent[] = [];
+    const proxy = createHttpServer((_req, res) => {
+      proxiedRequests += 1;
+      res.writeHead(200);
+      res.end("ok");
+    });
+    const proxyPort = await listen(proxy);
+    const target = "http://ordinary-proxied-hostname.invalid/egress";
+    const httpProxy = `http://127.0.0.1:${String(proxyPort)}`;
+    try {
+      await expect(
+        gatewayFetch(target, {
+          egress: { httpProxy },
+          log: { write: (event) => logEvents.push(event) },
+        }),
+      ).rejects.toMatchObject({ code: "PROXY_BLOCKED_BY_POLICY" });
+      expect(proxiedRequests).toBe(0);
+      expect(logEvents.at(-1)?.extra).toMatchObject({
+        policyReason: "undelegated-proxied-hostname",
+      });
+
+      const allowed = await gatewayFetch(target, {
+        egress: { httpProxy, acknowledgeProxiedHostnamePolicy: true },
+      });
+      expect(allowed.status).toBe(200);
+      expect(proxiedRequests).toBe(1);
+    } finally {
+      await close(proxy);
+    }
+  });
+
+  it("recomputes no-proxy routing for a redirect before applying hostname delegation policy", async () => {
+    let proxyRequests = 0;
+    const proxy = createHttpServer((_req, res) => {
+      proxyRequests += 1;
+      res.writeHead(302, { location: "http://bypass.invalid/next" });
+      res.end();
+    });
+    const proxyPort = await listen(proxy);
+    try {
+      const response = await gatewayFetch("http://203.0.113.10/start", {
+        egress: {
+          httpProxy: `http://127.0.0.1:${String(proxyPort)}`,
+          noProxy: ["bypass.invalid"],
+        },
+      });
+
+      expect(response.status).toBe(302);
+      expect(proxyRequests).toBe(1);
+    } finally {
+      await close(proxy);
+    }
+  });
+
+  it("rejects an undelegated hostname redirect that leaves the no-proxy route", async () => {
+    let originRequests = 0;
+    let proxyRequests = 0;
+    const origin = createHttpServer((_req, res) => {
+      originRequests += 1;
+      res.writeHead(302, { location: "http://outside-no-proxy.invalid/next" });
+      res.end();
+    });
+    const proxy = createHttpServer((_req, res) => {
+      proxyRequests += 1;
+      res.writeHead(200);
+      res.end();
+    });
+    const originPort = await listen(origin);
+    const proxyPort = await listen(proxy);
+    try {
+      await expect(
+        gatewayFetch(`http://127.0.0.1:${String(originPort)}/start`, {
+          egress: {
+            httpProxy: `http://127.0.0.1:${String(proxyPort)}`,
+            noProxy: ["127.0.0.1"],
+          },
+        }),
+      ).rejects.toMatchObject({
+        code: "PROXY_BLOCKED_BY_POLICY",
+        policyReason: "undelegated-proxied-hostname",
+      });
+      expect(originRequests).toBe(1);
+      expect(proxyRequests).toBe(0);
+    } finally {
+      await close(origin);
+      await close(proxy);
+    }
+  });
+
+  it("keeps literal private redirect targets blocked after proxied hostname delegation", async () => {
+    const proxy = createHttpServer((_req, res) => {
+      res.writeHead(302, { location: "http://10.0.0.1/private" });
+      res.end();
+    });
+    const proxyPort = await listen(proxy);
+    try {
+      await expect(
+        gatewayFetch("http://delegated-hostname.invalid/redirect", {
+          egress: {
+            httpProxy: `http://127.0.0.1:${String(proxyPort)}`,
+            acknowledgeProxiedHostnamePolicy: true,
+          },
+        }),
+      ).rejects.toMatchObject({ code: "PROXY_BLOCKED_BY_POLICY" });
+    } finally {
+      await close(proxy);
+    }
   });
 
   it("re-validates and refuses a redirect hop whose DNS resolves to a blocked address", async () => {
@@ -862,6 +975,7 @@ describe("gatewayFetch proxied DNS pinning (pinProxiedConnectTarget, ADR-0038 D6
         egress: {
           httpProxy: `http://127.0.0.1:${String(proxyPort)}`,
           pinProxiedConnectTarget: true,
+          acknowledgeProxiedHostnamePolicy: true,
         },
       });
       expect(await response.json()).toEqual({ via: "pinned-proxy" });
@@ -877,7 +991,7 @@ describe("gatewayFetch proxied DNS pinning (pinProxiedConnectTarget, ADR-0038 D6
     }
   });
 
-  it("leaves the request-target authority as the literal hostname through a proxy when the flag is off (default-off preserves the existing gap honestly)", async () => {
+  it("leaves the request-target authority as the literal hostname when delegated policy is acknowledged and pinning is off", async () => {
     // Same technique as the pinned test above, MINUS pinProxiedConnectTarget: the proxy receives
     // the request-line's authority UNCHANGED — still the original, non-resolving hostname, never
     // rewritten to a Keiko-vetted address — captured and asserted directly off the wire. This pins
@@ -901,7 +1015,10 @@ describe("gatewayFetch proxied DNS pinning (pinProxiedConnectTarget, ADR-0038 D6
       }));
       const { gatewayFetch: unpinnedGatewayFetch } = await import("./http.js");
       const response = await unpinnedGatewayFetch("http://pinned-target.invalid/manual", {
-        egress: { httpProxy: `http://127.0.0.1:${String(proxyPort)}` },
+        egress: {
+          httpProxy: `http://127.0.0.1:${String(proxyPort)}`,
+          acknowledgeProxiedHostnamePolicy: true,
+        },
       });
       expect(response.status).toBe(200);
       expect(capturedRequestLine).toBe("http://pinned-target.invalid/manual");
@@ -947,7 +1064,10 @@ describe("gatewayFetch proxied DNS pinning (pinProxiedConnectTarget, ADR-0038 D6
       proxyConnections += 1;
     });
     const proxyPort = await listen(proxy);
-    const egress = { httpProxy: `http://127.0.0.1:${String(proxyPort)}` };
+    const egress = {
+      httpProxy: `http://127.0.0.1:${String(proxyPort)}`,
+      acknowledgeProxiedHostnamePolicy: true,
+    };
     try {
       vi.resetModules();
       vi.doMock("node:dns/promises", () => ({
@@ -1339,6 +1459,7 @@ describe("gatewayFetch proxied DNS pinning (pinProxiedConnectTarget, ADR-0038 D6
           denyLoopback: true,
           pinProxiedConnectTarget: true,
           httpProxy: `http://127.0.0.1:${String(proxyPort)}`,
+          acknowledgeProxiedHostnamePolicy: true,
         },
       });
       expect(await response.json()).toEqual({ via: "research-proxy" });
@@ -1859,6 +1980,7 @@ describe("noProxyRuleMatches (via gatewayFetch bypassing proxy)", () => {
         egress: {
           httpProxy: `http://127.0.0.1:${String(proxyPort)}`,
           noProxy: ["corp.example:1234"],
+          acknowledgeProxiedHostnamePolicy: true,
         },
       });
       expect(await response.json()).toEqual({ via: "proxy" });

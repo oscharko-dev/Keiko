@@ -1,8 +1,7 @@
-// BFF routes for managed task-workspace provisioning + activation (Issue #445, Epic #443).
+// BFF routes for managed task-workspace provisioning + lifecycle control (Issue #445, Epic #443).
 //
 //   POST /api/task-workspaces                     provision (create/resume) → { instance, binding }
 //   GET  /api/task-workspaces/:workspaceId        read one persisted instance
-//   POST /api/task-workspaces/:workspaceId/activate   activate/resume → { instance, binding }
 //
 // These are the controlled server-side mutating actions the Issue requires (no broad shell, no generic
 // Git runner). CSRF is enforced by the server's global state-changing-request gate for POST, exactly
@@ -11,12 +10,10 @@
 
 import type { IncomingMessage } from "node:http";
 import {
-  isTaskWorkspaceLifecycleState,
   isWorkspaceCleanupMode,
   isWorkspaceRecoveryStrategy,
 } from "@oscharko-dev/keiko-contracts/runtime/task-workspace";
 import type {
-  TaskWorkspaceLifecycleState,
   WorkspaceCleanupMode,
   WorkspaceRecoveryStrategy,
 } from "@oscharko-dev/keiko-contracts";
@@ -26,7 +23,6 @@ import { FilesError, resolveRoot } from "../files.js";
 import { TaskWorkspaceError } from "./errors.js";
 import { assertSafeFieldValue } from "./field-safety.js";
 import type {
-  WorkspaceActivateRequest,
   WorkspaceCleanupService,
   WorkspaceHealthService,
   WorkspaceLifecycleActionRequest,
@@ -248,14 +244,6 @@ function parseProvisionBody(body: Record<string, unknown>): {
   return { root, taskId, baseBranch, requestedBy };
 }
 
-function parseExpectedState(value: unknown): TaskWorkspaceLifecycleState | undefined {
-  if (value === undefined) return undefined;
-  if (!isTaskWorkspaceLifecycleState(value)) {
-    throw new TaskWorkspaceError("INVALID_REQUEST", "expectedLifecycleState is invalid");
-  }
-  return value;
-}
-
 // POST /api/task-workspaces — provision (create or resume) a managed task workspace.
 export async function handleProvisionTaskWorkspace(
   ctx: RouteContext,
@@ -295,33 +283,6 @@ export function handleGetTaskWorkspace(ctx: RouteContext, deps: UiHandlerDeps): 
     return { status: 404, body: errorBody("WORKSPACE_NOT_FOUND", "Task workspace not found.") };
   }
   return { status: 200, body: redacted(deps, { instance }) };
-}
-
-// POST /api/task-workspaces/:workspaceId/activate — activate/resume a workspace and yield its binding.
-export async function handleActivateTaskWorkspace(
-  ctx: RouteContext,
-  deps: UiHandlerDeps,
-): Promise<RouteResult> {
-  const guard = requireService(deps);
-  if (isRouteResult(guard)) return guard;
-  return runHandler(deps, async () => {
-    const workspaceId = ctx.params.workspaceId ?? "";
-    const body = await readJsonObject(ctx.req);
-    const requestedBy = requireSafeField(body.requestedBy, "requestedBy");
-    const expectedLifecycleState = parseExpectedState(body.expectedLifecycleState);
-    const request: WorkspaceActivateRequest = {
-      workspaceId,
-      taskId: optionalSafeField(body.taskId, "taskId") ?? "",
-      requestedBy,
-      acquireLock: body.acquireLock === true,
-      ...(expectedLifecycleState !== undefined ? { expectedLifecycleState } : {}),
-    };
-    const result = await guard.activate(request);
-    return {
-      status: 200,
-      body: redacted(deps, { instance: result.instance, binding: result.binding }),
-    };
-  });
 }
 
 // ─── #446 active-binding + lifecycle routes ──────────────────────────────────────────────────────

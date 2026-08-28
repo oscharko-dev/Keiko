@@ -24,6 +24,7 @@ import type {
   KnowledgeCapsuleId,
   KnowledgeSourceId,
   RetrievalReference,
+  UncertaintyMarker,
 } from "@oscharko-dev/keiko-contracts";
 import {
   rerankAndSelect,
@@ -107,6 +108,7 @@ import {
   reconcileNumericCitations,
   unsupportedCitationMarker,
   unsupportedNumericCitationMarker,
+  type NumericEntailmentEvidence,
 } from "./grounded-faithfulness.js";
 import { assertUsableAssistantContent } from "./assistant-response.js";
 import { rerankSelection } from "./grounded-rerank-facade.js";
@@ -114,6 +116,7 @@ import { buildLocalKnowledgeIndexLifecycle } from "./local-knowledge-index-lifec
 import { createEntailmentStage, type EntailmentStage } from "./grounded-entailment-stage.js";
 import {
   appendGroundedAnswerEntailment,
+  appendGroundedAnswerNumericEntailment,
   buildQuery,
   buildSelectedScopeFrom,
   clarificationRequest,
@@ -777,6 +780,18 @@ const HYBRID_SYSTEM_PROMPT =
   `${GROUNDED_SYSTEM_PROMPT} Connector excerpts are indexed-document citations: attribute every ` +
   "connector claim to its source label and the matching [n] marker in addition to any file reference.";
 
+function renderHybridCandidateBlock(candidate: SelectedCandidate<HybridPayload>): string {
+  const kindLabel = candidate.kind === "folder" ? "Folder" : "Connector";
+  const excerpt =
+    candidate.redactedText.length > 0
+      ? promptSafeExcerptText(candidate.redactedText)
+      : "(No excerpt text available.)";
+  return (
+    `[${String(candidate.marker)}] ### ${kindLabel} source: ${candidate.sourceLabel}\n` +
+    `\`\`\`text\n${excerpt}\n\`\`\``
+  );
+}
+
 // Builds the user message from the SAME selected set used for citations. Each candidate gets a
 // single global [n] marker that is consistent with the citation arrays. redactedText is
 // already redacted — do NOT pass it through redactString again.
@@ -796,18 +811,20 @@ function buildRerankedHybridUserMessage(
     "",
   ];
   for (const candidate of selected) {
-    const kindLabel = candidate.kind === "folder" ? "Folder" : "Connector";
-    lines.push(
-      `[${String(candidate.marker)}] ### ${kindLabel} source: ${candidate.sourceLabel}`,
-      "```text",
-      candidate.redactedText.length > 0
-        ? promptSafeExcerptText(candidate.redactedText)
-        : "(No excerpt text available.)",
-      "```",
-      "",
-    );
+    lines.push(renderHybridCandidateBlock(candidate), "");
   }
   return lines.join("\n");
+}
+
+function numericEntailmentEvidence(
+  selected: readonly SelectedCandidate<HybridPayload>[],
+): readonly NumericEntailmentEvidence[] {
+  return selected.map((candidate) => ({
+    marker: candidate.marker,
+    // The exact helper used by the prompt is the source of truth for semantic judgment. Every
+    // selected folder and connector receives a numeric marker, so every one must reach the judge.
+    excerptText: renderHybridCandidateBlock(candidate),
+  }));
 }
 
 export function createHybridAnswerer(
@@ -1158,35 +1175,76 @@ function hybridReconciliationUncertainty(
   return markers.map((m) => ({ kind: m.kind, claim: redactString(redactor, m.claim) }));
 }
 
-// Knowledge M1.2 (#2563): judge whether the hybrid answer's `[path:line]` citations are SUPPORTED by
-// their folder-evidence excerpts (the same folder packs membership reconciliation checks). Capsule
-// policy applies here — a connector capsule that denies `answerSynthesis` keeps the stage inert.
+// Knowledge M1.2 (#2563) / #2947: judge the hybrid answer's `[path:line]` and connector `[n]`
+// citations against their selected evidence. Capsule policy applies here — a connector capsule that
+// denies `answerSynthesis` keeps the stage inert.
+function hybridEntailmentStage(
+  ctx: HybridGroundedAskCtx,
+  capsules: readonly KnowledgeCapsule[],
+): EntailmentStage | undefined {
+  return ctx.entailmentStageFactory !== undefined
+    ? ctx.entailmentStageFactory({ capsules, modelId: ctx.modelId, signal: ctx.signal })
+    : createEntailmentStage(
+        ctx.deps,
+        capsules,
+        ctx.modelId,
+        { diagnostics: ctx.deps.diagnostics },
+        ctx.signal,
+      );
+}
+
+function answerWithHybridMarkers(
+  ctx: HybridGroundedAskCtx,
+  answer: HybridGroundedAnswer,
+  markers: readonly UncertaintyMarker[],
+): HybridGroundedAnswer {
+  if (markers.length === 0) return answer;
+  return {
+    ...answer,
+    uncertainty: [
+      ...answer.uncertainty,
+      ...markers.map((marker) => ({
+        kind: marker.kind,
+        claim: redactString(ctx.deps.redactor, marker.claim),
+      })),
+    ],
+  };
+}
+
 async function applyHybridEntailment(
   ctx: HybridGroundedAskCtx,
   answer: HybridGroundedAnswer,
   answerContent: string,
   folders: readonly RetrievedFolder[],
   connectors: readonly RetrievedConnector[],
+  selected: readonly SelectedCandidate<HybridPayload>[],
 ): Promise<HybridGroundedAnswer> {
   const capsules = connectors.flatMap((src) => src.selected.capsules);
-  const stage =
-    ctx.entailmentStageFactory !== undefined
-      ? ctx.entailmentStageFactory({ capsules, modelId: ctx.modelId, signal: ctx.signal })
-      : createEntailmentStage(
-          ctx.deps,
-          capsules,
-          ctx.modelId,
-          { diagnostics: ctx.deps.diagnostics },
-          ctx.signal,
-        );
+  const stage = hybridEntailmentStage(ctx, capsules);
   if (stage === undefined) {
     return answer;
   }
-  return appendGroundedAnswerEntailment(
+  if (stage.evaluateHybrid !== undefined) {
+    const markers = await stage.evaluateHybrid(
+      answerContent,
+      folders.map((folder) => folder.pack),
+      numericEntailmentEvidence(selected),
+      Date.now(),
+    );
+    return answerWithHybridMarkers(ctx, answer, markers);
+  }
+  const folderEntailment = await appendGroundedAnswerEntailment(
     answer,
     stage,
     answerContent,
     folders.map((folder) => folder.pack),
+    ctx.deps.redactor,
+  );
+  return appendGroundedAnswerNumericEntailment(
+    folderEntailment,
+    stage,
+    answerContent,
+    numericEntailmentEvidence(selected),
     ctx.deps.redactor,
   );
 }
@@ -1738,6 +1796,7 @@ async function assembleHybridNoEvidenceRoute(
           assistant.content,
           meta.folderResult.retrieved,
           meta.connectorResult.retrieved,
+          selected,
         )
       : answer;
   ensureNotCancelled(ctx.signal);
@@ -2037,8 +2096,8 @@ interface HybridFinalizeInput {
   readonly ids: { readonly userMessageId: string; readonly assistantMessageId: string };
 }
 
-// Assemble the hybrid answer, run the entailment stage over its folder evidence (#2563), and attach
-// it. Extracted from answerAndAssemble to keep both functions under the LOC bound.
+// Assemble the hybrid answer, judge its selected folder and connector evidence (#2563, #2947), and
+// attach the result. Extracted from answerAndAssemble to keep both functions under the LOC bound.
 async function finalizeHybridAnswer(
   ctx: HybridGroundedAskCtx,
   store: KnowledgeStore,
@@ -2070,6 +2129,7 @@ async function finalizeHybridAnswer(
     assistant.content,
     folders,
     meta.connectorResult.retrieved,
+    selected,
   );
   ensureNotCancelled(ctx.signal);
   const previewCitations = selectedConnectorPreviewCitations(store, selected, ctx.deps.redactor);

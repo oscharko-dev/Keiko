@@ -235,36 +235,3 @@ describe("GET /api/task-workspaces/:workspaceId", () => {
     expect(missing.status).toBe(404);
   });
 });
-
-describe("POST /api/task-workspaces/:workspaceId/activate", () => {
-  it("activates a provisioned workspace and returns its binding", async () => {
-    const created = (await (await provision("t1")).json()) as ProvisionBody;
-    const res = await fetch(
-      `${baseUrl()}/api/task-workspaces/${created.instance.workspaceId}/activate`,
-      {
-        method: "POST",
-        headers: csrfHeaders(),
-        body: JSON.stringify({ taskId: "t1", requestedBy: "u", acquireLock: false }),
-      },
-    );
-    expect(res.status).toBe(200);
-    const body = (await res.json()) as { instance: WorkspaceInstance; binding: WorkspaceBinding };
-    expect(body.instance.lifecycleState).toBe("active");
-    expect(body.binding.activeRoot).toBe(created.instance.managedWorktreePath);
-  });
-
-  it("rejects a malformed present optional taskId instead of treating it as absent", async () => {
-    const created = (await (await provision("t1")).json()) as ProvisionBody;
-    const res = await fetch(
-      `${baseUrl()}/api/task-workspaces/${created.instance.workspaceId}/activate`,
-      {
-        method: "POST",
-        headers: csrfHeaders(),
-        body: JSON.stringify({ taskId: 42, requestedBy: "u", acquireLock: false }),
-      },
-    );
-    expect(res.status).toBe(400);
-    const body = (await res.json()) as { error: { code: string } };
-    expect(body.error.code).toBe("INVALID_REQUEST");
-  });
-});

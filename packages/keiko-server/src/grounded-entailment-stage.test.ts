@@ -299,6 +299,21 @@ describe("createEntailmentStage — active flagging", () => {
     expect(markers).toEqual([]);
   });
 
+  it("flags an unsupported numeric connector claim through the same judge port", async () => {
+    const stage = createEntailmentStage(
+      depsWith(portReturning('{"verdict":"unsupported"}')),
+      [],
+      MODEL_ID,
+    );
+    const markers = await stage?.evaluateNumeric(
+      "Retention is ten years.[1]",
+      [{ marker: 1, excerptText: "Retention: 30 days" }],
+      NOW,
+    );
+    expect(markers?.map((marker) => marker.kind)).toEqual(["unsupported-claim"]);
+    expect(markers?.[0]?.claim).toContain("[1]");
+  });
+
   it("caveats an answer whose cited claims run past the per-answer claim ceiling", async () => {
     // #2670 AC6: the claim budget bounds judge fan-out; it does not bless the untested tail of a
     // long answer. One cited claim over the ceiling must still degrade the answer to WARN, exactly
@@ -318,6 +333,27 @@ describe("createEntailmentStage — active flagging", () => {
       NOW,
     );
     expect(markers?.map((m) => m.kind)).toEqual(["entailment-unavailable"]);
+  });
+
+  it("shares one claim allowance across path and numeric citation grammars", async () => {
+    const port = portReturning('{"verdict":"supported"}');
+    const call = vi.spyOn(port, "call");
+    const stage = createEntailmentStage(depsWith(port), [], MODEL_ID, undefined, undefined, {
+      maxClaims: 1,
+      maxExcerptChars: 900,
+      maxTotalMs: 20_000,
+    });
+    if (stage?.evaluateHybrid === undefined) throw new Error("expected a hybrid evaluator");
+
+    const markers = await stage.evaluateHybrid(
+      "Retention is 30 days [src/policy.ts:1-8]. Support starts in Q3 [1].",
+      [packWithExcerpt("src/policy.ts", "retention: 30 days")],
+      [{ marker: 1, excerptText: "Support starts in Q3" }],
+      NOW,
+    );
+
+    expect(call).toHaveBeenCalledTimes(1);
+    expect(markers.map((marker) => marker.kind)).toEqual(["entailment-unavailable"]);
   });
 });
 
@@ -372,5 +408,23 @@ describe("createEntailmentStage — fail-closed degradation", () => {
     await expect(
       stage?.evaluate("A [src/a.ts:1-8].", [packWithExcerpt("src/a.ts", "x")], NOW),
     ).resolves.toEqual([expect.objectContaining({ kind: "entailment-unavailable" })]);
+  });
+
+  it("degrades numeric citation verification with the same body-free warning and diagnostic", async () => {
+    const records: ServerDiagnosticRecord[] = [];
+    const deps = depsWith(portReturning(new Error("gateway down")), (record) =>
+      records.push(record),
+    );
+    const stage = createEntailmentStage(deps, [], MODEL_ID, {
+      diagnostics: deps.diagnostics,
+      correlationId: "corr-numeric",
+    });
+    const markers = await stage?.evaluateNumeric(
+      "Retention is 30 days [1].",
+      [{ marker: 1, excerptText: "connector secret content" }],
+      NOW,
+    );
+    expect(markers?.map((marker) => marker.kind)).toEqual(["entailment-unavailable"]);
+    expect(JSON.stringify(records)).not.toContain("connector secret content");
   });
 });

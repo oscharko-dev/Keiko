@@ -130,6 +130,17 @@ export interface MemoryRecord {
   readonly updatedAt: number;
 }
 
+// Shared BFF request/response shapes for correction review. These live beside MemoryRecord so the
+// server and browser cannot independently widen or narrow the predecessor-selection contract.
+export interface AcceptMemoryProposalOptions {
+  readonly bodyOverride?: string;
+  readonly predecessorId?: MemoryId;
+}
+
+export interface MemoryCorrectionPredecessorsResponse {
+  readonly candidates: readonly MemoryRecord[];
+}
+
 // ─── Structured payload ───────────────────────────────────────────────────────
 // Discriminated union so future kinds (e.g. "key-value-typed", "ordered-rule-set") can be
 // added without breaking existing readers. Each kind carries only the fields it needs.

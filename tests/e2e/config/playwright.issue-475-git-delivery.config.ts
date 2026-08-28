@@ -5,7 +5,7 @@ import { join } from "node:path";
 // Issue #475 (Epic #470) — browser evidence that governed commit creation cannot bypass preview
 // or policy evaluation. Mirrors tests/e2e/config/playwright.issue-1296-editor-agent.config.ts: build the packaged
 // CLI, boot the real UI server, run a single deterministic chromium worker. The only delta is the
-// webServer env flag KEIKO_GIT_DELIVERY_ENABLED=true, which makes the governed /api/git-delivery/*
+// governed /api/git-delivery/* routes, which are available in the
 // routes live in the running app (the spec intercepts the commit routes for determinism, but the
 // gate proves the surface reaches the governed BFF path rather than a no-op stub).
 
@@ -61,7 +61,6 @@ export default defineConfig({
       KEIKO_UI_DATA_DIR: join(stateDir, "ui"),
       KEIKO_MEMORY_DIR: join(stateDir, "memory"),
       KEIKO_CONFIG_FILE: runtimeConfigPath,
-      KEIKO_GIT_DELIVERY_ENABLED: "true",
     },
   },
 });

@@ -5,11 +5,17 @@
 import { describe, expect, it } from "vitest";
 import type { ConnectedContextPack, UncertaintyMarker } from "@oscharko-dev/keiko-contracts";
 import type { Redactor } from "./deps.js";
-import { appendGroundedAnswerEntailment } from "./grounded-qa.js";
+import {
+  appendGroundedAnswerEntailment,
+  appendGroundedAnswerNumericEntailment,
+} from "./grounded-qa.js";
 import type { EntailmentStage } from "./grounded-entailment-stage.js";
 
 function stageReturning(markers: readonly UncertaintyMarker[]): EntailmentStage {
-  return { evaluate: (): Promise<readonly UncertaintyMarker[]> => Promise.resolve(markers) };
+  return {
+    evaluate: (): Promise<readonly UncertaintyMarker[]> => Promise.resolve(markers),
+    evaluateNumeric: (): Promise<readonly UncertaintyMarker[]> => Promise.resolve(markers),
+  };
 }
 
 const identityRedactor: Redactor = (value: unknown): unknown => value;
@@ -47,5 +53,23 @@ describe("appendGroundedAnswerEntailment", () => {
     expect(result.uncertainty).toEqual([
       { kind: "unsupported-claim", claim: "[R]cited src/x.ts is unsupported" },
     ]);
+  });
+
+  it("projects numeric citation entailment markers through the same wire boundary", async () => {
+    const answer = { uncertainty: [] as { kind: string; claim: string }[] };
+    const marker: UncertaintyMarker = {
+      kind: "unsupported-claim",
+      claim: "cited [1] is unsupported",
+      impactedAtomIds: [],
+      emittedAtMs: 0,
+    };
+    const result = await appendGroundedAnswerNumericEntailment(
+      answer,
+      stageReturning([marker]),
+      "answer text [1]",
+      [{ marker: 1, excerptText: "rendered excerpt" }],
+      identityRedactor,
+    );
+    expect(result.uncertainty).toEqual([{ kind: "unsupported-claim", claim: marker.claim }]);
   });
 });
