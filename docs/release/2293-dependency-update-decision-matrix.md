@@ -48,9 +48,10 @@ manifest pin. The clean result deduplicates both workspaces to Vitest 4.1.10.
 
 ### ESLint lane supersession (2026-08-28)
 
-The four ESLint rows in the table above (`eslint-config-next`, `eslint` root, `eslint` `keiko-ui`,
-`@eslint/js`) record the 2026-07-11 decision to hold the repository on the ESLint 9 lane. That
-decision no longer describes the tree. ESLint 10 was integrated on 2026-08-27 by PR #3290 and the
+The four ESLint rows under [Updated dependencies](#updated-dependencies) (`eslint-config-next`,
+`eslint` root, `eslint` `keiko-ui`, `@eslint/js`) and the `ESLint 10` row under [Deferred dependency
+families](#deferred-dependency-families) record the 2026-07-11 decision to hold the repository on
+the ESLint 9 lane. That decision no longer describes the tree. ESLint 10 was integrated on 2026-08-27 by PR #3290 and the
 migration was completed on 2026-08-28 under issue #2777: the root and `keiko-ui` share one
 `eslint@^10.8.1` declaration, `@eslint/js` moved to `^10.0.1`, and `npm ls eslint` exits `0`. The
 current decision, the live upstream peer-range evidence, and the bounded override acceptance live in

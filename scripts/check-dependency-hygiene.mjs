@@ -32,6 +32,14 @@ const BARE_PACKAGE = /^(@[a-z0-9][\w.-]*\/)?[a-z0-9][\w.-]*(\/[\w.-]+)*$/i;
 // both and exits 0. check:eslint-lane therefore answers peer-edge validity and nothing else — the
 // duplicate is only ever caught here.
 const SINGLE_LANE_PACKAGES = ["eslint"];
+// Issue #2777, the third defect PR #3290 left behind and the one that actually silenced rules: it
+// moved `eslint` to a new major and left `@eslint/js` a major behind, so the ESLint 10 engine ran
+// ESLint 9's `recommended` set and three newly-default rules never fired. Nothing caught it and
+// nothing could: the two are independent devDependencies, `@eslint/js@9` declared no peer on
+// `eslint` at all, and `@eslint/js@10`'s peer is optional — so `npm ls` is silent by construction.
+// `@eslint/js` ships the rule set `eslint` runs; their majors move together or the gate fails.
+const MAJOR_LOCKED_PAIRS = [["eslint", "@eslint/js"]];
+const DECIMAL_DIGITS = new Set("0123456789");
 const GOVERNED_GIT_EXECUTABLE_PATHS = [
   "/usr/bin/git",
   "/usr/local/bin/git",
@@ -100,6 +108,36 @@ function collectSingleLaneProblems(manifests, rootPackage) {
           : `${label}: declares "${dependency}": "${range}" but the root declares "${rootRange}" — the workspace executes the root's installed ${dependency}, so a diverging range installs a second copy that never runs.`,
       );
     }
+  }
+  return problems;
+}
+
+function declaredMajor(range) {
+  // Deliberately regex-free: `/(\d+)\./` backtracks super-linearly on a long digit run with no
+  // dot (SonarCloud S8786), and a version range is attacker-adjacent input in a dependency file.
+  const dot = range.indexOf(".");
+  if (dot < 0) return undefined;
+  let major = "";
+  for (const character of range.slice(0, dot)) {
+    if (DECIMAL_DIGITS.has(character)) major += character;
+    else if (major.length > 0) return undefined;
+  }
+  return major.length > 0 ? major : undefined;
+}
+
+function collectMajorLockProblems(rootPackage) {
+  const problems = [];
+  for (const [anchor, follower] of MAJOR_LOCKED_PAIRS) {
+    const anchorRange = declaredRange(rootPackage, anchor);
+    const followerRange = declaredRange(rootPackage, follower);
+    if (anchorRange === undefined || followerRange === undefined) continue;
+    const anchorMajor = declaredMajor(anchorRange);
+    const followerMajor = declaredMajor(followerRange);
+    if (anchorMajor === undefined || followerMajor === undefined) continue;
+    if (anchorMajor === followerMajor) continue;
+    problems.push(
+      `<root>: "${follower}": "${followerRange}" is on major ${followerMajor} while "${anchor}": "${anchorRange}" is on major ${anchorMajor} — ${follower} ships the rule set ${anchor} runs, so a major apart silently changes which rules are enabled.`,
+    );
   }
   return problems;
 }
@@ -281,6 +319,7 @@ export function checkDependencyHygiene(repoRoot) {
     ...collectManifestProblems(manifests),
     ...collectSingleLaneProblems(manifests, rootPackage),
     ...collectDuplicateInstallProblems(repoRoot, manifests),
+    ...collectMajorLockProblems(rootPackage),
     ...collectScriptImportProblems(repoRoot, rootPackage),
   ];
   try {

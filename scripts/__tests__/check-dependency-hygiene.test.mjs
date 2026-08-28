@@ -273,6 +273,40 @@ describe("tracked Next.js output hygiene", () => {
     expect(checkDependencyHygiene(root).problems).toEqual([]);
   });
 
+  // The defect that actually silenced rules: PR #3290 moved eslint to a new major and left
+  // @eslint/js a major behind, so the ESLint 10 engine ran ESLint 9's recommended set. npm cannot
+  // see this — @eslint/js@9 declared no peer on eslint, and @eslint/js@10's peer is optional.
+  it("rejects a rule-set package left a major behind the engine it ships rules for", () => {
+    const root = makeRepository();
+    writeJson(resolve(root, "package.json"), {
+      engines: { node: ">=22" },
+      devDependencies: { eslint: "^10.8.1", "@eslint/js": "^9.39.5" },
+    });
+    trackAll(root);
+
+    expect(checkDependencyHygiene(root).problems).toEqual([
+      '<root>: "@eslint/js": "^9.39.5" is on major 9 while "eslint": "^10.8.1" is on major 10 — @eslint/js ships the rule set eslint runs, so a major apart silently changes which rules are enabled.',
+    ]);
+  });
+
+  it("accepts a rule-set package on the engine's major, and stays quiet when either is absent", () => {
+    const paired = makeRepository();
+    writeJson(resolve(paired, "package.json"), {
+      engines: { node: ">=22" },
+      devDependencies: { eslint: "^10.8.1", "@eslint/js": "^10.0.1" },
+    });
+    trackAll(paired);
+    expect(checkDependencyHygiene(paired).problems).toEqual([]);
+
+    const unpaired = makeRepository();
+    writeJson(resolve(unpaired, "package.json"), {
+      engines: { node: ">=22" },
+      devDependencies: { eslint: "^10.8.1" },
+    });
+    trackAll(unpaired);
+    expect(checkDependencyHygiene(unpaired).problems).toEqual([]);
+  });
+
   it("accepts a workspace that shares the root's declared lint toolchain range", () => {
     const root = makeRepository();
     writeJson(resolve(root, "package.json"), {
