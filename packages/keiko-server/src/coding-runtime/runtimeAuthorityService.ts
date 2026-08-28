@@ -43,6 +43,10 @@ import {
   editorAgentWorkspaceRootDigest,
   type EditorAgentRuntimeDelegationRequest,
 } from "../editor/agentAuthorityRegistry.js";
+import type {
+  ActiveGitDeliveryRunAuthority,
+  GitDeliveryRunAuthorityPort,
+} from "../gitDelivery/runBoundAuthority.js";
 import {
   createInMemorySupervisedCodingApprovalStore,
   type SupervisedCodingApprovalBindingOnce,
@@ -131,6 +135,7 @@ export type CodingRuntimeCapabilityRecheckInput = Omit<
 
 export class CodingRuntimeAuthorityService {
   private activeAuthorityRef: CodingRuntimeAuthorityRef | undefined;
+  private activeGitDeliveryAuthority: ActiveGitDeliveryRunAuthority | undefined;
   private activeTreeBindingId: string | undefined;
   private activeEffectiveMode: CodingWorkbenchMode | undefined;
   private reapPending: { readonly runId: string; readonly treeBindingId: string } | undefined;
@@ -242,6 +247,14 @@ export class CodingRuntimeAuthorityService {
     }
     const treeBindingId = randomBytes(32).toString("hex");
     this.activeAuthorityRef = registered.authorityRef;
+    this.activeGitDeliveryAuthority = {
+      runId,
+      envelopeDigest: registered.authorityRef.envelopeDigest,
+      projectId: context.projectId,
+      workspaceRoot: context.workspaceRoot,
+      branch: context.branch,
+      authority: envelope.authority,
+    };
     this.activeTreeBindingId = treeBindingId;
     this.activeEffectiveMode = envelope.authority.effectiveMode;
     this.runtimeState = stateForMint(this.runtimeState, envelope, nowIso);
@@ -269,6 +282,17 @@ export class CodingRuntimeAuthorityService {
 
   public effectiveMode(): CodingWorkbenchMode | undefined {
     return this.activeEffectiveMode;
+  }
+
+  /**
+   * Server-private projection used by Git delivery only. It deliberately exposes the live,
+   * accepted run instead of a deployment-wide ceiling or browser-provided authority object.
+   */
+  public gitDeliveryAuthorityPort(): GitDeliveryRunAuthorityPort {
+    return {
+      current: (nowIso): ActiveGitDeliveryRunAuthority | undefined =>
+        this.currentGitDeliveryAuthority(nowIso),
+    };
   }
 
   /** Authenticates and atomically reserves estimated prompt tokens before provider dispatch. */
@@ -487,6 +511,7 @@ export class CodingRuntimeAuthorityService {
       return false;
     if (!this.settleStateAfterObservedReap(runId, nowIso)) return false;
     this.activeAuthorityRef = undefined;
+    this.activeGitDeliveryAuthority = undefined;
     this.activeTreeBindingId = undefined;
     this.activeEffectiveMode = undefined;
     this.reapPending = undefined;
@@ -511,6 +536,7 @@ export class CodingRuntimeAuthorityService {
     this.capabilities.revokeRun(runId);
     this.approvals.invalidateRun(runId);
     this.activeAuthorityRef = undefined;
+    this.activeGitDeliveryAuthority = undefined;
     this.activeTreeBindingId = undefined;
     this.activeEffectiveMode = undefined;
     this.runtimeState = {
@@ -571,8 +597,26 @@ export class CodingRuntimeAuthorityService {
     this.runtimeState = candidate;
     if (terminal && this.reapPending?.runId !== runId) {
       this.activeAuthorityRef = undefined;
+      this.activeGitDeliveryAuthority = undefined;
     }
     return true;
+  }
+
+  private currentGitDeliveryAuthority(nowIso: string): ActiveGitDeliveryRunAuthority | undefined {
+    const active = this.activeGitDeliveryAuthority;
+    const reference = this.activeAuthorityRef;
+    if (
+      active === undefined ||
+      reference === undefined ||
+      this.reapPending !== undefined ||
+      this.runtimeState.state !== "running" ||
+      this.runtimeState.runId !== active.runId ||
+      reference.runId !== active.runId ||
+      reference.envelopeDigest !== active.envelopeDigest
+    ) {
+      return undefined;
+    }
+    return this.registry.revalidateRetainedRuntime(reference, nowIso).ok ? active : undefined;
   }
 
   private consumeConfirmation(

@@ -35,6 +35,7 @@ import {
   type GitDeliveryLocalErrorBody,
 } from "./localMutationRoutes.js";
 import type { GitDeliveryExecutionSeams } from "./execution.js";
+import { permittedGitDeliveryAuthority } from "./runBoundAuthority.test-support.js";
 import {
   deriveManagedWorktreePath,
   deriveRepositoryId,
@@ -157,6 +158,7 @@ function deps(overrides: Partial<UiHandlerDeps> = {}): UiHandlerDeps {
     registry: createRunRegistry(),
     modelPortFactory: () => undefined,
     store,
+    gitDeliveryAuthority: permittedGitDeliveryAuthority(() => projectId),
     ...overrides,
   };
 }
@@ -398,7 +400,12 @@ describe("local mutation routes — governed execution (direct handler + seams)"
           projectId: managed.instance.managedWorktreePath,
           branchName: "feature/x",
         }),
-        deps(managed.override),
+        deps({
+          ...managed.override,
+          gitDeliveryAuthority: permittedGitDeliveryAuthority(
+            () => managed.instance.managedWorktreePath,
+          ),
+        }),
       );
       expect(res.status).toBe(200);
       expect((res.body as { status: string }).status).toBe("succeeded");

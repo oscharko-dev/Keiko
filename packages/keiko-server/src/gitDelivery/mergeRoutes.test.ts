@@ -47,6 +47,7 @@ import type {
   GitDeliveryMergePreviewBody,
   GitDeliveryMergeSeams,
 } from "./mergeExecution.js";
+import { permittedGitDeliveryAuthority } from "./runBoundAuthority.test-support.js";
 
 const PREVIEW = "/api/git-delivery/merge/preview";
 const APPROVE = "/api/git-delivery/merge/approve";
@@ -156,6 +157,7 @@ function deps(overrides: Partial<UiHandlerDeps> = {}): UiHandlerDeps {
     registry: createRunRegistry(),
     modelPortFactory: () => undefined,
     store,
+    gitDeliveryAuthority: permittedGitDeliveryAuthority(() => projectId),
     ...overrides,
   };
 }

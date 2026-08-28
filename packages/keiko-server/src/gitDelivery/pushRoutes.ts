@@ -39,7 +39,11 @@ import {
   scanForbiddenStrings,
   scanUnsafeFormatChars,
 } from "./requestGuards.js";
-import { prepareGitDeliveryRequest, type GitDeliveryRequestErrors } from "./requestPreparation.js";
+import {
+  gitDeliveryAuthorityDenial,
+  prepareGitDeliveryRequest,
+  type GitDeliveryRequestErrors,
+} from "./requestPreparation.js";
 import {
   readTrustedGitDeliveryBranchProtection,
   signatureRequirementOf,
@@ -209,6 +213,8 @@ export const createHandlePushExecute = (
     if (!prepared.ok) return prepared.result;
     const { workspace } = prepared;
     const { projectId, command, approval } = prepared.value;
+    const authorityDenial = gitDeliveryAuthorityDenial(ctx, deps, projectId, workspace, "push");
+    if (authorityDenial !== undefined) return authorityDenial;
     const verifiedApproval = resolveGitDeliveryApprovalRequirement(approval, {
       store: seams.approvalStore,
       binding: { projectId, operation: "push", command },

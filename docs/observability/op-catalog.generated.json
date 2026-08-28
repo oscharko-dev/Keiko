@@ -845,7 +845,19 @@
     {
       "op": "git.commit.preview.completed",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/gitDelivery/commitRoutes.ts:424",
+      "site": "packages/keiko-server/src/gitDelivery/commitRoutes.ts:425",
+      "package": "keiko-server"
+    },
+    {
+      "op": "git.delivery.authority.admitted",
+      "category": "security",
+      "site": "packages/keiko-server/src/gitDelivery/requestPreparation.ts:65",
+      "package": "keiko-server"
+    },
+    {
+      "op": "git.delivery.authority.denied",
+      "category": "security",
+      "site": "packages/keiko-server/src/gitDelivery/requestPreparation.ts:65",
       "package": "keiko-server"
     },
     {

@@ -31,7 +31,11 @@ import {
   scanForbiddenStrings,
   scanUnsafeFormatChars,
 } from "./requestGuards.js";
-import { prepareGitDeliveryRequest, type GitDeliveryRequestErrors } from "./requestPreparation.js";
+import {
+  gitDeliveryAuthorityDenial,
+  prepareGitDeliveryRequest,
+  type GitDeliveryRequestErrors,
+} from "./requestPreparation.js";
 import {
   buildSyncPreview,
   runSyncExecute,
@@ -195,6 +199,14 @@ export const createHandleSyncExecute = (
     const prepared = await prepareGitDeliveryRequest(ctx, deps, SYNC_REQUEST_ERRORS, validate);
     if (!prepared.ok) return prepared.result;
     const { workspace } = prepared;
+    const authorityDenial = gitDeliveryAuthorityDenial(
+      ctx,
+      deps,
+      prepared.value.projectId,
+      workspace,
+      operation,
+    );
+    if (authorityDenial !== undefined) return authorityDenial;
     const { remote } = prepared.value;
     let before: GitSyncPreview;
     try {

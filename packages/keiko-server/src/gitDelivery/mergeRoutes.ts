@@ -55,7 +55,11 @@ import {
   scanForbiddenStrings,
   scanUnsafeFormatChars,
 } from "./requestGuards.js";
-import { prepareGitDeliveryRequest, type GitDeliveryRequestErrors } from "./requestPreparation.js";
+import {
+  gitDeliveryAuthorityDenial,
+  prepareGitDeliveryRequest,
+  type GitDeliveryRequestErrors,
+} from "./requestPreparation.js";
 
 // ─── Error envelope ───────────────────────────────────────────────────────────────────────────
 
@@ -259,6 +263,8 @@ export const createHandleMergeExecute = (
     if (!prepared.ok) return prepared.result;
     const { workspace } = prepared;
     const { projectId, command, approval } = prepared.value;
+    const authorityDenial = gitDeliveryAuthorityDenial(ctx, deps, projectId, workspace, "merge");
+    if (authorityDenial !== undefined) return authorityDenial;
     const verifiedApproval = resolveGitDeliveryApprovalRequirement(approval, {
       store: seams.approvalStore,
       binding: { projectId, operation: "merge", command },

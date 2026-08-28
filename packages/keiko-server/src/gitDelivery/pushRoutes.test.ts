@@ -30,6 +30,7 @@ import type {
   GitDeliveryPushPreviewBody,
   GitDeliveryPublishSeams,
 } from "./pushExecution.js";
+import { permittedGitDeliveryAuthority } from "./runBoundAuthority.test-support.js";
 
 const PREVIEW = "/api/git-delivery/push/preview";
 const EXECUTE = "/api/git-delivery/push/execute";
@@ -109,6 +110,7 @@ function deps(overrides: Partial<UiHandlerDeps> = {}): UiHandlerDeps {
     registry: createRunRegistry(),
     modelPortFactory: () => undefined,
     store,
+    gitDeliveryAuthority: permittedGitDeliveryAuthority(() => projectId),
     ...overrides,
   };
 }

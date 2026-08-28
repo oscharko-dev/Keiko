@@ -20,6 +20,7 @@ import type { RouteContext } from "../routes.js";
 import type { GitProcessResult, GitProcessRunner } from "../gitRoutes.js";
 import { createHandleSyncExecute, createHandleSyncPreview } from "./syncRoutes.js";
 import type { GitDeliverySyncSeams } from "./syncExecution.js";
+import { permittedGitDeliveryAuthority } from "./runBoundAuthority.test-support.js";
 
 const FETCH_PREVIEW = "/api/git-delivery/fetch/preview";
 const FETCH_EXECUTE = "/api/git-delivery/fetch/execute";
@@ -167,6 +168,7 @@ function deps(overrides: Partial<UiHandlerDeps> = {}): UiHandlerDeps {
     registry: createRunRegistry(),
     modelPortFactory: () => undefined,
     store,
+    gitDeliveryAuthority: permittedGitDeliveryAuthority(() => projectId),
     ...overrides,
   };
 }

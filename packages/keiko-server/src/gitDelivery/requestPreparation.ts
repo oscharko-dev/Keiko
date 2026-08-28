@@ -10,10 +10,14 @@
 // this scaffold.
 
 import type { WorkspaceInfo } from "@oscharko-dev/keiko-workspace";
+import type { GitRepositoryAgentOperationKind } from "@oscharko-dev/keiko-contracts";
 import type { RouteContext, RouteResult } from "../routes.js";
 import type { UiHandlerDeps } from "../deps.js";
+import { UNKNOWN_CORRELATION_ID } from "../correlation.js";
+import { processServerLogSink } from "../process-log-sink.js";
 import { resolveProjectWorkspace } from "./execution.js";
 import { readParsedGitDeliveryBody } from "./requestGuards.js";
+import { authorizeGitDelivery } from "./runBoundAuthority.js";
 
 // The validator each route already exposes: it maps an unknown parsed body to either a typed request
 // value (carrying the projectId) or a ready-to-return error result.
@@ -32,6 +36,51 @@ export interface GitDeliveryRequestErrors {
 export type PreparedGitDeliveryRequest<V> =
   | { readonly ok: true; readonly value: V; readonly workspace: WorkspaceInfo }
   | { readonly ok: false; readonly result: RouteResult };
+
+export interface GitDeliveryAuthorityTarget {
+  readonly headBranchName?: string | undefined;
+  readonly baseBranchName?: string | undefined;
+}
+
+/**
+ * Applies the sole delivery-write admission decision after a project workspace has been resolved.
+ * This intentionally consumes only the live server-owned runtime authority; headers, browser state,
+ * and deployment defaults cannot grant access here.
+ */
+export function gitDeliveryAuthorityDenial(
+  ctx: RouteContext,
+  deps: Pick<UiHandlerDeps, "gitDeliveryAuthority">,
+  projectId: string,
+  workspace: WorkspaceInfo,
+  operation: GitRepositoryAgentOperationKind,
+  target: GitDeliveryAuthorityTarget = {},
+): RouteResult | undefined {
+  const decision = authorizeGitDelivery(
+    deps.gitDeliveryAuthority,
+    { projectId, workspaceRoot: workspace.root, operation, ...target },
+    new Date().toISOString(),
+  );
+  processServerLogSink().write({
+    category: "security",
+    op: decision.allowed ? "git.delivery.authority.admitted" : "git.delivery.authority.denied",
+    correlationId: ctx.correlationId ?? UNKNOWN_CORRELATION_ID,
+    status: decision.allowed ? 200 : 403,
+    extra: {
+      operation,
+      ...(decision.allowed ? { runId: decision.runId } : { reason: decision.reason }),
+    },
+  });
+  if (decision.allowed) return undefined;
+  return {
+    status: 403,
+    body: {
+      error: {
+        code: "GIT_DELIVERY_AUTHORITY_DENIED",
+        message: "The accepted runtime authority does not admit this Git delivery operation.",
+      },
+    },
+  };
+}
 
 // Runs the shared read → validate → resolve-workspace prologue. Returns the validated request value
 // together with its authorized workspace, or the first typed error result encountered. `V` must carry

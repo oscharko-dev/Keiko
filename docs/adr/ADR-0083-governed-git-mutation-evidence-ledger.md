@@ -138,11 +138,9 @@ that projects a `GitMutationLifecycleResult` into a `GitDeliveryEvidenceRecord`.
   per bucket, fail-closed on a corrupt bucket document). The ledger never throws into the caller: a
   storage failure is reported through an injectable `onPersistError` sink and returns void — audit
   write is always best-effort (Force 5).
-- `evidenceRoutes.ts` — a capability-gated `GET /api/git-delivery/evidence` route registered as a
-  sibling `GIT_DELIVERY_EVIDENCE_ROUTE_GROUP` in `routes.ts`. Gated by `isGitDeliveryTrusted` (the
-  default-false `KEIKO_GIT_DELIVERY_ENABLED` deployment flag), returning a content-free `404` when
-  the surface is off. Being a `GET`, it is not covered by the central CSRF guard; the env flag is the
-  access control. It collects a bounded recent window (clamped `days`/`limit`), re-validates each
+- `evidenceRoutes.ts` — a bounded read-only `GET /api/git-delivery/evidence` route registered as a
+  sibling `GIT_DELIVERY_EVIDENCE_ROUTE_GROUP` in `routes.ts`. It collects a bounded recent window
+  (clamped `days`/`limit`), re-validates each
   record through the contract guard (dropping tampered records), builds a `GitDeliveryAuditPacket`,
   and re-applies `deps.redactor` at read (defense-in-depth, D3).
 
@@ -373,8 +371,8 @@ module. ADR-0019 rules 2–4 are satisfied.
 **`keiko-server/src/gitDelivery/mutationEvidenceLedger.ts`** and
 **`evidenceRoutes.ts`** sit in `keiko-server`, the permitted composition and wiring layer
 (ADR-0019 rule 6). They depend on `keiko-contracts` (evidence record types), `keiko-evidence`
-(`EvidenceStore`, `deepRedactStrings`), and `keiko-security` (`auditRedactor`,
-`isGitDeliveryTrusted`). No domain package depends on `keiko-server`. The GET route is a sibling
+(`EvidenceStore`, `deepRedactStrings`), and `keiko-security` (`auditRedactor`). The server-owned
+delivery-authority boundary remains in `keiko-server`; no domain package depends on it. The GET route is a sibling
 of the existing `git-delivery/` route group; it does not introduce a new architectural boundary,
 only a new route within an established pattern.
 

@@ -27,6 +27,7 @@ import {
   resolveProjectWorkspace,
   type GitDeliveryExecutionSeams,
 } from "./execution.js";
+import { gitDeliveryAuthorityDenial } from "./requestPreparation.js";
 import {
   hasOnlyAllowedKeys,
   isContainedPathspec,
@@ -74,16 +75,29 @@ const errResult = (status: number, code: GitDeliveryLocalErrorCode): RouteResult
 type ParsedCommand =
   { readonly ok: true; readonly command: GitMutationCommand } | { readonly ok: false };
 
+type LocalDeliveryOperation = "branch-create" | "branch-switch" | "stage" | "unstage";
+
 interface LocalMutationSpec {
   readonly pattern: string;
+  readonly operation?: LocalDeliveryOperation | undefined;
   readonly allowedKeys: ReadonlySet<string>;
   readonly parse: (obj: Record<string, unknown>) => ParsedCommand;
 }
 
 const sharedKeys = ["schemaVersion", "projectId", "approval"] as const;
 
+function localDeliveryOperationFor(
+  command: GitMutationCommand,
+): LocalDeliveryOperation | undefined {
+  if (command.kind === "branch-create") return "branch-create";
+  if (command.kind === "branch-switch") return "branch-switch";
+  if (command.kind === "stage") return "stage";
+  return command.kind === "unstage" ? "unstage" : undefined;
+}
+
 const BRANCH_CREATE_SPEC: LocalMutationSpec = {
   pattern: "/api/git-delivery/local-branch/create",
+  operation: "branch-create",
   allowedKeys: new Set([...sharedKeys, "branchName", "baseBranchName", "startPointRefHash"]),
   parse: (obj) => {
     if (
@@ -107,6 +121,7 @@ const BRANCH_CREATE_SPEC: LocalMutationSpec = {
 
 const BRANCH_SWITCH_SPEC: LocalMutationSpec = {
   pattern: "/api/git-delivery/local-branch/switch",
+  operation: "branch-switch",
   allowedKeys: new Set([...sharedKeys, "branchName"]),
   parse: (obj) =>
     isNonEmptyString(obj.branchName)
@@ -122,6 +137,7 @@ function parsePathspecs(value: unknown): readonly string[] | undefined {
 
 const STAGE_SPEC: LocalMutationSpec = {
   pattern: "/api/git-delivery/staging/stage",
+  operation: "stage",
   allowedKeys: new Set([...sharedKeys, "pathspecs", "includeUntracked"]),
   parse: (obj) => {
     const pathspecs = parsePathspecs(obj.pathspecs);
@@ -135,6 +151,7 @@ const STAGE_SPEC: LocalMutationSpec = {
 
 const UNSTAGE_SPEC: LocalMutationSpec = {
   pattern: "/api/git-delivery/staging/unstage",
+  operation: "unstage",
   allowedKeys: new Set([...sharedKeys, "pathspecs"]),
   parse: (obj) => {
     const pathspecs = parsePathspecs(obj.pathspecs);
@@ -201,6 +218,10 @@ export const createHandleLocalMutation = (
     const { projectId, command, approval } = validation.value;
     const workspace = resolveProjectWorkspace(deps, projectId);
     if (workspace === undefined) return errResult(404, "GIT_DELIVERY_LOCAL_UNKNOWN_PROJECT");
+    const operation = spec.operation ?? localDeliveryOperationFor(command);
+    if (operation === undefined) return errResult(400, "GIT_DELIVERY_LOCAL_BAD_REQUEST");
+    const authorityDenial = gitDeliveryAuthorityDenial(ctx, deps, projectId, workspace, operation);
+    if (authorityDenial !== undefined) return authorityDenial;
     const verifiedApproval = resolveGitDeliveryApprovalRequirement(approval, {
       store: seams.approvalStore,
       binding: { projectId, operation: "local-mutation", command },

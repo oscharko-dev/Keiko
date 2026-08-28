@@ -31,6 +31,8 @@ import { createGitDeliveryMergeRouteGroup } from "./mergeRoutes.js";
 import { createGitDeliveryPrRouteGroup } from "./prRoutes.js";
 import { createGitDeliveryPushRouteGroup } from "./pushRoutes.js";
 import { createGitDeliverySyncRouteGroup } from "./syncRoutes.js";
+import { resolveProjectWorkspace } from "./execution.js";
+import { gitDeliveryAuthorityDenial } from "./requestPreparation.js";
 import {
   hasOnlyAllowedKeys,
   isPlainObject,
@@ -572,8 +574,28 @@ export async function handleGitAgentOperation(
 ): Promise<RouteResult> {
   const parsed = await parseAgentRequest(ctx.req);
   if (!parsed.ok) return parsed.result;
-  const gate = autonomyDenial(parsed.request, gitAgentEffectiveMode(deps));
-  if (gate !== undefined) return gate;
+  if (parsed.request.mode === "execute") {
+    const workspace = resolveProjectWorkspace(deps, parsed.request.projectId);
+    if (workspace !== undefined) {
+      const gate = gitDeliveryAuthorityDenial(
+        ctx,
+        deps,
+        parsed.request.projectId,
+        workspace,
+        parsed.request.operation,
+      );
+      if (gate !== undefined) {
+        return {
+          status: gate.status,
+          body: denied(
+            parsed.request,
+            "autonomy-mode-denied",
+            "The accepted runtime authority does not admit this repository operation.",
+          ),
+        };
+      }
+    }
+  }
   return handleGitAgentOperationWithDelegate(parsed.request, parsed.fingerprint, () =>
     delegateRequest(parsed.request, ctx, deps),
   );

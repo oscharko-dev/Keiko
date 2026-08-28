@@ -34,6 +34,7 @@ import type {
   GitDeliveryPrPreviewBody,
   GitDeliveryPullRequestSeams,
 } from "./prExecution.js";
+import { permittedGitDeliveryAuthority } from "./runBoundAuthority.test-support.js";
 
 const PREVIEW = "/api/git-delivery/pr/preview";
 const EXECUTE = "/api/git-delivery/pr/execute";
@@ -126,6 +127,7 @@ function deps(overrides: Partial<UiHandlerDeps> = {}): UiHandlerDeps {
     registry: createRunRegistry(),
     modelPortFactory: () => undefined,
     store,
+    gitDeliveryAuthority: permittedGitDeliveryAuthority(() => projectId),
     ...overrides,
   };
 }

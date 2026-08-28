@@ -84,9 +84,9 @@ The local kernel, the local adapter, the publish gateway, and the PR gateway are
 
 `GitMergeRejectionReason` is a closed union: `not-mergeable | checks-failing | approvals-missing | conflict | head-modified | strategy-unavailable | branch-protection | already-merged | not-found | permission-denied | rate-limited | provider-unavailable | unknown`. Exhaustive `GIT_MERGE_REJECTION_ERROR_CODE` and `GIT_MERGE_REJECTION_DISPOSITION` tables map each reason to a `GitDeliveryExecutionErrorCode` and a `GitDeliveryRecoveryDisposition` (both reused). `classifyGitMergeRejection` (keiko-tools) matches GitHub's English error tokens against an ordered phrase table; the neutral enum and tables (contracts) change slowly and are test-driven in isolation.
 
-### D6 — Default merge policy pack: merge is approval-gated; capability-gated behind KEIKO_GIT_DELIVERY_ENABLED
+### D6 — Default merge policy pack: merge is approval-gated and bound to the active Authority Envelope
 
-`KEIKO_DEFAULT_MERGE_POLICY_PACK` (server) authorises `merge` as `approval-gated` (`requiredApprovers: []` — at least one approver of any identity), with `defaultRule: { decision: "blocked" }` so every other action kind is fail-closed. This is the explicit final-approval gate AC1 requires. Base-branch namespace and risk-ceiling enforcement happen in the readiness layer (which is where merge prerequisites live); the policy pack governs *authorization* (may this action proceed, and does it need approval). Governed merge is evaluated only when `KEIKO_GIT_DELIVERY_ENABLED=true` (the existing `isGitDeliveryTrusted` gate); the default is false. A deployment may override with a stricter pack (e.g. naming specific `requiredApprovers`).
+`KEIKO_DEFAULT_MERGE_POLICY_PACK` (server) authorises `merge` as `approval-gated` (`requiredApprovers: []` — at least one approver of any identity), with `defaultRule: { decision: "blocked" }` so every other action kind is fail-closed. This is the explicit final-approval gate AC1 requires. Base-branch namespace and risk-ceiling enforcement happen in the readiness layer (which is where merge prerequisites live); the policy pack governs *authorization* (may this action proceed, and does it need approval). Governed merge additionally requires a current server-owned runtime Authority Envelope; no environment switch grants delivery authority. A deployment may override with a stricter pack (e.g. naming specific `requiredApprovers`).
 
 ### D7 — A new sibling card GovernedMergeCard.tsx, not an extension of GovernedGitFlowCard or GovernedPullRequestCard
 
@@ -94,7 +94,7 @@ The local kernel, the local adapter, the publish gateway, and the PR gateway are
 
 ### D8 — AC5 test strategy: fake-adapter unit/integration tests gate CI; Playwright e2e covers preview/blocked/disabled
 
-Contract tests prove the pure readiness/strategy/rejection derivations. keiko-tools tests inject a deterministic fake `GitMergeAdapter` (no `gh`, no network) and prove: the readiness gate blocks a not-mergeable PR before `mergePullRequest` is called; the policy/approval gate blocks without a token; the argv builders map strategies correctly and reject malformed operands; the classifier's ordering invariant holds; and the gateway never calls anything but the narrow adapter (no-bypass). The Node executor test uses a scripted spawn to prove `mergeable_state` mapping and the guarded non-fatal branch delete. Server integration tests inject the seam and prove policy/approval/readiness blocking, content-free evidence append, and rejection→recovery projection. These run in the required `ci` job with no live GitHub credentials. A non-gating Playwright e2e (`tests/e2e/config/playwright.issue-478-merge-governance.config.ts`) drives the packaged app for the read-only preview, the blocked-merge state, and the disabled (`KEIKO_GIT_DELIVERY_ENABLED` unset → 404) state.
+Contract tests prove the pure readiness/strategy/rejection derivations. keiko-tools tests inject a deterministic fake `GitMergeAdapter` (no `gh`, no network) and prove: the readiness gate blocks a not-mergeable PR before `mergePullRequest` is called; the policy/approval gate blocks without a token; the argv builders map strategies correctly and reject malformed operands; the classifier's ordering invariant holds; and the gateway never calls anything but the narrow adapter (no-bypass). The Node executor test uses a scripted spawn to prove `mergeable_state` mapping and the guarded non-fatal branch delete. Server integration tests inject the seam and prove policy/approval/readiness blocking, content-free evidence append, and rejection→recovery projection. These run in the required `ci` job with no live GitHub credentials. A non-gating Playwright e2e (`tests/e2e/config/playwright.issue-478-merge-governance.config.ts`) drives the packaged app for the read-only preview and blocked-merge state.
 
 ## Consequences
 
@@ -147,7 +147,7 @@ Contract tests prove the pure readiness/strategy/rejection derivations. keiko-to
 
 - ADR-0080: Governed Git delivery contracts (`merge` action kind, `GitDeliveryMergeInputs`, `GitDeliveryMergeStrategyHint`, `GitDeliveryMergeBlockReason`, provider-state interfaces reused unchanged)
 - ADR-0081: Governed Git mutation execution kernel (`merge` → `preflightNoLocalPrecondition` unchanged; lifecycle result shape reused)
-- ADR-0082: Governed Git approval and preview surface (read-only BFF preview pattern; `isGitDeliveryTrusted` gate reused)
+- ADR-0082: Governed Git approval and preview surface (read-only BFF preview pattern)
 - ADR-0083: Governed Git mutation evidence ledger (`buildGitDeliveryEvidenceRecord` records the merge envelope unchanged)
 - ADR-0085: Governed remote publish gateway (parallel gateway pattern mirrored; publish gateway unchanged)
 - ADR-0086: Governed pull request gateway (parallel gateway pattern mirrored; PR gateway unchanged; merge was deferred to this slice)

@@ -61,7 +61,7 @@ The `branch-switch` action kind is added to the existing `GitDeliveryActionKind`
 
 **keiko-server** gains two new route groups under `packages/keiko-server/src/gitDelivery/`:
 
-- `localMutationRoutes.ts`: `POST /api/git-delivery/local-branch/create`, `/local-branch/switch`, `/staging/stage`, `/staging/unstage`. Each handler gates on `isGitDeliveryTrusted`, validates the typed envelope (allowed keys, secret-shape scan, unsafe-format-char scan), reads a fresh snapshot via the snapshot reader, calls `runGitMutation`, records evidence via `recordGitDeliveryMutationEvidence`, and returns a content-free outcome. Factory pattern mirrors `createHandleGitDeliveryActionSheet` for testability.
+- `localMutationRoutes.ts`: `POST /api/git-delivery/local-branch/create`, `/local-branch/switch`, `/staging/stage`, `/staging/unstage`. Each handler admits writes only through the active server-owned runtime Authority Envelope, validates the typed envelope (allowed keys, secret-shape scan, unsafe-format-char scan), reads a fresh snapshot via the snapshot reader, calls `runGitMutation`, records evidence via `recordGitDeliveryMutationEvidence`, and returns a content-free outcome.
 - `commitRoutes.ts`: `POST /api/git-delivery/commit/preview` (read-only: snapshot + staged paths → `analyzeGitCommitIntent` + `validateGitCommitMessage` + `evaluateGitPreflight` + `evaluateGitPolicy`; returns a content-free preview object; no mutation) and `POST /api/git-delivery/commit/execute` (message-policy gate first; if violations present, record blocked evidence and return typed violation codes before the kernel runs; else `runGitMutation` → evidence → content-free outcome).
 
 **keiko-ui** gains a `GovernedGitFlowCard` desktop window (`registerWindowRender` type `"governedGitFlow"`) walking the Branch → Staging → Commit composer sequence, calling the new API routes, and rendering intent warnings and message-policy violations as text badges with `aria-live` regions. Inline styles via CSS custom properties only; `globals.css` is not touched.
@@ -143,7 +143,7 @@ This placement ensures the kernel remains a narrow execution primitive that know
 
 - ADR-0080: Governed Git delivery contracts (action kinds, risk taxonomy, lifecycle envelope — extended by one kind here)
 - ADR-0081: Governed Git mutation execution kernel (`runGitMutation`, preflight dispatch, adapter port — extended by one kind here)
-- ADR-0082: Governed Git approval and preview surface (action-sheet BFF pattern reused for preview route; `isGitDeliveryTrusted` gate reused)
+- ADR-0082: Governed Git approval and preview surface (action-sheet BFF pattern reused for preview route)
 - ADR-0083: Governed Git mutation evidence ledger (`recordGitDeliveryMutationEvidence` reused for all five new routes)
 - ADR-0019: Modular Package Architecture (leaf-package rule; dependency direction contracts ← tools ← server; `arch:check` enforcement)
 - ADR-0018: Terminal allowlist (read-only git baseline preserved; `git switch` explicitly NOT added)
