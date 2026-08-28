@@ -13,12 +13,14 @@ import type {
   MemorySensitivity,
   MemoryStatus,
   MemoryType,
+  MemoryUpdatePreImage,
   MemoryValidityInterval,
 } from "@oscharko-dev/keiko-contracts/memory";
 import type { MemoryContentCipher } from "./cipher.js";
 import type { MemoryAccessStat } from "./access.js";
 
 export type { MemoryAccessStat } from "./access.js";
+export type { MemoryUpdatePreImage } from "@oscharko-dev/keiko-contracts/memory";
 
 export type MemoryEmbeddingMetric = "cosine" | "euclidean" | "dot";
 
@@ -83,11 +85,6 @@ export interface MemoryMetadata {
   readonly createdAt: number;
   readonly updatedAt: number;
 }
-
-// Body-free pre-image captured inside the same SQLite write transaction as an update. Consumers
-// must never infer this state from a process-local cache: another process can mutate the vault
-// between two BFF requests.
-export type MemoryUpdatePreImage = Pick<MemoryRecord, "id" | "status" | "pinned">;
 
 // Mutating-call event union for the optional onMemoryEvent callback. #214 wires the audit ledger
 // here later; #206 only forwards the event after a successful commit.

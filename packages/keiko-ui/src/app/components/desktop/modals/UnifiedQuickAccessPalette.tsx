@@ -21,6 +21,7 @@ import {
   useOptionalWidgetTranslate,
   type OptionalWidgetTranslate,
 } from "@/lib/optional-widget-i18n";
+import { restoreModalFocusAfterUnlock } from "./modalFocusRestore";
 import type { OpenEditorFileRequest, OpenEditorFileResult } from "../hooks/useWorkspace.types";
 import { FileIcon } from "../widgets/shared/projectTree";
 import { fuzzyScore } from "../widgets/cards/editorCommands";
@@ -287,7 +288,7 @@ function useQuickAccessFocusRestore(
     const opener = openerRef.current;
     inputRef.current?.focus();
     return (): void => {
-      if (opener?.isConnected === true && opener !== document.body) opener.focus();
+      restoreModalFocusAfterUnlock(opener);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);

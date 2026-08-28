@@ -354,8 +354,10 @@ export function createMemoryAuditHandler(options: MemoryAuditHandlerOptions): Me
   const previousStatus = new Map<MemoryId, MemoryStatus>();
   const previousPinned = new Map<MemoryId, boolean>();
   let seeded = false;
+  let processedEvent = false;
 
   const handler = (event: MemoryEvent): void => {
+    processedEvent = true;
     const ctx: BuildContext = {
       occurredAt: now(),
       newEventId,
@@ -377,7 +379,7 @@ export function createMemoryAuditHandler(options: MemoryAuditHandlerOptions): Me
   };
   return Object.assign(handler, {
     seed: (records: readonly MemoryAuditSeedRecord[]): void => {
-      if (seeded) {
+      if (seeded || processedEvent) {
         throw new Error("MemoryAuditHandler.seed() may only be called once before mutations.");
       }
       seeded = true;

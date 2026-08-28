@@ -34,6 +34,7 @@ import {
 import { CHAT_TITLE_IS_DEFAULT_CFG_KEY } from "../windows/connectionUtils";
 import KeikoSelect from "../KeikoSelect";
 import { PermControl, type Cfg, type CfgValue } from "./PermControl";
+import { restoreModalFocusAfterUnlock } from "./modalFocusRestore";
 import { isWorkflowEligibleModel } from "../../../../lib/workflow-eligibility";
 import { useTranslate, type I18nTranslate } from "@/lib/i18n";
 import type { MessageKey } from "@/lib/i18n-messages.en";
@@ -74,22 +75,10 @@ function useNewWindowFocusRestore(opener: HTMLElement | null | undefined): void 
       // Audit C148 — confirming from the Empty State unmounts the trigger button
       // (the first window replaces the empty state), so focusing it silently
       // dropped keyboard focus to <body>. Fall back to the freshly created top
-      // window (focusable via tabIndex={-1}) or the New-window FAB — the same
-      // deterministic targets as WindowFrame's close-with-focus-restore. The rAF
-      // waits for React to commit the new window before querying it.
-      if (trigger?.isConnected === true && trigger !== document.body) {
-        trigger.focus();
-        return;
-      }
-      requestAnimationFrame(() => {
-        // MD-05: guaranteed fallback to document.body so focus never lands in
-        // limbo when neither the top window nor the FAB is in the DOM yet.
-        const next =
-          document.querySelector<HTMLElement>('.window[data-top="true"]') ??
-          document.querySelector<HTMLElement>(".ws-fab") ??
-          document.body;
-        next.focus({ preventScroll: true });
-      });
+      // window (focusable via tabIndex={-1}) or the New-window FAB. The shared
+      // helper waits until AppShell unlocks an inert background before focusing
+      // a connected opener, then applies the MD-05 deterministic fallback.
+      restoreModalFocusAfterUnlock(trigger);
     };
   }, []);
 }

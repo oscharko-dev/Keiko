@@ -142,7 +142,7 @@ The ten finding-bearing pull requests were `#3305`, `#3300`, `#3303`, `#3302`, `
 baseline's 50 of 119 (**42%**) within SLO and **11.4 minutes** median, so this observation is
 recorded as a regression signal rather than represented as an improvement.
 
-`#3299` demonstrates the required monitored in-SLO reaction: its one measured reaction was
+`#3299` demonstrates the in-SLO reaction to be monitored: its one measured reaction was
 **3.2 minutes**. The report confirms the original diagnosis remains true: the median final
 checks-green-to-merged gap is **1.6 minutes**, well inside the 30-minute target, while repair rounds
 and reaction time remain the operative cost. No review conversation was bulk-resolved, timer-resolved,

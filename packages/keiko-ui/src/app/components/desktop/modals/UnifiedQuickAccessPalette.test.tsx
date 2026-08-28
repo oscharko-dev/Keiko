@@ -1,4 +1,4 @@
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { axe } from "jest-axe";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -78,6 +78,67 @@ describe("UnifiedQuickAccessPalette", () => {
     opener.remove();
   });
 
+  it("uses the top window fallback when no opener was captured", () => {
+    const topWindow = document.createElement("button");
+    topWindow.className = "window";
+    topWindow.dataset.top = "true";
+    document.body.appendChild(topWindow);
+
+    const { unmount } = render(
+      <UnifiedQuickAccessPalette
+        initialMode="files"
+        root="/repo"
+        commands={[]}
+        openEditorFile={vi.fn()}
+        opener={null}
+        onClose={vi.fn()}
+      />,
+    );
+    unmount();
+
+    expect(document.activeElement).toBe(topWindow);
+    topWindow.remove();
+  });
+
+  it("uses the FAB fallback instead of document.body", () => {
+    const fab = document.createElement("button");
+    fab.className = "ws-fab";
+    document.body.appendChild(fab);
+
+    const { unmount } = render(
+      <UnifiedQuickAccessPalette
+        initialMode="files"
+        root="/repo"
+        commands={[]}
+        openEditorFile={vi.fn()}
+        opener={document.body}
+        onClose={vi.fn()}
+      />,
+    );
+    unmount();
+
+    expect(document.activeElement).toBe(fab);
+    fab.remove();
+  });
+
+  it("uses the body fallback when the captured opener was disconnected", () => {
+    const opener = document.createElement("button");
+
+    const { unmount } = render(
+      <UnifiedQuickAccessPalette
+        initialMode="files"
+        root="/repo"
+        commands={[]}
+        openEditorFile={vi.fn()}
+        opener={opener}
+        onClose={vi.fn()}
+      />,
+    );
+    unmount();
+
+    expect(document.activeElement).toBe(document.body);
+  });
+
   it("switches to command mode with a leading greater-than and runs the selected command", async () => {
     const run = vi.fn();
     render(
@@ -116,6 +177,61 @@ describe("UnifiedQuickAccessPalette", () => {
     expect(input).toHaveAttribute("aria-controls", listbox.id);
     expect(input).toHaveAttribute("aria-activedescendant", option.id);
     expect(option).toHaveAttribute("aria-selected", "true");
+  });
+
+  it("keeps active-descendant navigation inside currently rendered command options", async () => {
+    const user = userEvent.setup();
+    render(
+      <UnifiedQuickAccessPalette
+        initialMode="commands"
+        root="/repo"
+        commands={[command("first", "First command"), command("second", "Second command")]}
+        openEditorFile={vi.fn()}
+        onClose={vi.fn()}
+      />,
+    );
+
+    const input = screen.getByRole("combobox");
+    const first = await screen.findByRole("option", { name: /First command/ });
+    const second = screen.getByRole("option", { name: /Second command/ });
+    input.focus();
+
+    await user.keyboard("{ArrowUp}");
+    expect(input).toHaveAttribute("aria-activedescendant", second.id);
+    await user.keyboard("{ArrowDown}");
+    expect(input).toHaveAttribute("aria-activedescendant", first.id);
+    await user.keyboard("{ArrowDown}");
+    expect(input).toHaveAttribute("aria-activedescendant", second.id);
+
+    await user.clear(input);
+    await user.type(input, ">first");
+    await waitFor(() => {
+      const activeId = input.getAttribute("aria-activedescendant");
+      expect(activeId).toBe(screen.getByRole("option", { name: /First command/ }).id);
+      expect(document.getElementById(activeId ?? "")).not.toBeNull();
+    });
+  });
+
+  it("omits active-descendant for empty and hostile command queries", async () => {
+    render(
+      <UnifiedQuickAccessPalette
+        initialMode="commands"
+        root="/repo"
+        commands={[command("first", "First command")]}
+        openEditorFile={vi.fn()}
+        onClose={vi.fn()}
+      />,
+    );
+
+    const input = screen.getByRole("combobox");
+    fireEvent.change(input, { target: { value: ">missing" } });
+    await waitFor(() => expect(input).not.toHaveAttribute("aria-activedescendant"));
+
+    fireEvent.change(input, { target: { value: "><img src=x>\u0007" } });
+    await waitFor(() => {
+      expect(input).not.toHaveAttribute("aria-activedescendant");
+      expect(screen.queryByRole("option")).toBeNull();
+    });
   });
 
   it("opens a filename result even when the query is not a content match", async () => {

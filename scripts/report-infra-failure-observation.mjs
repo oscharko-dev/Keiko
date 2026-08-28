@@ -18,7 +18,15 @@ function validateDateRange(parsed) {
   if (!DATE.test(parsed.from ?? "") || !DATE.test(parsed.to ?? "")) {
     fail("--from and --to must be UTC dates in YYYY-MM-DD form");
   }
+  if (!isCanonicalUtcDate(parsed.from) || !isCanonicalUtcDate(parsed.to)) {
+    fail("--from and --to must be valid UTC calendar dates");
+  }
   if (parsed.from > parsed.to) fail("--from must not be after --to");
+}
+
+function isCanonicalUtcDate(value) {
+  const parsed = new Date(`${value}T00:00:00Z`);
+  return !Number.isNaN(parsed.valueOf()) && parsed.toISOString().slice(0, 10) === value;
 }
 
 function parseArguments(args) {
@@ -70,10 +78,35 @@ async function actionRunsPage(fetchImpl, token, url, date) {
   if (!response.ok)
     fail(`GitHub Actions query for ${date} failed with HTTP ${String(response.status)}`);
   const payload = await response.json();
-  if (!Array.isArray(payload.workflow_runs))
+  if (
+    payload === null ||
+    typeof payload !== "object" ||
+    !Array.isArray(payload.workflow_runs) ||
+    !Number.isSafeInteger(payload.total_count) ||
+    payload.total_count < 0
+  ) {
     fail(`GitHub Actions query for ${date} has no workflow_runs`);
+  }
   const next = nextLinkTarget(response.headers.get("link"));
-  return { runs: payload.workflow_runs, next };
+  return { runs: payload.workflow_runs, next, totalCount: payload.total_count };
+}
+
+function nextPageUrl(next, first, date) {
+  if (next === undefined) return undefined;
+  let candidate;
+  try {
+    candidate = new globalThis.URL(next);
+  } catch {
+    fail(`GitHub Actions query for ${date} returned an invalid pagination link`);
+  }
+  if (
+    candidate.origin !== first.origin ||
+    candidate.pathname !== first.pathname ||
+    candidate.searchParams.get("created") !== date
+  ) {
+    fail(`GitHub Actions query for ${date} returned an unsafe pagination link`);
+  }
+  return candidate;
 }
 
 async function runsForDate(fetchImpl, token, repo, date) {
@@ -86,13 +119,17 @@ async function runsForDate(fetchImpl, token, repo, date) {
   let pageUrl = first;
   for (;;) {
     const page = await actionRunsPage(fetchImpl, token, pageUrl, date);
+    if (page.totalCount >= 1000) {
+      fail(`GitHub Actions query for ${date} reached the 1,000-run listing cap`);
+    }
     runs.push(...page.runs);
     if (page.next === undefined) return runs;
-    pageUrl = new globalThis.URL(page.next);
+    pageUrl = nextPageUrl(page.next, first, date);
   }
 }
 
 export async function observeInfrastructureRuns(args, dependencies = {}) {
+  validateDateRange(args);
   const dates = utcDates(args.from, args.to);
   const fetchImpl = dependencies.fetch ?? globalThis.fetch;
   const token = dependencies.token ?? githubToken();

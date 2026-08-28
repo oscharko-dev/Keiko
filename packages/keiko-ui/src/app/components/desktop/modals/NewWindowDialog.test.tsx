@@ -223,6 +223,36 @@ describe("NewWindowDialog: focus-restoration guaranteed fallback (MD-05)", () =>
     opener.remove();
   });
 
+  it("waits for AppShell to unlock an inert opener before restoring focus", async () => {
+    const background = document.createElement("div");
+    background.className = "app";
+    background.setAttribute("inert", "");
+    const opener = document.createElement("button");
+    background.appendChild(opener);
+    document.body.appendChild(background);
+    const nativeFocus = opener.focus.bind(opener);
+    const focus = vi.spyOn(opener, "focus").mockImplementation(() => {
+      if (!background.hasAttribute("inert")) nativeFocus();
+    });
+
+    const { unmount } = render(
+      <NewWindowDialog
+        type="chat"
+        types={WIN_TYPES}
+        opener={opener}
+        onConfirm={vi.fn()}
+        onClose={vi.fn()}
+      />,
+    );
+    unmount();
+    background.removeAttribute("inert");
+
+    await waitFor(() => expect(document.activeElement).toBe(opener));
+    expect(focus).toHaveBeenCalledTimes(1);
+    focus.mockRestore();
+    background.remove();
+  });
+
   it("focuses document.body when no top-window or FAB is available on close", () => {
     // Ensure no stray .window[data-top=true] or .ws-fab elements exist.
     expect(document.querySelector('.window[data-top="true"]')).toBeNull();

@@ -236,6 +236,28 @@ describe("createMemoryAuditHandler", () => {
     expect(readEvents(store, FIXED_NOW).map((event) => event.kind)).toEqual(["memory:accepted"]);
   });
 
+  it("rejects a first seed after event processing instead of clearing live transition state", () => {
+    const store = createInMemoryEvidenceStore();
+    const handler = createMemoryAuditHandler({
+      evidenceStore: store,
+      redactString: identityRedact,
+      now: () => FIXED_NOW,
+      newEventId: makeIdFactory(),
+    });
+    const proposed = makeRecord({ status: "proposed" });
+
+    handler({ kind: "memory:inserted", record: proposed });
+    expect((): void => {
+      handler.seed([]);
+    }).toThrow("may only be called once before mutations");
+    handler({ kind: "memory:updated", record: { ...proposed, status: "accepted" } });
+
+    expect(readEvents(store, FIXED_NOW).map((event) => event.kind)).toEqual([
+      "memory:proposed",
+      "memory:accepted",
+    ]);
+  });
+
   it("prefers the vault's transactional pre-image over a stale seeded cache", () => {
     const store = createInMemoryEvidenceStore();
     const handler = createMemoryAuditHandler({
