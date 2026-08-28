@@ -822,6 +822,41 @@ describe("gatewayFetch DNS-rebinding pinning (AUDIT-SEC-001)", () => {
     }
   });
 
+  it("rejects an undelegated hostname redirect that leaves the no-proxy route", async () => {
+    let originRequests = 0;
+    let proxyRequests = 0;
+    const origin = createHttpServer((_req, res) => {
+      originRequests += 1;
+      res.writeHead(302, { location: "http://outside-no-proxy.invalid/next" });
+      res.end();
+    });
+    const proxy = createHttpServer((_req, res) => {
+      proxyRequests += 1;
+      res.writeHead(200);
+      res.end();
+    });
+    const originPort = await listen(origin);
+    const proxyPort = await listen(proxy);
+    try {
+      await expect(
+        gatewayFetch(`http://127.0.0.1:${String(originPort)}/start`, {
+          egress: {
+            httpProxy: `http://127.0.0.1:${String(proxyPort)}`,
+            noProxy: ["127.0.0.1"],
+          },
+        }),
+      ).rejects.toMatchObject({
+        code: "PROXY_BLOCKED_BY_POLICY",
+        policyReason: "undelegated-proxied-hostname",
+      });
+      expect(originRequests).toBe(1);
+      expect(proxyRequests).toBe(0);
+    } finally {
+      await close(origin);
+      await close(proxy);
+    }
+  });
+
   it("keeps literal private redirect targets blocked after proxied hostname delegation", async () => {
     const proxy = createHttpServer((_req, res) => {
       res.writeHead(302, { location: "http://10.0.0.1/private" });

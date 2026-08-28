@@ -1,5 +1,7 @@
 import type {
   ActiveGitDeliveryRunAuthority,
+  GitDeliveryAuthorityDenial,
+  GitDeliveryAuthorityRequest,
   GitDeliveryRunAuthorityPort,
 } from "./runBoundAuthority.js";
 import type { WorkspaceInfo } from "@oscharko-dev/keiko-workspace";
@@ -34,6 +36,61 @@ function authorityPort(
   return { current: () => adjust(initial) };
 }
 
+type AuthorityDenialCase = readonly [
+  GitDeliveryRunAuthorityPort | undefined,
+  GitDeliveryAuthorityRequest,
+  GitDeliveryAuthorityDenial,
+];
+
+const AUTHORITY_DENIAL_CASES: readonly AuthorityDenialCase[] = [
+  [undefined, REQUEST, "accepted-run-unavailable"],
+  [
+    authorityPort((active) => ({
+      ...active,
+      authority: { ...active.authority, expiresAt: NOW },
+    })),
+    REQUEST,
+    "authority-expired",
+  ],
+  [
+    authorityPort((active) => ({ ...active, projectId: "another-project" })),
+    REQUEST,
+    "workspace-out-of-envelope",
+  ],
+  [
+    authorityPort((active) => ({
+      ...active,
+      authority: { ...active.authority, effectiveMode: "governed-assist" },
+    })),
+    REQUEST,
+    "mode-denied",
+  ],
+  [
+    authorityPort((active) => ({
+      ...active,
+      authority: { ...active.authority, connectorScopes: ["source-control.read"] },
+    })),
+    REQUEST,
+    "permission-scope-missing",
+  ],
+  [
+    permittedGitDeliveryAuthority(
+      () => PROJECT_ID,
+      () => WORKSPACE_ROOT,
+    ),
+    { ...REQUEST, headBranchName: "other/branch" },
+    "branch-out-of-envelope",
+  ],
+  [
+    permittedGitDeliveryAuthority(
+      () => PROJECT_ID,
+      () => WORKSPACE_ROOT,
+    ),
+    { ...REQUEST, remoteBranchName: "dev" },
+    "branch-out-of-envelope",
+  ],
+];
+
 describe("authorizeGitDelivery", () => {
   it("allows a matching accepted autonomous delivery run", () => {
     expect(
@@ -51,54 +108,7 @@ describe("authorizeGitDelivery", () => {
     });
   });
 
-  it.each([
-    [undefined, REQUEST, "accepted-run-unavailable"],
-    [
-      authorityPort((active) => ({
-        ...active,
-        authority: { ...active.authority, expiresAt: NOW },
-      })),
-      REQUEST,
-      "authority-expired",
-    ],
-    [
-      authorityPort((active) => ({ ...active, projectId: "another-project" })),
-      REQUEST,
-      "workspace-out-of-envelope",
-    ],
-    [
-      authorityPort((active) => ({
-        ...active,
-        authority: { ...active.authority, effectiveMode: "governed-assist" },
-      })),
-      REQUEST,
-      "mode-denied",
-    ],
-    [
-      authorityPort((active) => ({
-        ...active,
-        authority: { ...active.authority, connectorScopes: ["source-control.read"] },
-      })),
-      REQUEST,
-      "permission-scope-missing",
-    ],
-    [
-      permittedGitDeliveryAuthority(
-        () => PROJECT_ID,
-        () => WORKSPACE_ROOT,
-      ),
-      { ...REQUEST, headBranchName: "other/branch" },
-      "branch-out-of-envelope",
-    ],
-    [
-      permittedGitDeliveryAuthority(
-        () => PROJECT_ID,
-        () => WORKSPACE_ROOT,
-      ),
-      { ...REQUEST, remoteBranchName: "dev" },
-      "branch-out-of-envelope",
-    ],
-  ] as const)("denies %s with %s", (port, request, reason) => {
+  it.each(AUTHORITY_DENIAL_CASES)("denies %s with %s", (port, request, reason) => {
     expect(authorizeGitDelivery(port, request, NOW)).toEqual({ allowed: false, reason });
   });
 

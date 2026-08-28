@@ -467,6 +467,30 @@ describe("numeric citation entailment", () => {
     expect(result).toMatchObject({ judgedClaims: 1, unentailed: [{ citedPaths: ["[1]"] }] });
   });
 
+  it.each([
+    ["Retention is 30 days. 【1】", ["[1]"]],
+    ["Retention is 30 days. [1] [2]", ["[1]", "[2]"]],
+  ] as const)("judges every citation-only trailing marker in %s", async (answer, citedPaths) => {
+    const judged: EntailmentJudgeInput[] = [];
+    const result = await reconcileNumericClaimEntailment(
+      answer,
+      [
+        { marker: 1, excerptText: "Retention is ten years." },
+        { marker: 2, excerptText: "Retention is five years." },
+      ],
+      {
+        judge: (input): Promise<EntailmentVerdict> => {
+          judged.push(input);
+          return Promise.resolve("unsupported");
+        },
+      },
+    );
+
+    expect(judged).toHaveLength(1);
+    expect(judged[0]?.claimText).toBe("Retention is 30 days.");
+    expect(result).toMatchObject({ judgedClaims: 1, unentailed: [{ citedPaths }] });
+  });
+
   it("keeps duplicate markers on one claim to one judge call", async () => {
     let calls = 0;
     const result = await reconcileNumericClaimEntailment(
