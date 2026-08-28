@@ -221,7 +221,7 @@ async function hashWithOpenReader(
   hash: Hash,
 ): Promise<boolean> {
   if (fs.openFileReader === undefined) return false;
-  let complete = false;
+  let complete: boolean;
   const reader = await fs.openFileReader(absolutePath);
   try {
     complete = await hashRanges(reader.readRange, size, hash);

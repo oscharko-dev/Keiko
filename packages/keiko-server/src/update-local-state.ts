@@ -388,7 +388,7 @@ function discardRemediationLease(
   } catch {
     return false;
   }
-  let matches = false;
+  let matches: boolean;
   try {
     matches = remediationLeaseMatches(readRemediationLease(claimedPath), expected);
   } catch {

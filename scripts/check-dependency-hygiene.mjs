@@ -2,8 +2,9 @@
 // Dependency-hygiene gate (GEN-SYNTH-COVERAGE-005 / GEN-PKG-DEPENDENCY-001/003/004/005).
 //
 // This deterministic, offline gate fails closed on dependency placement, missing workspace engine
-// floors, undeclared script imports, and tracked generated Next.js output. It reports metadata only:
-// package names, policy descriptions, counts, and control-character-safe paths — never file bodies.
+// floors, a workspace lint toolchain that has drifted off the root's single lane, undeclared script
+// imports, and tracked generated Next.js output. It reports metadata only: package names, policy
+// descriptions, counts, and control-character-safe paths — never file bodies.
 
 import { spawnSync } from "node:child_process";
 import { existsSync, readdirSync, readFileSync, realpathSync } from "node:fs";
@@ -18,6 +19,19 @@ const GIT_TIMEOUT_MS = 10_000;
 const GIT_MAX_BUFFER_BYTES = 8 * 1024 * 1024;
 const NEXT_BUILD_SEGMENT = /(?:^|\/)\.next(?:\/|$)/u;
 const BARE_PACKAGE = /^(@[a-z0-9][\w.-]*\/)?[a-z0-9][\w.-]*(\/[\w.-]+)*$/i;
+// Issue #2777: packages/keiko-ui runs `../../node_modules/eslint/bin/eslint.js`, so it has no
+// ESLint of its own to execute — the monorepo lints through one installed binary and the root and
+// the workspace must therefore move between ESLint majors together. When the declared ranges drift
+// npm satisfies the workspace separately: PR #3290 left the root on "^10.8.1" (resolved 10.9.1) and
+// keiko-ui on "10.8.1", which installed a second, never-executed ESLint under
+// packages/keiko-ui/node_modules and silently reopened the divergence this lane exists to prevent.
+//
+// This gate owns BOTH layers of that invariant, because npm owns neither. `npm ls` raises a problem
+// only for a missing, invalid, or extraneous edge (npm/lib/commands/ls.js getProblems); a second
+// copy that satisfies its own workspace's declared range is a valid node, so `npm ls eslint` prints
+// both and exits 0. check:eslint-lane therefore answers peer-edge validity and nothing else — the
+// duplicate is only ever caught here.
+const SINGLE_LANE_PACKAGES = ["eslint"];
 const GOVERNED_GIT_EXECUTABLE_PATHS = [
   "/usr/bin/git",
   "/usr/local/bin/git",
@@ -63,6 +77,44 @@ function collectManifestProblems(manifests) {
     }
     if (label !== "<root>" && (pkg.engines === undefined || pkg.engines.node === undefined)) {
       problems.push(`${label}: missing an "engines.node" floor (align with the root).`);
+    }
+  }
+  return problems;
+}
+
+function declaredRange(pkg, dependency) {
+  return pkg.dependencies?.[dependency] ?? pkg.devDependencies?.[dependency];
+}
+
+function collectSingleLaneProblems(manifests, rootPackage) {
+  const problems = [];
+  for (const dependency of SINGLE_LANE_PACKAGES) {
+    const rootRange = declaredRange(rootPackage, dependency);
+    for (const { label, pkg } of manifests) {
+      if (label === "<root>") continue;
+      const range = declaredRange(pkg, dependency);
+      if (range === undefined || range === rootRange) continue;
+      problems.push(
+        rootRange === undefined
+          ? `${label}: declares "${dependency}": "${range}" while the root declares none — the workspace executes the root's installed ${dependency}, so declare it at the root instead.`
+          : `${label}: declares "${dependency}": "${range}" but the root declares "${rootRange}" — the workspace executes the root's installed ${dependency}, so a diverging range installs a second copy that never runs.`,
+      );
+    }
+  }
+  return problems;
+}
+
+function collectDuplicateInstallProblems(repoRoot, manifests) {
+  const problems = [];
+  for (const dependency of SINGLE_LANE_PACKAGES) {
+    // No root copy means nothing is installed yet; the manifest rule above still applies.
+    if (!existsSync(join(repoRoot, "node_modules", dependency))) continue;
+    for (const { label } of manifests) {
+      if (label === "<root>") continue;
+      if (!existsSync(join(repoRoot, "packages", label, "node_modules", dependency))) continue;
+      problems.push(
+        `${label}: a second "${dependency}" is installed at packages/${label}/node_modules/${dependency} — the workspace executes the root's copy, so this one never runs and the two can drift apart.`,
+      );
     }
   }
   return problems;
@@ -227,6 +279,8 @@ export function checkDependencyHygiene(repoRoot) {
   const { manifests, rootPackage } = readWorkspaceManifests(repoRoot);
   const problems = [
     ...collectManifestProblems(manifests),
+    ...collectSingleLaneProblems(manifests, rootPackage),
+    ...collectDuplicateInstallProblems(repoRoot, manifests),
     ...collectScriptImportProblems(repoRoot, rootPackage),
   ];
   try {
@@ -271,7 +325,7 @@ function main(argv) {
     return;
   }
   process.stdout.write(
-    `check:dependency-hygiene PASS — ${result.manifestCount} manifests and ${result.trackedPathCount} tracked paths: dependency placement, engines, script imports, and generated-output policy satisfied.\n`,
+    `check:dependency-hygiene PASS — ${result.manifestCount} manifests and ${result.trackedPathCount} tracked paths: dependency placement, engines, single-lane lint toolchain, script imports, and generated-output policy satisfied.\n`,
   );
 }
 

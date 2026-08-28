@@ -2,7 +2,9 @@
 
 Status: implemented and locally verified on 2026-07-11, then refreshed during the post-#2665 audit
 on 2026-07-22. This matrix records the live npm registry refresh performed for issue #2293 on top
-of the TypeScript compiler/API split from #2267 and #2268.
+of the TypeScript compiler/API split from #2267 and #2268. It is a dated record of what was decided
+then, not a statement of the current tree: the ESLint rows below were superseded on 2026-08-28 and
+are kept as history rather than rewritten.
 It is dependency evidence, not a second dependency-policy subsystem; the enforceable sources remain
 the workspace manifests, root lockfile, supply-chain gates, and package-surface checks.
 
@@ -35,14 +37,24 @@ manifest pin. The clean result deduplicates both workspaces to Vitest 4.1.10.
 
 ## Deferred dependency families
 
-| Dependency family                          |              Registry candidate | Disposition                                                                                                                                                                                                                                        |
-| ------------------------------------------ | ------------------------------: | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| React, React DOM, and declaration packages |           19.2.7 / 19.2.x types | Deferred from #2293 to child issue #2295. The completed migration decisions, runtime semantics, UI/editor verification, hydration, and rollback contract are recorded in [`../react19-ui-editor-migration.md`](../react19-ui-editor-migration.md). |
-| Node.js and npm                            | Node 24 LTS / governed npm line | Deferred from #2293 to child issue #2294. The selected runtime, CI matrix, portable metadata, and operator contract are recorded in [`../runtime-toolchain.md`](../runtime-toolchain.md).                                                          |
-| TypeScript runtime API                     |                TypeScript 7.0.2 | Deferred by #2269's stable-API entry gate. Keiko retains TypeScript 6.0.3 for the programmatic API and uses the separately governed TypeScript 7 native compiler.                                                                                  |
-| UI framework TypeScript API                |                TypeScript 7.0.2 | The Next.js-supported UI compiler remains 5.7.3; the separate native TypeScript 7 source-compatibility gate proves Keiko-owned UI code.                                                                                                            |
-| ESLint 10                                  |                          10.7.0 | Deferred until `eslint-plugin-import`, `eslint-plugin-jsx-a11y`, and `eslint-plugin-react` publish ESLint 10 peer ranges. Runtime success alone is insufficient while `npm ls` is invalid.                                                         |
-| Monaco Editor                              |                          0.56.0 | Deferred to a separately governed editor migration: a `0.x` minor can change public and runtime contracts, and ADR-0042 pins the reviewed 0.55 line.                                                                                               |
+| Dependency family                          |              Registry candidate | Disposition                                                                                                                                                                                                                                                                                                                                                                                                                                         |
+| ------------------------------------------ | ------------------------------: | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| React, React DOM, and declaration packages |           19.2.7 / 19.2.x types | Deferred from #2293 to child issue #2295. The completed migration decisions, runtime semantics, UI/editor verification, hydration, and rollback contract are recorded in [`../react19-ui-editor-migration.md`](../react19-ui-editor-migration.md).                                                                                                                                                                                                  |
+| Node.js and npm                            | Node 24 LTS / governed npm line | Deferred from #2293 to child issue #2294. The selected runtime, CI matrix, portable metadata, and operator contract are recorded in [`../runtime-toolchain.md`](../runtime-toolchain.md).                                                                                                                                                                                                                                                           |
+| TypeScript runtime API                     |                TypeScript 7.0.2 | Deferred by #2269's stable-API entry gate. Keiko retains TypeScript 6.0.3 for the programmatic API and uses the separately governed TypeScript 7 native compiler.                                                                                                                                                                                                                                                                                   |
+| UI framework TypeScript API                |                TypeScript 7.0.2 | The Next.js-supported UI compiler remains 5.7.3; the separate native TypeScript 7 source-compatibility gate proves Keiko-owned UI code.                                                                                                                                                                                                                                                                                                             |
+| ESLint 10                                  |                          10.7.0 | **Superseded 2026-08-28 (issue #2777) — no longer deferred.** ESLint 10 landed on 2026-08-27 via PR #3290 and the migration was completed under #2777. The three plugins still publish ESLint <=9 peer ranges; the rule surface they describe is not loaded, and the acceptance is now an explicit reviewed `overrides` register held green by `check:eslint-lane`. See [`../next16-eslint10-ui-migration.md`](../next16-eslint10-ui-migration.md). |
+| Monaco Editor                              |                          0.56.0 | Deferred to a separately governed editor migration: a `0.x` minor can change public and runtime contracts, and ADR-0042 pins the reviewed 0.55 line.                                                                                                                                                                                                                                                                                                |
+
+### ESLint lane supersession (2026-08-28)
+
+The four ESLint rows in the table above (`eslint-config-next`, `eslint` root, `eslint` `keiko-ui`,
+`@eslint/js`) record the 2026-07-11 decision to hold the repository on the ESLint 9 lane. That
+decision no longer describes the tree. ESLint 10 was integrated on 2026-08-27 by PR #3290 and the
+migration was completed on 2026-08-28 under issue #2777: the root and `keiko-ui` share one
+`eslint@^10.8.1` declaration, `@eslint/js` moved to `^10.0.1`, and `npm ls eslint` exits `0`. The
+current decision, the live upstream peer-range evidence, and the bounded override acceptance live in
+[`../next16-eslint10-ui-migration.md`](../next16-eslint10-ui-migration.md).
 
 ## Already-current compatible direct dependencies
 

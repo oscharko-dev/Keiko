@@ -274,6 +274,13 @@ jobs:
       - run: npm run typecheck
       - run: npm run check:version-consistency
       - run: npm run check:dependency-hygiene
+      # Issue #2777: npm reports a peer-invalid graph as an advisory `npm ls` exit code that no gate
+      # read, so PR #3290 could land ESLint 10 against plugins declaring `eslint@^9` peers without a
+      # check turning red. npm stays the authority on peer validity — this asks it rather than
+      # restating it. Peer validity is ALL this answers: `npm ls` exits 0 on a second ESLint that
+      # satisfies its own workspace's range, so the duplicate-install half of the same invariant is
+      # owned by check:dependency-hygiene above, not by this step.
+      - run: npm run check:eslint-lane
       # Makes each OSV waiver's "not shipped" claim executable: an ID-wide suppression must never
       # hide the same advisory once it reaches a dependency Keiko distributes.
       - run: npm run check:osv-waiver-scope

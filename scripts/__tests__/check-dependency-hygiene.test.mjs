@@ -167,6 +167,128 @@ describe("tracked Next.js output hygiene", () => {
     );
   });
 
+  // Issue #2777: PR #3290 bumped the root to "^10.8.1" (resolved 10.9.1) and keiko-ui to "10.8.1",
+  // which installed a second ESLint under packages/keiko-ui/node_modules that the workspace lint
+  // script — it executes ../../node_modules/eslint/bin/eslint.js — never runs. The two ranges can
+  // then drift a whole major apart with every gate still green, so the drift itself is the finding.
+  it("rejects a workspace lint toolchain range that has drifted off the root's single lane", () => {
+    const root = makeRepository();
+    writeJson(resolve(root, "package.json"), {
+      engines: { node: ">=22" },
+      devDependencies: { eslint: "^10.8.1" },
+    });
+    writeJson(resolve(root, "packages", "ui", "package.json"), {
+      name: "@oscharko-dev/ui",
+      engines: { node: ">=22" },
+      devDependencies: { eslint: "10.8.1" },
+    });
+    trackAll(root);
+
+    expect(checkDependencyHygiene(root).problems).toEqual([
+      'ui: declares "eslint": "10.8.1" but the root declares "^10.8.1" — the workspace executes the root\'s installed eslint, so a diverging range installs a second copy that never runs.',
+    ]);
+  });
+
+  it("rejects a workspace lint toolchain the root does not declare at all", () => {
+    const root = makeRepository();
+    writeJson(resolve(root, "packages", "ui", "package.json"), {
+      name: "@oscharko-dev/ui",
+      engines: { node: ">=22" },
+      devDependencies: { eslint: "^10.8.1" },
+    });
+    trackAll(root);
+
+    expect(checkDependencyHygiene(root).problems).toEqual([
+      'ui: declares "eslint": "^10.8.1" while the root declares none — the workspace executes the root\'s installed eslint, so declare it at the root instead.',
+    ]);
+  });
+
+  it("reads the lint toolchain range from either dependency section", () => {
+    const root = makeRepository();
+    writeJson(resolve(root, "package.json"), {
+      engines: { node: ">=22" },
+      dependencies: { eslint: "^10.8.1" },
+    });
+    writeJson(resolve(root, "packages", "ui", "package.json"), {
+      name: "@oscharko-dev/ui",
+      engines: { node: ">=22" },
+      dependencies: { eslint: "^9.39.5" },
+    });
+    trackAll(root);
+
+    expect(checkDependencyHygiene(root).problems).toEqual([
+      'ui: declares "eslint": "^9.39.5" but the root declares "^10.8.1" — the workspace executes the root\'s installed eslint, so a diverging range installs a second copy that never runs.',
+    ]);
+  });
+
+  // The manifest rule above cannot see a duplicate whose declared ranges already agree, and npm
+  // cannot either: `npm ls` raises a problem only for a missing, invalid, or extraneous edge, so a
+  // second copy that satisfies its workspace's own range prints in the tree and exits 0. This is
+  // the only check that fails on it.
+  it("rejects a second lint toolchain installed under a workspace", () => {
+    const root = makeRepository();
+    writeJson(resolve(root, "package.json"), {
+      engines: { node: ">=22" },
+      devDependencies: { eslint: "^10.8.1" },
+    });
+    writeJson(resolve(root, "packages", "ui", "package.json"), {
+      name: "@oscharko-dev/ui",
+      engines: { node: ">=22" },
+      devDependencies: { eslint: "^10.8.1" },
+    });
+    writeJson(resolve(root, "node_modules", "eslint", "package.json"), {
+      name: "eslint",
+      version: "10.9.1",
+    });
+    writeJson(resolve(root, "packages", "ui", "node_modules", "eslint", "package.json"), {
+      name: "eslint",
+      version: "10.8.1",
+    });
+    writeFileSync(resolve(root, ".gitignore"), "node_modules\n");
+    trackAll(root);
+
+    expect(checkDependencyHygiene(root).problems).toEqual([
+      'ui: a second "eslint" is installed at packages/ui/node_modules/eslint — the workspace executes the root\'s copy, so this one never runs and the two can drift apart.',
+    ]);
+  });
+
+  it("does not report a duplicate install before anything is installed", () => {
+    const root = makeRepository();
+    writeJson(resolve(root, "package.json"), {
+      engines: { node: ">=22" },
+      devDependencies: { eslint: "^10.8.1" },
+    });
+    writeJson(resolve(root, "packages", "ui", "package.json"), {
+      name: "@oscharko-dev/ui",
+      engines: { node: ">=22" },
+      devDependencies: { eslint: "^10.8.1" },
+    });
+    writeJson(resolve(root, "packages", "ui", "node_modules", "eslint", "package.json"), {
+      name: "eslint",
+      version: "10.8.1",
+    });
+    writeFileSync(resolve(root, ".gitignore"), "node_modules\n");
+    trackAll(root);
+
+    expect(checkDependencyHygiene(root).problems).toEqual([]);
+  });
+
+  it("accepts a workspace that shares the root's declared lint toolchain range", () => {
+    const root = makeRepository();
+    writeJson(resolve(root, "package.json"), {
+      engines: { node: ">=22" },
+      devDependencies: { eslint: "^10.8.1" },
+    });
+    writeJson(resolve(root, "packages", "ui", "package.json"), {
+      name: "@oscharko-dev/ui",
+      engines: { node: ">=22" },
+      devDependencies: { eslint: "^10.8.1" },
+    });
+    trackAll(root);
+
+    expect(checkDependencyHygiene(root).problems).toEqual([]);
+  });
+
   it("fails closed with a fixed diagnostic outside a Git repository", () => {
     const root = makeRepository();
     rmSync(resolve(root, ".git"), { recursive: true, force: true });
