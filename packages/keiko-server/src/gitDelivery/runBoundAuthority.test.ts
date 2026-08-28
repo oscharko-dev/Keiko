@@ -3,6 +3,7 @@ import type {
   GitDeliveryRunAuthorityPort,
 } from "./runBoundAuthority.js";
 import type { WorkspaceInfo } from "@oscharko-dev/keiko-workspace";
+import type { ServerLogEvent } from "../observability/index.js";
 import { describe, expect, it } from "vitest";
 import { gitDeliveryAuthorityDenial } from "./requestPreparation.js";
 import { authorizeGitDelivery } from "./runBoundAuthority.js";
@@ -92,7 +93,7 @@ describe("authorizeGitDelivery", () => {
   });
 
   it("writes a body-free authority audit event through the injected activity-log seam", () => {
-    const events: Array<Record<string, unknown>> = [];
+    const events: ServerLogEvent[] = [];
     const workspace = { root: WORKSPACE_ROOT } as WorkspaceInfo;
     const result = gitDeliveryAuthorityDenial(
       { correlationId: "correlation-1" } as never,
