@@ -590,6 +590,73 @@ describe("handleGatewaySetup", () => {
     deps.store.close();
   });
 
+  it("rejects temporary chat admission when its workflow model ids are not configured", async () => {
+    const uiDir = await tempDir("keiko-gw-transient-workflow-ui-");
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir: await tempDir("keiko-gw-transient-workflow-ev-"),
+      env: { ...VAULT_ENV },
+      uiDbPath: join(uiDir, "keiko-ui.db"),
+      gatewayEmbeddingProbe: PASSTHROUGH_EMBEDDING_PROBE,
+      gatewaySetupTester: () =>
+        Promise.reject(Object.assign(new Error("provider unavailable"), { code: "ETIMEDOUT" })),
+    });
+
+    const result = await handleGatewaySetup(
+      ctx({
+        baseUrl: "https://gateway.example.com/v1",
+        apiKey: "test-token",
+        deploymentNames: ["temporarily-offline"],
+        workflowEligibleModelIds: ["missing-chat"],
+      }),
+      deps,
+    );
+
+    expect(result).toMatchObject({
+      status: 400,
+      body: {
+        error: { message: "workflowEligibleModelIds must reference configured chat models." },
+      },
+    });
+    deps.store.close();
+  });
+
+  it("logs the original temporary chat-admission failure", async () => {
+    const uiDir = await tempDir("keiko-gw-transient-diagnostic-ui-");
+    const diagnostics: ServerDiagnosticRecord[] = [];
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir: await tempDir("keiko-gw-transient-diagnostic-ev-"),
+      env: { ...VAULT_ENV },
+      uiDbPath: join(uiDir, "keiko-ui.db"),
+      gatewayEmbeddingProbe: PASSTHROUGH_EMBEDDING_PROBE,
+      gatewaySetupTester: () =>
+        Promise.reject(Object.assign(new Error("provider unavailable"), { code: "ETIMEDOUT" })),
+      diagnostics: { record: (record): void => void diagnostics.push(record) },
+    });
+
+    try {
+      await handleGatewaySetup(
+        ctx({
+          baseUrl: "https://gateway.example.com/v1",
+          apiKey: "test-token",
+          deploymentNames: ["temporarily-offline"],
+        }),
+        deps,
+      );
+
+      const verificationDiagnostic = diagnostics.find(
+        (record) => record.source === "gateway.setup.provider-verify",
+      );
+      expect(verificationDiagnostic).toMatchObject({
+        errorClass: "Error",
+        code: "ETIMEDOUT",
+      });
+    } finally {
+      deps.store.close();
+    }
+  });
+
   it("replaces an older partial capability observation instead of refreshing its fields", async () => {
     const uiDir = await tempDir("keiko-gw-capability-replace-observation-ui-");
     const deps = buildUiHandlerDeps({

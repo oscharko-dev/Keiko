@@ -5835,6 +5835,10 @@ class DeferredTemporaryChatAdmission extends Error {
   }
 }
 
+function originalSetupVerificationError(error: unknown): unknown {
+  return error instanceof DeferredTemporaryChatAdmission ? error.original : error;
+}
+
 interface SetupCandidateAttempts {
   readonly failures: SetupCandidateFailure[];
   readonly result?: RouteResult | undefined;
@@ -5856,13 +5860,13 @@ async function attemptSetupCandidates(
     } catch (error) {
       reportSetupVerificationFailure(
         deps,
-        error,
+        originalSetupVerificationError(error),
         request.correlationId,
         "gateway.setup.provider-verify",
       );
       failures.push({
         baseUrl,
-        error: error instanceof DeferredTemporaryChatAdmission ? error.original : error,
+        error: originalSetupVerificationError(error),
         ...(error instanceof DeferredTemporaryChatAdmission
           ? { resumeTemporaryAdmission: error.resume }
           : {}),
@@ -5889,7 +5893,10 @@ function temporaryAdmissionOrFailure(
     !failures.some((failure) => definitiveGatewaySetupFailure(failure.error))
   ) {
     try {
-      return finalizeVerifiedCandidate(resume(), current, deps, gatewayConfig, request);
+      const verified = resume();
+      const workflowEligibilityError = validateWorkflowEligibleModelIds(request, verified.config);
+      if (workflowEligibilityError !== undefined) return workflowEligibilityError;
+      return finalizeVerifiedCandidate(verified, current, deps, gatewayConfig, request);
     } catch (error) {
       reportSetupVerificationFailure(
         deps,
