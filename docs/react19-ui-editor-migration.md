@@ -1,8 +1,11 @@
 # React 19 UI and Editor Migration
 
 Status: implemented and locally verified for issue #2295 on 2026-07-11. A clean Linux environment
-using Node.js 24.18.0 and npm 11.16.0 reproduced the authoritative editor bundle fingerprint
-`ba49c1483866b583330343f2e5c72451928540aa958a5c493c6626e29f5a66a8`.
+using Node.js 24.18.0 and npm 11.16.0 reproduced the editor release evidence committed at that
+time. The authoritative measurement fingerprint is owned by `docs/release/1209-bundle-evidence.json`
+(`measurementSha256`) and is enforced by `npm run check:editor-release-evidence`. It moves with
+every `keiko-ui` bundle change, so this document names the evidence file instead of carrying a
+second copy of the value that would drift out of it.
 
 ## Decision and supported dependency set
 
@@ -77,8 +80,17 @@ accessibility regression, editor bundle/performance regression, or visible CSS d
 Rollback is atomic; do not retain a mixture of React 18 declarations and React 19 compatibility
 types.
 
-1. Restore the UI runtime and declaration manifests, editor peer/development manifests, lockfile,
-   and the compatibility changes listed above from the pre-migration revision as one reviewed unit.
+1. Pin React back at the manifest and lockfile level rather than restoring a pre-migration
+   revision: set `react`, `react-dom`, `@types/react`, and `@types/react-dom` in
+   `packages/keiko-ui/package.json`, and the editor peer and development entries in
+   `packages/keiko-editor/package.json`, to the pre-migration React 18 set (`react`/`react-dom`
+   18.3.1, `@types/react` 18.3.29, `@types/react-dom` 18.3.7), regenerate `package-lock.json` from
+   those manifests, and reverse the React 19 typing accommodations listed under Compatibility work
+   as one reviewed unit. A historical restore is not available: the migration landed inside the
+   combined squash commit `5c885161` ("feat(platform): modernize TypeScript, Node, dependencies,
+   and React (#2304)", 160 files) that also carries the TypeScript 7, Node 24 / npm 11, and
+   secret-scanning changes, and the React pin has moved since (19.2.7 at that commit, 19.2.8
+   today).
 2. Run `npm ci` to remove the React 19 dependency graph rather than reusing `node_modules`.
 3. Re-run the complete verification contract, including a production static export and clean Linux
    editor release evidence.

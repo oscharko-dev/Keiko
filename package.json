@@ -133,6 +133,7 @@
     "check:grounded-entailment": "node scripts/check-grounded-entailment.mjs",
     "check:context-quality": "node scripts/check-context-quality.mjs",
     "check:error-observability": "node scripts/check-error-observability.mjs",
+    "check:dependency-currency": "node scripts/check-dependency-currency.mjs",
     "check:dependency-hygiene": "node scripts/check-dependency-hygiene.mjs",
     "check:knip": "node scripts/check-knip.mjs",
     "check:external-quality-config": "node scripts/check-external-quality-config.mjs",
@@ -176,6 +177,7 @@
     "check:install-script-approvals": "node scripts/check-install-script-approvals.mjs",
     "check:local-state": "node --experimental-sqlite --disable-warning=ExperimentalWarning scripts/check-local-state.mjs --self-test",
     "check:shell-spawn-guardrails": "node scripts/check-shell-spawn-guardrails.mjs",
+    "check:secret-scanning-queue": "node scripts/check-secret-scanning-queue.mjs",
     "check:security-regression-matrix": "node scripts/check-security-regression-matrix.mjs",
     "audit:local-state": "node --experimental-sqlite --disable-warning=ExperimentalWarning scripts/check-local-state.mjs",
     "check:coverage:quality": "node scripts/check-package-coverage.mjs --baseline docs/qa/package-coverage-baseline.json --all-metrics --enforce-file-floors --release-target keiko-ui=88 --release-target keiko-cli=87",
@@ -230,7 +232,8 @@
     "lightningcss": "1.32.0",
     "eslint-plugin-jsx-a11y": {
       "axe-core": "4.12.1"
-    }
+    },
+    "@napi-rs/canvas": "1.0.8"
   },
   "devDependencies": {
     "@babel/core": "^8.0.1",
@@ -246,7 +249,7 @@
     "@types/yauzl": "^3.4.0",
     "@typescript/native": "npm:typescript@~7.0.2",
     "@vitejs/plugin-react": "6.0.5",
-    "@vitest/coverage-v8": "^4.1.10",
+    "@vitest/coverage-v8": "^4.1.11",
     "acorn": "^8.16.0",
     "dependency-cruiser": "^18.0.0",
     "eslint": "^10.8.1",
@@ -256,7 +259,7 @@
     "knip": "6.32.2",
     "prettier": "^3.0.0",
     "typescript-eslint": "^8.67.0",
-    "vitest": "^4.1.10",
+    "vitest": "^4.1.11",
     "yaml": "2.9.0"
   },
   "dependencies": {

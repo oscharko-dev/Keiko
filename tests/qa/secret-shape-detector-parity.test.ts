@@ -28,6 +28,8 @@
 // wired into only one of the three detectors lands in a class by itself and its tuple exposes
 // exactly which detector(s) it is missing from.
 
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { looksLikeSecretShape } from "@oscharko-dev/keiko-contracts/runtime/memory";
 import { containsCredentialShape, redact } from "@oscharko-dev/keiko-security";
@@ -65,6 +67,11 @@ interface SecretShapeClass {
 const JWT =
   "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dozjgNryP4J3jVmNHl0w5N_XgL0n3I9PlFUP0THsR8U"; // gitleaks:allow
 
+// Credential prefixes GitHub's PARTNER secret scanner alerts on from the prefix alone. A fixture
+// for one of these must be assembled by concatenation so the contiguous form never exists in this
+// file's source; the pin at the bottom of this file enforces that. See alert #20 (#2296).
+const PARTNER_SCANNED_PREFIXES = ["sk-", "xoxb-", "ghp_", "AKIA"] as const;
+
 const SECRET_SHAPE_CLASSES: readonly SecretShapeClass[] = [
   {
     className: "issuer-prefixed-token",
@@ -78,11 +85,17 @@ const SECRET_SHAPE_CLASSES: readonly SecretShapeClass[] = [
       // scanner does not misclassify a test fixture as a leak. The whole point of the parity
       // test IS to run these shapes through keiko-contracts / keiko-security / keiko-ui detectors
       // and pin their agreement.
-      { id: "openai-key", value: "sk-abcdefghijklmnopqrstuvwxyz0123456789ABCD" }, // gitleaks:allow
-      { id: "aws-key", value: "AKIAABCDEFGHIJKLMNOP" }, // gitleaks:allow
+      // PARTNER_SCANNED_PREFIXES values are assembled by concatenation so the contiguous form
+      // never appears in this file's source. `gitleaks:allow` suppresses gitleaks only, and
+      // GitHub's partner secret scanner is a separate detector that alerts on the prefix alone
+      // (#2296, alert #20). The pin at the bottom of this file enforces the split.
+      // The OpenAI body is split TWICE on purpose: as one 40-character literal it is itself
+      // the shape of an AWS Secret Access Key, and sitting next to the AKIA line it completes
+      // a credential PAIR that push protection blocks. Repairing one detector's trigger can
+      // create another's, so no fixture here may leave a long opaque literal standing alone.
+      { id: "openai-key", value: "sk-" + "abcdefghijklmnopqrstuvwxyz" + "0123456789ABCD" }, // gitleaks:allow
+      { id: "aws-key", value: "AKIA" + "ABCDEFGHIJKLMNOP" }, // gitleaks:allow
       { id: "github-classic-pat", value: "ghp_" + "A".repeat(40) }, // gitleaks:allow
-      // Split literal so the contiguous string never appears in the file — GitHub's secret
-      // scanner flags the concatenated form as a real Slack token pattern otherwise.
       { id: "slack-token", value: "xoxb-" + "1234567890-abcdefghijklmnop" }, // gitleaks:allow
       { id: "pem-header", value: "-----BEGIN RSA PRIVATE KEY-----" }, // gitleaks:allow
       {
@@ -290,6 +303,25 @@ describe("secret-shape detector parity (keiko-contracts / keiko-security / works
       if (looksLikeSecretShape(fixture.value)) {
         expect(isSecretShapedString(fixture.value), fixture.id).toBe(true);
       }
+    }
+  });
+
+  it("never stores a partner-scannable credential prefix as one contiguous source literal", () => {
+    // Incident pin (#2296, repository secret-scanning alert #20 `openai_api_key`). GitHub's
+    // partner secret scanner is a DIFFERENT detector from gitleaks: a `gitleaks:allow` comment
+    // suppresses gitleaks only, so a fixture written as one contiguous literal still raises a
+    // repository secret-scanning alert. The neighbouring `slack-token` and `github-classic-pat`
+    // fixtures were already split across a concatenation for exactly this reason; the `openai-key`
+    // fixture was not, and alert #20 fired on it. This pin closes the CLASS rather than the single
+    // instance -- it reads this file's own source, so any future fixture that reintroduces a
+    // contiguous partner-scannable literal fails here instead of in the repository's alert list.
+    const source = readFileSync(fileURLToPath(import.meta.url), "utf8");
+    for (const prefix of PARTNER_SCANNED_PREFIXES) {
+      const contiguous = new RegExp(`"${prefix}[A-Za-z0-9_-]{16,}"`, "u");
+      expect(
+        contiguous.test(source),
+        `a "${prefix}..." fixture is a contiguous literal; split it across a concatenation`,
+      ).toBe(false);
     }
   });
 

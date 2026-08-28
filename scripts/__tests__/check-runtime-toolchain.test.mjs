@@ -7,6 +7,7 @@ import {
   evaluateRuntimeToolchain,
   readNpmVersionFromPath,
   readWorkspaceNodeEngines,
+  readWorkspaceNpmEngines,
   runtimeInput,
 } from "../check-runtime-toolchain.mjs";
 
@@ -38,6 +39,7 @@ const baseline = {
     { name: "@oscharko-dev/keiko-contracts", value: ">=24.18.0 <25" },
     { name: "@oscharko-dev/keiko-ui", value: ">=24.18.0 <25" },
   ],
+  workspaceNpmEngines: [{ name: "@oscharko-dev/keiko-ui", value: "11.16.0" }],
 };
 
 describe("evaluateRuntimeToolchain", () => {
@@ -60,12 +62,22 @@ describe("evaluateRuntimeToolchain", () => {
     ["portable drift", { portableNodeVersion: "24.17.0" }],
     ["unsupported runtime", { runtimeNodeVersion: "26.0.0" }],
     ["npm engine drift", { rootNpmEngine: ">=11" }],
+    [
+      "stale workspace npm engine",
+      { workspaceNpmEngines: [{ name: "@oscharko-dev/keiko-ui", value: "11.18.0" }] },
+    ],
     ["package-manager drift", { packageManager: "npm@12.0.1" }],
     ["executed npm drift", { runtimeNpmVersion: "11.18.0" }],
   ])("rejects %s", (_label, change) => {
     expect(evaluateRuntimeToolchain({ ...baseline, ...change }, { exactNode: false })).not.toEqual(
       [],
     );
+  });
+
+  it("accepts a workspace graph where no workspace declares an npm engine", () => {
+    expect(
+      evaluateRuntimeToolchain({ ...baseline, workspaceNpmEngines: [] }, { exactNode: true }),
+    ).toEqual([]);
   });
 
   it("rejects a non-approved Node patch in exact CI mode", () => {
@@ -144,6 +156,33 @@ describe("readWorkspaceNodeEngines", () => {
   });
 });
 
+describe("readWorkspaceNpmEngines", () => {
+  it("reports only workspaces that declare an npm engine, sorted by package name", () => {
+    const root = mkdtempSync(join(tmpdir(), "keiko-runtime-npm-engines-"));
+    fixtureRoots.push(root);
+    for (const name of ["zeta", "alpha", "beta", "fixtures-only"]) {
+      mkdirSync(join(root, "packages", name), { recursive: true });
+    }
+    writeFileSync(
+      join(root, "packages", "zeta", "package.json"),
+      `${JSON.stringify({ name: "@oscharko-dev/zeta", engines: { npm: "11.18.0" } })}\n`,
+    );
+    writeFileSync(
+      join(root, "packages", "alpha", "package.json"),
+      `${JSON.stringify({ name: "@oscharko-dev/alpha", engines: { npm: "11.16.0" } })}\n`,
+    );
+    writeFileSync(
+      join(root, "packages", "beta", "package.json"),
+      `${JSON.stringify({ name: "@oscharko-dev/beta", engines: { node: ">=24.18.0 <25" } })}\n`,
+    );
+
+    expect(readWorkspaceNpmEngines(root)).toEqual([
+      { name: "@oscharko-dev/alpha", value: "11.16.0" },
+      { name: "@oscharko-dev/zeta", value: "11.18.0" },
+    ]);
+  });
+});
+
 describe("runtimeInput", () => {
   it("assembles declared, approved, executed, and workspace runtime metadata", () => {
     const root = mkdtempSync(join(tmpdir(), "keiko-runtime-input-"));
@@ -180,7 +219,44 @@ describe("runtimeInput", () => {
         runtimeNodeVersion: process.versions.node,
         runtimeNpmVersion: "11.16.0",
         workspaceNodeEngines: [{ name: "@oscharko-dev/alpha", value: ">=24.18.0 <25" }],
+        workspaceNpmEngines: [],
       });
+    } finally {
+      if (previousPath === undefined) delete process.env.PATH;
+      else process.env.PATH = previousPath;
+    }
+  });
+
+  it("carries a drifted workspace npm engine through to a gate failure", () => {
+    const root = mkdtempSync(join(tmpdir(), "keiko-runtime-input-npm-drift-"));
+    fixtureRoots.push(root);
+    const npm = npmFixture("11.16.0");
+    symlinkSync(npm.npmCli, join(npm.root, "npm"));
+    mkdirSync(join(root, "packages", "ui"), { recursive: true });
+    writeFileSync(
+      join(root, "package.json"),
+      `${JSON.stringify({
+        engines: { node: ">=24.18.0 <25", npm: "11.16.0" },
+        packageManager: "npm@11.16.0",
+      })}\n`,
+    );
+    writeFileSync(
+      join(root, "portable-runtime-approvals.json"),
+      `${JSON.stringify({ node: { version: "24.18.0" } })}\n`,
+    );
+    writeFileSync(
+      join(root, "packages", "ui", "package.json"),
+      `${JSON.stringify({
+        name: "@oscharko-dev/keiko-ui",
+        engines: { node: ">=24.18.0 <25", npm: "11.18.0" },
+      })}\n`,
+    );
+    const previousPath = process.env.PATH;
+    process.env.PATH = npm.root;
+    try {
+      expect(evaluateRuntimeToolchain(runtimeInput(root), { exactNode: false })).toEqual([
+        "@oscharko-dev/keiko-ui: npm engine policy is stale",
+      ]);
     } finally {
       if (previousPath === undefined) delete process.env.PATH;
       else process.env.PATH = previousPath;

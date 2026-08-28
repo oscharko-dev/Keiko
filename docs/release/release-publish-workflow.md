@@ -346,8 +346,10 @@ The `publish` job authenticates to the npm registry with [npm Trusted Publishing
   into its temporary `.npmrc` when one of those env vars (or a local `.env`) is actually present,
   so leaving them unset in CI is what lets the npm CLI attempt the OIDC exchange.
 - npm CLI `>= 11.5.1` is required. The workflow pins an exact npm version with
-  `npm install --global npm@<pinned>` right after `actions/setup-node`, because Node 22.x does not
-  bundle a new-enough npm.
+  `npm install --global npm@<pinned>` right after `actions/setup-node`. Node 24.18.0 already
+  bundles npm 11.16.0, so the pin is not about clearing that floor: it holds the publish npm at
+  the exact governed version, because a drifted hand-maintained pin is what broke the 0.3.1
+  publish and a tag freezes whatever it captured.
 - **The one-time npmjs.com setup is done (issue #3088).** The package's Settings → Trusted
   Publishers page names this repository, the workflow filename `release.yml`, and the `npm-publish`
   environment. It was verified by the v0.3.8 dispatch publish on 2026-08-16: the `Publish to npm`
