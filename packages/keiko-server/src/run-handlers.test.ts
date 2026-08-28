@@ -405,6 +405,38 @@ describe("GET /api/runs/:runId/events (SSE)", () => {
     expect(text).toContain(`"runId":"${body.runId}"`);
   });
 
+  // User finding #2456 — the wake-up replay burst: a reconnecting desktop passes per-run resume
+  // cursors so the aggregate stream stops re-replaying every run's entire ring buffer. Driven
+  // through the real HTTP server so the query string provably reaches the handler via ctx.url.
+  it("skips replay for a run whose resume cursor is already past its buffer", async () => {
+    await start(fakeModel(["```diff", TEST_DIFF.trimEnd(), "```"].join("\n")));
+    const { body } = await createRun();
+    await awaitTerminal(body.runId);
+
+    const controller = new AbortController();
+    const res = await fetch(
+      `${base()}/api/runs/events?resume=${encodeURIComponent(body.runId)}:999999`,
+      { signal: controller.signal },
+    );
+    const reader = res.body?.getReader();
+    expect(reader).toBeDefined();
+    if (reader === undefined) {
+      throw new Error("expected an SSE reader");
+    }
+
+    let text = "";
+    for (let i = 0; i < 5 && !text.includes("event: ready"); i += 1) {
+      const chunk = await reader.read();
+      if (chunk.done) break;
+      text += new TextDecoder().decode(chunk.value);
+    }
+    controller.abort();
+    await reader.cancel().catch(() => undefined);
+
+    expect(text).toContain("event: ready");
+    expect(text).not.toContain('"type":"workflow:started"');
+  });
+
   it("returns 404 for an unknown run", async () => {
     await start(fakeModel("noop"));
     const res = await fetch(`${base()}/api/runs/unknown/events`);

@@ -29,6 +29,13 @@ import { FilesWidget, filesWidgetTestInternals } from "./FilesWidget";
 import { notifyGitRepositoryStateInvalidated } from "./git-repository-state-events";
 import { resetSharedEventSourcesForTests } from "./sharedEventSource";
 import { notifyWorkspaceFileMutated } from "./workspace-file-events";
+import selectableTextStyles from "./shared/selectableText.module.css";
+
+function selectableTextClass(name: keyof typeof selectableTextStyles): string {
+  const value = selectableTextStyles[name];
+  if (value === undefined) throw new Error(`missing selectableText CSS module class ${name}`);
+  return value;
+}
 
 vi.mock("../../../../../lib/api", async () => {
   const actual =
@@ -806,9 +813,12 @@ describe("FilesWidget", () => {
 
     expect(fetchGitDiff).toHaveBeenCalledWith({ root: "/repo space", path: "package.json" });
     expect(onOpenFile).toHaveBeenCalledTimes(2);
-    expect(await screen.findByRole("region", { name: "Git diff: package.json" })).toHaveTextContent(
-      "+new",
-    );
+    const diffRegion = await screen.findByRole("region", { name: "Git diff: package.json" });
+    expect(diffRegion).toHaveTextContent("+new");
+    // Issue #2710 — same selectable-text contract as the file preview region:
+    // the interaction guards must see this as an embedded text surface.
+    expect(diffRegion).toHaveAttribute("data-text-selectable", "true");
+    expect(diffRegion).toHaveClass(selectableTextClass("cmp-selectable-text"));
   });
 
   it("renders complete file badges and collapsed descendant folder aggregates", async () => {
@@ -1906,6 +1916,36 @@ describe("FilePreview", () => {
     expect(screen.getByText("Refresh failed")).toBeInTheDocument();
     expect(previewRegion).toHaveTextContent("old value");
     expect(fetchFilesPreview).toHaveBeenCalledTimes(2);
+  });
+
+  it("issue #2710 — makes the previewed text selectable, with line numbers excluded from the copy", async () => {
+    vi.mocked(fetchFilesPreview).mockResolvedValueOnce({
+      root: "/repo",
+      path: "hello.txt",
+      name: "hello.txt",
+      sizeBytes: 10,
+      modifiedAt: 1,
+      extension: "txt",
+      mime: "text/plain",
+      symlink: false,
+      kind: "text",
+      content: "hello\n",
+      truncated: false,
+      maxBytes: 1_000_000,
+    });
+
+    render(<FilePreview root="/repo" path="hello.txt" onClose={() => undefined} />);
+
+    const previewRegion = await screen.findByRole("region", { name: "File preview: hello.txt" });
+    // data-text-selectable is the contract isEmbeddedClipboardSurfaceTarget and
+    // isTextEntryTarget both key off — without it, the interaction guards treat
+    // this region as ordinary workspace canvas (marquee-select target, clipboard
+    // shortcuts intercepted) instead of an embedded text surface.
+    expect(previewRegion).toHaveAttribute("data-text-selectable", "true");
+    expect(previewRegion).toHaveClass(selectableTextClass("cmp-selectable-text"));
+    const lineNumber = previewRegion.querySelector(".fpv-num");
+    expect(lineNumber).not.toBeNull();
+    expect(lineNumber).toHaveClass(selectableTextClass("cmp-selectable-text-chrome"));
   });
 
   it("does not render a direct chat connector for the previewed file", async () => {

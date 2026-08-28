@@ -44,6 +44,34 @@ export type OpenEditorFileResult =
   | { readonly ok: true; readonly windowId: string }
   | { readonly ok: false; readonly message: string };
 
+// Issue #2150 follow-up — copy/cut/paste report counts so the workspace can
+// announce the outcome (ADR-0123 D5 requires skipped windows to carry a
+// documented reason; a silent no-op is not one). `captured` is the number of
+// windows the clipboard took (for cut: also closed); `skipped` is the number of
+// selected windows that cannot be duplicated (singleton/keyed/minimized/
+// maximized descriptors); `overflow` is the number of duplicable windows that
+// only exceeded the clipboard's per-copy cap — a different reason that must not
+// be announced as "not duplicable".
+export interface WorkspaceClipboardCaptureResult {
+  readonly captured: number;
+  readonly skipped: number;
+  readonly overflow: number;
+}
+
+// Cut removes windows, and a connected window only leaves once its scope and
+// connector unbinds are accepted — a refusal deliberately keeps it open. The
+// synchronous fields describe what went into the clipboard (known at once);
+// `settled` resolves with what actually left the workspace, so the caller
+// announces the real outcome instead of an optimistic one.
+export interface WorkspaceClipboardCutResult extends WorkspaceClipboardCaptureResult {
+  readonly settled: Promise<WorkspaceClipboardCaptureResult>;
+}
+
+export interface WorkspaceClipboardPasteResult {
+  readonly pasted: number;
+  readonly limitReached: boolean;
+}
+
 export interface WorkspaceApi {
   readonly add: (type: WindowType, cfg?: AppWindow["cfg"]) => string | null;
   readonly openEditorFile: (request: OpenEditorFileRequest) => OpenEditorFileResult;
@@ -58,8 +86,9 @@ export interface WorkspaceApi {
     dx: number,
     dy: number,
   ) => { readonly dx: number; readonly dy: number };
-  readonly copySelectedWindows: () => boolean;
-  readonly pasteCopiedWindows: () => boolean;
+  readonly copySelectedWindows: () => WorkspaceClipboardCaptureResult;
+  readonly cutSelectedWindows: () => WorkspaceClipboardCutResult;
+  readonly pasteCopiedWindows: () => WorkspaceClipboardPasteResult;
   readonly close: (id: string) => void;
   readonly minimize: (id: string) => void;
   readonly restore: (id: string) => void;

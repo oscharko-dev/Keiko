@@ -10,6 +10,7 @@ import type { AppWindow, Connection } from "./types";
 import type { WorkspaceApi } from "../hooks/useWorkspace.types";
 import { usePublishChatWindowActivity } from "./chatWindowActivity";
 import type { ChatWindowGroundingActivity } from "./chatWindowActivity";
+import { workspaceApiFixture } from "../../../../test-utils/workspace-api-fixture";
 
 function appWindow(patch: Partial<AppWindow> & Pick<AppWindow, "id" | "type">): AppWindow {
   return {
@@ -25,51 +26,7 @@ function appWindow(patch: Partial<AppWindow> & Pick<AppWindow, "id" | "type">): 
   };
 }
 
-function api(patch: Partial<WorkspaceApi> = {}): WorkspaceApi {
-  return {
-    add: vi.fn(() => null),
-    openEditorFile: vi.fn(() => ({ ok: false as const, message: "Unable to open editor." })),
-    toggleTool: vi.fn(),
-    focus: vi.fn(),
-    currentSelection: vi.fn(() => ({ focusedWindowId: null, selectedWindowIds: [] })),
-    replaceSelection: vi.fn(),
-    toggleWindowSelection: vi.fn(),
-    clearSelection: vi.fn(),
-    moveSelectedWindowsBy: vi.fn(() => ({ dx: 0, dy: 0 })),
-    copySelectedWindows: vi.fn(() => false),
-    pasteCopiedWindows: vi.fn(() => false),
-    close: vi.fn(),
-    minimize: vi.fn(),
-    restore: vi.fn(),
-    maximize: vi.fn(),
-    update: vi.fn(),
-    setSnap: vi.fn(),
-    commitSnap: vi.fn(),
-    tileAll: vi.fn(),
-    splitFront: vi.fn(),
-    cascade: vi.fn(),
-    startConnect: vi.fn(),
-    confirmConnect: vi.fn(),
-    cancelConnect: vi.fn(),
-    removeConn: vi.fn(),
-    updateConnBoundScope: vi.fn(),
-    connect: vi.fn(),
-    linkedFilesRoot: vi.fn(() => null),
-    linkedAllFilesRoots: vi.fn(() => []),
-    linkedConnectorCapsuleIds: vi.fn(() => []),
-    linkedConnectorCapsuleSetIds: vi.fn(() => []),
-    linkedFigmaSnapshotRunIds: vi.fn(() => []),
-    linkedFilesContext: vi.fn(() => null),
-    currentFilesContext: vi.fn(() => null),
-    zoomTo: vi.fn(),
-    fitView: vi.fn(),
-    resetView: vi.fn(),
-    panBy: vi.fn(),
-    rect: vi.fn(() => null),
-    currentView: vi.fn(() => ({ x: 0, y: 0, zoom: 1 })),
-    ...patch,
-  };
-}
+const api = workspaceApiFixture;
 
 // Two windows far enough apart that the edge-midpoint badge does not land under either window rect,
 // so the badge renders and is clickable.
