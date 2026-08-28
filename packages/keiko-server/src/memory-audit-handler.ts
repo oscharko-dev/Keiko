@@ -26,10 +26,9 @@
 // Corrupt audit manifests are never reset or overwritten; append attempts fail closed and
 // preserve the existing artifact for operator investigation.
 //
-// Known limitation: the `previousStatus` map is in-memory only. After a server restart the
-// first `memory:updated` for any record lacks transition context and is classified as a
-// plain `memory:updated` (not promoted to `memory:accepted` / `memory:archived` / etc.).
-// The downstream record is captured fully — only the kind classification is degraded.
+// The composition root seeds the in-memory pre-image cache from the vault's body-free metadata
+// before it accepts mutations. That preserves semantic transition classification across restarts
+// without loading or retaining memory bodies.
 //
 // Edge and embedding events are NOT bridged (out of audit scope per the audit invariant
 // in @oscharko-dev/keiko-contracts/memory: audit records carry no body or payload, and
@@ -40,7 +39,12 @@
 // helper exported below is the single emission point for those direct audit signals.
 
 import { createHash, randomUUID } from "node:crypto";
-import type { MemoryAuditEvent, MemoryId, MemoryStatus } from "@oscharko-dev/keiko-contracts";
+import type {
+  MemoryAuditEvent,
+  MemoryId,
+  MemoryRecord,
+  MemoryStatus,
+} from "@oscharko-dev/keiko-contracts";
 import type { EvidenceStore } from "@oscharko-dev/keiko-evidence";
 import type { MemoryEvent } from "@oscharko-dev/keiko-memory-vault";
 import { isValidCorrelationId } from "./correlation.js";
@@ -117,7 +121,9 @@ function reportAuditPersistFailure(
   );
 }
 
-export type MemoryAuditHandler = (event: MemoryEvent) => void;
+export type MemoryAuditHandler = ((event: MemoryEvent) => void) & {
+  readonly seed: (records: readonly Pick<MemoryRecord, "id" | "status" | "pinned">[]) => void;
+};
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -346,7 +352,7 @@ export function createMemoryAuditHandler(options: MemoryAuditHandlerOptions): Me
   const previousStatus = new Map<MemoryId, MemoryStatus>();
   const previousPinned = new Map<MemoryId, boolean>();
 
-  return (event: MemoryEvent): void => {
+  const handler = (event: MemoryEvent): void => {
     const ctx: BuildContext = {
       occurredAt: now(),
       newEventId,
@@ -366,6 +372,23 @@ export function createMemoryAuditHandler(options: MemoryAuditHandlerOptions): Me
       reportAuditPersistFailure(options, "memory-audit-handler.bridge", runId, error);
     }
   };
+  return Object.assign(handler, {
+    seed: (records: readonly Pick<MemoryRecord, "id" | "status" | "pinned">[]): void =>
+      seedStateCache(records, previousStatus, previousPinned),
+  });
+}
+
+function seedStateCache(
+  records: readonly Pick<MemoryRecord, "id" | "status" | "pinned">[],
+  previousStatus: Map<MemoryId, MemoryStatus>,
+  previousPinned: Map<MemoryId, boolean>,
+): void {
+  previousStatus.clear();
+  previousPinned.clear();
+  for (const record of records) {
+    previousStatus.set(record.id, record.status);
+    previousPinned.set(record.id, record.pinned);
+  }
 }
 
 function mapVaultEvent(
@@ -548,5 +571,7 @@ export function createMemoryAuditDeleteCommitHandler(
 // `onMemoryEvent` port wired so the vault doesn't have to special-case undefined.
 
 export function createNoopMemoryAuditHandler(): MemoryAuditHandler {
-  return (): void => undefined;
+  return Object.assign((_: MemoryEvent): void => undefined, {
+    seed: (_records: readonly Pick<MemoryRecord, "id" | "status" | "pinned">[]): void => undefined,
+  });
 }

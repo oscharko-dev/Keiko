@@ -16,7 +16,14 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { WorkspaceFs, WorkspaceStat } from "@oscharko-dev/keiko-workspace";
-import type { KnowledgeCapsuleId, KnowledgeSourceId } from "@oscharko-dev/keiko-contracts";
+import type {
+  KnowledgeCapsuleId,
+  KnowledgeSourceId,
+  MemoryAuditEvent,
+  MemoryId,
+  MemoryRecord,
+  MemoryUserId,
+} from "@oscharko-dev/keiko-contracts";
 import { ATLASSIAN_CONNECTOR_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import { DEFAULT_CONTEXT_PROFILE } from "@oscharko-dev/keiko-contracts/runtime/context-engineering";
 import { standardPodModelUsePolicy } from "@oscharko-dev/keiko-contracts/runtime/local-knowledge-model-use-policy";
@@ -95,6 +102,47 @@ function tmp(prefix: string): string {
   const d = realpathSync(mkdtempSync(join(tmpdir(), prefix)));
   tmpDirs.push(d);
   return d;
+}
+
+function memoryAuditFixture(): MemoryRecord {
+  return {
+    id: "memory-audit-restart" as MemoryId,
+    schemaVersion: "1",
+    scope: { kind: "user", userId: "memory-audit-user" as MemoryUserId },
+    type: "preference",
+    body: "Restart audit fixture.",
+    provenance: {
+      sourceKind: "explicit-user-instruction",
+      capturedAt: 1_750_000_000_000,
+      confidence: 0.9,
+      sensitivity: "public",
+    },
+    validity: { validFrom: 1_750_000_000_000 },
+    status: "proposed",
+    pinned: false,
+    tags: [],
+    createdAt: 1_750_000_000_000,
+    updatedAt: 1_750_000_000_000,
+  };
+}
+
+function requiredMemoryVault(deps: UiHandlerDeps): NonNullable<UiHandlerDeps["memoryVault"]> {
+  if (deps.memoryVault === undefined) {
+    throw new TypeError("Expected production memory vault wiring.");
+  }
+  return deps.memoryVault;
+}
+
+function memoryAuditEvents(deps: UiHandlerDeps): readonly MemoryAuditEvent[] {
+  const runId = deps.evidenceStore.list().find((value) => value.startsWith("memory-audit-"));
+  if (runId === undefined) {
+    throw new TypeError("Expected memory audit evidence.");
+  }
+  const json = deps.evidenceStore.get(runId);
+  if (json === undefined) {
+    throw new TypeError("Expected readable memory audit evidence.");
+  }
+  return JSON.parse(json) as MemoryAuditEvent[];
 }
 
 function operatorDapDocument(): Record<string, unknown> {
@@ -1138,6 +1186,46 @@ describe("buildUiHandlerDeps — UiStore wiring (ADR-0013)", () => {
     ).toEqual([]);
     deps.store.close();
     deps.memoryVault?.close();
+  });
+
+  it("seeds memory audit transition state before the first post-restart mutation (#3189)", () => {
+    const memoryDir = tmp("memory-audit-restart-");
+    const evidenceDir = tmp("memory-audit-restart-evidence-");
+    const fixture = memoryAuditFixture();
+    const first = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir,
+      env: { KEIKO_MEMORY_DIR: memoryDir },
+      store: createInMemoryUiStore(),
+    });
+
+    try {
+      requiredMemoryVault(first).insertMemory(fixture);
+    } finally {
+      first.store.close();
+      first.memoryVault?.close();
+    }
+
+    const restarted = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir,
+      env: { KEIKO_MEMORY_DIR: memoryDir },
+      store: createInMemoryUiStore(),
+    });
+    try {
+      const vault = requiredMemoryVault(restarted);
+      vault.updateMemory(fixture.id, { status: "archived" }, fixture.updatedAt + 1);
+      vault.updateMemory(fixture.id, { tags: ["metadata-change"] }, fixture.updatedAt + 2);
+
+      expect(memoryAuditEvents(restarted).map((event) => event.kind)).toEqual([
+        "memory:proposed",
+        "memory:archived",
+        "memory:updated",
+      ]);
+    } finally {
+      restarted.store.close();
+      restarted.memoryVault?.close();
+    }
   });
 
   // Wave 4a (epic #3233 §8): a UiStoreSchemaVersionError previously crashed startup as a bare,

@@ -1757,7 +1757,7 @@ function buildMemoryVault(
   env: EnvSource,
 ): MemoryVaultStore {
   const postCommitAudit = createMemoryAuditHandler({ evidenceStore, redactString });
-  return createBffMemoryVault(
+  const vault = createBffMemoryVault(
     redactString,
     // #214 — wire every successful vault mutation into the audit ledger. The handler
     // shares the same redactString closure as the live-payload redactor so audit
@@ -1771,6 +1771,16 @@ function buildMemoryVault(
     createMemoryAuditDeleteCommitHandler({ evidenceStore, redactString }),
     env,
   );
+  // Issue #3189 — seed only the transition classifier's body-free pre-image fields after the
+  // vault exists and before this composition returns it to mutation routes. This keeps the first
+  // post-restart archive/accept/reject/pin mutation semantically classified without retaining
+  // memory bodies in the audit bridge.
+  postCommitAudit.seed(
+    vault
+      .listMemoryScopes()
+      .flatMap((scope) => vault.listMemoryMetadataByScope(scope, { includeExpired: true })),
+  );
+  return vault;
 }
 
 // Issue #539: the relationship engine runs server-authoritative scope checks on every route.
