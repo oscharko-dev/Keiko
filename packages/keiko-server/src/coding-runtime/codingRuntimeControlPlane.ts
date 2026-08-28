@@ -1,6 +1,7 @@
 import type { CodingWorkbenchRuntimeEvent } from "@oscharko-dev/keiko-contracts";
 
 import type { WorkspaceLifecycleService } from "../task-workspace/types.js";
+import type { GitDeliveryRunAuthorityPort } from "../gitDelivery/runBoundAuthority.js";
 import type { ServerDiagnosticSink } from "../diagnostics-log.js";
 import type { ServerLogSink } from "../observability/server-log.js";
 import type { CodingRuntimeManager } from "./codingRuntimeManager.js";
@@ -49,6 +50,8 @@ export interface CodingRuntimeHost {
           ((capability: string, promptTokens: number) => unknown) | undefined;
       }
     | undefined;
+  /** Live server-private delivery authority for the currently accepted runtime run. */
+  readonly gitDeliveryAuthority?: GitDeliveryRunAuthorityPort | undefined;
   readonly openCodeGatewayReadinessRegistry?:
     | {
         readonly claim: (runId: string) => boolean;
@@ -84,6 +87,7 @@ export interface CodingRuntimeControlPlane {
   readonly runtimeHostQualified: boolean;
   readonly cancellationRegistry?: CodingRuntimeHost["cancellationRegistry"];
   readonly runtimeCapabilityAuthenticator?: CodingRuntimeHost["runtimeCapabilityAuthenticator"];
+  readonly gitDeliveryAuthority?: CodingRuntimeHost["gitDeliveryAuthority"];
   readonly openCodeGatewayReadinessRegistry?: CodingRuntimeHost["openCodeGatewayReadinessRegistry"];
   readonly safeActivityProjection?: CodingSafeActivityProjection | undefined;
 }
@@ -188,7 +192,10 @@ function runtimeHostCapabilities(
   runtimeHost: CodingRuntimeHost | undefined,
 ): Pick<
   CodingRuntimeControlPlane,
-  "cancellationRegistry" | "runtimeCapabilityAuthenticator" | "openCodeGatewayReadinessRegistry"
+  | "cancellationRegistry"
+  | "runtimeCapabilityAuthenticator"
+  | "gitDeliveryAuthority"
+  | "openCodeGatewayReadinessRegistry"
 > {
   return {
     ...(runtimeHost?.cancellationRegistry
@@ -196,6 +203,9 @@ function runtimeHostCapabilities(
       : {}),
     ...(runtimeHost?.runtimeCapabilityAuthenticator
       ? { runtimeCapabilityAuthenticator: runtimeHost.runtimeCapabilityAuthenticator }
+      : {}),
+    ...(runtimeHost?.gitDeliveryAuthority
+      ? { gitDeliveryAuthority: runtimeHost.gitDeliveryAuthority }
       : {}),
     ...(runtimeHost?.openCodeGatewayReadinessRegistry
       ? { openCodeGatewayReadinessRegistry: runtimeHost.openCodeGatewayReadinessRegistry }

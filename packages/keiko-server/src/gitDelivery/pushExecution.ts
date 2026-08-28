@@ -107,6 +107,20 @@ export interface GitDeliveryPublishSeams {
   readonly approvalStore?: GitDeliveryApprovalStore | undefined;
   readonly now?: (() => number) | undefined;
   readonly newActionId?: (() => string) | undefined;
+  readonly beforeRemoteDispatch?: (() => boolean) | undefined;
+}
+
+function authorityGuardedPublishAdapter(
+  adapter: GitRemotePublishAdapter,
+  beforeRemoteDispatch: (() => boolean) | undefined,
+): GitRemotePublishAdapter {
+  if (beforeRemoteDispatch === undefined) return adapter;
+  return {
+    publish: (request) =>
+      beforeRemoteDispatch()
+        ? adapter.publish(request)
+        : Promise.resolve({ schemaVersion: "1", outcome: "aborted", durationMs: 0 }),
+  };
 }
 
 function publishAdapterFor(
@@ -144,7 +158,10 @@ export async function executeGovernedPublish(
 ): Promise<GitPublishLifecycleResult> {
   const now = seams.now ?? Date.now;
   const snapshot = await readWorktreeSnapshotFor(workspace, seams, now);
-  const adapter = publishAdapterFor(workspace, seams, now);
+  const adapter = authorityGuardedPublishAdapter(
+    publishAdapterFor(workspace, seams, now),
+    seams.beforeRemoteDispatch,
+  );
   const packs = seams.policyPacks ?? defaultMintableRepoPack(KEIKO_DEFAULT_PUBLISH_POLICY_PACK);
   const newActionId =
     seams.newActionId ?? ((): string => defaultGitDeliveryActionId(command, now()));

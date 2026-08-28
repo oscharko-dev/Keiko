@@ -15,6 +15,7 @@ import { Readable } from "node:stream";
 import type { Server, IncomingMessage, ServerResponse } from "node:http";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type {
+  CodingWorkbenchAuthorityEnvelope,
   GitDeliveryExecutionResult,
   GitDeliveryRepoPolicyPack,
   WorkspaceInstance,
@@ -35,6 +36,7 @@ import {
   type GitDeliveryLocalErrorBody,
 } from "./localMutationRoutes.js";
 import type { GitDeliveryExecutionSeams } from "./execution.js";
+import { permittedGitDeliveryAuthority } from "./runBoundAuthority.test-support.js";
 import {
   deriveManagedWorktreePath,
   deriveRepositoryId,
@@ -147,7 +149,17 @@ let staticRoot: string;
 let store: UiStore;
 let projectId: string;
 
-function deps(overrides: Partial<UiHandlerDeps> = {}): UiHandlerDeps {
+const LOCAL_BRANCH_AUTHORITY: CodingWorkbenchAuthorityEnvelope["branch"] = {
+  headRef: "feature/x",
+  baseRef: "main",
+  allowDetachedHead: false,
+  allowedPrefixes: ["feature/"],
+};
+
+function deps(
+  overrides: Partial<UiHandlerDeps> = {},
+  branch: CodingWorkbenchAuthorityEnvelope["branch"] = LOCAL_BRANCH_AUTHORITY,
+): UiHandlerDeps {
   return {
     config: undefined,
     configPresent: false,
@@ -157,6 +169,12 @@ function deps(overrides: Partial<UiHandlerDeps> = {}): UiHandlerDeps {
     registry: createRunRegistry(),
     modelPortFactory: () => undefined,
     store,
+    gitDeliveryAuthority: permittedGitDeliveryAuthority(
+      () => projectId,
+      () => projectId,
+      "autonomous-delivery",
+      branch,
+    ),
     ...overrides,
   };
 }
@@ -398,7 +416,15 @@ describe("local mutation routes — governed execution (direct handler + seams)"
           projectId: managed.instance.managedWorktreePath,
           branchName: "feature/x",
         }),
-        deps(managed.override),
+        deps({
+          ...managed.override,
+          gitDeliveryAuthority: permittedGitDeliveryAuthority(
+            () => managed.instance.managedWorktreePath,
+            () => managed.instance.managedWorktreePath,
+            "autonomous-delivery",
+            LOCAL_BRANCH_AUTHORITY,
+          ),
+        }),
       );
       expect(res.status).toBe(200);
       expect((res.body as { status: string }).status).toBe("succeeded");
@@ -430,7 +456,10 @@ describe("local mutation routes — governed execution (direct handler + seams)"
     );
     const res = await handler(
       ctxFor(SWITCH, { schemaVersion: "1", projectId, branchName: "feature/missing" }),
-      deps({ evidenceStore: cap.evidenceStore }),
+      deps(
+        { evidenceStore: cap.evidenceStore },
+        { ...LOCAL_BRANCH_AUTHORITY, headRef: "feature/missing" },
+      ),
     );
     expect((res.body as { status: string; preflightFindingCodes?: string[] }).status).toBe(
       "blocked",
@@ -510,10 +539,28 @@ describe("local mutation routes — real specs through the route group (direct h
         baseBranchName: "main",
         startPointRefHash: "HEAD",
       }),
-      deps(),
+      deps({}, { ...LOCAL_BRANCH_AUTHORITY, headRef: "feature/new" }),
     );
     expect((res.body as { status: string }).status).toBe("succeeded");
     expect(adapter.calls()).toEqual(["createBranch"]);
+  });
+
+  it("denies branch creation outside the accepted run head and allowed prefix", async () => {
+    const adapter = recordingAdapter();
+    const res = await handlerFor(CREATE, seams({ adapterFactory: () => adapter.adapter }))(
+      ctxFor(CREATE, {
+        schemaVersion: "1",
+        projectId,
+        branchName: "release/v9",
+        baseBranchName: "main",
+        startPointRefHash: "HEAD",
+      }),
+      deps(),
+    );
+
+    expect(res.status).toBe(403);
+    expect(res.body).toMatchObject({ error: { code: "GIT_DELIVERY_AUTHORITY_DENIED" } });
+    expect(adapter.calls()).toEqual([]);
   });
 
   it("stages and unstages via the real staging specs", async () => {

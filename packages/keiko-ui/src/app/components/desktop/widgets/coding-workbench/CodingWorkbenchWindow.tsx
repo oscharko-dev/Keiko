@@ -75,7 +75,7 @@ const EMPTY_WORKSPACE = {
   loading: false,
   switching: false,
   error: null,
-  refresh: (): Promise<void> => Promise.resolve(),
+  refresh: (): Promise<boolean> => Promise.resolve(true),
 } as const;
 
 /**

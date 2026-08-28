@@ -580,7 +580,10 @@ async function executeAndRespond(
 ): Promise<RouteResult> {
   const startedAt = Date.now();
   const result = await executeWriteAction(
-    { http: guard.httpBodyPortFactory(credential), baseUrl: credential.baseUrl },
+    {
+      http: guard.httpBodyPortFactory(credential, correlationId),
+      baseUrl: credential.baseUrl,
+    },
     action,
   );
   const reasonCode: AtlassianConnectorActivityReasonCode | undefined =
@@ -655,7 +658,7 @@ async function executeLiveSearchAndRespond(
   const startedAt = Date.now();
   const request = liveSearch.request;
   const outcome = await executeJiraLiveSearch(
-    { http: guard.httpBodyPortFactory(credential) },
+    { http: guard.httpBodyPortFactory(credential, correlationId) },
     {
       baseUrl: credential.baseUrl,
       jql: resolveJiraLiveSearchJql(request),
@@ -889,7 +892,7 @@ async function approveSyncStart(
         reasonCode: entry.approval.reviewReason,
       },
     },
-    guard.httpBodyPortFactory(credential),
+    guard.httpBodyPortFactory(credential, entry.approval.correlationId),
   );
   return {
     status: 202,

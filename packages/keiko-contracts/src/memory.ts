@@ -45,6 +45,8 @@ export {
 
 // ─── Record types ─────────────────────────────────────────────────────────────
 export type {
+  AcceptMemoryProposalOptions,
+  MemoryCorrectionPredecessorsResponse,
   MemoryEdge,
   MemoryModelIdentity,
   MemoryProvenance,

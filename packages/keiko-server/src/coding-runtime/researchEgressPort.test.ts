@@ -209,6 +209,7 @@ describe("researchEgressPort success path", () => {
       gatewayEgress: {
         httpsProxy: "http://proxy.internal:8080",
         noProxy: ["metadata.internal"],
+        acknowledgeProxiedHostnamePolicy: true,
         allowPrivateNetwork: true,
         allowLinkLocalAndMetadata: true,
       },
@@ -220,6 +221,7 @@ describe("researchEgressPort success path", () => {
     expect(egress?.denyLoopback).toBe(true);
     expect(egress?.httpsProxy).toBe("http://proxy.internal:8080");
     expect(egress?.noProxy).toEqual(["metadata.internal"]);
+    expect(egress?.acknowledgeProxiedHostnamePolicy).toBeUndefined();
     expect(egress?.allowPrivateNetwork).toBeUndefined();
     expect(egress?.allowLinkLocalAndMetadata).toBeUndefined();
   });

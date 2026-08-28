@@ -35,6 +35,8 @@ import {
   gatewayFetch,
   type OutboundHttpEgressConfig,
 } from "@oscharko-dev/keiko-model-gateway/internal/http";
+import { UNKNOWN_CORRELATION_ID } from "../correlation.js";
+import { processServerLogSink } from "../process-log-sink.js";
 
 // Hard per-request ceiling: the largest ADR-0128 D3 budget (bulk sync pagination). Requests ask
 // for less (the verify probe asks for 30 000 ms); a hostile or buggy caller can never widen it.
@@ -74,6 +76,7 @@ export interface CreateAtlassianHttpPortOptions {
   // Resolved fresh per request so runtime gateway-config updates are honored immediately.
   readonly egress?: (() => OutboundHttpEgressConfig | undefined) | undefined;
   readonly fetchImpl?: typeof fetch | undefined;
+  readonly correlationId?: string | undefined;
 }
 
 function boundedTimeoutMs(requested: number): number {
@@ -116,14 +119,31 @@ function boundedTimeoutMs(requested: number): number {
 // authority when there is no proxy configured (`pinProxiedConnectTarget` requires a proxy to have
 // any effect; the direct path already pins via AUDIT-SEC-001), so this is a strict tightening with
 // no effect on unproxied deployments.
+function forwardedConnectorEgressConfig(
+  base: OutboundHttpEgressConfig | undefined,
+): OutboundHttpEgressConfig {
+  if (base === undefined) {
+    return {};
+  }
+
+  const { httpProxy, httpsProxy, noProxy, caBundlePath, acknowledgeProxiedHostnamePolicy } = base;
+
+  return {
+    ...(httpProxy !== undefined ? { httpProxy } : {}),
+    ...(httpsProxy !== undefined ? { httpsProxy } : {}),
+    ...(noProxy !== undefined ? { noProxy } : {}),
+    ...(caBundlePath !== undefined ? { caBundlePath } : {}),
+    ...(acknowledgeProxiedHostnamePolicy === true
+      ? { acknowledgeProxiedHostnamePolicy: true }
+      : {}),
+  };
+}
+
 function connectorEgressConfig(
   base: OutboundHttpEgressConfig | undefined,
 ): OutboundHttpEgressConfig {
   return {
-    ...(base?.httpProxy !== undefined ? { httpProxy: base.httpProxy } : {}),
-    ...(base?.httpsProxy !== undefined ? { httpsProxy: base.httpsProxy } : {}),
-    ...(base?.noProxy !== undefined ? { noProxy: base.noProxy } : {}),
-    ...(base?.caBundlePath !== undefined ? { caBundlePath: base.caBundlePath } : {}),
+    ...forwardedConnectorEgressConfig(base),
     denyLoopback: true,
     pinProxiedConnectTarget: true,
   };
@@ -233,6 +253,8 @@ export function createGatewayAtlassianHttpPort(
         },
         signal: AbortSignal.timeout(boundedTimeoutMs(request.timeoutMs)),
         egress,
+        log: processServerLogSink(),
+        logContext: { correlationId: options.correlationId ?? UNKNOWN_CORRELATION_ID },
         ...(options.fetchImpl === undefined ? {} : { fetchImpl: options.fetchImpl }),
       });
       await discardBody(response);
@@ -346,6 +368,8 @@ export function createGatewayAtlassianHttpBodyPort(
         ...(request.bodyJson === undefined ? {} : { body: request.bodyJson }),
         signal: composeBodyRequestSignal(request),
         egress,
+        log: processServerLogSink(),
+        logContext: { correlationId: options.correlationId ?? UNKNOWN_CORRELATION_ID },
         ...(options.fetchImpl === undefined ? {} : { fetchImpl: options.fetchImpl }),
       });
       const retryAfterMs = parseRetryAfterMs(response.headers.get("retry-after"), Date.now());

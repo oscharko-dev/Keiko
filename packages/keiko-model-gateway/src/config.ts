@@ -321,6 +321,11 @@ const EGRESS_FIELDS: readonly EgressField<keyof OutboundHttpEgressConfig>[] = [
     envNames: ["KEIKO_ALLOW_PRIVATE_EGRESS"],
     parser: optionalEgressBoolean,
   },
+  {
+    key: "acknowledgeProxiedHostnamePolicy",
+    envNames: [],
+    parser: optionalEgressBoolean,
+  },
 ];
 
 function setEgressField<K extends keyof OutboundHttpEgressConfig>(

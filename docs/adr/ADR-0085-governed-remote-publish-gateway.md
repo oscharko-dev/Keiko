@@ -131,7 +131,7 @@ Raw stderr never leaves the executor. Only the typed reason, the error code, and
 
 - ADR-0080: Governed Git delivery contracts (push input shape, execution error codes, recovery vocabulary reused unchanged)
 - ADR-0081: Governed Git mutation execution kernel (local adapter network-free invariant preserved; preflight push case reused)
-- ADR-0082: Governed Git approval and preview surface (read-only BFF preview pattern; `isGitDeliveryTrusted` gate reused)
+- ADR-0082: Governed Git approval and preview surface (read-only BFF preview pattern)
 - ADR-0083: Governed Git mutation evidence ledger (`recordGitDeliveryMutationEvidence` / `buildGitDeliveryEvidenceRecord` push projection reused)
 - ADR-0084: Governed local Git flows (governed flow card extended with a publish section; execution wiring pattern mirrored)
 - ADR-0019: Modular Package Architecture (leaf-package rule; dependency direction; `arch:check`)

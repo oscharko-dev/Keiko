@@ -46,8 +46,14 @@ const MAX_CREDENTIAL_BODY_BYTES = 16_000;
 // verify probe; the bounded-body port serves the sync lane (Issue #2242).
 export interface AtlassianConnectorCredentialDeps {
   readonly custody: AtlassianCredentialCustody;
-  readonly httpPortFactory: (metadata: AtlassianCredentialMetadata) => AtlassianHttpPort;
-  readonly httpBodyPortFactory: (metadata: AtlassianCredentialMetadata) => AtlassianHttpBodyPort;
+  readonly httpPortFactory: (
+    metadata: AtlassianCredentialMetadata,
+    correlationId?: string,
+  ) => AtlassianHttpPort;
+  readonly httpBodyPortFactory: (
+    metadata: AtlassianCredentialMetadata,
+    correlationId?: string,
+  ) => AtlassianHttpBodyPort;
   // KEIKO-0826 follow-up: optional sink for body-free activity events emitted on every typed
   // custody-error path (`credential-not-found` 404, `unsupported-auth-scheme` 400, `invalid-input`
   // 400, `credential-limit-exceeded` 429). Support bundles reconstruct why a credential operation
@@ -314,10 +320,13 @@ export function handleVerifyAtlassianConnectorCredential(
     const authRef = decodeAuthRefParam(ctx);
     const metadata = authRef === undefined ? undefined : guard.custody.getMetadata(authRef);
     if (metadata === undefined) return credentialNotFound(ctx.correlationId);
-    const status = await verifyAtlassianConnection(guard.httpPortFactory(metadata), {
-      provider: metadata.provider,
-      baseUrl: metadata.baseUrl,
-    });
+    const status = await verifyAtlassianConnection(
+      guard.httpPortFactory(metadata, ctx.correlationId ?? UNKNOWN_CORRELATION_ID),
+      {
+        provider: metadata.provider,
+        baseUrl: metadata.baseUrl,
+      },
+    );
     return { status: 200, body: { authRef: metadata.authRef, status } };
   });
 }

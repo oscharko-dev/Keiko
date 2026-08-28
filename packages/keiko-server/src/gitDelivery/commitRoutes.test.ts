@@ -41,6 +41,7 @@ import {
 } from "./commitRoutes.js";
 import { createInMemoryGitDeliveryApprovalStore } from "./approvalStore.js";
 import type { GitDeliveryExecutionSeams } from "./execution.js";
+import { permittedGitDeliveryAuthority } from "./runBoundAuthority.test-support.js";
 import {
   deriveManagedWorktreePath,
   deriveRepositoryId,
@@ -151,6 +152,7 @@ function deps(overrides: Partial<UiHandlerDeps> = {}): UiHandlerDeps {
     registry: createRunRegistry(),
     modelPortFactory: () => undefined,
     store,
+    gitDeliveryAuthority: permittedGitDeliveryAuthority(() => projectId),
     ...overrides,
   };
 }

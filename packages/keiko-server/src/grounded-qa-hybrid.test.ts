@@ -3363,10 +3363,15 @@ describe("hybrid entailment forwards the retrieved folder packs (KEIKO-0237)", (
     );
 
     const observedPacksPerCall: (readonly ConnectedContextPack[])[] = [];
+    const observedNumericEvidence: { readonly marker: number; readonly excerptText: string }[] = [];
     const observedCapsulesPerCall: number[] = [];
     const stage: EntailmentStage = {
       evaluate: (_answer, packs, _now) => {
         observedPacksPerCall.push(packs);
+        return Promise.resolve([]);
+      },
+      evaluateNumeric: (_answer, evidence, _now) => {
+        observedNumericEvidence.push(...evidence);
         return Promise.resolve([]);
       },
     };
@@ -3394,6 +3399,17 @@ describe("hybrid entailment forwards the retrieved folder packs (KEIKO-0237)", (
     // capsule policy is evaluated inside the factory. Pin the count so ADD-01's connector-pack
     // forwarding stays visible if it changes.
     expect(observedCapsulesPerCall).toEqual([1]);
+    expect(observedNumericEvidence.map((evidence) => evidence.marker).sort()).toEqual([1, 2, 3]);
+    expect(
+      observedNumericEvidence.some((evidence) =>
+        evidence.excerptText.includes("### Connector source:"),
+      ),
+    ).toBe(true);
+    expect(
+      observedNumericEvidence.some((evidence) =>
+        evidence.excerptText.includes("### Folder source:"),
+      ),
+    ).toBe(true);
   });
 });
 

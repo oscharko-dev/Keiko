@@ -6,7 +6,7 @@
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { axe } from "jest-axe";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { WorkspaceBinding } from "@oscharko-dev/keiko-contracts";
 import type { CodingWorkbenchRuntimeActions } from "@/lib/useCodingWorkbenchRuntime";
 import {
@@ -19,6 +19,7 @@ import {
 } from "../../context/ActiveWorkspaceContext";
 import { codingWorkbenchSetupTaskId, stripLeadingAndTrailingDashes } from "./CodingWorkbenchSetup";
 import { CodingWorkbenchWindow } from "./CodingWorkbenchWindow";
+import { resetClientDiagnosticWriter, setClientDiagnosticWriter } from "@/lib/client-diagnostics";
 
 const runtimeHookMock = vi.hoisted(() => vi.fn());
 const provisionMock = vi.hoisted(() => vi.fn());
@@ -65,7 +66,7 @@ function workspaceApi(overrides: Partial<ActiveWorkspaceApi> = {}): ActiveWorksp
     loading: false,
     switching: false,
     error: null,
-    refresh: vi.fn(() => Promise.resolve()),
+    refresh: vi.fn(() => Promise.resolve(true)),
     switchTo: vi.fn(() => Promise.resolve()),
     clearActive: vi.fn(() => Promise.resolve()),
     pause: vi.fn(() => Promise.resolve()),
@@ -143,6 +144,10 @@ describe("CodingWorkbenchSetup", () => {
     provisionMock.mockReset();
     reconcileMock.mockReset();
     setActiveMock.mockReset();
+  });
+
+  afterEach(() => {
+    resetClientDiagnosticWriter();
   });
 
   it("renders the setup section while the runtime is available and no binding is active", async () => {
@@ -291,6 +296,26 @@ describe("CodingWorkbenchSetup", () => {
     // Activation ran (reconcile verified) but failed before the refresh; no bound surface flips.
     expect(setActiveMock).toHaveBeenCalledTimes(1);
     expect(api.refresh).not.toHaveBeenCalled();
+  });
+
+  it("treats a refresh that does not settle as a bind failure", async () => {
+    const user = userEvent.setup();
+    const diagnostics: string[] = [];
+    setClientDiagnosticWriter((message) => diagnostics.push(message));
+    const api = workspaceApi({ refresh: vi.fn(() => Promise.resolve(false)) });
+    provisionMock.mockResolvedValue({ instance: { workspaceId: "ws-9" }, created: true });
+    reconcileMock.mockResolvedValue(reconciliationReport("ws-9", "healthy"));
+    setActiveMock.mockResolvedValue({});
+    renderWorkbench(api);
+
+    await user.type(screen.getByLabelText("Repository path"), "/repos/x");
+    await user.click(screen.getByRole("button", { name: "Bind workspace" }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "The workspace could not be bound. Review the repository path and target branch.",
+    );
+    expect(api.refresh).toHaveBeenCalledWith("/repos/x");
+    expect(diagnostics).toContain("[keiko] coding workbench workspace refresh did not settle");
   });
 
   it("surfaces a content-free alert when the bind fails and never activates", async () => {

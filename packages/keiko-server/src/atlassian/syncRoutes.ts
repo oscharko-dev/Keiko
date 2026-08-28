@@ -54,6 +54,7 @@ import {
 import type { AtlassianCredentialMetadata } from "@oscharko-dev/keiko-connectors";
 import { errorBody, type RouteContext, type RouteResult } from "../routes.js";
 import type { UiHandlerDeps } from "../deps.js";
+import { UNKNOWN_CORRELATION_ID } from "../correlation.js";
 import {
   createAtlassianPendingApprovalResult,
   deniedAtlassianActionResult,
@@ -369,6 +370,7 @@ async function startSyncAllowed(
   guard: AtlassianConnectorCredentialDeps,
   credential: AtlassianCredentialMetadata,
   body: StartSyncBody,
+  correlationId: string,
 ): Promise<RouteResult> {
   const { authority, ...scope } = body;
   const started = await startAtlassianSyncJob(
@@ -380,7 +382,7 @@ async function startSyncAllowed(
       // through the syncService default instead.
       ...(authority === undefined ? {} : { governance: { disposition: "allowed" } }),
     },
-    guard.httpBodyPortFactory(credential),
+    guard.httpBodyPortFactory(credential, correlationId),
   );
   return { status: 202, body: { job: started.job, capsuleId: started.capsuleId } };
 }
@@ -431,7 +433,7 @@ async function startSyncGoverned(
   }
   const reservation = reserveGovernedAtlassianAction(authority, deps);
   if (!reservation.ok) return denied(reservation.reason);
-  return startSyncAllowed(deps, guard, credential, body);
+  return startSyncAllowed(deps, guard, credential, body, correlationId);
 }
 
 // POST /api/atlassian-connectors/credentials/:authRef/sync-jobs
@@ -458,7 +460,13 @@ export function handleStartAtlassianConnectorSync(
     }
     // Direct human-triggered start: human-approved by construction (ADR-0129; ADR-0128 D5) —
     // recorded as `allowed` + `human-initiated` on the run's activity record.
-    return startSyncAllowed(deps, guard, credential, body);
+    return startSyncAllowed(
+      deps,
+      guard,
+      credential,
+      body,
+      ctx.correlationId ?? UNKNOWN_CORRELATION_ID,
+    );
   }, ctx.correlationId);
 }
 

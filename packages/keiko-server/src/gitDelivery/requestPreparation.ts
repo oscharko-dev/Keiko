@@ -10,10 +10,15 @@
 // this scaffold.
 
 import type { WorkspaceInfo } from "@oscharko-dev/keiko-workspace";
+import type { GitRepositoryAgentOperationKind } from "@oscharko-dev/keiko-contracts";
 import type { RouteContext, RouteResult } from "../routes.js";
 import type { UiHandlerDeps } from "../deps.js";
+import { UNKNOWN_CORRELATION_ID } from "../correlation.js";
+import { processServerLogSink } from "../process-log-sink.js";
+import type { ServerLogSink } from "../observability/index.js";
 import { resolveProjectWorkspace } from "./execution.js";
 import { readParsedGitDeliveryBody } from "./requestGuards.js";
+import { authorizeGitDelivery, type GitDeliveryAuthorityDenial } from "./runBoundAuthority.js";
 
 // The validator each route already exposes: it maps an unknown parsed body to either a typed request
 // value (carrying the projectId) or a ready-to-return error result.
@@ -32,6 +37,146 @@ export interface GitDeliveryRequestErrors {
 export type PreparedGitDeliveryRequest<V> =
   | { readonly ok: true; readonly value: V; readonly workspace: WorkspaceInfo }
   | { readonly ok: false; readonly result: RouteResult };
+
+export interface GitDeliveryAuthorityTarget {
+  readonly headBranchName?: string | undefined;
+  readonly baseBranchName?: string | undefined;
+  readonly remoteBranchName?: string | undefined;
+}
+
+export interface GitDeliveryAuthorityAuditSeams {
+  readonly nowIso?: string | undefined;
+  readonly logSink?: ServerLogSink | undefined;
+  readonly expectedAuthority?: GitDeliveryAuthorityIdentity | undefined;
+}
+
+export interface GitDeliveryAuthorityIdentity {
+  readonly runId: string;
+  readonly envelopeDigest: string;
+}
+
+export type GitDeliveryAuthorityGate =
+  | ({ readonly allowed: true } & GitDeliveryAuthorityIdentity)
+  | { readonly allowed: false; readonly result: RouteResult };
+
+interface GitDeliveryAuthorityContinuityInput {
+  readonly ctx: RouteContext;
+  readonly deps: Pick<UiHandlerDeps, "gitDeliveryAuthority">;
+  readonly projectId: string;
+  readonly workspace: WorkspaceInfo;
+  readonly operation: GitRepositoryAgentOperationKind;
+  readonly target?: GitDeliveryAuthorityTarget | undefined;
+  readonly admitted: GitDeliveryAuthorityIdentity;
+  readonly next?: (() => boolean) | undefined;
+}
+
+function deniedAuthorityGate(): GitDeliveryAuthorityGate {
+  return {
+    allowed: false,
+    result: {
+      status: 403,
+      body: {
+        error: {
+          code: "GIT_DELIVERY_AUTHORITY_DENIED",
+          message: "The accepted runtime authority does not admit this Git delivery operation.",
+        },
+      },
+    },
+  };
+}
+
+function authorityIdentityChanged(
+  decision: GitDeliveryAuthorityIdentity,
+  expected: GitDeliveryAuthorityIdentity | undefined,
+): boolean {
+  return (
+    expected !== undefined &&
+    (decision.runId !== expected.runId || decision.envelopeDigest !== expected.envelopeDigest)
+  );
+}
+
+export function logGitDeliveryAuthorityDenial(
+  ctx: RouteContext,
+  operation: GitRepositoryAgentOperationKind,
+  reason: GitDeliveryAuthorityDenial | "authority-changed" | "workspace-unresolvable",
+  logSink: ServerLogSink = processServerLogSink(),
+): void {
+  logSink.write({
+    category: "security",
+    op: "git.delivery.authority.denied",
+    correlationId: ctx.correlationId ?? UNKNOWN_CORRELATION_ID,
+    status: 403,
+    extra: { operation, reason },
+  });
+}
+
+/**
+ * Applies the sole delivery-write admission decision after a project workspace has been resolved.
+ * This intentionally consumes only the live server-owned runtime authority; headers, browser state,
+ * and deployment defaults cannot grant access here.
+ */
+export function gitDeliveryAuthorityGate(
+  ctx: RouteContext,
+  deps: Pick<UiHandlerDeps, "gitDeliveryAuthority">,
+  projectId: string,
+  workspace: WorkspaceInfo,
+  operation: GitRepositoryAgentOperationKind,
+  target: GitDeliveryAuthorityTarget = {},
+  audit: GitDeliveryAuthorityAuditSeams = {},
+): GitDeliveryAuthorityGate {
+  const decision = authorizeGitDelivery(
+    deps.gitDeliveryAuthority,
+    { projectId, workspaceRoot: workspace.root, operation, ...target },
+    audit.nowIso ?? new Date().toISOString(),
+  );
+  const logSink = audit.logSink ?? processServerLogSink();
+  if (decision.allowed && authorityIdentityChanged(decision, audit.expectedAuthority)) {
+    logGitDeliveryAuthorityDenial(ctx, operation, "authority-changed", logSink);
+    return deniedAuthorityGate();
+  }
+  if (decision.allowed) {
+    logSink.write({
+      category: "security",
+      op: "git.delivery.authority.admitted",
+      correlationId: ctx.correlationId ?? UNKNOWN_CORRELATION_ID,
+      status: 200,
+      extra: { operation, runId: decision.runId },
+    });
+    return decision;
+  }
+  logGitDeliveryAuthorityDenial(ctx, operation, decision.reason, logSink);
+  return deniedAuthorityGate();
+}
+
+export function gitDeliveryAuthorityContinuityGuard(
+  input: GitDeliveryAuthorityContinuityInput,
+): () => boolean {
+  return (): boolean => {
+    const latest = gitDeliveryAuthorityGate(
+      input.ctx,
+      input.deps,
+      input.projectId,
+      input.workspace,
+      input.operation,
+      input.target,
+      { expectedAuthority: input.admitted },
+    );
+    return latest.allowed && (input.next?.() ?? true);
+  };
+}
+
+export function gitDeliveryAuthorityDenial(
+  ctx: RouteContext,
+  deps: Pick<UiHandlerDeps, "gitDeliveryAuthority">,
+  projectId: string,
+  workspace: WorkspaceInfo,
+  operation: GitRepositoryAgentOperationKind,
+  target: GitDeliveryAuthorityTarget = {},
+  audit: GitDeliveryAuthorityAuditSeams = {},
+): RouteResult | undefined {
+  const gate = gitDeliveryAuthorityGate(ctx, deps, projectId, workspace, operation, target, audit);
+  return gate.allowed ? undefined : gate.result;
+}
 
 // Runs the shared read → validate → resolve-workspace prologue. Returns the validated request value
 // together with its authorized workspace, or the first typed error result encountered. `V` must carry

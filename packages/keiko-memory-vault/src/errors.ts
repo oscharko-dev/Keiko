@@ -7,6 +7,7 @@
 // [GEN-MAINT-COUPLING-003/004]. The per-domain code union stays LOCAL to this package.
 
 import { RedactingError } from "@oscharko-dev/keiko-security/errors/base";
+import type { MemoryId } from "@oscharko-dev/keiko-contracts/memory";
 
 export type MemoryStorageErrorCode =
   | "invalid-path"
@@ -51,9 +52,11 @@ export type MemoryStoragePreconditionField = "status" | "updatedAt";
 
 export class MemoryStoragePreconditionError extends MemoryStorageError {
   public readonly field: MemoryStoragePreconditionField;
+  public readonly memoryId: MemoryId | undefined;
 
-  public constructor(field: MemoryStoragePreconditionField) {
+  public constructor(field: MemoryStoragePreconditionField, memoryId?: MemoryId) {
     super("precondition-failed", "Memory mutation precondition failed.");
     this.field = field;
+    this.memoryId = memoryId;
   }
 }

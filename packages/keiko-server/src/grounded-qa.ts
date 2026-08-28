@@ -99,7 +99,10 @@ import {
   type HybridAnswerer,
 } from "./grounded-qa-hybrid.js";
 import { GROUNDED_SYSTEM_PROMPT } from "./grounded-prompt.js";
-import { uncitedMemoryContextMarker } from "./grounded-faithfulness.js";
+import {
+  uncitedMemoryContextMarker,
+  type NumericEntailmentEvidence,
+} from "./grounded-faithfulness.js";
 import {
   commitGroundedTurn,
   discardGroundedTurn,
@@ -1076,6 +1079,25 @@ export async function appendGroundedAnswerEntailment<
   if (markers.length === 0) {
     return answer;
   }
+  const projected: readonly GroundedUncertainty[] = markers.map((marker) => ({
+    kind: marker.kind,
+    claim: redactString(redactor, marker.claim),
+  }));
+  return { ...answer, uncertainty: [...answer.uncertainty, ...projected] };
+}
+
+/** Append shared-Judge results for exact prompt-selected numeric connector citations. */
+export async function appendGroundedAnswerNumericEntailment<
+  A extends { readonly uncertainty: readonly GroundedUncertainty[] },
+>(
+  answer: A,
+  stage: EntailmentStage,
+  answerContent: string,
+  selectedEvidence: readonly NumericEntailmentEvidence[],
+  redactor: Redactor,
+): Promise<A> {
+  const markers = await stage.evaluateNumeric(answerContent, selectedEvidence, Date.now());
+  if (markers.length === 0) return answer;
   const projected: readonly GroundedUncertainty[] = markers.map((marker) => ({
     kind: marker.kind,
     claim: redactString(redactor, marker.claim),

@@ -28,7 +28,7 @@ export interface ActiveWorkspaceApi {
   // The last action error (already redacted server-side), or null.
   readonly error: string | null;
   // Re-fetch the inventory (for the given repository root, if provided) and the active binding.
-  readonly refresh: (root?: string) => Promise<void>;
+  readonly refresh: (root?: string) => Promise<boolean>;
   // Atomic switch: activate/resume the target and bind all surfaces to it.
   readonly switchTo: (workspaceId: string) => Promise<void>;
   // Clear the active pointer → unbound mode.

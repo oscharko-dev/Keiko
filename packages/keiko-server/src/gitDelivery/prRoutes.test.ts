@@ -34,6 +34,7 @@ import type {
   GitDeliveryPrPreviewBody,
   GitDeliveryPullRequestSeams,
 } from "./prExecution.js";
+import { permittedGitDeliveryAuthority } from "./runBoundAuthority.test-support.js";
 
 const PREVIEW = "/api/git-delivery/pr/preview";
 const EXECUTE = "/api/git-delivery/pr/execute";
@@ -126,6 +127,17 @@ function deps(overrides: Partial<UiHandlerDeps> = {}): UiHandlerDeps {
     registry: createRunRegistry(),
     modelPortFactory: () => undefined,
     store,
+    gitDeliveryAuthority: permittedGitDeliveryAuthority(
+      () => projectId,
+      () => projectId,
+      "autonomous-delivery",
+      {
+        headRef: "claude/issue-477-github-pr-command-center",
+        baseRef: "dev",
+        allowDetachedHead: false,
+        allowedPrefixes: ["claude/"],
+      },
+    ),
     ...overrides,
   };
 }
@@ -340,7 +352,43 @@ describe("pr execute — governed create + no-bypass (AC1/AC4/AC5)", () => {
     expect(cap.raw()).not.toContain("Implements the #477");
   });
 
-  it("blocks a base outside the allow-list, executing nothing yet recording evidence (AC2/AC5)", async () => {
+  it("aborts PR dispatch when another allowed authority replaces the admitted run", async () => {
+    const adapter = recordingPrAdapter();
+    const baseAuthority = permittedGitDeliveryAuthority(
+      () => projectId,
+      () => projectId,
+      "autonomous-delivery",
+      {
+        headRef: "claude/issue-477-github-pr-command-center",
+        baseRef: "dev",
+        allowDetachedHead: false,
+        allowedPrefixes: ["claude/"],
+      },
+    );
+    let reads = 0;
+    const authority = {
+      current: (nowIso: string): ReturnType<typeof baseAuthority.current> => {
+        reads += 1;
+        const active = baseAuthority.current(nowIso);
+        if (active === undefined || reads === 1) return active;
+        return { ...active, runId: "replacement-run", envelopeDigest: "d".repeat(64) };
+      },
+    };
+    const handler = createHandlePrExecute({
+      execution: seams({ prAdapterFactory: () => adapter.adapter }),
+    });
+
+    const res = await handler(
+      ctxFor(EXECUTE, createBody()),
+      deps({ gitDeliveryAuthority: authority }),
+    );
+
+    expect((res.body as GitDeliveryPrExecuteResponseBody).status).toBe("failed");
+    expect(reads).toBe(2);
+    expect(adapter.creates()).toBe(0);
+  });
+
+  it("denies a base outside the active authority envelope before execution", async () => {
     const adapter = recordingPrAdapter();
     const cap = capturingEvidenceStore();
     const handler = createHandlePrExecute({
@@ -350,11 +398,10 @@ describe("pr execute — governed create + no-bypass (AC1/AC4/AC5)", () => {
       ctxFor(EXECUTE, createBody({ baseBranchName: "random-base" })),
       deps({ evidenceStore: cap.store }),
     );
-    const body = res.body as GitDeliveryPrExecuteResponseBody;
-    expect(body.status).toBe("blocked");
-    expect(body.blockReason).toBe("policy-pack-blocked");
+    expect(res.status).toBe(403);
+    expect(res.body).toMatchObject({ error: { code: "GIT_DELIVERY_AUTHORITY_DENIED" } });
     expect(adapter.creates()).toBe(0);
-    expect(cap.count()).toBe(1);
+    expect(cap.count()).toBe(0);
   });
 
   it("normalizes a provider rejection into a typed reason + recovery disposition (AC4)", async () => {

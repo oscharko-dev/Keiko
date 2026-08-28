@@ -35,6 +35,8 @@ import type {
   ManualFetchResult,
   ManualFetchTarget,
 } from "@oscharko-dev/keiko-local-knowledge";
+import { UNKNOWN_CORRELATION_ID } from "../correlation.js";
+import { processServerLogSink } from "../process-log-sink.js";
 
 // A single manual page is small; a hostile or dead origin must not hold a crawl slot open.
 const MANUAL_FETCH_TIMEOUT_MS = 20_000;
@@ -44,6 +46,7 @@ export interface GatewayManualFetcherOptions {
   readonly egress?: (() => OutboundHttpEgressConfig | undefined) | undefined;
   readonly fetchImpl?: typeof fetch | undefined;
   readonly timeoutMs?: number | undefined;
+  readonly correlationId?: string | undefined;
 }
 
 interface FetchOptions {
@@ -148,6 +151,8 @@ async function fetchHttpPage(
       headers: { accept: "text/html,application/xhtml+xml" },
       signal: composeSignal(config.timeoutMs ?? MANUAL_FETCH_TIMEOUT_MS, options.signal),
       ...(egress === undefined ? {} : { egress }),
+      log: processServerLogSink(),
+      logContext: { correlationId: config.correlationId ?? UNKNOWN_CORRELATION_ID },
       ...(config.fetchImpl === undefined ? {} : { fetchImpl: config.fetchImpl }),
     });
     return await classifyResponse(response, options.maxBytes);

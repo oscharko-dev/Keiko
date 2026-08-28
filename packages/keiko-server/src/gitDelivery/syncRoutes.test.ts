@@ -20,6 +20,7 @@ import type { RouteContext } from "../routes.js";
 import type { GitProcessResult, GitProcessRunner } from "../gitRoutes.js";
 import { createHandleSyncExecute, createHandleSyncPreview } from "./syncRoutes.js";
 import type { GitDeliverySyncSeams } from "./syncExecution.js";
+import { permittedGitDeliveryAuthority } from "./runBoundAuthority.test-support.js";
 
 const FETCH_PREVIEW = "/api/git-delivery/fetch/preview";
 const FETCH_EXECUTE = "/api/git-delivery/fetch/execute";
@@ -40,7 +41,9 @@ interface StatusFixture {
 function porcelain(fixture: StatusFixture = {}): string {
   const lines: string[] = [];
   lines.push(
-    fixture.detached ? "# branch.head (detached)" : `# branch.head ${fixture.branch ?? "main"}`,
+    fixture.detached
+      ? "# branch.head (detached)"
+      : `# branch.head ${fixture.branch ?? "feature/test"}`,
   );
   if (fixture.upstream !== undefined) lines.push(`# branch.upstream ${fixture.upstream}`);
   if (fixture.ahead !== undefined || fixture.behind !== undefined) {
@@ -167,6 +170,7 @@ function deps(overrides: Partial<UiHandlerDeps> = {}): UiHandlerDeps {
     registry: createRunRegistry(),
     modelPortFactory: () => undefined,
     store,
+    gitDeliveryAuthority: permittedGitDeliveryAuthority(() => projectId),
     ...overrides,
   };
 }
@@ -334,6 +338,47 @@ describe("fetch execute — outcomes", () => {
     const body = await runFetch({ fetch: ok("") });
     expect(body.status).toBe("succeeded");
     expect(body.operation).toBe("fetch");
+  });
+
+  it("does not fetch when another allowed authority replaces the admitted run", async () => {
+    const scripted = scriptedRunner({ fetch: ok("") });
+    const baseAuthority = permittedGitDeliveryAuthority(() => projectId);
+    let reads = 0;
+    const authority = {
+      current: (nowIso: string): ReturnType<typeof baseAuthority.current> => {
+        reads += 1;
+        const active = baseAuthority.current(nowIso);
+        if (active === undefined || reads === 1) return active;
+        return { ...active, runId: "replacement-run", envelopeDigest: "d".repeat(64) };
+      },
+    };
+    const handler = createHandleSyncExecute("fetch", {
+      execution: { runner: scripted.runner, now: () => 1_700_000_000_000 },
+    });
+
+    const res = await handler(
+      ctxFor(FETCH_EXECUTE, syncBody()),
+      deps({ gitDeliveryAuthority: authority }),
+    );
+
+    expect((res.body as GitSyncExecuteResponse).status).toBe("git-error");
+    expect(reads).toBe(2);
+    expect(scripted.calls()).toEqual(["status", "remote"]);
+  });
+
+  it("does not fetch when the live branch is outside the active branch envelope", async () => {
+    const scripted = scriptedRunner({
+      status: ok(porcelain({ branch: "release/v9" })),
+      fetch: ok(""),
+    });
+    const handler = createHandleSyncExecute("fetch", {
+      execution: { runner: scripted.runner, now: () => 1_700_000_000_000 },
+    });
+
+    const res = await handler(ctxFor(FETCH_EXECUTE, syncBody()), deps());
+
+    expect((res.body as GitSyncExecuteResponse).status).toBe("git-error");
+    expect(scripted.calls()).toEqual(["status", "remote"]);
   });
 
   it("reports auth-failed on a credential rejection", async () => {
