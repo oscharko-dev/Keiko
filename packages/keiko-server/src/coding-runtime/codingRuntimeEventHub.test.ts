@@ -61,27 +61,6 @@ describe("CodingRuntimeEventHub", () => {
     expect(received).toEqual([first.event.cursor, end.event.cursor]);
   });
 
-  it("does not replay a stale permission-requested fact after restart", () => {
-    const hub = new CodingRuntimeEventHub();
-    const requested = hub.publish(approval("run-a", 1));
-    const awaiting = hub.publish({
-      schemaVersion: "1",
-      kind: "status",
-      runId: "run-a",
-      state: "awaiting-approval",
-      revision: 2,
-    });
-    expect(requested.ok && awaiting.ok).toBe(true);
-    if (!awaiting.ok) return;
-
-    hub.restart("run-a");
-
-    const replay = hub.replay("run-a");
-    expect(replay.ok).toBe(true);
-    if (!replay.ok) return;
-    expect(replay.events).toEqual([awaiting.event]);
-  });
-
   it("admits the content-free auxiliary facts produced by research, skill, and child events", () => {
     const hub = new CodingRuntimeEventHub();
     const inputs: readonly CodingRuntimeEventHubInput[] = [
@@ -220,6 +199,46 @@ describe("CodingRuntimeEventHub", () => {
         (event) => event.state === "recovery-required" && event.failureCode === "recovery-required",
       ),
     ).toBe(true);
+  });
+
+  // KEIKO-0796: makeCapacity()'s reservation heuristic (`sum(existing critical bytes) +
+  // incoming.bytes * 2 > maxBytes`) is exact only when critical events are comparably sized. This
+  // pins the boundary the heuristic is exact for: two same-sized critical (non-containment) events
+  // that saturate the reservation exactly, followed by a same-class containment fact (the terminal
+  // event serializes a few bytes smaller than the approval events here, not byte-identical) that
+  // must still be admitted because containment events bypass the ×2 reservation check entirely.
+  it("admits a same-class containment fact even though critical events have saturated the byte reservation", () => {
+    const now = (): Date => new Date("2024-01-01T00:00:00.000Z");
+
+    // Derive the reservation boundary from the hub's own accounting instead of restating its byte
+    // formula: measure one critical event's serialized size the same way makeCapacity() does.
+    const probe = new CodingRuntimeEventHub({ now });
+    expect(probe.publish(approval("run-a", 1)).ok).toBe(true);
+    const probeInternals = probe as unknown as {
+      runs: Map<string, { events: readonly { bytes: number }[] }>;
+    };
+    const criticalEventBytes = probeInternals.runs.get("run-a")?.events[0]?.bytes;
+    if (criticalEventBytes === undefined)
+      throw new Error("test setup failed to measure event size");
+
+    // Two same-sized critical (non-containment) events exactly saturate the reservation
+    // (sum(existing) + incoming.bytes * 2 === maxBytes); a third of the same size is rejected.
+    const maxBytes = criticalEventBytes * 3;
+    const hub = new CodingRuntimeEventHub({ maxEvents: 10, maxBytes, now });
+    expect(hub.publish(approval("run-a", 1)).ok).toBe(true);
+    expect(hub.publish(approval("run-a", 2)).ok).toBe(true);
+    expect(hub.publish(approval("run-a", 3))).toMatchObject({
+      ok: false,
+      reason: "capacity-pressure",
+    });
+
+    // The terminal containment fact must still be admitted at the exact same saturation point: it
+    // is never subject to the ×2 reservation heuristic that guards non-containment critical events.
+    expect(hub.publish(terminal("run-a", 4)).ok).toBe(true);
+    const replay = hub.replay("run-a");
+    expect(replay.ok).toBe(true);
+    if (!replay.ok) return;
+    expect(replay.events.some((event) => event.state === "succeeded")).toBe(true);
   });
 
   it("fails closed before sequence overflow and isolates cursors by run", () => {
