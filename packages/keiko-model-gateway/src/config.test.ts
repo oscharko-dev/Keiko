@@ -416,11 +416,22 @@ describe("parseGatewayConfig", () => {
     expect(config.egress).toMatchObject({ acknowledgeProxiedHostnamePolicy: true });
   });
 
-  it("preserves an explicit false proxied-hostname policy acknowledgement", () => {
-    const config = parseGatewayConfig({
-      ...(validRaw() as Record<string, unknown>),
-      egress: { acknowledgeProxiedHostnamePolicy: false },
+  it("does not accept an environment-only proxied-hostname policy acknowledgement", () => {
+    const config = parseGatewayConfig(validRaw(), {
+      KEIKO_ACKNOWLEDGE_PROXIED_HOSTNAME_POLICY: "true",
     });
+
+    expect(config.egress?.acknowledgeProxiedHostnamePolicy).not.toBe(true);
+  });
+
+  it("preserves an explicit false proxied-hostname policy acknowledgement", () => {
+    const config = parseGatewayConfig(
+      {
+        ...(validRaw() as Record<string, unknown>),
+        egress: { acknowledgeProxiedHostnamePolicy: false },
+      },
+      { KEIKO_ACKNOWLEDGE_PROXIED_HOSTNAME_POLICY: "true" },
+    );
 
     expect(config.egress?.acknowledgeProxiedHostnamePolicy).toBe(false);
   });

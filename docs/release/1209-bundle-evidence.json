@@ -2,26 +2,26 @@
   "releaseEvidenceVersion": 1,
   "staticExport": {
     "root": "dist/ui/static",
-    "fileCount": 274
+    "fileCount": 273
   },
   "b1": {
-    "firstLoadScriptCount": 18,
+    "firstLoadScriptCount": 19,
     "monacoMarkersInFirstLoad": 0,
     "ok": true
   },
   "b2": {
     "budgetBytes": 2621440,
-    "shipsTotalBytes": 1005489,
-    "loadedTotalBytes": 1005489,
+    "shipsTotalBytes": 1008262,
+    "loadedTotalBytes": 1008262,
     "ok": true,
     "shipsOk": true,
     "loadedOk": true
   },
   "b3": {
     "budgetBytes": 768000,
-    "largestWorkerBytes": 111503,
+    "largestWorkerBytes": 112323,
     "largestWorkerLabel": "editor",
-    "largestLoadedWorkerBytes": 111503,
+    "largestLoadedWorkerBytes": 112323,
     "largestLoadedWorkerLabel": "editor",
     "ok": true,
     "shipsOk": true,
@@ -30,12 +30,12 @@
   "workers": [
     {
       "label": "editor",
-      "gzipBytes": 111503,
+      "gzipBytes": 112323,
       "path": "dist/ui/static/_next/static/chunks/1xnshc3pan0as.js"
     },
     {
       "label": "editor",
-      "gzipBytes": 152,
+      "gzipBytes": 151,
       "path": "dist/ui/static/_next/static/media/editor.worker.1duyl2hr9iop5.js"
     },
     {
@@ -49,25 +49,25 @@
   "editorRuntimeChunks": [
     {
       "path": "dist/ui/static/_next/static/chunks/1gb4enm09z949.js",
-      "gzipBytes": 606022,
+      "gzipBytes": 607030,
       "rawBytes": 2467072,
       "workerLabel": null
     },
     {
       "path": "dist/ui/static/_next/static/chunks/00012vp6kzw-s.js",
-      "gzipBytes": 287689,
+      "gzipBytes": 288635,
       "rawBytes": 1216526,
       "workerLabel": null
     },
     {
       "path": "dist/ui/static/_next/static/chunks/1xnshc3pan0as.js",
-      "gzipBytes": 111503,
+      "gzipBytes": 112323,
       "rawBytes": 368689,
       "workerLabel": "editor"
     },
     {
       "path": "dist/ui/static/_next/static/media/editor.worker.1duyl2hr9iop5.js",
-      "gzipBytes": 152,
+      "gzipBytes": 151,
       "rawBytes": 240,
       "workerLabel": "editor"
     },
@@ -78,5 +78,5 @@
       "workerLabel": "editor"
     }
   ],
-  "measurementSha256": "b5f8e9f78da3d45d0e6b5e65857f1a7ba2dccb38ccd9f350b2324d02b31aa160"
+  "measurementSha256": "f43ad67738b8ce74fa7412570fb4a65332844f73328f18ddce7c8a1f47ddfcd3"
 }

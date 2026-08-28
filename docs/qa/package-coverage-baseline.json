@@ -32,13 +32,13 @@
     "keiko-contracts": {
       "files": 193,
       "uncoveredFiles": 4,
-      "uncoveredLines": 892,
-      "totalLines": 14187,
+      "uncoveredLines": 885,
+      "totalLines": 14121,
       "coverage": {
-        "lines": 93.71,
-        "statements": 92.21,
-        "branches": 90.04,
-        "functions": 97.46
+        "lines": 93.73,
+        "statements": 92.25,
+        "branches": 90.11,
+        "functions": 97.4
       }
     },
     "keiko-editor": {
@@ -176,13 +176,13 @@
     "keiko-model-gateway": {
       "files": 43,
       "uncoveredFiles": 0,
-      "uncoveredLines": 192,
-      "totalLines": 3328,
+      "uncoveredLines": 193,
+      "totalLines": 3323,
       "coverage": {
-        "lines": 94.23,
-        "statements": 93.23,
-        "branches": 87.33,
-        "functions": 96.94
+        "lines": 94.19,
+        "statements": 93.19,
+        "branches": 87.22,
+        "functions": 96.93
       }
     },
     "keiko-quality-intelligence": {
@@ -234,15 +234,15 @@
       }
     },
     "keiko-server": {
-      "files": 590,
+      "files": 588,
       "uncoveredFiles": 0,
-      "uncoveredLines": 4486,
-      "totalLines": 57596,
+      "uncoveredLines": 4473,
+      "totalLines": 57506,
       "coverage": {
-        "lines": 92.21,
-        "statements": 89.48,
-        "branches": 82.05,
-        "functions": 95
+        "lines": 92.22,
+        "statements": 89.5,
+        "branches": 82.08,
+        "functions": 95.01
       }
     },
     "keiko-tools": {
@@ -258,15 +258,15 @@
       }
     },
     "keiko-ui": {
-      "files": 417,
+      "files": 416,
       "uncoveredFiles": 3,
-      "uncoveredLines": 2907,
-      "totalLines": 39784,
+      "uncoveredLines": 2931,
+      "totalLines": 39798,
       "coverage": {
-        "lines": 92.69,
-        "statements": 89.76,
-        "branches": 82.09,
-        "functions": 91.41
+        "lines": 92.64,
+        "statements": 89.73,
+        "branches": 82.06,
+        "functions": 91.47
       }
     },
     "keiko-verification": {
@@ -296,13 +296,13 @@
     "keiko-workspace": {
       "files": 54,
       "uncoveredFiles": 0,
-      "uncoveredLines": 500,
-      "totalLines": 7534,
+      "uncoveredLines": 499,
+      "totalLines": 7524,
       "coverage": {
-        "lines": 93.36,
-        "statements": 92.21,
-        "branches": 85.58,
-        "functions": 97.31
+        "lines": 93.37,
+        "statements": 92.22,
+        "branches": 85.57,
+        "functions": 97.3
       }
     }
   },

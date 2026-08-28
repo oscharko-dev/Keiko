@@ -11,6 +11,10 @@ import type {
 import { CODING_WORKBENCH_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench";
 import { validateCodingWorkbenchAuthorityEnvelope } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-validation";
 import { validateCodingWorkbenchEvidenceRecord } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-evidence";
+import {
+  gitOperationRequirement,
+  type GitOperationRequirement,
+} from "./gitOperationRequirements.js";
 
 export type AutonomousDeliveryDenialReason =
   | "authority-envelope-invalid"
@@ -110,52 +114,14 @@ export interface AutonomousDeliveryPolicyRequest {
   readonly operatorStopped?: boolean | undefined;
 }
 
-interface OperationRequirement {
-  readonly actionClasses: readonly CodingWorkbenchActionClass[];
-  readonly connectorScopes: readonly CodingWorkbenchConnectorScope[];
-  readonly needsNetwork: boolean;
-}
-
-const SOURCE_CONTROL_READ = "source-control.read" satisfies CodingWorkbenchConnectorScope;
-const SOURCE_CONTROL_WRITE = "source-control.write" satisfies CodingWorkbenchConnectorScope;
 const ISSUE_TRACKER_WRITE = "issue-tracker.write" satisfies CodingWorkbenchConnectorScope;
 
-const READ_REQUIREMENT = requirement(["workspace-read"], [SOURCE_CONTROL_READ], false);
-const LOCAL_WRITE_REQUIREMENT = requirement(["workspace-write"], [SOURCE_CONTROL_WRITE], false);
-const COMMIT_REQUIREMENT = requirement(["delivery-substrate"], [SOURCE_CONTROL_WRITE], false);
-const FETCH_REQUIREMENT = requirement(
-  ["delivery-substrate", "network-egress"],
-  [SOURCE_CONTROL_READ],
-  true,
-);
-const REMOTE_WRITE_REQUIREMENT = requirement(
-  ["delivery-substrate", "network-egress"],
-  [SOURCE_CONTROL_WRITE],
-  true,
-);
 const COMMAND_TASK_REQUIREMENT = requirement(["command-execution", "verification"], [], false);
 const ISSUE_TRACKER_WRITE_REQUIREMENT = requirement(
   ["connector-access", "network-egress"],
   [ISSUE_TRACKER_WRITE],
   true,
 );
-
-const OPERATION_REQUIREMENTS: Readonly<
-  Partial<Record<GitRepositoryAgentOperationKind, OperationRequirement>>
-> = Object.freeze({
-  status: READ_REQUIREMENT,
-  diff: READ_REQUIREMENT,
-  "branch-list": READ_REQUIREMENT,
-  "branch-create": LOCAL_WRITE_REQUIREMENT,
-  "branch-switch": LOCAL_WRITE_REQUIREMENT,
-  stage: LOCAL_WRITE_REQUIREMENT,
-  unstage: LOCAL_WRITE_REQUIREMENT,
-  commit: COMMIT_REQUIREMENT,
-  fetch: FETCH_REQUIREMENT,
-  pull: REMOTE_WRITE_REQUIREMENT,
-  push: REMOTE_WRITE_REQUIREMENT,
-  "pull-request": REMOTE_WRITE_REQUIREMENT,
-});
 
 export function decideAutonomousDeliveryOperation(
   request: AutonomousDeliveryPolicyRequest,
@@ -240,11 +206,14 @@ function envelopeExpired(nowIso: string, expiresAt: string): boolean {
 
 function operationRequirement(
   operation: GitRepositoryAgentOperationKind,
-): OperationRequirement | undefined {
-  return OPERATION_REQUIREMENTS[operation];
+): GitOperationRequirement | undefined {
+  // Native merge remains outside autonomous step execution. The delivery route performs its own
+  // required-check and review-conversation gate before GitHub can integrate the PR.
+  if (operation === "merge") return undefined;
+  return gitOperationRequirement(operation);
 }
 
-function stepRequirement(step: AutonomousDeliveryStep): OperationRequirement | undefined {
+function stepRequirement(step: AutonomousDeliveryStep): GitOperationRequirement | undefined {
   if (step.kind === "command-task") return COMMAND_TASK_REQUIREMENT;
   if (step.kind === "connector-operation") return ISSUE_TRACKER_WRITE_REQUIREMENT;
   return operationRequirement(step.request.operation);
@@ -269,7 +238,7 @@ function requirement(
   actionClasses: readonly CodingWorkbenchActionClass[],
   connectorScopes: readonly CodingWorkbenchConnectorScope[],
   needsNetwork: boolean,
-): OperationRequirement {
+): GitOperationRequirement {
   return { actionClasses, connectorScopes, needsNetwork };
 }
 
@@ -289,7 +258,7 @@ function hasConnectorScopes(
 
 function networkAllowed(
   envelope: CodingWorkbenchAuthorityEnvelope,
-  requirement: OperationRequirement,
+  requirement: GitOperationRequirement,
 ): boolean {
   if (!requirement.needsNetwork) return true;
   if (envelope.networkPolicy.mode === "deny-all") return false;

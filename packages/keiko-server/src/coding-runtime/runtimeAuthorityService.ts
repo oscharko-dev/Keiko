@@ -630,6 +630,7 @@ export class CodingRuntimeAuthorityService {
     if (
       active === undefined ||
       reference === undefined ||
+      this.activeEffectiveMode === undefined ||
       this.reapPending !== undefined ||
       this.runtimeState.state !== "running" ||
       this.runtimeState.runId !== active.runId ||
@@ -638,7 +639,11 @@ export class CodingRuntimeAuthorityService {
     ) {
       return undefined;
     }
-    return this.registry.revalidateRetainedRuntime(reference, nowIso).ok ? active : undefined;
+    if (!this.registry.revalidateRetainedRuntime(reference, nowIso).ok) return undefined;
+    return {
+      ...active,
+      authority: { ...active.authority, effectiveMode: this.activeEffectiveMode },
+    };
   }
 
   private consumeConfirmation(

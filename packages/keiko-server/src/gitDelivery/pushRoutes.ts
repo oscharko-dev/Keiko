@@ -213,7 +213,10 @@ export const createHandlePushExecute = (
     if (!prepared.ok) return prepared.result;
     const { workspace } = prepared;
     const { projectId, command, approval } = prepared.value;
-    const authorityDenial = gitDeliveryAuthorityDenial(ctx, deps, projectId, workspace, "push");
+    const authorityDenial = gitDeliveryAuthorityDenial(ctx, deps, projectId, workspace, "push", {
+      headBranchName: command.sourceBranchName,
+      baseBranchName: command.remoteBranchName,
+    });
     if (authorityDenial !== undefined) return authorityDenial;
     const verifiedApproval = resolveGitDeliveryApprovalRequirement(approval, {
       store: seams.approvalStore,

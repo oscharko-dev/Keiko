@@ -493,6 +493,11 @@ describe("splitClaimSpans", () => {
     expect(spans).toHaveLength(1);
   });
 
+  it("keeps dotted content inside full-width citation brackets in one span", () => {
+    const spans = splitClaimSpans("See ［src/config/env.ts:3］ for details.");
+    expect(spans).toHaveLength(1);
+  });
+
   it("splits on newlines for bulleted answers", () => {
     const spans = splitClaimSpans("- first [a/b.ts:1]\n- second [c/d.ts:2]");
     expect(spans).toHaveLength(2);
@@ -503,6 +508,12 @@ describe("stripInlineCitations", () => {
   it("removes citation brackets and collapses whitespace", () => {
     expect(stripInlineCitations("Login validates in [src/auth/login.ts:10-20] the session.")).toBe(
       "Login validates in the session.",
+    );
+  });
+
+  it("removes full-width numeric citation brackets before judging", () => {
+    expect(stripInlineCitations("The retention is 30 days ［1］.")).toBe(
+      "The retention is 30 days .",
     );
   });
 });

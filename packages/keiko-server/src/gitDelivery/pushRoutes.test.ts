@@ -110,7 +110,17 @@ function deps(overrides: Partial<UiHandlerDeps> = {}): UiHandlerDeps {
     registry: createRunRegistry(),
     modelPortFactory: () => undefined,
     store,
-    gitDeliveryAuthority: permittedGitDeliveryAuthority(() => projectId),
+    gitDeliveryAuthority: permittedGitDeliveryAuthority(
+      () => projectId,
+      () => projectId,
+      "autonomous-delivery",
+      {
+        headRef: "feat/x",
+        baseRef: "feat/x",
+        allowDetachedHead: false,
+        allowedPrefixes: ["feat/"],
+      },
+    ),
     ...overrides,
   };
 }
@@ -327,7 +337,7 @@ describe("push execute — governed publish + no-bypass (AC2/AC3/AC4/AC5)", () =
     expect(cap.count()).toBe(1);
   });
 
-  it("blocks a protected/shared target by the default pack, executing nothing yet recording evidence (AC2/AC5)", async () => {
+  it("denies a protected target outside the active authority envelope", async () => {
     const adapter = recordingPublishAdapter();
     const cap = capturingEvidenceStore();
     const handler = createHandlePushExecute({
@@ -337,11 +347,10 @@ describe("push execute — governed publish + no-bypass (AC2/AC3/AC4/AC5)", () =
       ctxFor(EXECUTE, pushBody({ remoteBranchName: "dev" })),
       deps({ evidenceStore: cap.store }),
     );
-    const body = res.body as GitDeliveryPushExecuteResponseBody;
-    expect(body.status).toBe("blocked");
-    expect(body.blockReason).toBe("protected-branch");
+    expect(res.status).toBe(403);
+    expect(res.body).toMatchObject({ error: { code: "GIT_DELIVERY_AUTHORITY_DENIED" } });
     expect(adapter.calls()).toBe(0);
-    expect(cap.count()).toBe(1);
+    expect(cap.count()).toBe(0);
   });
 
   // The no-direct-push-to-dev denial is the load-bearing half of the default pack; it must hold for
@@ -354,9 +363,8 @@ describe("push execute — governed publish + no-bypass (AC2/AC3/AC4/AC5)", () =
         execution: seams({ publishAdapterFactory: () => adapter.adapter }),
       });
       const res = await handler(ctxFor(EXECUTE, pushBody({ remoteBranchName })), deps());
-      const body = res.body as GitDeliveryPushExecuteResponseBody;
-      expect(body.status).toBe("blocked");
-      expect(body.blockReason).toBe("protected-branch");
+      expect(res.status).toBe(403);
+      expect(res.body).toMatchObject({ error: { code: "GIT_DELIVERY_AUTHORITY_DENIED" } });
       expect(adapter.calls()).toBe(0);
     },
   );
@@ -368,7 +376,19 @@ describe("push execute — governed publish + no-bypass (AC2/AC3/AC4/AC5)", () =
     });
     const res = await handler(
       ctxFor(EXECUTE, pushBody({ remoteBranchName: "my-work", sourceBranchName: "my-work" })),
-      deps(),
+      deps({
+        gitDeliveryAuthority: permittedGitDeliveryAuthority(
+          () => projectId,
+          () => projectId,
+          "autonomous-delivery",
+          {
+            headRef: "my-work",
+            baseRef: "my-work",
+            allowDetachedHead: false,
+            allowedPrefixes: ["my-"],
+          },
+        ),
+      }),
     );
     expect((res.body as GitDeliveryPushExecuteResponseBody).status).toBe("succeeded");
     expect(adapter.calls()).toBe(1);

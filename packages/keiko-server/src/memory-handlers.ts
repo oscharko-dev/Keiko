@@ -2027,6 +2027,16 @@ function correctionPredecessorFailure(code: CorrectionPredecessorFailureCode): R
   };
 }
 
+function proposalStaleFailure(): RouteResult {
+  return {
+    status: 409,
+    body: errorBody(
+      "PROPOSAL_STALE",
+      "The proposal changed before it could be accepted. Reload it.",
+    ),
+  };
+}
+
 function correctionOriginFailure(origin: MemoryRecord): RouteResult | null {
   if (origin.status === "superseded") {
     return correctionPredecessorFailure("CORRECTION_PREDECESSOR_ALREADY_SUPERSEDED");
@@ -2226,6 +2236,7 @@ function commitCorrectionAcceptance(
     return { updated, nowMs };
   } catch (error) {
     if (error instanceof MemoryStoragePreconditionError) {
+      if (error.memoryId === proposal.id) return proposalStaleFailure();
       return correctionPredecessorFailure("CORRECTION_PREDECESSOR_STALE");
     }
     throw error;
@@ -2240,13 +2251,11 @@ function acceptMemoryProposal(
 ): RouteResult {
   const existing = ensureProposedMemory(vault.getMemory(id));
   if (isRouteResult(existing)) return existing;
+  const authorizedScopes = authorizedMemoryScopes(deps, vault);
+  if (!scopeAuthorized(existing.scope, authorizedScopes)) return forbiddenMemoryScopeResult();
   const origins = resolveCorrectionOrigins(vault, existing, input.predecessorId);
   if (isRouteResult(origins)) return origins;
-  const authorizedScopes = authorizedMemoryScopes(deps, vault);
-  if (
-    !scopeAuthorized(existing.scope, authorizedScopes) ||
-    origins.some((origin) => !scopeAuthorized(origin.original.scope, authorizedScopes))
-  ) {
+  if (origins.some((origin) => !scopeAuthorized(origin.original.scope, authorizedScopes))) {
     return correctionPredecessorFailure("CORRECTION_PREDECESSOR_FORBIDDEN");
   }
   const committed = commitCorrectionAcceptance(vault, existing, origins, input.bodyOverride);
@@ -2379,7 +2388,11 @@ export function handleGetCorrectionPredecessors(
   }
   return {
     status: 200,
-    body: { candidates: candidates.map((candidate) => redactMemory(deps, candidate)) },
+    body: {
+      candidates: candidates
+        .filter((candidate) => candidate.status === "accepted")
+        .map((candidate) => redactMemory(deps, candidate)),
+    },
   };
 }
 

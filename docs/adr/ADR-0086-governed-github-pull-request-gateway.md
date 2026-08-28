@@ -133,7 +133,7 @@ The `GovernedPullRequestCard` is launched from the "PR" action button in the Pub
 
 `globals.css` is **not modified** (ADR-0051 gate). All card styling uses inline styles via existing CSS custom properties (`var(--space-4)`, `var(--fg-muted)`, `var(--text-body-sm)`, etc.), mirroring the pattern established in `GovernedGitFlowCard.tsx`.
 
-### D8 — AC5 test strategy: fake-adapter integration tests gate CI; Playwright e2e covers the read-only preview path and disabled/blocked states
+### D8 — AC5 test strategy: fake-adapter integration tests gate CI; Playwright e2e covers the read-only preview and blocked states
 
 **Server integration tests** (`packages/keiko-server/src/gitDelivery/prRoutes.test.ts`) inject a deterministic fake `GitPullRequestAdapter` seam (no `gh` subprocess, no network). They assert:
 - Policy-awareness: a PR whose base is outside the allowed-namespace constraint is blocked with `policy-pack-blocked` before the adapter is called.

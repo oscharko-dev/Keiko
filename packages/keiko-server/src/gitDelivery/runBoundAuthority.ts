@@ -1,8 +1,11 @@
 import type {
   CodingWorkbenchAuthorityEnvelope,
-  CodingWorkbenchConnectorScope,
   GitRepositoryAgentOperationKind,
 } from "@oscharko-dev/keiko-contracts";
+import {
+  gitOperationRequirement,
+  type GitOperationRequirement,
+} from "../coding-runtime/gitOperationRequirements.js";
 
 // The Git delivery routes must never derive authority from a deployment-wide default. This is the
 // server-private projection of the one accepted runtime that currently owns delivery authority.
@@ -48,57 +51,6 @@ export type GitDeliveryAuthorityDecision =
     }
   | { readonly allowed: false; readonly reason: GitDeliveryAuthorityDenial };
 
-interface OperationRequirement {
-  readonly actionClasses: readonly ("workspace-write" | "delivery-substrate" | "network-egress")[];
-  readonly connectorScopes: readonly CodingWorkbenchConnectorScope[];
-  readonly requiresAutonomousDelivery: boolean;
-}
-
-const SOURCE_CONTROL_READ = "source-control.read" satisfies CodingWorkbenchConnectorScope;
-const SOURCE_CONTROL_WRITE = "source-control.write" satisfies CodingWorkbenchConnectorScope;
-
-const LOCAL_WRITE: OperationRequirement = {
-  actionClasses: ["workspace-write"],
-  connectorScopes: [SOURCE_CONTROL_WRITE],
-  requiresAutonomousDelivery: false,
-};
-
-const COMMIT: OperationRequirement = {
-  actionClasses: ["delivery-substrate"],
-  connectorScopes: [SOURCE_CONTROL_WRITE],
-  requiresAutonomousDelivery: false,
-};
-
-const REMOTE_READ: OperationRequirement = {
-  actionClasses: ["delivery-substrate", "network-egress"],
-  connectorScopes: [SOURCE_CONTROL_READ],
-  requiresAutonomousDelivery: true,
-};
-
-const REMOTE_WRITE: OperationRequirement = {
-  actionClasses: ["delivery-substrate", "network-egress"],
-  connectorScopes: [SOURCE_CONTROL_WRITE],
-  requiresAutonomousDelivery: true,
-};
-
-const REQUIREMENT_BY_OPERATION: Readonly<
-  Record<GitRepositoryAgentOperationKind, OperationRequirement>
-> = {
-  status: LOCAL_WRITE,
-  diff: LOCAL_WRITE,
-  "branch-list": LOCAL_WRITE,
-  "branch-create": LOCAL_WRITE,
-  "branch-switch": LOCAL_WRITE,
-  stage: LOCAL_WRITE,
-  unstage: LOCAL_WRITE,
-  commit: COMMIT,
-  fetch: REMOTE_READ,
-  pull: REMOTE_WRITE,
-  push: REMOTE_WRITE,
-  "pull-request": REMOTE_WRITE,
-  merge: REMOTE_WRITE,
-};
-
 function expired(nowIso: string, expiresAt: string): boolean {
   const nowMs = Date.parse(nowIso);
   const expiresAtMs = Date.parse(expiresAt);
@@ -122,7 +74,7 @@ function withinBranchEnvelope(
 
 function hasRequiredScopes(
   active: ActiveGitDeliveryRunAuthority,
-  requirement: OperationRequirement,
+  requirement: GitOperationRequirement,
 ): boolean {
   const authority = active.authority;
   if (
@@ -133,7 +85,7 @@ function hasRequiredScopes(
   if (!requirement.connectorScopes.every((scope) => authority.connectorScopes.includes(scope))) {
     return false;
   }
-  if (!requirement.actionClasses.includes("network-egress")) return true;
+  if (!requirement.needsNetwork) return true;
   if (authority.networkPolicy.mode === "deny-all") return false;
   return requirement.connectorScopes.every((scope) =>
     authority.networkPolicy.connectorScopes.includes(scope),
@@ -142,13 +94,10 @@ function hasRequiredScopes(
 
 function modeAllows(
   active: ActiveGitDeliveryRunAuthority,
-  requirement: OperationRequirement,
+  requirement: GitOperationRequirement,
 ): boolean {
   if (active.authority.effectiveMode === "governed-assist") return false;
-  return (
-    !requirement.requiresAutonomousDelivery ||
-    active.authority.effectiveMode === "autonomous-delivery"
-  );
+  return !requirement.needsNetwork || active.authority.effectiveMode === "autonomous-delivery";
 }
 
 /**
@@ -168,7 +117,7 @@ export function authorizeGitDelivery(
   if (active.projectId !== request.projectId || active.workspaceRoot !== request.workspaceRoot) {
     return { allowed: false, reason: "workspace-out-of-envelope" };
   }
-  const requirement = REQUIREMENT_BY_OPERATION[request.operation];
+  const requirement = gitOperationRequirement(request.operation);
   if (!modeAllows(active, requirement)) return { allowed: false, reason: "mode-denied" };
   if (!hasRequiredScopes(active, requirement))
     return { allowed: false, reason: "permission-scope-missing" };

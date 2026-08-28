@@ -547,24 +547,32 @@ export async function handleGitAgentOperation(
   if (!parsed.ok) return parsed.result;
   if (parsed.request.mode === "execute") {
     const workspace = resolveProjectWorkspace(deps, parsed.request.projectId);
-    if (workspace !== undefined) {
-      const gate = gitDeliveryAuthorityDenial(
-        ctx,
-        deps,
-        parsed.request.projectId,
-        workspace,
-        parsed.request.operation,
-      );
-      if (gate !== undefined) {
-        return {
-          status: gate.status,
-          body: denied(
-            parsed.request,
-            "autonomy-mode-denied",
-            "The accepted runtime authority does not admit this repository operation.",
-          ),
-        };
-      }
+    if (workspace === undefined) {
+      return {
+        status: 403,
+        body: denied(
+          parsed.request,
+          "autonomy-mode-denied",
+          "The accepted runtime authority does not admit this repository operation.",
+        ),
+      };
+    }
+    const gate = gitDeliveryAuthorityDenial(
+      ctx,
+      deps,
+      parsed.request.projectId,
+      workspace,
+      parsed.request.operation,
+    );
+    if (gate !== undefined) {
+      return {
+        status: gate.status,
+        body: denied(
+          parsed.request,
+          "autonomy-mode-denied",
+          "The accepted runtime authority does not admit this repository operation.",
+        ),
+      };
     }
   }
   return handleGitAgentOperationWithDelegate(parsed.request, parsed.fingerprint, () =>

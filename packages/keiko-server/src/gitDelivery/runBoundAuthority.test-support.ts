@@ -51,6 +51,7 @@ export function permittedGitDeliveryAuthority(
   projectId: () => string,
   workspaceRoot: () => string = projectId,
   effectiveMode: CodingWorkbenchMode = "autonomous-delivery",
+  branch: CodingWorkbenchAuthorityEnvelope["branch"] = TEST_AUTHORITY.branch,
 ): GitDeliveryRunAuthorityPort {
   return {
     current: () => ({
@@ -58,9 +59,10 @@ export function permittedGitDeliveryAuthority(
       envelopeDigest: "c".repeat(64),
       projectId: projectId(),
       workspaceRoot: workspaceRoot(),
-      branch: TEST_AUTHORITY.branch,
+      branch,
       authority: {
         ...TEST_AUTHORITY,
+        branch,
         requestedMode: effectiveMode,
         deploymentCeiling: effectiveMode,
         effectiveMode,

@@ -5697,9 +5697,13 @@ describe("handleGatewaySetup", () => {
     expect(testerEgress).toEqual(expectedEgress);
     expect(currentGatewayConfig(deps)?.egress).toEqual(expectedEgress);
     const saved = readFileSync(deps.gatewayConfig?.storagePath ?? "", "utf8");
-    expect(saved).not.toContain("proxy.config.internal.example");
-    expect(saved).not.toContain("config-ca.pem");
-    expect(saved).not.toContain("egress");
+    expect(JSON.parse(saved)).toMatchObject({
+      egress: {
+        httpsProxy: "http://proxy.config.internal.example:8443",
+        noProxy: "localhost,.corp.example",
+        caBundlePath: "/etc/keiko/config-ca.pem",
+      },
+    });
     deps.store.close();
   });
 

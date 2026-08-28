@@ -271,6 +271,7 @@ export const createHandlePrExecute = (
       projectId,
       workspace,
       "pull-request",
+      { headBranchName: command.headBranchName, baseBranchName: command.baseBranchName },
     );
     if (authorityDenial !== undefined) return authorityDenial;
     const verifiedApproval = resolveGitDeliveryApprovalRequirement(approval, {

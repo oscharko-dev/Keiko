@@ -5,6 +5,7 @@ import { Readable } from "node:stream";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type {
+  CodingWorkbenchAuthorityEnvelope,
   CodingWorkbenchMode,
   GitRepositoryAgentOperationKind,
   GitRepositoryAgentOperationRequest,
@@ -42,6 +43,7 @@ const NO_CEILING = "unconfigured" as const;
 function deps(
   runner: GitProcessRunner = vi.fn(() => Promise.resolve(ok(""))),
   ceiling: CodingWorkbenchMode | typeof NO_CEILING = "autonomous-delivery",
+  branch?: CodingWorkbenchAuthorityEnvelope["branch"],
 ): UiHandlerDeps {
   return {
     config: undefined,
@@ -61,6 +63,7 @@ function deps(
             () => root,
             () => root,
             ceiling,
+            branch,
           ),
         }),
   };
@@ -173,7 +176,7 @@ describe("POST /api/git/agent/operations", () => {
     });
   });
 
-  it("passes through unknown project results from delegated routes", async () => {
+  it("denies an execute request for an unknown project before delegation", async () => {
     const result = await handleGitAgentOperation(
       ctx(
         request({
@@ -187,11 +190,11 @@ describe("POST /api/git/agent/operations", () => {
       deps(),
     );
 
-    expect(result.status).toBe(404);
+    expect(result.status).toBe(403);
     expect(result.body).toMatchObject({
-      status: "delegated",
+      status: "denied",
       operation: "branch-switch",
-      routeStatus: 404,
+      denialReason: "autonomy-mode-denied",
     });
   });
 
@@ -450,9 +453,16 @@ describe("agent facade — autonomy admission (fail-closed)", () => {
 
   it("routes an accepted autonomous push to its downstream policy and approval gate", async () => {
     const runner = vi.fn<GitProcessRunner>(() => Promise.resolve(ok("")));
+    const body = executeRequest("push", "push-autonomous");
+    body.payload = { remoteAlias: "origin", sourceBranchName: "feat/x", remoteBranchName: "main" };
     const result = await handleGitAgentOperation(
-      ctx(executeRequest("push", "push-autonomous")),
-      deps(runner, "autonomous-delivery"),
+      ctx(body),
+      deps(runner, "autonomous-delivery", {
+        headRef: "feat/x",
+        baseRef: "main",
+        allowDetachedHead: false,
+        allowedPrefixes: ["feat/"],
+      }),
     );
 
     expect(result.status).toBe(409);
@@ -466,7 +476,12 @@ describe("agent facade — autonomy admission (fail-closed)", () => {
     const runner = vi.fn<GitProcessRunner>(() => Promise.resolve(ok("")));
     const result = await handleGitAgentOperation(
       ctx(executeRequest("merge", "merge-facade-approval-required")),
-      deps(runner, "autonomous-delivery"),
+      deps(runner, "autonomous-delivery", {
+        headRef: "feat/x",
+        baseRef: "main",
+        allowDetachedHead: false,
+        allowedPrefixes: ["feat/"],
+      }),
     );
 
     expect(result.status).toBe(409);
@@ -501,6 +516,17 @@ describe("agent facade — autonomy admission (fail-closed)", () => {
     expect(blocked.body).toMatchObject({ status: "denied", denialReason: "autonomy-mode-denied" });
     expect(admitted.body).toMatchObject({ status: "delegated" });
     expect(admitted.body).not.toMatchObject({ replay: true });
+  });
+
+  it("denies an execute request for an unresolved workspace before idempotency or delegation", async () => {
+    const runner = vi.fn<GitProcessRunner>(() => Promise.resolve(ok("")));
+    const body = executeRequest("branch-switch", "unknown-workspace-idempotency");
+    body.projectId = "/not-a-registered-workspace";
+    const result = await handleGitAgentOperation(ctx(body), deps(runner, "autonomous-delivery"));
+
+    expect(result.status).toBe(403);
+    expect(result.body).toMatchObject({ status: "denied", denialReason: "autonomy-mode-denied" });
+    expect(runner).not.toHaveBeenCalled();
   });
 
   it("keeps the denial content-free", async () => {

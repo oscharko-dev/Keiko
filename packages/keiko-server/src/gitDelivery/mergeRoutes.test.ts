@@ -157,7 +157,12 @@ function deps(overrides: Partial<UiHandlerDeps> = {}): UiHandlerDeps {
     registry: createRunRegistry(),
     modelPortFactory: () => undefined,
     store,
-    gitDeliveryAuthority: permittedGitDeliveryAuthority(() => projectId),
+    gitDeliveryAuthority: permittedGitDeliveryAuthority(
+      () => projectId,
+      () => projectId,
+      "autonomous-delivery",
+      { headRef: "feat/x", baseRef: "main", allowDetachedHead: false, allowedPrefixes: ["feat/"] },
+    ),
     ...overrides,
   };
 }

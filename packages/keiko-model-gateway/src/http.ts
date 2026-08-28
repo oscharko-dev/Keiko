@@ -539,6 +539,7 @@ function refuseUndelegatedProxiedHostnameEgress(
   if (
     proxy !== undefined &&
     classifyOutboundHost(target.hostname) === undefined &&
+    egress?.pinProxiedConnectTarget !== true &&
     egress?.acknowledgeProxiedHostnamePolicy !== true
   ) {
     throw blockedTargetError(
@@ -566,11 +567,14 @@ async function enforceRedirectTargetPolicy(
   original: URL,
   response: Response,
   egress: OutboundHttpEgressConfig | undefined,
-  options: { readonly resolveDns: boolean; readonly proxy: URL | undefined },
+  options: { readonly resolveDns: boolean },
 ): Promise<URL | undefined> {
   const redirected = redirectTarget(original, response);
   if (redirected === undefined) return undefined;
-  refuseUndelegatedProxiedHostnameEgress(redirected, options.proxy, egress);
+  const redirectedProxyRaw = proxyForTarget(redirected, egress);
+  const redirectedProxy =
+    redirectedProxyRaw === undefined ? undefined : parseProxyUrl(redirectedProxyRaw);
+  refuseUndelegatedProxiedHostnameEgress(redirected, redirectedProxy, egress);
   await enforceOutboundTargetPolicy(redirected, egress, options);
   return redirected;
 }
@@ -1424,7 +1428,6 @@ async function performGatewayFetch(url: string, options: GatewayFetchOptions): P
     );
     await enforceRedirectTargetPolicy(plan.target, response, egress, {
       ...dns.redirectPolicy,
-      proxy: plan.proxy,
     });
     return response;
   }
@@ -1438,7 +1441,6 @@ async function performGatewayFetch(url: string, options: GatewayFetchOptions): P
   });
   await enforceRedirectTargetPolicy(plan.target, response, egress, {
     ...dns.redirectPolicy,
-    proxy: plan.proxy,
   });
   return response;
 }

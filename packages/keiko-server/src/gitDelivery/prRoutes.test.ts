@@ -127,7 +127,17 @@ function deps(overrides: Partial<UiHandlerDeps> = {}): UiHandlerDeps {
     registry: createRunRegistry(),
     modelPortFactory: () => undefined,
     store,
-    gitDeliveryAuthority: permittedGitDeliveryAuthority(() => projectId),
+    gitDeliveryAuthority: permittedGitDeliveryAuthority(
+      () => projectId,
+      () => projectId,
+      "autonomous-delivery",
+      {
+        headRef: "claude/issue-477-github-pr-command-center",
+        baseRef: "dev",
+        allowDetachedHead: false,
+        allowedPrefixes: ["claude/"],
+      },
+    ),
     ...overrides,
   };
 }
@@ -342,7 +352,7 @@ describe("pr execute — governed create + no-bypass (AC1/AC4/AC5)", () => {
     expect(cap.raw()).not.toContain("Implements the #477");
   });
 
-  it("blocks a base outside the allow-list, executing nothing yet recording evidence (AC2/AC5)", async () => {
+  it("denies a base outside the active authority envelope before execution", async () => {
     const adapter = recordingPrAdapter();
     const cap = capturingEvidenceStore();
     const handler = createHandlePrExecute({
@@ -352,11 +362,10 @@ describe("pr execute — governed create + no-bypass (AC1/AC4/AC5)", () => {
       ctxFor(EXECUTE, createBody({ baseBranchName: "random-base" })),
       deps({ evidenceStore: cap.store }),
     );
-    const body = res.body as GitDeliveryPrExecuteResponseBody;
-    expect(body.status).toBe("blocked");
-    expect(body.blockReason).toBe("policy-pack-blocked");
+    expect(res.status).toBe(403);
+    expect(res.body).toMatchObject({ error: { code: "GIT_DELIVERY_AUTHORITY_DENIED" } });
     expect(adapter.creates()).toBe(0);
-    expect(cap.count()).toBe(1);
+    expect(cap.count()).toBe(0);
   });
 
   it("normalizes a provider rejection into a typed reason + recovery disposition (AC4)", async () => {

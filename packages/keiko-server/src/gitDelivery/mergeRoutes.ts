@@ -263,7 +263,10 @@ export const createHandleMergeExecute = (
     if (!prepared.ok) return prepared.result;
     const { workspace } = prepared;
     const { projectId, command, approval } = prepared.value;
-    const authorityDenial = gitDeliveryAuthorityDenial(ctx, deps, projectId, workspace, "merge");
+    const authorityDenial = gitDeliveryAuthorityDenial(ctx, deps, projectId, workspace, "merge", {
+      headBranchName: command.headBranchName,
+      baseBranchName: command.baseBranchName,
+    });
     if (authorityDenial !== undefined) return authorityDenial;
     const verifiedApproval = resolveGitDeliveryApprovalRequirement(approval, {
       store: seams.approvalStore,

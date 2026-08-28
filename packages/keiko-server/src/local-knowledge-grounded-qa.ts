@@ -2235,6 +2235,9 @@ async function appendLocalKnowledgeNumericEntailment(
     numericEntailmentEvidence(result, env.store, deps, limits),
     Date.now(),
   );
+  if (context.signal?.aborted === true) {
+    throw new CancelledError("grounded request cancelled");
+  }
   if (markers.length === 0) return answer;
   return {
     ...answer,

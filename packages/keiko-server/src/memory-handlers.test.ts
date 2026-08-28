@@ -1129,9 +1129,7 @@ describe("memory handlers", () => {
     );
 
     expect(result.status).toBe(403);
-    expect((asJson(result).error as { code: string }).code).toBe(
-      "CORRECTION_PREDECESSOR_FORBIDDEN",
-    );
+    expect((asJson(result).error as { code: string }).code).toBe("MEMORY_SCOPE_FORBIDDEN");
     expect(vault.getMemory(correction.id)?.status).toBe("proposed");
   });
 
@@ -1161,6 +1159,37 @@ describe("memory handlers", () => {
     expect(result.status).toBe(409);
     expect((asJson(result).error as { code: string }).code).toBe("CORRECTION_PREDECESSOR_STALE");
     expect(vault.getMemory(correction.id)?.status).toBe("proposed");
+    expect(vault.listOutgoingEdges(original.id).some((edge) => edge.kind === "supersedes")).toBe(
+      false,
+    );
+  });
+
+  it("attributes a proposal version race to the proposal rather than its predecessor", async () => {
+    const vault = makeVault();
+    const original = vault.insertMemory(makeMemory("memory-correct-proposal-race", "Prefer yarn."));
+    const proposalResult = await handleCorrectMemory(
+      makeCtx(
+        "/api/memory/memory-correct-proposal-race/correct",
+        { body: "Prefer npm ci." },
+        { id: "memory-correct-proposal-race" },
+      ),
+      makeDeps({ memoryVault: vault }),
+    );
+    const correction = asJson(proposalResult).correction as MemoryRecord;
+    const applyGraphMutation = vault.applyGraphMutation.bind(vault);
+    vi.spyOn(vault, "applyGraphMutation").mockImplementationOnce((mutation) => {
+      vault.updateMemory(correction.id, { status: "archived" }, correction.updatedAt + 1);
+      return applyGraphMutation(mutation);
+    });
+
+    const result = await handleAcceptMemoryProposal(
+      makeCtx(`/api/memory/proposals/${correction.id}/accept`, {}, { id: correction.id }),
+      makeDeps({ memoryVault: vault }),
+    );
+
+    expect(result.status).toBe(409);
+    expect((asJson(result).error as { code: string }).code).toBe("PROPOSAL_STALE");
+    expect(vault.getMemory(original.id)?.status).toBe("accepted");
     expect(vault.listOutgoingEdges(original.id).some((edge) => edge.kind === "supersedes")).toBe(
       false,
     );

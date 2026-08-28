@@ -250,11 +250,15 @@ not permit individually.
 
 **Transport:** the concrete adapter is built from `gatewayFetch` (ADR-0038), reusing its existing
 proxy/CA composition unchanged — no connector-specific proxy or CA logic is introduced. Proxy
-configuration (`KEIKO_HTTPS_PROXY` > `HTTPS_PROXY` > `https_proxy`, `NO_PROXY` rules) and trusted
-CAs (Node bundled roots ∪ OS trust store ∪ `NODE_EXTRA_CA_CERTS` ∪ configured bundle) are the
-existing operator-level configuration; this connector does not gain its own proxy/CA settings
-surface. Both enterprise-proxied and direct-internet deployments are first-class because the
-transport is unchanged from the model-gateway/Figma path that already supports both.
+configuration (`KEIKO_HTTPS_PROXY` > `HTTPS_PROXY` > `https_proxy`, `NO_PROXY` rules) remains
+operator-level configuration. When an HTTP(S) proxy resolves a hostname, the gateway configuration
+file must additionally set `egress.acknowledgeProxiedHostnamePolicy: true`; that explicit
+acknowledgement records the delegated-resolution risk and is never inherited from an environment
+variable. Trusted CAs (Node bundled roots ∪ OS trust store ∪ `NODE_EXTRA_CA_CERTS` ∪ configured
+bundle) remain part of the existing operator-level configuration; this connector does not gain its
+own proxy/CA settings surface. Both enterprise-proxied and direct-internet deployments are
+first-class because the transport is unchanged from the model-gateway/Figma path that already
+supports both.
 
 **Redirects and protocol downgrade fail closed.** The adapter issues requests with no redirect
 following (mirroring `figmaHttpPort.ts`'s `redirect: "manual"`): any 3xx response is surfaced as a

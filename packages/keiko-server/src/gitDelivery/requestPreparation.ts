@@ -15,6 +15,7 @@ import type { RouteContext, RouteResult } from "../routes.js";
 import type { UiHandlerDeps } from "../deps.js";
 import { UNKNOWN_CORRELATION_ID } from "../correlation.js";
 import { processServerLogSink } from "../process-log-sink.js";
+import type { ServerLogSink } from "../observability/index.js";
 import { resolveProjectWorkspace } from "./execution.js";
 import { readParsedGitDeliveryBody } from "./requestGuards.js";
 import { authorizeGitDelivery } from "./runBoundAuthority.js";
@@ -42,6 +43,11 @@ export interface GitDeliveryAuthorityTarget {
   readonly baseBranchName?: string | undefined;
 }
 
+export interface GitDeliveryAuthorityAuditSeams {
+  readonly nowIso?: string | undefined;
+  readonly logSink?: ServerLogSink | undefined;
+}
+
 /**
  * Applies the sole delivery-write admission decision after a project workspace has been resolved.
  * This intentionally consumes only the live server-owned runtime authority; headers, browser state,
@@ -54,13 +60,14 @@ export function gitDeliveryAuthorityDenial(
   workspace: WorkspaceInfo,
   operation: GitRepositoryAgentOperationKind,
   target: GitDeliveryAuthorityTarget = {},
+  audit: GitDeliveryAuthorityAuditSeams = {},
 ): RouteResult | undefined {
   const decision = authorizeGitDelivery(
     deps.gitDeliveryAuthority,
     { projectId, workspaceRoot: workspace.root, operation, ...target },
-    new Date().toISOString(),
+    audit.nowIso ?? new Date().toISOString(),
   );
-  processServerLogSink().write({
+  (audit.logSink ?? processServerLogSink()).write({
     category: "security",
     op: decision.allowed ? "git.delivery.authority.admitted" : "git.delivery.authority.denied",
     correlationId: ctx.correlationId ?? UNKNOWN_CORRELATION_ID,

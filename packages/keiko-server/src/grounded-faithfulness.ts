@@ -528,9 +528,9 @@ export function splitClaimSpans(text: string): readonly string[] {
   let start = 0;
   for (let i = 0; i < text.length; i += 1) {
     const ch = text.charAt(i);
-    if (ch === "[") {
+    if (ch === "[" || ch === "［" || ch === "【") {
       depth += 1;
-    } else if (ch === "]" && depth > 0) {
+    } else if ((ch === "]" || ch === "］" || ch === "】") && depth > 0) {
       depth -= 1;
     } else if (depth === 0 && isSentenceBoundary(ch)) {
       if (text.slice(start, i + 1).trim().length > 0) {
@@ -548,7 +548,7 @@ export function splitClaimSpans(text: string): readonly string[] {
 /** Remove inline `[...]` citation brackets from a claim span so the judge sees the prose claim. */
 export function stripInlineCitations(text: string): string {
   return text
-    .replace(/\[[^\]\n]{1,200}\]/g, " ")
+    .replace(/[\[［【][^\]］】\n]{1,200}[\]］】]/g, " ")
     .replace(/\s{2,}/g, " ")
     .trim();
 }

@@ -59,7 +59,7 @@ function renderManager(value: ActiveWorkspaceApi): HTMLElement {
 }
 
 function openManager(): HTMLElement {
-  fireEvent.click(screen.getByRole("button", { name: /task workspace context/i }));
+  fireEvent.click(screen.getByRole("button", { name: /task workspaces/i }));
   return screen.getByRole("dialog", { name: "Task workspace context" });
 }
 
@@ -127,7 +127,7 @@ describe("TaskWorkspaceManager", () => {
   it("restores trigger focus when Escape closes the non-modal panel", () => {
     renderManager(api());
     const trigger = screen.getByRole("button", {
-      name: "Task workspace context: no active workspace",
+      name: "Task workspaces: no active workspace",
     });
     fireEvent.click(trigger);
     fireEvent.keyDown(document, { key: "Escape" });

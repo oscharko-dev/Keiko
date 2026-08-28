@@ -185,8 +185,12 @@ proxy or CA settings. Common causes in enterprise networks:
 
 **Resolution**
 
-1. **Configure the proxy** if outbound traffic must traverse one. Set `KEIKO_HTTPS_PROXY` (or the
-   standard `HTTPS_PROXY`) to the proxy URL. The proxy URL must not embed credentials (ADR-0038).
+1. **Configure and acknowledge the proxy policy** if outbound traffic must traverse one. Set
+   `KEIKO_HTTPS_PROXY` (or the standard `HTTPS_PROXY`) to the proxy URL and add
+   `egress.acknowledgeProxiedHostnamePolicy: true` to Keiko's gateway configuration file. This is
+   deliberately not an environment variable: it records an operator's explicit acceptance that a
+   configured proxy may resolve an outbound hostname. The proxy URL must not embed credentials
+   (ADR-0038).
 2. **Add the corporate CA** so Node trusts the inspecting proxy's certificate. Point
    `NODE_EXTRA_CA_CERTS` at the PEM bundle for your organization's root CA before starting Keiko:
 

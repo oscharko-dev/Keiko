@@ -136,12 +136,14 @@ async function loadCorrectionPredecessors(
   const corrections = records.filter(
     (record) => record.status === "proposed" && record.type === "correction",
   );
-  const entries = await Promise.all(
+  const settled = await Promise.allSettled(
     corrections.map(
       async (record) => [record.id, (await fetchImpl(record.id)).candidates] as const,
     ),
   );
-  return new Map(entries);
+  return new Map(
+    settled.flatMap((result) => (result.status === "fulfilled" ? [result.value] : [])),
+  );
 }
 
 function acceptsOptions(options: AcceptMemoryProposalOptions): boolean {
@@ -282,6 +284,7 @@ function RowActionButton({
   isBusy,
   busyLabel,
   idleLabel,
+  disabled = false,
   onClick,
 }: {
   readonly variant: "primary" | "ghost";
@@ -289,16 +292,17 @@ function RowActionButton({
   readonly isBusy: boolean;
   readonly busyLabel: string;
   readonly idleLabel: string;
+  readonly disabled?: boolean | undefined;
   readonly onClick: () => void;
 }): ReactNode {
   return (
     <button
       type="button"
       className={`lk-btn lk-btn-${variant}`}
-      aria-disabled={busyAction !== null}
+      aria-disabled={busyAction !== null || disabled}
       aria-busy={isBusy}
       onClick={() => {
-        if (busyAction !== null) return;
+        if (busyAction !== null || disabled) return;
         onClick();
       }}
     >
@@ -316,6 +320,7 @@ function ReviewRowActions({
   onAccept,
   onReject,
   onArchive,
+  acceptDisabled,
   editing,
   onEdit,
   onCancelEdit,
@@ -327,6 +332,7 @@ function ReviewRowActions({
   readonly onAccept: () => void;
   readonly onReject: (record: MemoryRecord) => void;
   readonly onArchive: (record: MemoryRecord) => void;
+  readonly acceptDisabled: boolean;
   readonly editing: boolean;
   readonly onEdit: () => void;
   readonly onCancelEdit: () => void;
@@ -345,6 +351,7 @@ function ReviewRowActions({
           isBusy={busyAction === "accept"}
           busyLabel={t("memoria.approving")}
           idleLabel={editing ? t("memoria.approveEditedProposal") : t("memoria.approve")}
+          disabled={acceptDisabled}
           onClick={onAccept}
         />
         <RowActionButton
@@ -426,6 +433,8 @@ function ReviewRow({
   const [editing, setEditing] = useState(false);
   const [draftBody, setDraftBody] = useState(record.body);
   const [predecessorId, setPredecessorId] = useState<MemoryId | undefined>();
+  const requiresPredecessorSelection =
+    record.type === "correction" && (predecessors?.length ?? 0) > 1 && predecessorId === undefined;
   const labelId = `memory-review-body-${record.id}`;
   const editorId = `memory-review-editor-${record.id}`;
   const detailLinkLabel = t("memoria.viewDetailsFor", {
@@ -502,6 +511,7 @@ function ReviewRow({
           }
           onReject={onReject}
           onArchive={onArchive}
+          acceptDisabled={requiresPredecessorSelection}
           editing={editing}
           onEdit={() => setEditing(true)}
           onCancelEdit={() => {
@@ -557,14 +567,14 @@ export function ReviewQueue({
     setError(null);
     try {
       const res: MemoryReviewQueueResponse = await fetchQueueImpl();
+      setRecords(res.memories);
+      setBusyById({});
+      setRowErrorsById({});
       const predecessors = await loadCorrectionPredecessors(
         res.memories,
         fetchCorrectionPredecessorsImpl,
       );
-      setRecords(res.memories);
       setPredecessorsById(predecessors);
-      setBusyById({});
-      setRowErrorsById({});
     } catch (err) {
       setError(formatError(err));
     } finally {

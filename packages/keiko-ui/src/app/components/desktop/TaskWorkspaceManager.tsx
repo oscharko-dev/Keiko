@@ -105,7 +105,10 @@ function useWorkspacePanelState(): {
   const panelId = useId();
   const triggerRef = useRef<HTMLButtonElement>(null);
   const rootRef = useRef<HTMLDivElement>(null);
-  const close = useCallback((): void => setOpen(false), []);
+  const close = useCallback((): void => {
+    setOpen(false);
+    triggerRef.current?.focus();
+  }, []);
   const toggle = useCallback((): void => setOpen((value) => !value), []);
 
   useEffect(() => {
@@ -113,7 +116,6 @@ function useWorkspacePanelState(): {
     const onKeyDown = (event: KeyboardEvent): void => {
       if (event.key !== "Escape") return;
       close();
-      triggerRef.current?.focus();
     };
     const onPointerDown = (event: PointerEvent): void => {
       if (event.target instanceof Node && !rootRef.current?.contains(event.target)) close();
@@ -234,6 +236,10 @@ function WorkspacePanel(props: {
   readonly t: I18nTranslate;
 }): ReactNode {
   const announcer = useOptionalAnnouncer();
+  const headingRef = useRef<HTMLHeadingElement>(null);
+  useEffect(() => {
+    headingRef.current?.focus();
+  }, []);
   const refresh = (): void => {
     void props.api.refresh().then(() => {
       if (props.api.error === null) announcer.announce(props.t("taskWorkspace.status.reconciled"));
@@ -248,7 +254,9 @@ function WorkspacePanel(props: {
       aria-label={props.t("taskWorkspace.panel.aria")}
     >
       <div className={styles["cmp-ph"]}>
-        <h2>{props.t("taskWorkspace.title")}</h2>
+        <h2 ref={headingRef} tabIndex={-1}>
+          {props.t("taskWorkspace.title")}
+        </h2>
         <button
           type="button"
           className={styles["cmp-rf"]}
