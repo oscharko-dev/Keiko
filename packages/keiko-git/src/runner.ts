@@ -177,6 +177,40 @@ function captureChunk(
   }
 }
 
+// KEIKO-0733: a raw byte-index cut (captureChunk) can bisect a multi-byte UTF-8 codepoint, leaving
+// a dangling lead byte (or lead byte plus a partial run of continuation bytes) at the very end of
+// the captured buffer. `Buffer#toString("utf8")` decodes that dangling tail as U+FFFD, which is a
+// decoding artifact of the cut, not anything git actually emitted. Scan back up to 3 bytes from the
+// end to find and drop an incomplete trailing lead-byte sequence before decoding, so a truncated
+// capture never surfaces a replacement character it didn't earn.
+function trimIncompleteUtf8Tail(buffer: Buffer): Buffer {
+  const length = buffer.length;
+  const maxScan = Math.min(3, length);
+  for (let distanceFromEnd = 1; distanceFromEnd <= maxScan; distanceFromEnd += 1) {
+    const byte = buffer[length - distanceFromEnd];
+    if (byte === undefined) break;
+    if ((byte & 0xc0) === 0x80) continue; // continuation byte — keep scanning back for its lead byte
+    const sequenceLength = utf8LeadByteSequenceLength(byte);
+    if (sequenceLength === undefined) return buffer; // not a multi-byte lead byte — nothing to trim
+    return sequenceLength > distanceFromEnd ? buffer.subarray(0, length - distanceFromEnd) : buffer;
+  }
+  return buffer;
+}
+
+// Returns the total codepoint byte length a UTF-8 lead byte announces, or undefined for an ASCII
+// byte / a byte that is not a valid multi-byte lead byte.
+function utf8LeadByteSequenceLength(byte: number): number | undefined {
+  if ((byte & 0xe0) === 0xc0) return 2;
+  if ((byte & 0xf0) === 0xe0) return 3;
+  if ((byte & 0xf8) === 0xf0) return 4;
+  return undefined;
+}
+
+function decodeCapturedStream(sink: OutputAccumulator, truncated: boolean): string {
+  const buffer = Buffer.concat(sink.chunks);
+  return (truncated ? trimIncompleteUtf8Tail(buffer) : buffer).toString("utf8");
+}
+
 function runResult(
   state: RunState,
   exitCode: number | null,
@@ -185,8 +219,8 @@ function runResult(
   return {
     exitCode,
     signal,
-    stdout: Buffer.concat(state.stdout.chunks).toString("utf8"),
-    stderr: Buffer.concat(state.stderr.chunks).toString("utf8"),
+    stdout: decodeCapturedStream(state.stdout, state.truncated),
+    stderr: decodeCapturedStream(state.stderr, state.truncated),
     truncated: state.truncated,
     timedOut: state.timedOut,
     aborted: state.aborted,

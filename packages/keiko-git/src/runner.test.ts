@@ -202,6 +202,69 @@ describe("createGitProcessRunner", () => {
     expect(Buffer.byteLength(result.stdout, "utf8")).toBeLessThanOrEqual(1024);
   });
 
+  it.skipIf(process.platform === "win32").each([
+    // KEIKO-0733: a raw byte-index cut that bisects a multi-byte UTF-8 codepoint decodes the
+    // dangling lead byte(s) as U+FFFD. "ab" (2 ASCII bytes) followed by a multi-byte codepoint;
+    // maxBytes lands the cut inside the codepoint, leaving only its lead byte(s) captured.
+    {
+      label: "mid-3-byte sequence (only the lead byte survives the cut)",
+      // "€" = E2 82 AC — capture "ab" + the first byte only.
+      octal: "ab\\342\\202\\254",
+      maxBytes: 3,
+      expectedStdout: "ab",
+    },
+    {
+      label: "mid-4-byte sequence (two of four bytes survive the cut)",
+      // "😀" = F0 9F 98 80 — capture "ab" + the first two bytes only.
+      octal: "ab\\360\\237\\230\\200",
+      maxBytes: 4,
+      expectedStdout: "ab",
+    },
+    {
+      label: "2-byte lead byte alone survives the cut",
+      // "é" = C3 A9 — capture "ab" + the lead byte only. Exercises the
+      // utf8LeadByteSequenceLength 2-byte branch ((byte & 0xe0) === 0xc0), which the two cases
+      // above never reach.
+      octal: "ab\\303\\251",
+      maxBytes: 3,
+      expectedStdout: "ab",
+    },
+    {
+      label: "a complete trailing codepoint at the cut boundary is preserved",
+      // "€" = E2 82 AC followed by "cd"; the cap lands exactly at the end of the complete
+      // 3-byte codepoint, so nothing should be trimmed. This kills a `>=` mutant on the
+      // `sequenceLength > distanceFromEnd` guard: a `>=` mutant silently deletes this complete,
+      // uncut "€" instead of leaving it alone.
+      octal: "ab\\342\\202\\254cd",
+      maxBytes: 5,
+      expectedStdout: "ab€",
+    },
+  ])(
+    "drops an incomplete trailing UTF-8 lead-byte sequence instead of emitting U+FFFD: $label",
+    async ({ octal, maxBytes, expectedStdout }) => {
+      const binDir = mkdtempSync(join(tmpdir(), "keiko-git-utf8-tail-bin-"));
+      const fakeGit = join(binDir, "git");
+      writeFileSync(fakeGit, `#!/bin/sh\nprintf '${octal}'\n`, "utf8");
+      chmodSync(binDir, 0o700);
+      chmodSync(fakeGit, 0o700);
+
+      try {
+        const runner = createGitProcessRunner(() => ({ PATH: binDir }));
+        const result = await runner(["status"], {
+          cwd: root,
+          timeoutMs: 1_000,
+          maxBytes,
+        });
+
+        expect(result.truncated).toBe(true);
+        expect(result.stdout).toBe(expectedStdout);
+        expect(result.stdout).not.toContain("�");
+      } finally {
+        rmSync(binDir, { recursive: true, force: true });
+      }
+    },
+  );
+
   it.skipIf(process.platform === "win32")(
     "shares the output cap across stdout and stderr",
     async () => {
