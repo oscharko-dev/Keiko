@@ -229,15 +229,15 @@
     "qs": "6.15.3",
     "vite": "8.1.4",
     "lightningcss": "1.32.0",
-    "eslint-plugin-import": {
-      "eslint": "$eslint"
+    "eslint-plugin-import@2.32.0": {
+      "eslint": "^10.0.0"
     },
     "eslint-plugin-jsx-a11y": {
       "axe-core": "4.12.1",
-      "eslint": "$eslint"
+      "eslint": "^10.0.0"
     },
-    "eslint-plugin-react": {
-      "eslint": "$eslint"
+    "eslint-plugin-react@7.37.5": {
+      "eslint": "^10.0.0"
     }
   },
   "devDependencies": {

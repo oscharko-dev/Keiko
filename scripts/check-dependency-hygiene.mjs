@@ -4,7 +4,9 @@
 // This deterministic, offline gate fails closed on dependency placement, missing workspace engine
 // floors, a workspace lint toolchain that has drifted off the root's single lane, undeclared script
 // imports, and tracked generated Next.js output. It reports metadata only: package names, policy
-// descriptions, counts, and control-character-safe paths — never file bodies.
+// descriptions, counts, and control-character-safe values — never file bodies. Every dynamic
+// value reaching a diagnostic goes through safeDiagnostic, because workspace directory names and
+// version ranges are file-supplied and would otherwise carry control sequences into CI output.
 
 import { spawnSync } from "node:child_process";
 import { existsSync, readdirSync, readFileSync, realpathSync } from "node:fs";
@@ -37,7 +39,9 @@ const SINGLE_LANE_PACKAGES = ["eslint"];
 // ESLint 9's `recommended` set and three newly-default rules never fired. Nothing caught it and
 // nothing could: the two are independent devDependencies, `@eslint/js@9` declared no peer on
 // `eslint` at all, and `@eslint/js@10`'s peer is optional — so `npm ls` is silent by construction.
-// `@eslint/js` ships the rule set `eslint` runs; their majors move together or the gate fails.
+// `@eslint/js` ships the rule set `eslint` runs; their majors move together, or the gate fails —
+// including when a range is written in a form the gate cannot compare, since staying quiet there
+// would remove the only guard this pair has.
 const MAJOR_LOCKED_PAIRS = [["eslint", "@eslint/js"]];
 const DECIMAL_DIGITS = new Set("0123456789");
 const GOVERNED_GIT_EXECUTABLE_PATHS = [
@@ -79,19 +83,27 @@ function collectManifestProblems(manifests) {
     for (const dependency of Object.keys(pkg.dependencies ?? {})) {
       if (dependency.startsWith("@types/")) {
         problems.push(
-          `${label}: "${dependency}" is a type-only package in "dependencies" — move it to "devDependencies" (it would ship in the tarball).`,
+          `${safeDiagnostic(label)}: "${safeDiagnostic(dependency)}" is a type-only package in "dependencies" — move it to "devDependencies" (it would ship in the tarball).`,
         );
       }
     }
     if (label !== "<root>" && (pkg.engines === undefined || pkg.engines.node === undefined)) {
-      problems.push(`${label}: missing an "engines.node" floor (align with the root).`);
+      problems.push(
+        `${safeDiagnostic(label)}: missing an "engines.node" floor (align with the root).`,
+      );
     }
   }
   return problems;
 }
 
 function declaredRange(pkg, dependency) {
-  return pkg.dependencies?.[dependency] ?? pkg.devDependencies?.[dependency];
+  // optionalDependencies counts: it installs a copy like the other two, so it can open the same
+  // second-lane hole. peerDependencies deliberately does not — it installs nothing.
+  return (
+    pkg.dependencies?.[dependency] ??
+    pkg.devDependencies?.[dependency] ??
+    pkg.optionalDependencies?.[dependency]
+  );
 }
 
 function collectSingleLaneProblems(manifests, rootPackage) {
@@ -104,8 +116,8 @@ function collectSingleLaneProblems(manifests, rootPackage) {
       if (range === undefined || range === rootRange) continue;
       problems.push(
         rootRange === undefined
-          ? `${label}: declares "${dependency}": "${range}" while the root declares none — the workspace executes the root's installed ${dependency}, so declare it at the root instead.`
-          : `${label}: declares "${dependency}": "${range}" but the root declares "${rootRange}" — the workspace executes the root's installed ${dependency}, so a diverging range installs a second copy that never runs.`,
+          ? `${safeDiagnostic(label)}: declares "${safeDiagnostic(dependency)}": "${safeDiagnostic(range)}" while the root declares none — the workspace executes the root's installed ${safeDiagnostic(dependency)}, so declare it at the root instead.`
+          : `${safeDiagnostic(label)}: declares "${safeDiagnostic(dependency)}": "${safeDiagnostic(range)}" but the root declares "${safeDiagnostic(rootRange)}" — the workspace executes the root's installed ${safeDiagnostic(dependency)}, so a diverging range installs a second copy that never runs.`,
       );
     }
   }
@@ -133,10 +145,18 @@ function collectMajorLockProblems(rootPackage) {
     if (anchorRange === undefined || followerRange === undefined) continue;
     const anchorMajor = declaredMajor(anchorRange);
     const followerMajor = declaredMajor(followerRange);
-    if (anchorMajor === undefined || followerMajor === undefined) continue;
+    if (anchorMajor === undefined || followerMajor === undefined) {
+      // Fail closed. Skipping an unreadable range would disable the only guard this pair has —
+      // `npm ls` cannot see the mismatch at all — so a range the gate cannot compare is itself the
+      // finding, not a reason to stay quiet.
+      problems.push(
+        `<root>: cannot compare majors for "${safeDiagnostic(anchor)}": "${safeDiagnostic(anchorRange)}" and "${safeDiagnostic(follower)}": "${safeDiagnostic(followerRange)}" — this pair must stay on one major, so declare both as plain ranges (for example "^10.8.1") that the gate can read.`,
+      );
+      continue;
+    }
     if (anchorMajor === followerMajor) continue;
     problems.push(
-      `<root>: "${follower}": "${followerRange}" is on major ${followerMajor} while "${anchor}": "${anchorRange}" is on major ${anchorMajor} — ${follower} ships the rule set ${anchor} runs, so a major apart silently changes which rules are enabled.`,
+      `<root>: "${safeDiagnostic(follower)}": "${safeDiagnostic(followerRange)}" is on major ${followerMajor} while "${safeDiagnostic(anchor)}": "${safeDiagnostic(anchorRange)}" is on major ${anchorMajor} — ${safeDiagnostic(follower)} ships the rule set ${safeDiagnostic(anchor)} runs, so a major apart silently changes which rules are enabled.`,
     );
   }
   return problems;
@@ -151,7 +171,7 @@ function collectDuplicateInstallProblems(repoRoot, manifests) {
       if (label === "<root>") continue;
       if (!existsSync(join(repoRoot, "packages", label, "node_modules", dependency))) continue;
       problems.push(
-        `${label}: a second "${dependency}" is installed at packages/${label}/node_modules/${dependency} — the workspace executes the root's copy, so this one never runs and the two can drift apart.`,
+        `${safeDiagnostic(label)}: a second "${safeDiagnostic(dependency)}" is installed at packages/${safeDiagnostic(label)}/node_modules/${safeDiagnostic(dependency)} — the workspace executes the root's copy, so this one never runs and the two can drift apart.`,
       );
     }
   }
@@ -199,7 +219,7 @@ function collectScriptImportProblems(repoRoot, rootPackage) {
       const packageName = packageNameOf(specifier);
       if (!declaredPackages.has(packageName)) {
         problems.push(
-          `scripts/${file}: imports "${packageName}" which is not declared in the root package.json (relies on transitive resolution — declare it in devDependencies).`,
+          `scripts/${safeDiagnostic(file)}: imports "${safeDiagnostic(packageName)}" which is not declared in the root package.json (relies on transitive resolution — declare it in devDependencies).`,
         );
       }
     }

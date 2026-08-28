@@ -189,6 +189,33 @@ describe("tracked Next.js output hygiene", () => {
     ]);
   });
 
+  // Workspace directory names and version ranges are file-supplied, so they reach the diagnostic as
+  // untrusted text. An ANSI escape in one would otherwise repaint or hide CI output around the
+  // finding; safeDiagnostic replaces every control character before interpolation.
+  it("strips control characters from a reported workspace label and range", () => {
+    const root = makeRepository();
+    writeJson(resolve(root, "package.json"), {
+      engines: { node: ">=22" },
+      devDependencies: { eslint: "^10.8.1" },
+    });
+    const hostileDirectory = "ui\u001b[2Kevil";
+    writeJson(resolve(root, "packages", hostileDirectory, "package.json"), {
+      name: "@oscharko-dev/ui",
+      engines: { node: ">=22" },
+      devDependencies: { eslint: "9.39.5\u0007\u001b[31m" },
+    });
+    trackAll(root);
+
+    const { problems } = checkDependencyHygiene(root);
+
+    expect(problems).toHaveLength(1);
+    const [reported] = problems;
+    expect(reported).not.toContain("\u001b");
+    expect(reported).not.toContain("\u0007");
+    expect(/[^\P{Cc}\r\n\t]/u.test(reported ?? "")).toBe(false);
+    expect(reported).toContain("ui?[2Kevil");
+  });
+
   it("rejects a workspace lint toolchain the root does not declare at all", () => {
     const root = makeRepository();
     writeJson(resolve(root, "packages", "ui", "package.json"), {
@@ -200,6 +227,24 @@ describe("tracked Next.js output hygiene", () => {
 
     expect(checkDependencyHygiene(root).problems).toEqual([
       'ui: declares "eslint": "^10.8.1" while the root declares none — the workspace executes the root\'s installed eslint, so declare it at the root instead.',
+    ]);
+  });
+
+  it("reads the lint toolchain range from an optional dependency section too", () => {
+    const root = makeRepository();
+    writeJson(resolve(root, "package.json"), {
+      engines: { node: ">=22" },
+      devDependencies: { eslint: "^10.8.1" },
+    });
+    writeJson(resolve(root, "packages", "ui", "package.json"), {
+      name: "@oscharko-dev/ui",
+      engines: { node: ">=22" },
+      optionalDependencies: { eslint: "^9.39.5" },
+    });
+    trackAll(root);
+
+    expect(checkDependencyHygiene(root).problems).toEqual([
+      'ui: declares "eslint": "^9.39.5" but the root declares "^10.8.1" — the workspace executes the root\'s installed eslint, so a diverging range installs a second copy that never runs.',
     ]);
   });
 
@@ -288,6 +333,25 @@ describe("tracked Next.js output hygiene", () => {
       '<root>: "@eslint/js": "^9.39.5" is on major 9 while "eslint": "^10.8.1" is on major 10 — @eslint/js ships the rule set eslint runs, so a major apart silently changes which rules are enabled.',
     ]);
   });
+
+  // Fail closed on a range the gate cannot read. `npm ls` cannot see this pair's mismatch at all,
+  // so skipping an unparseable range would silently remove the only guard it has — which is how a
+  // dot-less "^9" against an "^10.8.1" engine reproduced defect 1 with the gate reporting PASS.
+  it.each(["^9", "~9", "9", "*", "latest", ">=9 <10.0.0"])(
+    "rejects a rule-set range the gate cannot compare (%s)",
+    (followerRange) => {
+      const root = makeRepository();
+      writeJson(resolve(root, "package.json"), {
+        engines: { node: ">=22" },
+        devDependencies: { eslint: "^10.8.1", "@eslint/js": followerRange },
+      });
+      trackAll(root);
+
+      expect(checkDependencyHygiene(root).problems).toEqual([
+        `<root>: cannot compare majors for "eslint": "^10.8.1" and "@eslint/js": "${followerRange}" — this pair must stay on one major, so declare both as plain ranges (for example "^10.8.1") that the gate can read.`,
+      ]);
+    },
+  );
 
   it("accepts a rule-set package on the engine's major, and stays quiet when either is absent", () => {
     const paired = makeRepository();

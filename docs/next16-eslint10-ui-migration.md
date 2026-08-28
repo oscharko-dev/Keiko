@@ -59,9 +59,39 @@ Reverting an already-integrated ESLint 10 to restore a green `npm ls` was reject
 downgrade working, verified code to satisfy a stale document, and Dependabot would re-propose the
 same bump. The peer ranges are stale upstream metadata, not an observed incompatibility, so the
 acceptance is recorded where a reviewer sees it — three `overrides` entries in the root
-`package.json` binding those plugins' `eslint` peer to the root's own `$eslint` spec. The override
-changes no resolution: adding it produced a byte-identical lockfile tree, and `npm ls eslint` moved
-from exit `1` to exit `0` with a single `eslint@10.9.1` node.
+`package.json` rewriting those plugins' `eslint` peer to `^10.0.0`. The override changes no
+resolution: adding it produced a byte-identical lockfile tree, and `npm ls eslint` moved from exit
+`1` to exit `0` with a single `eslint@10.9.1` node.
+
+The range is pinned to the reviewed major deliberately, rather than tracking the root's own spec
+with `$eslint`. `$eslint` would follow the root wherever it goes, so the next ESLint major would
+inherit an acceptance nobody reviewed for it — silently, which is the failure mode this whole
+section exists to describe. `^10.0.0` absorbs every 10.x bump without churn and stops being
+satisfiable at ESLint 11, which forces the acceptance to be re-made against whatever the plugins
+publish by then.
+
+Both halves of that were measured rather than assumed, and they surface at different moments:
+
+- On an already-installed tree, editing the range to one the installed ESLint does not satisfy
+  moves `npm ls eslint` to exit `1` — `check:eslint-lane` goes red.
+- On a fresh install it never gets that far. npm refuses outright:
+  `npm error peer overridden eslint@"^9.0.0" (was "^3 || … || ^9.7") from eslint-plugin-react`,
+  and `npm install` / `npm ci` exit non-zero. Notably npm does **not** quietly nest a second ESLint
+  to satisfy the override, so this cannot reopen the duplicate-install defect.
+
+So an ESLint 11 bump cannot inherit this acceptance by default: it fails at dependency resolution,
+naming the override and the plugin that need re-reviewing.
+
+Two of the three keys are scoped to the reviewed plugin version as well
+(`eslint-plugin-import@2.32.0`, `eslint-plugin-react@7.37.5`), so a future release of either drops
+out of the override instead of inheriting it — a new major that explicitly rejects ESLint 10 then
+has to be re-reviewed rather than silently exempted. `eslint-plugin-jsx-a11y` is deliberately left
+unscoped: npm does not honour a version-scoped key alongside the unscoped key that already carries
+this repository's `axe-core` pin for that plugin (measured — adding both moves `npm ls eslint` to
+exit `1`), and narrowing that key would quietly scope a pre-existing security pin to one plugin
+version. That plugin's residual exposure is covered elsewhere: it is the only one of the three whose
+rules the UI config actually executes, so a release that genuinely broke under ESLint 10 would
+surface as a lint failure in the `ui` job.
 
 That acceptance is bounded rather than open-ended:
 
@@ -74,11 +104,14 @@ That acceptance is bounded rather than open-ended:
   root's — the manifest-level cause of the duplicate install above — and, separately, when a second
   `eslint` is actually installed under a workspace's own `node_modules`.
 
-  It also fails closed when `@eslint/js` and `eslint` are declared a major apart. That is the
-  defect above that actually silenced rules, and it is the one npm can least help with:
-  `@eslint/js@9` declared no peer on `eslint` at all, and `@eslint/js@10`'s peer is marked
-  optional, so no resolver will ever object. `@eslint/js` ships the rule set `eslint` runs — their
-  majors move together or this gate fails.
+  It also fails closed when `@eslint/js` and `eslint` are declared a major apart, **and when either
+  range is written in a form the gate cannot compare** (`^9`, `~9`, `*`, `latest`, `>=9 <10.0.0`).
+  The second half is not pedantry: this pair is the one npm can least help with — `@eslint/js@9`
+  declared no peer on `eslint` at all and `@eslint/js@10`'s peer is marked optional, so no resolver
+  will ever object — which means an unreadable range would silently remove the _only_ guard it has.
+  A first cut of this check skipped what it could not parse, and `{"eslint": "^10.8.1",
+"@eslint/js": "^9"}` — defect 1 exactly — passed it. An unreadable range is therefore itself the
+  finding.
 
   The installed-duplicate check is not redundant with the manifest one either, and it is not
   something `npm ls` could do. `npm ls` raises a problem only for a missing, invalid, or extraneous
