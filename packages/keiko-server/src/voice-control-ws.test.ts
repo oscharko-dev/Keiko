@@ -17,6 +17,12 @@ import { CORRELATION_HEADER } from "./correlation.js";
 import { MAX_VOICE_CONTROL_FRAME_BYTES } from "./voice-realtime.js";
 import { VOICE_LIVE_TRANSCRIBE_PATH } from "./voice-live-dictation.js";
 import { buildRedactor, createRunRegistry, type UiHandlerDeps } from "./index.js";
+import {
+  createBufferedServerLogSink,
+  createServerLogger,
+  resetServerLogger,
+  setServerLogger,
+} from "./observability/index.js";
 import { createInMemoryUiStore } from "./store/index.js";
 import type { Chat } from "./store/index.js";
 import {
@@ -137,6 +143,7 @@ function depsWithChat(overrides: Partial<UiHandlerDeps>): { deps: UiHandlerDeps;
 let server: Server | undefined;
 
 afterEach(async () => {
+  resetServerLogger();
   const current = server;
   server = undefined;
   if (current !== undefined) {
@@ -242,6 +249,20 @@ function nextClose(ws: WebSocket): Promise<number> {
       resolve(code);
     });
   });
+}
+
+function nextCloseDetails(
+  ws: WebSocket,
+): Promise<{ readonly code: number; readonly reason: string }> {
+  return new Promise((resolve) => {
+    ws.once("close", (code: number, reason: Buffer) => {
+      resolve({ code, reason: reason.toString("utf8") });
+    });
+  });
+}
+
+function closeClients(clients: readonly OpenClient[]): void {
+  for (const { ws } of clients) ws.close();
 }
 
 function sessionCreate(chatId: string, extra: Record<string, unknown> = {}): string {
@@ -373,6 +394,77 @@ describe("WebSocket live dictation upgrade — transcription-only control plane"
     const port = await boot(depsWith({ config: voiceConfig(false), configPresent: true }));
     const result = await connect(port, { path: VOICE_LIVE_TRANSCRIBE_PATH });
     expect(result.opened).toBe(false);
+  });
+
+  it("does not let 64 idle sockets consume negotiated-session capacity (#3190)", async () => {
+    const port = await boot(depsWith({ config: voiceConfig(true), configPresent: true }));
+    const idle = await Promise.all(
+      Array.from({ length: 64 }, () => connect(port, { path: VOICE_LIVE_TRANSCRIBE_PATH })),
+    );
+    const idleSockets = idle.map(expectOpen);
+    try {
+      const { ws: activeSocket, next } = expectOpen(
+        await connect(port, { path: VOICE_LIVE_TRANSCRIBE_PATH }),
+      );
+      activeSocket.send(liveSessionCreate());
+      expect(await next()).toMatchObject({ kind: "session.created" });
+      activeSocket.close();
+    } finally {
+      closeClients(idleSockets);
+    }
+  });
+
+  it("closes an unnegotiated socket on the initial-frame deadline with correlated evidence", async () => {
+    const sink = createBufferedServerLogSink();
+    setServerLogger(createServerLogger({ sink, level: "info" }));
+    const port = await boot(depsWith({ config: voiceConfig(true), configPresent: true }));
+    const { ws: socket } = expectOpen(
+      await connect(port, {
+        path: VOICE_LIVE_TRANSCRIBE_PATH,
+        headers: { [CORRELATION_HEADER]: "live-dictation-initial-frame-timeout" },
+      }),
+    );
+    const closed = await nextCloseDetails(socket);
+
+    expect(closed).toEqual({ code: 1008, reason: "initial session frame deadline exceeded" });
+    expect(sink.events).toContainEqual(
+      expect.objectContaining({
+        category: "http",
+        op: "voice.live-dictation.initial-frame-timeout",
+        correlationId: "live-dictation-initial-frame-timeout",
+      }),
+    );
+  }, 10_000);
+
+  it("keeps genuine negotiated-session capacity pressure on close(1013)", async () => {
+    const sink = createBufferedServerLogSink();
+    setServerLogger(createServerLogger({ sink, level: "info" }));
+    const port = await boot(depsWith({ config: voiceConfig(true), configPresent: true }));
+    const clients = await Promise.all(
+      Array.from({ length: 64 }, () => connect(port, { path: VOICE_LIVE_TRANSCRIBE_PATH })),
+    );
+    const activeSockets = clients.map(expectOpen);
+    try {
+      for (const { ws, next } of activeSockets) {
+        ws.send(liveSessionCreate());
+        expect(await next()).toMatchObject({ kind: "session.created" });
+      }
+      const { ws: rejectedSocket } = expectOpen(
+        await connect(port, { path: VOICE_LIVE_TRANSCRIBE_PATH }),
+      );
+      const closed = nextClose(rejectedSocket);
+      rejectedSocket.send(liveSessionCreate());
+      expect(await closed).toBe(1013);
+      expect(sink.events).toContainEqual(
+        expect.objectContaining({
+          category: "http",
+          op: "voice.live-dictation.capacity-rejected",
+          extra: { observedCount: 64, reason: "active-session-cap" },
+        }),
+      );
+    } finally {
+      closeClients(activeSockets);
+    }
   });
 
   it("negotiates a transcription-only realtime session without dialogue fields", async () => {
