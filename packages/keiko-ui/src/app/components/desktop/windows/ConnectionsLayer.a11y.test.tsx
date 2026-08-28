@@ -10,7 +10,7 @@ import type { AppWindow, Connection } from "./types";
 import type { WorkspaceApi } from "../hooks/useWorkspace.types";
 import { usePublishChatWindowActivity } from "./chatWindowActivity";
 import type { ChatWindowGroundingActivity } from "./chatWindowActivity";
-import { cutResult, workspaceApiFixture } from "../../../../test-utils/workspace-api-fixture";
+import { workspaceApiFixture } from "../../../../test-utils/workspace-api-fixture";
 
 function appWindow(patch: Partial<AppWindow> & Pick<AppWindow, "id" | "type">): AppWindow {
   return {

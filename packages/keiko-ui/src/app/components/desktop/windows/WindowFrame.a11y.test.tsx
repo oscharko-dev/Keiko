@@ -5,7 +5,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { WorkspaceApi } from "../hooks/useWorkspace.types";
 import { WindowFrame } from "./WindowFrame";
 import type { AppWindow } from "./types";
-import { cutResult, workspaceApiFixture } from "../../../../test-utils/workspace-api-fixture";
+import { workspaceApiFixture } from "../../../../test-utils/workspace-api-fixture";
 
 // GEN-UI-TEST-GAP-002 — a default-state WindowFrame must expose no axe violations.
 // This locks in the named-region labelling (aria-label + aria-roledescription), the

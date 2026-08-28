@@ -11,7 +11,7 @@ import { WsContext, type WsContextValue } from "./context/WsContext";
 import type { UseWorkspaceResult, WorkspaceApi } from "./hooks/useWorkspace.types";
 import { InspectorPanel } from "./widgets/panels/InspectorPanel";
 import type { AppWindow } from "./windows/types";
-import { cutResult, workspaceApiFixture } from "../../../test-utils/workspace-api-fixture";
+import { workspaceApiFixture } from "../../../test-utils/workspace-api-fixture";
 
 // Matches Workspace.test.tsx's own convention: the shader is a next/dynamic,
 // SSR-disabled import, so leaving it unmocked resolves outside of React's act()

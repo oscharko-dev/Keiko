@@ -7,7 +7,7 @@ import { WindowFrame } from "./WindowFrame";
 import type { AppWindow } from "./types";
 import { localizedWindowTitle, registerWindowRender, WIN_TYPES } from "./WindowsRegistry";
 import { translate, type I18nTranslate } from "@/lib/i18n";
-import { cutResult, workspaceApiFixture } from "../../../../test-utils/workspace-api-fixture";
+import { workspaceApiFixture } from "../../../../test-utils/workspace-api-fixture";
 
 const originalPlatform = window.navigator.platform;
 

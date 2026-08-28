@@ -13,7 +13,7 @@ import { WindowFrame } from "./WindowFrame";
 import { registerWindowRender } from "./WindowsRegistry";
 import type { AppWindow } from "./types";
 import type { WorkspaceApi } from "../hooks/useWorkspace.types";
-import { cutResult, workspaceApiFixture } from "../../../../test-utils/workspace-api-fixture";
+import { workspaceApiFixture } from "../../../../test-utils/workspace-api-fixture";
 
 function appWindow(patch: Partial<AppWindow> = {}): AppWindow {
   return {
