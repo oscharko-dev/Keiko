@@ -47,13 +47,35 @@ the committed numbers have travelled from the product without pretending anyone 
 The workspace measurement has its own toolchain digest, defined by
 `scripts/workspace-performance-measurement-toolchain.mjs`. A change to any listed member requires
 a fresh workspace measurement; a mismatched digest is always rejected so an evidence document cannot
-be re-stamped without running the producer. Run the measurement only on its declared reference
-environment, then replace the document through the producer rather than editing it:
+be re-stamped without running the producer.
+
+**Its reference environment is Linux**, and that is evidenced rather than asserted: `ci.yml`
+refreshes this document on every `push` to `dev` (`ubuntu-latest`) and only _validates_ its freshness
+on a pull request. A pull request that moves the workspace ruler must therefore bring a
+Linux-produced document with it; nothing else makes `check:perf-evidence:workspace` green.
+
+Unlike the editor D12 document, this one records no per-machine provenance and its budgets carry
+wide headroom — it is a browser-performance regression detector, not an absolute instrument
+calibrated to one machine class. That is why `ubuntu-latest` and the pinned `arm64` container are
+both acceptable producers, and why a macOS host is not: the harness serves the packaged CLI through
+Chromium, which is what CI exercises.
+
+One command, from any host with Docker. It provisions the self-contained clone, runs the pinned
+container, and copies the document back:
+
+```bash
+npm run perf:evidence:regen:workspace
+```
+
+Equivalent when you are already on Linux with the dependencies installed:
 
 ```bash
 rm -f docs/release/1580-workspace-perf-evidence.json
 npm run test:e2e:workspace-perf
 ```
+
+Deleting first is part of the contract, not tidiness: the gate rejects a stale extra project entry,
+so a re-measurement must not be able to silently narrow the committed run set.
 
 The committed document has an exact, intentionally Chromium-only run set: `chromium` and
 `chromium-mixed-windows`. The first is the representative workspace journey and the second proves

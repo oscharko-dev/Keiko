@@ -21,6 +21,7 @@ import {
 import { compareStrings } from "./lib/compare-strings.mjs";
 import { resolveHostExecutable } from "./lib/host-executable.mjs";
 import { createD12RuntimeEnvironment } from "./d12-runtime-environment.mjs";
+import { EXPECTED_NODE_BASELINE, EXPECTED_NPM_ENGINE } from "./check-runtime-toolchain.mjs";
 
 const FULL_COMMIT = /^[0-9a-f]{40}$/u;
 const SHA_256 = /^[0-9a-f]{64}$/u;
@@ -80,8 +81,8 @@ function normalizeBundleRuntime(value) {
     fail("runtime must contain only the canonical bundle-runtime fields");
   }
   if (value.platform !== "linux") fail("runtime platform must be linux");
-  if (value.nodeVersion !== "24.18.0") fail("runtime Node.js version must be 24.18.0");
-  if (value.npmVersion !== "11.16.0") fail("runtime npm version must be 11.16.0");
+  if (value.nodeVersion !== EXPECTED_NODE_BASELINE) fail("runtime Node.js version must be 24.18.0");
+  if (value.npmVersion !== EXPECTED_NPM_ENGINE) fail("runtime npm version must be 11.16.0");
   for (const field of ["architecture", "osRelease", "zlibVersion"]) {
     if (typeof value[field] !== "string" || value[field].length === 0) {
       fail(`runtime ${field} must be a non-empty string`);

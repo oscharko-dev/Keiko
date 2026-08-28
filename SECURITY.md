@@ -85,6 +85,13 @@ Treat every returned alert as potentially real until its provenance is establish
 Record only the alert identifier, path, status, disposition, reviewer, and remediation date; the
 detected value remains hidden. Apply exactly one disposition:
 
+An automated backstop runs this procedure nightly: `npm run check:secret-scanning-queue`
+(`.github/workflows/secret-scanning-queue.yml`) issues both listings, merges them, and fails when an
+open alert has no disposition recorded in
+[`docs/release/2296-dependency-security-closeout.md`](docs/release/2296-dependency-security-closeout.md)
+using exactly the four tokens below. It detects, it never resolves: closing an alert stays a
+maintainer act, and the lane deliberately withholds alert identifiers from its public log.
+
 - `revoked`: a real credential or generated key. Revoke or rotate it through the owning system,
   remove tracked generated output, and retain private rotation evidence before resolving the alert.
 - `used_in_tests`: an intentionally synthetic, non-functional fixture required by a security test.

@@ -30,13 +30,15 @@ behavior; it says nothing about answer quality, which needs a real model.
 node tests/e2e/support/model-mock-server.mjs &
 
 # 2. Point the dev gateway at it. Both entries use the same loopback endpoint; the gateway config
-#    schema permits http:// for loopback hosts, and the egress policy allows loopback.
+#    schema permits http:// for loopback hosts, and the egress policy allows loopback. The
+#    mock ignores `apiKey` entirely, so keep this placeholder short and obviously fake:
+#    a credential-shaped literal here raises a repository secret-scanning alert (#2292).
 mkdir -p .keiko/dev/ui
 cat > .keiko/dev/ui/keiko.config.json <<'JSON'
 {
   "providers": [
-    { "modelId": "local-chat", "baseUrl": "http://127.0.0.1:32186/v1", "apiKey": "local-mock-token-1234567890", "timeoutMs": 30000, "maxRetries": 0, "retryBaseDelayMs": 100 },
-    { "modelId": "local-embedding", "baseUrl": "http://127.0.0.1:32186/v1", "apiKey": "local-mock-token-1234567890", "timeoutMs": 30000, "maxRetries": 0, "retryBaseDelayMs": 100 }
+    { "modelId": "local-chat", "baseUrl": "http://127.0.0.1:32186/v1", "apiKey": "local-mock", "timeoutMs": 30000, "maxRetries": 0, "retryBaseDelayMs": 100 },
+    { "modelId": "local-embedding", "baseUrl": "http://127.0.0.1:32186/v1", "apiKey": "local-mock", "timeoutMs": 30000, "maxRetries": 0, "retryBaseDelayMs": 100 }
   ],
   "capabilities": [
     { "id": "local-chat", "kind": "chat", "contextWindow": 8192, "maxOutputTokens": 1024, "toolCalling": true, "structuredOutput": true, "streaming": true, "supportsImageInput": false, "supportsDocumentInput": true, "workflowEligible": true, "costClass": "low", "latencyClass": "fast", "throughputHint": "Local loopback mock for manual verification.", "preferredUseCases": ["Local verification"], "knownLimitations": ["Deterministic mock, not a real model."] },

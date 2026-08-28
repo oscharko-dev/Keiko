@@ -45,6 +45,8 @@ jobs:
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: "24.18.0"
+      - name: Verify governed Node.js and npm toolchain
+        run: node scripts/check-runtime-toolchain.mjs --exact
       - run: npm ci --ignore-scripts
       # The full source-freshness contract: recorded digests against the current tree, plus every
       # budget re-derived from the committed samples. All deterministic, all hashes and arithmetic —
