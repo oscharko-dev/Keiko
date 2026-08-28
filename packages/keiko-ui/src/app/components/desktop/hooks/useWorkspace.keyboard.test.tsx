@@ -486,6 +486,35 @@ describe("useWorkspace keyboard and connection workflow hardening", () => {
     expect(onScopeUnbind).toHaveBeenCalledTimes(1);
   });
 
+  it("tears a connection down once when a close overlaps an in-flight cut of its other endpoint", async () => {
+    // Batch dedupe only covers ONE operation. While a cut waits for teardown,
+    // only its own window id is marked pending, so closing the other endpoint
+    // starts the same connection's unbind a second time. A non-idempotent
+    // second unbind can reject and strand the first cut half-applied.
+    let releaseUnbind: (() => void) | undefined;
+    const gate = new Promise<void>((resolve) => {
+      releaseUnbind = resolve;
+    });
+    const onScopeUnbind = vi.fn(() => gate.then(() => true));
+    persistWorkspace([filesWindow(), appWindow()]);
+    render(<Harness onScopeUnbind={onScopeUnbind} />);
+    await waitFor(() => expect(readWins()).toHaveLength(2));
+
+    fireEvent.click(screen.getByRole("button", { name: "connect" }));
+    await waitFor(() => expect(readConns()).toHaveLength(1));
+
+    fireEvent.click(screen.getByRole("button", { name: "select files" }));
+    fireEvent.click(screen.getByRole("button", { name: "cut selected windows" }));
+    await waitFor(() => expect(onScopeUnbind).toHaveBeenCalledTimes(1));
+
+    // The cut's teardown is still in flight; close the OTHER endpoint.
+    fireEvent.click(screen.getByRole("button", { name: "close chat" }));
+    releaseUnbind?.();
+
+    await waitFor(() => expect(readWins()).toHaveLength(0));
+    expect(onScopeUnbind).toHaveBeenCalledTimes(1);
+  });
+
   it("restores a cut window's own state, not just its geometry", async () => {
     // The clipboard descriptor is content-free by design (ADR-0123 D5) — correct
     // for a duplicate, destructive for a move. A cut Files window must come back

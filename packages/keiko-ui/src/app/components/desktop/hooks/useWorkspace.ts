@@ -1829,6 +1829,24 @@ function connectionUnbindScope(
   return filesChatBindScope(win, other, Date.now());
 }
 
+// Runs a connection's teardown at most once across OVERLAPPING close operations:
+// a second caller reaching the same edge while the first is still in flight
+// awaits that result instead of issuing a duplicate server-side unbind. The
+// entry is dropped once it settles, so a later, genuinely new close still runs.
+function teardownConnectionOnce(
+  inFlight: Map<string, Promise<boolean>>,
+  conn: Connection,
+  run: () => Promise<boolean>,
+): Promise<boolean> {
+  const existing = inFlight.get(conn.id);
+  if (existing !== undefined) return existing;
+  const started = run().finally(() => {
+    inFlight.delete(conn.id);
+  });
+  inFlight.set(conn.id, started);
+  return started;
+}
+
 // One teardown per connection for a batch close: both endpoints of the same
 // edge can be in the batch, and every one of them reads the same pre-close
 // snapshot, so without this the edge's server-side unbind would run twice.
@@ -2062,6 +2080,13 @@ export function useWorkspace(
   const connsByEndpointRef = useRef<ReadonlyMap<string, readonly Connection[]>>(connsByEndpoint);
   connsByEndpointRef.current = connsByEndpoint;
   const pendingWindowClosesRef = useRef(new Set<string>());
+  // In-flight connection teardowns, keyed by connection id. Batch dedupe only
+  // covers one operation: while a cut waits for its unbinds, a close (or a
+  // second cut) of the OTHER endpoint reads the same pre-close connection
+  // snapshot and would start that edge's server-side unbind again. Overlapping
+  // operations share this promise instead, so each connection is torn down
+  // exactly once no matter how many closes reach it.
+  const pendingConnectionTeardownsRef = useRef(new Map<string, Promise<boolean>>());
   // Refs for the click-to-connect flow. connectingRef is a synchronous view of
   // the `connecting` state for handlers fired from child components (confirm).
   // connectCleanupRef stores the global pointermove listener disposer so we
@@ -2264,15 +2289,21 @@ export function useWorkspace(
       try {
         const outcomes = await Promise.all(
           byConnection.map(async ({ conn, ownerId }) => {
-            const owner = winsByIdRef.current.get(ownerId);
-            if (owner === undefined) return { conn, accepted: true };
-            const accepted = await unbindClosedWindowConnection(
-              ownerId,
-              owner,
+            const accepted = await teardownConnectionOnce(
+              pendingConnectionTeardownsRef.current,
               conn,
-              winsByIdRef.current,
-              stableScopeUnbind,
-              stableConnectorUnbind,
+              () => {
+                const owner = winsByIdRef.current.get(ownerId);
+                if (owner === undefined) return Promise.resolve(true);
+                return unbindClosedWindowConnection(
+                  ownerId,
+                  owner,
+                  conn,
+                  winsByIdRef.current,
+                  stableScopeUnbind,
+                  stableConnectorUnbind,
+                );
+              },
             );
             return { conn, accepted };
           }),
