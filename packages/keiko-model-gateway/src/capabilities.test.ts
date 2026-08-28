@@ -69,7 +69,7 @@ describe("capability registry", () => {
     expect(cap).toMatchObject({
       id: "example-chat-model",
       kind: "chat",
-      toolCalling: true,
+      toolCalling: false,
       structuredOutput: false,
       costClass: "medium",
       latencyClass: "standard",

@@ -3,6 +3,7 @@
 // API keys are sourced only from environment or the config file, never CLI flags,
 // and are excluded from every serialisation path.
 
+import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { isIP } from "node:net";
 import { ConfigInvalidError } from "@oscharko-dev/keiko-security/errors/gateway";
@@ -39,10 +40,22 @@ import type {
   ProviderEndpointStyle,
   RealtimeAuthMode,
   RerankerConfig,
+  ToolCallingVerification,
   VoicePersona,
   VoicePersonaVoice,
   VoiceProviderLocality,
 } from "./types.js";
+
+export function toolCallingConfigurationFingerprint(provider: ModelProviderConfig): string {
+  const binding = [
+    provider.modelId,
+    provider.baseUrl,
+    provider.apiKeyHeaderName ?? DEFAULT_API_KEY_HEADER_NAME,
+    provider.endpointStyle ?? "openai-compatible",
+    provider.apiVersion ?? "",
+  ];
+  return createHash("sha256").update(JSON.stringify(binding)).digest("hex");
+}
 
 const DEFAULT_TIMEOUT_MS = 30_000;
 const DEFAULT_MAX_RETRIES = 3;
@@ -62,6 +75,7 @@ export const DEFAULT_CIRCUIT_BREAKER_CONFIG = {
   halfOpenProbes: DEFAULT_HALF_OPEN_PROBES,
 } as const;
 export const DEFAULT_API_KEY_HEADER_NAME = "authorization";
+export const TOOL_CALLING_VERIFICATION_MAX_AGE_MS = 24 * 60 * 60 * 1_000;
 const MAX_API_KEY_HEADER_NAME_LENGTH = 64;
 const API_KEY_HEADER_NAME_RE = /^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$/u;
 export const SUPPORTED_API_KEY_HEADER_NAMES = [
@@ -1112,6 +1126,7 @@ function buildProviderCapabilityBody(
     maxOutputTokens: optionalNonNegativeInt(raw.maxOutputTokens, `${path}.maxOutputTokens`, 0),
     ...(tokenAccounting === undefined ? {} : { tokenAccounting }),
     ...flags,
+    ...optionalToolCallingVerification(raw, path, kind),
     ...optionalChatModeDeclaredFlag(raw, path),
     ...optionalReasoningEfforts(raw.reasoningEfforts, `${path}.reasoningEfforts`, kind),
     ...resolveInfillingAlignment(raw, path, flags.supportsInfilling ?? false, kind),
@@ -1183,6 +1198,7 @@ const MODEL_CAPABILITY_KNOWN_KEYS: ReadonlySet<string> = new Set([
   "contextWindow",
   "maxOutputTokens",
   "toolCalling",
+  "toolCallingVerification",
   "structuredOutput",
   "streaming",
   "supportsImageInput",
@@ -1261,6 +1277,99 @@ function optionalChatModeDeclaredFlag(
   return value.chatModeDeclared !== undefined
     ? { chatModeDeclared: requireBoolean(value.chatModeDeclared, `${path}.chatModeDeclared`) }
     : {};
+}
+
+function isCanonicalIsoTimestamp(value: unknown): value is string {
+  if (typeof value !== "string" || value.length === 0) return false;
+  const parsed = new Date(value);
+  return !Number.isNaN(parsed.getTime()) && parsed.toISOString() === value;
+}
+
+const TOOL_CALLING_VERIFICATION_KEYS = new Set([
+  "status",
+  "checkedAt",
+  "probe",
+  "configurationFingerprint",
+]);
+const TOOL_CALLING_VERIFICATION_STATUSES = new Set<ToolCallingVerification["status"]>([
+  "verified",
+  "unsupported",
+  "unverified",
+]);
+
+function isToolCallingVerificationStatus(
+  value: unknown,
+): value is ToolCallingVerification["status"] {
+  return (
+    typeof value === "string" &&
+    TOOL_CALLING_VERIFICATION_STATUSES.has(value as ToolCallingVerification["status"])
+  );
+}
+
+function requiredToolCallingVerification(value: unknown, path: string): Record<string, unknown> {
+  if (!isRecord(value)) {
+    throw new ConfigInvalidError(`${path}.toolCallingVerification must be an object`);
+  }
+  const unknown = Object.keys(value).find((key) => !TOOL_CALLING_VERIFICATION_KEYS.has(key));
+  if (unknown !== undefined) {
+    throw new ConfigInvalidError(`${path}.toolCallingVerification.${unknown} is not recognised`);
+  }
+  return value;
+}
+
+function requiredToolCallingStatus(
+  value: unknown,
+  path: string,
+): ToolCallingVerification["status"] {
+  if (!isToolCallingVerificationStatus(value)) {
+    throw new ConfigInvalidError(`${path}.toolCallingVerification.status is invalid`);
+  }
+  return value;
+}
+
+function requiredToolCallingTimestamp(value: unknown, path: string): string {
+  if (!isCanonicalIsoTimestamp(value)) {
+    throw new ConfigInvalidError(
+      `${path}.toolCallingVerification.checkedAt must be an ISO-8601 instant`,
+    );
+  }
+  return value;
+}
+
+function requiredToolCallingFingerprint(value: unknown, path: string): string {
+  if (typeof value !== "string" || !/^[a-f0-9]{64}$/u.test(value)) {
+    throw new ConfigInvalidError(
+      `${path}.toolCallingVerification.configurationFingerprint must be a SHA-256 hex digest`,
+    );
+  }
+  return value;
+}
+
+function optionalToolCallingVerification(
+  value: Record<string, unknown>,
+  path: string,
+  kind: ModelKind,
+): Partial<Pick<ModelCapability, "toolCallingVerification">> {
+  const raw = value.toolCallingVerification;
+  if (raw === undefined) return {};
+  if (kind !== "chat") {
+    throw new ConfigInvalidError(`${path}.toolCallingVerification is only valid for chat models`);
+  }
+  const verification = requiredToolCallingVerification(raw, path);
+  if (verification.probe !== "gateway-tool-calling-v1") {
+    throw new ConfigInvalidError(`${path}.toolCallingVerification.probe is invalid`);
+  }
+  return {
+    toolCallingVerification: {
+      status: requiredToolCallingStatus(verification.status, path),
+      checkedAt: requiredToolCallingTimestamp(verification.checkedAt, path),
+      probe: "gateway-tool-calling-v1",
+      configurationFingerprint: requiredToolCallingFingerprint(
+        verification.configurationFingerprint,
+        path,
+      ),
+    },
+  };
 }
 
 // Optional determinism flags for the strict list parser — preserved only when declared so a
@@ -1345,6 +1454,7 @@ export function parseModelCapability(value: unknown, path: string): ModelCapabil
     structuredOutput: requireBoolean(value.structuredOutput, `${path}.structuredOutput`),
     streaming: requireBoolean(value.streaming, `${path}.streaming`),
     ...optionalTokenAccountingField(value.tokenAccounting, `${path}.tokenAccounting`),
+    ...optionalToolCallingVerification(value, path, kind),
     supportsImageInput: requireBoolean(value.supportsImageInput, `${path}.supportsImageInput`),
     supportsDocumentInput: requireBoolean(
       value.supportsDocumentInput,
@@ -1756,6 +1866,49 @@ function applyVoicePersonaDerivation(
   return [...byId.values()];
 }
 
+function hasCurrentToolCallingVerification(
+  verification: ToolCallingVerification | undefined,
+  provider: ModelProviderConfig,
+  now: number,
+): boolean {
+  if (
+    verification?.status !== "verified" ||
+    verification.configurationFingerprint !== toolCallingConfigurationFingerprint(provider)
+  ) {
+    return false;
+  }
+  const checkedAt = Date.parse(verification.checkedAt);
+  return (
+    Number.isFinite(checkedAt) &&
+    checkedAt <= now &&
+    now - checkedAt <= TOOL_CALLING_VERIFICATION_MAX_AGE_MS
+  );
+}
+
+function verifiedToolCallingCapability(
+  capability: ModelCapability,
+  provider: ModelProviderConfig | undefined,
+): ModelCapability {
+  if (capability.kind !== "chat" || provider === undefined) return capability;
+  return hasCurrentToolCallingVerification(
+    capability.toolCallingVerification,
+    provider,
+    Date.now(),
+  ) && capability.toolCalling
+    ? capability
+    : { ...capability, toolCalling: false };
+}
+
+function applyToolCallingVerification(
+  capabilities: readonly ModelCapability[],
+  providers: readonly ModelProviderConfig[],
+): readonly ModelCapability[] {
+  const providersByModelId = new Map(providers.map((provider) => [provider.modelId, provider]));
+  return capabilities.map((capability) =>
+    verifiedToolCallingCapability(capability, providersByModelId.get(capability.id)),
+  );
+}
+
 // Rejects a config in which any two provider entries share the same modelId across the
 // merged chat/embedding/voice set (#2906 KEIKO-0567). Gateway's constructor builds a
 // modelId→provider Map — a duplicate silently lets the later entry win and routes chat
@@ -1783,7 +1936,10 @@ function buildGatewayConfig(
   const providers = providersWithEgress(parsed, egress);
   assertUniqueProviderModelIds(providers);
   const merged = mergeCapabilities(inlineCapabilities(parsed), topLevelCapabilities(raw));
-  const capabilities = applyVoicePersonaDerivation(merged, providers);
+  const capabilities = applyToolCallingVerification(
+    applyVoicePersonaDerivation(merged, providers),
+    providers,
+  );
   const grounding = parseGroundingLimits(raw);
   const reranker = parseRerankerConfig(raw, env, egress, options);
   const figma = parseFigmaConnectorConfig(raw);

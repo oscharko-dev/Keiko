@@ -35,6 +35,7 @@ import {
   validateBaseUrl,
   PROVIDER_ENDPOINT_STYLES,
   REALTIME_AUTH_MODES,
+  toolCallingConfigurationFingerprint,
   VOICE_PROVIDER_LOCALITIES,
   // KEIKO-0572: shared circuitBreaker defaults; hoisted into this import block instead of the
   // separate `import { DEFAULT_CIRCUIT_BREAKER_CONFIG } from ...` line Sonar S3863 flagged.
@@ -55,7 +56,9 @@ import type {
   GatewaySetupOutcomeKind,
   GatewaySetupTargetClass,
   GatewayUnsupportedDiscoveredModel,
+  ToolCallingVerification,
 } from "@oscharko-dev/keiko-contracts";
+import type { GatewayReadinessReport } from "@oscharko-dev/keiko-contracts/bff-wire";
 import {
   classifyOutboundHost,
   gatewayFetch,
@@ -79,6 +82,7 @@ import type {
   GatewayDiscoveredModels,
   GatewayModelDiscoveryOutput,
   GatewaySetupTestResult,
+  GatewaySetupToolCallingObservation,
   RuntimeGatewayConfig,
   UiHandlerDeps,
   VerifiedModelCapabilityFields,
@@ -103,6 +107,7 @@ import {
   tryParseJudgeVerdict,
 } from "./qualityIntelligence/judgePort.js";
 import { persistSealedGatewayConfig } from "./credentialPersistence.js";
+import { probeGatewayToolCalling } from "./gateway-tool-calling-probe.js";
 
 const MODEL_REASONING_EFFORT_SET: ReadonlySet<string> = new Set(MODEL_REASONING_EFFORTS);
 
@@ -356,6 +361,7 @@ interface ProviderRawOptions {
   readonly apiVersion?: string | undefined;
   readonly imageInputModelIds?: readonly string[] | undefined;
   readonly responseFormatModelIds?: readonly string[] | undefined;
+  readonly toolCallingObservations?: readonly GatewaySetupToolCallingObservation[] | undefined;
   readonly embeddingModelIds?: readonly string[] | undefined;
   readonly modelMetadata?: Readonly<Record<string, GatewayDiscoveredModelMetadata>> | undefined;
   readonly current?: GatewayConfig | undefined;
@@ -441,36 +447,18 @@ function existingCapabilityForSetup(
   return current?.capabilities?.find((candidate) => candidate.id === modelId);
 }
 
-// The readiness-verifiable chat flags whose DEFAULT is permissive: a stored false is a real
-// observation, a restored default is a claim nothing verified. structuredOutput,
-// supportsImageInput and supportsDocumentInput default to false already, so they need no
-// carry-over (review finding on #3042 — streaming was the missing twin of toolCalling).
-const PERMISSIVE_CHAT_DEFAULTS = ["toolCalling", "streaming"] as const;
-
-// A chat capability the stored config DISABLED stays disabled until re-verified: when the
-// endpoint moves, sameBaseUrlIdentity breaks and the URL-matched `existing` misses, and without
-// this carry-over a stored toolCalling: false (or streaming: false) silently flipped back to the
-// permissive default — the setup smoke test probes neither (it performs buffered chat only), so
-// nothing verified the flip (#3037 follow-up, extended on #3042). The sanctioned re-enable path
-// is unchanged: the readiness endpoint (replaceModelCapability, gated on a fresh observation), or
-// live discovery metadata, which overrides this restriction with fresh evidence exactly as it
-// overrides a URL-matched stored value. The kind guard keeps a corrected embedding-to-chat
-// deployment on the chat default.
-function storedToolCallingRestriction(
-  current: GatewayConfig | undefined,
-  modelId: string,
-): Partial<ModelCapability> {
-  const stored = current?.capabilities?.find((candidate) => candidate.id === modelId);
-  if (stored?.kind !== "chat") return {};
-  return Object.fromEntries(
-    PERMISSIVE_CHAT_DEFAULTS.filter((field) => !stored[field]).map((field) => [field, false]),
-  );
-}
-
 function codingUseCases(capability: ModelCapability): readonly string[] {
   return capability.preferredUseCases.some((useCase) => useCase.toLowerCase().includes("coding"))
     ? capability.preferredUseCases
     : [...capability.preferredUseCases, "Coding"];
+}
+
+function storedStreamingRestriction(
+  current: GatewayConfig | undefined,
+  modelId: string,
+): Partial<ModelCapability> {
+  const stored = current?.capabilities?.find((candidate) => candidate.id === modelId);
+  return stored?.kind === "chat" && !stored.streaming ? { streaming: false } : {};
 }
 
 function discoveredReasoningFields(
@@ -489,7 +477,6 @@ function discoveredCapabilityFields(
     ...(discovered?.maxOutputTokens === undefined
       ? {}
       : { maxOutputTokens: discovered.maxOutputTokens }),
-    ...(discovered?.toolCalling === undefined ? {} : { toolCalling: discovered.toolCalling }),
     ...discoveredReasoningFields(discovered),
     ...(discovered?.chatModeDeclared === undefined
       ? {}
@@ -515,36 +502,6 @@ function workflowCapabilityFields(
   return {
     workflowEligible: true,
     preferredUseCases: codingUseCases(existing ?? baseCapability),
-  };
-}
-
-const MISTRAL_TOOL_CALLING_LIMITATION =
-  "Tool calling is disabled by default for Mistral deployments until endpoint readiness verifies it";
-
-function applyMistralSetupDefaults(
-  modelId: string,
-  capability: ModelCapability,
-  toolCallingKnown: boolean,
-): ModelCapability {
-  // The note and the disabled default are CHAT semantics ("until endpoint readiness verifies
-  // it"): an embedding or OCR deployment has no tool calling to verify, and its correct
-  // toolCalling: false must not attract a chat explanation (review finding on #3042).
-  if (capability.kind !== "chat") return capability;
-  if (!modelId.toLowerCase().includes("mistral")) return capability;
-  const knownLimitations = capability.knownLimitations.filter(
-    (limitation) => limitation !== MISTRAL_TOOL_CALLING_LIMITATION,
-  );
-  // Only a VERIFIED toolCalling: true retires the limitation note. While tool calling stays
-  // disabled the note travels with it (deduplicated) — the old unconditional strip drifted the
-  // stored explanation out of the config on every preserve rebuild even though the restriction
-  // itself survived (#3037 follow-up).
-  if (toolCallingKnown && capability.toolCalling) {
-    return { ...capability, knownLimitations };
-  }
-  return {
-    ...capability,
-    toolCalling: false,
-    knownLimitations: [...knownLimitations, MISTRAL_TOOL_CALLING_LIMITATION],
   };
 }
 
@@ -581,7 +538,7 @@ function createDefaultSetupCapability(
     // finding on #3042).
     ...(existing ??
       (options.preserveExisting === true
-        ? storedToolCallingRestriction(options.current, modelId)
+        ? storedStreamingRestriction(options.current, modelId)
         : {})),
     ...discoveredCapabilityFields(discovered),
     id: modelId,
@@ -593,11 +550,7 @@ function createDefaultSetupCapability(
       options.workflowEligibleModelIds,
     ),
   };
-  return applyMistralSetupDefaults(
-    modelId,
-    capability,
-    existing !== undefined || discovered?.toolCalling !== undefined,
-  );
+  return capability;
 }
 
 // The generic endpoint protocol persists VERBATIM — absent fields stay absent so the runtime
@@ -1872,7 +1825,21 @@ async function defaultGatewaySetupTester(
     },
     SETUP_SMOKE_CONCURRENCY,
   );
-  return { testedModelIds, responseFormatModelIds };
+  const checkedAt = new Date().toISOString();
+  const toolCallingObservations = await Promise.all(
+    testedModelIds.map(async (modelId): Promise<GatewaySetupToolCallingObservation> => {
+      const provider = config.providers.find((candidate) => candidate.modelId === modelId);
+      if (provider === undefined) {
+        return { modelId, status: "unverified", checkedAt };
+      }
+      return {
+        modelId,
+        status: await probeGatewayToolCalling(config, provider),
+        checkedAt,
+      };
+    }),
+  );
+  return { testedModelIds, responseFormatModelIds, toolCallingObservations };
 }
 
 // Field incident (LiteLLM customer, 2026-08): chat models were smoke-tested, embedding models were
@@ -4204,10 +4171,14 @@ interface VerifiedSetup {
   readonly unverifiedEmbeddingModelIds?: readonly string[];
   /** Inferred embedding models removed because they could not answer an embedding request. */
   readonly droppedEmbeddingModelIds?: readonly string[];
+  /** Chat deployments retained after a transient verification failure; tool calling remains false. */
+  readonly unverifiedChatModelIds?: readonly string[];
 }
 
 interface SetupVerificationInput {
   readonly embeddingProbe: GatewayEmbeddingProbe;
+  /** A transient probe failure is admitted only after every normalized endpoint candidate failed. */
+  readonly allowTemporaryChatAdmission: boolean;
   readonly preserveExisting: boolean;
   readonly baseUrl: string;
   readonly apiKey: string;
@@ -4274,8 +4245,8 @@ function normalizeSetupTestResult(
   result: readonly string[] | GatewaySetupTestResult,
 ): GatewaySetupTestResult {
   return isGatewaySetupTestResult(result)
-    ? result
-    : { testedModelIds: result, responseFormatModelIds: [] };
+    ? { ...result, toolCallingObservations: result.toolCallingObservations ?? [] }
+    : { testedModelIds: result, responseFormatModelIds: [], toolCallingObservations: [] };
 }
 
 function assertImageInputModelsWereTested(
@@ -4627,22 +4598,141 @@ function finalRawConfigForTestedSetup(
   input: SetupVerificationInput,
   testResult: GatewaySetupTestResult,
   candidateModels: SetupCandidateModels,
+  configuredChatModelIds = testResult.testedModelIds,
 ): Record<string, unknown> {
   const imageInputModelIds = testedImageInputModelIds(
     input.imageInputModelIds,
     // An explicitly provided list is authoritative: discovery and current-config candidates must
     // not re-add models the request just removed (review finding on #3031).
     input.imageInputModelIdsProvided ? [] : candidateModels.imageInputModelIds,
-    testResult.testedModelIds,
+    configuredChatModelIds,
   );
   return finalRawConfigForSetup(
     input,
-    testResult.testedModelIds,
+    configuredChatModelIds,
     candidateModels.embeddingModelIds,
     imageInputModelIds,
     testResult.responseFormatModelIds,
     candidateModels.modelMetadata,
   );
+}
+
+interface ChatAdmission {
+  readonly testResult: GatewaySetupTestResult;
+  readonly configuredModelIds: readonly string[];
+  readonly unverifiedModelIds: readonly string[];
+}
+
+function temporaryGatewaySetupFailure(error: unknown): boolean {
+  const code = setupErrorCode(error);
+  return (
+    code === ERROR_CODES.RATE_LIMIT || (code !== undefined && SETUP_NETWORK_ERROR_CODES.has(code))
+  );
+}
+
+async function admitChatCandidates(
+  input: SetupVerificationInput,
+  candidateModels: SetupCandidateModels,
+  candidateConfig: GatewayConfig,
+): Promise<ChatAdmission> {
+  try {
+    const testResult = normalizeSetupTestResult(
+      await input.tester(candidateConfig, candidateModels.chatModelIds),
+    );
+    return {
+      testResult,
+      configuredModelIds: testResult.testedModelIds,
+      unverifiedModelIds: [],
+    };
+  } catch (error) {
+    if (!input.allowTemporaryChatAdmission || !temporaryGatewaySetupFailure(error)) throw error;
+    const checkedAt = new Date().toISOString();
+    return {
+      testResult: {
+        testedModelIds: [],
+        responseFormatModelIds: [],
+        toolCallingObservations: candidateModels.chatModelIds.map((modelId) => ({
+          modelId,
+          status: "unverified",
+          checkedAt,
+        })),
+      },
+      configuredModelIds: candidateModels.chatModelIds,
+      unverifiedModelIds: candidateModels.chatModelIds,
+    };
+  }
+}
+
+function toolCallingObservationMap(
+  observations: readonly GatewaySetupToolCallingObservation[],
+): ReadonlyMap<string, GatewaySetupToolCallingObservation> {
+  return new Map(observations.map((observation) => [observation.modelId, observation]));
+}
+
+function withToolCallingProbeProvenance(
+  rawConfig: Record<string, unknown>,
+  config: GatewayConfig,
+  observations: readonly GatewaySetupToolCallingObservation[],
+): Record<string, unknown> {
+  if (observations.length === 0 || !Array.isArray(rawConfig.providers)) return rawConfig;
+  const byModelId = toolCallingObservationMap(observations);
+  const rawProviders: readonly unknown[] = rawConfig.providers;
+  const providers = rawProviders.map((rawProvider: unknown) => {
+    if (!isRecord(rawProvider) || typeof rawProvider.modelId !== "string") return rawProvider;
+    const observation = byModelId.get(rawProvider.modelId);
+    const provider = config.providers.find(
+      (candidate) => candidate.modelId === rawProvider.modelId,
+    );
+    if (observation === undefined || provider === undefined || !isRecord(rawProvider.capability)) {
+      return rawProvider;
+    }
+    const capability = rawProvider.capability;
+    if (capability.kind !== "chat") return rawProvider;
+    return {
+      ...rawProvider,
+      capability: {
+        ...capability,
+        toolCalling: observation.status === "verified",
+        toolCallingVerification: {
+          status: observation.status,
+          checkedAt: observation.checkedAt,
+          probe: "gateway-tool-calling-v1",
+          configurationFingerprint: toolCallingConfigurationFingerprint(provider),
+        },
+      },
+    };
+  });
+  return { ...rawConfig, providers };
+}
+
+interface ParsedSetupConfig {
+  readonly rawConfig: Record<string, unknown>;
+  readonly config: GatewayConfig;
+}
+
+function parsedSetupConfigWithToolCallingProvenance(
+  input: SetupVerificationInput,
+  rawConfig: Record<string, unknown>,
+  observations: readonly GatewaySetupToolCallingObservation[],
+): ParsedSetupConfig {
+  const provisionalConfig = parseGatewayConfig(
+    withInheritedEgress(rawConfig, input.egress),
+    input.env,
+    linkLocalGatewayOverrideOptions(input.env),
+  );
+  const rawConfigWithProvenance = withToolCallingProbeProvenance(
+    rawConfig,
+    provisionalConfig,
+    observations,
+  );
+  return {
+    rawConfig: rawConfigWithProvenance,
+    config: parseGatewayConfig(
+      withInheritedEgress(rawConfigWithProvenance, input.egress),
+      input.env,
+      linkLocalGatewayOverrideOptions(input.env),
+    ),
+  };
 }
 
 // One retry (not zero) so a single transient blip — 429 rate-limit, brief timeout, momentary
@@ -4813,26 +4903,27 @@ async function verifySetupCandidate(input: SetupVerificationInput): Promise<Veri
     candidateModels.unsupportedModels ?? [],
     embeddingAdmission,
   );
-  const testResult = normalizeSetupTestResult(
-    await input.tester(candidateConfig, candidateModels.chatModelIds),
-  );
-  assertImageInputModelsWereTested(input.imageInputModelIds, testResult.testedModelIds);
+  const chatAdmission = await admitChatCandidates(input, candidateModels, candidateConfig);
+  const { testResult } = chatAdmission;
+  assertImageInputModelsWereTested(input.imageInputModelIds, chatAdmission.configuredModelIds);
   const rawConfigWithOptionalBlocks = finalRawConfigForTestedSetup(
     input,
     testResult,
     admittedModels,
+    chatAdmission.configuredModelIds,
   );
-  const config = parseGatewayConfig(
-    withInheritedEgress(rawConfigWithOptionalBlocks, input.egress),
-    input.env,
-    linkLocalGatewayOverrideOptions(input.env),
+  const parsedConfig = parsedSetupConfigWithToolCallingProvenance(
+    input,
+    rawConfigWithOptionalBlocks,
+    testResult.toolCallingObservations ?? [],
   );
   return verifiedSetupResult(
-    rawConfigWithOptionalBlocks,
-    config,
+    parsedConfig.rawConfig,
+    parsedConfig.config,
     testResult,
     candidateModels,
     embeddingAdmission,
+    chatAdmission,
   );
 }
 
@@ -4842,6 +4933,7 @@ function verifiedSetupResult(
   testResult: GatewaySetupTestResult,
   candidateModels: SetupCandidateModels,
   embeddingAdmission: EmbeddingAdmission,
+  chatAdmission: ChatAdmission,
 ): VerifiedSetup {
   return {
     rawConfig,
@@ -4849,7 +4941,7 @@ function verifiedSetupResult(
     testedModelIds: testResult.testedModelIds,
     skippedModelIds: skippedModelIdsForSetup(
       candidateModels.modelIds,
-      testResult.testedModelIds,
+      chatAdmission.configuredModelIds,
       embeddingAdmission.admitted,
     ),
     ...(candidateModels.unsupportedModels !== undefined
@@ -4860,6 +4952,9 @@ function verifiedSetupResult(
       : {}),
     ...(embeddingAdmission.droppedUnverified.length > 0
       ? { droppedEmbeddingModelIds: embeddingAdmission.droppedUnverified }
+      : {}),
+    ...(chatAdmission.unverifiedModelIds.length > 0
+      ? { unverifiedChatModelIds: chatAdmission.unverifiedModelIds }
       : {}),
   };
 }
@@ -4970,6 +5065,7 @@ interface SetupDiscoveryReport {
   readonly unsupportedModels?: readonly GatewayUnsupportedDiscoveredModel[];
   readonly unverifiedEmbeddingModelIds?: readonly string[];
   readonly droppedEmbeddingModelIds?: readonly string[];
+  readonly unverifiedChatModelIds?: readonly string[];
 }
 
 function setupSuccessResult(
@@ -4996,6 +5092,9 @@ function setupSuccessResult(
         : {}),
       ...(discoveryReport.droppedEmbeddingModelIds !== undefined
         ? { droppedEmbeddingModelIds: discoveryReport.droppedEmbeddingModelIds }
+        : {}),
+      ...(discoveryReport.unverifiedChatModelIds !== undefined
+        ? { unverifiedChatModelIds: discoveryReport.unverifiedChatModelIds }
         : {}),
       providerCount: config.providers.length,
       models: listConfiguredCapabilities(config),
@@ -5229,6 +5328,9 @@ function finalizeVerifiedCandidate(
     ...(verified.droppedEmbeddingModelIds !== undefined
       ? { droppedEmbeddingModelIds: verified.droppedEmbeddingModelIds }
       : {}),
+    ...(verified.unverifiedChatModelIds !== undefined
+      ? { unverifiedChatModelIds: verified.unverifiedChatModelIds }
+      : {}),
   });
 }
 
@@ -5241,6 +5343,7 @@ interface SetupSeams {
 
 async function trySetupCandidate(
   baseUrl: string,
+  allowTemporaryChatAdmission: boolean,
   request: SetupRequest,
   deps: UiHandlerDeps,
   gatewayConfig: RuntimeGatewayConfig,
@@ -5277,6 +5380,7 @@ async function trySetupCandidate(
     current,
     diagnostics: deps.diagnostics,
     correlationId: request.correlationId,
+    allowTemporaryChatAdmission,
   });
   const workflowEligibilityError = validateWorkflowEligibleModelIds(request, verified.config);
   if (workflowEligibilityError !== undefined) return workflowEligibilityError;
@@ -5619,9 +5723,17 @@ async function verifyAndSaveGatewaySetup(
     return deploymentNamesRequiredResult();
   }
   const errors: string[] = [];
-  for (const baseUrl of baseUrlCandidates) {
+  for (const [index, baseUrl] of baseUrlCandidates.entries()) {
     try {
-      return await trySetupCandidate(baseUrl, request, deps, gatewayConfig, seams, current);
+      return await trySetupCandidate(
+        baseUrl,
+        index === baseUrlCandidates.length - 1,
+        request,
+        deps,
+        gatewayConfig,
+        seams,
+        current,
+      );
     } catch (error) {
       reportSetupVerificationFailure(
         deps,
@@ -5729,29 +5841,61 @@ function replaceModelCapability(
   config: GatewayConfig,
   modelId: string,
   fields: VerifiedModelCapabilityFields,
+  checkedAt = new Date().toISOString(),
+  toolCallingStatus?: ToolCallingVerification["status"],
 ): GatewayConfig | undefined {
   const current = findConfiguredCapability(config, modelId);
   if (current === undefined) return undefined;
   const capabilities = [...(config.capabilities ?? [])];
   const explicitIndex = capabilities.findIndex((capability) => capability.id === modelId);
-  const knownLimitations =
-    current.id.toLowerCase().includes("mistral") && fields.toolCalling === true
-      ? current.knownLimitations.filter(
-          (limitation) => limitation !== MISTRAL_TOOL_CALLING_LIMITATION,
-        )
-      : current.knownLimitations;
-  // The json_schema readiness probe verifies the strict response_format request shape used by QI.
-  // Keep the public structured-output field and the provider request-capability flag in lockstep.
-  const responseFormatFields =
-    fields.structuredOutput === undefined
-      ? {}
-      : { supportsResponseFormat: fields.structuredOutput };
-  const replacement = { ...current, ...fields, ...responseFormatFields, knownLimitations };
+  const responseFormatFields = responseFormatCapabilityFields(fields);
+  const toolCallingVerification = toolCallingVerificationFields(
+    config,
+    modelId,
+    fields,
+    checkedAt,
+    toolCallingStatus,
+  );
+  const replacement = {
+    ...current,
+    ...fields,
+    ...responseFormatFields,
+    ...toolCallingVerification,
+  };
   if (explicitIndex === -1) capabilities.push(replacement);
   else capabilities[explicitIndex] = replacement;
   return {
     ...config,
     capabilities,
+  };
+}
+
+function responseFormatCapabilityFields(
+  fields: VerifiedModelCapabilityFields,
+): Partial<ModelCapability> {
+  // The json_schema readiness probe verifies the strict response_format request shape used by QI.
+  // Keep the public structured-output field and the provider request-capability flag in lockstep.
+  return fields.structuredOutput === undefined
+    ? {}
+    : { supportsResponseFormat: fields.structuredOutput };
+}
+
+function toolCallingVerificationFields(
+  config: GatewayConfig,
+  modelId: string,
+  fields: VerifiedModelCapabilityFields,
+  checkedAt: string,
+  status: ToolCallingVerification["status"] | undefined,
+): Partial<ModelCapability> {
+  const provider = config.providers.find((candidate) => candidate.modelId === modelId);
+  if (fields.toolCalling === undefined || provider === undefined) return {};
+  return {
+    toolCallingVerification: {
+      status: status ?? (fields.toolCalling ? "verified" : "unsupported"),
+      checkedAt,
+      probe: "gateway-tool-calling-v1",
+      configurationFingerprint: toolCallingConfigurationFingerprint(provider),
+    },
   };
 }
 
@@ -5822,6 +5966,7 @@ function persistVerifiedCapabilityUpdate(
   modelId: string,
   generation: number,
   updated: GatewayConfig,
+  consumeObservation = true,
 ): RouteResult {
   const raw = rawConfigForVerifiedCapabilityUpdate(updated, gatewayConfig.storagePath, deps);
   persistGatewayConfig(raw, gatewayConfig.storagePath, deps);
@@ -5842,7 +5987,7 @@ function persistVerifiedCapabilityUpdate(
       observation: gatewayConfig.verifiedCapability(provider.modelId),
     }))
     .filter((entry) => entry.observation?.fields.conversationReady === true);
-  if (!gatewayConfig.clearVerifiedCapability(modelId, generation)) {
+  if (consumeObservation && !gatewayConfig.clearVerifiedCapability(modelId, generation)) {
     return staleCapabilityObservationResult();
   }
   gatewayConfig.set(updated, true);
@@ -5854,6 +5999,51 @@ function persistVerifiedCapabilityUpdate(
     );
   }
   return { status: 200, body: { ok: true, model: findConfiguredCapability(updated, modelId) } };
+}
+
+function toolCallingStatusFromReadiness(
+  report: GatewayReadinessReport,
+): "verified" | "unsupported" | "unverified" {
+  const probe = report.probes.find((candidate) => candidate.name === "tool_calling");
+  if (probe?.status === "passed") return "verified";
+  if (probe?.status === "unsupported" && probe.capabilityObservation === false) {
+    return "unsupported";
+  }
+  return "unverified";
+}
+
+/** Persists the current readiness run's tool-calling conclusion without a second UI confirmation. */
+export function reconcileGatewayToolCallingReadiness(
+  deps: UiHandlerDeps,
+  report: GatewayReadinessReport,
+  observedGeneration: number | undefined,
+): void {
+  const gatewayConfig = deps.gatewayConfig;
+  const current = gatewayConfig?.current();
+  if (
+    gatewayConfig === undefined ||
+    current === undefined ||
+    (observedGeneration !== undefined && gatewayConfig.generation() !== observedGeneration)
+  ) {
+    return;
+  }
+  const status = toolCallingStatusFromReadiness(report);
+  const updated = replaceModelCapability(
+    current,
+    report.modelId,
+    { toolCalling: status === "verified" },
+    report.checkedAt,
+    status,
+  );
+  if (updated === undefined) return;
+  persistVerifiedCapabilityUpdate(
+    gatewayConfig,
+    deps,
+    report.modelId,
+    gatewayConfig.generation(),
+    updated,
+    false,
+  );
 }
 
 /** Applies only generation-current live observations after an explicit, human-confirmed request. */

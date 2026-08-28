@@ -9,6 +9,7 @@ import {
   DEFAULT_COOLDOWN_MS,
   DEFAULT_FAILURE_THRESHOLD,
   DEFAULT_HALF_OPEN_PROBES,
+  TOOL_CALLING_VERIFICATION_MAX_AGE_MS,
   loadConfigFromFile,
   loadEgressConfigFromFile,
   migrateLegacyChatContextWindows,
@@ -17,6 +18,7 @@ import {
   parseGatewayConfig,
   parseModelCapability,
   resolveOutboundHttpEgressConfig,
+  toolCallingConfigurationFingerprint,
   toSafeObject,
   type ParseGatewayConfigOptions,
 } from "./config.js";
@@ -28,6 +30,19 @@ interface RawProvider {
   timeoutMs: number;
   maxRetries: number;
   retryBaseDelayMs: number;
+}
+
+interface ToolCallingProofProvider extends RawProvider {
+  readonly capability: Record<string, unknown>;
+}
+
+interface ToolCallingProofRaw {
+  readonly providers: readonly [ToolCallingProofProvider];
+  readonly circuitBreaker: {
+    readonly failureThreshold: number;
+    readonly cooldownMs: number;
+    readonly halfOpenProbes: number;
+  };
 }
 
 function validProvider(): RawProvider {
@@ -54,6 +69,28 @@ function rawWithProvider(mutate: (provider: RawProvider) => Record<string, unkno
     providers: [mutate(validProvider())],
     circuitBreaker: { failureThreshold: 5, cooldownMs: 30000, halfOpenProbes: 2 },
   };
+}
+
+function rawToolCallingProof(): ToolCallingProofRaw {
+  return rawWithProvider((provider) => ({
+    ...provider,
+    capability: {
+      kind: "chat",
+      contextWindow: 8_192,
+      maxOutputTokens: 1_024,
+      toolCalling: true,
+      structuredOutput: false,
+      streaming: true,
+      supportsImageInput: false,
+      supportsDocumentInput: false,
+      workflowEligible: false,
+      costClass: "medium",
+      latencyClass: "standard",
+      throughputHint: "test",
+      preferredUseCases: ["Chat"],
+      knownLimitations: [],
+    },
+  })) as ToolCallingProofRaw;
 }
 
 describe("parseGatewayConfig", () => {
@@ -577,9 +614,59 @@ describe("parseGatewayConfig", () => {
     expect(config.capabilities?.[0]).toMatchObject({
       id: "example-private-chat",
       kind: "chat",
-      toolCalling: true,
+      toolCalling: false,
       structuredOutput: true,
     });
+  });
+
+  it("admits tool calling only with a current configuration-bound live proof", () => {
+    const raw = rawToolCallingProof();
+    const first = parseGatewayConfig(raw);
+    const provider = first.providers[0];
+    if (provider === undefined) throw new Error("expected provider");
+    const rawProvider = raw.providers[0];
+    const provenProvider = {
+      ...rawProvider,
+      capability: {
+        ...rawProvider.capability,
+        toolCallingVerification: {
+          status: "verified",
+          checkedAt: new Date().toISOString(),
+          probe: "gateway-tool-calling-v1",
+          configurationFingerprint: toolCallingConfigurationFingerprint(provider),
+        },
+      },
+    };
+    const provenRaw = {
+      ...raw,
+      providers: [provenProvider],
+    };
+    expect(parseGatewayConfig(provenRaw).capabilities?.[0]?.toolCalling).toBe(true);
+    const movedRaw = {
+      ...provenRaw,
+      providers: [{ ...provenProvider, baseUrl: "https://moved.example/v1" }],
+    };
+    expect(parseGatewayConfig(movedRaw).capabilities?.[0]?.toolCalling).toBe(false);
+    const staleRaw = {
+      ...provenRaw,
+      providers: [
+        {
+          ...provenProvider,
+          capability: {
+            ...provenProvider.capability,
+            toolCallingVerification: {
+              status: "verified",
+              checkedAt: new Date(
+                Date.now() - TOOL_CALLING_VERIFICATION_MAX_AGE_MS - 1,
+              ).toISOString(),
+              probe: "gateway-tool-calling-v1",
+              configurationFingerprint: toolCallingConfigurationFingerprint(provider),
+            },
+          },
+        },
+      ],
+    };
+    expect(parseGatewayConfig(staleRaw).capabilities?.[0]?.toolCalling).toBe(false);
   });
 
   it("round-trips calibrated token accounting through the inline provider capability path", () => {
@@ -1415,7 +1502,7 @@ describe("toSafeObject", () => {
     expect(safe.capabilities?.[0]).toMatchObject({
       id: "example-private-chat",
       kind: "chat",
-      toolCalling: true,
+      toolCalling: false,
       structuredOutput: true,
     });
     expect(safe.capabilities?.[0]?.tokenAccounting).toEqual({
@@ -2449,7 +2536,7 @@ describe("parseGatewayConfig top-level capabilities array", () => {
     expect(config.capabilities).toHaveLength(1);
     expect(config.capabilities?.[0]).toMatchObject({
       id: "example-private-chat",
-      toolCalling: true,
+      toolCalling: false,
       structuredOutput: true,
       supportsImageInput: true,
       supportsDocumentInput: true,

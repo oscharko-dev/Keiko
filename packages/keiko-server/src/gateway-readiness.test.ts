@@ -612,8 +612,7 @@ describe("gateway readiness route", () => {
     expect(report.overallStatus).toBe("partial");
     const toolProbe = report.probes.find((probe) => probe.name === "tool_calling");
     expect(toolProbe?.status).toBe("unsupported");
-    expect(toolProbe?.warning).toMatch(/qwen3_coder tool parser/i);
-    expect(config.capabilities?.[0]?.toolCalling).toBe(true);
+    expect(config.capabilities?.[0]?.toolCalling).toBe(false);
     expect(observedToolCalling).toBe(false);
     deps.store.close();
   });

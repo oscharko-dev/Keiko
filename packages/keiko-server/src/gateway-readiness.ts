@@ -27,6 +27,8 @@ import { emitServerDiagnostic, serverDiagnosticFromError } from "./diagnostics-l
 import { rerankSelection } from "./grounded-rerank-facade.js";
 import type { RouteContext, RouteResult } from "./routes.js";
 import { readBoundedRequestBody, RequestBodyTooLargeError } from "./bounded-request-body.js";
+import { probeGatewayToolCalling } from "./gateway-tool-calling-probe.js";
+import { reconcileGatewayToolCallingReadiness } from "./gateway-setup.js";
 
 const DEFAULT_PROBES: readonly GatewayReadinessProbeName[] = [
   "chat",
@@ -68,6 +70,8 @@ const MINI_PDF_DATA_URL =
   "data:application/pdf;base64,JVBERi0xLjQKMSAwIG9iago8PCAvVHlwZSAvQ2F0YWxvZyAvUGFnZXMgMiAwIFIgPj4KZW5kb2JqCjIgMCBvYmoKPDwgL1R5cGUgL1BhZ2VzIC9LaWRzIFszIDAgUl0gL0NvdW50IDEgPj4KZW5kb2JqCjMgMCBvYmoKPDwgL1R5cGUgL1BhZ2UgL1BhcmVudCAyIDAgUiAvTWVkaWFCb3ggWzAgMCAzMDAgMTQ0XSAvQ29udGVudHMgNCAwIFIgL1Jlc291cmNlcyA8PCAvRm9udCA8PCAvRjEgNSAwIFIgPj4gPj4gPj4KZW5kb2JqCjQgMCBvYmoKPDwgL0xlbmd0aCA2MSA+PgpzdHJlYW0KQlQKL0YxIDE4IFRmCjUwIDgwIFRkCihLRUlLTyBQREYgUkVBRElORVNTIFBST0JFKSBUagpFVApzdHJlYW0KZW5kb2JqCjUgMCBvYmoKPDwgL1R5cGUgL0ZvbnQgL1N1YnR5cGUgL1R5cGUxIC9CYXNlRm9udCAvSGVsdmV0aWNhID4+CmVuZG9iagp4cmVmCjAgNgowMDAwMDAwMDAwIDY1NTM1IGYgCjAwMDAwMDAwMDkgMDAwMDAgbiAKMDAwMDAwMDA1OCAwMDAwMCBuIAowMDAwMDAwMTE1IDAwMDAwIG4gCjAwMDAwMDAyNjIgMDAwMDAgbiAKMDAwMDAwMDM3MyAwMDAwMCBuIAp0cmFpbGVyCjw8IC9Sb290IDEgMCBSIC9TaXplIDYgPj4Kc3RhcnR4cmVmCjQ0MgolJUVPRgo=";
 
 type ProbeStatus = GatewayReadinessProbeResult["status"];
+
+export type { GatewayToolCallingProbeStatus } from "./gateway-tool-calling-probe.js";
 
 interface ParsedReadinessBody {
   readonly parsed: GatewayReadinessRequest;
@@ -474,15 +478,6 @@ function assistantText(payload: unknown): string {
   return textFromContent(firstMessage(payload)?.content);
 }
 
-function hasToolCall(payload: unknown, toolName: string): boolean {
-  const message = firstMessage(payload);
-  if (message === undefined || !Array.isArray(message.tool_calls)) return false;
-  return message.tool_calls.some((call) => {
-    if (!isRecord(call) || !isRecord(call.function)) return false;
-    return call.function.name === toolName;
-  });
-}
-
 function parseJsonObjectFromAssistant(payload: unknown): Record<string, unknown> | undefined {
   const text = assistantText(payload).trim();
   if (text.length === 0) return undefined;
@@ -621,88 +616,27 @@ async function probeToolCalling(
   deps: UiHandlerDeps,
   config: GatewayConfig,
   provider: ModelProviderConfig,
-  correlationId: string,
 ): Promise<GatewayReadinessProbeResult> {
   const start = Date.now();
-  try {
-    const response = await providerRequest(deps, config, provider, toolCallingBody());
-    if (!response.ok) {
-      const status = unsupportedStatus(response) ? "unsupported" : "failed";
-      return toolCallingResult(provider, status, start);
-    }
-    return toolCallingPayloadResult(provider, start, await readProviderJson(response));
-  } catch (probeError) {
-    return probeFailure(
-      deps,
-      correlationId,
+  const status = await probeGatewayToolCalling(config, provider, deps.gatewayReadinessFetch);
+  if (status === "verified") {
+    return result(
       "tool_calling",
+      "passed",
       start,
-      "Tool calling could not be verified.",
-      probeError,
+      "OpenAI-compatible tool call returned the expected function name.",
     );
   }
+  return toolCallingResult(status === "unsupported" ? "unsupported" : "failed", start);
 }
 
-function toolCallingBody(): Readonly<Record<string, unknown>> {
-  return {
-    messages: [
-      { role: "system", content: "Use the provided tool for readiness checks." },
-      { role: "user", content: "Call the report_readiness tool with status ok." },
-    ],
-    tools: [
-      {
-        type: "function",
-        function: {
-          name: "report_readiness",
-          description: "Report gateway readiness.",
-          parameters: {
-            type: "object",
-            additionalProperties: false,
-            properties: { status: { type: "string", enum: ["ok"] } },
-            required: ["status"],
-          },
-        },
-      },
-    ],
-    tool_choice: { type: "function", function: { name: "report_readiness" } },
-  };
-}
-
-function toolCallingResult(
-  provider: ModelProviderConfig,
-  status: ProbeStatus,
-  start: number,
-): GatewayReadinessProbeResult {
+function toolCallingResult(status: ProbeStatus, start: number): GatewayReadinessProbeResult {
   return rejectedCapabilityResult(
     "tool_calling",
     status,
     start,
     "Tool calling was not accepted by the endpoint.",
-    qwenToolWarning(provider, status),
   );
-}
-
-function toolCallingPayloadResult(
-  provider: ModelProviderConfig,
-  start: number,
-  payload: unknown,
-): GatewayReadinessProbeResult {
-  const passed = hasToolCall(payload, "report_readiness");
-  return result(
-    "tool_calling",
-    passed ? "passed" : "unsupported",
-    start,
-    passed
-      ? "OpenAI-compatible tool call returned the expected function name."
-      : "The endpoint answered without a valid tool call.",
-    passed ? undefined : qwenToolWarning(provider, "unsupported"),
-  );
-}
-
-function qwenToolWarning(provider: ModelProviderConfig, status: ProbeStatus): string | undefined {
-  if (status === "passed" || !provider.modelId.toLowerCase().includes("qwen3-coder"))
-    return undefined;
-  return "For Qwen3-Coder on vLLM, ask the provider to enable auto tool choice and the qwen3_coder tool parser.";
 }
 
 async function probeJsonSchema(
@@ -1051,7 +985,7 @@ async function runProbe(
   const { config, provider } = selection;
   if (name === "chat") return probeChat(deps, config, provider, correlationId);
   if (name === "streaming") return probeStreaming(deps, config, provider, correlationId);
-  if (name === "tool_calling") return probeToolCalling(deps, config, provider, correlationId);
+  if (name === "tool_calling") return probeToolCalling(deps, config, provider);
   if (name === "json_schema") return probeJsonSchema(deps, config, provider, correlationId);
   if (name === "embedding") return probeEmbedding(deps, config, correlationId);
   if (name === "reranker") return probeReranker(deps, config, correlationId);
@@ -1208,6 +1142,29 @@ function recordReadinessObservation(
   );
 }
 
+function reconcileToolCallingReadiness(
+  deps: UiHandlerDeps,
+  report: GatewayReadinessReport,
+  observedGeneration: number | undefined,
+  correlationId: string,
+): void {
+  try {
+    reconcileGatewayToolCallingReadiness(deps, report, observedGeneration);
+  } catch (error) {
+    emitServerDiagnostic(
+      deps.diagnostics,
+      serverDiagnosticFromError({
+        correlationId,
+        operation: "gateway.readiness",
+        source: "gateway-readiness.capability-reconcile",
+        error,
+        summary: "Gateway tool-calling verification could not be persisted.",
+        redact: (message): string => String(deps.redactor(message)),
+      }),
+    );
+  }
+}
+
 export async function runGatewayReadiness(
   request: GatewayReadinessRequest,
   deps: UiHandlerDeps,
@@ -1251,6 +1208,7 @@ export async function runGatewayReadiness(
   // AI-assist badge, the Coding Workbench source projection) report what was actually observed.
   // Content-free: one state word, no probe bodies, no endpoints, no credentials.
   recordReadinessObservation(deps, report, observedGeneration);
+  reconcileToolCallingReadiness(deps, report, observedGeneration, correlationId);
   return report;
 }
 
