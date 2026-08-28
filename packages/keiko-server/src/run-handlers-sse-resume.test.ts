@@ -20,6 +20,7 @@ import type { StreamEvent } from "./sink.js";
 import type { RouteContext } from "./routes.js";
 import type { UiHandlerDeps } from "./deps.js";
 import { createInMemoryUiStore } from "./store/index.js";
+import { UNKNOWN_CORRELATION_ID } from "./correlation.js";
 import {
   createBufferedServerLogSink,
   createServerLogger,
@@ -166,6 +167,11 @@ describe("GET /api/runs/events resume cursors (user finding #2456)", () => {
     // fail toward the SAME safe default as an absent parameter — full replay for every run — not
     // toward the "unnamed run" live-only branch. An empty (but defined) cursors Map would make
     // every snapshot run look "unnamed" to resumeAfterSeq and silently drop its replay.
+    //
+    // A malformed-but-present `resume` must still be logged: silently folding it into "no resume
+    // parameter at all" would make a full-replay burst caused by a bad client request
+    // indistinguishable in the activity log from an ordinary first connection (AGENTS.md §8).
+    const logSink = captureServerLog();
     const registry = createRunRegistry();
     registerRunWithEvents(registry, "run-a", [0, 1, 2]);
     const { deps, frames, fireClose } = connect(
@@ -174,6 +180,16 @@ describe("GET /api/runs/events resume cursors (user finding #2456)", () => {
     );
 
     expect(seqsFor(frames, "run-a")).toEqual([0, 1, 2]);
+    const line = logSink.events.find((event) => event.op === "sse.run-events.resume");
+    expect(line).toBeDefined();
+    expect(line?.category).toBe("http");
+    expect(line?.correlationId).toBe("corr-resume-1");
+    expect(line?.extra).toEqual({
+      resumedRuns: 0,
+      liveOnlyRuns: 0,
+      fullReplayRuns: 1,
+      cursorsUnusable: true,
+    });
     fireClose();
     deps.store.close();
   });
@@ -304,6 +320,98 @@ describe("GET /api/runs/events resume cursors (user finding #2456)", () => {
     const { deps, fireClose } = connect(registry, "http://localhost/api/runs/events");
 
     expect(logSink.events.some((event) => event.op === "sse.run-events.resume")).toBe(false);
+    fireClose();
+    deps.store.close();
+  });
+});
+
+// Repository-owner review findings on PR #3305 (both verified real against the code above).
+describe("GET /api/runs/events resume cursors — PR #3305 review findings", () => {
+  // Finding 1 (P1): `resume=garbage` (no `:` delimiter) parses into a NON-EMPTY cursor map keyed
+  // by the literal text "garbage" — `parseResumeCursors` never rejects an entry just because it
+  // has no delimiter, it treats the whole entry as a runId with an implicit malformed seq. Nothing
+  // in the actual snapshot is named "garbage", so before the fix `resumeAfterSeq` returned
+  // `Number.MAX_SAFE_INTEGER` (live-only) for every REAL run: malformed client input silently
+  // suppressed all buffered history, contradicting the parser's own documented "malformed input
+  // fails toward FULL replay" promise. A cursor set is now trusted only once it actually matches an
+  // authorized snapshot run; here it matches none, so the whole snapshot fails toward full replay.
+  it("finding 1: a resume value with no ':' delimiter does not turn every real run live-only", () => {
+    const registry = createRunRegistry();
+    registerRunWithEvents(registry, "run-a", [0, 1, 2]);
+    const { deps, frames, fireClose } = connect(
+      registry,
+      "http://localhost/api/runs/events?resume=garbage",
+    );
+
+    expect(seqsFor(frames, "run-a")).toEqual([0, 1, 2]);
+    fireClose();
+    deps.store.close();
+  });
+
+  // Finding 1, same root cause via a different malformed shape: `resume=%` is invalid
+  // percent-encoding, so `decodeResumeRunId` catches and falls back to the raw text "%" — again a
+  // non-empty cursor map that names nothing in the snapshot.
+  it("finding 1: a resume value with invalid percent-encoding does not turn every real run live-only", () => {
+    const registry = createRunRegistry();
+    registerRunWithEvents(registry, "run-a", [0, 1, 2]);
+    const { deps, frames, fireClose } = connect(
+      registry,
+      "http://localhost/api/runs/events?resume=%",
+    );
+
+    expect(seqsFor(frames, "run-a")).toEqual([0, 1, 2]);
+    fireClose();
+    deps.store.close();
+  });
+
+  // The healthy optimization this fix must NOT regress: a well-formed cursor that DOES match a
+  // snapshot run keeps its normal effect — the named run resumes after its cursor, and an unnamed
+  // run beside it still attaches live-only. (Also covered by the two tests above this describe
+  // block; restated here to pin it explicitly against the same review finding.)
+  it("finding 1 (control): a resume value naming a run actually in the snapshot keeps the live-only optimization for unnamed runs", () => {
+    const registry = createRunRegistry();
+    const sinkA = registerRunWithEvents(registry, "run-a", [0, 1, 2]);
+    const sinkB = registerRunWithEvents(registry, "run-b", [0, 1]);
+    const { deps, frames, fireClose } = connect(
+      registry,
+      "http://localhost/api/runs/events?resume=run-a:1",
+    );
+
+    expect(seqsFor(frames, "run-a")).toEqual([2]);
+    sinkA.emit(streamEvent("run-a", 3));
+    expect(seqsFor(frames, "run-a")).toEqual([2, 3]);
+    expect(seqsFor(frames, "run-b")).toEqual([]);
+    sinkB.emit(streamEvent("run-b", 2));
+    expect(seqsFor(frames, "run-b")).toEqual([2]);
+    fireClose();
+    deps.store.close();
+  });
+
+  // Finding 2 (P2): `RouteContext.correlationId` is optional, so a direct/internal handler
+  // composition can call `handleAllRunEvents` with no correlation id in scope at all. ADR-0173
+  // requires every line of one logical operation to carry a correlation id, and names
+  // `UNKNOWN_CORRELATION_ID` as the only sanctioned fallback — the resume-decision log line must
+  // resolve `ctx.correlationId ?? UNKNOWN_CORRELATION_ID` before logging, never omit the field.
+  it("finding 2: a resume-decision line logged with no correlationId in scope carries UNKNOWN_CORRELATION_ID", () => {
+    const logSink = captureServerLog();
+    const registry = createRunRegistry();
+    registerRunWithEvents(registry, "run-a", [0, 1, 2]);
+    const deps = minimalDeps(registry);
+    const { res, frames, fireClose } = recordingFakeRes();
+    const ctx: RouteContext = {
+      req: fakeReq(),
+      res,
+      params: {},
+      url: new URL("http://localhost/api/runs/events?resume=run-a:1"),
+      // No `correlationId` field at all — the shape a direct/internal caller can produce, since
+      // RouteContext.correlationId is optional.
+    };
+    handleAllRunEvents(ctx, deps);
+
+    const line = logSink.events.find((event) => event.op === "sse.run-events.resume");
+    expect(line).toBeDefined();
+    expect(line?.correlationId).toBe(UNKNOWN_CORRELATION_ID);
+    expect(seqsFor(frames, "run-a")).toEqual([2]);
     fireClose();
     deps.store.close();
   });

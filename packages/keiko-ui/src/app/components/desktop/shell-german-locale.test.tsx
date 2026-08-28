@@ -30,6 +30,7 @@ import { Workspace } from "./Workspace";
 import { WIN_TYPES } from "./windows/WindowsRegistry";
 import type { WorkspaceApi } from "./hooks/useWorkspace.types";
 import type { UseWorkspaceResult } from "./hooks/useWorkspace.types";
+import { cutResult } from "../../../test-utils/workspace-clipboard-fixture";
 
 vi.mock("./WorkspaceShader", () => ({
   WorkspaceShader: (): null => null,
@@ -243,7 +244,7 @@ describe("Workspace clipboard status pill under the German locale", () => {
       clearSelection: vi.fn(),
       moveSelectedWindowsBy: vi.fn(() => ({ dx: 0, dy: 0 })),
       copySelectedWindows: vi.fn(() => ({ captured: 0, skipped: 0, overflow: 0 })),
-      cutSelectedWindows: vi.fn(() => ({ captured: 0, skipped: 0, overflow: 0 })),
+      cutSelectedWindows: vi.fn(() => cutResult({ captured: 0, skipped: 0, overflow: 0 })),
       pasteCopiedWindows: vi.fn(() => ({ pasted: 0, limitReached: false })),
       close: vi.fn(),
       minimize: vi.fn(),
@@ -296,7 +297,7 @@ describe("Workspace clipboard status pill under the German locale", () => {
   it("announces a partial copy, a cut, and a paste in German — never the English fallback", async () => {
     await loadLocaleMessages("de");
     const copySelectedWindows = vi.fn(() => ({ captured: 2, skipped: 1, overflow: 0 }));
-    const cutSelectedWindows = vi.fn(() => ({ captured: 1, skipped: 0, overflow: 0 }));
+    const cutSelectedWindows = vi.fn(() => cutResult({ captured: 1, skipped: 0, overflow: 0 }));
     const pasteCopiedWindows = vi.fn(() => ({ pasted: 1, limitReached: false }));
     germanShell(
       <Workspace
@@ -316,8 +317,11 @@ describe("Workspace clipboard status pill under the German locale", () => {
     );
     expect(status()).not.toHaveTextContent("2 windows copied");
 
+    // Cut announces from its settled teardown outcome, so this one is awaited.
     fireEvent.keyDown(surface, { key: "x", ctrlKey: true });
-    expect(status()).toHaveTextContent(deTranslate("workspace.clipboard.cut.one"));
+    await waitFor(() =>
+      expect(status()).toHaveTextContent(deTranslate("workspace.clipboard.cut.one")),
+    );
     expect(status()).not.toHaveTextContent("1 window cut");
 
     fireEvent.keyDown(surface, { key: "v", ctrlKey: true });

@@ -1,5 +1,5 @@
 import { createRef } from "react";
-import { act, createEvent, fireEvent, render, screen } from "@testing-library/react";
+import { act, createEvent, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import { otherConnectionEndpoint, Workspace, workspaceDropPointToWindowOrigin } from "./Workspace";
@@ -25,6 +25,11 @@ import {
   LOCAL_KNOWLEDGE_CONNECTOR_DRAG_TYPE,
   serializeLocalKnowledgeConnectorDrag,
 } from "../../local-knowledge/connector-drag";
+import { cutResult } from "../../../test-utils/workspace-clipboard-fixture";
+import {
+  resetClientDiagnosticWriter,
+  setClientDiagnosticWriter,
+} from "../../../lib/client-diagnostics";
 
 vi.mock("./WorkspaceShader", () => ({
   WorkspaceShader: () => null,
@@ -56,7 +61,7 @@ function api(patch: Partial<WorkspaceApi> = {}): WorkspaceApi {
     clearSelection: vi.fn(),
     moveSelectedWindowsBy: vi.fn(() => ({ dx: 0, dy: 0 })),
     copySelectedWindows: vi.fn(() => ({ captured: 0, skipped: 0, overflow: 0 })),
-    cutSelectedWindows: vi.fn(() => ({ captured: 0, skipped: 0, overflow: 0 })),
+    cutSelectedWindows: vi.fn(() => cutResult({ captured: 0, skipped: 0, overflow: 0 })),
     pasteCopiedWindows: vi.fn(() => ({ pasted: 0, limitReached: false })),
     close: vi.fn(),
     minimize: vi.fn(),
@@ -1601,6 +1606,119 @@ describe("WC-01 — keyboard pan on the workspace surface (WCAG 2.1.1)", () => {
     expect(status).not.toHaveTextContent("not duplicable");
   });
 
+  it("issue #2150 — reports each clipboard outcome as a body-free client diagnostic", async () => {
+    // AGENTS.md §8: a change to product runtime behaviour must be
+    // reconstructable from the activity log alone. Cut removes windows, so a
+    // support bundle has to show which command ran and its counts — never a
+    // window id, title or path.
+    const diagnostics: string[] = [];
+    setClientDiagnosticWriter((message) => {
+      diagnostics.push(message);
+    });
+    try {
+      const copySelectedWindows = vi.fn(() => ({ captured: 2, skipped: 1, overflow: 0 }));
+      const cutSelectedWindows = vi.fn(() =>
+        cutResult(
+          { captured: 3, skipped: 0, overflow: 0 },
+          { captured: 2, skipped: 0, overflow: 0 },
+        ),
+      );
+      const pasteCopiedWindows = vi.fn(() => ({ pasted: 4, limitReached: true }));
+      render(
+        <Workspace
+          ws={workspace({
+            api: api({ copySelectedWindows, cutSelectedWindows, pasteCopiedWindows }),
+          })}
+          wsRef={createRef<HTMLDivElement>()}
+          openPalette={() => undefined}
+        />,
+      );
+      const surface = screen.getByRole("main", { name: "Workspace surface" });
+
+      fireEvent.keyDown(surface, { key: "c", ctrlKey: true });
+      fireEvent.keyDown(surface, { key: "x", ctrlKey: true });
+      fireEvent.keyDown(surface, { key: "v", ctrlKey: true });
+
+      await waitFor(() => expect(diagnostics).toHaveLength(3));
+      // Copy and paste report synchronously; cut reports only once its teardown
+      // settles, so it lands last here even though its key was pressed second.
+      expect(diagnostics).toContain("workspace-clipboard: copy captured=2 skipped=1 overflow=0");
+      expect(diagnostics).toContain("workspace-clipboard: paste pasted=4 limitReached=true");
+      // Cut reports what actually left the workspace, not what it captured.
+      expect(diagnostics.at(-1)).toBe("workspace-clipboard: cut captured=2 skipped=0 overflow=0");
+      for (const line of diagnostics) {
+        expect(line).not.toMatch(/agents-1|files-1|chat|\//u);
+      }
+    } finally {
+      resetClientDiagnosticWriter();
+    }
+  });
+
+  it("issue #2150 — announces the no-op outcomes too, never a silent shortcut", async () => {
+    // ADR-0123 D6 requires EVERY copy/cut/paste to report its outcome, including
+    // why nothing happened. A silent shortcut is the original "I pressed it and
+    // nothing happened" complaint, just moved to the empty cases.
+    const copySelectedWindows = vi.fn(() => ({ captured: 0, skipped: 0, overflow: 0 }));
+    const pasteCopiedWindows = vi.fn(() => ({ pasted: 0, limitReached: false }));
+    render(
+      <Workspace
+        ws={workspace({ api: api({ copySelectedWindows, pasteCopiedWindows }) })}
+        wsRef={createRef<HTMLDivElement>()}
+        openPalette={() => undefined}
+      />,
+    );
+    const surface = screen.getByRole("main", { name: "Workspace surface" });
+    const status = (): HTMLElement => screen.getByTestId("workspace-clipboard-status");
+
+    fireEvent.keyDown(surface, { key: "c", ctrlKey: true });
+    expect(status()).toHaveTextContent("Select one or more windows first");
+
+    fireEvent.keyDown(surface, { key: "v", ctrlKey: true });
+    await waitFor(() => expect(status()).toHaveTextContent("Nothing to paste"));
+  });
+
+  it("issue #2150 — says the workspace is full when a paste hits the window limit", () => {
+    const pasteCopiedWindows = vi.fn(() => ({ pasted: 0, limitReached: true }));
+    render(
+      <Workspace
+        ws={workspace({ api: api({ pasteCopiedWindows }) })}
+        wsRef={createRef<HTMLDivElement>()}
+        openPalette={() => undefined}
+      />,
+    );
+
+    fireEvent.keyDown(screen.getByRole("main", { name: "Workspace surface" }), {
+      key: "v",
+      ctrlKey: true,
+    });
+
+    expect(screen.getByTestId("workspace-clipboard-status")).toHaveTextContent(
+      "The workspace has no room for more windows",
+    );
+  });
+
+  it("issue #2150 — announces both remainder reasons when a capture hits the cap AND skips windows", () => {
+    // ADR-0123 D8 requires the two reasons to be counted AND announced
+    // separately. Reporting only the overflow silently drops the fact that some
+    // selected windows can never be duplicated at all.
+    const copySelectedWindows = vi.fn(() => ({ captured: 32, skipped: 2, overflow: 5 }));
+    render(
+      <Workspace
+        ws={workspace({ api: api({ copySelectedWindows }) })}
+        wsRef={createRef<HTMLDivElement>()}
+        openPalette={() => undefined}
+      />,
+    );
+    const surface = screen.getByRole("main", { name: "Workspace surface" });
+
+    fireEvent.keyDown(surface, { key: "c", ctrlKey: true });
+
+    const status = screen.getByTestId("workspace-clipboard-status");
+    expect(status).toHaveTextContent("32 windows copied");
+    expect(status).toHaveTextContent("5 more windows did not fit this copy");
+    expect(status).toHaveTextContent("2 selected windows skipped (not duplicable)");
+  });
+
   it("issue #2710 — Escape still clears the selection from a read-only selectable pane", () => {
     // Making file previews/diffs selectable tagged them data-text-selectable,
     // which isTextEntryTarget treats as text entry. Escape must not be swallowed
@@ -1681,8 +1799,8 @@ describe("WC-01 — keyboard pan on the workspace surface (WCAG 2.1.1)", () => {
     expect(pasteCopiedWindows).not.toHaveBeenCalled();
   });
 
-  it("issue #2150 — routes Ctrl+X to cut and announces the outcome", () => {
-    const cutSelectedWindows = vi.fn(() => ({ captured: 2, skipped: 0, overflow: 0 }));
+  it("issue #2150 — routes Ctrl+X to cut and announces the settled outcome", async () => {
+    const cutSelectedWindows = vi.fn(() => cutResult({ captured: 2, skipped: 0, overflow: 0 }));
     render(
       <Workspace
         ws={workspace({ api: api({ cutSelectedWindows }) })}
@@ -1697,11 +1815,15 @@ describe("WC-01 — keyboard pan on the workspace surface (WCAG 2.1.1)", () => {
 
     expect(cutSelectedWindows).toHaveBeenCalledTimes(1);
     expect(cut.defaultPrevented).toBe(true);
+    // Cut announces once the teardown settles, so a refused unbind can never be
+    // reported as a completed cut.
+    await waitFor(() =>
+      expect(screen.getByTestId("workspace-clipboard-status")).toHaveTextContent("2 windows cut"),
+    );
     const status = screen.getByTestId("workspace-clipboard-status");
     expect(status).toHaveAttribute("role", "status");
     expect(status).toHaveAttribute("aria-live", "polite");
     expect(status).toHaveAttribute("data-visible", "true");
-    expect(status).toHaveTextContent("2 windows cut");
   });
 
   it("issue #2150 — announces why a copy captured nothing instead of silently no-oping", () => {
@@ -1777,11 +1899,11 @@ describe("WC-01 — keyboard pan on the workspace surface (WCAG 2.1.1)", () => {
     expect(secondNode).not.toBe(firstNode);
   });
 
-  it("issue #2150 — announces nothing at all when there was no selection to act on", () => {
+  it("issue #2150 — tells the user to select something when there was no selection", () => {
     // captured: 0, skipped: 0 — an empty selection, not a failed duplication.
-    // describeClipboardCapture returns null here; the status pill must stay
-    // absent rather than announce an empty string (which would still fire the
-    // aria-live region for assistive tech on every no-op Ctrl+C).
+    // ADR-0123 D6 requires an outcome for THIS case too: staying silent is the
+    // "I pressed the shortcut and nothing happened" report the pill exists to
+    // answer, and an empty selection is exactly when a user needs telling.
     const copySelectedWindows = vi.fn(() => ({ captured: 0, skipped: 0, overflow: 0 }));
     render(
       <Workspace
@@ -1795,12 +1917,12 @@ describe("WC-01 — keyboard pan on the workspace surface (WCAG 2.1.1)", () => {
     fireEvent.keyDown(surface, { key: "c", ctrlKey: true });
 
     const status = screen.getByTestId("workspace-clipboard-status");
-    expect(status).toHaveAttribute("data-visible", "false");
-    expect(status).toHaveTextContent("");
+    expect(status).toHaveAttribute("data-visible", "true");
+    expect(status).toHaveTextContent("Select one or more windows first");
   });
 
-  it("issue #2150 — announces why a cut captured nothing instead of silently no-oping", () => {
-    const cutSelectedWindows = vi.fn(() => ({ captured: 0, skipped: 2, overflow: 0 }));
+  it("issue #2150 — announces why a cut captured nothing instead of silently no-oping", async () => {
+    const cutSelectedWindows = vi.fn(() => cutResult({ captured: 0, skipped: 2, overflow: 0 }));
     render(
       <Workspace
         ws={workspace({ api: api({ cutSelectedWindows }) })}
@@ -1816,13 +1938,15 @@ describe("WC-01 — keyboard pan on the workspace surface (WCAG 2.1.1)", () => {
     // Nothing was cut, so the native cut/delete keeps its default…
     expect(cut.defaultPrevented).toBe(false);
     // …but the user learns WHY, using the same reason copy uses.
-    expect(screen.getByTestId("workspace-clipboard-status")).toHaveTextContent(
-      "The selected windows can't be duplicated — chat and single-instance windows are excluded",
+    await waitFor(() =>
+      expect(screen.getByTestId("workspace-clipboard-status")).toHaveTextContent(
+        "The selected windows can't be duplicated — chat and single-instance windows are excluded",
+      ),
     );
   });
 
-  it("issue #2150 — announces a partial cut together with the skipped count", () => {
-    const cutSelectedWindows = vi.fn(() => ({ captured: 1, skipped: 1, overflow: 0 }));
+  it("issue #2150 — announces a partial cut together with the skipped count", async () => {
+    const cutSelectedWindows = vi.fn(() => cutResult({ captured: 1, skipped: 1, overflow: 0 }));
     render(
       <Workspace
         ws={workspace({ api: api({ cutSelectedWindows }) })}
@@ -1834,8 +1958,10 @@ describe("WC-01 — keyboard pan on the workspace surface (WCAG 2.1.1)", () => {
 
     fireEvent.keyDown(surface, { key: "x", ctrlKey: true });
 
-    expect(screen.getByTestId("workspace-clipboard-status")).toHaveTextContent(
-      "1 window cut · 1 selected window skipped (not duplicable)",
+    await waitFor(() =>
+      expect(screen.getByTestId("workspace-clipboard-status")).toHaveTextContent(
+        "1 window cut · 1 selected window skipped (not duplicable)",
+      ),
     );
   });
 
@@ -1860,8 +1986,8 @@ describe("WC-01 — keyboard pan on the workspace surface (WCAG 2.1.1)", () => {
     expect(screen.getByTestId("workspace-clipboard-status")).toHaveTextContent("3 windows pasted");
   });
 
-  it("issue #2150 — announces nothing when a paste has nothing to restore", () => {
-    // pasted: 0 (empty/expired clipboard) must not fire the aria-live region.
+  it("issue #2150 — says there is nothing to paste rather than staying silent", () => {
+    // pasted: 0 (empty/expired clipboard) still owes the user a reason (D6).
     const pasteCopiedWindows = vi.fn(() => ({ pasted: 0, limitReached: false }));
     render(
       <Workspace
@@ -1875,10 +2001,12 @@ describe("WC-01 — keyboard pan on the workspace surface (WCAG 2.1.1)", () => {
 
     fireEvent(surface, paste);
 
+    // Nothing was pasted, so the native paste keeps its default…
     expect(paste.defaultPrevented).toBe(false);
+    // …and the user still learns why.
     const status = screen.getByTestId("workspace-clipboard-status");
-    expect(status).toHaveAttribute("data-visible", "false");
-    expect(status).toHaveTextContent("");
+    expect(status).toHaveAttribute("data-visible", "true");
+    expect(status).toHaveTextContent("Nothing to paste — copy or cut windows first");
   });
 
   it("issue #2150 — auto-hides the clipboard status pill after its visible window elapses", () => {

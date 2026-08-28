@@ -11,6 +11,7 @@ import type {
   RefObject,
 } from "react";
 import { useTranslate, type I18nTranslate } from "@/lib/i18n";
+import { reportClientDiagnostic } from "@/lib/client-diagnostics";
 import { Icons } from "./Icons";
 import {
   acquireGrabbingBodyStyle,
@@ -494,24 +495,39 @@ function describeClipboardRemainder(
   t: I18nTranslate,
   result: WorkspaceClipboardCaptureResult,
 ): string | null {
+  // A selection can hit BOTH at once — more eligible windows than the per-copy
+  // cap, plus windows that are not duplicable at all. Announcing only one would
+  // hide a reason the user needs (ADR-0123 D8).
+  const clauses: string[] = [];
   if (result.overflow > 0) {
-    return result.overflow === 1
-      ? t("workspace.clipboard.overflow.one")
-      : t("workspace.clipboard.overflow.many", { count: result.overflow });
+    clauses.push(
+      result.overflow === 1
+        ? t("workspace.clipboard.overflow.one")
+        : t("workspace.clipboard.overflow.many", { count: result.overflow }),
+    );
   }
-  if (result.skipped === 0) return null;
-  return result.skipped === 1
-    ? t("workspace.clipboard.skipped.one")
-    : t("workspace.clipboard.skipped.many", { count: result.skipped });
+  if (result.skipped > 0) {
+    clauses.push(
+      result.skipped === 1
+        ? t("workspace.clipboard.skipped.one")
+        : t("workspace.clipboard.skipped.many", { count: result.skipped }),
+    );
+  }
+  return clauses.length === 0 ? null : clauses.join(" · ");
 }
 
 function describeClipboardCapture(
   t: I18nTranslate,
   action: "copy" | "cut",
   result: WorkspaceClipboardCaptureResult,
-): string | null {
+): string {
+  // ADR-0123 D6 — every command reports its outcome, including the empty ones.
+  // Returning nothing here would restore the silent shortcut this whole change
+  // exists to remove, just for the cases where the user is most confused.
   if (result.captured === 0) {
-    return result.skipped > 0 ? t("workspace.clipboard.noneEligible") : null;
+    return result.skipped > 0
+      ? t("workspace.clipboard.noneEligible")
+      : t("workspace.clipboard.noSelection");
   }
   const base = describeClipboardCaptureBase(t, action, result.captured);
   const remainder = describeClipboardRemainder(t, result);
@@ -520,7 +536,51 @@ function describeClipboardCapture(
 
 interface WorkspaceClipboardDispatch {
   readonly acted: boolean;
+  /** The message to announce now, or null when there is nothing to say. */
   readonly announcement: string | null;
+  /**
+   * Set only by cut, whose real outcome is not known until every captured
+   * window's teardown settles. Copy and paste stay synchronous.
+   */
+  readonly settled?: Promise<string | null> | undefined;
+}
+
+// AGENTS.md §8 — the workspace clipboard is product runtime behaviour, and cut
+// REMOVES windows, so an operator must be able to reconstruct which command ran
+// and what it did from the activity log alone. Body-free by construction: the
+// command name and its counts, never a window id, title, type or path.
+function reportClipboardCapture(
+  action: "copy" | "cut",
+  result: WorkspaceClipboardCaptureResult,
+): void {
+  reportClientDiagnostic(
+    `workspace-clipboard: ${action} captured=${String(result.captured)} ` +
+      `skipped=${String(result.skipped)} overflow=${String(result.overflow)}`,
+  );
+}
+
+function dispatchWorkspacePaste(
+  api: UseWorkspaceResult["api"],
+  t: I18nTranslate,
+): WorkspaceClipboardDispatch {
+  const result = api.pasteCopiedWindows();
+  reportClientDiagnostic(
+    `workspace-clipboard: paste pasted=${String(result.pasted)} ` +
+      `limitReached=${String(result.limitReached)}`,
+  );
+  if (result.pasted === 0) {
+    return {
+      acted: false,
+      announcement: result.limitReached
+        ? t("workspace.clipboard.workspaceFull")
+        : t("workspace.clipboard.nothingToPaste"),
+    };
+  }
+  const announcement =
+    result.pasted === 1
+      ? t("workspace.clipboard.pasted.one")
+      : t("workspace.clipboard.pasted.many", { count: result.pasted });
+  return { acted: true, announcement };
 }
 
 function dispatchWorkspaceClipboardCommand(
@@ -528,19 +588,30 @@ function dispatchWorkspaceClipboardCommand(
   api: UseWorkspaceResult["api"],
   t: I18nTranslate,
 ): WorkspaceClipboardDispatch {
-  if (key === "v") {
-    const result = api.pasteCopiedWindows();
-    if (result.pasted === 0) return { acted: false, announcement: null };
-    const announcement =
-      result.pasted === 1
-        ? t("workspace.clipboard.pasted.one")
-        : t("workspace.clipboard.pasted.many", { count: result.pasted });
-    return { acted: true, announcement };
+  if (key === "v") return dispatchWorkspacePaste(api, t);
+  if (key === "c") {
+    const result = api.copySelectedWindows();
+    reportClipboardCapture("copy", result);
+    return {
+      acted: result.captured > 0,
+      announcement: describeClipboardCapture(t, "copy", result),
+    };
   }
-  const result = key === "c" ? api.copySelectedWindows() : api.cutSelectedWindows();
+  // Cut removes windows, and a connected window only leaves once its unbinds are
+  // accepted. `acted` comes from the synchronous capture (the clipboard has the
+  // descriptors either way, so the key is ours), while the announcement waits
+  // for the teardown so it never claims a window was cut that is still open.
+  const result = api.cutSelectedWindows();
   return {
     acted: result.captured > 0,
-    announcement: describeClipboardCapture(t, key === "c" ? "copy" : "cut", result),
+    announcement: null,
+    settled: result.settled.then((settled) => {
+      // Logged from the settled outcome for the same reason the announcement is:
+      // a refused unbind leaves a window open, and the log must record what
+      // actually happened, not what was attempted.
+      reportClipboardCapture("cut", settled);
+      return describeClipboardCapture(t, "cut", settled);
+    }),
   };
 }
 
@@ -567,8 +638,13 @@ function tryHandleWorkspaceClipboardShortcut(
 ): boolean {
   const key = workspaceClipboardCommandKey(event);
   if (key === null) return false;
-  const { acted, announcement } = dispatchWorkspaceClipboardCommand(key, api, t);
+  const { acted, announcement, settled } = dispatchWorkspaceClipboardCommand(key, api, t);
   if (announcement !== null) announce(announcement);
+  if (settled !== undefined) {
+    void settled.then((message) => {
+      if (message !== null) announce(message);
+    });
+  }
   if (acted) {
     event.preventDefault();
     event.stopPropagation();

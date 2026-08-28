@@ -5,6 +5,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { WorkspaceApi } from "../hooks/useWorkspace.types";
 import { WindowFrame } from "./WindowFrame";
 import type { AppWindow } from "./types";
+import { cutResult } from "../../../../test-utils/workspace-clipboard-fixture";
 
 // GEN-UI-TEST-GAP-002 — a default-state WindowFrame must expose no axe violations.
 // This locks in the named-region labelling (aria-label + aria-roledescription), the
@@ -39,7 +40,7 @@ function api(patch: Partial<WorkspaceApi> = {}): WorkspaceApi {
     clearSelection: vi.fn(),
     moveSelectedWindowsBy: vi.fn(() => ({ dx: 0, dy: 0 })),
     copySelectedWindows: vi.fn(() => ({ captured: 0, skipped: 0, overflow: 0 })),
-    cutSelectedWindows: vi.fn(() => ({ captured: 0, skipped: 0, overflow: 0 })),
+    cutSelectedWindows: vi.fn(() => cutResult({ captured: 0, skipped: 0, overflow: 0 })),
     pasteCopiedWindows: vi.fn(() => ({ pasted: 0, limitReached: false })),
     close: vi.fn(),
     minimize: vi.fn(),

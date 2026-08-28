@@ -58,6 +58,15 @@ export interface WorkspaceClipboardCaptureResult {
   readonly overflow: number;
 }
 
+// Cut removes windows, and a connected window only leaves once its scope and
+// connector unbinds are accepted — a refusal deliberately keeps it open. The
+// synchronous fields describe what went into the clipboard (known at once);
+// `settled` resolves with what actually left the workspace, so the caller
+// announces the real outcome instead of an optimistic one.
+export interface WorkspaceClipboardCutResult extends WorkspaceClipboardCaptureResult {
+  readonly settled: Promise<WorkspaceClipboardCaptureResult>;
+}
+
 interface WorkspaceClipboardPasteResult {
   readonly pasted: number;
   readonly limitReached: boolean;
@@ -78,7 +87,7 @@ export interface WorkspaceApi {
     dy: number,
   ) => { readonly dx: number; readonly dy: number };
   readonly copySelectedWindows: () => WorkspaceClipboardCaptureResult;
-  readonly cutSelectedWindows: () => WorkspaceClipboardCaptureResult;
+  readonly cutSelectedWindows: () => WorkspaceClipboardCutResult;
   readonly pasteCopiedWindows: () => WorkspaceClipboardPasteResult;
   readonly close: (id: string) => void;
   readonly minimize: (id: string) => void;

@@ -201,10 +201,21 @@ through the same connection-teardown path ordinary `close` uses, so a cut window
 scope binding is released exactly as it would be on close; removing the window without that
 teardown would orphan a server-side grounding behind a vanished edge.
 
-Cut/paste is a move, not a duplication: the first paste after a cut restores the cut windows at
-their original geometry (zero offset). A second paste of the same clipboard duplicates with the
-ordinary offset, because the move has completed and any further paste is an explicit duplication
-request. Cut introduces no new authority, descriptor shape, or persistence.
+Cut/paste is a move, not a duplication, and a move must return what it took. D5's content-free
+descriptor is the right payload for a duplicate and the wrong one for a move: restoring only
+geometry would silently destroy a cut window's own state (a Files root and active path, an Editor's
+file, a Terminal's cwd, a Browser's URL). The windows a cut removes are therefore held verbatim in
+an in-memory, workspace-local move buffer, and the first paste after a cut puts them back unchanged
+— same ids where still free, same configuration, same geometry. That buffer never enters the
+clipboard payload, browser storage, or the OS clipboard, so D5's property that no window content
+leaves the workspace is unaffected; it is superseded by the next copy, and a second paste duplicates
+from the content-free descriptor with the ordinary offset. Cut introduces no new authority,
+descriptor shape, or persistence.
+
+A batch cut resolves its connection teardown before closing: every captured window reads the same
+pre-cut connection snapshot, so when both endpoints of one connection are cut together, a
+per-window loop would issue that edge's server-side unbind twice. Each connection is torn down
+exactly once per batch, and a refused edge blocks only the endpoints that belong to it.
 
 The capture outcome distinguishes two reasons a selected window did not make it into the clipboard:
 a window that cannot be duplicated at all (singleton, keyed, minimized, maximized) and one that

@@ -292,6 +292,38 @@ describe("useSSE", () => {
       second.unmount();
     });
 
+    it("resumes at full replay when a second subscriber joins an already-live run behind the first", () => {
+      // Two hooks subscribed to the SAME run: A has been receiving events (cursor 4). B mounts
+      // while the shared stream is already open, so subscribeRunEvents does not reopen it and B
+      // starts with no cursor of its own (open guards on `sharedEventSource !== null`, so no
+      // second EventSource is created either). The next reopen must resume "run 1" from B's
+      // missing history (full replay), never from A's higher cursor — resuming past B's minimum
+      // would permanently withhold events B still needs, including a terminal event, leaving B's
+      // hook stuck below "terminal" forever.
+      vi.stubGlobal("EventSource", FakeEventSource);
+      const subscriberA = renderHook(() => useSSE("run 1"));
+      const source = FakeEventSource.instances[0];
+      act(() => {
+        source?.emit(eventFor("run 1", 4));
+      });
+      expect(FakeEventSource.instances).toHaveLength(1);
+
+      const subscriberB = renderHook(() => useSSE("run 1"));
+      // B joined the already-live shared stream — no second EventSource was opened for it.
+      expect(FakeEventSource.instances).toHaveLength(1);
+
+      act(() => {
+        setVisibility("hidden");
+      });
+      act(() => {
+        setVisibility("visible");
+      });
+
+      expect(FakeEventSource.instances[1]?.url).toBe("/api/runs/events?resume=run%201:*");
+      subscriberA.unmount();
+      subscriberB.unmount();
+    });
+
     it("names a subscribed run with no observed event for full replay, never live-only", () => {
       // Under-delivery guard: a run subscribed but not yet seen (subscribed while hidden, or
       // during a reconnect gap) has no cursor. Leaving it OUT of the parameter would make the
@@ -366,12 +398,17 @@ describe("useSSE", () => {
 
     it("does not resurrect a stale cursor for a run re-subscribed after its last unsubscribe", () => {
       // "drops a run's cursor from the reopen URL" above only shows the unsubscribed run
-      // disappearing from the resume parameter, which the runIds-from-subscribersByRunId
-      // computation would do even without lastSeqByRunId.delete(runId) in the unsubscribe
-      // cleanup — that line is otherwise untested. This proves it's load-bearing: without it,
-      // re-subscribing to the SAME runId while the shared connection stays open (a second run
-      // keeps the subscriber count above zero) would resume from the seq the FIRST subscription
-      // observed, silently skipping whatever the server buffered in between.
+      // disappearing from the resume parameter. Cursors are tracked per SUBSCRIBER object
+      // (#3305), so a fresh re-subscription is a brand-new subscriber with no entry of its own —
+      // it can never inherit a stale cursor by construction, regardless of whether the old
+      // subscriber's entry was cleaned up. This proves that structural guarantee: re-subscribing
+      // to the SAME runId while the shared connection stays open (a second run keeps the
+      // subscriber count above zero) must resume from full replay, not the seq the FIRST,
+      // now-gone subscription observed — silently skipping whatever the server buffered in
+      // between would be exactly the under-delivery this fix exists to prevent.
+      // subscribeRunEvents' cleanup still deletes the old subscriber's entry from
+      // lastSeqBySubscriber on unmount so the map does not grow without bound; that deletion just
+      // is not what this particular assertion distinguishes.
       vi.stubGlobal("EventSource", FakeEventSource);
       const keepAlive = renderHook(() => useSSE("run 2"));
       const firstSubscription = renderHook(() => useSSE("run 1"));

@@ -15,6 +15,7 @@ import { ActiveRunLimitError, type AppliableSnapshot, type RunRecord } from "./r
 import { SSE_HEADERS, writeMessageEvent, readyMessage, startSseHeartbeat } from "./sse.js";
 import { markSseStreamBackpressureKilled } from "./sse-write.js";
 import { getServerLogger } from "./observability/index.js";
+import { UNKNOWN_CORRELATION_ID } from "./correlation.js";
 import type { SseWriter, StreamEvent } from "./sink.js";
 import type { RouteContext, RouteResult, HandlerOutcome } from "./routes.js";
 import { errorBody, STREAMING } from "./routes.js";
@@ -444,6 +445,12 @@ export function handleRunEvents(ctx: RouteContext, deps: UiHandlerDeps): Handler
 // branch — live-only — for EVERY run, which is under-delivery, not the safe over-delivery this
 // function promises. Falling back to `undefined` here keeps that shape byte-identical to "no
 // `resume` parameter at all": full replay for every run.
+//
+// This function has no view of the snapshot, so it cannot itself detect the case where every
+// parsed entry is well-formed AS A PAIR but names no run that actually exists (`resume=garbage`
+// with no `:` delimiter, or `resume=%` with invalid percent-encoding, both parse to one entry keyed
+// by nonsense text). That check — a cursor set is usable only once it matches at least one
+// snapshotted run — lives one layer up, in `usableResumeCursors` (PR #3305 review finding 1).
 function parseResumeCursors(url: URL): ReadonlyMap<string, number> | undefined {
   const raw = rawQueryParameter(url, "resume");
   if (raw === undefined) return undefined;
@@ -506,6 +513,28 @@ function resumeAfterSeq(cursors: ReadonlyMap<string, number> | undefined, runId:
   return cursors.get(runId) ?? Number.MAX_SAFE_INTEGER;
 }
 
+// Repository-owner review finding on PR #3305 (P1): a parsed cursor map is trusted only once it
+// actually authorizes at least one run present in THIS snapshot — i.e. at least one cursor key
+// equals a snapshotted run's id. `parseResumeCursors` cannot see the snapshot, so a malformed
+// `resume` value with no `:` delimiter (`resume=garbage`) or invalid percent-encoding
+// (`resume=%`) still parses into a non-empty, single-entry map keyed by nonsense text. Passed
+// straight to `resumeAfterSeq`, that map is non-`undefined` for every real run, so each one falls
+// through to the "unnamed run" branch (live-only) — malformed client input would silently suppress
+// ALL buffered history, the exact under-delivery `parseResumeCursors`'s own contract forbids.
+// A well-formed request that names at least one real run is unaffected: it still marks any other,
+// truly unnamed run live-only (the deliberate #2456 optimization) because the match check below
+// passes and the parsed map is returned unchanged.
+function usableResumeCursors(
+  cursors: ReadonlyMap<string, number> | undefined,
+  records: readonly RunRecord[],
+): ReadonlyMap<string, number> | undefined {
+  if (cursors === undefined) return undefined;
+  for (const record of records) {
+    if (cursors.has(record.runId)) return cursors;
+  }
+  return undefined;
+}
+
 interface ResumeAttachStats {
   resumedRuns: number;
   liveOnlyRuns: number;
@@ -523,32 +552,48 @@ function recordResumeDecision(stats: ResumeAttachStats, afterSeq: number): void 
 }
 
 // Body-free evidence for the resume decision (ADR-0173): counts per attach class, never runIds.
-function logResumeDecision(correlationId: string | undefined, stats: ResumeAttachStats): void {
+// `cursorsUnusable` is only added (as `true`) when the request carried a `resume` parameter that
+// yielded no usable pair, so a malformed-but-present request is distinguishable in the log from
+// an ordinary, fully-honoured resume request — without changing the shape of the ordinary line.
+// Repository-owner review finding on PR #3305 (P2): `RouteContext.correlationId` is optional, so a
+// direct/internal handler composition can reach this line with none in scope. ADR-0173 requires
+// every line of one logical operation to carry a correlation id, and names `UNKNOWN_CORRELATION_ID`
+// (correlation.ts) as the only sanctioned fallback — resolve it here rather than omitting the field.
+function logResumeDecision(
+  correlationId: string | undefined,
+  stats: ResumeAttachStats,
+  cursorsUnusable: boolean,
+): void {
   getServerLogger().info({
     category: "http",
     op: "sse.run-events.resume",
-    ...(correlationId === undefined ? {} : { correlationId }),
-    extra: { ...stats },
+    correlationId: correlationId ?? UNKNOWN_CORRELATION_ID,
+    extra: { ...stats, ...(cursorsUnusable ? { cursorsUnusable: true } : {}) },
   });
 }
 
 // Attaches every snapshot run at its resume boundary, then logs the per-class attach counts once
-// when (and only when) the connection actually carried a `resume` parameter.
+// when (and only when) the connection actually carried a `resume` parameter — including when that
+// parameter was present but unusable (`resume=`, `resume=,,`, or a parsed cursor set that names
+// nothing in this snapshot — see `usableResumeCursors`), which still causes a full-replay burst and
+// must not be indistinguishable in the log from a connection that never asked to resume.
 function attachSnapshotRuns(
   ctx: RouteContext,
   deps: UiHandlerDeps,
   attachRun: (record: RunRecord, afterSeq: number) => boolean,
 ): void {
-  const resumeCursors = parseResumeCursors(ctx.url);
+  const resumeRequested = rawQueryParameter(ctx.url, "resume") !== undefined;
+  const records = deps.registry.snapshot?.(AGGREGATE_RUN_EVENTS_SNAPSHOT_LIMIT) ?? [];
+  const resumeCursors = usableResumeCursors(parseResumeCursors(ctx.url), records);
   const stats: ResumeAttachStats = { resumedRuns: 0, liveOnlyRuns: 0, fullReplayRuns: 0 };
-  for (const record of deps.registry.snapshot?.(AGGREGATE_RUN_EVENTS_SNAPSHOT_LIMIT) ?? []) {
+  for (const record of records) {
     const afterSeq = resumeAfterSeq(resumeCursors, record.runId);
     if (attachRun(record, afterSeq)) {
       recordResumeDecision(stats, afterSeq);
     }
   }
-  if (resumeCursors !== undefined) {
-    logResumeDecision(ctx.correlationId, stats);
+  if (resumeRequested) {
+    logResumeDecision(ctx.correlationId, stats, resumeCursors === undefined);
   }
 }
 

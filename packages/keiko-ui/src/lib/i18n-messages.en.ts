@@ -251,6 +251,9 @@ export const EN_MESSAGES = {
   "workspace.clipboard.skipped.many": "{count} selected windows skipped (not duplicable)",
   "workspace.clipboard.overflow.one": "1 more window did not fit this copy",
   "workspace.clipboard.overflow.many": "{count} more windows did not fit this copy",
+  "workspace.clipboard.noSelection": "Select one or more windows first",
+  "workspace.clipboard.nothingToPaste": "Nothing to paste — copy or cut windows first",
+  "workspace.clipboard.workspaceFull": "The workspace has no room for more windows",
   "workspace.clipboard.noneEligible":
     "The selected windows can't be duplicated — chat and single-instance windows are excluded",
   "workspace.window.selectedLabel": "{label} — selected",

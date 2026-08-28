@@ -11,6 +11,7 @@ import { WsContext, type WsContextValue } from "./context/WsContext";
 import type { UseWorkspaceResult, WorkspaceApi } from "./hooks/useWorkspace.types";
 import { InspectorPanel } from "./widgets/panels/InspectorPanel";
 import type { AppWindow } from "./windows/types";
+import { cutResult } from "../../../test-utils/workspace-clipboard-fixture";
 
 // Matches Workspace.test.tsx's own convention: the shader is a next/dynamic,
 // SSR-disabled import, so leaving it unmocked resolves outside of React's act()
@@ -46,7 +47,7 @@ function api(patch: Partial<WorkspaceApi> = {}): WorkspaceApi {
     clearSelection: vi.fn(),
     moveSelectedWindowsBy: vi.fn(() => ({ dx: 0, dy: 0 })),
     copySelectedWindows: vi.fn(() => ({ captured: 0, skipped: 0, overflow: 0 })),
-    cutSelectedWindows: vi.fn(() => ({ captured: 0, skipped: 0, overflow: 0 })),
+    cutSelectedWindows: vi.fn(() => cutResult({ captured: 0, skipped: 0, overflow: 0 })),
     pasteCopiedWindows: vi.fn(() => ({ pasted: 0, limitReached: false })),
     close: vi.fn(),
     minimize: vi.fn(),

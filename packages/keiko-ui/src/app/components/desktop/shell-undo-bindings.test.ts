@@ -23,6 +23,7 @@ import {
 } from "./shell-undo-bindings";
 import type { AppWindow } from "./windows/types";
 import type { WorkspaceApi } from "./hooks/useWorkspace.types";
+import { cutResult } from "../../../test-utils/workspace-clipboard-fixture";
 
 function fakeApi(overrides: Partial<WorkspaceApi> = {}): WorkspaceApi {
   return {
@@ -36,7 +37,7 @@ function fakeApi(overrides: Partial<WorkspaceApi> = {}): WorkspaceApi {
     clearSelection: vi.fn(),
     moveSelectedWindowsBy: vi.fn(() => ({ dx: 0, dy: 0 })),
     copySelectedWindows: vi.fn(() => ({ captured: 0, skipped: 0, overflow: 0 })),
-    cutSelectedWindows: vi.fn(() => ({ captured: 0, skipped: 0, overflow: 0 })),
+    cutSelectedWindows: vi.fn(() => cutResult({ captured: 0, skipped: 0, overflow: 0 })),
     pasteCopiedWindows: vi.fn(() => ({ pasted: 0, limitReached: false })),
     close: vi.fn(),
     minimize: vi.fn(),

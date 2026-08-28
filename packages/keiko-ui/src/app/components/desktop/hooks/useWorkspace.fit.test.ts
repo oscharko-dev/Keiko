@@ -178,6 +178,22 @@ describe("content wheel zoom", () => {
     expect(next).toBe(wins);
   });
 
+  it("returns the SAME array when a multi-delta batch ends back at its starting zoom", () => {
+    // A batch that moves the zoom and returns to where it started has no net
+    // effect, so it must not flip the array identity either — that identity is
+    // what drives the downstream render, persistence, connection-prune and
+    // selection-normalization work #2402 exists to avoid. The clamp-boundary
+    // case has exactly this shape: from 1.9, -300 pins at the 2.0 cap and +40
+    // eases straight back to 1.9.
+    const target = appWindow({ id: "target", zoom: 1.9 });
+    const wins = [target, appWindow({ id: "sibling", zoom: 1 })];
+
+    const next = applyWheelZoomToWindows(wins, "target", [-300, 40]);
+
+    expect(nextContentZoomFromWheel(nextContentZoomFromWheel(1.9, -300), 40)).toBe(1.9);
+    expect(next).toBe(wins);
+  });
+
   it("returns the SAME array unchanged when the targeted window id is not present", () => {
     const wins = [appWindow({ id: "only" })];
 

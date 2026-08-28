@@ -1,10 +1,10 @@
 # Resolve a Windows portable install that flashes a console and exits
 
-| Field             | Value                                                                                                                                                                                        |
-| ----------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Severity          | Blocker                                                                                                                                                                                      |
-| Surface           | CLI                                                                                                                                                                                          |
-| Stable identifier | `Keiko could not start: the installation is incomplete.` / `Keiko could not start: the application bundle is damaged.` / `Keiko could not start its bundled runtime.` / silent console flash |
+| Field             | Value                                                                                                                                                                                                                                            |
+| ----------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Severity          | Blocker                                                                                                                                                                                                                                          |
+| Surface           | CLI                                                                                                                                                                                                                                              |
+| Stable identifier | `Keiko could not start: the installation is incomplete.` / `Keiko could not start: the application bundle is damaged.` / `Keiko could not prepare its launch environment.` / `Keiko could not start its bundled runtime.` / silent console flash |
 
 The Windows counterpart to the
 [macOS portable first-launch runbook](./macos-portable-first-launch.md). Use it when the Windows
@@ -14,11 +14,12 @@ portable asset does not bring up the web UI.
 
 Double-clicking `Keiko.exe` from the extracted portable ZIP (or the setup companion) shows a
 console window that opens and closes immediately, and no browser tab opens. Depending on the
-installed version, either nothing else happens at all, or one of three native dialogs appears:
+installed version, either nothing else happens at all, or one of four native dialogs appears:
 
 1. `Keiko could not start: the installation is incomplete.`
 2. `Keiko could not start: the application bundle is damaged.`
-3. `Keiko could not start its bundled runtime.`
+3. `Keiko could not prepare its launch environment.`
+4. `Keiko could not start its bundled runtime.`
 
 A related report: the setup companion stays alive as a background process after the CLI phase is
 aborted.
@@ -40,12 +41,24 @@ bundled `runtime\node\node.exe` against `app\dist\cli\index.js portable launch`.
 - **0.3.6 and later**: the launcher distinguishes a shell start from an Explorer double-click via
   `AttachConsole(ATTACH_PARENT_PROCESS)`, starts the child with `CREATE_NO_WINDOW` for a
   double-click (no window ever flashes), pre-flights the bundled runtime and CLI, pre-parses the
-  CLI with `node --check`, and reports every bootstrap failure through a native dialog. The three
-  dialogs above therefore mean a genuinely broken or incomplete extraction, not the launcher
-  defect: (1) `runtime\node\node.exe` or `app\dist\cli\index.js` is missing or unreadable, (2) the
-  bundled CLI is truncated or otherwise unparseable, (3) the child process could not be created.
-  A partial ZIP extraction, an antivirus quarantine of a file inside the extracted folder, and
-  running `Keiko.exe` from a folder that lost sibling directories all produce exactly these states.
+  CLI with `node --check`, and reports four specific bootstrap-failure classes through a native
+  dialog: (1) `bootstrap_artifact_unusable()` finds `runtime\node\node.exe` or
+  `app\dist\cli\index.js` missing, unreadable, or a directory wearing the artifact's name —
+  "the installation is incomplete"; (2) `node --check` fails to pre-parse the CLI bundle without
+  executing it — "the application bundle is damaged"; (3)
+  `SetEnvironmentVariableW(L"KEIKO_PORTABLE_UI_LAUNCH", L"1")` fails, so the CLI's own failure
+  notifier could never have activated anyway — "Keiko could not prepare its launch environment";
+  (4) `CreateProcessW` itself fails to create the Node child — "Keiko could not start its bundled
+  runtime". Dialogs 1 and 2 do mean a genuinely broken or incomplete extraction: a partial ZIP
+  extraction, an antivirus quarantine of a file inside the extracted folder, or running
+  `Keiko.exe` from a folder that lost sibling directories all produce exactly these states.
+  Dialog 4 does not by itself prove that — `CreateProcessW` can equally fail on a corrupt PE image
+  or **access denied**, so an endpoint-protection product or a policy blocking process creation
+  from the extracted folder raises the identical dialog on an otherwise intact install. Other
+  setup failures in the same code path — resolving the launcher's own directory, building the
+  runtime/CLI paths, quoting the launch arguments, and formatting the final command line into the
+  fixed-size command buffer — return with no dialog and no console line at all; they are not
+  currently reported, and would surface only as the fully silent exit described above.
 - **Setup companion staying alive**: `portable launch` starts the UI server detached and
   unreferenced, so the server intentionally outlives the installer that started it. That is the
   designed handoff, not a leak — the running process is Keiko itself. It is stopped with
@@ -85,8 +98,17 @@ error, that message is the real finding and the console flash was only hiding it
   `app\`, `runtime\`, and `.portable\` folders — it resolves everything relative to its own
   location.
 - If an endpoint-protection product quarantined a file inside the extracted folder, restore it or
-  allowlist the folder, then re-run the launcher. A missing bundled file is what dialogs 1 and 2
-  report.
+  allowlist the folder, then re-run the launcher. A missing or unreadable bundled file is what
+  dialog 1 reports, and a truncated or unparseable CLI bundle is what dialog 2 reports.
+- `Keiko could not prepare its launch environment.` (dialog 3) is not an extraction problem —
+  `SetEnvironmentVariableW` failed on an otherwise-intact install. Re-run from a normal user
+  session rather than a locked-down or heavily restricted process environment, and compare
+  against a shell start (step 3), which does not depend on that call succeeding.
+- `Keiko could not start its bundled runtime.` (dialog 4) means `CreateProcessW` failed to create
+  the Node child. Reinstalling fixes it when `runtime\node\node.exe` is corrupt or incomplete, but
+  the identical dialog also appears when the OS or an endpoint-protection/policy product denies
+  process creation from the extracted folder — check that product's block log and allowlist the
+  folder (as above) before assuming the extraction itself is broken.
 - If the setup companion appears to hang after the CLI phase, check whether Keiko is already
   serving (`keiko status`). A running detached UI server is the expected outcome; stop it with
   `keiko stop` rather than by killing the installer.
