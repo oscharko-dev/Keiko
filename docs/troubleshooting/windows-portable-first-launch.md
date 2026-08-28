@@ -97,21 +97,31 @@ error, that message is the real finding and the console flash was only hiding it
   of a temporary viewer inside the archive, and do not move `Keiko.exe` away from its sibling
   `app\`, `runtime\`, and `.portable\` folders — it resolves everything relative to its own
   location.
-- If an endpoint-protection product quarantined a file inside the extracted folder, **verify before
-  restoring it**. `Keiko.exe` executes binaries out of that folder, so a folder-wide exception would
-  extend trust to whatever else lands there. Confirm the file belongs to the official release first
-  — the production Windows assets carry an Authenticode chain and an RFC3161 timestamp
-  (ADR-0121) — then scope the exception to that verified file:
+- If an endpoint-protection product quarantined a file inside the extracted folder, **verify the
+  exact file you are about to restore** — never the folder. `Keiko.exe` executes binaries out of
+  that folder, so a folder-wide exception extends trust to whatever else lands there later. Which
+  check applies depends on what was quarantined, because only part of the payload is individually
+  signed:
 
-  ```powershell
-  # A production asset returns Status: Valid with the expected publisher.
-  Get-AuthenticodeSignature .\Keiko.exe | Format-List Status, SignerCertificate
-  ```
+  - **An executable** (`Keiko.exe`, `runtime\node\node.exe`, the `runtime\native\*.exe` helpers, a
+    bundled sidecar `.exe`). Production Windows assets sign every one of these, with an Authenticode
+    chain and an RFC3161 timestamp (ADR-0121), so verify that specific path and confirm the
+    publisher is the expected one:
 
-  If the signature does not verify, do not restore or allow the file: re-download the release asset
-  instead. Prefer re-extracting a freshly downloaded ZIP over restoring anything from quarantine.
-  A missing or unreadable bundled file is what dialog 1 reports, and a truncated or unparseable CLI
-  bundle is what dialog 2 reports.
+    ```powershell
+    # Substitute the quarantined path. A production asset returns Status: Valid.
+    Get-AuthenticodeSignature .\runtime\node\node.exe | Format-List Path, Status, SignerCertificate
+    ```
+
+  - **Anything else** (`app\dist\cli\index.js`, bundled modules, assets). These are payload files
+    inside the signed archive and carry no signature of their own, so there is nothing to verify
+    file-by-file. Do not restore them from quarantine — re-extract from a freshly downloaded release
+    asset instead.
+
+  If verification fails, is unavailable, or the publisher is not the expected one, do not restore or
+  allow the file: download the release asset again and re-extract. Re-extracting a fresh download is
+  always the safer path than restoring from quarantine. A missing or unreadable bundled file is what
+  dialog 1 reports, and a truncated or unparseable CLI bundle is what dialog 2 reports.
 
 - `Keiko could not prepare its launch environment.` (dialog 3) is not an extraction problem —
   `SetEnvironmentVariableW` failed on an otherwise-intact install. Re-run from a normal user
