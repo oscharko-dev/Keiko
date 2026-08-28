@@ -111,6 +111,49 @@ classic tokens on the package per npm's own recommendation) is a separate manual
 maintainer has confirmed a real trusted-publishing run succeeds; this ADR does not itself delete
 that secret.
 
+**Provisioning status: configured and verified (2026-08-16).** The Trusted Publisher entry exists on
+npmjs.com for `@oscharko-dev/keiko` naming this repository, the basename `release.yml`, and the
+`npm-publish` environment. The v0.3.8 publish ran as a `workflow_dispatch` on tag `v0.3.8` with the
+`Publish to npm` job green.
+
+What evidences the registry-auth path is that run's configuration, not an artifact: the workflow
+supplies no `NODE_AUTH_TOKEN`/`NPM_TOKEN` at workflow, job, or step scope (D5 pins all three), so
+OIDC was the only credential the npm CLI could present — and the publish succeeded where the 0.3.6
+dispatch had failed with `ENEEDAUTH` (issue #3088). The Sigstore publish attestation npm holds for
+`@oscharko-dev/keiko@0.3.8` is **not** that proof and must not be cited as it: `--provenance` is
+added whenever GitHub's OIDC variables are present (`provenancePublishArgs()` in
+`scripts/lib/npm-publish-preflight.mjs`), independent of how the CLI authenticated, so a
+token-authenticated Actions publish would carry the same attestation. It evidences workflow
+provenance — which repository, workflow, and run produced the tarball — and nothing about the
+credential. The run did pass through the environment, so the incomplete-provisioning fail-open
+window described above (repository and filename registered without the environment) is closed too.
+
+**Secret retirement: done (2026-08-28).** The `NPM_TOKEN` GitHub Actions secret was deleted on the
+release owner's decision once the verified trusted publish above made it redundant; no workflow read
+it, and D5 pins that no workflow starts reading it. No publish path lost anything: the governed local publish reads
+its token from the operator's own environment, never from Actions, and the D3 dist-tag repair is a
+manual run that exports one for itself. Optionally disallowing classic tokens on the package
+entirely remains available to the release owner on npmjs.com.
+
+### D5 — The repository half of the publisher binding is gated, not merely documented
+
+The publisher entry names three identifiers this repository owns — the workflow basename
+`release.yml`, the `npm-publish` environment, and a GitHub-hosted runner carrying `id-token: write`
+— plus one negative condition: no registry token may reach the publish step, because an unset
+`NODE_AUTH_TOKEN`/`NPM_TOKEN` is exactly what makes the npm CLI attempt the OIDC exchange (D1). The
+negative condition spans three scopes, not one: a workflow-level or job-level `env` entry is
+inherited by the step just as surely as a step-level one, from a secret of any name. npm never
+re-validates a saved entry, so each of these drifts silently: CI stays green, and authentication
+breaks only at the registry, in the middle of a release.
+
+`scripts/__tests__/release-trusted-publishing-binding.test.mjs` pins all four, plus the two
+structural changes that would break the OIDC claim without touching any of them — a `workflow_call`
+indirection (the claim would carry the caller's identity) and a self-hosted runner (GitHub issues no
+identity npm accepts there) — and asserts that no workflow consumes `secrets.NPM_TOKEN`, so D4's
+retirement follow-up cannot be quietly reversed. The npm-side half stays unreadable from here, so a
+rename must still be paired with the npmjs.com edit by hand; what the gate removes is the ability to
+land that rename unnoticed.
+
 ## Consequences
 
 ### Positive
@@ -131,9 +174,18 @@ that secret.
   the file, wrapping the publish job behind `workflow_call`, or renaming the environment would
   silently break trusted publishing (npm does not re-validate the saved configuration; publishing
   would simply start failing auth). Changing either must come with updating the npmjs.com Trusted
-  Publisher entry in the same change. Neither half is verifiable from this repository — the
-  binding lives only in the npmjs.com publisher settings — so the obligation is stated here
-  rather than enforced by a gate.
+  Publisher entry in the same change. The npm-side entry is still unreadable from this repository —
+  the binding lives only in the npmjs.com publisher settings — but the repository-side identifiers
+  are pinned by the D5 gate, so a rename or refactor now fails a test here instead of failing
+  authentication mid-release.
+- Provenance follows the path a version is published from, not this decision: only versions
+  published through the Actions `publish` job carry a Sigstore publish attestation (of the 0.3.x
+  line, only 0.3.8 does). The `npm-publish` environment requires the release owner's approval click
+  (ADR-0170 D3), so a release that must complete without one publishes through the governed local
+  path with an operator token, and that version carries no attestation. Trading the approval
+  boundary away to buy provenance is not on the table — that boundary is what keeps a dispatched
+  publish a person's decision — so this is a recorded gap for the release owner to weigh per
+  release, not an oversight.
 - Trusted publishing requires GitHub-hosted runners; self-hosted runners cannot use it. The
   `publish` job already runs on `ubuntu-latest`, so this is not a present constraint, only a
   future one to remember if that job is ever moved.
@@ -185,6 +237,8 @@ that secret.
   `ensurePackageDistTag()`.
 - `docs/release/release-publish-workflow.md`: operator-facing description of the npm
   authentication model and the one-time npmjs.com setup step.
+- `scripts/__tests__/release-trusted-publishing-binding.test.mjs`: the D5 gate over the
+  repository-side identifiers the publisher entry names.
 
 ## Revision Policy
 
@@ -198,3 +252,4 @@ reason other than a routine bump, increment the version and record it below.
 | ------- | ---------- | ----------------------------------------------------------------------- |
 | 1.0     | 2026-07-11 | Accepted: npm Trusted Publishing adopted for the release `publish` job. |
 | 1.1     | 2026-08-10 | Publish npm pin bound to the governed `EXPECTED_PACKAGE_MANAGER` (npm@11.16.0) with a lockstep test; stale 10.9.x/11.18.0 references removed. |
+| 1.2     | 2026-08-28 | Provisioning recorded as configured and verified (v0.3.8 attestation); `NPM_TOKEN` Actions secret retired; repository-side binding enforced by a new gate (D5); provenance-by-publish-path consequence recorded. |
