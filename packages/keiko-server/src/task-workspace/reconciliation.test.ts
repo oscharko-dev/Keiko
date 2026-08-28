@@ -14,9 +14,13 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { createNodeGitWorktreeAdapter } from "@oscharko-dev/keiko-tools/internal/git-mutation";
-import type { GitWorktreeAdapter } from "@oscharko-dev/keiko-tools/internal/git-mutation";
+import type {
+  GitWorktreeAdapter,
+  WorktreeListEntry,
+} from "@oscharko-dev/keiko-tools/internal/git-mutation";
 import type { EvidenceStore } from "@oscharko-dev/keiko-evidence";
 import type { WorkspaceInfo, WorkspaceInstance } from "@oscharko-dev/keiko-contracts";
+import { detectWorkspaceAt } from "@oscharko-dev/keiko-workspace";
 import { runMigrations } from "../store/schema.js";
 import { buildWorkspaceInstanceStoreOverDatabase, type WorkspaceInstanceStore } from "./store.js";
 import {
@@ -27,7 +31,7 @@ import {
 import { createWorkspaceProvisioningService } from "./provisioning.js";
 import { createWorkspaceReconciliationService } from "./reconciliation.js";
 import type { WorkspaceProvisioningService, WorkspaceReconciliationService } from "./types.js";
-import { createWorkspaceMutexRegistry } from "./mutex.js";
+import { createWorkspaceMutexRegistry, workspaceKey } from "./mutex.js";
 
 const __twMutex = createWorkspaceMutexRegistry();
 
@@ -83,6 +87,7 @@ function reconciliation(): WorkspaceReconciliationService {
     redactString: (s: string): string => s,
     now: (): number => nowMs,
     newId: (): string => `id-${String(idCounter++)}`,
+    mutex: __twMutex,
   });
 }
 
@@ -378,11 +383,145 @@ describe("dangling active pointer", () => {
       redactString: (s: string): string => s,
       now: (): number => nowMs,
       newId: (): string => `id-${String(idCounter++)}`,
+      mutex: __twMutex,
     });
     const read = svc.report();
     expect(read.activeRestoration.kind).toBe("cleared-dangling");
     expect(clearCount).toBe(0); // read-only GET path never mutates the pointer store
     await svc.reconcile();
     expect(clearCount).toBe(1); // the live reconcile self-heals the dangling pointer
+  });
+});
+
+// KEIKO-0996 (#3339): reconcileImpl writes a persisted classification via the SAME store.upsert every
+// other mutating workspace flow uses, but — unlike WorkspaceCleanupServiceDeps — never took the shared
+// #449 ws:<workspaceId> mutex key before doing so. An operator-triggered POST /reconciliation racing the
+// startup pass, or racing any other ws:-keyed flow (activate/pause/repair/cleanup), could interleave its
+// read-then-write with theirs.
+//
+// Both tests below are DETERMINISTIC, never duration-based: an earlier version of this suite asserted
+// `evidence.length` was unchanged after a fixed `setTimeout(..., 250)`, on the assumption that real
+// fact-gathering (git subprocess calls) for one tiny repo completes in single-digit ms. That assumption
+// is false under load — the git spawn can take far longer than 250ms — so the assertion passed whether
+// or not the mutex wrap was present, proving nothing (a red-then-green check against the unwrapped code
+// showed 4/4 false-green runs). Both tests below replace the real git adapter with a `createAdapter` test
+// double whose `listWorktrees`/`localBranchExists` resolve through promises THIS TEST controls, so
+// "fact-gathering has completed" is an event under the test's control rather than a wall-clock guess, and
+// use `runExclusive`'s synchronous registration (mutex.ts: keys are captured and installed in one
+// uninterrupted step, no `await`, before `fn` ever runs) to guarantee ordering between the external hold
+// and reconcile's own lock acquisition without any timer.
+describe("per-instance mutex serialization (KEIKO-0996, #3339)", () => {
+  // Builds a createAdapter whose listWorktrees returns a pre-fetched, real snapshot instantly (no repeat
+  // git spawn during the race) and whose localBranchExists resolves only once the test releases `gate` —
+  // deterministic control over when reconcile's fact-gathering completes.
+  function gatingAdapter(
+    worktreesSnapshot: readonly WorktreeListEntry[],
+    gate: Promise<void>,
+  ): (workspace: WorkspaceInfo) => GitWorktreeAdapter {
+    return (workspace: WorkspaceInfo): GitWorktreeAdapter => {
+      const inner = realAdapter(workspace);
+      return {
+        ...inner,
+        listWorktrees: (): Promise<readonly WorktreeListEntry[]> =>
+          Promise.resolve(worktreesSnapshot),
+        localBranchExists: async (): Promise<boolean> => {
+          await gate;
+          return true;
+        },
+      };
+    };
+  }
+
+  it("blocks reconcile's write for a workspace while another flow holds its ws: key", async () => {
+    const instance = await provisionTask("t1");
+    const evidenceCountBeforeReconcile = evidence.length;
+    const worktreesSnapshot = await realAdapter(detectWorkspaceAt(repoRoot)).listWorktrees();
+
+    let releaseFacts: () => void = () => undefined;
+    const factsGate = new Promise<void>((resolve) => {
+      releaseFacts = resolve;
+    });
+
+    let releaseHold: () => void = () => undefined;
+    const holdGate = new Promise<void>((resolve) => {
+      releaseHold = resolve;
+    });
+    // Simulates a concurrent ws:-keyed flow (e.g. repair/pause) already mid-critical-section for this
+    // exact workspace when reconcile() starts. Registered synchronously BEFORE reconcile() is even
+    // called, so mutex.ts's synchronous registration guarantees this hold is queued ahead of reconcile's
+    // own runExclusive call regardless of how the two promise chains later interleave.
+    const holdPromise = __twMutex.runExclusive(
+      [workspaceKey(instance.workspaceId)],
+      () => holdGate,
+    );
+
+    const svc = createWorkspaceReconciliationService({
+      store,
+      activePointerStore: pointerStore,
+      evidenceStore: capturingEvidence(),
+      managedRoot,
+      createAdapter: gatingAdapter(worktreesSnapshot, factsGate),
+      redactString: (s: string): string => s,
+      now: (): number => nowMs,
+      newId: (): string => `id-${String(idCounter++)}`,
+      mutex: __twMutex,
+    });
+    const reconcilePromise = svc.reconcile();
+
+    // Let fact-gathering complete WHILE the external hold is still active. Against the unwrapped
+    // production code this is sufficient for reconcile's write to land immediately — reconcileWithContext
+    // is fully synchronous once facts are in hand (Finding 2), so there is no further await standing
+    // between "facts ready" and "evidence appended". `setImmediate` flushes the entire pending microtask
+    // queue (everything gated here resolves via promise microtasks, no real IO), so by the time it fires,
+    // the unwrapped write would already have happened if nothing were serializing it.
+    releaseFacts();
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
+    expect(evidence).toHaveLength(evidenceCountBeforeReconcile);
+
+    releaseHold();
+    await holdPromise;
+    const report = await reconcilePromise;
+
+    expect(evidence.length).toBeGreaterThan(evidenceCountBeforeReconcile);
+    const reportEntry = report.entries.find((e) => e.workspaceId === instance.workspaceId);
+    expect(reportEntry?.status).toBe("healthy");
+    expect(store.getById(instance.workspaceId)?.health).toBe("healthy");
+  });
+
+  // Finding 2's exact demonstrated hazard: a concurrent ws:-keyed flow (e.g. completeCleanupImpl,
+  // cleanup.ts:394) deletes the workspace row from inside its OWN critical section while reconcile is
+  // queued behind it. Wrapping only the write over a pre-lock snapshot (the first version of this fix)
+  // could not see the deletion and resurrected the row via a stale-instance `upsert`. The fix re-reads
+  // `store.getById` AFTER the lock is held, so the deletion is observed and this instance is skipped.
+  it("does not resurrect a workspace deleted by another flow while reconcile awaited its ws: hold", async () => {
+    const instance = await provisionTask("t1");
+    const evidenceCountBeforeReconcile = evidence.length;
+    const worktreesSnapshot = await realAdapter(detectWorkspaceAt(repoRoot)).listWorktrees();
+
+    // Registered — and its delete run to completion — synchronously ahead of reconcile() the same way as
+    // above: mutex.ts's synchronous registration guarantees causality without any timer.
+    const holdPromise = __twMutex.runExclusive([workspaceKey(instance.workspaceId)], () => {
+      store.delete(instance.workspaceId);
+    });
+
+    const svc = createWorkspaceReconciliationService({
+      store,
+      activePointerStore: pointerStore,
+      evidenceStore: capturingEvidence(),
+      managedRoot,
+      createAdapter: gatingAdapter(worktreesSnapshot, Promise.resolve()),
+      redactString: (s: string): string => s,
+      now: (): number => nowMs,
+      newId: (): string => `id-${String(idCounter++)}`,
+      mutex: __twMutex,
+    });
+    const report = await svc.reconcile();
+    await holdPromise;
+
+    expect(store.getById(instance.workspaceId)).toBeUndefined();
+    expect(evidence).toHaveLength(evidenceCountBeforeReconcile);
+    expect(report.entries.find((e) => e.workspaceId === instance.workspaceId)).toBeUndefined();
   });
 });

@@ -127,15 +127,18 @@ promise per key; `runExclusive` appends `fn` to the chain of each requested key
 drains, so the map never grows unbounded. It is **pure in-process JavaScript**: no
 spawn, no filesystem, no new adapter verb, no allowlist entry (SC3). A single
 `WorkspaceMutexRegistry` instance is created once at server wiring and injected
-into the provisioning, lifecycle, repair, and cleanup service deps, so all four
-services share one keyspace.
+into the provisioning, lifecycle, repair, cleanup, and reconciliation service
+deps, so all five services share one keyspace (#447 reconciliation's live
+per-instance critical section — re-read, fact-gathering, classification, and
+write — joined the shared `ws:<workspaceId>` keyspace under KEIKO-0996, #3339 —
+see ADR-0091's "Concurrency guarantee").
 
 **Three lock scopes, one keyspace.** Mutating flows contend on three logical
 resources; each maps to a string key:
 
 | Scope | Key | Guards |
 |---|---|---|
-| Individual workspace instance | `ws:<workspaceId>` | provision-resume, activate, pause, handoff, repair, request/complete-cleanup of a known instance |
+| Individual workspace instance | `ws:<workspaceId>` | provision-resume, activate, pause, handoff, repair, request/complete-cleanup of a known instance, live reconcile's whole per-instance critical section — re-read + fact-gathering + write (#447) |
 | Shared managed root for a `(repo, task)` not yet provisioned | `prov:<repositoryId>:<taskId>` | first-time `provision()` — the workspaceId does not exist yet, so the instance key cannot be used; the `(repo,task)` pair is the contended resource (the racy `git worktree add` target) |
 | Activation / active-pointer retargeting | `active:<repositoryId>` | `setActive` / resume — serializes pointer flips so the singleton active pointer for a repository cannot interleave with a concurrent switch |
 

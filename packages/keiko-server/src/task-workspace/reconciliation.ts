@@ -51,6 +51,7 @@ import {
 } from "@oscharko-dev/keiko-contracts/runtime/task-workspace";
 import { deriveRepositoryId } from "./naming.js";
 import { lockIsLive, resolveLockTtl } from "./locks.js";
+import { workspaceKey } from "./mutex.js";
 import {
   appendWorkspaceLifecycleEvidence,
   buildWorkspaceEvent,
@@ -390,16 +391,36 @@ async function reconcileImpl(
     const adapter = ctx.deps.createAdapter(detectWorkspaceAt(root));
     const worktrees = await adapter.listWorktrees();
     for (const instance of group) {
-      const nowMs = ctx.deps.now();
-      const { facts, observedHead } = await gatherFacts(
-        ctx,
-        adapter,
-        worktrees,
-        instance,
-        nowMs,
-        undefined,
+      // Serialize the WHOLE per-instance critical section — re-read, fact-gathering, classification, and
+      // the persisted write — under the SAME `ws:<workspaceId>` key every other mutating workspace flow
+      // uses (#449, ADR-0093 D1), matching repair.ts's "advisory check -> live reconcile -> lock acquire
+      // -> strategy mutation" and cleanup.ts's "re-check persisted liveness inside the critical section"
+      // (KEIKO-0996, #3339). Gathering facts INSIDE the lock (not before it) closes the TOCTOU a
+      // pre-lock snapshot would leave open: the `instance` used for classification is re-read from the
+      // store after the lock is held, so a concurrent activate/pause/repair/cleanup that mutated or
+      // deleted this workspace while reconcile awaited the lock is observed, not clobbered. When the
+      // instance is gone by the time the lock is acquired, this reconcile pass skips it entirely rather
+      // than resurrecting a deleted row. Deliberately NOT applied to reconcileSingleInstance: repair.ts
+      // already holds this exact key for its whole operation and re-enters reconcileSingleInstance
+      // inside it, so locking there would self-deadlock.
+      const result = await ctx.deps.mutex.runExclusive(
+        [workspaceKey(instance.workspaceId)],
+        async (): Promise<ReconcileInstanceResult | undefined> => {
+          const fresh = ctx.deps.store.getById(instance.workspaceId);
+          if (fresh === undefined) return undefined;
+          const nowMs = ctx.deps.now();
+          const { facts, observedHead } = await gatherFacts(
+            ctx,
+            adapter,
+            worktrees,
+            fresh,
+            nowMs,
+            undefined,
+          );
+          return reconcileWithContext(ctx, facts, observedHead, fresh, nowMs);
+        },
       );
-      reconciled.push(reconcileWithContext(ctx, facts, observedHead, instance, nowMs).instance);
+      if (result !== undefined) reconciled.push(result.instance);
     }
   }
   return buildReport(ctx, reconciled, ctx.deps.now(), true);

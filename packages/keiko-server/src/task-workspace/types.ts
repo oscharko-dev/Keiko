@@ -191,6 +191,11 @@ export interface WorkspaceReconciliationServiceDeps {
   readonly now: () => number;
   readonly newId: () => string;
   readonly lockTtlMs?: number | undefined;
+  // The SAME shared in-process serializer (#449, ADR-0093 D1): the live reconcile's whole per-instance
+  // critical section (re-read + fact-gathering + classification + write) takes the `ws:<workspaceId>`
+  // key, mirroring WorkspaceCleanupServiceDeps, so it cannot race — or write over the result of — a
+  // concurrent activate/pause/repair/cleanup of the same workspace (KEIKO-0996, #3339).
+  readonly mutex: WorkspaceMutexRegistry;
 }
 
 export type WorkspaceRepairOutcome = "repaired" | "operator-required";
