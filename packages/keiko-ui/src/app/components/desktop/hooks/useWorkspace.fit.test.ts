@@ -184,15 +184,18 @@ describe("content wheel zoom", () => {
     // effect, so it must not flip the array identity either — that identity is
     // what drives the downstream render, persistence, connection-prune and
     // selection-normalization work #2402 exists to avoid. The clamp-boundary
-    // case has exactly this shape: from 1.9, -300 pins at the 2.0 cap and +40
-    // eases straight back to 1.9.
+    // case has exactly this shape: from 1.9, exp(0.45) overshoots the 2.0 cap
+    // and pins there, then exp(-0.06) eases to ~1.8835, which the 0.1 snap
+    // rounds back to 1.9 — the same value the batch started from. The expected
+    // value is stated here rather than recomputed with the production helper,
+    // which would make the assertion its own oracle.
     const target = appWindow({ id: "target", zoom: 1.9 });
     const wins = [target, appWindow({ id: "sibling", zoom: 1 })];
 
     const next = applyWheelZoomToWindows(wins, "target", [-300, 40]);
 
-    expect(nextContentZoomFromWheel(nextContentZoomFromWheel(1.9, -300), 40)).toBe(1.9);
     expect(next).toBe(wins);
+    expect(next?.find((win) => win.id === "target")?.zoom).toBe(1.9);
   });
 
   it("returns the SAME array unchanged when the targeted window id is not present", () => {
