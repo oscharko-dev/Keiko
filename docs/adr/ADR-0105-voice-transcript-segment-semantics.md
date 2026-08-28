@@ -6,12 +6,15 @@
 
 Accepted (Issue #500, Epic #491, 2026-06-24)
 
-Amended by [ADR-0154](ADR-0154-canonical-twin-voice-pipeline.md) for productive integration. The
-segment contract and reducer remain reusable, but current Twin does not use the standalone reducer as
-its exactly-once or persistence boundary. `useRealtimeVoice` settles provider finals and transfers one
-immutable turn to canonical chat, whose normal message, retrieval, and MemoriaViva paths own durable
-state. `replayable` in this ADR means eligible for the bounded in-session control replay buffer, not
-durable transcript storage.
+Amended by [ADR-0154](ADR-0154-canonical-twin-voice-pipeline.md) for productive integration. Only the
+leaf contract in [`keiko-contracts/src/voice-transcript.ts`](../../packages/keiko-contracts/src/voice-transcript.ts)
+remains reusable; current Twin does not use the standalone reducer as its exactly-once or persistence
+boundary. `useRealtimeVoice` settles provider finals and transfers one immutable turn to canonical
+chat, whose normal message, retrieval, and MemoriaViva paths own durable state. The standalone
+stateful reducer that D4 below describes (`voice-transcript-segments.ts`) had zero production
+importers and was removed as unused after ADR-0154's simplification to the continuation-buffer
+pattern; resurrecting it would contradict, not restore, that standing decision. `replayable` in this
+ADR means eligible for the bounded in-session control replay buffer, not durable transcript storage.
 
 ## Version
 
