@@ -373,8 +373,9 @@ export function createMemoryAuditHandler(options: MemoryAuditHandlerOptions): Me
     }
   };
   return Object.assign(handler, {
-    seed: (records: readonly Pick<MemoryRecord, "id" | "status" | "pinned">[]): void =>
-      seedStateCache(records, previousStatus, previousPinned),
+    seed: (records: readonly Pick<MemoryRecord, "id" | "status" | "pinned">[]): void => {
+      seedStateCache(records, previousStatus, previousPinned);
+    },
   });
 }
 
