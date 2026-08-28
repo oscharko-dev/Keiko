@@ -845,7 +845,7 @@
     {
       "op": "gateway.tool-calling.verification",
       "category": "gateway",
-      "site": "packages/keiko-server/src/gateway-setup.ts:6134",
+      "site": "packages/keiko-server/src/gateway-setup.ts:6229",
       "package": "keiko-server"
     },
     {
