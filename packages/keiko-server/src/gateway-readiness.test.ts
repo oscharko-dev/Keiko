@@ -449,6 +449,52 @@ describe("gateway readiness route", () => {
     deps.store.close();
   });
 
+  it("does not preserve a previous tool observation when the forced tool probe executes and fails", async () => {
+    const fetchImpl = vi
+      .fn()
+      .mockResolvedValueOnce(jsonResponse(chatPayload("OK")))
+      .mockRejectedValueOnce(new Error("tool probe transport failure")) as typeof fetch;
+    const config = gatewayConfig();
+    const clearVerifiedCapability = vi.fn(() => true);
+    const recordVerifiedCapability = vi.fn();
+    const deps: UiHandlerDeps = {
+      ...depsWith(config, fetchImpl),
+      gatewayConfig: {
+        storagePath: "/dev/null",
+        current: () => config,
+        present: () => true,
+        set: () => undefined,
+        generation: () => 0,
+        verification: () => UNVERIFIED_GATEWAY,
+        recordVerification: () => undefined,
+        verifiedCapability: () => ({
+          modelId: "test-chat-model",
+          generation: 0,
+          checkedAt: "2026-08-28T10:00:00.000Z",
+          fields: { toolCalling: true },
+        }),
+        recordVerifiedCapability,
+        clearVerifiedCapability,
+      },
+    };
+
+    const report = await runGatewayReadiness({ options: { probes: ["tool_calling"] } }, deps);
+
+    expect("status" in report).toBe(false);
+    if ("status" in report) return;
+    expect(report.probes).toContainEqual(
+      expect.objectContaining({ name: "tool_calling", status: "failed" }),
+    );
+    expect(clearVerifiedCapability).not.toHaveBeenCalled();
+    expect(recordVerifiedCapability).toHaveBeenCalledWith(
+      "test-chat-model",
+      { conversationReady: true },
+      expect.any(String),
+      0,
+    );
+    deps.store.close();
+  });
+
   it("classifies streaming and JSON schema provider rejections without blocking chat", async () => {
     const fetchImpl = vi
       .fn()

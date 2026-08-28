@@ -1147,7 +1147,7 @@ function recordReadinessObservation(
     observedGeneration,
   );
   if (report.overallStatus === "failed") {
-    recordFailedReadinessObservation(deps, report.modelId, observedGeneration);
+    recordFailedReadinessObservation(deps, report, observedGeneration);
     return;
   }
   const observation = verifiedCapabilityObservation(report.probes);
@@ -1172,19 +1172,21 @@ function recordReadinessObservation(
 
 function recordFailedReadinessObservation(
   deps: UiHandlerDeps,
-  modelId: string,
+  report: GatewayReadinessReport,
   observedGeneration: number | undefined,
 ): void {
-  if (preserveVerifiedToolCallingObservation(deps, modelId, observedGeneration)) return;
-  deps.gatewayConfig?.clearVerifiedCapability(modelId, observedGeneration);
+  if (preserveVerifiedToolCallingObservation(deps, report, observedGeneration)) return;
+  deps.gatewayConfig?.clearVerifiedCapability(report.modelId, observedGeneration);
 }
 
 function preserveVerifiedToolCallingObservation(
   deps: UiHandlerDeps,
-  modelId: string,
+  report: GatewayReadinessReport,
   observedGeneration: number | undefined,
 ): boolean {
-  const previous = deps.gatewayConfig?.verifiedCapability(modelId);
+  const toolCallingProbe = report.probes.find((probe) => probe.name === "tool_calling");
+  if (toolCallingProbe?.status !== "skipped") return false;
+  const previous = deps.gatewayConfig?.verifiedCapability(report.modelId);
   if (
     previous === undefined ||
     previous.generation !== observedGeneration ||
@@ -1196,7 +1198,7 @@ function preserveVerifiedToolCallingObservation(
   // about a previous, configuration-bound tool-call proof. Preserve only that exact observation
   // with its original timestamp so an unrelated outage cannot erase uncontradicted evidence.
   deps.gatewayConfig?.recordVerifiedCapability(
-    modelId,
+    report.modelId,
     { toolCalling: true },
     previous.checkedAt,
     observedGeneration,
