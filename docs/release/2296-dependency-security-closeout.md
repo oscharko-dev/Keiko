@@ -290,19 +290,7 @@ closeout. Left as a stated finding for the release owner.
 
 ## Follow-ups
 
-1. **Two repairs are blocked by the D12 measurement toolchain, not by disagreement** — tracked in
-   [#3304](https://github.com/oscharko-dev/Keiko/issues/3304).
-   `tests/e2e/fixtures/keiko.e2e.config.json` still carries a credential-shaped `apiKey` placeholder
-   of the same shape that raised alert #17, and `build-d12-bundle-input.mjs`,
-   `build-d12-perf-comparison.mjs` and `check-perf-evidence.mjs` hardcode the governed Node and npm
-   versions instead of importing the constants `check-runtime-toolchain.mjs` owns — the same
-   duplicate-source defect repaired in `portable-manual-review.mjs`. All four are members of
-   `D12_MEASUREMENT_TOOLCHAIN_PATHS`, so editing any of them changes the measurement digest and
-   obliges a re-measurement on the reference environment (linux/arm64, >=14 cores, ADR-0156 D6).
-   Both repairs were made, both turned `check:perf-evidence` red, and both were reverted: a
-   dependency-currency closeout must not spend a reference-environment re-measurement, and a hosted
-   runner cannot produce one.
-2. **Credential-shaped literals remain in pre-existing test fixtures.** A repository sweep found
+1. **Credential-shaped literals remain in pre-existing test fixtures.** A repository sweep found
    contiguous `AKIA…`, `ghp_…`, `github_pat_…`, `hf_…` and `sk-…` literals across roughly ten test
    files under `packages/*/src` and `tests/`. None has fired an alert — GitHub validity-checks AWS
    keys, which filters the sequential fakes, and the required `Secret scan` job only reads
@@ -310,38 +298,78 @@ closeout. Left as a stated finding for the release owner.
    worth one batch pass; splitting them here would have expanded this closeout across ten unrelated
    files for no evidenced risk reduction.
 
+## The measurement-toolchain repairs, and what made them look blocked
+
+[#3304](https://github.com/oscharko-dev/Keiko/issues/3304) was filed for two repairs this closeout
+found and could not land: the credential-shaped `apiKey` placeholder in
+`tests/e2e/fixtures/keiko.e2e.config.json`, and fourteen hardcoded `24.18.0` / `11.16.0` literals in
+`build-d12-bundle-input.mjs`, `build-d12-perf-comparison.mjs` and `check-perf-evidence.mjs` — the
+same two-sources-of-truth defect already repaired in `portable-manual-review.mjs`. All four files are
+members of a measurement-toolchain digest, so each repair turned `check:perf-evidence` red and
+obliged a re-measurement.
+
+**Both are done here**, because the obstacle turned out to be the documentation rather than the
+machine. The repairs are in this change, and both evidence documents are regenerated on the
+reference environment as its final commit.
+
+The obstacle: the editor D12 evidence had a one-command producer
+(`npm run perf:evidence:regen:container`), while the workspace evidence had two lines of prose and
+the instruction to run it "on its declared reference environment" — without stating anywhere which
+environment that is. A pull request that moved the workspace ruler therefore had to invent its own
+invocation, and an invented measurement measures something nobody can compare against the committed
+numbers. That ambiguity is the same defect class as everything else in this closeout: an instruction
+nobody can follow unambiguously is not an instruction.
+
+Closed in [`docs/qa/perf-evidence.md`](../qa/perf-evidence.md):
+
+- The workspace reference environment is now **evidenced rather than asserted** — `ci.yml` refreshes
+  that document on every push to `dev` (`ubuntu-latest`) and only validates freshness on a pull
+  request, so the producer is Linux, and a pull request that moves the ruler must bring a
+  Linux-produced document.
+- Why `ubuntu-latest` and the pinned `arm64` container are both acceptable producers while a macOS
+  host is not: unlike the D12 document, this one records no per-machine provenance and its budgets
+  carry wide headroom. It is a browser-performance regression detector, not an absolute instrument
+  calibrated to one machine class.
+- `npm run perf:evidence:regen:workspace` exists, and shares the editor producer's container driver
+  rather than growing a second one. A test pins that `--workspace` does not route into the editor
+  lane — sending it there would measure the wrong thing for thirty-five minutes.
+
 ## Verification
 
-Run on macOS (darwin/arm64) against this branch, after merging `origin/dev`. Platform coverage for
-Linux and Windows is CI's, not this document's: the required checks on the pull request are the
+Run on macOS (darwin/arm64) against this branch, after merging `origin/dev` — except the two
+performance-evidence documents, which were re-measured in the pinned `node:24.18.0-bookworm`
+container on the declared reference environment, with the host verified idle first. Platform
+coverage for Linux and Windows is CI's, not this document's: the required checks on the pull request are the
 complete arbiter, and no macOS-generated value is offered here as a substitute for
 platform-authoritative evidence.
 
-| Command                                                     | Result                                            |
-| ----------------------------------------------------------- | ------------------------------------------------- |
-| `npm ci`                                                    | pass                                              |
-| `npm audit --json`                                          | pass — 0 vulnerabilities across 944 packages      |
-| `npm outdated --workspaces --include-workspace-root --json` | 18 non-current direct entries, all dispositioned  |
-| `npm ls --all --workspaces --include-workspace-root`        | pass — exit 0, no invalid entries (was 2)         |
-| `npm run format:check`                                      | pass                                              |
-| `npm run typecheck`                                         | pass                                              |
-| `npm run lint`                                              | pass                                              |
-| `npm test`                                                  | pass — 1729 files, 33 261 tests, 0 failures       |
-| `npm run arch:check`                                        | pass                                              |
-| `npm run arch:check:negative`                               | pass                                              |
-| `npm run check:knip`                                        | pass                                              |
-| `npm run check:dependency-currency`                         | pass — 36 dependency rows, 14 action rows         |
-| `npm run check:secret-scanning-queue`                       | pass — 2 open alerts, each dispositioned          |
-| `npm run check:runtime-toolchain`                           | pass — Node 24.18.0; npm 11.16.0; 25 workspaces   |
-| `npm run check:typescript-toolchain`                        | pass — compiler 7.0.2; API 6.0.3                  |
-| `npm run check:portable-approvals`                          | pass — node 24.18.0                               |
-| `npm run check:version-consistency`                         | pass — 0.3.17 across every workspace              |
-| `npm run check:dependency-hygiene`                          | pass — 26 manifests, 6006 tracked paths           |
-| `npm run check:workspace-supply-chain`                      | pass                                              |
-| `npm run check:adr-index`                                   | pass — 158 ADRs indexed                           |
-| `npm run check:zizmor-anchors`                              | pass — 8 anchors still on the step they document  |
-| `npm run check:release-impact`                              | pass                                              |
-| `npm run gates:sonar`                                       | pass — no unresolved finding on the changed files |
+| Command                                                     | Result                                                   |
+| ----------------------------------------------------------- | -------------------------------------------------------- |
+| `npm ci`                                                    | pass                                                     |
+| `npm audit --json`                                          | pass — 0 vulnerabilities across 944 packages             |
+| `npm outdated --workspaces --include-workspace-root --json` | 18 non-current direct entries, all dispositioned         |
+| `npm ls --all --workspaces --include-workspace-root`        | pass — exit 0, no invalid entries (was 2)                |
+| `npm run format:check`                                      | pass                                                     |
+| `npm run typecheck`                                         | pass                                                     |
+| `npm run lint`                                              | pass                                                     |
+| `npm test`                                                  | pending — re-run as the final verification               |
+| `npm run arch:check`                                        | pass                                                     |
+| `npm run arch:check:negative`                               | pass                                                     |
+| `npm run check:knip`                                        | pass                                                     |
+| `npm run check:eslint-lane`                                 | pass — `npm ls eslint` exits 0 (#2777)                   |
+| `npm run check:perf-evidence`                               | pass — both documents within budget and internally sound |
+| `npm run check:dependency-currency`                         | pass — 37 dependency rows, 14 action rows                |
+| `npm run check:secret-scanning-queue`                       | pass — 0 open alerts; both prior findings closed         |
+| `npm run check:runtime-toolchain`                           | pass — Node 24.18.0; npm 11.16.0; 25 workspaces          |
+| `npm run check:typescript-toolchain`                        | pass — compiler 7.0.2; API 6.0.3                         |
+| `npm run check:portable-approvals`                          | pass — node 24.18.0                                      |
+| `npm run check:version-consistency`                         | pass — 0.3.17 across every workspace                     |
+| `npm run check:dependency-hygiene`                          | pass — 26 manifests, 6006 tracked paths                  |
+| `npm run check:workspace-supply-chain`                      | pass                                                     |
+| `npm run check:adr-index`                                   | pass — 158 ADRs indexed                                  |
+| `npm run check:zizmor-anchors`                              | pass — 8 anchors still on the step they document         |
+| `npm run check:release-impact`                              | pass                                                     |
+| `npm run gates:sonar`                                       | pass — no unresolved finding on the changed files        |
 
 `gates:sonar` reported three findings on its first run, all in the two new gate scripts, and all
 from rules `eslint-plugin-sonarjs` does not ship: a locale-naive `Array#sort`, two consecutive
