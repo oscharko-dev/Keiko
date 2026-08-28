@@ -90,7 +90,7 @@ function boundActiveWorkspace(): unknown {
     loading: false,
     switching: false,
     error: null,
-    refresh: vi.fn(() => Promise.resolve()),
+    refresh: vi.fn(() => Promise.resolve(true)),
     switchTo: vi.fn(() => Promise.resolve()),
     clearActive: vi.fn(() => Promise.resolve()),
     pause: vi.fn(() => Promise.resolve()),

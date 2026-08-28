@@ -27,6 +27,7 @@ import {
   DEFAULT_ENTAILMENT_OPTIONS,
   buildPackCitationIndex,
   buildPackExcerptTextResolver,
+  createEntailmentExecutionBudget,
   entailmentUnavailableMarker,
   reconcileClaimEntailment,
   reconcileNumericClaimEntailment,
@@ -60,6 +61,14 @@ export interface EntailmentStage {
   // as path-and-line citations. Evidence is supplied only from the prompt-selected rendering.
   readonly evaluateNumeric: (
     answerText: string,
+    selectedEvidence: readonly NumericEntailmentEvidence[],
+    nowMs: number,
+  ) => Promise<readonly UncertaintyMarker[]>;
+  // Hybrid answers carry both path/line and numeric citations. Production stages evaluate both
+  // grammars under one per-answer time and claim allowance instead of resetting the budget.
+  readonly evaluateHybrid?: (
+    answerText: string,
+    packs: readonly ConnectedContextPack[],
     selectedEvidence: readonly NumericEntailmentEvidence[],
     nowMs: number,
   ) => Promise<readonly UncertaintyMarker[]>;
@@ -197,6 +206,56 @@ async function evaluateNumericEntailment(
   }
 }
 
+async function evaluateHybridEntailment(
+  answerText: string,
+  packs: readonly ConnectedContextPack[],
+  selectedEvidence: readonly NumericEntailmentEvidence[],
+  nowMs: number,
+  judge: EntailmentJudge,
+  options: EntailmentOptions,
+  observability: CorrelatedEntailmentObservability,
+  signal: AbortSignal | undefined,
+): Promise<readonly UncertaintyMarker[]> {
+  try {
+    const budget = createEntailmentExecutionBudget(options, signal);
+    const membership = reconcileInlineCitations(answerText, buildPackCitationIndex(packs));
+    const inline = await reconcileClaimEntailment(
+      answerText,
+      membership,
+      buildPackExcerptTextResolver(packs),
+      judge,
+      options,
+      signal,
+      budget,
+    );
+    const numeric = await reconcileNumericClaimEntailment(
+      answerText,
+      selectedEvidence,
+      judge,
+      options,
+      signal,
+      budget,
+    );
+    return markersFor(
+      {
+        unentailed: [...inline.unentailed, ...numeric.unentailed],
+        judgedClaims: inline.judgedClaims + numeric.judgedClaims,
+        unavailableClaims: inline.unavailableClaims + numeric.unavailableClaims,
+      },
+      nowMs,
+      observability,
+    );
+  } catch (error) {
+    recordDiagnostic(
+      observability,
+      nowMs,
+      contentFreeErrorClass(error),
+      "entailment stage failed; degraded to WARN",
+    );
+    return [entailmentUnavailableMarker(nowMs)];
+  }
+}
+
 /**
  * Build the entailment stage for a grounded ask, or `undefined` when it must stay inert (no judge
  * model configured, or a capsule policy denies answer synthesis). `modelId` is the model that
@@ -251,6 +310,17 @@ export function createEntailmentStage(
     ): Promise<readonly UncertaintyMarker[]> =>
       evaluateNumericEntailment(
         answerText,
+        selectedEvidence,
+        nowMs,
+        judge,
+        options,
+        correlated,
+        signal,
+      ),
+    evaluateHybrid: (answerText, packs, selectedEvidence, nowMs) =>
+      evaluateHybridEntailment(
+        answerText,
+        packs,
         selectedEvidence,
         nowMs,
         judge,

@@ -3146,14 +3146,23 @@ async function askFailClosedChat(
 async function askWithNumericEntailmentJudge(
   chat: FailClosedChat,
   assistantAnswer: string,
-): Promise<{ readonly answer: LocalKnowledgeAnswer; readonly judgeCalls: number }> {
+): Promise<{
+  readonly answer: LocalKnowledgeAnswer;
+  readonly judgeCalls: number;
+  readonly judgeRequest: string;
+}> {
   const embeddingModelId = "text-embedding-3-small";
   const adapter = scriptedAdapter();
   let judgeCalls = 0;
+  let judgeRequest = "";
+  let excerptRedactions = 0;
   const model: ModelPort = {
     call: (request) => {
       const isEntailment = request.responseFormat !== undefined;
-      if (isEntailment) judgeCalls += 1;
+      if (isEntailment) {
+        judgeCalls += 1;
+        judgeRequest = JSON.stringify(request.messages);
+      }
       return Promise.resolve({
         modelId: "chat-model",
         content: isEntailment ? '{"verdict":"unsupported"}' : assistantAnswer,
@@ -3182,7 +3191,15 @@ async function askWithNumericEntailmentJudge(
     configPresent: true,
     evidenceStore: { put: () => "", list: () => [], get: () => undefined, delete: () => undefined },
     env: {},
-    redactor: (value: unknown): unknown => value,
+    redactor: (value: unknown): unknown => {
+      if (typeof value !== "string" || !value.includes("alpha beta grounded evidence")) {
+        return value;
+      }
+      excerptRedactions += 1;
+      return excerptRedactions === 1
+        ? value.replace("alpha beta grounded evidence", "prompt-time grounded evidence")
+        : value.replace("alpha beta grounded evidence", "later store rendering");
+    },
     registry: createRunRegistry(),
     modelPortFactory: () => model,
     store: rescueStore,
@@ -3196,7 +3213,7 @@ async function askWithNumericEntailmentJudge(
     new AbortController().signal,
   );
   expect(result.status, JSON.stringify(result.body)).toBe(200);
-  return { answer: result.body as LocalKnowledgeAnswer, judgeCalls };
+  return { answer: result.body as LocalKnowledgeAnswer, judgeCalls, judgeRequest };
 }
 
 describe("local-knowledge uncited-answer fail-closed (AC6, #2670)", () => {
@@ -3269,13 +3286,15 @@ describe("local-knowledge uncited-answer fail-closed (AC6, #2670)", () => {
 
   it("routes a supported numeric marker through the shared entailment judge", async () => {
     const chat = await seedFailClosedChat("numeric-entailment");
-    const { answer, judgeCalls } = await askWithNumericEntailmentJudge(
+    const { answer, judgeCalls, judgeRequest } = await askWithNumericEntailmentJudge(
       chat,
       "Alpha beta grounded evidence is retained for ten years [1].",
     );
 
     expect(answer.citations.map((citation) => citation.marker)).toEqual(["[1]"]);
     expect(judgeCalls).toBe(1);
+    expect(judgeRequest).toContain("prompt-time grounded evidence");
+    expect(judgeRequest).not.toContain("later store rendering");
     const unsupported = answer.uncertainty.find((marker) => marker.kind === "unsupported-claim");
     expect(unsupported?.claim).toContain("[1]");
   });

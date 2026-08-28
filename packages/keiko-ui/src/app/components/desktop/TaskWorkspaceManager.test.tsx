@@ -1,8 +1,9 @@
-import { fireEvent, render, screen, within } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { axe } from "jest-axe";
 import { describe, expect, it, vi } from "vitest";
 import type { WorkspaceInstance } from "@oscharko-dev/keiko-contracts";
 import { ActiveWorkspaceProvider, type ActiveWorkspaceApi } from "./context/ActiveWorkspaceContext";
+import { AnnouncerProvider } from "./context/AnnouncerContext";
 import { TaskWorkspaceManager } from "./TaskWorkspaceManager";
 
 function instance(overrides: Partial<WorkspaceInstance> = {}): WorkspaceInstance {
@@ -38,7 +39,7 @@ function api(overrides: Partial<ActiveWorkspaceApi> = {}): ActiveWorkspaceApi {
     loading: false,
     switching: false,
     error: null,
-    refresh: vi.fn(() => Promise.resolve()),
+    refresh: vi.fn(() => Promise.resolve(true)),
     switchTo: vi.fn(() => Promise.resolve()),
     clearActive: vi.fn(() => Promise.resolve()),
     pause: vi.fn(() => Promise.resolve()),
@@ -51,9 +52,11 @@ function api(overrides: Partial<ActiveWorkspaceApi> = {}): ActiveWorkspaceApi {
 
 function renderManager(value: ActiveWorkspaceApi): HTMLElement {
   const { container } = render(
-    <ActiveWorkspaceProvider value={value}>
-      <TaskWorkspaceManager />
-    </ActiveWorkspaceProvider>,
+    <AnnouncerProvider>
+      <ActiveWorkspaceProvider value={value}>
+        <TaskWorkspaceManager />
+      </ActiveWorkspaceProvider>
+    </AnnouncerProvider>,
   );
   return container;
 }
@@ -113,7 +116,7 @@ describe("TaskWorkspaceManager", () => {
     expect(failedSwitch).toHaveAttribute("aria-disabled", "true");
   });
 
-  it("surfaces a stale-state failure and lets the operator retry from server truth", () => {
+  it("announces a successful refresh from the resolved operation outcome", async () => {
     const value = api({ error: "The workspace changed on another client." });
     renderManager(value);
 
@@ -121,6 +124,23 @@ describe("TaskWorkspaceManager", () => {
     expect(within(panel).getByRole("alert")).toHaveTextContent("changed on another client");
     fireEvent.click(within(panel).getByRole("button", { name: "Refresh" }));
     expect(value.refresh).toHaveBeenCalledTimes(1);
+    await waitFor(() => {
+      expect(screen.getByTestId("app-announcer-polite")).toHaveTextContent(
+        "Task workspaces refreshed.",
+      );
+    });
+  });
+
+  it("does not announce success when refresh resolves as failed", async () => {
+    const refresh = vi.fn(() => Promise.resolve(false));
+    renderManager(api({ error: "The workspace changed on another client.", refresh }));
+
+    const panel = openManager();
+    fireEvent.click(within(panel).getByRole("button", { name: "Refresh" }));
+    await waitFor(() => {
+      expect(refresh).toHaveBeenCalledTimes(1);
+    });
+    expect(screen.getByTestId("app-announcer-polite")).toBeEmptyDOMElement();
   });
 
   it("restores trigger focus when Escape closes the non-modal panel", () => {

@@ -581,21 +581,30 @@ export function projectLocalKnowledgeCitation(
   };
 }
 
+interface RenderedReferenceLines {
+  readonly lines: readonly string[];
+  readonly numericEvidence: readonly NumericEntailmentEvidence[];
+}
+
 function buildReferenceLines(
   input: AnswerGeneratorInput,
   store: KnowledgeStore,
   redactExcerpt: (value: string) => string,
   limits: ReturnType<typeof currentGroundingLimits>,
-): readonly string[] {
+): RenderedReferenceLines {
   const lines: string[] = [];
+  const numericEvidence: NumericEntailmentEvidence[] = [];
   const references = input.references.slice(0, limits.maxPromptReferences);
   for (let i = 0; i < references.length; i += 1) {
     const reference = references[i];
     if (reference === undefined) continue;
     const rendered = renderConnectorEvidence(reference, store, redactExcerpt, limits);
-    lines.push(`[${String(i + 1)}] ${rendered.label}`, "```text", rendered.excerpt, "```");
+    const marker = i + 1;
+    const block = `[${String(marker)}] ${rendered.label}\n\`\`\`text\n${rendered.excerpt}\n\`\`\``;
+    lines.push(block);
+    numericEvidence.push({ marker, excerptText: block });
   }
-  return lines;
+  return { lines, numericEvidence };
 }
 
 interface RenderedConnectorEvidence {
@@ -635,8 +644,11 @@ function buildLocalKnowledgeMessages(
   store: KnowledgeStore,
   redactExcerpt: (value: string) => string,
   limits: ReturnType<typeof currentGroundingLimits>,
-): readonly { readonly role: "system" | "user"; readonly content: string }[] {
-  const lines = buildReferenceLines(input, store, redactExcerpt, limits);
+): {
+  readonly messages: readonly { readonly role: "system" | "user"; readonly content: string }[];
+  readonly numericEvidence: readonly NumericEntailmentEvidence[];
+} {
+  const rendered = buildReferenceLines(input, store, redactExcerpt, limits);
   const repairInstruction =
     input.citationRepair === true
       ? [
@@ -644,7 +656,7 @@ function buildLocalKnowledgeMessages(
           "The previous answer was rejected because it did not use valid inline [n] citations. Rewrite the answer now. Every factual sentence must include at least one matching [n] marker from the supplied citations. Do not invent citations.",
         ]
       : [];
-  return [
+  const messages = [
     {
       role: "system",
       content: LOCAL_KNOWLEDGE_SYSTEM_PROMPT,
@@ -657,14 +669,17 @@ function buildLocalKnowledgeMessages(
         localKnowledgePromptSummary(input),
         "",
         "Citations:",
-        ...lines,
+        ...rendered.lines,
         ...repairInstruction,
       ].join("\n"),
     },
-  ];
+  ] as const;
+  return { messages, numericEvidence: rendered.numericEvidence };
 }
 
 class StoreBackedAnswerGenerator implements AnswerGenerator {
+  private renderedNumericEvidence: readonly NumericEntailmentEvidence[] = [];
+
   public constructor(
     private readonly model: ModelPort,
     private readonly modelId: string,
@@ -676,16 +691,18 @@ class StoreBackedAnswerGenerator implements AnswerGenerator {
   ) {}
 
   public async generate(input: AnswerGeneratorInput): Promise<string> {
+    const rendered = buildLocalKnowledgeMessages(
+      input.query.answerQuestion ?? input.query.text,
+      input,
+      this.store,
+      this.redactExcerpt,
+      this.limits,
+    );
+    this.renderedNumericEvidence = rendered.numericEvidence;
     const response = await this.model.call(
       {
         modelId: this.modelId,
-        messages: buildLocalKnowledgeMessages(
-          input.query.answerQuestion ?? input.query.text,
-          input,
-          this.store,
-          this.redactExcerpt,
-          this.limits,
-        ),
+        messages: rendered.messages,
         stream: false,
         logContext: { correlationId: this.correlationId },
       },
@@ -708,6 +725,10 @@ class StoreBackedAnswerGenerator implements AnswerGenerator {
     const content = response.content.trim();
     assertUsableAssistantContent(content, this.modelId);
     return content;
+  }
+
+  public numericEntailmentEvidence(): readonly NumericEntailmentEvidence[] {
+    return this.renderedNumericEvidence;
   }
 }
 
@@ -2182,35 +2203,13 @@ function persistRedactedGroundedExchange(
   );
 }
 
-function numericEntailmentEvidence(
-  result: ScopedGroundedResult,
-  store: KnowledgeStore,
-  deps: UiHandlerDeps,
-  limits: ReturnType<typeof currentGroundingLimits>,
-): readonly NumericEntailmentEvidence[] {
-  return result.references.slice(0, limits.maxPromptReferences).map((reference, index) => {
-    const rendered = renderConnectorEvidence(
-      reference,
-      store,
-      (value) => redactText(deps, value),
-      limits,
-    );
-    const marker = index + 1;
-    return {
-      marker,
-      excerptText: `[${String(marker)}] ${rendered.label}\n\`\`\`text\n${rendered.excerpt}\n\`\`\``,
-    };
-  });
-}
-
 async function appendLocalKnowledgeNumericEntailment(
   answer: GroundedAnswer,
   result: ScopedGroundedResult,
+  numericEvidence: readonly NumericEntailmentEvidence[],
   selected: SelectedLocalKnowledgeScope,
   context: ScopedGroundedAnswerContext & { readonly modelId: string },
-  env: { readonly store: KnowledgeStore },
   deps: UiHandlerDeps,
-  limits: ReturnType<typeof currentGroundingLimits>,
 ): Promise<GroundedAnswer> {
   if (
     result.noEvidence ||
@@ -2230,11 +2229,7 @@ async function appendLocalKnowledgeNumericEntailment(
     context.signal,
   );
   if (stage === undefined) return answer;
-  const markers = await stage.evaluateNumeric(
-    result.answer,
-    numericEntailmentEvidence(result, env.store, deps, limits),
-    Date.now(),
-  );
+  const markers = await stage.evaluateNumeric(result.answer, numericEvidence, Date.now());
   if (context.signal?.aborted === true) {
     throw new CancelledError("grounded request cancelled");
   }
@@ -2283,12 +2278,14 @@ interface PersistScopedGroundedAnswerInput {
   readonly result: ScopedGroundedResult;
   readonly startedAt: number;
   readonly context: ScopedGroundedAnswerContext & { readonly modelId: string };
+  readonly numericEvidence: readonly NumericEntailmentEvidence[];
 }
 
 async function persistScopedGroundedAnswer(
   persistedInput: PersistScopedGroundedAnswerInput,
 ): Promise<GroundedAnswer> {
-  const { chat, input, deps, env, selected, result, startedAt, context } = persistedInput;
+  const { chat, input, deps, env, selected, result, startedAt, context, numericEvidence } =
+    persistedInput;
   const elapsedMs = Date.now() - startedAt;
   const auditSink = createSqliteAuditSink(env.store);
   const occurredAt = Date.now();
@@ -2313,11 +2310,10 @@ async function persistScopedGroundedAnswer(
   const finalAnswer = await appendLocalKnowledgeNumericEntailment(
     answer,
     result,
+    numericEvidence,
     selected,
     context,
-    env,
     deps,
-    limits,
   );
   attachGroundedAnswerWithPreviewCitations(
     deps,
@@ -2423,6 +2419,7 @@ async function runScopedGroundedAnswer(
     result,
     startedAt,
     context: { ...context, modelId },
+    numericEvidence: generator.numericEntailmentEvidence(),
   });
 }
 

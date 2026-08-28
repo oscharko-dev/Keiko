@@ -40,7 +40,9 @@ import {
   type ForgetSelector,
 } from "@oscharko-dev/keiko-memory-governance";
 import type {
+  AcceptMemoryProposalOptions,
   MemoryConversationId,
+  MemoryCorrectionPredecessorsResponse,
   MemoryAuditEvent,
   MemoryEdge,
   MemoryEdgeId,
@@ -64,6 +66,7 @@ import {
   MEMORY_STATUSES,
   MEMORY_TYPES,
   MEMORY_SENSITIVITIES,
+  isMemoryRecord,
   validateMemoryScope,
   validateMemoryAcceptance,
 } from "@oscharko-dev/keiko-contracts/runtime/memory";
@@ -323,8 +326,12 @@ function resolveVault(deps: UiHandlerDeps): MemoryVaultStore | RouteResult {
 
 // ─── Redaction helper ──────────────────────────────────────────────────────────
 
-function redactMemory(deps: UiHandlerDeps, record: MemoryRecord): unknown {
-  return deps.redactor(record);
+function redactMemory(deps: UiHandlerDeps, record: MemoryRecord): MemoryRecord {
+  const redacted = deps.redactor(record);
+  if (!isMemoryRecord(redacted)) {
+    throw new TypeError("Memory redaction produced an invalid record shape.");
+  }
+  return redacted;
 }
 
 function redactMemories(deps: UiHandlerDeps, records: readonly MemoryRecord[]): unknown {
@@ -2247,7 +2254,7 @@ function acceptMemoryProposal(
   vault: MemoryVaultStore,
   deps: UiHandlerDeps,
   id: MemoryId,
-  input: AcceptProposalInput,
+  input: AcceptMemoryProposalOptions,
 ): RouteResult {
   const existing = ensureProposedMemory(vault.getMemory(id));
   if (isRouteResult(existing)) return existing;
@@ -2272,16 +2279,11 @@ function acceptMemoryProposal(
   return { status: 200, body: { memory: redactMemory(deps, committed.updated) } };
 }
 
-interface AcceptProposalInput {
-  readonly bodyOverride?: string;
-  readonly predecessorId?: MemoryId;
-}
-
 function parseAcceptBody(
   raw: Record<string, unknown>,
   id: MemoryId,
   deps: UiHandlerDeps,
-): AcceptProposalInput | RouteResult {
+): AcceptMemoryProposalOptions | RouteResult {
   const bodyOverride = parseAcceptBodyOverride(raw, id, deps);
   if (isRouteResult(bodyOverride)) return bodyOverride;
   const predecessorId = parseCorrectionPredecessorId(raw.predecessorId);
@@ -2386,13 +2388,14 @@ export function handleGetCorrectionPredecessors(
   if (candidates.some((candidate) => !scopeAuthorized(candidate.scope, authorizedScopes))) {
     return forbiddenMemoryScopeResult();
   }
+  const response: MemoryCorrectionPredecessorsResponse = {
+    candidates: candidates
+      .filter((candidate) => candidate.status === "accepted")
+      .map((candidate) => redactMemory(deps, candidate)),
+  };
   return {
     status: 200,
-    body: {
-      candidates: candidates
-        .filter((candidate) => candidate.status === "accepted")
-        .map((candidate) => redactMemory(deps, candidate)),
-    },
+    body: response,
   };
 }
 

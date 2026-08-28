@@ -100,6 +100,7 @@ export function useActiveWorkspaceState(): ActiveWorkspaceApi {
   // refreshes so they re-list the same repository without the caller re-supplying it.
   const rootRef = useRef<string | null>(null);
   const operationSeqRef = useRef(0);
+  const mutationSeqRef = useRef(0);
   // The workspace identity whose restore verification this session holds — NOT a per-session "has
   // verified once" flag. Restore-time verification exists for the case where a pointer is claimed
   // without runtime start authority (release-audit F-09b), and `switchTo` routes through the same
@@ -140,15 +141,17 @@ export function useActiveWorkspaceState(): ActiveWorkspaceApi {
   }, []);
 
   const refresh = useCallback(
-    async (root?: string): Promise<void> => {
+    async (root?: string): Promise<boolean> => {
       if (root !== undefined) rootRef.current = root;
       const operationSeq = (operationSeqRef.current += 1);
       dispatch({ kind: "load-start" });
       try {
         await reload(operationSeq);
+        return operationSeqRef.current === operationSeq;
       } catch (error) {
-        if (operationSeqRef.current !== operationSeq) return;
+        if (operationSeqRef.current !== operationSeq) return false;
         dispatch({ kind: "fail", error: messageFor(error, t) });
+        return false;
       }
     },
     [reload, t],
@@ -158,14 +161,18 @@ export function useActiveWorkspaceState(): ActiveWorkspaceApi {
   // atomically. Surfaces keep the previous active root until reload lands (no mixed transient state).
   const mutate = useCallback(
     async (action: () => Promise<unknown>): Promise<void> => {
-      const operationSeq = (operationSeqRef.current += 1);
+      const mutationSeq = (mutationSeqRef.current += 1);
+      let operationSeq = (operationSeqRef.current += 1);
       dispatch({ kind: "mutate-start" });
       try {
         await action();
-        if (operationSeqRef.current !== operationSeq) return;
+        if (mutationSeqRef.current !== mutationSeq) return;
+        operationSeq = operationSeqRef.current += 1;
         await reload(operationSeq);
       } catch (error) {
-        if (operationSeqRef.current !== operationSeq) return;
+        if (mutationSeqRef.current !== mutationSeq || operationSeqRef.current !== operationSeq) {
+          return;
+        }
         dispatch({ kind: "fail", error: messageFor(error, t) });
       }
     },

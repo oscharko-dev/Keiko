@@ -513,6 +513,12 @@ export const DEFAULT_ENTAILMENT_OPTIONS: EntailmentOptions = {
   maxTotalMs: 20_000,
 };
 
+/** Mutable per-answer allowance shared by every citation grammar judged for that answer. */
+export interface EntailmentExecutionBudget {
+  readonly signal: AbortSignal | undefined;
+  remainingClaims: number;
+}
+
 function isSentenceBoundary(text: string, offset: number): boolean {
   const ch = text.charAt(offset);
   if (ch === "!" || ch === "?" || ch === "\n") return true;
@@ -704,6 +710,16 @@ function entailmentBudgetSignal(
   return signal === undefined ? deadline : AbortSignal.any([signal, deadline]);
 }
 
+export function createEntailmentExecutionBudget(
+  options: EntailmentOptions,
+  signal?: AbortSignal,
+): EntailmentExecutionBudget {
+  return {
+    signal: entailmentBudgetSignal(options.maxTotalMs, signal),
+    remainingClaims: Math.max(0, options.maxClaims),
+  };
+}
+
 interface ScheduledClaim {
   readonly claim: JudgeableClaim;
   readonly verdict: Promise<EntailmentVerdict>;
@@ -740,10 +756,16 @@ async function reconcileEntailmentClaims(
   judge: EntailmentJudge,
   options: EntailmentOptions,
   signal: AbortSignal | undefined,
+  executionBudget?: EntailmentExecutionBudget,
 ): Promise<EntailmentReconciliation> {
-  const budget = entailmentBudgetSignal(options.maxTotalMs, signal);
+  const budget = executionBudget ?? createEntailmentExecutionBudget(options, signal);
+  const boundedOptions = {
+    ...options,
+    maxClaims: Math.min(options.maxClaims, budget.remainingClaims),
+  };
   const unentailed: UnentailedClaim[] = [];
-  const scheduledClaims = scheduleClaimJudges(claims, judge, options, budget);
+  const scheduledClaims = scheduleClaimJudges(claims, judge, boundedOptions, budget.signal);
+  budget.remainingClaims -= scheduledClaims.scheduled.length;
   let unavailableClaims = scheduledClaims.unavailableClaims;
   const { scheduled } = scheduledClaims;
   const outcomes = await Promise.all(scheduled.map(({ verdict }) => verdict));
@@ -783,12 +805,14 @@ export async function reconcileClaimEntailment(
   judge: EntailmentJudge,
   options: EntailmentOptions = DEFAULT_ENTAILMENT_OPTIONS,
   signal?: AbortSignal,
+  executionBudget?: EntailmentExecutionBudget,
 ): Promise<EntailmentReconciliation> {
   return reconcileEntailmentClaims(
     inlineEntailmentClaims(answerText, membership, resolveExcerptText),
     judge,
     options,
     signal,
+    executionBudget,
   );
 }
 
@@ -803,6 +827,7 @@ export async function reconcileNumericClaimEntailment(
   judge: EntailmentJudge,
   options: EntailmentOptions = DEFAULT_ENTAILMENT_OPTIONS,
   signal?: AbortSignal,
+  executionBudget?: EntailmentExecutionBudget,
 ): Promise<EntailmentReconciliation> {
   const evidenceByMarker = new Map<number, NumericEntailmentEvidence>();
   for (const evidence of selectedEvidence) {
@@ -821,7 +846,7 @@ export async function reconcileNumericClaimEntailment(
       return evidence.length === 0 ? [] : [{ claimText: claim.claimText, evidence }];
     },
   );
-  return reconcileEntailmentClaims(claims, judge, options, signal);
+  return reconcileEntailmentClaims(claims, judge, options, signal, executionBudget);
 }
 
 /**

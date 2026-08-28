@@ -192,8 +192,8 @@ describe("useActiveWorkspaceState", () => {
     vi.stubGlobal("fetch", fetchMock);
     const { result } = renderHook(() => useActiveWorkspaceState());
 
-    let first!: Promise<void>;
-    let second!: Promise<void>;
+    let first!: Promise<boolean>;
+    let second!: Promise<boolean>;
     act(() => {
       first = result.current.refresh("/repo-a");
     });
@@ -275,6 +275,56 @@ describe("useActiveWorkspaceState", () => {
       await first;
     });
     expect(result.current.activeRoot).toBe("/wt/2");
+  });
+
+  it("reloads server truth after a concurrent refresh settles during a mutation", async () => {
+    const post = deferred<Response>();
+    const target = instance("ws-1", "/wt/1");
+    const state: RouterState = { active: null, instances: [target] };
+    const fetchMock = vi.fn((url: string, init?: RequestInit) => {
+      const method = (init?.method ?? "GET").toUpperCase();
+      if (url.startsWith("/api/task-workspaces/active") && method === "GET") {
+        return Promise.resolve(json({ active: state.active }));
+      }
+      if (url === "/api/task-workspaces/reconciliation" && method === "POST") {
+        return Promise.resolve(json(healthyReport(state)));
+      }
+      if (url.startsWith("/api/task-workspaces?") && method === "GET") {
+        return Promise.resolve(json({ instances: state.instances }));
+      }
+      if (url === "/api/task-workspaces/active" && method === "POST") {
+        return post.promise.then(() => {
+          state.active = {
+            instance: target,
+            binding: binding(target.workspaceId, target.managedWorktreePath),
+            pointer: {},
+          };
+          return json({ instance: target, binding: state.active.binding });
+        });
+      }
+      return Promise.resolve(json({}, 404));
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const { result } = renderHook(() => useActiveWorkspaceState());
+    await act(async (): Promise<void> => {
+      await result.current.refresh("/repo");
+    });
+
+    let mutation!: Promise<void>;
+    act(() => {
+      mutation = result.current.switchTo("ws-1");
+    });
+    await act(async (): Promise<void> => {
+      expect(await result.current.refresh("/repo")).toBe(true);
+    });
+    expect(result.current.activeRoot).toBeNull();
+
+    await act(async (): Promise<void> => {
+      post.resolve(json({}));
+      await mutation;
+    });
+    expect(result.current.activeRoot).toBe("/wt/1");
+    expect(result.current.switching).toBe(false);
   });
 
   it("clearActive returns to unbound mode", async () => {

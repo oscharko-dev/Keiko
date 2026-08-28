@@ -3091,6 +3091,7 @@ export type {
 // rather than mutating the existing "1" — the same evolution rule as
 // `CONNECTED_CONTEXT_SCHEMA_VERSION` and `LOCAL_KNOWLEDGE_SCHEMA_VERSION`.
 export type {
+  AcceptMemoryProposalOptions,
   ConversationId as MemoryConversationId,
   EvidenceManifestId as MemoryEvidenceManifestId,
   MemoryAcceptance,
@@ -3114,6 +3115,7 @@ export type {
   MemoryProposalId,
   MemoryProvenance,
   MemoryRecord,
+  MemoryCorrectionPredecessorsResponse,
   MemoryRejection,
   MemoryRetentionHint,
   MemoryRetrievalRequest,

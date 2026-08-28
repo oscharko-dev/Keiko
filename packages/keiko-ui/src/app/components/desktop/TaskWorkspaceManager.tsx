@@ -242,8 +242,8 @@ function WorkspacePanel(props: {
   }, []);
   const refresh = (): void => {
     if (props.api.loading || props.api.switching) return;
-    void props.api.refresh().then(() => {
-      if (props.api.error === null) announcer.announce(props.t("taskWorkspace.status.reconciled"));
+    void props.api.refresh().then((succeeded) => {
+      if (succeeded) announcer.announce(props.t("taskWorkspace.status.reconciled"));
     });
   };
   return (

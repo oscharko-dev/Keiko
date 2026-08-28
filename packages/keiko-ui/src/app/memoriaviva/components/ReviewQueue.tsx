@@ -9,14 +9,17 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { CSSProperties, ReactNode } from "react";
 import Link from "next/link";
-import type { MemoryId, MemoryRecord } from "@oscharko-dev/keiko-contracts";
+import type {
+  AcceptMemoryProposalOptions,
+  MemoryId,
+  MemoryRecord,
+} from "@oscharko-dev/keiko-contracts";
 import {
   acceptMemoryProposal,
   archiveMemory,
   fetchCorrectionPredecessors,
   fetchMemoryReviewQueue,
   rejectMemoryProposal,
-  type AcceptMemoryProposalOptions,
   type MemoryReviewQueueResponse,
 } from "@/lib/memory-api";
 import { useTranslate, type I18nTranslate } from "@/lib/i18n";
@@ -118,33 +121,18 @@ function actionStatusMessage(action: ReviewAction, t: I18nTranslate): string {
 interface ReviewRowProps {
   readonly record: MemoryRecord;
   readonly predecessors: readonly MemoryRecord[] | undefined;
+  readonly predecessorsLoading: boolean;
   readonly busyAction: ReviewAction | null;
   readonly rowError: string | null;
   readonly onAccept: (record: MemoryRecord, options: AcceptMemoryProposalOptions) => void;
   readonly onReject: (record: MemoryRecord) => void;
   readonly onArchive: (record: MemoryRecord) => void;
+  readonly onRequestPredecessors: (record: MemoryRecord) => void;
   readonly onOpenDetail?: ((id: string) => void) | undefined;
   readonly t: I18nTranslate;
 }
 
 type CorrectionPredecessorsById = ReadonlyMap<string, readonly MemoryRecord[]>;
-
-async function loadCorrectionPredecessors(
-  records: readonly MemoryRecord[],
-  fetchImpl: typeof fetchCorrectionPredecessors,
-): Promise<CorrectionPredecessorsById> {
-  const corrections = records.filter(
-    (record) => record.status === "proposed" && record.type === "correction",
-  );
-  const settled = await Promise.allSettled(
-    corrections.map(
-      async (record) => [record.id, (await fetchImpl(record.id)).candidates] as const,
-    ),
-  );
-  return new Map(
-    settled.flatMap((result) => (result.status === "fulfilled" ? [result.value] : [])),
-  );
-}
 
 function acceptsOptions(options: AcceptMemoryProposalOptions): boolean {
   return options.bodyOverride !== undefined || options.predecessorId !== undefined;
@@ -422,11 +410,13 @@ function ReviewRowActions({
 function ReviewRow({
   record,
   predecessors,
+  predecessorsLoading,
   busyAction,
   rowError,
   onAccept,
   onReject,
   onArchive,
+  onRequestPredecessors,
   onOpenDetail,
   t,
 }: ReviewRowProps): ReactNode {
@@ -503,15 +493,19 @@ function ReviewRow({
           record={record}
           busyAction={busyAction}
           labelId={labelId}
-          onAccept={() =>
+          onAccept={() => {
+            if (record.type === "correction" && predecessors === undefined) {
+              onRequestPredecessors(record);
+              return;
+            }
             onAccept(record, {
               ...(editing ? { bodyOverride: draftBody } : {}),
               ...(predecessorId === undefined ? {} : { predecessorId }),
-            })
-          }
+            });
+          }}
           onReject={onReject}
           onArchive={onArchive}
-          acceptDisabled={requiresPredecessorSelection}
+          acceptDisabled={predecessorsLoading || requiresPredecessorSelection}
           editing={editing}
           onEdit={() => setEditing(true)}
           onCancelEdit={() => {
@@ -549,6 +543,10 @@ export function ReviewQueue({
   const [predecessorsById, setPredecessorsById] = useState<CorrectionPredecessorsById>(
     () => new Map(),
   );
+  const [predecessorsLoadingById, setPredecessorsLoadingById] = useState<
+    Readonly<Record<string, boolean>>
+  >({});
+  const predecessorRequestsRef = useRef(new Set<string>());
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [busyById, setBusyById] = useState<Partial<Record<string, ReviewAction>>>({});
@@ -570,21 +568,37 @@ export function ReviewQueue({
       setRecords(res.memories);
       setBusyById({});
       setRowErrorsById({});
-      const predecessors = await loadCorrectionPredecessors(
-        res.memories,
-        fetchCorrectionPredecessorsImpl,
-      );
-      setPredecessorsById(predecessors);
+      setPredecessorsById(new Map());
+      setPredecessorsLoadingById({});
+      predecessorRequestsRef.current.clear();
     } catch (err) {
       setError(formatError(err));
     } finally {
       setLoading(false);
     }
-  }, [fetchCorrectionPredecessorsImpl, fetchQueueImpl]);
+  }, [fetchQueueImpl]);
 
   useEffect(() => {
     void load();
   }, [load]);
+
+  const requestCorrectionPredecessors = useCallback(
+    async (record: MemoryRecord): Promise<void> => {
+      if (predecessorRequestsRef.current.has(record.id)) return;
+      predecessorRequestsRef.current.add(record.id);
+      setPredecessorsLoadingById((prev) => ({ ...prev, [record.id]: true }));
+      try {
+        const response = await fetchCorrectionPredecessorsImpl(record.id);
+        setPredecessorsById((prev) => new Map(prev).set(record.id, response.candidates));
+      } catch (err) {
+        predecessorRequestsRef.current.delete(record.id);
+        setRowErrorsById((prev) => ({ ...prev, [record.id]: formatError(err) }));
+      } finally {
+        setPredecessorsLoadingById((prev) => ({ ...prev, [record.id]: false }));
+      }
+    },
+    [fetchCorrectionPredecessorsImpl],
+  );
 
   const clearRowState = useCallback((id: MemoryId): void => {
     setBusyById((prev) => {
@@ -613,6 +627,7 @@ export function ReviewQueue({
         next.delete(id);
         return next;
       });
+      predecessorRequestsRef.current.delete(id);
       clearRowState(id);
     },
     [records, clearRowState],
@@ -742,6 +757,7 @@ export function ReviewQueue({
             key={record.id}
             record={record}
             predecessors={predecessorsById.get(record.id)}
+            predecessorsLoading={predecessorsLoadingById[record.id] === true}
             busyAction={busyById[record.id] ?? null}
             rowError={rowErrorsById[record.id] ?? null}
             onAccept={(row, options) => {
@@ -752,6 +768,9 @@ export function ReviewQueue({
             }}
             onArchive={(row) => {
               void runRowAction(row, "archive");
+            }}
+            onRequestPredecessors={(row) => {
+              void requestCorrectionPredecessors(row);
             }}
             onOpenDetail={onOpenDetail}
             t={t}

@@ -334,6 +334,27 @@ describe("createEntailmentStage — active flagging", () => {
     );
     expect(markers?.map((m) => m.kind)).toEqual(["entailment-unavailable"]);
   });
+
+  it("shares one claim allowance across path and numeric citation grammars", async () => {
+    const port = portReturning('{"verdict":"supported"}');
+    const call = vi.spyOn(port, "call");
+    const stage = createEntailmentStage(depsWith(port), [], MODEL_ID, undefined, undefined, {
+      maxClaims: 1,
+      maxExcerptChars: 900,
+      maxTotalMs: 20_000,
+    });
+    if (stage?.evaluateHybrid === undefined) throw new Error("expected a hybrid evaluator");
+
+    const markers = await stage.evaluateHybrid(
+      "Retention is 30 days [src/policy.ts:1-8]. Support starts in Q3 [1].",
+      [packWithExcerpt("src/policy.ts", "retention: 30 days")],
+      [{ marker: 1, excerptText: "Support starts in Q3" }],
+      NOW,
+    );
+
+    expect(call).toHaveBeenCalledTimes(1);
+    expect(markers.map((marker) => marker.kind)).toEqual(["entailment-unavailable"]);
+  });
 });
 
 describe("createEntailmentStage — fail-closed degradation", () => {

@@ -3399,9 +3399,17 @@ describe("hybrid entailment forwards the retrieved folder packs (KEIKO-0237)", (
     // capsule policy is evaluated inside the factory. Pin the count so ADD-01's connector-pack
     // forwarding stays visible if it changes.
     expect(observedCapsulesPerCall).toEqual([1]);
-    expect(observedNumericEvidence).toHaveLength(1);
-    expect(observedNumericEvidence[0]?.excerptText).toContain("### Connector source:");
-    expect(observedNumericEvidence[0]?.excerptText).not.toContain("pack-a.ts");
+    expect(observedNumericEvidence.map((evidence) => evidence.marker).sort()).toEqual([1, 2, 3]);
+    expect(
+      observedNumericEvidence.some((evidence) =>
+        evidence.excerptText.includes("### Connector source:"),
+      ),
+    ).toBe(true);
+    expect(
+      observedNumericEvidence.some((evidence) =>
+        evidence.excerptText.includes("### Folder source:"),
+      ),
+    ).toBe(true);
   });
 });
 

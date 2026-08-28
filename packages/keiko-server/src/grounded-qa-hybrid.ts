@@ -779,6 +779,18 @@ const HYBRID_SYSTEM_PROMPT =
   `${GROUNDED_SYSTEM_PROMPT} Connector excerpts are indexed-document citations: attribute every ` +
   "connector claim to its source label and the matching [n] marker in addition to any file reference.";
 
+function renderHybridCandidateBlock(candidate: SelectedCandidate<HybridPayload>): string {
+  const kindLabel = candidate.kind === "folder" ? "Folder" : "Connector";
+  const excerpt =
+    candidate.redactedText.length > 0
+      ? promptSafeExcerptText(candidate.redactedText)
+      : "(No excerpt text available.)";
+  return (
+    `[${String(candidate.marker)}] ### ${kindLabel} source: ${candidate.sourceLabel}\n` +
+    `\`\`\`text\n${excerpt}\n\`\`\``
+  );
+}
+
 // Builds the user message from the SAME selected set used for citations. Each candidate gets a
 // single global [n] marker that is consistent with the citation arrays. redactedText is
 // already redacted — do NOT pass it through redactString again.
@@ -798,34 +810,19 @@ function buildRerankedHybridUserMessage(
     "",
   ];
   for (const candidate of selected) {
-    const kindLabel = candidate.kind === "folder" ? "Folder" : "Connector";
-    lines.push(
-      `[${String(candidate.marker)}] ### ${kindLabel} source: ${candidate.sourceLabel}`,
-      "```text",
-      candidate.redactedText.length > 0
-        ? promptSafeExcerptText(candidate.redactedText)
-        : "(No excerpt text available.)",
-      "```",
-      "",
-    );
+    lines.push(renderHybridCandidateBlock(candidate), "");
   }
   return lines.join("\n");
 }
 
-function numericConnectorEntailmentEvidence(
+function numericEntailmentEvidence(
   selected: readonly SelectedCandidate<HybridPayload>[],
 ): readonly NumericEntailmentEvidence[] {
-  return selected.filter(isConnectorCandidate).map((candidate) => ({
+  return selected.map((candidate) => ({
     marker: candidate.marker,
-    // Match the prompt's selected, redacted rendering. This never re-searches or reads a broader
-    // corpus, so `[n]` support is judged only against evidence the answer model actually saw.
-    excerptText:
-      `[${String(candidate.marker)}] ### Connector source: ${candidate.sourceLabel}\n` +
-      "```text\n" +
-      (candidate.redactedText.length > 0
-        ? promptSafeExcerptText(candidate.redactedText)
-        : "(No excerpt text available.)") +
-      "\n```",
+    // The exact helper used by the prompt is the source of truth for semantic judgment. Every
+    // selected folder and connector receives a numeric marker, so every one must reach the judge.
+    excerptText: renderHybridCandidateBlock(candidate),
   }));
 }
 
@@ -1202,6 +1199,25 @@ async function applyHybridEntailment(
   if (stage === undefined) {
     return answer;
   }
+  if (stage.evaluateHybrid !== undefined) {
+    const markers = await stage.evaluateHybrid(
+      answerContent,
+      folders.map((folder) => folder.pack),
+      numericEntailmentEvidence(selected),
+      Date.now(),
+    );
+    if (markers.length === 0) return answer;
+    return {
+      ...answer,
+      uncertainty: [
+        ...answer.uncertainty,
+        ...markers.map((marker) => ({
+          kind: marker.kind,
+          claim: redactString(ctx.deps.redactor, marker.claim),
+        })),
+      ],
+    };
+  }
   const folderEntailment = await appendGroundedAnswerEntailment(
     answer,
     stage,
@@ -1213,7 +1229,7 @@ async function applyHybridEntailment(
     folderEntailment,
     stage,
     answerContent,
-    numericConnectorEntailmentEvidence(selected),
+    numericEntailmentEvidence(selected),
     ctx.deps.redactor,
   );
 }

@@ -186,19 +186,24 @@ describe("MemoriaViva browser-tier flows", () => {
     });
     const acceptImpl = vi.fn().mockResolvedValue({ memory: { ...correction, status: "accepted" } });
 
+    const fetchPredecessors = vi.fn().mockResolvedValue({ candidates: [first, second] });
     render(
       <ReviewQueue
         fetchQueueImpl={vi.fn().mockResolvedValue(queueResponse([correction]))}
-        fetchCorrectionPredecessorsImpl={vi.fn().mockResolvedValue({ candidates: [first, second] })}
+        fetchCorrectionPredecessorsImpl={fetchPredecessors}
         acceptImpl={acceptImpl}
       />,
     );
 
+    const approve = await screen.findByRole("button", { name: "Approve" });
+    expect(fetchPredecessors).not.toHaveBeenCalled();
+    await user.click(approve);
+    expect(acceptImpl).not.toHaveBeenCalled();
     await user.selectOptions(
       await screen.findByLabelText("Memory being corrected"),
       "mem-browser-predecessor-1",
     );
-    await user.click(screen.getByRole("button", { name: "Approve" }));
+    await user.click(approve);
 
     await waitFor(() => {
       expect(acceptImpl).toHaveBeenCalledWith("mem-browser-correction", {
