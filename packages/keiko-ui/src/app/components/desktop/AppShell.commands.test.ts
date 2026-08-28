@@ -24,7 +24,7 @@ import {
 import type { AppWindow, Connection } from "./windows/types";
 import type { WorkspaceApi } from "./hooks/useWorkspace.types";
 import { DEFAULT_LOCALE, translate, type I18nTranslate } from "@/lib/i18n";
-import { cutResult } from "../../../test-utils/workspace-clipboard-fixture";
+import { cutResult } from "../../../test-utils/workspace-api-fixture";
 
 // The command labels are English here because "en" is the locale under test, not because the builder
 // hardcodes English: `buildAppShellCommands` REQUIRES a translate function, so a caller that

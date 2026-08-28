@@ -30,7 +30,7 @@ import { Workspace } from "./Workspace";
 import { WIN_TYPES } from "./windows/WindowsRegistry";
 import type { WorkspaceApi } from "./hooks/useWorkspace.types";
 import type { UseWorkspaceResult } from "./hooks/useWorkspace.types";
-import { cutResult } from "../../../test-utils/workspace-clipboard-fixture";
+import { cutResult } from "../../../test-utils/workspace-api-fixture";
 
 vi.mock("./WorkspaceShader", () => ({
   WorkspaceShader: (): null => null,

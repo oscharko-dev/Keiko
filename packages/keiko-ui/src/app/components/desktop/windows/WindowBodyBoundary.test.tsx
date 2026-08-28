@@ -13,7 +13,7 @@ import { WindowFrame } from "./WindowFrame";
 import { registerWindowRender } from "./WindowsRegistry";
 import type { AppWindow } from "./types";
 import type { WorkspaceApi } from "../hooks/useWorkspace.types";
-import { cutResult } from "../../../../test-utils/workspace-clipboard-fixture";
+import { cutResult, workspaceApiFixture } from "../../../../test-utils/workspace-api-fixture";
 
 function appWindow(patch: Partial<AppWindow> = {}): AppWindow {
   return {
@@ -31,52 +31,7 @@ function appWindow(patch: Partial<AppWindow> = {}): AppWindow {
   };
 }
 
-function api(patch: Partial<WorkspaceApi> = {}): WorkspaceApi {
-  return {
-    add: vi.fn(() => null),
-    currentSelection: vi.fn(() => ({ focusedWindowId: null, selectedWindowIds: [] })),
-    openEditorFile: vi.fn(() => ({ ok: false as const, message: "Unable to open editor." })),
-    toggleTool: vi.fn(),
-    focus: vi.fn(),
-    replaceSelection: vi.fn(),
-    toggleWindowSelection: vi.fn(),
-    clearSelection: vi.fn(),
-    moveSelectedWindowsBy: vi.fn(() => ({ dx: 0, dy: 0 })),
-    copySelectedWindows: vi.fn(() => ({ captured: 0, skipped: 0, overflow: 0 })),
-    cutSelectedWindows: vi.fn(() => cutResult({ captured: 0, skipped: 0, overflow: 0 })),
-    pasteCopiedWindows: vi.fn(() => ({ pasted: 0, limitReached: false })),
-    close: vi.fn(),
-    minimize: vi.fn(),
-    restore: vi.fn(),
-    maximize: vi.fn(),
-    update: vi.fn(),
-    setSnap: vi.fn(),
-    commitSnap: vi.fn(),
-    tileAll: vi.fn(),
-    splitFront: vi.fn(),
-    cascade: vi.fn(),
-    startConnect: vi.fn(),
-    confirmConnect: vi.fn(),
-    cancelConnect: vi.fn(),
-    removeConn: vi.fn(),
-    updateConnBoundScope: vi.fn(),
-    connect: vi.fn(),
-    linkedFilesRoot: vi.fn(() => null),
-    linkedAllFilesRoots: vi.fn(() => []),
-    linkedConnectorCapsuleIds: vi.fn(() => []),
-    linkedConnectorCapsuleSetIds: vi.fn(() => []),
-    linkedFigmaSnapshotRunIds: vi.fn(() => []),
-    linkedFilesContext: vi.fn(() => null),
-    currentFilesContext: vi.fn(() => null),
-    zoomTo: vi.fn(),
-    fitView: vi.fn(),
-    resetView: vi.fn(),
-    panBy: vi.fn(),
-    rect: vi.fn(() => null),
-    currentView: vi.fn(() => ({ x: 0, y: 0, zoom: 1 })),
-    ...patch,
-  };
-}
+const api = workspaceApiFixture;
 
 // Silences React's expected error-boundary console noise for a render that throws.
 function withBoundaryNoise<T>(message: string, run: () => T): T {

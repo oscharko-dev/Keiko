@@ -19,7 +19,7 @@ import { useWorkspace } from "./hooks/useWorkspace";
 import { registerWindowRender } from "./windows/WindowsRegistry";
 import type { UseWorkspaceResult, WorkspaceApi } from "./hooks/useWorkspace.types";
 import type { AppWindow, Connection, View } from "./windows/types";
-import { cutResult } from "../../../test-utils/workspace-clipboard-fixture";
+import { cutResult } from "../../../test-utils/workspace-api-fixture";
 
 vi.mock("./WorkspaceShader", () => ({ WorkspaceShader: () => null }));
 

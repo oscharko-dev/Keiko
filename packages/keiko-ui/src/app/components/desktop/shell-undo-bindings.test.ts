@@ -23,7 +23,7 @@ import {
 } from "./shell-undo-bindings";
 import type { AppWindow } from "./windows/types";
 import type { WorkspaceApi } from "./hooks/useWorkspace.types";
-import { cutResult } from "../../../test-utils/workspace-clipboard-fixture";
+import { cutResult } from "../../../test-utils/workspace-api-fixture";
 
 function fakeApi(overrides: Partial<WorkspaceApi> = {}): WorkspaceApi {
   return {

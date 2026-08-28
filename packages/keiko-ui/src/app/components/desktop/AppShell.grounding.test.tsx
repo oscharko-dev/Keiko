@@ -15,7 +15,7 @@ import { MAX_WORKSPACE_WINDOWS } from "./hooks/workspace-persistence";
 import type { AppWindow, Connection } from "./windows/types";
 import appShellStyles from "./AppShell.module.css";
 import { registerChatWindowRuntime } from "./windows/chatWindowActivity";
-import { cutResult } from "../../../test-utils/workspace-clipboard-fixture";
+import { cutResult } from "../../../test-utils/workspace-api-fixture";
 
 interface WorkspaceHookOptions {
   readonly onWindowLimitReached?: (limit: number) => void;

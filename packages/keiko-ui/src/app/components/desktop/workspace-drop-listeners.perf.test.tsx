@@ -15,7 +15,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { Workspace } from "./Workspace";
 import type { UseWorkspaceResult, WorkspaceApi } from "./hooks/useWorkspace.types";
 import type { AppWindow, View } from "./windows/types";
-import { cutResult } from "../../../test-utils/workspace-clipboard-fixture";
+import { cutResult } from "../../../test-utils/workspace-api-fixture";
 
 vi.mock("./WorkspaceShader", () => ({ WorkspaceShader: () => null }));
 
