@@ -2,7 +2,9 @@ import { describe, expect, it } from "vitest";
 
 import {
   alertQueries,
+  defaultSeams,
   ghArguments,
+  parseGhPages,
   evaluate,
   main,
   mergeAlerts,
@@ -50,6 +52,25 @@ describe("check-secret-scanning-queue pagination", () => {
     const args = ghArguments("repos/o/r/secret-scanning/alerts?state=open");
     expect(args).toContain("--paginate");
     expect(args).toContain("--slurp");
+  });
+
+  it("merges every page --slurp returns, not just the first", () => {
+    // Reading only the outer array's first element would reintroduce the truncation the flags were
+    // added to remove, and the run would look identical either way.
+    expect(parseGhPages(JSON.stringify([[{ number: 1 }, { number: 2 }], [{ number: 3 }]]))).toEqual(
+      [{ number: 1 }, { number: 2 }, { number: 3 }],
+    );
+  });
+
+  it("rejects a response shape that is not a page array, rather than reading it as empty", () => {
+    expect(() => parseGhPages(JSON.stringify({ message: "Not Found" }))).toThrow(TypeError);
+  });
+
+  it("reads the real closeout document through the default seams", () => {
+    // Proves the committed path constant still resolves: a renamed document would otherwise only
+    // surface in the scheduled lane, long after the rename.
+    const documented = parseDocumentedAlerts(defaultSeams().readDocument());
+    expect(documented.size).toBeGreaterThan(0);
   });
 });
 

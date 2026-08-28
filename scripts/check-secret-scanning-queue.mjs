@@ -67,7 +67,14 @@ function runGh(query) {
   if (result.status !== 0) {
     throw new Error(`GitHub API request failed (exit ${String(result.status)})`);
   }
-  const pages = JSON.parse(result.stdout);
+  return parseGhPages(result.stdout);
+}
+
+// Split out so the pagination contract is assertable without spawning a process: `--slurp` wraps
+// every page in an outer array, and reading only its first element would reintroduce exactly the
+// truncation the flags were added to remove.
+export function parseGhPages(stdout) {
+  const pages = JSON.parse(stdout);
   if (!Array.isArray(pages)) throw new TypeError("paginated alert response is not an array");
   return pages.flat();
 }
@@ -154,7 +161,7 @@ export function queueFailures(openAlerts, documented) {
   return failures;
 }
 
-function defaultSeams() {
+export function defaultSeams() {
   const repository = process.env.GITHUB_REPOSITORY ?? DEFAULT_REPOSITORY;
   return {
     fetchAlerts: () => alertQueries(repository).map((query) => runGh(query)),

@@ -267,7 +267,7 @@ function collectYamlFiles(directory, accumulator) {
   return accumulator;
 }
 
-function defaultSeams() {
+export function defaultSeams() {
   return {
     readDocument: () => readFileSync(join(repoRoot, CLOSEOUT_DOCUMENT), "utf8"),
     readLock: () => readJsonFile(join(repoRoot, LOCKFILE)).packages,

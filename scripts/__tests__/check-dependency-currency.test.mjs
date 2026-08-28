@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   actionFailures,
+  defaultSeams,
   malformedActionRows,
   collectWorkflowPins,
   dependencyFailures,
@@ -212,6 +213,22 @@ describe("check-dependency-currency action pins", () => {
       workflow("ci.yml", "      - uses: ./.github/actions/setup-sandbox-isolation"),
     ]);
     expect(pins.size).toBe(0);
+  });
+});
+
+describe("check-dependency-currency default seams", () => {
+  it("walks the real workflow directories and finds the pins this repository actually uses", () => {
+    // The seam is where a wrong path constant hides: parsing and comparison can all be correct
+    // while the gate silently reads nothing. A zero-pin result must never look like agreement.
+    const pins = collectWorkflowPins(defaultSeams().readWorkflows());
+    expect(pins.size).toBeGreaterThanOrEqual(10);
+    expect([...pins.keys()]).toContain("actions/checkout");
+  });
+
+  it("reads the committed closeout document and lockfile", () => {
+    const seams = defaultSeams();
+    expect(parseDependencyRows(seams.readDocument()).length).toBeGreaterThan(0);
+    expect(seams.readLock()["node_modules/typescript"]?.version).toBeDefined();
   });
 });
 
