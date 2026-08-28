@@ -31,6 +31,7 @@ export type {
   ChatMessageImageUrlContentPart,
   ChatMessageTextContentPart,
   ToolDefinition,
+  ToolCallingVerification,
   ResponseFormat,
   GatewayRequest,
   GatewaySamplingParameterIssue,

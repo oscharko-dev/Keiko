@@ -167,7 +167,9 @@ export function createDefaultChatCapability(modelId: string): ModelCapability {
     // widen it to the true value before the model is actually used.
     contextWindow: 4096,
     maxOutputTokens: 0,
-    toolCalling: true,
+    // A deployment name is never evidence that its endpoint accepts forced tool calls. Setup and
+    // readiness upgrade this only after the live, configuration-bound probe succeeds.
+    toolCalling: false,
     structuredOutput: false,
     streaming: true,
     // Conservative defaults for an UNKNOWN discovered chat model (Issue #143 / AC #2):

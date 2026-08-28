@@ -428,6 +428,7 @@ const SERVER_DIAGNOSTIC_SUMMARIES = [
   "Editor local-history capture failed.",
   "Verification execution failed unexpectedly.",
   "A verification event subscriber failed.",
+  "Gateway tool-calling verification could not be persisted.",
   "Model discovery exceeded the discovery cap; setup continued with the retained models.",
   "Stored gateway egress configuration was invalid; setup omitted it from the rewritten file.",
   "Setup skipped models the gateway declared as unsupported modes or that failed the embedding probe.",

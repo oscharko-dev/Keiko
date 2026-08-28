@@ -43,6 +43,35 @@ export const MODEL_COST_RANK: Readonly<Record<CostClass, number>> = Object.freez
 
 export type LatencyClass = "fast" | "standard" | "slow";
 
+/**
+ * Content-free proof that a configured deployment accepted Keiko's forced tool-call probe.
+ * The fingerprint binds the observation to the deployment's request-shaping configuration, so a
+ * copied capability record cannot enable tools after its endpoint or protocol changes.
+ */
+export interface ToolCallingVerification {
+  readonly status: "verified" | "unsupported" | "unverified";
+  readonly checkedAt: string;
+  readonly probe: "gateway-tool-calling-v1";
+  readonly configurationFingerprint: string;
+}
+
+/** A forced tool-call proof expires unless the deployment is probed again. */
+export const TOOL_CALLING_VERIFICATION_MAX_AGE_MS = 24 * 60 * 60 * 1_000;
+
+/**
+ * Returns whether the proof itself is current. Callers that know the provider must additionally
+ * compare its configuration fingerprint before relying on the capability.
+ */
+export function isToolCallingVerificationFresh(
+  verification: ToolCallingVerification | undefined,
+  now = Date.now(),
+): boolean {
+  if (verification?.status !== "verified") return false;
+  const checkedAt = Date.parse(verification.checkedAt);
+  const ageMs = now - checkedAt;
+  return Number.isFinite(checkedAt) && ageMs >= 0 && ageMs <= TOOL_CALLING_VERIFICATION_MAX_AGE_MS;
+}
+
 export type ModelTokenAccountingSource = "calibrated";
 
 export interface ModelTokenAccounting {
@@ -158,6 +187,11 @@ export interface ModelCapability {
   readonly contextWindow: number;
   readonly maxOutputTokens: number;
   readonly toolCalling: boolean;
+  /**
+   * Durable, content-free provenance for `toolCalling`. A consumer must treat a missing, stale,
+   * unverified, or unsupported record as `toolCalling: false`.
+   */
+  readonly toolCallingVerification?: ToolCallingVerification | undefined;
   readonly structuredOutput: boolean;
   readonly streaming: boolean;
   // Conversation Center modality flags (Issue #143 / Epic #142). Conservative
@@ -256,6 +290,7 @@ export function isCodingWorkbenchModel(capability: ModelCapability): boolean {
   return (
     capability.kind === "chat" &&
     capability.toolCalling &&
+    isToolCallingVerificationFresh(capability.toolCallingVerification) &&
     capability.workflowEligible &&
     capability.preferredUseCases.some((value) =>
       CODING_WORKBENCH_USE_CASES.has(normalizedCodingUseCase(value)),

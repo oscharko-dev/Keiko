@@ -18,6 +18,12 @@ function chatCapability(overrides: Partial<ModelCapability> = {}): ModelCapabili
     contextWindow: 32_000,
     maxOutputTokens: 4_096,
     toolCalling: true,
+    toolCallingVerification: {
+      status: "verified",
+      checkedAt: new Date().toISOString(),
+      probe: "gateway-tool-calling-v1",
+      configurationFingerprint: "test-fingerprint",
+    },
     structuredOutput: true,
     streaming: true,
     supportsImageInput: false,

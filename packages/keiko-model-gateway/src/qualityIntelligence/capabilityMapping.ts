@@ -9,6 +9,7 @@
 // capabilityGate tests.
 
 import type { ModelCapability } from "@oscharko-dev/keiko-contracts";
+import { isToolCallingVerificationFresh } from "../config.js";
 import type { QualityIntelligenceCapability } from "./taskProfiles.js";
 
 export function modelSupportsCapability(
@@ -23,6 +24,6 @@ export function modelSupportsCapability(
     case "structured-output":
       return model.structuredOutput;
     case "function-calling":
-      return model.toolCalling;
+      return model.toolCalling && isToolCallingVerificationFresh(model.toolCallingVerification);
   }
 }

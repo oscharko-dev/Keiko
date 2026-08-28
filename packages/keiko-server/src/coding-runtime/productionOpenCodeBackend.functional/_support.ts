@@ -13,11 +13,12 @@ import { join, relative, resolve, sep } from "node:path";
 import type { WorkspaceInfo } from "@oscharko-dev/keiko-contracts";
 import { CODING_SAFE_ACTIVITY_MAX_TEXT_SEGMENT_CHARS } from "@oscharko-dev/keiko-contracts/runtime/coding-safe-activity";
 import { EDITOR_AGENT_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts/runtime/editor-agent";
-import type {
-  GatewayConfig,
-  GatewayRequest,
-  GatewayStreamChunk,
-  NormalizedResponse,
+import {
+  toolCallingConfigurationFingerprint,
+  type GatewayConfig,
+  type GatewayRequest,
+  type GatewayStreamChunk,
+  type NormalizedResponse,
 } from "@oscharko-dev/keiko-model-gateway";
 import { applyPatch, inspectPatch } from "@oscharko-dev/keiko-tools";
 
@@ -726,20 +727,19 @@ function tool(
 }
 
 export function functionalGatewayConfig(): GatewayConfig {
+  const provider = {
+    modelId: "functional-model",
+    baseUrl: "https://provider.invalid/v1",
+    apiKey: "functional-provider-secret",
+    apiKeyHeaderName: "api-key",
+    endpointStyle: "azure-openai-deployment" as const,
+    apiVersion: "2024-06-01",
+    timeoutMs: 5_000,
+    maxRetries: 0,
+    retryBaseDelayMs: 1,
+  };
   return {
-    providers: [
-      {
-        modelId: "functional-model",
-        baseUrl: "https://provider.invalid/v1",
-        apiKey: "functional-provider-secret",
-        apiKeyHeaderName: "api-key",
-        endpointStyle: "azure-openai-deployment",
-        apiVersion: "2024-06-01",
-        timeoutMs: 5_000,
-        maxRetries: 0,
-        retryBaseDelayMs: 1,
-      },
-    ],
+    providers: [provider],
     circuitBreaker: { failureThreshold: 5, cooldownMs: 1_000, halfOpenProbes: 1 },
     capabilities: [
       {
@@ -748,6 +748,12 @@ export function functionalGatewayConfig(): GatewayConfig {
         contextWindow: 128_000,
         maxOutputTokens: 4_096,
         toolCalling: true,
+        toolCallingVerification: {
+          status: "verified",
+          checkedAt: new Date().toISOString(),
+          probe: "gateway-tool-calling-v1",
+          configurationFingerprint: toolCallingConfigurationFingerprint(provider),
+        },
         structuredOutput: true,
         streaming: true,
         supportsImageInput: false,

@@ -9,7 +9,11 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { runEvaluateCli } from "./evaluate.js";
 import type { EvaluateDeps } from "./evaluate.js";
 import { createInMemoryEvidenceStore } from "@oscharko-dev/keiko-evidence";
-import { ConfigInvalidError } from "@oscharko-dev/keiko-model-gateway";
+import {
+  ConfigInvalidError,
+  toolCallingConfigurationFingerprint,
+  type ModelProviderConfig,
+} from "@oscharko-dev/keiko-model-gateway";
 import {
   createScriptedModelPort,
   type EvaluationFixture,
@@ -75,6 +79,25 @@ function modelResponse(content: string): NormalizedResponse {
   };
 }
 
+function verifiedToolCallingCapabilities(
+  capabilities: readonly Record<string, unknown>[],
+  provider: ModelProviderConfig,
+): readonly Record<string, unknown>[] {
+  return capabilities.map((capability) =>
+    capability.id === provider.modelId && capability.toolCalling === true
+      ? {
+          ...capability,
+          toolCallingVerification: {
+            status: "verified",
+            checkedAt: new Date().toISOString(),
+            probe: "gateway-tool-calling-v1",
+            configurationFingerprint: toolCallingConfigurationFingerprint(provider),
+          },
+        }
+      : capability,
+  );
+}
+
 // evaluate.test.ts keeps its own writeGatewayConfig because it needs the top-level `capabilities`
 // array shape (with workflowEligible/supportsImageInput/supportsDocumentInput) that other suites
 // do not exercise. The reference-only variant now delegates the "delete apiKey + insert
@@ -89,39 +112,41 @@ function writeGatewayConfig(
 ): string {
   const modelId = options.modelId ?? "configured-live-model";
   const path = join(dir, "gateway.json");
+  const provider: ModelProviderConfig = {
+    modelId,
+    baseUrl: "https://provider.example/v1",
+    apiKey: FIXTURE_API_KEY,
+    timeoutMs: 30000,
+    maxRetries: 3,
+    retryBaseDelayMs: 500,
+  };
   writeFileSync(
     path,
     JSON.stringify({
-      providers: [
-        {
-          modelId,
-          baseUrl: "https://provider.example/v1",
-          apiKey: FIXTURE_API_KEY,
-          timeoutMs: 30000,
-          maxRetries: 3,
-          retryBaseDelayMs: 500,
-        },
-      ],
+      providers: [provider],
       circuitBreaker: { failureThreshold: 5, cooldownMs: 30000, halfOpenProbes: 2 },
-      capabilities: options.capabilities ?? [
-        {
-          id: modelId,
-          kind: "chat",
-          contextWindow: 64000,
-          maxOutputTokens: 4096,
-          toolCalling: true,
-          structuredOutput: true,
-          streaming: true,
-          supportsImageInput: false,
-          supportsDocumentInput: false,
-          workflowEligible: true,
-          costClass: "medium",
-          latencyClass: "standard",
-          throughputHint: "test",
-          preferredUseCases: ["Test"],
-          knownLimitations: [],
-        },
-      ],
+      capabilities: verifiedToolCallingCapabilities(
+        options.capabilities ?? [
+          {
+            id: modelId,
+            kind: "chat",
+            contextWindow: 64000,
+            maxOutputTokens: 4096,
+            toolCalling: true,
+            structuredOutput: true,
+            streaming: true,
+            supportsImageInput: false,
+            supportsDocumentInput: false,
+            workflowEligible: true,
+            costClass: "medium",
+            latencyClass: "standard",
+            throughputHint: "test",
+            preferredUseCases: ["Test"],
+            knownLimitations: [],
+          },
+        ],
+        provider,
+      ),
     }),
     "utf8",
   );

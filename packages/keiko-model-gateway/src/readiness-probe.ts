@@ -19,6 +19,16 @@ function providerHeaders(provider: ModelProviderConfig): Record<string, string> 
   };
 }
 
+function readinessChatCompletionsUrl(provider: ModelProviderConfig): string {
+  const trimmed = trimTrailingSlash(provider.baseUrl);
+  if (provider.endpointStyle === "azure-openai-deployment") {
+    return `${trimmed}/openai/deployments/${encodeURIComponent(
+      provider.modelId,
+    )}/chat/completions?api-version=${encodeURIComponent(provider.apiVersion ?? "")}`;
+  }
+  return `${trimmed}/chat/completions`;
+}
+
 // Gateway-owned raw chat-completions probe for operational readiness checks. The server needs a raw
 // provider-shaped response to verify streaming/tool/schema/multimodal capabilities, but credentialed
 // HTTP egress still stays inside the model-gateway package and uses the central config-level egress
@@ -32,11 +42,7 @@ export function requestGatewayReadinessChatCompletion(
     ...body,
     ...(stream === true ? { stream: true, stream_options: { include_usage: true } } : {}),
   });
-  // Trim a trailing slash before joining, exactly like the sibling adapters — a file/env-authored
-  // base URL ending in "/" otherwise yields '//chat/completions', which LiteLLM answers with a
-  // 404 (LiteLLM production audit).
-  const trimmed = trimTrailingSlash(provider.baseUrl);
-  return gatewayFetch(`${trimmed}/chat/completions`, {
+  return gatewayFetch(readinessChatCompletionsUrl(provider), {
     method: "POST",
     headers: providerHeaders(provider),
     body: requestBody,
