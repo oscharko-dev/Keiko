@@ -3,7 +3,7 @@
     {
       "modelId": "e2e-chat-model",
       "baseUrl": "http://127.0.0.1:42186/v1",
-      "apiKey": "e2e-test-token-1234567890",
+      "apiKey": "e2e-mock",
       "timeoutMs": 30000,
       "maxRetries": 1,
       "retryBaseDelayMs": 100
@@ -11,7 +11,7 @@
     {
       "modelId": "e2e-embedding-model",
       "baseUrl": "http://127.0.0.1:42186/v1",
-      "apiKey": "e2e-test-token-1234567890",
+      "apiKey": "e2e-mock",
       "timeoutMs": 30000,
       "maxRetries": 1,
       "retryBaseDelayMs": 100

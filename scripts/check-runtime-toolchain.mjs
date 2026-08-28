@@ -6,8 +6,14 @@ import { fileURLToPath } from "node:url";
 import { readJsonFile } from "./lib/json.mjs";
 
 const EXPECTED_NODE_ENGINE = ">=24.18.0 <25";
-const EXPECTED_NODE_BASELINE = "24.18.0";
-const EXPECTED_NPM_ENGINE = "11.16.0";
+// Exported for the same reason as EXPECTED_PACKAGE_MANAGER below: a workflow-parity test compares
+// its setup-node pins against THIS constant, so a fixture cannot restate the version and go on
+// passing while the governed baseline moves and the workflows stay behind.
+export const EXPECTED_NODE_BASELINE = "24.18.0";
+// Exported for the same reason as the Node baseline: three perf-evidence scripts hard-compared
+// this value and would have started rejecting valid runs on the next npm bump, with nothing to
+// point the person doing the bump at them (#3304).
+export const EXPECTED_NPM_ENGINE = "11.16.0";
 // Exported: release.yml pins its publish npm to this exact governed version, and the lockstep
 // test compares the workflow line against THIS constant — the 0.3.1 CI publish died on a drifted
 // hand-maintained pin (11.18.0) that the tag then froze forever.
@@ -46,6 +52,13 @@ function evaluateDeclaredToolchain(input) {
       problems.push(`${workspace.name}: Node.js engine policy is stale`);
     }
   }
+  // `evaluateRuntimeToolchain` is exported; a caller written against the previous input shape must
+  // not crash on a field it never knew about.
+  for (const workspace of input.workspaceNpmEngines ?? []) {
+    if (workspace.value !== EXPECTED_NPM_ENGINE) {
+      problems.push(`${workspace.name}: npm engine policy is stale`);
+    }
+  }
   return problems;
 }
 
@@ -67,19 +80,32 @@ export function evaluateRuntimeToolchain(input, options) {
   return [...evaluateDeclaredToolchain(input), ...evaluateExecutedToolchain(input, options)];
 }
 
-export function readWorkspaceNodeEngines(root) {
+function readWorkspaceEngines(root, engineKey) {
   const packagesRoot = join(root, "packages");
   const engines = [];
   for (const entry of readdirSync(packagesRoot, { withFileTypes: true })) {
     if (!entry.isDirectory()) continue;
-    try {
-      const manifest = readJsonFile(join(packagesRoot, entry.name, "package.json"));
-      engines.push({ name: manifest.name ?? entry.name, value: manifest.engines?.node });
-    } catch {
-      // Directories without package manifests are outside the workspace package graph.
-    }
+    const manifestPath = join(packagesRoot, entry.name, "package.json");
+    // A directory without a manifest is outside the workspace package graph and is skipped. A
+    // manifest that exists but cannot be read or parsed is a different thing entirely: swallowing
+    // it would drop that workspace out of the engine policy silently, and the gate would report a
+    // pass over a package it never examined. That one fails closed.
+    if (!existsSync(manifestPath)) continue;
+    const manifest = readJsonFile(manifestPath);
+    engines.push({ name: manifest.name ?? entry.name, value: manifest.engines?.[engineKey] });
   }
   return engines.sort((left, right) => left.name.localeCompare(right.name));
+}
+
+export function readWorkspaceNodeEngines(root) {
+  return readWorkspaceEngines(root, "node");
+}
+
+// Only workspaces that actually declare `engines.npm` are reported: a silent workspace inherits the
+// root npm policy, so an absent declaration is not drift. A declared one is governed exactly — the
+// UI workspace pinned 11.16.0 while nothing compared it against the governed constant.
+export function readWorkspaceNpmEngines(root) {
+  return readWorkspaceEngines(root, "npm").filter((workspace) => workspace.value !== undefined);
 }
 
 function npmManifestPath(pathEntry, platform) {
@@ -117,6 +143,7 @@ export function runtimeInput(root) {
     runtimeNodeVersion: process.versions.node,
     runtimeNpmVersion: readNpmVersionFromPath(process.env.PATH ?? ""),
     workspaceNodeEngines: readWorkspaceNodeEngines(root),
+    workspaceNpmEngines: readWorkspaceNpmEngines(root),
   };
 }
 

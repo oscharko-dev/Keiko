@@ -2,9 +2,17 @@
 
 Status: implemented and locally verified on 2026-07-11, then refreshed during the post-#2665 audit
 on 2026-07-22. This matrix records the live npm registry refresh performed for issue #2293 on top
-of the TypeScript compiler/API split from #2267 and #2268. It is a dated record of what was decided
-then, not a statement of the current tree: the ESLint rows below were superseded on 2026-08-28 and
-are kept as history rather than rewritten.
+of the TypeScript compiler/API split from #2267 and #2268.
+
+> **Superseded for version claims.** The tables below are the decision history of the #2293 wave —
+> why each version was chosen at the time — and are kept as history rather than rewritten. They are
+> not a statement of the current tree: the ESLint rows were superseded on 2026-08-28 by #2777, and
+> several others drifted after the wave merged (Monaco moved to the 0.56 line and the pinned Action
+> versions advanced). For the versions this repository actually resolves today, and for the gate
+> that keeps that record from drifting again, see
+> [`2296-dependency-security-closeout.md`](2296-dependency-security-closeout.md). Do not cite this
+> file as evidence of the current baseline.
+
 It is dependency evidence, not a second dependency-policy subsystem; the enforceable sources remain
 the workspace manifests, root lockfile, supply-chain gates, and package-surface checks.
 

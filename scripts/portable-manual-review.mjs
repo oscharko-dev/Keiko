@@ -20,6 +20,7 @@ import { basename, dirname, join, resolve } from "node:path";
 import { URL, fileURLToPath, pathToFileURL } from "node:url";
 
 import { PORTABLE_TARGETS, findPortableMetadataRedactionFailures } from "./portable-runtime.mjs";
+import { loadPortableRuntimeApprovals } from "./portable-runtime-approvals.mjs";
 import { writeZipArchiveEntries, writeZipArchiveFromDirectory } from "./lib/zip-archive.mjs";
 import { resolveHostExecutable } from "./lib/host-executable.mjs";
 import {
@@ -31,9 +32,11 @@ import { sha256, sha256File } from "./lib/digest.mjs";
 
 const repoRoot = dirname(dirname(fileURLToPath(import.meta.url)));
 const rootPackage = JSON.parse(readFileSync(join(repoRoot, "package.json"), "utf8"));
-const portableApprovals = JSON.parse(
-  readFileSync(join(repoRoot, "portable-runtime-approvals.json"), "utf8"),
-);
+// The approvals document is the governed release-approval act for both the OpenCode sidecar pin and
+// the Node runtime this harness reviews against. Reading it through the shared validated loader
+// instead of a private JSON.parse keeps this script from becoming a second, laxer reader of the same
+// file, and makes a missing or malformed document fail at load rather than mid-review.
+const portableApprovals = loadPortableRuntimeApprovals(repoRoot);
 const OPEN_CODE_APPROVAL = portableApprovals.sidecarRuntimes.find(
   (runtime) => runtime.name === "opencode-compatible",
 );
@@ -42,7 +45,10 @@ const CURRENT_VERSION = rootPackage.version;
 const TARGET_VERSION = nextPatchVersion(CURRENT_VERSION);
 const RELEASE_TAG = `v${TARGET_VERSION}`;
 const RELEASE_ID = 9_940_204_100;
-const REVIEWED_NODE_VERSION = "24.18.0";
+// Derived, never restated. A literal copy of this version here would keep the manual review binding
+// its manifests to a stale Node patch after the approvals document is updated, with nothing to
+// report the divergence — the exact two-sources-of-truth defect this derivation removes.
+const REVIEWED_NODE_VERSION = approvedNodeVersion(portableApprovals);
 const FIXED_NOW = "2026-07-08T00:00:00.000Z";
 const PACKAGE_NAME = "@oscharko-dev/keiko";
 const HOST = "127.0.0.1";
@@ -100,6 +106,17 @@ SOFTWARE.
 
 function fail(message) {
   throw new Error(`portable manual review failed: ${message}`);
+}
+
+export function approvedNodeVersion(approvals) {
+  const version = approvals?.node?.version;
+  // Fail closed at the consumer boundary too: an absent, empty, or non-string approval must stop the
+  // review outright. Reviewing against a default or an empty runtime identity would publish a
+  // manifest that claims an approval nobody granted.
+  if (typeof version !== "string" || version.length === 0) {
+    fail("approved node version is missing from portable-runtime-approvals.json");
+  }
+  return version;
 }
 
 function nextPatchVersion(version) {

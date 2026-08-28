@@ -4,7 +4,7 @@
 
 Accepted
 
-Superseded by ADR-0019 (single package to modular monorepo package architecture), detailed further by ADR-0020 (workspace tooling) and ADR-0021 (bundled publish strategy). The surviving toolchain content (npm, ESM/NodeNext, strict TypeScript, Vitest, ESLint, Apache-2.0, Node >=22 floor) remains accurate; the single-package topology and "zero runtime dependencies" claims do not.
+Superseded by ADR-0019 (single package to modular monorepo package architecture), detailed further by ADR-0020 (workspace tooling) and ADR-0021 (bundled publish strategy). The surviving toolchain content (npm, ESM/NodeNext, strict TypeScript, Vitest, ESLint, Apache-2.0) remains accurate, except the runtime floor: the Node >=22 floor recorded below was superseded by the Node 24 LTS migration (#2294) and the governed line is now `>=24.18.0 <25` with npm 11.16.0; the single-package topology and "zero runtime dependencies" claims do not.
 
 ## Context
 
@@ -133,6 +133,8 @@ implement it. No speculative abstractions are introduced.
   Acceptable for a developer tool; revisit if cold-start > 200ms becomes a complaint.
 - Node 22 floor (engines: >=22) means customers on Node 20 cannot install the package. Node 20 reached EOL
   on 2026-04-30; this is a deliberate choice, not an oversight.
+  (Superseded by #2294: the floor is now `>=24.18.0 <25`. The reasoning above still describes why a
+  floor is set at an EOL boundary at all; only the version moved.)
 
 ### Neutral
 

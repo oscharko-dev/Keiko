@@ -3269,9 +3269,13 @@ function ComposerCoreImpl({
   );
 
   const composerBoxClassName = composerBoxClassNameFor(compact, voiceDialogActive);
-  // React 18 treats `inert` as an unknown non-boolean attribute. Toggle the native attribute in
-  // the commit ref so each fading layer becomes non-interactive synchronously, without rendering
-  // duplicate accessibility targets or emitting a runtime warning.
+  // Both composer layers stay mounted so the mode change can cross-fade, and each renders its own
+  // copy of the controls. Toggle the native attribute in the commit ref so `inert` follows
+  // `voiceDialogActive` rather than the transition: the outgoing layer leaves the focus order,
+  // hit-testing, and the accessibility tree the instant the mode flips, leaving exactly one
+  // reachable copy. Focus handoff reads the attribute itself (`closest("[inert]")` in
+  // useModalInteractionLock), so exact presence on one layer and absence on the other is the
+  // contract.
   const normalLayerRef = useCallback(
     (node: HTMLDivElement | null): void => {
       node?.toggleAttribute("inert", voiceDialogActive);
