@@ -401,6 +401,39 @@ describe("parseGatewayConfig", () => {
     expect(config.providers[0]?.egress).toEqual(config.egress);
   });
 
+  it("parses proxied-hostname policy acknowledgement from config only", () => {
+    const config = parseGatewayConfig(
+      {
+        ...(validRaw() as Record<string, unknown>),
+        egress: {
+          httpProxy: "http://proxy.config.local:8080",
+          acknowledgeProxiedHostnamePolicy: true,
+        },
+      },
+      { KEIKO_ACKNOWLEDGE_PROXIED_HOSTNAME_POLICY: "false" },
+    );
+
+    expect(config.egress).toMatchObject({ acknowledgeProxiedHostnamePolicy: true });
+  });
+
+  it("preserves an explicit false proxied-hostname policy acknowledgement", () => {
+    const config = parseGatewayConfig({
+      ...(validRaw() as Record<string, unknown>),
+      egress: { acknowledgeProxiedHostnamePolicy: false },
+    });
+
+    expect(config.egress?.acknowledgeProxiedHostnamePolicy).toBe(false);
+  });
+
+  it("rejects malformed proxied-hostname policy acknowledgement", () => {
+    expect(() =>
+      parseGatewayConfig({
+        ...(validRaw() as Record<string, unknown>),
+        egress: { acknowledgeProxiedHostnamePolicy: "not-a-boolean" },
+      }),
+    ).toThrow(/egress\.acknowledgeProxiedHostnamePolicy/u);
+  });
+
   it("lets env vars override explicit enterprise egress settings per field", () => {
     const raw = {
       ...(validRaw() as Record<string, unknown>),

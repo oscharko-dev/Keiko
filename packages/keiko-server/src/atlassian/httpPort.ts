@@ -116,14 +116,31 @@ function boundedTimeoutMs(requested: number): number {
 // authority when there is no proxy configured (`pinProxiedConnectTarget` requires a proxy to have
 // any effect; the direct path already pins via AUDIT-SEC-001), so this is a strict tightening with
 // no effect on unproxied deployments.
+function forwardedConnectorEgressConfig(
+  base: OutboundHttpEgressConfig | undefined,
+): OutboundHttpEgressConfig {
+  if (base === undefined) {
+    return {};
+  }
+
+  const { httpProxy, httpsProxy, noProxy, caBundlePath, acknowledgeProxiedHostnamePolicy } = base;
+
+  return {
+    ...(httpProxy !== undefined ? { httpProxy } : {}),
+    ...(httpsProxy !== undefined ? { httpsProxy } : {}),
+    ...(noProxy !== undefined ? { noProxy } : {}),
+    ...(caBundlePath !== undefined ? { caBundlePath } : {}),
+    ...(acknowledgeProxiedHostnamePolicy === true
+      ? { acknowledgeProxiedHostnamePolicy: true }
+      : {}),
+  };
+}
+
 function connectorEgressConfig(
   base: OutboundHttpEgressConfig | undefined,
 ): OutboundHttpEgressConfig {
   return {
-    ...(base?.httpProxy !== undefined ? { httpProxy: base.httpProxy } : {}),
-    ...(base?.httpsProxy !== undefined ? { httpsProxy: base.httpsProxy } : {}),
-    ...(base?.noProxy !== undefined ? { noProxy: base.noProxy } : {}),
-    ...(base?.caBundlePath !== undefined ? { caBundlePath: base.caBundlePath } : {}),
+    ...forwardedConnectorEgressConfig(base),
     denyLoopback: true,
     pinProxiedConnectTarget: true,
   };

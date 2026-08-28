@@ -46,22 +46,23 @@ single-credential posture: the proxy layer may not introduce additional secrets.
    (`FIGMA_NETWORK_UNREACHABLE`, `FIGMA_EGRESS_TIMEOUT`, `FIGMA_EGRESS_FAILED`). This fixes the
    #884 misattribution where a no-proxy runtime reported "the forward proxy rejected the
    request".
-6. **Proxied DNS pinning is opt-in (`egress.pinProxiedConnectTarget`), because the default posture
-   cannot honestly claim it for every deployment.** `gatewayFetch` already resolves and vets a
-   target's DNS itself and pins the actual connect to the validated address set on the direct
-   (unproxied) path (AUDIT-SEC-001) — so a hostname that only looks safe as a literal string but
-   *resolves* to a blocked address (a private/loopback/metadata range) is still refused, not just
-   one that is blocked by its literal shape. Through a proxy, `gatewayFetch` cannot make that same
-   guarantee by default: the proxy resolves the target hostname independently at its own CONNECT
-   (or forwarded-request) time, so a lookup Keiko performs beforehand validates an address set that
-   is never bound to use — a hostile or hijacked name can resolve to a public address for Keiko's
-   own check and rebind to a blocked one for the proxy's connect a moment later. Pre-resolving DNS
-   and trusting that lookup as protection would be a guarantee the code cannot keep, so by default
-   the DNS-level check is skipped entirely when a proxy is configured (the literal-shape check in
-   `outboundTargetBlockedReason` still always runs). Two fixes that look obvious were rejected: a
-   plain pre-proxy lookup is the exact TOCTOU gap just described, not a fix for it; and refusing
-   every proxied request outright breaks first-class, common proxied deployments (Atlassian per
-   ADR-0128 D3, and the model gateway itself) that have nothing to do with the gap. Instead,
+6. **Ordinary proxied hostname egress is fail-closed unless the deployment explicitly delegates
+   the address policy; proxied DNS pinning remains an optional strengthening.** `gatewayFetch`
+   already resolves and vets a target's DNS itself and pins the actual connect to the validated
+   address set on the direct (unproxied) path (AUDIT-SEC-001). A proxy independently resolves a
+   hostname at CONNECT or forwarded-request time, so Keiko cannot make that same guarantee without
+   pinning: a pre-proxy lookup validates an address set that is never bound to use and is not a
+   rebinding defence. Therefore an ordinary hostname selected for a proxy is refused before
+   transmission unless the config-file-only `egress.acknowledgeProxiedHostnamePolicy` is exactly
+   `true`. That setting is an explicit delegation acknowledgement that the configured proxy
+   enforces Keiko's blocked-address policy; it is not a validation or an attestation, is never
+   environment-mapped, and is logged only as the content-free policy reason
+   `undelegated-proxied-hostname` when absent. It applies in the shared gateway layer to provider,
+   connector, and Manual Knowledge Pod traffic; it does not apply when `NO_PROXY` selects the
+   direct path. Literal-IP, loopback, private/metadata, and redirect-hop checks remain local and
+   fail closed. Research egress never inherits this acknowledgement, so acknowledgement alone
+   cannot relax its stricter proxied posture.
+
    `egress.pinProxiedConnectTarget` (off by default, never config-file/env-mapped — a caller must
    construct it explicitly, exactly like `denyLoopback`) makes `gatewayFetch` resolve and vet the
    target itself, the same way it already does for the direct path, and then hand the *vetted
@@ -190,15 +191,15 @@ single-credential posture: the proxy layer may not introduce additional secrets.
   response bodies are size-capped on the streamed paths and at the connector ports.
 - Residual scope: streaming SSE through the CONNECT tunnel inherits the same byte cap as the
   buffered path; proxy authentication remains intentionally unsupported until a concrete
-  customer requirement defines its secret-handling story. Without a caller explicitly setting
-  D6's opt-in `pinProxiedConnectTarget` (paired with `denyLoopback`), a proxied request's
-  DNS-resolved address is still not vetted by Keiko — this is the accepted default posture for a
-  generic `gatewayFetch` caller, not an oversight, because a corporate proxy that filters
-  CONNECT/forwarded requests by hostname (a legitimate, common pattern) would see an IP-literal
-  target instead of a hostname and could reject it; an operator must confirm their proxy
-  tolerates that before opting in.
-  **Correction (#3156, 2026-08-15).** The Atlassian connector lane (ADR-0128 D3) now sets both
-  flags by default: a DNS name that only resolves into loopback/private/link-local/metadata space
+  customer requirement defines its secret-handling story. An acknowledged ordinary proxied
+  hostname request still delegates address-class enforcement to the proxy unless its caller also
+  uses D6's `pinProxiedConnectTarget`; acknowledgement is an explicit deployment risk decision,
+  not Keiko evidence that the proxy enforces it. Research does not inherit that acknowledgement
+  and remains fail-closed through an unpinned proxy.
+  **Correction (#3156, 2026-08-15; #2944, 2026-08-28).** The Atlassian connector lane (ADR-0128
+  D3) sets the two enforcement flags by default. A proxied hostname additionally requires the
+  deployment's explicit configuration acknowledgement; those enforcement flags are not a proxy
+  delegation acknowledgement. A DNS name that only resolves into loopback/private/link-local/metadata space
   after an operator has already configured it is a confirmed, silent SSRF and
   internal-reconnaissance path, and that risk outweighs the hostname-filtering-proxy compatibility
   concern for a lane whose target is a single, operator-configured host to begin with. No other v1
