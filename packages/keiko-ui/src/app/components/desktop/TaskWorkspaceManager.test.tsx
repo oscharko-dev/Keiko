@@ -86,12 +86,11 @@ describe("TaskWorkspaceManager", () => {
     fireEvent.click(within(activeItem).getByRole("button", { name: "Pause" }));
     fireEvent.click(within(pausedItem).getByRole("button", { name: "Resume" }));
     fireEvent.click(within(activeItem).getByRole("button", { name: "Prepare handoff" }));
-    fireEvent.click(within(pausedItem).getByRole("button", { name: "Switch" }));
 
     expect(value.pause).toHaveBeenCalledWith("ws-alpha");
     expect(value.resume).toHaveBeenCalledWith("ws-beta");
     expect(value.prepareHandoff).toHaveBeenCalledWith("ws-alpha");
-    expect(value.switchTo).toHaveBeenCalledWith("ws-beta");
+    expect(value.switchTo).not.toHaveBeenCalled();
   });
 
   it("keeps unsupported and dirty transitions focusable with their actionable reason", () => {
@@ -131,6 +130,21 @@ describe("TaskWorkspaceManager", () => {
     });
     fireEvent.click(trigger);
     fireEvent.keyDown(document, { key: "Escape" });
+    expect(
+      screen.queryByRole("dialog", { name: "Task workspace context" }),
+    ).not.toBeInTheDocument();
+    expect(trigger).toHaveFocus();
+  });
+
+  it("moves focus into the panel and restores it after an outside dismissal", () => {
+    renderManager(api());
+    const trigger = screen.getByRole("button", {
+      name: "Task workspaces: no active workspace",
+    });
+    const panel = openManager();
+
+    expect(within(panel).getByRole("heading", { name: "Task workspace" })).toHaveFocus();
+    fireEvent.pointerDown(document.body);
     expect(
       screen.queryByRole("dialog", { name: "Task workspace context" }),
     ).not.toBeInTheDocument();

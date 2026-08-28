@@ -407,6 +407,22 @@ describe("CodingRuntimeAuthorityService", () => {
     });
   });
 
+  it("projects the narrowed resume mode to Git-delivery authority", () => {
+    const authority = service();
+    const minted = mint(authority);
+    if (!minted.ok) throw new Error("expected mint");
+
+    expect(authority.pause("run-1", NOW)).toMatchObject({ ok: true });
+    expect(authority.resume("run-1", "governed-assist", NOW)).toEqual({
+      ok: true,
+      effectiveMode: "governed-assist",
+    });
+
+    expect(authority.gitDeliveryAuthorityPort().current(NOW)?.authority.effectiveMode).toBe(
+      "governed-assist",
+    );
+  });
+
   it("fails pause closed when retained authority is expired or revoked", () => {
     const expired = service();
     expect(mint(expired)).toMatchObject({ ok: true });

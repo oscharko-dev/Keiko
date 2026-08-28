@@ -457,9 +457,22 @@ describe("numeric citation entailment", () => {
     expect(calls).toBe(1);
   });
 
+  it("keeps a numeric citation with mixed path citations in one judgeable claim", () => {
+    expect(
+      segmentNumericCitedClaims(
+        "Retention is 30 days [docs/policy.md:12] and audits are quarterly [1].",
+      ),
+    ).toEqual([
+      {
+        claimText: "Retention is 30 days and audits are quarterly .",
+        markers: [1],
+      },
+    ]);
+  });
+
   it("keeps missing and malformed markers out of semantic evidence", async () => {
     const claims = segmentNumericCitedClaims("Missing [9], malformed [x], and zero [0].");
-    expect(claims).toEqual([{ claimText: "Missing , malformed , and zero", markers: [9] }]);
+    expect(claims).toEqual([{ claimText: "Missing , malformed , and zero .", markers: [9] }]);
     const result = await reconcileNumericClaimEntailment(
       "Missing [9], malformed [x], and zero [0].",
       [{ marker: 1, excerptText: "unused" }],

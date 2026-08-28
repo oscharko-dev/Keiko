@@ -198,14 +198,13 @@ export interface NumericCitationReconciliation {
 
 interface ParsedNumericCitation {
   readonly marker: number;
-  readonly offset: number;
 }
 
 function parseNumericCitations(answerText: string): readonly ParsedNumericCitation[] {
   const citations: ParsedNumericCitation[] = [];
   for (const match of answerText.matchAll(NUMERIC_CITATION_RE)) {
     const marker = Number.parseInt(match[1] ?? "", 10);
-    if (Number.isSafeInteger(marker) && marker > 0) citations.push({ marker, offset: match.index });
+    if (Number.isSafeInteger(marker) && marker > 0) citations.push({ marker });
   }
   return citations;
 }
@@ -514,8 +513,12 @@ export const DEFAULT_ENTAILMENT_OPTIONS: EntailmentOptions = {
   maxTotalMs: 20_000,
 };
 
-function isSentenceBoundary(ch: string): boolean {
-  return ch === "." || ch === "!" || ch === "?" || ch === "\n";
+function isSentenceBoundary(text: string, offset: number): boolean {
+  const ch = text.charAt(offset);
+  if (ch === "!" || ch === "?" || ch === "\n") return true;
+  if (ch !== ".") return false;
+  const next = text.charAt(offset + 1);
+  return next.length === 0 || /\s/u.test(next);
 }
 
 /**
@@ -532,7 +535,7 @@ export function splitClaimSpans(text: string): readonly string[] {
       depth += 1;
     } else if ((ch === "]" || ch === "］" || ch === "】") && depth > 0) {
       depth -= 1;
-    } else if (depth === 0 && isSentenceBoundary(ch)) {
+    } else if (depth === 0 && isSentenceBoundary(text, i)) {
       if (text.slice(start, i + 1).trim().length > 0) {
         spans.push(text.slice(start, i + 1));
       }
@@ -570,61 +573,17 @@ export interface NumericCitedClaim {
   readonly markers: readonly number[];
 }
 
-function isNumericClaimBoundary(text: string, offset: number): boolean {
-  const character = text.charAt(offset);
-  if (character === "!" || character === "?" || character === "\n") return true;
-  if (character !== ".") return false;
-  const next = text.charAt(offset + 1);
-  return next.length === 0 || /\s/u.test(next);
-}
-
-function numericSentenceBounds(
-  text: string,
-  offset: number,
-): { readonly start: number; readonly end: number } {
-  let start = offset;
-  while (start > 0 && !isNumericClaimBoundary(text, start - 1)) start -= 1;
-  let end = offset;
-  while (end < text.length && !isNumericClaimBoundary(text, end)) end += 1;
-  return { start, end };
-}
-
-function precedingNumericSentenceBounds(
-  text: string,
-  start: number,
-  fallbackEnd: number,
-): { readonly start: number; readonly end: number } {
-  let previousEnd = start;
-  while (previousEnd > 0 && isNumericClaimBoundary(text, previousEnd - 1)) previousEnd -= 1;
-  if (previousEnd === 0) return { start, end: fallbackEnd };
-  let previousStart = previousEnd - 1;
-  while (previousStart > 0 && !isNumericClaimBoundary(text, previousStart - 1)) previousStart -= 1;
-  return { start: previousStart, end: previousEnd };
-}
-
-function numericCitationClaimBounds(
-  text: string,
-  offset: number,
-): { readonly start: number; readonly end: number } {
-  const own = numericSentenceBounds(text, offset);
-  return stripInlineCitations(text.slice(own.start, own.end)).length > 0
-    ? own
-    : precedingNumericSentenceBounds(text, own.start, own.end);
-}
-
 /** Segment user-visible `[n]` citations against the sentence each marker actually supports. */
 export function segmentNumericCitedClaims(answerText: string): readonly NumericCitedClaim[] {
-  const claims = new Map<string, { claimText: string; markers: number[] }>();
-  for (const citation of parseNumericCitations(answerText)) {
-    const bounds = numericCitationClaimBounds(answerText, citation.offset);
-    const claimText = stripInlineCitations(answerText.slice(bounds.start, bounds.end));
+  const claims: NumericCitedClaim[] = [];
+  for (const span of splitClaimSpans(answerText)) {
+    const markers = [...new Set(parseNumericCitations(span).map((citation) => citation.marker))];
+    if (markers.length === 0) continue;
+    const claimText = stripInlineCitations(span);
     if (claimText.length === 0) continue;
-    const key = `${String(bounds.start)}:${String(bounds.end)}`;
-    const claim = claims.get(key) ?? { claimText, markers: [] };
-    if (!claim.markers.includes(citation.marker)) claim.markers.push(citation.marker);
-    claims.set(key, claim);
+    claims.push({ claimText, markers });
   }
-  return [...claims.values()];
+  return claims;
 }
 
 /** A claim whose cited excerpt(s) did NOT support it (verdict `unsupported`). */

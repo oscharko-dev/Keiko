@@ -90,7 +90,7 @@ function workspaceActions(
   active: boolean,
 ): readonly LifecycleAction[] {
   if (active) return ["pause", "handoff"];
-  if (instance.lifecycleState === "paused") return ["resume", "handoff", "switch"];
+  if (instance.lifecycleState === "paused") return ["resume", "handoff"];
   return ["switch"];
 }
 
@@ -241,6 +241,7 @@ function WorkspacePanel(props: {
     headingRef.current?.focus();
   }, []);
   const refresh = (): void => {
+    if (props.api.loading || props.api.switching) return;
     void props.api.refresh().then(() => {
       if (props.api.error === null) announcer.announce(props.t("taskWorkspace.status.reconciled"));
     });
@@ -260,7 +261,7 @@ function WorkspacePanel(props: {
         <button
           type="button"
           className={styles["cmp-rf"]}
-          disabled={props.api.loading || props.api.switching}
+          aria-disabled={props.api.loading || props.api.switching}
           onClick={refresh}
         >
           {props.t("taskWorkspace.action.refresh")}
@@ -275,8 +276,12 @@ function WorkspacePanel(props: {
       <button
         type="button"
         className={styles["cmp-clear"]}
-        disabled={props.api.activeInstance === null || props.api.switching}
-        onClick={() => void props.api.clearActive()}
+        aria-disabled={props.api.activeInstance === null || props.api.switching}
+        onClick={() => {
+          if (props.api.activeInstance !== null && !props.api.switching) {
+            void props.api.clearActive();
+          }
+        }}
       >
         {props.t("taskWorkspace.action.clearActive")}
       </button>

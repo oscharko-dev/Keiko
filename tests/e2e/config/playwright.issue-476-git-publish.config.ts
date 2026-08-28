@@ -4,7 +4,7 @@ import { join } from "node:path";
 
 // Issue #476 (Epic #470) — browser evidence that governed remote publish cannot bypass policy. Mirrors
 // tests/e2e/config/playwright.issue-475-git-delivery.config.ts: build the packaged CLI, boot the real UI server, run a
-// single deterministic chromium worker. The webServer env flag KEIKO_GIT_DELIVERY_ENABLED=true makes the
+// single deterministic chromium worker. The governed Git-delivery routes are available in the
 // governed /api/git-delivery/push/* routes live in the running app (the spec intercepts the push routes
 // for determinism, but the gate proves the surface reaches the governed BFF publish path rather than a
 // no-op stub).
@@ -61,7 +61,6 @@ export default defineConfig({
       KEIKO_UI_DATA_DIR: join(stateDir, "ui"),
       KEIKO_MEMORY_DIR: join(stateDir, "memory"),
       KEIKO_CONFIG_FILE: runtimeConfigPath,
-      KEIKO_GIT_DELIVERY_ENABLED: "true",
     },
   },
 });
