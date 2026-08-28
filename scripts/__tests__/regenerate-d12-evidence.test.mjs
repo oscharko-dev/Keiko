@@ -1,3 +1,6 @@
+import { readFileSync } from "node:fs";
+import { dirname, join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import { describe, expect, it, vi } from "vitest";
 
 import {
@@ -245,6 +248,24 @@ describe("dispatch collaborators", () => {
     expect(typeof deps.setExitCode).toBe("function");
   });
 
+  it("refuses both regeneration modes at once instead of silently picking one", () => {
+    // Preferring one would let a caller ask for the editor document and receive the workspace one:
+    // thirty-five minutes measuring the wrong subject, with a plausible document to show for it.
+    const calls = [];
+    const messages = [];
+    let exitCode;
+    const result = executeRegenerationCli(["node", "regen", "--workspace", "--container"], {
+      workspaceContainer: () => calls.push("workspace"),
+      container: () => calls.push("editor"),
+      error: (message) => messages.push(message),
+      setExitCode: (value) => (exitCode = value),
+    });
+    expect(calls).toEqual([]);
+    expect(result.ok).toBe(false);
+    expect(exitCode).toBe(1);
+    expect(messages).toEqual(["Pass either --workspace or --container, not both."]);
+  });
+
   it("routes --workspace to the workspace producer, not the editor one", () => {
     // The two documents have different toolchain digests and different producers; sending the
     // workspace flag to the editor lane would measure the wrong thing for 35 minutes and copy back
@@ -306,5 +327,17 @@ describe("dirty-tree warning", () => {
 
     // Across every message, not only the first: a warning emitted later must also fail this.
     expect(log.mock.calls.map(([message]) => message).join("\n")).not.toContain("uncommitted");
+  });
+});
+
+describe("Playwright installer pin", () => {
+  it("installs exactly the version the lockfile resolves", () => {
+    // The container installs browser binaries with this pin and then drives them with the locked
+    // test runner. A drift pairs one version's browsers with another version's driver, which is the
+    // kind of mismatch that shows up as a flaky measurement rather than an error.
+    const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
+    const lock = JSON.parse(readFileSync(join(repoRoot, "package-lock.json"), "utf8"));
+    const locked = lock.packages["node_modules/@playwright/test"].version;
+    expect(PLAYWRIGHT_PIN).toBe(`playwright@${locked}`);
   });
 });

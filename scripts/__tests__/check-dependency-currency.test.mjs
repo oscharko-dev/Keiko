@@ -4,6 +4,7 @@ import {
   actionFailures,
   defaultSeams,
   malformedActionRows,
+  malformedDependencyRows,
   collectWorkflowPins,
   dependencyFailures,
   evaluate,
@@ -22,7 +23,10 @@ const DOCUMENT = `# closeout
 | ------- | ----- | ------- | ----------- | --------- |
 | \`typescript\` | root | 6.0.3 | major-deferred | API lane |
 | \`vitest\` | keiko-ui | 4.1.11 | current | ahead of root |
-| \`prose\` | not | a | table-row | ignored |
+
+| Note | Owner | Detail | Status |
+| ---- | ----- | ------ | ------ |
+| \`prose\` | not | a | table-row |
 
 | Action | Version | Commit | Disposition |
 | ------ | ------- | ------ | ----------- |
@@ -93,6 +97,29 @@ describe("check-dependency-currency parsing", () => {
     expect(parseActionRows(DOCUMENT)).toEqual([
       { action: "actions/checkout", version: "v7.0.0", sha: SHA_A, disposition: "current" },
     ]);
+  });
+
+  it("rejects a dependency row whose disposition was deleted or mistyped", () => {
+    // Silently skipping it left the package ungoverned while the gate reported success over the
+    // rows that happened to survive.
+    const typo = DOCUMENT.replace("| major-deferred |", "| major-deferrred |");
+    expect(malformedDependencyRows(typo)).toEqual(["typescript (root)"]);
+    expect(malformedDependencyRows(DOCUMENT)).toEqual([]);
+  });
+
+  it("does not mistake an alert table's rows for broken dependency rows", () => {
+    // The document's alert tables share the four-cell, no-SHA shape. A shape test flagged
+    // `#20 | provider API key | ...` as a broken dependency row; the header answers what a shape
+    // test can only guess.
+    const withAlerts = `${DOCUMENT}
+
+### Dispositions
+
+| Alert | Type | Location | Disposition |
+| ----- | ---- | -------- | ----------- |
+| #20 | provider API key | \`a.ts\` | used_in_tests |
+`;
+    expect(malformedDependencyRows(withAlerts)).toEqual([]);
   });
 
   it("rejects an action row whose reviewed disposition was deleted or mistyped", () => {

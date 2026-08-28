@@ -102,6 +102,33 @@ export function parseActionRows(markdown) {
   return rows;
 }
 
+// A dependency row whose disposition is missing or invalid is the same corrupted decision record as
+// a malformed action row, and was the same silent hole: `parseDependencyRows` skipped it, `evaluate`
+// checked only what remained, and the gate passed over a package it had stopped governing.
+//
+// Bound to the governed-baseline table rather than guessing by shape. The document's alert tables
+// have the same four-plus-cell, no-SHA shape, so a shape test flags `#20 | provider API key | …` as
+// a broken dependency row — which is how the first cut of this check failed. A parser that has to
+// guess which table it is reading will eventually guess wrong; the header answers it.
+export function malformedDependencyRows(markdown) {
+  const malformed = [];
+  let inTable = false;
+  for (const { line, cells } of documentLines(markdown)) {
+    if (cells === null) {
+      inTable = false;
+      continue;
+    }
+    if (isSeparatorRow(line)) continue;
+    if (cells[0] === "Package" && cells.length >= 4) {
+      inTable = true;
+      continue;
+    }
+    if (!inTable || cells.length < 4) continue;
+    if (!DISPOSITIONS.has(cells[3])) malformed.push(`${unquote(cells[0])} (${unquote(cells[1])})`);
+  }
+  return malformed;
+}
+
 // A SHA-shaped row whose disposition is missing or invalid is a corrupted decision record, not an
 // absent one, so it must fail loudly rather than silently drop out of enforcement.
 export function malformedActionRows(markdown) {
@@ -313,6 +340,9 @@ export function evaluate(seams) {
   }
   if (actionRows.length === 0) {
     failures.push("closeout document declares no GitHub Action rows");
+  }
+  for (const row of malformedDependencyRows(markdown)) {
+    failures.push(`${row}: dependency row has no valid disposition`);
   }
   for (const action of malformedActionRows(markdown)) {
     failures.push(`${action}: action row has no valid disposition`);

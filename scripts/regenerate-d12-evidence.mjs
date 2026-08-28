@@ -26,7 +26,11 @@ const EVIDENCE_FILES = [
 ];
 
 export const CONTAINER_IMAGE = "node:24.18.0-bookworm";
-export const PLAYWRIGHT_PIN = "playwright@1.62.0";
+// Must equal the version `package-lock.json` resolves for `@playwright/test`: the container
+// installs browser binaries with this pin and then drives them with the locked test runner, so a
+// drift here pairs one version's browsers with another's driver.
+// `scripts/__tests__/regenerate-d12-evidence.test.mjs` compares the two and fails on a mismatch.
+export const PLAYWRIGHT_PIN = "playwright@1.62.1";
 
 // The one command the container runs. `safe.directory` is not optional: the bind mount is owned by
 // the host user and git refuses a repository it does not own, which otherwise fails the clone step
@@ -318,8 +322,19 @@ export function resolveCliIo(io = {}) {
 // the half that decides which lane runs and what the exit code is.
 export function executeRegenerationCli(argv = process.argv, io = {}) {
   const deps = resolveCliIo(io);
-  if (argv.includes("--workspace")) return deps.workspaceContainer();
-  if (argv.includes("--container")) return deps.container();
+  const workspace = argv.includes("--workspace");
+  const container = argv.includes("--container");
+  // Silently preferring one mode would let a caller ask for the editor document and receive the
+  // workspace one — thirty-five minutes spent measuring the wrong subject, with a plausible-looking
+  // document to show for it.
+  if (workspace && container) {
+    const remediation = "Pass either --workspace or --container, not both.";
+    deps.error(remediation);
+    deps.setExitCode(1);
+    return { ok: false, remediation };
+  }
+  if (workspace) return deps.workspaceContainer();
+  if (container) return deps.container();
   const result = deps.regenerate();
   if (!result.ok) {
     deps.error(result.remediation);

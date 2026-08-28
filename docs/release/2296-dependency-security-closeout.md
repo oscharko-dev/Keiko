@@ -220,7 +220,7 @@ these values; this document does not restate them as a second source.
 in the repository ever asked: `npm ls` at default depth exits 0, which is why this stayed invisible.
 At full depth the pre-existing tree reported two invalid packages:
 
-```
+```text
 npm error code ELSPROBLEMS
 npm error invalid: @vitest/coverage-v8@4.1.10 …/node_modules/@vitest/coverage-v8
 npm error invalid: eslint@10.9.1 …/node_modules/eslint

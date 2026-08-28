@@ -57,6 +57,20 @@ function stepGroups(document, label) {
 
 // Every occurrence is kept, not just the first. Collapsing to one index per kind is what let a
 // second `setup-node` added AFTER the gate satisfy an assertion about "every" setup.
+// A mention is not an execution. `# node scripts/check-runtime-toolchain.mjs --exact` in a comment,
+// or an `echo` that names it, satisfied the old substring test and made a job look gated while the
+// runtime it selected was never verified — the same defect as counting a `uses:` pin that appears
+// only in a YAML comment. Only a non-comment line that actually invokes the script counts.
+function runsGate(script) {
+  return script
+    .split("\n")
+    .map((line) => line.trim())
+    .filter((line) => !line.startsWith("#"))
+    .flatMap((line) => line.split(/&&|\|\||[;|]/u))
+    .map((segment) => segment.trim())
+    .some((segment) => /^(?:node|npx)\s+\S*check-runtime-toolchain\.mjs\b/u.test(segment));
+}
+
 function classify(steps) {
   const setupNode = [];
   const gates = [];
@@ -64,7 +78,7 @@ function classify(steps) {
   steps.forEach((step, index) => {
     if (typeof step?.uses === "string" && step.uses.includes(SETUP_NODE)) setupNode.push(index);
     if (typeof step?.run !== "string") return;
-    if (step.run.includes(GATE_SCRIPT)) gates.push(index);
+    if (runsGate(step.run)) gates.push(index);
     // `npm\s+ci`, not `npm ci`: a step written with two spaces would not be recognised as an
     // install, and the ordering assertion below would be skipped rather than fail.
     if (/\bnpm\s+ci\b/u.test(step.run)) installs.push(index);
@@ -136,6 +150,30 @@ describe("workflow Node toolchain parity rejects", () => {
     const withSetup = groups.filter((group) => classify(group.steps).setupNode.length > 0);
     expect(withSetup).toHaveLength(1);
     expect(classify(withSetup[0].steps).gates).toEqual([]);
+  });
+
+  it("a gate that is only mentioned in a comment, which executes nothing", () => {
+    const [group] = fixture(
+      "jobs:",
+      "  a:",
+      "    steps:",
+      `      ${setup}`,
+      "      - run: |",
+      "          # node scripts/check-runtime-toolchain.mjs --exact",
+      "          npm ci",
+    );
+    expect(classify(group.steps).gates).toEqual([]);
+  });
+
+  it("a gate that is only echoed, which also executes nothing", () => {
+    const [group] = fixture(
+      "jobs:",
+      "  a:",
+      "    steps:",
+      `      ${setup}`,
+      '      - run: echo "run node scripts/check-runtime-toolchain.mjs --exact first"',
+    );
+    expect(classify(group.steps).gates).toEqual([]);
   });
 
   it("a document with no steps at all, which must contribute no group", () => {
