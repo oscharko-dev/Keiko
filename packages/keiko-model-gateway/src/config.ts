@@ -21,7 +21,6 @@ import {
   isToolCallingVerificationFresh,
   isVoiceCapability,
   modelSupportsSpeechOutput,
-  TOOL_CALLING_VERIFICATION_MAX_AGE_MS,
 } from "@oscharko-dev/keiko-contracts/runtime/gateway";
 import { outboundTargetBlockedReason } from "./egress-policy.js";
 import { projectSafeCapabilities, type SafeModelCapability } from "./model-selection.js";
@@ -79,7 +78,8 @@ export const DEFAULT_CIRCUIT_BREAKER_CONFIG = {
   halfOpenProbes: DEFAULT_HALF_OPEN_PROBES,
 } as const;
 export const DEFAULT_API_KEY_HEADER_NAME = "authorization";
-export { isToolCallingVerificationFresh, TOOL_CALLING_VERIFICATION_MAX_AGE_MS };
+export { TOOL_CALLING_VERIFICATION_MAX_AGE_MS } from "@oscharko-dev/keiko-contracts/runtime/gateway";
+export { isToolCallingVerificationFresh };
 const MAX_API_KEY_HEADER_NAME_LENGTH = 64;
 const API_KEY_HEADER_NAME_RE = /^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$/u;
 export const SUPPORTED_API_KEY_HEADER_NAMES = [
