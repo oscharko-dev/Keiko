@@ -283,7 +283,8 @@ Publish is intentionally off by default. To publish, a maintainer must:
   defaults to `portable-assets.json`.
 
 No `NPM_TOKEN` is required for a normal publish — see [npm authentication](#npm-authentication-trusted-publishing)
-below. The npm Trusted Publisher must already be configured for this package on npmjs.com.
+below. The npm Trusted Publisher is configured for this package on npmjs.com and was verified by the
+v0.3.8 dispatch publish on 2026-08-16.
 
 For the first stable handoff, the release owner records only the reviewed tag/SHA, portable-assets
 run id/attempt, canonical artifact name, three target statuses, and manifest/archive digests. Do not
@@ -347,12 +348,21 @@ The `publish` job authenticates to the npm registry with [npm Trusted Publishing
 - npm CLI `>= 11.5.1` is required. The workflow pins an exact npm version with
   `npm install --global npm@<pinned>` right after `actions/setup-node`, because Node 22.x does not
   bundle a new-enough npm.
-- **One-time setup on npmjs.com is required before the first trusted publish**, and is outside
-  this repository: on the package's Settings → Trusted Publishers page, add a GitHub Actions
-  publisher naming this exact repository, the exact workflow filename `release.yml`, and the
-  `npm-publish` environment (case-sensitive, basename only, extension included, no
-  `workflow_call` indirection). Nothing in CI can perform or verify this step; a maintainer with
-  npm publish rights on the package must do it by hand.
+- **The one-time npmjs.com setup is done (issue #3088).** The package's Settings → Trusted
+  Publishers page names this repository, the workflow filename `release.yml`, and the `npm-publish`
+  environment. It was verified by the v0.3.8 dispatch publish on 2026-08-16: the `Publish to npm`
+  job ran with no registry token and npm holds a Sigstore publish attestation for
+  `@oscharko-dev/keiko@0.3.8`. Before that, the 0.3.6 dispatch failed with `ENEEDAUTH` because no
+  publisher entry existed yet.
+- **The three identifiers are load-bearing and case-sensitive** (basename only, extension included,
+  no `workflow_call` indirection). npm never re-validates a saved entry, so renaming the workflow
+  file or the environment breaks authentication only at the next publish. The repository side of
+  that binding is pinned by `scripts/__tests__/release-trusted-publishing-binding.test.mjs`
+  (ADR-0130 D5), which also fails if the publish step regains a registry token env var or the job
+  loses `id-token: write`; the npmjs.com side still has to be edited by hand in the same change.
+- **No `NPM_TOKEN` Actions secret exists any more** (retired 2026-08-28, ADR-0130 D4): nothing in CI
+  can publish with a classic token. The governed local publish reads its token from the operator's
+  own environment or a local `.env`, and the dist-tag repair below exports one for that single run.
 - **Scope limitation**: trusted publishing authorizes `npm publish` only, not `npm dist-tag add`.
   A fresh publish is unaffected, because `npm publish --tag <tag>` sets the dist-tag atomically as
   part of that same authenticated call; `ensurePackageDistTag` in `scripts/release-publish.mjs`
@@ -367,6 +377,37 @@ The `publish` job authenticates to the npm registry with [npm Trusted Publishing
 The `prepack` and `prepublishOnly` gates also run `npm run check:workspace-supply-chain` and
 `npm run check:release-impact`, so a publish cannot bypass SBOM/license verification or missing,
 duplicated, contradictory, unreviewed, unbundled, or version-mismatched release-impact metadata.
+
+### Which publish path a release uses
+
+Both paths run the same `scripts/release-publish.mjs` and the same gates. They differ in who has to
+click, and in what the published version carries afterwards:
+
+| Path                                                                                                     | Registry authentication                                                           | Human step                                                                      | Provenance attestation | `npm-publish` deployment                                |
+| -------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------- | ------------------------------------------------------------------------------- | ---------------------- | ------------------------------------------------------- |
+| Actions dispatch — `gh workflow run release.yml --ref v<version> -f publish=true -f npm_dist_tag=latest` | OIDC trusted publishing; no stored secret                                         | the `npm-publish` environment's required reviewer approves before any step runs | yes                    | written by GitHub for the environment                   |
+| Governed local publish — `npm run release:publish -- --tag latest`                                       | `NODE_AUTH_TOKEN`/`NPM_TOKEN` from the operator's own environment or local `.env` | none beyond starting the run                                                    | no                     | written by the script itself since 0.3.17 (issue #3252) |
+
+Prefer the Actions dispatch whenever the release owner is available to approve: it publishes with no
+standing credential and leaves a registry-verifiable attestation. The governed local publish exists
+for releases that must complete without an approval click; run it in the pinned Linux gates
+container (`docker/gates/docker-compose.yml`), because the editor bundle evidence the publish gates
+re-check is Linux-anchored and fails on macOS for platform reasons alone. When a version ships that
+way, record that it carries no publish attestation — of the 0.3.x line only 0.3.8 does.
+
+The approval requirement on the `npm-publish` environment is a deliberate control (ADR-0170 D3):
+`actions: write` anywhere in this repository is otherwise enough to dispatch a production publish.
+Do not remove it to make the Actions path unattended.
+
+### Release-owner allowlist in an operator shell
+
+Both paths verify the publish-time release-impact approval against `KEIKO_RELEASE_OWNER_GITHUB_LOGINS`,
+and an unresolved allowlist refuses **every** approval — the shape of the 0.3.1 operator outage. In
+Actions the workflow injects it from the repository variable of the same name. Locally
+`scripts/lib/release-owner-allowlist.mjs` resolves the same repository variable through `gh`, so no
+export is normally needed; export it by hand only when `gh` cannot read repository variables in that
+shell. It holds GitHub logins, and the author of the `Approved-for-publish:` comment must be one of
+them — that is the release owner's own login, which need not equal the repository account name.
 
 ## GitHub Release and required checks
 
