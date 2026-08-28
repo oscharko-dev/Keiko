@@ -317,7 +317,7 @@ function replaceAllEmbeddingRowsAtomically(
   for (const pair of pairs) gateEmbeddingInput(pair.input);
   const stagedIds = new Set<MemoryId>(pairs.map((pair) => pair.memoryId));
   db.exec("BEGIN IMMEDIATE");
-  let existing: readonly EmbeddingRowSnapshot[] = [];
+  let existing: readonly EmbeddingRowSnapshot[];
   try {
     existing = db
       .prepare("SELECT memory_id, created_at FROM memory_embeddings")

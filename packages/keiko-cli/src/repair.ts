@@ -887,7 +887,7 @@ function readAtlassianMetadataReferences(path: string): readonly string[] {
 function orphanedAtlassianSecretRefs(configPath: string): number {
   const paths = atlassianCredentialPaths(configPath);
   const metadataRefs = new Set(readAtlassianMetadataReferences(paths.metadata));
-  let vaultReferences: readonly string[] = [];
+  let vaultReferences: readonly string[];
   try {
     vaultReferences = existsSync(paths.vault) ? readLocalVaultReferences(paths.vault) : [];
   } catch (error) {

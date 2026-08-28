@@ -2,8 +2,12 @@
 // Dependency-hygiene gate (GEN-SYNTH-COVERAGE-005 / GEN-PKG-DEPENDENCY-001/003/004/005).
 //
 // This deterministic, offline gate fails closed on dependency placement, missing workspace engine
-// floors, undeclared script imports, and tracked generated Next.js output. It reports metadata only:
-// package names, policy descriptions, counts, and control-character-safe paths — never file bodies.
+// floors, a workspace lint toolchain that has drifted off the root's single lane, undeclared script
+// imports, and tracked generated Next.js output. It reports metadata only: package names, policy
+// descriptions, counts, and control-character-safe values — never file bodies. File-supplied
+// values (workspace directory names, version ranges, script and tracked file names) reach a
+// diagnostic only through safeDiagnostic or JSON.stringify, both of which render control sequences
+// inert: unescaped, one could repaint or hide the CI output around the finding.
 
 import { spawnSync } from "node:child_process";
 import { existsSync, readdirSync, readFileSync, realpathSync } from "node:fs";
@@ -18,6 +22,29 @@ const GIT_TIMEOUT_MS = 10_000;
 const GIT_MAX_BUFFER_BYTES = 8 * 1024 * 1024;
 const NEXT_BUILD_SEGMENT = /(?:^|\/)\.next(?:\/|$)/u;
 const BARE_PACKAGE = /^(@[a-z0-9][\w.-]*\/)?[a-z0-9][\w.-]*(\/[\w.-]+)*$/i;
+// Issue #2777: packages/keiko-ui runs `../../node_modules/eslint/bin/eslint.js`, so it has no
+// ESLint of its own to execute — the monorepo lints through one installed binary and the root and
+// the workspace must therefore move between ESLint majors together. When the declared ranges drift
+// npm satisfies the workspace separately: PR #3290 left the root on "^10.8.1" (resolved 10.9.1) and
+// keiko-ui on "10.8.1", which installed a second, never-executed ESLint under
+// packages/keiko-ui/node_modules and silently reopened the divergence this lane exists to prevent.
+//
+// This gate owns BOTH layers of that invariant, because npm owns neither. `npm ls` raises a problem
+// only for a missing, invalid, or extraneous edge (npm/lib/commands/ls.js getProblems); a second
+// copy that satisfies its own workspace's declared range is a valid node, so `npm ls eslint` prints
+// both and exits 0. check:eslint-lane therefore answers peer-edge validity and nothing else — the
+// duplicate is only ever caught here.
+const SHARED_LINT_ENGINE = "eslint";
+// Issue #2777, the third defect PR #3290 left behind and the one that actually silenced rules: it
+// moved `eslint` to a new major and left `@eslint/js` a major behind, so the ESLint 10 engine ran
+// ESLint 9's `recommended` set and three newly-default rules never fired. Nothing caught it and
+// nothing could: the two are independent devDependencies, `@eslint/js@9` declared no peer on
+// `eslint` at all, and `@eslint/js@10`'s peer is optional — so `npm ls` is silent by construction.
+// `@eslint/js` ships the rule set `eslint` runs; their majors move together, or the gate fails —
+// including when a range is written in a form the gate cannot compare, since staying quiet there
+// would remove the only guard this pair has.
+const LINT_RULE_SET = "@eslint/js";
+const DECIMAL_DIGITS = new Set("0123456789");
 const GOVERNED_GIT_EXECUTABLE_PATHS = [
   "/usr/bin/git",
   "/usr/local/bin/git",
@@ -57,13 +84,89 @@ function collectManifestProblems(manifests) {
     for (const dependency of Object.keys(pkg.dependencies ?? {})) {
       if (dependency.startsWith("@types/")) {
         problems.push(
-          `${label}: "${dependency}" is a type-only package in "dependencies" — move it to "devDependencies" (it would ship in the tarball).`,
+          `${safeDiagnostic(label)}: "${safeDiagnostic(dependency)}" is a type-only package in "dependencies" — move it to "devDependencies" (it would ship in the tarball).`,
         );
       }
     }
     if (label !== "<root>" && (pkg.engines === undefined || pkg.engines.node === undefined)) {
-      problems.push(`${label}: missing an "engines.node" floor (align with the root).`);
+      problems.push(
+        `${safeDiagnostic(label)}: missing an "engines.node" floor (align with the root).`,
+      );
     }
+  }
+  return problems;
+}
+
+function declaredRange(pkg, dependency) {
+  // optionalDependencies counts: it installs a copy like the other two, so it can open the same
+  // second-lane hole. peerDependencies deliberately does not — it installs nothing.
+  return (
+    pkg.dependencies?.[dependency] ??
+    pkg.devDependencies?.[dependency] ??
+    pkg.optionalDependencies?.[dependency]
+  );
+}
+
+function collectSingleLaneProblems(manifests, rootPackage) {
+  const problems = [];
+  const rootRange = declaredRange(rootPackage, SHARED_LINT_ENGINE);
+  for (const { label, pkg } of manifests) {
+    if (label === "<root>") continue;
+    const range = declaredRange(pkg, SHARED_LINT_ENGINE);
+    if (range === undefined || range === rootRange) continue;
+    problems.push(
+      rootRange === undefined
+        ? `${safeDiagnostic(label)}: declares "${SHARED_LINT_ENGINE}": "${safeDiagnostic(range)}" while the root declares none — the workspace executes the root's installed ${SHARED_LINT_ENGINE}, so declare it at the root instead.`
+        : `${safeDiagnostic(label)}: declares "${SHARED_LINT_ENGINE}": "${safeDiagnostic(range)}" but the root declares "${safeDiagnostic(rootRange)}" — the workspace executes the root's installed ${SHARED_LINT_ENGINE}, so a diverging range installs a second copy that never runs.`,
+    );
+  }
+  return problems;
+}
+
+function declaredMajor(range) {
+  // Deliberately regex-free: `/(\d+)\./` backtracks super-linearly on a long digit run with no
+  // dot (SonarCloud S8786), and a version range is attacker-adjacent input in a dependency file.
+  const dot = range.indexOf(".");
+  if (dot < 0) return undefined;
+  let major = "";
+  for (const character of range.slice(0, dot)) {
+    if (DECIMAL_DIGITS.has(character)) major += character;
+    else if (major.length > 0) return undefined;
+  }
+  return major.length > 0 ? major : undefined;
+}
+
+function collectMajorLockProblems(rootPackage) {
+  const engineRange = declaredRange(rootPackage, SHARED_LINT_ENGINE);
+  const ruleSetRange = declaredRange(rootPackage, LINT_RULE_SET);
+  if (engineRange === undefined || ruleSetRange === undefined) return [];
+  const engineMajor = declaredMajor(engineRange);
+  const ruleSetMajor = declaredMajor(ruleSetRange);
+  if (engineMajor === undefined || ruleSetMajor === undefined) {
+    // Fail closed. Skipping an unreadable range would disable the only guard this pair has —
+    // `npm ls` cannot see the mismatch at all — so a range the gate cannot compare is itself the
+    // finding, not a reason to stay quiet.
+    return [
+      `<root>: cannot compare majors for "${SHARED_LINT_ENGINE}": "${safeDiagnostic(engineRange)}" and "${LINT_RULE_SET}": "${safeDiagnostic(ruleSetRange)}" — this pair must stay on one major, so declare both as plain ranges (for example "^10.8.1") that the gate can read.`,
+    ];
+  }
+  if (engineMajor === ruleSetMajor) return [];
+  return [
+    `<root>: "${LINT_RULE_SET}": "${safeDiagnostic(ruleSetRange)}" is on major ${ruleSetMajor} while "${SHARED_LINT_ENGINE}": "${safeDiagnostic(engineRange)}" is on major ${engineMajor} — ${LINT_RULE_SET} ships the rule set ${SHARED_LINT_ENGINE} runs, so a major apart silently changes which rules are enabled.`,
+  ];
+}
+
+function collectDuplicateInstallProblems(repoRoot, manifests) {
+  // No root copy means nothing is installed yet; the manifest rule above still applies.
+  if (!existsSync(join(repoRoot, "node_modules", SHARED_LINT_ENGINE))) return [];
+  const problems = [];
+  for (const { label } of manifests) {
+    if (label === "<root>") continue;
+    if (!existsSync(join(repoRoot, "packages", label, "node_modules", SHARED_LINT_ENGINE)))
+      continue;
+    problems.push(
+      `${safeDiagnostic(label)}: a second "${SHARED_LINT_ENGINE}" is installed at packages/${safeDiagnostic(label)}/node_modules/${SHARED_LINT_ENGINE} — the workspace executes the root's copy, so this one never runs and the two can drift apart.`,
+    );
   }
   return problems;
 }
@@ -109,7 +212,7 @@ function collectScriptImportProblems(repoRoot, rootPackage) {
       const packageName = packageNameOf(specifier);
       if (!declaredPackages.has(packageName)) {
         problems.push(
-          `scripts/${file}: imports "${packageName}" which is not declared in the root package.json (relies on transitive resolution — declare it in devDependencies).`,
+          `scripts/${safeDiagnostic(file)}: imports "${safeDiagnostic(packageName)}" which is not declared in the root package.json (relies on transitive resolution — declare it in devDependencies).`,
         );
       }
     }
@@ -227,6 +330,9 @@ export function checkDependencyHygiene(repoRoot) {
   const { manifests, rootPackage } = readWorkspaceManifests(repoRoot);
   const problems = [
     ...collectManifestProblems(manifests),
+    ...collectSingleLaneProblems(manifests, rootPackage),
+    ...collectDuplicateInstallProblems(repoRoot, manifests),
+    ...collectMajorLockProblems(rootPackage),
     ...collectScriptImportProblems(repoRoot, rootPackage),
   ];
   try {
@@ -271,7 +377,7 @@ function main(argv) {
     return;
   }
   process.stdout.write(
-    `check:dependency-hygiene PASS — ${result.manifestCount} manifests and ${result.trackedPathCount} tracked paths: dependency placement, engines, script imports, and generated-output policy satisfied.\n`,
+    `check:dependency-hygiene PASS — ${result.manifestCount} manifests and ${result.trackedPathCount} tracked paths: dependency placement, engines, single-lane lint toolchain, script imports, and generated-output policy satisfied.\n`,
   );
 }
 
