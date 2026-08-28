@@ -123,3 +123,28 @@ rather than silently averaged away.
 | 2600 | finding-bearing | measured            |    14 |            13 |        9 |            181.8 |             0.1 | 10.4, 3.8                                      |
 | 2470 | finding-bearing | measured            |     5 |             4 |        2 |              0.1 |             0.1 | 11.1                                           |
 | 2599 | finding-bearing | never-fully-green   |     1 |             0 |        2 |                - |               - | -                                              |
+
+## Post-adoption observation (#2750)
+
+Generated on 2026-08-28 with `npm run report:settlement-latency -- --count 11`. Eleven recent
+merged pull requests targeting `dev` supplied the first complete post-adoption cohort: ten were
+finding-bearing and one was clean. The report is read-only and reports only durations, counts, and
+pull-request numbers.
+
+| cohort          | PRs | measured | median settlement | max settlement | median final gap | median rounds | median reaction |
+| --------------- | --: | -------: | ----------------: | -------------: | ---------------: | ------------: | --------------: |
+| finding-bearing |  10 |       10 |             118.9 |         1000.9 |              1.6 |             7 |            22.5 |
+| clean           |   1 |        1 |               0.1 |            0.1 |              0.1 |             0 |               - |
+
+The ten finding-bearing pull requests were `#3305`, `#3300`, `#3303`, `#3302`, `#3299`, `#3293`,
+`#3295`, `#3292`, `#3290`, and `#3289`. They contain 30 measured reactions; 7 were within the
+10-minute SLO (**23.3%**) and the median reaction was **22.5 minutes**. That is worse than the
+baseline's 50 of 119 (**42%**) within SLO and **11.4 minutes** median, so this observation is
+recorded as a regression signal rather than represented as an improvement.
+
+`#3299` demonstrates the required monitored in-SLO reaction: its one measured reaction was
+**3.2 minutes**. The report confirms the original diagnosis remains true: the median final
+checks-green-to-merged gap is **1.6 minutes**, well inside the 30-minute target, while repair rounds
+and reaction time remain the operative cost. No review conversation was bulk-resolved, timer-resolved,
+or otherwise automated to create this report; the observation does not change ADR-0135 settlement
+semantics.

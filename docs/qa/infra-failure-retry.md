@@ -99,6 +99,32 @@ aggregate whose eligibility is a separate decision (ADR-0161 D4, Consequences). 
 bounds and its proof are complete; the eligible set is the initial one Issue #2707 names. Widen it
 only with evidence, and record the widening here.
 
+## Post-activation observation, 2026-07-25 → 2026-08-25 (#2750)
+
+The scheduled 30-day observation closed with fewer than the five target occurrences. The observer
+received 4,965 workflow-run events in this period; 4,354 were skipped because their source run was
+not a failure. The remaining 611 completed classifications were read from their body-free decision
+lines:
+
+| Classification      | Runs | Action    |
+| ------------------- | ---: | --------- |
+| `genuine`           |  562 | no action |
+| `excluded-lane`     |   30 | no action |
+| `already-attempted` |   19 | no action |
+| `infra`             |    0 | re-run    |
+
+There were no eligible infrastructure-signature occurrences and therefore no automatic re-run
+request or manual re-run required for such an occurrence. The observation demonstrates the
+fail-closed default at production volume: every classified run stayed on the existing manual path
+unless the exact pinned signature and structural preconditions would have admitted it. The
+allowlist remains unchanged; in particular, this window does not authorize widening it to an
+external aggregate.
+
+The aggregate is reproducible from the `Infrastructure failure re-run` workflow history for the
+date range, counting only the observer runs whose `Classify infrastructure-signature failure` job
+actually executed. Its summaries contain only the run id, workflow path, counts, signature id, and
+the closed classification/action vocabulary.
+
 ## When the signature drifts
 
 GitHub may reword a runner failure. The failure mode is safe by construction — an unrecognised
