@@ -213,6 +213,14 @@ describe("DiffPane — states", () => {
     expect(diffBody).toHaveAttribute("data-text-selectable", "true");
     expect(diffBody).toHaveClass(selectableTextClass("cmp-selectable-text"));
 
+    // Review finding on #3305 — the hunk-header sr-only label sits directly in the
+    // selectable .rv-code body (same as the per-line sr-only label below), so a
+    // copied range must not be able to pull in its visually hidden "Hunk header"
+    // text either.
+    expect(hunkHeader.querySelector(".rv-sr-only")).toHaveClass(
+      selectableTextClass("cmp-selectable-text-chrome"),
+    );
+
     // A copied range must carry only the source text: line-number gutters, the
     // +/- sign gutter, and the visually hidden per-line kind label all opt back
     // out of selection so they cannot land inside a pasted diff line.

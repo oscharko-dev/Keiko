@@ -45,19 +45,29 @@ export function isWindowDragPointer(event: {
   return isPrimaryActivationPointer(event) || isMiddlePointerButton(event.button);
 }
 
+// Review finding on #3305 — the native text-input surface (input/textarea/select/
+// contenteditable) that every guard below needs to recognize, extracted to one
+// place so a future addition (or removal) cannot update some guards and miss
+// others. Order does not affect matching: Element.closest()'s selector list is a
+// set, not a sequence, so composing this into a longer selector list below is
+// behavior-preserving regardless of where in that list it lands.
+const TEXT_INPUT_SELECTORS: readonly string[] = [
+  "input",
+  "textarea",
+  "select",
+  "[contenteditable='true']",
+  "[contenteditable='']",
+];
+
 export function isInteractiveSurfaceTarget(target: EventTarget | null): boolean {
   if (!(target instanceof Element)) return false;
   return (
     target.closest(
       [
         "button",
-        "input",
-        "textarea",
-        "select",
+        ...TEXT_INPUT_SELECTORS,
         "a[href]",
         "summary",
-        "[contenteditable='true']",
-        "[contenteditable='']",
         "[role='button']",
         "[role='checkbox']",
         "[role='dialog']",
@@ -87,13 +97,9 @@ export function isInteractiveControlTarget(target: EventTarget | null): boolean 
     target.closest(
       [
         "button",
-        "input",
-        "textarea",
-        "select",
+        ...TEXT_INPUT_SELECTORS,
         "a[href]",
         "summary",
-        "[contenteditable='true']",
-        "[contenteditable='']",
         "[role='button']",
         "[role='checkbox']",
         "[role='link']",
@@ -111,9 +117,7 @@ export function isInteractiveControlTarget(target: EventTarget | null): boolean 
 export function isTextEntryTarget(target: EventTarget | null): boolean {
   if (!(target instanceof Element)) return false;
   return (
-    target.closest(
-      "input, textarea, select, [contenteditable='true'], [contenteditable=''], [data-text-selectable='true']",
-    ) !== null
+    target.closest([...TEXT_INPUT_SELECTORS, "[data-text-selectable='true']"].join(",")) !== null
   );
 }
 
@@ -125,10 +129,7 @@ export function isTextEntryTarget(target: EventTarget | null): boolean {
 // (ADR-0123 D6 requires selection commands to be keyboard reachable).
 export function isTextInputTarget(target: EventTarget | null): boolean {
   if (!(target instanceof Element)) return false;
-  return (
-    target.closest("input, textarea, select, [contenteditable='true'], [contenteditable='']") !==
-    null
-  );
+  return target.closest(TEXT_INPUT_SELECTORS.join(",")) !== null;
 }
 
 // ADR-0123 D6 / issue #2710 — surfaces whose clipboard behavior the workspace
@@ -142,11 +143,7 @@ export function isEmbeddedClipboardSurfaceTarget(target: EventTarget | null): bo
   return (
     target.closest(
       [
-        "input",
-        "textarea",
-        "select",
-        "[contenteditable='true']",
-        "[contenteditable='']",
+        ...TEXT_INPUT_SELECTORS,
         "[data-text-selectable='true']",
         "[role='tree']",
         "[role='treeitem']",

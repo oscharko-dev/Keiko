@@ -120,6 +120,35 @@ function registerRunWithEvents(
   return sink;
 }
 
+// A run bound to an app session the request cannot resolve: `agentRecordSessionMatches`
+// rejects it, so this connection may never attach to it.
+function registerInaccessibleRun(
+  registry: ReturnType<typeof createRunRegistry>,
+  runId: string,
+  seqs: readonly number[],
+): void {
+  const sink = new QueueEventSink();
+  for (const seq of seqs) sink.emit(streamEvent(runId, seq));
+  registry.register({
+    runId,
+    fingerprint: `fp-${runId}`,
+    modelId: "test-model",
+    sink,
+    cancel: () => undefined,
+    governance: {
+      authorityRef: { kind: "editor-agent", authorityId: "auth-1", issuedAtMs: 1 },
+      requestedMode: "supervised-coding",
+      deploymentCeiling: "supervised-coding",
+      effectiveMode: "supervised-coding",
+      sessionId: "other-session",
+      sessionRotationCount: 0,
+      mutationRisk: "low",
+      connectorExecution: "unavailable",
+      deliveryExecution: "unavailable",
+    } as never,
+  });
+}
+
 // Every `data:` payload that carries a runId/seq (the `ready` frame's `{}` does not), in wire order.
 function deliveredEvents(frames: readonly string[]): readonly { runId: string; seq: number }[] {
   const delivered: { runId: string; seq: number }[] = [];
@@ -246,6 +275,25 @@ describe("GET /api/runs/events resume cursors (user finding #2456)", () => {
 
     expect(seqsFor(frames, "run-a")).toEqual([0, 1, 2]);
     expect(seqsFor(frames, "run-b")).toEqual([2]);
+    fireClose();
+    deps.store.close();
+  });
+
+  it("ignores a cursor that names a run this connection may not attach to", () => {
+    // An id-only match lets a cursor for ANOTHER session's run mark the whole
+    // set usable. Every accessible run the client did not name would then
+    // attach live-only and lose its buffered history — under-delivery driven by
+    // a run the caller cannot even see.
+    const registry = createRunRegistry();
+    registerInaccessibleRun(registry, "run-private", [0, 1, 2]);
+    registerRunWithEvents(registry, "run-open", [0, 1, 2]);
+    const { deps, frames, fireClose } = connect(
+      registry,
+      "http://localhost/api/runs/events?resume=run-private:1",
+    );
+
+    expect(seqsFor(frames, "run-open")).toEqual([0, 1, 2]);
+    expect(seqsFor(frames, "run-private")).toEqual([]);
     fireClose();
     deps.store.close();
   });
@@ -412,6 +460,43 @@ describe("GET /api/runs/events resume cursors — PR #3305 review findings", () 
     expect(line).toBeDefined();
     expect(line?.correlationId).toBe(UNKNOWN_CORRELATION_ID);
     expect(seqsFor(frames, "run-a")).toEqual([2]);
+    fireClose();
+    deps.store.close();
+  });
+});
+
+// A later reviewer pass on PR #3305: the resume framing itself — pairs split on "," and each
+// pair's runId/seq split on the LAST ":" — was never exercised with a runId containing a ","
+// (or a "&"). Every case above uses a runId with a SPACE or a COLON ("run a:b"), never a COMMA,
+// so none of them can catch a regression that stopped splitting the raw (still percent-encoded)
+// query value BEFORE decoding — the exact ordering `parseResumeCursors` documents as required so
+// an encoded "," inside a runId is never mistaken for the pair separator. useSSE.test.tsx pins
+// the client's matching half of this contract: encodeURIComponent on every runId it names.
+describe("GET /api/runs/events resume cursors — comma/ampersand delimiter framing", () => {
+  it("keeps a comma-and-ampersand-bearing runId framed as ONE cursor entry, not split by its own encoded characters", () => {
+    const registry = createRunRegistry();
+    const sink = registerRunWithEvents(registry, "alpha,be&ta", [0, 1, 2]);
+    // Decoy: the runId a decode-before-split bug would carve out of the SAME request (the text
+    // before the first comma, once decoded). It is never named by the resume parameter, so if the
+    // comma inside "alpha%2Cbe%26ta" ever corrupted the framing, this run would wrongly pick up a
+    // cursor entry of its own (dropping out of the live-only class the assertions below pin).
+    const decoySink = registerRunWithEvents(registry, "alpha", [0, 1]);
+    const { deps, frames, fireClose } = connect(
+      registry,
+      "http://localhost/api/runs/events?resume=alpha%2Cbe%26ta:1",
+    );
+
+    expect(seqsFor(frames, "alpha,be&ta")).toEqual([2]);
+    sink.emit(streamEvent("alpha,be&ta", 3));
+    expect(seqsFor(frames, "alpha,be&ta")).toEqual([2, 3]);
+
+    // The decoy stays live-only — proof the "," inside the encoded runId was never read as the
+    // pair separator (a broken split would instead have handed it a cursor of its own, giving it
+    // either a full replay of [0, 1] or a resumed slice, never this empty live-only start).
+    expect(seqsFor(frames, "alpha")).toEqual([]);
+    decoySink.emit(streamEvent("alpha", 2));
+    expect(seqsFor(frames, "alpha")).toEqual([2]);
+
     fireClose();
     deps.store.close();
   });

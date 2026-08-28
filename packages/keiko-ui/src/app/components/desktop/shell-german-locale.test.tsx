@@ -312,9 +312,15 @@ describe("Workspace clipboard status pill under the German locale", () => {
     const status = (): HTMLElement => screen.getByTestId("workspace-clipboard-status");
 
     fireEvent.keyDown(surface, { key: "c", ctrlKey: true });
+    // Reviewer finding on PR #3305 — asserted as two independent fragments rather than one
+    // `${base} · ${remainder}` literal: that join belongs to describeClipboardCapture in
+    // Workspace.tsx (the " · " separator), and restating it here would let the test keep passing
+    // even if the separator changed, since both sides would be reproducing the same (now-wrong)
+    // formula instead of checking the actual rendered output.
     expect(status()).toHaveTextContent(
-      `${deTranslate("workspace.clipboard.copied.many", { count: 2 })} · ${deTranslate("workspace.clipboard.skipped.one")}`,
+      deTranslate("workspace.clipboard.copied.many", { count: 2 }),
     );
+    expect(status()).toHaveTextContent(deTranslate("workspace.clipboard.skipped.one"));
     expect(status()).not.toHaveTextContent("2 windows copied");
 
     // Cut announces from its settled teardown outcome, so this one is awaited.

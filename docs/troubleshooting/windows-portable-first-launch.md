@@ -97,9 +97,22 @@ error, that message is the real finding and the console flash was only hiding it
   of a temporary viewer inside the archive, and do not move `Keiko.exe` away from its sibling
   `app\`, `runtime\`, and `.portable\` folders — it resolves everything relative to its own
   location.
-- If an endpoint-protection product quarantined a file inside the extracted folder, restore it or
-  allowlist the folder, then re-run the launcher. A missing or unreadable bundled file is what
-  dialog 1 reports, and a truncated or unparseable CLI bundle is what dialog 2 reports.
+- If an endpoint-protection product quarantined a file inside the extracted folder, **verify before
+  restoring it**. `Keiko.exe` executes binaries out of that folder, so a folder-wide exception would
+  extend trust to whatever else lands there. Confirm the file belongs to the official release first
+  — the production Windows assets carry an Authenticode chain and an RFC3161 timestamp
+  (ADR-0121) — then scope the exception to that verified file:
+
+  ```powershell
+  # A production asset returns Status: Valid with the expected publisher.
+  Get-AuthenticodeSignature .\Keiko.exe | Format-List Status, SignerCertificate
+  ```
+
+  If the signature does not verify, do not restore or allow the file: re-download the release asset
+  instead. Prefer re-extracting a freshly downloaded ZIP over restoring anything from quarantine.
+  A missing or unreadable bundled file is what dialog 1 reports, and a truncated or unparseable CLI
+  bundle is what dialog 2 reports.
+
 - `Keiko could not prepare its launch environment.` (dialog 3) is not an extraction problem —
   `SetEnvironmentVariableW` failed on an otherwise-intact install. Re-run from a normal user
   session rather than a locked-down or heavily restricted process environment, and compare
@@ -107,8 +120,9 @@ error, that message is the real finding and the console flash was only hiding it
 - `Keiko could not start its bundled runtime.` (dialog 4) means `CreateProcessW` failed to create
   the Node child. Reinstalling fixes it when `runtime\node\node.exe` is corrupt or incomplete, but
   the identical dialog also appears when the OS or an endpoint-protection/policy product denies
-  process creation from the extracted folder — check that product's block log and allowlist the
-  folder (as above) before assuming the extraction itself is broken.
+  process creation from the extracted folder — check that product's block log before assuming the
+  extraction itself is broken. Any exception follows the same rule as above: verify the release
+  signature, then scope it to the verified executable rather than to the folder.
 - If the setup companion appears to hang after the CLI phase, check whether Keiko is already
   serving (`keiko status`). A running detached UI server is the expected outcome; stop it with
   `keiko stop` rather than by killing the installer.

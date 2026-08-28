@@ -67,7 +67,7 @@ export interface WorkspaceClipboardCutResult extends WorkspaceClipboardCaptureRe
   readonly settled: Promise<WorkspaceClipboardCaptureResult>;
 }
 
-interface WorkspaceClipboardPasteResult {
+export interface WorkspaceClipboardPasteResult {
   readonly pasted: number;
   readonly limitReached: boolean;
 }

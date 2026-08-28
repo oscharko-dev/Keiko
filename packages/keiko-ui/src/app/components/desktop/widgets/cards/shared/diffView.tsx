@@ -127,7 +127,10 @@ export function DiffHunkView({ hunk, lang, labels, viewLabels }: DiffHunkViewPro
         className="rv-hunk mono"
         aria-label={`${viewLabels?.hunkHeader ?? "Hunk header"} ${hunk.header}`}
       >
-        <span className="rv-sr-only">
+        {/* Review finding on #3305 — this label sits inside the selectable .rv-code
+            body (data-text-selectable) just like DiffLineView's per-line rv-sr-only
+            span, so it needs the same CHROME_CLASS to stay out of a copied range. */}
+        <span className={`rv-sr-only ${CHROME_CLASS}`}>
           {labels?.header ?? viewLabels?.hunkHeader ?? "Hunk header"}
         </span>
         {hunk.header}

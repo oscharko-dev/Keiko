@@ -527,10 +527,16 @@ function resumeAfterSeq(cursors: ReadonlyMap<string, number> | undefined, runId:
 function usableResumeCursors(
   cursors: ReadonlyMap<string, number> | undefined,
   records: readonly RunRecord[],
+  attachable: (record: RunRecord) => boolean,
 ): ReadonlyMap<string, number> | undefined {
   if (cursors === undefined) return undefined;
   for (const record of records) {
-    if (cursors.has(record.runId)) return cursors;
+    // The match must be a run this connection can actually attach to. An
+    // id-only check would let a cursor naming ANOTHER session's run mark the
+    // whole set usable, after which every accessible run the client did not
+    // name attaches live-only and loses its buffered history — under-delivery
+    // driven by a run the caller cannot even see.
+    if (cursors.has(record.runId) && attachable(record)) return cursors;
   }
   return undefined;
 }
@@ -584,7 +590,9 @@ function attachSnapshotRuns(
 ): void {
   const resumeRequested = rawQueryParameter(ctx.url, "resume") !== undefined;
   const records = deps.registry.snapshot?.(AGGREGATE_RUN_EVENTS_SNAPSHOT_LIMIT) ?? [];
-  const resumeCursors = usableResumeCursors(parseResumeCursors(ctx.url), records);
+  const resumeCursors = usableResumeCursors(parseResumeCursors(ctx.url), records, (record) =>
+    agentRecordSessionMatches(record, ctx, deps),
+  );
   const stats: ResumeAttachStats = { resumedRuns: 0, liveOnlyRuns: 0, fullReplayRuns: 0 };
   for (const record of records) {
     const afterSeq = resumeAfterSeq(resumeCursors, record.runId);

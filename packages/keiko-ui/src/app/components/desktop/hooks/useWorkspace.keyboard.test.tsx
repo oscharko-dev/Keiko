@@ -111,6 +111,31 @@ function Harness(options: UseWorkspaceOptions = {}): ReactElement {
       <button type="button" onClick={() => workspace.api.replaceSelection(["files-1"])}>
         select files
       </button>
+      <button
+        type="button"
+        onClick={() => {
+          for (
+            let index = workspace.wins?.length ?? 0;
+            index < MAX_WORKSPACE_WINDOWS - 1;
+            index++
+          ) {
+            workspace.api.add("files");
+          }
+        }}
+      >
+        fill to one below the limit
+      </button>
+      <button
+        type="button"
+        onClick={() => {
+          const filler = (workspace.wins ?? []).find(
+            (win) => win.id !== "files-1" && win.id !== "chat-1",
+          );
+          if (filler !== undefined) workspace.api.close(filler.id);
+        }}
+      >
+        close one filler window
+      </button>
       <button type="button" onClick={() => workspace.api.replaceSelection(["files-1", "chat-1"])}>
         select files and chat
       </button>
@@ -505,6 +530,79 @@ describe("useWorkspace keyboard and connection workflow hardening", () => {
     // The cut Files window is NOT resurrected; the paste duplicated the chat.
     expect(readWins().some((w) => w.id === "files-1")).toBe(false);
     expect(readWins().filter((w) => w.type === "chat")).toHaveLength(2);
+  });
+
+  it("keeps un-restored cut windows buffered when the workspace is full", async () => {
+    // The move buffer is the ONLY copy of a cut window's state. Dropping what
+    // capacity could not take would destroy it permanently, and the paste must
+    // report the real capacity outcome rather than a silent partial success.
+    const onWindowLimitReached = vi.fn();
+    persistWorkspace([
+      filesWindow({ cfg: { resolvedRoot: "/repo" } }),
+      appWindow({ id: "chat-1", type: "chat", x: 300 }),
+    ]);
+    render(<Harness onWindowLimitReached={onWindowLimitReached} />);
+    mockWorkspaceRect();
+    await waitFor(() => expect(readWins()).toHaveLength(2));
+
+    fireEvent.click(screen.getByRole("button", { name: "select files and chat" }));
+    fireEvent.click(screen.getByRole("button", { name: "cut selected windows" }));
+    await waitFor(() => expect(readWins()).toHaveLength(0));
+
+    // Fill the workspace so only one of the two cut windows can come back.
+    fireEvent.click(screen.getByRole("button", { name: "fill to one below the limit" }));
+    await waitFor(() => expect(readWins()).toHaveLength(MAX_WORKSPACE_WINDOWS - 1));
+
+    fireEvent.click(screen.getByRole("button", { name: "paste copied windows" }));
+    await waitFor(() => expect(readWins()).toHaveLength(MAX_WORKSPACE_WINDOWS));
+    expect(onWindowLimitReached).toHaveBeenCalled();
+
+    // The window capacity refused is still buffered: closing one frees a slot
+    // and the next paste brings it back with its state intact.
+    fireEvent.click(screen.getByRole("button", { name: "close one filler window" }));
+    await waitFor(() => expect(readWins()).toHaveLength(MAX_WORKSPACE_WINDOWS - 1));
+    fireEvent.click(screen.getByRole("button", { name: "paste copied windows" }));
+
+    await waitFor(() => expect(readWins()).toHaveLength(MAX_WORKSPACE_WINDOWS));
+    // BOTH originals are back under their own ids with their own state. Had the
+    // remainder been dropped, this second paste would have fallen through to the
+    // content-free duplicate path and produced a fresh `*-copy-*` id instead.
+    const restoredFiles = readWins().find((w) => w.id === "files-1");
+    const restoredChat = readWins().find((w) => w.id === "chat-1");
+    expect(restoredFiles).toBeDefined();
+    expect(restoredChat).toBeDefined();
+    expect(restoredFiles?.cfg).toMatchObject({ resolvedRoot: "/repo" });
+  });
+
+  it("does not let a copy that lands mid-cut be overwritten by the settling cut", async () => {
+    // Teardown is asynchronous, so a user can cut, copy something else, and
+    // paste before the cut settles. The stale cut completion must not write its
+    // windows back into the move buffer and hijack that paste.
+    const onScopeUnbind = vi.fn(
+      () => new Promise<boolean>((resolve) => setTimeout(() => resolve(true), 0)),
+    );
+    persistWorkspace([filesWindow({ cfg: { resolvedRoot: "/repo" } }), appWindow()]);
+    render(<Harness onScopeUnbind={onScopeUnbind} />);
+    mockWorkspaceRect();
+    await waitFor(() => expect(readWins()).toHaveLength(2));
+
+    fireEvent.click(screen.getByRole("button", { name: "connect" }));
+    await waitFor(() => expect(readConns()).toHaveLength(1));
+
+    fireEvent.click(screen.getByRole("button", { name: "select files" }));
+    fireEvent.click(screen.getByRole("button", { name: "cut selected windows" }));
+
+    // Copy the chat BEFORE the cut's teardown resolves.
+    fireEvent.click(screen.getByRole("button", { name: "select files and chat" }));
+    fireEvent.click(screen.getByRole("button", { name: "copy selected windows" }));
+
+    await waitFor(() => expect(readWins().some((w) => w.id === "files-1")).toBe(false));
+
+    fireEvent.click(screen.getByRole("button", { name: "paste copied windows" }));
+
+    // The paste duplicated the copy; it did not resurrect the cut Files window.
+    await waitFor(() => expect(readWins().length).toBeGreaterThan(1));
+    expect(readWins().some((w) => w.id === "files-1")).toBe(false);
   });
 
   it("does not report a cut for a window whose teardown refused to close it", async () => {

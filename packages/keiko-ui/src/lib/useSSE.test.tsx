@@ -457,6 +457,33 @@ describe("useSSE", () => {
       expect(FakeEventSource.instances[1]?.url).toBe("/api/runs/events");
       second.unmount();
     });
+
+    // Reviewer finding on PR #3305 — the resume framing splits pairs on "," and each pair's
+    // runId from its cursor on ":", so a reserved character INSIDE a runId must survive
+    // encodeURIComponent or it would corrupt that framing. Every case above uses a plain id like
+    // "run 1" or "run 2" — none puts a "," (the pair separator itself), a ":" (the cursor
+    // separator) or a "&" (a query-pair separator) in the runId, so none can catch a regression
+    // that stopped encoding one of them. run-handlers-sse-resume.test.ts pins the server's
+    // matching half: it decodes the runId only AFTER splitting the still-encoded raw query.
+    it("percent-encodes a runId containing comma, colon and ampersand in the resume cursor", () => {
+      vi.stubGlobal("EventSource", FakeEventSource);
+      const runId = "run,1:a&b";
+      const first = renderHook(() => useSSE(runId));
+      const source = FakeEventSource.instances[0];
+      act(() => {
+        source?.emit(eventFor(runId, 4));
+      });
+
+      act(() => {
+        setVisibility("hidden");
+      });
+      act(() => {
+        setVisibility("visible");
+      });
+
+      expect(FakeEventSource.instances[1]?.url).toBe("/api/runs/events?resume=run%2C1%3Aa%26b:4");
+      first.unmount();
+    });
   });
 
   // Wave 5 of epic #3233 (g6): every EventSource.onerror handler reports a client diagnostic
