@@ -346,7 +346,11 @@ The `publish` job authenticates to the npm registry with [npm Trusted Publishing
   into its temporary `.npmrc` when one of those env vars (or a local `.env`) is actually present,
   so leaving them unset in CI is what lets the npm CLI attempt the OIDC exchange.
 - npm CLI `>= 11.5.1` is required. The workflow pins an exact npm version with
-  `npm install --global npm@<pinned>` right after `actions/setup-node`. Node 24.18.0 already
+  `npm install --global npm@<pinned>` right after `actions/setup-node`, where `<pinned>` is the
+  governed `EXPECTED_PACKAGE_MANAGER` constant in `scripts/check-runtime-toolchain.mjs`
+  (`scripts/__tests__/release-workflow-npm-pin.test.mjs` compares the workflow line against
+  that constant, so the two cannot drift; this document deliberately does not restate the
+  number and become a third copy). Node 24.18.0 already
   bundles npm 11.16.0, so the pin is not about clearing that floor: it holds the publish npm at
   the exact governed version, because a drifted hand-maintained pin is what broke the 0.3.1
   publish and a tag freezes whatever it captured.

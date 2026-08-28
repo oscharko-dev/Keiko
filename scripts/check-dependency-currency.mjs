@@ -31,7 +31,8 @@
 // bodies or credentials.
 
 import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
-import { parse } from "yaml";
+import { parseDocument, visit } from "yaml";
+import { documentLines, isSeparatorRow, unquote } from "./lib/markdown-table.mjs";
 import { dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { readJsonFile } from "./lib/json.mjs";
@@ -60,27 +61,12 @@ const DEPENDENCY_SECTIONS = [
   "peerDependencies",
 ];
 
-function tableCells(line) {
-  const trimmed = line.trim();
-  if (!trimmed.startsWith("|")) return null;
-  if (/^\|[\s:|-]*$/u.test(trimmed)) return null;
-  return trimmed
-    .split("|")
-    .slice(1, -1)
-    .map((cell) => cell.trim());
-}
-
-function unquote(cell) {
-  return cell.replace(/^`|`$/gu, "").trim();
-}
-
 // Rows are identified by their own shape rather than by locating a heading, so reordering or
 // re-titling sections in the document cannot silently drop a table out of enforcement.
 export function parseDependencyRows(markdown) {
   const rows = [];
-  for (const line of markdown.split(/\r?\n/)) {
-    const cells = tableCells(line);
-    if (cells === null || cells.length < 4) continue;
+  for (const { line, cells } of documentLines(markdown)) {
+    if (cells === null || isSeparatorRow(line) || cells.length < 4) continue;
     if (!DISPOSITIONS.has(cells[3])) continue;
     // Action rows carry a disposition in the same column. Their third cell is a commit SHA, which
     // no dependency version can be, so this keeps the two row shapes disjoint without requiring
@@ -101,9 +87,8 @@ export function parseDependencyRows(markdown) {
 // green — the decision record is the artifact being enforced, not just the pin.
 export function parseActionRows(markdown) {
   const rows = [];
-  for (const line of markdown.split(/\r?\n/)) {
-    const cells = tableCells(line);
-    if (cells === null || cells.length < 4) continue;
+  for (const { line, cells } of documentLines(markdown)) {
+    if (cells === null || isSeparatorRow(line) || cells.length < 4) continue;
     const sha = unquote(cells[2]);
     if (!SHA_PATTERN.test(sha)) continue;
     if (!DISPOSITIONS.has(cells[3])) continue;
@@ -121,9 +106,8 @@ export function parseActionRows(markdown) {
 // absent one, so it must fail loudly rather than silently drop out of enforcement.
 export function malformedActionRows(markdown) {
   const malformed = [];
-  for (const line of markdown.split(/\r?\n/)) {
-    const cells = tableCells(line);
-    if (cells === null || cells.length < 3) continue;
+  for (const { line, cells } of documentLines(markdown)) {
+    if (cells === null || isSeparatorRow(line) || cells.length < 3) continue;
     if (!SHA_PATTERN.test(unquote(cells[2]))) continue;
     if (cells.length >= 4 && DISPOSITIONS.has(cells[3])) continue;
     malformed.push(unquote(cells[0]));
@@ -148,6 +132,11 @@ function workspaceDeclares(workspace, name) {
 // a misspelled scope never fails at all. Both now resolve to undefined and fail closed.
 export function resolveInstalledVersion(lockPackages, name, scope) {
   const hoisted = lockPackages[`node_modules/${name}`]?.version;
+  // A `root` row governs the HOISTED root resolution — the copy that is actually bundled — and not
+  // a root manifest declaration. Requiring the root to declare the package would reject two correct
+  // rows: `postcss` is governed only through the root `overrides` block, and `monaco-editor` is the
+  // hoisted resolution of two workspaces' declarations. A root row that stops describing anything
+  // still fails, because the package then leaves the lockfile and resolves to undefined below.
   if (scope === "root") return hoisted;
   const workspace = lockPackages[`packages/${scope}`];
   if (workspace === undefined) return undefined;
@@ -178,54 +167,89 @@ function actionRepository(reference) {
   return `${owner}/${name}`;
 }
 
-// A workflow's steps live under `jobs.<id>.steps`; a composite action's under `runs.steps`.
-function documentSteps(document) {
-  const steps = [];
-  for (const job of Object.values(document?.jobs ?? {})) {
-    if (Array.isArray(job?.steps)) steps.push(...job.steps);
-  }
-  if (Array.isArray(document?.runs?.steps)) steps.push(...document.runs.steps);
-  return steps;
+// Every `uses:` scalar in the document, paired with the trailing comment attached to THAT node —
+// `jobs.<id>.steps` and a composite action's `runs.steps` alike, since `visit` walks both.
+// Searching the file text for the reference instead returned the first textual match: two steps
+// pinning the same action with different comments collapsed to whichever appeared earlier, and the
+// "must move together" check then reported agreement over a file that literally disagreed.
+function usesEntries(text) {
+  const entries = [];
+  visit(parseDocument(text), {
+    Pair(_key, pair) {
+      if (pair.key?.value !== "uses" || typeof pair.value?.value !== "string") return;
+      const comment = (pair.value.comment ?? "").trim();
+      entries.push({ reference: pair.value.value.trim(), comment });
+    },
+  });
+  return entries;
 }
 
-// The version comment is not part of the parsed `uses` value, so it is recovered from the line that
-// declares this exact reference. A pin without one yields an empty comment, which then fails the
-// comparison against the documented row — the intended fail-closed outcome.
-function versionCommentFor(text, reference) {
-  const escaped = reference.replace(/[.*+?^${}()|[\]\\]/gu, String.raw`\$&`);
-  return new RegExp(String.raw`${escaped}\s*#\s*(\S+)`, "u").exec(text)?.[1] ?? "";
+// A local action (`./…`) or a reusable workflow in this repository has no external ref to pin.
+function isLocalReference(reference) {
+  return reference.startsWith("./") || reference.startsWith(".\\");
 }
 
-// Collects one entry per action REPOSITORY, keeping every distinct (sha, comment) pair seen for it.
+// Collects one entry per action REPOSITORY, keeping every distinct (sha, comment) pair seen for it,
+// and separately reports every EXTERNAL reference that is not an immutable commit SHA. Skipping
+// those would be the wrong kind of silence: a `@v4` or `@main` reference is precisely the mutable
+// third-party code the pinning policy exists to forbid, and a gate that ignores what it cannot
+// classify is easiest to pass by writing something it does not recognise.
 export function collectWorkflowPins(files) {
   const pins = new Map();
+  const mutableReferences = [];
   for (const { name, text } of files) {
-    for (const step of documentSteps(parse(text))) {
-      if (typeof step?.uses !== "string") continue;
-      const reference = step.uses.trim();
+    for (const { reference, comment } of usesEntries(text)) {
+      if (isLocalReference(reference)) continue;
       const match = USES_REFERENCE.exec(reference);
-      if (match === null) continue;
+      if (match === null) {
+        mutableReferences.push(
+          `${name}: \`${reference}\` is not pinned to a 40-character commit SHA`,
+        );
+        continue;
+      }
       const repository = actionRepository(match[1]);
       const seen = pins.get(repository) ?? new Map();
-      const key = `${match[2]} ${versionCommentFor(text, reference)}`;
-      seen.set(key, [...(seen.get(key) ?? []), name]);
+      const key = `${match[2]} ${comment}`;
+      seen.set(key, new Set([...(seen.get(key) ?? []), name]));
       pins.set(repository, seen);
     }
   }
-  return pins;
+  return { pins, mutableReferences };
 }
 
 function splitPinFailure(repository, seen) {
-  const variants = [...seen.keys()].sort((left, right) => left.localeCompare(right));
+  // Names the workflows, not just the count: "pinned at 2 different refs" without saying where
+  // leaves the reader to grep for it, and the files were already collected.
+  const variants = [...seen.entries()]
+    .map(
+      ([key, files]) =>
+        `${key.split(" ")[1]} in ${[...files].sort((left, right) => left.localeCompare(right)).join(", ")}`,
+    )
+    .sort((left, right) => left.localeCompare(right));
   return (
-    `${repository}: pinned at ${variants.length} different refs across workflows ` +
-    `(${variants.map((variant) => variant.split(" ")[1]).join(", ")}) — ` +
+    `${repository}: pinned at ${variants.length} different refs — ${variants.join("; ")} — ` +
     "an action's sub-actions must move together"
   );
 }
 
+// A repository documented twice is a corrupted decision record, and silently keeping the last row
+// is the worst possible reading of it: a second row appended anywhere later in the document would
+// override the reviewed one and bless whatever the workflows currently pin.
+function duplicateRowFailures(rows) {
+  const counts = new Map();
+  for (const row of rows) {
+    const repository = actionRepository(row.action);
+    counts.set(repository, (counts.get(repository) ?? 0) + 1);
+  }
+  return [...counts.entries()]
+    .filter(([, count]) => count > 1)
+    .map(
+      ([repository, count]) => `${repository}: documented ${String(count)} times, expected once`,
+    );
+}
+
 export function actionFailures(rows, pins) {
-  const failures = [];
+  const failures = duplicateRowFailures(rows);
   const documented = new Map(rows.map((row) => [actionRepository(row.action), row]));
   for (const [repository, seen] of pins) {
     if (seen.size > 1) {
@@ -293,9 +317,11 @@ export function evaluate(seams) {
   for (const action of malformedActionRows(markdown)) {
     failures.push(`${action}: action row has no valid disposition`);
   }
+  const { pins, mutableReferences } = collectWorkflowPins(seams.readWorkflows());
   failures.push(
+    ...mutableReferences,
     ...dependencyFailures(dependencyRows, seams.readLock()),
-    ...actionFailures(actionRows, collectWorkflowPins(seams.readWorkflows())),
+    ...actionFailures(actionRows, pins),
   );
   return { failures, dependencyRows: dependencyRows.length, actionRows: actionRows.length };
 }

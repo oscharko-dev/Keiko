@@ -70,7 +70,7 @@ const JWT =
 // Credential prefixes GitHub's PARTNER secret scanner alerts on from the prefix alone. A fixture
 // for one of these must be assembled by concatenation so the contiguous form never exists in this
 // file's source; the pin at the bottom of this file enforces that. See alert #20 (#2296).
-const PARTNER_SCANNED_PREFIXES = ["sk-", "xoxb-", "ghp_", "AKIA"] as const;
+const PARTNER_SCANNED_PREFIXES = ["sk-", "sk_live_", "xoxb-", "ghp_", "AKIA", "AIza"] as const;
 
 const SECRET_SHAPE_CLASSES: readonly SecretShapeClass[] = [
   {

@@ -181,6 +181,24 @@ describe("readWorkspaceNpmEngines", () => {
       { name: "@oscharko-dev/zeta", value: "11.18.0" },
     ]);
   });
+
+  it("skips a directory with no manifest, which is outside the package graph", () => {
+    const root = mkdtempSync(join(tmpdir(), "keiko-runtime-no-manifest-"));
+    fixtureRoots.push(root);
+    mkdirSync(join(root, "packages", "fixtures-only"), { recursive: true });
+    expect(readWorkspaceNpmEngines(root)).toEqual([]);
+  });
+
+  it("fails closed on a manifest that exists but cannot be parsed", () => {
+    // Swallowing this would drop the workspace out of the engine policy silently, and the gate
+    // would report a pass over a package it never examined — a stale engine could then sit there
+    // indefinitely with nothing to report it.
+    const root = mkdtempSync(join(tmpdir(), "keiko-runtime-bad-manifest-"));
+    fixtureRoots.push(root);
+    mkdirSync(join(root, "packages", "broken"), { recursive: true });
+    writeFileSync(join(root, "packages", "broken", "package.json"), "{ not json\n");
+    expect(() => readWorkspaceNpmEngines(root)).toThrow();
+  });
 });
 
 describe("runtimeInput", () => {

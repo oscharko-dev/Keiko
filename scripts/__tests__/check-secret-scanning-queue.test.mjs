@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  EXIT_ERROR,
+  EXIT_UNTRIAGED,
   alertQueries,
   defaultSeams,
   ghArguments,
@@ -14,10 +16,10 @@ import {
 
 const DOCUMENT = `## Dispositions
 
-| Alert | Type                 | Location            | Disposition                      |
-| ----- | -------------------- | ------------------- | -------------------------------- |
-| #20   | provider API key     | \`a.test.ts\`         | False positive — test fixture    |
-| #17   | generic (\`password\`) | \`b.md\`              | False positive — doc placeholder |
+| Alert | Type                 | Location            | Disposition    | Rationale         |
+| ----- | -------------------- | ------------------- | -------------- | ----------------- |
+| #20   | provider API key     | \`a.test.ts\`         | used_in_tests  | synthetic fixture |
+| #17   | generic (\`password\`) | \`b.md\`              | false_positive | doc placeholder   |
 
 | Package | Scope | Version | Disposition | Rationale |
 | ------- | ----- | ------- | ----------- | --------- |
@@ -104,9 +106,41 @@ describe("check-secret-scanning-queue parsing", () => {
     expect([...parseDocumentedAlerts(withFollowUps)].sort((a, b) => a - b)).toEqual([17, 20]);
   });
 
-  it("ignores a disposition row whose disposition cell is empty", () => {
-    const emptied = DOCUMENT.replace("False positive — doc placeholder", "");
-    expect([...parseDocumentedAlerts(emptied)]).toEqual([20]);
+  it("ignores a second Alert table placed outside the Dispositions section", () => {
+    // The hostile shape: a later section reusing the same table header would otherwise inject alert
+    // numbers into the documented set and silence a genuinely untriaged finding.
+    const hostile = `${DOCUMENT}
+## Historical notes
+
+| Alert | Type | Location | Disposition |
+| ----- | ---- | -------- | ----------- |
+| #31   | old  | \`x.md\`  | closed long ago |
+`;
+    expect([...parseDocumentedAlerts(hostile)].sort((a, b) => a - b)).toEqual([17, 20]);
+  });
+
+  it("ignores an adjacent table that starts with no blank line between them", () => {
+    // `inTable` used to survive the boundary, so a follow-up table butted directly against the
+    // dispositions table leaked its numbers in as security decisions.
+    const adjacent = DOCUMENT.replace(
+      "\n\n| Package |",
+      "\n| Ref | Owner | Status | Note |\n| --- | --- | --- | --- |\n| #31 | infra | open | unrelated |\n\n| Package |",
+    );
+    expect([...parseDocumentedAlerts(adjacent)].sort((a, b) => a - b)).toEqual([17, 20]);
+  });
+
+  it("reads an alert reference that is wrapped in backticks", () => {
+    // Every other cell in that table uses backticks, so wrapping this one is a natural edit. It
+    // must not silently drop the row out of the documented set — the stale-row check only ever
+    // walks what it recognised, so an unparsed row can never be reported as stale either.
+    expect(
+      [...parseDocumentedAlerts(DOCUMENT.replace("| #17 ", "| `#17` "))].sort((a, b) => a - b),
+    ).toEqual([17, 20]);
+  });
+
+  it("ignores a row whose disposition is not in SECURITY.md's closed vocabulary", () => {
+    // "TBD" or a typo is not a triage decision, and must not mark the alert as reviewed.
+    expect([...parseDocumentedAlerts(DOCUMENT.replace("false_positive", "TBD"))]).toEqual([20]);
   });
 });
 
@@ -162,10 +196,10 @@ describe("check-secret-scanning-queue entry point", () => {
         throw new Error("GitHub API request failed (exit 1)");
       },
     });
-    expect(main(throwing)).toBe(1);
+    expect(main(throwing)).toBe(EXIT_ERROR);
   });
 
   it("returns a non-zero exit code when an alert is untriaged", () => {
-    expect(main(seams({ readDocument: () => "# no dispositions\n" }))).toBe(1);
+    expect(main(seams({ readDocument: () => "# no dispositions\n" }))).toBe(EXIT_UNTRIAGED);
   });
 });

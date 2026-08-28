@@ -65,7 +65,9 @@ function classify(steps) {
     if (typeof step?.uses === "string" && step.uses.includes(SETUP_NODE)) setupNode.push(index);
     if (typeof step?.run !== "string") return;
     if (step.run.includes(GATE_SCRIPT)) gates.push(index);
-    if (/\bnpm ci\b/u.test(step.run)) installs.push(index);
+    // `npm\s+ci`, not `npm ci`: a step written with two spaces would not be recognised as an
+    // install, and the ordering assertion below would be skipped rather than fail.
+    if (/\bnpm\s+ci\b/u.test(step.run)) installs.push(index);
   });
   return { setupNode, gates, installs };
 }
@@ -82,11 +84,79 @@ function allGroups() {
 const groups = allGroups();
 const withSetupNode = groups.filter((group) => classify(group.steps).setupNode.length > 0);
 
+const fixture = (...lines) => stepGroups(parse(lines.join("\n")), "fixture.yml");
+
+// The assertions above read the real repository, which is the point of an anchor test — but a
+// repository that happens to be correct cannot demonstrate that a violation would be caught. These
+// drive the same `classify` helper with documents the repository must never contain.
+describe("workflow Node toolchain parity rejects", () => {
+  const gate = "- run: node scripts/check-runtime-toolchain.mjs --exact";
+  const setup = "- uses: actions/setup-node@abc # v7.0.0";
+
+  it("a second setup-node placed after the only gate", () => {
+    const [group] = fixture(
+      "jobs:",
+      "  a:",
+      "    steps:",
+      `      ${setup}`,
+      `      ${gate}`,
+      `      ${setup}`,
+    );
+    const { setupNode, gates } = classify(group.steps);
+    expect(setupNode).toHaveLength(2);
+    // The first setup is covered; the second selects a new runtime that nothing verifies.
+    expect(gates.find((index) => index > setupNode[0])).toBeDefined();
+    expect(gates.find((index) => index > setupNode[1])).toBeUndefined();
+  });
+
+  it("npm ci written with extra whitespace, which must still count as an install", () => {
+    const [group] = fixture(
+      "jobs:",
+      "  a:",
+      "    steps:",
+      `      ${setup}`,
+      "      - run: npm  ci",
+      `      ${gate}`,
+    );
+    const { gates, installs } = classify(group.steps);
+    expect(installs).toEqual([1]);
+    expect(gates[0]).toBeGreaterThan(installs[0]);
+  });
+
+  it("a gate that lives in a different job from the setup it is supposed to cover", () => {
+    const groups = fixture(
+      "jobs:",
+      "  a:",
+      "    steps:",
+      `      ${setup}`,
+      "  b:",
+      "    steps:",
+      `      ${gate}`,
+    );
+    const withSetup = groups.filter((group) => classify(group.steps).setupNode.length > 0);
+    expect(withSetup).toHaveLength(1);
+    expect(classify(withSetup[0].steps).gates).toEqual([]);
+  });
+
+  it("a document with no steps at all, which must contribute no group", () => {
+    expect(fixture("jobs:", "  a:", "    runs-on: ubuntu-latest")).toEqual([]);
+  });
+
+  it("malformed YAML, by failing loudly rather than contributing an empty group", () => {
+    // Silence here would be the worst outcome: an unparseable workflow that yields zero groups
+    // reads exactly like a compliant one.
+    expect(() => fixture("jobs:", "  a:", "   steps:", "  - uses: [")).toThrow();
+  });
+});
+
 describe("workflow Node toolchain parity", () => {
   it("finds the Node setup steps at all, so a parsing regression cannot pass this file vacuously", () => {
     // Without this, a YAML shape change that made `stepGroups` return nothing would turn every
     // assertion below into a loop over an empty array and report success.
-    expect(withSetupNode.length).toBeGreaterThanOrEqual(8);
+    // The real count is 27. A floor of 8 would still pass after `ci.yml` and
+    // `portable-assets.yml` silently dropped out — 70% of the coverage — so the floor sits
+    // just under the true number instead of at a round guess.
+    expect(withSetupNode.length).toBeGreaterThanOrEqual(24);
   });
 
   it("pins every actions/setup-node step to the governed Node version", () => {

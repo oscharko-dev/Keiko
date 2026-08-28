@@ -49,7 +49,9 @@ function evaluateDeclaredToolchain(input) {
       problems.push(`${workspace.name}: Node.js engine policy is stale`);
     }
   }
-  for (const workspace of input.workspaceNpmEngines) {
+  // `evaluateRuntimeToolchain` is exported; a caller written against the previous input shape must
+  // not crash on a field it never knew about.
+  for (const workspace of input.workspaceNpmEngines ?? []) {
     if (workspace.value !== EXPECTED_NPM_ENGINE) {
       problems.push(`${workspace.name}: npm engine policy is stale`);
     }
@@ -80,12 +82,14 @@ function readWorkspaceEngines(root, engineKey) {
   const engines = [];
   for (const entry of readdirSync(packagesRoot, { withFileTypes: true })) {
     if (!entry.isDirectory()) continue;
-    try {
-      const manifest = readJsonFile(join(packagesRoot, entry.name, "package.json"));
-      engines.push({ name: manifest.name ?? entry.name, value: manifest.engines?.[engineKey] });
-    } catch {
-      // Directories without package manifests are outside the workspace package graph.
-    }
+    const manifestPath = join(packagesRoot, entry.name, "package.json");
+    // A directory without a manifest is outside the workspace package graph and is skipped. A
+    // manifest that exists but cannot be read or parsed is a different thing entirely: swallowing
+    // it would drop that workspace out of the engine policy silently, and the gate would report a
+    // pass over a package it never examined. That one fails closed.
+    if (!existsSync(manifestPath)) continue;
+    const manifest = readJsonFile(manifestPath);
+    engines.push({ name: manifest.name ?? entry.name, value: manifest.engines?.[engineKey] });
   }
   return engines.sort((left, right) => left.name.localeCompare(right.name));
 }

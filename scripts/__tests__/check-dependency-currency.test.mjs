@@ -59,6 +59,28 @@ describe("check-dependency-currency parsing", () => {
     ]);
   });
 
+  it("reads a row that omits its optional trailing pipe, which GFM permits", () => {
+    // The obvious `split("|").slice(1, -1)` discards the LAST cell of such a row rather than an
+    // empty segment. A four-column row then reads as three, drops below the schema check, and
+    // leaves enforcement silent — indistinguishable from agreement.
+    const row = "| `eslint` | root | 9.39.5 | current | no trailing pipe";
+    expect(parseDependencyRows(row)).toEqual([
+      { name: "eslint", scope: "root", version: "9.39.5", disposition: "current" },
+    ]);
+  });
+
+  it("ignores a row inside a fenced code block, which is an illustration and not a decision", () => {
+    // This document shows example rows. In a record whose purpose is holding decisions, an example
+    // must never become one.
+    const fenced = ["```markdown", "| `ghost` | root | 1.0.0 | current | example |", "```"].join(
+      "\n",
+    );
+    expect(parseDependencyRows(fenced)).toEqual([]);
+    expect(
+      parseActionRows(["```", `| \`a/b\` | v1 | ${SHA_A} | current |`, "```"].join("\n")),
+    ).toEqual([]);
+  });
+
   it("never reads an action row as a dependency row even though both carry a disposition", () => {
     // The two tables are kept disjoint by the commit-SHA shape of the action row's third cell. If
     // that guard regressed, `actions/checkout` would be looked up as an npm package and the gate
@@ -129,7 +151,7 @@ describe("check-dependency-currency action pins", () => {
   const documented = [{ action: "actions/checkout", version: "v7.0.0", sha: SHA_A }];
 
   it("collects one entry per action repository, folding sub-action paths together", () => {
-    const pins = collectWorkflowPins([
+    const { pins } = collectWorkflowPins([
       workflow(
         "ci.yml",
         `      - uses: github/codeql-action/init@${SHA_A} # v4.37.7`,
@@ -141,7 +163,7 @@ describe("check-dependency-currency action pins", () => {
   });
 
   it("passes when the document and the workflows agree", () => {
-    const pins = collectWorkflowPins([
+    const { pins } = collectWorkflowPins([
       workflow("ci.yml", `      - uses: actions/checkout@${SHA_A} # v7.0.0`),
     ]);
     expect(actionFailures(documented, pins)).toEqual([]);
@@ -150,7 +172,7 @@ describe("check-dependency-currency action pins", () => {
   it("rejects sub-actions of one repository that have drifted onto different refs", () => {
     // Dependabot does not group an action's sub-actions, so bumping `init` without `analyze`
     // produces a version-mismatch failure at CodeQL runtime that no other gate here catches.
-    const pins = collectWorkflowPins([
+    const { pins } = collectWorkflowPins([
       workflow(
         "codeql.yml",
         `      - uses: github/codeql-action/init@${SHA_A} # v4.37.7`,
@@ -166,12 +188,39 @@ describe("check-dependency-currency action pins", () => {
   });
 
   it("rejects a workflow pin that no row dispositions", () => {
-    const pins = collectWorkflowPins([
+    const { pins } = collectWorkflowPins([
       workflow("ci.yml", `      - uses: some/action@${SHA_B} # v1.0.0`),
     ]);
     expect(actionFailures([], pins)).toEqual([
       "some/action: pinned in a workflow but absent from the closeout document",
     ]);
+  });
+
+  it("rejects an action documented twice, instead of silently keeping the last row", () => {
+    // A second row appended anywhere later would otherwise override the reviewed one and bless
+    // whatever the workflows currently pin — last-write-wins over a decision record.
+    const rows = [
+      { action: "actions/checkout", version: "v7.0.0", sha: SHA_A, disposition: "current" },
+      { action: "actions/checkout", version: "vEVIL", sha: SHA_B, disposition: "current" },
+    ];
+    const pins = collectWorkflowPins([
+      workflow("ci.yml", `- uses: actions/checkout@${SHA_B} # vEVIL`),
+    ]).pins;
+    const failures = actionFailures(rows, pins);
+    expect(failures.some((failure) => failure.includes("documented 2 times"))).toBe(true);
+  });
+
+  it("keeps each step's own version comment instead of the first textual match in the file", () => {
+    // Two steps pinning the same action with different comments must not collapse to whichever
+    // appears earlier: that reports agreement over a file that literally disagrees.
+    const { pins } = collectWorkflowPins([
+      workflow(
+        "ci.yml",
+        `- uses: actions/checkout@${SHA_A} # v7.0.0`,
+        `- uses: actions/checkout@${SHA_A} # v9.9.9`,
+      ),
+    ]);
+    expect(pins.get("actions/checkout").size).toBe(2);
   });
 
   it("rejects a documented action that no workflow pins", () => {
@@ -181,7 +230,7 @@ describe("check-dependency-currency action pins", () => {
   });
 
   it("rejects a pin whose commit or version comment disagrees with the document", () => {
-    const pins = collectWorkflowPins([
+    const { pins } = collectWorkflowPins([
       workflow("ci.yml", `      - uses: actions/checkout@${SHA_B} # v7.0.1`),
     ]);
     const failures = actionFailures(documented, pins);
@@ -192,7 +241,7 @@ describe("check-dependency-currency action pins", () => {
   it("ignores a pinned reference that is not an executed step", () => {
     // Raw-text scanning counted a pin inside a comment or a run script. A documented row could then
     // stay green on an action no workflow executes — the completeness check inverted.
-    const pins = collectWorkflowPins([
+    const { pins } = collectWorkflowPins([
       rawWorkflow(
         "ci.yml",
         [
@@ -208,8 +257,20 @@ describe("check-dependency-currency action pins", () => {
     expect(pins.size).toBe(0);
   });
 
+  it("reports an external action that is not pinned to a commit SHA", () => {
+    // Skipping what it cannot classify would make the gate easiest to pass by writing something it
+    // does not recognise — and a `@v4` or `@main` reference is exactly the mutable third-party code
+    // the pinning policy forbids.
+    const { pins, mutableReferences } = collectWorkflowPins([
+      workflow("ci.yml", "- uses: some/action@v4", "- uses: other/action@main"),
+    ]);
+    expect(pins.size).toBe(0);
+    expect(mutableReferences).toHaveLength(2);
+    expect(mutableReferences[0]).toContain("not pinned to a 40-character commit SHA");
+  });
+
   it("ignores a local composite action, which has no ref to pin", () => {
-    const pins = collectWorkflowPins([
+    const { pins } = collectWorkflowPins([
       workflow("ci.yml", "      - uses: ./.github/actions/setup-sandbox-isolation"),
     ]);
     expect(pins.size).toBe(0);
@@ -220,7 +281,7 @@ describe("check-dependency-currency default seams", () => {
   it("walks the real workflow directories and finds the pins this repository actually uses", () => {
     // The seam is where a wrong path constant hides: parsing and comparison can all be correct
     // while the gate silently reads nothing. A zero-pin result must never look like agreement.
-    const pins = collectWorkflowPins(defaultSeams().readWorkflows());
+    const { pins } = collectWorkflowPins(defaultSeams().readWorkflows());
     expect(pins.size).toBeGreaterThanOrEqual(10);
     expect([...pins.keys()]).toContain("actions/checkout");
   });

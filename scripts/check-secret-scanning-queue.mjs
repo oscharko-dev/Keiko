@@ -30,6 +30,7 @@ import { readFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { resolveHostExecutable } from "./lib/host-executable.mjs";
+import { documentLines, isSeparatorRow, unquote } from "./lib/markdown-table.mjs";
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -90,49 +91,53 @@ export function mergeAlerts(responses) {
   return [...byNumber.values()].sort((left, right) => left.number - right.number);
 }
 
-function tableCells(line) {
-  const trimmed = line.trim();
-  if (!trimmed.startsWith("|")) return null;
-  return trimmed
-    .split("|")
-    .slice(1, -1)
-    .map((cell) => cell.trim());
-}
-
-const SEPARATOR_ROW = /^\|[\s:|-]*$/u;
+const HEADING = /^#{1,6}\s/u;
+const DISPOSITIONS_HEADING = /^#{1,6}\s+Dispositions\s*$/u;
 const ALERT_REFERENCE = /^#(\d+)$/u;
 
-function tableRowKind(trimmed, cells) {
-  if (SEPARATOR_ROW.test(trimmed)) return "separator";
-  return cells[0] === "Alert" && cells.length >= 4 ? "header" : "row";
+// The exact vocabulary SECURITY.md defines for a triaged alert. Accepting any non-empty cell would
+// let "TBD" or a typo count as a decision, which is the same defect the sibling gate rejects for
+// action rows: the decision record is the artifact being enforced, not merely a filled-in cell.
+const DISPOSITIONS = new Set(["revoked", "used_in_tests", "false_positive", "unresolved"]);
+
+function alertNumber(cells) {
+  const match = ALERT_REFERENCE.exec(unquote(cells[0] ?? ""));
+  return match === null ? undefined : Number(match[1]);
 }
 
-function dispositionedAlertNumber(cells) {
-  if (cells.length < 4) return undefined;
-  const match = ALERT_REFERENCE.exec(cells[0] ?? "");
-  if (match === null) return undefined;
-  // An empty disposition cell is a row someone started and did not finish; it is not a decision.
-  return (cells[3] ?? "").length > 0 ? Number(match[1]) : undefined;
+// One step of the table walk, split out so the reader (and the complexity limit) can see the state
+// machine rather than a nest of conditions.
+function advanceTable(table, line, cells, documented) {
+  if (cells === null) return table === "inside" ? "done" : table;
+  if (isSeparatorRow(line)) return table;
+  if (table === "before") {
+    return cells[0] === "Alert" && cells.length >= 4 ? "inside" : "before";
+  }
+  const number = alertNumber(cells);
+  // A row that is not an alert row ends the table: it is a second table's header, or an adjacent
+  // table that happens to start with no blank line between them.
+  if (number === undefined) return "done";
+  // A row inside the table with an unrecognised disposition is NOT a decision, and must not end the
+  // table either — it simply fails to document its alert, which the queue check then reports.
+  if (DISPOSITIONS.has(cells[3] ?? "")) documented.add(number);
+  return "inside";
 }
 
-// Bound to the dispositions table specifically, entered only through its `Alert` header and left at
-// the first non-table line. This document is expected to grow: any later table listing issue or
-// follow-up numbers would otherwise be read as security dispositions, and a newly opened alert that
-// happened to share a number with a follow-up would count as reviewed by nobody.
+// Reads exactly one table: the first one under the `Dispositions` heading. Anything looser lets an
+// unrelated `#31` elsewhere in this growing document count as a security decision and silence a
+// genuinely untriaged alert.
 export function parseDocumentedAlerts(markdown) {
   const documented = new Set();
-  let inDispositions = false;
-  for (const line of markdown.split(/\r?\n/)) {
-    const cells = tableCells(line);
-    if (cells === null) {
-      inDispositions = false;
+  let inSection = false;
+  let table = "before";
+  for (const { line, cells } of documentLines(markdown)) {
+    if (HEADING.test(line)) {
+      inSection = DISPOSITIONS_HEADING.test(line);
+      table = "before";
       continue;
     }
-    const kind = tableRowKind(line.trim(), cells);
-    if (kind === "header") inDispositions = true;
-    if (kind !== "row" || !inDispositions) continue;
-    const number = dispositionedAlertNumber(cells);
-    if (number !== undefined) documented.add(number);
+    if (!inSection || table === "done") continue;
+    table = advanceTable(table, line, cells, documented);
   }
   return documented;
 }
@@ -175,19 +180,26 @@ export function evaluate(seams) {
   return { openAlerts, failures: queueFailures(openAlerts, documented) };
 }
 
+// Exit 1 means the queue has an untriaged alert; exit 2 means this check could not answer the
+// question at all. The caller needs the distinction: alert-identifying detail must stay off a public
+// surface, but an auth or network failure contains none and should be visible, and a lane that
+// reports both identically leaves an operator unable to tell a real finding from a broken check.
+export const EXIT_UNTRIAGED = 1;
+export const EXIT_ERROR = 2;
+
 export function main(seams = defaultSeams()) {
   let result;
   try {
     result = evaluate(seams);
   } catch (error) {
     // Fail closed. An unauthenticated or failed request must never read as an empty queue.
-    process.stderr.write(`secret-scanning-queue: FAIL — ${String(error.message ?? error)}\n`);
-    return 1;
+    process.stderr.write(`secret-scanning-queue: ERROR — ${String(error.message ?? error)}\n`);
+    return EXIT_ERROR;
   }
   if (result.failures.length > 0) {
     process.stderr.write("secret-scanning-queue: FAIL\n");
     for (const failure of result.failures) process.stderr.write(`  - ${failure}\n`);
-    return 1;
+    return EXIT_UNTRIAGED;
   }
   process.stdout.write(
     `secret-scanning-queue: PASS — ${String(result.openAlerts.length)} open alert(s), ` +
