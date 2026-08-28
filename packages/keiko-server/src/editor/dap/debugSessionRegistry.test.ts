@@ -1,6 +1,11 @@
 import { PassThrough } from "node:stream";
 import { describe, expect, it, vi, type Mock } from "vitest";
 import type { DebugLifecycleEvidence } from "@oscharko-dev/keiko-contracts";
+import {
+  DEBUG_LIFECYCLE_EVENT_KINDS,
+  isDebugLifecycleEvidence,
+  LEGAL_STATES_BY_EVENT,
+} from "@oscharko-dev/keiko-contracts/runtime/debug/debug-lifecycle";
 import type { QualifiedDebugCapsuleHandle } from "./dapCapsuleSupervisor.js";
 import {
   createDebugSessionRegistry,
@@ -1794,5 +1799,59 @@ describe("DebugSessionRegistry canonical lifecycle", () => {
     ).rejects.toMatchObject({ code: "INVALID_CAPSULE_PLAN" });
     expect(records).toStrictEqual([]);
     expect(registry.sessionIds()).toStrictEqual([]);
+  });
+});
+
+// KEIKO-0890: keiko-contracts' `LEGAL_STATES_BY_EVENT` (consulted by `hasClosedVocabulary`) is a
+// second source of truth for the (eventKind, state) pairs this registry — the sole producer that
+// flows through dapLifecycleLedger.ts — actually emits. A mismatch would start rejecting legitimate
+// evidence, which is worse than the permissiveness it replaces, so this drives every terminal path
+// through the real registry and fails if the registry ever emits a pairing the table does not
+// recognize, catching drift instead of letting it silently reject real evidence.
+describe("DebugSessionRegistry (eventKind, state) pairings stay inside LEGAL_STATES_BY_EVENT (KEIKO-0890)", () => {
+  it("keeps every emitted pairing, across every terminal path, inside the legality table", async () => {
+    const seen = new Set<string>();
+    function trackAndValidate(records: { readonly evidence: DebugLifecycleEvidence }[]): void {
+      for (const { evidence } of records) {
+        expect(isDebugLifecycleEvidence(evidence)).toBe(true);
+        seen.add(`${evidence.eventKind}/${evidence.state}`);
+      }
+    }
+
+    const stopped = setup();
+    await activate(stopped.registry);
+    await stopped.registry.stop("session_a");
+    trackAndValidate(stopped.records);
+
+    const revoked = setup();
+    await activate(revoked.registry);
+    await revoked.registry.revoke("session_a");
+    trackAndValidate(revoked.records);
+
+    const failed = setup();
+    await activate(failed.registry);
+    await failed.registry.teardown("session_a", "debuggeeExit");
+    trackAndValidate(failed.records);
+
+    const throttled = setup(() => 1);
+    await throttled.registry.reserve(identity());
+    const first = await throttled.registry.beginStartupAttempt("session_a");
+    await throttled.registry.completeLaunchFailure("session_a", first.attemptId);
+    const second = await throttled.registry.beginStartupAttempt("session_a");
+    await throttled.registry.completeLaunchFailure("session_a", second.attemptId);
+    await expect(throttled.registry.beginStartupAttempt("session_a")).rejects.toMatchObject({
+      code: "STARTUP_THROTTLED",
+    });
+    trackAndValidate(throttled.records);
+
+    // Every legal pairing this table declares was actually exercised above, and nothing outside it
+    // was ever emitted: a table entry the registry never emits, or a registry pairing the table does
+    // not recognize, both surface as a mismatch here.
+    const legalPairs = new Set(
+      DEBUG_LIFECYCLE_EVENT_KINDS.flatMap((eventKind) =>
+        [...LEGAL_STATES_BY_EVENT[eventKind]].map((state) => `${eventKind}/${state}`),
+      ),
+    );
+    expect(seen).toStrictEqual(legalPairs);
   });
 });

@@ -4,6 +4,7 @@ import {
   DEBUG_LIFECYCLE_REASONS,
   DEBUG_SESSION_STATES,
   EVIDENCE_KEYS,
+  LEGAL_STATES_BY_EVENT,
   isDebugLifecycleEvent,
   isDebugLifecycleEvidence,
 } from "./debug-lifecycle.js";
@@ -91,13 +92,33 @@ describe("debug lifecycle evidence", () => {
   // Derived from the production lookups (KEIKO-0377) rather than restated here — the third
   // hand-maintained copy of each vocabulary this finding flags — so a member added to the union AND
   // its Record<Union, true> table is automatically exercised here too, with nothing left to forget.
-  it.each(DEBUG_LIFECYCLE_EVENT_KINDS)("accepts closed event kind %s", (eventKind) => {
-    expect(isDebugLifecycleEvidence({ ...valid, eventKind })).toBe(true);
-  });
-
-  it.each(DEBUG_SESSION_STATES)("accepts closed state %s", (state) => {
-    expect(isDebugLifecycleEvidence({ ...valid, state })).toBe(true);
-  });
+  //
+  // eventKind and state are no longer independently-membership-checked (KEIKO-0890): a member of
+  // each closed vocabulary can still form a semantically illegal pairing (e.g. "start" + "running"),
+  // so every (eventKind, state) combination is exercised against LEGAL_STATES_BY_EVENT instead of
+  // crossing DEBUG_LIFECYCLE_EVENT_KINDS with DEBUG_SESSION_STATES independently. Because
+  // LEGAL_STATES_BY_EVENT is a complete Record<DebugLifecycleEventKind, …>, every event kind still
+  // gets an entry with nothing left to forget; the table's own values are what say which states are
+  // legal for it.
+  //
+  // This in-package check only proves "accepted iff in the table" — it cannot catch a
+  // DebugSessionState the table omits from every legal set (that state's asserted rejection stays
+  // green here regardless of whether the real producer emits it). The compensating control for that
+  // gap lives outside this package: debugSessionRegistry.test.ts drives the real producer
+  // (packages/keiko-server/src/editor/dap/debugSessionRegistry.ts) through every terminal path and
+  // fails if it ever emits an (eventKind, state) pairing this table does not recognize.
+  it.each(
+    DEBUG_LIFECYCLE_EVENT_KINDS.flatMap((eventKind) =>
+      DEBUG_SESSION_STATES.map((state) => [eventKind, state] as const),
+    ),
+  )(
+    "(eventKind: %s, state: %s) is accepted iff it is in LEGAL_STATES_BY_EVENT",
+    (eventKind, state) => {
+      expect(isDebugLifecycleEvidence({ ...valid, eventKind, state })).toBe(
+        LEGAL_STATES_BY_EVENT[eventKind].has(state),
+      );
+    },
+  );
 
   it.each(DEBUG_LIFECYCLE_REASONS)("accepts closed reason %s", (reason) => {
     expect(isDebugLifecycleEvidence({ ...valid, reason })).toBe(true);
@@ -165,6 +186,17 @@ describe("debug lifecycle evidence", () => {
 
   it("rejects arrays even when hostile properties mimic every evidence field", () => {
     expect(isDebugLifecycleEvidence(Object.assign([], valid))).toBe(false);
+  });
+
+  // KEIKO-0890 red proof: eventKind "start" and state "running" are each independently members of
+  // their closed vocabularies, so the pre-fix three-independent-checks hasClosedVocabulary accepted
+  // this pairing even though no producer ever emits a "start" event carrying a "running" state (that
+  // pairing is "active"/"running" — see debugSessionRegistry.ts). This must fail against the
+  // unmodified code and pass once hasClosedVocabulary also consults LEGAL_STATES_BY_EVENT.
+  it("rejects a syntactically valid but semantically illegal (eventKind, state) pairing", () => {
+    expect(isDebugLifecycleEvidence({ ...valid, eventKind: "start", state: "running" })).toBe(
+      false,
+    );
   });
 
   it("does not coerce an object-shaped provisioning digest", () => {
