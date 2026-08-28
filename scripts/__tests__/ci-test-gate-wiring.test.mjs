@@ -190,7 +190,14 @@ describe("CI test/gate wiring guard", () => {
   });
 
   it("pins the PKCS assembly required by the RFC3161 analyzer build", () => {
-    expect(windowsRfc3161QualityProject).toContain("<TargetFramework>net8.0</TargetFramework>");
+    // KEIKO-0892: net8.0-windows (not the OS-agnostic net8.0) is required so CA1416 recognizes the
+    // four unannotated crypt32.dll P/Invoke sites in windows-portable-rfc3161.cs as
+    // platform-restricted, adding a project-level defense-in-depth layer alongside the
+    // orchestration-level Windows-only enforcement (PowerShell caller name + runner.os gate).
+    expect(windowsRfc3161QualityProject).toContain(
+      "<TargetFramework>net8.0-windows</TargetFramework>",
+    );
+    expect(windowsRfc3161QualityProject).not.toContain("<TargetFramework>net8.0</TargetFramework>");
     expect(windowsRfc3161QualityProject).toContain(
       '<PackageReference Include="System.Security.Cryptography.Pkcs" Version="10.0.9" />',
     );
