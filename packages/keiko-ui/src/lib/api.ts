@@ -656,6 +656,8 @@ export interface GatewaySetupResponse {
   readonly unsupportedModels?: readonly GatewayUnsupportedDiscoveredModel[] | undefined;
   readonly unverifiedEmbeddingModelIds?: readonly string[] | undefined;
   readonly droppedEmbeddingModelIds?: readonly string[] | undefined;
+  /** Chat models retained after a transient setup failure; they need a successful re-check. */
+  readonly unverifiedChatModelIds?: readonly string[] | undefined;
   readonly providerCount: number;
   readonly models: ModelCapability[];
   readonly config: SafeGatewayConfig;

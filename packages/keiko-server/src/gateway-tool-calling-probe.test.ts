@@ -30,7 +30,15 @@ describe("probeGatewayToolCalling", () => {
       requestBody = typeof init?.body === "string" ? init.body : "";
       return Promise.resolve(
         jsonResponse({
-          choices: [{ message: { tool_calls: [{ function: { name: "report_readiness" } }] } }],
+          choices: [
+            {
+              message: {
+                tool_calls: [
+                  { function: { name: "report_readiness", arguments: '{"status":"ok"}' } },
+                ],
+              },
+            },
+          ],
         }),
       );
     };
@@ -48,6 +56,45 @@ describe("probeGatewayToolCalling", () => {
     await expect(probeGatewayToolCalling(CONFIG, PROVIDER, rejected)).resolves.toBe("unsupported");
     await expect(probeGatewayToolCalling(CONFIG, PROVIDER, missingCall)).resolves.toBe(
       "unsupported",
+    );
+  });
+
+  it("rejects malformed, incomplete, or unexpected forced-call arguments", async () => {
+    const malformed: typeof fetch = () =>
+      Promise.resolve(
+        jsonResponse({
+          choices: [
+            {
+              message: { tool_calls: [{ function: { name: "report_readiness", arguments: "{" } }] },
+            },
+          ],
+        }),
+      );
+    const unexpected: typeof fetch = () =>
+      Promise.resolve(
+        jsonResponse({
+          choices: [
+            {
+              message: {
+                tool_calls: [
+                  { function: { name: "report_readiness", arguments: '{"status":"no"}' } },
+                ],
+              },
+            },
+          ],
+        }),
+      );
+
+    await expect(probeGatewayToolCalling(CONFIG, PROVIDER, malformed)).resolves.toBe("unsupported");
+    await expect(probeGatewayToolCalling(CONFIG, PROVIDER, unexpected)).resolves.toBe(
+      "unsupported",
+    );
+  });
+
+  it("keeps transient client statuses unverified", async () => {
+    const rateLimited: typeof fetch = () => Promise.resolve(jsonResponse({}, 429));
+    await expect(probeGatewayToolCalling(CONFIG, PROVIDER, rateLimited)).resolves.toBe(
+      "unverified",
     );
   });
 

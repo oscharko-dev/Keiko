@@ -9,6 +9,15 @@ import {
 } from "./model-selection.js";
 import type { GatewayConfig, ModelCapability, ModelProviderConfig } from "./types.js";
 
+function verifiedToolCallingProof(): NonNullable<ModelCapability["toolCallingVerification"]> {
+  return {
+    status: "verified",
+    checkedAt: new Date().toISOString(),
+    probe: "gateway-tool-calling-v1",
+    configurationFingerprint: "0".repeat(64),
+  };
+}
+
 function provider(modelId: string): ModelProviderConfig {
   return {
     modelId,
@@ -78,6 +87,7 @@ describe("selectConfiguredModel", () => {
             contextWindow: 0,
             maxOutputTokens: 0,
             toolCalling: true,
+            toolCallingVerification: verifiedToolCallingProof(),
             structuredOutput: true,
             streaming: true,
             supportsImageInput: false,
@@ -95,6 +105,7 @@ describe("selectConfiguredModel", () => {
             contextWindow: 0,
             maxOutputTokens: 0,
             toolCalling: true,
+            toolCallingVerification: verifiedToolCallingProof(),
             structuredOutput: true,
             streaming: true,
             supportsImageInput: false,
@@ -124,6 +135,7 @@ describe("selectConfiguredModel", () => {
             contextWindow: 0,
             maxOutputTokens: 0,
             toolCalling: true,
+            toolCallingVerification: verifiedToolCallingProof(),
             structuredOutput: false,
             streaming: true,
             supportsImageInput: false,
@@ -157,6 +169,7 @@ describe("selectConfiguredModel", () => {
             contextWindow: 64_000,
             maxOutputTokens: 4_096,
             toolCalling: true,
+            toolCallingVerification: verifiedToolCallingProof(),
             structuredOutput: true,
             streaming: true,
             supportsImageInput: false,
@@ -173,6 +186,40 @@ describe("selectConfiguredModel", () => {
       { kind: "chat", toolCalling: true, structuredOutput: true },
     );
     expect(selected).toBe("example-private-chat");
+  });
+
+  it("fails closed when a tool-calling proof expires while the process is running", () => {
+    const selected = selectConfiguredModel(
+      config(
+        ["expired-proof"],
+        [
+          {
+            id: "expired-proof",
+            kind: "chat",
+            contextWindow: 64_000,
+            maxOutputTokens: 4_096,
+            toolCalling: true,
+            toolCallingVerification: {
+              ...verifiedToolCallingProof(),
+              checkedAt: new Date(Date.now() - 24 * 60 * 60 * 1_000 - 1).toISOString(),
+            },
+            structuredOutput: true,
+            streaming: true,
+            supportsImageInput: false,
+            supportsDocumentInput: false,
+            workflowEligible: false,
+            costClass: "medium",
+            latencyClass: "standard",
+            throughputHint: "test",
+            preferredUseCases: ["Test"],
+            knownLimitations: [],
+          },
+        ],
+      ),
+      { kind: "chat", toolCalling: true },
+    );
+
+    expect(selected).toBeUndefined();
   });
 });
 

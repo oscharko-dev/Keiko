@@ -47,10 +47,12 @@ import type {
 } from "./types.js";
 
 export function toolCallingConfigurationFingerprint(provider: ModelProviderConfig): string {
+  // Credential header spelling controls authentication transport, not the provider protocol or its
+  // tool-call semantics. Deliberately exclude it: hashing a request-supplied header name creates a
+  // misleading password-hash dataflow and cannot make a capability verdict more authoritative.
   const binding = [
     provider.modelId,
     provider.baseUrl,
-    provider.apiKeyHeaderName ?? DEFAULT_API_KEY_HEADER_NAME,
     provider.endpointStyle ?? "openai-compatible",
     provider.apiVersion ?? "",
   ];

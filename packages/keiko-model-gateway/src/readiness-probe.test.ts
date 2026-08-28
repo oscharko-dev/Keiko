@@ -66,6 +66,31 @@ describe("requestGatewayReadinessChatCompletion", () => {
     expect(seenUrl).toBe("https://provider.example/v1/chat/completions");
   });
 
+  it("uses the Azure deployment protocol for readiness probes", async () => {
+    let seenUrl = "";
+    const fetchImpl: typeof fetch = (url) => {
+      seenUrl = url instanceof Request ? url.url : url.toString();
+      return Promise.resolve(jsonResponse({ choices: [] }));
+    };
+
+    await requestGatewayReadinessChatCompletion({
+      config: CONFIG,
+      provider: {
+        ...PROVIDER,
+        baseUrl: "https://provider.example",
+        modelId: "deployment/name",
+        endpointStyle: "azure-openai-deployment",
+        apiVersion: "2025-03-01-preview",
+      },
+      body: { messages: [] },
+      fetchImpl,
+    });
+
+    expect(seenUrl).toBe(
+      "https://provider.example/openai/deployments/deployment%2Fname/chat/completions?api-version=2025-03-01-preview",
+    );
+  });
+
   it("sends the provider model id and credential header", async () => {
     let seenAuth: string | null = null;
     let seenBody = "";

@@ -150,6 +150,10 @@ function unusableModelSummary(t: GatewaySetupTranslate, result: GatewaySetupResp
   if (unverified.length > 0) {
     parts.push(t("gatewaySetup.unusable.unverified", { models: unverified.join(", ") }));
   }
+  const unverifiedChat = result.unverifiedChatModelIds ?? [];
+  if (unverifiedChat.length > 0) {
+    parts.push(t("gatewaySetup.unusable.unverified", { models: unverifiedChat.join(", ") }));
+  }
   return parts.join("");
 }
 
@@ -1081,7 +1085,8 @@ function reportedModelCount(result: GatewaySetupResponse): number {
     (result.skippedModelIds ?? []).length +
     (result.unsupportedModels ?? []).length +
     (result.droppedEmbeddingModelIds ?? []).length +
-    (result.unverifiedEmbeddingModelIds ?? []).length
+    (result.unverifiedEmbeddingModelIds ?? []).length +
+    (result.unverifiedChatModelIds ?? []).length
   );
 }
 

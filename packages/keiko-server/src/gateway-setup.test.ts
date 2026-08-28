@@ -525,22 +525,39 @@ describe("handleGatewaySetup", () => {
     };
     gatewayConfig.set(parseGatewayConfig(rawConfig), true);
     writeFileSync(gatewayConfig.storagePath, JSON.stringify(rawConfig), "utf8");
+    const sink = createBufferedServerLogSink();
+    setServerLogger(createServerLogger({ sink, level: "info" }));
 
-    const report = await runGatewayReadiness(
-      { modelId: "verified-by-readiness", options: { probes: ["tool_calling"] } },
-      { ...deps, gatewayReadinessFetch: readinessFetch },
-    );
+    try {
+      const report = await runGatewayReadiness(
+        { modelId: "verified-by-readiness", options: { probes: ["tool_calling"] } },
+        { ...deps, gatewayReadinessFetch: readinessFetch },
+        "corr-tool-proof",
+      );
 
-    expect("status" in report).toBe(false);
-    expect(requiredCapability(requiredGatewayConfig(deps), "verified-by-readiness")).toMatchObject({
-      toolCalling: true,
-      toolCallingVerification: {
-        status: "verified",
-        probe: "gateway-tool-calling-v1",
-      },
-    });
-    expect(readFileSync(gatewayConfig.storagePath, "utf8")).toContain("toolCallingVerification");
-    deps.store.close();
+      expect("status" in report).toBe(false);
+      expect(
+        requiredCapability(requiredGatewayConfig(deps), "verified-by-readiness"),
+      ).toMatchObject({
+        toolCalling: true,
+        toolCallingVerification: {
+          status: "verified",
+          probe: "gateway-tool-calling-v1",
+        },
+      });
+      expect(readFileSync(gatewayConfig.storagePath, "utf8")).toContain("toolCallingVerification");
+      const verificationEvent = sink.events.find(
+        (event) => event.op === "gateway.tool-calling.verification",
+      );
+      expect(verificationEvent).toMatchObject({
+        category: "gateway",
+        correlationId: "corr-tool-proof",
+        extra: { verificationStatus: "verified" },
+      });
+    } finally {
+      resetServerLogger();
+      deps.store.close();
+    }
   });
 
   it("keeps a temporarily unreachable chat deployment configured but tool-unverified", async () => {

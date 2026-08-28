@@ -1793,6 +1793,7 @@ async function defaultGatewaySetupTester(
   config: GatewayConfig,
   candidateModelIds: readonly string[],
   correlationId: string | undefined,
+  deps: UiHandlerDeps,
 ): Promise<GatewaySetupTestResult> {
   // Wired to the process activity log: first-run setup is where an operator's endpoint is wrong
   // in a way no UI message can name (a proxy that blocks CONNECT, a provider that answers 404 for
@@ -1825,21 +1826,51 @@ async function defaultGatewaySetupTester(
     },
     SETUP_SMOKE_CONCURRENCY,
   );
-  const checkedAt = new Date().toISOString();
-  const toolCallingObservations = await Promise.all(
-    testedModelIds.map(async (modelId): Promise<GatewaySetupToolCallingObservation> => {
-      const provider = config.providers.find((candidate) => candidate.modelId === modelId);
-      if (provider === undefined) {
-        return { modelId, status: "unverified", checkedAt };
-      }
-      return {
-        modelId,
-        status: await probeGatewayToolCalling(config, provider),
-        checkedAt,
-      };
-    }),
+  const toolCallingObservations = await setupToolCallingObservations(
+    config,
+    testedModelIds,
+    correlationId,
+    deps,
   );
   return { testedModelIds, responseFormatModelIds, toolCallingObservations };
+}
+
+async function setupToolCallingObservations(
+  config: GatewayConfig,
+  testedModelIds: readonly string[],
+  correlationId: string | undefined,
+  deps: UiHandlerDeps,
+): Promise<readonly GatewaySetupToolCallingObservation[]> {
+  const checkedAt = new Date().toISOString();
+  const toolCallingStatuses = new Map<string, GatewaySetupToolCallingObservation>();
+  await passingCandidates(
+    testedModelIds,
+    async (modelId) => {
+      const provider = config.providers.find((candidate) => candidate.modelId === modelId);
+      if (provider === undefined) {
+        toolCallingStatuses.set(modelId, { modelId, status: "unverified", checkedAt });
+        return;
+      }
+      toolCallingStatuses.set(modelId, {
+        modelId,
+        status: await probeGatewayToolCalling(config, provider, undefined, (error) => {
+          reportSetupVerificationFailure(
+            deps,
+            error,
+            correlationId,
+            "gateway.setup.tool-calling-probe",
+          );
+        }),
+        checkedAt,
+      });
+    },
+    SETUP_SMOKE_CONCURRENCY,
+  );
+  const toolCallingObservations = testedModelIds.map(
+    (modelId): GatewaySetupToolCallingObservation =>
+      toolCallingStatuses.get(modelId) ?? { modelId, status: "unverified", checkedAt },
+  );
+  return toolCallingObservations;
 }
 
 // Field incident (LiteLLM customer, 2026-08): chat models were smoke-tested, embedding models were
@@ -1928,7 +1959,7 @@ function gatewaySetupTester(
   const override = deps.gatewaySetupTester;
   if (override !== undefined) return override;
   return (config, candidateModelIds) =>
-    defaultGatewaySetupTester(config, candidateModelIds, correlationId);
+    defaultGatewaySetupTester(config, candidateModelIds, correlationId, deps);
 }
 
 const FIGMA_ME_ENDPOINT = "https://api.figma.com/v1/me";
@@ -4146,7 +4177,10 @@ function reportSetupVerificationFailure(
   deps: UiHandlerDeps,
   error: unknown,
   correlationId: string | undefined,
-  source: "gateway.setup.figma-verify" | "gateway.setup.provider-verify",
+  source:
+    | "gateway.setup.figma-verify"
+    | "gateway.setup.provider-verify"
+    | "gateway.setup.tool-calling-probe",
 ): void {
   emitServerDiagnostic(
     deps.diagnostics,
@@ -4628,6 +4662,11 @@ function temporaryGatewaySetupFailure(error: unknown): boolean {
   return (
     code === ERROR_CODES.RATE_LIMIT || (code !== undefined && SETUP_NETWORK_ERROR_CODES.has(code))
   );
+}
+
+function definitiveGatewaySetupFailure(error: unknown): boolean {
+  const status = setupHttpStatus(error);
+  return status === 401 || status === 403;
 }
 
 async function admitChatCandidates(
@@ -5722,12 +5761,86 @@ async function verifyAndSaveGatewaySetup(
   if (shouldRequireDeploymentNames(request, baseUrlCandidates, deps.env)) {
     return deploymentNamesRequiredResult();
   }
-  const errors: string[] = [];
-  for (const [index, baseUrl] of baseUrlCandidates.entries()) {
+  const attempted = await attemptSetupCandidates(
+    baseUrlCandidates,
+    request,
+    deps,
+    gatewayConfig,
+    seams,
+    current,
+  );
+  if (attempted.result !== undefined) return attempted.result;
+  return temporaryAdmissionOrFailure(
+    attempted.failures,
+    request,
+    deps,
+    gatewayConfig,
+    seams,
+    current,
+  );
+}
+
+interface SetupCandidateFailure {
+  readonly baseUrl: string;
+  readonly error: unknown;
+}
+
+interface SetupCandidateAttempts {
+  readonly failures: SetupCandidateFailure[];
+  readonly result?: RouteResult | undefined;
+}
+
+async function attemptSetupCandidates(
+  baseUrlCandidates: readonly string[],
+  request: SetupRequest,
+  deps: UiHandlerDeps,
+  gatewayConfig: RuntimeGatewayConfig,
+  seams: SetupSeams,
+  current: GatewayConfig | undefined,
+): Promise<SetupCandidateAttempts> {
+  const failures: SetupCandidateFailure[] = [];
+  for (const baseUrl of baseUrlCandidates) {
+    try {
+      const result = await trySetupCandidate(
+        baseUrl,
+        false,
+        request,
+        deps,
+        gatewayConfig,
+        seams,
+        current,
+      );
+      return { failures, result };
+    } catch (error) {
+      reportSetupVerificationFailure(
+        deps,
+        error,
+        request.correlationId,
+        "gateway.setup.provider-verify",
+      );
+      failures.push({ baseUrl, error });
+    }
+  }
+  return { failures };
+}
+
+async function temporaryAdmissionOrFailure(
+  failures: SetupCandidateFailure[],
+  request: SetupRequest,
+  deps: UiHandlerDeps,
+  gatewayConfig: RuntimeGatewayConfig,
+  seams: SetupSeams,
+  current: GatewayConfig | undefined,
+): Promise<RouteResult> {
+  const temporary = failures.find((failure) => temporaryGatewaySetupFailure(failure.error));
+  if (
+    temporary !== undefined &&
+    !failures.some((failure) => definitiveGatewaySetupFailure(failure.error))
+  ) {
     try {
       return await trySetupCandidate(
-        baseUrl,
-        index === baseUrlCandidates.length - 1,
+        temporary.baseUrl,
+        true,
         request,
         deps,
         gatewayConfig,
@@ -5741,10 +5854,16 @@ async function verifyAndSaveGatewaySetup(
         request.correlationId,
         "gateway.setup.provider-verify",
       );
-      errors.push(`candidate ${String(errors.length + 1)}: ${setupCandidateError(error)}`);
+      failures.push({ baseUrl: temporary.baseUrl, error });
     }
   }
-  return setupFailureResult(errors, request.correlationId);
+  return setupFailureResult(candidateFailureMessages(failures), request.correlationId);
+}
+
+function candidateFailureMessages(failures: readonly SetupCandidateFailure[]): readonly string[] {
+  return failures.map(
+    (failure, index) => `candidate ${String(index + 1)}: ${setupCandidateError(failure.error)}`,
+  );
 }
 
 export async function handleGatewaySetup(
@@ -5969,7 +6088,33 @@ function persistVerifiedCapabilityUpdate(
   consumeObservation = true,
 ): RouteResult {
   const raw = rawConfigForVerifiedCapabilityUpdate(updated, gatewayConfig.storagePath, deps);
-  persistGatewayConfig(raw, gatewayConfig.storagePath, deps);
+  try {
+    persistGatewayConfig(raw, gatewayConfig.storagePath, deps);
+  } catch (error) {
+    // A live negative tool verdict must take effect even if its durable evidence cannot be saved.
+    // Continuing to route tool calls on the old in-memory proof would widen authority exactly when
+    // the latest provider observation says it is no longer justified.
+    if (!consumeObservation) {
+      applyVerifiedCapabilityUpdate(gatewayConfig, modelId, generation, updated, false);
+    }
+    throw error;
+  }
+  return applyVerifiedCapabilityUpdate(
+    gatewayConfig,
+    modelId,
+    generation,
+    updated,
+    consumeObservation,
+  );
+}
+
+function applyVerifiedCapabilityUpdate(
+  gatewayConfig: RuntimeGatewayConfig,
+  modelId: string,
+  generation: number,
+  updated: GatewayConfig,
+  consumeObservation = true,
+): RouteResult {
   // Persistence is synchronous, so no configuration mutation can interleave between the
   // generation check in the handler and this consumption. Keep the live observation available
   // when durable storage fails, allowing the operator to retry the exact verified update.
@@ -5981,24 +6126,42 @@ function persistVerifiedCapabilityUpdate(
   // one) vanishes from the chat pickers until the operator re-runs identical probes.
   // Field-level apply stays consume-once: capability fields are NOT re-recorded, so a replayed
   // apply still answers 409.
-  const readyObservations = updated.providers
+  const observations = updated.providers
     .map((provider) => ({
       modelId: provider.modelId,
       observation: gatewayConfig.verifiedCapability(provider.modelId),
     }))
-    .filter((entry) => entry.observation?.fields.conversationReady === true);
+    .filter((entry) => entry.observation !== undefined)
+    .map((entry) => ({
+      ...entry,
+      fields: preservedVerifiedCapabilityFields(
+        entry.observation?.fields ?? {},
+        entry.modelId === modelId,
+        consumeObservation,
+      ),
+    }))
+    .filter((entry) => Object.keys(entry.fields).length > 0);
   if (consumeObservation && !gatewayConfig.clearVerifiedCapability(modelId, generation)) {
     return staleCapabilityObservationResult();
   }
   gatewayConfig.set(updated, true);
-  for (const entry of readyObservations) {
+  for (const entry of observations) {
     gatewayConfig.recordVerifiedCapability(
       entry.modelId,
-      { conversationReady: true },
+      entry.fields,
       entry.observation?.checkedAt ?? new Date().toISOString(),
     );
   }
   return { status: 200, body: { ok: true, model: findConfiguredCapability(updated, modelId) } };
+}
+
+function preservedVerifiedCapabilityFields(
+  fields: VerifiedModelCapabilityFields,
+  isAppliedModel: boolean,
+  consumeObservation: boolean,
+): VerifiedModelCapabilityFields {
+  if (!consumeObservation || !isAppliedModel) return fields;
+  return fields.conversationReady === true ? { conversationReady: true } : {};
 }
 
 function toolCallingStatusFromReadiness(
@@ -6017,33 +6180,63 @@ export function reconcileGatewayToolCallingReadiness(
   deps: UiHandlerDeps,
   report: GatewayReadinessReport,
   observedGeneration: number | undefined,
+  correlationId = UNKNOWN_CORRELATION_ID,
 ): void {
-  const gatewayConfig = deps.gatewayConfig;
-  const current = gatewayConfig?.current();
-  if (
-    gatewayConfig === undefined ||
-    current === undefined ||
-    (observedGeneration !== undefined && gatewayConfig.generation() !== observedGeneration)
-  ) {
-    return;
-  }
+  const reconciliation = currentToolCallingReconciliation(deps, observedGeneration);
+  if (reconciliation === undefined) return;
+  if (!report.probes.some((probe) => probe.name === "tool_calling")) return;
   const status = toolCallingStatusFromReadiness(report);
   const updated = replaceModelCapability(
-    current,
+    reconciliation.current,
     report.modelId,
     { toolCalling: status === "verified" },
     report.checkedAt,
     status,
   );
   if (updated === undefined) return;
+  logToolCallingVerification(reconciliation.current, report.modelId, status, correlationId);
   persistVerifiedCapabilityUpdate(
-    gatewayConfig,
+    reconciliation.gatewayConfig,
     deps,
     report.modelId,
-    gatewayConfig.generation(),
+    reconciliation.gatewayConfig.generation(),
     updated,
     false,
   );
+}
+
+function currentToolCallingReconciliation(
+  deps: UiHandlerDeps,
+  observedGeneration: number | undefined,
+): { readonly gatewayConfig: RuntimeGatewayConfig; readonly current: GatewayConfig } | undefined {
+  const gatewayConfig = deps.gatewayConfig;
+  const current = gatewayConfig?.current();
+  if (gatewayConfig === undefined || current === undefined) return undefined;
+  return observedGeneration === undefined || gatewayConfig.generation() === observedGeneration
+    ? { gatewayConfig, current }
+    : undefined;
+}
+
+function logToolCallingVerification(
+  config: GatewayConfig,
+  modelId: string,
+  status: ToolCallingVerification["status"],
+  correlationId: string,
+): void {
+  const provider = config.providers.find((candidate) => candidate.modelId === modelId);
+  processServerLogSink().write({
+    category: "gateway",
+    op: "gateway.tool-calling.verification",
+    correlationId,
+    status: status === "verified" ? 200 : 503,
+    ...(status === "verified" ? {} : { errorKind: status }),
+    extra: {
+      verificationStatus: status,
+      ...(provider === undefined
+        ? {}
+        : { configurationFingerprint: toolCallingConfigurationFingerprint(provider) }),
+    },
+  });
 }
 
 /** Applies only generation-current live observations after an explicit, human-confirmed request. */

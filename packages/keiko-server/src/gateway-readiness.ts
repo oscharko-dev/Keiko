@@ -616,9 +616,26 @@ async function probeToolCalling(
   deps: UiHandlerDeps,
   config: GatewayConfig,
   provider: ModelProviderConfig,
+  correlationId: string,
 ): Promise<GatewayReadinessProbeResult> {
   const start = Date.now();
-  const status = await probeGatewayToolCalling(config, provider, deps.gatewayReadinessFetch);
+  let failure: GatewayReadinessProbeResult | undefined;
+  const status = await probeGatewayToolCalling(
+    config,
+    provider,
+    deps.gatewayReadinessFetch,
+    (error) => {
+      failure = probeFailure(
+        deps,
+        correlationId,
+        "tool_calling",
+        start,
+        "Tool calling could not be verified.",
+        error,
+      );
+    },
+  );
+  if (failure !== undefined) return failure;
   if (status === "verified") {
     return result(
       "tool_calling",
@@ -985,7 +1002,7 @@ async function runProbe(
   const { config, provider } = selection;
   if (name === "chat") return probeChat(deps, config, provider, correlationId);
   if (name === "streaming") return probeStreaming(deps, config, provider, correlationId);
-  if (name === "tool_calling") return probeToolCalling(deps, config, provider);
+  if (name === "tool_calling") return probeToolCalling(deps, config, provider, correlationId);
   if (name === "json_schema") return probeJsonSchema(deps, config, provider, correlationId);
   if (name === "embedding") return probeEmbedding(deps, config, correlationId);
   if (name === "reranker") return probeReranker(deps, config, correlationId);
@@ -1150,7 +1167,7 @@ function reconcileToolCallingReadiness(
 ): void {
   if (!report.probes.some((probe) => probe.name === "tool_calling")) return;
   try {
-    reconcileGatewayToolCallingReadiness(deps, report, observedGeneration);
+    reconcileGatewayToolCallingReadiness(deps, report, observedGeneration, correlationId);
   } catch (error) {
     emitServerDiagnostic(
       deps.diagnostics,

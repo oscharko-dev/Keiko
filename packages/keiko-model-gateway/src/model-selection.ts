@@ -40,6 +40,7 @@ const voiceCapabilityCache = new WeakMap<
   ConfiguredCapabilitySource,
   Map<string, VoiceCapabilityResolution>
 >();
+const TOOL_CALLING_VERIFICATION_MAX_AGE_MS = 24 * 60 * 60 * 1_000;
 
 export interface ModelSelectionQuery {
   readonly kind: ModelKind;
@@ -81,7 +82,7 @@ function matches(capability: ModelCapability, query: ModelSelectionQuery): boole
   if (capability.kind !== query.kind) {
     return false;
   }
-  if (query.toolCalling === true && !capability.toolCalling) {
+  if (query.toolCalling === true && !hasCurrentToolCallingVerification(capability)) {
     return false;
   }
   if (query.structuredOutput === true && !capability.structuredOutput) {
@@ -94,6 +95,15 @@ function matches(capability: ModelCapability, query: ModelSelectionQuery): boole
     return false;
   }
   return true;
+}
+
+function hasCurrentToolCallingVerification(capability: ModelCapability): boolean {
+  if (!capability.toolCalling || capability.toolCallingVerification?.status !== "verified") {
+    return false;
+  }
+  const checkedAt = Date.parse(capability.toolCallingVerification.checkedAt);
+  const ageMs = Date.now() - checkedAt;
+  return Number.isFinite(checkedAt) && ageMs >= 0 && ageMs <= TOOL_CALLING_VERIFICATION_MAX_AGE_MS;
 }
 
 export function assertConfiguredModel(config: ConfiguredCapabilitySource, modelId: string): void {
