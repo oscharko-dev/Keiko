@@ -6188,7 +6188,10 @@ function applyVerifiedCapabilityUpdate(
     .filter((entry) => entry.observation !== undefined)
     .map((entry) => ({
       ...entry,
-      fields: preservedVerifiedCapabilityFields(entry.observation?.fields ?? {}),
+      fields:
+        !consumeObservation && entry.modelId === modelId
+          ? (entry.observation?.fields ?? {})
+          : preservedVerifiedCapabilityFields(entry.observation?.fields ?? {}),
     }))
     .filter((entry) => Object.keys(entry.fields).length > 0);
   if (consumeObservation && !gatewayConfig.clearVerifiedCapability(modelId, generation)) {
