@@ -19,13 +19,24 @@ import { runGenTestsCli, runInvestigateCli } from "@oscharko-dev/keiko-cli";
 import { parseRunRequest } from "@oscharko-dev/keiko-server";
 import type { EvalRunOptions, EvalRunnerDeps } from "./runner.js";
 import type { SurfaceParityDeps } from "./surface-parity.js";
-import type { ScoringInput } from "./index.js";
+import type { EvaluationFixture, ScoringInput } from "./index.js";
 import { must } from "./_support.js";
 
 // Fixed clock and id source so test output is deterministic
 const FIXED_NOW = 1_700_000_000_000;
 const fixedNow = (): number => FIXED_NOW;
 const fixedId = (name: string) => (): string => `eval-test-${name}`;
+
+// KEIKO-0533 (#3310): fixtureByName now returns a FixtureLookupResult discriminated union (found /
+// not-found / ambiguous) instead of EvaluationFixture | undefined, so tests use a fixed <kind>/<name>
+// selector — always unambiguous — and unwrap the "found" case here.
+function requireFixture(selector: string): EvaluationFixture {
+  const result = fixtureByName(selector);
+  if (result.status !== "found") {
+    throw new Error(`expected to find fixture "${selector}" (got ${result.status})`);
+  }
+  return result.fixture;
+}
 
 const SURFACE_PARITY_DEPS: SurfaceParityDeps = {
   runGenTestsCli,
@@ -145,7 +156,7 @@ describe("EvalScorecard shape", () => {
 
 describe("live-mode evidence semantics", () => {
   it("records current-run evidence refs, real timestamps, and folded model usage", async () => {
-    const fixture = must(fixtureByName("unit-tests/happy-path"));
+    const fixture = requireFixture("unit-tests/happy-path");
     const store = createInMemoryEvidenceStore();
     store.put("old-run", "{}");
     const scorecard = await runEvaluationSuite(
@@ -171,7 +182,7 @@ describe("live-mode evidence semantics", () => {
   });
 
   it("fails early when live mode starts without a resolved model selection", async () => {
-    const fixture = must(fixtureByName("unit-tests/happy-path"));
+    const fixture = requireFixture("unit-tests/happy-path");
     await expect(
       runEvaluationSuite(
         { mode: "live", fixtures: [fixture] },
@@ -190,7 +201,7 @@ describe("live-mode evidence semantics", () => {
 
 describe("unit-tests/happy-path fixture", () => {
   async function run(): Promise<ReturnType<typeof runEvaluationSuite>> {
-    const f = must(fixtureByName("unit-tests/happy-path"));
+    const f = requireFixture("unit-tests/happy-path");
     return runEvaluationSuite(makeOfflineOptions([f]), makeDeps("ut-happy"));
   }
 
@@ -230,7 +241,7 @@ describe("unit-tests/happy-path fixture", () => {
 
 describe("unit-tests/unsafe-action fixture", () => {
   async function run(): Promise<ReturnType<typeof runEvaluationSuite>> {
-    const f = must(fixtureByName("unit-tests/unsafe-action"));
+    const f = requireFixture("unit-tests/unsafe-action");
     return runEvaluationSuite(makeOfflineOptions([f]), makeDeps("ut-unsafe"));
   }
 
@@ -266,7 +277,7 @@ describe("unit-tests/unsafe-action fixture", () => {
 
 describe("unit-tests/retry-then-accept fixture", () => {
   async function run(): Promise<ReturnType<typeof runEvaluationSuite>> {
-    const f = must(fixtureByName("unit-tests/retry-then-accept"));
+    const f = requireFixture("unit-tests/retry-then-accept");
     return runEvaluationSuite(makeOfflineOptions([f]), makeDeps("ut-retry"));
   }
 
@@ -293,7 +304,7 @@ describe("unit-tests/retry-then-accept fixture", () => {
 
 describe("bug-investigation/happy-path fixture", () => {
   async function run(): Promise<ReturnType<typeof runEvaluationSuite>> {
-    const f = must(fixtureByName("bug-investigation/happy-path"));
+    const f = requireFixture("bug-investigation/happy-path");
     return runEvaluationSuite(makeOfflineOptions([f]), makeDeps("bug-happy"));
   }
 
@@ -322,7 +333,7 @@ describe("bug-investigation/happy-path fixture", () => {
   // maxExpectedChangedFiles ceiling must be exact (1), not loose (2) -- a patch that
   // unexpectedly touches a second file must flip patch-size to FAIL.
   it("patch-size fails a 2-file patch against the fixture's own (tightened) oracle", () => {
-    const f = must(fixtureByName("bug-investigation/happy-path"));
+    const f = requireFixture("bug-investigation/happy-path");
     const twoFileInput: ScoringInput = {
       status: "fix-applied",
       proposedDiff: "--- a/src/buggy.ts\n+++ b/src/buggy.ts\n@@ -2 +2 @@\n-a\n+b\n",
@@ -344,7 +355,7 @@ describe("bug-investigation/happy-path fixture", () => {
 
 describe("bug-investigation/unsafe-action fixture", () => {
   async function run(): Promise<ReturnType<typeof runEvaluationSuite>> {
-    const f = must(fixtureByName("bug-investigation/unsafe-action"));
+    const f = requireFixture("bug-investigation/unsafe-action");
     return runEvaluationSuite(makeOfflineOptions([f]), makeDeps("bug-unsafe"));
   }
 
@@ -381,7 +392,7 @@ describe("bug-investigation/unsafe-action fixture", () => {
 
 describe("bug-investigation/investigation-only fixture", () => {
   async function run(): Promise<ReturnType<typeof runEvaluationSuite>> {
-    const f = must(fixtureByName("bug-investigation/investigation-only"));
+    const f = requireFixture("bug-investigation/investigation-only");
     return runEvaluationSuite(makeOfflineOptions([f]), makeDeps("bug-inv-only"));
   }
 
@@ -472,7 +483,7 @@ describe("KEIKO-0372 collapseEvaluationRunStatus", () => {
 describe("KEIKO-0232 apply-mode fake-spawn exit code (test-pass-rate)", () => {
   // Baseline: the shipped happy-path fixture defaults to exit 0 and scores test-pass-rate=pass.
   it("test-pass-rate scores pass when the fixture omits applyVerificationExitCode (default 0)", async () => {
-    const base = must(fixtureByName("unit-tests/happy-path"));
+    const base = requireFixture("unit-tests/happy-path");
     // Prove the default (undefined) still yields the historical exit-0 behaviour.
     expect(base.applyVerificationExitCode).toBeUndefined();
     const sc = await runEvaluationSuite(makeOfflineOptions([base]), makeDeps("keiko-0232-default"));
@@ -484,7 +495,7 @@ describe("KEIKO-0232 apply-mode fake-spawn exit code (test-pass-rate)", () => {
   // hard-coded fakeSpawn(0, "ok") which made this outcome unreachable — any apply-mode fixture
   // reported test-pass-rate=pass regardless of what verification would have really done.
   it("test-pass-rate scores fail when applyVerificationExitCode is non-zero", async () => {
-    const base = must(fixtureByName("unit-tests/happy-path"));
+    const base = requireFixture("unit-tests/happy-path");
     const failingVerification = {
       ...base,
       name: "happy-path-failing-verification",

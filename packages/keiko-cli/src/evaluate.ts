@@ -36,6 +36,8 @@ const USAGE = `Usage:
 Runs the evaluation harness against the built-in fixtures. Offline by default
 (deterministic, no network); pass --live to evaluate against a configured model.
 --suite and --fixture are mutually exclusive.
+A bare --fixture <name> that matches more than one workflow kind is rejected as
+ambiguous; disambiguate with --fixture <kind>/<name> (e.g. unit-tests/happy-path).
 `;
 
 export interface EvaluateDeps {
@@ -115,10 +117,18 @@ function selectFixtures(parsed: EvaluateArgs, evaluations: EvaluationsModule): S
     return { usageError: "Error: --suite and --fixture are mutually exclusive.\n" };
   }
   if (parsed.fixture !== undefined) {
-    const fixture = evaluations.fixtureByName(parsed.fixture);
-    return fixture === undefined
+    const result = evaluations.fixtureByName(parsed.fixture);
+    if (result.status === "ambiguous") {
+      const candidates = result.matches.map((f) => `${f.workflowKind}/${f.name}`).join('", "');
+      return {
+        usageError:
+          `Error: ambiguous fixture "${parsed.fixture}" matches multiple fixtures. ` +
+          `Use --fixture <kind>/<name> to disambiguate: "${candidates}".\n`,
+      };
+    }
+    return result.status === "not-found"
       ? { usageError: `Error: unknown fixture "${parsed.fixture}".\n` }
-      : { fixtures: [fixture] };
+      : { fixtures: [result.fixture] };
   }
   const suite = parsed.suite ?? "all";
   if (!evaluations.isSuiteName(suite)) {
