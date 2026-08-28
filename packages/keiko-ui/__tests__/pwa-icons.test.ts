@@ -18,11 +18,13 @@ interface PngFixture {
 // Browser branding raster set plus apple-touch and the legacy ICO fallback.
 // favicon.ico ships as a 32×32 PNG payload (see scripts/generate-pwa-icons.mjs header) because
 // the codebase has no ICO encoder and the spec permits the PNG-bytes-with-.ico-extension form.
+// KEIKO-0549 / #3313: icon-192-maskable.png and icon-512-maskable.png were byte-identical to
+// their non-maskable siblings and carried no safe-area padding despite the manifest declaring
+// them `"purpose": "maskable"`. ADR-0122 already retired browser-managed PWA installability as a
+// promoted product path, so they were retired as vestigial rather than regenerated.
 const PNG_FIXTURES: readonly PngFixture[] = [
   { file: "icon-192.png", width: 192, height: 192 },
   { file: "icon-512.png", width: 512, height: 512 },
-  { file: "icon-192-maskable.png", width: 192, height: 192 },
-  { file: "icon-512-maskable.png", width: 512, height: 512 },
   { file: "apple-touch-icon.png", width: 180, height: 180 },
   { file: "favicon.ico", width: 32, height: 32 },
 ];
@@ -30,8 +32,6 @@ const PNG_FIXTURES: readonly PngFixture[] = [
 const OLD_PLACEHOLDER_HASHES: ReadonlyMap<string, string> = new Map([
   ["icon-192.png", "9059e1ba8b01fcf3e5f92eda3987ec790404ee704ce12de21d4bc447509f0cf8"],
   ["icon-512.png", "c3d0aae799bbe90e6504b2c2cdfc3a2ddb535fa08131ed529babcd99ad129faa"],
-  ["icon-192-maskable.png", "901d8e8505e89c0f0f40b116922262362d6f93335c824f69c936ad7a9fb497da"],
-  ["icon-512-maskable.png", "517ce6380ce284dd2bc3da83fce9c191c68e72b2f522ece8a2f6e44113bd952d"],
   ["apple-touch-icon.png", "ffe14908c22279fe5d05b3d257019ca866ab697de0fa2b4e4ce3259caafc7850"],
   ["favicon.ico", "f9f8abdd1383fa4adab6d08d77b94583aed94e69a4d729c391280c4d616c7069"],
 ] as const);
