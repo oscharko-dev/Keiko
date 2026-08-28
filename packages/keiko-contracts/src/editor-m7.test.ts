@@ -20,6 +20,7 @@ import {
   validateEditorM7Keybinding,
   type EditorM7AiActivationInput,
   type EditorM7CommandDefinition,
+  type EditorM7CommandScope,
   type EditorM7ModelEntry,
   type EditorM7SettingId,
   type EditorM7SettingsSnapshot,
@@ -274,6 +275,22 @@ describe("M7 keybinding, snippet, and AI activation contracts", () => {
     }).toThrow(TypeError);
   });
 
+  // KEIKO-0875 (#3332): "explorer" and "git" were legal EditorM7CommandScope values with zero
+  // registered commands using either -- two unreachable branches in scopeLabel and two
+  // unexercisable i18n keys. The product owner decided to narrow the type rather than keep it as
+  // a forward declaration; this pin proves the union no longer admits either value.
+  it("rejects explorer and git as EditorM7CommandScope values", () => {
+    // @ts-expect-error -- "explorer" is not a legal EditorM7CommandScope; no registered command
+    // uses it, and the KeyboardShortcutsPanel branch that read it was deleted alongside the
+    // "settings.keyboard.scopeExplorer" i18n key.
+    const explorerScope: EditorM7CommandScope = "explorer";
+    // @ts-expect-error -- same for "git"; the "settings.keyboard.scopeGit" i18n key was deleted
+    // alongside its branch too.
+    const gitScope: EditorM7CommandScope = "git";
+    expect(explorerScope).toBe("explorer");
+    expect(gitScope).toBe("git");
+  });
+
   it("keeps a closed command registry and rejects reserved, malformed, unknown, and colliding bindings", () => {
     expect(EDITOR_M7_COMMAND_REGISTRY.map((entry) => entry.id)).toContain("editor.save");
     expect(
@@ -525,7 +542,11 @@ describe("M7 keybinding, snippet, and AI activation contracts", () => {
         id: "explorer-only",
         labelKey: "command.explorerOnly",
         descriptionKey: "command.explorerOnly.description",
-        scope: "explorer",
+        // KEIKO-0875 (#3332): "explorer" was narrowed out of EditorM7CommandScope (zero commands
+        // used it); "editor" here is an arbitrary scope disjoint from "settings" below -- this
+        // fixture pins context-disjoint reuse, which the collision check keys on `contexts`, not
+        // `scope`. The still-valid "explorer" EditorM7CommandContext is untouched (out of scope).
+        scope: "editor",
         contexts: ["explorer"],
         defaultBindings: [],
         rebindable: true,
