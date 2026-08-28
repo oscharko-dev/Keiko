@@ -8,8 +8,10 @@
 // buildSelectionQueryForCapabilities (capabilityGate.ts), kept consistent with this READ side by the
 // capabilityGate tests.
 
-import type { ModelCapability } from "@oscharko-dev/keiko-contracts";
-import { isToolCallingVerificationFresh } from "@oscharko-dev/keiko-contracts/runtime/gateway";
+import {
+  isToolCallingVerificationFresh,
+  type ModelCapability,
+} from "@oscharko-dev/keiko-contracts";
 import type { QualityIntelligenceCapability } from "./taskProfiles.js";
 
 export function modelSupportsCapability(

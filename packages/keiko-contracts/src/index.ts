@@ -1821,6 +1821,7 @@ export type {
   VoiceProviderAvailability,
 } from "./gateway.js";
 export type { ProviderEndpointStyle, RealtimeAuthMode } from "./gateway.js";
+export { isToolCallingVerificationFresh, TOOL_CALLING_VERIFICATION_MAX_AGE_MS } from "./gateway.js";
 export type {
   CONVERSATION_CAPABILITY_CONTRACT_VERSION,
   MODEL_REASONING_EFFORTS,
