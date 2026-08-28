@@ -268,7 +268,60 @@ function decodeAudio(raw: unknown): Uint8Array | "invalid" | "empty" {
   return decoded;
 }
 
-function validateDurationMs(raw: unknown): "ok" | "invalid" {
+// KEIKO-0844: the declared durationMs is a client claim with no independent server-side
+// measurement (decoding the container to derive true playback length is out of scope, same
+// ADR-0100 supply-chain D8 reasoning as MAX_AUDIO_BYTES above). It is not forwarded to the
+// provider (SpeechToTextRequest carries no duration field) and MAX_AUDIO_BYTES already bounds
+// worst-case size/duration regardless of what a client claims, so this is a consistency guard,
+// not a security boundary: it catches a declared duration that is wildly inconsistent with the
+// decoded audio size and rejects early, before any provider call.
+//
+// The ceiling has two parts, both deliberately loose because this is a sanity bound, not a tight
+// codec model: a fixed container-overhead allowance, plus a bytes-per-millisecond payload rate
+// tiered by container class, since the accepted MIME types span very different maximum bitrates.
+//
+// CONTAINER_OVERHEAD_BYTES covers the fixed bytes that ride alongside the payload and are
+// unrelated to declared duration: a canonical RIFF/WAVE header is 44 bytes but real encoders add
+// `LIST`/`INFO` chunks, an ID3v2 tag (optionally carrying small embedded artwork), or an MP4
+// `ftyp`/`moov` box can each add up to a few KB. 8 KiB comfortably covers all of those for a
+// dictation-length clip without materially loosening the guard for the multi-second clips this
+// route actually handles.
+//
+// The per-ms rate is set to 2x the highest bitrate the accepted MIME allowlist can legitimately
+// produce, so the bound is a sanity ceiling with headroom rather than a byte-exact model of one
+// specific encoder configuration:
+//  - Lossless PCM containers (wav/x-wav/wave, and flac, which can only be <= the PCM size it
+//    encodes) can legitimately reach 48 kHz / 16-bit / stereo (48_000 * 2 * 2 = 192_000 bytes/s,
+//    192 bytes/ms) — the exact configuration the previous, unheadroomed bound was built from, and
+//    the one it always rejected once the container's own header bytes were counted. 2x = 384
+//    bytes/ms also covers 48 kHz / 24-bit / stereo (288 bytes/ms), 48 kHz / 32-bit-float / stereo
+//    (384 bytes/ms — what a browser AudioWorklet/ScriptProcessor WAV recorder commonly emits), and
+//    96 kHz / 16-bit / stereo (384 bytes/ms), all reachable within MAX_AUDIO_BYTES.
+//  - Every other accepted container is a lossy/compressed codec (webm, ogg, mp4/m4a/x-m4a,
+//    mpeg/mp3); 320 kbps (40_000 bytes/s, 40 bytes/ms) is above any realistic dictation-clip
+//    bitrate for those, so 2x = 80 bytes/ms.
+// A clip is rejected only when it is far too DENSE for its declared duration (more bytes than the
+// ceiling allows) — a sparse clip (a short, quiet, or highly compressed recording) is never wildly
+// inconsistent in the direction this guard cares about.
+const LOSSLESS_AUDIO_MIME: ReadonlySet<string> = new Set([
+  "audio/wav",
+  "audio/x-wav",
+  "audio/wave",
+  "audio/flac",
+]);
+const CONTAINER_OVERHEAD_BYTES = 8_192;
+const LOSSLESS_MAX_BYTES_PER_MS = 384;
+const LOSSY_MAX_BYTES_PER_MS = 80;
+
+function maxBytesPerMs(mimeType: string): number {
+  return LOSSLESS_AUDIO_MIME.has(mimeType) ? LOSSLESS_MAX_BYTES_PER_MS : LOSSY_MAX_BYTES_PER_MS;
+}
+
+function validateDurationMs(
+  raw: unknown,
+  decodedByteLength: number,
+  mimeType: string,
+): "ok" | "invalid" {
   if (raw === undefined) {
     return "ok";
   }
@@ -279,6 +332,9 @@ function validateDurationMs(raw: unknown): "ok" | "invalid" {
     raw <= 0 ||
     raw > MAX_DICTATION_MS
   ) {
+    return "invalid";
+  }
+  if (decodedByteLength > CONTAINER_OVERHEAD_BYTES + maxBytesPerMs(mimeType) * raw) {
     return "invalid";
   }
   return "ok";
@@ -329,11 +385,12 @@ function validateRequest(
       body: deps.redactor(errorBody("PAYLOAD_TOO_LARGE", "The audio clip exceeds the size limit.")),
     };
   }
-  if (validateDurationMs(body.durationMs) === "invalid") {
+  if (validateDurationMs(body.durationMs, decoded.byteLength, mimeType) === "invalid") {
     return badRequest(
       deps,
       "INVALID_DURATION",
-      "The declared durationMs must be a positive integer within the dictation limit.",
+      "The declared durationMs must be a positive integer within the dictation limit and " +
+        "consistent with the decoded audio size.",
     );
   }
   const language = validateLanguage(body.language);

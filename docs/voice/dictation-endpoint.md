@@ -51,14 +51,29 @@ endpoint adds no relaxation of the server media-type or CSRF gate.
 | body size    | The JSON envelope is capped (~6 MB) and the decoded audio is capped at 4 MB.                                                                 | `413 PAYLOAD_TOO_LARGE`                       |
 | `mimeType`   | Base type must be in the closed allowlist (`audio/webm`, `audio/ogg`, `audio/wav`, `audio/mp4`, `audio/m4a`, `audio/mpeg`, `audio/flac`, …). | `400 UNSUPPORTED_AUDIO_FORMAT`                |
 | `audio`      | Non-empty, well-formed base64 that decodes to ≥ 1 byte and ≤ 4 MB.                                                                           | `400 INVALID_AUDIO` / `413 PAYLOAD_TOO_LARGE` |
-| `durationMs` | When present: a positive integer ≤ 120000 (two minutes).                                                                                     | `400 INVALID_DURATION`                        |
+| `durationMs` | When present: a positive integer ≤ 120000 (two minutes), and cross-validated against the decoded audio size (below).                         | `400 INVALID_DURATION`                        |
 | `language`   | When present: an anchored BCP-47-ish tag, length ≤ 16.                                                                                       | `400 INVALID_LANGUAGE`                        |
 
-The decoded-byte cap is the authoritative bound on transcribable duration: precise server-side
-duration measurement would require decoding the container, which needs an audio-processing
-dependency that the supply-chain policy (ADR-0100 D8) forbids, so the byte cap bounds the maximum
-possible duration regardless of codec and the optional `durationMs` is an additional declared-length
-ceiling.
+The decoded-byte cap (4 MB) is the hard ceiling on transcribable duration regardless of codec: precise
+server-side duration measurement would require decoding the container, which needs an
+audio-processing dependency that the supply-chain policy (ADR-0100 D8) forbids. The optional
+`durationMs` is not forwarded to the speech-to-text provider (KEIKO-0844, #3329) — it is cross-validated
+against `decoded.byteLength` as a consistency guard: a declared duration wildly too short for the
+amount of decoded audio is rejected before any provider call. The bound is a bytes-per-millisecond
+sanity ceiling, tiered by container class and loosened with headroom rather than modeling one exact
+encoder configuration:
+
+- A fixed `CONTAINER_OVERHEAD_BYTES` allowance (8 KiB) covers header/metadata bytes that ride
+  alongside the payload and are unrelated to declared duration (RIFF/WAVE `LIST`/`INFO` chunks, an
+  ID3v2 tag, an MP4 `ftyp`/`moov` box).
+- Lossless PCM containers (`audio/wav`, `audio/x-wav`, `audio/wave`, `audio/flac`) are held to 2x
+  the 48 kHz / 16-bit / stereo payload rate: 384 bytes/ms, covering 24-bit, 32-bit-float, and
+  96 kHz variants within `MAX_AUDIO_BYTES`.
+- Every other accepted container (`audio/webm`, `audio/ogg`, `audio/mp4`/`m4a`/`x-m4a`,
+  `audio/mpeg`/`mp3`) is lossy/compressed and is held to 2x 320 kbps: 80 bytes/ms.
+
+Only a clip that is far too **dense** for its declared duration is rejected; a sparse clip (short,
+quiet, or highly compressed) is never inconsistent in the direction this guard cares about.
 
 ## 3. Response
 

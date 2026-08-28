@@ -537,6 +537,119 @@ describe("POST /api/voice/transcribe — request validation (D3/D5)", () => {
     }
   });
 
+  it("rejects a declared duration wildly inconsistent with the decoded audio size (KEIKO-0844)", async () => {
+    const { deps, seen } = sttDeps();
+    // In-shape (positive integer, within MAX_DICTATION_MS) but no lossy container can plausibly
+    // hold 3,000,000 bytes in 1ms — the cross-validation guard, not the shape check, must reject it.
+    const denseAudio = Buffer.alloc(3_000_000).toString("base64");
+    const result = await handleVoiceTranscribe(
+      ctx({ audio: denseAudio, mimeType: "audio/webm", durationMs: 1 }),
+      deps,
+    );
+    expect(result.status).toBe(400);
+    expect((result.body as { error: { code: string } }).error.code).toBe("INVALID_DURATION");
+    // AC3: no audio is forwarded to the provider when cross-validation rejects the request.
+    expect(seen).toHaveLength(0);
+  });
+
+  it("cross-validates durationMs against decoded byte size at the exact bytes-per-ms boundary (off-by-one mutation trap)", async () => {
+    const { deps, seen } = sttDeps();
+    // audio/webm is a lossy container: the sanity ceiling is CONTAINER_OVERHEAD_BYTES (8192) plus
+    // 80 bytes/ms (2x 320 kbps), so exactly 88192 bytes over 1000ms sits precisely on the boundary
+    // and must be accepted.
+    const onBoundary = Buffer.alloc(88_192).toString("base64");
+    const okResult = await handleVoiceTranscribe(
+      ctx({ audio: onBoundary, mimeType: "audio/webm", durationMs: 1000 }),
+      deps,
+    );
+    expect(okResult.status).toBe(200);
+    expect(seen).toHaveLength(1);
+
+    // One byte over the same boundary must be rejected.
+    const overBoundary = Buffer.alloc(88_193).toString("base64");
+    const rejected = await handleVoiceTranscribe(
+      ctx({ audio: overBoundary, mimeType: "audio/webm", durationMs: 1000 }),
+      deps,
+    );
+    expect(rejected.status).toBe(400);
+    expect((rejected.body as { error: { code: string } }).error.code).toBe("INVALID_DURATION");
+    expect(seen).toHaveLength(1);
+  });
+
+  // Builds a real (not schematic) 44-byte canonical RIFF/WAVE PCM header followed by
+  // `payloadBytes` of silence, so a WAV fixture carries the same fixed container overhead a real
+  // encoder would produce — this is what F1's regression class (a WAV rejected purely by its own
+  // header) must never again reach.
+  function buildWavBuffer(payloadBytes: number): Buffer {
+    const header = Buffer.alloc(44);
+    header.write("RIFF", 0, "ascii");
+    header.writeUInt32LE(36 + payloadBytes, 4);
+    header.write("WAVE", 8, "ascii");
+    header.write("fmt ", 12, "ascii");
+    header.writeUInt32LE(16, 16); // Subchunk1Size (PCM)
+    header.writeUInt16LE(1, 20); // AudioFormat (PCM)
+    header.writeUInt16LE(2, 22); // NumChannels (stereo)
+    header.writeUInt32LE(48_000, 24); // SampleRate
+    header.writeUInt32LE(48_000 * 2 * 2, 28); // ByteRate
+    header.writeUInt16LE(4, 32); // BlockAlign
+    header.writeUInt16LE(16, 34); // BitsPerSample
+    header.write("data", 36, "ascii");
+    header.writeUInt32LE(payloadBytes, 40);
+    return Buffer.concat([header, Buffer.alloc(payloadBytes)]);
+  }
+
+  it("tiers a WAV clip on the lossless ceiling, not the lossy one (KEIKO-0844 tiering mutation trap)", async () => {
+    const { deps, seen } = sttDeps();
+    // 200 bytes/ms over 1000ms: above the lossy ceiling (80 bytes/ms) but comfortably under the
+    // lossless one (384 bytes/ms). A real WAV header rides alongside. If the tiering were removed
+    // (maxBytesPerMs always returning the lossy constant), this would be rejected.
+    const wav = buildWavBuffer(200_000).toString("base64");
+    const result = await handleVoiceTranscribe(
+      ctx({ audio: wav, mimeType: "audio/wav", durationMs: 1000 }),
+      deps,
+    );
+    expect(result.status).toBe(200);
+    expect(seen).toHaveLength(1);
+  });
+
+  it("rejects a real-header WAV clip one byte over the lossless boundary", async () => {
+    const { deps, seen } = sttDeps();
+    // threshold = CONTAINER_OVERHEAD_BYTES (8192) + LOSSLESS_MAX_BYTES_PER_MS (384) * 1000 = 392192.
+    const onBoundary = buildWavBuffer(392_192 - 44).toString("base64");
+    const okResult = await handleVoiceTranscribe(
+      ctx({ audio: onBoundary, mimeType: "audio/wav", durationMs: 1000 }),
+      deps,
+    );
+    expect(okResult.status).toBe(200);
+    expect(seen).toHaveLength(1);
+
+    const overBoundary = buildWavBuffer(392_193 - 44).toString("base64");
+    const rejected = await handleVoiceTranscribe(
+      ctx({ audio: overBoundary, mimeType: "audio/wav", durationMs: 1000 }),
+      deps,
+    );
+    expect(rejected.status).toBe(400);
+    expect((rejected.body as { error: { code: string } }).error.code).toBe("INVALID_DURATION");
+    expect(seen).toHaveLength(1);
+  });
+
+  it.each(["audio/flac", "audio/x-wav"] as const)(
+    "tiers %s as lossless (MIME-membership pin)",
+    async (mimeType) => {
+      const { deps, seen } = sttDeps();
+      // 300 bytes/ms over 100ms: above the lossy ceiling (8192 + 80*100 = 16192) but under the
+      // lossless one (8192 + 384*100 = 46592). Only reachable if this MIME type is in
+      // LOSSLESS_AUDIO_MIME.
+      const dense = Buffer.alloc(30_000).toString("base64");
+      const result = await handleVoiceTranscribe(
+        ctx({ audio: dense, mimeType, durationMs: 100 }),
+        deps,
+      );
+      expect(result.status).toBe(200);
+      expect(seen).toHaveLength(1);
+    },
+  );
+
   it("rejects an invalid language tag", async () => {
     const { deps } = sttDeps();
     const result = await handleVoiceTranscribe(
