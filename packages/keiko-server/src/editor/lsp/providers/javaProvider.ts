@@ -17,10 +17,17 @@ import type {
 } from "@oscharko-dev/keiko-contracts";
 import type { BackendAvailability } from "@oscharko-dev/keiko-sandbox";
 import { currentPlatform, planIsolatedRun, probeBackends } from "@oscharko-dev/keiko-sandbox";
+import {
+  buildWindowsShellInvocation,
+  type WindowsShellInvocation,
+  type WindowsShellInvocationOptions,
+} from "@oscharko-dev/keiko-tools";
 
 import type { HostLanguageProviderSpec } from "../hostLanguageProviders.js";
 import { resolveExecutableOutsideWorkspace } from "../lspNodeAdapter.js";
 import type { LspSpawnPreparation, LspSpawnPreparationInput } from "../lspProcessManager.js";
+import { UNKNOWN_CORRELATION_ID } from "../../../correlation.js";
+import { processServerLogSink } from "../../../process-log-sink.js";
 
 const JAVA_OPERATIONS: readonly LanguageServiceOperation[] = Object.freeze([
   "diagnostics",
@@ -290,14 +297,52 @@ function javaMajorVersion(output: string): number {
 
 const JAVA_VERSION_PROBE_TIMEOUT_MS = 5_000;
 
+// Wraps the `java -version` probe below through the hardened cmd.exe seam (issue #3350 / Node
+// CVE-2024-27980): since that fix, spawning a `.cmd`/`.bat` target with `shell: false` raises EINVAL
+// on Windows, and a Windows JDK managed through a version-manager shim (jenv/jabba/scoop-style
+// wrappers commonly install `java.cmd` rather than a native `java.exe`) resolves to exactly that
+// shape. A pure function, exported so the win32 branch is reachable from a test on any host — the
+// same seam lspNodeAdapter.ts's `buildLspSpawnPlan` establishes for the LSP server's own spawn.
+// Production use (`defaultJavaVersionValid`, below) omits `opts` and gets the real
+// `process.platform`/`process.env`; every other resolved path (`.exe`, no extension) and every
+// non-Windows platform pass through unchanged.
+export function buildJavaVersionProbeInvocation(
+  executable: string,
+  opts?: WindowsShellInvocationOptions,
+): WindowsShellInvocation {
+  return buildWindowsShellInvocation(executable, ["-version"], opts);
+}
+
+// Body-free evidence for the branch above (AGENTS.md §8 Rule 1): a support bundle must be able to
+// tell whether a hung or failed Windows java probe took the hardened cmd.exe wrapper path, without
+// ever recording the resolved executable path or the probe's stdout/stderr. Mirrors
+// lspNodeAdapter.ts's `logLspSpawnCompleted` for the LSP server's own spawn; this probe is a
+// separate, directly-issued `spawnSync` call that issue #3350's fix never covered because it never
+// runs through that adapter. No request-scoped correlation id is available this deep in spawn
+// preparation, so the line carries UNKNOWN_CORRELATION_ID, exactly like its sibling.
+function logJavaVersionProbeCompleted(windowsWrapperEngaged: boolean, validVersion: boolean): void {
+  processServerLogSink().write({
+    category: "diagnostic",
+    op: "lsp.java.version-probe.completed",
+    correlationId: UNKNOWN_CORRELATION_ID,
+    extra: { windowsWrapperEngaged, validVersion, platform: process.platform },
+  });
+}
+
 function defaultJavaVersionValid(executable: string): boolean {
-  const probe = spawnSync(executable, ["-version"], {
+  const invocation = buildJavaVersionProbeInvocation(executable);
+  const probe = spawnSync(invocation.command, invocation.args, {
     encoding: "utf8",
     timeout: JAVA_VERSION_PROBE_TIMEOUT_MS,
     killSignal: "SIGKILL",
+    ...(invocation.windowsVerbatimArguments ? { windowsVerbatimArguments: true } : {}),
   });
-  if (probe.error !== undefined || probe.status !== 0) return false;
-  return javaMajorVersion(`${probe.stdout}${probe.stderr}`) >= MINIMUM_JDK_MAJOR_VERSION;
+  const validVersion =
+    probe.error === undefined &&
+    probe.status === 0 &&
+    javaMajorVersion(`${probe.stdout}${probe.stderr}`) >= MINIMUM_JDK_MAJOR_VERSION;
+  logJavaVersionProbeCompleted(invocation.windowsVerbatimArguments, validVersion);
+  return validVersion;
 }
 
 function isolatedJavaCommand(

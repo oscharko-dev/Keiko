@@ -18,9 +18,11 @@ import { buildRedactor } from "../index.js";
 import type { EvidenceStore } from "@oscharko-dev/keiko-evidence";
 import type { ServerLogEvent } from "../observability/server-log.js";
 import { createInMemoryUiStore } from "../store/index.js";
+import { UNKNOWN_CORRELATION_ID } from "../correlation.js";
 import {
   executeGovernedMutation,
   gitDeliveryMutationResponse,
+  gitDeliveryTerminationHandler,
   KEIKO_DEFAULT_LOCAL_GIT_POLICY_PACK,
   resolveProjectWorkspace,
   type GitDeliveryExecutionSeams,
@@ -261,6 +263,31 @@ describe("executeGovernedMutation — real git through the default seams", () =>
     } finally {
       rmSync(bare, { recursive: true, force: true });
     }
+  });
+});
+
+// ─── runCommand termination-evidence correlation (audit finding: readWorktreeSnapshotFor/adapterFor
+// dropped an already-in-scope correlationId in favour of UNKNOWN_CORRELATION_ID) ──────────────────
+
+describe("gitDeliveryTerminationHandler — correlation-id wiring for the runCommand evidence seam", () => {
+  it("carries the caller's own correlationId onto command.terminated instead of downgrading it", () => {
+    const activity = captureActivityLog();
+    const handler = gitDeliveryTerminationHandler(
+      { activityLog: activity.sink },
+      "request-correlation-7",
+    );
+    handler({ reason: "timeout", childPid: 4242, windowsTreeKill: "not-attempted" });
+    expect(activity.events).toHaveLength(1);
+    expect(activity.events[0]?.op).toBe("command.terminated");
+    expect(activity.events[0]?.correlationId).toBe("request-correlation-7");
+    expect(activity.events[0]?.extra?.childPid).toBe(4242);
+  });
+
+  it("falls back to UNKNOWN_CORRELATION_ID only when the caller genuinely has none in scope", () => {
+    const activity = captureActivityLog();
+    const handler = gitDeliveryTerminationHandler({ activityLog: activity.sink }, undefined);
+    handler({ reason: "abort", childPid: 4242, windowsTreeKill: "not-attempted" });
+    expect(activity.events[0]?.correlationId).toBe(UNKNOWN_CORRELATION_ID);
   });
 });
 

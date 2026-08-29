@@ -21,12 +21,30 @@ type TrustedCandidateResult =
   // over the fall-through "not-found".
   | { readonly ok: false; readonly reason: "not-found" | "untrusted-location" };
 
+// Only REAL executable images are accepted as `git`, even when PATHEXT offers script extensions.
+// Two independent reasons, either of which is sufficient:
+//
+//  1. A scripted git CANNOT be launched from here anyway. `runner.ts` spawns the resolved path with
+//     `shell: false`, and since the fix for CVE-2024-27980 (Node 20.12 / 18.20) that raises EINVAL
+//     for `.cmd`/`.bat` on Windows. Resolving one therefore never produced a working git — only a
+//     cryptic spawn failure in place of an honest "git is not installed".
+//  2. A scripted git SHOULD NOT be launched from here. A `git.bat` earlier on PATH than the real
+//     git is arbitrary code wearing a trusted name — precisely the PATH-salting this resolver's
+//     containment and writability checks exist to catch. keiko-git is a deliberate leaf (ADR-0019
+//     direction rule 2b: keiko-contracts only), so it cannot reach the hardened cmd.exe wrapper in
+//     keiko-tools that would be needed to launch one safely.
+//
+// Widening this set therefore requires BOTH a safe launch path and a reason to trust a scripted
+// git — not just an entry in PATHEXT.
+const WINDOWS_EXECUTABLE_IMAGE_EXTENSIONS = new Set([".com", ".exe"]);
+
 function executableNames(env: NodeJS.ProcessEnv, platform: NodeJS.Platform): readonly string[] {
   if (platform !== "win32") return ["git"];
   const extensions = (env.PATHEXT ?? ".COM;.EXE;.BAT;.CMD")
     .split(";")
-    .filter((extension) => extension.length > 0);
-  return ["git", ...extensions.map((extension) => `git${extension.toLowerCase()}`)];
+    .map((extension) => extension.trim().toLowerCase())
+    .filter((extension) => WINDOWS_EXECUTABLE_IMAGE_EXTENSIONS.has(extension));
+  return ["git", ...extensions.map((extension) => `git${extension}`)];
 }
 
 function isContained(root: string, candidate: string): boolean {

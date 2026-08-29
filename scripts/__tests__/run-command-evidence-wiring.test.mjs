@@ -41,10 +41,11 @@ function sourceFiles() {
   return out.filter((path) => !/\.test\.ts$/.test(path) && !/[\\/]testing[\\/]/.test(path));
 }
 
-// A file COUNTS as a production caller when it either imports keiko-tools' runCommand and invokes
-// it, or invokes an injected `<something>.runCommand(` port typed against RunCommandDeps. Files
-// that merely define their own local helper named runCommand (scripts-style wrappers) import
-// nothing from exec.js / the keiko-tools barrel and are excluded by the import check.
+// A file COUNTS as a production caller when it either imports keiko-tools' runCommand (by name or
+// as a namespace) and invokes it, or invokes an injected `<something>.runCommand(` port typed
+// against RunCommandDeps. Files that merely define their own local helper named runCommand
+// (scripts-style wrappers) import nothing from exec.js / the keiko-tools barrel and are excluded
+// by the import checks.
 function isProductionCaller(path, text) {
   if (path.endsWith(`${join("keiko-tools", "src", "exec.ts")}`)) return false;
   const importsExec =
@@ -52,8 +53,22 @@ function isProductionCaller(path, text) {
       text,
     );
   const callsDirect = /(?<![.\w])runCommand\s*\(/.test(text);
+  // Namespace import — `import * as tools from "@oscharko-dev/keiko-tools"` then
+  // `tools.runCommand(...)`. The import statement itself proves the alias IS keiko-tools' real
+  // runCommand, so — unlike the generic port-call heuristic below — this shape needs no
+  // RunCommandDeps/RunCommandInput corroboration. Without this branch a namespace-import caller
+  // that never spells either type name as literal text (e.g. it forwards already-typed
+  // parameters, or uses `Parameters<typeof tools.runCommand>`) is invisible to this scanner: it
+  // matches neither the named-import shape above nor the RunCommand(Deps|Input)-gated port-call
+  // shape below, and a runCommand call with no onTerminated seam on that path is never flagged —
+  // exactly the false assurance this pin exists to prevent.
+  const namespaceImport =
+    /import\s*\*\s*as\s*(\w+)\s*from\s*"(?:\.\/exec\.js|@oscharko-dev\/keiko-tools)"/.exec(text);
+  const callsNamespaced =
+    namespaceImport !== null &&
+    new RegExp(`(?<![.\\w])${namespaceImport[1]}\\s*\\.\\s*runCommand\\s*\\(`).test(text);
   const callsPort = /\.\s*runCommand\s*\(/.test(text) && /RunCommand(Deps|Input)/.test(text);
-  return (importsExec && callsDirect) || callsPort;
+  return (importsExec && callsDirect) || callsNamespaced || callsPort;
 }
 
 describe("runCommand termination-evidence wiring (PR #3354, comment 3887021650)", () => {

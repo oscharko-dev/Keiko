@@ -106,5 +106,14 @@ export function resolveWindowsSystemBinary(
       "binaryName must be a bare System32 file name, not a path",
     );
   }
+  // The name is held to the SAME character rules as the directory it is joined onto. Every current
+  // caller passes a literal ("cmd.exe", "taskkill.exe", "cscript.exe"), so this is defence in
+  // depth — but the returned string is spliced into a command line, and an exported function whose
+  // stated purpose is containment must not depend on its callers staying literal to be safe.
+  if (CONTROL_CHARACTER.test(binaryName) || CMD_METACHARACTER.test(binaryName)) {
+    throw new WindowsSystemDirectoryError(
+      "binaryName must not contain a control character, quote or cmd.exe metacharacter",
+    );
+  }
   return win32Path.join(resolveWindowsSystemDirectory(env), "System32", binaryName);
 }

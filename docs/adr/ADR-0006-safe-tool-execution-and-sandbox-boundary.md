@@ -381,15 +381,19 @@ Tool consumers (`WorkspaceToolHost` callers) depend only on the `ToolPort` inter
   the regulated environment, the mitigating control is that the developer reviews and commits:
   `git status` exposes any partial write, and the repository's VCS history is the recovery path.
 - **Windows grandchild orphaning is bounded, not architecturally eliminated.** `child.kill()`
-  terminates the immediate child only; `killGroup` additionally spawns
+  terminates the immediate child only; `killGroup` additionally runs
   `taskkill.exe /PID <pid> /T /F` to bound the whole descendant tree (e.g. a test runner that
   forks workers, or — the guaranteed case since issue #3350's `cmd.exe` wrapping — `node.exe`
   running npm under a wrapped `.cmd` target's `cmd.exe`). `taskkill.exe` is an OS binary shipped
   with every supported Windows image, so the earlier justification (`tree-kill` needs a runtime
-  npm dependency forbidden by ADR-0001) no longer applies. What remains is narrower and
-  best-effort: a `taskkill.exe` spawn failure is swallowed (idempotent termination, not a formal
-  guarantee), so a stripped-down Windows image without `taskkill.exe`, or a grandchild spawned in
-  the brief window between signalling and taskkill's process-tree snapshot, can still orphan.
+  npm dependency forbidden by ADR-0001) no longer applies. taskkill now runs SYNCHRONOUSLY to
+  completion before the immediate child is signalled (Dimension 5 above), so the window this
+  bullet used to describe — a grandchild spawning between signalling and taskkill's snapshot —
+  cannot occur; a `taskkill.exe` failure is measured and surfaces as `windowsTreeKill: "failed"`
+  rather than being swallowed. What remains, narrower than that: a stripped-down Windows image
+  without `taskkill.exe` still cannot have its tree bounded, and a grandchild that spawns AFTER
+  taskkill's snapshot but before it exits can still orphan — taskkill enumerates the tree once,
+  it does not repeat the scan. See Dimension 5 for the full, current residual list.
 - **Bounded unified-diff subset only.** The parser handles the common cases (create, modify,
   delete, standard hunks) but not rename detection, extended git-diff headers, or fuzzy matching.
   A diff produced by a non-standard tool may fail to parse or produce conflicts where a full

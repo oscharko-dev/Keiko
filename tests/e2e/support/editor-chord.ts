@@ -1,24 +1,23 @@
 // The editor modifier chord, derived from the BROWSER — never from the Node host.
 //
-// Monaco binds its keyboard shortcuts from the platform the PAGE reports (a "Macintosh" user
-// agent selects the Cmd-based bindings; everything else gets Ctrl). Two tempting shortcuts get
-// this wrong, and both are host-derived:
+// Monaco binds its keyboard shortcuts from the platform the PAGE reports: a "Macintosh" user agent
+// selects the Cmd-based bindings, everything else gets Ctrl. Two tempting shortcuts ask the wrong
+// machine, and both are host-derived:
 //
 //   process.platform === "darwin" ? "Meta" : "Control"   // the Node process, not the browser
 //   page.keyboard.press("ControlOrMeta+…")               // Playwright resolves it per HOST OS
 //
-// On a macOS host they both press Meta. That happens to match Chromium (which advertises
-// Macintosh), which is why the mistake survived: every E2E lane ran Chromium only. Playwright's
-// Firefox build does not advertise Macintosh, so Monaco binds Ctrl there — the Meta chord reaches
-// nothing, and the failure is SILENT rather than loud: a "select all" that selects nothing makes
-// the next `insertText` APPEND instead of replace. That is exactly how the release smoke's
-// `replaceMonacoText` produced a four-line buffer from a two-line one on Firefox, and the test then
-// failed far away with a strict-mode violation ("resolved to 2 elements") that named neither the
-// chord nor the platform.
+// Measured, not assumed: under this suite's own config both engines report a Windows user agent
+// (`devices["Desktop Chrome"]` and `devices["Desktop Firefox"]` each force `Windows NT 10.0`
+// regardless of the host OS), so `editorModifier` resolves to "Control" for both, and its "Meta"
+// branch is not exercised here at all. The bug the host-derived form actually causes is therefore
+// NOT an engine difference — it is a HOST difference: on a macOS developer machine those
+// expressions press Meta while the page reports Windows and Monaco is listening for Ctrl, so the
+// chord reaches nothing locally while CI (Linux) stays green. Asking `navigator.userAgent` inside
+// the page asks exactly the question Monaco asks, so it is right on every engine AND every host.
 //
-// Deriving the chord from `navigator.userAgent` inside the page asks the same question Monaco
-// asks, so it is correct on every engine and on every host — including a Windows runner, where
-// both the old and the new expression yield Control but only this one does so for the right reason.
+// The genuine cross-engine difference in this file is a different one, and it lives in
+// `focusMonacoInput` below: the EditContext-vs-textarea input surface.
 import { expect, type Locator, type Page } from "@playwright/test";
 
 /** "Meta" when the BROWSER reports a Macintosh user agent, "Control" otherwise. */

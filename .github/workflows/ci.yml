@@ -1051,6 +1051,16 @@ jobs:
       - name: Verify governed Node.js and npm toolchain
         run: node scripts/check-runtime-toolchain.mjs --exact
       - run: npm ci --ignore-scripts
+      # The spawn smoke imports `packages/keiko-tools/src/windows-shell.ts` as SOURCE (Node type
+      # stripping) so the escaping it exercises cannot drift from what ships. That source now
+      # imports the shared trusted-System32 resolver from @oscharko-dev/keiko-security, which
+      # resolves through node_modules to that package's BUILT dist — absent after a bare
+      # `npm ci --ignore-scripts`. Building the packages first is what makes the source-import
+      # strategy hold; without it the smoke dies with ERR_MODULE_NOT_FOUND before testing anything.
+      - name: Build packages for the Windows smokes
+        if: runner.os == 'Windows'
+        timeout-minutes: 20
+        run: npm run build:packages
       - name: Smoke the Windows command spawn wrapper
         # #3350: on modern Node a `.cmd`/`.bat` target spawned with shell:false raises EINVAL, so
         # every agent `npm`/`npx` call would fail. This exercises the real cmd.exe wrapper against

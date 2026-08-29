@@ -235,6 +235,43 @@ function validateBffResponse<T>(path: string, value: unknown, validator: Respons
 // caller-supplied signal is COMBINED with the deadline, never replaced by it.
 const DEFAULT_READ_TIMEOUT_MS = 15_000;
 
+// `AbortSignal.any` is the newest API this file would otherwise require: Chrome/Edge 116,
+// Firefox 124, Safari 17.4 — well above the browsers Keiko declares support for. Rather than raise
+// the support floor for one convenience combinator, this reproduces it: the fallback costs a
+// handful of lines and keeps Firefox 111-123 and Safari 16.4-17.3 users on a working app instead of
+// a `TypeError` at the first read request.
+//
+// The feature test reads `any` through an indexed type rather than `typeof AbortSignal.any`,
+// because TypeScript's lib types declare it as always present — the direct check is a condition the
+// compiler believes can never be false, which `no-unnecessary-condition` rejects. The runtime, on
+// an older engine, disagrees; that gap is the entire reason this function exists.
+function combineAbortSignals(caller: AbortSignal, deadline: AbortSignal): AbortSignal {
+  const native = (AbortSignal as { any?: (signals: readonly AbortSignal[]) => AbortSignal }).any;
+  if (typeof native === "function") return native.call(AbortSignal, [caller, deadline]);
+
+  const combined = new AbortController();
+  const sources = [caller, deadline];
+  // `once` is not enough on its own: the LOSING source keeps its listener until it aborts, and a
+  // caller signal can outlive the request. Aborting the combined controller detaches both.
+  const detach = new AbortController();
+  for (const source of sources) {
+    if (source.aborted) {
+      combined.abort(source.reason);
+      detach.abort();
+      return combined.signal;
+    }
+    source.addEventListener(
+      "abort",
+      () => {
+        combined.abort(source.reason);
+        detach.abort();
+      },
+      { once: true, signal: detach.signal },
+    );
+  }
+  return combined.signal;
+}
+
 function withReadDeadline(
   init: RequestInit | undefined,
   isStateChanging: boolean,
@@ -242,7 +279,7 @@ function withReadDeadline(
   if (isStateChanging) return init?.signal ?? null;
   const deadline = AbortSignal.timeout(DEFAULT_READ_TIMEOUT_MS);
   const caller = init?.signal;
-  return caller === undefined || caller === null ? deadline : AbortSignal.any([caller, deadline]);
+  return caller === undefined || caller === null ? deadline : combineAbortSignals(caller, deadline);
 }
 
 async function fetchJson<T>(

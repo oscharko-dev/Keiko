@@ -523,6 +523,36 @@ static HANDLE keiko_open_plain_dir_no_follow(const wchar_t *path) {
   return dir;
 }
 
+// Clears attributes to FILE_ATTRIBUTE_NORMAL on `path` WITHOUT following a reparse point.
+//
+// The path-based SetFileAttributesW has no documented "operates on the link" exception the way
+// DeleteFileW / RemoveDirectoryW / GetFileAttributesW each do (their MSDN pages carry an explicit
+// "Symbolic link behavior—..." remark; SetFileAttributesW's page has none), so by CreateFile's own
+// documented default — "If FILE_FLAG_OPEN_REPARSE_POINT is not specified... the handle returned is a
+// handle to the target" — a bare SetFileAttributesW(child, ...) opens and mutates the TARGET of a
+// symlink/junction. A same-user racer's junction reaching into content outside the staging tree is
+// exactly the boundary keiko_open_plain_dir_no_follow exists to hold; clearing attributes through it
+// before delete would silently strip READONLY/HIDDEN/SYSTEM off whatever the racer points at. So this
+// mirrors that helper: FILE_FLAG_OPEN_REPARSE_POINT pins the handle to the entry itself, never its
+// target, and FileBasicInfo.FileAttributes writes are host-attribute-only when nonzero (the timestamp
+// fields stay zeroed, which SetFileInformationByHandle documents as "leave unchanged"). Best-effort —
+// the caller's own DeleteFileW/RemoveDirectoryW is what actually fails closed, not this — so a
+// failure here (including "no longer exists") is silently ignored rather than blocking the delete.
+static void keiko_clear_normal_no_follow(const wchar_t *path) {
+  HANDLE handle = CreateFileW(path, FILE_WRITE_ATTRIBUTES,
+                              FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, NULL,
+                              OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT,
+                              NULL);
+  if (handle == INVALID_HANDLE_VALUE) {
+    return;
+  }
+  FILE_BASIC_INFO info;
+  ZeroMemory(&info, sizeof(info));
+  info.FileAttributes = FILE_ATTRIBUTE_NORMAL;
+  (void)SetFileInformationByHandle(handle, FileBasicInfo, &info, sizeof(info));
+  (void)CloseHandle(handle);
+}
+
 // Deletes ONE directory entry without ever following a link, based on the attributes the directory
 // scan reported. The scan data can be STALE — a racer may have swapped the entry since — but every
 // stale outcome fails CLOSED rather than following:
@@ -534,7 +564,7 @@ static int keiko_remove_tree(const wchar_t *path);
 
 static int keiko_delete_entry(const wchar_t *child, DWORD attributes) {
   if ((attributes & FILE_ATTRIBUTE_REPARSE_POINT) != 0) {
-    (void)SetFileAttributesW(child, FILE_ATTRIBUTE_NORMAL);
+    keiko_clear_normal_no_follow(child);
     if ((attributes & FILE_ATTRIBUTE_DIRECTORY) != 0) {
       // Unlinks the junction/symlink itself; the target and its contents are untouched.
       return RemoveDirectoryW(child) != 0;
@@ -544,7 +574,7 @@ static int keiko_delete_entry(const wchar_t *child, DWORD attributes) {
   if ((attributes & FILE_ATTRIBUTE_DIRECTORY) != 0) {
     return keiko_remove_tree(child);
   }
-  (void)SetFileAttributesW(child, FILE_ATTRIBUTE_NORMAL);
+  keiko_clear_normal_no_follow(child);
   return DeleteFileW(child) != 0;
 }
 

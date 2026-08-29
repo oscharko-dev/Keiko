@@ -785,7 +785,7 @@
     {
       "op": "command.terminated",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/process-log-sink.ts:107",
+      "site": "packages/keiko-server/src/process-log-sink.ts:110",
       "package": "keiko-server"
     },
     {
@@ -875,13 +875,13 @@
     {
       "op": "git.delivery.mutation.completed",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/gitDelivery/execution.ts:236",
+      "site": "packages/keiko-server/src/gitDelivery/execution.ts:270",
       "package": "keiko-server"
     },
     {
       "op": "git.delivery.mutation.failed",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/gitDelivery/execution.ts:265",
+      "site": "packages/keiko-server/src/gitDelivery/execution.ts:299",
       "package": "keiko-server"
     },
     {
@@ -963,27 +963,33 @@
       "package": "keiko-server"
     },
     {
+      "op": "lsp.java.version-probe.completed",
+      "category": "diagnostic",
+      "site": "packages/keiko-server/src/editor/lsp/providers/javaProvider.ts:326",
+      "package": "keiko-server"
+    },
+    {
       "op": "lsp.process.terminated",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/editor/lsp/lspNodeAdapter.ts:82",
+      "site": "packages/keiko-server/src/editor/lsp/lspNodeAdapter.ts:102",
       "package": "keiko-server"
     },
     {
       "op": "lsp.spawn.completed",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/editor/lsp/lspNodeAdapter.ts:57",
+      "site": "packages/keiko-server/src/editor/lsp/lspNodeAdapter.ts:66",
       "package": "keiko-server"
     },
     {
       "op": "lsp.spawn.failed",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/editor/lsp/lspNodeAdapter.ts:67",
+      "site": "packages/keiko-server/src/editor/lsp/lspNodeAdapter.ts:80",
       "package": "keiko-server"
     },
     {
       "op": "memory.audit.state-cache.seeded",
       "category": "memory",
-      "site": "packages/keiko-server/src/deps.ts:1812",
+      "site": "packages/keiko-server/src/deps.ts:1821",
       "package": "keiko-server"
     },
     {

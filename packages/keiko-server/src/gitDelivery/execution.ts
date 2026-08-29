@@ -18,6 +18,7 @@ import { sha256Hex } from "@oscharko-dev/keiko-security";
 import {
   buildGitDeliveryEvidenceRecord,
   runGitMutation,
+  type CommandTerminationEvidence,
   type GitLocalMutationAdapter,
   type GitMutationCommand,
   type GitMutationLifecycleResult,
@@ -95,19 +96,36 @@ export function resolveProjectWorkspace(
   return resolveRegisteredOrManagedWorkspaceRoot(deps, projectId);
 }
 
+// Builds the runCommand termination-evidence callback for one git-delivery composition point.
+// Threads the caller's own request-scoped correlationId when the call frame has one in scope,
+// rather than downgrading to UNKNOWN_CORRELATION_ID while a real id sits one frame up (review
+// finding: `executeGovernedMutation` already receives and uses `correlationId` for its own
+// `git.delivery.mutation.*` lines, but its `readWorktreeSnapshotFor`/`adapterFor` calls dropped
+// it). Also resolves the SAME `seams.activityLog` the rest of this file logs through — the
+// previous hard-coded `processServerLogSink()` meant a test-injected sink never observed this
+// evidence line.
+export function gitDeliveryTerminationHandler(
+  seams: GitDeliveryExecutionSeams,
+  correlationId: string | undefined,
+): (evidence: CommandTerminationEvidence) => void {
+  const activityLog = seams.activityLog ?? processServerLogSink();
+  return (evidence): void => {
+    logCommandTermination(activityLog, correlationId ?? UNKNOWN_CORRELATION_ID, evidence);
+  };
+}
+
 export function readWorktreeSnapshotFor(
   workspace: WorkspaceInfo,
   seams: GitDeliveryExecutionSeams,
   now: () => number,
+  correlationId?: string,
 ): Promise<GitWorktreeSnapshot> {
   if (seams.snapshotReader !== undefined) return seams.snapshotReader(workspace);
   return readGitWorktreeSnapshot({
     workspace,
     processEnv: process.env,
     now,
-    onTerminated: (evidence): void => {
-      logCommandTermination(processServerLogSink(), UNKNOWN_CORRELATION_ID, evidence);
-    },
+    onTerminated: gitDeliveryTerminationHandler(seams, correlationId),
   });
 }
 
@@ -140,6 +158,7 @@ function adapterFor(
   workspace: WorkspaceInfo,
   seams: GitDeliveryExecutionSeams,
   now: () => number,
+  correlationId?: string,
 ): GitLocalMutationAdapter {
   if (seams.adapterFactory !== undefined) return seams.adapterFactory(workspace);
   return createNodeGitMutationAdapter({
@@ -147,11 +166,9 @@ function adapterFor(
     processEnv: process.env,
     now,
     // Deps-level evidence port (PR #3354 review 3887021650): a governed git mutation that times
-    // out or is aborted must leave its Windows tree-kill disposition in the activity log. No
-    // per-run correlation exists at this composition point.
-    onTerminated: (evidence): void => {
-      logCommandTermination(processServerLogSink(), UNKNOWN_CORRELATION_ID, evidence);
-    },
+    // out or is aborted must leave its Windows tree-kill disposition in the activity log, tagged
+    // with the SAME correlationId as this mutation's other log lines when the caller has one.
+    onTerminated: gitDeliveryTerminationHandler(seams, correlationId),
   });
 }
 
@@ -217,12 +234,12 @@ export async function executeGovernedMutation(
   const activityLog = seams.activityLog ?? processServerLogSink();
   let snapshot: GitWorktreeSnapshot;
   try {
-    snapshot = await readWorktreeSnapshotFor(workspace, seams, now);
+    snapshot = await readWorktreeSnapshotFor(workspace, seams, now, correlationId);
   } catch (error) {
     logGitDeliveryPreconditionFailure(activityLog, command.kind, error, correlationId);
     throw error;
   }
-  const adapter = adapterFor(workspace, seams, now);
+  const adapter = adapterFor(workspace, seams, now, correlationId);
   const packs = seams.policyPacks ?? defaultMintableRepoPack(KEIKO_DEFAULT_LOCAL_GIT_POLICY_PACK);
   const newActionId =
     seams.newActionId ?? ((): string => defaultGitDeliveryActionId(command, now()));

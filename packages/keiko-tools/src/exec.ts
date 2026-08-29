@@ -12,7 +12,7 @@ import type { ChildProcess } from "node:child_process";
 import { accessSync, constants, mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { delimiter, join, resolve as resolvePath } from "node:path";
-import { redact } from "@oscharko-dev/keiko-security";
+import { redact, WindowsSystemDirectoryError } from "@oscharko-dev/keiko-security";
 import {
   planIsolatedRun,
   probeBackends,
@@ -68,7 +68,16 @@ export type ExecutableResolver = (command: string, deps: ExecutableResolverDeps)
 // own exit status, observed after it completed; "unknown" is the bounded-wait expiring before
 // taskkill finished — the one case where completion genuinely cannot be confirmed. There is no
 // silent success: a taskkill that could not run reports "failed", never "succeeded".
-export type WindowsTreeKillResult = "succeeded" | "failed" | "unknown";
+// "blocked-untrusted-system-root" is kept DISTINCT from "failed" on purpose. Both mean the tree was
+// not bounded, but they are different facts about the machine: "failed" is taskkill.exe missing or
+// reporting an error, while this one is the trusted-System32 resolver refusing a malformed or
+// hostile SystemRoot/WINDIR — a security-relevant property of the environment, not an operational
+// hiccup. Collapsed into one value, an operator reading a customer's activity log could not tell a
+// stripped-down Windows image apart from a tampered environment variable, and AGENTS.md §8 requires
+// the defect to be reconstructible from the log alone. The member itself is the entire evidence:
+// the rejected value never leaves the resolver.
+export type WindowsTreeKillResult =
+  "succeeded" | "failed" | "unknown" | "blocked-untrusted-system-root";
 
 // Everything a termination line can truthfully say about the tree-kill step: the three verified
 // results above, or "not-attempted" (POSIX, or no pid to signal).
@@ -227,10 +236,12 @@ export const nodeWindowsTreeKill: WindowsTreeKill = (pid, processEnv) => {
       return code === "ETIMEDOUT" ? "unknown" : "failed";
     }
     return completed.status === 0 ? "succeeded" : "failed";
-  } catch {
-    // resolveSystemBinaryPath failing closed on an untrusted SystemRoot lands here: the tree-kill
-    // could not run, and saying so is the point.
-    return "failed";
+  } catch (error) {
+    // Caught NARROWLY: only the trusted-System32 refusal earns the distinct member, so an unrelated
+    // bug can never masquerade as a security signal. Everything else stays "failed".
+    return error instanceof WindowsSystemDirectoryError
+      ? "blocked-untrusted-system-root"
+      : "failed";
   }
 };
 
@@ -673,7 +684,18 @@ function terminate(
     processEnv: deps.processEnv,
     killWindowsTree: deps.killWindowsTree ?? nodeWindowsTreeKill,
   };
-  const disposition = killGroup(child, "SIGTERM", killDeps);
+  // The SAME guard the SIGKILL escalation below carries, and for the same reason — it was missing
+  // here. `state.settled` is set at 'close', but Node releases the child handle at 'exit', and
+  // 'data' events keep arriving in the window between the two. An output-cap trigger firing in that
+  // window reached this line with a pid Node no longer holds reserved, so a `taskkill /PID <pid> /T
+  // /F` could land on a REUSED pid — some unrelated process on the customer's machine. ADR-0006 D5
+  // called that hazard unreachable on the strength of the held handle; the escalation path needed
+  // this check to make that true, and this path needs it just as much.
+  // The evidence line is still emitted: "not-attempted" records that termination ran and
+  // deliberately did not signal, which is a different fact from a tree-kill that failed.
+  const disposition = childExited(child, state)
+    ? "not-attempted"
+    : killGroup(child, "SIGTERM", killDeps);
   reportTermination(input, deps, reason, child.pid, disposition);
   state.graceTimer = setTimeout(() => {
     // The run settled (or the child demonstrably exited) while the grace period ran: there is

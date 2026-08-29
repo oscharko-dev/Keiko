@@ -56,6 +56,38 @@ describe.skipIf(process.platform === "win32")("resolveGitExecutable", () => {
     });
   });
 
+  // A `git.cmd`/`git.bat` is never accepted as git, even when PATHEXT lists those extensions and
+  // the file passes every trust check. `runner.ts` spawns the resolved path with `shell: false`,
+  // which raises EINVAL for a batch target on Windows (Node's fix for CVE-2024-27980) — so
+  // resolving one could only ever yield a cryptic spawn failure instead of an honest "not-found".
+  // It is also the PATH-salting shape this resolver exists to reject: a batch file is arbitrary
+  // code under a trusted name, and keiko-git (a contracts-only leaf, ADR-0019 rule 2b) cannot reach
+  // the hardened cmd.exe wrapper that would be needed to launch one safely.
+  it.each([".CMD", ".BAT"])(
+    "refuses a %s git even when PATHEXT offers it and the file is otherwise trusted",
+    (extension) => {
+      const bin = temporary("keiko-git-executable-bin-");
+      writeFileSync(join(bin, `git${extension.toLowerCase()}`), "@echo off\r\n", { mode: 0o755 });
+      chmodSync(bin, 0o777);
+      expect(
+        resolveGitExecutable({ PATH: bin, PATHEXT: `.EXE;${extension}` }, workspace, "win32"),
+      ).toEqual({ ok: false, reason: "not-found" });
+    },
+  );
+
+  // The real image still wins from the same directory, so narrowing the extension set costs no
+  // legitimate resolution: a normal Git-for-Windows install ships git.exe.
+  it("still resolves git.exe when a git.cmd sits beside it", () => {
+    const bin = temporary("keiko-git-executable-bin-");
+    const executable = join(bin, "git.exe");
+    writeFileSync(executable, "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+    writeFileSync(join(bin, "git.cmd"), "@echo off\r\n", { mode: 0o755 });
+    chmodSync(bin, 0o777);
+    expect(
+      resolveGitExecutable({ PATH: bin, PATHEXT: ".COM;.EXE;.BAT;.CMD" }, workspace, "win32"),
+    ).toEqual({ ok: true, path: executable });
+  });
+
   it("rejects a workspace-contained executable", () => {
     const bin = join(workspace, "bin");
     mkdirSync(bin);

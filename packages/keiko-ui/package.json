@@ -15,13 +15,18 @@
   },
   "_browserslistRationale": [
     "Corrected from chrome/edge>=79, firefox>=72, safari>=13.1, which the shipped UI code has not",
-    "satisfied for a long time: 33 production call sites use Array.prototype.at(-n) (Firefox 90,",
-    "Safari 15.4), 20 use crypto.randomUUID (Firefox 95, Safari 15.4), and lib/api.ts uses",
-    "AbortSignal.timeout (Firefox 100, Safari 16) — every one of them beyond the old floor, so the",
-    "declaration promised engines on which the app cannot start. These floors correspond to the",
-    "Baseline 'widely available' set and cover every API the UI actually calls. Enterprise Windows",
-    "fleets run evergreen Edge/Chrome, so this is not a reachability change for them; it makes the",
-    "declaration true. check:browser-baseline enforces it against the source."
+    "satisfied for a long time: Array.prototype.at(-n) appears 35 times across 22 production files",
+    "(Firefox 90, Safari 15.4), crypto.randomUUID 19 times across 13 (Firefox 95, Safari 15.4),",
+    "Object.hasOwn 7 times across 6 (Firefox 92), and lib/api.ts uses AbortSignal.timeout (Firefox",
+    "100, Safari 16) \u2014 every one beyond the old floor, so the declaration promised engines on which",
+    "the app cannot start. Counts are occurrences and files stated separately on purpose: the",
+    "gate's own messages report FILES, and conflating the two produced three wrong numbers here.",
+    "AbortSignal.any (Chrome 116, Firefox 124, Safari 17.4) sits above even these floors and is",
+    "feature-detected with a fallback in lib/api.ts rather than raising them further.",
+    "These floors correspond to the Baseline 'widely available' set and cover every JS API the UI",
+    "calls; CSS is NOT yet scanned by the gate, and :has() (Firefox 121) is used in module CSS.",
+    "Enterprise Windows fleets run evergreen Edge/Chrome, so this is not a reachability change for",
+    "them; it makes the declaration true. check:browser-baseline enforces it against the source."
   ],
   "browserslist": [
     "chrome >= 111",

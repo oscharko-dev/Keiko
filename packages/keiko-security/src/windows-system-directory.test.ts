@@ -1,0 +1,128 @@
+// Direct unit coverage for the shared trusted-System32 decision (PR #3354 review). Before this
+// file, every branch here was exercised only INDIRECTLY: via keiko-tools' windows-shell.test.ts
+// (a different package/workspace's coverage run) and via windows-shortcuts.ts's `read`-mode
+// wrapper, which always calls resolveWindowsSystemBinary with a fixed, literal binary name and so
+// can never reach the control-character/cmd-metacharacter check on `binaryName` itself. Within
+// this package's OWN test run that left resolveWindowsSystemBinary's defence-in-depth check for a
+// hostile (non-literal) binary name at 0% coverage — untested exactly where its own doc comment
+// says it matters: "an exported function whose stated purpose is containment must not depend on
+// its callers staying literal to be safe."
+
+import { describe, expect, it } from "vitest";
+import {
+  DEFAULT_WINDOWS_SYSTEM_ROOT,
+  WindowsSystemDirectoryError,
+  resolveWindowsSystemBinary,
+  resolveWindowsSystemDirectory,
+} from "./windows-system-directory.js";
+
+const HOSTILE_SYSTEM_ROOT_VECTORS: readonly [label: string, value: string][] = [
+  ["empty string", ""],
+  ["relative (bare name)", "Windows"],
+  ["UNC path", String.raw`\\attacker\share`],
+  ["device path", String.raw`\\?\C:\Windows`],
+  ["root-relative path", String.raw`\Windows`],
+  ["drive-absolute with a cmd metacharacter", String.raw`C:\Windows^Sneaky`],
+  ["drive-absolute with an embedded quote", 'C:\\Windows"Sneaky'],
+  ["drive-absolute with a path-traversal segment", String.raw`C:\Windows\..\Windows`],
+  ["drive-absolute with an embedded control character", "C:\\Windows\r\nEvil"],
+];
+
+describe("resolveWindowsSystemDirectory", () => {
+  it("resolves the hard-coded default when no override is present", () => {
+    expect(resolveWindowsSystemDirectory({})).toBe(DEFAULT_WINDOWS_SYSTEM_ROOT);
+  });
+
+  it("accepts a valid drive-absolute SystemRoot override", () => {
+    expect(resolveWindowsSystemDirectory({ SystemRoot: String.raw`D:\NonstandardWindows` })).toBe(
+      String.raw`D:\NonstandardWindows`,
+    );
+  });
+
+  it("falls back to WINDIR when SystemRoot is absent", () => {
+    expect(resolveWindowsSystemDirectory({ WINDIR: String.raw`E:\AltWindows` })).toBe(
+      String.raw`E:\AltWindows`,
+    );
+  });
+
+  it("fails closed rather than falling back to WINDIR when SystemRoot is present but invalid", () => {
+    // A hostile environment plausibly controls BOTH variables; silently trying the next candidate
+    // would give it a second chance to defeat the check instead of failing the whole resolution.
+    expect(() =>
+      resolveWindowsSystemDirectory({
+        SystemRoot: String.raw`\\attacker\share`,
+        WINDIR: String.raw`C:\Windows`,
+      }),
+    ).toThrow(WindowsSystemDirectoryError);
+  });
+
+  it.each(HOSTILE_SYSTEM_ROOT_VECTORS)(
+    "rejects a hostile SystemRoot override: %s",
+    (_label, value) => {
+      expect(() => resolveWindowsSystemDirectory({ SystemRoot: value })).toThrow(
+        WindowsSystemDirectoryError,
+      );
+    },
+  );
+
+  it("falls back to process.env when env is omitted, without throwing", () => {
+    expect(() => resolveWindowsSystemDirectory()).not.toThrow();
+  });
+
+  it("never echoes the rejected override in the thrown message", () => {
+    try {
+      resolveWindowsSystemDirectory({ SystemRoot: String.raw`\\attacker\shattack-marker` });
+      expect.unreachable("must throw on a UNC override");
+    } catch (error) {
+      expect(error).toBeInstanceOf(WindowsSystemDirectoryError);
+      expect((error as Error).message).not.toContain("shattack-marker");
+    }
+  });
+});
+
+describe("resolveWindowsSystemBinary", () => {
+  it("joins the trusted directory's System32 with the requested binary name", () => {
+    expect(resolveWindowsSystemBinary("taskkill.exe", {})).toBe(
+      String.raw`C:\Windows\System32\taskkill.exe`,
+    );
+    expect(resolveWindowsSystemBinary("cscript.exe", { SystemRoot: String.raw`D:\Win` })).toBe(
+      String.raw`D:\Win\System32\cscript.exe`,
+    );
+  });
+
+  it.each([
+    ["empty", ""],
+    ["a backslash path", String.raw`sub\evil.exe`],
+    ["a forward-slash path", "sub/evil.exe"],
+    ["exactly '..'", ".."],
+  ])("rejects a binaryName that is not a bare file name: %s", (_label, binaryName) => {
+    expect(() => resolveWindowsSystemBinary(binaryName, {})).toThrow(WindowsSystemDirectoryError);
+  });
+
+  // The branch this file exists to close: a bare (no slash, not "..") name can still smuggle a
+  // control character or a cmd.exe metacharacter, and — unlike windows-shortcuts.ts's own callers,
+  // which always pass a literal — a future or misbehaving caller is not guaranteed to. Every one of
+  // these vectors passes the "bare file name" check above and must be caught by the second one.
+  it.each([
+    ["an embedded control character", "cscript.exe\r\nevil"],
+    ["an embedded NUL", "cscript.exe\u0000"],
+    ["an embedded cmd metacharacter", "cscript.exe&calc.exe"],
+    ["an embedded quote", 'cscript.exe"'],
+  ])("rejects a bare binaryName carrying %s", (_label, binaryName) => {
+    expect(() => resolveWindowsSystemBinary(binaryName, {})).toThrow(WindowsSystemDirectoryError);
+  });
+
+  it("accepts a binaryName with a literal dot, which is neither a metacharacter nor a separator", () => {
+    expect(() => resolveWindowsSystemBinary("cscript.exe", {})).not.toThrow();
+  });
+
+  it("propagates a hostile SystemRoot failure through to the binary resolution", () => {
+    expect(() =>
+      resolveWindowsSystemBinary("cmd.exe", { SystemRoot: String.raw`\\attacker\share` }),
+    ).toThrow(WindowsSystemDirectoryError);
+  });
+
+  it("falls back to process.env when env is omitted, without throwing", () => {
+    expect(() => resolveWindowsSystemBinary("cmd.exe")).not.toThrow();
+  });
+});

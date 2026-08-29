@@ -423,6 +423,49 @@ describe("runCommand — timeout & cancellation (fake child)", () => {
   });
 });
 
+describe("runCommand — no raw-pid signal after the child has exited (reused-pid hazard)", () => {
+  // The window this pins: Node releases the child handle at 'exit', but `state.settled` is only set
+  // at 'close', and 'data' events keep arriving between the two. An output-cap trigger firing in
+  // that gap used to reach `killGroup` with a pid the OS no longer holds reserved — on Windows a
+  // `taskkill /PID <pid> /T /F` that can land on an unrelated, reused pid. ADR-0006 D5 declared that
+  // hazard unreachable because Node "holds an open handle for the lifetime of the ChildProcess";
+  // that is true only until 'exit', which is why the SIGKILL escalation already carried this guard
+  // and this path did not.
+  it("does not signal when output overflows AFTER the child has exited but before close", async () => {
+    const kills = captureKills();
+    const spawn = recordingSpawn();
+    try {
+      const promise = runCommand(
+        {
+          command: "node",
+          args: ["-e", "flood"],
+          cwd: undefined,
+          timeoutMs: undefined,
+          signal: controller().signal,
+        },
+        {
+          ...fakeDeps(spawn.fn),
+          policy: { ...DEFAULT_SANDBOX_POLICY, maxOutputBytes: 4 },
+        },
+      );
+      // The child has exited — Node has released the handle and the pid is no longer reserved —
+      // but 'close' has not fired yet, so the run has NOT settled.
+      spawn.child.exitCode = 0;
+      spawn.child.emit("exit", 0, null);
+      // A late chunk overflows the cap and drives terminate() into exactly that window.
+      spawn.child.stdout.emit("data", Buffer.from("0123456789", "utf8"));
+
+      expect(kills.groupSignals).toEqual([]);
+      expect(spawn.child.killed).toEqual([]);
+
+      spawn.child.emit("close", 0, null);
+      await expect(promise).resolves.toMatchObject({ truncated: true });
+    } finally {
+      kills.restore();
+    }
+  });
+});
+
 describe("runCommand — output flood protection (F12)", () => {
   it("kills the child and flags truncated:true when output exceeds maxOutputBytes", async () => {
     const kills = captureKills();
@@ -1428,9 +1471,12 @@ describe("runCommand — single-flight termination (first trigger wins)", () => 
       ctrl.abort(); // competing trigger — must be a no-op
       await vi.advanceTimersByTimeAsync(60);
       spawn.child.emit("close", null, "SIGTERM"); // settles
+      // Attach the rejection handler BEFORE advancing further: leaving the just-rejected `promise`
+      // unhandled across another `await` lets Node's unhandled-rejection detector fire before this
+      // test's own `.rejects` attaches, which fails the run despite every assertion passing.
+      await expect(promise).rejects.toBeInstanceOf(CommandTimeoutError);
       // Run PAST the original grace deadline: an orphaned timer would tree-kill here.
       await vi.advanceTimersByTimeAsync(400);
-      await expect(promise).rejects.toBeInstanceOf(CommandTimeoutError);
       expect(tree.calls()).toHaveLength(1);
       expect(seen.map((e) => e.reason)).toEqual(["timeout"]);
       expect(spawn.child.killed).toEqual(["SIGTERM"]);
@@ -1506,11 +1552,15 @@ describe("runCommand — single-flight termination (first trigger wins)", () => 
     }
   });
 
-  it("a timeout armed AFTER a spawn-callback termination cannot re-enter (the single-flight guard itself)", async () => {
-    // Single-flight across trigger CLASSES: the spawn-callback failure is the terminal cause, and
-    // a timeout armed around the same spawn must neither re-kill nor rewrite the rejection. The
-    // guard and the trigger-disarm back each other up here; reverting terminate() to the pre-fix
-    // shape (no guard, no disarm) turns this red together with the overlap pins above.
+  it("a spawn-callback termination is exclusive — no timer is ever armed to race against it", async () => {
+    // NOT a competing-trigger race: runSpawnedChild's onSpawn try/catch calls terminate() and
+    // RETURNS before armTimersAndAbort ever runs, so neither the timeout timer nor the abort
+    // listener is armed when onSpawn throws — there is structurally nothing left that COULD fire
+    // a second trigger through those two paths. This pins that exclusivity itself (advancing past
+    // the nominal timeoutMs proves no timer was scheduled); the guard's actual cross-trigger proof
+    // for spawn-callback-error is the output-cap test right below, since wireStreams' data
+    // listeners — unlike the timer/abort — are wired unconditionally and so remain a real,
+    // reachable competing trigger.
     vi.useFakeTimers();
     try {
       const spawn = recordingSpawn();
@@ -1532,7 +1582,7 @@ describe("runCommand — single-flight termination (first trigger wins)", () => 
         },
         { ...fakeDeps(spawn.fn), platform: "win32", killWindowsTree: tree.fn },
       );
-      await vi.advanceTimersByTimeAsync(120); // the later timeout timer fires into the guard
+      await vi.advanceTimersByTimeAsync(120); // past timeoutMs: nothing fires, because nothing was armed
       spawn.child.emit("close", null, "SIGTERM");
       await expect(promise).rejects.toThrow("lock write failed");
       expect(tree.calls()).toHaveLength(1);
@@ -1540,6 +1590,44 @@ describe("runCommand — single-flight termination (first trigger wins)", () => 
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it("output-cap arriving AFTER a spawn-callback termination cannot re-enter (the single-flight guard itself)", async () => {
+    // The REAL competing trigger against spawn-callback-error: wireStreams attaches the
+    // stdout/stderr data listeners before the onSpawn try/catch runs, so — unlike the timeout
+    // timer and the abort listener, which the test above shows are never armed on this path — a
+    // late output flood still reaches terminate() after the spawn callback already set the
+    // terminal cause. Reverting terminate() to the pre-fix shape (no guard, no disarm) turns this
+    // red: the flood would re-signal the tree and re-report a second (wrong) evidence line.
+    const spawn = recordingSpawn();
+    const tree = recordingTree();
+    const seen: CommandTerminationEvidence[] = [];
+    const promise = runCommand(
+      {
+        command: "node",
+        args: ["-e", "1"],
+        cwd: undefined,
+        timeoutMs: 50,
+        signal: controller().signal,
+        onSpawn: (): void => {
+          throw new Error("lock write failed");
+        },
+        onTerminated: (e): void => {
+          seen.push(e);
+        },
+      },
+      {
+        ...fakeDeps(spawn.fn),
+        platform: "win32",
+        killWindowsTree: tree.fn,
+        policy: { ...DEFAULT_SANDBOX_POLICY, maxOutputBytes: 4 },
+      },
+    );
+    spawn.child.stdout.emit("data", Buffer.from("0123456789", "utf8")); // must not re-enter terminate()
+    spawn.child.emit("close", null, "SIGTERM");
+    await expect(promise).rejects.toThrow("lock write failed");
+    expect(tree.calls()).toHaveLength(1);
+    expect(seen.map((e) => e.reason)).toEqual(["spawn-callback-error"]);
   });
 
   it("the grace escalation is a no-op when the child has EXITED but the run has not settled yet", async () => {
@@ -1869,5 +1957,22 @@ describe("windowsTaskkillInvocation — validated system-directory resolution", 
     expect(() => {
       nodeWindowsTreeKill(7, { SystemRoot: String.raw`\\attacker\share` });
     }).not.toThrow();
+  });
+
+  // AGENTS.md §8: the activity log must let an operator reconstruct the defect without the machine.
+  // A hostile/malformed SystemRoot and an ordinary taskkill failure are different facts about that
+  // machine — one is a tampered environment, the other a stripped image — so they must not arrive as
+  // the same value. Reported as a distinct member, never as free text and never carrying the
+  // rejected value.
+  it("reports an untrusted system root as its own disposition, distinct from a plain failure", () => {
+    expect(nodeWindowsTreeKill(7, { SystemRoot: String.raw`\\attacker\share` })).toBe(
+      "blocked-untrusted-system-root",
+    );
+  });
+
+  it("still reports an ordinary spawn failure as failed, not as an untrusted root", () => {
+    // A VALID system root, so the resolver returns cleanly and any failure comes from the spawn
+    // itself — the narrow catch must not let this borrow the security-relevant member.
+    expect(nodeWindowsTreeKill(7, { SystemRoot: String.raw`C:\Windows` })).toBe("failed");
   });
 });

@@ -19,7 +19,20 @@ import type { ManagedLspJavaConfiguration, WorkspaceInfo } from "@oscharko-dev/k
 import type { BackendAvailability } from "@oscharko-dev/keiko-sandbox";
 
 import type { LspSpawnPreparationInput } from "../lspProcessManager.js";
-import { JAVA_PROVIDER_SPEC, javaProtocolConfiguration, prepareJavaSpawn } from "./javaProvider.js";
+import {
+  JAVA_PROVIDER_SPEC,
+  buildJavaVersionProbeInvocation,
+  javaProtocolConfiguration,
+  prepareJavaSpawn,
+} from "./javaProvider.js";
+import { UNKNOWN_CORRELATION_ID } from "../../../correlation.js";
+import { redactLogFields } from "../../../observability/log-redaction.js";
+import type { ServerLogEvent } from "../../../observability/server-log.js";
+import {
+  createServerLogger,
+  resetServerLogger,
+  setServerLogger,
+} from "../../../observability/server-logger.js";
 
 const NATIVE: BackendAvailability = {
   bubblewrap: true,
@@ -40,6 +53,10 @@ beforeEach(() => {
 afterEach(() => {
   rmSync(root, { recursive: true, force: true });
   rmSync(runtimeStateRoot, { recursive: true, force: true });
+  // The activity-log evidence tests below install a capturing ServerLogger via the process-wide
+  // test seam (setServerLogger); resetting unconditionally is a harmless no-op for every other
+  // test in this file and prevents leaking a captured sink into an unrelated later suite.
+  resetServerLogger();
 });
 
 function configuration(): ManagedLspJavaConfiguration {
@@ -418,5 +435,113 @@ describe("managed Eclipse JDT LS provider", () => {
         // defaultJavaVersionValid probe's success path parsing a real -version reply.
       }),
     ).not.toThrow();
+  });
+});
+
+// Issue #3350 hardened the LSP server's OWN spawn (lspNodeAdapter.ts's buildLspSpawnPlan) but never
+// covered this provider's separate, directly-issued `java -version` probe (defaultJavaVersionValid,
+// via plain `spawnSync`): a Windows JDK managed through a version-manager shim (jenv/jabba/scoop-
+// style wrappers commonly install `java.cmd` rather than a native `java.exe`) resolves to exactly
+// the `.cmd`/`.bat` shape that raises EINVAL under `shell: false` (Node CVE-2024-27980). Tested
+// against the pure builder directly — never against defaultJavaVersionValid, which always uses the
+// real process.platform — so the win32 branch is reachable from a test on any host, mirroring
+// lspNodeAdapter.test.ts's `buildLspSpawnPlan` coverage for the identical class of defect. Without
+// this seam the cmd.exe wrapper call inside defaultJavaVersionValid could be deleted and every other
+// Java provider test would stay green (they all inject `validateJavaVersion` or run on POSIX),
+// silently reintroducing EINVAL for a shimmed Windows `java.cmd`.
+describe("buildJavaVersionProbeInvocation", () => {
+  it("routes a resolved java.cmd through the hardened cmd.exe wrapper on win32", () => {
+    const invocation = buildJavaVersionProbeInvocation(String.raw`C:\jdk\bin\java.cmd`, {
+      platform: "win32",
+      env: { SystemRoot: String.raw`C:\Windows` },
+    });
+
+    expect(
+      invocation.command.toLowerCase().endsWith(String.raw`\system32\cmd.exe`.toLowerCase()),
+    ).toBe(true);
+    expect(invocation.args.slice(0, 3)).toEqual(["/d", "/s", "/c"]);
+    expect(invocation.args[3]).toContain("java.cmd");
+    expect(invocation.args[3]).toContain("-version");
+    // The spread must survive at the call site: without it Node re-quotes the pre-escaped line and
+    // the escaping cross-spawn built is lost.
+    expect(invocation.windowsVerbatimArguments).toBe(true);
+  });
+
+  it("passes a resolved java.exe through unchanged on win32", () => {
+    const invocation = buildJavaVersionProbeInvocation(String.raw`C:\jdk\bin\java.exe`, {
+      platform: "win32",
+      env: { SystemRoot: String.raw`C:\Windows` },
+    });
+
+    expect(invocation.command).toBe(String.raw`C:\jdk\bin\java.exe`);
+    expect(invocation.args).toEqual(["-version"]);
+    expect(invocation.windowsVerbatimArguments).toBe(false);
+  });
+
+  it("leaves a POSIX java executable unwrapped", () => {
+    const invocation = buildJavaVersionProbeInvocation("/opt/jdk-21/bin/java", {
+      platform: "linux",
+    });
+
+    expect(invocation.command).toBe("/opt/jdk-21/bin/java");
+    expect(invocation.args).toEqual(["-version"]);
+    expect(invocation.windowsVerbatimArguments).toBe(false);
+  });
+});
+
+// A PR reviewer finding shape (AGENTS.md §8 Rule 1): the win32 wrapper-engagement decision above
+// must leave activity-log evidence, exactly like lspNodeAdapter.ts's own `lsp.spawn.completed`.
+// defaultJavaVersionValid has no injected log port — it reaches processServerLogSink() directly —
+// so this test installs a capturing ServerLogger via the process-wide test seam
+// (setServerLogger/resetServerLogger) rather than a constructor-injected fake.
+describe("defaultJavaVersionValid — activity-log evidence (AGENTS.md §8 Rule 1)", () => {
+  function captureLog(): ServerLogEvent[] {
+    const events: ServerLogEvent[] = [];
+    setServerLogger(
+      createServerLogger({ sink: { write: (event) => events.push(event) }, level: "debug" }),
+    );
+    return events;
+  }
+
+  it("logs lsp.java.version-probe.completed with the wrapper-engagement decision and outcome", () => {
+    const events = captureLog();
+    const realJava = join(root, "java");
+    writeFileSync(
+      realJava,
+      "#!/bin/sh\necho 'openjdk version \"21.0.1\" 2024-01-16' 1>&2\nexit 0\n",
+      "utf8",
+    );
+    chmodSync(realJava, 0o755);
+
+    expect(() =>
+      prepareJavaSpawn(spawnInput(), {
+        availability: NATIVE,
+        platform: "linux",
+        resolveExecutable: () => "/usr/bin/bwrap",
+        resolveJava: () => realJava,
+        validateLayout: () => true,
+        // validateJavaVersion intentionally not overridden: exercises the real
+        // defaultJavaVersionValid probe and its logging end to end.
+      }),
+    ).not.toThrow();
+
+    const probed = events.find((event) => event.op === "lsp.java.version-probe.completed");
+    expect(probed).toBeDefined();
+    expect(probed?.category).toBe("diagnostic");
+    expect(probed?.correlationId).toBe(UNKNOWN_CORRELATION_ID);
+    const extra = probed?.extra ?? {};
+    // This test host is never win32: the hardened cmd.exe wrapper never engages.
+    expect(extra.windowsWrapperEngaged).toBe(false);
+    expect(extra.validVersion).toBe(true);
+    expect(extra.platform).toBe(process.platform);
+    // Body-free: never the resolved java path or the probe's stdout/stderr on the evidence line.
+    expect(Object.keys(extra).sort()).toEqual([
+      "platform",
+      "validVersion",
+      "windowsWrapperEngaged",
+    ]);
+    // Through the REAL redactor: every evidence field here must survive redaction unchanged.
+    const redacted = redactLogFields(extra) ?? {};
+    expect(Object.keys(redacted).sort()).toEqual(Object.keys(extra).sort());
   });
 });

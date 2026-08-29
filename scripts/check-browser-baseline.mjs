@@ -2,11 +2,16 @@
 // Keeps keiko-ui's `browserslist` declaration TRUE.
 //
 // Why this gate exists: the declaration said chrome/edge >= 79, firefox >= 72, safari >= 13.1 while
-// the shipped UI called `Array.prototype.at(-n)` (Firefox 90 / Safari 15.4) in 33 production sites,
-// `crypto.randomUUID` (Firefox 95 / Safari 15.4) in 20, and `AbortSignal.timeout` (Firefox 100 /
-// Safari 16) in the API client. On any browser inside the declared-but-unsupported range the app
-// does not degrade — it throws on first use. Nothing checked the claim, so it drifted silently for
-// as long as it existed: a declaration a machine never verifies is documentation, not a guarantee.
+// the shipped UI called `Array.prototype.at(-n)` (Firefox 90 / Safari 15.4) in 35 places across 22
+// production files, `crypto.randomUUID` (Firefox 95 / Safari 15.4) in 19 across 13, `Object.hasOwn`
+// (Firefox 92) in 7 across 6, and `AbortSignal.timeout` (Firefox 100 / Safari 16) in the API
+// client. On any browser inside the declared-but-unsupported range the app does not degrade — it
+// throws on first use. Nothing checked the claim, so it drifted silently for as long as it existed:
+// a declaration a machine never verifies is documentation, not a guarantee.
+//
+// Counting note: the failure messages below report FILES, not occurrences — the two numbers differ
+// (35 occurrences live in 22 files), and quoting one as the other is how the original commit
+// message got all three of these counts wrong.
 //
 // What it checks: for each API below, if the UI source calls it, every floor in `browserslist` must
 // be at or above that API's first supporting version. Fails closed — an unparsable declaration or
@@ -19,6 +24,10 @@
 // cheaper than discovering it from a customer's Firefox.
 import { readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
+// Imported, never restated: a second copy of these numbers here would drift from the transpiler's
+// own copy exactly the way the browserslist declaration drifted from the product. The module is
+// `isMainModule`-guarded, so importing it runs no transpilation.
+import { TARGETS as TRANSPILE_TARGETS } from "./transpile-ui-static-js.mjs";
 
 const UI_PACKAGE = "packages/keiko-ui/package.json";
 const SOURCE_ROOTS = ["packages/keiko-ui/src", "packages/keiko-editor/src"];
@@ -40,6 +49,11 @@ const GUARDED_APIS = [
     name: "AbortSignal.timeout",
     pattern: /\bAbortSignal\.timeout\s*\(/,
     minimum: { chrome: 103, edge: 103, firefox: 100, safari: 16 },
+  },
+  {
+    name: "AbortSignal.any",
+    pattern: /\bAbortSignal\.any\s*\(/,
+    minimum: { chrome: 116, edge: 116, firefox: 124, safari: 17.4 },
   },
   {
     name: "structuredClone",
@@ -133,8 +147,41 @@ function violationsFor(api, users, floors) {
     // An engine the declaration does not name is not this gate's business.
     if (floor !== undefined && floor < required) {
       found.push(
+        // `users` holds FILES, so the count is a file count. It used to be printed as "call
+        // site(s)", which read as an occurrence count and did not match a hand grep — a file using
+        // the API three times still counts once here.
         `${api.name} needs ${engine} >= ${String(required)} but browserslist declares ` +
-          `${engine} >= ${String(floor)} (${String(users.length)} call site(s), e.g. ${users[0]})`,
+          `${engine} >= ${String(floor)} (${String(users.length)} file(s), e.g. ${users[0]})`,
+      );
+    }
+  }
+  return found;
+}
+
+// The SECOND question this gate answers, and the one no test could ask before `TARGETS` was
+// exported: does the Babel syntax floor stay AT OR BELOW the declared support floor?
+//
+// Direction matters and only one direction is a defect. A transpile floor BELOW the declaration is
+// deliberate slack — the bundle is lowered further than it has to be, so every declared-supported
+// browser can parse it. A floor ABOVE the declaration means Babel emits syntax that a
+// declared-supported browser cannot parse: not a missing feature but a blank page, and a failure
+// that no amount of API guarding below would catch. The two numbers previously lived in two files
+// with no link between them, so nothing noticed when one moved.
+function transpileFloorViolations(floors) {
+  const found = [];
+  for (const [engine, target] of Object.entries(TRANSPILE_TARGETS)) {
+    const declared = floors.get(engine);
+    if (declared === undefined) continue;
+    const transpiled = Number.parseFloat(target);
+    if (Number.isNaN(transpiled)) {
+      found.push(`transpile target for ${engine} (${target}) is not a version number`);
+      continue;
+    }
+    if (transpiled > declared) {
+      found.push(
+        `transpile floor ${engine} ${target} is ABOVE the declared browserslist floor ` +
+          `${engine} >= ${String(declared)} — the exported bundle would use syntax a ` +
+          `declared-supported browser cannot parse`,
       );
     }
   }
@@ -144,6 +191,12 @@ function violationsFor(api, users, floors) {
 function main() {
   const declaration = readDeclaredFloors();
   if (declaration === undefined) return;
+
+  const floorViolations = transpileFloorViolations(declaration.floors);
+  if (floorViolations.length > 0) {
+    for (const violation of floorViolations) fail(violation);
+    return;
+  }
 
   const sources = collectSources();
   if (sources.length === 0) {

@@ -257,7 +257,12 @@ class VerificationRunnerManagerImpl implements VerificationRunnerManager {
     this.emitRunStarted(runId, input, startedAtMs);
     this.emitStepsStarted(runId, plan);
     try {
-      const { report } = await this.executePort({ plan, workspace, signal: controller.signal });
+      const { report } = await this.executePort({
+        plan,
+        workspace,
+        signal: controller.signal,
+        correlationId: entry.correlationId,
+      });
       this.emitStepCompletions(runId, report);
       // Awaited path (the agent's HTTP request awaits this promise): an evidence-write failure is
       // surfaced both as the terminal SSE event AND a thrown error, so the caller receives a real
@@ -410,6 +415,7 @@ class VerificationRunnerManagerImpl implements VerificationRunnerManager {
         plan,
         workspace,
         signal: entry.controller.signal,
+        correlationId: entry.correlationId,
       });
       this.emitStepCompletions(runId, report);
       // Fire-and-forget path (nothing awaits runPlan): an evidence-write failure must not become an

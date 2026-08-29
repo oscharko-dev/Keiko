@@ -331,7 +331,11 @@ static void test_drain_pipe_drains_past_the_cap(void) {
   attributes.bInheritHandle = FALSE;
   HANDLE read_end = NULL;
   HANDLE write_end = NULL;
-  assert(CreatePipe(&read_end, &write_end, &attributes, 0) != 0);
+  // An explicit, generous buffer size — not 0 ("system default", documented as only a suggestion,
+  // commonly ~4 KiB and NOT guaranteed >= the flood below). This WriteFile runs single-threaded,
+  // before keiko_drain_pipe ever starts reading, so an undersized pipe buffer would deadlock this
+  // test (write blocks with nobody draining) instead of exercising the past-the-cap discard path.
+  assert(CreatePipe(&read_end, &write_end, &attributes, 65536) != 0);
 
   char flood[4096];
   memset(flood, 'x', sizeof(flood));
@@ -449,13 +453,23 @@ static void test_watchdog_terminates_the_descendant_tree(void) {
   assert(keiko_spawn_in_job(cmd_exe, command, &startup, FALSE, &child) == 1);
   assert(child.job != NULL); // the Job Object is what binds the tree
 
-  // Let the grandchild come up, then fire the watchdog with a short deadline.
-  Sleep(2500);
+  // Let the grandchild come up, then fire the watchdog with a short deadline. Polled, not a fixed
+  // Sleep: process-creation latency through two nested cmd.exe launches is not bounded on a loaded
+  // CI runner, and a single fixed sleep either wastes time or — worse — under-waits and makes the
+  // ActiveProcesses assertion flaky. Bounded at 15s, far under the 20-minute product watchdog, so a
+  // genuine failure to spawn the tree still fails the test instead of hanging it.
   JOBOBJECT_BASIC_ACCOUNTING_INFORMATION before;
   ZeroMemory(&before, sizeof(before));
   DWORD returned = 0;
-  assert(QueryInformationJobObject(child.job, JobObjectBasicAccountingInformation, &before,
-                                   sizeof(before), &returned) != 0);
+  ULONGLONG poll_deadline = GetTickCount64() + 15000;
+  for (;;) {
+    assert(QueryInformationJobObject(child.job, JobObjectBasicAccountingInformation, &before,
+                                     sizeof(before), &returned) != 0);
+    if (before.ActiveProcesses >= 2 || GetTickCount64() >= poll_deadline) {
+      break;
+    }
+    Sleep(100);
+  }
   assert(before.ActiveProcesses >= 2); // the tree really is a tree
 
   assert(keiko_wait_or_terminate(&child, 200) == 0); // deadline expires -> terminate the tree
