@@ -896,18 +896,46 @@ static int keiko_extract_verified_payload(keiko_setup_buffers *b) {
 // Governed lifecycle steps: tar extraction, then the portable CLI resolve-root / setup / launch.
 // ---------------------------------------------------------------------------------------------
 
+// A path-sized working buffer, on the HEAP. KEIKO_PATH_CAP is 32768 wchar_t = 64 KiB, which is far
+// past the stack budget `/analyze` enforces (C6262) and past what this call chain can afford —
+// keiko_setup_buffers is heap-allocated for exactly the same reason, as is each level of
+// keiko_remove_tree. Returns NULL on exhaustion; every caller must check.
+static wchar_t *keiko_alloc_path(void) {
+  return (wchar_t *)HeapAlloc(GetProcessHeap(), 0, KEIKO_PATH_CAP * sizeof(wchar_t));
+}
+
+static void keiko_free_path(wchar_t *path) {
+  if (path != NULL) {
+    (void)HeapFree(GetProcessHeap(), 0, path);
+  }
+}
+
+static int keiko_build_managed_paths(keiko_setup_buffers *b, const wchar_t *system_dir);
+
 static int keiko_prepare_paths(keiko_setup_buffers *b) {
-  wchar_t system_dir[KEIKO_PATH_CAP];
-  if (GetModuleFileNameW(NULL, b->self_path, KEIKO_PATH_CAP) == 0 ||
-      GetTempPathW(KEIKO_PATH_CAP, b->temp_dir) == 0 ||
-      GetSystemDirectoryW(system_dir, KEIKO_PATH_CAP) == 0) {
+  wchar_t *system_dir = keiko_alloc_path();
+  if (system_dir == NULL) {
     return 0;
   }
+  int located = GetModuleFileNameW(NULL, b->self_path, KEIKO_PATH_CAP) != 0 &&
+                GetTempPathW(KEIKO_PATH_CAP, b->temp_dir) != 0 &&
+                GetSystemDirectoryW(system_dir, KEIKO_PATH_CAP) != 0;
   unsigned char random16[16];
-  if (BCryptGenRandom(NULL, random16, sizeof(random16), BCRYPT_USE_SYSTEM_PREFERRED_RNG) != 0 ||
-      !keiko_build_staging_name(b->staging_dir, KEIKO_PATH_CAP, b->temp_dir, random16)) {
+  if (located) {
+    located = BCryptGenRandom(NULL, random16, sizeof(random16), BCRYPT_USE_SYSTEM_PREFERRED_RNG) ==
+                  0 &&
+              keiko_build_staging_name(b->staging_dir, KEIKO_PATH_CAP, b->temp_dir, random16);
+  }
+  if (!located) {
+    keiko_free_path(system_dir);
     return 0;
   }
+  int ok = keiko_build_managed_paths(b, system_dir);
+  keiko_free_path(system_dir);
+  return ok;
+}
+
+static int keiko_build_managed_paths(keiko_setup_buffers *b, const wchar_t *system_dir) {
   return _snwprintf_s(b->tar_path, KEIKO_PATH_CAP, _TRUNCATE, L"%ls\\tar.exe", system_dir) > 0 &&
          _snwprintf_s(b->zip_path, KEIKO_PATH_CAP, _TRUNCATE, L"%ls\\keiko-windows-x64.zip",
                       b->staging_dir) > 0 &&
@@ -927,12 +955,16 @@ static int keiko_extract_archive(keiko_setup_buffers *b) {
 }
 
 static int keiko_payload_contents_present(const keiko_setup_buffers *b) {
-  wchar_t keiko_exe[KEIKO_PATH_CAP];
-  if (_snwprintf_s(keiko_exe, KEIKO_PATH_CAP, _TRUNCATE, L"%ls\\Keiko.exe", b->extract_dir) <= 0) {
+  wchar_t *keiko_exe = keiko_alloc_path();
+  if (keiko_exe == NULL) {
     return 0;
   }
-  return keiko_file_exists(keiko_exe) && keiko_file_exists(b->node_path) &&
-         keiko_file_exists(b->cli_path);
+  int ok =
+      _snwprintf_s(keiko_exe, KEIKO_PATH_CAP, _TRUNCATE, L"%ls\\Keiko.exe", b->extract_dir) > 0 &&
+      keiko_file_exists(keiko_exe) && keiko_file_exists(b->node_path) &&
+      keiko_file_exists(b->cli_path);
+  keiko_free_path(keiko_exe);
+  return ok;
 }
 
 static int keiko_resolve_managed_root(keiko_setup_buffers *b) {
@@ -941,12 +973,18 @@ static int keiko_resolve_managed_root(keiko_setup_buffers *b) {
                    b->node_path, b->cli_path, KEIKO_WIDEN(KEIKO_SETUP_TARGET), b->extract_dir) <= 0) {
     return 0;
   }
-  char output[KEIKO_RESOLVE_OUTPUT_CAP];
-  int output_len = 0;
-  if (!keiko_run_capture(b->node_path, b->command, output, KEIKO_RESOLVE_OUTPUT_CAP, &output_len)) {
+  // Heap, not stack: KEIKO_RESOLVE_OUTPUT_CAP is 64 KiB, the same reason every path buffer above is
+  // heap-allocated (`/analyze` C6262, and a deep call chain cannot afford it).
+  char *output = (char *)HeapAlloc(GetProcessHeap(), 0, (SIZE_T)KEIKO_RESOLVE_OUTPUT_CAP);
+  if (output == NULL) {
     return 0;
   }
-  return keiko_parse_managed_root(output, output_len, b->managed_root, KEIKO_PATH_CAP);
+  int output_len = 0;
+  int ok = keiko_run_capture(b->node_path, b->command, output, KEIKO_RESOLVE_OUTPUT_CAP,
+                             &output_len) &&
+           keiko_parse_managed_root(output, output_len, b->managed_root, KEIKO_PATH_CAP);
+  (void)HeapFree(GetProcessHeap(), 0, output);
+  return ok;
 }
 
 static int keiko_run_setup_step(keiko_setup_buffers *b) {
@@ -959,23 +997,27 @@ static int keiko_run_setup_step(keiko_setup_buffers *b) {
 }
 
 static int keiko_run_launch_step(keiko_setup_buffers *b) {
-  wchar_t managed_node[KEIKO_PATH_CAP];
-  wchar_t managed_cli[KEIKO_PATH_CAP];
-  if (_snwprintf_s(managed_node, KEIKO_PATH_CAP, _TRUNCATE, L"%ls\\runtime\\node\\node.exe",
-                   b->managed_root) <= 0 ||
+  wchar_t *managed_node = keiko_alloc_path();
+  wchar_t *managed_cli = keiko_alloc_path();
+  int ok = 0;
+  if (managed_node != NULL && managed_cli != NULL &&
+      _snwprintf_s(managed_node, KEIKO_PATH_CAP, _TRUNCATE, L"%ls\\runtime\\node\\node.exe",
+                   b->managed_root) > 0 &&
       _snwprintf_s(managed_cli, KEIKO_PATH_CAP, _TRUNCATE, L"%ls\\app\\dist\\cli\\index.js",
-                   b->managed_root) <= 0) {
-    return 0;
-  }
-  // `portable launch` exits 0 only after the lifecycle CLI's own waitForHealth saw /api/health
-  // answer with the installed version while the spawned process stayed alive. That exit code IS the
-  // "Keiko is running" proof; a second poll here would re-attest weaker evidence.
-  return _snwprintf_s(b->command, KEIKO_COMMAND_CAP, _TRUNCATE,
+                   b->managed_root) > 0) {
+    // `portable launch` exits 0 only after the lifecycle CLI's own waitForHealth saw /api/health
+    // answer with the installed version while the spawned process stayed alive. That exit code IS
+    // the "Keiko is running" proof; a second poll here would re-attest weaker evidence.
+    ok = _snwprintf_s(b->command, KEIKO_COMMAND_CAP, _TRUNCATE,
                       L"\"%ls\" \"%ls\" portable launch --target %ls --portable-root \"%ls\" "
                       L"--managed-root \"%ls\"",
                       managed_node, managed_cli, KEIKO_WIDEN(KEIKO_SETUP_TARGET), b->managed_root,
                       b->managed_root) > 0 &&
          keiko_run_and_wait(managed_node, b->command);
+  }
+  keiko_free_path(managed_node);
+  keiko_free_path(managed_cli);
+  return ok;
 }
 
 // Rewrites an absolute path into its extended-length (`\\?\`) form, which lifts the MAX_PATH limit
@@ -995,11 +1037,7 @@ static int keiko_extended_path(const wchar_t *path, wchar_t *out, size_t cap) {
   return _snwprintf_s(out, cap, _TRUNCATE, L"\\\\?\\%ls", path) > 0;
 }
 
-static int keiko_cleanup_staging(const keiko_setup_buffers *b) {
-  wchar_t staging[KEIKO_PATH_CAP];
-  if (!keiko_extended_path(b->staging_dir, staging, KEIKO_PATH_CAP)) {
-    return 0;
-  }
+static int keiko_remove_staging_tree(const wchar_t *staging) {
   for (int attempt = 0; attempt < 10; attempt++) {
     if (GetFileAttributesW(staging) == INVALID_FILE_ATTRIBUTES) {
       return 1;
@@ -1010,6 +1048,17 @@ static int keiko_cleanup_staging(const keiko_setup_buffers *b) {
     Sleep(1000);
   }
   return GetFileAttributesW(staging) == INVALID_FILE_ATTRIBUTES;
+}
+
+static int keiko_cleanup_staging(const keiko_setup_buffers *b) {
+  wchar_t *staging = keiko_alloc_path();
+  if (staging == NULL) {
+    return 0;
+  }
+  int ok = keiko_extended_path(b->staging_dir, staging, KEIKO_PATH_CAP) &&
+           keiko_remove_staging_tree(staging);
+  keiko_free_path(staging);
+  return ok;
 }
 
 // ---------------------------------------------------------------------------------------------

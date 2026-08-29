@@ -194,7 +194,9 @@ static void test_hex_helpers(void) {
 }
 
 static void test_managed_root_parse(void) {
-  wchar_t out[KEIKO_PATH_CAP];
+  // Static, not stack: KEIKO_PATH_CAP is 64 KiB and `/analyze` (C6262) rejects a stack frame
+  // that large. The harness is single-threaded and each case fully overwrites the buffer.
+  static wchar_t out[KEIKO_PATH_CAP];
   const char *plain = "C:\\Keiko\\managed";
   assert(keiko_parse_managed_root(plain, (int)strlen(plain), out, KEIKO_PATH_CAP) == 1);
   assert(wcscmp(out, L"C:\\Keiko\\managed") == 0);
@@ -224,7 +226,9 @@ static void test_managed_root_parse(void) {
 }
 
 static void test_staging_name(void) {
-  wchar_t out[KEIKO_PATH_CAP];
+  // Static, not stack: KEIKO_PATH_CAP is 64 KiB and `/analyze` (C6262) rejects a stack frame
+  // that large. The harness is single-threaded and each case fully overwrites the buffer.
+  static wchar_t out[KEIKO_PATH_CAP];
   unsigned char random16[16];
   for (size_t index = 0; index < 16; index++) {
     random16[index] = (unsigned char)index;
@@ -237,7 +241,9 @@ static void test_staging_name(void) {
 // against the extended-length spelling of the staging root; if this rewrite were wrong, a successful
 // install would end in exit 19 ("temporary files could not be removed") on every deep tree.
 static void test_extended_path(void) {
-  wchar_t out[KEIKO_PATH_CAP];
+  // Static, not stack: KEIKO_PATH_CAP is 64 KiB and `/analyze` (C6262) rejects a stack frame
+  // that large. The harness is single-threaded and each case fully overwrites the buffer.
+  static wchar_t out[KEIKO_PATH_CAP];
 
   assert(keiko_extended_path(L"C:\\Temp\\Keiko-install-00", out, KEIKO_PATH_CAP) == 1);
   assert(wcscmp(out, L"\\\\?\\C:\\Temp\\Keiko-install-00") == 0);
