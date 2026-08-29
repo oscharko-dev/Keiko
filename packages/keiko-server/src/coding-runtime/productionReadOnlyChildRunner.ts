@@ -150,7 +150,9 @@ async function runChildSession(
   if (input.signal.aborted) abort();
   try {
     const result = await session.result;
-    logHarnessContextCompactionEvents(result.events);
+    logHarnessContextCompactionEvents(result.events, {
+      parentCorrelationId: input.envelope.parentRunId,
+    });
     if (result.outcome === "failed") throw new Error("child-session-failed");
     const summary = result.report ?? result.outcome;
     return {

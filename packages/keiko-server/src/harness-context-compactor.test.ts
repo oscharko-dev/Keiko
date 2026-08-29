@@ -68,6 +68,30 @@ describe("createServerHarnessContextCompactor", () => {
     expect(rendered).toContain("keiko.compactedHistoryNotice");
   });
 
+  it("reports the real eviction count, not net array shrinkage (Codex, #3348)", () => {
+    // First eviction pass: a 2-message assistant/tool turn is evicted and exactly one
+    // placeholder notice message is inserted in its place. Net array-length shrinkage
+    // (messages.length before - after) would report 1, undercounting the 2 real messages
+    // actually dropped -- the defect the messagesEvicted field exists to fix.
+    const messages: ChatMessage[] = [
+      SYSTEM,
+      USER,
+      ...assistantTurn(1, 500),
+      ...assistantTurn(2, 500),
+      ...assistantTurn(3, 500),
+    ];
+    const compactor = createServerHarnessContextCompactor();
+    const budget = bytesOf(messages) - 400;
+    const result = compactor({ messages, maxContextBytes: budget });
+    expect(result).toBeDefined();
+    if (result === undefined) return;
+    expect(result.messagesEvicted).toBe(2);
+    // Pin that the two values actually differ, so the naive net-shrinkage formula can never be
+    // silently reinstated as the source of the reported count.
+    expect(messages.length - result.messages.length).not.toBe(result.messagesEvicted);
+    expect(messages.length - result.messages.length).toBe(1);
+  });
+
   it("never rewrites tool-role message content — only evicts whole turns", () => {
     const toolMessage: ChatMessage = {
       role: "tool",
@@ -247,15 +271,40 @@ describe("logHarnessContextCompactionEvents", () => {
         bytesAfter: 3000,
       },
     ];
-    logHarnessContextCompactionEvents(events, sink);
+    logHarnessContextCompactionEvents(events, {}, sink);
     expect(writes).toHaveLength(1);
     const line = writes[0];
     expect(line?.op).toBe("harness.context.compacted");
     expect(line?.category).toBe("process");
     expect(line?.correlationId).toBe("run-123");
+    expect(line?.parentCorrelationId).toBeUndefined();
     expect(line?.extra).toEqual({ messagesDropped: 4, bytesBefore: 9000, bytesAfter: 3000 });
     // Body-free: no message content anywhere in the line.
     expect(JSON.stringify(line)).not.toContain("call ");
+  });
+
+  it("threads a supplied parentCorrelationId onto the emitted line (Codex, #3348)", () => {
+    // A read-only child's compaction line otherwise carries only the harness's own freshly-minted
+    // runId, an orphan identity that support analysis can never join back to the governed parent
+    // run that spawned the child (AGENTS.md §8 Rule 1, ADR-0173 D5).
+    const { sink, writes } = captor();
+    const events: HarnessEvent[] = [
+      {
+        schemaVersion: "1",
+        runId: "run-456",
+        fingerprint: "fp",
+        seq: 1,
+        ts: 0,
+        type: "context:compacted",
+        messagesDropped: 2,
+        bytesBefore: 5000,
+        bytesAfter: 2000,
+      },
+    ];
+    logHarnessContextCompactionEvents(events, { parentCorrelationId: "parent-run-abc" }, sink);
+    expect(writes).toHaveLength(1);
+    expect(writes[0]?.correlationId).toBe("run-456");
+    expect(writes[0]?.parentCorrelationId).toBe("parent-run-abc");
   });
 
   it("writes nothing for a run whose events contain no context:compacted event", () => {
@@ -282,7 +331,7 @@ describe("logHarnessContextCompactionEvents", () => {
         },
       },
     ];
-    logHarnessContextCompactionEvents(events, sink);
+    logHarnessContextCompactionEvents(events, {}, sink);
     expect(writes).toHaveLength(0);
   });
 });

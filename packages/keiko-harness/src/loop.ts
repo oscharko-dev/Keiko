@@ -105,12 +105,26 @@ function tryCompact(ctx: RunContext): boolean {
     return false;
   }
   ctx.messages = [...result.messages];
+  // messagesEvicted, when the port reports it, is the real eviction count. Net array-length
+  // shrinkage undercounts whenever the port also INSERTS a placeholder (e.g. a merged eviction
+  // notice) in place of the messages it removed. The port is untrusted, same posture as the byte
+  // re-validation above: only a well-formed, plausible count is used, otherwise fall back to the
+  // net-shrinkage figure this loop always had.
+  const netShrink = Math.max(0, messagesBefore - ctx.messages.length);
+  const reported = result.messagesEvicted;
+  const messagesDropped =
+    typeof reported === "number" &&
+    Number.isInteger(reported) &&
+    reported >= 0 &&
+    reported <= messagesBefore
+      ? reported
+      : netShrink;
   // KEIKO-0726 (#3323): body-free observability signal (AGENTS.md §8 Rule 1) — counts and byte
   // totals only, never message content. Emitted through the harness's existing instrumentation
   // port (ctx.emitter), exactly like every other structured audit event this loop already emits.
   ctx.emitter.emit({
     type: "context:compacted",
-    messagesDropped: Math.max(0, messagesBefore - ctx.messages.length),
+    messagesDropped,
     bytesBefore,
     bytesAfter,
   });

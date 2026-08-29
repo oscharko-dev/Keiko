@@ -246,7 +246,15 @@ server-tier compactor without inverting `keiko-cli`'s dependency direction.
 (`messagesDropped`/`bytesBefore`/`bytesAfter` only, never message content) the moment it succeeds, and the
 server tier bridges it into the activity log (`op: "harness.context.compacted"`, `correlationId` = the
 harness run id) via `harness-context-compactor.ts`'s `logHarnessContextCompactionEvents`, so a run whose
-history was evicted is reconstructable from `server.log` alone (AGENTS.md §8 Rule 1).
+history was evicted is reconstructable from `server.log` alone (AGENTS.md §8 Rule 1). `messagesDropped` is
+the port's own reported eviction count (`HarnessCompactionResult.messagesEvicted`) when the port supplies
+one, not a net array-length delta — a port may both evict and insert a placeholder eviction notice, which
+makes the net delta undercount (Codex, #3348); a port that omits the count keeps the net-shrinkage
+fallback. `logHarnessContextCompactionEvents` also accepts an optional `parentCorrelationId` (ADR-0173
+D5): the two production call sites that spawn a background harness run from a known parent —
+`productionReadOnlyChildRunner.ts`'s read-only child (`input.envelope.parentRunId`) and
+`agentProducerRoute.ts`'s producer turn (the triggering request's `correlationId`) — thread it through, so
+the emitted line joins back to the governed run that spawned it instead of standing as an orphan identity.
 
 ## Consequences
 

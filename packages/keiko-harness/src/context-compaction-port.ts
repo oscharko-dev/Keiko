@@ -34,6 +34,12 @@ export interface HarnessCompactionResult {
   // Replacement message array. The caller re-validates its byte size before trusting it — a
   // result that does not actually fit under maxContextBytes is treated as "could not compact".
   readonly messages: readonly ChatMessage[];
+  // Exact count of input messages the port evicted during this pass, BEFORE any placeholder/notice
+  // message was inserted in their place. A port may both remove and insert messages (e.g. a merged
+  // eviction notice), which makes the caller's own (messages.length before − after) undercount the
+  // real eviction whenever it differs from the net array-length delta. Optional so a port that
+  // cannot report it keeps the caller's net-shrinkage fallback unchanged.
+  readonly messagesEvicted?: number;
 }
 
 export type HarnessCompactionPort = (

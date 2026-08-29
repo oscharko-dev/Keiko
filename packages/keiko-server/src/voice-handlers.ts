@@ -276,52 +276,26 @@ function decodeAudio(raw: unknown): Uint8Array | "invalid" | "empty" {
 // not a security boundary: it catches a declared duration that is wildly inconsistent with the
 // decoded audio size and rejects early, before any provider call.
 //
-// The ceiling has two parts, both deliberately loose because this is a sanity bound, not a tight
-// codec model: a fixed container-overhead allowance, plus a bytes-per-millisecond payload rate
-// tiered by container class, since the accepted MIME types span very different maximum bitrates.
-//
 // CONTAINER_OVERHEAD_BYTES covers the fixed bytes that ride alongside the payload and are
 // unrelated to declared duration: a canonical RIFF/WAVE header is 44 bytes but real encoders add
 // `LIST`/`INFO` chunks, an ID3v2 tag (optionally carrying small embedded artwork), or an MP4
-// `ftyp`/`moov` box can each add up to a few KB. 8 KiB comfortably covers all of those for a
-// dictation-length clip without materially loosening the guard for the multi-second clips this
-// route actually handles.
+// `ftyp`/`moov` box can each add up to a few KB. 8 KiB comfortably covers all of those.
 //
-// The per-ms rate is set to 2x the highest bitrate the accepted MIME allowlist can legitimately
-// produce, so the bound is a sanity ceiling with headroom rather than a byte-exact model of one
-// specific encoder configuration:
-//  - Lossless PCM containers (wav/x-wav/wave, and flac, which can only be <= the PCM size it
-//    encodes) can legitimately reach 48 kHz / 16-bit / stereo (48_000 * 2 * 2 = 192_000 bytes/s,
-//    192 bytes/ms) — the exact configuration the previous, unheadroomed bound was built from, and
-//    the one it always rejected once the container's own header bytes were counted. 2x = 384
-//    bytes/ms also covers 48 kHz / 24-bit / stereo (288 bytes/ms), 48 kHz / 32-bit-float / stereo
-//    (384 bytes/ms — what a browser AudioWorklet/ScriptProcessor WAV recorder commonly emits), and
-//    96 kHz / 16-bit / stereo (384 bytes/ms), all reachable within MAX_AUDIO_BYTES.
-//  - Every other accepted container is a lossy/compressed codec (webm, ogg, mp4/m4a/x-m4a,
-//    mpeg/mp3); 320 kbps (40_000 bytes/s, 40 bytes/ms) is above any realistic dictation-clip
-//    bitrate for those, so 2x = 80 bytes/ms.
-// A clip is rejected only when it is far too DENSE for its declared duration (more bytes than the
-// ceiling allows) — a sparse clip (a short, quiet, or highly compressed recording) is never wildly
-// inconsistent in the direction this guard cares about.
-const LOSSLESS_AUDIO_MIME: ReadonlySet<string> = new Set([
-  "audio/wav",
-  "audio/x-wav",
-  "audio/wave",
-  "audio/flac",
-]);
+// A single per-ms rate applies to every accepted MIME type — Codex (#3348) found the earlier
+// MIME-tiered version rejected legitimate high-rate lossless audio (e.g. 96 kHz/24-bit/stereo WAV
+// is 576 bytes/ms, above the previous 384 bytes/ms lossless ceiling), and the same class of
+// false-positive is worse for the "lossy" tier: MIME type alone never constrains sample rate, bit
+// depth, channel count, or even the codec inside every accepted container (audio/mp4 legitimately
+// carries ALAC or LPCM, audio/ogg legitimately carries FLAC), so a fixed per-MIME bound cannot be
+// both correct and non-vacuous. The rate is instead set to the densest uncompressed stream any
+// accepted container could plausibly carry — 192 kHz / 32-bit / 8 channels = 192_000 * 4 * 8 =
+// 6_144_000 bytes/s, 6_144 bytes/ms — so it can no longer reject any real encoder output while
+// still catching a durationMs claim that is physically impossible for the decoded payload size (a
+// spoofed 1 ms duration paired with a multi-MB payload is still rejected).
+const MAX_AUDIO_BYTES_PER_MS = 6_144;
 const CONTAINER_OVERHEAD_BYTES = 8_192;
-const LOSSLESS_MAX_BYTES_PER_MS = 384;
-const LOSSY_MAX_BYTES_PER_MS = 80;
 
-function maxBytesPerMs(mimeType: string): number {
-  return LOSSLESS_AUDIO_MIME.has(mimeType) ? LOSSLESS_MAX_BYTES_PER_MS : LOSSY_MAX_BYTES_PER_MS;
-}
-
-function validateDurationMs(
-  raw: unknown,
-  decodedByteLength: number,
-  mimeType: string,
-): "ok" | "invalid" {
+function validateDurationMs(raw: unknown, decodedByteLength: number): "ok" | "invalid" {
   if (raw === undefined) {
     return "ok";
   }
@@ -334,7 +308,7 @@ function validateDurationMs(
   ) {
     return "invalid";
   }
-  if (decodedByteLength > CONTAINER_OVERHEAD_BYTES + maxBytesPerMs(mimeType) * raw) {
+  if (decodedByteLength > CONTAINER_OVERHEAD_BYTES + MAX_AUDIO_BYTES_PER_MS * raw) {
     return "invalid";
   }
   return "ok";
@@ -385,7 +359,7 @@ function validateRequest(
       body: deps.redactor(errorBody("PAYLOAD_TOO_LARGE", "The audio clip exceeds the size limit.")),
     };
   }
-  if (validateDurationMs(body.durationMs, decoded.byteLength, mimeType) === "invalid") {
+  if (validateDurationMs(body.durationMs, decoded.byteLength) === "invalid") {
     return badRequest(
       deps,
       "INVALID_DURATION",

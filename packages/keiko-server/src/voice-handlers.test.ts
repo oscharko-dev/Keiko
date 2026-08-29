@@ -554,21 +554,21 @@ describe("POST /api/voice/transcribe — request validation (D3/D5)", () => {
 
   it("cross-validates durationMs against decoded byte size at the exact bytes-per-ms boundary (off-by-one mutation trap)", async () => {
     const { deps, seen } = sttDeps();
-    // audio/webm is a lossy container: the sanity ceiling is CONTAINER_OVERHEAD_BYTES (8192) plus
-    // 80 bytes/ms (2x 320 kbps), so exactly 88192 bytes over 1000ms sits precisely on the boundary
-    // and must be accepted.
-    const onBoundary = Buffer.alloc(88_192).toString("base64");
+    // The density ceiling applies uniformly regardless of MIME type (Codex, #3348): a fixed
+    // CONTAINER_OVERHEAD_BYTES (8192) plus MAX_AUDIO_BYTES_PER_MS (6144), so exactly 622592 bytes
+    // over 100ms sits precisely on the boundary and must be accepted.
+    const onBoundary = Buffer.alloc(622_592).toString("base64");
     const okResult = await handleVoiceTranscribe(
-      ctx({ audio: onBoundary, mimeType: "audio/webm", durationMs: 1000 }),
+      ctx({ audio: onBoundary, mimeType: "audio/webm", durationMs: 100 }),
       deps,
     );
     expect(okResult.status).toBe(200);
     expect(seen).toHaveLength(1);
 
     // One byte over the same boundary must be rejected.
-    const overBoundary = Buffer.alloc(88_193).toString("base64");
+    const overBoundary = Buffer.alloc(622_593).toString("base64");
     const rejected = await handleVoiceTranscribe(
-      ctx({ audio: overBoundary, mimeType: "audio/webm", durationMs: 1000 }),
+      ctx({ audio: overBoundary, mimeType: "audio/webm", durationMs: 100 }),
       deps,
     );
     expect(rejected.status).toBe(400);
@@ -598,12 +598,37 @@ describe("POST /api/voice/transcribe — request validation (D3/D5)", () => {
     return Buffer.concat([header, Buffer.alloc(payloadBytes)]);
   }
 
-  it("tiers a WAV clip on the lossless ceiling, not the lossy one (KEIKO-0844 tiering mutation trap)", async () => {
+  it("rejects a real-header WAV clip one byte over the single density boundary", async () => {
     const { deps, seen } = sttDeps();
-    // 200 bytes/ms over 1000ms: above the lossy ceiling (80 bytes/ms) but comfortably under the
-    // lossless one (384 bytes/ms). A real WAV header rides alongside. If the tiering were removed
-    // (maxBytesPerMs always returning the lossy constant), this would be rejected.
-    const wav = buildWavBuffer(200_000).toString("base64");
+    // threshold = CONTAINER_OVERHEAD_BYTES (8192) + MAX_AUDIO_BYTES_PER_MS (6144) * 500 = 3_080_192
+    // (durationMs anchored at 500, not 1000, so both sides of the boundary stay under
+    // MAX_AUDIO_BYTES (4_000_000) rather than colliding with the size-limit gate).
+    const onBoundary = buildWavBuffer(3_080_192 - 44).toString("base64");
+    const okResult = await handleVoiceTranscribe(
+      ctx({ audio: onBoundary, mimeType: "audio/wav", durationMs: 500 }),
+      deps,
+    );
+    expect(okResult.status).toBe(200);
+    expect(seen).toHaveLength(1);
+
+    const overBoundary = buildWavBuffer(3_080_193 - 44).toString("base64");
+    const rejected = await handleVoiceTranscribe(
+      ctx({ audio: overBoundary, mimeType: "audio/wav", durationMs: 500 }),
+      deps,
+    );
+    expect(rejected.status).toBe(400);
+    expect((rejected.body as { error: { code: string } }).error.code).toBe("INVALID_DURATION");
+    expect(seen).toHaveLength(1);
+  });
+
+  // Codex (#3348): the previous MIME-tiered ceiling (384 bytes/ms for "lossless" containers)
+  // rejected legitimate high-rate lossless audio that the endpoint otherwise admits — MIME type
+  // alone never constrains sample rate, bit depth, or channel count. These three cases were all
+  // rejected with INVALID_DURATION before the fix and must now be accepted.
+  it("accepts a truthful 96kHz/24-bit/stereo WAV clip the MIME allowlist admits (Codex, #3348)", async () => {
+    const { deps, seen } = sttDeps();
+    // 96_000 Hz * 3 bytes (24-bit) * 2 channels * 1s = 576_000 payload bytes; + 44-byte header.
+    const wav = buildWavBuffer(576_000).toString("base64");
     const result = await handleVoiceTranscribe(
       ctx({ audio: wav, mimeType: "audio/wav", durationMs: 1000 }),
       deps,
@@ -612,43 +637,31 @@ describe("POST /api/voice/transcribe — request validation (D3/D5)", () => {
     expect(seen).toHaveLength(1);
   });
 
-  it("rejects a real-header WAV clip one byte over the lossless boundary", async () => {
+  it("accepts a truthful 48kHz/24-bit/6-channel WAV clip (Codex, #3348 multichannel case)", async () => {
     const { deps, seen } = sttDeps();
-    // threshold = CONTAINER_OVERHEAD_BYTES (8192) + LOSSLESS_MAX_BYTES_PER_MS (384) * 1000 = 392192.
-    const onBoundary = buildWavBuffer(392_192 - 44).toString("base64");
-    const okResult = await handleVoiceTranscribe(
-      ctx({ audio: onBoundary, mimeType: "audio/wav", durationMs: 1000 }),
+    // 48_000 Hz * 3 bytes (24-bit) * 6 channels * 1s = 864_000 payload bytes; + 44-byte header.
+    const wav = buildWavBuffer(864_000).toString("base64");
+    const result = await handleVoiceTranscribe(
+      ctx({ audio: wav, mimeType: "audio/wav", durationMs: 1000 }),
       deps,
     );
-    expect(okResult.status).toBe(200);
-    expect(seen).toHaveLength(1);
-
-    const overBoundary = buildWavBuffer(392_193 - 44).toString("base64");
-    const rejected = await handleVoiceTranscribe(
-      ctx({ audio: overBoundary, mimeType: "audio/wav", durationMs: 1000 }),
-      deps,
-    );
-    expect(rejected.status).toBe(400);
-    expect((rejected.body as { error: { code: string } }).error.code).toBe("INVALID_DURATION");
+    expect(result.status).toBe(200);
     expect(seen).toHaveLength(1);
   });
 
-  it.each(["audio/flac", "audio/x-wav"] as const)(
-    "tiers %s as lossless (MIME-membership pin)",
-    async (mimeType) => {
-      const { deps, seen } = sttDeps();
-      // 300 bytes/ms over 100ms: above the lossy ceiling (8192 + 80*100 = 16192) but under the
-      // lossless one (8192 + 384*100 = 46592). Only reachable if this MIME type is in
-      // LOSSLESS_AUDIO_MIME.
-      const dense = Buffer.alloc(30_000).toString("base64");
-      const result = await handleVoiceTranscribe(
-        ctx({ audio: dense, mimeType, durationMs: 100 }),
-        deps,
-      );
-      expect(result.status).toBe(200);
-      expect(seen).toHaveLength(1);
-    },
-  );
+  it("accepts truthful lossless content inside an admitted lossy-tier container (Codex, #3348)", async () => {
+    const { deps, seen } = sttDeps();
+    // audio/mp4 legitimately carries ALAC or LPCM; MIME type alone cannot distinguish that from a
+    // compressed AAC stream, so the ceiling must not assume every mp4 clip is highly compressed.
+    // 44.1kHz/16-bit/stereo PCM-equivalent density: 44_100 * 2 * 2 = 176_400 bytes/s.
+    const dense = Buffer.alloc(176_400).toString("base64");
+    const result = await handleVoiceTranscribe(
+      ctx({ audio: dense, mimeType: "audio/mp4", durationMs: 1000 }),
+      deps,
+    );
+    expect(result.status).toBe(200);
+    expect(seen).toHaveLength(1);
+  });
 
   it("rejects an invalid language tag", async () => {
     const { deps } = sttDeps();

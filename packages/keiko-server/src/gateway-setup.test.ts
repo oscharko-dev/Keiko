@@ -25,6 +25,7 @@ import {
   setServerLogger,
 } from "./observability/index.js";
 import { gatewaySetupTargetClass } from "./gateway-setup.js";
+import { UNKNOWN_CORRELATION_ID } from "./correlation.js";
 import type { ServerDiagnosticRecord } from "./diagnostics-log.js";
 import {
   ERROR_CODES,
@@ -1221,6 +1222,89 @@ describe("handleGatewaySetup", () => {
     deps.store.close();
   });
 
+  it("falls back to the sanctioned unknown-correlation id, never a fresh mint (Codex, #3348)", async () => {
+    // AGENTS.md section 8: "The only sanctioned fallback is UNKNOWN_CORRELATION_ID -- never an
+    // ad-hoc string, never a silently missing id." A minted randomUUID() would be a fresh,
+    // unrecognizable identity that support-bundle clustering can never distinguish from a
+    // separately spawned operation.
+    const uiDir = await tempDir("keiko-gw-loopback-unknown-corr-ui-");
+    const evidenceDir = await tempDir("keiko-gw-loopback-unknown-corr-ev-");
+    const diagnostics: ServerDiagnosticRecord[] = [];
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir,
+      env: { ...VAULT_ENV, KEIKO_ALLOW_PRIVATE_EGRESS: "true" },
+      uiDbPath: join(uiDir, "keiko-ui.db"),
+      gatewayModelDiscovery: () => Promise.resolve(["local-model"]),
+      gatewayEmbeddingProbe: PASSTHROUGH_EMBEDDING_PROBE,
+      gatewaySetupTester: (_config, modelIds) => Promise.resolve([modelIds[0] ?? "local-model"]),
+      diagnostics: { record: (record): void => void diagnostics.push(record) },
+    });
+
+    // No correlation id argument: ctx() omits the field entirely, so RouteContext carries none.
+    const result = await handleGatewaySetup(
+      ctx({ baseUrl: "http://127.0.0.1:11434/v1", apiKey: "local-token" }),
+      deps,
+    );
+    expect(result.status, JSON.stringify(result.body)).toBe(200);
+
+    const loopbackDiag = diagnostics.find(
+      (record) => record.code === "GATEWAY_SETUP_LOOPBACK_TARGET_ACCEPTED",
+    );
+    expect(loopbackDiag?.correlationId).toBe(UNKNOWN_CORRELATION_ID);
+    // Guards against a future re-mint: a UUID never satisfies this shape.
+    expect(loopbackDiag?.correlationId).not.toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-/);
+    deps.store.close();
+  });
+
+  it("emits the loopback diagnostic for a trailing-dot localhost target over https (Codex, #3348)", async () => {
+    // classifyOutboundHost does exact string equality against "localhost" with no trailing-dot
+    // normalization; gatewaySetupTargetClass (used by the success audit) already strips it, but
+    // reportLoopbackTargetAccepted used to call classifyOutboundHost directly, so an accepted
+    // "https://localhost.:PORT" candidate left no diagnostic even though the success audit
+    // recorded it as loopback -- the same request disagreeing with itself.
+    const uiDir = await tempDir("keiko-gw-loopback-dot-ui-");
+    const evidenceDir = await tempDir("keiko-gw-loopback-dot-ev-");
+    const diagnostics: ServerDiagnosticRecord[] = [];
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir,
+      env: { ...VAULT_ENV },
+      uiDbPath: join(uiDir, "keiko-ui.db"),
+      gatewayModelDiscovery: () => Promise.resolve(["local-model"]),
+      gatewayEmbeddingProbe: PASSTHROUGH_EMBEDDING_PROBE,
+      gatewaySetupTester: (_config, modelIds) => Promise.resolve([modelIds[0] ?? "local-model"]),
+      diagnostics: { record: (record): void => void diagnostics.push(record) },
+    });
+
+    const result = await handleGatewaySetup(
+      ctx(
+        { baseUrl: "https://localhost.:8443/v1", apiKey: "local-token" },
+        "corr-gw-dotted-loopback",
+      ),
+      deps,
+    );
+    expect(result.status, JSON.stringify(result.body)).toBe(200);
+
+    expect(diagnostics).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          correlationId: "corr-gw-dotted-loopback",
+          operation: "POST /api/gateway/setup",
+          code: "GATEWAY_SETUP_LOOPBACK_TARGET_ACCEPTED",
+        }),
+      ]),
+    );
+    const auditFiles = readdirSync(evidenceDir).filter((name) => name.startsWith("gateway-setup-"));
+    expect(auditFiles).toHaveLength(1);
+    const record = JSON.parse(
+      readFileSync(join(evidenceDir, auditFiles[0] ?? ""), "utf8"),
+    ) as Record<string, unknown>;
+    // The diagnostic and the success audit must agree on the same request's classification.
+    expect(record.targetClass).toBe("loopback");
+    deps.store.close();
+  });
+
   it("records the link-local/metadata override, not only the private-network one (Codex, #3201)", async () => {
     const uiDir = await tempDir("keiko-gw-audit-linklocal-ui-");
     const evidenceDir = await tempDir("keiko-gw-audit-linklocal-ev-");
@@ -1304,9 +1388,10 @@ describe("handleGatewaySetup", () => {
     ["https://169.254.169.254/", "metadata"],
     ["https://10.0.0.5/", "private"],
   ])("classifies %s as %s (KEIKO-0497 / #3201)", (input, expected) => {
-    // Direct test of the classifier: the URL validator strips no trailing dot, so it rejects
-    // "localhost." earlier in the request path — but a valid record still needs the right class
-    // for edge cases like an IP-with-dot or a name that happens to match a literal address.
+    // Direct test of the classifier. Note: the URL validator's http-only loopback rejection (an
+    // exact "localhost" string match) does reject a dotted "localhost." over http, but NOT over
+    // https, where a dotted-loopback candidate reaches this classifier live — see the
+    // "trailing-dot localhost target over https" diagnostic test above (Codex, #3348).
     const url = input.includes(":") ? input : `http://${input}:11434/v1`;
     expect(gatewaySetupTargetClass(url)).toBe(expected);
   });

@@ -4804,7 +4804,7 @@ function reportDiscoveryTruncation(
 ): void {
   if (candidateModels.truncated !== true) return;
   emitServerDiagnostic(diagnostics, {
-    correlationId: correlationId ?? randomUUID(),
+    correlationId: correlationId ?? UNKNOWN_CORRELATION_ID,
     timestamp: new Date().toISOString(),
     operation: "POST /api/gateway/setup",
     source: "gateway-setup.discovery",
@@ -4897,7 +4897,7 @@ function reportUnusableDiscoveredModels(
   const dropped = admission.droppedUnverified.length;
   if (unsupported.length === 0 && retained === 0 && dropped === 0) return;
   emitServerDiagnostic(diagnostics, {
-    correlationId: correlationId ?? randomUUID(),
+    correlationId: correlationId ?? UNKNOWN_CORRELATION_ID,
     timestamp: new Date().toISOString(),
     operation: "POST /api/gateway/setup",
     source: "gateway-setup.discovery",
@@ -4926,9 +4926,9 @@ function reportLoopbackTargetAccepted(
   correlationId: string | undefined,
   baseUrl: string,
 ): void {
-  if (classifyOutboundHost(new URL(baseUrl).hostname) !== "loopback") return;
+  if (gatewaySetupTargetClass(baseUrl) !== "loopback") return;
   emitServerDiagnostic(diagnostics, {
-    correlationId: correlationId ?? randomUUID(),
+    correlationId: correlationId ?? UNKNOWN_CORRELATION_ID,
     timestamp: new Date().toISOString(),
     operation: "POST /api/gateway/setup",
     source: "gateway-setup.candidate",

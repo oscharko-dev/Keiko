@@ -764,6 +764,83 @@ describe("runLoop — checkModelCallLimits compaction (KEIKO-0726)", () => {
     }
   });
 
+  it("prefers a port-reported messagesEvicted over net array shrinkage (Codex, #3348)", async () => {
+    // A port that removes 2 messages but also inserts 1 placeholder notice, net-shrinking the
+    // array by only 1 -- the exact shape the production compactor's eviction-notice produces.
+    // Net shrinkage would report 1; the real eviction count is 2.
+    const { port, calls } = scriptedModel([
+      overflowingFirstResponse(),
+      response({ content: "final" }),
+    ]);
+    const compactionPort: HarnessCompactionPort = (input) => ({
+      messages: [
+        ...input.messages.filter((m) => m.role === "system"),
+        { role: "system", content: "compacted-history-notice" } satisfies ChatMessage,
+      ],
+      messagesEvicted: 2,
+    });
+    const { ctx, sink } = buildContext({
+      task: TASK,
+      model: port,
+      limits: { maxContextBytes: 1000 },
+      compactionPort,
+    });
+    const outcome = await runLoop(ctx);
+    expect(outcome).toBe("completed");
+    expect(calls()).toBe(2);
+    const compacted = sink.events().find((e) => e.type === "context:compacted");
+    expect(compacted).toBeDefined();
+    if (compacted?.type === "context:compacted") {
+      expect(compacted.messagesDropped).toBe(2);
+    }
+  });
+
+  it("falls back to net array shrinkage when the port omits messagesEvicted (back-compat)", async () => {
+    const { port } = scriptedModel([overflowingFirstResponse(), response({ content: "final" })]);
+    const compactionPort: HarnessCompactionPort = (input) => ({
+      messages: input.messages.filter((m) => m.role === "system"),
+      // messagesEvicted intentionally omitted.
+    });
+    const { ctx, sink } = buildContext({
+      task: TASK,
+      model: port,
+      limits: { maxContextBytes: 1000 },
+      compactionPort,
+    });
+    const outcome = await runLoop(ctx);
+    expect(outcome).toBe("completed");
+    const compacted = sink.events().find((e) => e.type === "context:compacted");
+    expect(compacted).toBeDefined();
+    if (compacted?.type === "context:compacted") {
+      // No messagesEvicted supplied: the pre-existing net-shrinkage figure is used unchanged.
+      expect(compacted.messagesDropped).toBeGreaterThan(0);
+    }
+  });
+
+  it("ignores an implausible port-reported messagesEvicted and falls back to net shrinkage", async () => {
+    const { port } = scriptedModel([overflowingFirstResponse(), response({ content: "final" })]);
+    const compactionPort: HarnessCompactionPort = (input) => ({
+      messages: input.messages.filter((m) => m.role === "system"),
+      // A hostile/broken port cannot be trusted to report a sane count — more messages evicted
+      // than the input ever held.
+      messagesEvicted: 1_000_000,
+    });
+    const { ctx, sink } = buildContext({
+      task: TASK,
+      model: port,
+      limits: { maxContextBytes: 1000 },
+      compactionPort,
+    });
+    const outcome = await runLoop(ctx);
+    expect(outcome).toBe("completed");
+    const compacted = sink.events().find((e) => e.type === "context:compacted");
+    expect(compacted).toBeDefined();
+    if (compacted?.type === "context:compacted") {
+      expect(compacted.messagesDropped).toBeLessThan(1_000_000);
+      expect(compacted.messagesDropped).toBeGreaterThan(0);
+    }
+  });
+
   it("still hard-fails when the compactionPort cannot free enough room", async () => {
     const { port } = scriptedModel([overflowingFirstResponse(), response({ content: "final" })]);
     const compactionPort: HarnessCompactionPort = () => ({

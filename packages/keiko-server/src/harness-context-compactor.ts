@@ -186,6 +186,14 @@ function messageBytes(messages: readonly ChatMessage[]): number {
 // dropping every evictable turn (keeping only the protected tail) does not fit. `priorDroppedTurns`
 // carries forward the count from any notice this pass stripped, so a merged notice always states
 // the total ever dropped, never only this pass's contribution.
+interface FitUnderBytesResult {
+  readonly messages: readonly ChatMessage[];
+  // Raw content messages actually evicted THIS pass (the dropped turns), excluding the
+  // replacement notice — never a net array-length delta, which undercounts whenever a notice is
+  // inserted in place of what was removed.
+  readonly messagesEvicted: number;
+}
+
 function fitUnderBytes(
   head: readonly ChatMessage[],
   evictable: readonly Turn[],
@@ -193,14 +201,15 @@ function fitUnderBytes(
   startDropCount: number,
   priorDroppedTurns: number,
   maxContextBytes: number,
-): readonly ChatMessage[] | undefined {
+): FitUnderBytesResult | undefined {
   for (let dropCount = startDropCount; dropCount <= evictable.length; dropCount += 1) {
+    const droppedTurns = evictable.slice(0, dropCount);
     const kept = evictable.slice(dropCount);
     const totalDropped = priorDroppedTurns + dropCount;
     const notice = totalDropped > 0 ? [droppedNoticeMessage(totalDropped)] : [];
     const candidate = [...head, ...notice, ...flatten(kept), ...flatten(protectedTail)];
     if (messageBytes(candidate) <= maxContextBytes) {
-      return candidate;
+      return { messages: candidate, messagesEvicted: flatten(droppedTurns).length };
     }
   }
   return undefined;
@@ -239,7 +248,7 @@ export function createServerHarnessContextCompactor(
     const protectedTail = turns.slice(-1);
     const evictable = turns.slice(0, -1);
     const startDropCount = Math.max(1, excludedTurnCount(evictable, profile));
-    const messages = fitUnderBytes(
+    const fit = fitUnderBytes(
       head,
       evictable,
       protectedTail,
@@ -247,12 +256,22 @@ export function createServerHarnessContextCompactor(
       priorDroppedTurns,
       input.maxContextBytes,
     );
-    return messages === undefined ? undefined : { messages };
+    return fit === undefined
+      ? undefined
+      : { messages: fit.messages, messagesEvicted: fit.messagesEvicted };
   };
 }
 
 export const serverHarnessContextCompactor: HarnessCompactionPort =
   createServerHarnessContextCompactor();
+
+export interface HarnessCompactionLogContext {
+  // The correlation id of the request/run that spawned this HarnessEvent run, when one is known
+  // (ADR-0173 D5 / g12). event.runId is a fresh id the harness mints for its own run — with no
+  // parentCorrelationId, a background compaction line cannot be joined back to the governed run
+  // that spawned it.
+  readonly parentCorrelationId?: string | undefined;
+}
 
 // KEIKO-0726 (#3323) / AGENTS.md §8 Rule 1: bridges the harness's own body-free
 // "context:compacted" event (emitted via ctx.emitter by loop.ts's tryCompact the moment this port
@@ -264,6 +283,7 @@ export const serverHarnessContextCompactor: HarnessCompactionPort =
 // majority of runs. Body-free by construction: counts and byte totals only (ADR-0173 D4).
 export function logHarnessContextCompactionEvents(
   events: readonly HarnessEvent[],
+  context: HarnessCompactionLogContext = {},
   activityLog: ServerLogSink = processServerLogSink(),
 ): void {
   for (const event of events) {
@@ -274,6 +294,9 @@ export function logHarnessContextCompactionEvents(
       category: "process",
       op: "harness.context.compacted",
       correlationId: event.runId,
+      ...(context.parentCorrelationId === undefined
+        ? {}
+        : { parentCorrelationId: context.parentCorrelationId }),
       extra: {
         messagesDropped: event.messagesDropped,
         bytesBefore: event.bytesBefore,

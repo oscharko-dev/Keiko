@@ -281,6 +281,7 @@ async function runProducerTurn(
   workspaceRoot: string,
   model: ModelPort,
   host: EditorAgentToolHost,
+  requestCorrelationId: string | undefined,
 ): Promise<ProducerTurnResult> {
   const outcomes: ProducerToolOutcome[] = [];
   const session = createSession(
@@ -298,7 +299,9 @@ async function runProducerTurn(
     },
   );
   const result = await session.result;
-  logHarnessContextCompactionEvents(result.events);
+  logHarnessContextCompactionEvents(result.events, {
+    ...(requestCorrelationId === undefined ? {} : { parentCorrelationId: requestCorrelationId }),
+  });
   const toolCompletions = result.events.filter(isToolCallCompleted);
   return {
     schemaVersion: EDITOR_AGENT_SCHEMA_VERSION,
@@ -407,6 +410,7 @@ export async function handleEditorAgentProducerTurn(
     rootedSnapshot.workspaceRoot,
     model,
     hostOutcome.host,
+    ctx.correlationId,
   );
   return { status: 200, body: summary };
 }

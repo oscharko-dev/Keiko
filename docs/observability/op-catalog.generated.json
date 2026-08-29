@@ -881,7 +881,7 @@
     {
       "op": "harness.context.compacted",
       "category": "process",
-      "site": "packages/keiko-server/src/harness-context-compactor.ts:275",
+      "site": "packages/keiko-server/src/harness-context-compactor.ts:295",
       "package": "keiko-server"
     },
     {

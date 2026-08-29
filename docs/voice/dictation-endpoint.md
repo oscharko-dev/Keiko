@@ -59,18 +59,19 @@ server-side duration measurement would require decoding the container, which nee
 audio-processing dependency that the supply-chain policy (ADR-0100 D8) forbids. The optional
 `durationMs` is not forwarded to the speech-to-text provider (KEIKO-0844, #3329) — it is cross-validated
 against `decoded.byteLength` as a consistency guard: a declared duration wildly too short for the
-amount of decoded audio is rejected before any provider call. The bound is a bytes-per-millisecond
-sanity ceiling, tiered by container class and loosened with headroom rather than modeling one exact
-encoder configuration:
+amount of decoded audio is rejected before any provider call. The bound is a single
+bytes-per-millisecond sanity ceiling applied uniformly to every accepted container, not tiered by
+MIME type (Codex, #3348): MIME type alone never constrains sample rate, bit depth, channel count, or
+even the codec inside every accepted container (e.g. `audio/mp4` legitimately carries ALAC or LPCM,
+`audio/ogg` legitimately carries FLAC), so a per-MIME bound cannot be both correct and non-vacuous.
 
 - A fixed `CONTAINER_OVERHEAD_BYTES` allowance (8 KiB) covers header/metadata bytes that ride
   alongside the payload and are unrelated to declared duration (RIFF/WAVE `LIST`/`INFO` chunks, an
   ID3v2 tag, an MP4 `ftyp`/`moov` box).
-- Lossless PCM containers (`audio/wav`, `audio/x-wav`, `audio/wave`, `audio/flac`) are held to 2x
-  the 48 kHz / 16-bit / stereo payload rate: 384 bytes/ms, covering 24-bit, 32-bit-float, and
-  96 kHz variants within `MAX_AUDIO_BYTES`.
-- Every other accepted container (`audio/webm`, `audio/ogg`, `audio/mp4`/`m4a`/`x-m4a`,
-  `audio/mpeg`/`mp3`) is lossy/compressed and is held to 2x 320 kbps: 80 bytes/ms.
+- `MAX_AUDIO_BYTES_PER_MS` (6144 bytes/ms) is the densest uncompressed stream any accepted
+  container could plausibly carry — 192 kHz / 32-bit / 8 channels — so it can no longer reject any
+  real encoder output while still catching a `durationMs` claim that is physically impossible for
+  the decoded payload size.
 
 Only a clip that is far too **dense** for its declared duration is rejected; a sparse clip (short,
 quiet, or highly compressed) is never inconsistent in the direction this guard cares about.
