@@ -578,7 +578,7 @@ describe("orphan cleanup", () => {
     expect(existsSync(join(orphanPath, "late-wip.txt"))).toBe(true);
   });
 
-  // GEN-TEST-FLAKE: this test does 4 genuine `provisionTask` calls plus one extra `makeRepo`, each
+  // GEN-TEST-FLAKE-006: this test does 4 genuine `provisionTask` calls plus one extra `makeRepo`, each
   // spawning real `git` subprocesses (init/config/commit/worktree add) against disposable
   // repositories — already the minimum fixture count that can prove the invariant ("the global
   // sweep visits more than one repository-id directory and spares a live worktree in each"; fewer
@@ -679,7 +679,7 @@ describe("orphan cleanup", () => {
     ).rejects.toMatchObject({ code: "OPERATOR_APPROVAL_REQUIRED" });
   });
 
-  // GEN-TEST-FLAKE: the invariant this test pins is a CALL-COUNT bound (listAll() runs at most once
+  // GEN-TEST-FLAKE-006: the invariant this test pins is a CALL-COUNT bound (listAll() runs at most once
   // for the whole sweep, never once per candidate) — it does not depend on wall-clock time and does
   // not need a large candidate count to be meaningful: pre-fix, listAll() ran once per candidate, so
   // even 2 candidates already produce 2 calls, which already fails `toBeLessThanOrEqual(1)` below.
