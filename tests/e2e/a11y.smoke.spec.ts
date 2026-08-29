@@ -198,7 +198,7 @@ const openCommandPalette: SurfaceOpener = async (page, _request, theme) => {
   await shellReady(page, theme);
   // The product's own shortcut for `quick-access.commands` (CtrlOrMeta+Shift+P) — no test-only hook.
   await page.keyboard.press("ControlOrMeta+Shift+P");
-  const palette = page.locator('.cmdk[role="dialog"][aria-modal="true"]');
+  const palette = page.getByRole("dialog", { name: "Quick access" });
   await expect(palette).toBeVisible();
   await expect(palette.getByRole("combobox")).toBeFocused();
   // Scan a populated list, not the empty state: the command rows are what carries the palette's

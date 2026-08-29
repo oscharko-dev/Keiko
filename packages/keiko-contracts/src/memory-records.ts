@@ -130,6 +130,11 @@ export interface MemoryRecord {
   readonly updatedAt: number;
 }
 
+// Body-free state captured by a mutation owner before it updates a durable record. Event consumers
+// use it to classify transitions without consulting process-local state that can be stale after a
+// restart or concurrent write.
+export type MemoryUpdatePreImage = Pick<MemoryRecord, "id" | "status" | "pinned">;
+
 // Shared BFF request/response shapes for correction review. These live beside MemoryRecord so the
 // server and browser cannot independently widen or narrow the predecessor-selection contract.
 export interface AcceptMemoryProposalOptions {

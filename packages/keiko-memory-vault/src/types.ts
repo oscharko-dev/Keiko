@@ -13,12 +13,14 @@ import type {
   MemorySensitivity,
   MemoryStatus,
   MemoryType,
+  MemoryUpdatePreImage,
   MemoryValidityInterval,
 } from "@oscharko-dev/keiko-contracts/memory";
 import type { MemoryContentCipher } from "./cipher.js";
 import type { MemoryAccessStat } from "./access.js";
 
 export type { MemoryAccessStat } from "./access.js";
+export type { MemoryUpdatePreImage } from "@oscharko-dev/keiko-contracts/memory";
 
 export type MemoryEmbeddingMetric = "cosine" | "euclidean" | "dot";
 
@@ -88,7 +90,13 @@ export interface MemoryMetadata {
 // here later; #206 only forwards the event after a successful commit.
 export type MemoryEvent =
   | { readonly kind: "memory:inserted"; readonly record: MemoryRecord }
-  | { readonly kind: "memory:updated"; readonly record: MemoryRecord }
+  | {
+      readonly kind: "memory:updated";
+      readonly record: MemoryRecord;
+      // Optional only for compatibility with pre-image-free external adapters. The vault itself
+      // always emits it, and the audit bridge degrades conservatively when it is absent.
+      readonly previous?: MemoryUpdatePreImage;
+    }
   | {
       readonly kind: "memory:deleted";
       readonly memoryId: MemoryId;

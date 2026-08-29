@@ -11,7 +11,7 @@ const NewChatIcon = Icons.newChat;
 const BrainIcon = Icons.brain;
 const CheckIcon = Icons.check;
 const SparkIcon = Icons.spark;
-const CodeIcon = Icons.code;
+const CodingWorkbenchIcon = Icons.codingWorkbench;
 const GitIcon = Icons.git;
 const EditorIcon = Icons.editor;
 const LocalKnowledgeIcon = Icons.localKnowledge;
@@ -151,7 +151,7 @@ function LeftRailImpl({
           data-tip={t("rail.coding")}
           onClick={() => onTool("coding")}
         >
-          <CodeIcon size={19} />
+          <CodingWorkbenchIcon size={19} />
         </button>
         <button
           type="button"

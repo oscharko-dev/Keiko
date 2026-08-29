@@ -1026,7 +1026,12 @@ describe("GitClientWindow — toolbar actions", () => {
     );
     await waitFor(() => expect(client.listBranches).toHaveBeenCalled());
 
-    fireEvent.click(screen.getByRole("button", { name: /Open in Editor/ }));
+    const openEditor = screen.getByRole("button", { name: /Open in Editor/ });
+    // #2694 gives governed Coding Workbench a dedicated glyph; repository-editor navigation keeps
+    // the generic source-code glyph so the two surfaces do not become visually conflated.
+    expect(openEditor.querySelector('path[d*="M13.5 5.5"]')).toBeInTheDocument();
+    expect(openEditor.querySelector('path[d*="M16.4 6.5"]')).not.toBeInTheDocument();
+    fireEvent.click(openEditor);
     expect(onOpenEditor).toHaveBeenCalledWith(REPO_A.path);
   });
 
