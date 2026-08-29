@@ -6,9 +6,13 @@
 // 100,000 chars on Node v24.18.0), sub-millisecond at realistic prompt lengths, and not material at
 // Keiko's local-first, single-user desktop scale ahead of a network/LLM call — so no
 // Aho-Corasick/alternation-regex rewrite is undertaken; that would risk behavioral drift across the
-// 40+ keyword lists in prompt-enhancer-analyzer.ts for no justified gain. This bench exists purely
-// so a future accidental slowdown (e.g. a new detector added without checking existing scan
-// patterns) shows up in benchmark output instead of staying silent. It asserts nothing — `vitest
+// 40+ keyword lists in prompt-enhancer-analyzer.ts for no justified gain. This bench exists so a
+// future accidental slowdown (e.g. a new detector added without checking existing scan patterns)
+// is *measurable* rather than silent — run it manually with `npm run bench:prompt-enhancer
+// --workspace @oscharko-dev/keiko-contracts` before/after a change to prompt-enhancer-analyzer.ts's
+// scan logic. It is not wired into any CI lane or npm test/typecheck/lint run (vitest's own
+// `include` glob never matches `*.bench.ts`, and `vitest bench` does not run under `vitest run`),
+// so a slowdown will not surface on its own without that manual step. It asserts nothing — `vitest
 // bench` reports timings, it does not pass/fail on them.
 
 import { bench, describe } from "vitest";
