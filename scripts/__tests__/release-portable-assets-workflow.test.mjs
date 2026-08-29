@@ -29,6 +29,14 @@ import {
 
 const hasPowerShell =
   spawnSync("pwsh", ["-NoProfile", "-NonInteractive", "-Command", "exit 0"]).status === 0;
+// macOS pwsh routes the RFC3161 cryptographic proof's BCL crypto stack through Apple's Security
+// framework, which blocks indefinitely (observed: process state "U", uninterruptible, near-zero
+// CPU accumulated past a 120s wall-clock wait) in this non-interactive test-runner session. This
+// is darwin-specific, not "non-Windows": the identical proof runs and passes in ~16s in this
+// repo's own Linux CI (`Coverage suite (scripts)` job, ubuntu-latest) today, so gating on
+// `process.platform === "win32"` would silently stop exercising it on the only CI lane that
+// actually runs it. Exclude only the platform that hangs.
+const hasNonDarwinPowerShell = hasPowerShell && process.platform !== "darwin";
 
 const portableWorkflow = readFileSync(".github/workflows/portable-assets.yml", "utf8");
 const portableWorkflowDocument = parse(portableWorkflow);
@@ -686,7 +694,7 @@ describe("Windows portable production signing workflow", () => {
     );
   });
 
-  it.skipIf(!hasPowerShell)(
+  it.skipIf(!hasNonDarwinPowerShell)(
     "cryptographically accepts RFC3161 SHA-256 fixtures and rejects legacy or malformed tokens",
     () => {
       const result = spawnSync(
