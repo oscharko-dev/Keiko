@@ -6,6 +6,7 @@ import { fileURLToPath } from "node:url";
 
 import { KEIKO_REPOSITORY_GATE_CONTRACT } from "./sonar-quality-gate-contract.mjs";
 import { readJsonFile } from "./lib/json.mjs";
+import { PACKAGE_COVERAGE_GATE_SCRIPTS } from "./lib/package-coverage-gate-scripts.mjs";
 
 // ADR-0158 D3: the constitutional 85 has exactly one definition. The package ratchet target and
 // SonarCloud's `new_coverage` condition are the same number by construction rather than by two
@@ -212,14 +213,7 @@ export function listPackages(root) {
 export const PACKAGE_COVERAGE_INCLUDE = [
   "packages/*/src/**/*.{ts,tsx}",
   "src/**/*.{ts,tsx}",
-  "scripts/check-lcov-source-mapping.mjs",
-  "scripts/check-mutation-quality.mjs",
-  "scripts/check-mutation-scope.mjs",
-  "scripts/check-sonar-analysis-log.mjs",
-  "scripts/check-sonar-main-quality-gate.mjs",
-  "scripts/check-sonar-pr-quality-gate.mjs",
-  "scripts/sonar-analysis-scope.mjs",
-  "scripts/sonar-quality-gate-contract.mjs",
+  ...PACKAGE_COVERAGE_GATE_SCRIPTS,
 ];
 export const PACKAGE_COVERAGE_EXCLUDE = [
   "packages/keiko-ui/**",
