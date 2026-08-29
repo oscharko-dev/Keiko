@@ -18,6 +18,7 @@
 // Not a *.test.mjs: vitest never runs this. It is invoked directly by the Windows CI leg because it
 // needs a real win32 process, not vitest's node/jsdom environment.
 import assert from "node:assert/strict";
+import { Buffer } from "node:buffer";
 import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, rmSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -57,9 +58,11 @@ function commandResultSummary(result) {
     `status=${String(result.status ?? "none")}`,
     `signal=${String(result.signal ?? "none")}`,
     `errorCode=${String(result.error?.code ?? "none")}`,
-    `stderr=${String(result.stderr ?? "")
-      .trim()
-      .slice(0, 200)}`,
+    // Byte COUNT, never the bytes: a failing child's stderr can carry a path, an environment value
+    // or another operator secret, and this string lands verbatim in a public CI log (AGENTS.md §8
+    // keeps diagnostics body-free). The count still distinguishes "cmd.exe said nothing" from
+    // "cmd.exe rejected the line", which is what this summary is for.
+    `stderrBytes=${String(Buffer.byteLength(String(result.stderr ?? ""), "utf8"))}`,
   ].join(" ");
 }
 

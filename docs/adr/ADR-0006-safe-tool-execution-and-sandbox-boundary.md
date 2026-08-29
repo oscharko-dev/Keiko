@@ -183,10 +183,32 @@ an OS binary, resolved the same validated, never-PATH way `cmd.exe` is (`windows
 runtime dependency is needed. This closes what issue #3350's `cmd.exe` wrapping turned into the
 guaranteed topology for every Windows `.cmd`/`.bat` invocation: the wrapper's immediate child is
 always `cmd.exe`, and the real work (e.g. `node.exe` running npm) is a grandchild that
-`child.kill()` alone cannot reach. The bound is best-effort, not a formal guarantee: a
-`taskkill.exe` spawn failure (missing on a stripped-down Windows image, or a pid reused in the
-brief window between signalling and taskkill's process-tree snapshot) is swallowed the same way a
-POSIX `ESRCH` is, so termination stays idempotent but orphaning is not architecturally impossible.
+`child.kill()` alone cannot reach.
+
+**The tree kill runs BEFORE the immediate child is signalled, and the order is load-bearing.**
+`child.kill()` is `TerminateProcess` and takes effect at once, whereas `taskkill /PID <pid> /T`
+resolves the descendant set from the live process table when it runs. Signalling `cmd.exe` first
+would leave taskkill with no such pid, terminating no descendant — and Windows does not reparent
+orphans, so the grandchild would survive exactly the path this exists to bound. `nodeGroupKill` in
+keiko-server's `lspNodeAdapter.ts` holds the same ordering, and `exec.test.ts` pins it directly
+rather than asserting only that the tree kill was called.
+
+Two residuals, both narrower than the general `taskkill` caveat:
+
+- **A `taskkill.exe` spawn failure** (missing on a stripped-down Windows image) is swallowed the
+  same way a POSIX `ESRCH` is, so termination stays idempotent but orphaning is not architecturally
+  impossible.
+- **PID reuse is not reachable on this path**, though it is a real hazard for `taskkill` in general:
+  `taskkill` validates no process identity, so a stale pid can hit an unrelated process. Here the pid
+  cannot go stale while it is in use — Node holds an open Win32 handle to the child for the lifetime
+  of the `ChildProcess` object, and Windows does not recycle a PID until every handle to the process
+  object is closed. `killGroup` invokes taskkill from `terminate()` with that handle still open, and
+  now before `child.kill()` rather than after, which is the earliest point at which it can run. A
+  Job Object would bind termination to process identity outright and is the stronger mechanism, but
+  Node exposes no Job Object API: it needs native code, which is a runtime dependency ADR-0001
+  forbids. The existing Job Object implementation in keiko-server's
+  `nativeRuntimeProcessBackend.ts` drives a separate compiled helper over a control pipe and cannot
+  be reached from `keiko-tools` without inverting the ADR-0019 dependency direction.
 
 The `runCommand` promise rejects with `CommandCancelledError` on abort and `CommandTimeoutError` on
 timeout — both caught from the `close` event after cleanup (`src/tools/exec.ts:194–202`). The

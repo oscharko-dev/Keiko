@@ -223,26 +223,39 @@ function killGroup(
     return TREE_KILL_NOT_ATTEMPTED;
   }
   const posix = deps.platform !== "win32";
-  try {
-    if (posix) {
-      process.kill(-pid, sig);
-    } else {
-      child.kill(sig);
-    }
-  } catch {
-    // The child already exited; nothing to signal. Swallowing here keeps termination idempotent.
-  }
   if (posix) {
+    try {
+      process.kill(-pid, sig);
+    } catch {
+      // The group already exited; nothing to signal. Swallowing keeps termination idempotent.
+    }
     return TREE_KILL_NOT_ATTEMPTED;
   }
+  // ORDER IS LOAD-BEARING on Windows: the tree kill runs BEFORE the immediate child is signalled.
+  // `child.kill()` is TerminateProcess and takes effect at once, while `taskkill /PID <pid> /T`
+  // resolves the descendant set from the LIVE process table when it runs. Signal cmd.exe first and
+  // taskkill finds no such pid, terminates nothing, and — because Windows does not reparent
+  // orphans — the `node.exe` grandchild survives exactly the timeout/abort path this exists to
+  // bound. Killing the tree first also narrows the pid-reuse window. `nodeGroupKill` in
+  // keiko-server's lspNodeAdapter holds the same ordering for the same reason.
+  const outcome = ((): WindowsTreeKillOutcome => {
+    try {
+      deps.killWindowsTree(pid, deps.processEnv);
+      return { attempted: true, succeeded: true };
+    } catch {
+      // Never let a misbehaving tree-kill implementation propagate — see the WindowsTreeKill
+      // contract above.
+      return { attempted: true, succeeded: false };
+    }
+  })();
   try {
-    deps.killWindowsTree(pid, deps.processEnv);
-    return { attempted: true, succeeded: true };
+    // Fallback for the descendants taskkill could not reach (and the no-op when it reached all of
+    // them): the immediate child is signalled either way.
+    child.kill(sig);
   } catch {
-    // Never let a misbehaving tree-kill implementation propagate — see the WindowsTreeKill
-    // contract above.
-    return { attempted: true, succeeded: false };
+    // The child already exited; nothing to signal. Swallowing keeps termination idempotent.
   }
+  return outcome;
 }
 
 interface Buffers {

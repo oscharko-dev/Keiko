@@ -255,6 +255,13 @@ static void test_extended_path(void) {
   // Already extended: copied through untouched, never double-prefixed.
   assert(keiko_extended_path(L"\\\\?\\C:\\Temp", out, KEIKO_PATH_CAP) == 1);
   assert(wcscmp(out, L"\\\\?\\C:\\Temp") == 0);
+
+  // A capacity too small for the prefixed path is a FAILURE, not a silent truncation. This is the
+  // only branch that keeps cleanup from ever walking a SHORTENED path, so it is pinned explicitly:
+  // _snwprintf_s with _TRUNCATE returns -1 here, keiko_extended_path returns 0, and
+  // keiko_cleanup_staging reports exit 19 instead of deleting the wrong tree.
+  wchar_t tiny[8];
+  assert(keiko_extended_path(L"C:\\Temp\\Keiko-install-00", tiny, 8) == 0);
 }
 
 int wmain(void) {

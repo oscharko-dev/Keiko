@@ -1236,6 +1236,44 @@ describe("runCommand — Windows process-tree termination (taskkill /T /F, ADR-0
     expect(spawn.child.killed).toContain("SIGTERM");
   });
 
+  // ORDERING PIN. `child.kill()` is TerminateProcess and takes effect immediately, while
+  // `taskkill /PID <pid> /T` resolves the descendant set from the LIVE process table when it runs.
+  // If the immediate child were signalled first, taskkill would find no such pid, terminate no
+  // descendant, and — Windows does not reparent orphans — the node.exe grandchild would survive the
+  // very timeout this exists to bound. Asserting only "tree kill was called" cannot catch that.
+  it("kills the Windows tree BEFORE signalling the immediate child", async () => {
+    const spawn = recordingSpawn();
+    const order: string[] = [];
+    const originalKill = spawn.child.kill.bind(spawn.child);
+    spawn.child.kill = (signal?: NodeJS.Signals): boolean => {
+      order.push("child.kill");
+      return originalKill(signal);
+    };
+    const promise = runCommand(
+      {
+        command: "node",
+        args: ["-e", "wait"],
+        cwd: undefined,
+        timeoutMs: 5,
+        signal: controller().signal,
+      },
+      {
+        ...fakeDeps(spawn.fn),
+        platform: "win32",
+        killWindowsTree: (): void => {
+          order.push("treeKill");
+        },
+      },
+    );
+    await new Promise((r) => setTimeout(r, 20));
+    spawn.child.emit("close", null, "SIGTERM");
+    await expect(promise).rejects.toBeInstanceOf(CommandTimeoutError);
+
+    expect(order.indexOf("treeKill")).toBeGreaterThanOrEqual(0);
+    expect(order.indexOf("child.kill")).toBeGreaterThanOrEqual(0);
+    expect(order.indexOf("treeKill")).toBeLessThan(order.indexOf("child.kill"));
+  });
+
   it("bounds the whole process tree on abort, in addition to killing the immediate child", async () => {
     const ctrl = controller();
     const spawn = recordingSpawn();

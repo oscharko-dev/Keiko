@@ -460,6 +460,10 @@ class ContainerRunnerManagerImpl implements ContainerRunnerManager {
       policy: this.policy,
       processEnv: this.processEnv,
       now: this.now,
+      // Forwarded, not defaulted: without it a probe that times out writes its termination evidence
+      // to the process-wide sink instead of the sink this runner was configured with, so a caller
+      // that injected its own log port would silently lose those lines.
+      activityLog: this.activityLog,
     };
     const promise = detectContainerEngines(probeDeps);
     this.capabilityCache.set(HOST_CAPABILITY_CACHE_KEY, {
