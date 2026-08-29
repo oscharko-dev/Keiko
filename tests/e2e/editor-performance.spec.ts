@@ -7,8 +7,6 @@ import { arch, cpus, platform, release, tmpdir, totalmem } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { writePaddedFixtureFiles } from "./support/editorWorkspace.js";
-import { clickWindowChromeButton } from "./support/window-chrome.js";
-import { editorModifier, focusMonacoInput } from "./support/editor-chord.js";
 
 // Number of cold-start samples: kept at 3 for the manual/release-evidence smoke, raised (>=10) in the
 // scheduled/CI perf job via KEIKO_PERF_RUNS so p50/p95 are stable rather than the max of 3 noisy
@@ -529,7 +527,7 @@ async function openEditorCard(page: Page): Promise<ReturnType<Page["getByRole"]>
   await filesWindow.getByRole("button", { name: "Open in editor" }).click();
   const editorWindow = page.getByRole("region", { name: /Editor.*run\.ts/u });
   await expect(editorWindow.locator(".monaco-editor")).toBeVisible();
-  await clickWindowChromeButton(filesWindow, "Close Files window");
+  await filesWindow.getByRole("button", { name: "Close Files window" }).click();
   await expect(filesWindow).toBeHidden();
   return editorWindow;
 }
@@ -554,9 +552,9 @@ async function measureColdStarts(page: Page, warmups: number, runs: number): Pro
     if (run >= warmups) {
       samples.push(Date.now() - start);
     }
-    await clickWindowChromeButton(filesWindow, "Close Files window");
+    await filesWindow.getByRole("button", { name: "Close Files window" }).click();
     await expect(filesWindow).toBeHidden();
-    await clickWindowChromeButton(editorWindow, "Close Editor window");
+    await editorWindow.getByRole("button", { name: "Close Editor window" }).click();
     await expect(editorWindow).toBeHidden();
   }
   return samples;
@@ -674,13 +672,11 @@ async function replaceEditorText(
   page: Page,
   editorWindow: ReturnType<Page["getByRole"]>,
 ): Promise<boolean> {
-  // F6: a plain `.click()` on `.monaco-editor` can leave Firefox's fallback `textarea.inputarea`
-  // unfocused (support/editor-chord.ts `focusMonacoInput`'s doc comment), so the select-all below
-  // reaches nothing and the measured typing appends into whatever old content remains instead of
-  // a clean buffer. `focusMonacoInput` focuses whichever real input surface this engine created.
-  await focusMonacoInput(editorWindow);
+  const editor = editorWindow.locator(".monaco-editor").first();
+  await expect(editor).toBeVisible({ timeout: 10_000 });
+  await editor.click({ timeout: 8_000 });
   const observerInstalled = await installPerfObservers(page);
-  const modifier = await editorModifier(page);
+  const modifier = process.platform === "darwin" ? "Meta" : "Control";
   await page.keyboard.press(`${modifier}+KeyA`);
   const diagnosticsRecomputed = waitForFinalDiagnosticsRecompute(page).then(
     () => true,
@@ -1174,10 +1170,10 @@ async function measureD12BaselineWork(
   page: Page,
   editorWindow: ReturnType<Page["getByRole"]>,
 ): Promise<D12BaselineMeasuredWork> {
-  // F6: see replaceEditorText above — focusMonacoInput, not a plain click, is what reliably
-  // reaches Firefox's fallback input surface before the select-all chord.
-  await focusMonacoInput(editorWindow);
-  const modifier = await editorModifier(page);
+  const editor = editorWindow.locator(".monaco-editor").first();
+  await expect(editor).toBeVisible({ timeout: 10_000 });
+  await editor.click({ timeout: 8_000 });
+  const modifier = process.platform === "darwin" ? "Meta" : "Control";
   await page.keyboard.press(`${modifier}+KeyA`);
   expect(await installPerfObservers(page)).toBe(true);
   const measurements = await captureInputProcessingSamples(page, TYPING_CHUNKS);
@@ -1212,12 +1208,11 @@ async function measureIdleDebugTyping(
   editorWindow: ReturnType<Page["getByRole"]>,
   session: IdleDebugSession,
 ): Promise<IdleDebugMetrics> {
-  // F6: see replaceEditorText above — focusMonacoInput, not a plain click, is what reliably
-  // reaches Firefox's fallback input surface before the select-all chord. The role-based check
-  // below is additional: it also pins the accessible name Monaco's input surface exposes.
-  await focusMonacoInput(editorWindow);
+  const editor = editorWindow.locator(".monaco-editor").first();
+  await expect(editor).toBeVisible({ timeout: 10_000 });
+  await editor.click({ timeout: 8_000 });
   await expect(editorWindow.getByRole("textbox", { name: /Editor:/u })).toBeFocused();
-  const modifier = await editorModifier(page);
+  const modifier = process.platform === "darwin" ? "Meta" : "Control";
   await page.keyboard.press(`${modifier}+KeyA`);
   const diagnosticsRecomputed = waitForFinalDiagnosticsRecompute(page).catch(() => undefined);
   let observerInstalled = false;

@@ -132,13 +132,19 @@ export async function replaceEditorBuffer(
       ).toEqual([]);
       return;
     }
-    for (const line of expectedLines) {
-      if (line === "") continue;
+    // Counted against the EXPECTED multiplicity, not against 1: a fixture may legitimately repeat a
+    // line (`"same\nsame"` must render two "same" lines), and demanding at most one would fail a
+    // correct replacement. `<=` rather than `===` because Monaco may REPLACE a rendered line with an
+    // inline completion, so a line can legitimately go missing from `.view-line` — but it can never
+    // legitimately appear MORE times than it was inserted, which is exactly the append-instead-of-
+    // replace corruption this guards.
+    for (const line of new Set(expectedLines.filter((candidate) => candidate !== ""))) {
+      const expectedCount = expectedLines.filter((candidate) => candidate === line).length;
       expect(
         actualLines.filter((actual) => actual === line).length,
-        `expected "${line}" exactly once after replacing the buffer, got ` +
+        `expected "${line}" at most ${String(expectedCount)}x after replacing the buffer, got ` +
           JSON.stringify(actualLines),
-      ).toBeLessThanOrEqual(1);
+      ).toBeLessThanOrEqual(expectedCount);
     }
     // At least the first inserted line must be present, so a select-all that wiped everything and
     // inserted nothing cannot pass the duplicate check vacuously.

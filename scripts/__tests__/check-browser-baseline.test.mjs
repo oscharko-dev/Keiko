@@ -132,6 +132,26 @@ describe("transpileFloorViolations", () => {
     expect(transpileFloorViolations(new Map())).toEqual([]);
   });
 
+  // `Number.parseFloat` reads a numeric PREFIX, so "111junk" and "111.0.1" both come back as 111.
+  // A malformed target would then compare as a plausible version and slip past the one gate whose
+  // job is to catch exactly this drift, so the whole string is validated before comparing.
+  it.each(["111junk", "111.0.1", "", "v111", "111,0"])(
+    "reports a malformed transpile target rather than parsing its numeric prefix: %s",
+    (target) => {
+      const found = transpileFloorViolations(new Map([["fakeengine", 111]]), {
+        fakeengine: target,
+      });
+      expect(found).toHaveLength(1);
+      expect(found[0]).toContain("is not a version number");
+    },
+  );
+
+  it("still accepts a well-formed fractional target", () => {
+    expect(
+      transpileFloorViolations(new Map([["fakeengine", 16.4]]), { fakeengine: "13.1" }),
+    ).toEqual([]);
+  });
+
   // Guards the real pairing rather than a copy of it: the shipped TARGETS must sit at or below the
   // shipped browserslist, so this fails if either file moves past the other.
   it("passes for the SHIPPED transpile targets against the SHIPPED declaration", () => {
@@ -248,6 +268,29 @@ describe("main", () => {
   });
 
   // A scan over zero files would report PASS while checking nothing at all.
+  it("reports a CSS selector feature the declared floors cannot support", () => {
+    const fx = fixture({ browserslist: ["firefox >= 111"] });
+    writeFileSync(join(fx.sourceRoots[0], "a.module.css"), ".x:has(.y) { --k: 1; }\n", "utf8");
+    const result = run(fx);
+    expect(result.exitCode).toBe(1);
+    expect(result.errors.join("\n")).toContain("CSS :has() needs firefox >= 121");
+  });
+
+  // The distinction the gate is built on: a SELECTOR that does not match takes its whole rule body
+  // with it, while a DECLARATION an old engine drops is progressive enhancement. Gating the latter
+  // would manufacture pressure to raise a support floor for a cosmetic nicety, so it must not fire.
+  it("does not report a declaration that degrades gracefully", () => {
+    const fx = fixture({ browserslist: ["firefox >= 111"] });
+    writeFileSync(join(fx.sourceRoots[0], "a.module.css"), "h1 { text-wrap: balance; }\n", "utf8");
+    expect(run(fx).exitCode).toBeUndefined();
+  });
+
+  it("scans CSS and TS in the same run", () => {
+    const fx = fixture({ browserslist: ["firefox >= 121"], source: "const l = items.at(-1);\n" });
+    writeFileSync(join(fx.sourceRoots[0], "a.module.css"), ".x:has(.y) { color: red; }\n", "utf8");
+    expect(run(fx).exitCode).toBeUndefined();
+  });
+
   it("fails closed when no UI sources are found", () => {
     const result = run(fixture({ browserslist: ["chrome >= 120"] }));
     expect(result.exitCode).toBe(1);

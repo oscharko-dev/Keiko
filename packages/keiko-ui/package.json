@@ -24,14 +24,18 @@
     "AbortSignal.any (Chrome 116, Firefox 124, Safari 17.4) sits above even these floors and is",
     "feature-detected with a fallback in lib/api.ts rather than raising them further.",
     "These floors correspond to the Baseline 'widely available' set and cover every JS API the UI",
-    "calls; CSS is NOT yet scanned by the gate, and :has() (Firefox 121) is used in module CSS.",
     "Enterprise Windows fleets run evergreen Edge/Chrome, so this is not a reachability change for",
-    "them; it makes the declaration true. check:browser-baseline enforces it against the source."
+    "them; it makes the declaration true. check:browser-baseline enforces it against the source.",
+    "Firefox is 121 rather than 111 because 32 shipped :has() rules across 6 stylesheets DEFINE",
+    "custom properties that later declarations consume: on Firefox 111-120 the selector never",
+    "matches, so those properties are absent rather than merely unstyled. check:browser-baseline",
+    "now scans CSS for selector features that do NOT degrade gracefully; declarations an old engine",
+    "simply drops (text-wrap: balance) are progressive enhancement and are deliberately not gated."
   ],
   "browserslist": [
     "chrome >= 111",
     "edge >= 111",
-    "firefox >= 111",
+    "firefox >= 121",
     "safari >= 16.4"
   ],
   "dependencies": {

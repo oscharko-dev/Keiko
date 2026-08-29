@@ -358,6 +358,10 @@ async function replaceMonacoText(page: Page, editorWindow: Locator, text: string
   await page.keyboard.down(modifier);
   await page.keyboard.press("KeyA");
   await page.keyboard.up(modifier);
+  // Delete the selection with a REAL key event first. `insertText` bypasses key events, and
+  // whether it replaces a selection is engine-dependent: Chromium replaces, Firefox inserts at
+  // the caret and leaves the selected text behind — appending instead of replacing.
+  await page.keyboard.press("Backspace");
   await page.keyboard.insertText(text);
 }
 

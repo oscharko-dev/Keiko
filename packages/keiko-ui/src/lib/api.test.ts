@@ -3033,6 +3033,33 @@ describe("GEN-RES-FETCH-001 — default read deadline", () => {
       const signal = await forwardedSignal(caller.signal);
       expect(signal.aborted).toBe(true);
     });
+
+    // The gap the three cases above leave open: they only ever abort the CALLER. A combinator that
+    // returned the caller's signal verbatim — ignoring the deadline entirely — would satisfy all of
+    // them, while silently removing the 15s read deadline for exactly the older browsers this
+    // fallback exists to serve. A stalled BFF would then hang the UI behind the browser's own
+    // minutes-long network timeout, the defect GEN-RES-FETCH-001 was written to prevent.
+    //
+    // Driven by STUBBING `AbortSignal.timeout` rather than by advancing timers: measured in this
+    // jsdom lane, `AbortSignal.timeout` does NOT observe vitest's fake clock (a 100ms signal is
+    // still unaborted after 200ms of fake time), so a timer-based version of this test would pass
+    // for the wrong reason. Handing back a controller we own makes the deadline leg deterministic.
+    it("aborts on the DEADLINE leg even when the caller never cancels", async () => {
+      const deadline = new AbortController();
+      const nativeTimeout = AbortSignal.timeout;
+      AbortSignal.timeout = (): AbortSignal => deadline.signal;
+      try {
+        const caller = new AbortController();
+        const signal = await forwardedSignal(caller.signal);
+        expect(signal.aborted).toBe(false);
+        const reason = new Error("read deadline elapsed");
+        deadline.abort(reason);
+        expect(signal.aborted).toBe(true);
+        expect(signal.reason).toBe(reason);
+      } finally {
+        AbortSignal.timeout = nativeTimeout;
+      }
+    });
   });
 });
 

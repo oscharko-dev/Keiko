@@ -39,8 +39,14 @@ try {
   $launcherFunctionSource = $productionScriptSource.Substring(
     $launcherFunctionStart, $launcherFunctionEnd - $launcherFunctionStart
   )
+  # Comments and dead code are STRIPPED before the search. A plain `Contains` would be satisfied by
+  # the flag appearing in a `//` comment or a commented-out argument list, so the gate could keep
+  # proving a hardening posture the shipped command no longer has -- exactly the stale-evidence case
+  # this check exists to prevent (PR #3355 review).
+  $activeLauncherSource = ($launcherFunctionSource -split "`n" |
+    Where-Object { $_.Trim() -notmatch '^(//|/\*|\*)' }) -join "`n"
   foreach ($requiredFlagLiteral in @('"/MT"', '"/DEPENDENTLOADFLAG:0x800"')) {
-    if (-not $launcherFunctionSource.Contains($requiredFlagLiteral)) {
+    if (-not $activeLauncherSource.Contains($requiredFlagLiteral)) {
       throw ("scripts/stage-portable-runtime.mjs compileWindowsLauncher() no longer contains " +
         "the hardened flag $requiredFlagLiteral -- update this gate deliberately if the " +
         "hardening posture changed, do not let it silently keep proving a configuration the " +

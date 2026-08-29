@@ -606,8 +606,16 @@ async function computePreview(
 export const createHandleCommitPreview = (
   options: GitDeliveryCommitRouteOptions = {},
 ): ((ctx: RouteContext, deps: UiHandlerDeps) => Promise<RouteResult>) => {
-  const seams = options.execution ?? {};
-  const activityLog = options.activityLog ?? processServerLogSink();
+  // ONE resolved sink for both the preview line and the termination callbacks inside `seams`.
+  // They used to resolve separately: preview logging honoured `options.activityLog`, while the
+  // termination evidence read `seams.activityLog` and fell back to the global
+  // `processServerLogSink()`. A caller that set only `options.activityLog` — every test that
+  // injects a sink to observe this route — therefore saw its preview lines but never the
+  // termination evidence, which went somewhere it was not looking. The more specific
+  // `execution.activityLog` still wins when a caller sets both.
+  const activityLog =
+    options.execution?.activityLog ?? options.activityLog ?? processServerLogSink();
+  const seams = { ...(options.execution ?? {}), activityLog };
   const now = (): number => (seams.now ?? Date.now)();
   return async (ctx, deps): Promise<RouteResult> => {
     const correlationId = ctx.correlationId ?? UNKNOWN_CORRELATION_ID;
@@ -799,7 +807,12 @@ async function runCommitMutation(
 export const createHandleCommitExecute = (
   options: GitDeliveryCommitRouteOptions = {},
 ): ((ctx: RouteContext, deps: UiHandlerDeps) => Promise<RouteResult>) => {
-  const seams = options.execution ?? {};
+  // Same single resolution as the preview handler above, for the same reason: a caller that sets
+  // only `options.activityLog` must still see this route's termination evidence.
+  const seams = {
+    ...(options.execution ?? {}),
+    activityLog: options.execution?.activityLog ?? options.activityLog ?? processServerLogSink(),
+  };
   return async (ctx, deps): Promise<RouteResult> => {
     const correlationId = ctx.correlationId ?? UNKNOWN_CORRELATION_ID;
     const prepared = await prepareCommitExecution(ctx, deps, options.messagePolicy);

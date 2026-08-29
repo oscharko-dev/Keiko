@@ -16,7 +16,6 @@ import { execFileSync, spawnSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { editorModifier, focusMonacoInput } from "./editor-chord.js";
 
 /** The stable, accessibility-anchored DOM contract the editor renders (verified in source). */
 export const EDITOR_SELECTORS = {
@@ -525,19 +524,12 @@ export async function readHotExitSnapshotKeys(page: Page): Promise<readonly stri
 /**
  * Type into the focused Monaco editor of a pane to make its buffer dirty. Selects all then inserts,
  * so the resulting buffer deterministically differs from the on-disk fixture regardless of content.
- *
- * F6: this used to click `.monaco-editor` directly and derive its select-all modifier from
- * `process.platform` — the wrong machine, per support/editor-chord.ts's header comment: Monaco
- * binds its keybindings from the PAGE's reported platform, not the Node host's OS, so on a macOS
- * developer machine testing an emulated-Windows page this pressed Meta while Monaco listened for
- * Ctrl and the chord reached nothing. The plain click also does not reliably focus Firefox's
- * fallback `textarea.inputarea`. Both are exactly what the shared editor-chord helpers close:
- * `focusMonacoInput` focuses whichever real input surface this engine created, and
- * `editorModifier` asks the BROWSER.
  */
 export async function typeIntoActiveEditor(page: Page, pane: Locator, text: string): Promise<void> {
-  await focusMonacoInput(pane);
-  const modifier = await editorModifier(page);
+  const editor = pane.locator(EDITOR_SELECTORS.monaco).first();
+  await expect(editor).toBeVisible();
+  await editor.click();
+  const modifier = process.platform === "darwin" ? "Meta" : "Control";
   await page.keyboard.press(`${modifier}+KeyA`);
   await page.keyboard.insertText(text);
 }

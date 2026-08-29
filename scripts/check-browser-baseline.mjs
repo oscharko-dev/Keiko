@@ -33,6 +33,30 @@ import { isMainModule } from "./lib/is-main-module.mjs";
 const UI_PACKAGE = "packages/keiko-ui/package.json";
 const SOURCE_ROOTS = ["packages/keiko-ui/src", "packages/keiko-editor/src"];
 
+// CSS is scanned too, and the reason is not symmetry. A missing JS API throws on first use, which
+// is loud; an unsupported SELECTOR is silently ignored, so the rule never applies and the app
+// renders wrong with nothing in the console.
+//
+// The bar for an entry here is NOT "unsupported below some version" — it is "does NOT degrade
+// gracefully". A declaration an old engine drops (`text-wrap: balance` leaves the text unbalanced,
+// `scrollbar-width` leaves a default scrollbar) is progressive enhancement and belongs nowhere near
+// a gate: listing it would manufacture pressure to raise a support floor for a cosmetic nicety.
+// A SELECTOR that fails to match is different — the whole rule body never applies. `:has()` is the
+// live case: several shipped rules use it to DEFINE custom properties that later declarations
+// consume, so on an engine without it those properties are simply absent.
+const GUARDED_CSS = [
+  {
+    name: "CSS :has()",
+    pattern: /:has\(/u,
+    minimum: { chrome: 105, edge: 105, firefox: 121, safari: 15.4 },
+  },
+  {
+    name: "CSS :is()",
+    pattern: /:is\(/u,
+    minimum: { chrome: 88, edge: 88, firefox: 78, safari: 14 },
+  },
+];
+
 // pattern: matched against production source (tests excluded — they run in Node, not a browser).
 // Versions are the FIRST release of each engine that supports the API (MDN browser-compat-data).
 export const GUARDED_APIS = [
@@ -100,7 +124,7 @@ function collectSources(roots = SOURCE_ROOTS) {
       if (entry.name === "node_modules" || entry.name === "dist") continue;
       const path = join(dir, entry.name);
       if (entry.isDirectory()) walk(path);
-      else if (/\.(ts|tsx)$/.test(entry.name) && !/\.test\.(ts|tsx)$/.test(entry.name)) {
+      else if (/\.(ts|tsx|css)$/.test(entry.name) && !/\.test\.(ts|tsx)$/.test(entry.name)) {
         files.push(path);
       }
     }
@@ -185,14 +209,22 @@ export function violationsFor(api, users, floors) {
 // declared-supported browser cannot parse: not a missing feature but a blank page, and a failure
 // that no amount of API guarding below would catch. The two numbers previously lived in two files
 // with no link between them, so nothing noticed when one moved.
-export function transpileFloorViolations(floors) {
+// `targets` defaults to the transpiler's REAL exported table, so production behaviour is unchanged;
+// it is injectable only so a test can drive the malformed-version branch, which cannot be reached
+// through the shipped table (and must never be reachable by editing it).
+export function transpileFloorViolations(floors, targets = TRANSPILE_TARGETS) {
   const found = [];
-  for (const [engine, target] of Object.entries(TRANSPILE_TARGETS)) {
+  for (const [engine, target] of Object.entries(targets)) {
     const declared = floors.get(engine);
     if (declared === undefined) continue;
-    const transpiled = Number.parseFloat(target);
+    // Validate the WHOLE string before comparing. `Number.parseFloat` reads a numeric PREFIX, so
+    // "111junk" and "111.0.1" both come back as 111 — a malformed target would silently compare as
+    // a plausible version and pass a gate whose entire job is to catch exactly that kind of drift.
+    const transpiled = /^[0-9]+(?:\.[0-9]+)?$/u.test(String(target).trim())
+      ? Number.parseFloat(String(target))
+      : Number.NaN;
     if (Number.isNaN(transpiled)) {
-      found.push(`transpile target for ${engine} (${target}) is not a version number`);
+      found.push(`transpile target for ${engine} (${String(target)}) is not a version number`);
       continue;
     }
     if (transpiled > declared) {
@@ -209,9 +241,15 @@ export function transpileFloorViolations(floors) {
 // Every guarded API that the sources actually call, checked against the declared floors.
 function apiViolations(sources, floors) {
   const violations = [];
+  const scripts = sources.filter((path) => !path.endsWith(".css"));
+  const styles = sources.filter((path) => path.endsWith(".css"));
   for (const api of GUARDED_APIS) {
-    const users = sources.filter((path) => api.pattern.test(readFileSync(path, "utf8")));
+    const users = scripts.filter((path) => api.pattern.test(readFileSync(path, "utf8")));
     if (users.length > 0) violations.push(...violationsFor(api, users, floors));
+  }
+  for (const feature of GUARDED_CSS) {
+    const users = styles.filter((path) => feature.pattern.test(readFileSync(path, "utf8")));
+    if (users.length > 0) violations.push(...violationsFor(feature, users, floors));
   }
   return violations;
 }

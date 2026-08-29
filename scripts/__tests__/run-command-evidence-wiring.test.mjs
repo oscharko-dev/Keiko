@@ -298,6 +298,23 @@ function expressionProvidesOnTerminated(expr, declByName, hopsRemaining) {
 
 const MAX_IDENTIFIER_HOPS = 4;
 
+// How many call sites may pass on FILE-LEVEL evidence alone (see `callSiteVerdict`). MEASURED from
+// the current tree, never chosen: a ratchet, not a target. Lowering it is always welcome; raising it
+// means a new call site now leans on the one soft spot in this pin and must be justified
+// deliberately rather than slipped in.
+//
+// The nine are all the same shape — a Node effect module whose `runCommand` argument is a typed
+// parameter (`ctx`, `deps`) declared in ANOTHER module, which this single-file analyzer cannot
+// follow:
+//   keiko-tools/src/git-merge-node.ts:156          git-mutation-node.ts:176, :209
+//   keiko-tools/src/git-pr-node.ts:145             git-publish-node.ts:161
+//   keiko-tools/src/git-worktree-adapter.ts:402    git-worktree-snapshot-node.ts:117, :301
+//   keiko-verification/src/orchestrator.ts:334
+// Each was separately confirmed wired by reading it; the budget exists so the TENTH is not taken on
+// trust. Closing the gap properly means cross-module resolution, which is a different tool than a
+// single-file AST pass.
+const SOFT_VERDICT_BUDGET = 9;
+
 // A call site is "wired" when at least one argument provably carries onTerminated, OR when every
 // argument that could not be resolved leaves the file's own text as the only available evidence AND
 // that text references the seam. It is "unwired" — the pin's actual fail-closed verdict — only when
@@ -310,7 +327,20 @@ function callSiteVerdict(callExpression, declByName, fileText) {
     if (result === "true") return "wired";
     if (result === "unresolved") anyUnresolved = true;
   }
-  if (anyUnresolved) return fileText.includes("onTerminated") ? "wired" : "unwired";
+  if (anyUnresolved) {
+    // The file-text fallback, and the ONE soft spot in this pin: an argument this analyzer cannot
+    // resolve (a typed parameter such as `ctx`, whose value lives in another module) leaves the
+    // file's own text as the only evidence, and any `onTerminated` in it — including one belonging
+    // to a DIFFERENT, correctly wired call — satisfies that. A genuinely unwired call in such a file
+    // would therefore pass.
+    //
+    // It is not hardened into a hard "unwired" because that verdict would be a false accusation for
+    // every legitimately cross-module case, and a gate that cries wolf gets weakened rather than
+    // obeyed. Instead the soft verdict is COUNTED and pinned below, so the set of call sites relying
+    // on it cannot grow unnoticed: a new one fails the pin and has to be made resolvable or
+    // explicitly re-justified.
+    return fileText.includes("onTerminated") ? "wired-by-file-text" : "unwired";
+  }
   return "unwired";
 }
 
@@ -325,10 +355,17 @@ function analyzeFile(path, text) {
   const callSites = findRunCommandCallSites(sourceFile, bindings);
   if (callSites.length === 0) return undefined;
   const declByName = collectLocalDeclarationInitializers(sourceFile);
-  const unwired = callSites
-    .filter((call) => callSiteVerdict(call, declByName, text) === "unwired")
-    .map((call) => ({ path, ...locationOf(sourceFile, call) }));
-  return { path, callSiteCount: callSites.length, unwired };
+  const verdicts = callSites.map((call) => ({
+    call,
+    verdict: callSiteVerdict(call, declByName, text),
+  }));
+  const unwired = verdicts
+    .filter(({ verdict }) => verdict === "unwired")
+    .map(({ call }) => ({ path, ...locationOf(sourceFile, call) }));
+  const softlyWired = verdicts
+    .filter(({ verdict }) => verdict === "wired-by-file-text")
+    .map(({ call }) => ({ path, ...locationOf(sourceFile, call) }));
+  return { path, callSiteCount: callSites.length, unwired, softlyWired };
 }
 
 // exec.ts itself needs no explicit exclusion (unlike the previous regex-based version): it DEFINES
@@ -359,6 +396,21 @@ describe("runCommand termination-evidence wiring (PR #3354, comment 3887021650)"
       expect(names).toContain(required);
     }
     expect(analyses.length).toBeGreaterThanOrEqual(10);
+  });
+
+  // The soft verdict, ratcheted. `callSiteVerdict` falls back to file-level text evidence when an
+  // argument cannot be resolved across modules, and that fallback is the one way a genuinely unwired
+  // call could still pass — any `onTerminated` in the file satisfies it, including one belonging to a
+  // different, correctly wired call. Hardening it into a flat "unwired" would falsely accuse every
+  // legitimate cross-module case, and a gate that cries wolf gets weakened rather than obeyed. So the
+  // soft path is counted instead: the set cannot grow unnoticed.
+  it("does not grow the set of call sites that pass only on file-level evidence", () => {
+    const soft = analyses.flatMap(({ softlyWired }) => softlyWired);
+    const rendered = soft.map((site) => `${site.path}:${String(site.line)}`).sort();
+    expect(
+      rendered.length,
+      `call sites passing only on file-text evidence:\n${rendered.join("\n")}`,
+    ).toBeLessThanOrEqual(SOFT_VERDICT_BUDGET);
   });
 
   it("every production runCommand call site references the onTerminated evidence seam", () => {

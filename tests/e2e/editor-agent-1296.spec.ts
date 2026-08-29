@@ -219,6 +219,12 @@ async function triggerLiveInlineGhost(page: Page, editorWindow: Locator): Promis
   await focusMonacoInput(editorWindow);
   const modifier = await editorModifier(page);
   await page.keyboard.press(`${modifier}+KeyA`);
+  // Delete the selection with a REAL key event before inserting. `insertText` hands text to the
+  // engine's input pipeline without key events, and whether that replaces an existing selection
+  // is engine-dependent: Chromium replaces, Firefox inserts at the caret and LEAVES the selected
+  // text in place — appending instead of replacing. Backspace on a selection is unambiguous in
+  // both (same reason `replaceEditorBuffer` in support/editor-chord.ts does it).
+  await page.keyboard.press("Backspace");
   await page.keyboard.insertText("export function answer() {\n  ret");
   await expect(page.getByRole("alert").filter({ hasText: "urn 42;" }).first()).toBeVisible();
 }
