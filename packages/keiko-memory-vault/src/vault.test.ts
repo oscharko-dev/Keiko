@@ -212,6 +212,29 @@ describe("onMemoryEvent fires post-commit and never on rollback", () => {
     v.close();
   });
 
+  it("emits a transactional body-free pre-image with each committed update", () => {
+    const dir = freshDir();
+    const events: MemoryEvent[] = [];
+    const v = openVault(dir, events);
+    const memory = makeMemory({
+      id: "m-update-preimage" as MemoryId,
+      status: "proposed",
+      pinned: true,
+    });
+    v.insertMemory(memory);
+    events.length = 0;
+
+    v.updateMemory(memory.id, { status: "accepted", pinned: false }, memory.updatedAt + 1);
+
+    expect(events).toEqual([
+      expect.objectContaining({
+        kind: "memory:updated",
+        previous: { id: memory.id, status: "proposed", pinned: true },
+      }),
+    ]);
+    v.close();
+  });
+
   it("AC18: does NOT emit on validation failure (no SQL touched, no event fired)", () => {
     const dir = freshDir();
     const events: MemoryEvent[] = [];

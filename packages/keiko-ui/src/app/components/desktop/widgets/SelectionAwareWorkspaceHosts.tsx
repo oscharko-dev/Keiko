@@ -219,15 +219,10 @@ interface ActiveChatCreation {
   readonly correlationId: string;
   desiredTitle: string | undefined;
   isOwnerCurrent: () => boolean;
-  owner: ChatCreationOwner;
   readonly projectPath: string | null;
   readonly promise: Promise<Chat | undefined>;
   reconciliation: Promise<ChatCreationResult> | null;
   titleRevision: number;
-}
-
-function sameCreationOwner(left: ChatCreationOwner, right: ChatCreationOwner): boolean {
-  return left.kind === right.kind && left.id === right.id;
 }
 
 function chatCreationOwnerKey(owner: ChatCreationOwner): string {
@@ -321,7 +316,19 @@ function activeCreationResult(
   return tracked;
 }
 
-function useChatCreationCoordinator(
+function releaseSettledCreation(
+  activeByOwner: Map<string, ActiveChatCreation>,
+  ownerKey: string,
+  created: ActiveChatCreation,
+  result: Promise<ChatCreationResult>,
+): void {
+  const releaseIfCurrent = (): void => {
+    if (activeByOwner.get(ownerKey) === created) activeByOwner.delete(ownerKey);
+  };
+  void result.then(releaseIfCurrent, releaseIfCurrent);
+}
+
+export function useChatCreationCoordinator(
   openNewChat: ChatSessionApi["openNewChat"],
   replaceChat: ChatSessionApi["replaceChat"],
 ): ChatCreationCoordinator {
@@ -337,17 +344,17 @@ function useChatCreationCoordinator(
           correlationId: newClientCorrelationId(),
           desiredTitle: normalizedChatTitle(title),
           isOwnerCurrent,
-          owner,
           projectPath,
           promise,
           reconciliation: null,
           titleRevision: 0,
         };
-        active = created;
         activeByOwnerRef.current.set(ownerKey, created);
+        const result = activeCreationResult(created, replaceChat);
+        releaseSettledCreation(activeByOwnerRef.current, ownerKey, created, result);
+        return result;
       } else {
         active.isOwnerCurrent = isOwnerCurrent;
-        active.owner = owner;
         if (owner.kind === "window" || title !== undefined) {
           active.desiredTitle = normalizedChatTitle(title);
           active.titleRevision += 1;
@@ -359,10 +366,7 @@ function useChatCreationCoordinator(
   );
   const release = useCallback<ChatCreationCoordinator["release"]>((owner): void => {
     const ownerKey = chatCreationOwnerKey(owner);
-    const active = activeByOwnerRef.current.get(ownerKey);
-    if (active !== undefined && sameCreationOwner(active.owner, owner)) {
-      activeByOwnerRef.current.delete(ownerKey);
-    }
+    activeByOwnerRef.current.delete(ownerKey);
   }, []);
   return useMemo((): ChatCreationCoordinator => ({ release, request }), [release, request]);
 }
@@ -576,8 +580,8 @@ function applyChatCreationResult(
   });
 }
 
-function executeChatCreationRequest(execution: ChatCreationRequestExecution): void {
-  void execution.coordinator
+export function executeChatCreationRequest(execution: ChatCreationRequestExecution): Promise<void> {
+  return execution.coordinator
     .request(execution.owner, execution.activeProject, execution.title, execution.isCurrent)
     .then(
       (result): void => {
@@ -596,10 +600,7 @@ function executeChatCreationRequest(execution: ChatCreationRequestExecution): vo
           requestId: execution.requestKey,
         });
       },
-    )
-    .finally((): void => {
-      execution.coordinator.release(execution.owner);
-    });
+    );
 }
 
 function visibleChatCreationError(
@@ -657,7 +658,7 @@ function useChatCreationControl(args: ChatCreationControlArgs): ChatCreationCont
     attemptStateRef.current.attemptedRequestKey = requestKey;
     attemptStateRef.current.active = { coordinator, owner };
     setError(null);
-    executeChatCreationRequest({
+    void executeChatCreationRequest({
       activeProject,
       coordinator,
       isCurrent: (): boolean =>

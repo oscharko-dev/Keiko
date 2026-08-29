@@ -233,7 +233,21 @@ test("workspace search panel opens a result at its reported start line", async (
   expect(reportedRange).toBeDefined();
   if (reportedRange === undefined) return;
   const pageErrors = collectPageErrors(page);
-  await seedWindows(page, []);
+  // Workspace search is root-bound. Give the shell a deterministic editor owner rather than
+  // relying on the most recently registered project to supply an implicit search root.
+  await seedWindows(page, [
+    {
+      id: "editor-2090-search",
+      type: "editor",
+      x: 24,
+      y: 24,
+      w: 760,
+      h: 620,
+      z: 10,
+      cfg: { root, file: "src/search-target.ts", openFiles: ["src/search-target.ts"] },
+      max: false,
+    },
+  ]);
   await page.goto("/");
   const searchbox = await openSearchPanel(page);
   await searchbox.fill("workspaceSearchNeedle");

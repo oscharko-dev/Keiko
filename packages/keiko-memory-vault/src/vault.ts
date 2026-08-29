@@ -102,6 +102,7 @@ import type {
   MemoryEmbeddingInput,
   MemoryEmbeddingRow,
   MemoryEvent,
+  MemoryUpdatePreImage,
   MemoryGraphMutation,
   MemoryGraphPrecondition,
   MemoryGraphMutationResult,
@@ -632,11 +633,16 @@ function runBatchDeleteMemories(
   return ready.map((prepared) => prepared.result);
 }
 
+interface UpdatedMemory {
+  readonly record: MemoryRecord;
+  readonly previous: MemoryUpdatePreImage;
+}
+
 function updateMemoryInPlace(
   db: DatabaseSync,
   update: MemoryBatchUpdate,
   opts: ResolvedOptions,
-): MemoryRecord {
+): UpdatedMemory {
   const existing = existingMemoryOrThrow(db, update.id, opts.cipher);
   if (update.expectedStatus !== undefined && existing.status !== update.expectedStatus) {
     throw new MemoryStoragePreconditionError("status", update.id);
@@ -647,16 +653,19 @@ function updateMemoryInPlace(
   const merged = mergePatch(existing, update.patch, update.nowMs);
   const ready = preparedForWrite(merged, opts);
   updateMemoryRow(db, ready, opts.cipher);
-  return ready;
+  return {
+    record: ready,
+    previous: { id: existing.id, status: existing.status, pinned: existing.pinned },
+  };
 }
 
 function runGraphMutation(
   db: DatabaseSync,
   mutation: MemoryGraphMutation,
   opts: ResolvedOptions,
-): MemoryGraphMutationResult {
+): { readonly memories: readonly UpdatedMemory[]; readonly edges: readonly MemoryEdge[] } {
   const edges = mutation.edges.map((edge) => preparedEdgeForWrite(edge, opts));
-  const memories: MemoryRecord[] = [];
+  const memories: UpdatedMemory[] = [];
   db.exec("BEGIN IMMEDIATE");
   try {
     for (const precondition of mutation.preconditions ?? []) {
@@ -702,7 +711,7 @@ function runSingleUpdateMemory(
   db: DatabaseSync,
   update: MemoryBatchUpdate,
   opts: ResolvedOptions,
-): MemoryRecord {
+): UpdatedMemory {
   db.exec("BEGIN IMMEDIATE");
   try {
     const ready = updateMemoryInPlace(db, update, opts);
@@ -718,8 +727,8 @@ function runBatchUpdateMemories(
   db: DatabaseSync,
   updates: readonly MemoryBatchUpdate[],
   opts: ResolvedOptions,
-): readonly MemoryRecord[] {
-  const ready: MemoryRecord[] = [];
+): readonly UpdatedMemory[] {
+  const ready: UpdatedMemory[] = [];
   // PR-review follow-up (Codex thread 3772030490): BEGIN (deferred) only takes the write lock
   // on the first UPDATE, leaving room for another writer to interleave a read of the same
   // updated_at before we do. BEGIN IMMEDIATE reserves the write lock up front so every
@@ -737,9 +746,9 @@ function runBatchUpdateMemories(
   return ready;
 }
 
-function emitUpdatedRecords(records: readonly MemoryRecord[], opts: ResolvedOptions): void {
-  for (const record of records) {
-    opts.emit({ kind: "memory:updated", record });
+function emitUpdatedRecords(records: readonly UpdatedMemory[], opts: ResolvedOptions): void {
+  for (const updated of records) {
+    opts.emit({ kind: "memory:updated", record: updated.record, previous: updated.previous });
   }
 }
 
@@ -795,15 +804,15 @@ function buildMemoryWriteOps(db: DatabaseSync, opts: ResolvedOptions): MemoryWri
     updateMemory: (id: MemoryId, patch: MemoryUpdatePatch, nowMs: number): MemoryRecord => {
       return withSidecarHardening(opts, () => {
         const ready = runSingleUpdateMemory(db, { id, patch, nowMs }, opts);
-        opts.emit({ kind: "memory:updated", record: ready });
-        return ready;
+        opts.emit({ kind: "memory:updated", record: ready.record, previous: ready.previous });
+        return ready.record;
       });
     },
     updateMemories: (updates: readonly MemoryBatchUpdate[]): readonly MemoryRecord[] => {
       return withSidecarHardening(opts, () => {
         const ready = runBatchUpdateMemories(db, updates, opts);
         emitUpdatedRecords(ready, opts);
-        return ready;
+        return ready.map((updated) => updated.record);
       });
     },
     applyGraphMutation: (mutation: MemoryGraphMutation): MemoryGraphMutationResult => {
@@ -813,7 +822,7 @@ function buildMemoryWriteOps(db: DatabaseSync, opts: ResolvedOptions): MemoryWri
         for (const edge of ready.edges) {
           opts.emit({ kind: "edge:inserted", edge });
         }
-        return ready;
+        return { memories: ready.memories.map((updated) => updated.record), edges: ready.edges };
       });
     },
     deleteMemory: (id: MemoryId, options: DeleteMemoryOptions): void => {

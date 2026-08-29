@@ -75,6 +75,8 @@ export interface UiServerDeps {
   // The JSON/SSE handler dependencies. Optional: when absent the server still serves static assets
   // and the health route, and the API handlers degrade gracefully (null config, empty evidence).
   readonly handlerDeps?: UiHandlerDeps | undefined;
+  /** Test-only override for the bounded live-dictation initial-frame deadline. */
+  readonly liveDictationInitialFrameTimeoutMs?: number | undefined;
   // Structured activity log sink. When present, every incoming HTTP request writes one line
   // (method, path, status, duration, correlation id) into a plain-text JSON log the operator
   // can read. Absent by default so unit tests stay hermetic; the CLI wires the file-backed sink.
@@ -394,6 +396,7 @@ async function handle(
 function createVoicePlanes(
   port: number,
   handlerDeps: UiHandlerDeps,
+  liveDictationInitialFrameTimeoutMs: number | undefined,
 ): {
   readonly voiceControl: ReturnType<typeof createVoiceControlPlane>;
   readonly liveDictation: ReturnType<typeof createVoiceLiveDictationPlane>;
@@ -406,6 +409,9 @@ function createVoicePlanes(
     liveDictation: createVoiceLiveDictationPlane({
       port,
       handlerDeps: () => handlerDeps,
+      ...(liveDictationInitialFrameTimeoutMs === undefined
+        ? {}
+        : { initialFrameTimeoutMs: liveDictationInitialFrameTimeoutMs }),
     }),
   };
 }
@@ -529,7 +535,11 @@ function reportTopLevelFailure(
 
 export function createUiServer(deps: UiServerDeps): Server {
   const handlerDeps = deps.handlerDeps ?? fallbackDeps();
-  const { voiceControl, liveDictation } = createVoicePlanes(deps.port, handlerDeps);
+  const { voiceControl, liveDictation } = createVoicePlanes(
+    deps.port,
+    handlerDeps,
+    deps.liveDictationInitialFrameTimeoutMs,
+  );
   const activityLog: ServerLogSink = deps.activityLog ?? nullServerLogSink();
   const server = createServer((req, res) => {
     const correlationId = resolveCorrelationId(req);
