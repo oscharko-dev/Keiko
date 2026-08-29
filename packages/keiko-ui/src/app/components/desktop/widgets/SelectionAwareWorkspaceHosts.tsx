@@ -1353,7 +1353,7 @@ function useRemovedRootDisposal(manifest: WorkspaceManifest | null): void {
     const remaining = new Set(manifest.roots.map((entry) => entry.rootRef));
     for (const removed of before.roots) {
       if (remaining.has(removed.rootRef)) continue;
-      disposeEditorModelRegistryRoot(removed.canonicalRoot, "root-disposed", true);
+      disposeEditorModelRegistryRoot(removed.canonicalRoot, true);
     }
   }, [manifest]);
 }

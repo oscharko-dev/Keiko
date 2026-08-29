@@ -30,9 +30,14 @@ import {
 const here = dirname(fileURLToPath(import.meta.url));
 
 describe("RegistryEntry source (KEIKO-0929)", () => {
-  it("never re-introduces the dead disposalReason field (write-only: zero reads, unread even by diagnostics())", () => {
+  it("never re-introduces the dead disposalReason field or the write-only EditorModelDisposalReason parameter chain that fed it (write-only: zero reads, unread even by diagnostics())", () => {
+    // Strengthened by the #2907 final review: the original pin only checked the lowercase-d
+    // "disposalReason" field name, which never matched "EditorModelDisposalReason" (capital D) --
+    // the exported type and reason parameter threaded through disposeEntry/disposeRoot/disposeAll
+    // and the module-level dispose* functions, which fed the very field this pin was written to
+    // keep deleted. A case-insensitive check now catches both spellings.
     const source = readFileSync(resolve(here, "editor-model-registry.ts"), "utf8");
-    expect(source).not.toContain("disposalReason");
+    expect(source.toLowerCase()).not.toContain("disposalreason");
   });
 });
 
@@ -391,7 +396,7 @@ describe("EditorModelRegistry", () => {
 
     registry.disposeRoot("scope:/removed");
     expect(registry.diagnostics().liveModelCount).toBe(1);
-    registry.disposeRoot("scope:/removed", "root-disposed", true);
+    registry.disposeRoot("scope:/removed", true);
     expect(registry.diagnostics().liveModelCount).toBe(0);
     expect(namespace.created[0]?.dispose).toHaveBeenCalledOnce();
   });
@@ -711,7 +716,7 @@ describe("EditorModelRegistry", () => {
       protection: UNPROTECTED_EDITOR_MODEL,
     });
     minimal.detach();
-    registry.disposeAll("shutdown");
+    registry.disposeAll();
     expect((minimal.model as MinimalModel).dispose).toHaveBeenCalledOnce();
   });
 
@@ -722,7 +727,7 @@ describe("EditorModelRegistry", () => {
     retained.attachment.detach();
     namespace.created[0]?.dispose();
 
-    registry.disposeAll("shutdown");
+    registry.disposeAll();
 
     expect(namespace.created[0]?.dispose).toHaveBeenCalledOnce();
   });
