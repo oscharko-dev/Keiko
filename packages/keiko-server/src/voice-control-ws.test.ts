@@ -17,6 +17,12 @@ import { CORRELATION_HEADER } from "./correlation.js";
 import { MAX_VOICE_CONTROL_FRAME_BYTES } from "./voice-realtime.js";
 import { VOICE_LIVE_TRANSCRIBE_PATH } from "./voice-live-dictation.js";
 import { buildRedactor, createRunRegistry, type UiHandlerDeps } from "./index.js";
+import {
+  createBufferedServerLogSink,
+  createServerLogger,
+  resetServerLogger,
+  setServerLogger,
+} from "./observability/index.js";
 import { createInMemoryUiStore } from "./store/index.js";
 import type { Chat } from "./store/index.js";
 import {
@@ -137,6 +143,7 @@ function depsWithChat(overrides: Partial<UiHandlerDeps>): { deps: UiHandlerDeps;
 let server: Server | undefined;
 
 afterEach(async () => {
+  resetServerLogger();
   const current = server;
   server = undefined;
   if (current !== undefined) {
@@ -148,10 +155,21 @@ afterEach(async () => {
   }
 });
 
-async function boot(handlerDeps: UiHandlerDeps): Promise<number> {
+async function boot(
+  handlerDeps: UiHandlerDeps,
+  liveDictationInitialFrameTimeoutMs?: number,
+): Promise<number> {
   const staticRoot = tmpdir();
   const csp = "default-src 'none'";
-  const probe = createUiServer({ staticRoot, csp, port: 0, handlerDeps });
+  const probe = createUiServer({
+    staticRoot,
+    csp,
+    port: 0,
+    handlerDeps,
+    ...(liveDictationInitialFrameTimeoutMs === undefined
+      ? {}
+      : { liveDictationInitialFrameTimeoutMs }),
+  });
   const port = await new Promise<number>((res) =>
     probe.listen(0, UI_HOST, () => {
       res((probe.address() as AddressInfo).port);
@@ -162,7 +180,15 @@ async function boot(handlerDeps: UiHandlerDeps): Promise<number> {
       res();
     }),
   );
-  const listening = createUiServer({ staticRoot, csp, port, handlerDeps });
+  const listening = createUiServer({
+    staticRoot,
+    csp,
+    port,
+    handlerDeps,
+    ...(liveDictationInitialFrameTimeoutMs === undefined
+      ? {}
+      : { liveDictationInitialFrameTimeoutMs }),
+  });
   server = listening;
   await new Promise<void>((res) => {
     listening.listen(port, UI_HOST, res);
@@ -244,6 +270,20 @@ function nextClose(ws: WebSocket): Promise<number> {
   });
 }
 
+function nextCloseDetails(
+  ws: WebSocket,
+): Promise<{ readonly code: number; readonly reason: string }> {
+  return new Promise((resolve) => {
+    ws.once("close", (code: number, reason: Buffer) => {
+      resolve({ code, reason: reason.toString("utf8") });
+    });
+  });
+}
+
+function closeClients(clients: readonly OpenClient[]): void {
+  for (const { ws } of clients) ws.close();
+}
+
 function sessionCreate(chatId: string, extra: Record<string, unknown> = {}): string {
   return JSON.stringify({
     protocolVersion: "1",
@@ -316,13 +356,13 @@ describe("WebSocket voice control upgrade — capability gate (AC1/AC3)", () => 
   });
 
   it("rejects an upgrade on any other path", async () => {
-    const port = await boot(depsWith({ config: voiceConfig(true), configPresent: true }));
+    const port = await boot(depsWith({ config: voiceConfig(true), configPresent: true }), 20);
     const result = await connect(port, { path: "/api/voice/other" });
     expect(result.opened).toBe(false);
   });
 
   it("rejects an upgrade carrying a non-loopback Origin (cross-origin defense)", async () => {
-    const port = await boot(depsWith({ config: voiceConfig(true), configPresent: true }));
+    const port = await boot(depsWith({ config: voiceConfig(true), configPresent: true }), 20_000);
     const result = await connect(port, { headers: { Origin: "http://evil.example.com" } });
     expect(result.opened).toBe(false);
   });
@@ -373,6 +413,87 @@ describe("WebSocket live dictation upgrade — transcription-only control plane"
     const port = await boot(depsWith({ config: voiceConfig(false), configPresent: true }));
     const result = await connect(port, { path: VOICE_LIVE_TRANSCRIBE_PATH });
     expect(result.opened).toBe(false);
+  });
+
+  it("does not let 64 idle sockets consume negotiated-session capacity (#3190)", async () => {
+    const port = await boot(depsWith({ config: voiceConfig(true), configPresent: true }), 20_000);
+    const idle = await Promise.all(
+      Array.from({ length: 64 }, () => connect(port, { path: VOICE_LIVE_TRANSCRIBE_PATH })),
+    );
+    const idleSockets = idle.map(expectOpen);
+    try {
+      const { ws: activeSocket, next } = expectOpen(
+        await connect(port, { path: VOICE_LIVE_TRANSCRIBE_PATH }),
+      );
+      activeSocket.send(liveSessionCreate());
+      expect(await next()).toMatchObject({ kind: "session.created" });
+      activeSocket.close();
+    } finally {
+      closeClients(idleSockets);
+    }
+  });
+
+  it("closes an unnegotiated socket on the initial-frame deadline with correlated evidence", async () => {
+    const sink = createBufferedServerLogSink();
+    setServerLogger(createServerLogger({ sink, level: "info" }));
+    const port = await boot(depsWith({ config: voiceConfig(true), configPresent: true }), 20);
+    const { ws: socket } = expectOpen(
+      await connect(port, {
+        path: VOICE_LIVE_TRANSCRIBE_PATH,
+        headers: { [CORRELATION_HEADER]: "live-dictation-initial-frame-timeout" },
+      }),
+    );
+    const closed = await nextCloseDetails(socket);
+
+    expect(closed).toEqual({ code: 1008, reason: "initial session frame deadline exceeded" });
+    expect(sink.events).toContainEqual(
+      expect.objectContaining({
+        category: "http",
+        op: "voice.live-dictation.initial-frame-timeout",
+        correlationId: "live-dictation-initial-frame-timeout",
+      }),
+    );
+  });
+
+  it("does not admit junk opening frames before the initial-frame deadline", async () => {
+    const port = await boot(depsWith({ config: voiceConfig(true), configPresent: true }), 1_000);
+    const { ws: socket } = expectOpen(await connect(port, { path: VOICE_LIVE_TRANSCRIBE_PATH }));
+    const closed = nextCloseDetails(socket);
+
+    socket.send(JSON.stringify({ kind: "not-a-session-create" }));
+
+    await expect(closed).resolves.toEqual({ code: 1008, reason: "expected session.create" });
+  });
+
+  it("keeps genuine negotiated-session capacity pressure on close(1013)", async () => {
+    const sink = createBufferedServerLogSink();
+    setServerLogger(createServerLogger({ sink, level: "info" }));
+    const port = await boot(depsWith({ config: voiceConfig(true), configPresent: true }));
+    const clients = await Promise.all(
+      Array.from({ length: 64 }, () => connect(port, { path: VOICE_LIVE_TRANSCRIBE_PATH })),
+    );
+    const activeSockets = clients.map(expectOpen);
+    try {
+      for (const { ws, next } of activeSockets) {
+        ws.send(liveSessionCreate());
+        expect(await next()).toMatchObject({ kind: "session.created" });
+      }
+      const { ws: rejectedSocket } = expectOpen(
+        await connect(port, { path: VOICE_LIVE_TRANSCRIBE_PATH }),
+      );
+      const closed = nextClose(rejectedSocket);
+      rejectedSocket.send(liveSessionCreate());
+      expect(await closed).toBe(1013);
+      expect(sink.events).toContainEqual(
+        expect.objectContaining({
+          category: "http",
+          op: "voice.live-dictation.capacity-rejected",
+          extra: { observedCount: 64, reason: "active-session-cap" },
+        }),
+      );
+    } finally {
+      closeClients(activeSockets);
+    }
   });
 
   it("negotiates a transcription-only realtime session without dialogue fields", async () => {

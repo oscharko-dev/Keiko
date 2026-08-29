@@ -365,7 +365,7 @@
     {
       "op": "memory-vault.store.opened",
       "category": "memory",
-      "site": "packages/keiko-memory-vault/src/vault.ts:420",
+      "site": "packages/keiko-memory-vault/src/vault.ts:421",
       "package": "keiko-memory-vault"
     },
     {
@@ -951,6 +951,12 @@
       "package": "keiko-server"
     },
     {
+      "op": "memory.audit.state-cache.seeded",
+      "category": "memory",
+      "site": "packages/keiko-server/src/deps.ts:1812",
+      "package": "keiko-server"
+    },
+    {
       "op": "memory.capture.novelty-gate",
       "category": "memory",
       "site": "packages/keiko-server/src/memory-embedding.ts:686",
@@ -1001,7 +1007,7 @@
     {
       "op": "request",
       "category": "http",
-      "site": "packages/keiko-server/src/server.ts:489",
+      "site": "packages/keiko-server/src/server.ts:495",
       "package": "keiko-server"
     },
     {
@@ -1038,6 +1044,18 @@
       "op": "store.opened",
       "category": "setup",
       "site": "packages/keiko-server/src/store/db.ts:929",
+      "package": "keiko-server"
+    },
+    {
+      "op": "voice.live-dictation.capacity-rejected",
+      "category": "http",
+      "site": "packages/keiko-server/src/voice-live-dictation.ts:649",
+      "package": "keiko-server"
+    },
+    {
+      "op": "voice.live-dictation.initial-frame-timeout",
+      "category": "http",
+      "site": "packages/keiko-server/src/voice-live-dictation.ts:663",
       "package": "keiko-server"
     },
     {

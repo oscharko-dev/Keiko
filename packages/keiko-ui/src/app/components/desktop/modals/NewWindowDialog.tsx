@@ -34,6 +34,7 @@ import {
 import { CHAT_TITLE_IS_DEFAULT_CFG_KEY } from "../windows/connectionUtils";
 import KeikoSelect from "../KeikoSelect";
 import { PermControl, type Cfg, type CfgValue } from "./PermControl";
+import { restoreModalFocusAfterUnlock } from "./modalFocusRestore";
 import { isWorkflowEligibleModel } from "../../../../lib/workflow-eligibility";
 import { useTranslate, type I18nTranslate } from "@/lib/i18n";
 import type { MessageKey } from "@/lib/i18n-messages.en";
@@ -53,6 +54,7 @@ interface NewWindowDialogProps {
   readonly type: WindowType;
   readonly types: typeof WinTypes;
   readonly filesContext?: FilesWindowContext | null;
+  readonly opener?: HTMLElement | null;
   readonly onConfirm: (cfg: Cfg) => void;
   readonly onClose: () => void;
 }
@@ -63,6 +65,22 @@ function initialCfg(fields: readonly LocalizedConfigField[]): Cfg {
     out[f.key] = f.def;
   }
   return out;
+}
+
+function useNewWindowFocusRestore(opener: HTMLElement | null | undefined): void {
+  const triggerRef = useRef(opener ?? null);
+  useEffect((): (() => void) => {
+    const trigger = triggerRef.current;
+    return () => {
+      // Audit C148 — confirming from the Empty State unmounts the trigger button
+      // (the first window replaces the empty state), so focusing it silently
+      // dropped keyboard focus to <body>. Fall back to the freshly created top
+      // window (focusable via tabIndex={-1}) or the New-window FAB. The shared
+      // helper waits until AppShell unlocks an inert background before focusing
+      // a connected opener, then applies the MD-05 deterministic fallback.
+      restoreModalFocusAfterUnlock(trigger);
+    };
+  }, []);
 }
 
 // 0.3.0 release audit — the dialog seeds the chat title field with the LOCALIZED default, so that
@@ -1069,6 +1087,7 @@ export function NewWindowDialog({
   type,
   types,
   filesContext = null,
+  opener,
   onConfirm,
   onClose,
 }: NewWindowDialogProps): ReactNode {
@@ -1083,39 +1102,12 @@ export function NewWindowDialog({
   const nativeDialogSupported = useNativeFileDialogCapability();
   const firstFieldRef = useRef<HTMLElement | null>(null);
   const dlgRef = useRef<HTMLDialogElement | null>(null);
-  const triggerRef = useRef<HTMLElement | null>(null);
+  useNewWindowFocusRestore(opener);
   const windowLabel = localizedWindowTitle(translate, type);
   const dialogTitle = translate("newWindow.title", { label: windowLabel });
   const dialogDesc = localizedWindowDesc(translate, type);
   const cta =
     localizedWindowCta(translate, type) ?? translate("newWindow.open", { label: windowLabel });
-
-  useEffect(() => {
-    // capture the element that opened this dialog so we can return focus on close
-    triggerRef.current = document.activeElement as HTMLElement | null;
-    return () => {
-      const trigger = triggerRef.current;
-      // Audit C148 — confirming from the Empty State unmounts the trigger button
-      // (the first window replaces the empty state), so focusing it silently
-      // dropped keyboard focus to <body>. Fall back to the freshly created top
-      // window (focusable via tabIndex={-1}) or the New-window FAB — the same
-      // deterministic targets as WindowFrame's close-with-focus-restore. The rAF
-      // waits for React to commit the new window before querying it.
-      if (trigger?.isConnected === true) {
-        trigger.focus();
-        return;
-      }
-      requestAnimationFrame(() => {
-        // MD-05: guaranteed fallback to document.body so focus never lands in
-        // limbo when neither the top window nor the FAB is in the DOM yet.
-        const next =
-          document.querySelector<HTMLElement>('.window[data-top="true"]') ??
-          document.querySelector<HTMLElement>(".ws-fab") ??
-          document.body;
-        next.focus({ preventScroll: true });
-      });
-    };
-  }, []);
 
   useEffect(() => {
     const r = requestAnimationFrame(() => {

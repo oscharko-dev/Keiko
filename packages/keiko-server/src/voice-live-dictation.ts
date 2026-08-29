@@ -44,6 +44,7 @@ import {
   type AliveControlSocket,
   type VoiceControlPlane,
 } from "./voice-realtime.js";
+import { getServerLogger } from "./observability/index.js";
 
 export const VOICE_LIVE_TRANSCRIBE_PATH = "/api/voice/transcribe/live";
 
@@ -51,32 +52,38 @@ const MAX_OFFER_SDP_BYTES = 256_000;
 const MAX_ID_LENGTH = 200;
 const SAFE_IDENTIFIER = /^[\x21-\x7e]+$/;
 const LIVE_DICTATION_NEGOTIATION_TIMEOUT_MS = 12_000;
+const LIVE_DICTATION_INITIAL_FRAME_TIMEOUT_MS = 5_000;
 const LANGUAGE_HINT = /^[A-Za-z]{2,3}(?:-[A-Za-z0-9]{2,8})*$/;
 const MAX_LANGUAGE_HINT_CHARS = 35;
-// KEIKO-0342: cap concurrent WebSocket dictation sessions the same way voice-realtime.ts
-// caps its control-plane sessions (MAX_ACTIVE_SESSIONS = 64), so an unbounded burst of
-// upgrades cannot exhaust the WebSocket server or the downstream transcription budget.
+// Cap only validated session.create admissions, matching voice-realtime.ts's session cap. Idle
+// sockets are bounded separately: this avoids letting pre-negotiation sockets reserve capacity.
 export const MAX_ACTIVE_LIVE_DICTATION_SESSIONS = 64;
+// A looser transport ceiling limits an upgrade flood before the initial-frame deadline can expire.
+// It deliberately permits at least 64 idle sockets plus a session admission burst (#3190).
+export const MAX_OPEN_LIVE_DICTATION_SOCKETS = MAX_ACTIVE_LIVE_DICTATION_SESSIONS * 4;
 // A rejected socket that ignores the close handshake would otherwise pin the server for
 // ws's default 30 s close timeout. Terminate after 2 s if the client has not acknowledged.
 const LIVE_DICTATION_REJECT_TERMINATE_TIMEOUT_MS = 2_000;
 
-// Pure predicate exposed for regression coverage of KEIKO-0342. Callers pass the current
-// wss.clients.size AFTER this connection has been admitted (the WebSocket server always
-// adds the socket to the clients set before onConnection fires).
-export function liveDictationSessionExceedsCap(activeClientCount: number): boolean {
-  return activeClientCount > MAX_ACTIVE_LIVE_DICTATION_SESSIONS;
+// Pure admission predicates. Socket counts include the just-admitted WebSocket; session counts do
+// not, so their boundary conditions intentionally differ.
+export function liveDictationSocketExceedsCap(openSocketCount: number): boolean {
+  return openSocketCount > MAX_OPEN_LIVE_DICTATION_SOCKETS;
+}
+
+export function liveDictationSessionAtCap(activeSessionCount: number): boolean {
+  return activeSessionCount >= MAX_ACTIVE_LIVE_DICTATION_SESSIONS;
 }
 
 // ws 8.x emits 'error' on the WebSocket for a protocol error during close; an unhandled event
-// terminates the Node process. Attach a NOOP listener BEFORE close(1013), then fall back to
+// terminates the Node process. Attach a NOOP listener before close(), then fall back to
 // terminate() after a bounded grace so a stuck rejected socket cannot pin the server for ws's
 // default 30 s close-timeout. Extracted so the onConnection method stays under its LOC ceiling.
-function rejectOverCapSocket(ws: WsSocket): void {
+function closeRejectedSocket(ws: WsSocket, code: number, reason: string): void {
   ws.on("error", () => {
     // NOOP — swallow protocol errors on a socket we are already rejecting.
   });
-  ws.close(1013, "too many live-dictation sessions");
+  ws.close(code, reason);
   const terminateTimer = setTimeout(() => {
     try {
       ws.terminate();
@@ -121,6 +128,8 @@ type HostMessagePayload = DistributiveOmit<
 export interface VoiceLiveDictationPlaneDeps {
   readonly port: number;
   readonly handlerDeps: () => UiHandlerDeps;
+  // Test seam only; production keeps the bounded five-second admission deadline.
+  readonly initialFrameTimeoutMs?: number | undefined;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -296,7 +305,7 @@ function readSessionCreateFrame(
   try {
     parsed = JSON.parse(raw);
   } catch {
-    ws.close(1008, "invalid opening frame");
+    closeRejectedSocket(ws, 1008, "invalid opening frame");
     return undefined;
   }
   if (
@@ -304,13 +313,13 @@ function readSessionCreateFrame(
     !isRecord(parsed) ||
     parsed.kind !== "session.create"
   ) {
-    ws.close(1008, "expected session.create");
+    closeRejectedSocket(ws, 1008, "expected session.create");
     return undefined;
   }
   const sessionId = typeof parsed.sessionId === "string" ? parsed.sessionId : "unknown";
   if (parsed.chatContext !== undefined || parsed.persona !== undefined) {
     emitStandaloneError(ws, sessionId, "not-allowed-for-profile", redact);
-    ws.close(1008, "dialogue fields are not accepted");
+    closeRejectedSocket(ws, 1008, "dialogue fields are not accepted");
     return undefined;
   }
   return parsed as unknown as LiveSessionCreateMessage;
@@ -498,11 +507,17 @@ class VoiceLiveDictationConnection {
   }
 }
 
+interface LiveDictationConnectionState {
+  connection: VoiceLiveDictationConnection | undefined;
+  activeSession: boolean;
+}
+
 class VoiceLiveDictationPlaneImpl implements VoiceControlPlane {
   private readonly wss = new WebSocketServer({
     maxPayload: MAX_VOICE_CONTROL_FRAME_BYTES,
     noServer: true,
   });
+  private readonly activeSessionSockets = new Set<WsSocket>();
   private heartbeat: ReturnType<typeof setInterval> | undefined;
 
   constructor(private readonly planeDeps: VoiceLiveDictationPlaneDeps) {}
@@ -596,7 +611,7 @@ class VoiceLiveDictationPlaneImpl implements VoiceControlPlane {
     if (parsed === undefined) return undefined;
     const sessionId = parsed.sessionId;
     if (!isSafeIdentifier(sessionId) || !isSafeIdentifier(parsed.idempotencyKey)) {
-      ws.close(1008, "invalid session identifiers");
+      closeRejectedSocket(ws, 1008, "invalid session identifiers");
       return undefined;
     }
     if (
@@ -605,13 +620,13 @@ class VoiceLiveDictationPlaneImpl implements VoiceControlPlane {
       parsed.negotiationMode !== VOICE_PROFILE_NEGOTIATION_MODE["full-realtime"]
     ) {
       emitStandaloneError(ws, sessionId, "not-allowed-for-profile", deps.redactor);
-      ws.close(1008, "profile/negotiation mismatch");
+      closeRejectedSocket(ws, 1008, "profile/negotiation mismatch");
       return undefined;
     }
     const language = resolveRequestedTranscriptionLanguage(parsed.transcriptionLanguage);
     if (language === null) {
       emitStandaloneError(ws, sessionId, "invalid-message", deps.redactor);
-      ws.close(1008, "invalid transcription language");
+      closeRejectedSocket(ws, 1008, "invalid transcription language");
       return undefined;
     }
     return {
@@ -623,39 +638,76 @@ class VoiceLiveDictationPlaneImpl implements VoiceControlPlane {
     };
   }
 
-  private onConnection(ws: WsSocket, deps: UiHandlerDeps, correlationId: string): void {
-    this.attachHeartbeat(ws);
-    // KEIKO-0342: enforce the concurrent-connection cap after handleUpgrade admitted the
-    // socket. wss.clients already includes this new one by the time onConnection runs, so
-    // liveDictationSessionExceedsCap rejects the excess. Match voice-realtime.ts's close(1013).
-    if (liveDictationSessionExceedsCap(this.wss.clients.size)) {
-      rejectOverCapSocket(ws);
-      return;
-    }
-    const voice = resolveVoiceCapability(currentGatewayConfig(deps) ?? { providers: [] }, {
-      policyDisabled: isVoiceDisabledByPolicy(deps.env),
+  private rejectForCapacity(
+    ws: WsSocket,
+    correlationId: string,
+    reason: "active-session-cap" | "socket-cap",
+    observedCount: number,
+  ): void {
+    getServerLogger().info({
+      category: "http",
+      op: "voice.live-dictation.capacity-rejected",
+      correlationId,
+      extra: { reason, observedCount },
     });
-    let connection: VoiceLiveDictationConnection | undefined;
+    closeRejectedSocket(ws, 1013, "too many live-dictation sessions");
+  }
 
+  private startInitialFrameDeadline(
+    ws: WsSocket,
+    correlationId: string,
+  ): ReturnType<typeof setTimeout> {
+    const timer = setTimeout(() => {
+      getServerLogger().info({
+        category: "http",
+        op: "voice.live-dictation.initial-frame-timeout",
+        correlationId,
+      });
+      closeRejectedSocket(ws, 1008, "initial session frame deadline exceeded");
+    }, this.planeDeps.initialFrameTimeoutMs ?? LIVE_DICTATION_INITIAL_FRAME_TIMEOUT_MS);
+    timer.unref();
+    return timer;
+  }
+
+  private attachMessageHandler(
+    ws: WsSocket,
+    deps: UiHandlerDeps,
+    correlationId: string,
+    voice: VoiceCapabilityResolution,
+    initialFrameDeadline: ReturnType<typeof setTimeout>,
+    state: LiveDictationConnectionState,
+  ): void {
     ws.on("message", (data: RawData, isBinary: boolean) => {
       if (rawDataByteLength(data) > MAX_VOICE_CONTROL_FRAME_BYTES) {
-        ws.close(1009, "control frame too large");
+        closeRejectedSocket(ws, 1009, "control frame too large");
         return;
       }
       const raw = rawDataToString(data, isBinary);
       if (raw === undefined) {
-        ws.close(1003, "binary frames are not permitted on the control plane");
+        closeRejectedSocket(ws, 1003, "binary frames are not permitted on the control plane");
         return;
       }
-      if (connection !== undefined) {
-        void connection.receive(raw);
+      if (state.connection !== undefined) {
+        void state.connection.receive(raw);
         return;
       }
       const session = this.resolveSession(ws, deps, voice, raw);
       if (session === undefined) {
         return;
       }
-      connection = new VoiceLiveDictationConnection(
+      if (liveDictationSessionAtCap(this.activeSessionSockets.size)) {
+        this.rejectForCapacity(
+          ws,
+          correlationId,
+          "active-session-cap",
+          this.activeSessionSockets.size,
+        );
+        return;
+      }
+      this.activeSessionSockets.add(ws);
+      clearTimeout(initialFrameDeadline);
+      state.activeSession = true;
+      state.connection = new VoiceLiveDictationConnection(
         ws,
         session,
         this.buildNegotiate(deps, session.transcriptionLanguage),
@@ -663,15 +715,37 @@ class VoiceLiveDictationPlaneImpl implements VoiceControlPlane {
         deps.diagnostics,
         correlationId,
       );
-      connection.start();
+      state.connection.start();
     });
+  }
 
+  private attachCloseHandler(
+    ws: WsSocket,
+    initialFrameDeadline: ReturnType<typeof setTimeout>,
+    state: LiveDictationConnectionState,
+  ): void {
     ws.on("close", () => {
-      connection?.dispose();
+      clearTimeout(initialFrameDeadline);
+      if (state.activeSession) this.activeSessionSockets.delete(ws);
+      state.connection?.dispose();
     });
+  }
 
+  private onConnection(ws: WsSocket, deps: UiHandlerDeps, correlationId: string): void {
+    if (liveDictationSocketExceedsCap(this.wss.clients.size)) {
+      this.rejectForCapacity(ws, correlationId, "socket-cap", this.wss.clients.size);
+      return;
+    }
+    this.attachHeartbeat(ws);
+    const voice = resolveVoiceCapability(currentGatewayConfig(deps) ?? { providers: [] }, {
+      policyDisabled: isVoiceDisabledByPolicy(deps.env),
+    });
+    const initialFrameDeadline = this.startInitialFrameDeadline(ws, correlationId);
+    const state: LiveDictationConnectionState = { activeSession: false, connection: undefined };
+    this.attachMessageHandler(ws, deps, correlationId, voice, initialFrameDeadline, state);
+    this.attachCloseHandler(ws, initialFrameDeadline, state);
     ws.on("error", () => {
-      ws.close(1011, "live dictation control plane error");
+      closeRejectedSocket(ws, 1011, "live dictation control plane error");
     });
   }
 }

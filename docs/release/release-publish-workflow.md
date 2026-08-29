@@ -241,6 +241,14 @@ The release stabilization flow uses a dedicated branch for release-only hardenin
 - Immediately back-merge `release/0.3` into `dev` so next-cycle work can continue with stable
   fixes included.
 
+`release/0.3` branch protection is an operational part of that contract. Its required checks are
+`ci`, `workflow hygiene`, `Analyze (actions)`, `Analyze (javascript-typescript)`, `Build, scan,
+SBOM, smoke`, `ui`, and `Review dependency diff (dev/main)`, each bound to the GitHub Actions app.
+It also requires an up-to-date head, signed commits, resolved conversations, and linear history;
+force pushes and branch deletion remain disabled. Do not derive this list from the tag workflow:
+the dependency-diff check runs only for pull requests and must remain protected on every release
+branch even though a tag cannot emit it.
+
 ## Gates
 
 The tag verification job is dependency-free after checkout and Node setup:
@@ -443,6 +451,9 @@ The tag-push release verification waits only for checks emitted on the release c
 Review remains a required PR gate, but it is not listed in `RELEASE_REQUIRED_CHECKS` because it is
 `pull_request`-only and GitHub does not emit it on the tagged squash commit. This avoids the
 manual commit-status mirroring that previously made patch releases slow and error-prone.
+
+This exception is limited to tag verification. `release/0.3` PR branch protection must continue to
+require `Review dependency diff (dev/main)` before a hotfix can merge.
 
 The GitHub Release entry is owned by `scripts/release-publish.mjs`; do not create it manually as
 a separate step. Default user-facing bullets omit issue and PR numbers. Catalog ids, approval

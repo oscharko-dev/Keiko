@@ -157,6 +157,16 @@ describe("LeftRail — workspace tool buttons", () => {
     );
   });
 
+  it("uses the dedicated governed-coding Lift glyph at the 19px navigation size (#2694)", () => {
+    renderRail();
+    const button = screen.getByRole("button", { name: "Coding Workbench" });
+    const icon = button.querySelector("svg");
+    expect(icon).toHaveAttribute("width", "19");
+    expect(icon).toHaveAttribute("aria-hidden", "true");
+    expect(icon?.querySelector('path[d*="M16.4 6.5"]')).toBeInTheDocument();
+    expect(icon?.querySelector('path[d*="M13.5 5.5"]')).not.toBeInTheDocument();
+  });
+
   it("marks the Git button pressed when its window is open", () => {
     renderRail(new Set(["governedGit"]));
     expect(screen.getByRole("button", { name: "Git" })).toHaveAttribute("aria-pressed", "true");

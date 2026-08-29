@@ -54,6 +54,7 @@ export type {
   MemoryRetentionHint,
   MemoryStructuredPayload,
   MemoryStructuredPayloadKind,
+  MemoryUpdatePreImage,
   MemoryValidityInterval,
 } from "./memory-records.js";
 export { MEMORY_STRUCTURED_PAYLOAD_KINDS } from "./memory-records.js";

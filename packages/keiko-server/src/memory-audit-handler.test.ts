@@ -158,6 +158,126 @@ describe("createMemoryAuditHandler", () => {
     });
   });
 
+  it("classifies the first post-restart transitions from seeded body-free pre-images", () => {
+    const store = createInMemoryEvidenceStore();
+    const handler = createMemoryAuditHandler({
+      evidenceStore: store,
+      redactString: identityRedact,
+      now: () => FIXED_NOW,
+      newEventId: makeIdFactory(),
+    });
+    const archived = makeRecord({ id: brandedMemoryId("mem-archived"), status: "accepted" });
+    const accepted = makeRecord({ id: brandedMemoryId("mem-accepted"), status: "proposed" });
+    const rejected = makeRecord({ id: brandedMemoryId("mem-rejected"), status: "proposed" });
+    const pinned = makeRecord({ id: brandedMemoryId("mem-pinned"), status: "accepted" });
+
+    handler.seed([archived, accepted, rejected, pinned]);
+    handler({ kind: "memory:updated", record: { ...archived, status: "archived" } });
+    handler({ kind: "memory:updated", record: { ...accepted, status: "accepted" } });
+    handler({ kind: "memory:updated", record: { ...rejected, status: "rejected" } });
+    handler({ kind: "memory:updated", record: { ...pinned, pinned: true } });
+
+    expect(readEvents(store, FIXED_NOW).map((event) => event.kind)).toEqual([
+      "memory:archived",
+      "memory:accepted",
+      "memory:rejected",
+      "memory:pinned",
+    ]);
+  });
+
+  it("keeps an unrelated update to a seeded archived record as memory:updated", () => {
+    const store = createInMemoryEvidenceStore();
+    const handler = createMemoryAuditHandler({
+      evidenceStore: store,
+      redactString: identityRedact,
+      now: () => FIXED_NOW,
+      newEventId: makeIdFactory(),
+    });
+    const archived = makeRecord({ status: "archived" });
+
+    handler.seed([archived]);
+    handler({ kind: "memory:updated", record: { ...archived, tags: ["metadata-change"] } });
+
+    expect(readEvents(store, FIXED_NOW).map((event) => event.kind)).toEqual(["memory:updated"]);
+  });
+
+  it("classifies an unpin from a seeded body-free pre-image", () => {
+    const store = createInMemoryEvidenceStore();
+    const handler = createMemoryAuditHandler({
+      evidenceStore: store,
+      redactString: identityRedact,
+      now: () => FIXED_NOW,
+      newEventId: makeIdFactory(),
+    });
+    const pinned = makeRecord({ pinned: true });
+
+    handler.seed([pinned]);
+    handler({ kind: "memory:updated", record: { ...pinned, pinned: false } });
+
+    expect(readEvents(store, FIXED_NOW).map((event) => event.kind)).toEqual(["memory:unpinned"]);
+  });
+
+  it("rejects a second empty seed instead of discarding live transition state", () => {
+    const store = createInMemoryEvidenceStore();
+    const handler = createMemoryAuditHandler({
+      evidenceStore: store,
+      redactString: identityRedact,
+      now: () => FIXED_NOW,
+      newEventId: makeIdFactory(),
+    });
+    const proposed = makeRecord({ status: "proposed" });
+
+    handler.seed([proposed]);
+    expect((): void => {
+      handler.seed([]);
+    }).toThrow("may only be called once");
+    handler({ kind: "memory:updated", record: { ...proposed, status: "accepted" } });
+
+    expect(readEvents(store, FIXED_NOW).map((event) => event.kind)).toEqual(["memory:accepted"]);
+  });
+
+  it("rejects a first seed after event processing instead of clearing live transition state", () => {
+    const store = createInMemoryEvidenceStore();
+    const handler = createMemoryAuditHandler({
+      evidenceStore: store,
+      redactString: identityRedact,
+      now: () => FIXED_NOW,
+      newEventId: makeIdFactory(),
+    });
+    const proposed = makeRecord({ status: "proposed" });
+
+    handler({ kind: "memory:inserted", record: proposed });
+    expect((): void => {
+      handler.seed([]);
+    }).toThrow("may only be called once before mutations");
+    handler({ kind: "memory:updated", record: { ...proposed, status: "accepted" } });
+
+    expect(readEvents(store, FIXED_NOW).map((event) => event.kind)).toEqual([
+      "memory:proposed",
+      "memory:accepted",
+    ]);
+  });
+
+  it("prefers the vault's transactional pre-image over a stale seeded cache", () => {
+    const store = createInMemoryEvidenceStore();
+    const handler = createMemoryAuditHandler({
+      evidenceStore: store,
+      redactString: identityRedact,
+      now: () => FIXED_NOW,
+      newEventId: makeIdFactory(),
+    });
+    const accepted = makeRecord({ status: "accepted" });
+
+    handler.seed([accepted]);
+    handler({
+      kind: "memory:updated",
+      record: { ...accepted, status: "archived" },
+      previous: { id: accepted.id, status: "proposed", pinned: false },
+    });
+
+    expect(readEvents(store, FIXED_NOW).map((event) => event.kind)).toEqual(["memory:archived"]);
+  });
+
   it("keeps audit hashes independent of runtime locale collation", () => {
     const localeCompare = vi.spyOn(String.prototype, "localeCompare").mockImplementation(() => {
       throw new Error("locale collation must not participate in canonical hashes");

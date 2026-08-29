@@ -4,8 +4,10 @@
 
 import { describe, expect, it } from "vitest";
 import {
-  liveDictationSessionExceedsCap,
+  liveDictationSessionAtCap,
+  liveDictationSocketExceedsCap,
   MAX_ACTIVE_LIVE_DICTATION_SESSIONS,
+  MAX_OPEN_LIVE_DICTATION_SOCKETS,
   resolveRequestedTranscriptionLanguage,
 } from "./voice-live-dictation.js";
 
@@ -27,15 +29,16 @@ describe("resolveRequestedTranscriptionLanguage", () => {
   });
 });
 
-describe("liveDictationSessionExceedsCap (KEIKO-0342)", () => {
-  it("mirrors the sibling voice-realtime cap and rejects only after the cap+1th admission", () => {
-    // The admission check runs after the new socket is already in wss.clients, so the
-    // predicate returns true only when the observed count STRICTLY exceeds the cap.
-    // Matching voice-realtime.ts's MAX_ACTIVE_SESSIONS (64) is the shape the finding
-    // called out; a future divergence would trip this pin.
+describe("live dictation admission limits (#3190)", () => {
+  it("caps only validated sessions at the sibling realtime limit", () => {
     expect(MAX_ACTIVE_LIVE_DICTATION_SESSIONS).toBe(64);
-    expect(liveDictationSessionExceedsCap(MAX_ACTIVE_LIVE_DICTATION_SESSIONS - 1)).toBe(false);
-    expect(liveDictationSessionExceedsCap(MAX_ACTIVE_LIVE_DICTATION_SESSIONS)).toBe(false);
-    expect(liveDictationSessionExceedsCap(MAX_ACTIVE_LIVE_DICTATION_SESSIONS + 1)).toBe(true);
+    expect(liveDictationSessionAtCap(MAX_ACTIVE_LIVE_DICTATION_SESSIONS - 1)).toBe(false);
+    expect(liveDictationSessionAtCap(MAX_ACTIVE_LIVE_DICTATION_SESSIONS)).toBe(true);
+  });
+
+  it("keeps a separate, looser cap on raw sockets", () => {
+    expect(MAX_OPEN_LIVE_DICTATION_SOCKETS).toBe(MAX_ACTIVE_LIVE_DICTATION_SESSIONS * 4);
+    expect(liveDictationSocketExceedsCap(MAX_OPEN_LIVE_DICTATION_SOCKETS)).toBe(false);
+    expect(liveDictationSocketExceedsCap(MAX_OPEN_LIVE_DICTATION_SOCKETS + 1)).toBe(true);
   });
 });

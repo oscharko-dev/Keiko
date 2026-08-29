@@ -100,6 +100,7 @@ import {
   type ServerDiagnosticSink,
   type ServerDiagnosticSummary,
 } from "./diagnostics-log.js";
+import { UNKNOWN_CORRELATION_ID } from "./correlation.js";
 import { processServerLogSink } from "./process-log-sink.js";
 import type { CodexSubscriptionProfileCoordinator } from "./coding-codex-subscription.js";
 import {
@@ -147,7 +148,11 @@ import {
 import { createBrowserSessionManager, type BrowserSessionManager } from "@oscharko-dev/keiko-tools";
 import { type MemoryVaultStore } from "@oscharko-dev/keiko-memory-vault";
 import type { CapturePolicyOptions } from "@oscharko-dev/keiko-memory-capture";
-import type { MemoryReviewerId, MemoryScope } from "@oscharko-dev/keiko-contracts/memory";
+import type {
+  MemoryRecord,
+  MemoryReviewerId,
+  MemoryScope,
+} from "@oscharko-dev/keiko-contracts/memory";
 import { createBffMemoryVault } from "./memory-handlers.js";
 import {
   createMemoryAuditDeleteCommitHandler,
@@ -1763,9 +1768,10 @@ function buildMemoryVault(
   redactString: (value: string) => string,
   evidenceStore: EvidenceStore,
   env: EnvSource,
+  diagnostics: ServerDiagnosticSink | undefined,
 ): MemoryVaultStore {
   const postCommitAudit = createMemoryAuditHandler({ evidenceStore, redactString });
-  return createBffMemoryVault(
+  const vault = createBffMemoryVault(
     redactString,
     // #214 — wire every successful vault mutation into the audit ledger. The handler
     // shares the same redactString closure as the live-payload redactor so audit
@@ -1779,6 +1785,35 @@ function buildMemoryVault(
     createMemoryAuditDeleteCommitHandler({ evidenceStore, redactString }),
     env,
   );
+  // Issue #3189 — seed only the transition classifier's body-free pre-image fields after the
+  // vault exists and before this composition returns it to mutation routes. This keeps the first
+  // post-restart archive/accept/reject/pin mutation semantically classified without retaining
+  // memory bodies in the audit bridge.
+  let records: readonly Pick<MemoryRecord, "id" | "status" | "pinned">[] = [];
+  try {
+    records = vault
+      .listMemoryScopes()
+      .flatMap((scope) => vault.listMemoryMetadataByScope(scope, { includeExpired: true }));
+  } catch (error) {
+    // The seed is an optimisation for pre-image-free adapters, not a boot prerequisite. The vault
+    // now supplies transactional body-free pre-images for its own mutations, so a corrupt legacy
+    // scope must preserve the documented conservative `memory:updated` fallback rather than make
+    // the entire local server unavailable.
+    emitCompositionDiagnostic(
+      diagnostics,
+      "memory-audit.state-cache.seed",
+      "Audit or evidence persistence failed.",
+      error,
+    );
+  }
+  postCommitAudit.seed(records);
+  processServerLogSink().write({
+    category: "memory",
+    op: "memory.audit.state-cache.seeded",
+    correlationId: UNKNOWN_CORRELATION_ID,
+    extra: { recordCount: records.length },
+  });
+  return vault;
 }
 
 // Issue #539: the relationship engine runs server-authoritative scope checks on every route.
@@ -2785,7 +2820,12 @@ function buildPeripherals(args: BuildPeripheralsArgs): PeripheralManagers {
     diagnostics: args.options.diagnostics,
     redactString: args.redactString,
   });
-  const memoryVault = buildMemoryVault(args.redactString, args.evidenceStore, args.options.env);
+  const memoryVault = buildMemoryVault(
+    args.redactString,
+    args.evidenceStore,
+    args.options.env,
+    args.options.diagnostics,
+  );
   const { workspaceScriptTrust, managedLspControl, disposeTrustLspBridge } =
     resolveTrustAndManagedLspControl(args);
   const debugActivationControl = buildDebugActivationControl(args);

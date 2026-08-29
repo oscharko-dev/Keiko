@@ -213,6 +213,7 @@
     "gates:local:shell": "docker compose -f docker/gates/docker-compose.yml run --rm gates bash",
     "check:coverage:new-code": "node scripts/check-new-code-coverage.mjs",
     "report:settlement-latency": "node scripts/report-settlement-latency.mjs",
+    "report:infra-failure-observation": "node scripts/report-infra-failure-observation.mjs",
     "check:sonar-rules": "node scripts/check-sonar-rules.mjs",
     "check:osv-waiver-scope": "node scripts/check-osv-waiver-scope.mjs"
   },

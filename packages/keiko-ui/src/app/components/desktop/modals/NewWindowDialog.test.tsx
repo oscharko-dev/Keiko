@@ -201,6 +201,58 @@ describe("NewWindowDialog: no Keiko-Mode coming-soon toggle (#146 GAP-C3)", () =
 // target — document.body is the guaranteed last resort when neither the top
 // window nor the FAB is present in the DOM.
 describe("NewWindowDialog: focus-restoration guaranteed fallback (MD-05)", () => {
+  it("restores the opener captured before the lazy dialog mounts", () => {
+    const opener = document.createElement("button");
+    document.body.appendChild(opener);
+    opener.focus();
+    const capturedOpener = document.activeElement as HTMLElement;
+    capturedOpener.blur();
+
+    const { unmount } = render(
+      <NewWindowDialog
+        type="chat"
+        types={WIN_TYPES}
+        opener={capturedOpener}
+        onConfirm={vi.fn()}
+        onClose={vi.fn()}
+      />,
+    );
+    unmount();
+
+    expect(document.activeElement).toBe(opener);
+    opener.remove();
+  });
+
+  it("waits for AppShell to unlock an inert opener before restoring focus", async () => {
+    const background = document.createElement("div");
+    background.className = "app";
+    background.setAttribute("inert", "");
+    const opener = document.createElement("button");
+    background.appendChild(opener);
+    document.body.appendChild(background);
+    const nativeFocus = opener.focus.bind(opener);
+    const focus = vi.spyOn(opener, "focus").mockImplementation(() => {
+      if (!background.hasAttribute("inert")) nativeFocus();
+    });
+
+    const { unmount } = render(
+      <NewWindowDialog
+        type="chat"
+        types={WIN_TYPES}
+        opener={opener}
+        onConfirm={vi.fn()}
+        onClose={vi.fn()}
+      />,
+    );
+    unmount();
+    background.removeAttribute("inert");
+
+    await waitFor(() => expect(document.activeElement).toBe(opener));
+    expect(focus).toHaveBeenCalledTimes(1);
+    focus.mockRestore();
+    background.remove();
+  });
+
   it("focuses document.body when no top-window or FAB is available on close", () => {
     // Ensure no stray .window[data-top=true] or .ws-fab elements exist.
     expect(document.querySelector('.window[data-top="true"]')).toBeNull();
@@ -215,6 +267,28 @@ describe("NewWindowDialog: focus-restoration guaranteed fallback (MD-05)", () =>
     // Without the guaranteed fallback, focus would land in limbo (null activeElement
     // on some browsers); with it, document.body is always the fallback.
     expect(document.activeElement).toBe(document.body);
+  });
+
+  it("does not treat document.body as a valid opener and uses the deterministic FAB fallback", async () => {
+    const fab = document.createElement("button");
+    fab.className = "ws-fab";
+    document.body.appendChild(fab);
+
+    const { unmount } = render(
+      <NewWindowDialog
+        type="chat"
+        types={WIN_TYPES}
+        opener={document.body}
+        onConfirm={vi.fn()}
+        onClose={vi.fn()}
+      />,
+    );
+    unmount();
+
+    await waitFor(() => {
+      expect(document.activeElement).toBe(fab);
+    });
+    fab.remove();
   });
 });
 
