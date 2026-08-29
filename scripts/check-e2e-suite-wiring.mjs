@@ -1250,11 +1250,22 @@ export function normalizeApiPathReference(raw) {
 // `request.post("/api/x")` and friends. The verb is the call site's own, so it is read from there
 // rather than guessed — an interception glob or a bare string carries no method and stays
 // path-only, which is what `undefined` means downstream.
-const REQUEST_VERB = /\b(?:request|page)\.(get|post|put|patch|delete)\(\s*[`'"]?[^`'")]*$/u;
+// Two anchored, non-overlapping pieces rather than one pattern that has to span the call AND the
+// gap to the path: the combined form ended in `\s*[`'"]?[^`'")]*$`, whose overlapping quantifiers
+// backtrack super-linearly on adversarial input (sonarjs S8786).
+const REQUEST_VERB = /\b(?:request|page)\.(get|post|put|patch|delete)\(/gu;
+const ONLY_OPENING_QUOTE = /^[\s"'`]*$/u;
 
 function referenceMethod(source, at) {
-  const verb = REQUEST_VERB.exec(source.slice(Math.max(0, at - 120), at))?.[1];
-  return verb === undefined ? undefined : verb.toUpperCase();
+  const window = source.slice(Math.max(0, at - 120), at);
+  let call;
+  for (const match of window.matchAll(REQUEST_VERB)) call = match;
+  if (call === undefined) return undefined;
+  // The call counts only when it is THIS path's own: nothing but whitespace and the opening quote
+  // may sit between them, or an earlier call in the window would name a later literal's method.
+  const between = window.slice((call.index ?? 0) + call[0].length);
+  if (!ONLY_OPENING_QUOTE.test(between)) return undefined;
+  return call[1].toUpperCase();
 }
 
 export function apiPathReferences(source) {

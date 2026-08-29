@@ -269,9 +269,26 @@ async function rootTabIsSelected(tab: Locator): Promise<boolean> {
  * been issued: under the bootstrap race described in `rootTabIsSelected`, the click and the
  * bootstrap's own selection can land in either order, and only the end state is stable.
  */
-async function selectRootTab(tab: Locator): Promise<void> {
+async function selectRootTab(tab: Locator, raisedPrompt?: Locator): Promise<void> {
   if (!(await rootTabIsSelected(tab))) await tab.click();
-  await expect(tab).toHaveAttribute("aria-selected", "true", { timeout: ROOT_TAB_TIMEOUT_MS });
+  // The selection is witnessed by `aria-selected` — UNLESS the click raised the workspace-trust
+  // prompt. That dialog is `aria-modal`, so the tab it just selected leaves the accessibility tree
+  // and the attribute becomes unobservable: the assertion then fails with "element(s) not found"
+  // on a tab that is in the DOM and correctly selected. This is the same mechanism the caller
+  // below was fixed for, one call deeper, and it survived because the attribute is sometimes
+  // readable in the window before the dialog mounts — a race, not a stable pass.
+  //
+  // So an open prompt counts as the selection having taken, because it is the selection's own
+  // consequence. A caller that cannot raise one passes no locator and the attribute still decides.
+  await expect
+    .poll(
+      async () => {
+        if (raisedPrompt !== undefined && (await raisedPrompt.isVisible())) return true;
+        return (await tab.count()) > 0 && (await tab.getAttribute("aria-selected")) === "true";
+      },
+      { timeout: ROOT_TAB_TIMEOUT_MS },
+    )
+    .toBe(true);
 }
 
 async function restrictBetaAndExpectAlphaTrusted(page: Page): Promise<void> {
@@ -290,7 +307,7 @@ async function restrictBetaAndExpectAlphaTrusted(page: Page): Promise<void> {
   // accessibility tree is both impossible and unnecessary.
   if (!(await prompt.isVisible())) {
     // Bootstrap focused Alpha instead: Beta is reachable, and selecting it raises its prompt.
-    await selectRootTab(page.getByRole("tab", { name: /M11 Root Beta/u }));
+    await selectRootTab(page.getByRole("tab", { name: /M11 Root Beta/u }), prompt);
   }
   await expect(prompt).toBeVisible();
   await prompt.getByRole("button", { name: "Stay restricted" }).click();
