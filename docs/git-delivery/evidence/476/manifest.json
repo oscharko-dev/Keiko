@@ -5,12 +5,13 @@
   "appPath": "packaged-cli-ui",
   "route": "/",
   "evidencePath": "docs/git-delivery/evidence/476",
-  "generatedAt": "2026-06-27T11:34:45.711Z",
+  "generatedAt": "2026-08-28T19:29:57.543Z",
   "governedRoutes": ["/api/git-delivery/push/preview", "/api/git-delivery/push/execute"],
   "windowRegistration": {
     "kind": "governedGit",
     "seededVia": "keiko.workspace.v4",
-    "renderedBy": "GovernedGitFlowCard (Publish section)"
+    "renderedBy": "GitClientWindow (sync control)",
+    "cfgPersistence": "fs-reference"
   },
   "assertions": {
     "packagedUiLoaded": true,
@@ -18,17 +19,20 @@
     "protectedTargetPreviewSurfacesPolicyBlock": true,
     "publishPathSurfacesGovernedBlock": true,
     "blockReasonIsPolicyPackBlocked": true,
+    "blockedTargetNeverReachesExecute": true,
     "browserReachedGovernedPushExecuteRoute": true,
     "safeNamespaceTargetReachesSucceeded": true
   },
   "requestLedger": {
-    "previewRequests": 1,
-    "executeRequests": 2
+    "previewRequests": 2,
+    "executeRequests": 1
   },
   "notes": [
     "Real packaged CLI UI; governedGit window rendered through the real WindowsRegistry.",
-    "Push routes intercepted with governed JSON for determinism; routing enforcement is proven by the integration/route/contract suites.",
-    "The UI exposes no force-publish escape: the Push button always routes through /push/execute and renders its governed response verbatim."
+    "Read surface and push routes intercepted with governed JSON for determinism; routing enforcement is proven by the integration/route/contract suites.",
+    "The push target is derived from repository state, so the protected and safe cases are two intercepted summaries rather than two typed field values.",
+    "The UI exposes no force-publish escape: a blocked push preview short-circuits before /push/execute, and the sync control offers no other publish affordance.",
+    "browserReachedGovernedPushExecuteRoute is proven by the safe-namespace control, which is the only path on which execute may be called at all."
   ],
   "artifacts": ["manifest.json", "governed-publish-block.png"]
 }

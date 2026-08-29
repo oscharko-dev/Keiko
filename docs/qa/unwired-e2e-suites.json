@@ -1,13 +1,12 @@
 {
-  "purpose": "Suites that exist as npm scripts but run in no workflow lane, and Playwright configs that have no owning npm script at all. A debt register, not an exemption list: scripts/check-e2e-suite-wiring.mjs fails on any suite or config missing from here, and fails again on any entry that has since been wired, given a script, or deleted, so these lists can only shrink. suiteProtection records the strongest concrete event class for every E2E script; any change to that class fails the gate until the baseline is updated through an explicit reviewed change.",
-  "recordedBy": "#2629 (epic #2285 Wave 2); configsWithoutScript added by #2891 (audit KEIKO-0077); suiteProtection added by #3120 (audits KEIKO-0151 and KEIKO-0256)",
+  "purpose": "Suites that exist as npm scripts but run in no workflow lane, Playwright configs that have no owning npm script at all, spec files no script can reach, and /api paths a spec names that this server deliberately does not mount. A debt register, not an exemption list: scripts/check-e2e-suite-wiring.mjs fails on any suite, config, spec or path missing from here, and fails again on any entry that has since been wired, given a script, made reachable, mounted, or deleted, so these lists can only shrink. suiteProtection records the strongest concrete event class for every E2E script; any change to that class fails the gate until the baseline is updated through an explicit reviewed change.",
+  "recordedBy": "#2629 (epic #2285 Wave 2); configsWithoutScript added by #2891 (audit KEIKO-0077); suiteProtection added by #3120 (audits KEIKO-0151 and KEIKO-0256); specsWithoutLane and externalApiPaths added by #2955 (audits KEIKO-0078, KEIKO-0080, KEIKO-0094)",
   "note": "Every entry predates the gate that records it; none was added to silence a failure. Wiring one is a CI-minute decision owned by the suite area, not by this file. The creation date is in git history rather than duplicated here, where it could only drift. test:e2e:editor-perf is deliberate: it is driven by the D12 evidence regeneration flow (docs/qa/perf-evidence.md), not by a lane.",
   "suites": [
     "test:e2e:coding-workbench-1990",
     "test:e2e:coding-workbench-1991",
     "test:e2e:coding-workbench-1992",
     "test:e2e:coding-workbench-1994",
-    "test:e2e:editor-agent-docking-2122",
     "test:e2e:editor-fidelity-1295",
     "test:e2e:editor-fidelity-1296",
     "test:e2e:editor-perf",
@@ -20,6 +19,7 @@
     "test:e2e:workspace-selection-2060"
   ],
   "suiteProtection": {
+    "test:e2e:assistive-surfaces": "scheduled-nonblocking",
     "test:e2e:code-task-research-2387": "scheduled-nonblocking",
     "test:e2e:code-task:authority": "scheduled-nonblocking",
     "test:e2e:code-task:opencode-tracer": "scheduled-nonblocking",
@@ -29,7 +29,6 @@
     "test:e2e:coding-workbench-1992": "unwired",
     "test:e2e:coding-workbench-1994": "unwired",
     "test:e2e:coding-workbench-2253": "scheduled-nonblocking",
-    "test:e2e:editor-agent-docking-2122": "unwired",
     "test:e2e:editor-agent-pins": "scheduled-nonblocking",
     "test:e2e:editor-baseline-1377": "scheduled-nonblocking",
     "test:e2e:editor-chat-2119": "scheduled-nonblocking",
@@ -58,6 +57,7 @@
     "test:e2e:merge-governance-478": "scheduled-nonblocking",
     "test:e2e:multi-root-editor-2525": "scheduled-nonblocking",
     "test:e2e:multi-root-search-2526": "scheduled-nonblocking",
+    "test:e2e:operations-surfaces": "scheduled-nonblocking",
     "test:e2e:per-root-settings-2527": "scheduled-nonblocking",
     "test:e2e:pr-command-center-477": "scheduled-nonblocking",
     "test:e2e:profile-portability-2529": "scheduled-nonblocking",
@@ -67,6 +67,7 @@
     "test:e2e:workspace-perf": "push-nonblocking",
     "test:e2e:workspace-search-2090": "unwired",
     "test:e2e:workspace-selection-2060": "unwired",
+    "test:e2e:workspace-surfaces": "scheduled-nonblocking",
     "test:e2e:workspace-trust-2523": "scheduled-nonblocking"
   },
   "configsWithoutScriptNote": "A config with no owning script is less runnable than a suite that merely runs in no lane: nothing can even name it, so the suites list above cannot see it. Each entry states why a script would be wrong today rather than merely absent. Adding the script is the fix; recording it here is the interim. Reasons are in configsWithoutScriptReasons, keyed by the same file name.",
@@ -75,7 +76,18 @@
     "playwright.issue-1405-human-loop.config.ts"
   ],
   "configsWithoutScriptReasons": {
-    "playwright.code-task-real-binary.config.ts": "Issue #2483 \u2014 drives code-task-authority.spec.ts against a staged, approved real OpenCode payload discovered through the production macOS dev-lane path, with no resolver/supervisor/KEIKO_OPENCODE_REAL_* seam to substitute. It requires that payload staged on the machine, so it is operator-run on a prepared checkout; a hosted runner has nothing to discover and the script could only ever fail.",
+    "playwright.code-task-real-binary.config.ts": "Issue #2483 — drives code-task-authority.spec.ts against a staged, approved real OpenCode payload discovered through the production macOS dev-lane path, with no resolver/supervisor/KEIKO_OPENCODE_REAL_* seam to substitute. It requires that payload staged on the machine, so it is operator-run on a prepared checkout; a hosted runner has nothing to discover and the script could only ever fail.",
     "playwright.issue-1405-human-loop.config.ts": "human-loop-1405.spec.ts renders a hand-authored HTML replica instead of driving the real app or the real AgentGateCard (open finding KEIKO-0140 / GEN-TEST-E2E-003). Giving it a script and a lane would gate on a fixture already known not to exercise the component it claims to cover. The script lands when that finding is repaired or the suite is rewritten."
+  },
+  "specsWithoutLaneNote": "A spec file declares nothing about how it runs, so before #2955 nothing enumerated tests/e2e/*.spec.ts at all and eleven specs sat there reachable from no script. A spec is reachable when a test:e2e:* command names its path, a config's LITERAL testMatch names it, or the command greps a tag the spec declares. The shared config's \"**/*.spec.ts\" glob does NOT count: it collects every spec in the tree while its only script greps @smoke, so honouring it would report total coverage over a lane that runs eight. Each entry states why no lane can run it yet; reasons are in specsWithoutLaneReasons, keyed by the same file name.",
+  "specsWithoutLane": ["human-loop-1405.spec.ts"],
+  "specsWithoutLaneReasons": {
+    "human-loop-1405.spec.ts": "The same open finding that keeps its config scriptless (KEIKO-0140 / GEN-TEST-E2E-003, see configsWithoutScriptReasons for playwright.issue-1405-human-loop.config.ts): the spec renders a hand-authored HTML replica instead of driving the real app or the real AgentGateCard. It is named only by that config, which no script runs, so it is unreachable in this dimension too. Both entries leave together when the finding is repaired or the suite is rewritten."
+  },
+  "externalApiPathsNote": "/api paths a retained spec names that no route in the server's API_ROUTES table serves. The gate reads that table from the BUILT packages/keiko-server/dist rather than re-deriving it from routes.ts, because the table is composed from route groups — some built by factory calls, and at least one defined but deliberately never spread — so a source scan would bless routes the product does not mount. An entry here is a path that is deliberately not an HTTP route, not an excuse for a stale journey; reasons are in externalApiPathReasons.",
+  "externalApiPaths": ["/api/desktop/chat/voice-turn", "/api/voice/control"],
+  "externalApiPathReasons": {
+    "/api/voice/control": "The realtime voice control plane is a WebSocket UPGRADE path (VOICE_CONTROL_PATH in packages/keiko-server/src/voice-realtime.ts, re-opened for loopback in server.ts), not an entry in API_ROUTES. voice-realtime.smoke.spec.ts and voice-dialogue.smoke.spec.ts name it to recognise and stub that socket, never to issue an HTTP request against it.",
+    "/api/desktop/chat/voice-turn": "Deliberately UNMOUNTED, and asserted as such: packages/keiko-server/src/routes.test.ts pins that no provider-native realtime assistant tool route is registered. voice-dialogue.smoke.spec.ts names the path to prove the browser never calls it — the reference is the negative assertion itself, so a mounted route would be the defect."
   }
 }

@@ -314,7 +314,11 @@ jobs:
           fi
           npm run check:ui-i18n
       - run: npm run check:adr-index
-      - name: End-to-end suite wiring gate (#2629)
+      - name: End-to-end suite wiring gate (#2629, #2955)
+        # Runs after `npm run typecheck` (which builds packages) on purpose: since #2955 the gate
+        # resolves every /api literal in tests/e2e against the server's REAL API_ROUTES table, read
+        # from packages/keiko-server/dist. Move this step above the build and it fails closed with
+        # "could not be loaded" rather than silently skipping the invariant.
         run: npm run check:e2e-suite-wiring
       - run: npm run arch:check
       - run: npm run arch:check:negative

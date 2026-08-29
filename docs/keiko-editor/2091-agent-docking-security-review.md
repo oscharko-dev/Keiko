@@ -91,7 +91,7 @@ No unresolved high or critical finding remains after these fixes.
 | Authority and capability         | missing/wrong/replayed bridge capability; expired changeset authority; delayed stream close; unknown-field smuggling               | `agentRoutes.test.ts`: bridge lease/supersession, changeset expiry, and canonical-wire tests    |
 | Atomicity                        | browser rejection; stale member; writer failure on a later member; replay; forged result                                           | `agentRoutes.test.ts`: apply-none, rollback, idempotency, and forged-result tests               |
 | Authority budgets                | cumulative tool calls and UTF-8 patch bytes; elapsed runtime; text-edit bytes; identical re-registration                           | `agentAuthorityRegistry.test.ts` and `agentRoutes.test.ts` Authority Envelope budget tests      |
-| Cross-pane reconciliation        | active-pane switching; stale retained snapshots; clean peer model; dirty/delete rechecks; bounded queue                            | route, queue, runtime, and `editor-agent-docking-2122` split-pane tests                         |
+| Cross-pane reconciliation        | active-pane switching; stale retained snapshots; clean peer model; dirty/delete rechecks; bounded queue                            | route, queue, runtime, and the `editor-agent-pins` split-pane session pin (#2955)               |
 | Diagnostics/context              | item/message caps, ingest rejection, truncation, unsafe-format stripping, redaction                                                | `editor-agent.test.ts`, `agentRoutes.test.ts`, and `codingContextProviders.test.ts`             |
 
 The credential-path case intentionally uses a well-known credential store (`.aws/credentials`). A
@@ -116,8 +116,14 @@ Review timing follows policy rather than an obsolete blanket Save rule:
 - Chat **Apply to editor** is an explicit review workflow. Accept changes the active buffer, marks it
   dirty, and requires explicit Save before that buffer reaches disk.
 
-The #2122 Playwright suite verifies all three paths plus active split-pane bridge switching and
-two-visible-model reconciliation against the real BFF and filesystem.
+`tests/e2e/editor-agent-pins.spec.ts` verifies all three paths against the real BFF and
+filesystem, and pins that a split keeps exactly ONE live agent session with the SSE bridge
+subscribed to that same session across a pane-focus change. Two-visible-model reconciliation is
+NOT covered end to end and is not currently reachable: a split moves the active tab, so proving it
+needs a changeset touching both panes' files at once, and #2256 removed the only route that could
+supply one. `packages/keiko-editor/src/components/editor-model-registry.test.ts` keeps the
+unit-level proof against a mocked Monaco. See
+[`2091-agent-docking-demo.md`](2091-agent-docking-demo.md) for the full gap statement.
 
 ## Audit and data handling
 
