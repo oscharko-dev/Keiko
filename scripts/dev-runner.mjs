@@ -325,10 +325,10 @@ export function writeAtomicUtf8File(path, contents) {
   renameSync(temporaryPath, path);
 }
 
-function writeState(extra = {}) {
-  mkdirSync(dirname(pidFile), { recursive: true });
+export function writeState(extra = {}, stateFile = pidFile) {
+  mkdirSync(dirname(stateFile), { recursive: true });
   writeAtomicUtf8File(
-    pidFile,
+    stateFile,
     `${JSON.stringify(
       {
         runnerPid: process.pid,

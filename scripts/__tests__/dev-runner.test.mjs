@@ -36,6 +36,7 @@ import {
   resolveConfiguredNextBundler,
   resolveNextBundler,
   writeAtomicUtf8File,
+  writeState,
 } from "../dev-runner.mjs";
 
 describe("atomic state persistence", () => {
@@ -57,6 +58,18 @@ describe("atomic state persistence", () => {
     writeAtomicUtf8File(stateFile, nextState);
 
     expect(JSON.parse(readFileSync(stateFile, "utf8"))).toEqual({ nextPort: 3001 });
+    expect(existsSync(`${stateFile}.${String(process.pid)}.tmp`)).toBe(false);
+  });
+
+  it("uses atomic persistence for the runner's complete state document", () => {
+    const stateFile = join(stateDirectory, "nested", "dev-ui.pid.json");
+
+    writeState({ ready: false, starting: "waiting for API and UI" }, stateFile);
+
+    expect(JSON.parse(readFileSync(stateFile, "utf8"))).toMatchObject({
+      ready: false,
+      starting: "waiting for API and UI",
+    });
     expect(existsSync(`${stateFile}.${String(process.pid)}.tmp`)).toBe(false);
   });
 });
