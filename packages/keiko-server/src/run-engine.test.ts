@@ -295,6 +295,68 @@ describe("startRun explain-plan dispatch", () => {
     expect(prompt).toContain("--- src/discounts.ts ---");
     expect(prompt).toContain("export const discount = 100;");
   });
+
+  // 2895 audit KEIKO-0902: dispatchExplain used to inject compactionPort: serverHarnessContextCompactor
+  // even though explain-plan is structurally single-call and read-only, so the port could never fire
+  // (harness-context-compactor.ts's turns.length < 2 precondition always declines). Wiring an
+  // unreachable port invites a future reader to believe this path is compaction-covered when it is
+  // not, so it was removed. This test spies on the real, unmocked keiko-harness createSession to
+  // capture the exact deps object dispatchExplain constructs, proving no compactionPort key reaches
+  // it at all — it must fail if the injection is reinstated.
+  it("does not inject a compactionPort (explain-plan is structurally single-call and read-only)", async () => {
+    mkdirSync(join(workspaceRoot, "src"));
+    writeFileSync(join(workspaceRoot, "src", "discounts.ts"), "export const discount = 100;\n");
+    vi.resetModules();
+    const actualHarness = await vi.importActual<typeof import("@oscharko-dev/keiko-harness")>(
+      "@oscharko-dev/keiko-harness",
+    );
+    const capturedDeps: Parameters<typeof actualHarness.createSession>[2][] = [];
+    vi.doMock("@oscharko-dev/keiko-harness", () => ({
+      ...actualHarness,
+      createSession: (
+        ...args: Parameters<typeof actualHarness.createSession>
+      ): ReturnType<typeof actualHarness.createSession> => {
+        capturedDeps.push(args[2]);
+        return actualHarness.createSession(...args);
+      },
+    }));
+    try {
+      const { startRun: startRunFresh } = await import("./run-engine.js");
+      const model: ModelPort = {
+        call: (request): Promise<NormalizedResponse> =>
+          Promise.resolve({
+            modelId: request.modelId,
+            content: "grounded explanation",
+            finishReason: "stop",
+            toolCalls: [],
+            structuredOutput: null,
+            usage: {
+              requestId: "req",
+              promptTokens: 1,
+              completionTokens: 1,
+              latencyMs: 1,
+              costClass: "low",
+            },
+          }),
+      };
+      const request = ok(
+        parseRunRequest(
+          JSON.stringify({
+            taskType: "explain-plan",
+            modelId: "m",
+            input: { workspaceRoot, filePath: "src/discounts.ts" },
+          }),
+        ),
+      );
+      const result = startRunFresh({ request, model, registry }, (v) => v);
+      await waitForTerminal(result.runId);
+      expect(capturedDeps).toHaveLength(1);
+      expect(capturedDeps[0]).not.toHaveProperty("compactionPort");
+    } finally {
+      vi.doUnmock("@oscharko-dev/keiko-harness");
+      vi.resetModules();
+    }
+  });
 });
 
 describe("probeNetworkIsolationSafely", () => {
