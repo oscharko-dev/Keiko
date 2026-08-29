@@ -280,6 +280,10 @@ describe("M7 keybinding, snippet, and AI activation contracts", () => {
   // unexercisable i18n keys. The product owner decided to narrow the type rather than keep it as
   // a forward declaration; this pin proves the union no longer admits either value.
   it("rejects explorer and git as EditorM7CommandScope values", () => {
+    // The assertion here is the `@ts-expect-error` directive itself, enforced by `npm run
+    // typecheck`: if either literal were ever legal again, tsc would fail on an unused
+    // `@ts-expect-error`. A runtime `expect(...).toBe(...)` on a value just assigned from the
+    // same literal would be tautological (SonarJS S5914) and prove nothing `tsc` doesn't already.
     // @ts-expect-error -- "explorer" is not a legal EditorM7CommandScope; no registered command
     // uses it, and the KeyboardShortcutsPanel branch that read it was deleted alongside the
     // "settings.keyboard.scopeExplorer" i18n key.
@@ -287,8 +291,8 @@ describe("M7 keybinding, snippet, and AI activation contracts", () => {
     // @ts-expect-error -- same for "git"; the "settings.keyboard.scopeGit" i18n key was deleted
     // alongside its branch too.
     const gitScope: EditorM7CommandScope = "git";
-    expect(explorerScope).toBe("explorer");
-    expect(gitScope).toBe("git");
+    void explorerScope;
+    void gitScope;
   });
 
   it("keeps a closed command registry and rejects reserved, malformed, unknown, and colliding bindings", () => {
