@@ -258,7 +258,11 @@ describe("createGitProcessRunner", () => {
 
         expect(result.truncated).toBe(true);
         expect(result.stdout).toBe(expectedStdout);
-        expect(result.stdout).not.toContain("�");
+        // Escaped, not a literal glyph: a literal U+FFFD in analyzable source text fails
+        // scripts/sonar-analysis-scope.mjs's sourceEncodingFailures check (source files are
+        // expected to be clean UTF-8 with no replacement characters); the escape sequence below
+        // is the identical runtime value, so the assertion itself is unchanged.
+        expect(result.stdout).not.toContain("\uFFFD");
       } finally {
         rmSync(binDir, { recursive: true, force: true });
       }
