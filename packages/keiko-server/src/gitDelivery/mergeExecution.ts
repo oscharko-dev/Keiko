@@ -41,6 +41,8 @@ import {
 } from "@oscharko-dev/keiko-tools";
 import { createNodeGitMergeAdapter } from "@oscharko-dev/keiko-tools/internal/git-mutation";
 import type { UiHandlerDeps } from "../deps.js";
+import { UNKNOWN_CORRELATION_ID } from "../correlation.js";
+import { logCommandTermination, processServerLogSink } from "../process-log-sink.js";
 import type { GitDeliveryApprovalStore } from "./approvalStore.js";
 import type { GitDeliveryTrustedPolicyPacks } from "./actionSheetProjection.js";
 import { defaultMintableRepoPack } from "./policyPackMintability.js";
@@ -97,7 +99,14 @@ function mergeAdapterFor(
   now: () => number,
 ): GitMergeAdapter {
   if (seams.mergeAdapterFactory !== undefined) return seams.mergeAdapterFactory(workspace);
-  return createNodeGitMergeAdapter({ workspace, processEnv: process.env, now });
+  return createNodeGitMergeAdapter({
+    workspace,
+    processEnv: process.env,
+    now,
+    onTerminated: (evidence): void => {
+      logCommandTermination(processServerLogSink(), UNKNOWN_CORRELATION_ID, evidence);
+    },
+  });
 }
 
 // Reads the provider's content-free merge-readiness facts. Never throws: a thrown read becomes a

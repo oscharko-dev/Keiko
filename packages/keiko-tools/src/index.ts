@@ -82,6 +82,8 @@ export {
   type SpawnFn,
   type SpawnOptions,
   type WindowsTreeKill,
+  type WindowsTreeKillDisposition,
+  type WindowsTreeKillResult,
 } from "./exec.js";
 
 // ─── Hardened Windows cmd.exe shell invocation (issue #3350, Node CVE-2024-27980) ──

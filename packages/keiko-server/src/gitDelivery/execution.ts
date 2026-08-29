@@ -39,7 +39,7 @@ import type { GitDeliveryBranchProtectionReader } from "./branchProtectionPrefli
 import { recordGitDeliveryMutationEvidence } from "./mutationEvidenceLedger.js";
 import { defaultMintableRepoPack } from "./policyPackMintability.js";
 import { errorKindOf, type ServerLogSink } from "../observability/server-log.js";
-import { processServerLogSink } from "../process-log-sink.js";
+import { logCommandTermination, processServerLogSink } from "../process-log-sink.js";
 
 const KEIKO_DEFAULT_PROTECTED_BRANCH_PATTERNS = [
   { matchKind: "exact", value: "dev" },
@@ -101,7 +101,14 @@ export function readWorktreeSnapshotFor(
   now: () => number,
 ): Promise<GitWorktreeSnapshot> {
   if (seams.snapshotReader !== undefined) return seams.snapshotReader(workspace);
-  return readGitWorktreeSnapshot({ workspace, processEnv: process.env, now });
+  return readGitWorktreeSnapshot({
+    workspace,
+    processEnv: process.env,
+    now,
+    onTerminated: (evidence): void => {
+      logCommandTermination(processServerLogSink(), UNKNOWN_CORRELATION_ID, evidence);
+    },
+  });
 }
 
 export function readStagedPathsFor(
@@ -135,7 +142,17 @@ function adapterFor(
   now: () => number,
 ): GitLocalMutationAdapter {
   if (seams.adapterFactory !== undefined) return seams.adapterFactory(workspace);
-  return createNodeGitMutationAdapter({ workspace, processEnv: process.env, now });
+  return createNodeGitMutationAdapter({
+    workspace,
+    processEnv: process.env,
+    now,
+    // Deps-level evidence port (PR #3354 review 3887021650): a governed git mutation that times
+    // out or is aborted must leave its Windows tree-kill disposition in the activity log. No
+    // per-run correlation exists at this composition point.
+    onTerminated: (evidence): void => {
+      logCommandTermination(processServerLogSink(), UNKNOWN_CORRELATION_ID, evidence);
+    },
+  });
 }
 
 export function defaultGitDeliveryActionId(command: unknown, nowMs: number): string {

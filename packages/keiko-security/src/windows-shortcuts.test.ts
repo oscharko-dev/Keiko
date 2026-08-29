@@ -4,6 +4,8 @@ import { join } from "node:path";
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+import { WindowsSystemDirectoryError } from "./windows-system-directory.js";
+
 import {
   WINDOWS_SHORTCUT_MAX_BYTES,
   WINDOWS_SHORTCUT_TIMEOUT_MS,
@@ -195,17 +197,32 @@ describe("runWindowsShortcutCommand", () => {
     });
   });
 
-  it("falls back to the default SystemRoot when the environment offers a relative one", () => {
+  // STRENGTHENED, not relaxed (PR #3354 review, "the whole class is not fixed"): this case used to
+  // assert a SILENT FALLBACK to the default for a relative SystemRoot. Silent fallback is the
+  // weakness — the same `isAbsolute`-only check also ACCEPTED a UNC share, a device path and a
+  // root-relative value, so a hostile override could select the cscript.exe this helper spawns.
+  // The shared validator in windows-system-directory.ts now fails CLOSED on every one of those
+  // shapes, and no shortcut command is spawned at all.
+  it.each([
+    ["a bare relative value", "not-absolute"],
+    ["a UNC share", String.raw`\\attacker\share`],
+    ["a device path", String.raw`\\?\C:\Windows`],
+    ["a root-relative value", String.raw`\Windows`],
+    ["a traversal segment", String.raw`C:\Windows\..\Users\pub`],
+    ["an embedded cmd metacharacter", String.raw`C:\Win&dows`],
+  ])("refuses to resolve cscript.exe under %s, and spawns nothing", (_label, systemRoot) => {
     const spawnFn = vi.fn<WindowsShortcutSpawnFn>(() => spawnResult());
-    runWindowsShortcutCommand(
-      "read",
-      String.raw`C:\Menu\Keiko.lnk`,
-      DEFINITION,
-      { SystemRoot: "not-absolute" },
-      "test prefix",
-      spawnFn,
-    );
-    expect(spawnFn.mock.calls[0]?.[0]).toBe(String.raw`C:\Windows\System32\cscript.exe`);
+    expect(() =>
+      runWindowsShortcutCommand(
+        "read",
+        String.raw`C:\Menu\Keiko.lnk`,
+        DEFINITION,
+        { SystemRoot: systemRoot },
+        "test prefix",
+        spawnFn,
+      ),
+    ).toThrow(WindowsSystemDirectoryError);
+    expect(spawnFn).not.toHaveBeenCalled();
   });
 
   it("passes TEMP/TMP through to the script-host environment when the caller's env carries them", () => {

@@ -91,6 +91,12 @@ export interface LspLifecycleEvent {
   readonly pendingRequestCount: number;
   readonly restartCount: number;
   readonly stderrBytesSeen: number;
+  // OS process id of the manager's current child, when one is running. Content-free (a number),
+  // and the JOIN key that lets support correlate a lifecycle transition (which carries the REASON:
+  // SHUTDOWN, CRASHED + errorCode, RESTART_THROTTLED, …) with the spawn adapter's per-kill
+  // `lsp.process.terminated` activity line (which carries the SIGNAL and the verified Windows
+  // tree-kill disposition for the same childPid). Absent before the first spawn and after cleanup.
+  readonly childPid?: number;
 }
 
 export interface LspLatencyHistogram {

@@ -66,11 +66,10 @@ function commandResultSummary(result) {
   ].join(" ");
 }
 
-// Every argument must arrive at the child byte-for-byte. `%` is deliberately absent: caret escaping
-// does not neutralise cmd.exe's `%`-expansion inside a batch file, so a `%VAR%`-shaped argument is
-// expanded by the shim layer rather than mangled by the escaping. That is a documented property of
-// the algorithm this module reproduces (see windows-shell.ts), not a round-trip defect — `%` is still
-// carried through the parseability and injection vectors below, where its behaviour is well-defined.
+// Every argument must arrive at the child byte-for-byte. `%` is deliberately absent: the wrapper
+// REJECTS it fail-closed (windows-shell.ts — cmd.exe expands %NAME% before any escaping applies, so
+// no literal transport exists), which assertPercentRejected below pins against a live build. TAB is
+// present on purpose: only NUL/CR/LF break a cmd.exe line, and a TSV/JSON argument must round-trip.
 const ROUND_TRIP_ARGS = [
   "hello",
   "hello world",
@@ -87,11 +86,10 @@ const ROUND_TRIP_ARGS = [
   "trailing\\",
   'has"quote',
   "",
+  "a\tb",
 ];
 
-// The full battery, `%` included: each must be caret-escaped so cmd.exe parses the whole line as
-// literal arguments and the child runs. An under-escaped one makes cmd treat it as syntax instead.
-const METACHARACTER_ARGS = [...ROUND_TRIP_ARGS, "%"];
+const METACHARACTER_ARGS = [...ROUND_TRIP_ARGS];
 
 // Each entry tries to break out of the wrapper into a command that writes the injection marker. The
 // marker is a bare relative name (no spaces/quotes) resolved against the spawn cwd, so a real
@@ -197,6 +195,18 @@ function assertShimDoubleEscape() {
   );
 }
 
+// The percent fail-closed contract, against the LIVE wrapper build: a %NAME% argument must throw
+// before any cmd.exe line is assembled — never reach the child expanded (review 5058544058 P1).
+function assertPercentRejected(shimPath) {
+  for (const argument of ["%PATH%", "100%"]) {
+    assert.throws(
+      () => buildWindowsShellInvocation(shimPath, [argument]),
+      /must not contain '%'/,
+      `expected the wrapper to reject ${JSON.stringify(argument)} fail-closed`,
+    );
+  }
+}
+
 function writeFixture(path, contents) {
   mkdirSync(dirname(path), { recursive: true });
   writeFileSync(path, contents, "utf8");
@@ -226,6 +236,7 @@ function runWindowsCmdSpawnSmoke() {
       assertNoInjection(label, shimPath, root, outPath);
     }
     assertShimDoubleEscape();
+    assertPercentRejected(ordinaryShim);
   } catch (error) {
     failure = error;
   } finally {

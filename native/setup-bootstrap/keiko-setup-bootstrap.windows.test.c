@@ -264,6 +264,210 @@ static void test_extended_path(void) {
   assert(keiko_extended_path(L"C:\\Temp\\Keiko-install-00", tiny, 8) == 0);
 }
 
+// ---------------------------------------------------------------------------------------------
+// BEHAVIOURAL tests against real Win32 objects (review 3887051417: everything added to the product
+// file in the previous round was pure-logic-tested only, while the parts that had actually shipped
+// a hang — the drain loop — were exercised by nothing). These use real anonymous pipes, a real
+// temp directory tree, a real junction and real child processes. No admin rights are required:
+// creating a directory junction needs none, only a symlink would.
+// ---------------------------------------------------------------------------------------------
+
+static void make_temp_dir(wchar_t *out, size_t cap, const wchar_t *tag) {
+  wchar_t base[MAX_PATH];
+  DWORD n = GetTempPathW(MAX_PATH, base);
+  assert(n > 0 && n < MAX_PATH);
+  unsigned char random16[16];
+  assert(BCryptGenRandom(NULL, random16, sizeof(random16), BCRYPT_USE_SYSTEM_PREFERRED_RNG) == 0);
+  char hex[33];
+  keiko_bytes_to_hex(random16, 16, hex);
+  wchar_t hex_wide[33];
+  for (size_t index = 0; index < (size_t)33; index++) {
+    hex_wide[index] = (wchar_t)hex[index];
+  }
+  assert(_snwprintf_s(out, cap, _TRUNCATE, L"%ls%ls-%ls", base, tag, hex_wide) > 0);
+  assert(CreateDirectoryW(out, NULL) != 0);
+}
+
+static void write_file(const wchar_t *path, const char *contents) {
+  HANDLE file = CreateFileW(path, GENERIC_WRITE, 0, NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL,
+                            NULL);
+  assert(file != INVALID_HANDLE_VALUE);
+  DWORD written = 0;
+  assert(WriteFile(file, contents, (DWORD)strlen(contents), &written, NULL) != 0);
+  (void)CloseHandle(file);
+}
+
+// The drain loop must return promptly when the writer closes, and must capture what was written.
+static void test_drain_pipe_reads_and_ends_at_eof(void) {
+  SECURITY_ATTRIBUTES attributes;
+  ZeroMemory(&attributes, sizeof(attributes));
+  attributes.nLength = sizeof(attributes);
+  attributes.bInheritHandle = FALSE;
+  HANDLE read_end = NULL;
+  HANDLE write_end = NULL;
+  assert(CreatePipe(&read_end, &write_end, &attributes, 0) != 0);
+
+  const char *payload = "C:\\Managed\\Root\n";
+  DWORD written = 0;
+  assert(WriteFile(write_end, payload, (DWORD)strlen(payload), &written, NULL) != 0);
+  (void)CloseHandle(write_end); // EOF for the reader
+
+  char out[256];
+  // GetCurrentProcess() is a live handle that never signals, so the loop's exit here is EOF —
+  // proving the PeekNamedPipe/EOF branch, not the process-exit branch.
+  int total = keiko_drain_pipe(read_end, GetCurrentProcess(), out, (int)sizeof(out));
+  out[total] = '\0';
+  assert(total == (int)strlen(payload));
+  assert(strcmp(out, payload) == 0);
+  (void)CloseHandle(read_end);
+}
+
+// Output past the cap must keep draining (so the child never blocks on a full pipe) while the
+// captured prefix stays exactly cap-1 bytes.
+static void test_drain_pipe_drains_past_the_cap(void) {
+  SECURITY_ATTRIBUTES attributes;
+  ZeroMemory(&attributes, sizeof(attributes));
+  attributes.nLength = sizeof(attributes);
+  attributes.bInheritHandle = FALSE;
+  HANDLE read_end = NULL;
+  HANDLE write_end = NULL;
+  assert(CreatePipe(&read_end, &write_end, &attributes, 0) != 0);
+
+  char flood[4096];
+  memset(flood, 'x', sizeof(flood));
+  DWORD written = 0;
+  assert(WriteFile(write_end, flood, (DWORD)sizeof(flood), &written, NULL) != 0);
+  (void)CloseHandle(write_end);
+
+  char out[64];
+  int total = keiko_drain_pipe(read_end, GetCurrentProcess(), out, (int)sizeof(out));
+  assert(total == (int)sizeof(out) - 1); // captured exactly cap-1, the rest discarded not blocked
+  (void)CloseHandle(read_end);
+}
+
+// A junction inside the staging tree must be UNLINKED, never followed: the target's contents have
+// to survive the cleanup that removes the staging root. This is the race/traversal class from
+// review 3887021643 in its observable form.
+static void test_remove_tree_unlinks_junctions_without_following(void) {
+  wchar_t staging[MAX_PATH];
+  wchar_t outside[MAX_PATH];
+  make_temp_dir(staging, MAX_PATH, L"keiko-test-staging");
+  make_temp_dir(outside, MAX_PATH, L"keiko-test-outside");
+
+  wchar_t treasure[MAX_PATH];
+  assert(_snwprintf_s(treasure, MAX_PATH, _TRUNCATE, L"%ls\\treasure.txt", outside) > 0);
+  write_file(treasure, "must survive");
+
+  // A real file inside staging, so the walk has ordinary work to do as well.
+  wchar_t inner[MAX_PATH];
+  assert(_snwprintf_s(inner, MAX_PATH, _TRUNCATE, L"%ls\\inner.txt", staging) > 0);
+  write_file(inner, "disposable");
+
+  // mklink /J needs no elevation. cmd.exe is resolved from the system directory, never PATH.
+  wchar_t link[MAX_PATH];
+  assert(_snwprintf_s(link, MAX_PATH, _TRUNCATE, L"%ls\\link", staging) > 0);
+  wchar_t system_dir[MAX_PATH];
+  assert(GetSystemDirectoryW(system_dir, MAX_PATH) != 0);
+  wchar_t cmd_exe[MAX_PATH];
+  assert(_snwprintf_s(cmd_exe, MAX_PATH, _TRUNCATE, L"%ls\\cmd.exe", system_dir) > 0);
+  // static: KEIKO_COMMAND_CAP is 96 KiB of wchar_t (192 KiB) — far past /analyze's C6262
+  // stack budget. Single-threaded harness, each case fully rewrites it.
+  static wchar_t command[KEIKO_COMMAND_CAP];
+  assert(_snwprintf_s(command, KEIKO_COMMAND_CAP, _TRUNCATE,
+                      L"\"%ls\" /d /s /c mklink /J \"%ls\" \"%ls\"", cmd_exe, link, outside) > 0);
+  assert(keiko_run_and_wait(cmd_exe, command) == 1);
+  assert((GetFileAttributesW(link) & FILE_ATTRIBUTE_REPARSE_POINT) != 0);
+
+  assert(keiko_remove_tree(staging) == 1);
+  assert(GetFileAttributesW(staging) == INVALID_FILE_ATTRIBUTES); // staging gone
+  assert(GetFileAttributesW(treasure) != INVALID_FILE_ATTRIBUTES); // target UNTOUCHED
+  assert(GetFileAttributesW(outside) != INVALID_FILE_ATTRIBUTES);
+
+  (void)DeleteFileW(treasure);
+  (void)RemoveDirectoryW(outside);
+}
+
+// keiko_remove_tree must FAIL CLOSED when handed a junction as its root, rather than deleting
+// through it. (keiko_open_plain_dir_no_follow rejects the reparse point on the handle itself.)
+static void test_remove_tree_refuses_a_junction_root(void) {
+  wchar_t holder[MAX_PATH];
+  wchar_t outside[MAX_PATH];
+  make_temp_dir(holder, MAX_PATH, L"keiko-test-holder");
+  make_temp_dir(outside, MAX_PATH, L"keiko-test-target");
+
+  wchar_t treasure[MAX_PATH];
+  assert(_snwprintf_s(treasure, MAX_PATH, _TRUNCATE, L"%ls\\treasure.txt", outside) > 0);
+  write_file(treasure, "must survive");
+
+  wchar_t link[MAX_PATH];
+  assert(_snwprintf_s(link, MAX_PATH, _TRUNCATE, L"%ls\\link", holder) > 0);
+  wchar_t system_dir[MAX_PATH];
+  assert(GetSystemDirectoryW(system_dir, MAX_PATH) != 0);
+  wchar_t cmd_exe[MAX_PATH];
+  assert(_snwprintf_s(cmd_exe, MAX_PATH, _TRUNCATE, L"%ls\\cmd.exe", system_dir) > 0);
+  // static: KEIKO_COMMAND_CAP is 96 KiB of wchar_t (192 KiB) — far past /analyze's C6262
+  // stack budget. Single-threaded harness, each case fully rewrites it.
+  static wchar_t command[KEIKO_COMMAND_CAP];
+  assert(_snwprintf_s(command, KEIKO_COMMAND_CAP, _TRUNCATE,
+                      L"\"%ls\" /d /s /c mklink /J \"%ls\" \"%ls\"", cmd_exe, link, outside) > 0);
+  assert(keiko_run_and_wait(cmd_exe, command) == 1);
+
+  // Handed the LINK as the root: refuse rather than descend.
+  assert(keiko_remove_tree(link) == 0);
+  assert(GetFileAttributesW(treasure) != INVALID_FILE_ATTRIBUTES);
+
+  (void)RemoveDirectoryW(link);
+  (void)RemoveDirectoryW(holder);
+  (void)DeleteFileW(treasure);
+  (void)RemoveDirectoryW(outside);
+}
+
+// The watchdog must terminate the child's WHOLE tree: a wedged CLI that already spawned a
+// descendant must not leave that descendant running (review 3887021654).
+static void test_watchdog_terminates_the_descendant_tree(void) {
+  wchar_t system_dir[MAX_PATH];
+  assert(GetSystemDirectoryW(system_dir, MAX_PATH) != 0);
+  wchar_t cmd_exe[MAX_PATH];
+  assert(_snwprintf_s(cmd_exe, MAX_PATH, _TRUNCATE, L"%ls\\cmd.exe", system_dir) > 0);
+
+  // The outer cmd starts a DETACHED grandchild that would outlive a single-process kill, then
+  // hangs. `waitfor` without a signal blocks until its timeout, so both processes are alive when
+  // the watchdog fires.
+  // static: KEIKO_COMMAND_CAP is 96 KiB of wchar_t (192 KiB) — far past /analyze's C6262
+  // stack budget. Single-threaded harness, each case fully rewrites it.
+  static wchar_t command[KEIKO_COMMAND_CAP];
+  // `ping -n` is the portable Windows sleep: present on every image, unlike `waitfor.exe`/`timeout`.
+  assert(_snwprintf_s(command, KEIKO_COMMAND_CAP, _TRUNCATE,
+                      L"\"%ls\" /d /s /c start /b \"\" \"%ls\" /d /s /c ping -n 120 127.0.0.1 "
+                      L"> nul & ping -n 120 127.0.0.1 > nul",
+                      cmd_exe, cmd_exe) > 0);
+
+  STARTUPINFOW startup;
+  keiko_child child;
+  ZeroMemory(&startup, sizeof(startup));
+  startup.cb = sizeof(startup);
+  assert(keiko_spawn_in_job(cmd_exe, command, &startup, FALSE, &child) == 1);
+  assert(child.job != NULL); // the Job Object is what binds the tree
+
+  // Let the grandchild come up, then fire the watchdog with a short deadline.
+  Sleep(2500);
+  JOBOBJECT_BASIC_ACCOUNTING_INFORMATION before;
+  ZeroMemory(&before, sizeof(before));
+  DWORD returned = 0;
+  assert(QueryInformationJobObject(child.job, JobObjectBasicAccountingInformation, &before,
+                                   sizeof(before), &returned) != 0);
+  assert(before.ActiveProcesses >= 2); // the tree really is a tree
+
+  assert(keiko_wait_or_terminate(&child, 200) == 0); // deadline expires -> terminate the tree
+
+  JOBOBJECT_BASIC_ACCOUNTING_INFORMATION after;
+  ZeroMemory(&after, sizeof(after));
+  assert(QueryInformationJobObject(child.job, JobObjectBasicAccountingInformation, &after,
+                                   sizeof(after), &returned) != 0);
+  assert(after.ActiveProcesses == 0); // NO descendant survived the watchdog
+  keiko_close_child(&child);
+}
+
 int wmain(void) {
   keiko_setup_buffers *buffers = keiko_allocate_buffers();
   assert(buffers != NULL);
@@ -278,5 +482,12 @@ int wmain(void) {
   test_managed_root_parse();
   test_staging_name();
   test_extended_path();
+
+  // Behavioural (real Win32 objects, see the block above).
+  test_drain_pipe_reads_and_ends_at_eof();
+  test_drain_pipe_drains_past_the_cap();
+  test_remove_tree_unlinks_junctions_without_following();
+  test_remove_tree_refuses_a_junction_root();
+  test_watchdog_terminates_the_descendant_tree();
   return 0;
 }

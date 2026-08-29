@@ -14,11 +14,17 @@ try {
     "/nologo", "/std:c17", "/W4", "/WX", "/analyze", "/external:env:INCLUDE", "/external:W0"
   )
 
+  # Review 3887051410: the shipped launcher's PRODUCTION link line (/MT static CRT +
+  # /DEPENDENTLOADFLAG:0x800 for statically-linked imports, stage-portable-runtime.mjs) was
+  # compiled by no PR-time gate -- portable-assets.yml is tag/dispatch-only, so a broken link flag
+  # surfaced for the first time during a release build. Compiling with the same flags here proves
+  # the toolchain accepts the exact production line on every pull request.
+  $productionLinkFlags = @("/DEPENDENTLOADFLAG:0x800")
   $launcher = Join-Path $root "native/portable-launcher/keiko-portable-launcher.c"
   $launcherOut = Join-Path $scratch "keiko-launcher.exe"
   $launcherObject = Join-Path $scratch "keiko-launcher.obj"
-  & cl.exe @nativeFlags '/DKEIKO_PORTABLE_TARGET="windows-x64"' `
-    "/Fo:$launcherObject" "/Fe:$launcherOut" $launcher
+  & cl.exe @nativeFlags "/MT" '/DKEIKO_PORTABLE_TARGET="windows-x64"' `
+    "/Fo:$launcherObject" "/Fe:$launcherOut" $launcher /link @productionLinkFlags
   if ($LASTEXITCODE -ne 0) { throw "MSVC native quality analysis failed" }
 
   $launcherTest = Join-Path $root "native/portable-launcher/keiko-portable-launcher.windows.test.c"
@@ -42,7 +48,8 @@ try {
   $setupBootstrap = Join-Path $root "native/setup-bootstrap/keiko-setup-bootstrap.c"
   $setupBootstrapOut = Join-Path $scratch "keiko-setup-bootstrap.exe"
   $setupBootstrapObject = Join-Path $scratch "keiko-setup-bootstrap.obj"
-  & cl.exe @nativeFlags @setupDefines "/Fo:$setupBootstrapObject" "/Fe:$setupBootstrapOut" $setupBootstrap
+  & cl.exe @nativeFlags "/MT" @setupDefines "/Fo:$setupBootstrapObject" "/Fe:$setupBootstrapOut" `
+    $setupBootstrap /link @productionLinkFlags
   if ($LASTEXITCODE -ne 0) { throw "MSVC setup-bootstrap quality analysis failed" }
 
   $setupBootstrapTest = Join-Path $root "native/setup-bootstrap/keiko-setup-bootstrap.windows.test.c"

@@ -451,16 +451,12 @@ describe("TerminalExecutionManager — cancel/timeout/concurrency", () => {
     expect(terminated?.correlationId).toBe(executionId);
     const extra = terminated?.extra ?? {};
     expect(extra.reason).toBe("timeout");
-    expect(typeof extra.pid).toBe("number");
-    expect(typeof extra.windowsTreeKillAttempted).toBe("boolean");
-    expect(typeof extra.windowsTreeKillSucceeded).toBe("boolean");
-    // Body-free: exactly the four evidence fields — never the command, argv, or cwd.
-    expect(Object.keys(extra).sort()).toEqual([
-      "pid",
-      "reason",
-      "windowsTreeKillAttempted",
-      "windowsTreeKillSucceeded",
-    ]);
+    expect(typeof extra.childPid).toBe("number");
+    expect(extra.windowsTreeKill).toBe("not-attempted");
+    // Body-free: exactly the three evidence fields — never the command, argv, or cwd. `childPid`
+    // (not the reserved `pid`) so the child identity survives the real redactor — pinned against
+    // redactLogFields in command-runner.test.ts.
+    expect(Object.keys(extra).sort()).toEqual(["childPid", "reason", "windowsTreeKill"]);
   });
 
   it("rejects when MAX_CONCURRENT_EXECUTIONS is reached (D9 cap of 8)", async () => {

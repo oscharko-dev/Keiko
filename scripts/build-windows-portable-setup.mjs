@@ -462,6 +462,10 @@ export function compileSetupBootstrap({ payloadSha256Hex, payloadSizeBytes, outp
   const tempRoot = mkdtempSync(join(tmpdir(), "keiko-setup-bootstrap-resource-"));
   try {
     const resourcePath = join(tempRoot, "keiko-setup-bootstrap.res");
+    // /Fo keeps the intermediate object OUT of the checkout (review 3887051433): without it
+    // cl.exe writes keiko-setup-bootstrap.obj into the working directory — the repository root on
+    // the signing runner — leaving an untracked artifact a signing job then inventories.
+    const objectPath = join(tempRoot, "keiko-setup-bootstrap.obj");
     run(
       windowsToolFromPath(env.PATH, "rc.exe"),
       ["/nologo", `/fo${resourcePath}`, setupBootstrapResourcePath()],
@@ -483,6 +487,7 @@ export function compileSetupBootstrap({ payloadSha256Hex, payloadSizeBytes, outp
         `/DKEIKO_SETUP_TARGET="windows-x64"`,
         `/DKEIKO_SETUP_PAYLOAD_SHA256_HEX="${payloadSha256Hex}"`,
         `/DKEIKO_SETUP_PAYLOAD_SIZE_BYTES=${String(payloadSizeBytes)}ULL`,
+        `/Fo:${objectPath}`,
         `/Fe:${outputPath}`,
         setupBootstrapSourcePath(),
         resourcePath,

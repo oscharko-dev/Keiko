@@ -14,6 +14,10 @@ import { spawnSync } from "node:child_process";
 import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, win32 as win32Path } from "node:path";
+import {
+  resolveWindowsSystemBinary,
+  resolveWindowsSystemDirectory,
+} from "./windows-system-directory.js";
 
 export interface WindowsShortcutDefinition {
   readonly targetPath: string;
@@ -27,7 +31,6 @@ export const WINDOWS_SHORTCUT_MAX_BYTES = 128 * 1024;
 // spawn error, which the caller already fails closed on.
 export const WINDOWS_SHORTCUT_TIMEOUT_MS = 30_000;
 const WINDOWS_SHORTCUT_FALLBACK_SCHEMA = "keiko-windows-shortcut-v1";
-const DEFAULT_WINDOWS_ROOT = String.raw`C:\Windows`;
 
 const WINDOWS_SHORTCUT_SCRIPT = [
   'var shell = WScript.CreateObject("WScript.Shell");',
@@ -69,17 +72,23 @@ export type WindowsShortcutSpawnFn = (
 };
 
 /**
- * The trusted Windows system root: an absolute SystemRoot/WINDIR from the environment, or the
+ * The trusted Windows system root: `SystemRoot`/`WINDIR` validated for canonical SHAPE, or the
  * platform default. The one shared trust decision every governed Windows child-process helper
- * (cscript, powershell) resolves its executable against.
+ * (cscript, powershell) resolves its executable against — and, since PR #3354's review, the SAME
+ * decision keiko-tools' `cmd.exe`/`taskkill.exe` resolution uses, because both now delegate to
+ * `resolveWindowsSystemDirectory`.
+ *
+ * FAILS CLOSED (throws `WindowsSystemDirectoryError`) on a hostile or malformed override. The
+ * previous `isAbsolute`-only check silently fell back to the default while ACCEPTING
+ * `\\attacker\share`, `\\?\C:\Windows` and root-relative `\Windows` — a UNC or device-path
+ * override could therefore select the `cscript.exe` this helper spawns.
  */
 export function windowsSystemRoot(env: ShortcutEnvSource): string {
-  const root = env.SystemRoot ?? env.WINDIR ?? DEFAULT_WINDOWS_ROOT;
-  return win32Path.isAbsolute(root) ? root : DEFAULT_WINDOWS_ROOT;
+  return resolveWindowsSystemDirectory(env);
 }
 
 function windowsCscriptExecutable(env: ShortcutEnvSource): string {
-  return win32Path.join(windowsSystemRoot(env), "System32", "cscript.exe");
+  return resolveWindowsSystemBinary("cscript.exe", env);
 }
 
 // The script host gets ONLY the variables it needs to run — never the caller's process

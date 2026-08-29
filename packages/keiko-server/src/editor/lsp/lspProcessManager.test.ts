@@ -278,9 +278,12 @@ describe("createLspProcessManager", () => {
     expect(controller.killed()).toContain("SIGKILL");
     await settle();
     expect(spawnCount).toBe(1);
-    expect(events.filter((event) => event.errorCode === "RESOURCE_BUDGET_EXCEEDED")).toHaveLength(
-      1,
-    );
+    const budgetEvents = events.filter((event) => event.errorCode === "RESOURCE_BUDGET_EXCEEDED");
+    expect(budgetEvents).toHaveLength(1);
+    // Review C2 (5058544058, 3887021649): the transition that carries the termination REASON must
+    // also carry the child's identity, so support can join it to the spawn adapter's per-kill
+    // `lsp.process.terminated` line (signal + verified tree-kill disposition) on childPid.
+    expect(budgetEvents[0]?.childPid).toBe(4242);
     await manager.dispose();
   });
 

@@ -24,6 +24,7 @@ import {
 import { CommandRunnerError } from "./command-runner-errors.js";
 import { createInMemoryUiStore, type UiStore } from "./store/index.js";
 import type { ServerLogEvent } from "./observability/server-log.js";
+import { redactLogFields } from "./observability/log-redaction.js";
 
 // ── Fake spawn helpers (mirrors terminal.test.ts) ────────────────────────────────
 
@@ -422,17 +423,19 @@ describe("CommandRunnerManager — runCommand termination evidence (AGENTS.md §
     expect(terminated?.correlationId).toBe(runId);
     const extra = terminated?.extra ?? {};
     expect(extra.reason).toBe("timeout");
-    expect(typeof extra.pid).toBe("number");
+    expect(typeof extra.childPid).toBe("number");
     // makeManager pins platform:"linux" (line ~150) — the win32 tree-kill branch never engages.
-    expect(extra.windowsTreeKillAttempted).toBe(false);
-    expect(extra.windowsTreeKillSucceeded).toBe(true);
-    // Body-free: exactly the four evidence fields — never the task id, executable, argv, or output.
-    expect(Object.keys(extra).sort()).toEqual([
-      "pid",
-      "reason",
-      "windowsTreeKillAttempted",
-      "windowsTreeKillSucceeded",
-    ]);
+    expect(extra.windowsTreeKill).toBe("not-attempted");
+    // Body-free: exactly the three evidence fields — never the task id, executable, argv, or output.
+    expect(Object.keys(extra).sort()).toEqual(["childPid", "reason", "windowsTreeKill"]);
+    // THE REAL REDACTOR, not a fake sink (review 5058571583 finding 1): `pid` is a reserved
+    // envelope name and redactLogFields drops it from `extra`, which is exactly how the child
+    // identity silently vanished from every command.terminated line while the fake-sink tests
+    // stayed green. Running the emitted extra through the shipped redactor pins the whole
+    // reserved-name class: every evidence field must SURVIVE redaction.
+    const redacted = redactLogFields(extra) ?? {};
+    expect(Object.keys(redacted).sort()).toEqual(Object.keys(extra).sort());
+    expect(redacted.childPid).toBe(extra.childPid);
   });
 
   it("still completes a run and never throws when no activityLog is injected", async () => {

@@ -88,14 +88,17 @@ export function consolidationLogSinkFor(correlationId: string): ConsolidationLog
 
 /**
  * Writes ONE body-free line for a keiko-tools `runCommand` termination decision (the optional
- * `onTerminated` seam on `RunCommandInput`, exec.ts) — in particular whether the win32
- * taskkill.exe tree-kill path engaged and completed without throwing (AGENTS.md §8 Rule 1; a PR
- * reviewer finding on the #3350 cmd.exe-wrapper follow-up). Shared by every `runCommand` call site
- * across the server (terminal, command-runner, container-runner, the GitHub code-context port, the
- * container-engine probe, the assured pre-filter) so the mapping from `CommandTerminationEvidence`
+ * `onTerminated` seam on `RunCommandInput`, exec.ts) — in particular the VERIFIED win32
+ * taskkill.exe tree-kill disposition (AGENTS.md §8 Rule 1; PR #3354 reviewer findings). Shared by
+ * every `runCommand` call site across the server so the mapping from `CommandTerminationEvidence`
  * to a `ServerLogEvent` is written exactly once instead of once per call site. `sink` is the
  * caller's own port (its existing injected seam, defaulting to `processServerLogSink()`) so this
  * stays a pure adapter, never a second logging mechanism.
+ *
+ * The child's identity travels as `childPid`, NEVER as `pid`: `pid` is a reserved envelope field
+ * (`log-redaction.ts` RESERVED_FIELD_NAMES), so the redactor drops an `extra.pid` and the line
+ * would carry only the SERVER's own process id — the exact identity loss this evidence exists to
+ * prevent. Pinned by a test that runs the emitted `extra` through the REAL redactor.
  */
 export function logCommandTermination(
   sink: ServerLogSink,
@@ -108,9 +111,8 @@ export function logCommandTermination(
     correlationId,
     extra: {
       reason: evidence.reason,
-      pid: evidence.pid,
-      windowsTreeKillAttempted: evidence.windowsTreeKillAttempted,
-      windowsTreeKillSucceeded: evidence.windowsTreeKillSucceeded,
+      childPid: evidence.childPid,
+      windowsTreeKill: evidence.windowsTreeKill,
     },
   });
 }

@@ -353,6 +353,10 @@ function buildLifecycleEvent(
     pendingRequestCount: state.transport?.client.pendingCount() ?? 0,
     restartCount: state.restartCount,
     stderrBytesSeen: state.transport?.stderrBytesSeen() ?? 0,
+    // The join key toward the spawn adapter's per-kill activity line (see the contract comment on
+    // LspLifecycleEvent.childPid): the transition carries the REASON, the adapter line carries the
+    // signal and the verified tree-kill disposition, and childPid ties them together.
+    ...(state.child?.pid !== undefined ? { childPid: state.child.pid } : {}),
   };
 }
 

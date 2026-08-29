@@ -101,7 +101,7 @@ import {
   type ServerDiagnosticSummary,
 } from "./diagnostics-log.js";
 import { UNKNOWN_CORRELATION_ID } from "./correlation.js";
-import { processServerLogSink } from "./process-log-sink.js";
+import { logCommandTermination, processServerLogSink } from "./process-log-sink.js";
 import type { CodexSubscriptionProfileCoordinator } from "./coding-codex-subscription.js";
 import {
   assertUiDbOutsideProject,
@@ -171,7 +171,16 @@ import {
   createRelationshipStorePort,
   type RelationshipHandlerDeps,
 } from "./relationship-handlers.js";
+import type { CommandTerminationEvidence } from "@oscharko-dev/keiko-tools";
 import { createNodeGitWorktreeAdapter } from "@oscharko-dev/keiko-tools/internal/git-mutation";
+// Deps-level termination-evidence port for every managed-worktree git lane composed here
+// (PR #3354 review, comment 3887021650): a worktree operation that times out or is aborted leaves
+// its verified Windows tree-kill disposition in the activity log. No per-run correlation exists at
+// this composition point.
+function logWorktreeTermination(evidence: CommandTerminationEvidence): void {
+  logCommandTermination(processServerLogSink(), UNKNOWN_CORRELATION_ID, evidence);
+}
+
 import {
   buildWorkspaceInstanceStoreOverDatabase,
   type WorkspaceInstanceStore,
@@ -2072,7 +2081,11 @@ function buildWorkspaceProvisioning(
     evidenceStore: args.evidenceStore,
     managedRoot: resolveManagedWorktreeRoot(args.resolvedUiDbPath),
     createAdapter: (workspace) =>
-      createNodeGitWorktreeAdapter({ workspace, processEnv: options.env }),
+      createNodeGitWorktreeAdapter({
+        workspace,
+        processEnv: options.env,
+        onTerminated: logWorktreeTermination,
+      }),
     redactString: args.redactString,
     now: () => Date.now(),
     newId: randomUUID,
@@ -2148,7 +2161,11 @@ function buildWorkspaceReconciliation(
     evidenceStore,
     managedRoot: resolveManagedWorktreeRoot(resolvedUiDbPath),
     createAdapter: (workspace) =>
-      createNodeGitWorktreeAdapter({ workspace, processEnv: options.env }),
+      createNodeGitWorktreeAdapter({
+        workspace,
+        processEnv: options.env,
+        onTerminated: logWorktreeTermination,
+      }),
     redactString,
     now: () => Date.now(),
     newId: randomUUID,
@@ -2185,7 +2202,11 @@ function buildWorkspaceRepair(args: BuildWorkspaceRepairArgs): WorkspaceRepairSe
     provisioning: args.provisioning,
     managedRoot: resolveManagedWorktreeRoot(args.resolvedUiDbPath),
     createAdapter: (workspace) =>
-      createNodeGitWorktreeAdapter({ workspace, processEnv: args.options.env }),
+      createNodeGitWorktreeAdapter({
+        workspace,
+        processEnv: args.options.env,
+        onTerminated: logWorktreeTermination,
+      }),
     redactString: args.redactString,
     now: () => Date.now(),
     newId: randomUUID,
@@ -2214,7 +2235,11 @@ function buildWorkspaceHealth(
     evidenceStore,
     managedRoot: resolveManagedWorktreeRoot(resolvedUiDbPath),
     createAdapter: (workspace) =>
-      createNodeGitWorktreeAdapter({ workspace, processEnv: options.env }),
+      createNodeGitWorktreeAdapter({
+        workspace,
+        processEnv: options.env,
+        onTerminated: logWorktreeTermination,
+      }),
     redactString,
     now: () => Date.now(),
     newId: randomUUID,
@@ -2247,7 +2272,11 @@ function buildWorkspaceCleanup(
     evidenceStore: args.evidenceStore,
     managedRoot: resolveManagedWorktreeRoot(args.resolvedUiDbPath),
     createAdapter: (workspace) =>
-      createNodeGitWorktreeAdapter({ workspace, processEnv: args.options.env }),
+      createNodeGitWorktreeAdapter({
+        workspace,
+        processEnv: args.options.env,
+        onTerminated: logWorktreeTermination,
+      }),
     redactString: args.redactString,
     now: () => Date.now(),
     newId: randomUUID,

@@ -32,6 +32,8 @@ import {
 } from "@oscharko-dev/keiko-tools";
 import { createNodeGitPublishAdapter } from "@oscharko-dev/keiko-tools/internal/git-mutation";
 import type { UiHandlerDeps } from "../deps.js";
+import { UNKNOWN_CORRELATION_ID } from "../correlation.js";
+import { logCommandTermination, processServerLogSink } from "../process-log-sink.js";
 import type { GitDeliveryApprovalStore } from "./approvalStore.js";
 import type { GitDeliveryTrustedPolicyPacks } from "./actionSheetProjection.js";
 import type {
@@ -129,7 +131,14 @@ function publishAdapterFor(
   now: () => number,
 ): GitRemotePublishAdapter {
   if (seams.publishAdapterFactory !== undefined) return seams.publishAdapterFactory(workspace);
-  return createNodeGitPublishAdapter({ workspace, processEnv: process.env, now });
+  return createNodeGitPublishAdapter({
+    workspace,
+    processEnv: process.env,
+    now,
+    onTerminated: (evidence): void => {
+      logCommandTermination(processServerLogSink(), UNKNOWN_CORRELATION_ID, evidence);
+    },
+  });
 }
 
 function pushInputsOf(command: GitPushCommand): GitDeliveryPushInputs {

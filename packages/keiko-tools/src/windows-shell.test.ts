@@ -155,11 +155,6 @@ const SINGLE_ARG_VECTORS: readonly [label: string, arg: string, expectedArgs: re
       '"',
       ["/d", "/s", "/c", '"C:\\Users\\test\\AppData\\Roaming\\npm\\npm.cmd ^"\\^"^""'],
     ],
-    [
-      "percent",
-      "%",
-      ["/d", "/s", "/c", '"C:\\Users\\test\\AppData\\Roaming\\npm\\npm.cmd ^"^%^""'],
-    ],
     ["bang", "!", ["/d", "/s", "/c", '"C:\\Users\\test\\AppData\\Roaming\\npm\\npm.cmd ^"^!^""']],
     [
       "open-paren",
@@ -340,10 +335,49 @@ describe("buildWindowsShellInvocation — CR/LF and C0 control-character rejecti
     ).toThrow(WindowsShellInvocationError);
   });
 
-  it("rejects a non-CR/LF C0 control character (the full range, not only CR/LF)", () => {
-    expect(() => buildWindowsShellInvocation(CMD_PATH, ["a\u0007b"], WIN_ENV)).toThrow(
+  it("accepts TAB inside an argument — cross-spawn escapes it correctly, only NUL/CR/LF break the line", () => {
+    // Review 5058571583 finding 4: rejecting TAB was a silent, platform-divergent capability loss
+    // (a TSV/JSON/diff argument failing on Windows only). Inside the double-quoted argument TAB is
+    // a literal for the outer cmd.exe parse and the child's CRT.
+    const result = buildWindowsShellInvocation(CMD_PATH, ["a\tb"], WIN_ENV);
+    expect(result.windowsVerbatimArguments).toBe(true);
+    expect(result.args[3]).toContain("a\tb");
+  });
+
+  it.each([
+    ["NUL", "a\u0000b"],
+    ["LF", "a\nb"],
+    ["CR", "a\rb"],
+  ])(
+    "rejects %s — the characters that genuinely break a cmd.exe command line",
+    (_label, argument) => {
+      expect(() => buildWindowsShellInvocation(CMD_PATH, [argument], WIN_ENV)).toThrow(
+        WindowsShellInvocationError,
+      );
+    },
+  );
+
+  it("rejects '%' on the wrap path — cmd.exe expands %NAME% before any escaping applies", () => {
+    // Review 5058544058 P1 3887021639: there is no literal transport for a percent-carrying
+    // argument through `cmd /c` (caret does not survive the early expansion phase, and batch-file
+    // %%-doubling does not apply to a command line). Fail closed rather than deliver a different
+    // argv than the caller passed — e.g. `npm view %PATH%` reaching npm.cmd expanded.
+    expect(() => buildWindowsShellInvocation(CMD_PATH, ["%PATH%"], WIN_ENV)).toThrow(
       WindowsShellInvocationError,
     );
+    expect(() => buildWindowsShellInvocation(CMD_PATH, ["100%"], WIN_ENV)).toThrow(
+      WindowsShellInvocationError,
+    );
+  });
+
+  it("a '%' in a NON-wrapped invocation passes through untouched (pass-through path)", () => {
+    const result = buildWindowsShellInvocation(
+      String.raw`C:\tools\tsserver.exe`,
+      ["%PATH%"],
+      WIN_ENV,
+    );
+    expect(result.windowsVerbatimArguments).toBe(false);
+    expect(result.args).toEqual(["%PATH%"]);
   });
 
   it("rejects a control character in the resolved command path itself", () => {

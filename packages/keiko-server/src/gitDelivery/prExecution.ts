@@ -41,6 +41,8 @@ import {
 } from "@oscharko-dev/keiko-tools";
 import { createNodeGitPullRequestAdapter } from "@oscharko-dev/keiko-tools/internal/git-mutation";
 import type { UiHandlerDeps } from "../deps.js";
+import { UNKNOWN_CORRELATION_ID } from "../correlation.js";
+import { logCommandTermination, processServerLogSink } from "../process-log-sink.js";
 import type { GitDeliveryApprovalStore } from "./approvalStore.js";
 import type { GitDeliveryTrustedPolicyPacks } from "./actionSheetProjection.js";
 import { defaultMintableRepoPack } from "./policyPackMintability.js";
@@ -113,7 +115,14 @@ function prAdapterFor(
   now: () => number,
 ): GitPullRequestAdapter {
   if (seams.prAdapterFactory !== undefined) return seams.prAdapterFactory(workspace);
-  return createNodeGitPullRequestAdapter({ workspace, processEnv: process.env, now });
+  return createNodeGitPullRequestAdapter({
+    workspace,
+    processEnv: process.env,
+    now,
+    onTerminated: (evidence): void => {
+      logCommandTermination(processServerLogSink(), UNKNOWN_CORRELATION_ID, evidence);
+    },
+  });
 }
 
 /**

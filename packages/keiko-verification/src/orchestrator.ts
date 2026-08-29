@@ -16,6 +16,7 @@ import {
   type SandboxPolicy,
   type SpawnFn,
 } from "@oscharko-dev/keiko-tools";
+import type { CommandTerminationEvidence } from "@oscharko-dev/keiko-tools";
 import { nodeSpawnFn } from "@oscharko-dev/keiko-tools/internal/exec";
 import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
 import type { WorkspaceFs, WorkspaceInfo } from "@oscharko-dev/keiko-workspace";
@@ -65,6 +66,10 @@ export interface VerificationDeps {
   // probes keiko-sandbox once (a synchronous PATH/binary check) and injects the result, so the
   // orchestrator stays free of a keiko-sandbox dependency and tests stay deterministic. Default false.
   readonly enforcedNetworkAvailable?: boolean | undefined;
+  // Termination-evidence port for every verification step (RunCommandDeps deps-level seam,
+  // keiko-tools exec.ts): wired once by the composing server so a timed-out or aborted step's
+  // Windows tree-kill disposition is reconstructable (PR #3354 review, comment 3887021650).
+  readonly onTerminated?: ((evidence: CommandTerminationEvidence) => void) | undefined;
 }
 
 // Verification runs deterministic repository gates selected by Keiko, not arbitrary model-issued
@@ -360,6 +365,7 @@ function buildRunDeps(
     now: deps.now ?? Date.now,
     fs: deps.fs ?? nodeWorkspaceFs,
     ...(deps.resolveExecutable === undefined ? {} : { resolveExecutable: deps.resolveExecutable }),
+    ...(deps.onTerminated === undefined ? {} : { onTerminated: deps.onTerminated }),
     ...(deps.sandboxAvailability === undefined
       ? {}
       : { sandboxAvailability: deps.sandboxAvailability }),

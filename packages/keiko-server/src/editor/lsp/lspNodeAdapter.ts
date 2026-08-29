@@ -19,7 +19,11 @@ import type { ChildProcess, SpawnOptionsWithoutStdio } from "node:child_process"
 import { mkdtempSync, rmSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { extname, isAbsolute, join } from "node:path";
-import { isCommandAllowed, nodeWindowsTreeKill } from "@oscharko-dev/keiko-tools";
+import {
+  isCommandAllowed,
+  nodeWindowsTreeKill,
+  type WindowsTreeKillDisposition,
+} from "@oscharko-dev/keiko-tools";
 import type { CommandRule, WindowsShellInvocationOptions } from "@oscharko-dev/keiko-tools";
 import type { WorkspaceInfo } from "@oscharko-dev/keiko-workspace";
 import type { LspProcessErrorCode } from "@oscharko-dev/keiko-contracts";
@@ -51,12 +55,21 @@ import type { LspSpawnHandle } from "./lspTransport.js";
 // composition site uses (processServerLogSink()) rather than growing a second logging mechanism or
 // widening `LspSpawnFn`'s public signature. No request-scoped correlation id is available this
 // deep in the spawn boundary, so every line carries UNKNOWN_CORRELATION_ID.
-function logLspSpawnCompleted(windowsWrapperEngaged: boolean, pid: number | undefined): void {
+// `childPid`, never `pid`: `pid` is a reserved envelope field in the activity-log redaction
+// (log-redaction.ts RESERVED_FIELD_NAMES), so an `extra.pid` is silently dropped and the line
+// would carry only the SERVER's own process id — the identity loss that makes a support bundle
+// unable to join this line to the child tree. Fired on the child's real 'spawn' event, not on
+// spawn() returning: dispatch is not success, ENOENT arrives asynchronously via 'error'.
+function logLspSpawnCompleted(windowsWrapperEngaged: boolean, childPid: number | undefined): void {
   processServerLogSink().write({
     category: "diagnostic",
     op: "lsp.spawn.completed",
     correlationId: UNKNOWN_CORRELATION_ID,
-    extra: { windowsWrapperEngaged, platform: process.platform, pid },
+    extra: {
+      windowsWrapperEngaged,
+      platform: process.platform,
+      ...(childPid !== undefined ? { childPid } : {}),
+    },
   });
 }
 
@@ -72,16 +85,23 @@ function logLspSpawnFailed(code: LspProcessErrorCode): void {
 }
 
 // Fires on every kill() call, including the SIGTERM-then-SIGKILL escalation `escalateKill` drives —
-// deliberately not de-duplicated to a single line per termination (unlike exec.ts's
-// reportTermination, which has a distinct "one trigger" call site to hook): each line is still an
-// honest report of one real invocation, and de-duplicating here would mean threading extra state
-// through wrapChild's closure for a cosmetic difference only.
-function logLspTreeKillDecision(pid: number): void {
+// each line is an honest report of one real invocation, carrying the SIGNAL and the VERIFIED
+// Windows tree-kill disposition (taskkill's own completed exit status, never
+// dispatched-therefore-succeeded). The REASON for the termination lives one layer up: the process
+// manager's lifecycle transitions (SHUTDOWN, CRASHED + errorCode, RESTART_THROTTLED, …) reach the
+// lifecycle ledger with the same `childPid`, which is the join key between the two records. A
+// per-request correlation id does not exist for a long-lived language server, so the line carries
+// UNKNOWN_CORRELATION_ID by design.
+function logLspProcessTerminated(
+  childPid: number,
+  signal: NodeJS.Signals,
+  windowsTreeKill: WindowsTreeKillDisposition,
+): void {
   processServerLogSink().write({
     category: "diagnostic",
     op: "lsp.process.terminated",
     correlationId: UNKNOWN_CORRELATION_ID,
-    extra: { windowsTreeKillAttempted: process.platform === "win32", pid },
+    extra: { childPid, signal, windowsTreeKill },
   });
 }
 
@@ -206,22 +226,30 @@ export function createApprovedExecutablePath(
 // fix as runCommand's killGroup (keiko-tools exec.ts); the primitive is imported rather than
 // re-derived so both spawn boundaries terminate identically. A failed kill (process already gone) is
 // swallowed; the escalation timer still owns the SIGKILL fallback.
-function nodeGroupKill(pid: number, child: KillableChild, signal: NodeJS.Signals): void {
+function nodeGroupKill(
+  pid: number,
+  child: KillableChild,
+  signal: NodeJS.Signals,
+): WindowsTreeKillDisposition {
+  let disposition: WindowsTreeKillDisposition = "not-attempted";
   if (process.platform !== "win32") {
     try {
       process.kill(-pid, signal);
-      return;
+      return disposition;
     } catch {
       // Group may already be gone; fall through to a direct child kill.
     }
   } else {
-    nodeWindowsTreeKill(pid, process.env);
+    // Synchronous and verified (see nodeWindowsTreeKill in keiko-tools): taskkill has COMPLETED
+    // against the live tree before the immediate child is signalled below.
+    disposition = nodeWindowsTreeKill(pid, process.env);
   }
   try {
     child.kill(signal);
   } catch {
     // The child may have already exited.
   }
+  return disposition;
 }
 
 function safeKill(child: KillableChild, signal: NodeJS.Signals): void {
@@ -281,8 +309,7 @@ function wrapChild(child: ChildProcess): ReturnType<LspSpawnFn> {
         safeKill(child, signal);
         return;
       }
-      logLspTreeKillDecision(pid);
-      nodeGroupKill(pid, child, signal);
+      logLspProcessTerminated(pid, signal, nodeGroupKill(pid, child, signal));
     },
     onExit: (callback): void => {
       child.on("exit", (code) => {
@@ -346,15 +373,43 @@ export const defaultLspSpawnFn: LspSpawnFn = (executable, args, env, cwd) => {
     throw new LspProcessError("EXECUTABLE_NOT_FOUND");
   }
   const home = createEphemeralHome();
+  // Removes the ephemeral HOME exactly once, on whichever failure/exit path fires first. Every
+  // path after createEphemeralHome() must run it: a SYNCHRONOUS throw (buildLspSpawnPlan rejecting
+  // a control character or an untrusted SystemRoot, spawn itself, wrapChild's null-stdio check),
+  // an ASYNCHRONOUS spawn failure ('error' with no 'exit' following — ENOENT's normal shape), and
+  // the ordinary exit. Before this guard, the sync throws leaked one keiko-lsp-home-* directory
+  // per spawn attempt and emitted no lsp.spawn.failed line.
+  let homeCleaned = false;
+  const cleanupHomeOnce = (): void => {
+    if (!homeCleaned) {
+      homeCleaned = true;
+      home.cleanup();
+    }
+  };
   const childEnv = { ...env, HOME: home.path, USERPROFILE: home.path };
-  const plan = buildLspSpawnPlan(executable, args, childEnv, cwd);
-  const child = spawn(plan.command, [...plan.args], plan.options);
-  const wrapped = wrapChild(child);
-  logLspSpawnCompleted(plan.options.windowsVerbatimArguments === true, wrapped.pid);
-  wrapped.onExit(() => {
-    home.cleanup();
-  });
-  return wrapped;
+  try {
+    const plan = buildLspSpawnPlan(executable, args, childEnv, cwd);
+    const child = spawn(plan.command, [...plan.args], plan.options);
+    const wrapped = wrapChild(child);
+    // Spawn SUCCESS is the child's real 'spawn' event, not spawn() returning: dispatch always
+    // returns, while ENOENT and friends arrive asynchronously via 'error'. One-shot handlers keep
+    // the success/failure lines mutually consistent and the HOME cleanup exact.
+    child.once("spawn", () => {
+      logLspSpawnCompleted(plan.options.windowsVerbatimArguments === true, child.pid);
+    });
+    child.once("error", () => {
+      cleanupHomeOnce();
+      logLspSpawnFailed("SPAWN_FAILED");
+    });
+    wrapped.onExit(() => {
+      cleanupHomeOnce();
+    });
+    return wrapped;
+  } catch (error) {
+    cleanupHomeOnce();
+    logLspSpawnFailed("SPAWN_FAILED");
+    throw error;
+  }
 };
 
 // Convenience preflight used by the manager before it calls the injected spawn fn: proves the command

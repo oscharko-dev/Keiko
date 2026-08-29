@@ -19,6 +19,7 @@ import {
   type CommandTerminationEvidence,
   type HomeProvider,
   type RunCommandDeps,
+  type WindowsTreeKillResult,
 } from "./exec.js";
 import { WindowsSystemDirectoryError } from "./windows-shell.js";
 import { CommandCancelledError, CommandDeniedError, CommandTimeoutError } from "./errors.js";
@@ -1207,8 +1208,9 @@ describe("runCommand — Windows process-tree termination (taskkill /T /F, ADR-0
     const calls: { pid: number; processEnv: NodeJS.ProcessEnv }[] = [];
     return {
       calls: () => calls,
-      fn: (pid, processEnv): void => {
+      fn: (pid, processEnv): WindowsTreeKillResult => {
         calls.push({ pid, processEnv });
+        return "succeeded";
       },
     };
   }
@@ -1260,8 +1262,9 @@ describe("runCommand — Windows process-tree termination (taskkill /T /F, ADR-0
       {
         ...fakeDeps(spawn.fn),
         platform: "win32",
-        killWindowsTree: (): void => {
+        killWindowsTree: () => {
           order.push("treeKill");
+          return "succeeded";
         },
       },
     );
@@ -1319,7 +1322,7 @@ describe("runCommand — Windows process-tree termination (taskkill /T /F, ADR-0
 
   it("stays idempotent and settles the promise even when the injected tree-kill throws", async () => {
     const spawn = recordingSpawn();
-    const throwingTreeKill: RunCommandDeps["killWindowsTree"] = (): void => {
+    const throwingTreeKill: RunCommandDeps["killWindowsTree"] = () => {
       throw new Error("taskkill exploded");
     };
     const promise = runCommand(
@@ -1371,6 +1374,240 @@ describe("runCommand — Windows process-tree termination (taskkill /T /F, ADR-0
 // shipped with NO activity-log evidence anywhere, so a support bundle could never answer whether
 // it engaged. `onTerminated` mirrors the existing `onSpawn` seam so a caller with a log port
 // (keiko-server) can record the decision; keiko-tools itself stays logging-agnostic.
+// Review 5058544058/5058571583 on PR #3354: competing termination triggers each re-signalled the
+// tree and re-armed the grace timer, overwriting the tracked handle — cleanup() then cleared only
+// the LAST timer, and the ORPHANED earlier one fired `taskkill /T /F` against a raw pid AFTER the
+// run had settled (reproduced upstream at t+405 against a settle at t+263). terminate() is now
+// single-flight: the first trigger wins, competing triggers are disarmed, exactly one grace timer
+// exists, and the escalation is guarded on the child still being alive.
+describe("runCommand — single-flight termination (first trigger wins)", () => {
+  interface TreeKillCallRecord {
+    readonly pid: number;
+  }
+
+  function recordingTree(): {
+    calls: () => readonly TreeKillCallRecord[];
+    fn: NonNullable<RunCommandDeps["killWindowsTree"]>;
+  } {
+    const calls: TreeKillCallRecord[] = [];
+    return {
+      calls: () => calls,
+      fn: (pid): WindowsTreeKillResult => {
+        calls.push({ pid });
+        return "succeeded";
+      },
+    };
+  }
+
+  it("abort after timeout neither re-kills nor re-reports — and the rejection stays CommandTimeoutError", async () => {
+    vi.useFakeTimers();
+    try {
+      const spawn = recordingSpawn();
+      const tree = recordingTree();
+      const ctrl = controller();
+      const seen: CommandTerminationEvidence[] = [];
+      const promise = runCommand(
+        {
+          command: "node",
+          args: ["-e", "wait"],
+          cwd: undefined,
+          timeoutMs: 100,
+          signal: ctrl.signal,
+          onTerminated: (e): void => {
+            seen.push(e);
+          },
+        },
+        {
+          ...fakeDeps(spawn.fn),
+          platform: "win32",
+          killWindowsTree: tree.fn,
+          policy: { ...DEFAULT_SANDBOX_POLICY, terminationGraceMs: 300 },
+        },
+      );
+      await vi.advanceTimersByTimeAsync(100); // timeout wins
+      ctrl.abort(); // competing trigger — must be a no-op
+      await vi.advanceTimersByTimeAsync(60);
+      spawn.child.emit("close", null, "SIGTERM"); // settles
+      // Run PAST the original grace deadline: an orphaned timer would tree-kill here.
+      await vi.advanceTimersByTimeAsync(400);
+      await expect(promise).rejects.toBeInstanceOf(CommandTimeoutError);
+      expect(tree.calls()).toHaveLength(1);
+      expect(seen.map((e) => e.reason)).toEqual(["timeout"]);
+      expect(spawn.child.killed).toEqual(["SIGTERM"]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("a timeout firing after an abort cannot rewrite the rejection into CommandTimeoutError", async () => {
+    vi.useFakeTimers();
+    try {
+      const spawn = recordingSpawn();
+      const tree = recordingTree();
+      const ctrl = controller();
+      const seen: CommandTerminationEvidence[] = [];
+      const promise = runCommand(
+        {
+          command: "node",
+          args: ["-e", "wait"],
+          cwd: undefined,
+          timeoutMs: 100,
+          signal: ctrl.signal,
+          onTerminated: (e): void => {
+            seen.push(e);
+          },
+        },
+        { ...fakeDeps(spawn.fn), platform: "win32", killWindowsTree: tree.fn },
+      );
+      ctrl.abort(); // abort wins first
+      await vi.advanceTimersByTimeAsync(150); // the timeout timer must have been disarmed
+      spawn.child.emit("close", null, "SIGTERM");
+      await expect(promise).rejects.toBeInstanceOf(CommandCancelledError);
+      expect(tree.calls()).toHaveLength(1);
+      expect(seen.map((e) => e.reason)).toEqual(["abort"]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("output-cap followed by the timeout stays a single termination with reason output-cap", async () => {
+    vi.useFakeTimers();
+    try {
+      const spawn = recordingSpawn();
+      const tree = recordingTree();
+      const seen: CommandTerminationEvidence[] = [];
+      const promise = runCommand(
+        {
+          command: "node",
+          args: ["-e", "flood"],
+          cwd: undefined,
+          timeoutMs: 100,
+          signal: controller().signal,
+          onTerminated: (e): void => {
+            seen.push(e);
+          },
+        },
+        {
+          ...fakeDeps(spawn.fn),
+          platform: "win32",
+          killWindowsTree: tree.fn,
+          policy: { ...DEFAULT_SANDBOX_POLICY, maxOutputBytes: 4 },
+        },
+      );
+      spawn.child.stdout.emit("data", Buffer.from("0123456789", "utf8")); // cap trips first
+      await vi.advanceTimersByTimeAsync(150); // the disarmed timeout must not re-enter
+      spawn.child.emit("close", null, "SIGTERM");
+      const result = await promise; // output-cap resolves with a truncated result, never a timeout
+      expect(result.truncated).toBe(true);
+      expect(tree.calls()).toHaveLength(1);
+      expect(seen.map((e) => e.reason)).toEqual(["output-cap"]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("a timeout armed AFTER a spawn-callback termination cannot re-enter (the single-flight guard itself)", async () => {
+    // Single-flight across trigger CLASSES: the spawn-callback failure is the terminal cause, and
+    // a timeout armed around the same spawn must neither re-kill nor rewrite the rejection. The
+    // guard and the trigger-disarm back each other up here; reverting terminate() to the pre-fix
+    // shape (no guard, no disarm) turns this red together with the overlap pins above.
+    vi.useFakeTimers();
+    try {
+      const spawn = recordingSpawn();
+      const tree = recordingTree();
+      const seen: CommandTerminationEvidence[] = [];
+      const promise = runCommand(
+        {
+          command: "node",
+          args: ["-e", "1"],
+          cwd: undefined,
+          timeoutMs: 50,
+          signal: controller().signal,
+          onSpawn: (): void => {
+            throw new Error("lock write failed");
+          },
+          onTerminated: (e): void => {
+            seen.push(e);
+          },
+        },
+        { ...fakeDeps(spawn.fn), platform: "win32", killWindowsTree: tree.fn },
+      );
+      await vi.advanceTimersByTimeAsync(120); // the later timeout timer fires into the guard
+      spawn.child.emit("close", null, "SIGTERM");
+      await expect(promise).rejects.toThrow("lock write failed");
+      expect(tree.calls()).toHaveLength(1);
+      expect(seen.map((e) => e.reason)).toEqual(["spawn-callback-error"]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("the grace escalation is a no-op when the child has EXITED but the run has not settled yet", async () => {
+    // exit precedes close while stdio drains; SIGKILL/taskkill against that raw pid is the
+    // reused-pid hazard the escalation guard exists for.
+    vi.useFakeTimers();
+    try {
+      const spawn = recordingSpawn();
+      const tree = recordingTree();
+      const promise = runCommand(
+        {
+          command: "node",
+          args: ["-e", "wait"],
+          cwd: undefined,
+          timeoutMs: 50,
+          signal: controller().signal,
+        },
+        {
+          ...fakeDeps(spawn.fn),
+          platform: "win32",
+          killWindowsTree: tree.fn,
+          policy: { ...DEFAULT_SANDBOX_POLICY, terminationGraceMs: 100 },
+        },
+      );
+      await vi.advanceTimersByTimeAsync(50); // timeout → SIGTERM + tree kill
+      (spawn.child as unknown as { exitCode: number | null }).exitCode = 1; // exited, close pending
+      await vi.advanceTimersByTimeAsync(200); // grace deadline passes before close
+      expect(tree.calls()).toHaveLength(1); // no escalation against the exited pid
+      expect(spawn.child.killed).toEqual(["SIGTERM"]);
+      spawn.child.emit("close", 1, null);
+      await expect(promise).rejects.toBeInstanceOf(CommandTimeoutError);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("the grace-timer escalation is a no-op once the run has settled (no raw-pid kill after settle)", async () => {
+    vi.useFakeTimers();
+    try {
+      const spawn = recordingSpawn();
+      const tree = recordingTree();
+      const promise = runCommand(
+        {
+          command: "node",
+          args: ["-e", "wait"],
+          cwd: undefined,
+          timeoutMs: 50,
+          signal: controller().signal,
+        },
+        {
+          ...fakeDeps(spawn.fn),
+          platform: "win32",
+          killWindowsTree: tree.fn,
+          policy: { ...DEFAULT_SANDBOX_POLICY, terminationGraceMs: 200 },
+        },
+      );
+      await vi.advanceTimersByTimeAsync(50); // timeout → SIGTERM + tree kill
+      spawn.child.emit("close", null, "SIGTERM"); // child exits well inside the grace window
+      await expect(promise).rejects.toBeInstanceOf(CommandTimeoutError);
+      await vi.advanceTimersByTimeAsync(500); // grace deadline passes AFTER settle
+      expect(tree.calls()).toHaveLength(1); // no second, post-settle tree kill
+      expect(spawn.child.killed).toEqual(["SIGTERM"]); // and no SIGKILL against a gone child
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
 describe("runCommand — onTerminated evidence seam (AGENTS.md §8 Rule 1)", () => {
   interface EvidenceRecorder {
     readonly calls: () => readonly CommandTerminationEvidence[];
@@ -1405,12 +1642,7 @@ describe("runCommand — onTerminated evidence seam (AGENTS.md §8 Rule 1)", () 
     spawn.child.emit("close", null, "SIGTERM");
     await expect(promise).rejects.toBeInstanceOf(CommandTimeoutError);
     expect(evidence.calls()).toEqual([
-      {
-        reason: "timeout",
-        pid: spawn.child.pid,
-        windowsTreeKillAttempted: false,
-        windowsTreeKillSucceeded: true,
-      },
+      { reason: "timeout", childPid: spawn.child.pid, windowsTreeKill: "not-attempted" },
     ]);
   });
 
@@ -1484,7 +1716,7 @@ describe("runCommand — onTerminated evidence seam (AGENTS.md §8 Rule 1)", () 
     expect(evidence.calls()[0]?.reason).toBe("spawn-callback-error");
   });
 
-  it("reports windowsTreeKillAttempted:true and succeeded:true on win32 with a well-behaved tree-kill", async () => {
+  it("reports the tree-kill's VERIFIED result on win32 — succeeded means taskkill said so", async () => {
     const spawn = recordingSpawn();
     const evidence = recordingEvidence();
     const promise = runCommand(
@@ -1496,25 +1728,47 @@ describe("runCommand — onTerminated evidence seam (AGENTS.md §8 Rule 1)", () 
         signal: controller().signal,
         onTerminated: evidence.onTerminated,
       },
-      { ...fakeDeps(spawn.fn), platform: "win32", killWindowsTree: (): void => undefined },
+      { ...fakeDeps(spawn.fn), platform: "win32", killWindowsTree: () => "succeeded" },
     );
     await new Promise((r) => setTimeout(r, 20));
     spawn.child.emit("close", null, "SIGTERM");
     await expect(promise).rejects.toBeInstanceOf(CommandTimeoutError);
     expect(evidence.calls()).toEqual([
-      {
-        reason: "timeout",
-        pid: spawn.child.pid,
-        windowsTreeKillAttempted: true,
-        windowsTreeKillSucceeded: true,
-      },
+      { reason: "timeout", childPid: spawn.child.pid, windowsTreeKill: "succeeded" },
     ]);
   });
 
-  it("reports windowsTreeKillAttempted:true and succeeded:false when the injected tree-kill throws — and still never breaks termination", async () => {
+  // A real taskkill failure must be reported as one — the tautology the review pinned was that the
+  // default implementation could never produce anything but success.
+  it.each(["failed", "unknown"] as const)(
+    "reports the tree-kill's VERIFIED result on win32 — %s passes through unchanged",
+    async (result) => {
+      const spawn = recordingSpawn();
+      const evidence = recordingEvidence();
+      const promise = runCommand(
+        {
+          command: "node",
+          args: ["-e", "wait"],
+          cwd: undefined,
+          timeoutMs: 5,
+          signal: controller().signal,
+          onTerminated: evidence.onTerminated,
+        },
+        { ...fakeDeps(spawn.fn), platform: "win32", killWindowsTree: () => result },
+      );
+      await new Promise((r) => setTimeout(r, 20));
+      spawn.child.emit("close", null, "SIGTERM");
+      await expect(promise).rejects.toBeInstanceOf(CommandTimeoutError);
+      expect(evidence.calls()).toEqual([
+        { reason: "timeout", childPid: spawn.child.pid, windowsTreeKill: result },
+      ]);
+    },
+  );
+
+  it("reports windowsTreeKill:'failed' when the injected tree-kill throws — and still never breaks termination", async () => {
     const spawn = recordingSpawn();
     const evidence = recordingEvidence();
-    const throwingTreeKill: RunCommandDeps["killWindowsTree"] = (): void => {
+    const throwingTreeKill: RunCommandDeps["killWindowsTree"] = () => {
       throw new Error("taskkill exploded");
     };
     const promise = runCommand(
@@ -1532,12 +1786,7 @@ describe("runCommand — onTerminated evidence seam (AGENTS.md §8 Rule 1)", () 
     spawn.child.emit("close", null, "SIGTERM");
     await expect(promise).rejects.toBeInstanceOf(CommandTimeoutError);
     expect(evidence.calls()).toEqual([
-      {
-        reason: "timeout",
-        pid: spawn.child.pid,
-        windowsTreeKillAttempted: true,
-        windowsTreeKillSucceeded: false,
-      },
+      { reason: "timeout", childPid: spawn.child.pid, windowsTreeKill: "failed" },
     ]);
   });
 

@@ -18,6 +18,8 @@ import {
   type VerificationReport,
 } from "@oscharko-dev/keiko-verification";
 import type { WorkspaceInfo } from "@oscharko-dev/keiko-workspace";
+import { UNKNOWN_CORRELATION_ID } from "../correlation.js";
+import { logCommandTermination, processServerLogSink } from "../process-log-sink.js";
 
 export interface NetworkIsolationProbe {
   readonly available: boolean;
@@ -64,6 +66,11 @@ export async function executeVerificationEnforced(
     signal: args.signal,
     networkEnforcement: "enforce-or-fail-closed",
     enforcedNetworkAvailable: probe.available,
+    // Deps-level termination-evidence port (PR #3354 review, 3887021650): a verification
+    // step's timeout/abort leaves its verified Windows tree-kill disposition in the log.
+    onTerminated: (evidence): void => {
+      logCommandTermination(processServerLogSink(), UNKNOWN_CORRELATION_ID, evidence);
+    },
   });
   return { report, probe };
 }

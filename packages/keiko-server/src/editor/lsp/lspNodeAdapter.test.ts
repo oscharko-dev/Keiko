@@ -24,6 +24,7 @@ import {
   writeNodeExecutableFixture,
 } from "./testing/executableFixture.js";
 import { UNKNOWN_CORRELATION_ID } from "../../correlation.js";
+import { redactLogFields } from "../../observability/log-redaction.js";
 import type { ServerLogEvent } from "../../observability/server-log.js";
 import {
   createServerLogger,
@@ -453,7 +454,7 @@ describe("defaultLspSpawnFn — activity-log evidence (AGENTS.md §8 Rule 1)", (
     return events;
   }
 
-  it("logs lsp.spawn.completed with the wrapper-engagement decision, platform, and a real pid", async () => {
+  it("logs lsp.spawn.completed with the wrapper-engagement decision, platform, and the childPid", async () => {
     const events = captureLog();
     const binDir = makeTempDir("keiko-lsp-real-");
     const executable = writeExecutableFixture(binDir, "fakelsp");
@@ -473,9 +474,14 @@ describe("defaultLspSpawnFn — activity-log evidence (AGENTS.md §8 Rule 1)", (
     // POSIX (this test host is never win32): the hardened cmd.exe wrapper never engages.
     expect(extra.windowsWrapperEngaged).toBe(false);
     expect(extra.platform).toBe(process.platform);
-    expect(typeof extra.pid).toBe("number");
+    expect(typeof extra.childPid).toBe("number");
     // Body-free: never the resolved executable path or args on the evidence line.
-    expect(Object.keys(extra).sort()).toEqual(["pid", "platform", "windowsWrapperEngaged"]);
+    expect(Object.keys(extra).sort()).toEqual(["childPid", "platform", "windowsWrapperEngaged"]);
+    // Through the REAL redactor (review 5058571583 finding 1): `pid` is a reserved envelope name
+    // and would be silently dropped — every evidence field here must SURVIVE redaction.
+    const redacted = redactLogFields(extra) ?? {};
+    expect(Object.keys(redacted).sort()).toEqual(Object.keys(extra).sort());
+    expect(redacted.childPid).toBe(extra.childPid);
   });
 
   it("logs lsp.spawn.failed with the closed EXECUTABLE_NOT_FOUND code for a non-absolute executable", () => {
@@ -491,7 +497,40 @@ describe("defaultLspSpawnFn — activity-log evidence (AGENTS.md §8 Rule 1)", (
     expect(failed?.errorKind).toBe("EXECUTABLE_NOT_FOUND");
   });
 
-  it("logs lsp.process.terminated with windowsTreeKillAttempted on kill()", async () => {
+  // Review 5058544058/5058571583: spawn() returning is NOT spawn success — ENOENT arrives
+  // asynchronously via 'error', with no 'exit' following. The pre-fix adapter logged
+  // lsp.spawn.completed on dispatch, emitted no failure line, and cleaned the ephemeral HOME only
+  // on exit — leaking one keiko-lsp-home-* directory per failed attempt. The same cleanup guard
+  // covers the synchronous throw paths (buildLspSpawnPlan rejecting a control character or an
+  // untrusted SystemRoot on win32, wrapChild's null-stdio check): they share cleanupHomeOnce +
+  // logLspSpawnFailed + rethrow.
+  it("an async spawn failure logs lsp.spawn.failed, never lsp.spawn.completed, and leaks no HOME", async () => {
+    const events = captureLog();
+    const binDir = makeTempDir("keiko-lsp-enoent-");
+    const missing = join(binDir, "does-not-exist");
+    const homesBefore = new Set(
+      readdirSync(tmpdir()).filter((name) => name.startsWith("keiko-lsp-home-")),
+    );
+
+    const handle = defaultLspSpawnFn(missing, [], { PATH: "/usr/bin" }, binDir);
+    await new Promise<void>((resolve) => {
+      handle.onError(() => {
+        resolve();
+      });
+    });
+    // The error path must have cleaned up by the time the failure line is written.
+    await new Promise((resolve) => setImmediate(resolve));
+
+    expect(events.some((event) => event.op === "lsp.spawn.completed")).toBe(false);
+    const failed = events.find((event) => event.op === "lsp.spawn.failed");
+    expect(failed).toBeDefined();
+    expect(failed?.errorKind).toBe("SPAWN_FAILED");
+    const homesAfter = readdirSync(tmpdir()).filter((name) => name.startsWith("keiko-lsp-home-"));
+    const leaked = homesAfter.filter((name) => !homesBefore.has(name));
+    expect(leaked).toEqual([]);
+  });
+
+  it("logs lsp.process.terminated with signal and the VERIFIED tree-kill disposition on kill()", async () => {
     const events = captureLog();
     const binDir = makeTempDir("keiko-lsp-kill-");
     const executable = writeNodeExecutableFixture(
@@ -514,9 +553,13 @@ describe("defaultLspSpawnFn — activity-log evidence (AGENTS.md §8 Rule 1)", (
     expect(terminated?.category).toBe("diagnostic");
     expect(terminated?.correlationId).toBe(UNKNOWN_CORRELATION_ID);
     const extra = terminated?.extra ?? {};
-    // POSIX (this test host is never win32): the taskkill.exe tree-kill path never engages.
-    expect(extra.windowsTreeKillAttempted).toBe(false);
-    expect(typeof extra.pid).toBe("number");
-    expect(Object.keys(extra).sort()).toEqual(["pid", "windowsTreeKillAttempted"]);
+    // POSIX (this test host is never win32): the taskkill.exe tree-kill path never engages, and
+    // the line says so honestly instead of a dispatched-therefore-succeeded boolean.
+    expect(extra.windowsTreeKill).toBe("not-attempted");
+    expect(extra.signal).toBe("SIGTERM");
+    expect(typeof extra.childPid).toBe("number");
+    expect(Object.keys(extra).sort()).toEqual(["childPid", "signal", "windowsTreeKill"]);
+    const redacted = redactLogFields(extra) ?? {};
+    expect(Object.keys(redacted).sort()).toEqual(Object.keys(extra).sort());
   });
 });

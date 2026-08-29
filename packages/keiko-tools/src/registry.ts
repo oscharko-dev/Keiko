@@ -19,7 +19,13 @@ import {
   type WorkspaceInfo,
 } from "@oscharko-dev/keiko-workspace";
 import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
-import { nodeSpawnFn, runCommand, type ExecutableResolver, type SpawnFn } from "./exec.js";
+import {
+  nodeSpawnFn,
+  runCommand,
+  type CommandTerminationEvidence,
+  type ExecutableResolver,
+  type SpawnFn,
+} from "./exec.js";
 import { CommandCancelledError, ToolArgumentError, UnknownToolError } from "./errors.js";
 import { applyPatch, renderDryRun, validatePatch } from "./patch.js";
 import { TOOL_DEFINITIONS } from "./schemas.js";
@@ -112,6 +118,7 @@ export class WorkspaceToolHost implements ToolPort {
   private readonly config: ToolHostConfig;
   private readonly processEnv: NodeJS.ProcessEnv;
   private readonly now: () => number;
+  private readonly onTerminated: ((evidence: CommandTerminationEvidence) => void) | undefined;
 
   constructor(deps: {
     readonly workspace: WorkspaceInfo;
@@ -122,6 +129,10 @@ export class WorkspaceToolHost implements ToolPort {
     readonly config?: ToolHostConfigInput | undefined;
     readonly processEnv?: NodeJS.ProcessEnv | undefined;
     readonly now?: (() => number) | undefined;
+    // Termination-evidence port for the always-on `run_command` tool (RunCommandDeps deps-level
+    // seam): the composing server wires it once, so the agent-facing surface the #3350 fix is
+    // about cannot terminate unobservably (PR #3354 review, comment 3887021650).
+    readonly onTerminated?: ((evidence: CommandTerminationEvidence) => void) | undefined;
   }) {
     this.workspace = deps.workspace;
     this.fs = deps.fs ?? nodeWorkspaceFs;
@@ -131,6 +142,7 @@ export class WorkspaceToolHost implements ToolPort {
     this.config = resolveToolHostConfig(deps.config);
     this.processEnv = deps.processEnv ?? process.env;
     this.now = deps.now ?? Date.now;
+    this.onTerminated = deps.onTerminated;
   }
 
   listTools(): readonly ToolDefinition[] {
@@ -222,6 +234,7 @@ export class WorkspaceToolHost implements ToolPort {
         resolveExecutable: this.resolveExecutable,
         processEnv: this.processEnv,
         now: this.now,
+        ...(this.onTerminated !== undefined ? { onTerminated: this.onTerminated } : {}),
       },
     );
     return {

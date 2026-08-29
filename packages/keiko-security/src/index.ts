@@ -68,6 +68,15 @@ export {
   hasCriticalInjectionSignal,
 } from "./promptInjection.js";
 
+// The ONE trusted Windows system-directory decision, shared with keiko-tools (PR #3354 review):
+// keiko-tools depends on keiko-security, never the reverse, so this is the only layer both the
+// cscript/powershell helpers here and the cmd.exe/taskkill.exe resolution there can reach.
+export {
+  DEFAULT_WINDOWS_SYSTEM_ROOT,
+  resolveWindowsSystemBinary,
+  resolveWindowsSystemDirectory,
+  WindowsSystemDirectoryError,
+} from "./windows-system-directory.js";
 export type { WindowsShortcutDefinition, WindowsShortcutSpawnFn } from "./windows-shortcuts.js";
 export {
   WINDOWS_SHORTCUT_MAX_BYTES,
