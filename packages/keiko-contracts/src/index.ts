@@ -1610,6 +1610,17 @@ export type {
   validateCommandTaskRunResult,
 } from "./command-runner.js";
 
+// ─── Command termination evidence (PR #3355 review) ───────────────────────────────
+// Body-free evidence for a terminated command. Defined here rather than in keiko-tools because
+// three packages depend on the shape — tools produces it, server logs it, verification forwards it
+// — and ADR-0019 makes this leaf the owner of cross-package types.
+export type {
+  CommandTerminationEvidence,
+  CommandTerminationReason,
+  WindowsTreeKillDisposition,
+  WindowsTreeKillResult,
+} from "./command-termination.js";
+
 // ─── Editor completion gateway (Issue #1199) ──────────────────────────────────────
 // Wire request/response for the governed `POST /api/editor/completion` route: deterministic
 // language-service completion (#1198) merged with gated model-assisted completion (#1210) over

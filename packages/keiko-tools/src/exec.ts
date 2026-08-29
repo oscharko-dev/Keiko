@@ -13,6 +13,12 @@ import { accessSync, constants, mkdtempSync, realpathSync, rmSync } from "node:f
 import { tmpdir } from "node:os";
 import { delimiter, join, resolve as resolvePath } from "node:path";
 import { redact, WindowsSystemDirectoryError } from "@oscharko-dev/keiko-security";
+import type {
+  CommandTerminationEvidence,
+  CommandTerminationReason,
+  WindowsTreeKillDisposition,
+  WindowsTreeKillResult,
+} from "@oscharko-dev/keiko-contracts";
 import {
   planIsolatedRun,
   probeBackends,
@@ -64,24 +70,13 @@ export interface ExecutableResolverDeps {
 
 export type ExecutableResolver = (command: string, deps: ExecutableResolverDeps) => string;
 
-// The VERIFIED result of one Windows tree-kill invocation. "succeeded" and "failed" are taskkill's
-// own exit status, observed after it completed; "unknown" is the bounded-wait expiring before
-// taskkill finished — the one case where completion genuinely cannot be confirmed. There is no
-// silent success: a taskkill that could not run reports "failed", never "succeeded".
-// "blocked-untrusted-system-root" is kept DISTINCT from "failed" on purpose. Both mean the tree was
-// not bounded, but they are different facts about the machine: "failed" is taskkill.exe missing or
-// reporting an error, while this one is the trusted-System32 resolver refusing a malformed or
-// hostile SystemRoot/WINDIR — a security-relevant property of the environment, not an operational
-// hiccup. Collapsed into one value, an operator reading a customer's activity log could not tell a
-// stripped-down Windows image apart from a tampered environment variable, and AGENTS.md §8 requires
-// the defect to be reconstructible from the log alone. The member itself is the entire evidence:
-// the rejected value never leaves the resolver.
-export type WindowsTreeKillResult =
-  "succeeded" | "failed" | "unknown" | "blocked-untrusted-system-root";
-
-// Everything a termination line can truthfully say about the tree-kill step: the three verified
-// results above, or "not-attempted" (POSIX, or no pid to signal).
-export type WindowsTreeKillDisposition = WindowsTreeKillResult | "not-attempted";
+// DEFINED in keiko-contracts (see command-termination.ts for what each member means and why
+// "blocked-untrusted-system-root" is kept apart from "failed"). Re-exported here so the existing
+// importers of these names keep working unchanged.
+export type {
+  WindowsTreeKillDisposition,
+  WindowsTreeKillResult,
+} from "@oscharko-dev/keiko-contracts";
 
 // Bounds the WHOLE Windows process tree rooted at `pid` (see killGroup below for why the immediate
 // child alone is not enough) and reports the VERIFIED outcome. Implementations must complete the
@@ -149,23 +144,13 @@ export interface RunCommandDeps {
 // whether the win32 taskkill.exe tree-kill path below was engaged, and whether it completed
 // without throwing) becomes observable to a caller that DOES own a log port. Mirrors the existing
 // `onSpawn` seam immediately below: optional, never the command text/args/cwd/env/output.
-export type CommandTerminationReason = "timeout" | "abort" | "output-cap" | "spawn-callback-error";
-
-export interface CommandTerminationEvidence {
-  // The FIRST terminal trigger — terminate() is single-flight, so exactly one evidence line fires
-  // per terminated run and a later competing trigger can neither re-kill nor re-report.
-  readonly reason: CommandTerminationReason;
-  // Deliberately NOT named `pid`: that is a reserved envelope field in the server's activity-log
-  // redaction (`log-redaction.ts` RESERVED_FIELD_NAMES), so an `extra.pid` would be silently
-  // dropped and the line would carry only the SERVER's own pid — exactly the identity loss this
-  // evidence exists to prevent. `childPid` survives redaction and joins the line to the
-  // cmd.exe/node.exe tree in host-side evidence.
-  readonly childPid: number;
-  // The VERIFIED tree-kill outcome (see WindowsTreeKillDisposition): taskkill's own completed exit
-  // status, "unknown" only when the bounded wait expired, "not-attempted" on POSIX. Never a
-  // dispatched-therefore-succeeded tautology.
-  readonly windowsTreeKill: WindowsTreeKillDisposition;
-}
+// DEFINED in keiko-contracts, not here: keiko-server logs this shape and keiko-verification
+// forwards it, so it is a cross-package contract and ADR-0019 puts those in the leaf. Re-exported
+// so every existing importer keeps working unchanged (PR #3355 review).
+export type {
+  CommandTerminationEvidence,
+  CommandTerminationReason,
+} from "@oscharko-dev/keiko-contracts";
 
 export interface RunCommandInput {
   readonly command: string;
@@ -644,13 +629,21 @@ function reportTermination(
   reason: CommandTerminationReason,
   childPid: number | undefined,
   windowsTreeKill: WindowsTreeKillDisposition,
+  escalation?: WindowsTreeKillDisposition,
 ): void {
   const onTerminated = input.onTerminated ?? deps.onTerminated;
   if (childPid === undefined || onTerminated === undefined) {
     return;
   }
   try {
-    onTerminated({ reason, childPid, windowsTreeKill });
+    // Conditional spread, not `escalation: undefined`: exactOptionalPropertyTypes distinguishes an
+    // absent key from an explicit undefined, and the SIGTERM line must carry no key at all.
+    onTerminated({
+      reason,
+      childPid,
+      windowsTreeKill,
+      ...(escalation === undefined ? {} : { escalation }),
+    });
   } catch {
     // See the contract above: an evidence callback failure must never break termination.
   }
@@ -717,7 +710,10 @@ function terminate(
     if (childExited(child, state)) {
       return;
     }
-    killGroup(child, "SIGKILL", killDeps);
+    // Report the escalation's OWN verified disposition. Dropping it left the one step that only
+    // runs when the child ignored SIGTERM with no evidence at all.
+    const escalated = killGroup(child, "SIGKILL", killDeps);
+    reportTermination(input, deps, reason, child.pid, escalated, escalated);
   }, deps.policy.terminationGraceMs);
   state.graceTimer.unref();
   return true;

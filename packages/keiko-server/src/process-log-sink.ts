@@ -113,6 +113,11 @@ export function logCommandTermination(
       reason: evidence.reason,
       childPid: evidence.childPid,
       windowsTreeKill: evidence.windowsTreeKill,
+      // Only the SIGKILL-escalation line carries this, and it is what separates the two lines a
+      // single termination can emit: without it, "SIGTERM was enough" and "we escalated and the
+      // tree-kill still failed" reach the log looking identical. Body-free — a closed-vocabulary
+      // disposition, never a pid, path or command.
+      ...(evidence.escalation === undefined ? {} : { escalation: evidence.escalation }),
     },
   });
 }

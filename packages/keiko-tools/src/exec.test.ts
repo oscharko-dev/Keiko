@@ -1410,6 +1410,52 @@ describe("runCommand — Windows process-tree termination (taskkill /T /F, ADR-0
       vi.useRealTimers();
     }
   });
+
+  // AGENTS.md §8: the escalation must be reconstructible from the log. It runs ONLY when the child
+  // ignored SIGTERM — the case where a failed tree-kill matters most — and it previously discarded
+  // its own disposition, so the log recorded nothing about the step that mattered.
+  it("emits a second evidence line for the SIGKILL escalation, carrying its own disposition", async () => {
+    vi.useFakeTimers();
+    const spawn = recordingSpawn();
+    const evidence: CommandTerminationEvidence[] = [];
+    try {
+      const promise = runCommand(
+        {
+          command: "node",
+          args: ["-e", "wait"],
+          cwd: undefined,
+          timeoutMs: 5,
+          signal: controller().signal,
+          onTerminated: (line) => evidence.push(line),
+        },
+        {
+          ...fakeDeps(spawn.fn),
+          platform: "win32",
+          // The escalation's tree-kill FAILS while the first one succeeds, so the two lines cannot
+          // be confused for each other and a copied-through value would be visible.
+          killWindowsTree: (() => {
+            let call = 0;
+            return (): WindowsTreeKillResult => (++call === 1 ? "succeeded" : "failed");
+          })(),
+        },
+      );
+      await vi.advanceTimersByTimeAsync(5);
+      expect(evidence).toHaveLength(1);
+      // The SIGTERM line must carry NO escalation key at all, not an undefined one.
+      expect(Object.hasOwn(evidence[0] ?? {}, "escalation")).toBe(false);
+      expect(evidence[0]?.windowsTreeKill).toBe("succeeded");
+
+      await vi.advanceTimersByTimeAsync(DEFAULT_SANDBOX_POLICY.terminationGraceMs);
+      expect(evidence).toHaveLength(2);
+      expect(evidence[1]?.escalation).toBe("failed");
+      expect(evidence[1]?.reason).toBe(evidence[0]?.reason);
+
+      spawn.child.emit("close", null, "SIGKILL");
+      await expect(promise).rejects.toBeInstanceOf(CommandTimeoutError);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });
 
 // ─── onTerminated — body-free termination evidence seam ─────────────────────────────────────────
