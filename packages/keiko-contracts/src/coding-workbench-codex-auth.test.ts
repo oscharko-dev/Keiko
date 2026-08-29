@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 
-import { CODING_WORKBENCH_SCHEMA_VERSION } from "./coding-workbench.js";
+import {
+  CODING_WORKBENCH_SCHEMA_VERSION,
+  type CodingWorkbenchModelSource,
+} from "./coding-workbench.js";
 import {
   buildCodingWorkbenchRuntimeProfile,
   CODEX_REDISTRIBUTION_APPROVED,
@@ -93,7 +96,11 @@ describe("selectCodingWorkbenchRuntimeProfile", () => {
   });
 
   it("selects the sidecar adapter for gateway model sources, which the Codex kill switch can never authorize", () => {
-    for (const modelSource of ["keiko-model-gateway", "openai-api-key-through-gateway"] as const) {
+    const gatewayModelSources: readonly CodingWorkbenchModelSource[] = [
+      "keiko-model-gateway",
+      "openai-api-key-through-gateway",
+    ];
+    for (const modelSource of gatewayModelSources) {
       expect(selectCodingWorkbenchRuntimeProfile(modelSource)).toEqual({
         schemaVersion: CODING_WORKBENCH_SCHEMA_VERSION,
         modelSource,
