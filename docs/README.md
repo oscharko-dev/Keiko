@@ -93,6 +93,15 @@ Current package responsibilities:
 | `keiko-ui`                   | Next.js local UI, browser components, static export                                     | Filesystem IO, provider tokens, direct model calls |
 | root `@oscharko-dev/keiko`   | Public product facade and bundled artifact                                              | New domain implementation                          |
 
+Per-package `README.md` files are not the repository convention. Scope, boundaries, and
+ownership for every workspace package are centralized in the table above; a package does not
+need its own `README.md` to be documented — see [adr/README.md](adr/README.md) for the full
+decision catalog. `keiko-editor/README.md` and `keiko-workspace/README.md` are exceptions, not
+a pattern to replicate in new or existing packages: the former is the editor package's
+embedding/API document, link-checked by `npm run check:editor-doc-links` and deep-linked from
+`docs/keiko-editor/runbook.md`; the latter is referenced by ADR-0165 as the consumer-facing
+statement of the two read lanes. Neither should be deleted or treated as inert.
+
 ## Architecture decision clusters
 
 Use [adr/README.md](adr/README.md) only when you need the full decision catalog. For

@@ -578,6 +578,9 @@ describe("handleCreateRun — voiceOrigin wiring (Issue #503)", () => {
     // The deployment has no voice provider configured, so the server-trusted profile is `none`
     // regardless of the client's claimed `speech-to-text` profile and valid-looking digest. AC1 must be
     // enforced against deployment reality, not the untrusted client claim.
+    // This is the client-trust pin for KEIKO-0685: `governedHandoffVoiceOrigin.profile` is
+    // wire-shape-only (run-request.ts) and must never be substituted for `serverTrustedVoiceProfile`
+    // in `applyVoiceGovernance` (run-handlers.ts) — doing so would turn this 403 into a 202.
     const result = await handleCreateRun(
       routeCtx(
         routeHandoffBody({
@@ -602,6 +605,9 @@ describe("handleCreateRun — voiceOrigin wiring (Issue #503)", () => {
   it("denies a voice-capable deployment with KEIKO_VOICE_DISABLED set (AC1)", async () => {
     // Even with a configured voice provider, the policy kill-switch forces the server-trusted profile to
     // `none`, so the spoken action is rejected before any client claim is trusted.
+    // Also a client-trust pin for KEIKO-0685: the client claims "speech-to-text" while the
+    // server-trusted profile is forced to "none" — this 403 would flip to 202 if
+    // `applyVoiceGovernance` ever governed against the client-claimed profile instead.
     const disabledDeps: UiHandlerDeps = {
       ...depsWithConfig(VOICE_CAPABLE_CONFIG),
       env: { KEIKO_VOICE_DISABLED: "1" },

@@ -4804,7 +4804,7 @@ function reportDiscoveryTruncation(
 ): void {
   if (candidateModels.truncated !== true) return;
   emitServerDiagnostic(diagnostics, {
-    correlationId: correlationId ?? randomUUID(),
+    correlationId: correlationId ?? UNKNOWN_CORRELATION_ID,
     timestamp: new Date().toISOString(),
     operation: "POST /api/gateway/setup",
     source: "gateway-setup.discovery",
@@ -4897,7 +4897,7 @@ function reportUnusableDiscoveredModels(
   const dropped = admission.droppedUnverified.length;
   if (unsupported.length === 0 && retained === 0 && dropped === 0) return;
   emitServerDiagnostic(diagnostics, {
-    correlationId: correlationId ?? randomUUID(),
+    correlationId: correlationId ?? UNKNOWN_CORRELATION_ID,
     timestamp: new Date().toISOString(),
     operation: "POST /api/gateway/setup",
     source: "gateway-setup.discovery",
@@ -4914,10 +4914,62 @@ function reportUnusableDiscoveredModels(
   });
 }
 
+// KEIKO-0884 (#3333): every non-public egress target class (private, link-local, metadata)
+// requires an explicit env opt-in to be accepted by Gateway Setup; loopback is the only class
+// silently accepted with no configuration signal, no log line, and no opt-in trail — a deliberate
+// product choice (local sidecar providers, Ollama-style, #2387 research egress), not a defect. The
+// gap is purely observability: an operator investigating an unexpected Gateway Setup acceptance had
+// no record that a loopback target was the one silently let through. Body-free by construction, the
+// same pattern as `reportDiscoveryTruncation` above — a fixed code, never the raw baseUrl/host/port.
+function reportLoopbackTargetAccepted(
+  diagnostics: ServerDiagnosticSink | undefined,
+  correlationId: string | undefined,
+  baseUrl: string,
+): void {
+  if (gatewaySetupTargetClass(baseUrl) !== "loopback") return;
+  emitServerDiagnostic(diagnostics, {
+    correlationId: correlationId ?? UNKNOWN_CORRELATION_ID,
+    timestamp: new Date().toISOString(),
+    operation: "POST /api/gateway/setup",
+    source: "gateway-setup.candidate",
+    errorClass: "GatewaySetupLoopbackTargetAccepted",
+    message: "Gateway Setup accepted a loopback candidate target.",
+    code: "GATEWAY_SETUP_LOOPBACK_TARGET_ACCEPTED",
+  });
+}
+
+// Isolates the chat-smoke-test call from verifySetupCandidate: on a temporary gateway failure,
+// the caller must defer to a retry rather than fail the setup outright, replaying the exact
+// verified-setup construction it would have used had the smoke test itself succeeded.
+async function admitChatCandidatesOrDefer(
+  input: SetupVerificationInput,
+  candidateModels: SetupCandidateModels,
+  admittedModels: SetupCandidateModels,
+  candidateConfig: ReturnType<typeof probeConfigForModels>,
+  embeddingAdmission: EmbeddingAdmission,
+): Promise<ChatAdmission> {
+  try {
+    return await admitChatCandidates(input, candidateModels, candidateConfig);
+  } catch (error) {
+    if (!temporaryGatewaySetupFailure(error)) throw error;
+    throw new DeferredTemporaryChatAdmission(error, () =>
+      verifiedSetupFromChatAdmission(
+        input,
+        candidateModels,
+        admittedModels,
+        candidateConfig,
+        embeddingAdmission,
+        temporaryChatAdmission(candidateModels),
+      ),
+    );
+  }
+}
+
 async function verifySetupCandidate(input: SetupVerificationInput): Promise<VerifiedSetup> {
   // Defence-in-depth: never send the credential to a candidate URL that has not passed the same
   // scheme/credential/loopback validation as the originally submitted base URL.
   validateBaseUrl(input.baseUrl, "candidate", input.egress);
+  reportLoopbackTargetAccepted(input.diagnostics, input.correlationId, input.baseUrl);
   const validationConfig = validationConfigForSetup(input);
   const candidateModels = await candidateModelIdsForSetup(input, validationConfig);
   reportDiscoveryTruncation(input.diagnostics, input.correlationId, candidateModels);
@@ -4943,22 +4995,13 @@ async function verifySetupCandidate(input: SetupVerificationInput): Promise<Veri
     candidateModels.unsupportedModels ?? [],
     embeddingAdmission,
   );
-  let chatAdmission: ChatAdmission;
-  try {
-    chatAdmission = await admitChatCandidates(input, candidateModels, candidateConfig);
-  } catch (error) {
-    if (!temporaryGatewaySetupFailure(error)) throw error;
-    throw new DeferredTemporaryChatAdmission(error, () =>
-      verifiedSetupFromChatAdmission(
-        input,
-        candidateModels,
-        admittedModels,
-        candidateConfig,
-        embeddingAdmission,
-        temporaryChatAdmission(candidateModels),
-      ),
-    );
-  }
+  const chatAdmission = await admitChatCandidatesOrDefer(
+    input,
+    candidateModels,
+    admittedModels,
+    candidateConfig,
+    embeddingAdmission,
+  );
   return verifiedSetupFromChatAdmission(
     input,
     candidateModels,
@@ -5078,7 +5121,13 @@ function recordGatewaySetupAudit(
     schemaVersion: GATEWAY_SETUP_AUDIT_SCHEMA_VERSION,
     outcome,
     timestamp: new Date().toISOString(),
-    correlationId: request.correlationId ?? randomUUID(),
+    // The sanctioned fallback, not a fresh mint (AGENTS.md §8). `record.correlationId` is reused
+    // by both diagnostics below, so a minted UUID here would key the persisted audit evidence and
+    // its failure diagnostics to a different identity than the loopback/discovery diagnostics this
+    // same request emits under UNKNOWN_CORRELATION_ID — one request, two correlation identities,
+    // unjoinable in a support bundle. (The randomUUID below is an evidence-store KEY, not a
+    // correlation id, and is correct.)
+    correlationId: request.correlationId ?? UNKNOWN_CORRELATION_ID,
     targetClass: gatewaySetupTargetClass(request.baseUrl),
     // Any active outbound-egress override counts, not just the private-network one: a
     // link-local/metadata override under KEIKO_ALLOW_LINK_LOCAL_GATEWAY is exactly the more

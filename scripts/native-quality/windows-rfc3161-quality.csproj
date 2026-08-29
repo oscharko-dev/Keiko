@@ -1,6 +1,6 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
-    <TargetFramework>net8.0</TargetFramework>
+    <TargetFramework>net8.0-windows</TargetFramework>
     <OutputType>Library</OutputType>
     <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
     <EnableNETAnalyzers>true</EnableNETAnalyzers>
@@ -9,12 +9,23 @@
     <Nullable>enable</Nullable>
     <ImplicitUsings>disable</ImplicitUsings>
     <Deterministic>true</Deterministic>
-    <!-- KEIKO-0899: Deterministic=true above is unsound without a NuGet lock file — a floating
-         transitive dependency would still let a rebuild resolve a different set of assemblies
-         under an identical .csproj/lock-free tree, which defeats the reproducibility contract.
-         RestorePackagesWithLockFile=true pins every transitive dependency into
-         packages.lock.json; that file is committed and treated as the authoritative resolution
-         graph on every subsequent restore. -->
+    <!-- KEIKO-0899 (status corrected in final review, 2026-08-29): Deterministic=true above is
+         unsound without a NuGet lock file — a floating transitive dependency would still let a
+         rebuild resolve a different set of assemblies under an identical .csproj/lock-free tree,
+         which defeats the reproducibility contract. RestorePackagesWithLockFile=true is the
+         mechanism that closes this (it pins every transitive dependency into a committed
+         packages.lock.json, then rejects a restore whose resolution would drift from it), but
+         that mechanism is not yet actually enforced here: no packages.lock.json is committed in
+         this repository, and scripts/check-windows-native-quality.ps1's `dotnet build` call does
+         not pass the `-p:RestoreLockedMode=true` MSBuild property (equivalently, the dotnet CLI's
+         locked mode flag). Without a committed lock file, RestorePackagesWithLockFile=true
+         silently regenerates an uncommitted lock file on every restore instead of pinning or
+         failing closed — so the reproducibility contract this property is meant to provide is not
+         currently enforced. To close the gap for real: on a Windows/dotnet host, run a dotnet
+         restore invocation using its own lock-file generation flag for this project, commit the
+         resulting packages.lock.json, and add `-p:RestoreLockedMode=true` to the `dotnet build`
+         invocation in scripts/check-windows-native-quality.ps1 so a resolution drift fails the
+         gate instead of silently re-pinning. -->
     <RestorePackagesWithLockFile>true</RestorePackagesWithLockFile>
   </PropertyGroup>
   <ItemGroup>

@@ -25,6 +25,7 @@ import {
   setServerLogger,
 } from "./observability/index.js";
 import { gatewaySetupTargetClass } from "./gateway-setup.js";
+import { UNKNOWN_CORRELATION_ID } from "./correlation.js";
 import type { ServerDiagnosticRecord } from "./diagnostics-log.js";
 import {
   ERROR_CODES,
@@ -1176,6 +1177,145 @@ describe("handleGatewaySetup", () => {
     deps.store.close();
   });
 
+  it("emits a body-free operator diagnostic when a loopback candidate is accepted (KEIKO-0884, #3333)", async () => {
+    // Loopback is the only egress class Gateway Setup accepts with no configuration signal, no log
+    // line, and no opt-in trail (a deliberate product choice, not a defect). The gap is purely
+    // observability: an operator investigating an unexpected acceptance has no record that a
+    // loopback target was the one silently let through.
+    const uiDir = await tempDir("keiko-gw-loopback-diag-ui-");
+    const evidenceDir = await tempDir("keiko-gw-loopback-diag-ev-");
+    const diagnostics: ServerDiagnosticRecord[] = [];
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir,
+      env: { ...VAULT_ENV, KEIKO_ALLOW_PRIVATE_EGRESS: "true" },
+      uiDbPath: join(uiDir, "keiko-ui.db"),
+      gatewayModelDiscovery: () => Promise.resolve(["local-model"]),
+      gatewayEmbeddingProbe: PASSTHROUGH_EMBEDDING_PROBE,
+      gatewaySetupTester: (_config, modelIds) => Promise.resolve([modelIds[0] ?? "local-model"]),
+      diagnostics: { record: (record): void => void diagnostics.push(record) },
+    });
+
+    const result = await handleGatewaySetup(
+      ctx(
+        { baseUrl: "http://127.0.0.1:11434/v1", apiKey: "local-token" },
+        "corr-gw-loopback-diagnostic",
+      ),
+      deps,
+    );
+    expect(result.status, JSON.stringify(result.body)).toBe(200);
+
+    expect(diagnostics).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          correlationId: "corr-gw-loopback-diagnostic",
+          operation: "POST /api/gateway/setup",
+          code: "GATEWAY_SETUP_LOOPBACK_TARGET_ACCEPTED",
+        }),
+      ]),
+    );
+    // Body-free by construction: a count/code only, never the raw baseUrl/host/port.
+    const serialized = JSON.stringify(diagnostics);
+    expect(serialized).not.toContain("127.0.0.1");
+    expect(serialized).not.toContain("11434");
+    expect(serialized).not.toContain("local-token");
+    deps.store.close();
+  });
+
+  it("falls back to the sanctioned unknown-correlation id, never a fresh mint (Codex, #3348)", async () => {
+    // AGENTS.md section 8: "The only sanctioned fallback is UNKNOWN_CORRELATION_ID -- never an
+    // ad-hoc string, never a silently missing id." A minted randomUUID() would be a fresh,
+    // unrecognizable identity that support-bundle clustering can never distinguish from a
+    // separately spawned operation.
+    const uiDir = await tempDir("keiko-gw-loopback-unknown-corr-ui-");
+    const evidenceDir = await tempDir("keiko-gw-loopback-unknown-corr-ev-");
+    const diagnostics: ServerDiagnosticRecord[] = [];
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir,
+      env: { ...VAULT_ENV, KEIKO_ALLOW_PRIVATE_EGRESS: "true" },
+      uiDbPath: join(uiDir, "keiko-ui.db"),
+      gatewayModelDiscovery: () => Promise.resolve(["local-model"]),
+      gatewayEmbeddingProbe: PASSTHROUGH_EMBEDDING_PROBE,
+      gatewaySetupTester: (_config, modelIds) => Promise.resolve([modelIds[0] ?? "local-model"]),
+      diagnostics: { record: (record): void => void diagnostics.push(record) },
+    });
+
+    // No correlation id argument: ctx() omits the field entirely, so RouteContext carries none.
+    const result = await handleGatewaySetup(
+      ctx({ baseUrl: "http://127.0.0.1:11434/v1", apiKey: "local-token" }),
+      deps,
+    );
+    expect(result.status, JSON.stringify(result.body)).toBe(200);
+
+    const loopbackDiag = diagnostics.find(
+      (record) => record.code === "GATEWAY_SETUP_LOOPBACK_TARGET_ACCEPTED",
+    );
+    expect(loopbackDiag?.correlationId).toBe(UNKNOWN_CORRELATION_ID);
+    // Guards against a future re-mint: a UUID never satisfies this shape.
+    expect(loopbackDiag?.correlationId).not.toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-/);
+
+    // The PERSISTED audit record must key to the same identity as the diagnostics above. A minted
+    // UUID here would split one request across two correlation identities, so the audit evidence
+    // could never be joined back to that request's diagnostics in a support bundle.
+    const auditFiles = readdirSync(evidenceDir).filter((name) => name.startsWith("gateway-setup-"));
+    expect(auditFiles).toHaveLength(1);
+    const auditRecord = JSON.parse(
+      readFileSync(join(evidenceDir, auditFiles[0] ?? ""), "utf8"),
+    ) as Record<string, unknown>;
+    expect(auditRecord.correlationId).toBe(UNKNOWN_CORRELATION_ID);
+    expect(auditRecord.correlationId).not.toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-/);
+    deps.store.close();
+  });
+
+  it("emits the loopback diagnostic for a trailing-dot localhost target over https (Codex, #3348)", async () => {
+    // classifyOutboundHost does exact string equality against "localhost" with no trailing-dot
+    // normalization; gatewaySetupTargetClass (used by the success audit) already strips it, but
+    // reportLoopbackTargetAccepted used to call classifyOutboundHost directly, so an accepted
+    // "https://localhost.:PORT" candidate left no diagnostic even though the success audit
+    // recorded it as loopback -- the same request disagreeing with itself.
+    const uiDir = await tempDir("keiko-gw-loopback-dot-ui-");
+    const evidenceDir = await tempDir("keiko-gw-loopback-dot-ev-");
+    const diagnostics: ServerDiagnosticRecord[] = [];
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir,
+      env: { ...VAULT_ENV },
+      uiDbPath: join(uiDir, "keiko-ui.db"),
+      gatewayModelDiscovery: () => Promise.resolve(["local-model"]),
+      gatewayEmbeddingProbe: PASSTHROUGH_EMBEDDING_PROBE,
+      gatewaySetupTester: (_config, modelIds) => Promise.resolve([modelIds[0] ?? "local-model"]),
+      diagnostics: { record: (record): void => void diagnostics.push(record) },
+    });
+
+    const result = await handleGatewaySetup(
+      ctx(
+        { baseUrl: "https://localhost.:8443/v1", apiKey: "local-token" },
+        "corr-gw-dotted-loopback",
+      ),
+      deps,
+    );
+    expect(result.status, JSON.stringify(result.body)).toBe(200);
+
+    expect(diagnostics).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          correlationId: "corr-gw-dotted-loopback",
+          operation: "POST /api/gateway/setup",
+          code: "GATEWAY_SETUP_LOOPBACK_TARGET_ACCEPTED",
+        }),
+      ]),
+    );
+    const auditFiles = readdirSync(evidenceDir).filter((name) => name.startsWith("gateway-setup-"));
+    expect(auditFiles).toHaveLength(1);
+    const record = JSON.parse(
+      readFileSync(join(evidenceDir, auditFiles[0] ?? ""), "utf8"),
+    ) as Record<string, unknown>;
+    // The diagnostic and the success audit must agree on the same request's classification.
+    expect(record.targetClass).toBe("loopback");
+    deps.store.close();
+  });
+
   it("records the link-local/metadata override, not only the private-network one (Codex, #3201)", async () => {
     const uiDir = await tempDir("keiko-gw-audit-linklocal-ui-");
     const evidenceDir = await tempDir("keiko-gw-audit-linklocal-ev-");
@@ -1259,9 +1399,10 @@ describe("handleGatewaySetup", () => {
     ["https://169.254.169.254/", "metadata"],
     ["https://10.0.0.5/", "private"],
   ])("classifies %s as %s (KEIKO-0497 / #3201)", (input, expected) => {
-    // Direct test of the classifier: the URL validator strips no trailing dot, so it rejects
-    // "localhost." earlier in the request path — but a valid record still needs the right class
-    // for edge cases like an IP-with-dot or a name that happens to match a literal address.
+    // Direct test of the classifier. Note: the URL validator's http-only loopback rejection (an
+    // exact "localhost" string match) does reject a dotted "localhost." over http, but NOT over
+    // https, where a dotted-loopback candidate reaches this classifier live — see the
+    // "trailing-dot localhost target over https" diagnostic test above (Codex, #3348).
     const url = input.includes(":") ? input : `http://${input}:11434/v1`;
     expect(gatewaySetupTargetClass(url)).toBe(expected);
   });
@@ -6273,7 +6414,18 @@ describe("handleGatewaySetup", () => {
     const deps = buildUiHandlerDeps({
       configPath: undefined,
       evidenceDir,
-      env: { ...VAULT_ENV },
+      // KEIKO-0325 test-infra (#2907 follow-up): declaring the submitted apiKey as the env
+      // default makes every one of the MAX_DISCOVERED_MODELS+5 discovered providers take the
+      // env-credential branch in credentialVault.ts's planPlaintextProviderCredential, so none of
+      // them is queued for sealing. Without this, persistVaultEntries seals each one individually
+      // — createLocalSecretVault's set() does a full read-modify-write-with-double-fsync of the
+      // ENTIRE vault file per call — and ~100 sequential whole-file rewrites measured ~28-29s of
+      // real synchronous disk I/O even outside coverage instrumentation (see the sibling
+      // discovery-truncation test below for the same fixture and rationale), pushing this test
+      // past the suite's 15s testTimeout. This test's subject is the truncation diagnostic, not
+      // vault sealing, so steering the fixture around that unrelated, expensive path is scoped to
+      // the test and changes no assertion below.
+      env: { ...VAULT_ENV, KEIKO_DEFAULT_API_KEY: "example-secret-token" },
       uiDbPath: join(uiDir, "keiko-ui.db"),
       gatewayModelDiscovery: () => Promise.resolve(parseModelDiscovery({ data: oversized })),
       gatewayEmbeddingProbe: PASSTHROUGH_EMBEDDING_PROBE,
@@ -6321,7 +6473,11 @@ describe("handleGatewaySetup", () => {
     const deps = buildUiHandlerDeps({
       configPath: undefined,
       evidenceDir,
-      env: { ...VAULT_ENV },
+      // See the sibling "emits an operator diagnostic when model discovery truncates" test above
+      // for why KEIKO_DEFAULT_API_KEY is set here: it keeps ~100 discovered providers off the
+      // per-model vault-sealing path (real ~28-29s of sequential whole-file-rewrite disk I/O in
+      // credentialVault.ts, unrelated to what this test asserts) so the test stays within budget.
+      env: { ...VAULT_ENV, KEIKO_DEFAULT_API_KEY: "example-secret-token" },
       uiDbPath: join(uiDir, "keiko-ui.db"),
       gatewayModelDiscovery: () => Promise.resolve(parseModelDiscovery({ data: oversized })),
       gatewayEmbeddingProbe: PASSTHROUGH_EMBEDDING_PROBE,

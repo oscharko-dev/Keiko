@@ -43,6 +43,7 @@ export default defineConfig({
       exclude: [
         "packages/keiko-ui/**",
         "**/*.test.*",
+        "**/*.bench.*",
         "**/__tests__/**",
         "**/_support.ts",
         "**/test-support.ts",

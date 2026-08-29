@@ -27,7 +27,6 @@ const STATES = new Set<CodingWorkbenchRuntimeStateName>([
   "taken-over",
   "recovery-required",
   "idle",
-  "unavailable",
 ]);
 const SETTLED = new Set<CodingWorkbenchRuntimeStateName>([
   "succeeded",

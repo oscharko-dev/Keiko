@@ -78,6 +78,7 @@ import {
 import {
   gateDeleteOptions,
   gateEmbeddingInput,
+  gateListOptions,
   gateMemoryEdge,
   gateMemoryRecord,
   gateMemoryScope,
@@ -849,7 +850,7 @@ function buildMemoryReadOps(db: DatabaseSync, opts: ResolvedOptions): MemoryRead
       options?: ListMemoriesOptions,
     ): readonly MemoryRecord[] => {
       for (const scope of scopes) gateMemoryScope(scope);
-      const effective = options ?? {};
+      const effective = gateListOptions(options ?? {});
       const nowMs = effective.nowMs ?? opts.now();
       return listMemoriesAcrossScopeRows(db, scopes, effective, nowMs, opts.cipher);
     },
@@ -858,7 +859,7 @@ function buildMemoryReadOps(db: DatabaseSync, opts: ResolvedOptions): MemoryRead
       options?: ListMemoriesOptions,
     ): readonly MemoryRecord[] => {
       gateMemoryScope(scope);
-      const effective = options ?? {};
+      const effective = gateListOptions(options ?? {});
       const nowMs = effective.nowMs ?? opts.now();
       return listMemoriesByScopeRows(db, scope, effective, nowMs, opts.cipher);
     },
@@ -867,7 +868,7 @@ function buildMemoryReadOps(db: DatabaseSync, opts: ResolvedOptions): MemoryRead
       options?: ListMemoriesOptions,
     ): ReturnType<MemoryVaultStore["listMemoryMetadataByScope"]> => {
       gateMemoryScope(scope);
-      const effective = options ?? {};
+      const effective = gateListOptions(options ?? {});
       const nowMs = effective.nowMs ?? opts.now();
       return listMemoryMetadataByScopeRows(db, scope, effective, nowMs);
     },

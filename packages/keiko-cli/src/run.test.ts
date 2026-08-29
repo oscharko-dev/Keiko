@@ -143,6 +143,76 @@ describe("runAgentCli dry-run", () => {
     expect(c.out()).toContain("completed");
   });
 
+  // 2895 audit KEIKO-0903 (Finding D, #3323 follow-up): before this fix, run.ts constructed the
+  // tool-using CLI dispatch (generate-unit-tests / investigate-bug) with only shaperPort -- no
+  // compactionPort -- so a session whose accumulated assistant/tool history genuinely exceeded
+  // maxContextBytes (512,000 -- keiko-contracts/src/harness.ts DEFAULT_LIMITS) hard-failed
+  // HARNESS_LIMIT_CONTEXT_SIZE instead of compacting and continuing, exactly the gap #3323 closed
+  // for the reachable server call sites.
+  //
+  // Each growth round answers with finishReason "tool_calls" and an EMPTY toolCalls array. This is
+  // the same construction keiko-harness/src/loop.test.ts's own "checkModelCallLimits compaction
+  // (KEIKO-0726)" tests use, and for the same documented reason: routeAfterModel (executor.ts)
+  // sends the run to the tool-call state on finishReason alone, and handleToolCall's per-call loop
+  // has nothing to iterate when toolCalls is empty, so it returns straight to model-call WITHOUT
+  // running its own tool-result byte check (selectToolMessage/toolOutputBudgetExceeded). That
+  // per-tool-result check is a narrower, EARLIER gate scoped to whether one new tool message fits
+  // (HarnessShaperPort, ADR-0055 D4) -- growth concentrated in assistant content routes around it
+  // and lands on checkModelCallLimits at the next model-call entry exactly as it would for a real
+  // provider response that narrates large reasoning alongside a request to keep working, which is
+  // the actual target of this fix. 8 rounds of ~70,000 bytes of assistant content comfortably
+  // exceeds 512,000 bytes cumulative before the model finally stops on round 9. A session this
+  // large can only reach `completed` if checkModelCallLimits' compaction attempt
+  // (keiko-harness/src/loop.ts's tryCompact) actually fires and the injected port actually evicts
+  // old turns; the unfixed run.ts hard-fails instead.
+  it("compacts a tool-using session that grows past maxContextBytes and completes, instead of hard-failing (multi-round regression)", async () => {
+    const c = capture();
+    const GROWTH_ROUNDS = 8;
+    let calls = 0;
+    const growingModel: ModelPort = {
+      call: (request: GatewayRequest): Promise<NormalizedResponse> => {
+        calls += 1;
+        if (calls <= GROWTH_ROUNDS) {
+          return Promise.resolve({
+            modelId: request.modelId,
+            content: "x".repeat(70_000),
+            finishReason: "tool_calls",
+            toolCalls: [],
+            structuredOutput: null,
+            usage: {
+              requestId: `req-${String(calls)}`,
+              promptTokens: 1,
+              completionTokens: 1,
+              latencyMs: 1,
+              costClass: "low",
+            },
+          });
+        }
+        return Promise.resolve(response(request.modelId));
+      },
+    };
+    const code = await runAgentCli(
+      [
+        "investigate-bug",
+        "--description",
+        "Grounded answer omits the linked PDF source.",
+        "--no-evidence",
+        "--model",
+        "test-model",
+      ],
+      c.io,
+      {},
+      { model: growingModel },
+    );
+    expect(code).toBe(0);
+    expect(c.err()).not.toContain("HARNESS_LIMIT_CONTEXT_SIZE");
+    expect(c.out()).toContain("run:completed");
+    expect(c.out()).toContain("context:compacted");
+    // The model was called past the growth rounds into its final "stop" response -- the run
+    // reached completion rather than hard-failing partway through the tool-calling loop.
+    expect(calls).toBeGreaterThan(GROWTH_ROUNDS);
+  });
+
   it("returns usage error 2 for an unknown task type", async () => {
     const c = capture();
     const code = await runAgentCli(["frobnicate", "--file", "x"], c.io);

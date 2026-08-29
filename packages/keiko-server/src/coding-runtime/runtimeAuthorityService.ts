@@ -771,10 +771,7 @@ function reusableTransitionRequiresReapProof(
   target: CodingWorkbenchRuntimeStateName,
   reapPendingRunId: string | undefined,
 ): boolean {
-  return (
-    (target === "idle" || target === "unavailable") &&
-    (current === "recovery-required" || reapPendingRunId !== undefined)
-  );
+  return target === "idle" && (current === "recovery-required" || reapPendingRunId !== undefined);
 }
 
 function transitionAllowed(
@@ -800,7 +797,7 @@ function transitionedState(
   nowIso: string,
   failureCode: CodingWorkbenchRuntimeFailureCode | undefined,
 ): CodingWorkbenchRuntimeState {
-  const clear = target === "idle" || target === "unavailable";
+  const clear = target === "idle";
   return {
     ...previous,
     state: target,

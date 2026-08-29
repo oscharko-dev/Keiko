@@ -94,10 +94,7 @@ const LEGAL_TRANSITION_PAIRS: readonly (readonly [
   CodingWorkbenchRuntimeStateName,
   CodingWorkbenchRuntimeStateName,
 ])[] = [
-  ["unavailable", "idle"],
-  ["unavailable", "recovery-required"],
   ["idle", "starting"],
-  ["idle", "unavailable"],
   ["idle", "recovery-required"],
   ["starting", "ready"],
   ["starting", "failed"],
@@ -293,10 +290,6 @@ function serviceInState(state: CodingWorkbenchRuntimeStateName): {
 } {
   const authority = service();
   if (state === "idle") return { authority, runId: undefined };
-  if (state === "unavailable") {
-    authority.transition(undefined, "unavailable", NOW, "runtime-unavailable");
-    return { authority, runId: undefined };
-  }
   if (state === "recovery-required") {
     authority.transition(undefined, "recovery-required", NOW, "recovery-required");
     return { authority, runId: undefined };
@@ -877,6 +870,22 @@ describe("CodingRuntimeAuthorityService", () => {
     expect(validateCodingWorkbenchRuntimeState(authority.state())).toMatchObject({ ok: true });
   });
 
+  // KEIKO-0618: the shared `starting` -> `cancelled` contract edge is genuinely reachable through
+  // REAP_SETTLEMENT_TRANSITIONS, via confirmReaped, when a Codex/OpenCode sidecar fails its startup
+  // handshake before productionCodingRuntimePorts.ts ever advances authority state past `starting`.
+  // Pinned so a future edit does not remove this edge on the mistaken belief that it is dead code.
+  it("settles a starting run's reap through the starting->cancelled edge (KEIKO-0618)", async () => {
+    const authority = service();
+    const minted = mint(authority, intent, false);
+    if (!minted.ok) throw new Error("mint");
+    expect(authority.state()).toMatchObject({ state: "starting", runId: "run-1" });
+    expect(authority.revokeBeforeTerminate("run-1")).toBe(true);
+    expect(authority.state()).toMatchObject({ state: "starting", runId: "run-1" });
+    const receipt = await reapReceipt("run-1", treeBinding(authority));
+    expect(authority.confirmReaped("run-1", receipt, NOW)).toBe(true);
+    expect(authority.state()).toMatchObject({ state: "idle", runId: undefined });
+  });
+
   it("rejects an invalid transition candidate atomically", () => {
     const authority = service();
     const minted = mint(authority, intent, false);
@@ -892,7 +901,6 @@ describe("CodingRuntimeAuthorityService", () => {
       true,
     );
     expect(authority.transition(undefined, "idle", NOW)).toBe(false);
-    expect(authority.transition(undefined, "unavailable", NOW, "runtime-unavailable")).toBe(false);
     expect(authority.state()).toMatchObject({ state: "recovery-required" });
   });
 

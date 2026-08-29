@@ -1,4 +1,7 @@
-import { describe, expect, it } from "vitest";
+// @vitest-environment jsdom
+import "../../vitest.setup.js";
+
+import { afterEach, describe, expect, it } from "vitest";
 
 import { EDITOR_THEME_TOKEN_NAMES } from "./theme.js";
 import {
@@ -256,5 +259,81 @@ describe("DOM editor token resolver", () => {
     const { view, root, events } = fakeView({ computedProbeColor: "not-a-parseable-colour" });
     expect(() => resolveEditorThemeTokensFromDom(root, view)).toThrow(/could not parse/);
     expect(events.removed).toBe(1);
+  });
+});
+
+describe("resolveEditorThemeTokensFromDom against real jsdom (KEIKO-0528, KEIKO-0581)", () => {
+  afterEach(() => {
+    for (const tokenName of EDITOR_THEME_TOKEN_NAMES) {
+      document.documentElement.style.removeProperty(tokenName);
+    }
+  });
+
+  it("throws via the two-sentinel guard when jsdom cannot resolve a --ed-* token to a concrete colour", () => {
+    // jsdom's computed style never resolves var(...) to a concrete colour (unlike a real browser),
+    // so every probe read below stays the literal "var(--token)" string. Seeding the tokens on
+    // documentElement satisfies resolveEditorThemeTokens' presence check (the raw custom property is
+    // non-empty), so resolution reaches the real canvas normaliser in vitest.setup.ts's shared
+    // facade, whose fillStyle accept/reject semantics silently reject "var(--token)" (it matches
+    // none of hex/rgb/oklch/lab) and trip the two-sentinel guard — exercising the exact guard that,
+    // before the facade had fillStyle accept/reject semantics, no jsdom-backed test but
+    // theme-resolver.test.ts's own hand-rolled mock could reach.
+    for (const tokenName of EDITOR_THEME_TOKEN_NAMES) {
+      document.documentElement.style.setProperty(tokenName, "#112233");
+    }
+    expect(() => resolveEditorThemeTokensFromDom(document.body)).toThrow(/could not parse/);
+  });
+});
+
+// #3348 audit: the shared facade must validate a colour FORM, not merely a prefix. A prefix-only
+// check reported `#not-a-colour` / `rgb-nope` / a bare `lab(` as ACCEPTED, where a real canvas
+// silently keeps the previous fillStyle — so a jsdom-backed component test could not observe the
+// rejection path the two-sentinel guard above depends on.
+describe("shared jsdom canvas facade fillStyle accept/reject semantics (#3348 audit)", () => {
+  function context2d(): CanvasRenderingContext2D {
+    const context = document.createElement("canvas").getContext("2d");
+    if (context === null)
+      throw new Error("expected the jsdom canvas facade to provide a 2d context");
+    return context;
+  }
+
+  it.each([
+    ["#abc", "#abc"],
+    ["#abcd", "#abcd"],
+    ["#a1b2c3", "#a1b2c3"],
+    ["#a1b2c3d4", "#a1b2c3d4"],
+    ["rgb(1, 2, 3)", "rgb(1, 2, 3)"],
+    ["rgba(1, 2, 3, 0.5)", "rgba(1, 2, 3, 0.5)"],
+    ["oklch(0.5 0.1 200)", "oklch(0.5 0.1 200)"],
+    ["lab(50% 20 -30)", "lab(50% 20 -30)"],
+  ])("stores a well-formed %s", (assigned, expected) => {
+    const context = context2d();
+    context.fillStyle = assigned;
+    expect(context.fillStyle).toBe(expected);
+  });
+
+  // Every case here shares a prefix with an accepted form, so a prefix-only check would wrongly
+  // store it. The sentinel must survive the assignment untouched, exactly as on a real canvas.
+  it.each([
+    "#not-a-colour",
+    "#12345",
+    "#xyzxyz",
+    "#",
+    "rgb-nope",
+    "rgb(",
+    "rgb(1, 2, 3",
+    "oklch",
+    "oklch(0.5 0.1 200",
+    "lab(",
+    "labrador",
+    "var(--ed-editor-background)",
+    "",
+    "   ",
+  ])("silently rejects %j and preserves the previous value", (assigned) => {
+    const context = context2d();
+    const sentinel = "#0a0b0c";
+    context.fillStyle = sentinel;
+    context.fillStyle = assigned;
+    expect(context.fillStyle).toBe(sentinel);
   });
 });

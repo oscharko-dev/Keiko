@@ -105,6 +105,11 @@ function reconDeps(deps: WorkspaceRepairServiceDeps): WorkspaceReconciliationSer
     now: deps.now,
     newId: deps.newId,
     ...(deps.lockTtlMs !== undefined ? { lockTtlMs: deps.lockTtlMs } : {}),
+    // Present only to satisfy the shared deps shape: reconcileSingleInstance (unlike reconcileImpl)
+    // deliberately never calls the mutex — repair.ts already holds this exact `ws:<workspaceId>` key
+    // for its whole operation before re-entering reconcileSingleInstance, so locking there would
+    // self-deadlock (KEIKO-0996, #3339).
+    mutex: deps.mutex,
   };
 }
 

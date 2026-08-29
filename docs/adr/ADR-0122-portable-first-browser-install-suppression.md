@@ -72,6 +72,10 @@ runtime state, or affect portable updater v2.
 - Existing PWA-specific verification artifacts become historical rather than active release gates.
 - Users who already created browser-managed shortcuts may need to remove them manually if they
   cause confusion.
+- Follow-up (KEIKO-0549 / #3313): the `icon-192-maskable.png` / `icon-512-maskable.png` manifest
+  entries were byte-identical to their non-maskable siblings with no safe-area padding, so they
+  were retired as vestigial rather than regenerated — servicing a proper maskable icon would be
+  investment in a browser-install surface this ADR already stepped away from.
 
 ### Neutral
 

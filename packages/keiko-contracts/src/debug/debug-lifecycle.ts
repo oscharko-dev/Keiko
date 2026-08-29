@@ -139,6 +139,50 @@ const REASONS: Record<DebugLifecycleReason, true> = {
 };
 export const DEBUG_LIFECYCLE_REASONS = Object.keys(REASONS) as readonly DebugLifecycleReason[];
 
+// ─── (eventKind, state) legality table (KEIKO-0890) ─────────────────────────────────────────────
+//
+// `hasClosedVocabulary` validated eventKind, state, and reason as three independent enum-membership
+// checks, so it would accept a semantically impossible combination — e.g. a "start" event carrying a
+// "running" state — if a producer bug ever emitted one. No illegal pairing has been observed in
+// production; this closes the defense-in-depth gap with an explicit table rather than leaving it
+// document-and-accept.
+//
+// Enumerated from every `DebugLifecycleEvidence` actually constructed in
+// packages/keiko-server/src/editor/dap/debugSessionRegistry.ts (the sole producer that flows through
+// dapLifecycleLedger.ts) as of this table's authoring:
+//   start            -> starting
+//   active           -> running
+//   stop             -> stopped
+//   failure          -> failed | restartThrottled
+//   session-revoked  -> revoked
+//   teardown         -> revoked | stopped | restartThrottled | failed
+//
+// This table is a SECOND source of truth that must be kept in sync with the producer as debug-session
+// states evolve — a mismatch would start rejecting legitimate evidence, which is worse than the
+// permissiveness it replaces. debugSessionRegistry.test.ts pins a drift-detection test (KEIKO-0890)
+// that runs the real producer through every terminal path and fails if it ever emits a pairing this
+// table does not recognize, so a drifted table is caught before it silently rejects real evidence.
+//
+// `Record<DebugLifecycleEventKind, …>` rather than a `Partial`: every event kind must have an entry,
+// so a new member added to the union without a matching row here is a compile error — but that
+// guarantee covers only the KEYS. The VALUES are `ReadonlySet<DebugSessionState>`, which carries no
+// completeness constraint: a newly added `DebugSessionState` compiles fine while being absent from
+// every legal set here, and is then silently rejected at runtime — exactly the "dangerous direction"
+// the KEIKO-0377 comment above warns about for untyped vocabularies. That gap is real; the
+// debugSessionRegistry.test.ts drift test (KEIKO-0890) is the compensating control that catches it,
+// by driving the real producer through every terminal path and failing if a pairing it emits is
+// missing from this table.
+export const LEGAL_STATES_BY_EVENT: Readonly<
+  Record<DebugLifecycleEventKind, ReadonlySet<DebugSessionState>>
+> = {
+  start: new Set(["starting"]),
+  active: new Set(["running"]),
+  stop: new Set(["stopped"]),
+  failure: new Set(["failed", "restartThrottled"]),
+  "session-revoked": new Set(["revoked"]),
+  teardown: new Set(["revoked", "stopped", "restartThrottled", "failed"]),
+};
+
 /**
  * The exact `DebugLifecycleEvidence` field set, keyed off `keyof DebugLifecycleEvidence` so a field
  * added to (or removed from) the interface without a matching entry here is a compile error in both
@@ -200,10 +244,13 @@ function hasExactKeys(record: Record<string, unknown>): boolean {
 }
 
 function hasClosedVocabulary(record: Record<string, unknown>): boolean {
+  const eventKind = record.eventKind as DebugLifecycleEventKind;
+  const state = record.state as DebugSessionState;
   return (
-    Object.hasOwn(EVENT_KINDS, record.eventKind as DebugLifecycleEventKind) &&
-    Object.hasOwn(STATES, record.state as DebugSessionState) &&
-    Object.hasOwn(REASONS, record.reason as DebugLifecycleReason)
+    Object.hasOwn(EVENT_KINDS, eventKind) &&
+    Object.hasOwn(STATES, state) &&
+    Object.hasOwn(REASONS, record.reason as DebugLifecycleReason) &&
+    LEGAL_STATES_BY_EVENT[eventKind].has(state)
   );
 }
 

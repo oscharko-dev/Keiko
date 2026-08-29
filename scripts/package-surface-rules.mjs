@@ -14,9 +14,9 @@ export const FORBIDDEN_TARBALL_PATH_RULES = [
     test: (p) =>
       p.includes("/__tests__/") ||
       p.startsWith("__tests__/") ||
-      /\.(test|spec)\.[cm]?[jt]sx?$/.test(p) ||
-      /\.(test|spec)\.d\.ts$/.test(p),
-    label: "compiled test or spec artifact",
+      /\.(test|spec|bench)\.[cm]?[jt]sx?$/.test(p) ||
+      /\.(test|spec|bench)\.d\.ts$/.test(p),
+    label: "compiled test, spec, or bench artifact",
   },
   { test: (p) => p === ".env" || p.startsWith(".env."), label: "an environment file" },
   {

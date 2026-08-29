@@ -545,8 +545,6 @@ function commandDescription(command: EditorM7CommandDefinition, t: I18nTranslate
 function scopeLabel(command: EditorM7CommandDefinition, t: I18nTranslate): string {
   if (command.scope === "editor") return t("settings.keyboard.scopeEditor");
   if (command.scope === "settings") return t("settings.keyboard.scopeSettings");
-  if (command.scope === "explorer") return t("settings.keyboard.scopeExplorer");
-  if (command.scope === "git") return t("settings.keyboard.scopeGit");
   return t("settings.keyboard.scopeGlobal");
 }
 

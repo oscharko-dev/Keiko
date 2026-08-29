@@ -268,6 +268,30 @@ function decodeAudio(raw: unknown): Uint8Array | "invalid" | "empty" {
   return decoded;
 }
 
+// KEIKO-0844 introduced this as a "consistency guard": durationMs is a client claim with no
+// independent server-side measurement (decoding the container to derive true playback length is
+// out of scope, ADR-0100 supply-chain D8 — no audio-processing dependency). Codex (#3348) then
+// widened the per-MIME density ceiling this guard cross-checked against to a single 6_144
+// bytes/ms rate (192 kHz / 32-bit / 8 channels), claiming it "can no longer reject any real
+// encoder output".
+//
+// The #2895 audit disproved that claim and the cross-check was removed. A valid
+// WAVEFORMATEXTENSIBLE PCM stream can legitimately exceed 192 kHz / 32-bit / 8 channels — e.g.
+// 384 kHz / 32-bit / 6 channels is 9_216 bytes/ms, above the widened ceiling — so a truthful,
+// well-formed clip was still rejected. No fixed bytes-per-ms rate can be both correct and
+// non-vacuous without decoding the container, which remains out of scope for the same ADR-0100 D8
+// reason. Worse, the cross-check was directional: it only ever rejected a decoded size that was
+// too DENSE for the declared duration, so a caller could evade it trivially by declaring a larger
+// durationMs, or by omitting the field entirely (the `raw === undefined` branch below has always
+// short-circuited to "ok" — no claim, nothing to cross-check). It rejected only the honest callers
+// who reported accurate, high-density audio, while admitting every dishonest one.
+//
+// It carried no independent security value either: durationMs is never forwarded to the provider
+// (SpeechToTextRequest carries no duration field) and MAX_AUDIO_BYTES already bounds worst-case
+// decoded size — and therefore worst-case work — regardless of what a client claims. What remains
+// is shape validation only: durationMs, when present, must be a finite positive integer within the
+// dictation limit. See voice-handlers.test.ts's "accepts a truthful 384kHz/32-bit/6-channel WAV"
+// case for the regression fixture, and docs/voice/dictation-endpoint.md for the updated contract.
 function validateDurationMs(raw: unknown): "ok" | "invalid" {
   if (raw === undefined) {
     return "ok";
@@ -297,8 +321,105 @@ function validateLanguage(raw: unknown): LanguageResult {
   return { ok: true, language: raw };
 }
 
+// A coarse, closed classification of the decoded audio size relative to MAX_AUDIO_BYTES, used only
+// for body-free activity-log evidence (never the response body): an operator can tell "this was a
+// tiny clip" from "this was right at the cap" without the log ever carrying the exact byte count,
+// let alone the audio itself.
+const AUDIO_BYTES_BUCKET_QUARTILE = MAX_AUDIO_BYTES / 4;
+
+function audioBytesBucket(byteLength: number): string {
+  if (byteLength === 0) {
+    return "empty";
+  }
+  if (byteLength > MAX_AUDIO_BYTES) {
+    return "over-limit";
+  }
+  const quartile = Math.ceil(byteLength / AUDIO_BYTES_BUCKET_QUARTILE);
+  return `q${String(quartile)}-of-4`;
+}
+
+// #2895 audit (Finding 2): a request-validation rejection used to return straight to the browser
+// with no activity-log trace at all, so an operator reading server.log could not distinguish "this
+// dictation request never reached the provider, and here is the closed reason why" from a
+// provider-side failure — the gap AGENTS.md section 8 Rule 1 requires every behavioural change to
+// close. Emitted through THIS file's existing diagnostic port (emitServerDiagnostic /
+// UiHandlerDeps.diagnostics), the same one pipeAudioStream already uses below, never a second log
+// path. Body-free by construction (ADR-0173 D4): `code` is the SAME closed reason the browser
+// response already carries (never secret, never request content), and `bytesBucket` — present only
+// once the audio has been decoded — is a coarse quartile classification, never the exact byte
+// count, the declared duration, the audio, or its base64 encoding. `correlationId` falls back to
+// the sanctioned UNKNOWN_CORRELATION_ID marker, never a fresh mint (AGENTS.md section 8: "never an
+// ad-hoc string, never a silently missing id").
+function emitVoiceValidationRejected(
+  deps: UiHandlerDeps,
+  ctx: RouteContext,
+  code: string,
+  bytesBucket?: string,
+): void {
+  emitServerDiagnostic(deps.diagnostics, {
+    correlationId: ctx.correlationId ?? UNKNOWN_CORRELATION_ID,
+    timestamp: new Date().toISOString(),
+    operation: "POST /api/voice/transcribe",
+    source: "voice.transcribe.validation",
+    errorClass: "VoiceDictationValidationRejected",
+    message: "Voice dictation request rejected during request validation.",
+    code,
+    ...(bytesBucket !== undefined ? { audioBytesBucket: bytesBucket } : {}),
+  });
+}
+
+// Emits the rejection diagnostic and builds the matching 400 RouteResult in one call, so callers
+// stay a flat list of checks instead of repeating both steps per branch.
+function rejectValidation(
+  deps: UiHandlerDeps,
+  ctx: RouteContext,
+  code: string,
+  message: string,
+  bytesBucket?: string,
+): RouteResult {
+  emitVoiceValidationRejected(deps, ctx, code, bytesBucket);
+  return badRequest(deps, code, message);
+}
+
+interface DecodedRequestAudio {
+  readonly decoded: Uint8Array;
+  readonly bytesBucket: string;
+}
+
+// Decodes and size-checks the audio field, emitting the matching validation-rejection diagnostic
+// on any failure path. Split out of validateRequest to keep that function under this repository's
+// max-lines-per-function ceiling.
+function decodeAndSizeCheckAudio(
+  body: Record<string, unknown>,
+  deps: UiHandlerDeps,
+  ctx: RouteContext,
+): DecodedRequestAudio | RouteResult {
+  const decoded = decodeAudio(body.audio);
+  if (decoded === "invalid") {
+    return rejectValidation(
+      deps,
+      ctx,
+      "INVALID_AUDIO",
+      "The audio field must be non-empty base64 data.",
+    );
+  }
+  if (decoded === "empty") {
+    return rejectValidation(deps, ctx, "INVALID_AUDIO", "The decoded audio is empty.", "empty");
+  }
+  const bytesBucket = audioBytesBucket(decoded.byteLength);
+  if (decoded.byteLength > MAX_AUDIO_BYTES) {
+    emitVoiceValidationRejected(deps, ctx, "PAYLOAD_TOO_LARGE", bytesBucket);
+    return {
+      status: 413,
+      body: deps.redactor(errorBody("PAYLOAD_TOO_LARGE", "The audio clip exceeds the size limit.")),
+    };
+  }
+  return { decoded, bytesBucket };
+}
+
 // Validates and normalizes the request fields, returning either the audio payload to transcribe or a
-// deterministic 4xx RouteResult.
+// deterministic 4xx RouteResult. Every rejection also emits a body-free activity-log diagnostic (see
+// emitVoiceValidationRejected) before returning.
 // KEIKO-0874: the actual implemented order is: MIME format check, then audio decode
 // (invalid/empty), then decoded byte-size cap, then durationMs, then language, then prompt. The
 // prompt is validated but never rejects the request (an invalid prompt is silently dropped and the
@@ -307,38 +428,40 @@ function validateLanguage(raw: unknown): LanguageResult {
 function validateRequest(
   body: Record<string, unknown>,
   deps: UiHandlerDeps,
+  ctx: RouteContext,
 ): ValidatedAudio | RouteResult {
   const mimeType = normalizeMimeType(body.mimeType);
   if (mimeType === undefined) {
-    return badRequest(
+    return rejectValidation(
       deps,
+      ctx,
       "UNSUPPORTED_AUDIO_FORMAT",
       "The audio mimeType is missing or not a supported dictation format.",
     );
   }
-  const decoded = decodeAudio(body.audio);
-  if (decoded === "invalid") {
-    return badRequest(deps, "INVALID_AUDIO", "The audio field must be non-empty base64 data.");
+  const audio = decodeAndSizeCheckAudio(body, deps, ctx);
+  if (isRouteResult(audio)) {
+    return audio;
   }
-  if (decoded === "empty") {
-    return badRequest(deps, "INVALID_AUDIO", "The decoded audio is empty.");
-  }
-  if (decoded.byteLength > MAX_AUDIO_BYTES) {
-    return {
-      status: 413,
-      body: deps.redactor(errorBody("PAYLOAD_TOO_LARGE", "The audio clip exceeds the size limit.")),
-    };
-  }
+  const { decoded, bytesBucket } = audio;
   if (validateDurationMs(body.durationMs) === "invalid") {
-    return badRequest(
+    return rejectValidation(
       deps,
+      ctx,
       "INVALID_DURATION",
       "The declared durationMs must be a positive integer within the dictation limit.",
+      bytesBucket,
     );
   }
   const language = validateLanguage(body.language);
   if (!language.ok) {
-    return badRequest(deps, "INVALID_LANGUAGE", "The language tag is not a valid BCP-47 language.");
+    return rejectValidation(
+      deps,
+      ctx,
+      "INVALID_LANGUAGE",
+      "The language tag is not a valid BCP-47 language.",
+      bytesBucket,
+    );
   }
   const prompt = validatePrompt(body.prompt);
   return {
@@ -432,7 +555,7 @@ export async function handleVoiceTranscribe(
   if (isRouteResult(parsed)) {
     return parsed;
   }
-  const validated = validateRequest(parsed, deps);
+  const validated = validateRequest(parsed, deps, ctx);
   if (isRouteResult(validated)) {
     return validated;
   }

@@ -429,6 +429,71 @@ execute its decision:
   drift markers — the operator must choose.
 - `none`: clear the pointer (dangling or no prior pointer). Idempotent.
 
+**Concurrency guarantee (KEIKO-0996, #3339).** Step 8's per-instance re-read,
+fact-gathering, classification, and persisted write (`WorkspaceInstanceStore.upsert`
+inside `reconcileWithContext`, called from the live `reconcile()` path) run as ONE
+critical section serialized under the SAME `ws:<workspaceId>` key every other
+mutating workspace flow uses (ADR-0093 D1): `reconcileImpl` wraps the re-read +
+`gatherFacts` + `reconcileWithContext` sequence in
+`ctx.deps.mutex.runExclusive([workspaceKey(instance.workspaceId)], ...)`, mirroring
+`repair.ts`'s "advisory check → live reconcile → lock acquire → strategy mutation"
+and `cleanup.ts`'s "re-check persisted liveness inside the critical section". This
+was originally a documented gap — ADR-0091 was silent on reconciliation's
+concurrency semantics, and reconciliation's write did not take the shared mutex the
+way `WorkspaceCleanupServiceDeps` (also mutating) already did. Widening the lock to
+cover fact-gathering (not just the write) matters: once the lock is held, the
+callback re-reads `store.getById(workspaceId)` and classifies from THAT record, so
+a concurrent `activate`/`pause`/`repair`/`cleanup` that mutated or deleted the
+workspace while this reconcile pass awaited the lock is observed rather than
+clobbered; when the fresh read comes back `undefined` (the workspace was deleted,
+e.g. by `completeCleanupImpl`), this pass skips it instead of resurrecting a
+deleted row via a stale-instance `upsert`. An operator-triggered
+`POST /api/task-workspaces/reconciliation` racing the startup bootstrap
+reconciliation pass (`reconcileTaskWorkspacesAtStartup`), or racing an
+already-in-flight `activate`/`pause`/`repair`/`cleanup` of the same workspace, can
+no longer land its write inside another flow's critical section for that
+workspace, nor can it write a persisted row that flow has since deleted or
+retargeted. `reconcileSingleInstance` (used by #447 repair and internal callers)
+stays unlocked because its callers (e.g. `repair.ts`) already hold the same
+`ws:<workspaceId>` key for their whole operation before re-entering it — wrapping
+it there again would self-deadlock.
+
+**Worktree-list freshness (PR #3348 review finding, same lock).** The re-read above
+closed the TOCTOU for the persisted store row, but a PR #3348 review pass on this
+change caught that the SAME class of gap still existed one layer down: the git
+worktree list `gatherFacts` classifies `observedHead`/`headMatches` against was, in
+the first version of this fix, still fetched ONCE per repository BEFORE any
+instance in that repository's group attempted its `ws:<workspaceId>` lock — a
+pre-lock snapshot reused across every instance in the group regardless of how long
+each one waited for its own key. A concurrent repair/cleanup that changed the
+worktree while a later instance's reconcile was queued behind that exact key could
+therefore still classify against pre-mutation git state, persisting a false
+missing/mismatched-worktree outcome immediately after the concurrent mutation
+completed. The fix: `gatherFacts` now accepts either an eager array (every caller
+that fetches it immediately before use, with no intervening await —
+`gatherInstanceReconciliationFacts`, `reconcileSingleInstance`) or a lazy
+`() => adapter.listWorktrees()` factory, and the live batch `reconcile()` path
+passes the lazy form, invoked only once this instance's lock is held AND only when
+its worktree still exists on disk (`worktreeDirExists` is itself always freshly
+observed via `existsSync`, never stale). This keeps the documented common case — a
+backlog of paused instances whose worktree is already gone — at ZERO
+`listWorktrees` spawns, and costs exactly one FRESH spawn per instance whose
+worktree does exist, which D4 below bounds to single digits per repository at the
+realistic operating scale, not the N=200 backlog scale the `#449` scale test seeds.
+
+Deadlock re-analysis for the widened section: holding `ws:<workspaceId>` across a
+git subprocess call (`adapter.localBranchExists` inside `gatherFacts`) for every
+instance is not a new risk — `repair.ts` already holds the same key across an
+equivalent `gatherFacts` call (via `reconcileSingleInstance`) for its entire
+operation, so this section is no more exclusion-heavy than an existing one at the
+same key tier. No caller invokes the batch `reconcile()` while already holding a
+`ws:` key — only two call sites invoke it at all, `deps.ts`'s startup wiring and
+the `POST /api/task-workspaces/reconciliation` route handler, neither of which
+holds any mutex key first — so widening the hold cannot create a hold-and-wait
+cycle against `repair`/`cleanup`/`activate`/`pause`, which take at most the single
+`ws:` tier (or `ws:` plus a strictly-lower tier, per the canonical acquisition
+order in `mutex.ts`) and never call back into `reconcile()`.
+
 **D4 — Active-workspace restoration on startup is conservative.**
 
 Conservative means: classify first, restore only if clean. The reconciliation

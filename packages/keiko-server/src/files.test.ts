@@ -501,9 +501,14 @@ describe("desktop files browser", () => {
     // enforces at the type level. `readable` stays the security invariant this test pins; there is
     // no separate `symlink` field to assert on since PR #3289 review (comment 3865167775) removed
     // it from the wire type -- `kind` alone is the discriminant.
+    // KEIKO-0873 (#3331): an out-of-root symlink target must NOT disclose whether the escaped path
+    // is a file or a directory -- `symlinkTargetKind` collapses to "unknown" whenever `contained`
+    // is false, mirroring how `readable` already collapses to `false` for the same case. Reporting
+    // the real kind here was a one-bit filesystem-enumeration oracle for paths the workspace
+    // boundary is otherwise supposed to hide entirely.
     expect(listing.entries.find((entry) => entry.name === "escape")).toMatchObject({
       kind: "symlink",
-      symlinkTargetKind: "directory",
+      symlinkTargetKind: "unknown",
       readable: false,
     });
     await expect(readFilesTree(store, root, "escape")).rejects.toMatchObject({
@@ -528,15 +533,20 @@ describe("desktop files browser", () => {
     // PR #3289 review (comment 3865167775): config.txt is a symlink whose target (.env) is a FILE
     // -- the mirror-image case of the directory-target collapse bug below. It must stay
     // `kind: "symlink"` too, never collapsed into `kind: "file"` just because its target is one.
+    // KEIKO-0873 (#3331, hardened in final review): a deny-listed but in-root target's real kind
+    // must not be disclosed either -- it is the same filesystem-enumeration oracle the out-of-root
+    // case closes, just reachable through a symlink aliasing a denied path instead of an absolute
+    // escape. symlinkTargetKind collapses to "unknown" here exactly as it does for an out-of-root
+    // target, while `readable: false` (already correct) is unchanged.
     expect(listing.entries.find((entry) => entry.name === "config.txt")).toMatchObject({
       kind: "symlink",
-      symlinkTargetKind: "file",
+      symlinkTargetKind: "unknown",
       readable: false,
     });
     // Same symlink-to-directory relabeling as the escape case above.
     expect(listing.entries.find((entry) => entry.name === "git-cache")).toMatchObject({
       kind: "symlink",
-      symlinkTargetKind: "directory",
+      symlinkTargetKind: "unknown",
       readable: false,
     });
 
@@ -550,6 +560,43 @@ describe("desktop files browser", () => {
       status: 403,
       code: "DENIED",
     });
+  });
+
+  // #3348 audit (P3): closing the target-KIND oracle above still left the target-PATH-LENGTH one.
+  // On POSIX, `lstat().size` for a symbolic link is the exact byte length of its target path, and
+  // that value rode out on the entry as `sizeBytes`, so a caller could still distinguish two
+  // hidden targets (e.g. `.env` from a long secrets path) purely by their reported size. An
+  // unreadable symlink must be indistinguishable from every other unreadable symlink.
+  it("does not leak an unreadable symlink's target-path length through sizeBytes", async () => {
+    await writeFile(join(root, ".env"), "SECRET=1\n");
+    await mkdir(join(root, ".git"));
+    // Two deny-listed targets whose path lengths differ substantially. Under the pre-fix behaviour
+    // the entries reported sizeBytes 4 and 42 respectively; they must now be identical.
+    const longDeniedTarget = ".git/a-deliberately-long-inner-path-name.txt";
+    await mkdir(join(root, ".git"), { recursive: true });
+    await writeFile(join(root, longDeniedTarget), "x\n");
+    try {
+      await symlink(".env", join(root, "short-alias"));
+      await symlink(longDeniedTarget, join(root, "long-alias"));
+    } catch (error: unknown) {
+      if ((error as NodeJS.ErrnoException).code === "EPERM") return;
+      throw error;
+    }
+
+    const listing = await readFilesTree(store, root, "");
+    const shortAlias = listing.entries.find((entry) => entry.name === "short-alias");
+    const longAlias = listing.entries.find((entry) => entry.name === "long-alias");
+    expect(shortAlias).toBeDefined();
+    expect(longAlias).toBeDefined();
+    expect(shortAlias).toMatchObject({ kind: "symlink", readable: false });
+    expect(longAlias).toMatchObject({ kind: "symlink", readable: false });
+
+    // The oracle itself is the subject: two hidden targets of very different path length must be
+    // byte-for-byte indistinguishable on the wire, not merely "both unreadable".
+    expect(longAlias?.sizeBytes).toBe(shortAlias?.sizeBytes);
+    expect(shortAlias?.sizeBytes).toBe(0);
+    expect(shortAlias?.modifiedAt).toBe(0);
+    expect(longAlias?.modifiedAt).toBe(0);
   });
 
   // #2906 review (comment 3863185718): the positive case the two symlink-to-directory tests above

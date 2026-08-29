@@ -502,14 +502,6 @@
       "count": 1
     }
   },
-  "src/app/components/desktop/hooks/voice-transcript-segments.ts": {
-    "complexity": {
-      "count": 1
-    },
-    "max-lines-per-function": {
-      "count": 1
-    }
-  },
   "src/app/components/desktop/hooks/voice-turn-manager.ts": {
     "complexity": {
       "count": 1

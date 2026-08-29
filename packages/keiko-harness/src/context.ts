@@ -7,6 +7,7 @@ import type { ContextToolObservation } from "@oscharko-dev/keiko-contracts";
 import type { ChatMessage, Clock, NormalizedResponse } from "@oscharko-dev/keiko-model-gateway";
 import { Emitter } from "./emitter.js";
 import type { ModelPort, ToolPort } from "./ports.js";
+import type { HarnessCompactionPort } from "./context-compaction-port.js";
 import type { HarnessShaperPort } from "./shaper-port.js";
 import type { TaskPlan } from "./tasks/policy.js";
 import type {
@@ -34,6 +35,12 @@ export interface RunContext {
   // tier injects an implementation backed by the keiko-workflows shapers; the harness never imports
   // keiko-workflows (no new package edge).
   readonly shaperPort?: HarnessShaperPort | undefined;
+  // Optional injected message-history compaction port (KEIKO-0726, #3323). When absent (every
+  // caller predating KEIKO-0726), checkModelCallLimits keeps its original byte-only hard-fail
+  // behavior. The production wiring tier injects an implementation that evicts by measured bytes
+  // alone (packages/keiko-server/src/harness-context-compactor.ts; ADR-0052 D9); see
+  // context-compaction-port.ts for the full contract and its reconciliation with shaperPort above.
+  readonly compactionPort?: HarnessCompactionPort | undefined;
   // Accumulator of shaped tool observations produced this run (ADR-0055 D4, PR4-W3). Stays empty
   // when no shaperPort is injected. The raw observation object is not appended directly; the
   // executor may render a bounded compact message from it only under context-budget pressure.

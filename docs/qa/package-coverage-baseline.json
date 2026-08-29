@@ -90,7 +90,7 @@
       }
     },
     "keiko-harness": {
-      "files": 24,
+      "files": 25,
       "uncoveredFiles": 0,
       "uncoveredLines": 15,
       "totalLines": 483,
@@ -234,7 +234,7 @@
       }
     },
     "keiko-server": {
-      "files": 592,
+      "files": 593,
       "uncoveredFiles": 0,
       "uncoveredLines": 4473,
       "totalLines": 57506,
@@ -258,7 +258,7 @@
       }
     },
     "keiko-ui": {
-      "files": 419,
+      "files": 418,
       "uncoveredFiles": 3,
       "uncoveredLines": 2931,
       "totalLines": 39798,

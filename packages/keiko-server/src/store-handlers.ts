@@ -22,7 +22,6 @@ import {
   type ChatConnectedScope,
   type ChatLocalKnowledgeScope,
   type ChatRole,
-  type NewChatMessage,
   type UpdateChatMessagePatch,
   type UpdateChatPatch,
   type UpdateProjectPatch,
@@ -233,14 +232,6 @@ function requireNumber(body: Record<string, unknown>, name: string): number {
     throw new InvalidRequest(`Field "${name}" must be a finite number.`);
   }
   return v;
-}
-
-function requireObject(body: Record<string, unknown>, name: string): Record<string, unknown> {
-  const v = body[name];
-  if (typeof v !== "object" || v === null || Array.isArray(v)) {
-    throw new InvalidRequest(`Field "${name}" must be a JSON object.`);
-  }
-  return v as Record<string, unknown>;
 }
 
 const ROLES: ReadonlySet<string> = new Set(["user", "assistant", "system"]);
@@ -1235,65 +1226,6 @@ export async function handleCreateMessage(
       taskType: optionalTaskType(body),
     });
     return { status: 201, body: { message } };
-  });
-}
-
-// ──────────────────────────────────────────────────────────────────────────
-// Route 23 — POST /api/chats/messages/run-summary-pair (issue #66)
-// ──────────────────────────────────────────────────────────────────────────
-
-function buildRunSummaryPair(
-  body: Record<string, unknown>,
-): readonly [NewChatMessage, NewChatMessage] {
-  const chatId = requireString(body, "chatId");
-  const user = requireObject(body, "user");
-  const summary = requireObject(body, "summary");
-  const workflowId = optionalString(summary, "workflowId");
-  const taskType = optionalTaskType(summary);
-  if ((workflowId === undefined) === (taskType === undefined)) {
-    throw new InvalidRequest('Run summary requires exactly one of "workflowId" or "taskType".');
-  }
-  const userMessage: NewChatMessage = {
-    chatId,
-    role: "user",
-    content: requireString(user, "content"),
-    timestamp: requireNumber(user, "timestamp"),
-    runId: undefined,
-    workflowId: undefined,
-    workflowStatus: undefined,
-    shortResult: undefined,
-    taskType: undefined,
-  };
-  const summaryMessage: NewChatMessage = {
-    chatId,
-    role: "system",
-    content: requireString(summary, "content"),
-    timestamp: requireNumber(summary, "timestamp"),
-    runId: requireString(summary, "runId"),
-    workflowId,
-    workflowStatus: optionalWorkflowStatus(summary),
-    shortResult: optionalString(summary, "shortResult"),
-    taskType,
-  };
-  if (summaryMessage.workflowStatus === undefined) {
-    throw new InvalidRequest('Field "summary.workflowStatus" is required.');
-  }
-  return [userMessage, summaryMessage];
-}
-
-export async function handleCreateRunSummaryPair(
-  ctx: RouteContext,
-  deps: UiHandlerDeps,
-): Promise<RouteResult> {
-  return runHandler(async () => {
-    const body = await readJsonObject(ctx.req);
-    const chatId = requireString(body, "chatId");
-    const projectPath = requireString(body, "projectPath");
-    if (!chatBelongsToProject(deps, projectPath, chatId)) {
-      return notFoundResult("Chat not found.");
-    }
-    const messages = deps.store.createMessages(buildRunSummaryPair(body));
-    return { status: 201, body: { messages } };
   });
 }
 

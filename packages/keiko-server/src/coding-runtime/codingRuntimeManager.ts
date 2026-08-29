@@ -321,6 +321,23 @@ export interface OpenCodeLifecycleAdapter {
 /**
  * Server-private lifecycle boundary for a reviewed Codex app-server composition.
  * It receives an already supervisor-owned process tree; it cannot spawn or kill one.
+ *
+ * As of 2026-08-28, no production implementation of this interface is wired into
+ * `deps.ts` (`grep -c codexLifecycleAdapter` returns 0). A composition-level
+ * factory already exists — `createCodexRuntimeComposition` in
+ * `codexRuntimeComposition.ts` builds a full `CodexLifecycleAdapter` and is
+ * unit-tested — but nothing constructs it in production: there is no Codex
+ * counterpart to `productionOpenCodeBackend.ts` calling
+ * `createOpenCodeRuntimeComposition`, nor to `resolveProductionOpenCodeActivation`
+ * wired into `deps.ts` for OpenCode. This is intentional: Codex subscription
+ * activation is deferred for this release per
+ * `docs/adr/ADR-0163-self-contained-release-qualified-coding-runtime.md` D6, and
+ * `startAfterPreflight` correctly fails closed with `"redistribution-unapproved"`
+ * when `codexLifecycleAdapter` is undefined. This interface and
+ * `codexRuntimeComposition.ts` (which has no production importer) are a
+ * deliberate composition seam, not dead code — do not delete either. Before
+ * Codex activation ever ships, see #3316 (KEIKO-0602, KEIKO-0671) for the
+ * production wiring and `prepare()` sandbox/approval-policy prerequisites.
  */
 export interface CodexLifecycleAdapter {
   qualify(request: CodexLifecycleCheckRequest): Promise<CodexLifecycleCheckResult>;

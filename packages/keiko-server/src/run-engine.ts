@@ -363,6 +363,14 @@ function dispatchExplain(
     shaperPort: createServerHarnessToolShaper({
       ...(ctx.toolArtifacts === undefined ? {} : { artifactWriter: ctx.toolArtifacts }),
     }),
+    // 2895 audit KEIKO-0902: no compactionPort here. explain-plan is read-only by construction
+    // (allowsTools/allowsPatch/allowsVerification all false, tasks/explain-plan.ts) and its session
+    // makes exactly one model call from the initial [system, user] seed with no prior assistant
+    // turn — checkModelCallLimits therefore never sees more than that seed, and the compactor's
+    // turns.length < 2 precondition (harness-context-compactor.ts) always declines. A port injected
+    // here can structurally never fire; wiring one anyway would invite a future reader to believe
+    // this path is covered by compaction when it cannot be. If explain-plan ever grows a multi-call
+    // shape, wire the port here then, alongside a test that proves it actually fires.
     ...(reservedRunId === undefined ? {} : { idSource: { newRunId: (): string => reservedRunId } }),
   });
   const result = session.result.then((runResult): DispatchOutcome => ({

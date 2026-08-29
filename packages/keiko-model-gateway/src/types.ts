@@ -157,8 +157,8 @@ export interface OutboundHttpEgressConfig {
   // Explicit deployment acknowledgement for ordinary proxied HOSTNAME egress. Keiko cannot
   // validate a proxy's independently-resolved address at connect time, so this delegates the
   // blocked-address policy to that proxy; it is not proof that the proxy enforces it. This
-  // config-file-only acknowledgement never relaxes research, literal-address, redirect, or
-  // private/metadata address-class denials.
+  // config-file-only acknowledgement never relaxes research, literal-address, or private/metadata
+  // address-class denials.
   readonly acknowledgeProxiedHostnamePolicy?: boolean | undefined;
 }
 

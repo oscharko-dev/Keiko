@@ -199,7 +199,11 @@ function createWorkspaceServices(managedRoot: string): JourneyWorkspaceServices 
     provisioning,
     mutex,
   });
-  const reconciliation = createWorkspaceReconciliationService({ ...shared, activePointerStore });
+  const reconciliation = createWorkspaceReconciliationService({
+    ...shared,
+    activePointerStore,
+    mutex,
+  });
   return {
     provisioning,
     lifecycle,

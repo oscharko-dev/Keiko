@@ -783,14 +783,6 @@
     "en": "settings",
     "de": "Einstellungen"
   },
-  "settings.keyboard.scopeExplorer": {
-    "en": "explorer",
-    "de": "Explorer"
-  },
-  "settings.keyboard.scopeGit": {
-    "en": "git",
-    "de": "Git"
-  },
   "settings.keyboard.conflict": {
     "en": "Conflicts with: {commands}",
     "de": "Konflikt mit: {commands}"

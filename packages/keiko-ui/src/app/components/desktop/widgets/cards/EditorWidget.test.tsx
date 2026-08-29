@@ -1290,7 +1290,7 @@ describe("EditorWidget — edit and save", () => {
     view.rerender(<EditorRuntimeWidget windowId="editor-test" root="/next" file="src/app.ts" />);
 
     await waitFor(() => {
-      expect(disposeEditorModelRegistryRoot).toHaveBeenCalledWith("/repo", "root-disposed");
+      expect(disposeEditorModelRegistryRoot).toHaveBeenCalledWith("/repo");
     });
     expect(disposeAllUnattachedEditorModels).not.toHaveBeenCalled();
     expect(surface.props?.modelRootKey).toBe("/next");
@@ -1303,7 +1303,7 @@ describe("EditorWidget — edit and save", () => {
     view.unmount();
 
     await waitFor(() => {
-      expect(disposeAllUnattachedEditorModels).toHaveBeenCalledWith("shutdown");
+      expect(disposeAllUnattachedEditorModels).toHaveBeenCalledWith();
     });
   });
 
@@ -1323,7 +1323,7 @@ describe("EditorWidget — edit and save", () => {
       expect(screen.getAllByTestId("editor-surface")).toHaveLength(2);
     });
 
-    expect(disposeEditorModelRegistryRoot).toHaveBeenCalledWith("/repo", "root-disposed");
+    expect(disposeEditorModelRegistryRoot).toHaveBeenCalledWith("/repo");
     expect(disposeAllUnattachedEditorModels).not.toHaveBeenCalled();
 
     sibling.unmount();
@@ -1344,9 +1344,9 @@ describe("EditorWidget — edit and save", () => {
     view.rerender(<EditorRuntimeWidget windowId="editor-test" root="/next" file="src/app.ts" />);
 
     await waitFor(() => {
-      expect(disposeEditorModelRegistryRoot).toHaveBeenCalledWith("/repo", "root-disposed");
+      expect(disposeEditorModelRegistryRoot).toHaveBeenCalledWith("/repo");
     });
-    expect(disposeEditorModelRegistryRoot).not.toHaveBeenCalledWith("/sibling", "root-disposed");
+    expect(disposeEditorModelRegistryRoot).not.toHaveBeenCalledWith("/sibling");
     expect(disposeAllUnattachedEditorModels).not.toHaveBeenCalled();
 
     sibling.unmount();
@@ -1367,7 +1367,7 @@ describe("EditorWidget — edit and save", () => {
 
     second.unmount();
     await waitFor(() => {
-      expect(disposeAllUnattachedEditorModels).toHaveBeenCalledWith("shutdown");
+      expect(disposeAllUnattachedEditorModels).toHaveBeenCalledWith();
     });
   });
 

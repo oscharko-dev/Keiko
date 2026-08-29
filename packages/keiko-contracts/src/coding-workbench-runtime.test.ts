@@ -133,12 +133,29 @@ describe("Coding Workbench runtime contracts", () => {
     ).toMatchObject({ ok: false });
   });
 
-  it("defines all thirteen states and only explicit transitions", () => {
-    expect(CODING_WORKBENCH_RUNTIME_STATE_NAMES).toHaveLength(13);
+  it("defines all twelve states and only explicit transitions", () => {
+    expect(CODING_WORKBENCH_RUNTIME_STATE_NAMES).toHaveLength(12);
     expect(CODING_WORKBENCH_RUNTIME_STATE_NAMES).toContain("paused");
     expect(isLegalCodingWorkbenchRuntimeTransition("idle", "starting")).toBe(true);
     expect(isLegalCodingWorkbenchRuntimeTransition("running", "idle")).toBe(false);
     expect(isLegalCodingWorkbenchRuntimeTransition("taken-over", "idle")).toBe(true);
+  });
+
+  // KEIKO-0539: `unavailable` was declared as a legal FSM state with real transitions but no
+  // orchestrator code path ever produced it (host-qualification is reported exclusively through
+  // the unrelated `codingRuntimeUnavailableReason` field). Pin its removal so the state vocabulary
+  // never quietly regrows a state nothing can ever reach.
+  it("removes the unreachable unavailable state from the state vocabulary (KEIKO-0539)", () => {
+    expect(CODING_WORKBENCH_RUNTIME_STATE_NAMES).toHaveLength(12);
+    expect(CODING_WORKBENCH_RUNTIME_STATE_NAMES).not.toContain("unavailable");
+    expect(
+      validateCodingWorkbenchRuntimeState({
+        schemaVersion: "1",
+        state: "unavailable",
+        revision: 0,
+        updatedAt: "2026-07-11T12:00:00.000Z",
+      }),
+    ).toMatchObject({ ok: false });
   });
 
   it("pauses and resumes only through the explicit paused transitions", () => {

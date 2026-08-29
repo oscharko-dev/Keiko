@@ -20,6 +20,7 @@ import {
   validateEditorM7Keybinding,
   type EditorM7AiActivationInput,
   type EditorM7CommandDefinition,
+  type EditorM7CommandScope,
   type EditorM7ModelEntry,
   type EditorM7SettingId,
   type EditorM7SettingsSnapshot,
@@ -274,6 +275,38 @@ describe("M7 keybinding, snippet, and AI activation contracts", () => {
     }).toThrow(TypeError);
   });
 
+  // KEIKO-0875 (#3332): "explorer" and "git" were legal EditorM7CommandScope values with zero
+  // registered commands using either -- two unreachable branches in scopeLabel and two
+  // unexercisable i18n keys. The product owner decided to narrow the type rather than keep it as
+  // a forward declaration; this pin proves the union no longer admits either value.
+  it("rejects explorer and git as EditorM7CommandScope values", () => {
+    // The assertion here is the `@ts-expect-error` directive itself, enforced by `npm run
+    // typecheck`: if either literal were ever legal again, tsc would fail on an unused
+    // `@ts-expect-error`. A runtime `expect(...).toBe(...)` on a value just assigned from the
+    // same literal would be tautological (SonarJS S5914) and prove nothing `tsc` doesn't already.
+    // @ts-expect-error -- "explorer" is not a legal EditorM7CommandScope; no registered command
+    // uses it, and the KeyboardShortcutsPanel branch that read it was deleted alongside the
+    // "settings.keyboard.scopeExplorer" i18n key.
+    const explorerScope: EditorM7CommandScope = "explorer";
+    // @ts-expect-error -- same for "git"; the "settings.keyboard.scopeGit" i18n key was deleted
+    // alongside its branch too.
+    const gitScope: EditorM7CommandScope = "git";
+    void explorerScope;
+    void gitScope;
+
+    // Real runtime assertion (not a restatement of the type check above): the type-level guard
+    // only stops a literal "explorer"/"git" from being written in source. It cannot stop a value
+    // smuggled in via a wider-typed variable or an `as EditorM7CommandScope` cast from reaching
+    // the actual runtime registry. This proves the operational invariant the type narrowing is
+    // meant to protect -- no registered command actually carries either retired scope -- against
+    // the real array scopeLabel and every other registry consumer reads.
+    const registeredScopes: ReadonlySet<string> = new Set(
+      EDITOR_M7_COMMAND_REGISTRY.map((entry) => entry.scope),
+    );
+    expect(registeredScopes.has("explorer")).toBe(false);
+    expect(registeredScopes.has("git")).toBe(false);
+  });
+
   it("keeps a closed command registry and rejects reserved, malformed, unknown, and colliding bindings", () => {
     expect(EDITOR_M7_COMMAND_REGISTRY.map((entry) => entry.id)).toContain("editor.save");
     expect(
@@ -525,7 +558,11 @@ describe("M7 keybinding, snippet, and AI activation contracts", () => {
         id: "explorer-only",
         labelKey: "command.explorerOnly",
         descriptionKey: "command.explorerOnly.description",
-        scope: "explorer",
+        // KEIKO-0875 (#3332): "explorer" was narrowed out of EditorM7CommandScope (zero commands
+        // used it); "editor" here is an arbitrary scope disjoint from "settings" below -- this
+        // fixture pins context-disjoint reuse, which the collision check keys on `contexts`, not
+        // `scope`. The still-valid "explorer" EditorM7CommandContext is untouched (out of scope).
+        scope: "editor",
         contexts: ["explorer"],
         defaultBindings: [],
         rebindable: true,

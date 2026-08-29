@@ -55,6 +55,10 @@ does emit an inline finding, GitHub's required conversation-resolution rule bloc
 conversation is resolved. Policy additionally requires the underlying defect to be repaired; the
 quota-tolerant interim topology cannot infer code repair merely from GitHub's resolved bit.
 
+`.github/CODEOWNERS` intentionally stays a single flat `* @oscharko` rule while Keiko has one
+maintainer; it has no merge-gating effect under this no-human-review auto-merge model. Revisit
+path-scoped rows if/when a second maintainer joins.
+
 The hosted performance dashboard and quota-paced reviewer evaluated in ADR-0169 are retired.
 Neither has repository configuration, an installed App, a workflow, or a protected context.
 Deterministic bundle, latency, retrieval, and performance gates inside `ci` retain merge authority.

@@ -12,6 +12,8 @@ import type {
   SpeechToTextRequest,
 } from "@oscharko-dev/keiko-model-gateway";
 import type { EvidenceStore } from "@oscharko-dev/keiko-evidence";
+import { UNKNOWN_CORRELATION_ID } from "./correlation.js";
+import type { ServerDiagnosticRecord, ServerDiagnosticSink } from "./diagnostics-log.js";
 
 const PROVIDER_SECRET = "voice-secret-token-1234567890";
 const PROVIDER_BASE_URL = "https://keiko-stt.example.com";
@@ -106,7 +108,10 @@ class FakeResponse extends EventEmitter {
   }
 }
 
-function voiceContext(body: unknown): {
+function voiceContext(
+  body: unknown,
+  correlationId?: string,
+): {
   readonly context: RouteContext;
   readonly request: IncomingMessage;
   readonly response: FakeResponse;
@@ -123,12 +128,13 @@ function voiceContext(body: unknown): {
       res: response as unknown as RouteContext["res"],
       params: {},
       url: new URL("http://127.0.0.1/api/voice/transcribe"),
+      ...(correlationId !== undefined ? { correlationId } : {}),
     },
   };
 }
 
-function ctx(body: unknown): RouteContext {
-  return voiceContext(body).context;
+function ctx(body: unknown, correlationId?: string): RouteContext {
+  return voiceContext(body, correlationId).context;
 }
 
 function spyingStore(): { store: EvidenceStore; put: ReturnType<typeof vi.fn> } {
@@ -136,6 +142,23 @@ function spyingStore(): { store: EvidenceStore; put: ReturnType<typeof vi.fn> } 
   return {
     store: { put, list: () => [], get: () => undefined, delete: () => undefined },
     put,
+  };
+}
+
+// Capturing operator-diagnostic sink (never the default stderr sink) for the Finding 2 (#2895
+// audit) observability pins — same pattern as gateway-readiness.test.ts / gateway-setup.test.ts.
+function capturingDiagnostics(): {
+  readonly sink: ServerDiagnosticSink;
+  readonly records: ServerDiagnosticRecord[];
+} {
+  const records: ServerDiagnosticRecord[] = [];
+  return {
+    records,
+    sink: {
+      record: (entry: ServerDiagnosticRecord): void => {
+        records.push(entry);
+      },
+    },
   };
 }
 
@@ -526,7 +549,7 @@ describe("POST /api/voice/transcribe — request validation (D3/D5)", () => {
   });
 
   it("rejects an invalid declared duration", async () => {
-    const { deps } = sttDeps();
+    const { deps, seen } = sttDeps();
     for (const durationMs of [-1, 0, 1.5, 120_001, "10"]) {
       const result = await handleVoiceTranscribe(
         ctx({ audio: VALID_AUDIO, mimeType: "audio/webm", durationMs }),
@@ -535,6 +558,98 @@ describe("POST /api/voice/transcribe — request validation (D3/D5)", () => {
       expect(result.status).toBe(400);
       expect((result.body as { error: { code: string } }).error.code).toBe("INVALID_DURATION");
     }
+    // AC3: no audio is forwarded to the provider on any of these shape-rejection paths. Relocated
+    // from the removed KEIKO-0844 density cross-validation test (#2895 audit, Finding 1) — that
+    // guard rejected a truthful high-density clip as a false positive and was removed (see
+    // "accepts a truthful 384kHz/32-bit/6-channel WAV" below), but "no audio reaches the provider
+    // when durationMs is rejected" is a real protection this file must keep proving.
+    expect(seen).toHaveLength(0);
+  });
+
+  // Builds a real (not schematic) 44-byte canonical RIFF/WAVE PCM header followed by
+  // `payloadBytes` of silence, so a WAV fixture carries the same fixed container overhead a real
+  // encoder would produce — this is what F1's regression class (a WAV rejected purely by its own
+  // header) must never again reach.
+  function buildWavBuffer(payloadBytes: number): Buffer {
+    const header = Buffer.alloc(44);
+    header.write("RIFF", 0, "ascii");
+    header.writeUInt32LE(36 + payloadBytes, 4);
+    header.write("WAVE", 8, "ascii");
+    header.write("fmt ", 12, "ascii");
+    header.writeUInt32LE(16, 16); // Subchunk1Size (PCM)
+    header.writeUInt16LE(1, 20); // AudioFormat (PCM)
+    header.writeUInt16LE(2, 22); // NumChannels (stereo)
+    header.writeUInt32LE(48_000, 24); // SampleRate
+    header.writeUInt32LE(48_000 * 2 * 2, 28); // ByteRate
+    header.writeUInt16LE(4, 32); // BlockAlign
+    header.writeUInt16LE(16, 34); // BitsPerSample
+    header.write("data", 36, "ascii");
+    header.writeUInt32LE(payloadBytes, 40);
+    return Buffer.concat([header, Buffer.alloc(payloadBytes)]);
+  }
+
+  // #2895 audit, Finding 1 (repository owner, P2): the owner disproved the b6ab3958/#3348 comment's
+  // "can no longer reject any real encoder output" claim — a valid WAVEFORMATEXTENSIBLE PCM stream
+  // can legitimately exceed even the widened 6144 bytes/ms ceiling, e.g. 384 kHz / 32-bit / 6
+  // channels = 384_000 * 4 * 6 = 9_216_000 bytes/s = 9216 bytes/ms. A 400ms clip at that density is
+  // 9216 * 400 = 3_686_400 payload bytes (+44-byte header = 3_686_444 bytes, ~3.69 MB) — comfortably
+  // under MAX_AUDIO_BYTES (4_000_000) with a truthful durationMs, yet the former cross-check
+  // rejected it (3_686_444 > the old 8192 + 6144*400 = 2_465_792 threshold). This is the regression
+  // fixture for that removal: it fails red (400 INVALID_DURATION) before the fix and passes green
+  // (200, forwarded to the provider exactly once) after it — see the red-then-green evidence in the
+  // PR description / commit message for the actual before/after run.
+  it("accepts a truthful 384kHz/32-bit/6-channel WAV clip above the former density ceiling (#2895 audit)", async () => {
+    const { deps, seen } = sttDeps();
+    const wav = buildWavBuffer(3_686_400).toString("base64");
+    const result = await handleVoiceTranscribe(
+      ctx({ audio: wav, mimeType: "audio/wav", durationMs: 400 }),
+      deps,
+    );
+    expect(result.status).toBe(200);
+    expect(seen).toHaveLength(1);
+    expect(seen[0]?.audio.byteLength).toBe(3_686_444);
+  });
+
+  // Codex (#3348): the previous MIME-tiered ceiling (384 bytes/ms for "lossless" containers)
+  // rejected legitimate high-rate lossless audio that the endpoint otherwise admits — MIME type
+  // alone never constrains sample rate, bit depth, or channel count. These three cases were all
+  // rejected with INVALID_DURATION before the fix and must now be accepted.
+  it("accepts a truthful 96kHz/24-bit/stereo WAV clip the MIME allowlist admits (Codex, #3348)", async () => {
+    const { deps, seen } = sttDeps();
+    // 96_000 Hz * 3 bytes (24-bit) * 2 channels * 1s = 576_000 payload bytes; + 44-byte header.
+    const wav = buildWavBuffer(576_000).toString("base64");
+    const result = await handleVoiceTranscribe(
+      ctx({ audio: wav, mimeType: "audio/wav", durationMs: 1000 }),
+      deps,
+    );
+    expect(result.status).toBe(200);
+    expect(seen).toHaveLength(1);
+  });
+
+  it("accepts a truthful 48kHz/24-bit/6-channel WAV clip (Codex, #3348 multichannel case)", async () => {
+    const { deps, seen } = sttDeps();
+    // 48_000 Hz * 3 bytes (24-bit) * 6 channels * 1s = 864_000 payload bytes; + 44-byte header.
+    const wav = buildWavBuffer(864_000).toString("base64");
+    const result = await handleVoiceTranscribe(
+      ctx({ audio: wav, mimeType: "audio/wav", durationMs: 1000 }),
+      deps,
+    );
+    expect(result.status).toBe(200);
+    expect(seen).toHaveLength(1);
+  });
+
+  it("accepts truthful lossless content inside an admitted lossy-tier container (Codex, #3348)", async () => {
+    const { deps, seen } = sttDeps();
+    // audio/mp4 legitimately carries ALAC or LPCM; MIME type alone cannot distinguish that from a
+    // compressed AAC stream, so the ceiling must not assume every mp4 clip is highly compressed.
+    // 44.1kHz/16-bit/stereo PCM-equivalent density: 44_100 * 2 * 2 = 176_400 bytes/s.
+    const dense = Buffer.alloc(176_400).toString("base64");
+    const result = await handleVoiceTranscribe(
+      ctx({ audio: dense, mimeType: "audio/mp4", durationMs: 1000 }),
+      deps,
+    );
+    expect(result.status).toBe(200);
+    expect(seen).toHaveLength(1);
   });
 
   it("rejects an invalid language tag", async () => {
@@ -561,6 +676,89 @@ describe("POST /api/voice/transcribe — request validation (D3/D5)", () => {
     );
     expect(result.status).toBe(400);
     expect((result.body as { error: { code: string } }).error.code).toBe("BAD_REQUEST");
+  });
+});
+
+describe("POST /api/voice/transcribe — validation-rejection activity log (Finding 2, #2895 audit)", () => {
+  it("emits a body-free diagnostic carrying the request's own correlation id for an unsupported MIME type", async () => {
+    const { sink, records } = capturingDiagnostics();
+    const { deps } = sttDeps({ diagnostics: sink });
+    const result = await handleVoiceTranscribe(
+      ctx({ audio: VALID_AUDIO, mimeType: "text/plain" }, "req-voice-corr-0001"),
+      deps,
+    );
+    expect(result.status).toBe(400);
+    expect(records).toHaveLength(1);
+    expect(records[0]?.code).toBe("UNSUPPORTED_AUDIO_FORMAT");
+    expect(records[0]?.correlationId).toBe("req-voice-corr-0001");
+    expect(records[0]?.operation).toBe("POST /api/voice/transcribe");
+    expect(records[0]?.errorClass).toBe("VoiceDictationValidationRejected");
+  });
+
+  it("falls back to the sanctioned UNKNOWN_CORRELATION_ID marker, never a fresh mint, when the request carries none", async () => {
+    const { sink, records } = capturingDiagnostics();
+    const { deps } = sttDeps({ diagnostics: sink });
+    const result = await handleVoiceTranscribe(
+      ctx({ audio: VALID_AUDIO, mimeType: "text/plain" }),
+      deps,
+    );
+    expect(result.status).toBe(400);
+    expect(records).toHaveLength(1);
+    expect(records[0]?.correlationId).toBe(UNKNOWN_CORRELATION_ID);
+    // Guards against a future re-mint: a UUID never satisfies this shape (mirrors the sibling
+    // gateway-setup.test.ts pin for the same AGENTS.md section 8 rule).
+    expect(records[0]?.correlationId).not.toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-/);
+  });
+
+  it("emits a coarse audioBytesBucket for a payload-too-large rejection, with no audio content on the line", async () => {
+    const { sink, records } = capturingDiagnostics();
+    const { deps, seen } = sttDeps({ diagnostics: sink });
+    const tooBig = Buffer.alloc(4_000_001, 7).toString("base64");
+    const result = await handleVoiceTranscribe(
+      ctx({ audio: tooBig, mimeType: "audio/webm" }),
+      deps,
+    );
+    expect(result.status).toBe(413);
+    expect(seen).toHaveLength(0);
+    expect(records).toHaveLength(1);
+    expect(records[0]?.code).toBe("PAYLOAD_TOO_LARGE");
+    expect(records[0]?.audioBytesBucket).toBe("over-limit");
+    const serialized = JSON.stringify(records[0]);
+    // Body-free (ADR-0173 D4): no audio bytes, no base64 fragment, no secret, and nowhere near the
+    // size an audio-bearing line would be.
+    expect(serialized).not.toContain(tooBig.slice(0, 200));
+    expect(serialized).not.toContain(PROVIDER_SECRET);
+    expect(serialized.length).toBeLessThan(1000);
+  });
+
+  it("emits the closed reason for an invalid duration shape, distinct from the payload-too-large reason", async () => {
+    const { sink, records } = capturingDiagnostics();
+    const { deps } = sttDeps({ diagnostics: sink });
+    // A distinctive, implausible-to-collide declared duration: proves the RAW value never reaches
+    // the diagnostic line (only the closed `code` and the coarse `audioBytesBucket` do). "-1" would
+    // be a weaker probe here — it can coincidentally appear inside the record's own ISO `timestamp`
+    // field (e.g. any "-1x" day-of-month), making that assertion date-dependent and non-hermetic.
+    const result = await handleVoiceTranscribe(
+      ctx({ audio: VALID_AUDIO, mimeType: "audio/webm", durationMs: -424_242 }),
+      deps,
+    );
+    expect(result.status).toBe(400);
+    expect(records).toHaveLength(1);
+    expect(records[0]?.code).toBe("INVALID_DURATION");
+    const serialized = JSON.stringify(records[0]);
+    expect(serialized).not.toContain(VALID_AUDIO);
+    expect(serialized).not.toContain("424242");
+  });
+
+  it("emits no diagnostic on a successful dictation request", async () => {
+    const { sink, records } = capturingDiagnostics();
+    const { deps } = sttDeps({ diagnostics: sink });
+    const result = await handleVoiceTranscribe(
+      ctx({ audio: VALID_AUDIO, mimeType: "audio/webm" }),
+      deps,
+    );
+    expect(result.status).toBe(200);
+    expect(records).toHaveLength(0);
   });
 });
 
