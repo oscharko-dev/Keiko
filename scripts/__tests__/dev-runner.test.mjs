@@ -9,7 +9,7 @@
 
 import { createServer } from "node:net";
 import { createServer as createHttpServer, request as httpRequest } from "node:http";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { PassThrough } from "node:stream";
@@ -35,7 +35,31 @@ import {
   restartNextChildWithRetry,
   resolveConfiguredNextBundler,
   resolveNextBundler,
+  writeAtomicUtf8File,
 } from "../dev-runner.mjs";
+
+describe("atomic state persistence", () => {
+  let stateDirectory;
+
+  beforeEach(() => {
+    stateDirectory = mkdtempSync(join(tmpdir(), "dev-runner-state-"));
+  });
+
+  afterEach(() => {
+    rmSync(stateDirectory, { recursive: true, force: true });
+  });
+
+  it("replaces an existing state file without exposing a partial document", () => {
+    const stateFile = join(stateDirectory, "dev-ui.pid.json");
+    const nextState = `${JSON.stringify({ nextPort: 3001 })}\n`;
+    writeFileSync(stateFile, '{"nextPort":3000}\n', "utf8");
+
+    writeAtomicUtf8File(stateFile, nextState);
+
+    expect(JSON.parse(readFileSync(stateFile, "utf8"))).toEqual({ nextPort: 3001 });
+    expect(existsSync(`${stateFile}.${String(process.pid)}.tmp`)).toBe(false);
+  });
+});
 
 describe("proxyHttp request target validation", () => {
   it.each([
