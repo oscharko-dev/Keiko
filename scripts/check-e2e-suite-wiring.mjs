@@ -733,9 +733,33 @@ function configArgumentValue(token, nextToken) {
 // Repeating the group keeps `--config=` and `"a b.ts"` in one token.
 const SHELL_TOKEN = /(?:[^\s"']+|"[^"]*"|'[^']*')+/gu;
 
-export function playwrightConfigNames(command) {
+const SHELL_COMMAND_SEPARATORS = new Set([";", "|", "||", "&", "&&"]);
+
+/**
+ * The tokens a `playwright` invocation in this command actually receives.
+ *
+ * Every reader of a command's options goes through this, so the segmentation cannot drift between
+ * them. `echo --config playwright.orphan.config.ts && playwright test --config real.config.ts`
+ * names a config Playwright never reads, and a `--grep` in an unrelated segment filters a run
+ * Playwright never makes — both turn an unreachable spec into a reachable one, which is the exact
+ * false green this gate exists to prevent. `playwright` is matched anywhere rather than only at a
+ * command start, so `npx playwright test …` and a direct `node_modules/.bin/playwright` both
+ * count; a shell separator ends the run.
+ */
+function playwrightInvocationTokens(command) {
   if (typeof command !== "string") return [];
-  const tokens = command.match(SHELL_TOKEN) ?? [];
+  const selected = [];
+  let inPlaywright = false;
+  for (const token of command.match(SHELL_TOKEN) ?? []) {
+    if (SHELL_COMMAND_SEPARATORS.has(token)) inPlaywright = false;
+    else if (basename(unquote(token)) === "playwright") inPlaywright = true;
+    else if (inPlaywright) selected.push(token);
+  }
+  return selected;
+}
+
+export function playwrightConfigNames(command) {
+  const tokens = playwrightInvocationTokens(command);
   const found = [];
   for (const [index, token] of tokens.entries()) {
     const value = configArgumentValue(token, tokens[index + 1]);
@@ -1055,7 +1079,14 @@ function configReachesSpec(selection, spec) {
 // comment cannot pass for a selector. `--grep @smoke` matches on the rendered test title, so the
 // tag may equally live in a title literal or in a constant the title interpolates.
 export function declaredSpecTags(source) {
-  return new Set([...blankComments(source).matchAll(/@[a-z][a-z0-9-]*/giu)].map((m) => m[0]));
+  const text = blankComments(source);
+  const tags = new Set();
+  for (const match of text.matchAll(/@[a-z][a-z0-9-]*/giu)) {
+    // `"@playwright/test"` is an import specifier, not a tag. A Playwright tag never carries a path
+    // separator, so a following `/` marks a scoped package name and nothing this gate should read.
+    if (text[match.index + match[0].length] !== "/") tags.add(match[0]);
+  }
+  return tags;
 }
 
 /**
@@ -1068,8 +1099,7 @@ export function declaredSpecTags(source) {
  * the exclusion reports coverage that does not exist.
  */
 function commandGrepFilters(command) {
-  if (typeof command !== "string") return { grep: undefined, invert: undefined };
-  const tokens = command.match(SHELL_TOKEN) ?? [];
+  const tokens = playwrightInvocationTokens(command);
   const filters = { grep: undefined, invert: undefined };
   for (const [index, token] of tokens.entries()) {
     for (const [flag, key] of [
@@ -1096,18 +1126,8 @@ function commandGrepFilters(command) {
  * the false-green inventory this gate exists to prevent.
  */
 export function commandSpecNames(command) {
-  if (typeof command !== "string") return [];
-  const tokens = (command.match(SHELL_TOKEN) ?? []).map((token) => unquote(token));
-  const names = [];
-  let inPlaywright = false;
-  for (const [index, token] of tokens.entries()) {
-    // `playwright` is matched anywhere rather than only at a command start, so `npx playwright
-    // test …` and a direct `node_modules/.bin/playwright` both count; a separator ends the run.
-    if (SHELL_COMMAND_SEPARATORS.has(token)) inPlaywright = false;
-    else if (basename(token) === "playwright") inPlaywright = true;
-    else if (inPlaywright && isSpecOperand(tokens, index)) names.push(basename(token));
-  }
-  return names;
+  const tokens = playwrightInvocationTokens(command).map((token) => unquote(token));
+  return tokens.flatMap((token, index) => (isSpecOperand(tokens, index) ? [basename(token)] : []));
 }
 
 /** A positional `*.spec.ts` argument: not a flag, and not the value one consumed. */
@@ -1116,8 +1136,6 @@ function isSpecOperand(tokens, index) {
   if (token.startsWith("-") || VALUE_FLAGS.has(tokens[index - 1] ?? "")) return false;
   return token.endsWith(SPEC_SUFFIX);
 }
-
-const SHELL_COMMAND_SEPARATORS = new Set([";", "|", "||", "&", "&&"]);
 
 // Playwright options that consume the following token as their value.
 const VALUE_FLAGS = new Set([

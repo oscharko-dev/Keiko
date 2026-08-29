@@ -641,6 +641,24 @@ describe("config ownership (KEIKO-0077)", () => {
     ).toHaveLength(1);
   });
 
+  // A mention is not the only way to name a config a command never runs: an option in an UNRELATED
+  // shell segment is read by Playwright not at all. Left unsegmented, `--config` and `--grep` were
+  // scanned across the whole line while the spec-operand reader already was not — so the three
+  // readers disagreed about what the invocation received, and the widest one decided reachability.
+  it("ignores options that belong to a different command in the same line", () => {
+    expect(
+      playwrightConfigNames(`echo --config tests/e2e/config/${ORPHAN} && playwright test`),
+    ).toEqual([]);
+    expect(commandSpecNames(`echo tests/e2e/never.spec.ts && playwright test`)).toEqual([]);
+    expect(
+      checkE2eConfigOwnership({
+        configs: [ORPHAN],
+        scriptCommands: [`echo --config tests/e2e/config/${ORPHAN} && playwright test`],
+        unownedConfigs: [],
+      }),
+    ).toHaveLength(1);
+  });
+
   it("reads both --config spellings and an alternate path to the same file", () => {
     expect(playwrightConfigNames(command(ORPHAN))).toEqual([ORPHAN]);
     expect(playwrightConfigNames(`playwright test --config=tests/e2e/config/${ORPHAN}`)).toEqual([
@@ -921,6 +939,11 @@ describe("spec reachability (KEIKO-0078 / KEIKO-0080)", () => {
   it("reads a tag from a spec's code but not from its comments", () => {
     expect(declaredSpecTags('test("runs @smoke", () => {});')).toContain("@smoke");
     expect(declaredSpecTags("// @smoke is not wired yet\nconst x = 1;")).not.toContain("@smoke");
+    // A scoped package specifier is not a tag. Every spec imports `@playwright/test`, so reading
+    // one as a declared tag would make every spec reachable from a `--grep @playwright` lane.
+    expect(declaredSpecTags('import { test } from "@playwright/test";')).not.toContain(
+      "@playwright",
+    );
   });
 
   it("requires a non-empty reason for every recorded spec and rejects stale reasons", () => {

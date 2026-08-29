@@ -600,6 +600,30 @@ function collectEventSessionSets(page: Page): string[][] {
   return sessionSets;
 }
 
+/**
+ * Exactly one live agent session for the workspace, and the SSE bridge subscribed to that same id.
+ *
+ * Reported as one object so a failure names which half broke — a bridge on a stale id reads very
+ * differently from a second live session, and a bare boolean would hide both.
+ */
+async function expectBridgeBoundToTheLiveSession(
+  request: APIRequestContext,
+  root: string,
+  eventSessionSets: readonly (readonly string[])[],
+): Promise<void> {
+  await expect
+    .poll(async () => {
+      const live = await liveEditorSessionIds(request, root);
+      const subscribed = eventSessionSets.at(-1) ?? [];
+      return {
+        live,
+        subscribed,
+        bound: live.length === 1 && subscribed.length === 1 && live[0] === subscribed[0],
+      };
+    })
+    .toMatchObject({ bound: true });
+}
+
 test("keeps exactly one live agent session across split panes (#2122 pin)", async ({
   page,
   request,
@@ -629,16 +653,17 @@ test("keeps exactly one live agent session across split panes (#2122 pin)", asyn
   const panes = workspace.locator(EDITOR_SELECTORS.pane);
   await expect(panes).toHaveCount(2);
 
-  // Two panes, one live session — and the SSE bridge subscribed to exactly that one.
-  await expect.poll(async () => liveEditorSessionIds(request, root)).toHaveLength(1);
-  await expect.poll(() => eventSessionSets.at(-1)).toHaveLength(1);
+  // Two panes, one live session — and the SSE bridge subscribed to exactly THAT one. Counting each
+  // side separately is not the same claim: one live session and one subscribed session are both
+  // satisfied when the bridge is listening to a session the editor is not running, which is the
+  // split-brain this pin exists to catch. So the ids are compared, not just their cardinality.
+  await expectBridgeBoundToTheLiveSession(request, root, eventSessionSets);
 
-  // Focusing the other pane keeps that cardinality. Both panes stay mounted throughout, so this is
-  // the two-pane steady state rather than a teardown artefact.
+  // Focusing the other pane keeps that binding. Both panes stay mounted throughout, so this is the
+  // two-pane steady state rather than a teardown artefact.
   await panes.nth(0).locator(EDITOR_SELECTORS.monaco).first().click();
   await expect(panes).toHaveCount(2);
-  await expect.poll(async () => liveEditorSessionIds(request, root)).toHaveLength(1);
-  await expect.poll(() => eventSessionSets.at(-1)).toHaveLength(1);
+  await expectBridgeBoundToTheLiveSession(request, root, eventSessionSets);
 
   expect(pageErrors).toEqual([]);
 });
