@@ -293,6 +293,16 @@ describe("M7 keybinding, snippet, and AI activation contracts", () => {
     const gitScope: EditorM7CommandScope = "git";
     void explorerScope;
     void gitScope;
+
+    // Real runtime assertion (not a restatement of the type check above): the type-level guard
+    // only stops a literal "explorer"/"git" from being written in source. It cannot stop a value
+    // smuggled in via a wider-typed variable or an `as EditorM7CommandScope` cast from reaching
+    // the actual runtime registry. This proves the operational invariant the type narrowing is
+    // meant to protect -- no registered command actually carries either retired scope -- against
+    // the real array scopeLabel and every other registry consumer reads.
+    const registeredScopes = new Set(EDITOR_M7_COMMAND_REGISTRY.map((entry) => entry.scope));
+    expect(registeredScopes.has("explorer")).toBe(false);
+    expect(registeredScopes.has("git")).toBe(false);
   });
 
   it("keeps a closed command registry and rejects reserved, malformed, unknown, and colliding bindings", () => {
