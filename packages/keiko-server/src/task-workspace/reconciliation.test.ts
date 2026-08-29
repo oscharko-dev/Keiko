@@ -230,6 +230,21 @@ describe("pointer drift (negative: corrupted / moved gitdir)", () => {
   // `\s*` that overlapped with `(.+)` and, under the multiline flag, made the parse quadratic on
   // adversarial pointer content. This pads the real `.git` pointer with a huge whitespace run
   // around the actual target and asserts reconciliation still classifies it healthy, quickly.
+  //
+  // The 2000ms bound this pin originally used was too tight for what `elapsedMs` actually measures:
+  // real `reconcile()` fact-gathering (two `git` subprocess spawns via the real adapter — Finding 2's
+  // comment above this describe block explains why this suite avoids stubbing that out), not the
+  // regex itself. The regex is µs-scale regardless of padding size at any input length exercised
+  // here (measured directly, isolated from process-spawn cost: 0-1ms from 5,000 up to 200,000 padding
+  // characters, both the fixed and the pre-fix `\s*(.+)\s*$` pattern) — modern V8 does not exhibit
+  // catastrophic backtracking on this shape for a single-line, successfully-matching input, so this
+  // assertion's real job is "reconcile() completes promptly", not distinguishing linear from quadratic
+  // regex cost at this input size. Subprocess-spawn latency alone is measured, isolated from this
+  // file's other fixture cost, at up to 3438ms across 30 samples on this class of host with no other
+  // load, and the specific investigated failure hit 7279ms under a coverage-instrumented full-suite
+  // run (heavier CPU load from V8 coverage instrumentation plus concurrent git spawns from other test
+  // files). 10000ms keeps >2.7x headroom over that documented failure and >2.9x over the quiet-host
+  // sample max while still failing fast on a genuine hang or a multi-second-plus regression.
   it("still classifies healthy when the .git pointer is padded with adversarial whitespace", async () => {
     const instance = await provisionTask("t1");
     const gitPointerPath = join(instance.managedWorktreePath, ".git");
@@ -242,11 +257,11 @@ describe("pointer drift (negative: corrupted / moved gitdir)", () => {
     const report = await reconciliation().reconcile();
     const elapsedMs = Date.now() - start;
 
-    expect(elapsedMs).toBeLessThan(2000);
+    expect(elapsedMs).toBeLessThan(10_000);
     const reportEntry = report.entries.find((e) => e.workspaceId === instance.workspaceId);
     expect(reportEntry?.status).toBe("healthy");
     expect(reportEntry?.driftMarkers).toEqual([]);
-  });
+  }, 20_000);
 });
 
 describe("branch / HEAD drift (negative: branch mismatch, moved HEAD)", () => {
