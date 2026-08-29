@@ -947,24 +947,26 @@ export function vendoredDependencyRequirements(
   const bundled = manifest.bundleDependencies ?? manifest.bundledDependencies ?? [];
   const bundledSet = new Set(bundled);
   const requirements = new Map();
-  // Keyed by name, but every distinct OPTIONAL range is kept: two bundled workspaces may declare
-  // the same absent optional dependency under non-overlapping ranges, and Yarn has to resolve both
-  // descriptors. A required edge from any manifest supersedes them all, since that one must
-  // genuinely be present, and its own range is the binding one.
+  // Keyed by name AND range AND kind, so each descriptor keeps the origins that actually declared
+  // IT. Keying by name alone unioned the origins across ranges: two bundled workspaces declaring
+  // the same optional package under non-overlapping ranges produced a range/origin cross-product,
+  // so the origin resolving `foo@2.x` was also checked against `1.x`, missed, and minted a spurious
+  // minimum-version stub that `assertStubsAreForeignOnly` then rejected as unpinned. Required
+  // edges had the same defect one step earlier — the last range overwrote the others while every
+  // origin was retained.
   const record = ({ name, range, optional }, origin) => {
-    const existing = requirements.get(name) ?? {
+    const key = `${name}\u0000${optional === true ? "optional" : "required"}\u0000${range}`;
+    const existing = requirements.get(key) ?? {
       name,
-      required: undefined,
-      optionalRanges: new Set(),
+      range,
+      optional: optional === true,
       origins: new Set(),
     };
     // The lockfile path the edge was declared from. npm resolves a bundled workspace's dependency
     // from that workspace's own directory, so a closure that resolved everything from the root
     // would miss a nested copy — and pick up a hoisted one the workspace never sees.
     existing.origins.add(origin);
-    if (optional) existing.optionalRanges.add(range);
-    else existing.required = range;
-    requirements.set(name, existing);
+    requirements.set(key, existing);
   };
   // The staged root carries optional entries too — `promoteWorkspacePeers` lifts a workspace's
   // optional third-party peers into exactly that field — so both groups belong in the closure.
@@ -979,14 +981,23 @@ export function vendoredDependencyRequirements(
       record(requirement, origin);
     }
   }
+  // A required edge from any manifest supersedes this name's optional descriptors, since that one
+  // must genuinely be present and must never be answered with an inert stub.
+  const required = new Set(
+    [...requirements.values()].filter(({ optional }) => !optional).map(({ name }) => name),
+  );
   return [...requirements.values()]
-    .sort((left, right) => compareStrings(left.name, right.name))
-    .flatMap(({ name, required, optionalRanges, origins }) => {
-      const from = [...origins].sort(compareStrings);
-      return required === undefined
-        ? [...optionalRanges].map((range) => ({ name, range, optional: true, origins: from }))
-        : [{ name, range: required, optional: false, origins: from }];
-    });
+    .filter(({ name, optional }) => !optional || !required.has(name))
+    .sort(
+      (left, right) =>
+        compareStrings(left.name, right.name) || compareStrings(left.range, right.range),
+    )
+    .map(({ name, range, optional, origins }) => ({
+      name,
+      range,
+      optional,
+      origins: [...origins].sort(compareStrings),
+    }));
 }
 
 export function vendoredDependencyNames(manifest = rootPackageJson, packagesRoot = repoRoot) {
@@ -1224,13 +1235,22 @@ function recordClosureMissing(state, name) {
  * lockfile pins nothing at all. That fallback is what `minimumSatisfyingVersion` is for, and a
  * range it cannot model leaves the absence fatal rather than serving a stub the descriptor rejects.
  */
-function stubClosureEdge(state, requirement, version) {
+/**
+ * `name` is the LOCKFILE identity when the edge resolved, not the descriptor's own name.
+ *
+ * An `npm:` alias declares one name and the lockfile records another: `entry.name` carries the
+ * target. Keying the stub by the alias seeded a packument no consumer resolves, and then
+ * `assertStubsAreForeignOnly` rejected it as unpinned — the lockfile has no record under the alias
+ * — so the absent-alias path failed closed on a closure that was in fact valid. Where no edge
+ * resolved there is no identity to prefer, and the descriptor's name is the only one there is.
+ */
+function stubClosureEdge(state, requirement, version, name = requirement.name) {
   if (requirement.optional !== true || version === undefined) {
     recordClosureMissing(state, requirement.name);
     return;
   }
   // Keyed by name AND version: two platform builds of one package each demand their own stub.
-  state.stubs.set(`${requirement.name}@${version}`, { name: requirement.name, version });
+  state.stubs.set(`${name}@${version}`, { name, version });
 }
 
 /**
@@ -1258,7 +1278,7 @@ function visitClosureEdge(state, originPath, requirement) {
   if (!descriptorIsSatisfied(requirement, identity.version)) {
     // The edge exists but this descriptor's range excludes it — the non-overlapping optional range
     // case. It needs its own stub; seeding the resolved copy would answer the wrong descriptor.
-    stubClosureEdge(state, requirement, minimumSatisfyingVersion(requirement.range));
+    stubClosureEdge(state, requirement, minimumSatisfyingVersion(requirement.range), identity.name);
     return;
   }
   if (requirement.optional !== true) withdrawClosureStub(state, identity.name);
@@ -1274,7 +1294,7 @@ function seedClosurePackage(state, edge, entry, identity, requirement) {
     // The lockfile selects a path this checkout does not have. For an optional edge that is npm
     // declining a platform prebuild — the stub path. For a required one it is a broken tree.
     state.visited.delete(edge);
-    stubClosureEdge(state, requirement, identity.version);
+    stubClosureEdge(state, requirement, identity.version, identity.name);
     return;
   }
   assertInstalledMatchesLockfile(edge, identity, installed);
@@ -1293,11 +1313,17 @@ function seedClosurePackage(state, edge, entry, identity, requirement) {
  * exists to stop. Named loudly rather than tolerated.
  */
 function assertInstalledMatchesLockfile(edge, identity, installed) {
-  if (installed.version === identity.version) return;
+  // The NAME is checked too. A directory carrying the pinned version but a different package's
+  // manifest used to pass: the seed was then advertised under the lockfile identity while `npm
+  // pack` archived the directory under its own, so the smoke exercised bytes for the wrong package
+  // or failed later inside Yarn with nothing naming the cause. An alias is unaffected — its
+  // installed manifest already carries the target name, which is what the identity resolves to.
+  if (installed.name === identity.name && installed.version === identity.version) return;
   fail(
-    `${edge} is installed at ${String(installed.version)} but package-lock.json pins ` +
-      `${String(identity.version)}, so the offline registry would serve a version the committed ` +
-      `closure does not resolve — run \`npm install\` before the installable-package smoke`,
+    `${edge} is installed as ${String(installed.name)}@${String(installed.version)} but ` +
+      `package-lock.json pins ${identity.name}@${String(identity.version)}, so the offline ` +
+      `registry would serve something the committed closure does not resolve — run ` +
+      `\`npm install\` before the installable-package smoke`,
   );
 }
 

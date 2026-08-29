@@ -1010,6 +1010,73 @@ describe("installable package smoke optional-dependency coverage", () => {
     }
   });
 
+  // A directory can carry the pinned VERSION under a different package's manifest — a stale or
+  // tampered tree. The seed was then advertised under the lockfile identity while `npm pack`
+  // archived the directory's own manifest, so the smoke exercised bytes for the wrong package.
+  it("refuses an installed directory whose manifest names a different package", () => {
+    const root = mkdtempSync(join(tmpdir(), "keiko-wrongname-"));
+    try {
+      mkdirSync(join(root, "node_modules", "demo"), { recursive: true });
+      writeFileSync(
+        join(root, "node_modules", "demo", "package.json"),
+        JSON.stringify({ name: "not-demo", version: "1.0.0" }),
+        "utf8",
+      );
+      // The lockfile pins `demo` at exactly the installed version, so only the NAME is wrong.
+      writeFixtureLockfile(root, { "node_modules/demo": { version: "1.0.0" } });
+
+      rejectProcessExit();
+      expect(() =>
+        resolveVendorClosure(
+          join(root, "node_modules"),
+          { dependencies: { demo: "^1.0.0" }, bundleDependencies: [] },
+          root,
+          join(root, "package-lock.json"),
+        ),
+      ).toThrow(/process\.exit\(1\)/u);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  // An `npm:` alias declares one name and the lockfile records another. Keying the stub by the
+  // ALIAS seeded a packument no consumer resolves, and `assertStubsAreForeignOnly` then rejected it
+  // as unpinned — the lockfile holds no record under that name — so a valid closure failed closed.
+  it("stubs an absent npm: alias under the name the lockfile pins", () => {
+    const root = mkdtempSync(join(tmpdir(), "keiko-alias-stub-"));
+    try {
+      writeFixtureLockfile(root, {
+        // npm records the alias PATH carrying the TARGET's name; the platform declined the install.
+        "node_modules/demo-alias": {
+          name: "demo-target",
+          version: "1.0.0",
+          os: ["keiko-smoke-never-matches"],
+        },
+      });
+      const lockfilePath = join(root, "package-lock.json");
+      const closure = resolveVendorClosure(
+        join(root, "node_modules"),
+        {
+          optionalDependencies: { "demo-alias": "npm:demo-target@^1.0.0" },
+          bundleDependencies: [],
+        },
+        root,
+        lockfilePath,
+      );
+      expect(closure.stubs).toEqual([{ name: "demo-target", version: "1.0.0" }]);
+
+      // …and the guard that reads the lockfile by name now finds the record, instead of calling a
+      // legitimately foreign stub unpinned.
+      const seeded = new Map([
+        ["demo-target", new Map([["1.0.0", { version: "1.0.0", stub: true, tarball: undefined }]])],
+      ]);
+      rejectProcessExit();
+      expect(() => assertStubsAreForeignOnly(seeded, lockfilePath)).not.toThrow();
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   // Item B: two parents, non-overlapping OPTIONAL ranges, one installed copy. The descriptor the
   // copy does not satisfy needs its own stub — tracking resolution per NAME skipped it, leaving
   // Yarn with no candidate for that descriptor and a valid optional omission failing the gate.
@@ -3021,11 +3088,15 @@ describe("installable package smoke optional-dependency coverage", () => {
         },
         root,
       );
-      const ranges = requirements
+      const declared = requirements
         .filter((entry) => entry.name === "keiko-smoke-absent-multi")
-        .map((entry) => entry.range)
-        .sort();
-      expect(ranges).toEqual(["^1.0.0", "^2.0.0"]);
+        .sort((left, right) => left.range.localeCompare(right.range));
+      expect(declared.map((entry) => entry.range)).toEqual(["^1.0.0", "^2.0.0"]);
+      // Each range keeps only the origin that DECLARED it. Unioning the origins per name produced
+      // a range/origin cross-product: the workspace resolving `^2.0.0` was also walked against
+      // `^1.0.0`, missed, and minted a spurious stub that the foreign-only guard then rejected.
+      expect(declared.map((entry) => entry.origins.length)).toEqual([1, 1]);
+      expect(declared[0]?.origins).not.toEqual(declared[1]?.origins);
 
       // Each distinct range yields its own stub, so both descriptors can resolve.
       writeFixtureLockfile(root);
