@@ -94,6 +94,7 @@ export type {
   ToolShapingDegradedEvent,
   SinkDegradedReason,
   SinkDegradedEvent,
+  ContextCompactedEvent,
   HarnessEvent,
 } from "./harness.js";
 export type {
@@ -2361,6 +2362,15 @@ export type {
   redactAbsolutePaths,
   stripUnsafeFormatChars,
 } from "./text-safety.js";
+
+// ─── Shared line/offset primitive (browser editor + server language service, GEN-DUP-SEMANTIC-017)
+export type {
+  computeLineStarts,
+  lineContentEnd,
+  offsetToPosition,
+  positionToOffset,
+  spanToRange,
+} from "./line-offsets.js";
 
 // ─── Governed documentation browser (Epic #1851, ADR-0113) ──────────────────────
 export type {

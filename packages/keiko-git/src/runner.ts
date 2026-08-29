@@ -20,8 +20,20 @@ export const GIT_BASE_ARGS: readonly string[] = ["--no-pager", "--no-optional-lo
 
 // Repository-local configuration is intentionally still visible for ordinary repository data,
 // but executable read helpers must never run. This fixed override is injected by the local runner
-// before every caller-supplied argument, so no route can accidentally omit it.
-const LOCAL_READ_CONFIG_ARGS: readonly string[] = ["-c", "core.fsmonitor=false"];
+// before every caller-supplied argument, so no route can accidentally omit it. `diff.external` is
+// deliberately NOT here as a blanket `-c diff.external=`: git treats an explicit empty override as
+// "the external diff command is the empty string" and fails the whole invocation at exec time
+// (exit 128) instead of falling back to the internal differ, which would turn every `git diff` on
+// this runner into a hard failure. That helper is neutralized per diff-family subcommand instead —
+// see `withDiffFamilyNeutralized` below. `core.editor=true` has no reachable local-read path (no
+// subcommand this runner uses launches an editor) but costs nothing and closes the config value
+// for good if one is ever added.
+const LOCAL_READ_CONFIG_ARGS: readonly string[] = [
+  "-c",
+  "core.fsmonitor=false",
+  "-c",
+  "core.editor=true",
+];
 const NETWORK_CONFIG_ARGS: readonly string[] = [
   "-c",
   "core.fsmonitor=false",
@@ -59,6 +71,198 @@ const FORBIDDEN_GIT_OPTION = /^--(?:upload-pack|receive-pack|exec)(?:=|$)/u;
 
 function forbiddenGitOption(args: readonly string[]): string | undefined {
   return args.find((arg) => FORBIDDEN_GIT_OPTION.test(arg));
+}
+
+// `--ext-diff`/`--textconv` re-enable exactly the external helpers `withDiffFamilyNeutralized`
+// below otherwise neutralizes for every diff-family subcommand. Checked anywhere in the caller's
+// args, not only after a resolved subcommand: this is the literal override audit finding #3348
+// reproduces (`[...GIT_BASE_ARGS, "diff", "--ext-diff"]` must never reach spawn), and neither flag
+// has any other meaning at any argv position in git's grammar, so there is no legitimate call
+// shape this could reject by mistake.
+const FORBIDDEN_DIFF_ENABLING_FLAG = /^--(?:ext-diff|textconv)(?:=|$)/u;
+
+function forbiddenDiffEnablingFlag(args: readonly string[]): string | undefined {
+  return args.find((arg) => FORBIDDEN_DIFF_ENABLING_FLAG.test(arg));
+}
+
+// Diff-family subcommands whose default behaviour can shell out to a repository-local
+// `diff.external` helper, or run a repository-local `textconv` filter, unless the invocation
+// carries `--no-ext-diff --no-textconv`. Injected right after the subcommand token at the single
+// spawn boundary so no caller can silently reopen the gap by omitting the flags — mirroring how
+// NETWORK_CONFIG_ARGS neutralizes remote-facing repository config regardless of the call site.
+// `show` and `log` render diffs too (a bare `git show <commit>` and `git log -p` both honour
+// diff.external/textconv by default) and both are reachable through the agent-facing git tool
+// allowlist (keiko-contracts DEFAULT_COMMAND_RULES) alongside `diff` itself — audit finding on
+// #3348: the neutralization must cover every porcelain surface that can render a diff, not only
+// the literal `diff` subcommand.
+const DIFF_FAMILY_SUBCOMMANDS: ReadonlySet<string> = new Set([
+  "diff",
+  "diff-files",
+  "diff-index",
+  "diff-tree",
+  "log",
+  "show",
+]);
+const DIFF_NO_EXTERNAL_ARGS: readonly string[] = ["--no-ext-diff", "--no-textconv"];
+
+// Global flags this codebase's callers pass before the subcommand: GIT_BASE_ARGS'
+// `--no-pager`/`--no-optional-locks` take no value; `-C <path>` and `-c <key>=<value>` each take
+// one (the latter is how gitHistoryArgs() in grounded-git-history-evidence.ts passes
+// `-c core.quotepath=false` ahead of `log`). Extend the relevant set before any caller adds
+// another pre-subcommand flag, or subcommand detection below stops one token early and the
+// diff-family injection silently becomes a no-op for that call shape.
+const PRE_SUBCOMMAND_FLAG_NO_VALUE: ReadonlySet<string> = new Set([
+  "--no-pager",
+  "--no-optional-locks",
+]);
+const PRE_SUBCOMMAND_FLAG_ONE_VALUE: ReadonlySet<string> = new Set(["-C", "-c"]);
+
+function findSubcommandIndex(args: readonly string[]): number | undefined {
+  let index = 0;
+  while (index < args.length) {
+    const arg = args[index];
+    if (arg !== undefined && PRE_SUBCOMMAND_FLAG_ONE_VALUE.has(arg)) {
+      index += 2;
+      continue;
+    }
+    if (arg !== undefined && PRE_SUBCOMMAND_FLAG_NO_VALUE.has(arg)) {
+      index += 1;
+      continue;
+    }
+    return arg !== undefined && !arg.startsWith("-") ? index : undefined;
+  }
+  return undefined;
+}
+
+function withDiffFamilyNeutralized(args: readonly string[]): readonly string[] {
+  const index = findSubcommandIndex(args);
+  const subcommand = index === undefined ? undefined : args[index];
+  if (index === undefined || subcommand === undefined || !DIFF_FAMILY_SUBCOMMANDS.has(subcommand)) {
+    return args;
+  }
+  if (DIFF_NO_EXTERNAL_ARGS.every((flag) => args.includes(flag))) return args;
+  return [...args.slice(0, index + 1), ...DIFF_NO_EXTERNAL_ARGS, ...args.slice(index + 1)];
+}
+
+// ─── `-c`/`--config-env` config-key preflight (audit finding on #3348) ────────────────────────
+//
+// Reuse decision (AGENTS.md §5): packages/keiko-contracts/src/tools.ts already denies `-c` and
+// `--config-env` OUTRIGHT for the agent-facing git TOOL surface (DEFAULT_COMMAND_RULES) — no call
+// through that narrow, read-only allowlist ever needs a config override, so it can afford to
+// blanket-deny the flag by NAME via a flat denyFlags list. This runner sits one layer lower and is
+// consumed by more than that tool surface (gitRoutes.ts, gitDelivery/syncExecution.ts, and
+// grounded-git-history-evidence.ts's gitHistoryArgs(), which legitimately passes
+// `-c core.quotepath=false` ahead of `log` — a real production call), so it cannot deny `-c`
+// wholesale without breaking that caller. The only sound boundary here is to permit `-c`/
+// `--config-env` in general and deny by the config KEY the value carries — a check that operates
+// on a wholly different shape of data (parsed key patterns, several with a caller/repo-chosen
+// middle segment such as a diff driver or protocol name) than tools.ts's flat flag-name list. The
+// two lists are kept separate on purpose, not duplicated silently: if the set of enabling flag
+// NAMES (--ext-diff/--textconv/--config-env) ever changes, update both this file and tools.ts's
+// git denyFlags together (see the cross-reference comment left on that list).
+//
+// git only treats `-c`/`--config-env` as a GLOBAL config override when it appears before the
+// resolved subcommand — verified empirically against git 2.50: `git diff -c core.pager=cat`
+// parses `-c` as diff's OWN combined-format flag and `core.pager=cat` as a revision argument,
+// never touching config. The scan below is therefore bounded to the pre-subcommand region (the
+// same region findSubcommandIndex resolves for withDiffFamilyNeutralized above), which also
+// matches the one real production call shape. When no subcommand boundary can be resolved at all,
+// the whole array is treated as pre-subcommand — fail closed rather than silently narrow the scan.
+
+const DENIED_CONFIG_EXACT_KEYS: readonly string[] = [
+  "diff.external",
+  "core.pager",
+  "core.editor",
+  "sequence.editor",
+  "core.sshCommand",
+  "core.fsmonitor",
+  "core.hooksPath",
+  "uploadpack.packObjectsHook",
+  "http.proxy",
+  "credential.helper",
+  "init.templateDir",
+  "safe.directory",
+];
+const DENIED_CONFIG_EXACT_KEYS_LOWER: ReadonlySet<string> = new Set(
+  DENIED_CONFIG_EXACT_KEYS.map((key) => key.toLowerCase()),
+);
+
+// Per-driver / per-remote-protocol / per-alias keys: the middle segment is caller- or
+// repository-chosen (a diff driver name, a protocol name, an alias name), so no exact string can
+// enumerate them. `[\s\S]*` (not just "no dot") is deliberate: a subsection that itself contains a
+// dot must still match rather than slip past a narrower pattern — fail closed.
+const DENIED_CONFIG_WILDCARD_PATTERNS: readonly RegExp[] = [
+  /^diff\.[\s\S]*\.textconv$/u,
+  /^diff\.[\s\S]*\.command$/u,
+  /^pager\.[\s\S]+$/u,
+  /^alias\.[\s\S]+$/u,
+  /^protocol\.[\s\S]*\.allow$/u,
+];
+
+function configKeyFromSpec(spec: string): string {
+  const equalsIndex = spec.indexOf("=");
+  return equalsIndex === -1 ? spec : spec.slice(0, equalsIndex);
+}
+
+// git config section/variable names are case-insensitive (git-config(1)); compare lowercase so
+// `-c DIFF.External=...` cannot bypass the checks above by casing alone.
+function isDangerousConfigKey(rawKey: string): boolean {
+  const key = rawKey.toLowerCase();
+  if (DENIED_CONFIG_EXACT_KEYS_LOWER.has(key)) return true;
+  return DENIED_CONFIG_WILDCARD_PATTERNS.some((pattern) => pattern.test(key));
+}
+
+function preSubcommandRegion(args: readonly string[]): readonly string[] {
+  const boundary = findSubcommandIndex(args);
+  return boundary === undefined ? args : args.slice(0, boundary);
+}
+
+// Two-token form: `-c key=value` / `--config-env key=value`. The value token belongs to the flag
+// immediately before it, so this walks by index rather than using Array#find. A dangling flag
+// with no following token is denied too — there is no value to prove safe.
+function forbiddenTwoTokenConfigOverride(region: readonly string[]): string | undefined {
+  for (let index = 0; index < region.length; index += 1) {
+    const arg = region[index];
+    if (arg !== "-c" && arg !== "--config-env") continue;
+    const value = region[index + 1];
+    if (value === undefined) return arg;
+    const key = configKeyFromSpec(value);
+    if (isDangerousConfigKey(key)) return `${arg} ${key}`;
+    index += 1; // the value token is this flag's argument, never re-scanned as one of its own
+  }
+  return undefined;
+}
+
+// --config-env's documented single-token form: `--config-env=<name>=<envvar>`.
+function forbiddenConfigEnvJoinedOverride(region: readonly string[]): string | undefined {
+  for (const arg of region) {
+    if (!arg.startsWith("--config-env=")) continue;
+    const key = configKeyFromSpec(arg.slice("--config-env=".length));
+    if (isDangerousConfigKey(key)) return `--config-env ${key}`;
+  }
+  return undefined;
+}
+
+// Defensive: this git build rejects a joined `-cKEY=VALUE` token today (verified: "unknown
+// option: -c...") but an input this preflight cannot positively classify as safe is denied, never
+// silently allowed — never assume today's parser behaviour holds for every git version this
+// runner may execute against.
+function forbiddenShortFlagJoinedOverride(region: readonly string[]): string | undefined {
+  for (const arg of region) {
+    if (arg === "-c" || !arg.startsWith("-c")) continue;
+    const key = configKeyFromSpec(arg.slice(2).replace(/^=/u, ""));
+    if (isDangerousConfigKey(key)) return `-c ${key}`;
+  }
+  return undefined;
+}
+
+function forbiddenConfigOverride(args: readonly string[]): string | undefined {
+  const region = preSubcommandRegion(args);
+  return (
+    forbiddenTwoTokenConfigOverride(region) ??
+    forbiddenConfigEnvJoinedOverride(region) ??
+    forbiddenShortFlagJoinedOverride(region)
+  );
 }
 
 interface OutputAccumulator {
@@ -116,6 +320,40 @@ function captureChunk(
   }
 }
 
+// KEIKO-0733: a raw byte-index cut (captureChunk) can bisect a multi-byte UTF-8 codepoint, leaving
+// a dangling lead byte (or lead byte plus a partial run of continuation bytes) at the very end of
+// the captured buffer. `Buffer#toString("utf8")` decodes that dangling tail as U+FFFD, which is a
+// decoding artifact of the cut, not anything git actually emitted. Scan back up to 3 bytes from the
+// end to find and drop an incomplete trailing lead-byte sequence before decoding, so a truncated
+// capture never surfaces a replacement character it didn't earn.
+function trimIncompleteUtf8Tail(buffer: Buffer): Buffer {
+  const length = buffer.length;
+  const maxScan = Math.min(3, length);
+  for (let distanceFromEnd = 1; distanceFromEnd <= maxScan; distanceFromEnd += 1) {
+    const byte = buffer[length - distanceFromEnd];
+    if (byte === undefined) break;
+    if ((byte & 0xc0) === 0x80) continue; // continuation byte — keep scanning back for its lead byte
+    const sequenceLength = utf8LeadByteSequenceLength(byte);
+    if (sequenceLength === undefined) return buffer; // not a multi-byte lead byte — nothing to trim
+    return sequenceLength > distanceFromEnd ? buffer.subarray(0, length - distanceFromEnd) : buffer;
+  }
+  return buffer;
+}
+
+// Returns the total codepoint byte length a UTF-8 lead byte announces, or undefined for an ASCII
+// byte / a byte that is not a valid multi-byte lead byte.
+function utf8LeadByteSequenceLength(byte: number): number | undefined {
+  if ((byte & 0xe0) === 0xc0) return 2;
+  if ((byte & 0xf0) === 0xe0) return 3;
+  if ((byte & 0xf8) === 0xf0) return 4;
+  return undefined;
+}
+
+function decodeCapturedStream(sink: OutputAccumulator, truncated: boolean): string {
+  const buffer = Buffer.concat(sink.chunks);
+  return (truncated ? trimIncompleteUtf8Tail(buffer) : buffer).toString("utf8");
+}
+
 function runResult(
   state: RunState,
   exitCode: number | null,
@@ -124,8 +362,8 @@ function runResult(
   return {
     exitCode,
     signal,
-    stdout: Buffer.concat(state.stdout.chunks).toString("utf8"),
-    stderr: Buffer.concat(state.stderr.chunks).toString("utf8"),
+    stdout: decodeCapturedStream(state.stdout, state.truncated),
+    stderr: decodeCapturedStream(state.stderr, state.truncated),
     truncated: state.truncated,
     timedOut: state.timedOut,
     aborted: state.aborted,
@@ -183,7 +421,11 @@ function gitSpawnPreflight(
   args: readonly string[],
   options: GitProcessOptions,
 ): GitProcessResult | undefined {
-  const forbidden = forbiddenGitOption(args);
+  // Fail closed before the spawn: a remote-command option, an external-diff/textconv enabling
+  // flag, or a `-c`/`--config-env` override of a dangerous config key is refused here so none of
+  // them can ever reach the child process — however they got into `args` (audit finding #3348).
+  const forbidden =
+    forbiddenGitOption(args) ?? forbiddenDiffEnablingFlag(args) ?? forbiddenConfigOverride(args);
   if (forbidden !== undefined) return refusedOptionResult(forbidden);
   return signalIsAborted(options.abortSignal) ? abortedProcessResult() : undefined;
 }
@@ -235,7 +477,7 @@ function createGitProcessRunnerWithFixedArgs(
         resolveResult({ ...base, truncated: false, timedOut: false, aborted: false });
         return;
       }
-      const child = spawn(resolution.path, [...fixedArgs, ...args], {
+      const child = spawn(resolution.path, [...fixedArgs, ...withDiffFamilyNeutralized(args)], {
         cwd: options.cwd,
         env,
         shell: false,

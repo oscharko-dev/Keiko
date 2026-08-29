@@ -533,7 +533,7 @@ describe("EditorWindowSessionHost removed-root model disposal (#2621)", () => {
     view.rerender(editorHost({ root: "/repo-a" }, ctx));
 
     expect(disposeRoot).toHaveBeenCalledTimes(1);
-    expect(disposeRoot).toHaveBeenCalledWith("/repo-b", "root-disposed", true);
+    expect(disposeRoot).toHaveBeenCalledWith("/repo-b", true);
   });
 
   it("disposes exactly the removed root when a three-root workspace loses one", async () => {
@@ -547,7 +547,7 @@ describe("EditorWindowSessionHost removed-root model disposal (#2621)", () => {
 
     // Exactly the departed root — the two survivors keep every model they had open.
     expect(disposeRoot).toHaveBeenCalledTimes(1);
-    expect(disposeRoot).toHaveBeenCalledWith("/repo-c", "root-disposed", true);
+    expect(disposeRoot).toHaveBeenCalledWith("/repo-c", true);
   });
 
   it("treats the first workspace it ever sees as a baseline, not as a removal", async () => {
@@ -566,7 +566,7 @@ describe("EditorWindowSessionHost removed-root model disposal (#2621)", () => {
     manifestRef.current = ONE_ROOT;
     view.rerender(editorHost({ root: "/repo-a" }, ctx));
     expect(disposeRoot).toHaveBeenCalledTimes(1);
-    expect(disposeRoot).toHaveBeenCalledWith("/repo-b", "root-disposed", true);
+    expect(disposeRoot).toHaveBeenCalledWith("/repo-b", true);
   });
 
   it("never disposes without proof that a root left the same workspace", async () => {
@@ -601,7 +601,7 @@ describe("EditorWindowSessionHost removed-root model disposal (#2621)", () => {
     manifestRef.current = ONE_ROOT;
     view.rerender(editorHost({ root: "/repo-a" }, ctx));
     expect(disposeRoot).toHaveBeenCalledTimes(1);
-    expect(disposeRoot).toHaveBeenCalledWith("/repo-b", "root-disposed", true);
+    expect(disposeRoot).toHaveBeenCalledWith("/repo-b", true);
   });
 });
 

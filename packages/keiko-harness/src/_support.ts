@@ -10,6 +10,7 @@ import type {
 import { Emitter } from "./emitter.js";
 import { MemoryEventSink } from "./sinks.js";
 import { newCounters, type RunContext } from "./context.js";
+import type { HarnessCompactionPort } from "./context-compaction-port.js";
 import type { ModelPort, ToolCallRequest, ToolCallResult, ToolPort } from "./ports.js";
 import type { HarnessShaperPort } from "./shaper-port.js";
 import { resolveTaskPlan } from "./tasks/policy.js";
@@ -123,6 +124,7 @@ export interface CtxOptions {
   readonly limits?: Partial<HarnessLimits> | undefined;
   readonly sink?: MemoryEventSink | undefined;
   readonly shaperPort?: HarnessShaperPort | undefined;
+  readonly compactionPort?: HarnessCompactionPort | undefined;
 }
 
 export function buildContext(options: CtxOptions): { ctx: RunContext; sink: MemoryEventSink } {
@@ -144,6 +146,7 @@ export function buildContext(options: CtxOptions): { ctx: RunContext; sink: Memo
     startedAt: clock.now(),
     counters: newCounters(),
     ...(options.shaperPort === undefined ? {} : { shaperPort: options.shaperPort }),
+    ...(options.compactionPort === undefined ? {} : { compactionPort: options.compactionPort }),
     shapedObservations: [],
     compactedToolMessages: new Map(),
     messages: [...plan.messages],

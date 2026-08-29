@@ -50,6 +50,7 @@ export type {
   ToolShapingDegradedEvent,
   SinkDegradedReason,
   SinkDegradedEvent,
+  ContextCompactedEvent,
   HarnessEvent,
 } from "@oscharko-dev/keiko-contracts";
 export {

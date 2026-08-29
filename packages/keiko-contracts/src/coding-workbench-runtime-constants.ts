@@ -13,8 +13,13 @@
 
 export const CODING_WORKBENCH_RUNTIME_CONTRACT_VERSION = "1" as const;
 
+// KEIKO-0539: `unavailable` was removed as a legal FSM state — no orchestrator code path
+// (snapshot(), status(), CodingRuntimeOrchestratorState.idle()) ever produced it, and every
+// current consumer already reads host-qualification exclusively through the unrelated
+// `codingRuntimeUnavailableReason` field (deps.ts:buildCodingRuntimeControlPlaneDeps), which
+// carries richer information than a bare state value ever could. That field remains the sole
+// host-qualification signal.
 export type CodingWorkbenchRuntimeStateName =
-  | "unavailable"
   | "idle"
   | "starting"
   | "ready"
@@ -30,7 +35,6 @@ export type CodingWorkbenchRuntimeStateName =
 
 export const CODING_WORKBENCH_RUNTIME_STATE_NAMES: readonly CodingWorkbenchRuntimeStateName[] =
   Object.freeze([
-    "unavailable",
     "idle",
     "starting",
     "ready",

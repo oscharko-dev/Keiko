@@ -32,14 +32,30 @@ export function fixturesForSuite(suite: SuiteName): readonly EvaluationFixture[]
   return suite === "all" ? ALL_FIXTURES : ALL_FIXTURES.filter((f) => f.workflowKind === suite);
 }
 
-// Resolves a single fixture by its "<kind>/<name>" or bare "<name>" selector. Returns undefined when
-// no fixture matches so the CLI can emit a usage error (exit 2).
-export function fixtureByName(selector: string): EvaluationFixture | undefined {
+// Result of resolving a --fixture selector (KEIKO-0533, #3310). A bare "<name>" selector can match
+// more than one fixture when the same name is reused across workflow kinds (e.g. "happy-path" exists
+// under both unit-tests and bug-investigation) — "ambiguous" surfaces that distinguishably instead of
+// silently returning ALL_FIXTURES' first match, so the CLI can fail closed per AGENTS.md §7.
+export type FixtureLookupResult =
+  | { readonly status: "found"; readonly fixture: EvaluationFixture }
+  | { readonly status: "not-found" }
+  | { readonly status: "ambiguous"; readonly matches: readonly EvaluationFixture[] };
+
+// Resolves a single fixture by its "<kind>/<name>" or bare "<name>" selector. The "<kind>/<name>"
+// form is always unambiguous (workflowKind + name is unique per fixture). The bare form returns
+// "ambiguous" with every match when more than one fixture shares that name across workflow kinds.
+export function fixtureByName(selector: string): FixtureLookupResult {
   const slash = selector.indexOf("/");
   if (slash !== -1) {
     const kind = selector.slice(0, slash);
     const name = selector.slice(slash + 1);
-    return ALL_FIXTURES.find((f) => f.workflowKind === kind && f.name === name);
+    const fixture = ALL_FIXTURES.find((f) => f.workflowKind === kind && f.name === name);
+    return fixture === undefined ? { status: "not-found" } : { status: "found", fixture };
   }
-  return ALL_FIXTURES.find((f) => f.name === selector);
+  const matches = ALL_FIXTURES.filter((f) => f.name === selector);
+  if (matches.length > 1) {
+    return { status: "ambiguous", matches };
+  }
+  const [fixture] = matches;
+  return fixture === undefined ? { status: "not-found" } : { status: "found", fixture };
 }

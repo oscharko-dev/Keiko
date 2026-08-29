@@ -107,6 +107,11 @@ on purpose: a missing runtime must never quietly mask a real ANN regression.
 Use `npm` only. This repo is npm workspaces with a committed `package-lock.json` — there is no
 pnpm/yarn/bun lockfile. Do not add one.
 
+Every workspace package's `scripts.test` is `"vitest run"` — never `"npm run build && vitest run"`.
+An isolated `npm test --workspace <pkg>` therefore requires a prior `npm run build:packages`, which
+root `npm test` performs for you once, workspace-wide, before it invokes vitest (KEIKO-0915,
+#3336).
+
 ---
 
 ## 3. The green bar — how to know a change is actually done

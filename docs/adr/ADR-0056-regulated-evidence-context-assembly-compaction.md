@@ -2,7 +2,8 @@
 
 ## Status
 
-Proposed
+Accepted (retroactive record; see docs/context-engineering/decision-log.md, MILESTONE COMPLETE,
+commits fb6e9439/8cdf2d69).
 
 ## Version
 

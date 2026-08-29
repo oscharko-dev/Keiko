@@ -7,6 +7,19 @@ import {
   positionToOffset,
   spanToRange,
 } from "./line-offsets.js";
+// KEIKO-0571 (#3315): the root barrel mirrors every non-runtime subpath's exports type-only
+// (see index.ts's `text-safety.js` block for the sibling primitive this module matches in
+// shape) except the documented `memory-fixtures` exclusion. These aliased type-only imports
+// prove `line-offsets.js` is mirrored the same way: they resolve only if index.ts re-exports
+// the identically-named function types, so `npm run typecheck` fails whenever the mirror is
+// missing even though vitest itself does not type-check (AGENTS.md §3).
+import type {
+  computeLineStarts as RootComputeLineStarts,
+  lineContentEnd as RootLineContentEnd,
+  offsetToPosition as RootOffsetToPosition,
+  positionToOffset as RootPositionToOffset,
+  spanToRange as RootSpanToRange,
+} from "./index.js";
 
 describe("computeLineStarts", () => {
   it("records the start of each line for LF, CRLF, and lone CR", () => {
@@ -151,5 +164,25 @@ describe("spanToRange", () => {
       start: { line: 0, character: 0 },
       end: { line: 0, character: 0 },
     });
+  });
+});
+
+describe("root barrel mirror (KEIKO-0571, #3315)", () => {
+  // Assigning the real, imported functions to `typeof <root import>`-typed bindings only
+  // compiles if index.ts re-exports the identically-named function types from
+  // "./line-offsets.js". `npm test` (vitest) erases these type positions and cannot see a
+  // missing mirror; `npm run typecheck` is the gate that actually proves it.
+  const rootComputeLineStarts: typeof RootComputeLineStarts = computeLineStarts;
+  const rootLineContentEnd: typeof RootLineContentEnd = lineContentEnd;
+  const rootOffsetToPosition: typeof RootOffsetToPosition = offsetToPosition;
+  const rootPositionToOffset: typeof RootPositionToOffset = positionToOffset;
+  const rootSpanToRange: typeof RootSpanToRange = spanToRange;
+
+  it("mirrors every line-offsets export as a type-only root barrel export", () => {
+    expect(rootComputeLineStarts).toBe(computeLineStarts);
+    expect(rootLineContentEnd).toBe(lineContentEnd);
+    expect(rootOffsetToPosition).toBe(offsetToPosition);
+    expect(rootPositionToOffset).toBe(positionToOffset);
+    expect(rootSpanToRange).toBe(spanToRange);
   });
 });

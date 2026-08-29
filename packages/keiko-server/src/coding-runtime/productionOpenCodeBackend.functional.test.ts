@@ -827,6 +827,7 @@ function setupWorkspace(
           redactString: (value) => value,
           now: () => 1_700_000_000_000,
           newId: () => "functional-reconcile-id",
+          mutex,
         },
         provisioned.instance,
         1_700_000_000_000,

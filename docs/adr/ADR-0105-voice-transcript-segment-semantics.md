@@ -6,12 +6,15 @@
 
 Accepted (Issue #500, Epic #491, 2026-06-24)
 
-Amended by [ADR-0154](ADR-0154-canonical-twin-voice-pipeline.md) for productive integration. The
-segment contract and reducer remain reusable, but current Twin does not use the standalone reducer as
-its exactly-once or persistence boundary. `useRealtimeVoice` settles provider finals and transfers one
-immutable turn to canonical chat, whose normal message, retrieval, and MemoriaViva paths own durable
-state. `replayable` in this ADR means eligible for the bounded in-session control replay buffer, not
-durable transcript storage.
+Amended by [ADR-0154](ADR-0154-canonical-twin-voice-pipeline.md) for productive integration. Only the
+leaf contract in [`keiko-contracts/src/voice-transcript.ts`](../../packages/keiko-contracts/src/voice-transcript.ts)
+remains reusable; current Twin does not use the standalone reducer as its exactly-once or persistence
+boundary. `useRealtimeVoice` settles provider finals and transfers one immutable turn to canonical
+chat, whose normal message, retrieval, and MemoriaViva paths own durable state. The standalone
+stateful reducer that D4 below describes (`voice-transcript-segments.ts`) had zero production
+importers and was removed as unused after ADR-0154's simplification to the continuation-buffer
+pattern; resurrecting it would contradict, not restore, that standing decision. `replayable` in this
+ADR means eligible for the bounded in-session control replay buffer, not durable transcript storage.
 
 ## Version
 
@@ -108,14 +111,15 @@ Two totality-keyed classification tables align states to the wire-protocol class
   `corrected`) are `reviewable-text` (must pass through `stripUnsafeFormatChars` + redact-at-persist);
   content-free states (`discarded`, `redacted`, `provider-error`) are `content-free` (no redaction overhead).
 
-### D4 — Reducer in keiko-ui; split contract/reducer for server-importability (AC1 / AC3 / AC5)
+### D4 (historical — code removed, see Status) — Reducer in keiko-ui; split contract/reducer for server-importability (AC1 / AC3 / AC5)
 
-The stateful reducer `createVoiceTranscriptSegmentStore` lives at
-[`packages/keiko-ui/src/app/components/desktop/hooks/voice-transcript-segments.ts`](../../packages/keiko-ui/src/app/components/desktop/hooks/voice-transcript-segments.ts)
-(+ tests), co-located with `voice-timebase.ts` and `voice-turn-manager.ts`, mirroring ADR-0103 and
-ADR-0104 pattern. It is a pure factory (`createVoiceTranscriptSegmentStore(options)`) with injectable
-seams: a `VoiceProfile` for capability gating, a `VoiceClock` (reused from `voice-timebase.ts`), and
-an optional `VoiceTranscriptStoreObserver` (content-free, see D8). It is a synchronous, deterministic
+The stateful reducer that implemented this design, `createVoiceTranscriptSegmentStore`, lived at
+`packages/keiko-ui/src/app/components/desktop/hooks/voice-transcript-segments.ts` (+ tests),
+co-located with `voice-timebase.ts` and `voice-turn-manager.ts`, mirroring ADR-0103 and ADR-0104
+pattern, until KEIKO-0666 removed it as unused (see Status). It was a pure factory
+(`createVoiceTranscriptSegmentStore(options)`) with injectable seams: a `VoiceProfile` for
+capability gating, a `VoiceClock` (reused from `voice-timebase.ts`), and an optional
+`VoiceTranscriptStoreObserver` (content-free, see D8). It was a synchronous, deterministic
 reducer (no timers, no async, no hidden microtask queues) with a single `apply(input)` entry point.
 
 **Why split?** The reducer is keiko-ui-only because it holds transcript text in its internal segments
@@ -204,10 +208,10 @@ For AC3 enforcement: partial and stable segments are structurally excluded from 
 and discarded/redacted/provider-error are content-free. A consumer reading only the projection is type-protected
 against using any non-committed text.
 
-### D8 — Content-free observer; no transcript text, no raw audio (AC6)
+### D8 (historical — code removed, see Status) — Content-free observer; no transcript text, no raw audio (AC6)
 
-The reducer accepts an optional `VoiceTranscriptStoreObserver` called via optional chaining. It fires
-two event types, both content-free:
+The reducer (see D4) accepted an optional `VoiceTranscriptStoreObserver` called via optional
+chaining. It fired two event types, both content-free:
 
 ```
 onSegment?(event: {
@@ -333,9 +337,11 @@ input makes a segment `discarded`, which contributes 0 to the committed projecti
 - [`docs/voice/transcript-semantics.md`](../voice/transcript-semantics.md): detailed spec and state lifecycle
 - [`docs/voice/privacy-contract.md`](../voice/privacy-contract.md): content-free observer invariant (§2 / §3)
 - [`packages/keiko-contracts/src/voice-transcript.ts`](../../packages/keiko-contracts/src/voice-transcript.ts):
-  the contract (types, constants, validators, classification tables, selectors)
-- [`packages/keiko-ui/src/app/components/desktop/hooks/voice-transcript-segments.ts`](../../packages/keiko-ui/src/app/components/desktop/hooks/voice-transcript-segments.ts):
-  the reducer (factory, state machine, observer, snapshot)
+  the contract (types, constants, validators, classification tables, selectors) — still live and
+  reused (see Status)
+- `packages/keiko-ui/src/app/components/desktop/hooks/voice-transcript-segments.ts` (historical —
+  the reducer factory/state machine/observer/snapshot D4 and D8 describe; removed by KEIKO-0666 as
+  unused, see Status; no longer a valid link)
 
 ## Date
 

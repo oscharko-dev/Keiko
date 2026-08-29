@@ -352,6 +352,15 @@ export const DEFAULT_COMMAND_RULES: readonly CommandRule[] = deepFreeze([
     // defeating the Node spawn's shell:false; --exec-path redirects git to attacker-supplied sub-binaries.
     // hasDeniedFlag runs BEFORE subcommand resolution and matches both `--flag value` and
     // `--flag=value`. `-C`/--git-dir/--work-tree stay value-flags (location only, not execution).
+    // Cross-reference (audit finding #3348): packages/keiko-git/src/runner.ts — the lower-level
+    // spawn boundary this tool ultimately shares with gitRoutes.ts and
+    // grounded-git-history-evidence.ts — cannot deny `-c`/`--config-env` outright the way this
+    // narrow, read-only tool surface does, because a real production caller legitimately needs
+    // `-c core.quotepath=false`. That runner instead permits `-c`/`--config-env` in general and
+    // denies by the specific config KEY carried in the value (diff.external, core.pager, etc.), a
+    // deliberately separate check operating on a different shape of data than this flat flag-name
+    // list. If the enabling flag NAMES below (--ext-diff/--textconv/--config-env) ever change,
+    // update both lists together.
     denyFlags: Object.freeze([
       "-c",
       "--config-env",

@@ -233,6 +233,31 @@ describe("usage errors → exit 2", () => {
     expect(captured().err).toContain("unknown fixture");
   });
 
+  // KEIKO-0533 (#3310): "happy-path" and "unsafe-action" are each duplicated across the
+  // unit-tests and bug-investigation workflow kinds. A bare --fixture selector matching both
+  // must be rejected as ambiguous — distinct from "unknown fixture" — and name both
+  // <kind>/<name> candidates so the caller can disambiguate.
+  it("ambiguous bare --fixture name exits 2 and names both candidates", async () => {
+    const { io, captured } = makeIo();
+    const code = await runEvaluateCli(["--fixture", "happy-path"], io);
+    expect(code).toBe(2);
+    const err = captured().err;
+    expect(err).toContain("ambiguous");
+    expect(err).not.toContain("unknown fixture");
+    expect(err).toContain("unit-tests/happy-path");
+    expect(err).toContain("bug-investigation/happy-path");
+  });
+
+  it("ambiguous bare --fixture 'unsafe-action' exits 2 and names both candidates", async () => {
+    const { io, captured } = makeIo();
+    const code = await runEvaluateCli(["--fixture", "unsafe-action"], io);
+    expect(code).toBe(2);
+    const err = captured().err;
+    expect(err).toContain("ambiguous");
+    expect(err).toContain("unit-tests/unsafe-action");
+    expect(err).toContain("bug-investigation/unsafe-action");
+  });
+
   it("unknown flags exit 2 instead of running the suite", async () => {
     const { io, captured } = makeIo();
     const code = await runEvaluateCli(["--definitely-unknown"], io, {}, offlineDeps());

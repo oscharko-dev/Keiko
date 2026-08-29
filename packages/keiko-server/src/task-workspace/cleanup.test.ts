@@ -578,11 +578,24 @@ describe("orphan cleanup", () => {
     expect(existsSync(join(orphanPath, "late-wip.txt"))).toBe(true);
   });
 
+  // GEN-TEST-FLAKE-006: this test does 4 genuine `provisionTask` calls plus one extra `makeRepo`, each
+  // spawning real `git` subprocesses (init/config/commit/worktree add) against disposable
+  // repositories — already the minimum fixture count that can prove the invariant ("the global
+  // sweep visits more than one repository-id directory and spares a live worktree in each"; fewer
+  // repos or fewer worktrees per repo stops proving that). Three consecutive local runs of this exact
+  // test (unmodified except this override) measured 21.4s / 22.1s / 21.9s wall time on a dev machine
+  // already busy with several other concurrent vitest/tsc processes — real, not synthetic, host
+  // load — comfortably past the suite's default 15s `testTimeout`. The suite
+  // already uses this exact per-test override shape for other real-I/O-heavy tests (e.g.
+  // packages/keiko-evaluations/src/local-knowledge/*.test.ts,
+  // packages/keiko-evidence/src/listByPrefix.test.ts); 60s gives ~3x headroom over the measured
+  // busy-host cost without masking a real hang.
   it("global sweep finds orphans across multiple repositories while sparing live worktrees", async () => {
-    // Two distinct repositories → two distinct repository-id directories under the managed root. Each
-    // keeps one live (persisted) worktree and contributes one orphan (record deleted, directory kept).
-    // The global sweep (no repositoryRoot) must visit BOTH repository-id directories and remove exactly
-    // the two orphans, leaving the two live worktrees and their records untouched.
+    // Two distinct repositories → two distinct repository-id directories under the managed root.
+    // Each keeps one live (persisted) worktree and contributes one orphan (record deleted,
+    // directory kept). The global sweep (no repositoryRoot) must visit BOTH repository-id
+    // directories and remove exactly the two orphans, leaving the two live worktrees and their
+    // records untouched.
     const repoB = makeRepo("keiko-clean-repo-b-");
 
     const orphanA = await provisionTask("t-multi-a-orphan");
@@ -609,7 +622,7 @@ describe("orphan cleanup", () => {
     expect(existsSync(liveB.managedWorktreePath)).toBe(true);
     expect(store.getById(liveA.workspaceId)).toBeDefined();
     expect(store.getById(liveB.workspaceId)).toBeDefined();
-  });
+  }, 60_000);
 
   it("does not treat a persisted instance's worktree as an orphan", async () => {
     const instance = await provisionTask("t-keep");
@@ -666,10 +679,23 @@ describe("orphan cleanup", () => {
     ).rejects.toMatchObject({ code: "OPERATOR_APPROVAL_REQUIRED" });
   });
 
+  // GEN-TEST-FLAKE-006: the invariant this test pins is a CALL-COUNT bound (listAll() runs at most once
+  // for the whole sweep, never once per candidate) — it does not depend on wall-clock time and does
+  // not need a large candidate count to be meaningful: pre-fix, listAll() ran once per candidate, so
+  // even 2 candidates already produce 2 calls, which already fails `toBeLessThanOrEqual(1)` below.
+  // Kept at 3 (down from 6) so the fixture still plainly reads as "several candidates sharing one
+  // snapshot" while cutting the real cost: each candidate is a genuine `provisionTask` (real git
+  // subprocess spawns) followed by up to two real `git status` dirty-probes during the sweep. At 6
+  // candidates this test measured 35.3s wall time on this same busy dev machine (unmodified except
+  // instrumentation to isolate setup-vs-sweep cost). At 3 candidates, three consecutive local runs
+  // measured 18.0s / 16.3s / 18.1s. The suite already uses this per-test override shape for other
+  // real-I/O-heavy tests
+  // (e.g. packages/keiko-evaluations/src/local-knowledge/*.test.ts,
+  // packages/keiko-evidence/src/listByPrefix.test.ts).
   it("calls store.listAll() at most once for a sweep with many orphan candidates (GEN-PERF-PERSISTENCE-016)", async () => {
     // Materialize several orphan directories in one repository (records deleted, dirs kept).
     const orphans: string[] = [];
-    for (let i = 0; i < 6; i += 1) {
+    for (let i = 0; i < 3; i += 1) {
       const instance = await provisionTask(`t-many-orphan-${String(i)}`);
       store.delete(instance.workspaceId);
       orphans.push(instance.managedWorktreePath);
@@ -694,10 +720,10 @@ describe("orphan cleanup", () => {
     // Correctness preserved: all orphans removed.
     expect(result.removed).toBe(orphans.length);
     for (const path of orphans) expect(existsSync(path)).toBe(false);
-    // Pre-fix: listAll() ran once per candidate (>= 6). Fixed: the single buildKnownPathsByRepo
+    // Pre-fix: listAll() ran once per candidate (>= 3). Fixed: the single buildKnownPathsByRepo
     // snapshot is reused for every candidate, so listAll() runs at most once for the whole sweep.
     expect(listAllCalls).toBeLessThanOrEqual(1);
-  });
+  }, 45_000);
 });
 
 describe("safelyRemoveManagedPath choke point (SC1 — the only filesystem deletion)", () => {

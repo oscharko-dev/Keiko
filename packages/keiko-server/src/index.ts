@@ -103,6 +103,15 @@ export {
 export { QueueEventSink, type StreamEvent, type SseWriter } from "./sink.js";
 export { parseRunRequest, type RunRequest, type RunKind } from "./run-request.js";
 export { startRun, applyRun, type StartRunResult } from "./run-engine.js";
+// 2895 audit KEIKO-0903 (Finding D, #3323 follow-up): a public export so the CLI tier, which
+// already depends on this package (keiko-cli/package.json), can reuse the same harness
+// compaction port the reachable server call sites use rather than reimplementing it.
+export {
+  createServerHarnessContextCompactor,
+  logHarnessContextCompactionEvents,
+  serverHarnessContextCompactor,
+  type HarnessCompactionLogContext,
+} from "./harness-context-compactor.js";
 export {
   handleCreateRun,
   handleRunEvents,

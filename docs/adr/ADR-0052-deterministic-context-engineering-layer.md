@@ -2,7 +2,8 @@
 
 ## Status
 
-Proposed
+Accepted (retroactive record; see docs/context-engineering/decision-log.md, MILESTONE COMPLETE,
+commits fb6e9439/8cdf2d69).
 
 ## Version
 
@@ -29,11 +30,24 @@ Keiko has **two context paths**, established by a full read-only mapping:
 
 2. **Agentic harness loop.** `keiko-harness` (`executor.ts` / `loop.ts` / `planner.ts`) `-> ToolPort -> tool
    exec -> role:tool messages`; desktop chat in `keiko-server/chat-handlers.ts`. History today is a hard
-   last-24-message slice (`MAX_CONTEXT_MESSAGES = 24`) with **zero compaction**; the budget is
-   `HarnessLimits.maxContextBytes = 512KB` measured by `keiko-harness/context.ts` `contextBytes()` at
-   `packages/keiko-harness/src/context.ts:64` via `JSON.stringify` byte length. This is the path where
-   compaction, tool-observation lanes, working-memory, history-summary, verification-evidence, and the true
-   128k window live.
+   last-24-message slice (`MAX_CONTEXT_MESSAGES = 24`); the budget is `HarnessLimits.maxContextBytes = 512KB`
+   measured by `keiko-harness/context.ts` `contextBytes()` at `packages/keiko-harness/src/context.ts:64` via
+   `JSON.stringify` byte length. This is the path where tool-observation lanes, working-memory,
+   history-summary, verification-evidence, and the true 128k window live.
+
+   **KEIKO-0726 (#3323) update:** `HarnessShaperPort` (ADR-0055 D4) closed part of this gap by narrowly
+   recompacting individual `role:tool` messages, reactively, when a new tool result would overflow — but
+   `loop.ts`'s `checkModelCallLimits` still hard-failed on `maxContextBytes` alone, with no compaction wired
+   into the gate itself, for growth from assistant/user/system turns. `checkModelCallLimits` now gives an
+   optional, injected `HarnessCompactionPort` (`context-compaction-port.ts`, mirroring `HarnessShaperPort`'s
+   own no-new-package-edge shape) one attempt to evict/compact history before hard-failing — see D9 below.
+   Zero compaction is therefore no longer accurate for the reachable, tool-using call sites that inject the
+   port (`agentProducerRoute.ts`'s editor producer route, `productionReadOnlyChildRunner.ts`'s read-only child
+   runner) — those get bounded, best-effort compaction with an unchanged byte-ceiling hard-fail as the
+   fallback. The read-only `explain-plan` path also carries the port but cannot structurally exercise it (a
+   single model call, no prior assistant turn ever exists for `checkModelCallLimits` to compact), and
+   `keiko-cli`'s tool-using CLI dispatch does not yet inject the port at all — see D9's "Wiring status" for the
+   full, currently-accurate breakdown.
 
 **Token reality.** There is no tokenizer anywhere in the repository. Historical approximations diverged:
 `APPROX_BYTES_PER_TOKEN = 4` (`grounded-qa.ts`), `chars / 4` (editor), and `word * 1.3`
@@ -176,6 +190,106 @@ messages), the evidence wiring of `contextAssembly?` / `compaction?`, and ground
 PR1 implements: `ContextProfile`, `ContextBudget`, `ContextLane`,
 `ContextLaneId`, `ContextLaneDiagnostics`, `ContextAssemblyDiagnostics`, `estimateTokens`,
 `DEFAULT_CONTEXT_PROFILE`, the `ContextPackDiagnostics.contextBudget?` attach point, and the allocator.
+
+### D9 — Compaction reaches checkModelCallLimits' hard-fail gate (KEIKO-0726, #3323)
+
+`HarnessShaperPort` (ADR-0055 D4) is deliberately narrow: it substitutes a compact stand-in for a prior
+`role:tool` message only when a *new* tool result would overflow `maxContextBytes`, reactively, at tool-result
+insertion time in `executor.ts`. It does nothing for growth from assistant/user/system turns — content
+`handleModelCall` appends to `ctx.messages` unchecked — which only becomes visible again at the next
+`model-call` entry guard, `loop.ts`'s `checkModelCallLimits`. Before this change that guard hard-failed on
+context-size alone with zero compaction wired into it.
+
+`checkModelCallLimits` now gives an optional, injected `HarnessCompactionPort`
+(`packages/keiko-harness/src/context-compaction-port.ts`) one attempt to evict/compact history before
+hard-failing. The port mirrors `HarnessShaperPort`'s own shape exactly (D5): the harness stays decoupled from
+`keiko-workflows` (no new package edge), a concrete compactor backed by the `keiko-workflows` context-budget
+allocator (D6) is injected by the production wiring tier, and an absent port (every caller predating
+KEIKO-0726) leaves `checkModelCallLimits` byte-identical to before.
+
+**2895 audit correction (KEIKO-0900/0901/0902/0903).** The paragraphs below replace this D9's original
+description of the production wiring, which specified a token-allocator-seeded escalation and a
+profile-present precondition. Both were found to violate this same ADR's own stated invariant — see the
+corrected text and rationale immediately below.
+
+The production wiring (`packages/keiko-server/src/harness-context-compactor.ts`) segments on
+**assistant-message** boundaries, not user-message boundaries: every task plan seeds exactly one
+`[system, user]` pair (`tasks/*.ts`) and the loop thereafter appends only `role:"assistant"` and
+`role:"tool"` messages, so a run never carries more than one `role:"user"` message — segmenting on it (this
+D9's original shape) always produced exactly one turn and made the port a structural no-op. The leading
+`[system, user]` seed (everything before the FIRST `role:"assistant"` message) is the non-evictable head;
+each turn thereafter is one assistant response plus the `role:"tool"` results it triggered, up to (not
+including) the next assistant response — so an assistant's tool calls and their results are never separated.
+
+Eviction is decided **exclusively by measured bytes**, with no token estimate or `ContextProfile` consulted
+at all. An earlier revision seeded the eviction-count search from the `keiko-workflows` context-budget
+allocator's exclusion count for turns scored oldest-first against a single fixed `history-summary` lane
+capped at 16,000 TOKENS (D3's default lane table), and the search only ever escalated upward from that
+seed. Two defects followed from that shape, found by the 2895 audit: (1) every production caller
+constructed the port from the profile-less singleton, so the allocator's token accounting never reflected
+the resolved model's actual `ContextProfile` regardless of which model was running; and, more fundamentally,
+(2) the fixed 16,000-token lane cap is unrelated to the harness's own `maxContextBytes` limit, so a history
+whose *token* estimate cleared that cap could make the allocator exclude far more turns than the *byte*
+budget actually required — and because the search never re-descended, a history just a few bytes over
+`maxContextBytes` could lose nearly all of it even though evicting the single oldest turn was enough to fit.
+This directly contradicted this ADR's own "re-verified against actual bytes, never trusted from the token
+estimate alone" claim: the byte check was real, but the STARTING point it re-verified was already
+token-allocator-biased, and the escalation could only make that worse, never correct it. Fixing the second
+defect eliminates the first as a side effect — once the search starts at the true minimum (the single
+oldest turn) and escalates one turn at a time purely by re-measuring bytes, no decision remains for a
+`ContextProfile` to influence, correctly-resolved or not. The allocator, `DEFAULT_CONTEXT_BUDGET`, and
+`ContextProfile` were therefore removed from this file entirely (AGENTS.md §6) rather than kept as
+unreachable machinery; `createServerHarnessContextCompactor` takes no options and
+`serverHarnessContextCompactor` is a single shared, stateless singleton every call site injects unchanged.
+`role:tool` message content is never rewritten by this port — only whole turns are kept or evicted — so it
+composes with `HarnessShaperPort` instead of double-compacting or conflicting with it: the two are scoped to
+disjoint responsibilities (individual tool messages vs. whole history turns) and are invoked at different
+points in the loop. A single content-free eviction notice (`keiko.compactedHistoryNotice`, carrying the
+running total of turns dropped) is merged and replaced on every pass rather than accumulated.
+
+**Wiring status.** The port is injected at three production call sites: `packages/keiko-server/src/editor/
+agentProducerRoute.ts` (the editor producer route), `packages/keiko-server/src/coding-runtime/
+productionReadOnlyChildRunner.ts` (the read-only child runner), and — since the 2895 audit closed the last
+open gap — `packages/keiko-cli/src/run.ts`'s tool-using CLI dispatch. The first two drive `editor-agent-turn`
+sessions that loop through several model/tool rounds and can genuinely grow past `maxContextBytes`.
+`packages/keiko-server/src/run-engine.ts`'s `dispatchExplain` does **not** carry the port: `explain-plan` is
+read-only by construction (`allowsTools`/`allowsPatch`/`allowsVerification` all false) and its session makes
+exactly one model call with no prior assistant turn, so `checkModelCallLimits` never sees more than the
+initial seed there — the port could structurally never fire on that path. An earlier revision left it wired
+anyway as a documented no-op; the 2895 audit found that a wired-but-dead port invites a future reader to
+believe the path is compaction-covered when it cannot be, so it was removed (KEIKO-0902) rather than kept.
+`packages/keiko-cli/src/run.ts`'s `generate-unit-tests` / `investigate-bug` dispatch — real, multi-round
+harness sessions (`investigate-bug` loops through tool calls; `generate-unit-tests` can loop back to
+model-call after a failed verification) that can accumulate enough history to hit `maxContextBytes` — now
+injects `serverHarnessContextCompactor` too (KEIKO-0903), imported from `@oscharko-dev/keiko-server`'s public
+barrel: `keiko-cli/package.json` already declares that dependency (alongside `keiko-workflows`, which
+`investigate.ts` already imports), so reusing the server-tier compactor inverts no package edge, confirmed by
+`npm run arch:check`. The module is loaded lazily via the existing `loadServer` memoized dynamic import
+(`lazy-modules.ts`) and only for the two task types that can use it — `explain-plan` is excluded, preserving
+both the GEN-PERF-CLI-001 lazy-loading discipline for the read-only path and the same "never wire a
+structurally inert port" principle KEIKO-0902 applied to `dispatchExplain`. Because no `ContextProfile` is
+resolved anywhere in this mechanism any more (see above), the CLI needs no model-specific construction
+either — it injects the same shared singleton the server call sites use.
+
+**Observability.** `loop.ts`'s `tryCompact` emits a body-free `context:compacted` `HarnessEvent`
+(`messagesDropped`/`bytesBefore`/`bytesAfter` only, never message content) the moment it succeeds. The two
+server call sites bridge it into the server activity log (`op: "harness.context.compacted"`, `correlationId`
+= the harness run id) via `harness-context-compactor.ts`'s `logHarnessContextCompactionEvents`, so a run
+whose history was evicted is reconstructable from `server.log` alone (AGENTS.md §8 Rule 1). `messagesDropped`
+is the port's own reported eviction count (`HarnessCompactionResult.messagesEvicted`) when the port supplies
+one, not a net array-length delta — a port may both evict and insert a placeholder eviction notice, which
+makes the net delta undercount (Codex, #3348); a port that omits the count keeps the net-shrinkage
+fallback. `logHarnessContextCompactionEvents` also accepts an optional `parentCorrelationId` (ADR-0173
+D5): the two server call sites that spawn a background harness run from a known parent —
+`productionReadOnlyChildRunner.ts`'s read-only child (`input.envelope.parentRunId`) and
+`agentProducerRoute.ts`'s producer turn (the triggering request's `correlationId`) — thread it through, so
+the emitted line joins back to the governed run that spawned it instead of standing as an orphan identity.
+The CLI tier has no server activity-log sink in scope (it is a standalone process, not the BFF), so
+`run.ts` does not call `logHarnessContextCompactionEvents`; `context:compacted` instead flows through the
+CLI's own existing event pipeline unchanged — the same `teeSink` every other `HarnessEvent` already uses,
+which forwards to `CliEventSink` (already had a body-free summariser for this event type,
+`packages/keiko-harness/src/sinks.ts`, since KEIKO-0726) for the printed run transcript and to
+`MemoryEventSink` for the persisted evidence manifest. No new CLI-side channel was invented for this.
 
 ## Consequences
 

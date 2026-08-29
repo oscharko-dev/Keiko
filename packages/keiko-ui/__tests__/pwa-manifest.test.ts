@@ -63,25 +63,22 @@ describe("legacy web manifest metadata", () => {
     expect(m.categories).toEqual(["business", "productivity", "developer-tools"]);
   });
 
-  it("lists exactly four icon entries covering both purposes and both sizes", () => {
+  // KEIKO-0549 / #3313: the maskable variants were byte-identical to the non-maskable icons
+  // with no safe-area padding despite declaring `"purpose": "maskable"`, and ADR-0122 already
+  // retired browser-managed PWA installability as a promoted product path — so they were
+  // retired as vestigial rather than regenerated. Only the two "any"-purpose entries remain.
+  it("lists exactly two icon entries, both purpose 'any' (KEIKO-0549)", () => {
     const m = loadManifest();
-    expect(m.icons).toHaveLength(4);
+    expect(m.icons).toHaveLength(2);
     expect(m.icons).toEqual([
       { src: "/icon-192.png", sizes: "192x192", type: "image/png", purpose: "any" },
       { src: "/icon-512.png", sizes: "512x512", type: "image/png", purpose: "any" },
-      {
-        src: "/icon-192-maskable.png",
-        sizes: "192x192",
-        type: "image/png",
-        purpose: "maskable",
-      },
-      {
-        src: "/icon-512-maskable.png",
-        sizes: "512x512",
-        type: "image/png",
-        purpose: "maskable",
-      },
     ]);
+  });
+
+  it("declares no maskable-purpose icon entries (KEIKO-0549)", () => {
+    const m = loadManifest();
+    expect(m.icons.some((icon) => icon.purpose === "maskable")).toBe(false);
   });
 
   it("contains no absolute URLs (no deployment endpoint leak)", () => {

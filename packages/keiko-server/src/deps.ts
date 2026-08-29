@@ -2138,6 +2138,7 @@ function buildWorkspaceReconciliation(
   resolvedUiDbPath: string,
   evidenceStore: EvidenceStore,
   redactString: (value: string) => string,
+  mutex: WorkspaceMutexRegistry,
 ): WorkspaceReconciliationService | undefined {
   if (options.workspaceReconciliation !== undefined) return options.workspaceReconciliation;
   if (instanceStore === undefined || activePointerStore === undefined) return undefined;
@@ -2151,6 +2152,7 @@ function buildWorkspaceReconciliation(
     redactString,
     now: () => Date.now(),
     newId: randomUUID,
+    mutex,
   });
 }
 
@@ -2202,6 +2204,7 @@ function buildWorkspaceHealth(
   resolvedUiDbPath: string,
   evidenceStore: EvidenceStore,
   redactString: (value: string) => string,
+  mutex: WorkspaceMutexRegistry,
 ): WorkspaceHealthService | undefined {
   if (options.workspaceHealth !== undefined) return options.workspaceHealth;
   if (instanceStore === undefined || activePointerStore === undefined) return undefined;
@@ -2215,6 +2218,10 @@ function buildWorkspaceHealth(
     redactString,
     now: () => Date.now(),
     newId: randomUUID,
+    // WorkspaceHealthServiceDeps is the SAME type as WorkspaceReconciliationServiceDeps (aliased, never
+    // re-declared, so the shape can't drift — see types.ts). Health itself stays read-only and never
+    // calls the mutex; it is threaded through only to satisfy that shared shape (KEIKO-0996, #3339).
+    mutex,
   });
 }
 
@@ -3019,6 +3026,7 @@ function composeHealthAndCleanup(
       args.resolvedUiDbPath,
       args.evidenceStore,
       args.redactString,
+      args.mutex,
     ),
     workspaceCleanup: buildWorkspaceCleanup({
       options: args.options,
@@ -3078,6 +3086,7 @@ function composeCoreTaskWorkspaceServices(
       args.resolvedUiDbPath,
       args.evidenceStore,
       args.redactString,
+      args.mutex,
     ),
     workspaceRepair: buildWorkspaceRepair({
       options: args.options,

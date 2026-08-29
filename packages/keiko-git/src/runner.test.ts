@@ -9,6 +9,7 @@ import {
   existsSync,
   mkdirSync,
   mkdtempSync,
+  readFileSync,
   realpathSync,
   rmSync,
   writeFileSync,
@@ -202,6 +203,73 @@ describe("createGitProcessRunner", () => {
     expect(Buffer.byteLength(result.stdout, "utf8")).toBeLessThanOrEqual(1024);
   });
 
+  it.skipIf(process.platform === "win32").each([
+    // KEIKO-0733: a raw byte-index cut that bisects a multi-byte UTF-8 codepoint decodes the
+    // dangling lead byte(s) as U+FFFD. "ab" (2 ASCII bytes) followed by a multi-byte codepoint;
+    // maxBytes lands the cut inside the codepoint, leaving only its lead byte(s) captured.
+    {
+      label: "mid-3-byte sequence (only the lead byte survives the cut)",
+      // "€" = E2 82 AC — capture "ab" + the first byte only.
+      octal: "ab\\342\\202\\254",
+      maxBytes: 3,
+      expectedStdout: "ab",
+    },
+    {
+      label: "mid-4-byte sequence (two of four bytes survive the cut)",
+      // "😀" = F0 9F 98 80 — capture "ab" + the first two bytes only.
+      octal: "ab\\360\\237\\230\\200",
+      maxBytes: 4,
+      expectedStdout: "ab",
+    },
+    {
+      label: "2-byte lead byte alone survives the cut",
+      // "é" = C3 A9 — capture "ab" + the lead byte only. Exercises the
+      // utf8LeadByteSequenceLength 2-byte branch ((byte & 0xe0) === 0xc0), which the two cases
+      // above never reach.
+      octal: "ab\\303\\251",
+      maxBytes: 3,
+      expectedStdout: "ab",
+    },
+    {
+      label: "a complete trailing codepoint at the cut boundary is preserved",
+      // "€" = E2 82 AC followed by "cd"; the cap lands exactly at the end of the complete
+      // 3-byte codepoint, so nothing should be trimmed. This kills a `>=` mutant on the
+      // `sequenceLength > distanceFromEnd` guard: a `>=` mutant silently deletes this complete,
+      // uncut "€" instead of leaving it alone.
+      octal: "ab\\342\\202\\254cd",
+      maxBytes: 5,
+      expectedStdout: "ab€",
+    },
+  ])(
+    "drops an incomplete trailing UTF-8 lead-byte sequence instead of emitting U+FFFD: $label",
+    async ({ octal, maxBytes, expectedStdout }) => {
+      const binDir = mkdtempSync(join(tmpdir(), "keiko-git-utf8-tail-bin-"));
+      const fakeGit = join(binDir, "git");
+      writeFileSync(fakeGit, `#!/bin/sh\nprintf '${octal}'\n`, "utf8");
+      chmodSync(binDir, 0o700);
+      chmodSync(fakeGit, 0o700);
+
+      try {
+        const runner = createGitProcessRunner(() => ({ PATH: binDir }));
+        const result = await runner(["status"], {
+          cwd: root,
+          timeoutMs: 1_000,
+          maxBytes,
+        });
+
+        expect(result.truncated).toBe(true);
+        expect(result.stdout).toBe(expectedStdout);
+        // Escaped, not a literal glyph: a literal U+FFFD in analyzable source text fails
+        // scripts/sonar-analysis-scope.mjs's sourceEncodingFailures check (source files are
+        // expected to be clean UTF-8 with no replacement characters); the escape sequence below
+        // is the identical runtime value, so the assertion itself is unchanged.
+        expect(result.stdout).not.toContain("\uFFFD");
+      } finally {
+        rmSync(binDir, { recursive: true, force: true });
+      }
+    },
+  );
+
   it.skipIf(process.platform === "win32")(
     "shares the output cap across stdout and stderr",
     async () => {
@@ -257,6 +325,82 @@ describe("createGitProcessRunner", () => {
       expect(existsSync(marker)).toBe(false);
     },
   );
+
+  it.skipIf(process.platform === "win32")(
+    "neutralizes a repository-local diff.external for local reads",
+    async () => {
+      const marker = join(root, "diff-external-executed.marker");
+      const hook = join(root, "hostile-diff-external.sh");
+      writeFileSync(hook, `#!/bin/sh\ntouch '${marker}'\n`);
+      execFileSync("chmod", ["+x", hook]);
+      execFileSync("git", ["config", "diff.external", hook], { cwd: root });
+
+      const tracked = join(root, "tracked.txt");
+      writeFileSync(tracked, "original\n");
+      execFileSync("git", ["add", "tracked.txt"], { cwd: root });
+      writeFileSync(tracked, "changed\n");
+
+      const result = await defaultGitProcessRunner([...GIT_BASE_ARGS, "-C", root, "diff"], {
+        cwd: root,
+        maxBytes: 4096,
+        timeoutMs: 10_000,
+      });
+
+      // The repository-local hostile external-diff helper must never run, AND the read must still
+      // succeed with a correct internal-differ patch. Order matters: this must be red because the
+      // hostile script ran, never because the read itself failed (a blanket `-c diff.external=`
+      // override would fail the whole invocation at exec time, which is not neutralization — see
+      // the comment on LOCAL_READ_CONFIG_ARGS in runner.ts).
+      expect(existsSync(marker)).toBe(false);
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toMatch(/^diff --git /u);
+    },
+  );
+
+  it.skipIf(process.platform === "win32")(
+    "still neutralizes diff.external when a caller places -c <key>=<value> before the subcommand",
+    async () => {
+      // Final review of #2907: findSubcommandIndex only special-cased "-C <path>" as a
+      // value-taking pre-subcommand flag, so a caller passing "-c core.quotepath=false" (the
+      // exact shape grounded-git-history-evidence.ts's gitHistoryArgs() already uses ahead of
+      // "log") made subcommand detection stop one token early, silently turning
+      // withDiffFamilyNeutralized into a no-op for any diff-family invocation shaped this way.
+      const marker = join(root, "diff-external-c-flag-executed.marker");
+      const hook = join(root, "hostile-diff-external-c-flag.sh");
+      writeFileSync(hook, `#!/bin/sh\ntouch '${marker}'\n`);
+      execFileSync("chmod", ["+x", hook]);
+      execFileSync("git", ["config", "diff.external", hook], { cwd: root });
+
+      const tracked = join(root, "tracked-c-flag.txt");
+      writeFileSync(tracked, "original\n");
+      execFileSync("git", ["add", "tracked-c-flag.txt"], { cwd: root });
+      writeFileSync(tracked, "changed\n");
+
+      const result = await defaultGitProcessRunner(
+        [...GIT_BASE_ARGS, "-C", root, "-c", "core.quotepath=false", "diff"],
+        { cwd: root, maxBytes: 4096, timeoutMs: 10_000 },
+      );
+
+      expect(existsSync(marker)).toBe(false);
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toMatch(/^diff --git /u);
+    },
+  );
+
+  it.each([
+    ["core.fsmonitor", "hostile", "false"],
+    ["core.editor", "hostile-editor", "true"],
+  ] as const)("overrides repository-local read setting %s", async (key, configured, expected) => {
+    execFileSync("git", ["config", key, configured], { cwd: root });
+
+    const result = await defaultGitProcessRunner(
+      [...GIT_BASE_ARGS, "-C", root, "config", "--get", key],
+      { cwd: root, maxBytes: 1_024, timeoutMs: 5_000 },
+    );
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout.trim()).toBe(expected);
+  });
 
   it.each([
     ["core.fsmonitor", "hostile", "false"],
@@ -390,4 +534,234 @@ describe("createGitProcessRunner", () => {
     },
     15_000,
   );
+
+  // Audit finding on #3348: injecting --no-ext-diff --no-textconv before the caller's remaining
+  // arguments did not enforce the invariant — a later --ext-diff/--textconv, or a -c/--config-env
+  // override of diff.external (and sibling dangerous keys), reached spawn unexamined. These tests
+  // prove the preflight now rejects the override BEFORE the child process is ever created, and
+  // that show/log -p are neutralized like diff.
+  describe("external-diff boundary preflight (audit finding #3348)", () => {
+    function plantMarkerGit(): { readonly bin: string; readonly marker: string } {
+      const bin = mkdtempSync(join(tmpdir(), "keiko-git-runner-fake-bin-"));
+      const marker = join(root, `spawned-${String(Math.random()).slice(2)}.marker`);
+      const fakeGit = join(bin, "git");
+      writeFileSync(fakeGit, `#!/bin/sh\ntouch '${marker}'\nexit 0\n`);
+      chmodSync(fakeGit, 0o755);
+      chmodSync(bin, 0o700);
+      return { bin, marker };
+    }
+
+    it("rejects a later --ext-diff before spawning git (the override the finding names)", async () => {
+      const { bin, marker } = plantMarkerGit();
+      const runner = createGitProcessRunner(() => ({ PATH: bin }));
+      try {
+        const result = await runner([...GIT_BASE_ARGS, "diff", "--ext-diff"], {
+          cwd: root,
+          maxBytes: 1024,
+          timeoutMs: 10_000,
+        });
+        expect(result.exitCode).toBe(128);
+        expect(result.stderr).toContain("refused git option");
+        // Load-bearing: this is the exact reproduction from the finding
+        // (`defaultGitProcessRunner([...GIT_BASE_ARGS, "diff", "--ext-diff"], …)`); if the
+        // preflight is removed, the marker gets written and this assertion fails.
+        expect(existsSync(marker)).toBe(false);
+      } finally {
+        rmSync(bin, { force: true, recursive: true });
+      }
+    });
+
+    it("rejects a bare --textconv before spawning git", async () => {
+      const { bin, marker } = plantMarkerGit();
+      const runner = createGitProcessRunner(() => ({ PATH: bin }));
+      try {
+        const result = await runner([...GIT_BASE_ARGS, "show", "--textconv", "HEAD:f"], {
+          cwd: root,
+          maxBytes: 1024,
+          timeoutMs: 10_000,
+        });
+        expect(result.exitCode).toBe(128);
+        expect(result.stderr).toContain("refused git option");
+        expect(existsSync(marker)).toBe(false);
+      } finally {
+        rmSync(bin, { force: true, recursive: true });
+      }
+    });
+
+    it.each([
+      { label: "-c diff.external=<cmd> (two-token)", args: ["-c", "diff.external=/bin/true"] },
+      { label: "-cdiff.external=<cmd> (joined)", args: ["-cdiff.external=/bin/true"] },
+      { label: "-c=diff.external=<cmd> (=-joined)", args: ["-c=diff.external=/bin/true"] },
+      {
+        label: "--config-env diff.external=<envvar> (two-token)",
+        args: ["--config-env", "diff.external=KEIKO_AUDIT_EVIL"],
+      },
+      {
+        label: "--config-env=diff.external=<envvar> (joined)",
+        args: ["--config-env=diff.external=KEIKO_AUDIT_EVIL"],
+      },
+    ])("rejects a $label override before the subcommand", async ({ args: configArgs }) => {
+      const { bin, marker } = plantMarkerGit();
+      const runner = createGitProcessRunner(() => ({ PATH: bin }));
+      try {
+        const result = await runner([...GIT_BASE_ARGS, ...configArgs, "diff"], {
+          cwd: root,
+          maxBytes: 1024,
+          timeoutMs: 10_000,
+        });
+        expect(result.exitCode).toBe(128);
+        expect(result.stderr).toContain("refused git option");
+        expect(result.stderr).toContain("diff.external");
+        // Body-free: the denied KEY may appear in the redacted refusal, the VALUE never does.
+        expect(result.stderr).not.toContain("/bin/true");
+        expect(existsSync(marker)).toBe(false);
+      } finally {
+        rmSync(bin, { force: true, recursive: true });
+      }
+    });
+
+    it("rejects a -c override with a differently-cased dangerous key (case-insensitive)", async () => {
+      const { bin, marker } = plantMarkerGit();
+      const runner = createGitProcessRunner(() => ({ PATH: bin }));
+      try {
+        const result = await runner([...GIT_BASE_ARGS, "-c", "DIFF.External=/bin/true", "diff"], {
+          cwd: root,
+          maxBytes: 1024,
+          timeoutMs: 10_000,
+        });
+        expect(result.exitCode).toBe(128);
+        expect(result.stderr).toContain("refused git option");
+        expect(existsSync(marker)).toBe(false);
+      } finally {
+        rmSync(bin, { force: true, recursive: true });
+      }
+    });
+
+    it.each([
+      "pager.log",
+      "alias.evil",
+      "protocol.ext.allow",
+      "diff.mydriver.textconv",
+      "diff.mydriver.command",
+      "core.sshCommand",
+      "credential.helper",
+    ])("rejects a -c override of the dangerous key %s", async (key) => {
+      const { bin, marker } = plantMarkerGit();
+      const runner = createGitProcessRunner(() => ({ PATH: bin }));
+      try {
+        const result = await runner([...GIT_BASE_ARGS, "-c", `${key}=x`, "diff"], {
+          cwd: root,
+          maxBytes: 1024,
+          timeoutMs: 10_000,
+        });
+        expect(result.exitCode).toBe(128);
+        expect(result.stderr).toContain("refused git option");
+        expect(existsSync(marker)).toBe(false);
+      } finally {
+        rmSync(bin, { force: true, recursive: true });
+      }
+    });
+
+    it("rejects a dangling -c with no following value (cannot prove safe)", async () => {
+      const { bin, marker } = plantMarkerGit();
+      const runner = createGitProcessRunner(() => ({ PATH: bin }));
+      try {
+        const result = await runner([...GIT_BASE_ARGS, "-c"], {
+          cwd: root,
+          maxBytes: 1024,
+          timeoutMs: 10_000,
+        });
+        expect(result.exitCode).toBe(128);
+        expect(result.stderr).toContain("refused git option");
+        expect(existsSync(marker)).toBe(false);
+      } finally {
+        rmSync(bin, { force: true, recursive: true });
+      }
+    });
+
+    it("rejects a -c value with no = at all when the bare value matches a dangerous key", async () => {
+      // Required shape: `-c core.pager` (no "=value") is malformed as a real config override,
+      // but the key extraction must still treat the whole value as the key and deny it — a key
+      // with no `=` is denied if it matches, never silently allowed.
+      const { bin, marker } = plantMarkerGit();
+      const runner = createGitProcessRunner(() => ({ PATH: bin }));
+      try {
+        const result = await runner([...GIT_BASE_ARGS, "-c", "core.pager", "diff"], {
+          cwd: root,
+          maxBytes: 1024,
+          timeoutMs: 10_000,
+        });
+        expect(result.exitCode).toBe(128);
+        expect(result.stderr).toContain("refused git option");
+        expect(existsSync(marker)).toBe(false);
+      } finally {
+        rmSync(bin, { force: true, recursive: true });
+      }
+    });
+
+    it("still allows the real production call shape: -c core.quotepath=false before log", async () => {
+      // grounded-git-history-evidence.ts's gitHistoryArgs() places this exact override ahead of
+      // `log`. This must never be rejected by the new preflight — only the dangerous keys are.
+      const result = await defaultGitProcessRunner(
+        [...GIT_BASE_ARGS, "-C", root, "-c", "core.quotepath=false", "log", "--max-count=1"],
+        { cwd: root, maxBytes: 4096, timeoutMs: 10_000 },
+      );
+      expect(result.stderr).not.toContain("refused git option");
+    });
+
+    it("still allows the existing -c gc.auto=0 look-alike shape", async () => {
+      // Guards against a regression on the pre-existing "still allows legitimate look-alike
+      // flags" test above: an unrelated, safe -c key must never be caught by the new deny list.
+      const result = await defaultGitProcessRunner(
+        [...GIT_BASE_ARGS, "-c", "gc.auto=0", "status"],
+        { cwd: root, maxBytes: 4096, timeoutMs: 10_000 },
+      );
+      expect(result.stderr).not.toContain("refused git option");
+    });
+
+    // Empirically verified (git 2.50) before writing this test: unlike bare `diff` — which
+    // invokes a configured diff.external / .gitattributes diff.<driver>.command AUTOMATICALLY,
+    // no flag needed — bare `show`/`log -p` do NOT; both require the caller to pass `--ext-diff`
+    // explicitly. That flag is exactly what forbiddenDiffEnablingFlag above refuses at preflight
+    // (see the "rejects a bare --textconv before spawning git" case using `show --textconv`
+    // above), so a real-execution "plant a hostile diff.external and call plain show" test would
+    // pass identically with or without this DIFF_FAMILY_SUBCOMMANDS change — proving nothing (the
+    // AGENTS.md §7 trap this file's own KEIKO-0317 comment already warns about). The injection is
+    // still added as defense in depth (mirrors this file's existing belt-and-suspenders pattern
+    // for `diff`, and closes the surface for any future git behaviour change), and the argv-level
+    // proof below is the correct, non-vacuous way to verify the injection itself.
+    it.each([
+      { label: "show", args: ["show", "HEAD"] },
+      { label: "log -p", args: ["log", "-p"] },
+    ])(
+      "injects --no-ext-diff --no-textconv right after $label, not only diff",
+      async ({ args: callerArgs }) => {
+        const bin = mkdtempSync(join(tmpdir(), "keiko-git-diff-family-bin-"));
+        const argvFile = join(bin, "argv.captured");
+        const fakeGit = join(bin, "git");
+        writeFileSync(
+          fakeGit,
+          `#!/bin/sh\nfor a in "$@"; do printf '%s\\n' "$a" >> '${argvFile}'; done\nexit 0\n`,
+        );
+        chmodSync(fakeGit, 0o755);
+        chmodSync(bin, 0o700);
+        try {
+          const runner = createGitProcessRunner(() => ({ PATH: bin }));
+          await runner(callerArgs, { cwd: root, maxBytes: 1024, timeoutMs: 5_000 });
+          const capturedArgv = readFileSync(argvFile, "utf8")
+            .split("\n")
+            .filter((line) => line.length > 0);
+          const subcommand = callerArgs[0] ?? "";
+          const subcommandIndex = capturedArgv.indexOf(subcommand);
+          expect(subcommandIndex).toBeGreaterThanOrEqual(0);
+          expect(capturedArgv.slice(subcommandIndex + 1, subcommandIndex + 3)).toEqual([
+            "--no-ext-diff",
+            "--no-textconv",
+          ]);
+        } finally {
+          rmSync(bin, { recursive: true, force: true });
+        }
+      },
+    );
+  });
 });

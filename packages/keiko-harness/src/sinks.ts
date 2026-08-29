@@ -92,6 +92,9 @@ const SUMMARISERS: {
   // Body-free by construction: an index into the sink list and a closed reason. The throw value
   // that caused the quarantine is deliberately never carried (KEIKO-0205).
   "sink:degraded": (e) => `sinkIndex=${String(e.sinkIndex)} reason=${e.reason}`,
+  // KEIKO-0726 (#3323): counts and byte totals only — never message content.
+  "context:compacted": (e) =>
+    `dropped=${String(e.messagesDropped)} bytesBefore=${String(e.bytesBefore)} bytesAfter=${String(e.bytesAfter)}`,
 };
 
 function summarise(event: HarnessEvent): string {

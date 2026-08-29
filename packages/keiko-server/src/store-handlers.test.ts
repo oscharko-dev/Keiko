@@ -2482,89 +2482,15 @@ describe("POST /api/chats/messages", () => {
   });
 });
 
-// ─── Route 23: POST /api/chats/messages/run-summary-pair (issue #66) ────────
-describe("POST /api/chats/messages/run-summary-pair", () => {
-  it("atomically creates exactly one user message and one system run summary", async () => {
+// ─── Retired route: POST /api/chats/messages/run-summary-pair (KEIKO-0566, #3314) ──────────
+// The route, its handler (`handleCreateRunSummaryPair`/`buildRunSummaryPair`), and the client
+// wrapper were unreachable in production — no UI component called it — and it accepted
+// caller-supplied timestamps with no relative-ordering check. Deleted rather than wired to a
+// speculative new caller; see the accepted decision on issue #3314.
+describe("POST /api/chats/messages/run-summary-pair (retired)", () => {
+  it("is no longer exposed", async () => {
     store.createProject(projDir);
     const c = store.createChat(projDir, "t", "m");
-    const res = await fetch(url("/api/chats/messages/run-summary-pair"), {
-      method: "POST",
-      headers: POST_HEADERS,
-      body: JSON.stringify({
-        chatId: c.id,
-        projectPath: projDir,
-        user: { content: "Verify requested.", timestamp: 1 },
-        summary: {
-          content: "Verify started",
-          timestamp: 2,
-          runId: "run-pair",
-          taskType: "verify",
-          workflowStatus: "running",
-        },
-      }),
-    });
-    expect(res.status).toBe(201);
-    const body = (await res.json()) as {
-      messages: { role: string; runId?: string; taskType?: string }[];
-    };
-    expect(body.messages.map((m) => m.role)).toEqual(["user", "system"]);
-    expect(body.messages[1]?.runId).toBe("run-pair");
-    expect(body.messages[1]?.taskType).toBe("verify");
-    expect(store.listMessages(c.id)).toHaveLength(2);
-  });
-
-  it("rolls back the user message when the summary row is invalid", async () => {
-    store.createProject(projDir);
-    const c = store.createChat(projDir, "t", "m");
-    const res = await fetch(url("/api/chats/messages/run-summary-pair"), {
-      method: "POST",
-      headers: POST_HEADERS,
-      body: JSON.stringify({
-        chatId: c.id,
-        projectPath: projDir,
-        user: { content: "Verify requested.", timestamp: 1 },
-        summary: {
-          content: "Verify started",
-          timestamp: 2,
-          taskType: "verify",
-          workflowStatus: "running",
-        },
-      }),
-    });
-    expect(res.status).toBe(400);
-    expect(store.listMessages(c.id)).toHaveLength(0);
-  });
-
-  it("returns 400 when the summary has both workflowId and taskType", async () => {
-    store.createProject(projDir);
-    const c = store.createChat(projDir, "t", "m");
-    const res = await fetch(url("/api/chats/messages/run-summary-pair"), {
-      method: "POST",
-      headers: POST_HEADERS,
-      body: JSON.stringify({
-        chatId: c.id,
-        projectPath: projDir,
-        user: { content: "Tests requested.", timestamp: 1 },
-        summary: {
-          content: "Tests started",
-          timestamp: 2,
-          runId: "run-pair",
-          workflowId: "unit-test-generation",
-          taskType: "verify",
-          workflowStatus: "running",
-        },
-      }),
-    });
-    expect(res.status).toBe(400);
-    expect(store.listMessages(c.id)).toHaveLength(0);
-  });
-
-  it("returns 404 when the chat belongs to another project", async () => {
-    store.createProject(projDir);
-    const otherDir = join(tmp, "other-pair");
-    mkdirSync(otherDir);
-    store.createProject(otherDir);
-    const c = store.createChat(otherDir, "t", "m");
     const res = await fetch(url("/api/chats/messages/run-summary-pair"), {
       method: "POST",
       headers: POST_HEADERS,

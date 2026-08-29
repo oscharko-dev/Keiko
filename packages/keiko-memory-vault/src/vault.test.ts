@@ -992,6 +992,26 @@ describe("list filters", () => {
     ).toEqual(["m2"]);
     v.close();
   });
+
+  it("rejects offset without limit instead of silently discarding the offset (KEIKO-0792)", () => {
+    const dir = freshDir();
+    const v = openVault(dir);
+    const userScope = { kind: "user" as const, userId: "u-1" as UserId };
+    v.insertMemory(makeMemory({ id: "m1" as MemoryId, createdAt: 100, updatedAt: 100 }));
+    v.insertMemory(makeMemory({ id: "m2" as MemoryId, createdAt: 200, updatedAt: 200 }));
+    v.insertMemory(makeMemory({ id: "m3" as MemoryId, createdAt: 300, updatedAt: 300 }));
+
+    expect(() => v.listMemoriesByScope(userScope, { offset: 1 })).toThrow(
+      MemoryStorageValidationError,
+    );
+    expect(() => v.listMemoriesAcrossScopes([userScope], { offset: 1 })).toThrow(
+      MemoryStorageValidationError,
+    );
+    expect(() => v.listMemoryMetadataByScope(userScope, { offset: 1 })).toThrow(
+      MemoryStorageValidationError,
+    );
+    v.close();
+  });
 });
 
 describe("update + delete error paths", () => {

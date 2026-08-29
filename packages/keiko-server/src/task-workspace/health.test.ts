@@ -81,6 +81,7 @@ function health(): WorkspaceHealthService {
     redactString: (s: string): string => s,
     now: (): number => nowMs,
     newId: (): string => `id-${String(idCounter++)}`,
+    mutex: __twMutex,
   });
 }
 

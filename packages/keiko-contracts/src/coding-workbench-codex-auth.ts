@@ -440,8 +440,50 @@ export function validateCodingWorkbenchCodexAuthSetupPlan(
     : { ok: true, value: value as unknown as CodingWorkbenchCodexAuthSetupPlan };
 }
 
-export function selectCodingWorkbenchRuntimeProfile(
+// KEIKO-0708 / #3321: redistribution of the Codex CLI adapter has not been approved yet, so
+// `selectCodingWorkbenchRuntimeProfile` below must keep returning `codexSubscriptionAllowed: false`
+// and `runtimeBinarySources: []` for the Codex model source, instead of hand-writing that `false` /
+// `[]` as a bare literal with no explanation at the point of the decision.
+//
+// This constant is only the contract layer's static default — it is NOT where redistribution
+// approval is granted or recorded. The actual approval record lives in
+// `portable-runtime-approvals.json` (`releaseApproval.redistribution.status` /
+// `reviewReference`; see ADR-0140 D3 and ADR-0163) and is verified at runtime through
+// `deps.codexRuntimeAvailability.isApprovedVerified()`
+// (`packages/keiko-server/src/coding-codex-subscription.ts`), which projects the unapproved case
+// as the `redistribution-unapproved` status via `codexSubscriptionProfileForEnv`. Do not flip this
+// constant to `true` as a way to grant approval — flip it only once a `codex-cli` entry exists in
+// that catalog and the server-side gate verifies it.
+export const CODEX_REDISTRIBUTION_APPROVED = false as const;
+
+// Exported so tests can drive both the approved and unapproved branches directly, without needing
+// to mock module-level state: the derivation itself — not just the constant's current value — is
+// what must stay pinned. `codex` gates on the model source; `approved` gates on redistribution
+// approval. Both must hold for Codex runtime binaries or the Codex subscription to be authorized —
+// a non-Codex model source must never report `codexSubscriptionAllowed: true`, no matter how
+// `CODEX_REDISTRIBUTION_APPROVED` is set.
+export function deriveCodexRuntimeAuthorization(
+  codex: boolean,
+  approved: boolean,
+): Pick<
+  CodingWorkbenchRuntimeProfileSelection,
+  "codexSubscriptionAllowed" | "runtimeBinarySources"
+> {
+  const allowed = codex && approved;
+  return {
+    codexSubscriptionAllowed: allowed,
+    runtimeBinarySources: allowed ? CODING_WORKBENCH_CODEX_RUNTIME_BINARY_SOURCES : [],
+  };
+}
+
+// Exported (in addition to selectCodingWorkbenchRuntimeProfile) so tests can drive the wrapper's
+// own `approved` branch directly. selectCodingWorkbenchRuntimeProfile always calls this with the
+// live CODEX_REDISTRIBUTION_APPROVED constant, which is false today -- a test that only calls
+// selectCodingWorkbenchRuntimeProfile can never observe the wrapper's `approved: true` path, so it
+// cannot tell a real derivation from a reverted bare-literal one. This builder closes that gap.
+export function buildCodingWorkbenchRuntimeProfile(
   modelSource: CodingWorkbenchModelSource,
+  approved: boolean,
 ): CodingWorkbenchRuntimeProfileSelection {
   const codex = modelSource === "chatgpt-codex-subscription-profile";
   return {
@@ -450,7 +492,12 @@ export function selectCodingWorkbenchRuntimeProfile(
     runtimeSource: codex ? "codex-cli-adapter" : "keiko-sidecar",
     adapterKind: codex ? "codex-cli-adapter" : "model-gateway-sidecar",
     sidecarGatewayAllowed: !codex,
-    codexSubscriptionAllowed: false,
-    runtimeBinarySources: [],
+    ...deriveCodexRuntimeAuthorization(codex, approved),
   };
+}
+
+export function selectCodingWorkbenchRuntimeProfile(
+  modelSource: CodingWorkbenchModelSource,
+): CodingWorkbenchRuntimeProfileSelection {
+  return buildCodingWorkbenchRuntimeProfile(modelSource, CODEX_REDISTRIBUTION_APPROVED);
 }

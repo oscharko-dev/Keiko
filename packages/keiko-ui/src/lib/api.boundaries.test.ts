@@ -8,7 +8,6 @@ import {
   createChatMessage,
   createDesktopChat,
   createProject,
-  createRunSummaryPair,
   fetchChatMessages,
   fetchConfig,
   fetchEvidenceList,
@@ -170,17 +169,6 @@ describe("API BFF boundary helpers", () => {
       role: "user",
       content: "hello",
       timestamp: 3,
-    });
-    await createRunSummaryPair({
-      chatId: "chat 1",
-      projectPath: "/repo",
-      user: { content: "hello", timestamp: 3 },
-      summary: {
-        content: "done",
-        timestamp: 4,
-        runId: "run 1",
-        workflowStatus: "completed",
-      },
     });
     await patchChatMessage("msg 1", "chat 1", "/repo", { shortResult: "patched" });
     await createDesktopChat({ projectPath: "/repo", title: "Desktop", modelId: "model-a" });

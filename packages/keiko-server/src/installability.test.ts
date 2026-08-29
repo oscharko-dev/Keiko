@@ -122,10 +122,12 @@ describe("Gate 1 — manifest reachable as retained browser metadata (ADR-0120)"
     expect(body.categories).toEqual(["business", "productivity", "developer-tools"]);
   });
 
-  it("icons array contains exactly four entries (192/512 standard + 192/512 maskable)", async () => {
+  // KEIKO-0549 / #3313: the maskable variants were byte-identical to the non-maskable icons
+  // with no safe-area padding, so they were retired as vestigial rather than regenerated.
+  it("icons array contains exactly two entries (192/512 standard, purpose any)", async () => {
     const res = await fetch(url("/manifest.webmanifest"));
     const body = (await res.json()) as { icons: unknown[] };
-    expect(body.icons).toHaveLength(4);
+    expect(body.icons).toHaveLength(2);
   });
 });
 
@@ -175,19 +177,17 @@ describe("Gate 3 — CSP wire headers include worker-src, manifest-src, and medi
   });
 });
 
-// ─── Gate 4: all seven icon assets are reachable with correct Content-Type ────
+// ─── Gate 4: all five icon assets are reachable with correct Content-Type ─────
 
 const ICON_ASSETS: readonly { path: string; expectedContentType: string }[] = [
   { path: "/icon-192.png", expectedContentType: "image/png" },
   { path: "/icon-512.png", expectedContentType: "image/png" },
-  { path: "/icon-192-maskable.png", expectedContentType: "image/png" },
-  { path: "/icon-512-maskable.png", expectedContentType: "image/png" },
   { path: "/apple-touch-icon.png", expectedContentType: "image/png" },
   { path: "/favicon.svg", expectedContentType: "image/svg+xml" },
   { path: "/favicon.ico", expectedContentType: "image/x-icon" },
 ];
 
-describe("Gate 4 — all seven icon assets reachable with correct Content-Type (ADR-0024 D5)", () => {
+describe("Gate 4 — all five icon assets reachable with correct Content-Type (ADR-0024 D5)", () => {
   it.each(ICON_ASSETS)("GET $path returns 200", async ({ path }) => {
     const res = await fetch(url(path));
     expect(res.status).toBe(200);

@@ -237,7 +237,6 @@ export const API_ROUTE_LITERAL_SEGMENTS: ReadonlySet<string> = new Set([
   "root",
   "roots",
   "rotate",
-  "run-summary-pair",
   "runs",
   "runtime",
   "scopes",

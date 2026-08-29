@@ -1971,7 +1971,7 @@ function EditorRuntimeWidget({
     const previousRoot = previousRuntimeRootRef.current;
     if (previousRoot === root) return;
     if (previousRoot !== undefined) {
-      disposeEditorModelRegistryRoot(previousRoot, "root-disposed");
+      disposeEditorModelRegistryRoot(previousRoot);
     }
     previousRuntimeRootRef.current = root;
   }, [root]);
@@ -1984,7 +1984,7 @@ function EditorRuntimeWidget({
         // one React commit. Defer final-window cleanup until after that commit's effects so the
         // transient zero does not destroy retained dirty models between sibling root sessions.
         queueMicrotask(() => {
-          if (liveEditorRuntimeInstances === 0) disposeAllUnattachedEditorModels("shutdown");
+          if (liveEditorRuntimeInstances === 0) disposeAllUnattachedEditorModels();
         });
       }
     };

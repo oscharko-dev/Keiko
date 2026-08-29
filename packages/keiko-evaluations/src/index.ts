@@ -49,6 +49,7 @@ export {
   fixtureByName,
   isSuiteName,
   type SuiteName,
+  type FixtureLookupResult,
 } from "./fixtures/index.js";
 export {
   EVAL_SCORECARD_SCHEMA_VERSION,

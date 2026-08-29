@@ -16,6 +16,7 @@ import type { EnvSource } from "@oscharko-dev/keiko-model-gateway";
 import type {
   AgentConfig,
   EventSink,
+  HarnessCompactionPort,
   HarnessEvent,
   HarnessShaperPort,
   ManifestSeed,
@@ -27,7 +28,7 @@ import type {
 } from "@oscharko-dev/keiko-harness";
 import type { EvidenceStore } from "@oscharko-dev/keiko-evidence";
 import { loadGatewayConfigFromFile } from "./gateway-config.js";
-import { loadEvidence, loadHarness, loadModelGateway } from "./lazy-modules.js";
+import { loadEvidence, loadHarness, loadModelGateway, loadServer } from "./lazy-modules.js";
 import type { CliIo } from "./runner.js";
 import { createHarnessToolShaper } from "./tool-shaper.js";
 
@@ -280,6 +281,28 @@ async function buildHarnessToolShaper(
   });
 }
 
+// 2895 audit KEIKO-0903 (Finding D, #3323 follow-up): generate-unit-tests and investigate-bug are
+// real, multi-round harness sessions -- investigate-bug loops through tool calls, and
+// generate-unit-tests can loop back to model-call after a failed verification
+// (keiko-harness/src/tasks/generate-unit-tests.ts) -- either can accumulate enough
+// assistant/tool history to hit maxContextBytes and hard-fail HARNESS_LIMIT_CONTEXT_SIZE, exactly
+// what #3323 closed for the reachable server call sites but never reached here. explain-plan is
+// excluded: it is read-only and single-call by construction
+// (keiko-harness/src/tasks/explain-plan.ts), so a compaction port there would be structurally
+// inert -- the same anti-pattern just removed from run-engine.ts's dispatchExplain
+// (packages/keiko-server/src/run-engine.ts). @oscharko-dev/keiko-server is loaded lazily and only
+// for the task types that can use it, preserving this file's GEN-PERF-CLI-001 lazy-loading
+// discipline for the read-only explain-plan path. serverHarnessContextCompactor is a shared,
+// stateless singleton (no per-model configuration to resolve — see
+// harness-context-compactor.ts's header comment), so no model-specific construction is needed here.
+async function loadCompactionPort(taskType: TaskType): Promise<HarnessCompactionPort | undefined> {
+  if (taskType === "explain-plan") {
+    return undefined;
+  }
+  const server = await loadServer();
+  return server.serverHarnessContextCompactor;
+}
+
 async function configuredModelId(
   flags: EvidenceFlags,
   env: EnvSource,
@@ -357,12 +380,46 @@ function outcomeToExitCode(result: RunResult, io: CliIo, redact: RedactFn): numb
   return 1;
 }
 
-export async function runAgentCli(
-  args: readonly string[],
-  io: CliIo,
-  env: EnvSource = {},
-  deps: RunDeps = {},
-): Promise<number> {
+interface HarnessSessionOutcome {
+  readonly result: RunResult;
+  readonly memory: MemoryEventSink;
+}
+
+interface DispatchHarnessSessionInput {
+  readonly task: TaskInput;
+  readonly model: { readonly port: ModelPort; readonly modelId: string };
+  readonly io: CliIo;
+  readonly flags: EvidenceFlags;
+  readonly env: EnvSource;
+  readonly gateway: GatewayModule;
+  readonly harness: HarnessModule;
+  readonly evidence: EvidenceModule;
+}
+
+// Extracted from runAgentCli to keep it under the repo's complexity/length bar. Builds and runs
+// the harness session: the compaction port is resolved once (see loadCompactionPort's own comment
+// for why explain-plan is excluded and why no model-specific construction is needed) and injected
+// alongside the existing shaper port.
+async function dispatchHarnessSession(
+  input: DispatchHarnessSessionInput,
+): Promise<HarnessSessionOutcome> {
+  const { task, model, io, flags, env, gateway, harness, evidence } = input;
+  const memory = new harness.MemoryEventSink();
+  const config: AgentConfig = { model: model.modelId, workingDirectory: ".", dryRun: true };
+  const compactionPort = await loadCompactionPort(task.taskType);
+  const session = harness.createSession(task, config, {
+    model: model.port,
+    tools: new harness.DryRunToolPort(),
+    sink: teeSink([memory, new harness.CliEventSink(io)], gateway.redact),
+    shaperPort: await buildHarnessToolShaper(flags, env, evidence),
+    ...(compactionPort === undefined ? {} : { compactionPort }),
+  });
+  return { result: await session.result, memory };
+}
+
+// Extracted from runAgentCli (with dispatchHarnessSession) to keep it under the repo's
+// complexity/length bar. Returns the exit code directly (2) on either usage error.
+function parseCliTask(args: readonly string[], io: CliIo): TaskInput | number {
   const taskType = args[0];
   if (taskType === undefined || !TASK_TYPES.has(taskType)) {
     io.err(taskType === undefined ? USAGE : `keiko run: unknown task type: ${taskType}\n${USAGE}`);
@@ -372,6 +429,19 @@ export async function runAgentCli(
   if (task === null) {
     io.err(`keiko run: missing required argument for ${taskType}.\n${USAGE}`);
     return 2;
+  }
+  return task;
+}
+
+export async function runAgentCli(
+  args: readonly string[],
+  io: CliIo,
+  env: EnvSource = {},
+  deps: RunDeps = {},
+): Promise<number> {
+  const task = parseCliTask(args, io);
+  if (typeof task === "number") {
+    return task;
   }
   const flags = parseEvidenceFlags(args);
   const [gateway, harness, evidence] = await Promise.all([
@@ -383,15 +453,16 @@ export async function runAgentCli(
   if (typeof model === "number") {
     return model;
   }
-  const memory = new harness.MemoryEventSink();
-  const config: AgentConfig = { model: model.modelId, workingDirectory: ".", dryRun: true };
-  const session = harness.createSession(task, config, {
-    model: model.port,
-    tools: new harness.DryRunToolPort(),
-    sink: teeSink([memory, new harness.CliEventSink(io)], gateway.redact),
-    shaperPort: await buildHarnessToolShaper(flags, env, evidence),
+  const { result, memory } = await dispatchHarnessSession({
+    task,
+    model,
+    io,
+    flags,
+    env,
+    gateway,
+    harness,
+    evidence,
   });
-  const result = await session.result;
   if (flags.write) {
     const evidenceFailure = writeEvidence(
       result,

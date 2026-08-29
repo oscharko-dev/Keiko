@@ -541,6 +541,31 @@ function classifySymlinkTargetKind(targetStats: {
 // collapsed into whatever the target happens to be -- with `symlinkTargetKind` naming what the walk
 // resolved the target to, so a consumer that wants target-aware treatment can opt in explicitly
 // instead of the server silently asserting it.
+// KEIKO-0873 follow-up (#3348 audit, P3): an unreadable symlink must disclose neither its target's
+// KIND nor its target-path LENGTH. On POSIX, `lstat().size` for a symbolic link is the exact byte
+// length of the target path string, so spreading the link's own lstat metadata left a weaker but
+// real enumeration oracle over precisely the paths the workspace boundary hides entirely -- it
+// distinguishes a link to `/etc/passwd` (11) from one to a long secrets path (58). The redactor
+// never caught it because it only runs over string paths (assertMetadataSafe).
+//
+// The wire type requires `sizeBytes`/`modifiedAt` on the "symlink" variant (unlike "directory",
+// where both are `?: undefined`), so they are ZEROED rather than omitted. That is a deliberate
+// trade: a `0` sentinel is less honest than an absent field, but changing the shared wire variant
+// would ripple into every consumer, and a uniform zeroed shape makes every unreadable symlink
+// one-decision-proof -- no caller can tell two hidden targets apart by any field.
+function unreadableSymlinkEntry(meta: FilesTreeEntryMetadata): FilesTreeEntry {
+  return {
+    name: meta.name,
+    path: meta.path,
+    kind: "symlink",
+    sizeBytes: 0,
+    modifiedAt: 0,
+    extension: meta.extension,
+    readable: false,
+    symlinkTargetKind: "unknown",
+  };
+}
+
 async function classifySymlinkEntry(
   root: string,
   entryPath: string,
@@ -551,11 +576,20 @@ async function classifySymlinkEntry(
     const targetStats = await stat(target);
     const contained = isContained(root, target);
     const denied = contained && pathIsDenied(rootRelativePosixPath(root, target));
-    const readable = contained && !denied;
-    const symlinkTargetKind: FilesSymlinkTargetKind = classifySymlinkTargetKind(targetStats);
-    return { ...meta, kind: "symlink", symlinkTargetKind, readable };
+    // KEIKO-0873 (#3331, hardened in final review): an unreadable target's real kind (file vs
+    // directory) must never be disclosed -- it is a one-bit filesystem-enumeration oracle for
+    // paths the workspace boundary is otherwise supposed to hide entirely, whether the target is
+    // out-of-root or an in-root but deny-listed path (e.g. a symlink aliasing .env or .git/HEAD).
+    // Gate on `readable`, not just `contained`, so both cases collapse the same way.
+    if (!contained || denied) return unreadableSymlinkEntry(meta);
+    return {
+      ...meta,
+      kind: "symlink",
+      symlinkTargetKind: classifySymlinkTargetKind(targetStats),
+      readable: true,
+    };
   } catch {
-    return { ...meta, kind: "symlink", symlinkTargetKind: "unknown", readable: false };
+    return unreadableSymlinkEntry(meta);
   }
 }
 

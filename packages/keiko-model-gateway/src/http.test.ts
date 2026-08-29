@@ -208,7 +208,15 @@ describe("gatewayFetch", () => {
     expect(fetchImpl).toHaveBeenCalledOnce();
   });
 
-  it("forces manual redirects and blocks redirects to metadata/private targets", async () => {
+  it("forces manual redirects and passes a 3xx response through unchanged, even to a metadata/private Location (KEIKO-0791)", async () => {
+    // gatewayFetch never AUTO-follows: `redirect: "manual"` is forced on every call (http.ts), so
+    // fetch itself never connects to a Location target. Manual followers DO exist — the
+    // update-portable staging manifest (safeRedirectUrl, bounded by MAX_ASSET_REDIRECTS) and the
+    // research egress port (redirectTarget) both read Location and loop — but each re-enters
+    // gatewayFetch for the next hop, so the target is re-vetted by the full DNS/address-pinning
+    // egress policy on the hop that actually connects to it. That next-hop re-entry, NOT an absent
+    // follower, is what made the removed Location pre-check redundant. Any future follower must
+    // route back through gatewayFetch rather than a raw fetch (#3348 audit).
     const fetchImpl = vi.fn<typeof fetch>(() =>
       Promise.resolve(
         new Response(null, {
@@ -217,16 +225,13 @@ describe("gatewayFetch", () => {
         }),
       ),
     );
-    await expect(
-      gatewayFetch("https://example.com/v1/models", { fetchImpl }),
-    ).rejects.toMatchObject({
-      code: "PROXY_BLOCKED_BY_POLICY",
-    });
+    const response = await gatewayFetch("https://example.com/v1/models", { fetchImpl });
+    expect(response.status).toBe(302);
     expect(fetchImpl).toHaveBeenCalledOnce();
     expect(fetchImpl.mock.calls[0]?.[1]).toMatchObject({ redirect: "manual" });
   });
 
-  it("checks relative redirects with the same central egress policy", async () => {
+  it("passes a relative redirect through unchanged as well", async () => {
     const fetchImpl = vi.fn<typeof fetch>(() =>
       Promise.resolve(new Response(null, { status: 307, headers: { location: "/v2/models" } })),
     );
@@ -799,110 +804,26 @@ describe("gatewayFetch DNS-rebinding pinning (AUDIT-SEC-001)", () => {
     }
   });
 
-  it("recomputes no-proxy routing for a redirect before applying hostname delegation policy", async () => {
-    let proxyRequests = 0;
-    const proxy = createHttpServer((_req, res) => {
-      proxyRequests += 1;
-      res.writeHead(302, { location: "http://bypass.invalid/next" });
+  it("passes a 3xx response through unchanged without validating its Location target (KEIKO-0791)", async () => {
+    // gatewayFetch always sends redirect: "manual", so fetch itself never connects to a Location
+    // target. Manual followers DO exist (update-portable staging's safeRedirectUrl, the research
+    // egress port's redirectTarget) — but both re-enter gatewayFetch for the next hop, so every
+    // redirect target still passes the full DNS/address-pinning egress policy on the hop that
+    // actually connects to it. The removed pre-check was redundant with that re-entry, NOT with
+    // "nothing follows redirects" (#3348 audit). A 3xx response — even one whose Location points at
+    // an address the classifier would otherwise block — is therefore returned to the caller
+    // unchanged, and it is the connecting hop, not this response, that enforces the boundary.
+    const origin = createHttpServer((_req, res) => {
+      res.writeHead(302, { location: "http://169.254.169.254/latest/meta-data" });
       res.end();
     });
-    const proxyPort = await listen(proxy);
+    const originPort = await listen(origin);
     try {
-      const response = await gatewayFetch("http://203.0.113.10/start", {
-        egress: {
-          httpProxy: `http://127.0.0.1:${String(proxyPort)}`,
-          noProxy: ["bypass.invalid"],
-        },
-      });
-
+      const response = await gatewayFetch(`http://127.0.0.1:${String(originPort)}/start`);
       expect(response.status).toBe(302);
-      expect(proxyRequests).toBe(1);
-    } finally {
-      await close(proxy);
-    }
-  });
-
-  it("rejects an undelegated hostname redirect that leaves the no-proxy route", async () => {
-    let originRequests = 0;
-    let proxyRequests = 0;
-    const origin = createHttpServer((_req, res) => {
-      originRequests += 1;
-      res.writeHead(302, { location: "http://outside-no-proxy.invalid/next" });
-      res.end();
-    });
-    const proxy = createHttpServer((_req, res) => {
-      proxyRequests += 1;
-      res.writeHead(200);
-      res.end();
-    });
-    const originPort = await listen(origin);
-    const proxyPort = await listen(proxy);
-    try {
-      await expect(
-        gatewayFetch(`http://127.0.0.1:${String(originPort)}/start`, {
-          egress: {
-            httpProxy: `http://127.0.0.1:${String(proxyPort)}`,
-            noProxy: ["127.0.0.1"],
-          },
-        }),
-      ).rejects.toMatchObject({
-        code: "PROXY_BLOCKED_BY_POLICY",
-        policyReason: "undelegated-proxied-hostname",
-      });
-      expect(originRequests).toBe(1);
-      expect(proxyRequests).toBe(0);
+      expect(response.headers.get("location")).toBe("http://169.254.169.254/latest/meta-data");
     } finally {
       await close(origin);
-      await close(proxy);
-    }
-  });
-
-  it("keeps literal private redirect targets blocked after proxied hostname delegation", async () => {
-    const proxy = createHttpServer((_req, res) => {
-      res.writeHead(302, { location: "http://10.0.0.1/private" });
-      res.end();
-    });
-    const proxyPort = await listen(proxy);
-    try {
-      await expect(
-        gatewayFetch("http://delegated-hostname.invalid/redirect", {
-          egress: {
-            httpProxy: `http://127.0.0.1:${String(proxyPort)}`,
-            acknowledgeProxiedHostnamePolicy: true,
-          },
-        }),
-      ).rejects.toMatchObject({ code: "PROXY_BLOCKED_BY_POLICY" });
-    } finally {
-      await close(proxy);
-    }
-  });
-
-  it("re-validates and refuses a redirect hop whose DNS resolves to a blocked address", async () => {
-    // The origin is a legitimate, allowed target; its redirect Location points at a second
-    // hostname that only resolves to a blocked (metadata-class) address on the redirect-hop
-    // DNS check, simulating a rebind between the original request and the redirect follow-up.
-    const origin = createHttpServer((_req, res) => {
-      res.writeHead(302, { location: "http://rebind-hop.invalid.test/next" });
-      res.end();
-    });
-    const originPort = await listen(origin);
-    try {
-      vi.resetModules();
-      vi.doMock("node:dns/promises", () => ({
-        lookup: vi.fn((hostname: string) =>
-          hostname === "rebind-hop.invalid.test"
-            ? Promise.resolve([{ address: "169.254.169.254", family: 4 }])
-            : Promise.resolve([{ address: "127.0.0.1", family: 4 }]),
-        ),
-      }));
-      const { gatewayFetch: pinnedGatewayFetch } = await import("./http.js");
-      await expect(
-        pinnedGatewayFetch(`http://redirect-origin.invalid.test:${String(originPort)}/first`),
-      ).rejects.toMatchObject({ code: "PROXY_BLOCKED_BY_POLICY" });
-    } finally {
-      await close(origin);
-      vi.doUnmock("node:dns/promises");
-      vi.resetModules();
     }
   });
 });

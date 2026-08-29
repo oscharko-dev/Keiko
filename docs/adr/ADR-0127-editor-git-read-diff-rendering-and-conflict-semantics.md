@@ -97,9 +97,35 @@ input. Paths reject absolute, backslash-shaped, empty-segment, dot-segment, trav
 and over-cap values. Issue #2228 parses unified diff server-side at the existing Git route boundary,
 after `keiko-git` membership and containment checks and before returning this contract. Blame needs
 no subcommand allowlist widening. Issue #2228 nevertheless hardens every local read against
-execution-capable repository configuration: fixed Git arguments override `core.fsmonitor=false`,
-diff keeps `--no-ext-diff --no-textconv`, and blame uses `--no-textconv`. The existing
-forbidden-option family remains in force, and `LC_ALL=C` stabilizes machine parsing.
+execution-capable repository configuration: fixed Git arguments override `core.fsmonitor=false` and
+`core.editor=true`; the single spawn boundary injects `--no-ext-diff --no-textconv` right after any
+diff-family subcommand (`diff`, `diff-files`, `diff-index`, `diff-tree`, `log`, `show` — the latter
+two added by the #3348 audit repair below) regardless of what the caller passed, so a future call
+site can never silently reopen the repository-local `diff.external`/textconv gap (a blanket
+`-c diff.external=` override was tried and rejected: git treats an explicit empty value as "the
+external diff command is the empty string" and fails the whole invocation rather than falling back
+to the internal differ — KEIKO-0652, #3318); blame keeps `--no-textconv` at the call site. The
+existing forbidden-option family remains in force, and `LC_ALL=C` stabilizes machine parsing.
+
+Injection alone does not enforce the invariant against a later, caller-supplied override in the
+same argument vector: appending the disabling flags right after the subcommand does not stop a
+caller from ALSO passing `--ext-diff`/`--textconv` later in the same call, and this runner
+separately permits arbitrary `-c`/`--config-env` overrides for legitimate callers (e.g.
+`grounded-git-history-evidence.ts` needs `-c core.quotepath=false` ahead of `log`). Audit finding
+#3348 closed this gap with a preflight, not another injection: the single spawn boundary now
+rejects the invocation outright — before any process is spawned — when the caller's arguments
+contain `--ext-diff`/`--textconv` anywhere (either flag name has no legitimate use at any argv
+position for this runner) or a `-c`/`--config-env` override (two-token, `--config-env=`-joined, or
+a defensively-parsed `-c`-joined form) whose config key is `diff.external`, a per-driver
+`diff.<driver>.textconv`/`diff.<driver>.command`, or another execution-capable key
+(`core.pager`, `pager.*`, `core.editor`, `sequence.editor`, `core.sshCommand`, `core.fsmonitor`,
+`core.hooksPath`, `alias.*`, `uploadpack.packObjectsHook`, `protocol.*.allow`, `http.proxy`,
+`credential.helper`, `init.templateDir`, `safe.directory`), matched case-insensitively per
+git-config(1). The key-level check (rather than denying `-c` outright, as the narrower
+agent-facing git tool allowlist in `keiko-contracts` `DEFAULT_COMMAND_RULES` does) is deliberate:
+this runner is a lower, shared boundary that a real production caller needs `-c` through for a
+safe key. Rejection reuses the existing `refusedOptionResult` shape (exit 128, redacted
+`stderr`) rather than a new error channel.
 
 ### D2 - Two rendering engines behind one contract and visual language
 

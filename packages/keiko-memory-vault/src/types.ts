@@ -160,6 +160,10 @@ export interface ListMemoriesOptions {
   readonly pinned?: boolean;
   readonly includeExpired?: boolean;
   readonly limit?: number;
+  // Meaningful only relative to a `limit`-bounded page. KEIKO-0792 (#3328): supplying `offset`
+  // without `limit` is rejected with a MemoryStorageValidationError from the public
+  // listMemoriesAcrossScopes/listMemoriesByScope/listMemoryMetadataByScope entry points, rather
+  // than silently discarding the offset and returning the full unpaged result.
   readonly offset?: number;
   readonly orderBy?: "createdAt" | "updatedAt" | "validFrom";
   readonly orderDir?: "asc" | "desc";

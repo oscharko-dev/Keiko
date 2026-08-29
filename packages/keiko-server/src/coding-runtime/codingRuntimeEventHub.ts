@@ -217,16 +217,6 @@ export class CodingRuntimeEventHub {
     return { ok: true, detach: () => run.subscribers.delete(subscriber) };
   }
 
-  /** Explicit lifecycle cleanup for a restart before its first new status/event. */
-  restart(runId: string): void {
-    const run = this.runs.get(runId);
-    if (run === undefined) return;
-    this.removeLossy(run);
-    this.removePermissionRequested(run);
-    run.terminal = false;
-    this.closeSubscribers(run);
-  }
-
   /** Retention coupling: delete only ids selected by the durable snapshot ledger. */
   deleteRuns(runIds: readonly string[]): void {
     for (const runId of runIds) {
@@ -254,6 +244,13 @@ export class CodingRuntimeEventHub {
     // Keep one bounded slot (and equivalent byte headroom) for the terminal/recovery fact. If a
     // nonterminal critical burst consumes that reserve, fail admission so the orchestrator can move
     // the run to recovery-required; the terminal containment fact itself is never dropped.
+    //
+    // The `incoming.bytes * 2` headroom is an exact reservation only when every retained critical
+    // event is comparably sized to `incoming` — true today because every field of
+    // CodingRuntimeEventHubInput is a small fixed-width primitive or bounded string enum (KEIKO-0796).
+    // If that type ever gains a variable-length field, this heuristic must be re-derived against a
+    // fixed worst-case per-event byte constant instead of assuming the incoming event's own size
+    // stands in for every other critical event already retained.
     if (
       incoming.critical &&
       !isContainment(incoming.event) &&
@@ -279,20 +276,6 @@ export class CodingRuntimeEventHub {
     for (let index = run.events.length - 1; index >= 0; index -= 1) {
       const retained = run.events[index];
       if (retained !== undefined && !retained.critical) {
-        run.bytes -= retained.bytes;
-        run.events.splice(index, 1);
-      }
-    }
-  }
-
-  /** Permission requests bind to a prior revision; clients must obtain the fresh snapshot after restart. */
-  private removePermissionRequested(run: RunBuffer): void {
-    for (let index = run.events.length - 1; index >= 0; index -= 1) {
-      const retained = run.events[index];
-      if (
-        retained?.event.kind === "runtime-event" &&
-        retained.event.eventKind === "permission-requested"
-      ) {
         run.bytes -= retained.bytes;
         run.events.splice(index, 1);
       }
