@@ -77,6 +77,25 @@ function isoFrom(nowMs: number): string {
   return new Date(nowMs).toISOString();
 }
 
+// Parses the raw content of a `.git` linked-worktree pointer file and returns its (trimmed) target, or
+// undefined when the pointer is missing/malformed. Split out of safeGitdirIdentity so the parse itself —
+// specifically its cost on adversarial whitespace padding (S8786) — is directly measurable with no file
+// I/O in the timed path: see reconciliation-gitdir-pointer-parse.bench.ts, which imports this exact
+// function (never a hand-copied regex) so the bench can never silently drift from the parse it measures.
+// See provisioning.ts's gitdirIdentity: the removed leading/trailing `\s*` overlapped with `(.+)`, the
+// overlapping-quantifier shape SonarCloud's S8786 rule flags as ReDoS-risky. `.trim()` below already
+// strips the same whitespace, so behavior is unchanged. The bench's header states the honest empirical
+// result plainly: for this always-matching, single-line pointer, no dynamic measurement (this bench
+// included) reliably shows the pre-fix pattern as slower — the S8786 finding is a static, structural
+// classification of the pattern's shape, not a demonstrated exploit in this usage. The simplification is
+// kept regardless: it is a harmless, strictly-simpler pattern that satisfies the static gate
+// (`gates:sonar`) without changing parse behavior.
+export function parseGitdirPointerTarget(raw: string): string | undefined {
+  const match = /^gitdir:(.+)$/mu.exec(raw);
+  if (match?.[1] === undefined || match[1].length === 0) return undefined;
+  return match[1].trim();
+}
+
 // Non-throwing content-free identity of a worktree's git admin dir, or undefined when the `.git`
 // linked-worktree pointer is missing/malformed. Mirrors the throwing variant in provisioning.ts but
 // returns undefined so reconciliation can classify a stale pointer instead of failing.
@@ -89,12 +108,12 @@ function safeGitdirIdentity(worktreePath: string): string | undefined {
   } catch {
     return undefined;
   }
-  // See provisioning.ts's gitdirIdentity: the removed leading/trailing `\s*` overlapped with
-  // `(.+)` and, under the multiline flag, made this quadratic on adversarial pointer content
-  // (S8786). `.trim()` below already strips the same whitespace, so behavior is unchanged.
-  const match = /^gitdir:(.+)$/mu.exec(raw);
-  if (match?.[1] === undefined || match[1].length === 0) return undefined;
-  return createHash("sha256").update(match[1].trim(), "utf8").digest("hex").slice(0, 32);
+  const target = parseGitdirPointerTarget(raw);
+  // Preserves the pre-extraction behavior exactly: only an UNDEFINED target (no match, or an entirely
+  // empty capture pre-trim) short-circuits. A target that trims down to "" (e.g. an all-whitespace
+  // capture) still reaches the hash below, unchanged from before this function was split out.
+  if (target === undefined) return undefined;
+  return createHash("sha256").update(target, "utf8").digest("hex").slice(0, 32);
 }
 
 // Realpath-aware containment check delegated to keiko-workspace (same engine provisioning uses). True
@@ -135,6 +154,16 @@ export interface FactsAndHead {
   readonly observedHead: string | undefined;
 }
 
+// Either an already-resolved repository worktree-list snapshot (every caller that fetches it
+// immediately before calling gatherFacts, with no intervening await: gatherInstanceReconciliationFacts,
+// reconcileSingleInstance) OR a lazy factory that reconcileImpl's per-instance `ws:<workspaceId>`
+// critical section uses instead, so the list is only ever fetched once that instance's lock is held.
+type WorktreesSource = readonly WorktreeListEntry[] | (() => Promise<readonly WorktreeListEntry[]>);
+
+async function resolveWorktrees(source: WorktreesSource): Promise<readonly WorktreeListEntry[]> {
+  return typeof source === "function" ? source() : source;
+}
+
 interface LockFacts {
   readonly lockPresent: boolean;
   readonly lockLive: boolean;
@@ -158,11 +187,14 @@ function computeLockFacts(
   };
 }
 
-// Gathers the content-free reconciliation facts for one instance.
+// Gathers the content-free reconciliation facts for one instance. `worktrees` accepts either shape
+// WorktreesSource documents — an already-resolved array, or a lazy factory — and is resolved (fetching
+// it, for the lazy shape) ONLY when `worktreeDirExists` is true, since that is the one fact that ever
+// consults it (findWorktreeEntry).
 async function gatherFacts(
   ctx: ReconcileCtx,
   adapter: GitWorktreeAdapter,
-  worktrees: readonly WorktreeListEntry[],
+  worktrees: WorktreesSource,
   instance: WorkspaceInstance,
   nowMs: number,
   actor: string | undefined,
@@ -174,7 +206,7 @@ async function gatherFacts(
     ? await adapter.localBranchExists(instance.taskBranch)
     : false;
   const entry = worktreeDirExists
-    ? findWorktreeEntry(worktrees, instance.managedWorktreePath)
+    ? findWorktreeEntry(await resolveWorktrees(worktrees), instance.managedWorktreePath)
     : undefined;
   const observedHead = entry?.head;
   const lock = computeLockFacts(instance.lock, nowMs, ctx.lockTtlMs, actor);
@@ -373,8 +405,10 @@ function instancesFor(
   return deps.store.listByRepository(deriveRepositoryId(repositoryRoot));
 }
 
-// Live reconcile: group the in-scope instances by repository root so each repository's worktree list
-// is fetched once, reconcile every instance, then build the report from the freshly persisted records.
+// Live reconcile: group the in-scope instances by repository root so each repository's adapter is built
+// once, reconcile every instance, then build the report from the freshly persisted records. The git
+// worktree list is NOT fetched here — see the per-instance comment below for why it moved inside the
+// lock.
 async function reconcileImpl(
   ctx: ReconcileCtx,
   repositoryRoot: string | undefined,
@@ -389,20 +423,30 @@ async function reconcileImpl(
   const reconciled: WorkspaceInstance[] = [];
   for (const [root, group] of byRepo) {
     const adapter = ctx.deps.createAdapter(detectWorkspaceAt(root));
-    const worktrees = await adapter.listWorktrees();
     for (const instance of group) {
       // Serialize the WHOLE per-instance critical section — re-read, fact-gathering, classification, and
       // the persisted write — under the SAME `ws:<workspaceId>` key every other mutating workspace flow
       // uses (#449, ADR-0093 D1), matching repair.ts's "advisory check -> live reconcile -> lock acquire
       // -> strategy mutation" and cleanup.ts's "re-check persisted liveness inside the critical section"
-      // (KEIKO-0996, #3339). Gathering facts INSIDE the lock (not before it) closes the TOCTOU a
-      // pre-lock snapshot would leave open: the `instance` used for classification is re-read from the
-      // store after the lock is held, so a concurrent activate/pause/repair/cleanup that mutated or
-      // deleted this workspace while reconcile awaited the lock is observed, not clobbered. When the
-      // instance is gone by the time the lock is acquired, this reconcile pass skips it entirely rather
-      // than resurrecting a deleted row. Deliberately NOT applied to reconcileSingleInstance: repair.ts
-      // already holds this exact key for its whole operation and re-enters reconcileSingleInstance
-      // inside it, so locking there would self-deadlock.
+      // (KEIKO-0996, #3339). Both facts this pass classifies against are read AFTER the lock is held,
+      // never before it: `fresh` re-reads the store row from inside the callback (a concurrent
+      // activate/pause/repair/cleanup that mutated or deleted the workspace while this pass awaited the
+      // lock is observed, not clobbered — and a deleted row is skipped rather than resurrected), and
+      // `gatherFacts` is handed a LAZY `() => adapter.listWorktrees()` factory instead of a pre-fetched
+      // snapshot. A PR #3348 review finding caught that the first version of this fix widened the lock
+      // around fact-gathering but still fed it the SAME worktree list captured once per repository BEFORE
+      // any instance in the group acquired its lock, so `observedHead`/`headMatches` could still be
+      // classified against pre-mutation git state for an instance further down the group. gatherFacts only
+      // invokes the factory when THIS instance's worktree still exists on disk (worktreeDirExists is
+      // itself always live), so the documented common case — a backlog of paused instances whose worktree
+      // is already gone — costs zero `listWorktrees` spawns, and a live worktree costs exactly one FRESH
+      // spawn, taken under its own lock. ADR-0093 D4 bounds live worktrees to single digits per repository
+      // in the realistic operating envelope (not the N=200 backlog scale that scale.test.ts seeds), so
+      // this cannot reintroduce the O(N) `listWorktrees` blow-up the repository-grouping guard catches.
+      // Deliberately NOT applied to reconcileSingleInstance: repair.ts already holds this exact key for
+      // its whole operation and re-enters reconcileSingleInstance inside it (locking there would
+      // self-deadlock), and that path already fetches its worktree list fresh immediately before use with
+      // no intervening await, so it has no equivalent staleness gap to close.
       const result = await ctx.deps.mutex.runExclusive(
         [workspaceKey(instance.workspaceId)],
         async (): Promise<ReconcileInstanceResult | undefined> => {
@@ -412,7 +456,7 @@ async function reconcileImpl(
           const { facts, observedHead } = await gatherFacts(
             ctx,
             adapter,
-            worktrees,
+            () => adapter.listWorktrees(),
             fresh,
             nowMs,
             undefined,

@@ -19,7 +19,8 @@
   "scripts": {
     "build": "tsc -b tsconfig.json",
     "typecheck": "tsc -b tsconfig.json",
-    "test": "vitest run"
+    "test": "vitest run",
+    "bench:reconciliation-gitdir-pointer": "vitest bench src/task-workspace/reconciliation-gitdir-pointer-parse.bench.ts"
   },
   "files": [
     "dist"

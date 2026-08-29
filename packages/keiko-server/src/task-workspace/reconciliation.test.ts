@@ -225,26 +225,29 @@ describe("pointer drift (negative: corrupted / moved gitdir)", () => {
     expect(reportEntry?.driftMarkers).toContain("gitdir-mismatch");
   });
 
-  // Regression for S8786: safeGitdirIdentity's `.git` pointer parse mirrors provisioning.ts's
+  // S8786 pointer-drift regression: safeGitdirIdentity's `.git` pointer parse mirrors provisioning.ts's
   // gitdirIdentity (`/^gitdir:\s*(.+)\s*$/mu` → `/^gitdir:(.+)$/mu`), removing the leading/trailing
-  // `\s*` that overlapped with `(.+)` and, under the multiline flag, made the parse quadratic on
-  // adversarial pointer content. This pads the real `.git` pointer with a huge whitespace run
-  // around the actual target and asserts reconciliation still classifies it healthy, quickly.
+  // `\s*` that overlapped with `(.+)` — the overlapping-quantifier shape SonarCloud's S8786 rule flags.
+  // This pads the real `.git` pointer with a huge whitespace run around the actual target and asserts
+  // reconciliation still classifies it healthy: the parse still extracts the right target and matches
+  // the identity computed at provision time despite the padding. That correctness guarantee is real and
+  // stays pinned here, unweakened.
   //
-  // The 2000ms bound this pin originally used was too tight for what `elapsedMs` actually measures:
-  // real `reconcile()` fact-gathering (two `git` subprocess spawns via the real adapter — Finding 2's
-  // comment above this describe block explains why this suite avoids stubbing that out), not the
-  // regex itself. The regex is µs-scale regardless of padding size at any input length exercised
-  // here (measured directly, isolated from process-spawn cost: 0-1ms from 5,000 up to 200,000 padding
-  // characters, both the fixed and the pre-fix `\s*(.+)\s*$` pattern) — modern V8 does not exhibit
-  // catastrophic backtracking on this shape for a single-line, successfully-matching input, so this
-  // assertion's real job is "reconcile() completes promptly", not distinguishing linear from quadratic
-  // regex cost at this input size. Subprocess-spawn latency alone is measured, isolated from this
-  // file's other fixture cost, at up to 3438ms across 30 samples on this class of host with no other
-  // load, and the specific investigated failure hit 7279ms under a coverage-instrumented full-suite
-  // run (heavier CPU load from V8 coverage instrumentation plus concurrent git spawns from other test
-  // files). 10000ms keeps >2.7x headroom over that documented failure and >2.9x over the quiet-host
-  // sample max while still failing fast on a genuine hang or a multi-second-plus regression.
+  // A PR #3348 review finding caught that this pin ALSO carried a wall-clock assertion
+  // (`elapsedMs < Nms`) presented as an S8786 regression guard, which it never was: this fixture is a
+  // SUCCESSFULLY-MATCHING single-line input, dominated by two real `git` subprocess spawns via the real
+  // adapter (this suite intentionally never stubs that out — see Finding 2's comment above this describe
+  // block), not by the regex. The guarantee is RELOCATED, not relaxed, to
+  // reconciliation-gitdir-pointer-parse.bench.ts, which measures parseGitdirPointerTarget directly with
+  // no subprocess/IO in the timed path — the one place a quadratic regression WOULD be visible if it
+  // existed. That bench's own header is equally honest about what was found: rigorous A/B measurement
+  // (three methods, including vitest's own bench harness with call order reversed to rule out an
+  // ordering artifact) could NOT make the pre-fix pattern show up as reliably slower for this
+  // always-matching input shape, at any size up to 1,600,000 padding characters — the S8786
+  // classification is a static, structural finding (guarded by `npm run gates:sonar`, mandatory before
+  // every PR), not one with a demonstrated dynamic exploit in this codebase's actual usage. No wall-clock
+  // bound at ANY layer — this end-to-end test included — can carry that invariant, so none is asserted
+  // here anymore; the padded-input classification above is this test's real, remaining, unweakened job.
   it("still classifies healthy when the .git pointer is padded with adversarial whitespace", async () => {
     const instance = await provisionTask("t1");
     const gitPointerPath = join(instance.managedWorktreePath, ".git");
@@ -253,15 +256,12 @@ describe("pointer drift (negative: corrupted / moved gitdir)", () => {
       .trim();
     writeFileSync(gitPointerPath, `gitdir:${" ".repeat(20_000)}${rawTarget}${" ".repeat(5_000)}\n`);
 
-    const start = Date.now();
     const report = await reconciliation().reconcile();
-    const elapsedMs = Date.now() - start;
 
-    expect(elapsedMs).toBeLessThan(10_000);
     const reportEntry = report.entries.find((e) => e.workspaceId === instance.workspaceId);
     expect(reportEntry?.status).toBe("healthy");
     expect(reportEntry?.driftMarkers).toEqual([]);
-  }, 20_000);
+  });
 });
 
 describe("branch / HEAD drift (negative: branch mismatch, moved HEAD)", () => {
@@ -538,5 +538,104 @@ describe("per-instance mutex serialization (KEIKO-0996, #3339)", () => {
     expect(store.getById(instance.workspaceId)).toBeUndefined();
     expect(evidence).toHaveLength(evidenceCountBeforeReconcile);
     expect(report.entries.find((e) => e.workspaceId === instance.workspaceId)).toBeUndefined();
+  });
+});
+
+// PR #3348 review finding on the KEIKO-0996 change above: widening the lock around fact-gathering
+// closed the TOCTOU for the persisted INSTANCE ROW, but `worktrees` was still fetched once per
+// repository, BEFORE any instance in the group attempted its `ws:<workspaceId>` lock — so a concurrent
+// repair/cleanup that changed the git worktree state while this reconcile was queued behind that exact
+// key was invisible: `gatherFacts` still classified the instance against the pre-lock worktree-list
+// snapshot. The fix makes reconciliation.ts's `gatherFacts` accept a LAZY `() => adapter.listWorktrees()`
+// factory for the live batch path, invoked only once this instance's lock is held (and only when its
+// worktree still exists on disk).
+//
+// This test is DETERMINISTIC, not duration-based, for the same reason the KEIKO-0996 tests above are:
+// it uses a `createAdapter` test double whose `listWorktrees()` result flips from a "pre-mutation" to a
+// "post-mutation" snapshot on a test-controlled boolean (never a timer), and `runExclusive`'s synchronous
+// registration (mutex.ts) to guarantee the external hold is queued ahead of reconcile's own lock attempt.
+describe("worktree-list freshness inside the critical section (PR #3348 review finding)", () => {
+  // Wraps the real adapter, overriding only `listWorktrees`: it returns `preMutation` until the test
+  // calls the returned `applyMutation`, then `postMutation` for every call after. `localBranchExists`
+  // and every other verb stay real — only the worktree-list staleness this finding is about is faked.
+  function worktreeMutationAdapter(
+    preMutation: readonly WorktreeListEntry[],
+    postMutation: readonly WorktreeListEntry[],
+  ): {
+    createAdapter: (workspace: WorkspaceInfo) => GitWorktreeAdapter;
+    applyMutation: () => void;
+  } {
+    let mutated = false;
+    return {
+      createAdapter: (workspace: WorkspaceInfo): GitWorktreeAdapter => ({
+        ...realAdapter(workspace),
+        listWorktrees: (): Promise<readonly WorktreeListEntry[]> =>
+          Promise.resolve(mutated ? postMutation : preMutation),
+      }),
+      applyMutation: (): void => {
+        mutated = true;
+      },
+    };
+  }
+
+  it("classifies against the worktree list observed AFTER the lock, not a pre-lock snapshot", async () => {
+    const instance = await provisionTask("t1");
+    const preMutation = await realAdapter(detectWorkspaceAt(repoRoot)).listWorktrees();
+    const managedRealPath = realpathSync(instance.managedWorktreePath);
+    const mutatedHead = "f".repeat(40);
+    const postMutation = preMutation.map((entry) =>
+      realpathSync(entry.path) === managedRealPath ? { ...entry, head: mutatedHead } : entry,
+    );
+    // Sanity: the fixture actually targets this instance's own worktree entry, not a no-op mutation.
+    expect(postMutation.some((entry) => entry.head === mutatedHead)).toBe(true);
+    const { createAdapter, applyMutation } = worktreeMutationAdapter(preMutation, postMutation);
+
+    let releaseHold: () => void = () => undefined;
+    const holdGate = new Promise<void>((resolve) => {
+      releaseHold = resolve;
+    });
+    // Simulates a concurrent ws:-keyed flow (e.g. repair's reconcile-pointer strategy) that reconciles
+    // this instance to a NEW head — persisting it via the SAME store.upsert every mutating flow uses —
+    // while this reconcile() pass is still queued behind the same ws:<workspaceId> key. Registered
+    // synchronously ahead of reconcile(), so mutex.ts's synchronous registration guarantees this hold is
+    // queued first regardless of how the two promise chains later interleave.
+    const holdPromise = __twMutex.runExclusive([workspaceKey(instance.workspaceId)], async () => {
+      await holdGate;
+      const current = store.getById(instance.workspaceId);
+      if (current !== undefined) store.upsert({ ...current, lastVerifiedHead: mutatedHead });
+      applyMutation();
+    });
+
+    const svc = createWorkspaceReconciliationService({
+      store,
+      activePointerStore: pointerStore,
+      evidenceStore: capturingEvidence(),
+      managedRoot,
+      createAdapter,
+      redactString: (s: string): string => s,
+      now: (): number => nowMs,
+      newId: (): string => `id-${String(idCounter++)}`,
+      mutex: __twMutex,
+    });
+    // Against the pre-fix code, calling reconcile() synchronously fires the pre-loop `listWorktrees()`
+    // right here — BEFORE the mutation below — capturing `preMutation` into a closure variable reused
+    // for every instance in the group regardless of when each one's lock is actually granted.
+    const reconcilePromise = svc.reconcile();
+
+    releaseHold();
+    await holdPromise;
+    const report = await reconcilePromise;
+
+    const reportEntry = report.entries.find((e) => e.workspaceId === instance.workspaceId);
+    // Fixed code: gatherFacts's lazy factory fires only once this instance's lock is granted, i.e. AFTER
+    // the concurrent mutation above — it observes `postMutation` (mutatedHead), matching the
+    // freshly-re-read `lastVerifiedHead`, so this classifies healthy. Pre-fix code: the pre-loop
+    // `listWorktrees()` call already captured `preMutation` (the ORIGINAL head) before the mutation ran,
+    // so `observedHead` (original) mismatches the freshly-re-read `lastVerifiedHead` (mutatedHead) —
+    // a false "head-moved" drift immediately after the concurrent mutation completed, exactly the false
+    // unhealthy outcome the review finding describes.
+    expect(reportEntry?.status).toBe("healthy");
+    expect(reportEntry?.driftMarkers).toEqual([]);
+    expect(store.getById(instance.workspaceId)?.health).toBe("healthy");
   });
 });

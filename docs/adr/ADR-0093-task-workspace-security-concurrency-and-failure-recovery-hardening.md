@@ -294,16 +294,22 @@ rows, not live worktrees. The bounds:
 
 | Operation | Complexity | Wall-clock budget at N=200 | Reuses |
 |---|---|---|---|
-| (a) Startup reconciliation over N instances | O(N) — one fact-gather + pure classify per instance, no nested scan | ≤ 2000 ms total (≤ 10 ms/instance amortized incl. fs probes) | #447 `reconcileAll` + `gatherReconciliationFacts` |
+| (a) Startup reconciliation over N instances | O(N) — one fact-gather + pure classify per instance, no nested scan; the per-repository `git worktree list` spawn is lazy and only per instance with a live worktree (KEIKO-0996/#3339, PR #3348 review — see ADR-0091's "Worktree-list freshness") | ≤ 2000 ms total (≤ 10 ms/instance amortized incl. fs probes) | #447 `reconcileAll` + `gatherReconciliationFacts` |
 | (b) Repeated health checks | O(N) per full report; O(1) per single-instance health | ≤ 2000 ms per full report; ≤ 15 ms single instance | #448 `health.report` |
 | (c) Rapid workspace switching | O(1) per switch (single instance load + pointer write under `active:` key) | ≤ 25 ms p95 per `setActive`, fully serialized (no interleave) | #446 active pointer + D1 mutex |
 | (d) `listAll` enumeration | O(N) single store query, no per-row IO | ≤ 50 ms | #447/#448 `store.listAll` |
 
 These are intentionally generous (≈10× expected) so the test is a regression guard
 against accidental O(N²) (e.g. a nested managed-root rescan per instance), not a
-micro-benchmark. The mutex adds **zero** asymptotic cost to read paths (health,
-list, reconciliation gathering are not wrapped) and bounded queuing only to
-*mutating* paths, which are not on the enumeration hot path. Rapid switching is
+micro-benchmark. The mutex adds **zero** asymptotic cost to the TRUE read paths —
+`health.report()` (never takes `ws:`, D1's keyspace table) and reconciliation's own
+read-only `report()` (derives from persisted rows, no IO at all) — and bounded
+queuing only to *mutating* paths, which are not on the enumeration hot path. The
+live batch `reconcile()` path is mutating, not a read path: since KEIKO-0996/#3339
+its per-instance fact-gathering + classification + write run INSIDE the
+`ws:<workspaceId>` critical section (ADR-0091's "Concurrency guarantee"), so it
+queues behind, and serializes with, any other mutating flow for the same instance —
+row (a) above already prices that in. Rapid switching is
 O(1) per switch and serialized, so K switches complete in O(K) with no
 interleaving corruption — the measurable assertion is "K serial `setActive` calls
 each within budget and the final pointer equals the last requested workspace."
