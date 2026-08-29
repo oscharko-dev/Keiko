@@ -31,6 +31,7 @@ import {
   parseGatewayConfig,
   resolveCodingSafeSidecarGatewayProfile,
   resolveVoiceCapability,
+  toolCallingConfigurationFingerprint,
 } from "@oscharko-dev/keiko-model-gateway";
 import type {
   GatewayConfig,
@@ -51,6 +52,7 @@ import {
   stripTrailingSlashes,
 } from "./gateway-setup.js";
 import { selectEmbeddingModelId } from "./local-knowledge-handlers.js";
+import { runGatewayReadiness } from "./gateway-readiness.js";
 import { recommendQiModelPolicy } from "./qualityIntelligence/modelSelection.js";
 import type { RouteContext } from "./routes.js";
 
@@ -397,7 +399,7 @@ describe("handleGatewaySetup", () => {
       deps,
     );
     expect(rejected.status).toBe(409);
-    expect(requiredCapability(requiredGatewayConfig(deps), "model/one").toolCalling).toBe(true);
+    expect(requiredCapability(requiredGatewayConfig(deps), "model/one").toolCalling).toBe(false);
 
     const result = await handleApplyGatewayVerifiedCapabilities(
       {
@@ -478,6 +480,292 @@ describe("handleGatewaySetup", () => {
     expect(observation?.fields.toolCalling).toBeUndefined();
     expect(observation?.generation).toBe(gatewayConfig.generation());
     deps.store.close();
+  });
+
+  it("reconciles readiness tool-calling proof into the durable capability", async () => {
+    const uiDir = await tempDir("keiko-gw-readiness-proof-ui-");
+    const readinessFetch = vi
+      .fn()
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ choices: [{ message: { content: "OK" } }] }), {
+          headers: { "content-type": "application/json" },
+        }),
+      )
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            choices: [
+              {
+                message: {
+                  tool_calls: [
+                    { function: { name: "report_readiness", arguments: '{"status":"ok"}' } },
+                  ],
+                },
+              },
+            ],
+          }),
+          { headers: { "content-type": "application/json" } },
+        ),
+      ) as typeof fetch;
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir: await tempDir("keiko-gw-readiness-proof-ev-"),
+      env: { ...VAULT_ENV },
+      uiDbPath: join(uiDir, "keiko-ui.db"),
+    });
+    const gatewayConfig = deps.gatewayConfig;
+    if (gatewayConfig === undefined) throw new Error("expected runtime gateway config");
+    const rawConfig = {
+      providers: [
+        {
+          modelId: "verified-by-readiness",
+          baseUrl: "https://gateway.example.com/v1",
+          apiKey: "test-token",
+        },
+      ],
+    };
+    gatewayConfig.set(parseGatewayConfig(rawConfig), true);
+    writeFileSync(gatewayConfig.storagePath, JSON.stringify(rawConfig), "utf8");
+    const sink = createBufferedServerLogSink();
+    setServerLogger(createServerLogger({ sink, level: "info" }));
+
+    try {
+      const report = await runGatewayReadiness(
+        { modelId: "verified-by-readiness", options: { probes: ["tool_calling"] } },
+        { ...deps, gatewayReadinessFetch: readinessFetch },
+        "corr-tool-proof",
+      );
+
+      expect("status" in report).toBe(false);
+      expect(
+        requiredCapability(requiredGatewayConfig(deps), "verified-by-readiness"),
+      ).toMatchObject({
+        toolCalling: true,
+        toolCallingVerification: {
+          status: "verified",
+          probe: "gateway-tool-calling-v1",
+        },
+      });
+      expect(readFileSync(gatewayConfig.storagePath, "utf8")).toContain("toolCallingVerification");
+      const verificationEvent = sink.events.find(
+        (event) => event.op === "gateway.tool-calling.verification",
+      );
+      expect(verificationEvent).toMatchObject({
+        category: "gateway",
+        correlationId: "corr-tool-proof",
+        extra: { verificationStatus: "verified" },
+      });
+    } finally {
+      resetServerLogger();
+      deps.store.close();
+    }
+  });
+
+  it("preserves a verified tool proof when an unrelated readiness chat probe fails", async () => {
+    const uiDir = await tempDir("keiko-gw-readiness-failure-proof-ui-");
+    const provider: ModelProviderConfig = {
+      modelId: "verified-before-chat-failure",
+      baseUrl: "https://gateway.example.com/v1",
+      apiKey: "test-token",
+      timeoutMs: 30_000,
+      maxRetries: 0,
+      retryBaseDelayMs: 1,
+    };
+    const proof = {
+      status: "verified" as const,
+      checkedAt: "2026-08-28T10:00:00.000Z",
+      probe: "gateway-tool-calling-v1" as const,
+      configurationFingerprint: toolCallingConfigurationFingerprint(provider),
+    };
+    const readinessFetch: typeof fetch = (): Promise<Response> =>
+      Promise.resolve(
+        new Response(JSON.stringify({ choices: [] }), {
+          headers: { "content-type": "application/json" },
+        }),
+      );
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir: await tempDir("keiko-gw-readiness-failure-proof-ev-"),
+      env: { ...VAULT_ENV },
+      uiDbPath: join(uiDir, "keiko-ui.db"),
+    });
+    const gatewayConfig = deps.gatewayConfig;
+    if (gatewayConfig === undefined) throw new Error("expected runtime gateway config");
+    gatewayConfig.set(
+      parseGatewayConfig({
+        providers: [provider],
+        capabilities: [
+          {
+            id: provider.modelId,
+            kind: "chat",
+            contextWindow: 32_000,
+            maxOutputTokens: 4_096,
+            toolCalling: true,
+            toolCallingVerification: proof,
+            structuredOutput: true,
+            streaming: true,
+            supportsImageInput: false,
+            supportsDocumentInput: false,
+            workflowEligible: true,
+            costClass: "medium",
+            latencyClass: "standard",
+            throughputHint: "test",
+            preferredUseCases: [],
+            knownLimitations: [],
+          },
+        ],
+      }),
+      true,
+    );
+    gatewayConfig.recordVerifiedCapability(
+      provider.modelId,
+      { toolCalling: true },
+      proof.checkedAt,
+      gatewayConfig.generation(),
+    );
+
+    const report = await runGatewayReadiness(
+      { modelId: provider.modelId, options: { probes: ["chat", "tool_calling"] } },
+      { ...deps, gatewayReadinessFetch: readinessFetch },
+      "corr-preserve-tool-proof",
+    );
+
+    expect("status" in report).toBe(false);
+    expect(
+      requiredCapability(requiredGatewayConfig(deps), provider.modelId).toolCallingVerification,
+    ).toEqual(proof);
+    expect(gatewayConfig.verifiedCapability(provider.modelId)).toEqual({
+      modelId: provider.modelId,
+      generation: gatewayConfig.generation(),
+      checkedAt: proof.checkedAt,
+      fields: { toolCalling: true },
+    });
+    deps.store.close();
+  });
+
+  it("keeps a temporarily unreachable chat deployment configured but tool-unverified", async () => {
+    const uiDir = await tempDir("keiko-gw-transient-setup-ui-");
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir: await tempDir("keiko-gw-transient-setup-ev-"),
+      env: { ...VAULT_ENV },
+      uiDbPath: join(uiDir, "keiko-ui.db"),
+      gatewayEmbeddingProbe: PASSTHROUGH_EMBEDDING_PROBE,
+      gatewaySetupTester: () =>
+        Promise.reject(Object.assign(new Error("provider unavailable"), { code: "ETIMEDOUT" })),
+    });
+
+    const result = await handleGatewaySetup(
+      ctx({
+        baseUrl: "https://gateway.example.com/v1",
+        apiKey: "test-token",
+        deploymentNames: ["temporarily-offline"],
+      }),
+      deps,
+    );
+
+    expect(result.status).toBe(200);
+    expect(result.body).toMatchObject({ unverifiedChatModelIds: ["temporarily-offline"] });
+    expect(requiredCapability(requiredGatewayConfig(deps), "temporarily-offline")).toMatchObject({
+      toolCalling: false,
+      toolCallingVerification: { status: "unverified", probe: "gateway-tool-calling-v1" },
+    });
+    deps.store.close();
+  });
+
+  it("rejects DNS setup failures without persisting an unverified chat deployment", async () => {
+    const uiDir = await tempDir("keiko-gw-dns-setup-ui-");
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir: await tempDir("keiko-gw-dns-setup-ev-"),
+      env: { ...VAULT_ENV },
+      uiDbPath: join(uiDir, "keiko-ui.db"),
+      gatewayEmbeddingProbe: PASSTHROUGH_EMBEDDING_PROBE,
+      gatewaySetupTester: () =>
+        Promise.reject(
+          Object.assign(new Error("provider hostname not found"), { code: "ENOTFOUND" }),
+        ),
+    });
+
+    const result = await handleGatewaySetup(
+      ctx({
+        baseUrl: "https://gateway.example.com/v1",
+        apiKey: "test-token",
+        deploymentNames: ["unresolvable-deployment"],
+      }),
+      deps,
+    );
+
+    expect(result.status).toBe(502);
+    expect(currentGatewayConfig(deps)).toBeUndefined();
+    deps.store.close();
+  });
+
+  it("rejects temporary chat admission when its workflow model ids are not configured", async () => {
+    const uiDir = await tempDir("keiko-gw-transient-workflow-ui-");
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir: await tempDir("keiko-gw-transient-workflow-ev-"),
+      env: { ...VAULT_ENV },
+      uiDbPath: join(uiDir, "keiko-ui.db"),
+      gatewayEmbeddingProbe: PASSTHROUGH_EMBEDDING_PROBE,
+      gatewaySetupTester: () =>
+        Promise.reject(Object.assign(new Error("provider unavailable"), { code: "ETIMEDOUT" })),
+    });
+
+    const result = await handleGatewaySetup(
+      ctx({
+        baseUrl: "https://gateway.example.com/v1",
+        apiKey: "test-token",
+        deploymentNames: ["temporarily-offline"],
+        workflowEligibleModelIds: ["missing-chat"],
+      }),
+      deps,
+    );
+
+    expect(result).toMatchObject({
+      status: 400,
+      body: {
+        error: { message: "workflowEligibleModelIds must reference configured chat models." },
+      },
+    });
+    deps.store.close();
+  });
+
+  it("logs the original temporary chat-admission failure", async () => {
+    const uiDir = await tempDir("keiko-gw-transient-diagnostic-ui-");
+    const diagnostics: ServerDiagnosticRecord[] = [];
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir: await tempDir("keiko-gw-transient-diagnostic-ev-"),
+      env: { ...VAULT_ENV },
+      uiDbPath: join(uiDir, "keiko-ui.db"),
+      gatewayEmbeddingProbe: PASSTHROUGH_EMBEDDING_PROBE,
+      gatewaySetupTester: () =>
+        Promise.reject(Object.assign(new Error("provider unavailable"), { code: "ETIMEDOUT" })),
+      diagnostics: { record: (record): void => void diagnostics.push(record) },
+    });
+
+    try {
+      await handleGatewaySetup(
+        ctx({
+          baseUrl: "https://gateway.example.com/v1",
+          apiKey: "test-token",
+          deploymentNames: ["temporarily-offline"],
+        }),
+        deps,
+      );
+
+      const verificationDiagnostic = diagnostics.find(
+        (record) => record.source === "gateway.setup.provider-verify",
+      );
+      expect(verificationDiagnostic).toMatchObject({
+        errorClass: "Error",
+        code: "ETIMEDOUT",
+      });
+    } finally {
+      deps.store.close();
+    }
   });
 
   it("replaces an older partial capability observation instead of refreshing its fields", async () => {
@@ -1700,7 +1988,7 @@ describe("handleGatewaySetup", () => {
     const capability = currentGatewayConfig(deps)?.capabilities?.find(
       (item) => item.id === "example-chat",
     );
-    expect(capability?.toolCalling).toBe(true);
+    expect(capability?.toolCalling).toBe(false);
     deps.store.close();
   });
 
@@ -4814,6 +5102,68 @@ describe("handleGatewaySetup", () => {
     deps.store.close();
   });
 
+  it("removes the Mistral limitation note only after a verified tool-calling observation", async () => {
+    const note =
+      "Tool calling is disabled by default for Mistral deployments until endpoint readiness verifies it";
+    const uiDir = await tempDir("keiko-gw-ui-mistral-verified-note-");
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir: await tempDir("keiko-gw-ev-mistral-verified-note-"),
+      env: { ...VAULT_ENV },
+      uiDbPath: join(uiDir, "keiko-ui.db"),
+    });
+    const gatewayConfig = deps.gatewayConfig;
+    if (gatewayConfig === undefined) throw new Error("expected gateway config store");
+    gatewayConfig.set(
+      parseGatewayConfig({
+        providers: [
+          {
+            modelId: "Mistral-Large-3",
+            baseUrl: "https://llm.example.com/v1",
+            apiKey: "chat-token",
+          },
+        ],
+        capabilities: [
+          {
+            id: "Mistral-Large-3",
+            kind: "chat",
+            contextWindow: 128_000,
+            maxOutputTokens: 8_192,
+            toolCalling: false,
+            structuredOutput: false,
+            streaming: true,
+            supportsImageInput: false,
+            supportsDocumentInput: false,
+            workflowEligible: false,
+            costClass: "medium",
+            latencyClass: "standard",
+            throughputHint: "test chat deployment",
+            preferredUseCases: ["Chat"],
+            knownLimitations: [note],
+          },
+        ],
+      }),
+      true,
+    );
+    gatewayConfig.recordVerifiedCapability(
+      "Mistral-Large-3",
+      { toolCalling: true },
+      "2026-08-28T12:00:00.000Z",
+      gatewayConfig.generation(),
+    );
+
+    const result = await handleApplyGatewayVerifiedCapabilities(
+      { ...ctx({ fields: { toolCalling: true } }), params: { modelId: "Mistral-Large-3" } },
+      deps,
+    );
+
+    expect(result.status).toBe(200);
+    expect(
+      requiredCapability(requiredGatewayConfig(deps), "Mistral-Large-3").knownLimitations,
+    ).not.toContain(note);
+    deps.store.close();
+  });
+
   it("restores stored OCR providers verbatim through preserve-mode rebuilds", async () => {
     // Review finding on #3031 (P1): the rebuild only re-derives chat and embedding providers, so
     // a stored ocr-vision provider was chat-probed and silently dropped (or reclassified) by an
@@ -6418,7 +6768,14 @@ describe("handleGatewaySetup", () => {
         deps,
       );
       expect(result.status).toBe(200);
-      expect(seenModels).toEqual(["phi-4", "gpt-oss-120b", "phi-4", "gpt-oss-120b"]);
+      expect(seenModels).toEqual([
+        "phi-4",
+        "gpt-oss-120b",
+        "phi-4",
+        "gpt-oss-120b",
+        "phi-4",
+        "gpt-oss-120b",
+      ]);
       expect((result.body as { testedModelIds?: readonly string[] }).testedModelIds).toEqual([
         "phi-4",
         "gpt-oss-120b",
@@ -6493,7 +6850,12 @@ describe("handleGatewaySetup", () => {
         deps,
       );
       expect(result.status).toBe(200);
-      expect(seen.map((call) => call.model)).toEqual(["Mistral-Large-3", "gpt-5.4", "gpt-5.4"]);
+      expect(seen.map((call) => call.model)).toEqual([
+        "Mistral-Large-3",
+        "gpt-5.4",
+        "gpt-5.4",
+        "gpt-5.4",
+      ]);
       expect(seen.every((call) => call.firstRole === "system")).toBe(true);
       expect((result.body as { testedModelIds?: readonly string[] }).testedModelIds).toEqual([
         "gpt-5.4",
@@ -6608,7 +6970,16 @@ describe("handleGatewaySetup", () => {
       env: { ...VAULT_ENV },
       uiDbPath: join(uiDir, "keiko-ui.db"),
       gatewayEmbeddingProbe: PASSTHROUGH_EMBEDDING_PROBE,
-      gatewaySetupTester: (_config, modelIds) => Promise.resolve(modelIds),
+      gatewaySetupTester: (_config, modelIds) =>
+        Promise.resolve({
+          testedModelIds: modelIds,
+          responseFormatModelIds: [],
+          toolCallingObservations: modelIds.map((modelId) => ({
+            modelId,
+            status: "verified" as const,
+            checkedAt: new Date().toISOString(),
+          })),
+        }),
     });
 
     const result = await handleGatewaySetup(
@@ -6995,6 +7366,9 @@ describe("handleGatewaySetup", () => {
         "litellm-chat-large",
         "litellm-vision-chat",
         "litellm-unknown-mode",
+        "litellm-chat-large",
+        "litellm-vision-chat",
+        "litellm-unknown-mode",
       ]);
       expect((result.body as { testedModelIds?: readonly string[] }).testedModelIds).toEqual([
         "litellm-chat-large",
@@ -7361,6 +7735,8 @@ describe("handleGatewaySetup", () => {
       );
       expect(result.status).toBe(200);
       expect(seenModels).toEqual([
+        "example-chat-model-large",
+        "example-chat-model-fast",
         "example-chat-model-large",
         "example-chat-model-fast",
         "example-chat-model-large",

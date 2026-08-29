@@ -59,6 +59,24 @@ interface StrictLiteLlmBehavior {
   readonly emptyChatModels: Set<string>;
 }
 
+function requestedToolName(body: Record<string, unknown>): string | undefined {
+  const toolChoice = body.tool_choice;
+  if (typeof toolChoice !== "object" || toolChoice === null || Array.isArray(toolChoice)) {
+    return undefined;
+  }
+  if (!("function" in toolChoice)) return undefined;
+  const functionDefinition = toolChoice.function;
+  if (
+    typeof functionDefinition !== "object" ||
+    functionDefinition === null ||
+    Array.isArray(functionDefinition)
+  ) {
+    return undefined;
+  }
+  if (!("name" in functionDefinition)) return undefined;
+  return typeof functionDefinition.name === "string" ? functionDefinition.name : undefined;
+}
+
 function answerModelInfo(res: ServerResponse, options: StrictLiteLlmOptions): void {
   json(res, {
     data: [
@@ -78,9 +96,19 @@ function answerChatCompletion(
   const body = JSON.parse(raw === "" ? "{}" : raw) as Record<string, unknown>;
   if (typeof body.model === "string") log.chatModels.push(body.model);
   const empty = typeof body.model === "string" && behavior.emptyChatModels.has(body.model);
+  const toolName = requestedToolName(body);
   json(res, {
     choices: [
-      { message: { role: "assistant", content: empty ? "" : "OK" }, finish_reason: "stop" },
+      {
+        message: {
+          role: "assistant",
+          content: empty ? "" : "OK",
+          ...(toolName === undefined
+            ? {}
+            : { tool_calls: [{ function: { name: toolName, arguments: "{}" } }] }),
+        },
+        finish_reason: "stop",
+      },
     ],
     usage: { prompt_tokens: 3, completion_tokens: 1 },
   });

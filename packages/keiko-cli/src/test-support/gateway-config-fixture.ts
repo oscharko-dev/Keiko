@@ -13,7 +13,11 @@
 import { readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createDefaultChatCapability } from "@oscharko-dev/keiko-model-gateway";
+import {
+  createDefaultChatCapability,
+  toolCallingConfigurationFingerprint,
+  type ModelProviderConfig,
+} from "@oscharko-dev/keiko-model-gateway";
 import { openProviderCredentialVault } from "@oscharko-dev/keiko-server/credential-vault";
 
 // The vault key is intentionally reused across every test suite that consumes this fixture. The
@@ -39,10 +43,20 @@ export const REAL_TMPDIR = realpathSync(tmpdir());
  * factory means a change to the capability contract or its defaults propagates automatically
  * instead of leaving this fixture behind — the exact fixture-drift class §7 forbids.
  */
-function defaultCapability(modelId: string): Record<string, unknown> {
+function defaultCapability(
+  modelId: string,
+  provider: ModelProviderConfig,
+): Record<string, unknown> {
   const base = createDefaultChatCapability(modelId);
   return {
     ...base,
+    toolCalling: true,
+    toolCallingVerification: {
+      status: "verified",
+      checkedAt: new Date().toISOString(),
+      probe: "gateway-tool-calling-v1",
+      configurationFingerprint: toolCallingConfigurationFingerprint(provider),
+    },
     structuredOutput: !modelId.includes("unstructured"),
     costClass: modelId.endsWith("-fast") ? "low" : "high",
     latencyClass: modelId.endsWith("-fast") ? "fast" : "standard",
@@ -80,7 +94,7 @@ export interface GatewayConfigOptions {
 
 function providerRecord(modelId: string, options: GatewayConfigOptions): Record<string, unknown> {
   const mode = options.capabilityMode ?? "per-provider";
-  const record: Record<string, unknown> = {
+  const provider: ModelProviderConfig = {
     modelId,
     baseUrl: options.baseUrl ?? "https://provider.example/v1",
     apiKey: options.apiKey ?? FIXTURE_API_KEY,
@@ -88,8 +102,9 @@ function providerRecord(modelId: string, options: GatewayConfigOptions): Record<
     maxRetries: options.maxRetries ?? 0,
     retryBaseDelayMs: 500,
   };
+  const record: Record<string, unknown> = { ...provider };
   if (mode === "per-provider") {
-    record.capability = defaultCapability(modelId);
+    record.capability = defaultCapability(modelId, provider);
   }
   return record;
 }
