@@ -5121,7 +5121,13 @@ function recordGatewaySetupAudit(
     schemaVersion: GATEWAY_SETUP_AUDIT_SCHEMA_VERSION,
     outcome,
     timestamp: new Date().toISOString(),
-    correlationId: request.correlationId ?? randomUUID(),
+    // The sanctioned fallback, not a fresh mint (AGENTS.md §8). `record.correlationId` is reused
+    // by both diagnostics below, so a minted UUID here would key the persisted audit evidence and
+    // its failure diagnostics to a different identity than the loopback/discovery diagnostics this
+    // same request emits under UNKNOWN_CORRELATION_ID — one request, two correlation identities,
+    // unjoinable in a support bundle. (The randomUUID below is an evidence-store KEY, not a
+    // correlation id, and is correct.)
+    correlationId: request.correlationId ?? UNKNOWN_CORRELATION_ID,
     targetClass: gatewaySetupTargetClass(request.baseUrl),
     // Any active outbound-egress override counts, not just the private-network one: a
     // link-local/metadata override under KEIKO_ALLOW_LINK_LOCAL_GATEWAY is exactly the more

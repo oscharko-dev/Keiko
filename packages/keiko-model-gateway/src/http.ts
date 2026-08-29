@@ -1360,6 +1360,14 @@ function planGatewayProxy(
 }
 
 // Compose caller signal + optional timeout into a single signal for all paths.
+//
+// `redirect: "manual"` is forced on every request and is the load-bearing half of the redirect
+// posture: fetch itself never connects to a Location target, so a 3xx is handed back to the caller
+// unvalidated. Callers MAY follow redirects manually (update-portable staging's safeRedirectUrl,
+// the research egress port's redirectTarget both do) — but a follower MUST re-enter gatewayFetch
+// for each hop, so the target is re-vetted by the full DNS/address-pinning egress policy on the hop
+// that actually connects to it. Following a Location with a raw fetch would bypass that boundary
+// entirely (#3348 audit).
 function gatewayRequestInit(rest: RequestInit, timeoutMs: number | undefined): RequestInit {
   const composedSignal = composeSignal(rest.signal, timeoutMs);
   return composedSignal !== undefined

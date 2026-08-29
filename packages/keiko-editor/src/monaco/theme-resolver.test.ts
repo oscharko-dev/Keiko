@@ -284,3 +284,56 @@ describe("resolveEditorThemeTokensFromDom against real jsdom (KEIKO-0528, KEIKO-
     expect(() => resolveEditorThemeTokensFromDom(document.body)).toThrow(/could not parse/);
   });
 });
+
+// #3348 audit: the shared facade must validate a colour FORM, not merely a prefix. A prefix-only
+// check reported `#not-a-colour` / `rgb-nope` / a bare `lab(` as ACCEPTED, where a real canvas
+// silently keeps the previous fillStyle — so a jsdom-backed component test could not observe the
+// rejection path the two-sentinel guard above depends on.
+describe("shared jsdom canvas facade fillStyle accept/reject semantics (#3348 audit)", () => {
+  function context2d(): CanvasRenderingContext2D {
+    const context = document.createElement("canvas").getContext("2d");
+    if (context === null)
+      throw new Error("expected the jsdom canvas facade to provide a 2d context");
+    return context;
+  }
+
+  it.each([
+    ["#abc", "#abc"],
+    ["#abcd", "#abcd"],
+    ["#a1b2c3", "#a1b2c3"],
+    ["#a1b2c3d4", "#a1b2c3d4"],
+    ["rgb(1, 2, 3)", "rgb(1, 2, 3)"],
+    ["rgba(1, 2, 3, 0.5)", "rgba(1, 2, 3, 0.5)"],
+    ["oklch(0.5 0.1 200)", "oklch(0.5 0.1 200)"],
+    ["lab(50% 20 -30)", "lab(50% 20 -30)"],
+  ])("stores a well-formed %s", (assigned, expected) => {
+    const context = context2d();
+    context.fillStyle = assigned;
+    expect(context.fillStyle).toBe(expected);
+  });
+
+  // Every case here shares a prefix with an accepted form, so a prefix-only check would wrongly
+  // store it. The sentinel must survive the assignment untouched, exactly as on a real canvas.
+  it.each([
+    "#not-a-colour",
+    "#12345",
+    "#xyzxyz",
+    "#",
+    "rgb-nope",
+    "rgb(",
+    "rgb(1, 2, 3",
+    "oklch",
+    "oklch(0.5 0.1 200",
+    "lab(",
+    "labrador",
+    "var(--ed-editor-background)",
+    "",
+    "   ",
+  ])("silently rejects %j and preserves the previous value", (assigned) => {
+    const context = context2d();
+    const sentinel = "#0a0b0c";
+    context.fillStyle = sentinel;
+    context.fillStyle = assigned;
+    expect(context.fillStyle).toBe(sentinel);
+  });
+});

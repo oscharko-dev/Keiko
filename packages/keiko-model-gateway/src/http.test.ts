@@ -209,10 +209,14 @@ describe("gatewayFetch", () => {
   });
 
   it("forces manual redirects and passes a 3xx response through unchanged, even to a metadata/private Location (KEIKO-0791)", async () => {
-    // No caller of gatewayFetch ever reads Location or follows a redirect, so validating it against
-    // the SSRF classifier only produced false confidence — the redirect was never followed either
-    // way. redirect: "manual" is still forced (fetch must never auto-follow), but the 3xx response
-    // itself is returned to the caller unchanged, regardless of what its Location targets.
+    // gatewayFetch never AUTO-follows: `redirect: "manual"` is forced on every call (http.ts), so
+    // fetch itself never connects to a Location target. Manual followers DO exist — the
+    // update-portable staging manifest (safeRedirectUrl, bounded by MAX_ASSET_REDIRECTS) and the
+    // research egress port (redirectTarget) both read Location and loop — but each re-enters
+    // gatewayFetch for the next hop, so the target is re-vetted by the full DNS/address-pinning
+    // egress policy on the hop that actually connects to it. That next-hop re-entry, NOT an absent
+    // follower, is what made the removed Location pre-check redundant. Any future follower must
+    // route back through gatewayFetch rather than a raw fetch (#3348 audit).
     const fetchImpl = vi.fn<typeof fetch>(() =>
       Promise.resolve(
         new Response(null, {
@@ -801,11 +805,14 @@ describe("gatewayFetch DNS-rebinding pinning (AUDIT-SEC-001)", () => {
   });
 
   it("passes a 3xx response through unchanged without validating its Location target (KEIKO-0791)", async () => {
-    // gatewayFetch always sends redirect: "manual" and no caller ever follows the Location header
-    // (no adapter reads it or retries), so validating it against the SSRF classifier only produced
-    // false confidence: the redirect was never followed either way. A 3xx response — even one whose
-    // Location points at an address the classifier would otherwise block — must be returned to the
-    // caller unchanged, never rejected on the strength of a target nothing will ever connect to.
+    // gatewayFetch always sends redirect: "manual", so fetch itself never connects to a Location
+    // target. Manual followers DO exist (update-portable staging's safeRedirectUrl, the research
+    // egress port's redirectTarget) — but both re-enter gatewayFetch for the next hop, so every
+    // redirect target still passes the full DNS/address-pinning egress policy on the hop that
+    // actually connects to it. The removed pre-check was redundant with that re-entry, NOT with
+    // "nothing follows redirects" (#3348 audit). A 3xx response — even one whose Location points at
+    // an address the classifier would otherwise block — is therefore returned to the caller
+    // unchanged, and it is the connecting hop, not this response, that enforces the boundary.
     const origin = createHttpServer((_req, res) => {
       res.writeHead(302, { location: "http://169.254.169.254/latest/meta-data" });
       res.end();

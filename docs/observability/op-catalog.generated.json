@@ -653,19 +653,19 @@
     {
       "op": "http.gateway.fetch.completed",
       "category": "http",
-      "site": "packages/keiko-model-gateway/src/http.ts:1484",
+      "site": "packages/keiko-model-gateway/src/http.ts:1492",
       "package": "keiko-model-gateway"
     },
     {
       "op": "http.gateway.fetch.failed",
       "category": "http",
-      "site": "packages/keiko-model-gateway/src/http.ts:1516",
+      "site": "packages/keiko-model-gateway/src/http.ts:1524",
       "package": "keiko-model-gateway"
     },
     {
       "op": "http.gateway.fetch.started",
       "category": "http",
-      "site": "packages/keiko-model-gateway/src/http.ts:1448",
+      "site": "packages/keiko-model-gateway/src/http.ts:1456",
       "package": "keiko-model-gateway"
     },
     {
@@ -845,7 +845,7 @@
     {
       "op": "gateway.tool-calling.verification",
       "category": "gateway",
-      "site": "packages/keiko-server/src/gateway-setup.ts:6336",
+      "site": "packages/keiko-server/src/gateway-setup.ts:6342",
       "package": "keiko-server"
     },
     {

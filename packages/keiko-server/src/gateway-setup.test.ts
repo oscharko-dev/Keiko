@@ -1254,6 +1254,17 @@ describe("handleGatewaySetup", () => {
     expect(loopbackDiag?.correlationId).toBe(UNKNOWN_CORRELATION_ID);
     // Guards against a future re-mint: a UUID never satisfies this shape.
     expect(loopbackDiag?.correlationId).not.toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-/);
+
+    // The PERSISTED audit record must key to the same identity as the diagnostics above. A minted
+    // UUID here would split one request across two correlation identities, so the audit evidence
+    // could never be joined back to that request's diagnostics in a support bundle.
+    const auditFiles = readdirSync(evidenceDir).filter((name) => name.startsWith("gateway-setup-"));
+    expect(auditFiles).toHaveLength(1);
+    const auditRecord = JSON.parse(
+      readFileSync(join(evidenceDir, auditFiles[0] ?? ""), "utf8"),
+    ) as Record<string, unknown>;
+    expect(auditRecord.correlationId).toBe(UNKNOWN_CORRELATION_ID);
+    expect(auditRecord.correlationId).not.toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-/);
     deps.store.close();
   });
 

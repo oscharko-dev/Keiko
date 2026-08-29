@@ -562,6 +562,43 @@ describe("desktop files browser", () => {
     });
   });
 
+  // #3348 audit (P3): closing the target-KIND oracle above still left the target-PATH-LENGTH one.
+  // On POSIX, `lstat().size` for a symbolic link is the exact byte length of its target path, and
+  // that value rode out on the entry as `sizeBytes`, so a caller could still distinguish two
+  // hidden targets (e.g. `.env` from a long secrets path) purely by their reported size. An
+  // unreadable symlink must be indistinguishable from every other unreadable symlink.
+  it("does not leak an unreadable symlink's target-path length through sizeBytes", async () => {
+    await writeFile(join(root, ".env"), "SECRET=1\n");
+    await mkdir(join(root, ".git"));
+    // Two deny-listed targets whose path lengths differ substantially. Under the pre-fix behaviour
+    // the entries reported sizeBytes 4 and 42 respectively; they must now be identical.
+    const longDeniedTarget = ".git/a-deliberately-long-inner-path-name.txt";
+    await mkdir(join(root, ".git"), { recursive: true });
+    await writeFile(join(root, longDeniedTarget), "x\n");
+    try {
+      await symlink(".env", join(root, "short-alias"));
+      await symlink(longDeniedTarget, join(root, "long-alias"));
+    } catch (error: unknown) {
+      if ((error as NodeJS.ErrnoException).code === "EPERM") return;
+      throw error;
+    }
+
+    const listing = await readFilesTree(store, root, "");
+    const shortAlias = listing.entries.find((entry) => entry.name === "short-alias");
+    const longAlias = listing.entries.find((entry) => entry.name === "long-alias");
+    expect(shortAlias).toBeDefined();
+    expect(longAlias).toBeDefined();
+    expect(shortAlias).toMatchObject({ kind: "symlink", readable: false });
+    expect(longAlias).toMatchObject({ kind: "symlink", readable: false });
+
+    // The oracle itself is the subject: two hidden targets of very different path length must be
+    // byte-for-byte indistinguishable on the wire, not merely "both unreadable".
+    expect(longAlias?.sizeBytes).toBe(shortAlias?.sizeBytes);
+    expect(shortAlias?.sizeBytes).toBe(0);
+    expect(shortAlias?.modifiedAt).toBe(0);
+    expect(longAlias?.modifiedAt).toBe(0);
+  });
+
   // #2906 review (comment 3863185718): the positive case the two symlink-to-directory tests above
   // don't cover -- a READABLE symlink whose target is a directory. Before the fix this reported
   // `kind: "directory"` while ALSO carrying the symlink's own real lstat sizeBytes/modifiedAt,
