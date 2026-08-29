@@ -87,19 +87,22 @@ const DIFF_FAMILY_SUBCOMMANDS: ReadonlySet<string> = new Set([
 const DIFF_NO_EXTERNAL_ARGS: readonly string[] = ["--no-ext-diff", "--no-textconv"];
 
 // Global flags this codebase's callers pass before the subcommand: GIT_BASE_ARGS'
-// `--no-pager`/`--no-optional-locks` take no value, `-C <path>` takes one. Extend this set before
-// any caller adds another pre-subcommand flag, or subcommand detection below stops one token early
-// and the diff-family injection silently becomes a no-op for that call shape.
+// `--no-pager`/`--no-optional-locks` take no value; `-C <path>` and `-c <key>=<value>` each take
+// one (the latter is how gitHistoryArgs() in grounded-git-history-evidence.ts passes
+// `-c core.quotepath=false` ahead of `log`). Extend the relevant set before any caller adds
+// another pre-subcommand flag, or subcommand detection below stops one token early and the
+// diff-family injection silently becomes a no-op for that call shape.
 const PRE_SUBCOMMAND_FLAG_NO_VALUE: ReadonlySet<string> = new Set([
   "--no-pager",
   "--no-optional-locks",
 ]);
+const PRE_SUBCOMMAND_FLAG_ONE_VALUE: ReadonlySet<string> = new Set(["-C", "-c"]);
 
 function findSubcommandIndex(args: readonly string[]): number | undefined {
   let index = 0;
   while (index < args.length) {
     const arg = args[index];
-    if (arg === "-C") {
+    if (arg !== undefined && PRE_SUBCOMMAND_FLAG_ONE_VALUE.has(arg)) {
       index += 2;
       continue;
     }

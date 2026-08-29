@@ -352,6 +352,36 @@ describe("createGitProcessRunner", () => {
     },
   );
 
+  it.skipIf(process.platform === "win32")(
+    "still neutralizes diff.external when a caller places -c <key>=<value> before the subcommand",
+    async () => {
+      // Final review of #2907: findSubcommandIndex only special-cased "-C <path>" as a
+      // value-taking pre-subcommand flag, so a caller passing "-c core.quotepath=false" (the
+      // exact shape grounded-git-history-evidence.ts's gitHistoryArgs() already uses ahead of
+      // "log") made subcommand detection stop one token early, silently turning
+      // withDiffFamilyNeutralized into a no-op for any diff-family invocation shaped this way.
+      const marker = join(root, "diff-external-c-flag-executed.marker");
+      const hook = join(root, "hostile-diff-external-c-flag.sh");
+      writeFileSync(hook, `#!/bin/sh\ntouch '${marker}'\n`);
+      execFileSync("chmod", ["+x", hook]);
+      execFileSync("git", ["config", "diff.external", hook], { cwd: root });
+
+      const tracked = join(root, "tracked-c-flag.txt");
+      writeFileSync(tracked, "original\n");
+      execFileSync("git", ["add", "tracked-c-flag.txt"], { cwd: root });
+      writeFileSync(tracked, "changed\n");
+
+      const result = await defaultGitProcessRunner(
+        [...GIT_BASE_ARGS, "-C", root, "-c", "core.quotepath=false", "diff"],
+        { cwd: root, maxBytes: 4096, timeoutMs: 10_000 },
+      );
+
+      expect(existsSync(marker)).toBe(false);
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toMatch(/^diff --git /u);
+    },
+  );
+
   it.each([
     ["core.fsmonitor", "hostile", "false"],
     ["core.editor", "hostile-editor", "true"],
