@@ -261,6 +261,29 @@ async function rootTabIsSelected(tab: Locator): Promise<boolean> {
 }
 
 /**
+ * A root tab, addressed through the DOM instead of the accessibility tree.
+ *
+ * Playwright's role engine honours `aria-modal`: while the workspace-trust dialog that selecting a
+ * root raises is open, every `getByRole("tab", …)` query for that tab reports "element(s) not
+ * found" for its whole timeout, even though the tab is attached, on screen, and carrying the
+ * correct `aria-selected`. That is how this spec failed on `dev` — the assertion could not observe
+ * the very state the click had just produced. A CSS locator does not consult the accessibility
+ * tree, so `aria-selected` stays readable through the dialog the selection itself raised. Measured
+ * here with the dialog open: the role query resolves 0 elements, this one resolves 1 and reads
+ * `aria-selected="true"` — the selection HAD taken, only the assertion could not see it.
+ *
+ * Scoped to the roots switcher so the locator stays strict: the editor mounts a second tablist for
+ * open documents, and a strict-mode violation here must fail by name rather than as a timeout.
+ */
+function rootTab(page: Page, displayName: string): Locator {
+  return page
+    .locator('[role="tablist"][aria-label="Editor workspace roots"]')
+    .first()
+    .locator('[role="tab"]')
+    .filter({ hasText: displayName });
+}
+
+/**
  * Selects a root tab and proves it took, idempotently.
  *
  * Clicking is still conditional — clicking an already-selected tab is not a no-op in this UI, it
@@ -269,26 +292,13 @@ async function rootTabIsSelected(tab: Locator): Promise<boolean> {
  * been issued: under the bootstrap race described in `rootTabIsSelected`, the click and the
  * bootstrap's own selection can land in either order, and only the end state is stable.
  */
-async function selectRootTab(tab: Locator, raisedPrompt?: Locator): Promise<void> {
+async function selectRootTab(tab: Locator): Promise<void> {
   if (!(await rootTabIsSelected(tab))) await tab.click();
-  // The selection is witnessed by `aria-selected` — UNLESS the click raised the workspace-trust
-  // prompt. That dialog is `aria-modal`, so the tab it just selected leaves the accessibility tree
-  // and the attribute becomes unobservable: the assertion then fails with "element(s) not found"
-  // on a tab that is in the DOM and correctly selected. This is the same mechanism the caller
-  // below was fixed for, one call deeper, and it survived because the attribute is sometimes
-  // readable in the window before the dialog mounts — a race, not a stable pass.
-  //
-  // So an open prompt counts as the selection having taken, because it is the selection's own
-  // consequence. A caller that cannot raise one passes no locator and the attribute still decides.
-  await expect
-    .poll(
-      async () => {
-        if (raisedPrompt !== undefined && (await raisedPrompt.isVisible())) return true;
-        return (await tab.count()) > 0 && (await tab.getAttribute("aria-selected")) === "true";
-      },
-      { timeout: ROOT_TAB_TIMEOUT_MS },
-    )
-    .toBe(true);
+  // Still `aria-selected` on THIS tab, and nothing weaker. Treating "some trust dialog is open" as
+  // proof that the selection took would accept a dialog raised for a different root — and would
+  // answer it, which is how the caller below silently restricted the wrong workspace. `rootTab`
+  // keeps the attribute observable through the dialog, so the strict assertion needs no escape.
+  await expect(tab).toHaveAttribute("aria-selected", "true", { timeout: ROOT_TAB_TIMEOUT_MS });
 }
 
 async function restrictBetaAndExpectAlphaTrusted(page: Page): Promise<void> {
@@ -307,7 +317,7 @@ async function restrictBetaAndExpectAlphaTrusted(page: Page): Promise<void> {
   // accessibility tree is both impossible and unnecessary.
   if (!(await prompt.isVisible())) {
     // Bootstrap focused Alpha instead: Beta is reachable, and selecting it raises its prompt.
-    await selectRootTab(page.getByRole("tab", { name: /M11 Root Beta/u }), prompt);
+    await selectRootTab(rootTab(page, "M11 Root Beta"));
   }
   await expect(prompt).toBeVisible();
   await prompt.getByRole("button", { name: "Stay restricted" }).click();
@@ -317,7 +327,7 @@ async function restrictBetaAndExpectAlphaTrusted(page: Page): Promise<void> {
   await expect(
     page.getByRole("treeitem", { name: "M11 Root Beta" }).getByLabel("Restricted Mode"),
   ).toBeVisible();
-  await page.getByRole("tab", { name: /M11 Root Alpha/u }).click();
+  await rootTab(page, "M11 Root Alpha").click();
   await expect(prompt).toHaveCount(0);
   await expect(
     page.getByRole("treeitem", { name: "M11 Root Alpha" }).getByLabel("Trusted workspace"),
@@ -329,7 +339,7 @@ async function switchProfile(
   root: string,
   profileRef: string,
 ): Promise<ProfileSwitchResult> {
-  await page.getByRole("tab", { name: /M11 Root Alpha/u }).click();
+  await rootTab(page, "M11 Root Alpha").click();
   const settingsWindow = seededWindows(root).filter((window) => window.type === "settings");
   const settingsPage = await replacePage(page, settingsWindow);
   const settings = settingsPage.locator(SETTINGS_WINDOW);
@@ -491,14 +501,14 @@ async function reopenTrustedAlphaAfterProfileSwitch(page: Page, root: string): P
   // The active root is server-owned and can legitimately start on either root after replacement.
   // Clear only Beta's expected restricted prompt when Beta is active, then select Alpha explicitly
   // and prove the profile switch preserved Alpha's server-owned grant.
-  const betaTab = page.getByRole("tab", { name: /M11 Root Beta/u });
+  const betaTab = rootTab(page, "M11 Root Beta");
   if (await rootTabIsSelected(betaTab)) {
     await page
       .getByRole("alertdialog", { name: "Trust this workspace?" })
       .getByRole("button", { name: "Stay restricted" })
       .click();
   }
-  const alphaTab = page.getByRole("tab", { name: /M11 Root Alpha/u });
+  const alphaTab = rootTab(page, "M11 Root Alpha");
   await selectRootTab(alphaTab);
   const editor = await openEditorWorkspace(page, { dismissTrustPrompt: false });
   await expect(page.getByRole("alertdialog", { name: "Trust this workspace?" })).toHaveCount(0);
