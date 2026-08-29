@@ -1,6 +1,6 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { isAbsolute, join, relative } from "node:path";
 import { describe, expect, it } from "vitest";
 
 import {
@@ -15,6 +15,18 @@ import {
   readMaterializedLimits,
   realBinaryEvidenceComplete,
 } from "../run-code-task-real-binary.mjs";
+
+/**
+ * Whether `candidate` really lives under `root`, separator-aware.
+ *
+ * `candidate.startsWith(root)` accepts `${root}-evil/state`, a SIBLING directory — so a state path
+ * assembled by concatenation instead of `join` would satisfy a prefix pin while escaping the
+ * resolved temp root the helper exists to stay inside.
+ */
+function containedIn(root, candidate) {
+  const offset = relative(root, candidate);
+  return offset !== "" && !offset.startsWith("..") && !isAbsolute(offset);
+}
 
 describe("#2483 real-binary observation helpers", () => {
   it("classifies connections without returning a persisted endpoint projection", () => {
@@ -213,9 +225,19 @@ describe("#2483 real-binary observation helpers", () => {
 
     expect(context.executable).toContain("macos-arm64");
     expect(context.executable.endsWith("/payload/bin/opencode")).toBe(true);
-    // State and probe directories live outside the checkout so a run cannot dirty the tree.
-    expect(context.stateDir.startsWith(tmpdir())).toBe(true);
-    expect(context.probeState.startsWith(tmpdir())).toBe(true);
+    // State and probe directories live outside the checkout so a run cannot dirty the tree, and
+    // under the RESOLVED temp root: this journey forces these paths into KEIKO_E2E_STATE_DIR, which
+    // e2eStateDir returns verbatim, so an unresolved one would route the whole lane around the
+    // symlink resolution the helper exists to perform (#2955 follow-up). The pin moved from
+    // `tmpdir()` to its realpath — the same invariant, one step stricter.
+    const tempRoot = realpathSync(tmpdir());
+    for (const statePath of [context.stateDir, context.probeState]) {
+      expect(containedIn(tempRoot, statePath)).toBe(true);
+    }
+    // The negative control a prefix test cannot express: a SIBLING whose name starts with the temp
+    // root passes `startsWith` and is not inside it. Without this, a state path built by string
+    // concatenation rather than `join` would satisfy the pin.
+    expect(containedIn(tempRoot, `${tempRoot}-evil/state`)).toBe(false);
     expect(context.stateDir).not.toBe(context.probeState);
   });
 

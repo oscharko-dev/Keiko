@@ -34,11 +34,13 @@ import { join } from "node:path";
 import { sha256Hex } from "@oscharko-dev/keiko-security";
 
 import {
+  EDITOR_SELECTORS,
   cleanupEditorWorkspaces,
   collectPageErrors,
   createEditorWorkspace,
   openEditorWorkspace,
   seedEditorWindow,
+  splitActivePane,
 } from "./support/editorWorkspace.js";
 
 const MUTATION_HEADERS = { "X-Keiko-CSRF": "1" };
@@ -553,6 +555,115 @@ test("round-trips browser undo/redo across an agent-applied edit (#1394 pin)", a
   await editorInput.focus();
   await page.keyboard.press(`${undoModifier}+Shift+KeyZ`);
   await expect.poll(() => readEditorBuffer(editorWindow)).toBe(normalizeBuffer(ACCEPTED_CONTENT));
+
+  expect(pageErrors).toEqual([]);
+});
+
+// Pin (#2122 / ADR-0125): a split editor holds exactly ONE live agent session, and the SSE bridge
+// subscribes to exactly that one. Two live sessions on one workspace would let an agent action land
+// in whichever buffer answered first rather than in the pane the human is looking at.
+//
+// This is the surviving half of the retired editor-agent-docking-2122 suite. Its other journeys
+// registered a browser-supplied Authority Envelope through `POST /api/editor/agent/authority` and
+// `/api/coding-workbench/autonomous-delivery/confirm` — routes #2256 deliberately unmounted
+// (routes.test.ts pins that they stay unmounted), so they asserted a capability the product no
+// longer has. See `docs/keiko-editor/2091-agent-docking-demo.md` for the one behaviour that leaves
+// end-to-end coverage with them, and why it cannot be relocated onto the current path.
+const SPLIT_WINDOW_ID = "editor-agent-pins-split";
+const SECOND_FILE = "src/second.ts";
+const SECOND_CONTENT = "export const second = 1;\n";
+
+async function liveEditorSessionIds(
+  request: APIRequestContext,
+  root: string,
+): Promise<readonly string[]> {
+  const response = await request.get("/api/editor/agent/sessions");
+  if (!response.ok()) return [];
+  const body = (await response.json()) as { sessions?: readonly unknown[] };
+  return (body.sessions ?? []).flatMap((candidate) =>
+    isRecord(candidate) &&
+    candidate.workspaceRoot === root &&
+    typeof candidate.sessionId === "string"
+      ? [candidate.sessionId]
+      : [],
+  );
+}
+
+function collectEventSessionSets(page: Page): string[][] {
+  const sessionSets: string[][] = [];
+  page.on("request", (browserRequest) => {
+    const url = new URL(browserRequest.url());
+    if (url.pathname === "/api/editor/agent/events") {
+      sessionSets.push(url.searchParams.getAll("sessionId"));
+    }
+  });
+  return sessionSets;
+}
+
+/**
+ * Exactly one live agent session for the workspace, and the SSE bridge subscribed to that same id.
+ *
+ * Reported as one object so a failure names which half broke — a bridge on a stale id reads very
+ * differently from a second live session, and a bare boolean would hide both.
+ */
+async function expectBridgeBoundToTheLiveSession(
+  request: APIRequestContext,
+  root: string,
+  eventSessionSets: readonly (readonly string[])[],
+): Promise<void> {
+  await expect
+    .poll(async () => {
+      const live = await liveEditorSessionIds(request, root);
+      const subscribed = eventSessionSets.at(-1) ?? [];
+      return {
+        live,
+        subscribed,
+        bound: live.length === 1 && subscribed.length === 1 && live[0] === subscribed[0],
+      };
+    })
+    .toMatchObject({ bound: true });
+}
+
+test("keeps exactly one live agent session across split panes (#2122 pin)", async ({
+  page,
+  request,
+}) => {
+  test.setTimeout(120_000);
+  // TWO open files, because a split MOVES the active tab into the new pane
+  // (`editorLayoutReducer`'s split-pane refuses to leave the source pane empty). A one-file seed
+  // makes the split a silent no-op and the pane assertion below the only thing that notices.
+  const { root } = createEditorWorkspace([
+    { path: RELATIVE_PATH, content: INITIAL_CONTENT },
+    { path: SECOND_FILE, content: SECOND_CONTENT },
+  ]);
+  await registerProject(request, root);
+  await seedEditorWindow(page, {
+    root,
+    active: RELATIVE_PATH,
+    openFiles: [RELATIVE_PATH, SECOND_FILE],
+    windowId: SPLIT_WINDOW_ID,
+    resetWorkspace: true,
+  });
+  const eventSessionSets = collectEventSessionSets(page);
+  const pageErrors = collectPageErrors(page);
+
+  await page.goto("/");
+  const workspace = await openEditorWorkspace(page);
+  await splitActivePane(workspace, RELATIVE_PATH, "right");
+  const panes = workspace.locator(EDITOR_SELECTORS.pane);
+  await expect(panes).toHaveCount(2);
+
+  // Two panes, one live session — and the SSE bridge subscribed to exactly THAT one. Counting each
+  // side separately is not the same claim: one live session and one subscribed session are both
+  // satisfied when the bridge is listening to a session the editor is not running, which is the
+  // split-brain this pin exists to catch. So the ids are compared, not just their cardinality.
+  await expectBridgeBoundToTheLiveSession(request, root, eventSessionSets);
+
+  // Focusing the other pane keeps that binding. Both panes stay mounted throughout, so this is the
+  // two-pane steady state rather than a teardown artefact.
+  await panes.nth(0).locator(EDITOR_SELECTORS.monaco).first().click();
+  await expect(panes).toHaveCount(2);
+  await expectBridgeBoundToTheLiveSession(request, root, eventSessionSets);
 
   expect(pageErrors).toEqual([]);
 });

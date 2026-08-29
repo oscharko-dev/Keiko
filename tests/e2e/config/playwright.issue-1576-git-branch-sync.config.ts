@@ -1,6 +1,6 @@
 import { defineConfig, devices } from "@playwright/test";
-import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { e2eStateDir } from "../support/e2e-state-dir.js";
 
 // Issue #1576 (Epic #1571) — browser evidence for the Git client Branch, History, and
 // Sync workflows. The harness builds the packaged CLI, boots the real UI server, seeds the real
@@ -11,7 +11,7 @@ import { join } from "node:path";
 const root = process.cwd();
 const publicPort = Number(process.env.KEIKO_E2E_UI_PORT ?? "32201");
 const stateId = process.env.GITHUB_RUN_ID ?? `issue-1576-git-branch-sync-${String(process.pid)}`;
-const stateDir = process.env.KEIKO_E2E_STATE_DIR ?? join(tmpdir(), "keiko-e2e", stateId);
+const stateDir = e2eStateDir(stateId);
 const fixtureConfigPath = join(root, "tests", "e2e", "fixtures", "keiko.e2e.config.json");
 const runtimeConfigPath = join(stateDir, "keiko.e2e.config.json");
 const prepareRuntimeConfig = [

@@ -78,14 +78,25 @@ async function waitFor<T>(
   return value;
 }
 
+/**
+ * The runner rewrites this file in place, so a read can land mid-write and see a truncated
+ * document. That is transient and indistinguishable from "not updated yet", so it has to keep the
+ * caller's poll going instead of throwing a bare `SyntaxError` out of it — a partial read failed
+ * the coverage shard while the runner under test was behaving correctly. Nothing is swallowed: a
+ * file that never becomes parseable still fails, through the caller's own deadline and message.
+ */
 function readRunnerState(stateFile: string): {
   readonly children?: readonly unknown[];
   readonly nextPort?: unknown;
 } {
-  return JSON.parse(readFileSync(stateFile, "utf8")) as {
-    readonly children?: readonly unknown[];
-    readonly nextPort?: unknown;
-  };
+  try {
+    return JSON.parse(readFileSync(stateFile, "utf8")) as {
+      readonly children?: readonly unknown[];
+      readonly nextPort?: unknown;
+    };
+  } catch {
+    return {};
+  }
 }
 
 function childProcessIds(pid: number): readonly number[] {
@@ -280,7 +291,12 @@ describe("scripts/dev-runner.mjs readiness gate", () => {
         PUBLIC_READY_TIMEOUT_MS,
         "public proxy did not become ready",
       );
-      const initialState = readRunnerState(stateFile);
+      const initialState = await waitFor(
+        () => readRunnerState(stateFile),
+        (state) => Number.isInteger(state.children?.at(-1)),
+        PUBLIC_READY_TIMEOUT_MS,
+        "dev runner state never reported a Next.js child",
+      );
       const nextPid = initialState.children?.at(-1);
       expect(Number.isInteger(nextPid)).toBe(true);
       const runnerPid = child.pid;

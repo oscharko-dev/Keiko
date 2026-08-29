@@ -3,7 +3,7 @@ import { access, readFile, rm } from "node:fs/promises";
 import { createServer, request } from "node:http";
 import { connect } from "node:net";
 import { createRequire } from "node:module";
-import { mkdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { clearTimeout, setTimeout } from "node:timers";
 import { setTimeout as sleep } from "node:timers/promises";
@@ -319,10 +319,31 @@ export async function preflightNextRespawn(currentPort, lockPath, overrides = {}
   return { nextPort: selectedPort, reselected: selectedPort !== currentPort };
 }
 
-function writeState(extra = {}) {
-  mkdirSync(dirname(pidFile), { recursive: true });
-  writeFileSync(
-    pidFile,
+const defaultAtomicFileOperations = { renameSync, rmSync, writeFileSync };
+
+function removeIncompleteAtomicWrite(operations, temporaryPath) {
+  try {
+    operations.rmSync(temporaryPath, { force: true });
+  } catch {
+    console.error("[dev] failed to remove an incomplete state-file replacement.");
+  }
+}
+
+export function writeAtomicUtf8File(path, contents, operations = defaultAtomicFileOperations) {
+  const temporaryPath = `${path}.${String(process.pid)}.tmp`;
+  try {
+    operations.writeFileSync(temporaryPath, contents, "utf8");
+    operations.renameSync(temporaryPath, path);
+  } catch (error) {
+    removeIncompleteAtomicWrite(operations, temporaryPath);
+    throw error;
+  }
+}
+
+export function writeState(extra = {}, stateFile = pidFile) {
+  mkdirSync(dirname(stateFile), { recursive: true });
+  writeAtomicUtf8File(
+    stateFile,
     `${JSON.stringify(
       {
         runnerPid: process.pid,
@@ -341,7 +362,6 @@ function writeState(extra = {}) {
       null,
       2,
     )}\n`,
-    "utf8",
   );
 }
 
