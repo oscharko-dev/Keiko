@@ -1254,15 +1254,16 @@ function stubClosureEdge(state, requirement, version, name = requirement.name) {
 }
 
 /**
- * A required edge withdraws a stub an optional edge left behind: serving an inert package for a
- * genuinely required dependency would let the smoke pass without it.
+ * A required edge withdraws the stub an optional edge left behind AT THAT VERSION: serving an inert
+ * package for a genuinely required dependency would let the smoke pass without it.
+ *
+ * Only that one version. Stubs are keyed by name AND version, and a recursive child traversal can
+ * legitimately mint several for one name — a transitive optional descriptor does not pass through
+ * the supersede rule that drops a name's optional entries at the root. Deleting every version
+ * removed a stub some other descriptor still needs, leaving Yarn with no candidate for it.
  */
-function withdrawClosureStub(state, name) {
-  // Iterating the live key iterator is safe here because only the key just visited is deleted;
-  // a Map iterator skips entries removed behind it and revisits nothing.
-  for (const key of state.stubs.keys()) {
-    if (key.startsWith(`${name}@`)) state.stubs.delete(key);
-  }
+function withdrawClosureStub(state, name, version) {
+  state.stubs.delete(`${name}@${String(version)}`);
 }
 
 function visitClosureEdge(state, originPath, requirement) {
@@ -1281,7 +1282,7 @@ function visitClosureEdge(state, originPath, requirement) {
     stubClosureEdge(state, requirement, minimumSatisfyingVersion(requirement.range), identity.name);
     return;
   }
-  if (requirement.optional !== true) withdrawClosureStub(state, identity.name);
+  if (requirement.optional !== true) withdrawClosureStub(state, identity.name, identity.version);
   seedClosurePackage(state, edge, entry, identity, requirement);
 }
 
@@ -1696,17 +1697,21 @@ function isReusableSeedEntry(destination, entry) {
  * The lockfile criterion subsumes the suffix one: a host binding is scoped to this host by its own
  * `os`/`cpu`, so it is still caught, and a foreign binding is still shareable.
  */
-function isNonDurableStub(name, entry) {
+function isNonDurableStub(name, entry, lockfilePath) {
   if (!isStubEntry(entry)) return false;
   // The UNION of both criteria, because neither covers the other. The lockfile answers for a pinned
   // package including a platform-agnostic parent, but says nothing about a name it does not pin;
   // the suffix answers for this host's own binding by name, whether pinned or not. Using only the
   // lockfile let an unpinned host-binding stub through, which the suffix rule had been catching.
   if (hostBindingSuffixes().some((suffix) => name.endsWith(suffix))) return true;
-  return lockfilePackageInstallsOnHost(name, entry.version, join(repoRoot, "package-lock.json"));
+  return lockfilePackageInstallsOnHost(name, entry.version, lockfilePath);
 }
 
-export function writeSeedIndex(destination, seeded) {
+export function writeSeedIndex(
+  destination,
+  seeded,
+  lockfilePath = join(repoRoot, "package-lock.json"),
+) {
   // Published by rename so a concurrent reader never sees a half-written file: two smoke commands
   // share this path within one checkout, and an interrupted write would otherwise leave malformed
   // JSON that the next invocation cannot parse.
@@ -1730,7 +1735,9 @@ export function writeSeedIndex(destination, seeded) {
   // or torn one is rejected and re-packed.
   const serializable = {};
   for (const [name, versions] of seeded) {
-    const durable = [...versions].filter(([, entry]) => !isNonDurableStub(name, entry));
+    const durable = [...versions].filter(
+      ([, entry]) => !isNonDurableStub(name, entry, lockfilePath),
+    );
     if (durable.length === 0) continue;
     serializable[name] = Object.fromEntries(
       durable.map(([version, entry]) => [
@@ -1783,7 +1790,7 @@ export function seedVendoredRegistry(
   for (const { entry, pack } of pending) {
     if (shouldSeed(seeded, entry)) seedEntry(seeded, entry, pack(entry, destination));
   }
-  writeSeedIndex(destination, seeded);
+  writeSeedIndex(destination, seeded, lockfilePath);
   assertHostBindingsAreReal(seeded);
   // Broader than the check above and derived from a different source: that one asks whether the
   // host's own BINDING resolved to a stub, from the running platform triple; this one asks whether

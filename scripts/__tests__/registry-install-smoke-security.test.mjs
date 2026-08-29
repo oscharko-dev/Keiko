@@ -1039,6 +1039,77 @@ describe("installable package smoke optional-dependency coverage", () => {
     }
   });
 
+  // A required edge withdraws the stub AT ITS OWN VERSION, not every version under the name. A
+  // transitive optional descriptor does not pass through the supersede rule that drops a name's
+  // optional entries at the root, so both can legitimately coexist. `alpha` sorts before `zeta` on
+  // purpose: the optional stub must already exist when the required edge is visited, or the old
+  // delete-everything behaviour would be indistinguishable from the fix.
+  it("keeps an optional stub at another version when a required edge resolves", () => {
+    const root = mkdtempSync(join(tmpdir(), "keiko-withdraw-"));
+    try {
+      for (const [dir, manifest] of [
+        ["alpha", { name: "alpha", version: "1.0.0", optionalDependencies: { zeta: "^1.0.0" } }],
+        ["zeta", { name: "zeta", version: "2.0.0" }],
+      ]) {
+        mkdirSync(join(root, "node_modules", dir), { recursive: true });
+        writeFileSync(
+          join(root, "node_modules", dir, "package.json"),
+          JSON.stringify(manifest),
+          "utf8",
+        );
+      }
+      writeFixtureLockfile(root, {
+        // `alpha`'s own nested copy: pinned, absent, and foreign — the stub the withdrawal used to
+        // delete along with the version it was actually withdrawing.
+        "node_modules/alpha/node_modules/zeta": {
+          version: "1.0.0",
+          os: ["keiko-smoke-never-matches"],
+        },
+      });
+
+      const closure = resolveVendorClosure(
+        join(root, "node_modules"),
+        { dependencies: { alpha: "^1.0.0", zeta: "^2.0.0" }, bundleDependencies: [] },
+        root,
+        join(root, "package-lock.json"),
+      );
+      expect(closure.stubs).toEqual([{ name: "zeta", version: "1.0.0" }]);
+      expect(closure.packages.map(({ name, version }) => `${name}@${version}`).sort()).toEqual([
+        "alpha@1.0.0",
+        "zeta@2.0.0",
+      ]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  // The persistence rule must read the SAME lockfile the rest of the seed did. Reading the
+  // repository's while the closure read the fixture's judged one tree by another's pins — and the
+  // repository pins nothing under this name, so an installs-here stub was published as durable.
+  it("judges stub persistence by the lockfile it was given, not the repository's", () => {
+    const seedDir = mkdtempSync(join(tmpdir(), "keiko-seed-lockfile-"));
+    const tree = mkdtempSync(join(tmpdir(), "keiko-seed-tree-"));
+    const name = "keiko-smoke-agnostic-fixture";
+    try {
+      mkdirSync(join(tree, "node_modules"), { recursive: true });
+      // No `os`/`cpu`: this package installs on every host, so its stub must never be published.
+      writeFixtureLockfile(tree, { [`node_modules/${name}`]: { version: "1.0.0" } });
+      const seeded = new Map([
+        [
+          name,
+          new Map([["1.0.0", { manifest: stubManifest(name, "1.0.0"), name, version: "1.0.0" }]]),
+        ],
+      ]);
+
+      writeSeedIndex(seedDir, seeded, join(tree, "package-lock.json"));
+      const written = JSON.parse(readFileSync(join(seedDir, "seed-index.json"), "utf8"));
+      expect(written[name]).toBeUndefined();
+    } finally {
+      rmSync(seedDir, { recursive: true, force: true });
+      rmSync(tree, { recursive: true, force: true });
+    }
+  });
+
   // An `npm:` alias declares one name and the lockfile records another. Keying the stub by the
   // ALIAS seeded a packument no consumer resolves, and `assertStubsAreForeignOnly` then rejected it
   // as unpinned — the lockfile holds no record under that name — so a valid closure failed closed.
