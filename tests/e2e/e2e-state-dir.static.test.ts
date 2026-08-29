@@ -46,6 +46,13 @@ const CONSOLIDATION_EXCEPTIONS = [
   // ruler. Not worth it; the clause below still holds them to the invariant that matters.
   "playwright.editor-performance.config.ts",
   "playwright.issue-2348-editor-debugging.config.ts",
+  // Same trade for the workspace ruler: this file is a member of
+  // `WORKSPACE_PERFORMANCE_MEASUREMENT_TOOLCHAIN_PATHS`, whose digest is bound into the committed
+  // workspace performance evidence. Routing it through the helper changes no measured behaviour —
+  // it already resolves the temp root exactly as the helper does — but it does move the digest,
+  // which fails `perf-evidence` with "stale workspace measurement toolchain evidence" and can only
+  // be answered by re-measuring on the reference environment.
+  "playwright.workspace-performance.config.ts",
 ] as const;
 
 describe("E2E state directory (#2955 follow-up)", () => {
