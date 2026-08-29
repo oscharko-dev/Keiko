@@ -63,6 +63,17 @@ describe("report-infra-failure-observation", () => {
     ).rejects.toThrow("has no workflow_runs");
   });
 
+  it("rejects a workflow-run entry without a terminal conclusion", async () => {
+    const fetch = vi.fn().mockResolvedValue(page([{ event: "workflow_run" }]));
+
+    await expect(
+      observeInfrastructureRuns(
+        { from: "2026-08-25", to: "2026-08-25", repo: "oscharko-dev/Keiko" },
+        { fetch, token: "test-token" },
+      ),
+    ).rejects.toThrow("has no workflow_runs");
+  });
+
   it("rejects hostile pagination links before sending the token to another endpoint", async () => {
     const fetch = vi
       .fn()

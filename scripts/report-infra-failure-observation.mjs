@@ -9,6 +9,16 @@
 const DATE = /^\d{4}-\d{2}-\d{2}$/u;
 const DEFAULT_REPOSITORY = "oscharko-dev/Keiko";
 const WORKFLOW = "infra-failure-retry.yml";
+const WORKFLOW_RUN_CONCLUSIONS = new Set([
+  "action_required",
+  "cancelled",
+  "failure",
+  "neutral",
+  "skipped",
+  "stale",
+  "success",
+  "timed_out",
+]);
 
 function fail(message) {
   throw new Error(message);
@@ -71,6 +81,16 @@ function nextLinkTarget(link) {
   return undefined;
 }
 
+function hasValidWorkflowRunEntry(entry) {
+  if (entry === null || typeof entry !== "object" || typeof entry.event !== "string") {
+    return false;
+  }
+  return (
+    entry.event !== "workflow_run" ||
+    (typeof entry.conclusion === "string" && WORKFLOW_RUN_CONCLUSIONS.has(entry.conclusion))
+  );
+}
+
 async function actionRunsPage(fetchImpl, token, url, date) {
   const response = await fetchImpl(url, {
     headers: { Accept: "application/vnd.github+json", Authorization: `Bearer ${token}` },
@@ -83,7 +103,8 @@ async function actionRunsPage(fetchImpl, token, url, date) {
     typeof payload !== "object" ||
     !Array.isArray(payload.workflow_runs) ||
     !Number.isSafeInteger(payload.total_count) ||
-    payload.total_count < 0
+    payload.total_count < 0 ||
+    !payload.workflow_runs.every(hasValidWorkflowRunEntry)
   ) {
     fail(`GitHub Actions query for ${date} has no workflow_runs`);
   }
