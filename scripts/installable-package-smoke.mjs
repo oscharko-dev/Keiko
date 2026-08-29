@@ -1238,7 +1238,9 @@ function stubClosureEdge(state, requirement, version) {
  * genuinely required dependency would let the smoke pass without it.
  */
 function withdrawClosureStub(state, name) {
-  for (const key of [...state.stubs.keys()]) {
+  // Iterating the live key iterator is safe here because only the key just visited is deleted;
+  // a Map iterator skips entries removed behind it and revisits nothing.
+  for (const key of state.stubs.keys()) {
     if (key.startsWith(`${name}@`)) state.stubs.delete(key);
   }
 }
@@ -1534,6 +1536,11 @@ export function lockfilePinsPackage(name, version, lockfilePath) {
   return lockfilePlatformScope(name, version, lockfilePath) !== undefined;
 }
 
+/** `name@version` pairs, comma-joined. Extracted so the failure messages stay unnested (S4624). */
+function formatSpecifiers(entries) {
+  return entries.map(({ name, version }) => `${name}@${version}`).join(", ");
+}
+
 export function assertStubsAreForeignOnly(
   seeded,
   lockfilePath = join(repoRoot, "package-lock.json"),
@@ -1548,7 +1555,7 @@ export function assertStubsAreForeignOnly(
     fail(
       `these packages install on this host but were seeded as inert stubs, so the Yarn arm would ` +
         `resolve them and link nothing: ` +
-        `${installsHere.map(({ name, version }) => `${name}@${version}`).join(", ")} — run ` +
+        `${formatSpecifiers(installsHere)} — run ` +
         `\`npm install\` before the installable-package smoke`,
     );
   }
@@ -1563,7 +1570,7 @@ export function assertStubsAreForeignOnly(
     fail(
       `these packages were seeded as inert stubs but package-lock.json pins no such version, so ` +
         `nothing proves them foreign to this host: ` +
-        `${unpinned.map(({ name, version }) => `${name}@${version}`).join(", ")} — regenerate the ` +
+        `${formatSpecifiers(unpinned)} — regenerate the ` +
         `vendored closure`,
     );
   }
