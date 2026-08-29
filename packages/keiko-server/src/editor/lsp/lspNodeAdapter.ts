@@ -336,6 +336,19 @@ function wrapChild(child: ChildProcess): ReturnType<LspSpawnFn> {
         safeKill(child, signal);
         return;
       }
+      // The SAME guard `killGroup` carries in keiko-tools' exec.ts, and this twin was missing it
+      // even though the comment on nodeGroupKill above already claims "the same defect and the same
+      // fix". Node releases the child handle at 'exit', so once the child has left the process table
+      // the OS may REUSE its pid — and on win32 nodeGroupKill's first act is
+      // `taskkill /PID <pid> /T /F`, which would then tear down an unrelated process tree on the
+      // customer's machine. Every crash-then-dispose sequence reaches this path.
+      //
+      // `!= null` (not `!== null`) so a test double lacking these fields still reads as running,
+      // matching exec.ts's childExited().
+      if (child.exitCode != null || child.signalCode != null) {
+        logLspProcessTerminated(pid, signal, "not-attempted");
+        return;
+      }
       logLspProcessTerminated(pid, signal, nodeGroupKill(pid, child, signal));
     },
     onExit: (callback): void => {

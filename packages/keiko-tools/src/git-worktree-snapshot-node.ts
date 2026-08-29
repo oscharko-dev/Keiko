@@ -311,6 +311,22 @@ export async function readStagedConflictMarkerFileCount(
   } catch {
     throw new GitWorktreeReadError("git diff --check failed to run");
   }
+  // TRUNCATION FIRST, before the exit code is read — this reader FAILED OPEN without it, and it
+  // guards whether a commit may proceed.
+  //
+  // When the output cap trips, `runCommand` kills git and returns `stdout` replaced by the literal
+  // "[TRUNCATED OUTPUT REDACTED]". That placeholder is non-empty, so the emptiness check below lets
+  // it through, and it matches no `path:line: leftover conflict marker` line, so the count came back
+  // as 0 — indistinguishable from "this staged changeset is clean". `conflictMarkerBlockResult` then
+  // allowed the commit and baked the marker lines into history.
+  //
+  // Checked BEFORE `exitCode`, because a truncated run can also report 0: either way the output is
+  // incomplete, so no count can be derived from it and the only honest answer is to refuse.
+  if (result.truncated) {
+    throw new GitWorktreeReadError(
+      "git diff --check output was truncated; the conflict-marker count cannot be trusted",
+    );
+  }
   if (result.exitCode === 0) return 0;
   // `--check` exits non-zero both when it reports a problem (its diagnostic lines go to stdout, e.g.
   // "path:line: leftover conflict marker.") AND on a genuine command/environment failure (e.g. "fatal:

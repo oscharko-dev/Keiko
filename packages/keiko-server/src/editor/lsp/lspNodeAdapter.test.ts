@@ -484,6 +484,48 @@ describe("defaultLspSpawnFn — activity-log evidence (AGENTS.md §8 Rule 1)", (
     expect(redacted.childPid).toBe(extra.childPid);
   });
 
+  // The LSP twin of the reused-pid window closed in keiko-tools' exec.ts (PR #3355 review, P1).
+  // `nodeGroupKill`'s own comment claims "the same defect and the same fix as runCommand's
+  // killGroup", but the guard was missing here: Node releases the child handle at 'exit', so once
+  // the process has left the table the OS may REUSE its pid — and nodeGroupKill's first act is
+  // `process.kill(-pid, …)` on POSIX and `taskkill /PID <pid> /T /F` on win32, either of which can
+  // then reach an unrelated tree. Every crash-then-dispose sequence takes this path.
+  //
+  // Asserts that NOTHING IS SIGNALLED, not the evidence value: on this POSIX host the disposition
+  // reads "not-attempted" whether or not the guard exists (the POSIX branch returns that either
+  // way), so an evidence-only assertion passes with the guard removed — it was written that way
+  // first and the sabotage run caught it.
+  it("does not signal at all once the child has exited", async () => {
+    const events = captureLog();
+    const binDir = makeTempDir("keiko-lsp-exited-");
+    const executable = writeExecutableFixture(binDir, "fakelsp");
+
+    const handle = defaultLspSpawnFn(executable, [], { PATH: "/usr/bin" }, binDir);
+    await new Promise<void>((resolve) => {
+      handle.onExit(() => {
+        resolve();
+      });
+    });
+
+    const nativeKill = process.kill.bind(process);
+    const signalled: number[] = [];
+    process.kill = (pid: number, signal?: string | number): true => {
+      signalled.push(pid);
+      return nativeKill(pid, signal);
+    };
+    try {
+      // The child is demonstrably gone; disposal still calls kill().
+      handle.kill("SIGTERM");
+    } finally {
+      process.kill = nativeKill;
+    }
+
+    // No raw-pid signal may leave this path — that pid may already belong to someone else.
+    expect(signalled).toEqual([]);
+    const terminated = events.filter((event) => event.op === "lsp.process.terminated");
+    expect(terminated.at(-1)?.extra?.windowsTreeKill).toBe("not-attempted");
+  });
+
   it("logs lsp.spawn.failed with the closed EXECUTABLE_NOT_FOUND code for a non-absolute executable", () => {
     const events = captureLog();
 
