@@ -38,6 +38,7 @@ import {
   tabLabels,
   typeIntoActiveEditor,
 } from "./support/editorWorkspace.js";
+import { editorModifier } from "./support/editor-chord.js";
 
 const APP_FILE = "src/App.tsx";
 const HELPER_FILE = "src/helper.ts";
@@ -246,7 +247,13 @@ async function revealLine(scope: Locator, line: Locator): Promise<void> {
     // sit outside the rendered viewport entirely and never appear on its own.
   }
   await scope.locator(".monaco-editor").first().click();
-  await line.page().keyboard.press("ControlOrMeta+End");
+  // Monaco binds end-of-buffer from the platform the PAGE reports, so the chord is derived from the
+  // page too. Playwright's "ControlOrMeta" shorthand resolves per the NODE host: on a macOS machine
+  // it sends Meta while the device preset makes the page report Windows and Monaco listens for
+  // Ctrl. The reveal then silently does nothing and the failure appears later as "line still absent
+  // after the end-of-buffer reveal" — naming neither the chord nor the platform.
+  const page = line.page();
+  await page.keyboard.press(`${await editorModifier(page)}+End`);
   const rendered = await scope.locator(".monaco-editor .view-lines .view-line").allInnerTexts();
   await expect(
     line,

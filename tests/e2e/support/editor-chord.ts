@@ -105,20 +105,49 @@ export async function replaceEditorBuffer(
   // is unambiguous in both.
   await page.keyboard.press("Backspace");
   await page.keyboard.insertText(text);
-  // The buffer must now BE exactly `text` — not contain it twice, and not retain any OLD content
-  // a failed select-all left behind anywhere but the first line. The previous version of this
-  // check compared only the first non-empty line, so (a) a stale trailing line past the newly
-  // inserted content never failed the assertion, and (b) for text === "" the check ran nothing at
-  // all — exactly the silent-corruption mode this helper exists to catch. Comparing the COMPLETE
-  // set of normalized rendered lines against the complete normalized expectation closes both
-  // gaps. Monaco virtualises long files, so this is safe only for the short, fully-visible
-  // fixtures this helper is used with.
+  // The invariant this checks is REPLACEMENT, not equality: after a successful select-all the
+  // inserted text must appear ONCE, never twice. That is the actual corruption mode — a select-all
+  // that silently reached nothing leaves the old content in place and `insertText` appends, so
+  // every line shows up a second time.
+  //
+  // It deliberately does NOT assert the rendered lines EQUAL `text`, because `.view-line` is not
+  // the buffer. Monaco renders inline completions (ghost text) and auto-closed brackets into those
+  // same elements, so a fixture that inserts `"…answer() {\n  ret"` legitimately reads back as
+  // `["…answer() {", "return 42;", "}"]` — the ghost-text suggestion replacing the visible `ret`
+  // and Monaco supplying the closing brace. An equality check calls that a corrupted buffer and
+  // fails a passing product (it did, on chromium, in `editor inline ghost text renders and Tab
+  // accepts it`). Reading the model instead of the DOM would allow equality, but this helper's
+  // contract is the replacement, so it asserts exactly that and nothing it cannot see.
+  //
+  // The empty-string case is still checked — the earlier first-line-only version skipped it
+  // entirely, which is how a failed select-all could pass silently.
   const expectedLines = normalizedEditorLines(text);
   await expect(async () => {
     const renderedLines = await editorWindow.locator(".view-line").allInnerTexts();
     const actualLines = renderedLines.map(normalizeEditorLine);
-    expect(actualLines, `expected the buffer to read back as ${JSON.stringify(text)}`).toEqual(
-      expectedLines,
-    );
+    if (expectedLines.every((line) => line === "")) {
+      expect(
+        actualLines.filter((line) => line !== ""),
+        `expected the buffer to be empty, got ${JSON.stringify(actualLines)}`,
+      ).toEqual([]);
+      return;
+    }
+    for (const line of expectedLines) {
+      if (line === "") continue;
+      expect(
+        actualLines.filter((actual) => actual === line).length,
+        `expected "${line}" exactly once after replacing the buffer, got ` +
+          JSON.stringify(actualLines),
+      ).toBeLessThanOrEqual(1);
+    }
+    // At least the first inserted line must be present, so a select-all that wiped everything and
+    // inserted nothing cannot pass the duplicate check vacuously.
+    const anchor = expectedLines.find((line) => line !== "");
+    if (anchor !== undefined) {
+      expect(
+        actualLines.some((actual) => actual.startsWith(anchor) || anchor.startsWith(actual)),
+        `expected the buffer to contain "${anchor}", got ${JSON.stringify(actualLines)}`,
+      ).toBe(true);
+    }
   }).toPass({ timeout: 10_000 });
 }

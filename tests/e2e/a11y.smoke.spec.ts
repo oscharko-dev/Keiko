@@ -197,6 +197,18 @@ const openChatWindow: SurfaceOpener = async (page, request, theme) => {
 const openCommandPalette: SurfaceOpener = async (page, _request, theme) => {
   await shellReady(page, theme);
   // The product's own shortcut for `quick-access.commands` (CtrlOrMeta+Shift+P) — no test-only hook.
+  //
+  // "ControlOrMeta" is CORRECT here and must NOT be swapped for `editorModifier`, even though that
+  // helper is the right answer for Monaco chords elsewhere in this suite. The two read different
+  // sources, and Playwright's device presets make them disagree:
+  //   - Monaco derives its bindings from `navigator.userAgent`, which the presets FORCE to Windows
+  //     on every host — so Monaco listens for Ctrl, and `editorModifier` (userAgent-based) matches.
+  //   - Keiko's own `useKeyboardShortcuts` derives from `navigator.platform`, which the presets do
+  //     NOT override — it still reports "MacIntel" on a Mac (measured, both engines) — so the
+  //     product listens for metaKey there, and Playwright's host-derived "ControlOrMeta" sends
+  //     exactly that.
+  // Using `editorModifier` here sends Control to a product waiting for Meta: the palette never
+  // opens. Verified by running it both ways on this macOS host — shorthand passes, helper fails.
   await page.keyboard.press("ControlOrMeta+Shift+P");
   const palette = page.getByRole("dialog", { name: "Quick access" });
   await expect(palette).toBeVisible();
