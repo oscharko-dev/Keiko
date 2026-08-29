@@ -365,7 +365,7 @@
     {
       "op": "memory-vault.store.opened",
       "category": "memory",
-      "site": "packages/keiko-memory-vault/src/vault.ts:421",
+      "site": "packages/keiko-memory-vault/src/vault.ts:422",
       "package": "keiko-memory-vault"
     },
     {
@@ -647,43 +647,43 @@
     {
       "op": "http.gateway.egress.planned",
       "category": "http",
-      "site": "packages/keiko-model-gateway/src/http.ts:1382",
+      "site": "packages/keiko-model-gateway/src/http.ts:1350",
       "package": "keiko-model-gateway"
     },
     {
       "op": "http.gateway.fetch.completed",
       "category": "http",
-      "site": "packages/keiko-model-gateway/src/http.ts:1522",
+      "site": "packages/keiko-model-gateway/src/http.ts:1484",
       "package": "keiko-model-gateway"
     },
     {
       "op": "http.gateway.fetch.failed",
       "category": "http",
-      "site": "packages/keiko-model-gateway/src/http.ts:1555",
+      "site": "packages/keiko-model-gateway/src/http.ts:1516",
       "package": "keiko-model-gateway"
     },
     {
       "op": "http.gateway.fetch.started",
       "category": "http",
-      "site": "packages/keiko-model-gateway/src/http.ts:1486",
+      "site": "packages/keiko-model-gateway/src/http.ts:1448",
       "package": "keiko-model-gateway"
     },
     {
       "op": "http.gateway.tls.ca-bundle-fallback",
       "category": "http",
-      "site": "packages/keiko-model-gateway/src/http.ts:1242",
+      "site": "packages/keiko-model-gateway/src/http.ts:1212",
       "package": "keiko-model-gateway"
     },
     {
       "op": "http.gateway.tls.trust-failed",
       "category": "http",
-      "site": "packages/keiko-model-gateway/src/http.ts:1210",
+      "site": "packages/keiko-model-gateway/src/http.ts:1180",
       "package": "keiko-model-gateway"
     },
     {
       "op": "http.gateway.tls.trust-failed",
       "category": "http",
-      "site": "packages/keiko-model-gateway/src/http.ts:1252",
+      "site": "packages/keiko-model-gateway/src/http.ts:1222",
       "package": "keiko-model-gateway"
     },
     {
@@ -845,7 +845,7 @@
     {
       "op": "gateway.tool-calling.verification",
       "category": "gateway",
-      "site": "packages/keiko-server/src/gateway-setup.ts:6293",
+      "site": "packages/keiko-server/src/gateway-setup.ts:6336",
       "package": "keiko-server"
     },
     {
