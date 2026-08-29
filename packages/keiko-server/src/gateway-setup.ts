@@ -4938,6 +4938,33 @@ function reportLoopbackTargetAccepted(
   });
 }
 
+// Isolates the chat-smoke-test call from verifySetupCandidate: on a temporary gateway failure,
+// the caller must defer to a retry rather than fail the setup outright, replaying the exact
+// verified-setup construction it would have used had the smoke test itself succeeded.
+async function admitChatCandidatesOrDefer(
+  input: SetupVerificationInput,
+  candidateModels: SetupCandidateModels,
+  admittedModels: SetupCandidateModels,
+  candidateConfig: ReturnType<typeof probeConfigForModels>,
+  embeddingAdmission: EmbeddingAdmission,
+): Promise<ChatAdmission> {
+  try {
+    return await admitChatCandidates(input, candidateModels, candidateConfig);
+  } catch (error) {
+    if (!temporaryGatewaySetupFailure(error)) throw error;
+    throw new DeferredTemporaryChatAdmission(error, () =>
+      verifiedSetupFromChatAdmission(
+        input,
+        candidateModels,
+        admittedModels,
+        candidateConfig,
+        embeddingAdmission,
+        temporaryChatAdmission(candidateModels),
+      ),
+    );
+  }
+}
+
 async function verifySetupCandidate(input: SetupVerificationInput): Promise<VerifiedSetup> {
   // Defence-in-depth: never send the credential to a candidate URL that has not passed the same
   // scheme/credential/loopback validation as the originally submitted base URL.
@@ -4968,22 +4995,13 @@ async function verifySetupCandidate(input: SetupVerificationInput): Promise<Veri
     candidateModels.unsupportedModels ?? [],
     embeddingAdmission,
   );
-  let chatAdmission: ChatAdmission;
-  try {
-    chatAdmission = await admitChatCandidates(input, candidateModels, candidateConfig);
-  } catch (error) {
-    if (!temporaryGatewaySetupFailure(error)) throw error;
-    throw new DeferredTemporaryChatAdmission(error, () =>
-      verifiedSetupFromChatAdmission(
-        input,
-        candidateModels,
-        admittedModels,
-        candidateConfig,
-        embeddingAdmission,
-        temporaryChatAdmission(candidateModels),
-      ),
-    );
-  }
+  const chatAdmission = await admitChatCandidatesOrDefer(
+    input,
+    candidateModels,
+    admittedModels,
+    candidateConfig,
+    embeddingAdmission,
+  );
   return verifiedSetupFromChatAdmission(
     input,
     candidateModels,
