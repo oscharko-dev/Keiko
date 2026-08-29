@@ -35,7 +35,7 @@ const SOURCE_ROOTS = ["packages/keiko-ui/src", "packages/keiko-editor/src"];
 
 // pattern: matched against production source (tests excluded — they run in Node, not a browser).
 // Versions are the FIRST release of each engine that supports the API (MDN browser-compat-data).
-const GUARDED_APIS = [
+export const GUARDED_APIS = [
   {
     name: "Array.prototype.at",
     pattern: /\.at\(\s*-/,
@@ -93,7 +93,7 @@ function fail(message) {
   process.exitCode = 1;
 }
 
-function collectSources() {
+function collectSources(roots = SOURCE_ROOTS) {
   const files = [];
   const walk = (dir) => {
     for (const entry of readdirSync(dir, { withFileTypes: true })) {
@@ -105,7 +105,7 @@ function collectSources() {
       }
     }
   };
-  for (const root of SOURCE_ROOTS) walk(root);
+  for (const root of roots) walk(root);
   return files;
 }
 
@@ -142,12 +142,12 @@ export function parseDeclaredFloors(queries) {
 }
 
 // Reads the declaration, failing closed on anything unusable.
-function readDeclaredFloors() {
+function readDeclaredFloors(uiPackage = UI_PACKAGE) {
   let declared;
   try {
-    declared = JSON.parse(readFileSync(UI_PACKAGE, "utf8")).browserslist;
+    declared = JSON.parse(readFileSync(uiPackage, "utf8")).browserslist;
   } catch (error) {
-    fail(`${UI_PACKAGE} could not be read: ${String(error)}`);
+    fail(`${uiPackage} could not be read: ${String(error)}`);
     return undefined;
   }
   if (!Array.isArray(declared) || declared.length === 0) {
@@ -158,7 +158,7 @@ function readDeclaredFloors() {
   return floors === undefined ? undefined : { count: declared.length, floors };
 }
 
-function violationsFor(api, users, floors) {
+export function violationsFor(api, users, floors) {
   const found = [];
   for (const [engine, required] of Object.entries(api.minimum)) {
     const floor = floors.get(engine);
@@ -185,7 +185,7 @@ function violationsFor(api, users, floors) {
 // declared-supported browser cannot parse: not a missing feature but a blank page, and a failure
 // that no amount of API guarding below would catch. The two numbers previously lived in two files
 // with no link between them, so nothing noticed when one moved.
-function transpileFloorViolations(floors) {
+export function transpileFloorViolations(floors) {
   const found = [];
   for (const [engine, target] of Object.entries(TRANSPILE_TARGETS)) {
     const declared = floors.get(engine);
@@ -206,8 +206,21 @@ function transpileFloorViolations(floors) {
   return found;
 }
 
-function main() {
-  const declaration = readDeclaredFloors();
+// Every guarded API that the sources actually call, checked against the declared floors.
+function apiViolations(sources, floors) {
+  const violations = [];
+  for (const api of GUARDED_APIS) {
+    const users = sources.filter((path) => api.pattern.test(readFileSync(path, "utf8")));
+    if (users.length > 0) violations.push(...violationsFor(api, users, floors));
+  }
+  return violations;
+}
+
+// `uiPackage`/`sourceRoots` default to the production paths, so the CLI below is unchanged. They
+// exist so a test can drive every branch of this orchestration against a fixture instead of leaving
+// it to run only in CI, where a wrong branch shows up as a confusing pass rather than a failure.
+export function main({ uiPackage = UI_PACKAGE, sourceRoots = SOURCE_ROOTS } = {}) {
+  const declaration = readDeclaredFloors(uiPackage);
   if (declaration === undefined) return;
 
   const floorViolations = transpileFloorViolations(declaration.floors);
@@ -216,18 +229,13 @@ function main() {
     return;
   }
 
-  const sources = collectSources();
+  const sources = collectSources(sourceRoots);
   if (sources.length === 0) {
     fail("no UI sources were found — the scan would pass vacuously");
     return;
   }
 
-  const violations = [];
-  for (const api of GUARDED_APIS) {
-    const users = sources.filter((path) => api.pattern.test(readFileSync(path, "utf8")));
-    if (users.length > 0) violations.push(...violationsFor(api, users, declaration.floors));
-  }
-
+  const violations = apiViolations(sources, declaration.floors);
   if (violations.length > 0) {
     for (const violation of violations) fail(violation);
     console.error(
