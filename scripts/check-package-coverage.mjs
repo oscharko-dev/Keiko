@@ -224,6 +224,7 @@ export const PACKAGE_COVERAGE_INCLUDE = [
 export const PACKAGE_COVERAGE_EXCLUDE = [
   "packages/keiko-ui/**",
   "**/*.test.*",
+  "**/*.bench.*",
   "**/__tests__/**",
   "**/_support.ts",
   "**/test-support.ts",
