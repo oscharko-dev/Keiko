@@ -20,6 +20,12 @@
       "gates": ["dotnet-analyzers", "compiler-warnings-as-errors", "rfc3161-fixtures"]
     },
     {
+      "path": "native/setup-bootstrap/keiko-setup-bootstrap.c",
+      "language": "c",
+      "platforms": ["windows"],
+      "gates": ["compiler-warnings-as-errors", "native-static-analysis", "setup-bootstrap-behavior"]
+    },
+    {
       "path": "native/secure-workspace-read/secure_workspace_read.c",
       "language": "c",
       "platforms": ["macos", "windows"],
