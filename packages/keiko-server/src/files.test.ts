@@ -533,15 +533,20 @@ describe("desktop files browser", () => {
     // PR #3289 review (comment 3865167775): config.txt is a symlink whose target (.env) is a FILE
     // -- the mirror-image case of the directory-target collapse bug below. It must stay
     // `kind: "symlink"` too, never collapsed into `kind: "file"` just because its target is one.
+    // KEIKO-0873 (#3331, hardened in final review): a deny-listed but in-root target's real kind
+    // must not be disclosed either -- it is the same filesystem-enumeration oracle the out-of-root
+    // case closes, just reachable through a symlink aliasing a denied path instead of an absolute
+    // escape. symlinkTargetKind collapses to "unknown" here exactly as it does for an out-of-root
+    // target, while `readable: false` (already correct) is unchanged.
     expect(listing.entries.find((entry) => entry.name === "config.txt")).toMatchObject({
       kind: "symlink",
-      symlinkTargetKind: "file",
+      symlinkTargetKind: "unknown",
       readable: false,
     });
     // Same symlink-to-directory relabeling as the escape case above.
     expect(listing.entries.find((entry) => entry.name === "git-cache")).toMatchObject({
       kind: "symlink",
-      symlinkTargetKind: "directory",
+      symlinkTargetKind: "unknown",
       readable: false,
     });
 

@@ -552,11 +552,13 @@ async function classifySymlinkEntry(
     const contained = isContained(root, target);
     const denied = contained && pathIsDenied(rootRelativePosixPath(root, target));
     const readable = contained && !denied;
-    // KEIKO-0873 (#3331): an out-of-root target's real kind (file vs directory) must never be
-    // disclosed -- it is a one-bit filesystem-enumeration oracle for paths the workspace boundary
-    // is otherwise supposed to hide entirely. Collapse to "unknown" whenever `contained` is false,
-    // mirroring how `readable` already collapses to `false` for the same case.
-    const symlinkTargetKind: FilesSymlinkTargetKind = contained
+    // KEIKO-0873 (#3331, hardened in final review): an unreadable target's real kind (file vs
+    // directory) must never be disclosed -- it is a one-bit filesystem-enumeration oracle for
+    // paths the workspace boundary is otherwise supposed to hide entirely, whether the target is
+    // out-of-root or an in-root but deny-listed path (e.g. a symlink aliasing .env or .git/HEAD).
+    // Gate on `readable`, not just `contained`, so both cases collapse to "unknown" the same way
+    // `readable` itself already does.
+    const symlinkTargetKind: FilesSymlinkTargetKind = readable
       ? classifySymlinkTargetKind(targetStats)
       : "unknown";
     return { ...meta, kind: "symlink", symlinkTargetKind, readable };
