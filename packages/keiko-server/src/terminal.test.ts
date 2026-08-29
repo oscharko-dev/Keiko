@@ -18,6 +18,7 @@ import { createInMemoryEvidenceStore, type EvidenceStore } from "@oscharko-dev/k
 import { createInMemoryUiStore, type UiStore } from "./store/index.js";
 import { TerminalToolError } from "./terminal-errors.js";
 import type { SpawnFn } from "@oscharko-dev/keiko-tools";
+import type { ServerLogEvent } from "./observability/server-log.js";
 
 // ── Fake spawn helpers ─────────────────────────────────────────────────────────
 
@@ -413,6 +414,53 @@ describe("TerminalExecutionManager — cancel/timeout/concurrency", () => {
     expect(payload.timedOut).toBe(true);
     expect(payload.exitCode).toBeNull();
     expect(events.some((e) => e.kind === "execution-failed")).toBe(false);
+  });
+
+  // AGENTS.md §8 Rule 1 (PR reviewer finding): the keiko-tools win32 taskkill.exe tree-kill
+  // decision shipped with no activity-log evidence anywhere. Proves the wiring to this manager's
+  // injected activityLog port; the seam's own reason/pid/tree-kill-outcome matrix is covered by
+  // packages/keiko-tools/src/exec.test.ts.
+  it("logs command.terminated with the execution's own correlationId on timeout", async () => {
+    const logged: ServerLogEvent[] = [];
+    const manager = createTerminalExecutionManager({
+      store,
+      evidenceStore,
+      policy: {
+        envAllowlist: ["PATH"],
+        network: "inherit",
+        maxOutputBytes: 1024,
+        defaultTimeoutMs: 50,
+        terminationGraceMs: 10,
+      },
+      processEnv: { PATH: "/usr/bin" },
+      activityLog: { write: (event): void => void logged.push(event) },
+      runDeps: {
+        spawn: makeSpawn({ hangs: true }),
+        resolveExecutable: (command) => command,
+      },
+    });
+    const events = collect(manager);
+    await expect(
+      manager.execute({ projectId: workspaceRoot, command: "ls", args: [] }),
+    ).rejects.toMatchObject({ code: "TIMEOUT" });
+    const executionId = events[0]?.executionId ?? "";
+    expect(executionId).not.toBe("");
+    const terminated = logged.find((event) => event.op === "command.terminated");
+    expect(terminated).toBeDefined();
+    expect(terminated?.category).toBe("diagnostic");
+    expect(terminated?.correlationId).toBe(executionId);
+    const extra = terminated?.extra ?? {};
+    expect(extra.reason).toBe("timeout");
+    expect(typeof extra.pid).toBe("number");
+    expect(typeof extra.windowsTreeKillAttempted).toBe("boolean");
+    expect(typeof extra.windowsTreeKillSucceeded).toBe("boolean");
+    // Body-free: exactly the four evidence fields — never the command, argv, or cwd.
+    expect(Object.keys(extra).sort()).toEqual([
+      "pid",
+      "reason",
+      "windowsTreeKillAttempted",
+      "windowsTreeKillSucceeded",
+    ]);
   });
 
   it("rejects when MAX_CONCURRENT_EXECUTIONS is reached (D9 cap of 8)", async () => {

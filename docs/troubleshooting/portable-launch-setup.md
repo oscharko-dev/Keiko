@@ -180,3 +180,69 @@ confirm whether a proxy or firewall blocks GitHub Release Asset downloads.
 - If a proxy or firewall blocks public GitHub Release Assets, use an approved organization mirror
   for the same reviewed artifacts.
 - Do not replace the portable launcher with shell startup commands as the primary user path.
+
+## Windows setup companion reports a failure and closes
+
+| Field             | Value                                          |
+| ----------------- | ---------------------------------------------- |
+| Severity          | Blocker                                        |
+| Surface           | Portable launch/setup, Windows setup companion |
+| Stable identifier | `windows setup companion step failed`          |
+
+**Symptom**
+
+`keiko-windows-x64-setup.exe` prints a numbered step (`[1/6] … [6/6] …`), then the specific failure
+reason for that step and a `Keiko setup failed. See the message above.` line, before the window
+closes (on a double-click the window stays open at `Press any key to close this window.` so the
+reason is readable). Keiko does not end up running.
+
+**Root Cause**
+
+The setup companion is a Keiko-owned native bootstrap (ADR-0121, issue #2992): it verifies the
+embedded portable archive against a digest baked into the signed binary, extracts it to a temporary
+folder with `System32\tar.exe`, and then drives the same governed portable lifecycle
+(`resolve-root` → `setup` → `launch`) the manual ZIP uses. Each numbered step maps to one failure
+class, and each maps to a stable process exit code for scripted (`/quiet`) installs:
+
+| Message                                                                     | Exit    | Cause                                                                                                                                                                                                 |
+| --------------------------------------------------------------------------- | ------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `The setup package is damaged. Download keiko-windows-x64-setup.exe again.` | 11 / 12 | The running installer's own bytes could not be parsed, or the embedded archive's SHA-256 did not match the digest baked into the signed installer — a truncated download or a tampered/relinked file. |
+| `Keiko setup could not create its temporary staging folder.`                | 13      | `%TEMP%` is unwritable, full, or redirected.                                                                                                                                                          |
+| `Keiko setup could not unpack the embedded package.`                        | 14      | `System32\tar.exe` failed (missing on very old Windows builds, or blocked by policy).                                                                                                                 |
+| `Keiko setup payload did not contain the expected application files.`       | 15      | The extracted tree is incomplete — usually an interrupted extraction or an endpoint-protection product removing files mid-unpack.                                                                     |
+| `Keiko setup could not resolve the managed install root.`                   | 16      | The portable CLI could not determine a managed install location (see "cannot create the managed install root" above).                                                                                 |
+| `Keiko setup could not complete the governed installation.`                 | 17      | The governed `portable setup` step failed; the CLI printed the specific reason above this line.                                                                                                       |
+| `Keiko started but did not report healthy.`                                 | 18      | The app launched but its health check did not pass in the allotted window — a blocked loopback port or a runtime that exits early.                                                                    |
+| `Keiko is running, but its temporary files could not be removed.`           | 19      | The install succeeded; only the temporary staging folder under `%TEMP%\Keiko-install-*` could not be deleted (a lingering antivirus handle). Keiko is usable.                                         |
+| `Keiko setup: unsupported argument …`                                       | 87      | An argument other than `/quiet` (or `/Q`) was passed. The installer accepts no install-command override by design; run it with no arguments, or `/quiet` for an unattended install.                   |
+
+**Diagnostic Steps**
+
+```powershell
+# 1) Run the installer from a terminal so the failure line stays visible, and capture the exit code.
+.\keiko-windows-x64-setup.exe
+"exit code: $LASTEXITCODE"
+
+# 2) Unattended (scripted) install — same steps, no pauses; the exit code is the failure class above.
+.\keiko-windows-x64-setup.exe /quiet
+"exit code: $LASTEXITCODE"
+
+# 3) If it reported the package is damaged (11/12), byte-verify the download before retrying.
+Get-FileHash .\keiko-windows-x64-setup.exe -Algorithm SHA256
+```
+
+**Resolution**
+
+- **11 / 12 (damaged package):** re-download `keiko-windows-x64-setup.exe` from the release and
+  compare its SHA-256 to the release notes before running it. Do not attempt to "repair" the file.
+- **13 / 14 / 15 (staging, extraction, contents):** confirm `%TEMP%` is writable and has space,
+  then check the endpoint-protection block log for a file removed under `%TEMP%\Keiko-install-*`
+  during the install, and add the reviewed installer to that product's allowlist before retrying.
+- **16 / 17 (resolve-root, setup):** the governed CLI printed the specific cause above the failure
+  line — follow it, or see "Portable setup cannot create the managed install root" above.
+- **18 (unhealthy):** confirm loopback traffic is allowed for the Keiko process and the local port
+  is free, then re-run; the fallback is the manual ZIP started from `Keiko.exe`.
+- **19 (cleanup):** Keiko is installed and running; remove the leftover `%TEMP%\Keiko-install-*`
+  folder manually once any antivirus scan on it has finished.
+- **87 (unsupported argument):** run the installer with no arguments, or `/quiet` for an unattended
+  install. The setup companion deliberately exposes no way to substitute the install command.

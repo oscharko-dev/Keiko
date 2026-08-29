@@ -53,6 +53,8 @@ import {
   evidenceRetentionDiagnosticObserver,
   type ServerDiagnosticSink,
 } from "./diagnostics-log.js";
+import { logCommandTermination, processServerLogSink } from "./process-log-sink.js";
+import type { ServerLogSink } from "./observability/server-log.js";
 
 const MAX_CONCURRENT_EXECUTIONS = 8;
 const MIN_TIMEOUT_MS = 1_000;
@@ -158,6 +160,11 @@ export interface TerminalExecutionManagerOptions {
   readonly processEnv?: NodeJS.ProcessEnv | undefined;
   readonly redactor?: ((input: string) => string) | undefined;
   readonly diagnostics?: ServerDiagnosticSink | undefined;
+  // Activity-log port for the runCommand termination-evidence seam (AGENTS.md §8 Rule 1).
+  // Defaults to processServerLogSink() — the same process-wide sink every other server
+  // composition site uses — so production logging works with no wiring required; tests inject a
+  // buffered sink to assert on the emitted line.
+  readonly activityLog?: ServerLogSink | undefined;
   readonly runDeps?: Partial<RunCommandDeps> | undefined;
   readonly now?: (() => number) | undefined;
 }
@@ -684,6 +691,7 @@ class TerminalExecutionManagerImpl implements TerminalExecutionManager {
   private readonly processEnv: NodeJS.ProcessEnv;
   private readonly redactor: (input: string) => string;
   private readonly diagnostics: ServerDiagnosticSink | undefined;
+  private readonly activityLog: ServerLogSink;
   private readonly runDeps: Partial<RunCommandDeps>;
   private readonly now: () => number;
   private readonly executions = new Map<string, InFlightExecution>();
@@ -696,6 +704,7 @@ class TerminalExecutionManagerImpl implements TerminalExecutionManager {
     this.processEnv = opts.processEnv ?? process.env;
     this.redactor = opts.redactor ?? defaultRedactor;
     this.diagnostics = opts.diagnostics;
+    this.activityLog = opts.activityLog ?? processServerLogSink();
     this.runDeps = opts.runDeps ?? {};
     this.now = opts.now ?? Date.now;
   }
@@ -811,6 +820,9 @@ class TerminalExecutionManagerImpl implements TerminalExecutionManager {
           cwd,
           timeoutMs,
           signal: entry.controller.signal,
+          onTerminated: (evidence): void => {
+            logCommandTermination(this.activityLog, executionId, evidence);
+          },
         },
         deps,
       );

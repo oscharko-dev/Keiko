@@ -338,14 +338,38 @@ describe("dev quality workflows", () => {
     );
     expect(crossPlatform).toContain("npm run check:native:macos");
     expect(crossPlatform).toContain("npm run check:native:windows");
-    const iexpressSmoke = ciWorkflow.jobs["cross-platform-smoke"].steps.find(
-      (step) => step.name === "Smoke IExpress command execution",
+    // #3350: the command-spawn wrapper smoke needs no MSVC, so it runs before the compiler config.
+    const cmdSpawnSmoke = ciWorkflow.jobs["cross-platform-smoke"].steps.find(
+      (step) => step.name === "Smoke the Windows command spawn wrapper",
     );
-    expect(iexpressSmoke, "IExpress smoke step must exist").toBeDefined();
-    expect(iexpressSmoke.if).toBe("runner.os == 'Windows'");
-    expect(iexpressSmoke.run).toContain(
-      "node scripts/__tests__/windows-iexpress-command-smoke.mjs",
+    expect(cmdSpawnSmoke, "command spawn wrapper smoke step must exist").toBeDefined();
+    expect(cmdSpawnSmoke.if).toBe("runner.os == 'Windows'");
+    expect(cmdSpawnSmoke.run).toContain("node scripts/__tests__/windows-cmd-spawn-smoke.mjs");
+    // A step-level `continue-on-error: true` soft-fails the step while the job (and therefore
+    // `needs.cross-platform-smoke.result` in the `ci` aggregate) still reports success, defeating
+    // the fail-closed aggregation the .if/.run pins above assume. Neither smoke step carries it
+    // today; this pin catches the one edit that would silently disarm them.
+    expect(cmdSpawnSmoke["continue-on-error"]).toBeUndefined();
+    // #2992: the setup bootstrap smoke compiles the C stub, so it MUST run after MSVC is configured.
+    const setupSteps = ciWorkflow.jobs["cross-platform-smoke"].steps;
+    const setupBootstrapSmoke = setupSteps.find(
+      (step) => step.name === "Smoke the Windows setup bootstrap",
     );
+    expect(setupBootstrapSmoke, "setup bootstrap smoke step must exist").toBeDefined();
+    expect(setupBootstrapSmoke.if).toBe("runner.os == 'Windows'");
+    expect(setupBootstrapSmoke.run).toContain(
+      "node scripts/__tests__/windows-setup-bootstrap-smoke.mjs",
+    );
+    // Same fail-closed reasoning as the command-spawn smoke step above.
+    expect(setupBootstrapSmoke["continue-on-error"]).toBeUndefined();
+    const msvcIndex = setupSteps.findIndex(
+      (step) => step.name === "Configure MSVC for native quality analysis",
+    );
+    const setupSmokeIndex = setupSteps.findIndex(
+      (step) => step.name === "Smoke the Windows setup bootstrap",
+    );
+    expect(msvcIndex).toBeGreaterThanOrEqual(0);
+    expect(setupSmokeIndex).toBeGreaterThan(msvcIndex);
     expect(crossPlatform).toContain("Configure MSVC for native quality analysis");
     expect(crossPlatform).toContain('Join-Path $env:RUNNER_TEMP "keiko-vcvars-env.cmd"');
     expect(crossPlatform).toContain("$environment = & cmd.exe /d /c $vcvarsWrapper");

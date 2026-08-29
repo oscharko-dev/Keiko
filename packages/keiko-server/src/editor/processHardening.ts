@@ -1,7 +1,11 @@
 import { accessSync, constants, existsSync, mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { delimiter, join, resolve as resolvePath } from "node:path";
-import { buildSandboxEnv } from "@oscharko-dev/keiko-tools";
+import {
+  buildSandboxEnv,
+  buildWindowsShellInvocation,
+  type WindowsShellInvocationOptions,
+} from "@oscharko-dev/keiko-tools";
 import { isWithinWorkspace, type WorkspaceInfo } from "@oscharko-dev/keiko-workspace";
 
 export class EditorProcessHardeningError extends Error {
@@ -134,6 +138,29 @@ export function buildCopyOnlyProcessEnv(
   envAllowlist: readonly string[],
 ): Record<string, string> {
   return buildSandboxEnv(processEnv, envAllowlist);
+}
+
+export interface WindowsSpawnInvocation {
+  readonly command: string;
+  readonly args: readonly string[];
+  readonly windowsVerbatimArguments: boolean;
+}
+
+// Wraps a resolved executable for Windows-safe spawning (issue #3350 / Node CVE-2024-27980): a
+// `.cmd`/`.bat` resolved by resolveExecutableOutsideWorkspace cannot be spawned with `shell:false`
+// on Windows without raising EINVAL. Delegates to keiko-tools' pure hardened cmd.exe wrapper — the
+// SAME implementation exec.ts's runCommand spawn boundary uses — so every editor-tree Node process
+// adapter that resolves an executable through this module shares one escaping implementation
+// instead of re-deriving it. A no-op on every non-`.cmd`/`.bat` resolved path and on every
+// non-Windows platform (pass-through, `windowsVerbatimArguments: false`).
+export function resolveWindowsSpawnInvocation(
+  executable: string,
+  args: readonly string[],
+  options?: WindowsShellInvocationOptions,
+): WindowsSpawnInvocation {
+  // `options` is forwarded only so a test can force the win32 branch on any host; production callers
+  // (the LSP adapter) omit it and get the real process.platform / process.env.
+  return buildWindowsShellInvocation(executable, args, options);
 }
 
 function safeKill(child: KillableChild, signal: NodeJS.Signals): void {

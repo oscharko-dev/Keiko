@@ -4,21 +4,38 @@ import { createHash } from "node:crypto";
 import { spawnSync } from "node:child_process";
 import { Buffer } from "node:buffer";
 import {
-  copyFileSync,
-  existsSync,
+  closeSync,
+  createReadStream,
+  createWriteStream,
+  fstatSync,
+  fsyncSync,
   lstatSync,
   mkdirSync,
   mkdtempSync,
+  openSync,
   readFileSync,
+  readSync,
   realpathSync,
+  renameSync,
   rmSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
+import { pipeline } from "node:stream/promises";
 import { fileURLToPath } from "node:url";
 
 import { isPortableExecutableFile } from "./lib/portable-executable.mjs";
+import {
+  assertSetupOverlayHeaderFitsBeforeEnd,
+  assertZeroBytes,
+  buildSetupOverlayHeader,
+  portableExecutableOverlayBounds,
+  readSetupOverlayHeaderFields,
+  SETUP_OVERLAY_HEADER_BYTES,
+  setupOverlayPayloadRegion,
+} from "./lib/portable-setup-overlay.mjs";
+import { resolveWindowsMsvcEnv, windowsToolFromPath } from "./lib/windows-msvc.mjs";
 
 import {
   PORTABLE_TARGETS,
@@ -28,13 +45,24 @@ import {
   WINDOWS_PORTABLE_SETUP_ASSET_NAME,
 } from "./portable-runtime.mjs";
 
+// Issue #2992: the setup companion is a Keiko-owned native bootstrap (MSVC-compiled,
+// /SUBSYSTEM:CONSOLE, same lane as native/portable-launcher) with the portable ZIP appended as a
+// hash-bound overlay (scripts/lib/portable-setup-overlay.mjs implements the frozen byte layout).
+// IExpress/WExtract, the generated batch installer, and cmd.exe are gone from this surface
+// entirely — WExtract's undocumented `/C:<command>` switch was a signature-laundering primitive
+// against the Keiko Authenticode identity, and there is no SED field that disables it.
+const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const WINDOWS_TARGET = PORTABLE_TARGETS.find((target) => target.platformTarget === "windows-x64");
-const INSTALL_SCRIPT_NAME = "install-keiko.cmd";
-const COMMAND_PROCESSOR_SUFFIX = String.raw`System32\cmd.exe`;
 const DEFAULT_CATALOG_NAME = "windows-setup-signing-file.txt";
 const MAX_SETUP_INPUT_BYTES = 2 * 1024 * 1024 * 1024;
 const RUN_OUTPUT_BYTES = 64 * 1024 * 1024;
-const SYSTEM_TAR = String.raw`"%SystemRoot%\System32\tar.exe"`;
+// 1 MiB bounded header-prefix scan window for streaming verification: large enough to cover any
+// real PE's headers + section table without ever reading the whole (up to MAX_SETUP_INPUT_BYTES)
+// file just to locate the overlay. Mirrors native/setup-bootstrap/keiko-setup-bootstrap.c's
+// KEIKO_HEADER_SCAN_BYTES exactly -- the native stub already makes this same bounded-prefix
+// assumption about its OWN running image at install time, so matching it here is parity, not a
+// new risk.
+const OVERLAY_HEADER_SCAN_BYTES = 1024 * 1024;
 const VALUE_OPTION_FIELDS = new Map([
   ["--catalog", "catalog"],
   ["--output", "output"],
@@ -43,8 +71,15 @@ const VALUE_OPTION_FIELDS = new Map([
 
 export class WindowsPortableSetupError extends Error {}
 
+// Split from `fail` so a rejection built OUTSIDE a throwable context (a stream "error" listener,
+// where throwing would become an uncaught exception instead of failing the read) can still
+// construct the identical error shape via `reject(windowsPortableSetupError(...))`.
+function windowsPortableSetupError(message) {
+  return new WindowsPortableSetupError(`build-windows-portable-setup: ${message}`);
+}
+
 function fail(message) {
-  throw new WindowsPortableSetupError(`build-windows-portable-setup: ${message}`);
+  throw windowsPortableSetupError(message);
 }
 
 function readRequiredOptionValue(key, value) {
@@ -196,199 +231,6 @@ export async function validateWindowsSetupStage(stageRoot) {
   return { archivePath, manifest, manifestPath, stageRoot: canonicalRoot };
 }
 
-export function windowsSetupInstallerScript() {
-  return [
-    ...windowsSetupBootstrapLines(),
-    ...windowsSetupPayloadLines(),
-    ...windowsSetupInstallLines(),
-    ...windowsSetupLaunchLines(),
-    ...windowsSetupFailureLines(),
-  ].join("\r\n");
-}
-
-function windowsSetupBootstrapLines() {
-  return [
-    "@echo off",
-    "setlocal EnableExtensions DisableDelayedExpansion",
-    `set "ARCHIVE=%~dp0${WINDOWS_TARGET.assetName}"`,
-    'set "INSTALL_ROOT="',
-    'set "ORIGINAL_CODE_PAGE="',
-    String.raw`set "STAGING_ROOT=%TEMP%\Keiko-install-%RANDOM%-%RANDOM%"`,
-    String.raw`set "EXTRACT_ROOT=%STAGING_ROOT%\Keiko"`,
-    String.raw`set "MANAGED_ROOT_FILE=%STAGING_ROOT%\managed-root.txt"`,
-    'set "KEIKO_INTERACTIVE=0"',
-    'if /I "%~1"=="--interactive" set "KEIKO_INTERACTIVE=1"',
-    "",
-    "echo Keiko setup",
-    "echo ===========",
-    "echo.",
-  ];
-}
-
-function windowsSetupPayloadLines() {
-  return [
-    "echo [1/6] Checking setup payload...",
-    'if not exist "%ARCHIVE%" (',
-    "  echo Keiko setup payload is missing.",
-    "  goto failure",
-    ")",
-    "echo       Found embedded portable package.",
-    'if exist "%STAGING_ROOT%" rmdir /s /q "%STAGING_ROOT%" >nul 2>nul',
-    'mkdir "%STAGING_ROOT%"',
-    "if errorlevel 1 goto failure",
-    "echo [2/6] Extracting Keiko to a temporary staging folder...",
-    `${SYSTEM_TAR} -xf "%ARCHIVE%" -C "%STAGING_ROOT%"`,
-    "if errorlevel 1 goto failure",
-    "echo       Extraction finished.",
-    "echo [3/6] Verifying installed application files...",
-    String.raw`if not exist "%EXTRACT_ROOT%\Keiko.exe" (`,
-    "  echo Keiko setup payload did not contain Keiko.exe.",
-    "  goto failure",
-    ")",
-    String.raw`if not exist "%EXTRACT_ROOT%\runtime\node\node.exe" (`,
-    "  echo Keiko setup payload did not contain the bundled Node runtime.",
-    "  goto failure",
-    ")",
-    String.raw`if not exist "%EXTRACT_ROOT%\app\dist\cli\index.js" (`,
-    "  echo Keiko setup payload did not contain the Keiko CLI.",
-    "  goto failure",
-    ")",
-    "echo       Keiko.exe found.",
-    "echo       Bundled Node runtime found. No separate Node installation is required.",
-    "echo       Keiko CLI found.",
-    String.raw`"%EXTRACT_ROOT%\runtime\node\node.exe" "%EXTRACT_ROOT%\app\dist\cli\index.js" portable resolve-root --target windows-x64 --portable-root "%EXTRACT_ROOT%" > "%MANAGED_ROOT_FILE%"`,
-    "if errorlevel 1 goto failure",
-    `for /f "tokens=2 delims=:." %%C in ('chcp') do set "ORIGINAL_CODE_PAGE=%%C"`,
-    'set "ORIGINAL_CODE_PAGE=%ORIGINAL_CODE_PAGE: =%"',
-    "if not defined ORIGINAL_CODE_PAGE goto failure",
-    "chcp 65001 >nul",
-    "if errorlevel 1 goto failure",
-    `set /p "INSTALL_ROOT="<"%MANAGED_ROOT_FILE%"`,
-    "chcp %ORIGINAL_CODE_PAGE% >nul",
-    "if errorlevel 1 goto failure",
-    "if not defined INSTALL_ROOT (",
-    "  echo Keiko setup could not resolve the managed install root.",
-    "  goto failure",
-    ")",
-  ];
-}
-
-function windowsSetupInstallLines() {
-  return [
-    "echo [4/6] Checking the managed install through Keiko portable authority...",
-    'if exist "%INSTALL_ROOT%" goto validate_existing',
-    "echo [5/6] Installing Keiko through the governed portable lifecycle...",
-    String.raw`"%EXTRACT_ROOT%\runtime\node\node.exe" "%EXTRACT_ROOT%\app\dist\cli\index.js" portable setup --target windows-x64 --portable-root "%EXTRACT_ROOT%" --managed-root "%INSTALL_ROOT%"`,
-    "if errorlevel 1 goto failure",
-    "echo       Portable lifecycle accepted the installation.",
-    "goto launch_managed",
-    ":validate_existing",
-    "echo [5/6] Validating or recovering the existing managed installation...",
-    String.raw`"%EXTRACT_ROOT%\runtime\node\node.exe" "%EXTRACT_ROOT%\app\dist\cli\index.js" portable setup --target windows-x64 --portable-root "%EXTRACT_ROOT%" --managed-root "%INSTALL_ROOT%"`,
-    "if errorlevel 1 goto failure",
-    "echo       Existing managed installation was validated or recovered.",
-    ":launch_managed",
-    String.raw`"%INSTALL_ROOT%\runtime\node\node.exe" "%INSTALL_ROOT%\app\dist\cli\index.js" portable launch --target windows-x64 --portable-root "%INSTALL_ROOT%" --managed-root "%INSTALL_ROOT%"`,
-    "if errorlevel 1 goto failure",
-    "echo       Managed portable lifecycle reported the application healthy.",
-    ":lifecycle_ready",
-    "",
-  ];
-}
-
-function windowsSetupLaunchLines() {
-  return [
-    // No separate liveness poll: `portable launch` above exits 0 only after the lifecycle CLI's
-    // waitForHealth saw /api/health answer with the exact installed version while the spawned
-    // process stayed alive. That exit code IS the "Keiko is running" proof; a marker file or a
-    // process poll here would re-attest weaker evidence the CLI already established.
-    "echo [6/6] Keiko reported healthy; removing temporary application files...",
-    "for /l %%A in (1,1,10) do (",
-    '  if exist "%STAGING_ROOT%" rmdir /s /q "%STAGING_ROOT%" >nul 2>nul',
-    '  if not exist "%STAGING_ROOT%" goto cleanup_ok',
-    // ping, not timeout.exe: timeout demands console stdin and exits immediately under a
-    // redirected-stdin host (quiet IExpress), collapsing all ten retries into one instant.
-    "  ping -n 2 127.0.0.1 >nul",
-    ")",
-    ":cleanup_ok",
-    'if exist "%STAGING_ROOT%" (',
-    "  echo Keiko setup could not remove its temporary application files.",
-    "  goto failure",
-    ")",
-    "echo       Keiko is running.",
-    "echo.",
-    "echo Keiko setup finished successfully.",
-    "ping -n 3 127.0.0.1 >nul",
-    "exit /b 0",
-    "",
-  ];
-}
-
-function windowsSetupFailureLines() {
-  return [
-    ":failure",
-    'set "EXIT_CODE=%ERRORLEVEL%"',
-    'if "%EXIT_CODE%"=="0" set EXIT_CODE=1',
-    'if exist "%STAGING_ROOT%" rmdir /s /q "%STAGING_ROOT%" >nul 2>nul',
-    "echo.",
-    "echo Keiko setup failed. See the message above for the failing step.",
-    String.raw`echo If Keiko wrote startup logs, they are under "%USERPROFILE%\.keiko".`,
-    'if "%KEIKO_INTERACTIVE%"=="1" pause',
-    "exit /b %EXIT_CODE%",
-    "",
-  ];
-}
-
-function sedEscape(value) {
-  const text = String(value);
-  if (/["%\r\n]/u.test(text)) fail("IExpress path contains an unsafe character");
-  return text;
-}
-
-function trimTrailingSeparators(value) {
-  let end = value.length;
-  while (end > 0 && (value[end - 1] === "\\" || value[end - 1] === "/")) end -= 1;
-  return value.slice(0, end);
-}
-
-/**
- * The absolute command processor that IExpress hands the embedded installer script to.
- *
- * Two constraints meet here. A `.cmd` payload is not an executable image, so WExtract needs an
- * explicit command processor to run it — naming the script alone leaves the launch to the legacy
- * interpreter lookup and never reaches `install-keiko.cmd`. And naming `cmd.exe` without a path
- * would let the extraction directory or `PATH` decide which interpreter runs *before* the script
- * validates the embedded payload, which is the trust boundary the setup exists to hold.
- *
- * The path is therefore resolved on the Windows build host and embedded literally: inside a SED,
- * `%name%` is an IExpress `[Strings]` reference rather than an environment variable, so no `%VAR%`
- * token may survive into the launch fields — `sedEscape` rejects `%` in a path for the same reason.
- */
-export function systemCommandProcessorPath() {
-  const systemRoot = process.env.SystemRoot ?? process.env.WINDIR ?? String.raw`C:\Windows`;
-  // Built by hand rather than with `join`: the generator also runs on POSIX hosts, where `join`
-  // would emit a `/` separator into a path that only Windows ever resolves.
-  const path = `${trimTrailingSeparators(systemRoot)}\\${COMMAND_PROCESSOR_SUFFIX}`;
-  // Linear scans rather than one nested-quantifier pattern, whose backtracking would be
-  // super-linear on a hostile system root.
-  const shaped =
-    /^[A-Za-z]:\\/u.test(path) &&
-    path.endsWith(`\\${COMMAND_PROCESSOR_SUFFIX}`) &&
-    !path.includes("/") &&
-    !path.includes(":", 2) &&
-    !/["%*?<>|\r\n]/u.test(path);
-  if (!shaped) fail("system command processor must resolve to an absolute System32 cmd.exe path");
-  return path;
-}
-
-function installScriptCommand(interactive) {
-  // `/d` skips the AutoRun registry commands, so no per-user `Command Processor\AutoRun` value runs
-  // ahead of the installer; `/s` keeps the remainder of the line literal. The script name carries
-  // no space, so it needs no quoting — the ambiguity of nested SED quoting is avoided entirely.
-  const command = `${systemCommandProcessorPath()} /d /s /c ${INSTALL_SCRIPT_NAME}`;
-  return interactive ? `${command} --interactive` : command;
-}
-
 export function validateWindowsSetupOutputPath(outputPath, stageRoot) {
   if (basename(outputPath) !== WINDOWS_PORTABLE_SETUP_ASSET_NAME) {
     fail(`--output must be named ${WINDOWS_PORTABLE_SETUP_ASSET_NAME}`);
@@ -406,61 +248,163 @@ export function validateWindowsSetupOutputPath(outputPath, stageRoot) {
   }
 }
 
-export function windowsSetupSed({ inputRoot, outputPath }) {
-  return [
-    "[Version]",
-    "Class=IEXPRESS",
-    "SEDVersion=3",
-    "[Options]",
-    "PackagePurpose=InstallApp",
-    "ShowInstallProgramWindow=1",
-    "HideExtractAnimation=1",
-    "UseLongFileName=1",
-    "InsideCompressed=0",
-    "CAB_FixedSize=0",
-    "CAB_ResvCodeSigning=0",
-    "RebootMode=N",
-    "InstallPrompt=",
-    "DisplayLicense=",
-    "FinishMessage=",
-    `TargetName=${sedEscape(outputPath)}`,
-    "FriendlyName=Keiko Windows setup",
-    `AppLaunched=${installScriptCommand(true)}`,
-    "PostInstallCmd=<None>",
-    `AdminQuietInstCmd=${installScriptCommand(false)}`,
-    `UserQuietInstCmd=${installScriptCommand(false)}`,
-    "SourceFiles=SourceFiles",
-    "[Strings]",
-    `FILE0="${INSTALL_SCRIPT_NAME}"`,
-    `FILE1="${WINDOWS_TARGET.assetName}"`,
-    "[SourceFiles]",
-    `SourceFiles0=${sedEscape(inputRoot)}`,
-    "[SourceFiles0]",
-    "%FILE0%=",
-    "%FILE1%=",
-    "",
-  ].join("\r\n");
-}
-
 function requireWindowsHost() {
-  if (process.platform !== "win32") fail("IExpress setup generation requires a Windows host");
+  if (process.platform !== "win32") fail("windows setup bootstrap build requires a Windows host");
 }
 
-export function iexpressPath() {
-  const windir = process.env.WINDIR ?? String.raw`C:\Windows`;
-  const systemCandidate = join(windir, "System32", "iexpress.exe");
-  if (existsSync(systemCandidate)) return systemCandidate;
-  if (process.platform === "win32") fail("system IExpress executable is unavailable");
-  return "iexpress.exe";
+// Any failure raised by the pure overlay codec (scripts/lib/portable-setup-overlay.mjs) is
+// re-raised as this script's own error type, so every caller of this file sees one consistent
+// failure class regardless of which layer actually detected the malformed/tampered input.
+function callOverlayLib(action) {
+  try {
+    return action();
+  } catch (error) {
+    fail(error instanceof Error ? error.message : "windows setup overlay is malformed");
+  }
 }
 
-/* v8 ignore next -- Windows/IExpress subprocess boundary is exercised by the Windows smoke job. */
-function run(command, args, label) {
-  // Packaging and extraction can process the full 2 GiB accepted input; the owning workflow job
-  // provides the bounded timeout without imposing a size-inconsistent subprocess cap here.
+function readExactAt(fd, offset, length, label) {
+  const buffer = Buffer.alloc(length);
+  const bytesRead = readSync(fd, buffer, 0, length, offset);
+  if (bytesRead !== length) fail(`${label} is truncated or out of bounds`);
+  return buffer;
+}
+
+/**
+ * Streaming, bounded-memory counterpart to parseSetupOverlay
+ * (scripts/lib/portable-setup-overlay.mjs): locates and validates a setup companion's overlay
+ * using only a handful of small positioned reads, never the whole (up to MAX_SETUP_INPUT_BYTES)
+ * file. Mirrors native/setup-bootstrap/keiko-setup-bootstrap.c's keiko_extract_verified_payload
+ * ordering exactly -- a bounded header-prefix scan locates the overlay
+ * (portableExecutableOverlayBounds, matching keiko_parse_overlay_bounds), a small positioned read
+ * decodes the fixed-size overlay header (readSetupOverlayHeaderFields, matching
+ * keiko_validate_overlay_header), and the <=7 trailing padding bytes are read and zero-checked
+ * directly (setupOverlayPayloadRegion + assertZeroBytes, matching keiko_payload_region). Returns
+ * the same shape as parseSetupOverlay — the header's declared digest, the declared payload size,
+ * and where the payload begins — so callers hash the payload (hashSetupOverlayPayload, below)
+ * only once they've confirmed it is worth hashing.
+ */
+function parseSetupOverlayFromFile(setupPath) {
+  const fd = openSync(setupPath, "r");
+  try {
+    const fileSizeBytes = fstatSync(fd).size;
+    const prefix = readExactAt(
+      fd,
+      0,
+      Math.min(fileSizeBytes, OVERLAY_HEADER_SCAN_BYTES),
+      "windows setup companion header prefix",
+    );
+    const { overlayEnd, overlayStart } = callOverlayLib(() =>
+      portableExecutableOverlayBounds(prefix, fileSizeBytes),
+    );
+    const header = readExactAt(
+      fd,
+      overlayStart,
+      SETUP_OVERLAY_HEADER_BYTES,
+      "setup overlay header",
+    );
+    callOverlayLib(() => assertSetupOverlayHeaderFitsBeforeEnd(overlayStart, overlayEnd));
+    const { payloadSha256Hex, payloadSize } = callOverlayLib(() =>
+      readSetupOverlayHeaderFields(header),
+    );
+    const payloadStart = overlayStart + SETUP_OVERLAY_HEADER_BYTES;
+    const { paddingBytes, payloadEnd } = callOverlayLib(() =>
+      setupOverlayPayloadRegion(payloadStart, payloadSize, overlayEnd),
+    );
+    if (paddingBytes > 0) {
+      const padding = readExactAt(fd, payloadEnd, paddingBytes, "setup overlay trailing padding");
+      callOverlayLib(() => assertZeroBytes(padding, "setup overlay trailing padding"));
+    }
+    return { payloadSha256Hex, payloadSize, payloadStart };
+  } finally {
+    closeSync(fd);
+  }
+}
+
+// Hashes ONLY the payload region [payloadStart, payloadStart + payloadSize) through a stream, so
+// verifying a setup companion near the documented MAX_SETUP_INPUT_BYTES bound never requires a
+// multi-gigabyte contiguous Buffer — the OOM this pairing (with parseSetupOverlayFromFile above)
+// exists to close. Mirrors the native stub's keiko_stream_sha256: the byte count actually streamed
+// is checked against the declared size before the digest is trusted, so a file that shrinks out
+// from under a concurrent read fails closed instead of silently hashing a truncated payload as if
+// it were complete.
+function hashSetupOverlayPayload(setupPath, payloadStart, payloadSize) {
+  return new Promise((resolvePromise, reject) => {
+    const hash = createHash("sha256");
+    if (payloadSize === 0) {
+      resolvePromise(hash.digest("hex"));
+      return;
+    }
+    let bytesHashed = 0;
+    createReadStream(setupPath, { start: payloadStart, end: payloadStart + payloadSize - 1 })
+      .on("data", (chunk) => {
+        bytesHashed += chunk.length;
+        hash.update(chunk);
+      })
+      .on("error", (error) => {
+        reject(
+          windowsPortableSetupError(
+            `windows setup companion payload could not be streamed (code=${error?.code ?? "unknown"})`,
+          ),
+        );
+      })
+      .on("end", () => {
+        if (bytesHashed !== payloadSize) {
+          reject(
+            windowsPortableSetupError(
+              "windows setup companion payload is truncated or out of bounds",
+            ),
+          );
+          return;
+        }
+        resolvePromise(hash.digest("hex"));
+      });
+  });
+}
+
+/**
+ * Non-executing, cross-platform verification: confirms the setup companion's name and PE shape,
+ * locates its overlay, and proves the embedded payload is byte-identical to the staged archive —
+ * both via the header's declared digest AND an independent re-hash of the bytes actually present
+ * in the file, so a header that lies about its own payload cannot pass. No host requirement: this
+ * used to require running the (Windows-only, LOLBin-capable) extractor; parsing an appended,
+ * hash-bound overlay needs nothing platform-specific. Verification is streamed
+ * (parseSetupOverlayFromFile + hashSetupOverlayPayload) rather than buffering the whole setup
+ * companion, so a valid artifact near the documented MAX_SETUP_INPUT_BYTES bound never needs a
+ * multi-gigabyte contiguous allocation just to verify.
+ */
+export async function verifyWindowsPortableSetup(setupPath, archivePath) {
+  assertRegularFile(setupPath, "windows setup companion");
+  if (basename(setupPath) !== WINDOWS_PORTABLE_SETUP_ASSET_NAME) {
+    fail(`windows setup companion must be named ${WINDOWS_PORTABLE_SETUP_ASSET_NAME}`);
+  }
+  if (!isPortableExecutableFile(setupPath)) fail("windows setup companion is not a PE file");
+  const archiveStat = assertRegularFile(archivePath, "windows portable archive");
+  const overlay = parseSetupOverlayFromFile(setupPath);
+  if (overlay.payloadSize !== archiveStat.size) {
+    fail("windows setup companion payload size does not match the staged archive");
+  }
+  const archiveSha256 = await sha256File(archivePath);
+  const embeddedSha256 = await hashSetupOverlayPayload(
+    setupPath,
+    overlay.payloadStart,
+    overlay.payloadSize,
+  );
+  if (overlay.payloadSha256Hex !== archiveSha256 || embeddedSha256 !== archiveSha256) {
+    fail("windows setup companion payload digest does not match the staged archive");
+  }
+}
+
+/* v8 ignore next -- MSVC subprocess boundary is exercised by the Windows smoke job. */
+function run(command, args, label, options = {}) {
+  // Compilation and the streamed archive append can process the full 2 GiB accepted input; the
+  // owning workflow job provides the bounded timeout without imposing a size-inconsistent
+  // subprocess cap here.
   const result = spawnSync(command, args, {
+    cwd: repoRoot,
     encoding: "utf8",
     maxBuffer: RUN_OUTPUT_BYTES,
+    ...options,
   });
   if (result.error !== undefined || result.status !== 0) {
     const outputBytes = [result.stdout, result.stderr]
@@ -472,82 +416,236 @@ function run(command, args, label) {
   }
 }
 
-/* v8 ignore next -- extraction executes the generated Windows setup executable. */
-export async function verifyWindowsPortableSetup(setupPath, archivePath) {
-  assertRegularFile(setupPath, "windows setup companion");
-  if (basename(setupPath) !== WINDOWS_PORTABLE_SETUP_ASSET_NAME) {
-    fail(`windows setup companion must be named ${WINDOWS_PORTABLE_SETUP_ASSET_NAME}`);
+function setupBootstrapSourcePath() {
+  return join(repoRoot, "native", "setup-bootstrap", "keiko-setup-bootstrap.c");
+}
+
+function setupBootstrapResourcePath() {
+  return join(repoRoot, "native", "setup-bootstrap", "keiko-setup-bootstrap.rc");
+}
+
+// Defence in depth for a SHIPPED, SIGNED installer: the digest and size are baked into the stub as
+// C preprocessor tokens, and the stub compares the streamed payload against the baked digest with a
+// fixed-length read. A malformed digest (wrong length/charset) or a non-positive size would produce
+// an installer that can never accept its own payload. Reject it here — at build time — rather than
+// discovering it only when a customer's install fails closed. Kept pure + exported so it is covered
+// cross-platform, independent of the Windows-only compile below.
+export function assertBakedPayloadIdentity(payloadSha256Hex, payloadSizeBytes) {
+  if (typeof payloadSha256Hex !== "string" || !/^[0-9a-f]{64}$/u.test(payloadSha256Hex)) {
+    fail("setup bootstrap payload digest must be 64 lowercase hex characters");
   }
-  if (!isPortableExecutableFile(setupPath)) fail("windows setup companion is not a PE file");
-  requireWindowsHost();
-  const extractRoot = mkdtempSync(join(tmpdir(), "keiko-setup-extract-"));
+  if (!Number.isSafeInteger(payloadSizeBytes) || payloadSizeBytes <= 0) {
+    fail("setup bootstrap payload size must be a positive safe integer");
+  }
+}
+
+/* v8 ignore start -- native compile, overlay append, and catalog write run only on the Windows
+   build host; exercised end to end by the protected Windows workflow's setup-bootstrap smoke. */
+function requireSetupBootstrapNativeSources() {
+  assertRegularFile(setupBootstrapSourcePath(), "setup bootstrap native source");
+  assertRegularFile(setupBootstrapResourcePath(), "setup bootstrap native resource script");
+}
+
+/**
+ * Compiles the Keiko-owned native setup bootstrap stub (native/setup-bootstrap): a console
+ * executable with the expected payload identity baked in via preprocessor defines (frozen SPEC v1
+ * section 2), mirroring how stage-portable-runtime.mjs's `compileWindowsLauncher` builds the
+ * portable launcher — same rc.exe + cl.exe pattern, same MSVC environment resolution
+ * (scripts/lib/windows-msvc.mjs). Unlike the launcher, the stub is `/SUBSYSTEM:CONSOLE` with NO
+ * `/ENTRY` override: the console CRT resolves `wmainCRTStartup` from the source's `wmain`
+ * automatically, so a double-click still gets a visible progress console.
+ */
+export function compileSetupBootstrap({ payloadSha256Hex, payloadSizeBytes, outputPath }) {
+  assertBakedPayloadIdentity(payloadSha256Hex, payloadSizeBytes);
+  requireSetupBootstrapNativeSources();
+  const env = resolveWindowsMsvcEnv();
+  const tempRoot = mkdtempSync(join(tmpdir(), "keiko-setup-bootstrap-resource-"));
   try {
-    run(setupPath, ["/Q", "/C", `/T:${extractRoot}`], "setup extraction verification");
-    const extractedScript = join(extractRoot, INSTALL_SCRIPT_NAME);
-    const extractedArchive = join(extractRoot, WINDOWS_TARGET.assetName);
-    assertRegularFile(extractedScript, "extracted setup script", 1024 * 1024);
-    assertRegularFile(extractedArchive, "extracted portable archive");
-    await verifyExtractedWindowsSetupPayload(extractedScript, extractedArchive, archivePath);
+    const resourcePath = join(tempRoot, "keiko-setup-bootstrap.res");
+    run(
+      windowsToolFromPath(env.PATH, "rc.exe"),
+      ["/nologo", `/fo${resourcePath}`, setupBootstrapResourcePath()],
+      "setup bootstrap resource compile",
+      { env },
+    );
+    run(
+      windowsToolFromPath(env.PATH, "cl.exe"),
+      [
+        "/nologo",
+        "/O2",
+        // Static CRT. An installer is by construction the FIRST Keiko code to run on a machine with
+        // nothing installed yet, so it must not depend on a VC runtime redistributable being
+        // present — and, security-wise, it removes the plantable CRT DLLs from the set of implicit
+        // imports the loader resolves out of the application directory before wmain runs.
+        "/MT",
+        "/DUNICODE",
+        "/D_UNICODE",
+        `/DKEIKO_SETUP_TARGET="windows-x64"`,
+        `/DKEIKO_SETUP_PAYLOAD_SHA256_HEX="${payloadSha256Hex}"`,
+        `/DKEIKO_SETUP_PAYLOAD_SIZE_BYTES=${String(payloadSizeBytes)}ULL`,
+        `/Fe:${outputPath}`,
+        setupBootstrapSourcePath(),
+        resourcePath,
+        "/link",
+        "/SUBSYSTEM:CONSOLE",
+        // LOAD_LIBRARY_SEARCH_SYSTEM32 for STATICALLY-LINKED imports. wmain's own
+        // SetDefaultDllDirectories/SetDllDirectoryW calls only affect later LoadLibraryEx-style
+        // loads; this binary's implicit imports (bcrypt.dll) are resolved by the loader BEFORE the
+        // first instruction of wmain, with the application directory searched first for anything
+        // that is not a KnownDLL. That is precisely the launched-from-Downloads DLL-plant scenario,
+        // and this flag is the only thing that closes it.
+        "/DEPENDENTLOADFLAG:0x800",
+      ],
+      "setup bootstrap compile",
+      { env },
+    );
   } finally {
-    rmSync(extractRoot, { force: true, recursive: true });
+    rmSync(tempRoot, { recursive: true, force: true });
+  }
+}
+/* v8 ignore stop */
+
+function fsyncFile(path) {
+  const fd = openSync(path, "r+");
+  try {
+    fsyncSync(fd);
+  } finally {
+    closeSync(fd);
   }
 }
 
-export async function verifyExtractedWindowsSetupPayload(
-  extractedScript,
-  extractedArchive,
-  archivePath,
-) {
-  const expectedScript = Buffer.from(windowsSetupInstallerScript(), "utf8");
-  const extractedBytes = readFileSync(extractedScript);
-  if (!extractedBytes.equals(expectedScript)) {
-    fail("extracted setup script bytes do not match the generated installer script");
+// Streamed the same way as verifyWindowsPortableSetup above (parseSetupOverlayFromFile +
+// hashSetupOverlayPayload) rather than buffering the just-written setup companion whole, so
+// confirming a freshly appended overlay never needs a multi-gigabyte contiguous allocation either.
+async function verifyAppendedSetupOverlay(outputPath, expectedSizeBytes, expectedSha256Hex) {
+  const overlay = parseSetupOverlayFromFile(outputPath);
+  if (overlay.payloadSize !== expectedSizeBytes || overlay.payloadSha256Hex !== expectedSha256Hex) {
+    fail("appended setup overlay header does not match the intended payload");
   }
-  const expectedScriptDigest = createHash("sha256").update(expectedScript).digest("hex");
-  if ((await sha256File(extractedScript)) !== expectedScriptDigest) {
-    fail("extracted setup script digest does not match the generated installer script");
-  }
-  if ((await sha256File(extractedArchive)) !== (await sha256File(archivePath))) {
-    fail("extracted setup archive digest does not match the staged archive");
+  const actualPayloadHash = await hashSetupOverlayPayload(
+    outputPath,
+    overlay.payloadStart,
+    overlay.payloadSize,
+  );
+  if (actualPayloadHash !== expectedSha256Hex) {
+    fail("appended setup overlay payload bytes do not match the intended digest");
   }
 }
 
-/* v8 ignore next -- IExpress build/signing orchestration runs only on protected Windows jobs. */
+/**
+ * Appends the portable archive to a compiled stub as a hash-bound overlay (frozen SPEC v1 section
+ * 1): `[stub][64-byte header][payload]`. Cross-platform and independently testable — the stub only
+ * needs to be a valid PE32+ image, not an executable one, so this can be exercised with a synthetic
+ * fixture on any host. Writes through a same-directory temp file and an atomic rename so a reader
+ * never observes a partially-written setup companion; a failure anywhere in that sequence removes
+ * the temp file rather than leaving a partial artifact behind in the stage root.
+ *
+ * `expectedPayload` is the identity `validateWindowsSetupStage` already proved the staged archive
+ * satisfies — the SAME `manifest.artifact.sha256`/`sizeBytes` baked into the compiled stub. The
+ * overlay header is built from THAT validated identity, never from an independent fresh re-hash of
+ * `archivePath`, so a mutation between stage validation and this call is caught as a drift failure
+ * instead of silently being trusted and baked into the shipped installer.
+ */
+export async function appendSetupOverlay(stubPath, archivePath, outputPath, expectedPayload) {
+  const { payloadSha256Hex, payloadSizeBytes } = expectedPayload;
+  assertBakedPayloadIdentity(payloadSha256Hex, payloadSizeBytes);
+  assertRegularFile(stubPath, "compiled setup stub");
+  const stubBuffer = readFileSync(stubPath);
+  const { overlayStart } = callOverlayLib(() => portableExecutableOverlayBounds(stubBuffer));
+  if (overlayStart !== stubBuffer.length) {
+    fail("compiled setup stub unexpectedly carries trailing data before the overlay is appended");
+  }
+  const archiveStat = assertRegularFile(archivePath, "windows portable archive payload");
+  if (archiveStat.size !== payloadSizeBytes) {
+    fail("windows portable archive no longer matches the validated manifest identity (size drift)");
+  }
+  if ((await sha256File(archivePath)) !== payloadSha256Hex) {
+    fail(
+      "windows portable archive no longer matches the validated manifest identity (digest drift)",
+    );
+  }
+  const header = callOverlayLib(() =>
+    buildSetupOverlayHeader({ payloadSha256Hex, payloadSizeBytes }),
+  );
+  const temporaryPath = `${outputPath}.tmp-${process.pid}`;
+  rmSync(temporaryPath, { force: true });
+  try {
+    writeFileSync(temporaryPath, Buffer.concat([stubBuffer, header]), { flag: "wx", mode: 0o600 });
+    // Streamed rather than buffered: the portable archive is roughly 130 MB, and the stub + header
+    // prefix above is written first so this append only ever holds one archive-sized chunk in
+    // flight at a time (the internal stream highWaterMark), not the whole payload in memory.
+    await pipeline(createReadStream(archivePath), createWriteStream(temporaryPath, { flags: "a" }));
+    fsyncFile(temporaryPath);
+    // renameSync replaces an existing destination atomically on both POSIX (rename) and Windows
+    // (MoveFileExW with MOVEFILE_REPLACE_EXISTING), so an explicit unlink first would only open a
+    // window where outputPath does not exist at all — a strictly weaker guarantee.
+    renameSync(temporaryPath, outputPath);
+  } catch (error) {
+    // A failure anywhere above (disk full mid-pipeline, a read error on the archive, an fsync or
+    // rename failure) must not leave `${outputPath}.tmp-${process.pid}` behind in the stage root:
+    // the rename above is the only step that moves ownership of temporaryPath's bytes to
+    // outputPath, so up to that point temporaryPath is this call's alone to clean up. The original
+    // error is rethrown unchanged — never swallowed.
+    rmSync(temporaryPath, { force: true });
+    throw error;
+  }
+  await verifyAppendedSetupOverlay(outputPath, payloadSizeBytes, payloadSha256Hex);
+  return outputPath;
+}
+
+// The Azure signing action's files-catalog names the file to sign RELATIVE to the catalog's own
+// directory. The catalog and the setup companion are always siblings (validateWindowsSetupOutputPath
+// plus the "--catalog beside the output" rule), so this reduces to the companion's basename — hence
+// separator-independent and unit-testable cross-platform even though the catalog is written only on
+// the Windows build host. Kept pure + exported so a wrong catalog target fails a local test, not
+// only the Azure signing step on CI.
+export function setupCatalogContent(catalogPath, outputPath) {
+  return `${relative(dirname(catalogPath), outputPath)}\n`;
+}
+
+/* v8 ignore start -- native compile, overlay append, and catalog write run only on the Windows
+   build host; exercised end to end by the protected Windows workflow's setup-bootstrap smoke. */
+function writeWindowsSetupCatalog(options) {
+  if (options.catalog === undefined) return;
+  mkdirSync(dirname(options.catalog), { recursive: true });
+  assertCatalogOutputAbsent(options.catalog);
+  writeCatalogExclusive(options.catalog, setupCatalogContent(options.catalog, options.output));
+}
+
+async function performWindowsPortableSetupBuild(options, archivePath, manifest) {
+  requireWindowsHost();
+  mkdirSync(dirname(options.output), { recursive: true });
+  const workRoot = mkdtempSync(join(tmpdir(), "keiko-setup-build-"));
+  try {
+    const stubPath = join(workRoot, "keiko-setup-bootstrap-stub.exe");
+    compileSetupBootstrap({
+      outputPath: stubPath,
+      payloadSha256Hex: manifest.artifact.sha256,
+      payloadSizeBytes: manifest.artifact.sizeBytes,
+    });
+    await appendSetupOverlay(stubPath, archivePath, options.output, {
+      payloadSha256Hex: manifest.artifact.sha256,
+      payloadSizeBytes: manifest.artifact.sizeBytes,
+    });
+    await verifyWindowsPortableSetup(options.output, archivePath);
+    writeWindowsSetupCatalog(options);
+  } finally {
+    rmSync(workRoot, { force: true, recursive: true });
+  }
+}
+/* v8 ignore stop */
+
 export async function buildWindowsPortableSetup(argv, deps = {}) {
   const options = parseArgs(argv);
   const validateStageFn = deps.validateStageFn ?? validateWindowsSetupStage;
-  const { archivePath, stageRoot } = await validateStageFn(options.stageRoot);
+  const { archivePath, manifest, stageRoot } = await validateStageFn(options.stageRoot);
   validateWindowsSetupOutputPath(options.output, stageRoot);
   if (options.verifyOnly) {
     await verifyWindowsPortableSetup(options.output, archivePath);
     return options.output;
   }
-  requireWindowsHost();
-  // The launch fields embed this path literally, so a build host that cannot produce it would ship
-  // a setup whose installer never starts. Prove it here rather than at a user's first run.
-  if (!existsSync(systemCommandProcessorPath())) fail("system command processor is unavailable");
-  mkdirSync(dirname(options.output), { recursive: true });
-  const workRoot = mkdtempSync(join(tmpdir(), "keiko-setup-build-"));
-  try {
-    const inputRoot = join(workRoot, "input");
-    mkdirSync(inputRoot, { recursive: true });
-    copyFileSync(archivePath, join(inputRoot, WINDOWS_TARGET.assetName));
-    writeFileSync(join(inputRoot, INSTALL_SCRIPT_NAME), windowsSetupInstallerScript(), "utf8");
-    const sedPath = join(workRoot, "keiko-setup.sed");
-    writeFileSync(sedPath, windowsSetupSed({ inputRoot, outputPath: options.output }), "utf8");
-    rmSync(options.output, { force: true });
-    run(iexpressPath(), ["/N", "/Q", sedPath], "IExpress setup build");
-    await verifyWindowsPortableSetup(options.output, archivePath);
-    if (options.catalog !== undefined) {
-      mkdirSync(dirname(options.catalog), { recursive: true });
-      assertCatalogOutputAbsent(options.catalog);
-      const catalogEntry = relative(dirname(options.catalog), options.output);
-      writeCatalogExclusive(options.catalog, `${catalogEntry}\n`);
-    }
-    return options.output;
-  } finally {
-    rmSync(workRoot, { force: true, recursive: true });
-  }
+  await performWindowsPortableSetupBuild(options, archivePath, manifest);
+  return options.output;
 }
 
 /* v8 ignore start -- CLI error plumbing is covered by the protected Windows workflow. */

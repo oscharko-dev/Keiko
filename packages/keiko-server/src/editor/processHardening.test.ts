@@ -37,6 +37,7 @@ import {
   executableExtensions,
   resolveExecutableCandidateOutsideWorkspace,
   resolveExecutableOutsideWorkspace,
+  resolveWindowsSpawnInvocation,
   splitProcessPath,
   type KillScheduler,
   type KillableChild,
@@ -360,5 +361,108 @@ describe("editor process TERM-to-KILL escalation", () => {
     const child = tracker(signals);
     await expect(escalateKill(child, 1, () => false, immediate)).resolves.toBeUndefined();
     expect(child.signals).toStrictEqual(["SIGTERM", "SIGKILL"]);
+  });
+});
+
+// resolveWindowsSpawnInvocation (issue #3350 / Node CVE-2024-27980) delegates to keiko-tools'
+// buildWindowsShellInvocation, which is exhaustively golden-vector tested in
+// packages/keiko-tools/src/windows-shell.test.ts. This pins the DELEGATION: the wrapper must not
+// swallow, transform, or hardcode away the underlying decision. The pass-through cases mirror
+// defaultLspSpawnFn's own un-overridden (process.platform) call site on this non-win32 host; the
+// final case forces platform:win32 so the actual wrapping branch is exercised too — without it a
+// raw pass-through return would pass every other assertion here.
+describe("resolveWindowsSpawnInvocation", () => {
+  it("passes a resolved .cmd executable through unchanged on a non-win32 host", () => {
+    const executable = "/abs/tools/typescript-language-server.cmd";
+    const result = resolveWindowsSpawnInvocation(executable, ["--stdio"]);
+    expect(result).toStrictEqual({
+      command: executable,
+      args: ["--stdio"],
+      windowsVerbatimArguments: false,
+    });
+  });
+
+  it("passes a resolved .exe/native executable through unchanged", () => {
+    const executable = "/abs/tools/gopls";
+    const result = resolveWindowsSpawnInvocation(executable, []);
+    expect(result).toStrictEqual({
+      command: executable,
+      args: [],
+      windowsVerbatimArguments: false,
+    });
+  });
+
+  it("routes a resolved .cmd through the hardened cmd.exe wrapper on win32", () => {
+    // Forcing the platform proves the win32 branch is actually reached — a raw pass-through return
+    // would fail this even though it passes the non-win32 cases above.
+    const executable = String.raw`C:\tools\typescript-language-server.cmd`;
+    const result = resolveWindowsSpawnInvocation(executable, ["&"], {
+      platform: "win32",
+      env: { SystemRoot: String.raw`C:\Windows` },
+    });
+    expect(result.windowsVerbatimArguments).toBe(true);
+    expect(result.command).toBe(String.raw`C:\Windows\System32\cmd.exe`);
+    expect(result.args).toEqual([
+      "/d",
+      "/s",
+      "/c",
+      '"C:\\tools\\typescript-language-server.cmd ^"^&^""',
+    ]);
+  });
+
+  // The byte-exact golden vectors for the escaping algorithm itself live in windows-shell.test.ts
+  // and are deliberately NOT restated here — a fixture that reproduces the production formula stops
+  // being able to detect that formula moving. What this call site owns is the property that every
+  // shape of argument still reaches cmd.exe as ONE pre-escaped operand with no bare metacharacter
+  // left to be reinterpreted as syntax.
+  it.each([
+    ["an empty argument", ""],
+    ["a lone quote", '"'],
+    ["a trailing backslash", "trailing\\"],
+    ["a command separator", "& echo pwned"],
+    ["a pipe into another command", "| whoami"],
+    ["a redirect", "> out.txt"],
+    ["a caret", "^"],
+    ["a percent expansion", "%PATH%"],
+    ["a long backslash run", "\\".repeat(64)],
+  ])("keeps %s inert inside a single cmd.exe operand on win32", (_label, argument) => {
+    const invocation = resolveWindowsSpawnInvocation(
+      String.raw`C:\tools\typescript-language-server.cmd`,
+      [argument],
+      { platform: "win32", env: { SystemRoot: String.raw`C:\Windows` } },
+    );
+
+    expect(invocation.windowsVerbatimArguments).toBe(true);
+    // Exactly one operand after /d /s /c: cmd.exe must never see the argument as its own token.
+    expect(invocation.args).toHaveLength(4);
+    const line = invocation.args[3] ?? "";
+    // Every cmd metacharacter that survives into the line is caret-escaped. Counting carets rather
+    // than matching an expected string keeps this independent of the escaping implementation.
+    for (const metacharacter of ["&", "|", "<", ">"]) {
+      let index = line.indexOf(metacharacter);
+      while (index !== -1) {
+        expect(line[index - 1]).toBe("^");
+        index = line.indexOf(metacharacter, index + 1);
+      }
+    }
+  });
+
+  // CR/LF is the one shape that must NOT be escaped through: cmd.exe treats a bare newline as a
+  // command boundary that caret-escaping cannot neutralise (the gap cross-spawn's metacharacter
+  // class leaves open, upstream #179), so this call site fails CLOSED rather than wrapping it.
+  it.each([
+    ["a line feed", "first\nsecond"],
+    ["a carriage return", "first\rsecond"],
+  ])("refuses to wrap %s on win32", (_label, argument) => {
+    expect(() =>
+      resolveWindowsSpawnInvocation(
+        String.raw`C:\tools\typescript-language-server.cmd`,
+        [argument],
+        {
+          platform: "win32",
+          env: { SystemRoot: String.raw`C:\Windows` },
+        },
+      ),
+    ).toThrow();
   });
 });

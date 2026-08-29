@@ -1050,9 +1050,14 @@ jobs:
       - name: Verify governed Node.js and npm toolchain
         run: node scripts/check-runtime-toolchain.mjs --exact
       - run: npm ci --ignore-scripts
-      - name: Smoke IExpress command execution
+      - name: Smoke the Windows command spawn wrapper
+        # #3350: on modern Node a `.cmd`/`.bat` target spawned with shell:false raises EINVAL, so
+        # every agent `npm`/`npx` call would fail. This exercises the real cmd.exe wrapper against
+        # an adversarial argument matrix on genuine Windows — the one place the escaping is proven
+        # against the OS rather than against golden vectors. Needs no MSVC, so it runs here.
         if: runner.os == 'Windows'
-        run: node scripts/__tests__/windows-iexpress-command-smoke.mjs
+        timeout-minutes: 10
+        run: node scripts/__tests__/windows-cmd-spawn-smoke.mjs
       - name: Configure MSVC for native quality analysis
         if: runner.os == 'Windows'
         shell: pwsh
@@ -1076,6 +1081,15 @@ jobs:
       - name: Verify productive native sources on Windows
         if: runner.os == 'Windows'
         run: npm run check:native:windows
+      - name: Smoke the Windows setup bootstrap
+        # #2992: build the real Keiko-owned native setup bootstrap (MSVC-compiled, archive appended
+        # as a hash-bound overlay) and exercise the actual install-command path — fresh install,
+        # existing-install revalidation, launch-failure, a tampered/truncated overlay, and the
+        # adversarial argument matrix that proves the closed `/quiet`-only allowlist rejects every
+        # `/C:`-style override. Runs after MSVC configuration because it compiles the C stub.
+        if: runner.os == 'Windows'
+        timeout-minutes: 20
+        run: node scripts/__tests__/windows-setup-bootstrap-smoke.mjs
       - name: Setup Linux sandbox isolation
         if: runner.os == 'Linux'
         uses: ./.github/actions/setup-sandbox-isolation

@@ -40,6 +40,8 @@ import {
   type WorkspaceInfo,
 } from "@oscharko-dev/keiko-workspace";
 import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
+import { UNKNOWN_CORRELATION_ID } from "../correlation.js";
+import { logCommandTermination, processServerLogSink } from "../process-log-sink.js";
 import type { AssuredPreFilterOutcome } from "./assuredPreFilter.js";
 import type { SandboxedCommand, SandboxedRunResult } from "./assuredGateRunner.js";
 import {
@@ -246,7 +248,19 @@ async function runSandboxed(
     return { exitCode: 1, networkEnforced: false, filesystemEnforced: false };
   }
   const result = await runCommand(
-    { command: cmd.command, args: cmd.args, cwd: undefined, timeoutMs: undefined, signal },
+    {
+      command: cmd.command,
+      args: cmd.args,
+      cwd: undefined,
+      timeoutMs: undefined,
+      signal,
+      // AGENTS.md §8 Rule 1: body-free runCommand termination evidence. No request-scoped
+      // correlation id is threaded this deep into the disposable-execution harness, so every line
+      // is stamped UNKNOWN_CORRELATION_ID.
+      onTerminated: (evidence): void => {
+        logCommandTermination(processServerLogSink(), UNKNOWN_CORRELATION_ID, evidence);
+      },
+    },
     {
       workspace: disposableWorkspace(root),
       policy: {
@@ -282,6 +296,9 @@ async function proveAssuredIsolation(root: string, signal: AbortSignal): Promise
         cwd: undefined,
         timeoutMs: undefined,
         signal,
+        onTerminated: (evidence): void => {
+          logCommandTermination(processServerLogSink(), UNKNOWN_CORRELATION_ID, evidence);
+        },
       },
       {
         workspace: disposableWorkspace(root),
