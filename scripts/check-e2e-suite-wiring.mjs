@@ -40,7 +40,8 @@
 // drive it over fixtures — including an intentionally unwired suite, which is how the gate proves
 // it can still fail.
 
-import { readFileSync, readdirSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
@@ -947,6 +948,7 @@ function blankBlockComment(source, start, out) {
 
 function copyStringLiteral(source, start, out) {
   const quote = source[start];
+  if (quote === "`") return copyTemplateLiteral(source, start, out);
   out.push(quote);
   let index = start + 1;
   while (index < source.length) {
@@ -961,11 +963,67 @@ function copyStringLiteral(source, start, out) {
   return index;
 }
 
+/**
+ * A template literal, copied verbatim to its REAL end.
+ *
+ * Treating the backtick as a plain toggle desynchronises on a nested template: the inner backtick
+ * of `` `outer ${`http://inner`} tail` `` closes the outer string early, the scanner drops into
+ * code mode over the remaining text, and the first `//` it meets there blanks the rest of the line
+ * — taking any real route call or tag on it along. That is a silent fail-open for both invariants,
+ * so the interpolation is tracked by depth and a nested quote is handed back to the copier.
+ */
+function copyTemplateLiteral(source, start, out) {
+  const state = { depth: 0, index: start + 1 };
+  out.push(source[start]);
+  while (state.index < source.length) {
+    if (source[state.index] === "`" && state.depth === 0) {
+      out.push("`");
+      return state.index + 1;
+    }
+    copyTemplateCharacter(source, state, out);
+  }
+  return state.index;
+}
+
+function copyTemplateCharacter(source, state, out) {
+  const character = source[state.index];
+  if (character === "\\") {
+    state.index = copyEscapedPair(source, state.index, out);
+    return;
+  }
+  if (character === "$" && source[state.index + 1] === "{") {
+    out.push("$", "{");
+    state.depth += 1;
+    state.index += 2;
+    return;
+  }
+  if (state.depth > 0 && isQuoteCharacter(character)) {
+    state.index = copyStringLiteral(source, state.index, out);
+    return;
+  }
+  if (state.depth > 0 && character === "{") state.depth += 1;
+  if (state.depth > 0 && character === "}") state.depth -= 1;
+  out.push(character);
+  state.index += 1;
+}
+
+function copyEscapedPair(source, index, out) {
+  out.push(source[index]);
+  if (index + 1 >= source.length) return index + 1;
+  out.push(source[index + 1]);
+  return index + 2;
+}
+
 // A Playwright config selects specs through `testMatch` and excludes through `testIgnore`. Both are
 // read as literals: a quoted name, an array of quoted names, or a regular expression whose escaped
 // dots spell one file name. Anything containing a `*` is a glob and selects nothing LITERALLY —
 // see (b) above for why that distinction is the whole point.
-export function configSelectorValues(text, key) {
+export function configSelectorValues(rawText, key) {
+  // Blanked first, exactly as the spec side is. `.exec` returns the FIRST match in the file, so a
+  // prose comment mentioning a quoted `testMatch:` above the real declaration would win over it —
+  // and this repository writes dense explanatory comments in precisely these files. The spec-side
+  // extractors already blank; leaving this one raw was the asymmetry.
+  const text = blankComments(rawText);
   const single = new RegExp(String.raw`${key}:\s*"([^"]*)"`, "u").exec(text);
   if (single !== null) return [single[1]];
   const array = new RegExp(String.raw`${key}:\s*\[([^\]]*)\]`, "u").exec(text);
@@ -1000,25 +1058,82 @@ export function declaredSpecTags(source) {
   return new Set([...blankComments(source).matchAll(/@[a-z][a-z0-9-]*/giu)].map((m) => m[0]));
 }
 
-function commandGrepTags(command) {
-  const tags = [];
+/**
+ * The effective `--grep` / `--grep-invert` of a command.
+ *
+ * Playwright registers both as ordinary Commander options, so a repeated flag OVERWRITES rather
+ * than accumulating — modelling several `--grep` flags as a conjunction would call a spec reachable
+ * that Playwright never selects. `--grep-invert` is read for the same reason in the other
+ * direction: a script that excludes a tag does not run the specs carrying it, and a gate blind to
+ * the exclusion reports coverage that does not exist.
+ */
+function commandGrepFilters(command) {
+  if (typeof command !== "string") return { grep: undefined, invert: undefined };
   const tokens = command.match(SHELL_TOKEN) ?? [];
+  const filters = { grep: undefined, invert: undefined };
   for (const [index, token] of tokens.entries()) {
-    if (token.startsWith("--grep=")) tags.push(unquote(token.slice("--grep=".length)));
-    else if (token === "--grep" && tokens[index + 1] !== undefined) {
-      tags.push(unquote(tokens[index + 1]));
+    for (const [flag, key] of [
+      ["--grep", "grep"],
+      ["--grep-invert", "invert"],
+    ]) {
+      if (token === flag && tokens[index + 1] !== undefined)
+        filters[key] = unquote(tokens[index + 1]);
+      else if (token.startsWith(`${flag}=`)) filters[key] = unquote(token.slice(flag.length + 1));
     }
   }
-  return tags;
+  return filters;
 }
 
 // A positional `*.spec.ts` argument, which is how `test:e2e:editor-chat-2119` names its one file.
 // A `--config` value is excluded by construction: it never ends in `.spec.ts`.
+/**
+ * The spec files a command actually hands to Playwright.
+ *
+ * Two things have to be true of a token before it counts, and both were once missing. It must
+ * belong to a `playwright` invocation — `echo tests/e2e/new.spec.ts && playwright test …` names a
+ * spec Playwright never collects — and it must be a POSITIONAL operand, not a flag or a flag's
+ * value, or `--output=stale.spec.ts` marks an unreachable spec reachable. Either mistake produces
+ * the false-green inventory this gate exists to prevent.
+ */
 export function commandSpecNames(command) {
   if (typeof command !== "string") return [];
   const tokens = (command.match(SHELL_TOKEN) ?? []).map((token) => unquote(token));
-  return tokens.filter((token) => token.endsWith(SPEC_SUFFIX)).map((token) => basename(token));
+  const names = [];
+  let inPlaywright = false;
+  for (const [index, token] of tokens.entries()) {
+    // `playwright` is matched anywhere rather than only at a command start, so `npx playwright
+    // test …` and a direct `node_modules/.bin/playwright` both count; a separator ends the run.
+    if (SHELL_COMMAND_SEPARATORS.has(token)) inPlaywright = false;
+    else if (basename(token) === "playwright") inPlaywright = true;
+    else if (inPlaywright && isSpecOperand(tokens, index)) names.push(basename(token));
+  }
+  return names;
 }
+
+/** A positional `*.spec.ts` argument: not a flag, and not the value one consumed. */
+function isSpecOperand(tokens, index) {
+  const token = tokens[index] ?? "";
+  if (token.startsWith("-") || VALUE_FLAGS.has(tokens[index - 1] ?? "")) return false;
+  return token.endsWith(SPEC_SUFFIX);
+}
+
+const SHELL_COMMAND_SEPARATORS = new Set([";", "|", "||", "&", "&&"]);
+
+// Playwright options that consume the following token as their value.
+const VALUE_FLAGS = new Set([
+  "--config",
+  "-c",
+  "--grep",
+  "-g",
+  "--grep-invert",
+  "--project",
+  "--reporter",
+  "--output",
+  "--workers",
+  "--timeout",
+  "--retries",
+  "--shard",
+]);
 
 function scriptReachesSpec(script, spec, selections, specTags) {
   if (script.specNames.includes(spec)) return true;
@@ -1032,9 +1147,10 @@ function scriptReachesSpec(script, spec, selections, specTags) {
 
 function grepReachesSpec(script, spec, selection, specTags) {
   if (selection.ignoredGlobs.some((glob) => globMatches(glob, spec))) return false;
-  return (
-    script.tags.length > 0 && script.tags.every((tag) => specTags.get(spec)?.has(tag) === true)
-  );
+  const declared = specTags.get(spec);
+  const { grep, invert } = script.filters;
+  if (grep === undefined || declared?.has(grep) !== true) return false;
+  return invert === undefined || !declared.has(invert);
 }
 
 function resolveScript(script) {
@@ -1042,7 +1158,7 @@ function resolveScript(script) {
     name: script.name,
     specNames: commandSpecNames(script.command),
     configs: playwrightConfigNames(script.command),
-    tags: commandGrepTags(script.command),
+    filters: commandGrepFilters(script.command),
   };
 }
 
@@ -1100,12 +1216,20 @@ export function checkE2eSpecReachability({ specs, scripts, selections, specTags,
 // calls, and one group (`AUTONOMOUS_DELIVERY_ROUTE_GROUP`) is DEFINED but deliberately never
 // spread. A source scan for `pattern:` literals finds that group and would bless the exact dead
 // call this invariant exists to catch. The production table is the only answer that cannot drift.
-const API_PATH_REFERENCE = /\/api\/[^\s"'`,;)\]}>]*/gu;
+// The separator may be escaped: a spec that recognises a route with a REGULAR EXPRESSION spells it
+// `/\/api\/editor\/…/u`, and a finder anchored on a bare `/api/` never matches it — the route would
+// then be exempt from this invariant for no better reason than the syntax that named it.
+// `normalizeApiPathReference` unescapes what this captures.
+const API_PATH_REFERENCE = /(?:\\?\/)api(?:\\?\/)[^\s"'`,;)\]}>]*/gu;
 // Everything after one of these is a wildcard, an interpolation, or a pattern fragment, so the
 // literal bounds a FAMILY of paths rather than naming one. `page.route("**/api/git/status*")` is a
 // legitimate interception of every status call; resolving it by prefix keeps that honest without
 // pretending the test named a single route.
-const REFERENCE_TERMINATORS = ["?", "#", "$", "*", "[", "(", "{", ":"];
+// `:` is deliberately absent. It names a parameterised SEGMENT, structurally identical to the
+// `:param` the mounted patterns use, so truncating at it turned `/api/editor/gone/:id/rename` into
+// the prefix `/api/editor` — which any one of the sixty-odd real editor routes then satisfies.
+// Kept whole, it is matched segment-for-segment against the table instead.
+const REFERENCE_TERMINATORS = ["?", "#", "$", "*", "[", "(", "{"];
 
 export function normalizeApiPathReference(raw) {
   let path = raw.replaceAll(String.raw`\/`, "/");
@@ -1123,15 +1247,32 @@ export function normalizeApiPathReference(raw) {
   return { path, prefix };
 }
 
+// `request.post("/api/x")` and friends. The verb is the call site's own, so it is read from there
+// rather than guessed — an interception glob or a bare string carries no method and stays
+// path-only, which is what `undefined` means downstream.
+const REQUEST_VERB = /\b(?:request|page)\.(get|post|put|patch|delete)\(\s*[`'"]?[^`'")]*$/u;
+
+function referenceMethod(source, at) {
+  const verb = REQUEST_VERB.exec(source.slice(Math.max(0, at - 120), at))?.[1];
+  return verb === undefined ? undefined : verb.toUpperCase();
+}
+
 export function apiPathReferences(source) {
   const found = new Map();
-  for (const match of blankComments(source).matchAll(API_PATH_REFERENCE)) {
-    const reference = normalizeApiPathReference(match[0]);
+  const blanked = blankComments(source);
+  for (const match of blanked.matchAll(API_PATH_REFERENCE)) {
+    const method = referenceMethod(blanked, match.index ?? 0);
+    const reference = { ...normalizeApiPathReference(match[0]), method };
+    // A bare `/api` carries no route to check: as a prefix it matches the entire table, so
+    // accepting it would wave through whatever followed it. No spec builds a route from a bare
+    // base today (they all name the full path), and one that started to would be reported by the
+    // reachability of its own literal rather than silently blessed here.
     if (reference.path === "/api") continue;
-    const existing = found.get(reference.path);
-    if (existing === undefined || (existing.prefix && !reference.prefix)) {
-      found.set(reference.path, reference);
-    }
+    // Keyed by path AND method: one spec may legitimately GET and POST the same route, and the
+    // two are different questions of the table.
+    const key = `${reference.method ?? "*"} ${reference.path}`;
+    const existing = found.get(key);
+    if (existing === undefined || (existing.prefix && !reference.prefix)) found.set(key, reference);
   }
   return [...found.values()];
 }
@@ -1139,15 +1280,31 @@ export function apiPathReferences(source) {
 function patternMatchesPath(pattern, path) {
   const patternParts = pattern.split("/");
   const pathParts = path.split("/");
-  return (
-    patternParts.length === pathParts.length &&
-    patternParts.every((part, index) => part.startsWith(":") || part === pathParts[index])
-  );
+  if (patternParts.length !== pathParts.length) return false;
+  return patternParts.every((part, index) => segmentMatches(part, pathParts[index] ?? ""));
+}
+
+// A `:param` on either side is a placeholder for one NON-EMPTY segment: an empty one comes from a
+// doubled slash in an interpolated URL, which is a defect in the spec rather than a route the
+// server serves, and accepting it would resolve that defect away.
+function segmentMatches(patternPart, pathPart) {
+  if (patternPart.startsWith(":") || pathPart.startsWith(":")) return pathPart.length > 0;
+  return patternPart === pathPart;
 }
 
 export function routeResolves(reference, patterns) {
-  if (!reference.prefix) return patterns.some((p) => patternMatchesPath(p, reference.path));
-  return patterns.some((p) => p === reference.path || p.startsWith(`${reference.path}/`));
+  // A method the call site named must be one the table serves for that pattern: the server
+  // dispatches on method AND pattern, so `request.post("/api/health")` against a GET-only route is
+  // a journey that cannot succeed, and a path-only projection called it mounted.
+  const candidates = patterns.filter(
+    (route) => reference.method === undefined || route.method === reference.method,
+  );
+  if (!reference.prefix) {
+    return candidates.some((route) => patternMatchesPath(route.pattern, reference.path));
+  }
+  return candidates.some(
+    (route) => route.pattern === reference.path || route.pattern.startsWith(`${reference.path}/`),
+  );
 }
 
 /**
@@ -1177,6 +1334,14 @@ export function checkE2eRouteResolution({ specSources, patterns, externalPaths }
       problems.push(
         `${BASELINE_PATH} records ${path} as an unmounted endpoint, but no spec names it any ` +
           "more. Remove the entry — the register only shrinks.",
+      );
+    } else if (routeResolves({ path, prefix: false }, patterns)) {
+      // The other direction, and the one that matters most: an entry recorded because the server
+      // deliberately does not mount a path must not survive the day it starts mounting it. Without
+      // this the exemption is permanent, and the register would stop describing the server.
+      problems.push(
+        `${BASELINE_PATH} records ${path} as an endpoint this server does not mount, but a route ` +
+          "now serves it. Remove the entry — the register only shrinks.",
       );
     }
   }
@@ -1248,22 +1413,93 @@ const SERVER_ROUTE_TABLE = join("packages", "keiko-server", "dist", "index.js");
  * that group and would bless the exact dead call the gate is looking for. An unreadable table is
  * reported as the finding — never skipped, which would silently remove the invariant.
  */
-export async function mountedRoutePatterns(repoRoot) {
-  const entry = join(repoRoot, SERVER_ROUTE_TABLE);
-  let table;
-  try {
-    ({ API_ROUTES: table } = await import(pathToFileURL(entry).href));
-  } catch (cause) {
+const SERVER_SOURCE_DIR = join("packages", "keiko-server", "src");
+
+// The walk stats every TypeScript file in the server package, so it is done once per directory and
+// remembered: nothing can change it inside a single run, and the suite calls the gate four times.
+const newestSourceTimes = new Map();
+
+/** The newest modification time under a directory, or 0 when it does not exist. */
+function newestSourceTime(directory) {
+  const cached = newestSourceTimes.get(directory);
+  if (cached !== undefined) return cached;
+  let newest = 0;
+  if (existsSync(directory)) {
+    for (const entry of readdirSync(directory, { recursive: true, withFileTypes: true })) {
+      if (!entry.isFile() || !entry.name.endsWith(".ts")) continue;
+      newest = Math.max(newest, statSync(join(entry.parentPath ?? entry.path, entry.name)).mtimeMs);
+    }
+  }
+  newestSourceTimes.set(directory, newest);
+  return newest;
+}
+
+/**
+ * A built table older than the source it was built from answers the wrong question.
+ *
+ * This is not hypothetical: the invariant's motivating incident is a route #2256 UNMOUNTED, and a
+ * dist predating that removal still exports it — so the dead call the gate exists to catch resolves
+ * cleanly. CI always builds before this step, but the local run AGENTS.md asks for is exactly where
+ * a stale dist sits, so the check belongs here rather than in the lane ordering.
+ */
+function assertRouteTableIsFresh(repoRoot, entry) {
+  const built = statSync(entry).mtimeMs;
+  const source = newestSourceTime(join(repoRoot, SERVER_SOURCE_DIR));
+  if (source <= built) return;
+  throw new Error(
+    `${SERVER_ROUTE_TABLE} is older than ${SERVER_SOURCE_DIR}, so the mounted route set it ` +
+      "reports is not the one this checkout serves. Run `npm run build:packages` first.",
+  );
+}
+
+// Read in a CHILD Node process, not by importing here. The server package is a large module graph,
+// and a test runner that intercepts module loading transforms all of it — which took this gate's
+// own suite from eight seconds to nearly a minute. A plain `node -e` pays none of that, and the
+// answer is the same production table either way.
+const ROUTE_TABLE_READER = [
+  "const { pathToFileURL } = require('node:url');",
+  "import(pathToFileURL(process.argv[1]).href)",
+  "  .then((m) => { process.stdout.write(JSON.stringify(m.API_ROUTES?.map((r) => [r.method, r.pattern]) ?? null)); })",
+  "  .catch((error) => { process.stderr.write(String(error?.message ?? error)); process.exit(1); });",
+].join("\n");
+
+function readRouteTable(entry) {
+  const result = spawnSync(process.execPath, ["-e", ROUTE_TABLE_READER, entry], {
+    encoding: "utf8",
+    maxBuffer: 1 << 24,
+  });
+  if (result.status !== 0) {
     throw new Error(
       `${SERVER_ROUTE_TABLE} could not be loaded, so the mounted route set is unknown. Run ` +
-        "`npm run build:packages` first — this gate reads the production route table.",
-      { cause },
+        `\`npm run build:packages\` first — this gate reads the production route table. ` +
+        `(${(result.stderr || "").trim().split("\n")[0] ?? "no detail"})`,
     );
   }
+  return JSON.parse(result.stdout);
+}
+
+// Keyed by the built file, which cannot change inside one run: the CLI reads it once, but the suite
+// evaluates the gate several times and each read is a child process.
+const routePatternCache = new Map();
+
+export async function mountedRoutePatterns(repoRoot) {
+  const entry = join(repoRoot, SERVER_ROUTE_TABLE);
+  const cached = routePatternCache.get(entry);
+  if (cached !== undefined) return cached;
+  if (existsSync(entry)) assertRouteTableIsFresh(repoRoot, entry);
+  const table = readRouteTable(entry);
   if (!Array.isArray(table) || table.length === 0) {
     throw new TypeError(`${SERVER_ROUTE_TABLE} exported no API_ROUTES table.`);
   }
-  return [...new Set(table.map((route) => route.pattern))].sort(compareStrings);
+  const patterns = [
+    ...new Map(
+      table.map(([method, pattern]) => [`${method} ${pattern}`, { method, pattern }]),
+    ).values(),
+  ].sort((left, right) =>
+    compareStrings(`${left.pattern} ${left.method}`, `${right.pattern} ${right.method}`),
+  );
+  routePatternCache.set(entry, patterns);
+  return patterns;
 }
 
 // Every Playwright config a `test:e2e:*` command can name, which is a wider set than invariant 3's
@@ -1275,8 +1511,16 @@ function readConfigSelections(repoRoot) {
   for (const directory of directories) {
     for (const name of readdirSync(directory)) {
       if (!name.endsWith(CONFIG_SUFFIX)) continue;
-      const text = readFileSync(join(directory, name), "utf8");
-      selections.set(name, parseConfigSelection(text));
+      // A `--config` argument is resolved to its BASENAME, so two configs sharing one across the
+      // two directories are indistinguishable to every caller. Picking a winner would silently
+      // answer for the wrong file; there is no collision today and this keeps it that way.
+      if (selections.has(name)) {
+        throw new TypeError(
+          `${name} exists in both ${SPEC_DIR} and ${CONFIG_DIR}. A config is addressed by its ` +
+            "base name, so the two are indistinguishable — rename one.",
+        );
+      }
+      selections.set(name, parseConfigSelection(readFileSync(join(directory, name), "utf8")));
     }
   }
   return selections;
@@ -1359,6 +1603,7 @@ export async function runE2eSuiteWiringGate(repoRoot = REPO_ROOT) {
     unownedConfigs: baseline.configsWithoutScript.length,
     specs: specSources.length,
     unreachableSpecs: baseline.specsWithoutLane.length,
+    externalPaths: baseline.externalApiPaths.length,
     protection: protection.protection,
   };
 }
@@ -1371,6 +1616,7 @@ export function formatGateReport({
   unownedConfigs,
   specs = 0,
   unreachableSpecs = 0,
+  externalPaths = 0,
   protection = {},
 }) {
   if (problems.length > 0) {
@@ -1393,8 +1639,9 @@ export function formatGateReport({
       `${String(configs - unownedConfigs)} of ${String(configs)} config(s) have an owning script; ` +
       `${String(unownedConfigs)} recorded as scriptless. ` +
       `${String(specs - unreachableSpecs)} of ${String(specs)} spec(s) are reachable from a ` +
-      `script; ${String(unreachableSpecs)} recorded as laneless. Every retained spec calls only ` +
-      "mounted routes.",
+      `script; ${String(unreachableSpecs)} recorded as laneless. Every /api path a retained spec ` +
+      `names resolves to a mounted route, except ${String(externalPaths)} recorded as ` +
+      "deliberately unmounted.",
     ...suiteLines,
     "",
   ].join("\n");

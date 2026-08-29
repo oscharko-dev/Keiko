@@ -2,7 +2,7 @@ import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSyn
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { describe, expect, it } from "vitest";
+import { beforeAll, describe, expect, it } from "vitest";
 
 import {
   apiPathReferences,
@@ -11,6 +11,7 @@ import {
   checkE2eProtectionBaseline,
   checkE2eRouteResolution,
   checkE2eSpecReachability,
+  commandSpecNames,
   checkE2eSuiteWiring,
   declaredSpecTags,
   executableWorkflowSegments,
@@ -100,6 +101,16 @@ jobs:
 `,
 };
 
+// The gate imports the BUILT server package to read the real route table. That module graph is
+// large, and vitest re-transforms it whenever a `build:packages` run has touched it, which is long
+// enough to blow a per-test timeout. Every real-repository assertion in this file therefore shares
+// one evaluation instead of paying for its own.
+let realRepositoryGate;
+
+beforeAll(async () => {
+  realRepositoryGate = await runE2eSuiteWiringGate();
+}, 180_000);
+
 function problemsFor(scripts, workflowText, baseline = []) {
   return checkE2eSuiteWiring({ scripts, workflowText, baseline });
 }
@@ -181,8 +192,8 @@ describe("e2e suite wiring gate (#2629)", () => {
   // Live wiring, through the gate's own readers rather than a re-implementation of them. This is
   // what turns the register into a ratchet on the actual repository instead of only on fixtures,
   // and it is the only thing that proves the gate can load its real inputs at all.
-  it("holds over the real package.json, workflows, and baseline", async () => {
-    const result = await runE2eSuiteWiringGate();
+  it("holds over the real package.json, workflows, and baseline", () => {
+    const result = realRepositoryGate;
     expect(result.problems).toEqual([]);
     expect(result.total).toBeGreaterThan(result.recorded);
     expect(formatGateReport(result)).toContain("e2e-suite-wiring: PASS");
@@ -535,7 +546,7 @@ jobs:
     const written = [];
     expect(await main((text) => written.push(text))).toBe(0);
     expect(written.join("")).toContain("e2e-suite-wiring: PASS");
-  });
+  }, 180_000);
 });
 
 // KEIKO-0077: the suite check starts from the scripts, so a fully-built suite whose config never
@@ -697,8 +708,8 @@ describe("config ownership (KEIKO-0077)", () => {
 
   // The real repository must satisfy the invariant, not only the fixtures: a gate whose only
   // coverage is synthetic never proves it can read its own inputs.
-  it("holds over the real repository", async () => {
-    expect((await runE2eSuiteWiringGate()).problems).toEqual([]);
+  it("holds over the real repository", () => {
+    expect(realRepositoryGate.problems).toEqual([]);
   });
 });
 
@@ -822,6 +833,91 @@ describe("spec reachability (KEIKO-0078 / KEIKO-0080)", () => {
     expect(parseConfigSelection("timeout: 1,").collectsByGlob).toBe(true);
   });
 
+  // `.exec` returns the FIRST match in a file, so a prose comment naming a quoted `testMatch:`
+  // above the real declaration used to win over it — in a repository whose configs are full of
+  // prose comments. The spec-side extractors already blanked; this one did not.
+  it("reads a config's real testMatch, not one quoted in a comment above it", () => {
+    const text = [
+      '// Prior to #2955 this file used testMatch: "smoke.spec.ts" and a grep lane.',
+      'testMatch: "**/*.spec.ts",',
+      'testIgnore: "code-task-*.spec.ts",',
+    ].join("\n");
+    expect(parseConfigSelection(text)).toEqual({
+      literals: [],
+      collectsByGlob: true,
+      ignoredGlobs: ["code-task-*.spec.ts"],
+    });
+  });
+
+  // A literal testMatch and testIgnore share the guard; only the grep lane was covered before.
+  it("honours testIgnore against a literal testMatch too", () => {
+    const ignored = "code-task-thing.spec.ts";
+    const selections = new Map([
+      [
+        "playwright.literal.config.ts",
+        parseConfigSelection(`testMatch: ["${ignored}"],\ntestIgnore: "code-task-*.spec.ts",`),
+      ],
+    ]);
+    const reached = reachableSpecs({
+      specs: [ignored],
+      scripts: [
+        {
+          name: "test:e2e:literal",
+          command: "playwright test --config x/playwright.literal.config.ts",
+        },
+      ],
+      selections,
+      specTags: new Map([[ignored, new Set()]]),
+    });
+    expect(reached.has(ignored)).toBe(false);
+  });
+
+  it("reads a literal testMatch as not collecting by glob", () => {
+    expect(parseConfigSelection('testMatch: "one.spec.ts",').collectsByGlob).toBe(false);
+  });
+
+  // Playwright registers --grep through Commander, so a repeated flag OVERWRITES; and
+  // --grep-invert excludes. Modelling several --grep flags as a conjunction, or ignoring the
+  // inversion, both report coverage the lane does not have.
+  it("takes the last --grep, honours --grep-invert, and reads the inline form", () => {
+    const specs = ["tagged.spec.ts"];
+    const specTags = new Map([["tagged.spec.ts", new Set(["@smoke", "@slow"])]]);
+    const via = (command) =>
+      reachableSpecs({
+        specs,
+        scripts: [{ name: "test:e2e:x", command }],
+        selections: SELECTIONS,
+        specTags,
+      }).has("tagged.spec.ts");
+    const base = "playwright test --config tests/e2e/config/playwright.config.ts";
+    expect(via(`${base} --grep=@smoke`)).toBe(true);
+    expect(via(`${base} --grep @other --grep @smoke`)).toBe(true);
+    expect(via(`${base} --grep @smoke --grep @other`)).toBe(false);
+    expect(via(`${base} --grep @smoke --grep-invert @slow`)).toBe(false);
+  });
+
+  // Only a positional argument names a file Playwright runs. A flag's VALUE that happens to end in
+  // .spec.ts marked an otherwise-unreachable spec reachable.
+  it("does not read a flag value as a named spec", () => {
+    expect(commandSpecNames("playwright test --output=stale.spec.ts real.spec.ts")).toEqual([
+      "real.spec.ts",
+    ]);
+    expect(commandSpecNames("playwright test --grep other.spec.ts real.spec.ts")).toEqual([
+      "real.spec.ts",
+    ]);
+  });
+
+  // …and only operands of a PLAYWRIGHT command count. A neighbouring command in the same script
+  // naming a spec Playwright never collects recreates the false-green inventory.
+  it("takes spec operands only from a playwright invocation", () => {
+    expect(commandSpecNames("echo tests/e2e/new.spec.ts")).toEqual([]);
+    expect(commandSpecNames("echo new.spec.ts && playwright test real.spec.ts")).toEqual([
+      "real.spec.ts",
+    ]);
+    expect(commandSpecNames("npx playwright test real.spec.ts")).toEqual(["real.spec.ts"]);
+    expect(commandSpecNames("playwright test a.spec.ts && echo b.spec.ts")).toEqual(["a.spec.ts"]);
+  });
+
   it("reads a tag from a spec's code but not from its comments", () => {
     expect(declaredSpecTags('test("runs @smoke", () => {});')).toContain("@smoke");
     expect(declaredSpecTags("// @smoke is not wired yet\nconst x = 1;")).not.toContain("@smoke");
@@ -846,12 +942,13 @@ describe("spec reachability (KEIKO-0078 / KEIKO-0080)", () => {
 // passing journey right up to the moment it runs — which is how editor-agent-docking-2122 kept
 // POSTing two routes #2256 deliberately unmounted, in a lane nobody watched.
 describe("route resolution (KEIKO-0094)", () => {
+  // Method-pattern pairs, as the production table is: the server dispatches on both.
   const PATTERNS = [
-    "/api/editor/agent/sessions",
-    "/api/editor/agent/audit",
-    "/api/git/status",
-    "/api/runs/:runId/cancel",
-    "/api/prompt-enhancement/evidence/:runId",
+    { method: "GET", pattern: "/api/editor/agent/sessions" },
+    { method: "GET", pattern: "/api/editor/agent/audit" },
+    { method: "GET", pattern: "/api/git/status" },
+    { method: "POST", pattern: "/api/runs/:runId/cancel" },
+    { method: "GET", pattern: "/api/prompt-enhancement/evidence/:runId" },
   ];
   const source = (body) => [{ name: "one.spec.ts", source: body }];
 
@@ -883,8 +980,76 @@ describe("route resolution (KEIKO-0094)", () => {
   // Interception globs and interpolated template literals name a FAMILY of paths, not one route.
   it("resolves a wildcard route glob and an interpolated path by prefix", () => {
     expect(problemsFor('page.route("**/api/git/status**", handler)')).toEqual([]);
-    expect(problemsFor("request.get(`/api/runs/${id}/cancel`)")).toEqual([]);
+    // POST, because that is the method the fixture mounts for this family — the prefix branch
+    // consults the method too, and a GET here would be the "cannot succeed" case.
+    expect(problemsFor("request.post(`/api/runs/${id}/cancel`)")).toEqual([]);
     expect(problemsFor('expect(url).toContain("/api/prompt-enhancement/evidence/")')).toEqual([]);
+  });
+
+  // A spec that RECOGNISES a route with a regular expression spells the separators escaped. A
+  // finder anchored on a bare `/api/` matched none of them, so a route named that way was exempt
+  // from this invariant for no reason but the syntax that named it — `editor-run-verification-2215`
+  // is exactly that shape.
+  it("finds a route named by a regular expression, with escaped separators", () => {
+    const source = String.raw`const r = /\/api\/runs\/[^/]+\/cancel$/u;`;
+    expect(apiPathReferences(source)).toEqual([{ path: "/api/runs", prefix: true }]);
+    expect(problemsFor(source)).toEqual([]);
+    expect(problemsFor(String.raw`const r = /\/api\/editor\/authority$/u;`)).toHaveLength(1);
+  });
+
+  // A nested template desynchronised the scanner: the inner backtick closed the outer string, the
+  // scanner fell into code mode, and the first `//` it met — inside a URL — blanked the rest of the
+  // line together with any real call on it. Silent, and in the fail-OPEN direction.
+  it("does not lose a call that follows a nested template literal", () => {
+    const source = 'const l = `outer ${`http://nested`} tail`; page.route("/api/git/status", h);';
+    expect(apiPathReferences(source).map((reference) => reference.path)).toEqual([
+      "/api/git/status",
+    ]);
+  });
+
+  // A `:` names one parameterised SEGMENT, exactly as the mounted patterns do. Truncating at it
+  // turned a stale template into a prefix that any sibling route satisfied.
+  it("matches a parameterised path segment instead of truncating to a prefix", () => {
+    expect(problemsFor('request.post("/api/runs/:runId/cancel")')).toEqual([]);
+    const stale = problemsFor('request.post("/api/editor/gone/:id/rename")');
+    expect(stale).toHaveLength(1);
+    expect(stale[0]).toContain("/api/editor/gone/:id/rename");
+  });
+
+  it("does not let a :param stand in for an empty segment", () => {
+    expect(problemsFor('request.post("/api/runs//cancel")')).toHaveLength(1);
+  });
+
+  // The other direction of this register's ratchet. Without it a recorded path is exempt forever,
+  // and the register would stop describing the server the day it started mounting one.
+  it("reports a recorded external path that the server now mounts", () => {
+    const problems = checkE2eRouteResolution({
+      specSources: source('request.get("/api/git/status")'),
+      patterns: PATTERNS,
+      externalPaths: ["/api/git/status"],
+    });
+    expect(problems).toHaveLength(1);
+    expect(problems[0]).toContain("a route now serves it");
+  });
+
+  // The server dispatches on method AND pattern, so a path-only projection called a POST to a
+  // GET-only route "mounted" — a journey that cannot succeed.
+  it("requires the method a call site names to be one the table serves", () => {
+    const methodPatterns = [
+      { method: "GET", pattern: "/api/git/status" },
+      { method: "POST", pattern: "/api/runs/:runId/cancel" },
+    ];
+    const problems = (src) =>
+      checkE2eRouteResolution({
+        specSources: source(src),
+        patterns: methodPatterns,
+        externalPaths: [],
+      });
+    expect(problems('request.get("/api/git/status")')).toEqual([]);
+    expect(problems('request.post("/api/git/status")')).toHaveLength(1);
+    expect(problems('request.post("/api/runs/run-7/cancel")')).toEqual([]);
+    // An interception glob names no verb, so it stays a path-only question.
+    expect(problems('page.route("**/api/git/status", handler)')).toEqual([]);
   });
 
   it("ignores a path that appears only in a comment", () => {
@@ -928,7 +1093,12 @@ describe("route resolution (KEIKO-0094)", () => {
     const refs = apiPathReferences(
       'page.route("**/api/git/status**"); request.get("/api/git/status")',
     );
-    expect(refs).toEqual([{ path: "/api/git/status", prefix: false }]);
+    // Two entries: the interception glob names no verb, the request names GET. They are different
+    // questions of the table, so they are kept apart rather than collapsed.
+    expect(refs).toEqual([
+      { path: "/api/git/status", prefix: true, method: undefined },
+      { path: "/api/git/status", prefix: false, method: "GET" },
+    ]);
     expect(apiPathReferences('const base = "/api/";')).toEqual([]);
   });
 
@@ -940,11 +1110,57 @@ describe("route resolution (KEIKO-0094)", () => {
     );
   });
 
+  // An empty `problems` array cannot distinguish "the invariant ran and found nothing" from "the
+  // invariant was never spread into the aggregate". These assert the two new registers against the
+  // REAL repository, the way the suite register already was, so dropping either spread goes red.
+  it("holds both new invariants over the real repository", () => {
+    const result = realRepositoryGate;
+    expect(result.problems).toEqual([]);
+    // Every spec is accounted for: reachable, or recorded with a reason.
+    expect(result.specs).toBeGreaterThan(result.unreachableSpecs);
+    expect(result.unreachableSpecs).toBeGreaterThan(0);
+    expect(result.externalPaths).toBeGreaterThan(0);
+    expect(formatGateReport(result)).toContain("deliberately unmounted");
+  });
+
+  it("still finds the real recorded spec unreachable, and its recorded paths unmounted", async () => {
+    const repoRoot = join(import.meta.dirname, "..", "..");
+    const baseline = JSON.parse(
+      readFileSync(join(repoRoot, "docs", "qa", "unwired-e2e-suites.json"), "utf8"),
+    );
+    expect(baseline.specsWithoutLane).toContain("human-loop-1405.spec.ts");
+    const patterns = await mountedRoutePatterns(repoRoot);
+    for (const path of baseline.externalApiPaths) {
+      // The reason each entry carries is "this server deliberately does not mount it" — asserted
+      // here against the real table rather than trusted from the prose.
+      expect(routeResolves({ path, prefix: false }, patterns)).toBe(false);
+    }
+  }, 180_000);
+
+  // A table that loads but says nothing is as unusable as one that does not load, and silently
+  // resolving nothing would turn the invariant into a no-op rather than a failure.
+  it("reports a route table that loads but exports nothing", async () => {
+    await withFixtureRoot(
+      (root) => {
+        mkdirSync(join(root, "packages", "keiko-server", "dist"), { recursive: true });
+        writeFileSync(
+          join(root, "packages", "keiko-server", "dist", "index.js"),
+          "export const API_ROUTES = [];\n",
+          "utf8",
+        );
+      },
+      async (root) => {
+        await expect(mountedRoutePatterns(root)).rejects.toThrow(/exported no API_ROUTES/u);
+      },
+    );
+  }, 180_000);
+
   it("reads the real mounted table from the built server package", async () => {
     const patterns = await mountedRoutePatterns(join(import.meta.dirname, "..", ".."));
-    expect(patterns).toContain("/api/editor/agent/sessions");
+    const mounted = patterns.map((route) => route.pattern);
+    expect(mounted).toContain("/api/editor/agent/sessions");
     // #2256 unmounted the browser-owned authority routes on purpose; routes.test.ts pins that they
     // stay unmounted. If this ever resolves, the register entry — not the gate — is what moved.
-    expect(patterns).not.toContain("/api/editor/agent/authority");
-  });
+    expect(mounted).not.toContain("/api/editor/agent/authority");
+  }, 180_000);
 });

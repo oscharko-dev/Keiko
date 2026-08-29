@@ -65,9 +65,26 @@ npm run test:e2e:editor-agent-pins
 ```
 
 Together these cover selection-grounded Ask/response, Chat Apply Reject/Accept/Save, the
-sensitive-path denial and authority-missing fail-closed default, split-pane session supersession and
-model reconciliation, filesystem state, presence, and content-free audit evidence against the real
-BFF.
+sensitive-path denial and authority-missing fail-closed default, split-pane session cardinality,
+filesystem state, and content-free audit evidence against the real BFF.
+
+Two behaviours the retired suite covered end-to-end are **not** covered end-to-end any more. They
+are named here rather than quietly dropped, with the reason, because one of them cannot simply be
+rewritten:
+
+- **Cross-pane model reconciliation** — an inactive pane's buffer updating after a committed
+  changeset. This is not merely unwritten, it is currently unreachable end-to-end. A split MOVES the
+  active tab into the new pane (`editorLayoutReducer`'s `split-pane` refuses to leave the source
+  pane empty), so two panes hold two DIFFERENT files; proving reconciliation across them therefore
+  needs a changeset that touches BOTH files at once. The chat bridge — the only agent-write path the
+  product still mounts — applies to the active buffer alone. The retired journey got its multi-file
+  changeset from `POST /api/editor/agent/authority`, which #2256 removed on purpose. Restoring the
+  proof needs a server-side path that can apply a multi-file changeset, not a rewrite of the test.
+- **The agent presence indicator** — no E2E coverage remains.
+
+Both keep unit-level coverage — `packages/keiko-editor/src/components/editor-model-registry.test.ts`
+and `packages/keiko-ui/.../EditorRuntimeWidget.a11y.test.tsx` respectively — against a mocked Monaco
+and no real BFF.
 
 The former `test:e2e:editor-agent-docking-2122` suite is retired (#2955). Its reviewed and direct
 multi-file transaction journeys registered a browser-supplied Authority Envelope through

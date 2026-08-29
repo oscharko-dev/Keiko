@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -213,9 +213,13 @@ describe("#2483 real-binary observation helpers", () => {
 
     expect(context.executable).toContain("macos-arm64");
     expect(context.executable.endsWith("/payload/bin/opencode")).toBe(true);
-    // State and probe directories live outside the checkout so a run cannot dirty the tree.
-    expect(context.stateDir.startsWith(tmpdir())).toBe(true);
-    expect(context.probeState.startsWith(tmpdir())).toBe(true);
+    // State and probe directories live outside the checkout so a run cannot dirty the tree, and
+    // under the RESOLVED temp root: this journey forces these paths into KEIKO_E2E_STATE_DIR, which
+    // e2eStateDir returns verbatim, so an unresolved one would route the whole lane around the
+    // symlink resolution the helper exists to perform (#2955 follow-up). The pin moved from
+    // `tmpdir()` to its realpath — the same invariant, one step stricter.
+    expect(context.stateDir.startsWith(realpathSync(tmpdir()))).toBe(true);
+    expect(context.probeState.startsWith(realpathSync(tmpdir()))).toBe(true);
     expect(context.stateDir).not.toBe(context.probeState);
   });
 

@@ -1,5 +1,4 @@
-import { realpathSync } from "node:fs";
-import { readdirSync, readFileSync } from "node:fs";
+import { mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 
@@ -9,7 +8,7 @@ import { e2eStateDir } from "./support/e2e-state-dir.js";
 
 // A Playwright config that builds its state directory from the raw `os.tmpdir()` cannot boot the UI
 // server on macOS at all — the store refuses a database path inside a symlinked directory, and
-// `/var` is a symlink to `/private/var`. On the Linux runners the same expression works, so twelve
+// `/var` is a symlink to `/private/var`. On the Linux runners the same expression works, so sixteen
 // suites were unrunnable on every developer machine while CI reported them healthy. Two of them
 // (#1575, #1577) turned out to be fully red the moment they could be booted locally.
 //
@@ -29,6 +28,26 @@ function configFiles(): readonly { readonly name: string; readonly source: strin
   );
 }
 
+/**
+ * Configs that keep their own state-directory expression, each for a stated reason.
+ *
+ * This is a consolidation exemption, NOT a defect exemption: the clause below that forbids an
+ * unresolved `os.tmpdir()` applies to every config including these, so the failure this branch
+ * exists to remove stays closed for them too. They simply do not route through the shared helper.
+ */
+const CONSOLIDATION_EXCEPTIONS = [
+  // A different contract entirely: its state lives beside the corpus, under KEIKO_LK_E2E_STATE_DIR.
+  "playwright.local-knowledge-regression.config.ts",
+  // ADR-0139 D10: both are hashed into the D12 measurement toolchain digest
+  // (`scripts/d12-measurement-toolchain.mjs`), so ANY edit — including one that changes no measured
+  // behaviour, as routing through this helper would not — invalidates the committed performance
+  // evidence and demands a re-measurement on the pinned reference container. Both already resolve
+  // the temp root correctly, so the refactor would buy tidiness at the price of re-measuring the
+  // ruler. Not worth it; the clause below still holds them to the invariant that matters.
+  "playwright.editor-performance.config.ts",
+  "playwright.issue-2348-editor-debugging.config.ts",
+] as const;
+
 describe("E2E state directory (#2955 follow-up)", () => {
   const originalOverride = process.env.KEIKO_E2E_STATE_DIR;
 
@@ -37,12 +56,29 @@ describe("E2E state directory (#2955 follow-up)", () => {
     else process.env.KEIKO_E2E_STATE_DIR = originalOverride;
   });
 
-  it("resolves the temp root through its symlinks", () => {
+  // Deliberately NOT `expect(dir).toBe(join(realpathSync(tmpdir()), …))`. That restates the
+  // production formula, and on Linux — the only platform this suite runs on in CI —
+  // `tmpdir() === realpathSync(tmpdir())`, so deleting the `realpathSync` call from the subject
+  // would leave it green on every required check. The proof therefore needs a temp root that IS a
+  // symlink on every platform, built here rather than borrowed from the OS.
+  it("resolves a symlinked temp root, on every platform", () => {
     delete process.env.KEIKO_E2E_STATE_DIR;
-    const dir = e2eStateDir("unit-fixture");
-    expect(dir).toBe(join(realpathSync(tmpdir()), "keiko-e2e", "unit-fixture"));
-    // The whole point: the resolved parent must not itself resolve to something else.
-    expect(realpathSync(join(realpathSync(tmpdir())))).toBe(realpathSync(tmpdir()));
+    const real = mkdtempSync(join(realpathSync(tmpdir()), "keiko-state-dir-real-"));
+    const link = `${real}-link`;
+    symlinkSync(real, link, "dir");
+    try {
+      // The link and its target are genuinely different paths on every platform, which is what
+      // makes this proof portable where a comparison against the OS temp root is not.
+      expect(realpathSync(link)).toBe(real);
+      expect(link).not.toBe(real);
+      // Handed the LINK, the subject must return a path under its TARGET. Delete the
+      // `realpathSync` from the subject and this is the assertion that goes red — on Linux too.
+      expect(e2eStateDir("unit-fixture", link)).toBe(join(real, "keiko-e2e", "unit-fixture"));
+      expect(e2eStateDir("unit-fixture", link).startsWith(link)).toBe(false);
+    } finally {
+      rmSync(link, { force: true });
+      rmSync(real, { force: true, recursive: true });
+    }
   });
 
   it("honours a non-empty override and ignores an empty one", () => {
@@ -63,10 +99,9 @@ describe("E2E state directory (#2955 follow-up)", () => {
     const offenders = configFiles()
       .filter(({ source }) => /const stateDir\s*=/u.test(source))
       .filter(({ source }) => !viaHelper.test(source))
-      .map(({ name }) => name);
-    // playwright.local-knowledge-regression.config.ts owns a different contract (its state lives
-    // beside the corpus, under KEIKO_LK_E2E_STATE_DIR), so it is the one deliberate exception.
-    expect(offenders).toEqual(["playwright.local-knowledge-regression.config.ts"]);
+      .map(({ name }) => name)
+      .sort((left, right) => left.localeCompare(right));
+    expect(offenders).toEqual([...CONSOLIDATION_EXCEPTIONS].sort((l, r) => l.localeCompare(r)));
   });
 
   // …and the named helpers the clause above accepts must themselves delegate, or that clause would

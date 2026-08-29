@@ -40,18 +40,20 @@ const PROJECT_PATH = "keiko-git-delivery-475";
 const BLOCKED_PREVIEW_BODY = {
   schemaVersion: "1",
   summary: { stagedFileCount: 2, areaCount: 1, touchesTests: false },
-  intent: { warnings: ["non-conventional-subject"], isWip: false },
+  intent: { warnings: ["non-conventional-subject"], isWip: false, mixedScope: false },
   messageValidation: { ok: false, violations: ["missing-conventional-prefix"] },
   preflightFindingCodes: [],
+  signatureRequirement: "not-required",
   policyOutcome: "allowed",
 } as const;
 
 const OK_PREVIEW_BODY = {
   schemaVersion: "1",
   summary: { stagedFileCount: 2, areaCount: 1, touchesTests: false },
-  intent: { warnings: [], isWip: false },
+  intent: { warnings: [], isWip: false, mixedScope: false },
   messageValidation: { ok: true },
   preflightFindingCodes: [],
+  signatureRequirement: "not-required",
   policyOutcome: "allowed",
 } as const;
 
@@ -398,7 +400,11 @@ function writeEvidenceManifest(ledger: RouteLedger): void {
       conventionalCommitReachesSucceeded: true,
     },
     requestLedger: {
-      previewRequests: ledger.previewBodies.length,
+      // The composer's policy preview is debounced, so the NUMBER of preview requests varies
+      // between runs on identical code — recording it would present a one-run timing artifact as
+      // evidence. What is stable, and what the proof actually rests on, is that preview was
+      // reached at all and that execute was reached exactly once, by the conventional message.
+      previewReached: ledger.previewBodies.length > 0,
       executeRequests: ledger.executeBodies.length,
     },
     notes: [

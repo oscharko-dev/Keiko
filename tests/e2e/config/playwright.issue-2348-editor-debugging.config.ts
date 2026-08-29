@@ -1,12 +1,14 @@
 import { defineConfig, devices } from "@playwright/test";
+import { realpathSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createE2eDapOperatorProvisioning } from "../support/dapOperatorProvisioning.js";
-import { e2eStateDir } from "../support/e2e-state-dir.js";
 
 const root = process.cwd();
 const port = Number(process.env.KEIKO_E2E_DEBUG_UI_PORT ?? "32283");
 const stateId = process.env.GITHUB_RUN_ID ?? `editor-debugging-2348-${String(process.pid)}`;
-const stateDir = e2eStateDir(stateId);
+const stateDir =
+  process.env.KEIKO_E2E_STATE_DIR ?? join(realpathSync(tmpdir()), "keiko-e2e", stateId);
 const fixtureDir = join(root, "tests", "e2e", "fixtures", "editor-debugging-2348");
 const runtimeConfigPath = join(stateDir, "keiko.e2e.config.json");
 const provisioning = createE2eDapOperatorProvisioning({

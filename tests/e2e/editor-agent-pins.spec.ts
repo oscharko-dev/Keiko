@@ -559,16 +559,16 @@ test("round-trips browser undo/redo across an agent-applied edit (#1394 pin)", a
   expect(pageErrors).toEqual([]);
 });
 
-// Pin (#2122 / ADR-0125): a split editor holds exactly ONE live agent session — the active pane's
-// — and switching panes RETARGETS it rather than adding a second. Two live sessions on one
-// workspace would let an agent action land in whichever buffer happened to answer first.
+// Pin (#2122 / ADR-0125): a split editor holds exactly ONE live agent session, and the SSE bridge
+// subscribes to exactly that one. Two live sessions on one workspace would let an agent action land
+// in whichever buffer answered first rather than in the pane the human is looking at.
 //
-// This pin is the surviving half of the retired editor-agent-docking-2122 suite. That suite's other
-// two journeys registered a browser-supplied Authority Envelope through
-// `POST /api/editor/agent/authority` and `/api/coding-workbench/autonomous-delivery/confirm` —
-// routes #2256 deliberately unmounted (routes.test.ts pins that they stay unmounted), so those
-// journeys asserted a capability the product no longer has and could never pass again. The session
-// invariant does not depend on browser-owned authority, so it moves here, onto a wired lane.
+// This is the surviving half of the retired editor-agent-docking-2122 suite. Its other journeys
+// registered a browser-supplied Authority Envelope through `POST /api/editor/agent/authority` and
+// `/api/coding-workbench/autonomous-delivery/confirm` — routes #2256 deliberately unmounted
+// (routes.test.ts pins that they stay unmounted), so they asserted a capability the product no
+// longer has. See `docs/keiko-editor/2091-agent-docking-demo.md` for the one behaviour that leaves
+// end-to-end coverage with them, and why it cannot be relocated onto the current path.
 const SPLIT_WINDOW_ID = "editor-agent-pins-split";
 const SECOND_FILE = "src/second.ts";
 const SECOND_CONTENT = "export const second = 1;\n";
@@ -605,6 +605,9 @@ test("keeps exactly one live agent session across split panes (#2122 pin)", asyn
   request,
 }) => {
   test.setTimeout(120_000);
+  // TWO open files, because a split MOVES the active tab into the new pane
+  // (`editorLayoutReducer`'s split-pane refuses to leave the source pane empty). A one-file seed
+  // makes the split a silent no-op and the pane assertion below the only thing that notices.
   const { root } = createEditorWorkspace([
     { path: RELATIVE_PATH, content: INITIAL_CONTENT },
     { path: SECOND_FILE, content: SECOND_CONTENT },
@@ -626,15 +629,12 @@ test("keeps exactly one live agent session across split panes (#2122 pin)", asyn
   const panes = workspace.locator(EDITOR_SELECTORS.pane);
   await expect(panes).toHaveCount(2);
 
-  // Two panes, one live session — and the SSE bridge subscribed to exactly that one. A second
-  // session here is the defect the pin exists for: an agent action would then land in whichever
-  // buffer answered first rather than in the pane the human is looking at.
+  // Two panes, one live session — and the SSE bridge subscribed to exactly that one.
   await expect.poll(async () => liveEditorSessionIds(request, root)).toHaveLength(1);
   await expect.poll(() => eventSessionSets.at(-1)).toHaveLength(1);
 
-  // Moving the focus to the other pane keeps that cardinality: the one session is RETARGETED, not
-  // joined by a second. Both panes stay mounted throughout, so this is the two-pane steady state
-  // rather than a teardown artefact.
+  // Focusing the other pane keeps that cardinality. Both panes stay mounted throughout, so this is
+  // the two-pane steady state rather than a teardown artefact.
   await panes.nth(0).locator(EDITOR_SELECTORS.monaco).first().click();
   await expect(panes).toHaveCount(2);
   await expect.poll(async () => liveEditorSessionIds(request, root)).toHaveLength(1);

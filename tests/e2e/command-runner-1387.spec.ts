@@ -96,12 +96,15 @@ function deferred(): Deferred {
 // KEIKO-0204 scoped the visible "Recent events" log to the widget's OWN in-flight request, so a
 // synthetic frame is only logged while `pendingRequestIdRef` still holds the requestId the browser
 // minted for this run — that is, strictly before the run POST resolves. The two handlers below
-// therefore hand off rather than race: the run POST publishes the requestId and then waits for the
-// event frame to be served; the event stream waits for that requestId and serves the frame with it.
-// No sleeps and no assumed ordering — each side awaits the fact it needs.
+// therefore hand off rather than race: the run POST publishes the requestId, then waits until the
+// PAGE has rendered the event, and only then answers.
+//
+// Waiting on `route.fulfill()` alone would prove only that Playwright handed over the bytes, not
+// that the EventSource handler consumed them — the POST could still resolve first, clear
+// `pendingRequestIdRef`, and have the frame rejected as belonging to no active run. The signal is
+// therefore taken from the log the assertion itself reads. No sleeps, no assumed ordering.
 async function routeCommandBff(page: Page, runs: string[]): Promise<void> {
   const requestIdKnown = deferred();
-  const eventServed = deferred();
 
   await page.route("**/api/commands/events**", async (route) => {
     const requestId = await requestIdKnown.promise;
@@ -116,7 +119,6 @@ async function routeCommandBff(page: Page, runs: string[]): Promise<void> {
       contentType: "text/event-stream; charset=utf-8",
       body: `event: ready\ndata: {}\n\nid: 1\nevent: command:run-completed\ndata: ${completed}\n\n`,
     });
-    eventServed.resolve(requestId);
   });
 
   await page.route("**/api/commands/runs", async (route) => {
@@ -125,7 +127,13 @@ async function routeCommandBff(page: Page, runs: string[]): Promise<void> {
     const posted = JSON.parse(body) as { readonly requestId?: unknown };
     if (typeof posted.requestId === "string") {
       requestIdKnown.resolve(posted.requestId);
-      await eventServed.promise;
+      // The page-visible receipt: the widget has parsed the frame and rendered it into the events
+      // log this test asserts on. Only then may the run resolve and clear its pending request id.
+      await page.waitForFunction(
+        () => document.querySelector('[role="log"]')?.textContent.includes("completed") === true,
+        undefined,
+        { timeout: 15_000 },
+      );
     }
     await route.fulfill({
       contentType: "application/json",

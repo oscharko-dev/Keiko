@@ -25,7 +25,9 @@ const PREVIEW_ROUTE = "**/api/git-delivery/push/preview**";
 const EXECUTE_ROUTE = "**/api/git-delivery/push/execute**";
 const WINDOW_ID = "issue-476-governed-git";
 
-// A protected/shared branch the default publish pack blocks; a user-namespace branch it permits.
+// A protected/shared branch the default publish pack blocks by name; a user-namespace branch it
+// permits. `isSafeTarget` mirrors the fixture's own split, not a product allow-list — the default
+// pack carries no branch-pattern constraint, only the protected-name deny-list.
 const PROTECTED_BRANCH = "dev";
 const SAFE_BRANCH = "feat/x";
 
@@ -51,8 +53,13 @@ function previewBody(remoteBranchName: string): unknown {
     forceBlocked: false,
     preflightBlockingCodes: [],
     preflightAdvisoryCodes: [],
+    signatureRequirement: "not-required",
     policyOutcome: safe ? "allowed" : "blocked",
-    ...(safe ? {} : { policyBlockReason: "policy-pack-blocked" }),
+    // `protected-branch`, not the generic `policy-pack-blocked`: the default publish pack states
+    // the protection directly (KEIKO_PROTECTED_REMOTE_BRANCHES) instead of deriving it from an
+    // allow-list of branch prefixes, and pushRoutes.test.ts pins exactly this reason for `dev`.
+    // A fixture carrying the other code would describe a policy model the product retired.
+    ...(safe ? {} : { policyBlockReason: "protected-branch" }),
   };
 }
 
@@ -83,6 +90,13 @@ function rootOf(route: Route): string {
 // The branch the intercepted read surface reports. Mutable so the same page can be reloaded onto the
 // safe-namespace control without a second fixture: the push target is derived from this state.
 const branchState = { current: PROTECTED_BRANCH };
+
+// Module-level fixture state is safe only while something resets it. The single test below does,
+// but a second test added later would silently inherit whatever the first left behind, so the
+// reset lives here rather than in one test body.
+test.beforeEach(() => {
+  branchState.current = PROTECTED_BRANCH;
+});
 
 async function interceptReadRoutes(page: Page): Promise<void> {
   await page.route("**/api/git/status**", async (route) => {
@@ -307,7 +321,7 @@ async function assertProtectedTargetIsBlocked(
     .poll(() => ledger.previewBodies.length, { message: "governed push preview called" })
     .toBeGreaterThan(0);
   expect(ledger.previewBodies.at(-1)?.remoteBranchName).toBe(PROTECTED_BRANCH);
-  await expect(gitWindow.getByText("Blocked: policy-pack-blocked")).toBeVisible();
+  await expect(gitWindow.getByText("Blocked: protected-branch")).toBeVisible();
   expect(ledger.executeBodies).toEqual([]);
 }
 
@@ -347,7 +361,7 @@ function writeEvidenceManifest(ledger: RouteLedger): void {
       governedWindowMountedFromRegistry: true,
       protectedTargetPreviewSurfacesPolicyBlock: true,
       publishPathSurfacesGovernedBlock: true,
-      blockReasonIsPolicyPackBlocked: true,
+      blockReasonIsProtectedBranch: true,
       blockedTargetNeverReachesExecute: true,
       browserReachedGovernedPushExecuteRoute: true,
       safeNamespaceTargetReachesSucceeded: true,
@@ -371,7 +385,6 @@ function writeEvidenceManifest(ledger: RouteLedger): void {
 test("Issue #476 — browser publish path cannot bypass governed target policy", async ({ page }) => {
   test.setTimeout(120_000);
   ensureEvidenceDir();
-  branchState.current = PROTECTED_BRANCH;
   const ledger: RouteLedger = { previewBodies: [], executeBodies: [] };
 
   const gitWindow = await openGovernedWindow(page, ledger);

@@ -24,7 +24,7 @@
     "conventionalCommitReachesSucceeded": true
   },
   "requestLedger": {
-    "previewRequests": 4,
+    "previewReached": true,
     "executeRequests": 1
   },
   "notes": [

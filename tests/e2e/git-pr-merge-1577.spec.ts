@@ -394,10 +394,11 @@ test("Git window embeds Pull Request and Merge repository operations", async ({ 
   // "Back to diff" text stopped existing and this suite has been timing out on it in the nightly
   // lane ever since.
   await page.getByRole("button", { name: "Back to changes" }).click();
-  // …which returns to the Changes view, not to a Diff region: the Diff pane only exists while a
-  // changed file is selected, and this fixture has none. The tabpanel is the surface the control
-  // actually returns to.
-  await expect(page.getByRole("tabpanel", { name: "Changes" })).toBeVisible();
+  // …which dismisses the PULL REQUEST panel. Asserting the Changes tabpanel instead would prove
+  // nothing: ChangesPane is mounted unconditionally in the sidebar and stays visible the whole
+  // time the PR panel is open, so that assertion holds even if the control does nothing at all.
+  // Only the right pane changes across this click, so only it can witness it.
+  await expect(prPanel).toBeHidden();
   await page.getByRole("button", { name: /Merge/u }).click();
   const mergePanel = page.getByRole("region", { name: "Merge", exact: true });
   await expect(mergePanel).toBeVisible();
