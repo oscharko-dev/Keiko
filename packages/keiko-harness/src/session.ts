@@ -49,8 +49,8 @@ export interface HarnessDeps {
   readonly shaperPort?: HarnessShaperPort | undefined;
   // Optional injected message-history compaction port (KEIKO-0726, #3323). When omitted, the
   // harness performs no compaction and checkModelCallLimits keeps its original byte-only
-  // hard-fail. The production wiring tier (which already depends on keiko-workflows) injects an
-  // implementation backed by the context-budget allocator.
+  // hard-fail. The production wiring tier injects an implementation that evicts by measured bytes
+  // alone (packages/keiko-server/src/harness-context-compactor.ts; ADR-0052 D9).
   readonly compactionPort?: HarnessCompactionPort | undefined;
 }
 

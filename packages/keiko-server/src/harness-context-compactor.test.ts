@@ -2,7 +2,6 @@
 import { describe, expect, it } from "vitest";
 import type { ChatMessage } from "@oscharko-dev/keiko-model-gateway";
 import { resolveTaskPlan, type HarnessEvent } from "@oscharko-dev/keiko-harness";
-import { DEFAULT_CONTEXT_PROFILE } from "@oscharko-dev/keiko-contracts/runtime/context-engineering";
 import type { ServerLogEvent, ServerLogSink } from "./observability/server-log.js";
 import {
   createServerHarnessContextCompactor,
@@ -137,22 +136,45 @@ describe("createServerHarnessContextCompactor", () => {
     expect(result).toBeUndefined();
   });
 
-  it("falls back to DEFAULT_CONTEXT_PROFILE when no contextProfile is supplied (profile-present precondition)", () => {
-    const withDefault = createServerHarnessContextCompactor();
-    const withExplicitDefault = createServerHarnessContextCompactor({
-      contextProfile: DEFAULT_CONTEXT_PROFILE,
-    });
-    const messages: ChatMessage[] = [
-      SYSTEM,
-      USER,
-      ...assistantTurn(1, 500),
-      ...assistantTurn(2, 500),
-      ...assistantTurn(3, 500),
-    ];
-    const budget = bytesOf(messages) - 400;
-    expect(withDefault({ messages, maxContextBytes: budget })).toEqual(
-      withExplicitDefault({ messages, maxContextBytes: budget }),
-    );
+  // 2895 audit KEIKO-0900/KEIKO-0901: the escalation used to start from the keiko-workflows
+  // allocator's exclusion count for a "history-summary" lane capped at a fixed 16,000 TOKENS,
+  // completely unrelated to the actual byte budget this gate enforces. A history whose estimated
+  // token size clears that 16k lane cap made the allocator exclude MANY turns, and the old
+  // start-from-that-count loop only ever escalated upward from there — so a history just a few
+  // bytes over maxContextBytes could lose nearly all of it even though dropping the single oldest
+  // turn was enough to fit. This test builds exactly that shape: comfortably over 16,000 tokens
+  // (60 turns of dense 2,000-character content each, ~68,000+ tokens at the ~3.5 bytes/token
+  // estimator — packages/keiko-contracts/src/context-engineering.ts), but with maxContextBytes set
+  // to just ONE byte under the full, uncompacted size — the smallest possible byte overage. Fixed
+  // behavior: only the single oldest turn is evicted. Unfixed (start-from-excludedTurnCount)
+  // behavior: roughly half the turns would be evicted to clear the 16k lane cap, which this test's
+  // assertions on turn 1..58's surviving markers would catch.
+  it("evicts only the minimum oldest turn(s) when a tiny byte overage hides behind a large token estimate (near-cap regression)", () => {
+    const turnCount = 60;
+    const rounds = Array.from({ length: turnCount }, (_, i) => assistantTurn(i, 2000)).flat();
+    const messages: ChatMessage[] = [SYSTEM, USER, ...rounds];
+    const fullBytes = bytesOf(messages);
+    // Comfortably clears the allocator's fixed 16,000-token "history-summary" lane cap regardless
+    // of which byte/token divisor applies, so the OLD behavior would have excluded far more than
+    // the byte-minimum one turn.
+    expect(fullBytes).toBeGreaterThan(150_000);
+    const compactor = createServerHarnessContextCompactor();
+    // Exactly one byte over budget with zero turns dropped: the smallest possible byte overage.
+    const result = compactor({ messages, maxContextBytes: fullBytes - 1 });
+    expect(result).toBeDefined();
+    if (result === undefined) return;
+    expect(bytesOf(result.messages)).toBeLessThanOrEqual(fullBytes - 1);
+    // Exactly one turn (2 messages: the assistant call + its tool result) was evicted.
+    expect(result.messagesEvicted).toBe(2);
+    const rendered = JSON.stringify(result.messages);
+    // The oldest turn (call 0) is gone...
+    expect(rendered).not.toContain("call 0:");
+    // ...but EVERY other turn, including the second-oldest (call 1), survives verbatim. The old
+    // start-from-excludedTurnCount behavior would have dropped call 1 (and many more) too, since
+    // the allocator's 16k-token lane cap demands excluding roughly half of 60 dense-content turns.
+    for (let i = 1; i < turnCount; i += 1) {
+      expect(rendered).toContain(`call ${String(i)}:`);
+    }
   });
 
   it("the exported default instance behaves the same as a freshly-created one", () => {
