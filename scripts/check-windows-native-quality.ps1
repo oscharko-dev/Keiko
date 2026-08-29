@@ -32,7 +32,7 @@ try {
 
   # #2992: the Keiko-owned native setup bootstrap replaces the IExpress self-extractor. It is held
   # to the same /W4 /WX /analyze bar as the launcher. The baked-payload defines here are QUALITY
-  # dummies (a valid 64-hex digest and a nonzero size) — the real values are baked per release by
+  # dummies (a valid 64-hex digest and a nonzero size) -- the real values are baked per release by
   # build-windows-portable-setup.mjs; this build only proves the source compiles and analyzes clean.
   $setupDefines = @(
     '/DKEIKO_SETUP_TARGET="windows-x64"',

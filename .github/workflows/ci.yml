@@ -1056,6 +1056,7 @@ jobs:
         # an adversarial argument matrix on genuine Windows — the one place the escaping is proven
         # against the OS rather than against golden vectors. Needs no MSVC, so it runs here.
         if: runner.os == 'Windows'
+        timeout-minutes: 10
         run: node scripts/__tests__/windows-cmd-spawn-smoke.mjs
       - name: Configure MSVC for native quality analysis
         if: runner.os == 'Windows'
@@ -1087,6 +1088,7 @@ jobs:
         # adversarial argument matrix that proves the closed `/quiet`-only allowlist rejects every
         # `/C:`-style override. Runs after MSVC configuration because it compiles the C stub.
         if: runner.os == 'Windows'
+        timeout-minutes: 20
         run: node scripts/__tests__/windows-setup-bootstrap-smoke.mjs
       - name: Setup Linux sandbox isolation
         if: runner.os == 'Linux'

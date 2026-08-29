@@ -23,6 +23,12 @@ static void write_u32(unsigned char *buffer, size_t offset, uint32_t value) {
   }
 }
 
+static void write_u64(unsigned char *buffer, size_t offset, uint64_t value) {
+  for (size_t index = 0; index < 8; index++) {
+    buffer[offset + index] = (unsigned char)((value >> (8 * index)) & 0xff);
+  }
+}
+
 // Lays out a minimal-but-valid PE32+ header into `buffer` and returns the computed overlay start
 // (max of SizeOfHeaders and the single section's PointerToRawData + SizeOfRawData).
 static uint64_t make_pe(unsigned char *buffer, size_t buffer_len, uint16_t magic,
@@ -148,7 +154,7 @@ static void test_overlay_header(void) {
   unsigned char header[KEIKO_OVERLAY_HEADER_BYTES];
   memset(header, 0, sizeof(header));
   memcpy(header, KEIKO_OVERLAY_MAGIC, OVERLAY_MAGIC_BYTES);
-  write_u32(header, OVERLAY_SIZE_OFFSET, 0x1234);
+  write_u64(header, OVERLAY_SIZE_OFFSET, 0x1234);
   for (size_t index = 0; index < KEIKO_SHA256_BYTES; index++) {
     header[OVERLAY_DIGEST_OFFSET + index] = (unsigned char)index;
   }

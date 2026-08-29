@@ -65,14 +65,18 @@ function buildSyntheticStub(overrides = {}) {
 
   const sectionTableOffset = OPTIONAL_HEADER_OFFSET + options.sizeOfOptionalHeader;
   const headerRegionEnd = sectionTableOffset + sectionHeaderCount * 40;
-  const overlayStartFromSections = options.sections.reduce(
-    (max, section) => Math.max(max, section.pointerToRawData + section.sizeOfRawData),
+  // Byte extent the allocation must cover so each section's raw data physically fits in the buffer.
+  // This is a BUFFER-SIZING bound, not the overlay-start expectation: every test asserts the overlay
+  // start/end against hardcoded constants (e.g. 1024), so a regression in the production
+  // `computeOverlayStart` formula is still caught even though the two happen to coincide here.
+  const sectionRawDataExtent = options.sections.reduce(
+    (extent, section) => Math.max(extent, section.pointerToRawData + section.sizeOfRawData),
     options.sizeOfHeaders,
   );
   const bufferLength = Math.max(
     headerRegionEnd,
     OPTIONAL_HEADER_OFFSET + OPTIONAL_HEADER_PHYSICAL_RESERVE,
-    options.includeSectionRawData ? overlayStartFromSections : 0,
+    options.includeSectionRawData ? sectionRawDataExtent : 0,
   );
 
   const buffer = Buffer.alloc(bufferLength);
@@ -249,6 +253,16 @@ describe("parseSetupOverlay", () => {
     expect(parseSetupOverlay(file)).toEqual({
       payloadSha256Hex: sha256Hex(payload),
       payloadSize: payload.byteLength,
+      payloadStart: stub.byteLength + SETUP_OVERLAY_HEADER_BYTES,
+    });
+  });
+
+  it("parses a zero-length payload (the empty-payload boundary)", () => {
+    const emptyPayload = Buffer.alloc(0);
+    const file = buildCompleteFile(stub, emptyPayload);
+    expect(parseSetupOverlay(file)).toEqual({
+      payloadSha256Hex: sha256Hex(emptyPayload),
+      payloadSize: 0,
       payloadStart: stub.byteLength + SETUP_OVERLAY_HEADER_BYTES,
     });
   });

@@ -1,7 +1,11 @@
 import { accessSync, constants, existsSync, mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { delimiter, join, resolve as resolvePath } from "node:path";
-import { buildSandboxEnv, buildWindowsShellInvocation } from "@oscharko-dev/keiko-tools";
+import {
+  buildSandboxEnv,
+  buildWindowsShellInvocation,
+  type WindowsShellInvocationOptions,
+} from "@oscharko-dev/keiko-tools";
 import { isWithinWorkspace, type WorkspaceInfo } from "@oscharko-dev/keiko-workspace";
 
 export class EditorProcessHardeningError extends Error {
@@ -152,8 +156,11 @@ export interface WindowsSpawnInvocation {
 export function resolveWindowsSpawnInvocation(
   executable: string,
   args: readonly string[],
+  options?: WindowsShellInvocationOptions,
 ): WindowsSpawnInvocation {
-  return buildWindowsShellInvocation(executable, args);
+  // `options` is forwarded only so a test can force the win32 branch on any host; production callers
+  // (the LSP adapter) omit it and get the real process.platform / process.env.
+  return buildWindowsShellInvocation(executable, args, options);
 }
 
 function safeKill(child: KillableChild, signal: NodeJS.Signals): void {

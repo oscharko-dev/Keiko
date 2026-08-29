@@ -366,10 +366,11 @@ describe("editor process TERM-to-KILL escalation", () => {
 
 // resolveWindowsSpawnInvocation (issue #3350 / Node CVE-2024-27980) delegates to keiko-tools'
 // buildWindowsShellInvocation, which is exhaustively golden-vector tested in
-// packages/keiko-tools/src/windows-shell.test.ts. This only pins the DELEGATION: the wrapper must
-// not swallow, transform, or hardcode away the underlying decision. It calls buildWindowsShellInvocation
-// with no platform override, so on this (non-win32) test host every case below takes the
-// pass-through branch — exactly what defaultLspSpawnFn's own un-overridden call site does here too.
+// packages/keiko-tools/src/windows-shell.test.ts. This pins the DELEGATION: the wrapper must not
+// swallow, transform, or hardcode away the underlying decision. The pass-through cases mirror
+// defaultLspSpawnFn's own un-overridden (process.platform) call site on this non-win32 host; the
+// final case forces platform:win32 so the actual wrapping branch is exercised too — without it a
+// raw pass-through return would pass every other assertion here.
 describe("resolveWindowsSpawnInvocation", () => {
   it("passes a resolved .cmd executable through unchanged on a non-win32 host", () => {
     const executable = "/abs/tools/typescript-language-server.cmd";
@@ -389,5 +390,23 @@ describe("resolveWindowsSpawnInvocation", () => {
       args: [],
       windowsVerbatimArguments: false,
     });
+  });
+
+  it("routes a resolved .cmd through the hardened cmd.exe wrapper on win32", () => {
+    // Forcing the platform proves the win32 branch is actually reached — a raw pass-through return
+    // would fail this even though it passes the non-win32 cases above.
+    const executable = String.raw`C:\tools\typescript-language-server.cmd`;
+    const result = resolveWindowsSpawnInvocation(executable, ["&"], {
+      platform: "win32",
+      env: { SystemRoot: String.raw`C:\Windows` },
+    });
+    expect(result.windowsVerbatimArguments).toBe(true);
+    expect(result.command).toBe(String.raw`C:\Windows\System32\cmd.exe`);
+    expect(result.args).toEqual([
+      "/d",
+      "/s",
+      "/c",
+      '"C:\\tools\\typescript-language-server.cmd ^"^&^""',
+    ]);
   });
 });

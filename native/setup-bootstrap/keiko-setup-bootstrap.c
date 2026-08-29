@@ -588,16 +588,22 @@ static int keiko_run_capture(const wchar_t *application, wchar_t *command_line, 
   }
   (void)CloseHandle(write_end);
   int total = 0;
+  unsigned char drain[4096];
   for (;;) {
     DWORD read_bytes = 0;
-    if (total >= cap - 1) {
+    if (total < cap - 1) {
+      if (!ReadFile(read_end, out + total, (DWORD)(cap - 1 - total), &read_bytes, NULL) ||
+          read_bytes == 0) {
+        break;
+      }
+      total += (int)read_bytes;
+    } else if (!ReadFile(read_end, drain, (DWORD)sizeof(drain), &read_bytes, NULL) ||
+               read_bytes == 0) {
+      // Output exceeded the capture cap: keep draining into a throwaway buffer so the child never
+      // blocks writing to a full pipe (which would stall it until the watchdog fires) — stop only
+      // at EOF or a read error.
       break;
     }
-    if (!ReadFile(read_end, out + total, (DWORD)(cap - 1 - total), &read_bytes, NULL) ||
-        read_bytes == 0) {
-      break;
-    }
-    total += (int)read_bytes;
   }
   (void)CloseHandle(read_end);
   DWORD exit_code = 1;

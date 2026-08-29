@@ -40,17 +40,22 @@ import { windowsLauncher } from "../../packages/keiko-cli/src/launcher-platforms
 // looks like a plausible WExtract/IExpress-style switch (`/C:`, `/T:`, `/D`) or a near-miss of the
 // one accepted spelling (`/quiet`, case-insensitive `/Q`) — the argument gate must reject ALL of
 // them with zero side effects, because it is an allowlist, never a denylist of known-bad switches.
+// Each entry is a full argument vector. Singletons mimic a WExtract/IExpress switch or near-miss the
+// one accepted spelling; the mixed vectors pair a VALID leading flag with a rejected one so the gate
+// is proven to validate EVERY argument, not just argv[1].
 const ADVERSARIAL_ARGUMENTS = Object.freeze([
-  "/C:calc.exe",
-  "/c:x",
-  "/C",
-  "/T:dir",
-  "/D",
-  "--anything",
-  "-q",
-  "quiet",
-  "/quiet:extra",
-  "/Q2",
+  ["/C:calc.exe"],
+  ["/c:x"],
+  ["/C"],
+  ["/T:dir"],
+  ["/D"],
+  ["--anything"],
+  ["-q"],
+  ["quiet"],
+  ["/quiet:extra"],
+  ["/Q2"],
+  ["/Q", "/C:calc.exe"],
+  ["/quiet", "/D"],
 ]);
 
 function commandOutput(result) {
@@ -391,8 +396,8 @@ function assertAdversarialArgumentsRejected(setupPath, localAppData, managedRoot
   const temporaryRoot = tmpdir();
   const dir = mkdtempSync(join(temporaryRoot, "keiko-setup-smoke-adversarial-"));
   try {
-    ADVERSARIAL_ARGUMENTS.forEach((argument, index) => {
-      const label = `argument "${argument}"`;
+    ADVERSARIAL_ARGUMENTS.forEach((argv, index) => {
+      const label = `arguments [${argv.join(" ")}]`;
       const setupSentinelPath = join(dir, `setup-sentinel-${String(index)}.txt`);
       const executeOptions = setupEnvironment(
         localAppData,
@@ -403,7 +408,7 @@ function assertAdversarialArgumentsRejected(setupPath, localAppData, managedRoot
         managedRoot,
       );
       const before = listTempInstallDirs(temporaryRoot);
-      const attempt = runResult(setupPath, [argument], { ...executeOptions, timeout: 45_000 });
+      const attempt = runResult(setupPath, argv, { ...executeOptions, timeout: 45_000 });
       const after = listTempInstallDirs(temporaryRoot);
       assert.equal(attempt.status, 87, `${label} must be rejected with exit code 87`);
       assert.equal(existsSync(setupSentinelPath), false, `${label} reached the fixture CLI`);
