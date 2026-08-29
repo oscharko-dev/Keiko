@@ -282,16 +282,21 @@ function quickAccessResultsStatus(
 function useQuickAccessFocusRestore(
   inputRef: RefObject<HTMLInputElement | null>,
   opener: HTMLElement | null,
-): void {
+): () => void {
   const openerRef = useRef(opener);
+  const restoreOpenerRef = useRef(true);
+  const focusActivatedTarget = useCallback((): void => {
+    restoreOpenerRef.current = false;
+  }, []);
   useEffect(() => {
     const opener = openerRef.current;
     inputRef.current?.focus();
     return (): void => {
-      restoreModalFocusAfterUnlock(opener);
+      restoreModalFocusAfterUnlock(restoreOpenerRef.current ? opener : null);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+  return focusActivatedTarget;
 }
 
 interface QuickAccessFileSearchState {
@@ -396,7 +401,7 @@ export function UnifiedQuickAccessPalette({
   const targets = useMemo(() => quickAccessTargets(root, roots), [root, roots]);
   const multiRoot = targets.length > 1;
 
-  useQuickAccessFocusRestore(inputRef, opener);
+  const focusActivatedTarget = useQuickAccessFocusRestore(inputRef, opener);
   const { searchResults, truncated, failedRoots } = useQuickAccessFileSearch(mode, query, targets);
 
   const commandResults = useMemo(
@@ -418,6 +423,7 @@ export function UnifiedQuickAccessPalette({
         const command = commandResults[index];
         if (command === undefined) return;
         command.run();
+        focusActivatedTarget();
         onClose();
         return;
       }
@@ -429,9 +435,10 @@ export function UnifiedQuickAccessPalette({
         lineStart: result.line,
         lineEnd: result.line,
       });
+      focusActivatedTarget();
       onClose();
     },
-    [commandResults, mode, onClose, openEditorFile, searchResults],
+    [commandResults, focusActivatedTarget, mode, onClose, openEditorFile, searchResults],
   );
 
   const onKeyDown = quickAccessKeyDownHandler(

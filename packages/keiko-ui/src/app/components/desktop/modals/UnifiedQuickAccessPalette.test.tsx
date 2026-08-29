@@ -159,6 +159,31 @@ describe("UnifiedQuickAccessPalette", () => {
     expect(run).toHaveBeenCalledTimes(1);
   });
 
+  it("keeps the newly focused top window active after a command closes the palette", async () => {
+    const opener = document.createElement("button");
+    const activatedWindow = document.createElement("button");
+    activatedWindow.className = "window";
+    activatedWindow.dataset.top = "true";
+    document.body.append(opener, activatedWindow);
+    const { unmount } = render(
+      <UnifiedQuickAccessPalette
+        initialMode="commands"
+        root="/repo"
+        commands={[command("open-problems", "Open Problems")]}
+        openEditorFile={vi.fn()}
+        opener={opener}
+        onClose={vi.fn()}
+      />,
+    );
+
+    await userEvent.click(await screen.findByRole("option", { name: /Open Problems/ }));
+    unmount();
+
+    expect(document.activeElement).toBe(activatedWindow);
+    opener.remove();
+    activatedWindow.remove();
+  });
+
   it("keeps the combobox active-descendant contract available to screen readers", async () => {
     render(
       <UnifiedQuickAccessPalette

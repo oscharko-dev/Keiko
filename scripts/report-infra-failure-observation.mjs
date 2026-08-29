@@ -39,7 +39,7 @@ function isCanonicalUtcDate(value) {
   return !Number.isNaN(parsed.valueOf()) && parsed.toISOString().slice(0, 10) === value;
 }
 
-function parseArguments(args) {
+export function parseInfrastructureRunArguments(args) {
   const parsed = { from: undefined, to: undefined, repo: DEFAULT_REPOSITORY };
   const argumentKeys = { "--from": "from", "--to": "to", "--repo": "repo" };
   for (let index = 0; index < args.length; index += 1) {
@@ -64,7 +64,7 @@ function utcDates(from, to) {
   return dates;
 }
 
-function githubToken() {
+export function infrastructureRunGitHubToken() {
   if (process.env.GH_TOKEN !== undefined) return process.env.GH_TOKEN;
   if (process.env.GITHUB_TOKEN !== undefined) return process.env.GITHUB_TOKEN;
   fail("GitHub authentication is required (set GH_TOKEN or GITHUB_TOKEN)");
@@ -82,12 +82,10 @@ function nextLinkTarget(link) {
 }
 
 function hasValidWorkflowRunEntry(entry) {
-  if (entry === null || typeof entry !== "object" || typeof entry.event !== "string") {
-    return false;
-  }
+  const event = entry?.event;
   return (
-    entry.event !== "workflow_run" ||
-    (typeof entry.conclusion === "string" && WORKFLOW_RUN_CONCLUSIONS.has(entry.conclusion))
+    typeof event === "string" &&
+    (event !== "workflow_run" || WORKFLOW_RUN_CONCLUSIONS.has(entry.conclusion))
   );
 }
 
@@ -153,7 +151,7 @@ export async function observeInfrastructureRuns(args, dependencies = {}) {
   validateDateRange(args);
   const dates = utcDates(args.from, args.to);
   const fetchImpl = dependencies.fetch ?? globalThis.fetch;
-  const token = dependencies.token ?? githubToken();
+  const token = dependencies.token ?? infrastructureRunGitHubToken();
   const days = await Promise.all(
     dates.map(async (date) => {
       const runs = await runsForDate(fetchImpl, token, args.repo, date);
@@ -183,7 +181,7 @@ export async function observeInfrastructureRuns(args, dependencies = {}) {
 }
 
 async function main() {
-  const args = parseArguments(process.argv.slice(2));
+  const args = parseInfrastructureRunArguments(process.argv.slice(2));
   const report = await observeInfrastructureRuns(args);
   process.stdout.write(`${JSON.stringify(report, null, 2)}\n`);
 }

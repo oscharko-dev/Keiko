@@ -1,6 +1,10 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { observeInfrastructureRuns } from "../report-infra-failure-observation.mjs";
+import {
+  infrastructureRunGitHubToken,
+  observeInfrastructureRuns,
+  parseInfrastructureRunArguments,
+} from "../report-infra-failure-observation.mjs";
 
 function page(runs, next, totalCount = runs.length) {
   return {
@@ -11,7 +15,41 @@ function page(runs, next, totalCount = runs.length) {
   };
 }
 
+afterEach(() => {
+  vi.unstubAllEnvs();
+});
+
 describe("report-infra-failure-observation", () => {
+  it("parses a bounded UTC range and rejects invalid command-line forms", () => {
+    expect(
+      parseInfrastructureRunArguments([
+        "--from",
+        "2026-08-25",
+        "--to",
+        "2026-08-26",
+        "--repo",
+        "example/Keiko",
+      ]),
+    ).toEqual({ from: "2026-08-25", to: "2026-08-26", repo: "example/Keiko" });
+    expect(() => parseInfrastructureRunArguments(["--from"])).toThrow("requires a value");
+    expect(() => parseInfrastructureRunArguments(["--unknown", "value"])).toThrow(
+      "unknown argument",
+    );
+    expect(() =>
+      parseInfrastructureRunArguments(["--from", "2026-08-25", "--to", "2026-08-24"]),
+    ).toThrow("must not be after");
+  });
+
+  it("uses the explicit GitHub token and rejects an absent credential", () => {
+    vi.stubEnv("GH_TOKEN", "preferred-token");
+    vi.stubEnv("GITHUB_TOKEN", "fallback-token");
+    expect(infrastructureRunGitHubToken()).toBe("preferred-token");
+    vi.stubEnv("GH_TOKEN", undefined);
+    expect(infrastructureRunGitHubToken()).toBe("fallback-token");
+    vi.stubEnv("GITHUB_TOKEN", undefined);
+    expect(infrastructureRunGitHubToken).toThrow("GitHub authentication is required");
+  });
+
   it("paginates one UTC day and excludes manual dispatches from the observation envelope", async () => {
     const fetch = vi
       .fn()
@@ -61,6 +99,24 @@ describe("report-infra-failure-observation", () => {
         { fetch, token: "test-token" },
       ),
     ).rejects.toThrow("has no workflow_runs");
+  });
+
+  it("rejects failed queries and malformed pagination links", async () => {
+    const failedFetch = vi.fn().mockResolvedValue({ ok: false, status: 503 });
+    await expect(
+      observeInfrastructureRuns(
+        { from: "2026-08-25", to: "2026-08-25", repo: "oscharko-dev/Keiko" },
+        { fetch: failedFetch, token: "test-token" },
+      ),
+    ).rejects.toThrow("HTTP 503");
+
+    const invalidLinkFetch = vi.fn().mockResolvedValue(page([], "not a URL"));
+    await expect(
+      observeInfrastructureRuns(
+        { from: "2026-08-25", to: "2026-08-25", repo: "oscharko-dev/Keiko" },
+        { fetch: invalidLinkFetch, token: "test-token" },
+      ),
+    ).rejects.toThrow("invalid pagination link");
   });
 
   it("rejects a workflow-run entry without a terminal conclusion", async () => {
@@ -113,5 +169,28 @@ describe("report-infra-failure-observation", () => {
       skipped: 0,
       observerCompleted: 0,
     });
+  });
+
+  it("aggregates independent UTC days without cross-day pagination", async () => {
+    const fetch = vi
+      .fn()
+      .mockResolvedValueOnce(page([{ event: "workflow_run", conclusion: "failure" }]))
+      .mockResolvedValueOnce(page([{ event: "workflow_run", conclusion: "skipped" }]));
+
+    await expect(
+      observeInfrastructureRuns(
+        { from: "2026-08-25", to: "2026-08-26", repo: "oscharko-dev/Keiko" },
+        { fetch, token: "test-token" },
+      ),
+    ).resolves.toMatchObject({
+      days: [
+        { date: "2026-08-25", total: 1, skipped: 0, observerCompleted: 1 },
+        { date: "2026-08-26", total: 1, skipped: 1, observerCompleted: 0 },
+      ],
+      total: 2,
+      skipped: 1,
+      observerCompleted: 1,
+    });
+    expect(fetch).toHaveBeenCalledTimes(2);
   });
 });
