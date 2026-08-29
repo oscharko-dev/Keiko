@@ -6318,7 +6318,18 @@ describe("handleGatewaySetup", () => {
     const deps = buildUiHandlerDeps({
       configPath: undefined,
       evidenceDir,
-      env: { ...VAULT_ENV },
+      // KEIKO-0325 test-infra (#2907 follow-up): declaring the submitted apiKey as the env
+      // default makes every one of the MAX_DISCOVERED_MODELS+5 discovered providers take the
+      // env-credential branch in credentialVault.ts's planPlaintextProviderCredential, so none of
+      // them is queued for sealing. Without this, persistVaultEntries seals each one individually
+      // — createLocalSecretVault's set() does a full read-modify-write-with-double-fsync of the
+      // ENTIRE vault file per call — and ~100 sequential whole-file rewrites measured ~28-29s of
+      // real synchronous disk I/O even outside coverage instrumentation (see the sibling
+      // discovery-truncation test below for the same fixture and rationale), pushing this test
+      // past the suite's 15s testTimeout. This test's subject is the truncation diagnostic, not
+      // vault sealing, so steering the fixture around that unrelated, expensive path is scoped to
+      // the test and changes no assertion below.
+      env: { ...VAULT_ENV, KEIKO_DEFAULT_API_KEY: "example-secret-token" },
       uiDbPath: join(uiDir, "keiko-ui.db"),
       gatewayModelDiscovery: () => Promise.resolve(parseModelDiscovery({ data: oversized })),
       gatewayEmbeddingProbe: PASSTHROUGH_EMBEDDING_PROBE,
@@ -6366,7 +6377,11 @@ describe("handleGatewaySetup", () => {
     const deps = buildUiHandlerDeps({
       configPath: undefined,
       evidenceDir,
-      env: { ...VAULT_ENV },
+      // See the sibling "emits an operator diagnostic when model discovery truncates" test above
+      // for why KEIKO_DEFAULT_API_KEY is set here: it keeps ~100 discovered providers off the
+      // per-model vault-sealing path (real ~28-29s of sequential whole-file-rewrite disk I/O in
+      // credentialVault.ts, unrelated to what this test asserts) so the test stays within budget.
+      env: { ...VAULT_ENV, KEIKO_DEFAULT_API_KEY: "example-secret-token" },
       uiDbPath: join(uiDir, "keiko-ui.db"),
       gatewayModelDiscovery: () => Promise.resolve(parseModelDiscovery({ data: oversized })),
       gatewayEmbeddingProbe: PASSTHROUGH_EMBEDDING_PROBE,
