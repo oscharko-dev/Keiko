@@ -1,3 +1,17 @@
+// Windows-only smoke for the Keiko-owned native setup bootstrap (issue #2992). Builds the setup
+// companion through the PRODUCTION path (compileSetupBootstrap + appendSetupOverlay, the same
+// functions the real release pipeline calls) against a disposable fixture portable tree, then
+// exercises the REAL COMPILED EXE directly — no cmd.exe, no IExpress, no SED. This is the
+// acceptance test for the vulnerability #2992 fixes: WExtract's undocumented `/C:<command>`
+// switch could substitute the embedded install command against the Keiko Authenticode identity;
+// the native stub replaces that surface with a closed `/quiet`/`/Q` allowlist that rejects every
+// other argument before any side effect.
+//
+// Not a `*.test.mjs` file on purpose: it compiles a native stub with MSVC and runs a real Windows
+// executable, so only the Windows CI leg invokes it directly (`node
+// scripts/__tests__/windows-setup-bootstrap-smoke.mjs`), after MSVC has been configured. It must
+// never be picked up by `npm test`'s cross-platform vitest run.
+
 import assert from "node:assert/strict";
 import { Buffer } from "node:buffer";
 import { spawnSync } from "node:child_process";
@@ -16,14 +30,28 @@ import {
 import { tmpdir } from "node:os";
 import { join, relative, resolve } from "node:path";
 
-import {
-  iexpressPath,
-  windowsSetupInstallerScript,
-  windowsSetupSed,
-} from "../build-windows-portable-setup.mjs";
+import { appendSetupOverlay, compileSetupBootstrap } from "../build-windows-portable-setup.mjs";
+import { parseSetupOverlay } from "../lib/portable-setup-overlay.mjs";
 import { writeZipArchiveFromDirectory } from "../lib/zip-archive.mjs";
-import { WINDOWS_PORTABLE_SETUP_ASSET_NAME } from "../portable-runtime.mjs";
+import { sha256File, WINDOWS_PORTABLE_SETUP_ASSET_NAME } from "../portable-runtime.mjs";
 import { windowsLauncher } from "../../packages/keiko-cli/src/launcher-platforms.ts";
+
+// The closed allowlist this smoke pins (frozen SPEC v1 section 3, point 2): every one of these
+// looks like a plausible WExtract/IExpress-style switch (`/C:`, `/T:`, `/D`) or a near-miss of the
+// one accepted spelling (`/quiet`, case-insensitive `/Q`) — the argument gate must reject ALL of
+// them with zero side effects, because it is an allowlist, never a denylist of known-bad switches.
+const ADVERSARIAL_ARGUMENTS = Object.freeze([
+  "/C:calc.exe",
+  "/c:x",
+  "/C",
+  "/T:dir",
+  "/D",
+  "--anything",
+  "-q",
+  "quiet",
+  "/quiet:extra",
+  "/Q2",
+]);
 
 function commandOutput(result) {
   return [result.stdout, result.stderr].filter(Boolean).join("\n");
@@ -62,22 +90,22 @@ function fixtureCli() {
     'const index = args.indexOf("--portable-root");',
     "if (index < 0 || args[index + 1] === undefined) process.exit(2);",
     "const portableRoot = resolve(args[index + 1]);",
-    'const managedRoot = resolve(process.env.KEIKO_IEXPRESS_MANAGED_ROOT || join(process.env.LOCALAPPDATA, "Programs", "Keiko"));',
+    'const managedRoot = resolve(process.env.KEIKO_SETUP_SMOKE_MANAGED_ROOT || join(process.env.LOCALAPPDATA, "Programs", "Keiko"));',
     'if (command === "resolve-root") { console.log(managedRoot); process.exit(0); }',
     'if (command === "setup") {',
     "  mkdirSync(dirname(managedRoot), { recursive: true });",
     "  if (!existsSync(managedRoot)) cpSync(portableRoot, managedRoot, { recursive: true });",
-    '  writeFileSync(process.env.KEIKO_IEXPRESS_SETUP_SENTINEL, `${portableRoot}\\n`, "utf8");',
+    '  writeFileSync(process.env.KEIKO_SETUP_SMOKE_SETUP_SENTINEL, `${portableRoot}\\n`, "utf8");',
     "  process.exit(0);",
     "}",
     'if (command !== "launch" || !existsSync(managedRoot)) process.exit(3);',
-    'writeFileSync(process.env.KEIKO_IEXPRESS_LAUNCH_SENTINEL, `${portableRoot}\\n`, "utf8");',
-    'writeFileSync(process.env.KEIKO_IEXPRESS_RUNTIME_SENTINEL, `${process.execPath}\\n`, "utf8");',
+    'writeFileSync(process.env.KEIKO_SETUP_SMOKE_LAUNCH_SENTINEL, `${portableRoot}\\n`, "utf8");',
+    'writeFileSync(process.env.KEIKO_SETUP_SMOKE_RUNTIME_SENTINEL, `${process.execPath}\\n`, "utf8");',
     'const nodePath = join(managedRoot, "runtime", "node", "node.exe");',
-    'const childScript = process.env.KEIKO_IEXPRESS_EXIT_IMMEDIATELY === "1" ? "process.exit(0)" : "setTimeout(() => process.exit(0), 14000)";',
+    'const childScript = process.env.KEIKO_SETUP_SMOKE_EXIT_IMMEDIATELY === "1" ? "process.exit(0)" : "setTimeout(() => process.exit(0), 14000)";',
     'const child = spawn(nodePath, ["-e", childScript], { detached: true, stdio: "ignore" });',
     "child.unref();",
-    'writeFileSync(process.env.KEIKO_IEXPRESS_PID, `${child.pid}\\n`, "utf8");',
+    'writeFileSync(process.env.KEIKO_SETUP_SMOKE_PID, `${child.pid}\\n`, "utf8");',
     "// Mirrors the real lifecycle CLI: launch exits 0 only after its own health window saw the",
     "// spawned process stay alive; a child that dies early fails the launch (and the installer).",
     "const deadline = Date.now() + 3000;",
@@ -221,34 +249,27 @@ function setupEnvironment(
   return {
     env: {
       ...process.env,
-      KEIKO_IEXPRESS_LAUNCH_SENTINEL: launchSentinelPath,
-      KEIKO_IEXPRESS_PID: pidPath,
-      KEIKO_IEXPRESS_RUNTIME_SENTINEL: runtimeSentinelPath,
-      KEIKO_IEXPRESS_SETUP_SENTINEL: setupSentinelPath,
-      KEIKO_IEXPRESS_MANAGED_ROOT: managedRoot,
+      KEIKO_SETUP_SMOKE_LAUNCH_SENTINEL: launchSentinelPath,
+      KEIKO_SETUP_SMOKE_PID: pidPath,
+      KEIKO_SETUP_SMOKE_RUNTIME_SENTINEL: runtimeSentinelPath,
+      KEIKO_SETUP_SMOKE_SETUP_SENTINEL: setupSentinelPath,
+      KEIKO_SETUP_SMOKE_MANAGED_ROOT: managedRoot,
       LOCALAPPDATA: localAppData,
     },
   };
 }
 
-function assertLaunchFailure(installerRoot, executeOptions) {
-  const failed = runResult("cmd.exe", ["/d", "/s", "/c", "install-keiko.cmd"], {
-    ...executeOptions,
-    cwd: installerRoot,
-    env: { ...executeOptions.env, KEIKO_IEXPRESS_EXIT_IMMEDIATELY: "1" },
-    timeout: 90_000,
-  });
-  assert.notEqual(failed.status, 0, "setup accepted a lifecycle launch that failed before health");
-  const output = commandOutput(failed);
-  assert.equal(/Keiko setup failed\. See the message above/u.test(output), true);
-  assert.equal(/Keiko setup finished successfully\./u.test(output), false);
-  const pidPath = executeOptions.env.KEIKO_IEXPRESS_PID;
-  const pid = fixtureProcessId(pidPath);
-  rmSync(pidPath, { force: true });
-  assert.equal(processExists(pid), false, "failed setup process is still running");
+// Case 1 (frozen SPEC v1 §7): a fresh install runs the compiled EXE with NO arguments at all —
+// the real double-click grammar (`argc == 1`). Case 2: an existing-install revalidation runs with
+// the explicit `/Q`. Both are accepted argument shapes; the spawned process never owns the console
+// alone here (GetConsoleProcessList sees this harness too), so neither the success pacing sleep
+// nor an interactive failure pause can ever block the smoke.
+function runFreshInstall(setupPath, executeOptions, pidPath) {
+  run(setupPath, [], { ...executeOptions, timeout: 90_000 });
+  waitForFixtureProcessExit(pidPath);
 }
 
-function runHealthySetup(setupPath, executeOptions, pidPath) {
+function runExistingInstallRevalidation(setupPath, executeOptions, pidPath) {
   run(setupPath, ["/Q"], { ...executeOptions, timeout: 90_000 });
   waitForFixtureProcessExit(pidPath);
 }
@@ -262,10 +283,10 @@ function assertFreshSetup({
   setupPath,
   setupSentinelPath,
 }) {
-  runHealthySetup(setupPath, executeOptions, pidPath);
+  runFreshInstall(setupPath, executeOptions, pidPath);
   assert.equal(existsSync(managedRoot), true, "setup did not create the managed root");
-  assert.equal(existsSync(setupSentinelPath), true, "generated installer did not invoke setup");
-  assert.equal(existsSync(launchSentinelPath), true, "generated installer did not invoke launch");
+  assert.equal(existsSync(setupSentinelPath), true, "compiled bootstrap did not invoke setup");
+  assert.equal(existsSync(launchSentinelPath), true, "compiled bootstrap did not invoke launch");
   const extractedRoot = readFileSync(setupSentinelPath, "utf8").trim();
   assert.equal(existsSync(extractedRoot), false, "setup did not remove its extracted staging root");
   assert.equal(resolve(readFileSync(launchSentinelPath, "utf8").trim()), resolve(managedRoot));
@@ -293,7 +314,7 @@ function assertExistingSetupUnchanged({
   rmSync(setupSentinelPath, { force: true });
   rmSync(launchSentinelPath, { force: true });
   rmSync(runtimeSentinelPath, { force: true });
-  runHealthySetup(setupPath, executeOptions, pidPath);
+  runExistingInstallRevalidation(setupPath, executeOptions, pidPath);
   const extractedRoot = resolve(readFileSync(setupSentinelPath, "utf8").trim());
   assert.notEqual(
     extractedRoot,
@@ -317,6 +338,8 @@ function assertExistingSetupUnchanged({
   );
 }
 
+// Case 3: a custom (Unicode/metacharacter) managed root must never leave a duplicate install at
+// the default `%LOCALAPPDATA%\Programs\Keiko` location.
 function assertCustomRootSetup(setupAssertion, localAppData) {
   assertFreshSetup(setupAssertion);
   assertExistingSetupUnchanged(setupAssertion);
@@ -327,14 +350,154 @@ function assertCustomRootSetup(setupAssertion, localAppData) {
   );
 }
 
-function runWindowsIExpressCommandSmoke() {
-  const root = mkdtempSync(join(tmpdir(), "keiko-iexpress-command-"));
+// Case 4: a launch that fails its health window must report the documented exit code (frozen
+// SPEC v1 §3 point 10), print the failure wording, and leave no orphan process — running the REAL
+// compiled EXE directly, never a cmd.exe bypass (the issue's third acceptance criterion).
+function assertLaunchFailure(setupPath, executeOptions) {
+  const failed = runResult(setupPath, ["/Q"], {
+    ...executeOptions,
+    env: { ...executeOptions.env, KEIKO_SETUP_SMOKE_EXIT_IMMEDIATELY: "1" },
+    timeout: 90_000,
+  });
+  assert.equal(failed.status, 18, "launch failure must report the documented exit code");
+  const output = commandOutput(failed);
+  assert.equal(/Keiko setup failed\. See the message above/u.test(output), true);
+  assert.equal(/Keiko setup finished successfully\./u.test(output), false);
+  const pidPath = executeOptions.env.KEIKO_SETUP_SMOKE_PID;
+  const pid = fixtureProcessId(pidPath);
+  rmSync(pidPath, { force: true });
+  assert.equal(processExists(pid), false, "failed setup process is still running");
+}
+
+function listTempInstallDirs(temporaryRoot) {
+  return new Set(readdirSync(temporaryRoot).filter((name) => name.startsWith("Keiko-install-")));
+}
+
+function assertNoNewInstallStagingDirs(before, after, label) {
+  const created = [...after].filter((name) => !before.has(name));
+  assert.deepEqual(
+    created,
+    [],
+    `${label} created unexpected staging dir(s): ${created.join(", ")}`,
+  );
+}
+
+// Case 5, the regression pin for #2992: every argument below either mimics a WExtract/IExpress
+// switch (`/C:`, `/T:`, `/D`) or near-misses the one accepted spelling (`/quiet`, `/Q`). The
+// argument gate is an ALLOWLIST — `argc == 1` or every argument is (case-insensitively) `/quiet`
+// or `/Q`, nothing else — so each of these must be rejected with exit 87 and zero side effects,
+// verified against the REAL managed root established by cases 1-3.
+function assertAdversarialArgumentsRejected(setupPath, localAppData, managedRoot, expectedDigest) {
+  const temporaryRoot = tmpdir();
+  const dir = mkdtempSync(join(temporaryRoot, "keiko-setup-smoke-adversarial-"));
+  try {
+    ADVERSARIAL_ARGUMENTS.forEach((argument, index) => {
+      const label = `argument "${argument}"`;
+      const setupSentinelPath = join(dir, `setup-sentinel-${String(index)}.txt`);
+      const executeOptions = setupEnvironment(
+        localAppData,
+        join(dir, `pid-${String(index)}.txt`),
+        join(dir, `launch-sentinel-${String(index)}.txt`),
+        join(dir, `runtime-sentinel-${String(index)}.txt`),
+        setupSentinelPath,
+        managedRoot,
+      );
+      const before = listTempInstallDirs(temporaryRoot);
+      const attempt = runResult(setupPath, [argument], { ...executeOptions, timeout: 45_000 });
+      const after = listTempInstallDirs(temporaryRoot);
+      assert.equal(attempt.status, 87, `${label} must be rejected with exit code 87`);
+      assert.equal(existsSync(setupSentinelPath), false, `${label} reached the fixture CLI`);
+      assertNoNewInstallStagingDirs(before, after, label);
+    });
+    assert.equal(
+      treeDigest(managedRoot),
+      expectedDigest,
+      "an adversarial argument altered the managed root",
+    );
+  } finally {
+    rmSync(dir, { force: true, recursive: true });
+  }
+}
+
+// Cases 6 and 7 both fail during step 4 ("self-open + integrity", frozen SPEC v1 §3): the stub
+// hashes its own embedded payload against the baked-in expected digest before staging anything.
+// Neither a tampered byte nor a truncated overlay may reach extraction, so this asserts the same
+// "nothing happened" shape for both, parameterized only by the accepted exit code(s).
+function assertIntegrityFailure(setupPath, localAppData, expectedStatuses, label) {
+  const dir = mkdtempSync(join(tmpdir(), "keiko-setup-smoke-integrity-"));
+  try {
+    const managedRoot = join(dir, "managed-root");
+    const setupSentinelPath = join(dir, "setup-sentinel.txt");
+    const executeOptions = setupEnvironment(
+      localAppData,
+      join(dir, "pid.txt"),
+      join(dir, "launch-sentinel.txt"),
+      join(dir, "runtime-sentinel.txt"),
+      setupSentinelPath,
+      managedRoot,
+    );
+    const temporaryRoot = tmpdir();
+    const before = listTempInstallDirs(temporaryRoot);
+    const attempt = runResult(setupPath, ["/Q"], { ...executeOptions, timeout: 45_000 });
+    const after = listTempInstallDirs(temporaryRoot);
+    assert.equal(
+      expectedStatuses.includes(attempt.status),
+      true,
+      `${label} exited ${String(attempt.status)}, expected one of ${expectedStatuses.join("/")} (${commandResultSummary(attempt)})`,
+    );
+    assert.equal(existsSync(setupSentinelPath), false, `${label} reached the fixture CLI`);
+    assert.equal(existsSync(managedRoot), false, `${label} created a managed root`);
+    assertNoNewInstallStagingDirs(before, after, label);
+  } finally {
+    rmSync(dir, { force: true, recursive: true });
+  }
+}
+
+function flipPayloadByte(sourcePath, destinationPath) {
+  const bytes = readFileSync(sourcePath);
+  const overlay = parseSetupOverlay(bytes);
+  const tampered = Buffer.from(bytes);
+  const targetOffset = overlay.payloadStart + Math.floor(overlay.payloadSize / 2);
+  tampered[targetOffset] ^= 0xff;
+  writeFileSync(destinationPath, tampered);
+}
+
+function truncateOverlayTail(sourcePath, destinationPath, cutBytes) {
+  const bytes = readFileSync(sourcePath);
+  writeFileSync(destinationPath, bytes.subarray(0, bytes.length - cutBytes));
+}
+
+async function buildSetupCompanion(root, archivePath, setupPath) {
+  const stubPath = join(root, "keiko-setup-bootstrap-stub.exe");
+  const payloadSha256Hex = await sha256File(archivePath);
+  const payloadSizeBytes = statSync(archivePath).size;
+  compileSetupBootstrap({ outputPath: stubPath, payloadSha256Hex, payloadSizeBytes });
+  await appendSetupOverlay(stubPath, archivePath, setupPath);
+}
+
+// Cases 4-7: every negative path (launch failure, the adversarial argument matrix, a tampered
+// payload, a truncated overlay) runs against the SAME managed root cases 1-3 already established,
+// so "nothing happened" assertions have a real, populated install to prove they left untouched.
+function runNegativePathCases(root, setupPath, executeOptions, localAppData, managedRoot) {
+  assertLaunchFailure(setupPath, executeOptions); // case 4
+  assertAdversarialArgumentsRejected(setupPath, localAppData, managedRoot, treeDigest(managedRoot)); // case 5
+
+  const tamperedPath = join(root, "keiko-windows-x64-setup-tampered.exe");
+  flipPayloadByte(setupPath, tamperedPath);
+  assertIntegrityFailure(tamperedPath, localAppData, [12], "tampered payload"); // case 6
+
+  const truncatedPath = join(root, "keiko-windows-x64-setup-truncated.exe");
+  truncateOverlayTail(setupPath, truncatedPath, 10);
+  assertIntegrityFailure(truncatedPath, localAppData, [11, 12], "truncated overlay"); // case 7
+}
+
+async function runWindowsSetupBootstrapSmoke() {
+  const root = mkdtempSync(join(tmpdir(), "keiko-setup-bootstrap-"));
   const inputRoot = join(root, "input");
   const localAppData = join(root, "local-app-data");
   const managedRoot = join(localAppData, "Kéiko Üñîçødé & % ! ^ (Programs)", "Keiko");
   const setupPath = join(root, WINDOWS_PORTABLE_SETUP_ASSET_NAME);
   const archivePath = join(inputRoot, "keiko-windows-x64.zip");
-  const sedPath = join(root, "setup.sed");
   const launchSentinelPath = join(root, "launch-root.txt");
   const setupSentinelPath = join(root, "setup-root.txt");
   const runtimeSentinelPath = join(root, "runtime-root.txt");
@@ -343,9 +506,7 @@ function runWindowsIExpressCommandSmoke() {
   try {
     mkdirSync(inputRoot, { recursive: true });
     writePortableFixture(root, archivePath);
-    writeFileSync(join(inputRoot, "install-keiko.cmd"), windowsSetupInstallerScript(), "utf8");
-    writeFileSync(sedPath, windowsSetupSed({ inputRoot, outputPath: setupPath }));
-    run(iexpressPath(), ["/N", "/Q", sedPath], { timeout: 120_000 });
+    await buildSetupCompanion(root, archivePath, setupPath);
 
     const executeOptions = setupEnvironment(
       localAppData,
@@ -364,8 +525,8 @@ function runWindowsIExpressCommandSmoke() {
       setupPath,
       setupSentinelPath,
     };
-    assertCustomRootSetup(setupAssertion, localAppData);
-    assertLaunchFailure(inputRoot, executeOptions);
+    assertCustomRootSetup(setupAssertion, localAppData); // cases 1, 2, 3
+    runNegativePathCases(root, setupPath, executeOptions, localAppData, managedRoot);
   } catch (error) {
     failure = error;
   } finally {
@@ -375,5 +536,5 @@ function runWindowsIExpressCommandSmoke() {
 }
 
 assert.equal(process.platform, "win32", "this smoke must run on a Windows host");
-runWindowsIExpressCommandSmoke();
-console.log("windows-iexpress-command-smoke: PASS");
+await runWindowsSetupBootstrapSmoke();
+console.log("windows-setup-bootstrap-smoke: PASS");

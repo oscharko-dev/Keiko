@@ -75,6 +75,17 @@ export {
   type SpawnOptions,
 } from "./exec.js";
 
+// ─── Hardened Windows cmd.exe shell invocation (issue #3350, Node CVE-2024-27980) ──
+// Pure decision logic — same category as isCommandAllowed/buildSandboxEnv above — so it lives on
+// the public barrel rather than an ./internal/* subpath. exec.ts's own spawn boundary is the
+// primary consumer; keiko-server's editor-tree Node process adapters (LSP today) are the other
+// consumer, reached through processHardening.ts rather than importing this directly.
+export {
+  buildWindowsShellInvocation,
+  type WindowsShellInvocation,
+  type WindowsShellInvocationOptions,
+} from "./windows-shell.js";
+
 // ─── Patch workflow ─────────────────────────────────────────────────────────────────
 export {
   applyPatch,

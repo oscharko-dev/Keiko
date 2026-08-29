@@ -30,6 +30,29 @@ try {
   & $launcherTestOut
   if ($LASTEXITCODE -ne 0) { throw "Windows launcher behavior verification failed" }
 
+  # #2992: the Keiko-owned native setup bootstrap replaces the IExpress self-extractor. It is held
+  # to the same /W4 /WX /analyze bar as the launcher. The baked-payload defines here are QUALITY
+  # dummies (a valid 64-hex digest and a nonzero size) — the real values are baked per release by
+  # build-windows-portable-setup.mjs; this build only proves the source compiles and analyzes clean.
+  $setupDefines = @(
+    '/DKEIKO_SETUP_TARGET="windows-x64"',
+    '/DKEIKO_SETUP_PAYLOAD_SHA256_HEX="0000000000000000000000000000000000000000000000000000000000000000"',
+    "/DKEIKO_SETUP_PAYLOAD_SIZE_BYTES=1ULL"
+  )
+  $setupBootstrap = Join-Path $root "native/setup-bootstrap/keiko-setup-bootstrap.c"
+  $setupBootstrapOut = Join-Path $scratch "keiko-setup-bootstrap.exe"
+  $setupBootstrapObject = Join-Path $scratch "keiko-setup-bootstrap.obj"
+  & cl.exe @nativeFlags @setupDefines "/Fo:$setupBootstrapObject" "/Fe:$setupBootstrapOut" $setupBootstrap
+  if ($LASTEXITCODE -ne 0) { throw "MSVC setup-bootstrap quality analysis failed" }
+
+  $setupBootstrapTest = Join-Path $root "native/setup-bootstrap/keiko-setup-bootstrap.windows.test.c"
+  $setupBootstrapTestOut = Join-Path $scratch "keiko-setup-bootstrap-test.exe"
+  $setupBootstrapTestObject = Join-Path $scratch "keiko-setup-bootstrap-test.obj"
+  & cl.exe @nativeFlags @setupDefines "/Fo:$setupBootstrapTestObject" "/Fe:$setupBootstrapTestOut" $setupBootstrapTest
+  if ($LASTEXITCODE -ne 0) { throw "MSVC setup-bootstrap behavior build failed" }
+  & $setupBootstrapTestOut
+  if ($LASTEXITCODE -ne 0) { throw "Windows setup-bootstrap behavior verification failed" }
+
   $c11Flags = @(
     "/nologo", "/std:c11", "/W4", "/WX", "/analyze", "/external:env:INCLUDE", "/external:W0",
     "/DUNICODE", "/D_UNICODE", "/D_CRT_SECURE_NO_WARNINGS"

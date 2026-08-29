@@ -1043,3 +1043,139 @@ describe("runCommand — the governed credential lane", () => {
     expect(result.stdout).toContain("[REDACTED]");
   });
 });
+
+// ─── Windows .cmd/.bat spawn hardening (issue #3350, Node CVE-2024-27980) ──────────────────────
+// Since Node's CVE-2024-27980 fix, spawning a `.cmd`/`.bat` path with `shell:false` raises EINVAL
+// on Windows. exec.ts's allowlisted-command resolver honours PATHEXT, so a bare `npm` regularly
+// resolves to an absolute `...\npm.CMD` — every such run failed closed before this wiring existed.
+// The escaping algorithm itself is exhaustively golden-vector tested in windows-shell.test.ts;
+// these tests prove only that runCommand's win32 branch actually DELEGATES to it and threads the
+// result into deps.spawn — an integration/wiring proof, not a second copy of the escaping proof.
+describe("runCommand — Windows .cmd/.bat spawn hardening (issue #3350)", () => {
+  const WIN_ENV: NodeJS.ProcessEnv = { PATH: "", SystemRoot: String.raw`C:\Windows` };
+
+  // Removal-fails: if the win32 branch in resolveInheritedSpawnTarget/resolveSpawnTarget is ever
+  // reverted (or short-circuited back to `{ command: executable, args: input.args, ... }`
+  // unconditionally), `call?.command` reverts to the raw `...\npm.cmd` path instead of cmd.exe,
+  // `call?.args` reverts to `["ping"]`, and `windowsVerbatimArguments` disappears from the spawn
+  // options — every assertion below goes red together.
+  it("routes a resolved .cmd executable through the hardened cmd.exe invocation on win32", async () => {
+    const spawn = recordingSpawn();
+    const npmCmdPath = String.raw`C:\Users\test\AppData\Roaming\npm\npm.cmd`;
+    const deps: RunCommandDeps = {
+      ...fakeDeps(spawn.fn, WIN_ENV),
+      resolveExecutable: () => npmCmdPath,
+      platform: "win32",
+    };
+    const promise = runCommand(
+      {
+        command: "npm",
+        args: ["ping"],
+        cwd: undefined,
+        timeoutMs: undefined,
+        signal: controller().signal,
+      },
+      deps,
+    );
+    spawn.child.emit("close", 0, null);
+    await promise;
+    const call = spawn.calls()[0];
+    expect(call?.command).toBe(String.raw`C:\Windows\System32\cmd.exe`);
+    expect(call?.args).toEqual([
+      "/d",
+      "/s",
+      "/c",
+      '"C:\\Users\\test\\AppData\\Roaming\\npm\\npm.cmd ^"ping^""',
+    ]);
+    expect(call?.options.windowsVerbatimArguments).toBe(true);
+    // The hardened wrapper never flips the shell:false posture — cmd.exe is spawned as a
+    // deterministic, fully-escaped argv, never as an interpreter of untrusted shell syntax.
+    expect(call?.options.shell).toBe(false);
+  });
+
+  it("leaves a resolved .exe executable unwrapped on win32 (git.exe pass-through)", async () => {
+    const spawn = recordingSpawn();
+    const gitExePath = String.raw`C:\Program Files\Git\cmd\git.exe`;
+    const deps: RunCommandDeps = {
+      ...fakeDeps(spawn.fn, WIN_ENV),
+      resolveExecutable: () => gitExePath,
+      platform: "win32",
+    };
+    const promise = runCommand(
+      {
+        command: "git",
+        args: ["status"],
+        cwd: undefined,
+        timeoutMs: undefined,
+        signal: controller().signal,
+      },
+      deps,
+    );
+    spawn.child.emit("close", 0, null);
+    await promise;
+    const call = spawn.calls()[0];
+    expect(call?.command).toBe(gitExePath);
+    expect(call?.args).toEqual(["status"]);
+    expect(call?.options.windowsVerbatimArguments).toBeUndefined();
+    expect(call?.options.shell).toBe(false);
+  });
+
+  it("leaves a resolved .cmd executable unwrapped on a non-win32 platform", async () => {
+    const spawn = recordingSpawn();
+    const npmCmdPath = String.raw`C:\Users\test\AppData\Roaming\npm\npm.cmd`;
+    const deps: RunCommandDeps = {
+      ...fakeDeps(spawn.fn, WIN_ENV),
+      resolveExecutable: () => npmCmdPath,
+      platform: "linux",
+    };
+    const promise = runCommand(
+      {
+        command: "npm",
+        args: ["ping"],
+        cwd: undefined,
+        timeoutMs: undefined,
+        signal: controller().signal,
+      },
+      deps,
+    );
+    spawn.child.emit("close", 0, null);
+    await promise;
+    const call = spawn.calls()[0];
+    expect(call?.command).toBe(npmCmdPath);
+    expect(call?.args).toEqual(["ping"]);
+    expect(call?.options.windowsVerbatimArguments).toBeUndefined();
+  });
+
+  it("does not disturb the network:'none' sandbox-wrapper branch on win32", async () => {
+    const spawn = recordingSpawn();
+    const absResolver: RunCommandDeps["resolveExecutable"] = (command) => `/abs/${command}`;
+    const deps: RunCommandDeps = {
+      ...fakeDeps(spawn.fn, WIN_ENV),
+      policy: { ...DEFAULT_SANDBOX_POLICY, network: "none" },
+      resolveExecutable: absResolver,
+      sandboxAvailability: {
+        bubblewrap: false,
+        unshare: false,
+        seatbelt: false,
+        docker: false,
+        podman: false,
+      },
+      platform: "win32",
+    };
+    await expect(
+      runCommand(
+        {
+          command: "node",
+          args: [],
+          cwd: undefined,
+          timeoutMs: undefined,
+          signal: controller().signal,
+        },
+        deps,
+      ),
+    ).rejects.toBeInstanceOf(CommandDeniedError);
+    // Fails closed before ever reaching spawn — the Windows cmd-wrapping branch belongs solely to
+    // the inherited-network path and must never be consulted here.
+    expect(spawn.calls()).toHaveLength(0);
+  });
+});

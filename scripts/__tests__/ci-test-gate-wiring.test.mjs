@@ -22,6 +22,10 @@ const windowsLauncher = readFileSync(
   resolve(repoRoot, "native/portable-launcher/keiko-portable-launcher.c"),
   "utf8",
 );
+const setupBootstrapSource = readFileSync(
+  resolve(repoRoot, "native/setup-bootstrap/keiko-setup-bootstrap.c"),
+  "utf8",
+);
 const windowsRfc3161QualityProject = readFileSync(
   resolve(repoRoot, "scripts/native-quality/windows-rfc3161-quality.csproj"),
   "utf8",
@@ -187,6 +191,35 @@ describe("CI test/gate wiring guard", () => {
     expect(windowsLauncher).toContain("free_launcher_buffers(buffers)");
     expect(windowsLauncher).not.toContain("wchar_t root[32768]");
     expect(windowsLauncher).not.toContain("wchar_t command[98304]");
+  });
+
+  it("compiles and runs the native setup-bootstrap under the strict native quality bar (#2992)", () => {
+    // The setup bootstrap that replaced IExpress must be held to /W4 /WX /analyze and its behavior
+    // test must actually execute — dropping either from the native quality gate fails this pin.
+    expect(windowsNativeQuality).toContain("native/setup-bootstrap/keiko-setup-bootstrap.c");
+    expect(windowsNativeQuality).toContain(
+      "native/setup-bootstrap/keiko-setup-bootstrap.windows.test.c",
+    );
+    expect(windowsNativeQuality).toContain("Windows setup-bootstrap behavior verification failed");
+    expect(windowsNativeQuality).toContain('/DKEIKO_SETUP_TARGET="windows-x64"');
+  });
+
+  it("keeps the #2992 security invariants in the native setup bootstrap", () => {
+    // These are the three properties that close the IExpress /C: signature-laundering class. Each
+    // is pinned here so it cannot be silently removed from the signed installer without a red gate.
+    // 1. Loader hardening: System32 is preferred, the CWD/same-directory is not (DLL planting).
+    expect(setupBootstrapSource).toContain(
+      "SetDefaultDllDirectories(LOAD_LIBRARY_SEARCH_SYSTEM32)",
+    );
+    expect(setupBootstrapSource).toContain('SetDllDirectoryW(L"")');
+    // 2. Closed argument allowlist — /quiet or /Q only, everything else rejected with code 87.
+    expect(setupBootstrapSource).toContain('_wcsicmp(arg, L"/quiet") == 0');
+    expect(setupBootstrapSource).toContain('_wcsicmp(arg, L"/Q") == 0');
+    expect(setupBootstrapSource).toContain("KEIKO_EXIT_BAD_ARGUMENT = 87");
+    // 3. Payload bound to the baked digest, and tar resolved from System32 (never PATH).
+    expect(setupBootstrapSource).toContain("KEIKO_SETUP_PAYLOAD_SHA256_HEX");
+    expect(setupBootstrapSource).toContain("BCRYPT_SHA256_ALGORITHM");
+    expect(setupBootstrapSource).toContain("GetSystemDirectoryW");
   });
 
   it("pins the PKCS assembly required by the RFC3161 analyzer build", () => {

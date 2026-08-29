@@ -28,6 +28,7 @@ import {
   createIsolatedProcessDirectory as createSharedIsolatedProcessDirectory,
   escalateKill as escalateSharedKill,
   resolveExecutableCandidateOutsideWorkspace as resolveSharedExecutableCandidate,
+  resolveWindowsSpawnInvocation,
   type ChildExitRegistration as SharedChildExitRegistration,
   type IsolatedProcessDirectory,
   type KillableChild as SharedKillableChild,
@@ -248,12 +249,17 @@ export const defaultLspSpawnFn: LspSpawnFn = (executable, args, env, cwd) => {
   }
   const home = createEphemeralHome();
   const childEnv = { ...env, HOME: home.path, USERPROFILE: home.path };
-  const child = spawn(executable, [...args], {
+  // A resolved `.cmd`/`.bat` language server (routine on Windows for npm-installed servers such as
+  // typescript-language-server) cannot be spawned with shell:false without EINVAL (issue #3350 /
+  // Node CVE-2024-27980); the hardened cmd.exe wrapper is a no-op for every other resolved path.
+  const invocation = resolveWindowsSpawnInvocation(executable, args);
+  const child = spawn(invocation.command, [...invocation.args], {
     cwd,
     env: childEnv,
     stdio: ["pipe", "pipe", "pipe"],
     detached: process.platform !== "win32",
     windowsHide: true,
+    ...(invocation.windowsVerbatimArguments ? { windowsVerbatimArguments: true } : {}),
   });
   const wrapped = wrapChild(child);
   wrapped.onExit(() => {

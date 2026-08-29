@@ -2,7 +2,8 @@
 
 ## Status
 
-Accepted; amended for the Windows setup companion by Issue #2966.
+Accepted; amended for the Windows setup companion by Issue #2966; setup-companion wording aligned to
+the Keiko-owned native bootstrap by Issue #2992 (2026-08-29).
 
 ## Date
 
@@ -76,8 +77,9 @@ runtime state, or affect portable updater v2.
 
 - This ADR does not remove the npm package or npm/Yarn compatibility update path.
 - This ADR does not introduce Electron, Tauri, WebView embedding, MSI/MSIX/PKG/DMG packaging, tray
-  apps, or enterprise-managed rollout. The Windows self-extracting setup companion remains a thin
-  delivery wrapper around the governed portable archive and lifecycle.
+  apps, or enterprise-managed rollout. The Windows setup companion remains a thin delivery wrapper
+  around the governed portable archive and lifecycle (a Keiko-owned native bootstrap since ADR-0121's
+  Issue #2992 amendment; previously an IExpress self-extractor).
 - This ADR does not change API caching prohibitions, CSP, loopback host binding, evidence
   redaction, or update authority.
 

@@ -1,4 +1,5 @@
 import { Buffer } from "node:buffer";
+import { createHash } from "node:crypto";
 import {
   linkSync,
   mkdirSync,
@@ -13,18 +14,17 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
 import {
+  appendSetupOverlay,
+  assertBakedPayloadIdentity,
   buildWindowsPortableSetup,
-  iexpressPath,
-  systemCommandProcessorPath,
+  setupCatalogContent,
   validateWindowsSetupOutputPath,
   validateWindowsSetupStage,
   verifyWindowsPortableSetup,
-  verifyExtractedWindowsSetupPayload,
   WindowsPortableSetupError,
-  windowsSetupInstallerScript,
-  windowsSetupSed,
 } from "../build-windows-portable-setup.mjs";
 import { isPortableExecutableFile } from "../lib/portable-executable.mjs";
+import { buildSetupOverlayHeader } from "../lib/portable-setup-overlay.mjs";
 import { WINDOWS_PORTABLE_SETUP_ASSET_NAME } from "../portable-runtime.mjs";
 
 const roots = [];
@@ -39,11 +39,42 @@ afterEach(() => {
   for (const path of roots.splice(0)) rmSync(path, { force: true, recursive: true });
 });
 
-function restoreEnvValue(key, previous) {
-  // `Reflect.deleteProperty` rather than `delete`: the key is a parameter, and a dynamically
-  // computed `delete` is rejected by lint.
-  if (previous === undefined) Reflect.deleteProperty(process.env, key);
-  else process.env[key] = previous;
+describe("assertBakedPayloadIdentity", () => {
+  const validHex = "a".repeat(64);
+
+  it("accepts a 64-char lowercase hex digest with a positive safe-integer size", () => {
+    expect(() => assertBakedPayloadIdentity(validHex, 130_000_000)).not.toThrow();
+  });
+
+  it("rejects a digest that is not 64 lowercase hex characters", () => {
+    for (const bad of ["a".repeat(63), "a".repeat(65), "A".repeat(64), "g".repeat(64), "", 123]) {
+      expect(() => assertBakedPayloadIdentity(bad, 1)).toThrow(WindowsPortableSetupError);
+    }
+  });
+
+  it("rejects a size that is not a positive safe integer", () => {
+    for (const bad of [0, -1, 1.5, Number.NaN, Number.MAX_SAFE_INTEGER + 1, "1"]) {
+      expect(() => assertBakedPayloadIdentity(validHex, bad)).toThrow(WindowsPortableSetupError);
+    }
+  });
+});
+
+describe("setupCatalogContent", () => {
+  it("names the setup companion by basename relative to the sibling catalog", () => {
+    // The catalog and the companion are always siblings, so the entry is the basename plus a
+    // newline — the same on POSIX and Windows, which is why this is testable off a Windows host.
+    const dir = join(tmpdir(), "keiko-catalog");
+    expect(
+      setupCatalogContent(
+        join(dir, "windows-setup-signing-file.txt"),
+        join(dir, WINDOWS_PORTABLE_SETUP_ASSET_NAME),
+      ),
+    ).toBe(`${WINDOWS_PORTABLE_SETUP_ASSET_NAME}\n`);
+  });
+});
+
+function sha256Hex(buffer) {
+  return createHash("sha256").update(buffer).digest("hex");
 }
 
 function portableExecutable(marker = 0) {
@@ -53,6 +84,33 @@ function portableExecutable(marker = 0) {
   bytes.writeUInt32LE(64, 0x3c);
   bytes.set([0x50, 0x45, 0x00, 0x00], 64);
   return bytes;
+}
+
+// Minimal-but-real synthetic PE32+ image: DOS header, PE signature, COFF header, a PE32+ optional
+// header with NO certificate table directory, and one section whose raw data ends exactly at the
+// buffer's own length (i.e. `portableExecutableOverlayBounds` sees no existing overlay). A fixed,
+// unparametrized duplicate of the fixture builder in portable-setup-overlay.test.mjs — this file
+// only needs the ONE happy-path shape to exercise `appendSetupOverlay`/`verifyWindowsPortableSetup`
+// as integration points; the overlay codec's own bounds math is exhaustively covered there.
+function buildValidStub() {
+  const eLfanew = 64;
+  const coffOffset = eLfanew + 4;
+  const optionalHeaderOffset = coffOffset + 20;
+  const sizeOfOptionalHeader = 240;
+  const sectionTableOffset = optionalHeaderOffset + sizeOfOptionalHeader;
+  const buffer = Buffer.alloc(1024);
+  buffer[0] = 0x4d; // 'M'
+  buffer[1] = 0x5a; // 'Z'
+  buffer.writeUInt32LE(eLfanew, 0x3c);
+  buffer.write("PE\0\0", eLfanew, "latin1");
+  buffer.writeUInt16LE(1, coffOffset + 2); // NumberOfSections
+  buffer.writeUInt16LE(sizeOfOptionalHeader, coffOffset + 16);
+  buffer.writeUInt16LE(0x20b, optionalHeaderOffset); // PE32+
+  buffer.writeUInt32LE(512, optionalHeaderOffset + 60); // SizeOfHeaders
+  // Security directory (DataDirectory[4]) left zeroed: no certificate table.
+  buffer.writeUInt32LE(512, sectionTableOffset + 16); // SizeOfRawData
+  buffer.writeUInt32LE(512, sectionTableOffset + 20); // PointerToRawData
+  return buffer;
 }
 
 async function expectSetupError(action, message) {
@@ -78,24 +136,6 @@ describe("windows portable setup companion", () => {
     expect(() => validateWindowsSetupOutputPath(join(stageRoot, "wrong.exe"), stageRoot)).toThrow(
       /must be named/u,
     );
-  });
-
-  it("resolves the Windows IExpress executable from WINDIR with a PATH fallback", () => {
-    const previous = process.env.WINDIR;
-    const windir = root();
-    try {
-      process.env.WINDIR = windir;
-      if (process.platform === "win32") {
-        expect(() => iexpressPath()).toThrow(/system IExpress executable is unavailable/u);
-      } else {
-        expect(iexpressPath()).toBe("iexpress.exe");
-      }
-      mkdirSync(join(windir, "System32"), { recursive: true });
-      writeFileSync(join(windir, "System32", "iexpress.exe"), "fixture");
-      expect(iexpressPath()).toBe(join(windir, "System32", "iexpress.exe"));
-    } finally {
-      restoreEnvValue("WINDIR", previous);
-    }
   });
 
   it("recognizes bounded PE setup companions", () => {
@@ -297,184 +337,7 @@ describe("windows portable setup companion", () => {
     );
   });
 
-  it("generates an installer script that installs the whole portable tree before launch", () => {
-    const script = windowsSetupInstallerScript();
-    const resolveRootCommand =
-      'portable resolve-root --target windows-x64 --portable-root "%EXTRACT_ROOT%"';
-    const freshSetupCommand =
-      '"%EXTRACT_ROOT%\\runtime\\node\\node.exe" "%EXTRACT_ROOT%\\app\\dist\\cli\\index.js" portable setup --target windows-x64 --portable-root "%EXTRACT_ROOT%" --managed-root "%INSTALL_ROOT%"';
-    const existingSetupCommand =
-      '"%EXTRACT_ROOT%\\runtime\\node\\node.exe" "%EXTRACT_ROOT%\\app\\dist\\cli\\index.js" portable setup --target windows-x64 --portable-root "%EXTRACT_ROOT%" --managed-root "%INSTALL_ROOT%"';
-    const managedLaunchCommand =
-      '"%INSTALL_ROOT%\\runtime\\node\\node.exe" "%INSTALL_ROOT%\\app\\dist\\cli\\index.js" portable launch --target windows-x64 --portable-root "%INSTALL_ROOT%" --managed-root "%INSTALL_ROOT%"';
-    expect(script).toContain("setlocal EnableExtensions DisableDelayedExpansion");
-    expect(script).not.toContain("setlocal EnableExtensions\r\n");
-    expect(script).toContain("[1/6] Checking setup payload...");
-    expect(script).toContain('"%SystemRoot%\\System32\\tar.exe" -xf "%ARCHIVE%"');
-    expect(script).not.toContain("Expand-Archive");
-    expect(script).not.toMatch(/WindowsPowerShell\\v1\.0\\powershell\.exe/iu);
-    expect(script).not.toMatch(/(?:^|\r\n)powershell\.exe /u);
-    expect(script).toContain("%EXTRACT_ROOT%\\runtime\\node\\node.exe");
-    expect(script).toContain("%EXTRACT_ROOT%\\app\\dist\\cli\\index.js");
-    expect(script).toContain(
-      "Bundled Node runtime found. No separate Node installation is required.",
-    );
-    expect(script).toContain(freshSetupCommand);
-    expect(script).toContain(resolveRootCommand);
-    expect(script.indexOf(resolveRootCommand)).toBeLessThan(
-      script.indexOf('if exist "%INSTALL_ROOT%" goto validate_existing'),
-    );
-    expect(script).toContain("Keiko setup could not resolve the managed install root.");
-    expect(script).toContain('> "%MANAGED_ROOT_FILE%"');
-    expect(script).toContain("chcp 65001 >nul");
-    expect(script).toContain("tokens=2 delims=:.");
-    expect(script).toContain("chcp %ORIGINAL_CODE_PAGE% >nul");
-    expect(script).toContain('set /p "INSTALL_ROOT="<"%MANAGED_ROOT_FILE%"');
-    expect(script).not.toContain('set "INSTALL_ROOT=%LOCALAPPDATA%\\Programs\\Keiko"');
-    expect(script).toContain("--target windows-x64 --portable-root");
-    expect(script).toContain('if exist "%INSTALL_ROOT%" goto validate_existing');
-    expect(script).toContain(existingSetupCommand);
-    expect(script).toContain(managedLaunchCommand);
-    expect(script.indexOf(freshSetupCommand)).toBeLessThan(script.indexOf(managedLaunchCommand));
-    expect(script.indexOf(existingSetupCommand)).toBeLessThan(script.indexOf(managedLaunchCommand));
-    expect(script.split(managedLaunchCommand)).toHaveLength(2);
-    expect(script).toContain("Existing managed installation was validated or recovered.");
-    expect(script).not.toContain(
-      'portable setup --target windows-x64 --portable-root "%INSTALL_ROOT%"',
-    );
-    expect(script).not.toContain('move "%INSTALL_ROOT%"');
-    expect(script).not.toContain('rmdir /s /q "%INSTALL_ROOT%"');
-    expect(script).not.toContain("Start-Process");
-    // The managed `portable launch` exit code IS the health proof (the lifecycle CLI's
-    // waitForHealth gates it on /api/health answering with the installed version), so the
-    // payload carries NO secondary liveness poll: no marker file, no process query, no sleep.
-    expect(script).toContain("Keiko reported healthy; removing temporary application files");
-    expect(script).not.toContain("KEIKO_IEXPRESS_HEALTHY");
-    expect(script).not.toContain("timeout /t 5 /nobreak");
-    // timeout.exe demands console stdin and exits instantly under a redirected-stdin host
-    // (quiet IExpress) — the payload must pace retries with ping instead.
-    expect(script).not.toMatch(/\btimeout \/t\b/u);
-    expect(script).toContain("ping -n 2 127.0.0.1 >nul");
-    expect(script).not.toContain("AddSeconds(30)");
-    expect(script).not.toContain("Get-Process -Name Keiko,node");
-    expect(script).not.toContain("Start-Sleep -Milliseconds 500");
-    expect(script).not.toContain("Get-CimInstance Win32_Process");
-    expect(script).toContain("for /l %%A in (1,1,10) do (");
-    expect(script).toContain('rmdir /s /q "%STAGING_ROOT%"');
-    expect(script).toContain('if exist "%STAGING_ROOT%" (');
-    expect(script).toContain("Keiko setup could not remove its temporary application files.");
-    expect(script.indexOf(managedLaunchCommand)).toBeLessThan(script.indexOf(":cleanup_ok"));
-    expect(script).toContain('if "%KEIKO_INTERACTIVE%"=="1" pause');
-    expect(script).not.toContain("\r\npause\r\n");
-    expect(script).toContain("Keiko setup finished successfully.");
-    expect(script).not.toContain("Keiko wird installiert");
-    expect(script).not.toContain("Starte Keiko");
-  });
-
-  it("generates an IExpress package definition for the archive and installer script", () => {
-    const sed = windowsSetupSed({
-      inputRoot: String.raw`C:\keiko setup\input`,
-      outputPath: String.raw`C:\keiko setup\keiko-windows-x64-setup.exe`,
-    });
-    expect(sed).toContain("Class=IEXPRESS");
-    expect(sed).toContain(`TargetName=C:\\keiko setup\\${WINDOWS_PORTABLE_SETUP_ASSET_NAME}`);
-    const interpreter = systemCommandProcessorPath();
-    expect(sed).toContain(`AppLaunched=${interpreter} /d /s /c install-keiko.cmd --interactive`);
-    expect(sed).toContain(`AdminQuietInstCmd=${interpreter} /d /s /c install-keiko.cmd`);
-    expect(sed).toContain(`UserQuietInstCmd=${interpreter} /d /s /c install-keiko.cmd`);
-    expect(sed).toContain('FILE1="keiko-windows-x64.zip"');
-  });
-
-  // A `.cmd` payload is not an executable image: every launch field must hand it to a command
-  // processor, and that processor must be named by absolute path so neither the extraction
-  // directory nor `PATH` can supply the interpreter that runs before the payload is validated.
-  // Dropping the interpreter shipped a setup whose installer never ran (#2966).
-  it("launches every IExpress mode through an absolute System32 command processor", () => {
-    const sed = windowsSetupSed({
-      inputRoot: String.raw`C:\keiko setup\input`,
-      outputPath: String.raw`C:\keiko setup\keiko-windows-x64-setup.exe`,
-    });
-    const launchFields = sed
-      .split("\r\n")
-      .filter((line) => /^(?:AppLaunched|AdminQuietInstCmd|UserQuietInstCmd)=/u.test(line));
-
-    expect(launchFields).toHaveLength(3);
-    for (const field of launchFields) {
-      const command = field.slice(field.indexOf("=") + 1);
-      expect(command).toMatch(/^[A-Za-z]:\\(?:[^\\]+\\)*System32\\cmd\.exe /u);
-      expect(command).toContain(" /d /s /c install-keiko.cmd");
-      // A `%VAR%` token would be read as an IExpress `[Strings]` reference, not an environment
-      // variable, so the interpreter path has to reach the SED already resolved.
-      expect(command).not.toContain("%");
-    }
-  });
-
-  it("rejects a system root that is not an absolute Windows path", () => {
-    const systemRoot = process.env.SystemRoot;
-    const windir = process.env.WINDIR;
-    try {
-      process.env.SystemRoot = "/usr/bin";
-      delete process.env.WINDIR;
-      expect(() => systemCommandProcessorPath()).toThrow(
-        /system command processor must resolve to an absolute System32 cmd\.exe path/u,
-      );
-      // Trailing separator: a raw template cannot carry it, because the backslash would escape the
-      // closing backtick.
-      process.env.SystemRoot = "D:\\Windows\\";
-      expect(systemCommandProcessorPath()).toBe(String.raw`D:\Windows\System32\cmd.exe`);
-    } finally {
-      restoreEnvValue("SystemRoot", systemRoot);
-      restoreEnvValue("WINDIR", windir);
-    }
-  });
-
-  it("rejects extracted installer scripts that differ from the generated script", async () => {
-    const dir = root();
-    const extractedScript = join(dir, "install-keiko.cmd");
-    const extractedArchive = join(dir, "keiko-windows-x64.zip");
-    const archivePath = join(dir, "staged.zip");
-    writeFileSync(extractedScript, windowsSetupInstallerScript(), "utf8");
-    writeFileSync(extractedArchive, "portable archive", "utf8");
-    writeFileSync(archivePath, "portable archive", "utf8");
-
-    await verifyExtractedWindowsSetupPayload(extractedScript, extractedArchive, archivePath);
-
-    writeFileSync(extractedScript, "@echo off\r\necho altered\r\n", "utf8");
-    await expectSetupError(
-      () => verifyExtractedWindowsSetupPayload(extractedScript, extractedArchive, archivePath),
-      "extracted setup script bytes do not match the generated installer script",
-    );
-
-    writeFileSync(extractedScript, windowsSetupInstallerScript(), "utf8");
-    writeFileSync(extractedArchive, "different portable archive", "utf8");
-    await expectSetupError(
-      () => verifyExtractedWindowsSetupPayload(extractedScript, extractedArchive, archivePath),
-      "extracted setup archive digest does not match the staged archive",
-    );
-  });
-
-  it("rejects IExpress paths with control characters or quotes", () => {
-    expect(() =>
-      windowsSetupSed({
-        inputRoot: "C:\\keiko\nsetup\\input",
-        outputPath: "C:\\keiko setup\\keiko-windows-x64-setup.exe",
-      }),
-    ).toThrow(/IExpress path contains an unsafe character/u);
-    expect(() =>
-      windowsSetupSed({
-        inputRoot: 'C:\\keiko"setup\\input',
-        outputPath: "C:\\keiko setup\\keiko-windows-x64-setup.exe",
-      }),
-    ).toThrow(/IExpress path contains an unsafe character/u);
-    expect(() =>
-      windowsSetupSed({
-        inputRoot: "C:\\keiko%TEMP%\\input",
-        outputPath: "C:\\keiko setup\\keiko-windows-x64-setup.exe",
-      }),
-    ).toThrow(/IExpress path contains an unsafe character/u);
-  });
-
-  it("bounds setup verification before extraction", async () => {
+  it("bounds setup verification before parsing the overlay", async () => {
     const dir = root();
     const archivePath = join(dir, "keiko-windows-x64.zip");
     writeFileSync(archivePath, "zip fixture");
@@ -498,12 +361,120 @@ describe("windows portable setup companion", () => {
       "windows setup companion is not a PE file",
     );
 
-    if (process.platform !== "win32") {
-      writeFileSync(setupPath, portableExecutable(12));
+    // A structurally valid PE32+ image with no overlay data appended at all: the overlay header
+    // cannot even be read, so this is refused by the overlay parser, not by any executed extractor.
+    writeFileSync(setupPath, buildValidStub());
+    await expectSetupError(
+      () => verifyWindowsPortableSetup(setupPath, archivePath),
+      "setup overlay header is truncated",
+    );
+  });
+
+  describe("appendSetupOverlay + verifyWindowsPortableSetup", () => {
+    it("round-trips a compiled stub and a staged archive into a verifiable setup companion", async () => {
+      const dir = root();
+      const stubPath = join(dir, "stub.exe");
+      const archivePath = join(dir, "keiko-windows-x64.zip");
+      const outputPath = join(dir, WINDOWS_PORTABLE_SETUP_ASSET_NAME);
+      writeFileSync(stubPath, buildValidStub());
+      writeFileSync(archivePath, "keiko portable archive fixture bytes");
+
+      const result = await appendSetupOverlay(stubPath, archivePath, outputPath);
+
+      expect(result).toBe(outputPath);
+      expect(isPortableExecutableFile(outputPath)).toBe(true);
+      await expect(verifyWindowsPortableSetup(outputPath, archivePath)).resolves.toBeUndefined();
+    });
+
+    it("rejects a stub that already carries trailing data before the overlay is appended", async () => {
+      const dir = root();
+      const stubPath = join(dir, "stub.exe");
+      const archivePath = join(dir, "keiko-windows-x64.zip");
+      writeFileSync(stubPath, Buffer.concat([buildValidStub(), Buffer.from("unexpected tail")]));
+      writeFileSync(archivePath, "archive bytes");
+
+      await expectSetupError(
+        () =>
+          appendSetupOverlay(stubPath, archivePath, join(dir, WINDOWS_PORTABLE_SETUP_ASSET_NAME)),
+        "unexpectedly carries trailing data",
+      );
+    });
+
+    it("rejects a header digest that does not match the staged archive", async () => {
+      const dir = root();
+      const archiveBytes = Buffer.from("keiko portable archive fixture");
+      const archivePath = join(dir, "keiko-windows-x64.zip");
+      writeFileSync(archivePath, archiveBytes);
+      const header = buildSetupOverlayHeader({
+        payloadSha256Hex: sha256Hex(Buffer.from("not the staged archive")),
+        payloadSizeBytes: archiveBytes.byteLength,
+      });
+      const setupPath = join(dir, WINDOWS_PORTABLE_SETUP_ASSET_NAME);
+      writeFileSync(setupPath, Buffer.concat([buildValidStub(), header, archiveBytes]));
+
       await expectSetupError(
         () => verifyWindowsPortableSetup(setupPath, archivePath),
-        "IExpress setup generation requires a Windows host",
+        "payload digest does not match the staged archive",
       );
-    }
+    });
+
+    it("rejects a magic mismatch in the embedded overlay header", async () => {
+      const dir = root();
+      const archiveBytes = Buffer.from("keiko portable archive fixture");
+      const archivePath = join(dir, "keiko-windows-x64.zip");
+      writeFileSync(archivePath, archiveBytes);
+      const stub = buildValidStub();
+      const header = buildSetupOverlayHeader({
+        payloadSha256Hex: sha256Hex(archiveBytes),
+        payloadSizeBytes: archiveBytes.byteLength,
+      });
+      const file = Buffer.concat([stub, header, archiveBytes]);
+      file[stub.byteLength] = 0x00;
+      const setupPath = join(dir, WINDOWS_PORTABLE_SETUP_ASSET_NAME);
+      writeFileSync(setupPath, file);
+
+      await expectSetupError(
+        () => verifyWindowsPortableSetup(setupPath, archivePath),
+        "magic does not match KSETUP01",
+      );
+    });
+
+    it("rejects trailing padding beyond the 7-byte alignment allowance", async () => {
+      const dir = root();
+      const archiveBytes = Buffer.from("keiko portable archive fixture");
+      const archivePath = join(dir, "keiko-windows-x64.zip");
+      writeFileSync(archivePath, archiveBytes);
+      const header = buildSetupOverlayHeader({
+        payloadSha256Hex: sha256Hex(archiveBytes),
+        payloadSizeBytes: archiveBytes.byteLength,
+      });
+      const file = Buffer.concat([buildValidStub(), header, archiveBytes, Buffer.alloc(8)]);
+      const setupPath = join(dir, WINDOWS_PORTABLE_SETUP_ASSET_NAME);
+      writeFileSync(setupPath, file);
+
+      await expectSetupError(
+        () => verifyWindowsPortableSetup(setupPath, archivePath),
+        "padding exceeds 7 bytes",
+      );
+    });
+
+    it("rejects a payload size that does not match the staged archive", async () => {
+      const dir = root();
+      const archiveBytes = Buffer.from("keiko portable archive fixture, longer than the payload");
+      const archivePath = join(dir, "keiko-windows-x64.zip");
+      writeFileSync(archivePath, archiveBytes);
+      const embeddedPayload = Buffer.from("short payload");
+      const header = buildSetupOverlayHeader({
+        payloadSha256Hex: sha256Hex(embeddedPayload),
+        payloadSizeBytes: embeddedPayload.byteLength,
+      });
+      const setupPath = join(dir, WINDOWS_PORTABLE_SETUP_ASSET_NAME);
+      writeFileSync(setupPath, Buffer.concat([buildValidStub(), header, embeddedPayload]));
+
+      await expectSetupError(
+        () => verifyWindowsPortableSetup(setupPath, archivePath),
+        "payload size does not match the staged archive",
+      );
+    });
   });
 });

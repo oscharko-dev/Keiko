@@ -3,7 +3,8 @@
 ## Status
 
 Accepted (Issue #1946, 2026-07-05); amended for the Windows setup companion (Issue #2966,
-2026-08-04).
+2026-08-04); construction surface replaced by a Keiko-owned native bootstrap (Issue #2992,
+2026-08-29).
 
 ## Context
 
@@ -341,17 +342,37 @@ Security review for implementation under this ADR must cover:
 - **Ephemeral Apple material.** Imported Developer ID and notarization credentials are masked,
   owner-readable only, never passed on command lines, and removed in an always-run cleanup step
   together with the temporary keychain. Cleanup failure blocks promotion.
-- **Setup companion launch surface.** The Windows companion's IExpress launch fields must name an
-  absolute `System32\cmd.exe` interpreter. A `.cmd` payload is not an executable image, so naming
-  the script alone never reaches the installer, and naming `cmd.exe` without a path would let the
-  extraction directory or `PATH` choose the interpreter that runs before the payload is validated.
-  The path is resolved on the build host and embedded literally, because inside a SED a `%name%`
-  token is an IExpress `[Strings]` reference rather than an environment variable. Accepted residual:
-  WExtract's documented `/C:<command>` switch can still substitute the install command at invocation
-  time. It is unreachable for a user running the companion normally and grants an actor who can
-  already execute locally no new authority over Keiko state, but it does let a Keiko-signed binary
-  front arbitrary local code. Replacing the construction surface is tracked in issue #2992 and is
-  not settled by this ADR.
+- **Setup companion launch surface (amended 2026-08-29, issue #2992 — settled).** The companion is
+  a Keiko-authored native console bootstrap (`native/setup-bootstrap/keiko-setup-bootstrap.c`,
+  compiled by MSVC on the same protected native lane as the portable launcher), with the reviewed
+  `windows-x64` archive appended as a hash-bound overlay. It replaces the previous IExpress/WExtract
+  self-extractor, whose documented `/C:<command>` switch let a caller substitute the embedded
+  install command before any payload code ran — a signature-laundering / LOLBin primitive against
+  the Keiko publisher identity that no SED field, switch, or payload-side guard could disable,
+  because WExtract handled `/C:` before the embedded command executed. The native bootstrap holds
+  three invariants that close that class:
+  1. **No command surface.** Its argument grammar is a closed allowlist: `argc == 1`, or every
+     argument is case-insensitively `/quiet`/`/Q`. Every other argument — the `/C:` form included —
+     is rejected with exit code 87 before any staging directory, extraction, or child process. This
+     is an allowlist, never a denylist of known-bad switches, so an unforeseen future switch cannot
+     regress it.
+  2. **A fixed, verified execution set.** The only programs the bootstrap will run are
+     `System32\tar.exe` (resolved from `GetSystemDirectoryW`, never from `PATH`/CWD) and the bundled
+     `node.exe` from the extracted payload — and only after the payload's SHA-256 matches the digest
+     baked into the bootstrap at build time. It calls the same governed portable CLI steps
+     (`portable resolve-root` / `setup` / `launch`) the previous batch called, so the portable
+     lifecycle authority (D1, D5) is unchanged.
+  3. **Tamper-evident payload.** The expected payload digest and size are baked into the bootstrap
+     as compile-time constants and re-verified at run time by streaming the overlay through BCrypt
+     SHA-256. Because an overlay appended after the Authenticode certificate table is not itself
+     covered by the signature, binding the payload through a digest that IS inside the signed image
+     is what makes a swapped payload fail closed — the signed bootstrap refuses to extract or run
+     anything whose bytes it did not vouch for. These invariants live in the binary whether or not a
+     given release signs it, so an `evaluation` (unsigned) companion carries the same closed grammar
+     and hash binding; a production-signed companion additionally cannot be leveraged to front
+     arbitrary code under the Keiko Authenticode identity. The Windows setup contract suite pins the
+     argument-rejection and integrity behavior, and the Windows smoke exercises the real
+     install-command path (including the adversarial `/C:` matrix), not extraction alone.
 - **Evidence provenance.** Native verification booleans are trusted only when produced in the same
   protected native job as signing and bound to the artifact digest and approved durable platform
   identity: the Windows subscriber EKU and Public Trust/code-signing chain, or the macOS Developer ID
@@ -440,3 +461,13 @@ Security review for implementation under this ADR must cover:
   longer necessarily `unverified-staging`: an explicitly requested evaluation build produces
   `evaluation-unqualified`. Neither is attested and neither can reach `assemble`. D7 is unchanged
   and remains the sentence that keeps production signing unrelaxed.
+- **2026-08-29 — Issue #2992:** Replaced the setup companion's construction surface. The previous
+  IExpress/WExtract self-extractor exposed a `/C:<command>` install-command override that could
+  front arbitrary local code under the Keiko signature; it is retired for a Keiko-authored native
+  console bootstrap that appends the reviewed archive as a hash-bound overlay, rejects every
+  argument outside a `/quiet`/`/Q` allowlist, and runs only `System32\tar.exe` and the
+  digest-verified bundled `node.exe`. The accepted residual recorded in the security-and-threat-model
+  "Setup companion launch surface" bullet is now settled rather than tracked. D1 and D5 are
+  unchanged: the companion still embeds the exact reviewed `windows-x64` archive and delegates
+  installation and launch to the same portable lifecycle; only its construction and launch surface
+  changed.

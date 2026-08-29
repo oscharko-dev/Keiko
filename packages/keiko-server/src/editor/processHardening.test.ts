@@ -37,6 +37,7 @@ import {
   executableExtensions,
   resolveExecutableCandidateOutsideWorkspace,
   resolveExecutableOutsideWorkspace,
+  resolveWindowsSpawnInvocation,
   splitProcessPath,
   type KillScheduler,
   type KillableChild,
@@ -360,5 +361,33 @@ describe("editor process TERM-to-KILL escalation", () => {
     const child = tracker(signals);
     await expect(escalateKill(child, 1, () => false, immediate)).resolves.toBeUndefined();
     expect(child.signals).toStrictEqual(["SIGTERM", "SIGKILL"]);
+  });
+});
+
+// resolveWindowsSpawnInvocation (issue #3350 / Node CVE-2024-27980) delegates to keiko-tools'
+// buildWindowsShellInvocation, which is exhaustively golden-vector tested in
+// packages/keiko-tools/src/windows-shell.test.ts. This only pins the DELEGATION: the wrapper must
+// not swallow, transform, or hardcode away the underlying decision. It calls buildWindowsShellInvocation
+// with no platform override, so on this (non-win32) test host every case below takes the
+// pass-through branch — exactly what defaultLspSpawnFn's own un-overridden call site does here too.
+describe("resolveWindowsSpawnInvocation", () => {
+  it("passes a resolved .cmd executable through unchanged on a non-win32 host", () => {
+    const executable = "/abs/tools/typescript-language-server.cmd";
+    const result = resolveWindowsSpawnInvocation(executable, ["--stdio"]);
+    expect(result).toStrictEqual({
+      command: executable,
+      args: ["--stdio"],
+      windowsVerbatimArguments: false,
+    });
+  });
+
+  it("passes a resolved .exe/native executable through unchanged", () => {
+    const executable = "/abs/tools/gopls";
+    const result = resolveWindowsSpawnInvocation(executable, []);
+    expect(result).toStrictEqual({
+      command: executable,
+      args: [],
+      windowsVerbatimArguments: false,
+    });
   });
 });

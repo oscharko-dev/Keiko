@@ -36,12 +36,18 @@ import {
   isCommandAllowed,
 } from "./sandbox.js";
 import type { CommandResult, CommandRule, SandboxAttestation, SandboxPolicy } from "./types.js";
+import { buildWindowsShellInvocation } from "./windows-shell.js";
 
 export interface SpawnOptions {
   readonly cwd: string;
   readonly env: Record<string, string>;
   readonly shell: false;
   readonly detached: boolean;
+  // Set only for a Windows `.cmd`/`.bat` executable routed through the hardened cmd.exe wrapper
+  // (issue #3350 / Node CVE-2024-27980, windows-shell.ts). Absent on every other spawn — including
+  // every POSIX spawn and the network:"none" sandbox-wrapper branch — so it never widens what a
+  // plain shell:false spawn already does.
+  readonly windowsVerbatimArguments?: boolean | undefined;
 }
 
 export type SpawnFn = (
@@ -236,6 +242,36 @@ interface SpawnTarget {
   readonly command: string;
   readonly args: readonly string[];
   readonly attestation: SandboxAttestation | undefined;
+  // Set only when `command`/`args` were built by the hardened Windows cmd.exe wrapper (issue
+  // #3350) and MUST reach spawn's options verbatim. Optional (never `false`) so the network:"none"
+  // sandbox-wrapper branch below — POSIX-only, untouched by this issue — never has to mention it.
+  readonly windowsVerbatimArguments?: boolean | undefined;
+}
+
+// Resolves what to spawn for an INHERITED-network run (deps.policy.network !== "none"): normally
+// the resolved executable unchanged, but on Windows a resolved `.cmd`/`.bat` (PATHEXT resolution
+// regularly produces one, e.g. `...\npm.CMD`) cannot be spawned with `shell:false` since Node's
+// CVE-2024-27980 fix — it raises EINVAL. buildWindowsShellInvocation decides pass-through vs the
+// hardened cmd.exe wrapper; every other platform/extension combination is returned unchanged.
+function resolveInheritedSpawnTarget(
+  executable: string,
+  args: readonly string[],
+  deps: RunCommandDeps,
+): SpawnTarget {
+  const platform = deps.platform ?? process.platform;
+  const invocation = buildWindowsShellInvocation(executable, args, {
+    platform,
+    env: deps.processEnv,
+  });
+  if (!invocation.windowsVerbatimArguments) {
+    return { command: invocation.command, args: invocation.args, attestation: undefined };
+  }
+  return {
+    command: invocation.command,
+    args: invocation.args,
+    attestation: undefined,
+    windowsVerbatimArguments: true,
+  };
 }
 
 // Resolves the isolation wrapper binary (e.g. bwrap) to a real absolute path through the same
@@ -256,7 +292,7 @@ function resolveSpawnTarget(
   cwd: string,
 ): SpawnTarget {
   if (deps.policy.network !== "none") {
-    return { command: executable, args: input.args, attestation: undefined };
+    return resolveInheritedSpawnTarget(executable, input.args, deps);
   }
   const platform = deps.platform ?? process.platform;
   const availability = deps.sandboxAvailability ?? probeBackends(deps.processEnv, platform);
@@ -597,6 +633,7 @@ function spawnChild(
       env,
       shell: false,
       detached: POSIX,
+      ...(target.windowsVerbatimArguments === true ? { windowsVerbatimArguments: true } : {}),
     });
     return child;
   } catch (error) {
