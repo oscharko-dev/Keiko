@@ -400,4 +400,13 @@ describe("parseSetupOverlayFromFile — the SHIPPED parser rejects the same malf
       parseSetupOverlayFromFile(writeFixture(file.subarray(0, stub.byteLength + 8))),
     ).toThrow();
   });
+
+  // F3: the empty-input boundary was untested for the SHIPPED (streaming) parser. An empty file
+  // reads back a zero-length header-prefix scan (Math.min(0, OVERLAY_HEADER_SCAN_BYTES) === 0),
+  // which readExactAt does not itself reject (0 bytes requested, 0 bytes read), so the failure
+  // must come from the DOS-header length check downstream — the same guard the buffer-based
+  // "physically truncated" cases above exercise, at its most extreme input.
+  it("rejects an empty file", () => {
+    expect(() => parseSetupOverlayFromFile(writeFixture(Buffer.alloc(0)))).toThrow(/DOS header/u);
+  });
 });

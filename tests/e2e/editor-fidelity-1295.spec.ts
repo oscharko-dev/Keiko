@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { clickWindowChromeButton } from "./support/window-chrome.js";
-import { editorModifier } from "./support/editor-chord.js";
+import { editorModifier, focusMonacoInput } from "./support/editor-chord.js";
 
 const EVIDENCE_DIR = resolve(
   dirname(fileURLToPath(import.meta.url)),
@@ -347,10 +347,13 @@ function createProjectFixture(): string {
   return root;
 }
 
+// F6: a plain `.click()` on `.monaco-editor` can leave Firefox's fallback `textarea.inputarea`
+// unfocused (support/editor-chord.ts `focusMonacoInput`'s doc comment), so the select-all below
+// reaches nothing and `insertText` APPENDS instead of replacing. `focusMonacoInput` focuses
+// whichever real input surface this engine created instead of re-deriving a weaker click-only
+// version of that logic here.
 async function replaceMonacoText(page: Page, editorWindow: Locator, text: string): Promise<void> {
-  const editor = editorWindow.locator(".monaco-editor").first();
-  await expect(editor).toBeVisible();
-  await editor.click();
+  await focusMonacoInput(editorWindow);
   const modifier = await editorModifier(page);
   await page.keyboard.down(modifier);
   await page.keyboard.press("KeyA");

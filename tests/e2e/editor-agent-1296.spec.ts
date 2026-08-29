@@ -3,7 +3,7 @@ import { existsSync, lstatSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } 
 import { tmpdir } from "node:os";
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { editorModifier } from "./support/editor-chord.js";
+import { editorModifier, focusMonacoInput } from "./support/editor-chord.js";
 
 const EVIDENCE_DIR = resolve(
   dirname(fileURLToPath(import.meta.url)),
@@ -210,8 +210,13 @@ async function openLiveEditor(page: Page): Promise<Locator> {
 }
 
 async function triggerLiveInlineGhost(page: Page, editorWindow: Locator): Promise<void> {
-  const editor = editorWindow.locator(".monaco-editor").first();
-  await editor.click();
+  // F6: a plain `.click()` on `.monaco-editor` lands focus on Chromium's EditContext surface but
+  // can leave Firefox's fallback `textarea.inputarea` unfocused (support/editor-chord.ts
+  // `focusMonacoInput`'s doc comment). An unfocused fallback means the select-all chord below
+  // reaches nothing, and `insertText` then APPENDS instead of replacing — the same silent
+  // corruption class `replaceEditorBuffer` was written to catch. Use the shared, engine-agnostic
+  // focus helper instead of re-deriving a weaker click-only version of it here.
+  await focusMonacoInput(editorWindow);
   const modifier = await editorModifier(page);
   await page.keyboard.press(`${modifier}+KeyA`);
   await page.keyboard.insertText("export function answer() {\n  ret");

@@ -367,6 +367,21 @@ static void test_remove_tree_unlinks_junctions_without_following(void) {
   assert(_snwprintf_s(inner, MAX_PATH, _TRUNCATE, L"%ls\\inner.txt", staging) > 0);
   write_file(inner, "disposable");
 
+  // A plain NESTED subdirectory with its own content. Without this, staging holds only a file and a
+  // junction directly under the root, so keiko_delete_entry's recursive branch
+  // (`(attributes & FILE_ATTRIBUTE_DIRECTORY) != 0` with no reparse bit -> keiko_remove_tree(child))
+  // is never taken and keiko_open_plain_dir_no_follow is only ever exercised on the root — the
+  // per-level no-follow handle one level down is dead code as far as this test is concerned. Nesting
+  // one real subdirectory forces the recursion, and the final "staging gone" assertion below can
+  // only hold if RemoveDirectoryW(staging) actually saw an EMPTY directory, which requires this
+  // subtree to have been walked and removed first.
+  wchar_t nested_dir[MAX_PATH];
+  assert(_snwprintf_s(nested_dir, MAX_PATH, _TRUNCATE, L"%ls\\nested", staging) > 0);
+  assert(CreateDirectoryW(nested_dir, NULL) != 0);
+  wchar_t nested_inner[MAX_PATH];
+  assert(_snwprintf_s(nested_inner, MAX_PATH, _TRUNCATE, L"%ls\\nested-inner.txt", nested_dir) > 0);
+  write_file(nested_inner, "disposable-nested");
+
   // mklink /J needs no elevation. cmd.exe is resolved from the system directory, never PATH.
   wchar_t link[MAX_PATH];
   assert(_snwprintf_s(link, MAX_PATH, _TRUNCATE, L"%ls\\link", staging) > 0);
@@ -380,7 +395,12 @@ static void test_remove_tree_unlinks_junctions_without_following(void) {
   assert(_snwprintf_s(command, KEIKO_COMMAND_CAP, _TRUNCATE,
                       L"\"%ls\" /d /s /c mklink /J \"%ls\" \"%ls\"", cmd_exe, link, outside) > 0);
   assert(keiko_run_and_wait(cmd_exe, command) == 1);
-  assert((GetFileAttributesW(link) & FILE_ATTRIBUTE_REPARSE_POINT) != 0);
+  // GetFileAttributesW returns INVALID_FILE_ATTRIBUTES (0xFFFFFFFF) on failure, and that all-ones
+  // value ANDed with FILE_ATTRIBUTE_REPARSE_POINT is itself nonzero — so a bare `&` check here would
+  // pass even if mklink silently produced no junction at all. Check existence first, explicitly.
+  DWORD link_attributes = GetFileAttributesW(link);
+  assert(link_attributes != INVALID_FILE_ATTRIBUTES);
+  assert((link_attributes & FILE_ATTRIBUTE_REPARSE_POINT) != 0);
 
   assert(keiko_remove_tree(staging) == 1);
   assert(GetFileAttributesW(staging) == INVALID_FILE_ATTRIBUTES); // staging gone
@@ -435,8 +455,7 @@ static void test_watchdog_terminates_the_descendant_tree(void) {
   assert(_snwprintf_s(cmd_exe, MAX_PATH, _TRUNCATE, L"%ls\\cmd.exe", system_dir) > 0);
 
   // The outer cmd starts a DETACHED grandchild that would outlive a single-process kill, then
-  // hangs. `waitfor` without a signal blocks until its timeout, so both processes are alive when
-  // the watchdog fires.
+  // hangs — both processes are alive when the watchdog fires.
   // static: KEIKO_COMMAND_CAP is 96 KiB of wchar_t (192 KiB) — far past /analyze's C6262
   // stack budget. Single-threaded harness, each case fully rewrites it.
   static wchar_t command[KEIKO_COMMAND_CAP];

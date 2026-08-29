@@ -8,7 +8,7 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { writePaddedFixtureFiles } from "./support/editorWorkspace.js";
 import { clickWindowChromeButton } from "./support/window-chrome.js";
-import { editorModifier } from "./support/editor-chord.js";
+import { editorModifier, focusMonacoInput } from "./support/editor-chord.js";
 
 // Number of cold-start samples: kept at 3 for the manual/release-evidence smoke, raised (>=10) in the
 // scheduled/CI perf job via KEIKO_PERF_RUNS so p50/p95 are stable rather than the max of 3 noisy
@@ -674,9 +674,11 @@ async function replaceEditorText(
   page: Page,
   editorWindow: ReturnType<Page["getByRole"]>,
 ): Promise<boolean> {
-  const editor = editorWindow.locator(".monaco-editor").first();
-  await expect(editor).toBeVisible({ timeout: 10_000 });
-  await editor.click({ timeout: 8_000 });
+  // F6: a plain `.click()` on `.monaco-editor` can leave Firefox's fallback `textarea.inputarea`
+  // unfocused (support/editor-chord.ts `focusMonacoInput`'s doc comment), so the select-all below
+  // reaches nothing and the measured typing appends into whatever old content remains instead of
+  // a clean buffer. `focusMonacoInput` focuses whichever real input surface this engine created.
+  await focusMonacoInput(editorWindow);
   const observerInstalled = await installPerfObservers(page);
   const modifier = await editorModifier(page);
   await page.keyboard.press(`${modifier}+KeyA`);
@@ -1172,9 +1174,9 @@ async function measureD12BaselineWork(
   page: Page,
   editorWindow: ReturnType<Page["getByRole"]>,
 ): Promise<D12BaselineMeasuredWork> {
-  const editor = editorWindow.locator(".monaco-editor").first();
-  await expect(editor).toBeVisible({ timeout: 10_000 });
-  await editor.click({ timeout: 8_000 });
+  // F6: see replaceEditorText above — focusMonacoInput, not a plain click, is what reliably
+  // reaches Firefox's fallback input surface before the select-all chord.
+  await focusMonacoInput(editorWindow);
   const modifier = await editorModifier(page);
   await page.keyboard.press(`${modifier}+KeyA`);
   expect(await installPerfObservers(page)).toBe(true);
@@ -1210,9 +1212,10 @@ async function measureIdleDebugTyping(
   editorWindow: ReturnType<Page["getByRole"]>,
   session: IdleDebugSession,
 ): Promise<IdleDebugMetrics> {
-  const editor = editorWindow.locator(".monaco-editor").first();
-  await expect(editor).toBeVisible({ timeout: 10_000 });
-  await editor.click({ timeout: 8_000 });
+  // F6: see replaceEditorText above — focusMonacoInput, not a plain click, is what reliably
+  // reaches Firefox's fallback input surface before the select-all chord. The role-based check
+  // below is additional: it also pins the accessible name Monaco's input surface exposes.
+  await focusMonacoInput(editorWindow);
   await expect(editorWindow.getByRole("textbox", { name: /Editor:/u })).toBeFocused();
   const modifier = await editorModifier(page);
   await page.keyboard.press(`${modifier}+KeyA`);

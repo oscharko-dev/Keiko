@@ -200,9 +200,23 @@ export function windowsTaskkillInvocation(
   };
 }
 
-// Bound on how long one taskkill invocation may hold the event loop. taskkill normally completes in
+// Bound on how long ONE taskkill invocation may hold the event loop. taskkill normally completes in
 // tens of milliseconds; the bound only caps a pathological hang, and expiring it reports "unknown"
 // rather than guessing.
+//
+// Read the scope precisely — it is per invocation, NOT per process, and the difference is the whole
+// cost model. `spawnSync` blocks the entire Node event loop, not just the run being terminated, and
+// `terminate()` executes on that loop. Terminations therefore SERIALISE: cancelling N Windows
+// commands in one tick can stall the host for up to N x TASKKILL_WAIT_MS, and the SIGKILL escalation
+// can spend the bound a second time for the same run. During that stall `keiko-server` serves no
+// other request.
+//
+// It is synchronous on purpose: taskkill must finish enumerating the live tree while cmd.exe still
+// anchors it, and an async spawn would let `child.kill()` race it so a grandchild survives. An
+// awaited async spawn could give the same ordering without blocking, but that requires making
+// `terminate()`/`killGroup` async and rippling through every caller — a design decision, not a
+// drive-by change, so the cost is documented here rather than hidden behind a comment that implies
+// the aggregate is bounded.
 const TASKKILL_WAIT_MS = 5000;
 
 // Bounds the WHOLE Windows process tree rooted at `pid`, not just the immediate child. Before

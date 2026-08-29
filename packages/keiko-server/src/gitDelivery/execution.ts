@@ -96,16 +96,29 @@ export function resolveProjectWorkspace(
   return resolveRegisteredOrManagedWorkspaceRoot(deps, projectId);
 }
 
+// The minimal "does this seam bag carry the caller's chosen activity-log sink" contract every
+// termination-evidence composition point across git-delivery depends on. Deliberately narrower
+// than `GitDeliveryExecutionSeams` so `gitDeliveryTerminationHandler` is reusable by every sibling
+// execution module (pushExecution.ts, prExecution.ts, mergeExecution.ts) and by
+// branchProtectionPreflight.ts's default reader — none of which share the local-mutation-specific
+// seam shape (adapterFactory, stagedPathsReader, …) but all of which own an `activityLog` seam.
+export interface GitDeliveryTerminationLogSeam {
+  readonly activityLog?: ServerLogSink | undefined;
+}
+
 // Builds the runCommand termination-evidence callback for one git-delivery composition point.
 // Threads the caller's own request-scoped correlationId when the call frame has one in scope,
 // rather than downgrading to UNKNOWN_CORRELATION_ID while a real id sits one frame up (review
 // finding: `executeGovernedMutation` already receives and uses `correlationId` for its own
 // `git.delivery.mutation.*` lines, but its `readWorktreeSnapshotFor`/`adapterFor` calls dropped
-// it). Also resolves the SAME `seams.activityLog` the rest of this file logs through — the
-// previous hard-coded `processServerLogSink()` meant a test-injected sink never observed this
-// evidence line.
+// it — and, per the follow-up audit, so did every sibling default reader/adapter across
+// pushExecution.ts, prExecution.ts, mergeExecution.ts, and branchProtectionPreflight.ts). Also
+// resolves the SAME `seams.activityLog` the rest of this file logs through — a hard-coded
+// `processServerLogSink()` at the call site would mean a test-injected sink never observed this
+// evidence line. Shared by every one of those composition points so the mapping from
+// "termination evidence" to "content-free activity-log line" is written exactly once.
 export function gitDeliveryTerminationHandler(
-  seams: GitDeliveryExecutionSeams,
+  seams: GitDeliveryTerminationLogSeam,
   correlationId: string | undefined,
 ): (evidence: CommandTerminationEvidence) => void {
   const activityLog = seams.activityLog ?? processServerLogSink();
@@ -133,9 +146,15 @@ export function readStagedPathsFor(
   workspace: WorkspaceInfo,
   seams: GitDeliveryExecutionSeams,
   now: () => number,
+  correlationId?: string,
 ): Promise<readonly string[]> {
   if (seams.stagedPathsReader !== undefined) return seams.stagedPathsReader(workspace);
-  return readStagedPaths({ workspace, processEnv: process.env, now });
+  return readStagedPaths({
+    workspace,
+    processEnv: process.env,
+    now,
+    onTerminated: gitDeliveryTerminationHandler(seams, correlationId),
+  });
 }
 
 // Counts staged files that still contain an unresolved merge-conflict marker (`git diff --cached
@@ -149,9 +168,15 @@ export function readStagedConflictMarkerFileCountFor(
   workspace: WorkspaceInfo,
   seams: GitDeliveryExecutionSeams,
   now: () => number,
+  correlationId?: string,
 ): Promise<number> {
   if (seams.conflictMarkerReader !== undefined) return seams.conflictMarkerReader(workspace);
-  return readStagedConflictMarkerFileCount({ workspace, processEnv: process.env, now });
+  return readStagedConflictMarkerFileCount({
+    workspace,
+    processEnv: process.env,
+    now,
+    onTerminated: gitDeliveryTerminationHandler(seams, correlationId),
+  });
 }
 
 function adapterFor(

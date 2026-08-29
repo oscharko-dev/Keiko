@@ -814,6 +814,14 @@ async function disposeManager(
       },
     );
   }
+  // F1 (PR reviewer finding): the child is provably terminated by this point — escalateKill only
+  // resolves once it has exited, and the branch above is skipped entirely when there was never a
+  // child to begin with. Clearing the state HERE, at the layer that owns it, means every lifecycle
+  // event from here on (including the terminal DISPOSED transition below) correctly omits
+  // `childPid` per the contract on `LspLifecycleEvent.childPid`: "present only for a current
+  // running child... absent after cleanup." Leaving it set let the OS-reused pid of a long-dead
+  // child masquerade as still owned by this manager in a reconstructed support timeline.
+  state.child = undefined;
   const cleanupSucceeded = cleanupSpawnResources(state);
   if (!cleanupSucceeded) transition("CRASHED", "RUNTIME_STATE_CLEANUP_FAILED");
   transition("DISPOSED", "DISPOSED");

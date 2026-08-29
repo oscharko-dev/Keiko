@@ -1192,7 +1192,13 @@ jobs:
         # environment artifacts (all CI perf-evidence runs are scoped to --project=chromium).
         # firefox: the second real engine behind the browserslist support claim. Edge and Chrome
         # are both Chromium, so without Gecko nothing ever exercised a non-Chromium browser.
-        run: npx --ignore-scripts playwright@1.62.0 install --with-deps chromium firefox
+        # The LOCKFILE-resolved CLI, not `npx playwright@<version>`: a pinned version literal here is
+        # a second source of truth that silently drifts from `package-lock.json` (it already said
+        # 1.62.0 while the lockfile resolved 1.62.1). Browser revisions are chosen by the Playwright
+        # version, so a mismatch installs browsers the runner's own test library never asked for and
+        # decouples the CI evidence from the dependency graph the tests actually execute against.
+        # `npm ci` above already installed this binary at the locked version.
+        run: ./node_modules/.bin/playwright install --with-deps chromium firefox
       - name: Release smoke E2E
         if: ${{ github.event_name != 'pull_request' || github.base_ref != 'feat/keiko-editor' }}
         run: npm run test:e2e:smoke

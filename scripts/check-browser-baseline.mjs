@@ -28,6 +28,7 @@ import { join } from "node:path";
 // own copy exactly the way the browserslist declaration drifted from the product. The module is
 // `isMainModule`-guarded, so importing it runs no transpilation.
 import { TARGETS as TRANSPILE_TARGETS } from "./transpile-ui-static-js.mjs";
+import { isMainModule } from "./lib/is-main-module.mjs";
 
 const UI_PACKAGE = "packages/keiko-ui/package.json";
 const SOURCE_ROOTS = ["packages/keiko-ui/src", "packages/keiko-editor/src"];
@@ -110,7 +111,15 @@ function collectSources() {
 
 // "chrome >= 111" -> { engine: "chrome", floor: 111 }. Any other shape is a failure: this gate
 // cannot reason about a query it does not understand, and guessing would defeat its purpose.
-function parseDeclaredFloors(queries) {
+//
+// A repeated engine is ALSO a failure, never a silent overwrite: Browserslist itself resolves every
+// query in the array and unions the results, so `["chrome >= 100", "chrome >= 111"]` still includes
+// Chrome 100 in the real target set even though this function used to keep only the Map's last write
+// (Chrome 111). A guarded API needing Chrome 103-110 would then pass this gate while remaining
+// unreachable on a browser Browserslist still declares supported. Rejecting the duplicate keeps this
+// function's model of "the declared floor" equal to Browserslist's, and matches every other
+// unparsable-input path in this gate: fail closed rather than guess which entry the author meant.
+export function parseDeclaredFloors(queries) {
   const floors = new Map();
   for (const query of queries) {
     const match = /^([a-z_]+)\s*>=\s*([0-9]+(?:\.[0-9]+)?)$/u.exec(query.trim());
@@ -118,7 +127,16 @@ function parseDeclaredFloors(queries) {
       fail(`browserslist entry ${JSON.stringify(query)} is not a "<engine> >= <version>" floor`);
       return undefined;
     }
-    floors.set(match[1], Number.parseFloat(match[2]));
+    const [, engine, version] = match;
+    if (floors.has(engine)) {
+      fail(
+        `browserslist declares ${engine} more than once (${String(floors.get(engine))} and ` +
+          `${version}) — duplicate engine floors silently collapse to the last one; keep exactly ` +
+          "one entry per engine",
+      );
+      return undefined;
+    }
+    floors.set(engine, Number.parseFloat(version));
   }
   return floors;
 }
@@ -224,4 +242,7 @@ function main() {
   );
 }
 
-main();
+// Run as a CLI unless imported by a test.
+if (isMainModule(import.meta.url)) {
+  main();
+}

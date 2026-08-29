@@ -15,16 +15,17 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Readable } from "node:stream";
 import type { Server, IncomingMessage, ServerResponse } from "node:http";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import type { GitWorktreeSnapshot } from "@oscharko-dev/keiko-tools";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { GitMergeCommand, GitWorktreeSnapshot } from "@oscharko-dev/keiko-tools";
 import type {
   GitMergeAdapter,
-  GitMergeCommand,
   GitMergeExecRequest,
   GitMergeExecResult,
   GitMergeProviderReadiness,
   GitMergeReadinessRequest,
 } from "@oscharko-dev/keiko-tools";
+import type { NodeGitMergeAdapterDeps } from "@oscharko-dev/keiko-tools/internal/git-mutation";
+import type { WorkspaceInfo } from "@oscharko-dev/keiko-workspace";
 import type { EvidenceStore } from "@oscharko-dev/keiko-evidence";
 import type {
   GitDeliveryApprovalClaim,
@@ -36,16 +37,38 @@ import { buildRedactor, createRunRegistry, type UiHandlerDeps } from "../index.j
 import { startUiTestServer } from "../ui-test-server/_support.js";
 import { createInMemoryUiStore, type UiStore } from "../store/index.js";
 import type { RouteContext } from "../routes.js";
+import type { ServerLogEvent } from "../observability/server-log.js";
+
+// Spies on the default merge-adapter factory the F1 fix threads runCommand termination-evidence
+// through (readMergeProviderReadiness / executeGovernedMerge's shared `mergeAdapterFor`, exercised
+// below via a direct call to readMergeProviderReadiness). Delegates to the REAL implementation so
+// the adapter this test file's OTHER suites inject via `mergeAdapterFactory` seams stays entirely
+// unaffected. Mirrors the importOriginal-plus-delegating-wrapper pattern
+// defaultPolicyPacks.test.ts and execution.test.ts already use for this exact module graph.
+const createNodeGitMergeAdapterCalls: NodeGitMergeAdapterDeps[] = [];
+vi.mock("@oscharko-dev/keiko-tools/internal/git-mutation", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("@oscharko-dev/keiko-tools/internal/git-mutation")>();
+  return {
+    ...actual,
+    createNodeGitMergeAdapter: (deps: NodeGitMergeAdapterDeps): GitMergeAdapter => {
+      createNodeGitMergeAdapterCalls.push(deps);
+      return actual.createNodeGitMergeAdapter(deps);
+    },
+  };
+});
+
 import {
   createHandleMergeApprove,
   createHandleMergeExecute,
   createHandleMergePreview,
 } from "./mergeRoutes.js";
 import { createInMemoryGitDeliveryApprovalStore } from "./approvalStore.js";
-import type {
-  GitDeliveryMergeExecuteResponseBody,
-  GitDeliveryMergePreviewBody,
-  GitDeliveryMergeSeams,
+import {
+  readMergeProviderReadiness,
+  type GitDeliveryMergeExecuteResponseBody,
+  type GitDeliveryMergePreviewBody,
+  type GitDeliveryMergeSeams,
 } from "./mergeExecution.js";
 import { permittedGitDeliveryAuthority } from "./runBoundAuthority.test-support.js";
 
@@ -642,5 +665,71 @@ describe("merge request validation", () => {
     const handler = createHandleMergePreview({ execution: seams() });
     const res = await handler(ctxFor(PREVIEW, mergeBody({ projectId: "/nope" })), deps());
     expect(res.status).toBe(404);
+  });
+});
+
+// ─── F1: the default merge adapter (no mergeAdapterFactory seam) — audit finding: this branch
+// previously hard-coded UNKNOWN_CORRELATION_ID and an uninjectable processServerLogSink(),
+// silently dropping BOTH the caller's real correlationId and its activityLog seam. Exercises
+// readMergeProviderReadiness directly (bypassing HTTP): it wraps the adapter's real
+// `.readMergeReadiness()` call in its own try/catch and reports a provider-error readiness on any
+// failure, so no policy-block trick is needed here — the only fact under test is what deps object
+// the default factory receives. ─────────────────────────────────────────────────────────────
+
+function testWorkspace(root: string): WorkspaceInfo {
+  return {
+    root,
+    name: undefined,
+    version: undefined,
+    testFramework: "unknown",
+    sourceDirs: [],
+    testDirs: [],
+    languages: [],
+    ignoreLines: [],
+  };
+}
+
+const WIRING_COMMAND: GitMergeCommand = {
+  kind: "merge",
+  ownerAndRepo: "oscharko-dev/Keiko",
+  prExternalId: "42",
+  baseBranchName: "dev",
+  headBranchName: "feat/x",
+  mergeStrategy: "squash",
+  deleteBranchAfterMerge: false,
+};
+
+describe("readMergeProviderReadiness — default merge-adapter termination wiring (F1)", () => {
+  beforeEach(() => {
+    createNodeGitMergeAdapterCalls.length = 0;
+  });
+
+  it("wires the caller's activityLog + correlationId into the default createNodeGitMergeAdapter call", async () => {
+    const activity: ServerLogEvent[] = [];
+    await readMergeProviderReadiness(
+      WIRING_COMMAND,
+      testWorkspace("/nonexistent/keiko-gd-merge-wiring"),
+      {
+        activityLog: {
+          write: (event): void => {
+            activity.push(event);
+          },
+        },
+      },
+      () => 1,
+      "request-correlation-merge-wiring",
+    );
+    expect(createNodeGitMergeAdapterCalls).toHaveLength(1);
+    const onTerminated = createNodeGitMergeAdapterCalls[0]?.onTerminated;
+    expect(onTerminated).toBeTypeOf("function");
+    onTerminated?.({
+      reason: "spawn-callback-error",
+      childPid: 9012,
+      windowsTreeKill: "not-attempted",
+    });
+    expect(activity).toHaveLength(1);
+    expect(activity[0]?.op).toBe("command.terminated");
+    expect(activity[0]?.correlationId).toBe("request-correlation-merge-wiring");
+    expect(activity[0]?.extra?.childPid).toBe(9012);
   });
 });

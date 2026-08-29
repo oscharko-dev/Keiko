@@ -246,7 +246,11 @@ const DEFAULT_READ_TIMEOUT_MS = 15_000;
 // compiler believes can never be false, which `no-unnecessary-condition` rejects. The runtime, on
 // an older engine, disagrees; that gap is the entire reason this function exists.
 function combineAbortSignals(caller: AbortSignal, deadline: AbortSignal): AbortSignal {
-  const native = (AbortSignal as { any?: (signals: readonly AbortSignal[]) => AbortSignal }).any;
+  // The parameter type must match lib.dom's own `any(signals: AbortSignal[])` EXACTLY. Declaring it
+  // `readonly AbortSignal[]` here looks harmless and stricter, but it makes the two signatures
+  // non-comparable (readonly is not assignable to mutable), so the assertion fails TS2352 — caught
+  // by `next build`'s type check, which is a separate pass from `npm run typecheck`.
+  const native = (AbortSignal as { any?: (signals: AbortSignal[]) => AbortSignal }).any;
   if (typeof native === "function") return native.call(AbortSignal, [caller, deadline]);
 
   const combined = new AbortController();

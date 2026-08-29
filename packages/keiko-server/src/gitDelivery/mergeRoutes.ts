@@ -31,6 +31,7 @@ import { isGitDeliveryMergeStrategyHint } from "@oscharko-dev/keiko-contracts/ru
 import type { GitMergeCommand } from "@oscharko-dev/keiko-tools";
 import type { RouteContext, RouteDefinition, RouteResult } from "../routes.js";
 import type { UiHandlerDeps } from "../deps.js";
+import { UNKNOWN_CORRELATION_ID } from "../correlation.js";
 import {
   DEFAULT_GIT_DELIVERY_APPROVAL_STORE,
   GIT_DELIVERY_LOCAL_OPERATOR_ID,
@@ -203,6 +204,7 @@ export const createHandleMergePreview = (
   const seams = options.execution ?? {};
   const now = (): number => (seams.now ?? Date.now)();
   return async (ctx, deps): Promise<RouteResult> => {
+    const correlationId = ctx.correlationId ?? UNKNOWN_CORRELATION_ID;
     const prepared = await prepareGitDeliveryRequest(ctx, deps, MERGE_REQUEST_ERRORS, validate);
     if (!prepared.ok) return prepared.result;
     const { workspace } = prepared;
@@ -211,7 +213,13 @@ export const createHandleMergePreview = (
     const strategyPolicy = seams.strategyPolicy ?? {
       allowedStrategies: ["squash", "rebase", "merge-commit", "provider-default"],
     };
-    const provider = await readMergeProviderReadiness(command, workspace, seams, now);
+    const provider = await readMergeProviderReadiness(
+      command,
+      workspace,
+      seams,
+      now,
+      correlationId,
+    );
     return {
       status: 200,
       body: deps.redactor(buildGitDeliveryMergePreview(command, provider, packs, strategyPolicy)),
@@ -279,6 +287,7 @@ async function handleMergeExecute(
   deps: UiHandlerDeps,
   seams: GitDeliveryMergeSeams,
 ): Promise<RouteResult> {
+  const correlationId = ctx.correlationId ?? UNKNOWN_CORRELATION_ID;
   const prepared = await prepareGitDeliveryRequest(ctx, deps, MERGE_REQUEST_ERRORS, validate);
   if (!prepared.ok) return prepared.result;
   const { workspace } = prepared;
@@ -309,10 +318,14 @@ async function handleMergeExecute(
     next: seams.beforeRemoteDispatch,
   });
   try {
-    const result = await executeGovernedMerge(command, verifiedApproval, workspace, deps, {
-      ...seams,
-      beforeRemoteDispatch,
-    });
+    const result = await executeGovernedMerge(
+      command,
+      verifiedApproval,
+      workspace,
+      deps,
+      { ...seams, beforeRemoteDispatch },
+      correlationId,
+    );
     return { status: 200, body: deps.redactor(gitDeliveryMergeExecuteResponse(result)) };
   } catch {
     return errResult(409, "GIT_DELIVERY_MERGE_WORKTREE_UNAVAILABLE");

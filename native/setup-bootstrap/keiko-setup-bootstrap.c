@@ -643,16 +643,30 @@ static int keiko_remove_tree(const wchar_t *path) {
 // while the bootstrap reported failure and cleaned up under them.
 typedef struct {
   PROCESS_INFORMATION process;
-  // NULL when Job assignment was unavailable (then termination degrades to the single process —
-  // the pre-fix behaviour — rather than failing the run). NEVER configured kill-on-close: on the
-  // SUCCESS path of the launch step, the started Keiko app must outlive this installer, so the job
-  // handle is simply closed; only the WATCHDOG path terminates the job.
+  // Non-NULL for every child a caller actually receives: keiko_spawn_in_job fails the WHOLE spawn
+  // (child torn down, *out zeroed, returns 0) rather than resuming a child it could not put in a
+  // job, so a caller that gets one back always has real containment. NEVER configured
+  // kill-on-close: on the SUCCESS path of the launch step, the started Keiko app must outlive this
+  // installer, so the job handle is simply closed; only the WATCHDOG path terminates the job.
   HANDLE job;
 } keiko_child;
 
 // Spawns suspended, assigns the process to a fresh Job Object, then resumes — the assign must win
 // the race against the child spawning its first descendant, which is exactly what the suspended
 // start guarantees. `inherit`/`startup` come from the caller (the capture runner passes a pipe).
+//
+// Job containment is not optional: a failure to create the job or to assign the child to it tears
+// the child down — still SUSPENDED, never resumed — and fails the whole spawn, rather than resuming
+// into single-process containment. Degrading silently would defeat the exact defence this type
+// exists to provide (review 3887021654): a watchdog fire on a job-less child can only
+// TerminateProcess the immediate CLI, leaving any server/worker descendants it already spawned
+// alive while the bootstrap reports failure and cleans up beneath them. Windows has supported
+// nested Job Objects with no opt-in since Windows 8 / Server 2012, so on a current desktop a real
+// failure here most likely means something is actively denying job assignment (security software,
+// an unusually restrictive outer job) rather than a benign platform gap — and
+// native/runtime-supervisor/windows/keiko_runtime_supervisor.c's launch_in_job already treats this
+// exact AssignProcessToJobObject failure as a launch failure for the same reason, so this brings
+// the two native launchers in this repo into agreement instead of leaving one of them permissive.
 static int keiko_spawn_in_job(const wchar_t *application, wchar_t *command_line,
                               STARTUPINFOW *startup, BOOL inherit_handles, keiko_child *out) {
   ZeroMemory(out, sizeof(*out));
@@ -662,13 +676,13 @@ static int keiko_spawn_in_job(const wchar_t *application, wchar_t *command_line,
   }
   out->job = CreateJobObjectW(NULL, NULL);
   if (out->job != NULL && !AssignProcessToJobObject(out->job, out->process.hProcess)) {
-    // Assignment can fail inside an older nested-job-hostile container: degrade to single-process
-    // termination instead of failing a run that would otherwise succeed.
     (void)CloseHandle(out->job);
     out->job = NULL;
   }
-  if (ResumeThread(out->process.hThread) == (DWORD)-1) {
-    // A child that cannot be resumed will never exit on its own: tear it (and its job) down now.
+  if (out->job == NULL || ResumeThread(out->process.hThread) == (DWORD)-1) {
+    // Either the child has no job to contain it, or it could not be resumed and will never exit on
+    // its own: tear it (and its job, if any) down now while it is still SUSPENDED, and fail the
+    // step. Nothing has run yet, so refusing to proceed leaks nothing.
     if (out->job != NULL) {
       (void)TerminateJobObject(out->job, 1);
       (void)CloseHandle(out->job);
@@ -933,11 +947,12 @@ static int keiko_stage_verified_payload(HANDLE self, uint64_t payload_start, uin
         result = KEIKO_EXIT_INTEGRITY;
         break;
       // Both remaining causes are LOCAL faults, not tampering: a full/blocked destination volume,
-      // or no memory / no crypto provider. Listed explicitly rather than folded into `default:` so
-      // a future status added to keiko_stream_status cannot silently inherit "staging".
+      // or no memory / no crypto provider. Listed explicitly with NO `default:` label: this switch
+      // is exhaustive over keiko_stream_status, so -Wswitch (-Werror, part of -Wall) turns a future
+      // status added to keiko_stream_status without a case here into a BUILD FAILURE instead of a
+      // silent "staging" — a compile-time guarantee, not just a comment claiming one.
       case KEIKO_STREAM_SINK_FAILED:
       case KEIKO_STREAM_RESOURCE_FAILED:
-      default:
         result = KEIKO_EXIT_STAGING;
         break;
     }

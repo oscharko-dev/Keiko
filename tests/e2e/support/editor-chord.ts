@@ -69,11 +69,27 @@ export async function focusMonacoInput(editorWindow: Locator): Promise<void> {
   await expect(input).toBeFocused();
 }
 
+// Monaco renders an empty line as a lone non-breaking-space placeholder (to keep its line
+// height), never as a truly empty `.view-line`. Normalizing that back to a plain space (then
+// trimming) is what lets a genuinely blank line compare equal to "" instead of to a stray nbsp.
+function normalizeEditorLine(line: string): string {
+  return line.replace(/\u00a0/gu, " ").trim();
+}
+
+// The expected reading of `text` in the SAME shape the per-line innerText comparison needs: one
+// entry per line, in order. A document with N "\n" characters renders N+1 lines (the content
+// after the final "\n" is itself a — possibly empty — line), and Monaco represents a wholly empty
+// document as exactly one empty line, never zero.
+function normalizedEditorLines(text: string): readonly string[] {
+  return text.length === 0 ? [""] : text.split("\n").map(normalizeEditorLine);
+}
+
 /**
  * Replaces the whole editor buffer with `text` — the engine-agnostic version of the
  * click-selectAll-insert dance that several specs previously each carried their own copy of.
- * Verifies that the select-all actually took effect, so a chord that silently reaches nothing
- * fails HERE with a clear message instead of corrupting the buffer for a later assertion.
+ * Verifies that the select-all actually took effect AND that no old content survives anywhere in
+ * the buffer, so a chord that silently reaches nothing fails HERE with a clear message instead of
+ * corrupting the buffer for a later assertion.
  */
 export async function replaceEditorBuffer(
   page: Page,
@@ -89,17 +105,20 @@ export async function replaceEditorBuffer(
   // is unambiguous in both.
   await page.keyboard.press("Backspace");
   await page.keyboard.insertText(text);
-  // The buffer must now BE the text, not contain it twice. Monaco renders non-breaking spaces and
-  // virtualises long files, so this compares the trimmed first line rather than the whole buffer.
-  const firstLine = text.split("\n")[0]?.trim() ?? "";
-  if (firstLine.length > 0) {
-    await expect(async () => {
-      const lines = await editorWindow.locator(".view-line").allInnerTexts();
-      const matches = lines.filter((line) => line.replace(/\u00a0/gu, " ").trim() === firstLine);
-      expect(
-        matches.length,
-        `expected exactly one "${firstLine}" line after replacing the buffer`,
-      ).toBe(1);
-    }).toPass({ timeout: 10_000 });
-  }
+  // The buffer must now BE exactly `text` — not contain it twice, and not retain any OLD content
+  // a failed select-all left behind anywhere but the first line. The previous version of this
+  // check compared only the first non-empty line, so (a) a stale trailing line past the newly
+  // inserted content never failed the assertion, and (b) for text === "" the check ran nothing at
+  // all — exactly the silent-corruption mode this helper exists to catch. Comparing the COMPLETE
+  // set of normalized rendered lines against the complete normalized expectation closes both
+  // gaps. Monaco virtualises long files, so this is safe only for the short, fully-visible
+  // fixtures this helper is used with.
+  const expectedLines = normalizedEditorLines(text);
+  await expect(async () => {
+    const renderedLines = await editorWindow.locator(".view-line").allInnerTexts();
+    const actualLines = renderedLines.map(normalizeEditorLine);
+    expect(actualLines, `expected the buffer to read back as ${JSON.stringify(text)}`).toEqual(
+      expectedLines,
+    );
+  }).toPass({ timeout: 10_000 });
 }

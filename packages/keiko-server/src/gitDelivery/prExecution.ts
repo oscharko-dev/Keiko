@@ -41,14 +41,14 @@ import {
 } from "@oscharko-dev/keiko-tools";
 import { createNodeGitPullRequestAdapter } from "@oscharko-dev/keiko-tools/internal/git-mutation";
 import type { UiHandlerDeps } from "../deps.js";
-import { UNKNOWN_CORRELATION_ID } from "../correlation.js";
-import { logCommandTermination, processServerLogSink } from "../process-log-sink.js";
+import type { ServerLogSink } from "../observability/server-log.js";
 import type { GitDeliveryApprovalStore } from "./approvalStore.js";
 import type { GitDeliveryTrustedPolicyPacks } from "./actionSheetProjection.js";
 import { defaultMintableRepoPack } from "./policyPackMintability.js";
 import {
   defaultGitDeliveryActionId,
   gitDeliveryMutationResponse,
+  gitDeliveryTerminationHandler,
   persistGitDeliveryEvidence,
   readWorktreeSnapshotFor,
   type GitDeliveryMutationResponseBody,
@@ -90,6 +90,10 @@ export interface GitDeliveryPullRequestSeams {
     ((workspace: WorkspaceInfo) => Promise<GitWorktreeSnapshot>) | undefined;
   readonly policyPacks?: GitDeliveryTrustedPolicyPacks | undefined;
   readonly approvalStore?: GitDeliveryApprovalStore | undefined;
+  // The request's own activity-log sink, so the default PR adapter's runCommand
+  // termination-evidence callback (see prAdapterFor) writes through the SAME sink the caller logs
+  // everything else through, instead of an uninjectable `processServerLogSink()`.
+  readonly activityLog?: ServerLogSink | undefined;
   readonly now?: (() => number) | undefined;
   readonly newActionId?: (() => string) | undefined;
   readonly beforeRemoteDispatch?: (() => boolean) | undefined;
@@ -113,15 +117,14 @@ function prAdapterFor(
   workspace: WorkspaceInfo,
   seams: GitDeliveryPullRequestSeams,
   now: () => number,
+  correlationId: string | undefined,
 ): GitPullRequestAdapter {
   if (seams.prAdapterFactory !== undefined) return seams.prAdapterFactory(workspace);
   return createNodeGitPullRequestAdapter({
     workspace,
     processEnv: process.env,
     now,
-    onTerminated: (evidence): void => {
-      logCommandTermination(processServerLogSink(), UNKNOWN_CORRELATION_ID, evidence);
-    },
+    onTerminated: gitDeliveryTerminationHandler(seams, correlationId),
   });
 }
 
@@ -136,11 +139,12 @@ export async function executeGovernedPullRequest(
   workspace: WorkspaceInfo,
   deps: Pick<UiHandlerDeps, "evidenceStore" | "redactor">,
   seams: GitDeliveryPullRequestSeams,
+  correlationId?: string,
 ): Promise<GitPullRequestLifecycleResult> {
   const now = seams.now ?? Date.now;
-  const snapshot = await readWorktreeSnapshotFor(workspace, seams, now);
+  const snapshot = await readWorktreeSnapshotFor(workspace, seams, now, correlationId);
   const adapter = authorityGuardedPrAdapter(
-    prAdapterFor(workspace, seams, now),
+    prAdapterFor(workspace, seams, now, correlationId),
     seams.beforeRemoteDispatch,
   );
   const packs = seams.policyPacks ?? defaultMintableRepoPack(KEIKO_DEFAULT_PR_POLICY_PACK);

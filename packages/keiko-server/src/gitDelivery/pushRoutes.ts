@@ -17,12 +17,13 @@ import type { GitPushCommand } from "@oscharko-dev/keiko-tools";
 import type { WorkspaceInfo } from "@oscharko-dev/keiko-workspace";
 import type { RouteContext, RouteDefinition, RouteResult } from "../routes.js";
 import type { UiHandlerDeps } from "../deps.js";
+import { UNKNOWN_CORRELATION_ID } from "../correlation.js";
 import {
   parseGitDeliveryApprovalRequest,
   resolveGitDeliveryApprovalRequirement,
   type ParsedGitDeliveryApprovalRequest,
 } from "./approvalStore.js";
-import { readWorktreeSnapshotFor } from "./execution.js";
+import { gitDeliveryTerminationHandler, readWorktreeSnapshotFor } from "./execution.js";
 import { defaultMintableRepoPack } from "./policyPackMintability.js";
 import {
   buildGitDeliveryPushPreview,
@@ -43,10 +44,11 @@ import {
   gitDeliveryAuthorityContinuityGuard,
   gitDeliveryAuthorityGate,
   prepareGitDeliveryRequest,
+  type GitDeliveryAuthorityIdentity,
   type GitDeliveryRequestErrors,
 } from "./requestPreparation.js";
 import {
-  readTrustedGitDeliveryBranchProtection,
+  createTrustedGitDeliveryBranchProtectionReader,
   signatureRequirementOf,
   type GitDeliverySignatureRequirement,
 } from "./branchProtectionPreflight.js";
@@ -164,8 +166,13 @@ async function pushSignatureRequirement(
   workspace: WorkspaceInfo,
   command: GitPushCommand,
   seams: GitDeliveryPublishSeams,
+  correlationId: string,
 ): Promise<GitDeliverySignatureRequirement> {
-  const reader = seams.branchProtectionReader ?? readTrustedGitDeliveryBranchProtection;
+  const reader =
+    seams.branchProtectionReader ??
+    createTrustedGitDeliveryBranchProtectionReader(
+      gitDeliveryTerminationHandler(seams, correlationId),
+    );
   try {
     return signatureRequirementOf(
       await reader(workspace, command.remoteAlias, command.remoteBranchName),
@@ -183,14 +190,20 @@ export const createHandlePushPreview = (
   const seams = options.execution ?? {};
   const now = (): number => (seams.now ?? Date.now)();
   return async (ctx, deps): Promise<RouteResult> => {
+    const correlationId = ctx.correlationId ?? UNKNOWN_CORRELATION_ID;
     const prepared = await prepareGitDeliveryRequest(ctx, deps, PUSH_REQUEST_ERRORS, validate);
     if (!prepared.ok) return prepared.result;
     const { workspace } = prepared;
     const { command } = prepared.value;
     const packs = seams.policyPacks ?? defaultMintableRepoPack(KEIKO_DEFAULT_PUBLISH_POLICY_PACK);
     try {
-      const snapshot = await readWorktreeSnapshotFor(workspace, seams, now);
-      const signatureRequirement = await pushSignatureRequirement(workspace, command, seams);
+      const snapshot = await readWorktreeSnapshotFor(workspace, seams, now, correlationId);
+      const signatureRequirement = await pushSignatureRequirement(
+        workspace,
+        command,
+        seams,
+        correlationId,
+      );
       return {
         status: 200,
         body: deps.redactor(
@@ -205,11 +218,68 @@ export const createHandlePushPreview = (
 
 // ─── Execute handler (governed) ───────────────────────────────────────────────────────────────
 
+interface PushMutationInput {
+  readonly ctx: RouteContext;
+  readonly deps: UiHandlerDeps;
+  readonly seams: GitDeliveryPublishSeams;
+  readonly projectId: string;
+  readonly workspace: WorkspaceInfo;
+  readonly command: GitPushCommand;
+  readonly approval: ParsedGitDeliveryApprovalRequest;
+  readonly authority: GitDeliveryAuthorityIdentity;
+  readonly target: { readonly headBranchName: string; readonly remoteBranchName: string };
+  readonly correlationId: string;
+}
+
+// Resolves the approval requirement, arms the continuity guard, drives the publish gateway, and
+// projects the content-free response. Extracted from createHandlePushExecute's returned handler
+// purely to stay under the function-length budget (AGENTS.md §6) — no behavioral seam of its own.
+async function runPushMutation(input: PushMutationInput): Promise<RouteResult> {
+  const { ctx, deps, seams, projectId, workspace, command, approval, authority, target } = input;
+  const verifiedApproval = resolveGitDeliveryApprovalRequirement(approval, {
+    store: seams.approvalStore,
+    binding: {
+      projectId,
+      operation: "push",
+      command,
+      runId: authority.runId,
+      envelopeDigest: authority.envelopeDigest,
+    },
+    nowMs: (seams.now ?? Date.now)(),
+  });
+  if (verifiedApproval === undefined) return errResult(400, "GIT_DELIVERY_PUSH_BAD_REQUEST");
+  const beforeRemoteDispatch = gitDeliveryAuthorityContinuityGuard({
+    ctx,
+    deps,
+    projectId,
+    workspace,
+    operation: "push",
+    target,
+    admitted: authority,
+    next: seams.beforeRemoteDispatch,
+  });
+  try {
+    const result = await executeGovernedPublish(
+      command,
+      verifiedApproval,
+      workspace,
+      deps,
+      { ...seams, beforeRemoteDispatch },
+      input.correlationId,
+    );
+    return { status: 200, body: deps.redactor(gitDeliveryPublishExecuteResponse(result)) };
+  } catch {
+    // Only the read-only snapshot step can throw (not a git repository); the gateway never throws.
+    return errResult(409, "GIT_DELIVERY_PUSH_WORKTREE_UNAVAILABLE");
+  }
+}
+
 export const createHandlePushExecute = (
   options: GitDeliveryPushRouteOptions = {},
 ): ((ctx: RouteContext, deps: UiHandlerDeps) => Promise<RouteResult>) => {
   const seams = options.execution ?? {};
   return async (ctx, deps): Promise<RouteResult> => {
+    const correlationId = ctx.correlationId ?? UNKNOWN_CORRELATION_ID;
     const prepared = await prepareGitDeliveryRequest(ctx, deps, PUSH_REQUEST_ERRORS, validate);
     if (!prepared.ok) return prepared.result;
     const { workspace } = prepared;
@@ -220,39 +290,18 @@ export const createHandlePushExecute = (
     };
     const authority = gitDeliveryAuthorityGate(ctx, deps, projectId, workspace, "push", target);
     if (!authority.allowed) return authority.result;
-    const verifiedApproval = resolveGitDeliveryApprovalRequirement(approval, {
-      store: seams.approvalStore,
-      binding: {
-        projectId,
-        operation: "push",
-        command,
-        runId: authority.runId,
-        envelopeDigest: authority.envelopeDigest,
-      },
-      nowMs: (seams.now ?? Date.now)(),
-    });
-    if (verifiedApproval === undefined) return errResult(400, "GIT_DELIVERY_PUSH_BAD_REQUEST");
-    const beforeRemoteDispatch = gitDeliveryAuthorityContinuityGuard({
+    return runPushMutation({
       ctx,
       deps,
+      seams,
       projectId,
       workspace,
-      operation: "push",
+      command,
+      approval,
+      authority,
       target,
-      admitted: authority,
-      next: seams.beforeRemoteDispatch,
+      correlationId,
     });
-    let result;
-    try {
-      result = await executeGovernedPublish(command, verifiedApproval, workspace, deps, {
-        ...seams,
-        beforeRemoteDispatch,
-      });
-    } catch {
-      // Only the read-only snapshot step can throw (not a git repository); the gateway never throws.
-      return errResult(409, "GIT_DELIVERY_PUSH_WORKTREE_UNAVAILABLE");
-    }
-    return { status: 200, body: deps.redactor(gitDeliveryPublishExecuteResponse(result)) };
   };
 };
 

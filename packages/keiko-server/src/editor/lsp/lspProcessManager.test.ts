@@ -390,6 +390,40 @@ describe("createLspProcessManager", () => {
     }
   });
 
+  // F1 (PR reviewer finding, ~lspProcessManager.ts line 359): disposeManager called
+  // cleanupSpawnResources and then transitioned to DISPOSED without ever clearing state.child, so
+  // the terminal event's spread (`...state.child?.pid !== undefined ? { childPid: ... } : {}`) kept
+  // emitting the TERMINATED child's pid. A reconstructed support timeline would then show a disposed
+  // manager as still owning a process — and the OS is free to reuse that pid for an unrelated one.
+  // The contract on LspLifecycleEvent.childPid is explicit: present only for a CURRENT running
+  // child, absent after cleanup.
+  it("clears childPid from the terminal DISPOSED event after normal disposal (F1)", async () => {
+    const { spawn } = fakeSpawnHarness(["normal"]);
+    const events: LspLifecycleEvent[] = [];
+    const manager = createLspProcessManager(
+      makeDeps(spawn, makeConfig(), (event) => events.push(event)),
+    );
+    await settle();
+    expect(manager.getLspProcessStatus()).toBe("READY");
+    // Prove the manager genuinely had a live child before disposal, so the terminal assertion below
+    // is not vacuous: 4242 is the fake process handle's constant pid (testing/fakeLspProcess.ts).
+    const readyEvent = events.find((event) => event.status === "READY");
+    expect(readyEvent?.childPid).toBe(4242);
+
+    await manager.dispose();
+
+    const disposedEvents = events.filter((event) => event.status === "DISPOSED");
+    expect(disposedEvents).toHaveLength(1);
+    const terminal = disposedEvents[0];
+    expect(terminal).toBeDefined();
+    if (terminal === undefined) throw new Error("terminal DISPOSED event missing");
+    expect(terminal.childPid).toBeUndefined();
+    // The field must be genuinely ABSENT (per the contract's "absent after cleanup"), not merely
+    // `undefined` — a stronger pin than toBeUndefined() alone, which would also pass for an
+    // explicitly-set `undefined` value that still serialises differently under some encoders.
+    expect(Object.hasOwn(terminal, "childPid")).toBe(false);
+  });
+
   it("transitions to INITIALIZE_TIMEOUT when the server never answers initialize", async () => {
     const { spawn } = fakeSpawnHarness(["slow"]);
     const manager = createLspProcessManager(makeDeps(spawn, makeConfig()));

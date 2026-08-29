@@ -41,14 +41,14 @@ import {
 } from "@oscharko-dev/keiko-tools";
 import { createNodeGitMergeAdapter } from "@oscharko-dev/keiko-tools/internal/git-mutation";
 import type { UiHandlerDeps } from "../deps.js";
-import { UNKNOWN_CORRELATION_ID } from "../correlation.js";
-import { logCommandTermination, processServerLogSink } from "../process-log-sink.js";
+import type { ServerLogSink } from "../observability/server-log.js";
 import type { GitDeliveryApprovalStore } from "./approvalStore.js";
 import type { GitDeliveryTrustedPolicyPacks } from "./actionSheetProjection.js";
 import { defaultMintableRepoPack } from "./policyPackMintability.js";
 import {
   defaultGitDeliveryActionId,
   gitDeliveryMutationResponse,
+  gitDeliveryTerminationHandler,
   persistGitDeliveryEvidence,
   readWorktreeSnapshotFor,
   type GitDeliveryMutationResponseBody,
@@ -74,6 +74,10 @@ export interface GitDeliveryMergeSeams {
   readonly policyPacks?: GitDeliveryTrustedPolicyPacks | undefined;
   readonly approvalStore?: GitDeliveryApprovalStore | undefined;
   readonly strategyPolicy?: GitMergeStrategyPolicy | undefined;
+  // The request's own activity-log sink, so the default merge adapter's runCommand
+  // termination-evidence callback (see mergeAdapterFor) writes through the SAME sink the caller
+  // logs everything else through, instead of an uninjectable `processServerLogSink()`.
+  readonly activityLog?: ServerLogSink | undefined;
   readonly now?: (() => number) | undefined;
   readonly newActionId?: (() => string) | undefined;
   readonly beforeRemoteDispatch?: (() => boolean) | undefined;
@@ -97,15 +101,14 @@ function mergeAdapterFor(
   workspace: WorkspaceInfo,
   seams: GitDeliveryMergeSeams,
   now: () => number,
+  correlationId: string | undefined,
 ): GitMergeAdapter {
   if (seams.mergeAdapterFactory !== undefined) return seams.mergeAdapterFactory(workspace);
   return createNodeGitMergeAdapter({
     workspace,
     processEnv: process.env,
     now,
-    onTerminated: (evidence): void => {
-      logCommandTermination(processServerLogSink(), UNKNOWN_CORRELATION_ID, evidence);
-    },
+    onTerminated: gitDeliveryTerminationHandler(seams, correlationId),
   });
 }
 
@@ -116,8 +119,9 @@ export async function readMergeProviderReadiness(
   workspace: WorkspaceInfo,
   seams: GitDeliveryMergeSeams,
   now: () => number,
+  correlationId?: string,
 ): Promise<GitMergeProviderReadiness> {
-  const adapter = mergeAdapterFor(workspace, seams, now);
+  const adapter = mergeAdapterFor(workspace, seams, now, correlationId);
   try {
     return await adapter.readMergeReadiness({
       ownerAndRepo: command.ownerAndRepo,
@@ -141,11 +145,12 @@ export async function executeGovernedMerge(
   workspace: WorkspaceInfo,
   deps: Pick<UiHandlerDeps, "evidenceStore" | "redactor">,
   seams: GitDeliveryMergeSeams,
+  correlationId?: string,
 ): Promise<GitMergeLifecycleResult> {
   const now = seams.now ?? Date.now;
-  const snapshot = await readWorktreeSnapshotFor(workspace, seams, now);
+  const snapshot = await readWorktreeSnapshotFor(workspace, seams, now, correlationId);
   const adapter = authorityGuardedMergeAdapter(
-    mergeAdapterFor(workspace, seams, now),
+    mergeAdapterFor(workspace, seams, now, correlationId),
     seams.beforeRemoteDispatch,
   );
   const packs = seams.policyPacks ?? defaultMintableRepoPack(KEIKO_DEFAULT_MERGE_POLICY_PACK);

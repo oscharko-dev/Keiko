@@ -16,6 +16,7 @@
 import type { GitPullRequestCommand } from "@oscharko-dev/keiko-tools";
 import type { RouteContext, RouteDefinition, RouteResult } from "../routes.js";
 import type { UiHandlerDeps } from "../deps.js";
+import { UNKNOWN_CORRELATION_ID } from "../correlation.js";
 import {
   parseGitDeliveryApprovalRequest,
   resolveGitDeliveryApprovalRequirement,
@@ -240,13 +241,14 @@ export const createHandlePrPreview = (
   const seams = options.execution ?? {};
   const now = (): number => (seams.now ?? Date.now)();
   return async (ctx, deps): Promise<RouteResult> => {
+    const correlationId = ctx.correlationId ?? UNKNOWN_CORRELATION_ID;
     const prepared = await prepareGitDeliveryRequest(ctx, deps, PR_REQUEST_ERRORS, validate);
     if (!prepared.ok) return prepared.result;
     const { workspace } = prepared;
     const { command } = prepared.value;
     const packs = seams.policyPacks ?? defaultMintableRepoPack(KEIKO_DEFAULT_PR_POLICY_PACK);
     try {
-      const snapshot = await readWorktreeSnapshotFor(workspace, seams, now);
+      const snapshot = await readWorktreeSnapshotFor(workspace, seams, now, correlationId);
       return {
         status: 200,
         body: deps.redactor(buildGitDeliveryPrPreview(command, snapshot, packs)),
@@ -285,6 +287,7 @@ async function handlePrExecute(
   deps: UiHandlerDeps,
   seams: GitDeliveryPullRequestSeams,
 ): Promise<RouteResult> {
+  const correlationId = ctx.correlationId ?? UNKNOWN_CORRELATION_ID;
   const prepared = await prepareGitDeliveryRequest(ctx, deps, PR_REQUEST_ERRORS, validate);
   if (!prepared.ok) return prepared.result;
   const { workspace } = prepared;
@@ -316,10 +319,14 @@ async function handlePrExecute(
     next: seams.beforeRemoteDispatch,
   });
   try {
-    const result = await executeGovernedPullRequest(command, verifiedApproval, workspace, deps, {
-      ...seams,
-      beforeRemoteDispatch,
-    });
+    const result = await executeGovernedPullRequest(
+      command,
+      verifiedApproval,
+      workspace,
+      deps,
+      { ...seams, beforeRemoteDispatch },
+      correlationId,
+    );
     return { status: 200, body: deps.redactor(gitDeliveryPrExecuteResponse(result)) };
   } catch {
     return errResult(409, "GIT_DELIVERY_PR_WORKTREE_UNAVAILABLE");

@@ -13,14 +13,18 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Readable } from "node:stream";
 import type { Server, IncomingMessage, ServerResponse } from "node:http";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import type { GitWorktreeSnapshot } from "@oscharko-dev/keiko-tools";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { GitDeliveryRepoPolicyPack } from "@oscharko-dev/keiko-contracts";
+import { GIT_DELIVERY_POLICY_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts/runtime/git-delivery-policy";
+import type { GitPullRequestCommand, GitWorktreeSnapshot } from "@oscharko-dev/keiko-tools";
 import type {
   GitPrCreateExecRequest,
   GitPrExecResult,
   GitPrUpdateExecRequest,
   GitPullRequestAdapter,
 } from "@oscharko-dev/keiko-tools";
+import type { NodeGitPullRequestAdapterDeps } from "@oscharko-dev/keiko-tools/internal/git-mutation";
+import type { WorkspaceInfo } from "@oscharko-dev/keiko-workspace";
 import type { EvidenceStore } from "@oscharko-dev/keiko-evidence";
 import { UI_HOST } from "../server.js";
 import { buildCspHeader } from "../csp.js";
@@ -28,11 +32,35 @@ import { buildRedactor, createRunRegistry, type UiHandlerDeps } from "../index.j
 import { startUiTestServer } from "../ui-test-server/_support.js";
 import { createInMemoryUiStore, type UiStore } from "../store/index.js";
 import type { RouteContext } from "../routes.js";
+import type { ServerLogEvent } from "../observability/server-log.js";
+
+// Spies on the default PR-adapter factory the F1 fix threads runCommand termination-evidence
+// through (executeGovernedPullRequest's `prAdapterFor`, exercised below via direct calls to
+// executeGovernedPullRequest itself). Delegates to the REAL implementation so the adapter this
+// test file's OTHER suites inject via `prAdapterFactory` seams stays entirely unaffected. Mirrors
+// the importOriginal-plus-delegating-wrapper pattern defaultPolicyPacks.test.ts and
+// execution.test.ts already use for this exact module graph.
+const createNodeGitPullRequestAdapterCalls: NodeGitPullRequestAdapterDeps[] = [];
+vi.mock("@oscharko-dev/keiko-tools/internal/git-mutation", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("@oscharko-dev/keiko-tools/internal/git-mutation")>();
+  return {
+    ...actual,
+    createNodeGitPullRequestAdapter: (
+      deps: NodeGitPullRequestAdapterDeps,
+    ): GitPullRequestAdapter => {
+      createNodeGitPullRequestAdapterCalls.push(deps);
+      return actual.createNodeGitPullRequestAdapter(deps);
+    },
+  };
+});
+
 import { createHandlePrExecute, createHandlePrPreview } from "./prRoutes.js";
-import type {
-  GitDeliveryPrExecuteResponseBody,
-  GitDeliveryPrPreviewBody,
-  GitDeliveryPullRequestSeams,
+import {
+  executeGovernedPullRequest,
+  type GitDeliveryPrExecuteResponseBody,
+  type GitDeliveryPrPreviewBody,
+  type GitDeliveryPullRequestSeams,
 } from "./prExecution.js";
 import { permittedGitDeliveryAuthority } from "./runBoundAuthority.test-support.js";
 
@@ -495,5 +523,84 @@ describe("pr execute — governed create + no-bypass (AC1/AC4/AC5)", () => {
     expect(body.status).toBe("succeeded");
     expect(adapter.updates()).toBe(1);
     expect(adapter.creates()).toBe(0);
+  });
+});
+
+// ─── F1: the default PR adapter (no prAdapterFactory seam) — audit finding: this branch
+// previously hard-coded UNKNOWN_CORRELATION_ID and an uninjectable processServerLogSink(),
+// silently dropping BOTH the caller's real correlationId and its activityLog seam. Exercises
+// executeGovernedPullRequest directly (bypassing HTTP) with a policy pack that BLOCKS every
+// action, so the kernel never reaches the adapter's real `.createPullRequest()` — the only fact
+// under test is what deps object the default factory receives. ──────────────────────────────
+
+const BLOCK_ALL_PR_PACK: GitDeliveryRepoPolicyPack = {
+  schemaVersion: GIT_DELIVERY_POLICY_SCHEMA_VERSION,
+  repoId: "repo",
+  rules: [],
+  defaultRule: { decision: "blocked" },
+};
+
+function testWorkspace(root: string): WorkspaceInfo {
+  return {
+    root,
+    name: undefined,
+    version: undefined,
+    testFramework: "unknown",
+    sourceDirs: [],
+    testDirs: [],
+    languages: [],
+    ignoreLines: [],
+  };
+}
+
+const WIRING_COMMAND: GitPullRequestCommand = {
+  kind: "pr-create",
+  ownerAndRepo: "oscharko-dev/Keiko",
+  headBranchName: "feat/x",
+  baseBranchName: "dev",
+  title: "wiring probe",
+  body: "",
+  isDraft: false,
+};
+
+describe("executeGovernedPullRequest — default PR-adapter termination wiring (F1)", () => {
+  beforeEach(() => {
+    createNodeGitPullRequestAdapterCalls.length = 0;
+  });
+
+  it("wires the caller's activityLog + correlationId into the default createNodeGitPullRequestAdapter call", async () => {
+    const activity: ServerLogEvent[] = [];
+    await executeGovernedPullRequest(
+      WIRING_COMMAND,
+      { required: false },
+      testWorkspace("/nonexistent/keiko-gd-pr-wiring"),
+      {
+        evidenceStore: {
+          put: () => "",
+          list: () => [],
+          get: () => undefined,
+          delete: () => undefined,
+        },
+        redactor: buildRedactor({}),
+      },
+      {
+        snapshotReader: () => Promise.resolve(SNAPSHOT),
+        policyPacks: { repoPack: BLOCK_ALL_PR_PACK },
+        activityLog: {
+          write: (event): void => {
+            activity.push(event);
+          },
+        },
+      },
+      "request-correlation-pr-wiring",
+    );
+    expect(createNodeGitPullRequestAdapterCalls).toHaveLength(1);
+    const onTerminated = createNodeGitPullRequestAdapterCalls[0]?.onTerminated;
+    expect(onTerminated).toBeTypeOf("function");
+    onTerminated?.({ reason: "abort", childPid: 5678, windowsTreeKill: "not-attempted" });
+    expect(activity).toHaveLength(1);
+    expect(activity[0]?.op).toBe("command.terminated");
+    expect(activity[0]?.correlationId).toBe("request-correlation-pr-wiring");
+    expect(activity[0]?.extra?.childPid).toBe(5678);
   });
 });

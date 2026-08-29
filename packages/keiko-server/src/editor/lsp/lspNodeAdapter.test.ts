@@ -504,7 +504,13 @@ describe("defaultLspSpawnFn — activity-log evidence (AGENTS.md §8 Rule 1)", (
   // covers the synchronous throw paths (buildLspSpawnPlan rejecting a control character or an
   // untrusted SystemRoot on win32, wrapChild's null-stdio check): they share cleanupHomeOnce +
   // logLspSpawnFailed + rethrow.
-  it("an async spawn failure logs lsp.spawn.failed, never lsp.spawn.completed, and leaks no HOME", async () => {
+  //
+  // F2 (PR reviewer finding): the handler used to discard the real Error and always log the generic
+  // `errorKind: "SPAWN_FAILED"`, so a support bundle could not tell an ENOENT apart from an EACCES
+  // or a resource-limit failure. errorKind must now be the REAL classification (errorKindOf reads
+  // only the error's coded `.code`, e.g. Node's own "ENOENT" — see the sibling synchronous-catch
+  // test below for a second, different classification, proving the two are told apart).
+  it("an async spawn failure logs lsp.spawn.failed with the real ENOENT classification, never lsp.spawn.completed, and leaks no HOME", async () => {
     const events = captureLog();
     const binDir = makeTempDir("keiko-lsp-enoent-");
     const missing = join(binDir, "does-not-exist");
@@ -524,10 +530,60 @@ describe("defaultLspSpawnFn — activity-log evidence (AGENTS.md §8 Rule 1)", (
     expect(events.some((event) => event.op === "lsp.spawn.completed")).toBe(false);
     const failed = events.find((event) => event.op === "lsp.spawn.failed");
     expect(failed).toBeDefined();
-    expect(failed?.errorKind).toBe("SPAWN_FAILED");
+    expect(failed?.errorKind).toBe("ENOENT");
+    expect(failed?.errorKind).not.toBe("SPAWN_FAILED");
+    // BODY-FREE: Node's real ENOENT carries the resolved executable PATH on both `.message` and
+    // `.path` (`Error: spawn <path> ENOENT`) — none of it may reach the line, in any field.
+    expect(JSON.stringify(failed)).not.toContain(missing);
+    // Whatever WAS emitted must survive the REAL redactor unchanged — proof it is already
+    // conforming, not merely proof the redactor would have caught a violation.
+    const extra = failed?.extra ?? {};
+    const redacted = redactLogFields(extra) ?? {};
+    expect(Object.keys(redacted).sort()).toEqual(Object.keys(extra).sort());
     const homesAfter = readdirSync(tmpdir()).filter((name) => name.startsWith("keiko-lsp-home-"));
     const leaked = homesAfter.filter((name) => !homesBefore.has(name));
     expect(leaked).toEqual([]);
+  });
+
+  // F2 (PR reviewer finding): "the synchronous catch below likewise ignores its captured error when
+  // logging." A NUL byte anywhere in the executable path makes Node's real spawn() throw
+  // SYNCHRONOUSLY (node:child_process's own validateArgumentNullCheck, code ERR_INVALID_ARG_VALUE) —
+  // deterministic and cross-platform, unlike EACCES (a root-run process ignores POSIX permission
+  // bits, so a chmod-based probe would be flaky under exactly the containers this suite runs in).
+  // Node's own thrown message embeds the raw path too, making this the sharpest available
+  // body-freedom probe for the synchronous branch. Because the throw is SYNCHRONOUS, the stack
+  // passes through defaultLspSpawnFn's own call to spawn() before unwinding — unlike the async
+  // ENOENT case above, this is real evidence that `extra.frames` is correctly wired end to end.
+  it("a synchronous spawn failure logs lsp.spawn.failed with a distinct classification, real frames, and rethrows", () => {
+    const events = captureLog();
+    const binDir = makeTempDir("keiko-lsp-nul-");
+    const withNulByte = `${join(binDir, "does-not-exist")}${String.fromCharCode(0)}`;
+
+    expect(() => defaultLspSpawnFn(withNulByte, [], { PATH: "/usr/bin" }, binDir)).toThrow();
+
+    const failed = events.find((event) => event.op === "lsp.spawn.failed");
+    expect(failed).toBeDefined();
+    expect(failed?.level).toBe("error");
+    // A DIFFERENT real cause than the ENOENT test above yields a DIFFERENT errorKind — proof the
+    // line now tells failures apart instead of collapsing every spawn failure onto one constant.
+    expect(failed?.errorKind).toBe("ERR_INVALID_ARG_VALUE");
+    expect(failed?.errorKind).not.toBe("SPAWN_FAILED");
+    const frames = failed?.extra?.frames;
+    expect(Array.isArray(frames)).toBe(true);
+    const frameList = Array.isArray(frames) ? frames : [];
+    expect(
+      frameList.some((frame) => typeof frame === "string" && frame.includes("lspNodeAdapter.ts")),
+    ).toBe(true);
+    // BODY-FREE: Node's ERR_INVALID_ARG_VALUE message embeds the raw executable path verbatim
+    // (`Received '<path>'`) — it must never reach the line, and neither must the temp dir it lives
+    // under.
+    expect(JSON.stringify(failed)).not.toContain(binDir);
+    const extra = failed?.extra ?? {};
+    const redacted = redactLogFields(extra) ?? {};
+    expect(Object.keys(redacted).sort()).toEqual(Object.keys(extra).sort());
+    // frames must survive the redactor's own re-validation (redactKeikoFrames) with every element
+    // intact, not merely as a same-length array of markers.
+    expect(redacted.frames).toEqual(frameList);
   });
 
   it("logs lsp.process.terminated with signal and the VERIFIED tree-kill disposition on kill()", async () => {

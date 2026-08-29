@@ -59,6 +59,7 @@ import {
 import {
   executeGovernedMutation,
   gitDeliveryMutationResponse,
+  gitDeliveryTerminationHandler,
   KEIKO_DEFAULT_LOCAL_GIT_POLICY_PACK,
   readStagedConflictMarkerFileCountFor,
   readStagedPathsFor,
@@ -78,7 +79,7 @@ import {
 import { resolveGovernedCommitMessagePolicy } from "./commitPolicySettings.js";
 import { defaultMintableRepoPack } from "./policyPackMintability.js";
 import {
-  readTrustedGitDeliveryBranchProtection,
+  createTrustedGitDeliveryBranchProtectionReader,
   signatureRequirementOf,
   type GitDeliverySignatureRequirement,
 } from "./branchProtectionPreflight.js";
@@ -511,12 +512,17 @@ async function commitSignatureRequirement(
   workspace: WorkspaceInfo,
   snapshot: GitWorktreeSnapshot,
   seams: GitDeliveryExecutionSeams,
+  correlationId: string,
   reportFailure: (error: unknown) => void,
 ): Promise<GitDeliverySignatureRequirement> {
   const branchName = snapshot.currentBranchName;
   const remoteAlias = preferredRemoteAlias(snapshot);
   if (branchName === undefined || remoteAlias === undefined) return "unavailable";
-  const reader = seams.branchProtectionReader ?? readTrustedGitDeliveryBranchProtection;
+  const reader =
+    seams.branchProtectionReader ??
+    createTrustedGitDeliveryBranchProtectionReader(
+      gitDeliveryTerminationHandler(seams, correlationId),
+    );
   try {
     return signatureRequirementOf(await reader(workspace, remoteAlias, branchName));
   } catch (error) {
@@ -557,10 +563,11 @@ async function computePreview(
   policy: GitCommitMessagePolicy,
   seams: GitDeliveryExecutionSeams,
   now: () => number,
+  correlationId: string,
   reportFailure: (error: unknown) => void,
 ): Promise<GitDeliveryCommitPreviewBody> {
-  const snapshot = await readWorktreeSnapshotFor(workspace, seams, now);
-  const stagedPaths = await readStagedPathsFor(workspace, seams, now);
+  const snapshot = await readWorktreeSnapshotFor(workspace, seams, now, correlationId);
+  const stagedPaths = await readStagedPathsFor(workspace, seams, now, correlationId);
   const summary = summarizeStagedChangeset(stagedPaths);
   const commitInputs: GitDeliveryResolvedInputs = {
     kind: "commit",
@@ -576,6 +583,7 @@ async function computePreview(
     workspace,
     snapshot,
     seams,
+    correlationId,
     reportFailure,
   );
   const effectivePolicy = previewEffectivePolicy(snapshot, commitInputs, seams);
@@ -617,9 +625,17 @@ export const createHandleCommitPreview = (
     );
     let body: GitDeliveryCommitPreviewBody;
     try {
-      body = await computePreview(workspace, messageDraft, policy, seams, now, (error) => {
-        reportBranchProtectionFailure(deps, correlationId, error);
-      });
+      body = await computePreview(
+        workspace,
+        messageDraft,
+        policy,
+        seams,
+        now,
+        correlationId,
+        (error) => {
+          reportBranchProtectionFailure(deps, correlationId, error);
+        },
+      );
     } catch (error) {
       reportPreviewWorktreeFailure(deps, correlationId, error);
       return errResult(409, "GIT_DELIVERY_COMMIT_WORKTREE_UNAVAILABLE");
@@ -718,6 +734,7 @@ function messagePolicyBlockResult(
 async function conflictMarkerBlockResult(
   workspace: WorkspaceInfo,
   seams: GitDeliveryExecutionSeams,
+  correlationId: string,
   deps: Pick<UiHandlerDeps, "redactor">,
   reportFailure: (error: unknown) => void,
 ): Promise<RouteResult | undefined> {
@@ -727,6 +744,7 @@ async function conflictMarkerBlockResult(
       workspace,
       seams,
       seams.now ?? Date.now,
+      correlationId,
     );
   } catch (error) {
     reportFailure(error);
@@ -743,6 +761,39 @@ async function conflictMarkerBlockResult(
       conflictMarkerFileCount,
     }),
   };
+}
+
+// Builds the typed commit command, resolves the approval requirement, drives the kernel, and
+// projects the content-free response. Extracted from createHandleCommitExecute's returned handler
+// purely to stay under the function-length budget (AGENTS.md §6) — no behavioral seam of its own.
+async function runCommitMutation(
+  req: ExecuteRequest,
+  workspace: WorkspaceInfo,
+  seams: GitDeliveryExecutionSeams,
+  correlationId: string,
+  deps: UiHandlerDeps,
+): Promise<RouteResult> {
+  const command = { kind: "commit" as const, message: req.message, allowEmpty: req.allowEmpty };
+  const verifiedApproval = resolveGitDeliveryApprovalRequirement(req.approval, {
+    store: seams.approvalStore,
+    binding: { projectId: req.projectId, operation: "commit", command },
+    nowMs: (seams.now ?? Date.now)(),
+  });
+  if (verifiedApproval === undefined) return errResult(400, "GIT_DELIVERY_COMMIT_BAD_REQUEST");
+  try {
+    const result = await executeGovernedMutation(
+      command,
+      verifiedApproval,
+      workspace,
+      deps,
+      seams,
+      correlationId,
+    );
+    return { status: 200, body: deps.redactor(gitDeliveryMutationResponse(result)) };
+  } catch (error) {
+    reportCommitMutationFailure(deps, correlationId, error);
+    return errResult(409, "GIT_DELIVERY_COMMIT_WORKTREE_UNAVAILABLE");
+  }
 }
 
 export const createHandleCommitExecute = (
@@ -766,33 +817,18 @@ export const createHandleCommitExecute = (
     const messageBlock = messagePolicyBlockResult(req.message, policy, deps);
     if (messageBlock !== undefined) return messageBlock;
 
-    const conflictBlock = await conflictMarkerBlockResult(workspace, seams, deps, (error) => {
-      reportConflictScanFailure(deps, correlationId, error);
-    });
+    const conflictBlock = await conflictMarkerBlockResult(
+      workspace,
+      seams,
+      correlationId,
+      deps,
+      (error) => {
+        reportConflictScanFailure(deps, correlationId, error);
+      },
+    );
     if (conflictBlock !== undefined) return conflictBlock;
 
-    const command = { kind: "commit" as const, message: req.message, allowEmpty: req.allowEmpty };
-    const verifiedApproval = resolveGitDeliveryApprovalRequirement(req.approval, {
-      store: seams.approvalStore,
-      binding: { projectId: req.projectId, operation: "commit", command },
-      nowMs: (seams.now ?? Date.now)(),
-    });
-    if (verifiedApproval === undefined) return errResult(400, "GIT_DELIVERY_COMMIT_BAD_REQUEST");
-    let result;
-    try {
-      result = await executeGovernedMutation(
-        command,
-        verifiedApproval,
-        workspace,
-        deps,
-        seams,
-        correlationId,
-      );
-    } catch (error) {
-      reportCommitMutationFailure(deps, correlationId, error);
-      return errResult(409, "GIT_DELIVERY_COMMIT_WORKTREE_UNAVAILABLE");
-    }
-    return { status: 200, body: deps.redactor(gitDeliveryMutationResponse(result)) };
+    return runCommitMutation(req, workspace, seams, correlationId, deps);
   };
 };
 

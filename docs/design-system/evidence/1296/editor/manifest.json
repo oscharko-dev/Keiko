@@ -5,7 +5,7 @@
   "route": "/",
   "workspace": "synthetic-temp-project",
   "evidencePath": "docs/design-system/evidence/1296/editor",
-  "generatedAt": "2026-08-27T17:58:51.787Z",
+  "generatedAt": "2026-08-29T19:49:08.343Z",
   "designReference": "design-system/editor-agent.html",
   "productCss": "packages/keiko-ui/src/app/globals.css",
   "assertions": {

@@ -210,6 +210,12 @@ describe("runWindowsShortcutCommand", () => {
     ["a root-relative value", String.raw`\Windows`],
     ["a traversal segment", String.raw`C:\Windows\..\Users\pub`],
     ["an embedded cmd metacharacter", String.raw`C:\Win&dows`],
+    // Regression pin: an empty SystemRoot is not `undefined`, so the `??` fallback chain in
+    // resolveWindowsSystemDirectory never reaches the default — it is the literal candidate
+    // `""`, which is not drive-absolute. Under the OLD `isAbsolute`-only check this silently fell
+    // back to DEFAULT_WINDOWS_SYSTEM_ROOT and let the command run anyway; it must now fail closed
+    // exactly like every other malformed shape above, with cscript.exe never spawned.
+    ["an empty value", ""],
   ])("refuses to resolve cscript.exe under %s, and spawns nothing", (_label, systemRoot) => {
     const spawnFn = vi.fn<WindowsShortcutSpawnFn>(() => spawnResult());
     expect(() =>

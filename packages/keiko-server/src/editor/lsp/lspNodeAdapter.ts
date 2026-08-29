@@ -42,6 +42,8 @@ import {
 } from "../processHardening.js";
 import { UNKNOWN_CORRELATION_ID } from "../../correlation.js";
 import { processServerLogSink } from "../../process-log-sink.js";
+import { errorKindOf } from "../../observability/server-log.js";
+import { causeChain, keikoStackFrames } from "../../observability/stack-frames.js";
 import type { LspSpawnHandle } from "./lspTransport.js";
 
 // AGENTS.md §8 Rule 1 (PR reviewer finding): this adapter's two platform-dependent decision
@@ -73,14 +75,39 @@ function logLspSpawnCompleted(windowsWrapperEngaged: boolean, childPid: number |
   });
 }
 
-function logLspSpawnFailed(code: LspProcessErrorCode): void {
+// F2 (PR reviewer finding): the two async/sync spawn-failure call sites below each already catch a
+// real Error (ENOENT, EACCES, a resource-limit failure, a hardening rejection, ...) and used to
+// discard it, collapsing every distinct cause onto the same generic `code` — a support bundle could
+// not tell an unresolvable executable apart from a permission or resource-limit failure. `error` is
+// routed through the SAME structured diagnostic machinery every other server call site already uses
+// (AGENTS.md §8 Rule 1), never a bespoke shape: `errorKindOf` (the closed-vocabulary classifier —
+// reads only a coded `.code`/class name, never `.message`) for `errorKind`, and `keikoStackFrames` /
+// `causeChain` (the dist-anchored Keiko-code stack reducer) for `extra.frames` / `extra.causeChain`.
+// Both degrade safely to an empty array when the real cause never passes through our own code (a
+// raw Node internal spawn failure, e.g. the async ENOENT case, has no Keiko-code frame to report),
+// so `frames`/`causeChain` are only ever added when there is real evidence to add (`nonEmpty`
+// mirrors diagnostics-log.ts's own `describeError` helper). `code` remains the fallback `errorKind`
+// for the ONE call site (the non-absolute-executable guard) that has no underlying Error at all.
+//
+// BODY-FREE (non-negotiable): none of `errorKindOf`/`keikoStackFrames`/`causeChain` ever reads
+// `.message`, `.path`, `.syscall`, `.cmd` or `.spawnargs` — Node's own ENOENT/EINVAL errors put the
+// resolved executable PATH on several of exactly those fields, so reading any of them here would
+// leak it straight into the activity log. Redaction survival for this exact shape is pinned by
+// `lspNodeAdapter.test.ts`'s "AGENTS.md §8 Rule 1" describe block, run through the REAL redactor.
+function logLspSpawnFailed(code: LspProcessErrorCode, error?: unknown): void {
+  const frames = keikoStackFrames(error);
+  const chain = causeChain(error);
   processServerLogSink().write({
     level: "error",
     category: "diagnostic",
     op: "lsp.spawn.failed",
     correlationId: UNKNOWN_CORRELATION_ID,
-    errorKind: code,
-    extra: { platform: process.platform },
+    errorKind: error === undefined ? code : errorKindOf(error),
+    extra: {
+      platform: process.platform,
+      ...(frames.length > 0 ? { frames } : {}),
+      ...(chain.length > 0 ? { causeChain: chain } : {}),
+    },
   });
 }
 
@@ -397,9 +424,9 @@ export const defaultLspSpawnFn: LspSpawnFn = (executable, args, env, cwd) => {
     child.once("spawn", () => {
       logLspSpawnCompleted(plan.options.windowsVerbatimArguments === true, child.pid);
     });
-    child.once("error", () => {
+    child.once("error", (spawnError) => {
       cleanupHomeOnce();
-      logLspSpawnFailed("SPAWN_FAILED");
+      logLspSpawnFailed("SPAWN_FAILED", spawnError);
     });
     wrapped.onExit(() => {
       cleanupHomeOnce();
@@ -407,7 +434,7 @@ export const defaultLspSpawnFn: LspSpawnFn = (executable, args, env, cwd) => {
     return wrapped;
   } catch (error) {
     cleanupHomeOnce();
-    logLspSpawnFailed("SPAWN_FAILED");
+    logLspSpawnFailed("SPAWN_FAILED", error);
     throw error;
   }
 };

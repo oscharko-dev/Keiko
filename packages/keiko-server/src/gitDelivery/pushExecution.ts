@@ -32,8 +32,7 @@ import {
 } from "@oscharko-dev/keiko-tools";
 import { createNodeGitPublishAdapter } from "@oscharko-dev/keiko-tools/internal/git-mutation";
 import type { UiHandlerDeps } from "../deps.js";
-import { UNKNOWN_CORRELATION_ID } from "../correlation.js";
-import { logCommandTermination, processServerLogSink } from "../process-log-sink.js";
+import type { ServerLogSink } from "../observability/server-log.js";
 import type { GitDeliveryApprovalStore } from "./approvalStore.js";
 import type { GitDeliveryTrustedPolicyPacks } from "./actionSheetProjection.js";
 import type {
@@ -43,6 +42,7 @@ import type {
 import {
   defaultGitDeliveryActionId,
   gitDeliveryMutationResponse,
+  gitDeliveryTerminationHandler,
   persistGitDeliveryEvidence,
   readWorktreeSnapshotFor,
   type GitDeliveryMutationResponseBody,
@@ -107,6 +107,10 @@ export interface GitDeliveryPublishSeams {
   readonly branchProtectionReader?: GitDeliveryBranchProtectionReader | undefined;
   readonly policyPacks?: GitDeliveryTrustedPolicyPacks | undefined;
   readonly approvalStore?: GitDeliveryApprovalStore | undefined;
+  // The request's own activity-log sink, so the default publish adapter's runCommand
+  // termination-evidence callback (see publishAdapterFor) writes through the SAME sink the caller
+  // logs everything else through, instead of an uninjectable `processServerLogSink()`.
+  readonly activityLog?: ServerLogSink | undefined;
   readonly now?: (() => number) | undefined;
   readonly newActionId?: (() => string) | undefined;
   readonly beforeRemoteDispatch?: (() => boolean) | undefined;
@@ -129,15 +133,14 @@ function publishAdapterFor(
   workspace: WorkspaceInfo,
   seams: GitDeliveryPublishSeams,
   now: () => number,
+  correlationId: string | undefined,
 ): GitRemotePublishAdapter {
   if (seams.publishAdapterFactory !== undefined) return seams.publishAdapterFactory(workspace);
   return createNodeGitPublishAdapter({
     workspace,
     processEnv: process.env,
     now,
-    onTerminated: (evidence): void => {
-      logCommandTermination(processServerLogSink(), UNKNOWN_CORRELATION_ID, evidence);
-    },
+    onTerminated: gitDeliveryTerminationHandler(seams, correlationId),
   });
 }
 
@@ -164,11 +167,12 @@ export async function executeGovernedPublish(
   workspace: WorkspaceInfo,
   deps: Pick<UiHandlerDeps, "evidenceStore" | "redactor">,
   seams: GitDeliveryPublishSeams,
+  correlationId?: string,
 ): Promise<GitPublishLifecycleResult> {
   const now = seams.now ?? Date.now;
-  const snapshot = await readWorktreeSnapshotFor(workspace, seams, now);
+  const snapshot = await readWorktreeSnapshotFor(workspace, seams, now, correlationId);
   const adapter = authorityGuardedPublishAdapter(
-    publishAdapterFor(workspace, seams, now),
+    publishAdapterFor(workspace, seams, now, correlationId),
     seams.beforeRemoteDispatch,
   );
   const packs = seams.policyPacks ?? defaultMintableRepoPack(KEIKO_DEFAULT_PUBLISH_POLICY_PACK);

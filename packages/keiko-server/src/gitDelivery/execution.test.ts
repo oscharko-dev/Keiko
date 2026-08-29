@@ -4,7 +4,7 @@
 // outcome status. This proves the whole local-execution stack end-to-end and covers the default-seam
 // branches the route tests inject around.
 
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { execFileSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -14,16 +14,47 @@ import type { GitDeliveryRepoPolicyPack, WorkspaceInstance } from "@oscharko-dev
 import { GIT_DELIVERY_POLICY_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts/runtime/git-delivery-policy";
 import { GIT_DELIVERY_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts/runtime/git-delivery";
 import type { GitMutationLifecycleResult } from "@oscharko-dev/keiko-tools";
+import type { NodeGitWorktreeReaderDeps } from "@oscharko-dev/keiko-tools/internal/git-mutation";
 import { buildRedactor } from "../index.js";
 import type { EvidenceStore } from "@oscharko-dev/keiko-evidence";
 import type { ServerLogEvent } from "../observability/server-log.js";
 import { createInMemoryUiStore } from "../store/index.js";
 import { UNKNOWN_CORRELATION_ID } from "../correlation.js";
+
+// Spies on the two staged-content readers the F1 audit fix wires into a runCommand
+// termination-evidence callback (readStagedPathsFor / readStagedConflictMarkerFileCountFor,
+// exercised below) while delegating to the REAL implementation for every export — including
+// readGitWorktreeSnapshot and createNodeGitMutationAdapter, which the "real git through the
+// default seams" suite below depends on staying genuine. Declared before the mock factory purely
+// for readability; the factory's inner closure is only invoked later, from inside an `it()` body,
+// long after this module's own top-level code (including this declaration) has finished running
+// — mirrors the same importOriginal-plus-delegating-wrapper pattern
+// defaultPolicyPacks.test.ts already uses for this exact module graph.
+const readStagedPathsCalls: NodeGitWorktreeReaderDeps[] = [];
+const readStagedConflictMarkerFileCountCalls: NodeGitWorktreeReaderDeps[] = [];
+vi.mock("@oscharko-dev/keiko-tools/internal/git-mutation", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("@oscharko-dev/keiko-tools/internal/git-mutation")>();
+  return {
+    ...actual,
+    readStagedPaths: (deps: NodeGitWorktreeReaderDeps): Promise<readonly string[]> => {
+      readStagedPathsCalls.push(deps);
+      return actual.readStagedPaths(deps);
+    },
+    readStagedConflictMarkerFileCount: (deps: NodeGitWorktreeReaderDeps): Promise<number> => {
+      readStagedConflictMarkerFileCountCalls.push(deps);
+      return actual.readStagedConflictMarkerFileCount(deps);
+    },
+  };
+});
+
 import {
   executeGovernedMutation,
   gitDeliveryMutationResponse,
   gitDeliveryTerminationHandler,
   KEIKO_DEFAULT_LOCAL_GIT_POLICY_PACK,
+  readStagedConflictMarkerFileCountFor,
+  readStagedPathsFor,
   resolveProjectWorkspace,
   type GitDeliveryExecutionSeams,
 } from "./execution.js";
@@ -288,6 +319,94 @@ describe("gitDeliveryTerminationHandler — correlation-id wiring for the runCom
     const handler = gitDeliveryTerminationHandler({ activityLog: activity.sink }, undefined);
     handler({ reason: "abort", childPid: 4242, windowsTreeKill: "not-attempted" });
     expect(activity.events[0]?.correlationId).toBe(UNKNOWN_CORRELATION_ID);
+  });
+});
+
+// ─── F1: the sibling default readers (readStagedPathsFor / readStagedConflictMarkerFileCountFor)
+// — audit finding: unlike readWorktreeSnapshotFor/adapterFor above, these two receive NO
+// termination callback at all in their DEFAULT (no-seam) branch, so a request-scoped local
+// mutation whose staged-path or conflict-marker read times out or hits the output cap leaves NO
+// evidence line joinable to its git-delivery operation. ────────────────────────────────────────
+
+describe("readStagedPathsFor / readStagedConflictMarkerFileCountFor — default-reader termination wiring", () => {
+  beforeEach(() => {
+    readStagedPathsCalls.length = 0;
+    readStagedConflictMarkerFileCountCalls.length = 0;
+  });
+
+  it("wires the caller's activityLog + correlationId into the default readStagedPaths call", async () => {
+    const activity = captureActivityLog();
+    const paths = await readStagedPathsFor(
+      workspaceInfo(root),
+      { activityLog: activity.sink },
+      () => 1_700_000_000_000,
+      "request-correlation-staged-paths",
+    );
+    expect(paths).toEqual([]); // beforeEach leaves a clean worktree — nothing staged
+    expect(readStagedPathsCalls).toHaveLength(1);
+    const onTerminated = readStagedPathsCalls[0]?.onTerminated;
+    expect(onTerminated).toBeTypeOf("function");
+    onTerminated?.({ reason: "timeout", childPid: 777, windowsTreeKill: "not-attempted" });
+    expect(activity.events).toHaveLength(1);
+    expect(activity.events[0]?.op).toBe("command.terminated");
+    expect(activity.events[0]?.correlationId).toBe("request-correlation-staged-paths");
+    expect(activity.events[0]?.extra?.childPid).toBe(777);
+  });
+
+  it("wires the caller's activityLog + correlationId into the default readStagedConflictMarkerFileCount call", async () => {
+    const activity = captureActivityLog();
+    const count = await readStagedConflictMarkerFileCountFor(
+      workspaceInfo(root),
+      { activityLog: activity.sink },
+      () => 1_700_000_000_000,
+      "request-correlation-conflict-count",
+    );
+    expect(count).toBe(0); // beforeEach leaves a clean worktree — nothing staged
+    expect(readStagedConflictMarkerFileCountCalls).toHaveLength(1);
+    const onTerminated = readStagedConflictMarkerFileCountCalls[0]?.onTerminated;
+    expect(onTerminated).toBeTypeOf("function");
+    onTerminated?.({ reason: "output-cap", childPid: 888, windowsTreeKill: "not-attempted" });
+    expect(activity.events).toHaveLength(1);
+    expect(activity.events[0]?.op).toBe("command.terminated");
+    expect(activity.events[0]?.correlationId).toBe("request-correlation-conflict-count");
+    expect(activity.events[0]?.extra?.childPid).toBe(888);
+  });
+
+  it("falls back to UNKNOWN_CORRELATION_ID for both readers when the caller has none in scope", async () => {
+    const activity = captureActivityLog();
+    const workspace = workspaceInfo(root);
+    await readStagedPathsFor(workspace, { activityLog: activity.sink }, () => 1);
+    await readStagedConflictMarkerFileCountFor(workspace, { activityLog: activity.sink }, () => 1);
+    readStagedPathsCalls[0]?.onTerminated?.({
+      reason: "abort",
+      childPid: 1,
+      windowsTreeKill: "not-attempted",
+    });
+    readStagedConflictMarkerFileCountCalls[0]?.onTerminated?.({
+      reason: "abort",
+      childPid: 2,
+      windowsTreeKill: "not-attempted",
+    });
+    expect(activity.events).toHaveLength(2);
+    expect(activity.events[0]?.correlationId).toBe(UNKNOWN_CORRELATION_ID);
+    expect(activity.events[1]?.correlationId).toBe(UNKNOWN_CORRELATION_ID);
+  });
+
+  it("still defers to an injected stagedPathsReader/conflictMarkerReader seam untouched", async () => {
+    const seams: GitDeliveryExecutionSeams = {
+      stagedPathsReader: () => Promise.resolve(["a.txt"]),
+      conflictMarkerReader: () => Promise.resolve(3),
+    };
+    const workspace = workspaceInfo(root);
+    await expect(
+      readStagedPathsFor(workspace, seams, () => 1, "unused-correlation"),
+    ).resolves.toEqual(["a.txt"]);
+    await expect(
+      readStagedConflictMarkerFileCountFor(workspace, seams, () => 1, "unused-correlation"),
+    ).resolves.toBe(3);
+    // The seam path never reaches the default reader at all.
+    expect(readStagedPathsCalls).toHaveLength(0);
+    expect(readStagedConflictMarkerFileCountCalls).toHaveLength(0);
   });
 });
 

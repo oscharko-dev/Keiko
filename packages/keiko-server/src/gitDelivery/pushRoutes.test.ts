@@ -14,21 +14,47 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Readable } from "node:stream";
 import type { Server, IncomingMessage, ServerResponse } from "node:http";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import type { GitWorktreeSnapshot } from "@oscharko-dev/keiko-tools";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { GitDeliveryRepoPolicyPack } from "@oscharko-dev/keiko-contracts";
+import { GIT_DELIVERY_POLICY_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts/runtime/git-delivery-policy";
+import type { GitPushCommand, GitWorktreeSnapshot } from "@oscharko-dev/keiko-tools";
 import type { GitPublishExecResult, GitRemotePublishAdapter } from "@oscharko-dev/keiko-tools";
+import type { NodeGitPublishAdapterDeps } from "@oscharko-dev/keiko-tools/internal/git-mutation";
+import type { WorkspaceInfo } from "@oscharko-dev/keiko-workspace";
 import type { EvidenceStore } from "@oscharko-dev/keiko-evidence";
 import { UI_HOST } from "../server.js";
 import { buildCspHeader } from "../csp.js";
 import { buildRedactor, createRunRegistry, type UiHandlerDeps } from "../index.js";
 import { createInMemoryUiStore, type UiStore } from "../store/index.js";
 import type { RouteContext } from "../routes.js";
+import type { ServerLogEvent } from "../observability/server-log.js";
 import { startUiTestServer } from "../ui-test-server/_support.js";
+
+// Spies on the default remote publish-adapter factory the F1 fix threads runCommand
+// termination-evidence through (executeGovernedPublish's `publishAdapterFor`, exercised below via
+// direct calls to executeGovernedPublish itself). Delegates to the REAL implementation so the
+// adapter this test file's OTHER suites inject via `publishAdapterFactory` seams stays entirely
+// unaffected. Mirrors the importOriginal-plus-delegating-wrapper pattern
+// defaultPolicyPacks.test.ts and execution.test.ts already use for this exact module graph.
+const createNodeGitPublishAdapterCalls: NodeGitPublishAdapterDeps[] = [];
+vi.mock("@oscharko-dev/keiko-tools/internal/git-mutation", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("@oscharko-dev/keiko-tools/internal/git-mutation")>();
+  return {
+    ...actual,
+    createNodeGitPublishAdapter: (deps: NodeGitPublishAdapterDeps): GitRemotePublishAdapter => {
+      createNodeGitPublishAdapterCalls.push(deps);
+      return actual.createNodeGitPublishAdapter(deps);
+    },
+  };
+});
+
 import { createHandlePushExecute, createHandlePushPreview } from "./pushRoutes.js";
-import type {
-  GitDeliveryPushExecuteResponseBody,
-  GitDeliveryPushPreviewBody,
-  GitDeliveryPublishSeams,
+import {
+  executeGovernedPublish,
+  type GitDeliveryPushExecuteResponseBody,
+  type GitDeliveryPushPreviewBody,
+  type GitDeliveryPublishSeams,
 } from "./pushExecution.js";
 import { permittedGitDeliveryAuthority } from "./runBoundAuthority.test-support.js";
 
@@ -498,5 +524,83 @@ describe("push execute — governed publish + no-bypass (AC2/AC3/AC4/AC5)", () =
     expect(body.publishRejectionReason).toBe("permission-denied");
     expect(body.recoveryDisposition).toBe("user-fixable");
     expect(cap.count()).toBe(1);
+  });
+});
+
+// ─── F1: the default publish adapter (no publishAdapterFactory seam) — audit finding: this branch
+// previously hard-coded UNKNOWN_CORRELATION_ID and an uninjectable processServerLogSink(),
+// silently dropping BOTH the caller's real correlationId and its activityLog seam. Exercises
+// executeGovernedPublish directly (bypassing HTTP) with a policy pack that BLOCKS every action, so
+// the kernel never reaches the adapter's real `.publish()` — the only fact under test is what deps
+// object the default factory receives. ────────────────────────────────────────────────────────
+
+const BLOCK_ALL_PUBLISH_PACK: GitDeliveryRepoPolicyPack = {
+  schemaVersion: GIT_DELIVERY_POLICY_SCHEMA_VERSION,
+  repoId: "repo",
+  rules: [],
+  defaultRule: { decision: "blocked" },
+};
+
+function testWorkspace(root: string): WorkspaceInfo {
+  return {
+    root,
+    name: undefined,
+    version: undefined,
+    testFramework: "unknown",
+    sourceDirs: [],
+    testDirs: [],
+    languages: [],
+    ignoreLines: [],
+  };
+}
+
+const WIRING_COMMAND: GitPushCommand = {
+  kind: "push",
+  sourceBranchName: "feat/x",
+  remoteAlias: "origin",
+  remoteBranchName: "feat/x",
+  forcePush: false,
+  setUpstreamTracking: false,
+};
+
+describe("executeGovernedPublish — default publish-adapter termination wiring (F1)", () => {
+  beforeEach(() => {
+    createNodeGitPublishAdapterCalls.length = 0;
+  });
+
+  it("wires the caller's activityLog + correlationId into the default createNodeGitPublishAdapter call", async () => {
+    const activity: ServerLogEvent[] = [];
+    await executeGovernedPublish(
+      WIRING_COMMAND,
+      { required: false },
+      testWorkspace("/nonexistent/keiko-gd-push-wiring"),
+      {
+        evidenceStore: {
+          put: () => "",
+          list: () => [],
+          get: () => undefined,
+          delete: () => undefined,
+        },
+        redactor: buildRedactor({}),
+      },
+      {
+        snapshotReader: () => Promise.resolve(SNAPSHOT),
+        policyPacks: { repoPack: BLOCK_ALL_PUBLISH_PACK },
+        activityLog: {
+          write: (event): void => {
+            activity.push(event);
+          },
+        },
+      },
+      "request-correlation-push-wiring",
+    );
+    expect(createNodeGitPublishAdapterCalls).toHaveLength(1);
+    const onTerminated = createNodeGitPublishAdapterCalls[0]?.onTerminated;
+    expect(onTerminated).toBeTypeOf("function");
+    onTerminated?.({ reason: "timeout", childPid: 4321, windowsTreeKill: "not-attempted" });
+    expect(activity).toHaveLength(1);
+    expect(activity[0]?.op).toBe("command.terminated");
+    expect(activity[0]?.correlationId).toBe("request-correlation-push-wiring");
+    expect(activity[0]?.extra?.childPid).toBe(4321);
   });
 });

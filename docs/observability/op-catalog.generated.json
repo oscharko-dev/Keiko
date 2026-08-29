@@ -857,7 +857,7 @@
     {
       "op": "git.commit.preview.completed",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/gitDelivery/commitRoutes.ts:425",
+      "site": "packages/keiko-server/src/gitDelivery/commitRoutes.ts:426",
       "package": "keiko-server"
     },
     {
@@ -875,13 +875,13 @@
     {
       "op": "git.delivery.mutation.completed",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/gitDelivery/execution.ts:270",
+      "site": "packages/keiko-server/src/gitDelivery/execution.ts:295",
       "package": "keiko-server"
     },
     {
       "op": "git.delivery.mutation.failed",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/gitDelivery/execution.ts:299",
+      "site": "packages/keiko-server/src/gitDelivery/execution.ts:324",
       "package": "keiko-server"
     },
     {
@@ -971,19 +971,19 @@
     {
       "op": "lsp.process.terminated",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/editor/lsp/lspNodeAdapter.ts:102",
+      "site": "packages/keiko-server/src/editor/lsp/lspNodeAdapter.ts:129",
       "package": "keiko-server"
     },
     {
       "op": "lsp.spawn.completed",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/editor/lsp/lspNodeAdapter.ts:66",
+      "site": "packages/keiko-server/src/editor/lsp/lspNodeAdapter.ts:68",
       "package": "keiko-server"
     },
     {
       "op": "lsp.spawn.failed",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/editor/lsp/lspNodeAdapter.ts:80",
+      "site": "packages/keiko-server/src/editor/lsp/lspNodeAdapter.ts:103",
       "package": "keiko-server"
     },
     {

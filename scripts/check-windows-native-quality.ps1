@@ -14,16 +14,47 @@ try {
     "/nologo", "/std:c17", "/W4", "/WX", "/analyze", "/external:env:INCLUDE", "/external:W0"
   )
 
-  # Review 3887051410: the shipped launcher's PRODUCTION link line (/MT static CRT +
-  # /DEPENDENTLOADFLAG:0x800 for statically-linked imports, stage-portable-runtime.mjs) was
-  # compiled by no PR-time gate -- portable-assets.yml is tag/dispatch-only, so a broken link flag
-  # surfaced for the first time during a release build. Compiling with the same flags here proves
-  # the toolchain accepts the exact production line on every pull request.
+  # Review 3887051410 (and its follow-up, PR #3354 review): the shipped launcher's PRODUCTION link
+  # line (/MT static CRT + /DEPENDENTLOADFLAG:0x800 for statically-linked imports,
+  # stage-portable-runtime.mjs) was compiled by no PR-time gate -- portable-assets.yml is
+  # tag/dispatch-only, so a broken link flag surfaced for the first time during a release build.
+  # Compiling with the same flags here proves the toolchain accepts the exact production line on
+  # every pull request.
+  #
+  # A SECOND, independently hand-typed copy of those flags would defeat the point: if
+  # compileWindowsLauncher() in the producer ever dropped /MT or /DEPENDENTLOADFLAG:0x800, a
+  # retyped copy here would keep compiling the OLD hardened command and keep reporting PASS --
+  # proving a configuration the product no longer ships. So this gate does not retype them: it
+  # reads compileWindowsLauncher() out of the producer itself (AGENTS.md §7 -- a fixture must
+  # never restate a formula the code under test owns, derive it from the production entry point)
+  # and fails closed, before compiling anything, the moment either literal is no longer there.
+  $productionScriptPath = Join-Path $PSScriptRoot "stage-portable-runtime.mjs"
+  $productionScriptSource = Get-Content -LiteralPath $productionScriptPath -Raw
+  $launcherFunctionStart = $productionScriptSource.IndexOf("function compileWindowsLauncher(")
+  $launcherFunctionEnd = $productionScriptSource.IndexOf("function requireWindowsLauncherIconSource(")
+  if ($launcherFunctionStart -lt 0 -or $launcherFunctionEnd -lt 0 -or
+      $launcherFunctionEnd -le $launcherFunctionStart) {
+    throw "could not locate compileWindowsLauncher() in stage-portable-runtime.mjs to derive the production link flags"
+  }
+  $launcherFunctionSource = $productionScriptSource.Substring(
+    $launcherFunctionStart, $launcherFunctionEnd - $launcherFunctionStart
+  )
+  foreach ($requiredFlagLiteral in @('"/MT"', '"/DEPENDENTLOADFLAG:0x800"')) {
+    if (-not $launcherFunctionSource.Contains($requiredFlagLiteral)) {
+      throw ("scripts/stage-portable-runtime.mjs compileWindowsLauncher() no longer contains " +
+        "the hardened flag $requiredFlagLiteral -- update this gate deliberately if the " +
+        "hardening posture changed, do not let it silently keep proving a configuration the " +
+        "product no longer ships")
+    }
+  }
+  # Proven present above, byte-for-byte, in the production entry point -- not an independent guess.
+  $productionMTFlag = "/MT"
   $productionLinkFlags = @("/DEPENDENTLOADFLAG:0x800")
+
   $launcher = Join-Path $root "native/portable-launcher/keiko-portable-launcher.c"
   $launcherOut = Join-Path $scratch "keiko-launcher.exe"
   $launcherObject = Join-Path $scratch "keiko-launcher.obj"
-  & cl.exe @nativeFlags "/MT" '/DKEIKO_PORTABLE_TARGET="windows-x64"' `
+  & cl.exe @nativeFlags $productionMTFlag '/DKEIKO_PORTABLE_TARGET="windows-x64"' `
     "/Fo:$launcherObject" "/Fe:$launcherOut" $launcher /link @productionLinkFlags
   if ($LASTEXITCODE -ne 0) { throw "MSVC native quality analysis failed" }
 
@@ -48,8 +79,8 @@ try {
   $setupBootstrap = Join-Path $root "native/setup-bootstrap/keiko-setup-bootstrap.c"
   $setupBootstrapOut = Join-Path $scratch "keiko-setup-bootstrap.exe"
   $setupBootstrapObject = Join-Path $scratch "keiko-setup-bootstrap.obj"
-  & cl.exe @nativeFlags "/MT" @setupDefines "/Fo:$setupBootstrapObject" "/Fe:$setupBootstrapOut" `
-    $setupBootstrap /link @productionLinkFlags
+  & cl.exe @nativeFlags $productionMTFlag @setupDefines "/Fo:$setupBootstrapObject" `
+    "/Fe:$setupBootstrapOut" $setupBootstrap /link @productionLinkFlags
   if ($LASTEXITCODE -ne 0) { throw "MSVC setup-bootstrap quality analysis failed" }
 
   $setupBootstrapTest = Join-Path $root "native/setup-bootstrap/keiko-setup-bootstrap.windows.test.c"
