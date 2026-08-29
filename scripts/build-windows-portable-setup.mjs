@@ -7,12 +7,14 @@ import {
   closeSync,
   createReadStream,
   createWriteStream,
+  fstatSync,
   fsyncSync,
   lstatSync,
   mkdirSync,
   mkdtempSync,
   openSync,
   readFileSync,
+  readSync,
   realpathSync,
   renameSync,
   rmSync,
@@ -25,9 +27,13 @@ import { fileURLToPath } from "node:url";
 
 import { isPortableExecutableFile } from "./lib/portable-executable.mjs";
 import {
+  assertSetupOverlayHeaderFitsBeforeEnd,
+  assertZeroBytes,
   buildSetupOverlayHeader,
-  parseSetupOverlay,
   portableExecutableOverlayBounds,
+  readSetupOverlayHeaderFields,
+  SETUP_OVERLAY_HEADER_BYTES,
+  setupOverlayPayloadRegion,
 } from "./lib/portable-setup-overlay.mjs";
 import { resolveWindowsMsvcEnv, windowsToolFromPath } from "./lib/windows-msvc.mjs";
 
@@ -50,6 +56,13 @@ const WINDOWS_TARGET = PORTABLE_TARGETS.find((target) => target.platformTarget =
 const DEFAULT_CATALOG_NAME = "windows-setup-signing-file.txt";
 const MAX_SETUP_INPUT_BYTES = 2 * 1024 * 1024 * 1024;
 const RUN_OUTPUT_BYTES = 64 * 1024 * 1024;
+// 1 MiB bounded header-prefix scan window for streaming verification: large enough to cover any
+// real PE's headers + section table without ever reading the whole (up to MAX_SETUP_INPUT_BYTES)
+// file just to locate the overlay. Mirrors native/setup-bootstrap/keiko-setup-bootstrap.c's
+// KEIKO_HEADER_SCAN_BYTES exactly -- the native stub already makes this same bounded-prefix
+// assumption about its OWN running image at install time, so matching it here is parity, not a
+// new risk.
+const OVERLAY_HEADER_SCAN_BYTES = 1024 * 1024;
 const VALUE_OPTION_FIELDS = new Map([
   ["--catalog", "catalog"],
   ["--output", "output"],
@@ -58,8 +71,15 @@ const VALUE_OPTION_FIELDS = new Map([
 
 export class WindowsPortableSetupError extends Error {}
 
+// Split from `fail` so a rejection built OUTSIDE a throwable context (a stream "error" listener,
+// where throwing would become an uncaught exception instead of failing the read) can still
+// construct the identical error shape via `reject(windowsPortableSetupError(...))`.
+function windowsPortableSetupError(message) {
+  return new WindowsPortableSetupError(`build-windows-portable-setup: ${message}`);
+}
+
 function fail(message) {
-  throw new WindowsPortableSetupError(`build-windows-portable-setup: ${message}`);
+  throw windowsPortableSetupError(message);
 }
 
 function readRequiredOptionValue(key, value) {
@@ -243,10 +263,103 @@ function callOverlayLib(action) {
   }
 }
 
-function sha256OfRegion(buffer, start, length) {
-  return createHash("sha256")
-    .update(buffer.subarray(start, start + length))
-    .digest("hex");
+function readExactAt(fd, offset, length, label) {
+  const buffer = Buffer.alloc(length);
+  const bytesRead = readSync(fd, buffer, 0, length, offset);
+  if (bytesRead !== length) fail(`${label} is truncated or out of bounds`);
+  return buffer;
+}
+
+/**
+ * Streaming, bounded-memory counterpart to parseSetupOverlay
+ * (scripts/lib/portable-setup-overlay.mjs): locates and validates a setup companion's overlay
+ * using only a handful of small positioned reads, never the whole (up to MAX_SETUP_INPUT_BYTES)
+ * file. Mirrors native/setup-bootstrap/keiko-setup-bootstrap.c's keiko_extract_verified_payload
+ * ordering exactly -- a bounded header-prefix scan locates the overlay
+ * (portableExecutableOverlayBounds, matching keiko_parse_overlay_bounds), a small positioned read
+ * decodes the fixed-size overlay header (readSetupOverlayHeaderFields, matching
+ * keiko_validate_overlay_header), and the <=7 trailing padding bytes are read and zero-checked
+ * directly (setupOverlayPayloadRegion + assertZeroBytes, matching keiko_payload_region). Returns
+ * the same shape as parseSetupOverlay — the header's declared digest, the declared payload size,
+ * and where the payload begins — so callers hash the payload (hashSetupOverlayPayload, below)
+ * only once they've confirmed it is worth hashing.
+ */
+function parseSetupOverlayFromFile(setupPath) {
+  const fd = openSync(setupPath, "r");
+  try {
+    const fileSizeBytes = fstatSync(fd).size;
+    const prefix = readExactAt(
+      fd,
+      0,
+      Math.min(fileSizeBytes, OVERLAY_HEADER_SCAN_BYTES),
+      "windows setup companion header prefix",
+    );
+    const { overlayEnd, overlayStart } = callOverlayLib(() =>
+      portableExecutableOverlayBounds(prefix, fileSizeBytes),
+    );
+    const header = readExactAt(
+      fd,
+      overlayStart,
+      SETUP_OVERLAY_HEADER_BYTES,
+      "setup overlay header",
+    );
+    callOverlayLib(() => assertSetupOverlayHeaderFitsBeforeEnd(overlayStart, overlayEnd));
+    const { payloadSha256Hex, payloadSize } = callOverlayLib(() =>
+      readSetupOverlayHeaderFields(header),
+    );
+    const payloadStart = overlayStart + SETUP_OVERLAY_HEADER_BYTES;
+    const { paddingBytes, payloadEnd } = callOverlayLib(() =>
+      setupOverlayPayloadRegion(payloadStart, payloadSize, overlayEnd),
+    );
+    if (paddingBytes > 0) {
+      const padding = readExactAt(fd, payloadEnd, paddingBytes, "setup overlay trailing padding");
+      callOverlayLib(() => assertZeroBytes(padding, "setup overlay trailing padding"));
+    }
+    return { payloadSha256Hex, payloadSize, payloadStart };
+  } finally {
+    closeSync(fd);
+  }
+}
+
+// Hashes ONLY the payload region [payloadStart, payloadStart + payloadSize) through a stream, so
+// verifying a setup companion near the documented MAX_SETUP_INPUT_BYTES bound never requires a
+// multi-gigabyte contiguous Buffer — the OOM this pairing (with parseSetupOverlayFromFile above)
+// exists to close. Mirrors the native stub's keiko_stream_sha256: the byte count actually streamed
+// is checked against the declared size before the digest is trusted, so a file that shrinks out
+// from under a concurrent read fails closed instead of silently hashing a truncated payload as if
+// it were complete.
+function hashSetupOverlayPayload(setupPath, payloadStart, payloadSize) {
+  return new Promise((resolvePromise, reject) => {
+    const hash = createHash("sha256");
+    if (payloadSize === 0) {
+      resolvePromise(hash.digest("hex"));
+      return;
+    }
+    let bytesHashed = 0;
+    createReadStream(setupPath, { start: payloadStart, end: payloadStart + payloadSize - 1 })
+      .on("data", (chunk) => {
+        bytesHashed += chunk.length;
+        hash.update(chunk);
+      })
+      .on("error", (error) => {
+        reject(
+          windowsPortableSetupError(
+            `windows setup companion payload could not be streamed (code=${error?.code ?? "unknown"})`,
+          ),
+        );
+      })
+      .on("end", () => {
+        if (bytesHashed !== payloadSize) {
+          reject(
+            windowsPortableSetupError(
+              "windows setup companion payload is truncated or out of bounds",
+            ),
+          );
+          return;
+        }
+        resolvePromise(hash.digest("hex"));
+      });
+  });
 }
 
 /**
@@ -255,7 +368,10 @@ function sha256OfRegion(buffer, start, length) {
  * both via the header's declared digest AND an independent re-hash of the bytes actually present
  * in the file, so a header that lies about its own payload cannot pass. No host requirement: this
  * used to require running the (Windows-only, LOLBin-capable) extractor; parsing an appended,
- * hash-bound overlay needs nothing platform-specific.
+ * hash-bound overlay needs nothing platform-specific. Verification is streamed
+ * (parseSetupOverlayFromFile + hashSetupOverlayPayload) rather than buffering the whole setup
+ * companion, so a valid artifact near the documented MAX_SETUP_INPUT_BYTES bound never needs a
+ * multi-gigabyte contiguous allocation just to verify.
  */
 export async function verifyWindowsPortableSetup(setupPath, archivePath) {
   assertRegularFile(setupPath, "windows setup companion");
@@ -264,13 +380,16 @@ export async function verifyWindowsPortableSetup(setupPath, archivePath) {
   }
   if (!isPortableExecutableFile(setupPath)) fail("windows setup companion is not a PE file");
   const archiveStat = assertRegularFile(archivePath, "windows portable archive");
-  const fileBuffer = readFileSync(setupPath);
-  const overlay = callOverlayLib(() => parseSetupOverlay(fileBuffer));
+  const overlay = parseSetupOverlayFromFile(setupPath);
   if (overlay.payloadSize !== archiveStat.size) {
     fail("windows setup companion payload size does not match the staged archive");
   }
   const archiveSha256 = await sha256File(archivePath);
-  const embeddedSha256 = sha256OfRegion(fileBuffer, overlay.payloadStart, overlay.payloadSize);
+  const embeddedSha256 = await hashSetupOverlayPayload(
+    setupPath,
+    overlay.payloadStart,
+    overlay.payloadSize,
+  );
   if (overlay.payloadSha256Hex !== archiveSha256 || embeddedSha256 !== archiveSha256) {
     fail("windows setup companion payload digest does not match the staged archive");
   }
@@ -354,6 +473,11 @@ export function compileSetupBootstrap({ payloadSha256Hex, payloadSizeBytes, outp
       [
         "/nologo",
         "/O2",
+        // Static CRT. An installer is by construction the FIRST Keiko code to run on a machine with
+        // nothing installed yet, so it must not depend on a VC runtime redistributable being
+        // present — and, security-wise, it removes the plantable CRT DLLs from the set of implicit
+        // imports the loader resolves out of the application directory before wmain runs.
+        "/MT",
         "/DUNICODE",
         "/D_UNICODE",
         `/DKEIKO_SETUP_TARGET="windows-x64"`,
@@ -364,6 +488,13 @@ export function compileSetupBootstrap({ payloadSha256Hex, payloadSizeBytes, outp
         resourcePath,
         "/link",
         "/SUBSYSTEM:CONSOLE",
+        // LOAD_LIBRARY_SEARCH_SYSTEM32 for STATICALLY-LINKED imports. wmain's own
+        // SetDefaultDllDirectories/SetDllDirectoryW calls only affect later LoadLibraryEx-style
+        // loads; this binary's implicit imports (bcrypt.dll) are resolved by the loader BEFORE the
+        // first instruction of wmain, with the application directory searched first for anything
+        // that is not a KnownDLL. That is precisely the launched-from-Downloads DLL-plant scenario,
+        // and this flag is the only thing that closes it.
+        "/DEPENDENTLOADFLAG:0x800",
       ],
       "setup bootstrap compile",
       { env },
@@ -383,13 +514,19 @@ function fsyncFile(path) {
   }
 }
 
-function verifyAppendedSetupOverlay(outputPath, expectedSizeBytes, expectedSha256Hex) {
-  const fileBuffer = readFileSync(outputPath);
-  const overlay = callOverlayLib(() => parseSetupOverlay(fileBuffer));
+// Streamed the same way as verifyWindowsPortableSetup above (parseSetupOverlayFromFile +
+// hashSetupOverlayPayload) rather than buffering the just-written setup companion whole, so
+// confirming a freshly appended overlay never needs a multi-gigabyte contiguous allocation either.
+async function verifyAppendedSetupOverlay(outputPath, expectedSizeBytes, expectedSha256Hex) {
+  const overlay = parseSetupOverlayFromFile(outputPath);
   if (overlay.payloadSize !== expectedSizeBytes || overlay.payloadSha256Hex !== expectedSha256Hex) {
     fail("appended setup overlay header does not match the intended payload");
   }
-  const actualPayloadHash = sha256OfRegion(fileBuffer, overlay.payloadStart, overlay.payloadSize);
+  const actualPayloadHash = await hashSetupOverlayPayload(
+    outputPath,
+    overlay.payloadStart,
+    overlay.payloadSize,
+  );
   if (actualPayloadHash !== expectedSha256Hex) {
     fail("appended setup overlay payload bytes do not match the intended digest");
   }
@@ -400,9 +537,18 @@ function verifyAppendedSetupOverlay(outputPath, expectedSizeBytes, expectedSha25
  * 1): `[stub][64-byte header][payload]`. Cross-platform and independently testable — the stub only
  * needs to be a valid PE32+ image, not an executable one, so this can be exercised with a synthetic
  * fixture on any host. Writes through a same-directory temp file and an atomic rename so a reader
- * never observes a partially-written setup companion.
+ * never observes a partially-written setup companion; a failure anywhere in that sequence removes
+ * the temp file rather than leaving a partial artifact behind in the stage root.
+ *
+ * `expectedPayload` is the identity `validateWindowsSetupStage` already proved the staged archive
+ * satisfies — the SAME `manifest.artifact.sha256`/`sizeBytes` baked into the compiled stub. The
+ * overlay header is built from THAT validated identity, never from an independent fresh re-hash of
+ * `archivePath`, so a mutation between stage validation and this call is caught as a drift failure
+ * instead of silently being trusted and baked into the shipped installer.
  */
-export async function appendSetupOverlay(stubPath, archivePath, outputPath) {
+export async function appendSetupOverlay(stubPath, archivePath, outputPath, expectedPayload) {
+  const { payloadSha256Hex, payloadSizeBytes } = expectedPayload;
+  assertBakedPayloadIdentity(payloadSha256Hex, payloadSizeBytes);
   assertRegularFile(stubPath, "compiled setup stub");
   const stubBuffer = readFileSync(stubPath);
   const { overlayStart } = callOverlayLib(() => portableExecutableOverlayBounds(stubBuffer));
@@ -410,23 +556,40 @@ export async function appendSetupOverlay(stubPath, archivePath, outputPath) {
     fail("compiled setup stub unexpectedly carries trailing data before the overlay is appended");
   }
   const archiveStat = assertRegularFile(archivePath, "windows portable archive payload");
-  const payloadSha256Hex = await sha256File(archivePath);
+  if (archiveStat.size !== payloadSizeBytes) {
+    fail("windows portable archive no longer matches the validated manifest identity (size drift)");
+  }
+  if ((await sha256File(archivePath)) !== payloadSha256Hex) {
+    fail(
+      "windows portable archive no longer matches the validated manifest identity (digest drift)",
+    );
+  }
   const header = callOverlayLib(() =>
-    buildSetupOverlayHeader({ payloadSha256Hex, payloadSizeBytes: archiveStat.size }),
+    buildSetupOverlayHeader({ payloadSha256Hex, payloadSizeBytes }),
   );
   const temporaryPath = `${outputPath}.tmp-${process.pid}`;
   rmSync(temporaryPath, { force: true });
-  writeFileSync(temporaryPath, Buffer.concat([stubBuffer, header]), { flag: "wx", mode: 0o600 });
-  // Streamed rather than buffered: the portable archive is roughly 130 MB, and the stub + header
-  // prefix above is written first so this append only ever holds one archive-sized chunk in
-  // flight at a time (the internal stream highWaterMark), not the whole payload in memory.
-  await pipeline(createReadStream(archivePath), createWriteStream(temporaryPath, { flags: "a" }));
-  fsyncFile(temporaryPath);
-  // renameSync replaces an existing destination atomically on both POSIX (rename) and Windows
-  // (MoveFileExW with MOVEFILE_REPLACE_EXISTING), so an explicit unlink first would only open a
-  // window where outputPath does not exist at all — a strictly weaker guarantee.
-  renameSync(temporaryPath, outputPath);
-  verifyAppendedSetupOverlay(outputPath, archiveStat.size, payloadSha256Hex);
+  try {
+    writeFileSync(temporaryPath, Buffer.concat([stubBuffer, header]), { flag: "wx", mode: 0o600 });
+    // Streamed rather than buffered: the portable archive is roughly 130 MB, and the stub + header
+    // prefix above is written first so this append only ever holds one archive-sized chunk in
+    // flight at a time (the internal stream highWaterMark), not the whole payload in memory.
+    await pipeline(createReadStream(archivePath), createWriteStream(temporaryPath, { flags: "a" }));
+    fsyncFile(temporaryPath);
+    // renameSync replaces an existing destination atomically on both POSIX (rename) and Windows
+    // (MoveFileExW with MOVEFILE_REPLACE_EXISTING), so an explicit unlink first would only open a
+    // window where outputPath does not exist at all — a strictly weaker guarantee.
+    renameSync(temporaryPath, outputPath);
+  } catch (error) {
+    // A failure anywhere above (disk full mid-pipeline, a read error on the archive, an fsync or
+    // rename failure) must not leave `${outputPath}.tmp-${process.pid}` behind in the stage root:
+    // the rename above is the only step that moves ownership of temporaryPath's bytes to
+    // outputPath, so up to that point temporaryPath is this call's alone to clean up. The original
+    // error is rethrown unchanged — never swallowed.
+    rmSync(temporaryPath, { force: true });
+    throw error;
+  }
+  await verifyAppendedSetupOverlay(outputPath, payloadSizeBytes, payloadSha256Hex);
   return outputPath;
 }
 
@@ -460,7 +623,10 @@ async function performWindowsPortableSetupBuild(options, archivePath, manifest) 
       payloadSha256Hex: manifest.artifact.sha256,
       payloadSizeBytes: manifest.artifact.sizeBytes,
     });
-    await appendSetupOverlay(stubPath, archivePath, options.output);
+    await appendSetupOverlay(stubPath, archivePath, options.output, {
+      payloadSha256Hex: manifest.artifact.sha256,
+      payloadSizeBytes: manifest.artifact.sizeBytes,
+    });
     await verifyWindowsPortableSetup(options.output, archivePath);
     writeWindowsSetupCatalog(options);
   } finally {

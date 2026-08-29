@@ -33,6 +33,9 @@ import {
   CONTAINER_RUNTIME_SCHEMA_VERSION,
   CONTAINER_TASK_RULES,
 } from "@oscharko-dev/keiko-contracts/runtime/container-runtime";
+import { UNKNOWN_CORRELATION_ID } from "../correlation.js";
+import { logCommandTermination, processServerLogSink } from "../process-log-sink.js";
+import type { ServerLogSink } from "../observability/server-log.js";
 
 export const DEFAULT_CONTAINER_PROBE_DEADLINE_MS = 4_000 as const; // generous: real daemon round-trip
 export const SUPPORTED_DOCKER_MAJOR = 20 as const; // engine-version floor; below → "unsupported"
@@ -67,6 +70,13 @@ export interface ContainerProbeDeps {
   readonly now: () => number;
   readonly deadlineMs?: number | undefined;
   readonly engines?: readonly ContainerEngineId[] | undefined;
+  // Activity-log port for the runCommand termination-evidence seam (AGENTS.md §8 Rule 1).
+  // Defaults to processServerLogSink() — the same process-wide sink every other server
+  // composition site uses — so production logging works with no wiring required; tests inject a
+  // buffered sink to assert on the emitted line. The probe carries no request-scoped correlation
+  // id (it is a host-level capability check, not a per-request operation), so every line is
+  // stamped UNKNOWN_CORRELATION_ID.
+  readonly activityLog?: ServerLogSink | undefined;
 }
 
 interface EngineResolution {
@@ -185,6 +195,7 @@ async function confirmDaemon(
   run: typeof runCommand,
   signal: AbortSignal,
   base: EngineResolution,
+  activityLog: ServerLogSink,
 ): Promise<EngineResolution> {
   try {
     const result = await run(
@@ -194,6 +205,9 @@ async function confirmDaemon(
         cwd: undefined,
         timeoutMs: PER_CALL_TIMEOUT_MS,
         signal,
+        onTerminated: (evidence): void => {
+          logCommandTermination(activityLog, UNKNOWN_CORRELATION_ID, evidence);
+        },
       },
       runDeps,
     );
@@ -216,6 +230,7 @@ async function probeEngine(
   runDeps: RunCommandDeps,
 ): Promise<EngineResolution> {
   const controller = new AbortController();
+  const activityLog = deps.activityLog ?? processServerLogSink();
   let versionResolution: EngineResolution;
   try {
     const result = await deps.runCommand(
@@ -225,6 +240,9 @@ async function probeEngine(
         cwd: undefined,
         timeoutMs: PER_CALL_TIMEOUT_MS,
         signal: controller.signal,
+        onTerminated: (evidence): void => {
+          logCommandTermination(activityLog, UNKNOWN_CORRELATION_ID, evidence);
+        },
       },
       runDeps,
     );
@@ -235,7 +253,14 @@ async function probeEngine(
   if (versionResolution.state !== "available") {
     return versionResolution;
   }
-  return confirmDaemon(engine, runDeps, deps.runCommand, controller.signal, versionResolution);
+  return confirmDaemon(
+    engine,
+    runDeps,
+    deps.runCommand,
+    controller.signal,
+    versionResolution,
+    activityLog,
+  );
 }
 
 function statusFromResolution(

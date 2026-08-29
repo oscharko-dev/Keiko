@@ -7,7 +7,13 @@
 // independent oracle to fail against, and every literal below is a plain JSON string (no
 // hand-built template-literal concatenation) to remove a second class of transcription risk.
 import { describe, expect, it } from "vitest";
-import { buildWindowsShellInvocation } from "./windows-shell.js";
+import {
+  buildWindowsShellInvocation,
+  resolveSystemBinaryPath,
+  resolveWindowsSystemDirectory,
+  WindowsShellInvocationError,
+  WindowsSystemDirectoryError,
+} from "./windows-shell.js";
 
 const CMD_PATH = String.raw`C:\Users\test\AppData\Roaming\npm\npm.cmd`;
 const UNC_CMD_PATH = String.raw`\\build-server\share\tools\npm.cmd`;
@@ -307,5 +313,147 @@ describe("buildWindowsShellInvocation — multi-argument assembly", () => {
       "/c",
       '"C:\\Users\\test\\AppData\\Roaming\\npm\\npm.cmd"',
     ]);
+  });
+});
+
+// Finding 1 (PR #3354, P1): cross-spawn's metachar class omits CR/LF, so a model/workspace-
+// controlled newline could previously reach the assembled cmd.exe command line and be
+// reinterpreted as a command boundary (moxystudio/node-cross-spawn#179). These pin the fail-closed
+// fix: buildWindowsShellInvocation now rejects CR/LF and the rest of the C0 control range in the
+// resolved command path and every argument BEFORE building that command line.
+describe("buildWindowsShellInvocation — CR/LF and C0 control-character rejection (finding 1)", () => {
+  it("rejects a bare CR in an argument", () => {
+    expect(() => buildWindowsShellInvocation(CMD_PATH, ["a\rb"], WIN_ENV)).toThrow(
+      WindowsShellInvocationError,
+    );
+  });
+
+  it("rejects a bare LF in an argument", () => {
+    expect(() => buildWindowsShellInvocation(CMD_PATH, ["a\nb"], WIN_ENV)).toThrow(
+      WindowsShellInvocationError,
+    );
+  });
+
+  it("rejects a CRLF pair in an argument (the cross-spawn #179 command-injection shape)", () => {
+    expect(() =>
+      buildWindowsShellInvocation(CMD_PATH, ["innocent\r\necho PWNED"], WIN_ENV),
+    ).toThrow(WindowsShellInvocationError);
+  });
+
+  it("rejects a non-CR/LF C0 control character (the full range, not only CR/LF)", () => {
+    expect(() => buildWindowsShellInvocation(CMD_PATH, ["a\u0007b"], WIN_ENV)).toThrow(
+      WindowsShellInvocationError,
+    );
+  });
+
+  it("rejects a control character in the resolved command path itself", () => {
+    const poisoned = "C:\\tools\\evil\r\nx.cmd";
+    expect(() => buildWindowsShellInvocation(poisoned, ["install"], WIN_ENV)).toThrow(
+      WindowsShellInvocationError,
+    );
+  });
+
+  it("still accepts a normal argument on the wrap path (no false positive)", () => {
+    const result = buildWindowsShellInvocation(CMD_PATH, ["hello"], WIN_ENV);
+    expect(result.windowsVerbatimArguments).toBe(true);
+    expect(result.args).toEqual([
+      "/d",
+      "/s",
+      "/c",
+      '"C:\\Users\\test\\AppData\\Roaming\\npm\\npm.cmd ^"hello^""',
+    ]);
+  });
+
+  it("does not reject a newline in an argument when no cmd.exe wrapping occurs", () => {
+    // The check guards the cmd.exe command-LINE string this module builds; a pass-through call
+    // (non-Windows, or a resolved path that is not .cmd/.bat) never constructs one, so a literal
+    // newline in an argument — e.g. a multi-line commit message passed to git.exe — is inert and
+    // must not be rejected here.
+    const gitExe = String.raw`C:\Program Files\Git\cmd\git.exe`;
+    const result = buildWindowsShellInvocation(gitExe, ["a\nb"], { platform: "win32" });
+    expect(result).toEqual({ command: gitExe, args: ["a\nb"], windowsVerbatimArguments: false });
+  });
+});
+
+// Finding 2 (PR #3354, P1/P2): `SystemRoot`/`WINDIR` are mutable, inherited environment text. An
+// empty or relative value previously produced a RELATIVE `System32\cmd.exe`, resolved against the
+// workspace cwd a caller spawns with; an absolute UNC or device-path value selected an arbitrary,
+// possibly attacker-planted, executable outright. These pin the fail-closed fix: an override is
+// validated for canonical shape and the resolver THROWS rather than silently substituting a
+// default when it is invalid.
+const HOSTILE_SYSTEM_ROOT_VECTORS: readonly [label: string, value: string][] = [
+  ["empty string", ""],
+  ["relative (bare name)", "Windows"],
+  ["workspace-local relative path", String.raw`workspace\fake-system32`],
+  ["UNC path", String.raw`\\attacker\share`],
+  ["device path", String.raw`\\?\C:\Windows`],
+  ["drive-absolute with a cmd metacharacter", String.raw`C:\Windows^Sneaky`],
+  ["drive-absolute with an embedded quote", 'C:\\Windows"Sneaky'],
+  ["drive-absolute with a path-traversal segment", String.raw`C:\Windows\..\Windows`],
+  ["drive-absolute with an embedded control character", "C:\\Windows\r\nEvil"],
+];
+
+describe("resolveWindowsSystemDirectory / resolveSystemBinaryPath — canonical validation (finding 2)", () => {
+  it("resolves the hard-coded default when no override is present", () => {
+    expect(resolveWindowsSystemDirectory({})).toBe(String.raw`C:\Windows`);
+    expect(resolveSystemBinaryPath("taskkill.exe", {})).toBe(
+      String.raw`C:\Windows\System32\taskkill.exe`,
+    );
+  });
+
+  it("accepts a valid drive-absolute SystemRoot override", () => {
+    const env = { SystemRoot: String.raw`D:\NonstandardWindows` };
+    expect(resolveWindowsSystemDirectory(env)).toBe(String.raw`D:\NonstandardWindows`);
+    expect(resolveSystemBinaryPath("cmd.exe", env)).toBe(
+      String.raw`D:\NonstandardWindows\System32\cmd.exe`,
+    );
+  });
+
+  it.each(HOSTILE_SYSTEM_ROOT_VECTORS)(
+    "rejects a hostile SystemRoot override: %s",
+    (_label, value) => {
+      expect(() => resolveWindowsSystemDirectory({ SystemRoot: value })).toThrow(
+        WindowsSystemDirectoryError,
+      );
+    },
+  );
+
+  it("fails closed on a hostile WINDIR override too, not only SystemRoot", () => {
+    expect(() => resolveWindowsSystemDirectory({ WINDIR: String.raw`\\attacker\share` })).toThrow(
+      WindowsSystemDirectoryError,
+    );
+  });
+
+  it("fails closed rather than falling back to WINDIR when SystemRoot is present but invalid", () => {
+    // A hostile environment plausibly controls BOTH variables; silently trying the next candidate
+    // would give it a second chance to defeat the check instead of failing the whole resolution.
+    expect(() =>
+      resolveWindowsSystemDirectory({
+        SystemRoot: String.raw`\\attacker\share`,
+        WINDIR: String.raw`C:\Windows`,
+      }),
+    ).toThrow(WindowsSystemDirectoryError);
+  });
+
+  it("propagates the failure through buildWindowsShellInvocation when SystemRoot is hostile", () => {
+    expect(() =>
+      buildWindowsShellInvocation(CMD_PATH, ["install"], {
+        platform: "win32",
+        env: { SystemRoot: String.raw`\\attacker\share` },
+      }),
+    ).toThrow(WindowsSystemDirectoryError);
+  });
+
+  it("rejects a binaryName that is not a bare System32 file name", () => {
+    expect(() => resolveSystemBinaryPath(String.raw`..\evil.exe`, {})).toThrow(
+      WindowsSystemDirectoryError,
+    );
+    expect(() => resolveSystemBinaryPath("sub/evil.exe", {})).toThrow(WindowsSystemDirectoryError);
+    expect(() => resolveSystemBinaryPath("", {})).toThrow(WindowsSystemDirectoryError);
+  });
+
+  it("falls back to process.env when env is omitted, without throwing", () => {
+    expect(() => resolveWindowsSystemDirectory()).not.toThrow();
+    expect(() => resolveSystemBinaryPath("cmd.exe")).not.toThrow();
   });
 });

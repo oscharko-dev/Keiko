@@ -176,9 +176,17 @@ later wave flips to `"none"` when the container layer lands. Tool consumers depe
 `signal.abort`, `terminate()` sends `SIGTERM` to the process group, then arms a
 `terminationGraceMs` (default 2 000 ms) timer that sends `SIGKILL` (`src/tools/exec.ts:148–154`).
 On POSIX, the process is spawned `{ detached: true }` so `process.kill(-pid, sig)` kills the entire
-process group including grandchildren (`src/tools/exec.ts:56–69`). On Windows, `child.kill()` is
-called instead; tree-kill requires a dependency that violates ADR-0001, so grandchild orphaning on
-Windows is a documented limitation.
+process group including grandchildren (`src/tools/exec.ts:56–69`). On Windows, `child.kill()` still
+terminates the immediate child, and `killGroup` additionally bounds the whole descendant tree via
+`%SystemRoot%\System32\taskkill.exe /PID <pid> /T /F` on every SIGTERM/SIGKILL escalation step —
+an OS binary, resolved the same validated, never-PATH way `cmd.exe` is (`windows-shell.ts`), so no
+runtime dependency is needed. This closes what issue #3350's `cmd.exe` wrapping turned into the
+guaranteed topology for every Windows `.cmd`/`.bat` invocation: the wrapper's immediate child is
+always `cmd.exe`, and the real work (e.g. `node.exe` running npm) is a grandchild that
+`child.kill()` alone cannot reach. The bound is best-effort, not a formal guarantee: a
+`taskkill.exe` spawn failure (missing on a stripped-down Windows image, or a pid reused in the
+brief window between signalling and taskkill's process-tree snapshot) is swallowed the same way a
+POSIX `ESRCH` is, so termination stays idempotent but orphaning is not architecturally impossible.
 
 The `runCommand` promise rejects with `CommandCancelledError` on abort and `CommandTimeoutError` on
 timeout — both caught from the `close` event after cleanup (`src/tools/exec.ts:194–202`). The
@@ -335,9 +343,16 @@ Tool consumers (`WorkspaceToolHost` callers) depend only on the `ToolPort` inter
   leave the working tree in a partially reverted state. There is no write-ahead log or journal. For
   the regulated environment, the mitigating control is that the developer reviews and commits:
   `git status` exposes any partial write, and the repository's VCS history is the recovery path.
-- **Windows grandchild orphaning.** On Windows, `child.kill()` terminates the immediate child only.
-  Grandchildren spawned by the child (e.g. a test runner that forks workers) may continue running.
-  `tree-kill` would solve this but is a runtime npm dependency forbidden by ADR-0001.
+- **Windows grandchild orphaning is bounded, not architecturally eliminated.** `child.kill()`
+  terminates the immediate child only; `killGroup` additionally spawns
+  `taskkill.exe /PID <pid> /T /F` to bound the whole descendant tree (e.g. a test runner that
+  forks workers, or — the guaranteed case since issue #3350's `cmd.exe` wrapping — `node.exe`
+  running npm under a wrapped `.cmd` target's `cmd.exe`). `taskkill.exe` is an OS binary shipped
+  with every supported Windows image, so the earlier justification (`tree-kill` needs a runtime
+  npm dependency forbidden by ADR-0001) no longer applies. What remains is narrower and
+  best-effort: a `taskkill.exe` spawn failure is swallowed (idempotent termination, not a formal
+  guarantee), so a stripped-down Windows image without `taskkill.exe`, or a grandchild spawned in
+  the brief window between signalling and taskkill's process-tree snapshot, can still orphan.
 - **Bounded unified-diff subset only.** The parser handles the common cases (create, modify,
   delete, standard hunks) but not rename detection, extended git-diff headers, or fuzzy matching.
   A diff produced by a non-standard tool may fail to parse or produce conflicts where a full

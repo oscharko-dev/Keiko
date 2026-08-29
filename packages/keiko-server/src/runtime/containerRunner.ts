@@ -51,6 +51,8 @@ import {
   evidenceRetentionDiagnosticObserver,
   type ServerDiagnosticSink,
 } from "../diagnostics-log.js";
+import { logCommandTermination, processServerLogSink } from "../process-log-sink.js";
+import type { ServerLogSink } from "../observability/server-log.js";
 
 // Tight cap — a container run is a high-trust surface, so a small number of concurrent runs.
 const MAX_CONCURRENT_CONTAINER_RUNS = 2;
@@ -172,6 +174,11 @@ export interface ContainerRunnerManagerOptions {
   readonly processEnv?: NodeJS.ProcessEnv | undefined;
   readonly redactor?: ((input: string) => string) | undefined;
   readonly diagnostics?: ServerDiagnosticSink | undefined;
+  // Activity-log port for the runCommand termination-evidence seam (AGENTS.md §8 Rule 1).
+  // Defaults to processServerLogSink() — the same process-wide sink every other server
+  // composition site uses — so production logging works with no wiring required; tests inject a
+  // buffered sink to assert on the emitted line.
+  readonly activityLog?: ServerLogSink | undefined;
   readonly runDeps?: Partial<RunCommandDeps> | undefined; // injectable spawn seam
   // Injectable detector outcome (tests pass a fake; production uses detectContainerEngines).
   readonly detect?: ((projectId: string) => Promise<ContainerCapabilityResponse>) | undefined;
@@ -344,6 +351,7 @@ class ContainerRunnerManagerImpl implements ContainerRunnerManager {
   private readonly processEnv: NodeJS.ProcessEnv;
   private readonly redactor: (input: string) => string;
   private readonly diagnostics: ServerDiagnosticSink | undefined;
+  private readonly activityLog: ServerLogSink;
   private readonly runDeps: Partial<RunCommandDeps>;
   private readonly detect:
     ((projectId: string) => Promise<ContainerCapabilityResponse>) | undefined;
@@ -361,6 +369,7 @@ class ContainerRunnerManagerImpl implements ContainerRunnerManager {
     this.processEnv = opts.processEnv ?? process.env;
     this.redactor = opts.redactor ?? ((input: string): string => input);
     this.diagnostics = opts.diagnostics;
+    this.activityLog = opts.activityLog ?? processServerLogSink();
     this.runDeps = opts.runDeps ?? {};
     this.detect = opts.detect;
     this.now = opts.now ?? Date.now;
@@ -552,6 +561,9 @@ class ContainerRunnerManagerImpl implements ContainerRunnerManager {
           cwd: undefined,
           timeoutMs,
           signal: entry.controller.signal,
+          onTerminated: (evidence): void => {
+            logCommandTermination(this.activityLog, runId, evidence);
+          },
         },
         deps,
       );

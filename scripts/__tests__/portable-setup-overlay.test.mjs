@@ -34,6 +34,12 @@ const OPTIONAL_HEADER_PHYSICAL_RESERVE = 240;
 const SECURITY_DIRECTORY_FIELD_OFFSET = OPTIONAL_HEADER_OFFSET + 112 + 4 * 8;
 const DEFAULT_SIZE_OF_HEADERS = 512;
 const DEFAULT_SECTION = { pointerToRawData: 512, sizeOfRawData: 512 };
+// Physical byte length the default fixture materializes. Chosen explicitly — NOT re-derived from the
+// section layout — so the fixture never recomputes production's overlay-start formula (AGENTS.md §7:
+// a fixture never restates a formula the code under test owns). It happens to equal the default
+// section's raw-data extent (512 + 512) and is the offset at which every default-fixture test
+// expects the overlay to begin; a test that needs a larger image passes `physicalImageBytes`.
+const DEFAULT_PHYSICAL_IMAGE_BYTES = 1024;
 
 // A plain merged-defaults object (rather than per-field destructuring defaults) keeps this
 // fixture builder's own cyclomatic complexity low — each `= fallback` in a destructuring pattern
@@ -43,6 +49,7 @@ const DEFAULT_STUB_OPTIONS = Object.freeze({
   numberOfSections: 1,
   optionalHeaderMagic: 0x20b,
   securityDirectory: Object.freeze({ size: 0, virtualAddress: 0 }),
+  physicalImageBytes: DEFAULT_PHYSICAL_IMAGE_BYTES,
   sections: Object.freeze([DEFAULT_SECTION]),
   sizeOfHeaders: DEFAULT_SIZE_OF_HEADERS,
   sizeOfOptionalHeader: 240,
@@ -65,18 +72,14 @@ function buildSyntheticStub(overrides = {}) {
 
   const sectionTableOffset = OPTIONAL_HEADER_OFFSET + options.sizeOfOptionalHeader;
   const headerRegionEnd = sectionTableOffset + sectionHeaderCount * 40;
-  // Byte extent the allocation must cover so each section's raw data physically fits in the buffer.
-  // This is a BUFFER-SIZING bound, not the overlay-start expectation: every test asserts the overlay
-  // start/end against hardcoded constants (e.g. 1024), so a regression in the production
-  // `computeOverlayStart` formula is still caught even though the two happen to coincide here.
-  const sectionRawDataExtent = options.sections.reduce(
-    (extent, section) => Math.max(extent, section.pointerToRawData + section.sizeOfRawData),
-    options.sizeOfHeaders,
-  );
+  // `physicalImageBytes` is an explicit, independently chosen fixture input (default 1024), never a
+  // re-derivation of production's overlay-start formula. When `includeSectionRawData` is false the
+  // buffer stops at the header region, so a section can claim raw-data bytes that do not physically
+  // exist (the "past EOF" malformed-input class).
   const bufferLength = Math.max(
     headerRegionEnd,
     OPTIONAL_HEADER_OFFSET + OPTIONAL_HEADER_PHYSICAL_RESERVE,
-    options.includeSectionRawData ? sectionRawDataExtent : 0,
+    options.includeSectionRawData ? options.physicalImageBytes : 0,
   );
 
   const buffer = Buffer.alloc(bufferLength);

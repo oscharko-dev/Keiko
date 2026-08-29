@@ -9,14 +9,27 @@ import type { WorkspaceInfo } from "@oscharko-dev/keiko-workspace";
 
 import {
   LspProcessError,
+  buildLspSpawnPlan,
   createApprovedExecutablePath,
   createEphemeralHome,
+  defaultLspSpawnFn,
   escalateKill,
   preflightSpawnEnv,
   resolveExecutableOutsideWorkspace,
 } from "./lspNodeAdapter.js";
 import type { KillScheduler, KillableChild } from "./lspNodeAdapter.js";
-import { executableFixtureName, writeExecutableFixture } from "./testing/executableFixture.js";
+import {
+  executableFixtureName,
+  writeExecutableFixture,
+  writeNodeExecutableFixture,
+} from "./testing/executableFixture.js";
+import { UNKNOWN_CORRELATION_ID } from "../../correlation.js";
+import type { ServerLogEvent } from "../../observability/server-log.js";
+import {
+  createServerLogger,
+  resetServerLogger,
+  setServerLogger,
+} from "../../observability/server-logger.js";
 
 const cleanups: (() => void)[] = [];
 
@@ -24,6 +37,10 @@ afterEach(() => {
   while (cleanups.length > 0) {
     cleanups.pop()?.();
   }
+  // Every test in this file shares the process-wide logger slot (AGENTS.md §8 Rule 1 tests below
+  // install a capturing one); resetting unconditionally is a harmless no-op for tests that never
+  // touch it and prevents leaking a captured sink into an unrelated later suite.
+  resetServerLogger();
 });
 
 function makeTempDir(prefix: string): string {
@@ -365,5 +382,141 @@ describe("escalateKill — pid undefined branch", () => {
     await escalateKill(pidlessChild, 5_000, () => false, immediateScheduler);
 
     expect(signals).toEqual(["SIGTERM", "SIGKILL"]);
+  });
+});
+
+// Pins defaultLspSpawnFn's OWN call site (issue #3350). Every other LSP test injects `deps.spawn`
+// and never reaches this adapter, so without these cases both the hardened cmd.exe wrapper call and
+// the `windowsVerbatimArguments` spread could be deleted and the suite would stay green — while
+// silently reintroducing EINVAL for npm-installed `.cmd` language servers.
+describe("buildLspSpawnPlan", () => {
+  const env = { PATH: "/usr/bin" } as NodeJS.ProcessEnv;
+
+  it("routes a resolved .cmd language server through the hardened cmd.exe wrapper on win32", () => {
+    const plan = buildLspSpawnPlan(
+      String.raw`C:\tools\typescript-language-server.cmd`,
+      ["--stdio"],
+      env,
+      String.raw`C:\workspace`,
+      { platform: "win32", env: { SystemRoot: String.raw`C:\Windows` } },
+    );
+
+    expect(plan.command.toLowerCase().endsWith(String.raw`\system32\cmd.exe`.toLowerCase())).toBe(
+      true,
+    );
+    expect(plan.args.slice(0, 3)).toEqual(["/d", "/s", "/c"]);
+    expect(plan.args[3]).toContain("typescript-language-server.cmd");
+    // The spread must survive: without it Node re-quotes the pre-escaped line and the escaping is lost.
+    expect(plan.options.windowsVerbatimArguments).toBe(true);
+    // Windows has no process groups here, so the child is never detached.
+    expect(plan.options.detached).toBe(false);
+  });
+
+  it("passes a resolved .exe language server through unchanged on win32", () => {
+    const plan = buildLspSpawnPlan(
+      String.raw`C:\tools\pyright-langserver.exe`,
+      ["--stdio"],
+      env,
+      String.raw`C:\workspace`,
+      { platform: "win32", env: { SystemRoot: String.raw`C:\Windows` } },
+    );
+
+    expect(plan.command).toBe(String.raw`C:\tools\pyright-langserver.exe`);
+    expect(plan.args).toEqual(["--stdio"]);
+    expect(plan.options.windowsVerbatimArguments).toBeUndefined();
+  });
+
+  it("spawns detached and unwrapped on a POSIX host so the manager can group-kill", () => {
+    const plan = buildLspSpawnPlan("/usr/bin/typescript-language-server", ["--stdio"], env, "/ws", {
+      platform: "linux",
+    });
+
+    expect(plan.command).toBe("/usr/bin/typescript-language-server");
+    expect(plan.args).toEqual(["--stdio"]);
+    expect(plan.options.detached).toBe(true);
+    expect(plan.options.windowsVerbatimArguments).toBeUndefined();
+  });
+});
+
+// A PR reviewer finding (AGENTS.md §8 Rule 1): this adapter's win32 wrapper-engagement decision
+// (buildLspSpawnPlan, pinned above) and its win32 taskkill.exe tree-kill decision (nodeGroupKill,
+// same primitive as runCommand's killGroup in keiko-tools exec.ts) shipped with no activity-log
+// evidence anywhere. defaultLspSpawnFn has no injected log port — it reaches processServerLogSink()
+// directly — so these tests install a capturing ServerLogger via the process-wide test seam
+// (setServerLogger/resetServerLogger) rather than a constructor-injected fake.
+describe("defaultLspSpawnFn — activity-log evidence (AGENTS.md §8 Rule 1)", () => {
+  function captureLog(): ServerLogEvent[] {
+    const events: ServerLogEvent[] = [];
+    setServerLogger(
+      createServerLogger({ sink: { write: (event) => events.push(event) }, level: "debug" }),
+    );
+    return events;
+  }
+
+  it("logs lsp.spawn.completed with the wrapper-engagement decision, platform, and a real pid", async () => {
+    const events = captureLog();
+    const binDir = makeTempDir("keiko-lsp-real-");
+    const executable = writeExecutableFixture(binDir, "fakelsp");
+
+    const handle = defaultLspSpawnFn(executable, [], { PATH: "/usr/bin" }, binDir);
+    await new Promise<void>((resolve) => {
+      handle.onExit(() => {
+        resolve();
+      });
+    });
+
+    const spawned = events.find((event) => event.op === "lsp.spawn.completed");
+    expect(spawned).toBeDefined();
+    expect(spawned?.category).toBe("diagnostic");
+    expect(spawned?.correlationId).toBe(UNKNOWN_CORRELATION_ID);
+    const extra = spawned?.extra ?? {};
+    // POSIX (this test host is never win32): the hardened cmd.exe wrapper never engages.
+    expect(extra.windowsWrapperEngaged).toBe(false);
+    expect(extra.platform).toBe(process.platform);
+    expect(typeof extra.pid).toBe("number");
+    // Body-free: never the resolved executable path or args on the evidence line.
+    expect(Object.keys(extra).sort()).toEqual(["pid", "platform", "windowsWrapperEngaged"]);
+  });
+
+  it("logs lsp.spawn.failed with the closed EXECUTABLE_NOT_FOUND code for a non-absolute executable", () => {
+    const events = captureLog();
+
+    expect(() => defaultLspSpawnFn("relative-name", [], {}, "/tmp")).toThrow(LspProcessError);
+
+    const failed = events.find((event) => event.op === "lsp.spawn.failed");
+    expect(failed).toBeDefined();
+    expect(failed?.level).toBe("error");
+    expect(failed?.category).toBe("diagnostic");
+    expect(failed?.correlationId).toBe(UNKNOWN_CORRELATION_ID);
+    expect(failed?.errorKind).toBe("EXECUTABLE_NOT_FOUND");
+  });
+
+  it("logs lsp.process.terminated with windowsTreeKillAttempted on kill()", async () => {
+    const events = captureLog();
+    const binDir = makeTempDir("keiko-lsp-kill-");
+    const executable = writeNodeExecutableFixture(
+      binDir,
+      "hanglsp",
+      "setInterval(() => {}, 1000);\n",
+    );
+
+    const handle = defaultLspSpawnFn(executable, [], { PATH: "/usr/bin" }, binDir);
+    const exited = new Promise<void>((resolve) => {
+      handle.onExit(() => {
+        resolve();
+      });
+    });
+    handle.kill("SIGTERM");
+    await exited;
+
+    const terminated = events.find((event) => event.op === "lsp.process.terminated");
+    expect(terminated).toBeDefined();
+    expect(terminated?.category).toBe("diagnostic");
+    expect(terminated?.correlationId).toBe(UNKNOWN_CORRELATION_ID);
+    const extra = terminated?.extra ?? {};
+    // POSIX (this test host is never win32): the taskkill.exe tree-kill path never engages.
+    expect(extra.windowsTreeKillAttempted).toBe(false);
+    expect(typeof extra.pid).toBe("number");
+    expect(Object.keys(extra).sort()).toEqual(["pid", "windowsTreeKillAttempted"]);
   });
 });

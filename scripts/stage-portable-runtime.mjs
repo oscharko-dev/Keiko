@@ -1876,6 +1876,9 @@ function compileWindowsLauncher(target, destination) {
       [
         "/nologo",
         "/O2",
+        // Static CRT: no VC runtime redistributable dependency, and no plantable CRT DLL among the
+        // implicit imports the loader resolves from the application directory before wmain runs.
+        "/MT",
         "/DUNICODE",
         "/D_UNICODE",
         `/D${nativeLauncherTargetDefine(target)}`,
@@ -1885,6 +1888,10 @@ function compileWindowsLauncher(target, destination) {
         "/link",
         "/SUBSYSTEM:WINDOWS",
         "/ENTRY:wmainCRTStartup",
+        // LOAD_LIBRARY_SEARCH_SYSTEM32 for statically-linked imports — the DLL-plant gap that a
+        // runtime SetDefaultDllDirectories call cannot cover, because the loader has already
+        // resolved them. Same rationale as compileSetupBootstrap in build-windows-portable-setup.mjs.
+        "/DEPENDENTLOADFLAG:0x800",
       ],
       { env },
     );

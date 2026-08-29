@@ -19,6 +19,9 @@ import {
 import { nodeSpawnFn } from "@oscharko-dev/keiko-tools/internal/exec";
 import type { CommandResult, CommandRule, WorkspaceInfo } from "@oscharko-dev/keiko-contracts";
 
+import { UNKNOWN_CORRELATION_ID } from "../correlation.js";
+import { logCommandTermination, processServerLogSink } from "../process-log-sink.js";
+import type { ServerLogSink } from "../observability/server-log.js";
 import { GITHUB_CODE_CONTEXT_ALLOWED_SUBCOMMANDS } from "./githubCodeContextConnector.js";
 import type { GitHubCodeContextApiPort } from "./githubCodeContextConnector.js";
 
@@ -81,6 +84,12 @@ export interface GitHubCodeContextPortOptions {
   readonly resolveExecutable?: ExecutableResolver | undefined;
   readonly now?: (() => number) | undefined;
   readonly timeoutMs?: number | undefined;
+  // Activity-log port for the runCommand termination-evidence seam (AGENTS.md §8 Rule 1).
+  // Defaults to processServerLogSink() — the same process-wide sink every other server
+  // composition site uses — so production logging works with no wiring required; tests inject a
+  // buffered sink to assert on the emitted line. This port carries no per-request correlation id
+  // of its own (readJson takes only an argv), so every line is stamped UNKNOWN_CORRELATION_ID.
+  readonly activityLog?: ServerLogSink | undefined;
 }
 
 function assertReadOnlyGhApiArgv(argv: readonly string[]): void {
@@ -124,6 +133,7 @@ async function runGhApi(
   argv: readonly string[],
   runDeps: RunCommandDeps,
   timeoutMs: number,
+  activityLog: ServerLogSink,
 ): Promise<CommandResult> {
   try {
     return await runCommand(
@@ -133,6 +143,9 @@ async function runGhApi(
         cwd: undefined,
         timeoutMs,
         signal: new AbortController().signal,
+        onTerminated: (evidence): void => {
+          logCommandTermination(activityLog, UNKNOWN_CORRELATION_ID, evidence);
+        },
       },
       runDeps,
     );
@@ -149,10 +162,11 @@ export function createGitHubCodeContextApiPort(
 ): GitHubCodeContextApiPort {
   const runDeps = runDepsFor(options);
   const timeoutMs = options.timeoutMs ?? GH_API_TIMEOUT_MS;
+  const activityLog = options.activityLog ?? processServerLogSink();
   return {
     readJson: async (argv: readonly string[]): Promise<unknown> => {
       assertReadOnlyGhApiArgv(argv);
-      const result = await runGhApi(argv, runDeps, timeoutMs);
+      const result = await runGhApi(argv, runDeps, timeoutMs, activityLog);
       // Truncation is classified FIRST, and it outranks both later branches for the same reason:
       // hitting the cap kills the child and replaces stdout with a marker, so the very same run
       // also presents as a non-zero exit (the kill) or as unparsable output (the marker). Reading

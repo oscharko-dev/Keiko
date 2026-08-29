@@ -66,6 +66,14 @@ export type { WorkspaceWriter } from "./writer.js";
 // ─── Command execution boundary ─────────────────────────────────────────────────────
 export {
   runCommand,
+  // Windows process-tree termination (issue #3350 / ADR-0006 D5): once a `.cmd` target is routed
+  // through the hardened cmd.exe wrapper, the immediate child is cmd.exe and the real work is a
+  // grandchild. Exported so every spawn boundary that adopted the wrapper terminates the same way
+  // instead of growing its own tree-kill.
+  nodeWindowsTreeKill,
+  windowsTaskkillInvocation,
+  type CommandTerminationEvidence,
+  type CommandTerminationReason,
   type ExecutableResolver,
   type ExecutableResolverDeps,
   type HomeProvider,
@@ -73,6 +81,7 @@ export {
   type RunCommandInput,
   type SpawnFn,
   type SpawnOptions,
+  type WindowsTreeKill,
 } from "./exec.js";
 
 // ─── Hardened Windows cmd.exe shell invocation (issue #3350, Node CVE-2024-27980) ──
@@ -80,8 +89,15 @@ export {
 // the public barrel rather than an ./internal/* subpath. exec.ts's own spawn boundary is the
 // primary consumer; keiko-server's editor-tree Node process adapters (LSP today) are the other
 // consumer, reached through processHardening.ts rather than importing this directly.
+// `resolveWindowsSystemDirectory`/`resolveSystemBinaryPath` are the SAME trusted-System32
+// resolution `buildWindowsShellInvocation` uses internally for `cmd.exe`; exec.ts's
+// `taskkill.exe` lookup is a second consumer of the identical trust boundary (PR #3354 finding 2).
 export {
   buildWindowsShellInvocation,
+  resolveSystemBinaryPath,
+  resolveWindowsSystemDirectory,
+  WindowsShellInvocationError,
+  WindowsSystemDirectoryError,
   type WindowsShellInvocation,
   type WindowsShellInvocationOptions,
 } from "./windows-shell.js";

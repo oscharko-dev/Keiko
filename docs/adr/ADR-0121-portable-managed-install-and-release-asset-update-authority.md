@@ -364,15 +364,32 @@ Security review for implementation under this ADR must cover:
      lifecycle authority (D1, D5) is unchanged.
   3. **Tamper-evident payload.** The expected payload digest and size are baked into the bootstrap
      as compile-time constants and re-verified at run time by streaming the overlay through BCrypt
-     SHA-256. Because an overlay appended after the Authenticode certificate table is not itself
-     covered by the signature, binding the payload through a digest that IS inside the signed image
-     is what makes a swapped payload fail closed — the signed bootstrap refuses to extract or run
-     anything whose bytes it did not vouch for. These invariants live in the binary whether or not a
-     given release signs it, so an `evaluation` (unsigned) companion carries the same closed grammar
-     and hash binding; a production-signed companion additionally cannot be leveraged to front
-     arbitrary code under the Keiko Authenticode identity. The Windows setup contract suite pins the
+     SHA-256. The release pipeline appends the overlay and signs the resulting file afterwards
+     (`portable-assets.yml`: "Build the Windows setup companion" precedes "Sign the Windows setup
+     companion"), so the payload is **inside** what the signature covers: an Authenticode digest
+     spans the whole file except the optional header's checksum, the certificate-table data-directory
+     entry, and the attribute certificate table appended at the end. The baked digest is therefore
+     not a substitute for the signature — it is the binding that still holds when nothing verified
+     the signature. Windows does not refuse to execute an unsigned or invalidly-signed binary, so a
+     swapped payload is caught by the bootstrap itself rather than by the OS, and the same binding
+     protects an `evaluation` (unsigned) companion, which carries the identical closed grammar and
+     hash gate. A production-signed companion additionally cannot be leveraged to front arbitrary
+     code under the Keiko Authenticode identity. The Windows setup contract suite pins the
      argument-rejection and integrity behavior, and the Windows smoke exercises the real
      install-command path (including the adversarial `/C:` matrix), not extraction alone.
+
+     **Residual — verified bytes vs executed bytes.** The digest gate covers the compressed payload
+     as it streams out of the running image, and the staged ZIP is re-verified and then held open
+     write- and delete-denied for the whole extraction, so what `tar.exe` consumes is what was
+     verified. After extraction the bootstrap checks only that `Keiko.exe`, `node.exe` and the CLI
+     entry **exist** before handing them to `CreateProcessW`; their contents are not re-hashed
+     against per-file digests. A process already running as the same user could therefore modify an
+     unpacked file between extraction and launch. The staging directory name carries 128 CSPRNG bits
+     and is created by the bootstrap, so it cannot be pre-created or predicted, and no privilege
+     boundary is crossed — this is not the `/C:` signature-laundering class, which was reachable by
+     anyone holding the signed binary. Closing it fully requires per-file digests carried inside the
+     verified archive and checked immediately before each launch; that is recorded here as accepted
+     residual risk rather than claimed as settled.
 - **Evidence provenance.** Native verification booleans are trusted only when produced in the same
   protected native job as signing and bound to the artifact digest and approved durable platform
   identity: the Windows subscriber EKU and Public Trust/code-signing chain, or the macOS Developer ID

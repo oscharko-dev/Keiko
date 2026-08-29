@@ -345,6 +345,11 @@ describe("dev quality workflows", () => {
     expect(cmdSpawnSmoke, "command spawn wrapper smoke step must exist").toBeDefined();
     expect(cmdSpawnSmoke.if).toBe("runner.os == 'Windows'");
     expect(cmdSpawnSmoke.run).toContain("node scripts/__tests__/windows-cmd-spawn-smoke.mjs");
+    // A step-level `continue-on-error: true` soft-fails the step while the job (and therefore
+    // `needs.cross-platform-smoke.result` in the `ci` aggregate) still reports success, defeating
+    // the fail-closed aggregation the .if/.run pins above assume. Neither smoke step carries it
+    // today; this pin catches the one edit that would silently disarm them.
+    expect(cmdSpawnSmoke["continue-on-error"]).toBeUndefined();
     // #2992: the setup bootstrap smoke compiles the C stub, so it MUST run after MSVC is configured.
     const setupSteps = ciWorkflow.jobs["cross-platform-smoke"].steps;
     const setupBootstrapSmoke = setupSteps.find(
@@ -355,6 +360,8 @@ describe("dev quality workflows", () => {
     expect(setupBootstrapSmoke.run).toContain(
       "node scripts/__tests__/windows-setup-bootstrap-smoke.mjs",
     );
+    // Same fail-closed reasoning as the command-spawn smoke step above.
+    expect(setupBootstrapSmoke["continue-on-error"]).toBeUndefined();
     const msvcIndex = setupSteps.findIndex(
       (step) => step.name === "Configure MSVC for native quality analysis",
     );

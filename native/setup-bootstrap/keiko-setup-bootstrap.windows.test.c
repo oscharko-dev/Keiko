@@ -47,7 +47,7 @@ static uint64_t make_pe(unsigned char *buffer, size_t buffer_len, uint16_t magic
   write_u16(buffer, opt, magic);
   write_u32(buffer, opt + OPTIONAL_HEADER_SIZE_OF_HEADERS_OFFSET, 0x200);
   const size_t directory = opt + OPTIONAL_HEADER_DATA_DIRECTORY_OFFSET +
-                           (size_t)IMAGE_DIRECTORY_ENTRY_SECURITY * DATA_DIRECTORY_ENTRY_BYTES;
+                           (size_t)KEIKO_SECURITY_DIR_INDEX * DATA_DIRECTORY_ENTRY_BYTES;
   write_u32(buffer, directory, certificate_offset);
   write_u32(buffer, directory + 4, certificate_size);
   const size_t section_table = opt + optional_header_size;
@@ -70,22 +70,29 @@ static void test_argument_allowlist(void) {
   }
 
   int quiet = -1;
-  const wchar_t *bad = NULL;
+  int bad_index = -1;
   wchar_t program[] = L"setup.exe";
   wchar_t quiet_flag[] = L"/quiet";
   wchar_t q_flag[] = L"/Q";
   wchar_t bad_flag[] = L"/C:x";
+  // A rejected argument that carries a secret. The scanner must report only WHERE it was, so no
+  // code path can ever hand this text to a diagnostic (the body-free contract, AGENTS.md §8).
+  wchar_t secret_flag[] = L"/token=SUPER_SECRET_VALUE";
   wchar_t *only_program[] = {program};
   wchar_t *with_quiet[] = {program, quiet_flag};
   wchar_t *with_both[] = {program, q_flag, quiet_flag};
   wchar_t *with_bad[] = {program, bad_flag};
   wchar_t *quiet_then_bad[] = {program, quiet_flag, bad_flag};
+  wchar_t *with_secret[] = {program, secret_flag};
 
-  assert(keiko_scan_arguments(1, only_program, &quiet, &bad) == 1 && quiet == 0 && bad == NULL);
-  assert(keiko_scan_arguments(2, with_quiet, &quiet, &bad) == 1 && quiet == 1);
-  assert(keiko_scan_arguments(3, with_both, &quiet, &bad) == 1 && quiet == 1);
-  assert(keiko_scan_arguments(2, with_bad, &quiet, &bad) == 0 && bad == bad_flag);
-  assert(keiko_scan_arguments(3, quiet_then_bad, &quiet, &bad) == 0 && bad == bad_flag);
+  assert(keiko_scan_arguments(1, only_program, &quiet, &bad_index) == 1 && quiet == 0 &&
+         bad_index == 0);
+  assert(keiko_scan_arguments(2, with_quiet, &quiet, &bad_index) == 1 && quiet == 1);
+  assert(keiko_scan_arguments(3, with_both, &quiet, &bad_index) == 1 && quiet == 1);
+  // The rejection reports the POSITION of the offending argument, never a pointer to its text.
+  assert(keiko_scan_arguments(2, with_bad, &quiet, &bad_index) == 0 && bad_index == 1);
+  assert(keiko_scan_arguments(3, quiet_then_bad, &quiet, &bad_index) == 0 && bad_index == 2);
+  assert(keiko_scan_arguments(2, with_secret, &quiet, &bad_index) == 0 && bad_index == 1);
 }
 
 static void test_overlay_bounds(void) {
@@ -226,6 +233,24 @@ static void test_staging_name(void) {
   assert(wcscmp(out, L"C:\\Temp\\Keiko-install-000102030405060708090a0b0c0d0e0f") == 0);
 }
 
+// The staging tree is npm's node_modules, which nests far past MAX_PATH. Cleanup therefore runs
+// against the extended-length spelling of the staging root; if this rewrite were wrong, a successful
+// install would end in exit 19 ("temporary files could not be removed") on every deep tree.
+static void test_extended_path(void) {
+  wchar_t out[KEIKO_PATH_CAP];
+
+  assert(keiko_extended_path(L"C:\\Temp\\Keiko-install-00", out, KEIKO_PATH_CAP) == 1);
+  assert(wcscmp(out, L"\\\\?\\C:\\Temp\\Keiko-install-00") == 0);
+
+  // A UNC temp directory takes the \\?\UNC\ spelling, NOT a doubled backslash run.
+  assert(keiko_extended_path(L"\\\\server\\share\\tmp", out, KEIKO_PATH_CAP) == 1);
+  assert(wcscmp(out, L"\\\\?\\UNC\\server\\share\\tmp") == 0);
+
+  // Already extended: copied through untouched, never double-prefixed.
+  assert(keiko_extended_path(L"\\\\?\\C:\\Temp", out, KEIKO_PATH_CAP) == 1);
+  assert(wcscmp(out, L"\\\\?\\C:\\Temp") == 0);
+}
+
 int wmain(void) {
   keiko_setup_buffers *buffers = keiko_allocate_buffers();
   assert(buffers != NULL);
@@ -239,5 +264,6 @@ int wmain(void) {
   test_hex_helpers();
   test_managed_root_parse();
   test_staging_name();
+  test_extended_path();
   return 0;
 }

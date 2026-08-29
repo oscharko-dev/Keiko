@@ -783,6 +783,12 @@
       "package": "keiko-server"
     },
     {
+      "op": "command.terminated",
+      "category": "diagnostic",
+      "site": "packages/keiko-server/src/process-log-sink.ts:107",
+      "package": "keiko-server"
+    },
+    {
       "op": "editor.local-history.rekey.completed",
       "category": "diagnostic",
       "site": "packages/keiko-server/src/editor/localHistory/localHistoryCapture.ts:210",
@@ -954,6 +960,24 @@
       "op": "indexing.start.refused",
       "category": "indexing",
       "site": "packages/keiko-server/src/local-knowledge-handlers.ts:2886",
+      "package": "keiko-server"
+    },
+    {
+      "op": "lsp.process.terminated",
+      "category": "diagnostic",
+      "site": "packages/keiko-server/src/editor/lsp/lspNodeAdapter.ts:82",
+      "package": "keiko-server"
+    },
+    {
+      "op": "lsp.spawn.completed",
+      "category": "diagnostic",
+      "site": "packages/keiko-server/src/editor/lsp/lspNodeAdapter.ts:57",
+      "package": "keiko-server"
+    },
+    {
+      "op": "lsp.spawn.failed",
+      "category": "diagnostic",
+      "site": "packages/keiko-server/src/editor/lsp/lspNodeAdapter.ts:67",
       "package": "keiko-server"
     },
     {

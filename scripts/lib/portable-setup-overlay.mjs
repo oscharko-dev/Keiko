@@ -65,6 +65,12 @@ function assertPayloadSha256Hex(value) {
   }
 }
 
+function assertFileSizeBytes(value) {
+  if (!Number.isSafeInteger(value) || value < 0) {
+    fail("file size must be a non-negative safe integer");
+  }
+}
+
 /**
  * Builds the 64-byte overlay header for a payload of the given size and digest — the inverse of
  * the header decode inside `parseSetupOverlay`. Kept as one small pure function so the two can
@@ -182,7 +188,13 @@ function readOptionalHeader(fileBuffer, optionalHeaderOffset, sizeOfOptionalHead
   };
 }
 
-function computeOverlayStart(fileBuffer, sectionTableOffset, numberOfSections, sizeOfHeaders) {
+function computeOverlayStart(
+  fileBuffer,
+  sectionTableOffset,
+  numberOfSections,
+  sizeOfHeaders,
+  fileSizeBytes,
+) {
   let overlayStart = sizeOfHeaders;
   for (let index = 0; index < numberOfSections; index += 1) {
     const sectionOffset = sectionTableOffset + index * SECTION_HEADER_BYTES;
@@ -198,20 +210,20 @@ function computeOverlayStart(fileBuffer, sectionTableOffset, numberOfSections, s
     );
     overlayStart = Math.max(overlayStart, pointerToRawData + sizeOfRawData);
   }
-  if (overlayStart > fileBuffer.length) {
+  if (overlayStart > fileSizeBytes) {
     fail("stub image section data extends past the end of the file");
   }
   return overlayStart;
 }
 
 function computeOverlayEnd(
-  fileBuffer,
   certificateTableFileOffset,
   certificateTableSize,
   overlayStart,
+  fileSizeBytes,
 ) {
-  if (certificateTableSize === 0) return fileBuffer.length;
-  if (certificateTableFileOffset < overlayStart || certificateTableFileOffset > fileBuffer.length) {
+  if (certificateTableSize === 0) return fileSizeBytes;
+  if (certificateTableFileOffset < overlayStart || certificateTableFileOffset > fileSizeBytes) {
     fail("stub image certificate table offset is out of bounds");
   }
   return certificateTableFileOffset;
@@ -223,9 +235,21 @@ function computeOverlayEnd(
  * `overlayEnd` is the certificate table's file offset when one is declared, else the physical end
  * of the file. Implements frozen SPEC v1 section 1's overlay location algorithm exactly — the
  * native stub performs the identical walk at run time, so a change here must be mirrored there.
+ *
+ * `fileBuffer` need not hold the WHOLE file: `fileSizeBytes` (default `fileBuffer.length`, the
+ * original whole-buffer contract every existing caller relies on) is the file's true total size,
+ * checked independently of how much of it `fileBuffer` physically contains. A caller verifying a
+ * large file without buffering all of it reads a bounded header prefix into `fileBuffer` and
+ * passes the real size (from `fstatSync`) separately — the same split the native stub's
+ * `keiko_parse_overlay_bounds(scan, scan_len, file_size, out)` makes between its bounded
+ * header-scan window and the file's actual size.
  */
-export function portableExecutableOverlayBounds(fileBuffer) {
-  if (!Buffer.isBuffer(fileBuffer)) fail("expected a Buffer of the whole file");
+export function portableExecutableOverlayBounds(fileBuffer, fileSizeBytes = fileBuffer?.length) {
+  if (!Buffer.isBuffer(fileBuffer)) fail("expected a Buffer of PE file bytes");
+  assertFileSizeBytes(fileSizeBytes);
+  if (fileSizeBytes < fileBuffer.length) {
+    fail("declared file size is smaller than the PE file bytes that were read");
+  }
   const peHeaderOffset = readDosHeaderPeOffset(fileBuffer);
   const { numberOfSections, optionalHeaderOffset, sizeOfOptionalHeader } = readPeAndCoffHeaders(
     fileBuffer,
@@ -242,12 +266,13 @@ export function portableExecutableOverlayBounds(fileBuffer) {
     sectionTableOffset,
     numberOfSections,
     sizeOfHeaders,
+    fileSizeBytes,
   );
   const overlayEnd = computeOverlayEnd(
-    fileBuffer,
     certificateTableFileOffset,
     certificateTableSize,
     overlayStart,
+    fileSizeBytes,
   );
   return { overlayEnd, overlayStart };
 }
@@ -256,7 +281,12 @@ export function portableExecutableOverlayBounds(fileBuffer) {
 // Overlay header + payload decode.
 // -------------------------------------------------------------------------------------------
 
-function assertZeroBytes(buffer, label) {
+/**
+ * Fails closed unless every byte in `buffer` is zero. Exported so both the whole-buffer padding
+ * check below and the streaming verifier's small positioned read of the same <=7 trailing bytes
+ * (build-windows-portable-setup.mjs) share one implementation and one failure message.
+ */
+export function assertZeroBytes(buffer, label) {
   for (const byte of buffer) {
     if (byte !== 0) fail(`${label} must be zero`);
   }
@@ -270,7 +300,14 @@ function readOverlayPayloadSize(header) {
   return Number(raw);
 }
 
-function readSetupOverlayHeaderFields(header) {
+/**
+ * Decodes and validates a 64-byte overlay header buffer: magic, payload size, payload digest, and
+ * zero reserved bytes. Takes the header bytes directly rather than a whole file buffer, so it is
+ * equally usable after slicing a whole-file buffer (`parseSetupOverlay`) or after a small
+ * positioned read of just these 64 bytes (the streaming verifier in
+ * build-windows-portable-setup.mjs, mirroring the native stub's `keiko_validate_overlay_header`).
+ */
+export function readSetupOverlayHeaderFields(header) {
   if (!header.subarray(0, SETUP_OVERLAY_MAGIC_END).equals(SETUP_OVERLAY_MAGIC)) {
     fail("setup overlay magic does not match KSETUP01");
   }
@@ -282,7 +319,17 @@ function readSetupOverlayHeaderFields(header) {
   return { payloadSha256Hex, payloadSize };
 }
 
-function assertPayloadFitsBeforeOverlayEnd(fileBuffer, payloadStart, payloadSize, overlayEnd) {
+/**
+ * Pure size arithmetic for the payload region, shared by the whole-buffer codec
+ * (`assertPayloadFitsBeforeOverlayEnd` below) and the streaming verifier in
+ * build-windows-portable-setup.mjs: computes where the payload ends and how many trailing padding
+ * bytes (if any) sit before `overlayEnd`, and fails closed exactly as this module always has — an
+ * oversized payload, or more than the <=7 bytes signing may add for certificate-table alignment
+ * (frozen SPEC v1 section 1). Callers still validate the padding bytes themselves are zero, since
+ * that requires reading them from wherever the caller's bytes live (a whole buffer or a small
+ * positioned file read) — this function only proves how many there should be.
+ */
+export function setupOverlayPayloadRegion(payloadStart, payloadSize, overlayEnd) {
   const payloadEnd = payloadStart + payloadSize;
   if (payloadEnd > overlayEnd) fail("setup overlay payload does not fit before the overlay end");
   const paddingBytes = overlayEnd - payloadEnd;
@@ -290,8 +337,29 @@ function assertPayloadFitsBeforeOverlayEnd(fileBuffer, payloadStart, payloadSize
   // appends (frozen SPEC v1 section 1). 8 or more bytes, or any non-zero byte, means the
   // "padding" is really unaccounted data and the overlay cannot be trusted.
   if (paddingBytes > 7) fail("setup overlay trailing padding exceeds 7 bytes");
+  return { paddingBytes, payloadEnd };
+}
+
+function assertPayloadFitsBeforeOverlayEnd(fileBuffer, payloadStart, payloadSize, overlayEnd) {
+  const { paddingBytes, payloadEnd } = setupOverlayPayloadRegion(
+    payloadStart,
+    payloadSize,
+    overlayEnd,
+  );
   if (paddingBytes > 0) {
     assertZeroBytes(fileBuffer.subarray(payloadEnd, overlayEnd), "setup overlay trailing padding");
+  }
+}
+
+/**
+ * Fails closed unless the fixed-size overlay header physically fits before `overlayEnd` once
+ * `overlayStart` is known. Factored out of `parseSetupOverlay` so the streaming verifier in
+ * build-windows-portable-setup.mjs can enforce the identical bound before ITS OWN small
+ * positioned read of just those 64 bytes, instead of requiring a whole-file buffer to slice from.
+ */
+export function assertSetupOverlayHeaderFitsBeforeEnd(overlayStart, overlayEnd) {
+  if (overlayStart + SETUP_OVERLAY_HEADER_BYTES > overlayEnd) {
+    fail("setup overlay header does not fit before the overlay end");
   }
 }
 
@@ -304,9 +372,7 @@ function assertPayloadFitsBeforeOverlayEnd(fileBuffer, payloadStart, payloadSize
 export function parseSetupOverlay(fileBuffer) {
   const { overlayEnd, overlayStart } = portableExecutableOverlayBounds(fileBuffer);
   assertReadable(fileBuffer, overlayStart, SETUP_OVERLAY_HEADER_BYTES, "setup overlay header");
-  if (overlayStart + SETUP_OVERLAY_HEADER_BYTES > overlayEnd) {
-    fail("setup overlay header does not fit before the overlay end");
-  }
+  assertSetupOverlayHeaderFitsBeforeEnd(overlayStart, overlayEnd);
   const header = fileBuffer.subarray(overlayStart, overlayStart + SETUP_OVERLAY_HEADER_BYTES);
   const { payloadSha256Hex, payloadSize } = readSetupOverlayHeaderFields(header);
   const payloadStart = overlayStart + SETUP_OVERLAY_HEADER_BYTES;

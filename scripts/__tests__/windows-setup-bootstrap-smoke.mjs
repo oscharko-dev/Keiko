@@ -58,6 +58,18 @@ const ADVERSARIAL_ARGUMENTS = Object.freeze([
   ["/quiet", "/D"],
 ]);
 
+// Shared between fixtureCli() (which embeds these into the generated child script) and
+// waitForFixtureProcessExit() below, so the wait budget is provably derived from the same numbers
+// the fixture lives by rather than independent magic numbers that can silently drift apart. [P2]:
+// a 3s health window plus a 10s wait budget totalled ~13s against the child's 14s lifetime, so the
+// final assertion could run while the child was still validly alive — flaky-to-red depending on
+// setup overhead. waitForFixtureProcessExit now budgets the COMPLETE child lifetime again, from
+// its own start, plus a real margin — never the remainder after an assumed elapsed time — so it
+// stays correct no matter how much overhead the setup exe itself adds before polling begins.
+const FIXTURE_CHILD_LIFETIME_MS = 14_000;
+const FIXTURE_LAUNCH_HEALTH_WINDOW_MS = 3_000;
+const FIXTURE_PROCESS_EXIT_WAIT_MARGIN_MS = 5_000;
+
 function commandOutput(result) {
   return [result.stdout, result.stderr].filter(Boolean).join("\n");
 }
@@ -107,13 +119,13 @@ function fixtureCli() {
     'writeFileSync(process.env.KEIKO_SETUP_SMOKE_LAUNCH_SENTINEL, `${portableRoot}\\n`, "utf8");',
     'writeFileSync(process.env.KEIKO_SETUP_SMOKE_RUNTIME_SENTINEL, `${process.execPath}\\n`, "utf8");',
     'const nodePath = join(managedRoot, "runtime", "node", "node.exe");',
-    'const childScript = process.env.KEIKO_SETUP_SMOKE_EXIT_IMMEDIATELY === "1" ? "process.exit(0)" : "setTimeout(() => process.exit(0), 14000)";',
+    `const childScript = process.env.KEIKO_SETUP_SMOKE_EXIT_IMMEDIATELY === "1" ? "process.exit(0)" : "setTimeout(() => process.exit(0), ${String(FIXTURE_CHILD_LIFETIME_MS)})";`,
     'const child = spawn(nodePath, ["-e", childScript], { detached: true, stdio: "ignore" });',
     "child.unref();",
     'writeFileSync(process.env.KEIKO_SETUP_SMOKE_PID, `${child.pid}\\n`, "utf8");',
     "// Mirrors the real lifecycle CLI: launch exits 0 only after its own health window saw the",
     "// spawned process stay alive; a child that dies early fails the launch (and the installer).",
-    "const deadline = Date.now() + 3000;",
+    `const deadline = Date.now() + ${String(FIXTURE_LAUNCH_HEALTH_WINDOW_MS)};`,
     "const waitSignal = new Int32Array(new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT));",
     "while (Date.now() < deadline) {",
     "  try { process.kill(child.pid, 0); } catch { process.exit(1); }",
@@ -184,7 +196,11 @@ function fixtureProcessId(pidPath) {
 function waitForFixtureProcessExit(pidPath) {
   if (!existsSync(pidPath)) return;
   const pid = fixtureProcessId(pidPath);
-  const deadline = Date.now() + 10_000;
+  // Budgets the child's COMPLETE FIXTURE_CHILD_LIFETIME_MS again, from scratch, plus a real
+  // margin — not "the remainder after the health window" — so this stays correct even when setup
+  // overhead delays the moment this function starts polling relative to when the child was
+  // actually spawned.
+  const deadline = Date.now() + FIXTURE_CHILD_LIFETIME_MS + FIXTURE_PROCESS_EXIT_WAIT_MARGIN_MS;
   const waitSignal = new Int32Array(new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT));
   while (processExists(pid) && Date.now() < deadline) {
     Atomics.wait(waitSignal, 0, 0, 100);
@@ -477,7 +493,10 @@ async function buildSetupCompanion(root, archivePath, setupPath) {
   const payloadSha256Hex = await sha256File(archivePath);
   const payloadSizeBytes = statSync(archivePath).size;
   compileSetupBootstrap({ outputPath: stubPath, payloadSha256Hex, payloadSizeBytes });
-  await appendSetupOverlay(stubPath, archivePath, setupPath);
+  await appendSetupOverlay(stubPath, archivePath, setupPath, {
+    payloadSha256Hex,
+    payloadSizeBytes,
+  });
 }
 
 // Cases 4-7: every negative path (launch failure, the adversarial argument matrix, a tampered

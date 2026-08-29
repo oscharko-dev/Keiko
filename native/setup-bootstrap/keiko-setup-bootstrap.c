@@ -17,11 +17,16 @@
 //      bundled `node.exe` from the extracted payload — and only after the payload's SHA-256 matches
 //      the digest baked into this (signed) binary at build time.
 //   3. TAMPER-EVIDENT PAYLOAD. The expected payload digest and size are compile-time constants,
-//      re-verified at run time by streaming the appended overlay through BCrypt SHA-256. An overlay
-//      appended after the Authenticode certificate table is NOT itself covered by the signature, so
-//      binding the payload through a digest that IS inside the signed image is what makes a swapped
-//      payload fail closed: the signed bootstrap refuses to extract or run bytes it did not vouch
-//      for.
+//      re-verified at run time by streaming the appended overlay through BCrypt SHA-256. The release
+//      pipeline appends the overlay and signs the resulting file afterwards, so the payload IS
+//      covered by the Authenticode signature (the digest spans the whole file except the checksum,
+//      the certificate-table directory entry, and the certificate table itself). The baked digest is
+//      not a substitute for that signature — it is what still holds when nothing verified it, since
+//      Windows will happily execute an unsigned or invalidly-signed binary. Verified bytes and
+//      EXECUTED bytes are not identical: the staged ZIP is re-verified and held write-/delete-denied
+//      across extraction, but the unpacked files are only checked for existence before launch. That
+//      residual is recorded in ADR-0121; it needs a process already running as this same user, and
+//      the staging directory carries 128 CSPRNG bits.
 //
 // Exit-code contract (stable; the Windows smoke and the reproduction runbook depend on it):
 //   0  success
@@ -91,7 +96,9 @@ enum {
   KEIKO_HASH_CHUNK_BYTES = 1048576,  // 1 MiB streamed hash/copy chunk
   KEIKO_RESOLVE_OUTPUT_CAP = 65536,  // <= 64 KiB captured from `portable resolve-root` stdout
   KEIKO_MAX_TRAILING_PADDING = 7,    // signing may 8-byte-align the certificate table it appends
-  KEIKO_CHILD_TIMEOUT_MS = 1200000   // 20 min watchdog: far above any real step, bounds a hang
+  KEIKO_CHILD_TIMEOUT_MS = 1200000,  // 20 min watchdog: far above any real step, bounds a hang
+  KEIKO_DRAIN_POLL_MS = 50,          // slice the capture loop sleeps on the child handle per turn
+  KEIKO_CHILD_EXIT_GRACE_MS = 5000   // how long a child gets to exit once its stdout has closed
 };
 
 // ---------------------------------------------------------------------------------------------
@@ -119,7 +126,7 @@ enum {
   OPTIONAL_HEADER_SIZE_OF_HEADERS_OFFSET = 60,
   OPTIONAL_HEADER_DATA_DIRECTORY_OFFSET = 112,
   DATA_DIRECTORY_ENTRY_BYTES = 8,
-  IMAGE_DIRECTORY_ENTRY_SECURITY = 4,
+  KEIKO_SECURITY_DIR_INDEX = 4,
   SECTION_HEADER_BYTES = 40,
   SECTION_SIZE_OF_RAW_DATA_OFFSET = 16,
   SECTION_POINTER_TO_RAW_DATA_OFFSET = 20
@@ -129,7 +136,7 @@ static const unsigned char KEIKO_PE_SIGNATURE[PE_SIGNATURE_BYTES] = {'P', 'E', 0
 // The fixed PE32+ optional-header fields (112) plus the first five 8-byte data-directory slots
 // (indices 0..4, so the Security directory at index 4 is physically present).
 #define OPTIONAL_HEADER_MIN_BYTES_FOR_SECURITY_DIRECTORY \
-  (OPTIONAL_HEADER_DATA_DIRECTORY_OFFSET + (IMAGE_DIRECTORY_ENTRY_SECURITY + 1) * DATA_DIRECTORY_ENTRY_BYTES)
+  (OPTIONAL_HEADER_DATA_DIRECTORY_OFFSET + (KEIKO_SECURITY_DIR_INDEX + 1) * DATA_DIRECTORY_ENTRY_BYTES)
 
 typedef struct {
   uint64_t overlay_start;
@@ -183,12 +190,17 @@ static int keiko_argument_allowed(const wchar_t *arg) {
 // Scans the whole argument vector. Returns 1 when argv[1..argc-1] are all accepted (and sets
 // *out_quiet to whether any quiet flag was present); returns 0 and points *out_bad at the first
 // rejected argument otherwise. argv[0] (the program path) is never inspected.
-static int keiko_scan_arguments(int argc, wchar_t **argv, int *out_quiet, const wchar_t **out_bad) {
+// Reports the 1-based POSITION of the first rejected argument, never a pointer to its text: the
+// value may carry a credential, a customer path, an endpoint, PII, or a whole legacy `/C:` payload,
+// and the diagnostic built from it lands in terminal transcripts and in the installation logs that
+// /quiet deployment systems retain. A position is enough to locate the argument in the caller's own
+// command line and is body-free (AGENTS.md §8). `*out_bad_index` is 0 when every argument passed.
+static int keiko_scan_arguments(int argc, wchar_t **argv, int *out_quiet, int *out_bad_index) {
   *out_quiet = 0;
-  *out_bad = NULL;
+  *out_bad_index = 0;
   for (int index = 1; index < argc; index++) {
     if (!keiko_argument_allowed(argv[index])) {
-      *out_bad = argv[index];
+      *out_bad_index = index;
       return 0;
     }
     *out_quiet = 1;
@@ -259,7 +271,7 @@ static int keiko_parse_overlay_bounds(const unsigned char *scan, size_t scan_len
   uint32_t certificate_offset = 0;
   uint32_t certificate_size = 0;
   size_t directory_offset = optional_header_offset + OPTIONAL_HEADER_DATA_DIRECTORY_OFFSET +
-                            (size_t)IMAGE_DIRECTORY_ENTRY_SECURITY * DATA_DIRECTORY_ENTRY_BYTES;
+                            (size_t)KEIKO_SECURITY_DIR_INDEX * DATA_DIRECTORY_ENTRY_BYTES;
   if (!keiko_read_u32(scan, scan_len, optional_header_offset + OPTIONAL_HEADER_SIZE_OF_HEADERS_OFFSET,
                       &size_of_headers) ||
       !keiko_read_u32(scan, scan_len, directory_offset, &certificate_offset) ||
@@ -480,20 +492,58 @@ static int keiko_read_exact(HANDLE file, unsigned char *buffer, DWORD length) {
   return 1;
 }
 
-// Recursively deletes a directory tree the bootstrap created (no reparse-point following: staging
-// is our own freshly-created tree). Each level allocates its OWN heap path buffers, so the deeply
-// nested extracted tree (node_modules) cannot overflow the stack the way 32 KiB per-level stack
-// buffers would, and the recursion never aliases a parent level's buffers.
+// Deletes ONE directory entry without ever following a link. A junction or directory symlink is
+// reported as DIRECTORY | REPARSE_POINT; recursing into it would delete the TARGET's contents, which
+// is why a reparse point of either kind is treated as a leaf here and removed as the link it is
+// (RemoveDirectoryW on a directory reparse point unlinks the junction and leaves its target
+// untouched). The attributes come from the directory scan that produced this entry, so the
+// link/real-directory decision is made from the same observation that named the child.
+static int keiko_remove_tree(const wchar_t *path);
+
+static int keiko_delete_entry(const wchar_t *child, DWORD attributes) {
+  if ((attributes & FILE_ATTRIBUTE_REPARSE_POINT) != 0) {
+    (void)SetFileAttributesW(child, FILE_ATTRIBUTE_NORMAL);
+    if ((attributes & FILE_ATTRIBUTE_DIRECTORY) != 0) {
+      return RemoveDirectoryW(child) != 0;
+    }
+    return DeleteFileW(child) != 0;
+  }
+  if ((attributes & FILE_ATTRIBUTE_DIRECTORY) != 0) {
+    return keiko_remove_tree(child);
+  }
+  (void)SetFileAttributesW(child, FILE_ATTRIBUTE_NORMAL);
+  return DeleteFileW(child) != 0;
+}
+
+// Recursively deletes a directory tree the bootstrap created. Reparse points are never followed
+// (see keiko_delete_entry): the staging tree is observable by any process running as the same user
+// for the duration of a multi-step install, so a racer that swaps a child for a junction must not be
+// able to steer this cleanup outside the staging root. Each level allocates its OWN heap path
+// buffers, so the deeply nested extracted tree (node_modules) cannot overflow the stack the way
+// 32 KiB per-level stack buffers would, and the recursion never aliases a parent level's buffers.
+// A directory that cannot be ENUMERATED is a failure, never silently "already empty": FindFirstFileW
+// returning INVALID_HANDLE_VALUE is only success when it reports ERROR_FILE_NOT_FOUND (a genuinely
+// empty directory); every other cause (a long path, a permission error, an I/O fault) is reported so
+// the real reason surfaces instead of resurfacing later as an unexplained RemoveDirectoryW failure.
 static int keiko_remove_tree(const wchar_t *path) {
+  DWORD self_attributes = GetFileAttributesW(path);
+  if (self_attributes == INVALID_FILE_ATTRIBUTES) {
+    return 0;
+  }
+  if ((self_attributes & FILE_ATTRIBUTE_REPARSE_POINT) != 0) {
+    // The root handed to us is itself a link (it was swapped, or a caller passed one): unlink it
+    // and stop. Descending would delete a tree we never created.
+    return RemoveDirectoryW(path) != 0;
+  }
   HANDLE heap = GetProcessHeap();
   wchar_t *pattern = (wchar_t *)HeapAlloc(heap, 0, KEIKO_PATH_CAP * sizeof(wchar_t));
   wchar_t *child = (wchar_t *)HeapAlloc(heap, 0, KEIKO_PATH_CAP * sizeof(wchar_t));
   int ok = 0;
   if (pattern != NULL && child != NULL &&
       _snwprintf_s(pattern, KEIKO_PATH_CAP, _TRUNCATE, L"%ls\\*", path) > 0) {
-    ok = 1;
     WIN32_FIND_DATAW entry;
     HANDLE find = FindFirstFileW(pattern, &entry);
+    ok = find != INVALID_HANDLE_VALUE || GetLastError() == ERROR_FILE_NOT_FOUND;
     if (find != INVALID_HANDLE_VALUE) {
       do {
         if (wcscmp(entry.cFileName, L".") == 0 || wcscmp(entry.cFileName, L"..") == 0) {
@@ -503,12 +553,8 @@ static int keiko_remove_tree(const wchar_t *path) {
           ok = 0;
           break;
         }
-        if ((entry.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0) {
-          ok = keiko_remove_tree(child); // the recursion allocates its own buffers, no aliasing
-        } else {
-          (void)SetFileAttributesW(child, FILE_ATTRIBUTE_NORMAL);
-          ok = DeleteFileW(child) != 0;
-        }
+        // The recursion allocates its own buffers, so no level aliases another's.
+        ok = keiko_delete_entry(child, entry.dwFileAttributes);
         if (!ok) {
           break;
         }
@@ -553,6 +599,61 @@ static int keiko_run_and_wait(const wchar_t *application, wchar_t *command_line)
   return exit_code == 0;
 }
 
+// Drains a child's stdout pipe WITHOUT ever blocking indefinitely, and returns the number of bytes
+// captured into `out` (always < cap, leaving room for the caller's NUL).
+//
+// A plain blocking ReadFile cannot be watchdogged: a child that wedges while holding stdout open
+// produces no bytes and never closes the pipe, so the read never returns and the process deadline
+// below it is unreachable — the installer hangs forever on a silently hung `portable resolve-root`.
+// This loop instead MULTIPLEXES the three things that can end the capture: bytes becoming available
+// (PeekNamedPipe), the child exiting (WaitForSingleObject with a short slice), and the deadline
+// elapsing (a monotonic GetTickCount64 comparison that is immune to wall-clock changes).
+//
+// Output past the cap keeps being drained into a throwaway buffer instead of stopping the loop: a
+// full pipe would block the child's next write until the deadline, turning a merely chatty child
+// into a 20-minute stall. Draining costs nothing and lets a chatty-but-healthy child finish.
+static int keiko_drain_pipe(HANDLE read_end, HANDLE child, char *out, int cap) {
+  int total = 0;
+  unsigned char discard[4096];
+  ULONGLONG deadline = GetTickCount64() + (ULONGLONG)KEIKO_CHILD_TIMEOUT_MS;
+  for (;;) {
+    // Checked on EVERY turn, not only when the pipe is idle: a child that produces output without
+    // end must hit the watchdog too, not just one that goes silent.
+    if (GetTickCount64() >= deadline) {
+      break; // Watchdog: the caller terminates the child and reports the step as failed.
+    }
+    DWORD available = 0;
+    if (!PeekNamedPipe(read_end, NULL, 0, NULL, &available, NULL)) {
+      break; // The write end is closed and the buffer is empty: EOF, the normal exit.
+    }
+    if (available == 0) {
+      // Nothing to read right now. If the child is gone, one more Peek settles whether it left
+      // buffered bytes behind; otherwise sleep on the process handle so a prompt exit is noticed
+      // immediately rather than after a fixed poll interval.
+      if (WaitForSingleObject(child, KEIKO_DRAIN_POLL_MS) == WAIT_OBJECT_0 &&
+          PeekNamedPipe(read_end, NULL, 0, NULL, &available, NULL) && available == 0) {
+        break;
+      }
+      continue;
+    }
+    DWORD read_bytes = 0;
+    if (total < cap - 1) {
+      DWORD want = (DWORD)(cap - 1 - total);
+      if (!ReadFile(read_end, out + total, available < want ? available : want, &read_bytes, NULL) ||
+          read_bytes == 0) {
+        break;
+      }
+      total += (int)read_bytes;
+    } else if (!ReadFile(read_end, discard, available < (DWORD)sizeof(discard) ? available
+                                                                              : (DWORD)sizeof(discard),
+                         &read_bytes, NULL) ||
+               read_bytes == 0) {
+      break;
+    }
+  }
+  return total;
+}
+
 // Runs an application capturing up to KEIKO_RESOLVE_OUTPUT_CAP bytes of its stdout (stderr stays on
 // this process's console). Returns 1 with the captured length only when the child exits 0.
 static int keiko_run_capture(const wchar_t *application, wchar_t *command_line, char *out,
@@ -587,29 +688,15 @@ static int keiko_run_capture(const wchar_t *application, wchar_t *command_line, 
     return 0;
   }
   (void)CloseHandle(write_end);
-  int total = 0;
-  unsigned char drain[4096];
-  for (;;) {
-    DWORD read_bytes = 0;
-    if (total < cap - 1) {
-      if (!ReadFile(read_end, out + total, (DWORD)(cap - 1 - total), &read_bytes, NULL) ||
-          read_bytes == 0) {
-        break;
-      }
-      total += (int)read_bytes;
-    } else if (!ReadFile(read_end, drain, (DWORD)sizeof(drain), &read_bytes, NULL) ||
-               read_bytes == 0) {
-      // Output exceeded the capture cap: keep draining into a throwaway buffer so the child never
-      // blocks writing to a full pipe (which would stall it until the watchdog fires) — stop only
-      // at EOF or a read error.
-      break;
-    }
-  }
+  int total = keiko_drain_pipe(read_end, process.hProcess, out, cap);
   (void)CloseHandle(read_end);
   DWORD exit_code = 1;
-  if (WaitForSingleObject(process.hProcess, (DWORD)KEIKO_CHILD_TIMEOUT_MS) != WAIT_OBJECT_0) {
+  // The drain loop above already observed the deadline, so this wait only collects a child that has
+  // finished (or is finishing) — it is not the watchdog. A child still alive here has blown the
+  // deadline or wedged after closing stdout, and is terminated rather than waited on for 20 minutes.
+  if (WaitForSingleObject(process.hProcess, KEIKO_CHILD_EXIT_GRACE_MS) != WAIT_OBJECT_0) {
     (void)TerminateProcess(process.hProcess, 1);
-    (void)WaitForSingleObject(process.hProcess, 5000);
+    (void)WaitForSingleObject(process.hProcess, KEIKO_CHILD_EXIT_GRACE_MS);
   } else {
     (void)GetExitCodeProcess(process.hProcess, &exit_code);
   }
@@ -625,49 +712,62 @@ static int keiko_run_capture(const wchar_t *application, wchar_t *command_line, 
 // copying it to the staging ZIP, then compare the digest and size to the baked constants.
 // ---------------------------------------------------------------------------------------------
 
-static int keiko_hash_matches_baked(HANDLE self, uint64_t payload_start, uint64_t payload_size,
-                                    const wchar_t *zip_path) {
-  if (payload_size != (uint64_t)KEIKO_SETUP_PAYLOAD_SIZE_BYTES) {
-    return 0;
-  }
-  HANDLE zip = CreateFileW(zip_path, GENERIC_WRITE, 0, NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL,
-                           NULL);
-  if (zip == INVALID_HANDLE_VALUE) {
-    return 0;
-  }
+// Copies the payload region to the staging ZIP while hashing it, and returns an EXIT CODE rather
+// than a boolean so the caller can tell the two very different failure classes apart:
+//
+//   KEIKO_EXIT_INTEGRITY — the bytes are not the bytes we baked (size or digest mismatch), or the
+//                          running image could not be read back. Remediation: download again.
+//   KEIKO_EXIT_STAGING   — the DESTINATION or a local resource failed: %TEMP% full or unwritable,
+//                          endpoint protection blocking the file, a write error, no memory, no
+//                          crypto provider. Nothing here is evidence of tampering, and telling an
+//                          operator to re-download a full disk sends them to the wrong fix.
+typedef enum {
+  KEIKO_STREAM_OK = 0,
+  KEIKO_STREAM_SOURCE_FAILED = 1, // the read side or the hash failed: the bytes are not vouched for
+  KEIKO_STREAM_SINK_FAILED = 2,   // the write side failed: a full or blocked destination volume
+  KEIKO_STREAM_RESOURCE_FAILED = 3 // no memory / no crypto provider: a local fault, not tampering
+} keiko_stream_status;
+
+// Streams `length` bytes from the CURRENT position of `source` through SHA-256, copying each chunk
+// to `sink` when one is supplied (INVALID_HANDLE_VALUE hashes without copying). Writes the lowercase
+// hex digest to `out_hex` on success. The status names WHICH side failed so callers can keep the
+// published exit-code contract honest instead of collapsing every fault into "package damaged".
+static keiko_stream_status keiko_stream_sha256(HANDLE source, uint64_t length, HANDLE sink,
+                                               char *out_hex) {
   BCRYPT_ALG_HANDLE algorithm = NULL;
   BCRYPT_HASH_HANDLE hash = NULL;
   unsigned char *chunk = NULL;
-  int ok = 0;
+  keiko_stream_status status = KEIKO_STREAM_RESOURCE_FAILED;
   if (BCryptOpenAlgorithmProvider(&algorithm, BCRYPT_SHA256_ALGORITHM, NULL, 0) == 0 &&
-      BCryptCreateHash(algorithm, &hash, NULL, 0, NULL, 0, 0) == 0 &&
-      keiko_seek(self, payload_start)) {
+      BCryptCreateHash(algorithm, &hash, NULL, 0, NULL, 0, 0) == 0) {
     chunk = (unsigned char *)HeapAlloc(GetProcessHeap(), 0, (SIZE_T)KEIKO_HASH_CHUNK_BYTES);
   }
   if (chunk != NULL) {
-    ok = 1;
-    uint64_t remaining = payload_size;
-    while (remaining > 0 && ok) {
+    status = KEIKO_STREAM_OK;
+    uint64_t remaining = length;
+    while (remaining > 0 && status == KEIKO_STREAM_OK) {
       DWORD want = remaining < (uint64_t)KEIKO_HASH_CHUNK_BYTES ? (DWORD)remaining
-                                                               : (DWORD)KEIKO_HASH_CHUNK_BYTES;
+                                                                : (DWORD)KEIKO_HASH_CHUNK_BYTES;
       DWORD read_bytes = 0;
       DWORD written = 0;
-      if (!ReadFile(self, chunk, want, &read_bytes, NULL) || read_bytes != want ||
-          BCryptHashData(hash, chunk, read_bytes, 0) != 0 ||
-          !WriteFile(zip, chunk, read_bytes, &written, NULL) || written != read_bytes) {
-        ok = 0;
-        break;
+      if (!ReadFile(source, chunk, want, &read_bytes, NULL) || read_bytes != want ||
+          BCryptHashData(hash, chunk, read_bytes, 0) != 0) {
+        status = KEIKO_STREAM_SOURCE_FAILED;
+      } else if (sink != INVALID_HANDLE_VALUE &&
+                 (!WriteFile(sink, chunk, read_bytes, &written, NULL) || written != read_bytes)) {
+        status = KEIKO_STREAM_SINK_FAILED;
+      } else {
+        remaining -= read_bytes;
       }
-      remaining -= read_bytes;
     }
   }
   unsigned char digest[KEIKO_SHA256_BYTES];
-  char computed_hex[KEIKO_SHA256_HEX_CHARS + 1];
-  if (ok && BCryptFinishHash(hash, digest, (ULONG)KEIKO_SHA256_BYTES, 0) == 0) {
-    keiko_bytes_to_hex(digest, KEIKO_SHA256_BYTES, computed_hex);
-    ok = keiko_hex_equal(computed_hex, KEIKO_SETUP_PAYLOAD_SHA256_HEX);
-  } else {
-    ok = 0;
+  if (status == KEIKO_STREAM_OK) {
+    if (BCryptFinishHash(hash, digest, (ULONG)KEIKO_SHA256_BYTES, 0) == 0) {
+      keiko_bytes_to_hex(digest, KEIKO_SHA256_BYTES, out_hex);
+    } else {
+      status = KEIKO_STREAM_RESOURCE_FAILED;
+    }
   }
   if (chunk != NULL) {
     (void)HeapFree(GetProcessHeap(), 0, chunk);
@@ -678,8 +778,66 @@ static int keiko_hash_matches_baked(HANDLE self, uint64_t payload_start, uint64_
   if (algorithm != NULL) {
     (void)BCryptCloseAlgorithmProvider(algorithm, 0);
   }
+  return status;
+}
+
+static int keiko_stage_verified_payload(HANDLE self, uint64_t payload_start, uint64_t payload_size,
+                                        const wchar_t *zip_path) {
+  if (payload_size != (uint64_t)KEIKO_SETUP_PAYLOAD_SIZE_BYTES) {
+    return KEIKO_EXIT_INTEGRITY;
+  }
+  HANDLE zip = CreateFileW(zip_path, GENERIC_WRITE, 0, NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL,
+                           NULL);
+  if (zip == INVALID_HANDLE_VALUE) {
+    return KEIKO_EXIT_STAGING;
+  }
+  int result = KEIKO_EXIT_INTEGRITY;
+  char computed_hex[KEIKO_SHA256_HEX_CHARS + 1];
+  if (keiko_seek(self, payload_start)) {
+    switch (keiko_stream_sha256(self, payload_size, zip, computed_hex)) {
+      case KEIKO_STREAM_OK:
+        result = keiko_hex_equal(computed_hex, KEIKO_SETUP_PAYLOAD_SHA256_HEX) ? KEIKO_EXIT_OK
+                                                                               : KEIKO_EXIT_INTEGRITY;
+        break;
+      case KEIKO_STREAM_SOURCE_FAILED:
+        result = KEIKO_EXIT_INTEGRITY;
+        break;
+      default:
+        result = KEIKO_EXIT_STAGING;
+        break;
+    }
+  }
   (void)CloseHandle(zip);
-  return ok;
+  return result;
+}
+
+// Reopens the staged ZIP for reading with write and delete DENIED to every other process, proves the
+// bytes now on disk are still the bytes that were staged, and returns the handle STILL OPEN.
+//
+// keiko_stage_verified_payload hashes the payload as it streams out of the running image, so what it
+// proves is a property of the SOURCE. Between that write and tar.exe opening the ZIP by name, another
+// process running as the same user could replace the file, and the bootstrap would unpack bytes
+// nobody hashed. Re-hashing through this handle proves the on-disk bytes, and keeping the handle open
+// for the whole extraction closes the window behind it: replacing, renaming or deleting the file all
+// require a sharing mode this handle refuses. tar.exe still opens it for reading, which is the only
+// access it needs and the only one FILE_SHARE_READ grants.
+static HANDLE keiko_open_staged_zip(const wchar_t *zip_path) {
+  HANDLE zip = CreateFileW(zip_path, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING,
+                           FILE_ATTRIBUTE_NORMAL, NULL);
+  if (zip == INVALID_HANDLE_VALUE) {
+    return INVALID_HANDLE_VALUE;
+  }
+  LARGE_INTEGER size;
+  char computed_hex[KEIKO_SHA256_HEX_CHARS + 1];
+  if (GetFileSizeEx(zip, &size) &&
+      (uint64_t)size.QuadPart == (uint64_t)KEIKO_SETUP_PAYLOAD_SIZE_BYTES && keiko_seek(zip, 0) &&
+      keiko_stream_sha256(zip, (uint64_t)size.QuadPart, INVALID_HANDLE_VALUE, computed_hex) ==
+          KEIKO_STREAM_OK &&
+      keiko_hex_equal(computed_hex, KEIKO_SETUP_PAYLOAD_SHA256_HEX)) {
+    return zip;
+  }
+  (void)CloseHandle(zip);
+  return INVALID_HANDLE_VALUE;
 }
 
 // Locates + verifies the overlay in the running image and extracts the payload to the staging ZIP.
@@ -719,9 +877,9 @@ static int keiko_extract_verified_payload(keiko_setup_buffers *b) {
                             keiko_read_exact(self, padding_bytes, (DWORD)padding) &&
                             keiko_all_zero(padding_bytes, (size_t)padding)));
       if (region_ok) {
-        result = keiko_hash_matches_baked(self, payload_start, payload_size, b->zip_path)
-                     ? KEIKO_EXIT_OK
-                     : KEIKO_EXIT_INTEGRITY;
+        // Propagates the staged result verbatim: OK, INTEGRITY (the bytes are wrong) or STAGING
+        // (the temp volume is), so the exit code names the failure the operator actually has.
+        result = keiko_stage_verified_payload(self, payload_start, payload_size, b->zip_path);
       } else {
         result = KEIKO_EXIT_INTEGRITY;
       }
@@ -820,17 +978,38 @@ static int keiko_run_launch_step(keiko_setup_buffers *b) {
          keiko_run_and_wait(managed_node, b->command);
 }
 
+// Rewrites an absolute path into its extended-length (`\\?\`) form, which lifts the MAX_PATH limit
+// on FindFirstFileW / DeleteFileW / RemoveDirectoryW without depending on the machine's
+// LongPathsEnabled policy or an application manifest. The extracted tree is npm's `node_modules`,
+// which nests far past 260 characters under a staging prefix that is already ~90 characters — and a
+// cleanup that fails there turns a SUCCESSFUL install into exit 19, which every /quiet deployment
+// records as a failed install. A UNC temp directory takes the `\\?\UNC\server\share` spelling. A
+// path that is already prefixed, or too long to prefix, is copied through unchanged.
+static int keiko_extended_path(const wchar_t *path, wchar_t *out, size_t cap) {
+  if (wcsncmp(path, L"\\\\?\\", 4) == 0) {
+    return _snwprintf_s(out, cap, _TRUNCATE, L"%ls", path) > 0;
+  }
+  if (wcsncmp(path, L"\\\\", 2) == 0) {
+    return _snwprintf_s(out, cap, _TRUNCATE, L"\\\\?\\UNC\\%ls", path + 2) > 0;
+  }
+  return _snwprintf_s(out, cap, _TRUNCATE, L"\\\\?\\%ls", path) > 0;
+}
+
 static int keiko_cleanup_staging(const keiko_setup_buffers *b) {
+  wchar_t staging[KEIKO_PATH_CAP];
+  if (!keiko_extended_path(b->staging_dir, staging, KEIKO_PATH_CAP)) {
+    return 0;
+  }
   for (int attempt = 0; attempt < 10; attempt++) {
-    if (GetFileAttributesW(b->staging_dir) == INVALID_FILE_ATTRIBUTES) {
+    if (GetFileAttributesW(staging) == INVALID_FILE_ATTRIBUTES) {
       return 1;
     }
-    if (keiko_remove_tree(b->staging_dir)) {
+    if (keiko_remove_tree(staging)) {
       return 1;
     }
     Sleep(1000);
   }
-  return GetFileAttributesW(b->staging_dir) == INVALID_FILE_ATTRIBUTES;
+  return GetFileAttributesW(staging) == INVALID_FILE_ATTRIBUTES;
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -845,13 +1024,29 @@ static int keiko_run_setup(keiko_setup_buffers *b) {
     return KEIKO_EXIT_STAGING;
   }
   int integrity = keiko_extract_verified_payload(b);
+  if (integrity == KEIKO_EXIT_STAGING) {
+    // A full or blocked temp volume is not evidence of tampering: sending an operator to re-download
+    // a ~130 MB installer because their disk is full is the wrong remediation entirely.
+    fwprintf(stderr, L"Keiko setup could not write to its temporary folder. Free space in %%TEMP%% "
+                     L"(or allow the installer in your endpoint protection) and run setup again.\n");
+    return integrity;
+  }
   if (integrity != KEIKO_EXIT_OK) {
     fwprintf(stderr, L"The setup package is damaged. Download keiko-windows-x64-setup.exe again.\n");
     return integrity;
   }
 
   fwprintf(stdout, L"[2/6] Extracting Keiko to a temporary staging folder...\n");
-  if (!keiko_extract_archive(b)) {
+  // Hold the staged ZIP open, write- and delete-denied, for the whole extraction, so the bytes
+  // tar.exe reads are provably the bytes that were just verified (see keiko_open_staged_zip).
+  HANDLE zip_guard = keiko_open_staged_zip(b->zip_path);
+  if (zip_guard == INVALID_HANDLE_VALUE) {
+    fwprintf(stderr, L"The setup package is damaged. Download keiko-windows-x64-setup.exe again.\n");
+    return KEIKO_EXIT_INTEGRITY;
+  }
+  int extracted = keiko_extract_archive(b);
+  (void)CloseHandle(zip_guard);
+  if (!extracted) {
     fwprintf(stderr, L"Keiko setup could not unpack the embedded package.\n");
     return KEIKO_EXIT_EXTRACTION;
   }
@@ -911,17 +1106,28 @@ static void keiko_pace_after(int exit_code, int quiet) {
 }
 
 int wmain(int argc, wchar_t **argv) {
-  // Harden the loader before anything else runs: an installer is routinely launched from Downloads,
-  // so a same-directory or CWD DLL plant must never be preferred over System32.
+  // Constrain every RUNTIME library load to System32 and drop the current directory from the search
+  // order. These two calls affect subsequent LoadLibraryEx-style resolution only; this program
+  // performs none, so what they actually buy is defence in depth against a future load and against
+  // one performed by a DLL we import. They CANNOT cover this binary's own implicit imports
+  // (bcrypt.dll, and the CRT unless linked /MT), which the loader has already resolved before the
+  // first instruction of wmain runs — the application directory is searched first for any implicit
+  // import that is not a KnownDLL. That gap, which is exactly the launched-from-Downloads case, is
+  // closed on the LINK line instead: /DEPENDENTLOADFLAG:0x800 (LOAD_LIBRARY_SEARCH_SYSTEM32) applies
+  // to statically-linked imports, and /MT removes the plantable CRT DLLs altogether. Both are set by
+  // compileSetupBootstrap in scripts/build-windows-portable-setup.mjs.
   (void)SetDefaultDllDirectories(LOAD_LIBRARY_SEARCH_SYSTEM32);
   (void)SetDllDirectoryW(L"");
 
   // SECURITY INVARIANT 1: the closed argument allowlist, enforced before any side effect.
   int quiet = 0;
-  const wchar_t *bad_argument = NULL;
-  if (!keiko_scan_arguments(argc, argv, &quiet, &bad_argument)) {
-    fwprintf(stderr, L"Keiko setup: unsupported argument %ls\n",
-             bad_argument != NULL ? bad_argument : L"");
+  int bad_argument_index = 0;
+  if (!keiko_scan_arguments(argc, argv, &quiet, &bad_argument_index)) {
+    // The rejected VALUE is never echoed — see keiko_scan_arguments. Position plus the closed
+    // allowlist is everything an operator needs to correct the invocation.
+    fwprintf(stderr,
+             L"Keiko setup: unsupported argument at position %d. Supported arguments: /quiet, /Q.\n",
+             bad_argument_index);
     return KEIKO_EXIT_BAD_ARGUMENT;
   }
 

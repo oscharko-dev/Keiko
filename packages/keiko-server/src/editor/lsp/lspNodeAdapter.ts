@@ -11,15 +11,16 @@
 // only an ephemeral empty HOME (so the server cannot read or write the operator's real home) and the
 // process-group spawn/kill wiring. As defense-in-depth it asserts the executable is an absolute path,
 // so a future DIRECT caller that bypassed the manager's resolution cannot spawn a relative/bare name.
-// POSIX spawns detached and kills the whole process group; Windows kills the single child.
+// POSIX spawns detached and kills the whole process group; Windows bounds the process TREE with the
+// shared taskkill primitive, because a wrapped `.cmd` server runs as a grandchild of cmd.exe (#3350).
 
 import { spawn } from "node:child_process";
-import type { ChildProcess } from "node:child_process";
+import type { ChildProcess, SpawnOptionsWithoutStdio } from "node:child_process";
 import { mkdtempSync, rmSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { extname, isAbsolute, join } from "node:path";
-import { isCommandAllowed } from "@oscharko-dev/keiko-tools";
-import type { CommandRule } from "@oscharko-dev/keiko-tools";
+import { isCommandAllowed, nodeWindowsTreeKill } from "@oscharko-dev/keiko-tools";
+import type { CommandRule, WindowsShellInvocationOptions } from "@oscharko-dev/keiko-tools";
 import type { WorkspaceInfo } from "@oscharko-dev/keiko-workspace";
 import type { LspProcessErrorCode } from "@oscharko-dev/keiko-contracts";
 import {
@@ -35,7 +36,54 @@ import {
   type KillScheduler as SharedKillScheduler,
   type WorkspaceExternalExecutable as SharedWorkspaceExternalExecutable,
 } from "../processHardening.js";
+import { UNKNOWN_CORRELATION_ID } from "../../correlation.js";
+import { processServerLogSink } from "../../process-log-sink.js";
 import type { LspSpawnHandle } from "./lspTransport.js";
+
+// AGENTS.md §8 Rule 1 (PR reviewer finding): this adapter's two platform-dependent decision
+// branches — whether the win32 hardened cmd.exe wrapper engaged at spawn (issue #3350) and
+// whether the win32 taskkill.exe tree-kill engaged on termination (same defect/fix as runCommand's
+// killGroup, exec.ts) — shipped with no activity-log evidence, so a support bundle could not
+// reconstruct which path a hung or failed `.cmd` language server actually took. This module has no
+// injected log port of its own (it is a low-level node:child_process adapter the manager depends
+// on structurally, per the file header), so — exactly like keiko-tools' own logging-agnostic
+// posture — it reaches directly for the SAME process-wide activity-log sink every other server
+// composition site uses (processServerLogSink()) rather than growing a second logging mechanism or
+// widening `LspSpawnFn`'s public signature. No request-scoped correlation id is available this
+// deep in the spawn boundary, so every line carries UNKNOWN_CORRELATION_ID.
+function logLspSpawnCompleted(windowsWrapperEngaged: boolean, pid: number | undefined): void {
+  processServerLogSink().write({
+    category: "diagnostic",
+    op: "lsp.spawn.completed",
+    correlationId: UNKNOWN_CORRELATION_ID,
+    extra: { windowsWrapperEngaged, platform: process.platform, pid },
+  });
+}
+
+function logLspSpawnFailed(code: LspProcessErrorCode): void {
+  processServerLogSink().write({
+    level: "error",
+    category: "diagnostic",
+    op: "lsp.spawn.failed",
+    correlationId: UNKNOWN_CORRELATION_ID,
+    errorKind: code,
+    extra: { platform: process.platform },
+  });
+}
+
+// Fires on every kill() call, including the SIGTERM-then-SIGKILL escalation `escalateKill` drives —
+// deliberately not de-duplicated to a single line per termination (unlike exec.ts's
+// reportTermination, which has a distinct "one trigger" call site to hook): each line is still an
+// honest report of one real invocation, and de-duplicating here would mean threading extra state
+// through wrapChild's closure for a cosmetic difference only.
+function logLspTreeKillDecision(pid: number): void {
+  processServerLogSink().write({
+    category: "diagnostic",
+    op: "lsp.process.terminated",
+    correlationId: UNKNOWN_CORRELATION_ID,
+    extra: { windowsTreeKillAttempted: process.platform === "win32", pid },
+  });
+}
 
 // Typed failure carrying only a content-free `LspProcessErrorCode` — never a path, server output, or
 // stack-derived message beyond the code itself (ADR-0069 D6).
@@ -150,8 +198,14 @@ export function createApprovedExecutablePath(
 }
 
 // POSIX group kill: signals the whole process group (`-pid`) so the LSP server's grandchildren are
-// included (ADR-0069 D2). Windows has no process groups here, so the single child is killed. A failed
-// kill (process already gone) is swallowed; the escalation timer still owns the SIGKILL fallback.
+// included (ADR-0069 D2). Windows has no process groups here, so the tree is bounded with the shared
+// taskkill primitive instead: since issue #3350 routed a resolved `.cmd` language server through the
+// hardened cmd.exe wrapper, the immediate child is cmd.exe and the SERVER (node.exe running
+// typescript-language-server) is a grandchild that `child.kill()` cannot reach — it would survive
+// dispose, holding its stdio handles and the workspace files it indexed. The same defect and the same
+// fix as runCommand's killGroup (keiko-tools exec.ts); the primitive is imported rather than
+// re-derived so both spawn boundaries terminate identically. A failed kill (process already gone) is
+// swallowed; the escalation timer still owns the SIGKILL fallback.
 function nodeGroupKill(pid: number, child: KillableChild, signal: NodeJS.Signals): void {
   if (process.platform !== "win32") {
     try {
@@ -160,6 +214,8 @@ function nodeGroupKill(pid: number, child: KillableChild, signal: NodeJS.Signals
     } catch {
       // Group may already be gone; fall through to a direct child kill.
     }
+  } else {
+    nodeWindowsTreeKill(pid, process.env);
   }
   try {
     child.kill(signal);
@@ -225,6 +281,7 @@ function wrapChild(child: ChildProcess): ReturnType<LspSpawnFn> {
         safeKill(child, signal);
         return;
       }
+      logLspTreeKillDecision(pid);
       nodeGroupKill(pid, child, signal);
     },
     onExit: (callback): void => {
@@ -243,25 +300,57 @@ function wrapChild(child: ChildProcess): ReturnType<LspSpawnFn> {
 // this adapter substitutes an ephemeral HOME/USERPROFILE and spawns detached on POSIX so the manager
 // can group-kill grandchildren. As defense-in-depth (FIX 8) it rejects a non-absolute executable, so a
 // future caller that bypassed `resolveExecutableOutsideWorkspace` cannot spawn a bare/relative name.
+export interface LspSpawnPlan {
+  readonly command: string;
+  readonly args: readonly string[];
+  readonly options: SpawnOptionsWithoutStdio;
+}
+
+// Builds EXACTLY what defaultLspSpawnFn hands to `spawn`, as a pure function so the Windows branch is
+// reachable from a test on any host (issue #3350). Without this seam the `.cmd` wrapping below is
+// unpinned: `resolveWindowsSpawnInvocation` and the `windowsVerbatimArguments` spread could both be
+// deleted and every LSP test would stay green, because they all inject `deps.spawn` and bypass this
+// adapter entirely — silently reintroducing EINVAL for npm-installed `.cmd` language servers
+// (typescript-language-server, pyright, bash-language-server).
+export function buildLspSpawnPlan(
+  executable: string,
+  args: readonly string[],
+  childEnv: NodeJS.ProcessEnv,
+  cwd: string,
+  opts?: WindowsShellInvocationOptions,
+): LspSpawnPlan {
+  const platform = opts?.platform ?? process.platform;
+  // A resolved `.cmd`/`.bat` language server (routine on Windows for npm-installed servers) cannot be
+  // spawned with shell:false without EINVAL; the hardened cmd.exe wrapper is a no-op for every other
+  // resolved path and on every other platform.
+  const invocation = resolveWindowsSpawnInvocation(executable, args, opts);
+  return {
+    command: invocation.command,
+    args: [...invocation.args],
+    options: {
+      cwd,
+      env: childEnv,
+      stdio: ["pipe", "pipe", "pipe"],
+      // POSIX spawns detached so the manager can group-kill grandchildren (ADR-0069 D2); Windows has
+      // no process groups here.
+      detached: platform !== "win32",
+      windowsHide: true,
+      ...(invocation.windowsVerbatimArguments ? { windowsVerbatimArguments: true } : {}),
+    },
+  };
+}
+
 export const defaultLspSpawnFn: LspSpawnFn = (executable, args, env, cwd) => {
   if (!isAbsolute(executable)) {
+    logLspSpawnFailed("EXECUTABLE_NOT_FOUND");
     throw new LspProcessError("EXECUTABLE_NOT_FOUND");
   }
   const home = createEphemeralHome();
   const childEnv = { ...env, HOME: home.path, USERPROFILE: home.path };
-  // A resolved `.cmd`/`.bat` language server (routine on Windows for npm-installed servers such as
-  // typescript-language-server) cannot be spawned with shell:false without EINVAL (issue #3350 /
-  // Node CVE-2024-27980); the hardened cmd.exe wrapper is a no-op for every other resolved path.
-  const invocation = resolveWindowsSpawnInvocation(executable, args);
-  const child = spawn(invocation.command, [...invocation.args], {
-    cwd,
-    env: childEnv,
-    stdio: ["pipe", "pipe", "pipe"],
-    detached: process.platform !== "win32",
-    windowsHide: true,
-    ...(invocation.windowsVerbatimArguments ? { windowsVerbatimArguments: true } : {}),
-  });
+  const plan = buildLspSpawnPlan(executable, args, childEnv, cwd);
+  const child = spawn(plan.command, [...plan.args], plan.options);
   const wrapped = wrapChild(child);
+  logLspSpawnCompleted(plan.options.windowsVerbatimArguments === true, wrapped.pid);
   wrapped.onExit(() => {
     home.cleanup();
   });

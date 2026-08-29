@@ -36,7 +36,7 @@ import {
   isCommandAllowed,
 } from "./sandbox.js";
 import type { CommandResult, CommandRule, SandboxAttestation, SandboxPolicy } from "./types.js";
-import { buildWindowsShellInvocation } from "./windows-shell.js";
+import { buildWindowsShellInvocation, resolveSystemBinaryPath } from "./windows-shell.js";
 
 export interface SpawnOptions {
   readonly cwd: string;
@@ -63,6 +63,11 @@ export interface ExecutableResolverDeps {
 }
 
 export type ExecutableResolver = (command: string, deps: ExecutableResolverDeps) => string;
+
+// Bounds the WHOLE Windows process tree rooted at `pid` (see killGroup below for why the immediate
+// child alone is not enough). Injectable so tests can assert the tree-kill decision deterministically
+// without spawning a real process tree on a non-Windows host; defaults to nodeWindowsTreeKill.
+export type WindowsTreeKill = (pid: number, processEnv: NodeJS.ProcessEnv) => void;
 
 export const nodeSpawnFn: SpawnFn = (command, args, options) =>
   nodeSpawn(command, [...args], options);
@@ -101,6 +106,33 @@ export interface RunCommandDeps {
   // force a backend deterministically; they default to probing the real host.
   readonly sandboxAvailability?: BackendAvailability | undefined;
   readonly platform?: NodeJS.Platform | undefined;
+  // Bounds the Windows process tree on termination (taskkill /T /F) so a wrapped `.cmd` target's
+  // grandchild — e.g. node.exe running npm under cmd.exe (issue #3350, ADR-0006 D5) — cannot
+  // survive timeout/abort. Defaults to nodeWindowsTreeKill; never consulted on POSIX. Injectable
+  // so tests can assert the tree-kill decision without a real Windows host.
+  readonly killWindowsTree?: WindowsTreeKill | undefined;
+}
+
+// Body-free evidence of a termination decision, handed to the optional `onTerminated` seam below.
+// keiko-tools has no injected log port of its own — and must not grow one; ADR-0019 keeps the
+// dependency direction one-way, keiko-server -> keiko-tools, never the reverse — so this callback
+// seam, not a new logging mechanism, is how a platform-dependent decision branch (in particular
+// whether the win32 taskkill.exe tree-kill path below was engaged, and whether it completed
+// without throwing) becomes observable to a caller that DOES own a log port. Mirrors the existing
+// `onSpawn` seam immediately below: optional, never the command text/args/cwd/env/output.
+export type CommandTerminationReason = "timeout" | "abort" | "output-cap" | "spawn-callback-error";
+
+export interface CommandTerminationEvidence {
+  readonly reason: CommandTerminationReason;
+  readonly pid: number;
+  // True only once killGroup reaches the win32 tree-kill step below — never on POSIX, where
+  // signalling the process group alone is sufficient (see killGroup).
+  readonly windowsTreeKillAttempted: boolean;
+  // True when the (attempted) tree-kill invocation ran without the caller having to swallow a
+  // synchronous throw from it; always true when windowsTreeKillAttempted is false. An asynchronous
+  // spawn failure (e.g. a stripped-down image missing taskkill.exe) is already swallowed inside
+  // nodeWindowsTreeKill itself (see its own doc comment) and is therefore not observable here.
+  readonly windowsTreeKillSucceeded: boolean;
 }
 
 export interface RunCommandInput {
@@ -110,25 +142,106 @@ export interface RunCommandInput {
   readonly timeoutMs: number | undefined;
   readonly signal: AbortSignal;
   readonly onSpawn?: ((pid: number) => void) | undefined;
+  // Fires once per termination trigger (never on a clean exit), with body-free evidence only.
+  // Optional; a throwing callback must never break termination — see reportTermination below,
+  // which holds the same swallow-and-continue contract killGroup already holds for a misbehaving
+  // killWindowsTree.
+  readonly onTerminated?: ((evidence: CommandTerminationEvidence) => void) | undefined;
 }
 
 const POSIX = process.platform !== "win32";
 
-// Kills the whole process group on POSIX (negative pid) so orphaned grandchildren die too;
-// on Windows, best-effort child.kill() (a tree-kill needs a dependency we cannot add).
-function killGroup(child: ChildProcess, sig: NodeJS.Signals): void {
+// The taskkill.exe command/args for bounding a Windows process tree rooted at `pid`. Pure (no
+// spawn) so the validated path resolution is unit-testable without touching child_process.
+// `resolveSystemBinaryPath` is the SAME validated, never-from-PATH resolution the cmd.exe wrapper
+// uses (windows-shell.ts) — one implementation, so taskkill.exe cannot end up less trusted than the
+// binary it is terminating. It THROWS on a hostile or malformed SystemRoot/WINDIR rather than
+// silently substituting a default; `nodeWindowsTreeKill` below owns turning that into a best-effort
+// no-op, because termination must stay idempotent.
+export function windowsTaskkillInvocation(
+  pid: number,
+  processEnv: NodeJS.ProcessEnv,
+): { readonly command: string; readonly args: readonly string[] } {
+  return {
+    command: resolveSystemBinaryPath("taskkill.exe", processEnv),
+    args: ["/PID", String(pid), "/T", "/F"],
+  };
+}
+
+// Bounds the WHOLE Windows process tree rooted at `pid`, not just the immediate child. Before
+// issue #3350's cmd.exe hardening, a `.cmd` target never spawned on win32 (Node CVE-2024-27980
+// raised EINVAL), so the immediate child WAS the resolved target. Now the immediate child is
+// always `cmd.exe` and the real work — e.g. `node.exe` running npm — is a grandchild that
+// `child.kill()` cannot reach (ADR-0006 D5). `taskkill.exe` is an OS binary, resolved the same
+// validated, never-PATH way cmd.exe is, so no new dependency is needed. Must never throw: a
+// tree-kill failure (the pid already exited, or taskkill.exe is missing on a stripped-down image)
+// must leave termination idempotent, matching killGroup's own contract below.
+export const nodeWindowsTreeKill: WindowsTreeKill = (pid, processEnv) => {
+  try {
+    // Inside the try on purpose: resolveSystemBinaryPath fails CLOSED on an untrusted SystemRoot,
+    // and a hostile environment must not be able to turn termination into a thrown exception.
+    const { command, args } = windowsTaskkillInvocation(pid, processEnv);
+    const child = nodeSpawn(command, args, { stdio: "ignore", windowsHide: true });
+    // An unhandled 'error' event (e.g. ENOENT if taskkill.exe is missing) throws on the
+    // EventEmitter itself; this listener keeps a spawn failure best-effort instead of crashing
+    // the host process. The immediate child is still signalled via child.kill() in killGroup.
+    child.on("error", () => undefined);
+  } catch {
+    // Synchronous spawn failure: swallow for the same reason killGroup swallows ESRCH below.
+  }
+};
+
+interface KillGroupDeps {
+  readonly platform: NodeJS.Platform;
+  readonly processEnv: NodeJS.ProcessEnv;
+  readonly killWindowsTree: WindowsTreeKill;
+}
+
+// What killGroup actually did about the win32 tree-kill step, so terminate() can hand body-free
+// evidence to the optional onTerminated seam without re-deriving the platform/pid decision a
+// second time. Always { attempted: false, succeeded: true } on POSIX and when child.pid is
+// already unknown (nothing to signal at all).
+interface WindowsTreeKillOutcome {
+  readonly attempted: boolean;
+  readonly succeeded: boolean;
+}
+
+const TREE_KILL_NOT_ATTEMPTED: WindowsTreeKillOutcome = { attempted: false, succeeded: true };
+
+// Kills the whole process group on POSIX (negative pid) so orphaned grandchildren die too. On
+// Windows, `child.kill()` still reaches only the immediate child (cmd.exe for a wrapped `.cmd`
+// target — issue #3350), so `killWindowsTree` additionally bounds the whole tree via taskkill.
+// Both branches are best-effort and swallow their own failures: termination must stay idempotent
+// and must never throw, including when an injected `killWindowsTree` misbehaves.
+function killGroup(
+  child: ChildProcess,
+  sig: NodeJS.Signals,
+  deps: KillGroupDeps,
+): WindowsTreeKillOutcome {
   const pid = child.pid;
   if (pid === undefined) {
-    return;
+    return TREE_KILL_NOT_ATTEMPTED;
   }
+  const posix = deps.platform !== "win32";
   try {
-    if (POSIX) {
+    if (posix) {
       process.kill(-pid, sig);
     } else {
       child.kill(sig);
     }
   } catch {
     // The child already exited; nothing to signal. Swallowing here keeps termination idempotent.
+  }
+  if (posix) {
+    return TREE_KILL_NOT_ATTEMPTED;
+  }
+  try {
+    deps.killWindowsTree(pid, deps.processEnv);
+    return { attempted: true, succeeded: true };
+  } catch {
+    // Never let a misbehaving tree-kill implementation propagate — see the WindowsTreeKill
+    // contract above.
+    return { attempted: true, succeeded: false };
   }
 }
 
@@ -444,27 +557,68 @@ function cleanup(state: RunState, signal: AbortSignal): void {
   }
 }
 
+// Reports ONE termination decision to the optional onTerminated seam — never on a clean exit,
+// since every caller of terminate() is itself a termination trigger. Fires from the initial
+// SIGTERM step only, not the later SIGKILL escalation in terminate() below: the win32 tree-kill
+// decision (attempted/succeeded) is the same shape on both steps, so one line already answers
+// "did the wrapper engage". A callback failure must never break termination — the same
+// swallow-and-continue contract killGroup itself already holds for a misbehaving killWindowsTree.
+function reportTermination(
+  input: RunCommandInput,
+  reason: CommandTerminationReason,
+  pid: number | undefined,
+  outcome: WindowsTreeKillOutcome,
+): void {
+  if (pid === undefined || input.onTerminated === undefined) {
+    return;
+  }
+  try {
+    input.onTerminated({
+      reason,
+      pid,
+      windowsTreeKillAttempted: outcome.attempted,
+      windowsTreeKillSucceeded: outcome.succeeded,
+    });
+  } catch {
+    // See the contract above: an evidence callback failure must never break termination.
+  }
+}
+
 // Escalates from SIGTERM to SIGKILL after the grace period so a child ignoring SIGTERM is still
-// guaranteed to terminate within terminationGraceMs of the trigger.
-function terminate(child: ChildProcess, policy: SandboxPolicy, state: RunState): void {
-  killGroup(child, "SIGTERM");
+// guaranteed to terminate within terminationGraceMs of the trigger. On win32 this also bounds the
+// descendant process tree (killGroup → killWindowsTree) on every escalation step.
+function terminate(
+  child: ChildProcess,
+  deps: RunCommandDeps,
+  state: RunState,
+  input: RunCommandInput,
+  reason: CommandTerminationReason,
+): void {
+  const killDeps: KillGroupDeps = {
+    platform: deps.platform ?? process.platform,
+    processEnv: deps.processEnv,
+    killWindowsTree: deps.killWindowsTree ?? nodeWindowsTreeKill,
+  };
+  const outcome = killGroup(child, "SIGTERM", killDeps);
+  reportTermination(input, reason, child.pid, outcome);
   state.graceTimer = setTimeout(() => {
-    killGroup(child, "SIGKILL");
-  }, policy.terminationGraceMs);
+    killGroup(child, "SIGKILL", killDeps);
+  }, deps.policy.terminationGraceMs);
   state.graceTimer.unref();
 }
 
 function wireStreams(
   child: ChildProcess,
   buffers: Buffers,
-  policy: SandboxPolicy,
+  deps: RunCommandDeps,
   state: RunState,
+  input: RunCommandInput,
 ): void {
   const onData =
     (sink: Buffer[]) =>
     (chunk: Buffer): void => {
-      if (appendCapped(buffers, sink, chunk, policy.maxOutputBytes)) {
-        terminate(child, policy, state); // output flood → kill
+      if (appendCapped(buffers, sink, chunk, deps.policy.maxOutputBytes)) {
+        terminate(child, deps, state, input, "output-cap"); // output flood → kill
       }
     };
   child.stdout?.on("data", onData(buffers.out));
@@ -535,11 +689,11 @@ function armTimersAndAbort(ctx: ExecContext): void {
   const ms = timeoutOf(ctx);
   ctx.state.timer = setTimeout(() => {
     ctx.state.timedOut = true;
-    terminate(ctx.child, ctx.deps.policy, ctx.state);
+    terminate(ctx.child, ctx.deps, ctx.state, ctx.input, "timeout");
   }, ms);
   ctx.state.timer.unref();
   const onAbort = (): void => {
-    terminate(ctx.child, ctx.deps.policy, ctx.state);
+    terminate(ctx.child, ctx.deps, ctx.state, ctx.input, "abort");
   };
   ctx.state.onAbort = onAbort;
   if (ctx.input.signal.aborted) {
@@ -644,13 +798,13 @@ function spawnChild(
 
 function runSpawnedChild(ctx: ExecContext): Promise<CommandResult> {
   return new Promise<CommandResult>((resolve, reject) => {
-    wireStreams(ctx.child, ctx.buffers, ctx.deps.policy, ctx.state);
+    wireStreams(ctx.child, ctx.buffers, ctx.deps, ctx.state, ctx.input);
     settleOnClose(ctx, resolve, reject);
     try {
       if (ctx.child.pid !== undefined) ctx.input.onSpawn?.(ctx.child.pid);
     } catch (error) {
       ctx.state.spawnCallbackError = asError(error, "spawn callback failed");
-      terminate(ctx.child, ctx.deps.policy, ctx.state);
+      terminate(ctx.child, ctx.deps, ctx.state, ctx.input, "spawn-callback-error");
       return;
     }
     armTimersAndAbort(ctx);

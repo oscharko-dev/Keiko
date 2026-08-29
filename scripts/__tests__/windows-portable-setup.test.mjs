@@ -1,6 +1,7 @@
 import { Buffer } from "node:buffer";
 import { createHash } from "node:crypto";
 import {
+  existsSync,
   linkSync,
   mkdirSync,
   mkdtempSync,
@@ -376,13 +377,47 @@ describe("windows portable setup companion", () => {
       const stubPath = join(dir, "stub.exe");
       const archivePath = join(dir, "keiko-windows-x64.zip");
       const outputPath = join(dir, WINDOWS_PORTABLE_SETUP_ASSET_NAME);
+      const archiveBytes = Buffer.from("keiko portable archive fixture bytes");
       writeFileSync(stubPath, buildValidStub());
-      writeFileSync(archivePath, "keiko portable archive fixture bytes");
+      writeFileSync(archivePath, archiveBytes);
 
-      const result = await appendSetupOverlay(stubPath, archivePath, outputPath);
+      const result = await appendSetupOverlay(stubPath, archivePath, outputPath, {
+        payloadSha256Hex: sha256Hex(archiveBytes),
+        payloadSizeBytes: archiveBytes.byteLength,
+      });
 
       expect(result).toBe(outputPath);
       expect(isPortableExecutableFile(outputPath)).toBe(true);
+      await expect(verifyWindowsPortableSetup(outputPath, archivePath)).resolves.toBeUndefined();
+    });
+
+    // P2 finding (PR #3354): verification used to `readFileSync` the whole setup companion into
+    // one Buffer, so a valid artifact near the documented 2 GiB bound needed a multi-gigabyte
+    // contiguous allocation to verify. The fix streams the payload region instead. A 2 GiB fixture
+    // is impractical here, so this simulates the streaming BOUNDARY the same way: a payload well
+    // past Node's default stream highWaterMark (64 KiB), forcing both verification call sites
+    // (appendSetupOverlay's internal check, and this test's own explicit one) to hash the payload
+    // across SEVERAL "data" events rather than one. Bytes vary across the buffer (not a constant
+    // fill) so a chunk dropped, duplicated, or reordered by a broken accumulation would almost
+    // certainly change the digest instead of accidentally matching.
+    it("verifies a payload spanning multiple stream chunks, not just a single in-memory read", async () => {
+      const dir = root();
+      const stubPath = join(dir, "stub.exe");
+      const archivePath = join(dir, "keiko-windows-x64.zip");
+      const outputPath = join(dir, WINDOWS_PORTABLE_SETUP_ASSET_NAME);
+      const archiveBytes = Buffer.alloc(3 * 64 * 1024 + 12_345);
+      for (let index = 0; index < archiveBytes.length; index += 1) {
+        archiveBytes[index] = index % 256;
+      }
+      writeFileSync(stubPath, buildValidStub());
+      writeFileSync(archivePath, archiveBytes);
+
+      const result = await appendSetupOverlay(stubPath, archivePath, outputPath, {
+        payloadSha256Hex: sha256Hex(archiveBytes),
+        payloadSizeBytes: archiveBytes.byteLength,
+      });
+
+      expect(result).toBe(outputPath);
       await expect(verifyWindowsPortableSetup(outputPath, archivePath)).resolves.toBeUndefined();
     });
 
@@ -390,14 +425,75 @@ describe("windows portable setup companion", () => {
       const dir = root();
       const stubPath = join(dir, "stub.exe");
       const archivePath = join(dir, "keiko-windows-x64.zip");
+      const archiveBytes = Buffer.from("archive bytes");
       writeFileSync(stubPath, Buffer.concat([buildValidStub(), Buffer.from("unexpected tail")]));
-      writeFileSync(archivePath, "archive bytes");
+      writeFileSync(archivePath, archiveBytes);
 
       await expectSetupError(
         () =>
-          appendSetupOverlay(stubPath, archivePath, join(dir, WINDOWS_PORTABLE_SETUP_ASSET_NAME)),
+          appendSetupOverlay(stubPath, archivePath, join(dir, WINDOWS_PORTABLE_SETUP_ASSET_NAME), {
+            payloadSha256Hex: sha256Hex(archiveBytes),
+            payloadSizeBytes: archiveBytes.byteLength,
+          }),
         "unexpectedly carries trailing data",
       );
+    });
+
+    it("fails closed when the archive drifts from the validated identity between stage validation and append", async () => {
+      const dir = root();
+      const stubPath = join(dir, "stub.exe");
+      const archivePath = join(dir, "keiko-windows-x64.zip");
+      const outputPath = join(dir, WINDOWS_PORTABLE_SETUP_ASSET_NAME);
+      const validatedBytes = Buffer.from("validated archive payload for identity binding");
+      writeFileSync(stubPath, buildValidStub());
+      writeFileSync(archivePath, validatedBytes);
+      const validatedIdentity = {
+        payloadSha256Hex: sha256Hex(validatedBytes),
+        payloadSizeBytes: validatedBytes.byteLength,
+      };
+      // Simulates the archive changing on disk AFTER validateWindowsSetupStage already proved it
+      // matches the manifest — the compiled stub is baked from this SAME validatedIdentity in the
+      // real build — but BEFORE appendSetupOverlay runs. Same length as the validated bytes, so
+      // only a comparison against the PASSED-IN identity (never a fresh re-hash treated as ground
+      // truth) can catch it.
+      const mutatedBytes = Buffer.concat([Buffer.from("MUTATED!"), validatedBytes.subarray(8)]);
+      writeFileSync(archivePath, mutatedBytes);
+
+      await expectSetupError(
+        () => appendSetupOverlay(stubPath, archivePath, outputPath, validatedIdentity),
+        "no longer matches the validated manifest identity",
+      );
+      expect(existsSync(outputPath)).toBe(false);
+    });
+
+    it("removes the temp file and surfaces the original error when append fails before promotion", async () => {
+      const dir = root();
+      const stubPath = join(dir, "stub.exe");
+      const archivePath = join(dir, "keiko-windows-x64.zip");
+      const outputPath = join(dir, WINDOWS_PORTABLE_SETUP_ASSET_NAME);
+      const archiveBytes = Buffer.from("keiko portable archive fixture bytes");
+      writeFileSync(stubPath, buildValidStub());
+      writeFileSync(archivePath, archiveBytes);
+      // Forces the atomic rename to fail (EISDIR: renaming a file onto an existing directory) so
+      // the write -> append -> fsync -> rename sequence fails AFTER the temp file is fully
+      // written, proving the temp file left in the stage root by that failure is cleaned up.
+      mkdirSync(outputPath);
+      const temporaryPath = `${outputPath}.tmp-${String(process.pid)}`;
+
+      let error;
+      try {
+        await appendSetupOverlay(stubPath, archivePath, outputPath, {
+          payloadSha256Hex: sha256Hex(archiveBytes),
+          payloadSizeBytes: archiveBytes.byteLength,
+        });
+      } catch (caught) {
+        error = caught;
+      }
+
+      expect(error).toBeInstanceOf(Error);
+      // The original filesystem error surfaces unchanged — never swallowed or re-wrapped.
+      expect(error).not.toBeInstanceOf(WindowsPortableSetupError);
+      expect(existsSync(temporaryPath)).toBe(false);
     });
 
     it("rejects a header digest that does not match the staged archive", async () => {
@@ -411,6 +507,31 @@ describe("windows portable setup companion", () => {
       });
       const setupPath = join(dir, WINDOWS_PORTABLE_SETUP_ASSET_NAME);
       writeFileSync(setupPath, Buffer.concat([buildValidStub(), header, archiveBytes]));
+
+      await expectSetupError(
+        () => verifyWindowsPortableSetup(setupPath, archivePath),
+        "payload digest does not match the staged archive",
+      );
+    });
+
+    // Every OTHER digest-mismatch test in this file fails on the header's declared digest, so the
+    // independent re-hash of the bytes actually present is never the check that decides the
+    // outcome — a simplification that dropped it would leave every one of them green. This is the
+    // complementary case: the header correctly declares the staged archive's digest, but the
+    // embedded payload bytes differ from it (same length, so the size check does not fire first),
+    // which is exactly the tamper shape the independent re-hash exists to catch.
+    it("rejects a payload whose embedded bytes were tampered even though the header correctly declares the staged archive's digest", async () => {
+      const dir = root();
+      const archiveBytes = Buffer.from("keiko portable archive fixture");
+      const archivePath = join(dir, "keiko-windows-x64.zip");
+      writeFileSync(archivePath, archiveBytes);
+      const header = buildSetupOverlayHeader({
+        payloadSha256Hex: sha256Hex(archiveBytes),
+        payloadSizeBytes: archiveBytes.byteLength,
+      });
+      const tamperedPayload = Buffer.concat([Buffer.from("X"), archiveBytes.subarray(1)]);
+      const setupPath = join(dir, WINDOWS_PORTABLE_SETUP_ASSET_NAME);
+      writeFileSync(setupPath, Buffer.concat([buildValidStub(), header, tamperedPayload]));
 
       await expectSetupError(
         () => verifyWindowsPortableSetup(setupPath, archivePath),

@@ -23,6 +23,7 @@ import {
 } from "./command-runner.js";
 import { CommandRunnerError } from "./command-runner-errors.js";
 import { createInMemoryUiStore, type UiStore } from "./store/index.js";
+import type { ServerLogEvent } from "./observability/server-log.js";
 
 // ── Fake spawn helpers (mirrors terminal.test.ts) ────────────────────────────────
 
@@ -394,6 +395,52 @@ describe("CommandRunnerManager — execution", () => {
       manager.execute({ projectId: workspaceRoot, taskId: "npm-script:test" }),
     ).rejects.toMatchObject({ code: "RUN_LIMIT_EXCEEDED" });
     void pending;
+  });
+});
+
+// ── runCommand termination evidence (AGENTS.md §8 Rule 1) ──────────────────────────
+// A PR reviewer finding: the keiko-tools win32 taskkill.exe tree-kill decision shipped with no
+// activity-log evidence anywhere. runCommand's onTerminated seam is wired here to this manager's
+// injected activityLog port (defaulting to processServerLogSink() in production); this proves the
+// wiring, not the seam itself — the seam's own reason/pid/tree-kill-outcome matrix is covered by
+// packages/keiko-tools/src/exec.test.ts.
+describe("CommandRunnerManager — runCommand termination evidence (AGENTS.md §8 Rule 1)", () => {
+  it("logs command.terminated with the run's own correlationId on timeout", async () => {
+    const events: ServerLogEvent[] = [];
+    const manager = makeManager(makeSpawn({ hangs: true }), {
+      policy: { ...DEFAULT_SANDBOX_POLICY, defaultTimeoutMs: 20 },
+      activityLog: { write: (event): void => void events.push(event) },
+    });
+    const collected = collect(manager);
+    const result = await manager.execute({ projectId: workspaceRoot, taskId: "npm-script:start" });
+    expect(result.timedOut).toBe(true);
+    const runId = collected.find((event) => event.kind === "run-started")?.runId ?? "";
+    expect(runId).not.toBe("");
+    const terminated = events.find((event) => event.op === "command.terminated");
+    expect(terminated).toBeDefined();
+    expect(terminated?.category).toBe("diagnostic");
+    expect(terminated?.correlationId).toBe(runId);
+    const extra = terminated?.extra ?? {};
+    expect(extra.reason).toBe("timeout");
+    expect(typeof extra.pid).toBe("number");
+    // makeManager pins platform:"linux" (line ~150) — the win32 tree-kill branch never engages.
+    expect(extra.windowsTreeKillAttempted).toBe(false);
+    expect(extra.windowsTreeKillSucceeded).toBe(true);
+    // Body-free: exactly the four evidence fields — never the task id, executable, argv, or output.
+    expect(Object.keys(extra).sort()).toEqual([
+      "pid",
+      "reason",
+      "windowsTreeKillAttempted",
+      "windowsTreeKillSucceeded",
+    ]);
+  });
+
+  it("still completes a run and never throws when no activityLog is injected", async () => {
+    const manager = makeManager(makeSpawn({ hangs: true }), {
+      policy: { ...DEFAULT_SANDBOX_POLICY, defaultTimeoutMs: 20 },
+    });
+    const result = await manager.execute({ projectId: workspaceRoot, taskId: "npm-script:start" });
+    expect(result.timedOut).toBe(true);
   });
 });
 

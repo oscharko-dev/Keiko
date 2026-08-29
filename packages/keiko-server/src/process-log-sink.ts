@@ -32,6 +32,7 @@ import type {
   ConsolidationLogEvent,
   ConsolidationLogSink,
 } from "@oscharko-dev/keiko-memory-consolidation";
+import type { CommandTerminationEvidence } from "@oscharko-dev/keiko-tools";
 import {
   DEFAULT_SERVER_LOG_LEVEL,
   getServerLogger,
@@ -83,4 +84,33 @@ export function consolidationLogSinkFor(correlationId: string): ConsolidationLog
       sink.write({ ...event, correlationId: event.correlationId ?? correlationId });
     },
   };
+}
+
+/**
+ * Writes ONE body-free line for a keiko-tools `runCommand` termination decision (the optional
+ * `onTerminated` seam on `RunCommandInput`, exec.ts) — in particular whether the win32
+ * taskkill.exe tree-kill path engaged and completed without throwing (AGENTS.md §8 Rule 1; a PR
+ * reviewer finding on the #3350 cmd.exe-wrapper follow-up). Shared by every `runCommand` call site
+ * across the server (terminal, command-runner, container-runner, the GitHub code-context port, the
+ * container-engine probe, the assured pre-filter) so the mapping from `CommandTerminationEvidence`
+ * to a `ServerLogEvent` is written exactly once instead of once per call site. `sink` is the
+ * caller's own port (its existing injected seam, defaulting to `processServerLogSink()`) so this
+ * stays a pure adapter, never a second logging mechanism.
+ */
+export function logCommandTermination(
+  sink: ServerLogSink,
+  correlationId: string,
+  evidence: CommandTerminationEvidence,
+): void {
+  sink.write({
+    category: "diagnostic",
+    op: "command.terminated",
+    correlationId,
+    extra: {
+      reason: evidence.reason,
+      pid: evidence.pid,
+      windowsTreeKillAttempted: evidence.windowsTreeKillAttempted,
+      windowsTreeKillSucceeded: evidence.windowsTreeKillSucceeded,
+    },
+  });
 }

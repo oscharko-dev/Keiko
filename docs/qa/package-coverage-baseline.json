@@ -249,7 +249,7 @@
       "files": 40,
       "uncoveredFiles": 0,
       "uncoveredLines": 276,
-      "totalLines": 3260,
+      "totalLines": 3309,
       "coverage": {
         "lines": 91.53,
         "statements": 90.15,
