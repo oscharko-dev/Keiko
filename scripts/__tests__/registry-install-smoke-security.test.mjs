@@ -494,6 +494,59 @@ describe("registry install smoke security posture", () => {
   });
 });
 
+/**
+ * Write the `package-lock.json` a fixture tree implies.
+ *
+ * Since #3133 the closure is walked over the lockfile's edges rather than scanned out of the tree,
+ * so a fixture without one no longer describes an npm install at all. This derives the records from
+ * the manifests already written under `root`, which keeps the two in step: a fixture cannot pin a
+ * version its own tree does not carry.
+ */
+function writeFixtureLockfile(root, extraPackages = {}) {
+  const packages = { "": { name: "keiko-fixture", version: "0.0.0" } };
+  const walk = (modulesRoot, prefix) => {
+    if (!existsSync(modulesRoot)) return;
+    for (const entry of readdirSync(modulesRoot)) {
+      if (entry.startsWith(".")) continue;
+      const names = entry.startsWith("@")
+        ? readdirSync(join(modulesRoot, entry)).map((scoped) => `${entry}/${scoped}`)
+        : [entry];
+      for (const name of names) {
+        const directory = join(modulesRoot, ...name.split("/"));
+        const manifestPath = join(directory, "package.json");
+        if (!existsSync(manifestPath)) continue;
+        const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
+        packages[`${prefix}node_modules/${name}`] = {
+          version: manifest.version,
+          ...(manifest.name !== name ? { name: manifest.name } : {}),
+        };
+        walk(join(directory, "node_modules"), `${prefix}node_modules/${name}/`);
+      }
+    }
+  };
+  walk(join(root, "node_modules"), "");
+  // npm records the platform prebuild it DECLINED to install: the lockfile pins it, the directory
+  // is absent. Fixtures must say the same, or the closure sees a stub nothing proves foreign.
+  // The version is derived through the production helper rather than restated here.
+  for (const [path] of Object.entries({ ...packages })) {
+    const manifestPath = join(root, path, "package.json");
+    if (path === "" || !existsSync(manifestPath)) continue;
+    const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
+    for (const [name, range] of Object.entries(manifest.optionalDependencies ?? {})) {
+      const pinned = `node_modules/${name}`;
+      if (packages[pinned] !== undefined) continue;
+      const version = minimumSatisfyingVersion(range);
+      if (version === undefined) continue;
+      packages[pinned] = { version, os: ["keiko-smoke-never-matches"] };
+    }
+  }
+  writeFileSync(
+    join(root, "package-lock.json"),
+    JSON.stringify({ lockfileVersion: 3, packages: { ...packages, ...extraPackages } }, null, 2),
+    "utf8",
+  );
+}
+
 describe("installable package smoke optional-dependency coverage", () => {
   // `new URL()` passes `%zz` through untouched and `decodeURIComponent` raises `URIError` on it.
   // Unhandled inside an http handler that is an uncaught exception, so the registry would die
@@ -890,6 +943,119 @@ describe("installable package smoke optional-dependency coverage", () => {
     }
   });
 
+  // The acceptance criterion of #3133, as a fixture. A development tool's copy of a RUNTIME
+  // dependency name sat in the tree beside the real one — in this repository, `typescript` 5.7.3
+  // under `packages/keiko-ui/node_modules` (a devDependency, `dev: true` in the lockfile) next to
+  // the root's 6.0.3 — and the name-scan offered both in the packument. Yarn then picks the highest
+  // version satisfying a transitive range, which can be the dev-only copy: the smoke would exercise
+  // a graph consumers never receive.
+  it("offers no dev-only copy of a runtime dependency name", () => {
+    const root = mkdtempSync(join(tmpdir(), "keiko-devonly-"));
+    try {
+      const write = (path, manifest) => {
+        mkdirSync(join(root, path), { recursive: true });
+        writeFileSync(join(root, path, "package.json"), JSON.stringify(manifest), "utf8");
+      };
+      // The production copy the root resolves…
+      write("node_modules/demo", { name: "demo", version: "6.0.3" });
+      // …and a development tool's nested copy of the same NAME, which no production edge selects.
+      write("packages/tool/node_modules/demo", { name: "demo", version: "5.7.3" });
+      writeFixtureLockfile(root);
+
+      const closure = resolveVendorClosure(
+        join(root, "node_modules"),
+        { dependencies: { demo: "^6.0.0" }, bundleDependencies: [] },
+        root,
+        join(root, "package-lock.json"),
+      );
+
+      expect(closure.missing).toEqual([]);
+      // Exactly one copy, and it is the one the production edge resolves. Before #3133 the tree
+      // scan returned both, keyed only by name.
+      expect(closure.packages.map((entry) => `${entry.name}@${entry.version}`)).toEqual([
+        "demo@6.0.3",
+      ]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  // …and the other half of "which pinned versions it serves": a local copy that has drifted from
+  // the lockfile is named, not quietly offered. A developer-machine run must not pass against a
+  // graph that is not the committed closure.
+  it("refuses to serve an installed version the lockfile does not pin", () => {
+    const root = mkdtempSync(join(tmpdir(), "keiko-drifted-"));
+    try {
+      mkdirSync(join(root, "node_modules", "demo"), { recursive: true });
+      writeFileSync(
+        join(root, "node_modules", "demo", "package.json"),
+        JSON.stringify({ name: "demo", version: "1.0.0" }),
+        "utf8",
+      );
+      writeFixtureLockfile(root, { "node_modules/demo": { version: "2.0.0" } });
+
+      rejectProcessExit();
+      // The range matches what the LOCKFILE pins, so the descriptor is satisfied and the drift is
+      // the only thing left to notice: the directory holds 1.0.0 where the lockfile says 2.0.0.
+      expect(() =>
+        resolveVendorClosure(
+          join(root, "node_modules"),
+          { dependencies: { demo: "^2.0.0" }, bundleDependencies: [] },
+          root,
+          join(root, "package-lock.json"),
+        ),
+      ).toThrow(/process\.exit\(1\)/u);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  // Item B: two parents, non-overlapping OPTIONAL ranges, one installed copy. The descriptor the
+  // copy does not satisfy needs its own stub — tracking resolution per NAME skipped it, leaving
+  // Yarn with no candidate for that descriptor and a valid optional omission failing the gate.
+  it("stubs an optional descriptor the resolved copy does not satisfy", () => {
+    const root = mkdtempSync(join(tmpdir(), "keiko-nonoverlap-"));
+    try {
+      mkdirSync(join(root, "node_modules", "demo"), { recursive: true });
+      writeFileSync(
+        join(root, "node_modules", "demo", "package.json"),
+        JSON.stringify({ name: "demo", version: "1.5.0" }),
+        "utf8",
+      );
+      writeFixtureLockfile(root, {
+        "node_modules/demo": { version: "1.5.0" },
+        // The version the second, non-overlapping descriptor would want, pinned but not installed.
+        "node_modules/demo-two": { version: "2.0.0", os: ["keiko-smoke-never-matches"] },
+      });
+
+      const closure = resolveVendorClosure(
+        join(root, "node_modules"),
+        {
+          optionalDependencies: { demo: "^1.0.0" },
+          dependencies: {},
+          bundleDependencies: [],
+        },
+        root,
+        join(root, "package-lock.json"),
+      );
+      expect(closure.packages.map((entry) => `${entry.name}@${entry.version}`)).toEqual([
+        "demo@1.5.0",
+      ]);
+      expect(closure.missing).toEqual([]);
+      // A descriptor the installed copy DOES satisfy resolves; one it does not is stubbed instead.
+      const excluded = resolveVendorClosure(
+        join(root, "node_modules"),
+        { optionalDependencies: { demo: "^3.0.0" }, dependencies: {}, bundleDependencies: [] },
+        root,
+        join(root, "package-lock.json"),
+      );
+      expect(excluded.packages).toEqual([]);
+      expect(excluded.stubs).toEqual([{ name: "demo", version: "3.0.0" }]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it("packs installed dependencies and synthesizes stubs for absent optional ones", () => {
     const root = mkdtempSync(join(tmpdir(), "keiko-seed-test-"));
     const destination = mkdtempSync(join(tmpdir(), "keiko-seed-out-"));
@@ -906,6 +1072,7 @@ describe("installable package smoke optional-dependency coverage", () => {
         "utf8",
       );
 
+      writeFixtureLockfile(root);
       const seeded = seedVendoredRegistry(destination, join(root, "node_modules"), {
         dependencies: { demo: "^1.2.3" },
         bundleDependencies: [],
@@ -946,6 +1113,7 @@ describe("installable package smoke optional-dependency coverage", () => {
         dependencies: { "keiko-smoke-absent-both": "^7.8.9" },
       });
 
+      writeFixtureLockfile(root);
       const closure = resolveVendorClosure(join(root, "node_modules"), {
         dependencies: { "parent-optional": "^1.0.0", "parent-required": "^1.0.0" },
         bundleDependencies: [],
@@ -1061,6 +1229,7 @@ describe("installable package smoke optional-dependency coverage", () => {
           "utf8",
         );
       }
+      writeFixtureLockfile(root);
       const seeded = seedVendoredRegistry(destination, join(root, "node_modules"), {
         dependencies: { "@foo/bar-baz": "^1.2.3", "@foo-bar/baz": "^1.2.3" },
         bundleDependencies: [],
@@ -1093,6 +1262,7 @@ describe("installable package smoke optional-dependency coverage", () => {
         "utf8",
       );
 
+      writeFixtureLockfile(tree);
       const first = seedVendoredRegistry(seedDir, join(tree, "node_modules"), manifest);
       const realTarball = first.get("demo-native")?.get("1.0.0")?.tarballPath;
       expect(realTarball).toBeDefined();
@@ -1136,6 +1306,15 @@ describe("installable package smoke optional-dependency coverage", () => {
     };
     try {
       mkdirSync(join(tree, "node_modules"), { recursive: true });
+      // Both prebuilds are pinned and neither is installed in this empty tree. Both are scoped
+      // FOREIGN on purpose: this test is about the SUFFIX criterion in `isNonDurableStub` — a stub
+      // whose NAME is this host's binding must never outlive the process — and a lockfile scope
+      // marking it installable here would make `assertStubsAreForeignOnly` reject it first, before
+      // the persistence rule under test is ever reached. That lockfile rule has its own tests.
+      writeFixtureLockfile(tree, {
+        [`node_modules/${hostBinding}`]: { version: "1.0.0", os: ["aix"], cpu: ["ppc64"] },
+        [`node_modules/${foreignBinding}`]: { version: "1.0.0", os: ["aix"], cpu: ["ppc64"] },
+      });
       const seeded = seedVendoredRegistry(seedDir, join(tree, "node_modules"), manifest);
       expect(seeded.get(hostBinding)?.get("1.0.0")?.manifest?.os).toBeDefined();
       expect(seeded.get(foreignBinding)?.get("1.0.0")?.manifest?.os).toBeDefined();
@@ -1174,7 +1353,7 @@ describe("installable package smoke optional-dependency coverage", () => {
       new Map([
         [
           name,
-          new Map([["1.0.2", { manifest: stubManifest(name, "1.0.2"), name, version: "1.0.2" }]]),
+          new Map([["1.0.8", { manifest: stubManifest(name, "1.0.8"), name, version: "1.0.8" }]]),
         ],
       ]);
     try {
@@ -1191,7 +1370,7 @@ describe("installable package smoke optional-dependency coverage", () => {
 
       // A binding for a platform this host is not: still shareable, still published.
       const foreign = written(stubbed("@napi-rs/canvas-android-arm64"));
-      expect(foreign["@napi-rs/canvas-android-arm64"]?.["1.0.2"]).toBeDefined();
+      expect(foreign["@napi-rs/canvas-android-arm64"]?.["1.0.8"]).toBeDefined();
 
       // And this host's own binding, which the lockfile pins to this platform.
       const own = `@napi-rs/canvas${hostBindingSuffixes().at(-1)}`;
@@ -1281,7 +1460,9 @@ describe("installable package smoke optional-dependency coverage", () => {
         [glibcLock, darwin, false],
       ];
       for (const [lockfilePath, host, expected] of cases) {
-        expect(lockfilePackageInstallsOnHost("demo-native", lockfilePath, host)).toBe(expected);
+        expect(lockfilePackageInstallsOnHost("demo-native", "1.0.2", lockfilePath, host)).toBe(
+          expected,
+        );
       }
     } finally {
       rmSync(dir, { recursive: true, force: true });
@@ -1335,7 +1516,7 @@ describe("installable package smoke optional-dependency coverage", () => {
       new Map([
         [
           name,
-          new Map([["1.0.2", { manifest: stubManifest(name, "1.0.2"), name, version: "1.0.2" }]]),
+          new Map([["1.0.8", { manifest: stubManifest(name, "1.0.8"), name, version: "1.0.8" }]]),
         ],
       ]);
 
@@ -1352,8 +1533,13 @@ describe("installable package smoke optional-dependency coverage", () => {
         : "@napi-rs/canvas-android-arm64";
     expect(() => assertStubsAreForeignOnly(stubbed(foreign))).not.toThrow();
 
-    // A name the lockfile pins no platform data for is a closure question, not a platform one.
-    expect(() => assertStubsAreForeignOnly(stubbed("not-in-the-lockfile-at-all"))).not.toThrow();
+    // #3133: a name+version the lockfile pins NOWHERE is now fatal. It used to be waved through as
+    // "a closure question, not a platform one" — but nothing else caught it, so adding an optional
+    // third-party dependency without regenerating the closure kept the smoke green while Yarn
+    // linked nothing. A stub is legitimate only when a lockfile record proves that version foreign.
+    expect(() => assertStubsAreForeignOnly(stubbed("not-in-the-lockfile-at-all"))).toThrow(
+      /process\.exit\(1\)/u,
+    );
   });
 
   it("validates the staged root's own descriptors, allowing only its vendor archives", () => {
@@ -2538,7 +2724,11 @@ describe("installable package smoke optional-dependency coverage", () => {
     };
     try {
       mkdirSync(join(tree, "node_modules"), { recursive: true });
-      // First run: the package is not installed, so an inert stub is cached.
+      // First run: the package is not installed, so an inert stub is cached. The lockfile still
+      // pins it — that is what proves the stub foreign rather than merely absent.
+      writeFixtureLockfile(tree, {
+        "node_modules/demo-native": { version: "1.0.0", os: ["aix"], cpu: ["ppc64"] },
+      });
       const first = seedVendoredRegistry(seedDir, join(tree, "node_modules"), manifest);
       expect(first.get("demo-native")?.get("1.0.0")?.manifest?.os).toEqual([
         "keiko-smoke-never-matches",
@@ -2838,6 +3028,7 @@ describe("installable package smoke optional-dependency coverage", () => {
       expect(ranges).toEqual(["^1.0.0", "^2.0.0"]);
 
       // Each distinct range yields its own stub, so both descriptors can resolve.
+      writeFixtureLockfile(root);
       const closure = resolveVendorClosure(
         join(root, "node_modules"),
         {
@@ -2870,9 +3061,12 @@ describe("installable package smoke optional-dependency coverage", () => {
     expect(minimumSatisfyingVersion("~1.2")).toBe("1.2.0");
     expect(minimumSatisfyingVersion("^1.2")).toBe("1.2.0");
     expect(minimumSatisfyingVersion("^3")).toBe("3.0.0");
-    // A grammar this helper does not model stays undefined, which recordAbsent treats as fatal —
-    // serving a stub that does not satisfy the range would fail later and far less legibly.
-    expect(minimumSatisfyingVersion("npm:other@^1.0.0")).toBeUndefined();
+    // #3133: an `npm:` alias now resolves through its target's range. `assertRegistryOnlyDescriptors`
+    // already accepts `npm:` as a registry protocol; treating it as unresolvable here made a
+    // legitimately absent optional alias fatal instead of stubbing it.
+    expect(minimumSatisfyingVersion("npm:other@^1.0.0")).toBe("1.0.0");
+    // A grammar this helper does not model still stays undefined, which recordAbsent treats as
+    // fatal — serving a stub that does not satisfy the range would fail later and far less legibly.
     expect(minimumSatisfyingVersion("github:owner/repo")).toBeUndefined();
     // A strict comparator excludes its own boundary, so no stub version is derivable.
     expect(minimumSatisfyingVersion(">1.2.3")).toBeUndefined();

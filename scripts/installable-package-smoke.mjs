@@ -28,6 +28,7 @@ import { createServer as createNetServer } from "node:net";
 import { homedir, tmpdir } from "node:os";
 import { dirname, join, resolve, sep } from "node:path";
 import { fileURLToPath, pathToFileURL, URL } from "node:url";
+import { satisfies } from "semver";
 import ts from "typescript";
 import { resolveHostExecutable, shellCommandForTrustedExecutable } from "./lib/host-executable.mjs";
 import {
@@ -736,6 +737,7 @@ export function packRoot() {
     ["pack", "--silent", "--ignore-scripts", "--pack-destination", artifactRoot],
     { cwd: staged.packageDir },
   );
+  const bundledManifests = staged.vendorPackages.map((vendorPackage) => vendorPackage.manifest);
   staged.cleanup();
   if (result.status !== 0) {
     rmSync(artifactRoot, { recursive: true, force: true });
@@ -749,6 +751,10 @@ export function packRoot() {
   }
   return {
     manifest,
+    // The staged bundled workspace manifests, as they will ship INSIDE the tarball. They are a
+    // third descriptor surface: `assertStagedRootDescriptors` sees the promoted root and
+    // `assertRegistryOnlyDescriptors` the seeded third parties, but neither reads these (#3133).
+    bundledManifests,
     tarballPath,
     cleanup: () => rmSync(artifactRoot, { recursive: true, force: true }),
   };
@@ -809,6 +815,18 @@ function registryPackument(registryUrl, artifact, tarballBytes) {
 // The closure below is seeded from THIS repository's `node_modules`, i.e. exactly the versions the
 // committed `package-lock.json` already pins, so the smoke answers the Yarn-compatibility question
 // offline and deterministically.
+/** `@oscharko-dev/keiko-ui` -> `packages/keiko-ui`, the path package-lock.json keys that workspace by. */
+function bundledWorkspaceLockfilePath(workspace) {
+  const directory = /^@oscharko-dev\/(?<name>[^/]+)$/u.exec(workspace)?.groups?.name;
+  if (directory === undefined) {
+    fail(
+      `bundled workspace ${workspace} is outside the @oscharko-dev scope, so its lockfile path ` +
+        `cannot be derived for the offline closure`,
+    );
+  }
+  return `packages/${directory ?? ""}`;
+}
+
 function workspaceThirdPartyRequirements(workspace, packagesRoot) {
   // A bundled workspace outside the product scope would leave `@other/foo` in the path and miss
   // its manifest, silently dropping that workspace's third-party dependencies from the closure —
@@ -839,6 +857,39 @@ function workspaceThirdPartyRequirements(workspace, packagesRoot) {
 }
 
 /**
+ * Whether the version an edge resolves to satisfies THIS descriptor's range.
+ *
+ * Per descriptor, not per name: when one parent's optional range is satisfied by an installed copy
+ * and a second parent declares a NON-OVERLAPPING optional range for the same name, npm may resolve
+ * the second to nothing and the walk-up then finds the first parent's copy. Serving it would answer
+ * a descriptor it does not satisfy, and Yarn fails with "no candidates" for the other one.
+ *
+ * `semver` decides this rather than `minimumSatisfyingVersion`'s lowest-member approximation: the
+ * ranges here come from every manifest in the transitive closure, and a hand-rolled matcher over
+ * that grammar is exactly the guessing this file already refuses to do elsewhere. An `npm:` alias
+ * descriptor carries its range after the target, which is the half `semver` needs.
+ */
+export function descriptorIsSatisfied(requirement, version) {
+  if (version === undefined) return false;
+  const range = aliasRange(requirement.range ?? "");
+  if (range === "" || range === "*" || range === "latest") return true;
+  return satisfies(version, range, { includePrerelease: true, loose: true });
+}
+
+/**
+ * `npm:target@^1.2.3` -> `^1.2.3`. `assertRegistryOnlyDescriptors` already accepts `npm:` as a
+ * registry protocol; treating it as unresolvable here is the inconsistency #3133 records, and it
+ * made a legitimately absent optional alias fatal instead of stubbing it.
+ */
+export function aliasRange(range) {
+  const trimmed = range.trim();
+  if (!trimmed.startsWith("npm:")) return trimmed;
+  const target = trimmed.slice("npm:".length);
+  const at = target.lastIndexOf("@");
+  return at <= 0 ? "*" : target.slice(at + 1);
+}
+
+/**
  * A concrete version that satisfies `range`, used only to name an inert stub for an optional
  * dependency this repository does not install. Handles the npm forms that actually occur —
  * exact, `^`, `~`, `>=`, `v`-prefixed, x-ranges and `*` — and returns `undefined` for anything
@@ -847,7 +898,7 @@ function workspaceThirdPartyRequirements(workspace, packagesRoot) {
  * "no candidates" error instead of a diagnosable one.
  */
 export function minimumSatisfyingVersion(range) {
-  const trimmed = (range ?? "").trim();
+  const trimmed = aliasRange(range ?? "");
   if (trimmed === "" || trimmed === "*" || trimmed === "x" || trimmed === "latest") return "0.0.0";
   // A strict `>` or `<` excludes the boundary version, so the lowest member of the range is not
   // derivable this way. Those return undefined and the absence becomes fatal, rather than serving
@@ -900,35 +951,42 @@ export function vendoredDependencyRequirements(
   // the same absent optional dependency under non-overlapping ranges, and Yarn has to resolve both
   // descriptors. A required edge from any manifest supersedes them all, since that one must
   // genuinely be present, and its own range is the binding one.
-  const record = ({ name, range, optional }) => {
+  const record = ({ name, range, optional }, origin) => {
     const existing = requirements.get(name) ?? {
       name,
       required: undefined,
       optionalRanges: new Set(),
+      origins: new Set(),
     };
+    // The lockfile path the edge was declared from. npm resolves a bundled workspace's dependency
+    // from that workspace's own directory, so a closure that resolved everything from the root
+    // would miss a nested copy — and pick up a hoisted one the workspace never sees.
+    existing.origins.add(origin);
     if (optional) existing.optionalRanges.add(range);
     else existing.required = range;
     requirements.set(name, existing);
   };
   // The staged root carries optional entries too — `promoteWorkspacePeers` lifts a workspace's
   // optional third-party peers into exactly that field — so both groups belong in the closure.
-  for (const requirement of manifestRequirements(manifest, bundledSet)) record(requirement);
+  for (const requirement of manifestRequirements(manifest, bundledSet)) record(requirement, "");
   // A bundled workspace ships inside the tarball, but its own third-party dependencies do not:
   // the consumer's package manager still resolves those from a registry. `keiko-local-knowledge`
   // declaring `@napi-rs/canvas` is exactly how the 2026-08-13 upstream publish race reached a
   // required Keiko gate, so the closure has to include them.
   for (const workspace of bundled) {
+    const origin = bundledWorkspaceLockfilePath(workspace);
     for (const requirement of workspaceThirdPartyRequirements(workspace, packagesRoot)) {
-      record(requirement);
+      record(requirement, origin);
     }
   }
   return [...requirements.values()]
     .sort((left, right) => compareStrings(left.name, right.name))
-    .flatMap(({ name, required, optionalRanges }) =>
-      required === undefined
-        ? [...optionalRanges].map((range) => ({ name, range, optional: true }))
-        : [{ name, range: required, optional: false }],
-    );
+    .flatMap(({ name, required, optionalRanges, origins }) => {
+      const from = [...origins].sort(compareStrings);
+      return required === undefined
+        ? [...optionalRanges].map((range) => ({ name, range, optional: true, origins: from }))
+        : [{ name, range: required, optional: false, origins: from }];
+    });
 }
 
 export function vendoredDependencyNames(manifest = rootPackageJson, packagesRoot = repoRoot) {
@@ -965,6 +1023,74 @@ function readInstalledManifest(name, modulesRoot) {
   const manifestPath = join(modulesRoot, ...name.split("/"), "package.json");
   if (!existsSync(manifestPath)) return undefined;
   return JSON.parse(readFileSync(manifestPath, "utf8"));
+}
+
+// ─── Lockfile closure (#3133) ──────────────────────────────────────────────────────────────────
+//
+// The offline registry used to be seeded by scanning the installed tree for each needed NAME,
+// anywhere it appeared: the hoisted `node_modules`, every `packages/<workspace>/node_modules`, and
+// nested roots below both. That set is wider than the production graph. A development tool's copy of
+// a runtime dependency name was offered in the packument beside the real one — `typescript` 6.0.3
+// (a root dependency) and 5.7.3 (`packages/keiko-ui`'s devDependency, `dev: true` in the lockfile)
+// were both seeded — and a stale local copy could be served in place of the version the committed
+// lockfile resolves. The smoke could then exercise a graph consumers never receive.
+//
+// The closure is therefore walked over `package-lock.json`'s own edges. Every question the guards
+// used to ask of the tree — which copies exist, at which versions, under which platform scope — is
+// asked of the lockfile instead, and the installed directory is only ever the payload.
+
+const lockfilePackageCache = new Map();
+
+function readLockfilePackages(lockfilePath) {
+  const cached = lockfilePackageCache.get(lockfilePath);
+  if (cached !== undefined) return cached;
+  if (!existsSync(lockfilePath)) {
+    fail(`${lockfilePath} does not exist, so the vendored closure cannot be derived from it`);
+  }
+  const parsed = JSON.parse(readFileSync(lockfilePath, "utf8"));
+  const packages = new Map(Object.entries(parsed.packages ?? {}));
+  lockfilePackageCache.set(lockfilePath, packages);
+  return packages;
+}
+
+/**
+ * The install path that owns `path` — where Node's resolution continues when a name is not found
+ * beside it. `node_modules/a/node_modules/b` is owned by `node_modules/a`; a workspace path and a
+ * hoisted package alike are owned by the project root, spelled `""`.
+ */
+export function lockfileOwnerPath(path) {
+  const marker = "/node_modules/";
+  const at = path.lastIndexOf(marker);
+  return at === -1 ? "" : path.slice(0, at);
+}
+
+/**
+ * Resolve one dependency edge the way Node does: beside the requesting package first, then in each
+ * owner up to the project root. This is the whole point of #3133 — the answer comes from the edges
+ * the lockfile pins, so a copy the production graph never selects is never even considered.
+ */
+export function resolveLockfileEdge(packages, originPath, name) {
+  let owner = originPath;
+  for (;;) {
+    const candidate = owner === "" ? `node_modules/${name}` : `${owner}/node_modules/${name}`;
+    if (packages.has(candidate)) return candidate;
+    if (owner === "") return undefined;
+    owner = lockfileOwnerPath(owner);
+  }
+}
+
+/**
+ * The name and version a lockfile record pins. An `npm:` alias is installed under the ALIAS
+ * directory while Yarn requests the packument under the TARGET name, and the record carries that
+ * target in its own `name` field — which is why the alias question this issue also tracks is
+ * answered here rather than by re-parsing a descriptor `minimumSatisfyingVersion` cannot read.
+ */
+export function lockfileRecordIdentity(path, entry) {
+  const installedAs = path.split("node_modules/").at(-1) ?? "";
+  return {
+    name: typeof entry.name === "string" && entry.name.length > 0 ? entry.name : installedAs,
+    version: typeof entry.version === "string" ? entry.version : undefined,
+  };
 }
 
 /**
@@ -1062,68 +1188,121 @@ export function resolveVendorClosure(
   modulesRoot,
   manifest = rootPackageJson,
   packagesRoot = repoRoot,
+  lockfilePath = join(dirname(modulesRoot), "package-lock.json"),
 ) {
   // `manifest` should be the STAGED manifest (`artifact.manifest`), not the repo root:
   // `promoteWorkspacePeers` in stage-publish-package.mjs lifts a bundled workspace's third-party
   // peer dependencies into the staged root, and a closure that re-derived only the workspace's
   // own dependency fields would miss them — the consumer would then request a package this
   // registry never seeded. Deriving from the producer's output keeps the two in step.
-  const resolved = new Map();
-  const missing = [];
-  const stubs = new Map();
-  // A package first seen through an optional edge may later be REQUIRED by another parent. Keeping
-  // the stub there would serve an inert package for a genuinely required dependency and let the
-  // smoke pass without it, so the required edge withdraws the stub and the absence becomes fatal.
-  const resolveAgainstExistingStub = (name, requirement, stubKey) => {
-    if (requirement?.optional !== false) return;
-    stubs.delete(stubKey);
-    missing.push(name);
-  };
-  const visit = (name, requirement) => {
-    if (resolved.has(name) || missing.includes(name)) return;
-    // No derivable version means no stub can exist for this descriptor, so the lookup is skipped
-    // rather than probing a `name@` key that is never written.
-    const stubVersion = minimumSatisfyingVersion(requirement?.range);
-    const stubKey = stubVersion === undefined ? undefined : `${name}@${stubVersion}`;
-    if (stubKey !== undefined && stubs.has(stubKey)) {
-      resolveAgainstExistingStub(name, requirement, stubKey);
-      return;
-    }
-    const copies = findInstalledCopies(name, modulesRoot, packagesRoot);
-    if (copies.length === 0) {
-      recordAbsent(name, requirement);
-      return;
-    }
-    resolved.set(name, copies);
-    for (const copy of copies) visitDependenciesOf(copy);
-  };
-  // npm drops an optional dependency entirely when its platform prebuild cannot be installed, so
-  // the tree genuinely may not contain it — that is how `@napi-rs/canvas` is present on macOS here
-  // and absent on Linux CI. Yarn still insists on RESOLVING it, so an absent optional package
-  // becomes an inert stub: resolvable, never linked. A non-optional absence stays fatal.
-  const recordAbsent = (name, requirement) => {
-    const version = minimumSatisfyingVersion(requirement?.range);
-    if (requirement?.optional === true && version !== undefined) {
-      // Keyed by name AND version: canvas 1.0.0 and 1.0.2 each demand their own platform build,
-      // so a name-only key would serve one version's stub for the other's requirement.
-      stubs.set(`${name}@${version}`, { name, version });
-      return;
-    }
-    missing.push(name);
-  };
-  const visitDependenciesOf = (copy) => {
-    // Same npm precedence as the root manifest: a name in both fields is optional here.
-    for (const requirement of manifestRequirements(copy.manifest))
-      visit(requirement.name, requirement);
+  const state = {
+    installRoot: dirname(modulesRoot),
+    packages: readLockfilePackages(lockfilePath),
+    resolved: new Map(),
+    visited: new Set(),
+    stubs: new Map(),
+    missing: [],
   };
   for (const requirement of vendoredDependencyRequirements(manifest, packagesRoot)) {
-    visit(requirement.name, requirement);
+    for (const origin of requirement.origins) visitClosureEdge(state, origin, requirement);
   }
   return {
-    packages: [...resolved.values()].flat(),
-    stubs: [...stubs.values()],
-    missing,
+    packages: [...state.resolved.values()],
+    stubs: [...state.stubs.values()],
+    missing: state.missing,
   };
+}
+
+function recordClosureMissing(state, name) {
+  if (!state.missing.includes(name)) state.missing.push(name);
+}
+
+/**
+ * An optional edge the tree does not carry becomes an inert stub: resolvable, never linked. The
+ * version comes from the LOCKFILE record when there is one — npm still pins every platform
+ * prebuild it declined to install — and only falls back to the range's lowest member when the
+ * lockfile pins nothing at all. That fallback is what `minimumSatisfyingVersion` is for, and a
+ * range it cannot model leaves the absence fatal rather than serving a stub the descriptor rejects.
+ */
+function stubClosureEdge(state, requirement, version) {
+  if (requirement.optional !== true || version === undefined) {
+    recordClosureMissing(state, requirement.name);
+    return;
+  }
+  // Keyed by name AND version: two platform builds of one package each demand their own stub.
+  state.stubs.set(`${requirement.name}@${version}`, { name: requirement.name, version });
+}
+
+/**
+ * A required edge withdraws a stub an optional edge left behind: serving an inert package for a
+ * genuinely required dependency would let the smoke pass without it.
+ */
+function withdrawClosureStub(state, name) {
+  for (const key of [...state.stubs.keys()]) {
+    if (key.startsWith(`${name}@`)) state.stubs.delete(key);
+  }
+}
+
+function visitClosureEdge(state, originPath, requirement) {
+  const edge = resolveLockfileEdge(state.packages, originPath, requirement.name);
+  if (edge === undefined) {
+    // The lockfile pins no such edge from here: an optional dependency npm dropped entirely, or a
+    // closure defect. Both are decided by the descriptor, never by scanning the tree for the name.
+    stubClosureEdge(state, requirement, minimumSatisfyingVersion(requirement.range));
+    return;
+  }
+  const entry = state.packages.get(edge) ?? {};
+  const identity = lockfileRecordIdentity(edge, entry);
+  if (!descriptorIsSatisfied(requirement, identity.version)) {
+    // The edge exists but this descriptor's range excludes it — the non-overlapping optional range
+    // case. It needs its own stub; seeding the resolved copy would answer the wrong descriptor.
+    stubClosureEdge(state, requirement, minimumSatisfyingVersion(requirement.range));
+    return;
+  }
+  if (requirement.optional !== true) withdrawClosureStub(state, identity.name);
+  seedClosurePackage(state, edge, entry, identity, requirement);
+}
+
+function seedClosurePackage(state, edge, entry, identity, requirement) {
+  if (state.visited.has(edge)) return;
+  state.visited.add(edge);
+  const directory = join(state.installRoot, edge);
+  const installed = readManifestAt(directory);
+  if (installed === undefined) {
+    // The lockfile selects a path this checkout does not have. For an optional edge that is npm
+    // declining a platform prebuild — the stub path. For a required one it is a broken tree.
+    state.visited.delete(edge);
+    stubClosureEdge(state, requirement, identity.version);
+    return;
+  }
+  assertInstalledMatchesLockfile(edge, identity, installed);
+  state.resolved.set(edge, {
+    name: identity.name,
+    version: identity.version,
+    directory,
+    manifest: installed,
+  });
+  for (const child of manifestRequirements(installed)) visitClosureEdge(state, edge, child);
+}
+
+/**
+ * A tree that has drifted from the lockfile answers a different question than the committed
+ * closure does, and serving its bytes is exactly the "graph consumers never receive" this issue
+ * exists to stop. Named loudly rather than tolerated.
+ */
+function assertInstalledMatchesLockfile(edge, identity, installed) {
+  if (installed.version === identity.version) return;
+  fail(
+    `${edge} is installed at ${String(installed.version)} but package-lock.json pins ` +
+      `${String(identity.version)}, so the offline registry would serve a version the committed ` +
+      `closure does not resolve — run \`npm install\` before the installable-package smoke`,
+  );
+}
+
+function readManifestAt(directory) {
+  const manifestPath = join(directory, "package.json");
+  if (!existsSync(manifestPath)) return undefined;
+  return JSON.parse(readFileSync(manifestPath, "utf8"));
 }
 
 function packVendoredPackage(entry, destination) {
@@ -1286,19 +1465,27 @@ const lockfilePlatformScopes = new Map();
  * The `os`/`cpu`/`libc` `package-lock.json` records for a name, or `undefined` if it pins no such
  * name.
  */
-function lockfilePlatformScope(name, lockfilePath) {
+function lockfilePlatformScope(name, version, lockfilePath) {
   let scopes = lockfilePlatformScopes.get(lockfilePath);
   if (scopes === undefined) {
     scopes = new Map();
     const raw = existsSync(lockfilePath) ? JSON.parse(readFileSync(lockfilePath, "utf8")) : {};
     for (const [path, entry] of Object.entries(raw.packages ?? {})) {
-      const pinned = path.split("node_modules/").at(-1);
-      if (pinned === undefined || pinned === "" || scopes.has(pinned)) continue;
-      scopes.set(pinned, { cpu: entry.cpu, libc: entry.libc, os: entry.os });
+      const identity = lockfileRecordIdentity(path, entry);
+      if (identity.name === "" || identity.version === undefined) continue;
+      // Keyed by name AND version (#3133). Keeping only the first record per NAME judged every
+      // seeded version by the first one's scope: with two versions of one optional package under
+      // different os/cpu, that accepts an inert host stub in one lockfile ordering and rejects a
+      // legitimate foreign stub in the other, decided by nothing but which record came first.
+      scopes.set(`${identity.name}@${identity.version}`, {
+        cpu: entry.cpu,
+        libc: entry.libc,
+        os: entry.os,
+      });
     }
     lockfilePlatformScopes.set(lockfilePath, scopes);
   }
-  return scopes.get(name);
+  return scopes.get(`${name}@${version}`);
 }
 
 /**
@@ -1333,28 +1520,51 @@ function scopeInstallsOnHost(scope, host) {
 /** Whether the lockfile pins this name AND records no platform scope excluding the supplied host. */
 export function lockfilePackageInstallsOnHost(
   name,
+  version,
   lockfilePath,
   host = currentHostPlatformScope(),
 ) {
-  const scope = lockfilePlatformScope(name, lockfilePath);
+  const scope = lockfilePlatformScope(name, version, lockfilePath);
   if (scope === undefined) return false;
   return scopeInstallsOnHost(scope, host);
+}
+
+/** Whether the lockfile pins this exact name and version at all. */
+export function lockfilePinsPackage(name, version, lockfilePath) {
+  return lockfilePlatformScope(name, version, lockfilePath) !== undefined;
 }
 
 export function assertStubsAreForeignOnly(
   seeded,
   lockfilePath = join(repoRoot, "package-lock.json"),
 ) {
-  const offenders = [...seeded].flatMap(([name, versions]) =>
-    [...versions.values()]
-      .filter((entry) => isStubEntry(entry) && lockfilePackageInstallsOnHost(name, lockfilePath))
-      .map((entry) => `${name}@${entry.version}`),
+  const stubs = [...seeded].flatMap(([name, versions]) =>
+    [...versions.values()].filter(isStubEntry).map((entry) => ({ name, version: entry.version })),
   );
-  if (offenders.length > 0) {
+  const installsHere = stubs.filter(({ name, version }) =>
+    lockfilePackageInstallsOnHost(name, version, lockfilePath),
+  );
+  if (installsHere.length > 0) {
     fail(
       `these packages install on this host but were seeded as inert stubs, so the Yarn arm would ` +
-        `resolve them and link nothing: ${offenders.join(", ")} — run \`npm install\` before the ` +
-        `installable-package smoke`,
+        `resolve them and link nothing: ` +
+        `${installsHere.map(({ name, version }) => `${name}@${version}`).join(", ")} — run ` +
+        `\`npm install\` before the installable-package smoke`,
+    );
+  }
+  // A stub for a name+version the lockfile pins NOWHERE used to be waved through as "a closure
+  // question, not a platform one" — but nothing else caught it either, so adding an optional
+  // third-party dependency without regenerating the closure left the smoke green while Yarn linked
+  // nothing. A stub is legitimate only when a lockfile record proves that exact version foreign.
+  const unpinned = stubs.filter(
+    ({ name, version }) => !lockfilePinsPackage(name, version, lockfilePath),
+  );
+  if (unpinned.length > 0) {
+    fail(
+      `these packages were seeded as inert stubs but package-lock.json pins no such version, so ` +
+        `nothing proves them foreign to this host: ` +
+        `${unpinned.map(({ name, version }) => `${name}@${version}`).join(", ")} — regenerate the ` +
+        `vendored closure`,
     );
   }
 }
@@ -1460,7 +1670,7 @@ function isNonDurableStub(name, entry) {
   // the suffix answers for this host's own binding by name, whether pinned or not. Using only the
   // lockfile let an unpinned host-binding stub through, which the suffix rule had been catching.
   if (hostBindingSuffixes().some((suffix) => name.endsWith(suffix))) return true;
-  return lockfilePackageInstallsOnHost(name, join(repoRoot, "package-lock.json"));
+  return lockfilePackageInstallsOnHost(name, entry.version, join(repoRoot, "package-lock.json"));
 }
 
 export function writeSeedIndex(destination, seeded) {
@@ -1508,7 +1718,16 @@ export function seedVendoredRegistry(
   manifest = rootPackageJson,
   seeded = loadSeedIndex(destination),
 ) {
-  const { packages, stubs, missing } = resolveVendorClosure(modulesRoot, manifest);
+  // One lockfile answers every question in this function: which copies the closure selects, and
+  // which stubs a platform scope proves foreign. Letting the closure read the fixture's lockfile
+  // while the stub assertions read the repository's would judge one tree by another's pins.
+  const lockfilePath = join(dirname(modulesRoot), "package-lock.json");
+  const { packages, stubs, missing } = resolveVendorClosure(
+    modulesRoot,
+    manifest,
+    repoRoot,
+    lockfilePath,
+  );
   // A name already restored from the index was captured from an intact tree by an earlier process;
   // its absence now is `prepack`'s pruning, not a broken checkout. Likewise a stub must never
   // replace a real archive we already hold.
@@ -1537,7 +1756,7 @@ export function seedVendoredRegistry(
   // host's own BINDING resolved to a stub, from the running platform triple; this one asks whether
   // ANY package the lockfile installs here did, including a platform-agnostic parent like
   // `@napi-rs/canvas` whose name carries no platform to match on.
-  assertStubsAreForeignOnly(seeded);
+  assertStubsAreForeignOnly(seeded, lockfilePath);
   return seeded;
 }
 
@@ -1676,6 +1895,30 @@ export function assertStagedRootDescriptors(manifest) {
     fail(
       `staged root declares non-registry dependency protocols outside its vendor archives: ` +
         `${offenders.join(", ")}`,
+    );
+  }
+}
+
+/**
+ * A bundled workspace ships inside the tarball, but its own third-party dependencies do not — the
+ * consumer's package manager resolves those. A workspace declaring one through `git+https:`, an
+ * HTTP tarball or `file:` keeps that raw descriptor in its archive, and Yarn would process it
+ * outside the loopback registry: the same hermeticity hole the other two validators close, on the
+ * one manifest surface neither of them reads (#3133).
+ */
+export function assertStagedBundledDescriptors(bundledManifests) {
+  const offenders = (bundledManifests ?? []).flatMap((manifest) =>
+    ["dependencies", "optionalDependencies"]
+      .flatMap((group) => Object.entries(manifest?.[group] ?? {}))
+      .filter(([, range]) => typeof range === "string")
+      .filter(([, range]) => !isStagedVendorArchive(range))
+      .filter(([, range]) => isNonRegistryDescriptor(range))
+      .map(([dependency, range]) => `${manifest.name}/${dependency} (${descriptorClass(range)})`),
+  );
+  if (offenders.length > 0) {
+    fail(
+      `staged bundled workspaces declare non-registry dependency protocols, which would resolve ` +
+        `outside the offline registry: ${offenders.join(", ")}`,
     );
   }
 }
@@ -2208,6 +2451,7 @@ function assertYarnInstallResult(result, registry) {
 export async function installIntoWithYarn(tmp, artifact, vendored, locator = PINNED_YARN) {
   assertRegistryOnlyDescriptors(vendored ?? new Map());
   assertStagedRootDescriptors(artifact.manifest);
+  assertStagedBundledDescriptors(artifact.bundledManifests);
   const registry = await startLocalRegistry(artifact, vendored);
   const yarnHome = privateYarnHome();
   writeYarnInstallManifest(tmp, locator);
