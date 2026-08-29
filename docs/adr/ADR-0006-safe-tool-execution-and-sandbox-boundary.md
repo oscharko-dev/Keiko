@@ -185,19 +185,34 @@ guaranteed topology for every Windows `.cmd`/`.bat` invocation: the wrapper's im
 always `cmd.exe`, and the real work (e.g. `node.exe` running npm) is a grandchild that
 `child.kill()` alone cannot reach.
 
-**The tree kill runs BEFORE the immediate child is signalled, and the order is load-bearing.**
-`child.kill()` is `TerminateProcess` and takes effect at once, whereas `taskkill /PID <pid> /T`
-resolves the descendant set from the live process table when it runs. Signalling `cmd.exe` first
-would leave taskkill with no such pid, terminating no descendant — and Windows does not reparent
-orphans, so the grandchild would survive exactly the path this exists to bound. `nodeGroupKill` in
-keiko-server's `lspNodeAdapter.ts` holds the same ordering, and `exec.test.ts` pins it directly
-rather than asserting only that the tree kill was called.
+**The tree kill runs BEFORE the immediate child is signalled, to COMPLETION, and both properties
+are load-bearing.** `child.kill()` is `TerminateProcess` and takes effect at once, whereas
+`taskkill /PID <pid> /T` resolves the descendant set from the live process table when it runs.
+Signalling `cmd.exe` first would leave taskkill with no such pid, terminating no descendant — and
+Windows does not reparent orphans, so the grandchild would survive exactly the path this exists to
+bound. `nodeWindowsTreeKill` is therefore SYNCHRONOUS (`spawnSync` with a bounded wait): an
+asynchronous spawn would only SCHEDULE taskkill, and `child.kill()` would race it. `nodeGroupKill`
+in keiko-server's `lspNodeAdapter.ts` holds the same ordering, and `exec.test.ts` pins the order
+directly rather than asserting only that the tree kill was called.
+
+**Termination is single-flight.** Abort, timeout, the output cap and a failing spawn callback can
+all reach `terminate()`; the FIRST one becomes the terminal cause, the others are disarmed, and
+exactly one grace timer is armed. Before this, each trigger re-signalled the tree and overwrote the
+tracked timer handle, so `cleanup()` cleared only the last one and the orphaned earlier timer fired
+`taskkill /T /F` against a raw pid AFTER the run had settled — with the handle that kept that pid
+reserved already released. The escalation is additionally guarded on the child still being alive.
+
+**The reported outcome is measured, not assumed.** `WindowsTreeKillDisposition` carries taskkill's
+own completed exit status (`succeeded`/`failed`), `unknown` only when the bounded wait expired, and
+`not-attempted` on POSIX. The previous boolean was a production tautology — the default
+implementation could not throw, so a genuine failure on an image without `taskkill.exe` was logged
+as success, which is worse than not logging it.
 
 Two residuals, both narrower than the general `taskkill` caveat:
 
-- **A `taskkill.exe` spawn failure** (missing on a stripped-down Windows image) is swallowed the
-  same way a POSIX `ESRCH` is, so termination stays idempotent but orphaning is not architecturally
-  impossible.
+- **A `taskkill.exe` failure** (missing on a stripped-down Windows image, or refusing) no longer
+  reports as success — it surfaces as `windowsTreeKill: "failed"` in the termination evidence — but
+  the descendants it could not reach do survive, so orphaning is not architecturally impossible.
 - **PID reuse is not reachable on this path**, though it is a real hazard for `taskkill` in general:
   `taskkill` validates no process identity, so a stale pid can hit an unrelated process. Here the pid
   cannot go stale while it is in use — Node holds an open Win32 handle to the child for the lifetime

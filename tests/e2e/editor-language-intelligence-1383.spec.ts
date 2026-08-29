@@ -9,6 +9,7 @@ import {
   openTreeFile,
   seedEditorWindow,
 } from "./support/editorWorkspace.js";
+import { editorModifier } from "./support/editor-chord.js";
 
 const TAG = "@language-intelligence-1383";
 const TS_FILE = "app.ts";
@@ -149,7 +150,7 @@ async function replaceMonacoText(page: Page, workspace: Locator, text: string): 
   const editor = workspace.locator(EDITOR_SELECTORS.monaco).first();
   await expect(editor).toBeVisible();
   await editor.click();
-  const modifier = process.platform === "darwin" ? "Meta" : "Control";
+  const modifier = await editorModifier(page);
   await page.keyboard.down(modifier);
   await page.keyboard.press("KeyA");
   await page.keyboard.up(modifier);
@@ -253,7 +254,7 @@ async function hoverOnGreeting(page: Page, workspace: Locator): Promise<void> {
 
 async function triggerSymbols(page: Page, workspace: Locator): Promise<void> {
   await workspace.locator(EDITOR_SELECTORS.monaco).first().click();
-  const modifier = process.platform === "darwin" ? "Meta" : "Control";
+  const modifier = await editorModifier(page);
   await page.keyboard.press(`${modifier}+Shift+KeyO`);
 }
 

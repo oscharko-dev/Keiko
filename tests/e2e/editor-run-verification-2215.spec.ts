@@ -27,6 +27,7 @@ import {
   openEditorWorkspace,
   seedEditorWindow,
 } from "./support/editorWorkspace.js";
+import { editorModifier } from "./support/editor-chord.js";
 
 const FAILING_TEST = "src/sum.test.ts";
 const SOURCE = "src/sum.ts";
@@ -70,7 +71,6 @@ const BLOCKING_BUILD = "setInterval(() => undefined, 1_000);\n";
 // third line of the (deliberately minimal) failing-test fixture above.
 const FAILING_LINE = 3;
 
-const MODIFIER = process.platform === "darwin" ? "Meta" : "Control";
 const MUTATION_HEADERS = { "X-Keiko-CSRF": "1" };
 
 function workspace(): { readonly root: string } {
@@ -113,7 +113,7 @@ async function openEditorFor(page: Page, root: string): Promise<Locator> {
 // top (only) result. Throws (via the `option` locator's own timeout) if the command never becomes
 // available — e.g. because the run-affordance wiring this test exists to prove is broken.
 async function runPaletteCommand(page: Page, commandTitle: string): Promise<void> {
-  await page.keyboard.press(`${MODIFIER}+Shift+KeyP`);
+  await page.keyboard.press(`${await editorModifier(page)}+Shift+KeyP`);
   const combobox = page.getByRole("combobox", { name: "Command query" });
   await expect(combobox).toBeVisible();
   await combobox.fill(`>${commandTitle}`);
@@ -198,7 +198,7 @@ test("running a workspace typecheck through the command palette exercises the no
 
   // The command becomes available again once idle — proving the run genuinely reached a terminal
   // state (not merely that the UI stopped showing a spinner for an unrelated reason).
-  await page.keyboard.press(`${MODIFIER}+Shift+KeyP`);
+  await page.keyboard.press(`${await editorModifier(page)}+Shift+KeyP`);
   await page.getByRole("combobox", { name: "Command query" }).fill(">Run Typecheck");
   await expect(page.getByRole("option").filter({ hasText: "Run Typecheck" }).first()).toBeVisible();
   await page.keyboard.press("Escape");
@@ -232,7 +232,7 @@ test("cancelling a run mid-flight through the command palette settles without le
     "Verification: cancelled",
   );
 
-  await page.keyboard.press(`${MODIFIER}+Shift+KeyP`);
+  await page.keyboard.press(`${await editorModifier(page)}+Shift+KeyP`);
   await page.getByRole("combobox", { name: "Command query" }).fill(">Run Build");
   await expect(page.getByRole("option").filter({ hasText: "Run Build" }).first()).toBeVisible();
   await page.keyboard.press("Escape");

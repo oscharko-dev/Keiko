@@ -13,11 +13,21 @@
     "typecheck:native": "npm --prefix ../.. run check:typescript-toolchain && node ../../node_modules/@typescript/native/bin/tsc -p tsconfig.json --noEmit --incremental false",
     "test": "vitest run"
   },
+  "_browserslistRationale": [
+    "Corrected from chrome/edge>=79, firefox>=72, safari>=13.1, which the shipped UI code has not",
+    "satisfied for a long time: 33 production call sites use Array.prototype.at(-n) (Firefox 90,",
+    "Safari 15.4), 20 use crypto.randomUUID (Firefox 95, Safari 15.4), and lib/api.ts uses",
+    "AbortSignal.timeout (Firefox 100, Safari 16) — every one of them beyond the old floor, so the",
+    "declaration promised engines on which the app cannot start. These floors correspond to the",
+    "Baseline 'widely available' set and cover every API the UI actually calls. Enterprise Windows",
+    "fleets run evergreen Edge/Chrome, so this is not a reachability change for them; it makes the",
+    "declaration true. check:browser-baseline enforces it against the source."
+  ],
   "browserslist": [
-    "chrome >= 79",
-    "edge >= 79",
-    "firefox >= 72",
-    "safari >= 13.1"
+    "chrome >= 111",
+    "edge >= 111",
+    "firefox >= 111",
+    "safari >= 16.4"
   ],
   "dependencies": {
     "@monaco-editor/react": "4.7.0",

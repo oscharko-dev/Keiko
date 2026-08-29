@@ -284,7 +284,7 @@ function readExactAt(fd, offset, length, label) {
  * and where the payload begins — so callers hash the payload (hashSetupOverlayPayload, below)
  * only once they've confirmed it is worth hashing.
  */
-function parseSetupOverlayFromFile(setupPath) {
+export function parseSetupOverlayFromFile(setupPath) {
   const fd = openSync(setupPath, "r");
   try {
     const fileSizeBytes = fstatSync(fd).size;

@@ -28,6 +28,7 @@ import {
   capturedStartedSessionIdAfter,
   capturedStartedSessionIds,
 } from "./support/debugSessionStartCapture.js";
+import { editorModifier } from "./support/editor-chord.js";
 
 const { computeD12NearestRankPercentile: percentile } = (await import(
   new URL("../../scripts/check-perf-evidence.mjs", import.meta.url).href
@@ -44,7 +45,7 @@ const THROWS = "src/throws.ts";
 const CAP_STOPPED = "src/cap-stopped.ts";
 const CAP_OUTPUT = "src/cap-output.ts";
 const EDITOR_WINDOW_ID = "issue-2348-editor";
-const MODIFIER = process.platform === "darwin" ? "Meta" : "Control";
+
 const CAP_SAMPLE_COUNT = 10;
 // ADR-0139 D1: shared CI runners cannot schedule reliably enough for single-shot wall-clock
 // assertions. The D12 producer and the scheduled performance workflow set this flag and enforce
@@ -676,7 +677,7 @@ async function startCatalogDebugging(
 }
 
 async function runPaletteCommand(page: Page, commandTitle: string): Promise<void> {
-  await page.keyboard.press(`${MODIFIER}+Shift+KeyP`);
+  await page.keyboard.press(`${await editorModifier(page)}+Shift+KeyP`);
   const combobox = page.getByRole("combobox", { name: "Command query" });
   await expect(combobox).toBeVisible();
   await combobox.fill(`>${commandTitle}`);
@@ -689,7 +690,7 @@ async function selectBreakpointSourceLine(pane: Locator): Promise<void> {
   const editor = pane.locator(EDITOR_SELECTORS.monaco).first();
   await expect(editor).toBeVisible();
   await editor.click();
-  await editor.page().keyboard.press(`${MODIFIER}+KeyF`);
+  await editor.page().keyboard.press(`${await editorModifier(editor.page())}+KeyF`);
   await expect(editor.page().locator(".find-widget").first()).toBeVisible();
   await editor.page().keyboard.type("const displayed = total;");
   await editor.page().keyboard.press("Enter");
@@ -1119,7 +1120,7 @@ async function collectInlineDecorations(page: Page, editor: Locator): Promise<nu
   const values = new Set<string>();
   const monaco = editor.locator(EDITOR_SELECTORS.monaco).first();
   await monaco.click();
-  await page.keyboard.press(`${MODIFIER}+Home`);
+  await page.keyboard.press(`${await editorModifier(page)}+Home`);
   for (let index = 0; index < 30; index += 1) {
     for (const value of await editor.locator(".keiko-debug-inline-value").allTextContents()) {
       values.add(value);

@@ -7,6 +7,8 @@ import { arch, cpus, platform, release, tmpdir, totalmem } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { writePaddedFixtureFiles } from "./support/editorWorkspace.js";
+import { clickWindowChromeButton } from "./support/window-chrome.js";
+import { editorModifier } from "./support/editor-chord.js";
 
 // Number of cold-start samples: kept at 3 for the manual/release-evidence smoke, raised (>=10) in the
 // scheduled/CI perf job via KEIKO_PERF_RUNS so p50/p95 are stable rather than the max of 3 noisy
@@ -527,7 +529,7 @@ async function openEditorCard(page: Page): Promise<ReturnType<Page["getByRole"]>
   await filesWindow.getByRole("button", { name: "Open in editor" }).click();
   const editorWindow = page.getByRole("region", { name: /Editor.*run\.ts/u });
   await expect(editorWindow.locator(".monaco-editor")).toBeVisible();
-  await filesWindow.getByRole("button", { name: "Close Files window" }).click();
+  await clickWindowChromeButton(filesWindow, "Close Files window");
   await expect(filesWindow).toBeHidden();
   return editorWindow;
 }
@@ -552,9 +554,9 @@ async function measureColdStarts(page: Page, warmups: number, runs: number): Pro
     if (run >= warmups) {
       samples.push(Date.now() - start);
     }
-    await filesWindow.getByRole("button", { name: "Close Files window" }).click();
+    await clickWindowChromeButton(filesWindow, "Close Files window");
     await expect(filesWindow).toBeHidden();
-    await editorWindow.getByRole("button", { name: "Close Editor window" }).click();
+    await clickWindowChromeButton(editorWindow, "Close Editor window");
     await expect(editorWindow).toBeHidden();
   }
   return samples;
@@ -676,7 +678,7 @@ async function replaceEditorText(
   await expect(editor).toBeVisible({ timeout: 10_000 });
   await editor.click({ timeout: 8_000 });
   const observerInstalled = await installPerfObservers(page);
-  const modifier = process.platform === "darwin" ? "Meta" : "Control";
+  const modifier = await editorModifier(page);
   await page.keyboard.press(`${modifier}+KeyA`);
   const diagnosticsRecomputed = waitForFinalDiagnosticsRecompute(page).then(
     () => true,
@@ -1173,7 +1175,7 @@ async function measureD12BaselineWork(
   const editor = editorWindow.locator(".monaco-editor").first();
   await expect(editor).toBeVisible({ timeout: 10_000 });
   await editor.click({ timeout: 8_000 });
-  const modifier = process.platform === "darwin" ? "Meta" : "Control";
+  const modifier = await editorModifier(page);
   await page.keyboard.press(`${modifier}+KeyA`);
   expect(await installPerfObservers(page)).toBe(true);
   const measurements = await captureInputProcessingSamples(page, TYPING_CHUNKS);
@@ -1212,7 +1214,7 @@ async function measureIdleDebugTyping(
   await expect(editor).toBeVisible({ timeout: 10_000 });
   await editor.click({ timeout: 8_000 });
   await expect(editorWindow.getByRole("textbox", { name: /Editor:/u })).toBeFocused();
-  const modifier = process.platform === "darwin" ? "Meta" : "Control";
+  const modifier = await editorModifier(page);
   await page.keyboard.press(`${modifier}+KeyA`);
   const diagnosticsRecomputed = waitForFinalDiagnosticsRecompute(page).catch(() => undefined);
   let observerInstalled = false;

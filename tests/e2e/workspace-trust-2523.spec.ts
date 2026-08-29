@@ -13,8 +13,8 @@ import {
 } from "./support/editorWorkspace.js";
 import { formatViolations, runAxe, seriousOrCritical } from "./support/axe.js";
 import { expectViewportModal } from "./support/modal.js";
+import { editorModifier } from "./support/editor-chord.js";
 
-const MODIFIER = process.platform === "darwin" ? "Meta" : "Control";
 const MUTATION_HEADERS = { "X-Keiko-CSRF": "1" };
 const SOURCE = "src/index.ts";
 const PACKAGE_JSON = JSON.stringify(
@@ -30,7 +30,7 @@ const PACKAGE_JSON = JSON.stringify(
 );
 
 async function runPaletteCommand(page: Page, title: string): Promise<void> {
-  await page.keyboard.press(`${MODIFIER}+Shift+KeyP`);
+  await page.keyboard.press(`${await editorModifier(page)}+Shift+KeyP`);
   const query = page.getByRole("combobox", { name: "Command query" });
   await expect(query).toBeVisible();
   await query.fill(`>${title}`);
@@ -40,7 +40,7 @@ async function runPaletteCommand(page: Page, title: string): Promise<void> {
 }
 
 async function expectNoPaletteCommand(page: Page, title: string): Promise<void> {
-  await page.keyboard.press(`${MODIFIER}+Shift+KeyP`);
+  await page.keyboard.press(`${await editorModifier(page)}+Shift+KeyP`);
   const query = page.getByRole("combobox", { name: "Command query" });
   await query.fill(`>${title}`);
   await expect(page.getByRole("option").filter({ hasText: title })).toHaveCount(0);
@@ -48,7 +48,7 @@ async function expectNoPaletteCommand(page: Page, title: string): Promise<void> 
 }
 
 async function expectPaletteCommand(page: Page, title: string): Promise<void> {
-  await page.keyboard.press(`${MODIFIER}+Shift+KeyP`);
+  await page.keyboard.press(`${await editorModifier(page)}+Shift+KeyP`);
   const query = page.getByRole("combobox", { name: "Command query" });
   await query.fill(`>${title}`);
   await expect(page.getByRole("option").filter({ hasText: title }).first()).toBeVisible();

@@ -293,6 +293,7 @@ jobs:
       # hide the same advisory once it reaches a dependency Keiko distributes.
       - run: npm run check:osv-waiver-scope
       - run: npm run check:knip
+      - run: npm run check:browser-baseline
       - run: npm run check:external-quality-config
       - run: npm run check:review-bot-suppression
       - run: npm run check:release-required-workflows
@@ -1179,10 +1180,18 @@ jobs:
         # workspace-performance webkit project is a local-only cross-browser aid: headless WebKit on CI
         # software-renders and mis-batches events, so both its timing and write-coalescing budgets are
         # environment artifacts (all CI perf-evidence runs are scoped to --project=chromium).
-        run: npx --ignore-scripts playwright@1.62.0 install --with-deps chromium
+        # firefox: the second real engine behind the browserslist support claim. Edge and Chrome
+        # are both Chromium, so without Gecko nothing ever exercised a non-Chromium browser.
+        run: npx --ignore-scripts playwright@1.62.0 install --with-deps chromium firefox
       - name: Release smoke E2E
         if: ${{ github.event_name != 'pull_request' || github.base_ref != 'feat/keiko-editor' }}
         run: npm run test:e2e:smoke
+      # Same @smoke journeys on Gecko. Kept a SEPARATE step so a Firefox-only failure is
+      # attributable at a glance instead of hiding inside the Chromium run's report.
+      - name: Release smoke E2E (Firefox)
+        if: ${{ github.event_name != 'pull_request' || github.base_ref != 'feat/keiko-editor' }}
+        timeout-minutes: 20
+        run: npm run test:e2e:smoke:firefox
       - name: Editor run, verify, problems E2E (#2215)
         if: ${{ github.event_name != 'pull_request' || github.base_ref != 'feat/keiko-editor' }}
         run: npm run test:e2e:editor-run-verification-2215

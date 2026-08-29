@@ -13,6 +13,7 @@ import {
   paneCount,
   typeIntoActiveEditor,
 } from "./support/editorWorkspace.js";
+import { editorModifier } from "./support/editor-chord.js";
 
 const MUTATION_HEADERS = { "X-Keiko-CSRF": "1" };
 const EVIDENCE_PATH = join(
@@ -132,8 +133,8 @@ async function seedWindows(page: Page, windows: readonly Record<string, unknown>
   }, windows);
 }
 
-function shortcutModifier(): "Meta" | "Control" {
-  return process.platform === "darwin" ? "Meta" : "Control";
+async function shortcutModifier(page: Page): Promise<"Meta" | "Control"> {
+  return editorModifier(page);
 }
 
 async function waitForShell(page: Page): Promise<void> {
@@ -143,7 +144,7 @@ async function waitForShell(page: Page): Promise<void> {
 
 async function openSearchPanel(page: Page): Promise<Locator> {
   await waitForShell(page);
-  await page.keyboard.press(`${shortcutModifier()}+Shift+KeyF`);
+  await page.keyboard.press(`${await shortcutModifier(page)}+Shift+KeyF`);
   const searchbox = page.getByRole("searchbox", { name: "Search files and symbols" });
   await expect(searchbox).toBeEnabled();
   return searchbox;
@@ -151,7 +152,7 @@ async function openSearchPanel(page: Page): Promise<Locator> {
 
 async function openQuickAccess(page: Page): Promise<Locator> {
   await waitForShell(page);
-  await page.keyboard.press(`${shortcutModifier()}+KeyP`);
+  await page.keyboard.press(`${await shortcutModifier(page)}+KeyP`);
   const quickInput = page.getByRole("combobox", {
     name: /workspace file or symbol query/i,
   });

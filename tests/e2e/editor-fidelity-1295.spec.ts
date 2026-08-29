@@ -3,6 +3,8 @@ import { existsSync, lstatSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } 
 import { tmpdir } from "node:os";
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { clickWindowChromeButton } from "./support/window-chrome.js";
+import { editorModifier } from "./support/editor-chord.js";
 
 const EVIDENCE_DIR = resolve(
   dirname(fileURLToPath(import.meta.url)),
@@ -349,7 +351,7 @@ async function replaceMonacoText(page: Page, editorWindow: Locator, text: string
   const editor = editorWindow.locator(".monaco-editor").first();
   await expect(editor).toBeVisible();
   await editor.click();
-  const modifier = process.platform === "darwin" ? "Meta" : "Control";
+  const modifier = await editorModifier(page);
   await page.keyboard.down(modifier);
   await page.keyboard.press("KeyA");
   await page.keyboard.up(modifier);
@@ -484,7 +486,7 @@ async function openEditor(page: Page, projectPath: string, mode: ThemeMode): Pro
   await filesWindow.getByRole("button", { name: "Open in editor" }).click();
   const editorRegion = page.getByRole("region", { name: /Editor.*src\/App\.tsx/u });
   await expect(editorRegion).toBeVisible();
-  await filesWindow.getByRole("button", { name: "Close Files window" }).click();
+  await clickWindowChromeButton(filesWindow, "Close Files window");
   await expect(filesWindow).toBeHidden();
   const editorWindow = page
     .locator(".window[data-window-id]")
@@ -851,7 +853,7 @@ async function openDiagnosticHover(
   if (await diagnosticAction.isVisible({ timeout: 1_000 }).catch(() => false)) {
     await diagnosticAction.click({ force: true });
     await waitForAnimationFrames(page);
-    const modifier = process.platform === "darwin" ? "Meta" : "Control";
+    const modifier = await editorModifier(page);
     await page.keyboard.press(`${modifier}+K`);
     await page.keyboard.press(`${modifier}+I`);
     if (await hoverFrame.isVisible({ timeout: 2_000 }).catch(() => false)) return hoverFrame;

@@ -52,6 +52,16 @@ export default defineConfig({
       name: "chromium",
       use: { ...devices["Desktop Chrome"] },
     },
+    // Firefox is a DECLARED support target (keiko-ui's browserslist) and, on the Windows fleets this
+    // product is deployed to, the one real second engine next to Edge/Chrome — which are both
+    // Chromium and therefore already covered by the project above. Until now nothing exercised Gecko
+    // at all: 45 Playwright configs, none with Firefox, and CI installed only the Chromium binary. A
+    // support claim no test can fail is a claim, not a guarantee. The first run of this project
+    // found four real cross-engine defects in the specs (see support/window-chrome.ts).
+    {
+      name: "firefox",
+      use: { ...devices["Desktop Firefox"] },
+    },
   ],
   webServer: [
     // GEN-TEST-RELEASE-GATE-002: the deterministic model provider must be up before a chat send

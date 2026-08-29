@@ -2,6 +2,7 @@ import { expect, test, type Locator, type Page } from "@playwright/test";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { editorModifier } from "./support/editor-chord.js";
 
 let fixtureRoot: string | null = null;
 
@@ -192,7 +193,7 @@ async function expectGroupedDragMovesSelected(
 
 async function expectLocalDuplication(page: Page, locators: WorkspaceProofLocators): Promise<void> {
   await locators.workspace.focus();
-  const modifier = process.platform === "darwin" ? "Meta" : "Control";
+  const modifier = await editorModifier(page);
   await page.keyboard.down(modifier);
   await page.keyboard.press("KeyC");
   await page.keyboard.press("KeyV");

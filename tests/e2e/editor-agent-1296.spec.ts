@@ -3,6 +3,7 @@ import { existsSync, lstatSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } 
 import { tmpdir } from "node:os";
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { editorModifier } from "./support/editor-chord.js";
 
 const EVIDENCE_DIR = resolve(
   dirname(fileURLToPath(import.meta.url)),
@@ -211,7 +212,7 @@ async function openLiveEditor(page: Page): Promise<Locator> {
 async function triggerLiveInlineGhost(page: Page, editorWindow: Locator): Promise<void> {
   const editor = editorWindow.locator(".monaco-editor").first();
   await editor.click();
-  const modifier = process.platform === "darwin" ? "Meta" : "Control";
+  const modifier = await editorModifier(page);
   await page.keyboard.press(`${modifier}+KeyA`);
   await page.keyboard.insertText("export function answer() {\n  ret");
   await expect(page.getByRole("alert").filter({ hasText: "urn 42;" }).first()).toBeVisible();

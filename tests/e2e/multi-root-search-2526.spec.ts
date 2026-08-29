@@ -10,6 +10,7 @@ import {
   revokeEditorWorkspaceTrust,
 } from "./support/editorWorkspace.js";
 import { editorM11PairingFragment } from "./support/editor-m11-app-session.js";
+import { editorModifier } from "./support/editor-chord.js";
 
 const MUTATION_HEADERS = { "X-Keiko-CSRF": "1" };
 const WORKSPACE_KEY = "keiko.workspace.v4";
@@ -150,7 +151,7 @@ async function verifyDiscovery(
   page: Page,
   testInfo: TestInfo,
 ): Promise<{ readonly search: Locator; readonly editor: Locator }> {
-  await page.keyboard.press(process.platform === "darwin" ? "Meta+Shift+F" : "Control+Shift+F");
+  await page.keyboard.press(`${await editorModifier(page)}+Shift+KeyF`);
   const search = page.locator('[data-window-id="search"]');
   const searchStartedAt = Date.now();
   await search.getByRole("searchbox", { name: "Search files and symbols" }).fill("needle");
