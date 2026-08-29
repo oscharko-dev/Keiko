@@ -941,7 +941,14 @@ async function runRegressionPass(
   await stubNativeFileDialog(page, join(CORPUS_DATA_ROOT, "small-files"));
   await resetWorkspaceState(page);
   await openLocalKnowledge(page);
-  await expect(page.locator(".lk-pipeline")).toHaveCount(0);
+  // #2955: this was `expect(page.locator(".lk-pipeline")).toHaveCount(0)` — a class that exists
+  // nowhere in the product, so the assertion passed over any state whatsoever. The intent was "a
+  // reset pass starts from a clean overview". The empty state is the positive form of that, but it
+  // is NOT sufficient on its own: connector-graph renders the same element when the capsule load
+  // FAILS, because a failed load leaves the list empty too. The absent alert banner is what
+  // separates "empty because the reset worked" from "empty because the backend is down".
+  await expect(page.getByTestId("empty-state")).toBeVisible();
+  await expect(page.locator(".lk-alert[role='alert']")).toHaveCount(0);
   await expect(page.getByRole("button", { name: "Create Knowledge Pod Set" })).toBeDisabled();
 
   const uiCapsule = `E2E Pass ${passLabel} UI`;

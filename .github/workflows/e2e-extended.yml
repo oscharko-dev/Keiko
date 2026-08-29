@@ -73,6 +73,16 @@ jobs:
           - test:e2e:editor-profiles-2528
           - test:e2e:profile-portability-2529
           - test:e2e:file-history-2531
+          # Issue #2955 (audits KEIKO-0078 / KEIKO-0080): eleven specs existed in tests/e2e that no
+          # test:e2e:* script could reach, so nothing ran them and the wiring gate could not see
+          # them — it enumerated scripts and configs, never spec files. (Ten had no config either;
+          # human-loop-1405 had one, but no script naming that config.) These three entries
+          # are grouped rather than one-per-spec on purpose: every suite here pays a full dev-server
+          # boot, and three boots cover ten specs where ten would cover ten. Playwright still
+          # reports each spec's result individually inside the job.
+          - test:e2e:workspace-surfaces
+          - test:e2e:operations-surfaces
+          - test:e2e:assistive-surfaces
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:

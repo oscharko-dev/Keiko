@@ -9,6 +9,7 @@ import {
   mkdirSync,
   readFileSync,
   readdirSync,
+  realpathSync,
   renameSync,
   rmSync,
   statSync,
@@ -274,9 +275,23 @@ function ensureMacTarget() {
   return target;
 }
 
+/**
+ * The same resolved temp root `tests/e2e/support/e2e-state-dir.ts` uses.
+ *
+ * It is repeated rather than imported because that helper is TypeScript, loaded by Playwright, and
+ * this is a plain Node script — but the VALUE has to agree, because the paths below are forced into
+ * `KEIKO_E2E_STATE_DIR`, which the helper returns verbatim. Handing it an unresolved path routes
+ * every downstream consumer around the very resolution the helper exists to perform, on the one
+ * lane (`code-task-real-binary`, macOS) where the symlinked temp root actually bites.
+ * `e2e-state-dir.static.test.ts` pins that this file and the helper stay in step.
+ */
+function e2eTempRoot() {
+  return realpathSync(tmpdir());
+}
+
 export function createJourneyContext(target) {
   const runKey = process.env.GITHUB_RUN_ID ?? String(process.pid);
-  const stateDir = join(tmpdir(), "keiko-e2e", `code-task-2483-real-binary-${runKey}`);
+  const stateDir = join(e2eTempRoot(), "keiko-e2e", `code-task-2483-real-binary-${runKey}`);
   return {
     executable: join(
       repoRoot,
@@ -289,7 +304,7 @@ export function createJourneyContext(target) {
     ),
     stateDir,
     gatewayObservation: join(stateDir, "gateway-observation.json"),
-    probeState: join(tmpdir(), "keiko-e2e", `code-task-2483-missing-${runKey}`),
+    probeState: join(e2eTempRoot(), "keiko-e2e", `code-task-2483-missing-${runKey}`),
     evidencePath: resolve(
       repoRoot,
       process.env.KEIKO_CODE_TASK_EVIDENCE_OUT ??

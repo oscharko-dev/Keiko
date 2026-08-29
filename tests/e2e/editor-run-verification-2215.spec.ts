@@ -1,6 +1,6 @@
 // Issue #2215 (Epic #2092 closeout) — end-to-end evidence for the run → verify → problems → jump →
 // fix → rerun loop, driven against the REAL BFF (no mocked contracts, no mocked AuthorityEnvelope),
-// following the shape of editor-agent-docking-2122.spec.ts (top-level `test(...)` blocks, real-BFF
+// following the shape of editor-agent-pins.spec.ts (top-level `test(...)` blocks, real-BFF
 // fixtures via ./support/editorWorkspace.js). Executed by the CI Studio browser gate (chromium is the
 // reference browser).
 //
