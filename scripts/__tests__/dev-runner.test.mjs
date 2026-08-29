@@ -9,7 +9,7 @@
 
 import { createServer } from "node:net";
 import { createServer as createHttpServer, request as httpRequest } from "node:http";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { PassThrough } from "node:stream";
@@ -35,7 +35,109 @@ import {
   restartNextChildWithRetry,
   resolveConfiguredNextBundler,
   resolveNextBundler,
+  writeAtomicUtf8File,
+  writeState,
 } from "../dev-runner.mjs";
+
+describe("atomic state persistence", () => {
+  let stateDirectory;
+
+  beforeEach(() => {
+    stateDirectory = mkdtempSync(join(tmpdir(), "dev-runner-state-"));
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    rmSync(stateDirectory, { recursive: true, force: true });
+  });
+
+  it("replaces an existing state file without exposing a partial document", () => {
+    const stateFile = join(stateDirectory, "dev-ui.pid.json");
+    const temporaryStateFile = `${stateFile}.${String(process.pid)}.tmp`;
+    const nextState = `${JSON.stringify({ nextPort: 3001 })}\n`;
+    const files = new Map([[stateFile, '{"nextPort":3000}\n']]);
+    const operations = {
+      writeFileSync: vi.fn((path, contents, encoding) => {
+        expect(path).toBe(temporaryStateFile);
+        expect(contents).toBe(nextState);
+        expect(encoding).toBe("utf8");
+        files.set(path, contents);
+      }),
+      renameSync: vi.fn((from, to) => {
+        expect(from).toBe(temporaryStateFile);
+        expect(to).toBe(stateFile);
+        expect(files.get(stateFile)).toBe('{"nextPort":3000}\n');
+        files.set(to, files.get(from));
+        files.delete(from);
+      }),
+      rmSync: vi.fn(),
+    };
+    writeFileSync(stateFile, '{"nextPort":3000}\n', "utf8");
+
+    writeAtomicUtf8File(stateFile, nextState, operations);
+
+    expect(JSON.parse(String(files.get(stateFile)))).toEqual({ nextPort: 3001 });
+    expect(files.has(temporaryStateFile)).toBe(false);
+    expect(operations.rmSync).not.toHaveBeenCalled();
+  });
+
+  it("cleans up the temporary file and preserves the persistence error", () => {
+    const stateFile = join(stateDirectory, "dev-ui.pid.json");
+    const temporaryStateFile = `${stateFile}.${String(process.pid)}.tmp`;
+    const failure = new Error("rename failed");
+    const operations = {
+      writeFileSync: vi.fn(),
+      renameSync: vi.fn(() => {
+        throw failure;
+      }),
+      rmSync: vi.fn(),
+    };
+
+    expect(() => writeAtomicUtf8File(stateFile, "{}\n", operations)).toThrow(failure);
+    expect(operations.rmSync).toHaveBeenCalledWith(temporaryStateFile, { force: true });
+  });
+
+  it("preserves the persistence error when temporary-file cleanup also fails", () => {
+    const reportError = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const stateFile = join(stateDirectory, "dev-ui.pid.json");
+    const failure = new Error("rename failed");
+    const operations = {
+      writeFileSync: vi.fn(),
+      renameSync: vi.fn(() => {
+        throw failure;
+      }),
+      rmSync: vi.fn(() => {
+        throw new Error("cleanup failed");
+      }),
+    };
+
+    expect(() => writeAtomicUtf8File(stateFile, "{}\n", operations)).toThrow(failure);
+    expect(reportError).toHaveBeenCalledWith(
+      "[dev] failed to remove an incomplete state-file replacement.",
+    );
+  });
+
+  it("uses atomic persistence for the runner's complete state document", () => {
+    const stateFile = join(stateDirectory, "nested", "dev-ui.pid.json");
+
+    writeState({ ready: false, starting: "waiting for API and UI" }, stateFile);
+
+    expect(JSON.parse(readFileSync(stateFile, "utf8"))).toMatchObject({
+      runnerPid: process.pid,
+      publicPort: 1983,
+      bffPort: 1984,
+      nextPort: 3000,
+      stateDir: expect.any(String),
+      nextBundler: "turbopack",
+      appUrl: "http://localhost:1983",
+      children: [],
+      updatedAt: expect.any(String),
+      ready: false,
+      starting: "waiting for API and UI",
+    });
+    expect(existsSync(`${stateFile}.${String(process.pid)}.tmp`)).toBe(false);
+  });
+});
 
 describe("proxyHttp request target validation", () => {
   it.each([
