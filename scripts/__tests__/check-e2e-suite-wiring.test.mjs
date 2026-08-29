@@ -939,10 +939,18 @@ describe("spec reachability (KEIKO-0078 / KEIKO-0080)", () => {
   it("reads a tag from a spec's code but not from its comments", () => {
     expect(declaredSpecTags('test("runs @smoke", () => {});')).toContain("@smoke");
     expect(declaredSpecTags("// @smoke is not wired yet\nconst x = 1;")).not.toContain("@smoke");
-    // A scoped package specifier is not a tag. Every spec imports `@playwright/test`, so reading
-    // one as a declared tag would make every spec reachable from a `--grep @playwright` lane.
+    // `--grep` matches the rendered TITLE, so a tag-shaped string anywhere else declares nothing.
+    // Both of these used to mark a spec reachable from a lane that would run zero of its tests.
+    expect(declaredSpecTags('const diagnostic = "@smoke";')).not.toContain("@smoke");
     expect(declaredSpecTags('import { test } from "@playwright/test";')).not.toContain(
       "@playwright",
+    );
+    // …while the established "name the tag once, interpolate it into every title" pattern resolves.
+    expect(
+      declaredSpecTags('const TAG = "@git-status-1386";\ntest(`opens a diff ${TAG}`, () => {});'),
+    ).toContain("@git-status-1386");
+    expect(declaredSpecTags('test.describe("Atlassian connectors @smoke", () => {});')).toContain(
+      "@smoke",
     );
   });
 

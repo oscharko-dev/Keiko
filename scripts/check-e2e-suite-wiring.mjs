@@ -1078,13 +1078,64 @@ function configReachesSpec(selection, spec) {
 // The `@tag` values a spec declares, read from its comment-blanked source so a tag named only in a
 // comment cannot pass for a selector. `--grep @smoke` matches on the rendered test title, so the
 // tag may equally live in a title literal or in a constant the title interpolates.
+const TAG_PATTERN = /@[a-z][a-z0-9-]*/giu;
+
+// `test`, `it` and `describe`, with any chain of Playwright/Vitest modifiers, up to the open paren.
+const TITLE_CALL =
+  /\b(?:test|it|describe)(?:\.(?:only|skip|fixme|serial|parallel|concurrent|todo|failing))*\s*\(/gu;
+
+// A top-level `const NAME = "…"` whose value is a plain literal, which is how a spec names its tag
+// once and interpolates it into every title (`const TAG = "@git-status-1386"`).
+const TITLE_CONSTANT = /\bconst\s+([A-Za-z_$][\w$]*)\s*=\s*(["'`])((?:[^\\]|\\.)*?)\2/gu;
+
+const INTERPOLATION = /\$\{\s*([A-Za-z_$][\w$]*)\s*\}/gu;
+
+/** The string or template literal beginning at `start`, without its delimiters. */
+function literalAt(text, start) {
+  const quote = text[start];
+  if (quote !== '"' && quote !== "'" && quote !== "`") return undefined;
+  let index = start + 1;
+  while (index < text.length) {
+    const char = text[index];
+    if (char === "\\") index += 2;
+    else if (char === quote) return text.slice(start + 1, index);
+    else index += 1;
+  }
+  return undefined;
+}
+
+/** The first argument of every title-taking call: the only text Playwright renders as a title. */
+function titleExpressions(text) {
+  const titles = [];
+  for (const match of text.matchAll(TITLE_CALL)) {
+    let index = (match.index ?? 0) + match[0].length;
+    while (index < text.length && /\s/u.test(text[index] ?? "")) index += 1;
+    const literal = literalAt(text, index);
+    if (literal !== undefined) titles.push(literal);
+  }
+  return titles;
+}
+
+/**
+ * The `@tag` values a spec declares, read from its TITLES rather than from its source.
+ *
+ * `--grep` matches the rendered test title, so a tag-shaped string anywhere else declares nothing:
+ * `const diagnostic = "@smoke";` — or the `@playwright/test` every spec imports — used to make the
+ * spec reachable from a lane that would execute zero of its tests, which is a direct bypass of the
+ * REACHABLE invariant. Titles are read from comment-blanked source, and a title interpolating a
+ * plain string constant is resolved, because naming the tag once and reusing it is the established
+ * pattern here (`const TAG = "@git-status-1386"`). An interpolation this cannot resolve contributes
+ * nothing, so a tag it cannot see leaves the spec unreachable — loud, not silent.
+ */
 export function declaredSpecTags(source) {
   const text = blankComments(source);
+  const constants = new Map(
+    [...text.matchAll(TITLE_CONSTANT)].map((match) => [match[1], match[3] ?? ""]),
+  );
   const tags = new Set();
-  for (const match of text.matchAll(/@[a-z][a-z0-9-]*/giu)) {
-    // `"@playwright/test"` is an import specifier, not a tag. A Playwright tag never carries a path
-    // separator, so a following `/` marks a scoped package name and nothing this gate should read.
-    if (text[match.index + match[0].length] !== "/") tags.add(match[0]);
+  for (const title of titleExpressions(text)) {
+    const rendered = title.replaceAll(INTERPOLATION, (_, name) => constants.get(name) ?? "");
+    for (const match of rendered.matchAll(TAG_PATTERN)) tags.add(match[0]);
   }
   return tags;
 }

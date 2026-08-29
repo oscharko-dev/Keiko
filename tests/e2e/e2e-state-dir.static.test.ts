@@ -55,6 +55,42 @@ const CONSOLIDATION_EXCEPTIONS = [
   "playwright.workspace-performance.config.ts",
 ] as const;
 
+/**
+ * The `*StateDir` helpers exported from `tests/e2e/support` that delegate to `e2eStateDir`, and the
+ * ones that do not.
+ *
+ * One traversal answers both guards below: which helper names a config may legitimately call, and
+ * whether every exported helper still delegates. Deriving the accepted set from the declarations
+ * means a config cannot mint a new one locally.
+ */
+function delegatingSupportHelpers(): {
+  readonly delegating: ReadonlySet<string>;
+  readonly offenders: readonly string[];
+} {
+  const supportDir = join(E2E_ROOT, "support");
+  const delegating = new Set<string>(["e2eStateDir"]);
+  const offenders: string[] = [];
+  for (const name of readdirSync(supportDir).filter(
+    (entry) => entry.endsWith(".ts") && entry !== "e2e-state-dir.ts",
+  )) {
+    const source = readFileSync(join(supportDir, name), "utf8");
+    for (const match of source.matchAll(
+      /export function ([A-Za-z]+StateDir)\(\)[^{]*\{([\s\S]*?)\n\}/gu,
+    )) {
+      const helper = match[1] ?? "";
+      if ((match[2] ?? "").includes("return e2eStateDir(")) delegating.add(helper);
+      else offenders.push(`${name}: ${helper}`);
+    }
+  }
+  return { delegating, offenders };
+}
+
+/** Whether the config's `const stateDir = …` calls a helper proven to delegate. */
+function usesADelegatingHelper(source: string, delegating: ReadonlySet<string>): boolean {
+  const call = /const stateDir = ([A-Za-z][A-Za-z0-9]*)\(/u.exec(source);
+  return call !== null && delegating.has(call[1] ?? "");
+}
+
 describe("E2E state directory (#2955 follow-up)", () => {
   const originalOverride = process.env.KEIKO_E2E_STATE_DIR;
 
@@ -100,34 +136,25 @@ describe("E2E state directory (#2955 follow-up)", () => {
   });
 
   it("leaves no Playwright config building its own state directory", () => {
-    // A config either calls the shared helper, or a named per-suite helper that does — anything
-    // else is a config constructing the path itself, which is the drift this consolidation ended.
-    const viaHelper = /const stateDir = (e2eStateDir|[A-Za-z]+StateDir)\(/u;
+    // A config either calls the shared helper, or a named per-suite helper RESOLVED to its
+    // declaration and proven to delegate — anything else is a config constructing the path itself,
+    // which is the drift this consolidation ended. Matching the NAME alone was a hole: a config
+    // declaring its own local `fooStateDir` around `join(tmpdir(), …)` satisfied the shape while
+    // reintroducing exactly the macOS symlink failure this migration removed.
+    const delegating = delegatingSupportHelpers().delegating;
     const offenders = configFiles()
       .filter(({ source }) => /const stateDir\s*=/u.test(source))
-      .filter(({ source }) => !viaHelper.test(source))
+      .filter(({ source }) => !usesADelegatingHelper(source, delegating))
       .map(({ name }) => name)
       .sort((left, right) => left.localeCompare(right));
     expect(offenders).toEqual([...CONSOLIDATION_EXCEPTIONS].sort((l, r) => l.localeCompare(r)));
   });
 
-  // …and the named helpers the clause above accepts must themselves delegate, or that clause would
-  // be a hole rather than a check. Discovered by shape, so a fifth code-task helper is covered the
-  // day it is written.
+  // …and the named helpers the clause above resolves against must themselves delegate, or that
+  // clause would accept a support helper that had stopped delegating. Discovered by shape, so a
+  // fifth code-task helper is covered the day it is written.
   it("routes every per-suite state-dir helper through the shared one", () => {
-    const supportDir = join(E2E_ROOT, "support");
-    const offenders = readdirSync(supportDir)
-      .filter((name) => name.endsWith(".ts") && name !== "e2e-state-dir.ts")
-      .flatMap((name) => {
-        const source = readFileSync(join(supportDir, name), "utf8");
-        return [
-          ...source.matchAll(/export function ([A-Za-z]+StateDir)\(\)[^{]*\{([\s\S]*?)\n\}/gu),
-        ]
-          .map((match) => ({ helper: match[1] ?? "", body: match[2] ?? "" }))
-          .filter(({ body }) => !body.includes("return e2eStateDir("))
-          .map(({ helper }) => `${name}: ${helper}`);
-      });
-    expect(offenders).toEqual([]);
+    expect(delegatingSupportHelpers().offenders).toEqual([]);
   });
 
   // Scoped to the configs on purpose. A spec's `mkdtempSync(join(tmpdir(), …))` fixture root is a

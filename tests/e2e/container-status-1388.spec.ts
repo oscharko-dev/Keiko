@@ -56,7 +56,9 @@ async function openContainersFromRuntimeHub(page: Page): Promise<void> {
 }
 
 // The CI host has no container engine: the capability route reports both engines unavailable.
-async function routeUnavailableContainerBff(page: Page): Promise<void> {
+// Returns the catalog requests the page made, so the caller can pin that it made none.
+async function routeUnavailableContainerBff(page: Page): Promise<string[]> {
+  const catalogRequests: string[] = [];
   await page.route("**/api/containers/capability**", async (route) => {
     await route.fulfill({
       contentType: "application/json",
@@ -84,9 +86,12 @@ async function routeUnavailableContainerBff(page: Page): Promise<void> {
     });
   });
 
-  // With no engine the catalog route 503s by contract; the UI must never call it, but route it
-  // defensively so a regression that does call it fails loudly rather than hanging.
+  // With no engine the catalog route 503s by contract and the UI must never call it. Fulfilling a
+  // 503 alone does NOT pin that: the UI swallows the error and still renders the unavailable state,
+  // so a regression that starts calling the route would keep this test green. Every request is
+  // therefore recorded and the count asserted below — the 503 only keeps a regression from hanging.
   await page.route("**/api/containers/catalog**", async (route) => {
+    catalogRequests.push(new URL(route.request().url()).pathname);
     await route.fulfill({
       status: 503,
       contentType: "application/json",
@@ -98,11 +103,12 @@ async function routeUnavailableContainerBff(page: Page): Promise<void> {
       }),
     });
   });
+  return catalogRequests;
 }
 
 test(`Container surface degrades gracefully with no engine ${TAG}`, async ({ page }) => {
   await seedRuntimeHubWindow(page);
-  await routeUnavailableContainerBff(page);
+  const catalogRequests = await routeUnavailableContainerBff(page);
 
   await page.goto("/");
   await openContainersFromRuntimeHub(page);
@@ -123,4 +129,8 @@ test(`Container surface degrades gracefully with no engine ${TAG}`, async ({ pag
   const tasksWindow = page.getByRole("region", { name: /^Tasks/u });
   await expect(tasksWindow).toBeVisible();
   await expect(tasksWindow.getByLabel(/project path/i)).toBeEditable();
+
+  // AC3: the catalog is never requested without an engine. Asserted last, once the container window
+  // and a sibling window have both settled, so the window is wide enough for a stray call to land.
+  expect(catalogRequests).toEqual([]);
 });
