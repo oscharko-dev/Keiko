@@ -3,7 +3,7 @@ import { access, readFile, rm } from "node:fs/promises";
 import { createServer, request } from "node:http";
 import { connect } from "node:net";
 import { createRequire } from "node:module";
-import { mkdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, renameSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { clearTimeout, setTimeout } from "node:timers";
 import { setTimeout as sleep } from "node:timers/promises";
@@ -319,9 +319,15 @@ export async function preflightNextRespawn(currentPort, lockPath, overrides = {}
   return { nextPort: selectedPort, reselected: selectedPort !== currentPort };
 }
 
+export function writeAtomicUtf8File(path, contents) {
+  const temporaryPath = `${path}.${String(process.pid)}.tmp`;
+  writeFileSync(temporaryPath, contents, "utf8");
+  renameSync(temporaryPath, path);
+}
+
 function writeState(extra = {}) {
   mkdirSync(dirname(pidFile), { recursive: true });
-  writeFileSync(
+  writeAtomicUtf8File(
     pidFile,
     `${JSON.stringify(
       {
@@ -341,7 +347,6 @@ function writeState(extra = {}) {
       null,
       2,
     )}\n`,
-    "utf8",
   );
 }
 
