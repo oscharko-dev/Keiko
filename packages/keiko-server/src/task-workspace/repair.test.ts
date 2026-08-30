@@ -308,7 +308,7 @@ describe("release-stale-lock (clear stale lock)", () => {
     // validates shape-as-"non-empty string", not shape-as-"safe correlation id".
     it("preserves a malformed (control-character) correlationId verbatim in evidence", async () => {
       const instance = await lockedInstance("t-corr-malformed");
-      const hostile = "req corr\ncontrol";
+      const hostile = "req\u0000corr\ncontrol";
       await repair(instance.workspaceId, "release-stale-lock", true, "u", hostile);
       expect(lastEventCorrelationId()).toBe(hostile);
     });
