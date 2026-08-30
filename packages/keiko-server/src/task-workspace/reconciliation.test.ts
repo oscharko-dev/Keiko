@@ -33,6 +33,12 @@ import { createWorkspaceReconciliationService } from "./reconciliation.js";
 import type { WorkspaceProvisioningService, WorkspaceReconciliationService } from "./types.js";
 import { createWorkspaceMutexRegistry, workspaceKey } from "./mutex.js";
 import { UNKNOWN_CORRELATION_ID } from "../correlation.js";
+import {
+  createBufferedServerLogSink,
+  type BufferedServerLogSink,
+  type ServerLogEvent,
+  type ServerLogSink,
+} from "../observability/index.js";
 
 const __twMutex = createWorkspaceMutexRegistry();
 
@@ -61,6 +67,15 @@ function capturingEvidence(): EvidenceStore {
   };
 }
 
+// Single narrowing point for a captured activity-log line, so a chain of `expect(line?.field)`
+// assertions (each `?.` its own branch to ESLint's `complexity` rule) does not push an otherwise
+// linear assertion test over the repo's complexity ceiling (AGENTS.md §6).
+function lastActivityLogEvent(sink: BufferedServerLogSink): ServerLogEvent {
+  const line = sink.events.at(-1);
+  if (line === undefined) throw new Error("no activity-log event recorded");
+  return line;
+}
+
 function lastEventCorrelationId(): string {
   const last = evidence.at(-1);
   if (last === undefined) throw new Error("no evidence recorded");
@@ -85,7 +100,7 @@ function provisioning(): WorkspaceProvisioningService {
   });
 }
 
-function reconciliation(): WorkspaceReconciliationService {
+function reconciliation(activityLog?: ServerLogSink): WorkspaceReconciliationService {
   return createWorkspaceReconciliationService({
     store,
     activePointerStore: pointerStore,
@@ -96,6 +111,7 @@ function reconciliation(): WorkspaceReconciliationService {
     now: (): number => nowMs,
     newId: (): string => `id-${String(idCounter++)}`,
     mutex: __twMutex,
+    ...(activityLog === undefined ? {} : { activityLog }),
   });
 }
 
@@ -204,6 +220,40 @@ describe("healthy reconciliation (AC4)", () => {
     await reconciliation().reconcile();
     expect(lastEventCorrelationId()).toBe(UNKNOWN_CORRELATION_ID);
     expect(lastEventCorrelationId()).not.toBe(instance.auditCorrelationId);
+  });
+
+  // IDX61: the EvidenceStore ledger above is a SEPARATE audit surface from `<stateDir>/logs/
+  // server.log` — this proves the SAME reconcile pass also reaches the server activity log
+  // (AGENTS.md §8), carrying the SAME correlationId. The evidence `outcome` is always the fixed
+  // "reconciled" (this pass always completes); the classification an agent actually needs — was the
+  // workspace found healthy or drifted — rides in `errorKind` as the live `WorkspaceReconciliationStatus`
+  // instead (see activity-log.ts).
+  it("emits a task-workspace.lifecycle activity-log line for a healthy reconcile, no errorKind", async () => {
+    const activityLog = createBufferedServerLogSink();
+    const instance = await provisionTask("t-activity-healthy");
+    await reconciliation(activityLog).reconcile(undefined, "req-corr-reconcile-activity-1");
+    const line = lastActivityLogEvent(activityLog);
+    expect(line.category).toBe("diagnostic");
+    expect(line.op).toBe("task-workspace.lifecycle");
+    expect(line.correlationId).toBe("req-corr-reconcile-activity-1");
+    expect(line.level).toBe("info");
+    expect(line.errorKind).toBeUndefined();
+    const extra = line.extra ?? {};
+    expect(extra.operation).toBe("reconcile");
+    expect(extra.outcome).toBe("reconciled");
+    expect(extra.workspaceId).toBe(instance.workspaceId);
+  });
+
+  it("carries the live WorkspaceReconciliationStatus as errorKind for a drifted reconcile", async () => {
+    const activityLog = createBufferedServerLogSink();
+    const instance = await provisionTask("t-activity-missing");
+    rmSync(instance.managedWorktreePath, { recursive: true, force: true });
+    await reconciliation(activityLog).reconcile();
+    const line = lastActivityLogEvent(activityLog);
+    expect(line.op).toBe("task-workspace.lifecycle");
+    expect(line.level).toBe("warn");
+    expect(line.errorKind).toBe("missing");
+    expect(line.extra?.outcome).toBe("reconciled");
   });
 });
 

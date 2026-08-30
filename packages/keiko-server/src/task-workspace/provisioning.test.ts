@@ -38,6 +38,12 @@ import {
 } from "./naming.js";
 import { createWorkspaceMutexRegistry } from "./mutex.js";
 import { UNKNOWN_CORRELATION_ID } from "../correlation.js";
+import {
+  createBufferedServerLogSink,
+  type BufferedServerLogSink,
+  type ServerLogEvent,
+  type ServerLogSink,
+} from "../observability/index.js";
 
 const __twMutex = createWorkspaceMutexRegistry();
 
@@ -69,6 +75,7 @@ function capturingEvidence(): EvidenceStore {
 function makeService(
   adapterFactory?: (workspace: WorkspaceInfo) => GitWorktreeAdapter,
   ensureManagedWorkspaceIdentity?: (instance: WorkspaceInstance, initializeTrust: boolean) => void,
+  activityLog?: ServerLogSink,
 ): WorkspaceProvisioningService {
   return createWorkspaceProvisioningService({
     store,
@@ -83,12 +90,22 @@ function makeService(
     newId: (): string => `id-${String(idCounter++)}`,
     ...(ensureManagedWorkspaceIdentity === undefined ? {} : { ensureManagedWorkspaceIdentity }),
     mutex: __twMutex,
+    ...(activityLog === undefined ? {} : { activityLog }),
   });
 }
 
 // The last-appended evidence record's WorkspaceEvent.correlationId — the join key an operator's
 // `keiko support analyze` uses to tie this lifecycle line back to the HTTP request that produced it
 // (AGENTS.md §8). Parses the SAME persisted JSON `evidence.ts` writes, never a re-derived shape.
+// Single narrowing point for a captured activity-log line, so a chain of `expect(line?.field)`
+// assertions (each `?.` its own branch to ESLint's `complexity` rule) does not push an otherwise
+// linear assertion test over the repo's complexity ceiling (AGENTS.md §6).
+function lastActivityLogEvent(sink: BufferedServerLogSink): ServerLogEvent {
+  const line = sink.events.at(-1);
+  if (line === undefined) throw new Error("no activity-log event recorded");
+  return line;
+}
+
 function lastEventCorrelationId(): string {
   const last = evidence.at(-1);
   if (last === undefined) throw new Error("no evidence recorded");
@@ -217,6 +234,133 @@ describe("provision success (AC1, AC4)", () => {
     });
     expect(lastEventCorrelationId()).toBe(UNKNOWN_CORRELATION_ID);
     expect(lastEventCorrelationId()).not.toBe(result.instance.workspaceId);
+  });
+
+  // IDX51: the correlation-ID regression matrix beyond an ordinary id and an omitted property.
+  // `buildWorkspaceEvent` (evidence.ts) validates `correlationId` through the #444 contract's
+  // `isNonEmptyString` gate — non-empty and typeof string, nothing more — so any NON-EMPTY string
+  // (malformed, hostile, or absurdly long) is accepted and persisted as-is; only the EMPTY string is
+  // rejected (a genuinely distinct case from "no correlation id was supplied", which is `undefined`).
+  describe("correlation-ID regression matrix", () => {
+    // An empty string is NOT `undefined`, so the `correlationId ?? UNKNOWN_CORRELATION_ID` fallback
+    // (provisioning.ts) never triggers for it — it reaches `buildWorkspaceEvent` verbatim, and the
+    // #444 contract's `isNonEmptyString` gate rejects it, so `buildWorkspaceEvent` throws
+    // synchronously. Pinned as PRESERVE-current-behavior: an empty-string correlationId currently
+    // fails the WHOLE provision (not merely the audit line) with a content-free-invariant Error,
+    // never a silent fallback to UNKNOWN_CORRELATION_ID, even though the git worktree mutation itself
+    // may already have succeeded. A caller must never pass "" — only omit the property.
+    it("rejects an empty-string correlationId by failing the provision (does not silently fall back)", async () => {
+      const service = makeService();
+      await expect(
+        service.provision({
+          repositoryRequestPath: repoRoot,
+          taskId: "t-corr-empty",
+          baseBranch: "main",
+          requestedBy: "u",
+          correlationId: "",
+        }),
+      ).rejects.toThrow(/content-free workspace event invariant violated/u);
+    });
+
+    // A malformed-but-non-empty correlationId (fails `isValidCorrelationId`'s narrow
+    // `SAFE_CORRELATION_ID` HTTP-header shape — correlation.ts — but is still a non-empty string) is
+    // NOT rejected by the #444 contract gate: it is preserved verbatim into the evidence, exactly like
+    // a well-formed one. This is CURRENT behavior, not a claim it is ideal — `buildWorkspaceEvent`
+    // validates shape-as-"non-empty string", not shape-as-"safe correlation id".
+    it("preserves a malformed (control-character) correlationId verbatim in evidence", async () => {
+      const service = makeService();
+      const hostile = "req corr\ncontrol";
+      await service.provision({
+        repositoryRequestPath: repoRoot,
+        taskId: "t-corr-malformed",
+        baseBranch: "main",
+        requestedBy: "u",
+        correlationId: hostile,
+      });
+      expect(lastEventCorrelationId()).toBe(hostile);
+    });
+
+    // "Hostile" here means implausibly long — the #444 contract has no length ceiling of its own, so
+    // an oversized value is preserved into the EvidenceStore verbatim (the SEPARATE server-log line
+    // this same provision now also emits — IDX61 — DOES cap it, via `redactLogString`'s
+    // `MAX_LOG_STRING_LENGTH`; the two surfaces have different redaction rules by design, and this
+    // test pins the evidence side only).
+    it("preserves an implausibly long correlationId verbatim in evidence (no length ceiling)", async () => {
+      const service = makeService();
+      const long = `req-corr-${"a".repeat(4000)}`;
+      await service.provision({
+        repositoryRequestPath: repoRoot,
+        taskId: "t-corr-long",
+        baseBranch: "main",
+        requestedBy: "u",
+        correlationId: long,
+      });
+      expect(lastEventCorrelationId()).toBe(long);
+      expect(lastEventCorrelationId().length).toBe(long.length);
+    });
+
+    // Boundary: `isValidCorrelationId`'s own shape (`SAFE_CORRELATION_ID`, correlation.ts) requires
+    // 8-128 characters. A 1-character id is well below that floor but is STILL a non-empty string, so
+    // the #444 contract preserves it unchanged — proving the evidence layer's validation is strictly
+    // looser than `isValidCorrelationId`, not merely untested.
+    it("preserves a below-the-HTTP-boundary 1-character correlationId verbatim in evidence", async () => {
+      const service = makeService();
+      await service.provision({
+        repositoryRequestPath: repoRoot,
+        taskId: "t-corr-boundary",
+        baseBranch: "main",
+        requestedBy: "u",
+        correlationId: "x",
+      });
+      expect(lastEventCorrelationId()).toBe("x");
+    });
+  });
+
+  // IDX61: the EvidenceStore ledger above is a SEPARATE audit surface from `<stateDir>/logs/
+  // server.log` — this proves the SAME provision outcome also reaches the server activity log
+  // (AGENTS.md §8), carrying the SAME correlationId the evidence assertions above just proved.
+  it("emits a task-workspace.lifecycle activity-log line alongside the evidence, same correlationId", async () => {
+    const activityLog = createBufferedServerLogSink();
+    const service = makeService(undefined, undefined, activityLog);
+    const result = await service.provision({
+      repositoryRequestPath: repoRoot,
+      taskId: "t-activity-log",
+      baseBranch: "main",
+      requestedBy: "u",
+      correlationId: "req-corr-activity-1",
+    });
+    const line = lastActivityLogEvent(activityLog);
+    expect(line.category).toBe("diagnostic");
+    expect(line.op).toBe("task-workspace.lifecycle");
+    expect(line.correlationId).toBe("req-corr-activity-1");
+    expect(line.level).toBe("info");
+    expect(line.errorKind).toBeUndefined();
+    const extra = line.extra ?? {};
+    expect(extra.operation).toBe("provision");
+    expect(extra.outcome).toBe("provisioned");
+    expect(extra.workspaceId).toBe(result.instance.workspaceId);
+    expect(extra.taskId).toBe("t-activity-log");
+  });
+
+  // A failure path carries a structured, closed-vocabulary `errorKind` — the TaskWorkspaceError code
+  // — not merely the coarser evidence `outcome`, so an agent grepping the log can tell LOCK_CONTENTION
+  // from POINTER_DRIFT from a bare "blocked"/"retry-required".
+  it("carries the TaskWorkspaceError code as errorKind on a blocked provision", async () => {
+    const activityLog = createBufferedServerLogSink();
+    const service = makeService(undefined, undefined, activityLog);
+    await expect(
+      service.provision({
+        repositoryRequestPath: repoRoot,
+        taskId: "t-activity-log-blocked",
+        baseBranch: "does-not-exist",
+        requestedBy: "u",
+      }),
+    ).rejects.toBeInstanceOf(TaskWorkspaceError);
+    const line = lastActivityLogEvent(activityLog);
+    expect(line.op).toBe("task-workspace.lifecycle");
+    expect(line.level).toBe("warn");
+    expect(line.errorKind).toBe("INVALID_BASE_BRANCH");
+    expect(line.extra?.outcome).toBe("blocked");
   });
 
   it("establishes the managed workspace identity before every active exposure", async () => {
