@@ -1,6 +1,7 @@
 import { spawn, type ChildProcess, type SpawnOptions } from "node:child_process";
 import { homedir } from "node:os";
 import type { EnvSource } from "@oscharko-dev/keiko-model-gateway";
+import type { SecurityLogSink } from "@oscharko-dev/keiko-security";
 import type {
   UpdatePortableActivationSummary,
   UpdatePortableStagingSummary,
@@ -56,6 +57,10 @@ export interface PortableUpdateActivatorOptions {
   readonly homedir?: (() => string) | undefined;
   readonly versionVerifier?: VersionVerifier | undefined;
   readonly relaunchTimeoutMs?: number | undefined;
+  // Forwarded to `refreshPortableShortcut` (update-portable-activation-files.js): a hostile or
+  // malformed SystemRoot/WINDIR encountered while creating or verifying the Windows Start Menu
+  // shortcut is logged through this sink instead of only degrading to `shortcutRefreshed: false`.
+  readonly securityLogSink?: SecurityLogSink | undefined;
 }
 
 export { PortableUpdateActivationError } from "./update-portable-activation-files.js";
@@ -269,6 +274,7 @@ function finishPreparedActivation(
     layout: promoted.layout,
     env: input.options.env,
     home,
+    securityLogSink: input.options.securityLogSink,
   });
   return { shortcutRefreshed, layout: promoted.layout };
 }

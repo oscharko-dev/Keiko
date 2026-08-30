@@ -713,7 +713,7 @@
     {
       "op": "security.windows-shortcut.system-root-refused",
       "category": "security",
-      "site": "packages/keiko-security/src/windows-shortcuts.ts:267",
+      "site": "packages/keiko-security/src/windows-shortcuts.ts:198",
       "package": "keiko-security"
     },
     {
@@ -1001,7 +1001,7 @@
     {
       "op": "memory.audit.state-cache.seeded",
       "category": "memory",
-      "site": "packages/keiko-server/src/deps.ts:1832",
+      "site": "packages/keiko-server/src/deps.ts:1833",
       "package": "keiko-server"
     },
     {

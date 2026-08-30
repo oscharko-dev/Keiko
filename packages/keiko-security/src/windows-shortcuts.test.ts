@@ -164,7 +164,15 @@ describe("definition read/write entry points on the win32 route", () => {
   it("creates through cscript instead of the JSON stand-in", () => {
     stubWin32();
     const spawnFn = vi.fn<WindowsShortcutSpawnFn>(() => spawnResult());
-    writeWindowsShortcutDefinition("p", DEFINITION, {}, "test prefix", spawnFn, EXISTS_ON_DISK);
+    writeWindowsShortcutDefinition(
+      "p",
+      DEFINITION,
+      {},
+      "test prefix",
+      spawnFn,
+      undefined,
+      EXISTS_ON_DISK,
+    );
     expect(spawnFn).toHaveBeenCalledTimes(1);
     expect(spawnFn.mock.calls[0]?.[1]).toContain("create");
   });
@@ -244,6 +252,47 @@ describe("definition read/write entry points on the win32 route", () => {
         vi.fn<WindowsShortcutSpawnFn>(() => spawnResult()),
       ),
     ).toThrow(WindowsSystemDirectoryError);
+  });
+
+  // The main finding this pins: writeWindowsShortcutDefinition had NO logging port at all, so a
+  // hostile SystemRoot on the CREATE path (the first-install branch — no prior shortcut to read)
+  // produced zero activity-log evidence even though the refusal still threw. Both directions now
+  // share runWindowsShortcutCommand's single emit-before-rethrow, so this must observe the exact
+  // same event shape the read-path test above pins, with `extra.mode` distinguishing the two.
+  it("logs the refusal through an injected sink on the WRITE path too", () => {
+    stubWin32();
+    const sink: SecurityLogSink = { write: vi.fn() };
+    expect(() => {
+      writeWindowsShortcutDefinition(
+        "p",
+        DEFINITION,
+        { SystemRoot: String.raw`\\attacker\share` },
+        "test prefix",
+        vi.fn<WindowsShortcutSpawnFn>(() => spawnResult()),
+        sink,
+      );
+    }).toThrow(WindowsSystemDirectoryError);
+    expect(sink.write).toHaveBeenCalledTimes(1);
+    expect(sink.write).toHaveBeenCalledWith(
+      expect.objectContaining({
+        level: "warn",
+        category: "security",
+        op: "security.windows-shortcut.system-root-refused",
+        extra: { mode: "create" },
+      }),
+    );
+
+    // The pre-existing 5-arg call shape (every current external writer) omits the sink entirely;
+    // the refusal must still throw rather than depend on a sink being wired.
+    expect(() => {
+      writeWindowsShortcutDefinition(
+        "p",
+        DEFINITION,
+        { SystemRoot: String.raw`\\attacker\share` },
+        "test prefix",
+        vi.fn<WindowsShortcutSpawnFn>(() => spawnResult()),
+      );
+    }).toThrow(WindowsSystemDirectoryError);
   });
 });
 

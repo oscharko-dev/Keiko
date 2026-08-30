@@ -151,6 +151,13 @@ function shortcutFailure(failurePrefix: string, status: number | null, stderr: B
 /**
  * Run the fixed shortcut JScript through cscript. Fails closed on spawn errors, nonzero exits,
  * and ANY stderr output; returns decoded stdout (three UTF-16LE lines in read mode).
+ *
+ * A refusal of the trust boundary itself (`WindowsSystemDirectoryError`, thrown by SystemRoot/
+ * WINDIR resolution before cscript ever runs) is logged through `sink` — when wired; a no-op
+ * otherwise, same convention as `readMacosKeychainSecret`'s `options.sink` — and RE-THROWN
+ * unchanged. This is the ONE place both the read and the create/overwrite mode fork out of the
+ * shared cscript invocation, so both directions get the same event instead of only the read side
+ * observing it.
  */
 export function runWindowsShortcutCommand(
   mode: "create" | "read",
@@ -159,6 +166,7 @@ export function runWindowsShortcutCommand(
   env: ShortcutEnvSource,
   failurePrefix: string,
   spawnFn: WindowsShortcutSpawnFn = spawnSync,
+  sink?: SecurityLogSink,
   existsAsFile?: WindowsBinaryExistsCheck,
 ): string {
   const scriptRoot = mkdtempSync(join(tmpdir(), "keiko-shortcut-"));
@@ -182,6 +190,17 @@ export function runWindowsShortcutCommand(
       throw new Error(shortcutFailure(failurePrefix, result.status, stderr));
     }
     return (result.stdout ?? Buffer.alloc(0)).toString("utf16le");
+  } catch (error) {
+    if (error instanceof WindowsSystemDirectoryError) {
+      emitSecurityLogEvent(sink, {
+        level: "warn",
+        category: "security",
+        op: "security.windows-shortcut.system-root-refused",
+        errorKind: securityErrorKind(error),
+        extra: { mode },
+      });
+    }
+    throw error;
   } finally {
     rmSync(scriptRoot, { recursive: true, force: true });
   }
@@ -232,8 +251,8 @@ const EMPTY_DEFINITION: WindowsShortcutDefinition = {
  * (`WindowsSystemDirectoryError`, thrown before cscript ever runs) — is a DIFFERENT failure class
  * and is never folded into that same "absent" signal: a poisoned environment must not be mistaken
  * for "no shortcut installed" by a caller that then treats absence as an invitation to (re)create
- * one. It is logged through `sink` (when wired; a no-op otherwise, same convention as
- * `readMacosKeychainSecret`'s `options.sink`) and RE-THROWN.
+ * one. `runWindowsShortcutCommand` already logs it through `sink` (when wired; a no-op otherwise)
+ * before it reaches this catch, so this only has to decide whether to RE-THROW it.
  */
 export function readWindowsShortcutDefinition(
   path: string,
@@ -252,6 +271,7 @@ export function readWindowsShortcutDefinition(
       env,
       failurePrefix,
       spawnFn,
+      sink,
       existsAsFile,
     );
     const [targetPath, workingDirectory, iconPath] = output.split(/\r?\n/u);
@@ -260,33 +280,39 @@ export function readWindowsShortcutDefinition(
     }
     return { targetPath, workingDirectory, iconPath };
   } catch (error) {
-    if (error instanceof WindowsSystemDirectoryError) {
-      emitSecurityLogEvent(sink, {
-        level: "warn",
-        category: "security",
-        op: "security.windows-shortcut.system-root-refused",
-        errorKind: securityErrorKind(error),
-      });
-      throw error;
-    }
+    if (error instanceof WindowsSystemDirectoryError) throw error;
     return undefined;
   }
 }
 
-/** Create/overwrite the shortcut (JSON fallback off Windows). Throws on failure. */
+/**
+ * Create/overwrite the shortcut (JSON fallback off Windows). Throws on failure — including a
+ * trust-boundary refusal (`WindowsSystemDirectoryError`), which `runWindowsShortcutCommand` logs
+ * through `sink` (when wired) before it propagates here unchanged.
+ */
 export function writeWindowsShortcutDefinition(
   path: string,
   definition: WindowsShortcutDefinition,
   env: ShortcutEnvSource,
   failurePrefix: string,
   spawnFn: WindowsShortcutSpawnFn = spawnSync,
+  sink?: SecurityLogSink,
   existsAsFile?: WindowsBinaryExistsCheck,
 ): void {
   if (process.platform !== "win32") {
     writeFileSync(path, windowsShortcutFallbackContent(definition), "utf8");
     return;
   }
-  runWindowsShortcutCommand("create", path, definition, env, failurePrefix, spawnFn, existsAsFile);
+  runWindowsShortcutCommand(
+    "create",
+    path,
+    definition,
+    env,
+    failurePrefix,
+    spawnFn,
+    sink,
+    existsAsFile,
+  );
 }
 
 /** Case- and separator-insensitive Windows path equivalence for shortcut field comparison. */

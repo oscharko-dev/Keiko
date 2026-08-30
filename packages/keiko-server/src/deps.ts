@@ -1701,6 +1701,7 @@ function buildUpdateSession(options: {
     portableActivator: createPortableUpdateActivator({
       env: options.env,
       localState: options.updateLocalState,
+      securityLogSink: processServerLogSink(),
     }),
     portableCompletionGate: portableCompletionGate(options.updateRemediation),
     redactor: (value: string): string => {
