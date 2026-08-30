@@ -209,14 +209,19 @@ describe("resolveWindowsSystemBinary — resolved-binary existence (finding 4)",
     });
 
     it("actually checks the filesystem when the platform is genuinely win32", () => {
-      // No real C:\Windows exists under this process on ANY host that runs this suite (this repo's
-      // CI never runs it on win32 — the Windows leg runs a separate, narrower smoke script instead;
-      // see scripts/__tests__/windows-cmd-spawn-smoke.mjs). Stubbing the platform check to "true"
-      // therefore reaches the real `statSync`, which fails ENOENT on this literal, non-existent
-      // path and must surface as the SAME typed, fail-closed error as every other refusal — proving
-      // the gate is platform-READ, not platform-DECORATIVE.
+      // IDX49 (PR #3355 review): the DEFAULT root (`C:\Windows`) is exactly where a REAL Windows
+      // host keeps `cmd.exe` — asserting non-existence against it is only true because CI never
+      // runs this suite on win32 (the Windows leg runs a separate, narrower smoke script instead;
+      // see scripts/__tests__/windows-cmd-spawn-smoke.mjs). On an actual Windows developer machine
+      // `statSync` would find the real binary and this assertion would fail. A GUID-suffixed root
+      // cannot exist on ANY host, real or CI, so the fail-closed assertion holds everywhere while
+      // still proving the gate is platform-READ (it reaches the real `statSync` and fails ENOENT on
+      // this literal path), not platform-DECORATIVE.
       Object.defineProperty(process, "platform", { ...platform, value: "win32" });
-      expect(() => resolveWindowsSystemBinary("cmd.exe", {})).toThrow(WindowsSystemDirectoryError);
+      const neverExistsRoot = String.raw`C:\keiko-test-8f14e45f-ceea-467e-9764-58bf5e5fc4c1`;
+      expect(() => resolveWindowsSystemBinary("cmd.exe", { SystemRoot: neverExistsRoot })).toThrow(
+        WindowsSystemDirectoryError,
+      );
     });
   });
 });
