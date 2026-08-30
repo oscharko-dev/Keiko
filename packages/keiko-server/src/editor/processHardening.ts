@@ -182,6 +182,21 @@ export function escalateKill(
   scheduler: KillScheduler = productionKillScheduler,
   whenExited?: ChildExitRegistration,
 ): Promise<void> {
+  // THE ORDER HERE IS LOAD-BEARING, AND IT IS NOT THE ORDER `killGroup` USES. A PR #3355 review P1
+  // asked for the exit check to be hoisted above this signal, matching the guard keiko-tools'
+  // exec.ts gained for `killGroup`. It was implemented and then WITHDRAWN, because `child` here is
+  // frequently a process GROUP handle, not a single process: `dapCapsuleSupervisor` passes
+  // `handle.processGroup` with `handle.exited`, which reports the DIRECT child. "The direct child
+  // exited" does not mean "there is nothing left to signal" — surviving descendants are exactly what
+  // containment must still reach. Hoisting the check timed out that supervisor's own proof,
+  // "rejects hostile descendant counts after containment" (15s, reproduced against HEAD both ways),
+  // by leaving the descendants unsignalled.
+  //
+  // The raw-pid hazard that P1 names is real and IS closed — at the layer that knows a pid, which
+  // this one does not: lspNodeAdapter's `kill` wrapper checks `exitCode`/`signalCode` before it
+  // reaches `nodeWindowsTreeKill` and logs a `not-attempted` disposition instead. `safeKill` here
+  // goes through `child.kill`, so that guard is in force for this call too; what it deliberately
+  // does not suppress is a group signal that still has descendants to reach.
   safeKill(child, "SIGTERM");
   if (exited()) return Promise.resolve();
   return new Promise<void>((resolve) => {

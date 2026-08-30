@@ -840,9 +840,16 @@ async function disposeManager(
       },
     );
   }
-  // F1 (PR reviewer finding): the child is provably terminated by this point — escalateKill only
-  // resolves once it has exited, and the branch above is skipped entirely when there was never a
-  // child to begin with. Clearing the state HERE, at the layer that owns it, means every lifecycle
+  // F1 (PR reviewer finding): SIGTERM, then SIGKILL at the grace deadline, has been requested by
+  // this point, and the branch above is skipped entirely when there was never a child to begin with.
+  //
+  // The original wording here — "escalateKill only resolves once it has exited" — was NOT true of
+  // the grace-deadline path, which settles on the SIGKILL request (PR #3355 review, P1; the
+  // primitive now says so at its own definition). Clearing ownership does not need that guarantee,
+  // and this is the reason it is correct without it: after dispose this manager no longer owns the
+  // pid whatever the child is doing, and it is CARRYING the pid that is unsafe — that is what let an
+  // OS-reused pid masquerade as ours in a reconstructed support timeline. Releasing it early is the
+  // fail-safe direction; holding it is not. Clearing the state HERE, at the layer that owns it, means every lifecycle
   // event from here on (including the terminal DISPOSED transition below) correctly omits
   // `childPid` per the contract on `LspLifecycleEvent.childPid`: "present only for a current
   // running child... absent after cleanup." Leaving it set let the OS-reused pid of a long-dead

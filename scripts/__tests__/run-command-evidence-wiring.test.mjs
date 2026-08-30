@@ -254,14 +254,54 @@ function objectLiteralProvidesOnTerminated(node, declByName, hopsRemaining) {
   return sawUnresolvedSpread ? "unresolved" : "false";
 }
 
+// One wired branch does NOT wire the call site: `flag ? { onTerminated } : {}` leaves a real runtime
+// path silent, which is the exact omission this gate exists to prevent (PR #3355 review, P1). So a
+// conditional is wired only when BOTH branches are, a resolved-false branch makes it unwired, and
+// anything else stays unresolved rather than being rounded up to "wired".
 function combineBranchResults(whenTrue, whenFalse) {
-  if (whenTrue === "true" || whenFalse === "true") return "true";
-  if (whenTrue === "unresolved" || whenFalse === "unresolved") return "unresolved";
-  return "false";
+  if (whenTrue === "false" || whenFalse === "false") return "false";
+  if (whenTrue === "true" && whenFalse === "true") return "true";
+  return "unresolved";
+}
+
+// The ONE shape where an empty branch is not a silent path: the optional-port pass-through
+// `...(deps.onTerminated !== undefined ? { onTerminated: deps.onTerminated } : {})`. The seam IS
+// threaded here — the empty branch means this caller was given no handler to thread, not that the
+// code forgot one — and `exactOptionalPropertyTypes` forces exactly this spelling, because an
+// `onTerminated?: T | undefined` target may not receive the key at all rather than receive
+// `undefined`. It is live production code (git-merge-node.ts:120), so the rule above must recognise
+// it by SHAPE instead of flagging the idiom the type system requires.
+//
+// Deliberately narrow: the guard must test `onTerminated` itself. `someOtherFlag ? {…} : {}` is not
+// this idiom and stays unwired, which is the case the review named.
+function guardsOnTerminatedPresence(condition) {
+  const namesOnTerminated = (node) =>
+    (ts.isPropertyAccessExpression(node) &&
+      ts.isIdentifier(node.name) &&
+      node.name.text === "onTerminated") ||
+    (ts.isIdentifier(node) && node.text === "onTerminated") ||
+    (ts.isElementAccessExpression(node) &&
+      ts.isStringLiteralLike(node.argumentExpression) &&
+      node.argumentExpression.text === "onTerminated");
+  if (namesOnTerminated(condition)) return true;
+  if (!ts.isBinaryExpression(condition)) return false;
+  const { operatorToken, left, right } = condition;
+  if (
+    operatorToken.kind === ts.SyntaxKind.InKeyword &&
+    ts.isStringLiteralLike(left) &&
+    left.text === "onTerminated"
+  ) {
+    return true;
+  }
+  const comparison =
+    operatorToken.kind === ts.SyntaxKind.ExclamationEqualsEqualsToken ||
+    operatorToken.kind === ts.SyntaxKind.ExclamationEqualsToken;
+  return comparison && (namesOnTerminated(left) || namesOnTerminated(right));
 }
 
 function conditionalProvidesOnTerminated(node, declByName, hopsRemaining) {
   const whenTrue = expressionProvidesOnTerminated(node.whenTrue, declByName, hopsRemaining);
+  if (whenTrue === "true" && guardsOnTerminatedPresence(node.condition)) return "true";
   const whenFalse = expressionProvidesOnTerminated(node.whenFalse, declByName, hopsRemaining);
   return combineBranchResults(whenTrue, whenFalse);
 }
@@ -495,6 +535,58 @@ describe("structural caller discovery and per-call wiring resolution (unit fixtu
     // file-scoped detection, which finds "onTerminated" in buildReadContext — correctly wired, not a
     // regression on the real production pattern this fixture mirrors.
     expect(silentCallSites("fixture-shared-context.ts", source)).toEqual([]);
+  });
+
+  // The four conditional shapes, after the PR #3355 review P1: one wired branch used to make the
+  // whole site "wired", so a real silent runtime path passed the gate that exists to catch it.
+  const conditionalFixture = (condition, whenFalse) => `
+      import { runCommand } from "@oscharko-dev/keiko-tools";
+      export async function run(deps): Promise<void> {
+        await runCommand({ command: "git", args: [], cwd: undefined, timeoutMs: 1, signal: s }, {
+          ...(${condition} ? { onTerminated: (e) => log(e) } : ${whenFalse}),
+        });
+      }
+    `;
+
+  it("P1: a one-sided conditional is UNWIRED — `flag ? { onTerminated } : {}` leaves a silent path", () => {
+    // Red before green: with the previous `whenTrue === "true" || whenFalse === "true"` this
+    // returned "wired" and the call site was never reported.
+    const unwired = silentCallSites(
+      "fixture-one-sided.ts",
+      conditionalFixture("deps.verbose === true", "{}"),
+    );
+    expect(unwired).toHaveLength(1);
+  });
+
+  it("P1: both branches wired is still WIRED", () => {
+    const unwired = silentCallSites(
+      "fixture-both-branches.ts",
+      conditionalFixture("deps.verbose === true", "{ onTerminated: (e) => audit(e) }"),
+    );
+    expect(unwired).toEqual([]);
+  });
+
+  it("P1: a wired branch against an UNRESOLVED one stays unresolved, not silently wired", () => {
+    // `deps.fallbackSeams` cannot be resolved in this file, so the site must fall through to the
+    // counted soft verdict rather than being rounded up to a hard "wired".
+    const source = conditionalFixture("deps.verbose === true", "deps.fallbackSeams");
+    const analysis = analyzeFile("fixture-unresolved-branch.ts", source);
+    expect(analysis?.unwired).toEqual([]);
+    expect(analysis?.softlyWired).toHaveLength(1);
+  });
+
+  // The idiom `exactOptionalPropertyTypes` forces on every optional-port pass-through, live at
+  // packages/keiko-tools/src/git-merge-node.ts:120. The empty branch means this caller was handed no
+  // handler to thread — not that the seam was forgotten — so it must stay wired, or the rule above
+  // would flag the spelling the type system requires.
+  it.each([
+    ["a !== undefined guard", "deps.onTerminated !== undefined"],
+    ["a truthiness guard", "deps.onTerminated"],
+    ["an `in` guard", '"onTerminated" in deps'],
+  ])("P1: the optional-port pass-through stays WIRED (%s)", (_label, condition) => {
+    expect(
+      silentCallSites("fixture-optional-port.ts", conditionalFixture(condition, "{}")),
+    ).toEqual([]);
   });
 
   it("catches a genuinely omitted seam even when the file mentions onTerminated elsewhere in an unrelated function", () => {
