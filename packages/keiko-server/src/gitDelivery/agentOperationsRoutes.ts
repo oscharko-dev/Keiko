@@ -198,12 +198,22 @@ function makeRequest(body: unknown, base: IncomingMessage): IncomingMessage {
   return req;
 }
 
+// The delegated contexts below carry the OUTER request's correlation id. Without it every line the
+// delegated git route emits — including a failed read or a spawn-boundary refusal — lands under
+// `UNKNOWN_CORRELATION_ID` and cannot be joined to the agent operation that caused it
+// (AGENTS.md §8 Rule 1). `RouteContext.correlationId` is optional and the project runs
+// `exactOptionalPropertyTypes`, so it is spread rather than assigned.
+function delegatedCorrelation(ctx: RouteContext): { readonly correlationId?: string } {
+  return ctx.correlationId === undefined ? {} : { correlationId: ctx.correlationId };
+}
+
 function postContext(ctx: RouteContext, pattern: string, body: unknown): RouteContext {
   return {
     req: makeRequest(body, ctx.req),
     res: ctx.res,
     params: {},
     url: new URL(`http://127.0.0.1${pattern}`),
+    ...delegatedCorrelation(ctx),
   };
 }
 
@@ -213,6 +223,7 @@ function readContext(ctx: RouteContext, path: string): RouteContext {
     res: ctx.res,
     params: {},
     url: new URL(`http://127.0.0.1${path}`),
+    ...delegatedCorrelation(ctx),
   };
 }
 

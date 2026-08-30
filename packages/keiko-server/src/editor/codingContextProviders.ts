@@ -96,6 +96,13 @@ export interface ProviderContext {
   readonly currentTimeMs: () => number;
   readonly nowMs: number;
   readonly gitContextReader?: GitContextReader | undefined;
+  /**
+   * The originating editor request's correlation id. The git context is assembled by CALLING the
+   * git routes in-process, so without it every line those routes emit — a failed read, a
+   * spawn-boundary refusal — lands under `UNKNOWN_CORRELATION_ID` and cannot be joined to the
+   * editor operation that triggered it (AGENTS.md §8 Rule 1).
+   */
+  readonly correlationId?: string | undefined;
 }
 
 export interface GitContextReadResult {
@@ -109,6 +116,7 @@ export type GitContextReader = (input: {
   readonly realRoot: string;
   readonly activeFile: string | null;
   readonly startLine: number;
+  readonly correlationId?: string | undefined;
 }) => Promise<GitContextReadResult | undefined>;
 
 const REPO_SEARCH_MAX_HITS = 6;
@@ -394,12 +402,20 @@ export function runEditorStateProvider(
 }
 
 // ─── read-only Git-context provider ────────────────────────────────────────────────
-function gitRouteContext(path: string): import("../routes.js").RouteContext {
+// Carries the originating request's correlation id into the in-process git route call, so the
+// lines that route emits are joinable to the editor operation rather than orphaned under
+// `UNKNOWN_CORRELATION_ID`. `RouteContext.correlationId` is optional and the project runs
+// `exactOptionalPropertyTypes`, so it is spread rather than assigned.
+function gitRouteContext(
+  path: string,
+  correlationId: string | undefined,
+): import("../routes.js").RouteContext {
   return {
     req: {} as IncomingMessage,
     res: {} as ServerResponse,
     params: {},
     url: new URL(path, "http://127.0.0.1"),
+    ...(correlationId === undefined ? {} : { correlationId }),
   };
 }
 
@@ -415,10 +431,11 @@ async function readStructuredDiff(
   realRoot: string,
   activeFile: string,
   scope: "staged" | "unstaged",
+  correlationId: string | undefined,
 ): Promise<GitEditorDiffResponse | undefined> {
   const query = new URLSearchParams({ root: realRoot, path: activeFile, scope });
   const result = await handleGitStructuredDiff(
-    gitRouteContext(`/api/git/diff/structured?${query.toString()}`),
+    gitRouteContext(`/api/git/diff/structured?${query.toString()}`, correlationId),
     deps,
     deps.gitRouteOptions,
   );
@@ -431,6 +448,7 @@ async function readBlame(
   realRoot: string,
   activeFile: string,
   startLine: number,
+  correlationId: string | undefined,
 ): Promise<GitEditorBlameResponse | undefined> {
   const query = new URLSearchParams({
     root: realRoot,
@@ -439,7 +457,7 @@ async function readBlame(
     maxLines: String(Math.min(GIT_AGENT_CONTEXT_MAX_BLAME_LINES, GIT_EDITOR_BLAME_MAX_LINES)),
   });
   const result = await handleGitBlame(
-    gitRouteContext(`/api/git/blame?${query.toString()}`),
+    gitRouteContext(`/api/git/blame?${query.toString()}`, correlationId),
     deps,
     deps.gitRouteOptions,
   );
@@ -450,7 +468,7 @@ async function readBlame(
 const defaultGitContextReader: GitContextReader = async (input) => {
   const query = new URLSearchParams({ root: input.realRoot });
   const result = await handleGitStatus(
-    gitRouteContext(`/api/git/status?${query.toString()}`),
+    gitRouteContext(`/api/git/status?${query.toString()}`, input.correlationId),
     input.deps,
     input.deps.gitRouteOptions,
   );
@@ -459,10 +477,22 @@ const defaultGitContextReader: GitContextReader = async (input) => {
   if (input.activeFile === null) return { status, diffs: [], blame: undefined };
   const diffs = await Promise.all(
     (["staged", "unstaged"] as const).map((scope) =>
-      readStructuredDiff(input.deps, input.realRoot, input.activeFile ?? "", scope),
+      readStructuredDiff(
+        input.deps,
+        input.realRoot,
+        input.activeFile ?? "",
+        scope,
+        input.correlationId,
+      ),
     ),
   );
-  const blame = await readBlame(input.deps, input.realRoot, input.activeFile, input.startLine);
+  const blame = await readBlame(
+    input.deps,
+    input.realRoot,
+    input.activeFile,
+    input.startLine,
+    input.correlationId,
+  );
   return {
     status,
     diffs: diffs.filter((diff): diff is GitEditorDiffResponse => diff !== undefined),
@@ -599,6 +629,7 @@ async function readGitContext(
       realRoot: ctx.realRoot,
       activeFile: snapshot.activeFile,
       startLine: (snapshot.cursor?.line ?? 0) + 1,
+      correlationId: ctx.correlationId,
     });
   } catch {
     return undefined;

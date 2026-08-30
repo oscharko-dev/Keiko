@@ -157,9 +157,14 @@ export interface OrchestratorDeps {
   // ADR-0173 D5 — the request-scoped correlation id, already carried this far for the Gateway
   // answerer. Threaded on to the git-history evidence provider so a git read that silently emptied
   // this ask's history ring is joinable to the ask itself in `server.log` (AGENTS.md §8 Rule 1).
-  // Absent for the legacy callers and tests that never had one; the provider falls back at the
-  // emitting site rather than inventing an id here.
-  readonly correlationId?: string | undefined;
+  //
+  // REQUIRED, not optional-with-a-fallback. Three production paths reach retrieval — single-folder,
+  // multi-source and hybrid — and each builds this object by hand. Two of them shipped without the
+  // id and stamped every git-history failure `UNKNOWN_CORRELATION_ID`, which type-checked perfectly
+  // because the field was optional. `undefined` is still an accepted VALUE (a caller genuinely
+  // without a request id says so explicitly, and the provider falls back at the emitting site);
+  // what the compiler now refuses is a call site that never considered it.
+  readonly correlationId: string | undefined;
   // Optional context profile (ADR-0055 D1, PR4-W1). When absent (legacy callers, multi-source and
   // hybrid paths in W1), the diagnostics observer is NOT invoked and the assembled pack is
   // byte-identical to today. When present, the observer attaches ContextAssemblyDiagnostics-derived

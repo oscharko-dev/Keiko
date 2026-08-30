@@ -441,6 +441,7 @@ describe("configuredRepoSemanticSearchProviderFor", () => {
         workspaceRoot: ROOT,
       },
       {
+        correlationId: undefined,
         answerer: { answer: () => Promise.resolve("") },
         nowMs: () => 1,
         fs,

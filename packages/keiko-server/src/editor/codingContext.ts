@@ -52,6 +52,8 @@ export interface AssembleCodingContextDeps {
   readonly budgetBytes?: number | undefined;
   readonly allowEmbeddingProviders?: boolean | undefined;
   readonly gitContextReader?: GitContextReader | undefined;
+  /** The originating request's correlation id; see ProviderContext for why the git context needs it. */
+  readonly correlationId?: string | undefined;
 }
 
 function buildProviderContext(
@@ -67,6 +69,7 @@ function buildProviderContext(
     currentTimeMs,
     nowMs: context.nowMs,
     gitContextReader: context.gitContextReader,
+    correlationId: context.correlationId,
   };
 }
 
