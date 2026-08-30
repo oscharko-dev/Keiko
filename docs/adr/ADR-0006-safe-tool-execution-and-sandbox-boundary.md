@@ -533,6 +533,24 @@ precondition for Wave 1, and block the issue until the operator infrastructure i
   it was accepted. The honest documentation of the Wave-1 limitation (D2, Dimension 4) is preferable
   to an overclaimed guarantee.
 
+### Alternative 6: OS-authoritative `GetSystemDirectoryW` verification, or refusing every override, vs. shape-plus-existence validation (PR #3355 review, finding T19)
+
+Investigated for the trusted-System32 resolver (`packages/keiko-security/src/windows-system-directory.ts`, introduced by PR #3354's review) after a follow-up review flagged that a shape-valid-but-fabricated `SystemRoot` (e.g. `C:\Attacker\Windows`, complete with its own `System32`) passes the resolver's canonical-shape and existence checks, because Node has no binding to `GetSystemDirectoryW`, the only OS-authoritative source.
+
+**Option A — spawn `powershell.exe -Command [System.Environment]::SystemDirectory` and compare against the candidate.**
+
+- **Pros**: the only channel Node exposes to the real `GetSystemDirectoryW` value; would close the residual completely for the common case.
+- **Cons**: circular trust — the verifier binary (`powershell.exe`) itself lives under `SystemRoot\System32\WindowsPowerShell\v1.0\`, so resolving IT from the untrusted candidate root re-introduces the exact problem being verified. The only sound bootstrap is to resolve `powershell.exe` from the HARDCODED default root only, which then cannot verify a genuinely non-standard install (Windows on a non-`C:` drive) at all — and `resolveWindowsSystemBinary` today joins a bare name directly onto `System32`, so verifying `powershell.exe` needs a second, subdirectory-aware join path that exists nowhere else in the module. The check would also need to run on the same synchronous path `killGroup`'s `taskkill.exe /T /F` runs on every SIGTERM/SIGKILL escalation step (D2 Dimension 5) — a cold PowerShell start is commonly 200-500ms, turning a single-digit-millisecond system call into a multi-hundred-millisecond stall on the process-termination hot path — and Server Core / Nano Server images ship without PowerShell at all, so a "verifier missing" failure mode would need its own policy on top of everything else.
+- **Why rejected**: the added spawn surface, the bootstrap complexity, and the hot-path latency cost are disproportionate to the threat this closes. The premise this module protects against is an attacker who can set process environment variables for Keiko's OWN process; per AGENTS.md's human-control invariant, that is the local user's own environment, not a remote/sandboxed adversary's — an attacker with that capability already runs code as the same local user Keiko runs as, which is a materially larger foothold than this residual grants them.
+
+**Option B — refuse every `SystemRoot`/`WINDIR` override; only ever trust the hardcoded default.**
+
+- **Pros**: closes the fabricated-root class completely for the override vector — no environment value, however shaped, can ever redirect resolution.
+- **Cons**: a real, not merely theoretical, functionality regression: a genuine non-standard Windows install (Windows on a non-`C:` drive, which real machines still ship) sets `SystemRoot` correctly at boot, and every call site that resolves `taskkill.exe`/`cmd.exe`/`cscript.exe` through this module would then resolve to a location that provably does not exist there, failing the existence check on every call. It also reverses already-tested, intentional behaviour — `windows-system-directory.test.ts`'s "accepts a valid drive-absolute SystemRoot override" and "falls back to WINDIR" cases exist because Dimension 1 above lists `SystemRoot`/`WINDIR` as legitimate Windows essentials.
+- **Why rejected**: trades a narrow, already-mitigated residual for a certain regression on a real, if uncommon, class of machine.
+
+**Decision**: keep shape-plus-existence validation (`assertCanonicalSystemRoot` plus the resolved-binary existence check) as the resolver's full contract, and keep the residual honestly documented in the module header rather than closed by either option above. The residual is already narrow: it requires an attacker who (a) controls Keiko's own process environment on the local machine AND (b) has separately planted a complete, real, on-disk directory tree (including its own `System32`) that passes every shape and existence check — at which point the attacker already has local write access to the filesystem outside Keiko's own workspace boundary, a capability this module was never positioned to deny. Revisit if Node ever exposes `GetSystemDirectoryW` directly (no spawn required), which would remove both the bootstrap circularity and the latency cost.
+
 ## Related
 
 - ADR-0001: Project Foundation and Toolchain — zero-runtime-dependency constraint (load-bearing

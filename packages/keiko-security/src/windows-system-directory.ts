@@ -20,6 +20,21 @@
 // `C:\Attacker\Windows`, complete with its own `System32`) passes both the shape check and the
 // existence check, because nothing short of `GetSystemDirectoryW` itself can tell that apart from
 // the genuine system directory. The residual is documented rather than papered over.
+//
+// PR #3355 review (finding T19) asked whether that residual can be closed further, and investigated
+// two options before choosing to leave it as-is; the full trade-off analysis is recorded as
+// Alternative 6 in ADR-0006. In short: (1) an OS-authoritative check via a spawned
+// `powershell.exe -Command [System.Environment]::SystemDirectory` is circular — the verifier binary
+// itself lives under the very `SystemRoot` being verified, so a sound bootstrap can only use the
+// HARDCODED default to find it, which then cannot verify a genuinely non-standard install at all —
+// and it would add a cold PowerShell start (commonly 200-500ms) to a path `killGroup`'s
+// `taskkill.exe` escalation runs SYNCHRONOUSLY on every SIGTERM/SIGKILL step (ADR-0006 D2
+// Dimension 5); (2) refusing every `SystemRoot`/`WINDIR` override outright would regress a genuine,
+// if uncommon, non-`C:`-drive Windows install to total failure on every resolution, for a residual
+// whose precondition (an attacker who can set env vars for Keiko's OWN process AND has separately
+// planted a complete on-disk directory tree, `System32` included) already implies local write access
+// this module was never positioned to deny. Both are disproportionate to what they would close;
+// shape-plus-existence validation remains the resolver's full, documented contract.
 
 import { statSync } from "node:fs";
 import { win32 as win32Path } from "node:path";
