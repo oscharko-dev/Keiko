@@ -187,6 +187,7 @@ function speakContext(body: unknown): {
     request,
     response,
     context: {
+      correlationId: undefined,
       req: request,
       res: response as unknown as RouteContext["res"],
       params: {},

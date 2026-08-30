@@ -191,6 +191,7 @@ function makeReq(body: Record<string, unknown>): IncomingMessage {
 
 function routeContext(req: IncomingMessage, res: ServerResponse): RouteContext {
   return {
+    correlationId: undefined,
     req,
     res,
     params: {},

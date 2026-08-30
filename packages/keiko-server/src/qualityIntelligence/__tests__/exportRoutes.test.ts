@@ -69,6 +69,7 @@ function makeRawReq(raw: string): IncomingMessage {
 
 function ctx(runId: string, req: IncomingMessage): RouteContext {
   return {
+    correlationId: undefined,
     req,
     res: {} as RouteContext["res"],
     params: { id: runId },
@@ -181,6 +182,7 @@ afterEach(() => {
 describe("handleQiExport — missing id param", () => {
   it("returns 400 QI_BAD_REQUEST when id param is absent", async () => {
     const c: RouteContext = {
+      correlationId: undefined,
       req: makeReq({ adapter: "csv" }),
       res: {} as RouteContext["res"],
       params: {},
@@ -193,6 +195,7 @@ describe("handleQiExport — missing id param", () => {
 
   it("returns 400 QI_BAD_REQUEST when id param is an empty string", async () => {
     const c: RouteContext = {
+      correlationId: undefined,
       req: makeReq({ adapter: "csv" }),
       res: {} as RouteContext["res"],
       params: { id: "" },
@@ -1432,6 +1435,7 @@ const MANIFEST_FILE = (dir: string): string => join(dir, "qi", `${RUN_ID}.qi.jso
 
 function editCtx(runId: string, body: Record<string, unknown>): RouteContext {
   return {
+    correlationId: undefined,
     req: makeReq(body),
     res: {} as RouteContext["res"],
     params: { id: runId },
@@ -1441,6 +1445,7 @@ function editCtx(runId: string, body: Record<string, unknown>): RouteContext {
 
 function detailCtx(runId: string): RouteContext {
   return {
+    correlationId: undefined,
     req: makeRawReq(""),
     res: {} as RouteContext["res"],
     params: { id: runId },

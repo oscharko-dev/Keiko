@@ -149,6 +149,7 @@ function depsFor(
 function makeRouteContext(path: string): RouteContext {
   const req = new IncomingMessage(new Socket());
   return {
+    correlationId: undefined,
     req,
     res: new ServerResponse(req),
     params: {},

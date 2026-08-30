@@ -240,6 +240,7 @@ function jsonRequest(body: Record<string, unknown>): IncomingMessage {
 
 function ctxFor(params: Record<string, string>, body: Record<string, unknown>): RouteContext {
   return {
+    correlationId: undefined,
     req: jsonRequest(body),
     res: {} as never,
     params,

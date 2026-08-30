@@ -184,29 +184,36 @@ Settled network operations re-read branch/upstream/ahead/behind, build a redacte
 
 ### `GitSyncOutcome` taxonomy
 
-The evidence-friendly outcome union (`GIT_SYNC_OUTCOMES`, 13 members):
+The evidence-friendly outcome union (`GIT_SYNC_OUTCOMES`, 15 members):
 
-| Outcome              | Operation | Meaning                                                       |
-| -------------------- | --------- | ------------------------------------------------------------- |
-| `succeeded`          | both      | Fetch completed / pull fast-forwarded.                        |
-| `up-to-date`         | pull      | Already up to date (stdout match).                            |
-| `no-remote`          | both      | No such remote / not a Git repository on the remote leg.      |
-| `no-upstream`        | pull      | No tracking information for the current branch.               |
-| `detached-head`      | pull      | Detached HEAD (surfaced as a preview block; pull cannot run). |
-| `dirty-worktree`     | pull      | Local changes would be overwritten.                           |
-| `not-fast-forward`   | pull      | `--ff-only` refused a non-fast-forward.                       |
-| `auth-failed`        | both      | Credentials/permission/terminal-prompt-disabled failure.      |
-| `untrusted-host-key` | both      | SSH refused an unknown or changed host key.                   |
-| `timeout`            | both      | The bounded process was truncated (timeout or byte cap).      |
-| `git-missing`        | both      | The `git` executable was unavailable (exit code 127).         |
-| `unsafe-repository`  | both      | Dubious ownership / `safe.directory` refusal.                 |
-| `git-error`          | both      | A non-zero result none of the above classifies.               |
+| Outcome              | Operation | Meaning                                                        |
+| -------------------- | --------- | -------------------------------------------------------------- |
+| `succeeded`          | both      | Fetch completed / pull fast-forwarded.                         |
+| `up-to-date`         | pull      | Already up to date (stdout match).                             |
+| `no-remote`          | both      | No such remote / not a Git repository on the remote leg.       |
+| `no-upstream`        | pull      | No tracking information for the current branch.                |
+| `detached-head`      | pull      | Detached HEAD (surfaced as a preview block; pull cannot run).  |
+| `dirty-worktree`     | pull      | Local changes would be overwritten.                            |
+| `not-fast-forward`   | pull      | `--ff-only` refused a non-fast-forward.                        |
+| `auth-failed`        | both      | Credentials/permission/terminal-prompt-disabled failure.       |
+| `untrusted-host-key` | both      | SSH refused an unknown or changed host key.                    |
+| `remote-unavailable` | both      | The remote host could not be reached (DNS, refused, no route). |
+| `timeout`            | both      | Keiko's wall-clock budget fired and stopped the run.           |
+| `output-truncated`   | both      | Keiko's byte cap cut the output. NOT a timeout — see below.    |
+| `git-missing`        | both      | The `git` executable was unavailable (exit code 127).          |
+| `unsafe-repository`  | both      | Dubious ownership / `safe.directory` refusal.                  |
+| `git-error`          | both      | A non-zero result none of the above classifies.                |
 
-Outcome classification scans stderr case-insensitively in a fixed precedence: truncation → exit code
-127 → ownership → host-key trust → auth → remote/repository → (pull only)
-tracking/fast-forward/local-changes → exit-code-0 success/up-to-date → `git-error`. Ownership,
-host-key trust, and auth precede the generic remote checks so a credential or SSH-trust failure is
-never mislabeled.
+Outcome classification scans stderr case-insensitively in a fixed precedence: exit code 127 →
+caller cancellation → wall-clock timeout → recognized cause phrases → byte cap → exit-code-0
+success/up-to-date → `git-error`. Ownership, host-key trust, and auth precede the generic remote
+checks so a credential or SSH-trust failure is never mislabeled.
+
+`timeout` and `output-truncated` are SEPARATE members on purpose, and the ordering above is what
+keeps them apart. The runner sets `truncated` for the byte cap AND for the wall-clock stop, so a
+classifier reading `truncated` alone reports every over-cap run as a timeout — the exact defect
+`classifyGitRemoteFailure` was hardened against. The deadline is checked first; the cap only claims
+a run no earlier cause explains.
 
 ## 4. Reuse and safety boundaries
 
@@ -214,11 +221,38 @@ never mislabeled.
   `optionsWithDefaults`, `classifyFailure`, `defaultGitProcessRunner`, and `deps.redactor` from
   `gitRoutes.ts` (those five symbols were made `export` behavior-preservingly), plus the shared
   `parsePorcelainV2Branch` from `gitPorcelainStatus.ts` consumed identically by the sync preview.
+- **A failed git run is on the activity log, and the response body still is not.** This holds
+  across two DIFFERENT execution boundaries, and the guarantees are not identical — the distinction
+  matters when reading a log, so it is stated rather than blurred:
+  - **Through the `GitProcessRunner` boundary** (the read routes, the clone route, and the
+    fetch/pull sync executor — both its local read runner and its credential-capable network
+    runner): every run goes through `observedGitRunner` (`gitProcessActivity.ts`), so an
+    UNDECLARED non-zero outcome — and a run the byte cap cut, which can still close with exit 0 —
+    writes one body-free line per subprocess: `git.process.failed`, or `git.process.refused` on the
+    `security` category when keiko-git's spawn boundary rejected the invocation (a forbidden
+    option, a denied `-c` config key, or a `git` resolved in an untrusted location). "Undeclared"
+    is the call site's own statement, never the observer's guess: `git diff --no-index` exits 1 to
+    say "the files differ", so that route declares `expectedExitCodes: [1]` and a healthy untracked
+    diff stays OFF the log instead of writing a `warn` under the 200 the route returns. Every line
+    carries the subcommand, how the child ended and the request's own correlation id; the refusal
+    class is carried by `git.process.refused` alone, because only a spawn-boundary refusal has one.
+  - **Through the keiko-tools `runCommand` boundary** (the governed publish/push path,
+    ADR-0085): this does NOT use `GitProcessRunner`, so `observedGitRunner` cannot reach it. It
+    reports at the ACTION grain instead — `logGitDeliveryMutation` writes one line per governed
+    action with `actionKind: "push"`, and a snapshot precondition failure writes
+    `git.delivery.mutation.failed` — not one line per spawned subprocess. An operator reading a
+    failed push therefore gets the action's outcome, not each `status`/`branch`/`remote` read the
+    snapshot performed.
+
+  The redacted response projections are unchanged on both; the log is where the reason lives.
+
 - **Fetch/pull do NOT enter the governed mutation taxonomy.** `GitDeliveryActionKind` carries no
   fetch/pull, and the sync executor (`syncExecution.ts`) does not import `runGitMutation`, the policy
-  packs, or the approval-token gate. It reuses only the hardened runner with fixed argv. The rationale
-  (a fetch writes only remote-tracking refs; a fast-forward-only pull advances by replay) and the
-  reuse-vs-new decision are recorded in
+  packs, or the approval-token gate. It reuses only the hardened runner with fixed argv — observed,
+  like every other git run above: `normalizeSeams` wraps both the local read runner and the
+  credential-capable network runner, so a sync failure is logged even though it never enters the
+  kernel. The rationale (a fetch writes only remote-tracking refs; a fast-forward-only pull advances
+  by replay) and the reuse-vs-new decision are recorded in
   [ADR-0098](../adr/ADR-0098-git-client-repository-state-and-sync-api.md) D4.
 - **Sync evidence is a sibling ledger.** `syncEvidence.ts` mirrors `mutationEvidenceLedger.ts`: one
   UTC date-bucketed document (run id `git-sync-evidence-YYYY-MM-DD`), `EvidenceStore.update ?? get+put`,

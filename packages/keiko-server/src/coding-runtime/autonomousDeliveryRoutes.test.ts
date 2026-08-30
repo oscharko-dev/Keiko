@@ -107,6 +107,7 @@ function ctx(body: unknown): RouteContext {
   req.method = "POST";
   req.headers = { "content-type": "application/json", "x-keiko-csrf": "1" };
   return {
+    correlationId: undefined,
     req,
     res: {} as ServerResponse,
     params: {},

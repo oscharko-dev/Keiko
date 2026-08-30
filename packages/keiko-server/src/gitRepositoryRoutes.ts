@@ -15,9 +15,13 @@ import {
   defaultGitNetworkProcessRunner,
   isSafeGitPositional,
   type GitProcessResult,
+  type GitProcessRunner,
   type GitRemoteFailureReason,
 } from "@oscharko-dev/keiko-git";
 import { emitServerDiagnostic, serverDiagnosticFromError } from "./diagnostics-log.js";
+import { observedGitRunner } from "./gitProcessActivity.js";
+import type { ServerLogSink } from "./observability/index.js";
+import { processServerLogSink } from "./process-log-sink.js";
 
 const MAX_BODY_BYTES = 32 * 1024;
 const MAX_OUTPUT_BYTES = 64 * 1024;
@@ -258,9 +262,15 @@ async function assertDestination(candidate: string): Promise<RouteResult | strin
   return normalized;
 }
 
-type CloneRepositoryRunner = (
+// `runner` is the OBSERVED network runner the handler builds per request (see
+// createCloneRepositoryHandler). Passing it in rather than reaching for
+// `defaultGitNetworkProcessRunner` here is what puts a failed clone — and, defence in depth, a
+// spawn-boundary refusal — into the activity log under the request's own correlation id; the
+// existing two-parameter test seams stay assignable because they simply ignore it.
+export type CloneRepositoryRunner = (
   repositoryUrl: string,
   destinationPath: string,
+  runner: GitProcessRunner,
 ) => Promise<RouteResult | null>;
 
 // Clone goes through the shared hardened runner (single spawn path, byte cap, timeout with
@@ -268,6 +278,7 @@ type CloneRepositoryRunner = (
 const cloneRepository: CloneRepositoryRunner = async function cloneRepository(
   repositoryUrl: string,
   destinationPath: string,
+  runner: GitProcessRunner,
 ): Promise<RouteResult | null> {
   // Fail closed at the spawn boundary: neither positional may be option-like, so a hostile URL or
   // destination can never be re-read by git as `--upload-pack`/`--exec`/… even though `--` already
@@ -280,10 +291,11 @@ const cloneRepository: CloneRepositoryRunner = async function cloneRepository(
   if (!isSafeGitPositional(repositoryUrl) || !isSafeGitPositional(destinationPath)) {
     return invalid("The repository URL and destination must be non-empty.");
   }
-  const result = await defaultGitNetworkProcessRunner(
-    ["clone", "--", repositoryUrl, destinationPath],
-    { cwd: dirname(destinationPath), maxBytes: MAX_OUTPUT_BYTES, timeoutMs: CLONE_TIMEOUT_MS },
-  );
+  const result = await runner(["clone", "--", repositoryUrl, destinationPath], {
+    cwd: dirname(destinationPath),
+    maxBytes: MAX_OUTPUT_BYTES,
+    timeoutMs: CLONE_TIMEOUT_MS,
+  });
   return classifyCloneOutcome(result);
 };
 
@@ -415,6 +427,7 @@ function handleCloneError(ctx: RouteContext, deps: UiHandlerDeps, error: unknown
 
 export function createCloneRepositoryHandler(
   cloneRunner: CloneRepositoryRunner = cloneRepository,
+  activityLog: ServerLogSink = processServerLogSink(),
 ): (ctx: RouteContext, deps: UiHandlerDeps) => Promise<RouteResult> {
   return async (ctx: RouteContext, deps: UiHandlerDeps): Promise<RouteResult> => {
     try {
@@ -430,7 +443,11 @@ export function createCloneRepositoryHandler(
       const destination = await assertDestination(destinationInput);
       if (typeof destination !== "string") return destination;
       assertUiDbOutsideProject(deps.uiDbPath, destination);
-      const cloneResult = await cloneRunner(repositoryUrl, destination);
+      const cloneResult = await cloneRunner(
+        repositoryUrl,
+        destination,
+        observedGitRunner(defaultGitNetworkProcessRunner, activityLog, ctx.correlationId),
+      );
       if (cloneResult !== null) return cloneResult;
       const normalizedPath = validateProjectPath(destination, { mustExist: true });
       // Registration owns the paired project + single-root manifest transaction. Only after that

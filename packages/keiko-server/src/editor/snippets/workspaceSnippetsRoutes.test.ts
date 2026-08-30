@@ -167,6 +167,7 @@ function context(
   res: ServerResponse = {} as ServerResponse,
 ): RouteContext {
   return {
+    correlationId: undefined,
     req: request(body, headers),
     res,
     params: {},

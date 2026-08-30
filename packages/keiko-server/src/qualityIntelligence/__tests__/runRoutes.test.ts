@@ -85,6 +85,7 @@ class MockResponse extends EventEmitter {
 
 function ctx(req: IncomingMessage, res: MockResponse): RouteContext {
   return {
+    correlationId: undefined,
     req,
     res: res as unknown as ServerResponse,
     params: {},

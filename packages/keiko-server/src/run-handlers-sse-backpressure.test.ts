@@ -142,6 +142,7 @@ describe("SSE writers report reason=backpressure-killed, not client-disconnected
     const deps = minimalDeps(registry);
     const { res, frames, fireClose } = rejectingFakeRes();
     const ctx: RouteContext = {
+      correlationId: undefined,
       req: fakeReq(),
       res,
       params: { runId: "run-bp-1" },
@@ -170,6 +171,7 @@ describe("SSE writers report reason=backpressure-killed, not client-disconnected
     const deps = minimalDeps(registry);
     const { res, frames, fireClose } = rejectingFakeRes();
     const ctx: RouteContext = {
+      correlationId: undefined,
       req: fakeReq(),
       res,
       params: {},

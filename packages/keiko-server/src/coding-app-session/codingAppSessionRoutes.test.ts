@@ -34,6 +34,7 @@ function fakeReq(cookie?: string): IncomingMessage {
 
 function ctx(cookie?: string): RouteContext {
   return {
+    correlationId: undefined,
     req: fakeReq(cookie),
     res: {} as ServerResponse,
     params: {},
@@ -134,7 +135,13 @@ describe("app-session route handlers (fail-closed defensive branches)", () => {
       destroyed: false,
     } as unknown as ServerResponse;
     handleCodingAppSessionChannelStream(
-      { req: fakeReq(), res, params: {}, url: new URL("http://127.0.0.1/") },
+      {
+        correlationId: undefined,
+        req: fakeReq(),
+        res,
+        params: {},
+        url: new URL("http://127.0.0.1/"),
+      },
       deps(),
     );
     expect(writes[0]).toContain('"content":null');

@@ -8,6 +8,7 @@ import { buildRedactor, createRunRegistry, type UiHandlerDeps } from "./index.js
 import { createInMemoryUiStore } from "./store/index.js";
 
 const emptyCtx: RouteContext = {
+  correlationId: undefined,
   req: {} as RouteContext["req"],
   res: {} as RouteContext["res"],
   params: {},

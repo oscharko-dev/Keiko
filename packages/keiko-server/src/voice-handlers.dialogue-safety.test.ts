@@ -141,6 +141,7 @@ function ctx(url: string, body: unknown): RouteContext {
     writableEnded: false,
   });
   return {
+    correlationId: undefined,
     req: Readable.from([Buffer.from(JSON.stringify(body), "utf8")], {
       autoDestroy: false,
     }) as IncomingMessage,

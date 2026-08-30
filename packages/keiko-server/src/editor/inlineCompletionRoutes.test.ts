@@ -48,6 +48,7 @@ function postContext(body: unknown): RouteContext {
   ]) as unknown as IncomingMessage;
   (req as { method?: string }).method = "POST";
   return {
+    correlationId: undefined,
     req,
     res: {} as unknown as ServerResponse,
     params: {},

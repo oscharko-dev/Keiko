@@ -184,6 +184,7 @@ function routeCtx(body: string): RouteContext {
   const res = new EventEmitter() as RouteContext["res"] & { writableEnded: boolean };
   res.writableEnded = false;
   return {
+    correlationId: undefined,
     req: fakeReq(body),
     res,
     params: {},

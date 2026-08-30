@@ -52,6 +52,7 @@ function makeCtx(
 ): RouteContext {
   const socket = new Socket();
   return {
+    correlationId: undefined,
     req: makeReq(payload),
     res: { socket } as unknown as RouteContext["res"],
     params,

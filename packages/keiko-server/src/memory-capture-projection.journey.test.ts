@@ -111,6 +111,7 @@ function makeRequest(content: string): {
 
 function makeRouteContext(path: string, payload: unknown, id?: string): RouteContext {
   return {
+    correlationId: undefined,
     req: Readable.from([Buffer.from(JSON.stringify(payload))]) as unknown as IncomingMessage,
     res: { socket: new Socket() } as unknown as RouteContext["res"],
     params: id === undefined ? {} : { id },

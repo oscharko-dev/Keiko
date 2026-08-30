@@ -67,6 +67,7 @@ function context(
   req.headers = cookie === undefined ? {} : { cookie };
   queueMicrotask(() => (req as unknown as PassThrough).end(body));
   return {
+    correlationId: undefined,
     req,
     res: new FakeResponse() as unknown as RouteContext["res"],
     params,

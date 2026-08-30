@@ -114,12 +114,7 @@ function makeCtx(
       destroyed: (): boolean => destroyed,
     },
   } as unknown as ServerResponse;
-  return {
-    req: req as unknown as IncomingMessage,
-    res,
-    params,
-    url,
-  };
+  return { correlationId: undefined, req: req as unknown as IncomingMessage, res, params, url };
 }
 
 function trackingRedactor(): {
@@ -1561,7 +1556,7 @@ describe("GET /api/relationships/events correlationId threading (#2902 audit fin
       res,
       params: {},
       url,
-      ...(correlationId === undefined ? {} : { correlationId }),
+      correlationId,
     };
   }
 

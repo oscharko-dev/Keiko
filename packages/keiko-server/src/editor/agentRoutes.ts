@@ -1467,7 +1467,11 @@ function serverResolvedPathIssues(
   return queryGitPathIssue(action, snapshot);
 }
 
-function serverActionContext(body: unknown, path: string): RouteContext {
+// `correlationId` is the ACTION's own id, not a request id: these contexts are synthesized to run
+// an editor-agent action's server-resolved step in-process, and the action is the operation an
+// operator reconstructs. `executeServerResolvedAction` already keys its diagnostics on the same
+// value, so a delegated route's activity-log lines now join to the identical id (AGENTS.md §8).
+function serverActionContext(body: unknown, path: string, actionId: string): RouteContext {
   const req = Readable.from([
     Buffer.from(JSON.stringify(body), "utf8"),
   ]) as unknown as IncomingMessage;
@@ -1476,7 +1480,13 @@ function serverActionContext(body: unknown, path: string): RouteContext {
     writableEnded: false,
     on: (): typeof res => res,
   } as unknown as ServerResponse;
-  return { req, res, params: {}, url: new URL(`http://127.0.0.1${path}`) };
+  return {
+    req,
+    res,
+    params: {},
+    url: new URL(`http://127.0.0.1${path}`),
+    correlationId: actionId,
+  };
 }
 
 function actionAbortSignal(ctx: RouteContext): AbortSignal {
@@ -2480,6 +2490,7 @@ async function runNavigateSymbolAction(
         ...(request.diagnostics === undefined ? {} : { diagnostics: request.diagnostics }),
       },
       "/api/editor/language",
+      action.actionId,
     ),
     deps,
     deps.editorLanguageRouteOptions,
@@ -2490,6 +2501,7 @@ async function runNavigateSymbolAction(
 function symbolSearchContext(
   root: string,
   request: NonNullable<EditorAgentAction["searchWorkspace"]>,
+  actionId: string,
 ): RouteContext {
   return serverActionContext(
     {
@@ -2499,6 +2511,7 @@ function symbolSearchContext(
       ...(request.scopePath === undefined ? {} : { scopePath: request.scopePath }),
     },
     "/api/editor/workspace-symbols",
+    actionId,
   );
 }
 
@@ -2507,6 +2520,7 @@ function symbolSearchContext(
 function textSearchContext(
   root: string,
   request: NonNullable<EditorAgentAction["searchWorkspace"]>,
+  actionId: string,
 ): RouteContext {
   return serverActionContext(
     {
@@ -2521,6 +2535,7 @@ function textSearchContext(
       ...(request.scopePath === undefined ? {} : { scopePath: request.scopePath }),
     },
     "/api/editor/workspace-search",
+    actionId,
   );
 }
 
@@ -2532,9 +2547,15 @@ async function runSearchWorkspaceAction(
   const request = action.searchWorkspace;
   if (request === undefined) throw new Error("searchWorkspace payload is missing");
   if (request.mode === "symbol") {
-    return handleEditorWorkspaceSymbols(symbolSearchContext(snapshot.workspaceRoot, request), deps);
+    return handleEditorWorkspaceSymbols(
+      symbolSearchContext(snapshot.workspaceRoot, request, action.actionId),
+      deps,
+    );
   }
-  return handleEditorWorkspaceSearch(textSearchContext(snapshot.workspaceRoot, request), deps);
+  return handleEditorWorkspaceSearch(
+    textSearchContext(snapshot.workspaceRoot, request, action.actionId),
+    deps,
+  );
 }
 
 // Issue #2298: a GET-style synthesized route context so the read-only git handlers (which read
@@ -2543,6 +2564,7 @@ async function runSearchWorkspaceAction(
 function gitReadContext(
   path: string,
   entries: readonly (readonly [string, string])[],
+  actionId: string,
 ): RouteContext {
   const url = new URL(`http://127.0.0.1${path}`);
   for (const [key, value] of entries) url.searchParams.set(key, value);
@@ -2552,19 +2574,24 @@ function gitReadContext(
     writableEnded: false,
     on: (): typeof res => res,
   } as unknown as ServerResponse;
-  return { req, res, params: {}, url };
+  return { req, res, params: {}, url, correlationId: actionId };
 }
 
 function runGitStatusResult(
   root: string,
   path: string,
   deps: EditorAgentActionRouteDeps,
+  actionId: string,
 ): Promise<RouteResult> {
   return handleGitStatus(
-    gitReadContext("/api/git/status", [
-      ["root", root],
-      ["path", path],
-    ]),
+    gitReadContext(
+      "/api/git/status",
+      [
+        ["root", root],
+        ["path", path],
+      ],
+      actionId,
+    ),
     deps,
   );
 }
@@ -2574,13 +2601,18 @@ function runGitDiffResult(
   path: string,
   scope: "staged" | "unstaged",
   deps: EditorAgentActionRouteDeps,
+  actionId: string,
 ): Promise<RouteResult> {
   return handleGitStructuredDiff(
-    gitReadContext("/api/git/diff/structured", [
-      ["root", root],
-      ["path", path],
-      ["scope", scope],
-    ]),
+    gitReadContext(
+      "/api/git/diff/structured",
+      [
+        ["root", root],
+        ["path", path],
+        ["scope", scope],
+      ],
+      actionId,
+    ),
     deps,
   );
 }
@@ -2589,14 +2621,19 @@ function runGitBlameResult(
   root: string,
   path: string,
   deps: EditorAgentActionRouteDeps,
+  actionId: string,
 ): Promise<RouteResult> {
   return handleGitBlame(
-    gitReadContext("/api/git/blame", [
-      ["root", root],
-      ["path", path],
-      ["startLine", "1"],
-      ["maxLines", String(GIT_AGENT_CONTEXT_MAX_BLAME_LINES + 1)],
-    ]),
+    gitReadContext(
+      "/api/git/blame",
+      [
+        ["root", root],
+        ["path", path],
+        ["startLine", "1"],
+        ["maxLines", String(GIT_AGENT_CONTEXT_MAX_BLAME_LINES + 1)],
+      ],
+      actionId,
+    ),
     deps,
   );
 }
@@ -2925,11 +2962,12 @@ function queryGitDiffResults(
   request: NonNullable<EditorAgentAction["queryGit"]>,
   snapshot: EditorAgentSessionSnapshot,
   deps: EditorAgentActionRouteDeps,
+  actionId: string,
 ): Promise<readonly RouteResult[]> | undefined {
   if (!request.aspects.includes("diff")) return undefined;
   return Promise.all(
     (["staged", "unstaged"] as const).map((scope) =>
-      runGitDiffResult(snapshot.workspaceRoot, request.path, scope, deps),
+      runGitDiffResult(snapshot.workspaceRoot, request.path, scope, deps, actionId),
     ),
   );
 }
@@ -2938,9 +2976,10 @@ function queryGitBlameResult(
   request: NonNullable<EditorAgentAction["queryGit"]>,
   snapshot: EditorAgentSessionSnapshot,
   deps: EditorAgentActionRouteDeps,
+  actionId: string,
 ): Promise<RouteResult> | undefined {
   return request.aspects.includes("blame")
-    ? runGitBlameResult(snapshot.workspaceRoot, request.path, deps)
+    ? runGitBlameResult(snapshot.workspaceRoot, request.path, deps, actionId)
     : undefined;
 }
 
@@ -2951,10 +2990,11 @@ async function collectQueryGitOptionalAspects(
   deps: EditorAgentActionRouteDeps,
   aspects: Record<string, unknown>,
   omissions: QueryGitOmission[],
+  actionId: string,
 ): Promise<QueryGitPolicyDenial | QueryGitCancellation | undefined> {
   const [diffResults, blameResult] = await Promise.all([
-    queryGitDiffResults(request, snapshot, deps),
-    queryGitBlameResult(request, snapshot, deps),
+    queryGitDiffResults(request, snapshot, deps, actionId),
+    queryGitBlameResult(request, snapshot, deps, actionId),
   ]);
   if (queryGitWasCancelled(deps)) return { kind: "query-git-cancelled" };
   const denial = queryGitBoundaryDenial([
@@ -3031,7 +3071,12 @@ async function runQueryGitAction(
 ): Promise<RouteResult | QueryGitPolicyDenial | QueryGitCancellation> {
   const request = action.queryGit;
   if (request === undefined) throw new Error("queryGit payload is missing");
-  const statusResult = await runGitStatusResult(snapshot.workspaceRoot, request.path, deps);
+  const statusResult = await runGitStatusResult(
+    snapshot.workspaceRoot,
+    request.path,
+    deps,
+    action.actionId,
+  );
   if (queryGitWasCancelled(deps)) return { kind: "query-git-cancelled" };
   const statusDenial = queryGitBoundaryDenial([statusResult]);
   if (statusDenial !== undefined) return statusDenial;
@@ -3060,6 +3105,7 @@ async function runQueryGitAction(
     deps,
     aspects,
     omissions,
+    action.actionId,
   );
   if (optionalDenial !== undefined) return optionalDenial;
   return queryGitSuccessResult(action, request.path, aspects, omissions, deps);

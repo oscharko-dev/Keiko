@@ -140,6 +140,7 @@ function routeContext(body: unknown): RouteContext {
   });
   const response = mockResponse();
   return {
+    correlationId: undefined,
     req: request,
     res: response.res,
     params: {},
@@ -189,6 +190,7 @@ function authenticatedContext(body: unknown, origin?: string): RouteContext {
   const rawBody = typeof body === "string" ? body : JSON.stringify(body);
   const response = mockResponse({ captureBody: true });
   return {
+    correlationId: undefined,
     req: mockRequest({
       method: "POST",
       url: "/api/coding-sidecar/gateway/chat/completions",
@@ -2136,6 +2138,7 @@ describe("coding-sidecar gateway", () => {
       res: mockResponse().res,
       params: {},
       url: new URL("http://127.0.0.1/api/coding-sidecar/gateway/profile"),
+      correlationId: undefined,
     } satisfies RouteContext;
     const deps = depsValue(configValue(provider(), capability()), undefined, {}, undefined, {
       codingWorkbenchEvidenceStore: {
@@ -2167,6 +2170,7 @@ describe("coding-sidecar gateway", () => {
       res: mockResponse().res,
       params: {},
       url: new URL("http://127.0.0.1/api/coding-sidecar/gateway/profile"),
+      correlationId: undefined,
     } satisfies RouteContext;
     const config = configValue(provider(), capability());
     const unprobed = handleCodingSidecarGatewayProfile(context, depsValue(config));
@@ -2198,6 +2202,7 @@ describe("coding-sidecar gateway", () => {
       res: mockResponse().res,
       params: {},
       url: new URL("http://127.0.0.1/api/coding-sidecar/gateway/profile"),
+      correlationId: undefined,
     } satisfies RouteContext;
     const result = handleCodingSidecarGatewayProfile(
       context,

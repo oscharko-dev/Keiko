@@ -190,6 +190,7 @@ function makeCtx(bodyStr: string): RouteContext {
     once: (_event: string, _listener: () => void): unknown => fakeReq,
   }) as unknown as IncomingMessage;
   return {
+    correlationId: undefined,
     req: fakeReq,
     res: {} as RouteContext["res"],
     params: {},
@@ -754,6 +755,7 @@ function makeGetCtx(runId: string): RouteContext {
     once: (_event: string, _listener: () => void): unknown => fakeReq,
   }) as unknown as IncomingMessage;
   return {
+    correlationId: undefined,
     req: fakeReq,
     res: {} as RouteContext["res"],
     params: { runId },
@@ -768,6 +770,7 @@ function makePatchSnapshotCtx(runId: string, body: Record<string, unknown>): Rou
     once: (_event: string, _listener: () => void): unknown => fakeReq,
   }) as unknown as IncomingMessage;
   return {
+    correlationId: undefined,
     req: fakeReq,
     res: {} as RouteContext["res"],
     params: { runId },
@@ -782,6 +785,7 @@ function makeScreenJsonCtx(runId: string, screenId: string): RouteContext {
     once: (_event: string, _listener: () => void): unknown => fakeReq,
   }) as unknown as IncomingMessage;
   return {
+    correlationId: undefined,
     req: fakeReq,
     res: {} as RouteContext["res"],
     params: { runId: encodeURIComponent(runId), screenId: encodeURIComponent(screenId) },
@@ -800,6 +804,7 @@ function makeListCtx(query = ""): RouteContext {
     once: (_event: string, _listener: () => void): unknown => fakeReq,
   }) as unknown as IncomingMessage;
   return {
+    correlationId: undefined,
     req: fakeReq,
     res: {} as RouteContext["res"],
     params: {},

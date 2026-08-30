@@ -1,3 +1,4 @@
+import { captureActivityLog } from "./activityLogCapture.test-support.js";
 import { mkdir, mkdtemp, readFile, realpath, rm, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, delimiter, dirname, join } from "node:path";
@@ -49,6 +50,7 @@ function deps(runner: GitProcessRunner, redactor = buildRedactor({})): UiHandler
 
 function ctx(path: string): RouteContext {
   return {
+    correlationId: undefined,
     req: Readable.from([]) as unknown as IncomingMessage,
     res: {} as unknown as ServerResponse,
     params: {},
@@ -316,7 +318,12 @@ describe("GET /api/git/summary", () => {
     const runner = vi
       .fn<GitProcessRunner>()
       .mockResolvedValueOnce(ok(`${root}\n`))
-      .mockResolvedValueOnce(fail("fatal: detected dubious ownership"));
+      .mockResolvedValueOnce(fail("fatal: detected dubious ownership"))
+      // The summary route reads `status` and `remote -v` concurrently, so a fake scripted with
+      // only the two calls above answers a third call with `undefined` — a value no
+      // GitProcessRunner can return. The base result keeps the fake inside its own declared
+      // contract instead of relying on the route never dereferencing that answer.
+      .mockResolvedValue(ok(""));
 
     const result = await handleGitSummary(
       ctx(`/api/git/summary?root=${encodeURIComponent(root)}`),
@@ -964,7 +971,12 @@ describe("read routes — auth-shaped status failure maps to git-error", () => {
     const runner = vi
       .fn<GitProcessRunner>()
       .mockResolvedValueOnce(ok(`${root}\n`))
-      .mockResolvedValueOnce(statusResult);
+      .mockResolvedValueOnce(statusResult)
+      // The summary route reads `status` and `remote -v` concurrently, so a fake scripted with
+      // only the two calls above answers a third call with `undefined` — a value no
+      // GitProcessRunner can return. The base result keeps the fake inside its own declared
+      // contract instead of relying on the route never dereferencing that answer.
+      .mockResolvedValue(ok(""));
     const result = await handleGitSummary(
       ctx(`/api/git/summary?root=${encodeURIComponent(root)}`),
       deps(runner),
@@ -1088,4 +1100,197 @@ describe("parseRemotes / parseHistory — bounded regex safety (S8786)", () => {
     expect(entries).toHaveLength(1);
     expect(entries[0]?.changedFileCount).toBe(0);
   });
+});
+
+describe("git summary response cache partitioning", () => {
+  // The cache is keyed on the UNDERLYING runner's identity (`runnerIdentity`), never on the
+  // normalized `runner` — which is a fresh per-request activity-log wrapper. Keying on the wrapper
+  // would mint a unique key for every request and turn this 2s cache into a permanent miss with
+  // nothing failing: the responses stay correct, the cache just silently stops existing. That half
+  // is already pinned by "deduplicates repeated summary reads for the same deps and root within
+  // the TTL" above. What was NOT pinned is the other half — that the runner leg of the key does
+  // any work at all — which is what a wrapper-keyed cache would also destroy, in the opposite
+  // direction, by making every entry unshareable.
+
+  function summaryRunner(): ReturnType<typeof vi.fn<GitProcessRunner>> {
+    return vi.fn<GitProcessRunner>((args: readonly string[]) => {
+      if (args.includes("rev-parse")) return Promise.resolve(ok(`${root}\n`));
+      if (args.includes("status")) return Promise.resolve(ok(porcelain(["# branch.head main"])));
+      return Promise.resolve(ok(""));
+    });
+  }
+
+  it("does not replay an unavailable summary to a later request", async () => {
+    // The cache stores failure bodies too. Replaying one would hand a later request a projection
+    // whose cause sits on an earlier request's timeline under an earlier correlation id — nothing
+    // in that request's own log would explain it. The entry is dropped as soon as it resolves
+    // unavailable, so the next request recomputes and records its own failure.
+    const activity = captureActivityLog();
+    const runner = vi
+      .fn<GitProcessRunner>()
+      .mockResolvedValue(fail("fatal: not a git repository (or any of the parent directories)"));
+    const dependencies = deps(runner);
+    const path = `/api/git/summary?root=${encodeURIComponent(root)}`;
+    const options = { runner, activityLog: activity.sink, maxStatusBytes: 4096, timeoutMs: 5_000 };
+
+    const first = await handleGitSummary(
+      { ...ctx(path), correlationId: "corr-cache-first-01" },
+      dependencies,
+      options,
+    );
+    const callsAfterFirst = runner.mock.calls.length;
+    const second = await handleGitSummary(
+      { ...ctx(path), correlationId: "corr-cache-second-1" },
+      dependencies,
+      options,
+    );
+
+    expect(first.body).toMatchObject({ available: false });
+    expect(second.body).toMatchObject({ available: false });
+    // Recomputed, not replayed — and the second request has its own failure line under its own id.
+    expect(runner.mock.calls.length).toBeGreaterThan(callsAfterFirst);
+    expect(activity.events.map((event) => event.correlationId)).toContain("corr-cache-second-1");
+  });
+
+  it("shares one in-flight computation across genuinely concurrent requests, by design", async () => {
+    // The complement of the eviction test above: two requests that are ALREADY concurrent when the
+    // first misses the cache share the same promise — that is the cache's job. Both get an accurate
+    // response; only one runner call happens, so only one activity-log line exists, under whichever
+    // request started the computation. This pins that behaviour explicitly rather than leaving it
+    // as an unstated side effect of the eviction fix.
+    const activity = captureActivityLog();
+    // `computeGitSummary` runs `status` and `remote -v` CONCURRENTLY via `Promise.all`, so a
+    // single-slot resolver would have its first capture silently overwritten by the second call —
+    // whichever call lost its resolver would leave `Promise.all` hanging forever. Every pending
+    // call gets its own resolver here instead.
+    const pendingResolvers: ((value: Awaited<ReturnType<GitProcessRunner>>) => void)[] = [];
+    const runner = vi.fn<GitProcessRunner>((args: readonly string[]) => {
+      if (args.includes("rev-parse")) return Promise.resolve(ok(`${root}\n`));
+      return new Promise((resolve) => {
+        pendingResolvers.push(resolve);
+      });
+    });
+    const dependencies = deps(runner);
+    const path = `/api/git/summary?root=${encodeURIComponent(root)}`;
+    const options = { runner, activityLog: activity.sink, maxStatusBytes: 4096, timeoutMs: 5_000 };
+
+    const first = handleGitSummary(
+      { ...ctx(path), correlationId: "corr-concurrent-first" },
+      dependencies,
+      options,
+    );
+    // `computeGitSummary` does real async work (realpath, membership resolution) before it ever
+    // calls the runner, backed by libuv I/O callbacks — a microtask-only loop would starve those
+    // callbacks and hang forever. `setImmediate` yields to the macrotask queue on every iteration.
+    // Waits for BOTH concurrent calls (`status` and `remote -v`), not just the first.
+    await new Promise<void>((resolve) => {
+      const poll = (): void => {
+        if (pendingResolvers.length >= 2) {
+          resolve();
+          return;
+        }
+        setImmediate(poll);
+      };
+      poll();
+    });
+    const second = handleGitSummary(
+      { ...ctx(path), correlationId: "corr-concurrent-second" },
+      dependencies,
+      options,
+    );
+    const failure = fail("fatal: not a git repository (or any of the parent directories)");
+    for (const resolve of pendingResolvers) resolve(failure);
+    const [firstResult, secondResult] = await Promise.all([first, second]);
+
+    expect(firstResult.body).toStrictEqual(secondResult.body);
+    // `computeGitSummary` runs `status` AND `remote -v` concurrently, so ONE shared computation
+    // correctly produces TWO failure lines (one per failed subcommand) — that is not a bug, it is
+    // two real subprocess failures. What the shared-computation guarantee actually rules out is a
+    // SECOND independent computation: proven by the runner call count (4, not 8 — membership +
+    // status + remote-v + last-sync's rev-parse, run exactly ONCE) and by every line carrying the
+    // FIRST request's correlation id, never the second's.
+    expect(runner.mock.calls).toHaveLength(4);
+    expect(activity.events).toHaveLength(2);
+    expect(activity.events.map((event) => event.correlationId)).toEqual([
+      "corr-concurrent-first",
+      "corr-concurrent-first",
+    ]);
+    expect(activity.events.map((event) => event.extra?.subcommand).sort()).toEqual([
+      "remote",
+      "status",
+    ]);
+  });
+
+  it("still partitions the cache by runner, so two fake runners never share an entry", async () => {
+    const path = `/api/git/summary?root=${encodeURIComponent(root)}`;
+    const first = summaryRunner();
+    const second = vi.fn<GitProcessRunner>((args: readonly string[]) =>
+      Promise.resolve(
+        args.includes("rev-parse") ? ok(`${root}\n`) : fail("fatal: detected dubious ownership"),
+      ),
+    );
+    const dependencies = deps(first);
+
+    const available = await handleGitSummary(ctx(path), dependencies);
+    // The SAME deps object and the same URL — the runner is varied through the handler's own
+    // options argument, not by rebuilding deps, because the cache is a WeakMap keyed on deps: a
+    // fresh deps object would land in a different bucket and the runner leg of the key would go
+    // untested. Only the runner differs here, so the second read must compute its own answer.
+    // Every other leg of the cache key is held EQUAL to the deps fixture's own options
+    // (`maxStatusBytes`, `timeoutMs`): with the defaults instead, the two reads would differ on a
+    // cap rather than on the runner and the test would pass even with the runner leg deleted.
+    const unsafe = await handleGitSummary(ctx(path), dependencies, {
+      runner: second,
+      maxDiffBytes: 64,
+      maxStatusBytes: 4096,
+      maxChanges: 10,
+    });
+
+    expect(available.body).toMatchObject({ available: true });
+    expect(unsafe.body).toMatchObject({ available: false, reason: "unsafe-repository" });
+    expect(second.mock.calls.length).toBeGreaterThan(0);
+  });
+});
+
+describe("repository read activity log (AGENTS.md §8 Rule 1)", () => {
+  // Each of these three handlers threads `ctx.correlationId` into `optionsWithDefaults` by hand.
+  // The parameter's type is `string | undefined`, so a stray `undefined` at any one of them
+  // type-checks and would silently bind that whole route's git failures to
+  // `UNKNOWN_CORRELATION_ID` — a line no operator can join back to the request that caused it.
+  // Covered per route rather than by sampling one, because the three call sites are independent.
+
+  const READ_HANDLERS = [
+    { label: "summary", run: handleGitSummary, path: "/api/git/summary" },
+    { label: "remotes", run: handleGitRemotes, path: "/api/git/remotes" },
+    { label: "history", run: handleGitHistory, path: "/api/git/history" },
+  ] as const;
+
+  it.each(READ_HANDLERS)(
+    "reports the $label route's git failure under that request's correlation id",
+    async ({ label, run, path }) => {
+      const activity = captureActivityLog();
+      const correlationId = `corr-reads-${label}-01`;
+      const runner = vi
+        .fn<GitProcessRunner>()
+        .mockResolvedValue(fail("fatal: not a git repository (or any of the parent directories)"));
+
+      const result = await run(
+        { ...ctx(`${path}?root=${encodeURIComponent(root)}`), correlationId },
+        deps(runner),
+        { runner, activityLog: activity.sink },
+      );
+
+      // The response keeps its content-free unavailable projection; only the LOG gains the reason.
+      expect(result.status).toBe(200);
+      expect(result.body).toMatchObject({ available: false });
+      expect(activity.events).not.toHaveLength(0);
+      expect(activity.events[0]).toMatchObject({
+        op: "git.process.failed",
+        correlationId,
+        errorKind: "not-a-repository",
+        extra: { subcommand: "rev-parse" },
+      });
+      expect(JSON.stringify(result.body)).not.toContain("not a git repository");
+    },
+  );
 });

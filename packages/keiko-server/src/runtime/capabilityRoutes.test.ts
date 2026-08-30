@@ -52,6 +52,7 @@ function ctx(path: string, cookie?: string): RouteContext {
   const req = Readable.from([]) as unknown as IncomingMessage;
   req.headers = cookie === undefined ? {} : { cookie };
   return {
+    correlationId: undefined,
     req,
     res: {} as unknown as ServerResponse,
     params: {},

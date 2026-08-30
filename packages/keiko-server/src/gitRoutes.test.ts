@@ -1,3 +1,4 @@
+import { captureActivityLog } from "./activityLogCapture.test-support.js";
 import { Buffer } from "node:buffer";
 import { mkdir, mkdtemp, rename, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -11,7 +12,7 @@ import {
   parseGitEditorBlameResponse,
   parseGitEditorDiffResponse,
 } from "@oscharko-dev/keiko-contracts/runtime/git-editor";
-import { defaultGitProcessRunner } from "@oscharko-dev/keiko-git";
+import { defaultGitProcessRunner, type GitRefusalClass } from "@oscharko-dev/keiko-git";
 import {
   buildRedactor,
   createInMemoryUiStore,
@@ -20,6 +21,7 @@ import {
 } from "./index.js";
 import { matchRoute, type RouteContext } from "./routes.js";
 import type { ServerDiagnosticRecord } from "./diagnostics-log.js";
+import type { ServerLogSink } from "./observability/index.js";
 import type { UiStore } from "./store/index.js";
 import { mockRequest, mockResponse } from "./_support.js";
 import {
@@ -34,6 +36,7 @@ import {
   readBoundedSnapshotBytes,
   rethrowSnapshotPathError,
   rethrowSnapshotRaceError,
+  optionsWithDefaults,
   selectedRootPathspecArgs,
   type GitProcessRunner,
 } from "./gitRoutes.js";
@@ -61,7 +64,7 @@ function ctx(path: string, correlationId?: string): RouteContext {
     res: mockResponse().res,
     params: {},
     url: new URL(`http://localhost${path}`),
-    ...(correlationId === undefined ? {} : { correlationId }),
+    correlationId,
   };
 }
 
@@ -1751,5 +1754,188 @@ describe("git diff route templates stay pinned to the registered routes", () => 
     expect((match as { definition: { pattern: string } }).definition.pattern).toBe(
       GIT_STRUCTURED_DIFF_ROUTE_TEMPLATE,
     );
+  });
+});
+
+describe("git route activity log (AGENTS.md §8 Rule 1)", () => {
+  // Every read-only git route answers a failed run with a redacted, content-free body by design.
+  // Before this wiring nothing about WHY it failed reached `<stateDir>/logs/server.log` — not an
+  // ordinary "not a git repository" and not the spawn-boundary security refusal — so a defect
+  // could not be reconstructed from a customer's log alone, which is the log's whole contract.
+
+  function activityDeps(
+    runner: GitProcessRunner,
+    activityLog: ServerLogSink,
+  ): ReturnType<typeof deps> {
+    const base = deps(runner);
+    return {
+      ...base,
+      gitRouteOptions: { ...base.gitRouteOptions, runner, activityLog },
+    };
+  }
+
+  const refused = (
+    option: string,
+    refusal: GitRefusalClass,
+  ): Awaited<ReturnType<GitProcessRunner>> => ({
+    exitCode: 128,
+    signal: null,
+    stdout: "",
+    stderr: `refused git option: ${option}`,
+    truncated: false,
+    refusal,
+  });
+
+  it("reports the membership read's failure — the outcome a per-route hook would have missed", async () => {
+    // `resolveRepository` runs `rev-parse` through keiko-git's own resolveGitMembership, so this
+    // most common failure of all never passes through a route handler's own body. It is observed
+    // because the OBSERVATION SITS ON THE RUNNER, and this test is what pins that placement.
+    const activity = captureActivityLog();
+    const runner = vi
+      .fn<GitProcessRunner>()
+      .mockResolvedValue(fail("fatal: not a git repository (or any of the parent directories)"));
+
+    const result = await handleGitStatus(
+      ctx(`/api/git/status?root=${encodeURIComponent(root)}`, "corr-membership-0001"),
+      activityDeps(runner, activity.sink),
+    );
+
+    expect(result.status).toBe(200);
+    expect(result.body).toMatchObject({ available: false, reason: "not-a-repository" });
+    expect(activity.events).toHaveLength(1);
+    expect(activity.events[0]).toMatchObject({
+      level: "warn",
+      category: "diagnostic",
+      op: "git.process.failed",
+      correlationId: "corr-membership-0001",
+      errorKind: "not-a-repository",
+      extra: { subcommand: "rev-parse", exitCode: 128 },
+    });
+  });
+
+  it("reports a spawn-boundary refusal on a git route as a security event", async () => {
+    // The gap #3348's preflight inherited: its new `--ext-diff`/`--textconv` and `-c <denied key>`
+    // rejections reuse the same GitProcessResult shape as the pre-existing `--upload-pack` refusal,
+    // so "a caller tried to override diff.external through a git route" was swallowed into a
+    // redacted 200 body with no trace anywhere.
+    const activity = captureActivityLog();
+    const runner = vi
+      .fn<GitProcessRunner>()
+      .mockResolvedValueOnce(ok(`${root}\n`))
+      .mockResolvedValueOnce(refused("-c diff.external", "config-override"));
+
+    const result = await handleGitStatus(
+      ctx(`/api/git/status?root=${encodeURIComponent(root)}`, "corr-refusal-route-01"),
+      activityDeps(runner, activity.sink),
+    );
+
+    expect(result.status).toBe(200);
+    expect(activity.events).toHaveLength(1);
+    expect(activity.events[0]).toMatchObject({
+      level: "error",
+      category: "security",
+      op: "git.process.refused",
+      correlationId: "corr-refusal-route-01",
+      errorKind: "git-option-refused",
+      extra: { subcommand: "status", exitCode: 128, refusal: "config-override" },
+    });
+  });
+
+  // EVERY handler in this module, not a sample: each one threads `ctx.correlationId` into
+  // `optionsWithDefaults` by hand, so a wrong-but-valid value (a stray `undefined`) type-checks
+  // and would bind a whole request's git failures to the wrong id. The query strings are the ones
+  // each route's own tests use, so a handler that rejects its input before ever reaching the
+  // runner would fail here rather than pass vacuously.
+  const ROUTE_HANDLERS = [
+    { label: "status", run: handleGitStatus, query: "" },
+    { label: "branches", run: handleGitBranches, query: "" },
+    // `/api/git/diff` and `/api/git/diff/structured` take DIFFERENT scope vocabularies
+    // (all|worktree|staged vs staged|unstaged); a scope the route rejects 400s before git runs,
+    // so the wrong literal here would make this row pass for the wrong reason — an empty log
+    // because nothing was ever spawned.
+    { label: "diff", run: handleGitDiff, query: "&scope=worktree" },
+    { label: "structured", run: handleGitStructuredDiff, query: "&scope=unstaged&path=notes.txt" },
+    { label: "blame", run: handleGitBlame, query: "&path=notes.txt&startLine=1&maxLines=5" },
+  ] as const;
+
+  it.each(ROUTE_HANDLERS)(
+    "observes the $label route and binds it to that request's correlation id",
+    async ({ label, run, query }) => {
+      // The reason the wrapper lives in optionsWithDefaults: a route added tomorrow is observed
+      // without its author opting in. Each of these reaches the runner through its own handler.
+      const activity = captureActivityLog();
+      const correlationId = `corr-route-${label}-01`;
+      const runner = vi
+        .fn<GitProcessRunner>()
+        .mockResolvedValueOnce(ok(`${root}\n`))
+        .mockResolvedValue(refused("--upload-pack", "remote-command-option"));
+
+      await run(
+        ctx(`/api/git/x?root=${encodeURIComponent(root)}${query}`, correlationId),
+        activityDeps(runner, activity.sink),
+      );
+
+      const refusals = activity.events.filter((event) => event.op === "git.process.refused");
+      expect(refusals, `${label} must report the refusal`).not.toHaveLength(0);
+      expect(refusals[0]).toMatchObject({ correlationId, category: "security" });
+    },
+  );
+
+  it.each([
+    { label: "a scope this route does not accept", run: handleGitDiff, query: "&scope=unstaged" },
+    {
+      label: "an option-like path",
+      run: handleGitBlame,
+      query: "&path=-x.ts&startLine=1&maxLines=1",
+    },
+    {
+      label: "no path for a structured diff",
+      run: handleGitStructuredDiff,
+      query: "&scope=unstaged",
+    },
+  ])("writes no process line for $label, because no git run failed", async ({ run, query }) => {
+    // The complement of every test above. `git.process.*` reports a git PROCESS outcome, so the
+    // line count is tied to what the runner actually did — never to the HTTP status. Here every
+    // admitted run succeeds, so whether the route answers 400 (input rejected before the spawn)
+    // or 200 (a content-free projection), the log must stay empty: a line would tell an operator
+    // a git command failed when none did.
+    const activity = captureActivityLog();
+    const runner = vi.fn<GitProcessRunner>().mockResolvedValue(ok(`${root}\n`));
+
+    await run(
+      ctx(`/api/git/x?root=${encodeURIComponent(root)}${query}`, "corr-rejected-0001"),
+      activityDeps(runner, activity.sink),
+    );
+
+    expect(activity.events.filter((event) => event.op.startsWith("git.process."))).toEqual([]);
+  });
+
+  it("writes nothing when every git run succeeds", async () => {
+    const activity = captureActivityLog();
+    const runner = vi
+      .fn<GitProcessRunner>()
+      .mockResolvedValueOnce(ok(`${root}\n`))
+      .mockResolvedValueOnce(ok("## main\0"));
+
+    const result = await handleGitStatus(
+      ctx(`/api/git/status?root=${encodeURIComponent(root)}`, "corr-success-route-1"),
+      activityDeps(runner, activity.sink),
+    );
+
+    expect(result.status).toBe(200);
+    expect(activity.events).toEqual([]);
+  });
+
+  it("keeps the raw runner reachable as an identity, and never as the route's runner", () => {
+    // `runnerIdentity` exists only so gitRepositoryReads can partition its git-summary cache by
+    // the UNDERLYING runner: `runner` is a fresh per-request wrapper, so keying the cache on it
+    // would mint a unique key per request and silently retire the cache. Both halves are pinned
+    // here — the identity must be the exact function supplied, and the callable one must not be.
+    const raw = vi.fn<GitProcessRunner>();
+
+    const normalized = optionsWithDefaults({ runner: raw }, "corr-identity-00001");
+
+    expect(normalized.runnerIdentity).toBe(raw);
+    expect(normalized.runner).not.toBe(raw);
   });
 });

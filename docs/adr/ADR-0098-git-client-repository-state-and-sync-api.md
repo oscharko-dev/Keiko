@@ -96,7 +96,7 @@ union is changed.
 - `git-history.ts` — `GitHistoryEntry` (sha, shortSha, subject, author, ISO date, refs[],
   parentCount, changedFileCount) and the paginated `GitHistoryResponse` (entries, limit, skip,
   truncated). `GIT_HISTORY_SCHEMA_VERSION = "1"`. Validator `validateGitHistoryResponse`.
-- `git-sync.ts` — the sync contracts (D3): `GitSyncOperation`, `GitSyncOutcome` (13 members),
+- `git-sync.ts` — the sync contracts (D3): `GitSyncOperation`, `GitSyncOutcome` (15 members),
   `GitSyncBlockReason`, `GitSyncExecuteRequest`, `GitSyncPreview`, `GitSyncExecuteResponse`,
   `GIT_SYNC_SCHEMA_VERSION = "1"`, the frozen `GIT_SYNC_OPERATIONS` / `GIT_SYNC_OUTCOMES` /
   `GIT_SYNC_BLOCK_REASONS` arrays, the `isGitSyncOperation` / `isGitSyncOutcome` guards, and the
@@ -116,21 +116,31 @@ types in the type block). The exports are additive; `KEIKO_CONTRACTS_VERSION` is
 - `resolveRepository(ctx, deps, options)` for selected-root containment, `rev-parse --show-toplevel`,
   and unsafe-owner / missing classification. An unavailable resolution short-circuits to a
   content-free `available: false` envelope with zeroed counts and empty remotes.
-- `optionsWithDefaults` for the byte-cap/timeout normalization, and `options.runner` (defaulting to
-  `defaultGitProcessRunner`) for the bounded process effect through fixed argv and the hardened
-  `gitEnv()` (`GIT_TERMINAL_PROMPT=0`, `GIT_PAGER=cat`, `GIT_CONFIG_NOSYSTEM=1`,
-  `GIT_CONFIG_GLOBAL=/dev/null`, no system/global config), with spawn-error → exit code 127 and a
-  byte-cap/timeout truncation flag.
+- `optionsWithDefaults` for the byte-cap/timeout normalization, and `options.runner` for the
+  bounded process effect through fixed argv and the hardened `gitEnv()` (`GIT_TERMINAL_PROMPT=0`,
+  `GIT_PAGER=cat`, `GIT_CONFIG_NOSYSTEM=1`, `GIT_CONFIG_GLOBAL=/dev/null`, no system/global
+  config), with spawn-error → exit code 127 and a byte-cap/timeout truncation flag. Since the
+  activity-log wiring (AGENTS.md §8 Rule 1), `options.runner` is the supplied runner (defaulting to
+  `defaultGitProcessRunner`) wrapped by `observedGitRunner`, so an UNDECLARED non-zero outcome —
+  including the spawn-boundary refusal — leaves one body-free line under the request's correlation
+  id. A call site may declare an expected non-zero exit through `expectedExitCodes` (`git diff
+  --no-index` exits 1 to say "the files differ"), and a declared one is a success that stays off
+  the log rather than a `warn` contradicting the 200 the route returns. The
+  process effect is unchanged: the wrapper returns the underlying result untouched. The
+  UNOBSERVED runner remains reachable as `options.runnerIdentity` for one purpose only, the
+  git-summary cache's runner partition, because `runner` is now a fresh per-request closure.
 - `classifyFailure` to map a non-zero status read to the existing reason union (`git-missing`,
   `unsafe-repository`, `not-a-repository`, `git-error`).
 - `deps.redactor` applied to every response body, so any URL inside a remote is redacted at the
   boundary.
 
-The only edit to `gitRoutes.ts` is **behavior-preserving**: `resolveRepository`,
+The only edit to `gitRoutes.ts` was **behavior-preserving**: `resolveRepository`,
 `optionsWithDefaults`, `classifyFailure`, `interface RepositoryContext`, and
 `interface NormalizedGitRouteOptions` gain `export` so the sibling file can consume them. No logic
-in `gitRoutes.ts` changes, and the existing `/api/git/status` / `/api/git/diff` / `/api/git/branches`
-routes are byte-for-byte unchanged.
+in `gitRoutes.ts` changed, and the existing `/api/git/status` / `/api/git/diff` /
+`/api/git/branches` routes were byte-for-byte unchanged. `optionsWithDefaults` has since taken the
+request's correlation id as a second parameter so the activity-log wiring above can bind to it; the
+response projections remain unchanged.
 
 The three routes are registered in `routes.ts` immediately after `/api/git/branches`, each as
 `handler: (ctx, deps) => handleX(ctx, deps, deps.gitRouteOptions)`, matching the existing reads'
@@ -158,6 +168,12 @@ through a dedicated bounded executor, **not** the #472 kernel:
   `fetch --no-tags [remote]` and `pull --ff-only --no-edit [remote]`. The `--ff-only` flag makes a
   pull refuse anything but a fast-forward, so a pull can never create a merge commit or rewrite local
   history outside the governed surface.
+- Since the activity-log wiring (AGENTS.md §8 Rule 1), `normalizeSeams` wraps BOTH the local read
+  runner and the credential-capable network runner with `observedGitRunner`, and the route handlers
+  supply `ctx.correlationId` per request. Sync answers every failure with a content-free typed code,
+  so without those lines an auth failure, an unreachable remote, a non-fast-forward or a
+  spawn-boundary refusal on this path left no trace at all. The process effect and the typed
+  response are unchanged; only the operator's evidence is.
 - It does **not** import `runGitMutation`, the policy packs, the approval-token gate, or any
   `GitDeliveryActionKind`. `GitDeliveryActionKind` carries no `fetch`/`pull` member, and this ADR
   does not add one.

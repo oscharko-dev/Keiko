@@ -27,6 +27,7 @@ import type { RouteContext, RouteResult } from "./routes.js";
 function makeCtx(): RouteContext {
   const socket = new Socket();
   return {
+    correlationId: undefined,
     req: {} as RouteContext["req"],
     res: { socket } as unknown as RouteContext["res"],
     params: {},
