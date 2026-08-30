@@ -343,17 +343,41 @@ const MAX_IDENTIFIER_HOPS = 4;
 // means a new call site now leans on the one soft spot in this pin and must be justified
 // deliberately rather than slipped in.
 //
-// The nine are all the same shape — a Node effect module whose `runCommand` argument is a typed
-// parameter (`ctx`, `deps`) declared in ANOTHER module, which this single-file analyzer cannot
-// follow:
-//   keiko-tools/src/git-merge-node.ts:156          git-mutation-node.ts:176, :209
-//   keiko-tools/src/git-pr-node.ts:145             git-publish-node.ts:161
-//   keiko-tools/src/git-worktree-adapter.ts:402    git-worktree-snapshot-node.ts:117, :301
-//   keiko-verification/src/orchestrator.ts:334
-// Each was separately confirmed wired by reading it; the budget exists so the TENTH is not taken on
-// trust. Closing the gap properly means cross-module resolution, which is a different tool than a
-// single-file AST pass.
+// Deliberately independent of EXPECTED_SOFT_VERDICT_SITES below rather than derived from its length:
+// this number is the ratchet a reviewer edits on purpose when the set legitimately grows, and keeping
+// it hand-maintained means adding a tenth entry to the set without ALSO raising this constant still
+// fails the budget assertion, exactly as it should.
 const SOFT_VERDICT_BUDGET = 9;
+
+// The exact nine call sites the budget above ratchets — every one the SAME shape: a Node effect
+// module whose `runCommand` argument is a typed parameter (`ctx`, `deps`) declared in ANOTHER module,
+// which this single-file analyzer cannot follow. Each was separately confirmed wired by reading it.
+// This is the FIX for the gap the budget-only assertion left open (review finding): a length-only
+// check (`rendered.length <= SOFT_VERDICT_BUDGET`) never notices a KNOWN-safe site silently swapping
+// for a different, newly-unsafe one while the count stays put — invisible to a pin whose own title
+// promises "does not grow the set". Listing the exact set here and asserting equality below closes
+// that gap; the budget constant stays as a secondary, independently-edited sanity ceiling.
+const EXPECTED_SOFT_VERDICT_SITES = [
+  { pkg: "keiko-tools", file: "git-merge-node.ts", line: 156 },
+  { pkg: "keiko-tools", file: "git-mutation-node.ts", line: 176 },
+  { pkg: "keiko-tools", file: "git-mutation-node.ts", line: 209 },
+  { pkg: "keiko-tools", file: "git-pr-node.ts", line: 145 },
+  { pkg: "keiko-tools", file: "git-publish-node.ts", line: 161 },
+  { pkg: "keiko-tools", file: "git-worktree-adapter.ts", line: 402 },
+  { pkg: "keiko-tools", file: "git-worktree-snapshot-node.ts", line: 117 },
+  { pkg: "keiko-tools", file: "git-worktree-snapshot-node.ts", line: 301 },
+  { pkg: "keiko-verification", file: "orchestrator.ts", line: 334 },
+];
+
+// Renders EXPECTED_SOFT_VERDICT_SITES in the SAME `${path}:${line}` shape (and against the SAME
+// PACKAGES_ROOT) `analyzeFile`'s real call sites are rendered in, so the comparison in the test below
+// holds regardless of the absolute checkout path (CI vs. a local clone) — never a literal absolute
+// path hardcoded into the fixture.
+function expectedSoftVerdictSiteStrings() {
+  return EXPECTED_SOFT_VERDICT_SITES.map(
+    ({ pkg, file, line }) => `${join(PACKAGES_ROOT, pkg, "src", file)}:${String(line)}`,
+  ).sort();
+}
 
 // A call site is "wired" when at least one argument provably carries onTerminated, OR when every
 // argument that could not be resolved leaves the file's own text as the only available evidence AND
@@ -443,14 +467,20 @@ describe("runCommand termination-evidence wiring (PR #3354, comment 3887021650)"
   // call could still pass — any `onTerminated` in the file satisfies it, including one belonging to a
   // different, correctly wired call. Hardening it into a flat "unwired" would falsely accuse every
   // legitimate cross-module case, and a gate that cries wolf gets weakened rather than obeyed. So the
-  // soft path is counted instead: the set cannot grow unnoticed.
-  it("does not grow the set of call sites that pass only on file-level evidence", () => {
+  // soft path is checked against the exact expected SET (not merely counted): a length-only check
+  // cannot notice one known-safe site silently swapping for a different, newly-unsafe one while the
+  // count stays put (review finding) — `toEqual` against EXPECTED_SOFT_VERDICT_SITES catches exactly
+  // that swap, since a new/different site changes the rendered array even when its length does not.
+  it("does not grow OR change the set of call sites that pass only on file-level evidence", () => {
     const soft = analyses.flatMap(({ softlyWired }) => softlyWired);
     const rendered = soft.map((site) => `${site.path}:${String(site.line)}`).sort();
     expect(
-      rendered.length,
+      rendered,
       `call sites passing only on file-text evidence:\n${rendered.join("\n")}`,
-    ).toBeLessThanOrEqual(SOFT_VERDICT_BUDGET);
+    ).toEqual(expectedSoftVerdictSiteStrings());
+    // Secondary sanity check: the exact-set assertion above already pins the count, but the explicit
+    // ratchet stays legible as its own number rather than only implied by the array's length.
+    expect(rendered.length).toBeLessThanOrEqual(SOFT_VERDICT_BUDGET);
   });
 
   it("every production runCommand call site references the onTerminated evidence seam", () => {
