@@ -5,10 +5,13 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
   GUARDED_APIS,
+  collectDependencyClosure,
   dependencyClosureForSources,
+  deriveDependencyEntryFiles,
   main,
   parseDeclaredFloors,
   providedRuntimeApis,
+  resolveRuntimeSpecifier,
   runtimeSpecifiers,
   transpileFloorViolations,
   violationsFor,
@@ -656,9 +659,42 @@ describe("main", () => {
         true,
       );
       expect(paths.filter((path) => path.includes("/monaco-editor/")).length).toBeGreaterThan(500);
+      expect(
+        paths.some((path) => path.endsWith("/packages/keiko-contracts/dist/editor-m7.js")),
+      ).toBe(true);
     },
     REAL_DEPENDENCY_CLOSURE_TIMEOUT_MS,
   );
+
+  it("follows runtime workspace-package exports but excludes type-only imports", () => {
+    const importer = resolve("packages/keiko-ui/src/app/components/desktop/shellShortcutState.ts");
+    const specifier = "@oscharko-dev/keiko-contracts/runtime/editor-m7";
+    const runtimeEntries = deriveDependencyEntryFiles([
+      { path: importer, text: `import { EDITOR_M7_COMMAND_REGISTRY } from "${specifier}";` },
+    ]);
+    const typeOnlyEntries = deriveDependencyEntryFiles([
+      { path: importer, text: `import type { EditorM7CommandId } from "${specifier}";` },
+    ]);
+    const inlineTypeExportEntries = deriveDependencyEntryFiles([
+      { path: importer, text: `export { type EditorM7CommandId } from "${specifier}";` },
+    ]);
+    const mixedExportEntries = deriveDependencyEntryFiles([
+      {
+        path: importer,
+        text:
+          `export { type EditorM7CommandId, ` + `EDITOR_M7_COMMAND_REGISTRY } from "${specifier}";`,
+      },
+    ]);
+
+    expect(resolveRuntimeSpecifier(importer, specifier)).toMatch(
+      /\/packages\/keiko-contracts\/dist\/editor-m7\.js$/u,
+    );
+    expect(runtimeEntries).toHaveLength(1);
+    expect(collectDependencyClosure(runtimeEntries)).toContain(runtimeEntries[0]);
+    expect(typeOnlyEntries).toEqual([]);
+    expect(inlineTypeExportEntries).toEqual([]);
+    expect(mixedExportEntries).toHaveLength(1);
+  });
 
   it("extracts value imports and worker URLs but excludes type-only imports", () => {
     const source =

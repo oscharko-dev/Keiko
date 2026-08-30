@@ -147,6 +147,20 @@ describe.skipIf(process.platform === "win32")("resolveGitExecutable", () => {
     });
   });
 
+  // POSIX `X_OK` on a directory checks search permission, so accessSync alone cannot establish
+  // that a PATH candidate is an executable file. A searchable directory named `git` is an absent
+  // executable, not a planted executable in an untrusted location: keep scanning and report the
+  // same redacted `not-found` classification as any other non-candidate.
+  it("reports not-found for a searchable directory decoy named git", () => {
+    const bin = temporary("keiko-git-executable-directory-decoy-");
+    mkdirSync(join(bin, "git"), { mode: 0o755 });
+
+    expect(resolveGitExecutable({ PATH: bin }, workspace)).toEqual({
+      ok: false,
+      reason: "not-found",
+    });
+  });
+
   it("accepts a group-writable toolcache owned by a group unavailable to the caller", () => {
     const bin = temporary("keiko-git-executable-bin-");
     const executable = writeGit(bin);

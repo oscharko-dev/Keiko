@@ -275,17 +275,21 @@ async function dispatchSync(input: SyncDispatchInput): Promise<SyncDispatchResul
   return { result, denial: denialCapture.result };
 }
 
-function completedSyncResponse(
+function syncResponse(
   deps: UiHandlerDeps,
   operation: GitSyncOperation,
   remote: string | undefined,
   workspaceRoot: string,
   before: GitSyncPreview,
-  result: SyncExecuteResult,
+  dispatched: SyncDispatchResult,
   now: () => number,
 ): RouteResult {
-  persistSyncResult(deps, operation, remote, workspaceRoot, before, result, now());
-  return { status: 200, body: deps.redactor(executeResponse(operation, remote, result)) };
+  persistSyncResult(deps, operation, remote, workspaceRoot, before, dispatched.result, now());
+  if (dispatched.denial !== undefined) return dispatched.denial;
+  return {
+    status: 200,
+    body: deps.redactor(executeResponse(operation, remote, dispatched.result)),
+  };
 }
 
 async function handleSyncExecute(
@@ -327,14 +331,13 @@ async function handleSyncExecute(
     remote,
     authority,
   });
-  if (dispatched.denial !== undefined) return dispatched.denial;
-  return completedSyncResponse(
+  return syncResponse(
     deps,
     operation,
     remote,
     workspace.root,
     before,
-    dispatched.result,
+    dispatched,
     seams.now ?? Date.now,
   );
 }

@@ -6,6 +6,7 @@ import { dirname, join } from "node:path";
 import { Readable } from "node:stream";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { NativeFileDialogRequest } from "@oscharko-dev/keiko-contracts";
+import { UNKNOWN_CORRELATION_ID } from "../correlation.js";
 import type { UiHandlerDeps } from "../deps.js";
 import type { ServerDiagnosticRecord } from "../diagnostics-log.js";
 import { buildRedactor, createInMemoryUiStore } from "../index.js";
@@ -596,6 +597,30 @@ describe("native file dialog route", () => {
     expect(errorOf(result.body).code).toBe("NATIVE_DIALOG_FAILED");
     expect(errorOf(result.body).message).not.toContain("exitCode");
     expect(diagnostics).toHaveLength(1);
+  });
+
+  it("uses the canonical unknown correlation id for an adapter failure without request correlation", async () => {
+    const failing: NativeFileDialogAdapter = {
+      open: () =>
+        Promise.reject(new NativeFileDialogAdapterError("failed", "exitCode=1 stderrBytes=42")),
+      cancel: (): void => {
+        /* no-op — test fake, nothing in flight */
+      },
+    };
+    const { deps, diagnostics } = buildDeps({ adapter: failing });
+    const ctx: RouteContext = {
+      ...openContext({ mode: "open-file" }),
+      correlationId: undefined,
+    };
+
+    const result = await handleNativeFileDialogOpen(ctx, deps);
+
+    expect(result.status).toBe(502);
+    expect(errorOf(result.body).code).toBe("NATIVE_DIALOG_FAILED");
+    expect(errorOf(result.body).correlationId).toBeUndefined();
+    expect(diagnostics).toMatchObject([
+      { source: "native-file-dialog", correlationId: UNKNOWN_CORRELATION_ID },
+    ]);
   });
 
   it("maps an unavailable platform helper to 501 with a correlated diagnostic", async () => {

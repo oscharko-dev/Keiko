@@ -2,11 +2,11 @@
 
 ## Status
 
-Accepted (Issue #1573, Epic #1572, 2026-06-27)
+Accepted (Issue #1573, Epic #1572, 2026-06-27; amended 2026-08-31)
 
 ## Version
 
-0.2.0
+0.3.0
 
 ## Context
 
@@ -21,8 +21,9 @@ exist in `keiko-ui`. The write contract is frozen — no child issue adds a BFF 
 
 Issue #1573 is the **API foundation** child. Its job is precisely the small set of genuine gaps the
 reuse contract isolated in its Section 3, plus the read-only/preview/execute sync surface the
-History and Sync panes need. It is backend + contracts only; it ships no UI, and it changes no
-existing route or contract.
+History and Sync panes need. It began as backend + contracts only. The later continuity-evidence
+correction extends only the existing sync outcome union with `authority-denied`; it adds no route or
+mutation authority.
 
 Three forces shape this ADR.
 
@@ -75,18 +76,20 @@ non-governing sync executor (`gitDelivery/syncExecution.ts`), its sibling eviden
 (`gitDelivery/syncEvidence.ts`), and its routes (`gitDelivery/syncRoutes.ts`); the barrel exports and
 route registrations; tests; and this documentation.
 
-Out of scope: any UI (deferred to #1574–#1578); any change to an existing route, contract, or the
-governed mutation taxonomy; conflict resolution, merge, or push (push remains the governed publish
-gateway, ADR-0085); and any package version bump (all new exports are additive).
+Out of scope: conflict resolution, merge, or push (push remains the governed publish gateway,
+ADR-0085); any widening of the governed mutation taxonomy; and unrelated route or contract changes.
+The additive `authority-denied` sync outcome is in scope because it is the durable reconstruction of
+the already-required continuity gate, not a new execution capability.
 
 ## Decision
 
 ### D1 — Three additive read contracts reusing the existing repository-state unions
 
-Three new strict-leaf contract modules are added in `keiko-contracts`, each pure (no filesystem,
-process, clock, or crypto) and each reusing the `GitRepositoryState`, `GitUnavailableReason`, and
-`GitRepositoryValidation` unions already exported by `git-repository.ts` (Issue #1386). No existing
-union is changed.
+Three strict-leaf contract modules live in `keiko-contracts`, each pure (no filesystem, process,
+clock, or crypto) and each reusing the `GitRepositoryState`, `GitUnavailableReason`, and
+`GitRepositoryValidation` unions already exported by `git-repository.ts` (Issue #1386). The
+repository-state unions remain unchanged; `GitSyncOutcome` is additively extended as described
+below.
 
 - `git-repository-summary.ts` — `GitRepositorySummary` (branch, detached, `GitUpstreamSummary`,
   ahead/behind, staged/unstaged/untracked/conflicted counts, clean flag, `GitRemoteSummary[]`,
@@ -96,7 +99,7 @@ union is changed.
 - `git-history.ts` — `GitHistoryEntry` (sha, shortSha, subject, author, ISO date, refs[],
   parentCount, changedFileCount) and the paginated `GitHistoryResponse` (entries, limit, skip,
   truncated). `GIT_HISTORY_SCHEMA_VERSION = "1"`. Validator `validateGitHistoryResponse`.
-- `git-sync.ts` — the sync contracts (D3): `GitSyncOperation`, `GitSyncOutcome` (15 members),
+- `git-sync.ts` — the sync contracts (D3): `GitSyncOperation`, `GitSyncOutcome` (16 members),
   `GitSyncBlockReason`, `GitSyncExecuteRequest`, `GitSyncPreview`, `GitSyncExecuteResponse`,
   `GIT_SYNC_SCHEMA_VERSION = "1"`, the frozen `GIT_SYNC_OPERATIONS` / `GIT_SYNC_OUTCOMES` /
   `GIT_SYNC_BLOCK_REASONS` arrays, the `isGitSyncOperation` / `isGitSyncOutcome` guards, and the
@@ -278,22 +281,23 @@ The group registers four POST routes:
 
 The execute routes also require the server-owned accepted-run Authority Envelope and re-check its
 identity immediately before the network command. A continuity denial returns the same correlated
-403 contract as admission and emits the body-free no-spawn marker; because no fetch or pull attempt
-occurred, it does not append a synthetic `git-error` record to the sync ledger. This runtime-authority
-gate does not route fetch/pull through the governed mutation kernel or widen its frozen action-kind
-taxonomy.
+403 contract as admission, emits the body-free no-spawn marker, and appends a content-free
+`authority-denied` sync-evidence record. It never fabricates `git-error`: the distinct outcome says
+that no fetch or pull attempt occurred and preserves the denial in the durable reconstruction
+ledger. This runtime-authority gate does not route fetch/pull through the governed mutation kernel
+or widen its frozen action-kind taxonomy.
 
 The group is registered in `routes.ts` by spreading `...GIT_DELIVERY_SYNC_ROUTE_GROUP` next to the
 other git-delivery groups, with a comment citing #1573.
 
-### D7 — No existing route or contract changed
+### D7 — Routes remain unchanged; the sync outcome extension is additive
 
-The only file with an existing public surface that is edited is `gitRoutes.ts`, and that edit only
-adds `export` to five already-defined symbols — behavior-preserving. `/api/projects`,
-`/api/repositories/clone`, `/api/git/status|diff|branches`, every `gitDelivery/*` route, and every
-existing contract type are byte-for-byte unchanged. `GitDeliveryActionKind`, the governed policy
-packs, the mutation kernel, and `mutationEvidenceLedger.ts` are untouched. All new surface is
-additive, so no package version is bumped.
+No route is added or re-shaped. `/api/projects`, `/api/repositories/clone`,
+`/api/git/status|diff|branches`, and the `gitDelivery/*` endpoint envelopes remain unchanged.
+`GitSyncOutcome` gains the additive `authority-denied` member so the sibling sync ledger can record
+a mid-flight continuity refusal without misclassifying it as `git-error`. `GitDeliveryActionKind`,
+the governed policy packs, the mutation kernel, and `mutationEvidenceLedger.ts` remain untouched;
+the extension grants no new authority and requires no schema-version bump.
 
 ## Consequences
 
@@ -314,7 +318,8 @@ additive, so no package version is bumped.
 - Every response body and evidence record is content-free (counts, typed codes, branch/remote names,
   ISO dates, hashes) and passes through `deps.redactor`, so a remote URL or credential never reaches
   the browser or the ledger.
-- The change is additive end to end (D7); no existing route, contract, or version moves.
+- The current correction is additive end to end (D7): no route or schema version moves, and the
+  sync contract gains only the fail-closed `authority-denied` terminal outcome.
 
 ### Negative
 

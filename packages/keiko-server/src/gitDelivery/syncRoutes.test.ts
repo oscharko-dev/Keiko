@@ -347,7 +347,7 @@ describe("fetch execute — outcomes", () => {
     expect(body.operation).toBe("fetch");
   });
 
-  it("does not fetch when another allowed authority replaces the admitted run", async () => {
+  it("does not fetch and records authority denial when admitted authority is replaced", async () => {
     const scripted = scriptedRunner({ fetch: ok("") });
     const evidence = capturingEvidenceStore();
     const activity = captureActivityLog();
@@ -390,7 +390,12 @@ describe("fetch execute — outcomes", () => {
     });
     expect(reads).toBe(2);
     expect(scripted.calls()).toEqual(["status", "remote"]);
-    expect(evidence.records()).toHaveLength(0);
+    expect(evidence.records()).toHaveLength(1);
+    expect(evidence.records()[0]).toMatchObject({
+      operation: "fetch",
+      outcome: "authority-denied",
+      recordedAtMs: 1_700_000_000_000,
+    });
     expect(activity.events).toContainEqual(
       expect.objectContaining({
         op: "git.delivery.dispatch.no-spawn",
@@ -566,7 +571,7 @@ describe("pull execute — outcomes", () => {
     expect(body.behind).toBe(0);
   });
 
-  it("returns 403 and records no synthetic git-error when continuity authority changes", async () => {
+  it("returns 403 and records authority denial when continuity authority changes", async () => {
     const scripted = scriptedRunner({
       status: ok(porcelain({ upstream: "origin/main", behind: 1 })),
       pull: ok("Updating a1b2..c3d4\nFast-forward\n"),
@@ -594,7 +599,12 @@ describe("pull execute — outcomes", () => {
     expect(res.status).toBe(403);
     expect(res.body).toMatchObject({ error: { code: "GIT_DELIVERY_AUTHORITY_DENIED" } });
     expect(scripted.calls()).toEqual(["status", "remote"]);
-    expect(evidence.records()).toHaveLength(0);
+    expect(evidence.records()).toHaveLength(1);
+    expect(evidence.records()[0]).toMatchObject({
+      operation: "pull",
+      outcome: "authority-denied",
+      recordedAtMs: 1_700_000_000_000,
+    });
   });
 
   it("reports up-to-date when already up to date", async () => {

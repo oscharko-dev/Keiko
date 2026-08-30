@@ -143,11 +143,11 @@ function trustedCandidate(
     // The most common shape: this PATH entry does not carry a git executable. Keep looking.
     return { ok: false, reason: "not-found" };
   }
-  // T23: `X_OK` is documented as behaving like a plain existence check on win32 — it does not
-  // distinguish a genuine image from a directory or a non-image file sharing the candidate's name.
-  // Require a regular file explicitly so a decoy is simply not a candidate, the same verdict as it
-  // not existing at all.
-  if (platform === "win32" && !isRegularFile(candidate)) {
+  // `X_OK` does not establish regular-file-ness on either platform family: Windows treats it as an
+  // existence check, while POSIX accepts a searchable directory. Require a regular file before any
+  // trust classification so a directory/non-file decoy is simply not a candidate — the same
+  // redacted `not-found` verdict as an absent executable, not a false planted-binary signal.
+  if (!isRegularFile(candidate)) {
     return { ok: false, reason: "not-found" };
   }
   // Reject the PATH-selected spelling before following any symlink/reparse chain. Checking only

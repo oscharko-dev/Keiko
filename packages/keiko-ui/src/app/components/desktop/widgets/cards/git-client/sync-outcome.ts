@@ -40,6 +40,7 @@ const SYNC_OUTCOME: Readonly<Record<GitSyncOutcome, OutcomePresentation>> = {
   "detached-head": { labelKey: "gitClientWindow.sync.result.detachedHead", failed: true },
   "dirty-worktree": { labelKey: "gitClientWindow.sync.result.dirtyWorktree", failed: true },
   "not-fast-forward": { labelKey: "gitClientWindow.sync.result.notFastForward", failed: true },
+  "authority-denied": { labelKey: "gitClientWindow.sync.result.blockedByPolicy", failed: true },
   "auth-failed": { labelKey: "gitClientWindow.sync.result.authFailed", failed: true },
   "untrusted-host-key": { labelKey: "gitClientWindow.sync.result.untrustedHostKey", failed: true },
   "remote-unavailable": { labelKey: "gitClientWindow.sync.result.remoteUnavailable", failed: true },

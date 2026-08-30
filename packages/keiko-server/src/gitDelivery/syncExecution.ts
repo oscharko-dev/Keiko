@@ -342,7 +342,7 @@ function blockedResultFor(preview: GitSyncPreview): SyncExecuteResult {
 
 function authorityStoppedResultFor(preview: GitSyncPreview): SyncExecuteResult {
   return {
-    outcome: "git-error",
+    outcome: "authority-denied",
     branch: preview.branch,
     upstream: preview.upstream,
     ahead: preview.ahead,

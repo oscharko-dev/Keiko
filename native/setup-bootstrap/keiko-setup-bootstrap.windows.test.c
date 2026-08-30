@@ -578,10 +578,22 @@ static keiko_job_probe injected_probe_job_failure(HANDLE job) {
   return KEIKO_JOB_PROBE_FAILED;
 }
 
+static keiko_job_probe injected_probe_job_active(HANDLE job) {
+  (void)job;
+  injected_probe_job_calls++;
+  return KEIKO_JOB_PROBE_ACTIVE;
+}
+
 static int injected_arm_kill_on_close_failure(HANDLE job) {
   (void)job;
   injected_arm_kill_on_close_calls++;
   return 0;
+}
+
+static int injected_arm_kill_on_close_success(HANDLE job) {
+  (void)job;
+  injected_arm_kill_on_close_calls++;
+  return 1;
 }
 
 static void injected_no_sleep(DWORD milliseconds) {
@@ -652,6 +664,72 @@ static void test_unconfirmed_job_reap_blocks_staging_cleanup(void) {
   keiko_free_buffers(buffers);
 }
 
+static void test_armed_job_reap_closes_job_and_blocks_staging_cleanup(void) {
+  reset_injected_termination_calls();
+  keiko_setup_buffers *buffers = keiko_allocate_buffers();
+  assert(buffers != NULL);
+  assert(buffers->staging_cleanup_permitted == 1);
+  make_temp_dir(buffers->staging_dir, KEIKO_PATH_CAP, L"keiko-test-reap-armed");
+  wchar_t sentinel[MAX_PATH];
+  assert(_snwprintf_s(sentinel, MAX_PATH, _TRUNCATE, L"%ls\\sentinel.txt",
+                      buffers->staging_dir) > 0);
+  write_file(sentinel, "must remain until an armed close has contained the descendant tree");
+
+  keiko_child child;
+  ZeroMemory(&child, sizeof(child));
+  child.job = CreateJobObjectW(NULL, NULL);
+  child.process.hProcess = CreateEventW(NULL, TRUE, FALSE, NULL);
+  child.process.hThread = CreateEventW(NULL, TRUE, FALSE, NULL);
+  assert(child.job != NULL);
+  assert(child.process.hProcess != NULL);
+  assert(child.process.hThread != NULL);
+  HANDLE job = child.job;
+  HANDLE process = child.process.hProcess;
+  HANDLE thread = child.process.hThread;
+  const keiko_child_termination_ops injected = {
+      injected_terminate_job,
+      injected_probe_job_active,
+      injected_arm_kill_on_close_success,
+      injected_no_sleep,
+      injected_terminate_process,
+      injected_wait_process,
+  };
+
+  assert(keiko_terminate_child_tree_with(&child, &buffers->staging_cleanup_permitted, &injected) ==
+         KEIKO_JOB_REAP_KILL_ON_CLOSE_ARMED);
+  assert(injected_terminate_job_calls == 1);
+  assert(injected_probe_job_calls == KEIKO_JOB_REAP_ATTEMPTS);
+  assert(injected_arm_kill_on_close_calls == 1);
+  assert(injected_terminate_process_calls == 1);
+  assert(injected_wait_process_calls == 1);
+  assert(child.retain_job_handle == 0);
+  assert(buffers->staging_cleanup_permitted == 0);
+
+  DWORD handle_flags = 0;
+  assert(GetHandleInformation(job, &handle_flags) != 0);
+  keiko_close_child(&child);
+  SetLastError(ERROR_SUCCESS);
+  assert(GetHandleInformation(job, &handle_flags) == 0);
+  assert(GetLastError() == ERROR_INVALID_HANDLE);
+  SetLastError(ERROR_SUCCESS);
+  assert(GetHandleInformation(process, &handle_flags) == 0);
+  assert(GetLastError() == ERROR_INVALID_HANDLE);
+  SetLastError(ERROR_SUCCESS);
+  assert(GetHandleInformation(thread, &handle_flags) == 0);
+  assert(GetLastError() == ERROR_INVALID_HANDLE);
+
+  // Arming kill-on-close still cannot be upgraded to a confirmed empty-job observation. Staging
+  // therefore remains latched even though the close path releases the handle that activates the
+  // backstop.
+  assert(keiko_cleanup_staging(buffers) == 0);
+  assert(GetFileAttributesW(sentinel) != INVALID_FILE_ATTRIBUTES);
+  assert(GetFileAttributesW(buffers->staging_dir) != INVALID_FILE_ATTRIBUTES);
+
+  (void)DeleteFileW(sentinel);
+  (void)RemoveDirectoryW(buffers->staging_dir);
+  keiko_free_buffers(buffers);
+}
+
 static void test_capture_reports_the_shared_wait_result(void) {
   wchar_t system_dir[MAX_PATH];
   assert(GetSystemDirectoryW(system_dir, MAX_PATH) != 0);
@@ -703,6 +781,7 @@ int wmain(void) {
   test_watchdog_terminates_the_descendant_tree();
   test_job_reap_helpers_fail_closed();
   test_unconfirmed_job_reap_blocks_staging_cleanup();
+  test_armed_job_reap_closes_job_and_blocks_staging_cleanup();
   test_capture_reports_the_shared_wait_result();
   return 0;
 }

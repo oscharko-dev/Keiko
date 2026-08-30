@@ -36,6 +36,7 @@
 import { readFileSync, readdirSync, statSync } from "node:fs";
 import { createRequire } from "node:module";
 import { dirname, extname, isAbsolute, join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import { parse as babelParse } from "@babel/parser";
 // Imported, never restated: a second copy of these numbers here would drift from the transpiler's
 // own copy exactly the way the browserslist declaration drifted from the product. The module is
@@ -227,6 +228,18 @@ function importDeclarationSpecifier(node) {
   return node.specifiers.length === 0 || hasRuntimeBinding ? node.source.value : undefined;
 }
 
+function exportDeclarationSpecifier(node) {
+  if (node.type === "ExportAllDeclaration") {
+    return node.exportKind === "type" ? undefined : node.source.value;
+  }
+  if (node.type !== "ExportNamedDeclaration" || node.exportKind === "type") return undefined;
+  // Babel marks `export { type Foo } from "pkg"` as a value declaration whose individual
+  // specifier is type-only. Mirror importDeclarationSpecifier: a mixed re-export is a runtime edge,
+  // while a declaration containing only inline `type` specifiers disappears from emitted JS.
+  const hasRuntimeBinding = node.specifiers.some((specifier) => specifier.exportKind !== "type");
+  return node.specifiers.length === 0 || hasRuntimeBinding ? node.source?.value : undefined;
+}
+
 function dynamicImportSpecifier(node) {
   const argument = node.arguments?.[0];
   if (node.type === "CallExpression" && node.callee?.type === "Import") {
@@ -273,12 +286,8 @@ function expressionSpecifier(node, functionDepth, allowRequire) {
 function runtimeSpecifier(node, functionDepth, allowRequire) {
   const declaration = importDeclarationSpecifier(node);
   if (declaration !== undefined) return declaration;
-  if (
-    (node.type === "ExportNamedDeclaration" || node.type === "ExportAllDeclaration") &&
-    node.exportKind !== "type"
-  ) {
-    return node.source?.value;
-  }
+  const exported = exportDeclarationSpecifier(node);
+  if (exported !== undefined) return exported;
   if (node.type === "ImportExpression") {
     return node.source?.type === "StringLiteral" ? node.source.value : undefined;
   }
@@ -352,11 +361,30 @@ function resolvedFileCandidate(candidate) {
 }
 
 function isIgnoredRuntimeSpecifier(specifier) {
-  return (
-    specifier.startsWith("node:") ||
-    specifier.startsWith("@/") ||
-    specifier.startsWith("@oscharko-dev/")
-  );
+  return specifier.startsWith("node:") || specifier.startsWith("@/");
+}
+
+function isWorkspaceRuntimeSpecifier(specifier) {
+  return specifier.startsWith("@oscharko-dev/");
+}
+
+function resolvePackageRuntimeSpecifier(importer, specifier) {
+  try {
+    // Keiko workspace packages expose ESM-only runtime entries. createRequire().resolve() applies
+    // the `require` export condition and therefore rejects those valid `import` exports. Resolve
+    // the fixed workspace scope through Node's ESM resolver so their built browser runtime joins
+    // the same closure as third-party packages. All workspaces are installed at the repository
+    // root, where this gate itself lives; ordinary dependencies retain importer-relative require
+    // resolution below so nested dependency graphs keep their existing semantics.
+    if (isWorkspaceRuntimeSpecifier(specifier)) {
+      return fileURLToPath(import.meta.resolve(specifier));
+    }
+    return createRequire(resolve(importer)).resolve(specifier);
+  } catch (error) {
+    throw new Error(`cannot resolve ${JSON.stringify(specifier)} from ${importer}`, {
+      cause: error,
+    });
+  }
 }
 
 export function resolveRuntimeSpecifier(importer, specifier) {
@@ -367,13 +395,7 @@ export function resolveRuntimeSpecifier(importer, specifier) {
     if (resolved !== undefined) return resolved;
     throw new Error(`cannot resolve ${JSON.stringify(specifier)} from ${importer}`);
   }
-  try {
-    return createRequire(resolve(importer)).resolve(specifier);
-  } catch (error) {
-    throw new Error(`cannot resolve ${JSON.stringify(specifier)} from ${importer}`, {
-      cause: error,
-    });
-  }
+  return resolvePackageRuntimeSpecifier(importer, specifier);
 }
 
 function scannableDependencyPath(path) {
@@ -403,7 +425,12 @@ export function deriveDependencyEntryFiles(firstPartySources, resolver = resolve
     for (const specifier of runtimeSpecifiers(source.path, source.text)) {
       if (specifier.startsWith(".") || isIgnoredRuntimeSpecifier(specifier)) continue;
       const resolved = resolver(source.path, specifier);
-      if (resolved?.includes(`${join("node_modules", "")}`) === true) entries.add(resolved);
+      if (
+        resolved !== undefined &&
+        (resolved.includes(`${join("node_modules", "")}`) || isWorkspaceRuntimeSpecifier(specifier))
+      ) {
+        entries.add(resolved);
+      }
     }
   }
   return [...entries].sort(compareCodeUnits);

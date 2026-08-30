@@ -237,7 +237,7 @@ function emitAdapterDiagnostic(
   emitServerDiagnostic(
     deps.diagnostics,
     serverDiagnosticFromError({
-      correlationId: ctx.correlationId ?? "uncorrelated",
+      correlationId: ctx.correlationId ?? UNKNOWN_CORRELATION_ID,
       operation: "POST /api/native-file-dialog/open",
       source: "native-file-dialog",
       error,
