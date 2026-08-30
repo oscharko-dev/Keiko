@@ -97,25 +97,15 @@ describe("logWorkspaceLifecycle", () => {
 
   // A hostile/malformed correlationId (fails `isValidCorrelationId`'s SAFE_CORRELATION_ID shape —
   // correlation.ts) is treated the same as one genuinely absent: UNKNOWN_CORRELATION_ID, never
-  // written through unshaped. This is this module's OWN guard, independent of whatever the
-  // EvidenceStore side of the same call accepted (evidence.ts validates only non-empty-string).
-  it("falls back to UNKNOWN_CORRELATION_ID for a correlationId that fails isValidCorrelationId's shape", () => {
+  // written through unshaped. The shared service-layer normalizer now applies the same contract
+  // before both this sink and persisted workspace evidence.
+  it.each([
+    ["malformed", "req corr\ncontrol"],
+    ["empty", ""],
+    ["omitted", undefined],
+  ] as const)("falls back to UNKNOWN_CORRELATION_ID for a %s correlationId", (_label, value) => {
     const activityLog = createBufferedServerLogSink();
-    logWorkspaceLifecycle({ activityLog }, { ...BASE, correlationId: "req corr\ncontrol" });
-    const [line] = activityLog.events;
-    expect(line?.correlationId).toBe("unknown-correlation-id");
-  });
-
-  it("falls back to UNKNOWN_CORRELATION_ID for an empty-string correlationId", () => {
-    const activityLog = createBufferedServerLogSink();
-    logWorkspaceLifecycle({ activityLog }, { ...BASE, correlationId: "" });
-    const [line] = activityLog.events;
-    expect(line?.correlationId).toBe("unknown-correlation-id");
-  });
-
-  it("falls back to UNKNOWN_CORRELATION_ID for an undefined correlationId", () => {
-    const activityLog = createBufferedServerLogSink();
-    logWorkspaceLifecycle({ activityLog }, { ...BASE, correlationId: undefined });
+    logWorkspaceLifecycle({ activityLog }, { ...BASE, correlationId: value });
     const [line] = activityLog.events;
     expect(line?.correlationId).toBe("unknown-correlation-id");
   });
@@ -125,6 +115,16 @@ describe("logWorkspaceLifecycle", () => {
     logWorkspaceLifecycle({ activityLog }, { ...BASE, correlationId: "req-corr-abc123" });
     const [line] = activityLog.events;
     expect(line?.correlationId).toBe("req-corr-abc123");
+  });
+
+  it.each([
+    ["minimum", "a".repeat(8)],
+    ["maximum", "z".repeat(128)],
+  ])("preserves a valid %s-length correlationId through the shared normalizer", (_label, value) => {
+    const activityLog = createBufferedServerLogSink();
+    logWorkspaceLifecycle({ activityLog }, { ...BASE, correlationId: value });
+    const [line] = activityLog.events;
+    expect(line?.correlationId).toBe(value);
   });
 
   it("falls back to the process-wide sink when the seam carries no activityLog", () => {

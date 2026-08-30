@@ -35,7 +35,7 @@ import { isManagedTargetContained, managedTargetExists } from "./managed-root.js
 import { lockIsLive, resolveLockTtl } from "./locks.js";
 import { activePointerKey, workspaceKey } from "./mutex.js";
 import { TaskWorkspaceError } from "./errors.js";
-import { UNKNOWN_CORRELATION_ID } from "../correlation.js";
+import { correlationIdOrUnknown } from "../correlation.js";
 import { logWorkspaceLifecycle } from "./activity-log.js";
 import {
   appendWorkspaceLifecycleEvidence,
@@ -93,7 +93,7 @@ function emit(
     readonly correlationId?: string | undefined;
   },
 ): void {
-  const correlationId = input.correlationId ?? UNKNOWN_CORRELATION_ID;
+  const correlationId = correlationIdOrUnknown(input.correlationId);
   const event = buildWorkspaceEvent({
     eventId: ctx.deps.newId(),
     workspaceId: input.instance.workspaceId,

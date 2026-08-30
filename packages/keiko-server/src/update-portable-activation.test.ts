@@ -24,7 +24,7 @@ import {
   readWindowsPortableShortcutTarget,
   refreshPortableShortcut,
 } from "./update-portable-activation-files.js";
-import type { SecurityLogSink } from "@oscharko-dev/keiko-security";
+import type { SecurityLogEvent, SecurityLogSink } from "@oscharko-dev/keiko-security";
 import {
   parseWindowsShortcutFallback,
   windowsShortcutFallbackContent,
@@ -664,6 +664,69 @@ describe("refreshPortableShortcut logs a trust-boundary refusal (win32 route)", 
 
   const HOSTILE_ENV = { SystemRoot: String.raw`\\attacker\share` };
 
+  it.each([
+    ["absent", "create"],
+    ["existing", "read"],
+  ] as const)(
+    "activation correlates the %s-shortcut refusal to its request",
+    async (shortcutState, mode) => {
+      stubWin32();
+      const install = await makeInstall();
+      const appData = join(install.home, "AppData", "Roaming");
+      const shortcutPath = join(
+        appData,
+        "Microsoft",
+        "Windows",
+        "Start Menu",
+        "Programs",
+        "Keiko.lnk",
+      );
+      if (shortcutState === "existing") {
+        mkdirSync(dirname(shortcutPath), { recursive: true });
+        writeFileSync(shortcutPath, "placeholder-shortcut-bytes", "utf8");
+      }
+      const events: SecurityLogEvent[] = [];
+      const request = {
+        sessionId: `session-correlated-${shortcutState}`,
+        targetVersion: TARGET_VERSION,
+        stage: stageSummary(),
+        runtimeFacts: {
+          packageRoot: install.packageRoot,
+          portableStateDir: install.stateDir,
+        },
+      } as const;
+      const correlationId = activationIdFor(request);
+      const activator = createPortableUpdateActivator({
+        env: {
+          ...HOSTILE_ENV,
+          APPDATA: appData,
+          KEIKO_STATE_DIR: install.stateDir,
+          LOCALAPPDATA: join(install.home, "AppData", "Local"),
+        },
+        homedir: () => install.home,
+        securityLogSink: {
+          write: (event): void => {
+            events.push(event);
+          },
+        },
+        spawnFn: () => childProcess(),
+        versionVerifier: () => Promise.resolve(true),
+      });
+
+      await expect(activator.activate(request)).resolves.toMatchObject({
+        shortcutRefreshed: false,
+      });
+      expect(events).toEqual([
+        expect.objectContaining({
+          correlationId,
+          op: "security.windows-shortcut.system-root-refused",
+          extra: { mode },
+        }),
+      ]);
+      expect(JSON.stringify(events)).not.toContain("attacker");
+    },
+  );
+
   function layoutFor(installRoot: string): {
     readonly installRoot: string;
     readonly appRoot: string;
@@ -686,7 +749,8 @@ describe("refreshPortableShortcut logs a trust-boundary refusal (win32 route)", 
     tempRoots.push(base);
     const home = join(base, "home");
     const layout = layoutFor(join(home, "AppData", "Local", "Programs", "Keiko"));
-    const sink: SecurityLogSink = { write: vi.fn() };
+    const write = vi.fn<SecurityLogSink["write"]>();
+    const sink: SecurityLogSink = { write };
 
     // Absent case: nothing under Start Menu\Programs yet, so refreshPortableShortcut takes the
     // CREATE branch straight into writeShortcut/writeWindowsShortcutDefinition.
@@ -699,8 +763,8 @@ describe("refreshPortableShortcut logs a trust-boundary refusal (win32 route)", 
         securityLogSink: sink,
       }),
     ).toBe(false);
-    expect(sink.write).toHaveBeenCalledTimes(1);
-    expect(sink.write).toHaveBeenCalledWith(
+    expect(write).toHaveBeenCalledTimes(1);
+    expect(write).toHaveBeenCalledWith(
       expect.objectContaining({
         level: "warn",
         category: "security",
@@ -732,7 +796,8 @@ describe("refreshPortableShortcut logs a trust-boundary refusal (win32 route)", 
     // rewrite, and that resolution — never cscript, which is stubbed win32 never actually reaches
     // here — is exactly what the hostile env refuses. The content is never parsed.
     writeFileSync(shortcutPath, "placeholder-shortcut-bytes", "utf8");
-    const sink: SecurityLogSink = { write: vi.fn() };
+    const write = vi.fn<SecurityLogSink["write"]>();
+    const sink: SecurityLogSink = { write };
 
     expect(
       refreshPortableShortcut({
@@ -743,8 +808,8 @@ describe("refreshPortableShortcut logs a trust-boundary refusal (win32 route)", 
         securityLogSink: sink,
       }),
     ).toBe(false);
-    expect(sink.write).toHaveBeenCalledTimes(1);
-    expect(sink.write).toHaveBeenCalledWith(
+    expect(write).toHaveBeenCalledTimes(1);
+    expect(write).toHaveBeenCalledWith(
       expect.objectContaining({
         level: "warn",
         category: "security",

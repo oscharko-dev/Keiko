@@ -419,11 +419,41 @@ describe("main", () => {
       expect(result.errors.join("\n")).toContain("Promise.withResolvers needs chrome >= 119");
     });
 
-    it("does not scan a dependency file that dependencyFiles does not list", () => {
+    it("reports guarded CSS injected from a listed .mjs dependency", () => {
+      const fx = fixture({ browserslist: ["firefox >= 100"] });
+      const dep = dependencyFile(
+        "export const popupStyle = `.popup { background: color-mix(in srgb, red 30%, white); }`;\n",
+      );
+      const result = run({ ...fx, dependencyFiles: [dep] });
+      expect(result.exitCode).toBe(1);
+      expect(result.errors.join("\n")).toContain("CSS color-mix() needs firefox >= 113");
+    });
+
+    it("scans the listed dependency file but not another dependency file left unlisted", () => {
       const fx = fixture({ browserslist: ["chrome >= 100"], source: "export const v = 1;\n" });
-      dependencyFile("export function load() { return Promise.withResolvers(); }\n");
-      const result = run({ ...fx, dependencyFiles: [] });
-      expect(result.exitCode).toBeUndefined();
+      const listed = dependencyFile(
+        "export function listed() { return Promise.withResolvers(); }\n",
+      );
+      dependencyFile("export function unlisted() { return URL.parse('/x', location.href); }\n");
+      const result = run({ ...fx, dependencyFiles: [listed] });
+      const errors = result.errors.join("\n");
+      expect(result.exitCode).toBe(1);
+      expect(errors).toContain("Promise.withResolvers needs chrome >= 119");
+      expect(errors).not.toContain("URL.parse needs chrome >= 126");
+    });
+
+    it("diagnoses a missing dependency and still scans the remaining readable entries", () => {
+      const fx = fixture({ browserslist: ["chrome >= 100"], source: "export const v = 1;\n" });
+      const readable = dependencyFile(
+        "export function load() { return Promise.withResolvers(); }\n",
+      );
+      const missing = join(tmpdir(), "keiko-browser-baseline-missing-dependency.mjs");
+      rmSync(missing, { force: true });
+      const result = run({ ...fx, dependencyFiles: [missing, readable] });
+      const errors = result.errors.join("\n");
+      expect(result.exitCode).toBe(1);
+      expect(errors).toContain(`bundled dependency file is missing or unreadable: ${missing}`);
+      expect(errors).toContain("Promise.withResolvers needs chrome >= 119");
     });
   });
 

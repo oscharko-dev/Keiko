@@ -52,7 +52,7 @@ export {
 // of `keiko-local-knowledge`'s `KnowledgeLogSink`. Wired into `readMacosKeychainSecret` and
 // `createShardedLocalSecretVault`'s shard reads; the composition root supplies the real sink.
 export type { SecurityLogEvent, SecurityLogSink } from "./log-port.js";
-export { nullSecurityLogSink } from "./log-port.js";
+export { emitSecurityLogEvent, nullSecurityLogSink, securityErrorKind } from "./log-port.js";
 
 // Prompt Enhancer authoritative injection / unsafe-content detector (#1313, ADR-0044 §1/§5).
 export type {
@@ -73,11 +73,23 @@ export {
 // cscript/powershell helpers here and the cmd.exe/taskkill.exe resolution there can reach.
 export {
   DEFAULT_WINDOWS_SYSTEM_ROOT,
+  WINDOWS_CMD_METACHARACTER_SOURCE,
   resolveWindowsSystemBinary,
   resolveWindowsSystemDirectory,
+  resolveWindowsSystemExecutable,
+  sameWindowsSystemDirectoryIdentity,
+  WindowsSystemBinaryMissingError,
   WindowsSystemDirectoryError,
 } from "./windows-system-directory.js";
-export type { WindowsShortcutDefinition, WindowsShortcutSpawnFn } from "./windows-shortcuts.js";
+export type {
+  WindowsBinaryExistsCheck,
+  WindowsSystemDirectoryIdentityCheck,
+} from "./windows-system-directory.js";
+export type {
+  WindowsShortcutCommandOptions,
+  WindowsShortcutDefinition,
+  WindowsShortcutSpawnFn,
+} from "./windows-shortcuts.js";
 export {
   WINDOWS_SHORTCUT_MAX_BYTES,
   WINDOWS_SHORTCUT_TIMEOUT_MS,

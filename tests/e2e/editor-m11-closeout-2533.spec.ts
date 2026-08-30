@@ -361,8 +361,13 @@ async function switchProfile(
   return { page: await replacePage(settingsPage, seededWindows(root)), durationMs };
 }
 
-async function saveVersion(page: Page, pane: Locator, content: string): Promise<void> {
-  await replaceEditorBuffer(page, pane, content);
+async function saveVersion(
+  page: Page,
+  pane: Locator,
+  content: string,
+  workspaceRoot: string,
+): Promise<void> {
+  await replaceEditorBuffer(page, pane, content, workspaceRoot);
   const saved = page.waitForResponse(
     (response) =>
       response.request().method() === "PATCH" && response.url().endsWith("/api/files/content"),
@@ -385,7 +390,11 @@ async function saveVersion(page: Page, pane: Locator, content: string): Promise<
  * rather than on a sleep, and it is the request whose body is the thing that must not also land in
  * the browser.
  */
-async function leaveUnsavedHotExitEdit(page: Page, pane: Locator): Promise<void> {
+async function leaveUnsavedHotExitEdit(
+  page: Page,
+  pane: Locator,
+  workspaceRoot: string,
+): Promise<void> {
   // `restoreOldest` leaves the history panel open, and it overlays the editor surface — typing has
   // to reach Monaco, so close it through its own control rather than clicking past it.
   await pane.getByRole("button", { name: "Close file history" }).click();
@@ -395,7 +404,7 @@ async function leaveUnsavedHotExitEdit(page: Page, pane: Locator): Promise<void>
       response.request().method() === "POST" &&
       response.url().endsWith("/api/editor/hot-exit/write"),
   );
-  await replaceEditorBuffer(page, pane, UNSAVED_VERSION);
+  await replaceEditorBuffer(page, pane, UNSAVED_VERSION, workspaceRoot);
   expect((await persisted).ok()).toBe(true);
   // The index write is a separate IndexedDB transaction the POST only precedes, so settle on the
   // product's own observable outcome — the dirty marker the same effect gates on — before dumping.
@@ -530,11 +539,11 @@ test("mixed-trust multi-root, profile switching, and local-history restore compo
   // This journey replaces the whole editor buffer (`replaceEditorBuffer`) before asserting. Monaco
   // 0.56 uses the EditContext API where it exists and falls back to `textarea.inputarea` where it
   // does not; Firefox has no EditContext. On that fallback surface neither Ctrl+A nor Cmd+A reaches
-  // Monaco's keybinding service, so the select-all selects nothing and the following insert APPENDS.
+  // Monaco's keybinding service, so the replacement paste leaves stale model content behind.
   // Verified on this host, not assumed: the sibling #2531 spec run with --project=firefox fails
-  // inside the shared helper with `expected "…" at most 1x after replacing the buffer` — the helper
-  // catching the corruption where it happens, which is the improvement over the silent doubling that
-  // preceded it. Same gap and same wording as release-smoke.spec.ts.
+  // inside the shared helper because no hot-exit write ever carries the requested exact full buffer
+  // — the helper catches the corruption where it happens instead of accepting a visible first-line
+  // anchor while stale content survives. Same gap as release-smoke.spec.ts.
   //
   // This config inherits BOTH projects from the shared base config, but its npm script pins
   // --project=chromium, so this guard changes no CI lane today; it exists so a future firefox run
@@ -547,16 +556,16 @@ test("mixed-trust multi-root, profile switching, and local-history restore compo
   const journeyPage = switched.page;
   const editor = await reopenTrustedAlphaAfterProfileSwitch(journeyPage, harness.alpha.root);
   const pane = firstPane(editor);
-  await saveVersion(journeyPage, pane, VERSION_ONE);
+  await saveVersion(journeyPage, pane, VERSION_ONE, harness.alpha.root);
   // Read the oldest checkpoint's content from disk instead of hard-coding it (the sibling #2531
   // journey established this pattern): `replaceEditorBuffer` now VERIFIES the replacement rather
   // than assuming it, but what restore must guarantee is exactly "the file equals the oldest
   // checkpoint", and asserting that directly stays independent of how the buffer got there.
   const oldestContent = readFileSync(join(harness.alpha.root, FILE), "utf8");
-  await saveVersion(journeyPage, pane, VERSION_TWO);
+  await saveVersion(journeyPage, pane, VERSION_TWO, harness.alpha.root);
   const historyRestoreMs = await restoreOldest(journeyPage, pane);
   expect(readFileSync(join(harness.alpha.root, FILE), "utf8")).toBe(oldestContent);
-  await leaveUnsavedHotExitEdit(journeyPage, pane);
+  await leaveUnsavedHotExitEdit(journeyPage, pane, harness.alpha.root);
   const storage = await browserStorageDump(journeyPage);
   // Assert on booleans and carry the diagnosis in the message, never in the subject: a failing
   // `toContain` prints what it searched, and here that is every browser sink including cookies —

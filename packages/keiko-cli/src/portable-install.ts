@@ -34,6 +34,7 @@ import {
   installNativeRegistration,
   parseWindowsStartMenuRegistration,
   removePortableManagedInstall,
+  type PortableRegistrationOptions,
   windowsLegacyStartMenuRegistrationPath,
   windowsStartMenuRegistrationPath,
 } from "./portable-maintenance.js";
@@ -54,6 +55,7 @@ import {
   type SpawnFn,
 } from "./portable-shared.js";
 import type { EnvSource } from "@oscharko-dev/keiko-model-gateway";
+import type { SecurityLogSink } from "@oscharko-dev/keiko-security";
 
 export interface ValidatedPortableRoot {
   readonly layout: PortableLayout;
@@ -70,6 +72,7 @@ export interface PortableManagedUpgradeInput {
   readonly home: string;
   readonly now: Date;
   readonly io: CliIo;
+  readonly securityLogSink?: SecurityLogSink | undefined;
 }
 
 type PortableManagedReplacementInput = Omit<PortableManagedUpgradeInput, "current">;
@@ -508,6 +511,7 @@ function promoteStagedUpgrade(
         dryRun: false,
         env: input.env,
         home: input.home,
+        securityLogSink: input.securityLogSink,
       },
       layout,
       stagedSource.manifest,
@@ -653,6 +657,7 @@ interface SetupPortableOptions {
   readonly dryRun: boolean;
   readonly env: EnvSource;
   readonly home: string;
+  readonly securityLogSink?: SecurityLogSink | undefined;
 }
 
 const SILENT_IO: CliIo = {
@@ -675,6 +680,7 @@ function finalizeManagedSetup(
     options.env,
     options.home,
     io,
+    { securityLogSink: options.securityLogSink },
   );
   writeManagedRegistration({
     stateDir: options.stateDir,
@@ -813,8 +819,9 @@ export function recoverableFailedWindowsManagedRoot(
   stateDir: string,
   env: EnvSource,
   home: string,
+  options: PortableRegistrationOptions = {},
 ): string | undefined {
-  for (const registeredExe of windowsRegisteredLauncherTargets(env, home)) {
+  for (const registeredExe of windowsRegisteredLauncherTargets(env, home, options)) {
     const recovered = recoverableFailedManagedRoot("windows-x64", dirname(registeredExe), stateDir);
     if (recovered !== undefined) return recovered;
   }
@@ -1272,24 +1279,29 @@ function candidateManagedRoots(
   registration: PortableInstallRegistration,
   env: EnvSource,
   home: string,
+  options: PortableRegistrationOptions,
 ): readonly string[] {
   const target = registration.platformTarget;
   const roots = new Set<string>([defaultManagedRoot(target, env, home)]);
   const hintedRoot = resolveManagedRootLocator(registration, home);
   if (hintedRoot !== undefined) roots.add(hintedRoot);
   if (target !== "windows-x64") return [...roots];
-  for (const registeredExe of windowsRegisteredLauncherTargets(env, home)) {
+  for (const registeredExe of windowsRegisteredLauncherTargets(env, home, options)) {
     roots.add(dirname(registeredExe));
   }
   return [...roots];
 }
 
-function windowsRegisteredLauncherTargets(env: EnvSource, home: string): readonly string[] {
+function windowsRegisteredLauncherTargets(
+  env: EnvSource,
+  home: string,
+  options: PortableRegistrationOptions,
+): readonly string[] {
   return [
     windowsStartMenuRegistrationPath(env, home),
     windowsLegacyStartMenuRegistrationPath(env, home),
   ]
-    .map((path) => parseWindowsStartMenuRegistration(path))
+    .map((path) => parseWindowsStartMenuRegistration(path, env, options))
     .filter((path): path is string => path !== undefined);
 }
 
@@ -1327,6 +1339,7 @@ export function attestedPortableInstallRecord(
   stateDir: string,
   env: EnvSource,
   home: string,
+  options: PortableRegistrationOptions = {},
 ):
   | {
       readonly registration: PortableInstallRegistration;
@@ -1347,7 +1360,7 @@ export function attestedPortableInstallRecord(
       manifest: undefined,
     };
   }
-  for (const managedRoot of candidateManagedRoots(registration, env, home)) {
+  for (const managedRoot of candidateManagedRoots(registration, env, home, options)) {
     const attested = attestedManagedLayout(registration, managedRoot, stateDir);
     if (attested !== undefined) {
       return {

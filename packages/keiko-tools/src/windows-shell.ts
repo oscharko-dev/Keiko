@@ -41,10 +41,10 @@
 // review found two independently hand-written copies of this check had drifted — the other side's
 // `isAbsolute`-only check accepted UNC/device/root-relative shapes this one rejected — so
 // `resolveSystemBinaryPath` here is a thin wrapper over the shared function, not a parallel
-// implementation to keep in sync by hand. Node has no binding to `GetSystemDirectoryW` — the only
-// OS-authoritative source — so the shared check validates SHAPE, never the live identity of the
-// directory; `resolveSystemBinaryPath` is exported for every caller in this package that needs the
-// same trusted-System32 resolution (e.g. `exec.ts`'s `taskkill.exe` lookup).
+// implementation to keep in sync by hand. On Windows the shared resolver binds the shaped
+// candidate to the OS-owned `\\?\GLOBALROOT\SystemRoot` filesystem identity before use;
+// `resolveSystemBinaryPath` is exported for every caller in this package that needs the same
+// trusted-System32 resolution (e.g. `exec.ts`'s `taskkill.exe` lookup).
 //
 // Pure and side-effect-free: callers may inject `env`/`platform` for deterministic tests; the
 // defaults read `process.env`/`process.platform` only for production callers' convenience.
@@ -75,7 +75,12 @@
 // https://github.com/moxystudio/node-cross-spawn
 
 import { win32 } from "node:path";
-import { resolveWindowsSystemBinary } from "@oscharko-dev/keiko-security";
+import {
+  resolveWindowsSystemBinary,
+  WINDOWS_CMD_METACHARACTER_SOURCE,
+  type WindowsBinaryExistsCheck,
+  type WindowsSystemDirectoryIdentityCheck,
+} from "@oscharko-dev/keiko-security";
 
 // cross-spawn's metachar class, reproduced verbatim: each of these characters is meaningful to
 // cmd.exe's own parser and must be caret-escaped wherever it appears in the assembled command
@@ -92,7 +97,7 @@ import { resolveWindowsSystemBinary } from "@oscharko-dev/keiko-security";
 // caret-escaping neutralises. No current caller pairs a `.cmd` target with a credential-bearing
 // environment policy, but `buildWindowsShellInvocation` is a public export: a future caller that
 // does should not have to rediscover this by reading cmd.exe's own parsing order first.
-const CMD_METACHARACTERS = /([()\][%!^"`<>&|;, *?])/g;
+const CMD_METACHARACTERS = new RegExp(`(${WINDOWS_CMD_METACHARACTER_SOURCE})`, "gu");
 
 // The wrap trigger: exactly `.cmd`/`.bat`. cross-spawn's own condition is broader — it wraps
 // everything that is NOT a recognised native image (`needsShell = !/\.(?:com|exe)$/i.test(...)`
@@ -159,6 +164,8 @@ function assertSafelyTransportable(value: string, label: string): void {
 export interface WindowsShellInvocationOptions {
   readonly env?: NodeJS.ProcessEnv | undefined;
   readonly platform?: NodeJS.Platform | undefined;
+  readonly existsAsFile?: WindowsBinaryExistsCheck | undefined;
+  readonly systemDirectoryIdentity?: WindowsSystemDirectoryIdentityCheck | undefined;
 }
 
 // `windowsVerbatimArguments` is always present (never optional) so a caller can branch on it
@@ -198,7 +205,7 @@ function isCmdShim(resolvedCommandPath: string): boolean {
   return CMD_SHIM_PATH.test(resolvedCommandPath);
 }
 
-function needsCmdWrapping(resolvedCommandPath: string): boolean {
+export function isWindowsCommandScript(resolvedCommandPath: string): boolean {
   return CMD_SHIM_EXTENSION.test(resolvedCommandPath);
 }
 
@@ -210,21 +217,30 @@ function needsCmdWrapping(resolvedCommandPath: string): boolean {
 // package barrel) keep working against the single source of truth.
 export {
   resolveWindowsSystemDirectory,
+  WINDOWS_CMD_METACHARACTER_SOURCE,
+  WindowsSystemBinaryMissingError,
   WindowsSystemDirectoryError,
+} from "@oscharko-dev/keiko-security";
+export type {
+  WindowsBinaryExistsCheck,
+  WindowsSystemDirectoryIdentityCheck,
 } from "@oscharko-dev/keiko-security";
 
 export function resolveSystemBinaryPath(
   binaryName: string,
   env: NodeJS.ProcessEnv = process.env,
+  existsAsFile?: WindowsBinaryExistsCheck,
+  identityCheck?: WindowsSystemDirectoryIdentityCheck,
 ): string {
-  return resolveWindowsSystemBinary(binaryName, env);
+  return resolveWindowsSystemBinary(binaryName, env, existsAsFile, identityCheck);
 }
 
 function buildWrappedInvocation(
   resolvedCommandPath: string,
   args: readonly string[],
-  env: NodeJS.ProcessEnv,
+  options: WindowsShellInvocationOptions,
 ): WindowsShellInvocation {
+  const env = options.env ?? process.env;
   assertSafelyTransportable(resolvedCommandPath, "resolved command path");
   for (const [index, arg] of args.entries()) {
     assertSafelyTransportable(arg, `argument ${String(index)}`);
@@ -237,7 +253,12 @@ function buildWrappedInvocation(
   ];
   const commandLine = '"' + escapedParts.join(" ") + '"';
   return {
-    command: resolveSystemBinaryPath("cmd.exe", env),
+    command: resolveSystemBinaryPath(
+      "cmd.exe",
+      env,
+      options.existsAsFile,
+      options.systemDirectoryIdentity,
+    ),
     args: ["/d", "/s", "/c", commandLine],
     windowsVerbatimArguments: true,
   };
@@ -256,9 +277,8 @@ export function buildWindowsShellInvocation(
   opts?: WindowsShellInvocationOptions,
 ): WindowsShellInvocation {
   const platform = opts?.platform ?? process.platform;
-  if (platform !== "win32" || !needsCmdWrapping(resolvedCommandPath)) {
+  if (platform !== "win32" || !isWindowsCommandScript(resolvedCommandPath)) {
     return { command: resolvedCommandPath, args, windowsVerbatimArguments: false };
   }
-  const env = opts?.env ?? process.env;
-  return buildWrappedInvocation(resolvedCommandPath, args, env);
+  return buildWrappedInvocation(resolvedCommandPath, args, opts ?? {});
 }

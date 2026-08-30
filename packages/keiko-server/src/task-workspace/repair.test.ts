@@ -50,6 +50,8 @@ let idCounter: number;
 let nowMs: number;
 let provisioning: WorkspaceProvisioningService;
 
+type AdapterFactory = (workspace: WorkspaceInfo, correlationId: string) => GitWorktreeAdapter;
+
 function git(args: readonly string[]): string {
   return execFileSync("git", [...args], { cwd: repoRoot, encoding: "utf8" });
 }
@@ -70,14 +72,36 @@ function realAdapter(workspace: WorkspaceInfo): GitWorktreeAdapter {
   return createNodeGitWorktreeAdapter({ workspace, processEnv: { PATH: process.env.PATH ?? "" } });
 }
 
-function repairService(activityLog?: ServerLogSink): WorkspaceRepairService {
+function capturingAdapterFactory(received: string[]): AdapterFactory {
+  return (workspace, correlationId): GitWorktreeAdapter => {
+    received.push(correlationId);
+    return realAdapter(workspace);
+  };
+}
+
+function rejectingAdapterFactory(received: string[]): AdapterFactory {
+  return (_workspace, correlationId): GitWorktreeAdapter => {
+    received.push(correlationId);
+    throw new Error("captured adapter correlation");
+  };
+}
+
+function expectOnlyAdapterCorrelation(received: readonly string[], expected: string): void {
+  expect(received.length).toBeGreaterThan(0);
+  expect(new Set(received)).toEqual(new Set([expected]));
+}
+
+function repairService(
+  activityLog?: ServerLogSink,
+  adapterFactory: AdapterFactory = realAdapter,
+): WorkspaceRepairService {
   return createWorkspaceRepairService({
     store,
     activePointerStore: pointerStore,
     evidenceStore: capturingEvidence(),
     provisioning,
     managedRoot,
-    createAdapter: realAdapter,
+    createAdapter: adapterFactory,
     redactString: (s: string): string => s,
     now: (): number => nowMs,
     newId: (): string => `id-${String(idCounter++)}`,
@@ -250,6 +274,7 @@ describe("release-stale-lock (clear stale lock)", () => {
   });
 
   it("falls back to UNKNOWN_CORRELATION_ID (never the auditCorrelationId) when no request scope exists", async () => {
+    const received: string[] = [];
     const instance = await provisionTask("t-nocorr");
     store.upsert({
       ...instance,
@@ -261,17 +286,45 @@ describe("release-stale-lock (clear stale lock)", () => {
         expiresAt: new Date(nowMs - 1_800_000).toISOString(),
       },
     });
-    await repair(instance.workspaceId, "release-stale-lock", true);
+    await repairService(undefined, capturingAdapterFactory(received)).repair({
+      workspaceId: instance.workspaceId,
+      strategy: "release-stale-lock",
+      operatorApproved: true,
+      requestedBy: "u",
+    });
+    expectOnlyAdapterCorrelation(received, UNKNOWN_CORRELATION_ID);
     expect(lastEventCorrelationId()).toBe(UNKNOWN_CORRELATION_ID);
     expect(lastEventCorrelationId()).not.toBe(instance.auditCorrelationId);
   });
 
-  // IDX51: the correlation-ID regression matrix beyond an ordinary id and an omitted property.
-  // `buildWorkspaceEvent` (evidence.ts) validates `correlationId` through the #444 contract's
-  // `isNonEmptyString` gate — non-empty and typeof string, nothing more — so any NON-EMPTY string
-  // (malformed, hostile, or absurdly long) is accepted and persisted as-is; only the EMPTY string is
-  // rejected (a genuinely distinct case from "no correlation id was supplied", which is `undefined`).
-  describe("correlation-ID regression matrix", () => {
+  describe("adapter correlation-ID boundary", () => {
+    it.each([
+      ["empty", ""],
+      ["malformed", "req corr\ncontrol"],
+      ["hostile", `req-corr-${"a".repeat(4000)}`],
+      ["below the HTTP boundary", "x"],
+    ] as const)(
+      "normalizes a supplied %s ID before adapter construction",
+      async (_label, input) => {
+        const received: string[] = [];
+        const instance = await provisionTask(`t-adapter-${_label.replaceAll(" ", "-")}`);
+        await expect(
+          repairService(undefined, rejectingAdapterFactory(received)).repair({
+            workspaceId: instance.workspaceId,
+            strategy: "release-stale-lock",
+            operatorApproved: true,
+            requestedBy: "u",
+            correlationId: input,
+          }),
+        ).rejects.toThrow("captured adapter correlation");
+        expectOnlyAdapterCorrelation(received, UNKNOWN_CORRELATION_ID);
+      },
+    );
+  });
+
+  // IDX51: the same normalization that protects adapter termination evidence also protects lifecycle
+  // evidence. A supplied value outside SAFE_CORRELATION_ID joins the explicit omitted-id fallback.
+  describe("correlation-ID normalization", () => {
     function lockedInstance(taskId: string): Promise<WorkspaceInstance> {
       return provisionTask(taskId).then((instance) => {
         store.upsert({
@@ -288,52 +341,15 @@ describe("release-stale-lock (clear stale lock)", () => {
       });
     }
 
-    // An empty string is NOT `undefined`, so the `correlationId ?? UNKNOWN_CORRELATION_ID` fallback
-    // (repair.ts) never triggers for it — it reaches `buildWorkspaceEvent` verbatim, and the #444
-    // contract's `isNonEmptyString` gate rejects it, so `buildWorkspaceEvent` throws synchronously.
-    // Pinned as PRESERVE-current-behavior: an empty-string correlationId currently fails the WHOLE
-    // repair (not merely the audit line) with a content-free-invariant Error, never a silent
-    // fallback to UNKNOWN_CORRELATION_ID. A caller must never pass "" — only omit the property.
-    it("rejects an empty-string correlationId by failing the repair (does not silently fall back)", async () => {
-      const instance = await lockedInstance("t-corr-empty");
-      await expect(
-        repair(instance.workspaceId, "release-stale-lock", true, "u", ""),
-      ).rejects.toThrow(/content-free workspace event invariant violated/u);
-    });
-
-    // A malformed-but-non-empty correlationId (fails `isValidCorrelationId`'s narrow
-    // `SAFE_CORRELATION_ID` HTTP-header shape — correlation.ts — but is still a non-empty string) is
-    // NOT rejected by the #444 contract gate: it is preserved verbatim into the evidence, exactly like
-    // a well-formed one. This is CURRENT behavior, not a claim it is ideal — `buildWorkspaceEvent`
-    // validates shape-as-"non-empty string", not shape-as-"safe correlation id".
-    it("preserves a malformed (control-character) correlationId verbatim in evidence", async () => {
-      const instance = await lockedInstance("t-corr-malformed");
-      const hostile = "req\u0000corr\ncontrol";
-      await repair(instance.workspaceId, "release-stale-lock", true, "u", hostile);
-      expect(lastEventCorrelationId()).toBe(hostile);
-    });
-
-    // "Hostile" here means implausibly long — the #444 contract has no length ceiling of its own, so
-    // an oversized value is preserved into the EvidenceStore verbatim (the SEPARATE server-log line
-    // this same repair now also emits — IDX61 — DOES cap it, via `redactLogString`'s
-    // `MAX_LOG_STRING_LENGTH`; the two surfaces have different redaction rules by design, and this
-    // test pins the evidence side only).
-    it("preserves an implausibly long correlationId verbatim in evidence (no length ceiling)", async () => {
-      const instance = await lockedInstance("t-corr-long");
-      const long = `req-corr-${"a".repeat(4000)}`;
-      await repair(instance.workspaceId, "release-stale-lock", true, "u", long);
-      expect(lastEventCorrelationId()).toBe(long);
-      expect(lastEventCorrelationId().length).toBe(long.length);
-    });
-
-    // Boundary: `isValidCorrelationId`'s own shape (`SAFE_CORRELATION_ID`, correlation.ts) requires
-    // 8-128 characters. A 1-character id is well below that floor but is STILL a non-empty string, so
-    // the #444 contract preserves it unchanged — proving the evidence layer's validation is strictly
-    // looser than `isValidCorrelationId`, not merely untested.
-    it("preserves a below-the-HTTP-boundary 1-character correlationId verbatim in evidence", async () => {
-      const instance = await lockedInstance("t-corr-boundary");
-      await repair(instance.workspaceId, "release-stale-lock", true, "u", "x");
-      expect(lastEventCorrelationId()).toBe("x");
+    it.each([
+      ["empty", ""],
+      ["malformed", "req\u0000corr\ncontrol"],
+      ["hostile", `req-corr-${"a".repeat(4000)}`],
+      ["below the HTTP boundary", "x"],
+    ] as const)("normalizes a supplied %s ID in lifecycle evidence", async (_label, input) => {
+      const instance = await lockedInstance(`t-corr-${_label.replaceAll(" ", "-")}`);
+      await repair(instance.workspaceId, "release-stale-lock", true, "u", input);
+      expect(lastEventCorrelationId()).toBe(UNKNOWN_CORRELATION_ID);
     });
   });
 
@@ -342,6 +358,7 @@ describe("release-stale-lock (clear stale lock)", () => {
   // (AGENTS.md §8), carrying the SAME correlationId the evidence assertions above just proved.
   it("emits a task-workspace.lifecycle activity-log line alongside the evidence, same correlationId", async () => {
     const activityLog = createBufferedServerLogSink();
+    const received: string[] = [];
     const instance = await provisionTask("t-activity-log");
     store.upsert({
       ...instance,
@@ -353,14 +370,14 @@ describe("release-stale-lock (clear stale lock)", () => {
         expiresAt: new Date(nowMs - 1_800_000).toISOString(),
       },
     });
-    await repair(
-      instance.workspaceId,
-      "release-stale-lock",
-      true,
-      "u",
-      "req-corr-repair-activity-1",
-      activityLog,
-    );
+    await repairService(activityLog, capturingAdapterFactory(received)).repair({
+      workspaceId: instance.workspaceId,
+      strategy: "release-stale-lock",
+      operatorApproved: true,
+      requestedBy: "u",
+      correlationId: "req-corr-repair-activity-1",
+    });
+    expectOnlyAdapterCorrelation(received, "req-corr-repair-activity-1");
     const line = lastActivityLogEvent(activityLog);
     expect(line.category).toBe("diagnostic");
     expect(line.op).toBe("task-workspace.lifecycle");

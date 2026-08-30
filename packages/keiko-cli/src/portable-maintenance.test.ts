@@ -9,16 +9,20 @@ import {
 } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
   WINDOWS_SHORTCUT_MAX_BYTES,
+  WindowsSystemBinaryMissingError,
   WindowsSystemDirectoryError,
+  type SecurityLogEvent,
+  type SecurityLogSink,
   windowsShortcutFallbackContent,
 } from "@oscharko-dev/keiko-security";
 
 import { windowsLauncher } from "./launcher-platforms.js";
 import { layoutFor } from "./portable-shared.js";
+import { createCliSecurityLogSink } from "./security-log.js";
 import {
   installNativeRegistration,
   nativeRegistrationKinds,
@@ -30,6 +34,20 @@ import {
   windowsLegacyStartMenuRegistrationPath,
   windowsStartMenuRegistrationPath,
 } from "./portable-maintenance.js";
+
+function recordingCliSink(stateDir: string): {
+  readonly sink: SecurityLogSink;
+  readonly events: SecurityLogEvent[];
+} {
+  const events: SecurityLogEvent[] = [];
+  const sink = createCliSecurityLogSink(stateDir, (_selectedStateDir) => ({
+    write(event): void {
+      events.push(event);
+    },
+  }));
+  if (sink === undefined) throw new Error("test security log sink was not created");
+  return { sink, events };
+}
 
 describe("portable native registration policy", () => {
   it("registers only canonical platform-managed roots", () => {
@@ -128,6 +146,65 @@ describe("portable native registration policy", () => {
       rmSync(root, { recursive: true, force: true });
     }
   });
+
+  it.each([
+    [
+      "hostile root",
+      String.raw`\\attacker\share`,
+      undefined,
+      "security",
+      "security.windows-portable-legacy-launcher.system-root-refused",
+      "WindowsSystemDirectoryError",
+    ],
+    [
+      "missing PowerShell",
+      String.raw`Z:\KeikoMissingWindowsRoot`,
+      (): string => {
+        throw new WindowsSystemBinaryMissingError();
+      },
+      "diagnostic",
+      "security.windows-portable-legacy-launcher.system-binary-missing",
+      "WINDOWS_SYSTEM_BINARY_MISSING",
+    ],
+  ] as const)(
+    "keeps verified shortcut installation successful when legacy cleanup meets %s",
+    (_label, systemRoot, resolveWindowsPowerShell, category, op, errorKind) => {
+      const root = mkdtempSync(join(homedir(), ".keiko-legacy-helper-refused-"));
+      try {
+        const home = join(root, "home");
+        const env = {
+          APPDATA: join(home, "AppData", "Roaming"),
+          SystemRoot: systemRoot,
+        };
+        const installRoot = join(home, "Keiko Program");
+        const layout = layoutFor("windows-x64", installRoot);
+        const { sink, events } = recordingCliSink(join(root, ".keiko"));
+        const errors: string[] = [];
+        const io = {
+          out: (): void => undefined,
+          err: (line: string): void => {
+            errors.push(line);
+          },
+        };
+
+        expect(() => {
+          installNativeRegistration(layout, "windows-x64", installRoot, env, home, io, {
+            securityLogSink: sink,
+            ...(resolveWindowsPowerShell === undefined ? {} : { resolveWindowsPowerShell }),
+          });
+        }).not.toThrow();
+
+        expect(existsSync(windowsStartMenuRegistrationPath(env, home))).toBe(true);
+        expect(events).toHaveLength(1);
+        expect(events[0]).toMatchObject({ category, op, errorKind });
+        expect(events[0]?.correlationId).toMatch(/^[0-9a-f-]{36}$/u);
+        expect(errors.join("")).toContain("trusted Windows launch helper is unavailable");
+        expect(JSON.stringify({ events, errors })).not.toContain(systemRoot);
+      } finally {
+        rmSync(root, { recursive: true, force: true });
+      }
+    },
+  );
 
   it("counts action-required registrations and reports a refused legacy removal", () => {
     const root = mkdtempSync(join(homedir(), ".keiko-action-required-"));
@@ -320,6 +397,97 @@ describe("parseWindowsStartMenuRegistration propagates a trust-boundary refusal"
       expect(() =>
         parseWindowsStartMenuRegistration(shortcut, { SystemRoot: String.raw`\\attacker\share` }),
       ).toThrow(WindowsSystemDirectoryError);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("emits a correlated body-free read event before failing closed", () => {
+    Object.defineProperty(process, "platform", { ...platform, value: "win32" });
+    const root = mkdtempSync(join(homedir(), ".keiko-shortcut-read-event-"));
+    try {
+      const shortcut = join(root, "Keiko.lnk");
+      writeFileSync(shortcut, "placeholder-shortcut-bytes");
+      const { sink, events } = recordingCliSink(join(root, ".keiko"));
+
+      expect(() =>
+        parseWindowsStartMenuRegistration(
+          shortcut,
+          { SystemRoot: String.raw`\\attacker\share` },
+          { securityLogSink: sink },
+        ),
+      ).toThrow(WindowsSystemDirectoryError);
+
+      expect(events).toHaveLength(1);
+      expect(events[0]).toMatchObject({
+        category: "security",
+        op: "security.windows-shortcut.system-root-refused",
+        errorKind: "WindowsSystemDirectoryError",
+        extra: { mode: "read" },
+      });
+      expect(events[0]?.correlationId).toMatch(/^[0-9a-f-]{36}$/u);
+      expect(JSON.stringify(events)).not.toContain("attacker");
+      expect(JSON.stringify(events)).not.toContain(shortcut);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("preserves the typed refusal when the lazy CLI sink factory is unavailable", () => {
+    Object.defineProperty(process, "platform", { ...platform, value: "win32" });
+    const root = mkdtempSync(join(homedir(), ".keiko-shortcut-sink-failure-"));
+    const emitWarning = vi.spyOn(process, "emitWarning").mockImplementation((): void => undefined);
+    try {
+      const shortcut = join(root, "Keiko.lnk");
+      writeFileSync(shortcut, "placeholder-shortcut-bytes");
+      const sink = createCliSecurityLogSink(join(root, ".keiko"), () => {
+        throw new Error("sink factory failure containing SensitiveProfilePath");
+      });
+
+      expect(() =>
+        parseWindowsStartMenuRegistration(
+          shortcut,
+          { SystemRoot: String.raw`\\attacker\share` },
+          { securityLogSink: sink },
+        ),
+      ).toThrow(WindowsSystemDirectoryError);
+      expect(emitWarning).toHaveBeenCalledTimes(1);
+      expect(JSON.stringify(emitWarning.mock.calls)).not.toContain("SensitiveProfilePath");
+    } finally {
+      emitWarning.mockRestore();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("emits a correlated body-free create event and leaves an absent shortcut absent", () => {
+    Object.defineProperty(process, "platform", { ...platform, value: "win32" });
+    const root = mkdtempSync(join(homedir(), ".keiko-shortcut-create-event-"));
+    try {
+      const home = join(root, "home");
+      const env = { SystemRoot: String.raw`\\attacker\share` };
+      const installRoot = join(home, "AppData", "Local", "Programs", "Keiko");
+      const layout = layoutFor("windows-x64", installRoot);
+      const shortcut = windowsStartMenuRegistrationPath(env, home);
+      const { sink, events } = recordingCliSink(join(root, ".keiko"));
+      const io = { out: (): void => undefined, err: (): void => undefined };
+
+      expect(() => {
+        installNativeRegistration(layout, "windows-x64", installRoot, env, home, io, {
+          securityLogSink: sink,
+        });
+      }).toThrow(WindowsSystemDirectoryError);
+
+      expect(existsSync(shortcut)).toBe(false);
+      expect(events).toHaveLength(1);
+      expect(events[0]).toMatchObject({
+        category: "security",
+        op: "security.windows-shortcut.system-root-refused",
+        errorKind: "WindowsSystemDirectoryError",
+        extra: { mode: "create" },
+      });
+      expect(events[0]?.correlationId).toMatch(/^[0-9a-f-]{36}$/u);
+      expect(JSON.stringify(events)).not.toContain("attacker");
+      expect(JSON.stringify(events)).not.toContain(shortcut);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

@@ -287,22 +287,36 @@ function prApprovalBinding(
 
 type PrAuthorityTarget = ReturnType<typeof prAuthorityTarget>;
 
+interface GovernedPrDispatch {
+  readonly ctx: RouteContext;
+  readonly deps: UiHandlerDeps;
+  readonly seams: GitDeliveryPullRequestSeams;
+  readonly command: GitPullRequestCommand;
+  readonly verifiedApproval: GitDeliveryApprovalRequirement;
+  readonly workspace: WorkspaceInfo;
+  readonly projectId: string;
+  readonly target: PrAuthorityTarget;
+  readonly authority: GitDeliveryAuthorityIdentity;
+  readonly correlationId: string;
+}
+
 // Runs the continuity-guarded dispatch: builds the guard (capturing a mid-flight denial's 403), calls
 // the PR gateway, and — when the guard denied — returns that SAME 403 instead of projecting the
 // gateway's synthetic no-spawn result as a misleading 200 internal failure. Split out of the handler
 // purely to keep the handler under the repo's max-lines-per-function bar.
-async function dispatchGovernedPr(
-  ctx: RouteContext,
-  deps: UiHandlerDeps,
-  seams: GitDeliveryPullRequestSeams,
-  command: GitPullRequestCommand,
-  verifiedApproval: GitDeliveryApprovalRequirement,
-  workspace: WorkspaceInfo,
-  projectId: string,
-  target: PrAuthorityTarget,
-  authority: GitDeliveryAuthorityIdentity,
-  correlationId: string,
-): Promise<RouteResult> {
+async function dispatchGovernedPr(input: GovernedPrDispatch): Promise<RouteResult> {
+  const {
+    ctx,
+    deps,
+    seams,
+    command,
+    verifiedApproval,
+    workspace,
+    projectId,
+    target,
+    authority,
+    correlationId,
+  } = input;
   const denialCapture: GitDeliveryAuthorityContinuityDenialCapture = {};
   const beforeRemoteDispatch = gitDeliveryAuthorityContinuityGuard({
     ctx,
@@ -360,7 +374,7 @@ async function handlePrExecute(
     nowMs: (seams.now ?? Date.now)(),
   });
   if (verifiedApproval === undefined) return errResult(400, "GIT_DELIVERY_PR_BAD_REQUEST");
-  return dispatchGovernedPr(
+  return dispatchGovernedPr({
     ctx,
     deps,
     seams,
@@ -371,7 +385,7 @@ async function handlePrExecute(
     target,
     authority,
     correlationId,
-  );
+  });
 }
 
 export const createHandlePrExecute = (

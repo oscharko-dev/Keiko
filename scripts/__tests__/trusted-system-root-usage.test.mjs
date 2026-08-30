@@ -21,6 +21,7 @@
 import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
+import ts from "typescript";
 
 const PACKAGES_ROOT = join(process.cwd(), "packages");
 
@@ -49,23 +50,10 @@ function sourceFiles() {
   return out;
 }
 
-// IDX55 (PR #3355 review): the original readsRaw regex matched ONLY dot-property access
-// (`env.SystemRoot`), so `process.env["SystemRoot"]` (computed/bracket access) and
-// `process.env?.SystemRoot` (optional chaining) read the exact same raw value while sailing past
-// the pin entirely. Both forms are widened here, as two SEPARATE alternatives rather than one
-// do-everything regex, so each stays readable and independently testable (see the fixtures below).
-//
-// Dot access, with or without optional chaining: `env.SystemRoot`, `env?.SystemRoot`,
-// `process.env?.WINDIR`.
-const READS_RAW_DOT_ACCESS = /\b(?:process\.)?env\s*\??\.\s*(?:SystemRoot|WINDIR|windir)\b/u;
-// Bracket/computed access, with or without optional chaining: `env["SystemRoot"]`,
-// `env['WINDIR']`, `` env?.[`SystemRoot`] ``.
-const READS_RAW_BRACKET_ACCESS =
-  /\b(?:process\.)?env\s*(?:\?\.)?\s*\[\s*["'`](?:SystemRoot|WINDIR|windir)["'`]\s*\]/u;
-
-// A raw read is only a defect when the value becomes a PATH. Forwarding it into a child process's
-// env (keiko-git/src/env.ts) is legitimate and must not be flagged.
-const JOINS_A_PATH = /\bjoin\s*\(|\bresolve\s*\(|System32|`\$\{[^}]*(?:SystemRoot|WINDIR)/u;
+const RAW_SYSTEM_ROOT_PROPERTIES = new Set(["SystemRoot", "WINDIR", "windir"]);
+const EXPANDS_SYSTEM_ROOT_IN_BATCH_PATH = /%(?:SystemRoot|WINDIR)%\\+System32\b/iu;
+const HARDCODES_DEFAULT_SYSTEM32_PATH = /\bC:\\+Windows\\+System32\b/iu;
+const PATH_MARKER = /System32|[\\/]/u;
 
 // Comments are stripped first: this very pin's own explanatory comments quote the banned pattern,
 // and so does every fixed call site's comment. A scanner that flagged those would be unusable.
@@ -77,10 +65,118 @@ function stripComments(text) {
     .join("\n");
 }
 
+function rawSystemRootPropertyName(node) {
+  if (ts.isPropertyAccessExpression(node)) return node.name.text;
+  if (!ts.isElementAccessExpression(node)) return undefined;
+  const argument = node.argumentExpression;
+  return argument !== undefined && ts.isStringLiteralLike(argument) ? argument.text : undefined;
+}
+
+function isRawSystemRootMember(node) {
+  const propertyName = rawSystemRootPropertyName(node);
+  return propertyName !== undefined && RAW_SYSTEM_ROOT_PROPERTIES.has(propertyName);
+}
+
+function containsRawSystemRoot(node, bindings) {
+  let found = false;
+  function visit(current) {
+    if (isRawSystemRootMember(current)) found = true;
+    if (ts.isIdentifier(current) && bindings.has(current.text)) found = true;
+    if (!found) ts.forEachChild(current, visit);
+  }
+  visit(node);
+  return found;
+}
+
+function recordDestructuredSystemRoot(node, bindings) {
+  if (!ts.isObjectBindingPattern(node)) return;
+  for (const element of node.elements) {
+    const property = element.propertyName ?? element.name;
+    const propertyName =
+      ts.isIdentifier(property) || ts.isStringLiteralLike(property) ? property.text : undefined;
+    if (!RAW_SYSTEM_ROOT_PROPERTIES.has(propertyName) || !ts.isIdentifier(element.name)) continue;
+    bindings.add(element.name.text);
+  }
+}
+
+function collectRawSystemRootAssignments(sourceFile, bindings) {
+  const assignments = [];
+  function visit(node) {
+    if (ts.isVariableDeclaration(node)) {
+      recordDestructuredSystemRoot(node.name, bindings);
+      if (ts.isIdentifier(node.name) && node.initializer !== undefined) {
+        assignments.push([node.name.text, node.initializer]);
+      }
+    }
+    if (
+      ts.isBinaryExpression(node) &&
+      node.operatorToken.kind === ts.SyntaxKind.EqualsToken &&
+      ts.isIdentifier(node.left)
+    ) {
+      assignments.push([node.left.text, node.right]);
+    }
+    ts.forEachChild(node, visit);
+  }
+  visit(sourceFile);
+  return assignments;
+}
+
+function collectRawSystemRootBindings(sourceFile) {
+  const bindings = new Set();
+  const assignments = collectRawSystemRootAssignments(sourceFile, bindings);
+  let changed = true;
+  while (changed) {
+    changed = false;
+    for (const [name, initializer] of assignments) {
+      if (bindings.has(name) || !containsRawSystemRoot(initializer, bindings)) continue;
+      bindings.add(name);
+      changed = true;
+    }
+  }
+  return bindings;
+}
+
+function isPathJoinOrResolveCall(node) {
+  if (!ts.isCallExpression(node)) return false;
+  const callee = node.expression;
+  if (ts.isIdentifier(callee)) return callee.text === "join" || callee.text === "resolve";
+  return (
+    ts.isPropertyAccessExpression(callee) &&
+    (callee.name.text === "join" || callee.name.text === "resolve")
+  );
+}
+
+function isManualPathExpression(node, sourceFile) {
+  if (ts.isBinaryExpression(node) && node.operatorToken.kind === ts.SyntaxKind.PlusToken)
+    return true;
+  if (!ts.isTemplateExpression(node) && !ts.isTaggedTemplateExpression(node)) return false;
+  return PATH_MARKER.test(node.getText(sourceFile));
+}
+
+function sourceJoinsRawSystemRoot(sourceFile) {
+  const bindings = collectRawSystemRootBindings(sourceFile);
+  let found = false;
+  function visit(node) {
+    if (
+      (isPathJoinOrResolveCall(node) || isManualPathExpression(node, sourceFile)) &&
+      containsRawSystemRoot(node, bindings)
+    ) {
+      found = true;
+    }
+    if (!found) ts.forEachChild(node, visit);
+  }
+  visit(sourceFile);
+  return found;
+}
+
 function joinsAPathFromRawSystemRoot(text) {
+  const sourceFile = ts.createSourceFile("scanner-fixture.ts", text, ts.ScriptTarget.Latest, true);
   const code = stripComments(text);
-  const readsRaw = READS_RAW_DOT_ACCESS.test(code) || READS_RAW_BRACKET_ACCESS.test(code);
-  return readsRaw && JOINS_A_PATH.test(code);
+  return (
+    sourceJoinsRawSystemRoot(sourceFile) ||
+    EXPANDS_SYSTEM_ROOT_IN_BATCH_PATH.test(code) ||
+    HARDCODES_DEFAULT_SYSTEM32_PATH.test(code)
+  );
 }
 
 describe("trusted Windows system-root usage (whole-class pin)", () => {
@@ -119,7 +215,68 @@ describe("trusted Windows system-root usage (whole-class pin)", () => {
         "bare env (no process. prefix), bracket access",
         'const p = join(env["windir"] ?? "C:\\\\Windows", "System32");',
       ],
+      [
+        "processEnv holder with dot access",
+        'const p = join(processEnv.SystemRoot ?? "C:\\\\Windows", "System32");',
+      ],
+      [
+        "baseEnv holder with bracket access",
+        'const p = join(baseEnv["WINDIR"] ?? "C:\\\\Windows", "System32");',
+      ],
+      [
+        "optional-chained processEnv holder",
+        'const p = join(processEnv?.["SystemRoot"] ?? "C:\\\\Windows", "System32");',
+      ],
+      [
+        "environment holder without a naming convention",
+        'const p = join(environment["WINDIR"] ?? "C:\\\\Windows", "System32");',
+      ],
+      [
+        "holder whose name only starts with env",
+        'const p = join(envValue.SystemRoot ?? "C:\\\\Windows", "System32");',
+      ],
+      [
+        "destructured SystemRoot binding",
+        'const { SystemRoot } = process.env; const p = join(SystemRoot, "System32");',
+      ],
+      [
+        "aliased destructured WINDIR binding",
+        'const { WINDIR: windowsRoot } = environment; const p = resolve(windowsRoot, "System32");',
+      ],
+      [
+        "manual template-literal System32 path",
+        "const root = environment.SystemRoot; const p = `${root}\\\\System32\\\\cmd.exe`;",
+      ],
+      [
+        "manual concatenated System32 path",
+        'const p = environment.SystemRoot + "\\\\System32\\\\cmd.exe";',
+      ],
+      [
+        "manual array-joined System32 path",
+        'const p = [environment.SystemRoot, "System32", "cmd.exe"].join("\\\\");',
+      ],
     ])("flags %s joined onto a path", (_label, snippet) => {
+      expect(joinsAPathFromRawSystemRoot(snippet)).toBe(true);
+    });
+
+    it.each([
+      [
+        "a deferred SystemRoot expansion in generated batch content",
+        String.raw`const line = '@"%SystemRoot%\System32\cmd.exe"';`,
+      ],
+      [
+        "a deferred WINDIR expansion in generated batch content",
+        String.raw`const line = '@"%WINDIR%\System32\cmd.exe"';`,
+      ],
+      [
+        "a hard-coded raw-string default System32 executable",
+        String.raw`const command = String.raw\`C:\Windows\System32\cmd.exe\`;`,
+      ],
+      [
+        "a hard-coded escaped default System32 executable",
+        'const command = "C:\\\\Windows\\\\System32\\\\cmd.exe";',
+      ],
+    ])("flags %s without needing an environment read", (_label, snippet) => {
       expect(joinsAPathFromRawSystemRoot(snippet)).toBe(true);
     });
 
@@ -135,6 +292,10 @@ describe("trusted Windows system-root usage (whole-class pin)", () => {
       [
         "an unrelated env var read with the same access forms",
         'const lang = process.env.LANG; const home = process.env?.["HOME"];',
+      ],
+      [
+        "the shared resolver receiving an arbitrarily named environment object",
+        'const p = resolveWindowsSystemExecutable(["System32", "cmd.exe"], environment);',
       ],
     ])("does not flag %s", (_label, snippet) => {
       expect(joinsAPathFromRawSystemRoot(snippet)).toBe(false);

@@ -299,6 +299,7 @@ test("replace preview applies closed files and dirty open buffers only after con
     `export const replaceTarget = "replaceNeedle";
 export const unsavedOnly = true;
 `,
+    root,
   );
   const searchbox = await openSearchPanel(page);
   await searchbox.fill("replaceNeedle");

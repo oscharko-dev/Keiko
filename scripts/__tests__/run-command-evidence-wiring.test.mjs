@@ -271,38 +271,71 @@ function combineBranchResults(whenTrue, whenFalse) {
 // `onTerminated?: T | undefined` target may not receive the key at all rather than receive
 // `undefined`. It is live production code (git-merge-node.ts:120), so the rule above must recognise
 // it by SHAPE instead of flagging the idiom the type system requires.
+// The equivalent inverted spelling is live too (keiko-verification/orchestrator.ts):
+// `deps.onTerminated === undefined ? {} : { onTerminated: deps.onTerminated }`. Equality therefore
+// guards the false branch while inequality, truthiness and `in` guard the true branch.
 //
 // Deliberately narrow: the guard must test `onTerminated` itself. `someOtherFlag ? {…} : {}` is not
 // this idiom and stays unwired, which is the case the review named.
-function guardsOnTerminatedPresence(condition) {
-  const namesOnTerminated = (node) =>
-    (ts.isPropertyAccessExpression(node) &&
-      ts.isIdentifier(node.name) &&
-      node.name.text === "onTerminated") ||
-    (ts.isIdentifier(node) && node.text === "onTerminated") ||
-    (ts.isElementAccessExpression(node) &&
-      ts.isStringLiteralLike(node.argumentExpression) &&
-      node.argumentExpression.text === "onTerminated");
-  if (namesOnTerminated(condition)) return true;
-  if (!ts.isBinaryExpression(condition)) return false;
+function namesOnTerminated(node) {
+  const propertyAccess =
+    ts.isPropertyAccessExpression(node) &&
+    ts.isIdentifier(node.name) &&
+    node.name.text === "onTerminated";
+  const identifier = ts.isIdentifier(node) && node.text === "onTerminated";
+  const elementAccess =
+    ts.isElementAccessExpression(node) &&
+    ts.isStringLiteralLike(node.argumentExpression) &&
+    node.argumentExpression.text === "onTerminated";
+  return propertyAccess || identifier || elementAccess;
+}
+
+function comparisonGuardBranch(operatorKind) {
+  switch (operatorKind) {
+    case ts.SyntaxKind.ExclamationEqualsEqualsToken:
+    case ts.SyntaxKind.ExclamationEqualsToken:
+      return "whenTrue";
+    case ts.SyntaxKind.EqualsEqualsEqualsToken:
+    case ts.SyntaxKind.EqualsEqualsToken:
+      return "whenFalse";
+    default:
+      return undefined;
+  }
+}
+
+function isUndefinedIdentifier(node) {
+  const candidate = unwrapParens(node);
+  return ts.isIdentifier(candidate) && candidate.text === "undefined";
+}
+
+function onTerminatedGuardBranch(condition) {
+  if (namesOnTerminated(condition)) return "whenTrue";
+  if (!ts.isBinaryExpression(condition)) return undefined;
   const { operatorToken, left, right } = condition;
   if (
     operatorToken.kind === ts.SyntaxKind.InKeyword &&
     ts.isStringLiteralLike(left) &&
     left.text === "onTerminated"
   ) {
-    return true;
+    return "whenTrue";
   }
-  const comparison =
-    operatorToken.kind === ts.SyntaxKind.ExclamationEqualsEqualsToken ||
-    operatorToken.kind === ts.SyntaxKind.ExclamationEqualsToken;
-  return comparison && (namesOnTerminated(left) || namesOnTerminated(right));
+  const leftNamesPort = namesOnTerminated(left);
+  const rightNamesPort = namesOnTerminated(right);
+  if (leftNamesPort === rightNamesPort) return undefined;
+  const comparisonValue = leftNamesPort ? right : left;
+  // Only an explicit undefined comparison proves presence/absence. Treating
+  // `deps.onTerminated === arbitrarySentinel` as a presence guard would let the empty branch hide a
+  // real runtime path with no evidence handler.
+  if (!isUndefinedIdentifier(comparisonValue)) return undefined;
+  return comparisonGuardBranch(operatorToken.kind);
 }
 
 function conditionalProvidesOnTerminated(node, declByName, hopsRemaining) {
   const whenTrue = expressionProvidesOnTerminated(node.whenTrue, declByName, hopsRemaining);
-  if (whenTrue === "true" && guardsOnTerminatedPresence(node.condition)) return "true";
   const whenFalse = expressionProvidesOnTerminated(node.whenFalse, declByName, hopsRemaining);
+  const guardedBranch = onTerminatedGuardBranch(node.condition);
+  if (guardedBranch === "whenTrue" && whenTrue === "true") return "true";
+  if (guardedBranch === "whenFalse" && whenFalse === "true") return "true";
   return combineBranchResults(whenTrue, whenFalse);
 }
 
@@ -578,6 +611,15 @@ describe("structural caller discovery and per-call wiring resolution (unit fixtu
       }
     `;
 
+  const invertedOptionalPortFixture = (condition) => `
+      import { runCommand } from "@oscharko-dev/keiko-tools";
+      export async function run(deps): Promise<void> {
+        await runCommand({ command: "git", args: [], cwd: undefined, timeoutMs: 1, signal: s }, {
+          ...(${condition} ? {} : { onTerminated: (e) => log(e) }),
+        });
+      }
+    `;
+
   it("P1: a one-sided conditional is UNWIRED — `flag ? { onTerminated } : {}` leaves a silent path", () => {
     // Red before green: with the previous `whenTrue === "true" || whenFalse === "true"` this
     // returned "wired" and the call site was never reported.
@@ -616,6 +658,23 @@ describe("structural caller discovery and per-call wiring resolution (unit fixtu
   ])("P1: the optional-port pass-through stays WIRED (%s)", (_label, condition) => {
     expect(
       silentCallSites("fixture-optional-port.ts", conditionalFixture(condition, "{}")),
+    ).toEqual([]);
+  });
+
+  it("does not mistake an arbitrary equality comparison for an optional-port guard", () => {
+    const unwired = silentCallSites(
+      "fixture-not-a-presence-guard.ts",
+      invertedOptionalPortFixture("deps.onTerminated === deps.fallback"),
+    );
+    expect(unwired).toHaveLength(1);
+  });
+
+  it.each([
+    ["strict equality", "deps.onTerminated === undefined"],
+    ["loose equality with reversed operands", "undefined == deps.onTerminated"],
+  ])("P1: the inverted optional-port pass-through stays WIRED (%s)", (_label, condition) => {
+    expect(
+      silentCallSites("fixture-inverted-optional-port.ts", invertedOptionalPortFixture(condition)),
     ).toEqual([]);
   });
 

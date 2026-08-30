@@ -290,22 +290,36 @@ function mergeAuthorityTarget(command: GitMergeCommand): {
 
 type MergeAuthorityTarget = ReturnType<typeof mergeAuthorityTarget>;
 
+interface GovernedMergeDispatch {
+  readonly ctx: RouteContext;
+  readonly deps: UiHandlerDeps;
+  readonly seams: GitDeliveryMergeSeams;
+  readonly command: GitMergeCommand;
+  readonly verifiedApproval: GitDeliveryApprovalRequirement;
+  readonly workspace: WorkspaceInfo;
+  readonly projectId: string;
+  readonly target: MergeAuthorityTarget;
+  readonly authority: GitDeliveryAuthorityIdentity;
+  readonly correlationId: string;
+}
+
 // Runs the continuity-guarded dispatch: builds the guard (capturing a mid-flight denial's 403), calls
 // the merge gateway, and — when the guard denied — returns that SAME 403 instead of projecting the
 // gateway's synthetic no-spawn result as a misleading 200 internal failure. Split out of the handler
 // purely to keep the handler under the repo's max-lines-per-function bar.
-async function dispatchGovernedMerge(
-  ctx: RouteContext,
-  deps: UiHandlerDeps,
-  seams: GitDeliveryMergeSeams,
-  command: GitMergeCommand,
-  verifiedApproval: GitDeliveryApprovalRequirement,
-  workspace: WorkspaceInfo,
-  projectId: string,
-  target: MergeAuthorityTarget,
-  authority: GitDeliveryAuthorityIdentity,
-  correlationId: string,
-): Promise<RouteResult> {
+async function dispatchGovernedMerge(input: GovernedMergeDispatch): Promise<RouteResult> {
+  const {
+    ctx,
+    deps,
+    seams,
+    command,
+    verifiedApproval,
+    workspace,
+    projectId,
+    target,
+    authority,
+    correlationId,
+  } = input;
   const denialCapture: GitDeliveryAuthorityContinuityDenialCapture = {};
   const beforeRemoteDispatch = gitDeliveryAuthorityContinuityGuard({
     ctx,
@@ -362,7 +376,7 @@ async function handleMergeExecute(
     nowMs: (seams.now ?? Date.now)(),
   });
   if (verifiedApproval === undefined) return errResult(400, "GIT_DELIVERY_MERGE_BAD_REQUEST");
-  return dispatchGovernedMerge(
+  return dispatchGovernedMerge({
     ctx,
     deps,
     seams,
@@ -373,7 +387,7 @@ async function handleMergeExecute(
     target,
     authority,
     correlationId,
-  );
+  });
 }
 
 export const createHandleMergeExecute = (

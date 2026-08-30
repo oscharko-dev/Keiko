@@ -38,7 +38,7 @@ import {
 import { deriveRepositoryId } from "./naming.js";
 import { isManagedRootOwned, isManagedTargetContained } from "./managed-root.js";
 import { gatherInstanceReconciliationFacts } from "./reconciliation.js";
-import { UNKNOWN_CORRELATION_ID } from "../correlation.js";
+import { correlationIdOrUnknown } from "../correlation.js";
 import type { WorkspaceHealthService, WorkspaceHealthServiceDeps } from "./types.js";
 
 const ORPHAN_ID_PREFIX = "orph_";
@@ -247,6 +247,6 @@ export function createWorkspaceHealthService(
 ): WorkspaceHealthService {
   return {
     report: (repositoryRoot?: string, correlationId?: string): Promise<WorkspaceHealthReport> =>
-      reportImpl(deps, repositoryRoot, correlationId ?? UNKNOWN_CORRELATION_ID),
+      reportImpl(deps, repositoryRoot, correlationIdOrUnknown(correlationId)),
   };
 }

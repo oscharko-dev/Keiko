@@ -178,9 +178,10 @@ later wave flips to `"none"` when the container layer lands. Tool consumers depe
 On POSIX, the process is spawned `{ detached: true }` so `process.kill(-pid, sig)` kills the entire
 process group including grandchildren (`src/tools/exec.ts:56–69`). On Windows, `child.kill()` still
 terminates the immediate child, and `killGroup` additionally bounds the whole descendant tree via
-`%SystemRoot%\System32\taskkill.exe /PID <pid> /T /F` on every SIGTERM/SIGKILL escalation step —
-an OS binary, resolved the same validated, never-PATH way `cmd.exe` is (`windows-shell.ts`), so no
-runtime dependency is needed. This closes what issue #3350's `cmd.exe` wrapping turned into the
+the authoritative `\\?\GLOBALROOT\SystemRoot\System32\taskkill.exe /PID <pid> /T /F` on every
+SIGTERM/SIGKILL escalation step — an OS binary reached only after the environment-selected root's OS
+identity is verified, never through PATH or the mutable lexical candidate. This closes what issue
+#3350's `cmd.exe` wrapping turned into the
 guaranteed topology for every Windows `.cmd`/`.bat` invocation: the wrapper's immediate child is
 always `cmd.exe`, and the real work (e.g. `node.exe` running npm) is a grandchild that
 `child.kill()` alone cannot reach.
@@ -195,25 +196,29 @@ asynchronous spawn would only SCHEDULE taskkill, and `child.kill()` would race i
 in keiko-server's `lspNodeAdapter.ts` holds the same ordering, and `exec.test.ts` pins the order
 directly rather than asserting only that the tree kill was called.
 
-**The bounded wait is per invocation, not per process — read the cost model precisely.**
+**The bounded wait is per invocation; admission bounds the aggregate before a process exists.**
 `spawnSync` blocks the ENTIRE Node event loop, not just the run being terminated, and `terminate()`
-executes on that loop, so Windows terminations SERIALISE: cancelling N commands in the same tick can
-otherwise stall the host for up to N x `TASKKILL_WAIT_MS` (5 000 ms), during which `keiko-server`
-serves no other request — the SIGKILL escalation can spend the bound a second time for the same run.
-`WindowsTaskkillBudget` (`src/tools/exec.ts`, `createWindowsTaskkillBudget`) additionally bounds
-that AGGREGATE cost: a process-wide counter, decremented synchronously immediately before each
-`spawnSync` call (Node's single thread makes this race-free with no mutex), permits up to six
-full-timeout waits (30 000 ms) per 60-second window and refills the WHOLE budget — never
-per-call — once the window elapses, so a burst early in a long-running server cannot permanently
-disable tree-kill enumeration for its remaining lifetime. Once a window's budget is spent, a further
-termination in that window reports `windowsTreeKill: "unknown"` WITHOUT spawning taskkill at all —
-the accurate evidence for "this stall was not paid," never a guessed `"succeeded"`/`"failed"`. This
-bounds the worst case; it does not make the per-invocation wait itself asynchronous — see the
-synchronicity reasoning above, which is a design decision requiring `terminate()`/`killGroup` to
-become async throughout, not a drive-by change.
+executes on that loop. One Windows run can pay the 5 000 ms bound twice (SIGTERM and SIGKILL), so
+`WindowsTerminationCapacity` deliberately admits at most THREE live Windows commands process-wide.
+Each admitted command holds two tree-kill slots for its full child lifetime; a fourth command is
+denied with `CommandDeniedError` before ephemeral HOME creation or spawn. The resulting worst
+synchronous burst remains 3 x 2 x 5 000 ms = 30 000 ms, but an exhausted budget can no longer strand
+an already-launched `cmd.exe` grandchild outside the Authority Envelope. The slot is released only
+after confirmed `close` or a pre-spawn failure. Because an admission denial owns no child, it emits
+no fabricated termination line; the owning terminal, command-runner, verification, or tool-call
+surface records its ordinary body-free `denied` outcome and correlation.
 
-**Termination is single-flight.** Abort, timeout, the output cap and a failing spawn callback can
-all reach `terminate()`; the FIRST one becomes the terminal cause, the others are disarmed, and
+Reservation also binds the trusted executable decision: admission copies only `SystemRoot` and
+`WINDIR`, verifies the OS identity and regular `taskkill.exe`, and caches the authoritative
+GLOBALROOT command. Later mutation of the caller's environment cannot redirect or refuse the kill
+for an already-admitted child. Direct consumers of exported `nodeWindowsTreeKill` that do not use
+`runCommand` retain the monotonic 30-second/60-second aggregate budget; exhaustion there reports
+`budget-exhausted` without launching taskkill. It is distinct from `unknown`, which means taskkill
+did launch but its bounded wait expired.
+
+**Termination is single-flight.** Abort, timeout, the output cap, a failing `onSpawn` callback and a
+post-spawn child-process error can all reach `terminate()`; the FIRST one becomes the terminal cause,
+the others are disarmed, and
 exactly one grace timer is armed. Before this, each trigger re-signalled the tree and overwrote the
 tracked timer handle, so `cleanup()` cleared only the last one and the orphaned earlier timer fired
 `taskkill /T /F` against a raw pid AFTER the run had settled — with the handle that kept that pid
@@ -221,22 +226,26 @@ reserved already released. The escalation is additionally guarded on the child s
 
 **The reported outcome is measured, not assumed.** `WindowsTreeKillDisposition` carries taskkill's
 own completed exit status (`succeeded`/`failed`), `unknown` only when the bounded wait expired,
+`budget-exhausted` only when a direct non-reserved consumer's monotonic aggregate budget refused to
+launch taskkill,
 `blocked-untrusted-system-root` when the trusted-System32 resolver refuses a malformed or hostile
 `SystemRoot`/`WINDIR` (kept distinct from `failed` because it is a security-relevant fact about the
 environment, not an operational hiccup), `refused-self-pid` when the pid handed to `killGroup` is
-this process or its own parent (see the residual below), `already-gone` when taskkill's own exit
-code is 128 — "the specified process was not found", i.e. the tree had already exited on its own,
-which is a different fact from `failed` and must not share its word (a live hostile tree surviving
-vs. nothing left to kill) — and `not-attempted` on POSIX, when there is no pid to signal, or when
-the child is already verifiably exited before a signal would have been sent. The previous boolean was a production tautology — the default implementation could not throw,
-so a genuine failure on an image without `taskkill.exe` was logged as success, which is worse than
-not logging it.
+this process or its own parent (see the residual below), `root-not-found` when taskkill's own exit
+code is 128 — "the specified process was not found". That result proves only that the requested
+root was absent; it does not prove that every descendant is gone. It remains a different fact from
+`failed` and must not share its word — and `not-attempted` applies on POSIX, when there is no pid to
+signal, or when the child is already verifiably exited before a signal would have been sent. The
+previous boolean was a production tautology — the default implementation could not throw, so a
+genuine failure on an image without `taskkill.exe` was logged as success, which is worse than not
+logging it.
 
 Two residuals, both narrower than the general `taskkill` caveat:
 
-- **A `taskkill.exe` failure** (missing on a stripped-down Windows image, or refusing) no longer
-  reports as success — it surfaces as `windowsTreeKill: "failed"` in the termination evidence — but
-  the descendants it could not reach do survive, so orphaning is not architecturally impossible.
+- **A `taskkill.exe` failure** no longer reports as success. A missing binary or untrusted root
+  denies a `runCommand` Windows spawn before it owns a child. If the already-validated binary is
+  removed or taskkill later refuses, termination surfaces `windowsTreeKill: "failed"`; descendants
+  it could not reach can survive, so orphaning is not architecturally impossible.
 - **PID reuse WAS reachable on this path, and a customer hit it.** `taskkill` validates no process
   identity, so a stale pid can hit an unrelated process, and `/T` takes the whole tree — which, on a
   recycled pid, can include this server or its own launcher. The original argument for why that
@@ -428,10 +437,11 @@ Tool consumers (`WorkspaceToolHost` callers) depend only on the `ToolPort` inter
   completion before the immediate child is signalled (Dimension 5 above), so the window this
   bullet used to describe — a grandchild spawning between signalling and taskkill's snapshot —
   cannot occur; a `taskkill.exe` failure is measured and surfaces as `windowsTreeKill: "failed"`
-  rather than being swallowed. What remains, narrower than that: a stripped-down Windows image
-  without `taskkill.exe` still cannot have its tree bounded, and a grandchild that spawns AFTER
-  taskkill's snapshot but before it exits can still orphan — taskkill enumerates the tree once,
-  it does not repeat the scan. See Dimension 5 for the full, current residual list.
+  rather than being swallowed. `runCommand` validates taskkill and reserves termination capacity
+  before spawning, so a stripped image is denied before a tree exists. What remains, narrower than
+  that: an admitted taskkill can be removed/refuse later, and a grandchild that spawns AFTER
+  taskkill's snapshot but before it exits can still orphan — taskkill enumerates the tree once, it
+  does not repeat the scan. See Dimension 5 for the full, current residual list.
 - **Bounded unified-diff subset only.** The parser handles the common cases (create, modify,
   delete, standard hunks) but not rename detection, extended git-diff headers, or fuzzy matching.
   A diff produced by a non-standard tool may fail to parse or produce conflicts where a full
@@ -550,23 +560,46 @@ precondition for Wave 1, and block the issue until the operator infrastructure i
   it was accepted. The honest documentation of the Wave-1 limitation (D2, Dimension 4) is preferable
   to an overclaimed guarantee.
 
-### Alternative 6: OS-authoritative `GetSystemDirectoryW` verification, or refusing every override, vs. shape-plus-existence validation (PR #3355 review, finding T19)
+### Alternative 6: OS-owned SystemRoot identity vs. trusting a shaped environment path (PR #3355 review, finding T19)
 
-Investigated for the trusted-System32 resolver (`packages/keiko-security/src/windows-system-directory.ts`, introduced by PR #3354's review) after a follow-up review flagged that a shape-valid-but-fabricated `SystemRoot` (e.g. `C:\Attacker\Windows`, complete with its own `System32`) passes the resolver's canonical-shape and existence checks, because Node has no binding to `GetSystemDirectoryW`, the only OS-authoritative source.
+The first trusted-System32 resolver accepted a drive-absolute `SystemRoot`/`WINDIR` once its shape
+was canonical and the requested binary existed. That is insufficient: an accepted task may control
+the process environment and create `C:\workspace\fake-windows\System32\cmd.exe`, or select a junction,
+without writing to the real Windows directory. Treating that capability as equivalent to already
+owning the host contradicted the workspace trust boundary and failed open.
 
-**Option A — spawn `powershell.exe -Command [System.Environment]::SystemDirectory` and compare against the candidate.**
+**Rejected — spawn PowerShell to call `GetSystemDirectoryW`.** The verifier binary must itself be
+located before the candidate is trusted, making the bootstrap circular. It also adds another process
+surface and a cold synchronous spawn to process-tree termination.
 
-- **Pros**: the only channel Node exposes to the real `GetSystemDirectoryW` value; would close the residual completely for the common case.
-- **Cons**: circular trust — the verifier binary (`powershell.exe`) itself lives under `SystemRoot\System32\WindowsPowerShell\v1.0\`, so resolving IT from the untrusted candidate root re-introduces the exact problem being verified. The only sound bootstrap is to resolve `powershell.exe` from the HARDCODED default root only, which then cannot verify a genuinely non-standard install (Windows on a non-`C:` drive) at all — and `resolveWindowsSystemBinary` today joins a bare name directly onto `System32`, so verifying `powershell.exe` needs a second, subdirectory-aware join path that exists nowhere else in the module. The check would also need to run on the same synchronous path `killGroup`'s `taskkill.exe /T /F` runs on every SIGTERM/SIGKILL escalation step (D2 Dimension 5) — a cold PowerShell start is commonly 200-500ms, turning a single-digit-millisecond system call into a multi-hundred-millisecond stall on the process-termination hot path — and Server Core / Nano Server images ship without PowerShell at all, so a "verifier missing" failure mode would need its own policy on top of everything else.
-- **Why rejected**: the added spawn surface, the bootstrap complexity, and the hot-path latency cost are disproportionate to the threat this closes. The premise this module protects against is an attacker who can set process environment variables for Keiko's OWN process; per AGENTS.md's human-control invariant, that is the local user's own environment, not a remote/sandboxed adversary's — an attacker with that capability already runs code as the same local user Keiko runs as, which is a materially larger foothold than this residual grants them.
+**Rejected — hard-code `C:\Windows`.** This fails every genuine Windows installation whose OS root
+is on another drive.
 
-**Option B — refuse every `SystemRoot`/`WINDIR` override; only ever trust the hardcoded default.**
+**Decision — compare filesystem object identity with the OS object-manager root.** Windows maintains
+the live OS-root symbolic link as `\SystemRoot` in the object-manager namespace. The Win32
+`\\?\GLOBALROOT` escape reaches that namespace independently of `SystemRoot`, `WINDIR`, PATH, drive
+mappings, and the workspace. On win32 the resolver therefore:
 
-- **Pros**: closes the fabricated-root class completely for the override vector — no environment value, however shaped, can ever redirect resolution.
-- **Cons**: a real, not merely theoretical, functionality regression: a genuine non-standard Windows install (Windows on a non-`C:` drive, which real machines still ship) sets `SystemRoot` correctly at boot, and every call site that resolves `taskkill.exe`/`cmd.exe`/`cscript.exe` through this module would then resolve to a location that provably does not exist there, failing the existence check on every call. It also reverses already-tested, intentional behaviour — `windows-system-directory.test.ts`'s "accepts a valid drive-absolute SystemRoot override" and "falls back to WINDIR" cases exist because Dimension 1 above lists `SystemRoot`/`WINDIR` as legitimate Windows essentials.
-- **Why rejected**: trades a narrow, already-mitigated residual for a certain regression on a real, if uncommon, class of machine.
+1. validates the candidate's canonical drive-absolute shape;
+2. resolves it and requires case-insensitive realpath-text equality, rejecting a symlink or junction
+   at the final component or any ancestor;
+3. compares its BigInt filesystem device/file identity with `\\?\GLOBALROOT\SystemRoot`; and
+4. checks the requested regular System32 binary, then returns the authoritative
+   `\\?\GLOBALROOT\SystemRoot\System32\...` path for executable traversal — never the mutable
+   candidate path.
 
-**Decision**: keep shape-plus-existence validation (`assertCanonicalSystemRoot` plus the resolved-binary existence check) as the resolver's full contract, and keep the residual honestly documented in the module header rather than closed by either option above. The residual is already narrow: it requires an attacker who (a) controls Keiko's own process environment on the local machine AND (b) has separately planted a complete, real, on-disk directory tree (including its own `System32`) that passes every shape and existence check — at which point the attacker already has local write access to the filesystem outside Keiko's own workspace boundary, a capability this module was never positioned to deny. Revisit if Node ever exposes `GetSystemDirectoryW` directly (no spawn required), which would remove both the bootstrap circularity and the latency cost.
+An unreadable identity, zero/unsupported identity fields, a missing root, a fabricated directory,
+or a reparse-point candidate all fail closed as `WindowsSystemDirectoryError`. Comparing identity,
+not path text, supports a genuine non-`C:` Windows installation without trusting its environment
+string. The production check performs no verifier spawn and emits no path or environment value in
+its error; callers retain their existing body-free security/termination evidence.
+
+This is a whole-class executable contract, not only the command sandbox's rule. CLI launcher
+generation, lifecycle browser opening, portable legacy-launcher cleanup and native failure alerts,
+server Authenticode probes, shortcut helpers, and Git/LSP runtime probes resolve known Windows
+system executables through the same authoritative helper. A fail-soft surface may keep its primary
+operation available, but it must emit a correlated, body-free event that distinguishes an untrusted
+root from a genuinely missing binary; it may not collapse either into a generic stderr-only notice.
 
 ## Related
 

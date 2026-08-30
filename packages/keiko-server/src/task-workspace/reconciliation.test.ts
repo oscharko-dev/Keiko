@@ -51,6 +51,8 @@ let evidence: { id: string; json: string }[];
 let idCounter: number;
 let nowMs: number;
 
+type AdapterFactory = (workspace: WorkspaceInfo, correlationId: string) => GitWorktreeAdapter;
+
 function git(args: readonly string[], cwd = repoRoot): string {
   return execFileSync("git", [...args], { cwd, encoding: "utf8" });
 }
@@ -87,6 +89,25 @@ function realAdapter(workspace: WorkspaceInfo): GitWorktreeAdapter {
   return createNodeGitWorktreeAdapter({ workspace, processEnv: { PATH: process.env.PATH ?? "" } });
 }
 
+function capturingAdapterFactory(received: string[]): AdapterFactory {
+  return (workspace, correlationId): GitWorktreeAdapter => {
+    received.push(correlationId);
+    return realAdapter(workspace);
+  };
+}
+
+function rejectingAdapterFactory(received: string[]): AdapterFactory {
+  return (_workspace, correlationId): GitWorktreeAdapter => {
+    received.push(correlationId);
+    throw new Error("captured adapter correlation");
+  };
+}
+
+function expectOnlyAdapterCorrelation(received: readonly string[], expected: string): void {
+  expect(received.length).toBeGreaterThan(0);
+  expect(new Set(received)).toEqual(new Set([expected]));
+}
+
 function provisioning(): WorkspaceProvisioningService {
   return createWorkspaceProvisioningService({
     store,
@@ -100,13 +121,16 @@ function provisioning(): WorkspaceProvisioningService {
   });
 }
 
-function reconciliation(activityLog?: ServerLogSink): WorkspaceReconciliationService {
+function reconciliation(
+  activityLog?: ServerLogSink,
+  adapterFactory: AdapterFactory = realAdapter,
+): WorkspaceReconciliationService {
   return createWorkspaceReconciliationService({
     store,
     activePointerStore: pointerStore,
     evidenceStore: capturingEvidence(),
     managedRoot,
-    createAdapter: realAdapter,
+    createAdapter: adapterFactory,
     redactString: (s: string): string => s,
     now: (): number => nowMs,
     newId: (): string => `id-${String(idCounter++)}`,
@@ -190,36 +214,45 @@ describe("healthy reconciliation (AC4)", () => {
   // spying factory records what the service actually hands it. Before the fix this receives one
   // argument and `received[0]` is undefined.
   it("hands the caller's correlationId to createAdapter, so termination evidence joins the same timeline", async () => {
-    const received: (string | undefined)[] = [];
-    const service = createWorkspaceReconciliationService({
-      store,
-      activePointerStore: pointerStore,
-      evidenceStore: capturingEvidence(),
-      managedRoot,
-      createAdapter: (workspace, correlationId): GitWorktreeAdapter => {
-        received.push(correlationId);
-        return realAdapter(workspace);
-      },
-      redactString: (value: string): string => value,
-      now: (): number => nowMs,
-      newId: (): string => `id-${String(idCounter++)}`,
-      mutex: __twMutex,
-    });
+    const received: string[] = [];
+    const service = reconciliation(undefined, capturingAdapterFactory(received));
     await provisionTask("t-adapter-corr");
     await service.reconcile(undefined, "req-corr-adapter-1");
-    expect(received.length).toBeGreaterThan(0);
-    expect(received).not.toContain(undefined);
-    expect(new Set(received)).toEqual(new Set(["req-corr-adapter-1"]));
-    expect(received).not.toContain(UNKNOWN_CORRELATION_ID);
+    expectOnlyAdapterCorrelation(received, "req-corr-adapter-1");
   });
 
   // The startup reconciliation pass has no HTTP request behind it at all: no correlationId is
   // reachable, so this is the one genuinely correlation-free call site in the module.
   it("falls back to UNKNOWN_CORRELATION_ID (never the auditCorrelationId) when no request scope exists", async () => {
+    const received: string[] = [];
     const instance = await provisionTask("t-nocorr");
-    await reconciliation().reconcile();
+    await reconciliation(undefined, capturingAdapterFactory(received)).reconcile();
+    expectOnlyAdapterCorrelation(received, UNKNOWN_CORRELATION_ID);
     expect(lastEventCorrelationId()).toBe(UNKNOWN_CORRELATION_ID);
     expect(lastEventCorrelationId()).not.toBe(instance.auditCorrelationId);
+  });
+
+  // The adapter's `onTerminated` callback writes directly to the activity log, so an unshaped id
+  // must be normalized before adapter construction. This capture-only adapter throws immediately:
+  // the assertion therefore observes the exact value at that boundary without pinning any later
+  // EvidenceStore behavior as part of the adapter contract.
+  describe("adapter correlation-ID boundary", () => {
+    it.each([
+      ["empty", ""],
+      ["malformed", "req corr\ncontrol"],
+      ["hostile", `req-corr-${"a".repeat(4000)}`],
+      ["below the HTTP boundary", "x"],
+    ] as const)(
+      "normalizes a supplied %s ID before adapter construction",
+      async (_label, input) => {
+        const received: string[] = [];
+        await provisionTask(`t-adapter-${_label.replaceAll(" ", "-")}`);
+        await expect(
+          reconciliation(undefined, rejectingAdapterFactory(received)).reconcile(undefined, input),
+        ).rejects.toThrow("captured adapter correlation");
+        expectOnlyAdapterCorrelation(received, UNKNOWN_CORRELATION_ID);
+      },
+    );
   });
 
   // IDX61: the EvidenceStore ledger above is a SEPARATE audit surface from `<stateDir>/logs/

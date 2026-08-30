@@ -17,8 +17,19 @@ import { FILE_HISTORY_APP_SESSION_LAUNCHER_SECRET } from "./support/file-history
 
 const FILE = "src/app.ts";
 const MUTATION_HEADERS = { "X-Keiko-CSRF": "1" };
+// Larger than the editor viewport, with meaningful indentation. The first replacement in the live
+// journey therefore proves the shared helper observes the complete model-backed hot-exit payload;
+// a `.view-line`-based check would see only Monaco's virtualized subset and could not pass honestly.
+const OFFSCREEN_VERSION = [
+  'export const historyValue = "one";',
+  ...Array.from(
+    { length: 120 },
+    (_value, index) => `  export const retainedLine${String(index)} = ${String(index)};`,
+  ),
+  "",
+].join("\n");
 const VERSIONS = [
-  'export const historyValue = "one";\n',
+  OFFSCREEN_VERSION,
   'export const historyValue = "two";\n',
   'export const historyValue = "three";\n',
 ] as const;
@@ -33,8 +44,13 @@ function pairingFragment(): string {
   );
 }
 
-async function saveVersion(page: Page, pane: Locator, content: string): Promise<void> {
-  await replaceEditorBuffer(page, pane, content);
+async function saveVersion(
+  page: Page,
+  pane: Locator,
+  content: string,
+  workspaceRoot: string,
+): Promise<void> {
+  await replaceEditorBuffer(page, pane, content, workspaceRoot);
   const saved = page.waitForResponse(
     (response) =>
       response.request().method() === "PATCH" && response.url().endsWith("/api/files/content"),
@@ -77,9 +93,9 @@ async function prepareHistoryJourney(
   expect(project.ok(), await project.text()).toBe(true);
   const workspace = await openEditorWorkspace(page);
   const pane = firstPane(workspace);
-  await saveVersion(page, pane, VERSIONS[0]);
+  await saveVersion(page, pane, VERSIONS[0], root);
   const oldestContent = readFileSync(join(root, FILE), "utf8");
-  for (const version of VERSIONS.slice(1)) await saveVersion(page, pane, version);
+  for (const version of VERSIONS.slice(1)) await saveVersion(page, pane, version, root);
   await openHistory(pane);
   await expect(historyRows(pane)).toHaveCount(3);
   await expect(historyRows(pane).getByText("User save")).toHaveCount(3);
@@ -112,11 +128,11 @@ test("#2531 file history compares, pins, restores safely, and stays accessible",
   // This journey replaces the whole editor buffer (`replaceEditorBuffer`) before asserting. Monaco
   // 0.56 uses the EditContext API where it exists and falls back to `textarea.inputarea` where it
   // does not; Firefox has no EditContext. On that fallback surface neither Ctrl+A nor Cmd+A reaches
-  // Monaco's keybinding service, so the select-all selects nothing and the following insert APPENDS.
-  // Verified on this host, not assumed: running this very spec with --project=firefox fails inside
-  // the shared helper with `expected "…historyValue = "one";" at most 1x after replacing the buffer`
-  // — the helper catching the corruption exactly where it happens, which is the improvement over the
-  // silent doubling that preceded it. Same gap and same wording as release-smoke.spec.ts.
+  // Monaco's keybinding service, so the replacement paste leaves stale model content behind.
+  // Verified on this host, not assumed: running this very spec with --project=firefox times out in
+  // the shared helper because the product never emits a hot-exit write carrying the requested exact
+  // full buffer — the helper catches the corruption where it happens instead of accepting a visible
+  // first-line anchor while stale or off-screen content survives. Same gap as release-smoke.spec.ts.
   //
   // This config inherits BOTH projects from the shared base config, but its npm script pins
   // --project=chromium, so this guard changes no CI lane today; it exists so a future firefox run
@@ -150,7 +166,7 @@ test("#2531 file history compares, pins, restores safely, and stays accessible",
   await expect(pane.locator(".view-lines")).toContainText("historyValue");
 
   await pane.getByRole("button", { name: "Close file history" }).click();
-  await replaceEditorBuffer(page, pane, 'export const historyValue = "dirty";\n');
+  await replaceEditorBuffer(page, pane, 'export const historyValue = "dirty";\n', root);
   await openHistory(pane);
   const diskBeforeConflict = readFileSync(join(root, FILE), "utf8");
   await historyRows(pane).first().getByRole("button", { name: "Restore", exact: true }).click();

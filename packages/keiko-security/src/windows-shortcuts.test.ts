@@ -5,7 +5,10 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { SecurityLogSink } from "./log-port.js";
-import { WindowsSystemDirectoryError } from "./windows-system-directory.js";
+import {
+  WindowsSystemBinaryMissingError,
+  WindowsSystemDirectoryError,
+} from "./windows-system-directory.js";
 
 import {
   WINDOWS_SHORTCUT_MAX_BYTES,
@@ -142,6 +145,7 @@ describe("definition read/write entry points on the win32 route", () => {
   // `resolveWindowsSystemBinary` (and this file's own `WindowsBinaryExistsCheck` passthrough) exist
   // to provide.
   const EXISTS_ON_DISK = (): boolean => true;
+  const TRUSTED_SYSTEM_ROOT = (): boolean => true;
 
   it("reads three UTF-16LE lines through cscript and refuses a short read", () => {
     stubWin32();
@@ -150,29 +154,33 @@ describe("definition read/write entry points on the win32 route", () => {
       spawnResult({ stdout: Buffer.from(lines, "utf16le") }),
     );
     expect(
-      readWindowsShortcutDefinition("p", {}, "test prefix", spawnFn, undefined, EXISTS_ON_DISK),
+      readWindowsShortcutDefinition("p", {}, "test prefix", {
+        spawnFn,
+        existsAsFile: EXISTS_ON_DISK,
+        systemDirectoryIdentity: TRUSTED_SYSTEM_ROOT,
+      }),
     ).toEqual(DEFINITION);
 
     const short = vi.fn<WindowsShortcutSpawnFn>(() =>
       spawnResult({ stdout: Buffer.from("only-one-line", "utf16le") }),
     );
     expect(
-      readWindowsShortcutDefinition("p", {}, "test prefix", short, undefined, EXISTS_ON_DISK),
+      readWindowsShortcutDefinition("p", {}, "test prefix", {
+        spawnFn: short,
+        existsAsFile: EXISTS_ON_DISK,
+        systemDirectoryIdentity: TRUSTED_SYSTEM_ROOT,
+      }),
     ).toBeUndefined();
   });
 
   it("creates through cscript instead of the JSON stand-in", () => {
     stubWin32();
     const spawnFn = vi.fn<WindowsShortcutSpawnFn>(() => spawnResult());
-    writeWindowsShortcutDefinition(
-      "p",
-      DEFINITION,
-      {},
-      "test prefix",
+    writeWindowsShortcutDefinition("p", DEFINITION, {}, "test prefix", {
       spawnFn,
-      undefined,
-      EXISTS_ON_DISK,
-    );
+      existsAsFile: EXISTS_ON_DISK,
+      systemDirectoryIdentity: TRUSTED_SYSTEM_ROOT,
+    });
     expect(spawnFn).toHaveBeenCalledTimes(1);
     expect(spawnFn.mock.calls[0]?.[1]).toContain("create");
   });
@@ -183,22 +191,60 @@ describe("definition read/write entry points on the win32 route", () => {
     stubWin32();
     const spawnFn = vi.fn<WindowsShortcutSpawnFn>(() => spawnResult({ status: 1 }));
     expect(
-      readWindowsShortcutDefinition("p", {}, "test prefix", spawnFn, undefined, EXISTS_ON_DISK),
+      readWindowsShortcutDefinition("p", {}, "test prefix", {
+        spawnFn,
+        existsAsFile: EXISTS_ON_DISK,
+        systemDirectoryIdentity: TRUSTED_SYSTEM_ROOT,
+      }),
     ).toBeUndefined();
   });
 
-  it("fails closed on the stubbed win32 route when existsAsFile is NOT overridden", () => {
+  it("re-throws and diagnoses a missing cscript binary without reporting tampering", () => {
     // Regression pin for the exact failure mode this finding's implementation first hit mid-review:
-    // stubbing process.platform to "win32" makes the resolver's REAL, platform-gated default
-    // existence check run for real, and C:\Windows\System32\cscript.exe does not exist on the host
-    // running this suite — so the DEFAULT (no override supplied) must fail closed here, never
-    // silently succeed against a filesystem it never actually found the file on.
+    // stubbing process.platform to "win32" makes the resolver's real, platform-gated default
+    // existence check run. A GUID root keeps the fixture nonexistent even on a Windows host.
     stubWin32();
     const spawnFn = vi.fn<WindowsShortcutSpawnFn>(() => spawnResult());
-    expect(() => readWindowsShortcutDefinition("p", {}, "test prefix", spawnFn)).toThrow(
-      WindowsSystemDirectoryError,
-    );
+    const write = vi.fn<SecurityLogSink["write"]>();
+    expect(() =>
+      readWindowsShortcutDefinition(
+        "p",
+        { SystemRoot: String.raw`C:\keiko-test-6783c89e-013f-4ac9-a6ac-adcebe890ea1` },
+        "test prefix",
+        { spawnFn, sink: { write }, systemDirectoryIdentity: TRUSTED_SYSTEM_ROOT },
+      ),
+    ).toThrow(WindowsSystemBinaryMissingError);
     expect(spawnFn).not.toHaveBeenCalled();
+    expect(write).toHaveBeenCalledWith({
+      level: "error",
+      category: "diagnostic",
+      op: "security.windows-shortcut.system-binary-missing",
+      errorKind: "WINDOWS_SYSTEM_BINARY_MISSING",
+      extra: { mode: "read" },
+    });
+  });
+
+  it("propagates and diagnoses a missing system binary on write without reporting tampering", () => {
+    stubWin32();
+    const spawnFn = vi.fn<WindowsShortcutSpawnFn>(() => spawnResult());
+    const write = vi.fn<SecurityLogSink["write"]>();
+    const sink: SecurityLogSink = { write };
+    expect(() => {
+      writeWindowsShortcutDefinition("p", DEFINITION, {}, "test prefix", {
+        spawnFn,
+        sink,
+        existsAsFile: () => false,
+        systemDirectoryIdentity: TRUSTED_SYSTEM_ROOT,
+      });
+    }).toThrow(WindowsSystemBinaryMissingError);
+    expect(spawnFn).not.toHaveBeenCalled();
+    expect(write).toHaveBeenCalledWith({
+      level: "error",
+      category: "diagnostic",
+      op: "security.windows-shortcut.system-binary-missing",
+      errorKind: "WINDOWS_SYSTEM_BINARY_MISSING",
+      extra: { mode: "create" },
+    });
   });
 
   // Finding 2 (PR #3354 review round 2, P2): a hostile/malformed SystemRoot must never collapse
@@ -214,7 +260,7 @@ describe("definition read/write entry points on the win32 route", () => {
         "p",
         { SystemRoot: String.raw`\\attacker\share` },
         "test prefix",
-        spawnFn,
+        { spawnFn },
       ),
     ).toThrow(WindowsSystemDirectoryError);
     // The refusal happens at resolution, strictly before any spawn is attempted.
@@ -229,8 +275,7 @@ describe("definition read/write entry points on the win32 route", () => {
         "p",
         { SystemRoot: String.raw`\\attacker\share` },
         "test prefix",
-        vi.fn<WindowsShortcutSpawnFn>(() => spawnResult()),
-        sink,
+        { spawnFn: vi.fn<WindowsShortcutSpawnFn>(() => spawnResult()), sink },
       ),
     ).toThrow(WindowsSystemDirectoryError);
     expect(sink.write).toHaveBeenCalledTimes(1);
@@ -249,7 +294,7 @@ describe("definition read/write entry points on the win32 route", () => {
         "p",
         { SystemRoot: String.raw`\\attacker\share` },
         "test prefix",
-        vi.fn<WindowsShortcutSpawnFn>(() => spawnResult()),
+        { spawnFn: vi.fn<WindowsShortcutSpawnFn>(() => spawnResult()) },
       ),
     ).toThrow(WindowsSystemDirectoryError);
   });
@@ -268,8 +313,7 @@ describe("definition read/write entry points on the win32 route", () => {
         DEFINITION,
         { SystemRoot: String.raw`\\attacker\share` },
         "test prefix",
-        vi.fn<WindowsShortcutSpawnFn>(() => spawnResult()),
-        sink,
+        { spawnFn: vi.fn<WindowsShortcutSpawnFn>(() => spawnResult()), sink },
       );
     }).toThrow(WindowsSystemDirectoryError);
     expect(sink.write).toHaveBeenCalledTimes(1);
@@ -290,7 +334,7 @@ describe("definition read/write entry points on the win32 route", () => {
         DEFINITION,
         { SystemRoot: String.raw`\\attacker\share` },
         "test prefix",
-        vi.fn<WindowsShortcutSpawnFn>(() => spawnResult()),
+        { spawnFn: vi.fn<WindowsShortcutSpawnFn>(() => spawnResult()) },
       );
     }).toThrow(WindowsSystemDirectoryError);
   });
@@ -298,6 +342,7 @@ describe("definition read/write entry points on the win32 route", () => {
 
 describe("runWindowsShortcutCommand", () => {
   it("invokes cscript by absolute SystemRoot path with argv-carried fields", () => {
+    const resolvedBinaries: string[] = [];
     const spawnFn = vi.fn<WindowsShortcutSpawnFn>(() =>
       spawnResult({ stdout: Buffer.from("out\n", "utf16le") }),
     );
@@ -307,7 +352,13 @@ describe("runWindowsShortcutCommand", () => {
       DEFINITION,
       { SystemRoot: String.raw`C:\Windows` },
       "test prefix",
-      spawnFn,
+      {
+        spawnFn,
+        existsAsFile: (path) => {
+          resolvedBinaries.push(path);
+          return true;
+        },
+      },
     );
     expect(output).toBe("out\n");
     const [command, args, options] = spawnFn.mock.calls[0] ?? [];
@@ -329,6 +380,10 @@ describe("runWindowsShortcutCommand", () => {
       WINDIR: String.raw`C:\Windows`,
       ComSpec: String.raw`C:\Windows\System32\cmd.exe`,
     });
+    expect(resolvedBinaries).toEqual([
+      String.raw`C:\Windows\System32\cscript.exe`,
+      String.raw`C:\Windows\System32\cmd.exe`,
+    ]);
   });
 
   // STRENGTHENED, not relaxed (PR #3354 review, "the whole class is not fixed"): this case used to
@@ -359,7 +414,7 @@ describe("runWindowsShortcutCommand", () => {
         DEFINITION,
         { SystemRoot: systemRoot },
         "test prefix",
-        spawnFn,
+        { spawnFn },
       ),
     ).toThrow(WindowsSystemDirectoryError);
     expect(spawnFn).not.toHaveBeenCalled();
@@ -373,7 +428,7 @@ describe("runWindowsShortcutCommand", () => {
       DEFINITION,
       { SystemRoot: String.raw`C:\Windows`, TEMP: String.raw`C:\Temp`, TMP: String.raw`C:\Tmp` },
       "test prefix",
-      spawnFn,
+      { spawnFn },
     );
     expect(spawnFn.mock.calls[0]?.[2]?.env).toEqual({
       SystemRoot: String.raw`C:\Windows`,
@@ -391,13 +446,15 @@ describe("runWindowsShortcutCommand", () => {
     const spawnFn = vi.fn<WindowsShortcutSpawnFn>(() =>
       spawnResult({ stdout: null, stderr: null }),
     );
-    expect(runWindowsShortcutCommand("read", "p", DEFINITION, {}, "test prefix", spawnFn)).toBe("");
+    expect(runWindowsShortcutCommand("read", "p", DEFINITION, {}, "test prefix", { spawnFn })).toBe(
+      "",
+    );
   });
 
   it("fails closed on a nonzero exit", () => {
     const spawnFn = vi.fn<WindowsShortcutSpawnFn>(() => spawnResult({ status: 1 }));
     expect(() =>
-      runWindowsShortcutCommand("read", "p", DEFINITION, {}, "test prefix", spawnFn),
+      runWindowsShortcutCommand("read", "p", DEFINITION, {}, "test prefix", { spawnFn }),
     ).toThrow("test prefix");
   });
 
@@ -405,13 +462,13 @@ describe("runWindowsShortcutCommand", () => {
     const stderr = Buffer.from(String.raw`Error at C:\Users\José\shortcut.js`, "utf16le");
     const spawnFn = vi.fn<WindowsShortcutSpawnFn>(() => spawnResult({ stderr }));
     expect(() =>
-      runWindowsShortcutCommand("create", "p", DEFINITION, {}, "test prefix", spawnFn),
+      runWindowsShortcutCommand("create", "p", DEFINITION, {}, "test prefix", { spawnFn }),
     ).toThrow(`test prefix (cscript exit 0, stderr ${String(stderr.byteLength)} bytes)`);
     // The profile-bearing stderr body never reaches the message. Captured unconditionally: if
     // the command ever stops throwing here, the missing error itself fails the assertion.
     let thrown: unknown;
     try {
-      runWindowsShortcutCommand("create", "p", DEFINITION, {}, "test prefix", spawnFn);
+      runWindowsShortcutCommand("create", "p", DEFINITION, {}, "test prefix", { spawnFn });
     } catch (error) {
       thrown = error;
     }
@@ -424,7 +481,9 @@ describe("runWindowsShortcutCommand", () => {
     const spawnFn = vi.fn<WindowsShortcutSpawnFn>(() =>
       spawnResult({ stdout: Buffer.from(lines, "utf16le") }),
     );
-    const output = runWindowsShortcutCommand("read", "p", DEFINITION, {}, "test prefix", spawnFn);
+    const output = runWindowsShortcutCommand("read", "p", DEFINITION, {}, "test prefix", {
+      spawnFn,
+    });
     expect(output).toContain("José");
   });
 
@@ -433,7 +492,7 @@ describe("runWindowsShortcutCommand", () => {
       spawnResult({ error: new Error("ENOENT") }),
     );
     expect(() =>
-      runWindowsShortcutCommand("read", "p", DEFINITION, {}, "test prefix", spawnFn),
+      runWindowsShortcutCommand("read", "p", DEFINITION, {}, "test prefix", { spawnFn }),
     ).toThrow("ENOENT");
   });
 });

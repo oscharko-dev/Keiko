@@ -1,7 +1,9 @@
 import { existsSync, mkdtempSync, readdirSync, realpathSync, rmSync, symlinkSync } from "node:fs";
+import { spawn as nodeSpawn } from "node:child_process";
+import type { ChildProcessWithoutNullStreams } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { DEFAULT_COMMAND_RULES } from "@oscharko-dev/keiko-tools";
 import type { CommandRule } from "@oscharko-dev/keiko-tools";
@@ -11,13 +13,15 @@ import {
   LspProcessError,
   buildLspSpawnPlan,
   createApprovedExecutablePath,
+  createDefaultLspSpawnFn,
   createEphemeralHome,
   defaultLspSpawnFn,
   escalateKill,
+  nodeGroupKill,
   preflightSpawnEnv,
   resolveExecutableOutsideWorkspace,
 } from "./lspNodeAdapter.js";
-import type { KillScheduler, KillableChild } from "./lspNodeAdapter.js";
+import type { KillScheduler, KillableChild, LspProcessKillResult } from "./lspNodeAdapter.js";
 import {
   executableFixtureName,
   writeExecutableFixture,
@@ -222,6 +226,20 @@ function makeKillTracker(pid: number | undefined): KillTracker {
   };
 }
 
+function makeContainmentTracker(): KillableChild {
+  let result: LspProcessKillResult | undefined;
+  return {
+    pid: 1234,
+    kill: (signal): void => {
+      result = {
+        windowsTreeKill: "not-attempted",
+        treeContainment: signal === "SIGKILL" ? "confirmed" : "unconfirmed",
+      };
+    },
+    lastKillResult: (): LspProcessKillResult | undefined => result,
+  };
+}
+
 const immediateScheduler: KillScheduler = {
   setTimer: (callback): unknown => {
     callback();
@@ -244,6 +262,24 @@ describe("escalateKill", () => {
     await escalateKill(tracker, 5_000, () => false, immediateScheduler);
 
     expect(tracker.signals).toEqual(["SIGTERM", "SIGKILL"]);
+  });
+
+  it("does not claim containment from SIGTERM alone", async () => {
+    await expect(
+      escalateKill(makeContainmentTracker(), 5_000, () => true, immediateScheduler),
+    ).resolves.toEqual({
+      windowsTreeKill: "not-attempted",
+      treeContainment: "unconfirmed",
+    });
+  });
+
+  it("upgrades containment monotonically when escalation reaches group SIGKILL", async () => {
+    await expect(
+      escalateKill(makeContainmentTracker(), 5_000, () => false, immediateScheduler),
+    ).resolves.toEqual({
+      windowsTreeKill: "not-attempted",
+      treeContainment: "confirmed",
+    });
   });
 
   it("does not send SIGKILL when the child exits during the grace window", async () => {
@@ -354,9 +390,8 @@ describe("resolveExecutableOutsideWorkspace — realpath fallback", () => {
 
 describe("escalateKill — pid undefined branch", () => {
   it("falls back to direct child.kill when pid is undefined", async () => {
-    // Covers the `if (pid === undefined) { safeKill(child, signal); return; }` branch
-    // inside wrapChild's kill closure (line 232-234). We test this via escalateKill with
-    // a KillTracker that has pid=undefined — safeKill calls child.kill directly.
+    // An injected pidless KillableChild still follows the generic escalation signal sequence. The
+    // production manager handles Node's pidless pre-spawn error as confirmed-not-spawned instead.
     const signals: NodeJS.Signals[] = [];
     const pidlessChild: KillableChild = {
       pid: undefined,
@@ -434,8 +469,72 @@ describe("buildLspSpawnPlan", () => {
 
     expect(plan.command).toBe("/usr/bin/typescript-language-server");
     expect(plan.args).toEqual(["--stdio"]);
+    expect(plan.options.stdio).toEqual(["pipe", "pipe", "pipe"]);
     expect(plan.options.detached).toBe(true);
     expect(plan.options.windowsVerbatimArguments).toBeUndefined();
+  });
+});
+
+describe("nodeGroupKill — protected pid guard", () => {
+  it.each([process.pid, process.ppid])(
+    "refuses pid %s before taskkill and the direct-child fallback",
+    (pid) => {
+      const childKill = vi.fn();
+      const child: KillableChild = { pid, kill: childKill };
+      const killWindowsTree = vi.fn(() => "succeeded" as const);
+      expect(
+        nodeGroupKill(pid, child, "SIGTERM", {
+          platform: "win32",
+          processEnv: {},
+          killWindowsTree,
+        }),
+      ).toEqual({
+        windowsTreeKill: "refused-self-pid",
+        treeContainment: "unconfirmed",
+      });
+      expect(killWindowsTree).not.toHaveBeenCalled();
+      expect(childKill).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each([
+    ["succeeded", "confirmed"],
+    ["failed", "unconfirmed"],
+    ["root-not-found", "unconfirmed"],
+    ["blocked-untrusted-system-root", "unconfirmed"],
+    ["budget-exhausted", "unconfirmed"],
+    ["unknown", "unconfirmed"],
+  ] as const)(
+    "maps a Windows %s disposition to %s tree containment",
+    (windowsTreeKill, treeContainment) => {
+      const childKill = vi.fn();
+      const child: KillableChild = { pid: 41_234, kill: childKill };
+
+      expect(
+        nodeGroupKill(41_234, child, "SIGKILL", {
+          platform: "win32",
+          processEnv: {},
+          killWindowsTree: () => windowsTreeKill,
+        }),
+      ).toEqual({ windowsTreeKill, treeContainment });
+      expect(childKill).toHaveBeenCalledWith("SIGKILL");
+    },
+  );
+
+  it("classifies a throwing Windows tree-kill implementation as unconfirmed failure", () => {
+    const childKill = vi.fn();
+    const child: KillableChild = { pid: 41_234, kill: childKill };
+
+    expect(
+      nodeGroupKill(41_234, child, "SIGKILL", {
+        platform: "win32",
+        processEnv: {},
+        killWindowsTree: () => {
+          throw new Error("injected taskkill failure");
+        },
+      }),
+    ).toEqual({ windowsTreeKill: "failed", treeContainment: "unconfirmed" });
+    expect(childKill).toHaveBeenCalledWith("SIGKILL");
   });
 });
 
@@ -544,8 +643,9 @@ describe("defaultLspSpawnFn — activity-log evidence (AGENTS.md §8 Rule 1)", (
   // lsp.spawn.completed on dispatch, emitted no failure line, and cleaned the ephemeral HOME only
   // on exit — leaking one keiko-lsp-home-* directory per failed attempt. The same cleanup guard
   // covers the synchronous throw paths (buildLspSpawnPlan rejecting a control character or an
-  // untrusted SystemRoot on win32, wrapChild's null-stdio check): they share cleanupHomeOnce +
-  // logLspSpawnFailed + rethrow.
+  // untrusted SystemRoot on win32, or spawn itself): they share cleanupHomeOnce + logLspSpawnFailed
+  // + rethrow. The spawn seam itself returns ChildProcessWithoutNullStreams because the plan fixes
+  // stdio to three pipes; null stdio is not a production state.
   //
   // F2 (PR reviewer finding): the handler used to discard the real Error and always log the generic
   // `errorKind: "SPAWN_FAILED"`, so a support bundle could not tell an ENOENT apart from an EACCES
@@ -585,6 +685,57 @@ describe("defaultLspSpawnFn — activity-log evidence (AGENTS.md §8 Rule 1)", (
     const homesAfter = readdirSync(tmpdir()).filter((name) => name.startsWith("keiko-lsp-home-"));
     const leaked = homesAfter.filter((name) => !homesBefore.has(name));
     expect(leaked).toEqual([]);
+  });
+
+  it("keeps HOME owned after a post-spawn error until the child exit is observed", async () => {
+    const events = captureLog();
+    const binDir = makeTempDir("keiko-lsp-post-spawn-error-");
+    const executable = writeNodeExecutableFixture(
+      binDir,
+      "hanglsp",
+      "setInterval(() => {}, 1000);\n",
+    );
+    let nativeChild: ChildProcessWithoutNullStreams | undefined;
+    let homePath = "";
+    const spawnLsp = createDefaultLspSpawnFn(
+      (command, args, options) => {
+        nativeChild = nodeSpawn(command, args, options);
+        return nativeChild;
+      },
+      () => {
+        const home = createEphemeralHome();
+        homePath = home.path;
+        return home;
+      },
+    );
+
+    const handle = spawnLsp(executable, [], { PATH: "/usr/bin" }, binDir);
+    handle.onError(() => undefined);
+    const child = nativeChild;
+    if (child === undefined) throw new Error("native child missing");
+    await new Promise<void>((resolve) => child.once("spawn", resolve));
+    expect(existsSync(homePath)).toBe(true);
+
+    child.emit("error", Object.assign(new Error("runtime fault"), { code: "EIO" }));
+    await new Promise<void>((resolve) => setImmediate(resolve));
+
+    expect(events.some((event) => event.op === "lsp.spawn.failed")).toBe(false);
+    const runtimeError = events.find((event) => event.op === "lsp.process.runtime-error");
+    expect(runtimeError?.errorKind).toBe("EIO");
+    expect(runtimeError?.correlationId).toBe(UNKNOWN_CORRELATION_ID);
+    expect(runtimeError?.extra?.childPid).toBe(child.pid);
+    const runtimeExtra = runtimeError?.extra ?? {};
+    expect(redactLogFields(runtimeExtra)).toEqual(runtimeExtra);
+    expect(existsSync(homePath)).toBe(true);
+
+    const exited = new Promise<void>((resolve) => {
+      handle.onExit(() => {
+        resolve();
+      });
+    });
+    handle.kill("SIGTERM");
+    await exited;
+    expect(existsSync(homePath)).toBe(false);
   });
 
   // F2 (PR reviewer finding): "the synchronous catch below likewise ignores its captured error when
@@ -654,9 +805,15 @@ describe("defaultLspSpawnFn — activity-log evidence (AGENTS.md §8 Rule 1)", (
     // POSIX (this test host is never win32): the taskkill.exe tree-kill path never engages, and
     // the line says so honestly instead of a dispatched-therefore-succeeded boolean.
     expect(extra.windowsTreeKill).toBe("not-attempted");
+    expect(extra.treeContainment).toBe("unconfirmed");
     expect(extra.signal).toBe("SIGTERM");
     expect(typeof extra.childPid).toBe("number");
-    expect(Object.keys(extra).sort()).toEqual(["childPid", "signal", "windowsTreeKill"]);
+    expect(Object.keys(extra).sort()).toEqual([
+      "childPid",
+      "signal",
+      "treeContainment",
+      "windowsTreeKill",
+    ]);
     const redacted = redactLogFields(extra) ?? {};
     expect(Object.keys(redacted).sort()).toEqual(Object.keys(extra).sort());
   });

@@ -8,12 +8,19 @@
 // says it matters: "an exported function whose stated purpose is containment must not depend on
 // its callers staying literal to be safe."
 
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   DEFAULT_WINDOWS_SYSTEM_ROOT,
+  WINDOWS_CMD_METACHARACTER_SOURCE,
+  WindowsSystemBinaryMissingError,
   WindowsSystemDirectoryError,
   resolveWindowsSystemBinary,
   resolveWindowsSystemDirectory,
+  resolveWindowsSystemExecutable,
+  sameWindowsSystemDirectoryIdentity,
 } from "./windows-system-directory.js";
 
 const HOSTILE_SYSTEM_ROOT_VECTORS: readonly [label: string, value: string][] = [
@@ -32,22 +39,60 @@ const HOSTILE_SYSTEM_ROOT_VECTORS: readonly [label: string, value: string][] = [
   ["a colon after the drive letter (NTFS alternate data stream)", String.raw`C:\Windows:evil`],
   ["a colon introducing a trailing $DATA stream marker", String.raw`C:\Windows\System32:$DATA`],
 ];
+const TRUSTED_SYSTEM_ROOT = (): boolean => true;
+const GLOBALROOT_SYSTEM_ROOT = String.raw`\\?\GLOBALROOT\SystemRoot`;
+
+function expectedSystemExecutable(selectedRoot: string, ...segments: readonly string[]): string {
+  const root = process.platform === "win32" ? GLOBALROOT_SYSTEM_ROOT : selectedRoot;
+  return [root, ...segments].join("\\");
+}
 
 describe("resolveWindowsSystemDirectory", () => {
   it("resolves the hard-coded default when no override is present", () => {
-    expect(resolveWindowsSystemDirectory({})).toBe(DEFAULT_WINDOWS_SYSTEM_ROOT);
+    expect(resolveWindowsSystemDirectory({}, TRUSTED_SYSTEM_ROOT)).toBe(
+      DEFAULT_WINDOWS_SYSTEM_ROOT,
+    );
   });
 
   it("accepts a valid drive-absolute SystemRoot override", () => {
-    expect(resolveWindowsSystemDirectory({ SystemRoot: String.raw`D:\NonstandardWindows` })).toBe(
-      String.raw`D:\NonstandardWindows`,
-    );
+    expect(
+      resolveWindowsSystemDirectory(
+        { SystemRoot: String.raw`D:\NonstandardWindows` },
+        TRUSTED_SYSTEM_ROOT,
+      ),
+    ).toBe(String.raw`D:\NonstandardWindows`);
   });
 
   it("falls back to WINDIR when SystemRoot is absent", () => {
-    expect(resolveWindowsSystemDirectory({ WINDIR: String.raw`E:\AltWindows` })).toBe(
-      String.raw`E:\AltWindows`,
-    );
+    expect(
+      resolveWindowsSystemDirectory({ WINDIR: String.raw`E:\AltWindows` }, TRUSTED_SYSTEM_ROOT),
+    ).toBe(String.raw`E:\AltWindows`);
+  });
+
+  it("fails closed when a shaped override does not match the OS-owned root identity", () => {
+    const identityCheck = (candidate: string, authoritativeRoot: string): boolean => {
+      expect(candidate).toBe(String.raw`C:\workspace\fake-windows`);
+      expect(authoritativeRoot).toBe(String.raw`\\?\GLOBALROOT\SystemRoot`);
+      return false;
+    };
+    expect(() =>
+      resolveWindowsSystemDirectory(
+        { SystemRoot: String.raw`C:\workspace\fake-windows` },
+        identityCheck,
+      ),
+    ).toThrow(WindowsSystemDirectoryError);
+  });
+
+  it("converts an identity-probe failure to a body-free trust-boundary refusal", () => {
+    try {
+      resolveWindowsSystemDirectory({ SystemRoot: String.raw`C:\attack-marker` }, () => {
+        throw new Error("filesystem detail attack-marker");
+      });
+      expect.unreachable("must reject an unverified system root");
+    } catch (error) {
+      expect(error).toBeInstanceOf(WindowsSystemDirectoryError);
+      expect((error as Error).message).not.toContain("attack-marker");
+    }
   });
 
   it("fails closed rather than falling back to WINDIR when SystemRoot is present but invalid", () => {
@@ -75,9 +120,9 @@ describe("resolveWindowsSystemDirectory", () => {
   // valid override in this file carries exactly one. Pinned explicitly, not left to be inferred
   // from the other passing tests in this describe block.
   it("still accepts the mandatory drive-letter colon at index 1", () => {
-    expect(resolveWindowsSystemDirectory({ SystemRoot: String.raw`C:\Windows` })).toBe(
-      String.raw`C:\Windows`,
-    );
+    expect(
+      resolveWindowsSystemDirectory({ SystemRoot: String.raw`C:\Windows` }, TRUSTED_SYSTEM_ROOT),
+    ).toBe(String.raw`C:\Windows`);
   });
 
   it("falls back to process.env when env is omitted, without throwing", () => {
@@ -95,14 +140,96 @@ describe("resolveWindowsSystemDirectory", () => {
   });
 });
 
+describe("sameWindowsSystemDirectoryIdentity", () => {
+  it("accepts the same real directory and rejects a fake directory and a junction", () => {
+    const root = realpathSync.native(mkdtempSync(join(tmpdir(), "keiko-system-root-identity-")));
+    const authoritative = join(root, "authoritative");
+    const fake = join(root, "fake");
+    const junction = join(root, "junction");
+    try {
+      mkdirSync(authoritative);
+      mkdirSync(fake);
+      symlinkSync(authoritative, junction, process.platform === "win32" ? "junction" : "dir");
+
+      expect(sameWindowsSystemDirectoryIdentity(authoritative, authoritative)).toBe(true);
+      expect(sameWindowsSystemDirectoryIdentity(fake, authoritative)).toBe(false);
+      expect(sameWindowsSystemDirectoryIdentity(junction, authoritative)).toBe(false);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects a real system directory reached through a mutable ancestor junction", () => {
+    const root = mkdtempSync(join(tmpdir(), "keiko-system-root-ancestor-identity-"));
+    const authoritativeParent = join(root, "authoritative-parent");
+    const authoritative = join(authoritativeParent, "Windows");
+    const ancestorJunction = join(root, "mutable-parent");
+    try {
+      mkdirSync(authoritativeParent);
+      mkdirSync(authoritative);
+      symlinkSync(
+        authoritativeParent,
+        ancestorJunction,
+        process.platform === "win32" ? "junction" : "dir",
+      );
+
+      expect(
+        sameWindowsSystemDirectoryIdentity(join(ancestorJunction, "Windows"), authoritative),
+      ).toBe(false);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("fails closed when either identity cannot be read", () => {
+    expect(
+      sameWindowsSystemDirectoryIdentity(
+        join(tmpdir(), "keiko-missing-system-root"),
+        join(tmpdir(), "keiko-missing-authoritative-root"),
+      ),
+    ).toBe(false);
+  });
+});
+
+describe("production Windows system-root identity", () => {
+  it.runIf(process.platform === "win32")(
+    "rejects a real fake directory and an env-selected junction",
+    () => {
+      const root = mkdtempSync(join(tmpdir(), "keiko-system-root-production-"));
+      const fake = join(root, "fake-windows");
+      const junction = join(root, "junction-windows");
+      const actualRoot = process.env.SystemRoot ?? process.env.WINDIR;
+      if (actualRoot === undefined) throw new Error("Windows system root is unavailable");
+      try {
+        mkdirSync(fake);
+        symlinkSync(actualRoot, junction, "junction");
+
+        expect(() => resolveWindowsSystemDirectory({ SystemRoot: fake })).toThrow(
+          WindowsSystemDirectoryError,
+        );
+        expect(() => resolveWindowsSystemDirectory({ SystemRoot: junction })).toThrow(
+          WindowsSystemDirectoryError,
+        );
+      } finally {
+        rmSync(root, { recursive: true, force: true });
+      }
+    },
+  );
+});
+
 describe("resolveWindowsSystemBinary", () => {
   it("joins the trusted directory's System32 with the requested binary name", () => {
-    expect(resolveWindowsSystemBinary("taskkill.exe", {})).toBe(
-      String.raw`C:\Windows\System32\taskkill.exe`,
+    expect(resolveWindowsSystemBinary("taskkill.exe", {}, () => true, TRUSTED_SYSTEM_ROOT)).toBe(
+      expectedSystemExecutable(String.raw`C:\Windows`, "System32", "taskkill.exe"),
     );
-    expect(resolveWindowsSystemBinary("cscript.exe", { SystemRoot: String.raw`D:\Win` })).toBe(
-      String.raw`D:\Win\System32\cscript.exe`,
-    );
+    expect(
+      resolveWindowsSystemBinary(
+        "cscript.exe",
+        { SystemRoot: String.raw`D:\Win` },
+        () => true,
+        TRUSTED_SYSTEM_ROOT,
+      ),
+    ).toBe(expectedSystemExecutable(String.raw`D:\Win`, "System32", "cscript.exe"));
   });
 
   it.each([
@@ -147,23 +274,53 @@ describe("resolveWindowsSystemBinary", () => {
   });
 });
 
-// Finding 4 (PR #3354 review round 2, P1): the module's own header admits it validates SHAPE only,
-// because Node has no binding to GetSystemDirectoryW. This narrows that gap for one concrete case —
-// a shape-valid root that resolves to nothing on disk — by requiring the resolved binary to exist
-// as a regular file. `existsAsFile` is the injected test seam described next to
-// `defaultWindowsBinaryExists` in the source: it lets both branches be exercised hermetically,
-// without needing a real `C:\...` filesystem on the host running the test.
-describe("resolveWindowsSystemBinary — resolved-binary existence (finding 4)", () => {
-  it("returns the resolved path when existsAsFile reports it present", () => {
-    expect(resolveWindowsSystemBinary("cmd.exe", {}, () => true)).toBe(
-      String.raw`C:\Windows\System32\cmd.exe`,
+describe("resolveWindowsSystemExecutable", () => {
+  it("resolves a fixed nested executable beneath an identity-approved root", () => {
+    expect(
+      resolveWindowsSystemExecutable(
+        ["System32", "WindowsPowerShell", "v1.0", "powershell.exe"],
+        { SystemRoot: String.raw`D:\Windows` },
+        () => true,
+        TRUSTED_SYSTEM_ROOT,
+      ),
+    ).toBe(
+      expectedSystemExecutable(
+        String.raw`D:\Windows`,
+        "System32",
+        "WindowsPowerShell",
+        "v1.0",
+        "powershell.exe",
+      ),
     );
   });
 
-  it("fails closed with the same error type when the resolved binary does not exist", () => {
-    expect(() => resolveWindowsSystemBinary("cmd.exe", {}, () => false)).toThrow(
-      WindowsSystemDirectoryError,
+  it.each([
+    ["an empty path", []],
+    ["an empty segment", ["System32", ""]],
+    ["a traversal segment", ["System32", "..", "cmd.exe"]],
+    ["a separator", ["System32\\WindowsPowerShell", "powershell.exe"]],
+    ["command syntax", ["System32", "cmd.exe&calc.exe"]],
+  ] as const)("rejects %s", (_label, segments) => {
+    expect(() =>
+      resolveWindowsSystemExecutable(segments, {}, () => true, TRUSTED_SYSTEM_ROOT),
+    ).toThrow(WindowsSystemDirectoryError);
+  });
+});
+
+// After the OS-identity boundary accepts the directory, the binary still has an independent
+// operational existence check. The two injected seams keep those decisions distinct and let both
+// branches run hermetically without a real `C:\...` filesystem on this host.
+describe("resolveWindowsSystemBinary — resolved-binary existence (finding 4)", () => {
+  it("returns the resolved path when existsAsFile reports it present", () => {
+    expect(resolveWindowsSystemBinary("cmd.exe", {}, () => true, TRUSTED_SYSTEM_ROOT)).toBe(
+      expectedSystemExecutable(String.raw`C:\Windows`, "System32", "cmd.exe"),
     );
+  });
+
+  it("classifies an absent resolved binary separately from an untrusted system root", () => {
+    expect(() =>
+      resolveWindowsSystemBinary("cmd.exe", {}, () => false, TRUSTED_SYSTEM_ROOT),
+    ).toThrow(WindowsSystemBinaryMissingError);
   });
 
   it("never echoes the resolved path in the thrown message", () => {
@@ -172,12 +329,27 @@ describe("resolveWindowsSystemBinary — resolved-binary existence (finding 4)",
         "cmd.exe",
         { SystemRoot: String.raw`C:\attack-marker` },
         () => false,
+        TRUSTED_SYSTEM_ROOT,
       );
       expect.unreachable("must throw when existsAsFile reports absent");
     } catch (error) {
-      expect(error).toBeInstanceOf(WindowsSystemDirectoryError);
+      expect(error).toBeInstanceOf(WindowsSystemBinaryMissingError);
       expect((error as Error).message).not.toContain("attack-marker");
     }
+  });
+
+  it("propagates an unexpected filesystem error instead of misclassifying it as absent", () => {
+    const inaccessible = Object.assign(new Error("permission denied"), { code: "EACCES" });
+    expect(() =>
+      resolveWindowsSystemBinary(
+        "cmd.exe",
+        {},
+        () => {
+          throw inaccessible;
+        },
+        TRUSTED_SYSTEM_ROOT,
+      ),
+    ).toThrow(inaccessible);
   });
 
   it("receives the fully joined System32 path, not the bare directory or binary name", () => {
@@ -189,8 +361,11 @@ describe("resolveWindowsSystemBinary — resolved-binary existence (finding 4)",
         seen.push(resolvedPath);
         return true;
       },
+      TRUSTED_SYSTEM_ROOT,
     );
-    expect(seen).toEqual([String.raw`D:\Win\System32\taskkill.exe`]);
+    expect(seen).toEqual([
+      expectedSystemExecutable(String.raw`D:\Win`, "System32", "taskkill.exe"),
+    ]);
   });
 
   describe("default existsAsFile (no override supplied)", () => {
@@ -209,19 +384,48 @@ describe("resolveWindowsSystemBinary — resolved-binary existence (finding 4)",
     });
 
     it("actually checks the filesystem when the platform is genuinely win32", () => {
-      // IDX49 (PR #3355 review): the DEFAULT root (`C:\Windows`) is exactly where a REAL Windows
-      // host keeps `cmd.exe` — asserting non-existence against it is only true because CI never
-      // runs this suite on win32 (the Windows leg runs a separate, narrower smoke script instead;
-      // see scripts/__tests__/windows-cmd-spawn-smoke.mjs). On an actual Windows developer machine
-      // `statSync` would find the real binary and this assertion would fail. A GUID-suffixed root
-      // cannot exist on ANY host, real or CI, so the fail-closed assertion holds everywhere while
-      // still proving the gate is platform-READ (it reaches the real `statSync` and fails ENOENT on
-      // this literal path), not platform-DECORATIVE.
+      // The candidate root cannot be fake on production win32 any more: accepted binaries are read
+      // through GLOBALROOT. A GUID-named binary below that genuine root is guaranteed absent, on a
+      // real Windows developer host as well as CI, and therefore pins the production filesystem
+      // check without weakening the root-identity decision.
       Object.defineProperty(process, "platform", { ...platform, value: "win32" });
-      const neverExistsRoot = String.raw`C:\keiko-test-8f14e45f-ceea-467e-9764-58bf5e5fc4c1`;
-      expect(() => resolveWindowsSystemBinary("cmd.exe", { SystemRoot: neverExistsRoot })).toThrow(
-        WindowsSystemDirectoryError,
-      );
+      expect(() =>
+        resolveWindowsSystemBinary(
+          "keiko-missing-8f14e45f-ceea-467e-9764-58bf5e5fc4c1.exe",
+          { SystemRoot: String.raw`C:\Windows` },
+          undefined,
+          () => true,
+        ),
+      ).toThrow(WindowsSystemBinaryMissingError);
     });
+  });
+});
+
+describe("WINDOWS_CMD_METACHARACTER_SOURCE", () => {
+  it("exports the complete stateless authority used by downstream escaping", () => {
+    const matcher = new RegExp(WINDOWS_CMD_METACHARACTER_SOURCE, "u");
+    const characters = [
+      "(",
+      ")",
+      "]",
+      "[",
+      "%",
+      "!",
+      "^",
+      '"',
+      "`",
+      "<",
+      ">",
+      "&",
+      "|",
+      ";",
+      ",",
+      " ",
+      "*",
+      "?",
+    ];
+    for (const character of characters) {
+      expect(matcher.test(character)).toBe(true);
+    }
   });
 });

@@ -1867,37 +1867,60 @@ describe("reconcileTaskWorkspacesAtStartup", () => {
     }).not.toThrow();
   });
 
-  it("does not throw when reconcile() rejects (failure is silent)", async () => {
-    const rejection = Promise.reject(new Error("reconciliation IO failed"));
+  it("does not throw when reconcile() rejects and records a body-free diagnostic", async () => {
+    const failure = new Error("sensitive reconciliation IO path");
+    failure.stack =
+      "Error: sensitive reconciliation IO path\n    at reconcile (file:///app/packages/keiko-server/dist/task-workspace/reconciliation.js:12:4)";
+    const rejection = Promise.reject(failure);
     const service = fakeReconciliationService(() => rejection);
+    const records: ServerDiagnosticRecord[] = [];
 
     const unhandled = vi.fn();
     process.on("unhandledRejection", unhandled);
 
     expect(() => {
-      reconcileTaskWorkspacesAtStartup(service);
+      reconcileTaskWorkspacesAtStartup(service, { record: (record) => records.push(record) });
     }).not.toThrow();
 
     // Flush microtasks so the `.catch` on the detached promise has a chance to settle before
     // asserting no unhandled rejection leaked to the process.
     await rejection.catch(() => undefined);
-    await Promise.resolve();
+    await new Promise<void>((resolve) => setImmediate(resolve));
 
     process.off("unhandledRejection", unhandled);
     expect(unhandled).not.toHaveBeenCalled();
+    expect(records).toHaveLength(1);
+    expect(records[0]).toMatchObject({
+      correlationId: "unknown-correlation-id",
+      errorClass: "Error",
+      frames: ["packages/keiko-server/dist/task-workspace/reconciliation.js:12:4"],
+      message: DEFAULT_SERVER_DIAGNOSTIC_SUMMARY,
+      operation: "task-workspace.reconcile.startup",
+      source: "task-workspace.bootstrap",
+    });
+    expect(JSON.stringify(records)).not.toContain("sensitive");
   });
 
-  it("does not throw if reconcile() itself throws synchronously (construction must never fail)", () => {
+  it("records a synchronous reconcile throw without failing construction", async () => {
     // A non-conforming implementation (e.g. a test double, or a degraded environment) could throw
     // synchronously instead of returning a rejected Promise. Startup construction must still
-    // degrade silently — the persisted classification simply stays untouched until the next pass.
+    // remain available — the persisted classification stays untouched until the next pass.
     const service = fakeReconciliationService(() => {
       throw new Error("synchronous reconciliation failure");
     });
+    const records: ServerDiagnosticRecord[] = [];
 
     expect(() => {
-      reconcileTaskWorkspacesAtStartup(service);
+      reconcileTaskWorkspacesAtStartup(service, { record: (record) => records.push(record) });
     }).not.toThrow();
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(records).toHaveLength(1);
+    expect(records[0]).toMatchObject({
+      correlationId: "unknown-correlation-id",
+      errorClass: "Error",
+      operation: "task-workspace.reconcile.startup",
+    });
+    expect(JSON.stringify(records)).not.toContain("synchronous reconciliation failure");
   });
 
   it("does not throw when reconcile() resolves normally", async () => {

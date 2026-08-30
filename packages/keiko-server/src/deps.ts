@@ -2303,16 +2303,16 @@ function buildWorkspaceCleanup(
   });
 }
 
-// Best-effort startup reconciliation (Issue #447): mirror the QI-retention startup pass — run once at
-// bootstrap, never throw into construction, and never block server start (the reconcile IO is detached
-// and self-contained). A failure simply leaves the persisted classification untouched until the next
-// pass or an explicit refresh.
+// Best-effort startup reconciliation (Issue #447): run once at bootstrap, never throw into
+// construction, and never block server start. A failure leaves persisted classification untouched,
+// but it is not silent: the detached path emits a body-free structured diagnostic.
 /** @internal Exported only for deterministic server tests. */
 export function reconcileTaskWorkspacesAtStartup(
   service: WorkspaceReconciliationService | undefined,
+  diagnostics?: ServerDiagnosticSink,
 ): void {
   if (service === undefined) return;
-  // Construction must never fail because of reconciliation, so both failure modes are swallowed.
+  // Construction must never fail because of reconciliation, so both failure modes are detached.
   // Invoking inside `.then` rather than a `try` is what makes that possible with a single handler:
   // a synchronous throw from the call itself (property lookup + invocation), which a non-conforming
   // implementation such as a test double can still raise even though `reconcile()` is typed as
@@ -2321,7 +2321,19 @@ export function reconcileTaskWorkspacesAtStartup(
   // with a `.catch` it asks for the `try` to go, without one it asks for the `.catch`.
   void Promise.resolve()
     .then(() => service.reconcile())
-    .catch(() => undefined);
+    .catch((error: unknown) => {
+      emitServerDiagnostic(
+        diagnostics,
+        serverDiagnosticFromError({
+          correlationId: UNKNOWN_CORRELATION_ID,
+          operation: "task-workspace.reconcile.startup",
+          source: "task-workspace.bootstrap",
+          error,
+          summary: DEFAULT_SERVER_DIAGNOSTIC_SUMMARY,
+          redact: (message): string => message,
+        }),
+      );
+    });
 }
 
 function seedInitialProject(
@@ -3260,7 +3272,7 @@ function reconcileNodeStoreAtStartup(
   bundle: PersistenceBundle,
 ): void {
   if (options.store !== undefined) return;
-  reconcileTaskWorkspacesAtStartup(bundle.workspaceReconciliation);
+  reconcileTaskWorkspacesAtStartup(bundle.workspaceReconciliation, options.diagnostics);
 }
 
 function gatewayConfigFields(

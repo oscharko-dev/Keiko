@@ -30,7 +30,7 @@ import {
   preflightSpawnEnv,
   resolveExecutableOutsideWorkspace,
 } from "./lspNodeAdapter.js";
-import type { LspSpawnFn } from "./lspNodeAdapter.js";
+import type { LspProcessKillResult, LspSpawnFn, LspTreeContainment } from "./lspNodeAdapter.js";
 import { createLspRestartThrottle } from "./lspRestartThrottle.js";
 import {
   LspRpcCancelledError,
@@ -41,6 +41,8 @@ import { buildLanguageProvider } from "./lspLanguageProvider.js";
 import type { LspManagerLanguageProvider } from "./lspLanguageProvider.js";
 import { createLspProtocolSession, type LspProtocolSession } from "./lspProtocolSession.js";
 import type { LspSemanticTokenNegotiation } from "./lspSemanticTokens.js";
+import { UNKNOWN_CORRELATION_ID } from "../../correlation.js";
+import { processServerLogSink } from "../../process-log-sink.js";
 
 export interface LspProcessProtocolConfig {
   readonly language: ManagedLspLanguage;
@@ -97,6 +99,10 @@ export interface LspProcessManagerDeps {
 export interface LspProcessManager {
   getLspProcessStatus(): LspProcessStatus;
   getChildGeneration(): number;
+  // True once a terminal/termination path retains a generation whose immediate exit and bounded-
+  // tree containment have not both been confirmed. Callers must not replace such a manager: the old
+  // generation can still have live descendants even when its root process already emitted `exit`.
+  hasRetainedProcessOwnership(): boolean;
   getNegotiatedCapabilities(): ManagedLspNegotiatedCapabilitySnapshot | undefined;
   getHealthSnapshot(): ManagedLspProcessHealthSnapshot | undefined;
   getSemanticTokenNegotiation(): LspSemanticTokenNegotiation | undefined;
@@ -112,12 +118,32 @@ export interface LspProcessManager {
 
 type SpawnHandle = ReturnType<LspSpawnFn>;
 type Transition = (status: LspProcessStatus, code?: LspProcessErrorCode) => void;
+type TreeContainmentState = "not-required" | LspTreeContainment;
+type OwnershipRetentionReason = "exit-unconfirmed" | "tree-unconfirmed";
+
+interface CrashTransition {
+  readonly status: "CRASHED" | "INITIALIZE_TIMEOUT";
+  readonly code: LspProcessErrorCode;
+}
+
+const DEFAULT_CRASH_TRANSITION: CrashTransition = Object.freeze({
+  status: "CRASHED",
+  code: "CRASHED",
+});
 
 interface RuntimeState {
   status: LspProcessStatus;
   transport: LspTransport | undefined;
   child: SpawnHandle | undefined;
   exited: boolean;
+  // A terminal path has requested process-tree termination. This is deliberately distinct from
+  // `exited`: requesting SIGKILL is not OS confirmation, and ownership must survive until an exit
+  // callback proves the handle is no longer live.
+  terminationRequested: boolean;
+  treeContainment: TreeContainmentState;
+  restartPendingAfterExit: boolean;
+  terminalTransitionRecorded: boolean;
+  ownershipRetentionReason: OwnershipRetentionReason | undefined;
   restartCount: number;
   disposed: boolean;
   // Monotonic counter incremented per spawned child. Each crash callback captures the generation it
@@ -160,6 +186,7 @@ function supervisorOnCrash(
   ctx: SupervisorContext,
   crashGeneration: number,
   terminateProcess: boolean,
+  crashTransition: CrashTransition = DEFAULT_CRASH_TRANSITION,
 ): void {
   // A late `exit`/`error` from a child already superseded by a restart carries a stale generation;
   // discard it so it cannot debit the throttle or re-enter CRASHED (FIX 4). The same-generation
@@ -168,23 +195,49 @@ function supervisorOnCrash(
   if (crashGeneration !== ctx.state.childGeneration || ctx.state.exited) {
     return;
   }
+  if (terminateProcess) {
+    requestCrashTermination(ctx, crashTransition);
+    return;
+  }
+  handleObservedChildExit(ctx);
+}
+
+function handleObservedChildExit(ctx: SupervisorContext): void {
   // Marking the child exited BEFORE the disposed early-return lets `escalateKill`'s stop-predicate
   // (`() => state.exited`) observe a prompt exit during dispose and resolve without waiting the full
   // grace window (FIX 2).
   ctx.state.exited = true;
-  if (terminateProcess) terminateProcessTree(ctx.state);
-  const cleanupSucceeded = cleanupSpawnResources(ctx.state);
-  if (ctx.state.disposed) {
+  // An observed exit closes the protocol channel for this generation immediately. Relying on
+  // `beginSpawnGeneration()` to dispose it is insufficient: when the restart throttle is exhausted
+  // there is no next generation, so pending requests and their deadline/abort handles would remain
+  // owned by a transport whose child is already dead.
+  ctx.state.transport?.dispose();
+  if (ctx.state.restartPendingAfterExit) {
+    if (ctx.state.terminalTransitionRecorded) restartConfirmedCrash(ctx);
     return;
   }
+  if (ctx.state.disposed || ctx.state.terminationRequested) {
+    if (ctx.state.terminalTransitionRecorded) settleChildOwnership(ctx.state);
+    return;
+  }
+  handleUnsolicitedChildExit(ctx);
+}
+
+function handleUnsolicitedChildExit(ctx: SupervisorContext): void {
+  // The immediate child is only the root of the bounded process tree. Its unsolicited exit cannot
+  // prove that descendants are gone (a detached POSIX child or a Windows cmd.exe wrapper can leave
+  // one behind), and signalling its raw pid after this observation risks hitting a recycled pid.
+  // Retain the generation and suppress replacement unless containment had already been confirmed.
+  const treeWasConfirmed = ctx.state.treeContainment === "confirmed";
+  if (!treeWasConfirmed) markTreeContainmentUnconfirmed(ctx.state);
+  const cleanupSucceeded = cleanupSpawnResources(ctx.state);
   ctx.transition("CRASHED", cleanupSucceeded ? "CRASHED" : "RUNTIME_STATE_CLEANUP_FAILED");
-  // The child is confirmed gone from this point on: it either just exited on its own (this callback IS
-  // that exit) or terminateProcessTree above just killed it. The CRASHED transition just above still
-  // carries its pid (join key to the adapter's per-kill `lsp.process.terminated` line, Review C2), but
-  // every event from here on must not — clearing it here, at the layer that owns RuntimeState, is what
-  // stops a LATER dispose() from calling kill() on a handle whose OS pid Windows may already have
-  // recycled to an unrelated process tree (the CRASH-path twin of the DISPOSED-path fix, F1).
-  ctx.state.child = undefined;
+  ctx.state.terminalTransitionRecorded = true;
+  if (!settleChildOwnership(ctx.state)) return;
+  restartAfterCrash(ctx);
+}
+
+function restartAfterCrash(ctx: SupervisorContext): void {
   if (ctx.throttle.recordCrashAndMayRestart(ctx.now())) {
     ctx.state.restartCount = ctx.throttle.restartCount();
     supervisorStart(ctx);
@@ -193,12 +246,113 @@ function supervisorOnCrash(
   }
 }
 
+function requestCrashTermination(ctx: SupervisorContext, crashTransition: CrashTransition): void {
+  if (ctx.state.terminationRequested) return;
+  ctx.state.terminationRequested = true;
+  ctx.state.restartPendingAfterExit = true;
+  ctx.state.terminalTransitionRecorded = false;
+  ctx.state.transport?.dispose();
+  // Node's asynchronous ENOENT/EACCES spawn failure has no pid and does not promise a later `exit`
+  // event. No OS process was acquired, so this is an observed not-spawned terminal state rather than
+  // an unconfirmed kill; waiting for an exit here would retain the handle and suppress restart
+  // forever. A post-spawn error has a pid and still follows the retained-until-exit path below.
+  if (ctx.state.child?.pid === undefined) ctx.state.exited = true;
+  else terminateProcessTree(ctx.state);
+  const cleanupSucceeded = cleanupSpawnResources(ctx.state);
+  ctx.transition(
+    crashTransition.status,
+    cleanupSucceeded ? crashTransition.code : "RUNTIME_STATE_CLEANUP_FAILED",
+  );
+  completeTerminalTermination(ctx.state);
+  if (ctx.state.exited) restartConfirmedCrash(ctx);
+}
+
+function restartConfirmedCrash(ctx: SupervisorContext): void {
+  if (!ctx.state.restartPendingAfterExit || !settleChildOwnership(ctx.state)) return;
+  ctx.state.restartPendingAfterExit = false;
+  ctx.state.terminationRequested = false;
+  ctx.state.terminalTransitionRecorded = false;
+  restartAfterCrash(ctx);
+}
+
 function terminateProcessTree(state: RuntimeState): void {
+  markTreeTerminationRequested(state);
   try {
     state.child?.kill("SIGKILL");
+    recordTreeKillResult(state, state.child?.lastKillResult?.());
   } catch {
-    // The process group may already be gone; the state remains failed closed and is superseded.
+    // The process group may already be gone. Without a verified bounded-tree disposition the
+    // generation remains owned and no replacement may start.
   }
+}
+
+function markTreeTerminationRequested(state: RuntimeState): void {
+  markTreeContainmentUnconfirmed(state);
+}
+
+function markTreeContainmentUnconfirmed(state: RuntimeState): void {
+  if (state.child !== undefined && state.treeContainment !== "confirmed") {
+    state.treeContainment = "unconfirmed";
+  }
+}
+
+function recordTreeKillResult(state: RuntimeState, result: LspProcessKillResult | undefined): void {
+  if (result?.treeContainment === "confirmed") state.treeContainment = "confirmed";
+}
+
+function logChildOwnership(
+  action: "retained-unconfirmed" | "released-after-exit",
+  childPid: number | undefined,
+  reason: OwnershipRetentionReason,
+): void {
+  processServerLogSink().write({
+    category: "diagnostic",
+    op: "lsp.process.ownership.changed",
+    correlationId: UNKNOWN_CORRELATION_ID,
+    extra: { action, reason, ...(childPid === undefined ? {} : { childPid }) },
+  });
+}
+
+function settleChildOwnership(state: RuntimeState): boolean {
+  const retentionReason = childRetentionReason(state);
+  if (retentionReason !== undefined) {
+    if (state.ownershipRetentionReason !== retentionReason) {
+      logChildOwnership("retained-unconfirmed", state.child?.pid, retentionReason);
+      state.ownershipRetentionReason = retentionReason;
+    }
+    return false;
+  }
+  const childPid = state.child?.pid;
+  state.child = undefined;
+  if (state.ownershipRetentionReason !== undefined) {
+    logChildOwnership("released-after-exit", childPid, state.ownershipRetentionReason);
+    state.ownershipRetentionReason = undefined;
+  }
+  return true;
+}
+
+function childRetentionReason(state: RuntimeState): OwnershipRetentionReason | undefined {
+  if (state.child === undefined) return undefined;
+  if (!state.exited) return "exit-unconfirmed";
+  return state.treeContainment === "unconfirmed" ? "tree-unconfirmed" : undefined;
+}
+
+function hasRetainedProcessOwnership(state: RuntimeState): boolean {
+  if (state.ownershipRetentionReason !== undefined) return true;
+  return (
+    (state.disposed || state.terminationRequested) && childRetentionReason(state) !== undefined
+  );
+}
+
+function beginTerminalTermination(state: RuntimeState): void {
+  state.terminationRequested = true;
+  state.restartPendingAfterExit = false;
+  state.terminalTransitionRecorded = false;
+}
+
+function completeTerminalTermination(state: RuntimeState): void {
+  state.terminalTransitionRecorded = true;
+  settleChildOwnership(state);
 }
 
 function supervisorStart(ctx: SupervisorContext): void {
@@ -230,37 +384,15 @@ function supervisorStart(ctx: SupervisorContext): void {
     spawnResourceCleanup: prepared.cleanup,
     resourceBudgetSatisfied: prepared.resourceBudgetSatisfied,
     backgroundResourceBudgetSatisfied: prepared.backgroundResourceBudgetSatisfied,
-    onCrash: (generation, terminateProcess) => {
-      supervisorOnCrash(ctx, generation, terminateProcess);
+    onCrash: (generation, terminateProcess, crashTransition) => {
+      supervisorOnCrash(ctx, generation, terminateProcess, crashTransition);
     },
   });
 }
 
 function createManagerRuntime(deps: LspProcessManagerDeps): ManagerRuntime {
   const now = deps.now ?? Date.now;
-  const state: RuntimeState = {
-    status: "STARTING",
-    transport: undefined,
-    child: undefined,
-    exited: false,
-    restartCount: 0,
-    disposed: false,
-    childGeneration: 0,
-    protocol: undefined,
-    lastTransitionTimestampMs: now(),
-    requestCount: 0,
-    successCount: 0,
-    timeoutCount: 0,
-    cancellationCount: 0,
-    failureCount: 0,
-    latencyTotalMs: 0,
-    latencyMaximumMs: 0,
-    latencyBuckets: [0, 0, 0, 0, 0],
-    spawnResourceCleanup: undefined,
-    resourceBudgetSatisfied: undefined,
-    backgroundResourceBudgetSatisfied: undefined,
-    resourceBudgetTimer: undefined,
-  };
+  const state = initialRuntimeState(now());
   const transition: Transition = (status, code) => {
     state.status = status;
     state.lastTransitionTimestampMs = now();
@@ -285,12 +417,44 @@ function createManagerRuntime(deps: LspProcessManagerDeps): ManagerRuntime {
   return { state, now, transition };
 }
 
+function initialRuntimeState(timestampMs: number): RuntimeState {
+  return {
+    status: "STARTING",
+    transport: undefined,
+    child: undefined,
+    exited: false,
+    terminationRequested: false,
+    treeContainment: "not-required",
+    restartPendingAfterExit: false,
+    terminalTransitionRecorded: false,
+    ownershipRetentionReason: undefined,
+    restartCount: 0,
+    disposed: false,
+    childGeneration: 0,
+    protocol: undefined,
+    lastTransitionTimestampMs: timestampMs,
+    requestCount: 0,
+    successCount: 0,
+    timeoutCount: 0,
+    cancellationCount: 0,
+    failureCount: 0,
+    latencyTotalMs: 0,
+    latencyMaximumMs: 0,
+    latencyBuckets: [0, 0, 0, 0, 0],
+    spawnResourceCleanup: undefined,
+    resourceBudgetSatisfied: undefined,
+    backgroundResourceBudgetSatisfied: undefined,
+    resourceBudgetTimer: undefined,
+  };
+}
+
 export function createLspProcessManager(deps: LspProcessManagerDeps): LspProcessManager {
   const { state, now, transition } = createManagerRuntime(deps);
 
   return {
     getLspProcessStatus: (): LspProcessStatus => state.status,
     getChildGeneration: (): number => state.childGeneration,
+    hasRetainedProcessOwnership: (): boolean => hasRetainedProcessOwnership(state),
     getNegotiatedCapabilities: (): ManagedLspNegotiatedCapabilitySnapshot | undefined =>
       state.protocol?.snapshot(),
     getHealthSnapshot: (): ManagedLspProcessHealthSnapshot | undefined =>
@@ -379,7 +543,11 @@ interface SpawnAndInitializeInput {
   readonly spawnResourceCleanup: (() => void) | undefined;
   readonly resourceBudgetSatisfied: (() => boolean) | undefined;
   readonly backgroundResourceBudgetSatisfied: (() => boolean) | undefined;
-  readonly onCrash: (generation: number, terminateProcess: boolean) => void;
+  readonly onCrash: (
+    generation: number,
+    terminateProcess: boolean,
+    crashTransition?: CrashTransition,
+  ) => void;
 }
 
 function spawnAndInitialize(input: SpawnAndInitializeInput): void {
@@ -397,18 +565,8 @@ function spawnAndInitialize(input: SpawnAndInitializeInput): void {
     backgroundResourceBudgetSatisfied,
     onCrash,
   } = input;
-  // On a restart, reject any request still pending against the dead transport IMMEDIATELY instead of
-  // letting it linger until requestTimeoutMs: dispose rejects pending with LspRpcDisposedError, which
-  // maps to DISPOSED (FIX 3). The new generation guards stale callbacks from the superseded child.
-  state.transport?.dispose();
-  if (!cleanupSpawnResources(state)) {
-    safeCleanup(spawnResourceCleanup);
-    transition("SPAWN_FAILED", "RUNTIME_STATE_CLEANUP_FAILED");
-    return;
-  }
-  state.childGeneration += 1;
-  const generation = state.childGeneration;
-  state.exited = false;
+  const generation = beginSpawnGeneration(state, spawnResourceCleanup, transition);
+  if (generation === undefined) return;
   const child = trySpawn(spawn, executable, args, env, deps, transition);
   if (child === undefined) {
     safeCleanup(spawnResourceCleanup);
@@ -432,7 +590,29 @@ function spawnAndInitialize(input: SpawnAndInitializeInput): void {
     onCrash(generation, true);
   });
   transition("INITIALIZING");
-  void runInitialize(state, deps, now, transition, generation);
+  void runInitialize(state, deps, now, transition, generation, onCrash);
+}
+
+function beginSpawnGeneration(
+  state: RuntimeState,
+  nextCleanup: (() => void) | undefined,
+  transition: Transition,
+): number | undefined {
+  // Reject old pending requests immediately; the new generation then guards stale callbacks.
+  state.transport?.dispose();
+  if (!cleanupSpawnResources(state)) {
+    safeCleanup(nextCleanup);
+    transition("SPAWN_FAILED", "RUNTIME_STATE_CLEANUP_FAILED");
+    return undefined;
+  }
+  state.childGeneration += 1;
+  state.exited = false;
+  state.terminationRequested = false;
+  state.treeContainment = "not-required";
+  state.restartPendingAfterExit = false;
+  state.terminalTransitionRecorded = false;
+  state.ownershipRetentionReason = undefined;
+  return state.childGeneration;
 }
 
 interface SpawnInstallation {
@@ -440,7 +620,11 @@ interface SpawnInstallation {
   readonly deps: LspProcessManagerDeps;
   readonly child: SpawnHandle;
   readonly generation: number;
-  readonly onCrash: (generation: number, terminateProcess: boolean) => void;
+  readonly onCrash: (
+    generation: number,
+    terminateProcess: boolean,
+    crashTransition?: CrashTransition,
+  ) => void;
   readonly transition: Transition;
   readonly spawnResourceCleanup: (() => void) | undefined;
   readonly resourceBudgetSatisfied: (() => boolean) | undefined;
@@ -614,6 +798,7 @@ async function runInitialize(
   now: () => number,
   transition: Transition,
   generation: number,
+  onCrash: SpawnAndInitializeInput["onCrash"],
 ): Promise<void> {
   const client = state.transport?.client;
   if (client === undefined) {
@@ -638,7 +823,10 @@ async function runInitialize(
     }
   } catch (error) {
     if (isCurrentInitialization(state, generation)) {
-      failInitialization(state, transition, classifyInitFailure(error));
+      onCrash(generation, true, {
+        status: "INITIALIZE_TIMEOUT",
+        code: classifyInitFailure(error),
+      });
     }
   }
 }
@@ -653,17 +841,6 @@ async function runInitialize(
 // symmetrically for both the success and the failure branch.
 function isCurrentInitialization(state: RuntimeState, generation: number): boolean {
   return state.status === "INITIALIZING" && state.childGeneration === generation;
-}
-
-function failInitialization(
-  state: RuntimeState,
-  transition: Transition,
-  code: LspProcessErrorCode,
-): void {
-  state.transport?.dispose();
-  terminateProcessTree(state);
-  const cleanupSucceeded = cleanupSpawnResources(state);
-  transition("INITIALIZE_TIMEOUT", cleanupSucceeded ? code : "RUNTIME_STATE_CLEANUP_FAILED");
 }
 
 function initializeParams(state: RuntimeState, networkPolicy: LspNetworkPolicy): unknown {
@@ -754,17 +931,12 @@ function resourceBudgetSatisfied(state: RuntimeState): boolean {
 
 function failResourceBudget(state: RuntimeState, transition: Transition): void {
   if (state.exited || state.status === "CRASHED") return;
-  state.exited = true;
+  beginTerminalTermination(state);
   state.transport?.dispose();
   terminateProcessTree(state);
   const cleanupSucceeded = cleanupSpawnResources(state);
   transition("CRASHED", "RESOURCE_BUDGET_EXCEEDED");
-  // Marking `exited` true above (synchronously, before the OS confirms the SIGKILL) permanently
-  // disables supervisorOnCrash's own clearing for this generation: its guard treats the eventual real
-  // exit event as already handled and returns early without ever reaching its own `state.child`
-  // clear. Nothing else runs on this path, so it must clear here or a later dispose() calls kill() on
-  // the dead handle (same class of defect as the crash-path fix, just triggered by a different guard).
-  state.child = undefined;
+  completeTerminalTermination(state);
   if (!cleanupSucceeded) transition("CRASHED", "RUNTIME_STATE_CLEANUP_FAILED");
 }
 
@@ -824,13 +996,24 @@ async function disposeManager(
     return;
   }
   state.disposed = true;
+  beginTerminalTermination(state);
   transition("SHUTDOWN");
-  const child = state.child;
+  const shutdownGeneration = state.childGeneration;
   const transport = state.transport;
   await requestGracefulShutdown(transport, deps, now);
+  // Let the exit notification written above cross the stdio/ChildProcess boundary before deciding
+  // whether escalation is still needed. If no exit arrives in this turn, ownership is still live
+  // and signalling remains appropriate.
+  await new Promise<void>((resolve) => setImmediate(resolve));
   transport?.dispose();
+  // The shutdown request/exit notification is asynchronous. Re-read ownership after that await:
+  // the originally captured handle may already have exited and relinquished its pid. Only the same
+  // still-current generation may receive the SIGTERM/SIGKILL escalation.
+  const child =
+    !state.exited && state.childGeneration === shutdownGeneration ? state.child : undefined;
   if (child !== undefined) {
-    await escalateKill(
+    markTreeTerminationRequested(state);
+    const killResult = await escalateKill(
       child,
       deps.config.shutdownTimeoutMs,
       () => state.exited,
@@ -839,23 +1022,15 @@ async function disposeManager(
         child.onExit(onExit);
       },
     );
+    recordTreeKillResult(state, killResult);
   }
-  // F1 (PR reviewer finding): SIGTERM, then SIGKILL at the grace deadline, has been REQUESTED by
-  // this point — not necessarily OBSERVED. The branch above is skipped entirely when there was
-  // never a child to begin with. Clearing `state.child` here does not depend on the child actually
-  // having exited: "escalateKill only resolves once it has exited" was never true of the
-  // grace-deadline path, which settles on the SIGKILL request (PR #3355 review, P1; the primitive
-  // now says so at its own definition), and clearing ownership does not need that guarantee anyway.
-  // After dispose this manager no longer owns the pid regardless of what the child is doing, and
-  // CARRYING the pid past that point is the unsafe direction — it is what let an OS-reused pid
-  // masquerade as ours in a reconstructed support timeline. Releasing it here, at the layer that
-  // owns `RuntimeState`, is also what makes every lifecycle event from here on (including the
-  // terminal DISPOSED transition below) correctly omit `childPid` per the contract on
-  // `LspLifecycleEvent.childPid`: "present only for a current running child... absent after
-  // cleanup."
-  state.child = undefined;
   const cleanupSucceeded = cleanupSpawnResources(state);
   if (!cleanupSucceeded) transition("CRASHED", "RUNTIME_STATE_CLEANUP_FAILED");
+  // `escalateKill` resolves when SIGKILL is requested at the deadline, not only after exit. Keep the
+  // child handle as a background reaper when exit is still unconfirmed. A later exit releases only
+  // when tree containment is confirmed; a failed tree kill remains retained fail-closed. The
+  // DISPOSED lifecycle event deliberately retains childPid in either unconfirmed case.
+  completeTerminalTermination(state);
   transition("DISPOSED", "DISPOSED");
 }
 

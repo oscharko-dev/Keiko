@@ -20,7 +20,15 @@
 import assert from "node:assert/strict";
 import { Buffer } from "node:buffer";
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, rmSync, mkdtempSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  rmSync,
+  mkdtempSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 
@@ -111,9 +119,9 @@ function spawnThroughWrapper(shimPath, args, root, outPath) {
     "a resolved .cmd fixture path must take the hardened cmd.exe wrapper branch on win32",
   );
   assert.equal(
-    invocation.command.toLowerCase().endsWith(String.raw`\system32\cmd.exe`.toLowerCase()),
-    true,
-    `expected the wrapper to resolve System32\\cmd.exe, got: ${invocation.command}`,
+    invocation.command.toLowerCase(),
+    String.raw`\\?\GLOBALROOT\SystemRoot\System32\cmd.exe`.toLowerCase(),
+    "the production wrapper must spawn through the OS-owned SystemRoot namespace",
   );
   rmSync(outPath, { force: true });
   return spawnSync(invocation.command, invocation.args, {
@@ -212,6 +220,26 @@ function writeFixture(path, contents) {
   writeFileSync(path, contents, "utf8");
 }
 
+function assertSystemRootRejectedBeforeSpawn(label, shimPath, systemRoot) {
+  let spawnReached = false;
+  assert.throws(
+    () => {
+      const invocation = buildWindowsShellInvocation(shimPath, [], {
+        platform: "win32",
+        env: { SystemRoot: systemRoot },
+      });
+      spawnReached = true;
+      spawnSync(invocation.command, invocation.args, {
+        shell: false,
+        windowsVerbatimArguments: true,
+      });
+    },
+    (error) => error?.name === "WindowsSystemDirectoryError",
+    `${label}: expected the untrusted SystemRoot to fail closed`,
+  );
+  assert.equal(spawnReached, false, `${label}: rejection happened only after the spawn boundary`);
+}
+
 function runWindowsCmdSpawnSmoke() {
   const root = mkdtempSync(join(tmpdir(), "keiko-cmd-spawn-"));
   let failure;
@@ -226,6 +254,24 @@ function runWindowsCmdSpawnSmoke() {
     const binShim = join(root, "node_modules", ".bin", "keiko-recorder.cmd");
     writeFixture(ordinaryShim, shimScript(recorderPath));
     writeFixture(binShim, shimScript(recorderPath));
+
+    // Real Node 24 + NTFS proof for the shared trusted-System32 boundary. A workspace can contain a
+    // convincing System32/cmd.exe tree and can create a junction to the genuine Windows directory;
+    // neither environment-selected path may reach spawn. This runs in the existing windows-latest
+    // lane, so GLOBALROOT stat identity and junction lstat semantics are validated by Windows rather
+    // than inferred from POSIX unit seams.
+    const fakeSystemRoot = join(root, "fake-windows");
+    writeFixture(join(fakeSystemRoot, "System32", "cmd.exe"), "not an operating-system binary");
+    const junctionSystemRoot = join(root, "junction-windows");
+    const actualSystemRoot = process.env.SystemRoot ?? process.env.WINDIR;
+    assert.notEqual(actualSystemRoot, undefined, "Windows did not expose its system root");
+    symlinkSync(actualSystemRoot, junctionSystemRoot, "junction");
+    assertSystemRootRejectedBeforeSpawn("workspace fake root", ordinaryShim, fakeSystemRoot);
+    assertSystemRootRejectedBeforeSpawn(
+      "workspace junction root",
+      ordinaryShim,
+      junctionSystemRoot,
+    );
 
     for (const [label, shimPath] of [
       ["ordinary .cmd", ordinaryShim],

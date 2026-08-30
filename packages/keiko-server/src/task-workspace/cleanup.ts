@@ -42,7 +42,7 @@ import { gatherInstanceReconciliationFacts } from "./reconciliation.js";
 import { lockIsLive, makeWorkspaceLock, resolveLockTtl } from "./locks.js";
 import { workspaceKey } from "./mutex.js";
 import { TaskWorkspaceError } from "./errors.js";
-import { UNKNOWN_CORRELATION_ID } from "../correlation.js";
+import { correlationIdOrUnknown } from "../correlation.js";
 import { logWorkspaceLifecycle } from "./activity-log.js";
 import {
   appendWorkspaceLifecycleEvidence,
@@ -152,7 +152,7 @@ function emitCleanupActivityLog(
 }
 
 function emit(ctx: CleanupCtx, input: EmitCleanupInput): void {
-  const correlationId = input.correlationId ?? UNKNOWN_CORRELATION_ID;
+  const correlationId = correlationIdOrUnknown(input.correlationId);
   const event = buildWorkspaceEvent({
     eventId: ctx.deps.newId(),
     workspaceId: input.workspaceId,
@@ -649,7 +649,7 @@ export function createWorkspaceCleanupService(
   const ctxFor = (correlationId: string | undefined): CleanupCtx => ({
     deps,
     lockTtlMs,
-    correlationId: correlationId ?? UNKNOWN_CORRELATION_ID,
+    correlationId: correlationIdOrUnknown(correlationId),
   });
   return {
     // Serialized under the workspace's `ws:` key (#449, ADR-0093 D1) so a governed removal cannot race a

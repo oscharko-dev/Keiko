@@ -56,6 +56,20 @@ describe.skipIf(process.platform === "win32")("resolveGitExecutable", () => {
     });
   });
 
+  it.each([
+    ["git.exe", ".CMD"],
+    ["git.com", ""],
+  ])("probes the closed trusted image set for %s regardless of PATHEXT=%j", (name, pathExt) => {
+    const bin = temporary("keiko-git-executable-bin-");
+    const executable = join(bin, name);
+    writeFileSync(executable, "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+    chmodSync(bin, 0o777);
+    expect(resolveGitExecutable({ PATH: bin, PATHEXT: pathExt }, workspace, "win32")).toEqual({
+      ok: true,
+      path: executable,
+    });
+  });
+
   // A `git.cmd`/`git.bat` is never accepted as git, even when PATHEXT lists those extensions and
   // the file passes every trust check. `runner.ts` spawns the resolved path with `shell: false`,
   // which raises EINVAL for a batch target on Windows (Node's fix for CVE-2024-27980) — so

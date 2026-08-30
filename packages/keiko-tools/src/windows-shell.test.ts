@@ -18,8 +18,27 @@ import {
 const CMD_PATH = String.raw`C:\Users\test\AppData\Roaming\npm\npm.cmd`;
 const UNC_CMD_PATH = String.raw`\\build-server\share\tools\npm.cmd`;
 const SHIM_CMD_PATH = String.raw`C:\proj\node_modules\.bin\tsserver.cmd`;
-const CMD_EXE = String.raw`C:\Windows\System32\cmd.exe`;
-const WIN_ENV = { env: { SystemRoot: String.raw`C:\Windows` }, platform: "win32" as const };
+const GLOBALROOT_SYSTEM_ROOT = String.raw`\\?\GLOBALROOT\SystemRoot`;
+const TRUSTED_SYSTEM_ROOT = {
+  existsAsFile: (): boolean => true,
+  systemDirectoryIdentity: (): boolean => true,
+};
+const WIN_ENV = {
+  env: { SystemRoot: String.raw`C:\Windows` },
+  platform: "win32" as const,
+  ...TRUSTED_SYSTEM_ROOT,
+};
+
+// Production win32 always traverses the OS-owned namespace after the injected identity decision;
+// an off-host hermetic run cannot traverse that namespace and deliberately retains the selected
+// lexical fixture root. Do not fake process.platform here: the real Windows lane must exercise the
+// production branch that this expectation describes.
+function expectedSystemBinary(selectedRoot: string, binaryName: string): string {
+  const root = process.platform === "win32" ? GLOBALROOT_SYSTEM_ROOT : selectedRoot;
+  return `${root}\\System32\\${binaryName}`;
+}
+
+const CMD_EXE = expectedSystemBinary(String.raw`C:\Windows`, "cmd.exe");
 
 describe("buildWindowsShellInvocation — pass-through (no wrapping)", () => {
   it("returns the input unchanged on a non-win32 platform, even for a .cmd path", () => {
@@ -80,20 +99,26 @@ describe("buildWindowsShellInvocation — cmd.exe resolution (never PATH)", () =
     const result = buildWindowsShellInvocation(CMD_PATH, [], {
       platform: "win32",
       env: { SystemRoot: String.raw`D:\NonstandardWindows`, WINDIR: String.raw`C:\Windows` },
+      ...TRUSTED_SYSTEM_ROOT,
     });
-    expect(result.command).toBe(String.raw`D:\NonstandardWindows\System32\cmd.exe`);
+    expect(result.command).toBe(expectedSystemBinary(String.raw`D:\NonstandardWindows`, "cmd.exe"));
   });
 
   it("falls back to WINDIR when SystemRoot is absent", () => {
     const result = buildWindowsShellInvocation(CMD_PATH, [], {
       platform: "win32",
       env: { WINDIR: String.raw`E:\Win` },
+      ...TRUSTED_SYSTEM_ROOT,
     });
-    expect(result.command).toBe(String.raw`E:\Win\System32\cmd.exe`);
+    expect(result.command).toBe(expectedSystemBinary(String.raw`E:\Win`, "cmd.exe"));
   });
 
   it("falls back to the hard-coded default when neither SystemRoot nor WINDIR is set", () => {
-    const result = buildWindowsShellInvocation(CMD_PATH, [], { platform: "win32", env: {} });
+    const result = buildWindowsShellInvocation(CMD_PATH, [], {
+      platform: "win32",
+      env: {},
+      ...TRUSTED_SYSTEM_ROOT,
+    });
     expect(result.command).toBe(CMD_EXE);
   });
 });
@@ -549,18 +574,22 @@ const HOSTILE_SYSTEM_ROOT_VECTORS: readonly [label: string, value: string][] = [
 ];
 
 describe("resolveWindowsSystemDirectory / resolveSystemBinaryPath — canonical validation (finding 2)", () => {
+  const TRUSTED_SYSTEM_ROOT = (): boolean => true;
+
   it("resolves the hard-coded default when no override is present", () => {
-    expect(resolveWindowsSystemDirectory({})).toBe(String.raw`C:\Windows`);
-    expect(resolveSystemBinaryPath("taskkill.exe", {})).toBe(
-      String.raw`C:\Windows\System32\taskkill.exe`,
+    expect(resolveWindowsSystemDirectory({}, TRUSTED_SYSTEM_ROOT)).toBe(String.raw`C:\Windows`);
+    expect(resolveSystemBinaryPath("taskkill.exe", {}, () => true, TRUSTED_SYSTEM_ROOT)).toBe(
+      expectedSystemBinary(String.raw`C:\Windows`, "taskkill.exe"),
     );
   });
 
   it("accepts a valid drive-absolute SystemRoot override", () => {
     const env = { SystemRoot: String.raw`D:\NonstandardWindows` };
-    expect(resolveWindowsSystemDirectory(env)).toBe(String.raw`D:\NonstandardWindows`);
-    expect(resolveSystemBinaryPath("cmd.exe", env)).toBe(
-      String.raw`D:\NonstandardWindows\System32\cmd.exe`,
+    expect(resolveWindowsSystemDirectory(env, TRUSTED_SYSTEM_ROOT)).toBe(
+      String.raw`D:\NonstandardWindows`,
+    );
+    expect(resolveSystemBinaryPath("cmd.exe", env, () => true, TRUSTED_SYSTEM_ROOT)).toBe(
+      expectedSystemBinary(String.raw`D:\NonstandardWindows`, "cmd.exe"),
     );
   });
 

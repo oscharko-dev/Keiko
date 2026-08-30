@@ -1,4 +1,6 @@
 import { describe, expect, it } from "vitest";
+import type { SecurityLogEvent } from "@oscharko-dev/keiko-security";
+import { createCliSecurityLogSink } from "./security-log.js";
 import {
   notifyPortableLaunchFailure,
   runDetachedAlert,
@@ -6,6 +8,20 @@ import {
 } from "./portable-launch-notifier.js";
 
 const UI_LAUNCH = { KEIKO_PORTABLE_UI_LAUNCH: "1" };
+
+function recordingSecuritySink(): {
+  readonly sink: NonNullable<ReturnType<typeof createCliSecurityLogSink>>;
+  readonly events: SecurityLogEvent[];
+} {
+  const events: SecurityLogEvent[] = [];
+  const sink = createCliSecurityLogSink("/state", () => ({
+    write: (event): void => {
+      events.push(event);
+    },
+  }));
+  if (sink === undefined) throw new Error("test security log sink was not created");
+  return { sink, events };
+}
 
 describe("notifyPortableLaunchFailure", () => {
   it("shows the recorded failure in a quoted alert for a double-click launch", () => {
@@ -87,6 +103,55 @@ describe("notifyPortableLaunchFailure", () => {
 
     expect(messages).toEqual(["keiko portable launch: failed\n"]);
   });
+
+  it.each([
+    [
+      "hostile root",
+      String.raw`\\attacker\share`,
+      undefined,
+      "security",
+      "security.windows-portable-alert.system-root-refused",
+      "WindowsSystemDirectoryError",
+    ],
+    [
+      "missing PowerShell",
+      String.raw`D:\Windows`,
+      (): boolean => false,
+      "diagnostic",
+      "security.windows-portable-alert.system-binary-missing",
+      "WINDOWS_SYSTEM_BINARY_MISSING",
+    ],
+  ] as const)(
+    "keeps the notifier best-effort and logs a body-free Windows %s refusal",
+    (_label, systemRoot, windowsBinaryExists, category, op, errorKind) => {
+      const { sink, events } = recordingSecuritySink();
+      const reported: string[] = [];
+
+      expect(() => {
+        notifyPortableLaunchFailure(
+          "reason",
+          { ...UI_LAUNCH, SystemRoot: systemRoot },
+          {
+            platform: () => "win32",
+            securityLogSink: sink,
+            ...(windowsBinaryExists === undefined ? {} : { windowsBinaryExists }),
+            ...(windowsBinaryExists === undefined
+              ? {}
+              : { windowsSystemDirectoryIdentity: (): boolean => true }),
+            reportAlertFailure: (line) => {
+              reported.push(line);
+            },
+          },
+        );
+      }).not.toThrow();
+
+      expect(reported).toEqual(["keiko portable launch: the failure alert could not be shown\n"]);
+      expect(events).toHaveLength(1);
+      expect(events[0]).toMatchObject({ category, op, errorKind });
+      expect(events[0]?.correlationId).toMatch(/^[0-9a-f-]{36}$/u);
+      expect(JSON.stringify(events)).not.toContain(systemRoot);
+    },
+  );
 
   it.each([[{}], [{ KEIKO_PORTABLE_UI_LAUNCH: "true" }]])(
     "stays silent without the exact double-click marker",
@@ -203,6 +268,7 @@ describe("runDetachedWindowsAlert", () => {
   it("spawns the bounded detached PowerShell MessageBox contract and detaches from it", () => {
     const calls: unknown[][] = [];
     const reported: string[] = [];
+    const { sink, events } = recordingSecuritySink();
     let errorHandler: ((error: Error) => void) | undefined;
     let unreferenced = false;
 
@@ -223,11 +289,15 @@ describe("runDetachedWindowsAlert", () => {
       (line) => {
         reported.push(line);
       },
+      () => true,
+      sink,
     );
 
     expect(calls).toHaveLength(1);
     expect(calls[0]?.[0]).toBe(
-      String.raw`D:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe`,
+      process.platform === "win32"
+        ? String.raw`\\?\GLOBALROOT\SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe`
+        : String.raw`D:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe`,
     );
     expect(calls[0]?.[1]).toEqual([
       "-NoLogo",
@@ -258,6 +328,13 @@ describe("runDetachedWindowsAlert", () => {
       errorHandler?.(new Error("spawn ENOENT"));
     }).not.toThrow();
     expect(reported).toEqual(["keiko portable launch: the failure alert could not be shown\n"]);
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({
+      category: "diagnostic",
+      op: "portable.windows-alert.spawn-failed",
+      errorKind: "Error",
+    });
+    expect(events[0]?.correlationId).toMatch(/^[0-9a-f-]{36}$/u);
   });
 
   it("forwards supplied TEMP and TMP into the detached child environment", () => {
@@ -274,6 +351,7 @@ describe("runDetachedWindowsAlert", () => {
         return { on: (): void => undefined, unref: (): void => undefined };
       },
       () => undefined,
+      () => true,
     );
     // WPF initialization needs a writable temp location when the profile provides one; both
     // variables must reach the child exactly as supplied, and nothing else may leak in.

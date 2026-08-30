@@ -47,8 +47,8 @@ import {
   ensureManagedWorktreeParent,
   managedTargetExists,
 } from "./managed-root.js";
-import { TaskWorkspaceError, type WorkspaceFailureOutcome } from "./errors.js";
-import { UNKNOWN_CORRELATION_ID } from "../correlation.js";
+import { TaskWorkspaceError } from "./errors.js";
+import { correlationIdOrUnknown } from "../correlation.js";
 import { logWorkspaceLifecycle } from "./activity-log.js";
 import {
   appendWorkspaceLifecycleEvidence,
@@ -208,7 +208,7 @@ function makeLock(
 // ─── evidence ───────────────────────────────────────────────────────────────────────────────────
 
 function emit(ctx: ProvisioningCtx, input: EmitInput): void {
-  const correlationId = input.correlationId ?? UNKNOWN_CORRELATION_ID;
+  const correlationId = correlationIdOrUnknown(input.correlationId);
   const event = buildWorkspaceEvent({
     eventId: ctx.deps.newId(),
     workspaceId: input.workspaceId,
@@ -247,28 +247,6 @@ function emit(ctx: ProvisioningCtx, input: EmitInput): void {
     durationMs: 0,
     worktreeCount: 0,
     errorCode: input.errorCode,
-  });
-}
-
-function emitOutcomeForCode(
-  ctx: ProvisioningCtx,
-  operation: WorkspaceLifecycleOperation,
-  outcome: WorkspaceFailureOutcome,
-  workspaceId: string,
-  taskId: string,
-  nowMs: number,
-  correlationId: string | undefined,
-  errorCode?: string,
-): void {
-  emit(ctx, {
-    operation,
-    outcome,
-    type: "transition-rejected",
-    workspaceId,
-    taskId,
-    nowMs,
-    correlationId,
-    errorCode,
   });
 }
 
@@ -663,16 +641,16 @@ async function provisionLocked(
     await assertProvisionable(ctx, repo, request, existing, nowMs);
   } catch (error) {
     if (error instanceof TaskWorkspaceError) {
-      emitOutcomeForCode(
-        ctx,
-        "provision",
-        error.outcome,
-        repo.workspaceId,
-        request.taskId,
+      emit(ctx, {
+        operation: "provision",
+        outcome: error.outcome,
+        type: "transition-rejected",
+        workspaceId: repo.workspaceId,
+        taskId: request.taskId,
         nowMs,
-        request.correlationId,
-        error.code,
-      );
+        correlationId: request.correlationId,
+        errorCode: error.code,
+      });
     }
     throw error;
   }
@@ -854,7 +832,7 @@ export function createWorkspaceProvisioningService(
   const ctxFor = (correlationId: string | undefined): ProvisioningCtx => ({
     deps,
     lockTtlMs,
-    correlationId: correlationId ?? UNKNOWN_CORRELATION_ID,
+    correlationId: correlationIdOrUnknown(correlationId),
   });
   return {
     provision: (request: WorkspaceProvisionRequest): Promise<WorkspaceProvisionResult> =>

@@ -1,14 +1,17 @@
-// Negative fixtures for the buffer-replacement postcondition (PR #3355 review, P2). The helper it
-// guards runs only inside Playwright, so the decision itself was extracted into a pure function —
-// otherwise the two corruptions below are only ever exercised against a live editor, which is
-// exactly why they went unnoticed: both PASSED the old check.
-import type { Page } from "@playwright/test";
+// Pure pins for the model-complete buffer source used by the replacement postcondition (PR #3355
+// review, P2). The live Chromium journey below the helper exercises request observation; these
+// fixtures prove its parser preserves whitespace and off-screen content instead of falling back to
+// Monaco's virtualized rendered lines.
+import type { Page, Request } from "@playwright/test";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { editorModifier, replacementViolations } from "./editor-chord.js";
-
-const NEW = ['export const value = "new";'];
-const OLD = ['export const value = "old";'];
+import {
+  editorModifier,
+  hotExitSnapshotContent,
+  isExactHotExitWrite,
+  matchesExactHotExitSnapshot,
+  type ExactHotExitExpectation,
+} from "./editor-chord.js";
 
 // `editorModifier`'s "Meta" branch is dead under every currently-wired device profile — both the
 // chromium and firefox projects in playwright.config.ts force a Windows user agent, so nothing in
@@ -47,62 +50,160 @@ describe("editorModifier", () => {
   });
 });
 
-describe("replacementViolations", () => {
-  it("accepts a clean replacement", () => {
-    expect(replacementViolations(NEW, NEW, OLD)).toEqual([]);
+describe("hotExitSnapshotContent", () => {
+  it("reads the production hot-exit request shape", () => {
+    const content = 'export const value = "new";\n';
+    expect(hotExitSnapshotContent({ snapshot: { content } })).toBe(content);
   });
 
-  // The first corruption the review named: a select-all that reached nothing leaves the old buffer
-  // in place and `insertText` appends. Every expected line still appears at most once and the
-  // anchor is present, so the old check passed this.
-  it("rejects stale content that survived alongside the new text", () => {
-    const violations = replacementViolations(NEW, [...OLD, ...NEW], OLD);
-    expect(violations).toHaveLength(1);
-    expect(violations[0]).toContain("stale line");
+  it("preserves whitespace exactly instead of trimming model content", () => {
+    const content = "\t  return value;  \n";
+    const observed = hotExitSnapshotContent({ snapshot: { content } });
+    expect(observed).toBe(content);
+    expect(observed).not.toBe(content.trim());
   });
 
-  // The second: a select-all that wiped the buffer and an insert that never landed. The old check
-  // passed this because `anchor.startsWith("")` is true for the empty rendered line.
-  it("rejects an empty buffer when text was supposed to be inserted", () => {
-    const violations = replacementViolations(NEW, [""], OLD);
-    expect(violations).toHaveLength(1);
-    expect(violations[0]).toContain("expected the buffer to contain");
+  it("reads every off-screen line instead of Monaco's virtualized DOM subset", () => {
+    const content = Array.from(
+      { length: 200 },
+      (_value, index) => `export const line${String(index)} = ${String(index)};`,
+    ).join("\n");
+    expect(hotExitSnapshotContent({ snapshot: { content } })).toBe(content);
+    expect(
+      hotExitSnapshotContent({
+        snapshot: { content: content.split("\n").slice(0, 20).join("\n") },
+      }),
+    ).not.toBe(content);
   });
 
-  it("rejects the doubling the previous check did catch", () => {
-    const violations = replacementViolations(NEW, [...NEW, ...NEW], OLD);
-    expect(violations.some((entry) => entry.includes("appears 2x"))).toBe(true);
+  it.each([
+    undefined,
+    null,
+    {},
+    { snapshot: null },
+    { snapshot: {} },
+    { snapshot: { content: 1 } },
+  ])("rejects a payload without a string snapshot content field (%j)", (payload) => {
+    expect(hotExitSnapshotContent(payload)).toBeUndefined();
+  });
+});
+
+const EXACT_EXPECTATION: ExactHotExitExpectation = {
+  content: "export function value(): number {\n  return 1;\n}\n",
+  paneId: "pane-1",
+  relativePath: "src/value.ts",
+  windowId: "editor-pane-1",
+  workspaceRoot: "/workspace/exact",
+};
+
+function hotExitPayload(overrides: Readonly<Record<string, unknown>> = {}): unknown {
+  return {
+    snapshot: {
+      content: EXACT_EXPECTATION.content,
+      paneId: EXACT_EXPECTATION.paneId,
+      relativePath: EXACT_EXPECTATION.relativePath,
+      windowId: EXACT_EXPECTATION.windowId,
+      workspaceRoot: EXACT_EXPECTATION.workspaceRoot,
+      ...overrides,
+    },
+  };
+}
+
+function fakeRequest(
+  options: {
+    readonly method?: string;
+    readonly payload?: unknown;
+    readonly throws?: boolean;
+    readonly url?: string;
+  } = {},
+): Request {
+  return {
+    method: () => options.method ?? "POST",
+    postDataJSON: () => {
+      if (options.throws === true) throw new SyntaxError("invalid JSON");
+      return options.payload ?? hotExitPayload();
+    },
+    url: () => options.url ?? "http://127.0.0.1:1983/api/editor/hot-exit/write",
+  } as unknown as Request;
+}
+
+describe("matchesExactHotExitSnapshot", () => {
+  it("accepts the complete expected buffer and its production identity", () => {
+    expect(matchesExactHotExitSnapshot(hotExitPayload(), EXACT_EXPECTATION)).toBe(true);
   });
 
-  // The tolerances that must survive, or the guard would fail correct products.
-  it("allows a line the caller legitimately repeated", () => {
-    const same = ["same", "same"];
-    expect(replacementViolations(same, same, OLD)).toEqual([]);
+  it("treats CRLF as the same Monaco model text while preserving all other whitespace", () => {
+    const crlfContent = EXACT_EXPECTATION.content.replace(/\n/gu, "\r\n");
+    expect(
+      matchesExactHotExitSnapshot(hotExitPayload({ content: crlfContent }), EXACT_EXPECTATION),
+    ).toBe(true);
+    expect(
+      matchesExactHotExitSnapshot(
+        hotExitPayload({ content: EXACT_EXPECTATION.content.replace("  return", " return") }),
+        EXACT_EXPECTATION,
+      ),
+    ).toBe(false);
   });
 
-  it("allows a stale line the new text also contains", () => {
-    const kept = ["kept", "fresh"];
-    expect(replacementViolations(kept, kept, ["kept"])).toEqual([]);
+  it("accepts an exactly empty replacement and rejects stale non-empty content", () => {
+    const expected = { ...EXACT_EXPECTATION, content: "" };
+    expect(matchesExactHotExitSnapshot(hotExitPayload({ content: "" }), expected)).toBe(true);
+    expect(matchesExactHotExitSnapshot(hotExitPayload({ content: "stale\n" }), expected)).toBe(
+      false,
+    );
   });
 
-  it("allows Monaco's ghost text to extend or shorten the anchor line", () => {
-    expect(replacementViolations(["ret"], ["return 42;"], OLD)).toEqual([]);
-    expect(replacementViolations(["return 42;"], ["return"], OLD)).toEqual([]);
+  it("preserves the exact cardinality of repeated lines", () => {
+    const expected = { ...EXACT_EXPECTATION, content: "same\nsame\n" };
+    expect(matchesExactHotExitSnapshot(hotExitPayload({ content: "same\nsame\n" }), expected)).toBe(
+      true,
+    );
+    expect(matchesExactHotExitSnapshot(hotExitPayload({ content: "same\n" }), expected)).toBe(
+      false,
+    );
+    expect(
+      matchesExactHotExitSnapshot(hotExitPayload({ content: "same\nsame\nsame\n" }), expected),
+    ).toBe(false);
   });
 
-  it("allows a line to go missing when an inline completion replaced it", () => {
-    expect(replacementViolations(["first", "second"], ["first"], OLD)).toEqual([]);
+  it.each([
+    ["stale off-screen suffix", `${EXACT_EXPECTATION.content}stale\n`],
+    ["truncated buffer", EXACT_EXPECTATION.content.slice(0, -3)],
+    ["appended duplicate", `${EXACT_EXPECTATION.content}${EXACT_EXPECTATION.content}`],
+  ])("rejects a %s", (_label, content) => {
+    expect(matchesExactHotExitSnapshot(hotExitPayload({ content }), EXACT_EXPECTATION)).toBe(false);
   });
 
-  describe("emptying the buffer", () => {
-    it("accepts an empty buffer when that is what was asked for", () => {
-      expect(replacementViolations([""], [""], OLD)).toEqual([]);
-    });
+  it.each([
+    ["paneId", "pane-2"],
+    ["relativePath", "src/other.ts"],
+    ["windowId", "other-editor"],
+    ["workspaceRoot", "/workspace/other"],
+  ])("rejects the wrong %s", (field, value) => {
+    expect(matchesExactHotExitSnapshot(hotExitPayload({ [field]: value }), EXACT_EXPECTATION)).toBe(
+      false,
+    );
+  });
 
-    it("rejects leftovers when the buffer was supposed to be emptied", () => {
-      const violations = replacementViolations([""], OLD, OLD);
-      expect(violations).toHaveLength(1);
-      expect(violations[0]).toContain("expected an empty buffer");
-    });
+  it.each([undefined, null, {}, { snapshot: null }, { snapshot: { content: 1 } }])(
+    "rejects an invalid payload (%j)",
+    (payload) => {
+      expect(matchesExactHotExitSnapshot(payload, EXACT_EXPECTATION)).toBe(false);
+    },
+  );
+});
+
+describe("isExactHotExitWrite", () => {
+  it("delegates an exact hot-exit POST payload to the pure snapshot matcher", () => {
+    expect(isExactHotExitWrite(fakeRequest(), EXACT_EXPECTATION)).toBe(true);
+  });
+
+  it.each([
+    fakeRequest({ method: "GET" }),
+    fakeRequest({ url: "http://127.0.0.1:1983/api/editor/hot-exit/read" }),
+    fakeRequest({ payload: hotExitPayload({ paneId: "pane-2" }) }),
+    fakeRequest({ throws: true }),
+  ])("rejects a non-matching request", (request) => {
+    expect(isExactHotExitWrite(request, EXACT_EXPECTATION)).toBe(false);
   });
 });

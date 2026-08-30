@@ -7,8 +7,7 @@
 // callers receive typed failures, never raw process output.
 
 import { spawn, type ChildProcess } from "node:child_process";
-import { join } from "node:path";
-import { resolveWindowsSystemDirectory } from "@oscharko-dev/keiko-security";
+import { resolveWindowsSystemExecutable } from "@oscharko-dev/keiko-security";
 import type { NativeFileDialogRequest } from "@oscharko-dev/keiko-contracts";
 import { NATIVE_FILE_DIALOG_MAX_SELECTIONS } from "@oscharko-dev/keiko-contracts/runtime/native-file-dialog";
 import { buildSandboxEnv } from "@oscharko-dev/keiko-tools";
@@ -431,13 +430,12 @@ function windowsPowershellPath(): string {
   // segment, while PowerShell 5.1 lives under a nested `WindowsPowerShell\v1.0`. The validated ROOT
   // is what matters, so the remaining segments are joined from literals that never touch the
   // environment. Same shape as keiko-cli's `windowsPowerShellExecutable`.
-  return join(
-    resolveWindowsSystemDirectory(),
+  return resolveWindowsSystemExecutable([
     "System32",
     "WindowsPowerShell",
     "v1.0",
     "powershell.exe",
-  );
+  ]);
 }
 
 export function createWindowsNativeFileDialogAdapter(

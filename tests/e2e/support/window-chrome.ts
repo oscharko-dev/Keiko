@@ -15,6 +15,21 @@
 // and then clicks, so the same journey passes on any engine without weakening a single assertion.
 import { expect, type Locator } from "@playwright/test";
 
+function desktopWindowFrame(windowRegion: Locator): Locator {
+  // A title such as "Problems" can label both the desktop window and a nested product region. Keep
+  // the caller's semantic locator, but intersect it with the product's own window-frame contract so
+  // strict mode never has to guess which of the two should receive focus.
+  return windowRegion.and(
+    windowRegion.page().locator('[data-window-id][aria-roledescription="window"]'),
+  );
+}
+
+async function activateFrame(frame: Locator): Promise<void> {
+  await expect(frame).toHaveCount(1);
+  await frame.focus();
+  await expect(frame).toHaveAttribute("data-top", "true");
+}
+
 /**
  * Brings `windowRegion` to the front and waits until the product has actually raised it.
  *
@@ -23,10 +38,7 @@ import { expect, type Locator } from "@playwright/test";
  * the window body might.
  */
 export async function activateWindow(windowRegion: Locator): Promise<void> {
-  await windowRegion.focus();
-  // `data-top` is the product's own answer to "is this window on top", so this waits on the real
-  // state transition rather than on a timeout.
-  await expect(windowRegion).toHaveAttribute("data-top", "true");
+  await activateFrame(desktopWindowFrame(windowRegion));
 }
 
 /**
@@ -38,6 +50,7 @@ export async function clickWindowChromeButton(
   windowRegion: Locator,
   buttonName: string,
 ): Promise<void> {
-  await activateWindow(windowRegion);
-  await windowRegion.getByRole("button", { name: buttonName }).click();
+  const frame = desktopWindowFrame(windowRegion);
+  await activateFrame(frame);
+  await frame.getByRole("button", { name: buttonName }).click();
 }

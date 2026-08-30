@@ -23,6 +23,10 @@ import {
   decodeCodingAppSessionPairingFragment,
 } from "@oscharko-dev/keiko-contracts/runtime/coding-app-session";
 import { computeLauncherPairingClaim } from "@oscharko-dev/keiko-server";
+import {
+  WindowsSystemBinaryMissingError,
+  type SecurityLogEvent,
+} from "@oscharko-dev/keiko-security";
 import { SDK_VERSION } from "@oscharko-dev/keiko-sdk";
 import { resolveExternalOpener, runLifecycleCli, safeKillProcess } from "./lifecycle.js";
 import type { CliIo } from "./runner.js";
@@ -648,7 +652,10 @@ describe("runLifecycleCli", () => {
   it("opens Windows URLs through an encoded PowerShell command, never cmd start", () => {
     const url = "http://127.0.0.1:1983/#keiko-app-session=%7B%22requestId%22%3A%22r%22%7D";
     const win = resolveExternalOpener(url, "win32");
-    expect(win.command).toBe("powershell.exe");
+    expect(win.command).not.toBe("powershell.exe");
+    expect(win.command.toLowerCase()).toMatch(
+      /\\system32\\windowspowershell\\v1\.0\\powershell\.exe$/u,
+    );
     expect(win.args).not.toContain(url);
     const encoded = win.args.at(-1) ?? "";
     expect(Buffer.from(encoded, "base64").toString("utf16le")).toBe(`Start-Process '${url}'`);
@@ -1164,6 +1171,59 @@ describe("runLifecycleCli", () => {
     expect(c.out()).toContain("Keiko UI running");
     expect(c.err()).toContain("failed to open http://127.0.0.1:1983");
   });
+
+  it.each([
+    [
+      "hostile root",
+      { SystemRoot: String.raw`\\attacker\share` },
+      undefined,
+      "security",
+      "security.windows-lifecycle-opener.system-root-refused",
+      "WindowsSystemDirectoryError",
+    ],
+    [
+      "missing PowerShell",
+      {},
+      (): void => {
+        throw new WindowsSystemBinaryMissingError();
+      },
+      "diagnostic",
+      "security.windows-lifecycle-opener.system-binary-missing",
+      "WINDOWS_SYSTEM_BINARY_MISSING",
+    ],
+  ] as const)(
+    "keeps start successful and logs a body-free Windows opener %s failure",
+    async (_label, env, openExternal, category, op, errorKind) => {
+      const root = makeRoot();
+      const c = makeIo();
+      const events: SecurityLogEvent[] = [];
+      const child = { pid: 12345, unref: vi.fn(), once: vi.fn() } as unknown as ChildProcess;
+
+      const code = await runLifecycleCli("start", ["--open"], c.io, env, {
+        cwd: root,
+        platform: () => "win32",
+        spawnFn: () => child,
+        fetchImpl: () => Promise.resolve(Response.json({ version: SDK_VERSION }, { status: 200 })),
+        isProcessAlive: () => true,
+        isPortAvailable: () => Promise.resolve(true),
+        killProcess: vi.fn(),
+        ...(openExternal === undefined ? {} : { openExternal }),
+        securityLogSinkFactory: () => ({
+          write: (event): void => {
+            events.push(event);
+          },
+        }),
+        sleep: () => Promise.resolve(),
+      });
+
+      expect(code).toBe(0);
+      expect(c.err()).toContain("failed to open http://127.0.0.1:1983");
+      expect(events).toHaveLength(1);
+      expect(events[0]).toMatchObject({ category, op, errorKind });
+      expect(events[0]?.correlationId).toMatch(/^[0-9a-f-]{36}$/u);
+      expect(JSON.stringify(events)).not.toContain("attacker");
+    },
+  );
 
   it("escalates stop to SIGKILL when the process misses the graceful deadline", async () => {
     const root = makeRoot();

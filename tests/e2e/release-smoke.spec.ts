@@ -221,15 +221,16 @@ async function openTreePath(
   await row.click();
 }
 
-// Delegates to the shared, engine-agnostic implementation: focusing Monaco's ACTUAL input surface
-// (EditContext in Chromium, textarea.inputarea in Firefox) is what makes the select-all land, and
-// the helper verifies the replacement instead of letting a silent no-op corrupt the buffer.
+// Delegates to the shared, fail-closed implementation: it focuses Monaco's actual input surface and
+// verifies the complete model-backed hot-exit payload instead of letting a silent no-op corrupt the
+// buffer. Journeys that invoke it retain an explicit Gecko skip until the fallback accepts select-all.
 async function replaceMonacoText(
   page: Page,
   editorWindow: ReturnType<Page["getByRole"]>,
   text: string,
+  workspaceRoot: string,
 ): Promise<void> {
-  await replaceEditorBuffer(page, editorWindow, text);
+  await replaceEditorBuffer(page, editorWindow, text, workspaceRoot);
 }
 
 async function stubInlineCompletionRoutes(page: Page): Promise<{
@@ -458,8 +459,8 @@ test("files editor opens, edits, saves, conflicts, reloads, and closes @smoke", 
   // EditContext API where it exists and falls back to `textarea.inputarea` where it does not;
   // Firefox has no EditContext (verified from a trace snapshot of this editor:
   // `native-edit-context` 0 occurrences, `inputarea` 2). On that fallback surface neither Ctrl+A
-  // nor Cmd+A reaches Monaco's keybinding service, so the select-all selects nothing, the
-  // following insert APPENDS, and the buffer doubles. The shared helper
+  // nor Cmd+A reaches Monaco's keybinding service, so the delete-plus-paste sequence cannot replace
+  // the full model and stale content survives. The shared helper
   // (support/editor-chord.ts) now fails loudly at that exact point instead of letting the
   // corruption surface later as an unrelated strict-mode violation.
   // The PRODUCT is not implicated: its own platform detection reads `navigator.platform` from the
@@ -480,7 +481,7 @@ test("files editor opens, edits, saves, conflicts, reloads, and closes @smoke", 
   // Issue #1205: dirty/saved/conflict state is communicated by the unified status bar's save field.
   const saveField = editorWindow.locator('[data-field="save"]');
   const savedText = "export const e2eFixture = 'saved in browser smoke';\n";
-  await replaceMonacoText(page, editorWindow, savedText);
+  await replaceMonacoText(page, editorWindow, savedText, projectPath);
   await expect(saveField).toHaveText("Unsaved");
   await editorWindow.getByRole("button", { name: "Save" }).click();
   await expect
@@ -490,7 +491,7 @@ test("files editor opens, edits, saves, conflicts, reloads, and closes @smoke", 
   await expect(editorWindow.getByTestId("editor-local-history-protection")).toHaveCount(0);
 
   const conflictDraft = "export const e2eFixture = 'conflicting browser draft';\n";
-  await replaceMonacoText(page, editorWindow, conflictDraft);
+  await replaceMonacoText(page, editorWindow, conflictDraft, projectPath);
   writeFileSync(absolutePath, "export const e2eFixture = 'external edit';\n", "utf8");
   await editorWindow.getByRole("button", { name: "Save" }).click();
   await expect(editorWindow.getByRole("alert")).toContainText("Save conflict");
@@ -507,7 +508,12 @@ test("files editor opens, edits, saves, conflicts, reloads, and closes @smoke", 
 
   // Issue #1376 (AC1/D4): a dirty tab close is gated by the in-app dialog (no native confirm), and
   // Cancel preserves the buffer.
-  await replaceMonacoText(page, editorWindow, "export const e2eFixture = 'dirty again';\n");
+  await replaceMonacoText(
+    page,
+    editorWindow,
+    "export const e2eFixture = 'dirty again';\n",
+    projectPath,
+  );
   // 0.3.0 audit: the tab strip now satisfies `aria-required-children`, so the close affordance is a
   // decorative span inside the tab rather than an owned button of the tablist. The keyboard path is
   // the accessible one (WAI-ARIA APG deletable tabs: Delete, or Backspace on Mac keyboards), so the
@@ -599,7 +605,7 @@ test("editor presents the VS Code-feeling UX surface: status bar, tabs, cursor, 
   await expect(editorWindow.getByRole("tabpanel")).toBeVisible();
 
   // Typing updates the live cursor field; "const answer = 42;" is 18 chars → caret at column 19.
-  await replaceMonacoText(page, editorWindow, "const answer = 42;");
+  await replaceMonacoText(page, editorWindow, "const answer = 42;", projectPath);
   await expect(statusBar.locator('[data-field="cursor"]')).toHaveText("Ln 1, Col 19");
 
   // Command palette integration: F1 opens Monaco's native palette carrying the Keiko Generate Tests
@@ -633,8 +639,8 @@ test("editor surfaces diagnostics and hover from the governed language service @
   // EditContext API where it exists and falls back to `textarea.inputarea` where it does not;
   // Firefox has no EditContext (verified from a trace snapshot of this editor:
   // `native-edit-context` 0 occurrences, `inputarea` 2). On that fallback surface neither Ctrl+A
-  // nor Cmd+A reaches Monaco's keybinding service, so the select-all selects nothing, the
-  // following insert APPENDS, and the buffer doubles. The shared helper
+  // nor Cmd+A reaches Monaco's keybinding service, so the delete-plus-paste sequence cannot replace
+  // the full model and stale content survives. The shared helper
   // (support/editor-chord.ts) now fails loudly at that exact point instead of letting the
   // corruption surface later as an unrelated strict-mode violation.
   // The PRODUCT is not implicated: its own platform detection reads `navigator.platform` from the
@@ -676,7 +682,12 @@ test("editor surfaces diagnostics and hover from the governed language service @
   await expect(editorWindow.locator(".monaco-editor")).toBeVisible();
 
   // A buffer with a deliberate type error on line 1 and a hoverable symbol used on line 2.
-  await replaceMonacoText(page, editorWindow, "const greeting: string = 42;\ngreeting;\n");
+  await replaceMonacoText(
+    page,
+    editorWindow,
+    "const greeting: string = 42;\ngreeting;\n",
+    projectPath,
+  );
 
   // Diagnostics: the type error must surface as a Monaco error squiggle (markers set by the bridge
   // after the governed BFF roundtrip + debounce).
@@ -720,8 +731,8 @@ test("editor inline ghost text renders and Tab accepts it @smoke", async ({
   // EditContext API where it exists and falls back to `textarea.inputarea` where it does not;
   // Firefox has no EditContext (verified from a trace snapshot of this editor:
   // `native-edit-context` 0 occurrences, `inputarea` 2). On that fallback surface neither Ctrl+A
-  // nor Cmd+A reaches Monaco's keybinding service, so the select-all selects nothing, the
-  // following insert APPENDS, and the buffer doubles. The shared helper
+  // nor Cmd+A reaches Monaco's keybinding service, so the delete-plus-paste sequence cannot replace
+  // the full model and stale content survives. The shared helper
   // (support/editor-chord.ts) now fails loudly at that exact point instead of letting the
   // corruption surface later as an unrelated strict-mode violation.
   // The PRODUCT is not implicated: its own platform detection reads `navigator.platform` from the
@@ -740,7 +751,7 @@ test("editor inline ghost text renders and Tab accepts it @smoke", async ({
   const assertNoPageErrors = collectPageErrors(page);
 
   const editorWindow = await openSmokeEditor(page, request, projectPath, relativePath);
-  await replaceMonacoText(page, editorWindow, "export function answer() {\n  ret");
+  await replaceMonacoText(page, editorWindow, "export function answer() {\n  ret", projectPath);
   await expect.poll(() => inlineRequests.length).toBeGreaterThan(0);
   await expect(page.getByRole("alert").filter({ hasText: "urn 42;" }).first()).toBeVisible();
 
@@ -818,7 +829,8 @@ test("memory and local-knowledge navigation surfaces load without client errors 
 // The Gecko-safe half of the three journeys above, and the reason they can stay skipped without
 // leaving the editor unproven on a second engine (PR #3355 review).
 //
-// What those three skip is one GESTURE: replacing the whole buffer via select-all + insertText.
+// What those three skip is one GESTURE: replacing the whole buffer via select-all, delete, and
+// paste.
 // Monaco 0.56 has no EditContext on Gecko, so the chord never reaches its keybinding service.
 // Everything AROUND that gesture — mounting the editor, loading a file through the governed read
 // path, rendering its content, the status bar, tab switching, closing — is engine-independent

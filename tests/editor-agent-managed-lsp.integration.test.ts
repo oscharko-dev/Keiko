@@ -27,7 +27,6 @@ import {
   resolveEffectiveCodingWorkbenchMode,
 } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench";
 import { DEFAULT_LANGUAGE_SERVICE_LIMITS } from "@oscharko-dev/keiko-contracts/runtime/language-service";
-import { DEFAULT_LSP_PROCESS_CONFIG } from "@oscharko-dev/keiko-contracts/runtime/lsp-process";
 import { EDITOR_AGENT_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts/runtime/editor-agent";
 import {
   createFetchEditorAgentHttpTransport,
@@ -195,12 +194,10 @@ function managedSpawn(
   };
 }
 
-// Spawns a process that crashes immediately, over and over, driving the manager's own restart
-// throttle to exhaustion (RESTART_THROTTLED) -- the docked-agent-visible shape of a crash-looping,
-// unhealthy provider (docs/qa: "Unhealthy ... including crash-loop exhaustion"). The crash is
-// deferred to a microtask so the manager's `onExit` listener is registered first while the fake can
-// never briefly negotiate capabilities before the crash. There is no real backoff delay anywhere in
-// the throttle, so the whole loop resolves in milliseconds, never the real restart window.
+// Spawns a process that crashes immediately. Because an ordinary exit does not prove that the
+// provider's descendants are gone, the manager must quarantine that generation and refuse to start
+// a replacement. The crash is deferred to a microtask so the manager's `onExit` listener is
+// registered first while the fake can never briefly negotiate capabilities before the crash.
 function crashLoopSpawn(methods: (readonly string[])[]): LspSpawnFn {
   return () => {
     const controller = createFakeLspProcess();
@@ -838,7 +835,7 @@ describe("docked-agent managed-LSP integration (#2281)", () => {
     });
   });
 
-  it("fails closed with TIMED_OUT when the provider is unhealthy from crash-loop exhaustion, never negotiating", async () => {
+  it("fails closed after an unconfirmed provider exit without spawning a replacement or negotiating", async () => {
     const fixture = await createFixture(undefined, {}, (methods) => crashLoopSpawn(methods));
     await activate(fixture, "python", 0);
     await registerSnapshot(fixture, fixture.root);
@@ -847,7 +844,10 @@ describe("docked-agent managed-LSP integration (#2281)", () => {
       ok: true,
       result: { status: "failed", failure: { code: "TIMED_OUT" } },
     });
-    expect(fixture.spawnedMethods).toHaveLength(DEFAULT_LSP_PROCESS_CONFIG.maxRestartsInWindow + 1);
+    // ADR-0069 D2: an observed leader exit is not proof of whole-tree termination. The former
+    // crash-loop pin expected repeated replacement processes; retaining that expectation would now
+    // bless the parallel-orphan risk this PR closes. One failed generation is the stronger pin.
+    expect(fixture.spawnedMethods).toHaveLength(1);
     expect(fixture.spawnedMethods.flat()).not.toContain("textDocument/references");
     expect(listEditorAgentActionAudit(SESSION_ID).at(-1)).toMatchObject({
       outcome: "failed",

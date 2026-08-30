@@ -110,7 +110,7 @@ describe("managed host semantic tokens", () => {
       { path: "lib.rs", languageId: "rust", text: "struct Other;\n", version: 12 },
       options(spawn),
     );
-    processes[0]?.crash();
+    processes[0]?.emitError();
     const restarted = await runHostLanguageSemanticTokens(
       { path: "lib.rs", languageId: "rust", text: "struct Final;\n", version: 13 },
       options(spawn),

@@ -145,11 +145,21 @@ USERPROFILE (Windows) substituted via the `buildSandboxEnv` env-copy path, exact
 (best-effort `rmSync`). This prevents the LSP server from reading or writing to the operator's
 real home directory.
 
-**POSIX process-group kill:**
+**Cross-platform process-tree kill:**
 On POSIX, the manager spawns with `detached: true` and kills via `process.kill(-pid, signal)` to
-include grandchildren. On Windows, `child.kill(signal)` is used (no tree-kill dependency). The
-escalation sequence on shutdown or forced-dispose is: `SIGTERM` → grace period (configurable,
-default 5 s) → `SIGKILL`. On Windows the sequence degrades to two `child.kill()` calls.
+include grandchildren. On Windows, it uses the shared, synchronous, result-classified
+`taskkill.exe /PID <pid> /T /F` primitive before the direct-child fallback; this is required because
+a `.cmd` language server is wrapped by `cmd.exe` and the actual server is its descendant. The
+escalation sequence on shutdown or forced-dispose is `SIGTERM` → grace period (configurable,
+default 5 s) → `SIGKILL`. A raw pid is never signalled after an observed exit, and a taskkill request
+is not itself treated as exit confirmation. Every adapter kill records a content-free containment
+result that the manager reads synchronously. On Windows, only the shared primitive's completed
+`succeeded` disposition confirms bounded-tree termination. All other dispositions remain
+unconfirmed, including `failed`, `root-not-found`, `blocked-untrusted-system-root`,
+`refused-self-pid`, `budget-exhausted`, `unknown`, and `not-attempted`, even when the direct
+`cmd.exe` wrapper exits.
+On POSIX, successful process-group `SIGKILL` confirms the bounded group; `SIGTERM` or a direct-child
+fallback does not. Confirmation is monotonic within one child generation.
 
 ### D3 — Transport: minimal LSP base-protocol framing implemented in-house; no vscode-jsonrpc
 
@@ -181,7 +191,9 @@ codec module is a contained replacement point behind the `LspJsonRpcClient` port
 
 **Initialize with timeout:** after spawn, the manager sends LSP `initialize` within
 `initializeTimeoutMs` (configurable, default 10 s). A timeout transitions to
-`LspProcessStatus.INITIALIZE_TIMEOUT` and triggers a restart attempt.
+`LspProcessStatus.INITIALIZE_TIMEOUT`, requests bounded process-tree termination, and triggers a
+restart attempt only after that same generation has both emitted `exit` and reported confirmed tree
+containment. An unconfirmed predecessor remains owned and prevents a replacement from starting.
 
 **Per-request deadline:** every outbound LSP request carries a deadline derived from an injected
 `now()` clock + `requestTimeoutMs` (default equals `DEFAULT_LANGUAGE_SERVICE_LIMITS.deadlineMs`,
@@ -196,19 +208,47 @@ the pending promise with `LspProcessErrorCode.REQUEST_TIMED_OUT`, but does NOT k
 **Response byte cap:** enforced at the frame reader boundary (D3 / I3 equivalent above).
 
 **Crash detection:** `child 'exit'` and `child 'error'` events transition the manager to
-`LspProcessStatus.CRASHED` and initiate a restart-throttle check.
+`LspProcessStatus.CRASHED`. An unsolicited immediate-child `exit` is not descendant-containment
+proof: the generation remains owned as `tree-unconfirmed`, no replacement starts, and the retained
+pid is evidence only — it is never signalled after exit because the OS may have reused it. A
+post-spawn `error` or frame-reader failure requests process-tree termination, retains the child
+handle, and defers the restart-throttle check until that same generation has BOTH emitted `exit` and
+reported confirmed bounded-tree containment. An immediate wrapper exit cannot override a failed
+Windows tree-kill disposition; the manager stays fail-closed with no replacement. An asynchronous
+pre-spawn error whose handle never acquired a pid is the sole confirmed-not-spawned exception: Node
+does not emit `exit` for that shape, so it is immediately safe to release and enter the restart
+check. The host-language process pool preserves any manager with retained ownership as a quarantine
+tombstone across retries, idle eviction, and activation/configuration invalidation. A replacement
+pool entry may be published only after disposal confirms that the predecessor released ownership;
+changing configuration is not authority to overlap process trees. Acquisition is serialized per
+pool key across that asynchronous disposal, so concurrent revisions cannot bind one request to the
+other revision's manager. Pool shutdown requests disposal but does not discard an unconfirmed
+tombstone while the module remains callable; it gates new acquisitions until in-flight per-key
+queues drain and disposal completes. Only process teardown makes the in-memory pool moot.
 
 **Restart throttling:** a rolling window (configurable `restartWindowMs` / `maxRestartsInWindow`)
 tracked with an injected clock. If the window is exhausted, the manager transitions to
 `LspProcessStatus.RESTART_THROTTLED` and stays down. The window resets when the process is up
-for at least `restartWindowMs` without a crash.
+for at least `restartWindowMs` without a crash. The host pool preserves a terminal manager for the
+same configuration revision rather than resetting its throttle or configuration fault on the next
+request. Explicit invalidation or a new revision may replace it only through the ownership-settling
+disposal sequence above.
 
 **Graceful shutdown:** on `dispose()` or workspace-close, the manager sends LSP `shutdown` request
 (with `shutdownTimeoutMs` deadline), then `exit` notification, then begins SIGTERM→grace→SIGKILL.
 All pending request promises are rejected with `LspProcessErrorCode.DISPOSED` before the kill.
 
-**Dispose/workspace-close:** kills the process group, deletes the ephemeral HOME, and rejects all
-pending promises. The manager becomes inert; further method calls throw synchronously.
+**Dispose/workspace-close:** requests graceful shutdown and then bounded process-tree termination,
+rejects all pending promises, and deletes generation resources. A graceful protocol exit before any
+forced signal may release ownership after the observed exit. Once forced termination is requested,
+release requires both the immediate-child exit and confirmed bounded-tree disposition. If either is
+unconfirmed, the manager becomes inert while retaining the generation handle/evidence join key; its
+terminal lifecycle event retains `childPid`, and body-free activity evidence distinguishes
+`exit-unconfirmed` from `tree-unconfirmed`. A later exit releases only an exit-unconfirmed generation;
+it cannot turn a failed tree kill into success. After disposal, `sendRequest()` returns a rejected
+promise with `DISPOSED`, notifications are no-ops, notification subscription returns a no-op
+unsubscribe function, lifecycle getters remain readable, and repeated `dispose()` calls are async
+no-ops.
 
 ### D5 — Status integration: pure mapping function, no UI rewrite, default registry unchanged
 

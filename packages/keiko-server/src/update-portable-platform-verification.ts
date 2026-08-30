@@ -5,9 +5,8 @@ import {
   PortableUpdateStagingError,
 } from "./update-portable-staging-shared.js";
 import {
-  WINDOWS_SYSTEM_POWERSHELL,
+  resolveWindowsAuthenticodeSystem,
   windowsAuthenticodeIdentityScript,
-  windowsSystemEnvironment,
 } from "./coding-runtime/windowsPortableAuthenticode.js";
 
 const VERIFY_TIMEOUT_MS = 30_000;
@@ -141,8 +140,9 @@ async function verifyWindowsPath(
   signal: AbortSignal | undefined,
   commandRunner: PlatformCommandRunner,
 ): Promise<string> {
+  const system = resolveWindowsAuthenticodeSystem();
   const output = await commandRunner(
-    WINDOWS_SYSTEM_POWERSHELL,
+    system.command,
     [
       "-NoLogo",
       "-NoProfile",
@@ -151,7 +151,7 @@ async function verifyWindowsPath(
       windowsAuthenticodeIdentityScript(),
       path,
     ],
-    windowsSystemEnvironment(),
+    system.env,
     signal,
   );
   return windowsSignerIdentity(output);

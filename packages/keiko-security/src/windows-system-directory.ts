@@ -11,32 +11,15 @@
 // and `isAbsolute` accepts `\\attacker\share`, `\\?\C:\Windows` and root-relative `\Windows`, the
 // exact three shapes the hardened one rejects.
 //
-// What it can and cannot promise: Node exposes no binding to `GetSystemDirectoryW`, the only
-// OS-authoritative source, so this validates the SHAPE of an environment override and, for a
-// resolved binary (PR #3354 review round 2), confirms a regular file actually exists there on win32
-// — enough that a binary resolved under it can never land on a workspace-adjacent, PATH-adjacent,
-// remote, reparsed, or purely hypothetical path. It is STILL not proof of live OS identity: a
-// hostile-but-well-shaped root that points at a REAL directory an attacker planted on disk (e.g.
-// `C:\Attacker\Windows`, complete with its own `System32`) passes both the shape check and the
-// existence check, because nothing short of `GetSystemDirectoryW` itself can tell that apart from
-// the genuine system directory. The residual is documented rather than papered over.
-//
-// PR #3355 review (finding T19) asked whether that residual can be closed further, and investigated
-// two options before choosing to leave it as-is; the full trade-off analysis is recorded as
-// Alternative 6 in ADR-0006. In short: (1) an OS-authoritative check via a spawned
-// `powershell.exe -Command [System.Environment]::SystemDirectory` is circular — the verifier binary
-// itself lives under the very `SystemRoot` being verified, so a sound bootstrap can only use the
-// HARDCODED default to find it, which then cannot verify a genuinely non-standard install at all —
-// and it would add a cold PowerShell start (commonly 200-500ms) to a path `killGroup`'s
-// `taskkill.exe` escalation runs SYNCHRONOUSLY on every SIGTERM/SIGKILL step (ADR-0006 D2
-// Dimension 5); (2) refusing every `SystemRoot`/`WINDIR` override outright would regress a genuine,
-// if uncommon, non-`C:`-drive Windows install to total failure on every resolution, for a residual
-// whose precondition (an attacker who can set env vars for Keiko's OWN process AND has separately
-// planted a complete on-disk directory tree, `System32` included) already implies local write access
-// this module was never positioned to deny. Both are disproportionate to what they would close;
-// shape-plus-existence validation remains the resolver's full, documented contract.
+// Windows exposes the live OS root in the object-manager namespace as `\SystemRoot`. The Win32
+// `\\?\GLOBALROOT` escape reaches that namespace without consulting process environment variables,
+// drive mappings, the workspace, or PATH. On win32 this module compares the filesystem identity of
+// an environment-selected candidate with that OS-owned reference and rejects a reparse anywhere in
+// its resolved path. `resolveWindowsSystemDirectory` retains the conventional path only for a
+// sanitized child environment; executable resolvers traverse the authoritative GLOBALROOT path.
+// Shape and binary-existence checks remain defence in depth; identity is the trust decision.
 
-import { statSync } from "node:fs";
+import { lstatSync, realpathSync, statSync } from "node:fs";
 import { win32 as win32Path } from "node:path";
 
 /** Thrown when `SystemRoot`/`WINDIR` — or a requested binary name — fails canonical validation. */
@@ -47,7 +30,18 @@ export class WindowsSystemDirectoryError extends Error {
   }
 }
 
+/** Thrown when a canonically resolved System32 binary is absent from the host image. */
+export class WindowsSystemBinaryMissingError extends Error {
+  public readonly code = "WINDOWS_SYSTEM_BINARY_MISSING" as const;
+
+  public constructor() {
+    super("resolved Windows system binary does not exist as a regular file");
+    this.name = "WindowsSystemBinaryMissingError";
+  }
+}
+
 export const DEFAULT_WINDOWS_SYSTEM_ROOT = String.raw`C:\Windows`;
+const WINDOWS_OBJECT_MANAGER_SYSTEM_ROOT = String.raw`\\?\GLOBALROOT\SystemRoot`;
 
 // Drive-absolute only (`C:\...`). Deliberately excludes every other Windows path SHAPE that
 // resolves against something other than one fixed drive letter: UNC (`\\server\share\...`) and
@@ -62,10 +56,12 @@ const DRIVE_ABSOLUTE_WINDOWS_PATH = /^[A-Za-z]:\\/;
 // eslint-disable-next-line no-control-regex -- intentionally matches control chars to REJECT them
 const CONTROL_CHARACTER = /[\u0000-\u001f\u007f]/;
 
-// cmd.exe's metacharacter class. A system-directory override carrying one of these would be
-// re-interpreted the moment the resolved path reaches a command line, so it is rejected at the
-// source rather than escaped at each consumer.
-const CMD_METACHARACTER = /[()\][%!^"`<>&|;, *?]/;
+// cmd.exe's ONE authoritative metacharacter class for both the system-directory validator here and
+// keiko-tools' command-line escaping. Exporting the source (rather than a stateful global RegExp)
+// lets the downstream escaping pass add its own capture group and `g` flag without copying this
+// security-sensitive character list by hand.
+const CMD_METACHARACTER = /[()\][%!^"`<>&|;, *?]/u;
+export const WINDOWS_CMD_METACHARACTER_SOURCE = CMD_METACHARACTER.source;
 
 function hasPathTraversalSegment(candidate: string): boolean {
   return candidate.split(/[\\/]/).includes("..");
@@ -113,6 +109,69 @@ function assertCanonicalSystemRoot(candidate: string): void {
   }
 }
 
+export type WindowsSystemDirectoryIdentityCheck = (
+  candidate: string,
+  authoritativeRoot: string,
+) => boolean;
+
+function comparableWindowsPath(path: string): string {
+  const normalized = win32Path.normalize(path);
+  const withoutLocalDevicePrefix = /^\\\\\?\\[A-Za-z]:\\/u.test(normalized)
+    ? normalized.slice(4)
+    : normalized;
+  return withoutLocalDevicePrefix.replace(/\\+$/u, "").toLowerCase();
+}
+
+// Uses stable filesystem object identity rather than path text. BigInt stats avoid precision loss
+// in Windows' 64-bit file index. lstat on the candidate deliberately rejects a final reparse point
+// (Node reports NTFS junctions as symbolic links); stat then follows ordinary path resolution for
+// the identity comparison. A host/filesystem that cannot supply non-zero identity fields fails
+// closed instead of treating two unknown identities as equal.
+export function sameWindowsSystemDirectoryIdentity(
+  candidate: string,
+  authoritativeRoot: string,
+): boolean {
+  try {
+    const candidateLink = lstatSync(candidate, { bigint: true });
+    if (!candidateLink.isDirectory() || candidateLink.isSymbolicLink()) return false;
+    const candidateRealPath = realpathSync.native(candidate);
+    // Reject reparses in ANY ancestor, not only a final junction. Otherwise
+    // `C:\workspace\mutable-junction\Windows` can identify the real root during this check and be
+    // retargeted to a planted System32 before a caller joins and spawns its binary.
+    if (comparableWindowsPath(candidateRealPath) !== comparableWindowsPath(candidate)) return false;
+    const candidateStats = statSync(candidateRealPath, { bigint: true });
+    const authoritativeStats = statSync(authoritativeRoot, { bigint: true });
+    return (
+      authoritativeStats.isDirectory() &&
+      candidateStats.dev !== 0n &&
+      candidateStats.ino !== 0n &&
+      candidateStats.dev === authoritativeStats.dev &&
+      candidateStats.ino === authoritativeStats.ino
+    );
+  } catch {
+    return false;
+  }
+}
+
+function defaultSystemDirectoryIdentity(candidate: string, authoritativeRoot: string): boolean {
+  if (process.platform !== "win32") return true;
+  return sameWindowsSystemDirectoryIdentity(candidate, authoritativeRoot);
+}
+
+function assertSystemDirectoryIdentity(
+  candidate: string,
+  identityCheck: WindowsSystemDirectoryIdentityCheck,
+): void {
+  try {
+    if (identityCheck(candidate, WINDOWS_OBJECT_MANAGER_SYSTEM_ROOT)) return;
+  } catch {
+    // Fall through to the same fail-closed typed error as a negative identity decision.
+  }
+  throw new WindowsSystemDirectoryError(
+    "Windows system directory override does not identify the live OS system root",
+  );
+}
+
 /**
  * The trusted Windows system directory: `SystemRoot`, then `WINDIR`, then the hard-coded default —
  * validated for canonical shape in every case. Every trusted Windows system-binary resolution in
@@ -121,9 +180,11 @@ function assertCanonicalSystemRoot(candidate: string): void {
  */
 export function resolveWindowsSystemDirectory(
   env: Readonly<Record<string, string | undefined>> = process.env,
+  identityCheck: WindowsSystemDirectoryIdentityCheck | undefined = defaultSystemDirectoryIdentity,
 ): string {
   const candidate = env.SystemRoot ?? env.WINDIR ?? DEFAULT_WINDOWS_SYSTEM_ROOT;
   assertCanonicalSystemRoot(candidate);
+  assertSystemDirectoryIdentity(candidate, identityCheck);
   return candidate;
 }
 
@@ -131,37 +192,86 @@ export function resolveWindowsSystemDirectory(
 // hermetically on any host, and so a future caller can supply its own filesystem seam. Every
 // current caller of `resolveWindowsSystemBinary` omits this (defaults to
 // `defaultWindowsBinaryExists`) — no existing call site needs to change.
-type WindowsBinaryExistsCheck = (resolvedPath: string) => boolean;
+export type WindowsBinaryExistsCheck = (resolvedPath: string) => boolean;
 
-// A shape-valid override that resolves to nothing on disk (a typo, a stale override, a root that
-// never had a System32) previously reached `spawn` and failed THERE, off this module's fail-closed
-// path, as a raw ENOENT several layers away. Checking here moves that failure to resolution, where
-// it produces the SAME typed error as every other refusal. Gated on the platform genuinely being
-// win32: on any other host `C:\...` is never a real filesystem location under this process, so an
-// unconditional check would fail EVERY resolution and make the pure-SHAPE contract this package's
-// and keiko-tools' own hermetic, cross-platform test suites depend on untestable off Windows. This
-// narrows the attack surface; it does not prove OS identity — see the file header.
+// Checking here moves an absent System32 binary from a raw spawn-time ENOENT to a dedicated
+// operational-missing type. It is gated on the platform genuinely being win32: on another host a
+// Windows path is not meaningful, and hermetic callers inject the seam above. Directory identity
+// has already been proven before this check runs; this final step classifies a missing/stripped
+// system binary separately from an untrusted root.
 function defaultWindowsBinaryExists(resolvedPath: string): boolean {
   if (process.platform !== "win32") return true;
   try {
     return statSync(resolvedPath).isFile();
-  } catch {
-    return false;
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code === "ENOENT" || code === "ENOTDIR") return false;
+    throw error;
   }
+}
+
+function assertSafeSystemPathSegment(segment: string): void {
+  if (
+    segment.length === 0 ||
+    segment === "." ||
+    segment === ".." ||
+    /[\\/]/u.test(segment) ||
+    CONTROL_CHARACTER.test(segment) ||
+    CMD_METACHARACTER.test(segment) ||
+    segment.includes(":")
+  ) {
+    throw new WindowsSystemDirectoryError(
+      "Windows system executable segments must be bare names without control characters or command syntax",
+    );
+  }
+}
+
+/**
+ * Resolve a fixed, literal executable path beneath the authenticated Windows root. This is the
+ * nested counterpart to `resolveWindowsSystemBinary` for OS tools such as
+ * `System32/WindowsPowerShell/v1.0/powershell.exe`. Every component is a bare segment, and the
+ * production path is joined beneath the OS-owned GLOBALROOT namespace so the selected environment
+ * path is never traversed again after identity validation.
+ */
+export function resolveWindowsSystemExecutable(
+  segments: readonly string[],
+  env: Readonly<Record<string, string | undefined>> = process.env,
+  existsAsFile: WindowsBinaryExistsCheck | undefined = defaultWindowsBinaryExists,
+  identityCheck: WindowsSystemDirectoryIdentityCheck | undefined = defaultSystemDirectoryIdentity,
+): string {
+  if (segments.length === 0) {
+    throw new WindowsSystemDirectoryError(
+      "Windows system executable path must contain at least one segment",
+    );
+  }
+  for (const segment of segments) assertSafeSystemPathSegment(segment);
+  const selectedRoot = resolveWindowsSystemDirectory(env, identityCheck);
+  // The test identity port changes only the decision, never the path selected after acceptance.
+  // Referential equality is not a trust boundary: a wrapper around the production checker must be
+  // just as safe as the function itself. Every real win32 resolution therefore uses GLOBALROOT;
+  // off-Windows hermetic tests retain their lexical Windows join.
+  const executableRoot =
+    process.platform === "win32" ? WINDOWS_OBJECT_MANAGER_SYSTEM_ROOT : selectedRoot;
+  const resolved = win32Path.join(executableRoot, ...segments);
+  if (!existsAsFile(resolved)) {
+    throw new WindowsSystemBinaryMissingError();
+  }
+  return resolved;
 }
 
 /**
  * A named binary under the validated Windows system directory's `System32`, NEVER from PATH. The
  * name must be a bare file name: a caller that could pass a path could escape System32 entirely,
  * which is the containment this function exists to provide. On win32, the resolved path must also
- * exist as a regular file: a fabricated-but-well-shaped root now fails HERE, at resolution, instead
- * of later as a raw spawn error (`existsAsFile` is a test seam off Windows — see
- * `defaultWindowsBinaryExists`).
+ * exist as a regular file. A fabricated or reparsed root fails at the preceding identity boundary;
+ * an authentic root whose binary is absent fails here instead of later as a raw spawn error.
+ * `existsAsFile` and `identityCheck` are hermetic test seams.
  */
 export function resolveWindowsSystemBinary(
   binaryName: string,
   env: Readonly<Record<string, string | undefined>> = process.env,
-  existsAsFile: WindowsBinaryExistsCheck = defaultWindowsBinaryExists,
+  existsAsFile: WindowsBinaryExistsCheck | undefined = defaultWindowsBinaryExists,
+  identityCheck: WindowsSystemDirectoryIdentityCheck | undefined = defaultSystemDirectoryIdentity,
 ): string {
   if (binaryName.length === 0 || /[\\/]/.test(binaryName) || binaryName === "..") {
     throw new WindowsSystemDirectoryError(
@@ -184,11 +294,5 @@ export function resolveWindowsSystemBinary(
       "binaryName must not contain a control character, quote, colon or cmd.exe metacharacter",
     );
   }
-  const resolved = win32Path.join(resolveWindowsSystemDirectory(env), "System32", binaryName);
-  if (!existsAsFile(resolved)) {
-    throw new WindowsSystemDirectoryError(
-      "resolved Windows system binary does not exist as a regular file",
-    );
-  }
-  return resolved;
+  return resolveWindowsSystemExecutable(["System32", binaryName], env, existsAsFile, identityCheck);
 }

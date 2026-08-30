@@ -42,12 +42,20 @@ import {
 import { homedir as defaultHomedir } from "node:os";
 import { dirname, join } from "node:path";
 import type { EnvSource } from "@oscharko-dev/keiko-model-gateway";
+import {
+  emitSecurityLogEvent,
+  resolveWindowsSystemExecutable,
+  securityErrorKind,
+  WindowsSystemBinaryMissingError,
+  WindowsSystemDirectoryError,
+} from "@oscharko-dev/keiko-security";
 import type { CliIo } from "./runner.js";
 import {
   LauncherError,
   launcherFor,
   validateExecPath,
   validatePort,
+  windowsLauncherNeedsPowerShell,
   type LauncherContentInput,
   type Platform,
   type PlatformLauncher,
@@ -63,6 +71,7 @@ import {
 } from "./launcher-state.js";
 import { resolveKeikoBinary } from "./install-layout.js";
 import { resolveContainedStateDir } from "./state-paths.js";
+import { createCliSecurityLogSink, type CliSecurityLogSinkFactory } from "./security-log.js";
 
 type LauncherSubcommand = "install" | "remove" | "status";
 
@@ -89,6 +98,8 @@ export interface LauncherCliDeps {
   // Test seam for sanity: which directory `.keiko/launcher-state.json` lives in.
   // Defaults to `<cwd>/.keiko`.
   readonly stateDir?: string;
+  readonly resolveWindowsPowerShell?: ((env: EnvSource) => string) | undefined;
+  readonly securityLogSinkFactory?: CliSecurityLogSinkFactory | undefined;
 }
 
 interface InstallArgs {
@@ -287,10 +298,20 @@ function buildInstallPlan(
   homedir: string,
   args: InstallArgs,
   exe: string,
+  env: EnvSource,
+  resolveWindowsPowerShell: (env: EnvSource) => string,
 ): InstallPlan {
   const approvedDir = launcher.installDirFor(homedir);
   const targetPath = join(approvedDir, launcher.safeFileName());
-  const contentInput: LauncherContentInput = { exe, port: args.port };
+  const contentInput: LauncherContentInput = {
+    exe,
+    port: args.port,
+    ...(launcher.id === "win32" && windowsLauncherNeedsPowerShell(exe)
+      ? {
+          windowsPowerShellPath: resolveWindowsPowerShell(env),
+        }
+      : {}),
+  };
   const content = launcher.generateContent(contentInput);
   return {
     platform: launcher.id,
@@ -376,13 +397,14 @@ function cmdInstall(
   env: EnvSource,
   deps: Required<Pick<LauncherCliDeps, "homedir" | "platform">> & {
     readonly resolveExe: (env: EnvSource) => string;
+    readonly resolveWindowsPowerShell: (env: EnvSource) => string;
     readonly stateDir: string;
   },
 ): number {
   const launcher = launcherFor(deps.platform());
   const exe = deps.resolveExe(env);
   const home = deps.homedir();
-  const plan = buildInstallPlan(launcher, home, args, exe);
+  const plan = buildInstallPlan(launcher, home, args, exe, env, deps.resolveWindowsPowerShell);
   assertRealpathContained(plan.approvedDir, plan.targetPath);
   if (args.dryRun || args.explain) {
     io.out(describePlan(plan, args.explain));
@@ -540,7 +562,15 @@ interface ResolvedDeps {
   readonly homedir: () => string;
   readonly platform: () => NodeJS.Platform;
   readonly resolveExe: (env: EnvSource) => string;
+  readonly resolveWindowsPowerShell: (env: EnvSource) => string;
   readonly stateDir: string;
+}
+
+function defaultResolveWindowsPowerShell(env: EnvSource): string {
+  return resolveWindowsSystemExecutable(
+    ["System32", "WindowsPowerShell", "v1.0", "powershell.exe"],
+    env,
+  );
 }
 
 function resolveDeps(env: EnvSource, deps: LauncherCliDeps): ResolvedDeps {
@@ -550,8 +580,43 @@ function resolveDeps(env: EnvSource, deps: LauncherCliDeps): ResolvedDeps {
     homedir: homedirFn,
     platform: deps.platform ?? ((): NodeJS.Platform => process.platform),
     resolveExe: deps.resolveExe ?? defaultResolveExe,
+    resolveWindowsPowerShell: deps.resolveWindowsPowerShell ?? defaultResolveWindowsPowerShell,
     stateDir: deps.stateDir ?? defaultStateDir(cwd, env, homedirFn()),
   };
+}
+
+function windowsSystemFailureExit(
+  error: unknown,
+  io: CliIo,
+  stateDir: string | undefined,
+  factory: CliSecurityLogSinkFactory | undefined,
+): number | undefined {
+  if (
+    !(error instanceof WindowsSystemDirectoryError) &&
+    !(error instanceof WindowsSystemBinaryMissingError)
+  ) {
+    return undefined;
+  }
+  const sink = stateDir === undefined ? undefined : createCliSecurityLogSink(stateDir, factory);
+  if (error instanceof WindowsSystemDirectoryError) {
+    emitSecurityLogEvent(sink, {
+      level: "warn",
+      category: "security",
+      op: "security.windows-launcher.system-root-refused",
+      errorKind: securityErrorKind(error),
+      extra: { surface: "launcher-install" },
+    });
+  } else {
+    emitSecurityLogEvent(sink, {
+      level: "error",
+      category: "diagnostic",
+      op: "security.windows-launcher.system-binary-missing",
+      errorKind: securityErrorKind(error),
+      extra: { surface: "launcher-install" },
+    });
+  }
+  io.err("keiko launcher: trusted Windows launch helper is unavailable.\n");
+  return 1;
 }
 
 export function runLauncherCli(
@@ -571,11 +636,13 @@ export function runLauncherCli(
     return 2;
   }
   const rest = args.slice(1);
+  let resolved: ResolvedDeps | undefined;
   try {
     // `resolveDeps` may throw `STATE_DIR_ESCAPE` (F4) when KEIKO_STATE_DIR resolves
     // outside the user's home — it MUST be inside the try/catch so the LauncherError
     // is converted to a `1` exit instead of an uncaught throw.
     const r = resolveDeps(env, deps);
+    resolved = r;
     const home = r.homedir();
     const handlers: Readonly<Record<LauncherSubcommand, () => number>> = {
       install: () => dispatchInstall(rest, io, env, r),
@@ -588,6 +655,13 @@ export function runLauncherCli(
       io.err(`${e.message}\n`);
       return 1;
     }
+    const systemFailure = windowsSystemFailureExit(
+      e,
+      io,
+      resolved?.stateDir,
+      deps.securityLogSinkFactory,
+    );
+    if (systemFailure !== undefined) return systemFailure;
     throw e;
   }
 }
@@ -598,6 +672,7 @@ function dispatchInstall(
   env: EnvSource,
   ctx: Required<Pick<LauncherCliDeps, "homedir" | "platform">> & {
     readonly resolveExe: (env: EnvSource) => string;
+    readonly resolveWindowsPowerShell: (env: EnvSource) => string;
     readonly stateDir: string;
   },
 ): number {

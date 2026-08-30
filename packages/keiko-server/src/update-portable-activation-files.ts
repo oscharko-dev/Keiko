@@ -598,7 +598,7 @@ function readShortcut(
   env: EnvSource,
   sink?: SecurityLogSink,
 ): WindowsShortcutArtifact | undefined {
-  return readWindowsShortcutDefinition(path, env, SHORTCUT_FAILURE_PREFIX, undefined, sink);
+  return readWindowsShortcutDefinition(path, env, SHORTCUT_FAILURE_PREFIX, { sink });
 }
 
 function readGuardedShortcut(
@@ -647,7 +647,7 @@ function writeShortcut(
   env: EnvSource,
   sink?: SecurityLogSink,
 ): void {
-  writeWindowsShortcutDefinition(path, artifact, env, SHORTCUT_FAILURE_PREFIX, undefined, sink);
+  writeWindowsShortcutDefinition(path, artifact, env, SHORTCUT_FAILURE_PREFIX, { sink });
 }
 
 export function refreshPortableShortcut(input: {

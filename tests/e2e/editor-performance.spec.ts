@@ -8,6 +8,7 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { editorModifier } from "./support/editor-chord.js";
 import { writePaddedFixtureFiles } from "./support/editorWorkspace.js";
+import { clickWindowChromeButton } from "./support/window-chrome.js";
 
 // Number of cold-start samples: kept at 3 for the manual/release-evidence smoke, raised (>=10) in the
 // scheduled/CI perf job via KEIKO_PERF_RUNS so p50/p95 are stable rather than the max of 3 noisy
@@ -528,7 +529,7 @@ async function openEditorCard(page: Page): Promise<ReturnType<Page["getByRole"]>
   await filesWindow.getByRole("button", { name: "Open in editor" }).click();
   const editorWindow = page.getByRole("region", { name: /Editor.*run\.ts/u });
   await expect(editorWindow.locator(".monaco-editor")).toBeVisible();
-  await filesWindow.getByRole("button", { name: "Close Files window" }).click();
+  await clickWindowChromeButton(filesWindow, "Close Files window");
   await expect(filesWindow).toBeHidden();
   return editorWindow;
 }
@@ -553,9 +554,9 @@ async function measureColdStarts(page: Page, warmups: number, runs: number): Pro
     if (run >= warmups) {
       samples.push(Date.now() - start);
     }
-    await filesWindow.getByRole("button", { name: "Close Files window" }).click();
+    await clickWindowChromeButton(filesWindow, "Close Files window");
     await expect(filesWindow).toBeHidden();
-    await editorWindow.getByRole("button", { name: "Close Editor window" }).click();
+    await clickWindowChromeButton(editorWindow, "Close Editor window");
     await expect(editorWindow).toBeHidden();
   }
   return samples;
@@ -1298,7 +1299,7 @@ async function measureMemory(page: Page, cycles: number): Promise<MemoryMetrics>
       baseline = Math.max(baseline, await collectedHeapBytes(client));
       const card = await openEditorCard(page);
       peak = Math.max(peak, await collectedHeapBytes(client));
-      await card.getByRole("button", { name: "Close Editor window" }).click();
+      await clickWindowChromeButton(card, "Close Editor window");
       await expect(card).toBeHidden();
       residual = Math.max(residual, await collectedHeapBytes(client));
     }

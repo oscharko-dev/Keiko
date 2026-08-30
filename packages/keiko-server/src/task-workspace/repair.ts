@@ -39,7 +39,7 @@ import { assertSafeFieldValue } from "./field-safety.js";
 import { lockIsLive, makeWorkspaceLock, resolveLockTtl } from "./locks.js";
 import { workspaceKey } from "./mutex.js";
 import { reconcileSingleInstance } from "./reconciliation.js";
-import { UNKNOWN_CORRELATION_ID } from "../correlation.js";
+import { correlationIdOrUnknown } from "../correlation.js";
 import { logWorkspaceLifecycle } from "./activity-log.js";
 import {
   appendWorkspaceLifecycleEvidence,
@@ -131,7 +131,7 @@ function emitRepair(
   // UNKNOWN_CORRELATION_ID — never the workspace's own persisted identity (AGENTS.md §8).
   correlationId: string | undefined,
 ): void {
-  const resolvedCorrelationId = correlationId ?? UNKNOWN_CORRELATION_ID;
+  const resolvedCorrelationId = correlationIdOrUnknown(correlationId);
   const event = buildWorkspaceEvent({
     eventId: ctx.deps.newId(),
     workspaceId: instance.workspaceId,
@@ -500,7 +500,7 @@ export function createWorkspaceRepairService(
   return {
     repair: (request: WorkspaceRepairRequest): Promise<WorkspaceRepairResult> =>
       repairImpl(
-        { deps, lockTtlMs, correlationId: request.correlationId ?? UNKNOWN_CORRELATION_ID },
+        { deps, lockTtlMs, correlationId: correlationIdOrUnknown(request.correlationId) },
         request,
       ),
   };

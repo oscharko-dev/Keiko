@@ -15,6 +15,14 @@ import { homedir as defaultHomedir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { EnvSource } from "@oscharko-dev/keiko-model-gateway";
+import {
+  WindowsSystemBinaryMissingError,
+  WindowsSystemDirectoryError,
+  emitSecurityLogEvent,
+  resolveWindowsSystemExecutable,
+  securityErrorKind,
+  type SecurityLogSink,
+} from "@oscharko-dev/keiko-security";
 // From the contracts leaf, NOT keiko-server or the keiko-sdk fat barrel: pulling the server
 // module graph in eagerly here cost every `keiko` invocation ~410ms of ESM loading
 // (GEN-PERF-CLI-001). Lifecycle needs the loopback endpoint constants plus the launcher half of
@@ -30,6 +38,7 @@ import { absoluteExistingPath, resolvePreferredInstallLayout } from "./install-l
 import { LauncherError } from "./launcher-platforms.js";
 import { resolveLoopbackEndpoint } from "./loopback-endpoint.js";
 import type { CliIo } from "./runner.js";
+import { createCliSecurityLogSink, type CliSecurityLogSinkFactory } from "./security-log.js";
 import {
   assertNotSymlink,
   assertRegularSingleLinkFile,
@@ -104,6 +113,9 @@ export interface LifecycleCliDeps {
   readonly killProcess?: ProcessKiller | undefined;
   readonly isPortAvailable?: PortAvailabilityFn | undefined;
   readonly openExternal?: ((url: string) => void) | undefined;
+  readonly platform?: (() => NodeJS.Platform) | undefined;
+  readonly securityLogSink?: SecurityLogSink | undefined;
+  readonly securityLogSinkFactory?: CliSecurityLogSinkFactory | undefined;
 }
 
 interface LifecycleRuntimeDeps {
@@ -114,6 +126,7 @@ interface LifecycleRuntimeDeps {
   readonly killProcess: ProcessKiller;
   readonly isPortAvailable: PortAvailabilityFn;
   readonly openExternal: (url: string) => void;
+  readonly securityLogSink?: SecurityLogSink | undefined;
 }
 
 interface HealthProbeResult {
@@ -477,12 +490,16 @@ function cliEntryPath(cwd: string, env: EnvSource): string {
 export function resolveExternalOpener(
   url: string,
   platform: NodeJS.Platform = process.platform,
+  env: EnvSource = process.env,
 ): { readonly command: string; readonly args: readonly string[] } {
   if (platform === "darwin") return { command: "open", args: [url] };
   if (platform === "win32") {
     const command = `Start-Process '${url.replaceAll("'", "''")}'`;
     return {
-      command: "powershell.exe",
+      command: resolveWindowsSystemExecutable(
+        ["System32", "WindowsPowerShell", "v1.0", "powershell.exe"],
+        env,
+      ),
       args: [
         "-NoProfile",
         "-NonInteractive",
@@ -494,8 +511,8 @@ export function resolveExternalOpener(
   return { command: "xdg-open", args: [url] };
 }
 
-function defaultOpenExternal(url: string): void {
-  const opener = resolveExternalOpener(url);
+function defaultOpenExternal(url: string, platform: NodeJS.Platform, env: EnvSource): void {
+  const opener = resolveExternalOpener(url, platform, env);
   const child = spawn(opener.command, [...opener.args], {
     detached: true,
     stdio: "ignore",
@@ -503,10 +520,31 @@ function defaultOpenExternal(url: string): void {
   child.unref();
 }
 
+function logWindowsOpenerFailure(error: unknown, sink: SecurityLogSink | undefined): void {
+  if (error instanceof WindowsSystemDirectoryError) {
+    emitSecurityLogEvent(sink, {
+      level: "warn",
+      category: "security",
+      op: "security.windows-lifecycle-opener.system-root-refused",
+      errorKind: securityErrorKind(error),
+      extra: { surface: "start-open-browser" },
+    });
+  } else if (error instanceof WindowsSystemBinaryMissingError) {
+    emitSecurityLogEvent(sink, {
+      level: "error",
+      category: "diagnostic",
+      op: "security.windows-lifecycle-opener.system-binary-missing",
+      errorKind: securityErrorKind(error),
+      extra: { surface: "start-open-browser" },
+    });
+  }
+}
+
 async function maybeOpenBrowser(
   options: LifecycleOptions,
   io: CliIo,
   openExternal: (url: string) => void,
+  securityLogSink: SecurityLogSink | undefined,
   pairingSecret?: string,
 ): Promise<void> {
   if (!options.openBrowser) return;
@@ -515,7 +553,8 @@ async function maybeOpenBrowser(
     const target =
       pairingSecret === undefined ? baseUrl : await pairedOpenUrl(baseUrl, pairingSecret);
     openExternal(target);
-  } catch {
+  } catch (error) {
+    logWindowsOpenerFailure(error, securityLogSink);
     io.err(`keiko start: failed to open ${baseUrl} in the default browser.\n`);
   }
 }
@@ -526,11 +565,12 @@ async function reportHealthyStart(
   pid: number,
   logPath: string,
   openExternal: (url: string) => void,
+  securityLogSink: SecurityLogSink | undefined,
   pairingSecret: string,
 ): Promise<number> {
   io.out(`Keiko UI running on ${lifecycleBaseUrl(options)} (pid ${String(pid)}).\n`);
   io.out(`Logs: ${logPath}\n`);
-  await maybeOpenBrowser(options, io, openExternal, pairingSecret);
+  await maybeOpenBrowser(options, io, openExternal, securityLogSink, pairingSecret);
   return 0;
 }
 
@@ -671,7 +711,7 @@ async function keepAlreadyRunningUi(
   io.out(`Keiko UI already running on ${lifecycleBaseUrl(options)} (pid ${String(pid)}).\n`);
   // The pairing secret of an already-running BFF is process-private to that launch, so this
   // window opens unpaired (fail closed) — question content needs a fresh paired launch.
-  await maybeOpenBrowser(options, io, deps.openExternal);
+  await maybeOpenBrowser(options, io, deps.openExternal, deps.securityLogSink);
   if (options.openBrowser) {
     io.out(
       "Note: this window is not paired for coding question content; run `keiko restart --open` to pair a fresh app session.\n",
@@ -795,7 +835,15 @@ async function cmdStart(
 
   const healthy = await waitForHealth(options, child.pid, deps);
   if (healthy) {
-    return reportHealthyStart(options, io, child.pid, logPath, deps.openExternal, pairingSecret);
+    return reportHealthyStart(
+      options,
+      io,
+      child.pid,
+      logPath,
+      deps.openExternal,
+      deps.securityLogSink,
+      pairingSecret,
+    );
   }
 
   return reportUnhealthyStart(options, io, deps, child.pid, logPath);
@@ -895,8 +943,13 @@ async function cmdRestart(
   return cmdStart(options, io, env, deps, cwd);
 }
 
-function runtimeDeps(deps: LifecycleCliDeps): LifecycleRuntimeDeps {
+function runtimeDeps(
+  deps: LifecycleCliDeps,
+  env: EnvSource,
+  securityLogSink: SecurityLogSink | undefined,
+): LifecycleRuntimeDeps {
   const fetchImpl = deps.fetchImpl;
+  const platform = deps.platform?.() ?? process.platform;
   return {
     spawnFn: deps.spawnFn ?? spawn,
     healthProbe:
@@ -909,7 +962,12 @@ function runtimeDeps(deps: LifecycleCliDeps): LifecycleRuntimeDeps {
     isProcessAlive: deps.isProcessAlive ?? defaultIsProcessAlive,
     killProcess: deps.killProcess ?? safeKillProcess,
     isPortAvailable: deps.isPortAvailable ?? defaultIsPortAvailable,
-    openExternal: deps.openExternal ?? defaultOpenExternal,
+    openExternal:
+      deps.openExternal ??
+      ((url: string): void => {
+        defaultOpenExternal(url, platform, env);
+      }),
+    securityLogSink,
   };
 }
 
@@ -964,7 +1022,9 @@ export async function runLifecycleCli(
   }
 
   const options = outcome.value;
-  const fullDeps = runtimeDeps(deps);
+  const securityLogSink =
+    deps.securityLogSink ?? createCliSecurityLogSink(options.stateDir, deps.securityLogSinkFactory);
+  const fullDeps = runtimeDeps(deps, env, securityLogSink);
 
   const handlers: Readonly<Record<LifecycleCommand, () => Promise<number>>> = {
     start: () => cmdStart(options, io, env, fullDeps, cwd),

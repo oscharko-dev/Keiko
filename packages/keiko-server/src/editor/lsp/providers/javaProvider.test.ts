@@ -23,10 +23,10 @@ import type { LspSpawnPreparationInput } from "../lspProcessManager.js";
 import {
   JAVA_PROBE_ENV_ALLOWLIST,
   JAVA_PROVIDER_SPEC,
+  JavaVersionProbeWrapperError,
   buildJavaVersionProbeInvocation,
   javaProtocolConfiguration,
   prepareJavaSpawn,
-  shouldAttemptWindowsProbeTreeKill,
 } from "./javaProvider.js";
 import { UNKNOWN_CORRELATION_ID } from "../../../correlation.js";
 import { redactLogFields } from "../../../observability/log-redaction.js";
@@ -408,14 +408,16 @@ describe("managed Eclipse JDT LS provider", () => {
         resolveExecutable: () => "/usr/bin/bwrap",
         resolveJava: () => hungJava,
         validateLayout: () => true,
+        javaVersionProbeTimeoutMs: 25,
         // validateJavaVersion intentionally not overridden: exercises the real
-        // defaultJavaVersionValid probe (and its bounded timeout) against a hung executable.
+        // defaultJavaVersionValid probe with a shortened test-only bound. Production still uses
+        // the fixed 5 s maximum.
       }),
     ).toThrow("minimum supported JDK version");
 
-    // The probe's own timeout is 5s; a generous 10s upper bound proves the process was killed
-    // rather than left to run for the fixture's full 30s sleep.
-    expect(Date.now() - startedAt).toBeLessThan(10_000);
+    // The short injected bound keeps this production-path proof deterministic under Vitest's own
+    // 5 s test deadline while still proving the 30 s fixture is terminated.
+    expect(Date.now() - startedAt).toBeLessThan(2_000);
   });
 
   it("accepts a real java executable whose reported version meets the minimum", () => {
@@ -441,34 +443,21 @@ describe("managed Eclipse JDT LS provider", () => {
   });
 });
 
-// Issue #3350 hardened the LSP server's OWN spawn (lspNodeAdapter.ts's buildLspSpawnPlan) but never
-// covered this provider's separate, directly-issued `java -version` probe (defaultJavaVersionValid,
-// via plain `spawnSync`): a Windows JDK managed through a version-manager shim (jenv/jabba/scoop-
-// style wrappers commonly install `java.cmd` rather than a native `java.exe`) resolves to exactly
-// the `.cmd`/`.bat` shape that raises EINVAL under `shell: false` (Node CVE-2024-27980). Tested
-// against the pure builder directly — never against defaultJavaVersionValid, which always uses the
-// real process.platform — so the win32 branch is reachable from a test on any host, mirroring
-// lspNodeAdapter.test.ts's `buildLspSpawnPlan` coverage for the identical class of defect. Without
-// this seam the cmd.exe wrapper call inside defaultJavaVersionValid could be deleted and every other
-// Java provider test would stay green (they all inject `validateJavaVersion` or run on POSIX),
-// silently reintroducing EINVAL for a shimmed Windows `java.cmd`.
+// A post-spawnSync raw pid has no stable identity: once the wrapper exits, Windows may already have
+// reused it. Command-script probes are therefore refused before spawn; native images are unchanged.
 describe("buildJavaVersionProbeInvocation", () => {
-  it("routes a resolved java.cmd through the hardened cmd.exe wrapper on win32", () => {
-    const invocation = buildJavaVersionProbeInvocation(String.raw`C:\jdk\bin\java.cmd`, {
-      platform: "win32",
-      env: { SystemRoot: String.raw`C:\Windows` },
-    });
-
-    expect(
-      invocation.command.toLowerCase().endsWith(String.raw`\system32\cmd.exe`.toLowerCase()),
-    ).toBe(true);
-    expect(invocation.args.slice(0, 3)).toEqual(["/d", "/s", "/c"]);
-    expect(invocation.args[3]).toContain("java.cmd");
-    expect(invocation.args[3]).toContain("-version");
-    // The spread must survive at the call site: without it Node re-quotes the pre-escaped line and
-    // the escaping cross-spawn built is lost.
-    expect(invocation.windowsVerbatimArguments).toBe(true);
-  });
+  it.each(["java.cmd", "java.BAT"])(
+    "refuses a resolved %s before cmd.exe resolution or spawn on win32",
+    (name) => {
+      expect(() =>
+        buildJavaVersionProbeInvocation(`${String.raw`C:\jdk\bin`}\\${name}`, {
+          platform: "win32",
+          // Deliberately hostile: wrapper refusal must happen before the SystemRoot resolver too.
+          env: { SystemRoot: String.raw`\\attacker\share` },
+        }),
+      ).toThrow(JavaVersionProbeWrapperError);
+    },
+  );
 
   it("passes a resolved java.exe through unchanged on win32", () => {
     const invocation = buildJavaVersionProbeInvocation(String.raw`C:\jdk\bin\java.exe`, {
@@ -489,27 +478,6 @@ describe("buildJavaVersionProbeInvocation", () => {
     expect(invocation.command).toBe("/opt/jdk-21/bin/java");
     expect(invocation.args).toEqual(["-version"]);
     expect(invocation.windowsVerbatimArguments).toBe(false);
-  });
-});
-
-// PR #3355 review T20/IDX64: the win32 tree-kill defense in depth must never fire for a POSIX probe,
-// and must never fire on a pid that could be this server or its own parent — a reused pid plus
-// `taskkill /T` would take the wrong tree. Pure and exported, so every branch is pinned on any host.
-describe("shouldAttemptWindowsProbeTreeKill", () => {
-  it.each([
-    ["the cmd.exe wrapper never engaged", false, "win32", 4242],
-    ["the platform is not win32", true, "linux", 4242],
-    ["no pid was observed", true, "win32", undefined],
-    ["the pid is this process's own", true, "win32", process.pid],
-    ["the pid is this process's parent", true, "win32", process.ppid],
-  ])("refuses when %s", (_label, windowsWrapperEngaged, platform, pid) => {
-    expect(
-      shouldAttemptWindowsProbeTreeKill(windowsWrapperEngaged, platform as NodeJS.Platform, pid),
-    ).toBe(false);
-  });
-
-  it("attempts the tree-kill only for a wrapped win32 probe with an unrelated pid", () => {
-    expect(shouldAttemptWindowsProbeTreeKill(true, "win32", 4242)).toBe(true);
   });
 });
 
@@ -571,6 +539,43 @@ describe("defaultJavaVersionValid — activity-log evidence (AGENTS.md §8 Rule 
     expect(Object.keys(redacted).sort()).toEqual(Object.keys(extra).sort());
   });
 
+  it("refuses a Windows command-script probe before spawn and emits body-free evidence", () => {
+    const events = captureLog();
+    const platformDescriptor = Object.getOwnPropertyDescriptor(process, "platform");
+    if (platformDescriptor === undefined)
+      throw new TypeError("process.platform descriptor unavailable");
+    const pathMarker = "profile-path-must-not-be-logged";
+    Object.defineProperty(process, "platform", { ...platformDescriptor, value: "win32" });
+    try {
+      expect(() =>
+        prepareJavaSpawn(spawnInput(), {
+          availability: NATIVE,
+          platform: "win32",
+          resolveExecutable: () => String.raw`C:\Windows\System32\bwrap.exe`,
+          resolveJava: () => String.raw`C:\Users\profile-path-must-not-be-logged\java.cmd`,
+          validateLayout: () => true,
+        }),
+      ).toThrow(JavaVersionProbeWrapperError);
+    } finally {
+      Object.defineProperty(process, "platform", platformDescriptor);
+    }
+
+    const probed = events.find((event) => event.op === "lsp.java.version-probe.completed");
+    expect(probed?.errorKind).toBe("JAVA_VERSION_PROBE_WRAPPER_REFUSED");
+    expect(probed?.extra).toEqual({
+      windowsWrapperEngaged: false,
+      outcome: "wrapper-refused",
+      platform: "win32",
+    });
+    expect(JSON.stringify(probed)).not.toContain(pathMarker);
+
+    // Whole-class pin: no post-return raw-pid reaper remains anywhere in the sync probe body.
+    const source = readFileSync(new URL("./javaProvider.ts", import.meta.url), "utf8");
+    expect(source).not.toContain("probe.pid");
+    expect(source).not.toContain("reapWindowsProbeDescendant");
+    expect(source).not.toContain("nodeWindowsTreeKill");
+  });
+
   // IDX63: "validVersion: false" alone made a timeout indistinguishable from every other failure.
   // Reuses the same real-spawnSync-path pattern as the pre-existing "bounds the real java -version
   // probe with a timeout" test above (validateJavaVersion NOT overridden), but now inspects the
@@ -588,8 +593,9 @@ describe("defaultJavaVersionValid — activity-log evidence (AGENTS.md §8 Rule 
         resolveExecutable: () => "/usr/bin/bwrap",
         resolveJava: () => hungJava,
         validateLayout: () => true,
+        javaVersionProbeTimeoutMs: 25,
         // validateJavaVersion intentionally not overridden: exercises the real bounded-timeout
-        // spawnSync path and its logging end to end.
+        // spawnSync path and its logging end to end without racing Vitest's 5 s test deadline.
       }),
     ).toThrow("minimum supported JDK version");
 

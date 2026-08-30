@@ -91,7 +91,6 @@ function macosFixture(receipt: unknown = { result: "passed" }): string {
 describe("production portable runtime platform attestation", () => {
   it("accepts only a signed Windows carrier with a body-free exact receipt", () => {
     const resourceRoot = windowsFixture();
-    vi.stubEnv("SystemRoot", String.raw`D:\Attacker`);
     const runner = recordingRunner(
       commandResult({ stdout: "A".repeat(40) }),
       commandResult({ stdout: "A".repeat(40) }),
@@ -100,8 +99,8 @@ describe("production portable runtime platform attestation", () => {
 
     expect(readWindowsAttestation(resourceRoot, runner.run)).toEqual({ result: "passed" });
     expect(runner.calls).toHaveLength(3);
-    expect(runner.calls[0]?.command).toBe(
-      String.raw`C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe`,
+    expect(runner.calls[0]?.command.toLowerCase()).toMatch(
+      /\\system32\\windowspowershell\\v1\.0\\powershell\.exe$/u,
     );
     expect(runner.calls[0]?.args).toContain("-NoProfile");
     expect(runner.calls[0]?.args).toContain("-NonInteractive");

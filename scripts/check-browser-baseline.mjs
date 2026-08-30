@@ -309,25 +309,48 @@ export function transpileFloorViolations(floors, targets = TRANSPILE_TARGETS) {
   return found;
 }
 
+function matchingSourcePaths(sources, pattern) {
+  return sources.filter(({ text }) => pattern.test(text)).map(({ path }) => path);
+}
+
+function sourceEntries(paths) {
+  return paths.map((path) => ({ path, text: readFileSync(path, "utf8") }));
+}
+
+// Dependency paths are a curated part of the gate contract. A missing package install or a moved
+// upstream entry point must fail closed with a stable diagnosis, but must not abort the rest of the
+// scan: another readable dependency can still expose an independent floor violation worth reporting
+// in the same run.
+function readableDependencyEntries(paths) {
+  const entries = [];
+  let readFailed = false;
+  for (const path of paths) {
+    try {
+      entries.push({ path, text: readFileSync(path, "utf8") });
+    } catch {
+      fail(`bundled dependency file is missing or unreadable: ${path}`);
+      readFailed = true;
+    }
+  }
+  return { entries, readFailed };
+}
+
 // Every guarded API that the sources actually call, checked against the declared floors.
 function apiViolations(sources, floors) {
   const violations = [];
-  const scripts = sources.filter((path) => !path.endsWith(".css"));
+  const scripts = sources.filter(({ path }) => !path.endsWith(".css"));
   for (const api of GUARDED_APIS) {
-    const users = scripts.filter((path) => api.pattern.test(readFileSync(path, "utf8")));
+    const users = matchingSourcePaths(scripts, api.pattern);
     if (users.length > 0) violations.push(...violationsFor(api, users, floors));
   }
-  // GUARDED_CSS is checked against `.css` files AND `.ts`/`.tsx` files: the UI also injects CSS
-  // function values from a TypeScript template literal — debug-monaco-styles.ts builds a runtime
-  // `<style>` element from a `color-mix(in oklch, ...)` rule as a plain string, so that guarded
-  // syntax never touches a `.css` file at all. Restricting this scan to the `.css` extension made
-  // that shape invisible: a fixture with guarded CSS syntax inside a `.ts` string passed even when
-  // its declared floor sat below the feature's real minimum.
-  const cssCapableSources = sources.filter((path) => /\.(css|ts|tsx)$/u.test(path));
+  // GUARDED_CSS is checked against `.css` files AND script sources that can inject CSS at runtime.
+  // First-party debug-monaco-styles.ts builds a `<style>` element from a `color-mix(...)` template
+  // literal, and the curated pdfjs `.mjs` entry assigns the same function through an inline style.
+  // Restricting this scan to stylesheet extensions — or only first-party TS/TSX — leaves shipped
+  // runtime CSS invisible even though the dependency entries are already in `sources`.
+  const cssCapableSources = sources.filter(({ path }) => /\.(css|mjs|ts|tsx)$/u.test(path));
   for (const feature of GUARDED_CSS) {
-    const users = cssCapableSources.filter((path) =>
-      feature.pattern.test(readFileSync(path, "utf8")),
-    );
+    const users = matchingSourcePaths(cssCapableSources, feature.pattern);
     if (users.length > 0) violations.push(...violationsFor(feature, users, floors));
   }
   return violations;
@@ -363,7 +386,9 @@ export function main(options = {}) {
     return;
   }
 
-  const sources = [...collectSources(sourceRoots), ...dependencyFiles];
+  const firstPartySources = sourceEntries(collectSources(sourceRoots));
+  const dependencyResult = readableDependencyEntries(dependencyFiles);
+  const sources = [...firstPartySources, ...dependencyResult.entries];
   if (sources.length === 0) {
     fail("no UI sources were found — the scan would pass vacuously");
     return;
@@ -378,6 +403,7 @@ export function main(options = {}) {
     );
     return;
   }
+  if (dependencyResult.readFailed) return;
   console.log(
     `browser-baseline: PASS — ${String(declaration.count)} declared floor(s) satisfy every guarded ` +
       `API across ${String(sources.length)} UI source files.`,

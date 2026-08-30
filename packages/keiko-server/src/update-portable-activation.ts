@@ -253,10 +253,23 @@ function prepareActivation(input: {
   return promotePortableInstall(input.request, input.activationId);
 }
 
+function correlatedSecurityLogSink(
+  sink: SecurityLogSink | undefined,
+  correlationId: string,
+): SecurityLogSink | undefined {
+  if (sink === undefined) return undefined;
+  return {
+    write(event): void {
+      sink.write({ ...event, correlationId });
+    },
+  };
+}
+
 function finishPreparedActivation(
   input: {
     readonly options: PortableUpdateActivatorOptions;
     readonly request: PortableUpdateActivateInput;
+    readonly correlationId: string;
   },
   promoted: PortablePromotionResult,
 ): { readonly shortcutRefreshed: boolean; readonly layout: PortableActivationLayout } {
@@ -274,7 +287,7 @@ function finishPreparedActivation(
     layout: promoted.layout,
     env: input.options.env,
     home,
-    securityLogSink: input.options.securityLogSink,
+    securityLogSink: correlatedSecurityLogSink(input.options.securityLogSink, input.correlationId),
   });
   return { shortcutRefreshed, layout: promoted.layout };
 }
@@ -333,7 +346,11 @@ function preparePortablePromotion(
   progress.recoveryPhase = "promoted";
   capturePortableRegistration({ stateDir: context.stateDir, activationId: context.activationId });
   const prepared = finishPreparedActivation(
-    { options: context.options, request: context.request },
+    {
+      options: context.options,
+      request: context.request,
+      correlationId: context.activationId,
+    },
     promoted,
   );
   writePortableActivationRecovery({

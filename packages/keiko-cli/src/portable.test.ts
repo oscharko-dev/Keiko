@@ -13,6 +13,7 @@ import { spawn, type SpawnOptions } from "node:child_process";
 import { dirname, join } from "node:path";
 import { homedir } from "node:os";
 import { afterEach, describe, expect, it } from "vitest";
+import type { SecurityLogEvent, SecurityLogSink } from "@oscharko-dev/keiko-security";
 import { runPortableCli } from "./portable.js";
 import { windowsLauncher } from "./launcher-platforms.js";
 import { portableManagedSetupLockPath } from "./portable-install.js";
@@ -410,6 +411,73 @@ describe("runPortableCli", () => {
     expect(code).toBe(0);
     expect(existsSync(shortcut)).toBe(true);
     expect(parseWindowsStartMenuRegistration(shortcut)).toBe(join(managedRoot, "Keiko.exe"));
+  });
+
+  it("fails closed and records a correlated body-free event for a hostile shortcut host root", async () => {
+    const platform = Object.getOwnPropertyDescriptor(process, "platform");
+    Object.defineProperty(process, "platform", { ...platform, value: "win32" });
+    const root = tempRoot();
+    const home = join(root, "home");
+    const source = join(root, "bootstrap");
+    const stateDir = join(root, "state");
+    const baseEnv = windowsPortableEnv(home);
+    const env = { ...baseEnv, SystemRoot: String.raw`\\attacker\share` };
+    const managedRoot = join(baseEnv.LOCALAPPDATA, "Programs", "Keiko");
+    const shortcut = join(
+      baseEnv.APPDATA,
+      "Microsoft",
+      "Windows",
+      "Start Menu",
+      "Programs",
+      "Keiko.lnk",
+    );
+    const events: SecurityLogEvent[] = [];
+    const selectedStateDirs: string[] = [];
+    const securityLogSinkFactory = (selectedStateDir: string): SecurityLogSink => {
+      selectedStateDirs.push(selectedStateDir);
+      return {
+        write(event): void {
+          events.push(event);
+        },
+      };
+    };
+    writeWindowsFixture(source);
+    const c = capture();
+
+    try {
+      const code = await runPortableCli(
+        [
+          "setup",
+          "--target",
+          "windows-x64",
+          "--portable-root",
+          source,
+          "--managed-root",
+          managedRoot,
+          "--state-dir",
+          stateDir,
+        ],
+        c.io,
+        env,
+        { homedir: () => home, now: () => NOW, securityLogSinkFactory },
+      );
+
+      expect(code).toBe(1);
+      expect(existsSync(shortcut)).toBe(false);
+      expect(selectedStateDirs).toEqual([stateDir]);
+      expect(events).toHaveLength(1);
+      expect(events[0]).toMatchObject({
+        category: "security",
+        op: "security.windows-shortcut.system-root-refused",
+        errorKind: "WindowsSystemDirectoryError",
+        extra: { mode: "create" },
+      });
+      expect(events[0]?.correlationId).toMatch(/^[0-9a-f-]{36}$/u);
+      expect(JSON.stringify(events)).not.toContain("attacker");
+      expect(JSON.stringify(events)).not.toContain(shortcut);
+    } finally {
+      if (platform !== undefined) Object.defineProperty(process, "platform", platform);
+    }
   });
 
   it("promotes a Windows bootstrap payload into a managed root and records content-free state", async () => {
@@ -2238,6 +2306,53 @@ describe("runPortableCli", () => {
     expect(code).toBe(0);
     expect(started).toBe(true);
     expect(c.out()).toContain("containment is waived");
+  });
+
+  it("threads the command-correlated security sink into portable launch lifecycle", async () => {
+    const root = tempRoot();
+    const home = join(root, "home");
+    const source = writePortableFixture(join(root, "bootstrap"), "macos-x64");
+    const managedRoot = managedRootForTarget(home, "macos-x64");
+    const stateDir = join(root, "state");
+    const events: SecurityLogEvent[] = [];
+
+    await runPortableCli(
+      portableLaunchArgs("macos-x64", source, managedRoot, stateDir),
+      capture().io,
+      {},
+      {
+        homedir: () => home,
+        now: () => NOW,
+        spawnFn: () => spawn(process.execPath, ["-e", ""], { stdio: "ignore" }),
+      },
+    );
+
+    const code = await runPortableCli(
+      portableLaunchArgs("macos-x64", managedRoot, managedRoot, stateDir),
+      capture().io,
+      {},
+      {
+        homedir: () => home,
+        activateMacosRuntimeFn: () => Promise.resolve("waived-unsigned" as const),
+        securityLogSinkFactory: () => ({
+          write: (event): void => {
+            events.push(event);
+          },
+        }),
+        lifecycleFn: (_command, _args, _io, _env, deps) => {
+          deps.securityLogSink?.write({
+            category: "security",
+            op: "security.windows-lifecycle-opener.system-root-refused",
+            errorKind: "WindowsSystemDirectoryError",
+          });
+          return Promise.resolve(0);
+        },
+      },
+    );
+
+    expect(code).toBe(0);
+    expect(events).toHaveLength(1);
+    expect(events[0]?.correlationId).toMatch(/^[0-9a-f-]{36}$/u);
   });
 
   it("surfaces a failed launch through the failure notifier with the launch environment", async () => {

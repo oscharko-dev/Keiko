@@ -20,6 +20,8 @@ import { runUpdateCli } from "./update.js";
 import { emitDoctorWarning, runDoctorCli } from "./doctor.js";
 import { runAuditCli } from "./audit.js";
 import { runSupportCli } from "./support.js";
+import { loadServer } from "./lazy-modules.js";
+import type { CliSecurityLogSinkFactory } from "./security-log.js";
 import type { EnvSource } from "@oscharko-dev/keiko-model-gateway";
 // The version constant comes from the contracts LEAF, not the keiko-sdk barrel:
 // the sdk package eagerly re-exports harness/workflows/evidence/gateway/
@@ -82,6 +84,99 @@ type CommandHandler = (
   env: EnvSource,
 ) => number | Promise<number>;
 
+async function productionSecurityLogSinkFactory(): Promise<CliSecurityLogSinkFactory | undefined> {
+  if (process.platform !== "win32") return undefined;
+  try {
+    const server = await loadServer();
+    return server.createFileServerLogSink;
+  } catch {
+    warnSecurityLogSinkUnavailable();
+    return undefined;
+  }
+}
+
+function warnSecurityLogSinkUnavailable(): void {
+  try {
+    process.emitWarning(
+      "Keiko CLI security activity-log evidence may be incomplete because the sink is unavailable.",
+      {
+        type: "KeikoActivityLog",
+        code: "KEIKO_CLI_SECURITY_LOG_SINK_UNAVAILABLE",
+      },
+    );
+  } catch {
+    // The warning channel is the last body-free fallback. Logging must never block a repair,
+    // uninstall, or portable command when that channel is unavailable too.
+  }
+}
+
+function runRepairCommand(
+  rest: readonly string[],
+  io: CliIo,
+  env: EnvSource,
+): number | Promise<number> {
+  // Keep repair's established synchronous return on hosts that cannot invoke the Windows shortcut
+  // helper. Windows loads the existing file sink only after dispatch, never on `keiko --version`.
+  if (process.platform !== "win32" || rest[0] === "--help" || rest[0] === "-h") {
+    return runRepairCli(rest, io, env);
+  }
+  return productionSecurityLogSinkFactory().then((securityLogSinkFactory) =>
+    runRepairCli(rest, io, env, { securityLogSinkFactory }),
+  );
+}
+
+function runLauncherCommand(
+  rest: readonly string[],
+  io: CliIo,
+  env: EnvSource,
+): number | Promise<number> {
+  const command = rest[0];
+  const needsWindowsHelper = process.platform === "win32" && command === "install";
+  if (!needsWindowsHelper) return runLauncherCli(rest, io, env);
+  return productionSecurityLogSinkFactory().then((securityLogSinkFactory) =>
+    runLauncherCli(rest, io, env, { securityLogSinkFactory }),
+  );
+}
+
+function runLifecycleCommand(
+  command: "start" | "restart",
+  rest: readonly string[],
+  io: CliIo,
+  env: EnvSource,
+): number | Promise<number> {
+  const needsWindowsOpener = process.platform === "win32" && rest.includes("--open");
+  if (!needsWindowsOpener) return runLifecycleCli(command, rest, io, env);
+  return productionSecurityLogSinkFactory().then((securityLogSinkFactory) =>
+    runLifecycleCli(command, rest, io, env, { securityLogSinkFactory }),
+  );
+}
+
+async function runUninstallCommand(
+  rest: readonly string[],
+  io: CliIo,
+  env: EnvSource,
+): Promise<number> {
+  const help = rest[0] === "--help" || rest[0] === "-h";
+  return runUninstallCli(rest, io, env, {
+    securityLogSinkFactory: help ? undefined : await productionSecurityLogSinkFactory(),
+  });
+}
+
+async function runPortableCommand(
+  rest: readonly string[],
+  io: CliIo,
+  env: EnvSource,
+): Promise<number> {
+  const command = rest[0];
+  const noShortcutOperation =
+    command === undefined || command === "--help" || command === "-h" || command === "status";
+  return runPortableCli(rest, io, env, {
+    securityLogSinkFactory: noShortcutOperation
+      ? undefined
+      : await productionSecurityLogSinkFactory(),
+  });
+}
+
 // A Map has no prototype-chain lookup surface — `.get("toString")` etc. return undefined instead
 // of resolving to inherited Object.prototype functions. An object literal indexed by raw argv let
 // `keiko toString` dispatch into `Object.prototype.toString`, whose "[object Object]" return
@@ -105,19 +200,22 @@ const COMMAND_HANDLERS: ReadonlyMap<string, CommandHandler> = new Map<string, Co
   ["doctor", runDoctorCli],
   ["audit", (rest, io, env): Promise<number> => runAuditCli(rest, io, env)],
   ["support", (rest, io, env): Promise<number> => runSupportCli(rest, io, env)],
-  ["repair", runRepairCli],
-  ["uninstall", runUninstallCli],
+  ["repair", runRepairCommand],
+  ["uninstall", runUninstallCommand],
   ["update", runUpdateCli],
-  ["start", (rest, io, env): number | Promise<number> => runLifecycleCli("start", rest, io, env)],
+  [
+    "start",
+    (rest, io, env): number | Promise<number> => runLifecycleCommand("start", rest, io, env),
+  ],
   ["stop", (rest, io, env): number | Promise<number> => runLifecycleCli("stop", rest, io, env)],
   ["status", (rest, io, env): number | Promise<number> => runLifecycleCli("status", rest, io, env)],
   [
     "restart",
-    (rest, io, env): number | Promise<number> => runLifecycleCli("restart", rest, io, env),
+    (rest, io, env): number | Promise<number> => runLifecycleCommand("restart", rest, io, env),
   ],
   ["ui", runUiCli],
-  ["launcher", runLauncherCli],
-  ["portable", runPortableCli],
+  ["launcher", runLauncherCommand],
+  ["portable", runPortableCommand],
 ]);
 
 // Dispatches named subcommands; returns undefined when the name is not recognised.

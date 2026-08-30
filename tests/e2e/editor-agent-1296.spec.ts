@@ -214,7 +214,7 @@ async function triggerLiveInlineGhost(page: Page, editorWindow: Locator): Promis
   // can leave Firefox's fallback `textarea.inputarea` unfocused (support/editor-chord.ts
   // `focusMonacoInput`'s doc comment). An unfocused fallback means the select-all chord below
   // reaches nothing, and `insertText` then APPENDS instead of replacing — the same silent
-  // corruption class `replaceEditorBuffer` was written to catch. Use the shared, engine-agnostic
+  // corruption class `replaceEditorBuffer` was written to catch. Use the shared, fail-closed
   // focus helper instead of re-deriving a weaker click-only version of it here.
   await focusMonacoInput(editorWindow);
   const modifier = await editorModifier(page);

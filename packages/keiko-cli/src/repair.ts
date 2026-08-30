@@ -82,6 +82,8 @@ import {
   SecretVaultStoreError,
   readLocalVaultReferences,
 } from "@oscharko-dev/keiko-security/secret-vault";
+import type { SecurityLogSink } from "@oscharko-dev/keiko-security";
+import { createCliSecurityLogSink, type CliSecurityLogSinkFactory } from "./security-log.js";
 
 const USAGE = `Usage:
   keiko repair [--state-dir PATH] [--config PATH] [--dry-run]
@@ -137,6 +139,7 @@ export interface RepairCliDeps {
   readonly argv?: readonly string[] | undefined;
   readonly homedir?: () => string;
   readonly isProcessAlive?: (pid: number) => boolean;
+  readonly securityLogSinkFactory?: CliSecurityLogSinkFactory | undefined;
 }
 
 function readFlagValue(args: readonly string[], index: number): string | null {
@@ -641,8 +644,9 @@ function checkPortableManagedInstall(
   stateDir: string,
   env: EnvSource,
   homedir: string,
+  securityLogSink?: SecurityLogSink,
 ): CheckResult {
-  const recordResult = readPortableRecordForRepair(stateDir, env, homedir);
+  const recordResult = readPortableRecordForRepair(stateDir, env, homedir, securityLogSink);
   if (recordResult.kind === "error") {
     return action("Portable managed install", recordResult.message);
   }
@@ -679,8 +683,9 @@ function checkPortableRegistration(
   homedir: string,
   dryRun: boolean,
   io: CliIo,
+  securityLogSink?: SecurityLogSink,
 ): CheckResult {
-  const recordResult = readPortableRecordForRepair(stateDir, env, homedir);
+  const recordResult = readPortableRecordForRepair(stateDir, env, homedir, securityLogSink);
   if (recordResult.kind === "error") {
     return action("Portable registration", recordResult.message);
   }
@@ -700,6 +705,7 @@ function checkPortableRegistration(
     record.managedRoot,
     env,
     homedir,
+    { securityLogSink },
   );
   const status = portableRegistrationStatus(health, dryRun);
   if (status !== "repair") return status;
@@ -710,6 +716,7 @@ function checkPortableRegistration(
     env,
     homedir,
     io,
+    { securityLogSink },
   );
   return fixed(
     "Portable registration",
@@ -746,11 +753,15 @@ function readPortableRecordForRepair(
   stateDir: string,
   env: EnvSource,
   homedir: string,
+  securityLogSink?: SecurityLogSink,
 ):
   | { readonly kind: "ok"; readonly record: ReturnType<typeof attestedPortableInstallRecord> }
   | { readonly kind: "error"; readonly message: string } {
   try {
-    return { kind: "ok", record: attestedPortableInstallRecord(stateDir, env, homedir) };
+    return {
+      kind: "ok",
+      record: attestedPortableInstallRecord(stateDir, env, homedir, { securityLogSink }),
+    };
   } catch (error) {
     return {
       kind: "error",
@@ -906,6 +917,7 @@ interface ResolvedRepairDeps {
   readonly argv: readonly string[];
   readonly homedir: () => string;
   readonly isProcessAlive: (pid: number) => boolean;
+  readonly securityLogSinkFactory?: CliSecurityLogSinkFactory | undefined;
 }
 
 function resolveDeps(deps: RepairCliDeps): ResolvedRepairDeps {
@@ -914,6 +926,7 @@ function resolveDeps(deps: RepairCliDeps): ResolvedRepairDeps {
     argv: deps.argv ?? process.argv,
     homedir: deps.homedir ?? defaultHomedir,
     isProcessAlive: deps.isProcessAlive ?? defaultIsProcessAlive,
+    securityLogSinkFactory: deps.securityLogSinkFactory,
   };
 }
 
@@ -949,6 +962,7 @@ function collectRepairResults(
   resolved: ResolvedRepairDeps,
 ): readonly CheckResult[] {
   const stateDir = resolveStateDir(resolved.cwd, env, parsed.stateDirArg);
+  const securityLogSink = createCliSecurityLogSink(stateDir, resolved.securityLogSinkFactory);
   const defaultConfigCandidates = defaultLocalGatewayConfigCandidates(
     env,
     resolved.homedir(),
@@ -963,8 +977,15 @@ function collectRepairResults(
           checkStateDirPerms(stateDir, parsed.dryRun),
           ...checkRuntimeStateArtifacts(stateDir, parsed.dryRun),
           checkLauncherRecords(stateDir, resolved.homedir(), io, parsed.dryRun),
-          checkPortableManagedInstall(stateDir, env, resolved.homedir()),
-          checkPortableRegistration(stateDir, env, resolved.homedir(), parsed.dryRun, io),
+          checkPortableManagedInstall(stateDir, env, resolved.homedir(), securityLogSink),
+          checkPortableRegistration(
+            stateDir,
+            env,
+            resolved.homedir(),
+            parsed.dryRun,
+            io,
+            securityLogSink,
+          ),
         ]
       : [stateRootAction];
   return [

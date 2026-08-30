@@ -281,7 +281,7 @@ describe("rust-analyzer fake-protocol security conformance", () => {
       },
     });
     await expect.poll(() => processManager.getLspProcessStatus()).toBe("READY");
-    controllers[0]?.crash();
+    controllers[0]?.emitError();
     await expect.poll(() => controllers.length).toBe(2);
     await expect.poll(() => processManager.getLspProcessStatus()).toBe("READY");
     expect(processManager.getHealthSnapshot()?.restartCount).toBe(1);

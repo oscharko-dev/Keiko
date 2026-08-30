@@ -1,7 +1,16 @@
 import { spawn } from "node:child_process";
-import { join as joinWindowsPath } from "node:path/win32";
 import type { EnvSource } from "@oscharko-dev/keiko-model-gateway";
-import { windowsSystemRoot } from "@oscharko-dev/keiko-security";
+import {
+  WindowsSystemBinaryMissingError,
+  WindowsSystemDirectoryError,
+  emitSecurityLogEvent,
+  resolveWindowsSystemDirectory,
+  resolveWindowsSystemExecutable,
+  securityErrorKind,
+  type SecurityLogSink,
+  type WindowsBinaryExistsCheck,
+  type WindowsSystemDirectoryIdentityCheck,
+} from "@oscharko-dev/keiko-security";
 
 /**
  * A desktop double-click gives the portable launcher no terminal: every `io.err` line vanishes and
@@ -31,11 +40,13 @@ export interface PortableFailureNotifierDeps {
   readonly platform?: (() => NodeJS.Platform) | undefined;
   readonly runAlert?: ((script: string) => void) | undefined;
   readonly runWindowsAlert?: ((message: string, env: EnvSource) => void) | undefined;
+  readonly securityLogSink?: SecurityLogSink | undefined;
+  readonly windowsBinaryExists?: WindowsBinaryExistsCheck | undefined;
+  readonly windowsSystemDirectoryIdentity?: WindowsSystemDirectoryIdentityCheck | undefined;
   /**
-   * Receives one fixed, content-free line when the alert itself cannot be shown. The CLI wires
-   * this to stderr: there is no operator diagnostic sink on this pre-server surface, and the
-   * primary launch diagnosis is already on stderr — this line only keeps the notifier's own
-   * failure from being silent.
+   * Receives one fixed, content-free line when the alert itself cannot be shown. The CLI keeps
+   * this stderr fallback for the person who launched it; `securityLogSink` separately carries the
+   * correlated machine-reconstruction event for resolver and spawn failures.
    */
   readonly reportAlertFailure?: ((line: string) => void) | undefined;
 }
@@ -97,10 +108,6 @@ export function runDetachedAlert(
   child.unref();
 }
 
-function windowsPowerShellExecutable(env: EnvSource): string {
-  return joinWindowsPath(windowsSystemRoot(env), ...WINDOWS_POWERSHELL_PARTS);
-}
-
 function powershellSingleQuoted(value: string): string {
   return `'${value.replaceAll("'", "''")}'`;
 }
@@ -118,41 +125,115 @@ export function runDetachedWindowsAlert(
   env: EnvSource,
   spawnFn: DetachedAlertSpawn = spawn,
   reportAlertFailure: (line: string) => void = defaultAlertFailureReport,
+  identityCheck?: WindowsSystemDirectoryIdentityCheck,
+  securityLogSink?: SecurityLogSink,
+  existsAsFile?: WindowsBinaryExistsCheck,
 ): void {
-  const systemRoot = windowsSystemRoot(env);
-  const child = spawnFn(
-    windowsPowerShellExecutable(env),
-    [
-      "-NoLogo",
-      "-NoProfile",
-      "-Sta",
-      "-WindowStyle",
-      "Hidden",
-      "-NonInteractive",
-      "-ExecutionPolicy",
-      "Bypass",
-      "-Command",
-      windowsAlertCommand(message),
-    ],
-    {
-      detached: true,
-      // PowerShell and WPF need the core system variables; a fully empty environment can fail
-      // to initialize the runtime. Everything else stays withheld from the detached child.
-      env: {
-        SystemRoot: systemRoot,
-        WINDIR: systemRoot,
-        ...(env.TEMP === undefined ? {} : { TEMP: env.TEMP }),
-        ...(env.TMP === undefined ? {} : { TMP: env.TMP }),
-      },
-      shell: false,
-      stdio: "ignore",
-      windowsHide: true,
-    },
-  );
-  child.on("error", () => {
+  const system = resolveWindowsAlertSystem(env, identityCheck, existsAsFile, securityLogSink);
+  const child = spawnWindowsAlertChild(message, env, system, spawnFn, securityLogSink);
+  child.on("error", (error) => {
+    logWindowsAlertSpawnFailure(error, securityLogSink);
     reportAlertFailure(ALERT_FAILURE_LINE);
   });
   child.unref();
+}
+
+interface WindowsAlertSystem {
+  readonly command: string;
+  readonly systemRoot: string;
+}
+
+function resolveWindowsAlertSystem(
+  env: EnvSource,
+  identityCheck: WindowsSystemDirectoryIdentityCheck | undefined,
+  existsAsFile: WindowsBinaryExistsCheck | undefined,
+  securityLogSink: SecurityLogSink | undefined,
+): WindowsAlertSystem {
+  try {
+    return {
+      systemRoot: resolveWindowsSystemDirectory(env, identityCheck),
+      command: resolveWindowsSystemExecutable(
+        WINDOWS_POWERSHELL_PARTS,
+        env,
+        existsAsFile,
+        identityCheck,
+      ),
+    };
+  } catch (error) {
+    logWindowsAlertSystemFailure(error, securityLogSink);
+    throw error;
+  }
+}
+
+function spawnWindowsAlertChild(
+  message: string,
+  env: EnvSource,
+  system: WindowsAlertSystem,
+  spawnFn: DetachedAlertSpawn,
+  securityLogSink: SecurityLogSink | undefined,
+): DetachedAlertChild {
+  try {
+    return spawnFn(
+      system.command,
+      [
+        "-NoLogo",
+        "-NoProfile",
+        "-Sta",
+        "-WindowStyle",
+        "Hidden",
+        "-NonInteractive",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-Command",
+        windowsAlertCommand(message),
+      ],
+      {
+        detached: true,
+        env: {
+          SystemRoot: system.systemRoot,
+          WINDIR: system.systemRoot,
+          ...(env.TEMP === undefined ? {} : { TEMP: env.TEMP }),
+          ...(env.TMP === undefined ? {} : { TMP: env.TMP }),
+        },
+        shell: false,
+        stdio: "ignore",
+        windowsHide: true,
+      },
+    );
+  } catch (error) {
+    logWindowsAlertSpawnFailure(error, securityLogSink);
+    throw error;
+  }
+}
+
+function logWindowsAlertSystemFailure(error: unknown, sink: SecurityLogSink | undefined): void {
+  if (error instanceof WindowsSystemDirectoryError) {
+    emitSecurityLogEvent(sink, {
+      level: "warn",
+      category: "security",
+      op: "security.windows-portable-alert.system-root-refused",
+      errorKind: securityErrorKind(error),
+      extra: { surface: "portable-failure-alert" },
+    });
+  } else if (error instanceof WindowsSystemBinaryMissingError) {
+    emitSecurityLogEvent(sink, {
+      level: "error",
+      category: "diagnostic",
+      op: "security.windows-portable-alert.system-binary-missing",
+      errorKind: securityErrorKind(error),
+      extra: { surface: "portable-failure-alert" },
+    });
+  }
+}
+
+function logWindowsAlertSpawnFailure(error: unknown, sink: SecurityLogSink | undefined): void {
+  emitSecurityLogEvent(sink, {
+    level: "error",
+    category: "diagnostic",
+    op: "portable.windows-alert.spawn-failed",
+    errorKind: securityErrorKind(error),
+    extra: { surface: "portable-failure-alert" },
+  });
 }
 
 function defaultAlertFailureReport(line: string): void {
@@ -185,7 +266,15 @@ function notifyWindowsLaunchFailure(
   const runWindowsAlert =
     deps.runWindowsAlert ??
     ((alertMessage: string, notifyEnv: EnvSource): void => {
-      runDetachedWindowsAlert(alertMessage, notifyEnv, undefined, reportAlertFailure);
+      runDetachedWindowsAlert(
+        alertMessage,
+        notifyEnv,
+        undefined,
+        reportAlertFailure,
+        deps.windowsSystemDirectoryIdentity,
+        deps.securityLogSink,
+        deps.windowsBinaryExists,
+      );
     });
   runWindowsAlert(text, env);
 }

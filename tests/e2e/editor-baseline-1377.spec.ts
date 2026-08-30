@@ -139,7 +139,7 @@ async function openSeededEditor(
     readonly active?: string | null;
     readonly openFiles?: readonly string[];
   } = {},
-): Promise<Locator> {
+): Promise<{ readonly root: string; readonly workspace: Locator }> {
   const { root } = createEditorWorkspace(WORKSPACE_FILES);
   const openFiles = options.openFiles ?? OPEN_FILES;
   await seedEditorWindow(page, {
@@ -154,7 +154,7 @@ async function openSeededEditor(
   await expect(firstPane(workspace).locator(EDITOR_SELECTORS.tabLabel)).toHaveCount(
     openFiles.length,
   );
-  return workspace;
+  return { root, workspace };
 }
 
 async function openNavigationEditor(
@@ -367,7 +367,7 @@ function languageResponse(page: Page, operation: string): Promise<unknown> {
 
 async function scenarioTreeOpen(page: Page, testInfo: TestInfo): Promise<void> {
   const errors = collectPageErrors(page);
-  const workspace = await openSeededEditor(page, { active: APP_FILE });
+  const { workspace } = await openSeededEditor(page, { active: APP_FILE });
   const pane = firstPane(workspace);
 
   await openTreeFile(workspace, README_FILE);
@@ -381,7 +381,7 @@ async function scenarioTreeOpen(page: Page, testInfo: TestInfo): Promise<void> {
 
 async function scenarioTabSwitchAndClose(page: Page): Promise<void> {
   const errors = collectPageErrors(page);
-  const workspace = await openSeededEditor(page);
+  const { workspace } = await openSeededEditor(page);
   const pane = firstPane(workspace);
   expect(await tabLabels(pane)).toEqual([...OPEN_FILES]);
 
@@ -401,7 +401,7 @@ async function scenarioTabSwitchAndClose(page: Page): Promise<void> {
 
 async function scenarioTabPersistence(page: Page): Promise<void> {
   const errors = collectPageErrors(page);
-  const workspace = await openSeededEditor(page);
+  const { workspace } = await openSeededEditor(page);
   const pane = firstPane(workspace);
   expect(await tabLabels(pane)).toEqual([...OPEN_FILES]);
 
@@ -419,7 +419,7 @@ async function scenarioTabPersistence(page: Page): Promise<void> {
 
 async function scenarioSplitAndResize(page: Page, testInfo: TestInfo): Promise<void> {
   const errors = collectPageErrors(page);
-  const workspace = await openSeededEditor(page);
+  const { workspace } = await openSeededEditor(page);
   expect(await paneCount(workspace)).toBe(1);
 
   await splitActivePane(workspace, APP_FILE, "right");
@@ -446,10 +446,10 @@ async function scenarioSplitAndResize(page: Page, testInfo: TestInfo): Promise<v
 
 async function scenarioDirtyBuffer(page: Page): Promise<void> {
   const errors = collectPageErrors(page);
-  const workspace = await openSeededEditor(page);
+  const { root, workspace } = await openSeededEditor(page);
   const pane = firstPane(workspace);
 
-  await replaceEditorBuffer(page, pane, "export const dirty = true;\n");
+  await replaceEditorBuffer(page, pane, "export const dirty = true;\n", root);
 
   await expect(tabFor(pane, APP_FILE)).toHaveAttribute("data-dirty", "true");
   await expect(
@@ -460,10 +460,10 @@ async function scenarioDirtyBuffer(page: Page): Promise<void> {
 
 async function scenarioDirtyCloseGuard(page: Page, testInfo: TestInfo): Promise<void> {
   const errors = collectPageErrors(page);
-  const workspace = await openSeededEditor(page);
+  const { root, workspace } = await openSeededEditor(page);
   const pane = firstPane(workspace);
 
-  await replaceEditorBuffer(page, pane, "export const stillDirty = 1;\n");
+  await replaceEditorBuffer(page, pane, "export const stillDirty = 1;\n", root);
   await expect(tabFor(pane, APP_FILE)).toHaveAttribute("data-dirty", "true");
 
   await closeButton(pane, APP_FILE).click();
@@ -491,10 +491,10 @@ async function scenarioDirtyCloseGuard(page: Page, testInfo: TestInfo): Promise<
 
 async function scenarioRecovery(page: Page, testInfo: TestInfo): Promise<void> {
   const errors = collectPageErrors(page);
-  const workspace = await openSeededEditor(page);
+  const { root, workspace } = await openSeededEditor(page);
   const pane = firstPane(workspace);
 
-  await replaceEditorBuffer(page, pane, "export const recoverMe = 42;\n");
+  await replaceEditorBuffer(page, pane, "export const recoverMe = 42;\n", root);
   await expect(tabFor(pane, APP_FILE)).toHaveAttribute("data-dirty", "true");
 
   // The snapshot write is an async effect; poll the IndexedDB store until it lands.
@@ -543,7 +543,7 @@ async function scenarioLoadFailure(page: Page, testInfo: TestInfo): Promise<void
 
 async function scenarioAccessibility(page: Page): Promise<void> {
   const errors = collectPageErrors(page);
-  const workspace = await openSeededEditor(page);
+  const { root, workspace } = await openSeededEditor(page);
   const pane = firstPane(workspace);
 
   // Tablist/tab roles and accessible names are present and unique.
@@ -579,7 +579,7 @@ async function scenarioAccessibility(page: Page): Promise<void> {
   // The dirty-close dialog contains focus and closes on Escape.
   const appPane = workspace.locator(EDITOR_SELECTORS.pane).nth(1);
   await expect(tabHit(appPane, APP_FILE)).toHaveAttribute("aria-selected", "true");
-  await replaceEditorBuffer(page, appPane, "export const a11y = true;\n");
+  await replaceEditorBuffer(page, appPane, "export const a11y = true;\n", root);
   await closeButton(appPane, APP_FILE).click();
   const dialog = workspace.locator(EDITOR_SELECTORS.dirtyDialog);
   await expect(dialog).toBeVisible();
@@ -593,7 +593,7 @@ async function scenarioAccessibility(page: Page): Promise<void> {
 
 async function scenarioOutlineBreadcrumbNavigation(page: Page, testInfo: TestInfo): Promise<void> {
   const errors = collectPageErrors(page);
-  const workspace = await openSeededEditor(page);
+  const { workspace } = await openSeededEditor(page);
   const outline = workspace.getByRole("region", { name: "Workspace outline" });
   const breadcrumbs = workspace.getByRole("navigation", { name: "Editor breadcrumbs" });
 

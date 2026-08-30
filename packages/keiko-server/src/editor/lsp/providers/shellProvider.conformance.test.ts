@@ -277,7 +277,7 @@ describe("Bash Language Server fake-protocol security conformance", () => {
     await runHostLanguageOperation(request, options(spawn));
     const firstPath = paths[0] ?? "";
 
-    controllers[0]?.crash();
+    controllers[0]?.emitError();
     const outcome = await runHostLanguageOperation(request, options(spawn));
 
     expect(outcome).toMatchObject({ kind: "hover" });

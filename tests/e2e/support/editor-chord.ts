@@ -18,7 +18,8 @@
 //
 // The genuine cross-engine difference in this file is a different one, and it lives in
 // `focusMonacoInput` below: the EditContext-vs-textarea input surface.
-import { expect, type Locator, type Page } from "@playwright/test";
+import { expect, type Locator, type Page, type Request } from "@playwright/test";
+import { editorPaneWindowId } from "../../../packages/keiko-ui/src/app/components/desktop/widgets/cards/editorPaneWindowId.js";
 
 /**
  * MONACO CHORDS ONLY. Do not use this for a Keiko product shortcut — they resolve differently, and
@@ -42,8 +43,8 @@ export async function editorModifier(page: Page): Promise<"Meta" | "Control"> {
 }
 
 /**
- * Presses the editor's select-all chord and waits for the page to settle, so a caller can follow
- * it with `insertText` and REPLACE the buffer rather than append to it.
+ * Presses the editor's select-all chord and waits for the page to settle, so a caller can replace
+ * the buffer rather than append to it.
  */
 export async function selectAllInEditor(page: Page): Promise<void> {
   await pressChord(page, await editorModifier(page));
@@ -70,107 +71,173 @@ async function pressChord(page: Page, modifier: "Meta" | "Control"): Promise<voi
  * first path, Firefox the second — verified from a Firefox trace snapshot of this very editor:
  * `native-edit-context` 0 occurrences, `inputarea` 2.
  *
- * Why this matters: clicking `.monaco-editor` lands focus on the EditContext surface in Chromium,
- * so a following select-all chord works. On Firefox the same click does not reliably focus the
- * fallback textarea, the chord reaches nothing, and — because a select-all that selects nothing
- * fails SILENTLY — the next `insertText` APPENDS. That is how a two-line buffer became four lines
- * and surfaced much later as an unrelated-looking strict-mode violation.
+ * Why this matters: clicking `.monaco-editor` lands focus on the EditContext surface in Chromium.
+ * Firefox instead needs its fallback textarea focused explicitly. Focus is necessary in both
+ * engines; the Gecko select-all chord remains unproven, so callers retain their explicit Gecko
+ * skip rather than treating focus alone as evidence that replacement is safe.
  */
 export async function focusMonacoInput(editorWindow: Locator): Promise<void> {
   const editor = editorWindow.locator(".monaco-editor").first();
   await expect(editor).toBeVisible();
   await editor.click();
-  // Whichever surface this engine created. `.or()` resolves to the one that exists, so this needs
-  // no platform branch and keeps working if a future Monaco brings EditContext to more engines.
-  const input = editor
-    .locator(".native-edit-context")
-    .or(editor.locator("textarea.inputarea"))
-    .first();
+  const input = monacoInput(editorWindow);
   await input.focus();
   await expect(input).toBeFocused();
 }
 
-// Monaco renders an empty line as a lone non-breaking-space placeholder (to keep its line
-// height), never as a truly empty `.view-line`. Normalizing that back to a plain space (then
-// trimming) is what lets a genuinely blank line compare equal to "" instead of to a stray nbsp.
-function normalizeEditorLine(line: string): string {
-  return line.replace(/\u00a0/gu, " ").trim();
-}
-
-// The expected reading of `text` in the SAME shape the per-line innerText comparison needs: one
-// entry per line, in order. A document with N "\n" characters renders N+1 lines (the content
-// after the final "\n" is itself a — possibly empty — line), and Monaco represents a wholly empty
-// document as exactly one empty line, never zero.
-function normalizedEditorLines(text: string): readonly string[] {
-  return text.length === 0 ? [""] : text.split("\n").map(normalizeEditorLine);
+function monacoInput(editorWindow: Locator): Locator {
+  const editor = editorWindow.locator(".monaco-editor").first();
+  // Whichever surface this engine created. `.or()` resolves to the one that exists, so this needs
+  // no platform branch and keeps working if a future Monaco brings EditContext to more engines.
+  return editor.locator(".native-edit-context").or(editor.locator("textarea.inputarea")).first();
 }
 
 /**
- * The replacement postcondition, as a pure function so it can be tested against fixtures instead of
- * only against a live editor. Returns the reasons the rendered buffer is NOT a clean replacement of
- * `staleLines` by `text`; an empty array means it is.
+ * Reads the complete buffer from the product's hot-exit write payload.
  *
- * Three things must hold, and the first two were missing (PR #3355 review, P2). The old check asked
- * only "does no expected line appear more often than expected, and does the first one appear at
- * all", which accepted both corruptions it claimed to catch:
- *
- *   expected ["new"]  actual ["old", "new"]  -> "new" appears once, "new" is present  => PASSED
- *   expected ["new"]  actual [""]            -> `"new".startsWith("")` is true        => PASSED
- *
- * so a select-all that reached nothing could leave stale content, and one that wiped the buffer
- * without inserting could leave it empty, and neither failed here.
+ * Monaco virtualizes `.view-line` nodes, so rendered DOM can neither prove that off-screen stale
+ * lines are gone nor preserve exact leading/trailing whitespace. The hot-exit write is produced
+ * from the host's controlled buffer after Monaco's `onChange` supplies the full model value. Reading
+ * that already-existing request therefore verifies the complete buffer without adding a test-only
+ * product hook or exposing file content in a DOM attribute.
  */
-export function replacementViolations(
-  expected: readonly string[],
-  actual: readonly string[],
-  staleLines: readonly string[],
-): readonly string[] {
-  const violations: string[] = [];
-  const rendered = JSON.stringify(actual);
-  const meaningful = expected.filter((line) => line !== "");
-  if (meaningful.length === 0) {
-    const leftovers = actual.filter((line) => line !== "");
-    if (leftovers.length > 0) violations.push(`expected an empty buffer, got ${rendered}`);
-    return violations;
-  }
-  // 1. No line may appear MORE often than it was inserted. Counted against the expected
-  //    multiplicity, not against 1: a fixture may legitimately repeat a line ("same\nsame" renders
-  //    two), and demanding at most one would fail a correct replacement.
-  for (const line of new Set(meaningful)) {
-    const allowed = expected.filter((candidate) => candidate === line).length;
-    const seen = actual.filter((candidate) => candidate === line).length;
-    if (seen > allowed) {
-      violations.push(`"${line}" appears ${String(seen)}x, at most ${String(allowed)}x expected`);
-    }
-  }
-  // 2. No line that was in the buffer BEFORE may survive unless the new text also contains it. This
-  //    is the stale-content half, and it needs the pre-replacement snapshot: without it there is no
-  //    way to tell "old buffer" from a line the caller legitimately inserted. Preferred over
-  //    asserting an empty buffer right after Backspace, which would add a round-trip inside the
-  //    gesture and race Monaco's ghost text.
-  for (const line of new Set(staleLines.filter((candidate) => candidate !== ""))) {
-    if (expected.includes(line)) continue;
-    if (actual.includes(line)) violations.push(`stale line "${line}" survived the replacement`);
-  }
-  // 3. The buffer must actually carry the new text. `startsWith` in BOTH directions tolerates
-  //    Monaco replacing a rendered line with an inline completion (ghost text), which is why this
-  //    is not an equality check — but an empty rendered line is not a truncation of anything, and
-  //    accepting it is what let a wiped-and-not-reinserted buffer pass.
-  const anchor = meaningful[0] ?? "";
-  const carried = actual.some(
-    (line) => line !== "" && (line.startsWith(anchor) || anchor.startsWith(line)),
-  );
-  if (!carried) violations.push(`expected the buffer to contain "${anchor}", got ${rendered}`);
-  return violations;
+function isUnknownRecord(value: unknown): value is Readonly<Record<string, unknown>> {
+  return typeof value === "object" && value !== null;
 }
 
-async function renderedLines(editorWindow: Locator): Promise<readonly string[]> {
-  return (await editorWindow.locator(".view-line").allInnerTexts()).map(normalizeEditorLine);
+function hotExitSnapshotString(
+  payload: unknown,
+  field: "content" | "paneId" | "relativePath" | "windowId" | "workspaceRoot",
+): string | undefined {
+  if (!isUnknownRecord(payload)) return undefined;
+  const snapshot = payload.snapshot;
+  if (!isUnknownRecord(snapshot)) return undefined;
+  const value = snapshot[field];
+  return typeof value === "string" ? value : undefined;
+}
+
+export function hotExitSnapshotContent(payload: unknown): string | undefined {
+  return hotExitSnapshotString(payload, "content");
+}
+
+export interface ExactHotExitExpectation {
+  readonly content: string;
+  readonly paneId: string;
+  readonly relativePath: string;
+  readonly windowId: string;
+  readonly workspaceRoot: string;
+}
+
+function canonicalModelText(text: string): string {
+  // Monaco follows the browser profile's Windows EOL preference in these journeys. EOL encoding is
+  // not a content difference; every other character, including all indentation, remains exact.
+  return text.replace(/\r\n?/gu, "\n");
+}
+
+export function matchesExactHotExitSnapshot(
+  payload: unknown,
+  expected: ExactHotExitExpectation,
+): boolean {
+  const observedContent = hotExitSnapshotContent(payload);
+  return (
+    observedContent !== undefined &&
+    canonicalModelText(observedContent) === canonicalModelText(expected.content) &&
+    hotExitSnapshotString(payload, "relativePath") === expected.relativePath &&
+    hotExitSnapshotString(payload, "paneId") === expected.paneId &&
+    hotExitSnapshotString(payload, "windowId") === expected.windowId &&
+    hotExitSnapshotString(payload, "workspaceRoot") === expected.workspaceRoot
+  );
+}
+
+export function isExactHotExitWrite(request: Request, expected: ExactHotExitExpectation): boolean {
+  if (request.method() !== "POST" || !request.url().endsWith("/api/editor/hot-exit/write")) {
+    return false;
+  }
+  try {
+    const payload: unknown = request.postDataJSON();
+    return matchesExactHotExitSnapshot(payload, expected);
+  } catch {
+    return false;
+  }
+}
+
+function multiRootRef(labelledBy: string | null | undefined): string | undefined {
+  if (labelledBy === undefined || labelledBy === null) return undefined;
+  const marker = "-tab-";
+  const markerIndex = labelledBy.lastIndexOf(marker);
+  return markerIndex < 0 ? undefined : labelledBy.slice(markerIndex + marker.length);
+}
+
+async function activeEditorIdentity(
+  editorWindow: Locator,
+): Promise<Omit<ExactHotExitExpectation, "content" | "workspaceRoot">> {
+  const identity = await editorWindow
+    .locator(".monaco-editor")
+    .first()
+    .evaluate((element) => {
+      const pane = element.closest<HTMLElement>("section.ed-pane[data-pane-id]");
+      const tab = pane?.querySelector<HTMLElement>(".ed-tab.active[data-tab-file]");
+      const windowFrame = element.closest<HTMLElement>(".window[data-window-id]");
+      const rootSession = element.closest<HTMLElement>(
+        '[role="tabpanel"][aria-labelledby*="-tab-root-"]',
+      );
+      return {
+        paneId: pane?.dataset.paneId,
+        relativePath: tab?.dataset.tabFile,
+        // MultiRootEditorHost exposes the opaque, body-free rootRef through the tab/panel relation.
+        // Keep the raw workspace path out of the DOM while reproducing its per-root window identity.
+        rootSessionLabel: rootSession?.getAttribute("aria-labelledby"),
+        windowId: windowFrame?.dataset.windowId,
+      };
+    });
+  if (
+    identity.paneId === undefined ||
+    identity.relativePath === undefined ||
+    identity.windowId === undefined
+  ) {
+    throw new Error("active editor identity is unavailable");
+  }
+  const rootRef = multiRootRef(identity.rootSessionLabel);
+  const runtimeWindowId =
+    rootRef === undefined ? identity.windowId : `${identity.windowId}-${rootRef}`;
+  return {
+    paneId: identity.paneId,
+    relativePath: identity.relativePath,
+    windowId: editorPaneWindowId(runtimeWindowId, identity.paneId),
+  };
+}
+
+async function pasteEditorText(editorWindow: Locator, text: string): Promise<void> {
+  // Dispatch through Monaco's real paste listener. `keyboard.insertText()` models character input,
+  // so Monaco auto-indents every embedded newline; a paste carries the complete literal buffer and
+  // preserves its indentation without using the OS clipboard or a test-only product hook.
+  await monacoInput(editorWindow).evaluate((input, pastedText) => {
+    const clipboardData = new DataTransfer();
+    clipboardData.setData("text/plain", pastedText);
+    input.dispatchEvent(
+      new ClipboardEvent("paste", {
+        bubbles: true,
+        cancelable: true,
+        clipboardData,
+        composed: true,
+      }),
+    );
+  }, text);
+}
+
+async function performReplacementGesture(
+  page: Page,
+  editorWindow: Locator,
+  text: string,
+): Promise<void> {
+  await page.keyboard.press("Backspace");
+  await pasteEditorText(editorWindow, text);
 }
 
 /**
- * Replaces the whole editor buffer with `text` — the engine-agnostic version of the
- * click-selectAll-insert dance that several specs previously each carried their own copy of.
+ * Replaces the whole editor buffer with `text` — the shared, fail-closed version of the
+ * click-selectAll-insert dance that several specs previously each carried their own copy of. The
+ * calling journeys retain an explicit Gecko skip until Monaco's fallback input accepts select-all.
  * Verifies that the select-all actually took effect AND that no old content survives anywhere in
  * the buffer, so a chord that silently reaches nothing fails HERE with a clear message instead of
  * corrupting the buffer for a later assertion.
@@ -179,25 +246,21 @@ export async function replaceEditorBuffer(
   page: Page,
   editorWindow: Locator,
   text: string,
+  workspaceRoot: string,
 ): Promise<void> {
+  const identity = await activeEditorIdentity(editorWindow);
   await focusMonacoInput(editorWindow);
-  // Snapshot BEFORE the gesture: this is what makes "stale content survived" decidable at all.
-  const staleLines = await renderedLines(editorWindow);
   await selectAllInEditor(page);
-  // Delete the selection with a REAL key event before inserting. `insertText` does not send key
-  // events — it hands the text to the engine's input pipeline — and whether that replaces an
-  // existing selection is engine-dependent: Chromium replaces, Firefox inserts at the caret and
-  // leaves the selected text in place, which is what doubled the buffer. Backspace on a selection
-  // is unambiguous in both.
-  await page.keyboard.press("Backspace");
-  await page.keyboard.insertText(text);
-  const expectedLines = normalizedEditorLines(text);
-  await expect(async () => {
-    const violations = replacementViolations(
-      expectedLines,
-      await renderedLines(editorWindow),
-      staleLines,
-    );
-    expect(violations, violations.join("; ")).toEqual([]);
-  }).toPass({ timeout: 10_000 });
+  // Register before the mutating part of the gesture so a fast state update cannot outrun the
+  // observer. The predicate ignores stale writes carrying other content or another active file and
+  // settles only when the product publishes this exact full buffer through its hot-exit path.
+  const expectation = { ...identity, content: text, workspaceRoot };
+  const exactBufferObserved = page.waitForRequest(
+    (request) => isExactHotExitWrite(request, expectation),
+    { timeout: 10_000 },
+  );
+  // Delete the selection with a real key event before pasting. Promise.all attaches rejection
+  // handlers to both operations immediately, so neither a gesture failure nor an observer timeout
+  // can leak later as an unhandled rejection.
+  await Promise.all([exactBufferObserved, performReplacementGesture(page, editorWindow, text)]);
 }

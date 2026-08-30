@@ -1,4 +1,9 @@
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
+
+import { createFileServerLogSink } from "@oscharko-dev/keiko-server";
 
 import {
   analyzeLogText,
@@ -102,6 +107,43 @@ const FIXTURE_TEXT =
 
 describe("analyzeLogText — raw log", () => {
   const result = analyzeLogText(FIXTURE_TEXT);
+
+  it("reconstructs a serialized task-workspace lifecycle failure with correlation and taxonomy", () => {
+    const stateDir = mkdtempSync(join(tmpdir(), "keiko-support-task-workspace-"));
+    const sink = createFileServerLogSink(stateDir, { level: "debug" });
+    const correlationId = "0123456789abcdef0123456789abcdef";
+    try {
+      sink.write({
+        level: "warn",
+        category: "diagnostic",
+        op: "task-workspace.lifecycle",
+        correlationId,
+        errorKind: "LOCK_CONTENTION",
+        durationMs: 17,
+        extra: {
+          operation: "provision",
+          outcome: "blocked",
+          attempt: 2,
+          worktreeCount: 1,
+        },
+      });
+      sink.close?.();
+
+      const serialized = readFileSync(join(stateDir, "logs", "server.log"), "utf8");
+      const timeline = findTimeline(analyzeLogText(serialized), correlationId);
+      expect(timeline?.correlationId).toBe(correlationId);
+      expect(timeline?.errorKinds).toEqual(["LOCK_CONTENTION"]);
+      expect(timeline?.lines[0]).toMatchObject({
+        category: "diagnostic",
+        op: "task-workspace.lifecycle",
+        errorKind: "LOCK_CONTENTION",
+        extra: { operation: "provision", outcome: "blocked", attempt: 2, worktreeCount: 1 },
+      });
+    } finally {
+      sink.close?.();
+      rmSync(stateDir, { recursive: true, force: true });
+    }
+  });
 
   it("ranks process lifetimes by first appearance and orders each lifetime by seq; a pre-v2 line ranks by its own file position", () => {
     const req1 = result.timelines.find((t) => t.correlationId === "req-1");

@@ -270,6 +270,7 @@ test("Files reflects conflict, folder, ignored, and post-save status", async ({ 
     page,
     workspace.locator(EDITOR_SELECTORS.pane).first(),
     "export const nested = 2235;\n",
+    fixture.root,
   );
   await page.keyboard.press("Control+KeyS");
   await expect(workspace.locator(EDITOR_SELECTORS.saveField)).toHaveText("Saved");

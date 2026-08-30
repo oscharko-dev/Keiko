@@ -12,6 +12,7 @@ import { tmpdir } from "node:os";
 import { isAbsolute, join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  createWindowsTerminationCapacity,
   createWindowsTaskkillBudget,
   nodeSpawnFn,
   nodeWindowsTreeKill,
@@ -24,7 +25,7 @@ import {
   type WindowsTaskkillBudget,
   type WindowsTreeKillResult,
 } from "./exec.js";
-import { WindowsSystemDirectoryError } from "./windows-shell.js";
+import { WindowsSystemBinaryMissingError, WindowsSystemDirectoryError } from "./windows-shell.js";
 import { CommandCancelledError, CommandDeniedError, CommandTimeoutError } from "./errors.js";
 import { PathEscapeError, type WorkspaceInfo } from "@oscharko-dev/keiko-workspace";
 import {
@@ -43,6 +44,17 @@ const NODE_COMMAND_RULES: readonly CommandRule[] = Object.freeze([
   { executable: "node" },
   ...DEFAULT_COMMAND_RULES,
 ]);
+const GLOBALROOT_SYSTEM_ROOT = String.raw`\\?\GLOBALROOT\SystemRoot`;
+
+function windowsSystemRootFixture(offHostRoot: string): string {
+  if (process.platform !== "win32") return offHostRoot;
+  return process.env.SystemRoot ?? process.env.WINDIR ?? String.raw`C:\Windows`;
+}
+
+function expectedWindowsSystemBinary(selectedRoot: string, binaryName: string): string {
+  const root = process.platform === "win32" ? GLOBALROOT_SYSTEM_ROOT : selectedRoot;
+  return `${root}\\System32\\${binaryName}`;
+}
 
 beforeEach(() => {
   ({ root, info } = makeWorkspace());
@@ -206,6 +218,7 @@ describe("runCommand — allowlist guard (before spawn)", () => {
       expectTerminated(kills, spawn.child);
       expect(home.cleaned()).toEqual([]);
       await vi.advanceTimersByTimeAsync(DEFAULT_SANDBOX_POLICY.terminationGraceMs);
+      await vi.runOnlyPendingTimersAsync();
       const groupKilled = kills.groupSignals.some(
         (call) => call.pid < 0 && call.signal === "SIGKILL",
       );
@@ -365,6 +378,89 @@ describe("runCommand — spawn options (no shell, clean env, detached)", () => {
 });
 
 describe("runCommand — timeout & cancellation (fake child)", () => {
+  it("refuses a Windows spawn before HOME creation when tree-kill capacity is exhausted", async () => {
+    const spawn = recordingSpawn();
+    const home = recordingHome();
+    const capacity = createWindowsTerminationCapacity(1, () => "succeeded");
+    const windowsEnv: NodeJS.ProcessEnv = {
+      PATH: process.env.PATH ?? "",
+      SystemRoot: process.env.SystemRoot ?? String.raw`C:\Windows`,
+    };
+    const held = capacity.reserve(windowsEnv);
+    expect(held).toBeDefined();
+
+    await expect(
+      runCommand(
+        {
+          command: "node",
+          args: ["-e", "wait"],
+          cwd: undefined,
+          timeoutMs: undefined,
+          signal: controller().signal,
+        },
+        {
+          ...fakeDeps(spawn.fn, windowsEnv),
+          home: home.provider,
+          platform: "win32",
+          windowsTerminationCapacity: capacity,
+        },
+      ),
+    ).rejects.toBeInstanceOf(CommandDeniedError);
+    expect(spawn.calls()).toEqual([]);
+    expect(home.made()).toEqual([]);
+
+    held?.release();
+    const admitted = runCommand(
+      {
+        command: "node",
+        args: ["-e", "ok"],
+        cwd: undefined,
+        timeoutMs: undefined,
+        signal: controller().signal,
+      },
+      {
+        ...fakeDeps(spawn.fn, windowsEnv),
+        home: home.provider,
+        platform: "win32",
+        windowsTerminationCapacity: capacity,
+      },
+    );
+    spawn.child.emit("close", 0, null);
+    await expect(admitted).resolves.toMatchObject({ exitCode: 0 });
+  });
+
+  it("refuses a Windows spawn when authoritative taskkill is unavailable", async () => {
+    const spawn = recordingSpawn();
+    const home = recordingHome();
+    const capacity = createWindowsTerminationCapacity(
+      1,
+      () => "succeeded",
+      () => {
+        throw new WindowsSystemBinaryMissingError();
+      },
+    );
+
+    await expect(
+      runCommand(
+        {
+          command: "node",
+          args: ["-e", "wait"],
+          cwd: undefined,
+          timeoutMs: undefined,
+          signal: controller().signal,
+        },
+        {
+          ...fakeDeps(spawn.fn),
+          home: home.provider,
+          platform: "win32",
+          windowsTerminationCapacity: capacity,
+        },
+      ),
+    ).rejects.toBeInstanceOf(WindowsSystemBinaryMissingError);
+    expect(spawn.calls()).toEqual([]);
+    expect(home.made()).toEqual([]);
+  });
+
   it("times out and rejects with CommandTimeoutError", async () => {
     const kills = captureKills();
     const spawn = recordingSpawn();
@@ -802,6 +898,65 @@ describe("runCommand — real node integration", () => {
     expect(home.cleaned()).toEqual(home.made());
   });
 
+  it("retains the child and HOME after a post-spawn error until close confirms exit", async () => {
+    vi.useFakeTimers();
+    const home = recordingHome();
+    const spawn = recordingSpawn();
+    const kills = captureKills();
+    const evidence: CommandTerminationEvidence[] = [];
+    try {
+      const pending = runCommand(
+        {
+          command: "node",
+          args: ["-e", "wait"],
+          cwd: undefined,
+          timeoutMs: undefined,
+          signal: controller().signal,
+          onTerminated: (event): void => {
+            evidence.push(event);
+          },
+        },
+        { ...fakeDeps(spawn.fn), home: home.provider },
+      );
+      let settled = false;
+      void pending.then(
+        () => {
+          settled = true;
+        },
+        () => {
+          settled = true;
+        },
+      );
+
+      spawn.child.emit("spawn");
+      const runtimeError = new Error("post-spawn transport failure");
+      spawn.child.emit("error", runtimeError);
+      await Promise.resolve();
+
+      expect(settled).toBe(false);
+      expect(home.cleaned()).toEqual([]);
+      expect(existsSync(home.made()[0] ?? "")).toBe(true);
+      expectTerminated(kills, spawn.child);
+      expect(evidence[0]?.reason).toBe("child-process-error");
+
+      await vi.advanceTimersByTimeAsync(DEFAULT_SANDBOX_POLICY.terminationGraceMs);
+      await vi.runOnlyPendingTimersAsync();
+      const escalated = kills.groupSignals.some(
+        (call) => call.pid < 0 && call.signal === "SIGKILL",
+      );
+      expect(escalated || spawn.child.killed.includes("SIGKILL")).toBe(true);
+      expect(settled).toBe(false);
+      expect(home.cleaned()).toEqual([]);
+
+      spawn.child.emit("close", null, "SIGKILL");
+      await expect(pending).rejects.toBe(runtimeError);
+      expect(home.cleaned()).toEqual(home.made());
+    } finally {
+      kills.restore();
+      vi.useRealTimers();
+    }
+  });
+
   it("C5: a denied command creates NO ephemeral home (nothing to clean)", async () => {
     const home = recordingHome();
     const spawn = recordingSpawn();
@@ -1155,7 +1310,8 @@ describe("runCommand — the governed credential lane", () => {
 // these tests prove only that runCommand's win32 branch actually DELEGATES to it and threads the
 // result into deps.spawn — an integration/wiring proof, not a second copy of the escaping proof.
 describe("runCommand — Windows .cmd/.bat spawn hardening (issue #3350)", () => {
-  const WIN_ENV: NodeJS.ProcessEnv = { PATH: "", SystemRoot: String.raw`C:\Windows` };
+  const selectedSystemRoot = windowsSystemRootFixture(String.raw`C:\Windows`);
+  const WIN_ENV: NodeJS.ProcessEnv = { PATH: "", SystemRoot: selectedSystemRoot };
 
   // Removal-fails: if the win32 branch in resolveInheritedSpawnTarget/resolveSpawnTarget is ever
   // reverted (or short-circuited back to `{ command: executable, args: input.args, ... }`
@@ -1183,7 +1339,7 @@ describe("runCommand — Windows .cmd/.bat spawn hardening (issue #3350)", () =>
     spawn.child.emit("close", 0, null);
     await promise;
     const call = spawn.calls()[0];
-    expect(call?.command).toBe(String.raw`C:\Windows\System32\cmd.exe`);
+    expect(call?.command).toBe(expectedWindowsSystemBinary(selectedSystemRoot, "cmd.exe"));
     expect(call?.args).toEqual([
       "/d",
       "/s",
@@ -1453,8 +1609,81 @@ describe("runCommand — Windows process-tree termination (taskkill /T /F, ADR-0
       await vi.advanceTimersByTimeAsync(5); // fires the timeout -> terminate() SIGTERM step
       expect(treeKill.calls()).toHaveLength(1);
       await vi.advanceTimersByTimeAsync(DEFAULT_SANDBOX_POLICY.terminationGraceMs); // SIGKILL step
+      await vi.runOnlyPendingTimersAsync(); // check-phase ownership recheck
       expect(treeKill.calls()).toHaveLength(2);
       spawn.child.emit("close", null, "SIGKILL");
+      await expect(promise).rejects.toBeInstanceOf(CommandTimeoutError);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("arms the SIGKILL grace deadline before the synchronous Windows tree-kill begins", async () => {
+    vi.useFakeTimers();
+    const spawn = recordingSpawn();
+    let graceTimerWasArmed = false;
+    try {
+      const promise = runCommand(
+        {
+          command: "node",
+          args: ["-e", "wait"],
+          cwd: undefined,
+          timeoutMs: 5,
+          signal: controller().signal,
+        },
+        {
+          ...fakeDeps(spawn.fn),
+          platform: "win32",
+          killWindowsTree: () => {
+            graceTimerWasArmed = vi.getTimerCount() > 0;
+            return "succeeded";
+          },
+        },
+      );
+      await vi.advanceTimersByTimeAsync(5);
+      expect(graceTimerWasArmed).toBe(true);
+      spawn.child.emit("close", null, "SIGTERM");
+      await expect(promise).rejects.toBeInstanceOf(CommandTimeoutError);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("observes an exit queued during synchronous taskkill before escalating a raw pid", async () => {
+    vi.useFakeTimers();
+    const spawn = recordingSpawn();
+    const treeKill = recordingTreeKill();
+    try {
+      const promise = runCommand(
+        {
+          command: "node",
+          args: ["-e", "wait"],
+          cwd: undefined,
+          timeoutMs: 5,
+          signal: controller().signal,
+        },
+        {
+          ...fakeDeps(spawn.fn),
+          platform: "win32",
+          policy: { ...DEFAULT_SANDBOX_POLICY, terminationGraceMs: 0 },
+          killWindowsTree: (pid, env) => {
+            const disposition = treeKill.fn(pid, env);
+            if (treeKill.calls().length === 1) {
+              setImmediate(() => {
+                spawn.child.exitCode = 0;
+                spawn.child.emit("exit", 0, null);
+              });
+            }
+            return disposition;
+          },
+        },
+      );
+
+      await vi.advanceTimersByTimeAsync(5);
+      expect(treeKill.calls()).toHaveLength(1);
+      expect(spawn.child.killed).toEqual(["SIGTERM"]);
+
+      spawn.child.emit("close", 0, null);
       await expect(promise).rejects.toBeInstanceOf(CommandTimeoutError);
     } finally {
       vi.useRealTimers();
@@ -1496,6 +1725,7 @@ describe("runCommand — Windows process-tree termination (taskkill /T /F, ADR-0
       expect(evidence[0]?.windowsTreeKill).toBe("succeeded");
 
       await vi.advanceTimersByTimeAsync(DEFAULT_SANDBOX_POLICY.terminationGraceMs);
+      await vi.runOnlyPendingTimersAsync();
       expect(evidence).toHaveLength(2);
       expect(evidence[1]?.escalation).toBe("failed");
       expect(evidence[1]?.reason).toBe(evidence[0]?.reason);
@@ -2020,14 +2250,19 @@ describe("runCommand — onTerminated evidence seam (AGENTS.md §8 Rule 1)", () 
 // torn down through — mirrors how windows-shell.ts resolves cmd.exe.
 describe("windowsTaskkillInvocation — validated system-directory resolution", () => {
   it("resolves taskkill.exe under a trusted, drive-absolute SystemRoot", () => {
-    const invocation = windowsTaskkillInvocation(4242, { SystemRoot: String.raw`C:\Windows` });
-    expect(invocation.command).toBe(String.raw`C:\Windows\System32\taskkill.exe`);
+    const systemRoot = windowsSystemRootFixture(String.raw`C:\Windows`);
+    const invocation = windowsTaskkillInvocation(4242, { SystemRoot: systemRoot });
+    expect(invocation.command).toBe(expectedWindowsSystemBinary(systemRoot, "taskkill.exe"));
     expect(invocation.args).toEqual(["/PID", "4242", "/T", "/F"]);
   });
 
   it("falls back to WINDIR when SystemRoot is absent", () => {
-    const invocation = windowsTaskkillInvocation(7, { WINDIR: String.raw`D:\WinDir` });
-    expect(invocation.command).toBe(String.raw`D:\WinDir\System32\taskkill.exe`);
+    const windir =
+      process.platform === "win32"
+        ? (process.env.WINDIR ?? process.env.SystemRoot ?? String.raw`C:\Windows`)
+        : String.raw`D:\WinDir`;
+    const invocation = windowsTaskkillInvocation(7, { WINDIR: windir });
+    expect(invocation.command).toBe(expectedWindowsSystemBinary(windir, "taskkill.exe"));
   });
 
   // Fails CLOSED rather than substituting a default: an invalid override says the environment is
@@ -2062,17 +2297,25 @@ describe("windowsTaskkillInvocation — validated system-directory resolution", 
   // rejected value.
   // taskkill's exit STATUS decides what a customer's log says about a termination, and until this
   // seam existed the branching was untestable off Windows — `nodeSpawnSync` was imported directly.
-  // 128 is "the specified process was not found": the tree was already gone, which on a termination
-  // path is the goal reached early, not a failure. It is also the COMMON non-zero status, because
-  // the child routinely exits between the guard check and taskkill actually running.
+  // 128 is "the specified process was not found" for the requested root. It is common when the
+  // child exits between the guard and taskkill, but proves nothing about an already-orphaned child.
   it.each([
     [0, "succeeded"],
-    [128, "already-gone"],
+    [128, "root-not-found"],
     [1, "failed"],
     [255, "failed"],
   ])("maps taskkill exit %s to %s", (status, expected) => {
     const treeKill = nodeWindowsTreeKillWith(() => ({ status }));
     expect(treeKill(4242, { SystemRoot: String.raw`C:\Windows` })).toBe(expected);
+  });
+
+  it("keeps exit 128 factual when the root is absent but a descendant fixture remains alive", () => {
+    const liveDescendantPids = new Set([4243]);
+    const treeKill = nodeWindowsTreeKillWith(() => ({
+      status: liveDescendantPids.has(4243) ? 128 : 0,
+    }));
+    expect(treeKill(4242, { SystemRoot: String.raw`C:\Windows` })).toBe("root-not-found");
+    expect(liveDescendantPids.has(4243)).toBe(true);
   });
 
   it("maps a taskkill that never completed within the bound to unknown, not failed", () => {
@@ -2096,15 +2339,15 @@ describe("windowsTaskkillInvocation — validated system-directory resolution", 
   it("still reports an ordinary spawn failure as failed, not as an untrusted root", () => {
     // A VALID system root, so the resolver returns cleanly and any failure comes from the spawn
     // itself — the narrow catch must not let this borrow the security-relevant member.
-    expect(nodeWindowsTreeKill(7, { SystemRoot: String.raw`C:\Windows` })).toBe("failed");
+    const treeKill = nodeWindowsTreeKillWith(() => ({ status: null, error: new Error("failed") }));
+    expect(treeKill(4242, { SystemRoot: String.raw`C:\Windows` })).toBe("failed");
   });
 });
 
 // ─── nodeWindowsTreeKill — a missing taskkill.exe is "failed", not "blocked-untrusted-system-root" ─
-// resolveWindowsSystemBinary (keiko-security) throws the SAME WindowsSystemDirectoryError for a
-// hostile/malformed SystemRoot/WINDIR as it does for a resolved System32 path that just doesn't
-// exist as a file (e.g. taskkill.exe absent on a stripped-down Windows image) — an operational fact,
-// not a security one. The two must not collapse into the same disposition.
+// resolveWindowsSystemBinary uses a dedicated missing-binary error for a resolved System32 path
+// that does not exist (e.g. taskkill.exe absent on a stripped-down image), keeping that operational
+// fact distinct from a hostile/malformed SystemRoot/WINDIR security refusal.
 describe("nodeWindowsTreeKill — distinguishing a missing taskkill.exe from a hostile system root", () => {
   const platformDescriptor = Object.getOwnPropertyDescriptor(process, "platform");
 
@@ -2114,17 +2357,31 @@ describe("nodeWindowsTreeKill — distinguishing a missing taskkill.exe from a h
     }
   });
 
-  it("maps a genuinely missing taskkill.exe to failed", () => {
-    // A VALID, drive-absolute SystemRoot (passes every shape check in windows-system-directory.ts),
-    // with process.platform stubbed to win32 so the existence check — gated off on every other
-    // platform, see windows-system-directory.ts's defaultWindowsBinaryExists — actually runs against
-    // the real filesystem: no genuine C:\Windows exists under this process on the host that runs this
-    // suite, so resolution reaches the EXISTENCE-check throw, never the shape/security one.
+  it("classifies a shaped but non-system root as untrusted before binary lookup", () => {
     Object.defineProperty(process, "platform", { ...platformDescriptor, value: "win32" });
-    expect(() => windowsTaskkillInvocation(7, { SystemRoot: String.raw`C:\Windows` })).toThrow(
-      "resolved Windows system binary does not exist as a regular file",
+    const neverExistsRoot = String.raw`C:\keiko-test-bcd065b8-9543-42fe-a860-a2006984e2fb`;
+    expect(() => windowsTaskkillInvocation(4242, { SystemRoot: neverExistsRoot })).toThrow(
+      WindowsSystemDirectoryError,
     );
-    expect(nodeWindowsTreeKill(7, { SystemRoot: String.raw`C:\Windows` })).toBe("failed");
+    expect(nodeWindowsTreeKill(4242, { SystemRoot: neverExistsRoot })).toBe(
+      "blocked-untrusted-system-root",
+    );
+  });
+
+  it("maps an absent binary under an already-trusted root to failed", () => {
+    const budget: WindowsTaskkillBudget = { tryConsume: () => true, refund: vi.fn() };
+    const runTaskkill = vi.fn(() => ({ status: 0 }));
+    const treeKill = nodeWindowsTreeKillWith(
+      runTaskkill,
+      budget,
+      () => 0,
+      () => {
+        throw new WindowsSystemBinaryMissingError();
+      },
+    );
+
+    expect(treeKill(4242, { SystemRoot: String.raw`C:\Windows` })).toBe("failed");
+    expect(runTaskkill).not.toHaveBeenCalled();
   });
 
   it("still maps a hostile/malformed system root to blocked-untrusted-system-root under the same win32 stub", () => {
@@ -2178,42 +2435,128 @@ describe("createWindowsTaskkillBudget — aggregate stall budget", () => {
     // `second` was never touched — it must still have its full budget.
     expect(second.tryConsume()).toBe(true);
   });
+
+  it("does not refill when the wall clock jumps forward", () => {
+    const dateNow = vi.spyOn(Date, "now").mockReturnValue(0);
+    try {
+      const budget = createWindowsTaskkillBudget();
+      for (let index = 0; index < 6; index += 1) {
+        expect(budget.tryConsume()).toBe(true);
+      }
+      expect(budget.tryConsume()).toBe(false);
+
+      dateNow.mockReturnValue(24 * 60 * 60 * 1_000);
+      expect(budget.tryConsume()).toBe(false);
+    } finally {
+      dateNow.mockRestore();
+    }
+  });
+
+  it("requires a full timeout reservation even after a partial refund", () => {
+    const budget = createWindowsTaskkillBudget(() => 0);
+    for (let index = 0; index < 6; index += 1) {
+      expect(budget.tryConsume()).toBe(true);
+    }
+    budget.refund(4_999);
+    expect(budget.tryConsume()).toBe(false);
+    budget.refund(1);
+    expect(budget.tryConsume()).toBe(true);
+  });
 });
 
 describe("nodeWindowsTreeKillWith — the budget gates the spawn, not just the report", () => {
-  it("reports unknown and never calls the taskkill runner once the injected budget is exhausted", () => {
-    const exhausted: WindowsTaskkillBudget = { tryConsume: () => false };
+  it.each([process.pid, process.ppid])(
+    "refuses protected pid %s before spending budget or spawning taskkill",
+    (pid) => {
+      const budget: WindowsTaskkillBudget = {
+        tryConsume: vi.fn(() => true),
+        refund: vi.fn(),
+      };
+      const runTaskkill = vi.fn(() => ({ status: 0 }));
+      const treeKill = nodeWindowsTreeKillWith(runTaskkill, budget);
+      expect(treeKill(pid, { SystemRoot: String.raw`C:\Windows` })).toBe("refused-self-pid");
+      expect(budget.tryConsume).not.toHaveBeenCalled();
+      expect(runTaskkill).not.toHaveBeenCalled();
+    },
+  );
+
+  it("reports budget-exhausted and never calls taskkill once the injected budget is spent", () => {
+    const exhausted: WindowsTaskkillBudget = { tryConsume: () => false, refund: vi.fn() };
     const runTaskkill = vi.fn(() => ({ status: 0 }));
     const treeKill = nodeWindowsTreeKillWith(runTaskkill, exhausted);
-    expect(treeKill(4242, { SystemRoot: String.raw`C:\Windows` })).toBe("unknown");
+    expect(treeKill(4242, { SystemRoot: String.raw`C:\Windows` })).toBe("budget-exhausted");
     // The whole point of the budget is to avoid PAYING the blocking wait — a spawn here would defeat
     // it even if the reported disposition happened to be right.
     expect(runTaskkill).not.toHaveBeenCalled();
   });
 
   it("still runs taskkill normally while the injected budget keeps granting", () => {
-    const alwaysGranting: WindowsTaskkillBudget = { tryConsume: () => true };
+    const alwaysGranting: WindowsTaskkillBudget = { tryConsume: () => true, refund: vi.fn() };
     const runTaskkill = vi.fn(() => ({ status: 0 }));
     const treeKill = nodeWindowsTreeKillWith(runTaskkill, alwaysGranting);
     expect(treeKill(4242, { SystemRoot: String.raw`C:\Windows` })).toBe("succeeded");
     expect(runTaskkill).toHaveBeenCalledTimes(1);
   });
 
-  it("the real budget denies concurrent terminations in one tick past its ceiling, then unbans", () => {
+  it("refunds unused reservations so fast terminations do not disable tree-kill", () => {
     let now = 0;
     const budget = createWindowsTaskkillBudget(() => now);
-    const runTaskkill = vi.fn(() => ({ status: 0 }));
-    const treeKill = nodeWindowsTreeKillWith(runTaskkill, budget);
-    // Simulate a run-cancel fan-out: seven Windows commands terminated in the same tick.
+    const runTaskkill = vi.fn(() => {
+      now += 20;
+      return { status: 0 };
+    });
+    const treeKill = nodeWindowsTreeKillWith(runTaskkill, budget, () => now);
     const results: WindowsTreeKillResult[] = Array.from({ length: 7 }, () =>
       treeKill(4242, { SystemRoot: String.raw`C:\Windows` }),
     );
-    expect(results.filter((r) => r === "succeeded")).toHaveLength(6);
-    expect(results.filter((r) => r === "unknown")).toHaveLength(1);
-    expect(runTaskkill).toHaveBeenCalledTimes(6); // the 7th never spawned taskkill at all
-    // The window elapses: the 8th call (a fresh burst) is granted again.
+    expect(results).toEqual(Array.from({ length: 7 }, () => "succeeded"));
+    expect(runTaskkill).toHaveBeenCalledTimes(7);
+  });
+
+  it("still denies the seventh full-timeout attempt, then refills at the window boundary", () => {
+    let now = 0;
+    const budget = createWindowsTaskkillBudget(() => now);
+    const runTaskkill = vi.fn(() => {
+      now += 5_000;
+      return { status: 0 };
+    });
+    const treeKill = nodeWindowsTreeKillWith(runTaskkill, budget, () => now);
+    const results: WindowsTreeKillResult[] = Array.from({ length: 7 }, () =>
+      treeKill(4242, { SystemRoot: String.raw`C:\Windows` }),
+    );
+    expect(results.filter((result) => result === "succeeded")).toHaveLength(6);
+    expect(results.filter((result) => result === "budget-exhausted")).toHaveLength(1);
+    expect(runTaskkill).toHaveBeenCalledTimes(6);
     now = 60_000;
     expect(treeKill(4242, { SystemRoot: String.raw`C:\Windows` })).toBe("succeeded");
     expect(runTaskkill).toHaveBeenCalledTimes(7);
+  });
+});
+
+describe("Windows pre-spawn termination capacity", () => {
+  it("binds the authenticated taskkill path across later environment mutation", () => {
+    const seenRoots: (string | undefined)[] = [];
+    const seenCommands: string[] = [];
+    const capacity = createWindowsTerminationCapacity(
+      1,
+      undefined,
+      (_pid, env) => {
+        seenRoots.push(env.SystemRoot);
+        return { command: String.raw`\\?\GLOBALROOT\SystemRoot\System32\taskkill.exe`, args: [] };
+      },
+      (command) => {
+        seenCommands.push(command);
+        return { status: 0 };
+      },
+    );
+    const mutableEnv = { SystemRoot: String.raw`D:\Windows` };
+    const reservation = capacity.reserve(mutableEnv);
+    expect(reservation).toBeDefined();
+
+    mutableEnv.SystemRoot = String.raw`C:\workspace\fake-windows`;
+    expect(reservation?.kill(4242, mutableEnv)).toBe("succeeded");
+    expect(seenRoots).toEqual([String.raw`D:\Windows`]);
+    expect(seenCommands).toEqual([String.raw`\\?\GLOBALROOT\SystemRoot\System32\taskkill.exe`]);
+    reservation?.release();
   });
 });

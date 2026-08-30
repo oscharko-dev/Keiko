@@ -21,7 +21,9 @@ import type { LspSpawnFn } from "./lspNodeAdapter.js";
 import { createFakeLspProcess } from "./testing/fakeLspProcess.js";
 import { writeExecutableFixture } from "./testing/executableFixture.js";
 import {
+  _resetHostLspPoolForTests,
   disposeHostLspPoolEntry,
+  type HostLanguageOperationOptions,
   initializeHostLanguageProvider,
   notifyHostLspWorkspaceFileChanged,
   runHostLanguageOperation,
@@ -45,6 +47,7 @@ beforeEach(() => {
 afterEach(async () => {
   // Release warm processes so pooled state never leaks across tests.
   await shutdownHostLspPool();
+  _resetHostLspPoolForTests();
   rmSync(binDir, { recursive: true, force: true });
   rmSync(workspaceRoot, { recursive: true, force: true });
 });
@@ -109,7 +112,11 @@ function countingSpawn(): {
   };
 }
 
-function runAt(root: string, spawn: LspSpawnFn): ReturnType<typeof runHostLanguageOperation> {
+function runAt(
+  root: string,
+  spawn: LspSpawnFn,
+  lspProcessConfig?: HostLanguageOperationOptions["lspProcessConfig"],
+): ReturnType<typeof runHostLanguageOperation> {
   const rules: readonly CommandRule[] = [{ executable: "gopls" }];
   return runHostLanguageOperation(diagnosticsRequest(root), {
     workspace: workspaceAt(root),
@@ -118,6 +125,7 @@ function runAt(root: string, spawn: LspSpawnFn): ReturnType<typeof runHostLangua
     overlayAbsolutePath: join(root, "main.go"),
     signal: new AbortController().signal,
     spawn,
+    ...(lspProcessConfig === undefined ? {} : { lspProcessConfig }),
   });
 }
 
@@ -150,6 +158,26 @@ function runAtRevision(
     signal: new AbortController().signal,
     spawn,
     protocolConfiguration: { revision, settings: {} },
+  });
+}
+
+function initializeAtRevision(
+  root: string,
+  spawn: LspSpawnFn,
+  revision: number,
+  lspProcessConfig?: HostLanguageOperationOptions["lspProcessConfig"],
+): ReturnType<typeof initializeHostLanguageProvider> {
+  return initializeHostLanguageProvider("go", {
+    workspace: workspaceAt(root),
+    processEnv: { PATH: binDir },
+    commandRules: [{ executable: "gopls" }],
+    overlayAbsolutePath: root,
+    signal: new AbortController().signal,
+    spawn,
+    activationAuthorized: true,
+    activationStillAuthorized: (): boolean => true,
+    protocolConfiguration: { revision, settings: {} },
+    ...(lspProcessConfig === undefined ? {} : { lspProcessConfig }),
   });
 }
 
@@ -211,20 +239,104 @@ describe("runHostLanguageOperation pooling (GEN-PERF-EDITOR-007)", () => {
 
   it("restarts exactly the affected pooled process when configuration revision changes", async () => {
     makeExecutable("gopls");
-    const { spawn, spawnCount } = countingSpawn();
+    const counted = countingSpawn();
+    let predecessorExitedBeforeReplacement = false;
+    const spawn: LspSpawnFn = (executable, args, env, cwd) => {
+      if (counted.spawnCount() === 1) {
+        predecessorExitedBeforeReplacement = counted.controllers()[0]?.exitEmitted() === true;
+      }
+      return counted.spawn(executable, args, env, cwd);
+    };
 
     await runAtRevision(workspaceRoot, spawn, 1);
     await runAtRevision(workspaceRoot, spawn, 2);
 
-    expect(spawnCount()).toBe(2);
+    expect(counted.spawnCount()).toBe(2);
+    expect(predecessorExitedBeforeReplacement).toBe(true);
   });
 
-  it("opens the document on the replacement child before an operation after a crash", async () => {
+  it("serializes conflicting revisions across the predecessor-exit disposal window", async () => {
+    makeExecutable("gopls");
+    const counted = countingSpawn();
+    expect(await initializeAtRevision(workspaceRoot, counted.spawn, 1)).toMatchObject({
+      status: "READY",
+      configurationRevision: 1,
+    });
+    const first = counted.controllers()[0];
+    if (first === undefined) throw new TypeError("first controller missing");
+    const raced: { third?: ReturnType<typeof initializeHostLanguageProvider> } = {};
+    first.handle.onExit(() => {
+      raced.third = initializeAtRevision(workspaceRoot, counted.spawn, 3);
+    });
+
+    const second = await initializeAtRevision(workspaceRoot, counted.spawn, 2);
+    const third = raced.third;
+    if (third === undefined) throw new TypeError("third revision was not triggered");
+
+    expect(second?.configurationRevision).toBe(2);
+    await expect(third).resolves.toMatchObject({ configurationRevision: 3 });
+    expect(counted.spawnCount()).toBe(3);
+  });
+
+  it("blocks a new acquisition that races global pool shutdown", async () => {
+    makeExecutable("gopls");
+    const counted = countingSpawn();
+    await initializeAtRevision(workspaceRoot, counted.spawn, 1);
+    const first = counted.controllers()[0];
+    if (first === undefined) throw new TypeError("first controller missing");
+    const raced: {
+      blocked?: ReturnType<typeof initializeHostLanguageProvider>;
+      shutdown?: Promise<void>;
+    } = {};
+    first.handle.onExit(() => {
+      raced.shutdown = shutdownHostLspPool();
+      raced.blocked = initializeAtRevision(workspaceRoot, counted.spawn, 3);
+      void raced.blocked.catch(() => undefined);
+    });
+
+    const second = await initializeAtRevision(workspaceRoot, counted.spawn, 2);
+    if (raced.shutdown === undefined || raced.blocked === undefined) {
+      throw new TypeError("shutdown race was not triggered");
+    }
+    await raced.shutdown;
+
+    expect(second?.configurationRevision).toBe(2);
+    await expect(raced.blocked).rejects.toMatchObject({ code: "DISPOSED" });
+    expect(counted.spawnCount()).toBe(2);
+  });
+
+  it("does not publish a config-revision replacement while tree disposal is unconfirmed", async () => {
+    makeExecutable("gopls");
+    const controllers: ReturnType<typeof createFakeLspProcess>[] = [];
+    const spawn: LspSpawnFn = () => {
+      const controller = createFakeLspProcess({
+        behavior: "unresponsive",
+        killConfirmsExit: false,
+        killResult: { treeContainment: "unconfirmed", windowsTreeKill: "failed" },
+      });
+      controllers.push(controller);
+      return controller.handle;
+    };
+    const initializeAt = (revision: number): ReturnType<typeof initializeHostLanguageProvider> =>
+      initializeAtRevision(workspaceRoot, spawn, revision, {
+        initializeTimeoutMs: 100,
+        shutdownTimeoutMs: 10,
+      });
+
+    expect(await initializeAt(1)).toMatchObject({ status: "READY", configurationRevision: 1 });
+    expect(await initializeAt(2)).toMatchObject({ status: "DISPOSED", configurationRevision: 1 });
+    await shutdownHostLspPool();
+    expect(await initializeAt(3)).toMatchObject({ status: "DISPOSED", configurationRevision: 1 });
+    expect(controllers).toHaveLength(1);
+    expect(controllers[0]?.killed()).toEqual(["SIGTERM", "SIGKILL"]);
+  });
+
+  it("opens the document on the replacement child after confirmed crash termination", async () => {
     makeExecutable("gopls");
     const { spawn, controllers } = countingSpawn();
 
     await runAt(workspaceRoot, spawn);
-    controllers()[0]?.crash();
+    controllers()[0]?.emitError();
     const result = await runAt(workspaceRoot, spawn);
 
     expect(result).toMatchObject({ kind: "diagnostics" });
@@ -236,6 +348,39 @@ describe("runHostLanguageOperation pooling (GEN-PERF-EDITOR-007)", () => {
     expect(replacementMethods.indexOf("textDocument/didOpen")).toBeLessThan(
       replacementMethods.indexOf("textDocument/diagnostic"),
     );
+  });
+
+  it("quarantines an unsolicited exit across retry and explicit pool invalidation", async () => {
+    makeExecutable("gopls");
+    const { spawn, spawnCount, controllers } = countingSpawn();
+
+    await runAtRevision(workspaceRoot, spawn, 1);
+    const first = controllers()[0];
+    if (first === undefined) throw new TypeError("first controller missing");
+    first.crash();
+
+    const retried = await runAtRevision(workspaceRoot, spawn, 1);
+    await disposeHostLspPoolEntry(workspaceRoot, "go");
+    const afterInvalidation = await runAtRevision(workspaceRoot, spawn, 2);
+
+    expect(retried).toMatchObject({ kind: "error", code: "TIMED_OUT" });
+    expect(afterInvalidation).toMatchObject({ kind: "error", code: "TIMED_OUT" });
+    expect(spawnCount()).toBe(1);
+    expect(first.killed()).toEqual([]);
+  });
+
+  it("keeps a restart-throttled manager down for the same configuration revision", async () => {
+    makeExecutable("gopls");
+    const { spawn, spawnCount, controllers } = countingSpawn();
+    const noRestart = { maxRestartsInWindow: 0 } as const;
+
+    await runAt(workspaceRoot, spawn, noRestart);
+    controllers()[0]?.emitError();
+    const retried = await runAt(workspaceRoot, spawn, noRestart);
+
+    expect(retried).toMatchObject({ kind: "error", code: "TIMED_OUT" });
+    expect(spawnCount()).toBe(1);
+    expect(controllers()[0]?.killed()).toEqual(["SIGKILL"]);
   });
 
   it("queues a concurrent second op onto the warm process instead of rejecting it busy", async () => {

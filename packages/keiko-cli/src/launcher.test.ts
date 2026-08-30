@@ -12,7 +12,14 @@ import {
 } from "node:fs";
 import { tmpdir, platform as osPlatform } from "node:os";
 import { dirname, join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  type SecurityLogEvent,
+  type SecurityLogSink,
+  securityErrorKind,
+  WindowsSystemBinaryMissingError,
+  WindowsSystemDirectoryError,
+} from "@oscharko-dev/keiko-security";
 import { runLauncherCli, type LauncherCliDeps } from "./launcher.js";
 import { hashContent, loadState, saveState, upsertEntry } from "./launcher-state.js";
 import { makeCapturedIo } from "./test-support/cli-io.js";
@@ -129,6 +136,28 @@ describe("runLauncherCli — help and unknown subcommand", () => {
 });
 
 describe("runLauncherCli install — happy paths", () => {
+  it("does not require PowerShell for a safe legacy Windows launcher", () => {
+    const h = makeHarness("win32", String.raw`C:\Tools\keiko.exe`);
+    const c = makeIo();
+    const resolveWindowsPowerShell = vi.fn(() => {
+      throw new WindowsSystemBinaryMissingError();
+    });
+
+    expect(
+      runLauncherCli(
+        ["install", "--dry-run", "--explain"],
+        c.io,
+        {},
+        {
+          ...h.deps,
+          resolveWindowsPowerShell,
+        },
+      ),
+    ).toBe(0);
+    expect(resolveWindowsPowerShell).not.toHaveBeenCalled();
+    expect(c.out()).toContain('@start "" C:\\Tools\\keiko.exe start --open');
+  });
+
   it("install --dry-run writes nothing but reports the plan", () => {
     const h = makeHarness();
     const c = makeIo();
@@ -251,6 +280,57 @@ describe("runLauncherCli install — happy paths", () => {
 });
 
 describe("runLauncherCli install — refusals (security)", () => {
+  it.each([
+    {
+      error: new WindowsSystemDirectoryError(
+        String.raw`hostile root C:\attack-marker\Windows was refused`,
+      ),
+      op: "security.windows-launcher.system-root-refused",
+    },
+    {
+      error: new WindowsSystemBinaryMissingError(),
+      op: "security.windows-launcher.system-binary-missing",
+    },
+  ])("logs a body-free $op failure and exits cleanly", ({ error, op }) => {
+    const h = makeHarness("win32", String.raw`C:\Program Files\Keiko\keiko.exe`);
+    const c = makeIo();
+    const events: SecurityLogEvent[] = [];
+    const stateDirs: string[] = [];
+    const securityLogSinkFactory = (stateDir: string): SecurityLogSink => {
+      stateDirs.push(stateDir);
+      return {
+        write: (event): void => {
+          events.push(event);
+        },
+      };
+    };
+
+    expect(
+      runLauncherCli(
+        ["install", "--dry-run"],
+        c.io,
+        {},
+        {
+          ...h.deps,
+          resolveWindowsPowerShell: () => {
+            throw error;
+          },
+          securityLogSinkFactory,
+        },
+      ),
+    ).toBe(1);
+    expect(c.err()).toBe("keiko launcher: trusted Windows launch helper is unavailable.\n");
+    expect(stateDirs).toEqual([h.stateDir]);
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({
+      errorKind: securityErrorKind(error),
+      op,
+      extra: { surface: "launcher-install" },
+    });
+    expect(events[0]?.correlationId).toMatch(/^[0-9a-f-]{36}$/u);
+    expect(JSON.stringify(events)).not.toContain("attack-marker");
+  });
+
   it("refuses --port below 1024", () => {
     const h = makeHarness();
     const c = makeIo();

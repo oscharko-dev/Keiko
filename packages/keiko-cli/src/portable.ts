@@ -42,13 +42,15 @@ import {
 import { hasPortableInstallRegistration } from "./portable-registration.js";
 import { assertManagedRootAllowed } from "./portable-root-policy.js";
 import type { CliIo } from "./runner.js";
+import { createCliSecurityLogSink, type CliSecurityLogSinkFactory } from "./security-log.js";
+import type { SecurityLogSink } from "@oscharko-dev/keiko-security";
 
 type LifecycleFn = (
   command: "start" | "stop",
   args: readonly string[],
   io: CliIo,
   env: EnvSource,
-  deps: { readonly cwd: string },
+  deps: { readonly cwd: string; readonly securityLogSink?: SecurityLogSink | undefined },
 ) => Promise<number>;
 
 interface PortableCliOptions {
@@ -60,6 +62,7 @@ interface PortableCliOptions {
   readonly dryRun: boolean;
   readonly noRelaunch: boolean;
   readonly home: string;
+  readonly securityLogSink?: SecurityLogSink | undefined;
 }
 
 export interface PortableSetupDeps {
@@ -72,6 +75,7 @@ export interface PortableSetupDeps {
   readonly lifecycleFn?: LifecycleFn | undefined;
   readonly activateMacosRuntimeFn?: MacosRuntimeActivationFn | undefined;
   readonly notifyFailureFn?: PortableFailureNotifierFn | undefined;
+  readonly securityLogSinkFactory?: CliSecurityLogSinkFactory | undefined;
 }
 
 interface PortableArgDeps {
@@ -227,6 +231,7 @@ async function launchManaged(
   env: EnvSource,
   stateDir: string,
   deps: Pick<PortableRuntimeDeps, "activateMacosRuntimeFn" | "lifecycleFn">,
+  securityLogSink?: SecurityLogSink,
 ): Promise<number> {
   if (target !== "windows-x64") {
     const activation = await deps.activateMacosRuntimeFn(layout, target);
@@ -242,6 +247,7 @@ async function launchManaged(
   }
   return deps.lifecycleFn("start", ["--open", "--state-dir", stateDir], io, env, {
     cwd: layout.appRoot,
+    securityLogSink,
   });
 }
 
@@ -264,8 +270,9 @@ async function relaunchPreviousManaged(
   env: EnvSource,
   stateDir: string,
   deps: Pick<PortableRuntimeDeps, "activateMacosRuntimeFn" | "lifecycleFn">,
+  securityLogSink?: SecurityLogSink,
 ): Promise<number> {
-  await launchManaged(target, layout, io, env, stateDir, deps);
+  await launchManaged(target, layout, io, env, stateDir, deps, securityLogSink);
   return 1;
 }
 
@@ -278,7 +285,15 @@ async function upgradeManagedFromClickedPackage(
   deps: PortableUpgradeDeps,
 ): Promise<number> {
   if (!portableSourceCanReplaceManaged(source, current)) {
-    return launchManaged(options.target, current.layout, io, env, options.stateDir, deps);
+    return launchManaged(
+      options.target,
+      current.layout,
+      io,
+      env,
+      options.stateDir,
+      deps,
+      options.securityLogSink,
+    );
   }
   try {
     return await withPortableManagedMutation(options, (upgrade) =>
@@ -314,9 +329,18 @@ async function upgradeManagedWhileLocked(
       home: options.home,
       now: deps.now(),
       io,
+      securityLogSink: options.securityLogSink,
     });
     io.out("Keiko portable upgrade installed from downloaded package.\n");
-    return await launchManaged(options.target, upgraded, io, env, options.stateDir, deps);
+    return await launchManaged(
+      options.target,
+      upgraded,
+      io,
+      env,
+      options.stateDir,
+      deps,
+      options.securityLogSink,
+    );
   } catch (error) {
     io.err(
       `keiko portable launch: ${error instanceof Error ? error.message : "portable upgrade failed"}\n`,
@@ -328,6 +352,7 @@ async function upgradeManagedWhileLocked(
       env,
       options.stateDir,
       deps,
+      options.securityLogSink,
     );
   }
 }
@@ -337,7 +362,9 @@ function attestedKnownManagedInstall(
   env: EnvSource,
 ): ValidatedPortableRoot | undefined {
   const registrationExists = hasPortableInstallRegistration(options.stateDir);
-  const record = attestedPortableInstallRecord(options.stateDir, env, options.home);
+  const record = attestedPortableInstallRecord(options.stateDir, env, options.home, {
+    securityLogSink: options.securityLogSink,
+  });
   if (registrationExists) {
     if (record === undefined) throw new Error("portable install registration is invalid");
     if (record.registration.status !== "managed") return undefined;
@@ -359,7 +386,15 @@ async function setupAndLaunchManaged(
 ): Promise<number> {
   const setup = setupPortable({ ...options, env, home: options.home }, io, deps.now());
   if (setup.code !== 0 || setup.layout === undefined) return setup.code;
-  return await launchManaged(options.target, setup.layout, io, env, options.stateDir, deps);
+  return await launchManaged(
+    options.target,
+    setup.layout,
+    io,
+    env,
+    options.stateDir,
+    deps,
+    options.securityLogSink,
+  );
 }
 
 function setupDownloadedPortable(
@@ -432,12 +467,16 @@ function failedPortableRecoveryRoot(
     options.stateDir,
   );
   if (requestedRoot !== undefined || options.target !== "windows-x64") return requestedRoot;
-  return recoverableFailedWindowsManagedRoot(options.stateDir, env, options.home);
+  return recoverableFailedWindowsManagedRoot(options.stateDir, env, options.home, {
+    securityLogSink: options.securityLogSink,
+  });
 }
 
 function resolvedPortableManagedRoot(options: PortableCliOptions, env: EnvSource): string {
   const registrationExists = hasPortableInstallRegistration(options.stateDir);
-  const record = attestedPortableInstallRecord(options.stateDir, env, options.home);
+  const record = attestedPortableInstallRecord(options.stateDir, env, options.home, {
+    securityLogSink: options.securityLogSink,
+  });
   if (record === undefined) {
     if (registrationExists) throw new Error("portable install registration is invalid");
     return options.managedRoot;
@@ -495,6 +534,26 @@ function emitPortableManagedRoot(
   io.out(`${managedRoot}\n`);
 }
 
+function notifyPortableFailureIfNeeded(
+  code: number,
+  message: string,
+  env: EnvSource,
+  io: CliIo,
+  deps: PortableSetupDeps,
+  securityLogSink: SecurityLogSink | undefined,
+): void {
+  if (code === 0) return;
+  const notify =
+    deps.notifyFailureFn ??
+    ((failureMessage: string, notifyEnv: EnvSource): void => {
+      notifyPortableLaunchFailure(failureMessage, notifyEnv, {
+        reportAlertFailure: io.err,
+        securityLogSink,
+      });
+    });
+  notify(message, env);
+}
+
 export async function runPortableCli(
   args: readonly string[],
   io: CliIo,
@@ -511,8 +570,14 @@ export async function runPortableCli(
     io.err(USAGE);
     return 2;
   }
-  if (options.command === "resolve-root") return resolvePortableManagedRoot(options, io, env);
   if (options.command === "status") return statusPortable(options, io);
+  const commandOptions: PortableCliOptions = {
+    ...options,
+    securityLogSink: createCliSecurityLogSink(options.stateDir, deps.securityLogSinkFactory),
+  };
+  if (commandOptions.command === "resolve-root") {
+    return resolvePortableManagedRoot(commandOptions, io, env);
+  }
   let lastError = "";
   const trackedIo: CliIo = {
     out: (text): void => {
@@ -524,16 +589,9 @@ export async function runPortableCli(
     },
   };
   const code =
-    options.command === "setup"
-      ? setupPortable({ ...options, env }, trackedIo, r.now()).code
-      : await launchPortable(options, trackedIo, env, r);
-  if (code !== 0) {
-    const notify =
-      deps.notifyFailureFn ??
-      ((message: string, notifyEnv: EnvSource): void => {
-        notifyPortableLaunchFailure(message, notifyEnv, { reportAlertFailure: io.err });
-      });
-    notify(lastError, env);
-  }
+    commandOptions.command === "setup"
+      ? setupPortable({ ...commandOptions, env }, trackedIo, r.now()).code
+      : await launchPortable(commandOptions, trackedIo, env, r);
+  notifyPortableFailureIfNeeded(code, lastError, env, io, deps, commandOptions.securityLogSink);
   return code;
 }

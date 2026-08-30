@@ -64,9 +64,12 @@ function windowsExtensionCandidates(
     .map((extension) => `git${extension}`);
 }
 
-function executableNames(env: NodeJS.ProcessEnv, platform: NodeJS.Platform): readonly string[] {
+function executableNames(platform: NodeJS.Platform): readonly string[] {
   if (platform !== "win32") return ["git"];
-  return windowsExtensionCandidates(env, WINDOWS_EXECUTABLE_IMAGE_EXTENSIONS);
+  // PATHEXT is environment-controlled and therefore cannot define the closed set of executable
+  // image formats this trust boundary accepts. Probe both approved images directly; PATHEXT remains
+  // relevant only to the diagnostic-only script scan below.
+  return [...WINDOWS_EXECUTABLE_IMAGE_EXTENSIONS].map((extension) => `git${extension}`);
 }
 
 // Diagnostic-only counterpart of executableNames: names that are NEVER trusted (see
@@ -234,7 +237,7 @@ export function resolveGitExecutable(
   platform: NodeJS.Platform = process.platform,
   groupIds: ReadonlySet<number> | undefined = activeGroupIds(),
 ): GitExecutableResolution {
-  const scan = scanForTrustedImage(executableNames(env, platform), env, cwd, platform, groupIds);
+  const scan = scanForTrustedImage(executableNames(platform), env, cwd, platform, groupIds);
   if (scan.found) return scan.resolution;
   const sawUntrusted = scan.sawUntrusted || hasUntrustedWindowsScript(env, cwd, platform, groupIds);
   return { ok: false, reason: sawUntrusted ? "untrusted-location" : "not-found" };

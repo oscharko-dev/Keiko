@@ -52,7 +52,7 @@ import {
 import { deriveRepositoryId } from "./naming.js";
 import { lockIsLive, resolveLockTtl } from "./locks.js";
 import { workspaceKey } from "./mutex.js";
-import { UNKNOWN_CORRELATION_ID } from "../correlation.js";
+import { correlationIdOrUnknown } from "../correlation.js";
 import { logWorkspaceLifecycle } from "./activity-log.js";
 import {
   appendWorkspaceLifecycleEvidence,
@@ -261,7 +261,7 @@ function emitReconcileEvidence(
   // UNKNOWN_CORRELATION_ID rather than the workspace's own persisted identity (AGENTS.md §8).
   correlationId: string | undefined,
 ): void {
-  const resolvedCorrelationId = correlationId ?? UNKNOWN_CORRELATION_ID;
+  const resolvedCorrelationId = correlationIdOrUnknown(correlationId);
   const event = buildWorkspaceEvent({
     eventId: ctx.deps.newId(),
     workspaceId: instance.workspaceId,
@@ -387,7 +387,7 @@ export function gatherInstanceReconciliationFacts(
   const ctx: ReconcileCtx = {
     deps,
     lockTtlMs: resolveLockTtl(deps.lockTtlMs),
-    correlationId: correlationId ?? UNKNOWN_CORRELATION_ID,
+    correlationId: correlationIdOrUnknown(correlationId),
   };
   return gatherFacts(ctx, adapter, worktrees, instance, nowMs, actor);
 }
@@ -404,7 +404,7 @@ export async function reconcileSingleInstance(
   const ctx: ReconcileCtx = {
     deps,
     lockTtlMs: resolveLockTtl(deps.lockTtlMs),
-    correlationId: correlationId ?? UNKNOWN_CORRELATION_ID,
+    correlationId: correlationIdOrUnknown(correlationId),
   };
   const adapter = deps.createAdapter(detectWorkspaceAt(instance.repositoryRoot), ctx.correlationId);
   const worktrees = await adapter.listWorktrees();
@@ -537,7 +537,7 @@ export function createWorkspaceReconciliationService(
   const ctxFor = (correlationId: string | undefined): ReconcileCtx => ({
     deps,
     lockTtlMs,
-    correlationId: correlationId ?? UNKNOWN_CORRELATION_ID,
+    correlationId: correlationIdOrUnknown(correlationId),
   });
   return {
     // Pure read over persisted rows — no child process, so no termination evidence to join.

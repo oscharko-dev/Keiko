@@ -177,6 +177,7 @@ describe("macosLauncher", () => {
 });
 
 describe("windowsLauncher", () => {
+  const powerShellPath = String.raw`D:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe`;
   it("installs under %APPDATA%\\Microsoft\\Windows\\Start Menu\\Programs", () => {
     expect(windowsLauncher.installDirFor("C:\\Users\\me")).toBe(
       "C:\\Users\\me\\AppData\\Roaming\\Microsoft\\Windows\\Start Menu\\Programs",
@@ -197,10 +198,14 @@ describe("windowsLauncher", () => {
   });
   it("encodes and round-trips Unicode and cmd metacharacters through ASCII-only content", () => {
     const exe = "C:\\Users\\José\\Kéiko & 100% ! ^ (Programs)\\Keiko.exe";
-    const content = windowsLauncher.generateContent({ exe, port: undefined });
+    const content = windowsLauncher.generateContent({
+      exe,
+      port: undefined,
+      windowsPowerShellPath: powerShellPath,
+    });
 
     expect(content).toContain(
-      '@"%SystemRoot%\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -NoLogo -NoProfile -NonInteractive -EncodedCommand ',
+      `@"${powerShellPath}" -NoLogo -NoProfile -NonInteractive -EncodedCommand `,
     );
     expect(content).not.toContain(exe);
     expect(Array.from(content).every((character) => character.charCodeAt(0) <= 0x7f)).toBe(true);
@@ -220,6 +225,7 @@ describe("windowsLauncher", () => {
     const generated = windowsLauncher.generateContent({
       exe: "C:\\Program Files\\Keiko\\keiko.exe",
       port: 5000,
+      windowsPowerShellPath: powerShellPath,
     });
     expect(
       parseWindowsLauncherContent(generated.replace(/KEIKO_EXE_B64=[^"]+/u, "KEIKO_EXE_B64=%")),
@@ -240,9 +246,19 @@ describe("windowsLauncher", () => {
     const generated = windowsLauncher.generateContent({
       exe: "C:\\Program Files\\100% Keiko\\keiko.exe",
       port: 5000,
+      windowsPowerShellPath: powerShellPath,
     });
     expect(parseWindowsLauncherContent(generated)).toBe("C:\\Program Files\\100% Keiko\\keiko.exe");
     expect(parseWindowsLauncherContent(`${generated.slice(0, -3)}A\r\n`)).toBeUndefined();
+  });
+
+  it("fails closed instead of emitting a runtime SystemRoot expansion", () => {
+    expect(() =>
+      windowsLauncher.generateContent({
+        exe: "C:\\Program Files\\Keiko\\keiko.exe",
+        port: undefined,
+      }),
+    ).toThrow("identity-validated absolute PowerShell path");
   });
 });
 

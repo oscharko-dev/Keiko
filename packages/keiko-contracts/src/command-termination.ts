@@ -23,27 +23,31 @@ export type WindowsTreeKillResult =
   | "succeeded"
   | "failed"
   | "unknown"
+  // The process-wide synchronous-taskkill budget was already spent, so taskkill was deliberately
+  // not started. Distinct from "unknown", which means a taskkill process DID start but its bounded
+  // wait expired before an exit status was observed.
+  | "budget-exhausted"
   | "blocked-untrusted-system-root"
   // The pid handed in was this process or its parent, so nothing was signalled. Distinct from every
   // other member because it is not an environment fact at all — it means a stale or recycled pid
   // reached the kill path, and signalling it would have been suicide (`taskkill /T` takes the whole
   // tree). Recorded so the near-miss is visible in a customer's log instead of silent.
   | "refused-self-pid"
-  // taskkill exited 128: "the specified process was not found". The tree was ALREADY GONE, which on
-  // a termination path is a benign outcome — the goal was reached before we asked. Collapsing it
-  // into "failed" told an operator the tree may still be running when it demonstrably was not, and
-  // it is the most common non-zero status this call produces: the child exits during the grace
-  // window between the guard check and taskkill actually running. Same reasoning as
-  // "blocked-untrusted-system-root": two different facts must not share one word.
-  | "already-gone";
+  // taskkill exited 128: the requested ROOT process was not found. This says nothing about a
+  // descendant that may have outlived that root, so the disposition deliberately does not claim
+  // the process tree is already gone. It remains distinct from a generic failure because it is a
+  // verified, operationally common race: the child exits during the grace window between the guard
+  // check and taskkill actually running.
+  | "root-not-found";
 
-// Everything a termination line can truthfully say about the tree-kill step: the four verified
-// results above, or "not-attempted" (POSIX, no pid to signal, or a child already known to have
+// Everything a termination line can truthfully say about the tree-kill step: a verified result
+// above, or "not-attempted" (POSIX, no pid to signal, or a child already known to have
 // exited — signalling a raw pid then risks hitting a REUSED one).
 export type WindowsTreeKillDisposition = WindowsTreeKillResult | "not-attempted";
 
 /** Why a run was terminated. Closed vocabulary — never free text on a log line. */
-export type CommandTerminationReason = "timeout" | "abort" | "output-cap" | "spawn-callback-error";
+export type CommandTerminationReason =
+  "timeout" | "abort" | "output-cap" | "spawn-callback-error" | "child-process-error";
 
 /**
  * Body-free evidence for one termination step. Every field is a count, an id, or a closed-vocabulary
@@ -60,8 +64,8 @@ export interface CommandTerminationEvidence {
   // cmd.exe/node.exe tree in host-side evidence.
   readonly childPid: number;
   // The VERIFIED tree-kill outcome: taskkill's own completed exit status, "unknown" only when the
-  // bounded wait expired, "not-attempted" when no signal was sent. Never a
-  // dispatched-therefore-succeeded tautology.
+  // bounded wait expired, "budget-exhausted" when taskkill was deliberately not launched, and
+  // "not-attempted" when no signal was sent. Never a dispatched-therefore-succeeded tautology.
   readonly windowsTreeKill: WindowsTreeKillDisposition;
   // PRESENT ONLY on the escalation line, and it is what makes the two lines tell themselves apart.
   //

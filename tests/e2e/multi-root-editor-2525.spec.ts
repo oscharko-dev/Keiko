@@ -196,11 +196,11 @@ test("two roots retain independent editor and trust state through focused-root c
   // This journey replaces the whole editor buffer (`replaceEditorBuffer`) before asserting. Monaco
   // 0.56 uses the EditContext API where it exists and falls back to `textarea.inputarea` where it
   // does not; Firefox has no EditContext. On that fallback surface neither Ctrl+A nor Cmd+A reaches
-  // Monaco's keybinding service, so the select-all selects nothing and the following insert APPENDS.
+  // Monaco's keybinding service, so the replacement paste leaves stale model content behind.
   // Verified on this host, not assumed: running this very spec with --project=firefox fails inside
-  // the shared helper with `expected "…historyValue = "one";" at most 1x after replacing the buffer`
-  // — the helper catching the corruption exactly where it happens, which is the improvement over the
-  // silent doubling that preceded it. Same gap and same wording as release-smoke.spec.ts.
+  // the shared helper because no hot-exit write ever carries the requested exact full buffer — the
+  // helper catches the corruption where it happens instead of accepting a visible first-line anchor
+  // while stale content survives. Same gap as release-smoke.spec.ts.
   //
   // This config inherits BOTH projects from the shared base config, but its npm script pins
   // --project=chromium, so this guard changes no CI lane today; it exists so a future firefox run
@@ -238,7 +238,7 @@ test("two roots retain independent editor and trust state through focused-root c
   await expect(rootA.getByLabel("Trusted workspace")).toBeVisible();
 
   const editor = page.locator(`${EDITOR_SELECTORS.workspace}:visible`);
-  await replaceEditorBuffer(page, firstPane(editor), "dirty root A\n");
+  await replaceEditorBuffer(page, firstPane(editor), "dirty root A\n", a.root);
   await expect(editor.locator(`${EDITOR_SELECTORS.tab}[data-dirty='true']`)).toHaveCount(1);
   await expect.poll(() => storedWorkspace(page)).toContain("rootSessionsJson");
   await expect.poll(() => storedWorkspace(page)).toContain("a.txt");

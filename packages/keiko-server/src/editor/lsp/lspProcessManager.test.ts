@@ -2,7 +2,7 @@ import { existsSync, mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { PassThrough } from "node:stream";
-import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 
 import type { LspLifecycleEvent, LspProcessConfig } from "@oscharko-dev/keiko-contracts";
 import type { CommandRule } from "@oscharko-dev/keiko-tools";
@@ -15,6 +15,14 @@ import { createLspFrameReader, writeLspFrame } from "./lspFrameCodec.js";
 import { createFakeLspProcess } from "./testing/fakeLspProcess.js";
 import type { FakeLspBehavior, FakeLspController } from "./testing/fakeLspProcess.js";
 import { writeExecutableFixture } from "./testing/executableFixture.js";
+import type { ServerLogEvent } from "../../observability/server-log.js";
+import {
+  createServerLogger,
+  resetServerLogger,
+  setServerLogger,
+} from "../../observability/server-logger.js";
+import { UNKNOWN_CORRELATION_ID } from "../../correlation.js";
+import { redactLogFields } from "../../observability/log-redaction.js";
 
 // `resolveExecutableOutsideWorkspace` runs against the real filesystem even when the spawn function is
 // faked, so the manager only proceeds to spawn if `fakelsp` actually resolves on PATH outside the
@@ -33,6 +41,10 @@ beforeAll(() => {
 afterAll(() => {
   rmSync(BIN_DIR, { recursive: true, force: true });
   rmSync(WORKSPACE_ROOT, { recursive: true, force: true });
+});
+
+afterEach(() => {
+  resetServerLogger();
 });
 
 function workspace(): WorkspaceInfo {
@@ -78,6 +90,28 @@ async function settle(turns = 12): Promise<void> {
 async function settleMs(ms: number): Promise<void> {
   await new Promise<void>((resolve) => setTimeout(resolve, ms));
   await settle();
+}
+
+function captureServerLog(): ServerLogEvent[] {
+  const events: ServerLogEvent[] = [];
+  setServerLogger(
+    createServerLogger({ sink: { write: (event) => events.push(event) }, level: "debug" }),
+  );
+  return events;
+}
+
+function findOwnershipLog(
+  events: readonly ServerLogEvent[],
+  action: "retained-unconfirmed" | "released-after-exit",
+  expected: { readonly reason?: string; readonly childPid?: number } = {},
+): ServerLogEvent | undefined {
+  return events.find(
+    (event) =>
+      event.op === "lsp.process.ownership.changed" &&
+      event.extra?.action === action &&
+      (expected.reason === undefined || event.extra.reason === expected.reason) &&
+      (expected.childPid === undefined || event.extra.childPid === expected.childPid),
+  );
 }
 
 interface Harness {
@@ -147,59 +181,6 @@ function silentAfterInitSpawn(): SilentHandle {
     onError: (): void => undefined,
   });
   return { spawn, controller: { exitEmitted: (): boolean => exited } };
-}
-
-interface CrashableSpawn {
-  spawn: LspSpawnFn;
-  // Fires the exit callback of the most-recently-spawned child, simulating a crash before it answers
-  // an in-flight (non-initialize) request.
-  crashLatest(): void;
-}
-
-// Like `silentAfterInitSpawn` but every spawned child exposes its exit callback so a test can crash
-// the live child on demand. Answers `initialize` (reaching READY) and ignores all later requests, so
-// a sent request stays pending until the crash forces a transport dispose (FIX 3).
-function crashableSilentSpawn(): CrashableSpawn {
-  let latestExit: ((code: number | null) => void) | undefined;
-  const spawn: LspSpawnFn = () => {
-    const stdin = new PassThrough();
-    const stdout = new PassThrough();
-    const stderr = new PassThrough();
-    void (async (): Promise<void> => {
-      const reader = createLspFrameReader(stdin, 1_048_576);
-      try {
-        for await (const body of reader) {
-          const message = JSON.parse(body.toString("utf8")) as { id?: number; method?: string };
-          if (message.method === "initialize" && message.id !== undefined) {
-            writeLspFrame(stdout, JSON.stringify({ jsonrpc: "2.0", id: message.id, result: {} }));
-          }
-        }
-      } catch {
-        // Stream closed on dispose/crash.
-      }
-    })();
-    return {
-      stdin: {
-        write: (chunk: Buffer): void => {
-          stdin.write(chunk);
-        },
-      },
-      stdout,
-      stderr,
-      pid: 5555,
-      kill: (): void => {
-        stdout.end();
-      },
-      onExit: (callback): void => {
-        latestExit = callback;
-      },
-      onError: (): void => undefined,
-    };
-  };
-  return {
-    spawn,
-    crashLatest: (): void => latestExit?.(1),
-  };
 }
 
 function makeDeps(
@@ -287,12 +268,9 @@ describe("createLspProcessManager", () => {
     await manager.dispose();
   });
 
-  // P1-A (failResourceBudget twin): this path sets `state.exited = true` SYNCHRONOUSLY, before the OS
-  // confirms the SIGKILL. That permanently disables supervisorOnCrash's own clearing for this
-  // generation — its guard treats the eventual real exit as already handled and returns early — so
-  // failResourceBudget is the ONLY place left that can clear state.child. Without its own clear, a
-  // later dispose() calls kill() on the already-dead handle a second time.
-  it("clears state.child after a resource-budget kill so a later dispose never re-signals it (P1-A)", async () => {
+  // The default fake publishes a synchronous exit confirmation on SIGKILL. That confirmed path may
+  // release its handle immediately; the unconfirmed counterpart is pinned separately below.
+  it("does not re-signal a confirmed resource-budget exit during later disposal", async () => {
     const controller = createFakeLspProcess({ results: { "textDocument/hover": null } });
     let budgetSatisfied = true;
     const manager = createLspProcessManager({
@@ -319,6 +297,36 @@ describe("createLspProcessManager", () => {
 
     // dispose() must not add a further signal against the already-dead handle.
     expect(controller.killed()).toEqual(signalsBeforeDispose);
+  });
+
+  it("retains a resource-budget child until a later OS exit confirmation", async () => {
+    const log = captureServerLog();
+    const controller = createFakeLspProcess({
+      results: { "textDocument/hover": null },
+      killConfirmsExit: false,
+    });
+    let budgetSatisfied = true;
+    const manager = createLspProcessManager({
+      ...makeDeps(() => controller.handle, makeConfig()),
+      prepareSpawn: (input) => ({
+        executable: input.executable,
+        args: input.args,
+        env: input.env,
+        resourceBudgetSatisfied: (): boolean => budgetSatisfied,
+      }),
+    });
+    await settle();
+    budgetSatisfied = false;
+
+    await expect(
+      manager.sendRequest("textDocument/hover", {}, new AbortController().signal),
+    ).rejects.toMatchObject({ code: "RESOURCE_BUDGET_EXCEEDED" });
+    expect(controller.exitEmitted()).toBe(false);
+    expect(findOwnershipLog(log, "retained-unconfirmed", { childPid: 4242 })).toBeDefined();
+    controller.confirmExit();
+    await settle();
+    expect(findOwnershipLog(log, "released-after-exit", { childPid: 4242 })).toBeDefined();
+    await manager.dispose();
   });
 
   it("continues lifecycle teardown when one prepared resource cleanup throws", async () => {
@@ -427,10 +435,9 @@ describe("createLspProcessManager", () => {
   // F1 (PR reviewer finding, ~lspProcessManager.ts line 359): disposeManager called
   // cleanupSpawnResources and then transitioned to DISPOSED without ever clearing state.child, so
   // the terminal event's spread (`...state.child?.pid !== undefined ? { childPid: ... } : {}`) kept
-  // emitting the TERMINATED child's pid. A reconstructed support timeline would then show a disposed
-  // manager as still owning a process — and the OS is free to reuse that pid for an unrelated one.
-  // The contract on LspLifecycleEvent.childPid is explicit: present only for a CURRENT running
-  // child, absent after cleanup.
+  // emitting a child pid even after this normal path had observed exit and released ownership. An
+  // unconfirmed terminal path intentionally retains the pid (pinned below), but a confirmed exit
+  // must remove it before the OS can reuse that pid for an unrelated process.
   it("clears childPid from the terminal DISPOSED event after normal disposal (F1)", async () => {
     const { spawn } = fakeSpawnHarness(["normal"]);
     const events: LspLifecycleEvent[] = [];
@@ -452,15 +459,45 @@ describe("createLspProcessManager", () => {
     expect(terminal).toBeDefined();
     if (terminal === undefined) throw new Error("terminal DISPOSED event missing");
     expect(terminal.childPid).toBeUndefined();
-    // The field must be genuinely ABSENT (per the contract's "absent after cleanup"), not merely
+    // The field must be genuinely absent after confirmed ownership release, not merely
     // `undefined` — a stronger pin than toBeUndefined() alone, which would also pass for an
     // explicitly-set `undefined` value that still serialises differently under some encoders.
     expect(Object.hasOwn(terminal, "childPid")).toBe(false);
   });
 
+  it("keeps an unconfirmed disposed child owned by the background exit reaper", async () => {
+    const log = captureServerLog();
+    const events: LspLifecycleEvent[] = [];
+    const controller = createFakeLspProcess({
+      behavior: "unresponsive",
+      killConfirmsExit: false,
+    });
+    const manager = createLspProcessManager(
+      makeDeps(
+        () => controller.handle,
+        makeConfig({ shutdownTimeoutMs: 5 }),
+        (event) => events.push(event),
+      ),
+    );
+    await settle();
+
+    await manager.dispose();
+
+    expect(controller.exitEmitted()).toBe(false);
+    expect(events.filter((event) => event.status === "DISPOSED")).toContainEqual(
+      expect.objectContaining({ childPid: 4242 }),
+    );
+    const retained = findOwnershipLog(log, "retained-unconfirmed", { childPid: 4242 });
+    expect(retained?.correlationId).toBe(UNKNOWN_CORRELATION_ID);
+
+    controller.confirmExit();
+    await settle();
+    expect(findOwnershipLog(log, "released-after-exit", { childPid: 4242 })).toBeDefined();
+  });
+
   it("transitions to INITIALIZE_TIMEOUT when the server never answers initialize", async () => {
-    const { spawn } = fakeSpawnHarness(["slow"]);
-    const manager = createLspProcessManager(makeDeps(spawn, makeConfig()));
+    const controller = createFakeLspProcess({ behavior: "slow", killConfirmsExit: false });
+    const manager = createLspProcessManager(makeDeps(() => controller.handle, makeConfig()));
     await settleMs(60);
 
     expect(manager.getLspProcessStatus()).toBe("INITIALIZE_TIMEOUT");
@@ -468,6 +505,78 @@ describe("createLspProcessManager", () => {
       "unavailable",
     );
     await manager.dispose();
+  });
+
+  it("retains an initialize-timeout child until its delayed exit is observed", async () => {
+    const log = captureServerLog();
+    const controllers: FakeLspController[] = [];
+    const spawn: LspSpawnFn = () => {
+      const controller = createFakeLspProcess({
+        behavior: controllers.length === 0 ? "slow" : "normal",
+        killConfirmsExit: controllers.length !== 0,
+      });
+      controllers.push(controller);
+      return controller.handle;
+    };
+    const manager = createLspProcessManager(
+      makeDeps(spawn, makeConfig({ initializeTimeoutMs: 10 })),
+    );
+
+    await settleMs(25);
+    const controller = controllers[0];
+    if (controller === undefined) throw new Error("initializing controller missing");
+    expect(manager.getLspProcessStatus()).toBe("INITIALIZE_TIMEOUT");
+    expect(controller.exitEmitted()).toBe(false);
+    expect(findOwnershipLog(log, "retained-unconfirmed", { childPid: 4242 })).toBeDefined();
+
+    controller.confirmExit();
+    await settle();
+    expect(manager.getLspProcessStatus()).toBe("READY");
+    expect(controllers).toHaveLength(2);
+    expect(findOwnershipLog(log, "released-after-exit", { childPid: 4242 })).toBeDefined();
+    await manager.dispose();
+  });
+
+  it("restarts after a confirmed initialization-timeout exit and ignores stale callbacks", async () => {
+    const controllers: FakeLspController[] = [];
+    const spawn: LspSpawnFn = () => {
+      const controller = createFakeLspProcess({
+        behavior: controllers.length === 0 ? "slow" : "normal",
+        killConfirmsExit: controllers.length !== 0,
+      });
+      controllers.push(controller);
+      return controller.handle;
+    };
+    const events: LspLifecycleEvent[] = [];
+    const manager = createLspProcessManager(
+      makeDeps(spawn, makeConfig(), (event) => events.push(event)),
+    );
+
+    await settleMs(60);
+
+    expect(manager.getLspProcessStatus()).toBe("INITIALIZE_TIMEOUT");
+    expect(controllers).toHaveLength(1);
+    const failedChild = controllers[0];
+    expect(failedChild).toBeDefined();
+    if (failedChild === undefined) throw new TypeError("failed initialization child missing");
+    expect(failedChild.killed()).toEqual(["SIGKILL"]);
+
+    failedChild.confirmExit();
+    await settle();
+    expect(manager.getLspProcessStatus()).toBe("READY");
+    expect(controllers).toHaveLength(2);
+
+    // A late callback from the released generation must not restart or rewrite the replacement.
+    failedChild.emitLateExit(1);
+    await settle();
+    expect(manager.getLspProcessStatus()).toBe("READY");
+    expect(controllers).toHaveLength(2);
+
+    await manager.dispose();
+    expect(failedChild.killed()).toEqual(["SIGKILL"]);
+    const disposed = events.find((event) => event.status === "DISPOSED");
+    expect(disposed).toBeDefined();
+    expect(Object.hasOwn(disposed ?? {}, "childPid")).toBe(false);
   });
 
   it("times out an in-flight request with REQUEST_TIMED_OUT while staying READY", async () => {
@@ -498,7 +607,7 @@ describe("createLspProcessManager", () => {
     await manager.dispose();
   });
 
-  it("restarts after a crash and returns to READY", async () => {
+  it("restarts after confirmed crash termination and returns to READY", async () => {
     const { spawn, controllers } = fakeSpawnHarness(["normal", "normal"]);
     const events: LspLifecycleEvent[] = [];
     const manager = createLspProcessManager(
@@ -508,7 +617,7 @@ describe("createLspProcessManager", () => {
     expect(manager.getLspProcessStatus()).toBe("READY");
     expect(manager.getChildGeneration()).toBe(1);
 
-    controllers[0]?.crash(1);
+    controllers[0]?.emitError();
     await settle();
 
     expect(manager.getLspProcessStatus()).toBe("READY");
@@ -537,7 +646,7 @@ describe("createLspProcessManager", () => {
     const firstPath = paths[0] ?? "";
     expect(existsSync(firstPath)).toBe(true);
 
-    controllers[0]?.crash();
+    controllers[0]?.emitError();
     await settle();
     const secondPath = paths[1] ?? "";
     expect(existsSync(firstPath)).toBe(false);
@@ -547,30 +656,169 @@ describe("createLspProcessManager", () => {
     expect(existsSync(secondPath)).toBe(false);
   });
 
-  it("rejects an in-flight request PROMPTLY when the child crashes before responding (FIX 3)", async () => {
-    // A request is in flight when the server crashes. On restart, spawnAndInitialize disposes the OLD
-    // transport, whose client.dispose() rejects every pending request with LspRpcDisposedError →
-    // DISPOSED. Without that, the request would linger until requestTimeoutMs. A long requestTimeoutMs
-    // makes the assertion meaningful: the rejection must arrive far sooner than the deadline.
-    const crashable = crashableSilentSpawn();
-    const config = makeConfig({ requestTimeoutMs: 30_000 });
-    const manager = createLspProcessManager(makeDeps(crashable.spawn, config));
+  it("retains an unsolicited exit without starting a potentially parallel replacement", async () => {
+    const log = captureServerLog();
+    const events: LspLifecycleEvent[] = [];
+    const controllers: FakeLspController[] = [];
+    const spawn: LspSpawnFn = () => {
+      const controller = createFakeLspProcess({ behavior: "unresponsive-request" });
+      controllers.push(controller);
+      return controller.handle;
+    };
+    const manager = createLspProcessManager(
+      makeDeps(spawn, makeConfig({ requestTimeoutMs: 30_000, maxRestartsInWindow: 0 }), (event) =>
+        events.push(event),
+      ),
+    );
     await settle();
     expect(manager.getLspProcessStatus()).toBe("READY");
 
-    const start = Date.now();
     const pending = manager.sendRequest<unknown>(
       "textDocument/hover",
       {},
       new AbortController().signal,
     );
     const assertion = expect(pending).rejects.toMatchObject({ code: "DISPOSED" });
-    // Crash the FIRST child: its exit callback drives supervisorOnCrash → restart →
-    // old transport.dispose() → the pending request is rejected immediately, not after the deadline.
-    crashable.crashLatest();
+    const first = controllers[0];
+    if (first === undefined) throw new TypeError("first controller missing");
+    // Model a leader that exits while a descendant may remain. No raw pid signal is safe after this
+    // observation, and no second generation may start without tree-containment proof.
+    first.crash(1);
     await settle();
     await assertion;
-    expect(Date.now() - start).toBeLessThan(5_000);
+
+    expect(manager.getLspProcessStatus()).toBe("CRASHED");
+    expect(manager.getChildGeneration()).toBe(1);
+    expect(manager.hasRetainedProcessOwnership()).toBe(true);
+    expect(controllers).toHaveLength(1);
+    expect(first.killed()).toEqual([]);
+    expect(events.filter((event) => event.status === "CRASHED")).toContainEqual(
+      expect.objectContaining({ childPid: 4242, pendingRequestCount: 0, restartCount: 0 }),
+    );
+    expect(
+      findOwnershipLog(log, "retained-unconfirmed", {
+        reason: "tree-unconfirmed",
+        childPid: 4242,
+      }),
+    ).toBeDefined();
+    await manager.dispose();
+    expect(manager.hasRetainedProcessOwnership()).toBe(true);
+    expect(first.killed()).toEqual([]);
+    expect(events.filter((event) => event.status === "DISPOSED")).toContainEqual(
+      expect.objectContaining({ childPid: 4242, pendingRequestCount: 0 }),
+    );
+  });
+
+  it.each(["child-error", "reader-error"] as const)(
+    "waits for confirmed exit before restarting after %s",
+    async (source) => {
+      const log = captureServerLog();
+      const controllers: FakeLspController[] = [];
+      const spawn: LspSpawnFn = () => {
+        const firstGeneration = controllers.length === 0;
+        const controller = createFakeLspProcess({
+          behavior: firstGeneration && source === "reader-error" ? "oversized" : "normal",
+          oversizedContentLength: 8_000_000,
+          killConfirmsExit: !firstGeneration,
+        });
+        controllers.push(controller);
+        return controller.handle;
+      };
+      const manager = createLspProcessManager(
+        makeDeps(spawn, makeConfig({ maxFrameBytes: 4_096, initializeTimeoutMs: 200 })),
+      );
+      await settle();
+      const first = controllers[0];
+      if (first === undefined) throw new Error("first controller missing");
+      if (source === "child-error") {
+        expect(manager.getLspProcessStatus()).toBe("READY");
+        first.emitError();
+        await settle();
+      }
+
+      expect(manager.getLspProcessStatus()).toBe("CRASHED");
+      expect(first.killed()).toContain("SIGKILL");
+      expect(first.exitEmitted()).toBe(false);
+      expect(controllers).toHaveLength(1);
+      expect(findOwnershipLog(log, "retained-unconfirmed", { childPid: 4242 })).toBeDefined();
+
+      await settle();
+      expect(controllers).toHaveLength(1);
+      first.confirmExit();
+      await settle();
+
+      expect(controllers).toHaveLength(2);
+      expect(manager.getLspProcessStatus()).toBe("READY");
+      expect(findOwnershipLog(log, "released-after-exit", { childPid: 4242 })).toBeDefined();
+      await manager.dispose();
+    },
+  );
+
+  it("does not release or restart when the wrapper exits after an unconfirmed tree kill", async () => {
+    const log = captureServerLog();
+    const events: LspLifecycleEvent[] = [];
+    const controllers: FakeLspController[] = [];
+    const spawn: LspSpawnFn = () => {
+      const controller = createFakeLspProcess({
+        killResult: {
+          treeContainment: "unconfirmed",
+          windowsTreeKill: "failed",
+        },
+      });
+      controllers.push(controller);
+      return controller.handle;
+    };
+    const manager = createLspProcessManager(
+      makeDeps(spawn, makeConfig(), (event) => events.push(event)),
+    );
+    await settle();
+    const first = controllers[0];
+    if (first === undefined) throw new Error("first controller missing");
+
+    first.emitError();
+    await settle();
+
+    expect(first.exitEmitted()).toBe(true);
+    expect(first.killed()).toEqual(["SIGKILL"]);
+    expect(controllers).toHaveLength(1);
+    expect(manager.getLspProcessStatus()).toBe("CRASHED");
+    const retained = findOwnershipLog(log, "retained-unconfirmed", {
+      reason: "tree-unconfirmed",
+      childPid: 4242,
+    });
+    expect(retained).toBeDefined();
+    expect(redactLogFields(retained?.extra)).toEqual(retained?.extra);
+    expect(findOwnershipLog(log, "released-after-exit")).toBeUndefined();
+
+    await manager.dispose();
+    expect(first.killed()).toEqual(["SIGKILL"]);
+    expect(events.filter((event) => event.status === "DISPOSED")).toContainEqual(
+      expect.objectContaining({ childPid: 4242 }),
+    );
+  });
+
+  it("treats an asynchronous spawn error without a pid as confirmed not-spawned", async () => {
+    const log = captureServerLog();
+    const controllers: FakeLspController[] = [];
+    const spawn: LspSpawnFn = () => {
+      const controller = createFakeLspProcess({
+        pid: controllers.length === 0 ? null : 4242,
+      });
+      controllers.push(controller);
+      return controller.handle;
+    };
+    const manager = createLspProcessManager(makeDeps(spawn, makeConfig()));
+    await settle();
+    const pidless = controllers[0];
+    if (pidless === undefined) throw new Error("pidless controller missing");
+
+    pidless.emitError();
+    await settle();
+
+    expect(pidless.killed()).toEqual([]);
+    expect(controllers).toHaveLength(2);
+    expect(manager.getLspProcessStatus()).toBe("READY");
+    expect(findOwnershipLog(log, "retained-unconfirmed")).toBeUndefined();
     await manager.dispose();
   });
 
@@ -585,7 +833,7 @@ describe("createLspProcessManager", () => {
     await settle();
     expect(manager.getLspProcessStatus()).toBe("READY");
 
-    controllers[0]?.crash(1);
+    controllers[0]?.emitError();
     await settle();
     expect(manager.getLspProcessStatus()).toBe("READY");
     const crashedAfterRestart = events.filter((e) => e.status === "CRASHED").length;
@@ -597,7 +845,7 @@ describe("createLspProcessManager", () => {
     expect(events.filter((e) => e.status === "CRASHED")).toHaveLength(crashedAfterRestart);
     expect(manager.getLspProcessStatus()).toBe("READY");
     // The throttle budget is intact: a second genuine crash still restarts (not throttled).
-    controllers[controllers.length - 1]?.crash(1);
+    controllers[controllers.length - 1]?.emitError();
     await settle();
     expect(manager.getLspProcessStatus()).toBe("READY");
     await manager.dispose();
@@ -610,12 +858,66 @@ describe("createLspProcessManager", () => {
     await settle();
 
     for (let i = 0; i < 4; i += 1) {
-      controllers[controllers.length - 1]?.crash(1);
+      controllers[controllers.length - 1]?.emitError();
       await settle();
     }
 
     expect(manager.getLspProcessStatus()).toBe("RESTART_THROTTLED");
     await manager.dispose();
+  });
+
+  it("disposes pending requests when the final confirmed crash is restart-throttled", async () => {
+    const { spawn, controllers } = fakeSpawnHarness([
+      "unresponsive-request",
+      "unresponsive-request",
+    ]);
+    const events: LspLifecycleEvent[] = [];
+    const manager = createLspProcessManager(
+      makeDeps(
+        spawn,
+        makeConfig({
+          maxRestartsInWindow: 1,
+          restartWindowMs: 60_000,
+          requestTimeoutMs: 30_000,
+        }),
+        (event) => events.push(event),
+      ),
+    );
+    await settle();
+    expect(manager.getLspProcessStatus()).toBe("READY");
+
+    // Spend the only restart and let the replacement reach READY.
+    controllers[0]?.emitError();
+    await settle();
+    expect(manager.getLspProcessStatus()).toBe("READY");
+    expect(manager.getChildGeneration()).toBe(2);
+
+    let requestOutcome = "pending";
+    const pending = manager.sendRequest<unknown>(
+      "textDocument/hover",
+      {},
+      new AbortController().signal,
+    );
+    void pending.then(
+      () => {
+        requestOutcome = "resolved";
+      },
+      (error: unknown) => {
+        requestOutcome = error instanceof Error ? error.message : "unknown-error";
+      },
+    );
+
+    // No restart remains. The confirmed error → tree-kill → exit path must still dispose this
+    // generation's transport instead of leaving the request alive until its long deadline.
+    controllers[1]?.emitError();
+    await settle();
+    const outcomeAfterCrash = requestOutcome;
+    const throttled = events.find((event) => event.status === "RESTART_THROTTLED");
+    await manager.dispose();
+
+    expect(manager.getLspProcessStatus()).toBe("DISPOSED");
+    expect(outcomeAfterCrash).toBe("DISPOSED");
+    expect(throttled?.pendingRequestCount).toBe(0);
   });
 
   // P1-A: before this fix, supervisorOnCrash never cleared state.child on the CRASH path — only
@@ -626,7 +928,7 @@ describe("createLspProcessManager", () => {
   // machine. The assertion below is on the SIGNAL itself (kill() calls observed on the dead handle),
   // not on an evidence field: a vacuous variant of this class of test asserted only an event value that
   // reads the same with and without the fix on POSIX and passed with the guard removed.
-  it("clears state.child after a CRASH so a later dispose never re-signals the dead handle (P1-A)", async () => {
+  it("releases a confirmed crashed child so later dispose never re-signals it (P1-A)", async () => {
     const { spawn, controllers } = fakeSpawnHarness(["normal"]);
     const config = makeConfig({ maxRestartsInWindow: 1, restartWindowMs: 60_000 });
     const events: LspLifecycleEvent[] = [];
@@ -634,10 +936,9 @@ describe("createLspProcessManager", () => {
     await settle();
     expect(manager.getLspProcessStatus()).toBe("READY");
 
-    // First crash restarts (budget = 1 within the frozen-clock window); the second is throttled and
-    // leaves that generation's child as the manager's last-known (now dead) child.
+    // First confirmed crash termination restarts (budget = 1); the second is throttled.
     for (let i = 0; i < 4; i += 1) {
-      controllers[controllers.length - 1]?.crash(1);
+      controllers[controllers.length - 1]?.emitError();
       await settle();
     }
     expect(manager.getLspProcessStatus()).toBe("RESTART_THROTTLED");
@@ -645,9 +946,8 @@ describe("createLspProcessManager", () => {
     const deadController = controllers[controllers.length - 1];
     expect(deadController).toBeDefined();
     if (deadController === undefined) throw new Error("controller missing");
-    // Sanity: a natural exit (onExit, terminateProcess=false) never itself calls kill() — proves any
-    // signal observed below can only have come from dispose(), not from the crash handling itself.
-    expect(deadController.killed()).toEqual([]);
+    const signalsBeforeDispose = [...deadController.killed()];
+    expect(signalsBeforeDispose).toEqual(["SIGKILL"]);
     // The contract on LspLifecycleEvent.childPid ("present only for a current running child... absent
     // after cleanup") applies here too: once the manager gives up restarting, there is no current
     // child, so RESTART_THROTTLED must not carry the dead child's pid either.
@@ -659,7 +959,7 @@ describe("createLspProcessManager", () => {
     await manager.dispose();
 
     // The manager must never signal an already-dead child a second time.
-    expect(deadController.killed()).toEqual([]);
+    expect(deadController.killed()).toEqual(signalsBeforeDispose);
   });
 
   // P1-B: runInitialize had no generation guard, only a `state.status === "INITIALIZING"` check. A
@@ -682,7 +982,7 @@ describe("createLspProcessManager", () => {
     // Crashing generation 1 synchronously drives supervisorStart → spawnAndInitialize for generation 2,
     // which disposes generation 1's transport (rejecting its pending initialize call) and transitions to
     // INITIALIZING for generation 2 — all before generation 1's rejection is even observed.
-    controllers[0]?.crash(1);
+    controllers[0]?.emitError();
     await settle();
 
     expect(manager.getChildGeneration()).toBe(2);
@@ -720,6 +1020,40 @@ describe("createLspProcessManager", () => {
     expect(controllers[0]?.killed()).toContain("SIGKILL");
   });
 
+  it("keeps disposal ownership after exit when bounded tree termination is unconfirmed", async () => {
+    const log = captureServerLog();
+    const events: LspLifecycleEvent[] = [];
+    const controller = createFakeLspProcess({
+      behavior: "unresponsive",
+      killResult: {
+        treeContainment: "unconfirmed",
+        windowsTreeKill: "root-not-found",
+      },
+    });
+    const manager = createLspProcessManager(
+      makeDeps(
+        () => controller.handle,
+        makeConfig({ shutdownTimeoutMs: 5 }),
+        (event) => events.push(event),
+      ),
+    );
+    await settle();
+
+    await manager.dispose();
+
+    expect(controller.exitEmitted()).toBe(true);
+    expect(controller.killed()).toEqual(["SIGTERM", "SIGKILL"]);
+    expect(events.filter((event) => event.status === "DISPOSED")).toContainEqual(
+      expect.objectContaining({ childPid: 4242 }),
+    );
+    expect(
+      findOwnershipLog(log, "retained-unconfirmed", {
+        reason: "tree-unconfirmed",
+        childPid: 4242,
+      }),
+    ).toBeDefined();
+  });
+
   it("does not wait the full grace window when the child exits promptly during dispose", async () => {
     // FIX 2: a well-behaved server answers `shutdown` (so requestGracefulShutdown returns fast) and
     // exits on `exit`. escalateKill's stop-predicate (`() => state.exited`) must observe the exit set
@@ -740,7 +1074,10 @@ describe("createLspProcessManager", () => {
     expect(manager.getLspProcessStatus()).toBe("DISPOSED");
     // Resolved well before the 5 s grace window — proves escalateKill saw the prompt exit (FIX 2).
     expect(elapsedMs).toBeLessThan(2_000);
-    expect(controllers[0]?.killed()).not.toContain("SIGKILL");
+    // Exit was observed while graceful shutdown was in flight. Re-reading the generation-owned
+    // handle after that await must skip escalation entirely — even SIGTERM against this raw pid is
+    // already too late and could target a reused Windows pid.
+    expect(controllers[0]?.killed()).toEqual([]);
   });
 
   it("throws DISPOSED for calls made after dispose", async () => {
@@ -793,9 +1130,9 @@ describe("createLspProcessManager", () => {
     // The "slow" behavior never answers initialize, so the manager ends up in INITIALIZE_TIMEOUT
     // after the timeout fires, but the transport/client exists. Sending a request then must yield
     // CRASHED (the client is undefined-or-not-ready branch of sendRequest, line 301-303).
-    const { spawn } = fakeSpawnHarness(["slow"]);
+    const controller = createFakeLspProcess({ behavior: "slow", killConfirmsExit: false });
     const config = makeConfig({ initializeTimeoutMs: 30, requestTimeoutMs: 30 });
-    const manager = createLspProcessManager(makeDeps(spawn, config));
+    const manager = createLspProcessManager(makeDeps(() => controller.handle, config));
     await settleMs(60);
 
     expect(manager.getLspProcessStatus()).toBe("INITIALIZE_TIMEOUT");
@@ -952,10 +1289,7 @@ describe("createLspProcessManager", () => {
     await manager.dispose();
   });
 
-  it("ignores a crash signal when the process has already been marked exited (double-crash guard)", async () => {
-    // supervisorOnCrash has an early return when state.exited is already true (line 86-88).
-    // Trigger this by crashing once (exited becomes true), then crashing again before the
-    // restart completes. The second crash should be silently ignored.
+  it("ignores a stale error callback after confirmed crash restart", async () => {
     const { spawn, controllers } = fakeSpawnHarness(["normal", "normal"]);
     const events: LspLifecycleEvent[] = [];
     const manager = createLspProcessManager(
@@ -967,10 +1301,10 @@ describe("createLspProcessManager", () => {
     const ctrl = controllers[0];
     expect(ctrl).toBeDefined();
     if (ctrl === undefined) throw new Error("controller missing");
-    // First crash triggers normal CRASHED → restart sequence.
-    ctrl.crash(1);
-    // Immediately crash again (state.exited is now true) — this must be a no-op.
-    ctrl.crash(2);
+    // The first error requests a confirmed tree kill and restart. A repeated callback from that old
+    // handle carries a stale generation and must be a no-op.
+    ctrl.emitError();
+    ctrl.emitError();
     await settle();
 
     // Only one CRASHED event should exist for the first controller (double crash is guarded).

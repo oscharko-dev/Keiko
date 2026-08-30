@@ -29,6 +29,7 @@ import {
   capturedStartedSessionIdAfter,
   capturedStartedSessionIds,
 } from "./support/debugSessionStartCapture.js";
+import { clickWindowChromeButton } from "./support/window-chrome.js";
 
 const { computeD12NearestRankPercentile: percentile } = (await import(
   new URL("../../scripts/check-perf-evidence.mjs", import.meta.url).href
@@ -1299,7 +1300,7 @@ async function closeDebugAndMeasureResidual(
   heapClient: CDPSession,
   baselineHeap: number,
 ): Promise<number> {
-  await panel.getByRole("button", { name: "Close Debug window" }).click();
+  await clickWindowChromeButton(panel, "Close Debug window");
   await expect(panel).toBeHidden();
   await awaitNextPaint(page);
   return Math.max(0, (await readHeap(heapClient)) - baselineHeap);

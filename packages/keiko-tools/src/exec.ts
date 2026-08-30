@@ -12,7 +12,12 @@ import type { ChildProcess } from "node:child_process";
 import { accessSync, constants, mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { delimiter, join, resolve as resolvePath } from "node:path";
-import { redact, WindowsSystemDirectoryError } from "@oscharko-dev/keiko-security";
+import { performance } from "node:perf_hooks";
+import {
+  redact,
+  WindowsSystemBinaryMissingError,
+  WindowsSystemDirectoryError,
+} from "@oscharko-dev/keiko-security";
 import type {
   CommandTerminationEvidence,
   CommandTerminationReason,
@@ -129,6 +134,10 @@ export interface RunCommandDeps {
   // survive timeout/abort. Defaults to nodeWindowsTreeKill; never consulted on POSIX. Injectable
   // so tests can assert the tree-kill decision without a real Windows host.
   readonly killWindowsTree?: WindowsTreeKill | undefined;
+  // Production Windows runs reserve enough synchronous tree-kill capacity BEFORE spawn, so a
+  // command is never admitted when its eventual `.cmd` grandchild could not be bounded. Tests may
+  // inject deterministic capacity; a custom killWindowsTree already owns its own containment.
+  readonly windowsTerminationCapacity?: WindowsTerminationCapacity | undefined;
   // Deps-level default for the per-input `onTerminated` seam (RunCommandInput below). Production
   // composition boundaries that build ONE RunCommandDeps for a whole lane (the tool-host registry,
   // the governed git adapters, the verification orchestrator) wire the evidence port here once, so
@@ -207,31 +216,37 @@ const TASKKILL_WAIT_MS = 5000;
 // Bounds the AGGREGATE event-loop stall every concurrent Windows termination in the current window
 // can impose — TASKKILL_WAIT_MS above only ever bounds ONE invocation (see the comment there for
 // why cancelling N commands in one tick can otherwise serialise to N x TASKKILL_WAIT_MS). Node is
-// single-threaded and this counter is only ever read and decremented synchronously, immediately
-// before the blocking `spawnSync` call it guards, so no two decrements can interleave — no mutex
-// needed. Six full-timeout waits (30s) per 60s window: enough concurrent terminations in one tick to
-// matter, while guaranteeing at least half of any window stays free for `keiko-server` to serve
-// other requests. The WHOLE budget refills when the window elapses — never per call — so a burst of
-// terminations early in a long-running server does not permanently disable tree-kill enumeration for
-// the rest of the process's life.
+// single-threaded and this counter is reserved/refunded synchronously around the blocking
+// `spawnSync` call it guards, so no two updates can interleave — no mutex needed. Six full-timeout
+// waits (30s) per 60s window: enough concurrent terminations in one tick to matter, while
+// guaranteeing at least half of any window stays free for `keiko-server` to serve other requests.
+// Fast calls refund their unused reservation, so ordinary cancellation bursts retain containment.
+// The WHOLE budget refills when the window elapses — never per call — so a burst early in a
+// long-running server does not permanently disable tree-kill enumeration.
 const WINDOWS_TASKKILL_BUDGET_WINDOW_MS = 60_000;
 const WINDOWS_TASKKILL_BUDGET_MS = 6 * TASKKILL_WAIT_MS;
 
 export interface WindowsTaskkillBudget {
   // Attempts to spend one TASKKILL_WAIT_MS unit of the current window's budget. Returns false, and
   // spends nothing, once the window's budget is exhausted; the caller must not spawn taskkill in
-  // that case (see nodeWindowsTreeKillWith below, which reports "unknown" instead).
+  // that case (see nodeWindowsTreeKillWith below, which reports "budget-exhausted" instead).
   readonly tryConsume: () => boolean;
+  // Returns the unused part of the full timeout reservation after the guarded synchronous call.
+  // The input is clamped so a faulty clock or injected test seam cannot mint more than one window.
+  readonly refund: (unusedMs: number) => void;
 }
 
-// `now` is injected — production defaults to Date.now, tests move time without a real 60s wait — and
+// `now` is injected — production uses the monotonic performance clock, tests move time without a
+// real 60s wait — and
 // each call to this factory returns a budget with its OWN private counter, never a shared module
 // singleton. `nodeWindowsTreeKillWith` relies on exactly that: its own `budget` parameter defaults to
 // a FRESH `createWindowsTaskkillBudget()` per factory call, so the one production `nodeWindowsTreeKill`
 // export below gets a single process-lifetime budget (created once, at module load) while every test
 // that calls `nodeWindowsTreeKillWith(...)` directly gets an isolated budget of its own — no shared
 // mutable state bleeding between unrelated test cases (AGENTS.md §7).
-export function createWindowsTaskkillBudget(now: () => number = Date.now): WindowsTaskkillBudget {
+export function createWindowsTaskkillBudget(
+  now: () => number = () => performance.now(),
+): WindowsTaskkillBudget {
   let remainingMs = WINDOWS_TASKKILL_BUDGET_MS;
   let windowResetAt = now() + WINDOWS_TASKKILL_BUDGET_WINDOW_MS;
   return {
@@ -241,11 +256,17 @@ export function createWindowsTaskkillBudget(now: () => number = Date.now): Windo
         remainingMs = WINDOWS_TASKKILL_BUDGET_MS;
         windowResetAt = currentTime + WINDOWS_TASKKILL_BUDGET_WINDOW_MS;
       }
-      if (remainingMs <= 0) {
+      if (remainingMs < TASKKILL_WAIT_MS) {
         return false;
       }
       remainingMs -= TASKKILL_WAIT_MS;
       return true;
+    },
+    refund: (unusedMs): void => {
+      const boundedRefund = Number.isFinite(unusedMs)
+        ? Math.min(TASKKILL_WAIT_MS, Math.max(0, unusedMs))
+        : 0;
+      remainingMs = Math.min(WINDOWS_TASKKILL_BUDGET_MS, remainingMs + boundedRefund);
     },
   };
 }
@@ -280,6 +301,9 @@ type TaskkillRunner = (
   args: readonly string[],
 ) => { readonly status: number | null; readonly error?: Error | undefined };
 
+type TaskkillCompletion = ReturnType<TaskkillRunner>;
+export type WindowsTaskkillInvocationResolver = typeof windowsTaskkillInvocation;
+
 const defaultTaskkillRunner: TaskkillRunner = (command, args) => {
   const completed = nodeSpawnSync(command, [...args], {
     stdio: "ignore",
@@ -292,65 +316,150 @@ const defaultTaskkillRunner: TaskkillRunner = (command, args) => {
   };
 };
 
-// The ONE WindowsSystemDirectoryError message that means "the environment and the binary name were
-// both fine — the resolved System32 path just doesn't exist as a file" (a stripped-down Windows
-// image missing taskkill.exe): windows-system-directory.ts's `resolveWindowsSystemBinary` throws the
-// SAME error class for that as it does for a malformed/hostile SystemRoot or WINDIR, or a malformed
-// binary name — and only the message text tells them apart. Those two facts are not interchangeable:
-// one is an operational hiccup ("failed"), the other a security-relevant property of the environment
-// ("blocked-untrusted-system-root"). `resolveWindowsSystemBinary` lives in keiko-security, upstream
-// of keiko-tools (ADR-0019), so a new error subtype for the distinction belongs there, not here —
-// this file cannot introduce one without moving the dependency direction the wrong way, and it must
-// not edit that shared module for one caller's classification need. Message-matching is the narrowest
-// available seam. Pinned against silent drift: exec.test.ts asserts this literal against the REAL
-// throw (via `windowsTaskkillInvocation`, with `process.platform` stubbed to `win32` so the real,
-// otherwise-Windows-only existence check runs), so a wording change in keiko-security fails LOUD
-// here — as a broken pin — instead of silently reclassifying a missing binary as a security event.
-const WINDOWS_SYSTEM_BINARY_MISSING_MESSAGE =
-  "resolved Windows system binary does not exist as a regular file";
+function taskkillCompletionDisposition(completed: TaskkillCompletion): WindowsTreeKillResult {
+  if (completed.error !== undefined) {
+    const code = (completed.error as NodeJS.ErrnoException).code;
+    return code === "ETIMEDOUT" ? "unknown" : "failed";
+  }
+  if (completed.status === 0) return "succeeded";
+  // Exit 128 proves only that the requested ROOT pid was absent. A descendant may already have
+  // outlived it, so the evidence stays factual and deliberately makes no tree-wide claim.
+  return completed.status === 128 ? "root-not-found" : "failed";
+}
+
+function taskkillThrownDisposition(error: unknown): WindowsTreeKillResult {
+  // Missing taskkill.exe is an operational host-image failure. A malformed/hostile SystemRoot is
+  // a separate security disposition. Typed discrimination avoids coupling this boundary to
+  // human-facing message text; unrelated errors remain ordinary failures.
+  if (error instanceof WindowsSystemBinaryMissingError) return "failed";
+  return error instanceof WindowsSystemDirectoryError ? "blocked-untrusted-system-root" : "failed";
+}
+
+function refundTaskkillReservation(
+  budget: WindowsTaskkillBudget,
+  startedAt: number,
+  elapsedNow: () => number,
+): void {
+  const elapsedMs = elapsedNow() - startedAt;
+  const boundedElapsedMs = Number.isFinite(elapsedMs)
+    ? Math.min(TASKKILL_WAIT_MS, Math.max(0, elapsedMs))
+    : TASKKILL_WAIT_MS;
+  budget.refund(TASKKILL_WAIT_MS - boundedElapsedMs);
+}
+
+function runWindowsTreeKillUnbudgeted(
+  pid: number,
+  processEnv: NodeJS.ProcessEnv,
+  runTaskkill: TaskkillRunner,
+  resolveInvocation: WindowsTaskkillInvocationResolver,
+): WindowsTreeKillResult {
+  if (isSelfOrParentPid(pid)) return "refused-self-pid";
+  try {
+    const { command, args } = resolveInvocation(pid, processEnv);
+    return taskkillCompletionDisposition(runTaskkill(command, args));
+  } catch (error) {
+    return taskkillThrownDisposition(error);
+  }
+}
 
 export const nodeWindowsTreeKillWith =
   (
     runTaskkill: TaskkillRunner,
     budget: WindowsTaskkillBudget = createWindowsTaskkillBudget(),
+    elapsedNow: () => number = () => performance.now(),
+    resolveInvocation: WindowsTaskkillInvocationResolver = windowsTaskkillInvocation,
   ): WindowsTreeKill =>
   (pid, processEnv) => {
-    // The AGGREGATE bound: once this window's budget is spent, report "unknown" — the accurate
-    // evidence for "we chose not to pay another blocking wait", never a guessed "succeeded"/"failed"
+    if (isSelfOrParentPid(pid)) {
+      return "refused-self-pid";
+    }
+    // The AGGREGATE bound: once this window's budget is spent, report "budget-exhausted" — the
+    // accurate evidence for "we chose not to pay another blocking wait", never a guessed
+    // "succeeded"/"failed" or a false claim that a launched taskkill timed out
     // — WITHOUT spawning taskkill at all, so a burst of concurrent terminations cannot serialise the
     // event loop past the budgeted ceiling.
     if (!budget.tryConsume()) {
-      return "unknown";
+      return "budget-exhausted";
     }
+    const startedAt = elapsedNow();
     try {
-      const { command, args } = windowsTaskkillInvocation(pid, processEnv);
-      const completed = runTaskkill(command, args);
-      if (completed.error !== undefined) {
-        const code = (completed.error as NodeJS.ErrnoException).code;
-        return code === "ETIMEDOUT" ? "unknown" : "failed";
-      }
-      if (completed.status === 0) return "succeeded";
-      // 128 is taskkill's "the specified process was not found" — the tree was ALREADY GONE, not a
-      // failed attempt. On a termination path that is success by another route, and it is the common
-      // case: the child exits in the window between the exited-child guard and taskkill running.
-      // Reporting it as "failed" told an operator the tree might still be alive when it was not.
-      return completed.status === 128 ? "already-gone" : "failed";
-    } catch (error) {
-      // Caught NARROWLY: only a genuine WindowsSystemDirectoryError earns a member other than
-      // "failed", so an unrelated bug can never masquerade as a security signal. Within that class,
-      // the existence-check refusal is an OPERATIONAL fact (see WINDOWS_SYSTEM_BINARY_MISSING_MESSAGE
-      // above) and must not be conflated with every other refusal in the class, which says the
-      // environment itself — SystemRoot/WINDIR, or the binary name — is malformed or hostile.
-      if (!(error instanceof WindowsSystemDirectoryError)) {
-        return "failed";
-      }
-      return error.message === WINDOWS_SYSTEM_BINARY_MISSING_MESSAGE
-        ? "failed"
-        : "blocked-untrusted-system-root";
+      return runWindowsTreeKillUnbudgeted(pid, processEnv, runTaskkill, resolveInvocation);
+    } finally {
+      refundTaskkillReservation(budget, startedAt, elapsedNow);
     }
   };
 
-export const nodeWindowsTreeKill: WindowsTreeKill = nodeWindowsTreeKillWith(defaultTaskkillRunner);
+const productionWindowsTaskkillBudget = createWindowsTaskkillBudget();
+export const nodeWindowsTreeKill: WindowsTreeKill = nodeWindowsTreeKillWith(
+  defaultTaskkillRunner,
+  productionWindowsTaskkillBudget,
+);
+
+export interface WindowsTerminationReservation {
+  readonly kill: WindowsTreeKill;
+  readonly release: () => void;
+}
+
+export interface WindowsTerminationCapacity {
+  readonly reserve: (processEnv: NodeJS.ProcessEnv) => WindowsTerminationReservation | undefined;
+}
+
+const MAX_CONCURRENT_WINDOWS_COMMANDS = 3;
+const TREE_KILLS_PER_RUN = 2;
+
+// One Windows command can need taskkill twice (SIGTERM, then SIGKILL). Holding one of three slots
+// for the full child lifetime caps the worst synchronous burst at the existing 30-second aggregate
+// ceiling, while making capacity a PRE-spawn decision. Discovering exhaustion only after cmd.exe
+// launches deterministically strands its grandchild outside the Authority Envelope.
+export function createWindowsTerminationCapacity(
+  maxConcurrent: number = MAX_CONCURRENT_WINDOWS_COMMANDS,
+  killWindowsTree?: WindowsTreeKill,
+  resolveInvocation?: WindowsTaskkillInvocationResolver,
+  runTaskkill: TaskkillRunner = defaultTaskkillRunner,
+): WindowsTerminationCapacity {
+  let available = maxConcurrent;
+  return {
+    reserve: (processEnv): WindowsTerminationReservation | undefined => {
+      if (available <= 0) return undefined;
+      const boundSystemEnv: NodeJS.ProcessEnv = {
+        ...(processEnv.SystemRoot === undefined ? {} : { SystemRoot: processEnv.SystemRoot }),
+        ...(processEnv.WINDIR === undefined ? {} : { WINDIR: processEnv.WINDIR }),
+      };
+      // Authenticate the root and prove taskkill is a regular OS binary before admitting a child.
+      // The returned command IS the authoritative GLOBALROOT path and is bound to this reservation;
+      // it never traverses a mutable lexical candidate again. Only the resolver inputs are copied:
+      // later mutation of deps.env cannot turn an admitted child's kill path into a hostile-root
+      // refusal. PID-specific args are rebuilt only when the reservation is consumed.
+      const validatedInvocation =
+        resolveInvocation?.(1, boundSystemEnv) ??
+        (killWindowsTree === undefined ? windowsTaskkillInvocation(1, boundSystemEnv) : undefined);
+      available -= 1;
+      let released = false;
+      let remainingKills = TREE_KILLS_PER_RUN;
+      return {
+        kill: (pid): WindowsTreeKillResult => {
+          if (released || remainingKills <= 0) return "budget-exhausted";
+          remainingKills -= 1;
+          if (killWindowsTree !== undefined) {
+            return killWindowsTree(pid, { ...boundSystemEnv });
+          }
+          if (validatedInvocation === undefined) return "failed";
+          if (isSelfOrParentPid(pid)) return "refused-self-pid";
+          return taskkillCompletionDisposition(
+            runTaskkill(validatedInvocation.command, ["/PID", String(pid), "/T", "/F"]),
+          );
+        },
+        release: (): void => {
+          if (released) return;
+          released = true;
+          available += 1;
+        },
+      };
+    },
+  };
+}
+
+const productionWindowsTerminationCapacity = createWindowsTerminationCapacity();
 
 interface KillGroupDeps {
   readonly platform: NodeJS.Platform;
@@ -377,7 +486,7 @@ interface KillGroupDeps {
 // The `childExited` guards above make that window much narrower; this makes the worst outcome
 // impossible rather than unlikely. Cheap, and it can only ever reject a signal that would have been
 // suicide: a legitimate child is never this process, and never its parent.
-function isSelfOrParentPid(pid: number): boolean {
+export function isSelfOrParentPid(pid: number): boolean {
   if (pid === process.pid) return true;
   // `process.ppid` exists on every supported platform; guarded anyway so a stripped runtime cannot
   // turn a missing field into `undefined === pid`.
@@ -641,6 +750,10 @@ function appendCapped(buffers: Buffers, sink: Buffer[], chunk: Buffer, max: numb
 
 interface RunState {
   settled: boolean;
+  // Node emits "spawn" only after the child process was created successfully. An "error" before
+  // that event is a spawn failure and owns no live process; an "error" after it may leave the
+  // child running, so ownership, HOME and termination timers must remain until "close".
+  spawnConfirmed: boolean;
   timedOut: boolean;
   // The FIRST terminal trigger, set exactly once by terminate(). Later triggers are no-ops: they
   // must not re-signal an already-terminated tree, arm a second grace timer (whose orphaned
@@ -648,14 +761,20 @@ interface RunState {
   // trigger established.
   terminalReason: CommandTerminationReason | undefined;
   spawnCallbackError: Error | undefined;
+  childProcessError: Error | undefined;
   timer: NodeJS.Timeout | undefined;
   graceTimer: NodeJS.Timeout | undefined;
+  // The grace timer hands the raw-pid escalation to the check phase. This gives libuv one poll
+  // phase to publish an exit observed while synchronous taskkill blocked the event loop, before we
+  // decide whether that pid still belongs to this child.
+  graceImmediate: NodeJS.Immediate | undefined;
   onAbort: (() => void) | undefined;
   // The ephemeral HOME dir to remove once after the command settles, and the provider that owns
   // its removal. `homeCleaned` makes the cleanup idempotent (close AND error both call cleanup()).
   home: HomeProvider | undefined;
   homeDir: string | undefined;
   homeCleaned: boolean;
+  windowsTerminationReservation: WindowsTerminationReservation | undefined;
 }
 
 // Resolves the validated cwd. Lexical containment first, then symlink containment via realpath
@@ -738,9 +857,13 @@ function cleanup(state: RunState, signal: AbortSignal): void {
   if (state.graceTimer !== undefined) {
     clearTimeout(state.graceTimer);
   }
+  if (state.graceImmediate !== undefined) {
+    clearImmediate(state.graceImmediate);
+  }
   if (state.onAbort !== undefined) {
     signal.removeEventListener("abort", state.onAbort);
   }
+  state.windowsTerminationReservation?.release();
   // Remove the ephemeral HOME exactly once, on whichever settle path fires first (C5).
   if (!state.homeCleaned && state.home !== undefined && state.homeDir !== undefined) {
     state.homeCleaned = true;
@@ -791,8 +914,10 @@ function childExited(child: ChildProcess, state: RunState): boolean {
   return state.settled || child.exitCode != null || child.signalCode != null;
 }
 
-// Escalates from SIGTERM to SIGKILL after the grace period so a child ignoring SIGTERM is still
-// guaranteed to terminate within terminationGraceMs of the trigger. SINGLE-FLIGHT: only the first
+// Makes the SIGKILL escalation eligible terminationGraceMs after the trigger. The timer is armed
+// before the synchronous Windows tree-kill so that blocking work cannot silently shift the grace
+// deadline later; its callback necessarily runs once the event loop is available again.
+// SINGLE-FLIGHT: only the first
 // trigger acts. Competing triggers (abort vs timeout vs output-cap vs a spawn-callback failure)
 // previously each re-signalled the tree and re-armed the grace timer, overwriting the tracked
 // handle — cleanup() then cleared only the LAST timer and the orphaned earlier one fired
@@ -822,8 +947,28 @@ function terminate(
   const killDeps: KillGroupDeps = {
     platform: deps.platform ?? process.platform,
     processEnv: deps.processEnv,
-    killWindowsTree: deps.killWindowsTree ?? nodeWindowsTreeKill,
+    killWindowsTree:
+      deps.killWindowsTree ?? state.windowsTerminationReservation?.kill ?? nodeWindowsTreeKill,
   };
+  state.graceTimer = setTimeout(() => {
+    // taskkill is synchronous. If it occupied the event loop past this deadline, Windows may have
+    // completed the child and queued libuv's exit notification while the timer was also overdue.
+    // A direct timer callback would run before the poll phase can update exitCode/signalCode, then
+    // taskkill the now-unowned raw pid a second time. Handoff to the check phase so that queued
+    // process-exit work is observed first; the identity guard is re-evaluated only there.
+    state.graceImmediate = setImmediate(() => {
+      state.graceImmediate = undefined;
+      if (childExited(child, state)) {
+        return;
+      }
+      // Report the escalation's OWN verified disposition. Dropping it left the one step that only
+      // runs when the child ignored SIGTERM with no evidence at all.
+      const escalated = killGroup(child, "SIGKILL", killDeps);
+      reportTermination(input, deps, reason, child.pid, escalated, escalated);
+    });
+    state.graceImmediate.unref();
+  }, deps.policy.terminationGraceMs);
+  state.graceTimer.unref();
   // The SAME guard the SIGKILL escalation below carries, and for the same reason — it was missing
   // here. `state.settled` is set at 'close', but Node releases the child handle at 'exit', and
   // 'data' events keep arriving in the window between the two. An output-cap trigger firing in that
@@ -837,18 +982,6 @@ function terminate(
     ? "not-attempted"
     : killGroup(child, "SIGTERM", killDeps);
   reportTermination(input, deps, reason, child.pid, disposition);
-  state.graceTimer = setTimeout(() => {
-    // The run settled (or the child demonstrably exited) while the grace period ran: there is
-    // nothing left to escalate against, and a raw-pid taskkill here could hit a reused pid.
-    if (childExited(child, state)) {
-      return;
-    }
-    // Report the escalation's OWN verified disposition. Dropping it left the one step that only
-    // runs when the child ignored SIGTERM with no evidence at all.
-    const escalated = killGroup(child, "SIGKILL", killDeps);
-    reportTermination(input, deps, reason, child.pid, escalated, escalated);
-  }, deps.policy.terminationGraceMs);
-  state.graceTimer.unref();
   return true;
 }
 
@@ -880,49 +1013,79 @@ interface ExecContext {
   readonly attestation: SandboxAttestation | undefined;
 }
 
+function settleClosedChild(
+  ctx: ExecContext,
+  code: number | null,
+  signalName: NodeJS.Signals | null,
+  resolve: (r: CommandResult) => void,
+  reject: (e: unknown) => void,
+): void {
+  if (ctx.state.settled) return;
+  ctx.state.settled = true;
+  cleanup(ctx.state, ctx.input.signal);
+  if (ctx.state.spawnCallbackError !== undefined) {
+    reject(ctx.state.spawnCallbackError);
+    return;
+  }
+  if (ctx.state.childProcessError !== undefined) {
+    reject(ctx.state.childProcessError);
+    return;
+  }
+  if (ctx.state.timedOut) {
+    reject(new CommandTimeoutError("command timed out", timeoutOf(ctx)));
+    return;
+  }
+  if (ctx.input.signal.aborted) {
+    reject(new CommandCancelledError("command cancelled"));
+    return;
+  }
+  resolve(
+    buildResult({
+      input: ctx.input,
+      buffers: ctx.buffers,
+      state: ctx.state,
+      exitCode: code,
+      termSignal: signalName,
+      deps: ctx.deps,
+      startedAt: ctx.startedAt,
+      attestation: ctx.attestation,
+    }),
+  );
+}
+
+function settleChildProcessError(
+  ctx: ExecContext,
+  error: Error,
+  reject: (e: unknown) => void,
+): void {
+  if (ctx.state.settled) return;
+  if (!ctx.state.spawnConfirmed) {
+    ctx.state.settled = true;
+    cleanup(ctx.state, ctx.input.signal);
+    reject(ctx.state.spawnCallbackError ?? error);
+    return;
+  }
+  // A ChildProcess can emit "error" after a successful "spawn". That is not proof of exit: keep
+  // the handle and ephemeral HOME, request bounded termination once, and settle only on "close".
+  if (ctx.state.terminalReason === undefined) {
+    ctx.state.childProcessError = error;
+    terminate(ctx.child, ctx.deps, ctx.state, ctx.input, "child-process-error");
+  }
+}
+
 function settleOnClose(
   ctx: ExecContext,
   resolve: (r: CommandResult) => void,
   reject: (e: unknown) => void,
 ): void {
   ctx.child.on("close", (code, signalName) => {
-    if (ctx.state.settled) {
-      return;
-    }
-    ctx.state.settled = true;
-    cleanup(ctx.state, ctx.input.signal);
-    if (ctx.state.spawnCallbackError !== undefined) {
-      reject(ctx.state.spawnCallbackError);
-      return;
-    }
-    if (ctx.state.timedOut) {
-      reject(new CommandTimeoutError("command timed out", timeoutOf(ctx)));
-      return;
-    }
-    if (ctx.input.signal.aborted) {
-      reject(new CommandCancelledError("command cancelled"));
-      return;
-    }
-    resolve(
-      buildResult({
-        input: ctx.input,
-        buffers: ctx.buffers,
-        state: ctx.state,
-        exitCode: code,
-        termSignal: signalName,
-        deps: ctx.deps,
-        startedAt: ctx.startedAt,
-        attestation: ctx.attestation,
-      }),
-    );
+    settleClosedChild(ctx, code, signalName, resolve, reject);
+  });
+  ctx.child.once("spawn", () => {
+    ctx.state.spawnConfirmed = true;
   });
   ctx.child.on("error", (error) => {
-    if (ctx.state.settled) {
-      return;
-    }
-    ctx.state.settled = true;
-    cleanup(ctx.state, ctx.input.signal);
-    reject(ctx.state.spawnCallbackError ?? error);
+    settleChildProcessError(ctx, error, reject);
   });
 }
 
@@ -974,18 +1137,26 @@ function resolveExecutable(input: RunCommandInput, deps: RunCommandDeps): string
   });
 }
 
-function createRunState(home: HomeProvider | undefined, homeDir: string | undefined): RunState {
+function createRunState(
+  home: HomeProvider | undefined,
+  homeDir: string | undefined,
+  windowsTerminationReservation: WindowsTerminationReservation | undefined,
+): RunState {
   return {
     settled: false,
+    spawnConfirmed: false,
     timedOut: false,
     terminalReason: undefined,
     spawnCallbackError: undefined,
+    childProcessError: undefined,
     timer: undefined,
     graceTimer: undefined,
+    graceImmediate: undefined,
     onAbort: undefined,
     home,
     homeDir,
     homeCleaned: false,
+    windowsTerminationReservation,
   };
 }
 
@@ -1006,20 +1177,40 @@ function inheritedHome(env: Record<string, string>): string | undefined {
 // home-dir credential lookup resolves to nothing. "inherit" is reserved for the governed git lanes
 // that cannot function without the user's own git/SSH/gh configuration; a lane that asks to inherit
 // while the parent carries no HOME falls back to the ephemeral home rather than running homeless.
-function applyHomeIsolation(env: Record<string, string>, deps: RunCommandDeps): RunState {
+function applyHomeIsolation(
+  env: Record<string, string>,
+  deps: RunCommandDeps,
+  reservation: WindowsTerminationReservation | undefined,
+): RunState {
   if (deps.policy.homeIsolation === "inherit") {
     const inherited = inheritedHome(env);
     if (inherited !== undefined) {
       env.HOME = inherited;
       env.USERPROFILE = inherited;
-      return createRunState(undefined, undefined);
+      return createRunState(undefined, undefined, reservation);
     }
   }
   const home = deps.home ?? nodeHomeProvider;
   const homeDir = home.make();
   env.HOME = homeDir;
   env.USERPROFILE = homeDir;
-  return createRunState(home, homeDir);
+  return createRunState(home, homeDir, reservation);
+}
+
+function reserveWindowsTermination(
+  input: RunCommandInput,
+  deps: RunCommandDeps,
+): WindowsTerminationReservation | undefined {
+  if ((deps.platform ?? process.platform) !== "win32" || deps.killWindowsTree !== undefined) {
+    return undefined;
+  }
+  const reservation = (
+    deps.windowsTerminationCapacity ?? productionWindowsTerminationCapacity
+  ).reserve(deps.processEnv);
+  if (reservation === undefined) {
+    throw new CommandDeniedError("Windows termination capacity exhausted", input.command);
+  }
+  return reservation;
 }
 
 function spawnChild(
@@ -1071,7 +1262,14 @@ export function runCommand(input: RunCommandInput, deps: RunCommandDeps): Promis
     const cwd = resolveCwd(deps, input.cwd);
     const target = resolveSpawnTarget(input, deps, executable, cwd);
     const env = buildChildEnv(deps.processEnv, deps.policy);
-    const state = applyHomeIsolation(env, deps);
+    const reservation = reserveWindowsTermination(input, deps);
+    let state: RunState;
+    try {
+      state = applyHomeIsolation(env, deps, reservation);
+    } catch (error) {
+      reservation?.release();
+      throw error;
+    }
     const child = spawnChild(input, deps, target, cwd, env, state);
     const buffers: Buffers = { out: [], err: [], total: 0, truncated: false, attempted: 0 };
     const ctx: ExecContext = {

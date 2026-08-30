@@ -34,13 +34,13 @@
 // and `extra.outcome`, exactly as it already filters `git.delivery.mutation.completed` by
 // `extra.actionKind`/`extra.status`.
 //
-// `errorKind` on a failure-classified outcome. `WorkspaceLifecycleOutcome` and (for reconciliation)
-// `WorkspaceReconciliationStatus` are both closed TS unions of short, hyphenated, lowercase
-// identifiers — the exact shape `ERROR_KIND_PATTERN` (keiko-contracts/observability.ts, ADR-0173 D11)
-// already gates every `errorKind` in this codebase against: an identifier/taxonomy code, never a
-// sentence. No second vocabulary needed inventing; the caller's own outcome enum already conforms.
+// `errorKind` on a failure-classified outcome is always a short identifier/taxonomy code, never a
+// sentence. Lowercase hyphenated `WorkspaceLifecycleOutcome`/`WorkspaceReconciliationStatus`
+// members and uppercase `TaskWorkspaceError.code` members are both intentionally accepted by the
+// shared `ERROR_KIND_PATTERN` (keiko-contracts/observability.ts, ADR-0173 D11). No second vocabulary
+// is needed; each caller's existing closed code set already conforms.
 
-import { UNKNOWN_CORRELATION_ID, isValidCorrelationId } from "../correlation.js";
+import { correlationIdOrUnknown } from "../correlation.js";
 import type { ServerLogSink } from "../observability/server-log.js";
 import { processServerLogSink } from "../process-log-sink.js";
 import type { WorkspaceLifecycleOperation, WorkspaceLifecycleOutcome } from "./evidence.js";
@@ -95,17 +95,6 @@ function resolvedErrorKind(input: WorkspaceLifecycleLogInput): string | undefine
   return FAILURE_OUTCOMES.has(input.outcome) ? input.outcome : undefined;
 }
 
-// A caller-supplied correlationId that does not fit `isValidCorrelationId`'s shape (hostile, malformed,
-// or the empty string a `??` fallback would miss — see correlation.ts) is treated the same as one
-// genuinely absent: UNKNOWN_CORRELATION_ID, never written through unshaped. This mirrors
-// `applyEnvelopeFields`'s existing `parentCorrelationId` guard (observability/server-log.ts) rather than
-// leaving the primary `correlationId` as the one envelope field that trusts its input unchecked.
-function safeCorrelationId(correlationId: string | undefined): string {
-  return correlationId !== undefined && isValidCorrelationId(correlationId)
-    ? correlationId
-    : UNKNOWN_CORRELATION_ID;
-}
-
 // The ONE place a #445-#448 lifecycle outcome becomes a `server.log` line. Called from each service's
 // own central `emit`-style helper, at the exact point it already builds the matching EvidenceStore
 // record (evidence.ts), so the two can never drift out of step.
@@ -119,7 +108,7 @@ export function logWorkspaceLifecycle(
     level: errorKind === undefined ? "info" : "warn",
     category: "diagnostic",
     op: TASK_WORKSPACE_LIFECYCLE_OP,
-    correlationId: safeCorrelationId(input.correlationId),
+    correlationId: correlationIdOrUnknown(input.correlationId),
     durationMs: input.durationMs,
     ...(errorKind === undefined ? {} : { errorKind }),
     extra: {
