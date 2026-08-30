@@ -207,9 +207,11 @@ own completed exit status (`succeeded`/`failed`), `unknown` only when the bounde
 `blocked-untrusted-system-root` when the trusted-System32 resolver refuses a malformed or hostile
 `SystemRoot`/`WINDIR` (kept distinct from `failed` because it is a security-relevant fact about the
 environment, not an operational hiccup), `refused-self-pid` when the pid handed to `killGroup` is
-this process or its own parent (see the residual below), and `not-attempted` on POSIX, when there is
-no pid to signal, or when the child is already verifiably exited before a signal would have been
-sent. The previous boolean was a production tautology — the default implementation could not throw,
+this process or its own parent (see the residual below), `already-gone` when taskkill's own exit
+code is 128 — "the specified process was not found", i.e. the tree had already exited on its own,
+which is a different fact from `failed` and must not share its word (a live hostile tree surviving
+vs. nothing left to kill) — and `not-attempted` on POSIX, when there is no pid to signal, or when
+the child is already verifiably exited before a signal would have been sent. The previous boolean was a production tautology — the default implementation could not throw,
 so a genuine failure on an image without `taskkill.exe` was logged as success, which is worse than
 not logging it.
 
