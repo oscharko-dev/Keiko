@@ -313,13 +313,21 @@ export function transpileFloorViolations(floors, targets = TRANSPILE_TARGETS) {
 function apiViolations(sources, floors) {
   const violations = [];
   const scripts = sources.filter((path) => !path.endsWith(".css"));
-  const styles = sources.filter((path) => path.endsWith(".css"));
   for (const api of GUARDED_APIS) {
     const users = scripts.filter((path) => api.pattern.test(readFileSync(path, "utf8")));
     if (users.length > 0) violations.push(...violationsFor(api, users, floors));
   }
+  // GUARDED_CSS is checked against `.css` files AND `.ts`/`.tsx` files: the UI also injects CSS
+  // function values from a TypeScript template literal — debug-monaco-styles.ts builds a runtime
+  // `<style>` element from a `color-mix(in oklch, ...)` rule as a plain string, so that guarded
+  // syntax never touches a `.css` file at all. Restricting this scan to the `.css` extension made
+  // that shape invisible: a fixture with guarded CSS syntax inside a `.ts` string passed even when
+  // its declared floor sat below the feature's real minimum.
+  const cssCapableSources = sources.filter((path) => /\.(css|ts|tsx)$/u.test(path));
   for (const feature of GUARDED_CSS) {
-    const users = styles.filter((path) => feature.pattern.test(readFileSync(path, "utf8")));
+    const users = cssCapableSources.filter((path) =>
+      feature.pattern.test(readFileSync(path, "utf8")),
+    );
     if (users.length > 0) violations.push(...violationsFor(feature, users, floors));
   }
   return violations;

@@ -356,6 +356,24 @@ describe("main", () => {
     expect(run(fx).exitCode).toBeUndefined();
   });
 
+  // IDX59 finding: GUARDED_CSS used to be checked only against `.css` files, so a guarded CSS
+  // function shipped as a TypeScript template-literal string (debug-monaco-styles.ts builds a
+  // runtime `<style>` element this exact way, with `color-mix(in oklch, ...)`) was invisible to
+  // the gate. This pins that a `.ts` file carrying the same syntax now fails identically to a
+  // `.css` file that does.
+  it("reports a guarded CSS function embedded in a TypeScript template literal, not only a .css file", () => {
+    const fx = fixture({
+      browserslist: ["firefox >= 100"],
+      source:
+        "export function styleText(): string {\n" +
+        "  return `.x { box-shadow: 0 0 0 3px color-mix(in oklch, red 20%, transparent); }`;\n" +
+        "}\n",
+    });
+    const result = run(fx);
+    expect(result.exitCode).toBe(1);
+    expect(result.errors.join("\n")).toContain("CSS color-mix() needs firefox >= 113");
+  });
+
   it("fails closed when no UI sources are found", () => {
     const result = run(fixture({ browserslist: ["chrome >= 120"] }));
     expect(result.exitCode).toBe(1);
