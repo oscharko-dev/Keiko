@@ -4,6 +4,7 @@ import { join } from "node:path";
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+import type { SecurityLogSink } from "./log-port.js";
 import { WindowsSystemDirectoryError } from "./windows-system-directory.js";
 
 import {
@@ -159,6 +160,59 @@ describe("definition read/write entry points on the win32 route", () => {
     stubWin32();
     const spawnFn = vi.fn<WindowsShortcutSpawnFn>(() => spawnResult({ status: 1 }));
     expect(readWindowsShortcutDefinition("p", {}, "test prefix", spawnFn)).toBeUndefined();
+  });
+
+  // Finding 2 (PR #3354 review round 2, P2): a hostile/malformed SystemRoot must never collapse
+  // into the SAME "undefined" signal as an ordinary cscript-side refusal (the test directly above).
+  // The resolver throws BEFORE cscript ever runs, so a bare `catch { return undefined }` here would
+  // report a poisoned environment as indistinguishable from "the shortcut simply is not there" —
+  // exactly the silent failure AGENTS.md §7 forbids.
+  it('re-throws WindowsSystemDirectoryError instead of masking a hostile SystemRoot as "absent"', () => {
+    stubWin32();
+    const spawnFn = vi.fn<WindowsShortcutSpawnFn>(() => spawnResult());
+    expect(() =>
+      readWindowsShortcutDefinition(
+        "p",
+        { SystemRoot: String.raw`\\attacker\share` },
+        "test prefix",
+        spawnFn,
+      ),
+    ).toThrow(WindowsSystemDirectoryError);
+    // The refusal happens at resolution, strictly before any spawn is attempted.
+    expect(spawnFn).not.toHaveBeenCalled();
+  });
+
+  it("logs the refusal through an injected sink before re-throwing, and stays a no-op without one", () => {
+    stubWin32();
+    const sink: SecurityLogSink = { write: vi.fn() };
+    expect(() =>
+      readWindowsShortcutDefinition(
+        "p",
+        { SystemRoot: String.raw`\\attacker\share` },
+        "test prefix",
+        vi.fn<WindowsShortcutSpawnFn>(() => spawnResult()),
+        sink,
+      ),
+    ).toThrow(WindowsSystemDirectoryError);
+    expect(sink.write).toHaveBeenCalledTimes(1);
+    expect(sink.write).toHaveBeenCalledWith(
+      expect.objectContaining({
+        level: "warn",
+        category: "security",
+        op: "security.windows-shortcut.system-root-refused",
+      }),
+    );
+
+    // The pre-existing 4-arg call shape (every current external caller) omits the sink entirely;
+    // the refusal must still throw rather than depend on a sink being wired.
+    expect(() =>
+      readWindowsShortcutDefinition(
+        "p",
+        { SystemRoot: String.raw`\\attacker\share` },
+        "test prefix",
+        vi.fn<WindowsShortcutSpawnFn>(() => spawnResult()),
+      ),
+    ).toThrow(WindowsSystemDirectoryError);
   });
 });
 

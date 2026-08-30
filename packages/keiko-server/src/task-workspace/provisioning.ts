@@ -586,7 +586,14 @@ async function runWorktreeMutation(
       error instanceof TaskWorkspaceError
         ? error
         : new TaskWorkspaceError("PROVISIONING_FAILED", "unexpected provisioning failure");
-    return failProvisioning(repo, ctx, provisioning, failure, ctx.deps.now(), request.correlationId);
+    return failProvisioning(
+      repo,
+      ctx,
+      provisioning,
+      failure,
+      ctx.deps.now(),
+      request.correlationId,
+    );
   }
   const active = finalizeActive(ctx, provisioning, identity, ctx.deps.now());
   emit(ctx, {

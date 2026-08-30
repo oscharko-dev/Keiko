@@ -198,12 +198,20 @@ function makeRequest(body: unknown, base: IncomingMessage): IncomingMessage {
   return req;
 }
 
+// Both context builders below synthesize a fresh RouteContext for an internally-delegated route
+// handler (F2: the agent facade continues the SAME request into commit/push/pr/merge/local-mutation
+// or the plain git read routes — it is not spawning background work, it AWAITS and wraps the result
+// before this request's own response is produced). The delegated handler reads `ctx.correlationId` as
+// its first line, so dropping it here silently downgrades every line the delegated operation logs to
+// UNKNOWN_CORRELATION_ID even though the real id is sitting in the enclosing `ctx` the whole time
+// (AGENTS.md §8). Threading it keeps the delegated evidence joinable to the originating request.
 function postContext(ctx: RouteContext, pattern: string, body: unknown): RouteContext {
   return {
     req: makeRequest(body, ctx.req),
     res: ctx.res,
     params: {},
     url: new URL(`http://127.0.0.1${pattern}`),
+    ...(ctx.correlationId !== undefined ? { correlationId: ctx.correlationId } : {}),
   };
 }
 
@@ -213,6 +221,7 @@ function readContext(ctx: RouteContext, path: string): RouteContext {
     res: ctx.res,
     params: {},
     url: new URL(`http://127.0.0.1${path}`),
+    ...(ctx.correlationId !== undefined ? { correlationId: ctx.correlationId } : {}),
   };
 }
 

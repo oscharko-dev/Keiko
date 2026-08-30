@@ -123,6 +123,11 @@ describe("resolveWindowsSystemBinary", () => {
     ["an embedded NUL", "cscript.exe\u0000"],
     ["an embedded cmd metacharacter", "cscript.exe&calc.exe"],
     ["an embedded quote", 'cscript.exe"'],
+    // Finding 3, whole-class (AGENTS.md §7): a bare file name has NO position at which a colon is
+    // legitimate — unlike the directory, there is no drive letter to skip — so, unlike
+    // hasStreamColon's index-2 search for the directory, ANY colon here is rejected outright.
+    ["a trailing NTFS alternate-data-stream marker", "cscript.exe:evil"],
+    ["a $DATA stream marker", "cscript.exe:$DATA"],
   ])("rejects a bare binaryName carrying %s", (_label, binaryName) => {
     expect(() => resolveWindowsSystemBinary(binaryName, {})).toThrow(WindowsSystemDirectoryError);
   });
@@ -139,5 +144,79 @@ describe("resolveWindowsSystemBinary", () => {
 
   it("falls back to process.env when env is omitted, without throwing", () => {
     expect(() => resolveWindowsSystemBinary("cmd.exe")).not.toThrow();
+  });
+});
+
+// Finding 4 (PR #3354 review round 2, P1): the module's own header admits it validates SHAPE only,
+// because Node has no binding to GetSystemDirectoryW. This narrows that gap for one concrete case —
+// a shape-valid root that resolves to nothing on disk — by requiring the resolved binary to exist
+// as a regular file. `existsAsFile` is the injected test seam described next to
+// `defaultWindowsBinaryExists` in the source: it lets both branches be exercised hermetically,
+// without needing a real `C:\...` filesystem on the host running the test.
+describe("resolveWindowsSystemBinary — resolved-binary existence (finding 4)", () => {
+  it("returns the resolved path when existsAsFile reports it present", () => {
+    expect(resolveWindowsSystemBinary("cmd.exe", {}, () => true)).toBe(
+      String.raw`C:\Windows\System32\cmd.exe`,
+    );
+  });
+
+  it("fails closed with the same error type when the resolved binary does not exist", () => {
+    expect(() => resolveWindowsSystemBinary("cmd.exe", {}, () => false)).toThrow(
+      WindowsSystemDirectoryError,
+    );
+  });
+
+  it("never echoes the resolved path in the thrown message", () => {
+    try {
+      resolveWindowsSystemBinary(
+        "cmd.exe",
+        { SystemRoot: String.raw`C:\attack-marker` },
+        () => false,
+      );
+      expect.unreachable("must throw when existsAsFile reports absent");
+    } catch (error) {
+      expect(error).toBeInstanceOf(WindowsSystemDirectoryError);
+      expect((error as Error).message).not.toContain("attack-marker");
+    }
+  });
+
+  it("receives the fully joined System32 path, not the bare directory or binary name", () => {
+    const seen: string[] = [];
+    resolveWindowsSystemBinary(
+      "taskkill.exe",
+      { SystemRoot: String.raw`D:\Win` },
+      (resolvedPath) => {
+        seen.push(resolvedPath);
+        return true;
+      },
+    );
+    expect(seen).toEqual([String.raw`D:\Win\System32\taskkill.exe`]);
+  });
+
+  describe("default existsAsFile (no override supplied)", () => {
+    const platform = Object.getOwnPropertyDescriptor(process, "platform");
+
+    afterEach(() => {
+      if (platform !== undefined) Object.defineProperty(process, "platform", platform);
+    });
+
+    it("is a permissive no-op off win32 — every other test in this file depends on this", () => {
+      // Every call above the "finding 4" describe block omits existsAsFile and runs on whatever
+      // platform executes this suite; this test pins that the DEFAULT itself is what lets them
+      // pass, not an accident of which vectors happened to be chosen.
+      Object.defineProperty(process, "platform", { ...platform, value: "linux" });
+      expect(() => resolveWindowsSystemBinary("cmd.exe", {})).not.toThrow();
+    });
+
+    it("actually checks the filesystem when the platform is genuinely win32", () => {
+      // No real C:\Windows exists under this process on ANY host that runs this suite (this repo's
+      // CI never runs it on win32 — the Windows leg runs a separate, narrower smoke script instead;
+      // see scripts/__tests__/windows-cmd-spawn-smoke.mjs). Stubbing the platform check to "true"
+      // therefore reaches the real `statSync`, which fails ENOENT on this literal, non-existent
+      // path and must surface as the SAME typed, fail-closed error as every other refusal — proving
+      // the gate is platform-READ, not platform-DECORATIVE.
+      Object.defineProperty(process, "platform", { ...platform, value: "win32" });
+      expect(() => resolveWindowsSystemBinary("cmd.exe", {})).toThrow(WindowsSystemDirectoryError);
+    });
   });
 });
