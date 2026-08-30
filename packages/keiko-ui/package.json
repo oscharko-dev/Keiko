@@ -32,13 +32,25 @@
     "an engine that cannot parse a colour value drops the whole declaration, which for a theme built on",
     "them means unreadable text, not a cosmetic shift. Declarations that DO degrade gracefully",
     "(text-wrap: balance) are deliberately not gated: listing them would manufacture pressure to raise",
-    "a support floor for a nicety."
+    "a support floor for a nicety.",
+    "Raised again (chrome/edge 111->126, firefox 121->126, safari 16.4->18) because",
+    "check:browser-baseline's DEPENDENCY_FILES scan (IDX58) found pdfjs-dist@6.2.108 \u2014 loaded by",
+    "PdfCitationPreviewWindow.tsx and shipped unmodified, no useBuiltIns polyfilling \u2014 unconditionally",
+    "calling Promise.withResolvers (Chrome 119, Firefox 121, Safari 17.4) on every getDocument() call",
+    "and URL.parse (Chrome 126, Firefox 126, Safari 18) on the URL-backed load path, plus the SAME",
+    "AbortSignal.any noted above, this time from code with no feature-detection to fall back on: a",
+    "dependency's own source cannot be patched to feature-detect the way lib/api.ts does. Switching",
+    "pdfjs-dist's legacy build entry does not avoid this \u2014 grepping node_modules/pdfjs-dist/legacy/",
+    "build/pdf.mjs finds the identical calls, since \"legacy\" only lowers Babel's SYNTAX target and",
+    "changes nothing about which runtime APIs the library calls. URL.parse is the binding constraint",
+    "on every engine (126/126/126/18 dominates withResolvers' 119/121/121/17.4 and AbortSignal.any's",
+    "116/124/124/17.4)."
   ],
   "browserslist": [
-    "chrome >= 111",
-    "edge >= 111",
-    "firefox >= 121",
-    "safari >= 16.4"
+    "chrome >= 126",
+    "edge >= 126",
+    "firefox >= 126",
+    "safari >= 18"
   ],
   "dependencies": {
     "@monaco-editor/react": "4.7.0",

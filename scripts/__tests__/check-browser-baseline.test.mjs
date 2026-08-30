@@ -247,7 +247,11 @@ describe("main", () => {
     const src = join(root, "src");
     mkdirSync(src, { recursive: true });
     if (source !== undefined) writeFileSync(join(src, "app.ts"), source, "utf8");
-    return { uiPackage, sourceRoots: [src] };
+    // Isolated from the REAL installed dependencies on purpose: every fixture here drives a
+    // specific branch with a floor chosen to be deliberately low, and the real pdfjs-dist would
+    // fail most of them for reasons unrelated to what each fixture is testing. The end-to-end
+    // dependency-scan proof runs against the real defaults separately, below.
+    return { uiPackage, sourceRoots: [src], dependencyFiles: [] };
   }
 
   function run(args) {
@@ -355,5 +359,52 @@ describe("main", () => {
     const errors = result.errors.join("\n");
     expect(errors).toContain("is ABOVE the declared browserslist floor");
     expect(errors).not.toContain("Array.prototype.at needs");
+  });
+
+  // IDX58 finding: SOURCE_ROOTS stops at first-party source, so a guarded API called only from
+  // inside a bundled DEPENDENCY_FILES entry (pdfjs-dist in production; a synthetic vendor file
+  // here, for a hermetic fixture) was invisible to this gate. This block pins that DEPENDENCY_FILES
+  // is actually scanned, and only the files it names.
+  describe("DEPENDENCY_FILES scanning", () => {
+    const depRoots = [];
+
+    afterEach(() => {
+      for (const root of depRoots.splice(0)) rmSync(root, { force: true, recursive: true });
+    });
+
+    function dependencyFile(content) {
+      const root = mkdtempSync(join(tmpdir(), "keiko-browser-baseline-dep-"));
+      depRoots.push(root);
+      const file = join(root, "vendor.mjs");
+      writeFileSync(file, content, "utf8");
+      return file;
+    }
+
+    it("reports a guarded API found only in a listed dependency file, not first-party source", () => {
+      const fx = fixture({ browserslist: ["chrome >= 100"] });
+      const dep = dependencyFile("export function load() { return Promise.withResolvers(); }\n");
+      const result = run({ ...fx, dependencyFiles: [dep] });
+      expect(result.exitCode).toBe(1);
+      expect(result.errors.join("\n")).toContain("Promise.withResolvers needs chrome >= 119");
+    });
+
+    it("does not scan a dependency file that dependencyFiles does not list", () => {
+      const fx = fixture({ browserslist: ["chrome >= 100"], source: "export const v = 1;\n" });
+      dependencyFile("export function load() { return Promise.withResolvers(); }\n");
+      const result = run({ ...fx, dependencyFiles: [] });
+      expect(result.exitCode).toBeUndefined();
+    });
+  });
+
+  // Real production proof for IDX58: `main()` with EVERY default — the shipped package.json, the
+  // shipped SOURCE_ROOTS, and the shipped DEPENDENCY_FILES (the installed pdfjs-dist main-thread
+  // module and its worker). This is the exact gate the CLI runs; before this change it failed here
+  // with "Promise.withResolvers needs chrome >= 119 but browserslist declares chrome >= 111" (and
+  // the equivalent for URL.parse), because pdfjs-dist calls both unconditionally and neither was
+  // reachable from SOURCE_ROOTS nor guarded against the declared floor.
+  it("passes end-to-end against the REAL shipped declaration, sources, and dependency files", () => {
+    const result = run({});
+    expect(result.exitCode).toBeUndefined();
+    expect(result.logs.join("\n")).toContain("browser-baseline: PASS");
   });
 });

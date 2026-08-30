@@ -22,6 +22,15 @@
 // MDN compat-data dependency for this would be a supply-chain change ADR-0001 does not warrant.
 // Each entry therefore records its source so a reviewer can re-check it; adding an API here is
 // cheaper than discovering it from a customer's Firefox.
+//
+// SOURCE_ROOTS is first-party code only, but the exported UI also SHIPS dependency code unmodified
+// — Babel's post-build pass (transpile-ui-static-js.mjs) runs with `useBuiltIns: false`, so it
+// lowers syntax but never adds a missing runtime API, and it never touches a dependency's own
+// guarded-API *calls* either way. A guarded API called from inside a bundled dependency was
+// therefore invisible to this gate: `pdfjs-dist` (loaded by `PdfCitationPreviewWindow.tsx`)
+// unconditionally calls `Promise.withResolvers` and, on its URL-backed load path, `URL.parse` —
+// both above several of the floors this file declared until this same change raised them. See
+// DEPENDENCY_FILES below.
 import { readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 // Imported, never restated: a second copy of these numbers here would drift from the transpiler's
@@ -32,6 +41,19 @@ import { isMainModule } from "./lib/is-main-module.mjs";
 
 const UI_PACKAGE = "packages/keiko-ui/package.json";
 const SOURCE_ROOTS = ["packages/keiko-ui/src", "packages/keiko-editor/src"];
+
+// Bundled-dependency entry points that ship into the browser bundle byte-for-byte. Curated by hand
+// for the same reason GUARDED_APIS is: scanning the full `node_modules` closure would false-positive
+// on code that never ships (Node-only fallbacks, build tooling, test helpers) and cost real time on
+// every run. These are exactly the two files `loadPdfJs()` in
+// packages/keiko-ui/src/app/components/desktop/widgets/cards/PdfCitationPreviewWindow.tsx loads at
+// runtime — the main-thread pdf.js module and the worker script it points
+// `GlobalWorkerOptions.workerSrc` at. Add an entry here whenever a new dependency is imported
+// directly into the shipped UI bundle (as opposed to only used at build time).
+const DEPENDENCY_FILES = [
+  "node_modules/pdfjs-dist/build/pdf.mjs",
+  "node_modules/pdfjs-dist/build/pdf.worker.mjs",
+];
 
 // CSS is scanned too, and the reason is not symmetry. A missing JS API throws on first use, which
 // is loud; an unsupported SELECTOR is silently ignored, so the rule never applies and the app
@@ -133,6 +155,25 @@ export const GUARDED_APIS = [
     name: "Intl.Segmenter",
     pattern: /\bIntl\.Segmenter\b/,
     minimum: { chrome: 87, edge: 87, firefox: 125, safari: 14.1 },
+  },
+  // IDX58 finding. Not first-party — DEPENDENCY_FILES is what makes these two reachable at all;
+  // `pdfjs-dist@6.2.108`'s `PDFDocumentLoadingTask` (constructed on every `getDocument()` call,
+  // both the `{data}` and `{url}` forms) calls this unconditionally in a class-field initializer.
+  // Versions per caniuse (mdn-javascript_builtins_promise_withresolvers), checked 2026-08-30.
+  {
+    name: "Promise.withResolvers",
+    pattern: /\bPromise\.withResolvers\s*\(/,
+    minimum: { chrome: 119, edge: 119, firefox: 121, safari: 17.4 },
+  },
+  // IDX58 finding, continued. `pdfjs-dist`'s `getUrlProp()` calls this on every `getDocument({url})`
+  // call (the range-request path `PdfCitationPreviewWindow.tsx` uses for large PDFs); the worker
+  // script (`pdf.worker.mjs`) calls it too. Versions per caniuse (mdn-api_url_parse_static), checked
+  // 2026-08-30 — a materially newer floor than every other guarded API in this file, which is why it
+  // now sets the declared minimum in packages/keiko-ui/package.json.
+  {
+    name: "URL.parse",
+    pattern: /\bURL\.parse\s*\(/,
+    minimum: { chrome: 126, edge: 126, firefox: 126, safari: 18 },
   },
 ];
 
@@ -278,10 +319,27 @@ function apiViolations(sources, floors) {
   return violations;
 }
 
-// `uiPackage`/`sourceRoots` default to the production paths, so the CLI below is unchanged. They
-// exist so a test can drive every branch of this orchestration against a fixture instead of leaving
-// it to run only in CI, where a wrong branch shows up as a confusing pass rather than a failure.
-export function main({ uiPackage = UI_PACKAGE, sourceRoots = SOURCE_ROOTS } = {}) {
+// `uiPackage`/`sourceRoots`/`dependencyFiles` default to the production paths, so the CLI below is
+// unchanged. They exist so a test can drive every branch of this orchestration against a fixture
+// instead of leaving it to run only in CI, where a wrong branch shows up as a confusing pass rather
+// than a failure. A test that wants an isolated first-party fixture passes `dependencyFiles: []` —
+// otherwise every fixture run would also scan the REAL installed pdfjs-dist against the fixture's
+// (often deliberately low) floors and fail for reasons unrelated to what that fixture is testing.
+//
+// Broken out of `main` itself: the `complexity` ESLint rule charges one point per default value in
+// a destructured parameter, and three of them (plus the outer `= {}`) would push `main` over this
+// file's own complexity ceiling for a change that adds no new decision to `main`'s own control flow.
+function resolveMainOptions(options = {}) {
+  const {
+    uiPackage = UI_PACKAGE,
+    sourceRoots = SOURCE_ROOTS,
+    dependencyFiles = DEPENDENCY_FILES,
+  } = options;
+  return { uiPackage, sourceRoots, dependencyFiles };
+}
+
+export function main(options = {}) {
+  const { uiPackage, sourceRoots, dependencyFiles } = resolveMainOptions(options);
   const declaration = readDeclaredFloors(uiPackage);
   if (declaration === undefined) return;
 
@@ -291,7 +349,7 @@ export function main({ uiPackage = UI_PACKAGE, sourceRoots = SOURCE_ROOTS } = {}
     return;
   }
 
-  const sources = collectSources(sourceRoots);
+  const sources = [...collectSources(sourceRoots), ...dependencyFiles];
   if (sources.length === 0) {
     fail("no UI sources were found — the scan would pass vacuously");
     return;
