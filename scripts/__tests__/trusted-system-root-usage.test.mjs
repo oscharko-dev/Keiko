@@ -49,27 +49,95 @@ function sourceFiles() {
   return out;
 }
 
+// IDX55 (PR #3355 review): the original readsRaw regex matched ONLY dot-property access
+// (`env.SystemRoot`), so `process.env["SystemRoot"]` (computed/bracket access) and
+// `process.env?.SystemRoot` (optional chaining) read the exact same raw value while sailing past
+// the pin entirely. Both forms are widened here, as two SEPARATE alternatives rather than one
+// do-everything regex, so each stays readable and independently testable (see the fixtures below).
+//
+// Dot access, with or without optional chaining: `env.SystemRoot`, `env?.SystemRoot`,
+// `process.env?.WINDIR`.
+const READS_RAW_DOT_ACCESS = /\b(?:process\.)?env\s*\??\.\s*(?:SystemRoot|WINDIR|windir)\b/u;
+// Bracket/computed access, with or without optional chaining: `env["SystemRoot"]`,
+// `env['WINDIR']`, `` env?.[`SystemRoot`] ``.
+const READS_RAW_BRACKET_ACCESS =
+  /\b(?:process\.)?env\s*(?:\?\.)?\s*\[\s*["'`](?:SystemRoot|WINDIR|windir)["'`]\s*\]/u;
+
+// A raw read is only a defect when the value becomes a PATH. Forwarding it into a child process's
+// env (keiko-git/src/env.ts) is legitimate and must not be flagged.
+const JOINS_A_PATH = /\bjoin\s*\(|\bresolve\s*\(|System32|`\$\{[^}]*(?:SystemRoot|WINDIR)/u;
+
+// Comments are stripped first: this very pin's own explanatory comments quote the banned pattern,
+// and so does every fixed call site's comment. A scanner that flagged those would be unusable.
+function stripComments(text) {
+  return text
+    .replace(/\/\*[\s\S]*?\*\//gu, "")
+    .split("\n")
+    .filter((line) => !line.trim().startsWith("//"))
+    .join("\n");
+}
+
+function joinsAPathFromRawSystemRoot(text) {
+  const code = stripComments(text);
+  const readsRaw = READS_RAW_DOT_ACCESS.test(code) || READS_RAW_BRACKET_ACCESS.test(code);
+  return readsRaw && JOINS_A_PATH.test(code);
+}
+
 describe("trusted Windows system-root usage (whole-class pin)", () => {
   it("no product file joins a PATH from a raw SystemRoot/WINDIR read", () => {
     const offenders = [];
     for (const path of sourceFiles()) {
       if (path.endsWith(OWNER)) continue;
       const text = readFileSync(path, "utf8");
-      // Strip comments first: this very pin's own explanatory comments quote the banned pattern,
-      // and so does the fixed call site's comment. A scanner that flagged those would be unusable.
-      const code = text
-        .replace(/\/\*[\s\S]*?\*\//gu, "")
-        .split("\n")
-        .filter((line) => !line.trim().startsWith("//"))
-        .join("\n");
-      const readsRaw = /\b(?:process\.)?env\s*\.\s*(?:SystemRoot|WINDIR|windir)\b/u.test(code);
-      if (!readsRaw) continue;
-      // A raw read is only a defect when the value becomes a PATH. Forwarding it into a child
-      // process's env (keiko-git/src/env.ts) is legitimate and must not be flagged.
-      const joinsAPath =
-        /\bjoin\s*\(|\bresolve\s*\(|System32|`\$\{[^}]*(?:SystemRoot|WINDIR)/u.test(code);
-      if (joinsAPath) offenders.push(path.slice(path.indexOf("packages/")));
+      if (joinsAPathFromRawSystemRoot(text)) offenders.push(path.slice(path.indexOf("packages/")));
     }
     expect(offenders).toEqual([]);
+  });
+
+  // IDX55 fixtures: prove the widened detection actually fires on the two forms the original
+  // dot-only regex missed, rather than trusting the regex change by inspection alone.
+  describe("detects a raw SystemRoot/WINDIR read regardless of access form (fixtures)", () => {
+    it.each([
+      ["dot access", 'const p = join(process.env.SystemRoot ?? "C:\\\\Windows", "System32");'],
+      [
+        "optional-chained dot access",
+        'const p = join(process.env?.SystemRoot ?? "C:\\\\Windows", "System32");',
+      ],
+      [
+        "bracket access with double quotes",
+        'const p = join(process.env["SystemRoot"] ?? "C:\\\\Windows", "System32");',
+      ],
+      [
+        "bracket access with single quotes",
+        "const p = join(process.env['WINDIR'] ?? String.raw`C:\\\\Windows`, \"System32\");",
+      ],
+      [
+        "optional-chained bracket access",
+        'const p = join(process.env?.["SystemRoot"] ?? "C:\\\\Windows", "System32");',
+      ],
+      [
+        "bare env (no process. prefix), bracket access",
+        'const p = join(env["windir"] ?? "C:\\\\Windows", "System32");',
+      ],
+    ])("flags %s joined onto a path", (_label, snippet) => {
+      expect(joinsAPathFromRawSystemRoot(snippet)).toBe(true);
+    });
+
+    it.each([
+      [
+        "dot access forwarded into a child env, never joined",
+        "const childEnv = { ...base, SystemRoot: process.env.SystemRoot };",
+      ],
+      [
+        "bracket access forwarded into a child env, never joined",
+        'const childEnv = { ...base, SystemRoot: process.env["SystemRoot"] };',
+      ],
+      [
+        "an unrelated env var read with the same access forms",
+        'const lang = process.env.LANG; const home = process.env?.["HOME"];',
+      ],
+    ])("does not flag %s", (_label, snippet) => {
+      expect(joinsAPathFromRawSystemRoot(snippet)).toBe(false);
+    });
   });
 });
