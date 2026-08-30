@@ -284,6 +284,30 @@ function emitReconcileEvidence(
   );
 }
 
+// Decides whether this pass must flag the instance into `recovery-required` — only when the contract's
+// own transition table permits the move; otherwise the lifecycle state is unchanged. Extracted from
+// reconcileWithContext to keep that function under the repo's per-function line budget (AGENTS.md §6).
+function resolveReconciledTargetState(
+  facts: WorkspaceReconciliationFacts,
+  outcome: WorkspaceReconciliationOutcome,
+  fromState: TaskWorkspaceLifecycleState,
+): TaskWorkspaceLifecycleState {
+  if (!reconciliationRequiresRecoveryFlag(outcome.status, fromState)) return fromState;
+  const transition = validateTaskWorkspaceTransition({
+    from: fromState,
+    to: "recovery-required",
+    context: {
+      lockHeldByActor: false,
+      pathContained: facts.pathContained,
+      worktreeClean: false,
+      branchReady: false,
+      providerReady: false,
+      operatorApproved: false,
+    },
+  });
+  return transition.ok ? "recovery-required" : fromState;
+}
+
 // Classifies one instance against pre-fetched git state, persists the classification within a legal
 // transition, and appends evidence. Pure decision-making is delegated to the contract; this only does
 // IO + persistence.
@@ -298,22 +322,7 @@ function reconcileWithContext(
   const outcome = classifyWorkspaceReconciliation(facts);
   const health = reconciliationHealth(outcome.status);
   const fromState = instance.lifecycleState;
-  let targetState = fromState;
-  if (reconciliationRequiresRecoveryFlag(outcome.status, fromState)) {
-    const transition = validateTaskWorkspaceTransition({
-      from: fromState,
-      to: "recovery-required",
-      context: {
-        lockHeldByActor: false,
-        pathContained: facts.pathContained,
-        worktreeClean: false,
-        branchReady: false,
-        providerReady: false,
-        operatorApproved: false,
-      },
-    });
-    if (transition.ok) targetState = "recovery-required";
-  }
+  const targetState = resolveReconciledTargetState(facts, outcome, fromState);
   const iso = isoFrom(nowMs);
   const persisted = ctx.deps.store.upsert({
     ...instance,

@@ -18,6 +18,7 @@ import type {
 import type { BackendAvailability } from "@oscharko-dev/keiko-sandbox";
 import { currentPlatform, planIsolatedRun, probeBackends } from "@oscharko-dev/keiko-sandbox";
 import {
+  buildSandboxEnv,
   buildWindowsShellInvocation,
   type WindowsShellInvocation,
   type WindowsShellInvocationOptions,
@@ -329,12 +330,41 @@ function logJavaVersionProbeCompleted(windowsWrapperEngaged: boolean, validVersi
   });
 }
 
+// The probe runs an executable resolved from the WORKSPACE's environment, so it is untrusted input
+// however ordinary `java -version` looks. It inherited this process's FULL environment — every API
+// key, token and provider credential the server holds — for a call whose entire output is a version
+// string. A planted or shimmed `java` on PATH could read all of it.
+//
+// Narrowed to the variables a JVM genuinely needs to start: the loader path, the Windows system
+// root (DLL resolution), and the temp/home locations a JVM writes to. `buildSandboxEnv` is the same
+// allowlist primitive the governed spawn boundary uses, so this is not a second mechanism.
+export const JAVA_PROBE_ENV_ALLOWLIST: readonly string[] = [
+  "PATH",
+  "SystemRoot",
+  "windir",
+  "SystemDrive",
+  "TEMP",
+  "TMP",
+  "TMPDIR",
+  "HOME",
+  "USERPROFILE",
+  "JAVA_HOME",
+  "LANG",
+  "LC_ALL",
+];
+
 function defaultJavaVersionValid(executable: string): boolean {
   const invocation = buildJavaVersionProbeInvocation(executable);
   const probe = spawnSync(invocation.command, invocation.args, {
     encoding: "utf8",
     timeout: JAVA_VERSION_PROBE_TIMEOUT_MS,
     killSignal: "SIGKILL",
+    // No shell, ever: the executable path comes from workspace-influenced resolution.
+    shell: false,
+    // Without this a console window flashes on every Windows probe — the only spawn in this file
+    // that lacked it.
+    windowsHide: true,
+    env: buildSandboxEnv(process.env, JAVA_PROBE_ENV_ALLOWLIST),
     ...(invocation.windowsVerbatimArguments ? { windowsVerbatimArguments: true } : {}),
   });
   const validVersion =

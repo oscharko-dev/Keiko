@@ -28,7 +28,14 @@ export type WindowsTreeKillResult =
   // other member because it is not an environment fact at all — it means a stale or recycled pid
   // reached the kill path, and signalling it would have been suicide (`taskkill /T` takes the whole
   // tree). Recorded so the near-miss is visible in a customer's log instead of silent.
-  | "refused-self-pid";
+  | "refused-self-pid"
+  // taskkill exited 128: "the specified process was not found". The tree was ALREADY GONE, which on
+  // a termination path is a benign outcome — the goal was reached before we asked. Collapsing it
+  // into "failed" told an operator the tree may still be running when it demonstrably was not, and
+  // it is the most common non-zero status this call produces: the child exits during the grace
+  // window between the guard check and taskkill actually running. Same reasoning as
+  // "blocked-untrusted-system-root": two different facts must not share one word.
+  | "already-gone";
 
 // Everything a termination line can truthfully say about the tree-kill step: the four verified
 // results above, or "not-attempted" (POSIX, no pid to signal, or a child already known to have

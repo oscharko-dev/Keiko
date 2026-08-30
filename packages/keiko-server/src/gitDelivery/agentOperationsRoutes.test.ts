@@ -230,6 +230,37 @@ describe("POST /api/git/agent/operations", () => {
     });
   });
 
+  // F2: the facade continues the SAME request into a downstream gitDelivery route handler (it AWAITS
+  // and wraps the delegate's result before this request's own response is produced — never a spawned
+  // background job), so the delegated handler must see the ORIGINATING request's own correlationId,
+  // not an unknown one. Drives a real execute delegation (branch-switch against the default fixture,
+  // whose branch envelope does not admit "main"): the delegated local-mutation route runs its OWN
+  // `gitDeliveryAuthorityDenial` check independently of the facade's outer admission and logs
+  // `git.delivery.authority.denied` (reason branch-out-of-envelope) through the shared activity log —
+  // a line only the DELEGATED handler emits. Asserting it carries the top-level ctx's correlationId
+  // proves postContext threads the id across the internal delegation boundary (AGENTS.md §8).
+  it("threads the originating request's correlationId across internal delegation to a downstream route", async () => {
+    const sink = createBufferedServerLogSink();
+    setServerLogger(createServerLogger({ sink, level: "info" }));
+    const body = executeRequest("branch-switch", "delegation-correlation-1");
+    const result = await handleGitAgentOperation(
+      { ...ctx(body), correlationId: "9c6c8d1e-2222-4444-8888-abcdef012345" },
+      deps(),
+    );
+
+    expect(result.body).toMatchObject({ status: "delegated", operation: "branch-switch" });
+    const delegatedDenial = sink.events.find(
+      (event) =>
+        event.op === "git.delivery.authority.denied" &&
+        (event.extra as { readonly reason?: string } | undefined)?.reason ===
+          "branch-out-of-envelope",
+    );
+    expect(delegatedDenial).toBeDefined();
+    expect(delegatedDenial?.correlationId).toBe("9c6c8d1e-2222-4444-8888-abcdef012345");
+    // Never the sanctioned "no id available" marker: a real one was in scope the whole time.
+    expect(delegatedDenial?.correlationId).not.toBe("unknown-correlation-id");
+  });
+
   it("keeps idempotency fingerprints independent of runtime locale collation", async () => {
     const localeCompare = vi.spyOn(String.prototype, "localeCompare").mockImplementation(() => {
       throw new Error("locale collation must not participate in idempotency fingerprints");

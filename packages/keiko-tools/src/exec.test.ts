@@ -14,6 +14,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   nodeSpawnFn,
   nodeWindowsTreeKill,
+  nodeWindowsTreeKillWith,
   runCommand,
   windowsTaskkillInvocation,
   type CommandTerminationEvidence,
@@ -2057,6 +2058,33 @@ describe("windowsTaskkillInvocation — validated system-directory resolution", 
   // machine — one is a tampered environment, the other a stripped image — so they must not arrive as
   // the same value. Reported as a distinct member, never as free text and never carrying the
   // rejected value.
+  // taskkill's exit STATUS decides what a customer's log says about a termination, and until this
+  // seam existed the branching was untestable off Windows — `nodeSpawnSync` was imported directly.
+  // 128 is "the specified process was not found": the tree was already gone, which on a termination
+  // path is the goal reached early, not a failure. It is also the COMMON non-zero status, because
+  // the child routinely exits between the guard check and taskkill actually running.
+  it.each([
+    [0, "succeeded"],
+    [128, "already-gone"],
+    [1, "failed"],
+    [255, "failed"],
+  ])("maps taskkill exit %s to %s", (status, expected) => {
+    const treeKill = nodeWindowsTreeKillWith(() => ({ status }));
+    expect(treeKill(4242, { SystemRoot: String.raw`C:\Windows` })).toBe(expected);
+  });
+
+  it("maps a taskkill that never completed within the bound to unknown, not failed", () => {
+    const timedOut = Object.assign(new Error("timed out"), { code: "ETIMEDOUT" });
+    const treeKill = nodeWindowsTreeKillWith(() => ({ status: null, error: timedOut }));
+    expect(treeKill(4242, { SystemRoot: String.raw`C:\Windows` })).toBe("unknown");
+  });
+
+  it("maps a taskkill that could not be launched at all to failed", () => {
+    const missing = Object.assign(new Error("not found"), { code: "ENOENT" });
+    const treeKill = nodeWindowsTreeKillWith(() => ({ status: null, error: missing }));
+    expect(treeKill(4242, { SystemRoot: String.raw`C:\Windows` })).toBe("failed");
+  });
+
   it("reports an untrusted system root as its own disposition, distinct from a plain failure", () => {
     expect(nodeWindowsTreeKill(7, { SystemRoot: String.raw`\\attacker\share` })).toBe(
       "blocked-untrusted-system-root",

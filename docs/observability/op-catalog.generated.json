@@ -711,6 +711,12 @@
       "package": "keiko-security"
     },
     {
+      "op": "security.windows-shortcut.system-root-refused",
+      "category": "security",
+      "site": "packages/keiko-security/src/windows-shortcuts.ts:267",
+      "package": "keiko-security"
+    },
+    {
       "op": "<dynamic>",
       "category": "diagnostic",
       "site": "packages/keiko-server/src/diagnostics-log.ts:316",
@@ -965,7 +971,7 @@
     {
       "op": "lsp.java.version-probe.completed",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/editor/lsp/providers/javaProvider.ts:326",
+      "site": "packages/keiko-server/src/editor/lsp/providers/javaProvider.ts:327",
       "package": "keiko-server"
     },
     {

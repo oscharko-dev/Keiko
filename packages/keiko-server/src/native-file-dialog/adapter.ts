@@ -8,6 +8,7 @@
 
 import { spawn, type ChildProcess } from "node:child_process";
 import { join } from "node:path";
+import { resolveWindowsSystemDirectory } from "@oscharko-dev/keiko-security";
 import type { NativeFileDialogRequest } from "@oscharko-dev/keiko-contracts";
 import { NATIVE_FILE_DIALOG_MAX_SELECTIONS } from "@oscharko-dev/keiko-contracts/runtime/native-file-dialog";
 import { buildSandboxEnv } from "@oscharko-dev/keiko-tools";
@@ -417,8 +418,26 @@ export function createMacosNativeFileDialogAdapter(
 // execution policy. The stdin config is base64-wrapped so the bytes stay ASCII regardless of the
 // console input codepage.
 function windowsPowershellPath(): string {
-  const systemRoot = process.env.SystemRoot ?? String.raw`C:\Windows`;
-  return join(systemRoot, "System32", "WindowsPowerShell", "v1.0", "powershell.exe");
+  // The system root comes from the SHARED trusted-System32 decision, never from a raw env read.
+  // This was the whole-class counter-example the PR #3355 review found: `process.env.SystemRoot`
+  // with no validation at all, joined and then SPAWNED. `resolveWindowsSystemDirectory` rejects the
+  // substitutions a bare read accepts — UNC (`\\attacker\share`), device paths (`\\?\C:\Windows`),
+  // root-relative (`\Windows`, resolves against the CURRENT drive), bare-relative (resolves against
+  // the process cwd, i.e. the workspace), traversal, control characters, cmd metacharacters, and
+  // NTFS alternate-data-stream colons — and it fails CLOSED rather than falling back to a default a
+  // hostile environment could also have tampered with.
+  //
+  // `resolveWindowsSystemBinary` cannot be used here: it joins exactly one flat `System32/<name>`
+  // segment, while PowerShell 5.1 lives under a nested `WindowsPowerShell\v1.0`. The validated ROOT
+  // is what matters, so the remaining segments are joined from literals that never touch the
+  // environment. Same shape as keiko-cli's `windowsPowerShellExecutable`.
+  return join(
+    resolveWindowsSystemDirectory(),
+    "System32",
+    "WindowsPowerShell",
+    "v1.0",
+    "powershell.exe",
+  );
 }
 
 export function createWindowsNativeFileDialogAdapter(

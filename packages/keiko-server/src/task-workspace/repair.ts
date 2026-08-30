@@ -376,6 +376,44 @@ function assertRepairAuthorized(
   }
 }
 
+// Executes the chosen strategy under the already-acquired repair lock, persists the success evidence,
+// and reads back the authoritative post-repair instance. The `finally` releases the repair lock
+// whether the strategy succeeded or threw, so an error mid-repair never leaves the workspace locked.
+// Extracted from repairLocked to stay under the repo's per-function line budget (AGENTS.md §6).
+async function executeRepairAndFinalize(
+  ctx: RepairCtx,
+  request: WorkspaceRepairRequest,
+  locked: WorkspaceInstance,
+  fromState: TaskWorkspaceLifecycleState,
+  strategy: WorkspaceRecoveryStrategy,
+  nowMs: number,
+): Promise<WorkspaceRepairResult> {
+  try {
+    const repaired = await executeStrategy(
+      ctx,
+      locked,
+      strategy,
+      request.requestedBy,
+      nowMs,
+      request.correlationId,
+    );
+    // Read back the authoritative post-repair instance (the provisioning path persists its own state).
+    const finalInstance = ctx.deps.store.getById(repaired.workspaceId) ?? repaired;
+    emitRepair(
+      ctx,
+      finalInstance,
+      fromState,
+      "repaired",
+      "repaired",
+      ctx.deps.now(),
+      request.correlationId,
+    );
+    return resultFor(finalInstance, strategy, true);
+  } finally {
+    releaseRepairLock(ctx, request.workspaceId, request.requestedBy);
+  }
+}
+
 async function repairLocked(
   ctx: RepairCtx,
   request: WorkspaceRepairRequest,
@@ -410,39 +448,15 @@ async function repairLocked(
   assertRepairAuthorized(request, reconciled, outcome, strategy);
 
   // Acquire the workspace lock for the requesting actor before mutating (the #444 `repair` operation is
-  // requiresLock:true). executeStrategy persists its own terminal lock state (provision clears it,
-  // release-stale-lock/abandon set it null); the finally releases the repair lock only if it is still
-  // ours — so an error mid-repair never leaves the workspace locked.
+  // requiresLock:true). executeRepairAndFinalize persists its own terminal lock state and releases the
+  // repair lock in a finally.
   const fromState = reconciled.lifecycleState;
   const locked = ctx.deps.store.upsert({
     ...reconciled,
     lock: makeRepairLock(ctx, request.requestedBy, nowMs),
     updatedAt: isoFrom(nowMs),
   });
-  try {
-    const repaired = await executeStrategy(
-      ctx,
-      locked,
-      strategy,
-      request.requestedBy,
-      nowMs,
-      request.correlationId,
-    );
-    // Read back the authoritative post-repair instance (the provisioning path persists its own state).
-    const finalInstance = ctx.deps.store.getById(repaired.workspaceId) ?? repaired;
-    emitRepair(
-      ctx,
-      finalInstance,
-      fromState,
-      "repaired",
-      "repaired",
-      ctx.deps.now(),
-      request.correlationId,
-    );
-    return resultFor(finalInstance, strategy, true);
-  } finally {
-    releaseRepairLock(ctx, request.workspaceId, request.requestedBy);
-  }
+  return executeRepairAndFinalize(ctx, request, locked, fromState, strategy, nowMs);
 }
 
 // Serializes the whole repair (advisory check → live reconcile → lock acquire → strategy mutation) under

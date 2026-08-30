@@ -56,6 +56,15 @@ const WINDOWS_SHORTCUT_SCRIPT = [
 
 type ShortcutEnvSource = Readonly<Record<string, string | undefined>>;
 
+// Mirrors `resolveWindowsSystemBinary`'s own `existsAsFile` seam (keiko-security's
+// windows-system-directory.ts) and is forwarded straight through to it. Needed here, specifically,
+// because this file's OWN test suite stubs `process.platform` to exercise the win32 CODE PATH
+// (cscript argv/env handling) without a real Windows filesystem — that stub also makes the
+// resolver's platform-gated default existence check genuinely run, and fail, since
+// `C:\Windows\System32\cscript.exe` does not exist on the host actually running the test. Omitted
+// (every production caller omits it), the real, platform-gated default applies unchanged.
+type WindowsBinaryExistsCheck = (resolvedPath: string) => boolean;
+
 export type WindowsShortcutSpawnFn = (
   command: string,
   args: readonly string[],
@@ -89,8 +98,11 @@ export function windowsSystemRoot(env: ShortcutEnvSource): string {
   return resolveWindowsSystemDirectory(env);
 }
 
-function windowsCscriptExecutable(env: ShortcutEnvSource): string {
-  return resolveWindowsSystemBinary("cscript.exe", env);
+function windowsCscriptExecutable(
+  env: ShortcutEnvSource,
+  existsAsFile?: WindowsBinaryExistsCheck,
+): string {
+  return resolveWindowsSystemBinary("cscript.exe", env, existsAsFile);
 }
 
 // The script host gets ONLY the variables it needs to run — never the caller's process
@@ -147,13 +159,14 @@ export function runWindowsShortcutCommand(
   env: ShortcutEnvSource,
   failurePrefix: string,
   spawnFn: WindowsShortcutSpawnFn = spawnSync,
+  existsAsFile?: WindowsBinaryExistsCheck,
 ): string {
   const scriptRoot = mkdtempSync(join(tmpdir(), "keiko-shortcut-"));
   const scriptPath = join(scriptRoot, "shortcut.js");
   try {
     writeFileSync(scriptPath, WINDOWS_SHORTCUT_SCRIPT, "utf8");
     const result = spawnFn(
-      windowsCscriptExecutable(env),
+      windowsCscriptExecutable(env, existsAsFile),
       windowsShortcutArgs(mode, scriptPath, path, definition),
       {
         env: windowsShortcutEnv(env),
@@ -228,6 +241,7 @@ export function readWindowsShortcutDefinition(
   failurePrefix: string,
   spawnFn: WindowsShortcutSpawnFn = spawnSync,
   sink?: SecurityLogSink,
+  existsAsFile?: WindowsBinaryExistsCheck,
 ): WindowsShortcutDefinition | undefined {
   if (process.platform !== "win32") return parseWindowsShortcutFallback(path);
   try {
@@ -238,6 +252,7 @@ export function readWindowsShortcutDefinition(
       env,
       failurePrefix,
       spawnFn,
+      existsAsFile,
     );
     const [targetPath, workingDirectory, iconPath] = output.split(/\r?\n/u);
     if (targetPath === undefined || workingDirectory === undefined || iconPath === undefined) {
@@ -265,12 +280,13 @@ export function writeWindowsShortcutDefinition(
   env: ShortcutEnvSource,
   failurePrefix: string,
   spawnFn: WindowsShortcutSpawnFn = spawnSync,
+  existsAsFile?: WindowsBinaryExistsCheck,
 ): void {
   if (process.platform !== "win32") {
     writeFileSync(path, windowsShortcutFallbackContent(definition), "utf8");
     return;
   }
-  runWindowsShortcutCommand("create", path, definition, env, failurePrefix, spawnFn);
+  runWindowsShortcutCommand("create", path, definition, env, failurePrefix, spawnFn, existsAsFile);
 }
 
 /** Case- and separator-insensitive Windows path equivalence for shortcut field comparison. */

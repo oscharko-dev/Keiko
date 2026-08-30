@@ -1,3 +1,4 @@
+import { buildSandboxEnv } from "@oscharko-dev/keiko-tools";
 import {
   chmodSync,
   existsSync,
@@ -20,6 +21,7 @@ import type { BackendAvailability } from "@oscharko-dev/keiko-sandbox";
 
 import type { LspSpawnPreparationInput } from "../lspProcessManager.js";
 import {
+  JAVA_PROBE_ENV_ALLOWLIST,
   JAVA_PROVIDER_SPEC,
   buildJavaVersionProbeInvocation,
   javaProtocolConfiguration,
@@ -543,5 +545,36 @@ describe("defaultJavaVersionValid — activity-log evidence (AGENTS.md §8 Rule 
     // Through the REAL redactor: every evidence field here must survive redaction unchanged.
     const redacted = redactLogFields(extra) ?? {};
     expect(Object.keys(redacted).sort()).toEqual(Object.keys(extra).sort());
+  });
+});
+
+// The probe runs a workspace-influenced executable, so it is untrusted input however ordinary
+// `java -version` looks — and it used to inherit this process's FULL environment for a call whose
+// entire output is a version string. Every provider credential the server holds was readable by a
+// planted or shimmed `java` on PATH (PR #3355 review P1).
+describe("JAVA_PROBE_ENV_ALLOWLIST", () => {
+  it("carries only what a JVM needs to start, and no credential-shaped names", () => {
+    // Loader path, Windows DLL resolution and the locations a JVM writes to — nothing else.
+    expect(JAVA_PROBE_ENV_ALLOWLIST).toContain("PATH");
+    expect(JAVA_PROBE_ENV_ALLOWLIST).toContain("SystemRoot");
+    expect(JAVA_PROBE_ENV_ALLOWLIST).toContain("JAVA_HOME");
+
+    // The point of the list: a name that could carry a secret must never be on it. Matched by
+    // SHAPE rather than by a fixed deny-list, so a credential variable invented later is caught too.
+    const secretShaped = /(?:key|token|secret|password|credential|auth|session|cookie)/iu;
+    expect(JAVA_PROBE_ENV_ALLOWLIST.filter((name) => secretShaped.test(name))).toEqual([]);
+  });
+
+  it("passes nothing outside the allowlist through to the probe", () => {
+    const built = buildSandboxEnv(
+      {
+        PATH: "/usr/bin",
+        ANTHROPIC_API_KEY: "sk-must-not-leak",
+        GITHUB_TOKEN: "ghp-must-not-leak",
+      },
+      JAVA_PROBE_ENV_ALLOWLIST,
+    );
+    expect(built).toEqual({ PATH: "/usr/bin" });
+    expect(JSON.stringify(built)).not.toContain("must-not-leak");
   });
 });

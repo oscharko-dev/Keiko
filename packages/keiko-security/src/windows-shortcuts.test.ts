@@ -132,24 +132,39 @@ describe("definition read/write entry points on the win32 route", () => {
     Object.defineProperty(process, "platform", { ...platform, value: "win32" });
   }
 
+  // Finding 4 made `resolveWindowsSystemBinary`'s existence check genuinely run once `stubWin32()`
+  // makes `process.platform` read "win32" for real — including inside the DEFAULT
+  // `defaultWindowsBinaryExists`, which this describe block's tests never overrode before. Real
+  // Windows is not this host, so `C:\Windows\System32\cscript.exe` does not exist here, and the
+  // check would fail closed before the injected `spawnFn` seam below is ever reached. These tests
+  // are about cscript argv/env/output handling, not filesystem reality, so they decouple the two by
+  // injecting a permissive existence check alongside the platform stub — exactly the seam
+  // `resolveWindowsSystemBinary` (and this file's own `WindowsBinaryExistsCheck` passthrough) exist
+  // to provide.
+  const EXISTS_ON_DISK = (): boolean => true;
+
   it("reads three UTF-16LE lines through cscript and refuses a short read", () => {
     stubWin32();
     const lines = `${DEFINITION.targetPath}\r\n${DEFINITION.workingDirectory}\r\n${DEFINITION.iconPath}\r\n`;
     const spawnFn = vi.fn<WindowsShortcutSpawnFn>(() =>
       spawnResult({ stdout: Buffer.from(lines, "utf16le") }),
     );
-    expect(readWindowsShortcutDefinition("p", {}, "test prefix", spawnFn)).toEqual(DEFINITION);
+    expect(
+      readWindowsShortcutDefinition("p", {}, "test prefix", spawnFn, undefined, EXISTS_ON_DISK),
+    ).toEqual(DEFINITION);
 
     const short = vi.fn<WindowsShortcutSpawnFn>(() =>
       spawnResult({ stdout: Buffer.from("only-one-line", "utf16le") }),
     );
-    expect(readWindowsShortcutDefinition("p", {}, "test prefix", short)).toBeUndefined();
+    expect(
+      readWindowsShortcutDefinition("p", {}, "test prefix", short, undefined, EXISTS_ON_DISK),
+    ).toBeUndefined();
   });
 
   it("creates through cscript instead of the JSON stand-in", () => {
     stubWin32();
     const spawnFn = vi.fn<WindowsShortcutSpawnFn>(() => spawnResult());
-    writeWindowsShortcutDefinition("p", DEFINITION, {}, "test prefix", spawnFn);
+    writeWindowsShortcutDefinition("p", DEFINITION, {}, "test prefix", spawnFn, EXISTS_ON_DISK);
     expect(spawnFn).toHaveBeenCalledTimes(1);
     expect(spawnFn.mock.calls[0]?.[1]).toContain("create");
   });
@@ -159,7 +174,23 @@ describe("definition read/write entry points on the win32 route", () => {
     // runWindowsShortcutCommand (a nonzero exit here) must be swallowed, not propagated.
     stubWin32();
     const spawnFn = vi.fn<WindowsShortcutSpawnFn>(() => spawnResult({ status: 1 }));
-    expect(readWindowsShortcutDefinition("p", {}, "test prefix", spawnFn)).toBeUndefined();
+    expect(
+      readWindowsShortcutDefinition("p", {}, "test prefix", spawnFn, undefined, EXISTS_ON_DISK),
+    ).toBeUndefined();
+  });
+
+  it("fails closed on the stubbed win32 route when existsAsFile is NOT overridden", () => {
+    // Regression pin for the exact failure mode this finding's implementation first hit mid-review:
+    // stubbing process.platform to "win32" makes the resolver's REAL, platform-gated default
+    // existence check run for real, and C:\Windows\System32\cscript.exe does not exist on the host
+    // running this suite — so the DEFAULT (no override supplied) must fail closed here, never
+    // silently succeed against a filesystem it never actually found the file on.
+    stubWin32();
+    const spawnFn = vi.fn<WindowsShortcutSpawnFn>(() => spawnResult());
+    expect(() => readWindowsShortcutDefinition("p", {}, "test prefix", spawnFn)).toThrow(
+      WindowsSystemDirectoryError,
+    );
+    expect(spawnFn).not.toHaveBeenCalled();
   });
 
   // Finding 2 (PR #3354 review round 2, P2): a hostile/malformed SystemRoot must never collapse

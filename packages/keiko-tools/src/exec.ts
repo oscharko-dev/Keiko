@@ -222,27 +222,54 @@ const TASKKILL_WAIT_MS = 5000;
 // The event-loop cost is bounded by TASKKILL_WAIT_MS and paid only on the termination path.
 // Never throws: a hostile SystemRoot (resolveSystemBinaryPath fails closed) or a spawn failure
 // reports "failed", keeping termination idempotent.
-export const nodeWindowsTreeKill: WindowsTreeKill = (pid, processEnv) => {
-  try {
-    const { command, args } = windowsTaskkillInvocation(pid, processEnv);
-    const completed = nodeSpawnSync(command, args, {
-      stdio: "ignore",
-      windowsHide: true,
-      timeout: TASKKILL_WAIT_MS,
-    });
-    if (completed.error !== undefined) {
-      const code = (completed.error as NodeJS.ErrnoException).code;
-      return code === "ETIMEDOUT" ? "unknown" : "failed";
-    }
-    return completed.status === 0 ? "succeeded" : "failed";
-  } catch (error) {
-    // Caught NARROWLY: only the trusted-System32 refusal earns the distinct member, so an unrelated
-    // bug can never masquerade as a security signal. Everything else stays "failed".
-    return error instanceof WindowsSystemDirectoryError
-      ? "blocked-untrusted-system-root"
-      : "failed";
-  }
+// The one seam this function needs to be testable off Windows. `nodeSpawnSync` is imported
+// directly rather than injected through RunCommandDeps (unlike `killWindowsTree`, which test
+// doubles already replace wholesale), so the 0 / 128 / other status branching below — the part that
+// decides what a customer's log SAYS about a termination — had no way to be exercised at all. A
+// default parameter keeps every production call site unchanged.
+type TaskkillRunner = (
+  command: string,
+  args: readonly string[],
+) => { readonly status: number | null; readonly error?: Error | undefined };
+
+const defaultTaskkillRunner: TaskkillRunner = (command, args) => {
+  const completed = nodeSpawnSync(command, [...args], {
+    stdio: "ignore",
+    windowsHide: true,
+    timeout: TASKKILL_WAIT_MS,
+  });
+  return {
+    status: completed.status,
+    ...(completed.error === undefined ? {} : { error: completed.error }),
+  };
 };
+
+export const nodeWindowsTreeKillWith =
+  (runTaskkill: TaskkillRunner): WindowsTreeKill =>
+  (pid, processEnv) => {
+    try {
+      const { command, args } = windowsTaskkillInvocation(pid, processEnv);
+      const completed = runTaskkill(command, args);
+      if (completed.error !== undefined) {
+        const code = (completed.error as NodeJS.ErrnoException).code;
+        return code === "ETIMEDOUT" ? "unknown" : "failed";
+      }
+      if (completed.status === 0) return "succeeded";
+      // 128 is taskkill's "the specified process was not found" — the tree was ALREADY GONE, not a
+      // failed attempt. On a termination path that is success by another route, and it is the common
+      // case: the child exits in the window between the exited-child guard and taskkill running.
+      // Reporting it as "failed" told an operator the tree might still be alive when it was not.
+      return completed.status === 128 ? "already-gone" : "failed";
+    } catch (error) {
+      // Caught NARROWLY: only the trusted-System32 refusal earns the distinct member, so an unrelated
+      // bug can never masquerade as a security signal. Everything else stays "failed".
+      return error instanceof WindowsSystemDirectoryError
+        ? "blocked-untrusted-system-root"
+        : "failed";
+    }
+  };
+
+export const nodeWindowsTreeKill: WindowsTreeKill = nodeWindowsTreeKillWith(defaultTaskkillRunner);
 
 interface KillGroupDeps {
   readonly platform: NodeJS.Platform;
@@ -642,7 +669,9 @@ function cleanup(state: RunState, signal: AbortSignal): void {
 
 // Reports THE termination decision to the optional onTerminated seam — exactly once per
 // terminated run (terminate() is single-flight), never on a clean exit. Fires from the initial
-// SIGTERM step only, not the later SIGKILL escalation: the win32 tree-kill disposition is already
+// BOTH termination steps — the initial SIGTERM and, since the escalation gained its own evidence
+// line, the later SIGKILL. (This comment said "SIGTERM step only" until that second call site was
+// added and it was not updated with it.) The win32 tree-kill disposition is already
 // verified there (nodeWindowsTreeKill completes synchronously). A callback failure must never
 // break termination — the same swallow-and-continue contract killGroup itself already holds for a
 // misbehaving killWindowsTree.

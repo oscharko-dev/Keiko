@@ -63,7 +63,7 @@ function hasPathTraversalSegment(candidate: string): boolean {
 // drive-letter colon at index 1 is mandatory and already enforced by DRIVE_ABSOLUTE_WINDOWS_PATH
 // above; searching from index 2 means that one is never flagged, while any OTHER colon always is.
 function hasStreamColon(candidate: string): boolean {
-  return candidate.indexOf(":", 2) !== -1;
+  return candidate.includes(":", 2);
 }
 
 // Throws rather than falling back to the next candidate or to the default: an invalid override is
