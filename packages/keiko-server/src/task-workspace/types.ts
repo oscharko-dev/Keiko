@@ -29,6 +29,12 @@ export interface WorkspaceProvisionRequest {
   readonly taskId: string;
   readonly baseBranch: string;
   readonly requestedBy: string;
+  // The triggering HTTP request's own correlation id (RouteContext.correlationId), threaded into this
+  // operation's lifecycle evidence so the timeline it produces can be joined back to the request that
+  // caused it (AGENTS.md §8). Undefined only for a caller with genuinely no request scope (e.g. an
+  // internal repair re-materialization not driven by a fresh HTTP call) — the evidence layer falls
+  // back to UNKNOWN_CORRELATION_ID in that case, never a silently reused workspace identity.
+  readonly correlationId?: string | undefined;
 }
 
 export interface WorkspaceProvisionResult {
@@ -45,6 +51,8 @@ export interface WorkspaceActivateRequest {
   readonly requestedBy: string;
   readonly acquireLock: boolean;
   readonly expectedLifecycleState?: TaskWorkspaceLifecycleState | undefined;
+  // See WorkspaceProvisionRequest.correlationId.
+  readonly correlationId?: string | undefined;
 }
 
 export interface WorkspaceActivateResult {
@@ -108,11 +116,15 @@ export interface SetActiveWorkspaceRequest {
   readonly requestedBy: string;
   // When true, the activation acquires the workspace lock for the actor (cross-actor exclusivity).
   readonly acquireLock: boolean;
+  // See WorkspaceProvisionRequest.correlationId.
+  readonly correlationId?: string | undefined;
 }
 
 export interface WorkspaceLifecycleActionRequest {
   readonly workspaceId: string;
   readonly requestedBy: string;
+  // See WorkspaceProvisionRequest.correlationId.
+  readonly correlationId?: string | undefined;
 }
 
 export interface WorkspaceLifecycleActionResult {
@@ -175,8 +187,14 @@ export interface WorkspaceReconciliationService {
   // Read-only: derive the report from the currently persisted instances (no filesystem/git IO).
   readonly report: (repositoryRoot?: string) => WorkspaceReconciliationReport;
   // Live: verify every (or one repository's) instance against disk + git, persist the classification,
-  // and return the fresh report. Used at startup and by the explicit refresh route.
-  readonly reconcile: (repositoryRoot?: string) => Promise<WorkspaceReconciliationReport>;
+  // and return the fresh report. Used at startup and by the explicit refresh route. `correlationId` is
+  // the triggering HTTP request's own id (see WorkspaceProvisionRequest.correlationId); the startup
+  // caller has no request scope and omits it, so evidence from that pass falls back to
+  // UNKNOWN_CORRELATION_ID — genuinely correct there, since no request produced it.
+  readonly reconcile: (
+    repositoryRoot?: string,
+    correlationId?: string,
+  ) => Promise<WorkspaceReconciliationReport>;
 }
 
 export interface WorkspaceReconciliationServiceDeps {
@@ -207,6 +225,8 @@ export interface WorkspaceRepairRequest {
   // The #444 `repair` operation requires operator approval; an automatic repair refuses to mutate
   // without it.
   readonly operatorApproved: boolean;
+  // See WorkspaceProvisionRequest.correlationId.
+  readonly correlationId?: string | undefined;
 }
 
 export interface WorkspaceRepairResult {
@@ -281,6 +301,8 @@ export interface WorkspaceCleanupRequest {
   // `request` transitions a settled instance to cleanup-pending; `complete` performs the live-verified
   // governed physical removal of a cleanup-pending instance.
   readonly mode: WorkspaceCleanupMode;
+  // See WorkspaceProvisionRequest.correlationId.
+  readonly correlationId?: string | undefined;
 }
 
 export type WorkspaceCleanupOutcome = "requested" | "completed" | "refused";

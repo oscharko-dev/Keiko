@@ -9,6 +9,7 @@ import {
 import { resolveEditorM11Settings } from "@oscharko-dev/keiko-contracts/runtime/editor-m11-settings";
 import { expectViewportModal } from "./support/modal.js";
 import { clickWindowChromeButton } from "./support/window-chrome.js";
+import { focusMonacoInput } from "./support/editor-chord.js";
 import { replaceEditorBuffer } from "./support/editor-chord.js";
 
 const CHAT_MODEL_ID = "e2e-chat-model";
@@ -810,6 +811,46 @@ test("memory and local-knowledge navigation surfaces load without client errors 
   await expect(
     localKnowledgeWindow.getByRole("button", { exact: true, name: "Create Knowledge Pod" }),
   ).toBeVisible();
+
+  assertNoPageErrors();
+});
+
+// The Gecko-safe half of the three journeys above, and the reason they can stay skipped without
+// leaving the editor unproven on a second engine (PR #3355 review).
+//
+// What those three skip is one GESTURE: replacing the whole buffer via select-all + insertText.
+// Monaco 0.56 has no EditContext on Gecko, so the chord never reaches its keybinding service.
+// Everything AROUND that gesture — mounting the editor, loading a file through the governed read
+// path, rendering its content, the status bar, tab switching, closing — is engine-independent
+// product surface, and it was the part left untested on Firefox.
+//
+// This journey exercises exactly that, on BOTH engines, with no buffer replacement anywhere. It
+// deliberately does not try to edit: an editing proof on Gecko needs a gesture that works there,
+// and inventing one here would re-open the very question the skips document.
+test("editor opens and renders a governed file read on both engines @smoke", async ({
+  page,
+  request,
+}) => {
+  const projectPath = createProjectFixture();
+  const relativePath = "packages/keiko-cli/src/run.ts";
+  writeFileSync(join(projectPath, relativePath), "export const first = 1;\n", "utf8");
+  const assertNoPageErrors = collectPageErrors(page);
+
+  // openSmokeEditor already proves the tree navigation, the "Open in editor" action, that Monaco
+  // mounts, and that no duplicate workspace-trust dialog appears — all on whichever engine runs it.
+  const editorWindow = await openSmokeEditor(page, request, projectPath, relativePath);
+
+  // The file's REAL content reached Monaco through the governed read path, not an empty shell.
+  await expect(editorWindow.locator(".view-line").first()).toContainText("export const first");
+  // The unified status bar is mounted and reports the clean buffer (nothing was edited here).
+  await expect(editorWindow.locator('[data-field="save"]')).toBeVisible();
+  // The opened file owns the active tab.
+  await expect(editorWindow.getByRole("tab", { selected: true })).toContainText("run.ts");
+  // And the editor's input surface exists on this engine — the EditContext div on Chromium, the
+  // textarea fallback on Gecko. `focusMonacoInput` resolves whichever one this engine created, so
+  // this asserts the surface is REACHABLE without performing the buffer-replacement gesture the
+  // three skips above document as unproven on Gecko.
+  await focusMonacoInput(editorWindow);
 
   assertNoPageErrors();
 });
