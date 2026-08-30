@@ -869,13 +869,13 @@
     {
       "op": "git.delivery.authority.admitted",
       "category": "security",
-      "site": "packages/keiko-server/src/gitDelivery/requestPreparation.ts:140",
+      "site": "packages/keiko-server/src/gitDelivery/requestPreparation.ts:160",
       "package": "keiko-server"
     },
     {
       "op": "git.delivery.authority.denied",
       "category": "security",
-      "site": "packages/keiko-server/src/gitDelivery/requestPreparation.ts:106",
+      "site": "packages/keiko-server/src/gitDelivery/requestPreparation.ts:126",
       "package": "keiko-server"
     },
     {
