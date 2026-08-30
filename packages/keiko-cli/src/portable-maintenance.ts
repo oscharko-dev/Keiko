@@ -13,6 +13,7 @@ import { dirname, join, relative, resolve, win32 as win32Path } from "node:path"
 import type { EnvSource } from "@oscharko-dev/keiko-model-gateway";
 import {
   WINDOWS_SHORTCUT_MAX_BYTES,
+  WindowsSystemDirectoryError,
   equivalentWindowsShortcutPath,
   readWindowsShortcutDefinition,
   writeWindowsShortcutDefinition,
@@ -121,6 +122,24 @@ export function windowsLegacyStartMenuRegistrationPath(env: EnvSource, home: str
   return join(appDataDir(env, home), "Microsoft", "Windows", "Start Menu", "Programs", "Keiko.bat");
 }
 
+// A refusal of the trust boundary itself (`WindowsSystemDirectoryError`, thrown by
+// `readWindowsShortcut` -> `readWindowsShortcutDefinition` on a hostile or malformed
+// SystemRoot/WINDIR) must never collapse into the SAME "this candidate is absent" signal an
+// ordinary missing/unreadable registration produces below — that would re-swallow the exact
+// rethrow `readWindowsShortcutDefinition` added so a caller one frame up could see it
+// (windows-shortcuts.ts). Every current caller of `parseWindowsStartMenuRegistration` already has
+// a catch that surfaces a thrown error's message to the operator (`launchPortable`/
+// `setupPortable`'s own `io.err`, `uninstall.ts`'s top-level catch, `repair.ts`'s
+// message-converting wrapper) — the CLI's existing error-surfacing mechanism, there being no
+// structured log port in this package (unlike the server's `SecurityLogSink` composition root) —
+// so re-throwing here is enough to make it visible instead of discarding it. Split out of
+// `parseWindowsStartMenuRegistration` to keep that function's cyclomatic complexity at the repo's
+// ceiling of 10 (ESLint `complexity`).
+function reraiseTrustBoundaryRefusal(error: unknown): undefined {
+  if (error instanceof WindowsSystemDirectoryError) throw error;
+  return undefined;
+}
+
 export function parseWindowsStartMenuRegistration(
   path: string,
   env: EnvSource = process.env,
@@ -134,7 +153,8 @@ export function parseWindowsStartMenuRegistration(
       return parseWindowsShortcutRegistration(path, stat.size, env);
     if (stat.size <= 0 || stat.size > WINDOWS_LAUNCHER_MAX_BYTES) return undefined;
     return parseWindowsLauncherContent(readFileSync(path, "utf8"));
-  } catch {
+  } catch (error) {
+    reraiseTrustBoundaryRefusal(error);
     return undefined;
   }
 }

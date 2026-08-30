@@ -9,10 +9,11 @@ import {
 } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 
 import {
   WINDOWS_SHORTCUT_MAX_BYTES,
+  WindowsSystemDirectoryError,
   windowsShortcutFallbackContent,
 } from "@oscharko-dev/keiko-security";
 
@@ -280,6 +281,45 @@ describe("portable native registration policy", () => {
       const oversized = join(root, "Oversized.lnk");
       writeFileSync(oversized, Buffer.alloc(WINDOWS_SHORTCUT_MAX_BYTES + 1, 0x20));
       expect(parseWindowsStartMenuRegistration(oversized)).toBeUndefined();
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+});
+
+// PR #3355 review (IDX62 follow-up): readWindowsShortcutDefinition RE-THROWS a
+// WindowsSystemDirectoryError instead of masking a hostile/malformed SystemRoot as "absent"
+// (windows-shortcuts.ts). parseWindowsStartMenuRegistration sits one frame above that call, on
+// the real `keiko portable setup` installation-detection path (portable-install.ts's
+// windowsRegisteredLauncherTargets), behind a bare `catch { return undefined }` that used to
+// swallow the rethrow right back into the same silent "absent" signal it exists to avoid.
+describe("parseWindowsStartMenuRegistration propagates a trust-boundary refusal", () => {
+  const platform = Object.getOwnPropertyDescriptor(process, "platform");
+
+  afterEach(() => {
+    if (platform !== undefined) Object.defineProperty(process, "platform", platform);
+  });
+
+  it("throws WindowsSystemDirectoryError for a hostile SystemRoot instead of returning undefined", () => {
+    Object.defineProperty(process, "platform", { ...platform, value: "win32" });
+    // homedir()-based, like every other test in this file that reaches
+    // parseWindowsStartMenuRegistration/assertNoSymlinkAncestor: on macOS, os.tmpdir() sits
+    // under /tmp, itself a symlink to /private/tmp, so assertNoSymlinkAncestor's ancestor walk
+    // would throw an ordinary Error on the FIRST ancestor it checks — before ever reaching
+    // readWindowsShortcut — and this test's catch would (correctly) swallow that unrelated
+    // symlink refusal into `undefined`, never exercising the WindowsSystemDirectoryError path
+    // this test exists to pin.
+    const root = mkdtempSync(join(homedir(), ".keiko-shortcut-root-refused-"));
+    try {
+      const shortcut = join(root, "Keiko.lnk");
+      // Content is never parsed: resolution fails before cscript would ever run (same win32
+      // stub technique windows-shortcuts.test.ts and update-portable-activation.test.ts use).
+      // Only needs to sit inside the shortcut size bounds so the earlier `stat.size` gate here
+      // does not itself return undefined before readWindowsShortcut is ever reached.
+      writeFileSync(shortcut, "placeholder-shortcut-bytes");
+      expect(() =>
+        parseWindowsStartMenuRegistration(shortcut, { SystemRoot: String.raw`\\attacker\share` }),
+      ).toThrow(WindowsSystemDirectoryError);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
