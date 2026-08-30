@@ -149,7 +149,7 @@ export function windowsAuthenticodeIdentityScript(): string {
   return (
     "$s=Get-AuthenticodeSignature -LiteralPath $args[0];" +
     "if($s.Status -ne 'Valid' -or $null -eq $s.SignerCertificate" +
-    "-or $null -eq $s.TimeStamperCertificate){exit 1};" +
+    " -or $null -eq $s.TimeStamperCertificate){exit 1};" +
     "[Console]::Out.Write($s.SignerCertificate.Thumbprint)"
   );
 }

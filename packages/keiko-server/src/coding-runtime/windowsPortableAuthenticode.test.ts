@@ -3,6 +3,7 @@ import { WindowsSystemDirectoryError, type SecurityLogEvent } from "@oscharko-de
 
 import {
   resolveWindowsAuthenticodeSystem,
+  windowsAuthenticodeIdentityScript,
   windowsPublisherIdentityMatches,
   windowsPublisherIdentityMatchesAsync,
   windowsSignerIdentity,
@@ -36,6 +37,13 @@ function signerRunner(...identities: readonly string[]): {
 }
 
 describe("Windows portable Authenticode identity", (): void => {
+  it("keeps PowerShell boolean operators separated across script fragments", (): void => {
+    const script = windowsAuthenticodeIdentityScript();
+
+    expect(script).toContain("$s.SignerCertificate -or $null");
+    expect(script).not.toContain("$s.SignerCertificate-or");
+  });
+
   it("uses the fixed system verifier and accepts only the trusted launcher's signer", (): void => {
     const signer = "A".repeat(40);
     const matching = signerRunner(signer, signer);
