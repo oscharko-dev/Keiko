@@ -501,6 +501,32 @@ describe("main", () => {
       expect(result.errors.join("\n")).toContain("Promise.withResolvers needs chrome >= 119");
     });
 
+    it("scans only explicit roots and their imports, not unrelated sibling files", () => {
+      const fx = fixture({ browserslist: ["chrome >= 100"] });
+      const listed = dependencyFixture(
+        {
+          "listed.mjs": "export const listed = Promise.withResolvers();\n",
+          "unlisted.mjs": "export const unlisted = items.toSorted();\n",
+        },
+        "listed.mjs",
+      );
+      const result = run({ ...fx, dependencyFiles: [listed] });
+      const errors = result.errors.join("\n");
+      expect(result.exitCode).toBe(1);
+      expect(errors).toContain("listed.mjs");
+      expect(errors).not.toContain("unlisted.mjs");
+    });
+
+    it("fails closed with a path-specific diagnosis for a missing dependency root", () => {
+      const fx = fixture({ browserslist: ["chrome >= 120"], source: "export const v = 1;\n" });
+      const missing = dependencyFixture({}, "missing-entry.mjs");
+      const result = run({ ...fx, dependencyFiles: [missing] });
+      const errors = result.errors.join("\n");
+      expect(result.exitCode).toBe(1);
+      expect(errors).toContain("bundled dependency closure could not be derived");
+      expect(errors).toContain("missing-entry.mjs");
+    });
+
     it("reports guarded CSS embedded in transitive plain .js", () => {
       const fx = fixture({ browserslist: ["firefox >= 100"] });
       const dep = dependencyFixture({
