@@ -1095,6 +1095,12 @@
       "package": "keiko-server"
     },
     {
+      "op": "task-workspace.lifecycle",
+      "category": "diagnostic",
+      "site": "packages/keiko-server/src/task-workspace/activity-log.ts:121",
+      "package": "keiko-server"
+    },
+    {
       "op": "voice.live-dictation.capacity-rejected",
       "category": "http",
       "site": "packages/keiko-server/src/voice-live-dictation.ts:649",

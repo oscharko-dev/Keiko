@@ -36,6 +36,7 @@ import { lockIsLive, resolveLockTtl } from "./locks.js";
 import { activePointerKey, workspaceKey } from "./mutex.js";
 import { TaskWorkspaceError } from "./errors.js";
 import { UNKNOWN_CORRELATION_ID } from "../correlation.js";
+import { logWorkspaceLifecycle } from "./activity-log.js";
 import {
   appendWorkspaceLifecycleEvidence,
   buildWorkspaceEvent,
@@ -92,13 +93,14 @@ function emit(
     readonly correlationId?: string | undefined;
   },
 ): void {
+  const correlationId = input.correlationId ?? UNKNOWN_CORRELATION_ID;
   const event = buildWorkspaceEvent({
     eventId: ctx.deps.newId(),
     workspaceId: input.instance.workspaceId,
     taskId: input.instance.taskId,
     type: input.type,
     at: isoFrom(input.nowMs),
-    correlationId: input.correlationId ?? UNKNOWN_CORRELATION_ID,
+    correlationId,
     fromState: input.fromState,
     toState: input.instance.lifecycleState,
   });
@@ -117,6 +119,17 @@ function emit(
     },
     ctx.deps.redactString,
   );
+  // Same operation, SAME correlationId, into the server activity log (AGENTS.md §8).
+  logWorkspaceLifecycle(ctx.deps, {
+    operation: input.operation,
+    outcome: input.outcome,
+    workspaceId: input.instance.workspaceId,
+    taskId: input.instance.taskId,
+    correlationId,
+    attempt: 1,
+    durationMs: 0,
+    worktreeCount: 0,
+  });
 }
 
 function loadInstance(ctx: LifecycleCtx, workspaceId: string): WorkspaceInstance {

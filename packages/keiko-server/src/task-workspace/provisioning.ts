@@ -49,6 +49,7 @@ import {
 } from "./managed-root.js";
 import { TaskWorkspaceError, type WorkspaceFailureOutcome } from "./errors.js";
 import { UNKNOWN_CORRELATION_ID } from "../correlation.js";
+import { logWorkspaceLifecycle } from "./activity-log.js";
 import {
   appendWorkspaceLifecycleEvidence,
   buildWorkspaceEvent,
@@ -111,6 +112,10 @@ interface EmitInput {
   readonly fromState?: TaskWorkspaceLifecycleState | undefined;
   readonly toState?: TaskWorkspaceLifecycleState | undefined;
   readonly lockId?: string | undefined;
+  // A caught TaskWorkspaceError's own `.code`, when the caller has one in scope — carried into the
+  // activity-log line's `errorKind` (see activity-log.ts's `WorkspaceLifecycleLogInput.errorCode`).
+  // Ignored on a success outcome.
+  readonly errorCode?: string | undefined;
 }
 
 // ─── pure helpers ────────────────────────────────────────────────────────────────────────────────
@@ -203,13 +208,14 @@ function makeLock(
 // ─── evidence ───────────────────────────────────────────────────────────────────────────────────
 
 function emit(ctx: ProvisioningCtx, input: EmitInput): void {
+  const correlationId = input.correlationId ?? UNKNOWN_CORRELATION_ID;
   const event = buildWorkspaceEvent({
     eventId: ctx.deps.newId(),
     workspaceId: input.workspaceId,
     taskId: input.taskId,
     type: input.type,
     at: isoFrom(input.nowMs),
-    correlationId: input.correlationId ?? UNKNOWN_CORRELATION_ID,
+    correlationId,
     ...(input.fromState !== undefined ? { fromState: input.fromState } : {}),
     ...(input.toState !== undefined ? { toState: input.toState } : {}),
     ...(input.lockId !== undefined ? { lockId: input.lockId } : {}),
@@ -229,6 +235,19 @@ function emit(ctx: ProvisioningCtx, input: EmitInput): void {
     },
     ctx.deps.redactString,
   );
+  // Same operation, SAME correlationId, into the server activity log (AGENTS.md §8) — see
+  // activity-log.ts for why this is one shared call rather than duplicated per service.
+  logWorkspaceLifecycle(ctx.deps, {
+    operation: input.operation,
+    outcome: input.outcome,
+    workspaceId: input.workspaceId,
+    taskId: input.taskId,
+    correlationId,
+    attempt: 1,
+    durationMs: 0,
+    worktreeCount: 0,
+    errorCode: input.errorCode,
+  });
 }
 
 function emitOutcomeForCode(
@@ -239,6 +258,7 @@ function emitOutcomeForCode(
   taskId: string,
   nowMs: number,
   correlationId: string | undefined,
+  errorCode?: string,
 ): void {
   emit(ctx, {
     operation,
@@ -248,6 +268,7 @@ function emitOutcomeForCode(
     taskId,
     nowMs,
     correlationId,
+    errorCode,
   });
 }
 
@@ -486,6 +507,7 @@ async function failProvisioning(
     correlationId,
     fromState: "provisioning",
     toState: target,
+    errorCode: error.code,
   });
   throw error;
 }
@@ -549,6 +571,7 @@ function flagResumableDrift(
     correlationId,
     fromState: existing.lifecycleState,
     toState: "recovery-required",
+    errorCode: "POINTER_DRIFT",
   });
   throw new TaskWorkspaceError("POINTER_DRIFT", "managed worktree is missing");
 }
@@ -648,6 +671,7 @@ async function provisionLocked(
         request.taskId,
         nowMs,
         request.correlationId,
+        error.code,
       );
     }
     throw error;
@@ -756,6 +780,7 @@ function flagActivateDrift(
     correlationId,
     fromState: instance.lifecycleState,
     toState: "recovery-required",
+    errorCode: "POINTER_DRIFT",
   });
   throw new TaskWorkspaceError("POINTER_DRIFT", "managed worktree is missing");
 }

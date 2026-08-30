@@ -19,6 +19,7 @@ import type {
   WorkspaceRecoveryStrategy,
 } from "@oscharko-dev/keiko-contracts";
 import type { ActiveWorkspacePointer, ActiveWorkspacePointerStore } from "./active-store.js";
+import type { WorkspaceActivityLogSeam } from "./activity-log.js";
 import type { WorkspaceInstanceStore } from "./store.js";
 import type { WorkspaceMutexRegistry } from "./mutex.js";
 
@@ -69,7 +70,7 @@ export interface WorkspaceProvisioningService {
   readonly ensureIdentity?: ((instance: WorkspaceInstance) => void) | undefined;
 }
 
-export interface WorkspaceProvisioningServiceDeps {
+export interface WorkspaceProvisioningServiceDeps extends WorkspaceActivityLogSeam {
   readonly store: WorkspaceInstanceStore;
   readonly evidenceStore: EvidenceStore;
   // The Keiko-owned managed worktree root (absolute). Provisioning proves ownership of this before
@@ -164,7 +165,7 @@ export interface WorkspaceLifecycleService {
   ) => Promise<WorkspaceLifecycleActionResult>;
 }
 
-export interface WorkspaceLifecycleServiceDeps {
+export interface WorkspaceLifecycleServiceDeps extends WorkspaceActivityLogSeam {
   readonly store: WorkspaceInstanceStore;
   readonly activePointerStore: ActiveWorkspacePointerStore;
   // The Keiko-owned managed worktree root. Active binding re-proves persisted paths are still
@@ -206,7 +207,7 @@ export interface WorkspaceReconciliationService {
   ) => Promise<WorkspaceReconciliationReport>;
 }
 
-export interface WorkspaceReconciliationServiceDeps {
+export interface WorkspaceReconciliationServiceDeps extends WorkspaceActivityLogSeam {
   readonly store: WorkspaceInstanceStore;
   readonly activePointerStore: ActiveWorkspacePointerStore;
   readonly evidenceStore: EvidenceStore;
@@ -254,7 +255,7 @@ export interface WorkspaceRepairService {
   readonly repair: (request: WorkspaceRepairRequest) => Promise<WorkspaceRepairResult>;
 }
 
-export interface WorkspaceRepairServiceDeps {
+export interface WorkspaceRepairServiceDeps extends WorkspaceActivityLogSeam {
   readonly store: WorkspaceInstanceStore;
   readonly activePointerStore: ActiveWorkspacePointerStore;
   readonly evidenceStore: EvidenceStore;

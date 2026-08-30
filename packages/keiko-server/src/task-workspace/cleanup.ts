@@ -43,6 +43,7 @@ import { lockIsLive, makeWorkspaceLock, resolveLockTtl } from "./locks.js";
 import { workspaceKey } from "./mutex.js";
 import { TaskWorkspaceError } from "./errors.js";
 import { UNKNOWN_CORRELATION_ID } from "../correlation.js";
+import { logWorkspaceLifecycle } from "./activity-log.js";
 import {
   appendWorkspaceLifecycleEvidence,
   buildWorkspaceEvent,
@@ -111,30 +112,54 @@ export function safelyRemoveManagedPath(managedRoot: string, target: string): vo
   rmSync(targetReal, { recursive: true, force: false });
 }
 
-function emit(
+interface EmitCleanupInput {
+  readonly outcome: WorkspaceLifecycleOutcome;
+  readonly type: WorkspaceEventType;
+  readonly workspaceId: string;
+  readonly taskId: string;
+  // The triggering request's own correlation id (WorkspaceCleanupRequest /
+  // WorkspaceOrphanCleanupRequest .correlationId). Falls back to UNKNOWN_CORRELATION_ID — never the
+  // workspace's own persisted identity, which would make every cleanup event look like the same
+  // operation regardless of which HTTP request actually triggered it (AGENTS.md §8).
+  readonly correlationId: string | undefined;
+  readonly fromState?: TaskWorkspaceLifecycleState | undefined;
+  readonly toState?: TaskWorkspaceLifecycleState | undefined;
+  readonly nowMs: number;
+  // The live safety gate's own refusal reason (WorkspaceCleanupRefusalReason), when this line is a
+  // `cleanup-refused` outcome — carried into the activity-log line's `errorKind` so an agent can tell
+  // WHY a removal was refused, not merely that it was.
+  readonly errorCode?: string | undefined;
+}
+
+// Same operation, SAME correlationId, into the server activity log (AGENTS.md §8). Split out of
+// `emit` so that function stays under the repo's per-function line budget (AGENTS.md §6).
+function emitCleanupActivityLog(
   ctx: CleanupCtx,
-  input: {
-    readonly outcome: WorkspaceLifecycleOutcome;
-    readonly type: WorkspaceEventType;
-    readonly workspaceId: string;
-    readonly taskId: string;
-    // The triggering request's own correlation id (WorkspaceCleanupRequest /
-    // WorkspaceOrphanCleanupRequest .correlationId). Falls back to UNKNOWN_CORRELATION_ID — never the
-    // workspace's own persisted identity, which would make every cleanup event look like the same
-    // operation regardless of which HTTP request actually triggered it (AGENTS.md §8).
-    readonly correlationId: string | undefined;
-    readonly fromState?: TaskWorkspaceLifecycleState | undefined;
-    readonly toState?: TaskWorkspaceLifecycleState | undefined;
-    readonly nowMs: number;
-  },
+  input: EmitCleanupInput,
+  correlationId: string,
 ): void {
+  logWorkspaceLifecycle(ctx.deps, {
+    operation: "cleanup",
+    outcome: input.outcome,
+    workspaceId: input.workspaceId,
+    taskId: input.taskId,
+    correlationId,
+    attempt: 1,
+    durationMs: 0,
+    worktreeCount: 0,
+    errorCode: input.errorCode,
+  });
+}
+
+function emit(ctx: CleanupCtx, input: EmitCleanupInput): void {
+  const correlationId = input.correlationId ?? UNKNOWN_CORRELATION_ID;
   const event = buildWorkspaceEvent({
     eventId: ctx.deps.newId(),
     workspaceId: input.workspaceId,
     taskId: input.taskId,
     type: input.type,
     at: isoFrom(input.nowMs),
-    correlationId: input.correlationId ?? UNKNOWN_CORRELATION_ID,
+    correlationId,
     ...(input.fromState !== undefined ? { fromState: input.fromState } : {}),
     ...(input.toState !== undefined ? { toState: input.toState } : {}),
   });
@@ -153,6 +178,7 @@ function emit(
     },
     ctx.deps.redactString,
   );
+  emitCleanupActivityLog(ctx, input, correlationId);
 }
 
 function loadInstance(ctx: CleanupCtx, workspaceId: string): WorkspaceInstance {
@@ -359,6 +385,7 @@ function refuseCleanup(
     correlationId,
     fromState: instance.lifecycleState,
     nowMs: ctx.deps.now(),
+    errorCode: refusalReason,
   });
   return {
     outcome: "refused",

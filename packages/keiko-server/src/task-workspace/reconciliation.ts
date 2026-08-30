@@ -53,6 +53,7 @@ import { deriveRepositoryId } from "./naming.js";
 import { lockIsLive, resolveLockTtl } from "./locks.js";
 import { workspaceKey } from "./mutex.js";
 import { UNKNOWN_CORRELATION_ID } from "../correlation.js";
+import { logWorkspaceLifecycle } from "./activity-log.js";
 import {
   appendWorkspaceLifecycleEvidence,
   buildWorkspaceEvent,
@@ -260,13 +261,14 @@ function emitReconcileEvidence(
   // UNKNOWN_CORRELATION_ID rather than the workspace's own persisted identity (AGENTS.md §8).
   correlationId: string | undefined,
 ): void {
+  const resolvedCorrelationId = correlationId ?? UNKNOWN_CORRELATION_ID;
   const event = buildWorkspaceEvent({
     eventId: ctx.deps.newId(),
     workspaceId: instance.workspaceId,
     taskId: instance.taskId,
     type: reconcileEventType(outcome, flaggedRecovery),
     at: isoFrom(nowMs),
-    correlationId: correlationId ?? UNKNOWN_CORRELATION_ID,
+    correlationId: resolvedCorrelationId,
     fromState,
     toState: instance.lifecycleState,
     health: instance.health,
@@ -287,6 +289,22 @@ function emitReconcileEvidence(
     },
     ctx.deps.redactString,
   );
+  // Same operation, SAME correlationId, into the server activity log (AGENTS.md §8). The evidence
+  // `outcome` is always the fixed "reconciled" (this pass always completes), so the classification an
+  // agent actually needs — was the workspace found healthy, drifted, missing, locked... — rides in
+  // `errorCode` as the live `WorkspaceReconciliationStatus` instead, the same closed vocabulary
+  // `WorkspaceHealthReport`/the reconciliation route already surface.
+  logWorkspaceLifecycle(ctx.deps, {
+    operation: "reconcile",
+    outcome: "reconciled",
+    workspaceId: instance.workspaceId,
+    taskId: instance.taskId,
+    correlationId: resolvedCorrelationId,
+    attempt: 1,
+    durationMs: 0,
+    worktreeCount: 0,
+    errorCode: outcome.status === "healthy" ? undefined : outcome.status,
+  });
 }
 
 // Decides whether this pass must flag the instance into `recovery-required` — only when the contract's

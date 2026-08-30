@@ -40,6 +40,7 @@ import { lockIsLive, makeWorkspaceLock, resolveLockTtl } from "./locks.js";
 import { workspaceKey } from "./mutex.js";
 import { reconcileSingleInstance } from "./reconciliation.js";
 import { UNKNOWN_CORRELATION_ID } from "../correlation.js";
+import { logWorkspaceLifecycle } from "./activity-log.js";
 import {
   appendWorkspaceLifecycleEvidence,
   buildWorkspaceEvent,
@@ -130,13 +131,14 @@ function emitRepair(
   // UNKNOWN_CORRELATION_ID — never the workspace's own persisted identity (AGENTS.md §8).
   correlationId: string | undefined,
 ): void {
+  const resolvedCorrelationId = correlationId ?? UNKNOWN_CORRELATION_ID;
   const event = buildWorkspaceEvent({
     eventId: ctx.deps.newId(),
     workspaceId: instance.workspaceId,
     taskId: instance.taskId,
     type,
     at: isoFrom(nowMs),
-    correlationId: correlationId ?? UNKNOWN_CORRELATION_ID,
+    correlationId: resolvedCorrelationId,
     fromState,
     toState: instance.lifecycleState,
     health: instance.health,
@@ -157,6 +159,17 @@ function emitRepair(
     },
     ctx.deps.redactString,
   );
+  // Same operation, SAME correlationId, into the server activity log (AGENTS.md §8).
+  logWorkspaceLifecycle(ctx.deps, {
+    operation: "repair",
+    outcome,
+    workspaceId: instance.workspaceId,
+    taskId: instance.taskId,
+    correlationId: resolvedCorrelationId,
+    attempt: 1,
+    durationMs: 0,
+    worktreeCount: 0,
+  });
 }
 
 function resultFor(
