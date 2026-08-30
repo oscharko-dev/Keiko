@@ -322,6 +322,26 @@ static void test_drain_pipe_reads_and_ends_at_eof(void) {
   (void)CloseHandle(read_end);
 }
 
+typedef struct {
+  HANDLE write_end;
+  const char *payload;
+  DWORD length;
+} keiko_flood_writer_args;
+
+// Runs the flood WriteFile on its own thread, concurrently with the main thread's
+// keiko_drain_pipe call, so the test's correctness never depends on CreatePipe's nSize actually
+// being honoured by the OS (MSDN: "the actual size chosen by the operating system may differ from
+// the suggested size" — a suggestion, not a guarantee). A single-threaded write ahead of the first
+// read would deadlock on whatever buffer the OS in fact allocated; a concurrent writer cannot,
+// because keiko_drain_pipe is always draining while bytes remain unread.
+static DWORD WINAPI keiko_flood_writer_thread(LPVOID parameter) {
+  keiko_flood_writer_args *args = (keiko_flood_writer_args *)parameter;
+  DWORD written = 0;
+  BOOL ok = WriteFile(args->write_end, args->payload, args->length, &written, NULL);
+  (void)CloseHandle(args->write_end); // EOF for the reader once the flood is fully written
+  return ok && written == args->length ? 0 : 1;
+}
+
 // Output past the cap must keep draining (so the child never blocks on a full pipe) while the
 // captured prefix stays exactly cap-1 bytes.
 static void test_drain_pipe_drains_past_the_cap(void) {
@@ -331,21 +351,27 @@ static void test_drain_pipe_drains_past_the_cap(void) {
   attributes.bInheritHandle = FALSE;
   HANDLE read_end = NULL;
   HANDLE write_end = NULL;
-  // An explicit, generous buffer size — not 0 ("system default", documented as only a suggestion,
-  // commonly ~4 KiB and NOT guaranteed >= the flood below). This WriteFile runs single-threaded,
-  // before keiko_drain_pipe ever starts reading, so an undersized pipe buffer would deadlock this
-  // test (write blocks with nobody draining) instead of exercising the past-the-cap discard path.
-  assert(CreatePipe(&read_end, &write_end, &attributes, 65536) != 0);
+  // Default OS buffer size: no longer load-bearing (see keiko_flood_writer_thread) now that the
+  // write runs concurrently with the read instead of entirely ahead of it.
+  assert(CreatePipe(&read_end, &write_end, &attributes, 0) != 0);
 
   char flood[4096];
   memset(flood, 'x', sizeof(flood));
-  DWORD written = 0;
-  assert(WriteFile(write_end, flood, (DWORD)sizeof(flood), &written, NULL) != 0);
-  (void)CloseHandle(write_end);
+  keiko_flood_writer_args writer_args;
+  writer_args.write_end = write_end;
+  writer_args.payload = flood;
+  writer_args.length = (DWORD)sizeof(flood);
+  HANDLE writer = CreateThread(NULL, 0, keiko_flood_writer_thread, &writer_args, 0, NULL);
+  assert(writer != NULL);
 
   char out[64];
   int total = keiko_drain_pipe(read_end, GetCurrentProcess(), out, (int)sizeof(out));
   assert(total == (int)sizeof(out) - 1); // captured exactly cap-1, the rest discarded not blocked
+
+  assert(WaitForSingleObject(writer, KEIKO_CHILD_EXIT_GRACE_MS) == WAIT_OBJECT_0);
+  DWORD writer_exit = 1;
+  assert(GetExitCodeThread(writer, &writer_exit) != 0 && writer_exit == 0);
+  (void)CloseHandle(writer);
   (void)CloseHandle(read_end);
 }
 
@@ -493,6 +519,12 @@ static void test_watchdog_terminates_the_descendant_tree(void) {
 
   assert(keiko_wait_or_terminate(&child, 200) == 0); // deadline expires -> terminate the tree
 
+  // This assertion is a direct proof of keiko_terminate_child_tree's own bounded
+  // ActiveProcesses==0 poll, not a hopeful immediate check: TerminateProcess/TerminateJobObject are
+  // documented asynchronous, so without that internal wait this Query could race a descendant that
+  // requested-but-not-yet-finished exiting and observe it as still active. keiko_wait_or_terminate
+  // has already returned by the time control reaches here, so if the assertion below holds, the
+  // production helper itself — not this test's timing — is what established the zero.
   JOBOBJECT_BASIC_ACCOUNTING_INFORMATION after;
   ZeroMemory(&after, sizeof(after));
   assert(QueryInformationJobObject(child.job, JobObjectBasicAccountingInformation, &after,

@@ -98,7 +98,9 @@ enum {
   KEIKO_MAX_TRAILING_PADDING = 7,    // signing may 8-byte-align the certificate table it appends
   KEIKO_CHILD_TIMEOUT_MS = 1200000,  // 20 min watchdog: far above any real step, bounds a hang
   KEIKO_DRAIN_POLL_MS = 50,          // slice the capture loop sleeps on the child handle per turn
-  KEIKO_CHILD_EXIT_GRACE_MS = 5000   // how long a child gets to exit once its stdout has closed
+  KEIKO_CHILD_EXIT_GRACE_MS = 5000,  // how long a child gets to exit once its stdout has closed
+  KEIKO_JOB_REAP_POLL_MS = 20,       // ActiveProcesses poll slice while a terminated job tears down
+  KEIKO_JOB_REAP_ATTEMPTS = 250      // bound: 250 * 20ms = 5s, matches KEIKO_CHILD_EXIT_GRACE_MS
 };
 
 // ---------------------------------------------------------------------------------------------
@@ -696,12 +698,39 @@ static int keiko_spawn_in_job(const wchar_t *application, wchar_t *command_line,
   return 1;
 }
 
-// Terminates the child's WHOLE tree (job-bound when available) and waits briefly for the process
-// object to settle so the caller can rely on the pid being dead before touching shared state.
+// Terminates the child's WHOLE tree (job-bound when available) and BLOCKS until the job itself
+// reports zero active processes (bounded), not merely until the one direct-child handle signals.
+//
+// TerminateProcess and TerminateJobObject are both documented ASYNCHRONOUS: each only requests
+// termination and can return before every associated process has actually exited
+// (learn.microsoft.com/windows/win32/api/processthreadsapi/nf-processthreadsapi-terminateprocess).
+// Waiting on just the direct child's handle — the previous shape here — could return while a
+// descendant was still alive and still holding staging-file handles, right as the caller
+// (keiko_close_child) closes this job handle: `keiko_child.job` is deliberately NEVER configured
+// kill-on-close (the launch step's successfully-started Keiko app must survive this installer), so
+// closing it without first observing the job empty would release any survivor unmanaged — the
+// exact defect class this containment exists to close. The bounded
+// JobObjectBasicAccountingInformation poll below reuses the shape
+// native/runtime-supervisor/windows/keiko_runtime_supervisor.c's reconcile_job already proves for
+// this identical contract, gated on TerminateJobObject's own return value rather than discarding
+// it: a failed request has nothing to observe, so this falls through to the direct-process kill
+// below exactly as before.
 static void keiko_terminate_child_tree(keiko_child *child) {
-  if (child->job != NULL) {
-    (void)TerminateJobObject(child->job, 1);
+  if (child->job != NULL && TerminateJobObject(child->job, 1)) {
+    for (int attempt = 0; attempt < KEIKO_JOB_REAP_ATTEMPTS; attempt++) {
+      JOBOBJECT_BASIC_ACCOUNTING_INFORMATION accounting;
+      ZeroMemory(&accounting, sizeof(accounting));
+      if (!QueryInformationJobObject(child->job, JobObjectBasicAccountingInformation, &accounting,
+                                     sizeof(accounting), NULL) ||
+          accounting.ActiveProcesses == 0) {
+        break;
+      }
+      Sleep(KEIKO_JOB_REAP_POLL_MS);
+    }
   }
+  // Best-effort backstop: harmless (and typically already-a-no-op, since the direct child is itself
+  // a member of the job just reaped above) when the job wait already settled it; the only path that
+  // still needs it is a failed TerminateJobObject request or an exhausted poll bound.
   (void)TerminateProcess(child->process.hProcess, 1);
   (void)WaitForSingleObject(child->process.hProcess, KEIKO_CHILD_EXIT_GRACE_MS);
 }
