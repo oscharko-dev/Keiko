@@ -194,15 +194,61 @@ export function windowsTaskkillInvocation(
 // `terminate()` executes on that loop. Terminations therefore SERIALISE: cancelling N Windows
 // commands in one tick can stall the host for up to N x TASKKILL_WAIT_MS, and the SIGKILL escalation
 // can spend the bound a second time for the same run. During that stall `keiko-server` serves no
-// other request.
+// other request. `WINDOWS_TASKKILL_BUDGET_MS` below caps the AGGREGATE across concurrent
+// terminations; this constant only ever bounds one call.
 //
 // It is synchronous on purpose: taskkill must finish enumerating the live tree while cmd.exe still
 // anchors it, and an async spawn would let `child.kill()` race it so a grandchild survives. An
 // awaited async spawn could give the same ordering without blocking, but that requires making
 // `terminate()`/`killGroup` async and rippling through every caller — a design decision, not a
-// drive-by change, so the cost is documented here rather than hidden behind a comment that implies
-// the aggregate is bounded.
+// drive-by change.
 const TASKKILL_WAIT_MS = 5000;
+
+// Bounds the AGGREGATE event-loop stall every concurrent Windows termination in the current window
+// can impose — TASKKILL_WAIT_MS above only ever bounds ONE invocation (see the comment there for
+// why cancelling N commands in one tick can otherwise serialise to N x TASKKILL_WAIT_MS). Node is
+// single-threaded and this counter is only ever read and decremented synchronously, immediately
+// before the blocking `spawnSync` call it guards, so no two decrements can interleave — no mutex
+// needed. Six full-timeout waits (30s) per 60s window: enough concurrent terminations in one tick to
+// matter, while guaranteeing at least half of any window stays free for `keiko-server` to serve
+// other requests. The WHOLE budget refills when the window elapses — never per call — so a burst of
+// terminations early in a long-running server does not permanently disable tree-kill enumeration for
+// the rest of the process's life.
+const WINDOWS_TASKKILL_BUDGET_WINDOW_MS = 60_000;
+const WINDOWS_TASKKILL_BUDGET_MS = 6 * TASKKILL_WAIT_MS;
+
+export interface WindowsTaskkillBudget {
+  // Attempts to spend one TASKKILL_WAIT_MS unit of the current window's budget. Returns false, and
+  // spends nothing, once the window's budget is exhausted; the caller must not spawn taskkill in
+  // that case (see nodeWindowsTreeKillWith below, which reports "unknown" instead).
+  readonly tryConsume: () => boolean;
+}
+
+// `now` is injected — production defaults to Date.now, tests move time without a real 60s wait — and
+// each call to this factory returns a budget with its OWN private counter, never a shared module
+// singleton. `nodeWindowsTreeKillWith` relies on exactly that: its own `budget` parameter defaults to
+// a FRESH `createWindowsTaskkillBudget()` per factory call, so the one production `nodeWindowsTreeKill`
+// export below gets a single process-lifetime budget (created once, at module load) while every test
+// that calls `nodeWindowsTreeKillWith(...)` directly gets an isolated budget of its own — no shared
+// mutable state bleeding between unrelated test cases (AGENTS.md §7).
+export function createWindowsTaskkillBudget(now: () => number = Date.now): WindowsTaskkillBudget {
+  let remainingMs = WINDOWS_TASKKILL_BUDGET_MS;
+  let windowResetAt = now() + WINDOWS_TASKKILL_BUDGET_WINDOW_MS;
+  return {
+    tryConsume: (): boolean => {
+      const currentTime = now();
+      if (currentTime >= windowResetAt) {
+        remainingMs = WINDOWS_TASKKILL_BUDGET_MS;
+        windowResetAt = currentTime + WINDOWS_TASKKILL_BUDGET_WINDOW_MS;
+      }
+      if (remainingMs <= 0) {
+        return false;
+      }
+      remainingMs -= TASKKILL_WAIT_MS;
+      return true;
+    },
+  };
+}
 
 // Bounds the WHOLE Windows process tree rooted at `pid`, not just the immediate child. Before
 // issue #3350's cmd.exe hardening, a `.cmd` target never spawned on win32 (Node CVE-2024-27980
@@ -219,7 +265,9 @@ const TASKKILL_WAIT_MS = 5000;
 //     success, "failed" means it could not run or reported failure (taskkill.exe absent on a
 //     stripped-down image included), and "unknown" is only the bounded wait expiring. Nothing is
 //     reported as success merely because dispatch did not throw.
-// The event-loop cost is bounded by TASKKILL_WAIT_MS and paid only on the termination path.
+// The event-loop cost of ONE call is bounded by TASKKILL_WAIT_MS; the AGGREGATE cost across
+// concurrent terminations in the same window is separately bounded by WINDOWS_TASKKILL_BUDGET_MS
+// above, and it is paid only on the termination path either way.
 // Never throws: a hostile SystemRoot (resolveSystemBinaryPath fails closed) or a spawn failure
 // reports "failed", keeping termination idempotent.
 // The one seam this function needs to be testable off Windows. `nodeSpawnSync` is imported
@@ -244,9 +292,36 @@ const defaultTaskkillRunner: TaskkillRunner = (command, args) => {
   };
 };
 
+// The ONE WindowsSystemDirectoryError message that means "the environment and the binary name were
+// both fine — the resolved System32 path just doesn't exist as a file" (a stripped-down Windows
+// image missing taskkill.exe): windows-system-directory.ts's `resolveWindowsSystemBinary` throws the
+// SAME error class for that as it does for a malformed/hostile SystemRoot or WINDIR, or a malformed
+// binary name — and only the message text tells them apart. Those two facts are not interchangeable:
+// one is an operational hiccup ("failed"), the other a security-relevant property of the environment
+// ("blocked-untrusted-system-root"). `resolveWindowsSystemBinary` lives in keiko-security, upstream
+// of keiko-tools (ADR-0019), so a new error subtype for the distinction belongs there, not here —
+// this file cannot introduce one without moving the dependency direction the wrong way, and it must
+// not edit that shared module for one caller's classification need. Message-matching is the narrowest
+// available seam. Pinned against silent drift: exec.test.ts asserts this literal against the REAL
+// throw (via `windowsTaskkillInvocation`, with `process.platform` stubbed to `win32` so the real,
+// otherwise-Windows-only existence check runs), so a wording change in keiko-security fails LOUD
+// here — as a broken pin — instead of silently reclassifying a missing binary as a security event.
+const WINDOWS_SYSTEM_BINARY_MISSING_MESSAGE =
+  "resolved Windows system binary does not exist as a regular file";
+
 export const nodeWindowsTreeKillWith =
-  (runTaskkill: TaskkillRunner): WindowsTreeKill =>
+  (
+    runTaskkill: TaskkillRunner,
+    budget: WindowsTaskkillBudget = createWindowsTaskkillBudget(),
+  ): WindowsTreeKill =>
   (pid, processEnv) => {
+    // The AGGREGATE bound: once this window's budget is spent, report "unknown" — the accurate
+    // evidence for "we chose not to pay another blocking wait", never a guessed "succeeded"/"failed"
+    // — WITHOUT spawning taskkill at all, so a burst of concurrent terminations cannot serialise the
+    // event loop past the budgeted ceiling.
+    if (!budget.tryConsume()) {
+      return "unknown";
+    }
     try {
       const { command, args } = windowsTaskkillInvocation(pid, processEnv);
       const completed = runTaskkill(command, args);
@@ -261,11 +336,17 @@ export const nodeWindowsTreeKillWith =
       // Reporting it as "failed" told an operator the tree might still be alive when it was not.
       return completed.status === 128 ? "already-gone" : "failed";
     } catch (error) {
-      // Caught NARROWLY: only the trusted-System32 refusal earns the distinct member, so an unrelated
-      // bug can never masquerade as a security signal. Everything else stays "failed".
-      return error instanceof WindowsSystemDirectoryError
-        ? "blocked-untrusted-system-root"
-        : "failed";
+      // Caught NARROWLY: only a genuine WindowsSystemDirectoryError earns a member other than
+      // "failed", so an unrelated bug can never masquerade as a security signal. Within that class,
+      // the existence-check refusal is an OPERATIONAL fact (see WINDOWS_SYSTEM_BINARY_MISSING_MESSAGE
+      // above) and must not be conflated with every other refusal in the class, which says the
+      // environment itself — SystemRoot/WINDIR, or the binary name — is malformed or hostile.
+      if (!(error instanceof WindowsSystemDirectoryError)) {
+        return "failed";
+      }
+      return error.message === WINDOWS_SYSTEM_BINARY_MISSING_MESSAGE
+        ? "failed"
+        : "blocked-untrusted-system-root";
     }
   };
 

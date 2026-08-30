@@ -195,6 +195,23 @@ asynchronous spawn would only SCHEDULE taskkill, and `child.kill()` would race i
 in keiko-server's `lspNodeAdapter.ts` holds the same ordering, and `exec.test.ts` pins the order
 directly rather than asserting only that the tree kill was called.
 
+**The bounded wait is per invocation, not per process — read the cost model precisely.**
+`spawnSync` blocks the ENTIRE Node event loop, not just the run being terminated, and `terminate()`
+executes on that loop, so Windows terminations SERIALISE: cancelling N commands in the same tick can
+otherwise stall the host for up to N x `TASKKILL_WAIT_MS` (5 000 ms), during which `keiko-server`
+serves no other request — the SIGKILL escalation can spend the bound a second time for the same run.
+`WindowsTaskkillBudget` (`src/tools/exec.ts`, `createWindowsTaskkillBudget`) additionally bounds
+that AGGREGATE cost: a process-wide counter, decremented synchronously immediately before each
+`spawnSync` call (Node's single thread makes this race-free with no mutex), permits up to six
+full-timeout waits (30 000 ms) per 60-second window and refills the WHOLE budget — never
+per-call — once the window elapses, so a burst early in a long-running server cannot permanently
+disable tree-kill enumeration for its remaining lifetime. Once a window's budget is spent, a further
+termination in that window reports `windowsTreeKill: "unknown"` WITHOUT spawning taskkill at all —
+the accurate evidence for "this stall was not paid," never a guessed `"succeeded"`/`"failed"`. This
+bounds the worst case; it does not make the per-invocation wait itself asynchronous — see the
+synchronicity reasoning above, which is a design decision requiring `terminate()`/`killGroup` to
+become async throughout, not a drive-by change.
+
 **Termination is single-flight.** Abort, timeout, the output cap and a failing spawn callback can
 all reach `terminate()`; the FIRST one becomes the terminal cause, the others are disarmed, and
 exactly one grace timer is armed. Before this, each trigger re-signalled the tree and overwrote the

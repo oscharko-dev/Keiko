@@ -12,6 +12,7 @@ import { tmpdir } from "node:os";
 import { isAbsolute, join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  createWindowsTaskkillBudget,
   nodeSpawnFn,
   nodeWindowsTreeKill,
   nodeWindowsTreeKillWith,
@@ -20,6 +21,7 @@ import {
   type CommandTerminationEvidence,
   type HomeProvider,
   type RunCommandDeps,
+  type WindowsTaskkillBudget,
   type WindowsTreeKillResult,
 } from "./exec.js";
 import { WindowsSystemDirectoryError } from "./windows-shell.js";
@@ -2095,5 +2097,123 @@ describe("windowsTaskkillInvocation — validated system-directory resolution", 
     // A VALID system root, so the resolver returns cleanly and any failure comes from the spawn
     // itself — the narrow catch must not let this borrow the security-relevant member.
     expect(nodeWindowsTreeKill(7, { SystemRoot: String.raw`C:\Windows` })).toBe("failed");
+  });
+});
+
+// ─── nodeWindowsTreeKill — a missing taskkill.exe is "failed", not "blocked-untrusted-system-root" ─
+// resolveWindowsSystemBinary (keiko-security) throws the SAME WindowsSystemDirectoryError for a
+// hostile/malformed SystemRoot/WINDIR as it does for a resolved System32 path that just doesn't
+// exist as a file (e.g. taskkill.exe absent on a stripped-down Windows image) — an operational fact,
+// not a security one. The two must not collapse into the same disposition.
+describe("nodeWindowsTreeKill — distinguishing a missing taskkill.exe from a hostile system root", () => {
+  const platformDescriptor = Object.getOwnPropertyDescriptor(process, "platform");
+
+  afterEach(() => {
+    if (platformDescriptor !== undefined) {
+      Object.defineProperty(process, "platform", platformDescriptor);
+    }
+  });
+
+  it("maps a genuinely missing taskkill.exe to failed", () => {
+    // A VALID, drive-absolute SystemRoot (passes every shape check in windows-system-directory.ts),
+    // with process.platform stubbed to win32 so the existence check — gated off on every other
+    // platform, see windows-system-directory.ts's defaultWindowsBinaryExists — actually runs against
+    // the real filesystem: no genuine C:\Windows exists under this process on the host that runs this
+    // suite, so resolution reaches the EXISTENCE-check throw, never the shape/security one.
+    Object.defineProperty(process, "platform", { ...platformDescriptor, value: "win32" });
+    expect(() => windowsTaskkillInvocation(7, { SystemRoot: String.raw`C:\Windows` })).toThrow(
+      "resolved Windows system binary does not exist as a regular file",
+    );
+    expect(nodeWindowsTreeKill(7, { SystemRoot: String.raw`C:\Windows` })).toBe("failed");
+  });
+
+  it("still maps a hostile/malformed system root to blocked-untrusted-system-root under the same win32 stub", () => {
+    // Proves the two branches stay apart even on the platform where BOTH throw sites are reachable —
+    // not only via the "runs on any host" shape check exercised elsewhere in this file.
+    Object.defineProperty(process, "platform", { ...platformDescriptor, value: "win32" });
+    expect(nodeWindowsTreeKill(7, { SystemRoot: String.raw`\\attacker\share` })).toBe(
+      "blocked-untrusted-system-root",
+    );
+  });
+});
+
+// ─── WindowsTaskkillBudget — bounding the AGGREGATE stall across concurrent terminations ───────────
+// TASKKILL_WAIT_MS only ever bounds ONE spawnSync call; this budget bounds what N of them, cancelled
+// in the same tick, can cost the event loop in total. Node is single-threaded, so a synchronous
+// decrement is race-free — these tests pin the counting and reset semantics, not concurrency safety.
+describe("createWindowsTaskkillBudget — aggregate stall budget", () => {
+  it("allows exactly six consumes before denying the seventh, within one window", () => {
+    const budget = createWindowsTaskkillBudget(() => 0);
+    for (let i = 0; i < 6; i += 1) {
+      expect(budget.tryConsume()).toBe(true);
+    }
+    expect(budget.tryConsume()).toBe(false);
+  });
+
+  it("refills the WHOLE budget once the window elapses, not per call", () => {
+    let now = 0;
+    const budget = createWindowsTaskkillBudget(() => now);
+    for (let i = 0; i < 6; i += 1) {
+      expect(budget.tryConsume()).toBe(true);
+    }
+    expect(budget.tryConsume()).toBe(false);
+    // One ms short of the window: still exhausted — the reset is a hard boundary, not a leak.
+    now = 59_999;
+    expect(budget.tryConsume()).toBe(false);
+    // The window has elapsed: the FULL budget is back, not a partial trickle.
+    now = 60_000;
+    for (let i = 0; i < 6; i += 1) {
+      expect(budget.tryConsume()).toBe(true);
+    }
+    expect(budget.tryConsume()).toBe(false);
+  });
+
+  it("gives every factory call its own private counter — no shared state across instances", () => {
+    const first = createWindowsTaskkillBudget(() => 0);
+    const second = createWindowsTaskkillBudget(() => 0);
+    for (let i = 0; i < 6; i += 1) {
+      expect(first.tryConsume()).toBe(true);
+    }
+    expect(first.tryConsume()).toBe(false);
+    // `second` was never touched — it must still have its full budget.
+    expect(second.tryConsume()).toBe(true);
+  });
+});
+
+describe("nodeWindowsTreeKillWith — the budget gates the spawn, not just the report", () => {
+  it("reports unknown and never calls the taskkill runner once the injected budget is exhausted", () => {
+    const exhausted: WindowsTaskkillBudget = { tryConsume: () => false };
+    const runTaskkill = vi.fn(() => ({ status: 0 }));
+    const treeKill = nodeWindowsTreeKillWith(runTaskkill, exhausted);
+    expect(treeKill(4242, { SystemRoot: String.raw`C:\Windows` })).toBe("unknown");
+    // The whole point of the budget is to avoid PAYING the blocking wait — a spawn here would defeat
+    // it even if the reported disposition happened to be right.
+    expect(runTaskkill).not.toHaveBeenCalled();
+  });
+
+  it("still runs taskkill normally while the injected budget keeps granting", () => {
+    const alwaysGranting: WindowsTaskkillBudget = { tryConsume: () => true };
+    const runTaskkill = vi.fn(() => ({ status: 0 }));
+    const treeKill = nodeWindowsTreeKillWith(runTaskkill, alwaysGranting);
+    expect(treeKill(4242, { SystemRoot: String.raw`C:\Windows` })).toBe("succeeded");
+    expect(runTaskkill).toHaveBeenCalledTimes(1);
+  });
+
+  it("the real budget denies concurrent terminations in one tick past its ceiling, then unbans", () => {
+    let now = 0;
+    const budget = createWindowsTaskkillBudget(() => now);
+    const runTaskkill = vi.fn(() => ({ status: 0 }));
+    const treeKill = nodeWindowsTreeKillWith(runTaskkill, budget);
+    // Simulate a run-cancel fan-out: seven Windows commands terminated in the same tick.
+    const results: WindowsTreeKillResult[] = Array.from({ length: 7 }, () =>
+      treeKill(4242, { SystemRoot: String.raw`C:\Windows` }),
+    );
+    expect(results.filter((r) => r === "succeeded")).toHaveLength(6);
+    expect(results.filter((r) => r === "unknown")).toHaveLength(1);
+    expect(runTaskkill).toHaveBeenCalledTimes(6); // the 7th never spawned taskkill at all
+    // The window elapses: the 8th call (a fresh burst) is granted again.
+    now = 60_000;
+    expect(treeKill(4242, { SystemRoot: String.raw`C:\Windows` })).toBe("succeeded");
+    expect(runTaskkill).toHaveBeenCalledTimes(7);
   });
 });
