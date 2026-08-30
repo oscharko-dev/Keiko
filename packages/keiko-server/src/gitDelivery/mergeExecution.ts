@@ -56,6 +56,7 @@ import {
   type GitDeliveryMutationResponseBody,
 } from "./execution.js";
 import { processServerLogSink } from "../process-log-sink.js";
+import type { GitDeliveryAuthorityContinuityDenialCapture } from "./requestPreparation.js";
 
 // Default trusted merge policy: merge is APPROVAL-GATED — the explicit final, high-risk confirmation a
 // merge requires (AC1). No approval token ⇒ approval-required; every other action kind is fail-closed via
@@ -84,6 +85,10 @@ export interface GitDeliveryMergeSeams {
   readonly now?: (() => number) | undefined;
   readonly newActionId?: (() => string) | undefined;
   readonly beforeRemoteDispatch?: (() => boolean) | undefined;
+  // Set by the route alongside `beforeRemoteDispatch` when that guard is the continuity re-check (see
+  // GitDeliveryAuthorityContinuityDenialCapture). When present, a continuity denial suppresses evidence
+  // persistence for this synthetic, never-executed attempt instead of recording it as a failure.
+  readonly authorityDenialCapture?: GitDeliveryAuthorityContinuityDenialCapture | undefined;
 }
 
 function authorityGuardedMergeAdapter(
@@ -179,7 +184,13 @@ export async function executeGovernedMerge(
       newActionId,
     },
   );
-  persistGitDeliveryEvidence(deps, result.lifecycle, snapshot, workspace.root, now);
+  // A continuity denial (caught by authorityGuardedMergeAdapter above) means the adapter never
+  // dispatched — `result` is the synthetic no-spawn stand-in, not a real attempt. The route returns the
+  // captured 403 instead of this result, so recording it here would leave a "failed"/retryable evidence
+  // entry for an attempt the client is never told happened. See GitDeliveryAuthorityContinuityDenialCapture.
+  if (seams.authorityDenialCapture?.result === undefined) {
+    persistGitDeliveryEvidence(deps, result.lifecycle, snapshot, workspace.root, now);
+  }
   return result;
 }
 

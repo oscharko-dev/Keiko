@@ -477,10 +477,19 @@ describe("merge execute (governed)", () => {
     expect(adapter.merges()).toBe(1);
   });
 
-  it("aborts merge when another allowed authority replaces the approval-bound run", async () => {
+  // The continuity guard re-checks authority right before remote dispatch (a TOCTOU gap: policy/preflight
+  // evaluation takes time, and the admitted authority can change or be revoked while that runs). Before
+  // this fix, a denial here fell through to a misleading 200 body — `status: "failed"`,
+  // `executionErrorCode: "internal-error"` — telling the client an internal fault happened and is safe to
+  // retry, and persisted the SAME misleading record to the evidence ledger, even though the F4 no-spawn
+  // marker (git.delivery.dispatch.no-spawn, proven in the next test) and the authority-denial security
+  // line had already correctly recorded a refusal. Proven red against the pre-fix code: this test
+  // asserted `status).toBe("failed")` and passed with no HTTP-status or evidence assertion at all.
+  it("returns the SAME 403 authority-denied response the up-front gate returns, not a misleading internal failure (#3350)", async () => {
     const adapter = recordingMergeAdapter(READY_PROVIDER);
     const approvalStore = createInMemoryGitDeliveryApprovalStore();
     const approval = issueMergeApproval(approvalStore);
+    const evidence = capturingEvidenceStore();
     const baseAuthority = permittedGitDeliveryAuthority(
       () => projectId,
       () => projectId,
@@ -502,12 +511,18 @@ describe("merge execute (governed)", () => {
 
     const res = await handler(
       ctxFor(EXECUTE, mergeBody({ approval })),
-      deps({ gitDeliveryAuthority: authority }),
+      deps({ gitDeliveryAuthority: authority, evidenceStore: evidence.store }),
     );
 
-    expect((res.body as GitDeliveryMergeExecuteResponseBody).status).toBe("failed");
+    // HTTP contract: the SAME 403 envelope the up-front admission gate returns — never a 200 claiming an
+    // internal, retryable failure for a request that was refused before anything was dispatched.
+    expect(res.status).toBe(403);
+    expect(res.body).toMatchObject({ error: { code: "GIT_DELIVERY_AUTHORITY_DENIED" } });
     expect(reads).toBe(2);
     expect(adapter.merges()).toBe(0);
+    // Evidence contract: no misleading "failed"/retryable record for an attempt the client is never told
+    // happened — consistent with the up-front denial, which also records nothing to the evidence ledger.
+    expect(evidence.count()).toBe(0);
   });
 
   // F4: the SAME mid-flight authority-replacement scenario as the previous test, but asserting the
@@ -556,7 +571,10 @@ describe("merge execute (governed)", () => {
       deps({ gitDeliveryAuthority: authority }),
     );
 
-    expect((res.body as GitDeliveryMergeExecuteResponseBody).status).toBe("failed");
+    // The route now answers this refusal with the SAME 403 the up-front admission gate returns (see the
+    // previous test); the F4 marker below is logged on the SAME path regardless, since it fires inside
+    // the adapter wrapper before the route ever sees a result to project.
+    expect(res.status).toBe(403);
     expect(adapter.merges()).toBe(0);
     const marker = activity.find((event) => event.op === "git.delivery.dispatch.no-spawn");
     expect(marker).toBeDefined();

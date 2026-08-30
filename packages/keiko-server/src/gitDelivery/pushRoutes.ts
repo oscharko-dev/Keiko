@@ -44,6 +44,7 @@ import {
   gitDeliveryAuthorityContinuityGuard,
   gitDeliveryAuthorityGate,
   prepareGitDeliveryRequest,
+  type GitDeliveryAuthorityContinuityDenialCapture,
   type GitDeliveryAuthorityIdentity,
   type GitDeliveryRequestErrors,
 } from "./requestPreparation.js";
@@ -248,6 +249,7 @@ async function runPushMutation(input: PushMutationInput): Promise<RouteResult> {
     nowMs: (seams.now ?? Date.now)(),
   });
   if (verifiedApproval === undefined) return errResult(400, "GIT_DELIVERY_PUSH_BAD_REQUEST");
+  const denialCapture: GitDeliveryAuthorityContinuityDenialCapture = {};
   const beforeRemoteDispatch = gitDeliveryAuthorityContinuityGuard({
     ctx,
     deps,
@@ -257,6 +259,7 @@ async function runPushMutation(input: PushMutationInput): Promise<RouteResult> {
     target,
     admitted: authority,
     next: seams.beforeRemoteDispatch,
+    denialCapture,
   });
   try {
     const result = await executeGovernedPublish(
@@ -264,9 +267,13 @@ async function runPushMutation(input: PushMutationInput): Promise<RouteResult> {
       verifiedApproval,
       workspace,
       deps,
-      { ...seams, beforeRemoteDispatch },
+      { ...seams, beforeRemoteDispatch, authorityDenialCapture: denialCapture },
       input.correlationId,
     );
+    // The continuity guard denied mid-flight (revoked/replaced authority): nothing was dispatched, and
+    // `result` is the gateway's synthetic no-spawn stand-in. Return the SAME 403 the up-front admission
+    // gate would have returned, not a 200 that projects the stand-in as a retryable internal failure.
+    if (denialCapture.result !== undefined) return denialCapture.result;
     return { status: 200, body: deps.redactor(gitDeliveryPublishExecuteResponse(result)) };
   } catch {
     // Only the read-only snapshot step can throw (not a git repository); the gateway never throws.

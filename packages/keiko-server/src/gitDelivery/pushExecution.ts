@@ -51,6 +51,7 @@ import {
 } from "./execution.js";
 import { defaultMintableRepoPack } from "./policyPackMintability.js";
 import { processServerLogSink } from "../process-log-sink.js";
+import type { GitDeliveryAuthorityContinuityDenialCapture } from "./requestPreparation.js";
 
 // The shared/protected remote branches a governed push may never target directly. This is the
 // enforcement of the "no direct push to dev" hard denial (and its equivalents in a repository that
@@ -117,6 +118,10 @@ export interface GitDeliveryPublishSeams {
   readonly now?: (() => number) | undefined;
   readonly newActionId?: (() => string) | undefined;
   readonly beforeRemoteDispatch?: (() => boolean) | undefined;
+  // Set by the route alongside `beforeRemoteDispatch` when that guard is the continuity re-check (see
+  // GitDeliveryAuthorityContinuityDenialCapture). When present, a continuity denial suppresses evidence
+  // persistence for this synthetic, never-executed attempt instead of recording it as a failure.
+  readonly authorityDenialCapture?: GitDeliveryAuthorityContinuityDenialCapture | undefined;
 }
 
 function authorityGuardedPublishAdapter(
@@ -200,7 +205,13 @@ export async function executeGovernedPublish(
       newActionId,
     },
   );
-  persistGitDeliveryEvidence(deps, result.lifecycle, snapshot, workspace.root, now);
+  // A continuity denial (caught by authorityGuardedPublishAdapter above) means the adapter never
+  // dispatched — `result` is the synthetic no-spawn stand-in, not a real attempt. The route returns the
+  // captured 403 instead of this result, so recording it here would leave a "failed"/retryable evidence
+  // entry for an attempt the client is never told happened. See GitDeliveryAuthorityContinuityDenialCapture.
+  if (seams.authorityDenialCapture?.result === undefined) {
+    persistGitDeliveryEvidence(deps, result.lifecycle, snapshot, workspace.root, now);
+  }
   return result;
 }
 

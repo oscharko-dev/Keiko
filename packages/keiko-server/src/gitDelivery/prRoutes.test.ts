@@ -380,8 +380,17 @@ describe("pr execute — governed create + no-bypass (AC1/AC4/AC5)", () => {
     expect(cap.raw()).not.toContain("Implements the #477");
   });
 
-  it("aborts PR dispatch when another allowed authority replaces the admitted run", async () => {
+  // The continuity guard re-checks authority right before remote dispatch (a TOCTOU gap: policy/preflight
+  // evaluation takes time, and the admitted authority can change or be revoked while that runs). Before
+  // this fix, a denial here fell through to a misleading 200 body — `status: "failed"`,
+  // `executionErrorCode: "internal-error"` — telling the client an internal fault happened and is safe to
+  // retry, and persisted the SAME misleading record to the evidence ledger, even though the F4 no-spawn
+  // marker (git.delivery.dispatch.no-spawn) and the authority-denial security line had already correctly
+  // recorded a refusal. Proven red against the pre-fix code: this test asserted `status).toBe("failed")`
+  // and passed with no HTTP-status or evidence assertion at all.
+  it("returns the SAME 403 authority-denied response the up-front gate returns, not a misleading internal failure (#3350)", async () => {
     const adapter = recordingPrAdapter();
+    const cap = capturingEvidenceStore();
     const baseAuthority = permittedGitDeliveryAuthority(
       () => projectId,
       () => projectId,
@@ -408,12 +417,18 @@ describe("pr execute — governed create + no-bypass (AC1/AC4/AC5)", () => {
 
     const res = await handler(
       ctxFor(EXECUTE, createBody()),
-      deps({ gitDeliveryAuthority: authority }),
+      deps({ gitDeliveryAuthority: authority, evidenceStore: cap.store }),
     );
 
-    expect((res.body as GitDeliveryPrExecuteResponseBody).status).toBe("failed");
+    // HTTP contract: the SAME 403 envelope the up-front admission gate returns — never a 200 claiming an
+    // internal, retryable failure for a request that was refused before anything was dispatched.
+    expect(res.status).toBe(403);
+    expect(res.body).toMatchObject({ error: { code: "GIT_DELIVERY_AUTHORITY_DENIED" } });
     expect(reads).toBe(2);
     expect(adapter.creates()).toBe(0);
+    // Evidence contract: no misleading "failed"/retryable record for an attempt the client is never told
+    // happened — consistent with the up-front denial, which also records nothing to the evidence ledger.
+    expect(cap.count()).toBe(0);
   });
 
   it("denies a base outside the active authority envelope before execution", async () => {

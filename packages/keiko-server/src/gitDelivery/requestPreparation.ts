@@ -68,6 +68,26 @@ interface GitDeliveryAuthorityContinuityInput {
   readonly target?: GitDeliveryAuthorityTarget | undefined;
   readonly admitted: GitDeliveryAuthorityIdentity;
   readonly next?: (() => boolean) | undefined;
+  // Optional out-parameter: when the continuity re-check denies (the admitted authority changed or
+  // was revoked between admission and remote dispatch), the denial's 403 RouteResult is written here
+  // — see GitDeliveryAuthorityContinuityDenialCapture for why the caller needs it.
+  readonly denialCapture?: GitDeliveryAuthorityContinuityDenialCapture | undefined;
+}
+
+// The continuity guard runs INSIDE the narrow remote adapter, right before the actual network/`gh api`
+// dispatch (see pushExecution.ts/prExecution.ts/mergeExecution.ts's authorityGuarded*Adapter). When it
+// denies, the adapter never spawns: it logs the F4 no-spawn marker (logGitDeliveryNoSpawnRefusal in
+// execution.ts) and resolves a synthetic, code-less "aborted" execution result instead of calling the
+// real adapter — so the gateway's execute phase has something to return. But that synthetic result is
+// NOT a real execution outcome: fed through the ordinary success/failure taxonomy it reads as a
+// transient, retryable "internal-error" (persisted to the evidence ledger and returned to the client
+// with HTTP 200), which is exactly wrong for a request that was refused before anything ran. The route
+// already knows how to answer an authority denial correctly (the SAME 403 GIT_DELIVERY_AUTHORITY_DENIED
+// body the admission gate returns for the up-front check) — this capture is how the continuity guard,
+// which fires deep inside the adapter, hands that 403 back up to the route so it can return the SAME
+// body instead of projecting the misleading synthetic result.
+export interface GitDeliveryAuthorityContinuityDenialCapture {
+  result?: RouteResult;
 }
 
 function deniedAuthorityGate(): GitDeliveryAuthorityGate {
@@ -161,7 +181,11 @@ export function gitDeliveryAuthorityContinuityGuard(
       input.target,
       { expectedAuthority: input.admitted },
     );
-    return latest.allowed && (input.next?.() ?? true);
+    if (!latest.allowed) {
+      if (input.denialCapture !== undefined) input.denialCapture.result = latest.result;
+      return false;
+    }
+    return input.next?.() ?? true;
   };
 }
 

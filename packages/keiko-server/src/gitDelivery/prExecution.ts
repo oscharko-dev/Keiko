@@ -55,6 +55,7 @@ import {
   type GitDeliveryMutationResponseBody,
 } from "./execution.js";
 import { processServerLogSink } from "../process-log-sink.js";
+import type { GitDeliveryAuthorityContinuityDenialCapture } from "./requestPreparation.js";
 
 // Default trusted PR policy: PERMIT `pr-create` / `pr-update` whose BASE is a legitimate integration
 // branch (dev, main, release/*, feat/*) and only within the protected-or-merge ceiling. A base outside
@@ -99,6 +100,10 @@ export interface GitDeliveryPullRequestSeams {
   readonly now?: (() => number) | undefined;
   readonly newActionId?: (() => string) | undefined;
   readonly beforeRemoteDispatch?: (() => boolean) | undefined;
+  // Set by the route alongside `beforeRemoteDispatch` when that guard is the continuity re-check (see
+  // GitDeliveryAuthorityContinuityDenialCapture). When present, a continuity denial suppresses evidence
+  // persistence for this synthetic, never-executed attempt instead of recording it as a failure.
+  readonly authorityDenialCapture?: GitDeliveryAuthorityContinuityDenialCapture | undefined;
 }
 
 function authorityGuardedPrAdapter(
@@ -174,7 +179,13 @@ export async function executeGovernedPullRequest(
       newActionId,
     },
   );
-  persistGitDeliveryEvidence(deps, result.lifecycle, snapshot, workspace.root, now);
+  // A continuity denial (caught by authorityGuardedPrAdapter above) means the adapter never dispatched —
+  // `result` is the synthetic no-spawn stand-in, not a real attempt. The route returns the captured 403
+  // instead of this result, so recording it here would leave a "failed"/retryable evidence entry for an
+  // attempt the client is never told happened. See GitDeliveryAuthorityContinuityDenialCapture.
+  if (seams.authorityDenialCapture?.result === undefined) {
+    persistGitDeliveryEvidence(deps, result.lifecycle, snapshot, workspace.root, now);
+  }
   return result;
 }
 

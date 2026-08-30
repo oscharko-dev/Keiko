@@ -26,9 +26,13 @@
 // Content-free in evidence: only the merge inputs (PR number, strategy, delete flag) and outcome enter the
 // ledger. CSRF + JSON content type are enforced centrally by server.ts.
 
-import type { GitDeliveryApprovalClaim } from "@oscharko-dev/keiko-contracts";
+import type {
+  GitDeliveryApprovalClaim,
+  GitDeliveryApprovalRequirement,
+} from "@oscharko-dev/keiko-contracts";
 import { isGitDeliveryMergeStrategyHint } from "@oscharko-dev/keiko-contracts/runtime/git-delivery";
 import type { GitMergeCommand } from "@oscharko-dev/keiko-tools";
+import type { WorkspaceInfo } from "@oscharko-dev/keiko-workspace";
 import type { RouteContext, RouteDefinition, RouteResult } from "../routes.js";
 import type { UiHandlerDeps } from "../deps.js";
 import { UNKNOWN_CORRELATION_ID } from "../correlation.js";
@@ -60,6 +64,8 @@ import {
   gitDeliveryAuthorityContinuityGuard,
   gitDeliveryAuthorityGate,
   prepareGitDeliveryRequest,
+  type GitDeliveryAuthorityContinuityDenialCapture,
+  type GitDeliveryAuthorityIdentity,
   type GitDeliveryRequestErrors,
 } from "./requestPreparation.js";
 
@@ -282,6 +288,55 @@ function mergeAuthorityTarget(command: GitMergeCommand): {
   return { headBranchName: command.headBranchName, baseBranchName: command.baseBranchName };
 }
 
+type MergeAuthorityTarget = ReturnType<typeof mergeAuthorityTarget>;
+
+// Runs the continuity-guarded dispatch: builds the guard (capturing a mid-flight denial's 403), calls
+// the merge gateway, and — when the guard denied — returns that SAME 403 instead of projecting the
+// gateway's synthetic no-spawn result as a misleading 200 internal failure. Split out of the handler
+// purely to keep the handler under the repo's max-lines-per-function bar.
+async function dispatchGovernedMerge(
+  ctx: RouteContext,
+  deps: UiHandlerDeps,
+  seams: GitDeliveryMergeSeams,
+  command: GitMergeCommand,
+  verifiedApproval: GitDeliveryApprovalRequirement,
+  workspace: WorkspaceInfo,
+  projectId: string,
+  target: MergeAuthorityTarget,
+  authority: GitDeliveryAuthorityIdentity,
+  correlationId: string,
+): Promise<RouteResult> {
+  const denialCapture: GitDeliveryAuthorityContinuityDenialCapture = {};
+  const beforeRemoteDispatch = gitDeliveryAuthorityContinuityGuard({
+    ctx,
+    deps,
+    projectId,
+    workspace,
+    operation: "merge",
+    target,
+    admitted: authority,
+    next: seams.beforeRemoteDispatch,
+    denialCapture,
+  });
+  try {
+    const result = await executeGovernedMerge(
+      command,
+      verifiedApproval,
+      workspace,
+      deps,
+      { ...seams, beforeRemoteDispatch, authorityDenialCapture: denialCapture },
+      correlationId,
+    );
+    // The continuity guard denied mid-flight (revoked/replaced authority): nothing was dispatched, and
+    // `result` is the gateway's synthetic no-spawn stand-in. Return the SAME 403 the up-front admission
+    // gate would have returned, not a 200 that projects the stand-in as a retryable internal failure.
+    if (denialCapture.result !== undefined) return denialCapture.result;
+    return { status: 200, body: deps.redactor(gitDeliveryMergeExecuteResponse(result)) };
+  } catch {
+    return errResult(409, "GIT_DELIVERY_MERGE_WORKTREE_UNAVAILABLE");
+  }
+}
+
 async function handleMergeExecute(
   ctx: RouteContext,
   deps: UiHandlerDeps,
@@ -307,29 +362,18 @@ async function handleMergeExecute(
     nowMs: (seams.now ?? Date.now)(),
   });
   if (verifiedApproval === undefined) return errResult(400, "GIT_DELIVERY_MERGE_BAD_REQUEST");
-  const beforeRemoteDispatch = gitDeliveryAuthorityContinuityGuard({
+  return dispatchGovernedMerge(
     ctx,
     deps,
-    projectId,
+    seams,
+    command,
+    verifiedApproval,
     workspace,
-    operation: "merge",
+    projectId,
     target,
-    admitted: authority,
-    next: seams.beforeRemoteDispatch,
-  });
-  try {
-    const result = await executeGovernedMerge(
-      command,
-      verifiedApproval,
-      workspace,
-      deps,
-      { ...seams, beforeRemoteDispatch },
-      correlationId,
-    );
-    return { status: 200, body: deps.redactor(gitDeliveryMergeExecuteResponse(result)) };
-  } catch {
-    return errResult(409, "GIT_DELIVERY_MERGE_WORKTREE_UNAVAILABLE");
-  }
+    authority,
+    correlationId,
+  );
 }
 
 export const createHandleMergeExecute = (
