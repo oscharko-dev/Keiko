@@ -510,6 +510,60 @@ describe("merge execute (governed)", () => {
     expect(adapter.merges()).toBe(0);
   });
 
+  // F4: the SAME mid-flight authority-replacement scenario as the previous test, but asserting the
+  // activity-log shape rather than just the response status. The continuity guard's refusal never
+  // reaches the real merge adapter (adapter.merges() stays 0, proven above) — the kernel still gets
+  // SOME result back from the adapter wrapper (a synthetic { outcome: "aborted" }), and without an
+  // explicit marker that synthetic, never-spawned result is indistinguishable in the evidence stream
+  // from a genuine `gh api` merge call that was itself cancelled mid-flight. This line is that marker.
+  it("logs git.delivery.dispatch.no-spawn when authority replacement stops the merge before dispatch", async () => {
+    const adapter = recordingMergeAdapter(READY_PROVIDER);
+    const approvalStore = createInMemoryGitDeliveryApprovalStore();
+    const approval = issueMergeApproval(approvalStore);
+    const baseAuthority = permittedGitDeliveryAuthority(
+      () => projectId,
+      () => projectId,
+      "autonomous-delivery",
+      { headRef: "feat/x", baseRef: "main", allowDetachedHead: false, allowedPrefixes: ["feat/"] },
+    );
+    let reads = 0;
+    const authority = {
+      current: (nowIso: string): ReturnType<typeof baseAuthority.current> => {
+        reads += 1;
+        const active = baseAuthority.current(nowIso);
+        if (active === undefined || reads === 1) return active;
+        return { ...active, runId: "replacement-run", envelopeDigest: "d".repeat(64) };
+      },
+    };
+    const activity: ServerLogEvent[] = [];
+    const handler = createHandleMergeExecute({
+      execution: seams({
+        mergeAdapterFactory: () => adapter.adapter,
+        approvalStore,
+        activityLog: {
+          write: (event): void => {
+            activity.push(event);
+          },
+        },
+      }),
+    });
+
+    const res = await handler(
+      {
+        ...ctxFor(EXECUTE, mergeBody({ approval })),
+        correlationId: "request-correlation-merge-no-spawn",
+      },
+      deps({ gitDeliveryAuthority: authority }),
+    );
+
+    expect((res.body as GitDeliveryMergeExecuteResponseBody).status).toBe("failed");
+    expect(adapter.merges()).toBe(0);
+    const marker = activity.find((event) => event.op === "git.delivery.dispatch.no-spawn");
+    expect(marker).toBeDefined();
+    expect(marker?.correlationId).toBe("request-correlation-merge-no-spawn");
+    expect(marker?.extra?.actionKind).toBe("merge");
+  });
+
   it("normalizes a provider rejection into a typed reason + recovery disposition (AC3/AC4)", async () => {
     const adapter = recordingMergeAdapter(READY_PROVIDER, {
       schemaVersion: "1",

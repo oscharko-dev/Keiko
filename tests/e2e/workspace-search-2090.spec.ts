@@ -11,8 +11,8 @@ import {
   firstPane,
   openEditorWorkspace,
   paneCount,
-  typeIntoActiveEditor,
 } from "./support/editorWorkspace.js";
+import { replaceEditorBuffer } from "./support/editor-chord.js";
 
 const MUTATION_HEADERS = { "X-Keiko-CSRF": "1" };
 const EVIDENCE_PATH = join(
@@ -293,7 +293,7 @@ test("replace preview applies closed files and dirty open buffers only after con
   ]);
   await page.goto("/");
   const workspace = await openEditorWorkspace(page);
-  await typeIntoActiveEditor(
+  await replaceEditorBuffer(
     page,
     firstPane(workspace),
     `export const replaceTarget = "replaceNeedle";

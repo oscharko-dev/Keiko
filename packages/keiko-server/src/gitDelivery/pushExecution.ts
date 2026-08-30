@@ -25,6 +25,7 @@ import {
   evaluateGitPreflight,
   evaluateGitPublishEffectivePolicy,
   runGitPublish,
+  type GitPublishExecResult,
   type GitPublishLifecycleResult,
   type GitPushCommand,
   type GitRemotePublishAdapter,
@@ -43,11 +44,13 @@ import {
   defaultGitDeliveryActionId,
   gitDeliveryMutationResponse,
   gitDeliveryTerminationHandler,
+  logGitDeliveryNoSpawnRefusal,
   persistGitDeliveryEvidence,
   readWorktreeSnapshotFor,
   type GitDeliveryMutationResponseBody,
 } from "./execution.js";
 import { defaultMintableRepoPack } from "./policyPackMintability.js";
+import { processServerLogSink } from "../process-log-sink.js";
 
 // The shared/protected remote branches a governed push may never target directly. This is the
 // enforcement of the "no direct push to dev" hard denial (and its equivalents in a repository that
@@ -119,13 +122,18 @@ export interface GitDeliveryPublishSeams {
 function authorityGuardedPublishAdapter(
   adapter: GitRemotePublishAdapter,
   beforeRemoteDispatch: (() => boolean) | undefined,
+  activityLog: ServerLogSink,
+  correlationId: string | undefined,
 ): GitRemotePublishAdapter {
   if (beforeRemoteDispatch === undefined) return adapter;
   return {
-    publish: (request) =>
-      beforeRemoteDispatch()
-        ? adapter.publish(request)
-        : Promise.resolve({ schemaVersion: "1", outcome: "aborted", durationMs: 0 }),
+    publish: (request): Promise<GitPublishExecResult> => {
+      if (beforeRemoteDispatch()) return adapter.publish(request);
+      // F4: no process is spawned for this attempt — mark it explicitly before returning the
+      // synthetic result (see logGitDeliveryNoSpawnRefusal in execution.ts).
+      logGitDeliveryNoSpawnRefusal(activityLog, "push", correlationId);
+      return Promise.resolve({ schemaVersion: "1", outcome: "aborted", durationMs: 0 });
+    },
   };
 }
 
@@ -170,10 +178,13 @@ export async function executeGovernedPublish(
   correlationId?: string,
 ): Promise<GitPublishLifecycleResult> {
   const now = seams.now ?? Date.now;
+  const activityLog = seams.activityLog ?? processServerLogSink();
   const snapshot = await readWorktreeSnapshotFor(workspace, seams, now, correlationId);
   const adapter = authorityGuardedPublishAdapter(
     publishAdapterFor(workspace, seams, now, correlationId),
     seams.beforeRemoteDispatch,
+    activityLog,
+    correlationId,
   );
   const packs = seams.policyPacks ?? defaultMintableRepoPack(KEIKO_DEFAULT_PUBLISH_POLICY_PACK);
   const newActionId =

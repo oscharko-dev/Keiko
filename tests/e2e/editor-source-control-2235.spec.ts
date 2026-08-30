@@ -10,9 +10,9 @@ import {
   createGitEditorWorkspace,
   openEditorWorkspace,
   seedEditorWindow,
-  typeIntoActiveEditor,
   type GitEditorWorkspace,
 } from "./support/editorWorkspace.js";
+import { replaceEditorBuffer } from "./support/editor-chord.js";
 
 const MUTATION_HEADERS = { "X-Keiko-CSRF": "1" };
 
@@ -266,7 +266,7 @@ test("Files reflects conflict, folder, ignored, and post-save status", async ({ 
   ).toBeVisible();
   const beforeSave = statusReads;
   const workspace = page.locator(EDITOR_SELECTORS.workspace).first();
-  await typeIntoActiveEditor(
+  await replaceEditorBuffer(
     page,
     workspace.locator(EDITOR_SELECTORS.pane).first(),
     "export const nested = 2235;\n",

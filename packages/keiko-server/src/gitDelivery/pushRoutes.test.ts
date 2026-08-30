@@ -604,3 +604,51 @@ describe("executeGovernedPublish — default publish-adapter termination wiring 
     expect(activity[0]?.extra?.childPid).toBe(4321);
   });
 });
+
+// F4: a `beforeRemoteDispatch` refusal (the accepted authority changed mid-flight, between admission
+// and this attempt's actual dispatch) never reaches the real remote adapter — the synthetic
+// `{ outcome: "aborted" }` result the adapter wrapper returns instead must be explicitly marked as a
+// no-spawn refusal, so it cannot be confused in the evidence stream with a genuine dispatch that DID
+// spawn a push and was then cancelled mid-flight (both would otherwise share the identical
+// `{ outcome: "aborted", errorCode: undefined }` shape).
+describe("executeGovernedPublish — no-spawn refusal is marked, never reaches the real adapter (F4)", () => {
+  it("logs git.delivery.dispatch.no-spawn and never calls the real publish adapter when beforeRemoteDispatch refuses", async () => {
+    const activity: ServerLogEvent[] = [];
+    let realAdapterCalls = 0;
+    await executeGovernedPublish(
+      WIRING_COMMAND,
+      { required: false },
+      testWorkspace("/nonexistent/keiko-gd-push-no-spawn"),
+      {
+        evidenceStore: {
+          put: () => "",
+          list: () => [],
+          get: () => undefined,
+          delete: () => undefined,
+        },
+        redactor: buildRedactor({}),
+      },
+      {
+        snapshotReader: () => Promise.resolve(SNAPSHOT),
+        publishAdapterFactory: (): GitRemotePublishAdapter => ({
+          publish: (): Promise<GitPublishExecResult> => {
+            realAdapterCalls += 1;
+            return Promise.resolve({ schemaVersion: "1", outcome: "succeeded", durationMs: 5 });
+          },
+        }),
+        beforeRemoteDispatch: () => false,
+        activityLog: {
+          write: (event): void => {
+            activity.push(event);
+          },
+        },
+      },
+      "request-correlation-push-no-spawn",
+    );
+    expect(realAdapterCalls).toBe(0);
+    const marker = activity.find((event) => event.op === "git.delivery.dispatch.no-spawn");
+    expect(marker).toBeDefined();
+    expect(marker?.correlationId).toBe("request-correlation-push-no-spawn");
+    expect(marker?.extra?.actionKind).toBe("push");
+  });
+});

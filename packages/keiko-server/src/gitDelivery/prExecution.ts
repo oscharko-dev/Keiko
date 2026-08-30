@@ -49,10 +49,12 @@ import {
   defaultGitDeliveryActionId,
   gitDeliveryMutationResponse,
   gitDeliveryTerminationHandler,
+  logGitDeliveryNoSpawnRefusal,
   persistGitDeliveryEvidence,
   readWorktreeSnapshotFor,
   type GitDeliveryMutationResponseBody,
 } from "./execution.js";
+import { processServerLogSink } from "../process-log-sink.js";
 
 // Default trusted PR policy: PERMIT `pr-create` / `pr-update` whose BASE is a legitimate integration
 // branch (dev, main, release/*, feat/*) and only within the protected-or-merge ceiling. A base outside
@@ -102,14 +104,22 @@ export interface GitDeliveryPullRequestSeams {
 function authorityGuardedPrAdapter(
   adapter: GitPullRequestAdapter,
   beforeRemoteDispatch: (() => boolean) | undefined,
+  activityLog: ServerLogSink,
+  correlationId: string | undefined,
 ): GitPullRequestAdapter {
   if (beforeRemoteDispatch === undefined) return adapter;
   const aborted = { schemaVersion: "1", outcome: "aborted", durationMs: 0 } as const;
+  // F4: no process is spawned for this attempt — mark it explicitly before returning the synthetic
+  // result (see logGitDeliveryNoSpawnRefusal in execution.ts).
+  const noSpawn = (actionKind: "pr-create" | "pr-update"): Promise<typeof aborted> => {
+    logGitDeliveryNoSpawnRefusal(activityLog, actionKind, correlationId);
+    return Promise.resolve(aborted);
+  };
   return {
     createPullRequest: (request) =>
-      beforeRemoteDispatch() ? adapter.createPullRequest(request) : Promise.resolve(aborted),
+      beforeRemoteDispatch() ? adapter.createPullRequest(request) : noSpawn("pr-create"),
     updatePullRequest: (request) =>
-      beforeRemoteDispatch() ? adapter.updatePullRequest(request) : Promise.resolve(aborted),
+      beforeRemoteDispatch() ? adapter.updatePullRequest(request) : noSpawn("pr-update"),
   };
 }
 
@@ -142,10 +152,13 @@ export async function executeGovernedPullRequest(
   correlationId?: string,
 ): Promise<GitPullRequestLifecycleResult> {
   const now = seams.now ?? Date.now;
+  const activityLog = seams.activityLog ?? processServerLogSink();
   const snapshot = await readWorktreeSnapshotFor(workspace, seams, now, correlationId);
   const adapter = authorityGuardedPrAdapter(
     prAdapterFor(workspace, seams, now, correlationId),
     seams.beforeRemoteDispatch,
+    activityLog,
+    correlationId,
   );
   const packs = seams.policyPacks ?? defaultMintableRepoPack(KEIKO_DEFAULT_PR_POLICY_PACK);
   const newActionId =

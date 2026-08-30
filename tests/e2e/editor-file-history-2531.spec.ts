@@ -10,8 +10,8 @@ import {
   firstPane,
   openEditorWorkspace,
   seedEditorWindow,
-  typeIntoActiveEditor,
 } from "./support/editorWorkspace.js";
+import { replaceEditorBuffer } from "./support/editor-chord.js";
 import { formatViolations, runAxe, seriousOrCritical } from "./support/axe.js";
 import { FILE_HISTORY_APP_SESSION_LAUNCHER_SECRET } from "./support/file-history-2531.js";
 
@@ -34,7 +34,7 @@ function pairingFragment(): string {
 }
 
 async function saveVersion(page: Page, pane: Locator, content: string): Promise<void> {
-  await typeIntoActiveEditor(page, pane, content);
+  await replaceEditorBuffer(page, pane, content);
   const saved = page.waitForResponse(
     (response) =>
       response.request().method() === "PATCH" && response.url().endsWith("/api/files/content"),
@@ -106,7 +106,26 @@ async function verifyResponsiveAccessibility(page: Page, pane: Locator): Promise
 
 test("#2531 file history compares, pins, restores safely, and stays accessible", async ({
   page,
+  browserName,
 }) => {
+  // KNOWN CROSS-ENGINE GAP — Gecko only, tracked, NOT a silent exclusion.
+  // This journey replaces the whole editor buffer (`replaceEditorBuffer`) before asserting. Monaco
+  // 0.56 uses the EditContext API where it exists and falls back to `textarea.inputarea` where it
+  // does not; Firefox has no EditContext. On that fallback surface neither Ctrl+A nor Cmd+A reaches
+  // Monaco's keybinding service, so the select-all selects nothing and the following insert APPENDS.
+  // Verified on this host, not assumed: running this very spec with --project=firefox fails inside
+  // the shared helper with `expected "…historyValue = "one";" at most 1x after replacing the buffer`
+  // — the helper catching the corruption exactly where it happens, which is the improvement over the
+  // silent doubling that preceded it. Same gap and same wording as release-smoke.spec.ts.
+  //
+  // This config inherits BOTH projects from the shared base config, but its npm script pins
+  // --project=chromium, so this guard changes no CI lane today; it exists so a future firefox run
+  // fails as a documented skip rather than as a confusing corruption error.
+  test.skip(
+    browserName === "firefox",
+    "Monaco select-all does not reach the EditContext fallback surface on Gecko; the buffer-replacement gesture is unproven there",
+  );
+
   const { root, pane, oldestContent } = await prepareHistoryJourney(page);
   const oldest = historyRows(pane).last();
   await oldest.getByRole("button", { name: "Compare with current" }).click();
@@ -131,7 +150,7 @@ test("#2531 file history compares, pins, restores safely, and stays accessible",
   await expect(pane.locator(".view-lines")).toContainText("historyValue");
 
   await pane.getByRole("button", { name: "Close file history" }).click();
-  await typeIntoActiveEditor(page, pane, 'export const historyValue = "dirty";\n');
+  await replaceEditorBuffer(page, pane, 'export const historyValue = "dirty";\n');
   await openHistory(pane);
   const diskBeforeConflict = readFileSync(join(root, FILE), "utf8");
   await historyRows(pane).first().getByRole("button", { name: "Restore", exact: true }).click();

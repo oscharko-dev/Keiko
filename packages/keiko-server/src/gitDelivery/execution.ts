@@ -127,6 +127,35 @@ export function gitDeliveryTerminationHandler(
   };
 }
 
+// F4: a run refused by the authority-continuity guard immediately before remote dispatch (the accepted
+// authority changed mid-flight, or the operator's runtime authority was revoked between admission and
+// this attempt) never reaches a real git/gh subprocess — pushExecution.ts / prExecution.ts /
+// mergeExecution.ts's `authorityGuarded*Adapter` wrappers return a SYNTHETIC
+// `{ outcome: "aborted", durationMs: 0 }` result instead of calling the real adapter. Left unmarked,
+// that synthetic result is INDISTINGUISHABLE in the evidence stream from a genuine dispatch that DID
+// reach a real subprocess and was then cancelled mid-flight (keiko-tools' CommandCancelledError path
+// also produces `{ outcome: "aborted", errorCode: undefined }`) — an operator (or `keiko support
+// analyze`) cannot tell "nothing ever ran" from "something ran and was terminated" from the evidence
+// record alone. The wire vocabulary (keiko-contracts' closed GitDeliveryExecutionErrorCode) has no
+// slot for "never spawned" that would not also misattribute a "user-fixable" git-state recovery hint
+// this refusal does not carry, so this body-free activity-log line is the explicit, LOCAL marker
+// instead: written the instant the guard refuses, strictly BEFORE the synthetic result is returned, so
+// its presence alone (never inferred from a zero duration or cross-referenced against a separate
+// authority-decision line) proves no process was spawned for this specific dispatch attempt.
+export function logGitDeliveryNoSpawnRefusal(
+  activityLog: ServerLogSink,
+  actionKind: GitDeliveryActionKind,
+  correlationId: string | undefined,
+): void {
+  activityLog.write({
+    category: "security",
+    op: "git.delivery.dispatch.no-spawn",
+    correlationId: correlationId ?? UNKNOWN_CORRELATION_ID,
+    status: 409,
+    extra: { actionKind },
+  });
+}
+
 export function readWorktreeSnapshotFor(
   workspace: WorkspaceInfo,
   seams: GitDeliveryExecutionSeams,

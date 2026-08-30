@@ -36,9 +36,8 @@ import {
   seedEditorWindow,
   splitActivePane,
   tabLabels,
-  typeIntoActiveEditor,
 } from "./support/editorWorkspace.js";
-import { editorModifier } from "./support/editor-chord.js";
+import { editorModifier, replaceEditorBuffer } from "./support/editor-chord.js";
 
 const APP_FILE = "src/App.tsx";
 const HELPER_FILE = "src/helper.ts";
@@ -450,7 +449,7 @@ async function scenarioDirtyBuffer(page: Page): Promise<void> {
   const workspace = await openSeededEditor(page);
   const pane = firstPane(workspace);
 
-  await typeIntoActiveEditor(page, pane, "export const dirty = true;\n");
+  await replaceEditorBuffer(page, pane, "export const dirty = true;\n");
 
   await expect(tabFor(pane, APP_FILE)).toHaveAttribute("data-dirty", "true");
   await expect(
@@ -464,7 +463,7 @@ async function scenarioDirtyCloseGuard(page: Page, testInfo: TestInfo): Promise<
   const workspace = await openSeededEditor(page);
   const pane = firstPane(workspace);
 
-  await typeIntoActiveEditor(page, pane, "export const stillDirty = 1;\n");
+  await replaceEditorBuffer(page, pane, "export const stillDirty = 1;\n");
   await expect(tabFor(pane, APP_FILE)).toHaveAttribute("data-dirty", "true");
 
   await closeButton(pane, APP_FILE).click();
@@ -495,7 +494,7 @@ async function scenarioRecovery(page: Page, testInfo: TestInfo): Promise<void> {
   const workspace = await openSeededEditor(page);
   const pane = firstPane(workspace);
 
-  await typeIntoActiveEditor(page, pane, "export const recoverMe = 42;\n");
+  await replaceEditorBuffer(page, pane, "export const recoverMe = 42;\n");
   await expect(tabFor(pane, APP_FILE)).toHaveAttribute("data-dirty", "true");
 
   // The snapshot write is an async effect; poll the IndexedDB store until it lands.
@@ -580,7 +579,7 @@ async function scenarioAccessibility(page: Page): Promise<void> {
   // The dirty-close dialog contains focus and closes on Escape.
   const appPane = workspace.locator(EDITOR_SELECTORS.pane).nth(1);
   await expect(tabHit(appPane, APP_FILE)).toHaveAttribute("aria-selected", "true");
-  await typeIntoActiveEditor(page, appPane, "export const a11y = true;\n");
+  await replaceEditorBuffer(page, appPane, "export const a11y = true;\n");
   await closeButton(appPane, APP_FILE).click();
   const dialog = workspace.locator(EDITOR_SELECTORS.dirtyDialog);
   await expect(dialog).toBeVisible();

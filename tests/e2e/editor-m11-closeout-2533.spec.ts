@@ -16,8 +16,8 @@ import {
   openEditorWorkspace,
   openTreeFile,
   revokeEditorWorkspaceTrust,
-  typeIntoActiveEditor,
 } from "./support/editorWorkspace.js";
+import { replaceEditorBuffer } from "./support/editor-chord.js";
 import { FILE_HISTORY_APP_SESSION_LAUNCHER_SECRET } from "./support/file-history-2531.js";
 
 const FILE = "src/app.ts";
@@ -362,7 +362,7 @@ async function switchProfile(
 }
 
 async function saveVersion(page: Page, pane: Locator, content: string): Promise<void> {
-  await typeIntoActiveEditor(page, pane, content);
+  await replaceEditorBuffer(page, pane, content);
   const saved = page.waitForResponse(
     (response) =>
       response.request().method() === "PATCH" && response.url().endsWith("/api/files/content"),
@@ -395,7 +395,7 @@ async function leaveUnsavedHotExitEdit(page: Page, pane: Locator): Promise<void>
       response.request().method() === "POST" &&
       response.url().endsWith("/api/editor/hot-exit/write"),
   );
-  await typeIntoActiveEditor(page, pane, UNSAVED_VERSION);
+  await replaceEditorBuffer(page, pane, UNSAVED_VERSION);
   expect((await persisted).ok()).toBe(true);
   // The index write is a separate IndexedDB transaction the POST only precedes, so settle on the
   // product's own observable outcome — the dirty marker the same effect gates on — before dumping.
@@ -524,17 +524,34 @@ test.afterAll(() => {
 
 test("mixed-trust multi-root, profile switching, and local-history restore compose end to end", async ({
   page,
+  browserName,
 }, testInfo) => {
+  // KNOWN CROSS-ENGINE GAP — Gecko only, tracked, NOT a silent exclusion.
+  // This journey replaces the whole editor buffer (`replaceEditorBuffer`) before asserting. Monaco
+  // 0.56 uses the EditContext API where it exists and falls back to `textarea.inputarea` where it
+  // does not; Firefox has no EditContext. On that fallback surface neither Ctrl+A nor Cmd+A reaches
+  // Monaco's keybinding service, so the select-all selects nothing and the following insert APPENDS.
+  // Verified on this host, not assumed: the sibling #2531 spec run with --project=firefox fails
+  // inside the shared helper with `expected "…" at most 1x after replacing the buffer` — the helper
+  // catching the corruption where it happens, which is the improvement over the silent doubling that
+  // preceded it. Same gap and same wording as release-smoke.spec.ts.
+  //
+  // This config inherits BOTH projects from the shared base config, but its npm script pins
+  // --project=chromium, so this guard changes no CI lane today; it exists so a future firefox run
+  // fails as a documented skip rather than as a confusing corruption error.
+  test.skip(
+    browserName === "firefox",
+    "Monaco select-all does not reach the EditContext fallback surface on Gecko; the buffer-replacement gesture is unproven there",
+  );
   const { harness, switched } = await prepareCloseoutJourney(page);
   const journeyPage = switched.page;
   const editor = await reopenTrustedAlphaAfterProfileSwitch(journeyPage, harness.alpha.root);
   const pane = firstPane(editor);
   await saveVersion(journeyPage, pane, VERSION_ONE);
   // Read the oldest checkpoint's content from disk instead of hard-coding it (the sibling #2531
-  // journey established this pattern): `typeIntoActiveEditor` selects-all-and-replaces, but how
-  // much Monaco actually selects differs per platform/focus timing, so a literal expectation
-  // encodes one platform's artifact. What restore must guarantee is exactly "the file equals the
-  // oldest checkpoint" — assert that.
+  // journey established this pattern): `replaceEditorBuffer` now VERIFIES the replacement rather
+  // than assuming it, but what restore must guarantee is exactly "the file equals the oldest
+  // checkpoint", and asserting that directly stays independent of how the buffer got there.
   const oldestContent = readFileSync(join(harness.alpha.root, FILE), "utf8");
   await saveVersion(journeyPage, pane, VERSION_TWO);
   const historyRestoreMs = await restoreOldest(journeyPage, pane);

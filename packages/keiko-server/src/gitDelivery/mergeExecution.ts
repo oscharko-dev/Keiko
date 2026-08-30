@@ -35,6 +35,7 @@ import {
   runGitMerge,
   type GitMergeAdapter,
   type GitMergeCommand,
+  type GitMergeExecResult,
   type GitMergeLifecycleResult,
   type GitMergeProviderReadiness,
   type GitWorktreeSnapshot,
@@ -49,10 +50,12 @@ import {
   defaultGitDeliveryActionId,
   gitDeliveryMutationResponse,
   gitDeliveryTerminationHandler,
+  logGitDeliveryNoSpawnRefusal,
   persistGitDeliveryEvidence,
   readWorktreeSnapshotFor,
   type GitDeliveryMutationResponseBody,
 } from "./execution.js";
+import { processServerLogSink } from "../process-log-sink.js";
 
 // Default trusted merge policy: merge is APPROVAL-GATED — the explicit final, high-risk confirmation a
 // merge requires (AC1). No approval token ⇒ approval-required; every other action kind is fail-closed via
@@ -86,14 +89,19 @@ export interface GitDeliveryMergeSeams {
 function authorityGuardedMergeAdapter(
   adapter: GitMergeAdapter,
   beforeRemoteDispatch: (() => boolean) | undefined,
+  activityLog: ServerLogSink,
+  correlationId: string | undefined,
 ): GitMergeAdapter {
   if (beforeRemoteDispatch === undefined) return adapter;
   return {
     readMergeReadiness: (request) => adapter.readMergeReadiness(request),
-    mergePullRequest: (request) =>
-      beforeRemoteDispatch()
-        ? adapter.mergePullRequest(request)
-        : Promise.resolve({ schemaVersion: "1", outcome: "aborted", durationMs: 0 }),
+    mergePullRequest: (request): Promise<GitMergeExecResult> => {
+      if (beforeRemoteDispatch()) return adapter.mergePullRequest(request);
+      // F4: no process is spawned for this attempt — mark it explicitly before returning the
+      // synthetic result (see logGitDeliveryNoSpawnRefusal in execution.ts).
+      logGitDeliveryNoSpawnRefusal(activityLog, "merge", correlationId);
+      return Promise.resolve({ schemaVersion: "1", outcome: "aborted", durationMs: 0 });
+    },
   };
 }
 
@@ -148,10 +156,13 @@ export async function executeGovernedMerge(
   correlationId?: string,
 ): Promise<GitMergeLifecycleResult> {
   const now = seams.now ?? Date.now;
+  const activityLog = seams.activityLog ?? processServerLogSink();
   const snapshot = await readWorktreeSnapshotFor(workspace, seams, now, correlationId);
   const adapter = authorityGuardedMergeAdapter(
     mergeAdapterFor(workspace, seams, now, correlationId),
     seams.beforeRemoteDispatch,
+    activityLog,
+    correlationId,
   );
   const packs = seams.policyPacks ?? defaultMintableRepoPack(KEIKO_DEFAULT_MERGE_POLICY_PACK);
   const newActionId =
