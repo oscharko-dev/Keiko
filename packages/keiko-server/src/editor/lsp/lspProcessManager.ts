@@ -840,20 +840,19 @@ async function disposeManager(
       },
     );
   }
-  // F1 (PR reviewer finding): SIGTERM, then SIGKILL at the grace deadline, has been requested by
-  // this point, and the branch above is skipped entirely when there was never a child to begin with.
-  //
-  // The original wording here — "escalateKill only resolves once it has exited" — was NOT true of
-  // the grace-deadline path, which settles on the SIGKILL request (PR #3355 review, P1; the
-  // primitive now says so at its own definition). Clearing ownership does not need that guarantee,
-  // and this is the reason it is correct without it: after dispose this manager no longer owns the
-  // pid whatever the child is doing, and it is CARRYING the pid that is unsafe — that is what let an
-  // OS-reused pid masquerade as ours in a reconstructed support timeline. Releasing it early is the
-  // fail-safe direction; holding it is not. Clearing the state HERE, at the layer that owns it, means every lifecycle
-  // event from here on (including the terminal DISPOSED transition below) correctly omits
-  // `childPid` per the contract on `LspLifecycleEvent.childPid`: "present only for a current
-  // running child... absent after cleanup." Leaving it set let the OS-reused pid of a long-dead
-  // child masquerade as still owned by this manager in a reconstructed support timeline.
+  // F1 (PR reviewer finding): SIGTERM, then SIGKILL at the grace deadline, has been REQUESTED by
+  // this point — not necessarily OBSERVED. The branch above is skipped entirely when there was
+  // never a child to begin with. Clearing `state.child` here does not depend on the child actually
+  // having exited: "escalateKill only resolves once it has exited" was never true of the
+  // grace-deadline path, which settles on the SIGKILL request (PR #3355 review, P1; the primitive
+  // now says so at its own definition), and clearing ownership does not need that guarantee anyway.
+  // After dispose this manager no longer owns the pid regardless of what the child is doing, and
+  // CARRYING the pid past that point is the unsafe direction — it is what let an OS-reused pid
+  // masquerade as ours in a reconstructed support timeline. Releasing it here, at the layer that
+  // owns `RuntimeState`, is also what makes every lifecycle event from here on (including the
+  // terminal DISPOSED transition below) correctly omit `childPid` per the contract on
+  // `LspLifecycleEvent.childPid`: "present only for a current running child... absent after
+  // cleanup."
   state.child = undefined;
   const cleanupSucceeded = cleanupSpawnResources(state);
   if (!cleanupSucceeded) transition("CRASHED", "RUNTIME_STATE_CLEANUP_FAILED");
