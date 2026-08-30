@@ -13,6 +13,7 @@ import {
 } from "./support/editorWorkspace.js";
 import { formatViolations, runAxe, seriousOrCritical } from "./support/axe.js";
 import { expectViewportModal } from "./support/modal.js";
+import { clickWindowChromeButton } from "./support/window-chrome.js";
 
 const MUTATION_HEADERS = { "X-Keiko-CSRF": "1" };
 const SOURCE = "src/index.ts";
@@ -149,8 +150,10 @@ async function grantFromManagement(page: Page): Promise<Locator> {
 }
 
 async function assertTrustedCapability(page: Page): Promise<void> {
-  await page.getByRole("button", { name: "Close Workspace Trust window" }).click();
-  await page.getByRole("button", { name: "Close Settings window" }).click();
+  const workspaceTrustWindow = page.getByRole("region", { name: /^Workspace Trust/u });
+  await clickWindowChromeButton(workspaceTrustWindow, "Close Workspace Trust window");
+  const settingsWindow = page.getByRole("region", { name: /^Settings/u });
+  await clickWindowChromeButton(settingsWindow, "Close Settings window");
   await expectPaletteCommand(page, "Run Typecheck");
 }
 

@@ -27,6 +27,7 @@ import {
   openEditorWorkspace,
   seedEditorWindow,
 } from "./support/editorWorkspace.js";
+import { clickWindowChromeButton } from "./support/window-chrome.js";
 
 // "ControlOrMeta", NOT `editorModifier`: `quick-access.commands` is a PRODUCT shortcut (the
 // UnifiedQuickAccessPalette shell component, i18n key `quickAccess.query.commands` — "Command
@@ -258,7 +259,8 @@ test("fixing and saving in Monaco before rerunning clears the problem", async ({
   await openProblems(page);
   await awaitProblemsRow(page);
 
-  await page.getByRole("button", { name: "Close Problems window" }).click();
+  const problemsWindow = page.getByRole("region", { name: /^Problems/u });
+  await clickWindowChromeButton(problemsWindow, "Close Problems window");
   await expect(page.locator(`[data-testid="problems-row"]`)).toHaveCount(0);
 
   const editorInput = pane.getByRole("textbox", { name: /^Editor:/u }).first();
