@@ -27,6 +27,13 @@ export const D12_MEASUREMENT_TOOLCHAIN_PATHS = Object.freeze([
   "tests/e2e/fixtures/editor-debugging-2348/throws.ts",
   "tests/e2e/fixtures/keiko.e2e.config.json",
   "tests/e2e/support/dapOperatorProvisioning.ts",
+  // Both members below are imported BY the measuring specs and so shape measured actions, but were
+  // missing from this list (PR #3355 review, P1): a change to either could move the numbers without
+  // moving measurementHarnessSha256, which is the one thing this digest exists to prevent.
+  // `scripts/__tests__/d12-toolchain-closure.test.mjs` now derives the requirement instead of
+  // trusting this list to be maintained by hand.
+  "tests/e2e/support/debugSessionStartCapture.ts",
+  "tests/e2e/support/editor-chord.ts",
   "tests/e2e/support/editorWorkspace.ts",
 ]);
 

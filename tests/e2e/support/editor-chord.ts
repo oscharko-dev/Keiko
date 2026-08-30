@@ -100,6 +100,69 @@ function normalizedEditorLines(text: string): readonly string[] {
 }
 
 /**
+ * The replacement postcondition, as a pure function so it can be tested against fixtures instead of
+ * only against a live editor. Returns the reasons the rendered buffer is NOT a clean replacement of
+ * `staleLines` by `text`; an empty array means it is.
+ *
+ * Three things must hold, and the first two were missing (PR #3355 review, P2). The old check asked
+ * only "does no expected line appear more often than expected, and does the first one appear at
+ * all", which accepted both corruptions it claimed to catch:
+ *
+ *   expected ["new"]  actual ["old", "new"]  -> "new" appears once, "new" is present  => PASSED
+ *   expected ["new"]  actual [""]            -> `"new".startsWith("")` is true        => PASSED
+ *
+ * so a select-all that reached nothing could leave stale content, and one that wiped the buffer
+ * without inserting could leave it empty, and neither failed here.
+ */
+export function replacementViolations(
+  expected: readonly string[],
+  actual: readonly string[],
+  staleLines: readonly string[],
+): readonly string[] {
+  const violations: string[] = [];
+  const rendered = JSON.stringify(actual);
+  const meaningful = expected.filter((line) => line !== "");
+  if (meaningful.length === 0) {
+    const leftovers = actual.filter((line) => line !== "");
+    if (leftovers.length > 0) violations.push(`expected an empty buffer, got ${rendered}`);
+    return violations;
+  }
+  // 1. No line may appear MORE often than it was inserted. Counted against the expected
+  //    multiplicity, not against 1: a fixture may legitimately repeat a line ("same\nsame" renders
+  //    two), and demanding at most one would fail a correct replacement.
+  for (const line of new Set(meaningful)) {
+    const allowed = expected.filter((candidate) => candidate === line).length;
+    const seen = actual.filter((candidate) => candidate === line).length;
+    if (seen > allowed) {
+      violations.push(`"${line}" appears ${String(seen)}x, at most ${String(allowed)}x expected`);
+    }
+  }
+  // 2. No line that was in the buffer BEFORE may survive unless the new text also contains it. This
+  //    is the stale-content half, and it needs the pre-replacement snapshot: without it there is no
+  //    way to tell "old buffer" from a line the caller legitimately inserted. Preferred over
+  //    asserting an empty buffer right after Backspace, which would add a round-trip inside the
+  //    gesture and race Monaco's ghost text.
+  for (const line of new Set(staleLines.filter((candidate) => candidate !== ""))) {
+    if (expected.includes(line)) continue;
+    if (actual.includes(line)) violations.push(`stale line "${line}" survived the replacement`);
+  }
+  // 3. The buffer must actually carry the new text. `startsWith` in BOTH directions tolerates
+  //    Monaco replacing a rendered line with an inline completion (ghost text), which is why this
+  //    is not an equality check — but an empty rendered line is not a truncation of anything, and
+  //    accepting it is what let a wiped-and-not-reinserted buffer pass.
+  const anchor = meaningful[0] ?? "";
+  const carried = actual.some(
+    (line) => line !== "" && (line.startsWith(anchor) || anchor.startsWith(line)),
+  );
+  if (!carried) violations.push(`expected the buffer to contain "${anchor}", got ${rendered}`);
+  return violations;
+}
+
+async function renderedLines(editorWindow: Locator): Promise<readonly string[]> {
+  return (await editorWindow.locator(".view-line").allInnerTexts()).map(normalizeEditorLine);
+}
+
+/**
  * Replaces the whole editor buffer with `text` — the engine-agnostic version of the
  * click-selectAll-insert dance that several specs previously each carried their own copy of.
  * Verifies that the select-all actually took effect AND that no old content survives anywhere in
@@ -112,6 +175,8 @@ export async function replaceEditorBuffer(
   text: string,
 ): Promise<void> {
   await focusMonacoInput(editorWindow);
+  // Snapshot BEFORE the gesture: this is what makes "stale content survived" decidable at all.
+  const staleLines = await renderedLines(editorWindow);
   await selectAllInEditor(page);
   // Delete the selection with a REAL key event before inserting. `insertText` does not send key
   // events — it hands the text to the engine's input pipeline — and whether that replaces an
@@ -120,55 +185,13 @@ export async function replaceEditorBuffer(
   // is unambiguous in both.
   await page.keyboard.press("Backspace");
   await page.keyboard.insertText(text);
-  // The invariant this checks is REPLACEMENT, not equality: after a successful select-all the
-  // inserted text must appear ONCE, never twice. That is the actual corruption mode — a select-all
-  // that silently reached nothing leaves the old content in place and `insertText` appends, so
-  // every line shows up a second time.
-  //
-  // It deliberately does NOT assert the rendered lines EQUAL `text`, because `.view-line` is not
-  // the buffer. Monaco renders inline completions (ghost text) and auto-closed brackets into those
-  // same elements, so a fixture that inserts `"…answer() {\n  ret"` legitimately reads back as
-  // `["…answer() {", "return 42;", "}"]` — the ghost-text suggestion replacing the visible `ret`
-  // and Monaco supplying the closing brace. An equality check calls that a corrupted buffer and
-  // fails a passing product (it did, on chromium, in `editor inline ghost text renders and Tab
-  // accepts it`). Reading the model instead of the DOM would allow equality, but this helper's
-  // contract is the replacement, so it asserts exactly that and nothing it cannot see.
-  //
-  // The empty-string case is still checked — the earlier first-line-only version skipped it
-  // entirely, which is how a failed select-all could pass silently.
   const expectedLines = normalizedEditorLines(text);
   await expect(async () => {
-    const renderedLines = await editorWindow.locator(".view-line").allInnerTexts();
-    const actualLines = renderedLines.map(normalizeEditorLine);
-    if (expectedLines.every((line) => line === "")) {
-      expect(
-        actualLines.filter((line) => line !== ""),
-        `expected the buffer to be empty, got ${JSON.stringify(actualLines)}`,
-      ).toEqual([]);
-      return;
-    }
-    // Counted against the EXPECTED multiplicity, not against 1: a fixture may legitimately repeat a
-    // line (`"same\nsame"` must render two "same" lines), and demanding at most one would fail a
-    // correct replacement. `<=` rather than `===` because Monaco may REPLACE a rendered line with an
-    // inline completion, so a line can legitimately go missing from `.view-line` — but it can never
-    // legitimately appear MORE times than it was inserted, which is exactly the append-instead-of-
-    // replace corruption this guards.
-    for (const line of new Set(expectedLines.filter((candidate) => candidate !== ""))) {
-      const expectedCount = expectedLines.filter((candidate) => candidate === line).length;
-      expect(
-        actualLines.filter((actual) => actual === line).length,
-        `expected "${line}" at most ${String(expectedCount)}x after replacing the buffer, got ` +
-          JSON.stringify(actualLines),
-      ).toBeLessThanOrEqual(expectedCount);
-    }
-    // At least the first inserted line must be present, so a select-all that wiped everything and
-    // inserted nothing cannot pass the duplicate check vacuously.
-    const anchor = expectedLines.find((line) => line !== "");
-    if (anchor !== undefined) {
-      expect(
-        actualLines.some((actual) => actual.startsWith(anchor) || anchor.startsWith(actual)),
-        `expected the buffer to contain "${anchor}", got ${JSON.stringify(actualLines)}`,
-      ).toBe(true);
-    }
+    const violations = replacementViolations(
+      expectedLines,
+      await renderedLines(editorWindow),
+      staleLines,
+    );
+    expect(violations, violations.join("; ")).toEqual([]);
   }).toPass({ timeout: 10_000 });
 }
