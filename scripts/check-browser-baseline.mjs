@@ -108,7 +108,13 @@ export const GUARDED_APIS = [
     // and a bare property read with no call (`.at` alone) — narrowing was never the safety
     // property here, so widening to any argument shape adds coverage without adding a new class of
     // false positive.
-    pattern: /\.at\(/,
+    //
+    // Widened again to `/\.at\s*\(/`: the plain `/\.at\(/` form still missed a call written with
+    // whitespace before the opening paren (`items.at (0)`) — still the exact same gated method, a
+    // formatter/linter is free to produce that spacing, and `\s*` cannot match into "attribute("/
+    // "attend(" because the literal "at" must be followed immediately by either whitespace or "("
+    // and neither appears there.
+    pattern: /\.at\s*\(/,
     minimum: { chrome: 92, edge: 92, firefox: 90, safari: 15.4 },
   },
   {

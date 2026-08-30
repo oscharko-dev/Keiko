@@ -216,6 +216,9 @@ describe("Array.prototype.at pattern (widened index-shape coverage)", () => {
     ["no argument at all", "items.at()"],
     ["a String.prototype.at call (same baseline, correct to match)", 'label.at(-1) === "x"'],
     ["optional chaining before the call", "items?.at(-1)"],
+    // IDX56 finding: `/\.at\(/` (no `\s*`) still missed this shape — same gated method, called
+    // with whitespace before the opening paren.
+    ["whitespace before the opening parenthesis", "items.at (0)"],
   ])("matches Array/String/TypedArray .at( called with %s", (_label, sample) => {
     expect(atApi.pattern.test(sample)).toBe(true);
   });
@@ -295,6 +298,16 @@ describe("main", () => {
   it("fails for a positive-literal or variable .at( index too, not only the negative-literal form", () => {
     const result = run(
       fixture({ browserslist: ["chrome >= 80"], source: "const first = items.at(0);\n" }),
+    );
+    expect(result.exitCode).toBe(1);
+    expect(result.errors.join("\n")).toContain("Array.prototype.at needs chrome >= 92");
+  });
+
+  // IDX56 finding, end-to-end: a call written with whitespace before the opening paren
+  // (`items.at (0)`) is the identical gated method as `items.at(0)` and must fail the same way.
+  it("fails for a .at( call with whitespace before the opening paren too", () => {
+    const result = run(
+      fixture({ browserslist: ["chrome >= 80"], source: "const first = items.at (0);\n" }),
     );
     expect(result.exitCode).toBe(1);
     expect(result.errors.join("\n")).toContain("Array.prototype.at needs chrome >= 92");
