@@ -191,6 +191,7 @@ function ctx(
     "content-type": "application/json",
   };
   return {
+    correlationId: undefined,
     req,
     res: {
       destroyed: false,

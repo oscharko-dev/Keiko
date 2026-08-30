@@ -807,6 +807,7 @@ describe("FIX 4 — apply rebuilds the ModelPort from the run's modelId, not the
       res: {} as never,
       params: { runId: "fix4-run" },
       url: new URL("http://127.0.0.1/api/runs/fix4-run/apply"),
+      correlationId: undefined,
     };
     await handleApplyRun(ctx, deps);
     expect(seen).toEqual(["example-chat-model"]);
@@ -865,6 +866,7 @@ describe("FIX B — apply snapshot retains the original limits from the dry-run"
       res: {} as never,
       params: { runId: "fixb-run" },
       url: new URL("http://127.0.0.1/api/runs/fixb-run/apply"),
+      correlationId: undefined,
     };
     const result = await handleApplyRun(ctx, deps);
     // 200 = applyRun was invoked (workflow failure yields a report, not an HTTP error).
@@ -1141,6 +1143,7 @@ describe("issue #638 — overlapping apply requests cannot reuse the same snapsh
       res: {} as never,
       params: { runId: "race-run" },
       url: new URL("http://127.0.0.1/api/runs/race-run/apply"),
+      correlationId: undefined,
     };
 
     const first = handleApplyRun(ctx, deps);
@@ -1290,6 +1293,7 @@ describe("apply re-proves workspace authorization at the write boundary", () => 
 
   function applyContext(runId: string): Parameters<typeof handleApplyRun>[0] {
     return {
+      correlationId: undefined,
       req: {} as never,
       res: {} as never,
       params: { runId },
@@ -1416,6 +1420,7 @@ describe("apply threads the run's own id into its verification egress probe", ()
 
       const result = await freshHandleApplyRun(
         {
+          correlationId: undefined,
           req: {} as never,
           res: {} as never,
           params: { runId: "probe-thread-run" },

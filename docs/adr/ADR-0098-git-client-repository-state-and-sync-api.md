@@ -96,7 +96,7 @@ union is changed.
 - `git-history.ts` — `GitHistoryEntry` (sha, shortSha, subject, author, ISO date, refs[],
   parentCount, changedFileCount) and the paginated `GitHistoryResponse` (entries, limit, skip,
   truncated). `GIT_HISTORY_SCHEMA_VERSION = "1"`. Validator `validateGitHistoryResponse`.
-- `git-sync.ts` — the sync contracts (D3): `GitSyncOperation`, `GitSyncOutcome` (13 members),
+- `git-sync.ts` — the sync contracts (D3): `GitSyncOperation`, `GitSyncOutcome` (15 members),
   `GitSyncBlockReason`, `GitSyncExecuteRequest`, `GitSyncPreview`, `GitSyncExecuteResponse`,
   `GIT_SYNC_SCHEMA_VERSION = "1"`, the frozen `GIT_SYNC_OPERATIONS` / `GIT_SYNC_OUTCOMES` /
   `GIT_SYNC_BLOCK_REASONS` arrays, the `isGitSyncOperation` / `isGitSyncOutcome` guards, and the

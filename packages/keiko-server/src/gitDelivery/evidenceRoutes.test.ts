@@ -68,6 +68,7 @@ function ctx(query = "days=7&limit=200"): RouteContext {
   const req = Readable.from([]) as IncomingMessage;
   req.method = "GET";
   return {
+    correlationId: undefined,
     req,
     res: {} as ServerResponse,
     params: {},

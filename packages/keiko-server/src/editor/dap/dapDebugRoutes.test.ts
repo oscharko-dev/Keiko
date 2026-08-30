@@ -403,6 +403,7 @@ function eventContext(cookie: string, response: FakeSseResponse): RouteContext {
   const req = Readable.from([]) as unknown as IncomingMessage;
   Object.defineProperty(req, "headers", { value: { cookie }, configurable: true });
   return {
+    correlationId: undefined,
     req,
     res: response as unknown as ServerResponse,
     params: {},

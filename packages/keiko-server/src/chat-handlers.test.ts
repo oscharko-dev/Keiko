@@ -100,6 +100,7 @@ function requestContext(body: Record<string, unknown>): RouteContext {
     },
   };
   return {
+    correlationId: undefined,
     req: req as unknown as IncomingMessage,
     res: res as unknown as ServerResponse,
     params: {},

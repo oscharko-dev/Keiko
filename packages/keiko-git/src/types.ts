@@ -84,6 +84,20 @@ export interface GitProcessOptions {
    * has, and it must reach the observation layer without every call site re-implementing logging.
    */
   readonly expectedExitCodes?: readonly number[] | undefined;
+  /**
+   * A call-site override for `errorKind` classification when a caller already owns a more precise
+   * taxonomy than the generic one an observer would pick. `gitDelivery/syncExecution.ts` is the
+   * motivating case: it classifies a failed pull's `stderr` into `not-fast-forward` /
+   * `dirty-worktree` / `no-upstream` / `detached-head` for its own response and evidence, but the
+   * activity-log observer has no route to that knowledge and would otherwise report the generic
+   * remote-failure kind — leaving the log unable to name the SAME outcome the response and
+   * evidence already do. Returning `undefined` defers to the observer's own classification; this
+   * is an ADDITIVE override, never a way to suppress a line.
+   *
+   * The runner does not read this or change any process behaviour because of it — same contract
+   * as `expectedExitCodes`.
+   */
+  readonly classifyFailure?: ((result: GitProcessResult) => string | undefined) | undefined;
 }
 
 export type GitProcessRunner = (

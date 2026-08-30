@@ -26,6 +26,7 @@ function rawPostContext(raw: string, path: string): RouteContext {
   const req = Readable.from([Buffer.from(raw, "utf8")]) as unknown as IncomingMessage;
   (req as { method?: string }).method = "POST";
   return {
+    correlationId: undefined,
     req,
     res: {} as unknown as ServerResponse,
     params: {},

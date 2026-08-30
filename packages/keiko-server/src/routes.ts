@@ -409,8 +409,17 @@ export interface RouteContext {
   readonly url: URL;
   // RB-6: the request-scoped correlation id minted at request entry (server.ts). Handlers that build
   // error responses or SSE error frames thread it through so a failure is traceable end-to-end.
-  // Optional so the many existing RouteContext literals in tests compile unchanged.
-  readonly correlationId?: string;
+  //
+  // REQUIRED, and the optionality is what made it necessary. Keiko delegates between routes
+  // IN-PROCESS by constructing a fresh `RouteContext` — the git-agent operations, autonomous
+  // delivery, and the editor's coding-context providers all do it — and every one of those
+  // factories silently omitted this field, so the routes they called logged under
+  // `UNKNOWN_CORRELATION_ID` and could not be joined to the operation that caused them. Four such
+  // families were found across three review rounds, one at a time, because nothing forced the
+  // question. `undefined` is still an accepted VALUE (a synthetic context with no originating
+  // request says so explicitly); what no longer compiles is a construction that never considered
+  // it. That turns an open-ended class of defect into a closed one (AGENTS.md §7, §8 Rule 1).
+  readonly correlationId: string | undefined;
 }
 
 export type RouteHandler = (

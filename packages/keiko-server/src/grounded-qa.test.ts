@@ -129,6 +129,7 @@ function fakeRes(): RouteContext["res"] {
 
 function ctx(body: string, res: RouteContext["res"] = fakeRes()): RouteContext {
   return {
+    correlationId: undefined,
     req: fakeReq(body),
     res,
     params: {},
@@ -1156,6 +1157,7 @@ describe("handleGroundedAsk", () => {
     let groundedCalls = 0;
     const outcome = handleGroundedAsk(
       {
+        correlationId: undefined,
         req,
         res,
         params: {},
@@ -1415,6 +1417,7 @@ describe("handleGroundedAsk", () => {
     await started.promise;
     const patch = handleUpdateChat(
       {
+        correlationId: undefined,
         req: fakeReq(JSON.stringify({ connectedScopes: null })),
         res: fakeRes(),
         params: {},

@@ -89,6 +89,7 @@ function ctx(
   req: IncomingMessage,
 ): RouteContext {
   return {
+    correlationId: undefined,
     req,
     res: {} as RouteContext["res"],
     params: { id: runId },
@@ -338,6 +339,7 @@ describe("handleQiReCheck — run not found", () => {
 describe("handleQiReCheck — missing id param", () => {
   it("returns 400 QI_BAD_REQUEST when id param is absent", async () => {
     const c: RouteContext = {
+      correlationId: undefined,
       req: makeReq({ sources: [{ kind: "requirements", label: "r", text: "x" }] }),
       res: {} as RouteContext["res"],
       params: {},
@@ -1345,6 +1347,7 @@ describe("handleQiRegenerateStale — malformed candidates companion", () => {
 describe("handleQiRegenerateStale — missing id param", () => {
   it("returns 400 QI_BAD_REQUEST when id param is absent", async () => {
     const c: RouteContext = {
+      correlationId: undefined,
       req: makeReq({ sources: [{ kind: "requirements", label: "r", text: "x" }] }),
       res: {} as RouteContext["res"],
       params: {},

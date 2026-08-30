@@ -208,6 +208,7 @@ function capsuleId(value: string): KnowledgeCapsuleId {
 
 function baseCtx(_tmp: string, method: string, body?: Record<string, unknown>): RouteContext {
   return {
+    correlationId: undefined,
     req: jsonRequest(body, method),
     res: {} as never,
     params: {},

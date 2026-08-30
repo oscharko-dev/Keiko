@@ -126,6 +126,21 @@ function storeGitSummary(deps: UiHandlerDeps, key: string, value: Promise<RouteR
   // Recomputing instead costs one bounded git read on a repository that is already failing, and
   // only for the request that actually asks; the healthy path this cache exists for is untouched.
   // Best-effort: a rejected promise is left to the existing catch in `handleGitSummary`.
+  //
+  // WHY THIS IS RACE-FREE FOR A GENUINELY LATER REQUEST: the eviction `.then()` below is the
+  // FIRST reaction registered on `value` (attached synchronously here, before `handleGitSummary`
+  // returns it to its own caller), so when `value` settles, Node drains every microtask reaction
+  // on it — this one included — before the event loop proceeds to its next macrotask. A later,
+  // genuinely separate HTTP request is processed as a macrotask, so it can never observe the Map
+  // between "value settled" and "this callback ran": those are the same turn of the event loop.
+  // Verified empirically (a controlled resolve + `setImmediate` probe), not asserted from theory.
+  //
+  // WHAT THIS DOES NOT COVER: two requests that are ALREADY concurrent when the first one misses
+  // the cache share the SAME in-flight promise by design — that is the cache's actual job, and
+  // running the same git command twice for two requests 5ms apart would be worse. Both receive an
+  // ACCURATE (never stale) response, but only one `git.process.failed` line exists, stamped with
+  // whichever request's correlation id started the computation. That is not a replay of a stale
+  // entry; it is one real git run two requests legitimately shared. See the pinned test below.
   void value
     .then((result) => {
       if (!isUnavailableSummaryBody(result.body)) return;

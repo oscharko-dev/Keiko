@@ -415,7 +415,7 @@ function gitRouteContext(
     res: {} as ServerResponse,
     params: {},
     url: new URL(path, "http://127.0.0.1"),
-    ...(correlationId === undefined ? {} : { correlationId }),
+    correlationId,
   };
 }
 

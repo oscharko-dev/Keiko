@@ -92,6 +92,7 @@ function reqFromText(body: string): IncomingMessage {
 
 function ctx(req: IncomingMessage = reqFromJson({})): RouteContext {
   return {
+    correlationId: undefined,
     req,
     res: {} as RouteContext["res"],
     params: {},

@@ -212,6 +212,7 @@ interface ElectedInlineModelContext {
   readonly config: GatewayConfig;
   readonly nowMs: number;
   readonly tokenBudget: EditorModelTokenBudget;
+  readonly correlationId: string | undefined;
 }
 
 function noItemOutcome(
@@ -378,6 +379,9 @@ async function runElectedInlineModel(ctx: ElectedInlineModelContext): Promise<In
     signal: ctx.signal,
     nowMs: ctx.nowMs,
     budgetBytes: effectiveContextBudgetBytes(ctx.request),
+    // The git context calls the git routes in-process; without the id their failure lines are
+    // orphaned under UNKNOWN_CORRELATION_ID (AGENTS.md §8 Rule 1). #3357.
+    correlationId: ctx.correlationId,
   });
   recordCodingContextEvidence(
     ctx.deps.evidenceStore,
@@ -517,6 +521,7 @@ async function runInlineModelTier(
       config,
       nowMs: now(),
       tokenBudget,
+      correlationId,
     });
     return outcome;
   } catch (error) {

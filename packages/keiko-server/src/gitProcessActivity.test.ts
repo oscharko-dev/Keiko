@@ -285,6 +285,24 @@ describe("logGitProcessOutcome", () => {
     expect(log.events.map((event) => event.errorKind)).toEqual(["timeout", "git-cancelled"]);
   });
 
+  it("keeps a spawn-error/abort race at warn, not info, so it survives KEIKO_LOG_LEVEL=warn", () => {
+    // The runner's spawn-error branch copies the LIVE abort flag, so a caller disconnecting while
+    // the OS fails to launch git yields the documented `{ exitCode: 127, aborted: true }` shape.
+    // `errorKind` already ranks exit 127 first; `level` must agree, or the kind that correctly
+    // says "git-missing" is filtered out at the threshold an operator investigating one would use.
+    const log = captureActivityLog();
+
+    logGitProcessOutcome(
+      log.sink,
+      "corr-launch-race-01",
+      STATUS_ARGS,
+      result({ exitCode: 127, aborted: true }),
+      2,
+    );
+
+    expect(onlyEvent(log.events)).toMatchObject({ level: "warn", errorKind: "git-missing" });
+  });
+
   it("separates an untrusted git executable from a machine with no git at all", () => {
     // Both exit 127 and both classify as `git-missing`, so before keiko-git reported the refusal
     // structurally the planted-binary indicator (KEIKO-0263) was indistinguishable in the log from

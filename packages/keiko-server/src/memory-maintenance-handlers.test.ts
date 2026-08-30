@@ -43,7 +43,7 @@ function makeCtx(correlationId?: string): RouteContext {
     res: { socket } as unknown as RouteContext["res"],
     params: {},
     url: new URL("http://127.0.0.1/api/memory/maintenance"),
-    ...(correlationId === undefined ? {} : { correlationId }),
+    correlationId,
   };
 }
 

@@ -43,6 +43,7 @@ function context(): {
     req,
     res,
     ctx: {
+      correlationId: undefined,
       req: req as unknown as IncomingMessage,
       res: res as unknown as ServerResponse,
       params: {},

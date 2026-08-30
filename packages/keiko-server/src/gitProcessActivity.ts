@@ -111,7 +111,11 @@ const REMOTE_FACING_SUBCOMMANDS: ReadonlySet<string> = new Set([
 // still-running child, so it lands with `exitCode: null` and a signal, and only the rarer race
 // closes with 0. Testing the exit code caught the race and let the common case fall through to
 // `git-error` while `extra.truncated` said otherwise — the line contradicting itself.
-function gitFailureErrorKind(result: GitProcessResult, subcommand: string): string {
+function gitFailureErrorKind(
+  result: GitProcessResult,
+  subcommand: string,
+  classifyFailure: ((result: GitProcessResult) => string | undefined) | undefined,
+): string {
   if (result.refusal !== undefined) return REFUSAL_ERROR_KIND[result.refusal];
   // Exit 127 first, matching `classifyGitFailure` and `classifyGitRemoteFailure`, which both rank
   // it above every Keiko-side stop. The runner's `child.on("error")` handler builds its 127 result
@@ -123,6 +127,13 @@ function gitFailureErrorKind(result: GitProcessResult, subcommand: string): stri
   if (result.aborted === true) return CANCELLED_ERROR_KIND;
   if (result.timedOut === true) return TIMEOUT_ERROR_KIND;
   if (result.truncated) return TRUNCATED_ERROR_KIND;
+  // A call site's own override, checked before the generic remote taxonomy: a caller that already
+  // classifies its own stderr into a finer outcome (a non-fast-forward pull, a dirty worktree) has
+  // exactly the knowledge `classifyGitRemoteFailure` cannot — those are Keiko-side vocabulary
+  // decisions, not remote-facing phrases. Deferring to `undefined` keeps every existing call site,
+  // which does not set this, on the shared classifier unchanged.
+  const override = classifyFailure?.(result);
+  if (override !== undefined) return override;
   return REMOTE_FACING_SUBCOMMANDS.has(subcommand)
     ? classifyGitRemoteFailure(result)
     : classifyGitFailure(result);
@@ -131,7 +142,14 @@ function gitFailureErrorKind(result: GitProcessResult, subcommand: string): stri
 // A cancelled run is the caller hanging up (a UI that abandoned a diff it no longer needs), not a
 // fault: recorded, but never at a level that makes routine navigation look like an incident. Every
 // other non-zero outcome is a real read failure an operator may have to act on.
+// Mirrors `gitFailureErrorKind`'s precedence exactly: exit 127 first. The runner's spawn-error
+// branch copies the LIVE abort flag into a synthesised `{ exitCode: 127, aborted: true }`, so a
+// caller disconnecting while the OS fails to launch git is a `git-missing` kind at `info` if this
+// checked `aborted` first — dropped entirely under `KEIKO_LOG_LEVEL=warn`, the threshold an
+// operator investigating a launch failure would actually run at. Kind and level must agree about
+// which cause won, or the level can silence the very line the kind correctly named.
 function gitFailureLevel(result: GitProcessResult): ServerLogLevel {
+  if (result.exitCode === 127) return "warn";
   return result.aborted === true ? "info" : "warn";
 }
 
@@ -207,18 +225,20 @@ export function logGitProcessOutcome(
   result: GitProcessResult,
   durationMs: number,
   expectedExitCodes?: readonly number[],
+  classifyFailure?: (result: GitProcessResult) => string | undefined,
 ): void {
   if (isSuccessfulGitOutcome(result, expectedExitCodes)) return;
   const id = correlationId ?? UNKNOWN_CORRELATION_ID;
   const subcommand = gitSubcommand(args) ?? UNNAMED_SUBCOMMAND;
   const fields = gitOutcomeFields(subcommand, result);
+  const errorKind = gitFailureErrorKind(result, subcommand, classifyFailure);
   if (result.refusal !== undefined) {
     log.write({
       level: "error",
       category: "security",
       op: "git.process.refused",
       correlationId: id,
-      errorKind: gitFailureErrorKind(result, subcommand),
+      errorKind,
       durationMs,
       extra: { ...fields, refusal: result.refusal },
     });
@@ -229,7 +249,7 @@ export function logGitProcessOutcome(
     category: "diagnostic",
     op: "git.process.failed",
     correlationId: id,
-    errorKind: gitFailureErrorKind(result, subcommand),
+    errorKind,
     durationMs,
     extra: fields,
   });
@@ -264,7 +284,15 @@ export function observedGitRunner(
     // very reconstruction evidence this line exists to provide.
     const elapsed = startLogTimer();
     const result = await runner(args, options);
-    logGitProcessOutcome(log, correlationId, args, result, elapsed(), options.expectedExitCodes);
+    logGitProcessOutcome(
+      log,
+      correlationId,
+      args,
+      result,
+      elapsed(),
+      options.expectedExitCodes,
+      options.classifyFailure,
+    );
     return result;
   };
 }

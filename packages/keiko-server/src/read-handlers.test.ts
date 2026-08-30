@@ -37,6 +37,7 @@ import { probeVerifiedGatewayConfig } from "./_support.js";
 
 function ctx(path: string, params: Record<string, string> = {}): RouteContext {
   return {
+    correlationId: undefined,
     req: {} as RouteContext["req"],
     res: {} as RouteContext["res"],
     params,

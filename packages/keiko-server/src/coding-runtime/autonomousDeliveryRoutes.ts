@@ -420,9 +420,9 @@ function delegateContext(
     res: ctx.res,
     params: {},
     url: new URL("http://127.0.0.1/api/git/agent/operations"),
-    // The delegated git route logs under the ORIGINATING request's id, not a fresh one, so an
-    // autonomous delivery's git failures stay joinable to the delivery (AGENTS.md §8 Rule 1).
-    ...(ctx.correlationId === undefined ? {} : { correlationId: ctx.correlationId }),
+    // The delegated route logs under the ORIGINATING request's id, not a fresh one, so an
+    // autonomous delivery's failures stay joinable to the delivery (AGENTS.md §8 Rule 1).
+    correlationId: ctx.correlationId,
   };
 }
 
@@ -435,7 +435,7 @@ function commandContext(ctx: RouteContext, body: CommandTaskRunRequest): RouteCo
     res: ctx.res,
     params: {},
     url: new URL("http://127.0.0.1/api/commands/runs"),
-    ...(ctx.correlationId === undefined ? {} : { correlationId: ctx.correlationId }),
+    correlationId: ctx.correlationId,
   };
 }
 

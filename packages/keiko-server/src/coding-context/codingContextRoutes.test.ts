@@ -31,6 +31,7 @@ function requestWithBody(body: unknown): IncomingMessage {
 
 function ctxFor(body: unknown): RouteContext {
   return {
+    correlationId: undefined,
     req: requestWithBody(body),
     res: undefined as never,
     params: {},

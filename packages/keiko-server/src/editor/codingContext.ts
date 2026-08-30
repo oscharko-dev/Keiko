@@ -52,8 +52,12 @@ export interface AssembleCodingContextDeps {
   readonly budgetBytes?: number | undefined;
   readonly allowEmbeddingProviders?: boolean | undefined;
   readonly gitContextReader?: GitContextReader | undefined;
-  /** The originating request's correlation id; see ProviderContext for why the git context needs it. */
-  readonly correlationId?: string | undefined;
+  /**
+   * The originating request's correlation id; see ProviderContext for why the git context
+   * needs it. REQUIRED: this field being optional is what let a fourth entry point
+   * (`inlineCompletionRoutes.ts`) omit it silently and still type-check.
+   */
+  readonly correlationId: string | undefined;
 }
 
 function buildProviderContext(

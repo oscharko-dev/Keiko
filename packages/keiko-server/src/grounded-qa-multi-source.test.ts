@@ -104,6 +104,7 @@ function fakeRes(): RouteContext["res"] {
 
 function ctx(body: string, res: RouteContext["res"] = fakeRes()): RouteContext {
   return {
+    correlationId: undefined,
     req: fakeReq(body),
     res,
     params: {},

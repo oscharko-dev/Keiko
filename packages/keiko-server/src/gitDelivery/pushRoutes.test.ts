@@ -10,6 +10,7 @@
 //           content-free evidence for allowed AND blocked outcomes.
 
 import { captureActivityLog } from "../activityLogCapture.test-support.js";
+import type { ServerLogEvent, ServerLogSink } from "../observability/index.js";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -131,7 +132,13 @@ function ctxFor(path: string, body: unknown): RouteContext {
   const req = Readable.from([Buffer.from(raw, "utf8")]) as IncomingMessage;
   req.method = "POST";
   req.headers = { "content-type": "application/json", "x-keiko-csrf": "1" };
-  return { req, res: {} as ServerResponse, params: {}, url: new URL(`http://127.0.0.1${path}`) };
+  return {
+    correlationId: undefined,
+    req,
+    res: {} as ServerResponse,
+    params: {},
+    url: new URL(`http://127.0.0.1${path}`),
+  };
 }
 
 // No policyPacks override → the route applies KEIKO_DEFAULT_PUBLISH_POLICY_PACK (the AC2 default).
@@ -511,6 +518,49 @@ describe("push execute activity log (AGENTS.md §8 Rule 1)", () => {
   function ctxWithCorrelation(path: string, body: unknown, correlationId: string): RouteContext {
     return { ...ctxFor(path, body), correlationId };
   }
+
+  it("emits a FAILED push at warn with a top-level errorKind, so a warn threshold keeps it", async () => {
+    // Without an explicit level this line defaulted to `info` and was filtered out entirely under
+    // `KEIKO_LOG_LEVEL=warn` — the threshold an operator investigating a failed delivery runs at.
+    // Asserted through a THRESHOLDING sink, not just the raw event, so the filter is what decides.
+    const activity = captureActivityLog();
+    const warnOnly: ServerLogSink = {
+      write: (event: ServerLogEvent): void => {
+        if (event.level === "warn" || event.level === "error") activity.sink.write(event);
+      },
+    };
+    const adapter = recordingPublishAdapter({
+      schemaVersion: "1",
+      outcome: "failed",
+      durationMs: 7,
+      errorCode: "provider-rejected",
+      rejectionReason: "permission-denied",
+    });
+    const handler = createHandlePushExecute({
+      execution: {
+        ...seams({ publishAdapterFactory: () => adapter.adapter }),
+        activityLog: warnOnly,
+      },
+    });
+
+    await handler(
+      ctxWithCorrelation(EXECUTE, pushBody({ setUpstreamTracking: true }), "corr-push-failed-1"),
+      deps(),
+    );
+
+    const events = activity.events.filter(
+      (event) => event.op === "git.delivery.mutation.completed",
+    );
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({
+      level: "warn",
+      correlationId: "corr-push-failed-1",
+      extra: { actionKind: "push" },
+    });
+    // `errorKind` on the envelope, not buried in `extra` — it is what an operator greps and what
+    // `keiko support analyze` clusters on.
+    expect(events[0]?.errorKind).toBeDefined();
+  });
 
   it("reports a governed push under the request's correlation id, marked as a push", async () => {
     const adapter = recordingPublishAdapter();

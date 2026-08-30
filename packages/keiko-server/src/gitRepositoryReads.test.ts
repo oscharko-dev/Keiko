@@ -50,6 +50,7 @@ function deps(runner: GitProcessRunner, redactor = buildRedactor({})): UiHandler
 
 function ctx(path: string): RouteContext {
   return {
+    correlationId: undefined,
     req: Readable.from([]) as unknown as IncomingMessage,
     res: {} as unknown as ServerResponse,
     params: {},
@@ -1149,6 +1150,75 @@ describe("git summary response cache partitioning", () => {
     // Recomputed, not replayed — and the second request has its own failure line under its own id.
     expect(runner.mock.calls.length).toBeGreaterThan(callsAfterFirst);
     expect(activity.events.map((event) => event.correlationId)).toContain("corr-cache-second-1");
+  });
+
+  it("shares one in-flight computation across genuinely concurrent requests, by design", async () => {
+    // The complement of the eviction test above: two requests that are ALREADY concurrent when the
+    // first misses the cache share the same promise — that is the cache's job. Both get an accurate
+    // response; only one runner call happens, so only one activity-log line exists, under whichever
+    // request started the computation. This pins that behaviour explicitly rather than leaving it
+    // as an unstated side effect of the eviction fix.
+    const activity = captureActivityLog();
+    // `computeGitSummary` runs `status` and `remote -v` CONCURRENTLY via `Promise.all`, so a
+    // single-slot resolver would have its first capture silently overwritten by the second call —
+    // whichever call lost its resolver would leave `Promise.all` hanging forever. Every pending
+    // call gets its own resolver here instead.
+    const pendingResolvers: ((value: Awaited<ReturnType<GitProcessRunner>>) => void)[] = [];
+    const runner = vi.fn<GitProcessRunner>((args: readonly string[]) => {
+      if (args.includes("rev-parse")) return Promise.resolve(ok(`${root}\n`));
+      return new Promise((resolve) => {
+        pendingResolvers.push(resolve);
+      });
+    });
+    const dependencies = deps(runner);
+    const path = `/api/git/summary?root=${encodeURIComponent(root)}`;
+    const options = { runner, activityLog: activity.sink, maxStatusBytes: 4096, timeoutMs: 5_000 };
+
+    const first = handleGitSummary(
+      { ...ctx(path), correlationId: "corr-concurrent-first" },
+      dependencies,
+      options,
+    );
+    // `computeGitSummary` does real async work (realpath, membership resolution) before it ever
+    // calls the runner, backed by libuv I/O callbacks — a microtask-only loop would starve those
+    // callbacks and hang forever. `setImmediate` yields to the macrotask queue on every iteration.
+    // Waits for BOTH concurrent calls (`status` and `remote -v`), not just the first.
+    await new Promise<void>((resolve) => {
+      const poll = (): void => {
+        if (pendingResolvers.length >= 2) {
+          resolve();
+          return;
+        }
+        setImmediate(poll);
+      };
+      poll();
+    });
+    const second = handleGitSummary(
+      { ...ctx(path), correlationId: "corr-concurrent-second" },
+      dependencies,
+      options,
+    );
+    const failure = fail("fatal: not a git repository (or any of the parent directories)");
+    for (const resolve of pendingResolvers) resolve(failure);
+    const [firstResult, secondResult] = await Promise.all([first, second]);
+
+    expect(firstResult.body).toStrictEqual(secondResult.body);
+    // `computeGitSummary` runs `status` AND `remote -v` concurrently, so ONE shared computation
+    // correctly produces TWO failure lines (one per failed subcommand) — that is not a bug, it is
+    // two real subprocess failures. What the shared-computation guarantee actually rules out is a
+    // SECOND independent computation: proven by the runner call count (4, not 8 — membership +
+    // status + remote-v + last-sync's rev-parse, run exactly ONCE) and by every line carrying the
+    // FIRST request's correlation id, never the second's.
+    expect(runner.mock.calls).toHaveLength(4);
+    expect(activity.events).toHaveLength(2);
+    expect(activity.events.map((event) => event.correlationId)).toEqual([
+      "corr-concurrent-first",
+      "corr-concurrent-first",
+    ]);
+    expect(activity.events.map((event) => event.extra?.subcommand).sort()).toEqual([
+      "remote",
+      "status",
+    ]);
   });
 
   it("still partitions the cache by runner, so two fake runners never share an entry", async () => {

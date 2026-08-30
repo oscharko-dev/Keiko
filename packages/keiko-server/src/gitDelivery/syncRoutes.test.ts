@@ -181,7 +181,13 @@ function ctxFor(path: string, body: unknown): RouteContext {
   const req = Readable.from([Buffer.from(raw, "utf8")]) as IncomingMessage;
   req.method = "POST";
   req.headers = { "content-type": "application/json", "x-keiko-csrf": "1" };
-  return { req, res: {} as ServerResponse, params: {}, url: new URL(`http://127.0.0.1${path}`) };
+  return {
+    correlationId: undefined,
+    req,
+    res: {} as ServerResponse,
+    params: {},
+    url: new URL(`http://127.0.0.1${path}`),
+  };
 }
 
 function syncBody(overrides: Record<string, unknown> = {}): Record<string, unknown> {
@@ -786,6 +792,57 @@ describe("sync route activity log (AGENTS.md §8 Rule 1)", () => {
     expect(serialized).not.toContain("example.invalid");
     expect(serialized).not.toContain("Authentication failed");
   });
+
+  it.each([
+    {
+      label: "a non-fast-forward pull",
+      stderr: "fatal: Not possible to fast-forward, aborting.",
+      kind: "not-fast-forward",
+    },
+    {
+      label: "a dirty worktree",
+      stderr: "error: Your local changes would be overwritten by merge.",
+      kind: "dirty-worktree",
+    },
+    {
+      label: "a missing upstream",
+      stderr: "There is no tracking information for the current branch.",
+      kind: "no-upstream",
+    },
+  ])(
+    "names $label in the log with the same outcome the response reports",
+    async ({ stderr, kind }) => {
+      // `classifyGitRemoteFailure` has no member for any of these — they are Keiko-side sync
+      // vocabulary derived from git's stderr, not remote-facing phrases — so the observer would
+      // report the generic remote kind while the response and the evidence ledger already named the
+      // specific outcome. The call site threads its OWN classifier through `classifyFailure` so all
+      // three artifacts agree about one event.
+      const activity = captureActivityLog();
+      const handler = createHandleSyncExecute("pull", {
+        execution: {
+          ...seams({
+            status: ok(porcelain({ ahead: 0, behind: 2, upstream: "origin/main" })),
+            remote: ok("origin\n"),
+            pull: fail(stderr, 1),
+          }),
+          activityLog: activity.sink,
+        },
+      });
+
+      await handler(ctxWithCorrelation(PULL_EXECUTE, syncBody(), "corr-sync-pullkind"), deps());
+
+      const failures = activity.events.filter((event) => event.op === "git.process.failed");
+      expect(failures).toHaveLength(1);
+      expect(failures[0]).toMatchObject({ correlationId: "corr-sync-pullkind", errorKind: kind });
+      // Still body-free. The closed-vocabulary KIND (`not-fast-forward`) is the point of the line;
+      // what must never appear is git's own prose, which is what the classifier read to derive it.
+      const serialized = JSON.stringify(failures[0]);
+      expect(serialized).not.toContain("aborting");
+      expect(serialized).not.toContain("would be overwritten");
+      expect(serialized).not.toContain("tracking information");
+      expect(serialized).not.toContain("Your local changes");
+    },
+  );
 
   it("threads the correlation id on the execute route too, not only preview", async () => {
     const activity = captureActivityLog();

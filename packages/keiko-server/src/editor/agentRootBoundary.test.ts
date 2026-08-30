@@ -67,6 +67,7 @@ function requestContext(body: unknown, path: string): RouteContext {
     Buffer.from(JSON.stringify(body), "utf8"),
   ]) as unknown as IncomingMessage;
   return {
+    correlationId: undefined,
     req,
     // `removeListener` is required by routes that install a request-lifecycle abort handler
     // (the verification route disposes one on every exit path).

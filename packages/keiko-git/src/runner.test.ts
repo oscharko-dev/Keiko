@@ -821,7 +821,9 @@ describe("refusal classification (AGENTS.md §8 Rule 1 evidence)", () => {
     expect(result.aborted).toBe(false);
   });
 
-  it.each([
+  // The fixture below is a POSIX shell script (shebang + chmod); it is not executable as a spawn
+  // target on Windows, matching every pre-existing fixture in this same describe block.
+  it.skipIf(process.platform === "win32").each([
     { label: "two-token", flag: ["--config-env", "safe.key=ENVVAR"] },
     { label: "joined", flag: ["--config-env=safe.key=ENVVAR"] },
   ])(

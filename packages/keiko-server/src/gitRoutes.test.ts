@@ -64,7 +64,7 @@ function ctx(path: string, correlationId?: string): RouteContext {
     res: mockResponse().res,
     params: {},
     url: new URL(`http://localhost${path}`),
-    ...(correlationId === undefined ? {} : { correlationId }),
+    correlationId,
   };
 }
 

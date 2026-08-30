@@ -402,6 +402,7 @@ function recordVisionSnapshot(dir: string): void {
 
 function runDetailCtx(runId: string): RouteContext {
   return {
+    correlationId: undefined,
     req: {} as RouteContext["req"],
     res: {} as RouteContext["res"],
     params: { id: runId },

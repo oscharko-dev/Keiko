@@ -16,6 +16,7 @@
 
 import { readFileSync, readdirSync, statSync } from "node:fs";
 import { dirname, join, relative } from "node:path";
+import { sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 
@@ -27,6 +28,14 @@ const RAW_RUNNERS = [
   "defaultGitNetworkProcessRunner",
   "createGitProcessRunner",
 ];
+
+// `relative()` returns backslash-separated paths on Windows, while every literal below (EXEMPT,
+// the assertions) is written forward-slash. Comparing raw `relative()` output against those
+// literals would silently lose the EXEMPT entry and every `named` assertion on that platform,
+// making the guard vacuous there rather than failing loudly.
+function posixRelative(from, to) {
+  return relative(from, to).split(sep).join("/");
+}
 
 // The module that DEFINES the wrapper cannot be required to call it.
 const EXEMPT = new Set(["packages/keiko-server/src/gitProcessActivity.ts"]);
@@ -84,7 +93,7 @@ function unobservedRawRunnerLines(source) {
 describe("git runner observation", () => {
   it("wraps every raw git runner a production source reaches for", () => {
     const offenders = productionSources(SERVER_SRC)
-      .map((file) => ({ rel: relative(REPO_ROOT, file), source: readFileSync(file, "utf8") }))
+      .map((file) => ({ rel: posixRelative(REPO_ROOT, file), source: readFileSync(file, "utf8") }))
       .filter(({ rel }) => !EXEMPT.has(rel))
       .flatMap(({ rel, source }) =>
         unobservedRawRunnerLines(source).map(
@@ -100,10 +109,10 @@ describe("git runner observation", () => {
     // the known observed spawn sites, so deleting or renaming them fails here rather than silently
     // shrinking the guarded set to zero.
     const scanned = productionSources(SERVER_SRC)
-      .map((file) => relative(REPO_ROOT, file))
+      .map((file) => posixRelative(REPO_ROOT, file))
       .filter((rel) => !EXEMPT.has(rel));
     const named = productionSources(SERVER_SRC)
-      .map((file) => ({ rel: relative(REPO_ROOT, file), source: readFileSync(file, "utf8") }))
+      .map((file) => ({ rel: posixRelative(REPO_ROOT, file), source: readFileSync(file, "utf8") }))
       .filter(({ rel }) => !EXEMPT.has(rel))
       .filter(({ source }) => rawRunnerValueLines(source).hits.length > 0)
       .map(({ rel }) => rel);

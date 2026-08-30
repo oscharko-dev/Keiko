@@ -34,6 +34,7 @@ function deps(): UiHandlerDeps {
 
 function ctx(body: unknown): RouteContext {
   return {
+    correlationId: undefined,
     req: Readable.from([Buffer.from(JSON.stringify(body), "utf8")]) as IncomingMessage,
     res: {} as ServerResponse,
     params: {},
@@ -43,6 +44,7 @@ function ctx(body: unknown): RouteContext {
 
 function ctxRaw(rawBody: string): RouteContext {
   return {
+    correlationId: undefined,
     req: Readable.from([Buffer.from(rawBody, "utf8")]) as IncomingMessage,
     res: {} as ServerResponse,
     params: {},
