@@ -10,7 +10,23 @@ const nextPort = Number(process.env.KEIKO_E2E_NEXT_PORT ?? "32185");
 const modelPort = Number(process.env.KEIKO_E2E_MODEL_PORT ?? "32186");
 const modelMockScript = join(root, "tests", "e2e", "support", "model-mock-server.mjs");
 const modelBaseUrl = `http://127.0.0.1:${String(modelPort)}/v1`;
-const stateId = process.env.GITHUB_RUN_ID ?? String(process.pid);
+// The state directory must be UNIQUE PER BROWSER RUN, not per workflow run. `GITHUB_RUN_ID` is
+// identical for every step of a job, so the chromium and firefox smoke lanes — two separate
+// `playwright test` invocations — resolved the SAME directory and the second inherited the first's
+// memory database, UI data and workspace state. A journey that asserts an empty starting state
+// ("disabled capture stays empty") then reads the previous engine's leftovers and fails for a
+// reason that has nothing to do with the engine under test.
+//
+// Derived from `--project=` on the command line rather than a new env var each script must remember
+// to set: the flag is already how the lanes differ, so isolation cannot be forgotten. Falls back to
+// the plain id when no project is pinned (a local full run), which is a single invocation and so
+// needs no split.
+const projectArgument = process.argv
+  .find((argument) => argument.startsWith("--project="))
+  ?.slice("--project=".length);
+const stateId = `${process.env.GITHUB_RUN_ID ?? String(process.pid)}${
+  projectArgument === undefined || projectArgument.length === 0 ? "" : `-${projectArgument}`
+}`;
 const stateDir = e2eStateDir(stateId);
 const fixtureConfigPath = join(root, "tests", "e2e", "fixtures", "keiko.e2e.config.json");
 const runtimeConfigPath = join(stateDir, "keiko.e2e.config.json");
