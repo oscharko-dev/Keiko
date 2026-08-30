@@ -70,5 +70,5 @@ export interface CommandTerminationEvidence {
   // already proved it will not leave on request. The first line carries no `escalation`; the second
   // carries the escalation's own verified disposition, so an operator can tell "SIGTERM was enough"
   // from "we escalated and the tree-kill still failed" instead of seeing one line for both.
-  readonly escalation?: WindowsTreeKillDisposition | undefined;
+  readonly escalation?: WindowsTreeKillDisposition;
 }
