@@ -22,9 +22,10 @@ import { extname, isAbsolute, join } from "node:path";
 import {
   isCommandAllowed,
   nodeWindowsTreeKill,
+  type CommandRule,
+  type WindowsShellInvocationOptions,
   type WindowsTreeKillDisposition,
 } from "@oscharko-dev/keiko-tools";
-import type { CommandRule, WindowsShellInvocationOptions } from "@oscharko-dev/keiko-tools";
 import type { WorkspaceInfo } from "@oscharko-dev/keiko-workspace";
 import type { LspProcessErrorCode } from "@oscharko-dev/keiko-contracts";
 import {

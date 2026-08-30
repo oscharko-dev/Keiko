@@ -33,10 +33,10 @@ import {
   runCommand,
   type ExecutableResolver,
   type HomeProvider,
+  type CommandTerminationEvidence,
   type RunCommandDeps,
   type SpawnFn,
 } from "./exec.js";
-import type { CommandTerminationEvidence } from "./exec.js";
 import {
   GOVERNED_GIT_REMOTE_SANDBOX_POLICY,
   type CommandResult,

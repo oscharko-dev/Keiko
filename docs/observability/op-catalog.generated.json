@@ -983,25 +983,25 @@
     {
       "op": "lsp.process.terminated",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/editor/lsp/lspNodeAdapter.ts:129",
+      "site": "packages/keiko-server/src/editor/lsp/lspNodeAdapter.ts:130",
       "package": "keiko-server"
     },
     {
       "op": "lsp.spawn.completed",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/editor/lsp/lspNodeAdapter.ts:68",
+      "site": "packages/keiko-server/src/editor/lsp/lspNodeAdapter.ts:69",
       "package": "keiko-server"
     },
     {
       "op": "lsp.spawn.failed",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/editor/lsp/lspNodeAdapter.ts:103",
+      "site": "packages/keiko-server/src/editor/lsp/lspNodeAdapter.ts:104",
       "package": "keiko-server"
     },
     {
       "op": "memory.audit.state-cache.seeded",
       "category": "memory",
-      "site": "packages/keiko-server/src/deps.ts:1821",
+      "site": "packages/keiko-server/src/deps.ts:1824",
       "package": "keiko-server"
     },
     {

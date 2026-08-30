@@ -170,7 +170,7 @@ function collectSources(roots = SOURCE_ROOTS) {
 export function parseDeclaredFloors(queries) {
   const floors = new Map();
   for (const query of queries) {
-    const match = /^([a-z_]+)\s*>=\s*([0-9]+(?:\.[0-9]+)?)$/u.exec(query.trim());
+    const match = /^([a-z_]+)\s*>=\s*(\d+(?:\.\d+)?)$/u.exec(query.trim());
     if (match === null) {
       fail(`browserslist entry ${JSON.stringify(query)} is not a "<engine> >= <version>" floor`);
       return undefined;
@@ -244,7 +244,7 @@ export function transpileFloorViolations(floors, targets = TRANSPILE_TARGETS) {
     // Validate the WHOLE string before comparing. `Number.parseFloat` reads a numeric PREFIX, so
     // "111junk" and "111.0.1" both come back as 111 — a malformed target would silently compare as
     // a plausible version and pass a gate whose entire job is to catch exactly that kind of drift.
-    const transpiled = /^[0-9]+(?:\.[0-9]+)?$/u.test(String(target).trim())
+    const transpiled = /^\d+(?:\.\d+)?$/u.test(String(target).trim())
       ? Number.parseFloat(String(target))
       : Number.NaN;
     if (Number.isNaN(transpiled)) {

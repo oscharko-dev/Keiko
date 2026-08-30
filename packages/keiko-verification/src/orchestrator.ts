@@ -13,10 +13,10 @@ import {
   type CommandResult,
   type NetworkPolicy,
   type RunCommandDeps,
+  type CommandTerminationEvidence,
   type SandboxPolicy,
   type SpawnFn,
 } from "@oscharko-dev/keiko-tools";
-import type { CommandTerminationEvidence } from "@oscharko-dev/keiko-tools";
 import { nodeSpawnFn } from "@oscharko-dev/keiko-tools/internal/exec";
 import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
 import type { WorkspaceFs, WorkspaceInfo } from "@oscharko-dev/keiko-workspace";

@@ -145,7 +145,11 @@ import {
   createContainerRunnerManager,
   type ContainerRunnerManager,
 } from "./runtime/containerRunner.js";
-import { createBrowserSessionManager, type BrowserSessionManager } from "@oscharko-dev/keiko-tools";
+import {
+  createBrowserSessionManager,
+  type BrowserSessionManager,
+  type CommandTerminationEvidence,
+} from "@oscharko-dev/keiko-tools";
 import { type MemoryVaultStore } from "@oscharko-dev/keiko-memory-vault";
 import type { CapturePolicyOptions } from "@oscharko-dev/keiko-memory-capture";
 import type {
@@ -171,7 +175,6 @@ import {
   createRelationshipStorePort,
   type RelationshipHandlerDeps,
 } from "./relationship-handlers.js";
-import type { CommandTerminationEvidence } from "@oscharko-dev/keiko-tools";
 import { createNodeGitWorktreeAdapter } from "@oscharko-dev/keiko-tools/internal/git-mutation";
 // Deps-level termination-evidence port for every managed-worktree git lane composed here
 // (PR #3354 review, comment 3887021650): a worktree operation that times out or is aborted leaves

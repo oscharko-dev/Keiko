@@ -615,7 +615,7 @@ export const createHandleCommitPreview = (
   // `execution.activityLog` still wins when a caller sets both.
   const activityLog =
     options.execution?.activityLog ?? options.activityLog ?? processServerLogSink();
-  const seams = { ...(options.execution ?? {}), activityLog };
+  const seams = { ...options.execution, activityLog };
   const now = (): number => (seams.now ?? Date.now)();
   return async (ctx, deps): Promise<RouteResult> => {
     const correlationId = ctx.correlationId ?? UNKNOWN_CORRELATION_ID;
@@ -810,7 +810,7 @@ export const createHandleCommitExecute = (
   // Same single resolution as the preview handler above, for the same reason: a caller that sets
   // only `options.activityLog` must still see this route's termination evidence.
   const seams = {
-    ...(options.execution ?? {}),
+    ...options.execution,
     activityLog: options.execution?.activityLog ?? options.activityLog ?? processServerLogSink(),
   };
   return async (ctx, deps): Promise<RouteResult> => {
