@@ -18,6 +18,7 @@
 // rather than driving a real synthesized-audio round trip.
 
 import { expect, test, type Page } from "@playwright/test";
+import { fakeDictationMediaInit } from "./support/dictation-media.js";
 import { evidenceScreenshotPath } from "./support/evidence.js";
 
 const SPEECH_OUTPUT_CAPABILITY = {
@@ -50,16 +51,6 @@ const NO_VOICE_CAPABILITY = {
   },
 };
 
-// A capture-capable browser so the STT-only flow renders the dictation affordance (the playback control
-// must be absent independently of capture support).
-const CAPTURE_FAKES_SCRIPT = `
-  Object.defineProperty(navigator, "mediaDevices", {
-    configurable: true,
-    value: { getUserMedia: async () => ({ getTracks: () => [{ stop() {} }] }) },
-  });
-  window.MediaRecorder = class { static isTypeSupported() { return true; } start() {} stop() {} addEventListener() {} };
-`;
-
 async function openComposer(page: Page): Promise<void> {
   await page.goto("/");
   await page.getByRole("button", { name: "Chat History", exact: true }).click();
@@ -83,7 +74,7 @@ async function noVoiceFlow(page: Page): Promise<void> {
 }
 
 async function sttOnlyFlow(page: Page): Promise<void> {
-  await page.addInitScript(CAPTURE_FAKES_SCRIPT);
+  await page.addInitScript(fakeDictationMediaInit("grant"));
   await stubCapability(page, STT_CAPABILITY);
   await openComposer(page);
   // Dictation is offered for an STT-only deployment, but NEVER the assistant-voice playback control:

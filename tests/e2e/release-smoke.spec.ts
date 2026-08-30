@@ -227,9 +227,9 @@ async function openTreePath(
   await row.click();
 }
 
-// Delegates to the shared, fail-closed implementation: it focuses Monaco's actual input surface and
-// verifies the complete model-backed hot-exit payload instead of letting a silent no-op corrupt the
-// buffer. Journeys that invoke it retain an explicit Gecko skip until the fallback accepts select-all.
+// Delegates to the shared, fail-closed implementation: it focuses Monaco's actual input surface,
+// invokes a real engine-appropriate Monaco select-all command, and verifies the complete
+// model-backed hot-exit payload instead of letting a silent no-op corrupt the buffer.
 async function replaceMonacoText(
   page: Page,
   editorWindow: ReturnType<Page["getByRole"]>,
@@ -472,25 +472,7 @@ test("window-owned AI confirm preserves viewport modality @smoke", async ({ page
 test("files editor opens, edits, saves, conflicts, reloads, and closes @smoke", async ({
   page,
   request,
-  browserName,
 }) => {
-  // KNOWN CROSS-ENGINE GAP — Gecko only, tracked, NOT a silent exclusion.
-  // This journey replaces the whole editor buffer before asserting. Monaco 0.56 uses the
-  // EditContext API where it exists and falls back to `textarea.inputarea` where it does not;
-  // Firefox has no EditContext (verified from a trace snapshot of this editor:
-  // `native-edit-context` 0 occurrences, `inputarea` 2). On that fallback surface neither Ctrl+A
-  // nor Cmd+A reaches Monaco's keybinding service, so the delete-plus-paste sequence cannot replace
-  // the full model and stale content survives. The shared helper
-  // (support/editor-chord.ts) now fails loudly at that exact point instead of letting the
-  // corruption surface later as an unrelated strict-mode violation.
-  // The PRODUCT is not implicated: its own platform detection reads `navigator.platform` from the
-  // page and accepts `metaKey || ctrlKey`. What is unproven on Gecko is this buffer-replacement
-  // TEST GESTURE, not the editor. Everything else in this smoke — 72 of 73 journeys — runs on
-  // Firefox, and all 73 run on Chromium and WebKit.
-  test.skip(
-    browserName === "firefox",
-    "Monaco select-all does not reach the EditContext fallback surface on Gecko; the buffer-replacement gesture is unproven there (the rest of this smoke runs on Firefox)",
-  );
   const projectPath = createProjectFixture();
   const relativePath = "packages/keiko-cli/src/run.ts";
   const absolutePath = join(projectPath, relativePath);
@@ -826,10 +808,9 @@ test("memory and local-knowledge navigation surfaces load without client errors 
   assertNoPageErrors();
 });
 
-// Gecko-safe edit/save proof. The full conflict/reload journey above still needs whole-buffer
-// replacement and keeps its explicit Firefox skip, but a known-empty model can be mutated through
-// Monaco's real key-event input on every engine without relying on select-all.
-test("editor edits and saves a known-empty governed file on both engines @smoke", async ({
+// Independent empty-model proof: real key events mutate Monaco's native input path on every
+// required engine without relying on whole-buffer replacement.
+test("editor edits and saves a known-empty governed file on every engine @smoke", async ({
   page,
   request,
   browserName,

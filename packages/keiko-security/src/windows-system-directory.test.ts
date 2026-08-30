@@ -8,7 +8,7 @@
 // says it matters: "an exported function whose stated purpose is containment must not depend on
 // its callers staying literal to be safe."
 
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync } from "node:fs";
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -371,9 +371,12 @@ describe("resolveWindowsSystemBinary — resolved-binary existence (finding 4)",
     }
   });
 
-  it("propagates an unexpected filesystem error instead of misclassifying it as absent", () => {
-    const inaccessible = Object.assign(new Error("permission denied"), { code: "EACCES" });
-    expect(() =>
+  it("redacts an unexpected filesystem inspection error instead of leaking its path", () => {
+    const inaccessible = Object.assign(
+      new Error(String.raw`EACCES: permission denied, lstat 'C:\attack-marker\cmd.exe'`),
+      { code: "EACCES", path: String.raw`C:\attack-marker\cmd.exe` },
+    );
+    try {
       resolveWindowsSystemBinary(
         "cmd.exe",
         {},
@@ -381,8 +384,13 @@ describe("resolveWindowsSystemBinary — resolved-binary existence (finding 4)",
           throw inaccessible;
         },
         TRUSTED_SYSTEM_ROOT,
-      ),
-    ).toThrow(inaccessible);
+      );
+      expect.unreachable("must fail when the binary cannot be inspected");
+    } catch (error) {
+      expect(error).toBeInstanceOf(WindowsSystemBinaryMissingError);
+      expect(error).not.toBe(inaccessible);
+      expect((error as Error).message).not.toContain("attack-marker");
+    }
   });
 
   it("receives the fully joined System32 path, not the bare directory or binary name", () => {
@@ -431,6 +439,58 @@ describe("resolveWindowsSystemBinary — resolved-binary existence (finding 4)",
         ),
       ).toThrow(WindowsSystemBinaryMissingError);
     });
+
+    it.runIf(process.platform === "win32")(
+      "rejects a final executable symlink instead of following it",
+      () => {
+        const root = mkdtempSync(join(tmpdir(), "keiko-system-binary-reparse-"));
+        const selectedRoot = join(root, "Windows");
+        const system32 = join(selectedRoot, "System32");
+        const realBinary = join(root, "real-cmd.exe");
+        try {
+          mkdirSync(system32, { recursive: true });
+          writeFileSync(realBinary, "not an operating-system binary", "utf8");
+          symlinkSync(realBinary, join(system32, "cmd.exe"), "file");
+
+          expect(() =>
+            resolveWindowsSystemBinary(
+              "cmd.exe",
+              { SystemRoot: selectedRoot },
+              undefined,
+              TRUSTED_SYSTEM_ROOT,
+            ),
+          ).toThrow(WindowsSystemBinaryMissingError);
+        } finally {
+          rmSync(root, { recursive: true, force: true });
+        }
+      },
+    );
+
+    it.runIf(process.platform === "win32")(
+      "rejects a System32 junction even when the final executable is a regular file",
+      () => {
+        const root = mkdtempSync(join(tmpdir(), "keiko-system-binary-parent-reparse-"));
+        const selectedRoot = join(root, "Windows");
+        const redirectedSystem32 = join(root, "redirected-system32");
+        try {
+          mkdirSync(selectedRoot, { recursive: true });
+          mkdirSync(redirectedSystem32, { recursive: true });
+          writeFileSync(join(redirectedSystem32, "cmd.exe"), "not an OS binary", "utf8");
+          symlinkSync(redirectedSystem32, join(selectedRoot, "System32"), "junction");
+
+          expect(() =>
+            resolveWindowsSystemBinary(
+              "cmd.exe",
+              { SystemRoot: selectedRoot },
+              undefined,
+              TRUSTED_SYSTEM_ROOT,
+            ),
+          ).toThrow(WindowsSystemBinaryMissingError);
+        } finally {
+          rmSync(root, { recursive: true, force: true });
+        }
+      },
+    );
   });
 });
 

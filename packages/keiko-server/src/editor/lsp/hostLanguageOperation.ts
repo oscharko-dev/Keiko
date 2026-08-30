@@ -1642,7 +1642,10 @@ async function finalizePooledEntry(key: string, entry: PooledLspEntry): Promise<
     clearIdleTimer(entry);
     return;
   }
-  if (isTerminalLspStatus(entry.manager.getLspProcessStatus())) {
+  // RESTART_THROTTLED is an intentional same-configuration tombstone: keeping its manager in the
+  // pool preserves the exhausted restart window. Evict every other settled non-reusable state so
+  // transient crashes, disposal, and configuration failures cannot poison later acquisitions.
+  if (entry.manager.getLspProcessStatus() === "RESTART_THROTTLED") {
     clearIdleTimer(entry);
     return;
   }

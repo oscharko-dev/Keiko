@@ -15,6 +15,12 @@ import {
 } from "../check-browser-baseline.mjs";
 import { TARGETS as TRANSPILE_TARGETS } from "../transpile-ui-static-js.mjs";
 
+// The two real-repository proofs parse the complete Monaco/PDF.js dependency closure (more than
+// 1,000 source files). V8 coverage instrumentation pushes that intentional integration workload
+// beyond the suite's 15-second unit-test default, so keep a separate bounded budget without
+// weakening the closure or its assertions.
+const REAL_DEPENDENCY_CLOSURE_TIMEOUT_MS = 60_000;
+
 // Review finding (F1): parseDeclaredFloors kept only the LAST floor per engine — for
 // ["chrome >= 100", "chrome >= 111"] it checked only Chrome 111, even though Browserslist itself
 // resolves and unions every query in the array, so Chrome 100 stays a real declared-supported
@@ -635,20 +641,24 @@ describe("main", () => {
     });
   });
 
-  it("derives the real Monaco and legacy PDF.js main/worker closure", () => {
-    const paths = dependencyClosureForSources();
-    expect(paths.some((path) => path.endsWith("/monaco-editor/esm/vs/editor/editor.api.js"))).toBe(
-      true,
-    );
-    expect(
-      paths.some((path) => path.endsWith("/monaco-editor/esm/vs/editor/editor.worker.js")),
-    ).toBe(true);
-    expect(paths.some((path) => path.endsWith("/pdfjs-dist/legacy/build/pdf.mjs"))).toBe(true);
-    expect(paths.some((path) => path.endsWith("/pdfjs-dist/legacy/build/pdf.worker.mjs"))).toBe(
-      true,
-    );
-    expect(paths.filter((path) => path.includes("/monaco-editor/")).length).toBeGreaterThan(500);
-  });
+  it(
+    "derives the real Monaco and legacy PDF.js main/worker closure",
+    () => {
+      const paths = dependencyClosureForSources();
+      expect(
+        paths.some((path) => path.endsWith("/monaco-editor/esm/vs/editor/editor.api.js")),
+      ).toBe(true);
+      expect(
+        paths.some((path) => path.endsWith("/monaco-editor/esm/vs/editor/editor.worker.js")),
+      ).toBe(true);
+      expect(paths.some((path) => path.endsWith("/pdfjs-dist/legacy/build/pdf.mjs"))).toBe(true);
+      expect(paths.some((path) => path.endsWith("/pdfjs-dist/legacy/build/pdf.worker.mjs"))).toBe(
+        true,
+      );
+      expect(paths.filter((path) => path.includes("/monaco-editor/")).length).toBeGreaterThan(500);
+    },
+    REAL_DEPENDENCY_CLOSURE_TIMEOUT_MS,
+  );
 
   it("extracts value imports and worker URLs but excludes type-only imports", () => {
     const source =
@@ -658,10 +668,14 @@ describe("main", () => {
     expect(runtimeSpecifiers("fixture.ts", source)).toEqual(["shown", "worker/entry.js"]);
   });
 
-  it("passes end to end against the real shipped declaration and derived closure", () => {
-    const result = run({});
-    expect(result.exitCode).toBeUndefined();
-    expect(result.logs.join("\n")).toContain("browser-baseline: PASS");
-    expect(result.logs.join("\n")).toMatch(/1\d{3} bundled dependency source files/u);
-  });
+  it(
+    "passes end to end against the real shipped declaration and derived closure",
+    () => {
+      const result = run({});
+      expect(result.exitCode).toBeUndefined();
+      expect(result.logs.join("\n")).toContain("browser-baseline: PASS");
+      expect(result.logs.join("\n")).toMatch(/1\d{3} bundled dependency source files/u);
+    },
+    REAL_DEPENDENCY_CLOSURE_TIMEOUT_MS,
+  );
 });

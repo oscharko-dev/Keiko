@@ -31,6 +31,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
+import { resolveWindowsSystemBinary } from "@oscharko-dev/keiko-security";
 
 // Import the pure helper straight from its TypeScript source (Node's native type-stripping), the
 // same mechanism the sibling smoke scripts use to import a package's `src/*.ts` — no build step, no
@@ -122,7 +123,7 @@ function spawnThroughWrapper(shimPath, args, root, outPath) {
   );
   assert.equal(
     invocation.command.toLowerCase(),
-    join(ACTUAL_SYSTEM_ROOT, "System32", "cmd.exe").toLowerCase(),
+    resolveWindowsSystemBinary("cmd.exe").toLowerCase(),
     "the production wrapper must spawn the identity-approved conventional System32 command",
   );
   rmSync(outPath, { force: true });
@@ -242,6 +243,34 @@ function assertSystemRootRejectedBeforeSpawn(label, shimPath, systemRoot) {
   assert.equal(spawnReached, false, `${label}: rejection happened only after the spawn boundary`);
 }
 
+function assertSystemBinaryRedirectRejectedBeforeSpawn(shimPath, root) {
+  const linkedSystemRoot = join(root, "binary-reparse-windows");
+  const linkedCmd = join(linkedSystemRoot, "System32", "cmd.exe");
+  mkdirSync(dirname(linkedCmd), { recursive: true });
+  symlinkSync(resolveWindowsSystemBinary("cmd.exe"), linkedCmd, "file");
+
+  let spawnReached = false;
+  assert.throws(
+    () => {
+      const invocation = buildWindowsShellInvocation(shimPath, [], {
+        platform: "win32",
+        env: { SystemRoot: linkedSystemRoot },
+        // Isolate the final-binary decision: the fake root is intentionally accepted here so the
+        // production exists check must inspect cmd.exe itself and refuse its symbolic redirect.
+        systemDirectoryIdentity: () => true,
+      });
+      spawnReached = true;
+      spawnSync(invocation.command, invocation.args, {
+        shell: false,
+        windowsVerbatimArguments: true,
+      });
+    },
+    (error) => error?.name === "WindowsSystemBinaryMissingError",
+    "a final System32\\cmd.exe symbolic redirect must fail closed before spawn",
+  );
+  assert.equal(spawnReached, false, "the binary redirect rejection happened only after spawn");
+}
+
 function runWindowsCmdSpawnSmoke() {
   const root = mkdtempSync(join(tmpdir(), "keiko-cmd-spawn-"));
   let failure;
@@ -272,6 +301,7 @@ function runWindowsCmdSpawnSmoke() {
       ordinaryShim,
       junctionSystemRoot,
     );
+    assertSystemBinaryRedirectRejectedBeforeSpawn(ordinaryShim, root);
 
     for (const [label, shimPath] of [
       ["ordinary .cmd", ordinaryShim],

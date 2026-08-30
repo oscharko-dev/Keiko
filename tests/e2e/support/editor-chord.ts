@@ -43,11 +43,32 @@ export async function editorModifier(page: Page): Promise<"Meta" | "Control"> {
 }
 
 /**
- * Presses the editor's select-all chord and waits for the page to settle, so a caller can replace
- * the buffer rather than append to it.
+ * Selects the complete Monaco model through the input surface this engine provides.
+ *
+ * Chromium's EditContext surface receives Monaco's select-all chord directly. Firefox's textarea
+ * fallback lets the browser consume that chord as a native textarea selection before Monaco can
+ * turn it into a model selection, so select from the model's first to last position through
+ * Monaco's cursor keybindings there. Neither path mutates a DOM value or exposes a test-only hook.
  */
-export async function selectAllInEditor(page: Page): Promise<void> {
+export async function selectAllInEditor(page: Page, editorWindow: Locator): Promise<void> {
+  if (await usesGeckoTextareaInput(page, editorWindow)) {
+    await selectAllThroughModelBounds(page);
+    return;
+  }
   await pressChord(page, await editorModifier(page));
+}
+
+async function usesGeckoTextareaInput(page: Page, editorWindow: Locator): Promise<boolean> {
+  return (
+    page.context().browser()?.browserType().name() === "firefox" &&
+    (await editorWindow.locator(".monaco-editor textarea.inputarea").count()) > 0
+  );
+}
+
+async function selectAllThroughModelBounds(page: Page): Promise<void> {
+  const modifier = await editorModifier(page);
+  await page.keyboard.press(`${modifier}+Home`);
+  await page.keyboard.press(`${modifier}+Shift+End`);
 }
 
 async function pressChord(page: Page, modifier: "Meta" | "Control"): Promise<void> {
@@ -73,8 +94,8 @@ async function pressChord(page: Page, modifier: "Meta" | "Control"): Promise<voi
  *
  * Why this matters: clicking `.monaco-editor` lands focus on the EditContext surface in Chromium.
  * Firefox instead needs its fallback textarea focused explicitly. Focus is necessary in both
- * engines; the Gecko select-all chord remains unproven, so callers retain their explicit Gecko
- * skip rather than treating focus alone as evidence that replacement is safe.
+ * engines; replacement then selects between Monaco's model bounds on that fallback rather than a
+ * browser-native textarea select-all.
  */
 export async function focusMonacoInput(editorWindow: Locator): Promise<void> {
   const editor = editorWindow.locator(".monaco-editor").first();
@@ -231,6 +252,12 @@ async function performReplacementGesture(
   text: string,
 ): Promise<void> {
   await page.keyboard.press("Backspace");
+  if (await usesGeckoTextareaInput(page, editorWindow)) {
+    // Firefox correctly rejects the synthetic ClipboardEvent used by the EditContext path. Drive
+    // its native textarea with real key events after the Monaco model selection is deleted.
+    await page.keyboard.type(text);
+    return;
+  }
   await pasteEditorText(editorWindow, text);
 }
 
@@ -260,10 +287,9 @@ export async function enterEmptyEditorBuffer(
 
 /**
  * Replaces the whole editor buffer with `text` — the shared, fail-closed version of the
- * click-selectAll-insert dance that several specs previously each carried their own copy of. The
- * calling journeys retain an explicit Gecko skip until Monaco's fallback input accepts select-all.
+ * click-selectAll-insert dance that several specs previously each carried their own copy of.
  * Verifies that the select-all actually took effect AND that no old content survives anywhere in
- * the buffer, so a chord that silently reaches nothing fails HERE with a clear message instead of
+ * the buffer, so a command that silently reaches nothing fails HERE with a clear message instead of
  * corrupting the buffer for a later assertion.
  */
 export async function replaceEditorBuffer(
@@ -274,7 +300,7 @@ export async function replaceEditorBuffer(
 ): Promise<void> {
   const identity = await activeEditorIdentity(editorWindow);
   await focusMonacoInput(editorWindow);
-  await selectAllInEditor(page);
+  await selectAllInEditor(page, editorWindow);
   // Register before the mutating part of the gesture so a fast state update cannot outrun the
   // observer. The predicate ignores stale writes carrying other content or another active file and
   // settles only when the product publishes this exact full buffer through its hot-exit path.

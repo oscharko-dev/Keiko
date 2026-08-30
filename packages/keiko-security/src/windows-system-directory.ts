@@ -14,11 +14,15 @@
 // Windows exposes the live OS root in the object-manager namespace as `\SystemRoot`. The Win32
 // `\\?\GLOBALROOT` escape reaches that namespace without consulting process environment variables,
 // drive mappings, the workspace, or PATH. On win32 this module compares the filesystem identity of
-// an environment-selected candidate with that OS-owned reference and rejects a reparse anywhere in
-// its resolved path. The OS-owned GLOBALROOT spelling is the identity oracle only: Node's Windows
-// process launcher rejects it as an image path, so executable resolvers return the conventional,
-// identity-approved drive path. Shape and binary-existence checks remain defence in depth;
-// identity is the trust decision.
+// an environment-selected candidate with that OS-owned reference and rejects symlink/junction
+// redirects in its resolved path at verification time. The OS-owned GLOBALROOT spelling is the
+// identity oracle only: Node's Windows process launcher rejects it as an image path, so executable
+// resolvers return the conventional, identity-approved drive path. Node's spawn API cannot bind
+// CreateProcess to a pre-opened executable handle. The returned string is therefore a point-in-time
+// decision rather than a durable capability; immediate-spawn callers minimize that residual window,
+// while a path persisted in an installed launcher necessarily relies on Windows' protection of the
+// approved OS root after installation. Shape plus final-link/redirect checks remain defence in
+// depth; identity is the trust decision at resolution time.
 
 import { lstatSync, realpathSync, statSync } from "node:fs";
 import { win32 as win32Path } from "node:path";
@@ -31,12 +35,12 @@ export class WindowsSystemDirectoryError extends Error {
   }
 }
 
-/** Thrown when a canonically resolved System32 binary is absent from the host image. */
+/** Thrown when a resolved System32 binary cannot be proven available as a regular file. */
 export class WindowsSystemBinaryMissingError extends Error {
   public readonly code = "WINDOWS_SYSTEM_BINARY_MISSING" as const;
 
   public constructor() {
-    super("resolved Windows system binary does not exist as a regular file");
+    super("resolved Windows system binary is unavailable as a regular file");
     this.name = "WindowsSystemBinaryMissingError";
   }
 }
@@ -134,10 +138,10 @@ function comparableWindowsPath(path: string): string {
 }
 
 // Uses stable filesystem object identity rather than path text. BigInt stats avoid precision loss
-// in Windows' 64-bit file index. lstat on the candidate deliberately rejects a final reparse point
-// (Node reports NTFS junctions as symbolic links); stat then follows ordinary path resolution for
-// the identity comparison. A host/filesystem that cannot supply non-zero identity fields fails
-// closed instead of treating two unknown identities as equal.
+// in Windows' 64-bit file index. lstat on the candidate deliberately rejects a final symlink or
+// junction (Node reports NTFS junctions as symbolic links); stat then follows ordinary path
+// resolution for the identity comparison. A host/filesystem that cannot supply non-zero identity
+// fields fails closed instead of treating two unknown identities as equal.
 export function sameWindowsSystemDirectoryIdentity(
   candidate: string,
   authoritativeRoot: string,
@@ -146,7 +150,7 @@ export function sameWindowsSystemDirectoryIdentity(
     const candidateLink = lstatSync(candidate, { bigint: true });
     if (!candidateLink.isDirectory() || candidateLink.isSymbolicLink()) return false;
     const candidateRealPath = realpathSync.native(candidate);
-    // Reject reparses in ANY ancestor, not only a final junction. Otherwise
+    // Reject symlink/junction redirects in ANY ancestor, not only a final junction. Otherwise
     // `C:\workspace\mutable-junction\Windows` can identify the real root during this check and be
     // retargeted to a planted System32 before a caller joins and spawns its binary.
     if (comparableWindowsPath(candidateRealPath) !== comparableWindowsPath(candidate)) return false;
@@ -187,7 +191,10 @@ function assertSystemDirectoryIdentity(
  * The trusted Windows system directory: `SystemRoot`, then `WINDIR`, then the hard-coded default —
  * validated for canonical shape in every case. Every trusted Windows system-binary resolution in
  * the monorepo goes through this function or `resolveWindowsSystemBinary` below, rather than
- * re-deriving the environment fallback chain with a weaker check.
+ * re-deriving the environment fallback chain with a weaker check. The result is a point-in-time
+ * path decision, not a held filesystem object. Immediate-spawn callers should resolve at their
+ * execution boundary; callers that persist the approved path must retain the documented Windows
+ * ACL/replacement residual instead of presenting the string as a durable filesystem capability.
  */
 export function resolveWindowsSystemDirectory(
   env: Readonly<Record<string, string | undefined>> = process.env,
@@ -209,11 +216,19 @@ export type WindowsBinaryExistsCheck = (resolvedPath: string) => boolean;
 // operational-missing type. It is gated on the platform genuinely being win32: on another host a
 // Windows path is not meaningful, and hermetic callers inject the seam above. Directory identity
 // has already been proven before this check runs; this final step classifies a missing/stripped
-// system binary separately from an untrusted root.
+// system binary separately from an untrusted root. `lstat` is load-bearing: `stat` would follow a
+// final executable symlink and authorize its target instead of refusing the alias itself. Comparing
+// the native real path also refuses other redirecting reparse forms that resolve to another name.
 function defaultWindowsBinaryExists(resolvedPath: string): boolean {
   if (process.platform !== "win32") return true;
   try {
-    return statSync(resolvedPath).isFile();
+    const binary = lstatSync(resolvedPath);
+    return (
+      binary.isFile() &&
+      !binary.isSymbolicLink() &&
+      comparableWindowsPath(realpathSync.native(resolvedPath)) ===
+        comparableWindowsPath(resolvedPath)
+    );
   } catch (error) {
     const code = (error as NodeJS.ErrnoException).code;
     if (code === "ENOENT" || code === "ENOTDIR") return false;
@@ -244,6 +259,8 @@ function assertSafeSystemPathSegment(segment: string): void {
  * production path is joined beneath the conventional drive path after that root has been matched
  * to the OS-owned GLOBALROOT identity. `CreateProcessW` cannot launch the GLOBALROOT object-manager
  * spelling; the validated candidate is therefore both the trust-preserving and executable form.
+ * The default existence check refuses final symlinks and redirecting reparse forms instead of
+ * authorizing their targets.
  */
 export function resolveWindowsSystemExecutable(
   segments: readonly string[],
@@ -260,9 +277,19 @@ export function resolveWindowsSystemExecutable(
   const selectedRoot = resolveWindowsSystemDirectory(env, identityCheck);
   // GLOBALROOT remains the identity oracle above. It must not become the CreateProcess image path:
   // Node rejects that NT object-manager spelling with EINVAL on Windows. The selected root is
-  // drive-absolute, reparse-free, and identity-matched before this conventional path is formed.
+  // drive-absolute, free of symlink-like redirects, and identity-matched before this conventional
+  // path is formed.
   const resolved = win32Path.join(selectedRoot, ...segments);
-  if (!existsAsFile(resolved)) {
+  let exists: boolean;
+  try {
+    exists = existsAsFile(resolved);
+  } catch {
+    // Filesystem errors can carry the absolute path in both `message` and `path`. Collapse them
+    // into the same body-free operational-unavailability class as a negative inspection result;
+    // the authenticated root remains distinct from this binary-level failure.
+    throw new WindowsSystemBinaryMissingError();
+  }
+  if (!exists) {
     throw new WindowsSystemBinaryMissingError();
   }
   return resolved;
@@ -291,8 +318,9 @@ export function resolveWindowsPowerShellExecutable(
  * A named binary under the validated Windows system directory's `System32`, NEVER from PATH. The
  * name must be a bare file name: a caller that could pass a path could escape System32 entirely,
  * which is the containment this function exists to provide. On win32, the resolved path must also
- * exist as a regular file. A fabricated or reparsed root fails at the preceding identity boundary;
- * an authentic root whose binary is absent fails here instead of later as a raw spawn error.
+ * exist as a regular file. A fabricated or symlink-redirected root fails at the preceding identity
+ * boundary; an authentic root whose binary is absent or cannot be proven regular fails here instead
+ * of later as a raw spawn error.
  * `existsAsFile` and `identityCheck` are hermetic test seams.
  */
 export function resolveWindowsSystemBinary(

@@ -18,6 +18,8 @@ import type { LanguageServiceRequest } from "@oscharko-dev/keiko-contracts";
 import type { CommandRule } from "@oscharko-dev/keiko-tools";
 import type { WorkspaceInfo } from "@oscharko-dev/keiko-workspace";
 import type { LspSpawnFn } from "./lspNodeAdapter.js";
+import { GO_PROVIDER_SPEC } from "./providers/goProvider.js";
+import { createLspRuntimeStatePort } from "./lspRuntimeStateStore.js";
 import { createFakeLspProcess } from "./testing/fakeLspProcess.js";
 import { writeExecutableFixture } from "./testing/executableFixture.js";
 import {
@@ -25,6 +27,7 @@ import {
   disposeHostLspPoolEntry,
   type HostLanguageOperationOptions,
   initializeHostLanguageProvider,
+  listHostLspHealthSnapshotsForRoot,
   notifyHostLspWorkspaceFileChanged,
   runHostLanguageOperation,
   shutdownHostLspPool,
@@ -373,6 +376,42 @@ describe("runHostLanguageOperation pooling (GEN-PERF-EDITOR-007)", () => {
     expect(attempts).toBe(2);
   });
 
+  it("evicts a settled terminal entry after releasing its durable lease", async () => {
+    makeExecutable("gopls");
+    const stateDir = mkdtempSync(join(tmpdir(), "keiko-host-lsp-terminal-state-"));
+    const spawn: LspSpawnFn = () => {
+      throw new Error("spawn fixture failure");
+    };
+
+    try {
+      const result = await runHostLanguageOperation(diagnosticsRequest(workspaceRoot), {
+        workspace: workspaceAt(workspaceRoot),
+        processEnv: { PATH: binDir, KEIKO_EDITOR_LSP_GO: "1" },
+        commandRules: [{ executable: "gopls" }],
+        overlayAbsolutePath: join(workspaceRoot, "main.go"),
+        signal: new AbortController().signal,
+        spawn,
+        privateRuntimeStateRoot: stateDir,
+      });
+      const runtimeState = createLspRuntimeStatePort({
+        stateDir,
+        workspaceRoot,
+        managerId: GO_PROVIDER_SPEC.id,
+        configurationRevision: 0,
+      }).load();
+
+      expect(result).toMatchObject({ kind: "error", code: "TIMED_OUT" });
+      expect(listHostLspHealthSnapshotsForRoot(workspaceRoot)).toEqual([]);
+      expect(runtimeState).toMatchObject({
+        state: "ready",
+        snapshot: { generation: 1, leaseState: "released" },
+      });
+    } finally {
+      await shutdownHostLspPool();
+      rmSync(stateDir, { recursive: true, force: true });
+    }
+  });
+
   it("quarantines an unsolicited exit across retry and explicit pool invalidation", async () => {
     makeExecutable("gopls");
     const { spawn, spawnCount, controllers } = countingSpawn();
@@ -400,8 +439,10 @@ describe("runHostLanguageOperation pooling (GEN-PERF-EDITOR-007)", () => {
     await runAt(workspaceRoot, spawn, noRestart);
     controllers()[0]?.emitError();
     const retried = await runAt(workspaceRoot, spawn, noRestart);
+    const repeated = await runAt(workspaceRoot, spawn, noRestart);
 
     expect(retried).toMatchObject({ kind: "error", code: "TIMED_OUT" });
+    expect(repeated).toMatchObject({ kind: "error", code: "TIMED_OUT" });
     expect(spawnCount()).toBe(1);
     expect(controllers()[0]?.killed()).toEqual(["SIGKILL"]);
   });

@@ -54,6 +54,8 @@ const RAW_SYSTEM_ROOT_PROPERTIES = new Set(["SystemRoot", "WINDIR", "windir"]);
 const EXPANDS_SYSTEM_ROOT_IN_BATCH_PATH = /%(?:SystemRoot|WINDIR)%\\+System32\b/iu;
 const HARDCODES_DEFAULT_SYSTEM32_PATH = /\bC:\\+Windows\\+System32\b/iu;
 const PATH_MARKER = /System32|[\\/]/u;
+const MAY_REFERENCE_WINDOWS_SYSTEM_PATH =
+  /SystemRoot|WINDIR|System32|\\(?:x[\dA-Fa-f]{2}|u[\dA-Fa-f]{4}|u\{[\dA-Fa-f]+\})/iu;
 
 function containsRawSystemRootToken(text) {
   const scanner = ts.createScanner(ts.ScriptTarget.Latest, true, ts.LanguageVariant.Standard, text);
@@ -178,6 +180,10 @@ function sourceJoinsRawSystemRoot(sourceFile) {
 }
 
 function joinsAPathFromRawSystemRoot(text) {
+  // Nearly every product file is irrelevant. Reject it before comment stripping or TypeScript AST
+  // construction; retain escaped-token candidates because the scanner deliberately decodes forms
+  // such as `System\x52oot` that a literal substring check would miss.
+  if (!MAY_REFERENCE_WINDOWS_SYSTEM_PATH.test(text)) return false;
   const code = stripComments(text);
   if (EXPANDS_SYSTEM_ROOT_IN_BATCH_PATH.test(code) || HARDCODES_DEFAULT_SYSTEM32_PATH.test(code)) {
     return true;
@@ -193,10 +199,12 @@ describe("trusted Windows system-root usage (whole-class pin)", () => {
     for (const path of sourceFiles()) {
       if (path.endsWith(OWNER)) continue;
       const text = readFileSync(path, "utf8");
-      if (joinsAPathFromRawSystemRoot(text)) offenders.push(path.slice(path.indexOf("packages/")));
+      if (joinsAPathFromRawSystemRoot(text)) {
+        offenders.push(path.slice(path.indexOf("packages/")));
+      }
     }
     expect(offenders).toEqual([]);
-  });
+  }, 60_000);
 
   // IDX55 fixtures: prove the widened detection actually fires on the two forms the original
   // dot-only regex missed, rather than trusting the regex change by inspection alone.
@@ -222,6 +230,10 @@ describe("trusted Windows system-root usage (whole-class pin)", () => {
       [
         "Unicode-escaped bracket access",
         String.raw`const p = join(process.env["System\x52oot"], "System32");`,
+      ],
+      [
+        "Unicode-escaped bracket access without another literal path marker",
+        String.raw`const p = join(process.env["System\x52oot"], dynamicSegment);`,
       ],
       [
         "bare env (no process. prefix), bracket access",

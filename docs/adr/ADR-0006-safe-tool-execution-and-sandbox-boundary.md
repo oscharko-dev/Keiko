@@ -591,25 +591,37 @@ mappings, and the workspace. On win32 the resolver therefore:
 2. resolves it and requires case-insensitive realpath-text equality, rejecting a symlink or junction
    at the final component or any ancestor;
 3. compares its BigInt filesystem device/file identity with `\\?\GLOBALROOT\SystemRoot`; and
-4. checks the requested regular System32 binary, then returns the validated conventional drive path
+4. uses `lstat` plus native-realpath equality to require a regular System32 binary that is neither a
+   final symlink nor a redirect to another name, then returns the validated conventional drive path
    for execution. `\\?\GLOBALROOT\SystemRoot` remains the identity oracle only: Node's
    `CreateProcessW` bridge rejects that object-manager spelling as an image path with `EINVAL`.
 
 An unreadable identity, zero/unsupported identity fields, a missing root, a fabricated directory,
-or a reparse-point candidate all fail closed as `WindowsSystemDirectoryError`. Comparing identity,
-not path text, supports a genuine non-`C:` Windows installation without trusting an arbitrary
-environment path. The returned candidate has already passed the canonical-shape, no-reparse, and
-OS-identity checks; this retains the documented lexical-path TOCTOU residual while keeping the
-command executable by the platform. The production check performs no verifier spawn and emits no
-path or environment value in its error; callers retain their existing body-free
-security/termination evidence.
+or a symlink/junction redirect all fail closed as `WindowsSystemDirectoryError`. Comparing
+identity, not path text, supports a genuine non-`C:` Windows installation without trusting an
+arbitrary environment path. The returned candidate has already passed the canonical-shape,
+symlink/redirect, and OS-identity checks at verification time. The decision remains point-in-time:
+Node's spawn API takes an executable path and cannot bind `CreateProcessW` to the filesystem handle
+that was inspected.
+Repeating `realpath` after the identity match would still return a mutable string and must not be
+presented as closing that race. Immediate-spawn callers resolve at their execution boundary to
+minimize the window. Installed launchers that persist the identity-approved path cannot do that and
+retain the Windows ACL/replacement residual between installation and execution; the stored string
+is not a durable filesystem capability. Exploiting either residual requires the ability to replace
+the genuine identity-approved OS root or its System32 binary after verification. A workspace-only
+fake root or ancestor junction fails at the identity decision, and a final binary symlink or other
+redirect to another name fails at the binary check. Node does not expose the raw Windows reparse
+attribute through `Stats`, so this contract does not claim to classify a non-redirecting custom
+reparse tag. The production check performs no verifier spawn and emits no path or environment value
+in its error; callers retain their existing body-free security/termination evidence.
 
 This is a whole-class executable contract, not only the command sandbox's rule. CLI launcher
 generation, lifecycle browser opening, portable legacy-launcher cleanup and native failure alerts,
 server Authenticode probes, shortcut helpers, and Git/LSP runtime probes resolve known Windows
 system executables through the same authoritative helper. A fail-soft surface may keep its primary
 operation available, but it must emit a correlated, body-free event that distinguishes an untrusted
-root from a genuinely missing binary; it may not collapse either into a generic stderr-only notice.
+root from an unavailable or unprovable system binary; it may not collapse either into a generic
+stderr-only notice.
 
 ## Related
 

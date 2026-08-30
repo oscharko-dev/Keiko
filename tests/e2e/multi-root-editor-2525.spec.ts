@@ -190,26 +190,7 @@ test.afterEach(() => {
 
 test("two roots retain independent editor and trust state through focused-root changes", async ({
   page,
-  browserName,
 }) => {
-  // KNOWN CROSS-ENGINE GAP — Gecko only, tracked, NOT a silent exclusion.
-  // This journey replaces the whole editor buffer (`replaceEditorBuffer`) before asserting. Monaco
-  // 0.56 uses the EditContext API where it exists and falls back to `textarea.inputarea` where it
-  // does not; Firefox has no EditContext. On that fallback surface neither Ctrl+A nor Cmd+A reaches
-  // Monaco's keybinding service, so the replacement paste leaves stale model content behind.
-  // Verified on this host, not assumed: running this very spec with --project=firefox fails inside
-  // the shared helper because no hot-exit write ever carries the requested exact full buffer — the
-  // helper catches the corruption where it happens instead of accepting a visible first-line anchor
-  // while stale content survives. Same gap as release-smoke.spec.ts.
-  //
-  // This config inherits BOTH projects from the shared base config, but its npm script pins
-  // --project=chromium, so this guard changes no CI lane today; it exists so a future firefox run
-  // fails as a documented skip rather than as a confusing corruption error.
-  test.skip(
-    browserName === "firefox",
-    "Monaco select-all does not reach the EditContext fallback surface on Gecko; the buffer-replacement gesture is unproven there",
-  );
-
   const [a, b] = createMultiRootFixtures();
   await pairAppSession(page);
   await registerProject(page, a.root, "Multi-root A");
