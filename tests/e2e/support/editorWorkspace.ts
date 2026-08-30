@@ -521,19 +521,6 @@ export async function readHotExitSnapshotKeys(page: Page): Promise<readonly stri
   );
 }
 
-/**
- * Type into the focused Monaco editor of a pane to make its buffer dirty. Selects all then inserts,
- * so the resulting buffer deterministically differs from the on-disk fixture regardless of content.
- */
-export async function typeIntoActiveEditor(page: Page, pane: Locator, text: string): Promise<void> {
-  const editor = pane.locator(EDITOR_SELECTORS.monaco).first();
-  await expect(editor).toBeVisible();
-  await editor.click();
-  const modifier = process.platform === "darwin" ? "Meta" : "Control";
-  await page.keyboard.press(`${modifier}+KeyA`);
-  await page.keyboard.insertText(text);
-}
-
 /** A benign Monaco cancellation that must not be treated as a leaked page error (ported from #1295). */
 export function isBenignMonacoCancellation(message: string): boolean {
   if (message === "Canceled: Canceled" || message === "Canceled") return true;

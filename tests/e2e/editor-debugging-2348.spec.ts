@@ -24,6 +24,7 @@ import {
   openTreeFile,
   seedEditorWindow,
 } from "./support/editorWorkspace.js";
+import { editorModifier } from "./support/editor-chord.js";
 import {
   capturedStartedSessionIdAfter,
   capturedStartedSessionIds,
@@ -44,7 +45,6 @@ const THROWS = "src/throws.ts";
 const CAP_STOPPED = "src/cap-stopped.ts";
 const CAP_OUTPUT = "src/cap-output.ts";
 const EDITOR_WINDOW_ID = "issue-2348-editor";
-const MODIFIER = process.platform === "darwin" ? "Meta" : "Control";
 const CAP_SAMPLE_COUNT = 10;
 // ADR-0139 D1: shared CI runners cannot schedule reliably enough for single-shot wall-clock
 // assertions. The D12 producer and the scheduled performance workflow set this flag and enforce
@@ -676,7 +676,15 @@ async function startCatalogDebugging(
 }
 
 async function runPaletteCommand(page: Page, commandTitle: string): Promise<void> {
-  await page.keyboard.press(`${MODIFIER}+Shift+KeyP`);
+  // "ControlOrMeta", NOT `editorModifier`: this is a PRODUCT shortcut, not a Monaco one — the
+  // combobox it opens is Keiko's own quick access ("Command query" is `quickAccess.query.commands`
+  // in keiko-ui's i18n catalog), and Keiko's `useKeyboardShortcuts` derives its platform from
+  // `navigator.platform`, which the device presets do NOT override. Measured under this suite's
+  // preset on a macOS host: `navigator.userAgent` reports "Windows NT 10.0" (so Monaco waits for
+  // Ctrl) while `navigator.platform` still reports "MacIntel" (so the product waits for Meta).
+  // Playwright's host-derived shorthand sends exactly the latter. `editorModifier` would send
+  // Control to a product listening for Meta and the palette would never open.
+  await page.keyboard.press("ControlOrMeta+Shift+KeyP");
   const combobox = page.getByRole("combobox", { name: "Command query" });
   await expect(combobox).toBeVisible();
   await combobox.fill(`>${commandTitle}`);
@@ -689,8 +697,12 @@ async function selectBreakpointSourceLine(pane: Locator): Promise<void> {
   const editor = pane.locator(EDITOR_SELECTORS.monaco).first();
   await expect(editor).toBeVisible();
   await editor.click();
-  await editor.page().keyboard.press(`${MODIFIER}+KeyF`);
-  await expect(editor.page().locator(".find-widget").first()).toBeVisible();
+  // MONACO chord (`.find-widget` is Monaco's own), so the modifier comes from the browser.
+  // Measured on a macOS host under this suite's preset: `Meta+KeyF` left the find widget closed
+  // (0 visible), `Control+KeyF` opened it (1) — the host-derived form reached nothing here.
+  const page = editor.page();
+  await page.keyboard.press(`${await editorModifier(page)}+KeyF`);
+  await expect(page.locator(".find-widget").first()).toBeVisible();
   await editor.page().keyboard.type("const displayed = total;");
   await editor.page().keyboard.press("Enter");
   await editor.page().keyboard.press("Escape");
@@ -1119,7 +1131,8 @@ async function collectInlineDecorations(page: Page, editor: Locator): Promise<nu
   const values = new Set<string>();
   const monaco = editor.locator(EDITOR_SELECTORS.monaco).first();
   await monaco.click();
-  await page.keyboard.press(`${MODIFIER}+Home`);
+  // MONACO chord (`cursorTop`), so the modifier comes from the browser — see `editorModifier`.
+  await page.keyboard.press(`${await editorModifier(page)}+Home`);
   for (let index = 0; index < 30; index += 1) {
     for (const value of await editor.locator(".keiko-debug-inline-value").allTextContents()) {
       values.add(value);

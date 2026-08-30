@@ -71,7 +71,10 @@ All scenarios are written against the shared helper library at
 - `splitActivePane`, `reorderActiveTab`, `moveActiveTabToAdjacentPane`, `openTreeFile`.
 - `persistedFirstPaneTabOrder` and `readPersistedEditorWindow` — read persisted layout state.
 - `readHotExitSnapshotKeys` — read the `keiko-editor-hot-exit` snapshot keys for deterministic polling.
-- `typeIntoActiveEditor` — make a buffer dirty deterministically.
+- `replaceEditorBuffer` (in `support/editor-chord.ts`) — replace a buffer, and so make it dirty,
+  deterministically. It supersedes the removed `typeIntoActiveEditor`, which derived the select-all
+  modifier from the Node host rather than the browser and omitted the `Backspace` that makes the
+  replacement engine-independent, so it silently APPENDED on a macOS host.
 - `collectPageErrors` and `isBenignMonacoCancellation` — assert no unexpected console or page errors
   leaked, filtering benign Monaco cancellations.
 
